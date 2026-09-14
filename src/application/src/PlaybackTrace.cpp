@@ -132,7 +132,8 @@ void PlaybackTrace::disable() noexcept {
 
 void PlaybackTrace::record(const TraceEventKind kind,
                            const TraceIdentity& identity,
-                           const std::uint64_t payload) noexcept {
+                           const std::uint64_t payload,
+                           std::optional<TraceIncomingIdentity> incoming) noexcept {
     const Clock clock = now_.load(std::memory_order_acquire);
     if (clock == nullptr) {
         return;
@@ -142,6 +143,7 @@ void PlaybackTrace::record(const TraceEventKind kind,
         .kind = kind,
         .timestampMicroseconds = clock(),
         .payload = payload,
+        .incoming = incoming,
     };
     static_cast<void>(buffer_.record(event));
 }

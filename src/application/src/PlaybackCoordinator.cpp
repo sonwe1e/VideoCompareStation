@@ -134,6 +134,38 @@ struct CommandIdentityHash final {
     return actual != nullptr && *actual == expected;
 }
 
+[[nodiscard]] std::optional<TraceIncomingIdentity>
+makeIncomingIdentity(const EventContext& context) noexcept {
+    if (const auto* const frame = std::get_if<FrameRequestContext>(&context)) {
+        return TraceIncomingIdentity{
+            .session = frame->playback.request.sessionId,
+            .epoch = frame->playback.request.sessionEpoch,
+            .generation = frame->playback.playbackGeneration,
+            .device = frame->deviceGeneration,
+            .request = frame->playback.request.requestId,
+        };
+    }
+    if (const auto* const playback = std::get_if<PlaybackRequestContext>(&context)) {
+        return TraceIncomingIdentity{
+            .session = playback->request.sessionId,
+            .epoch = playback->request.sessionEpoch,
+            .generation = playback->playbackGeneration,
+            .device = domain::DeviceGeneration{0U},
+            .request = playback->request.requestId,
+        };
+    }
+    if (const auto* const request = std::get_if<RequestContext>(&context)) {
+        return TraceIncomingIdentity{
+            .session = request->sessionId,
+            .epoch = request->sessionEpoch,
+            .generation = domain::PlaybackGeneration{0U},
+            .device = domain::DeviceGeneration{0U},
+            .request = request->requestId,
+        };
+    }
+    return std::nullopt;
+}
+
 // Checked signed 64-bit addition. Returns the sum, or nullopt when a + b would over/underflow
 // the int64 range, so callers never commit signed-overflow UB into a MediaTime or a tick delta.
 class CoordinatorEventTarget {
@@ -531,8 +563,11 @@ private:
         };
     }
 
-    void emitTrace(TraceEventKind kind, const TraceIdentity& identity, std::uint64_t payload = 0U) {
-        PlaybackTrace::instance().record(kind, identity, payload);
+    void emitTrace(TraceEventKind kind,
+                   const TraceIdentity& identity,
+                   std::uint64_t payload = 0U,
+                   std::optional<TraceIncomingIdentity> incoming = std::nullopt) {
+        PlaybackTrace::instance().record(kind, identity, payload, incoming);
     }
 
     [[nodiscard]] PlaybackRequestContext currentPlaybackScope() const noexcept {
@@ -1381,7 +1416,8 @@ private:
             [](const auto& value) -> const EventContext& { return value.context; }, terminal);
         emitTrace(TraceEventKind::ProviderTerminal,
                   makeTraceIdentity(),
-                  static_cast<std::uint64_t>(terminal.index()));
+                  static_cast<std::uint64_t>(terminal.index()),
+                  makeIncomingIdentity(terminalContext));
         if (matchesInteractiveStepFrame(terminalContext)) {
             if (std::holds_alternative<RequestSucceeded>(terminal)) {
                 interactiveStepRun_->frame->frame.providerSucceeded = true;
@@ -3095,7 +3131,8 @@ private:
     void handleFrameSet(const FrameSetReady& ready) {
         emitTrace(TraceEventKind::FrameSetReady,
                   makeTraceIdentity(),
-                  static_cast<std::uint64_t>(ready.set.canonicalFrameId().value()));
+                  static_cast<std::uint64_t>(ready.set.canonicalFrameId().value()),
+                  makeIncomingIdentity(ready.context));
         if (matchesInteractiveStepFrame(ready.context)) {
             PendingPlaybackFrame& frame = interactiveStepRun_->frame->frame;
             if (ready.set.canonicalFrameId() != frame.expectedFrame) {
@@ -3617,7 +3654,8 @@ private:
     void handleFramePresented(const FrameSetPresented& presented) {
         emitTrace(TraceEventKind::PresentationAcknowledged,
                   makeTraceIdentity(),
-                  static_cast<std::uint64_t>(presented.frameId.value()));
+                  static_cast<std::uint64_t>(presented.frameId.value()),
+                  makeIncomingIdentity(presented.context));
         if (matchesInteractiveStepFrame(presented.context) &&
             interactiveStepRun_->frame->frame.framePublished &&
             presented.frameId == interactiveStepRun_->frame->frame.expectedFrame) {

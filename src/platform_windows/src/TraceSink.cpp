@@ -18,12 +18,13 @@ namespace {
 // Encodes a single trace event as one JSON object on one line (JSONL). Kept dependency-free:
 // no JSON library, no allocator on the hot path beyond the reused `buffer`. Field order matches
 // trace-schema.md. Command and request are emitted as their integer values; a nullopt command
-// is emitted as null.
+// is emitted as null. Optional incoming identity fields are additive schema-v1 fields.
 [[nodiscard]] int formatEventJson(char* const buffer,
                                   const std::size_t capacity,
                                   const application::TraceEvent& event) noexcept {
-    // Schema v1 has eleven numeric fields; their valid all-UINT64_MAX representation is larger
-    // than 256 bytes. Keep fixed storage, but size it for the complete worst-case record.
+    // Schema v1 has eleven numeric fields plus five optional incoming fields; their valid
+    // all-UINT64_MAX representation is larger than 256 bytes. Keep fixed storage, but size it
+    // for the complete worst-case record.
     const auto command = event.identity.command;
     char commandBuffer[32];
     const char* commandText = "null";
@@ -37,6 +38,22 @@ namespace {
         }
         commandText = commandBuffer;
     }
+    char incomingBuffer[160];
+    incomingBuffer[0] = '\0';
+    if (event.incoming.has_value()) {
+        const int incomingLength =
+            std::snprintf(incomingBuffer,
+                          sizeof(incomingBuffer),
+                          R"(,"is":%llu,"ie":%llu,"igen":%llu,"idev":%llu,"ireq":%llu)",
+                          static_cast<unsigned long long>(event.incoming->session.value()),
+                          static_cast<unsigned long long>(event.incoming->epoch.value()),
+                          static_cast<unsigned long long>(event.incoming->generation.value()),
+                          static_cast<unsigned long long>(event.incoming->device.value()),
+                          static_cast<unsigned long long>(event.incoming->request.value()));
+        if (incomingLength <= 0 || incomingLength >= static_cast<int>(sizeof(incomingBuffer))) {
+            return false;
+        }
+    }
     // snprintf returns the would-be length (excluding the terminating NUL). Clamp to the buffer
     // size so a truncated line never reads past the array; the line is simply dropped to keep
     // the export well-formed rather than emitting a partial JSON object.
@@ -44,7 +61,7 @@ namespace {
         std::snprintf(buffer,
                       capacity,
                       R"({"t":%llu,"kind":%u,"s":%llu,"e":%llu,"topo":%llu,"tl":%llu,)"
-                      R"("al":%llu,"gen":%llu,"dev":%llu,"req":%llu,"cmd":%s,"p":%llu})"
+                      R"("al":%llu,"gen":%llu,"dev":%llu,"req":%llu,"cmd":%s,"p":%llu%s})"
                       "\n",
                       static_cast<unsigned long long>(event.timestampMicroseconds),
                       static_cast<unsigned>(event.kind),
@@ -57,7 +74,8 @@ namespace {
                       static_cast<unsigned long long>(event.identity.device.value()),
                       static_cast<unsigned long long>(event.identity.request.value()),
                       commandText,
-                      static_cast<unsigned long long>(event.payload));
+                      static_cast<unsigned long long>(event.payload),
+                      incomingBuffer);
     return written > 0 && written < static_cast<int>(capacity) ? written : 0;
 }
 

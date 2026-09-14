@@ -156,10 +156,9 @@ This is a machine property, not a project defect: the CI runner path is short.
 
 The following work remains open or requires the intended Windows/D3D11VA runner:
 
-- Extend stale-result analysis beyond identity regressions: define authoritative
-  incoming-versus-live identity data for stale arrivals. Overflow markers already fail closed, and
-  the Phase 0 analyzer checks command exactly-once, ACK-before-commit, and identity-regression
-  stale commits.
+- Stale-arrival analysis now compares optional incoming identity (`is`/`ie`/`igen`/`idev`/`ireq`)
+  against the live identity and fails a published stale `FrameSetReady`. Further hardening would
+  associate provider terminals and commits with the exact request id that produced them.
 - Decide separately whether crash-resilient or continuously streamed traces are required. The
   current shutdown-drained diagnostic was not designed to provide either property.
 - Measure tracing enabled versus disabled under contention. Loss is observable through overflow

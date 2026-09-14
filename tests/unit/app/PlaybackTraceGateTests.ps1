@@ -139,6 +139,18 @@ try {
     Assert-TraceFails -Name 'header-only' -Lines @($validHeader) `
         -ExpectedMessage 'TRACE_INCOMPLETE'
 
+    Assert-TracePasses -Name 'valid-incoming-identity' -Lines @(
+        $validHeader,
+        (
+            $validEvent.Substring(0, $validEvent.Length - 1) +
+            ',"is":1,"ie":2,"igen":6,"idev":7,"ireq":8}'
+        )
+    )
+    Assert-TraceFails -Name 'partial-incoming-identity' -Lines @(
+        $validHeader,
+        ($validEvent.Substring(0, $validEvent.Length - 1) + ',"is":1}')
+    ) -ExpectedMessage 'TRACE_INVALID_EVENT'
+
     function New-TraceEventJson {
         param(
             [int]$Kind,
@@ -153,15 +165,29 @@ try {
             [uint64]$Alignment = 1,
             [uint64]$Generation = 1,
             [uint64]$Device = 1,
-            [uint64]$Request = 1
+            [uint64]$Request = 1,
+            [bool]$Incoming = $false,
+            [uint64]$IncomingSession = 1,
+            [uint64]$IncomingEpoch = 1,
+            [uint64]$IncomingGeneration = 1,
+            [uint64]$IncomingDevice = 1,
+            [uint64]$IncomingRequest = 1
         )
         $commandField = if ($CommandNull) { 'null' } else { $Command.ToString() }
-        return (
+        $json = (
             '{"t":' + $Timestamp + ',"kind":' + $Kind + ',"s":' + $Session + ',"e":' + $Epoch +
             ',"topo":' + $Topology + ',"tl":' + $Timeline + ',"al":' + $Alignment +
             ',"gen":' + $Generation + ',"dev":' + $Device + ',"req":' + $Request +
-            ',"cmd":' + $commandField + ',"p":' + $Payload + '}'
+            ',"cmd":' + $commandField + ',"p":' + $Payload
         )
+        if ($Incoming) {
+            $json += (
+                ',"is":' + $IncomingSession + ',"ie":' + $IncomingEpoch +
+                ',"igen":' + $IncomingGeneration + ',"idev":' + $IncomingDevice +
+                ',"ireq":' + $IncomingRequest
+            )
+        }
+        return $json + '}'
     }
 
     function Assert-InvariantsPass {
@@ -298,6 +324,37 @@ try {
         (New-TraceEventJson -Kind 8 -Timestamp 5 -Payload 12 -Device 1),
         $happyTerminal
     ) -ExpectedMessage 'STALE_COMMIT'
+
+    [void](Assert-InvariantsPass -Name 'invariants-fresh-incoming-publish' -Lines @(
+        $validHeader,
+        $happyCommand,
+        (New-TraceEventJson -Kind 4 -Timestamp 2 -Payload 12 -Incoming $true -IncomingRequest 1),
+        (New-TraceEventJson -Kind 6 -Timestamp 3 -Payload 12),
+        $happyAck,
+        $happyCommit,
+        $happyTerminal
+    ))
+
+    [void](Assert-InvariantsPass -Name 'invariants-stale-incoming-dropped' -Lines @(
+        $validHeader,
+        $happyCommand,
+        (New-TraceEventJson -Kind 4 -Timestamp 2 -Payload 12 -Incoming $true -IncomingGeneration 9),
+        (New-TraceEventJson -Kind 4 -Timestamp 3 -Payload 12 -Incoming $true -IncomingRequest 1),
+        (New-TraceEventJson -Kind 6 -Timestamp 4 -Payload 12),
+        $happyAck,
+        $happyCommit,
+        $happyTerminal
+    ))
+
+    Assert-InvariantsFail -Name 'invariants-stale-incoming-published' -Lines @(
+        $validHeader,
+        $happyCommand,
+        (New-TraceEventJson -Kind 4 -Timestamp 2 -Payload 12 -Incoming $true -IncomingGeneration 9),
+        (New-TraceEventJson -Kind 6 -Timestamp 3 -Payload 12),
+        $happyAck,
+        $happyCommit,
+        $happyTerminal
+    ) -ExpectedMessage 'STALE_ARRIVAL_PUBLISHED'
 
     $probePath = Join-Path $casePath 'gate probe with spaces.cmd'
     $probeArgumentsPath = Join-Path $casePath 'captured arguments.txt'

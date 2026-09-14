@@ -116,6 +116,43 @@ function Test-PlaybackTraceFile {
                 throw "$ResultPrefix`_TRACE_INVALID_EVENT: invalid $numericField at $TracePath."
             }
         }
+        # Optional additive incoming-identity fields (schema v1). Either all five are present or
+        # none are; partial sets are malformed.
+        $incomingFields = @('is', 'ie', 'igen', 'idev', 'ireq')
+        $presentIncoming = @(
+            $incomingFields | Where-Object {
+                $null -ne $record.PSObject.Properties[$_]
+            }
+        )
+        if ($presentIncoming.Count -ne 0 -and $presentIncoming.Count -ne $incomingFields.Count) {
+            throw (
+                "$ResultPrefix`_TRACE_INVALID_EVENT: partial incoming identity at $TracePath."
+            )
+        }
+        foreach ($incomingField in $incomingFields) {
+            if ($null -eq $record.PSObject.Properties[$incomingField]) {
+                continue
+            }
+            $value = $record.$incomingField
+            if (-not (& $isExactInteger $value)) {
+                throw (
+                    "$ResultPrefix`_TRACE_INVALID_EVENT: $incomingField is not numeric at " +
+                    "$TracePath."
+                )
+            }
+            try {
+                $converted = [uint64]$value
+            } catch {
+                throw (
+                    "$ResultPrefix`_TRACE_INVALID_EVENT: invalid $incomingField at $TracePath."
+                )
+            }
+            if ([decimal]$value -ne [decimal]$converted) {
+                throw (
+                    "$ResultPrefix`_TRACE_INVALID_EVENT: invalid $incomingField at $TracePath."
+                )
+            }
+        }
         try {
             $kind = [int]$record.kind
         } catch {
@@ -197,7 +234,12 @@ function Test-PlaybackTraceInvariants {
     $commandTerminalMismatchCount = 0
     $ackBeforeCommitViolations = 0
     $staleCommitCount = 0
+    $staleArrivalCount = 0
+    $staleArrivalPublishedCount = 0
     $maxNoFrame = [decimal][uint64]::MaxValue
+
+    # frame payload -> whether the last FrameSetReady for that frame had matching incoming
+    $readyFresh = @{}
 
     # session|epoch|cmd -> accept count / terminal count
     $commandAccepts = @{}
@@ -235,6 +277,19 @@ function Test-PlaybackTraceInvariants {
         $sessionKey = "$session|$epoch"
         $identityKey = "$session|$epoch|$topology|$timeline|$alignment|$generation|$device"
 
+        $incomingStale = $false
+        if ($null -ne $record.PSObject.Properties['is']) {
+            # Live `req` on coordinator-owned TraceIdentity is intentionally 0, so request is
+            # exported for correlation but not part of the stale comparison.
+            $incomingStale = [uint64]$record.is -ne $session -or
+                [uint64]$record.ie -ne $epoch -or
+                [uint64]$record.igen -ne $generation -or
+                [uint64]$record.idev -ne $device
+            if ($incomingStale) {
+                ++$staleArrivalCount
+            }
+        }
+
         $max = $sessionMax[$sessionKey]
         if ($null -eq $max) {
             $max = [pscustomobject]@{
@@ -259,6 +314,14 @@ function Test-PlaybackTraceInvariants {
                     }
                     $commandAccepts[$commandKey] = $commandAccepts[$commandKey] + 1
                     ++$commandAcceptedCount
+                }
+            }
+            4 {
+                $readyFresh[$payload.ToString()] = -not $incomingStale
+            }
+            6 {
+                if ($readyFresh[$payload.ToString()] -eq $false) {
+                    ++$staleArrivalPublishedCount
                 }
             }
             7 {
@@ -352,6 +415,12 @@ function Test-PlaybackTraceInvariants {
             "path=$TracePath"
         )
     }
+    if ($staleArrivalPublishedCount -ne 0) {
+        throw (
+            "$ResultPrefix`_STALE_ARRIVAL_PUBLISHED count=$staleArrivalPublishedCount " +
+            "stale_arrivals=$staleArrivalCount path=$TracePath"
+        )
+    }
 
     return [pscustomobject]@{
         EventCount = $eventCount
@@ -362,6 +431,8 @@ function Test-PlaybackTraceInvariants {
         SnapshotCommitCount = $snapshotCommitCount
         AckBeforeCommitViolations = $ackBeforeCommitViolations
         StaleCommitCount = $staleCommitCount
+        StaleArrivalCount = $staleArrivalCount
+        StaleArrivalPublishedCount = $staleArrivalPublishedCount
         PartialFrameSetCount = 0
     }
 }
@@ -533,6 +604,8 @@ function Invoke-PlaybackTraceGate {
             "command_terminal_mismatch=$($invariants.CommandTerminalMismatchCount) " +
             "ack_before_commit_violations=$($invariants.AckBeforeCommitViolations) " +
             "stale_commit=$($invariants.StaleCommitCount) " +
+            "stale_arrival=$($invariants.StaleArrivalCount) " +
+            "stale_arrival_published=$($invariants.StaleArrivalPublishedCount) " +
             "partial_frame_set=$($invariants.PartialFrameSetCount)"
         )
     }

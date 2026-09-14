@@ -10,9 +10,7 @@ The navigation and comparison-semantics gate scripts validate that the child pro
 produces a structurally valid, fully parseable schema-v1 trace with a header, at least one event,
 and no overflow marker, and then run the Phase 0 semantic analyzer (`Test-PlaybackTraceInvariants`).
 The analyzer checks command exactly-once terminal delivery, acknowledgment-before-commit for
-displayed frames, and identity-regression stale commits. It still cannot prove every asynchronous
-stale-result rejection described below, because coordinator arrival events carry only the live
-identity.
+displayed frames, identity-regression stale commits, and publication of stale async arrivals.
 
 ## Enabling and file lifecycle
 
@@ -70,6 +68,23 @@ Each normal event is one compact JSON object:
 | `req` | Provider request identifier. |
 | `cmd` | Command identifier, or JSON `null` when the event is not command-scoped. |
 | `p` | Event-specific payload interpreted according to `kind`. |
+
+Optional additive incoming-identity fields (present together or absent together) record the
+async request context the producer carried at arrival time. Topology/timeline/alignment are
+coordinator-owned and therefore are not repeated here.
+
+| Field | Meaning |
+| --- | --- |
+| `is` | Incoming session identifier. |
+| `ie` | Incoming session epoch. |
+| `igen` | Incoming playback generation. |
+| `idev` | Incoming device generation. |
+| `ireq` | Incoming provider request identifier. |
+
+These fields are currently emitted on `FrameSetReady`, `PresentationAcknowledged`, and
+`ProviderTerminal` when the coordinator can extract a request/playback/frame context. A mismatch
+between the incoming tuple and the live `(s,e,gen,dev)` marks a stale arrival. `ireq` is not
+compared because coordinator-owned live `req` is always `0`.
 
 The timestamp is useful for elapsed-time measurements, but it is not a global wall clock. Queue
 serialization determines file order. Because producers obtain timestamps before attempting to
@@ -144,18 +159,23 @@ a lossless trace. An overflow marker is the explicit loss signal.
    same `(s, e, cmd)`; orphans, duplicates, and accepts without a command id fail closed;
 2. every `SnapshotCommitted` with a displayed-frame payload has a prior `PresentationAcknowledged`
    with the same payload and the same identity excluding `req`/`cmd`; `UINT64_MAX` means no
-   displayed frame and skips the ACK requirement; republishing a still-acked frame is allowed; and
+   displayed frame and skips the ACK requirement; republishing a still-acked frame is allowed;
 3. a `SnapshotCommitted` whose `gen`/`topo`/`tl`/`dev` is lower than a higher value already
-   observed for the same `(s, e)` is treated as a stale commit.
+   observed for the same `(s, e)` is treated as a stale commit; and
+4. a `FrameSetReady` whose optional incoming identity differs from the live `(s,e,gen,dev)`
+   marks that frame payload stale; a subsequent `RenderPublished` for the same payload fails as
+   `STALE_ARRIVAL_PUBLISHED`. Stale arrivals that are dropped (followed by a fresh ready) pass.
+   Live `req` is coordinator-owned and remains `0`, so `ireq` is exported for correlation but is
+   not part of the stale comparison.
 
 Overflow markers remain fail-closed. `PartialFrameSetCount` is reported as `0` because the
 single-line event stream cannot reconstruct multi-source FrameSet shape; structural FrameSet
 atomicity is enforced by the C++ factory, not this analyzer.
 
-Coordinator arrival events still use the coordinator's current trace identity, not a separately
-exported copy of the incoming asynchronous event context. Authoritative stale-result analysis for
-provider/request mismatches therefore still needs an emission contract that records both the
-incoming identity and the live identity (or equivalent replayable revision transitions).
+Incoming identity is only as complete as the `EventContext` on the arrival. `PlaybackRequestContext`
+arrivals leave `idev` as `0`, and `RequestContext` arrivals leave `igen`/`idev` as `0`; the
+analyzer still compares those zeros against the live identity, so producers that lack device or
+generation in their context must not be treated as carrying a full frame identity.
 
 ## Current validation coverage
 

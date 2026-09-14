@@ -102,6 +102,8 @@ JSONL file and checked by `Test-PlaybackTraceInvariants`:
 - `command_terminal_mismatch_count = 0` (every accepted command has exactly one terminal).
 - `ack_before_commit_violations = 0` (no `SnapshotCommitted` before its `PresentationAcknowledged`).
 - `stale_commit_count = 0` (commit identities do not regress within a session/epoch).
+- `stale_arrival_published_count = 0` (a `FrameSetReady` whose incoming identity differs from the
+  live identity must not be followed by `RenderPublished` for that frame).
 - `partial_frame_set_count = 0` (reported as 0; multi-source FrameSet shape is not reconstructible
   from the single-line stream and remains a C++ factory invariant).
 - `overflow_count` recorded; trace on/off A/B shows no gate regression.

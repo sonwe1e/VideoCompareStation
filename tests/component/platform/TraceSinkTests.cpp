@@ -59,6 +59,48 @@ TEST(TraceSinkTests, FileSinkExportsIdentityEventsAndOverflowMarkersToUnicodePat
     EXPECT_EQ(lines[2], R"({"overflow":12})");
 }
 
+TEST(TraceSinkTests, FileSinkExportsOptionalIncomingIdentityFields) {
+    test::ScopedTemporaryDirectory directory{"dvs-trace-sink-incoming"};
+    const std::filesystem::path path = directory.path() / L"incoming.jsonl";
+    {
+        FileTraceSink sink{path};
+        ASSERT_TRUE(sink.append(application::TraceEvent{
+            .identity =
+                application::TraceIdentity{
+                    .session = domain::SessionId{1U},
+                    .epoch = domain::SessionEpoch{1U},
+                    .topology = domain::TopologyRevision{1U},
+                    .timeline = domain::TimelineRevision{1U},
+                    .alignment = domain::AlignmentRevision{1U},
+                    .generation = domain::PlaybackGeneration{2U},
+                    .device = domain::DeviceGeneration{3U},
+                    .request = domain::RequestId{4U},
+                },
+            .kind = application::TraceEventKind::FrameSetReady,
+            .timestampMicroseconds = 5U,
+            .payload = 6U,
+            .incoming =
+                application::TraceIncomingIdentity{
+                    .session = domain::SessionId{1U},
+                    .epoch = domain::SessionEpoch{1U},
+                    .generation = domain::PlaybackGeneration{2U},
+                    .device = domain::DeviceGeneration{3U},
+                    .request = domain::RequestId{9U},
+                },
+        }));
+        ASSERT_TRUE(sink.finalize());
+    }
+
+    const std::vector<std::string> lines = readLines(path);
+    ASSERT_EQ(lines.size(), 2U);
+    EXPECT_EQ(lines[0], R"({"traceVersion":1})");
+    EXPECT_EQ(
+        lines[1],
+        R"({"t":5,"kind":4,"s":1,"e":1,"topo":1,"tl":1,)"
+        R"("al":1,"gen":2,"dev":3,"req":4,"cmd":null,"p":6,)"
+        R"("is":1,"ie":1,"igen":2,"idev":3,"ireq":9})");
+}
+
 TEST(TraceSinkTests, MemorySinkRemainsBoundedAndAccumulatesOverflow) {
     MemoryTraceSink sink{1U};
     const application::TraceEvent event{

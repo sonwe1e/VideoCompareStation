@@ -30,6 +30,19 @@ struct TraceIdentity final {
     [[nodiscard]] bool operator==(const TraceIdentity&) const = default;
 };
 
+// Async arrival identity captured from the producer's EventContext at handling time. Topology,
+// timeline, and alignment revisions are coordinator-owned and therefore stay on TraceIdentity
+// only; this subset is what a stale provider result can actually carry.
+struct TraceIncomingIdentity final {
+    domain::SessionId session{0};
+    domain::SessionEpoch epoch{0};
+    domain::PlaybackGeneration generation{0};
+    domain::DeviceGeneration device{0};
+    domain::RequestId request{0};
+
+    [[nodiscard]] bool operator==(const TraceIncomingIdentity&) const = default;
+};
+
 enum class TraceEventKind : std::uint8_t {
     CommandAccepted = 0,
     CommandRejected = 1,
@@ -56,6 +69,7 @@ struct TraceEvent final {
     TraceEventKind kind{};
     std::uint64_t timestampMicroseconds{0};
     std::uint64_t payload{0};
+    std::optional<TraceIncomingIdentity> incoming{};
 
     [[nodiscard]] bool operator==(const TraceEvent&) const = default;
 };
@@ -142,8 +156,10 @@ public:
     void enable(Clock nowMicroseconds) noexcept;
     void disable() noexcept;
 
-    void
-    record(TraceEventKind kind, const TraceIdentity& identity, std::uint64_t payload = 0U) noexcept;
+    void record(TraceEventKind kind,
+                const TraceIdentity& identity,
+                std::uint64_t payload = 0U,
+                std::optional<TraceIncomingIdentity> incoming = std::nullopt) noexcept;
 
     std::size_t drain(TraceEvent* out, std::size_t max) noexcept;
     std::size_t drainToSink() noexcept;
