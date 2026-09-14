@@ -139,6 +139,166 @@ try {
     Assert-TraceFails -Name 'header-only' -Lines @($validHeader) `
         -ExpectedMessage 'TRACE_INCOMPLETE'
 
+    function New-TraceEventJson {
+        param(
+            [int]$Kind,
+            [uint64]$Timestamp,
+            [uint64]$Command = 0,
+            [bool]$CommandNull = $true,
+            [uint64]$Payload = 0,
+            [uint64]$Session = 1,
+            [uint64]$Epoch = 1,
+            [uint64]$Topology = 1,
+            [uint64]$Timeline = 1,
+            [uint64]$Alignment = 1,
+            [uint64]$Generation = 1,
+            [uint64]$Device = 1,
+            [uint64]$Request = 1
+        )
+        $commandField = if ($CommandNull) { 'null' } else { $Command.ToString() }
+        return (
+            '{"t":' + $Timestamp + ',"kind":' + $Kind + ',"s":' + $Session + ',"e":' + $Epoch +
+            ',"topo":' + $Topology + ',"tl":' + $Timeline + ',"al":' + $Alignment +
+            ',"gen":' + $Generation + ',"dev":' + $Device + ',"req":' + $Request +
+            ',"cmd":' + $commandField + ',"p":' + $Payload + '}'
+        )
+    }
+
+    function Assert-InvariantsPass {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string]$Name,
+
+            [Parameter(Mandatory = $true)]
+            [string[]]$Lines
+        )
+
+        $path = Write-TraceCase -Name $Name -Lines $Lines
+        $result = Test-PlaybackTraceInvariants -TracePath $path -ResultPrefix 'TEST_GATE'
+        if ($result.CommandTerminalMismatchCount -ne 0 -or
+            $result.AckBeforeCommitViolations -ne 0 -or
+            $result.StaleCommitCount -ne 0) {
+            throw "$Name returned unexpected invariant counts."
+        }
+        ++$script:assertionCount
+        return $result
+    }
+
+    function Assert-InvariantsFail {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string]$Name,
+
+            [Parameter(Mandatory = $true)]
+            [string[]]$Lines,
+
+            [Parameter(Mandatory = $true)]
+            [string]$ExpectedMessage
+        )
+
+        $path = Write-TraceCase -Name $Name -Lines $Lines
+        try {
+            [void](Test-PlaybackTraceInvariants -TracePath $path -ResultPrefix 'TEST_GATE')
+        } catch {
+            if (-not $_.Exception.Message.Contains($ExpectedMessage)) {
+                throw "$Name failed with an unexpected message: $($_.Exception.Message)"
+            }
+            ++$script:assertionCount
+            return
+        }
+        throw "$Name unexpectedly passed invariant analysis."
+    }
+
+    $happyCommand = New-TraceEventJson -Kind 0 -Timestamp 1 -CommandNull $false -Command 1
+    $happyAck = New-TraceEventJson -Kind 7 -Timestamp 2 -Payload 12
+    $happyCommit = New-TraceEventJson -Kind 8 -Timestamp 3 -Payload 12
+    $happyTerminal = New-TraceEventJson -Kind 9 -Timestamp 4 -CommandNull $false -Command 1 -Payload 0
+    $happyTrace = @($validHeader, $happyCommand, $happyAck, $happyCommit, $happyTerminal)
+    $happyResult = Assert-InvariantsPass -Name 'invariants-happy-path' -Lines $happyTrace
+    if ($happyResult.CommandAcceptedCount -ne 1 -or
+        $happyResult.CommandTerminalCount -ne 1 -or
+        $happyResult.PresentationAckCount -ne 1 -or
+        $happyResult.SnapshotCommitCount -ne 1) {
+        throw 'Happy-path invariant counts were unexpected.'
+    }
+    ++$script:assertionCount
+
+    [void](Assert-InvariantsPass -Name 'invariants-null-displayed-frame' -Lines @(
+        $validHeader,
+        $happyCommand,
+        (New-TraceEventJson -Kind 8 -Timestamp 3 -Payload 18446744073709551615),
+        $happyTerminal
+    ))
+
+    [void](Assert-InvariantsPass -Name 'invariants-republish-after-ack' -Lines @(
+        $validHeader,
+        $happyCommand,
+        $happyAck,
+        $happyCommit,
+        (New-TraceEventJson -Kind 8 -Timestamp 5 -Payload 12),
+        $happyTerminal
+    ))
+
+    Assert-InvariantsFail -Name 'invariants-missing-terminal' -Lines @(
+        $validHeader, $happyCommand, $happyAck, $happyCommit
+    ) -ExpectedMessage 'COMMAND_TERMINAL_MISMATCH'
+
+    Assert-InvariantsFail -Name 'invariants-orphan-terminal' -Lines @(
+        $validHeader, $happyAck, $happyCommit, $happyTerminal
+    ) -ExpectedMessage 'COMMAND_TERMINAL_MISMATCH'
+
+    Assert-InvariantsFail -Name 'invariants-double-terminal' -Lines @(
+        $validHeader, $happyCommand, $happyAck, $happyCommit, $happyTerminal, $happyTerminal
+    ) -ExpectedMessage 'COMMAND_TERMINAL_MISMATCH'
+
+    Assert-InvariantsFail -Name 'invariants-accept-without-command-id' -Lines @(
+        $validHeader,
+        (New-TraceEventJson -Kind 0 -Timestamp 1),
+        $happyAck,
+        $happyCommit,
+        $happyTerminal
+    ) -ExpectedMessage 'COMMAND_TERMINAL_MISMATCH'
+
+    Assert-InvariantsFail -Name 'invariants-commit-before-ack' -Lines @(
+        $validHeader, $happyCommand, $happyCommit, $happyAck, $happyTerminal
+    ) -ExpectedMessage 'ACK_BEFORE_COMMIT_VIOLATIONS'
+
+    Assert-InvariantsFail -Name 'invariants-ack-different-frame' -Lines @(
+        $validHeader,
+        $happyCommand,
+        (New-TraceEventJson -Kind 7 -Timestamp 2 -Payload 11),
+        $happyCommit,
+        $happyTerminal
+    ) -ExpectedMessage 'ACK_BEFORE_COMMIT_VIOLATIONS'
+
+    Assert-InvariantsFail -Name 'invariants-ack-different-identity' -Lines @(
+        $validHeader,
+        $happyCommand,
+        (New-TraceEventJson -Kind 7 -Timestamp 2 -Payload 12 -Generation 2),
+        $happyCommit,
+        $happyTerminal
+    ) -ExpectedMessage 'ACK_BEFORE_COMMIT_VIOLATIONS'
+
+    Assert-InvariantsFail -Name 'invariants-stale-generation-commit' -Lines @(
+        $validHeader,
+        $happyCommand,
+        (New-TraceEventJson -Kind 7 -Timestamp 2 -Payload 12 -Generation 2),
+        (New-TraceEventJson -Kind 8 -Timestamp 3 -Payload 12 -Generation 2),
+        (New-TraceEventJson -Kind 7 -Timestamp 4 -Payload 12 -Generation 1),
+        (New-TraceEventJson -Kind 8 -Timestamp 5 -Payload 12 -Generation 1),
+        (New-TraceEventJson -Kind 9 -Timestamp 6 -CommandNull $false -Command 1)
+    ) -ExpectedMessage 'STALE_COMMIT'
+
+    Assert-InvariantsFail -Name 'invariants-stale-device-commit' -Lines @(
+        $validHeader,
+        $happyCommand,
+        $happyAck,
+        (New-TraceEventJson -Kind 8 -Timestamp 3 -Payload 12 -Device 1),
+        (New-TraceEventJson -Kind 13 -Timestamp 4 -Device 1 -Payload 2),
+        (New-TraceEventJson -Kind 8 -Timestamp 5 -Payload 12 -Device 1),
+        $happyTerminal
+    ) -ExpectedMessage 'STALE_COMMIT'
+
     $probePath = Join-Path $casePath 'gate probe with spaces.cmd'
     $probeArgumentsPath = Join-Path $casePath 'captured arguments.txt'
     $fixtureA = Join-Path $casePath 'fixture one.mp4'
@@ -157,7 +317,10 @@ try {
             '>> "%DVS_GATE_PROBE_ARGUMENTS%" echo %~4',
             '>> "%DVS_GATE_PROBE_ARGUMENTS%" echo %~5',
             '> "%DVS_PLAYBACK_TRACE%" echo {"traceVersion":1}',
-            '>> "%DVS_PLAYBACK_TRACE%" echo {"t":1,"kind":0,"s":1,"e":1,"topo":1,"tl":1,"al":1,"gen":1,"dev":1,"req":1,"cmd":null,"p":0}',
+            '>> "%DVS_PLAYBACK_TRACE%" echo {"t":1,"kind":0,"s":1,"e":1,"topo":1,"tl":1,"al":1,"gen":1,"dev":1,"req":1,"cmd":1,"p":0}',
+            '>> "%DVS_PLAYBACK_TRACE%" echo {"t":2,"kind":7,"s":1,"e":1,"topo":1,"tl":1,"al":1,"gen":1,"dev":1,"req":1,"cmd":null,"p":0}',
+            '>> "%DVS_PLAYBACK_TRACE%" echo {"t":3,"kind":8,"s":1,"e":1,"topo":1,"tl":1,"al":1,"gen":1,"dev":1,"req":1,"cmd":null,"p":0}',
+            '>> "%DVS_PLAYBACK_TRACE%" echo {"t":4,"kind":9,"s":1,"e":1,"topo":1,"tl":1,"al":1,"gen":1,"dev":1,"req":1,"cmd":1,"p":0}',
             'exit /b 0'
         ),
         [System.Text.Encoding]::ASCII

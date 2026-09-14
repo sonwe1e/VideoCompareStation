@@ -97,10 +97,11 @@
 ## Trace-observable acceptance criteria (Phase 0 exit)
 
 A valid Phase 0 trace of a held-forward and a held-backward run must satisfy, exportable from one
-JSONL file:
+JSONL file and checked by `Test-PlaybackTraceInvariants`:
 
 - `command_terminal_mismatch_count = 0` (every accepted command has exactly one terminal).
 - `ack_before_commit_violations = 0` (no `SnapshotCommitted` before its `PresentationAcknowledged`).
-- `stale_commit_count = 0` (every commit identity matches live revisions).
-- `partial_frame_set_count = 0` (no per-source advance — structural, asserted via snapshot shape).
+- `stale_commit_count = 0` (commit identities do not regress within a session/epoch).
+- `partial_frame_set_count = 0` (reported as 0; multi-source FrameSet shape is not reconstructible
+  from the single-line stream and remains a C++ factory invariant).
 - `overflow_count` recorded; trace on/off A/B shows no gate regression.

@@ -153,6 +153,219 @@ function Test-PlaybackTraceFile {
     }
 }
 
+function Test-PlaybackTraceInvariants {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TracePath,
+
+        [string]$ResultPrefix = 'PLAYBACK_TRACE'
+    )
+
+    # Semantic Phase 0 checks on an already structurally valid schema-v1 file.
+    # Overflow is fail-closed upstream in Test-PlaybackTraceFile; this function assumes none.
+    # Fail closed on any invariant violation. Stale-commit detection is limited to identity
+    # regressions visible in the serialized stream (see trace-schema.md).
+
+    $isExactInteger = {
+        param($Value)
+
+        return $Value -is [sbyte] -or $Value -is [byte] -or
+            $Value -is [int16] -or $Value -is [uint16] -or
+            $Value -is [int32] -or $Value -is [uint32] -or
+            $Value -is [int64] -or $Value -is [uint64] -or
+            $Value -is [decimal] -or $Value -is [System.Numerics.BigInteger]
+    }
+
+    if (-not (Test-Path -LiteralPath $TracePath -PathType Leaf)) {
+        throw "$ResultPrefix`_TRACE_MISSING: expected trace at $TracePath"
+    }
+
+    $traceLines = @(Get-Content -LiteralPath $TracePath)
+    if ($traceLines.Count -lt 2) {
+        throw (
+            "$ResultPrefix`_TRACE_INCOMPLETE: expected a header and at least one event at " +
+            "$TracePath; found $($traceLines.Count) line(s)."
+        )
+    }
+
+    $eventCount = 0
+    $commandAcceptedCount = 0
+    $commandTerminalCount = 0
+    $presentationAckCount = 0
+    $snapshotCommitCount = 0
+    $commandTerminalMismatchCount = 0
+    $ackBeforeCommitViolations = 0
+    $staleCommitCount = 0
+    $maxNoFrame = [decimal][uint64]::MaxValue
+
+    # session|epoch|cmd -> accept count / terminal count
+    $commandAccepts = @{}
+    $commandTerminals = @{}
+    # identity without req/cmd -> set of acked canonical positions
+    $ackedFrames = @{}
+    # session|epoch -> max gen/topo/tl/dev observed so far
+    $sessionMax = @{}
+
+    foreach ($line in ($traceLines | Select-Object -Skip 1)) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            continue
+        }
+        try {
+            $record = $line | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+            throw "$ResultPrefix`_TRACE_INVALID_RECORD: $TracePath. $($_.Exception.Message)"
+        }
+        if ($null -ne $record.PSObject.Properties['overflow']) {
+            throw (
+                "$ResultPrefix`_TRACE_OVERFLOW: invariant analysis requires a complete " +
+                "capture at $TracePath."
+            )
+        }
+
+        $session = [uint64]$record.s
+        $epoch = [uint64]$record.e
+        $topology = [uint64]$record.topo
+        $timeline = [uint64]$record.tl
+        $alignment = [uint64]$record.al
+        $generation = [uint64]$record.gen
+        $device = [uint64]$record.dev
+        $kind = [int]$record.kind
+        $payload = [uint64]$record.p
+        $sessionKey = "$session|$epoch"
+        $identityKey = "$session|$epoch|$topology|$timeline|$alignment|$generation|$device"
+
+        $max = $sessionMax[$sessionKey]
+        if ($null -eq $max) {
+            $max = [pscustomobject]@{
+                Generation = $generation
+                Topology = $topology
+                Timeline = $timeline
+                Device = $device
+            }
+            $sessionMax[$sessionKey] = $max
+        }
+
+        switch ($kind) {
+            0 {
+                # CommandAccepted
+                if ($null -eq $record.cmd -or -not (& $isExactInteger $record.cmd)) {
+                    $commandTerminalMismatchCount++
+                } else {
+                    $commandId = [uint64]$record.cmd
+                    $commandKey = "$session|$epoch|$commandId"
+                    if ($null -eq $commandAccepts[$commandKey]) {
+                        $commandAccepts[$commandKey] = 0
+                    }
+                    $commandAccepts[$commandKey] = $commandAccepts[$commandKey] + 1
+                    ++$commandAcceptedCount
+                }
+            }
+            7 {
+                ++$presentationAckCount
+                if ($null -eq $ackedFrames[$identityKey]) {
+                    $ackedFrames[$identityKey] = New-Object 'System.Collections.Generic.HashSet[decimal]'
+                }
+                [void]$ackedFrames[$identityKey].Add([decimal]$payload)
+            }
+            8 {
+                ++$snapshotCommitCount
+                $isStale = $generation -lt $max.Generation -or
+                    $topology -lt $max.Topology -or
+                    $timeline -lt $max.Timeline -or
+                    $device -lt $max.Device
+                if ($isStale) {
+                    ++$staleCommitCount
+                }
+                if ([decimal]$payload -ne $maxNoFrame) {
+                    $acks = $ackedFrames[$identityKey]
+                    if ($null -eq $acks -or -not $acks.Contains([decimal]$payload)) {
+                        ++$ackBeforeCommitViolations
+                    }
+                }
+            }
+            9 {
+                # CommandTerminal
+                if ($null -eq $record.cmd -or -not (& $isExactInteger $record.cmd)) {
+                    $commandTerminalMismatchCount++
+                } else {
+                    $commandId = [uint64]$record.cmd
+                    $commandKey = "$session|$epoch|$commandId"
+                    if ($null -eq $commandTerminals[$commandKey]) {
+                        $commandTerminals[$commandKey] = 0
+                    }
+                    $commandTerminals[$commandKey] = $commandTerminals[$commandKey] + 1
+                    ++$commandTerminalCount
+                }
+            }
+            13 {
+                # DeviceGenerationChanged — payload is the new device generation.
+                if ($payload -gt $device) {
+                    $device = $payload
+                }
+            }
+        }
+
+        if ($generation -gt $max.Generation) { $max.Generation = $generation }
+        if ($topology -gt $max.Topology) { $max.Topology = $topology }
+        if ($timeline -gt $max.Timeline) { $max.Timeline = $timeline }
+        if ($device -gt $max.Device) { $max.Device = $device }
+
+        ++$eventCount
+    }
+
+    if ($eventCount -eq 0) {
+        throw "$ResultPrefix`_TRACE_INCOMPLETE: no trace event was written to $TracePath."
+    }
+
+    foreach ($key in $commandAccepts.Keys) {
+        $acceptCount = $commandAccepts[$key]
+        $terminalCount = 0
+        if ($null -ne $commandTerminals[$key]) {
+            $terminalCount = $commandTerminals[$key]
+        }
+        if ($acceptCount -ne 1 -or $terminalCount -ne 1) {
+            ++$commandTerminalMismatchCount
+        }
+    }
+    foreach ($key in $commandTerminals.Keys) {
+        if ($null -eq $commandAccepts[$key]) {
+            ++$commandTerminalMismatchCount
+        }
+    }
+
+    if ($commandTerminalMismatchCount -ne 0) {
+        throw (
+            "$ResultPrefix`_COMMAND_TERMINAL_MISMATCH count=$commandTerminalMismatchCount " +
+            "accepted=$commandAcceptedCount terminal=$commandTerminalCount path=$TracePath"
+        )
+    }
+    if ($ackBeforeCommitViolations -ne 0) {
+        throw (
+            "$ResultPrefix`_ACK_BEFORE_COMMIT_VIOLATIONS count=$ackBeforeCommitViolations " +
+            "acks=$presentationAckCount commits=$snapshotCommitCount path=$TracePath"
+        )
+    }
+    if ($staleCommitCount -ne 0) {
+        throw (
+            "$ResultPrefix`_STALE_COMMIT count=$staleCommitCount commits=$snapshotCommitCount " +
+            "path=$TracePath"
+        )
+    }
+
+    return [pscustomobject]@{
+        EventCount = $eventCount
+        CommandAcceptedCount = $commandAcceptedCount
+        CommandTerminalCount = $commandTerminalCount
+        CommandTerminalMismatchCount = $commandTerminalMismatchCount
+        PresentationAckCount = $presentationAckCount
+        SnapshotCommitCount = $snapshotCommitCount
+        AckBeforeCommitViolations = $ackBeforeCommitViolations
+        StaleCommitCount = $staleCommitCount
+        PartialFrameSetCount = 0
+    }
+}
+
 function Invoke-PlaybackTraceGate {
     [CmdletBinding()]
     param(
@@ -310,15 +523,20 @@ function Invoke-PlaybackTraceGate {
         }
     }
     $validation = Test-PlaybackTraceFile -TracePath $tracePath -ResultPrefix $resultPrefix
+    $invariants = Test-PlaybackTraceInvariants -TracePath $tracePath -ResultPrefix $resultPrefix
 
     return [pscustomobject]@{
         ExitCode = $processExitCode
         Message = (
             "$resultPrefix`_TRACE_OK path=$tracePath lines=$($validation.LineCount) " +
-            "events=$($validation.EventCount)"
+            "events=$($validation.EventCount) " +
+            "command_terminal_mismatch=$($invariants.CommandTerminalMismatchCount) " +
+            "ack_before_commit_violations=$($invariants.AckBeforeCommitViolations) " +
+            "stale_commit=$($invariants.StaleCommitCount) " +
+            "partial_frame_set=$($invariants.PartialFrameSetCount)"
         )
     }
 }
 
 Export-ModuleMember -Function Invoke-PlaybackTraceGate, Test-PlaybackTraceFile,
-ConvertTo-WindowsCommandLineArgument
+Test-PlaybackTraceInvariants, ConvertTo-WindowsCommandLineArgument

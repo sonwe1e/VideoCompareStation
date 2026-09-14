@@ -156,10 +156,10 @@ This is a machine property, not a project defect: the CI runner path is short.
 
 The following work remains open or requires the intended Windows/D3D11VA runner:
 
-- Implement an analyzer for accepted-command terminal uniqueness, presentation acknowledgment
-  before snapshot commit, and stale-identity rejection. Define authoritative incoming-versus-live
-  identity data for stale arrivals, and fail closed on any overflow marker. The current scripts
-  perform structural validation only.
+- Extend stale-result analysis beyond identity regressions: define authoritative
+  incoming-versus-live identity data for stale arrivals. Overflow markers already fail closed, and
+  the Phase 0 analyzer checks command exactly-once, ACK-before-commit, and identity-regression
+  stale commits.
 - Decide separately whether crash-resilient or continuously streamed traces are required. The
   current shutdown-drained diagnostic was not designed to provide either property.
 - Measure tracing enabled versus disabled under contention. Loss is observable through overflow

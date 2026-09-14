@@ -2,14 +2,17 @@
 
 The playback trace is a versioned diagnostic JSON Lines file. Multiple playback producers submit
 events to one bounded in-process buffer; the runtime exports the buffer to one sink during
-orderly shutdown. The schema records identity fields intended for later invariant analysis, but
-the current emission contract is not by itself proof of the three asynchronous invariants and no
-such analyzer is implemented yet.
+orderly shutdown. The schema records identity fields for invariant analysis, and the Phase 0
+analyzer checks the invariants that the current emission contract can prove. The emission
+contract alone is still not a complete proof of every asynchronous identity rejection.
 
-The navigation and comparison-semantics gate scripts currently validate only that the child
-process succeeds and produces a structurally valid, fully parseable trace with a header, at least
-one event, and no overflow marker. They do not prove exactly-once terminal delivery,
-acknowledgment-before-commit ordering, or stale-result rejection.
+The navigation and comparison-semantics gate scripts validate that the child process succeeds,
+produces a structurally valid, fully parseable schema-v1 trace with a header, at least one event,
+and no overflow marker, and then run the Phase 0 semantic analyzer (`Test-PlaybackTraceInvariants`).
+The analyzer checks command exactly-once terminal delivery, acknowledgment-before-commit for
+displayed frames, and identity-regression stale commits. It still cannot prove every asynchronous
+stale-result rejection described below, because coordinator arrival events carry only the live
+identity.
 
 ## Enabling and file lifecycle
 
@@ -132,24 +135,27 @@ The implementation is a 16,384-event fixed-capacity MPSC queue guarded by a mute
 This design bounds producer delay and storage, but it is not lock-free and it does not guarantee
 a lossless trace. An overflow marker is the explicit loss signal.
 
-## Intended analyzer contract and current gaps
+## Analyzer contract and remaining gaps
 
-A future analyzer is intended to use the full identity tuple
-`(s, e, topo, tl, al, gen, dev, req, cmd)` and event payloads to check:
+`Test-PlaybackTraceInvariants` in `tools/testing/PlaybackTraceGate.psm1` uses the identity tuple
+`(s, e, topo, tl, al, gen, dev)` plus `cmd` and event payloads to check:
 
-1. every accepted command reaches exactly one terminal outcome;
-2. a matching `PresentationAcknowledged` precedes `SnapshotCommitted` for the same canonical
-   frame and identity; and
-3. results from superseded session, revision, provider, request, or device identities are not
-   published or committed.
+1. every `CommandAccepted` with a non-null `cmd` reaches exactly one `CommandTerminal` for the
+   same `(s, e, cmd)`; orphans, duplicates, and accepts without a command id fail closed;
+2. every `SnapshotCommitted` with a displayed-frame payload has a prior `PresentationAcknowledged`
+   with the same payload and the same identity excluding `req`/`cmd`; `UINT64_MAX` means no
+   displayed frame and skips the ACK requirement; republishing a still-acked frame is allowed; and
+3. a `SnapshotCommitted` whose `gen`/`topo`/`tl`/`dev` is lower than a higher value already
+   observed for the same `(s, e)` is treated as a stale commit.
 
-Those rules still need an executable analyzer with explicit handling for claimed-but-rejected
-commands, cancellation, non-frame snapshot publications, revision changes, and trace overflow.
-In addition, coordinator arrival events currently use the coordinator's current trace identity,
-not a separately exported copy of the incoming asynchronous event context. Authoritative stale-
-result analysis therefore needs an emission contract that records both the incoming identity and
-the live identity (or equivalent replayable revision transitions). The current fields and gate do
-not establish that proof.
+Overflow markers remain fail-closed. `PartialFrameSetCount` is reported as `0` because the
+single-line event stream cannot reconstruct multi-source FrameSet shape; structural FrameSet
+atomicity is enforced by the C++ factory, not this analyzer.
+
+Coordinator arrival events still use the coordinator's current trace identity, not a separately
+exported copy of the incoming asynchronous event context. Authoritative stale-result analysis for
+provider/request mismatches therefore still needs an emission contract that records both the
+incoming identity and the live identity (or equivalent replayable revision transitions).
 
 ## Current validation coverage
 
@@ -159,9 +165,10 @@ not establish that proof.
 - `TraceSinkTests` exercises the file header, every identity field including `dev`, normal events,
   overflow JSON, Unicode paths, and bounded memory-sink behavior.
 - `PlaybackTraceGate.psm1` parses every nonblank trace line, validates the schema-v1 numeric types
-  and ranges, rejects malformed records and any overflow marker, and propagates the child process
-  result. `PlaybackTraceGateTests.ps1` locks down the structural boundary and uint64 edge cases. The
-  gate deliberately does not implement the intended semantic analyzer contract.
+  and ranges, rejects malformed records and any overflow marker, runs the Phase 0 invariant
+  analyzer, and propagates the child process result. `PlaybackTraceGateTests.ps1` locks down the
+  structural boundary, uint64 edge cases, and the analyzer's happy path plus
+  terminal/ACK/stale failure modes.
 
 For the wider performance and hardware-validation boundary, see
 [Maintenance and Performance Notes](maintenance-and-performance.md).
