@@ -30,13 +30,13 @@ Popup {
         spacing: 12
 
         Label {
-            text: qsTr("Keyboard shortcuts")
+            text: qsTr("键盘快捷键")
             color: Theme.primaryText
             font.pixelSize: 20
             font.weight: Font.DemiBold
         }
         Label {
-            text: control.playerPreset ? qsTr("Player shortcuts") : qsTr("Frame review shortcuts")
+            text: control.playerPreset ? qsTr("播放器快捷键") : qsTr("逐帧检查快捷键")
             color: "#9fc3ff"
             font.pixelSize: 12
         }
@@ -47,7 +47,7 @@ Popup {
             rowSpacing: 7
 
             Repeater {
-                model: control.playerPreset ? [[qsTr("Left / Right"), qsTr("Seek 5 seconds")], [qsTr("Ctrl+Left / Right"), qsTr("Seek 30 seconds")], [qsTr(", / ."), qsTr("Previous / next frame")], [qsTr("Space"), qsTr("Play / pause")], [qsTr("I / O"), qsTr("Set In / Out")], [qsTr("\\"), qsTr("Play selected range")], [qsTr("F11 or double-click"), qsTr("Full screen")], [qsTr("Right click"), qsTr("Viewer commands")], [qsTr("Tab"), qsTr("Hide interface")], [qsTr("?"), qsTr("This help")]] : [[qsTr("Left / Right"), qsTr("Previous / next frame")], [qsTr("Shift+Left / Right"), qsTr("Step 5 frames")], [qsTr("Ctrl+Left / Right"), qsTr("Step 1 second")], [qsTr("A / D"), qsTr("Previous / next frame")], [qsTr("Space"), qsTr("Play / pause")], [qsTr("I / O"), qsTr("Set In / Out")], [qsTr("\\"), qsTr("Play selected range")], [qsTr("F11 or double-click"), qsTr("Full screen")], [qsTr("Right click"), qsTr("Viewer commands")], [qsTr("Tab"), qsTr("Hide interface")], [qsTr("?"), qsTr("This help")]]
+                model: control.playerPreset ? [[qsTr("← / →"), qsTr("快退 / 快进 5 秒")], [qsTr("Ctrl+← / →"), qsTr("快退 / 快进 30 秒")], [qsTr(", / ."), qsTr("上一帧 / 下一帧")], [qsTr("空格"), qsTr("播放 / 暂停")], [qsTr("I / O"), qsTr("设置入点 / 出点")], [qsTr("\\"), qsTr("播放选中区间")], [qsTr("F11 或双击"), qsTr("全屏")], [qsTr("右键"), qsTr("查看器命令")], [qsTr("Tab"), qsTr("隐藏界面")], [qsTr("?"), qsTr("本帮助")]] : [[qsTr("← / →"), qsTr("上一帧 / 下一帧")], [qsTr("Shift+← / →"), qsTr("前进 / 后退 5 帧")], [qsTr("Ctrl+← / →"), qsTr("前进 / 后退 1 秒")], [qsTr("A / D"), qsTr("上一帧 / 下一帧")], [qsTr("空格"), qsTr("播放 / 暂停")], [qsTr("I / O"), qsTr("设置入点 / 出点")], [qsTr("\\"), qsTr("播放选中区间")], [qsTr("F11 或双击"), qsTr("全屏")], [qsTr("右键"), qsTr("查看器命令")], [qsTr("Tab"), qsTr("隐藏界面")], [qsTr("?"), qsTr("本帮助")]]
 
                 delegate: RowLayout {
                     required property var modelData

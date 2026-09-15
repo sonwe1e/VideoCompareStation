@@ -13,6 +13,7 @@ add_library(
         src/SoftwareDecoder.cpp
         src/SignatureCache.cpp
         src/SignatureDecodeSession.cpp
+        src/StillImageDecoder.cpp
 )
 add_library(dvs::media_ffmpeg ALIAS dvs_media_ffmpeg)
 

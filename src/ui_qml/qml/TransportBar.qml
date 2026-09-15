@@ -52,7 +52,7 @@ Item {
 
             objectName: "firstButton"
             iconSource: "qrc:/icons/first.svg"
-            helpText: qsTr("First frame\nShortcut: Home")
+            helpText: qsTr("第一帧\n快捷键：Home")
             enabled: control.canFirst
             onClicked: {
                 control.firstRequested();
@@ -62,7 +62,7 @@ Item {
         TransportButton {
             objectName: "previousSecondButton"
             iconSource: "qrc:/icons/previous-second.svg"
-            helpText: qsTr("Back 1 second\nShortcut: Ctrl+Left / Ctrl+A")
+            helpText: qsTr("后退 1 秒\n快捷键：Ctrl+← / Ctrl+A")
             enabled: control.canPrevious
             onClicked: {
                 control.previousSecondRequested();
@@ -72,7 +72,7 @@ Item {
         TransportButton {
             objectName: "previousFiveButton"
             iconSource: "qrc:/icons/previous-five.svg"
-            helpText: qsTr("Back 5 frames\nShortcut: Shift+Left / Shift+A")
+            helpText: qsTr("后退 5 帧\n快捷键：Shift+← / Shift+A")
             enabled: control.canPrevious
             onClicked: {
                 control.previousFiveRequested();
@@ -84,7 +84,7 @@ Item {
 
             objectName: "previousButton"
             iconSource: "qrc:/icons/previous.svg"
-            helpText: qsTr("Previous frame\nShortcut: Left / A")
+            helpText: qsTr("上一帧\n快捷键：← / A")
             enabled: control.canPrevious
             onClicked: {
                 control.previousRequested();
@@ -97,7 +97,7 @@ Item {
             objectName: "playbackButton"
             implicitWidth: control.compact ? 42 : 54
             iconSource: control.playing ? "qrc:/icons/pause.svg" : "qrc:/icons/play.svg"
-            helpText: control.playing ? qsTr("Pause\nShortcut: Space") : qsTr("Play\nShortcut: Space")
+            helpText: control.playing ? qsTr("暂停\n快捷键：空格") : qsTr("播放\n快捷键：空格")
             enabled: control.playing ? control.canPause : control.canPlay
             onClicked: {
                 control.playbackRequested();
@@ -109,7 +109,7 @@ Item {
 
             objectName: "nextButton"
             iconSource: "qrc:/icons/next.svg"
-            helpText: qsTr("Next frame\nShortcut: Right / D")
+            helpText: qsTr("下一帧\n快捷键：→ / D")
             enabled: control.canNext
             onClicked: {
                 control.nextRequested();
@@ -119,7 +119,7 @@ Item {
         TransportButton {
             objectName: "nextFiveButton"
             iconSource: "qrc:/icons/next-five.svg"
-            helpText: qsTr("Forward 5 frames\nShortcut: Shift+Right / Shift+D")
+            helpText: qsTr("前进 5 帧\n快捷键：Shift+→ / Shift+D")
             enabled: control.canNext
             onClicked: {
                 control.nextFiveRequested();
@@ -129,7 +129,7 @@ Item {
         TransportButton {
             objectName: "nextSecondButton"
             iconSource: "qrc:/icons/next-second.svg"
-            helpText: qsTr("Forward 1 second\nShortcut: Ctrl+Right / Ctrl+D")
+            helpText: qsTr("前进 1 秒\n快捷键：Ctrl+→ / Ctrl+D")
             enabled: control.canNext
             onClicked: {
                 control.nextSecondRequested();
@@ -141,7 +141,7 @@ Item {
 
             objectName: "lastButton"
             iconSource: "qrc:/icons/last.svg"
-            helpText: qsTr("Last frame\nShortcut: End")
+            helpText: qsTr("最后一帧\n快捷键：End")
             enabled: control.canLast
             onClicked: {
                 control.lastRequested();

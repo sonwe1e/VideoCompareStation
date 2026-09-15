@@ -16,6 +16,10 @@
 *.VC.db
 *.VC.opendb
 
+# Stray compiler/linker artifacts from ad-hoc probes at the repository root
+/*.obj
+/*.pdb
+
 # Generated CMake files if a developer configures in the source tree by mistake
 /CMakeCache.txt
 /CMakeFiles/

@@ -3,11 +3,14 @@
 #include "dvs/domain/ComparisonValidator.h"
 #include "dvs/ui/ComparisonSurface.h"
 #include "dvs/ui/GraphicsBackend.h"
+#include "dvs/ui/ImageReviewController.h"
 #include "dvs/ui/ReviewController.h"
+#include "dvs/ui/ReviewImageProvider.h"
 #include "dvs/ui/ReviewPreferencesController.h"
 #include "dvs/ui/ReviewSessionFacade.h"
 #include "dvs/ui/ReviewShellController.h"
 
+#include <QColor>
 #include <QCoreApplication>
 #include <QDir>
 #include <QElapsedTimer>
@@ -313,9 +316,9 @@ TEST(MainQmlContractTests, InstantiatesRootAndSeparatesManualAlignmentStates) {
     ASSERT_NE(anchorButton, nullptr);
     ASSERT_NE(offsetRepeater, nullptr);
     EXPECT_EQ(offsetRepeater->property("count").toInt(), 2);
-    EXPECT_EQ(alignmentModeStatus->property("text").toString(), QStringLiteral("Manual alignment"));
-    EXPECT_EQ(offsetStatus->property("text").toString(), QStringLiteral("Frame alignment offset"));
-    EXPECT_EQ(anchorButton->property("text").toString(), QStringLiteral("Manual anchors active…"));
+    EXPECT_EQ(alignmentModeStatus->property("text").toString(), QStringLiteral("手动对齐"));
+    EXPECT_EQ(offsetStatus->property("text").toString(), QStringLiteral("帧对齐偏移"));
+    EXPECT_EQ(anchorButton->property("text").toString(), QStringLiteral("已设手动锚点…"));
 
     auto* const window = qobject_cast<QQuickWindow*>(root.get());
     ASSERT_NE(window, nullptr);
@@ -1836,6 +1839,85 @@ TEST(MainQmlContractTests, DISABLED_TimelineAccessibleValueMatchesPreviewOrCurre
     // Accessible.value must reflect the current/preview frame (here 5).
     EXPECT_EQ(timeline->property("Accessible.value").toInt(), controller.currentFrame())
         << "Timeline Accessible.value must match the current frame.";
+}
+
+TEST(MainQmlContractTests, ImageWorkspaceReloadsViewportSourceAfterImageOpen) {
+    // Regression: ImageWorkspace binds viewport.imageUrl to imageReview.imageUrl(slot),
+    // a Q_INVOKABLE whose result depends on the controller's content generation. The
+    // binding must also read a notified property (contentGeneration), otherwise it is
+    // evaluated once at startup and the Image element keeps a stale, generation-0 URL —
+    // its first provider request returned null (image not loaded yet) and it never
+    // reloads, leaving the viewport permanently black after opening an image.
+    auto snapshot = std::make_shared<application::SessionSnapshot>();
+    snapshot->graphicsReady = true;
+    snapshot->sessionState = domain::SessionState::kEmpty;
+    std::vector<application::PlaybackCommand> submitted;
+    std::vector<application::CommandTerminal> terminals;
+    ReviewController controller{
+        ReviewController::Dependencies{
+            .submit =
+                [&submitted](application::PlaybackCommand command) {
+                    submitted.push_back(std::move(command));
+                    return application::PortSubmitResult::Accepted;
+                },
+            .snapshot = [snapshot] { return snapshot; },
+            .takeCompletedCommands =
+                [&terminals] {
+                    std::vector<application::CommandTerminal> result = std::move(terminals);
+                    terminals.clear();
+                    return result;
+                },
+        },
+    };
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    ReviewShellController shell{controller, preferences};
+    ReviewSessionFacade facade{controller, preferences, shell};
+    ImageReviewController imageReview;
+
+    QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
+    engine.rootContext()->setContextProperty(QStringLiteral("imageReview"), &imageReview);
+    engine.addImageProvider(QStringLiteral("vcs-review"), new ReviewImageProvider(&imageReview));
+    QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
+    ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
+
+    std::unique_ptr<QObject> root{component.create()};
+    ASSERT_NE(root, nullptr) << componentErrors(component);
+    auto* const window = qobject_cast<QQuickWindow*>(root.get());
+    ASSERT_NE(window, nullptr);
+    window->resize(960, 640);
+    QCoreApplication::processEvents();
+
+    auto* const viewport = root->findChild<QQuickItem*>(QStringLiteral("primaryViewport"));
+    auto* const imageItem = root->findChild<QQuickItem*>(QStringLiteral("imageViewport-2"));
+    ASSERT_NE(viewport, nullptr);
+    ASSERT_NE(imageItem, nullptr);
+
+    // Before any image is loaded the binding holds the generation-0 URL and the Image
+    // element received a null pixmap from the provider.
+    EXPECT_EQ(viewport->property("imageUrl").toString(), QStringLiteral("image://vcs-review/2/0"));
+    EXPECT_EQ(imageItem->property("source").toString(), QStringLiteral("image://vcs-review/2/0"));
+
+    QImage image(64, 48, QImage::Format_ARGB32);
+    image.fill(QColor(200, 30, 30));
+    ASSERT_TRUE(imageReview.openPrimaryImage(std::move(image), QStringLiteral("left")));
+    for (int iteration = 0; iteration < 5; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+
+    // The binding must re-evaluate (generation 0 -> 1) so the Image element reloads the
+    // provider and actually paints the decoded pixels instead of staying black.
+    EXPECT_EQ(viewport->property("imageUrl").toString(), QStringLiteral("image://vcs-review/2/1"));
+    EXPECT_EQ(imageItem->property("source").toString(), QStringLiteral("image://vcs-review/2/1"));
+    // 1 == QQuickImage::Ready.
+    EXPECT_EQ(imageItem->property("status").toInt(), 1)
+        << "Image element must reach Ready after the source URL refreshes.";
+    EXPECT_EQ(imageItem->property("sourceSize").toSize(), QSize(64, 48));
 }
 
 } // namespace

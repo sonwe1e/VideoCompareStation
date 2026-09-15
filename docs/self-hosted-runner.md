@@ -11,7 +11,7 @@ Debug/Release、format/lint 使用 `dvs-toolchain-4.4` 标签，D3D11VA 与五�
 - Windows x64、NVIDIA GeForce RTX 4090，驱动 `32.0.16.1074`；
 - Visual Studio 2022 Build Tools 与 MSVC v143；
 - CMake 4.4.0、Ninja 1.13.2、Git 2.47.1；
-- vcpkg 位于 `I:\WorkStations\vcpkg`；
+- vcpkg 位于 `G:\Workspaces\vcpkg`（安装树：`G:\Workspaces\Toy\out\vcpkg`）；
 - 本地打包另有免管理员安装的 .NET SDK 8.0.423、WiX 4.0.4 与
   `WixToolset.UI.wixext` 4.0.4。
 
@@ -69,7 +69,7 @@ Set-Location $runnerRoot
 `ilammy/msvc-dev-cmd` 用 Visual Studio 内置 vcpkg 覆盖 `VCPKG_ROOT`：
 
 ```text
-DVS_VCPKG_ROOT=I:\WorkStations\vcpkg
+DVS_VCPKG_ROOT=G:\Workspaces\vcpkg
 DVS_PERFORMANCE_FIXTURE_ROOT=G:\GitHubActions\Toy-data\performance
 ```
 

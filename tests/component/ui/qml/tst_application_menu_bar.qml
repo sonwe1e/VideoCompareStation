@@ -125,6 +125,8 @@ Item {
             compareMenu.popup(root, 24, 24);
             tryCompare(compareMenu, "opened", true);
 
+            // Compare menu order: Side by side, Wipe, Difference, separator, Layout,
+            // Pair, Reference, separator, inspector row.
             const modeSeparator = compareMenu.itemAt(3);
             const layoutRow = compareMenu.itemAt(4);
             const pairRow = compareMenu.itemAt(5);
@@ -143,7 +145,7 @@ Item {
             compare(layoutRow.height, 0);
             compare(pairRow.visible, false);
             compare(pairRow.height, 0);
-            compare(referenceRow.text, "Reference");
+            compare(referenceRow.text, "参考源");
             compare(referenceRow.height, 35);
             compare(inspectorSeparator.height, 11);
             compare(inspectorRow.height, 35);

@@ -37,18 +37,10 @@ Rectangle {
             asynchronous: true
             cache: true
         }
-
-        Text {
-            text: qsTr("Preview caches during playback")
-            visible: control.thumbnailSource.toString().length === 0
-            color: "#6f8099"
-            font.pixelSize: 10
-            anchors.centerIn: parent
-        }
     }
 
     Text {
-        text: qsTr("%1  ·  Frame %2").arg(control.previewTimecode).arg(control.previewFrame + 1)
+        text: qsTr("%1  ·  第 %2 帧").arg(control.previewTimecode).arg(control.previewFrame + 1)
         color: Theme.primaryText
         font.pixelSize: 11
         anchors {

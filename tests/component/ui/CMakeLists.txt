@@ -29,6 +29,32 @@ dvs_add_gtest(
 )
 
 if(DVS_BUILD_ADAPTERS)
+add_executable(
+    dvs_image_review_controller_tests
+    ImageReviewControllerTests.cpp
+)
+target_link_libraries(
+    dvs_image_review_controller_tests
+    PRIVATE
+        dvs_ui_qml
+        dvs::qt_dependencies
+        dvs::test_dependencies
+)
+
+dvs_apply_project_warnings(dvs_image_review_controller_tests)
+set_target_properties(
+    dvs_image_review_controller_tests
+    PROPERTIES FOLDER "Tests/Component/UI"
+)
+
+dvs_add_gtest(
+    TARGET dvs_image_review_controller_tests
+    TEST_PREFIX "ui."
+    LAYER component
+    MODULE ui_qml
+    TIMEOUT 10
+)
+
 add_executable(dvs_main_qml_contract_tests MainQmlContractTests.cpp)
 target_link_libraries(
     dvs_main_qml_contract_tests

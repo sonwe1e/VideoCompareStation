@@ -309,6 +309,16 @@ struct LocalFileValidation final {
     };
 }
 
+[[nodiscard]] bool isStillImageFile(const QUrl& url) {
+    const QString suffix = QFileInfo{url.toLocalFile()}.suffix().toLower();
+    static const QStringList kImageSuffixes = {
+        QStringLiteral("png"),  QStringLiteral("jpg"),  QStringLiteral("jpeg"),
+        QStringLiteral("bmp"),  QStringLiteral("gif"),  QStringLiteral("webp"),
+        QStringLiteral("tif"),  QStringLiteral("tiff"),
+    };
+    return kImageSuffixes.contains(suffix);
+}
+
 [[nodiscard]] QVariantMap rejectedDrop(const QString& errorKey, const QString& detail = {}) {
     return QVariantMap{
         {QStringLiteral("accepted"), false},
@@ -2113,9 +2123,17 @@ QVariantMap ReviewController::handleDroppedUrls(const QVariantList& urls) const 
         normalizedUrls.push_back(QUrl::fromLocalFile(canonicalPath));
     }
 
+    bool allImages = true;
+    for (const QVariant& value : urls) {
+        if (!isStillImageFile(value.toUrl())) {
+            allImages = false;
+            break;
+        }
+    }
+
     return QVariantMap{
         {QStringLiteral("accepted"), true},
-        {QStringLiteral("kind"), QStringLiteral("videos")},
+        {QStringLiteral("kind"), allImages ? QStringLiteral("images") : QStringLiteral("videos")},
         {QStringLiteral("urls"), normalizedUrls},
     };
 }

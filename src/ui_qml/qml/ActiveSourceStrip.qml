@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
 import "VcsTheme.js" as Theme
 
 Rectangle {
@@ -71,8 +72,12 @@ Rectangle {
                 required property bool changedOnDisk
 
                 height: chips.height
-                width: Math.min(280, Math.max(128, chipText.implicitWidth + (control.singleMode ? 24 : 84)))
-                radius: 15
+                // Explicit label width: RowLayout.fillWidth children do not feed back into an
+                // implicit width, so sum the pieces here to size the chip from the real text.
+                readonly property real chipLabelPlainWidth: letterLabel.implicitWidth + separatorOne.implicitWidth + filenameLabel.implicitWidth + 10
+                readonly property real chipLabelCanonicalWidth: chipLabelPlainWidth + referenceTag.implicitWidth + separatorTwo.implicitWidth + 10
+                width: Math.min(280, Math.max(128, (chip.isCanonical ? chipLabelCanonicalWidth : chipLabelPlainWidth) + (control.singleMode ? 24 : 84)))
+                radius: 8
                 readonly property string resolvedSourceIdentity: chip.sourceIdentity.length > 0 ? chip.sourceIdentity : (chip.sourceId >= 0 && chip.sourceId < control.sourceIdentities.length ? String(control.sourceIdentities[chip.sourceId]) : "")
                 readonly property bool isCanonical: chip.resolvedSourceIdentity.length > 0 ? chip.resolvedSourceIdentity === control.canonicalSourceIdentity : chip.sourceId === control.canonicalSourceIndex
                 readonly property bool pending: control.pendingSourceIdentities.indexOf(chip.resolvedSourceIdentity) >= 0 || requestQueued
@@ -104,19 +109,70 @@ Rectangle {
                     });
                 }
 
-                Text {
-                    id: chipText
+                RowLayout {
+                    id: chipLabel
 
-                    text: qsTr("%1 · %2").arg(String.fromCharCode(65 + chip.sourceId)).arg(chip.filename)
-                    color: control.textColor
-                    font.pixelSize: 12
-                    elide: Text.ElideMiddle
+                    spacing: 5
                     anchors {
                         left: parent.left
                         leftMargin: 12
                         right: control.singleMode ? parent.right : chipControls.left
                         rightMargin: control.singleMode ? 12 : 6
                         verticalCenter: parent.verticalCenter
+                    }
+
+                    Text {
+                        id: letterLabel
+
+                        text: String.fromCharCode(65 + chip.sourceId)
+                        color: control.textColor
+                        font.pixelSize: 12
+                        font.weight: Font.DemiBold
+                    }
+                    Text {
+                        id: separatorOne
+
+                        text: "·"
+                        color: control.mutedTextColor
+                        font.pixelSize: 12
+                    }
+                    Text {
+                        id: referenceTag
+
+                        objectName: "sourceReferenceTag-" + chip.sourceId
+                        visible: chip.isCanonical
+                        text: qsTr("参考")
+                        color: control.accentColor
+                        font.pixelSize: 11
+                        font.weight: Font.DemiBold
+                        Accessible.name: qsTr("参考源")
+                        Accessible.description: qsTr("以它为帧号基准的参考源")
+
+                        HoverHandler {
+                            id: referenceTagHover
+                        }
+
+                        VcsToolTip {
+                            visible: referenceTagHover.hovered
+                            text: qsTr("参考源")
+                        }
+                    }
+                    Text {
+                        id: separatorTwo
+
+                        visible: chip.isCanonical
+                        text: "·"
+                        color: control.mutedTextColor
+                        font.pixelSize: 12
+                    }
+                    Text {
+                        id: filenameLabel
+
+                        text: chip.filename
+                        color: control.textColor
+                        font.pixelSize: 12
+                        elide: Text.ElideMiddle
+                        Layout.fillWidth: true
                     }
                 }
 
@@ -140,28 +196,6 @@ Rectangle {
                     }
 
                     Rectangle {
-                        id: referenceBadge
-
-                        objectName: "sourceReferenceBadge-" + chip.sourceId
-                        visible: chip.isCanonical
-                        width: 24
-                        height: 24
-                        radius: 6
-                        color: Theme.control
-                        border.width: 1
-                        border.color: Theme.controlBorder
-                        Accessible.name: qsTr("Canonical reference")
-
-                        Text {
-                            anchors.centerIn: parent
-                            text: "R"
-                            color: control.textColor
-                            font.pixelSize: 11
-                            font.weight: Font.DemiBold
-                        }
-                    }
-
-                    Rectangle {
                         id: changedOnDiskBadge
 
                         objectName: "changedOnDiskBadge-" + chip.sourceId
@@ -172,10 +206,10 @@ Rectangle {
                         color: "#3d2e10"
                         border.width: 1
                         border.color: "#b08630"
-                        Accessible.name: qsTr("Video changed on disk")
+                        Accessible.name: qsTr("视频文件已在磁盘上被修改")
                         VcsToolTip {
                             visible: changedOnDiskHover.hovered
-                            text: qsTr("Video changed on disk")
+                            text: qsTr("视频文件已在磁盘上被修改")
                         }
 
                         HoverHandler {
@@ -202,8 +236,8 @@ Rectangle {
                         height: 30
                         text: "⋯"
                         enabled: !chip.pending && chip.resolvedSourceIdentity.length > 0
-                        helpText: chip.pending ? qsTr("Updating video…") : qsTr("Source actions")
-                        Accessible.name: qsTr("Source actions for %1").arg(chip.filename)
+                        helpText: chip.pending ? qsTr("正在更新视频…") : qsTr("源操作")
+                        Accessible.name: qsTr("%1 的源操作").arg(chip.filename)
                         onClicked: sourceMenu.popup(overflowButton, Qt.point(0, overflowButton.height))
                     }
 
@@ -242,7 +276,7 @@ Rectangle {
 
                             objectName: "makeReferenceAction-" + chip.sourceId
                             visible: !chip.isCanonical
-                            text: qsTr("Make reference")
+                            text: qsTr("设为参考源")
                             enabled: !chip.pending
                             onTriggered: chip.requestReference()
                         }
@@ -251,7 +285,7 @@ Rectangle {
                             id: removeSourceItem
 
                             objectName: "removeSourceAction-" + chip.sourceId
-                            text: qsTr("Remove video")
+                            text: qsTr("移除视频")
                             enabled: control.sourceCount > 1
                             onTriggered: chip.requestRemoval()
                         }
@@ -269,9 +303,9 @@ Rectangle {
             height: chips.height
             text: "+"
             enabled: true
-            helpText: qsTr("Add a video")
+            helpText: qsTr("添加视频")
             onClicked: control.addRequested()
-            controlRadius: 15
+            controlRadius: 8
         }
     }
 }

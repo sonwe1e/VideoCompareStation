@@ -48,20 +48,20 @@ VcsMenu {
 
     VcsMenuItem {
         objectName: "contextOpenAction"
-        text: qsTr("Open videos…")
+        text: qsTr("打开视频…")
         visible: control.sourceCount === 0
         onTriggered: control.openRequested()
     }
 
     VcsMenu {
         objectName: "contextViewMenu"
-        title: qsTr("View")
+        title: qsTr("视图")
         enabled: control.sourceCount > 1
         visible: control.sourceCount > 1
 
         VcsRadioMenuItem {
             objectName: "contextSideAction"
-            text: qsTr("Side by side")
+            text: qsTr("并排")
             checked: control.currentViewMode === 0
             onTriggered: {
                 control.sideRequested();
@@ -70,7 +70,7 @@ VcsMenu {
         }
         VcsRadioMenuItem {
             objectName: "contextWipeAction"
-            text: qsTr("Wipe")
+            text: qsTr("擦除")
             checked: control.currentViewMode === 5
             onTriggered: {
                 control.wipeRequested();
@@ -79,7 +79,7 @@ VcsMenu {
         }
         VcsRadioMenuItem {
             objectName: "contextDifferenceAction"
-            text: qsTr("Difference")
+            text: qsTr("差异")
             checked: control.currentViewMode === 3
             onTriggered: {
                 control.diffRequested();
@@ -92,7 +92,7 @@ VcsMenu {
     }
     VcsMenu {
         objectName: "contextPairMenu"
-        title: qsTr("Pair")
+        title: qsTr("对比对")
         enabled: control.sourceCount === 3
         visible: control.sourceCount === 3
 
@@ -113,12 +113,12 @@ VcsMenu {
     }
     VcsMenu {
         objectName: "contextReferenceMenu"
-        title: qsTr("Reference")
+        title: qsTr("参考源")
         enabled: control.sourceCount > 1
         visible: control.sourceCount > 1
 
         VcsRadioMenuItem {
-            text: qsTr("Source A")
+            text: qsTr("源 A")
             checked: control.canonicalSourceIndex === 0
             onTriggered: {
                 control.changeReferenceByIndex(0);
@@ -126,7 +126,7 @@ VcsMenu {
             }
         }
         VcsRadioMenuItem {
-            text: qsTr("Source B")
+            text: qsTr("源 B")
             visible: control.sourceCount > 1
             checked: control.canonicalSourceIndex === 1
             onTriggered: {
@@ -135,7 +135,7 @@ VcsMenu {
             }
         }
         VcsRadioMenuItem {
-            text: qsTr("Source C")
+            text: qsTr("源 C")
             visible: control.sourceCount > 2
             checked: control.canonicalSourceIndex === 2
             onTriggered: {
@@ -149,7 +149,7 @@ VcsMenu {
     }
     VcsMenuItem {
         objectName: "contextInfoAction"
-        text: qsTr("Inspector and media info")
+        text: qsTr("检查器与媒体信息")
         visible: control.sourceCount > 0
         onTriggered: {
             control.inspectorRequested();
@@ -157,7 +157,7 @@ VcsMenu {
         }
     }
     VcsMenuItem {
-        text: control.fullScreen ? qsTr("Exit full screen") : qsTr("Full screen")
+        text: control.fullScreen ? qsTr("退出全屏") : qsTr("全屏")
         onTriggered: {
             control.fullScreenRequested();
             control.returnViewerFocusAfterClose = true;

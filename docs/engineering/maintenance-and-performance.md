@@ -129,22 +129,18 @@ schema.
 
 ## Local build environment notes (this workstation)
 
-The checkout lives at `I:\WorkStations\Toy` on an exFAT external drive whose object paths for a
-vcpkg qtdeclarative rebuild exceed 260 characters; `cl.exe` then fails with
-`fatal error C1083: cannot open compiler-generated file: ""` (the object path is 261 chars).
-This is a machine property, not a project defect: the CI runner path is short.
+The checkout lives at `G:\Workspaces\Toy`. The vcpkg toolchain root is the slim clone at
+`G:\Workspaces\vcpkg` (`scripts/`, `ports/`, `triplets/`, `vcpkg.exe`). The Qt 6.11.1 / FFmpeg /
+GTest installed tree is `G:\Workspaces\Toy\out\vcpkg\x64-windows`.
 
-- The Qt 6.11.1 installed tree (including the completed qtdeclarative package) lives at
-  `out\vcpkg\x64-windows`; `out\vcpkg\vcpkg\status` records it as installed. Do not run a plain
-  `cmake --preset dev` here: its default manifest install re-validates packages with whatever
-  `VCPKG_ROOT` is active, and a different vcpkg version can remove the installed qtdeclarative
-  before a doomed rebuild. Configure with the standalone clone used for the dependency builds:
-  `VCPKG_ROOT=I:\WorkStations\vcpkg`, `-DVCPKG_MANIFEST_INSTALL=OFF`.
-- If qtdeclarative is ever missing again, the completed staged package from the last full build is
-  at `I:\WorkStations\vcpkg\packages\qtdeclarative_x64-windows`; copying its contents into
-  `out\vcpkg\x64-windows` restores the install (Qt 6 CMake configs are relocatable). Rebuilding it
-  requires a short `VCPKG_INSTALLED_DIR` (for example `I:\WorkStations\Toy\vd`) so object paths
-  stay under 260 characters.
+- Configure with `VCPKG_ROOT=G:\Workspaces\vcpkg`, `-DVCPKG_MANIFEST_INSTALL=OFF`, and
+  `VCPKG_INSTALLED_DIR=G:/Workspaces/Toy/out/vcpkg`. A plain `cmake --preset dev` re-validates
+  packages and can remove the installed qtdeclarative before a doomed rebuild.
+- `C:\src\vcpkg` (the previous full clone with buildtrees) was deleted after the G-drive
+  installed tree was verified; the old `I:\WorkStations\vcpkg` external drive is offline.
+- If qtdeclarative is ever missing again, restore from a staged package copy into
+  `out\vcpkg\x64-windows` (Qt 6 CMake configs are relocatable). Rebuilding it requires a short
+  `VCPKG_INSTALLED_DIR` so object paths stay under 260 characters.
 - The machine PATH contains `C:\msys64\ucrt64\bin` (GNU toolchain); cmake must never see it, or it
   picks `g++` and the project's MSVC check fails. Do the PATH surgery in PowerShell before calling
   `cmd /c`: cmd's `set PATH=...;%PATH%` line exceeds its 8191-character limit with the full user

@@ -42,14 +42,20 @@ if(DVS_BUILD_ADAPTERS)
             include/dvs/ui/DesktopApplication.h
             include/dvs/ui/DirectCompare.h
             include/dvs/ui/GraphicsBackend.h
+            include/dvs/ui/ImageReviewController.h
             include/dvs/ui/Module.h
             include/dvs/ui/RenderAckRelay.h
+            include/dvs/ui/ReviewImageProvider.h
+            include/dvs/ui/StillImageDecoder.h
             src/DesktopApplication.cpp
             src/DirectCompare.cpp
             src/ComparisonSurface.cpp
             src/GraphicsBackend.cpp
+            src/ImageReviewController.cpp
             src/Module.cpp
             src/RenderAckRelay.cpp
+            src/ReviewImageProvider.cpp
+            src/StillImageDecoder.cpp
     )
     add_library(dvs::ui_d3d11_bridge ALIAS dvs_ui_d3d11_bridge)
 
@@ -58,6 +64,8 @@ if(DVS_BUILD_ADAPTERS)
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
             $<INSTALL_INTERFACE:include>
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}
     )
     target_link_libraries(
         dvs_ui_d3d11_bridge

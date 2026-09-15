@@ -87,13 +87,14 @@ Item {
         }
 
         function test_reference_is_a_badge_and_all_sources_have_action_menus() {
-            const badge = findChild(strip, "sourceReferenceBadge-0");
+            const tag = findChild(strip, "sourceReferenceTag-0");
             const firstOverflow = findChild(strip, "sourceOverflowButton-0");
             const secondOverflow = findChild(strip, "sourceOverflowButton-1");
-            verify(badge !== null);
+            verify(tag !== null);
             verify(firstOverflow !== null);
             verify(secondOverflow !== null);
-            verify(badge.visible);
+            verify(tag.visible);
+            compare(tag.text, "参考");
 
             mouseClick(secondOverflow, secondOverflow.width / 2, secondOverflow.height / 2);
             const menu = secondOverflow.sourceMenuControl;

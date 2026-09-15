@@ -8,6 +8,7 @@ Item {
 
     required property var stagedVideos
     required property var fileNameFunction
+    property var pathNameFunction: null
     required property int initialReferenceIndex
     readonly property bool comparisonVisible: comparisonDialog.visible
     readonly property bool modalVisible: comparisonDialog.visible || videoFilesDialog.visible || addVideoDialog.visible
@@ -34,9 +35,9 @@ Item {
         id: videoFilesDialog
 
         objectName: "videoFilesDialog"
-        title: qsTr("Open one to three videos")
+        title: qsTr("打开 1–3 个视频")
         fileMode: NativeDialogs.FileDialog.OpenFiles
-        nameFilters: [qsTr("Video files (*.mp4 *.mkv *.mov *.avi *.m4v)"), qsTr("All files (*)")]
+        nameFilters: [qsTr("视频文件 (*.mp4 *.mkv *.mov *.avi *.m4v)"), qsTr("所有文件 (*)")]
         onAccepted: control.openVideosAccepted(selectedFiles)
     }
 
@@ -44,9 +45,9 @@ Item {
         id: addVideoDialog
 
         objectName: "addSourceFileDialog"
-        title: qsTr("Add video")
+        title: qsTr("添加视频")
         fileMode: NativeDialogs.FileDialog.OpenFile
-        nameFilters: [qsTr("Video files (*.mp4 *.mkv *.mov *.avi *.m4v)"), qsTr("All files (*)")]
+        nameFilters: [qsTr("视频文件 (*.mp4 *.mkv *.mov *.avi *.m4v)"), qsTr("所有文件 (*)")]
         onAccepted: control.addVideoAccepted(selectedFile)
     }
 
@@ -55,6 +56,7 @@ Item {
 
         pendingVideos: control.stagedVideos
         fileNameFunction: control.fileNameFunction
+        pathNameFunction: control.pathNameFunction
         initialReferenceIndex: control.initialReferenceIndex
         onMoveRequested: (fromIndex, toIndex) => control.moveRequested(fromIndex, toIndex)
         onAccepted: control.comparisonAccepted(referenceIndex)

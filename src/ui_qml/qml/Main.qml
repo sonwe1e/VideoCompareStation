@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs as NativeDialogs
 import QtQuick.Window
 import "VcsTheme.js" as Theme
 // Dvs.Ui is registered by the C++ host before this document is loaded.
@@ -18,7 +19,7 @@ ApplicationWindow {
     minimumWidth: 960
     minimumHeight: 640
     visible: false
-    title: qsTr("VCStation — VideoCompareStation")
+    title: qsTr("VCStation — 视频对比工作站")
     color: Theme.window
 
     readonly property color panelColor: Theme.menu
@@ -62,6 +63,13 @@ ApplicationWindow {
     readonly property bool chromeVisible: shell ? Boolean(shell.chromeVisible) : true
     readonly property bool drawerMode: alignmentBar.visible && root.width < 1120
     property int visibilityBeforeFullScreen: Window.Windowed
+    // 0 = video compare workspace, 1 = still-image workspace.
+    property int workspaceMode: 0
+    readonly property bool imageWorkspaceActive: workspaceMode === 1
+    // Captured from the C++ context property so nested scopes never resolve a same-named
+    // Item property (ImageWorkspace.imageReview) into a circular binding.
+    // qmllint disable unqualified
+    readonly property var stillImageController: imageReview
     property string immersiveHudText: ""
     property bool immersiveHudVisible: false
     property bool manualHudPending: false
@@ -136,9 +144,9 @@ ApplicationWindow {
     }
     readonly property bool autoAlignmentActive: Boolean(controller && controller.autoAlignmentActive)
     readonly property bool hasErrors: sourceAErrorKey.length > 0 || sourceBErrorKey.length > 0 || sourceCErrorKey.length > 0 || pairErrorKey.length > 0
-    readonly property string sourceAName: sourceCount > 0 ? controller.sourceAFilename : qsTr("No file selected")
-    readonly property string sourceBName: sourceCount > 1 ? controller.sourceBFilename : qsTr("No file selected")
-    readonly property string sourceCName: sourceCount > 2 ? controller.sourceCFilename : qsTr("Optional third source")
+    readonly property string sourceAName: sourceCount > 0 ? controller.sourceAFilename : qsTr("未选择文件")
+    readonly property string sourceBName: sourceCount > 1 ? controller.sourceBFilename : qsTr("未选择文件")
+    readonly property string sourceCName: sourceCount > 2 ? controller.sourceCFilename : qsTr("可选的第三个源")
     readonly property bool canFirstAction: graphicsReady && !busy && Boolean(controller && controller.canFirst)
     readonly property bool canPreviousAction: graphicsReady && !busy && Boolean(controller && controller.canPrevious)
     readonly property bool canNextAction: graphicsReady && !busy && Boolean(controller && controller.canNext)
@@ -150,45 +158,45 @@ ApplicationWindow {
     readonly property int effectiveViewMode: shell ? Number(shell.effectiveViewMode) : (singleMode ? ComparisonSurface.Single : ComparisonSurface.SideBySide)
     readonly property var availableViewModes: sourceCount <= 1 ? [
         {
-            "label": qsTr("Single"),
+            "label": qsTr("单画面"),
             "value": ComparisonSurface.Single
         }
     ] : sourceCount === 2 ? [
         {
-            "label": qsTr("Side by side"),
+            "label": qsTr("并排"),
             "value": ComparisonSurface.SideBySide
         },
         {
-            "label": qsTr("Wipe compare"),
+            "label": qsTr("擦除对比"),
             "value": ComparisonSurface.Wipe
         },
         {
-            "label": qsTr("Diff"),
+            "label": qsTr("差异"),
             "value": ComparisonSurface.Difference
         }
     ] : [
         {
-            "label": qsTr("Side by side"),
+            "label": qsTr("并排"),
             "value": ComparisonSurface.SideBySide
         },
         {
-            "label": qsTr("Three up"),
+            "label": qsTr("三联"),
             "value": ComparisonSurface.ThreeUp
         },
         {
-            "label": qsTr("Reference focus"),
+            "label": qsTr("参考聚焦"),
             "value": ComparisonSurface.ReferenceFocus
         },
         {
-            "label": qsTr("Diff"),
+            "label": qsTr("差异"),
             "value": ComparisonSurface.Difference
         },
         {
-            "label": qsTr("Analysis grid"),
+            "label": qsTr("分析网格"),
             "value": ComparisonSurface.AnalysisGrid
         },
         {
-            "label": qsTr("Wipe compare"),
+            "label": qsTr("擦除对比"),
             "value": ComparisonSurface.Wipe
         }
     ]
@@ -223,9 +231,9 @@ ApplicationWindow {
         if (sourceMissing(differenceSecondSlot))
             missing.push(sourceLabel(differenceSecondSlot));
         if (missing.length > 0)
-            return qsTr("Frame %1 cannot be compared because %2 is missing.").arg(Number(currentFrame) + 1).arg(missing.join(qsTr(" and ")));
+            return qsTr("无法对比第 %1 帧，因为 %2 缺失。").arg(Number(currentFrame) + 1).arg(missing.join(qsTr(" 和 ")));
         if (differenceMode && exactPlaneMode && selectedDifferenceExactness !== 0)
-            return qsTr("Exact Plane Diff requires equal dimensions, pixel format, bit depth, color metadata, and ExactIndex mapping.");
+            return qsTr("逐像素精确差异要求分辨率、像素格式、位深、色彩元数据一致，并使用 ExactIndex 映射。");
         return "";
     }
     property var sourceOffsetValues: ({})
@@ -239,7 +247,7 @@ ApplicationWindow {
     readonly property bool anyManualAlignmentActive: manualAnchorActive || manualOffsetActive
     property bool timelineDragging: false
     property int timelinePreviewFrame: -1
-    readonly property string frameText: timelineDragging && timelinePreviewFrame >= 0 ? qsTr("Frame %1 of %2 (release to seek)").arg(timelinePreviewFrame + 1).arg(totalFrames) : (currentFrame >= 0 && totalFrames > 0 ? qsTr("Frame %1 of %2").arg(currentFrame + 1).arg(totalFrames) : qsTr("No frame displayed"))
+    readonly property string frameText: timelineDragging && timelinePreviewFrame >= 0 ? qsTr("第 %1 / %2 帧（松开跳转）").arg(timelinePreviewFrame + 1).arg(totalFrames) : (currentFrame >= 0 && totalFrames > 0 ? qsTr("第 %1 / %2 帧").arg(currentFrame + 1).arg(totalFrames) : qsTr("当前无帧"))
     readonly property real frameProgress: currentFrame >= 0 && totalFrames > 1 ? Math.max(0, Math.min(1, Number(currentFrame) / (Number(totalFrames) - 1))) : 0
     readonly property real timelineProgress: timelineDragging && timelinePreviewFrame >= 0 && totalFrames > 1 ? Number(timelinePreviewFrame) / (Number(totalFrames) - 1) : frameProgress
     readonly property bool timelineEnabled: graphicsReady && !busy && Boolean(controller && controller.canFirst) && totalFrames > 0
@@ -248,11 +256,15 @@ ApplicationWindow {
     readonly property bool globalMediaShortcutsEnabled: inputContext === 0 && (!chromeVisible || !focusBlocksGlobalMediaShortcuts(root.activeFocusItem))
     readonly property bool presentationShortcutsEnabled: inputContext === 0
     readonly property bool frameErrorBannerVisible: hasErrors && currentFrame >= 0 && !busy && graphicsReady && Boolean(controller && controller.canFirst)
-    readonly property string overlayTitle: busy ? qsTr("Loading videos...") : (!graphicsReady ? qsTr("Graphics unavailable") : (hasErrors ? qsTr("Unable to open videos") : qsTr("Drop one to three videos here")))
-    readonly property string overlayDetail: busy ? qsTr("Please wait while the requested media is prepared.") : (!graphicsReady ? qsTr("Navigation and opening are disabled until the graphics device is ready.") : (hasErrors ? errorDetails() : qsTr("Open one video for playback and frame review, or two to three videos for comparison.")))
+    readonly property string overlayTitle: busy ? qsTr("正在加载…") : (!graphicsReady ? qsTr("图形设备不可用") : (hasErrors ? qsTr("无法打开文件") : qsTr("把视频或图片拖到这里")))
+    readonly property string overlayDetail: busy ? qsTr("请稍候，正在准备媒体。") : (!graphicsReady ? qsTr("图形设备就绪前，导航和打开操作不可用。") : (hasErrors ? errorDetails() : qsTr("打开一个视频可播放和逐帧检查，两三个视频可对比；图片也可直接拖入查看。")))
     readonly property bool overlayVisible: (busy && currentFrame < 0) || !graphicsReady || (hasErrors && !frameErrorBannerVisible)
     readonly property string currentTimecode: controller ? controller.timecodeForFrame(currentFrame, dropFrameTimecode) : "00:00:00:00"
-    readonly property string previewTimecode: controller ? controller.timecodeForFrame(Math.max(0, timelinePreviewFrame), dropFrameTimecode) : "00:00:00:00"
+    // The hover popup must only ever describe the frame its thumbnail actually shows. Thumbnails
+    // are captured at sample-interval frames, so display the nearest sample instead of the raw
+    // hover frame; when nothing is cached the popup stays hidden (see PlayerOsc).
+    readonly property int timelinePreviewSampleFrame: timelinePreviewFrame >= 0 && totalFrames > 0 ? thumbnailCache.nearestSample(timelinePreviewFrame) : -1
+    readonly property string previewTimecode: controller && timelinePreviewSampleFrame >= 0 ? controller.timecodeForFrame(timelinePreviewSampleFrame, dropFrameTimecode) : "00:00:00:00"
     readonly property bool roiEnabled: Boolean(viewportFrame && viewportFrame.roiEnabled)
 
     onFramePendingChanged: {
@@ -273,14 +285,14 @@ ApplicationWindow {
             shell.setRangeStartPending(false);
             Qt.callLater(() => {
                 if (rangePlaybackActive && controller && !controller.playing && !controller.play())
-                    stopRangeLoop(qsTr("Loop playback stopped because playback could not start."));
+                    stopRangeLoop(qsTr("无法启动播放，已停止循环播放。"));
             });
             return;
         }
         if (rangePlaybackActive && playing && outFrame >= inFrame && Number(currentFrame) >= outFrame) {
             shell.setRangeStartPending(true);
             if (!controller.seekFrame(inFrame))
-                stopRangeLoop(qsTr("Loop playback stopped because the In point could not be reached."));
+                stopRangeLoop(qsTr("无法到达入点，已停止循环播放。"));
         }
     }
 
@@ -301,17 +313,42 @@ ApplicationWindow {
     onPlayingChanged: {
         revealOsc();
         if (!chromeVisible && currentFrame >= 0)
-            showImmersiveHud(playing ? qsTr("Playing · %1").arg(frameText) : qsTr("Paused · %1").arg(frameText));
+            showImmersiveHud(playing ? qsTr("播放中 · %1").arg(frameText) : qsTr("已暂停 · %1").arg(frameText));
     }
 
     // Closing the window never prompts to save. Alignment, probe, and decode work are cancelled
     // by the host shutdown path; the review session needs no persistence guard.
     onClosing: {}
 
+    // Fade was removed from the video compare modes; fall back to Wipe for persisted preferences
+    // that still point at it, so the UI never lands on an unselectable mode.
+    Component.onCompleted: {
+        // qmllint disable unqualified
+        if (preferences && Number(preferences.viewMode) === ComparisonSurface.Fade)
+            preferences.viewMode = ComparisonSurface.Wipe;
+        // qmllint enable unqualified
+    }
+
     function fileName(fileUrl) {
         const decodedUrl = decodeURIComponent(fileUrl.toString());
         const separator = Math.max(decodedUrl.lastIndexOf("/"), decodedUrl.lastIndexOf("\\"));
         return decodedUrl.substring(separator + 1);
+    }
+
+    // Parent-directory label used when same-named files from different folders must stay distinct.
+    function sourcePathLabel(fileUrl) {
+        const decodedUrl = decodeURIComponent(String(fileUrl));
+        let path = decodedUrl;
+        if (path.startsWith("file:///"))
+            path = path.substring(8);
+        else if (path.startsWith("file://"))
+            path = path.substring(7);
+        const separator = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+        if (separator < 0)
+            return "";
+        const rest = path.substring(0, separator);
+        const parentSeparator = Math.max(rest.lastIndexOf("/"), rest.lastIndexOf("\\"));
+        return parentSeparator >= 0 ? rest.substring(parentSeparator + 1) : rest;
     }
 
     function setInPoint() {
@@ -320,7 +357,7 @@ ApplicationWindow {
             const frame = Number(currentFrame);
             const mediaTime = controller ? Number(controller.mediaTimeForFrame(frame)) : -1;
             if (shell.setRangeIn(frame, mediaTime))
-                showImmersiveHud(qsTr("In · Frame %1").arg(frame + 1));
+                showImmersiveHud(qsTr("入点 · 第 %1 帧").arg(frame + 1));
         }
     }
 
@@ -330,7 +367,7 @@ ApplicationWindow {
             const frame = Number(currentFrame);
             const mediaTime = controller ? Number(controller.mediaTimeForFrame(frame)) : -1;
             if (shell.setRangeOut(frame, mediaTime))
-                showImmersiveHud(qsTr("Out · Frame %1").arg(frame + 1));
+                showImmersiveHud(qsTr("出点 · 第 %1 帧").arg(frame + 1));
         }
     }
 
@@ -342,11 +379,11 @@ ApplicationWindow {
             return false;
         if (seekRequired) {
             if (!controller.seekFrame(inFrame)) {
-                stopRangeLoop(qsTr("Loop playback stopped because the In point could not be reached."));
+                stopRangeLoop(qsTr("无法到达入点，已停止循环播放。"));
                 return false;
             }
         } else if (!controller.play()) {
-            stopRangeLoop(qsTr("Loop playback stopped because playback could not start."));
+            stopRangeLoop(qsTr("无法启动播放，已停止循环播放。"));
             return false;
         }
         return true;
@@ -376,7 +413,7 @@ ApplicationWindow {
         if (!shell.setRangePlaybackState(nextActive, false))
             return false;
         if (!nextActive && controller && controller.playing && !controller.pause()) {
-            showIntentMessage(qsTr("Loop playback was disabled, but playback could not be paused."));
+            showIntentMessage(qsTr("循环播放已关闭，但无法暂停播放。"));
             return false;
         }
         return true;
@@ -391,7 +428,7 @@ ApplicationWindow {
         if (message.length > 0)
             showIntentMessage(message);
         else if (!paused)
-            showIntentMessage(qsTr("Loop playback was disabled, but playback could not be paused."));
+            showIntentMessage(qsTr("循环播放已关闭，但无法暂停播放。"));
         return paused;
     }
 
@@ -459,6 +496,10 @@ ApplicationWindow {
             performVideoReview(action.urls);
             return;
         }
+        if (action.kind === "openImages") {
+            performImageReview(action.urls);
+            return;
+        }
         if (action.kind === "closeReview") {
             shell.closeSources();
             return;
@@ -491,6 +532,7 @@ ApplicationWindow {
     }
 
     function performVideoReview(normalizedUrls) {
+        root.workspaceMode = 0;
         if (normalizedUrls.length === 1) {
             dropError = "";
             if (shell && shell.stageSources(normalizedUrls, 0))
@@ -499,11 +541,26 @@ ApplicationWindow {
         }
         dropError = "";
         if (!setDroppedVideoOrder(normalizedUrls)) {
-            showIntentMessage(qsTr("The videos could not be staged."));
+            showIntentMessage(qsTr("无法暂存这些视频。"));
             return;
         }
         pendingComparisonPreservesPosition = false;
         reviewInputDialogs.openComparison();
+    }
+
+    function performImageReview(normalizedUrls) {
+        root.workspaceMode = 1;
+        // Opening images replaces the current video review, mirroring how opening videos
+        // replaces an existing session. CloseSources runs as a background intent; the image
+        // workspace is what the user sees immediately.
+        if (root.sourceCount > 0 && shell)
+            shell.closeSources();
+        const target = root.stillImageController;
+        if (!target || normalizedUrls.length === 0)
+            return;
+        target.openPrimary(normalizedUrls[0]);
+        if (normalizedUrls.length >= 2 && normalizedUrls[1])
+            target.openSecondary(normalizedUrls[1]);
     }
 
     function reviewUrls(urls, allowSingleSourceAppend) {
@@ -513,18 +570,27 @@ ApplicationWindow {
             return;
         }
         const normalizedUrls = reviewed.urls;
+        if (reviewed.kind === "images") {
+            requestDestructiveAction({
+                "kind": "openImages",
+                "urls": normalizedUrls,
+                "external": false
+            });
+            return;
+        }
         if (normalizedUrls.length === 1) {
             const existing = activeSourceUrls();
             if (allowSingleSourceAppend && sourceCount > 0 && existing.length === sourceCount && existing.length < 3) {
                 const candidate = normalizedUrls[0].toString();
                 for (const current of existing) {
                     if (current.toString() === candidate) {
-                        dropError = qsTr("That video is already open.");
+                        dropError = qsTr("该视频已打开。");
                         return;
                     }
                 }
                 existing.push(normalizedUrls[0]);
                 dropError = "";
+                root.workspaceMode = 0;
                 setDroppedVideoOrder(existing);
                 pendingComparisonPreservesPosition = true;
                 reviewInputDialogs.openComparison();
@@ -567,14 +633,14 @@ ApplicationWindow {
     function removeSelectedSource(identity) {
         const ok = shell ? shell.removeActiveSourceByIdentity(identity) : false;
         if (!ok)
-            showIntentMessage(qsTr("The selected video is no longer available."));
+            showIntentMessage(qsTr("所选视频已不可用。"));
         return ok;
     }
 
     function changeReference(identity) {
         const ok = shell ? shell.changeReferenceByIdentity(identity) : false;
         if (!ok)
-            showIntentMessage(qsTr("The selected video is no longer available."));
+            showIntentMessage(qsTr("所选视频已不可用。"));
         return ok;
     }
 
@@ -625,7 +691,7 @@ ApplicationWindow {
     }
 
     function sourceLabel(slot) {
-        return qsTr("Source %1").arg(String.fromCharCode(65 + slot));
+        return qsTr("源 %1").arg(String.fromCharCode(65 + slot));
     }
 
     function sourceMissing(slot) {
@@ -736,13 +802,13 @@ ApplicationWindow {
     function errorDetails() {
         const errors = [];
         if (sourceAErrorKey.length > 0)
-            errors.push(qsTr("Source A: %1").arg(root.messageCatalog.errorMessage(sourceAErrorKey)));
+            errors.push(qsTr("源 A：%1").arg(root.messageCatalog.errorMessage(sourceAErrorKey)));
         if (sourceBErrorKey.length > 0)
-            errors.push(qsTr("Source B: %1").arg(root.messageCatalog.errorMessage(sourceBErrorKey)));
+            errors.push(qsTr("源 B：%1").arg(root.messageCatalog.errorMessage(sourceBErrorKey)));
         if (sourceCErrorKey.length > 0)
-            errors.push(qsTr("Source C: %1").arg(root.messageCatalog.errorMessage(sourceCErrorKey)));
+            errors.push(qsTr("源 C：%1").arg(root.messageCatalog.errorMessage(sourceCErrorKey)));
         if (pairErrorKey.length > 0)
-            errors.push(qsTr("Comparison: %1").arg(root.messageCatalog.errorMessage(pairErrorKey)));
+            errors.push(qsTr("对比：%1").arg(root.messageCatalog.errorMessage(pairErrorKey)));
         return errors.join(" | ");
     }
 
@@ -752,12 +818,12 @@ ApplicationWindow {
             const labels = [];
             for (const sourceId of finding.sources)
                 labels.push(String.fromCharCode(65 + Number(sourceId)));
-            let severity = qsTr("warning");
+            let severity = qsTr("警告");
             if (Number(finding.severity) === 0)
-                severity = qsTr("incompatible");
+                severity = qsTr("不兼容");
             else if (Number(finding.severity) === 2)
-                severity = qsTr("alignment required");
-            messages.push(qsTr("%1: %2 — %3").arg(labels.join(" ↔ ")).arg(root.messageCatalog.errorMessage(finding.code)).arg(severity));
+                severity = qsTr("需要对齐");
+            messages.push(qsTr("%1：%2 — %3").arg(labels.join(" ↔ ")).arg(root.messageCatalog.errorMessage(finding.code)).arg(severity));
         }
         return messages.join(" | ");
     }
@@ -781,8 +847,18 @@ ApplicationWindow {
         fullScreen: root.fullScreen
         shortcutPreset: root.shortcutPreset
         sourceIdentities: root.shell ? root.shell.activeSourceIdentities : []
+        workspaceMode: root.workspaceMode
         onOpenVideosRequested: reviewInputDialogs.openVideos()
         onAddVideoRequested: reviewInputDialogs.openAddVideo()
+        onOpenImageRequested: {
+            root.workspaceMode = 1;
+            imageSingleDialog.open();
+        }
+        onOpenImagePairRequested: {
+            root.workspaceMode = 1;
+            imagePairDialog.open();
+        }
+        onWorkspaceRequested: mode => root.workspaceMode = mode
         onDestructiveActionRequested: kind => root.requestDestructiveAction({
                 "kind": kind,
                 "external": false
@@ -811,7 +887,7 @@ ApplicationWindow {
         onWipePositionRequested: position => {
             root.wipePosition = position;
             if (!root.chromeVisible)
-                root.showImmersiveHud(qsTr("Wipe %1%").arg(Math.round(position * 100)));
+                root.showImmersiveHud(qsTr("擦除 %1%").arg(Math.round(position * 100)));
         }
         onManualNavigationRequested: {
             root.revealOsc();
@@ -876,14 +952,14 @@ ApplicationWindow {
             if (Number(status) === 5)
                 root.showIntentMessage(root.messageCatalog.intentErrorText(error));
             else if (Number(status) === 6)
-                root.showIntentMessage(qsTr("A newer request replaced %1.").arg(root.messageCatalog.intentKindText(kind, sourceCountValue)));
+                root.showIntentMessage(qsTr("更新的请求已取代 %1。").arg(root.messageCatalog.intentKindText(kind, sourceCountValue)));
         }
 
         function onIntentFinished(intentId, kind, outcome, errorKey) {
             if (Number(outcome) !== 0) {
                 if (Number(kind) === 0)
                     root.pendingNewReviewWantsThreeUp = false;
-                root.showIntentMessage(errorKey.length > 0 ? root.messageCatalog.errorMessage(errorKey) : qsTr("The review request failed."));
+                root.showIntentMessage(errorKey.length > 0 ? root.messageCatalog.errorMessage(errorKey) : qsTr("检查请求失败。"));
                 return;
             }
             if (Number(kind) === 0) {
@@ -892,9 +968,9 @@ ApplicationWindow {
                 root.pendingNewReviewWantsThreeUp = false;
                 root.resetReviewVisualState();
             } else if (Number(kind) === 3) {
-                root.showIntentMessage(qsTr("Video removed."));
+                root.showIntentMessage(qsTr("已移除视频。"));
             } else if (Number(kind) === 4) {
-                root.showIntentMessage(qsTr("Reference changed."));
+                root.showIntentMessage(qsTr("已更换参考源。"));
             } else if (Number(kind) === 5) {
                 root.clearReviewUi();
             }
@@ -917,7 +993,7 @@ ApplicationWindow {
                 const idx = model.index(i, 0);
                 if (model.data(idx, 0x010C)) {
                     root.changedOnDiskAnnouncedGeneration = generation;
-                    root.showIntentMessage(qsTr("A video file changed on disk. The session keeps its original identity."));
+                    root.showIntentMessage(qsTr("磁盘上的视频文件已变化，本次会话仍保留其原始标识。"));
                     return;
                 }
             }
@@ -929,6 +1005,7 @@ ApplicationWindow {
 
         stagedVideos: root.shell ? root.shell.stagedSources : []
         fileNameFunction: root.fileName
+        pathNameFunction: root.sourcePathLabel
         initialReferenceIndex: root.pendingComparisonPreservesPosition ? root.canonicalSourceIndex : 0
         onOpenVideosAccepted: urls => root.openNewReviewUrls(urls)
         onAddVideoAccepted: url => root.reviewDroppedUrls([url])
@@ -938,15 +1015,19 @@ ApplicationWindow {
         }
     }
 
-    Dialog {
+    // Popup shell, not Dialog: a Dialog with a title adds style chrome (auto header + empty
+    // footer strip) around custom content, which looks like stray bars in the dark theme.
+    Popup {
         id: anchorDialog
 
         objectName: "manualAnchorDialog"
         width: 460
         modal: true
-        title: qsTr("Manual alignment anchor")
         closePolicy: Popup.CloseOnEscape
-        anchors.centerIn: parent
+        parent: Overlay.overlay
+        anchors.centerIn: Overlay.overlay
+        popupType: Popup.Item
+        padding: 14
 
         property var sourceChoices: {
             const choices = [];
@@ -976,7 +1057,14 @@ ApplicationWindow {
             spacing: 14
 
             Text {
-                text: qsTr("Map one canonical frame to a frame in a non-reference source. Multiple anchors remain monotone.")
+                text: qsTr("手动对齐锚点")
+                color: root.primaryTextColor
+                font.pixelSize: 16
+                font.weight: Font.DemiBold
+            }
+
+            Text {
+                text: qsTr("将一个基准帧映射到非参考源中的某一帧。多个锚点保持单调。")
                 color: root.mutedTextColor
                 wrapMode: Text.WordWrap
                 width: parent.width
@@ -986,7 +1074,7 @@ ApplicationWindow {
                 spacing: 12
 
                 Text {
-                    text: qsTr("Source")
+                    text: qsTr("源")
                     color: root.primaryTextColor
                     anchors.verticalCenter: parent.verticalCenter
                 }
@@ -1002,7 +1090,7 @@ ApplicationWindow {
                 }
 
                 Text {
-                    text: qsTr("Canonical frame")
+                    text: qsTr("基准帧")
                     color: root.primaryTextColor
                     anchors.verticalCenter: parent.verticalCenter
                 }
@@ -1021,7 +1109,7 @@ ApplicationWindow {
                 spacing: 12
 
                 Text {
-                    text: qsTr("Source frame")
+                    text: qsTr("源帧")
                     color: root.primaryTextColor
                     anchors.verticalCenter: parent.verticalCenter
                 }
@@ -1037,7 +1125,7 @@ ApplicationWindow {
 
                 ReviewActionButton {
                     objectName: "addManualAnchorButton"
-                    text: qsTr("Add / replace")
+                    text: qsTr("添加 / 替换")
                     enabled: !root.busy && anchorSource.currentIndex >= 0
                     onClicked: {
                         if (root.controller.setManualAlignmentAnchor(anchorSource.currentValue, canonicalAnchorFrame.value - 1, sourceAnchorFrame.value - 1))
@@ -1047,7 +1135,7 @@ ApplicationWindow {
 
                 ReviewActionButton {
                     objectName: "clearManualAnchorsButton"
-                    text: qsTr("Clear all")
+                    text: qsTr("全部清除")
                     enabled: !root.busy && root.manualAnchorActive
                     onClicked: {
                         if (root.controller.clearManualAlignmentAnchors())
@@ -1057,7 +1145,7 @@ ApplicationWindow {
             }
 
             Text {
-                text: root.manualAnchorStatus.length > 0 ? root.manualAnchorStatus : qsTr("No manual anchors")
+                text: root.manualAnchorStatus.length > 0 ? root.manualAnchorStatus : qsTr("暂无手动锚点")
                 color: root.manualAnchorActive ? Theme.warning : root.mutedTextColor
                 wrapMode: Text.WordWrap
                 width: parent.width
@@ -1068,6 +1156,7 @@ ApplicationWindow {
     ActiveSourceStrip {
         id: sourceBar
 
+        visible: !root.imageWorkspaceActive && root.sourceCount > 1
         sourcesModel: root.controller ? root.controller.sources : null
         sourceCount: root.sourceCount
         singleMode: root.singleMode
@@ -1094,6 +1183,7 @@ ApplicationWindow {
     CompareModeBar {
         id: comparisonBar
 
+        visible: !root.imageWorkspaceActive && root.sourceCount > 1
         sourceCount: root.sourceCount
         currentMode: root.effectiveViewMode
         differenceEdges: root.differenceEdges
@@ -1166,7 +1256,7 @@ ApplicationWindow {
         inFrame: root.inFrame
         outFrame: root.outFrame
         rangePlaybackActive: root.rangePlaybackActive
-        visible: root.chromeVisible && root.inspectorOpen && root.sourceCount > 0
+        visible: !root.imageWorkspaceActive && root.chromeVisible && root.inspectorOpen && root.sourceCount > 0
         z: 20
         anchors {
             top: parent.top
@@ -1192,6 +1282,7 @@ ApplicationWindow {
     ComparisonViewport {
         id: viewportFrame
 
+        visible: !root.imageWorkspaceActive
         preferences: root.preferences
         borderColor: root.borderColor
         accentColor: root.accentColor
@@ -1243,8 +1334,57 @@ ApplicationWindow {
         onContextMenuRequested: root.openViewerContextMenu()
         onFullScreenToggleRequested: root.toggleFullScreen()
     }
+    ImageWorkspace {
+        id: imageWorkspace
+
+        objectName: "imageWorkspaceRoot"
+        visible: root.imageWorkspaceActive
+        controller: root.stillImageController
+        anchors {
+            top: parent.top
+            topMargin: root.chromeVisible ? 10 : 0
+            bottom: parent.bottom
+            left: parent.left
+            leftMargin: root.chromeVisible ? 14 : 0
+            right: parent.right
+            rightMargin: root.chromeVisible ? 14 : 0
+        }
+        onOpenImageRequested: {
+            root.workspaceMode = 1;
+            imageSingleDialog.open();
+        }
+        onOpenPairRequested: {
+            root.workspaceMode = 1;
+            imagePairDialog.open();
+        }
+    }
+    NativeDialogs.FileDialog {
+        id: imageSingleDialog
+
+        objectName: "imageSingleDialog"
+        title: qsTr("打开图片")
+        fileMode: NativeDialogs.FileDialog.OpenFile
+        nameFilters: [qsTr("图片 (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tif *.tiff)"), qsTr("所有文件 (*)")]
+        onAccepted: {
+            const picked = selectedFile && selectedFile.toString().length > 0 ? selectedFile : currentFile;
+            if (picked && picked.toString().length > 0)
+                root.performImageReview([picked]);
+        }
+    }
+    NativeDialogs.FileDialog {
+        id: imagePairDialog
+
+        objectName: "imagePairDialog"
+        title: qsTr("打开图片对")
+        fileMode: NativeDialogs.FileDialog.OpenFiles
+        nameFilters: [qsTr("图片 (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tif *.tiff)"), qsTr("所有文件 (*)")]
+        onAccepted: {
+            const files = selectedFiles && selectedFiles.length > 0 ? selectedFiles : [selectedFile];
+            root.performImageReview(files.filter(url => url && url.toString().length > 0));
+        }
+    }
     EmptyReviewView {
-        visible: root.sourceCount === 0 && !root.busy && root.graphicsReady && !root.hasErrors
+        visible: !root.imageWorkspaceActive && root.sourceCount === 0 && !root.busy && root.graphicsReady && !root.hasErrors
         z: 35
         accentColor: root.accentColor
         textColor: root.primaryTextColor
@@ -1264,7 +1404,7 @@ ApplicationWindow {
         id: transport
 
         z: 50
-        controllerState: root.oscState
+        controllerState: root.imageWorkspaceActive ? 2 : root.oscState
         docked: root.transportDocked
         sourceLabel: root.sourceAName
         playing: root.playing
@@ -1285,7 +1425,7 @@ ApplicationWindow {
         inFrame: root.inFrame
         outFrame: root.outFrame
         loopRangeActive: root.rangePlaybackActive
-        previewFrame: root.timelinePreviewFrame
+        previewFrame: root.timelinePreviewSampleFrame
         previewTimecode: root.previewTimecode
         previewThumbnailSource: thumbnailCache.urlForFrame(root.timelinePreviewFrame)
         anchors {
@@ -1362,7 +1502,7 @@ ApplicationWindow {
 
             Text {
                 visible: Number(intentQueuePanel.runningIntent.id || 0) > 0
-                text: qsTr("Working · %1").arg(root.messageCatalog.intentKindText(intentQueuePanel.runningIntent.kind, intentQueuePanel.runningIntent.sourceCount))
+                text: qsTr("处理中 · %1").arg(root.messageCatalog.intentKindText(intentQueuePanel.runningIntent.kind, intentQueuePanel.runningIntent.sourceCount))
                 color: root.primaryTextColor
                 font.pixelSize: 12
                 elide: Text.ElideRight
@@ -1374,7 +1514,7 @@ ApplicationWindow {
                 width: parent.width
 
                 Text {
-                    text: qsTr("%1 request(s) queued").arg(intentQueuePanel.queued.length)
+                    text: qsTr("%1 个请求排队中").arg(intentQueuePanel.queued.length)
                     color: root.mutedTextColor
                     font.pixelSize: 12
                     width: parent.width - cancelAllButton.width
@@ -1384,7 +1524,7 @@ ApplicationWindow {
                 VcsToolButton {
                     id: cancelAllButton
 
-                    text: qsTr("Cancel all")
+                    text: qsTr("全部取消")
                     implicitWidth: 74
                     implicitHeight: 24
                     labelPixelSize: 11
@@ -1413,7 +1553,7 @@ ApplicationWindow {
                     VcsToolButton {
                         id: cancelQueuedButton
 
-                        text: qsTr("Cancel")
+                        text: qsTr("取消")
                         implicitWidth: 58
                         implicitHeight: 22
                         labelPixelSize: 11
@@ -1450,6 +1590,60 @@ ApplicationWindow {
             wrapMode: Text.Wrap
         }
     }
+    Rectangle {
+        id: chromeRestorePill
+
+        objectName: "chromeRestorePill"
+        // With the chrome hidden (Tab / presentation mode) every menu and bar disappears and the
+        // immersive HUD fades after 800 ms. This persistent pill is the always-visible way back:
+        // it names the Tab shortcut and restores the interface on click.
+        visible: !root.chromeVisible
+        z: 980
+        height: 32
+        radius: 16
+        color: restorePillHover.hovered ? "#e61d2635" : "#c21d2635"
+        border.color: "#46597a"
+        border.width: 1
+        opacity: restorePillHover.hovered ? 1.0 : 0.62
+        anchors {
+            top: parent.top
+            topMargin: 14
+            horizontalCenter: parent.horizontalCenter
+        }
+
+        Behavior on opacity {
+            NumberAnimation {
+                duration: 120
+            }
+        }
+
+        HoverHandler {
+            id: restorePillHover
+        }
+
+        TapHandler {
+            onTapped: root.toggleChrome()
+        }
+
+        Row {
+            spacing: 7
+            anchors.centerIn: parent
+
+            Text {
+                text: "↑"
+                color: root.primaryTextColor
+                font.pixelSize: 13
+                font.weight: Font.DemiBold
+                anchors.verticalCenter: parent.verticalCenter
+            }
+            Text {
+                text: qsTr("界面已隐藏 · 按 Tab 或点击恢复")
+                color: root.primaryTextColor
+                font.pixelSize: 12
+                anchors.verticalCenter: parent.verticalCenter
+            }
+        }
+    }
     DropArea {
         id: workspaceDropArea
 
@@ -1482,14 +1676,14 @@ ApplicationWindow {
             anchors.centerIn: parent
 
             Text {
-                text: qsTr("Drop to open in VCStation")
+                text: qsTr("松开即可在 VCStation 中打开")
                 color: root.primaryTextColor
                 font.pixelSize: 24
                 font.bold: true
                 anchors.horizontalCenter: parent.horizontalCenter
             }
             Text {
-                text: qsTr("1–3 videos")
+                text: qsTr("1–3 个视频或图片")
                 color: root.mutedTextColor
                 font.pixelSize: 14
                 anchors.horizontalCenter: parent.horizontalCenter

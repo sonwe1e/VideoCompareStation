@@ -51,6 +51,8 @@ public:
     // helpers keep the end-to-end smoke path on the declarative UI boundary instead of calling
     // the controller behind the controls.
     [[nodiscard]] bool openSourcesForAutomation(const QList<QUrl>& sources) noexcept;
+    // Opens a still image in the image workspace (smoke/debug and CLI --open-still).
+    [[nodiscard]] bool openStillImageForAutomation(const QUrl& url) noexcept;
     [[nodiscard]] bool clickControlForAutomation(std::string_view objectName) noexcept;
     [[nodiscard]] bool focusControlForAutomation(std::string_view objectName) noexcept;
     [[nodiscard]] bool clickTimelineForAutomation(double normalizedPosition) noexcept;

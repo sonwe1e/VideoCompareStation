@@ -20,7 +20,7 @@ Rectangle {
         anchors.centerIn: parent
 
         Text {
-            text: qsTr("Drop one to three videos")
+            text: qsTr("把视频或图片拖到这里")
             color: control.textColor
             font.pixelSize: 24
             font.weight: Font.DemiBold
@@ -28,14 +28,14 @@ Rectangle {
         }
 
         Text {
-            text: qsTr("Open one video to play, or two to three videos to compare frame by frame.")
+            text: qsTr("打开一个视频即可播放，两三个视频可逐帧对比；图片也可以直接拖进来查看。")
             color: control.mutedTextColor
             font.pixelSize: 13
             anchors.horizontalCenter: parent.horizontalCenter
         }
 
         Text {
-            text: qsTr("Visual playback only · Audio is not played")
+            text: qsTr("仅画面播放 · 不播放声音")
             color: control.mutedTextColor
             font.pixelSize: 12
             anchors.horizontalCenter: parent.horizontalCenter
@@ -49,7 +49,7 @@ Rectangle {
                 id: openVideosButton
 
                 objectName: "emptyOpenVideosButton"
-                text: qsTr("Open videos")
+                text: qsTr("打开视频")
                 prominent: true
                 onClicked: control.openVideosRequested()
             }

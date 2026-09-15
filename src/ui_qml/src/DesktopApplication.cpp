@@ -1,6 +1,8 @@
 #include "dvs/ui/DesktopApplication.h"
 
 #include "dvs/ui/ComparisonSurface.h"
+#include "dvs/ui/ImageReviewController.h"
+#include "dvs/ui/ReviewImageProvider.h"
 #include "dvs/ui/ReviewController.h"
 #include "dvs/ui/ReviewPreferencesController.h"
 #include "dvs/ui/ReviewSessionFacade.h"
@@ -98,6 +100,11 @@ public:
             std::make_unique<ReviewSessionFacade>(controller, preferences, *shellController_);
         engine->rootContext()->setContextProperty(QStringLiteral("reviewFacade"),
                                                   sessionFacade_.get());
+        imageReview_ = std::make_unique<ImageReviewController>();
+        engine->rootContext()->setContextProperty(QStringLiteral("imageReview"),
+                                                  imageReview_.get());
+        engine->addImageProvider(QStringLiteral("vcs-review"),
+                                 new ReviewImageProvider(imageReview_.get()));
         const QMetaObject::Connection warningConnection = QObject::connect(
             engine.get(),
             &QQmlEngine::warnings,
@@ -220,6 +227,14 @@ public:
         // intentionally projected through ReviewController and asserted by the smoke state machine.
         static_cast<void>(shellController_->openStagedSources(false));
         return true;
+    }
+
+    [[nodiscard]] bool openStillImageForAutomation(const QUrl& url) noexcept {
+        if (imageReview_ == nullptr || window_ == nullptr || !url.isValid()) {
+            return false;
+        }
+        static_cast<void>(window_->setProperty("workspaceMode", 1));
+        return imageReview_->openPrimary(url);
     }
 
     [[nodiscard]] bool clickControlForAutomation(const std::string_view objectName) noexcept {
@@ -482,6 +497,7 @@ public:
         engine_.reset();
         sessionFacade_.reset();
         shellController_.reset();
+        imageReview_.reset();
         QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
     }
 
@@ -542,6 +558,7 @@ private:
     std::unique_ptr<QQmlApplicationEngine> engine_;
     std::unique_ptr<ReviewShellController> shellController_;
     std::unique_ptr<ReviewSessionFacade> sessionFacade_;
+    std::unique_ptr<ImageReviewController> imageReview_;
     QQuickWindow* window_ = nullptr;
     ComparisonSurface* surface_ = nullptr;
     double activeScreenRefreshRate_ = 0.0;
@@ -583,6 +600,10 @@ void DesktopApplication::activateWindow() noexcept {
 
 bool DesktopApplication::openSourcesForAutomation(const QList<QUrl>& sources) noexcept {
     return impl_->openSourcesForAutomation(sources);
+}
+
+bool DesktopApplication::openStillImageForAutomation(const QUrl& url) noexcept {
+    return impl_->openStillImageForAutomation(url);
 }
 
 bool DesktopApplication::clickControlForAutomation(const std::string_view objectName) noexcept {

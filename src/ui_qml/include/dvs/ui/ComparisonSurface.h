@@ -69,6 +69,7 @@ public:
         AnalysisGrid = static_cast<int>(presentation::ViewMode::AnalysisGrid),
         Wipe = static_cast<int>(presentation::ViewMode::Wipe),
         Single = static_cast<int>(presentation::ViewMode::Single),
+        Fade = static_cast<int>(presentation::ViewMode::Fade),
     };
     Q_ENUM(ViewMode)
 
@@ -78,6 +79,9 @@ public:
         Chroma = static_cast<int>(presentation::DifferenceMetric::Chroma),
         Heatmap = static_cast<int>(presentation::DifferenceMetric::Heatmap),
         ExactPlanes = static_cast<int>(presentation::DifferenceMetric::ExactPlanes),
+        SignedSubtract = static_cast<int>(presentation::DifferenceMetric::SignedSubtract),
+        Highlight = static_cast<int>(presentation::DifferenceMetric::Highlight),
+        Crossfade = static_cast<int>(presentation::DifferenceMetric::Crossfade),
     };
     Q_ENUM(DifferenceMetric)
 

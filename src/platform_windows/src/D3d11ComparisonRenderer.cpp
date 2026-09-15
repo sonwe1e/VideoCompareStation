@@ -61,7 +61,8 @@ struct alignas(16) DifferenceConstants final {
     float thresholdPadding = 0.0F;
     std::uint32_t sourceRotationA = 0U;
     std::uint32_t sourceRotationB = 0U;
-    std::array<float, 2U> rotationPadding{};
+    float fadeAmount = 0.5F;
+    float rotationPadding = 0.0F;
 };
 
 static_assert(sizeof(ComposeConstants) == 144U);
@@ -108,14 +109,17 @@ struct PreparedSetDraw final {
     return value == SurfaceViewMode::SideBySide || value == SurfaceViewMode::ThreeUp ||
            value == SurfaceViewMode::ReferenceFocus || value == SurfaceViewMode::Difference ||
            value == SurfaceViewMode::AnalysisGrid || value == SurfaceViewMode::Wipe ||
-           value == SurfaceViewMode::Single;
+           value == SurfaceViewMode::Single || value == SurfaceViewMode::Fade;
 }
 
 [[nodiscard]] bool isValid(const SurfaceDifferenceMetric value) noexcept {
     return value == SurfaceDifferenceMetric::RgbAbsolute ||
            value == SurfaceDifferenceMetric::Luma || value == SurfaceDifferenceMetric::Chroma ||
            value == SurfaceDifferenceMetric::Heatmap ||
-           value == SurfaceDifferenceMetric::ExactPlanes;
+           value == SurfaceDifferenceMetric::ExactPlanes ||
+           value == SurfaceDifferenceMetric::SignedSubtract ||
+           value == SurfaceDifferenceMetric::Highlight ||
+           value == SurfaceDifferenceMetric::Crossfade;
 }
 
 [[nodiscard]] bool isValid(const SurfaceDifferenceGain value) noexcept {
@@ -338,7 +342,10 @@ d3dBacking(const std::shared_ptr<const GpuFrameResource>& frame) noexcept {
                 .sourceUvRectB = textureRegionValues(regionB),
                 .planeDimensionsA = sourcePlaneDimensions(frameA.geometry()),
                 .planeDimensionsB = sourcePlaneDimensions(frameB.geometry()),
-                .metric = static_cast<std::uint32_t>(state.differenceMetric),
+                .metric = static_cast<std::uint32_t>(
+                    state.viewMode == SurfaceViewMode::Fade
+                        ? SurfaceDifferenceMetric::Crossfade
+                        : state.differenceMetric),
                 .gain = differenceGain(state.differenceGain),
                 .filter = static_cast<std::uint32_t>(state.differenceMetric ==
                                                              SurfaceDifferenceMetric::ExactPlanes
@@ -349,6 +356,7 @@ d3dBacking(const std::shared_ptr<const GpuFrameResource>& frame) noexcept {
                 .thresholdPolicy = static_cast<std::uint32_t>(state.thresholdPolicy),
                 .sourceRotationA = frameA.geometry().presentation.rotationDegrees / 90U,
                 .sourceRotationB = frameB.geometry().presentation.rotationDegrees / 90U,
+                .fadeAmount = state.wipePosition,
             },
         .yViewA = backingA.yView(),
         .uvViewA = backingA.uvView(),
@@ -564,7 +572,7 @@ SurfacePanelLayout computeSurfacePanelLayout(const SurfaceViewMode viewMode,
         result.sourceCount = 1U;
         return result;
     }
-    if (viewMode == SurfaceViewMode::Difference) {
+    if (viewMode == SurfaceViewMode::Difference || viewMode == SurfaceViewMode::Fade) {
         result.differenceRect = full;
         return result;
     }
@@ -1387,10 +1395,11 @@ private:
         };
 
         prepared.publication = publication;
-        if (state.viewMode == SurfaceViewMode::Difference) {
-            // Difference never degrades to a single-source image. If either selected slot is
-            // unavailable, draw an explicit black unavailable canvas; the QML projection names
-            // the missing source and canonical frame above it.
+        if (state.viewMode == SurfaceViewMode::Difference ||
+            state.viewMode == SurfaceViewMode::Fade) {
+            // Difference and Fade never degrades to a single-source image. If either selected
+            // slot is unavailable, draw an explicit black unavailable canvas; the QML projection
+            // names the missing source and canonical frame above it.
             if (!appendDifference(SurfaceRect{
                     .x = 0.0F,
                     .y = 0.0F,

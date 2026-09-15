@@ -46,7 +46,7 @@ Rectangle {
         enabled: control.host.timelineEnabled
         activeFocusOnTab: enabled
         Accessible.role: Accessible.Slider
-        Accessible.name: qsTr("Frame timeline")
+        Accessible.name: qsTr("帧时间轴")
         Accessible.description: control.host.frameText
         anchors {
             top: frameCounter.bottom
@@ -166,7 +166,7 @@ Rectangle {
 
     Text {
         visible: control.host.width >= 1260
-        text: qsTr("A/D or ←/→: ±1 · Shift+←/→: ±5 · Ctrl+←/→: ±1 second")
+        text: qsTr("A/D 或 ←/→：±1 帧 · Shift+←/→：±5 帧 · Ctrl+←/→：±1 秒")
         color: control.host.mutedTextColor
         font.pixelSize: 11
         anchors {

@@ -93,6 +93,9 @@ Item {
     HoverHandler {
         id: hover
 
-        cursorShape: Qt.SplitHCursor
+        // SizeHorCursor maps to the standard Windows IDC_SIZEWE cursor. SplitHCursor is a
+        // Qt-private pixmap cursor on Windows and hits qpixmap_win.cpp:200 when the cursor
+        // image resources are missing from a deploy.
+        cursorShape: Qt.SizeHorCursor
     }
 }

@@ -328,7 +328,8 @@ ComparisonSurface::ViewMode ComparisonSurface::viewMode() const noexcept {
 
 void ComparisonSurface::setViewMode(const ViewMode value) {
     if ((value != SideBySide && value != ThreeUp && value != ReferenceFocus &&
-         value != Difference && value != AnalysisGrid && value != Wipe && value != Single) ||
+         value != Difference && value != AnalysisGrid && value != Wipe && value != Single &&
+         value != Fade) ||
         viewMode_ == value) {
         return;
     }
@@ -344,7 +345,8 @@ ComparisonSurface::DifferenceMetric ComparisonSurface::differenceMetric() const 
 
 void ComparisonSurface::setDifferenceMetric(const DifferenceMetric value) {
     if ((value != RgbAbsolute && value != Luma && value != Chroma && value != Heatmap &&
-         value != ExactPlanes) ||
+         value != ExactPlanes && value != SignedSubtract && value != Highlight &&
+         value != Crossfade) ||
         differenceMetric_ == value) {
         return;
     }

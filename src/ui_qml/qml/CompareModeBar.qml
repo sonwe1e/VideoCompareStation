@@ -28,7 +28,7 @@ Rectangle {
     // qmllint disable import unqualified unresolved-type
     readonly property bool pairRelevant: currentMode === ComparisonSurface.Wipe || currentMode === ComparisonSurface.Difference || currentMode === ComparisonSurface.AnalysisGrid
     readonly property bool advancedMode: currentMode === ComparisonSurface.ThreeUp || currentMode === ComparisonSurface.ReferenceFocus || currentMode === ComparisonSurface.AnalysisGrid
-    readonly property string advancedModeLabel: currentMode === ComparisonSurface.ThreeUp ? qsTr("Three up") : (currentMode === ComparisonSurface.ReferenceFocus ? qsTr("Reference focus") : (currentMode === ComparisonSurface.AnalysisGrid ? qsTr("Analysis grid") : ""))
+    readonly property string advancedModeLabel: currentMode === ComparisonSurface.ThreeUp ? qsTr("三联") : (currentMode === ComparisonSurface.ReferenceFocus ? qsTr("参考聚焦") : (currentMode === ComparisonSurface.AnalysisGrid ? qsTr("分析网格") : ""))
     // qmllint enable import unqualified unresolved-type
 
     objectName: "compareModeBar"
@@ -48,17 +48,17 @@ Rectangle {
         // qmllint disable import unqualified unresolved-type
         ModeButton {
             objectName: "sideModeButton"
-            text: qsTr("Side")
+            text: qsTr("并排")
             modeValue: ComparisonSurface.SideBySide
         }
         ModeButton {
             objectName: "wipeModeButton"
-            text: qsTr("Wipe")
+            text: qsTr("擦除")
             modeValue: ComparisonSurface.Wipe
         }
         ModeButton {
             objectName: "diffModeButton"
-            text: qsTr("Diff")
+            text: qsTr("差异")
             modeValue: ComparisonSurface.Difference
         }
         // qmllint enable import unqualified unresolved-type
@@ -73,7 +73,7 @@ Rectangle {
             model: control.differenceEdges
             textRole: "label"
             currentIndex: control.currentEdgeIndex
-            Accessible.name: qsTr("Comparison pair")
+            Accessible.name: qsTr("对比对")
             hoverEnabled: true
             leftPadding: 10
             rightPadding: 26
@@ -103,7 +103,7 @@ Rectangle {
                     id: threeUpMenuItem
 
                     objectName: "threeUpMenuItem"
-                    text: qsTr("Three up")
+                    text: qsTr("三联")
                     enabled: control.sourceCount === 3
                     checked: control.currentMode === ComparisonSurface.ThreeUp
                     onTriggered: control.modeRequested(ComparisonSurface.ThreeUp)
@@ -112,7 +112,7 @@ Rectangle {
                     id: referenceFocusMenuItem
 
                     objectName: "referenceFocusMenuItem"
-                    text: qsTr("Reference focus")
+                    text: qsTr("参考聚焦")
                     enabled: control.sourceCount === 3
                     checked: control.currentMode === ComparisonSurface.ReferenceFocus
                     onTriggered: control.modeRequested(ComparisonSurface.ReferenceFocus)
@@ -121,7 +121,7 @@ Rectangle {
                     id: analysisGridMenuItem
 
                     objectName: "analysisGridMenuItem"
-                    text: qsTr("Analysis grid")
+                    text: qsTr("分析网格")
                     enabled: control.sourceCount === 3
                     checked: control.currentMode === ComparisonSurface.AnalysisGrid
                     onTriggered: control.modeRequested(ComparisonSurface.AnalysisGrid)
@@ -166,7 +166,7 @@ Rectangle {
         id: inspectorToggleButton
 
         objectName: "inspectorToggleButton"
-        text: control.inspectorOpen ? qsTr("Hide inspector") : qsTr("Inspector")
+        text: control.inspectorOpen ? qsTr("隐藏检查器") : qsTr("检查器")
         implicitHeight: 30
         leftPadding: 12
         rightPadding: 12
