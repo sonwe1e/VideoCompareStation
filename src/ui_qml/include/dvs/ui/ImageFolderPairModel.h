@@ -3,6 +3,7 @@
 #include <QAbstractListModel>
 #include <QUrl>
 
+#include <cstdint>
 #include <functional>
 #include <vector>
 
@@ -22,14 +23,19 @@ class ImageFolderPairModel final : public QAbstractListModel {
     Q_PROPERTY(int pairCount READ pairCount NOTIFY foldersChanged)
     Q_PROPERTY(int currentPair READ currentPair WRITE setCurrentPair NOTIFY currentPairChanged)
     Q_PROPERTY(QString errorText READ errorText NOTIFY foldersChanged)
+    Q_PROPERTY(bool openPending READ openPending NOTIFY pendingPairChanged)
+    Q_PROPERTY(int pendingPair READ pendingPair NOTIFY pendingPairChanged)
 
 public:
-    // Opens a pair's images in the still-image review controller. Injected by the
-    // composition root so this model never depends on the controller type. Returns an
-    // empty string on success or the failure reason; the model only advances currentPair
-    // when the opener reports success, so list selection and canvas identity stay locked.
+    // Synchronous opener used by tests and non-UI embedding. Injected by the composition
+    // root so this model never depends on the controller type.
     using PairOpener =
         std::function<QString(const QUrl& primary, const QUrl& secondary, int pairId)>;
+    // T4 asynchronous opener: returns a positive request id or <= 0 with an immediate
+    // error in *error. Selection must only advance when completePairOpen reports success.
+    using AsyncPairOpener =
+        std::function<int(const QUrl& primary, const QUrl& secondary, int pairId, QString* error)>;
+    using AsyncPairCancel = std::function<void(int requestId)>;
 
     struct PairRow final {
         QString fileName;
@@ -53,6 +59,8 @@ public:
     explicit ImageFolderPairModel(QObject* parent = nullptr);
 
     void setPairOpener(PairOpener opener);
+    void setAsyncPairOpener(AsyncPairOpener opener);
+    void setAsyncPairCancel(AsyncPairCancel cancel);
 
     [[nodiscard]] QString leftFolderName() const noexcept;
     [[nodiscard]] QString rightFolderName() const noexcept;
@@ -62,6 +70,8 @@ public:
     [[nodiscard]] int currentPair() const noexcept;
     void setCurrentPair(int row);
     [[nodiscard]] QString errorText() const noexcept;
+    [[nodiscard]] bool openPending() const noexcept;
+    [[nodiscard]] int pendingPair() const noexcept;
 
     [[nodiscard]] int rowCount(const QModelIndex& parent = {}) const override;
     [[nodiscard]] QVariant data(const QModelIndex& index, int role) const override;
@@ -70,6 +80,10 @@ public:
     Q_INVOKABLE bool loadFolders(const QUrl& left, const QUrl& right);
     Q_INVOKABLE void clear();
     Q_INVOKABLE bool openPairAt(int row);
+    Q_INVOKABLE void cancelPendingOpen();
+    // Terminal callback from the async opener owner. Stale ids are ignored so an older
+    // N cannot advance the selection after N+1/N+2 was requested.
+    void completePairOpen(quint64 requestId, bool success, QString error);
     Q_INVOKABLE int firstCompleteRow() const noexcept;
     // Steps to the next (delta > 0) or previous (delta < 0) two-sided row, wrapping
     // around; returns the opened row or -1 when no complete pair exists.
@@ -78,16 +92,22 @@ public:
 signals:
     void foldersChanged();
     void currentPairChanged();
+    void pendingPairChanged();
+    void pairOpenFinished(int row, bool success, QString error);
 
 private:
     [[nodiscard]] static bool isStillImageName(const QString& fileName);
 
     PairOpener opener_;
+    AsyncPairOpener asyncOpener_;
+    AsyncPairCancel asyncCancel_;
     std::vector<PairRow> rows_;
     QString leftFolderPath_;
     QString rightFolderPath_;
     QString errorText_;
     int currentPair_ = -1;
+    quint64 pendingRequestId_ = 0;
+    int pendingRow_ = -1;
 };
 
 } // namespace dvs::ui

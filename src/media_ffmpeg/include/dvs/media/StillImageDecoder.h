@@ -22,6 +22,11 @@ struct StillImage final {
                                          StillImage* image,
                                          std::string* error);
 
+// Parse container/codec metadata only so callers can reject oversized images before
+// allocating decoder output. Returns false without a decoder context being opened twice.
+[[nodiscard]] bool probeStillImageBytes(
+    const std::uint8_t* data, std::size_t size, int* width, int* height, std::string* error);
+
 [[nodiscard]] bool
 decodeStillImageFile(const std::string& path, StillImage* image, std::string* error);
 

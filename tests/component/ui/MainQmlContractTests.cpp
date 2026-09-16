@@ -203,12 +203,25 @@ public:
         });
         shell = std::make_unique<ReviewShellController>(*controller, preferences);
         facade = std::make_unique<ReviewSessionFacade>(*controller, preferences, *shell);
-        folderPairs.setPairOpener(
-            [this](const QUrl& primary, const QUrl& secondary, const int pairId) {
-                if (!imageReview.openPairAtomically(primary, secondary, pairId)) {
-                    return imageReview.errorText();
+        folderPairs.setAsyncPairOpener(
+            [this](const QUrl& primary, const QUrl& secondary, const int pairId, QString* error) {
+                const int requestId = imageReview.requestOpenPair(primary, secondary, pairId);
+                if (requestId <= 0 && error != nullptr) {
+                    *error = imageReview.errorText();
                 }
-                return QString{};
+                return requestId;
+            });
+        folderPairs.setAsyncPairCancel(
+            [this](const int requestId) { imageReview.cancelOpenRequest(requestId); });
+        QObject::connect(
+            &imageReview,
+            &ImageReviewController::openFinished,
+            &folderPairs,
+            [this](
+                const int requestId, const int pairId, const bool success, const QString& error) {
+                if (pairId >= 0) {
+                    folderPairs.completePairOpen(static_cast<quint64>(requestId), success, error);
+                }
             });
     }
 
@@ -274,6 +287,17 @@ public:
         for (int iteration = 0; iteration < iterations; ++iteration) {
             QCoreApplication::processEvents();
         }
+    }
+
+    template <typename Predicate>
+    [[nodiscard]] bool waitUntil(Predicate predicate, const int timeoutMilliseconds = 8000) {
+        QElapsedTimer timer;
+        timer.start();
+        while (!predicate() && timer.elapsed() < timeoutMilliseconds) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 2);
+            QThread::msleep(1U);
+        }
+        return predicate();
     }
 
     std::shared_ptr<application::SessionSnapshot> snapshot =
@@ -2347,12 +2371,26 @@ TEST(MainQmlContractTests, ImageFolderComparisonLoadsSidebarAndOpensFirstPair) {
     ReviewSessionFacade facade{controller, preferences, shell};
     ImageReviewController imageReview;
     ImageFolderPairModel folderPairs;
-    folderPairs.setPairOpener(
-        [&imageReview](const QUrl& primary, const QUrl& secondary, const int pairId) {
-            if (!imageReview.openPairAtomically(primary, secondary, pairId)) {
-                return imageReview.errorText();
+    folderPairs.setAsyncPairOpener(
+        [&imageReview](
+            const QUrl& primary, const QUrl& secondary, const int pairId, QString* error) {
+            const int requestId = imageReview.requestOpenPair(primary, secondary, pairId);
+            if (requestId <= 0 && error != nullptr) {
+                *error = imageReview.errorText();
             }
-            return QString{};
+            return requestId;
+        });
+    folderPairs.setAsyncPairCancel(
+        [&imageReview](const int requestId) { imageReview.cancelOpenRequest(requestId); });
+    QObject::connect(
+        &imageReview,
+        &ImageReviewController::openFinished,
+        &folderPairs,
+        [&folderPairs](
+            const int requestId, const int pairId, const bool success, const QString& error) {
+            if (pairId >= 0) {
+                folderPairs.completePairOpen(static_cast<quint64>(requestId), success, error);
+            }
         });
 
     QQmlEngine engine;
@@ -2382,7 +2420,17 @@ TEST(MainQmlContractTests, ImageFolderComparisonLoadsSidebarAndOpensFirstPair) {
     ASSERT_TRUE(QMetaObject::invokeMethod(
         root.get(), "loadFolderComparison", Q_RETURN_ARG(QVariant, loadResult)));
     EXPECT_TRUE(loadResult.toBool());
-    QCoreApplication::processEvents();
+    // T4: loadFolderComparison returns when the candidate is accepted; the first pair is
+    // only committed after the worker finishes.
+    QElapsedTimer firstPairTimer;
+    firstPairTimer.start();
+    while ((!imageReview.hasPair() || folderPairs.currentPair() != 0) &&
+           firstPairTimer.elapsed() < 8000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 2);
+        QThread::msleep(1U);
+    }
+    ASSERT_TRUE(imageReview.hasPair());
+    ASSERT_EQ(folderPairs.currentPair(), 0);
 
     // Three rows: two complete pairs plus the left-only single; first complete opens.
     EXPECT_EQ(folderPairs.pairCount(), 3);
@@ -2406,7 +2454,15 @@ TEST(MainQmlContractTests, ImageFolderComparisonLoadsSidebarAndOpensFirstPair) {
     QVariant stepResult;
     ASSERT_TRUE(QMetaObject::invokeMethod(
         sidebar, "stepPair", Q_RETURN_ARG(QVariant, stepResult), Q_ARG(QVariant, QVariant{1})));
-    QCoreApplication::processEvents();
+    QElapsedTimer stepTimer;
+    stepTimer.start();
+    while ((folderPairs.currentPair() != 1 ||
+            !imageReview.primaryPath().endsWith(QStringLiteral("frame002.png"),
+                                                Qt::CaseInsensitive)) &&
+           stepTimer.elapsed() < 8000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 2);
+        QThread::msleep(1U);
+    }
     EXPECT_TRUE(
         imageReview.primaryPath().endsWith(QStringLiteral("frame002.png"), Qt::CaseInsensitive));
     EXPECT_EQ(folderPairs.currentPair(), 1);
@@ -2424,6 +2480,14 @@ TEST(MainQmlContractTests, ImageFolderComparisonLoadsSidebarAndOpensFirstPair) {
                                           Q_RETURN_ARG(QVariant, looseOpened),
                                           Q_ARG(QVariant, QVariant{looseUrls})));
     EXPECT_TRUE(looseOpened.toBool());
+    QElapsedTimer looseTimer;
+    looseTimer.start();
+    while (
+        (!imageReview.hasPrimary() || imageReview.hasSecondary() || folderPairs.pairCount() != 0) &&
+        looseTimer.elapsed() < 8000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 2);
+        QThread::msleep(1U);
+    }
     EXPECT_EQ(folderPairs.pairCount(), 0);
     EXPECT_EQ(folderPairs.currentPair(), -1);
     EXPECT_FALSE(imageReview.hasSecondary());

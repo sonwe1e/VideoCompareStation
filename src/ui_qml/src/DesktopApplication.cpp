@@ -107,17 +107,32 @@ public:
         engine->addImageProvider(QStringLiteral("vcs-review"),
                                  new ReviewImageProvider(imageReview_.get()));
         folderPairs_ = std::make_unique<ImageFolderPairModel>();
-        folderPairs_ = std::make_unique<ImageFolderPairModel>();
-        folderPairs_->setPairOpener([review = imageReview_.get()](const QUrl& primary,
-                                                                  const QUrl& secondary,
-                                                                  const int pairId) {
-            // T1: one atomic commit; both sides validated before any state change and
-            // the pair identity (committedPairId) switches exactly once on success.
-            if (!review->openPairAtomically(primary, secondary, pairId)) {
-                return review->errorText();
-            }
-            return QString{};
+        folderPairs_->setAsyncPairOpener(
+            [review = imageReview_.get()](
+                const QUrl& primary, const QUrl& secondary, const int pairId, QString* error) {
+                // T4: accept the candidate asynchronously. The controller keeps the previous
+                // committed pair visible until both sides decode, then emits openFinished once.
+                const int requestId = review->requestOpenPair(primary, secondary, pairId);
+                if (requestId <= 0 && error != nullptr) {
+                    *error = review->errorText();
+                }
+                return requestId;
+            });
+        folderPairs_->setAsyncPairCancel([review = imageReview_.get()](const int requestId) {
+            review->cancelOpenRequest(requestId);
         });
+        QObject::connect(
+            imageReview_.get(),
+            &ImageReviewController::openFinished,
+            folderPairs_.get(),
+            [folderPairs = folderPairs_.get()](
+                const int requestId, const int pairId, const bool success, const QString& error) {
+                if (pairId >= 0) {
+                    // Folder rows use the row index as pairId; loose image opens use -1 and
+                    // must never move the sidebar selection.
+                    folderPairs->completePairOpen(static_cast<quint64>(requestId), success, error);
+                }
+            });
         engine->rootContext()->setContextProperty(QStringLiteral("imageFolderPairs"),
                                                   folderPairs_.get());
         const QMetaObject::Connection warningConnection = QObject::connect(

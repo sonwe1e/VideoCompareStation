@@ -72,11 +72,17 @@ ApplicationWindow {
     property url imageFolderRightUrl: ""
     property int imageFolderStage: 0
     property bool imageFolderSidebarVisible: true
+    // T4 asynchronous image-open state. A request is pending until openFinished arrives;
+    // until then the previous committed pair stays visible and no workspace commit happens.
+    property int pendingImageRequestId: -1
+    property string pendingImageOpenKind: ""
+    property int pendingFolderPairRow: -1
     // Captured from the C++ context property so nested scopes never resolve a same-named
-    // Item property (ImageWorkspace.imageReview) into a circular binding.
+    // Item property (ImageWorkspace.imageReview) into a circular binding. The typeof guard
+    // keeps lightweight QML-only tests without the image context valid and warning-free.
     // qmllint disable unqualified
-    readonly property var stillImageController: imageReview
-    readonly property var folderPairModel: imageFolderPairs
+    readonly property var stillImageController: typeof imageReview !== "undefined" ? imageReview : null
+    readonly property var folderPairModel: typeof imageFolderPairs !== "undefined" ? imageFolderPairs : null
     // qmllint enable unqualified
     property string immersiveHudText: ""
     property bool immersiveHudVisible: false
@@ -614,10 +620,65 @@ ApplicationWindow {
         return true;
     }
 
+    // T4: cancelling a pending selector/open must invalidate the candidate request, not
+    // merely hide the dialog. The already-committed canvas is untouched.
     function cancelWorkspaceOpen() {
+        if (root.pendingImageRequestId > 0 && root.stillImageController) {
+            root.stillImageController.cancelOpenRequest(root.pendingImageRequestId);
+            root.pendingImageRequestId = -1;
+            root.pendingImageOpenKind = "";
+        }
+        if (root.pendingFolderPairRow >= 0 && root.folderPairModel) {
+            root.folderPairModel.cancelPendingOpen();
+            root.pendingFolderPairRow = -1;
+        }
         workspaceSession.cancelOpen();
         focusActiveWorkspace();
         return true;
+    }
+
+    // T4 completion handler for direct image opens. The loader reports exactly one terminal
+    // for each accepted request; stale ids are ignored so N cannot override N+2.
+    function completeImageOpen(requestId, pairId, success, error) {
+        if (Number(requestId) !== Number(root.pendingImageRequestId))
+            return;
+        const kind = root.pendingImageOpenKind;
+        const target = root.stillImageController;
+        root.pendingImageRequestId = -1;
+        root.pendingImageOpenKind = "";
+        if (!success) {
+            const detail = String(error || "").length > 0 ? String(error) : qsTr("无法打开图片。");
+            root.dropError = detail;
+            root.showIntentMessage(detail);
+            workspaceSession.cancelOpen();
+            return;
+        }
+        if (!target)
+            return;
+        root.detachFolderSession();
+        const identity = kind === "single" ? target.primaryPath : target.primaryPath + "\n" + target.secondaryPath;
+        root.commitWorkspace(workspaceSession.imageMedia, identity);
+        root.dropError = "";
+    }
+
+    // Folder rows finish through ImageFolderPairModel. Commit the folder workspace only
+    // after the first candidate actually commits, preserving the previous task on failure.
+    function completeFolderPairOpen(row, success, error) {
+        if (Number(row) !== Number(root.pendingFolderPairRow))
+            return;
+        root.pendingFolderPairRow = -1;
+        if (!success) {
+            const detail = String(error || "").length > 0 ? String(error) : qsTr("无法打开图片对。");
+            root.dropError = detail;
+            root.showIntentMessage(detail);
+            workspaceSession.cancelOpen();
+            return;
+        }
+        const pairModel = root.folderPairModel;
+        if (!pairModel)
+            return;
+        root.dropError = "";
+        root.commitWorkspace(workspaceSession.imageMedia, pairModel.leftFolderPath + "\n" + pairModel.rightFolderPath);
     }
 
     // Pure view switch used after a commit or a close; it owns no media command by itself so
@@ -652,9 +713,13 @@ ApplicationWindow {
     function closeCurrentTask() {
         if (workspaceSession.imageActive) {
             const imageTarget = root.stillImageController;
-            if (!imageTarget || !root.imageHasContent)
+            if (!imageTarget || (!root.imageHasContent && root.pendingImageRequestId <= 0))
                 return false;
-            imageTarget.closeAll();
+            root.pendingImageRequestId = -1;
+            root.pendingImageOpenKind = "";
+            root.pendingFolderPairRow = -1;
+            if (imageTarget)
+                imageTarget.closeAll();
             detachFolderSession();
             workspaceSession.clearCommitted(workspaceSession.imageMedia);
             showIntentMessage(qsTr("已关闭图片任务。"));
@@ -771,19 +836,29 @@ ApplicationWindow {
             dropError = pairModel.errorText;
             return false;
         }
-        commitWorkspace(workspaceSession.imageMedia, pairModel.leftFolderPath + "\n" + pairModel.rightFolderPath);
         const firstRow = pairModel.firstCompleteRow();
+        root.imageFolderSidebarVisible = true;
         if (firstRow < 0) {
+            // A valid folder choice with no same-named pair still switches to the image
+            // workspace, with the sidebar showing the missing rows and the reason.
+            commitWorkspace(workspaceSession.imageMedia, pairModel.leftFolderPath + "\n" + pairModel.rightFolderPath);
             dropError = qsTr("两个文件夹没有同名图片。");
             return false;
         }
         dropError = "";
-        root.imageFolderSidebarVisible = true;
+        root.pendingFolderPairRow = firstRow;
         if (!pairModel.openPairAt(firstRow)) {
-            // The controller kept the previous pair (or empty state); surface the failure
+            // The controller rejected the candidate synchronously; surface the failure
             // source instead of advancing the list selection.
+            root.pendingFolderPairRow = -1;
             dropError = pairModel.errorText;
+            workspaceSession.cancelOpen();
             return false;
+        }
+        if (!pairModel.openPending) {
+            // Synchronous opener (tests/embedding) already committed the first pair.
+            root.pendingFolderPairRow = -1;
+            commitWorkspace(workspaceSession.imageMedia, pairModel.leftFolderPath + "\n" + pairModel.rightFolderPath);
         }
         return true;
     }
@@ -792,33 +867,30 @@ ApplicationWindow {
         const target = root.stillImageController;
         if (!target || !normalizedUrls || normalizedUrls.length === 0)
             return false;
-        let opened = false;
+        // New candidate invalidates an older pending one; the visible canvas remains the
+        // previous committed pair until the new candidate actually decodes (T4).
+        if (root.pendingImageRequestId > 0)
+            target.cancelOpenRequest(root.pendingImageRequestId);
+        let requestId = -1;
+        let kind = "";
         if (normalizedUrls.length === 1) {
-            // A single replacement must not leave the previous pair's second image behind.
-            target.closeAll();
-            opened = Boolean(target.openPrimary(normalizedUrls[0]));
-            if (opened) {
-                detachFolderSession();
-                commitWorkspace(workspaceSession.imageMedia, target.primaryPath);
-            }
+            requestId = Number(target.requestOpenPrimary(normalizedUrls[0]));
+            kind = "single";
         } else {
-            // Atomic pair open: on failure the previous pair (or the empty state) stays intact
-            // and errorText keeps the failing side, instead of mixing a new A with an old B.
-            opened = Boolean(target.openPairAtomically(normalizedUrls[0], normalizedUrls[1], -1));
-            if (opened) {
-                detachFolderSession();
-                commitWorkspace(workspaceSession.imageMedia, target.primaryPath + "\n" + target.secondaryPath);
-            }
+            requestId = Number(target.requestOpenPair(normalizedUrls[0], normalizedUrls[1], -1));
+            kind = "pair";
         }
-        if (!opened) {
+        if (!(requestId > 0)) {
             const detail = target.errorText.length > 0 ? String(target.errorText) : qsTr("无法打开图片。");
             dropError = detail;
             showIntentMessage(detail);
             workspaceSession.cancelOpen();
-        } else {
-            dropError = "";
+            return false;
         }
-        return opened;
+        root.pendingImageRequestId = requestId;
+        root.pendingImageOpenKind = kind;
+        dropError = "";
+        return true;
     }
     function reviewUrls(urls, allowSingleSourceAppend) {
         const reviewed = controller.handleDroppedUrls(urls);
@@ -838,14 +910,17 @@ ApplicationWindow {
                     return false;
                 }
                 dropError = "";
-                // Only commit the image workspace after the secondary actually opened, so a
-                // corrupt/oversized B keeps the current committed workspace and its failure
-                // source instead of being overwritten by a half-open image task.
-                if (!imageTarget.openSecondary(normalizedUrls[0]))
+                // T4: append candidate also goes through the async controller. A failed B
+                // keeps the current committed workspace and never commits a half-open task.
+                const appendRequestId = Number(imageTarget.requestOpenSecondary(normalizedUrls[0]));
+                if (!(appendRequestId > 0)) {
+                    const detail = imageTarget.errorText.length > 0 ? String(imageTarget.errorText) : qsTr("无法打开图片。");
+                    dropError = detail;
+                    showIntentMessage(detail);
                     return false;
-                imageTarget.compareMode = 1;
-                detachFolderSession();
-                commitWorkspace(workspaceSession.imageMedia, imageTarget.primaryPath + "\n" + imageTarget.secondaryPath);
+                }
+                root.pendingImageRequestId = appendRequestId;
+                root.pendingImageOpenKind = "append";
                 return true;
             }
             requestDestructiveAction({
@@ -1359,6 +1434,22 @@ ApplicationWindow {
     }
 
     Connections {
+        target: root.stillImageController
+
+        function onOpenFinished(requestId, pairId, success, error) {
+            root.completeImageOpen(requestId, pairId, success, error);
+        }
+    }
+
+    Connections {
+        target: root.folderPairModel
+
+        function onPairOpenFinished(row, success, error) {
+            root.completeFolderPairOpen(row, success, error);
+        }
+    }
+
+    Connections {
         target: root.controller
 
         function onStateChanged() {
@@ -1810,9 +1901,7 @@ ApplicationWindow {
         objectName: "imageWorkspaceRoot"
         visible: root.imageWorkspaceActive
         controller: root.stillImageController
-        // qmllint disable unqualified
-        pairModel: imageFolderPairs
-        // qmllint enable unqualified
+        pairModel: root.folderPairModel
         sidebarVisible: root.imageFolderSidebarVisible
         anchors {
             top: parent.top

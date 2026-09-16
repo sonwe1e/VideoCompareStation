@@ -1,15 +1,61 @@
 #include "dvs/ui/ImageReviewController.h"
 
 #include <QColor>
+#include <QCoreApplication>
+#include <QDir>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QFile>
 #include <QImage>
+#include <QTemporaryDir>
+#include <QThread>
 #include <QUrl>
 
+#include <atomic>
+#include <chrono>
 #include <gtest/gtest.h>
+#include <string>
 
 namespace {
 
 using dvs::ui::ImageReviewController;
+
+void ensureCoreApplication() {
+    if (QCoreApplication::instance() != nullptr) {
+        return;
+    }
+    static int argumentCount = 1;
+    static char applicationName[] = "ImageReviewControllerTests";
+    static char* arguments[] = {applicationName, nullptr};
+    static QCoreApplication application{argumentCount, arguments};
+    static_cast<void>(application);
+}
+
+template <typename Predicate>
+[[nodiscard]] bool waitUntil(Predicate predicate,
+                             const std::chrono::milliseconds timeout = std::chrono::seconds(8)) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (!predicate() && std::chrono::steady_clock::now() < deadline) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 2);
+        QThread::msleep(1U);
+    }
+    return predicate();
+}
+
+[[nodiscard]] bool waitForControllerIdle(const ImageReviewController& controller) {
+    return waitUntil(
+        [&controller] { return !controller.openPending() && !controller.diffPending(); });
+}
+
+class CoreApplicationEnvironment final : public ::testing::Environment {
+public:
+    void SetUp() override {
+        ensureCoreApplication();
+    }
+};
+
+[[maybe_unused]] const bool kCoreApplicationEnvironmentRegistered =
+    ::testing::AddGlobalTestEnvironment(new CoreApplicationEnvironment) != nullptr;
 
 [[nodiscard]] QImage solidImage(const QColor& color) {
     QImage image(4, 4, QImage::Format_ARGB32);
@@ -43,9 +89,14 @@ TEST(ImageReviewControllerTests, DiffPairComputesPeakAndSignedMidpoint) {
         controller.openSecondaryImage(solidImage(QColor(20, 40, 80)), QStringLiteral("right")));
     EXPECT_TRUE(controller.hasPair());
     EXPECT_EQ(controller.compareMode(), static_cast<int>(ImageReviewController::SideBySide));
-    EXPECT_EQ(controller.maxAbsDifference(), 20);
+    // T4: side-by-side is not a diff request, so opening the pair must not pay for a
+    // whole-image difference computation.
+    EXPECT_FALSE(controller.hasDiffResult());
+    EXPECT_EQ(controller.maxAbsDifference(), 0);
 
     controller.setCompareMode(ImageReviewController::SignedDifference);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    EXPECT_EQ(controller.maxAbsDifference(), 20);
     const QVariantMap signedPixel =
         controller.samplePixel(ImageReviewController::DisplayDiffSlot, 0, 0);
     ASSERT_TRUE(signedPixel.value(QStringLiteral("valid")).toBool());
@@ -62,12 +113,14 @@ TEST(ImageReviewControllerTests, HighlightAndAbsDifferenceProduceOutput) {
         controller.openSecondaryImage(solidImage(QColor(10, 10, 10)), QStringLiteral("right")));
 
     controller.setCompareMode(ImageReviewController::AbsDifference);
+    ASSERT_TRUE(waitForControllerIdle(controller));
     EXPECT_EQ(controller.samplePixel(ImageReviewController::DisplayDiffSlot, 0, 0)
                   .value(QStringLiteral("r"))
                   .toInt(),
               40);
 
     controller.setCompareMode(ImageReviewController::Highlight);
+    ASSERT_TRUE(waitForControllerIdle(controller));
     const QVariantMap highlight =
         controller.samplePixel(ImageReviewController::DisplayDiffSlot, 0, 0);
     ASSERT_TRUE(highlight.value(QStringLiteral("valid")).toBool());
@@ -269,9 +322,10 @@ TEST(ImageReviewControllerTests, UnequalSizesGateDiffUntilResampleOptIn) {
     EXPECT_EQ(controller.compareMode(), static_cast<int>(ImageReviewController::Wipe));
     EXPECT_FALSE(controller.hasDiffResult());
 
-    // Opting into resampling computes a labeled derived diff.
+    // Opting into resampling computes a labeled derived diff in the background.
     controller.setResampleAllowed(true);
     controller.setCompareMode(ImageReviewController::AbsDifference);
+    ASSERT_TRUE(waitForControllerIdle(controller));
     EXPECT_TRUE(controller.hasDiffResult());
     EXPECT_TRUE(controller.diffResampled());
     EXPECT_GT(controller.maxAbsDifference(), 0);
@@ -286,6 +340,7 @@ TEST(ImageReviewControllerTests, AlphaOnlyDifferenceIsNotReportedAsEqual) {
     ASSERT_TRUE(
         controller.openPairImages(a, QStringLiteral("a.png"), b, QStringLiteral("b.png"), 0));
     controller.setCompareMode(ImageReviewController::AbsDifference);
+    ASSERT_TRUE(waitForControllerIdle(controller));
     ASSERT_TRUE(controller.hasDiffResult());
     EXPECT_EQ(controller.maxAbsDifference(), 0);
     EXPECT_TRUE(controller.alphaDifferenceOnly());
@@ -300,6 +355,7 @@ TEST(ImageReviewControllerTests, SamplePixelReportsOriginalVersusDerivedSource) 
                                           QStringLiteral("b.png"),
                                           /*pairId=*/0));
     controller.setCompareMode(ImageReviewController::AbsDifference);
+    ASSERT_TRUE(waitForControllerIdle(controller));
     const QVariantMap original = controller.samplePixel(ImageReviewController::PrimarySlot, 0, 0);
     const QVariantMap derived =
         controller.samplePixel(ImageReviewController::DisplayDiffSlot, 0, 0);
@@ -307,4 +363,266 @@ TEST(ImageReviewControllerTests, SamplePixelReportsOriginalVersusDerivedSource) 
     EXPECT_EQ(derived.value(QStringLiteral("source")).toString(), QStringLiteral("diff"));
 }
 
+class ScopedStillImageLoader final {
+public:
+    explicit ScopedStillImageLoader(ImageReviewController::StillImageLoader loader) {
+        ImageReviewController::setProcessStillImageLoader(std::move(loader));
+    }
+
+    ~ScopedStillImageLoader() {
+        ImageReviewController::setProcessStillImageProbe(nullptr);
+        ImageReviewController::setProcessStillImageLoader(nullptr);
+    }
+};
+
+[[nodiscard]] QUrl
+writeBytes(const QTemporaryDir& directory, const QString& name, const QByteArray& bytes) {
+    const QString path = QDir(directory.path()).filePath(name);
+    QFile file{path};
+    if (!file.open(QIODevice::WriteOnly)) {
+        return {};
+    }
+    if (file.write(bytes) != bytes.size()) {
+        return {};
+    }
+    file.close();
+    return QUrl::fromLocalFile(path);
+}
+
+TEST(ImageReviewControllerTests, AsyncPairOpenReturnsImmediatelyAndRejectsLateN) {
+    ensureCoreApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QUrl slowA =
+        writeBytes(directory, QStringLiteral("slowA.bin"), QByteArrayLiteral("slowA"));
+    const QUrl slowB =
+        writeBytes(directory, QStringLiteral("slowB.bin"), QByteArrayLiteral("slowB"));
+    const QUrl fastA =
+        writeBytes(directory, QStringLiteral("fastA.bin"), QByteArrayLiteral("fastA"));
+    const QUrl fastB =
+        writeBytes(directory, QStringLiteral("fastB.bin"), QByteArrayLiteral("fastB"));
+    ASSERT_FALSE(slowA.isEmpty() || slowB.isEmpty() || fastA.isEmpty() || fastB.isEmpty());
+
+    std::atomic<int> loaderCalls{0};
+    ScopedStillImageLoader loader{
+        [&loaderCalls](const QByteArray& bytes, QImage* image, std::string*) {
+            ++loaderCalls;
+            if (bytes.startsWith("slow")) {
+                QThread::msleep(250); // Missing on GUI thread in a passing T4.
+            }
+            QImage decoded(2, 2, QImage::Format_RGBA8888);
+            decoded.fill(bytes.startsWith("slow") ? QColor(10, 20, 30) : QColor(200, 210, 220));
+            *image = decoded;
+            return true;
+        }};
+
+    ImageReviewController controller;
+    QElapsedTimer acceptanceTimer;
+    acceptanceTimer.start();
+    const int slowRequest = controller.requestOpenPair(slowA, slowB, 1);
+    EXPECT_GT(slowRequest, 0);
+    EXPECT_LT(acceptanceTimer.elapsed(), 100)
+        << "accepting a candidate must not wait for the decode worker";
+    ASSERT_TRUE(waitUntil([&loaderCalls] { return loaderCalls.load() >= 1; }));
+
+    const int fastRequest = controller.requestOpenPair(fastA, fastB, 2);
+    EXPECT_GT(fastRequest, 0);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    EXPECT_EQ(controller.committedPairId(), 2);
+    EXPECT_TRUE(controller.primaryPath().endsWith(QStringLiteral("fastA.bin")));
+
+    // Let the late N candidate finish and deliver its old result; it must be dropped.
+    QThread::msleep(350);
+    for (int iteration = 0; iteration < 20; ++iteration) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 2);
+        QThread::msleep(2U);
+    }
+    EXPECT_EQ(controller.committedPairId(), 2);
+    EXPECT_TRUE(controller.primaryPath().endsWith(QStringLiteral("fastA.bin")));
+    EXPECT_FALSE(controller.openPending());
+}
+
+TEST(ImageReviewControllerTests, AsyncCandidateFailureKeepsPreviousPair) {
+    ensureCoreApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QUrl oldA =
+        writeBytes(directory, QStringLiteral("oldA.bin"), QByteArrayLiteral("goodA0"));
+    const QUrl oldB =
+        writeBytes(directory, QStringLiteral("oldB.bin"), QByteArrayLiteral("goodB0"));
+    const QUrl newA =
+        writeBytes(directory, QStringLiteral("newA.bin"), QByteArrayLiteral("goodA1"));
+    const QUrl badB = writeBytes(directory, QStringLiteral("badB.bin"), QByteArrayLiteral("badB1"));
+    ASSERT_FALSE(oldA.isEmpty() || oldB.isEmpty() || newA.isEmpty() || badB.isEmpty());
+
+    ScopedStillImageLoader loader{[](const QByteArray& bytes, QImage* image, std::string* error) {
+        if (bytes.startsWith("bad")) {
+            if (error != nullptr) {
+                *error = "B side corrupt";
+            }
+            return false;
+        }
+        QImage decoded(2, 2, QImage::Format_RGBA8888);
+        decoded.fill(bytes.startsWith("goodA") ? QColor(10, 20, 30) : QColor(40, 50, 60));
+        *image = decoded;
+        return true;
+    }};
+
+    ImageReviewController controller;
+    ASSERT_TRUE(controller.openPairImages(QImage(2, 2, QImage::Format_RGBA8888),
+                                          QStringLiteral("oldA"),
+                                          QImage(2, 2, QImage::Format_RGBA8888),
+                                          QStringLiteral("oldB"),
+                                          /*pairId=*/9));
+    const QImage oldSecondary = controller.imageForSlot(ImageReviewController::SecondarySlot);
+
+    const int requestId = controller.requestOpenPair(newA, badB, 10);
+    EXPECT_GT(requestId, 0);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    EXPECT_FALSE(controller.openPending());
+    EXPECT_EQ(controller.committedPairId(), 9);
+    EXPECT_TRUE(controller.primaryPath().endsWith(QStringLiteral("oldA")));
+    EXPECT_TRUE(controller.secondaryPath().endsWith(QStringLiteral("oldB")));
+    EXPECT_TRUE(controller.imageForSlot(ImageReviewController::SecondarySlot) == oldSecondary);
+    EXPECT_TRUE(controller.errorText().contains(QStringLiteral("B")));
+}
+
+TEST(ImageReviewControllerTests, CancelledOrClosedOpenNeverPublishesLateResult) {
+    ensureCoreApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QUrl slowA =
+        writeBytes(directory, QStringLiteral("cancelA.bin"), QByteArrayLiteral("slowA"));
+    const QUrl slowB =
+        writeBytes(directory, QStringLiteral("cancelB.bin"), QByteArrayLiteral("slowB"));
+    ASSERT_FALSE(slowA.isEmpty() || slowB.isEmpty());
+
+    std::atomic<bool> started{false};
+    ScopedStillImageLoader loader{[&started](const QByteArray&, QImage* image, std::string*) {
+        started.store(true);
+        QThread::msleep(200);
+        QImage decoded(2, 2, QImage::Format_RGBA8888);
+        decoded.fill(Qt::red);
+        *image = decoded;
+        return true;
+    }};
+
+    ImageReviewController controller;
+    const int requestId = controller.requestOpenPair(slowA, slowB, 5);
+    ASSERT_GT(requestId, 0);
+    ASSERT_TRUE(waitUntil([&started] { return started.load(); }));
+    controller.cancelOpenRequest(requestId);
+    EXPECT_FALSE(controller.openPending());
+    QThread::msleep(300);
+    for (int iteration = 0; iteration < 20; ++iteration) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 2);
+        QThread::msleep(2U);
+    }
+    EXPECT_FALSE(controller.hasPair());
+    EXPECT_EQ(controller.committedPairId(), -1);
+}
+
+TEST(ImageReviewControllerTests, DifferenceIsOnDemandAndReusedFromByteBudgetedCache) {
+    ensureCoreApplication();
+    ImageReviewController controller;
+    controller.clearAsyncCaches();
+    QImage left(32, 32, QImage::Format_ARGB32);
+    left.fill(QColor(10, 20, 30));
+    QImage right(32, 32, QImage::Format_ARGB32);
+    right.fill(QColor(40, 50, 60));
+    ASSERT_TRUE(
+        controller.openPairImages(left, QStringLiteral("a"), right, QStringLiteral("b"), 0));
+    EXPECT_FALSE(controller.hasDiffResult());
+
+    controller.setCompareMode(ImageReviewController::AbsDifference);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    ASSERT_TRUE(controller.hasDiffResult());
+    QVariantMap stats = controller.asyncStats();
+    EXPECT_EQ(stats.value(QStringLiteral("diff_cache_misses")).toInt(), 1);
+
+    controller.setCompareMode(ImageReviewController::SideBySide);
+    controller.setCompareMode(ImageReviewController::AbsDifference);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    EXPECT_TRUE(controller.hasDiffResult());
+    stats = controller.asyncStats();
+    EXPECT_EQ(stats.value(QStringLiteral("diff_cache_misses")).toInt(), 1);
+    EXPECT_GE(stats.value(QStringLiteral("diff_cache_hits")).toInt(), 1);
+    EXPECT_LE(stats.value(QStringLiteral("diff_cache_bytes")).toLongLong(),
+              stats.value(QStringLiteral("diff_cache_budget_bytes")).toLongLong());
+}
+
+TEST(ImageReviewControllerTests, PrefetchWarmsCacheAndUserOpenUsesIt) {
+    ensureCoreApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QUrl left =
+        writeBytes(directory, QStringLiteral("prefetchA.bin"), QByteArrayLiteral("prefetchA"));
+    const QUrl right =
+        writeBytes(directory, QStringLiteral("prefetchB.bin"), QByteArrayLiteral("prefetchB"));
+    ASSERT_FALSE(left.isEmpty() || right.isEmpty());
+
+    std::atomic<int> decodeCalls{0};
+    ScopedStillImageLoader loader{
+        [&decodeCalls](const QByteArray& bytes, QImage* image, std::string*) {
+            ++decodeCalls;
+            QImage decoded(2, 2, QImage::Format_RGBA8888);
+            decoded.fill(bytes.startsWith("prefetchA") ? QColor(1, 2, 3) : QColor(4, 5, 6));
+            *image = decoded;
+            return true;
+        }};
+
+    ImageReviewController controller;
+    controller.clearAsyncCaches();
+    controller.prefetchPair(left, right);
+    ASSERT_TRUE(waitUntil([&controller] {
+        const QVariantMap stats = controller.asyncStats();
+        return stats.value(QStringLiteral("active_requests")).toInt() == 0 &&
+               stats.value(QStringLiteral("load_cache_entries")).toInt() >= 2;
+    }));
+    const int callsAfterPrefetch = decodeCalls.load();
+    EXPECT_EQ(callsAfterPrefetch, 2);
+
+    ASSERT_GT(controller.requestOpenPair(left, right, 3), 0);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    EXPECT_EQ(controller.committedPairId(), 3);
+    EXPECT_EQ(decodeCalls.load(), callsAfterPrefetch);
+    const QVariantMap stats = controller.asyncStats();
+    EXPECT_GE(stats.value(QStringLiteral("load_cache_hits")).toInt(), 2);
+    EXPECT_LE(stats.value(QStringLiteral("load_cache_bytes")).toLongLong(),
+              stats.value(QStringLiteral("load_cache_budget_bytes")).toLongLong());
+}
+
+TEST(ImageReviewControllerTests, HeaderProbeRejectsOversizedBeforeDecoderThrows) {
+    ensureCoreApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QUrl hugeA =
+        writeBytes(directory, QStringLiteral("hugeA.bin"), QByteArrayLiteral("HUGE"));
+    const QUrl hugeB =
+        writeBytes(directory, QStringLiteral("hugeB.bin"), QByteArrayLiteral("HUGE"));
+    ASSERT_FALSE(hugeA.isEmpty() || hugeB.isEmpty());
+
+    std::atomic<int> decoderCalls{0};
+    ImageReviewController::setProcessStillImageProbe([](const QByteArray& bytes, QSize* size) {
+        if (!bytes.startsWith("HUGE") || size == nullptr) {
+            return false;
+        }
+        *size = QSize(20000, 20000);
+        return true;
+    });
+    ScopedStillImageLoader loader{[&decoderCalls](const QByteArray&, QImage* image, std::string*) {
+        ++decoderCalls;
+        QImage decoded(2, 2, QImage::Format_RGBA8888);
+        decoded.fill(Qt::green);
+        *image = decoded;
+        return true;
+    }};
+
+    ImageReviewController controller;
+    ASSERT_GT(controller.requestOpenPair(hugeA, hugeB, 1), 0);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    EXPECT_FALSE(controller.hasPair());
+    EXPECT_FALSE(controller.errorText().isEmpty());
+    EXPECT_EQ(decoderCalls.load(), 0);
+}
 } // namespace

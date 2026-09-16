@@ -34,6 +34,14 @@ void ImageFolderPairModel::setPairOpener(PairOpener opener) {
     opener_ = std::move(opener);
 }
 
+void ImageFolderPairModel::setAsyncPairOpener(AsyncPairOpener opener) {
+    asyncOpener_ = std::move(opener);
+}
+
+void ImageFolderPairModel::setAsyncPairCancel(AsyncPairCancel cancel) {
+    asyncCancel_ = std::move(cancel);
+}
+
 QString ImageFolderPairModel::leftFolderName() const noexcept {
     return QFileInfo{leftFolderPath_}.fileName();
 }
@@ -68,6 +76,14 @@ void ImageFolderPairModel::setCurrentPair(const int row) {
 
 QString ImageFolderPairModel::errorText() const noexcept {
     return errorText_;
+}
+
+bool ImageFolderPairModel::openPending() const noexcept {
+    return pendingRequestId_ != 0;
+}
+
+int ImageFolderPairModel::pendingPair() const noexcept {
+    return pendingRow_;
 }
 
 int ImageFolderPairModel::rowCount(const QModelIndex& parent) const {
@@ -117,6 +133,7 @@ bool ImageFolderPairModel::isStillImageName(const QString& fileName) {
 }
 
 bool ImageFolderPairModel::loadFolders(const QUrl& left, const QUrl& right) {
+    cancelPendingOpen();
     const QString leftPath = left.toLocalFile();
     const QString rightPath = right.toLocalFile();
     const QFileInfo leftInfo{leftPath};
@@ -209,6 +226,7 @@ bool ImageFolderPairModel::loadFolders(const QUrl& left, const QUrl& right) {
 }
 
 void ImageFolderPairModel::clear() {
+    cancelPendingOpen();
     if (rows_.empty() && leftFolderPath_.isEmpty() && rightFolderPath_.isEmpty() &&
         currentPair_ < 0 && errorText_.isEmpty()) {
         return;
@@ -225,11 +243,31 @@ void ImageFolderPairModel::clear() {
 }
 
 bool ImageFolderPairModel::openPairAt(const int row) {
-    if (row < 0 || static_cast<std::size_t>(row) >= rows_.size() || !opener_) {
+    if (row < 0 || static_cast<std::size_t>(row) >= rows_.size()) {
         return false;
     }
     const PairRow& pair = rows_[static_cast<std::size_t>(row)];
     if (!pair.hasLeft || !pair.hasRight) {
+        return false;
+    }
+
+    if (asyncOpener_) {
+        QString immediateError;
+        const int requestId = asyncOpener_(pair.leftUrl, pair.rightUrl, row, &immediateError);
+        if (requestId <= 0) {
+            errorText_ =
+                immediateError.isEmpty() ? tr("Could not open image pair.") : immediateError;
+            emit foldersChanged();
+            return false;
+        }
+        pendingRequestId_ = static_cast<quint64>(requestId);
+        pendingRow_ = row;
+        errorText_.clear();
+        emit pendingPairChanged();
+        return true;
+    }
+
+    if (!opener_) {
         return false;
     }
     const QString error = opener_(pair.leftUrl, pair.rightUrl, row);
@@ -237,6 +275,7 @@ bool ImageFolderPairModel::openPairAt(const int row) {
         // The canvas kept its previous committed pair (or the explicit empty state);
         // currentPair_ stays put so selection and canvas identity never diverge.
         errorText_ = error;
+        emit foldersChanged();
         return false;
     }
     errorText_.clear();
@@ -245,6 +284,49 @@ bool ImageFolderPairModel::openPairAt(const int row) {
         emit currentPairChanged();
     }
     return true;
+}
+
+void ImageFolderPairModel::cancelPendingOpen() {
+    if (pendingRequestId_ == 0) {
+        pendingRow_ = -1;
+        return;
+    }
+    if (asyncCancel_) {
+        asyncCancel_(static_cast<int>(pendingRequestId_));
+    }
+    pendingRequestId_ = 0;
+    pendingRow_ = -1;
+    emit pendingPairChanged();
+}
+
+void ImageFolderPairModel::completePairOpen(const quint64 requestId,
+                                            const bool success,
+                                            QString error) {
+    if (requestId == 0 || requestId != pendingRequestId_) {
+        return; // A late N/N+1 candidate can never advance N+2's selection.
+    }
+    const int row = pendingRow_;
+    pendingRequestId_ = 0;
+    pendingRow_ = -1;
+
+    if (!success) {
+        errorText_ = std::move(error);
+        if (errorText_.isEmpty()) {
+            errorText_ = tr("Could not open image pair.");
+        }
+        emit pendingPairChanged();
+        emit foldersChanged();
+        emit pairOpenFinished(row, false, errorText_);
+        return;
+    }
+
+    errorText_.clear();
+    if (row >= 0 && currentPair_ != row) {
+        currentPair_ = row;
+        emit currentPairChanged();
+    }
+    emit pendingPairChanged();
+    emit pairOpenFinished(row, true, QString{});
 }
 
 int ImageFolderPairModel::firstCompleteRow() const noexcept {

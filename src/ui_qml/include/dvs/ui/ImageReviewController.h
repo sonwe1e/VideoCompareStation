@@ -1,5 +1,7 @@
 #pragma once
 
+#include "dvs/ui/ImagePairLoader.h"
+
 #include <QByteArray>
 #include <QImage>
 #include <QObject>
@@ -9,6 +11,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 
 namespace dvs::ui {
@@ -43,6 +46,8 @@ class ImageReviewController final : public QObject {
     Q_PROPERTY(
         bool resampleAllowed READ resampleAllowed WRITE setResampleAllowed NOTIFY stateChanged)
     Q_PROPERTY(QString diffScopeText READ diffScopeText NOTIFY stateChanged)
+    Q_PROPERTY(bool openPending READ openPending NOTIFY stateChanged)
+    Q_PROPERTY(bool diffPending READ diffPending NOTIFY stateChanged)
 
 public:
     // Process-wide still-image decoder. Qt's imageformat plugins may omit PNG/JPEG on
@@ -51,6 +56,10 @@ public:
     using StillImageLoader =
         std::function<bool(const QByteArray& fileBytes, QImage* image, std::string* error)>;
     static void setProcessStillImageLoader(StillImageLoader loader);
+    // Optional header-only dimensions probe. Returning false means "unknown", not failure;
+    // the loader still decodes and checks the decoded size afterwards.
+    using StillImageProbe = std::function<bool(const QByteArray& fileBytes, QSize* size)>;
+    static void setProcessStillImageProbe(StillImageProbe probe);
 
     enum CompareMode : int {
         PrimaryOnly = 0,
@@ -72,6 +81,7 @@ public:
     Q_ENUM(ImageSlot)
 
     explicit ImageReviewController(QObject* parent = nullptr);
+    ~ImageReviewController() override;
 
     [[nodiscard]] bool hasPrimary() const noexcept;
     [[nodiscard]] bool hasSecondary() const noexcept;
@@ -101,6 +111,8 @@ public:
     [[nodiscard]] bool resampleAllowed() const noexcept;
     void setResampleAllowed(bool allowed);
     [[nodiscard]] QString diffScopeText() const;
+    [[nodiscard]] bool openPending() const noexcept;
+    [[nodiscard]] bool diffPending() const noexcept;
 
     Q_INVOKABLE bool openPrimary(const QUrl& url);
     Q_INVOKABLE bool openSecondary(const QUrl& url);
@@ -126,6 +138,20 @@ public:
     Q_INVOKABLE void clearCursorPixel();
     Q_INVOKABLE QString imageUrl(int imageSlot) const;
 
+    // T4 asynchronous entries. Each returns a positive request id when accepted; the final
+    // commit or error is delivered through openFinished on the GUI thread. A newer request
+    // invalidates older candidates, so a late N cannot replace N+2.
+    Q_INVOKABLE int requestOpenPrimary(const QUrl& url);
+    Q_INVOKABLE int requestOpenSecondary(const QUrl& url);
+    Q_INVOKABLE int requestOpenPair(const QUrl& primary, const QUrl& secondary, int pairId = -1);
+    Q_INVOKABLE void cancelPendingOpen();
+    Q_INVOKABLE void cancelOpenRequest(int requestId);
+    // One bounded neighbour read. It only warms the decoded-image cache; it never changes
+    // the visible pair or committed identity.
+    Q_INVOKABLE void prefetchPair(const QUrl& primary, const QUrl& secondary);
+    Q_INVOKABLE QVariantMap asyncStats() const;
+    Q_INVOKABLE void clearAsyncCaches();
+
     // Direct image injection (tests and non-file sources).
     bool openPrimaryImage(QImage image, QString pathLabel);
     bool openSecondaryImage(QImage image, QString pathLabel);
@@ -137,13 +163,28 @@ signals:
     void stateChanged();
     void viewChanged();
     void cursorPixelChanged();
+    // T4 completion contract: exactly one terminal per accepted asynchronous request.
+    void openFinished(int requestId, int pairId, bool success, QString error);
 
 private:
+    struct AsyncState;
+
     void setError(QString text);
-    void recomputeDifference();
     void bumpGeneration();
     [[nodiscard]] static bool loadChecked(const QUrl& url, QImage* image, QString* error);
     [[nodiscard]] QImage displayImage(int slot) const;
+
+    [[nodiscard]] ImagePairLoader::DecodePolicy currentDecodePolicy() const;
+    void handleLoadFinished(ImagePairLoader::Result result);
+    void handleDifferenceFinished(ImagePairLoader::DifferenceResult result);
+    void commitLoadedPrimary(QImage image, QString label, QString identity);
+    void commitLoadedSecondary(QImage image, QString label, QString identity);
+    void commitLoadedPair(ImagePairLoader::Result result);
+    void cancelDifferenceRequest();
+    void resetDifferenceState();
+    void requestDifferenceForCurrentMode();
+    void applyDifferenceResult(const ImagePairLoader::DifferenceResult& result);
+    [[nodiscard]] QString differenceCacheKey() const;
 
     QImage primary_;
     QImage secondary_;
@@ -168,6 +209,7 @@ private:
     qreal panX_ = 0.5;
     qreal panY_ = 0.5;
     QVariantMap cursorPixel_;
+    std::unique_ptr<AsyncState> async_;
 };
 
 } // namespace dvs::ui

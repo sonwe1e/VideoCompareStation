@@ -117,6 +117,28 @@
 | 回退 | 可关闭预读和派生缓存；必要时退到尺寸受限、语义仍正确的同步加载，保留 pending/commit 与错误协议；不能恢复原图破坏。 |
 
 
+**T4 验收记录 (2026-09-16)**
+
+- 交付: 新增 `ImagePairLoader` (`src/ui_qml/include/dvs/ui/ImagePairLoader.h`, `src/ui_qml/src/ImagePairLoader.cpp`) 作为后台加载/派生计算服务. 每控制器一个有界 `QThreadPool` (maxThreadCount=2); 请求带单调 request id 与取消 token; 完成回调经 queued invocation 回到 owner 线程, worker 只接触文件字节与 `QImage` 副本, 不触碰 QObject 状态.
+- 原图缓存按字节 LRU (128 MiB), 派生差异缓存按字节 LRU (64 MiB); 键包含文件身份 (路径/大小/mtime/decode policy revision), `QImage` 内容身份, 比较模式, resample 策略与目标尺寸/尺寸差异. 另提供单次邻接预读 `prefetchPair`, 用户请求会取消预读.
+- 格式头预检走注入的 FFmpeg header probe, 另加 `ImageHeaderProbe.h` 对 PNG/JPEG/GIF/BMP/WebP 的轻量兜底; 解码前后都检查 8192 边长与 128 MiB 解码预算, 解码器异常被捕获并转为显式失败.
+- 控制器 API: 新增 `requestOpenPrimary/requestOpenSecondary/requestOpenPair` (O(1) 接受并返回 request id), `cancelPendingOpen/cancelOpenRequest`, `prefetchPair`, `asyncStats`, `clearAsyncCaches`, `openPending/diffPending` 属性与 `openFinished(requestId,pairId,success,error)` 终态信号. 同步 `openPrimary/openSecondary/openPairAtomically/openPairImages` 保留给测试与非文件来源.
+- 每次新候选使旧候选失效; 晚到的 N/N+1 结果在 request id 检查处丢弃; 失败候选不改变 committedPairId, 路径, 原图像素或 generation, 错误来源保留为 "无法打开 A/B: ...".
+- 派生差异按需: `openPair*` 与 `SideBySide/Wipe` 不再计算整图差异; 切换差异模式才查派生缓存或提交 worker. 缓存命中同步应用, 未命中时 `diffPending=true`, `hasDiffResult=false` 不伪造结果; `setResampleAllowed` 仅重算差异模式, 尺寸不等未启用重采样时仍给出尺寸提示.
+- 原差异算法 (每像素 RGB 最大差, gain=4, alpha-only 标记, RGBA8 范围) 未改名/改义, 仅移入 worker.
+- 文件夹路径: `ImageFolderPairModel` 增加 `AsyncPairOpener`/`AsyncPairCancel` 与 `completePairOpen`; `currentPair` 只在匹配 request id 的成功终态推进, 失败/过期终态不改选择. `FolderPairSidebar` 与 `Main.loadFolderComparison` 仍经由该模型.
+- Main.qml 引入 pending image request 状态; `performImageReview`, 追加图片, 文件夹首对选择均先 beginOpen, 成功 `openFinished` 后才 commitWorkspace; 取消选择器/关闭任务会调用 `cancelOpenRequest`, 失败保留上一已提交任务. 同步 opener 仍可工作 (`openPending=false` 时立即提交).
+- T0 图片探针: `runImageFolderEvidence` 改为异步阶段机 (等待首对, 逐行, 等待差异完成, 取消/重开), 保证 `open_ms` 度量真实完成时间而不是接受时间; 命令与 fixture 不变. 该调整只影响证据采集, 不改变业务逻辑.
+- 测试: `dvs_image_review_controller_tests` 新增 6 项 (慢加载 N->N+1->N+2 晚到结果丢弃, 失败保留上一对, 取消/关闭后晚到不发布, 并排不计算/差异缓存命中, 预读命中, 头部预算在解码前拒绝); `dvs_image_folder_pair_model_tests` 新增 2 项 (异步选择只在匹配终态推进, 取消后晚到终态忽略); 既有 T1/T2 差异测试按异步终态等待后语义不变; `MainQmlContractTests` 文件夹端到端改为等待真实提交.
+- 开发全套 `ctest --preset dev` 527/527 通过 (7 项既有 disabled); `format-check`, `lint`, `qmllint --max-warnings 0` 通过; Release `--ui-image-folder` 探针 `passed:true`.
+- 证据 (Release, 同 T0 fixture; T0 基线见 `out/evidence/baseline-20260916-172928/p4-images/images.json`): T4 原始 stderr/stdout 为 `out/T4-release-image-probe.err` / `.out`. 同一探针对比: `big.png` open_ms 226->76 ms; UI event-loop gap P95 71->2 ms, P99 281->9 ms, max 281->64 ms; peak working set 518,377,472->409,784,320 bytes; diff recompute wall 5->11 ms (包含 worker 调度/等待, UI gap 证明计算不再占用主线程); threads baseline/peak 86/87->86/88; shutdown_ms 49. 结论属于同机同 fixture 的 Release 观测, 不作为硬件 cadence 指标.
+- 回退边界: 同步加载 API 与既有原子语义保留; `prefetchPair` 可不用, 缓存可 `clearAsyncCaches`. 未恢复任何直接改写 `secondary_` 或失败混图的旧行为.
+
+**T4 遗留 (供 T6/T5 参考)**
+
+- 邻接预读 API 已有并有缓存命中测试, 但尚未在文件夹换对时自动调度; 自动预读相邻配对与滚动上下文留给 T6 一起处理, 当前每次只加载用户选择的一对.
+- 取消运行中的解码只能在其读取/解码边界后丢弃结果; 析构会等待正在执行的 worker 完成, 避免悬空访问. 后续若出现超大图退出时延, 需要在解码循环内加入显式取消检查.
+- 未实现 "关闭派生缓存" 的独立用户开关; 当前通过 64 MiB 字节上限和 `clearAsyncCaches` 控制. T5 仍需 T0 因果证据后才允许修改播放调度/缓存参数.
 ### T5 · P1 条件执行｜视频平滑播放的已定位热点修复
 
 | 字段 | 可执行约定 |

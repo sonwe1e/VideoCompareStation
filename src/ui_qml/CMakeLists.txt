@@ -44,6 +44,7 @@ if(DVS_BUILD_ADAPTERS)
             include/dvs/ui/DesktopApplication.h
             include/dvs/ui/DirectCompare.h
             include/dvs/ui/GraphicsBackend.h
+            include/dvs/ui/ImagePairLoader.h
             include/dvs/ui/ImageReviewController.h
             include/dvs/ui/Module.h
             include/dvs/ui/RenderAckRelay.h
@@ -53,6 +54,7 @@ if(DVS_BUILD_ADAPTERS)
             src/DirectCompare.cpp
             src/ComparisonSurface.cpp
             src/GraphicsBackend.cpp
+            src/ImagePairLoader.cpp
             src/ImageReviewController.cpp
             src/Module.cpp
             src/RenderAckRelay.cpp

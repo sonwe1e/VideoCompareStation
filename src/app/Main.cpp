@@ -1911,10 +1911,14 @@ runImageFolderEvidence(int& argc, char** argv, const ImageFolderInvocation& invo
 
     enum class ImageStage {
         WaitingForGraphics,
-        LoadingFolders,
+        WaitingForFolderFirstPair,
         IteratingRows,
+        WaitingForRowOpen,
         DifferenceProbe,
+        WaitingForDiffPairOpen,
+        WaitingForDiff,
         CancelProbe,
+        WaitingForReopen,
         Completed,
     };
     ImageStage stage = ImageStage::WaitingForGraphics;
@@ -1933,6 +1937,8 @@ runImageFolderEvidence(int& argc, char** argv, const ImageFolderInvocation& invo
     qint64 loadFoldersMilliseconds = -1;
     std::vector<ImageRowEvidence> rows;
     int iterateRow = 1;
+    int folderFirstRow = -1;
+    int waitingRow = -1;
     int diffPairRow = -1;
     qint64 diffRecomputeMilliseconds = -1;
     int diffMaxAbsDifference = -1;
@@ -1992,6 +1998,9 @@ runImageFolderEvidence(int& argc, char** argv, const ImageFolderInvocation& invo
             evidence.contentGeneration = review->contentGeneration();
             evidence.errorText = review->errorText().toStdString();
         }
+        if (evidence.errorText.empty() && model != nullptr) {
+            evidence.errorText = model->errorText().toStdString();
+        }
         if (!evidence.leftPath.empty()) {
             evidence.leftSha256 = fileSha256Hex(std::filesystem::path{evidence.leftPath});
         }
@@ -2035,8 +2044,31 @@ runImageFolderEvidence(int& argc, char** argv, const ImageFolderInvocation& invo
                 fail("folder-pair-count-invalid");
                 return;
             }
-            // The load call opened the first complete row; every row (including row 0) is
-            // then observed uniformly so single-sided rows report opened=false.
+            folderFirstRow = model->firstCompleteRow();
+            if (folderFirstRow < 0) {
+                // No complete pair: the sidebar still gets a row walk with every row
+                // reporting opened=false.
+                stage = ImageStage::IteratingRows;
+                iterateRow = 0;
+                return;
+            }
+            // Folder load accepted the first candidate asynchronously; wait for its actual
+            // commit before the uniform row walk starts (T4 pending/committed boundary).
+            stage = ImageStage::WaitingForFolderFirstPair;
+            return;
+        }
+        case ImageStage::WaitingForFolderFirstPair: {
+            if (model == nullptr) {
+                fail("folder-model-missing");
+                return;
+            }
+            if (model->openPending()) {
+                return;
+            }
+            if (model->currentPair() != folderFirstRow) {
+                fail("first-pair-open-rejected:" + model->errorText().toStdString());
+                return;
+            }
             stage = ImageStage::IteratingRows;
             iterateRow = 0;
             return;
@@ -2054,14 +2086,34 @@ runImageFolderEvidence(int& argc, char** argv, const ImageFolderInvocation& invo
             const bool complete =
                 model->data(model->index(row, 0), dvs::ui::ImageFolderPairModel::HasBothRole)
                     .toBool();
+            if (!complete) {
+                captureRow(row, 0, false);
+                ++iterateRow;
+                return;
+            }
             openTimer.start();
-            const bool opened = complete && model->openPairAt(row);
-            captureRow(row, openTimer.elapsed(), opened);
+            if (!model->openPairAt(row)) {
+                fail("row-open-rejected:" + model->errorText().toStdString());
+                return;
+            }
+            waitingRow = row;
+            stage = ImageStage::WaitingForRowOpen;
+            return;
+        }
+        case ImageStage::WaitingForRowOpen: {
+            if (model == nullptr) {
+                fail("folder-model-missing");
+                return;
+            }
+            if (model->openPending()) {
+                return;
+            }
+            captureRow(waitingRow, openTimer.elapsed(), model->currentPair() == waitingRow);
             ++iterateRow;
+            stage = ImageStage::IteratingRows;
             return;
         }
         case ImageStage::DifferenceProbe: {
-            // Reopen the first complete pair, then measure the synchronous diff recompute.
             if (diffPairRow < 0) {
                 if (model == nullptr) {
                     fail("folder-model-missing");
@@ -2073,21 +2125,43 @@ runImageFolderEvidence(int& argc, char** argv, const ImageFolderInvocation& invo
                     return;
                 }
                 if (!model->openPairAt(diffPairRow)) {
-                    fail("diff-pair-open-rejected");
+                    fail("diff-pair-open-rejected:" + model->errorText().toStdString());
                     return;
                 }
+                stage = ImageStage::WaitingForDiffPairOpen;
                 return;
             }
+            stage = ImageStage::WaitingForDiffPairOpen;
+            return;
+        }
+        case ImageStage::WaitingForDiffPairOpen: {
+            if (model == nullptr || review == nullptr) {
+                fail("image-review-missing");
+                return;
+            }
+            if (model->openPending()) {
+                return;
+            }
+            if (model->currentPair() != diffPairRow) {
+                fail("diff-pair-open-rejected:" + model->errorText().toStdString());
+                return;
+            }
+            // T2: unequal-size pairs only compute a diff after the explicit resample opt-in.
+            // T4: this request runs on the loader worker and the probe measures commit latency.
+            review->setResampleAllowed(true);
+            diffTimer.start();
+            review->setCompareMode(static_cast<int>(dvs::ui::ImageReviewController::AbsDifference));
+            stage = ImageStage::WaitingForDiff;
+            return;
+        }
+        case ImageStage::WaitingForDiff: {
             if (review == nullptr) {
                 fail("image-review-missing");
                 return;
             }
-            diffTimer.start();
-            // T2: unequal-size pairs only compute a diff after the explicit resample opt-in,
-            // so the probe opts in to keep measuring the diff path and records whether the
-            // result was resampled (or gated) in the evidence.
-            review->setResampleAllowed(true);
-            review->setCompareMode(static_cast<int>(dvs::ui::ImageReviewController::AbsDifference));
+            if (review->diffPending()) {
+                return;
+            }
             diffRecomputeMilliseconds = diffTimer.elapsed();
             diffMaxAbsDifference = review->maxAbsDifference();
             diffMeanAbsDifference = review->meanAbsDifference();
@@ -2115,16 +2189,28 @@ runImageFolderEvidence(int& argc, char** argv, const ImageFolderInvocation& invo
                     return;
                 }
                 if (!model->openPairAt(diffPairRow)) {
-                    fail("cancel-reopen-rejected");
+                    fail("cancel-reopen-rejected:" + model->errorText().toStdString());
                     return;
                 }
-                cancelReopened = review->hasPair();
-                cancelReopenGeneration = review->contentGeneration();
+                stage = ImageStage::WaitingForReopen;
                 return;
             }
             stage = ImageStage::Completed;
             completed = true;
             desktop.exit(EXIT_SUCCESS);
+            return;
+        }
+        case ImageStage::WaitingForReopen: {
+            if (model == nullptr || review == nullptr) {
+                fail("image-review-missing");
+                return;
+            }
+            if (model->openPending()) {
+                return;
+            }
+            cancelReopened = review->hasPair() && model->currentPair() == diffPairRow;
+            cancelReopenGeneration = review->contentGeneration();
+            stage = ImageStage::CancelProbe;
             return;
         }
         case ImageStage::Completed:
@@ -2613,6 +2699,29 @@ int main(int argc, char* argv[]) {
         *image = decoded.copy();
         return !image->isNull();
     });
+    dvs::ui::ImageReviewController::setProcessStillImageProbe(
+        [](const QByteArray& bytes, QSize* size) {
+            if (bytes.isEmpty() || size == nullptr) {
+                return false;
+            }
+            int width = 0;
+            int height = 0;
+            std::string error;
+            if (!dvs::media::probeStillImageBytes(
+                    reinterpret_cast<const std::uint8_t*>(bytes.constData()),
+                    static_cast<std::size_t>(bytes.size()),
+                    &width,
+                    &height,
+                    &error)) {
+                return false;
+            }
+            if (width <= 0 || height <= 0) {
+                return false;
+            }
+            size->setWidth(width);
+            size->setHeight(height);
+            return true;
+        });
 
     const bool smokeArgument = argc >= 2 && std::string_view{argv[1]}.starts_with("--ui-");
     try {
