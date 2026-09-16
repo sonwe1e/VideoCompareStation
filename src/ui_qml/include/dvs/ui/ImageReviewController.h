@@ -36,6 +36,13 @@ class ImageReviewController final : public QObject {
     Q_PROPERTY(int contentGeneration READ contentGeneration NOTIFY stateChanged)
     Q_PROPERTY(int maxAbsDifference READ maxAbsDifference NOTIFY stateChanged)
     Q_PROPERTY(double meanAbsDifference READ meanAbsDifference NOTIFY stateChanged)
+    Q_PROPERTY(int committedPairId READ committedPairId NOTIFY stateChanged)
+    Q_PROPERTY(bool hasDiffResult READ hasDiffResult NOTIFY stateChanged)
+    Q_PROPERTY(bool diffResampled READ diffResampled NOTIFY stateChanged)
+    Q_PROPERTY(bool alphaDifferenceOnly READ alphaDifferenceOnly NOTIFY stateChanged)
+    Q_PROPERTY(
+        bool resampleAllowed READ resampleAllowed WRITE setResampleAllowed NOTIFY stateChanged)
+    Q_PROPERTY(QString diffScopeText READ diffScopeText NOTIFY stateChanged)
 
 public:
     // Process-wide still-image decoder. Qt's imageformat plugins may omit PNG/JPEG on
@@ -87,9 +94,28 @@ public:
     [[nodiscard]] int contentGeneration() const noexcept;
     [[nodiscard]] int maxAbsDifference() const noexcept;
     [[nodiscard]] double meanAbsDifference() const noexcept;
+    [[nodiscard]] int committedPairId() const noexcept;
+    [[nodiscard]] bool hasDiffResult() const noexcept;
+    [[nodiscard]] bool diffResampled() const noexcept;
+    [[nodiscard]] bool alphaDifferenceOnly() const noexcept;
+    [[nodiscard]] bool resampleAllowed() const noexcept;
+    void setResampleAllowed(bool allowed);
+    [[nodiscard]] QString diffScopeText() const;
 
     Q_INVOKABLE bool openPrimary(const QUrl& url);
     Q_INVOKABLE bool openSecondary(const QUrl& url);
+    // Opens both sides as one transaction: every validation runs before any state changes,
+    // and on success the pair, paths and committedPairId switch in a single generation bump.
+    // On failure the previous pair (or the explicit empty state) is fully retained and the
+    // failure source is kept in errorText.
+    Q_INVOKABLE bool
+    openPairAtomically(const QUrl& primary, const QUrl& secondary, int pairId = -1);
+    // Image-injection form of openPairAtomically (tests and non-file sources).
+    bool openPairImages(QImage primary,
+                        QString primaryLabel,
+                        QImage secondary,
+                        QString secondaryLabel,
+                        int pairId = -1);
     Q_INVOKABLE void closeAll();
     Q_INVOKABLE void resetView();
     Q_INVOKABLE void zoomBy(qreal factor, qreal anchorNormalizedX, qreal anchorNormalizedY);
@@ -130,6 +156,14 @@ private:
     int contentGeneration_ = 0;
     int maxAbsDifference_ = 0;
     double meanAbsDifference_ = 0.0;
+    // Row identity of the last atomically committed pair; -1 when no pair commit happened
+    // (including after closeAll). Updated only by openPairAtomically/openPairImages and
+    // closeAll so the canvas identity matches the folder list selection exactly.
+    int committedPairId_ = -1;
+    bool hasDiffResult_ = false;
+    bool diffResampled_ = false;
+    bool alphaDifferenceOnly_ = false;
+    bool resampleAllowed_ = false;
     qreal zoom_ = 1.0;
     qreal panX_ = 0.5;
     qreal panY_ = 0.5;

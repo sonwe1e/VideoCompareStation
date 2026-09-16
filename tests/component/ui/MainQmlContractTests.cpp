@@ -2203,11 +2203,13 @@ TEST(MainQmlContractTests, ImageFolderComparisonLoadsSidebarAndOpensFirstPair) {
     ReviewSessionFacade facade{controller, preferences, shell};
     ImageReviewController imageReview;
     ImageFolderPairModel folderPairs;
-    folderPairs.setPairOpener([&imageReview](const QUrl& primary, const QUrl& secondary) {
-        imageReview.openPrimary(primary);
-        imageReview.openSecondary(secondary);
-        imageReview.setCompareMode(static_cast<int>(ImageReviewController::SideBySide));
-    });
+    folderPairs.setPairOpener(
+        [&imageReview](const QUrl& primary, const QUrl& secondary, const int pairId) {
+            if (!imageReview.openPairAtomically(primary, secondary, pairId)) {
+                return imageReview.errorText();
+            }
+            return QString{};
+        });
 
     QQmlEngine engine;
     engine.addImportPath(

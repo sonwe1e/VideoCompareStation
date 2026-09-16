@@ -124,7 +124,11 @@ void ImageReviewController::setCompareMode(const int mode) {
         return;
     }
     if (mode != PrimaryOnly && mode != SideBySide && !hasPair()) {
-        setError(tr("Open a second image to compare."));
+        // Preserve an existing failure source (e.g. a failed pair open); only fill the
+        // generic hint when nothing else explains the state (T1 error-text retention).
+        if (errorText_.isEmpty()) {
+            setError(tr("Open a second image to compare."));
+        }
         return;
     }
     compareMode_ = mode;
@@ -177,6 +181,42 @@ int ImageReviewController::maxAbsDifference() const noexcept {
 
 double ImageReviewController::meanAbsDifference() const noexcept {
     return meanAbsDifference_;
+}
+
+int ImageReviewController::committedPairId() const noexcept {
+    return committedPairId_;
+}
+
+bool ImageReviewController::hasDiffResult() const noexcept {
+    return hasDiffResult_;
+}
+
+bool ImageReviewController::diffResampled() const noexcept {
+    return diffResampled_;
+}
+
+bool ImageReviewController::alphaDifferenceOnly() const noexcept {
+    return alphaDifferenceOnly_;
+}
+
+bool ImageReviewController::resampleAllowed() const noexcept {
+    return resampleAllowed_;
+}
+
+void ImageReviewController::setResampleAllowed(const bool allowed) {
+    if (resampleAllowed_ == allowed) {
+        return;
+    }
+    resampleAllowed_ = allowed;
+    recomputeDifference();
+    bumpGeneration();
+}
+
+QString ImageReviewController::diffScopeText() const {
+    // T2 scope contract: the decoder path is RGBA8 (stb_image) and the diff statistics
+    // cover per-pixel RGB max deltas. 16-bit original code values are not retained, so
+    // equality claims are always scoped to decoded RGBA8, never to source code values.
+    return tr("解码后 RGBA8；差异统计为 RGB（不含 alpha）");
 }
 
 bool ImageReviewController::openPrimaryImage(QImage image, QString pathLabel) {
@@ -242,6 +282,62 @@ bool ImageReviewController::openSecondary(const QUrl& url) {
                               url.isLocalFile() ? url.toLocalFile() : url.toString());
 }
 
+bool ImageReviewController::openPairImages(QImage primary,
+                                           QString primaryLabel,
+                                           QImage secondary,
+                                           QString secondaryLabel,
+                                           const int pairId) {
+    // Validate both sides before touching any member: a failed candidate must leave the
+    // previous committed pair (or the explicit empty state) fully intact (T1 atomicity).
+    if (primary.isNull() || secondary.isNull()) {
+        setError(tr("Could not open image."));
+        return false;
+    }
+    if (primary.width() > kMaxImageEdge || primary.height() > kMaxImageEdge ||
+        secondary.width() > kMaxImageEdge || secondary.height() > kMaxImageEdge) {
+        setError(tr("Image is larger than %1 px on a side.").arg(kMaxImageEdge));
+        return false;
+    }
+    primary_ = std::move(primary);
+    secondary_ = std::move(secondary);
+    primaryPath_ = std::move(primaryLabel);
+    secondaryPath_ = std::move(secondaryLabel);
+    committedPairId_ = pairId;
+    errorText_.clear();
+    compareMode_ = SideBySide;
+    maxAbsDifference_ = 0;
+    meanAbsDifference_ = 0.0;
+    hasDiffResult_ = false;
+    diffResampled_ = false;
+    alphaDifferenceOnly_ = false;
+    recomputeDifference();
+    resetView();
+    bumpGeneration();
+    return true;
+}
+
+bool ImageReviewController::openPairAtomically(const QUrl& primary,
+                                               const QUrl& secondary,
+                                               const int pairId) {
+    QImage primaryImage;
+    QString primaryError;
+    if (!loadChecked(primary, &primaryImage, &primaryError)) {
+        setError(tr("无法打开 A：%1").arg(primaryError));
+        return false;
+    }
+    QImage secondaryImage;
+    QString secondaryError;
+    if (!loadChecked(secondary, &secondaryImage, &secondaryError)) {
+        setError(tr("无法打开 B：%1").arg(secondaryError));
+        return false;
+    }
+    return openPairImages(std::move(primaryImage),
+                          primary.isLocalFile() ? primary.toLocalFile() : primary.toString(),
+                          std::move(secondaryImage),
+                          secondary.isLocalFile() ? secondary.toLocalFile() : secondary.toString(),
+                          pairId);
+}
+
 void ImageReviewController::closeAll() {
     primary_ = QImage();
     secondary_ = QImage();
@@ -250,8 +346,12 @@ void ImageReviewController::closeAll() {
     secondaryPath_.clear();
     errorText_.clear();
     compareMode_ = PrimaryOnly;
+    committedPairId_ = -1;
     maxAbsDifference_ = 0;
     meanAbsDifference_ = 0.0;
+    hasDiffResult_ = false;
+    diffResampled_ = false;
+    alphaDifferenceOnly_ = false;
     clearCursorPixel();
     resetView();
     bumpGeneration();
@@ -313,7 +413,13 @@ QVariantMap ImageReviewController::samplePixel(const int imageSlot,
     if (x < 0 || y < 0 || x >= image.width() || y >= image.height()) {
         return {{QStringLiteral("valid"), false}};
     }
-    return pixelMap(x, y, image.pixel(x, y));
+    QVariantMap result = pixelMap(x, y, image.pixel(x, y));
+    // Sampling source label: original pixels for the primary/secondary slots, derived
+    // pixels for the diff slot (T2 原图/派生取样来源).
+    result.insert(QStringLiteral("source"),
+                  imageSlot == DisplayDiffSlot ? QStringLiteral("diff")
+                                               : QStringLiteral("original"));
+    return result;
 }
 
 void ImageReviewController::updateCursorPixel(const int imageSlot,
@@ -352,13 +458,11 @@ void ImageReviewController::recomputeDifference() {
     maxAbsDifference_ = 0;
     meanAbsDifference_ = 0.0;
     diff_ = QImage();
+    hasDiffResult_ = false;
+    diffResampled_ = false;
+    alphaDifferenceOnly_ = false;
     if (!hasPair()) {
         return;
-    }
-    if (primary_.size() != secondary_.size()) {
-        // Normalize to the primary geometry so pixel inspector coordinates stay aligned.
-        secondary_ =
-            secondary_.scaled(primary_.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
     }
     const int width = primary_.width();
     const int height = primary_.height();
@@ -367,11 +471,31 @@ void ImageReviewController::recomputeDifference() {
         return;
     }
 
+    // T2: originals are immutable. The comparison works on converted copies only; an
+    // unequal-size pair is resampled to the primary geometry only after the user opts in
+    // (setResampleAllowed), and the persistent diffResampled flag labels the derivation.
     const QImage left = primary_.convertToFormat(QImage::Format_ARGB32);
-    const QImage right = secondary_.convertToFormat(QImage::Format_ARGB32);
+    QImage right = secondary_.convertToFormat(QImage::Format_ARGB32);
+    if (right.size() != left.size()) {
+        if (!resampleAllowed_) {
+            if (compareMode_ == AbsDifference || compareMode_ == SignedDifference ||
+                compareMode_ == Highlight) {
+                setError(tr("A 与 B 尺寸不同（%1×%2 与 %3×%4），未启用重采样时不计算逐像素差异。")
+                             .arg(primary_.width())
+                             .arg(primary_.height())
+                             .arg(secondary_.width())
+                             .arg(secondary_.height()));
+            }
+            return;
+        }
+        right = right.scaled(left.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        diffResampled_ = true;
+    }
+
     QImage output(width, height, QImage::Format_ARGB32);
     qint64 sum = 0;
     int peak = 0;
+    int peakAlpha = 0;
     constexpr int kGain = 4;
     for (int y = 0; y < height; ++y) {
         const auto* leftLine = reinterpret_cast<const QRgb*>(left.constScanLine(y));
@@ -383,8 +507,10 @@ void ImageReviewController::recomputeDifference() {
             const int delta = std::max({std::abs(qRed(a) - qRed(b)),
                                         std::abs(qGreen(a) - qGreen(b)),
                                         std::abs(qBlue(a) - qBlue(b))});
+            const int alphaDelta = std::abs(qAlpha(a) - qAlpha(b));
             sum += delta;
             peak = std::max(peak, delta);
+            peakAlpha = std::max(peakAlpha, alphaDelta);
             switch (compareMode_) {
             case SignedDifference:
                 outLine[x] = signedDiffPixel(a, b, kGain);
@@ -400,8 +526,12 @@ void ImageReviewController::recomputeDifference() {
         }
     }
     diff_ = std::move(output);
+    hasDiffResult_ = true;
     maxAbsDifference_ = peak;
     meanAbsDifference_ = width * height > 0 ? static_cast<double>(sum) / (width * height) : 0.0;
+    // RGB deltas are the statistics' scope; a pair whose only code-value difference is
+    // alpha must never be reported as equal (T2).
+    alphaDifferenceOnly_ = peak == 0 && peakAlpha > 0;
 }
 
 void ImageReviewController::bumpGeneration() {

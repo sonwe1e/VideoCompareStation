@@ -579,8 +579,12 @@ ApplicationWindow {
         }
         dropError = "";
         root.imageFolderSidebarVisible = true;
-        pairModel.openPairAt(firstRow);
-        pairModel.currentPair = firstRow;
+        if (!pairModel.openPairAt(firstRow)) {
+            // The controller kept the previous pair (or empty state); surface the failure
+            // source instead of advancing the list selection.
+            dropError = pairModel.errorText;
+            return false;
+        }
         return true;
     }
 
@@ -600,9 +604,9 @@ ApplicationWindow {
             target.openPrimary(normalizedUrls[0]);
             return;
         }
-        target.openPrimary(normalizedUrls[0]);
-        if (normalizedUrls[1])
-            target.openSecondary(normalizedUrls[1]);
+        // Atomic pair open: on failure the previous pair (or the empty state) stays intact
+        // and errorText keeps the failing side, instead of mixing a new A with an old B.
+        target.openPairAtomically(normalizedUrls[0], normalizedUrls[1], -1);
     }
 
     function reviewUrls(urls, allowSingleSourceAppend) {
@@ -625,8 +629,10 @@ ApplicationWindow {
                 root.workspaceMode = 1;
                 if (root.sourceCount > 0 && shell)
                     shell.closeSources();
-                imageTarget.openSecondary(normalizedUrls[0]);
-                imageTarget.compareMode = 1;
+                // Only switch to compare mode after the secondary actually opened, so a
+                // corrupt/oversized B keeps its failure source instead of being overwritten.
+                if (imageTarget.openSecondary(normalizedUrls[0]))
+                    imageTarget.compareMode = 1;
                 return;
             }
             requestDestructiveAction({

@@ -135,4 +135,176 @@ TEST(ImageReviewControllerTests, LoadsUserPngFromDisk) {
     }
 }
 
+TEST(ImageReviewControllerTests, AtomicPairOpenCommitsBothSidesWithIdentity) {
+    ImageReviewController controller;
+    ASSERT_TRUE(controller.openPairImages(solidImage(QColor(10, 20, 30)),
+                                          QStringLiteral("a0.png"),
+                                          solidImage(QColor(40, 50, 60)),
+                                          QStringLiteral("b0.png"),
+                                          /*pairId=*/2));
+    EXPECT_TRUE(controller.hasPair());
+    EXPECT_EQ(controller.committedPairId(), 2);
+    EXPECT_EQ(controller.compareMode(), static_cast<int>(ImageReviewController::SideBySide));
+    EXPECT_EQ(controller.primaryPath(), QStringLiteral("a0.png"));
+    EXPECT_EQ(controller.secondaryPath(), QStringLiteral("b0.png"));
+}
+
+TEST(ImageReviewControllerTests, FailedPairKeepsPreviousPairFully) {
+    ImageReviewController controller;
+    ASSERT_TRUE(controller.openPairImages(solidImage(QColor(10, 20, 30)),
+                                          QStringLiteral("a0.png"),
+                                          solidImage(QColor(40, 50, 60)),
+                                          QStringLiteral("b0.png"),
+                                          /*pairId=*/2));
+    const int generationBefore = controller.contentGeneration();
+
+    // Corrupt B: the candidate must not mix a new A with the old B.
+    EXPECT_FALSE(controller.openPairImages(solidImage(QColor(1, 1, 1)),
+                                           QStringLiteral("a1.png"),
+                                           QImage(),
+                                           QStringLiteral("b1.png"),
+                                           /*pairId=*/3));
+    EXPECT_TRUE(controller.hasPair());
+    EXPECT_EQ(controller.committedPairId(), 2);
+    EXPECT_EQ(controller.primaryPath(), QStringLiteral("a0.png"));
+    EXPECT_EQ(controller.secondaryPath(), QStringLiteral("b0.png"));
+    EXPECT_EQ(controller.secondaryWidth(), 4);
+    EXPECT_EQ(controller.contentGeneration(), generationBefore);
+    EXPECT_FALSE(controller.errorText().isEmpty());
+
+    // Corrupt A behaves identically: nothing changes.
+    EXPECT_FALSE(controller.openPairImages(QImage(),
+                                           QStringLiteral("a2.png"),
+                                           solidImage(QColor(2, 2, 2)),
+                                           QStringLiteral("b2.png"),
+                                           /*pairId=*/3));
+    EXPECT_TRUE(controller.hasPair());
+    EXPECT_EQ(controller.committedPairId(), 2);
+    EXPECT_EQ(controller.primaryPath(), QStringLiteral("a0.png"));
+    EXPECT_EQ(controller.secondaryPath(), QStringLiteral("b0.png"));
+
+    // A successful request switches the identity exactly once.
+    const int generationMid = controller.contentGeneration();
+    ASSERT_TRUE(controller.openPairImages(solidImage(QColor(3, 3, 3)),
+                                          QStringLiteral("a3.png"),
+                                          solidImage(QColor(4, 4, 4)),
+                                          QStringLiteral("b3.png"),
+                                          /*pairId=*/4));
+    EXPECT_EQ(controller.committedPairId(), 4);
+    EXPECT_EQ(controller.primaryPath(), QStringLiteral("a3.png"));
+    EXPECT_EQ(controller.secondaryPath(), QStringLiteral("b3.png"));
+    EXPECT_EQ(controller.contentGeneration(), generationMid + 1);
+}
+
+TEST(ImageReviewControllerTests, FailedFirstPairEntersExplicitMissingState) {
+    ImageReviewController controller;
+    EXPECT_FALSE(controller.openPairAtomically(
+        QUrl::fromLocalFile(QStringLiteral("Z:/definitely/missing_a.png")),
+        QUrl::fromLocalFile(QStringLiteral("Z:/definitely/missing_b.png")),
+        /*pairId=*/0));
+    EXPECT_FALSE(controller.hasPrimary());
+    EXPECT_FALSE(controller.hasSecondary());
+    EXPECT_FALSE(controller.hasPair());
+    EXPECT_EQ(controller.committedPairId(), -1);
+    EXPECT_FALSE(controller.errorText().isEmpty());
+}
+
+TEST(ImageReviewControllerTests, CloseAllResetsCommittedPairIdentity) {
+    ImageReviewController controller;
+    ASSERT_TRUE(controller.openPairImages(solidImage(Qt::red),
+                                          QStringLiteral("a.png"),
+                                          solidImage(Qt::blue),
+                                          QStringLiteral("b.png"),
+                                          /*pairId=*/5));
+    controller.closeAll();
+    EXPECT_EQ(controller.committedPairId(), -1);
+    EXPECT_FALSE(controller.hasPair());
+    EXPECT_FALSE(controller.hasDiffResult());
+}
+
+TEST(ImageReviewControllerTests, SecondaryOriginalsSurviveModesAndPrimarySwap) {
+    ImageReviewController controller;
+    ASSERT_TRUE(controller.openPairImages(solidImage(QColor(10, 20, 30)),
+                                          QStringLiteral("a.png"),
+                                          solidImage(QColor(40, 50, 60)),
+                                          QStringLiteral("b.png"),
+                                          /*pairId=*/0));
+    const QImage secondaryBefore = controller.imageForSlot(ImageReviewController::SecondarySlot);
+
+    // Equal-size diff previously resampled nothing, but switching modes must never touch
+    // the originals regardless of geometry.
+    controller.setCompareMode(ImageReviewController::AbsDifference);
+    EXPECT_EQ(controller.secondaryWidth(), 4);
+    EXPECT_EQ(controller.secondaryHeight(), 4);
+
+    // Replacing only A keeps B's original pixels byte-identical.
+    ASSERT_TRUE(controller.openPrimaryImage(solidImage(QColor(1, 2, 3)), QStringLiteral("a2.png")));
+    EXPECT_EQ(controller.secondaryPath(), QStringLiteral("b.png"));
+    EXPECT_EQ(controller.secondaryWidth(), 4);
+    EXPECT_EQ(controller.secondaryHeight(), 4);
+    EXPECT_TRUE(controller.imageForSlot(ImageReviewController::SecondarySlot) == secondaryBefore);
+}
+
+TEST(ImageReviewControllerTests, UnequalSizesGateDiffUntilResampleOptIn) {
+    ImageReviewController controller;
+    QImage big(6, 6, QImage::Format_ARGB32);
+    big.fill(QColor(10, 20, 30));
+    ASSERT_TRUE(controller.openPairImages(big,
+                                          QStringLiteral("big.png"),
+                                          solidImage(QColor(40, 50, 60)),
+                                          QStringLiteral("small.png"),
+                                          /*pairId=*/0));
+    // The original small image is not stretched by the diff path.
+    EXPECT_EQ(controller.secondaryWidth(), 4);
+    EXPECT_EQ(controller.secondaryHeight(), 4);
+
+    controller.setCompareMode(ImageReviewController::AbsDifference);
+    EXPECT_FALSE(controller.hasDiffResult());
+    EXPECT_FALSE(controller.diffResampled());
+    EXPECT_EQ(controller.maxAbsDifference(), 0);
+    EXPECT_FALSE(controller.errorText().isEmpty());
+
+    // Side-by-side and wipe stay available without a diff or an error.
+    controller.setCompareMode(ImageReviewController::Wipe);
+    EXPECT_EQ(controller.compareMode(), static_cast<int>(ImageReviewController::Wipe));
+    EXPECT_FALSE(controller.hasDiffResult());
+
+    // Opting into resampling computes a labeled derived diff.
+    controller.setResampleAllowed(true);
+    controller.setCompareMode(ImageReviewController::AbsDifference);
+    EXPECT_TRUE(controller.hasDiffResult());
+    EXPECT_TRUE(controller.diffResampled());
+    EXPECT_GT(controller.maxAbsDifference(), 0);
+}
+
+TEST(ImageReviewControllerTests, AlphaOnlyDifferenceIsNotReportedAsEqual) {
+    ImageReviewController controller;
+    QImage a(4, 4, QImage::Format_ARGB32);
+    a.fill(QColor(20, 40, 60, 255));
+    QImage b(4, 4, QImage::Format_ARGB32);
+    b.fill(QColor(20, 40, 60, 128));
+    ASSERT_TRUE(
+        controller.openPairImages(a, QStringLiteral("a.png"), b, QStringLiteral("b.png"), 0));
+    controller.setCompareMode(ImageReviewController::AbsDifference);
+    ASSERT_TRUE(controller.hasDiffResult());
+    EXPECT_EQ(controller.maxAbsDifference(), 0);
+    EXPECT_TRUE(controller.alphaDifferenceOnly());
+    EXPECT_TRUE(controller.diffScopeText().contains(QStringLiteral("RGBA8")));
+}
+
+TEST(ImageReviewControllerTests, SamplePixelReportsOriginalVersusDerivedSource) {
+    ImageReviewController controller;
+    ASSERT_TRUE(controller.openPairImages(solidImage(QColor(20, 40, 60)),
+                                          QStringLiteral("a.png"),
+                                          solidImage(QColor(20, 40, 80)),
+                                          QStringLiteral("b.png"),
+                                          /*pairId=*/0));
+    controller.setCompareMode(ImageReviewController::AbsDifference);
+    const QVariantMap original = controller.samplePixel(ImageReviewController::PrimarySlot, 0, 0);
+    const QVariantMap derived =
+        controller.samplePixel(ImageReviewController::DisplayDiffSlot, 0, 0);
+    EXPECT_EQ(original.value(QStringLiteral("source")).toString(), QStringLiteral("original"));
+    EXPECT_EQ(derived.value(QStringLiteral("source")).toString(), QStringLiteral("diff"));
+}
+
 } // namespace

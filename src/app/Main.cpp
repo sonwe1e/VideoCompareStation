@@ -1937,6 +1937,9 @@ runImageFolderEvidence(int& argc, char** argv, const ImageFolderInvocation& invo
     qint64 diffRecomputeMilliseconds = -1;
     int diffMaxAbsDifference = -1;
     double diffMeanAbsDifference = -1.0;
+    bool diffHasResult = false;
+    bool diffResampled = false;
+    bool diffAlphaOnly = false;
     bool cancelClosed = false;
     bool cancelReopened = false;
     int cancelReopenGeneration = -1;
@@ -2080,11 +2083,19 @@ runImageFolderEvidence(int& argc, char** argv, const ImageFolderInvocation& invo
                 return;
             }
             diffTimer.start();
+            // T2: unequal-size pairs only compute a diff after the explicit resample opt-in,
+            // so the probe opts in to keep measuring the diff path and records whether the
+            // result was resampled (or gated) in the evidence.
+            review->setResampleAllowed(true);
             review->setCompareMode(static_cast<int>(dvs::ui::ImageReviewController::AbsDifference));
             diffRecomputeMilliseconds = diffTimer.elapsed();
             diffMaxAbsDifference = review->maxAbsDifference();
             diffMeanAbsDifference = review->meanAbsDifference();
+            diffHasResult = review->hasDiffResult();
+            diffResampled = review->diffResampled();
+            diffAlphaOnly = review->alphaDifferenceOnly();
             review->setCompareMode(static_cast<int>(dvs::ui::ImageReviewController::SideBySide));
+            review->setResampleAllowed(false);
             stage = ImageStage::CancelProbe;
             return;
         }
@@ -2220,6 +2231,9 @@ runImageFolderEvidence(int& argc, char** argv, const ImageFolderInvocation& invo
             {QStringLiteral("max_abs_difference"), diffMaxAbsDifference},
             {QStringLiteral("mean_abs_difference"), diffMeanAbsDifference},
             {QStringLiteral("recompute_ms"), static_cast<double>(diffRecomputeMilliseconds)},
+            {QStringLiteral("has_diff_result"), diffHasResult},
+            {QStringLiteral("diff_resampled"), diffResampled},
+            {QStringLiteral("alpha_difference_only"), diffAlphaOnly},
         });
     report.insert(QStringLiteral("cancel_probe"),
                   QJsonObject{

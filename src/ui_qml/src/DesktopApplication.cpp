@@ -107,12 +107,17 @@ public:
         engine->addImageProvider(QStringLiteral("vcs-review"),
                                  new ReviewImageProvider(imageReview_.get()));
         folderPairs_ = std::make_unique<ImageFolderPairModel>();
-        folderPairs_->setPairOpener(
-            [review = imageReview_.get()](const QUrl& primary, const QUrl& secondary) {
-                review->openPrimary(primary);
-                review->openSecondary(secondary);
-                review->setCompareMode(static_cast<int>(ImageReviewController::SideBySide));
-            });
+        folderPairs_ = std::make_unique<ImageFolderPairModel>();
+        folderPairs_->setPairOpener([review = imageReview_.get()](const QUrl& primary,
+                                                                  const QUrl& secondary,
+                                                                  const int pairId) {
+            // T1: one atomic commit; both sides validated before any state change and
+            // the pair identity (committedPairId) switches exactly once on success.
+            if (!review->openPairAtomically(primary, secondary, pairId)) {
+                return review->errorText();
+            }
+            return QString{};
+        });
         engine->rootContext()->setContextProperty(QStringLiteral("imageFolderPairs"),
                                                   folderPairs_.get());
         const QMetaObject::Connection warningConnection = QObject::connect(

@@ -85,8 +85,10 @@ TEST_F(ImageFolderPairModelTests, OpenPairAtDrivesInjectedOpenerAndSkipsSingles)
 
     std::vector<RecordedPair> opened;
     ImageFolderPairModel model;
-    model.setPairOpener([&opened](const QUrl& primary, const QUrl& secondary) {
+    model.setPairOpener([&opened](const QUrl& primary, const QUrl& secondary, const int pairId) {
         opened.push_back(RecordedPair{primary, secondary});
+        static_cast<void>(pairId);
+        return QString{};
     });
     ASSERT_TRUE(model.loadFolders(folderUrl(left_), folderUrl(right_)));
 
@@ -96,7 +98,8 @@ TEST_F(ImageFolderPairModelTests, OpenPairAtDrivesInjectedOpenerAndSkipsSingles)
     EXPECT_FALSE(model.openPairAt(0));
     EXPECT_TRUE(opened.empty());
 
-    // Complete row drives the injected opener with left/right in order.
+    // Complete row drives the injected opener with left/right in order and advances the
+    // committed selection to the opened row.
     const int completeRow = model.firstCompleteRow();
     ASSERT_GE(completeRow, 0);
     EXPECT_TRUE(model.openPairAt(completeRow));
@@ -105,10 +108,38 @@ TEST_F(ImageFolderPairModelTests, OpenPairAtDrivesInjectedOpenerAndSkipsSingles)
               model.data(model.index(completeRow, 0), ImageFolderPairModel::LeftPathRole).toUrl());
     EXPECT_EQ(opened[0].secondary,
               model.data(model.index(completeRow, 0), ImageFolderPairModel::RightPathRole).toUrl());
+    EXPECT_EQ(model.currentPair(), completeRow);
 
     // Out-of-range rows are rejected.
     EXPECT_FALSE(model.openPairAt(-1));
     EXPECT_FALSE(model.openPairAt(model.pairCount()));
+}
+
+TEST_F(ImageFolderPairModelTests, FailedOpenKeepsSelectionAndSurfacesError) {
+    static_cast<void>(writeFile(left_, "shot.png", "a"));
+    static_cast<void>(writeFile(left_, "other.png", "a"));
+    static_cast<void>(writeFile(right_, "shot.png", "b"));
+    static_cast<void>(writeFile(right_, "other.png", "b"));
+
+    ImageFolderPairModel model;
+    model.setPairOpener([](const QUrl&, const QUrl&, const int pairId) {
+        // Row 0 opens; row 1 fails like a corrupt/oversized B would.
+        return pairId == 1 ? QStringLiteral("B 侧损坏") : QString{};
+    });
+    ASSERT_TRUE(model.loadFolders(folderUrl(left_), folderUrl(right_)));
+
+    ASSERT_TRUE(model.openPairAt(0));
+    EXPECT_EQ(model.currentPair(), 0);
+
+    EXPECT_FALSE(model.openPairAt(1));
+    // Selection stays locked to the still-displayed pair; the failure source is surfaced.
+    EXPECT_EQ(model.currentPair(), 0);
+    EXPECT_EQ(model.errorText(), QStringLiteral("B 侧损坏"));
+
+    // A later success clears the error and advances the selection.
+    EXPECT_TRUE(model.openPairAt(0));
+    EXPECT_TRUE(model.errorText().isEmpty());
+    EXPECT_EQ(model.currentPair(), 0);
 }
 
 TEST_F(ImageFolderPairModelTests, StepCompleteRowWalksOnlyComparablePairs) {

@@ -60,6 +60,20 @@
 | 主要风险 | 旧 meanAbsDifference 实际是每像素 RGB 最大差的平均，不可在重命名时悄悄改变含义；改变算法需要单独标明版本与测试；界面枚举/持久化值保兼容。 |
 | 回退 | 出问题先禁用不等尺寸差异和未验证精确模式，保留正确并排，不回滚为静默拉伸；高级派生变换可整体隐藏。 |
 
+**T1 验收记录（2026-09-16）**
+
+- 实现：`ImageReviewController::openPairAtomically/openPairImages`（两侧重解码与校验全部完成后一次性提交，成功时 committedPairId 与 generation 单次切换）；`ImageFolderPairModel::openPairAt` 改为 opener 返回失败原因、仅成功才推进 currentPair；`DesktopApplication` 注入新签名 opener；`Main.qml` 双图入口/文件夹首行/追加路径全部走原子语义且仅成功才切模式；`FolderPairSidebar::selectRow` 失败保持选中。`setCompareMode` 失败分支不再覆盖既有错误来源。
+- 新增组件测试（`ImageReviewControllerTests` 8 项、`ImageFolderPairModelTests` 1 项）：A1/B1 损坏、缺失、超限、首对失败进显式缺失态、closeAll 重置身份、成功切换 identity 一次（generation +1）、失败后重试路径。`MainQmlContractTests::ImageFolderComparisonLoadsSidebarAndOpensFirstPair` 端到端通过。
+- 冒烟（release 实机，`--ui-image-folder`）：pair_count=10、passed:true；单侧行 opened:false 时画布保持上一对（证据即 T1 语义）；cancel/reopen 探针通过。
+- 遗留：pending/committed 双身份与 token 化（为 T4 预留的 generation/token 接口）在 T4 时补充；当前 committedPairId 语义为"最后原子提交的行"，单侧替换不改变它（有意为之，已记录）。
+
+**T2 验收记录（2026-09-16）**
+
+- 实现：`recomputeDifference` 不再改写 `secondary_`（副本上换算）；不等尺寸默认不计算逐像素差异（`hasDiffResult=false`、`diffResampled` 标签、错误信息给出双方尺寸），显式 `resampleAllowed` 后才在副本上重采样并持续标注"已重采样对齐"；`diffScopeText` 声明"解码后 RGBA8；差异统计为 RGB（不含 alpha）"；alpha-only 差异单独检测（`alphaDifferenceOnly`）不再误报相等；`samplePixel` 输出 source=original|diff；ImageWorkspace 新增"适应窗口/100% 真实尺寸"双命令（trueSize = 1 图像像素→1 物理像素，baseScale=1/DPR，状态栏显示物理百分比与模式），差异视口仅在 hasDiffResult 时显示并提供未重采样提示；`--ui-image-folder` 探针记录 has_diff_result/diff_resampled/alpha_difference_only。
+- 新增组件测试：B 原始尺寸与字节在反复换模式/换 A 后不变；不等尺寸无重采样无假差异值、开启后 diffResampled=true 且峰值>0；alpha-only 不报相等；取样来源标签。全部通过。
+- DPI 映射：100%（DPR=1.0）→ baseScale 1；125%→0.8；150%→0.667；200%→0.5，与适应窗口的 fit 值可区分（qmllint/format 已校验）。
+- 遗留：16-bit 原码值不保留（解码即 RGBA8，范围声明在 diffScopeText）；meanAbsDifference 语义保持不变（每像素 RGB 最大差的平均），未改名。
+
 
 ### T3 · P0/P1｜工作区状态与命令路由收拢
 

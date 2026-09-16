@@ -32,9 +32,10 @@ Rectangle {
     function selectRow(row) {
         if (!pairModel || row < 0 || row >= pairModel.pairCount)
             return;
+        // The model advances currentPair only when the pair actually committed, so a failed
+        // open keeps the previous selection locked to the still-displayed canvas pair.
         if (!pairModel.openPairAt(row))
             return;
-        pairModel.currentPair = row;
         pairSelected(row);
     }
 

@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import QtQuick.Window
 import "VcsTheme.js" as Theme
 
 // Still-image workspace: single-image channel inspector + two-image DiffChecker.
@@ -17,6 +18,11 @@ Rectangle {
     signal compareFoldersRequested
     signal toggleSidebarRequested
 
+    // False = fit-window display; true = true-size display where 1 image pixel maps to
+    // 1 physical screen pixel (device-pixel-ratio aware). The two are separate commands
+    // (T2); the controller zoom multiplies whichever base is active.
+    property bool trueSize: false
+
     objectName: "imageWorkspace"
     color: "#06080d"
 
@@ -30,6 +36,19 @@ Rectangle {
     readonly property var cursorPixel: imageReview ? imageReview.cursorPixel : ({})
     readonly property string errorText: imageReview ? String(imageReview.errorText || "") : ""
     readonly property bool hasFolders: Boolean(pairModel && pairModel.pairCount > 0)
+    readonly property bool sizesDiffer: Boolean(imageReview && imageReview.hasPair && imageReview.primaryWidth > 0 && imageReview.primaryWidth !== imageReview.secondaryWidth || imageReview && imageReview.hasPair && imageReview.primaryHeight > 0 && imageReview.primaryHeight !== imageReview.secondaryHeight)
+    readonly property bool diffModeActive: Boolean(imageReview && imageReview.hasPair && imageReview.compareMode >= 2 && imageReview.compareMode <= 4)
+
+    // Physical-percent of the active display scale: true-size is 1 image px per physical
+    // px (100%), fit shows the actual physical percentage of the fitted image.
+    readonly property real displayPercent: {
+        if (!imageReview || !imageReview.hasPrimary)
+            return 0;
+        const dpr = Window.window ? Window.window.devicePixelRatio : 1;
+        const base = control.trueSize ? 1 / dpr : (primaryViewport ? primaryViewport.fitScale : 1);
+        return Math.round(base * dpr * imageReview.zoom * 100);
+    }
+    readonly property string displayPercentMode: control.trueSize ? qsTr("真实尺寸") : qsTr("适应窗口")
 
     function modeButton(mode) {
         if (!imageReview)
@@ -141,6 +160,9 @@ Rectangle {
         property point dragStart: Qt.point(0, 0)
 
         readonly property alias image: previewImage
+        // Fit scale of the displayed image (fit-window base), forwarded so the workspace
+        // status bar can report the physical display percentage.
+        readonly property real fitScale: previewImage ? previewImage.fitScale : 1
 
         clip: true
 
@@ -156,13 +178,20 @@ Rectangle {
             id: previewImage
 
             objectName: "imageViewport-" + viewport.slot
-            readonly property real baseScale: {
+            readonly property real fitScale: {
                 const sw = Math.max(1, sourceSize.width);
                 const sh = Math.max(1, sourceSize.height);
                 return Math.min(viewport.width / sw, viewport.height / sh);
             }
-            readonly property real drawWidth: sourceSize.width * baseScale * control.zoom
-            readonly property real drawHeight: sourceSize.height * baseScale * control.zoom
+            // True-size: 1 image pixel occupies 1 physical pixel, so the item's
+            // device-independent width is sourceSize / DPR (T2).
+            readonly property real trueSizeScale: {
+                const dpr = Window.window ? Window.window.devicePixelRatio : 1;
+                return 1 / dpr;
+            }
+            readonly property real effectiveBaseScale: control.trueSize ? trueSizeScale : fitScale
+            readonly property real drawWidth: sourceSize.width * effectiveBaseScale * control.zoom
+            readonly property real drawHeight: sourceSize.height * effectiveBaseScale * control.zoom
             x: (viewport.width - drawWidth) / 2 + (0.5 - (control.imageReview ? control.imageReview.panX : 0.5)) * drawWidth
             y: (viewport.height - drawHeight) / 2 + (0.5 - (control.imageReview ? control.imageReview.panY : 0.5)) * drawHeight
             width: drawWidth
@@ -320,6 +349,39 @@ Rectangle {
                 enabled: control.hasPrimary
                 onClicked: control.imageReview.resetView()
             }
+            ReviewActionButton {
+                objectName: "imageFitButton"
+                checkable: true
+                checked: !control.trueSize
+                text: qsTr("适应窗口")
+                implicitHeight: 30
+                leftPadding: 12
+                rightPadding: 12
+                enabled: control.hasPrimary
+                onClicked: control.trueSize = false
+            }
+            ReviewActionButton {
+                objectName: "imageTrueSizeButton"
+                checkable: true
+                checked: control.trueSize
+                text: qsTr("100% 真实尺寸")
+                implicitHeight: 30
+                leftPadding: 12
+                rightPadding: 12
+                enabled: control.hasPrimary
+                onClicked: control.trueSize = true
+            }
+            ReviewActionButton {
+                objectName: "imageResampleToggle"
+                checkable: true
+                checked: Boolean(control.imageReview && control.imageReview.resampleAllowed)
+                text: qsTr("重采样对齐差异")
+                implicitHeight: 30
+                leftPadding: 12
+                rightPadding: 12
+                visible: control.hasPair && control.sizesDiffer
+                onClicked: control.imageReview.resampleAllowed = !control.imageReview.resampleAllowed
+            }
         }
 
         Row {
@@ -426,6 +488,8 @@ Rectangle {
                     spacing: 12
 
                     ImageViewport {
+                        id: primaryViewport
+
                         objectName: "primaryViewport"
                         slot: 2
                         width: control.compareMode === 1 && control.hasPair ? parent.width / 2 - 6 : parent.width
@@ -452,15 +516,35 @@ Rectangle {
                 ImageViewport {
                     objectName: "diffViewport"
                     slot: 4
-                    visible: control.hasPair && control.compareMode >= 2 && control.compareMode <= 4
+                    visible: control.hasPair && control.compareMode >= 2 && control.compareMode <= 4 && control.imageReview && control.imageReview.hasDiffResult
                     anchors.fill: parent
                     imageUrl: control.imageReview && control.imageReview.contentGeneration >= 0 ? control.imageReview.imageUrl(4) : ""
                     label: {
-                        if (!control.imageReview)
+                        if (!control.imageReview || !control.imageReview.hasDiffResult)
                             return "";
                         const modeName = control.compareMode === 2 ? qsTr("绝对差异") : (control.compareMode === 3 ? qsTr("带符号差异") : qsTr("高亮"));
-                        return qsTr("%1 · 峰值 %2 · 均值 %3").arg(modeName).arg(control.imageReview.maxAbsDifference).arg(control.imageReview.meanAbsDifference.toFixed(2));
+                        let text = qsTr("%1 · 峰值 %2 · 均值 %3 · 统计 %4").arg(modeName).arg(control.imageReview.maxAbsDifference).arg(control.imageReview.meanAbsDifference.toFixed(2)).arg(control.imageReview.diffScopeText);
+                        if (control.imageReview.diffResampled)
+                            text += " · " + qsTr("已重采样对齐");
+                        if (control.imageReview.alphaDifferenceOnly)
+                            text += " · " + qsTr("RGB 相同，alpha 存在差异");
+                        return text;
                     }
+                }
+
+                // Diff mode on an unequal-size pair without resampling: no pixels are
+                // fabricated and no stats are pretended (T2). The controller errorText
+                // carries the exact sizes; the toggle in the toolbar opts into resampling.
+                Text {
+                    objectName: "imageDiffUnavailableNotice"
+                    visible: control.diffModeActive && control.imageReview && !control.imageReview.hasDiffResult
+                    anchors.centerIn: parent
+                    width: parent.width * 0.7
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.WordWrap
+                    text: qsTr("A 与 B 尺寸不同，未计算逐像素差异。可开启“重采样对齐差异”后再比较。")
+                    color: Theme.warning
+                    font.pixelSize: 13
                 }
 
                 // Split-line comparison: the secondary image is clipped at the split position and stacked
@@ -473,15 +557,22 @@ Rectangle {
                     anchors.fill: parent
                     clip: true
 
-                    readonly property real baseScale: {
+                    readonly property real fitScale: {
                         if (!control.imageReview)
                             return 1;
                         const sw = Math.max(1, control.imageReview.primaryWidth);
                         const sh = Math.max(1, control.imageReview.primaryHeight);
                         return Math.min(width / sw, height / sh);
                     }
-                    readonly property real drawWidth: control.imageReview ? control.imageReview.primaryWidth * baseScale * control.zoom : 0
-                    readonly property real drawHeight: control.imageReview ? control.imageReview.primaryHeight * baseScale * control.zoom : 0
+                    readonly property real effectiveBaseScale: {
+                        if (control.trueSize) {
+                            const dpr = Window.window ? Window.window.devicePixelRatio : 1;
+                            return 1 / dpr;
+                        }
+                        return fitScale;
+                    }
+                    readonly property real drawWidth: control.imageReview ? control.imageReview.primaryWidth * effectiveBaseScale * control.zoom : 0
+                    readonly property real drawHeight: control.imageReview ? control.imageReview.primaryHeight * effectiveBaseScale * control.zoom : 0
                     readonly property real drawX: (width - drawWidth) / 2 + (0.5 - (control.imageReview ? control.imageReview.panX : 0.5)) * drawWidth
                     readonly property real drawY: (height - drawHeight) / 2 + (0.5 - (control.imageReview ? control.imageReview.panY : 0.5)) * drawHeight
                     readonly property real splitX: width * control.wipePosition
@@ -596,7 +687,7 @@ Rectangle {
             }
 
             Text {
-                text: qsTr("缩放 %1%").arg(Math.round(control.zoom * 100))
+                text: qsTr("缩放 %1%（%2）").arg(control.displayPercent).arg(control.displayPercentMode)
                 color: Theme.primaryText
                 font.pixelSize: 12
             }

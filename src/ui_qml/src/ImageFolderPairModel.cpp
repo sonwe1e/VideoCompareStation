@@ -216,7 +216,18 @@ bool ImageFolderPairModel::openPairAt(const int row) {
     if (!pair.hasLeft || !pair.hasRight) {
         return false;
     }
-    opener_(pair.leftUrl, pair.rightUrl);
+    const QString error = opener_(pair.leftUrl, pair.rightUrl, row);
+    if (!error.isEmpty()) {
+        // The canvas kept its previous committed pair (or the explicit empty state);
+        // currentPair_ stays put so selection and canvas identity never diverge.
+        errorText_ = error;
+        return false;
+    }
+    errorText_.clear();
+    if (currentPair_ != row) {
+        currentPair_ = row;
+        emit currentPairChanged();
+    }
     return true;
 }
 

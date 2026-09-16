@@ -25,8 +25,11 @@ class ImageFolderPairModel final : public QAbstractListModel {
 
 public:
     // Opens a pair's images in the still-image review controller. Injected by the
-    // composition root so this model never depends on the controller type.
-    using PairOpener = std::function<void(const QUrl& primary, const QUrl& secondary)>;
+    // composition root so this model never depends on the controller type. Returns an
+    // empty string on success or the failure reason; the model only advances currentPair
+    // when the opener reports success, so list selection and canvas identity stay locked.
+    using PairOpener =
+        std::function<QString(const QUrl& primary, const QUrl& secondary, int pairId)>;
 
     struct PairRow final {
         QString fileName;
