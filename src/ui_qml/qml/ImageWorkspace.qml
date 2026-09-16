@@ -10,6 +10,7 @@ Rectangle {
     required property var controller
 
     signal openImageRequested
+    signal addImageRequested
     signal openPairRequested
 
     objectName: "imageWorkspace"
@@ -202,6 +203,15 @@ Rectangle {
                 onClicked: control.openImageRequested()
             }
             ReviewActionButton {
+                objectName: "imageAddButton"
+                text: qsTr("添加图片…")
+                implicitHeight: 30
+                leftPadding: 12
+                rightPadding: 12
+                enabled: control.hasPrimary && !control.hasSecondary
+                onClicked: control.addImageRequested()
+            }
+            ReviewActionButton {
                 objectName: "imageOpenPairButton"
                 text: qsTr("打开图片对…")
                 implicitHeight: 30
@@ -320,7 +330,6 @@ Rectangle {
                 return qsTr("%1 · 峰值 %2 · 均值 %3").arg(modeName).arg(control.imageReview.maxAbsDifference).arg(control.imageReview.meanAbsDifference.toFixed(2));
             }
         }
-    }
 
     Rectangle {
         id: statusBar

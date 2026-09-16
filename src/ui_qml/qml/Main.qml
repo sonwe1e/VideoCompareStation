@@ -848,6 +848,8 @@ ApplicationWindow {
         shortcutPreset: root.shortcutPreset
         sourceIdentities: root.shell ? root.shell.activeSourceIdentities : []
         workspaceMode: root.workspaceMode
+        imageHasPrimary: Boolean(root.stillImageController && root.stillImageController.hasPrimary)
+        imageHasSecondary: Boolean(root.stillImageController && root.stillImageController.hasSecondary)
         automaticAlignmentPending: root.automaticAlignmentPending
         canConfirmAutomaticAlignment: root.canConfirmAutomaticAlignment
         canUndoAutomaticAlignment: root.canUndoAutomaticAlignment
@@ -862,6 +864,10 @@ ApplicationWindow {
         onOpenImageRequested: {
             root.workspaceMode = 1;
             imageSingleDialog.open();
+        }
+        onAddImageRequested: {
+            root.workspaceMode = 1;
+            imageAddDialog.open();
         }
         onOpenImagePairRequested: {
             root.workspaceMode = 1;
@@ -1440,6 +1446,10 @@ ApplicationWindow {
             root.workspaceMode = 1;
             imageSingleDialog.open();
         }
+        onAddImageRequested: {
+            root.workspaceMode = 1;
+            imageAddDialog.open();
+        }
         onOpenPairRequested: {
             root.workspaceMode = 1;
             imagePairDialog.open();
@@ -1456,6 +1466,19 @@ ApplicationWindow {
             const picked = selectedFile && selectedFile.toString().length > 0 ? selectedFile : currentFile;
             if (picked && picked.toString().length > 0)
                 root.performImageReview([picked]);
+        }
+    }
+    NativeDialogs.FileDialog {
+        id: imageAddDialog
+
+        objectName: "imageAddDialog"
+        title: qsTr("添加图片")
+        fileMode: NativeDialogs.FileDialog.OpenFile
+        nameFilters: [qsTr("图片 (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tif *.tiff)"), qsTr("所有文件 (*)")]
+        onAccepted: {
+            const picked = selectedFile && selectedFile.toString().length > 0 ? selectedFile : currentFile;
+            if (picked && picked.toString().length > 0)
+                root.stillImageController.openSecondary(picked);
         }
     }
     NativeDialogs.FileDialog {

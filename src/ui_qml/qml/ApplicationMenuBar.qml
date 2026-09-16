@@ -21,6 +21,8 @@ VcsMenuBar {
     required property int shortcutPreset
     required property var sourceIdentities
     property int workspaceMode: 0
+    property bool imageHasPrimary: false
+    property bool imageHasSecondary: false
     // Alignment state and helpers live on the root; the Analyze menu hosts the actions that used
     // to live in the inspector's Alignment tab.
     property bool automaticAlignmentPending: false
@@ -36,6 +38,7 @@ VcsMenuBar {
     signal openVideosRequested
     signal addVideoRequested
     signal openImageRequested
+    signal addImageRequested
     signal openImagePairRequested
     signal workspaceRequested(int mode)
     signal destructiveActionRequested(string kind)
@@ -89,6 +92,13 @@ VcsMenuBar {
             text: qsTr("打开图片对…")
             shortcutText: "Ctrl+Shift+I"
             onTriggered: control.openImagePairRequested()
+        }
+        VcsMenuItem {
+            objectName: "addImageMenuItem"
+            text: qsTr("添加图片…")
+            shortcutText: "Ctrl+Alt+I"
+            enabled: control.workspaceMode === 1 && control.imageHasPrimary && !control.imageHasSecondary
+            onTriggered: control.addImageRequested()
         }
         VcsMenuItem {
             text: qsTr("关闭视频")
