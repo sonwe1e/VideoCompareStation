@@ -36,6 +36,19 @@ Rectangle {
         }
     }
 
+    Text {
+        objectName: "droppedFramesLabel"
+        visible: control.host.droppedFramesText.length > 0
+        text: control.host.droppedFramesText
+        color: "#f59e0b"
+        font.pixelSize: 12
+        anchors {
+            left: frameCounter.right
+            leftMargin: 12
+            baseline: frameCounter.baseline
+        }
+    }
+
     Item {
         id: progressTrack
 

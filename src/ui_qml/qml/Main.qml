@@ -248,6 +248,11 @@ ApplicationWindow {
     property bool timelineDragging: false
     property int timelinePreviewFrame: -1
     readonly property string frameText: timelineDragging && timelinePreviewFrame >= 0 ? qsTr("第 %1 / %2 帧（松开跳转）").arg(timelinePreviewFrame + 1).arg(totalFrames) : (currentFrame >= 0 && totalFrames > 0 ? qsTr("第 %1 / %2 帧").arg(currentFrame + 1).arg(totalFrames) : qsTr("当前无帧"))
+    // Live drop telemetry from the render-ack relay, surfaced beside the frame counter. The
+    // count covers the whole process lifetime of the attached surface; only show it when the
+    // relay has actually observed a gap.
+    readonly property int droppedFrames: viewportFrame ? Number(viewportFrame.droppedFrames) : 0
+    readonly property string droppedFramesText: droppedFrames > 0 ? qsTr("丢帧 %1").arg(droppedFrames) : ""
     readonly property real frameProgress: currentFrame >= 0 && totalFrames > 1 ? Math.max(0, Math.min(1, Number(currentFrame) / (Number(totalFrames) - 1))) : 0
     readonly property real timelineProgress: timelineDragging && timelinePreviewFrame >= 0 && totalFrames > 1 ? Number(timelinePreviewFrame) / (Number(totalFrames) - 1) : frameProgress
     readonly property bool timelineEnabled: graphicsReady && !busy && Boolean(controller && controller.canFirst) && totalFrames > 0

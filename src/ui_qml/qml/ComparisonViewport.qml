@@ -63,6 +63,9 @@ Rectangle {
     property alias surface: dualVideoSurface
     property alias videoOutput: surfaceLayer
     readonly property bool roiEnabled: dualVideoSurface.roiEnabled
+    // The var-typed `surface` alias defeats qmllint's type resolution from other files, so the
+    // drop counter is re-exposed as a plain int computed here where ComparisonSurface resolves.
+    readonly property int droppedFrames: dualVideoSurface.droppedFrames
 
     function clearRoi() {
         dualVideoSurface.clearRoi();

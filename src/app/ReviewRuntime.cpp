@@ -383,8 +383,17 @@ public:
 
         acknowledgementRelay_->attach(&surface);
         try {
-            if (!surface.attachRendererServices(
-                    deviceBroker_, frameMailbox_, acknowledgementMailbox_, acknowledgementRelay_)) {
+            // The drop probe hands the surface a lock-free read of the relay's canonical gap
+            // counter so QML can show live drop telemetry without touching the relay object.
+            auto relayProbe = [relay = std::weak_ptr{acknowledgementRelay_}]() -> std::uint64_t {
+                const std::shared_ptr<ui::RenderAckRelay> locked = relay.lock();
+                return locked ? locked->statistics().canonicalFrameGaps : 0U;
+            };
+            if (!surface.attachRendererServices(deviceBroker_,
+                                                frameMailbox_,
+                                                acknowledgementMailbox_,
+                                                acknowledgementRelay_,
+                                                std::move(relayProbe))) {
                 acknowledgementRelay_->detach();
                 return false;
             }
