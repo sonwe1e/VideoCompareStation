@@ -94,13 +94,16 @@ public:
 
 // Bounded multi-producer/single-consumer ring buffer. Events are produced by several threads
 // (the coordinator worker and, for media-layer events, each per-source decode worker) and
-// consumed later by a single export thread. The buffer is protected by a mutex, but producers use
-// try-lock and drop on contention or capacity exhaustion; record() therefore never waits and never
-// touches the sink. Queue drops and sink/export failures contribute to the lost count so export
-// can flag an incomplete trace. This is a diagnostic facility that is disabled by default.
+// consumed later by a single export thread. Producers serialize briefly on the queue lock for a
+// single-event copy and never touch the sink or perform I/O; drops happen only on capacity
+// exhaustion. Queue drops and sink/export failures contribute to the lost count so export can
+// flag an incomplete trace. This is a diagnostic facility that is disabled by default.
 class PlaybackTraceBuffer final {
 public:
-    static constexpr std::size_t kCapacity = 16384U;
+    // 16K fills in under 20 s at three 60 fps sources (roughly 900 events/s); the T0 evidence
+    // traces run 15 s with 1-3 sources plus the navigation gate's held-step bursts, so 64K
+    // gives several times the headroom and keeps overflow a genuine anomaly, not the norm.
+    static constexpr std::size_t kCapacity = 65536U;
     static_assert((kCapacity & (kCapacity - 1U)) == 0U, "capacity must be a power of two");
 
     // Sink installation is a lifecycle operation. Replacing a sink waits for an in-progress
@@ -108,8 +111,8 @@ public:
     // This lifecycle lock is independent of the producer queue lock.
     void setSink(ITraceSink* sink) noexcept;
 
-    // Records an event from any thread. Returns false (and counts it as lost) when the queue lock
-    // is contended or the buffer is full. Never waits and never performs I/O.
+    // Records an event from any thread. Returns false (and counts it as lost) only when the
+    // buffer is full. Serializes with other producers for a single-event copy; never performs I/O.
     [[nodiscard]] bool record(TraceEvent event) noexcept;
 
     // Drains up to `max` events into `out`, returning the count written. Single-consumer: must

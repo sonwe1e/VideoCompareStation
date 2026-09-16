@@ -570,6 +570,16 @@ private:
         };
     }
 
+    // Command terminals reference the identity under which the command was accepted, not the
+    // live state. An open command accepted in the initial epoch may complete only after the
+    // first open bumps the epoch; emitting its terminal under the live epoch would orphan both
+    // the acceptance and the terminal and break the command exactly-once invariant (03§4).
+    [[nodiscard]] TraceIdentity commandTraceIdentity(const CommandContext& context) const noexcept {
+        auto identity = makeTraceIdentity(context.commandId);
+        identity.epoch = context.sessionEpoch;
+        return identity;
+    }
+
     void emitTrace(TraceEventKind kind,
                    const TraceIdentity& identity,
                    std::uint64_t payload = 0U,
@@ -719,7 +729,15 @@ private:
             state_.displayedFrame.has_value()
                 ? static_cast<std::uint64_t>(state_.displayedFrame->value())
                 : UINT64_MAX;
-        emitTrace(TraceEventKind::SnapshotCommitted, makeTraceIdentity(), displayed);
+        // Emit a commit only when the displayed canonical position actually changed. Re-committing
+        // an unchanged frame after the generation advanced (e.g. interactive-step successor arming)
+        // is unrepresentable in the trace contract: a newer identity has no ACK for the older frame
+        // (ACK-before-commit) and the older identity is stale once a higher revision was observed
+        // (no stale commits). The canvas state publication below still happens on every notify.
+        if (state_.displayedFrame != lastCommittedDisplayedFrame_) {
+            emitTrace(TraceEventKind::SnapshotCommitted, makeTraceIdentity(), displayed);
+            lastCommittedDisplayedFrame_ = state_.displayedFrame;
+        }
         publication_.publish(state_, sequenceAlignmentMaps_);
         if (notify) {
             notifyStatePublished();
@@ -740,7 +758,7 @@ private:
                          const CommandOutcome outcome,
                          std::optional<domain::MediaError> error = std::nullopt) {
         emitTrace(TraceEventKind::CommandTerminal,
-                  makeTraceIdentity(context.commandId),
+                  commandTraceIdentity(context),
                   static_cast<std::uint64_t>(outcome));
         publication_.complete(CommandTerminal{
             .context = context,
@@ -780,7 +798,7 @@ private:
                        const CommandOutcome outcome,
                        domain::MediaError error) {
         emitTrace(TraceEventKind::CommandRejected,
-                  makeTraceIdentity(context.commandId),
+                  commandTraceIdentity(context),
                   static_cast<std::uint64_t>(outcome));
         publishError(error);
         completeCommand(context, outcome, std::move(error));
@@ -3989,6 +4007,9 @@ private:
     std::optional<InteractiveStepRun> interactiveStepRun_;
     std::optional<std::chrono::steady_clock::time_point> lastPlaybackProjectionAt_;
     std::optional<std::chrono::steady_clock::time_point> lastInteractiveProjectionAt_;
+    // Displayed frame of the most recent SnapshotCommitted; identical re-commits are suppressed
+    // so every commit carries a payload with a prior ACK under the same identity (trace contract).
+    std::optional<domain::FrameId> lastCommittedDisplayedFrame_;
     std::optional<BackgroundAnalysis> analysisJob_;
     std::optional<AutomaticAlignmentProposal> automaticAlignmentProposal_;
     std::optional<AutomaticAlignmentUndoState> automaticAlignmentUndo_;

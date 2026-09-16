@@ -9,6 +9,7 @@
 #include "dvs/ui/ComparisonSurface.h"
 #include "dvs/ui/DesktopApplication.h"
 #include "dvs/ui/GraphicsBackend.h"
+#include "dvs/ui/ImageFolderPairModel.h"
 #include "dvs/ui/ImageReviewController.h"
 #include "dvs/ui/ReviewController.h"
 #include "dvs/ui/ReviewPreferencesController.h"
@@ -21,7 +22,9 @@
 #include "StartupRequestBroker.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -128,6 +131,29 @@ struct PerformanceMetrics final {
     double comparisonBrightPixelRatio = 0.0;
     bool comparisonModeVerified = false;
     bool comparisonFrameRetained = false;
+    // T0 evidence baseline (plan: correctness reproduction and playback evidence). These are
+    // additive observations only; no playback behavior changes. "New content display interval"
+    // is the GUI-thread elapsed time between successive committed canonical frames during the
+    // Running window (post-warmup) — the metric behind "longest pause" and the P50/P95/P99
+    // display cadence the plan requires instead of average FPS alone.
+    std::vector<qint64> displayIntervalsMilliseconds;
+    std::vector<qint64> uiLoopGapMicroseconds;
+    qint64 displayIntervalP50Milliseconds = -1;
+    qint64 displayIntervalP95Milliseconds = -1;
+    qint64 displayIntervalP99Milliseconds = -1;
+    qint64 displayIntervalMaximumMilliseconds = -1;
+    qint64 uiLoopGapP50Milliseconds = -1;
+    qint64 uiLoopGapP95Milliseconds = -1;
+    qint64 uiLoopGapP99Milliseconds = -1;
+    qint64 uiLoopGapMaximumMilliseconds = -1;
+};
+
+// Tail-latency summary used by the T0 evidence baseline for display intervals and UI loop gaps.
+struct TailSummary final {
+    qint64 p50 = -1;
+    qint64 p95 = -1;
+    qint64 p99 = -1;
+    qint64 maximum = -1;
 };
 
 void writeStandardError(std::string_view message) noexcept {
@@ -972,6 +998,11 @@ runDesktop(int& argc,
     QElapsedTimer comparisonModeTimer;
     qint64 lastCountedFrame = -1;
     qint64 comparisonFrameBeforeSwitch = -1;
+    // T0 evidence: monotonic playback-clock position (ms) of the last counted new-content
+    // commit, and the heartbeat clock for UI event-loop gap observation during Running.
+    qint64 lastCountedFrameTimeMilliseconds = -1;
+    QElapsedTimer uiLoopHeartbeat;
+    qint64 lastHeartbeatTimeMilliseconds = -1;
     std::vector<qint64> seekTargets;
     std::vector<qint64> seekMilliseconds;
     std::vector<qint64> warmStepMilliseconds;
@@ -1061,6 +1092,12 @@ runDesktop(int& argc,
             return;
         }
         lastCountedFrame = current;
+        const qint64 frameTime = playbackTimer.elapsed();
+        if (lastCountedFrameTimeMilliseconds >= 0) {
+            metrics.displayIntervalsMilliseconds.push_back(frameTime -
+                                                           lastCountedFrameTimeMilliseconds);
+        }
+        lastCountedFrameTimeMilliseconds = frameTime;
         samplePresentedSources();
     };
     QObject::connect(runtime->controller(),
@@ -1153,6 +1190,21 @@ runDesktop(int& argc,
                 heldStepMilliseconds[static_cast<std::size_t>(samples * 99U / 100U)];
         }
     };
+
+    // T0 evidence: a 1 ms heartbeat observes UI event-loop gaps during the Running window.
+    // A main-thread stall (synchronous decode, file I/O, scene-graph hitch) appears as a gap
+    // far above the timer baseline. Reports percentiles and the maximum rather than relying on
+    // average FPS. Runs only while playback is being measured so seek/analysis stages do not
+    // contaminate the playback-window signal.
+    QTimer uiLoopHeartbeatTimer;
+    uiLoopHeartbeatTimer.setInterval(1);
+    QObject::connect(&uiLoopHeartbeatTimer, &QTimer::timeout, runtime->controller(), [&] {
+        const qint64 now = uiLoopHeartbeat.elapsed();
+        if (lastHeartbeatTimeMilliseconds >= 0) {
+            metrics.uiLoopGapMicroseconds.push_back((now - lastHeartbeatTimeMilliseconds) * 1000);
+        }
+        lastHeartbeatTimeMilliseconds = now;
+    });
 
     QTimer poll;
     poll.setInterval(5);
@@ -1273,6 +1325,9 @@ runDesktop(int& argc,
             }
             metrics.playbackResponseMilliseconds = responseTimer.elapsed();
             playbackTimer.start();
+            uiLoopHeartbeat.start();
+            lastHeartbeatTimeMilliseconds = -1;
+            uiLoopHeartbeatTimer.start();
             stage = Stage::Running;
             return;
         case Stage::Running:
@@ -1288,6 +1343,7 @@ runDesktop(int& argc,
             if (playbackTimer.elapsed() < duration.count() * 1000) {
                 return;
             }
+            uiLoopHeartbeatTimer.stop();
             playbackRelayEnd = runtime->renderRelayStatistics();
             if (!controller.pause()) {
                 fail("pause-rejected");
@@ -1488,6 +1544,7 @@ runDesktop(int& argc,
     poll.stop();
     telemetryPoll.stop();
     timeout.stop();
+    uiLoopHeartbeatTimer.stop();
 
     const dvs::platform::GpuTransferStatistics transfer = runtime->transferStatistics();
     const dvs::ui::RenderAckRelayStatistics relay = runtime->renderRelayStatistics();
@@ -1589,12 +1646,49 @@ runDesktop(int& argc,
     const auto addNumber = [&report](const QString& key, const auto value) {
         report.insert(key, static_cast<double>(value));
     };
+    // T0 evidence: summarize the new-content display interval and UI loop gap distributions
+    // (P50/P95/P99 + maximum) so the report carries tail latency and longest-pause evidence
+    // instead of only average FPS.
+    const auto summarizeTail = [](std::vector<qint64>& samples) {
+        std::ranges::sort(samples);
+        return TailSummary{
+            .p50 = samples.empty() ? -1 : samples[samples.size() / 2U],
+            .p95 = samples.empty() ? -1
+                                   : samples[static_cast<std::size_t>(samples.size() * 95U / 100U)],
+            .p99 = samples.empty() ? -1
+                                   : samples[static_cast<std::size_t>(samples.size() * 99U / 100U)],
+            .maximum = samples.empty() ? -1 : samples.back(),
+        };
+    };
+    const TailSummary displayIntervals = summarizeTail(metrics.displayIntervalsMilliseconds);
+    metrics.displayIntervalP50Milliseconds = displayIntervals.p50;
+    metrics.displayIntervalP95Milliseconds = displayIntervals.p95;
+    metrics.displayIntervalP99Milliseconds = displayIntervals.p99;
+    metrics.displayIntervalMaximumMilliseconds = displayIntervals.maximum;
+    const TailSummary uiLoopGaps = summarizeTail(metrics.uiLoopGapMicroseconds);
+    metrics.uiLoopGapP50Milliseconds = uiLoopGaps.p50 < 0 ? -1 : uiLoopGaps.p50 / 1000;
+    metrics.uiLoopGapP95Milliseconds = uiLoopGaps.p95 < 0 ? -1 : uiLoopGaps.p95 / 1000;
+    metrics.uiLoopGapP99Milliseconds = uiLoopGaps.p99 < 0 ? -1 : uiLoopGaps.p99 / 1000;
+    metrics.uiLoopGapMaximumMilliseconds = uiLoopGaps.maximum < 0 ? -1 : uiLoopGaps.maximum / 1000;
     addNumber(QStringLiteral("duration_seconds"), duration.count());
     addNumber(QStringLiteral("screen_refresh_hz"), desktop.activeScreenRefreshRate());
     addNumber(QStringLiteral("presented_frames"), metrics.presentedFrames);
     addNumber(QStringLiteral("dropped_frames"), metrics.droppedFrames);
     addNumber(QStringLiteral("drop_ratio"), dropRatio);
     addNumber(QStringLiteral("source_split_observations"), metrics.sourceSplitObservations);
+    addNumber(QStringLiteral("display_interval_p50_ms"), metrics.displayIntervalP50Milliseconds);
+    addNumber(QStringLiteral("display_interval_p95_ms"), metrics.displayIntervalP95Milliseconds);
+    addNumber(QStringLiteral("display_interval_p99_ms"), metrics.displayIntervalP99Milliseconds);
+    addNumber(QStringLiteral("display_interval_max_ms"),
+              metrics.displayIntervalMaximumMilliseconds);
+    addNumber(QStringLiteral("display_interval_count"),
+              static_cast<double>(metrics.displayIntervalsMilliseconds.size()));
+    addNumber(QStringLiteral("ui_loop_gap_p50_ms"), metrics.uiLoopGapP50Milliseconds);
+    addNumber(QStringLiteral("ui_loop_gap_p95_ms"), metrics.uiLoopGapP95Milliseconds);
+    addNumber(QStringLiteral("ui_loop_gap_p99_ms"), metrics.uiLoopGapP99Milliseconds);
+    addNumber(QStringLiteral("ui_loop_gap_max_ms"), metrics.uiLoopGapMaximumMilliseconds);
+    addNumber(QStringLiteral("ui_loop_gap_count"),
+              static_cast<double>(metrics.uiLoopGapMicroseconds.size()));
     addNumber(QStringLiteral("open_first_frame_ms"), metrics.openFirstFrameMilliseconds);
     addNumber(QStringLiteral("playback_response_ms"), metrics.playbackResponseMilliseconds);
     addNumber(QStringLiteral("cold_seek_p50_ms"), metrics.seekP50Milliseconds);
@@ -1696,6 +1790,14 @@ runDesktop(int& argc,
         const auto& backend = playbackBackends[index];
         sourceDecode.append(QJsonObject{
             {QStringLiteral("source_id"), static_cast<double>(backend.sourceId)},
+            {QStringLiteral("backend"),
+             QString::fromUtf8(
+                 backend.backend == dvs::media::DecoderBackend::D3d11Va ? "d3d11va" : "software")},
+            {QStringLiteral("fallback_reason"), QString::fromStdString(backend.fallbackReason)},
+            {QStringLiteral("device_generation"),
+             static_cast<double>(backend.deviceGeneration.value())},
+            {QStringLiteral("cache_hits"), static_cast<double>(backend.cacheHitCount)},
+            {QStringLiteral("exact_seeks"), static_cast<double>(backend.exactSeekCount)},
             {QStringLiteral("calls"), static_cast<double>(backend.completedDecodeCount)},
             {QStringLiteral("average_us"),
              static_cast<double>(backend.completedDecodeCount == 0U
@@ -1715,6 +1817,428 @@ runDesktop(int& argc,
     }
     const auto encodedReport = QJsonDocument{report}.toJson(QJsonDocument::Compact);
     writeStandardError("DVS_PERFORMANCE_RESULT " + encodedReport.toStdString() + '\n');
+    if (!shutdownCompleted) {
+        writeStandardError("DVS_RUNTIME_SHUTDOWN_TIMEOUT\n");
+        std::_Exit(EXIT_FAILURE);
+    }
+    return result;
+}
+
+// P4 image-folder evidence entry (T0 baseline). Loads two folders, walks every paired row,
+// records the committed image state (paths, sizes, hashes, generation, error text), the
+// synchronous open cost, and the UI event-loop gaps caused by GUI-thread decoding. Corrupt /
+// missing / different-size / alpha-only fixtures intentionally expose the current behavior —
+// including a stale previous pair surviving a failed open — so the "wrong object" symptom is
+// reproducible evidence before T1/T2 change any behavior.
+struct ImageFolderInvocation final {
+    std::filesystem::path left;
+    std::filesystem::path right;
+};
+
+struct ImageRowEvidence final {
+    int row = -1;
+    std::string fileName;
+    std::string leftPath;
+    std::string rightPath;
+    bool hasLeft = false;
+    bool hasRight = false;
+    bool opened = false;
+    bool hasPair = false;
+    int primaryWidth = 0;
+    int primaryHeight = 0;
+    int secondaryWidth = 0;
+    int secondaryHeight = 0;
+    std::string leftSha256;
+    std::string rightSha256;
+    qint64 openMilliseconds = -1;
+    int contentGeneration = -1;
+    std::string errorText;
+};
+
+[[nodiscard]] std::optional<ImageFolderInvocation> parseImageFolderInvocation(const int argc,
+                                                                              char** const argv) {
+    if (argc != 4 || argv == nullptr || std::string_view{argv[1]} != "--ui-image-folder") {
+        return std::nullopt;
+    }
+    return ImageFolderInvocation{
+        .left = std::filesystem::path{argv[2]},
+        .right = std::filesystem::path{argv[3]},
+    };
+}
+
+[[nodiscard]] std::string fileSha256Hex(const std::filesystem::path& path) {
+    QFile file(QString::fromStdString(path.string()));
+    if (!file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    const QByteArray bytes = file.readAll();
+    if (bytes.isEmpty()) {
+        return {};
+    }
+    return QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex())
+        .toStdString();
+}
+
+[[nodiscard]] int
+runImageFolderEvidence(int& argc, char** argv, const ImageFolderInvocation& invocation) {
+    constexpr std::size_t kMaximumImagePairs = 4096U;
+    dvs::ui::configureGraphicsBackend();
+    dvs::ui::DesktopApplication desktop{
+        argc,
+        argv,
+        dvs::ui::DesktopApplicationOptions{
+            .smokeMode = false,
+            .preferSoftwareDevice = false,
+            .preferHighRefreshScreen = true,
+        },
+    };
+    std::unique_ptr<dvs::app::ReviewRuntime> runtime = dvs::app::ReviewRuntime::create();
+    if (!runtime || runtime->controller() == nullptr || runtime->preferences() == nullptr ||
+        !desktop.load(*runtime->controller(),
+                      *runtime->preferences(),
+                      [&runtime](dvs::ui::ComparisonSurface& surface) {
+                          return runtime->attachSurface(surface);
+                      })) {
+        writeStandardError("DVS_IMAGE_UI_LOAD_FAILED\n");
+        if (runtime) {
+            runtime->prepareForSceneGraphRelease();
+            desktop.releaseSceneGraph();
+            static_cast<void>(runtime->shutdownAfterSceneGraphRelease());
+        }
+        return EXIT_FAILURE;
+    }
+    installPlaybackTrace(*runtime);
+
+    enum class ImageStage {
+        WaitingForGraphics,
+        LoadingFolders,
+        IteratingRows,
+        DifferenceProbe,
+        CancelProbe,
+        Completed,
+    };
+    ImageStage stage = ImageStage::WaitingForGraphics;
+    bool failed = false;
+    bool completed = false;
+    std::string failureReason;
+    QElapsedTimer folderLoadTimer;
+    QElapsedTimer openTimer;
+    QElapsedTimer diffTimer;
+    QElapsedTimer uiLoopHeartbeat;
+    qint64 lastHeartbeatTimeMilliseconds = -1;
+    std::vector<qint64> uiLoopGapMicroseconds;
+    std::size_t peakWorkingSetBytes = 0U;
+    std::size_t baselineThreads = 0U;
+    std::size_t peakThreads = 0U;
+    qint64 loadFoldersMilliseconds = -1;
+    std::vector<ImageRowEvidence> rows;
+    int iterateRow = 1;
+    int diffPairRow = -1;
+    qint64 diffRecomputeMilliseconds = -1;
+    int diffMaxAbsDifference = -1;
+    double diffMeanAbsDifference = -1.0;
+    bool cancelClosed = false;
+    bool cancelReopened = false;
+    int cancelReopenGeneration = -1;
+    QElapsedTimer settleTimer;
+
+    const auto fail = [&](std::string reason) {
+        if (!failed) {
+            failed = true;
+            failureReason = std::move(reason);
+            desktop.exit(EXIT_FAILURE);
+        }
+    };
+
+    auto* const review =
+        qobject_cast<dvs::ui::ImageReviewController*>(desktop.imageReviewForAutomation());
+    auto* const model =
+        qobject_cast<dvs::ui::ImageFolderPairModel*>(desktop.folderPairModelForAutomation());
+
+    const auto captureRow = [&](const int row, const qint64 openMilliseconds, const bool opened) {
+        ImageRowEvidence evidence;
+        evidence.row = row;
+        evidence.opened = opened;
+        evidence.openMilliseconds = openMilliseconds;
+        if (model != nullptr) {
+            const QModelIndex index = model->index(row, 0);
+            evidence.fileName = model->data(index, dvs::ui::ImageFolderPairModel::FileNameRole)
+                                    .toString()
+                                    .toStdString();
+            const QUrl leftUrl =
+                model->data(index, dvs::ui::ImageFolderPairModel::LeftPathRole).toUrl();
+            const QUrl rightUrl =
+                model->data(index, dvs::ui::ImageFolderPairModel::RightPathRole).toUrl();
+            evidence.hasLeft =
+                model->data(index, dvs::ui::ImageFolderPairModel::HasLeftRole).toBool();
+            evidence.hasRight =
+                model->data(index, dvs::ui::ImageFolderPairModel::HasRightRole).toBool();
+            if (leftUrl.isLocalFile()) {
+                evidence.leftPath = leftUrl.toLocalFile().toStdString();
+            }
+            if (rightUrl.isLocalFile()) {
+                evidence.rightPath = rightUrl.toLocalFile().toStdString();
+            }
+        }
+        if (review != nullptr) {
+            evidence.hasPair = review->hasPair();
+            evidence.primaryWidth = review->primaryWidth();
+            evidence.primaryHeight = review->primaryHeight();
+            evidence.secondaryWidth = review->secondaryWidth();
+            evidence.secondaryHeight = review->secondaryHeight();
+            evidence.contentGeneration = review->contentGeneration();
+            evidence.errorText = review->errorText().toStdString();
+        }
+        if (!evidence.leftPath.empty()) {
+            evidence.leftSha256 = fileSha256Hex(std::filesystem::path{evidence.leftPath});
+        }
+        if (!evidence.rightPath.empty()) {
+            evidence.rightSha256 = fileSha256Hex(std::filesystem::path{evidence.rightPath});
+        }
+        rows.push_back(std::move(evidence));
+    };
+
+    QTimer poll;
+    poll.setInterval(5);
+    QObject::connect(&poll, &QTimer::timeout, runtime->controller(), [&] {
+        dvs::ui::ReviewController& controller = *runtime->controller();
+        if (failed || completed) {
+            return;
+        }
+        if (stage != ImageStage::WaitingForGraphics && hasReviewError(controller) &&
+            !controller.busy()) {
+            fail("media-error:" + controller.lastErrorTechnicalDetail().toStdString());
+            return;
+        }
+        switch (stage) {
+        case ImageStage::WaitingForGraphics: {
+            if (!controller.graphicsReady()) {
+                return;
+            }
+            baselineThreads = dvs::platform::sampleCurrentProcessTelemetry().threadCount;
+            peakThreads = baselineThreads;
+            uiLoopHeartbeat.start();
+            lastHeartbeatTimeMilliseconds = -1;
+            folderLoadTimer.start();
+            if (!desktop.loadFolderComparisonForAutomation(
+                    QUrl::fromLocalFile(QString::fromStdString(invocation.left.string())),
+                    QUrl::fromLocalFile(QString::fromStdString(invocation.right.string())))) {
+                fail("folder-load-rejected");
+                return;
+            }
+            loadFoldersMilliseconds = folderLoadTimer.elapsed();
+            if (model == nullptr || model->pairCount() <= 0 ||
+                model->pairCount() > static_cast<int>(kMaximumImagePairs)) {
+                fail("folder-pair-count-invalid");
+                return;
+            }
+            // The load call opened the first complete row; every row (including row 0) is
+            // then observed uniformly so single-sided rows report opened=false.
+            stage = ImageStage::IteratingRows;
+            iterateRow = 0;
+            return;
+        }
+        case ImageStage::IteratingRows: {
+            if (model == nullptr) {
+                fail("folder-model-missing");
+                return;
+            }
+            if (iterateRow >= model->pairCount()) {
+                stage = ImageStage::DifferenceProbe;
+                return;
+            }
+            const int row = iterateRow;
+            const bool complete =
+                model->data(model->index(row, 0), dvs::ui::ImageFolderPairModel::HasBothRole)
+                    .toBool();
+            openTimer.start();
+            const bool opened = complete && model->openPairAt(row);
+            captureRow(row, openTimer.elapsed(), opened);
+            ++iterateRow;
+            return;
+        }
+        case ImageStage::DifferenceProbe: {
+            // Reopen the first complete pair, then measure the synchronous diff recompute.
+            if (diffPairRow < 0) {
+                if (model == nullptr) {
+                    fail("folder-model-missing");
+                    return;
+                }
+                diffPairRow = model->firstCompleteRow();
+                if (diffPairRow < 0) {
+                    fail("no-complete-pair-for-diff");
+                    return;
+                }
+                if (!model->openPairAt(diffPairRow)) {
+                    fail("diff-pair-open-rejected");
+                    return;
+                }
+                return;
+            }
+            if (review == nullptr) {
+                fail("image-review-missing");
+                return;
+            }
+            diffTimer.start();
+            review->setCompareMode(static_cast<int>(dvs::ui::ImageReviewController::AbsDifference));
+            diffRecomputeMilliseconds = diffTimer.elapsed();
+            diffMaxAbsDifference = review->maxAbsDifference();
+            diffMeanAbsDifference = review->meanAbsDifference();
+            review->setCompareMode(static_cast<int>(dvs::ui::ImageReviewController::SideBySide));
+            stage = ImageStage::CancelProbe;
+            return;
+        }
+        case ImageStage::CancelProbe: {
+            if (review == nullptr) {
+                fail("image-review-missing");
+                return;
+            }
+            if (!cancelClosed) {
+                review->closeAll();
+                cancelClosed = !review->hasPrimary() && !review->hasSecondary();
+                return;
+            }
+            if (!cancelReopened) {
+                if (model == nullptr || diffPairRow < 0) {
+                    fail("folder-model-missing");
+                    return;
+                }
+                if (!model->openPairAt(diffPairRow)) {
+                    fail("cancel-reopen-rejected");
+                    return;
+                }
+                cancelReopened = review->hasPair();
+                cancelReopenGeneration = review->contentGeneration();
+                return;
+            }
+            stage = ImageStage::Completed;
+            completed = true;
+            desktop.exit(EXIT_SUCCESS);
+            return;
+        }
+        case ImageStage::Completed:
+            return;
+        }
+    });
+
+    QTimer heartbeatTimer;
+    heartbeatTimer.setInterval(1);
+    QObject::connect(&heartbeatTimer, &QTimer::timeout, runtime->controller(), [&] {
+        const qint64 now = uiLoopHeartbeat.elapsed();
+        if (lastHeartbeatTimeMilliseconds >= 0) {
+            uiLoopGapMicroseconds.push_back((now - lastHeartbeatTimeMilliseconds) * 1000);
+        }
+        lastHeartbeatTimeMilliseconds = now;
+    });
+
+    QTimer telemetryPoll;
+    telemetryPoll.setInterval(250);
+    QObject::connect(&telemetryPoll, &QTimer::timeout, runtime->controller(), [&] {
+        const dvs::platform::ProcessTelemetry telemetry =
+            dvs::platform::sampleCurrentProcessTelemetry();
+        peakWorkingSetBytes = std::max(peakWorkingSetBytes, telemetry.workingSetBytes);
+        peakThreads = std::max(peakThreads, telemetry.threadCount);
+    });
+
+    QTimer timeout;
+    timeout.setSingleShot(true);
+    timeout.setInterval(90 * 1000);
+    QObject::connect(
+        &timeout, &QTimer::timeout, runtime->controller(), [&] { fail("image-evidence-timeout"); });
+
+    poll.start();
+    heartbeatTimer.start();
+    telemetryPoll.start();
+    timeout.start();
+    int result = desktop.exec();
+    poll.stop();
+    heartbeatTimer.stop();
+    telemetryPoll.stop();
+    timeout.stop();
+
+    QElapsedTimer shutdownTimer;
+    shutdownTimer.start();
+    runtime->prepareForSceneGraphRelease();
+    desktop.releaseSceneGraph();
+    const bool shutdownCompleted = runtime->shutdownAfterSceneGraphRelease();
+    const qint64 shutdownMilliseconds = shutdownTimer.elapsed();
+    if (!shutdownCompleted || shutdownMilliseconds > 7000) {
+        result = EXIT_FAILURE;
+    }
+
+    const auto summarizeGaps = [](std::vector<qint64>& samples) {
+        std::ranges::sort(samples);
+        return TailSummary{
+            .p50 = samples.empty() ? -1 : samples[samples.size() / 2U],
+            .p95 = samples.empty() ? -1
+                                   : samples[static_cast<std::size_t>(samples.size() * 95U / 100U)],
+            .p99 = samples.empty() ? -1
+                                   : samples[static_cast<std::size_t>(samples.size() * 99U / 100U)],
+            .maximum = samples.empty() ? -1 : samples.back(),
+        };
+    };
+    const TailSummary gaps = summarizeGaps(uiLoopGapMicroseconds);
+
+    QJsonObject report;
+    const auto addNumber = [&report](const QString& key, const auto value) {
+        report.insert(key, static_cast<double>(value));
+    };
+    report.insert(QStringLiteral("passed"), result == EXIT_SUCCESS);
+    if (failed) {
+        report.insert(QStringLiteral("failure"), QString::fromStdString(failureReason));
+    }
+    addNumber(QStringLiteral("screen_refresh_hz"), desktop.activeScreenRefreshRate());
+    report.insert(QStringLiteral("left_folder"), QString::fromStdString(invocation.left.string()));
+    report.insert(QStringLiteral("right_folder"),
+                  QString::fromStdString(invocation.right.string()));
+    addNumber(QStringLiteral("pair_count"), model == nullptr ? 0 : model->pairCount());
+    addNumber(QStringLiteral("load_folders_ms"), loadFoldersMilliseconds);
+    QJsonArray rowArray;
+    for (const ImageRowEvidence& row : rows) {
+        rowArray.append(QJsonObject{
+            {QStringLiteral("row"), row.row},
+            {QStringLiteral("fileName"), QString::fromStdString(row.fileName)},
+            {QStringLiteral("hasLeft"), row.hasLeft},
+            {QStringLiteral("hasRight"), row.hasRight},
+            {QStringLiteral("opened"), row.opened},
+            {QStringLiteral("hasPair"), row.hasPair},
+            {QStringLiteral("primaryWidth"), row.primaryWidth},
+            {QStringLiteral("primaryHeight"), row.primaryHeight},
+            {QStringLiteral("secondaryWidth"), row.secondaryWidth},
+            {QStringLiteral("secondaryHeight"), row.secondaryHeight},
+            {QStringLiteral("leftSha256"), QString::fromStdString(row.leftSha256)},
+            {QStringLiteral("rightSha256"), QString::fromStdString(row.rightSha256)},
+            {QStringLiteral("open_ms"), static_cast<double>(row.openMilliseconds)},
+            {QStringLiteral("contentGeneration"), row.contentGeneration},
+            {QStringLiteral("errorText"), QString::fromStdString(row.errorText)},
+        });
+    }
+    report.insert(QStringLiteral("rows"), rowArray);
+    report.insert(
+        QStringLiteral("diff_probe"),
+        QJsonObject{
+            {QStringLiteral("max_abs_difference"), diffMaxAbsDifference},
+            {QStringLiteral("mean_abs_difference"), diffMeanAbsDifference},
+            {QStringLiteral("recompute_ms"), static_cast<double>(diffRecomputeMilliseconds)},
+        });
+    report.insert(QStringLiteral("cancel_probe"),
+                  QJsonObject{
+                      {QStringLiteral("closed"), cancelClosed},
+                      {QStringLiteral("reopened"), cancelReopened},
+                      {QStringLiteral("reopen_generation"), cancelReopenGeneration},
+                  });
+    addNumber(QStringLiteral("ui_loop_gap_p50_ms"), gaps.p50 < 0 ? -1 : gaps.p50 / 1000);
+    addNumber(QStringLiteral("ui_loop_gap_p95_ms"), gaps.p95 < 0 ? -1 : gaps.p95 / 1000);
+    addNumber(QStringLiteral("ui_loop_gap_p99_ms"), gaps.p99 < 0 ? -1 : gaps.p99 / 1000);
+    addNumber(QStringLiteral("ui_loop_gap_max_ms"), gaps.maximum < 0 ? -1 : gaps.maximum / 1000);
+    addNumber(QStringLiteral("ui_loop_gap_count"),
+              static_cast<double>(uiLoopGapMicroseconds.size()));
+    addNumber(QStringLiteral("peak_working_set_bytes"), peakWorkingSetBytes);
+    addNumber(QStringLiteral("baseline_threads"), baselineThreads);
+    addNumber(QStringLiteral("peak_threads"), peakThreads);
+    addNumber(QStringLiteral("shutdown_ms"), shutdownMilliseconds);
+    const auto encodedReport = QJsonDocument{report}.toJson(QJsonDocument::Compact);
+    writeStandardError("DVS_IMAGE_RESULT " + encodedReport.toStdString() + '\n');
     if (!shutdownCompleted) {
         writeStandardError("DVS_RUNTIME_SHUTDOWN_TIMEOUT\n");
         std::_Exit(EXIT_FAILURE);
@@ -2145,6 +2669,15 @@ int main(int argc, char* argv[]) {
             }
             return runPerformance(
                 argc, argv, invocation->sources, invocation->duration, invocation->comparisonMode);
+        }
+        if (argc == 4 && std::string_view{argv[1]} == "--ui-image-folder") {
+            const std::optional<ImageFolderInvocation> invocation =
+                parseImageFolderInvocation(argc, argv);
+            if (!invocation.has_value()) {
+                return dvs::app::reportFatalStartup(
+                    "Usage: --ui-image-folder <leftFolder> <rightFolder>", true);
+            }
+            return runImageFolderEvidence(argc, argv, *invocation);
         }
         if (argc == 4 && std::string_view{argv[1]} == "--ui-shutdown-smoke") {
             return runDesktop(argc,

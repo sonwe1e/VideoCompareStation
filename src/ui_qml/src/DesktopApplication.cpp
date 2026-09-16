@@ -247,6 +247,30 @@ public:
         return imageReview_->openPrimary(url);
     }
 
+    [[nodiscard]] bool loadFolderComparisonForAutomation(const QUrl& left,
+                                                         const QUrl& right) noexcept {
+        if (folderPairs_ == nullptr || window_ == nullptr || !left.isValid() || !right.isValid()) {
+            return false;
+        }
+        static_cast<void>(window_->setProperty("workspaceMode", 1));
+        if (!folderPairs_->loadFolders(left, right)) {
+            return false;
+        }
+        const int first = folderPairs_->firstCompleteRow();
+        if (first < 0) {
+            return false;
+        }
+        return folderPairs_->openPairAt(first);
+    }
+
+    [[nodiscard]] QObject* imageReviewForAutomation() const noexcept {
+        return imageReview_.get();
+    }
+
+    [[nodiscard]] QObject* folderPairModelForAutomation() const noexcept {
+        return folderPairs_.get();
+    }
+
     [[nodiscard]] bool clickControlForAutomation(const std::string_view objectName) noexcept {
         if (window_ == nullptr || objectName.empty()) {
             return false;
@@ -615,6 +639,19 @@ bool DesktopApplication::openSourcesForAutomation(const QList<QUrl>& sources) no
 
 bool DesktopApplication::openStillImageForAutomation(const QUrl& url) noexcept {
     return impl_->openStillImageForAutomation(url);
+}
+
+bool DesktopApplication::loadFolderComparisonForAutomation(const QUrl& left,
+                                                           const QUrl& right) noexcept {
+    return impl_->loadFolderComparisonForAutomation(left, right);
+}
+
+QObject* DesktopApplication::imageReviewForAutomation() const noexcept {
+    return impl_->imageReviewForAutomation();
+}
+
+QObject* DesktopApplication::folderPairModelForAutomation() const noexcept {
+    return impl_->folderPairModelForAutomation();
 }
 
 bool DesktopApplication::clickControlForAutomation(const std::string_view objectName) noexcept {

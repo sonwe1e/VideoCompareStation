@@ -1,0 +1,1009 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VideoCompareStation · 体验与架构联合审查 · 139fd506</title><style>
+:root{--bg:#fafafa;--panel:#fff;--fg:#18181b;--muted:#616169;--border:#dedee3;--soft:#f3f3f5;--link:#284b77;--nav:58px}*{box-sizing:border-box}html{scroll-behavior:auto;scroll-padding-top:78px}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.72 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","Noto Sans CJK SC",sans-serif}a{color:var(--link);text-decoration:none}a:hover{text-decoration:underline}button,select{font:inherit}button{cursor:pointer;border:1px solid var(--border);border-radius:6px;background:var(--panel);padding:5px 12px;color:var(--fg)}button:hover{background:var(--soft)}button[aria-pressed=true]{background:#25252a;color:#fff;border-color:#25252a}button:focus-visible,a:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid #31577d;outline-offset:3px}.topbar{position:sticky;top:0;z-index:20;background:rgba(250,250,250,.97);border-bottom:1px solid var(--border)}.topbar-inner{max-width:1540px;margin:auto;min-height:var(--nav);padding:10px 28px;display:flex;justify-content:space-between;align-items:center;gap:16px}.brand{font-weight:650;white-space:nowrap}.density{display:flex;gap:6px;align-items:center}.density-label{font-size:12px;color:var(--muted);margin-right:4px}.navselect{max-width:240px;border:1px solid var(--border);background:white;padding:5px;border-radius:6px}.wrap{max-width:1540px;margin:auto;padding:30px 28px 72px}.eyebrow{color:var(--muted);font-size:12px;letter-spacing:.1em}.hero{padding-bottom:18px;border-bottom:1px solid var(--border)}h1{font-size:30px;line-height:1.3;letter-spacing:-.035em;margin:8px 0 12px;font-weight:720}h2{font-size:21px;line-height:1.4;margin:0 0 18px;letter-spacing:-.015em}h3{font-size:17px;line-height:1.5;margin:20px 0 12px}.sub{color:var(--muted);margin:8px 0;font-size:13px}.pin{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;word-break:break-all;font-size:12px}.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.tag{font-size:12px;border:1px solid var(--border);padding:3px 8px;border-radius:4px;color:#48484e;background:#fff}.readinghint{margin:16px 0;color:var(--muted);font-size:13px}.section{padding:28px 0;border-bottom:1px solid var(--border);min-width:0}.section>p:first-child,.content>p:first-child{margin-top:0}p{margin:12px 0;max-width:none}strong{font-weight:700}p code,td code,li code{font-size:.88em;background:#f0f0f3;padding:2px 4px;border-radius:3px;overflow-wrap:anywhere}.table-wrap{overflow-x:auto;overscroll-behavior-x:contain;border:1px solid var(--border);border-radius:7px;margin:16px 0;background:var(--panel)}table{width:100%;border-collapse:collapse;font-size:13.5px;line-height:1.65;min-width:860px}th{text-align:left;background:#f2f2f4;font-weight:650;color:#34343a;padding:12px 14px;white-space:normal}td{vertical-align:top;padding:12px 14px;border-top:1px solid #e7e7eb}td:first-child{font-weight:550;min-width:136px}td:last-child{background:#fcfcfd}td code{word-break:break-word}pre{background:#f2f2f4;border:1px solid var(--border);border-radius:6px;padding:18px;overflow:auto;font:13px/1.65 ui-monospace,SFMono-Regular,Consolas,"Microsoft YaHei",monospace;white-space:pre;max-width:100%}blockquote{border-left:3px solid #b0b0ba;padding:3px 16px;margin:16px 0;color:#44444b}details{border:1px solid var(--border);border-radius:7px;background:var(--panel);margin:16px 0;min-width:0}summary{list-style-position:outside;padding:14px 18px;margin-left:18px;cursor:pointer;font-size:15px;font-weight:600;line-height:1.5}summary .note{font-size:12px;font-weight:400;color:var(--muted);margin-left:10px}details[open]>summary{border-bottom:1px solid var(--border);margin-left:0;padding-left:35px}.detail-body{padding:8px 20px 18px;min-width:0}.detail-body h3{font-size:16px}.ticket table{min-width:760px}.ticket td:first-child{width:125px;min-width:125px}.source-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 24px}.source-item{border-bottom:1px solid #e7e7eb;padding:11px 0;font-size:12px;scroll-margin-top:82px;min-width:0}.source-item p{margin:3px 0;color:var(--muted)}.source-item a{overflow-wrap:anywhere}.source-key{font-weight:700;margin-right:6px}.footer{font-size:12px;color:var(--muted);margin-top:24px}.compact-note{display:none}.road-chip{background:var(--soft);padding:12px 16px;border:1px solid var(--border);border-radius:6px;margin-top:16px;font-weight:650}.outline{font-size:12px;margin-top:14px;display:flex;gap:16px;flex-wrap:wrap}.nojs{background:#f3f3f5;padding:8px 14px}.density-minimal .optional-section{display:none}.density-minimal .compact-note{display:block}.density-minimal .readinghint{display:none}.density-minimal .findings table{font-size:12.8px}.density-minimal #overview td{padding-top:9px;padding-bottom:9px}.density-deep .detail-body{background:#fff}
+@media(min-width:1350px){#findings table th:nth-child(1){width:19%}#findings table th:nth-child(2){width:29%}#findings table th:nth-child(3){width:21%}#findings table th:nth-child(4){width:23%}#findings table th:nth-child(5){width:8%}}
+@media(max-width:800px){.topbar-inner{padding:8px 14px;gap:8px;flex-wrap:wrap}.brand{font-size:13px}.navselect{display:none}.density-label{display:none}.density button{font-size:12px;padding:4px 10px}.wrap{padding:22px 14px 44px}h1{font-size:25px}h2{font-size:19px}.section{padding:24px 0}.source-grid{grid-template-columns:1fr}table{min-width:880px}.detail-body{padding:5px 12px 14px}.hero .sub{font-size:12px}pre{font-size:12px}.outline{gap:9px 15px}.pin{font-size:11px}.topbar-inner{min-height:54px}.eyebrow{display:none}.meta .tag:nth-child(-n+2){display:none}.outline{flex-wrap:nowrap;overflow-x:auto;padding-bottom:5px}.outline a{flex-shrink:0}.readinghint{display:none}h1{font-size:24px}}
+@media print{.topbar,.readinghint,.outline{display:none}.wrap{max-width:none;padding:0}.optional-section{display:block!important}details{break-inside:auto}.table-wrap{overflow:visible}table{min-width:0;font-size:10px}pre{white-space:pre-wrap;font-size:10px}.source-grid{grid-template-columns:1fr 1fr}body{font-size:11px;background:#fff}.section{padding:15px 0}.detail-body{padding:8px}.hero h1{font-size:23px}}
+</style></head><body class="density-standard"><div class="topbar"><div class="topbar-inner"><div class="brand">VCStation / 独立审查</div><select class="navselect" aria-label="跳转章节" onchange="if(this.value)location.hash=this.value"><option value="">跳转到…</option><option value="overview">核心结论</option><option value="findings">五个重要发现</option><option value="workflow">任务与界面</option><option value="technical">技术与比较语义</option><option value="plan">路线与工单</option><option value="evidence">证据与边界</option></select><div class="density" aria-label="阅读密度"><span class="density-label">阅读密度</span><button data-density="minimal" aria-pressed="false">极简</button><button data-density="standard" aria-pressed="true">标准</button><button data-density="deep" aria-pressed="false">深入</button></div></div></div><main class="wrap"><header class="hero"><div class="eyebrow">VIDEO COMPARE STATION / REVIEW</div><h1>保留视频底座，先修比较可信度。</h1><p class="sub">VideoCompareStation · 体验优先的产品、性能与架构联合审查</p><p class="sub">分支 <strong>agent/image-folder-comparison</strong> · 固定 commit <span class="pin">139fd5067d582a95beb2bcf99d2586099040a000</span></p><p class="sub">快照提交时间：2026-09-16 05:22:40 UTC</p><div class="meta"><span class="tag">代码与历史：只读核查</span><span class="tag">CI：读取已有运行日志</span><span class="tag">Windows/D3D11：未实测</span><span class="tag">未实施任何项目改动</span></div><nav class="outline"><a href="#overview">核心结论</a><a href="#findings">五个重要发现</a><a href="#workflow">任务与界面</a><a href="#technical">技术与比较语义</a><a href="#plan">路线与工单</a><a href="#evidence">证据与边界</a></nav></header><noscript><p class="nojs">此页面可离线阅读。脚本关闭时仍可逐项打开附录；密度按钮不生效。</p></noscript><p class="readinghint">结论与发现默认可见；实现、实验和工单按需展开。手机表格可横向滚动。</p><section class="section" id="overview"><h2>核心结论</h2><p><strong>建议继续迭代，并做两处有边界的局部重构；没有证据支持更换 Qt、C++、FFmpeg 或 D3D11。</strong></p>
+<p>视频侧已经有专业审查工具需要的重要基础；图片与跨任务操作的可靠性明显落后。当前最迫切的缺口不是更多比较模式，而是：<strong>保证比较对象没有混入上一组、显示没有静默改变原图、操作只影响当前任务，并取得真实播放节奏的证据。</strong> <a href="#E05">E05</a> <a href="#E07">E07</a> <a href="#E10">E10</a> <a href="#E16">E16</a> <a href="#E21">E21</a></p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+  <th>决策</th>
+  <th>本轮建议</th>
+  <th>对使用体验意味着什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>保留</td>
+  <td>Qt Quick / C++20；FFmpeg 每源解码；D3D11 原生纹理；完整帧组与失效控制</td>
+  <td>不丢掉已经解决的同步、错帧和资源生命周期问题</td>
+</tr>
+<tr>
+  <td>先修</td>
+  <td>图片原图不可变、成对加载事务、真实缩放语义</td>
+  <td>先让“我现在比较的是谁、看到了什么”可信</td>
+</tr>
+<tr>
+  <td>局部重构</td>
+  <td>工作区/命令上下文；图片后台加载及按需差异</td>
+  <td>视频与图片共用工作台，不相互抢操作，也不共用不合适的播放模型</td>
+</tr>
+<tr>
+  <td>先测后改</td>
+  <td>连续播放调度、显示端节奏、缩略图读回、缓存命中</td>
+  <td>找出卡顿属于哪条路径，而不是盲目换库</td>
+</tr>
+<tr>
+  <td>暂缓</td>
+  <td>剪辑/转码/音频平台、大型客观评测、通用插件架构</td>
+  <td>把开发精力用于每天反复执行的观察与复查</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>重要未知项：</strong>本次没有 Windows/D3D11 桌面实测；实际机器、显示器刷新率、素材规格、磁盘位置及卡顿发生方式尚未确认。不能给播放顺畅性打出可信分数，也不能承诺提升百分比。仓库的格式/硬件目标并不覆盖所有 4K/HDR 素材。<a href="#E02">E02</a> <a href="#E29">E29</a></p>
+</section><section class="section findings" id="findings"><h2>最重要的五个发现</h2><div class="table-wrap"><table>
+<thead>
+<tr>
+  <th>现象或问题</th>
+  <th>证据与确定性</th>
+  <th>用户影响</th>
+  <th>推荐处理</th>
+  <th>优先级</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><strong>B 图被直接改尺寸</strong>；“100%”也不是原像素 1:1</td>
+  <td><strong>代码确认</strong>：<code>recomputeDifference</code> 351–365 行覆盖 <code>secondary_</code>；<code>ImageWorkspace</code> 用 <code>baseScale × zoom</code> 显示，但只用 <code>zoom</code> 标百分比。<a href="#E05">E05</a> <a href="#E14">E14</a></td>
+  <td>就算只看并排，也可能在看变形后的 B；不能据此判断边缘、尺寸或细节损失</td>
+  <td>保留原图；尺寸不同时默认保持比例并排，逐像素比较不可用；重采样只能生成标明策略的派生预览；分开“适应”和真实 100%</td>
+  <td><strong>P0 正确性</strong></td>
+</tr>
+<tr>
+  <td><strong>成对打开不是一次事务</strong></td>
+  <td><strong>代码确认</strong>：桌面回调依次打开 A/B，忽略结果；模型 opener 为无返回结果回调，列表仍能提交新选择。<a href="#E07">E07</a> <a href="#E08">E08</a> <a href="#E09">E09</a></td>
+  <td>新 A 成功、B 损坏时可能保留旧 B；列表名字和画布身份不一致，比单纯报错危险</td>
+  <td>先生成完整候选结果，再一次提交；失败保留完整上一对并明确说明，或清空成明确缺失状态，禁止混合</td>
+  <td><strong>P0 正确性</strong></td>
+</tr>
+<tr>
+  <td><strong>同样是“进入图片”，不同入口对视频/选择状态处理不同</strong></td>
+  <td><strong>代码确认路径差异</strong>：直接打开图片会关闭视频；模式菜单仅切换；文件夹回调不走同一关闭逻辑；部分选择器打开前就切模式。全局视频快捷键未纳入工作区判断。<a href="#E10">E10</a> <a href="#E11">E11</a> <a href="#E12">E12</a> <a href="#E13">E13</a></td>
+  <td>取消选择也可能改变界面；返回视频的状态不稳定；图片键盘操作可能遇到隐藏视频命令参与路由。具体 Qt 事件竞争尚未实测</td>
+  <td>单一工作区转移入口与命令上下文；切离视频先暂停；选择器取消不改变已提交任务；焦点归当前画布</td>
+  <td><strong>P0 输入隔离 / P1 重构</strong></td>
+</tr>
+<tr>
+  <td><strong>图片任务把读取、解码和整图差异放在同步调用链</strong></td>
+  <td><strong>代码确认执行位置</strong>：UI 对象直接读文件、解码、遍历像素；非差异模式也触发整图差异；QML 图片请求禁用异步与缓存。<strong>耗时未测量</strong>。<a href="#E05">E05</a> <a href="#E07">E07</a> <a href="#E14">E14</a> <a href="#E15">E15</a></td>
+  <td>大图、网络目录或连续换图可能让整个界面不响应；普通小图的严重程度不能静态断言</td>
+  <td>有界后台加载、旧请求失效、派生图按需计算、按字节缓存；不是仅把 QML <code>asynchronous</code> 改为 true</td>
+  <td><strong>P1</strong></td>
+</tr>
+<tr>
+  <td><strong>播放可靠性设计较强，但平滑性的证据不够</strong></td>
+  <td><strong>代码确认策略，瓶颈待测</strong>：协调器保留 2000 ms 追赶容忍；缩略图抓取走 <code>grabToImage</code>；渲染 ACK 在绘制提交后产生，而非屏幕实际显示。<a href="#E16">E16</a> <a href="#E21">E21</a> <a href="#E26">E26</a> <a href="#O04">O04</a> <a href="#O05">O05</a></td>
+  <td>可能“平均速度够、没有很多帧号跳跃”，仍发生停顿或追赶；不能从一个丢帧计数判断流畅</td>
+  <td>先关联帧组身份和显示时间；做少量对照；只有实测证明某段负责才改变调度或数据路径</td>
+  <td><strong>P0 建基线 / P1 条件修复</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>不要错误归因：</strong>尺寸拉伸在分支基点 <code>bbb88b3…</code> 已存在；最新文件夹提交增加了批量进入和切换路径，不是视频解码重构。问题应修复，但不能一概归咎于“这次加图片文件夹把播放器搞坏了”。<a href="#E06">E06</a> <a href="#E38">E38</a></p>
+<p><strong>值得保留：</strong>完整帧组一次呈现、显式缺帧、原生 PTS 精确定位、旧请求失效、GPU 纹理路径、源身份/pending 防重操作、文件改动后台检查，以及现有 QML/DPI 与硬件测试。这些直接支撑可信比较，不是只为代码整齐而存在的抽象。<a href="#E17">E17</a> <a href="#E19">E19</a> <a href="#E20">E20</a> <a href="#E28">E28</a> <a href="#E32">E32</a> <a href="#E35">E35</a></p>
+</section><div class="compact-note road-chip">执行顺序：T0 基线 ∥ T1 配对事务 / T2 原图语义 → T3 工作区 → T4 图片路径 / T6 审查上下文 → T5 有证据才改播放 → T7 复查记录。</div><section class="section optional-section" id="workflow"><h2>日常任务：当前路径 → 推荐路径</h2><p><strong>推荐“一套工作台外壳 + 明确的媒体任务模式 + 分开的会话状态”。</strong> 不建议把图片包装成零帧率视频，也不建议继续让两套控制器通过 <code>Main.qml</code> 零散判断互相影响。</p>
+<p>一开始只需各保留一个视频任务和一个图片/文件夹任务的轻量状态。进入图片时暂停视频，返回时恢复暂停位置；是否保留后台解码资源由预算决定。不要因为保留状态就让两套大缓存和隐藏播放一直运行。</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+  <th>任务</th>
+  <th>当前路径与阻碍</th>
+  <th>推荐路径</th>
+  <th>减少什么负担</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>打开两段视频</td>
+  <td>打开/拖入 → 多源确认 → 比较；后续参考源还承担帧号基准身份。<a href="#E02">E02</a> <a href="#E25">E25</a></td>
+  <td>拖入 → 可见 A/B 顺序与帧号基准 → 提交 → 暂停在首个正确帧组；相容素材直接进入，异常素材显示原因与映射选择</td>
+  <td>保留必要身份确认，不让用户记住“参考”到底改变画面还是时间线</td>
+</tr>
+<tr>
+  <td>换 B，A 不变</td>
+  <td>已有源操作与身份防重，但工作流缺少足够直接的“指定槽位替换”表达。<a href="#E35">E35</a></td>
+  <td>B 标题上的“替换 B”或拖到 B → 显示候选路径 → 成功后只替换 B；失败保留原 B</td>
+  <td>不重建整组，不通过当前焦点猜替换目标</td>
+</tr>
+<tr>
+  <td>打开两张图片</td>
+  <td>图片入口切模式 → 依次打开 A/B → 第二张失败可能留下旧来源。<a href="#E07">E07</a> <a href="#E10">E10</a></td>
+  <td>左右槽位或一次选两张 → 候选配对 → 加载成功一次提交；取消不动现有任务</td>
+  <td>消除半次成功和取消后的状态猜测</td>
+</tr>
+<tr>
+  <td>连续检查两个文件夹</td>
+  <td>选左目录 → 选右目录 → 同名配对 → 换下一对；当前回调会重设并排，主图加载还重置视图；缺失项不能打开。<a href="#E07">E07</a> <a href="#E08">E08</a> <a href="#E09">E09</a></td>
+  <td>目录配对只设置一次 → 列表选择/方向键 → 保持当前观察方式与可兼容视图；选中项自动滚入视野；缺失项可看存在的一侧</td>
+  <td>不必每一对重新找同一局部、恢复同一种差异视图，也不必去资源管理器确认缺图</td>
+</tr>
+<tr>
+  <td>视频 ↔ 图片</td>
+  <td>直接打开、切模式、文件夹进入的清理/暂停逻辑不一致；焦点返回函数指向视频画布。<a href="#E10">E10</a> <a href="#E12">E12</a></td>
+  <td>切换命令 → 暂停离开的任务 → 激活目标会话 → 恢复其焦点、选中对象和视图</td>
+  <td>操作只作用当前任务；来回查看不等于反复销毁与重开</td>
+</tr>
+<tr>
+  <td>发现问题后复查</td>
+  <td>已有视频区间选择、对齐等能力，但 README 明确当前没有项目会话保存。<a href="#E02">E02</a></td>
+  <td>先保留当前上下文；下一轮加入“标记问题”与截图+清单 → 单击定位回原帧/原配对/ROI</td>
+  <td>从“看到了但找不回”变成可复查证据，而不是扩展成剪辑工程</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>三个身份必须独立表达：</strong>键盘焦点决定快捷键接收者；A/B/C 决定来源；帧号基准与当前比较边（A↔B、A↔C、B↔C）决定比较含义。点击画布不能隐式改参考源。播放/逐帧针对整个比较组，不做每个画布各播各的。当前参考源与 canonical 时间线的耦合可先通过命名讲清，之后确有独立切换基准需求再拆分。<a href="#E25">E25</a> <a href="#E35">E35</a></p>
+<p><strong>键盘约定：</strong>视频画布的左右键逐帧；文件夹画布的左右键换配对；文本框内用于编辑；模态选择器接管输入。<code>Ctrl+W</code> 关闭当前任务，不关闭隐藏视频；Tab 在控件区仍用于焦点导航，仅在画布上下文承担隐藏工具栏的快捷操作。底层仍复用已有动作，不重新做第二套视频播放命令。</p>
+<details data-auto="standard" open><summary>关键布局与四种状态<span class="note">推荐示意，非应用截图</span></summary><div class="detail-body"><p>下面是<strong>推荐布局示意，不是实际运行截图</strong>。重点是职责和状态，而不是最终视觉皮肤。</p>
+<pre><code class="language-text">┌ 文件 / 最近 / 关闭当前任务 ────── [视频] [图片·文件夹] ─── 设置⋯ ┐
+│ A：文件名（父目录）[帧号基准]   B：文件名（父目录）[替换 B]       │
+│ 并排  滑动  差异    对比 A↔B   适应 / 100%   视图联动   检查器 │
+├────────────────┬─────────────────────────────────────────────┤
+│ 文件夹任务才有 │           A 画布       │       B 画布          │
+│ 左目录 / 右目录│   名称、原尺寸和状态   │ 名称、原尺寸和状态     │
+│ 筛选/配对规则  │                       │                     │
+│ 001  已配对    │       同步平移、缩放、取样；明确作用对象       │
+│ 002  B 缺失    │       右侧检查器按需展开，不永久挤压画布       │
+│ 003  当前 ✓    │                                             │
+├────────────────┴─────────────────────────────────────────────┤
+│ 视频：共用时间轴、±1 帧、播放/暂停、每侧帧号与 PTS               │
+│ 图片：上一对 / 当前名称与序号 / 下一对；不显示伪视频播放条        │
+├ 当前对象/映射/实际比例/重采样或色彩限制/错误状态 ────────────────┤
+└──────────────────────────────────────────────────────────────┘
+</code></pre>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+  <th>状态</th>
+  <th>文件区与画布</th>
+  <th>控制与反馈</th>
+  <th>用户始终知道什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>无素材</td>
+  <td>A/B 槽位各自接受文件；另有“比较文件夹”入口；没有空的复杂设置面板</td>
+  <td>只显示可执行打开动作；说明单路也可查看</td>
+  <td>我应该把素材放在哪里</td>
+</tr>
+<tr>
+  <td>加载中</td>
+  <td>新候选在标题标“加载中”；上一组保留时明确标“仍显示上一组”</td>
+  <td>可取消/另选；比较模式可以保留，导出和标记不能误用待加载身份</td>
+  <td>正在加载谁、当前屏幕实际还是谁</td>
+</tr>
+<tr>
+  <td>正常</td>
+  <td>列表选中、A/B 标题、画布、像素采样、统计都来自同一个提交身份</td>
+  <td>显示当前作用对象、模式和必要警告；高级设置折叠</td>
+  <td>接下来的操作影响谁</td>
+</tr>
+<tr>
+  <td>加载失败</td>
+  <td>标明 A 或 B 的失败候选；不以旧 B 冒充新 B；缺失一侧显示占位</td>
+  <td>重试该侧、替换文件、返回上一对；不必清空整个任务恢复</td>
+  <td>哪一步失败、哪些结果仍可信</td>
+</tr>
+</tbody>
+</table></div>
+<p>菜单承载低频的打开种类、最近任务、导出和设置；工具栏只放当前任务高频动作。差异增益/阈值/滤镜、复杂对齐和诊断进入检查器。<strong>“全屏沉浸”可以隐藏工具条，不能把“缺失、重采样、未确认时间映射”等会改变结论的信息也悄悄隐藏。</strong></p>
+</div></details><details data-auto="deep"><summary>具体借鉴哪些竞品行为<span class="note">Beyond Compare / PotPlayer / Diffchecker 官方资料</span></summary><div class="detail-body"><div class="table-wrap"><table>
+<thead>
+<tr>
+  <th>借鉴对象</th>
+  <th>官方资料支持的具体行为</th>
+  <th>本项目如何采用</th>
+  <th>不应该照搬</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>Beyond Compare</td>
+  <td>文件夹快速检查和详细内容比较是不同层级；详细结果可以返回列表状态。<a href="#O01">O01</a></td>
+  <td>文件夹负责“选哪一对”，画布负责“看差在哪里”；“已按名称配对”与“已检查内容”分列/分状态</td>
+  <td>文件同步、覆盖、删除与合并操作；也不能把“左右都有”涂成“内容相同”</td>
+</tr>
+<tr>
+  <td>PotPlayer</td>
+  <td>官方 2026-06-22 记录导航栏定位时暂停能力。<a href="#O03">O03</a></td>
+  <td>拖动期间的目标预览、松开后的精确定位、是否恢复播放必须有明确状态；逐帧默认进入暂停审查</td>
+  <td>影视播放器庞大的菜单、音频/字幕/网络播放，以及没有核对过的默认键位</td>
+</tr>
+<tr>
+  <td>Diffchecker</td>
+  <td>独立左右入口、并排联动缩放/平移、滑动/淡入淡出/闪烁；对齐可控制且可撤销。<a href="#O02">O02</a></td>
+  <td>保留现有并排/滑动；按观察任务组织差异方式；之后需要查边界抖动时再加手动瞬时 A/B 切换</td>
+  <td>自动几何配准默认开启：插帧畸变恰好可能是要观察的错误，不能被工具“对齐修掉”</td>
+</tr>
+</tbody>
+</table></div>
+<p>此处是官方资料支持的行为借鉴，不是声称本次在 Windows 上实机操作了这三个软件。</p>
+</div></details></section><section class="section optional-section" id="technical"><h2>技术与性能：保留底座，先找出慢在哪里</h2><div class="table-wrap"><table>
+<thead>
+<tr>
+  <th>层次</th>
+  <th>当前实际方案</th>
+  <th>结论</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>桌面界面</td>
+  <td>C++20、Qt 6.11.1 的 Qt Quick/QML，Windows x64 桌面目标</td>
+  <td>不需要为改进交互而换 UI 框架</td>
+</tr>
+<tr>
+  <td>视频读取/解码</td>
+  <td>FFmpeg 8.1.2；<code>SoftwareDecoder</code> 实际包含软件和 D3D11VA 两条路径</td>
+  <td>不能从类名判断当前在用纯 CPU；先记录每个源的真实 backend/fallback reason</td>
+</tr>
+<tr>
+  <td>视频组织/调度</td>
+  <td><code>PlaybackCoordinator</code>，每源 <code>SourceDecodeActor</code>，原生 PTS 索引，优先级请求、缓存、完整 FrameSet</td>
+  <td>可信帧组和播放策略已分出基本边界，适合增量优化</td>
+</tr>
+<tr>
+  <td>视频渲染</td>
+  <td>Qt 场景图 <code>QSGRenderNode</code> + D3D11 + HLSL；NV12/P010；硬件路径直接使用解码纹理</td>
+  <td>不支持“目前每帧都在 CPU 上拼大 RGB 图，所以必须换引擎”的判断</td>
+</tr>
+<tr>
+  <td>图片任务</td>
+  <td>UI 控制器同步读入；stb 的部分格式快速路径输出 RGBA8，另有 Qt 加载回退；QImage CPU 差异；QML Image 显示</td>
+  <td>这是当前最值得独立改善的数据路径，不应强行并入视频解码调度</td>
+</tr>
+<tr>
+  <td>配置与验证</td>
+  <td>CMake/vcpkg、JSON 设置、GTest、QML 测试、专门硬件/性能入口</td>
+  <td>已有工程底座，但“有测试目标”不等于“目标机器已验收”</td>
+</tr>
+</tbody>
+</table></div>
+<p>依据：<a href="#E03">E03</a> <a href="#E04">E04</a> <a href="#E15">E15</a> <a href="#E18">E18</a> <a href="#E19">E19</a> <a href="#E22">E22</a> <a href="#E32">E32</a> <a href="#E34">E34</a></p>
+<pre><code class="language-text">视频：
+UI 主线程：QML / ReviewController ─命令→ PlaybackCoordinator [协调线程]
+                                           │
+                                  MediaProbe [后台探测/索引]
+                                           │
+                  MultiSourceFrameProvider [提供者线程：请求、缓存、组装]
+                         ├─ SourceDecodeActor A [源线程 + FFmpeg]
+                         ├─ SourceDecodeActor B [源线程 + FFmpeg]
+                         └─ SourceDecodeActor C [可选源线程 + FFmpeg]
+                                           │ 全部来源完成 / 显式 Missing
+                                       完整 FrameSet
+                                           │
+                                 GpuTransferActor [传输线程]
+                    软件帧：NV12/P010 → 上传；硬件帧：保留原生纹理
+                                           │
+                                  FrameMailbox（发布帧组）
+                                           │
+                 Qt 场景图渲染上下文 → QSGRenderNode → D3D11 绘制
+                                           │
+                    ACK 邮箱 / Relay → 协调器提交显示状态 → UI 投影
+
+SteadyDeadlineScheduler/时钟提供连续播放期限；设备代际贯穿 GPU 生命周期。
+Qt 是否采用单独场景图渲染线程受 render loop 配置影响，不能和 UI 线程混称。
+
+图片（当前）：
+UI 操作 → 同步扫描/读取 → stb 或 Qt 解码 → QImage → CPU 整图差异
+                                                    ↓
+                                  图像 provider → QML Image → 场景图
+图片没有复用视频完整帧组事务，也没有同等级后台调度。
+</code></pre>
+<p>对应装配和实现：<a href="#E07">E07</a> <a href="#E17">E17</a> <a href="#E18">E18</a> <a href="#E20">E20</a> <a href="#E21">E21</a> <a href="#E22">E22</a> <a href="#E23">E23</a>。软件和硬件数据流不同，实际是否发生上传/格式转换要按 backend 记录，不能把所有分支的开销叠加为每一帧必经成本。</p>
+<details data-auto="standard" open><summary>比较语义：同帧号、同时刻、原像素不是一回事</summary><div class="detail-body"><p><strong>比较可信度至少有四个独立维度：对象身份、时间关系、空间关系、像素/颜色解释。</strong> 其中任何一个不确定，都不能靠一张漂亮差异图消除。</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+  <th>维度</th>
+  <th>当前实现</th>
+  <th>风险与应该显示的信息</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>视频帧号与时间</td>
+  <td>默认映射是 canonical 帧号加已解析的偏移；已确认的序列对齐可以提供逐位置映射，不能概括为仅支持固定全局偏移。<a href="#E17">E17</a></td>
+  <td>默认同帧号不等于同一时刻。示例：均从 0 开始时，零基帧号 24 在 24 fps 是 1 秒，在 30 fps 是 0.8 秒。显示每侧源帧号、相对 PTS、映射方式；相差时间不能一概要求为零</td>
+</tr>
+<tr>
+  <td>VFR、B 帧、非零起点</td>
+  <td>解码以原生显示顺序 PTS 索引定位；已有变帧率时间线与准确失败反馈。<a href="#E19">E19</a> <a href="#E29">E29</a></td>
+  <td>“支持 VFR 单路正确取帧”不等于“两个 VFR 已经对应同一内容”。同 fps 元数据也不证明采样时刻全相同</td>
+</tr>
+<tr>
+  <td>时长与缺帧</td>
+  <td>已有帧数/帧率/时长告警；源越界或对齐缺口使用 Missing，不拿末帧填充伪装有效。<a href="#E17">E17</a> <a href="#E25">E25</a></td>
+  <td>保留占位并禁用涉及缺失侧的有效差异；注明时间轴由谁决定，不默默截为较短者或循环较短者</td>
+</tr>
+<tr>
+  <td>参考源与活动视图</td>
+  <td>当前参考角色参与时间线基准，源条也按 canonical 高亮。<a href="#E25">E25</a> <a href="#E35">E35</a></td>
+  <td>不要把它当“当前鼠标点击的面板”；先把标签改得足够明确。需要“只换视觉基准、不改时间线”时再拆成独立命令并测试</td>
+</tr>
+<tr>
+  <td>文件夹配对</td>
+  <td>仅扫描目录本层，按含扩展名的完整文件名忽略大小写取并集；不做内容匹配。<a href="#E08">E08</a></td>
+  <td><code>001.png</code> 不会自动对应 <code>001.jpg</code>；重名冲突不能静默选第一个。显示规则、完整/单边/加载失败数量，刷新后保留可识别选择</td>
+</tr>
+<tr>
+  <td>图片空间关系</td>
+  <td>当前直接把 B 拉成 A，且原尺寸随对象被覆盖。<a href="#E05">E05</a></td>
+  <td>必修。默认保持原图；可选派生重采样注明目标尺寸、比例、滤镜。源像素取样必须声明来自原图还是派生图</td>
+</tr>
+<tr>
+  <td>视频像素精确度</td>
+  <td>原生 4:2:0 8/10 bit 与 NV12/P010 有码值保持通路；422/444/RGB 视觉归一化不具备相同含义，已有 exactness 判定。<a href="#E24">E24</a> <a href="#E29">E29</a></td>
+  <td>“精确码值比较”只说像素值通路，不自动保证同一时刻。单枚举可以用于按钮准入，状态说明应保留所有同时存在的时间/空间/颜色原因</td>
+</tr>
+<tr>
+  <td>图片颜色和透明度</td>
+  <td>快速路径产生 RGBA8；差异公式目前比较 RGB，且每像素取最大通道差再平均，不是通常意义的 RGB MAE；alpha 未参与。<a href="#E05">E05</a> <a href="#E15">E15</a></td>
+  <td>不宣称 16-bit 原码值、完整 ICC 或透明度精确比较。首轮明确范围与格式能力；纯 alpha 变化必须被提示或纳入明确策略；不要把 mean/peak 差值命名为画质优劣</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>最小而重要的规则：</strong>“差异大”仅表示当前约定下差得多，不说明 A 更好或 B 更差。对齐、滤镜、显示缩放或颜色转换本身都可能制造差异，也可能把真实错误隐藏。</p>
+<p>图片后缀列表包含 WebP/TIFF，不代表打包产物在每台机器上都能解码它们；快速通路与 Qt 插件回退必须用安装产物实际探测和测试。动画格式应明确为静态帧查看及取哪一帧，不顺势实现新的动画播放器。<a href="#E08">E08</a> <a href="#E15">E15</a></p>
+</div></details><details data-auto="standard" open><summary>五类卡顿与对应排查方向</summary><div class="detail-body"><p><strong>先区分五类“慢”，再决定改动位置。</strong> 本次只确认代码路径，未确认下表候选就是你机器上的根因。</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+  <th>体验症状</th>
+  <th>当前值得检查的具体路径</th>
+  <th>能区分原因的证据</th>
+  <th>第一选择</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>连续播放停顿、随后追赶</td>
+  <td>调度的追赶策略、完整帧组等待最慢源、发布/ACK 背压、D3D 设备竞争、缩略图抓取</td>
+  <td>各源 decode 完成 → FrameSet ready → 发布 → 绘制提交 → 显示的时间关联；停顿是否与 grab/缓存事件重合</td>
+  <td>减少已证实的读回/竞争；调整连续播放策略时仍整组跳帧</td>
+</tr>
+<tr>
+  <td>拖完进度条等待</td>
+  <td>原生 PTS 索引、回到关键帧再解码、Exact 队列、旧请求取消、必要时一次 reopen 恢复</td>
+  <td>seek 目标→真正正确帧组显示；解码帧数量、索引命中、取消次数、冷/热差异</td>
+  <td>保留准确定位；优先取消合并、索引/缓存命中和预取策略</td>
+</tr>
+<tr>
+  <td>单步或反向逐帧慢</td>
+  <td>正向有顺序工作流；反向/不连续需要 Exact；缓存大小与 GOP 距离</td>
+  <td>每次接受的逐帧命令和呈现帧号序列；冷/热 P95/P99、seek/reopen 次数</td>
+  <td>小而有界的相邻帧缓存；不能丢掉已接受步进伪装响应快</td>
+</tr>
+<tr>
+  <td>首次打开或换文件慢</td>
+  <td>探测、身份确认、PTS 索引、解码器准备；图片还在 UI 同步执行</td>
+  <td>打开分阶段时间；同文件二次打开是否显著变化；UI 心跳是否停止</td>
+  <td>把长阶段显示为明确状态；只优化已证实重复工作</td>
+</tr>
+<tr>
+  <td>整个界面无响应</td>
+  <td>图片目录扫描/读文件/解码/整图 CPU 差异及图像请求</td>
+  <td>UI 事件循环延迟和各阶段耗时；不用 CPU 总占用率替代</td>
+  <td>后台候选结果 + UI 单次提交；QML 异步开关不是完整解决方案</td>
+</tr>
+</tbody>
+</table></div>
+<p>这些路径来自 <a href="#E05">E05</a> <a href="#E08">E08</a> <a href="#E14">E14</a> <a href="#E16">E16</a> <a href="#E17">E17</a> <a href="#E18">E18</a> <a href="#E19">E19</a> <a href="#E21">E21</a> <a href="#E26">E26</a>。</p>
+<p><strong>连续播放与精确审查应保持不同契约。</strong> 连续播放可以跳过完整过期帧组以追上时间，并公开次数及原因；暂停/单步/定位必须给目标来源帧或明确失败。旧帧保留可以避免闪黑，但必须标为“仍显示上一帧”，不能在状态栏宣布新帧已完成。</p>
+<p>当前 2000 ms 追赶容忍策略可能在较短迟滞后继续追逐中间帧。它有减少帧号跳跃的动机，但未必最符合“实时观察运动”的体验。先做可重复对照，不能直接把常量改成一个看似合理的毫秒数就宣布修好。<a href="#E16">E16</a></p>
+<p><strong>现有 ACK 需要保留，但要另加呈现观测。</strong> 代码在发出绘制后确认；Qt 的 <code>frameSwapped</code> 也只表示已经排队呈现。建议把解码、渲染提交和系统显示时间分开，结合 ETW/显示呈现工具关联帧组身份；不要直接把 ACK 移到另一个信号，破坏已有提交与资源生命周期契约。<a href="#E21">E21</a> <a href="#O05">O05</a></p>
+</div></details><details data-auto="deep"><summary>最小验证计划与建议埋点<span class="note">实验 P1–P4；阈值与基线分开</span></summary><div class="detail-body"><p><strong>基线前提：</strong>使用固定 SHA 的 Release 构建，在可见 Windows 桌面测试；记录 CPU、GPU/驱动、显示器刷新率/DPI、Qt render loop、每源实际解码 backend、磁盘位置、素材哈希、尺寸、编码、位深、帧率/PTS/GOP。保持画布尺寸与播放速度一致。不把 Linux core、WARP 像素正确性或 Debug 构建当真实 GPU 性能。</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+  <th>实验</th>
+  <th>可复现操作</th>
+  <th>必须记录</th>
+  <th>怎样改变决策</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>P1 基础播放</td>
+  <td>先运行已有 1/2/3 路 1080p60 可见窗口 300 秒入口；若真实任务是高分辨率，再增加一组实际卡顿素材，不展开无关编码矩阵</td>
+  <td>新内容帧组显示间隔 P50/P95/P99、最长停顿、整组跳过/重复、相对播放时钟落后、最慢源耗时；资源占用</td>
+  <td>单路就慢先看单源/呈现；多路才慢看最慢源与共享资源；4K 单独失败不能推出整个技术栈不适合</td>
+</tr>
+<tr>
+  <td>P2 显示路径对照</td>
+  <td>固定同一对视频：并排/滑动/差异；在隔离实验构建中仅关闭缩略图抓取做开关对照。每次只改一个变量</td>
+  <td>帧组准备、纹理上传/原生纹理复用、设备竞争、grab 次数及耗时、实际呈现节奏</td>
+  <td>关闭抓图改善才收紧抓图时机；差异模式独有退化才深入 shader/采样，不盲目换解码器</td>
+</tr>
+<tr>
+  <td>P3 精确导航</td>
+  <td>固定种子选 20 个 seek 位置，各重复 3 轮区分冷/热；含非零起点/B 帧素材；正向/反向单步及按住方向键后松开</td>
+  <td>seek→正确帧组显示延迟、逐帧 P95/P99、帧号/PTS 断言、取消/重开次数、排队剩余动作</td>
+  <td>寻找缓存、关键帧距离、过期请求或提交时序问题；若松键后仍长期执行，应处理有界背压而非静默跳过已接受动作</td>
+</tr>
+<tr>
+  <td>P4 图片与混合任务</td>
+  <td>固定临时文件夹：完整对、A/B 各自损坏、缺失、不同尺寸、alpha-only、同名异扩展；再用目标规格大图；从视频播放进入、取消选择、连续换图再返回</td>
+  <td>列表/标题/画布的 committedPairId；原图尺寸与哈希；主线程最长阻塞、打开/差异分段耗时、驻留峰值；所有退出/取消路径</td>
+  <td>正确性错误无须等性能测量即可修；若大图同步路径阻塞成立，推进图片工作线程，而非播放器重写</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>正确性断言可以现在制定；新性能阈值必须从目标环境基线制定。</strong> 例如：接受的单步命令必须有一次终态；新帧组不得混入旧请求的一侧；最后一次 seek 的结果才能替换当前画面；缺失不生成“零差异”；暂停后不以其他时刻冒充目标帧；切换任务后隐藏视频不接收媒体键。</p>
+<p>仓库说明已有目标：指定 runner 的多路 1080p60 在排除预热/seek/pause 后，整组 drop ≤0.5%、seek P95 ≤500 ms、UI 响应 ≤100 ms、解码帧缓存 ≤256 MiB。<strong>这些是仓库目标，不是本次测得的数值，也不是对你机器或所有 4K 素材的保证。</strong> 还应核对这些文字与实际 gate 参数一致，再新增显示间隔、最长停顿、时间落后和正反逐帧目标。<a href="#E28">E28</a></p>
+<p>已有入口可以复用，不需另起性能平台：</p>
+<pre><code class="language-powershell"># 在独立、可恢复的 Windows 测试构建中；先确认 preset 与依赖缓存。
+# 不要套用仓库文档里的个人磁盘路径，也不要重装用户正在使用的 Qt 缓存。
+ctest --preset dev -R &quot;ImageReviewControllerTests|ImageFolderPairModelTests|PlaybackCoordinatorTests&quot; --output-on-failure
+
+.\tools\testing\run-navigation-gate.ps1 `
+  -Executable .\out\build\dev\bin\VCStation.exe `
+  -Fixtures @('D:\audit-fixtures\a.mp4', 'D:\audit-fixtures\b.mp4')
+
+.\tools\testing\run-comparison-semantics-gate.ps1 `
+  -Executable .\out\build\dev\bin\VCStation.exe `
+  -Fixtures @('D:\audit-fixtures\a.mp4', 'D:\audit-fixtures\b.mp4')
+
+# 短诊断片段；正常退出后才生成当前 trace。
+$previousTrace = $env:DVS_PLAYBACK_TRACE
+try {
+  $env:DVS_PLAYBACK_TRACE = Join-Path $PWD ('out\audit-' + [guid]::NewGuid() + '.jsonl')
+  .\out\build\dev\bin\VCStation.exe
+} finally {
+  if ($null -eq $previousTrace) {
+    Remove-Item Env:DVS_PLAYBACK_TRACE -ErrorAction SilentlyContinue
+  } else {
+    $env:DVS_PLAYBACK_TRACE = $previousTrace
+  }
+}
+</code></pre>
+<p>以上是<strong>待执行计划</strong>，不是声称本次运行过这些命令。dev 测试用于正确性；最终性能仍应用 Release 对应构建，并保留与基线完全相同的调用参数。</p>
+<p>现有 trace 只有 16,384 条容量且关闭时才导出；部分事件尚未发出，遇到溢出不能用“不完整日志没有发现错误”证明正确。先用短 trace 定位，长播放用有界分位数/计数汇总；需要连续完整 trace 时再设计低干扰后台导出，不能单纯把队列无限增大。<a href="#E27">E27</a></p>
+<p>建议新增观测字段：<code>session/epoch/generation/request/pair-or-frame-set-id</code>、<code>sourceId/sourceFrame/PTS</code>、阶段起止、队列深度、缓存命中/拒绝原因、原生纹理/上传字节、提交帧组与显示对应关系。旧 schema 采用兼容的附加字段；会改变原事件语义时升级版本。</p>
+</div></details><details data-auto="deep"><summary>重构边界、资源释放与高分辨率条件<span class="note">哪些保留、哪里改变、怎样回退</span></summary><div class="detail-body"><div class="table-wrap"><table>
+<thead>
+<tr>
+  <th>模块/边界</th>
+  <th>保留什么</th>
+  <th>修改什么与收益</th>
+  <th>成本/风险/回退</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>视频解码与帧组</td>
+  <td>FFmpeg、每源 actor、PTS 索引、完整 FrameSet/Missing、失效代际</td>
+  <td>有证据后只改热点和策略；准确帧身份保持不变</td>
+  <td>通常中；设备/编码差异必须回归；策略开关回退</td>
+</tr>
+<tr>
+  <td>工作区状态</td>
+  <td>原有视频控制器和图片视图适配 API</td>
+  <td>增加小型 WorkspaceSessionState：active task、pending/committed、命令上下文；统一打开/取消/切换</td>
+  <td>中；主要风险是改变旧快捷键与恢复语义；逐入口迁移并保留兼容适配</td>
+</tr>
+<tr>
+  <td>图片加载/差异</td>
+  <td>QImage 和成熟解码能力，现有画布交互</td>
+  <td>ImagePairLoader 返回不可变候选，工作线程不触摸 UI；一次提交；原图与派生结果分开，按需差异</td>
+  <td>中；并发失效、内存峰值需要测试；可退为尺寸受限但语义正确的同步路径</td>
+</tr>
+<tr>
+  <td>UI 通用能力</td>
+  <td>A/B 身份、对比方式描述、视图变换概念、诊断显示</td>
+  <td>共享命令含义与呈现约定，不强制两种媒体共用解码、缓存、时钟、颜色管线</td>
+  <td>小至中；避免“万能 MediaController”积累更多分支</td>
+</tr>
+<tr>
+  <td>GPU 呈现与 ACK</td>
+  <td>原生纹理、旧 front 保留、有界背压、资源释放</td>
+  <td>先补独立呈现指标；只有上传/绘制测量证据才替换相关模块内部</td>
+  <td>高风险改动不应先做；不能为更顺滑拆开 A/B 独立发布</td>
+</tr>
+<tr>
+  <td>持久化</td>
+  <td>JSON 设置和已有来源身份原则</td>
+  <td>后续小型审查清单/会话快照，不提前引入数据库或工程系统</td>
+  <td>中；版本/源变更验证；可关闭恢复功能而保留导出文件</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>当前架构还能走多远？</strong> 对仓库既定的 1–3 路 Windows SDR 审查，现有边界仍可承载继续演进；没有证据表明它已经撞上框架上限。真正不应继续增长的是 Main 中散落的跨模式状态，以及把图片加载、原图修改、差异计算和 QML 投影放进一个同步流程。<a href="#E04">E04</a> <a href="#E05">E05</a> <a href="#E10">E10</a> <a href="#E23">E23</a> <a href="#E29">E29</a></p>
+<p><strong>不要以“减少线程/类数量”为目标清理。</strong> 当前设备代际、取消和关闭拥有依赖的设计是在防止过期结果、设备丢失和晚到任务访问释放对象；本次没有证据证明这些保护可删，也没有运行证据可以宣布不存在泄漏。<a href="#E18">E18</a> <a href="#E21">E21</a> <a href="#E23">E23</a></p>
+<p><strong>两个高分辨率边界值得提前讲清，但不应拿来推翻技术栈。</strong> 源缓存上限为 12 MiB，FrameSet 缓存还受共享预算四分之一约束；224 MiB 预算下该上限是 56 MiB。按未含填充的像素负载估算，一帧 3840×2160 P010 约 23.7 MiB，三路约 71.2 MiB；因此不能假设多路 4K10bit 的相邻帧会像小素材一样命中缓存，需测真实 accountedBytes 与命中率。这里是静态计算，不是显存或延迟实测。<a href="#E17">E17</a> <a href="#E23">E23</a></p>
+<p>类似地，8192×8192 的 RGBA8 单图已是 256 MiB，三张整图就约 768 MiB，尚未计入解码临时区、纹理及其他派生图。只在解码完以后检查边长无法有效控制峰值；先做头部尺寸/总像素/解码预算检查，并在实际加载期间继续限制。第一轮不需要马上实现复杂分块图像引擎。<a href="#E05">E05</a> <a href="#E15">E15</a></p>
+</div></details></section><section class="section" id="plan"><h2>推荐路线与实施规划</h2><p><strong>推荐顺序：先修不可信结果 → 收拢跨任务状态 → 后台化图片路径 → 依据播放证据修热点 → 补复查闭环。</strong> 性能基线与正确性修复可以并行，不能让测性能成为拖延已确认错误的理由。</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+  <th>阶段</th>
+  <th>执行内容</th>
+  <th>阶段结束时的明确产物</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>先验证与修复</td>
+  <td>T0 基线；T1 配对事务；T2 原图/尺寸/100%；T3 先做最小工作区输入隔离</td>
+  <td>不再出现新 A+旧 B；不同尺寸不静默改图；取消不改变已提交任务；得到可重跑基线而不是“感觉快了”</td>
+</tr>
+<tr>
+  <td>核心体验与必要重构</td>
+  <td>T3 完成状态路由；T4 图片工作线程与惰性差异；T6 文件夹和语义状态；T5 仅在证据支持时执行</td>
+  <td>切任务有统一规则，图片不在主线程做长任务，连续审查保留上下文；视频改动有前后对照且不破坏精确导航</td>
+</tr>
+<tr>
+  <td>后续扩展</td>
+  <td>T7 只读问题清单与轻量恢复；再评估原位手动切换</td>
+  <td>一个问题可以被保存、重新定位并验证来源，没有膨胀成剪辑器或评测平台</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>会改变这条路线的证据：</strong>目标机器在最简单路/无缩略图/无差异情况下仍有稳定且可归因于某个适配层的瓶颈；或真实素材必须超出当前 SDR/格式范围；或局部修复后仍无法满足明确帧身份和显示时限。此时才做模块级替代原型，在同素材、同显示、同准确性断言下比较，并保留旧实现回退。仅仅“PotPlayer 看着更顺”不足以证明需要换 Qt 或 FFmpeg。</p>
+<div class="optional-section"><details data-auto="standard" open><summary>功能取舍<span class="note">必须补齐 / 值得加入 / 暂不建议</span></summary><div class="detail-body"><div class="table-wrap"><table>
+<thead>
+<tr>
+  <th>取舍</th>
+  <th>观察/工作任务</th>
+  <th>相对现有功能的增量</th>
+  <th>入口与操作</th>
+  <th>避免复杂度</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><strong>必须补齐</strong>：对象/配对/映射状态、加载失败恢复</td>
+  <td>确认正在比较的文件和帧</td>
+  <td>不增加模式，补齐可信度</td>
+  <td>源标题、列表行、常驻语义状态；失败可重试单侧</td>
+  <td>高风险警告可见，诊断细节折叠</td>
+</tr>
+<tr>
+  <td><strong>必须补齐</strong>：原图、真实 100%、单边查看</td>
+  <td>确认细节是否来自素材，而非工具缩放/缺失</td>
+  <td>修正现有并排、滑动和像素检查的含义</td>
+  <td>适应/100%、原尺寸、缺失占位</td>
+  <td>默认无自动拉伸，不添加复杂配准向导</td>
+</tr>
+<tr>
+  <td><strong>必须补齐</strong>：保持观察上下文</td>
+  <td>连续审查文件夹同一部位</td>
+  <td>换对象不再重选模式/缩放/位置</td>
+  <td>上一对/下一对；尺寸不兼容时明确解释重置</td>
+  <td>用现有画布，不再新增一个批量查看器</td>
+</tr>
+<tr>
+  <td><strong>值得加入</strong>：问题标记 + 截图清单</td>
+  <td>记录并复查某个伪影</td>
+  <td>现有 ROI/区间操作之上增加证据身份和恢复</td>
+  <td>“标记问题”，记录源身份、帧号/PTS/配对、ROI、映射与显示参数；截图附清单</td>
+  <td>只做只读标记，不变成剪辑时间线</td>
+</tr>
+<tr>
+  <td><strong>值得加入</strong>：手动瞬时 A/B 切换</td>
+  <td>检查细小边界位移/形变</td>
+  <td>并排需要眼睛移动；原位切换降低空间记忆负担</td>
+  <td>暂停时按住一个无冲突键显示 B，松开回 A；以后再决定自动闪烁</td>
+  <td>无默认频闪，无额外常驻控制；与现有滑动不同，不先堆 Fade/Flicker 多组滑杆</td>
+</tr>
+<tr>
+  <td><strong>值得加入</strong>：轻量恢复</td>
+  <td>跨次继续昨天的检查</td>
+  <td>当前设置保存不等于审查任务恢复</td>
+  <td>最近任务/恢复上次，验证源是否改动</td>
+  <td>可选，格式版本化；不做复杂 .project 工程</td>
+</tr>
+<tr>
+  <td><strong>暂不建议</strong></td>
+  <td>全功能剪辑、转码、文件同步覆盖、音频字幕、客观评测排名、自动几何扭曲、插件平台</td>
+  <td>对当前核心闭环贡献不足或会改变比较含义</td>
+  <td>不进入主工具栏</td>
+  <td>需求与素材证据出现后单独评估</td>
+</tr>
+</tbody>
+</table></div>
+<p>视频已有 ROI、帧组比较、多种差异、手动/自动对齐相关能力，不应被重新列成“从零新增功能”。优先让已有能力在同一任务中可发现、可解释、可复查。<a href="#E02">E02</a> <a href="#E22">E22</a> <a href="#E24">E24</a></p>
+</div></details><p class="sub">以下是可以独立交给开发 Agent 的工单。成本只用等级表达，不虚构开发天数。</p><details class="ticket" data-auto="deep"><summary>T0 · P0｜建立正确性复现与播放证据基线<span class="note">成本：中</span></summary><div class="detail-body"><div class="table-wrap"><table>
+<thead>
+<tr>
+  <th>字段</th>
+  <th>可执行约定</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>目标</td>
+  <td>把“卡顿”和“看错对象”变成固定 SHA、素材与环境下可以重放的问题，不先改变播放行为。</td>
+</tr>
+<tr>
+  <td>涉及模块</td>
+  <td><code>src/app/Main.cpp</code> 已有性能入口；<code>tests/hardware/</code>；<code>tools/testing/</code>；<code>PlaybackTrace</code> 与 backend 诊断。参见 E16–E19、E21、E26–E28、E33–E37。</td>
+</tr>
+<tr>
+  <td>前置依赖</td>
+  <td>无；与 T1/T2 并行</td>
+</tr>
+<tr>
+  <td>实施边界</td>
+  <td>复用现有 gates；生成带显式源身份/帧号的确定性素材与图片失败夹具；新增提交和呈现的分离观测；先用短 trace，再汇总长播放。禁止同时调队列、解码、UI，以免失去因果。</td>
+</tr>
+<tr>
+  <td>验收</td>
+  <td>保存 SHA、Release 构建参数、设备/显示/磁盘、每源 backend、素材 hash、命令、原始输出与指标 JSON；先测 P1–P4。报告 P50/P95/P99、最长停顿、正确帧组延迟和 UI 事件循环间隙，不只报告平均 FPS。</td>
+</tr>
+<tr>
+  <td>成本等级</td>
+  <td>中；不是精确工期承诺</td>
+</tr>
+<tr>
+  <td>主要风险</td>
+  <td>日志溢出或缺失时该次证据无效；不同线程时间戳不等于可靠全序；合并预览结果不能混作 head 全栈证据。</td>
+</tr>
+<tr>
+  <td>回退</td>
+  <td>诊断默认关闭；有界计数与短 trace；诊断开/关对照确认观测开销。可撤销诊断开关，不改变业务结果。</td>
+</tr>
+</tbody>
+</table></div>
+</div></details><details class="ticket" data-auto="deep"><summary>T1 · P0｜图片配对原子加载与选择提交<span class="note">成本：中</span></summary><div class="detail-body"><div class="table-wrap"><table>
+<thead>
+<tr>
+  <th>字段</th>
+  <th>可执行约定</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>目标</td>
+  <td>无论 A/B 哪一侧损坏，都不会把上一组内容混成新比较；列表选中身份与画布身份始终一致。</td>
+</tr>
+<tr>
+  <td>涉及模块</td>
+  <td><code>DesktopApplication::setPairOpener</code> 连接；<code>ImageFolderPairModel::openPairAt</code>；<code>ImageReviewController</code>；<code>FolderPairSidebar::selectRow</code>；Main 图片入口。E05、E07–E10。</td>
+</tr>
+<tr>
+  <td>前置依赖</td>
+  <td>先定义 pending/committed 身份；无需等 T0 完成</td>
+</tr>
+<tr>
+  <td>实施边界</td>
+  <td>用返回实际结果的同步事务或显式异步 completion 取代 void opener；构造 CandidatePair，全部校验完成再一次提交。第一步可保持同步但必须正确，为 T4 留 generation/token。禁止先提交 A 再提交 B。</td>
+</tr>
+<tr>
+  <td>验收</td>
+  <td>夹具：旧 A0/B0，换 A1/B1，依次让 A1 损坏、B1 损坏、缺失/超限；验证 committedPairId、两侧路径/像素、当前列表行完全保留上一对或进入明确新缺失状态，不出现混合；新请求成功时身份一次切换；最后候选失败仍有重试/返回路径。</td>
+</tr>
+<tr>
+  <td>成本等级</td>
+  <td>中；不是精确工期承诺</td>
+</tr>
+<tr>
+  <td>主要风险</td>
+  <td>现有单独替换一侧功能仍需保留，不能通过每次 closeAll 绕过原子语义、丢失全部上下文；错误文本不得被后续 setCompareMode 覆盖而失去失败来源。</td>
+</tr>
+<tr>
+  <td>回退</td>
+  <td>必要时关闭文件夹批量入口，保留安全的单图/已提交配对查看；不得回退到忽略加载失败的新旧混图行为。</td>
+</tr>
+</tbody>
+</table></div>
+</div></details><details class="ticket" data-auto="deep"><summary>T2 · P0｜原图不可变、尺寸/像素语义与真实 100%<span class="note">成本：中</span></summary><div class="detail-body"><div class="table-wrap"><table>
+<thead>
+<tr>
+  <th>字段</th>
+  <th>可执行约定</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>目标</td>
+  <td>明确用户看到的是原图、显示缩放，还是经过用户允许的派生变换。</td>
+</tr>
+<tr>
+  <td>涉及模块</td>
+  <td><code>ImageReviewController::recomputeDifference/loadChecked/displayImage/samplePixel</code>；<code>ImageWorkspace</code> 的 baseScale/drawScale；<code>StillImageDecoder</code>；图片测试。E05、E14、E15、E30。</td>
+</tr>
+<tr>
+  <td>前置依赖</td>
+  <td>可与 T1 并行；提交时需共用配对身份</td>
+</tr>
+<tr>
+  <td>实施边界</td>
+  <td>分别保存 originalA/originalB 与派生结果。默认不等尺寸只保持比例查看，未选择变换不计算逐像素差异。100% 明确为图像像素→物理屏幕像素，适应窗口单独命令；DPR 纳入显示倍率。明确 RGBA8、alpha、RGB 差异统计的现行范围，不在此工单实现完整 ICC/HDR 管线。</td>
+</tr>
+<tr>
+  <td>验收</td>
+  <td>使用有网格与不同比例的 A/B：反复换模式/更换 A 后，B 原始尺寸与字节不变；未选变换时无差异数值假装有效；派生重采样有持续标签及原图/派生取样来源；DPI 100/125/150/200% 验证 100% 映射与适应有区别；alpha-only/16-bit 输入不误报为原码值完全相等。</td>
+</tr>
+<tr>
+  <td>成本等级</td>
+  <td>中；不是精确工期承诺</td>
+</tr>
+<tr>
+  <td>主要风险</td>
+  <td>旧 meanAbsDifference 实际是每像素 RGB 最大差的平均，不可在重命名时悄悄改变含义；改变算法需要单独标明版本与测试；界面枚举/持久化值保兼容。</td>
+</tr>
+<tr>
+  <td>回退</td>
+  <td>出问题先禁用不等尺寸差异和未验证精确模式，保留正确并排，不回滚为静默拉伸；高级派生变换可整体隐藏。</td>
+</tr>
+</tbody>
+</table></div>
+</div></details><details class="ticket" data-auto="deep"><summary>T3 · P0/P1｜工作区状态与命令路由收拢<span class="note">成本：中</span></summary><div class="detail-body"><div class="table-wrap"><table>
+<thead>
+<tr>
+  <th>字段</th>
+  <th>可执行约定</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>目标</td>
+  <td>打开/取消/切模式有同一语义；当前画布与隐藏任务绝不竞争媒体动作。</td>
+</tr>
+<tr>
+  <td>涉及模块</td>
+  <td><code>Main.qml</code> 路由、原生选择器、焦点函数；<code>ReviewShortcuts</code> / <code>ReviewActions</code>；视频/图片控制器的薄适配；可引入小型 WorkspaceSessionState。E10–E14、E35。</td>
+</tr>
+<tr>
+  <td>前置依赖</td>
+  <td>最小输入隔离立即做；完整迁移依赖 T1 的提交模型</td>
+</tr>
+<tr>
+  <td>实施边界</td>
+  <td>集中 activeMedia、pendingOpen、committedSession、inputContext。选择器打开不覆盖已提交工作区；切离视频先暂停；轻量保留会话位置，不承诺所有纹理常驻；只共享命令语义，不把两种控制器合成万能类。</td>
+</tr>
+<tr>
+  <td>验收</td>
+  <td>视频暂停/播放各执行一次：打开图片选择器后取消，模式与来源/位置不变；进入文件夹再返回视频，恢复明确暂停状态；图片画布方向键只换配对，视频画布方向键只逐帧；文本框、模态、菜单内输入不触发隐藏视频；Ctrl+W 仅关闭当前任务；焦点边框与实际按键接收者一致。</td>
+</tr>
+<tr>
+  <td>成本等级</td>
+  <td>中；不是精确工期承诺</td>
+</tr>
+<tr>
+  <td>主要风险</td>
+  <td>入口包括菜单、Ctrl+O/Shift+F、拖放、最近项、直接替换；不能只修其中一个。导入散图后旧文件夹键盘导航必须清除或显式脱离。</td>
+</tr>
+<tr>
+  <td>回退</td>
+  <td>逐入口切到新的 route adapter，保持旧控制器 API；保留完整契约测试。回退 UI 呈现可以，工作区输入隔离和取消不破坏状态不允许撤销。</td>
+</tr>
+</tbody>
+</table></div>
+</div></details><details class="ticket" data-auto="deep"><summary>T4 · P1｜图片后台加载与按需派生计算<span class="note">成本：中</span></summary><div class="detail-body"><div class="table-wrap"><table>
+<thead>
+<tr>
+  <th>字段</th>
+  <th>可执行约定</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>目标</td>
+  <td>读取/解码/整图差异不会占住 UI 主线程，并避免用户没看差异时支付重复整图计算。</td>
+</tr>
+<tr>
+  <td>涉及模块</td>
+  <td>图片控制器、解码封装、图像 provider；必要的新 ImagePairLoader/派生缓存；目录模型扫描。E05、E08、E14、E15。</td>
+</tr>
+<tr>
+  <td>前置依赖</td>
+  <td>T1/T2；先取得图片 T0 阶段耗时与内存峰值</td>
+</tr>
+<tr>
+  <td>实施边界</td>
+  <td>有界工作队列；不可变输入/输出；token/generation 拒绝过期结果；Qt QObject 只在所属线程更新。缓存按字节限制，键包含源身份与尺寸/颜色/alpha/变换策略；邻近配对最多少量预读，不预解整个目录。解码前检查头部像素与预算，解码中继续处理异常。</td>
+</tr>
+<tr>
+  <td>验收</td>
+  <td>注入可控慢加载器：请求 N→N+1→N+2、取消、关闭、退出；晚到 N 不能污染当前标题/画布；主线程仍可处理取消；仅并排切换不会触发新的整图差异；复用同派生结果有缓存命中；连续循环换图后预算/线程达到稳定区间，延迟与峰值相对基线报告且不回归已约定目标。</td>
+</tr>
+<tr>
+  <td>成本等级</td>
+  <td>中；不是精确工期承诺</td>
+</tr>
+<tr>
+  <td>主要风险</td>
+  <td>工作线程不可捕获会被销毁的 controller this；避免 provider 被多线程访问时在后台改共享 QImage；缩略预览不得被当成最终精确像素。</td>
+</tr>
+<tr>
+  <td>回退</td>
+  <td>可关闭预读和派生缓存；必要时退到尺寸受限、语义仍正确的同步加载，保留 pending/commit 与错误协议；不能恢复原图破坏。</td>
+</tr>
+</tbody>
+</table></div>
+</div></details><details class="ticket" data-auto="deep"><summary>T5 · P1 条件执行｜视频平滑播放的已定位热点修复<span class="note">成本：中；若需替换隔离模块再评估为大</span></summary><div class="detail-body"><div class="table-wrap"><table>
+<thead>
+<tr>
+  <th>字段</th>
+  <th>可执行约定</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>目标</td>
+  <td>降低已测得的播放停顿/时间落后，不靠错帧、左右独立丢帧或丢失精确导航命令改善表面 FPS。</td>
+</tr>
+<tr>
+  <td>涉及模块</td>
+  <td>只选被证据指向的模块：PlaybackCoordinator 连续策略、actor/cache、TimelineThumbnailCache 或 GPU transfer/render。E16–E23、E26。</td>
+</tr>
+<tr>
+  <td>前置依赖</td>
+  <td>T0 已证明瓶颈；逐帧/定位正确性基线先通过</td>
+</tr>
+<tr>
+  <td>实施边界</td>
+  <td>一次只做一类变化。缩略图若因果成立改成暂停/闲时或低优先级采样；调度若因果成立在现有协调器内区分连续期限与精确命令；大图缓存若因果成立调整字节政策。禁止默认更换 Qt/FFmpeg，禁止延长缓存到无限。</td>
+</tr>
+<tr>
+  <td>验收</td>
+  <td>相同机器/素材/显示/构建、至少重复对照，报告帧组显示间隔 P95/P99、最长停顿、时钟落后、整组 drop/duplicate、seek/step 正确性和资源；改进必须超过重复间波动且不破坏既定正确性；接受的单步每个有终态，A/B 来自同一有效映射帧组。</td>
+</tr>
+<tr>
+  <td>成本等级</td>
+  <td>中；若需替换隔离模块再评估为大；不是精确工期承诺</td>
+</tr>
+<tr>
+  <td>主要风险</td>
+  <td>2000 ms 常量不是已确认根因；render ACK 不是物理显示。连续播放允许整组跳过，但计数必须真实；Exact 不接受最近帧冒充目标。</td>
+</tr>
+<tr>
+  <td>回退</td>
+  <td>保留旧策略/模块开关及相同测试 fixture；异常时退旧连续策略。不得把精确导航正确性开关化，也不需要新增用户可见复杂性能模式菜单。</td>
+</tr>
+</tbody>
+</table></div>
+</div></details><details class="ticket" data-auto="deep"><summary>T6 · P1｜文件夹审查上下文与多维可信度状态<span class="note">成本：小至中</span></summary><div class="detail-body"><div class="table-wrap"><table>
+<thead>
+<tr>
+  <th>字段</th>
+  <th>可执行约定</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>目标</td>
+  <td>用户不需要记住隐藏规则，也不用每换一对重新找观察位置。</td>
+</tr>
+<tr>
+  <td>涉及模块</td>
+  <td><code>FolderPairSidebar</code>/模型；源标题；ImageWorkspace；比较语义投影、<code>ComparisonExactness</code> / <code>ComparisonValidator</code>；状态栏。E08、E09、E14、E24、E25、E35。</td>
+</tr>
+<tr>
+  <td>前置依赖</td>
+  <td>T1/T2/T3 提供正确来源与状态</td>
+</tr>
+<tr>
+  <td>实施边界</td>
+  <td>显示当前配对规则和完整/缺失/失败数量；选择缺失行可看存在的一侧；保持模式/兼容视图，尺寸不兼容重置有解释；自动滚到选中行。并列显示时间/空间/像素范围，不改变现有对齐算法，不自动模糊匹配。</td>
+</tr>
+<tr>
+  <td>验收</td>
+  <td>100 行列表键盘连续切换，选中行始终可见；检查缺失项无需资源管理器；切差异模式后换三对同尺寸图模式/ROI 不丢；24/30fps、VFR、异尺寸、颜色转换及缺帧夹具均能看见真实映射/限制；滑动两侧 A/B 身份不反向误标；同名大小写冲突明确列出而非静默任选。</td>
+</tr>
+<tr>
+  <td>成本等级</td>
+  <td>小至中；不是精确工期承诺</td>
+</tr>
+<tr>
+  <td>主要风险</td>
+  <td>“已配对”不能等价为“内容相同”；多种不精确原因不可被单枚举最高优先级遮蔽；不要增加四套并排设置栏。</td>
+</tr>
+<tr>
+  <td>回退</td>
+  <td>低频详情可折叠或暂隐藏新筛选，但必要可信度警告/来源身份不可隐藏；不改旧序列化枚举数值。</td>
+</tr>
+</tbody>
+</table></div>
+</div></details><details class="ticket" data-auto="deep"><summary>T7 · P2｜只读问题记录与轻量会话恢复<span class="note">成本：中</span></summary><div class="detail-body"><div class="table-wrap"><table>
+<thead>
+<tr>
+  <th>字段</th>
+  <th>可执行约定</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>目标</td>
+  <td>一个截图能追溯到准确对象与显示条件，一条问题记录可以重新定位。</td>
+</tr>
+<tr>
+  <td>涉及模块</td>
+  <td>复用现有源身份与设置持久化边界；新增审查记录 schema、小型列表和导出动作；不改解码引擎。E02、E22–E25、E28。</td>
+</tr>
+<tr>
+  <td>前置依赖</td>
+  <td>T1–T3/T6 已稳定；不阻挡核心修复发布</td>
+</tr>
+<tr>
+  <td>实施边界</td>
+  <td>记录 schema version、源路径+身份/文件变更信息、源帧号/PTS或配对、映射 revision/参数、ROI/视图、差异/重采样/颜色策略、备注；截图明确是显示结果，不伪装原始像素；先手动保存/加载，自动恢复可选。</td>
+</tr>
+<tr>
+  <td>验收</td>
+  <td>保存→关闭→重开→选问题，回到同一有效来源和观察上下文；移动/修改源时提示并要求重定位，不能加载错误文件假装恢复；无有效帧/有加载候选时导出不得混淆身份；旧 schema 可拒绝并解释，不损坏原文件。</td>
+</tr>
+<tr>
+  <td>成本等级</td>
+  <td>中；不是精确工期承诺</td>
+</tr>
+<tr>
+  <td>主要风险</td>
+  <td>不要加入时间线剪辑、音频、批量转码、数据库服务器或质量排名；不把来源改动后的旧截图当当前结果。</td>
+</tr>
+<tr>
+  <td>回退</td>
+  <td>禁用自动恢复仍可读取/导出记录；版本化格式、不破坏已有设置；持久化失败不影响当前查看任务。</td>
+</tr>
+</tbody>
+</table></div>
+</div></details></div></section><section class="section optional-section" id="evidence"><h2>证据、运行边界与来源</h2><div class="table-wrap"><table>
+<thead>
+<tr>
+  <th>证据等级</th>
+  <th>本次实际做到什么</th>
+  <th>不能由此推出什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><strong>代码已确认</strong></td>
+  <td>只读检查固定 SHA 的 README、构建/依赖、入口、QML/控制器、解码/帧组/渲染、测试与相关历史</td>
+  <td>不能直接量化你机器的瓶颈占比、掉帧率或帧间隔</td>
+</tr>
+<tr>
+  <td><strong>现有 CI 运行证据</strong></td>
+  <td>读取 Linux Clang core 的真实日志：152 项登记，149 项执行通过，3 项禁用；测试的是 PR 合并预览 <code>c17332e8c4abbf13d154e2b90ed410ac8cf59639</code></td>
+  <td>不是本次亲自运行，不是 Windows/D3D11/图片全栈通过，也不能不加说明称为 head SHA 的完整验收</td>
+</tr>
+<tr>
+  <td><strong>尚待 Windows 实测</strong></td>
+  <td>检查时 Debug/Release 作业仍排队；本环境为 Linux，无法运行目标 D3D11 桌面。直连 GitHub 的只读克隆因 DNS 失败，后续使用已授权连接器读取</td>
+  <td>不声称实际打开了应用、不生成虚构应用截图、不声称所有测试或最新硬件门禁通过</td>
+</tr>
+<tr>
+  <td><strong>合理推测</strong></td>
+  <td>连续播放追赶、缩略图读回、图片同步路径与高分辨率缓存边界对应潜在体验问题</td>
+  <td>这些不是已经定位的性能根因；需要上述分辨实验</td>
+</tr>
+</tbody>
+</table></div>
+<p>CI 日志中的禁用项为 <code>HeldBackwardPresentsEveryIntermediateFrame</code>、<code>ChangingReferenceDoesNotChangeTimelineMaster</code>、<code>SessionPairDoesNotLeakAcrossTopology</code>。<strong>禁用测试不是这些 bug 已存在的证明</strong>，但它们恰好对应本次关键需求，必须明确契约后恢复有意义的验证，不可用总体通过率掩盖。<a href="#E36">E36</a> <a href="#E37">E37</a></p>
+<p>图片测试已有价值，但文件夹 opener 测试只验证传入 URL；控制器图像测试主要使用小幅同尺寸图。下一轮需要真正组合模型、控制器、失败解码和 QML 选中状态。个人磁盘固定 PNG 且可跳过的用例应换成仓库生成的确定性素材。<a href="#E30">E30</a> <a href="#E31">E31</a> <a href="#E32">E32</a></p>
+<p>没有对目标仓库执行写入、提交或 PR 操作。报告内的布局、工单和新实验均为建议，当前并未实施。</p>
+<details data-auto="deep"><summary>完整来源索引<span class="note">固定 SHA 链接；外部资料为官方页面</span></summary><div class="detail-body source-grid"><div class="source-item" id="E01"><span class="source-key">E01</span><a href="https://github.com/sonwe1e/VideoCompareStation/commit/139fd5067d582a95beb2bcf99d2586099040a000" target="_blank" rel="noopener noreferrer">审查 commit 与提交历史</a><p>固定目标分支的审查快照；不把默认分支当作目标。</p><p>https://github.com/sonwe1e/VideoCompareStation/commit/139fd5067d582a95beb2bcf99d2586099040a000</p></div><div class="source-item" id="E02"><span class="source-key">E02</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/README.md" target="_blank" rel="noopener noreferrer">README / 产品范围与构建</a><p>Windows、1–3 路、静音视觉审查；性能目标不等于已取得的实测。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/README.md</p></div><div class="source-item" id="E03"><span class="source-key">E03</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/vcpkg.json" target="_blank" rel="noopener noreferrer">依赖锁定</a><p>Qt 6.11.1；FFmpeg 8.1.2 port 3；GTest、nlohmann-json。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/vcpkg.json</p></div><div class="source-item" id="E04"><span class="source-key">E04</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/CMakeLists.txt" target="_blank" rel="noopener noreferrer">CMake 分层与可选构建</a><p>C++20、CMake 4.4；桌面与 Windows 适配层区别于可单独构建的核心。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/CMakeLists.txt</p></div><div class="source-item" id="E05"><span class="source-key">E05</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/src/ImageReviewController.cpp#L351-L405" target="_blank" rel="noopener noreferrer">ImageReviewController：加载、原图、差异</a><p>recomputeDifference 会直接缩放并覆盖 secondary_；同时检查 openPrimaryImage / openSecondaryImage / loadChecked / displayImage。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/src/ImageReviewController.cpp#L351-L405</p></div><div class="source-item" id="E06"><span class="source-key">E06</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/bbb88b3f67051b5c86d6faad8fe8e74355cbb0a2/src/ui_qml/src/ImageReviewController.cpp#L351-L365" target="_blank" rel="noopener noreferrer">历史核对：基点已存在相同尺寸处理</a><p>该问题不是最新文件夹提交首次引入；必须区分新增与既有缺陷。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/bbb88b3f67051b5c86d6faad8fe8e74355cbb0a2/src/ui_qml/src/ImageReviewController.cpp#L351-L365</p></div><div class="source-item" id="E07"><span class="source-key">E07</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/src/DesktopApplication.cpp" target="_blank" rel="noopener noreferrer">DesktopApplication：图片配对连接</a><p>setPairOpener 的回调顺序打开 A、B，忽略 bool 返回，再设为 SideBySide。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/src/DesktopApplication.cpp</p></div><div class="source-item" id="E08"><span class="source-key">E08</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/src/ImageFolderPairModel.cpp" target="_blank" rel="noopener noreferrer">ImageFolderPairModel：扫描、配对、打开</a><p>仅本层、完整文件名含扩展名、大小写折叠；openPairAt 无法接收实际解码结果。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/src/ImageFolderPairModel.cpp</p></div><div class="source-item" id="E09"><span class="source-key">E09</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/qml/FolderPairSidebar.qml" target="_blank" rel="noopener noreferrer">FolderPairSidebar：选中与缺失项</a><p>selectRow 依赖 openPairAt 提交选择；单边行不能打开；上下切换跳过缺失行。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/qml/FolderPairSidebar.qml</p></div><div class="source-item" id="E10"><span class="source-key">E10</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/qml/Main.qml#L280-L650" target="_blank" rel="noopener noreferrer">Main：打开事务与模式路由</a><p>performVideoReview / performImageReview / reviewUrls / loadFolderComparison / returnFocusToViewer。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/qml/Main.qml#L280-L650</p></div><div class="source-item" id="E11"><span class="source-key">E11</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/qml/Main.qml#L241-L279" target="_blank" rel="noopener noreferrer">Main：输入上下文</a><p>globalMediaShortcutsEnabled 未把 workspaceMode 纳入准入条件。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/qml/Main.qml#L241-L279</p></div><div class="source-item" id="E12"><span class="source-key">E12</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/qml/Main.qml#L650-L1840" target="_blank" rel="noopener noreferrer">Main：模式菜单与原生选择器</a><p>模式进入时间、取消路径和文件夹/图片对话框；各入口对视频会话的处理不同。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/qml/Main.qml#L650-L1840</p></div><div class="source-item" id="E13"><span class="source-key">E13</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/qml/ReviewShortcuts.qml" target="_blank" rel="noopener noreferrer">ReviewShortcuts：应用级快捷键</a><p>Qt.ApplicationShortcut 的视频操作与图片工作区自己的 Keys 处理并存。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/qml/ReviewShortcuts.qml</p></div><div class="source-item" id="E14"><span class="source-key">E14</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/qml/ImageWorkspace.qml" target="_blank" rel="noopener noreferrer">ImageWorkspace：缩放、图像请求、模式</a><p>baseScale × zoom 才是显示比例；百分比显示仅取 zoom；Image asynchronous:false / cache:false。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/qml/ImageWorkspace.qml</p></div><div class="source-item" id="E15"><span class="source-key">E15</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/src/StillImageDecoder.cpp#L1-L59" target="_blank" rel="noopener noreferrer">图片快速解码器</a><p>stb_image 的 JPEG/PNG/BMP/GIF 通路输出 RGBA8；尺寸限制在解码后检查。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/src/StillImageDecoder.cpp#L1-L59</p></div><div class="source-item" id="E16"><span class="source-key">E16</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/application/src/PlaybackCoordinator.cpp#L1-L300" target="_blank" rel="noopener noreferrer">PlaybackCoordinator：播放与精确导航策略</a><p>含 2000 ms 追赶容忍常量、协调线程与有界队列；不能仅凭该常量确认卡顿根因。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/application/src/PlaybackCoordinator.cpp#L1-L300</p></div><div class="source-item" id="E17"><span class="source-key">E17</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/media_ffmpeg/src/MultiSourceFrameProvider.cpp#L900-L1170" target="_blank" rel="noopener noreferrer">MultiSourceFrameProvider：源映射与帧组</a><p>canonicalFrame + resolved offset；显式 Missing；每源并行完成后组装；Exact 帧组缓存。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/media_ffmpeg/src/MultiSourceFrameProvider.cpp#L900-L1170</p></div><div class="source-item" id="E18"><span class="source-key">E18</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/media_ffmpeg/src/SourceDecodeActor.cpp#L1-L340" target="_blank" rel="noopener noreferrer">SourceDecodeActor：线程、缓存与请求优先级</a><p>每源一个工作线程；Exact/Sequential/Prefetch；额外解码上下文不是额外源工作线程。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/media_ffmpeg/src/SourceDecodeActor.cpp#L1-L340</p></div><div class="source-item" id="E19"><span class="source-key">E19</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/media_ffmpeg/src/SoftwareDecoder.cpp#L360-L660" target="_blank" rel="noopener noreferrer">SoftwareDecoder：D3D11VA、软件回退和 PTS 定位</a><p>类名虽为 SoftwareDecoder，实际也承载硬件解码；准确定位失败会显式返回错误。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/media_ffmpeg/src/SoftwareDecoder.cpp#L360-L660</p></div><div class="source-item" id="E20"><span class="source-key">E20</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/media_ffmpeg/src/FrameSetAssembler.cpp" target="_blank" rel="noopener noreferrer">FrameSetAssembler：完整帧组</a><p>所有预期槽位完成才生成 FrameSet；Missing 也是有身份的显式状态。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/media_ffmpeg/src/FrameSetAssembler.cpp</p></div><div class="source-item" id="E21"><span class="source-key">E21</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/platform_windows/src/D3d11ComparisonRenderer.cpp#L850-L950" target="_blank" rel="noopener noreferrer">D3d11ComparisonRenderer：绘制与 ACK</a><p>旧 front 保留、队列背压、绘制提交后 acknowledge；ACK 不等于屏幕扫描显示。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/platform_windows/src/D3d11ComparisonRenderer.cpp#L850-L950</p></div><div class="source-item" id="E22"><span class="source-key">E22</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/src/ComparisonSurface.cpp#L1-L380" target="_blank" rel="noopener noreferrer">ComparisonSurface：Qt 场景图接入</a><p>QSGRenderNode 接入 D3D11，负责视图几何、DPR、ROI、旋转、SAR 等投影。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/src/ComparisonSurface.cpp#L1-L380</p></div><div class="source-item" id="E23"><span class="source-key">E23</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/app/ReviewRuntime.cpp#L1-L270" target="_blank" rel="noopener noreferrer">ReviewRuntime：运行时装配与释放</a><p>224 MiB FrameBudget、GpuTransferActor、时钟、定时器、协调器、独立拥有依赖的关闭工作。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/app/ReviewRuntime.cpp#L1-L270</p></div><div class="source-item" id="E24"><span class="source-key">E24</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/application/src/ComparisonExactness.cpp" target="_blank" rel="noopener noreferrer">比较精确度判定</a><p>码值/显示转换/空间重采样/时间映射/缺失；单枚举不等于完整多维说明。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/application/src/ComparisonExactness.cpp</p></div><div class="source-item" id="E25"><span class="source-key">E25</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/domain/src/ComparisonValidator.cpp" target="_blank" rel="noopener noreferrer">兼容性检查与时间基准</a><p>帧率、时长、帧数差异已有 AlignmentRequired；参考角色当前参与 canonical 选择。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/domain/src/ComparisonValidator.cpp</p></div><div class="source-item" id="E26"><span class="source-key">E26</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/qml/TimelineThumbnailCache.qml" target="_blank" rel="noopener noreferrer">时间轴缩略图</a><p>grabToImage、采样与有界 LRU；是否造成卡顿需要开关对照。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/qml/TimelineThumbnailCache.qml</p></div><div class="source-item" id="E27"><span class="source-key">E27</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/docs/engineering/trace-schema.md" target="_blank" rel="noopener noreferrer">Trace schema 与证据边界</a><p>16,384 事件、关闭时导出、溢出失败；若干事件未发出，PartialFrameSetCount 不能用作运行时零错配证明。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/docs/engineering/trace-schema.md</p></div><div class="source-item" id="E28"><span class="source-key">E28</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/docs/engineering/maintenance-and-performance.md" target="_blank" rel="noopener noreferrer">维护与性能说明</a><p>背景文件检查、缓存、日志限制、已有硬件目标与构建环境警告；不是本次测量结果。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/docs/engineering/maintenance-and-performance.md</p></div><div class="source-item" id="E29"><span class="source-key">E29</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/docs/media-support.md" target="_blank" rel="noopener noreferrer">视频格式边界</a><p>SDR / NV12 / P010、VFR 与原始码值限制；4K 不在当前主动性能矩阵内。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/docs/media-support.md</p></div><div class="source-item" id="E30"><span class="source-key">E30</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/tests/component/ui/ImageReviewControllerTests.cpp" target="_blank" rel="noopener noreferrer">图片控制器测试</a><p>小幅同尺寸图测试；本地硬编码 PNG 路径测试可以跳过；缺失替换和尺寸语义未覆盖。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/tests/component/ui/ImageReviewControllerTests.cpp</p></div><div class="source-item" id="E31"><span class="source-key">E31</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/tests/component/ui/ImageFolderPairModelTests.cpp" target="_blank" rel="noopener noreferrer">文件夹模型测试</a><p>临时文件、配对/循环/缺失语义；注入 opener 仅记录 URL，未端到端解码。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/tests/component/ui/ImageFolderPairModelTests.cpp</p></div><div class="source-item" id="E32"><span class="source-key">E32</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/tests/component/ui/CMakeLists.txt" target="_blank" rel="noopener noreferrer">UI 测试登记</a><p>已存在 QML、DPI、菜单、滑动分割、控制器测试；不能概括为没有 UI 测试。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/tests/component/ui/CMakeLists.txt</p></div><div class="source-item" id="E33"><span class="source-key">E33</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/app/Main.cpp#L84-L141" target="_blank" rel="noopener noreferrer">已有性能测量结构</a><p>seek、warm/held step 分位数、丢帧、资源、线程、关闭等指标。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/app/Main.cpp#L84-L141</p></div><div class="source-item" id="E34"><span class="source-key">E34</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/tests/hardware/CMakeLists.txt" target="_blank" rel="noopener noreferrer">已有硬件测试</a><p>真实 QML 控件下的 wipe/diff、保留帧、旋转/纹理填充和 1–3 路性能目标。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/tests/hardware/CMakeLists.txt</p></div><div class="source-item" id="E35"><span class="source-key">E35</span><a href="https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/qml/ActiveSourceStrip.qml" target="_blank" rel="noopener noreferrer">来源条与参考标识</a><p>父目录及完整路径提示、pending 身份防重复操作是应保留的设计。</p><p>https://github.com/sonwe1e/VideoCompareStation/blob/139fd5067d582a95beb2bcf99d2586099040a000/src/ui_qml/qml/ActiveSourceStrip.qml</p></div><div class="source-item" id="E36"><span class="source-key">E36</span><a href="https://github.com/sonwe1e/VideoCompareStation/actions/runs/35059308072/job/104676040553" target="_blank" rel="noopener noreferrer">CI：Linux 核心测试实际日志</a><p>读取现有日志，不是本次执行。合并预览 c17332e…：149 执行通过，3 禁用。</p><p>https://github.com/sonwe1e/VideoCompareStation/actions/runs/35059308072/job/104676040553</p></div><div class="source-item" id="E37"><span class="source-key">E37</span><a href="https://github.com/sonwe1e/VideoCompareStation/actions/runs/35059308072" target="_blank" rel="noopener noreferrer">CI：当前关联工作流</a><p>检查时 Debug/Release 队列等待；不能当作目标分支 Windows 全栈通过证明。</p><p>https://github.com/sonwe1e/VideoCompareStation/actions/runs/35059308072</p></div><div class="source-item" id="E38"><span class="source-key">E38</span><a href="https://github.com/sonwe1e/VideoCompareStation/compare/bbb88b3f67051b5c86d6faad8fe8e74355cbb0a2...139fd5067d582a95beb2bcf99d2586099040a000" target="_blank" rel="noopener noreferrer">分支与基点比较</a><p>此快照相对基点领先两个提交；文件夹与 UI 改动不等于重写视频核心。</p><p>https://github.com/sonwe1e/VideoCompareStation/compare/bbb88b3f67051b5c86d6faad8fe8e74355cbb0a2...139fd5067d582a95beb2bcf99d2586099040a000</p></div><div class="source-item" id="O01"><span class="source-key">O01</span><a href="https://www.scootersoftware.com/kb/differentthensame" target="_blank" rel="noopener noreferrer">Beyond Compare：列表状态与详细比较</a><p>官方区分文件夹快速检查与详细内容比较，详细结果可反馈回列表。</p><p>https://www.scootersoftware.com/kb/differentthensame</p></div><div class="source-item" id="O02"><span class="source-key">O02</span><a href="https://www.diffchecker.com/image-compare/" target="_blank" rel="noopener noreferrer">Diffchecker：图片比较交互</a><p>官方的左右独立入口、同步缩放/平移、滑动、闪烁、淡入淡出，以及可撤销对齐。</p><p>https://www.diffchecker.com/image-compare/</p></div><div class="source-item" id="O03"><span class="source-key">O03</span><a href="https://t1.daumcdn.net/potplayer/PotPlayer/v4/Update2/UpdateEng.html" target="_blank" rel="noopener noreferrer">PotPlayer 官方更新记录</a><p>2026-06-22 条目记录导航栏定位时暂停功能；不据此虚构某版本的默认键位。</p><p>https://t1.daumcdn.net/potplayer/PotPlayer/v4/Update2/UpdateEng.html</p></div><div class="source-item" id="O04"><span class="source-key">O04</span><a href="https://doc.qt.io/qt-6/qquickitem.html#grabToImage" target="_blank" rel="noopener noreferrer">Qt：QQuickItem::grabToImage</a><p>异步离屏抓图仍可能涉及 GPU→CPU 读回；异步不等于零开销。</p><p>https://doc.qt.io/qt-6/qquickitem.html#grabToImage</p></div><div class="source-item" id="O05"><span class="source-key">O05</span><a href="https://doc.qt.io/qt-6/qquickwindow.html#frameSwapped" target="_blank" rel="noopener noreferrer">Qt：QQuickWindow::frameSwapped</a><p>信号代表一帧已排队等待呈现，而非已经完成物理屏幕显示。</p><p>https://doc.qt.io/qt-6/qquickwindow.html#frameSwapped</p></div></div></details></section><footer class="footer">结论适用于固定快照。优先级是本次审查建议，不是已合并修改或性能保证。报告页面不访问网络、不上传素材；源码链接只在点击时打开。</footer></main><script>
+(function(){
+ const buttons=[...document.querySelectorAll('[data-density]')];
+ function setDensity(v,save=true){
+   if(!['minimal','standard','deep'].includes(v))v='standard';
+   document.body.className='density-'+v;
+   buttons.forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.density===v)));
+   document.querySelectorAll('details[data-auto]').forEach(d=>d.open=v==='deep'||(v==='standard'&&d.dataset.auto==='standard'));
+   if(save){try{localStorage.setItem('vcs-review-density',v)}catch(e){}}
+ }
+ buttons.forEach(b=>b.addEventListener('click',()=>setDensity(b.dataset.density)));
+ function showHash(){
+   const id=decodeURIComponent(location.hash.slice(1));if(!id)return;
+   const node=document.getElementById(id);if(!node)return;
+   if(document.body.classList.contains('density-minimal')&&node.closest('.optional-section'))setDensity('standard');
+   let p=node.parentElement;while(p){if(p.tagName==='DETAILS')p.open=true;p=p.parentElement;}
+   requestAnimationFrame(()=>node.scrollIntoView({block:'start'}));
+ }
+ let stored;try{stored=localStorage.getItem('vcs-review-density')}catch(e){}
+ setDensity(stored||'standard',false);window.addEventListener('hashchange',showHash);showHash();
+ window.addEventListener('beforeprint',()=>document.querySelectorAll('details').forEach(d=>d.open=true));
+})();
+</script></body></html>

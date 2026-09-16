@@ -135,11 +135,14 @@ header remains exactly the one-field object shown above.
 
 ## Buffer and export behavior
 
-The implementation is a 16,384-event fixed-capacity MPSC queue guarded by a mutex:
+The implementation is a 65,536-event fixed-capacity MPSC queue guarded by a mutex:
 
 - playback coordination and source-decode actors may both be producers;
-- every producer attempts `try_lock` and drops rather than waiting on contention;
-- the queue also drops when its fixed capacity is exhausted;
+- producers serialize briefly on the queue lock for a single-event copy (nanoseconds) and never
+  touch the sink or perform I/O, so a short wait cannot stall playback;
+- the queue drops only when its fixed capacity is exhausted; 64K fills in under 20 s only at
+  three 60 fps sources with pathological event rates, so an overflow marker is a genuine anomaly
+  rather than the norm for evidence-length traces;
 - lost-event accounting is atomic; and
 - the single shutdown consumer copies batches of at most 256 events, releases the mutex, and
   performs sink I/O outside the producer critical section;
@@ -167,6 +170,12 @@ a lossless trace. An overflow marker is the explicit loss signal.
    `STALE_ARRIVAL_PUBLISHED`. Stale arrivals that are dropped (followed by a fresh ready) pass.
    Live `req` is coordinator-owned and remains `0`, so `ireq` is exported for correlation but is
    not part of the stale comparison.
+
+The coordinator suppresses a `SnapshotCommitted` whose displayed canonical position is unchanged
+since the previous commit (the canvas state publication still fires on every notify). A
+re-commit of an already-acked frame after the generation advanced would otherwise be
+unrepresentable in the contract: the newer identity has no ACK for the older frame (rule 2) and
+the older identity is stale once a higher revision was observed (rule 3).
 
 Overflow markers remain fail-closed. `PartialFrameSetCount` is reported as `0` because the
 single-line event stream cannot reconstruct multi-source FrameSet shape; structural FrameSet
