@@ -305,7 +305,7 @@ Rectangle {
 
                 Label {
                     visible: control.wipeMode
-                    text: qsTr("擦除位置 · %1%").arg(Math.round(control.wipePosition * 100))
+                    text: qsTr("分割线位置 · %1%").arg(Math.round(control.wipePosition * 100))
                     color: control.mutedTextColor
                 }
                 Slider {

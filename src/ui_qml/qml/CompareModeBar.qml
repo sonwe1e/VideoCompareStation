@@ -53,7 +53,7 @@ Rectangle {
         }
         ModeButton {
             objectName: "wipeModeButton"
-            text: qsTr("擦除")
+            text: qsTr("分割线")
             modeValue: ComparisonSurface.Wipe
         }
         ModeButton {

@@ -167,7 +167,7 @@ ApplicationWindow {
             "value": ComparisonSurface.SideBySide
         },
         {
-            "label": qsTr("擦除对比"),
+            "label": qsTr("分割线对比"),
             "value": ComparisonSurface.Wipe
         },
         {
@@ -196,7 +196,7 @@ ApplicationWindow {
             "value": ComparisonSurface.AnalysisGrid
         },
         {
-            "label": qsTr("擦除对比"),
+            "label": qsTr("分割线对比"),
             "value": ComparisonSurface.Wipe
         }
     ]
@@ -887,7 +887,7 @@ ApplicationWindow {
         onWipePositionRequested: position => {
             root.wipePosition = position;
             if (!root.chromeVisible)
-                root.showImmersiveHud(qsTr("擦除 %1%").arg(Math.round(position * 100)));
+                root.showImmersiveHud(qsTr("分割线位置 %1%").arg(Math.round(position * 100)));
         }
         onManualNavigationRequested: {
             root.revealOsc();

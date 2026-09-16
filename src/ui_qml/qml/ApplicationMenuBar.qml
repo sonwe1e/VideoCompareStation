@@ -122,7 +122,7 @@ VcsMenuBar {
         }
         VcsRadioMenuItem {
             objectName: "wipeMenuItem"
-            text: qsTr("擦除")
+            text: qsTr("分割线")
             checked: control.currentViewMode === 5
             onTriggered: {
                 control.preferences.viewMode = 5;
