@@ -15,7 +15,6 @@ Rectangle {
     required property var controller
     required property var preferences
     required property var session
-    required property var alignmentHost
     required property color borderColor
     required property color primaryTextColor
     required property color mutedTextColor
@@ -59,7 +58,9 @@ Rectangle {
     color: Theme.panel
     border.color: control.borderColor
 
-    readonly property int effectiveTab: control.singleMode && tabs.currentIndex < 2 ? 2 : tabs.currentIndex
+    // Alignment lives in the Analyze menu, so the tab order is Compare / Review / Info. In
+    // single-source mode the Compare tab hides and the effective index must still land on Review.
+    readonly property int effectiveTab: control.singleMode && tabs.currentIndex < 1 ? 1 : tabs.currentIndex
 
     function differenceEdgeIndex(preferenceValue) {
         for (let index = 0; index < control.differenceEdges.length; ++index) {
@@ -161,11 +162,6 @@ Rectangle {
             objectName: "compareTabButton"
             visible: !control.singleMode
             text: qsTr("对比")
-        }
-        DarkTabButton {
-            objectName: "alignmentTabButton"
-            visible: !control.singleMode
-            text: qsTr("对齐")
         }
         DarkTabButton {
             objectName: "reviewTabButton"
@@ -366,10 +362,6 @@ Rectangle {
                     onClicked: control.clearRoiRequested()
                 }
             }
-        }
-
-        AlignmentInspector {
-            host: control.alignmentHost
         }
 
         Flickable {

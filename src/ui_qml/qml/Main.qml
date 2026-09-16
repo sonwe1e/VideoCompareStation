@@ -848,6 +848,15 @@ ApplicationWindow {
         shortcutPreset: root.shortcutPreset
         sourceIdentities: root.shell ? root.shell.activeSourceIdentities : []
         workspaceMode: root.workspaceMode
+        automaticAlignmentPending: root.automaticAlignmentPending
+        canConfirmAutomaticAlignment: root.canConfirmAutomaticAlignment
+        canUndoAutomaticAlignment: root.canUndoAutomaticAlignment
+        manualAnchorActive: root.manualAnchorActive
+        anyManualAlignmentActive: root.anyManualAlignmentActive
+        autoAlignmentActive: root.autoAlignmentActive
+        openManualAnchorsDialog: root.openManualAnchorsDialog
+        sourceOffsets: root.sourceOffsets
+        resetSourceOffsets: root.resetSourceOffsets
         onOpenVideosRequested: reviewInputDialogs.openVideos()
         onAddVideoRequested: reviewInputDialogs.openAddVideo()
         onOpenImageRequested: {
@@ -1150,6 +1159,85 @@ ApplicationWindow {
                 wrapMode: Text.WordWrap
                 width: parent.width
             }
+
+            Rectangle {
+                width: parent.width
+                height: 1
+                color: root.borderColor
+            }
+
+            Text {
+                objectName: "alignmentModeStatus"
+                text: root.anyManualAlignmentActive ? qsTr("手动对齐") : (root.autoAlignmentActive ? qsTr("自动对齐") : qsTr("严格索引"))
+                color: root.anyManualAlignmentActive || root.autoAlignmentActive ? Theme.warning : Theme.success
+                font.pixelSize: 12
+                font.weight: Font.DemiBold
+            }
+
+            Text {
+                objectName: "manualOffsetStatusLabel"
+                text: root.manualOffsetActive ? qsTr("帧对齐偏移 · 已启用") : qsTr("帧对齐偏移")
+                color: root.manualOffsetActive ? Theme.warning : root.mutedTextColor
+                font.pixelSize: 11
+            }
+
+            Repeater {
+                id: sourceOffsetRepeater
+
+                objectName: "sourceOffsetRepeater"
+                model: root.controller ? root.controller.sources : null
+
+                delegate: Row {
+                    id: sourceOffsetDelegate
+
+                    required property int sourceId
+                    required property int role
+                    required property int manualOffset
+                    property int sourceIdValue: sourceId
+                    width: parent.width
+                    spacing: 8
+
+                    Text {
+                        width: parent.width - sourceOffsetInput.width - parent.spacing
+                        text: qsTr("源 %1 偏移（帧）").arg(String.fromCharCode(65 + sourceOffsetDelegate.sourceIdValue))
+                        color: root.mutedTextColor
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    ReviewOffsetSpinBox {
+                        id: sourceOffsetInput
+
+                        objectName: "sourceOffset-" + sourceOffsetDelegate.sourceIdValue
+                        textColor: root.primaryTextColor
+                        mutedTextColor: root.mutedTextColor
+                        accentColor: root.accentColor
+                        panelColor: root.raisedPanelColor
+                        borderColor: root.borderColor
+                        value: root.sourceOffset(sourceOffsetDelegate.sourceIdValue, sourceOffsetDelegate.manualOffset)
+                        enabled: sourceOffsetDelegate.sourceIdValue !== (root.referenceSourceIndex >= 0 ? root.referenceSourceIndex : 0) && !root.busy
+                        Accessible.name: qsTr("源 %1 全局帧偏移").arg(String.fromCharCode(65 + sourceOffsetDelegate.sourceIdValue))
+                        onValueChanged: root.updateSourceOffset(sourceOffsetDelegate.sourceIdValue, value)
+                    }
+                }
+            }
+
+            Text {
+                visible: root.anyManualAlignmentActive || root.autoAlignmentActive
+                text: qsTr("缺失的映射帧保持黑色；偏移不会被截断。")
+                color: root.mutedTextColor
+                font.pixelSize: 10
+                width: parent.width
+                wrapMode: Text.WordWrap
+            }
+
+            Text {
+                visible: root.compatibilityDetails().length > 0
+                text: root.compatibilityDetails()
+                color: Theme.warning
+                font.pixelSize: 10
+                width: parent.width
+                wrapMode: Text.WordWrap
+            }
         }
     }
 
@@ -1232,7 +1320,6 @@ ApplicationWindow {
         controller: root.controller
         preferences: root.preferences
         session: root.shell
-        alignmentHost: root
         borderColor: root.borderColor
         primaryTextColor: root.primaryTextColor
         mutedTextColor: root.mutedTextColor

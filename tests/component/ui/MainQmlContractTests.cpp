@@ -322,8 +322,7 @@ TEST(MainQmlContractTests, InstantiatesRootAndSeparatesManualAlignmentStates) {
 
     auto* const window = qobject_cast<QQuickWindow*>(root.get());
     ASSERT_NE(window, nullptr);
-    QObject* const inspector =
-        root->findChild<QObject*>(QStringLiteral("advancedAlignmentInspector"));
+    QObject* const inspector = root->findChild<QObject*>(QStringLiteral("manualAnchorDialog"));
     QObject* const tabbedInspector = root->findChild<QObject*>(QStringLiteral("tabbedInspector"));
     auto* const compareBar = root->findChild<QQuickItem*>(QStringLiteral("compareModeBar"));
     auto* const transport = root->findChild<QQuickItem*>(QStringLiteral("transport"));
@@ -642,15 +641,14 @@ TEST(MainQmlContractTests, InstantiatesRootAndSeparatesManualAlignmentStates) {
     controller.refreshProjection();
     QCoreApplication::processEvents();
 
-    // In multi-source the TabbedInspector exposes all four tabs.
+    // In multi-source the TabbedInspector exposes the Compare/Review/Info tabs.
     shell.setInspectorVisible(true);
     QCoreApplication::processEvents();
     QObject* const inspectorTabBar =
         tabbedInspector->findChild<QObject*>(QStringLiteral("inspectorTabBar"));
     ASSERT_NE(inspectorTabBar, nullptr);
-    EXPECT_EQ(inspectorTabBar->property("count").toInt(), 4);
-    for (const char* const tabName :
-         {"compareTabButton", "alignmentTabButton", "reviewTabButton", "infoTabButton"}) {
+    EXPECT_EQ(inspectorTabBar->property("count").toInt(), 3);
+    for (const char* const tabName : {"compareTabButton", "reviewTabButton", "infoTabButton"}) {
         QObject* const tab = tabbedInspector->findChild<QObject*>(QString::fromLatin1(tabName));
         ASSERT_NE(tab, nullptr);
         EXPECT_TRUE(tab->property("visible").toBool());
@@ -685,25 +683,21 @@ TEST(MainQmlContractTests, InstantiatesRootAndSeparatesManualAlignmentStates) {
     shell.setInspectorVisible(true);
     QCoreApplication::processEvents();
     EXPECT_TRUE(tabbedInspector->property("visible").toBool());
-    EXPECT_EQ(tabbedInspector->property("effectiveTab").toInt(), 2);
+    EXPECT_EQ(tabbedInspector->property("effectiveTab").toInt(), 1);
     EXPECT_TRUE(setInButton->property("visible").toBool());
     EXPECT_TRUE(setOutButton->property("visible").toBool());
 
-    // In single mode the inspector keeps only the Review/Info tabs; Compare/Alignment
-    // tabs hide and the Review-tab range actions remain reachable.
+    // In single mode the inspector keeps only the Review/Info tabs; the Compare tab hides and
+    // the Review-tab range actions remain reachable.
     QObject* const compareTab =
         tabbedInspector->findChild<QObject*>(QStringLiteral("compareTabButton"));
-    QObject* const alignmentTab =
-        tabbedInspector->findChild<QObject*>(QStringLiteral("alignmentTabButton"));
     QObject* const reviewTab =
         tabbedInspector->findChild<QObject*>(QStringLiteral("reviewTabButton"));
     QObject* const infoTab = tabbedInspector->findChild<QObject*>(QStringLiteral("infoTabButton"));
     ASSERT_NE(compareTab, nullptr);
-    ASSERT_NE(alignmentTab, nullptr);
     ASSERT_NE(reviewTab, nullptr);
     ASSERT_NE(infoTab, nullptr);
     EXPECT_FALSE(compareTab->property("visible").toBool());
-    EXPECT_FALSE(alignmentTab->property("visible").toBool());
     EXPECT_TRUE(reviewTab->property("visible").toBool());
     EXPECT_TRUE(infoTab->property("visible").toBool());
     EXPECT_TRUE(loopRangeButton->property("visible").toBool());

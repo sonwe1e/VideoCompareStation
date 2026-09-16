@@ -21,6 +21,17 @@ VcsMenuBar {
     required property int shortcutPreset
     required property var sourceIdentities
     property int workspaceMode: 0
+    // Alignment state and helpers live on the root; the Analyze menu hosts the actions that used
+    // to live in the inspector's Alignment tab.
+    property bool automaticAlignmentPending: false
+    property bool canConfirmAutomaticAlignment: false
+    property bool canUndoAutomaticAlignment: false
+    property bool manualAnchorActive: false
+    property bool anyManualAlignmentActive: false
+    property bool autoAlignmentActive: false
+    property var openManualAnchorsDialog: null
+    property var sourceOffsets: null
+    property var resetSourceOffsets: null
 
     signal openVideosRequested
     signal addVideoRequested
@@ -281,6 +292,60 @@ VcsMenuBar {
             enabled: control.graphicsReady && !control.busy && Boolean(control.controller && (control.alignmentAnalysisRunning || control.controller.canFirst))
             onTriggered: {
                 control.alignmentAnalysisRunning ? control.controller.cancelAlignmentAnalysis() : control.controller.analyzeSequenceAlignment();
+                control.returnViewerFocusAfterClose = true;
+            }
+        }
+        VcsMenuSeparator {
+            objectName: "analyzeAutomaticSeparator"
+        }
+        VcsMenuItem {
+            objectName: "confirmAutomaticAlignmentMenuItem"
+            text: control.canConfirmAutomaticAlignment ? qsTr("确认建议映射") : qsTr("确认前先分析序列")
+            visible: control.automaticAlignmentPending
+            enabled: control.graphicsReady && !control.busy && !control.alignmentAnalysisRunning && control.canConfirmAutomaticAlignment
+            onTriggered: {
+                control.controller.confirmAutomaticAlignment();
+                control.returnViewerFocusAfterClose = true;
+            }
+        }
+        VcsMenuItem {
+            objectName: "undoAutomaticAlignmentMenuItem"
+            text: qsTr("撤销自动映射")
+            visible: control.canUndoAutomaticAlignment
+            enabled: control.graphicsReady && !control.busy && !control.alignmentAnalysisRunning
+            onTriggered: {
+                control.controller.undoAutomaticAlignment();
+                control.returnViewerFocusAfterClose = true;
+            }
+        }
+        VcsMenuItem {
+            objectName: "manualAnchorsButton"
+            text: control.manualAnchorActive ? qsTr("已设手动锚点…") : qsTr("编辑手动锚点…")
+            enabled: control.graphicsReady && !control.busy && Boolean(control.controller && control.controller.canFirst)
+            onTriggered: {
+                control.openManualAnchorsDialog();
+                control.returnViewerFocusAfterClose = true;
+            }
+        }
+        VcsMenuSeparator {
+            objectName: "analyzeOffsetSeparator"
+        }
+        VcsMenuItem {
+            objectName: "applyAlignmentMenuItem"
+            text: qsTr("应用帧偏移")
+            enabled: control.graphicsReady && !control.busy && Boolean(control.controller && control.controller.canFirst)
+            onTriggered: {
+                control.controller.applySourceOffsets(control.sourceOffsets());
+                control.returnViewerFocusAfterClose = true;
+            }
+        }
+        VcsMenuItem {
+            objectName: "resetAlignmentMenuItem"
+            text: qsTr("回到严格索引")
+            enabled: control.graphicsReady && !control.busy && (control.anyManualAlignmentActive || control.autoAlignmentActive) && Boolean(control.controller && control.controller.canFirst)
+            onTriggered: {
+                control.resetSourceOffsets();
+                control.controller.applySourceOffsets(control.sourceOffsets());
                 control.returnViewerFocusAfterClose = true;
             }
         }
