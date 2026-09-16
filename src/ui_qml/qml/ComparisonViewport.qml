@@ -38,6 +38,8 @@ Rectangle {
     required property int differenceFirstSlot
     required property int effectiveDifferenceEdge
     required property var sourceNames
+    required property var sourceParentLabels
+    required property var sourceFullPaths
     required property var sourceMediaInfo
     required property bool frameErrorBannerVisible
     required property string errorDetail
@@ -77,6 +79,14 @@ Rectangle {
 
     function sourceFilename(slot) {
         return slot >= 0 && slot < control.sourceNames.length ? String(control.sourceNames[slot]) : "";
+    }
+
+    function sourceParentLabel(slot) {
+        return slot >= 0 && slot < control.sourceParentLabels.length ? String(control.sourceParentLabels[slot]) : "";
+    }
+
+    function sourceFullPath(slot) {
+        return slot >= 0 && slot < control.sourceFullPaths.length ? String(control.sourceFullPaths[slot]) : "";
     }
 
     function comparisonExactnessLabel(exactness) {
@@ -506,7 +516,11 @@ Rectangle {
 
                 Text {
                     visible: surfaceLabel.showFilename
-                    text: control.sourceFilename(Number(surfaceLabel.modelData.slot))
+                    text: {
+                        const parent = control.sourceParentLabel(surfaceLabel.sourceSlot);
+                        const name = control.sourceFilename(surfaceLabel.sourceSlot);
+                        return parent.length > 0 ? "%1 (%2)".arg(name).arg(parent) : name;
+                    }
                     color: control.primaryTextColor
                     font.pixelSize: 12
                     elide: Text.ElideMiddle
@@ -516,6 +530,15 @@ Rectangle {
                         right: parent.right
                         rightMargin: 10
                         verticalCenter: parent.verticalCenter
+                    }
+
+                    HoverHandler {
+                        id: surfaceLabelNameHover
+                    }
+
+                    VcsToolTip {
+                        visible: surfaceLabelNameHover.hovered && control.sourceFullPath(surfaceLabel.sourceSlot).length > 0
+                        text: control.sourceFullPath(surfaceLabel.sourceSlot)
                     }
                 }
             }

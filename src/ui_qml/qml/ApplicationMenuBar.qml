@@ -40,6 +40,7 @@ VcsMenuBar {
     signal openImageRequested
     signal addImageRequested
     signal openImagePairRequested
+    signal compareImageFoldersRequested
     signal workspaceRequested(int mode)
     signal destructiveActionRequested(string kind)
     signal chromeToggleRequested
@@ -99,6 +100,12 @@ VcsMenuBar {
             shortcutText: "Ctrl+Alt+I"
             enabled: control.workspaceMode === 1 && control.imageHasPrimary && !control.imageHasSecondary
             onTriggered: control.addImageRequested()
+        }
+        VcsMenuItem {
+            objectName: "compareImageFoldersMenuItem"
+            text: qsTr("对比文件夹…")
+            shortcutText: "Ctrl+Shift+F"
+            onTriggered: control.compareImageFoldersRequested()
         }
         VcsMenuItem {
             text: qsTr("关闭视频")

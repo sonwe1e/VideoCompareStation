@@ -66,10 +66,17 @@ ApplicationWindow {
     // 0 = video compare workspace, 1 = still-image workspace.
     property int workspaceMode: 0
     readonly property bool imageWorkspaceActive: workspaceMode === 1
+    // Folder-comparison state: two staged folder URLs, selection progress, sidebar toggle.
+    property url imageFolderLeftUrl: ""
+    property url imageFolderRightUrl: ""
+    property int imageFolderStage: 0
+    property bool imageFolderSidebarVisible: true
     // Captured from the C++ context property so nested scopes never resolve a same-named
     // Item property (ImageWorkspace.imageReview) into a circular binding.
     // qmllint disable unqualified
     readonly property var stillImageController: imageReview
+    readonly property var folderPairModel: imageFolderPairs
+    // qmllint enable unqualified
     property string immersiveHudText: ""
     property bool immersiveHudVisible: false
     property bool manualHudPending: false
@@ -553,6 +560,30 @@ ApplicationWindow {
         reviewInputDialogs.openComparison();
     }
 
+    // Loads the two staged folder URLs into the pair model and opens the first comparable
+    // pair. Returns false and surfaces a toast when the folders cannot pair anything.
+    function loadFolderComparison() {
+        const pairModel = root.folderPairModel;
+        if (!pairModel)
+            return false;
+        const ok = pairModel.loadFolders(root.imageFolderLeftUrl, root.imageFolderRightUrl);
+        root.workspaceMode = 1;
+        if (!ok) {
+            dropError = pairModel.errorText;
+            return false;
+        }
+        const firstRow = pairModel.firstCompleteRow();
+        if (firstRow < 0) {
+            dropError = qsTr("两个文件夹没有同名图片。");
+            return false;
+        }
+        dropError = "";
+        root.imageFolderSidebarVisible = true;
+        pairModel.openPairAt(firstRow);
+        pairModel.currentPair = firstRow;
+        return true;
+    }
+
     function performImageReview(normalizedUrls) {
         root.workspaceMode = 1;
         // Opening images replaces the current video review, mirroring how opening videos
@@ -563,8 +594,14 @@ ApplicationWindow {
         const target = root.stillImageController;
         if (!target || normalizedUrls.length === 0)
             return;
+        if (normalizedUrls.length === 1) {
+            // A single replacement must not leave the previous pair's second image behind.
+            target.closeAll();
+            target.openPrimary(normalizedUrls[0]);
+            return;
+        }
         target.openPrimary(normalizedUrls[0]);
-        if (normalizedUrls.length >= 2 && normalizedUrls[1])
+        if (normalizedUrls[1])
             target.openSecondary(normalizedUrls[1]);
     }
 
@@ -576,6 +613,22 @@ ApplicationWindow {
         }
         const normalizedUrls = reviewed.urls;
         if (reviewed.kind === "images") {
+            const imageTarget = root.stillImageController;
+            if (allowSingleSourceAppend && imageTarget && imageTarget.hasPrimary && !imageTarget.hasSecondary && normalizedUrls.length === 1) {
+                const primary = imageTarget.primaryPath;
+                const candidate = decodeURIComponent(normalizedUrls[0].toString()).replace(/^file:[\/]{3}/, "");
+                if (primary.length > 0 && sameFilePath(primary, candidate)) {
+                    dropError = qsTr("该图片已打开。");
+                    return;
+                }
+                dropError = "";
+                root.workspaceMode = 1;
+                if (root.sourceCount > 0 && shell)
+                    shell.closeSources();
+                imageTarget.openSecondary(normalizedUrls[0]);
+                imageTarget.compareMode = 1;
+                return;
+            }
             requestDestructiveAction({
                 "kind": "openImages",
                 "urls": normalizedUrls,
@@ -615,7 +668,43 @@ ApplicationWindow {
         });
     }
 
+    // Path comparison helper for drop-append guards: controller paths are plain local
+    // paths while staged URLs are file:/// form; compare case-insensitively on Windows.
+    function sameFilePath(left, right) {
+        const normalize = path => String(path || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+        return normalize(left) === normalize(right);
+    }
+
+    // Directory detection for folder drops. The C++ drop validator requires regular
+    // files, so folders are routed here before it runs. Returns the local paths of every
+    // dropped entry that is a directory, or an empty array when none are.
+    function droppedFolderPaths(urls) {
+        const folders = [];
+        for (const value of urls) {
+            const url = typeof value === "string" ? Qt.resolvedUrl(value) : value;
+            if (!root.controller || !root.controller.isFolderPath(url))
+                continue;
+            folders.push(url);
+        }
+        return folders;
+    }
+
     function reviewDroppedUrls(urls) {
+        const folderPaths = droppedFolderPaths(urls);
+        if (folderPaths.length === 2) {
+            imageFolderLeftUrl = folderPaths[0];
+            imageFolderRightUrl = folderPaths[1];
+            loadFolderComparison();
+            return;
+        }
+        if (folderPaths.length === 1) {
+            dropError = qsTr("拖入两个文件夹可进行图片对比。");
+            return;
+        }
+        if (folderPaths.length > 2) {
+            dropError = qsTr("最多拖入两个文件夹。");
+            return;
+        }
         reviewUrls(urls, true);
     }
 
@@ -878,6 +967,11 @@ ApplicationWindow {
             root.workspaceMode = 1;
             imagePairDialog.open();
         }
+        onCompareImageFoldersRequested: {
+            root.workspaceMode = 1;
+            root.imageFolderStage = 0;
+            imageFolderLeftDialog.open();
+        }
         onWorkspaceRequested: mode => root.workspaceMode = mode
         onDestructiveActionRequested: kind => root.requestDestructiveAction({
                 "kind": kind,
@@ -938,6 +1032,17 @@ ApplicationWindow {
         onActivated: {
             if (root.shell)
                 root.shell.inspectorVisible = false;
+        }
+    }
+
+    Shortcut {
+        sequence: "Ctrl+Shift+F"
+        context: Qt.ApplicationShortcut
+        enabled: root.inputContext === 0
+        onActivated: {
+            root.workspaceMode = 1;
+            root.imageFolderStage = 0;
+            imageFolderLeftDialog.open();
         }
     }
 
@@ -1409,6 +1514,8 @@ ApplicationWindow {
         differenceFirstSlot: root.differenceFirstSlot
         effectiveDifferenceEdge: root.differenceEdge
         sourceNames: [root.sourceAName, root.sourceBName, root.sourceCName]
+        sourceParentLabels: root.controller ? root.controller.sourceParentLabels : []
+        sourceFullPaths: root.controller ? root.controller.sourceFullPaths : []
         sourceMediaInfo: root.controller ? root.controller.sourceMediaInfo : []
         frameErrorBannerVisible: root.frameErrorBannerVisible
         errorDetail: root.errorDetails()
@@ -1438,6 +1545,10 @@ ApplicationWindow {
         objectName: "imageWorkspaceRoot"
         visible: root.imageWorkspaceActive
         controller: root.stillImageController
+        // qmllint disable unqualified
+        pairModel: imageFolderPairs
+        // qmllint enable unqualified
+        sidebarVisible: root.imageFolderSidebarVisible
         anchors {
             top: parent.top
             topMargin: root.chromeVisible ? 10 : 0
@@ -1458,6 +1569,33 @@ ApplicationWindow {
         onOpenPairRequested: {
             root.workspaceMode = 1;
             imagePairDialog.open();
+        }
+        onCompareFoldersRequested: {
+            root.workspaceMode = 1;
+            root.imageFolderStage = 0;
+            imageFolderLeftDialog.open();
+        }
+        onToggleSidebarRequested: root.imageFolderSidebarVisible = !root.imageFolderSidebarVisible
+    }
+    NativeDialogs.FolderDialog {
+        id: imageFolderLeftDialog
+
+        objectName: "imageFolderLeftDialog"
+        title: qsTr("选择文件夹 A")
+        onAccepted: {
+            root.imageFolderLeftUrl = selectedFolder;
+            root.imageFolderStage = 1;
+            imageFolderRightDialog.open();
+        }
+    }
+    NativeDialogs.FolderDialog {
+        id: imageFolderRightDialog
+
+        objectName: "imageFolderRightDialog"
+        title: qsTr("选择文件夹 B")
+        onAccepted: {
+            root.imageFolderRightUrl = selectedFolder;
+            root.loadFolderComparison();
         }
     }
     NativeDialogs.FileDialog {

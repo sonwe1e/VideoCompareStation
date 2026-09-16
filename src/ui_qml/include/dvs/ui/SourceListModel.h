@@ -14,6 +14,8 @@ struct SourceListRow final {
     QString sourceIdentity;
     int role = 0;
     QString filename;
+    QString parentLabel;
+    QString fullPath;
     QString errorKey;
     std::optional<qint64> currentSourceFrame;
     int matchKind = 0;
@@ -35,6 +37,8 @@ public:
         SourceIdentityRole,
         RoleRole,
         FilenameRole,
+        ParentLabelRole,
+        FullPathRole,
         ErrorRole,
         CurrentSourceFrameRole,
         MatchKindRole,

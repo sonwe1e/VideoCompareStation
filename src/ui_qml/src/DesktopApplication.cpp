@@ -1,6 +1,7 @@
 #include "dvs/ui/DesktopApplication.h"
 
 #include "dvs/ui/ComparisonSurface.h"
+#include "dvs/ui/ImageFolderPairModel.h"
 #include "dvs/ui/ImageReviewController.h"
 #include "dvs/ui/ReviewController.h"
 #include "dvs/ui/ReviewImageProvider.h"
@@ -105,6 +106,15 @@ public:
                                                   imageReview_.get());
         engine->addImageProvider(QStringLiteral("vcs-review"),
                                  new ReviewImageProvider(imageReview_.get()));
+        folderPairs_ = std::make_unique<ImageFolderPairModel>();
+        folderPairs_->setPairOpener(
+            [review = imageReview_.get()](const QUrl& primary, const QUrl& secondary) {
+                review->openPrimary(primary);
+                review->openSecondary(secondary);
+                review->setCompareMode(static_cast<int>(ImageReviewController::SideBySide));
+            });
+        engine->rootContext()->setContextProperty(QStringLiteral("imageFolderPairs"),
+                                                  folderPairs_.get());
         const QMetaObject::Connection warningConnection = QObject::connect(
             engine.get(),
             &QQmlEngine::warnings,
@@ -559,6 +569,7 @@ private:
     std::unique_ptr<ReviewShellController> shellController_;
     std::unique_ptr<ReviewSessionFacade> sessionFacade_;
     std::unique_ptr<ImageReviewController> imageReview_;
+    std::unique_ptr<ImageFolderPairModel> folderPairs_;
     QQuickWindow* window_ = nullptr;
     ComparisonSurface* surface_ = nullptr;
     double activeScreenRefreshRate_ = 0.0;

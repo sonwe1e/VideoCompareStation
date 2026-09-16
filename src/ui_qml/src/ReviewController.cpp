@@ -354,6 +354,8 @@ struct ReviewView final {
     QString sourceBFilename;
     QString sourceCFilename;
     QVariantList sourceUrls;
+    QStringList sourceParentLabels;
+    QStringList sourceFullPaths;
     int sourceCount = 0;
     int canonicalSourceIndex = -1;
     int referenceSourceIndex = -1;
@@ -1525,6 +1527,13 @@ private:
         std::vector<SourceListRow> sourceRows;
         if (snapshot_) {
             sourceRows.reserve(snapshot_->sources.size());
+            // Same-named sources stay distinguishable by appending each parent folder to
+            // the filename; unique names keep the compact filename-only label.
+            std::vector<QString> rowFilenames;
+            rowFilenames.reserve(snapshot_->sources.size());
+            for (const application::SessionSourceView& source : snapshot_->sources) {
+                rowFilenames.push_back(QString::fromStdString(source.displayName));
+            }
             for (const application::SessionSourceView& source : snapshot_->sources) {
                 const auto presented =
                     std::find_if(snapshot_->presentedSources.begin(),
@@ -1565,10 +1574,22 @@ private:
                             // projection filesystem-free when an incomplete adapter omits it.
                             row.sourceIdentity = QDir::cleanPath(path).toCaseFolded();
                         }
+                        row.fullPath = path;
                         const auto changedOnDisk = changedOnDiskByPath_.constFind(frozenKey);
                         if (changedOnDisk != changedOnDiskByPath_.cend()) {
                             row.changedOnDisk = *changedOnDisk;
                         }
+                    }
+                    const QString displayName = QString::fromStdString(source.displayName);
+                    const std::size_t duplicateCount = std::count_if(
+                        rowFilenames.cbegin(),
+                        rowFilenames.cend(),
+                        [&displayName](const QString& value) {
+                            return value.compare(displayName, Qt::CaseInsensitive) == 0;
+                        });
+                    if (duplicateCount > 1U) {
+                        const QFileInfo info{row.fullPath};
+                        row.parentLabel = info.dir().dirName();
                     }
                 }
                 if (presented != snapshot_->presentedSources.end()) {
@@ -1588,6 +1609,14 @@ private:
                     }
                 }
                 sourceRows.push_back(std::move(row));
+            }
+            // Per-slot hover/label extras: keep slot order (A/B/C) stable regardless of
+            // which sources survived validation.
+            next.sourceParentLabels.clear();
+            next.sourceFullPaths.clear();
+            for (const SourceListRow& row : sourceRows) {
+                next.sourceParentLabels.push_back(row.parentLabel);
+                next.sourceFullPaths.push_back(row.fullPath);
             }
         }
         for (std::size_t first = 0U; first < sourceRows.size(); ++first) {
@@ -1866,6 +1895,14 @@ QString ReviewController::sourceCFilename() const {
 
 QVariantList ReviewController::sourceUrls() const {
     return impl_->view().sourceUrls;
+}
+
+QStringList ReviewController::sourceParentLabels() const {
+    return impl_->view().sourceParentLabels;
+}
+
+QStringList ReviewController::sourceFullPaths() const {
+    return impl_->view().sourceFullPaths;
 }
 
 QVariantList ReviewController::activeSources() const {
@@ -2157,6 +2194,14 @@ QVariantMap ReviewController::handleDroppedUrls(const QVariantList& urls) const 
         {QStringLiteral("kind"), allImages ? QStringLiteral("images") : QStringLiteral("videos")},
         {QStringLiteral("urls"), normalizedUrls},
     };
+}
+
+bool ReviewController::isFolderPath(const QUrl& url) const {
+    if (!url.isLocalFile()) {
+        return false;
+    }
+    const QFileInfo info{url.toLocalFile()};
+    return info.isDir();
 }
 
 bool ReviewController::first() {
