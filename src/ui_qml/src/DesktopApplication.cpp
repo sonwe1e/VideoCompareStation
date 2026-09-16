@@ -1,7 +1,9 @@
 #include "dvs/ui/DesktopApplication.h"
 
 #include "dvs/ui/ComparisonSurface.h"
+#include "dvs/ui/ImageReviewController.h"
 #include "dvs/ui/ReviewController.h"
+#include "dvs/ui/ReviewImageProvider.h"
 #include "dvs/ui/ReviewPreferencesController.h"
 #include "dvs/ui/ReviewSessionFacade.h"
 #include "dvs/ui/ReviewShellController.h"
@@ -98,6 +100,11 @@ public:
             std::make_unique<ReviewSessionFacade>(controller, preferences, *shellController_);
         engine->rootContext()->setContextProperty(QStringLiteral("reviewFacade"),
                                                   sessionFacade_.get());
+        imageReview_ = std::make_unique<ImageReviewController>();
+        engine->rootContext()->setContextProperty(QStringLiteral("imageReview"),
+                                                  imageReview_.get());
+        engine->addImageProvider(QStringLiteral("vcs-review"),
+                                 new ReviewImageProvider(imageReview_.get()));
         const QMetaObject::Connection warningConnection = QObject::connect(
             engine.get(),
             &QQmlEngine::warnings,
@@ -183,19 +190,6 @@ public:
         return activeScreenRefreshRate_;
     }
 
-    [[nodiscard]] bool reviewLocalFiles(const QList<QUrl>& files) {
-        if (window_ == nullptr || files.isEmpty()) {
-            return false;
-        }
-        QVariantList values;
-        values.reserve(files.size());
-        for (const QUrl& file : files) {
-            values.push_back(file);
-        }
-        return QMetaObject::invokeMethod(
-            window_, "reviewDroppedUrls", Q_ARG(QVariant, QVariant::fromValue(values)));
-    }
-
     [[nodiscard]] bool enqueueStartupRequest(const int kind, const QList<QUrl>& files) {
         if (window_ == nullptr || shellController_ == nullptr || kind < 0) {
             return false;
@@ -233,6 +227,14 @@ public:
         // intentionally projected through ReviewController and asserted by the smoke state machine.
         static_cast<void>(shellController_->openStagedSources(false));
         return true;
+    }
+
+    [[nodiscard]] bool openStillImageForAutomation(const QUrl& url) noexcept {
+        if (imageReview_ == nullptr || window_ == nullptr || !url.isValid()) {
+            return false;
+        }
+        static_cast<void>(window_->setProperty("workspaceMode", 1));
+        return imageReview_->openPrimary(url);
     }
 
     [[nodiscard]] bool clickControlForAutomation(const std::string_view objectName) noexcept {
@@ -382,8 +384,13 @@ public:
         if (window_ == nullptr || objectName.empty()) {
             return false;
         }
-        QObject* const menu = window_->findChild<QObject*>(
-            QString::fromUtf8(objectName.data(), static_cast<qsizetype>(objectName.size())));
+        const QString target =
+            QString::fromUtf8(objectName.data(), static_cast<qsizetype>(objectName.size()));
+        if (QObject* const anchor = sourceMenuAnchorForAutomation(target); anchor != nullptr) {
+            return anchor->property("enabled").toBool() &&
+                   QMetaObject::invokeMethod(anchor, "click", Qt::DirectConnection);
+        }
+        QObject* const menu = menuForAutomation(target);
         if (menu == nullptr || !menu->property("enabled").toBool()) {
             return false;
         }
@@ -394,7 +401,7 @@ public:
         if (window_ == nullptr || objectName.empty()) {
             return false;
         }
-        QObject* const menu = window_->findChild<QObject*>(
+        QObject* const menu = menuForAutomation(
             QString::fromUtf8(objectName.data(), static_cast<qsizetype>(objectName.size())));
         if (menu == nullptr) {
             return false;
@@ -406,7 +413,7 @@ public:
         if (window_ == nullptr || objectName.empty()) {
             return false;
         }
-        const QObject* const menu = window_->findChild<QObject*>(
+        const QObject* const menu = menuForAutomation(
             QString::fromUtf8(objectName.data(), static_cast<qsizetype>(objectName.size())));
         if (menu == nullptr) {
             return false;
@@ -425,7 +432,7 @@ public:
         // Primary strategy: resolve the popup window through the menu's own contentItem.
         // QML Popup.Window menus host their visual tree in a contentItem that lives inside the
         // separate top-level QQuickWindow created for the popup.
-        QObject* const menuObject = window_->findChild<QObject*>(target);
+        QObject* const menuObject = menuForAutomation(target);
         if (menuObject != nullptr) {
             const QVariant contentItemVariant = menuObject->property("contentItem");
             if (contentItemVariant.isValid()) {
@@ -490,10 +497,55 @@ public:
         engine_.reset();
         sessionFacade_.reset();
         shellController_.reset();
+        imageReview_.reset();
         QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
     }
 
 private:
+    [[nodiscard]] QQuickItem* visualItemForAutomation(const QString& target) const noexcept {
+        if (window_ == nullptr || window_->contentItem() == nullptr || target.isEmpty()) {
+            return nullptr;
+        }
+        std::vector<QQuickItem*> pending{window_->contentItem()};
+        while (!pending.empty()) {
+            QQuickItem* const item = pending.back();
+            pending.pop_back();
+            if (item->objectName() == target) {
+                return item;
+            }
+            const QList<QQuickItem*> children = item->childItems();
+            pending.insert(pending.end(), children.cbegin(), children.cend());
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] QObject* sourceMenuAnchorForAutomation(const QString& target) const noexcept {
+        static const QString kSourceMenuPrefix = QStringLiteral("sourceMenu-");
+        if (window_ == nullptr || !target.startsWith(kSourceMenuPrefix)) {
+            return nullptr;
+        }
+        const QString anchorName =
+            QStringLiteral("sourceOverflowButton-") + target.sliced(kSourceMenuPrefix.size());
+        if (QObject* const anchor = window_->findChild<QObject*>(anchorName); anchor != nullptr) {
+            return anchor;
+        }
+        return visualItemForAutomation(anchorName);
+    }
+
+    [[nodiscard]] QObject* menuForAutomation(const QString& target) const noexcept {
+        if (window_ == nullptr || target.isEmpty()) {
+            return nullptr;
+        }
+        if (QObject* const menu = window_->findChild<QObject*>(target); menu != nullptr) {
+            return menu;
+        }
+        QObject* const anchor = sourceMenuAnchorForAutomation(target);
+        if (anchor == nullptr) {
+            return nullptr;
+        }
+        return anchor->property("sourceMenuControl").value<QObject*>();
+    }
+
     static void reportWarnings(const std::vector<QQmlError>& warnings) {
         for (const QQmlError& error : warnings) {
             std::cerr << error.toString().toStdString() << '\n';
@@ -506,6 +558,7 @@ private:
     std::unique_ptr<QQmlApplicationEngine> engine_;
     std::unique_ptr<ReviewShellController> shellController_;
     std::unique_ptr<ReviewSessionFacade> sessionFacade_;
+    std::unique_ptr<ImageReviewController> imageReview_;
     QQuickWindow* window_ = nullptr;
     ComparisonSurface* surface_ = nullptr;
     double activeScreenRefreshRate_ = 0.0;
@@ -537,10 +590,6 @@ double DesktopApplication::activeScreenRefreshRate() const noexcept {
     return impl_->activeScreenRefreshRate();
 }
 
-bool DesktopApplication::reviewLocalFiles(const QList<QUrl>& files) {
-    return impl_->reviewLocalFiles(files);
-}
-
 bool DesktopApplication::enqueueStartupRequest(const int kind, const QList<QUrl>& files) {
     return impl_->enqueueStartupRequest(kind, files);
 }
@@ -551,6 +600,10 @@ void DesktopApplication::activateWindow() noexcept {
 
 bool DesktopApplication::openSourcesForAutomation(const QList<QUrl>& sources) noexcept {
     return impl_->openSourcesForAutomation(sources);
+}
+
+bool DesktopApplication::openStillImageForAutomation(const QUrl& url) noexcept {
+    return impl_->openStillImageForAutomation(url);
 }
 
 bool DesktopApplication::clickControlForAutomation(const std::string_view objectName) noexcept {

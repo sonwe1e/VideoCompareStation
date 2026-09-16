@@ -1,9 +1,9 @@
 #include "dvs/platform/AtomicFilePublisher.h"
 #include "dvs/platform/PlatformResult.h"
+#include "dvs/test/ScopedTemporaryDirectory.h"
 
 #include "AtomicFilePublisherTestHooks.h"
 
-#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
@@ -13,28 +13,6 @@
 
 namespace dvs::platform {
 namespace {
-
-class ScopedTemporaryDirectory final {
-public:
-    ScopedTemporaryDirectory() {
-        const auto suffix =
-            std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-        path_ = std::filesystem::temp_directory_path() / ("dvs-atomic-test-" + suffix);
-        std::filesystem::create_directory(path_);
-    }
-
-    ~ScopedTemporaryDirectory() {
-        std::error_code error;
-        std::filesystem::remove_all(path_, error);
-    }
-
-    [[nodiscard]] const std::filesystem::path& path() const noexcept {
-        return path_;
-    }
-
-private:
-    std::filesystem::path path_;
-};
 
 void writeTextFile(const std::filesystem::path& path, const std::string& text) {
     std::ofstream stream{path, std::ios::binary | std::ios::trunc};
@@ -86,7 +64,7 @@ BOOL WINAPI failTargetRecovery(const LPCWSTR, const LPCWSTR, const DWORD) {
 } // namespace
 
 TEST(AtomicFilePublisherTests, ReplacesAnExistingFileOnlyAfterFlush) {
-    ScopedTemporaryDirectory directory;
+    dvs::test::ScopedTemporaryDirectory directory{"dvs-atomic-test"};
     const std::filesystem::path destination = directory.path() / "output.dat";
     writeTextFile(destination, "old");
 
@@ -112,7 +90,7 @@ TEST(AtomicFilePublisherTests, ReplacesAnExistingFileOnlyAfterFlush) {
 }
 
 TEST(AtomicFilePublisherTests, RequiresFlushBeforePublishing) {
-    ScopedTemporaryDirectory directory;
+    dvs::test::ScopedTemporaryDirectory directory{"dvs-atomic-test"};
     const std::filesystem::path destination = directory.path() / "output.dat";
     writeTextFile(destination, "old");
 
@@ -133,7 +111,7 @@ TEST(AtomicFilePublisherTests, RequiresFlushBeforePublishing) {
 }
 
 TEST(AtomicFilePublisherTests, RefusesToOverwriteANewTarget) {
-    ScopedTemporaryDirectory directory;
+    dvs::test::ScopedTemporaryDirectory directory{"dvs-atomic-test"};
     const std::filesystem::path destination = directory.path() / "export.mov";
     writeTextFile(destination, "existing");
 
@@ -151,7 +129,7 @@ TEST(AtomicFilePublisherTests, RefusesToOverwriteANewTarget) {
 }
 
 TEST(AtomicFilePublisherTests, DestroysUnpublishedPartialFiles) {
-    ScopedTemporaryDirectory directory;
+    dvs::test::ScopedTemporaryDirectory directory{"dvs-atomic-test"};
     const std::filesystem::path destination = directory.path() / "settings.json";
     std::filesystem::path temporary;
 
@@ -166,7 +144,7 @@ TEST(AtomicFilePublisherTests, DestroysUnpublishedPartialFiles) {
 }
 
 TEST(AtomicFilePublisherTests, RetainsExistingTargetWhenReplacementCannotMove) {
-    ScopedTemporaryDirectory directory;
+    dvs::test::ScopedTemporaryDirectory directory{"dvs-atomic-test"};
     const std::filesystem::path destination = directory.path() / "output.dat";
     writeTextFile(destination, "old");
     injectedBackupPath.clear();
@@ -199,7 +177,7 @@ TEST(AtomicFilePublisherTests, RetainsExistingTargetWhenReplacementCannotMove) {
 }
 
 TEST(AtomicFilePublisherTests, RestoresExistingTargetAfterPartialReplacementMove) {
-    ScopedTemporaryDirectory directory;
+    dvs::test::ScopedTemporaryDirectory directory{"dvs-atomic-test"};
     const std::filesystem::path destination = directory.path() / "output.dat";
     writeTextFile(destination, "old");
     injectedBackupPath.clear();
@@ -232,7 +210,7 @@ TEST(AtomicFilePublisherTests, RestoresExistingTargetAfterPartialReplacementMove
 }
 
 TEST(AtomicFilePublisherTests, PreservesBothCopiesWhenPartialReplacementRecoveryFails) {
-    ScopedTemporaryDirectory directory;
+    dvs::test::ScopedTemporaryDirectory directory{"dvs-atomic-test"};
     const std::filesystem::path destination = directory.path() / "output.dat";
     writeTextFile(destination, "old");
     injectedBackupPath.clear();

@@ -2,14 +2,19 @@
 #define NOMINMAX
 #endif
 
+#include "dvs/application/PlaybackTrace.h"
+#include "dvs/media/StillImageDecoder.h"
 #include "dvs/platform/ProcessTelemetry.h"
+#include "dvs/platform/TraceSink.h"
 #include "dvs/ui/ComparisonSurface.h"
 #include "dvs/ui/DesktopApplication.h"
 #include "dvs/ui/GraphicsBackend.h"
+#include "dvs/ui/ImageReviewController.h"
 #include "dvs/ui/ReviewController.h"
 #include "dvs/ui/ReviewPreferencesController.h"
 #include "dvs/ui/SourceListModel.h"
 
+#include "PlaybackTraceEnvironment.h"
 #include "ReviewRuntime.h"
 #include "StartupFailureReporter.h"
 #include "StartupRequest.h"
@@ -33,6 +38,7 @@
 #include <deque>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -206,6 +212,18 @@ performanceSurfaceMode(const PerformanceComparisonMode comparisonMode) noexcept 
     return dvs::ui::ComparisonSurface::SideBySide;
 }
 
+void installPlaybackTrace(dvs::app::ReviewRuntime& runtime) {
+    const std::optional<std::filesystem::path> tracePath =
+        dvs::app::playbackTracePathFromEnvironment();
+    if (!tracePath.has_value()) {
+        return;
+    }
+    auto sink = std::make_shared<dvs::platform::FileTraceSink>(*tracePath);
+    dvs::application::PlaybackTrace::instance().installSink(sink.get());
+    dvs::application::PlaybackTrace::instance().enable(dvs::application::traceNowMicroseconds);
+    runtime.setTraceSink(std::move(sink));
+}
+
 [[nodiscard]] std::optional<PerformanceInvocation> parsePerformanceInvocation(const int argc,
                                                                               char** const argv) {
     if (argc < 5 || argv == nullptr || std::string_view{argv[1]} != "--ui-performance") {
@@ -320,12 +338,19 @@ performanceSurfaceMode(const PerformanceComparisonMode comparisonMode) noexcept 
     return false;
 }
 
-[[nodiscard]] int runDesktop(int& argc,
-                             char** argv,
-                             const bool smokeMode,
-                             const std::optional<SmokeSources>& smokeSources = std::nullopt,
-                             const bool shutdownDuringOpen = false) {
+[[nodiscard]] int
+runDesktop(int& argc,
+           char** argv,
+           const bool smokeMode,
+           const std::optional<SmokeSources>& smokeSources = std::nullopt,
+           const bool shutdownDuringOpen = false,
+           const std::optional<std::filesystem::path>& stillImage = std::nullopt) {
     dvs::ui::configureGraphicsBackend();
+    if (stillImage.has_value()) {
+        std::ofstream early{
+            std::filesystem::path{std::filesystem::temp_directory_path() / "dvs_still_open.log"}};
+        early << "START " << stillImage->string() << '\n';
+    }
     dvs::ui::DesktopApplication desktop{
         argc,
         argv,
@@ -336,7 +361,7 @@ performanceSurfaceMode(const PerformanceComparisonMode comparisonMode) noexcept 
     };
     std::unique_ptr<dvs::app::StartupRequestBroker> startupBroker;
     dvs::app::StartupRequest startupRequest;
-    if (!smokeMode) {
+    if (!smokeMode && !stillImage.has_value()) {
         const dvs::app::StartupRequestParseResult parsed =
             dvs::app::parseStartupRequest(QCoreApplication::arguments());
         if (!parsed) {
@@ -373,12 +398,31 @@ performanceSurfaceMode(const PerformanceComparisonMode comparisonMode) noexcept 
         }
         return dvs::app::reportFatalStartup("DVS_UI_LOAD_FAILED", smokeMode);
     }
-    if (!smokeMode && !applyStartupRequest(startupRequest, desktop)) {
+    if (!smokeMode && !stillImage.has_value() && !applyStartupRequest(startupRequest, desktop)) {
         runtime->prepareForSceneGraphRelease();
         desktop.releaseSceneGraph();
-        static_cast<void>(runtime->shutdownAfterSceneGraphRelease());
+        if (!runtime->shutdownAfterSceneGraphRelease()) {
+            writeStandardError("DVS_RUNTIME_SHUTDOWN_TIMEOUT\n");
+            std::_Exit(EXIT_FAILURE);
+        }
         return dvs::app::reportFatalStartup("The requested startup action could not be opened.",
                                             false);
+    }
+    if (stillImage.has_value()) {
+        std::ofstream log{
+            std::filesystem::path{std::filesystem::temp_directory_path() / "dvs_still_open.log"},
+            std::ios::app};
+        log << "AFTER_LOAD\n";
+        const bool opened = desktop.openStillImageForAutomation(localFileUrl(*stillImage));
+        log << (opened ? "OK\n" : "FAILED\n") << stillImage->string() << '\n';
+        writeStandardError(opened ? "DVS_STILL_OPEN_OK\n" : "DVS_STILL_OPEN_FAILED\n");
+        if (!opened) {
+            std::cerr << "still=" << stillImage->string() << '\n' << std::flush;
+        }
+        const int exitCode = opened ? EXIT_SUCCESS : EXIT_FAILURE;
+        QTimer::singleShot(opened ? 300 : 0, QCoreApplication::instance(), [&desktop, exitCode] {
+            desktop.exit(exitCode);
+        });
     }
     if (startupBroker) {
         startupBroker->setRequestHandler([&desktop](dvs::app::StartupRequest request) {
@@ -679,7 +723,7 @@ performanceSurfaceMode(const PerformanceComparisonMode comparisonMode) noexcept 
                 if (const std::optional<std::string> detail =
                         desktop.objectStringPropertyForAutomation("frameErrorBannerDetail", "text");
                     !detail.has_value() || detail->find("source-missing") != std::string::npos ||
-                    detail->find("missing or cannot be read") == std::string::npos ||
+                    detail->find("所选源文件不存在或无法读取") == std::string::npos ||
                     desktop.objectStringPropertyForAutomation("frameErrorBanner", "visible") !=
                         std::optional<std::string>{"true"} ||
                     desktop.objectStringPropertyForAutomation("statusOverlay", "visible") !=
@@ -709,6 +753,9 @@ performanceSurfaceMode(const PerformanceComparisonMode comparisonMode) noexcept 
         smokePoll.start();
         smokeTimeout.start();
     }
+
+    // Default-off Phase 0 trace. The sink is drained by the background runtime shutdown work.
+    installPlaybackTrace(*runtime);
 
     int result = desktop.exec();
     smokePoll.stop();
@@ -749,6 +796,14 @@ performanceSurfaceMode(const PerformanceComparisonMode comparisonMode) noexcept 
                           return runtime->attachSurface(surface);
                       })) {
         writeStandardError("DVS_UPGRADE_SETTINGS_UI_LOAD_FAILED\n");
+        if (runtime) {
+            runtime->prepareForSceneGraphRelease();
+            desktop.releaseSceneGraph();
+            if (!runtime->shutdownAfterSceneGraphRelease()) {
+                writeStandardError("DVS_RUNTIME_SHUTDOWN_TIMEOUT\n");
+                std::_Exit(EXIT_FAILURE);
+            }
+        }
         return EXIT_FAILURE;
     }
 
@@ -852,7 +907,7 @@ performanceSurfaceMode(const PerformanceComparisonMode comparisonMode) noexcept 
     desktop.releaseSceneGraph();
     if (!runtime->shutdownAfterSceneGraphRelease()) {
         writeStandardError("DVS_RUNTIME_SHUTDOWN_TIMEOUT\n");
-        return EXIT_FAILURE;
+        std::_Exit(EXIT_FAILURE);
     }
     return result;
 }
@@ -882,8 +937,17 @@ performanceSurfaceMode(const PerformanceComparisonMode comparisonMode) noexcept 
                           return runtime->attachSurface(surface);
                       })) {
         writeStandardError("DVS_PERFORMANCE_UI_LOAD_FAILED\n");
+        if (runtime) {
+            runtime->prepareForSceneGraphRelease();
+            desktop.releaseSceneGraph();
+            if (!runtime->shutdownAfterSceneGraphRelease()) {
+                writeStandardError("DVS_RUNTIME_SHUTDOWN_TIMEOUT\n");
+                std::_Exit(EXIT_FAILURE);
+            }
+        }
         return EXIT_FAILURE;
     }
+    installPlaybackTrace(*runtime);
     enum class Stage {
         WaitingForGraphics,
         WaitingForFirstFrame,
@@ -1023,8 +1087,9 @@ performanceSurfaceMode(const PerformanceComparisonMode comparisonMode) noexcept 
     // Held-forward cadence: deterministic jitter around a 25-35 Hz input rate. Each call advances
     // the deadline by a fresh jittered interval; the first call arms the initial deadline.
     const auto heldStepCadenceMs = [&] {
-        const qint64 jitter = static_cast<qint64>((heldStepIndex * 5U) % (2U * kHeldStepCadenceJitterMs + 1U)) -
-                              kHeldStepCadenceJitterMs;
+        const qint64 jitter =
+            static_cast<qint64>((heldStepIndex * 5U) % (2U * kHeldStepCadenceJitterMs + 1U)) -
+            kHeldStepCadenceJitterMs;
         heldStepNextDeadlineMs = heldStepTimer.elapsed() + kHeldStepCadenceBaseMs + jitter;
     };
     // Compute held-step latency percentiles and provider-statistic deltas for the window.
@@ -1035,30 +1100,35 @@ performanceSurfaceMode(const PerformanceComparisonMode comparisonMode) noexcept 
         }
         const auto& base = *heldStepProviderBaseline;
         const auto& end = *heldStepProviderEnd;
-        metrics.heldStepSequentialRequestCount = end.sequentialRequestCount - base.sequentialRequestCount;
+        metrics.heldStepSequentialRequestCount =
+            end.sequentialRequestCount - base.sequentialRequestCount;
         metrics.heldStepCancelCount = end.cancelCount - base.cancelCount;
         metrics.heldStepDecoderReopenCount = end.decoderReopenCount - base.decoderReopenCount;
         metrics.heldStepGenerationDelta = end.generationDeltaCount - base.generationDeltaCount;
-        const auto accumulateExactSeeks = [](const std::vector<dvs::media::DecoderBackendStatus>& statuses) {
-            return std::accumulate(
-                statuses.begin(), statuses.end(), std::uint64_t{0U},
-                [](const std::uint64_t total, const auto& status) {
-                    return total + status.exactSeekCount;
-                });
-        };
+        const auto accumulateExactSeeks =
+            [](const std::vector<dvs::media::DecoderBackendStatus>& statuses) {
+                return std::accumulate(statuses.begin(),
+                                       statuses.end(),
+                                       std::uint64_t{0U},
+                                       [](const std::uint64_t total, const auto& status) {
+                                           return total + status.exactSeekCount;
+                                       });
+            };
         const std::uint64_t baseExactSeeks = accumulateExactSeeks(heldStepDecoderBaseline);
         const std::uint64_t endExactSeeks = accumulateExactSeeks(heldStepDecoderEnd);
         metrics.heldStepExactSeekDelta = endExactSeeks - baseExactSeeks;
         // Sequential continuations are decodes that did NOT exact-seek. The ratio is the share of
         // held-window decodes served by the sequential cursor, which is exactly the "sequential
         // continuation >= 95%" gate. A healthy held-forward run on a warmed pipeline is ~1.0.
-        const auto accumulateDecodes = [](const std::vector<dvs::media::DecoderBackendStatus>& statuses) {
-            return std::accumulate(
-                statuses.begin(), statuses.end(), std::uint64_t{0U},
-                [](const std::uint64_t total, const auto& status) {
-                    return total + status.completedDecodeCount;
-                });
-        };
+        const auto accumulateDecodes =
+            [](const std::vector<dvs::media::DecoderBackendStatus>& statuses) {
+                return std::accumulate(statuses.begin(),
+                                       statuses.end(),
+                                       std::uint64_t{0U},
+                                       [](const std::uint64_t total, const auto& status) {
+                                           return total + status.completedDecodeCount;
+                                       });
+            };
         const std::uint64_t baseDecodes = accumulateDecodes(heldStepDecoderBaseline);
         const std::uint64_t endDecodes = accumulateDecodes(heldStepDecoderEnd);
         const std::uint64_t windowDecodes = endDecodes - baseDecodes;
@@ -1307,9 +1377,10 @@ performanceSurfaceMode(const PerformanceComparisonMode comparisonMode) noexcept 
                 // Cap the window to the frames remaining past the middle seek target so the run can
                 // never step past the fixture end (which would hard-fail as "held-step-rejected" on
                 // short fixtures). totalFrames() is authoritative only after the seek commits.
-                heldStepSamples = std::min(kHeldStepSamplesMax,
-                    static_cast<std::size_t>(
-                        std::max<qint64>(0, controller.totalFrames() - heldStepSeekTarget - 1)));
+                heldStepSamples =
+                    std::min(kHeldStepSamplesMax,
+                             static_cast<std::size_t>(std::max<qint64>(
+                                 0, controller.totalFrames() - heldStepSeekTarget - 1)));
                 heldStepTimer.start();
                 heldStepCadenceMs();
                 heldStepProviderBaseline = runtime->frameProviderStatistics();
@@ -1320,24 +1391,25 @@ performanceSurfaceMode(const PerformanceComparisonMode comparisonMode) noexcept 
             {
                 const qint64 presented = controller.currentFrame();
                 if (presented != heldStepLastPresentedFrame) {
-                // Count missing intermediate FrameIds. A clean +1 advance is error-free; a jump of
-                // N frames means (N - 1) intermediate FrameIds were skipped. This maps directly to
-                // the "0 missing intermediate FrameIds" gate. A regression (presented <= last) is
-                // also a sequence error (and is separately caught by the canonical-regression gate).
-                if (presented > heldStepLastPresentedFrame) {
-                    heldStepSequenceErrors +=
-                        static_cast<std::uint64_t>(presented - heldStepLastPresentedFrame - 1);
-                } else {
-                    ++heldStepSequenceErrors;
+                    // Count missing intermediate FrameIds. A clean +1 advance is error-free; a jump
+                    // of N frames means (N - 1) intermediate FrameIds were skipped. This maps
+                    // directly to the "0 missing intermediate FrameIds" gate. A regression
+                    // (presented <= last) is also a sequence error (and is separately caught by the
+                    // canonical-regression gate).
+                    if (presented > heldStepLastPresentedFrame) {
+                        heldStepSequenceErrors +=
+                            static_cast<std::uint64_t>(presented - heldStepLastPresentedFrame - 1);
+                    } else {
+                        ++heldStepSequenceErrors;
+                    }
+                    if (!heldStepSubmitTimes.empty()) {
+                        heldStepMilliseconds.push_back(heldStepTimer.elapsed() -
+                                                       heldStepSubmitTimes.front());
+                        heldStepSubmitTimes.pop_front();
+                    }
+                    heldStepLastPresentedFrame = presented;
+                    ++metrics.heldStepPresentedFrames;
                 }
-                if (!heldStepSubmitTimes.empty()) {
-                    heldStepMilliseconds.push_back(heldStepTimer.elapsed() -
-                                                   heldStepSubmitTimes.front());
-                    heldStepSubmitTimes.pop_front();
-                }
-                heldStepLastPresentedFrame = presented;
-                ++metrics.heldStepPresentedFrames;
-            }
             } // end presented-frame detection scope
             if (heldStepIndex >= heldStepSamples) {
                 if (controller.busy()) {
@@ -1363,9 +1435,9 @@ performanceSurfaceMode(const PerformanceComparisonMode comparisonMode) noexcept 
                 return;
             }
             // Paced cadence: never submit while the controller is busy. dispatchNavigation rejects
-            // stepFrames when busy (canNavigate requires !busy), so submitting unconditionally would
-            // fail the run. The cadence deadline sets the minimum interval; the controller's own
-            // pacing sets the effective rate when steps take longer than the cadence.
+            // stepFrames when busy (canNavigate requires !busy), so submitting unconditionally
+            // would fail the run. The cadence deadline sets the minimum interval; the controller's
+            // own pacing sets the effective rate when steps take longer than the cadence.
             if (!controller.busy() && heldStepTimer.elapsed() >= heldStepNextDeadlineMs) {
                 heldStepSubmitTimes.push_back(heldStepTimer.elapsed());
                 if (!controller.stepFrames(1)) {
@@ -1645,6 +1717,7 @@ performanceSurfaceMode(const PerformanceComparisonMode comparisonMode) noexcept 
     writeStandardError("DVS_PERFORMANCE_RESULT " + encodedReport.toStdString() + '\n');
     if (!shutdownCompleted) {
         writeStandardError("DVS_RUNTIME_SHUTDOWN_TIMEOUT\n");
+        std::_Exit(EXIT_FAILURE);
     }
     return result;
 }
@@ -1674,13 +1747,28 @@ struct PopupProbeResult final {
         return result;
     }
     result.captured = true;
+    // Popup.Window preserves the rounded VcsMenu corners as transparent pixels. Exclude only those
+    // four corners so the gate still verifies the top, bottom, left, and right edge centers.
+    constexpr qreal kSafeLogicalCornerExtent = 10.0;
+    const int cornerExtent =
+        static_cast<int>(std::ceil(kSafeLogicalCornerExtent * rgba.devicePixelRatio()));
+    if (cornerExtent <= 0 || rgba.width() <= cornerExtent * 2 ||
+        rgba.height() <= cornerExtent * 2) {
+        result.failureReason = "no-pixels";
+        return result;
+    }
     const int horizontalStep = (std::max)(1, rgba.width() / 48);
     const int verticalStep = (std::max)(1, rgba.height() / 48);
     int minimumAlpha = 255;
     std::uint64_t sampledPixels = 0U;
     for (int y = 0; y < rgba.height(); y += verticalStep) {
         const auto* const row = rgba.constScanLine(y);
+        const bool inVerticalCorner = y < cornerExtent || y >= rgba.height() - cornerExtent;
         for (int x = 0; x < rgba.width(); x += horizontalStep) {
+            const bool inHorizontalCorner = x < cornerExtent || x >= rgba.width() - cornerExtent;
+            if (inVerticalCorner && inHorizontalCorner) {
+                continue;
+            }
             const int offset = x * 4;
             const int alpha = static_cast<int>(row[offset + 3]);
             ++sampledPixels;
@@ -1716,6 +1804,14 @@ struct PopupProbeResult final {
                           return runtime->attachSurface(surface);
                       })) {
         writeStandardError("DVS_POPUP_PIXEL_UI_LOAD_FAILED\n");
+        if (runtime) {
+            runtime->prepareForSceneGraphRelease();
+            desktop.releaseSceneGraph();
+            if (!runtime->shutdownAfterSceneGraphRelease()) {
+                writeStandardError("DVS_RUNTIME_SHUTDOWN_TIMEOUT\n");
+                std::_Exit(EXIT_FAILURE);
+            }
+        }
         return EXIT_FAILURE;
     }
 
@@ -1939,7 +2035,7 @@ struct PopupProbeResult final {
     desktop.releaseSceneGraph();
     if (!runtime->shutdownAfterSceneGraphRelease()) {
         writeStandardError("DVS_RUNTIME_SHUTDOWN_TIMEOUT\n");
-        return EXIT_FAILURE;
+        std::_Exit(EXIT_FAILURE);
     }
     return result;
 }
@@ -1947,8 +2043,45 @@ struct PopupProbeResult final {
 } // namespace
 
 int main(int argc, char* argv[]) {
+    // Qt imageformat plugins may omit PNG/JPEG on this deploy; route still-image open
+    // through FFmpeg so File → Open image… works for common formats.
+    dvs::ui::ImageReviewController::setProcessStillImageLoader([](const QByteArray& bytes,
+                                                                  QImage* image,
+                                                                  std::string* error) {
+        if (bytes.isEmpty() || image == nullptr) {
+            if (error != nullptr) {
+                *error = "Empty image payload.";
+            }
+            return false;
+        }
+        dvs::media::StillImage still;
+        if (!dvs::media::decodeStillImageBytes(
+                reinterpret_cast<const std::uint8_t*>(bytes.constData()),
+                static_cast<std::size_t>(bytes.size()),
+                &still,
+                error)) {
+            return false;
+        }
+        if (still.width <= 0 || still.height <= 0 ||
+            still.rgba.size() != static_cast<std::size_t>(still.width) *
+                                     static_cast<std::size_t>(still.height) * 4U) {
+            if (error != nullptr) {
+                *error = "Decoded image buffer is invalid.";
+            }
+            return false;
+        }
+        const QImage decoded(
+            still.rgba.data(), still.width, still.height, still.width * 4, QImage::Format_RGBA8888);
+        *image = decoded.copy();
+        return !image->isNull();
+    });
+
     const bool smokeArgument = argc >= 2 && std::string_view{argv[1]}.starts_with("--ui-");
     try {
+        if (argc == 3 && std::string_view{argv[1]} == "--open-still") {
+            return runDesktop(
+                argc, argv, false, std::nullopt, false, std::filesystem::path{argv[2]});
+        }
         if (argc == 2 && std::string_view{argv[1]} == "--ui-stderr-smoke") {
             writeStandardError("DVS_GUI_STDERR_OK\n");
             return EXIT_SUCCESS;

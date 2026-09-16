@@ -18,10 +18,6 @@ class GpuFrameResource;
 struct GpuFrameSlot final {
     domain::SourceId sourceId = 0;
     std::shared_ptr<const GpuFrameResource> frame;
-
-    [[nodiscard]] bool isValid() const noexcept {
-        return frame != nullptr;
-    }
 };
 
 // A complete set of GPU frames for one canonical frame position, published atomically. The set

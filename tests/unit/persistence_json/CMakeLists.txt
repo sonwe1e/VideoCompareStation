@@ -10,6 +10,7 @@ target_link_libraries(
     PRIVATE
         dvs_persistence_json
         dvs::test_dependencies
+        dvs::test_support
 )
 target_include_directories(
     dvs_persistence_json_unit_tests

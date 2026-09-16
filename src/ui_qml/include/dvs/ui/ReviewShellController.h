@@ -26,7 +26,6 @@ class ReviewShellController final : public QObject {
     Q_PROPERTY(qulonglong activeGeneration READ activeGeneration NOTIFY stateChanged)
     Q_PROPERTY(int effectiveViewMode READ effectiveViewMode NOTIFY stateChanged)
     Q_PROPERTY(int effectiveDifferenceEdge READ effectiveDifferenceEdge NOTIFY stateChanged)
-    Q_PROPERTY(bool comparisonEdgeAvailable READ comparisonEdgeAvailable NOTIFY stateChanged)
     Q_PROPERTY(int stagedReferenceIndex READ stagedReferenceIndex WRITE setStagedReferenceIndex
                    NOTIFY stateChanged)
     Q_PROPERTY(int queuedIntentCount READ queuedIntentCount NOTIFY stateChanged)
@@ -35,7 +34,6 @@ class ReviewShellController final : public QObject {
     Q_PROPERTY(QStringList activeSourceIdentities READ activeSourceIdentities NOTIFY stateChanged)
     Q_PROPERTY(QString canonicalSourceIdentity READ canonicalSourceIdentity NOTIFY stateChanged)
     Q_PROPERTY(QStringList pendingSourceIdentities READ pendingSourceIdentities NOTIFY stateChanged)
-    Q_PROPERTY(QVariantList pendingSourceIndexes READ pendingSourceIndexes NOTIFY stateChanged)
     Q_PROPERTY(bool chromeVisible READ chromeVisible WRITE setChromeVisible NOTIFY stateChanged)
     Q_PROPERTY(
         bool inspectorVisible READ inspectorVisible WRITE setInspectorVisible NOTIFY stateChanged)
@@ -69,8 +67,7 @@ public:
 
     enum ReviewIntentOrigin {
         UserInterfaceOrigin = 0,
-        DragDropOrigin = 1,
-        StartupOrigin = 2,
+        StartupOrigin = 1,
     };
     Q_ENUM(ReviewIntentOrigin)
 
@@ -106,7 +103,6 @@ public:
     [[nodiscard]] qulonglong activeGeneration() const noexcept;
     [[nodiscard]] int effectiveViewMode() const noexcept;
     [[nodiscard]] int effectiveDifferenceEdge() const noexcept;
-    [[nodiscard]] bool comparisonEdgeAvailable() const noexcept;
     [[nodiscard]] int stagedReferenceIndex() const noexcept;
     [[nodiscard]] int queuedIntentCount() const noexcept;
     [[nodiscard]] QVariantList queuedIntents() const;
@@ -114,7 +110,6 @@ public:
     [[nodiscard]] QStringList activeSourceIdentities() const;
     [[nodiscard]] QString canonicalSourceIdentity() const;
     [[nodiscard]] QStringList pendingSourceIdentities() const;
-    [[nodiscard]] QVariantList pendingSourceIndexes() const;
     [[nodiscard]] bool chromeVisible() const noexcept;
     [[nodiscard]] bool inspectorVisible() const noexcept;
     [[nodiscard]] bool hasPendingAction() const noexcept;
@@ -137,7 +132,6 @@ public:
     Q_INVOKABLE bool openStagedSources(bool preserveDisplayedTime);
     Q_INVOKABLE bool removeActiveSource(int sourceIndex);
     Q_INVOKABLE bool removeActiveSourceByIdentity(const QString& sourceIdentity);
-    Q_INVOKABLE bool changeReference(int sourceIndex);
     Q_INVOKABLE bool changeReferenceByIdentity(const QString& sourceIdentity);
     Q_INVOKABLE bool closeSources();
     Q_INVOKABLE bool cancelQueuedIntent(qulonglong intentId);
@@ -162,7 +156,6 @@ private:
     struct EffectiveComparisonState final {
         int viewMode = 6;
         int differenceEdge = 0;
-        bool edgeAvailable = false;
     };
 
     struct ReviewIntent final {

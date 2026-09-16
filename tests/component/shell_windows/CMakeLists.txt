@@ -14,7 +14,7 @@ target_include_directories(
 )
 target_link_libraries(
     dvs_shell_component_tests
-    PRIVATE dvs::test_dependencies ole32 shell32 shlwapi
+    PRIVATE dvs::test_dependencies dvs::test_support ole32 shell32 shlwapi
 )
 add_dependencies(dvs_shell_component_tests VCStationShell dvs_shell_invoke_probe)
 

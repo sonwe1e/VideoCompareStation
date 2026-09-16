@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cwctype>
+#include <string_view>
 
 namespace dvs::shell {
 namespace {
@@ -15,17 +16,7 @@ constexpr std::array<std::wstring_view, 5U> kSupportedExtensions{
     L".m4v",
 };
 
-} // namespace
-
-bool hasSupportedVideoExtension(const std::filesystem::path& path) {
-    std::wstring extension = path.extension().wstring();
-    for (wchar_t& character : extension) {
-        character = static_cast<wchar_t>(std::towlower(character));
-    }
-    return std::ranges::find(kSupportedExtensions, extension) != kSupportedExtensions.end();
-}
-
-std::wstring quoteWindowsArgument(const std::wstring_view argument) {
+[[nodiscard]] std::wstring quoteWindowsArgument(const std::wstring_view argument) {
     std::wstring quoted;
     quoted.push_back(L'"');
     std::size_t slashes = 0U;
@@ -47,6 +38,16 @@ std::wstring quoteWindowsArgument(const std::wstring_view argument) {
     quoted.append(slashes * 2U, L'\\');
     quoted.push_back(L'"');
     return quoted;
+}
+
+} // namespace
+
+bool hasSupportedVideoExtension(const std::filesystem::path& path) {
+    std::wstring extension = path.extension().wstring();
+    for (wchar_t& character : extension) {
+        character = static_cast<wchar_t>(std::towlower(character));
+    }
+    return std::ranges::find(kSupportedExtensions, extension) != kSupportedExtensions.end();
 }
 
 std::wstring buildReviewCommandLine(const std::filesystem::path& executable,

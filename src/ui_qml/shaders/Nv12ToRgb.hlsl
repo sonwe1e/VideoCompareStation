@@ -27,7 +27,9 @@ cbuffer DifferenceConstants : register(b3) {
     float thresholdPadding : packoffset(c5.w);
     uint sourceRotationA : packoffset(c6.x);
     uint sourceRotationB : packoffset(c6.y);
-    float2 rotationPadding : packoffset(c6.z);
+    // Crossfade blend amount (0 = A, 1 = B). Unused by absolute metrics.
+    float fadeAmount : packoffset(c6.z);
+    float rotationPadding : packoffset(c6.w);
 };
 
 float2 rotateDisplayUv(float2 uv, uint rotation) {
@@ -209,6 +211,20 @@ float4 DifferencePixelShader(
     } else if (differenceMetric == 3U) {
         const float3 difference = differenceGain * channelDifference;
         result = heatmap(max(difference.r, max(difference.g, difference.b)));
+    } else if (differenceMetric == 5U) {
+        // Signed subtract: mid-gray is zero; brighter = A > B, darker = A < B.
+        const float3 signedDifference = differenceGain * (rgbA - rgbB);
+        result = saturate(0.5f.xxx + signedDifference);
+    } else if (differenceMetric == 6U) {
+        // Highlight: keep A and tint regions whose max-channel delta exceeds the threshold.
+        const float peak = differenceGain * max(channelDifference.r,
+                                                 max(channelDifference.g, channelDifference.b));
+        const float strength = saturate(peak);
+        const float3 highlightTint = float3(1.0f, 0.15f, 0.35f);
+        result = lerp(saturate(rgbA), highlightTint, strength);
+    } else if (differenceMetric == 7U) {
+        // Crossfade A↔B using fadeAmount.
+        result = lerp(saturate(rgbA), saturate(rgbB), saturate(fadeAmount));
     } else {
         result = differenceGain * channelDifference;
     }

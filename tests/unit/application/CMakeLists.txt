@@ -7,6 +7,7 @@ add_executable(
     ContractCompileTests.cpp
     ComparisonExactnessTests.cpp
     PlaybackCoordinatorTests.cpp
+    PlaybackTraceTests.cpp
     PrefetchSchedulerTests.cpp
 )
 target_link_libraries(

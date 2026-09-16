@@ -1,5 +1,6 @@
 #include "SoftwareDecoder.h"
 
+#include "dvs/application/PlaybackTrace.h"
 #include "dvs/platform/D3d11DecodedFrameResource.h"
 #include "dvs/platform/FrameResourceFactory.h"
 #include "dvs/platform/GraphicsDeviceBroker.h"
@@ -184,7 +185,6 @@ public:
     platform::Nv12BufferPool bufferPool;
     int streamIndex = -1;
     AVRational timeBase{};
-    std::int64_t startTimestamp = 0;
     std::shared_ptr<const std::vector<std::int64_t>> presentationTimestamps;
     std::optional<domain::FrameId> lastReturnedFrame;
     std::uint64_t exactSeekCount = 0;
@@ -424,7 +424,6 @@ domain::Status SoftwareDecoder::open(const std::atomic<bool>& cancellationReques
     impl_->codec = std::move(openedCodec);
     impl_->streamIndex = selectedStream;
     impl_->timeBase = stream->time_base;
-    impl_->startTimestamp = stream->start_time == AV_NOPTS_VALUE ? 0 : stream->start_time;
     impl_->opened = true;
 
     TimelineIndexCancellationState indexCancellation{
@@ -539,6 +538,11 @@ SoftwareDecoder::decodeInternal(const domain::FrameId frameId,
                 true));
         }
         ++impl_->exactSeekCount;
+        application::PlaybackTrace::instance().record(
+            application::TraceEventKind::DecoderSeek,
+            application::TraceIdentity{
+                .request = domain::RequestId{static_cast<std::uint64_t>(impl_->sourceId)}},
+            static_cast<std::uint64_t>(frameId.value()));
         avcodec_flush_buffers(impl_->codec.get());
         if (impl_->packet != nullptr) {
             av_packet_unref(impl_->packet.get());
@@ -997,7 +1001,6 @@ void SoftwareDecoder::close() noexcept {
     impl_->format.reset();
     impl_->streamIndex = -1;
     impl_->timeBase = AVRational{};
-    impl_->startTimestamp = 0;
     impl_->presentationTimestamps.reset();
     impl_->lastReturnedFrame.reset();
     impl_->exactSeekCount = 0;

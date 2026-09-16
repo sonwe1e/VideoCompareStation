@@ -145,20 +145,12 @@ GpuFrameResource::GpuFrameResource(GpuFrameIdentity identity,
     : identity_(std::move(identity)), geometry_(geometry), colorMetadata_(colorMetadata),
       allocation_(std::move(allocation)), format_(format) {}
 
-const GpuFrameIdentity& GpuFrameResource::identity() const noexcept {
-    return identity_;
-}
-
 const application::FrameRequestContext& GpuFrameResource::context() const noexcept {
     return identity_.context;
 }
 
 const domain::FrameId& GpuFrameResource::frameId() const noexcept {
     return identity_.frameId;
-}
-
-domain::SourceId GpuFrameResource::sourceId() const noexcept {
-    return identity_.sourceId;
 }
 
 const application::FrameGeometry& GpuFrameResource::geometry() const noexcept {

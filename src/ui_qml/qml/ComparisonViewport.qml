@@ -63,6 +63,9 @@ Rectangle {
     property alias surface: dualVideoSurface
     property alias videoOutput: surfaceLayer
     readonly property bool roiEnabled: dualVideoSurface.roiEnabled
+    // The var-typed `surface` alias defeats qmllint's type resolution from other files, so the
+    // drop counter is re-exposed as a plain int computed here where ComparisonSurface resolves.
+    readonly property int droppedFrames: dualVideoSurface.droppedFrames
 
     function clearRoi() {
         dualVideoSurface.clearRoi();
@@ -78,14 +81,14 @@ Rectangle {
 
     function comparisonExactnessLabel(exactness) {
         if (exactness === 0)
-            return qsTr("Pixel-exact");
+            return qsTr("逐像素精确");
         if (exactness === 1)
-            return qsTr("Display-space converted");
+            return qsTr("已做显示空间转换");
         if (exactness === 2)
-            return qsTr("Spatially resampled");
+            return qsTr("已空间重采样");
         if (exactness === 3)
-            return qsTr("Temporally aligned");
-        return qsTr("Unavailable");
+            return qsTr("已时间对齐");
+        return qsTr("不可用");
     }
 
     function surfaceLabelGeometry(index) {
@@ -126,7 +129,7 @@ Rectangle {
             id: dualVideoSurface
 
             objectName: "dualVideoSurface"
-            Accessible.name: qsTr("VCStation synchronized comparison surface")
+            Accessible.name: qsTr("VCStation 同步对比画面")
             viewMode: control.effectiveViewMode
             differenceMetric: control.preferences ? control.preferences.differenceMetric : ComparisonSurface.RgbAbsolute
             differenceGain: control.preferences ? control.preferences.differenceGain : ComparisonSurface.Gain1x
@@ -255,7 +258,7 @@ Rectangle {
                 running: parent.parent.visible
             }
             Text {
-                text: qsTr("Fetching latest frame…")
+                text: qsTr("正在获取最新帧…")
                 color: control.mutedTextColor
                 font.pixelSize: 11
             }
@@ -366,7 +369,7 @@ Rectangle {
                 if (control.differenceMode)
                     parts.push(control.comparisonExactnessLabel(control.selectedDifferenceExactness));
                 if (dualVideoSurface.roiEnabled)
-                    parts.push(qsTr("ROI active"));
+                    parts.push(qsTr("ROI 已启用"));
                 return parts.join(" · ");
             }
             color: control.selectedDifferenceExactness === 0 ? "#86efac" : "#facc15"
@@ -399,7 +402,7 @@ Rectangle {
             Text {
                 width: parent.width
                 horizontalAlignment: Text.AlignHCenter
-                text: qsTr("Difference unavailable")
+                text: qsTr("差异不可用")
                 color: control.primaryTextColor
                 font.pixelSize: 17
                 font.weight: Font.DemiBold
@@ -530,7 +533,7 @@ Rectangle {
         color: "#e6351f2a"
         border.color: "#b9503f4a"
         z: 40
-        Accessible.name: qsTr("Frame unchanged. %1").arg(control.errorDetail)
+        Accessible.name: qsTr("帧未变化。%1").arg(control.errorDetail)
         anchors {
             top: parent.top
             topMargin: alignmentStatus.visible ? alignmentStatus.height + 20 : 12
@@ -546,7 +549,7 @@ Rectangle {
 
             Text {
                 width: parent.width
-                text: qsTr("Frame unchanged")
+                text: qsTr("帧未变化")
                 color: "#ffb4b4"
                 font.pixelSize: 13
                 font.weight: Font.DemiBold
@@ -588,7 +591,7 @@ Rectangle {
                 running: control.busy && control.currentFrame < 0
                 visible: running
                 anchors.horizontalCenter: parent.horizontalCenter
-                Accessible.name: qsTr("Loading")
+                Accessible.name: qsTr("加载中")
             }
 
             Text {

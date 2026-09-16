@@ -7,6 +7,6 @@ Checks: >-
   clang-analyzer-security.*,
   clang-analyzer-unix.*
 WarningsAsErrors: '*'
-HeaderFilterRegex: '(^|.*[\\/])src[\\/](app|application|domain|jobs_ffmpeg|media_ffmpeg|persistence_json|ui_qml)[\\/].*'
+HeaderFilterRegex: '(^|.*[\\/])src[\\/](app|application|domain|jobs_ffmpeg|media_ffmpeg|persistence_json|ui_qml)[\\/](?!third_party[\\/]).*'
 SystemHeaders: false
 ...

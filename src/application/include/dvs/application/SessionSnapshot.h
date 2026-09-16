@@ -53,6 +53,9 @@ struct SessionSnapshot final {
     bool graphicsReady = false;
     domain::SessionState sessionState = domain::SessionState::kEmpty;
     domain::PlaybackState playbackState = domain::PlaybackState::kPaused;
+    // Visual playback rate: 1.0 real time. Published so the view layer can show and restore
+    // the selected speed across pause/play cycles.
+    double playbackSpeed = 1.0;
     std::optional<domain::FrameId> displayedFrame;
     std::optional<domain::FrameId> requestedFrame;
     std::uint64_t canonicalFrameCount = 0;

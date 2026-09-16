@@ -14,6 +14,7 @@ enum class ViewMode : std::uint8_t {
     AnalysisGrid = 4,
     Wipe = 5,
     Single = 6,
+    Fade = 7,
 };
 
 enum class DifferenceMetric : std::uint8_t {
@@ -22,6 +23,9 @@ enum class DifferenceMetric : std::uint8_t {
     Chroma = 2,
     Heatmap = 3,
     ExactPlanes = 4,
+    SignedSubtract = 5,
+    Highlight = 6,
+    Crossfade = 7,
 };
 
 enum class DifferenceGain : std::uint8_t {

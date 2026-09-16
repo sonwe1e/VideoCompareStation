@@ -33,10 +33,8 @@ struct RenderAckRelayStatistics final {
     std::uint64_t itemUpdates = 0U;
     std::uint64_t frameToRenderSamples = 0U;
     std::uint64_t totalFrameToRenderMicroseconds = 0U;
-    std::uint64_t maximumFrameToRenderMicroseconds = 0U;
     std::uint64_t renderToAckSamples = 0U;
     std::uint64_t totalRenderToAckMicroseconds = 0U;
-    std::uint64_t maximumRenderToAckMicroseconds = 0U;
     std::uint64_t frameToAckSamples = 0U;
     std::uint64_t totalFrameToAckMicroseconds = 0U;
     std::uint64_t maximumFrameToAckMicroseconds = 0U;

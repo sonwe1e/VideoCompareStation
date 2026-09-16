@@ -1,3 +1,5 @@
+#include "dvs/test/ScopedTemporaryDirectory.h"
+
 #include "ExplorerCommand.h"
 
 #ifndef NOMINMAX
@@ -205,10 +207,41 @@ private:
     IExplorerCommand* command_ = nullptr;
 };
 
-[[nodiscard]] std::filesystem::path makeFixtureDirectory() {
-    return std::filesystem::temp_directory_path() /
-           (L"VCStationShellSmoke-" + std::to_wstring(GetCurrentProcessId()));
-}
+class ScopedEnvironmentVariable final {
+public:
+    ScopedEnvironmentVariable(const wchar_t* name, const wchar_t* value) : name_(name) {
+        SetLastError(ERROR_SUCCESS);
+        const DWORD required = GetEnvironmentVariableW(name_.c_str(), nullptr, 0U);
+        hadValue_ = required != 0U || GetLastError() != ERROR_ENVVAR_NOT_FOUND;
+        if (required > 0U) {
+            previousValue_.resize(required);
+            const DWORD copied = GetEnvironmentVariableW(
+                name_.c_str(), previousValue_.data(), static_cast<DWORD>(previousValue_.size()));
+            previousValue_.resize(copied);
+        }
+        installed_ = SetEnvironmentVariableW(name_.c_str(), value) != FALSE;
+    }
+
+    ~ScopedEnvironmentVariable() {
+        if (installed_) {
+            static_cast<void>(SetEnvironmentVariableW(
+                name_.c_str(), hadValue_ ? previousValue_.c_str() : nullptr));
+        }
+    }
+
+    ScopedEnvironmentVariable(const ScopedEnvironmentVariable&) = delete;
+    ScopedEnvironmentVariable& operator=(const ScopedEnvironmentVariable&) = delete;
+
+    [[nodiscard]] bool installed() const noexcept {
+        return installed_;
+    }
+
+private:
+    std::wstring name_;
+    std::wstring previousValue_;
+    bool hadValue_ = false;
+    bool installed_ = false;
+};
 
 [[nodiscard]] std::filesystem::path environmentPath(const wchar_t* name) {
     std::wstring value(32768U, L'\0');
@@ -244,8 +277,8 @@ void writeFixture(const std::filesystem::path& path) {
 }
 
 TEST(ExplorerCommandSmokeTests, LoadsRealComServerAndFiltersSelectionCardinality) {
-    const std::filesystem::path directory = makeFixtureDirectory();
-    std::filesystem::create_directories(directory);
+    const dvs::test::ScopedTemporaryDirectory temporaryDirectory{"dvs-shell-smoke"};
+    const std::filesystem::path& directory = temporaryDirectory.path();
     const std::filesystem::path first = directory / L"甲 视频.mp4";
     const std::filesystem::path second = directory / L"乙 视频.MKV";
     const std::filesystem::path unsupported = directory / L"notes.txt";
@@ -268,14 +301,11 @@ TEST(ExplorerCommandSmokeTests, LoadsRealComServerAndFiltersSelectionCardinality
     EXPECT_EQ(stateFor({first, second}), ECS_ENABLED);
     EXPECT_EQ(stateFor({first, second, first}), ECS_ENABLED);
     EXPECT_EQ(stateFor({first, unsupported}), ECS_HIDDEN);
-
-    std::filesystem::remove_all(directory);
 }
 
 TEST(ExplorerCommandSmokeTests, InvokesRealComServerWithUnicodeCompareArguments) {
-    const std::filesystem::path directory = makeFixtureDirectory();
-    std::filesystem::remove_all(directory);
-    std::filesystem::create_directories(directory);
+    const dvs::test::ScopedTemporaryDirectory temporaryDirectory{"dvs-shell-smoke"};
+    const std::filesystem::path& directory = temporaryDirectory.path();
     const std::filesystem::path first = directory / L"甲 视频.mp4";
     const std::filesystem::path second = directory / L"乙 视频.MKV";
     const std::filesystem::path captured = directory / L"captured-arguments.bin";
@@ -287,7 +317,9 @@ TEST(ExplorerCommandSmokeTests, InvokesRealComServerWithUnicodeCompareArguments)
     ASSERT_TRUE(CopyFileW(shellDll.c_str(), copiedDll.c_str(), FALSE));
     ASSERT_TRUE(CopyFileW(
         environmentPath(L"DVS_SHELL_TEST_PROBE_EXE").c_str(), copiedProbe.c_str(), FALSE));
-    ASSERT_TRUE(SetEnvironmentVariableW(L"DVS_SHELL_TEST_CAPTURE_FILE", captured.c_str()));
+    const ScopedEnvironmentVariable captureEnvironment{L"DVS_SHELL_TEST_CAPTURE_FILE",
+                                                       captured.c_str()};
+    ASSERT_TRUE(captureEnvironment.installed());
 
     {
         LoadedExplorerCommand loaded{copiedDll};
@@ -305,9 +337,6 @@ TEST(ExplorerCommandSmokeTests, InvokesRealComServerWithUnicodeCompareArguments)
         EXPECT_EQ(arguments[1], first.wstring());
         EXPECT_EQ(arguments[2], second.wstring());
     }
-
-    SetEnvironmentVariableW(L"DVS_SHELL_TEST_CAPTURE_FILE", nullptr);
-    std::filesystem::remove_all(directory);
 }
 
 } // namespace

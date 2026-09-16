@@ -1,6 +1,7 @@
 #include "dvs/application/PlaybackCoordinator.h"
 
 #include "dvs/application/AlignmentCacheIdentity.h"
+#include "dvs/application/PlaybackTrace.h"
 #include "dvs/application/PrefetchScheduler.h"
 #include "dvs/domain/ComparisonValidator.h"
 
@@ -10,6 +11,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -17,6 +19,7 @@
 #include <filesystem>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -131,6 +134,38 @@ struct CommandIdentityHash final {
                                   const FrameRequestContext& expected) noexcept {
     const auto* const actual = std::get_if<FrameRequestContext>(&context);
     return actual != nullptr && *actual == expected;
+}
+
+[[nodiscard]] std::optional<TraceIncomingIdentity>
+makeIncomingIdentity(const EventContext& context) noexcept {
+    if (const auto* const frame = std::get_if<FrameRequestContext>(&context)) {
+        return TraceIncomingIdentity{
+            .session = frame->playback.request.sessionId,
+            .epoch = frame->playback.request.sessionEpoch,
+            .generation = frame->playback.playbackGeneration,
+            .device = frame->deviceGeneration,
+            .request = frame->playback.request.requestId,
+        };
+    }
+    if (const auto* const playback = std::get_if<PlaybackRequestContext>(&context)) {
+        return TraceIncomingIdentity{
+            .session = playback->request.sessionId,
+            .epoch = playback->request.sessionEpoch,
+            .generation = playback->playbackGeneration,
+            .device = domain::DeviceGeneration{0U},
+            .request = playback->request.requestId,
+        };
+    }
+    if (const auto* const request = std::get_if<RequestContext>(&context)) {
+        return TraceIncomingIdentity{
+            .session = request->sessionId,
+            .epoch = request->sessionEpoch,
+            .generation = domain::PlaybackGeneration{0U},
+            .device = domain::DeviceGeneration{0U},
+            .request = request->requestId,
+        };
+    }
+    return std::nullopt;
 }
 
 // Checked signed 64-bit addition. Returns the sum, or nullopt when a + b would over/underflow
@@ -407,6 +442,11 @@ private:
         domain::FrameId nextMinimum;
         domain::FrameId anchorFrame;
         std::chrono::steady_clock::time_point wallAnchor;
+        // Visual playback rate for this run. The cadence scales wall-clock time by 1/speed:
+        // due(n) = wallAnchor + (timeline(n) - timeline(anchor)) / speed, and the catch-up
+        // projection maps elapsed wall time back through speed. 1.0 keeps the historical
+        // real-time behavior bit-identical because the division is by exactly 1.0.
+        double speed = 1.0;
         std::optional<std::uint64_t> cadenceTimerId;
         std::optional<domain::FrameId> cadenceTarget;
         std::optional<PendingPlaybackFrame> frame;
@@ -415,12 +455,12 @@ private:
         bool pauseRequested = false;
     };
 
-    // A forward step stream: consecutive +1 steps that reuse the provider's Sequential decode path so
-    // a held key presents every intermediate frame without the Exact-seek cancel/generation storm the
-    // old beginStep()->beginSeek() path produced. Deliberately separate from PlaybackRun: realtime
-    // playback may catch up to the wall clock and skip whole FrameSets; interactive stepping must
-    // present every atomic frame and never skip, and it must not inherit PlaybackRun's catch-up,
-    // cadence, or Play/Pause semantics.
+    // A forward step stream: consecutive +1 steps that reuse the provider's Sequential decode path
+    // so a held key presents every intermediate frame without the Exact-seek cancel/generation
+    // storm the old beginStep()->beginSeek() path produced. Deliberately separate from PlaybackRun:
+    // realtime playback may catch up to the wall clock and skip whole FrameSets; interactive
+    // stepping must present every atomic frame and never skip, and it must not inherit
+    // PlaybackRun's catch-up, cadence, or Play/Pause semantics.
     struct PendingInteractiveStep final {
         CommandContext command;
         PendingPlaybackFrame frame;
@@ -437,7 +477,8 @@ private:
         // The successor frame already requested from the renderer but not yet current.
         std::optional<PendingInteractiveStep> preparedFrame;
 
-        // Commands whose targets are beyond the prepared slot, accepted but not yet in the pipeline.
+        // Commands whose targets are beyond the prepared slot, accepted but not yet in the
+        // pipeline.
         std::deque<CommandContext> queuedCommands;
 
         // The newest target the user input has been allowed to request. requestedFrame is projected
@@ -476,6 +517,16 @@ private:
         return value + 1U;
     }
 
+    [[nodiscard]] static domain::TopologyRevision
+    increment(const domain::TopologyRevision value) noexcept {
+        return domain::TopologyRevision{value.value() + 1U};
+    }
+
+    [[nodiscard]] static domain::TimelineRevision
+    increment(const domain::TimelineRevision value) noexcept {
+        return domain::TimelineRevision{value.value() + 1U};
+    }
+
     [[nodiscard]] bool acceptsCommand(const CommandContext& context) const noexcept {
         return context.sessionId == state_.sessionId && context.sessionEpoch == state_.sessionEpoch;
     }
@@ -498,6 +549,32 @@ private:
             .sessionEpoch = state_.sessionEpoch,
             .requestId = domain::RequestId{nextRequestId_++},
         };
+    }
+
+    // Builds the current trace identity from coordinator state. Carries every revision the plan's
+    // OperationIdentity requires (03§4) so a trace observer can detect a stale commit: any event
+    // whose identity revisions differ from the live state was produced against a superseded
+    // topology/timeline/generation and must not have committed.
+    [[nodiscard]] TraceIdentity
+    makeTraceIdentity(std::optional<domain::CommandId> command = {}) const noexcept {
+        return TraceIdentity{
+            .session = state_.sessionId,
+            .epoch = state_.sessionEpoch,
+            .topology = topologyRevision_,
+            .timeline = timelineRevision_,
+            .alignment = domain::AlignmentRevision{state_.alignmentRevision},
+            .generation = state_.playbackGeneration,
+            .device = state_.deviceGeneration,
+            .request = domain::RequestId{0},
+            .command = command,
+        };
+    }
+
+    void emitTrace(TraceEventKind kind,
+                   const TraceIdentity& identity,
+                   std::uint64_t payload = 0U,
+                   std::optional<TraceIncomingIdentity> incoming = std::nullopt) {
+        PlaybackTrace::instance().record(kind, identity, payload, incoming);
     }
 
     [[nodiscard]] PlaybackRequestContext currentPlaybackScope() const noexcept {
@@ -634,6 +711,15 @@ private:
     void publishSnapshot(const bool notify = true) {
         state_.alignmentOffsets = alignmentOffsets_;
         state_.canonicalTimeline = canonicalTimeline_;
+        state_.playbackSpeed =
+            playbackRun_.has_value() ? playbackRun_->speed : pendingPlaybackSpeed_.value_or(1.0);
+        // Snapshot committed: carries the displayed frame as payload so a trace can verify the
+        // frame only advanced after a matching PresentationACK (ACK-before-commit invariant).
+        const std::uint64_t displayed =
+            state_.displayedFrame.has_value()
+                ? static_cast<std::uint64_t>(state_.displayedFrame->value())
+                : UINT64_MAX;
+        emitTrace(TraceEventKind::SnapshotCommitted, makeTraceIdentity(), displayed);
         publication_.publish(state_, sequenceAlignmentMaps_);
         if (notify) {
             notifyStatePublished();
@@ -653,6 +739,9 @@ private:
     void completeCommand(const CommandContext& context,
                          const CommandOutcome outcome,
                          std::optional<domain::MediaError> error = std::nullopt) {
+        emitTrace(TraceEventKind::CommandTerminal,
+                  makeTraceIdentity(context.commandId),
+                  static_cast<std::uint64_t>(outcome));
         publication_.complete(CommandTerminal{
             .context = context,
             .outcome = outcome,
@@ -690,6 +779,9 @@ private:
     void rejectCommand(const CommandContext& context,
                        const CommandOutcome outcome,
                        domain::MediaError error) {
+        emitTrace(TraceEventKind::CommandRejected,
+                  makeTraceIdentity(context.commandId),
+                  static_cast<std::uint64_t>(outcome));
         publishError(error);
         completeCommand(context, outcome, std::move(error));
     }
@@ -843,8 +935,18 @@ private:
         if (!deltaMicroseconds.has_value()) {
             return std::nullopt;
         }
+        // Speed divides the media-time delta: 2x halves the wall time between frames, 0.5x
+        // doubles it. The speed comes from a validated positive ladder, so the scaled delta
+        // stays finite; it is re-clamped into int64 through the checked helper below.
+        const double scaled = static_cast<double>(*deltaMicroseconds) / playbackRun_->speed;
+        if (!std::isfinite(scaled) ||
+            scaled > static_cast<double>(std::numeric_limits<int64_t>::max()) ||
+            scaled < static_cast<double>(std::numeric_limits<int64_t>::min())) {
+            return std::nullopt;
+        }
+        const auto scaledMicroseconds = static_cast<std::int64_t>(scaled);
         return detail::addDuration(playbackRun_->wallAnchor,
-                                   std::chrono::microseconds{*deltaMicroseconds});
+                                   std::chrono::microseconds{scaledMicroseconds});
     }
 
     [[nodiscard]] domain::FrameId
@@ -880,11 +982,22 @@ private:
         }
         const std::int64_t maximum = static_cast<std::int64_t>(frameCount - 1U);
         domain::FrameId frame = run.nextMinimum;
+        // Catch-up scales elapsed wall time by speed before mapping back onto the timeline, the
+        // exact inverse of playbackDue's division: at 2x two media seconds pass per wall second.
+        // Overflow falls back to the final frame rather than accumulating through UB.
+        const double scaledElapsed = static_cast<double>(elapsedMicroseconds) * run.speed;
+        std::int64_t mediaElapsedMicroseconds = 0;
+        if (!std::isfinite(scaledElapsed) ||
+            scaledElapsed > static_cast<double>(std::numeric_limits<int64_t>::max())) {
+            mediaElapsedMicroseconds = std::numeric_limits<std::int64_t>::max();
+        } else {
+            mediaElapsedMicroseconds = static_cast<std::int64_t>(scaledElapsed);
+        }
         // The target media time is built from checked addition. Overflow means the wall clock has
         // advanced far past the media end, so fall back to the final frame rather than accumulate
         // through undefined arithmetic.
         const auto targetMedia =
-            detail::checkedAdd(startAnchor.value().microseconds(), elapsedMicroseconds);
+            detail::checkedAdd(startAnchor.value().microseconds(), mediaElapsedMicroseconds);
         if (targetMedia.has_value()) {
             const auto atOrBefore = domain::canonicalFrameAtOrBefore(
                 *canonicalTimeline_, domain::MediaTime{*targetMedia});
@@ -938,7 +1051,8 @@ private:
                matchesContext(context, interactiveStepRun_->frame->frame.context);
     }
 
-    [[nodiscard]] bool matchesInteractiveStepPreparedFrame(const EventContext& context) const noexcept {
+    [[nodiscard]] bool
+    matchesInteractiveStepPreparedFrame(const EventContext& context) const noexcept {
         return interactiveStepRun_.has_value() && interactiveStepRun_->preparedFrame.has_value() &&
                matchesContext(context, interactiveStepRun_->preparedFrame->frame.context);
     }
@@ -954,8 +1068,7 @@ private:
         };
     }
 
-    [[nodiscard]] PortSubmitResult
-    submitInteractiveStepRequest(PendingPlaybackFrame& frame) {
+    [[nodiscard]] PortSubmitResult submitInteractiveStepRequest(PendingPlaybackFrame& frame) {
         const FrameRequest request{
             .context = frame.context,
             .frameId = frame.expectedFrame,
@@ -1029,12 +1142,16 @@ private:
             RenderPublishResult::Closed) {
             // The render channel closed before it could accept the frame set: a hard render
             // failure, not a normal navigation — surface it via lastError.
-            failInteractiveStepRun(coordinatorError(domain::MediaErrorCode::kMediaDecodeFailed,
-                                                   "The render channel closed before it accepted the "
-                                                   "interactive step frame set."));
+            failInteractiveStepRun(
+                coordinatorError(domain::MediaErrorCode::kMediaDecodeFailed,
+                                 "The render channel closed before it accepted the "
+                                 "interactive step frame set."));
             return;
         }
         frame.framePublished = true;
+        emitTrace(TraceEventKind::RenderPublished,
+                  makeTraceIdentity(),
+                  static_cast<std::uint64_t>(frame.set->canonicalFrameId().value()));
         commitInteractiveStepFrameIfComplete();
     }
 
@@ -1049,10 +1166,10 @@ private:
     }
 
     // Commits the current interactive frame once it has a set, has rendered, the provider has
-    // succeeded, and the render ACK has returned. Advances the pipeline (prepared -> current), binds
-    // the next queued command as the new prepared, and completes the just-presented command. On a
-    // clean drain (no current, no prepared, no queued commands) the stream ends without touching
-    // the generation, leaving the provider's Sequential cursor warm for the next +1.
+    // succeeded, and the render ACK has returned. Advances the pipeline (prepared -> current),
+    // binds the next queued command as the new prepared, and completes the just-presented command.
+    // On a clean drain (no current, no prepared, no queued commands) the stream ends without
+    // touching the generation, leaving the provider's Sequential cursor warm for the next +1.
     void commitInteractiveStepFrameIfComplete() {
         if (!interactiveStepRun_.has_value() || !interactiveStepRun_->frame.has_value()) {
             return;
@@ -1068,9 +1185,9 @@ private:
         const CommandContext command = step.command;
         const domain::FrameId displayedFrame = frame.expectedFrame;
 
-        // Capture the presented sources from the frame being committed BEFORE promoting the prepared
-        // frame into the current slot: the move-assignment below destroys the current frame's
-        // PendingInteractiveStep, which `step`/`frame` reference.
+        // Capture the presented sources from the frame being committed BEFORE promoting the
+        // prepared frame into the current slot: the move-assignment below destroys the current
+        // frame's PendingInteractiveStep, which `step`/`frame` reference.
         std::vector<PresentedSourceState> presentedSources;
         presentedSources.reserve(frame.set->sources().size());
         for (const MappedSourceFrame& source : frame.set->sources()) {
@@ -1095,8 +1212,8 @@ private:
 
         if (interactiveStepRun_->frame.has_value()) {
             // The promoted successor becomes the new current frame: arm its presentation and render
-            // it (its set and provider success already arrived while it was prepared), then top up the
-            // prepared slot from the queue.
+            // it (its set and provider success already arrived while it was prepared), then top up
+            // the prepared slot from the queue.
             if (!armInteractiveStepPresentation(*interactiveStepRun_->frame)) {
                 return;
             }
@@ -1108,7 +1225,8 @@ private:
         }
 
         // No successor became current. If commands are still queued, the prepared slot had been
-        // empty (its request was rejected earlier); submit the next queued target as the current frame.
+        // empty (its request was rejected earlier); submit the next queued target as the current
+        // frame.
         if (!interactiveStepRun_->queuedCommands.empty()) {
             const domain::FrameId target{displayedFrame.value() + 1};
             PendingInteractiveStep next{
@@ -1146,8 +1264,8 @@ private:
 
     // Shared teardown for both cancel and failure: moves the run out, cancels its presentation
     // timers and provider request, and clears the render channel if the current frame was already
-    // published. Returns the moved run (or nullopt when none was engaged) so the caller can complete
-    // its pending commands with the outcome appropriate to the stop reason.
+    // published. Returns the moved run (or nullopt when none was engaged) so the caller can
+    // complete its pending commands with the outcome appropriate to the stop reason.
     [[nodiscard]] std::optional<InteractiveStepRun> teardownInteractiveStepRun() noexcept {
         if (!interactiveStepRun_.has_value()) {
             return std::nullopt;
@@ -1173,14 +1291,14 @@ private:
     }
 
     // Completes every not-yet-presented command of a torn-down run (queued, prepared, current) with
-    // the given outcome and optional error. The current frame's command is completed unconditionally:
-    // commitInteractiveStepFrameIfComplete always reassigns the frame slot right after completing
-    // its command, so a still-current frame.command is guaranteed never to have been completed already —
-    // gating on framePresented would instead drop the command of a frame that was rendered (render ACK)
-    // but whose provider-success event had not yet committed it.
+    // the given outcome and optional error. The current frame's command is completed
+    // unconditionally: commitInteractiveStepFrameIfComplete always reassigns the frame slot right
+    // after completing its command, so a still-current frame.command is guaranteed never to have
+    // been completed already — gating on framePresented would instead drop the command of a frame
+    // that was rendered (render ACK) but whose provider-success event had not yet committed it.
     void completeInteractiveStepCommands(const InteractiveStepRun& stopped,
-                                          const CommandOutcome outcome,
-                                          std::optional<domain::MediaError> error) {
+                                         const CommandOutcome outcome,
+                                         std::optional<domain::MediaError> error) {
         const auto completePending = [this, outcome, &error](const CommandContext& context) {
             completeCommand(context, outcome, error);
         };
@@ -1198,8 +1316,8 @@ private:
     // Cancellation path: a normal navigation event (backward step, seek, play, first/last, source
     // topology/reference/alignment change) or shutdown supersedes the warm Sequential stream. The
     // not-yet-presented step commands are completed as Canceled, or Closed for an orderly shutdown;
-    // lastError is NOT set because nothing went wrong. The generation still advances so any in-flight
-    // Sequential results from this run cannot commit.
+    // lastError is NOT set because nothing went wrong. The generation still advances so any
+    // in-flight Sequential results from this run cannot commit.
     void cancelInteractiveStepRun(const InteractiveStepStopReason reason) {
         const std::optional<InteractiveStepRun> stopped = teardownInteractiveStepRun();
         if (!stopped.has_value()) {
@@ -1234,12 +1352,15 @@ private:
     }
 
     // Begins a fresh interactive forward-step stream for the first +1. Stops any active playback,
-    // supersedes an in-flight exact seek, advances the generation once, and submits the first frame.
+    // supersedes an in-flight exact seek, advances the generation once, and submits the first
+    // frame.
     void beginInteractiveForwardStep(const StepFramesCommand& command) {
         if (!sources_.has_value() || state_.sessionState != domain::SessionState::kReady) {
-            rejectCommand(command.context, CommandOutcome::Failed,
+            rejectCommand(command.context,
+                          CommandOutcome::Failed,
                           coordinatorError(domain::MediaErrorCode::kInvalidArgument,
-                                           "A frame step requires a ready comparison set.", false));
+                                           "A frame step requires a ready comparison set.",
+                                           false));
             return;
         }
         // Note: unlike beginPlay, forward stepping does not gate on graphicsReady. The old step
@@ -1318,11 +1439,15 @@ private:
     }
 
     // Handles a provider terminal for the interactive run's current or prepared frame. A canceled
-    // prepared frame is dropped and its command re-queued so it is submitted later; any failure ends
-    // the run. Returns true if the terminal belonged to the interactive run.
+    // prepared frame is dropped and its command re-queued so it is submitted later; any failure
+    // ends the run. Returns true if the terminal belonged to the interactive run.
     [[nodiscard]] bool handleInteractiveStepTerminal(const RequestTerminal& terminal) {
         const EventContext& terminalContext = std::visit(
             [](const auto& value) -> const EventContext& { return value.context; }, terminal);
+        emitTrace(TraceEventKind::ProviderTerminal,
+                  makeTraceIdentity(),
+                  static_cast<std::uint64_t>(terminal.index()),
+                  makeIncomingIdentity(terminalContext));
         if (matchesInteractiveStepFrame(terminalContext)) {
             if (std::holds_alternative<RequestSucceeded>(terminal)) {
                 interactiveStepRun_->frame->frame.providerSucceeded = true;
@@ -1341,8 +1466,8 @@ private:
             if (std::holds_alternative<RequestSucceeded>(terminal)) {
                 interactiveStepRun_->preparedFrame->frame.providerSucceeded = true;
             } else {
-                // Drop a failed/canceled prepared frame and re-queue its command so it is re-submitted
-                // when the pipeline advances, rather than lost.
+                // Drop a failed/canceled prepared frame and re-queue its command so it is
+                // re-submitted when the pipeline advances, rather than lost.
                 CommandContext dropped = interactiveStepRun_->preparedFrame->command;
                 interactiveStepRun_->preparedFrame.reset();
                 interactiveStepRun_->queuedCommands.push_front(std::move(dropped));
@@ -1551,6 +1676,9 @@ private:
             .nextMinimum = firstTarget,
             .anchorFrame = *state_.displayedFrame,
             .wallAnchor = dependencies_.clock->now(),
+            // A rate chosen while paused overrides the rate carried by the play command, so
+            // setPlaybackRate(2x) followed by play() starts at 2x regardless of defaults.
+            .speed = pendingPlaybackSpeed_.value_or(command.speed),
             .restartFromEnd = restartFromEnd,
         };
         lastPlaybackProjectionAt_ = playbackRun_->wallAnchor;
@@ -1575,6 +1703,37 @@ private:
 
         playbackRun_->pauseRequested = true;
         state_.playbackState = domain::PlaybackState::kPaused;
+        publishSnapshot();
+        completeCommand(command.context, CommandOutcome::Succeeded);
+    }
+
+    // Rate changes take effect immediately during playback by re-anchoring the run on the
+    // current displayed frame: due() and the catch-up projection both derive from
+    // (anchorFrame, wallAnchor, speed), so re-anchoring at `now` keeps the displayed frame
+    // on screen and only rescales the time that elapses after the change. While paused the
+    // rate is remembered and applied by the next PlayCommand.
+    void beginSetPlaybackRate(const SetPlaybackRateCommand& command) {
+        pendingPlaybackSpeed_ = command.speed;
+        if (!playbackRun_.has_value() || !state_.displayedFrame.has_value()) {
+            completeCommand(command.context, CommandOutcome::Succeeded);
+            return;
+        }
+        playbackRun_->speed = command.speed;
+        playbackRun_->anchorFrame = *state_.displayedFrame;
+        playbackRun_->wallAnchor = dependencies_.clock->now();
+        lastPlaybackProjectionAt_.reset();
+        // A frame already in flight keeps its presentation deadline; only the pending cadence
+        // timer is rescheduled so the next request fires at the new rate's due time.
+        if (!playbackRun_->frame.has_value()) {
+            if (playbackRun_->cadenceTimerId.has_value()) {
+                static_cast<void>(
+                    dependencies_.deadlineScheduler->cancel(*playbackRun_->cadenceTimerId));
+                playbackRun_->cadenceTimerId.reset();
+            }
+            if (playbackRun_->cadenceTarget.has_value()) {
+                static_cast<void>(schedulePlaybackTarget(*playbackRun_->cadenceTarget));
+            }
+        }
         publishSnapshot();
         completeCommand(command.context, CommandOutcome::Succeeded);
     }
@@ -1661,6 +1820,8 @@ private:
         }
         state_.sessionEpoch = increment(state_.sessionEpoch);
         state_.playbackGeneration = increment(state_.playbackGeneration);
+        topologyRevision_ = increment(topologyRevision_);
+        timelineRevision_ = increment(timelineRevision_);
         sources_ = std::move(set);
         state_.validatedComparison.reset();
         compatibilityReport_ = std::move(report);
@@ -2504,6 +2665,11 @@ private:
         if (!claimCommand(context)) {
             return;
         }
+        // Record acceptance for every non-duplicate command, before any admission check, so the
+        // trace has exactly one acceptance for every terminal (a clean acceptance<->terminal
+        // bijection that proves command exactly-once). Commands failing admission below still
+        // reach completeCommand and emit exactly one matching CommandTerminal.
+        emitTrace(TraceEventKind::CommandAccepted, makeTraceIdentity(context.commandId));
         if (!acceptsCommand(context)) {
             completeCommand(context,
                             CommandOutcome::Canceled,
@@ -2541,6 +2707,12 @@ private:
             } else {
                 beginPause(std::get<PauseCommand>(command));
             }
+            return;
+        }
+        if (std::holds_alternative<SetPlaybackRateCommand>(command)) {
+            // Rate changes must pass while a playback run is active; beginSetPlaybackRate
+            // re-anchors the cadence instead of disturbing the in-flight frame.
+            beginSetPlaybackRate(std::get<SetPlaybackRateCommand>(command));
             return;
         }
         const bool isOpenCommand = std::holds_alternative<OpenComparisonCommand>(command) ||
@@ -2599,9 +2771,8 @@ private:
         // A forward +1 step extends an active interactive stream (handled in beginStep); any other
         // navigation command is a discontinuity that invalidates the warm Sequential cursor, so the
         // stream is torn down before the new exact navigation proceeds.
-        const bool isForwardStepPlusOne =
-            std::holds_alternative<StepFramesCommand>(command) &&
-            std::get<StepFramesCommand>(command).delta == 1;
+        const bool isForwardStepPlusOne = std::holds_alternative<StepFramesCommand>(command) &&
+                                          std::get<StepFramesCommand>(command).delta == 1;
         if (interactiveStepRun_.has_value() && !isForwardStepPlusOne) {
             // Any non-+1 navigation command (backward step, seek, first/last, play, source
             // topology/reference/alignment change) invalidates the warm Sequential cursor. This is
@@ -2643,6 +2814,9 @@ private:
                     beginPlay(value);
                 } else if constexpr (std::is_same_v<Value, PauseCommand>) {
                     // Pause is handled before the general active-operation admission gate.
+                } else if constexpr (std::is_same_v<Value, SetPlaybackRateCommand>) {
+                    // Rate changes are handled before the general active-operation admission
+                    // gate so they pass while playback runs.
                 } else if constexpr (std::is_same_v<Value, SetAlignmentOffsetsCommand>) {
                     beginSetAlignmentOffsets(value);
                 } else if constexpr (std::is_same_v<Value, EstimateAlignmentCommand>) {
@@ -2804,6 +2978,9 @@ private:
             return;
         }
         frame.framePublished = true;
+        emitTrace(TraceEventKind::RenderPublished,
+                  makeTraceIdentity(),
+                  static_cast<std::uint64_t>(frame.set->canonicalFrameId().value()));
         commitPlaybackFrameIfComplete();
     }
 
@@ -3025,6 +3202,10 @@ private:
     }
 
     void handleFrameSet(const FrameSetReady& ready) {
+        emitTrace(TraceEventKind::FrameSetReady,
+                  makeTraceIdentity(),
+                  static_cast<std::uint64_t>(ready.set.canonicalFrameId().value()),
+                  makeIncomingIdentity(ready.context));
         if (matchesInteractiveStepFrame(ready.context)) {
             PendingPlaybackFrame& frame = interactiveStepRun_->frame->frame;
             if (ready.set.canonicalFrameId() != frame.expectedFrame) {
@@ -3112,6 +3293,9 @@ private:
         }
         pending_->set = ready.set;
         pending_->framePublished = true;
+        emitTrace(TraceEventKind::RenderPublished,
+                  makeTraceIdentity(),
+                  static_cast<std::uint64_t>(ready.set.canonicalFrameId().value()));
         commitPresentedFrameIfComplete();
     }
 
@@ -3541,6 +3725,10 @@ private:
     }
 
     void handleFramePresented(const FrameSetPresented& presented) {
+        emitTrace(TraceEventKind::PresentationAcknowledged,
+                  makeTraceIdentity(),
+                  static_cast<std::uint64_t>(presented.frameId.value()),
+                  makeIncomingIdentity(presented.context));
         if (matchesInteractiveStepFrame(presented.context) &&
             interactiveStepRun_->frame->frame.framePublished &&
             presented.frameId == interactiveStepRun_->frame->frame.expectedFrame) {
@@ -3594,9 +3782,10 @@ private:
             elapsed.context == interactiveStepRun_->frame->frame.context.playback &&
             elapsed.timerId == *interactiveStepRun_->frame->frame.presentationTimerId) {
             // A frame decoded but never presented within the deadline is a presentation failure —
-            // surface it via lastError (plan M1.2: presentation timeout is a failure, not a cancel).
-            failInteractiveStepRun(
-                presentationError("The interactive step frame was not presented within five seconds."));
+            // surface it via lastError (plan M1.2: presentation timeout is a failure, not a
+            // cancel).
+            failInteractiveStepRun(presentationError(
+                "The interactive step frame was not presented within five seconds."));
             return;
         }
         if (!pending_.has_value() || !pending_->frameContext.has_value() ||
@@ -3615,6 +3804,9 @@ private:
         }
         state_.deviceGeneration = ready.context.deviceGeneration;
         state_.graphicsReady = true;
+        emitTrace(TraceEventKind::DeviceGenerationChanged,
+                  makeTraceIdentity(),
+                  static_cast<std::uint64_t>(state_.deviceGeneration.value()));
         if (state_.lastError.has_value() &&
             (state_.lastError->code == domain::MediaErrorCode::kGraphicsUnavailable ||
              state_.lastError->code == domain::MediaErrorCode::kGraphicsDeviceLost)) {
@@ -3792,6 +3984,8 @@ private:
     std::optional<ReadySessionBackup> openRollback_;
     std::optional<PendingProbe> pendingProbe_;
     std::optional<PlaybackRun> playbackRun_;
+    // Rate chosen while paused; applied by the next PlayCommand so play resumes at this speed.
+    std::optional<double> pendingPlaybackSpeed_;
     std::optional<InteractiveStepRun> interactiveStepRun_;
     std::optional<std::chrono::steady_clock::time_point> lastPlaybackProjectionAt_;
     std::optional<std::chrono::steady_clock::time_point> lastInteractiveProjectionAt_;
@@ -3802,6 +3996,13 @@ private:
     std::uint64_t nextRequestId_ = 1U;
     std::uint64_t nextTimerId_ = 1U;
     std::uint64_t nextAnalysisJobId_ = 1U;
+    // Topology/timeline revisions (plan OperationIdentity, 03§4). Topology revision tracks the
+    // loaded source set; timeline revision tracks the canonical timeline. Both are monotonic and
+    // carried on trace events so a trace can prove no stale commit across topology/timeline
+    // changes. They are foundational identity for Phase 1+ but populated here so the Phase 0 trace
+    // is already meaningful across these boundaries.
+    domain::TopologyRevision topologyRevision_{0};
+    domain::TimelineRevision timelineRevision_{0};
     std::unordered_set<CommandIdentity, CommandIdentityHash> seenCommands_;
 
     CoordinatorPublication publication_;

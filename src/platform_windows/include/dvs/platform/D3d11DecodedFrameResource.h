@@ -36,7 +36,6 @@ public:
     [[nodiscard]] domain::DeviceGeneration deviceGeneration() const noexcept;
     [[nodiscard]] application::NormalizedFrameFormat format() const noexcept;
     [[nodiscard]] const domain::ColorMetadata& colorMetadata() const noexcept;
-    [[nodiscard]] const std::shared_ptr<const void>& lifetimeAnchor() const noexcept;
     [[nodiscard]] std::size_t byteCount() const noexcept;
 
 private:

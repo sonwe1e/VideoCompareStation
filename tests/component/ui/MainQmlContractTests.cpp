@@ -3,11 +3,14 @@
 #include "dvs/domain/ComparisonValidator.h"
 #include "dvs/ui/ComparisonSurface.h"
 #include "dvs/ui/GraphicsBackend.h"
+#include "dvs/ui/ImageReviewController.h"
 #include "dvs/ui/ReviewController.h"
+#include "dvs/ui/ReviewImageProvider.h"
 #include "dvs/ui/ReviewPreferencesController.h"
 #include "dvs/ui/ReviewSessionFacade.h"
 #include "dvs/ui/ReviewShellController.h"
 
+#include <QColor>
 #include <QCoreApplication>
 #include <QDir>
 #include <QElapsedTimer>
@@ -313,14 +316,13 @@ TEST(MainQmlContractTests, InstantiatesRootAndSeparatesManualAlignmentStates) {
     ASSERT_NE(anchorButton, nullptr);
     ASSERT_NE(offsetRepeater, nullptr);
     EXPECT_EQ(offsetRepeater->property("count").toInt(), 2);
-    EXPECT_EQ(alignmentModeStatus->property("text").toString(), QStringLiteral("Manual alignment"));
-    EXPECT_EQ(offsetStatus->property("text").toString(), QStringLiteral("Frame alignment offset"));
-    EXPECT_EQ(anchorButton->property("text").toString(), QStringLiteral("Manual anchors active…"));
+    EXPECT_EQ(alignmentModeStatus->property("text").toString(), QStringLiteral("手动对齐"));
+    EXPECT_EQ(offsetStatus->property("text").toString(), QStringLiteral("帧对齐偏移"));
+    EXPECT_EQ(anchorButton->property("text").toString(), QStringLiteral("已设手动锚点…"));
 
     auto* const window = qobject_cast<QQuickWindow*>(root.get());
     ASSERT_NE(window, nullptr);
-    QObject* const inspector =
-        root->findChild<QObject*>(QStringLiteral("advancedAlignmentInspector"));
+    QObject* const inspector = root->findChild<QObject*>(QStringLiteral("manualAnchorDialog"));
     QObject* const tabbedInspector = root->findChild<QObject*>(QStringLiteral("tabbedInspector"));
     auto* const compareBar = root->findChild<QQuickItem*>(QStringLiteral("compareModeBar"));
     auto* const transport = root->findChild<QQuickItem*>(QStringLiteral("transport"));
@@ -532,8 +534,8 @@ TEST(MainQmlContractTests, InstantiatesRootAndSeparatesManualAlignmentStates) {
     EXPECT_TRUE(immersiveHud->property("visible").toBool());
 
     // Left/Right step a single frame in every preset (plan 1.5.md §11.1). Preset 1 (Player) no
-    // longer maps Right to a 5-second jump (5 * 30 = 150 frames) — that violated the ±1 expectation.
-    // Multi-frame jumps in preset 1 remain available via Ctrl+Right (stepSeconds(30)).
+    // longer maps Right to a 5-second jump (5 * 30 = 150 frames) — that violated the ±1
+    // expectation. Multi-frame jumps in preset 1 remain available via Ctrl+Right (stepSeconds(30)).
     preferences.setShortcutPreset(1);
     QCoreApplication::processEvents();
     sendKey(*window, Qt::Key_Right);
@@ -639,15 +641,14 @@ TEST(MainQmlContractTests, InstantiatesRootAndSeparatesManualAlignmentStates) {
     controller.refreshProjection();
     QCoreApplication::processEvents();
 
-    // In multi-source the TabbedInspector exposes all four tabs.
+    // In multi-source the TabbedInspector exposes the Compare/Review/Info tabs.
     shell.setInspectorVisible(true);
     QCoreApplication::processEvents();
     QObject* const inspectorTabBar =
         tabbedInspector->findChild<QObject*>(QStringLiteral("inspectorTabBar"));
     ASSERT_NE(inspectorTabBar, nullptr);
-    EXPECT_EQ(inspectorTabBar->property("count").toInt(), 4);
-    for (const char* const tabName :
-         {"compareTabButton", "alignmentTabButton", "reviewTabButton", "infoTabButton"}) {
+    EXPECT_EQ(inspectorTabBar->property("count").toInt(), 3);
+    for (const char* const tabName : {"compareTabButton", "reviewTabButton", "infoTabButton"}) {
         QObject* const tab = tabbedInspector->findChild<QObject*>(QString::fromLatin1(tabName));
         ASSERT_NE(tab, nullptr);
         EXPECT_TRUE(tab->property("visible").toBool());
@@ -682,25 +683,21 @@ TEST(MainQmlContractTests, InstantiatesRootAndSeparatesManualAlignmentStates) {
     shell.setInspectorVisible(true);
     QCoreApplication::processEvents();
     EXPECT_TRUE(tabbedInspector->property("visible").toBool());
-    EXPECT_EQ(tabbedInspector->property("effectiveTab").toInt(), 2);
+    EXPECT_EQ(tabbedInspector->property("effectiveTab").toInt(), 1);
     EXPECT_TRUE(setInButton->property("visible").toBool());
     EXPECT_TRUE(setOutButton->property("visible").toBool());
 
-    // In single mode the inspector keeps only the Review/Info tabs; Compare/Alignment
-    // tabs hide and the Review-tab range actions remain reachable.
+    // In single mode the inspector keeps only the Review/Info tabs; the Compare tab hides and
+    // the Review-tab range actions remain reachable.
     QObject* const compareTab =
         tabbedInspector->findChild<QObject*>(QStringLiteral("compareTabButton"));
-    QObject* const alignmentTab =
-        tabbedInspector->findChild<QObject*>(QStringLiteral("alignmentTabButton"));
     QObject* const reviewTab =
         tabbedInspector->findChild<QObject*>(QStringLiteral("reviewTabButton"));
     QObject* const infoTab = tabbedInspector->findChild<QObject*>(QStringLiteral("infoTabButton"));
     ASSERT_NE(compareTab, nullptr);
-    ASSERT_NE(alignmentTab, nullptr);
     ASSERT_NE(reviewTab, nullptr);
     ASSERT_NE(infoTab, nullptr);
     EXPECT_FALSE(compareTab->property("visible").toBool());
-    EXPECT_FALSE(alignmentTab->property("visible").toBool());
     EXPECT_TRUE(reviewTab->property("visible").toBool());
     EXPECT_TRUE(infoTab->property("visible").toBool());
     EXPECT_TRUE(loopRangeButton->property("visible").toBool());
@@ -826,9 +823,8 @@ TEST(MainQmlContractTests, DockedTransportResolvesContextuallyAndClearsViewport)
         EXPECT_FALSE(transportRect.intersects(viewportRect))
             << "docked transport must not intersect viewport (transport=" << transportRect.x()
             << "," << transportRect.y() << " " << transportRect.width() << "x"
-            << transportRect.height() << " viewport=" << viewportRect.x() << ","
-            << viewportRect.y() << " " << viewportRect.width() << "x" << viewportRect.height()
-            << ")";
+            << transportRect.height() << " viewport=" << viewportRect.x() << "," << viewportRect.y()
+            << " " << viewportRect.width() << "x" << viewportRect.height() << ")";
         EXPECT_GE(transportRect.top(), viewportRect.bottom() - 1.0)
             << "docked transport top must be at/under viewport bottom";
     }
@@ -856,11 +852,10 @@ TEST(MainQmlContractTests, DockedTransportResolvesContextuallyAndClearsViewport)
         const QRectF transportRect = rectInContent(transport);
         const QRectF viewportRect = rectInContent(viewport);
         EXPECT_TRUE(transportRect.intersects(viewportRect))
-            << "overlay transport must intersect viewport (transport=" << transportRect.x()
-            << "," << transportRect.y() << " " << transportRect.width() << "x"
-            << transportRect.height() << " viewport=" << viewportRect.x() << ","
-            << viewportRect.y() << " " << viewportRect.width() << "x" << viewportRect.height()
-            << ")";
+            << "overlay transport must intersect viewport (transport=" << transportRect.x() << ","
+            << transportRect.y() << " " << transportRect.width() << "x" << transportRect.height()
+            << " viewport=" << viewportRect.x() << "," << viewportRect.y() << " "
+            << viewportRect.width() << "x" << viewportRect.height() << ")";
     }
 
     // --- Empty: transport hidden and its controls disabled. ---
@@ -1114,6 +1109,8 @@ TEST(MainQmlContractTests, DrawerScrimTransportShrinkAndEscClose) {
     auto* const viewportItem =
         root->findChild<QQuickItem*>(QStringLiteral("mediaViewportFocusTarget"));
     ASSERT_NE(viewportItem, nullptr);
+    QQuickItem* const layoutRoot = inspectorItem->parentItem();
+    ASSERT_NE(layoutRoot, nullptr);
 
     const auto processLayout = [] {
         for (int iteration = 0; iteration < 5; ++iteration) {
@@ -1121,7 +1118,8 @@ TEST(MainQmlContractTests, DrawerScrimTransportShrinkAndEscClose) {
         }
     };
 
-    // Geometry matrix: four sizes x inspector open/closed.
+    // Keep the geometry matrix hidden so small Windows desktops do not clamp the requested
+    // logical size. The exposed 960x640 pixel and keyboard checks remain below.
     struct GeometryCase {
         int width;
         int height;
@@ -1135,12 +1133,17 @@ TEST(MainQmlContractTests, DrawerScrimTransportShrinkAndEscClose) {
 
     for (const auto& size : kSizes) {
         window->resize(size.width, size.height);
-        window->show();
         processLayout();
+        const auto restoreHiddenContentSize = [&] {
+            layoutRoot->setSize(
+                QSizeF{static_cast<qreal>(size.width), static_cast<qreal>(size.height)});
+        };
+        restoreHiddenContentSize();
 
         // --- Inspector closed ---
         shell.setInspectorVisible(false);
         processLayout();
+        restoreHiddenContentSize();
 
         EXPECT_FALSE(scrim->property("visible").toBool())
             << size.width << "x" << size.height << " scrim hidden when inspector closed";
@@ -1148,7 +1151,7 @@ TEST(MainQmlContractTests, DrawerScrimTransportShrinkAndEscClose) {
         // Transport spans approximately the full viewport width.
         const QPointF transportRightClosed =
             transportItem->mapToItem(window->contentItem(), QPointF{transportItem->width(), 0.0});
-        const double contentWidth = window->contentItem()->width();
+        const double contentWidth = layoutRoot->width();
         const double closedViewportWidth = viewportItem->width();
         // Allow a small margin for chrome margins.
         EXPECT_GE(transportRightClosed.x(), contentWidth * 0.85)
@@ -1159,6 +1162,7 @@ TEST(MainQmlContractTests, DrawerScrimTransportShrinkAndEscClose) {
         // --- Inspector open ---
         shell.setInspectorVisible(true);
         processLayout();
+        restoreHiddenContentSize();
 
         const bool isDrawer = size.width < 1120;
 
@@ -1583,6 +1587,331 @@ TEST(MainQmlContractTests, NestedPopupMouseTraversal) {
         QMetaObject::invokeMethod(layoutMenu, "close");
     }
     processLayout();
+}
+
+// Phase 0 baseline: the Range Loop must never present a frame outside [In,Out]. Today the loop is
+// driven by Main.qml::onCurrentFrameChanged reacting to displayedFrame, with no kernel Range clamp,
+// so after a >2000ms stall catch-up can present Out+Δ before QML seeks back. This QML-level test
+// sets a range, drives playback forward, and asserts the presented frame never exceeds Out.
+// Expected to FAIL/present-out-of-bounds on current code; passes after Phase 3's native Range Loop.
+TEST(MainQmlContractTests, DISABLED_RangeLoopNeverPresentsOutsideInclusiveRange) {
+    auto snapshot = std::make_shared<application::SessionSnapshot>();
+    snapshot->graphicsReady = true;
+    snapshot->sessionState = domain::SessionState::kReady;
+    snapshot->playbackState = domain::PlaybackState::kPlaying;
+    snapshot->displayedFrame = domain::FrameId{0};
+    snapshot->canonicalFrameCount = 30U;
+    snapshot->sources = {
+        application::SessionSourceView{.sourceId = 0U, .displayName = "A"},
+    };
+    snapshot->presentedSources = {
+        application::PresentedSourceState{
+            .sourceId = 0U,
+            .sourceFrameId = domain::FrameId{0},
+            .matchKind = application::FrameMatchKind::ExactIndex,
+        },
+    };
+    std::vector<application::PlaybackCommand> submitted;
+    std::vector<application::CommandTerminal> terminals;
+    ReviewController controller{ReviewController::Dependencies{
+        .submit =
+            [&submitted](application::PlaybackCommand command) {
+                submitted.push_back(std::move(command));
+                return application::PortSubmitResult::Accepted;
+            },
+        .snapshot = [snapshot] { return snapshot; },
+        .takeCompletedCommands =
+            [&terminals] {
+                std::vector<application::CommandTerminal> result = std::move(terminals);
+                terminals.clear();
+                return result;
+            },
+    }};
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    ReviewShellController shell{controller, preferences};
+    ReviewSessionFacade facade{controller, preferences, shell};
+
+    QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
+    QQmlComponent component{&engine, QUrl{QUrl{QStringLiteral("qrc:/qml/Main.qml")}}};
+    ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
+    std::unique_ptr<QObject> root{component.create()};
+    ASSERT_NE(root, nullptr) << componentErrors(component);
+    auto* const window = qobject_cast<QQuickWindow*>(root.get());
+    ASSERT_NE(window, nullptr);
+    QCoreApplication::processEvents();
+
+    // Establish range [3, 8] and activate range playback.
+    ASSERT_TRUE(QMetaObject::invokeMethod(root.get(), "setInPoint"));
+    // setInPoint uses current frame; set Out beyond it via the shell directly for determinism.
+    EXPECT_TRUE(shell.setRangeIn(3, controller.mediaTimeForFrame(3)));
+    EXPECT_TRUE(shell.setRangeOut(8, controller.mediaTimeForFrame(8)));
+    EXPECT_TRUE(shell.setRangePlaybackState(true, false));
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(shell.rangePlaybackActive());
+    EXPECT_EQ(shell.inFrame(), 3);
+    EXPECT_EQ(shell.outFrame(), 8);
+
+    // Drive playback forward past Out. Today onCurrentFrameChanged seeks back to In when the
+    // presented frame reaches Out; it must never present Out+1. We advance displayedFrame in the
+    // snapshot (simulating presentation) and let the QML handler react.
+    auto advanceTo = [&](std::int64_t frame) {
+        snapshot->displayedFrame = domain::FrameId{frame};
+        controller.refreshProjection();
+        for (int i = 0; i < 5; ++i) {
+            QCoreApplication::processEvents();
+        }
+    };
+    bool presentedOutsideRange = false;
+    for (std::int64_t frame = 3; frame <= 12; ++frame) {
+        advanceTo(frame);
+        const std::int64_t presented = controller.currentFrame();
+        if (presented < shell.inFrame() || presented > shell.outFrame()) {
+            presentedOutsideRange = true;
+            break;
+        }
+        if (!shell.rangePlaybackActive()) {
+            break;
+        }
+    }
+    EXPECT_FALSE(presentedOutsideRange)
+        << "Range loop presented a frame outside [In,Out] (no kernel Range clamp today).";
+    shell.clearRange();
+}
+
+// Phase 0 baseline: rapid scrubbing (fast successive seeks) must be latest-wins and must not spawn
+// a generation storm (one generation increment per pointer event). Today each seek is an Exact that
+// advances the generation; the plan's Scrub workflow (Phase 4) must coalesce. This test submits
+// rapid seeks and asserts the latest target wins and generation growth is bounded. Expected to show
+// unbounded generation growth today; bounded after Phase 4.
+TEST(MainQmlContractTests, DISABLED_ScrubLatestWinsWithoutGenerationStorm) {
+    auto snapshot = std::make_shared<application::SessionSnapshot>();
+    snapshot->graphicsReady = true;
+    snapshot->sessionState = domain::SessionState::kReady;
+    snapshot->playbackState = domain::PlaybackState::kPaused;
+    snapshot->displayedFrame = domain::FrameId{0};
+    snapshot->canonicalFrameCount = 60U;
+    snapshot->sources = {
+        application::SessionSourceView{.sourceId = 0U, .displayName = "A"},
+    };
+    std::vector<application::PlaybackCommand> submitted;
+    ReviewController controller{ReviewController::Dependencies{
+        .submit =
+            [&submitted](application::PlaybackCommand command) {
+                submitted.push_back(std::move(command));
+                return application::PortSubmitResult::Accepted;
+            },
+        .snapshot = [snapshot] { return snapshot; },
+        .takeCompletedCommands = [] { return std::vector<application::CommandTerminal>{}; },
+    }};
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    ReviewShellController shell{controller, preferences};
+
+    // Rapid scrub: submit many seeks to random targets as fast as possible.
+    constexpr int scrubCount = 20;
+    for (int i = 0; i < scrubCount; ++i) {
+        const std::int64_t target = (i * 3) % 60;
+        EXPECT_TRUE(controller.seekFrame(target));
+    }
+    // Latest-wins: the most recent seek must be the last submitted target.
+    ASSERT_FALSE(submitted.empty());
+    const auto* const lastSeek = std::get_if<application::SeekFrameCommand>(&submitted.back());
+    ASSERT_NE(lastSeek, nullptr);
+    EXPECT_EQ(lastSeek->frameId.value(), (scrubCount - 1) * 3 % 60);
+    // Generation storm check: count distinct SeekFrameCommands submitted (today one per pointer
+    // event; the plan's scrub coalescing must reduce this). Document the baseline count.
+    std::size_t seekCommands = 0;
+    for (const auto& command : submitted) {
+        if (std::holds_alternative<application::SeekFrameCommand>(command)) {
+            ++seekCommands;
+        }
+    }
+    EXPECT_EQ(seekCommands, static_cast<std::size_t>(scrubCount))
+        << "Today each scrub seek submits a separate Exact seek (baseline for Phase 4 coalescing).";
+}
+
+// Phase 0 baseline: the Wipe handle must be keyboard-operable (Accessible role Slider + cursor
+// keys) for accessibility. Today WipeHandle.qml has no activeFocusOnTab / Accessible.role / value /
+// cursor keys. This test asserts the handle exposes a Slider role and is keyboard-adjustable.
+// Expected to FAIL on current code; passes after Phase 4 a11y work.
+TEST(MainQmlContractTests, DISABLED_WipeHandleIsKeyboardAdjustable) {
+    auto snapshot = std::make_shared<application::SessionSnapshot>();
+    snapshot->graphicsReady = true;
+    snapshot->sessionState = domain::SessionState::kReady;
+    snapshot->playbackState = domain::PlaybackState::kPaused;
+    snapshot->displayedFrame = domain::FrameId{0};
+    snapshot->canonicalFrameCount = 10U;
+    snapshot->sources = {
+        application::SessionSourceView{
+            .sourceId = 0U, .role = domain::ComparisonRole::kReference, .displayName = "A"},
+        application::SessionSourceView{
+            .sourceId = 1U, .role = domain::ComparisonRole::kPrediction, .displayName = "B"},
+    };
+    ReviewController controller{ReviewController::Dependencies{
+        .submit =
+            [](application::PlaybackCommand) { return application::PortSubmitResult::Accepted; },
+        .snapshot = [snapshot] { return snapshot; },
+        .takeCompletedCommands = [] { return std::vector<application::CommandTerminal>{}; },
+    }};
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    preferences.setViewMode(ReviewPreferencesController::ViewMode::Wipe);
+    ReviewShellController shell{controller, preferences};
+    ReviewSessionFacade facade{controller, preferences, shell};
+
+    QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
+    QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
+    ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
+    std::unique_ptr<QObject> root{component.create()};
+    ASSERT_NE(root, nullptr) << componentErrors(component);
+    auto* const window = qobject_cast<QQuickWindow*>(root.get());
+    ASSERT_NE(window, nullptr);
+    QCoreApplication::processEvents();
+
+    QObject* const wipeHandle = root->findChild<QObject*>(QStringLiteral("wipeHandle"));
+    ASSERT_NE(wipeHandle, nullptr);
+    // Accessible.role must be Slider (value 8) for a adjustable split control.
+    EXPECT_EQ(wipeHandle->property("Accessible.role").toInt(), 8)
+        << "Wipe handle must expose Accessible.Slider (value 8).";
+    EXPECT_TRUE(wipeHandle->property("activeFocusOnTab").toBool())
+        << "Wipe handle must be tab-focusable.";
+}
+
+// Phase 0 baseline: the Timeline must expose an Accessible.value matching the preview or current
+// frame so screen-reader users know the position. Today TimelineTracks.qml has Accessible.role/
+// name but no value/keyboard. This test asserts the timeline's accessible value reflects the frame.
+// Expected to FAIL on current code; passes after Phase 4 a11y work.
+TEST(MainQmlContractTests, DISABLED_TimelineAccessibleValueMatchesPreviewOrCurrentFrame) {
+    auto snapshot = std::make_shared<application::SessionSnapshot>();
+    snapshot->graphicsReady = true;
+    snapshot->sessionState = domain::SessionState::kReady;
+    snapshot->playbackState = domain::PlaybackState::kPaused;
+    snapshot->displayedFrame = domain::FrameId{5};
+    snapshot->canonicalFrameCount = 30U;
+    snapshot->sources = {
+        application::SessionSourceView{.sourceId = 0U, .displayName = "A"},
+    };
+    ReviewController controller{ReviewController::Dependencies{
+        .submit =
+            [](application::PlaybackCommand) { return application::PortSubmitResult::Accepted; },
+        .snapshot = [snapshot] { return snapshot; },
+        .takeCompletedCommands = [] { return std::vector<application::CommandTerminal>{}; },
+    }};
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    ReviewShellController shell{controller, preferences};
+    ReviewSessionFacade facade{controller, preferences, shell};
+
+    QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
+    QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
+    ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
+    std::unique_ptr<QObject> root{component.create()};
+    ASSERT_NE(root, nullptr) << componentErrors(component);
+    auto* const window = qobject_cast<QQuickWindow*>(root.get());
+    ASSERT_NE(window, nullptr);
+    QCoreApplication::processEvents();
+
+    QObject* const timeline = root->findChild<QObject*>(QStringLiteral("timelineSlider"));
+    ASSERT_NE(timeline, nullptr);
+    EXPECT_EQ(timeline->property("Accessible.role").toInt(), 8)
+        << "Timeline must expose Accessible.Slider (value 8).";
+    // Accessible.value must reflect the current/preview frame (here 5).
+    EXPECT_EQ(timeline->property("Accessible.value").toInt(), controller.currentFrame())
+        << "Timeline Accessible.value must match the current frame.";
+}
+
+TEST(MainQmlContractTests, ImageWorkspaceReloadsViewportSourceAfterImageOpen) {
+    // Regression: ImageWorkspace binds viewport.imageUrl to imageReview.imageUrl(slot),
+    // a Q_INVOKABLE whose result depends on the controller's content generation. The
+    // binding must also read a notified property (contentGeneration), otherwise it is
+    // evaluated once at startup and the Image element keeps a stale, generation-0 URL —
+    // its first provider request returned null (image not loaded yet) and it never
+    // reloads, leaving the viewport permanently black after opening an image.
+    auto snapshot = std::make_shared<application::SessionSnapshot>();
+    snapshot->graphicsReady = true;
+    snapshot->sessionState = domain::SessionState::kEmpty;
+    std::vector<application::PlaybackCommand> submitted;
+    std::vector<application::CommandTerminal> terminals;
+    ReviewController controller{
+        ReviewController::Dependencies{
+            .submit =
+                [&submitted](application::PlaybackCommand command) {
+                    submitted.push_back(std::move(command));
+                    return application::PortSubmitResult::Accepted;
+                },
+            .snapshot = [snapshot] { return snapshot; },
+            .takeCompletedCommands =
+                [&terminals] {
+                    std::vector<application::CommandTerminal> result = std::move(terminals);
+                    terminals.clear();
+                    return result;
+                },
+        },
+    };
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    ReviewShellController shell{controller, preferences};
+    ReviewSessionFacade facade{controller, preferences, shell};
+    ImageReviewController imageReview;
+
+    QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
+    engine.rootContext()->setContextProperty(QStringLiteral("imageReview"), &imageReview);
+    engine.addImageProvider(QStringLiteral("vcs-review"), new ReviewImageProvider(&imageReview));
+    QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
+    ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
+
+    std::unique_ptr<QObject> root{component.create()};
+    ASSERT_NE(root, nullptr) << componentErrors(component);
+    auto* const window = qobject_cast<QQuickWindow*>(root.get());
+    ASSERT_NE(window, nullptr);
+    window->resize(960, 640);
+    QCoreApplication::processEvents();
+
+    auto* const viewport = root->findChild<QQuickItem*>(QStringLiteral("primaryViewport"));
+    auto* const imageItem = root->findChild<QQuickItem*>(QStringLiteral("imageViewport-2"));
+    ASSERT_NE(viewport, nullptr);
+    ASSERT_NE(imageItem, nullptr);
+
+    // Before any image is loaded the binding holds the generation-0 URL and the Image
+    // element received a null pixmap from the provider.
+    EXPECT_EQ(viewport->property("imageUrl").toString(), QStringLiteral("image://vcs-review/2/0"));
+    EXPECT_EQ(imageItem->property("source").toString(), QStringLiteral("image://vcs-review/2/0"));
+
+    QImage image(64, 48, QImage::Format_ARGB32);
+    image.fill(QColor(200, 30, 30));
+    ASSERT_TRUE(imageReview.openPrimaryImage(std::move(image), QStringLiteral("left")));
+    for (int iteration = 0; iteration < 5; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+
+    // The binding must re-evaluate (generation 0 -> 1) so the Image element reloads the
+    // provider and actually paints the decoded pixels instead of staying black.
+    EXPECT_EQ(viewport->property("imageUrl").toString(), QStringLiteral("image://vcs-review/2/1"));
+    EXPECT_EQ(imageItem->property("source").toString(), QStringLiteral("image://vcs-review/2/1"));
+    // 1 == QQuickImage::Ready.
+    EXPECT_EQ(imageItem->property("status").toInt(), 1)
+        << "Image element must reach Ready after the source URL refreshes.";
+    EXPECT_EQ(imageItem->property("sourceSize").toSize(), QSize(64, 48));
 }
 
 } // namespace

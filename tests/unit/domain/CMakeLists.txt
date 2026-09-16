@@ -4,8 +4,8 @@ add_executable(
     dvs_domain_unit_tests
     ComparisonValidatorTests.cpp
     FrameTimelineTests.cpp
-     FrameTimelineCanonicalContractTests.cpp
-     VfrMediaDescriptorConsistencyTests.cpp
+    FrameTimelineCanonicalContractTests.cpp
+    VfrMediaDescriptorConsistencyTests.cpp
     MediaDescriptorAndErrorTests.cpp
     ModuleNameTests.cpp
     RationalRateTests.cpp

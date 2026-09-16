@@ -1,5 +1,6 @@
 #include "SourceDecodeActor.h"
 
+#include "dvs/application/PlaybackTrace.h"
 #include "dvs/domain/MediaError.h"
 
 #ifndef NOMINMAX
@@ -465,6 +466,17 @@ void SourceDecodeActor::run() noexcept {
                 std::scoped_lock lock{mutex_};
                 ++cacheHitCount_;
                 backendStatus_.cacheHitCount = cacheHitCount_;
+            }
+            if (decode->request.context.has_value()) {
+                const auto& request = decode->request.context->playback.request;
+                application::PlaybackTrace::instance().record(
+                    application::TraceEventKind::CacheHit,
+                    application::TraceIdentity{
+                        .session = request.sessionId,
+                        .epoch = request.sessionEpoch,
+                        .request = request.requestId,
+                    },
+                    static_cast<std::uint64_t>(cacheKey_.sourceFrame.value()));
             }
             const SourceDecodeRequest readAheadRequest = decode->request;
             const std::size_t frameBytes = cached->handle.accountedBytes();

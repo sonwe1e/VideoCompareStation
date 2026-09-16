@@ -26,10 +26,18 @@ struct LastFrameCommand final {
 
 struct PlayCommand final {
     CommandContext context;
+    // Visual playback rate. 1.0 is real time; the UI exposes a fixed ladder so the
+    // coordinator can keep its checked timeline arithmetic on integer microseconds.
+    double speed = 1.0;
 };
 
 struct PauseCommand final {
     CommandContext context;
+};
+
+struct SetPlaybackRateCommand final {
+    CommandContext context;
+    double speed = 1.0;
 };
 
 } // namespace dvs::application

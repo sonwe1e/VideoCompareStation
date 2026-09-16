@@ -1,7 +1,7 @@
 name: Hardware and Performance
 
 # Kept separate from Build and Test on purpose: these suites need a GPU-equipped,
-# interactively logged-in self-hosted runner and six external performance fixtures. It includes
+# interactively logged-in self-hosted runner and external performance fixtures. It includes
 # actual Wipe/Diff pixel captures before the source-count performance profiles.
 # They run on demand instead of accepting pull-request code on the workstation.
 
@@ -89,6 +89,8 @@ jobs:
           $required = @(
             'gate-1080p60-a.mp4',
             'gate-1080p60-b.mp4',
+            'gate-1080p60-diff-b.mp4',
+            'gate-1080p60-diff-b.contract.json',
             'gate-1080p60-c.mp4',
             'gate-1080p60-rot90-a.mp4',
             'gate-1080p120-a.mp4',
@@ -101,18 +103,18 @@ jobs:
               throw "Missing performance fixture: $path"
             }
           }
-          .\tools\test-hardware-runner.ps1 -MinimumRefreshRate 120
+          .\tools\testing\test-hardware-runner.ps1 -MinimumRefreshRate 120
 
       - name: Configure
         shell: powershell
         run: >-
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 cmake
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake
           --preset release --fresh
 
       - name: Build
         shell: powershell
         run: >-
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 cmake
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake
           --build --preset release
 
       - name: D3D11VA, zero-copy, and comparison pixel tests
@@ -120,7 +122,7 @@ jobs:
         env:
           DVS_EXECUTION_RESOURCE_PROFILE: Interactive
         run: >-
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 ctest
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest
           --preset hardware-d3d11 --output-on-failure
 
       - name: Release-blocking performance gates
@@ -128,7 +130,7 @@ jobs:
         env:
           DVS_EXECUTION_RESOURCE_PROFILE: Interactive
         run: >-
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 ctest
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest
           --preset performance-d3d11 --output-on-failure
 
       - name: Collect performance logs

@@ -328,7 +328,8 @@ ComparisonSurface::ViewMode ComparisonSurface::viewMode() const noexcept {
 
 void ComparisonSurface::setViewMode(const ViewMode value) {
     if ((value != SideBySide && value != ThreeUp && value != ReferenceFocus &&
-         value != Difference && value != AnalysisGrid && value != Wipe && value != Single) ||
+         value != Difference && value != AnalysisGrid && value != Wipe && value != Single &&
+         value != Fade) ||
         viewMode_ == value) {
         return;
     }
@@ -344,7 +345,8 @@ ComparisonSurface::DifferenceMetric ComparisonSurface::differenceMetric() const 
 
 void ComparisonSurface::setDifferenceMetric(const DifferenceMetric value) {
     if ((value != RgbAbsolute && value != Luma && value != Chroma && value != Heatmap &&
-         value != ExactPlanes) ||
+         value != ExactPlanes && value != SignedSubtract && value != Highlight &&
+         value != Crossfade) ||
         differenceMetric_ == value) {
         return;
     }
@@ -813,7 +815,8 @@ bool ComparisonSurface::attachRendererServices(
     std::shared_ptr<platform::GraphicsDeviceBroker> deviceBroker,
     std::shared_ptr<platform::FrameMailbox> frameMailbox,
     std::shared_ptr<platform::PresentationAckMailbox> acknowledgementMailbox,
-    std::weak_ptr<platform::IRenderActivitySink> activitySink) {
+    std::weak_ptr<platform::IRenderActivitySink> activitySink,
+    std::function<std::uint64_t()> droppedFrameProbe) {
     if (!deviceBroker || !frameMailbox || !acknowledgementMailbox) {
         return false;
     }
@@ -821,12 +824,15 @@ bool ComparisonSurface::attachRendererServices(
                                            std::move(frameMailbox),
                                            std::move(acknowledgementMailbox),
                                            std::move(activitySink));
+    droppedFrameProbe_ = std::move(droppedFrameProbe);
+    droppedFrames_ = 0U;
     update();
     return true;
 }
 
 void ComparisonSurface::detachRendererServices() noexcept {
     services_.reset();
+    droppedFrameProbe_ = {};
     update();
 }
 
@@ -834,8 +840,21 @@ bool ComparisonSurface::hasRendererServices() const noexcept {
     return services_ != nullptr;
 }
 
+qulonglong ComparisonSurface::droppedFrames() const noexcept {
+    return droppedFrames_;
+}
+
 QSGNode* ComparisonSurface::updatePaintNode(QSGNode* const oldNode, UpdatePaintNodeData*) {
     QQuickWindow* const itemWindow = window();
+    // Sync-time probe of the relay's gap counter. The probe itself is a lock-free atomic read
+    // on the relay side; only a changed value emits, so steady playback costs one comparison.
+    if (droppedFrameProbe_) {
+        const qulonglong probed = static_cast<qulonglong>(droppedFrameProbe_.operator()());
+        if (probed != droppedFrames_) {
+            droppedFrames_ = probed;
+            emit droppedFramesChanged();
+        }
+    }
     if (!services_ || itemWindow == nullptr || width() <= 0.0 || height() <= 0.0) {
         delete oldNode;
         return nullptr;

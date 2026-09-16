@@ -12,7 +12,6 @@ extern "C" {
 #include <libavutil/pixdesc.h>
 }
 
-#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -142,7 +141,6 @@ public:
     AVRational timeBase{};
     std::shared_ptr<const std::vector<std::int64_t>> presentationTimestamps;
     std::optional<domain::FrameId> lastReturnedFrame;
-    std::uint64_t decodedCount = 0U;
     bool packetPending = false;
     bool inputEnded = false;
     bool flushSubmitted = false;
@@ -462,9 +460,7 @@ SignatureDecodeSession::decodeInternal(const domain::FrameId frameId,
             }
             if (timestamp > targetTimestamp) {
                 if (!continueSequentially && allowTimelineRecovery) {
-                    const std::uint64_t decodedCount = impl_->decodedCount;
                     const domain::Status reopened = open(cancellationRequested);
-                    impl_->decodedCount = decodedCount;
                     if (!reopened) {
                         return domain::Result<application::FrameLumaSignature>::failure(
                             reopened.error());
@@ -523,7 +519,6 @@ SignatureDecodeSession::decodeInternal(const domain::FrameId frameId,
             }
             impl_->lastReturnedFrame = frameId;
             impl_->sequentialReady = true;
-            ++impl_->decodedCount;
             return domain::Result<application::FrameLumaSignature>::success(*signature);
         }
         if (receiveResult != AVERROR(EAGAIN) && receiveResult != AVERROR_EOF) {
@@ -601,14 +596,6 @@ SignatureDecodeSession::decodeInternal(const domain::FrameId frameId,
                     impl_->sourceId,
                     "Signature decoder reached end of stream before the indexed frame.",
                     true));
-}
-
-std::uint64_t SignatureDecodeSession::decodedSignatureCount() const noexcept {
-    return impl_->decodedCount;
-}
-
-bool SignatureDecodeSession::isOpenForTesting() const noexcept {
-    return impl_->opened;
 }
 
 void SignatureDecodeSession::requestInterrupt() noexcept {

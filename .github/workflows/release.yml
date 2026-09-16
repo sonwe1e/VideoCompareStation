@@ -31,7 +31,7 @@ jobs:
         id: version
         shell: powershell
         run: |
-          .\tools\verify-release-version.ps1 -Tag $env:GITHUB_REF_NAME
+          .\tools\release\verify-release-version.ps1 -Tag $env:GITHUB_REF_NAME
           $version = $env:GITHUB_REF_NAME.Substring(1)
           "version=$version" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
@@ -42,7 +42,7 @@ jobs:
           if ($actualSha -cne '${{ github.sha }}') {
             throw "Expected commit ${{ github.sha }}, checked out $actualSha."
           }
-          .\tools\verify-release-commit.ps1
+          .\tools\release\verify-release-commit.ps1
 
   quality:
     name: Quality suites
@@ -96,18 +96,18 @@ jobs:
       - name: Debug build, tests, and quality
         shell: powershell
         run: |
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 cmake --preset dev --fresh
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 cmake --build --preset dev
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 ctest --preset dev --output-on-failure
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 cmake --build --preset dev --target format-check
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 cmake --build --preset dev --target lint
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --preset dev --fresh
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --build --preset dev
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset dev --output-on-failure
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --build --preset dev --target format-check
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --build --preset dev --target lint
 
       - name: Release build and tests
         shell: powershell
         run: |
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 cmake --preset release --fresh
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 cmake --build --preset release
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 ctest --preset release --output-on-failure
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --preset release --fresh
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --build --preset release
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset release --output-on-failure
 
   hardware-performance:
     name: Hardware and performance suites
@@ -205,9 +205,9 @@ jobs:
       - name: Build and test Release
         shell: powershell
         run: |
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 cmake --preset release --fresh
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 cmake --build --preset release
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 ctest --preset release --output-on-failure
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --preset release --fresh
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --build --preset release
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset release --output-on-failure
           $metadata = Get-Content '.\out\build\release\release-metadata.json' -Raw |
             ConvertFrom-Json
           "DVS_SHELL_BINARY_NAME=$($metadata.shellBinaryName)" |
@@ -216,7 +216,7 @@ jobs:
       - name: Frame provider terminal-retirement stress
         shell: powershell
         run: >-
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 ctest
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest
           --preset release --output-on-failure
           -R "media.MultiSourceFrameProviderTests.SequentialPlaybackDoesNotRetainHistoricalCpuPairs"
           --repeat until-fail:100
@@ -224,13 +224,13 @@ jobs:
       - name: Package and validate release identity
         shell: powershell
         run: |
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 cpack --preset release-zip
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 cpack --preset release-msi
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cpack --preset release-zip
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cpack --preset release-msi
           $version = '${{ needs.validate-version.outputs.version }}'
           $zip = Resolve-Path ".\out\package\zip\VCStation-$version-windows-x64.zip"
           $msi = Resolve-Path ".\out\package\msi\VCStation-$version-windows-x64.msi"
           wix msi validate $msi.Path
-          .\tools\verify-release-version.ps1 `
+          .\tools\release\verify-release-version.ps1 `
             -Tag $env:GITHUB_REF_NAME `
             -Executable '.\out\build\release\bin\VCStation.exe' `
             -ZipPath $zip.Path `
@@ -241,8 +241,8 @@ jobs:
       - name: Packaged upgrade and shutdown gates
         shell: powershell
         run: |
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 ctest --preset packaged-smoke --output-on-failure
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 ctest --preset shutdown-soak --output-on-failure
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset packaged-smoke --output-on-failure
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset shutdown-soak --output-on-failure
 
       - name: Create checksums
         shell: powershell

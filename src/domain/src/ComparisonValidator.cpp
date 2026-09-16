@@ -105,7 +105,6 @@ void comparePair(const ComparisonSource& first,
             .severity = CompatibilitySeverity::kAlignmentRequired,
             .code = MediaErrorCode::kSourceFrameCountMismatch,
             .sources = pair,
-            .technicalDetail = "Effective source frame counts differ.",
         });
     }
     if (a.frameRate.has_value() && b.frameRate.has_value() && *a.frameRate != *b.frameRate) {
@@ -113,7 +112,6 @@ void comparePair(const ComparisonSource& first,
             .severity = CompatibilitySeverity::kAlignmentRequired,
             .code = MediaErrorCode::kSourceFrameRateMismatch,
             .sources = pair,
-            .technicalDetail = "Declared source frame rates differ.",
         });
     }
     if (a.duration != b.duration) {
@@ -121,7 +119,6 @@ void comparePair(const ComparisonSource& first,
             .severity = CompatibilitySeverity::kAlignmentRequired,
             .code = MediaErrorCode::kSourceDurationMismatch,
             .sources = pair,
-            .technicalDetail = "Effective source durations differ.",
         });
     }
     if (a.extent.width != b.extent.width || a.extent.height != b.extent.height) {
@@ -129,7 +126,6 @@ void comparePair(const ComparisonSource& first,
             .severity = CompatibilitySeverity::kWarning,
             .code = MediaErrorCode::kSourceResolutionMismatch,
             .sources = pair,
-            .technicalDetail = "Source resolutions differ; comparison is resampled.",
         });
     }
     if (a.rotationDegrees != b.rotationDegrees || a.sampleAspectRatio != b.sampleAspectRatio) {
@@ -137,8 +133,6 @@ void comparePair(const ComparisonSource& first,
             .severity = CompatibilitySeverity::kWarning,
             .code = MediaErrorCode::kSourceResolutionMismatch,
             .sources = pair,
-            .technicalDetail =
-                "Source rotation or sample aspect ratio differs; comparison is resampled.",
         });
     }
     if (a.colorMetadata.matrix != b.colorMetadata.matrix ||
@@ -148,8 +142,6 @@ void comparePair(const ComparisonSource& first,
             .severity = CompatibilitySeverity::kWarning,
             .code = MediaErrorCode::kSourceColorMetadataMismatch,
             .sources = pair,
-            .technicalDetail =
-                "Source color matrix, range, or transfer differs; comparison is converted.",
         });
     }
 }

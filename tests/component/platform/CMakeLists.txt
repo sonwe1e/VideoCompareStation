@@ -9,12 +9,14 @@ add_executable(
     PresentationAckMailboxTests.cpp
     SourceIdentityServiceTests.cpp
     SteadyDeadlineSchedulerTests.cpp
+    TraceSinkTests.cpp
 )
 target_link_libraries(
     dvs_platform_component_tests
     PRIVATE
         dvs_platform_windows
         dvs::test_dependencies
+        dvs::test_support
 )
 target_include_directories(
     dvs_platform_component_tests

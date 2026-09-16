@@ -27,15 +27,9 @@ enum class EventPostResult {
     Closed,
 };
 
-enum class EventLane {
-    Critical,
-    Realtime,
-};
-
 enum class CancellationReason {
     Superseded,
     UserRequested,
-    Preempted,
     Shutdown,
 };
 

@@ -2,8 +2,10 @@ include(GoogleTest)
 
 add_executable(
     dvs_app_unit_tests
+    PlaybackTraceEnvironmentTests.cpp
     StartupRequestBrokerTests.cpp
     StartupRequestParserTests.cpp
+    "${PROJECT_SOURCE_DIR}/src/app/PlaybackTraceEnvironment.cpp"
     "${PROJECT_SOURCE_DIR}/src/app/StartupRequest.cpp"
     "${PROJECT_SOURCE_DIR}/src/app/StartupRequestBroker.cpp"
 )
@@ -19,4 +21,19 @@ dvs_add_gtest(
     LAYER unit
     MODULE app
     TIMEOUT 10
+)
+
+find_program(DVS_TEST_POWERSHELL_EXECUTABLE NAMES pwsh powershell REQUIRED)
+dvs_add_test(
+    NAME app.playback-trace-gate-schema
+    LAYER unit
+    MODULE app
+    TIMEOUT 20
+    COMMAND
+        "${DVS_TEST_POWERSHELL_EXECUTABLE}"
+        -NoLogo
+        -NoProfile
+        -File "${CMAKE_CURRENT_SOURCE_DIR}/PlaybackTraceGateTests.ps1"
+        -ModulePath "${PROJECT_SOURCE_DIR}/tools/testing/PlaybackTraceGate.psm1"
+        -TestRoot "${PROJECT_BINARY_DIR}/test-output"
 )

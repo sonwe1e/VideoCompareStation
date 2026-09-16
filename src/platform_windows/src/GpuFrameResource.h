@@ -115,10 +115,8 @@ public:
 
     ~GpuFrameResource() override = default;
 
-    [[nodiscard]] const GpuFrameIdentity& identity() const noexcept;
     [[nodiscard]] const application::FrameRequestContext& context() const noexcept;
     [[nodiscard]] const domain::FrameId& frameId() const noexcept;
-    [[nodiscard]] domain::SourceId sourceId() const noexcept;
     [[nodiscard]] const application::FrameGeometry& geometry() const noexcept;
     [[nodiscard]] const domain::ColorMetadata& colorMetadata() const noexcept;
     [[nodiscard]] application::NormalizedFrameFormat format() const noexcept;

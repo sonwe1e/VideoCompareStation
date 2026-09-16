@@ -1,39 +1,19 @@
 #include "dvs/platform/SourceIdentityService.h"
+#include "dvs/test/ScopedTemporaryDirectory.h"
 
-#include <atomic>
-#include <chrono>
-#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <string>
 #include <string_view>
-#include <system_error>
 
 namespace dvs::platform {
 namespace {
 
-std::atomic<std::uint64_t> nextDirectoryNumber{0};
-
 class SourceIdentityServiceTests : public ::testing::Test {
 protected:
-    void SetUp() override {
-        const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
-        root_ = std::filesystem::temp_directory_path() /
-                ("dvs-source-identity-" + std::to_string(timestamp) + "-" +
-                 std::to_string(nextDirectoryNumber.fetch_add(1U)));
-        std::error_code errorCode;
-        std::filesystem::create_directories(root_, errorCode);
-        ASSERT_FALSE(errorCode);
-    }
-
-    void TearDown() override {
-        std::error_code errorCode;
-        std::filesystem::remove_all(root_, errorCode);
-    }
-
     [[nodiscard]] std::filesystem::path filePath(const std::string_view name) const {
-        return root_ / std::string{name};
+        return directory_.path() / std::string{name};
     }
 
     void writeFile(const std::filesystem::path& path, const std::string_view contents) const {
@@ -44,7 +24,7 @@ protected:
     }
 
 private:
-    std::filesystem::path root_;
+    dvs::test::ScopedTemporaryDirectory directory_{"dvs-source-identity"};
 };
 
 TEST_F(SourceIdentityServiceTests, ReportsMissingSourcesAsRecoverableMediaProbeErrors) {

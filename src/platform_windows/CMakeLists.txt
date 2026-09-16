@@ -6,6 +6,7 @@ add_library(
         src/ProcessTelemetry.cpp
         src/SourceIdentityService.cpp
         src/SteadyDeadlineScheduler.cpp
+        src/TraceSink.cpp
         src/WindowsPaths.cpp
 )
 add_library(dvs::windows_support ALIAS dvs_windows_support)

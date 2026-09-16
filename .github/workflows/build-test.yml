@@ -77,32 +77,32 @@ jobs:
       - name: Configure
         shell: powershell
         run: >-
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 cmake
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake
           --preset ${{ matrix.preset }} --fresh
 
       - name: Build
         shell: powershell
         run: >-
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 cmake
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake
           --build --preset ${{ matrix.preset }}
 
       - name: Unit tests
         shell: powershell
         run: >-
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 ctest
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest
           --preset ${{ matrix.preset }} -L unit --output-on-failure
 
       - name: Component and smoke tests
         shell: powershell
         run: >-
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 ctest
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest
           --preset ${{ matrix.preset }}
           -L "component|e2e" --output-on-failure
 
       - name: Run startup check
         shell: powershell
         run: >-
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1
           ".\out\build\${{ matrix.preset }}\bin\VCStationCli.exe"
           --startup-check
 
@@ -110,17 +110,17 @@ jobs:
         if: matrix.preset == 'dev'
         shell: powershell
         run: |
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 cmake --preset core-dev --fresh
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 cmake --build --preset core-dev
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 ctest --preset core-dev
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --preset core-dev --fresh
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --build --preset core-dev
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset core-dev
 
       - name: Windows UI model-only build and tests
         if: matrix.preset == 'dev'
         shell: powershell
         run: |
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 cmake --preset ui-dev --fresh
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 cmake --build --preset ui-dev
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 ctest --preset ui-dev
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --preset ui-dev --fresh
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --build --preset ui-dev
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset ui-dev
 
   core-linux:
     name: Linux Clang core

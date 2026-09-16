@@ -10,6 +10,7 @@ add_library(
         src/Module.cpp
         src/PlaybackCoordinator.cpp
         src/PlaybackTiming.cpp
+        src/PlaybackTrace.cpp
         src/PrefetchScheduler.cpp
         src/SessionSnapshot.cpp
 )

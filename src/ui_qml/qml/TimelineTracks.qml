@@ -26,7 +26,7 @@ Item {
     clip: true
     activeFocusOnTab: enabled
     Accessible.role: Accessible.Slider
-    Accessible.name: qsTr("Video timeline")
+    Accessible.name: qsTr("视频时间轴")
 
     function frameAt(position) {
         if (totalFrames <= 1)
@@ -103,7 +103,7 @@ Item {
 
             VcsToolTip {
                 visible: markerHover.hovered
-                text: qsTr("Source %1 · %2\nFrame %3\nConfidence %4%").arg(String(marker.modelData.source)).arg(marker.kind).arg(Number(marker.modelData.frame) + 1).arg(Number(marker.modelData.confidence))
+                text: qsTr("源 %1 · %2\n第 %3 帧\n置信度 %4%").arg(String(marker.modelData.source)).arg(marker.kind).arg(Number(marker.modelData.frame) + 1).arg(Number(marker.modelData.confidence))
             }
         }
     }

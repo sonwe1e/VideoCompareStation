@@ -1,15 +1,18 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $true, Position = 0)]
     [string] $Executable,
 
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $true, Position = 1, ValueFromRemainingArguments = $true)]
     [string[]] $Sources,
 
     [string] $InstalledExeName = 'VCStation.exe'
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Shared command-line quoting rules live next to the other gate tooling.
+Import-Module (Join-Path (Join-Path $PSScriptRoot '..\..\tools\testing') 'CommandLineArgument.psm1') -Force
 
 # Resolve the executable path. When running against an installed package, the caller passes the
 # full path to VCStation.exe. When running from the build tree, the generator expression resolves
@@ -26,13 +29,13 @@ foreach ($source in $Sources) {
 
 $arguments = @('--ui-popup-pixels') + $Sources
 
-$stderrPath = Join-Path ([IO.Path]::GetTempPath()) "popup-pixels-$([Guid]::NewGuid().ToString('N')).stderr"
+$process = $null
 try {
     $processInfo = [Diagnostics.ProcessStartInfo]::new()
     $processInfo.FileName = $Executable
-    foreach ($arg in $arguments) {
-        $processInfo.ArgumentList.Add($arg)
-    }
+    $processInfo.Arguments = (
+        $arguments | ForEach-Object { ConvertTo-WindowsCommandLineArgument -Value ([string] $_) }
+    ) -join ' '
     $processInfo.UseShellExecute = $false
     $processInfo.RedirectStandardError = $true
     $processInfo.RedirectStandardOutput = $true
@@ -40,23 +43,20 @@ try {
 
     $process = [Diagnostics.Process]::Start($processInfo)
     if ($null -eq $process) {
-        throw "Failed to start popup pixel probe process."
+        throw 'Failed to start popup pixel probe process.'
     }
 
-    # Read stderr asynchronously to avoid deadlocking on stdout buffer.
+    # Read both streams asynchronously so neither output buffer can block the child.
     $stderrTask = $process.StandardError.ReadToEndAsync()
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $process.WaitForExit()
     $stderrText = $stderrTask.Result
     $stdoutText = $stdoutTask.Result
+    $exitCode = $process.ExitCode
 
-    if ($stderrText) {
-        [IO.File]::WriteAllText($stderrPath, $stderrText, [Text.UTF8Encoding]::new($false))
-    }
-
-    if ($process.ExitCode -ne 0) {
+    if ($exitCode -ne 0) {
         throw (
-            "Popup pixel probe exited with $($process.ExitCode). " +
+            "Popup pixel probe exited with $exitCode. " +
             "Stderr: $stderrText"
         )
     }
@@ -89,7 +89,7 @@ try {
     Write-Host "Popup pixel probe passed ($probeCount probes, all backgrounds opaque)."
 }
 finally {
-    if (Test-Path -LiteralPath $stderrPath -PathType Leaf) {
-        Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
+    if ($null -ne $process) {
+        $process.Dispose()
     }
 }

@@ -20,9 +20,27 @@ VcsMenuBar {
     required property bool fullScreen
     required property int shortcutPreset
     required property var sourceIdentities
+    property int workspaceMode: 0
+    property bool imageHasPrimary: false
+    property bool imageHasSecondary: false
+    // Alignment state and helpers live on the root; the Analyze menu hosts the actions that used
+    // to live in the inspector's Alignment tab.
+    property bool automaticAlignmentPending: false
+    property bool canConfirmAutomaticAlignment: false
+    property bool canUndoAutomaticAlignment: false
+    property bool manualAnchorActive: false
+    property bool anyManualAlignmentActive: false
+    property bool autoAlignmentActive: false
+    property var openManualAnchorsDialog: null
+    property var sourceOffsets: null
+    property var resetSourceOffsets: null
 
     signal openVideosRequested
     signal addVideoRequested
+    signal openImageRequested
+    signal addImageRequested
+    signal openImagePairRequested
+    signal workspaceRequested(int mode)
     signal destructiveActionRequested(string kind)
     signal chromeToggleRequested
     signal fullScreenToggleRequested
@@ -41,7 +59,7 @@ VcsMenuBar {
         id: fileMenu
 
         objectName: "fileMenu"
-        title: qsTr("&File")
+        title: qsTr("文件")
         onClosed: {
             if (control.returnViewerFocusAfterClose) {
                 control.returnViewerFocusAfterClose = false;
@@ -50,18 +68,40 @@ VcsMenuBar {
         }
 
         VcsMenuItem {
-            text: qsTr("Open videos…")
+            text: qsTr("打开视频…")
             shortcutText: "Ctrl+O"
             onTriggered: control.openVideosRequested()
         }
         VcsMenuItem {
-            text: qsTr("Add video…")
+            text: qsTr("添加视频…")
             shortcutText: "Ctrl+Shift+O"
             enabled: control.sourceCount > 0 && control.sourceCount < 3
             onTriggered: control.addVideoRequested()
         }
+        VcsMenuSeparator {
+            objectName: "fileImageSeparator"
+        }
         VcsMenuItem {
-            text: qsTr("Close videos")
+            objectName: "openImageMenuItem"
+            text: qsTr("打开图片…")
+            shortcutText: "Ctrl+I"
+            onTriggered: control.openImageRequested()
+        }
+        VcsMenuItem {
+            objectName: "openImagePairMenuItem"
+            text: qsTr("打开图片对…")
+            shortcutText: "Ctrl+Shift+I"
+            onTriggered: control.openImagePairRequested()
+        }
+        VcsMenuItem {
+            objectName: "addImageMenuItem"
+            text: qsTr("添加图片…")
+            shortcutText: "Ctrl+Alt+I"
+            enabled: control.workspaceMode === 1 && control.imageHasPrimary && !control.imageHasSecondary
+            onTriggered: control.addImageRequested()
+        }
+        VcsMenuItem {
+            text: qsTr("关闭视频")
             shortcutText: "Ctrl+W"
             enabled: control.sourceCount > 0
             onTriggered: {
@@ -71,7 +111,7 @@ VcsMenuBar {
         }
         VcsMenuSeparator {}
         VcsMenuItem {
-            text: qsTr("Exit")
+            text: qsTr("退出")
             shortcutText: "Alt+F4"
             onTriggered: {
                 control.destructiveActionRequested("exit");
@@ -83,7 +123,7 @@ VcsMenuBar {
     VcsMenu {
         id: compareMenu
         objectName: "compareMenu"
-        title: qsTr("&Compare")
+        title: qsTr("对比")
         enabled: control.sourceCount > 1 && !control.busy
         onClosed: {
             if (control.returnViewerFocusAfterClose) {
@@ -94,7 +134,7 @@ VcsMenuBar {
 
         VcsRadioMenuItem {
             objectName: "sideBySideMenuItem"
-            text: qsTr("Side by side")
+            text: qsTr("并排")
             checked: control.currentViewMode === 0
             onTriggered: {
                 control.preferences.viewMode = 0;
@@ -103,7 +143,7 @@ VcsMenuBar {
         }
         VcsRadioMenuItem {
             objectName: "wipeMenuItem"
-            text: qsTr("Wipe")
+            text: qsTr("分割线")
             checked: control.currentViewMode === 5
             onTriggered: {
                 control.preferences.viewMode = 5;
@@ -112,7 +152,7 @@ VcsMenuBar {
         }
         VcsRadioMenuItem {
             objectName: "differenceMenuItem"
-            text: qsTr("Difference")
+            text: qsTr("差异")
             checked: control.currentViewMode === 3
             onTriggered: {
                 control.preferences.viewMode = 3;
@@ -126,13 +166,13 @@ VcsMenuBar {
             id: layoutMenu
 
             objectName: "layoutMenu"
-            title: qsTr("Layout")
+            title: qsTr("布局")
             menuItemVisible: control.sourceCount === 3
             menuItemEnabled: control.sourceCount === 3
 
             VcsRadioMenuItem {
                 objectName: "threeUpMenuItem"
-                text: qsTr("Three up")
+                text: qsTr("三联")
                 checked: control.currentViewMode === 1
                 onTriggered: {
                     control.preferences.viewMode = 1;
@@ -140,7 +180,7 @@ VcsMenuBar {
                 }
             }
             VcsRadioMenuItem {
-                text: qsTr("Reference focus")
+                text: qsTr("参考聚焦")
                 checked: control.currentViewMode === 2
                 onTriggered: {
                     control.preferences.viewMode = 2;
@@ -149,7 +189,7 @@ VcsMenuBar {
             }
             VcsRadioMenuItem {
                 objectName: "analysisGridMenuItem"
-                text: qsTr("Analysis grid")
+                text: qsTr("分析网格")
                 checked: control.currentViewMode === 4
                 enabled: control.sourceCount === 3
                 onTriggered: {
@@ -162,7 +202,7 @@ VcsMenuBar {
             id: pairMenu
 
             objectName: "pairMenu"
-            title: qsTr("Pair")
+            title: qsTr("对比对")
             menuItemVisible: control.sourceCount === 3
             menuItemEnabled: control.sourceCount === 3
 
@@ -195,11 +235,11 @@ VcsMenuBar {
             id: referenceMenu
 
             objectName: "referenceMenu"
-            title: qsTr("Reference")
+            title: qsTr("参考源")
             enabled: control.sourceCount > 1
 
             VcsRadioMenuItem {
-                text: qsTr("Video A")
+                text: qsTr("视频 A")
                 checked: control.canonicalSourceIndex === 0
                 onTriggered: {
                     control.changeReferenceByIndex(0);
@@ -207,7 +247,7 @@ VcsMenuBar {
                 }
             }
             VcsRadioMenuItem {
-                text: qsTr("Video B")
+                text: qsTr("视频 B")
                 checked: control.canonicalSourceIndex === 1
                 onTriggered: {
                     control.changeReferenceByIndex(1);
@@ -215,7 +255,7 @@ VcsMenuBar {
                 }
             }
             VcsRadioMenuItem {
-                text: qsTr("Video C")
+                text: qsTr("视频 C")
                 visible: control.sourceCount > 2
                 checked: control.canonicalSourceIndex === 2
                 onTriggered: {
@@ -229,7 +269,7 @@ VcsMenuBar {
         }
         VcsMenuItem {
             objectName: "compareInspectorMenuItem"
-            text: control.inspectorOpen ? qsTr("Hide Inspector") : qsTr("Show Inspector")
+            text: control.inspectorOpen ? qsTr("隐藏检查器") : qsTr("显示检查器")
             onTriggered: {
                 control.session.inspectorVisible = !control.inspectorOpen;
                 control.returnViewerFocusAfterClose = true;
@@ -240,7 +280,7 @@ VcsMenuBar {
     VcsMenu {
         id: analyzeMenu
         objectName: "analyzeMenu"
-        title: qsTr("&Analyze")
+        title: qsTr("分析")
         enabled: control.sourceCount > 1 && control.graphicsReady && control.currentFrame >= 0 && !control.busy
         onClosed: {
             if (control.returnViewerFocusAfterClose) {
@@ -250,7 +290,7 @@ VcsMenuBar {
         }
 
         VcsMenuItem {
-            text: qsTr("Estimate global frame offset")
+            text: qsTr("估算全局帧偏移")
             enabled: control.graphicsReady && !control.busy && !control.alignmentAnalysisRunning && Boolean(control.controller && control.controller.canFirst)
             onTriggered: {
                 control.controller.estimateAlignment();
@@ -258,10 +298,64 @@ VcsMenuBar {
             }
         }
         VcsMenuItem {
-            text: control.alignmentAnalysisRunning ? qsTr("Cancel analysis") : qsTr("Analyze missing / duplicate frames")
+            text: control.alignmentAnalysisRunning ? qsTr("取消分析") : qsTr("分析缺失 / 重复帧")
             enabled: control.graphicsReady && !control.busy && Boolean(control.controller && (control.alignmentAnalysisRunning || control.controller.canFirst))
             onTriggered: {
                 control.alignmentAnalysisRunning ? control.controller.cancelAlignmentAnalysis() : control.controller.analyzeSequenceAlignment();
+                control.returnViewerFocusAfterClose = true;
+            }
+        }
+        VcsMenuSeparator {
+            objectName: "analyzeAutomaticSeparator"
+        }
+        VcsMenuItem {
+            objectName: "confirmAutomaticAlignmentMenuItem"
+            text: control.canConfirmAutomaticAlignment ? qsTr("确认建议映射") : qsTr("确认前先分析序列")
+            visible: control.automaticAlignmentPending
+            enabled: control.graphicsReady && !control.busy && !control.alignmentAnalysisRunning && control.canConfirmAutomaticAlignment
+            onTriggered: {
+                control.controller.confirmAutomaticAlignment();
+                control.returnViewerFocusAfterClose = true;
+            }
+        }
+        VcsMenuItem {
+            objectName: "undoAutomaticAlignmentMenuItem"
+            text: qsTr("撤销自动映射")
+            visible: control.canUndoAutomaticAlignment
+            enabled: control.graphicsReady && !control.busy && !control.alignmentAnalysisRunning
+            onTriggered: {
+                control.controller.undoAutomaticAlignment();
+                control.returnViewerFocusAfterClose = true;
+            }
+        }
+        VcsMenuItem {
+            objectName: "manualAnchorsButton"
+            text: control.manualAnchorActive ? qsTr("已设手动锚点…") : qsTr("编辑手动锚点…")
+            enabled: control.graphicsReady && !control.busy && Boolean(control.controller && control.controller.canFirst)
+            onTriggered: {
+                control.openManualAnchorsDialog();
+                control.returnViewerFocusAfterClose = true;
+            }
+        }
+        VcsMenuSeparator {
+            objectName: "analyzeOffsetSeparator"
+        }
+        VcsMenuItem {
+            objectName: "applyAlignmentMenuItem"
+            text: qsTr("应用帧偏移")
+            enabled: control.graphicsReady && !control.busy && Boolean(control.controller && control.controller.canFirst)
+            onTriggered: {
+                control.controller.applySourceOffsets(control.sourceOffsets());
+                control.returnViewerFocusAfterClose = true;
+            }
+        }
+        VcsMenuItem {
+            objectName: "resetAlignmentMenuItem"
+            text: qsTr("回到严格索引")
+            enabled: control.graphicsReady && !control.busy && (control.anyManualAlignmentActive || control.autoAlignmentActive) && Boolean(control.controller && control.controller.canFirst)
+            onTriggered: {
+                control.resetSourceOffsets();
+                control.controller.applySourceOffsets(control.sourceOffsets());
                 control.returnViewerFocusAfterClose = true;
             }
         }
@@ -271,7 +365,7 @@ VcsMenuBar {
         id: viewMenu
 
         objectName: "viewMenu"
-        title: qsTr("&View")
+        title: qsTr("视图")
         onClosed: {
             if (control.returnViewerFocusAfterClose) {
                 control.returnViewerFocusAfterClose = false;
@@ -280,16 +374,35 @@ VcsMenuBar {
         }
 
         VcsMenuItem {
-            text: control.chromeVisible ? qsTr("Hide interface chrome · Tab") : qsTr("Show interface chrome · Tab")
+            text: control.chromeVisible ? qsTr("隐藏界面 · Tab") : qsTr("显示界面 · Tab")
             onTriggered: {
                 control.chromeToggleRequested();
                 control.returnViewerFocusAfterClose = true;
             }
         }
         VcsMenuItem {
-            text: control.fullScreen ? qsTr("Exit full screen · F11") : qsTr("Enter full screen · F11")
+            text: control.fullScreen ? qsTr("退出全屏 · F11") : qsTr("进入全屏 · F11")
             onTriggered: {
                 control.fullScreenToggleRequested();
+                control.returnViewerFocusAfterClose = true;
+            }
+        }
+        VcsMenuSeparator {}
+        VcsRadioMenuItem {
+            objectName: "workspaceVideoMenuItem"
+            text: qsTr("视频对比")
+            checked: control.workspaceMode === 0
+            onTriggered: {
+                control.workspaceRequested(0);
+                control.returnViewerFocusAfterClose = true;
+            }
+        }
+        VcsRadioMenuItem {
+            objectName: "workspaceImageMenuItem"
+            text: qsTr("图片工具")
+            checked: control.workspaceMode === 1
+            onTriggered: {
+                control.workspaceRequested(1);
                 control.returnViewerFocusAfterClose = true;
             }
         }
@@ -298,10 +411,10 @@ VcsMenuBar {
             id: shortcutPresetMenu
 
             objectName: "shortcutPresetMenu"
-            title: qsTr("Shortcut preset")
+            title: qsTr("快捷键方案")
 
             VcsRadioMenuItem {
-                text: qsTr("Frame review")
+                text: qsTr("逐帧检查")
                 checked: control.shortcutPreset === 0
                 onTriggered: {
                     control.preferences.shortcutPreset = 0;
@@ -309,7 +422,7 @@ VcsMenuBar {
                 }
             }
             VcsRadioMenuItem {
-                text: qsTr("Player")
+                text: qsTr("播放器")
                 checked: control.shortcutPreset === 1
                 onTriggered: {
                     control.preferences.shortcutPreset = 1;

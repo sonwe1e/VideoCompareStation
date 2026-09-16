@@ -234,7 +234,6 @@ foreach(scale_label scale_value IN ZIP_LISTS
             -ExecutionPolicy Bypass
             -File "${CMAKE_CURRENT_SOURCE_DIR}/VerifyPopupPixels.ps1"
             -Executable "$<TARGET_FILE:VCStation>"
-            -Sources
             "${PROJECT_SOURCE_DIR}/tests/fixtures/media/h264_a_320x180_30fps_12.mp4"
             "${PROJECT_SOURCE_DIR}/tests/fixtures/media/h264_b_160x90_30fps_12.mp4"
             "${PROJECT_SOURCE_DIR}/tests/fixtures/media/h265_a_320x180_30fps_12.mp4"

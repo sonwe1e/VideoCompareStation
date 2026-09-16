@@ -6,6 +6,7 @@
 #include <QVariantList>
 #include <QVariantMap>
 
+#include <functional>
 #include <memory>
 
 namespace dvs::platform {
@@ -59,6 +60,9 @@ class ComparisonSurface : public QQuickItem {
     Q_PROPERTY(qreal roiBottom READ roiBottom NOTIFY viewportChanged)
     Q_PROPERTY(
         int referenceSlot READ referenceSlot WRITE setReferenceSlot NOTIFY referenceSlotChanged)
+    // Canonical frame gaps observed by the render-acknowledgement relay since surface attach.
+    // Refreshed on every scene-graph sync; an empty provider leaves the counter at zero.
+    Q_PROPERTY(qulonglong droppedFrames READ droppedFrames NOTIFY droppedFramesChanged)
 
 public:
     enum ViewMode {
@@ -69,6 +73,7 @@ public:
         AnalysisGrid = static_cast<int>(presentation::ViewMode::AnalysisGrid),
         Wipe = static_cast<int>(presentation::ViewMode::Wipe),
         Single = static_cast<int>(presentation::ViewMode::Single),
+        Fade = static_cast<int>(presentation::ViewMode::Fade),
     };
     Q_ENUM(ViewMode)
 
@@ -78,6 +83,9 @@ public:
         Chroma = static_cast<int>(presentation::DifferenceMetric::Chroma),
         Heatmap = static_cast<int>(presentation::DifferenceMetric::Heatmap),
         ExactPlanes = static_cast<int>(presentation::DifferenceMetric::ExactPlanes),
+        SignedSubtract = static_cast<int>(presentation::DifferenceMetric::SignedSubtract),
+        Highlight = static_cast<int>(presentation::DifferenceMetric::Highlight),
+        Crossfade = static_cast<int>(presentation::DifferenceMetric::Crossfade),
     };
     Q_ENUM(DifferenceMetric)
 
@@ -161,6 +169,7 @@ public:
     [[nodiscard]] qreal roiBottom() const noexcept;
     [[nodiscard]] int referenceSlot() const noexcept;
     void setReferenceSlot(int value);
+    [[nodiscard]] qulonglong droppedFrames() const noexcept;
 
     Q_INVOKABLE void zoomAt(qreal normalizedX, qreal normalizedY, qreal factor);
     Q_INVOKABLE void panBy(qreal normalizedDeltaX, qreal normalizedDeltaY);
@@ -182,7 +191,8 @@ public:
     attachRendererServices(std::shared_ptr<platform::GraphicsDeviceBroker> deviceBroker,
                            std::shared_ptr<platform::FrameMailbox> frameMailbox,
                            std::shared_ptr<platform::PresentationAckMailbox> acknowledgementMailbox,
-                           std::weak_ptr<platform::IRenderActivitySink> activitySink);
+                           std::weak_ptr<platform::IRenderActivitySink> activitySink,
+                           std::function<std::uint64_t()> droppedFrameProbe = {});
     void detachRendererServices() noexcept;
     [[nodiscard]] bool hasRendererServices() const noexcept;
 
@@ -198,6 +208,7 @@ signals:
     void thresholdChanged();
     void viewportChanged();
     void referenceSlotChanged();
+    void droppedFramesChanged();
 
 protected:
     [[nodiscard]] QSGNode* updatePaintNode(QSGNode* oldNode,
@@ -230,6 +241,8 @@ private:
     qreal roiRight_ = 1.0;
     qreal roiBottom_ = 1.0;
     int referenceSlot_ = 0;
+    std::function<std::uint64_t()> droppedFrameProbe_;
+    qulonglong droppedFrames_ = 0U;
 };
 
 } // namespace dvs::ui

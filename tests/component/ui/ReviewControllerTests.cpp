@@ -6,9 +6,11 @@
 #include "dvs/ui/SourceListModel.h"
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
+#include <QPointer>
 #include <QTemporaryDir>
 #include <QThread>
 #include <QUrl>
@@ -18,9 +20,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <gtest/gtest.h>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 #include <variant>
@@ -101,7 +105,8 @@ readySnapshotWithTiming(const std::vector<std::filesystem::path>& paths,
                         const std::size_t referenceIndex,
                         const std::optional<domain::RationalRate> rate,
                         const domain::TimingConfidence timingConfidence,
-                        const std::int64_t frameCount) {
+                        const std::int64_t frameCount,
+                        const bool includeSourceIdentity = true) {
     application::SessionSnapshot snapshot = readySnapshot(2, 12);
     std::vector<domain::ComparisonSource> sources;
     sources.reserve(paths.size());
@@ -133,7 +138,9 @@ readySnapshotWithTiming(const std::vector<std::filesystem::path>& paths,
                             .d3d11VaDecode = true,
                         },
                     .timingConfidence = timingConfidence,
-                    .sourceIdentity = realFileIdentity(paths[index]),
+                    .sourceIdentity = includeSourceIdentity
+                                          ? std::optional{realFileIdentity(paths[index])}
+                                          : std::nullopt,
                 },
             .displayName = std::string{"Source "} + static_cast<char>('A' + index),
         });
@@ -232,6 +239,26 @@ dependenciesFor(const std::weak_ptr<FakeBackend>& weakBackend) {
     file.close();
     return path;
 }
+
+class ManualTaskQueue final {
+public:
+    void schedule(std::function<void()> task) {
+        tasks_.push_back(std::move(task));
+    }
+
+    [[nodiscard]] std::size_t size() const noexcept {
+        return tasks_.size();
+    }
+
+    void runAt(const std::size_t index) {
+        std::function<void()> task = std::move(tasks_.at(index));
+        tasks_.erase(tasks_.begin() + static_cast<std::ptrdiff_t>(index));
+        task();
+    }
+
+private:
+    std::vector<std::function<void()>> tasks_;
+};
 
 void completeLastCommand(
     const std::shared_ptr<FakeBackend>& backend,
@@ -872,7 +899,11 @@ TEST_F(ReviewControllerTests, FrozenIdentityStaysStableWhenFileChangesOnDisk) {
     ASSERT_EQ(fileB.write("-appended"), 9);
     fileB.close();
 
-    controller.refreshProjection();
+    // File metadata checks run asynchronously and are throttled off the projection path.
+    ASSERT_TRUE(waitUntil([&controller, model] {
+        controller.refreshProjection();
+        return model->data(model->index(1, 0), SourceListModel::ChangedOnDiskRole).toBool();
+    }));
 
     EXPECT_EQ(shell.activeSourceIdentities().at(0), frozenA);
     EXPECT_EQ(shell.activeSourceIdentities().at(1), frozenB);
@@ -884,6 +915,175 @@ TEST_F(ReviewControllerTests, FrozenIdentityStaysStableWhenFileChangesOnDisk) {
     EXPECT_EQ(model->data(model->index(1, 0), SourceListModel::ChangedOnDiskRole).toBool(), true);
 
     controller.stop();
+}
+
+TEST_F(ReviewControllerTests, MissingDescriptorIdentityUsesOnePathOnlyFrozenIdentity) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString sourceA = createFile(directory, QStringLiteral("missing_identity_a.mp4"));
+    const QString sourceB = createFile(directory, QStringLiteral("missing_identity_b.mp4"));
+    ASSERT_FALSE(sourceA.isEmpty());
+    ASSERT_FALSE(sourceB.isEmpty());
+
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate);
+    auto backend = std::make_shared<FakeBackend>();
+    backend->currentSnapshot =
+        readySnapshotWithTiming({std::filesystem::path{sourceA.toStdWString()},
+                                 std::filesystem::path{sourceB.toStdWString()}},
+                                0U,
+                                rate.value(),
+                                domain::TimingConfidence::kVerifiedCfr,
+                                12,
+                                false);
+    ManualTaskQueue tasks;
+    auto dependencies = dependenciesFor(backend);
+    dependencies.eventDriven = true;
+    dependencies.scheduleBackgroundTask =
+        [&tasks](ReviewController::Dependencies::BackgroundTask task) {
+            tasks.schedule(std::move(task));
+        };
+    ReviewController controller{std::move(dependencies)};
+    ReviewShellController shell{controller};
+
+    const QString expectedIdentity = QDir::cleanPath(sourceB).toCaseFolded();
+    ASSERT_EQ(shell.activeSourceIdentities().size(), 2);
+    EXPECT_EQ(shell.activeSourceIdentities().at(1), expectedIdentity);
+    const auto* model = controller.sources();
+    ASSERT_NE(model, nullptr);
+    EXPECT_EQ(model->data(model->index(1, 0), SourceListModel::SourceIdentityRole).toString(),
+              expectedIdentity);
+    EXPECT_TRUE(shell.removeActiveSourceByIdentity(expectedIdentity));
+    EXPECT_EQ(backend->submitted.size(), 1U);
+    controller.stop();
+}
+
+TEST_F(ReviewControllerTests, LateDiskStatusFromPreviousComparisonCannotOverwriteReplacement) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString sourceA = createFile(directory, QStringLiteral("generation_a.mp4"));
+    const QString sourceB = createFile(directory, QStringLiteral("generation_b.mp4"));
+    ASSERT_FALSE(sourceA.isEmpty());
+    ASSERT_FALSE(sourceB.isEmpty());
+    const std::vector<std::filesystem::path> paths{
+        std::filesystem::path{sourceA.toStdWString()},
+        std::filesystem::path{sourceB.toStdWString()},
+    };
+
+    application::SessionSnapshot replacement = readySnapshotWithSources(paths);
+    QFile changedFile{sourceB};
+    ASSERT_TRUE(changedFile.open(QIODevice::Append));
+    ASSERT_EQ(changedFile.write("-changed"), 8);
+    changedFile.close();
+    application::SessionSnapshot original = readySnapshotWithSources(paths);
+
+    auto backend = std::make_shared<FakeBackend>();
+    backend->currentSnapshot = std::move(original);
+    ManualTaskQueue tasks;
+    auto dependencies = dependenciesFor(backend);
+    dependencies.eventDriven = true;
+    dependencies.scheduleBackgroundTask =
+        [&tasks](ReviewController::Dependencies::BackgroundTask task) {
+            tasks.schedule(std::move(task));
+        };
+    ReviewController controller{std::move(dependencies)};
+    const auto* model = controller.sources();
+    ASSERT_NE(model, nullptr);
+    ASSERT_EQ(tasks.size(), 1U);
+
+    replacement.sessionEpoch = domain::SessionEpoch{4U};
+    backend->currentSnapshot = std::move(replacement);
+    controller.refreshProjection();
+    ASSERT_EQ(tasks.size(), 2U);
+
+    tasks.runAt(1U);
+    ASSERT_TRUE(waitUntil([model] {
+        return model->data(model->index(1, 0), SourceListModel::ChangedOnDiskRole).toBool();
+    }));
+
+    tasks.runAt(0U);
+    QCoreApplication::processEvents(QEventLoop::AllEvents);
+    EXPECT_TRUE(model->data(model->index(1, 0), SourceListModel::ChangedOnDiskRole).toBool());
+    controller.stop();
+}
+
+TEST_F(ReviewControllerTests, QueuedDiskStatusTaskMayFinishAfterControllerDestruction) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString sourceA = createFile(directory, QStringLiteral("destroy_a.mp4"));
+    const QString sourceB = createFile(directory, QStringLiteral("destroy_b.mp4"));
+    ASSERT_FALSE(sourceA.isEmpty());
+    ASSERT_FALSE(sourceB.isEmpty());
+
+    auto backend = std::make_shared<FakeBackend>();
+    backend->currentSnapshot =
+        readySnapshotWithSources({std::filesystem::path{sourceA.toStdWString()},
+                                  std::filesystem::path{sourceB.toStdWString()}});
+    ManualTaskQueue tasks;
+    auto dependencies = dependenciesFor(backend);
+    dependencies.eventDriven = true;
+    dependencies.scheduleBackgroundTask =
+        [&tasks](ReviewController::Dependencies::BackgroundTask task) {
+            tasks.schedule(std::move(task));
+        };
+    auto controller = std::make_unique<ReviewController>(std::move(dependencies));
+    ASSERT_EQ(tasks.size(), 1U);
+    EXPECT_FALSE(controller->waitForSourceDiskStatusIdle(0ms));
+
+    QPointer<ReviewController> guarded{controller.get()};
+    controller.reset();
+    ASSERT_TRUE(guarded.isNull());
+    tasks.runAt(0U);
+    QCoreApplication::processEvents(QEventLoop::AllEvents);
+    SUCCEED();
+}
+
+TEST_F(ReviewControllerTests, EventDrivenDiskStatusRetriesAndContinuesWhileIdle) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString sourceA = createFile(directory, QStringLiteral("event_driven_a.mp4"));
+    const QString sourceB = createFile(directory, QStringLiteral("event_driven_b.mp4"));
+    ASSERT_FALSE(sourceA.isEmpty());
+    ASSERT_FALSE(sourceB.isEmpty());
+
+    auto backend = std::make_shared<FakeBackend>();
+    backend->currentSnapshot =
+        readySnapshotWithSources({std::filesystem::path{sourceA.toStdWString()},
+                                  std::filesystem::path{sourceB.toStdWString()}});
+    ManualTaskQueue tasks;
+    std::size_t probeCalls = 0U;
+    auto dependencies = dependenciesFor(backend);
+    dependencies.eventDriven = true;
+    dependencies.scheduleBackgroundTask =
+        [&tasks](ReviewController::Dependencies::BackgroundTask task) {
+            tasks.schedule(std::move(task));
+        };
+    dependencies.sourceFileMetadataProbe =
+        [&probeCalls](const QString&) -> ReviewController::SourceFileMetadata {
+        ++probeCalls;
+        if (probeCalls == 1U) {
+            throw std::runtime_error{"injected metadata failure"};
+        }
+        return ReviewController::SourceFileMetadata{.exists = false};
+    };
+    ReviewController controller{std::move(dependencies)};
+    const auto* model = controller.sources();
+    ASSERT_NE(model, nullptr);
+    ASSERT_EQ(tasks.size(), 1U);
+
+    tasks.runAt(0U);
+    ASSERT_TRUE(waitUntil([&tasks] { return tasks.size() == 1U; }));
+    tasks.runAt(0U);
+    ASSERT_TRUE(waitUntil([model] {
+        return model->data(model->index(0, 0), SourceListModel::ChangedOnDiskRole).toBool();
+    }));
+
+    ASSERT_TRUE(waitUntil([&tasks] { return tasks.size() == 1U; }));
+    EXPECT_GE(probeCalls, 2U);
+    controller.stop();
+    EXPECT_FALSE(controller.waitForSourceDiskStatusIdle(0ms));
+    tasks.runAt(0U);
+    EXPECT_TRUE(controller.waitForSourceDiskStatusIdle(100ms));
 }
 
 TEST_F(ReviewControllerTests, ShellOwnsChromeInspectorAndPendingActionState) {

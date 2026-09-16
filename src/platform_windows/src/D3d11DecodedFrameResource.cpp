@@ -132,10 +132,6 @@ const domain::ColorMetadata& D3d11DecodedFrameResource::colorMetadata() const no
     return colorMetadata_;
 }
 
-const std::shared_ptr<const void>& D3d11DecodedFrameResource::lifetimeAnchor() const noexcept {
-    return lifetimeAnchor_;
-}
-
 std::size_t D3d11DecodedFrameResource::byteCount() const noexcept {
     return reservation_.bytes();
 }

@@ -1,4 +1,5 @@
 #include "dvs/persistence/SettingsRepository.h"
+#include "dvs/test/ScopedTemporaryDirectory.h"
 
 #include <atomic>
 #include <chrono>
@@ -17,8 +18,6 @@
 
 namespace dvs::persistence {
 namespace {
-
-std::atomic<std::uint64_t> nextDirectoryNumber{0};
 
 [[nodiscard]] application::RequestContext requestContext(const std::uint64_t requestId) {
     return application::RequestContext{
@@ -188,26 +187,13 @@ private:
 
 class SettingsRepositoryTests : public ::testing::Test {
 protected:
-    void SetUp() override {
-        const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
-        root_ = std::filesystem::temp_directory_path() /
-                ("dvs-settings-" + std::to_string(timestamp) + "-" +
-                 std::to_string(nextDirectoryNumber.fetch_add(1U)));
-        settingsFile_ = root_ / "nested" / "settings.json";
-    }
-
-    void TearDown() override {
-        std::error_code errorCode;
-        std::filesystem::remove_all(root_, errorCode);
-    }
-
     [[nodiscard]] const std::filesystem::path& settingsFile() const noexcept {
         return settingsFile_;
     }
 
 private:
-    std::filesystem::path root_;
-    std::filesystem::path settingsFile_;
+    dvs::test::ScopedTemporaryDirectory directory_{"dvs-settings"};
+    std::filesystem::path settingsFile_{directory_.path() / "nested" / "settings.json"};
 };
 
 TEST_F(SettingsRepositoryTests, SavesAndLoadsSettingsWithPayloadBeforeTerminal) {

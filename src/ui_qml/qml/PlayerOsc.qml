@@ -12,6 +12,7 @@ Item {
     property bool docked: false
     property string sourceLabel
     required property bool playing
+    property real playbackRate: 1
     required property bool timelineEnabled
     required property int currentFrame
     required property int totalFrames
@@ -137,13 +138,13 @@ Item {
                 font.weight: Font.DemiBold
             }
             Text {
-                text: control.currentFrame >= 0 ? qsTr("Frame %1 / %2").arg(control.currentFrame + 1).arg(control.totalFrames) : qsTr("No frame")
+                text: control.currentFrame >= 0 ? qsTr("第 %1 / %2 帧").arg(control.currentFrame + 1).arg(control.totalFrames) : qsTr("无帧")
                 color: Theme.mutedText
                 font.pixelSize: 12
             }
             Text {
                 visible: control.inFrame >= 0 || control.outFrame >= 0
-                text: qsTr("In %1  Out %2%3").arg(control.inFrame >= 0 ? control.inFrame + 1 : "—").arg(control.outFrame >= 0 ? control.outFrame + 1 : "—").arg(control.loopRangeActive ? qsTr("  ·  LOOP") : "")
+                text: qsTr("入点 %1  出点 %2%3").arg(control.inFrame >= 0 ? control.inFrame + 1 : "—").arg(control.outFrame >= 0 ? control.outFrame + 1 : "—").arg(control.loopRangeActive ? qsTr("  ·  循环") : "")
                 color: control.loopRangeActive ? "#7dd3fc" : "#9fc3ff"
                 font.pixelSize: 11
             }
@@ -171,11 +172,14 @@ Item {
         }
 
         TimelineThumbnailPopup {
-            visible: tracks.hoverFrame >= 0
+            // Only show a hover preview when a thumbnail for the sampled frame actually exists;
+            // showing timecode text over a placeholder teaches nothing while hovering a timeline
+            // whose frames have not been cached yet.
+            visible: tracks.hoverFrame >= 0 && control.previewThumbnailSource.toString().length > 0
             previewFrame: Math.max(0, control.previewFrame)
             previewTimecode: control.previewTimecode
             thumbnailSource: control.previewThumbnailSource
-            comparisonState: control.markers.length > 0 ? qsTr("Analysis markers available") : ""
+            comparisonState: control.markers.length > 0 ? qsTr("已有分析标记") : ""
             x: Math.max(8, Math.min(control.width - width - 8, tracks.x + tracks.positionForFrame(tracks.hoverFrame) * tracks.width - width / 2))
             y: -height - 6
             z: 20
@@ -203,12 +207,17 @@ Item {
             canNext: control.canNext
             canLast: control.canLast
             playing: control.playing
+            playbackRate: control.playbackRate
             focusTarget: control.focusTarget
             onFirstRequested: control.actions.firstFrame()
             onPreviousSecondRequested: control.actions.stepBackwardSecond()
             onPreviousFiveRequested: control.actions.stepBackwardFive()
             onPreviousRequested: control.actions.previousFrame()
             onPlaybackRequested: control.actions.togglePlayback()
+            onPlaybackRateRequested: rate => {
+                if (control.actions && typeof control.actions.setPlaybackRate === "function")
+                    control.actions.setPlaybackRate(rate);
+            }
             onNextRequested: control.actions.nextFrame()
             onNextFiveRequested: control.actions.stepForwardFive()
             onNextSecondRequested: control.actions.stepForwardSecond()

@@ -1,5 +1,6 @@
 # --- Build, package, coverage, and downloaded runtime output ---
 /out/
+/vd/
 /Testing/
 /vcpkg_installed/
 /_deps/
@@ -14,6 +15,10 @@
 *.user
 *.VC.db
 *.VC.opendb
+
+# Stray compiler/linker artifacts from ad-hoc probes at the repository root
+/*.obj
+/*.pdb
 
 # Generated CMake files if a developer configures in the source tree by mistake
 /CMakeCache.txt
@@ -40,3 +45,4 @@
 .DS_Store
 Thumbs.db
 Desktop.ini
+/nul

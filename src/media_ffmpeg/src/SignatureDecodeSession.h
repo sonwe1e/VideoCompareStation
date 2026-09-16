@@ -35,9 +35,6 @@ public:
                 const std::atomic<bool>& cancellationRequested,
                 Progress progress = {});
 
-    [[nodiscard]] std::uint64_t decodedSignatureCount() const noexcept;
-    [[nodiscard]] bool isOpenForTesting() const noexcept;
-
     void requestInterrupt() noexcept;
     void close() noexcept;
 

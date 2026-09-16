@@ -59,10 +59,8 @@ struct RelayState final {
     std::atomic<std::int64_t> latestRenderStartedNanoseconds{0};
     std::atomic<std::uint64_t> frameToRenderSamples{0U};
     std::atomic<std::uint64_t> totalFrameToRenderMicroseconds{0U};
-    std::atomic<std::uint64_t> maximumFrameToRenderMicroseconds{0U};
     std::atomic<std::uint64_t> renderToAckSamples{0U};
     std::atomic<std::uint64_t> totalRenderToAckMicroseconds{0U};
-    std::atomic<std::uint64_t> maximumRenderToAckMicroseconds{0U};
     std::atomic<std::uint64_t> frameToAckSamples{0U};
     std::atomic<std::uint64_t> totalFrameToAckMicroseconds{0U};
     std::atomic<std::uint64_t> maximumFrameToAckMicroseconds{0U};
@@ -353,12 +351,6 @@ public:
             state_->renderToAckSamples.fetch_add(1U, std::memory_order_relaxed);
             state_->totalRenderToAckMicroseconds.fetch_add(elapsedMicroseconds,
                                                            std::memory_order_relaxed);
-            std::uint64_t maximum =
-                state_->maximumRenderToAckMicroseconds.load(std::memory_order_relaxed);
-            while (maximum < elapsedMicroseconds &&
-                   !state_->maximumRenderToAckMicroseconds.compare_exchange_weak(
-                       maximum, elapsedMicroseconds, std::memory_order_relaxed)) {
-            }
         }
         wakeWorker(state_);
     }
@@ -378,12 +370,6 @@ public:
         state_->frameToRenderSamples.fetch_add(1U, std::memory_order_relaxed);
         state_->totalFrameToRenderMicroseconds.fetch_add(elapsedMicroseconds,
                                                          std::memory_order_relaxed);
-        std::uint64_t maximum =
-            state_->maximumFrameToRenderMicroseconds.load(std::memory_order_relaxed);
-        while (maximum < elapsedMicroseconds &&
-               !state_->maximumFrameToRenderMicroseconds.compare_exchange_weak(
-                   maximum, elapsedMicroseconds, std::memory_order_relaxed)) {
-        }
     }
 
     void notifyAckBackpressured() noexcept {
@@ -433,13 +419,9 @@ public:
             .frameToRenderSamples = state_->frameToRenderSamples.load(std::memory_order_relaxed),
             .totalFrameToRenderMicroseconds =
                 state_->totalFrameToRenderMicroseconds.load(std::memory_order_relaxed),
-            .maximumFrameToRenderMicroseconds =
-                state_->maximumFrameToRenderMicroseconds.load(std::memory_order_relaxed),
             .renderToAckSamples = state_->renderToAckSamples.load(std::memory_order_relaxed),
             .totalRenderToAckMicroseconds =
                 state_->totalRenderToAckMicroseconds.load(std::memory_order_relaxed),
-            .maximumRenderToAckMicroseconds =
-                state_->maximumRenderToAckMicroseconds.load(std::memory_order_relaxed),
             .frameToAckSamples = state_->frameToAckSamples.load(std::memory_order_relaxed),
             .totalFrameToAckMicroseconds =
                 state_->totalFrameToAckMicroseconds.load(std::memory_order_relaxed),

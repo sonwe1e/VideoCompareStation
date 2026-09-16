@@ -9,6 +9,7 @@ add_executable(
     ProbeTimelineContractTests.cpp
     SignatureCacheTests.cpp
     SourceDecodeActorTests.cpp
+    SourceFrameCacheTests.cpp
     SoftwareDecoderTests.cpp
 )
 target_link_libraries(

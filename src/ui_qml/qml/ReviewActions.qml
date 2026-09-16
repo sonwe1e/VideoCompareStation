@@ -88,6 +88,11 @@ QtObject {
             controller.togglePlayback();
     }
 
+    function setPlaybackRate(rate) {
+        if (controller && typeof controller.setPlaybackRate === "function")
+            controller.setPlaybackRate(rate);
+    }
+
     function moveWipe(delta) {
         if (!wipeEnabled)
             return;

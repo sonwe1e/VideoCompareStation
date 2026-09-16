@@ -4,7 +4,6 @@
 #include "dvs/domain/MediaError.h"
 
 #include <span>
-#include <string>
 #include <vector>
 
 namespace dvs::domain {
@@ -23,7 +22,6 @@ struct CompatibilityFinding final {
     CompatibilitySeverity severity = CompatibilitySeverity::kWarning;
     MediaErrorCode code = MediaErrorCode::kInvalidArgument;
     std::vector<SourceId> sources;
-    std::string technicalDetail;
 };
 
 class CompatibilityReport final {

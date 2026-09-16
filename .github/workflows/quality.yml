@@ -28,16 +28,16 @@ jobs:
 
       - name: Check contributor guide
         shell: powershell
-        run: .\tools\check-repository-guide.ps1
+        run: .\tools\quality\check-repository-guide.ps1
 
       - name: Check resource limit policy
         shell: powershell
-        run: .\tools\check-resource-limits.ps1
+        run: .\tools\quality\check-resource-limits.ps1
 
       - name: Check coverage gate behavior
         shell: powershell
         run: >-
-          .\tools\check-coverage.ps1
+          .\tools\quality\check-coverage.ps1
           -BuildDir tests\fixtures\coverage
           -ReportPath tests\fixtures\coverage\sample.cobertura.xml
           -Module All
@@ -96,23 +96,23 @@ jobs:
       - name: Configure development preset
         shell: powershell
         run: >-
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 cmake
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake
           --preset dev --fresh
 
       - name: Build development preset
         shell: powershell
         run: >-
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 cmake
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake
           --build --preset dev
 
       - name: Check formatting
         shell: powershell
         run: >-
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 cmake
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake
           --build --preset dev --target format-check
 
       - name: Run static analysis
         shell: powershell
         run: >-
-          powershell -NoProfile -File .\tools\invoke-low-impact.ps1 cmake
+          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake
           --build --preset dev --target lint

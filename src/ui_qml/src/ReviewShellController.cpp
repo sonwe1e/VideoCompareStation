@@ -80,10 +80,6 @@ int ReviewShellController::effectiveDifferenceEdge() const noexcept {
     return effectiveComparisonState().differenceEdge;
 }
 
-bool ReviewShellController::comparisonEdgeAvailable() const noexcept {
-    return effectiveComparisonState().edgeAvailable;
-}
-
 int ReviewShellController::stagedReferenceIndex() const noexcept {
     return stagedReferenceIndex_;
 }
@@ -139,22 +135,6 @@ QStringList ReviewShellController::pendingSourceIdentities() const {
     }
     for (const ReviewIntent& intent : reviewIntents_) {
         appendIntent(intent);
-    }
-    return result;
-}
-
-QVariantList ReviewShellController::pendingSourceIndexes() const {
-    QVariantList result;
-    const QStringList identities = activeSourceIdentities();
-    const QStringList pending = pendingSourceIdentities();
-    for (const QString& pendingIdentity : pending) {
-        for (qsizetype index = 0; index < identities.size(); ++index) {
-            if (identities[index] == pendingIdentity) {
-                if (!result.contains(index)) {
-                    result.push_back(index);
-                }
-            }
-        }
     }
     return result;
 }
@@ -333,14 +313,6 @@ bool ReviewShellController::queueRemoveActiveSource(const QString& sourceIdentit
             review_.frozenSourceIdentity(stagedSources_[stagedReferenceIndex_].toUrl()),
         .targetIdentity = sourceIdentity,
     });
-}
-
-bool ReviewShellController::changeReference(const int sourceIndex) {
-    if (sourceIndex < 0 || sourceIndex >= activeSources_.size() ||
-        sourceIndex == canonicalSourceIndex_) {
-        return false;
-    }
-    return changeReferenceByIdentity(activeSourceIdentities()[sourceIndex]);
 }
 
 bool ReviewShellController::changeReferenceByIdentity(const QString& sourceIdentity) {
@@ -838,7 +810,6 @@ ReviewShellController::effectiveComparisonState() const noexcept {
         return EffectiveComparisonState{
             .viewMode = static_cast<int>(ViewMode::Single),
             .differenceEdge = kEdge0And1,
-            .edgeAvailable = false,
         };
     }
 
@@ -853,7 +824,6 @@ ReviewShellController::effectiveComparisonState() const noexcept {
     return EffectiveComparisonState{
         .viewMode = static_cast<int>(effectiveMode),
         .differenceEdge = sourceCount == 2 ? kEdge0And1 : (validEdge ? requestedEdge : kEdge0And1),
-        .edgeAvailable = true,
     };
 }
 

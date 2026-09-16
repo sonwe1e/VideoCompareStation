@@ -9,6 +9,7 @@
 #include <list>
 #include <optional>
 #include <string>
+#include <unordered_map>
 
 namespace dvs::media::internal {
 
@@ -26,6 +27,10 @@ struct SourceFrameCacheKey final {
     NormalizationProfile profile;
 
     [[nodiscard]] bool operator==(const SourceFrameCacheKey&) const noexcept = default;
+};
+
+struct SourceFrameCacheKeyHash final {
+    [[nodiscard]] std::size_t operator()(const SourceFrameCacheKey& key) const noexcept;
 };
 
 struct CachedSourceFrame final {
@@ -55,13 +60,15 @@ private:
     };
 
     using EntryList = std::list<Entry>;
+    using EntryIndex =
+        std::unordered_map<SourceFrameCacheKey, EntryList::iterator, SourceFrameCacheKeyHash>;
 
-    [[nodiscard]] EntryList::iterator findEntry(const SourceFrameCacheKey& key);
     void evictToFit(std::size_t incomingBytes) noexcept;
 
     std::size_t capacityBytes_ = 0U;
     std::size_t retainedBytes_ = 0U;
     EntryList entries_;
+    EntryIndex index_;
 };
 
 } // namespace dvs::media::internal

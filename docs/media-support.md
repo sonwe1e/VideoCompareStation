@@ -77,7 +77,7 @@ stated in the UI (`Resampled comparison — not pixel-exact`).
 
 ## Optional compatibility proxies
 
-Proxies must never be a precondition for playback (DualVideoTool's forced-proxy chain
-is retired under `legacy/`). A proxy may be generated only when the original cannot
-seek stably, when a format cannot enter the render pipeline directly, or when the
-user explicitly asks for a fast preview cache.
+Proxies must never be a precondition for playback (the pre-1.0 forced-proxy chain is
+retired and remains available through Git history). A proxy may be generated only when
+the original cannot seek stably, when a format cannot enter the render pipeline directly,
+or when the user explicitly asks for a fast preview cache.

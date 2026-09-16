@@ -4,8 +4,10 @@ VCStation 是面向 Windows 的 1～3 路逐帧视频工作站，使用 C++20、
 FFmpeg 动态库和 D3D11。单个视频可直接播放和逐帧审查；多路素材会被放在同一个
 canonical frame position 上，支持任意两路 Wipe/Diff、显式对齐以及缺帧和重复帧诊断。
 
-当前产品计划和验收范围以 [docs/architecture.md](docs/architecture.md) 和 [docs/releases/](docs/releases/) 为准。`legacy/` 只保存历史实现作为行为参考，
-不参与构建。
+当前产品架构、工程说明、活动方案和历史资料统一从
+[docs/README.md](docs/README.md) 进入。产品计划和验收范围以
+[docs/architecture.md](docs/architecture.md) 与 [docs/releases/](docs/releases/) 为准；旧实现已从主线移除，
+需要时可通过 Git 历史查阅。
 
 ---
 
@@ -101,8 +103,10 @@ ctest --preset hardware-d3d11 --output-on-failure
 ctest --preset performance-d3d11 --output-on-failure
 ```
 
-Release workflow 生成明确标注为未签名的 ZIP、MSI、EXE、CLI 与 Shell DLL，并执行真实
-安装、升级、A/B Pair 设置回归与 shutdown soak 门禁；SHA-256 只用于校验完整性，不代表
+Release workflow 生成明确标注为未签名的 ZIP、MSI、EXE、CLI 与
+`VCStationShell-1.6.dll`，并执行真实
+安装、`1.2.0→1.6.0` 升级、A/B Pair 设置回归与 shutdown soak 门禁；SHA-256 只用于
+校验完整性，不代表
 发布者身份。runner 标签、素材清单与发布合同详见
 [docs/self-hosted-runner.md](docs/self-hosted-runner.md)。
 

@@ -6,7 +6,7 @@
 namespace dvs::presentation {
 namespace {
 
-constexpr std::array<ComparisonModeDescriptor, 7U> kModeDescriptors{{
+constexpr std::array<ComparisonModeDescriptor, 8U> kModeDescriptors{{
     {.mode = ViewMode::SideBySide, .minimumSourceCount = 2U, .maximumSourceCount = 3U},
     {.mode = ViewMode::ThreeUp, .minimumSourceCount = 3U, .maximumSourceCount = 3U},
     {.mode = ViewMode::ReferenceFocus, .minimumSourceCount = 3U, .maximumSourceCount = 3U},
@@ -22,6 +22,7 @@ constexpr std::array<ComparisonModeDescriptor, 7U> kModeDescriptors{{
      .supportsThreshold = true},
     {.mode = ViewMode::Wipe, .minimumSourceCount = 2U, .maximumSourceCount = 3U, .usesPair = true},
     {.mode = ViewMode::Single, .minimumSourceCount = 1U, .maximumSourceCount = 1U},
+    {.mode = ViewMode::Fade, .minimumSourceCount = 2U, .maximumSourceCount = 3U, .usesPair = true},
 }};
 
 template <typename Enum>
@@ -45,7 +46,7 @@ bool ViewportState::isValid() const noexcept {
 
 bool ComparisonViewConfig::isValid() const noexcept {
     return comparisonModeDescriptor(mode) != nullptr &&
-           enumInRange(differenceMetric, DifferenceMetric::ExactPlanes) &&
+           enumInRange(differenceMetric, DifferenceMetric::Crossfade) &&
            enumInRange(differenceGain, DifferenceGain::Gain16x) &&
            enumInRange(differenceEdge, DifferenceEdge::Between1And2) &&
            enumInRange(differenceFilter, DifferenceFilter::Bicubic) &&

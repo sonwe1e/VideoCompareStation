@@ -62,6 +62,9 @@ private:
 
 struct SessionIdTag;
 struct SessionEpochTag;
+struct TopologyRevisionTag;
+struct TimelineRevisionTag;
+struct AlignmentRevisionTag;
 struct PlaybackGenerationTag;
 struct DeviceGenerationTag;
 struct RequestIdTag;
@@ -69,6 +72,9 @@ struct CommandIdTag;
 
 using SessionId = CounterId<SessionIdTag>;
 using SessionEpoch = CounterId<SessionEpochTag>;
+using TopologyRevision = CounterId<TopologyRevisionTag>;
+using TimelineRevision = CounterId<TimelineRevisionTag>;
+using AlignmentRevision = CounterId<AlignmentRevisionTag>;
 using PlaybackGeneration = CounterId<PlaybackGenerationTag>;
 using DeviceGeneration = CounterId<DeviceGenerationTag>;
 using RequestId = CounterId<RequestIdTag>;

@@ -1,19 +1,41 @@
 #include "SourceFrameCache.h"
 
+#include <functional>
+#include <type_traits>
 #include <utility>
 
 namespace dvs::media::internal {
+namespace {
+
+void combineHash(std::size_t& seed, const std::size_t value) noexcept {
+    seed ^= value + 0x9E3779B9U + (seed << 6U) + (seed >> 2U);
+}
+
+} // namespace
+
+std::size_t SourceFrameCacheKeyHash::operator()(const SourceFrameCacheKey& key) const noexcept {
+    std::size_t result = std::hash<std::string>{}(key.sourceFingerprint);
+    combineHash(result, std::hash<std::int64_t>{}(key.sourceFrame.value()));
+    combineHash(result,
+                std::hash<std::underlying_type_t<application::NormalizedFrameFormat>>{}(
+                    static_cast<std::underlying_type_t<application::NormalizedFrameFormat>>(
+                        key.profile.format)));
+    combineHash(result, std::hash<std::uint32_t>{}(key.profile.width));
+    combineHash(result, std::hash<std::uint32_t>{}(key.profile.height));
+    return result;
+}
 
 SourceFrameCache::SourceFrameCache(const std::size_t capacityBytes) noexcept
     : capacityBytes_(capacityBytes) {}
 
 std::optional<CachedSourceFrame> SourceFrameCache::find(const SourceFrameCacheKey& key) {
-    const EntryList::iterator entry = findEntry(key);
-    if (entry == entries_.end()) {
+    const EntryIndex::iterator indexed = index_.find(key);
+    if (indexed == index_.end()) {
         return std::nullopt;
     }
+    const EntryList::iterator entry = indexed->second;
     entries_.splice(entries_.begin(), entries_, entry);
-    return entries_.front().frame;
+    return entry->frame;
 }
 
 void SourceFrameCache::insert(SourceFrameCacheKey key, CachedSourceFrame frame) {
@@ -22,10 +44,11 @@ void SourceFrameCache::insert(SourceFrameCacheKey key, CachedSourceFrame frame) 
         return;
     }
 
-    const EntryList::iterator existing = findEntry(key);
-    if (existing != entries_.end()) {
-        retainedBytes_ -= existing->bytes;
-        entries_.erase(existing);
+    const EntryIndex::iterator existing = index_.find(key);
+    if (existing != index_.end()) {
+        retainedBytes_ -= existing->second->bytes;
+        entries_.erase(existing->second);
+        index_.erase(existing);
     }
     evictToFit(bytes);
     entries_.push_front(Entry{
@@ -33,10 +56,21 @@ void SourceFrameCache::insert(SourceFrameCacheKey key, CachedSourceFrame frame) 
         .frame = std::move(frame),
         .bytes = bytes,
     });
+    try {
+        const bool inserted = index_.emplace(entries_.front().key, entries_.begin()).second;
+        if (!inserted) {
+            entries_.pop_front();
+            return;
+        }
+    } catch (...) {
+        entries_.pop_front();
+        throw;
+    }
     retainedBytes_ += bytes;
 }
 
 void SourceFrameCache::clear() noexcept {
+    index_.clear();
     entries_.clear();
     retainedBytes_ = 0U;
 }
@@ -53,18 +87,10 @@ std::size_t SourceFrameCache::entryCount() const noexcept {
     return entries_.size();
 }
 
-SourceFrameCache::EntryList::iterator SourceFrameCache::findEntry(const SourceFrameCacheKey& key) {
-    for (EntryList::iterator entry = entries_.begin(); entry != entries_.end(); ++entry) {
-        if (entry->key == key) {
-            return entry;
-        }
-    }
-    return entries_.end();
-}
-
 void SourceFrameCache::evictToFit(const std::size_t incomingBytes) noexcept {
-    while (!entries_.empty() && retainedBytes_ + incomingBytes > capacityBytes_) {
+    while (!entries_.empty() && retainedBytes_ > capacityBytes_ - incomingBytes) {
         retainedBytes_ -= entries_.back().bytes;
+        index_.erase(entries_.back().key);
         entries_.pop_back();
     }
 }

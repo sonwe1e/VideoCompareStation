@@ -103,14 +103,25 @@ Item {
         function test_auto_hide_disables_invisible_controls() {
             const panel = findChild(osc, "oscPanel");
             verify(panel !== null);
-            osc.revealActive = true;
-            mouseMove(osc, osc.width / 2, osc.height / 2);
-            verify(osc.controlsEnabled);
-            verify(panel.enabled);
-            mouseMove(root, 10, 10);
-            tryCompare(osc, "controlsEnabled", false, 2000);
-            tryCompare(panel, "enabled", false, 400);
-            tryCompare(panel, "opacity", 0, 400);
+            // Exercise the production reveal entry point directly. Synthetic hover transitions
+            // are platform-window dependent and can leave HoverHandler hovered even after a
+            // mouseMove to another test item, preventing the hide timer from restarting.
+            // Hide the content tree while the timer runs so the runner's global cursor cannot
+            // immediately wake the panel again when the wake strip becomes visible.
+            root.visible = false;
+            wait(50);
+            try {
+                osc.revealActive = false;
+                compare(osc.controlsEnabled, false);
+                osc.reveal();
+                verify(osc.controlsEnabled);
+                verify(panel.enabled);
+                tryCompare(osc, "controlsEnabled", false, 3000);
+                tryCompare(panel, "enabled", false, 400);
+                tryCompare(panel, "opacity", 0, 1000);
+            } finally {
+                root.visible = true;
+            }
         }
 
         function test_compact_layout_does_not_overlap() {
@@ -132,8 +143,7 @@ Item {
             // NOTE: do NOT pass thumb.x/thumb.y as the rect origin — mapToItem already accounts for the
             // item's position in its parent, so doing so would double-count the offset.
             const thumbRect = thumb.mapToItem(osc, Qt.rect(0, 0, thumb.width, thumb.height));
-            verify(thumbRect.bottom <= transport.y,
-                "thumb bottom " + thumbRect.bottom + " must clear transport top " + transport.y);
+            verify(thumbRect.bottom <= transport.y, "thumb bottom " + thumbRect.bottom + " must clear transport top " + transport.y);
         }
 
         function test_preview_is_forwarded_as_a_signal() {

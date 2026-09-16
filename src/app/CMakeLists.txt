@@ -4,6 +4,8 @@ add_executable(
     VCStation
     WIN32
     Main.cpp
+    PlaybackTraceEnvironment.cpp
+    PlaybackTraceEnvironment.h
     ReviewRuntime.cpp
     ReviewRuntime.h
     RuntimeBridges.cpp
