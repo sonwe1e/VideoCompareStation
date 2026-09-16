@@ -117,7 +117,7 @@ int ImageReviewController::compareMode() const noexcept {
 }
 
 void ImageReviewController::setCompareMode(const int mode) {
-    if (mode < PrimaryOnly || mode > Highlight) {
+    if (mode < PrimaryOnly || mode > Wipe) {
         return;
     }
     if (compareMode_ == mode) {
@@ -133,6 +133,18 @@ void ImageReviewController::setCompareMode(const int mode) {
     // Bump the content revision so QML image sources tied to imageUrl(slot) re-fetch
     // the freshly recomputed diff instead of showing the previous mode's image.
     bumpGeneration();
+}
+
+qreal ImageReviewController::wipePosition() const noexcept {
+    return wipePosition_;
+}
+
+void ImageReviewController::setWipePosition(const qreal position) {
+    const qreal clamped = std::max(0.0, std::min(1.0, position));
+    if (!qFuzzyCompare(clamped, wipePosition_)) {
+        wipePosition_ = clamped;
+        emit viewChanged();
+    }
 }
 
 qreal ImageReviewController::zoom() const noexcept {

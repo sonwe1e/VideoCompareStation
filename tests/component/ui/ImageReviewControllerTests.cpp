@@ -74,6 +74,35 @@ TEST(ImageReviewControllerTests, HighlightAndAbsDifferenceProduceOutput) {
     EXPECT_GT(highlight.value(QStringLiteral("r")).toInt(), 0);
 }
 
+TEST(ImageReviewControllerTests, WipeModeRequiresPairAndClampsPosition) {
+    ImageReviewController controller;
+    ASSERT_TRUE(controller.openPrimaryImage(solidImage(Qt::red), QStringLiteral("left")));
+
+    // Without a pair the wipe mode is rejected like the other comparison modes.
+    controller.setCompareMode(ImageReviewController::Wipe);
+    EXPECT_EQ(controller.compareMode(), static_cast<int>(ImageReviewController::PrimaryOnly));
+    EXPECT_FALSE(controller.errorText().isEmpty());
+
+    ASSERT_TRUE(controller.openSecondaryImage(solidImage(Qt::blue), QStringLiteral("right")));
+    controller.setCompareMode(ImageReviewController::Wipe);
+    EXPECT_EQ(controller.compareMode(), static_cast<int>(ImageReviewController::Wipe));
+
+    // The wipe position clamps to [0, 1] and defaults to the middle.
+    EXPECT_DOUBLE_EQ(controller.wipePosition(), 0.5);
+    controller.setWipePosition(2.0);
+    EXPECT_DOUBLE_EQ(controller.wipePosition(), 1.0);
+    controller.setWipePosition(-1.0);
+    EXPECT_DOUBLE_EQ(controller.wipePosition(), 0.0);
+    controller.setWipePosition(0.25);
+    EXPECT_DOUBLE_EQ(controller.wipePosition(), 0.25);
+
+    // Both slots still sample in wipe mode: the left side shows the secondary image.
+    const QVariantMap left =
+        controller.samplePixel(ImageReviewController::DisplaySecondarySlot, 0, 0);
+    ASSERT_TRUE(left.value(QStringLiteral("valid")).toBool());
+    EXPECT_EQ(left.value(QStringLiteral("b")).toInt(), 255);
+}
+
 TEST(ImageReviewControllerTests, ZoomClampsAndResetRestoresDefaults) {
     ImageReviewController controller;
     ASSERT_TRUE(controller.openPrimaryImage(solidImage(Qt::red), QStringLiteral("left")));

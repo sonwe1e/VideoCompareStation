@@ -27,6 +27,7 @@ class ImageReviewController final : public QObject {
     Q_PROPERTY(QString primaryPath READ primaryPath NOTIFY stateChanged)
     Q_PROPERTY(QString secondaryPath READ secondaryPath NOTIFY stateChanged)
     Q_PROPERTY(int compareMode READ compareMode WRITE setCompareMode NOTIFY stateChanged)
+    Q_PROPERTY(qreal wipePosition READ wipePosition WRITE setWipePosition NOTIFY viewChanged)
     Q_PROPERTY(qreal zoom READ zoom NOTIFY viewChanged)
     Q_PROPERTY(qreal panX READ panX NOTIFY viewChanged)
     Q_PROPERTY(qreal panY READ panY NOTIFY viewChanged)
@@ -50,6 +51,7 @@ public:
         AbsDifference = 2,
         SignedDifference = 3,
         Highlight = 4,
+        Wipe = 5,
     };
     Q_ENUM(CompareMode)
 
@@ -75,6 +77,8 @@ public:
     [[nodiscard]] QString secondaryPath() const;
     [[nodiscard]] int compareMode() const noexcept;
     void setCompareMode(int mode);
+    [[nodiscard]] qreal wipePosition() const noexcept;
+    void setWipePosition(qreal position);
     [[nodiscard]] qreal zoom() const noexcept;
     [[nodiscard]] qreal panX() const noexcept;
     [[nodiscard]] qreal panY() const noexcept;
@@ -122,6 +126,7 @@ private:
     QString secondaryPath_;
     QString errorText_;
     int compareMode_ = PrimaryOnly;
+    qreal wipePosition_ = 0.5;
     int contentGeneration_ = 0;
     int maxAbsDifference_ = 0;
     double meanAbsDifference_ = 0.0;
