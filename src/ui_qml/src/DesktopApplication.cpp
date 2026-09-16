@@ -1,6 +1,7 @@
 #include "dvs/ui/DesktopApplication.h"
 
 #include "dvs/ui/ComparisonSurface.h"
+#include "dvs/ui/DiagnosticsProbe.h"
 #include "dvs/ui/ImageFolderPairModel.h"
 #include "dvs/ui/ImageReviewController.h"
 #include "dvs/ui/ReviewController.h"
@@ -135,6 +136,12 @@ public:
             });
         engine->rootContext()->setContextProperty(QStringLiteral("imageFolderPairs"),
                                                   folderPairs_.get());
+        // UI observation bridge: forwards QML scene-graph operations (timeline thumbnail grabs)
+        // into the bounded trace buffer so playback evidence can correlate them with pipeline
+        // timing. With tracing disabled every call is one atomic load and a branch.
+        diagnosticsProbe_ = std::make_unique<DiagnosticsProbe>();
+        engine->rootContext()->setContextProperty(QStringLiteral("dvsDiagnostics"),
+                                                  diagnosticsProbe_.get());
         const QMetaObject::Connection warningConnection = QObject::connect(
             engine.get(),
             &QQmlEngine::warnings,
@@ -628,6 +635,7 @@ private:
     std::unique_ptr<ReviewSessionFacade> sessionFacade_;
     std::unique_ptr<ImageReviewController> imageReview_;
     std::unique_ptr<ImageFolderPairModel> folderPairs_;
+    std::unique_ptr<DiagnosticsProbe> diagnosticsProbe_;
     QQuickWindow* window_ = nullptr;
     ComparisonSurface* surface_ = nullptr;
     double activeScreenRefreshRate_ = 0.0;

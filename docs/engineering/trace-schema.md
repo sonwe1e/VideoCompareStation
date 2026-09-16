@@ -123,6 +123,42 @@ must not be treated as complete.
 | `11` | `DecoderReopen` | Source identifier. Reserved; not currently emitted. |
 | `12` | `CacheHit` | Cached source-frame index. |
 | `13` | `DeviceGenerationChanged` | New device generation. |
+| `14` | `QmlGrabRequested` | Canonical frame the UI was showing when a scene-graph image grab was requested. |
+| `15` | `QmlGrabCompleted` | Same frame payload when that grab delivered its result. |
+| `16` | `RenderDrawStarted` | Canonical frame the render thread began drawing. |
+| `17` | `RenderAckPublished` | Canonical frame whose presentation acknowledgement was admitted to the ack mailbox. |
+| `18` | `PlaybackRunStarted` | First target frame of a continuous playback run. |
+| `19` | `PlaybackRunStopped` | Last committed frame when the run ended, or `UINT64_MAX` when none committed. |
+
+`PlaybackRunStarted`/`PlaybackRunStopped` bound exactly one continuous playback run (`play` to
+pause/end/stop). One trace also contains the open, seek and step phases, and those phases commit
+frames too, so an analyzer that compares display intervals must isolate the bounded running window
+before attributing a stall to continuous playback. A run that is stopped by an error path still
+emits `PlaybackRunStopped`, so an unmatched start means the capture was truncated.
+
+`QmlGrabRequested`/`QmlGrabCompleted` are UI-originated observation events emitted through the QML
+`dvsDiagnostics` bridge (currently the timeline thumbnail cache's `grabToImage`). They carry no
+session/playback identity — the identity tuple is all zeros — so they must be correlated with the
+pipeline events by timestamp, never by identity. The pair bounds how long a grab's result was
+outstanding and lets an analyzer line grabs up against the frames that were late. Correlation alone
+is not causation: the T5 gate A/B measured the same stall profile with every playback-time grab
+suppressed, so a grab that merely overlaps a late frame is not evidence that it caused the delay.
+Payload `UINT64_MAX` means the UI did not know a frame number when the event was recorded.
+
+`RenderDrawStarted`/`RenderAckPublished` are renderer-side observation events emitted from
+`D3d11ComparisonRenderer` on the render thread, with the canonical frame id as the payload. They
+also carry no playback identity. Joined with `RenderPublished` (kind 6) and
+`PresentationAcknowledged` (kind 7) they bisect a late frame's presentation:
+
+| hop | meaning when it dominates a long display interval |
+| --- | --- |
+| `RenderPublished` → `RenderDrawStarted` | the scene graph never scheduled a render for an already-published frame (window/render-loop scheduling) |
+| `RenderDrawStarted` → `RenderAckPublished` | the draw itself was slow (GPU or device contention) |
+| `RenderAckPublished` → `PresentationAcknowledged` | the relay thread was late |
+| `FrameSetReady` → `RenderPublished` | the producer or the coordinator was late |
+
+Because these events come from different identity scopes, an analyzer must key them by frame id
+within a single playback run rather than by the identity tuple.
 
 `CommandAccepted` currently means that a command was nonduplicate and claimed by the coordinator;
 it is emitted before the remaining admission checks. A rejected claimed command may therefore

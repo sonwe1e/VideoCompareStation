@@ -2,6 +2,7 @@ include(GoogleTest)
 
 add_executable(
     dvs_ui_component_tests
+    DiagnosticsProbeTests.cpp
     ReviewControllerTests.cpp
     ReviewPreferencesControllerTests.cpp
     SourceIdentityTests.cpp
@@ -185,7 +186,7 @@ set_tests_properties(
         RUN_SERIAL TRUE
 )
 
-foreach(dvs_review_shell_test IN ITEMS empty_review_view player_osc timeline_tracks)
+foreach(dvs_review_shell_test IN ITEMS empty_review_view player_osc timeline_tracks timeline_thumbnail_cache)
     add_test(
         NAME "ui.${dvs_review_shell_test}"
         COMMAND

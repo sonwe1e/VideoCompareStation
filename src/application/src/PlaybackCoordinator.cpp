@@ -1036,6 +1036,11 @@ private:
         PlaybackRun stopped = std::move(*playbackRun_);
         playbackRun_.reset();
         lastPlaybackProjectionAt_.reset();
+        emitTrace(TraceEventKind::PlaybackRunStopped,
+                  makeTraceIdentity(),
+                  state_.displayedFrame.has_value()
+                      ? static_cast<std::uint64_t>(state_.displayedFrame->value())
+                      : UINT64_MAX);
         if (stopped.cadenceTimerId.has_value()) {
             static_cast<void>(dependencies_.deadlineScheduler->cancel(*stopped.cadenceTimerId));
         }
@@ -1701,6 +1706,9 @@ private:
         };
         lastPlaybackProjectionAt_ = playbackRun_->wallAnchor;
         state_.lastError.reset();
+        emitTrace(TraceEventKind::PlaybackRunStarted,
+                  makeTraceIdentity(),
+                  static_cast<std::uint64_t>(firstTarget.value()));
         if (!schedulePlaybackTarget(firstTarget)) {
             completeCommand(command.context, CommandOutcome::Failed, state_.lastError);
             return;
@@ -3037,6 +3045,9 @@ private:
             if (playbackRun_->preparedFrame.has_value()) {
                 dependencies_.directFrameProvider->cancel(playbackRun_->providerContext);
             }
+            emitTrace(TraceEventKind::PlaybackRunStopped,
+                      makeTraceIdentity(),
+                      static_cast<std::uint64_t>(displayedFrame.value()));
             playbackRun_.reset();
             lastPlaybackProjectionAt_.reset();
             state_.playbackState = domain::PlaybackState::kPaused;

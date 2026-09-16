@@ -58,6 +58,24 @@ enum class TraceEventKind : std::uint8_t {
     DecoderReopen = 11,
     CacheHit = 12,
     DeviceGenerationChanged = 13,
+    // UI-side scene-graph image grabs (the timeline thumbnail cache). Additive observation only:
+    // the grab path is unchanged, but a gate can now test whether grabbing the viewport while
+    // playback is presenting frames delays them, instead of inferring it from the grab's cost.
+    QmlGrabRequested = 14,
+    QmlGrabCompleted = 15,
+    // Renderer-side staging of one published FrameSet: the point where the render thread actually
+    // began the draw, and the point where it published the presentation acknowledgement. Together
+    // with RenderPublished these separate "the renderer was never scheduled" from "the draw itself
+    // was slow", which is the difference between a UI/scene-graph stall and a GPU stall.
+    RenderDrawStarted = 16,
+    // Payload is the canonical frame id, matching RenderPublished/PresentationAcknowledged.
+    RenderAckPublished = 17,
+    // Boundaries of one continuous playback run. Payload is the first target frame on start and
+    // the last committed frame on stop (UINT64_MAX when nothing was committed). They let an
+    // analyzer isolate the Running window from the open/seek/step phases in the same trace, which
+    // a display-interval comparison has to do before attributing a stall to playback.
+    PlaybackRunStarted = 18,
+    PlaybackRunStopped = 19,
 };
 
 // A single fixed-size trace event. Kept small and trivially copyable so it can live in a bounded

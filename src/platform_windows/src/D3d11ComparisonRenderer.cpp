@@ -1,5 +1,6 @@
 #include "dvs/platform/D3d11ComparisonRenderer.h"
 
+#include "dvs/application/PlaybackTrace.h"
 #include "dvs/platform/FrameMailbox.h"
 #include "dvs/platform/GraphicsDeviceBroker.h"
 #include "dvs/platform/PresentationAckMailbox.h"
@@ -905,6 +906,8 @@ public:
         if (const std::shared_ptr<IRenderActivitySink> sink = activitySink_.lock()) {
             sink->notifyFrameRenderStarted();
         }
+        emitStagingTrace(application::TraceEventKind::RenderDrawStarted,
+                         publication.set->frameId());
         PreparedSetDraw prepared;
         if (!prepareSetDraw(state, publication, lease, prepared)) {
             return frontPublication_.has_value() && drawFrontOrBackground(state, lease)
@@ -1585,12 +1588,28 @@ private:
         const PresentationAckPushResult result =
             acknowledgementMailbox_->tryPush(pendingAcknowledgement_->event);
         if (result == PresentationAckPushResult::Accepted) {
+            emitStagingTrace(application::TraceEventKind::RenderAckPublished,
+                             pendingAcknowledgement_->event.frameId);
             pendingAcknowledgement_.reset();
             notifyAcknowledgementPublished();
         } else if (result == PresentationAckPushResult::Closed) {
             pendingAcknowledgement_.reset();
             acknowledgementClosed_ = true;
         }
+    }
+
+    // Additive render-thread observation. The renderer carries no playback identity, so the event
+    // uses the default scope and the canonical frame id as its payload; an analyzer correlates it
+    // with RenderPublished/PresentationAcknowledged by timestamp and frame. Disabled tracing
+    // leaves this as one atomic load and a branch.
+    static void emitStagingTrace(const application::TraceEventKind kind,
+                                 const domain::FrameId frameId) noexcept {
+        application::PlaybackTrace& trace = application::PlaybackTrace::instance();
+        if (!trace.enabled()) {
+            return;
+        }
+        trace.record(
+            kind, application::TraceIdentity{}, static_cast<std::uint64_t>(frameId.value()));
     }
 
     [[nodiscard]] ComparisonRenderResult acknowledge(const FrameMailboxPublication& publication,
@@ -1613,6 +1632,7 @@ private:
         highestAcknowledgementSerial_ = publication.publicationSerial;
         const PresentationAckPushResult result = acknowledgementMailbox_->tryPush(event);
         if (result == PresentationAckPushResult::Accepted) {
+            emitStagingTrace(application::TraceEventKind::RenderAckPublished, set.frameId());
             notifyAcknowledgementPublished();
             return ComparisonRenderResult::Presented;
         }
