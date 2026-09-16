@@ -64,6 +64,9 @@ function(dvs_add_quality_targets)
         "${PROJECT_SOURCE_DIR}/tests/*.cpp"
         "${PROJECT_SOURCE_DIR}/tests/*.h"
     )
+    # Vendored third-party sources keep their upstream layout; they are excluded from the
+    # formatting gate just like they are from clang-tidy's header filter.
+    list(FILTER cppFormatFiles EXCLUDE REGEX "[/\\\\]third_party[/\\\\]")
     file(
         GLOB_RECURSE cppLintFiles
         CONFIGURE_DEPENDS

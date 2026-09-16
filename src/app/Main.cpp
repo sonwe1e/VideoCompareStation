@@ -338,17 +338,17 @@ void installPlaybackTrace(dvs::app::ReviewRuntime& runtime) {
     return false;
 }
 
-[[nodiscard]] int runDesktop(int& argc,
-                             char** argv,
-                             const bool smokeMode,
-                             const std::optional<SmokeSources>& smokeSources = std::nullopt,
-                             const bool shutdownDuringOpen = false,
-                             const std::optional<std::filesystem::path>& stillImage =
-                                 std::nullopt) {
+[[nodiscard]] int
+runDesktop(int& argc,
+           char** argv,
+           const bool smokeMode,
+           const std::optional<SmokeSources>& smokeSources = std::nullopt,
+           const bool shutdownDuringOpen = false,
+           const std::optional<std::filesystem::path>& stillImage = std::nullopt) {
     dvs::ui::configureGraphicsBackend();
     if (stillImage.has_value()) {
-        std::ofstream early{std::filesystem::path{std::filesystem::temp_directory_path() /
-                                                  "dvs_still_open.log"}};
+        std::ofstream early{
+            std::filesystem::path{std::filesystem::temp_directory_path() / "dvs_still_open.log"}};
         early << "START " << stillImage->string() << '\n';
     }
     dvs::ui::DesktopApplication desktop{
@@ -409,9 +409,9 @@ void installPlaybackTrace(dvs::app::ReviewRuntime& runtime) {
                                             false);
     }
     if (stillImage.has_value()) {
-        std::ofstream log{std::filesystem::path{std::filesystem::temp_directory_path() /
-                                                "dvs_still_open.log"},
-                          std::ios::app};
+        std::ofstream log{
+            std::filesystem::path{std::filesystem::temp_directory_path() / "dvs_still_open.log"},
+            std::ios::app};
         log << "AFTER_LOAD\n";
         const bool opened = desktop.openStillImageForAutomation(localFileUrl(*stillImage));
         log << (opened ? "OK\n" : "FAILED\n") << stillImage->string() << '\n';
@@ -2045,49 +2045,42 @@ struct PopupProbeResult final {
 int main(int argc, char* argv[]) {
     // Qt imageformat plugins may omit PNG/JPEG on this deploy; route still-image open
     // through FFmpeg so File → Open image… works for common formats.
-    dvs::ui::ImageReviewController::setProcessStillImageLoader(
-        [](const QByteArray& bytes, QImage* image, std::string* error) {
-            if (bytes.isEmpty() || image == nullptr) {
-                if (error != nullptr) {
-                    *error = "Empty image payload.";
-                }
-                return false;
+    dvs::ui::ImageReviewController::setProcessStillImageLoader([](const QByteArray& bytes,
+                                                                  QImage* image,
+                                                                  std::string* error) {
+        if (bytes.isEmpty() || image == nullptr) {
+            if (error != nullptr) {
+                *error = "Empty image payload.";
             }
-            dvs::media::StillImage still;
-            if (!dvs::media::decodeStillImageBytes(
-                    reinterpret_cast<const std::uint8_t*>(bytes.constData()),
-                    static_cast<std::size_t>(bytes.size()),
-                    &still,
-                    error)) {
-                return false;
+            return false;
+        }
+        dvs::media::StillImage still;
+        if (!dvs::media::decodeStillImageBytes(
+                reinterpret_cast<const std::uint8_t*>(bytes.constData()),
+                static_cast<std::size_t>(bytes.size()),
+                &still,
+                error)) {
+            return false;
+        }
+        if (still.width <= 0 || still.height <= 0 ||
+            still.rgba.size() != static_cast<std::size_t>(still.width) *
+                                     static_cast<std::size_t>(still.height) * 4U) {
+            if (error != nullptr) {
+                *error = "Decoded image buffer is invalid.";
             }
-            if (still.width <= 0 || still.height <= 0 ||
-                still.rgba.size() !=
-                    static_cast<std::size_t>(still.width) *
-                        static_cast<std::size_t>(still.height) * 4U) {
-                if (error != nullptr) {
-                    *error = "Decoded image buffer is invalid.";
-                }
-                return false;
-            }
-            const QImage decoded(still.rgba.data(),
-                                 still.width,
-                                 still.height,
-                                 still.width * 4,
-                                 QImage::Format_RGBA8888);
-            *image = decoded.copy();
-            return !image->isNull();
-        });
+            return false;
+        }
+        const QImage decoded(
+            still.rgba.data(), still.width, still.height, still.width * 4, QImage::Format_RGBA8888);
+        *image = decoded.copy();
+        return !image->isNull();
+    });
 
     const bool smokeArgument = argc >= 2 && std::string_view{argv[1]}.starts_with("--ui-");
     try {
         if (argc == 3 && std::string_view{argv[1]} == "--open-still") {
-            return runDesktop(argc,
-                              argv,
-                              false,
-                              std::nullopt,
-                              false,
-                              std::filesystem::path{argv[2]});
+            return runDesktop(
+                argc, argv, false, std::nullopt, false, std::filesystem::path{argv[2]});
         }
         if (argc == 2 && std::string_view{argv[1]} == "--ui-stderr-smoke") {
             writeStandardError("DVS_GUI_STDERR_OK\n");

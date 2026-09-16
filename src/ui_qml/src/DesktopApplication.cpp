@@ -2,8 +2,8 @@
 
 #include "dvs/ui/ComparisonSurface.h"
 #include "dvs/ui/ImageReviewController.h"
-#include "dvs/ui/ReviewImageProvider.h"
 #include "dvs/ui/ReviewController.h"
+#include "dvs/ui/ReviewImageProvider.h"
 #include "dvs/ui/ReviewPreferencesController.h"
 #include "dvs/ui/ReviewSessionFacade.h"
 #include "dvs/ui/ReviewShellController.h"

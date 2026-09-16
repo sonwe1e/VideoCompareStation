@@ -94,11 +94,10 @@ TEST(TraceSinkTests, FileSinkExportsOptionalIncomingIdentityFields) {
     const std::vector<std::string> lines = readLines(path);
     ASSERT_EQ(lines.size(), 2U);
     EXPECT_EQ(lines[0], R"({"traceVersion":1})");
-    EXPECT_EQ(
-        lines[1],
-        R"({"t":5,"kind":4,"s":1,"e":1,"topo":1,"tl":1,)"
-        R"("al":1,"gen":2,"dev":3,"req":4,"cmd":null,"p":6,)"
-        R"("is":1,"ie":1,"igen":2,"idev":3,"ireq":9})");
+    EXPECT_EQ(lines[1],
+              R"({"t":5,"kind":4,"s":1,"e":1,"topo":1,"tl":1,)"
+              R"("al":1,"gen":2,"dev":3,"req":4,"cmd":null,"p":6,)"
+              R"("is":1,"ie":1,"igen":2,"idev":3,"ireq":9})");
 }
 
 TEST(TraceSinkTests, MemorySinkRemainsBoundedAndAccumulatesOverflow) {

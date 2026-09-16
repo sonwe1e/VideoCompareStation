@@ -342,10 +342,9 @@ d3dBacking(const std::shared_ptr<const GpuFrameResource>& frame) noexcept {
                 .sourceUvRectB = textureRegionValues(regionB),
                 .planeDimensionsA = sourcePlaneDimensions(frameA.geometry()),
                 .planeDimensionsB = sourcePlaneDimensions(frameB.geometry()),
-                .metric = static_cast<std::uint32_t>(
-                    state.viewMode == SurfaceViewMode::Fade
-                        ? SurfaceDifferenceMetric::Crossfade
-                        : state.differenceMetric),
+                .metric = static_cast<std::uint32_t>(state.viewMode == SurfaceViewMode::Fade
+                                                         ? SurfaceDifferenceMetric::Crossfade
+                                                         : state.differenceMetric),
                 .gain = differenceGain(state.differenceGain),
                 .filter = static_cast<std::uint32_t>(state.differenceMetric ==
                                                              SurfaceDifferenceMetric::ExactPlanes

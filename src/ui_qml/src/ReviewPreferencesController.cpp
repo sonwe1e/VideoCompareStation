@@ -528,21 +528,19 @@ private:
             break;
         }
         values.insert_or_assign(std::string{kViewModeKey}, std::string{viewModeName});
-        static constexpr std::string_view metrics[] = {
-            "rgb-absolute",
-            "luma",
-            "chroma",
-            "heatmap",
-            "exact-planes",
-            "signed-subtract",
-            "highlight"};
+        static constexpr std::string_view metrics[] = {"rgb-absolute",
+                                                       "luma",
+                                                       "chroma",
+                                                       "heatmap",
+                                                       "exact-planes",
+                                                       "signed-subtract",
+                                                       "highlight"};
         static constexpr std::string_view gains[] = {"1x", "2x", "4x", "8x", "16x"};
         static constexpr std::string_view filters[] = {"nearest", "bilinear", "bicubic"};
         const auto metricIndex = static_cast<std::size_t>(differenceMetric_);
         values.insert_or_assign(
             std::string{kDifferenceMetricKey},
-            std::string{metricIndex < std::size(metrics) ? metrics[metricIndex]
-                                                         : metrics[0]});
+            std::string{metricIndex < std::size(metrics) ? metrics[metricIndex] : metrics[0]});
         values.insert_or_assign(std::string{kDifferenceGainKey},
                                 std::string{gains[static_cast<std::size_t>(differenceGain_)]});
         const char* edgeName = "0-1";
