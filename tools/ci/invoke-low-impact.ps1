@@ -1,3 +1,4 @@
+#requires -Version 7.0
 [CmdletBinding(PositionalBinding = $false)]
 param(
     [Parameter(Mandatory = $true, Position = 0)]

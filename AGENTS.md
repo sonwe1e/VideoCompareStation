@@ -13,7 +13,32 @@ architecture notes, and notices.
 
 ## Build, Test, and Package Commands
 
-From repository root:
+PowerShell 7 (`pwsh`) is the required shell — every repository `.ps1`/`.psm1` carries
+`#requires -Version 7.0`, and CI runs `shell: pwsh`. Windows PowerShell 5.1 is not
+supported for repo scripts.
+
+Machine-local build defaults (vcpkg, MSVC/vcvarsall, ninja) live in one place,
+`tools/build/env.ps1`, with this machine's paths as defaults and parameters/
+environment as overrides:
+- `VCPKG_ROOT` default `G:\Workspaces\vcpkg` (an invalid existing `$env:VCPKG_ROOT`
+  is ignored with a warning rather than trusted);
+- MSVC via the VS 2022 BuildTools `vcvarsall.bat`
+  (`C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat`,
+  with Community/Professional/Enterprise fallbacks);
+- Ninja from `C:\msys64\ucrt64\bin` prepended to `PATH` when not already found.
+
+Use the unified wrapper instead of hand-rolled shell:
+
+```powershell
+pwsh tools/build/build.ps1 -Preset dev                       # build a preset
+pwsh tools/build/build.ps1 -Preset release -Test             # build + full ctest
+pwsh tools/build/build.ps1 -Preset dev -FormatCheck -Lint    # quality gates
+pwsh tools/build/build.ps1 -Preset dev -Test -TestRegex 'ui.ImageReviewControllerTests'
+```
+
+It sources `env.ps1`, auto-configures when the build dir has no CMake cache, and runs
+cmake/ctest inside the vcvarsall environment. The raw preset commands below remain valid
+inside such a shell.
 
 ```powershell
 cmake --preset dev

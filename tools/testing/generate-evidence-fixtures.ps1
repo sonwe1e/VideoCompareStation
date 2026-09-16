@@ -1,3 +1,4 @@
+#requires -Version 7.0
 <#
 .SYNOPSIS
     Generates deterministic T0 evidence fixtures: frame-number videos with explicit source

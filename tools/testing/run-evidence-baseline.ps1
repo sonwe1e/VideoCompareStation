@@ -1,3 +1,4 @@
+#requires -Version 7.0
 <#
 .SYNOPSIS
     Runs the T0 evidence baseline experiments (P1-P4) and produces an evidence bundle:

@@ -1,3 +1,4 @@
+#requires -Version 7.0
 Set-StrictMode -Version Latest
 
 Import-Module (Join-Path $PSScriptRoot 'CommandLineArgument.psm1') -Force

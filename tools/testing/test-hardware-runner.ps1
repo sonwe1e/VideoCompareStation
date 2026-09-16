@@ -1,3 +1,4 @@
+#requires -Version 7.0
 param(
     [ValidateRange(1, 240)]
     [int]$MinimumRefreshRate = 120
