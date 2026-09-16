@@ -89,6 +89,20 @@
 | 回退 | 逐入口切到新的 route adapter，保持旧控制器 API；保留完整契约测试。回退 UI 呈现可以，工作区输入隔离和取消不破坏状态不允许撤销。 |
 
 
+**T3 验收记录（2026-09-16）**
+
+- 实现：`Main.qml` 新增 `workspaceSession`（activeMedia / pendingMedia / committedMedia / committedIdentity / committedRevision），所有入口先 `beginWorkspaceOpen()` 记录意图，只有实际提交成功后才 `commitWorkspace()` 并经 `showWorkspace()` 切换视图；打开或取消选择器不再改写已提交工作区。`activateWorkspace()` 在离开视频时暂停，也在返回视频时强制回到明确暂停态；`commitWorkspace(image)` 不会关闭视频会话，返回后 sourceCount、currentFrame 与暂停后的位置均保留。原生图片/Folder 对话框取消路径接入 `cancelWorkspaceOpen()`，拖放确认框取消会清理 staged 源。
+
+- 输入隔离：`globalMediaShortcutsEnabled` 增加 `workspaceSession.videoActive`，图片工作区不再收到 Space/方向键/I/O 等视频命令；`inputContext` 把原生图片选择器纳入 modal 级（3），文本框/菜单/popup 仍按 1/2/3 分级。根窗口新增 Ctrl+O / Ctrl+Shift+O / Ctrl+I / Ctrl+Shift+I / Ctrl+Alt+I / Ctrl+W / Ctrl+Shift+F 路由，`ReviewShortcuts` 中重复的 Ctrl+O/Ctrl+Shift+O/Ctrl+W 删除。焦点通过 `focusActiveWorkspace()` 跟随可见工作区，ImageWorkspace 可见时主动接管焦点。
+
+- 任务关闭：Ctrl+W 以 activeTaskHasMedia 为门禁；图片任务只 closeAll() 并清理文件夹导航，视频任务才提交 CloseSession；关闭当前任务后若有另一侧已提交任务则切回该任务。针对 Shell 缓存 Active Sources 与媒体真相短暂不同步的竞态，仅在 shell 侧为空而 controller 仍有源时回退到 controller 关闭，避免隐藏视频任务残留。File 菜单关闭项按工作区动态显示为关闭图片工具或关闭视频。
+
+- 文件夹导航脱离：ImageFolderPairModel::clear() 一次性清空行、currentPair、左右路径与错误；直接导入散图成功后 detachFolderSession() 调用它，避免旧文件夹列表继续响应方向键。双击/单图替换、双图原子提交、文件夹首行提交仍走既有校验路径。
+
+- 测试：新增 WorkspaceOpenIntentDoesNotOverrideCommittedWorkspace、WorkspaceSwitchPausesAndRetainsVideoSession、ImageWorkspaceArrowsDoNotDriveHiddenVideo、CloseCurrentTaskOnlyClosesActiveWorkspace 四项 QML 契约测试，ImageFolderPairModelTests::ClearDetachesFolderSessionAndSelection，并扩展现有文件夹端到端用例验证散图导入后方向键导航已脱离。开发全套 ctest --preset dev 519/519 通过（1 项既有 disabled），qmllint --max-warnings 0 与 format-check 通过。
+
+- 遗留：图片打开失败时若此前图片画布已有内容，performImageReview 单图路径仍会先 closeAll() 再加载（此前行为，见 T4 的后台加载/失败保留设计）；选择器取消不会修改任何已提交状态，但最近项入口当前产品尚不存在，未涉及。
+
 ### T4 · P1｜图片后台加载与按需派生计算
 
 | 字段 | 可执行约定 |

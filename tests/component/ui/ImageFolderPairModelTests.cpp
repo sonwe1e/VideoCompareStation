@@ -193,4 +193,31 @@ TEST_F(ImageFolderPairModelTests, EmptyFoldersReportNoPairs) {
     EXPECT_EQ(model.firstCompleteRow(), -1);
 }
 
+TEST_F(ImageFolderPairModelTests, ClearDetachesFolderSessionAndSelection) {
+    static_cast<void>(writeFile(left_, "shot.png", "a"));
+    static_cast<void>(writeFile(right_, "shot.png", "b"));
+    ImageFolderPairModel model;
+    model.setPairOpener([](const QUrl&, const QUrl&, const int) { return QString{}; });
+    ASSERT_TRUE(model.loadFolders(folderUrl(left_), folderUrl(right_)));
+    ASSERT_EQ(model.pairCount(), 1);
+    ASSERT_TRUE(model.openPairAt(0));
+    ASSERT_EQ(model.currentPair(), 0);
+    ASSERT_FALSE(model.leftFolderPath().isEmpty());
+
+    model.clear();
+    EXPECT_EQ(model.pairCount(), 0);
+    EXPECT_EQ(model.currentPair(), -1);
+    EXPECT_TRUE(model.leftFolderPath().isEmpty());
+    EXPECT_TRUE(model.rightFolderPath().isEmpty());
+    EXPECT_TRUE(model.leftFolderName().isEmpty());
+    EXPECT_TRUE(model.rightFolderName().isEmpty());
+    EXPECT_TRUE(model.errorText().isEmpty());
+    EXPECT_FALSE(model.openPairAt(0));
+
+    // Repeating clear on an already-detached model is a safe no-op.
+    model.clear();
+    EXPECT_EQ(model.pairCount(), 0);
+    EXPECT_EQ(model.currentPair(), -1);
+}
+
 } // namespace

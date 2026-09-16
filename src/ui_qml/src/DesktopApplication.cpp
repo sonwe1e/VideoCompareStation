@@ -239,17 +239,30 @@ public:
             return false;
         }
         // Automation reports whether the UI accepted the action. Media validation failures are
-        // intentionally projected through ReviewController and asserted by the smoke state machine.
+        // intentionally projected through ReviewController and asserted by the smoke state machine,
+        // so a synchronous submit rejection must not be reported as an automation failure here.
         static_cast<void>(shellController_->openStagedSources(false));
+        static_cast<void>(
+            QMetaObject::invokeMethod(window_, "activateWorkspace", Q_ARG(QVariant, QVariant{0})));
         return true;
     }
 
     [[nodiscard]] bool openStillImageForAutomation(const QUrl& url) noexcept {
-        if (imageReview_ == nullptr || window_ == nullptr || !url.isValid()) {
+        if (window_ == nullptr || !url.isValid()) {
             return false;
         }
-        static_cast<void>(window_->setProperty("workspaceMode", 1));
-        return imageReview_->openPrimary(url);
+        // Route through the same QML commit boundary as the menu/drop paths so workspace
+        // intent and committed task identity stay consistent under automation.
+        QVariantList urls;
+        urls.push_back(url);
+        QVariant opened;
+        if (!QMetaObject::invokeMethod(window_,
+                                       "performImageReview",
+                                       Q_RETURN_ARG(QVariant, opened),
+                                       Q_ARG(QVariant, QVariant{urls}))) {
+            return false;
+        }
+        return opened.toBool();
     }
 
     [[nodiscard]] bool loadFolderComparisonForAutomation(const QUrl& left,
@@ -257,15 +270,16 @@ public:
         if (folderPairs_ == nullptr || window_ == nullptr || !left.isValid() || !right.isValid()) {
             return false;
         }
-        static_cast<void>(window_->setProperty("workspaceMode", 1));
-        if (!folderPairs_->loadFolders(left, right)) {
+        if (!window_->setProperty("imageFolderLeftUrl", left) ||
+            !window_->setProperty("imageFolderRightUrl", right)) {
             return false;
         }
-        const int first = folderPairs_->firstCompleteRow();
-        if (first < 0) {
+        QVariant loaded;
+        if (!QMetaObject::invokeMethod(
+                window_, "loadFolderComparison", Q_RETURN_ARG(QVariant, loaded))) {
             return false;
         }
-        return folderPairs_->openPairAt(first);
+        return loaded.toBool();
     }
 
     [[nodiscard]] QObject* imageReviewForAutomation() const noexcept {

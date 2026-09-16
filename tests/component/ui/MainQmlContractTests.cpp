@@ -153,6 +153,145 @@ public:
     void cancel(const application::RequestContext&) noexcept override {}
 };
 
+// Shared QML/controller harness for the workspace-routing contracts. It keeps the two-source
+// video session, the still-image controller and the folder model alive for the whole test.
+class WorkspaceHarness final {
+public:
+    WorkspaceHarness() {
+        snapshot->graphicsReady = true;
+        snapshot->sessionState = domain::SessionState::kReady;
+        snapshot->playbackState = domain::PlaybackState::kPaused;
+        snapshot->displayedFrame = domain::FrameId{41};
+        snapshot->canonicalFrameCount = 100U;
+        snapshot->sources = {
+            application::SessionSourceView{
+                .sourceId = 0U,
+                .role = domain::ComparisonRole::kReference,
+                .displayName = "A",
+            },
+            application::SessionSourceView{
+                .sourceId = 1U,
+                .role = domain::ComparisonRole::kPrediction,
+                .displayName = "B",
+            },
+        };
+        snapshot->presentedSources = {
+            application::PresentedSourceState{
+                .sourceId = 0U,
+                .sourceFrameId = domain::FrameId{41},
+                .matchKind = application::FrameMatchKind::ExactIndex,
+            },
+            application::PresentedSourceState{
+                .sourceId = 1U,
+                .sourceFrameId = domain::FrameId{41},
+                .matchKind = application::FrameMatchKind::ExactIndex,
+            },
+        };
+        controller = std::make_unique<ReviewController>(ReviewController::Dependencies{
+            .submit =
+                [this](application::PlaybackCommand command) {
+                    submitted.push_back(std::move(command));
+                    return application::PortSubmitResult::Accepted;
+                },
+            .snapshot = [this] { return snapshot; },
+            .takeCompletedCommands =
+                [this] {
+                    std::vector<application::CommandTerminal> result = std::move(terminals);
+                    terminals.clear();
+                    return result;
+                },
+        });
+        shell = std::make_unique<ReviewShellController>(*controller, preferences);
+        facade = std::make_unique<ReviewSessionFacade>(*controller, preferences, *shell);
+        folderPairs.setPairOpener(
+            [this](const QUrl& primary, const QUrl& secondary, const int pairId) {
+                if (!imageReview.openPairAtomically(primary, secondary, pairId)) {
+                    return imageReview.errorText();
+                }
+                return QString{};
+            });
+    }
+
+    [[nodiscard]] bool create() {
+        const QString importPath =
+            QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml"));
+        engine.addImportPath(importPath);
+        engine.rootContext()->setContextProperty(QStringLiteral("reviewController"),
+                                                 controller.get());
+        engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
+        engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), shell.get());
+        engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), facade.get());
+        engine.rootContext()->setContextProperty(QStringLiteral("imageReview"), &imageReview);
+        engine.rootContext()->setContextProperty(QStringLiteral("imageFolderPairs"), &folderPairs);
+        engine.addImageProvider(QStringLiteral("vcs-review"),
+                                new ReviewImageProvider(&imageReview));
+        QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
+        if (component.status() != QQmlComponent::Ready) {
+            error = componentErrors(component);
+            return false;
+        }
+        root.reset(component.create());
+        if (!root) {
+            error = componentErrors(component);
+            return false;
+        }
+        window = qobject_cast<QQuickWindow*>(root.get());
+        if (!window) {
+            error = "Main.qml root is not a QQuickWindow";
+            return false;
+        }
+        window->resize(1280, 800);
+        settle();
+        return true;
+    }
+
+    [[nodiscard]] bool activateWorkspace(const int media) {
+        QVariant result;
+        return QMetaObject::invokeMethod(root.get(),
+                                         "activateWorkspace",
+                                         Q_RETURN_ARG(QVariant, result),
+                                         Q_ARG(QVariant, QVariant{media})) &&
+               result.toBool();
+    }
+
+    [[nodiscard]] bool beginWorkspaceOpen(const int media) {
+        QVariant result;
+        return QMetaObject::invokeMethod(root.get(),
+                                         "beginWorkspaceOpen",
+                                         Q_RETURN_ARG(QVariant, result),
+                                         Q_ARG(QVariant, QVariant{media})) &&
+               result.toBool();
+    }
+
+    [[nodiscard]] bool cancelWorkspaceOpen() {
+        QVariant result;
+        return QMetaObject::invokeMethod(
+                   root.get(), "cancelWorkspaceOpen", Q_RETURN_ARG(QVariant, result)) &&
+               result.toBool();
+    }
+
+    void settle(const int iterations = 5) {
+        for (int iteration = 0; iteration < iterations; ++iteration) {
+            QCoreApplication::processEvents();
+        }
+    }
+
+    std::shared_ptr<application::SessionSnapshot> snapshot =
+        std::make_shared<application::SessionSnapshot>();
+    std::vector<application::PlaybackCommand> submitted;
+    std::vector<application::CommandTerminal> terminals;
+    std::unique_ptr<ReviewController> controller;
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    std::unique_ptr<ReviewShellController> shell;
+    std::unique_ptr<ReviewSessionFacade> facade;
+    ImageReviewController imageReview;
+    ImageFolderPairModel folderPairs;
+    QQmlEngine engine;
+    std::unique_ptr<QObject> root;
+    QQuickWindow* window = nullptr;
+    std::string error;
+};
+
 TEST(MainQmlContractTests, MapsEveryCurrentMediaErrorAndExcludesDeletedUiDomains) {
     QFile messageCatalog{QStringLiteral(":/qml/ReviewMessageCatalog.qml")};
     ASSERT_TRUE(messageCatalog.open(QIODevice::ReadOnly));
@@ -1976,7 +2115,12 @@ TEST(MainQmlContractTests, ImageWorkspaceWipeHandleMovesSplitPosition) {
     ASSERT_TRUE(imageReview.openPrimaryImage(std::move(left), QStringLiteral("left")));
     ASSERT_TRUE(imageReview.openSecondaryImage(std::move(right), QStringLiteral("right")));
     imageReview.setCompareMode(ImageReviewController::Wipe);
-    ASSERT_TRUE(root->setProperty("workspaceMode", 1));
+    QVariant workspaceActivated;
+    ASSERT_TRUE(QMetaObject::invokeMethod(root.get(),
+                                          "activateWorkspace",
+                                          Q_RETURN_ARG(QVariant, workspaceActivated),
+                                          Q_ARG(QVariant, QVariant{1})));
+    ASSERT_TRUE(workspaceActivated.toBool());
     for (int iteration = 0; iteration < 5; ++iteration) {
         QCoreApplication::processEvents();
     }
@@ -2268,8 +2412,171 @@ TEST(MainQmlContractTests, ImageFolderComparisonLoadsSidebarAndOpensFirstPair) {
     EXPECT_EQ(folderPairs.currentPair(), 1);
     // The single-sided row 2 must never open.
     EXPECT_FALSE(folderPairs.openPairAt(2));
+
+    // A direct loose-image import leaves the folder task: its list selection and arrow-key
+    // navigation must detach so the canvas identity and the list can never diverge.
+    QVariantList looseUrls;
+    looseUrls.push_back(
+        QUrl::fromLocalFile(QDir(leftDir).filePath(QStringLiteral("frame003.png"))));
+    QVariant looseOpened;
+    ASSERT_TRUE(QMetaObject::invokeMethod(root.get(),
+                                          "performImageReview",
+                                          Q_RETURN_ARG(QVariant, looseOpened),
+                                          Q_ARG(QVariant, QVariant{looseUrls})));
+    EXPECT_TRUE(looseOpened.toBool());
+    EXPECT_EQ(folderPairs.pairCount(), 0);
+    EXPECT_EQ(folderPairs.currentPair(), -1);
+    EXPECT_FALSE(imageReview.hasSecondary());
+    EXPECT_EQ(root->property("workspaceMode").toInt(), 1);
 }
 
+TEST(MainQmlContractTests, WorkspaceOpenIntentDoesNotOverrideCommittedWorkspace) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    QObject* const session = harness.root->findChild<QObject*>(QStringLiteral("workspaceSession"));
+    auto* const imageWorkspace =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
+    ASSERT_NE(session, nullptr);
+    ASSERT_NE(imageWorkspace, nullptr);
+
+    const int sourceCountBefore = harness.controller->sourceCount();
+    const auto displayedFrameBefore = harness.snapshot->displayedFrame;
+    ASSERT_TRUE(harness.beginWorkspaceOpen(1));
+    EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 0);
+    EXPECT_EQ(session->property("pendingMedia").toInt(), 1);
+    EXPECT_EQ(harness.controller->sourceCount(), sourceCountBefore);
+    EXPECT_EQ(harness.snapshot->displayedFrame, displayedFrameBefore);
+    EXPECT_FALSE(imageWorkspace->property("visible").toBool());
+
+    // Cancelling the selector/staging intent must leave the committed video workspace and its
+    // position untouched; it must not silently switch to an empty image workspace.
+    ASSERT_TRUE(harness.cancelWorkspaceOpen());
+    EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 0);
+    EXPECT_EQ(session->property("pendingMedia").toInt(), -1);
+    EXPECT_EQ(harness.controller->sourceCount(), sourceCountBefore);
+    EXPECT_EQ(harness.snapshot->displayedFrame, displayedFrameBefore);
+    EXPECT_FALSE(imageWorkspace->property("visible").toBool());
+}
+
+TEST(MainQmlContractTests, WorkspaceSwitchPausesAndRetainsVideoSession) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.snapshot->playbackState = domain::PlaybackState::kPlaying;
+    harness.controller->refreshProjection();
+    harness.settle();
+    ASSERT_TRUE(harness.controller->playing());
+    const int sourceCountBefore = harness.controller->sourceCount();
+    const int frameBefore = harness.controller->currentFrame();
+
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    ASSERT_FALSE(harness.submitted.empty());
+    const auto* const pause = std::get_if<application::PauseCommand>(&harness.submitted.back());
+    ASSERT_NE(pause, nullptr) << "leaving video must pause the hidden session";
+    EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 1);
+    EXPECT_EQ(harness.controller->sourceCount(), sourceCountBefore);
+    EXPECT_EQ(harness.controller->currentFrame(), frameBefore);
+
+    // Complete the pause terminal: the retained session is then an explicit paused session.
+    harness.terminals.push_back(application::CommandTerminal{
+        .context = application::commandContext(harness.submitted.back()),
+        .outcome = application::CommandOutcome::Succeeded,
+    });
+    harness.snapshot->playbackState = domain::PlaybackState::kPaused;
+    harness.controller->refreshProjection();
+    harness.settle();
+    ASSERT_FALSE(harness.controller->playing());
+
+    // Returning to video shows the same sources and does not issue a close command.
+    harness.submitted.clear();
+    ASSERT_TRUE(harness.activateWorkspace(0));
+    EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 0);
+    EXPECT_EQ(harness.controller->sourceCount(), sourceCountBefore);
+    EXPECT_TRUE(harness.submitted.empty());
+
+    // Even a stale "playing" projection is corrected on return: the workspace never resumes
+    // playback implicitly after being hidden behind the image task.
+    harness.snapshot->playbackState = domain::PlaybackState::kPlaying;
+    harness.controller->refreshProjection();
+    harness.settle();
+    ASSERT_TRUE(harness.controller->playing());
+    harness.submitted.clear();
+    ASSERT_TRUE(harness.activateWorkspace(0));
+    ASSERT_FALSE(harness.submitted.empty());
+    EXPECT_NE(std::get_if<application::PauseCommand>(&harness.submitted.back()), nullptr);
+}
+
+TEST(MainQmlContractTests, ImageWorkspaceArrowsDoNotDriveHiddenVideo) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    auto* const viewport =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("mediaViewportFocusTarget"));
+    auto* const imageWorkspace =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
+    ASSERT_NE(viewport, nullptr);
+    ASSERT_NE(imageWorkspace, nullptr);
+
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    harness.settle();
+    EXPECT_TRUE(imageWorkspace->property("visible").toBool());
+    EXPECT_TRUE(imageWorkspace->hasActiveFocus())
+        << "the image workspace must be the actual key receiver while it is visible";
+    const std::size_t submittedBefore = harness.submitted.size();
+    sendKey(*harness.window, Qt::Key_Right);
+    EXPECT_EQ(harness.submitted.size(), submittedBefore)
+        << "arrow keys in the image workspace must not step the hidden video";
+
+    ASSERT_TRUE(harness.activateWorkspace(0));
+    harness.settle();
+    EXPECT_TRUE(viewport->hasActiveFocus());
+    sendKey(*harness.window, Qt::Key_Right);
+    ASSERT_GT(harness.submitted.size(), submittedBefore);
+    const auto* const step = std::get_if<application::StepFramesCommand>(&harness.submitted.back());
+    ASSERT_NE(step, nullptr);
+    EXPECT_EQ(step->delta, 1);
+}
+
+TEST(MainQmlContractTests, CloseCurrentTaskOnlyClosesActiveWorkspace) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    QImage image(32, 32, QImage::Format_ARGB32);
+    image.fill(QColor(10, 20, 30));
+    ASSERT_TRUE(harness.imageReview.openPrimaryImage(std::move(image), QStringLiteral("image-a")));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    harness.settle();
+    ASSERT_TRUE(harness.imageReview.hasPrimary());
+
+    // Ctrl+W in the image workspace closes only that task and reveals the retained video.
+    sendKey(*harness.window, Qt::Key_W, Qt::ControlModifier);
+    harness.settle();
+    EXPECT_FALSE(harness.imageReview.hasPrimary());
+    EXPECT_EQ(harness.controller->sourceCount(), 2);
+    EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 0);
+
+    // Ctrl+W in the video workspace closes only the video task; the retained image is shown
+    // and remains loaded.
+    QImage retained(16, 16, QImage::Format_ARGB32);
+    retained.fill(QColor(40, 50, 60));
+    ASSERT_TRUE(
+        harness.imageReview.openPrimaryImage(std::move(retained), QStringLiteral("retained")));
+    ASSERT_TRUE(harness.activateWorkspace(0));
+    harness.settle();
+    EXPECT_EQ(harness.root->property("inputContext").toInt(), 0);
+    EXPECT_TRUE(harness.root->property("activeTaskHasMedia").toBool());
+    EXPECT_TRUE(harness.root->property("globalMediaShortcutsEnabled").toBool());
+    harness.submitted.clear();
+    sendKey(*harness.window, Qt::Key_W, Qt::ControlModifier);
+    harness.settle();
+    ASSERT_FALSE(harness.submitted.empty());
+    EXPECT_NE(std::get_if<application::CloseSessionCommand>(&harness.submitted.back()), nullptr);
+    EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 1);
+    EXPECT_TRUE(harness.imageReview.hasPrimary());
+}
 } // namespace
 } // namespace dvs::ui
 

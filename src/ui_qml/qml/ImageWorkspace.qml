@@ -25,6 +25,11 @@ Rectangle {
 
     objectName: "imageWorkspace"
     color: "#06080d"
+    activeFocusOnTab: true
+    onVisibleChanged: {
+        if (visible)
+            Qt.callLater(() => control.forceActiveFocus());
+    }
 
     readonly property var imageReview: controller
     readonly property bool hasPrimary: Boolean(controller && controller.hasPrimary)

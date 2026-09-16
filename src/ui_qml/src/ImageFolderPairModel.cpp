@@ -208,6 +208,22 @@ bool ImageFolderPairModel::loadFolders(const QUrl& left, const QUrl& right) {
     return true;
 }
 
+void ImageFolderPairModel::clear() {
+    if (rows_.empty() && leftFolderPath_.isEmpty() && rightFolderPath_.isEmpty() &&
+        currentPair_ < 0 && errorText_.isEmpty()) {
+        return;
+    }
+    beginResetModel();
+    rows_.clear();
+    endResetModel();
+    currentPair_ = -1;
+    leftFolderPath_.clear();
+    rightFolderPath_.clear();
+    errorText_.clear();
+    emit currentPairChanged();
+    emit foldersChanged();
+}
+
 bool ImageFolderPairModel::openPairAt(const int row) {
     if (row < 0 || static_cast<std::size_t>(row) >= rows_.size() || !opener_) {
         return false;

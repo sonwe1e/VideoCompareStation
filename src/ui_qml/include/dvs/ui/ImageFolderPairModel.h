@@ -68,6 +68,7 @@ public:
     [[nodiscard]] QHash<int, QByteArray> roleNames() const override;
 
     Q_INVOKABLE bool loadFolders(const QUrl& left, const QUrl& right);
+    Q_INVOKABLE void clear();
     Q_INVOKABLE bool openPairAt(int row);
     Q_INVOKABLE int firstCompleteRow() const noexcept;
     // Steps to the next (delta > 0) or previous (delta < 0) two-sided row, wrapping
