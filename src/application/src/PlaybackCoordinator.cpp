@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -18,6 +19,7 @@
 #include <filesystem>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -440,6 +442,11 @@ private:
         domain::FrameId nextMinimum;
         domain::FrameId anchorFrame;
         std::chrono::steady_clock::time_point wallAnchor;
+        // Visual playback rate for this run. The cadence scales wall-clock time by 1/speed:
+        // due(n) = wallAnchor + (timeline(n) - timeline(anchor)) / speed, and the catch-up
+        // projection maps elapsed wall time back through speed. 1.0 keeps the historical
+        // real-time behavior bit-identical because the division is by exactly 1.0.
+        double speed = 1.0;
         std::optional<std::uint64_t> cadenceTimerId;
         std::optional<domain::FrameId> cadenceTarget;
         std::optional<PendingPlaybackFrame> frame;
@@ -704,6 +711,8 @@ private:
     void publishSnapshot(const bool notify = true) {
         state_.alignmentOffsets = alignmentOffsets_;
         state_.canonicalTimeline = canonicalTimeline_;
+        state_.playbackSpeed =
+            playbackRun_.has_value() ? playbackRun_->speed : pendingPlaybackSpeed_.value_or(1.0);
         // Snapshot committed: carries the displayed frame as payload so a trace can verify the
         // frame only advanced after a matching PresentationACK (ACK-before-commit invariant).
         const std::uint64_t displayed =
@@ -926,8 +935,18 @@ private:
         if (!deltaMicroseconds.has_value()) {
             return std::nullopt;
         }
+        // Speed divides the media-time delta: 2x halves the wall time between frames, 0.5x
+        // doubles it. The speed comes from a validated positive ladder, so the scaled delta
+        // stays finite; it is re-clamped into int64 through the checked helper below.
+        const double scaled = static_cast<double>(*deltaMicroseconds) / playbackRun_->speed;
+        if (!std::isfinite(scaled) ||
+            scaled > static_cast<double>(std::numeric_limits<int64_t>::max()) ||
+            scaled < static_cast<double>(std::numeric_limits<int64_t>::min())) {
+            return std::nullopt;
+        }
+        const auto scaledMicroseconds = static_cast<std::int64_t>(scaled);
         return detail::addDuration(playbackRun_->wallAnchor,
-                                   std::chrono::microseconds{*deltaMicroseconds});
+                                   std::chrono::microseconds{scaledMicroseconds});
     }
 
     [[nodiscard]] domain::FrameId
@@ -963,11 +982,22 @@ private:
         }
         const std::int64_t maximum = static_cast<std::int64_t>(frameCount - 1U);
         domain::FrameId frame = run.nextMinimum;
+        // Catch-up scales elapsed wall time by speed before mapping back onto the timeline, the
+        // exact inverse of playbackDue's division: at 2x two media seconds pass per wall second.
+        // Overflow falls back to the final frame rather than accumulating through UB.
+        const double scaledElapsed = static_cast<double>(elapsedMicroseconds) * run.speed;
+        std::int64_t mediaElapsedMicroseconds = 0;
+        if (!std::isfinite(scaledElapsed) ||
+            scaledElapsed > static_cast<double>(std::numeric_limits<int64_t>::max())) {
+            mediaElapsedMicroseconds = std::numeric_limits<std::int64_t>::max();
+        } else {
+            mediaElapsedMicroseconds = static_cast<std::int64_t>(scaledElapsed);
+        }
         // The target media time is built from checked addition. Overflow means the wall clock has
         // advanced far past the media end, so fall back to the final frame rather than accumulate
         // through undefined arithmetic.
         const auto targetMedia =
-            detail::checkedAdd(startAnchor.value().microseconds(), elapsedMicroseconds);
+            detail::checkedAdd(startAnchor.value().microseconds(), mediaElapsedMicroseconds);
         if (targetMedia.has_value()) {
             const auto atOrBefore = domain::canonicalFrameAtOrBefore(
                 *canonicalTimeline_, domain::MediaTime{*targetMedia});
@@ -1646,6 +1676,9 @@ private:
             .nextMinimum = firstTarget,
             .anchorFrame = *state_.displayedFrame,
             .wallAnchor = dependencies_.clock->now(),
+            // A rate chosen while paused overrides the rate carried by the play command, so
+            // setPlaybackRate(2x) followed by play() starts at 2x regardless of defaults.
+            .speed = pendingPlaybackSpeed_.value_or(command.speed),
             .restartFromEnd = restartFromEnd,
         };
         lastPlaybackProjectionAt_ = playbackRun_->wallAnchor;
@@ -1670,6 +1703,37 @@ private:
 
         playbackRun_->pauseRequested = true;
         state_.playbackState = domain::PlaybackState::kPaused;
+        publishSnapshot();
+        completeCommand(command.context, CommandOutcome::Succeeded);
+    }
+
+    // Rate changes take effect immediately during playback by re-anchoring the run on the
+    // current displayed frame: due() and the catch-up projection both derive from
+    // (anchorFrame, wallAnchor, speed), so re-anchoring at `now` keeps the displayed frame
+    // on screen and only rescales the time that elapses after the change. While paused the
+    // rate is remembered and applied by the next PlayCommand.
+    void beginSetPlaybackRate(const SetPlaybackRateCommand& command) {
+        pendingPlaybackSpeed_ = command.speed;
+        if (!playbackRun_.has_value() || !state_.displayedFrame.has_value()) {
+            completeCommand(command.context, CommandOutcome::Succeeded);
+            return;
+        }
+        playbackRun_->speed = command.speed;
+        playbackRun_->anchorFrame = *state_.displayedFrame;
+        playbackRun_->wallAnchor = dependencies_.clock->now();
+        lastPlaybackProjectionAt_.reset();
+        // A frame already in flight keeps its presentation deadline; only the pending cadence
+        // timer is rescheduled so the next request fires at the new rate's due time.
+        if (!playbackRun_->frame.has_value()) {
+            if (playbackRun_->cadenceTimerId.has_value()) {
+                static_cast<void>(
+                    dependencies_.deadlineScheduler->cancel(*playbackRun_->cadenceTimerId));
+                playbackRun_->cadenceTimerId.reset();
+            }
+            if (playbackRun_->cadenceTarget.has_value()) {
+                static_cast<void>(schedulePlaybackTarget(*playbackRun_->cadenceTarget));
+            }
+        }
         publishSnapshot();
         completeCommand(command.context, CommandOutcome::Succeeded);
     }
@@ -2645,6 +2709,12 @@ private:
             }
             return;
         }
+        if (std::holds_alternative<SetPlaybackRateCommand>(command)) {
+            // Rate changes must pass while a playback run is active; beginSetPlaybackRate
+            // re-anchors the cadence instead of disturbing the in-flight frame.
+            beginSetPlaybackRate(std::get<SetPlaybackRateCommand>(command));
+            return;
+        }
         const bool isOpenCommand = std::holds_alternative<OpenComparisonCommand>(command) ||
                                    std::holds_alternative<OpenDirectComparisonCommand>(command);
         const bool invalidatesAnalysis =
@@ -2744,6 +2814,9 @@ private:
                     beginPlay(value);
                 } else if constexpr (std::is_same_v<Value, PauseCommand>) {
                     // Pause is handled before the general active-operation admission gate.
+                } else if constexpr (std::is_same_v<Value, SetPlaybackRateCommand>) {
+                    // Rate changes are handled before the general active-operation admission
+                    // gate so they pass while playback runs.
                 } else if constexpr (std::is_same_v<Value, SetAlignmentOffsetsCommand>) {
                     beginSetAlignmentOffsets(value);
                 } else if constexpr (std::is_same_v<Value, EstimateAlignmentCommand>) {
@@ -3911,6 +3984,8 @@ private:
     std::optional<ReadySessionBackup> openRollback_;
     std::optional<PendingProbe> pendingProbe_;
     std::optional<PlaybackRun> playbackRun_;
+    // Rate chosen while paused; applied by the next PlayCommand so play resumes at this speed.
+    std::optional<double> pendingPlaybackSpeed_;
     std::optional<InteractiveStepRun> interactiveStepRun_;
     std::optional<std::chrono::steady_clock::time_point> lastPlaybackProjectionAt_;
     std::optional<std::chrono::steady_clock::time_point> lastInteractiveProjectionAt_;

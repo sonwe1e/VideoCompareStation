@@ -312,9 +312,14 @@ struct LocalFileValidation final {
 [[nodiscard]] bool isStillImageFile(const QUrl& url) {
     const QString suffix = QFileInfo{url.toLocalFile()}.suffix().toLower();
     static const QStringList kImageSuffixes = {
-        QStringLiteral("png"),  QStringLiteral("jpg"),  QStringLiteral("jpeg"),
-        QStringLiteral("bmp"),  QStringLiteral("gif"),  QStringLiteral("webp"),
-        QStringLiteral("tif"),  QStringLiteral("tiff"),
+        QStringLiteral("png"),
+        QStringLiteral("jpg"),
+        QStringLiteral("jpeg"),
+        QStringLiteral("bmp"),
+        QStringLiteral("gif"),
+        QStringLiteral("webp"),
+        QStringLiteral("tif"),
+        QStringLiteral("tiff"),
     };
     return kImageSuffixes.contains(suffix);
 }
@@ -356,6 +361,7 @@ struct ReviewView final {
     bool busy = false;
     bool framePending = false;
     bool playing = false;
+    qreal playbackRate = 1.0;
     bool graphicsReady = false;
     qint64 currentFrame = -1;
     qulonglong totalFrames = 0U;
@@ -863,11 +869,12 @@ public:
     }
 
     [[nodiscard]] bool play() {
-        return dispatchTransport([](const ReviewView& view) { return view.canPlay; },
-                                 [](const application::CommandContext& context) {
-                                     return application::PlaybackCommand{
-                                         application::PlayCommand{.context = context}};
-                                 });
+        return dispatchTransport(
+            [](const ReviewView& view) { return view.canPlay; },
+            [rate = view_.playbackRate](const application::CommandContext& context) {
+                return application::PlaybackCommand{
+                    application::PlayCommand{.context = context, .speed = rate}};
+            });
     }
 
     [[nodiscard]] bool pause() {
@@ -876,6 +883,15 @@ public:
                                      return application::PlaybackCommand{
                                          application::PauseCommand{.context = context}};
                                  });
+    }
+
+    [[nodiscard]] bool setPlaybackRate(const qreal rate) {
+        return dispatchTransport(
+            [](const ReviewView& view) { return view.canFirst; },
+            [rate](const application::CommandContext& context) {
+                return application::PlaybackCommand{
+                    application::SetPlaybackRateCommand{.context = context, .speed = rate}};
+            });
     }
 
     [[nodiscard]] bool togglePlayback() {
@@ -1252,6 +1268,7 @@ private:
             }
             next.playing = snapshot_->playbackState == domain::PlaybackState::kPlaying ||
                            snapshot_->playbackState == domain::PlaybackState::kBuffering;
+            next.playbackRate = snapshot_->playbackSpeed;
             next.alignmentRequired = snapshot_->alignmentRequired;
             next.automaticAlignmentPending = snapshot_->automaticAlignmentPending;
             next.canConfirmAutomaticAlignment = snapshot_->canConfirmAutomaticAlignment;
@@ -1887,6 +1904,10 @@ bool ReviewController::playing() const noexcept {
     return impl_->view().playing;
 }
 
+qreal ReviewController::playbackRate() const noexcept {
+    return impl_->view().playbackRate;
+}
+
 bool ReviewController::graphicsReady() const noexcept {
     return impl_->view().graphicsReady;
 }
@@ -2220,6 +2241,10 @@ bool ReviewController::play() {
 
 bool ReviewController::pause() {
     return impl_->pause();
+}
+
+bool ReviewController::setPlaybackRate(const qreal rate) {
+    return impl_->setPlaybackRate(rate);
 }
 
 bool ReviewController::togglePlayback() {

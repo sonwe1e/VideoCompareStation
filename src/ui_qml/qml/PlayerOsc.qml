@@ -12,6 +12,7 @@ Item {
     property bool docked: false
     property string sourceLabel
     required property bool playing
+    property real playbackRate: 1
     required property bool timelineEnabled
     required property int currentFrame
     required property int totalFrames
@@ -206,12 +207,17 @@ Item {
             canNext: control.canNext
             canLast: control.canLast
             playing: control.playing
+            playbackRate: control.playbackRate
             focusTarget: control.focusTarget
             onFirstRequested: control.actions.firstFrame()
             onPreviousSecondRequested: control.actions.stepBackwardSecond()
             onPreviousFiveRequested: control.actions.stepBackwardFive()
             onPreviousRequested: control.actions.previousFrame()
             onPlaybackRequested: control.actions.togglePlayback()
+            onPlaybackRateRequested: rate => {
+                if (control.actions && typeof control.actions.setPlaybackRate === "function")
+                    control.actions.setPlaybackRate(rate);
+            }
             onNextRequested: control.actions.nextFrame()
             onNextFiveRequested: control.actions.stepForwardFive()
             onNextSecondRequested: control.actions.stepForwardSecond()

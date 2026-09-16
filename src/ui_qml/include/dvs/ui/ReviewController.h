@@ -42,6 +42,7 @@ class ReviewController final : public QObject {
     Q_PROPERTY(bool busy READ busy NOTIFY stateChanged)
     Q_PROPERTY(bool framePending READ framePending NOTIFY stateChanged)
     Q_PROPERTY(bool playing READ playing NOTIFY stateChanged)
+    Q_PROPERTY(qreal playbackRate READ playbackRate NOTIFY stateChanged)
     Q_PROPERTY(bool graphicsReady READ graphicsReady NOTIFY stateChanged)
     Q_PROPERTY(qint64 currentFrame READ currentFrame NOTIFY frameStateChanged)
     Q_PROPERTY(qulonglong totalFrames READ totalFrames NOTIFY stateChanged)
@@ -145,6 +146,7 @@ public:
     [[nodiscard]] bool busy() const noexcept;
     [[nodiscard]] bool framePending() const noexcept;
     [[nodiscard]] bool playing() const noexcept;
+    [[nodiscard]] qreal playbackRate() const noexcept;
     [[nodiscard]] bool graphicsReady() const noexcept;
     // Zero-based canonical frame ID. -1 means that no frame has been presented.
     [[nodiscard]] qint64 currentFrame() const noexcept;
@@ -231,6 +233,9 @@ public:
     Q_INVOKABLE bool clearManualAlignmentAnchors();
     Q_INVOKABLE bool play();
     Q_INVOKABLE bool pause();
+    // Selects the visual playback rate. Accepted while playing (re-anchors the cadence) and
+    // while paused (applied by the next play()).
+    Q_INVOKABLE bool setPlaybackRate(qreal rate);
     Q_INVOKABLE bool togglePlayback();
     Q_INVOKABLE void refreshProjection() noexcept;
     // Returns the snapshot-frozen identity for a source URL. The value is rebuilt only when the

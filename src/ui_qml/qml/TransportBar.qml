@@ -12,6 +12,7 @@ Item {
     property bool canNext: false
     property bool canLast: false
     property bool playing: false
+    property real playbackRate: 1
     property Item focusTarget: null
     property bool compact: false
 
@@ -24,6 +25,7 @@ Item {
     signal nextFiveRequested
     signal nextSecondRequested
     signal lastRequested
+    signal playbackRateRequested(real rate)
 
     implicitWidth: buttons.implicitWidth
     implicitHeight: buttons.implicitHeight
@@ -113,6 +115,33 @@ Item {
             enabled: control.canNext
             onClicked: {
                 control.nextRequested();
+                control.restoreFocus();
+            }
+        }
+        ToolbarCombo {
+            id: playbackRateCombo
+
+            objectName: "playbackRateCombo"
+            implicitWidth: control.compact ? 58 : 68
+            model: [qsTr("0.25×"), qsTr("0.5×"), qsTr("1×"), qsTr("1.5×"), qsTr("2×"), qsTr("4×")]
+            currentIndex: {
+                const rate = control.playbackRate;
+                if (rate < 0.375)
+                    return 0;
+                if (rate < 0.75)
+                    return 1;
+                if (rate < 1.25)
+                    return 2;
+                if (rate < 1.75)
+                    return 3;
+                if (rate < 3)
+                    return 4;
+                return 5;
+            }
+            Accessible.name: qsTr("播放速度")
+            onActivated: index => {
+                const ladder = [0.25, 0.5, 1, 1.5, 2, 4];
+                control.playbackRateRequested(ladder[index]);
                 control.restoreFocus();
             }
         }

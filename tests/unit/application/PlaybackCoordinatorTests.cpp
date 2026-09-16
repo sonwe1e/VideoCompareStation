@@ -1885,6 +1885,88 @@ TEST(PlaybackCoordinatorTests, PlayUsesAbsoluteRationalCadenceAndSequentialFrame
     EXPECT_EQ(following->frameId, domain::FrameId{3});
 }
 
+TEST(PlaybackCoordinatorTests, PlayCommandScalesCadenceBySpeed) {
+    const auto scheduler = std::make_shared<FakeDeadlineScheduler>();
+    const auto clock = std::make_shared<FakeSteadyClock>();
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator =
+        makeCoordinator(provider, render, std::make_shared<FakeMediaProbe>(), scheduler, clock);
+    markGraphicsReady(coordinator);
+    openReady(coordinator, provider, render);
+
+    const auto ready = coordinator->snapshot();
+    ASSERT_EQ(coordinator->submit(PlayCommand{
+                  .context =
+                      CommandContext{
+                          .sessionId = ready->sessionId,
+                          .sessionEpoch = ready->sessionEpoch,
+                          .commandId = domain::CommandId{2},
+                      },
+                  .speed = 2.0,
+              }),
+              PortSubmitResult::Accepted);
+    const auto playTerminal = waitForTerminals(coordinator, 1U);
+    ASSERT_EQ(playTerminal.size(), 1U);
+    EXPECT_EQ(playTerminal.front().outcome, CommandOutcome::Succeeded);
+    EXPECT_DOUBLE_EQ(coordinator->snapshot()->playbackSpeed, 2.0);
+
+    // At 2x the first cadence fires at half the 33'334us single-frame interval, minus the
+    // 14ms presentation lead: 33'334/2 - 14'000 = 2'667us.
+    ASSERT_TRUE(scheduler->waitForScheduleCount(2U));
+    const auto firstCadence = scheduler->request(1U);
+    ASSERT_TRUE(firstCadence.has_value());
+    EXPECT_EQ(firstCadence->due, clock->now() + 2'667us);
+}
+
+TEST(PlaybackCoordinatorTests, SetPlaybackRateWhilePlayingReanchorsCadence) {
+    const auto scheduler = std::make_shared<FakeDeadlineScheduler>();
+    const auto clock = std::make_shared<FakeSteadyClock>();
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator =
+        makeCoordinator(provider, render, std::make_shared<FakeMediaProbe>(), scheduler, clock);
+    markGraphicsReady(coordinator);
+    openReady(coordinator, provider, render);
+
+    const auto ready = coordinator->snapshot();
+    const CommandContext playContext{
+        .sessionId = ready->sessionId,
+        .sessionEpoch = ready->sessionEpoch,
+        .commandId = domain::CommandId{2},
+    };
+    ASSERT_EQ(coordinator->submit(PlayCommand{.context = playContext}), PortSubmitResult::Accepted);
+    ASSERT_EQ(waitForTerminals(coordinator, 1U).size(), 1U);
+    ASSERT_TRUE(scheduler->waitForScheduleCount(2U));
+    ASSERT_TRUE(waitUntil([&coordinator] {
+        return coordinator->snapshot()->playbackState == domain::PlaybackState::kPlaying;
+    }));
+
+    // Halve the speed while playing: the run re-anchors on the displayed frame (frame 0) and
+    // the pending cadence is rescheduled, so the next due is the slowed first-frame interval
+    // from the new anchor minus the presentation lead: 33'334/0.5 would be a full second for
+    // frame 1's due at 0.5x, but the immediate target is still frame 1 → 66'668 - 14'000.
+    ASSERT_EQ(coordinator->submit(SetPlaybackRateCommand{
+                  .context =
+                      CommandContext{
+                          .sessionId = ready->sessionId,
+                          .sessionEpoch = ready->sessionEpoch,
+                          .commandId = domain::CommandId{3},
+                      },
+                  .speed = 0.5,
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_EQ(waitForTerminals(coordinator, 1U).size(), 1U);
+    EXPECT_DOUBLE_EQ(coordinator->snapshot()->playbackSpeed, 0.5);
+
+    // The rescheduled cadence is the third scheduler entry (index 2): openReady's open request
+    // used index 0, the initial play cadence used index 1.
+    ASSERT_TRUE(scheduler->waitForScheduleCount(3U));
+    const auto reanchored = scheduler->request(2U);
+    ASSERT_TRUE(reanchored.has_value());
+    EXPECT_EQ(reanchored->due, clock->now() + 52'668us);
+}
+
 TEST(PlaybackCoordinatorTests, StepBeforeCadenceCancelsRunAndRejectsTheStaleTick) {
     const auto scheduler = std::make_shared<FakeDeadlineScheduler>();
     const auto provider = std::make_shared<FakeFrameProvider>();

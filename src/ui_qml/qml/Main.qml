@@ -1518,6 +1518,7 @@ ApplicationWindow {
         docked: root.transportDocked
         sourceLabel: root.sourceAName
         playing: root.playing
+        playbackRate: root.controller ? Number(root.controller.playbackRate) : 1
         timelineEnabled: root.timelineEnabled
         currentFrame: Number(root.currentFrame)
         totalFrames: Number(root.totalFrames)
