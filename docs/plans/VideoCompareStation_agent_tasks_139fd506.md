@@ -152,6 +152,38 @@
 | 主要风险 | 2000 ms 常量不是已确认根因；render ACK 不是物理显示。连续播放允许整组跳过，但计数必须真实；Exact 不接受最近帧冒充目标。 |
 | 回退 | 保留旧策略/模块开关及相同测试 fixture；异常时退旧连续策略。不得把精确导航正确性开关化，也不需要新增用户可见复杂性能模式菜单。 |
 
+**T5 验收记录（2026-09-16）**
+
+- 环境与素材：Release 构建，机器同 T0（i7-13700KF / RTX 4090 / 显示输出为 PCI 卡驱动的 `\\.\DISPLAY1` @120 Hz，exe sha256 见各 `summary.md`；GameViewer/Oray 虚拟适配器均未 attached，不承载窗口）；素材为用户指定视频 `D:\Videos\2026-06-01 23-46-34.mp4`（1080p60 H.264 + AAC，628 帧，10.47 s，sha256 `8c624b3a…`），并以 T0 fixture `frameid_1080p60_a.mp4` 作同机参照。探针要求播放窗口不短于素材，长窗口运行固定 `--seconds 8`（`--ui-performance` 下限 5 s，12 s 会触发 `playback-ended-before-duration`）。原始输出、metrics.json、trace 与对照汇总在 `out\t5-evidence\`。
+
+- 结论：**本轮证据没有指向可归因的播放热点，因此 T5 不修改任何播放调度、缓存或 UI 行为。** 依工单"T5 必须有 T0 因果证据""一次只做一类变化"，未证实的热点不得落地为行为改动。期间实现过一版候选修复（播放期间暂停时间轴缩略图采样），被下述交替对照实验证伪后已完整回退：`git diff` 中不含 `TimelineThumbnailCache.qml` / `Main.qml` 的行为改动。
+
+- 观测层（保留，纯附加、不改变业务结果，与 T0 的 trace 身份修复同类）：trace 新增 `QmlGrabRequested`/`QmlGrabCompleted`(14/15)、`RenderDrawStarted`/`RenderAckPublished`(16/17)、`PlaybackRunStarted`/`PlaybackRunStopped`(18/19)；新增 QML→trace 桥 `DiagnosticsProbe`（未启用 trace 时为一次原子读＋分支）；`TimelineThumbnailCache` 记录抓图请求/完成；`D3d11ComparisonRenderer` 在渲染线程记录起绘与 ACK 入队；`docs/engineering/trace-schema.md` 同步更新。
+
+- 证据工具（`tools/testing/`）：`run-t5-video-evidence.ps1`（视频/fixture 批量运行与归档，支持渲染循环对照与受控环境覆盖）、`run-t5-gate-ab.ps1`（两个可执行文件**逐轮交替**的配对 A/B，用 18/19 号事件切出播放窗口再统计）、`analyze-playback-trace-stages.ps1`（把显示间隔尾部归因到 ready→publish / publish→ack / ack→commit 与 cadence 余量）、`analyze-render-staging.ps1`（归因到 publish→drawStarted / drawStarted→ackPublished）、`compare-t5-evidence.ps1`。
+
+- 关键测量（Release，同素材、同机、重复对照；60 fps 源的显示间隔基准为 16.67 ms）：
+
+  | 观测 | 结果 |
+  |---|---|
+  | 播放窗口生产速率（`FrameSetReady` 间隔 / 载荷步进） | P50 14.9 ms，载荷步进恒为 +1 → 解码侧按 60 fps 供帧，不是热点 |
+  | 播放窗口提交速率 | 59.5–60.1 帧/s（481 帧 / 8.01 s），`drop_ratio=0`，无整组丢失 |
+  | 抽帧显示间隔 | P50 14–16 ms、P95 65–155 ms、max 91–236 ms；>40 ms 停顿 1.74–4.24 次/s；各次运行 P95 极差 65–155 ms，**运行间波动大于任何被测效应** |
+  | 渲染管线分解 | `published→drawStarted` P95 65–113 ms（全部 303 个 >40 ms 区间的支配项）；`drawStarted→ackPublished` P50 0.01 ms、max 0.38 ms；`ackPublished→acked`、`acked→commit` ≤0.1 ms |
+  | 抓图与尖峰的时间相关性 | >30 ms 的 publish→ack 尖峰 43 次中，其后 20 ms 内存在抓图请求者 **0 次** |
+  | 渲染循环对照（默认 / `threaded` / `basic` / `QSG_NO_VSYNC=0`） | 提交率 28.3–28.7 帧/s、P95 65–105 ms，四组配置互相落在噪声内 |
+  | 交付构建复验（`out\t5-evidence\final-verification`，exe sha256 `e6718644…`） | P50 16 ms（正好一个 60 fps 间隔）、P95 83 ms、P99 86 ms、max 90 ms；`presented_frames=360`、`dropped_frames=0`、`drop_ratio=0`、`render_canonical_gaps=0`、`render_canonical_regressions=0`；14–19 号观测事件全部落盘且无 overflow（14/15=107、16/17=822、18/19 各 1） |
+
+- 证伪实验（本轮核心）：把缩略图采样在播放期间完全关闭，再用 `out\t5-evidence\gate-ab-interleaved` 逐轮交替运行两个可执行文件（sha256 `24aec89b…` 门开 vs `25d18da4…` 门关），各 5 轮。播放窗口内抓图请求 74–80 → **0**（门确实生效），而 >40 ms 停顿为 32/32、33/32、32/14、34/32、32/32，帧率 59.5–60.1 帧/s 双边一致。**抓图被完全移除后停顿剖面不变**，故"播放中抓图造成显示尾部"不成立，该候选改动已回退。
+
+- 剩余瓶颈（未修，转交后续工单）：唯一未被排除的是渲染线程调度——帧已发布、绘制与 ACK 均 <0.4 ms，但场景图在 P95 上 65–113 ms 内没有启动该帧的绘制，且渲染循环配置不是变量。T5 的"改进必须超过重复间波动"验收条件在本轮被测效应面前不成立（见上表：被测效应小于重复间波动）。**追加更正（同日）**：下面这条最初写的"虚拟适配器"理由经复核不成立，特此作废——`.\tools\testing\test-hardware-runner.ps1 -MinimumRefreshRate 120` 在本机输出 `DVS_HARDWARE_RUNNER_READY session=1 physical_adapters=1 refresh_hz=120`；`EnumDisplayDevices` 显示只有 `\\.\DISPLAY1` 处于 attached 状态且由 PCI 卡 NVIDIA RTX 4090 驱动（120 Hz），GameViewer/Oray 的 14 个虚拟输出全部 attached=False，故它们既不出现在 Qt 的 `QGuiApplication::screens()` 中，也不可能承载本机窗口。也就是说**本机本来就是合格门禁环境，全部 T5 测量都是在物理 4090 @120 Hz 上取得的**。因此"必须换权威物理显示复核"不是遗留项，遗留项只有"如何在本机把被测效应做得比噪声更大"（增加轮次、配对统计、把窗口显式钉在 DISPLAY1、跑 AGENTS.md 要求的 5 分钟门禁时长）。
+
+- 正确性与门禁：全部留存运行 `drop=0`、`render_canonical_regressions=0`、`source_split_observations=0`、`warm_step_p95` 64–246 ms，精确导航与逐帧推进终态齐全；held-step 序列错误在门开/门关两种构建间无系统差异。需要单列的两项**既有事实**（与本次观测层改动无关，改动前后同在）：该素材的 `seek_p95` 稳定在 771–1079 ms（52 次运行一致），远超越探针 500 ms 目标，属既有的精确导航长尾；held-step 序列错误在 fixture 上多次为 0，而在该素材上为 1–15，属既有的按素材差异。两者均需单独立项，不在 T5 范围内。`ctest --preset dev` 全量通过、`format-check`、`lint`、`qmllint --max-warnings 0` 通过。新增测试：`DiagnosticsProbeTests` 6 项（事件类别数值固定、载荷编码、未启用 trace 时零开销、阶段名精确匹配）与 `tst_timeline_thumbnail_cache.qml` 5 项（采样网格、缓存命中不重抓、未缓存取样为空、trace 桥上报帧号、generation 重置）。
+
+- 验收工装遗留：`--ui-performance` 的入参解析不还原 `Start-Process -ArgumentList` 写入的引号，含空格路径会被拆成多个源并失败为 `media-error:`；本次用 8.3 短名 `D:\Videos\20BFE9~1.MP4` 指向同一文件（sha256 相同）。应用本身经对话框/拖放打开含空格路径不受影响，故仅记录在证据脚本中，未改动业务代码。
+
+- 明确未做（避免越过实施边界）：未改 `kPlaybackCatchUpTolerance`/`kPlaybackPresentationLead` 等调度常量，未改 actor/cache 字节政策与预读，未改缩略图采样策略，未更换 Qt/FFmpeg 或渲染循环配置，未引入用户可见性能模式菜单。
+
 
 ### T6 · P1｜文件夹审查上下文与多维可信度状态
 
@@ -269,3 +301,71 @@
   异步离屏抓图仍可能涉及 GPU→CPU 读回；异步不等于零开销。
 - **O05** Qt：QQuickWindow::frameSwapped：https://doc.qt.io/qt-6/qquickwindow.html#frameSwapped
   信号代表一帧已排队等待呈现，而非已经完成物理屏幕显示。
+
+## 遗留任务登记（2026-09-16）
+
+本节登记**当前未开工、尚未解决**的事项。每项都注明来源、为什么没做、以及重新开工前必须先满足什么。顺序即建议优先级。
+
+### B1 · P1｜T6 文件夹审查上下文与多维可信度状态
+
+未开工，**这是下一块关键路径**：前置依赖 T1/T2/T3 已全部交付，且它是剩余工单里唯一的 P1（T7 是 P2）。已对照现有代码核过差距，五处具体缺口：
+
+1. `FolderPairSidebar.qml` 的 `MouseArea` 与 `selectRow` 对单侧行直接 `return`（`hasBoth` 为假时行 `opacity 0.55` 且不可选）——"检查缺失项无需资源管理器"这条验收目前过不了；
+2. 头部只有文件夹名，没有"完整 N / 仅 A N / 仅 B N / 失败 N"计数——"已配对≠内容相同"这个被点名的风险没有可见防线；
+3. 列表是无 `positionViewAtIndex` 的 `ListView`——100 行键盘连切时选中行会滚出视野；
+4. 配对规则（仅本层、完整文件名含扩展名、大小写折叠）与同名大小写冲突都不可见，冲突仍是静默处理；
+5. 视频侧只透出 `ComparisonExactness` 的单枚举最高优先级，未并列摊开 `CompatibilityFinding` / `AlignmentRequired` 的时间/空间/像素维度。
+
+可复用资产：`ImageFolderPairModel::stepCompleteRow`、T3 的 `workspaceSession`、T4 的异步 opener 与 `completePairOpen`、T1 的原子提交语义。预计主要为 QML + 少量 model 角色/属性扩展。
+
+### B2 · P1｜T5 定论实验：把"证据不足"升级为确证（正或负）
+
+**未完成，T5 因此仍挂在"待定"。** 硬件资格已确认不是障碍（`test-hardware-runner.ps1` 输出 `DVS_HARDWARE_RUNNER_READY session=1 physical_adapters=1 refresh_hz=120`；只有 `\\.\DISPLAY1` attached，由物理 4090 驱动）。真正的障碍是**测量功效**，三项都不符合项目自己的口径：
+
+- 窗口只有 **8 秒**，而 `AGENTS.md` 要求 **300 秒**；
+- 进程以 **BelowNormal** 优先级启动，而 `docs/self-hosted-runner.md` 要求硬件门禁以 **Normal 优先级 + 完整 CPU affinity** 运行；
+- 电源方案是 `Stable-Balanced-v1`（省电），且机器上同时运行 DoubaoWork / ZCode / chrome / Weixin / cloudmusic 等常驻高 CPU 进程。
+
+现有配对 A/B 的统计量说明为什么给不出定论——`gate-ab-interleaved` 5 轮配对差值：
+
+| 指标 | 均值 | 标准差 | 95% CI |
+|---|---|---|---|
+| >40 ms 停顿次数 | −3.8 | 8.07 | [−13.8, +6.2] |
+| 显示间隔 P95 | −5.4 ms | 59.3 ms | [−79, +68] |
+
+两个区间都跨 0；逐轮 P95 差值为 +42、+21、−103、−18、+31 ms——**一次运气好，其余四次更差**，属噪声而非效应。
+
+重新开工的前置条件与步骤：
+
+1. 静默整机（需人工退出上述常驻进程），电源方案切到"高性能"（`8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c`），以 Normal 优先级启动；
+2. 用 `tools/testing/generate-evidence-fixtures.ps1` 生成 300 秒 1080p60 素材，`--seconds 300`；
+3. `tools/testing/run-t5-gate-ab.ps1` 交替 A/B 各 6–8 轮，报告**配对 95% CI**；
+4. **判定标准先写死：CI 不跨 0 才算定论**，无论正负。若仍跨 0，则"抓图不是热点"从"证据不足"升级为"已确证排除"，T5 可按负结果结案。
+
+### B3 · P2｜渲染线程调度：已发布帧不被及时绘制
+
+T5 唯一未被排除的嫌疑项，也是当前所有 >40 ms 停顿的支配来源。证据（`analyze-render-staging.ps1`）：帧已发布后，`RenderPublished → RenderDrawStarted` 的 P95 为 65–113 ms，**支配全部 303 个 >40 ms 区间**；而 `drawStarted → ackPublished` P50 仅 0.01 ms、max 0.38 ms，`ackPublished → acked` 与 `acked → commit` 均 ≤0.1 ms。即：**帧已经交到渲染线程面前，场景图却在几十毫秒内没有为它排上一次绘制**。
+
+已排除的变量：渲染循环配置（默认 / `threaded` / `basic` / `QSG_NO_VSYNC=0` 四组提交率 28.3–28.7 帧/s，互相落在噪声内）、解码侧（生产速率 59.45 fps、载荷步进恒为 +1）、缩略图抓图（见 T5 证伪实验）。
+
+开工前置：先完成 B2，因为需要先有一个噪声足够低的测量环境，否则无法判断任何候选修复是否真的有效。B2 之后若确认该停顿在静默环境下依旧稳定复现，才值得深入 Qt 场景图调度（`update()` 合并、窗口暴露状态、DWM/DXGI 呈现路径）。
+
+### B4 · P2｜精确导航长尾：真实素材 seek P95 771–1079 ms
+
+T5 期间顺带测出的**既有**问题，不随观测量改动变化。52 次留存运行中该素材 `seek_p95` 稳定在 771–1079 ms，远超探针 500 ms 目标（T0 fixture 上为 124–245 ms）。工单里 `2000 ms` 追赶容忍常量与 prepare 提前量（`kPlaybackPresentationLead = 14 ms`）都不是已确认根因，动手前必须先做定位实验，并且不得把精确导航正确性开关化。
+
+### B5 · P2｜held-step 序列错误按素材分化
+
+同为既有问题：held-step 序列错误在 T0 fixture 上多次为 0，而在真实素材上为 1–15。需要先区分这是"素材本身有重复/非单调 PTS"还是"顺序游标在长 GOP 上真的跳帧"，再决定是否修。按工单口径，连续播放允许整组跳过但**计数必须真实**，所以先要把计数与真实丢帧对齐。
+
+### B6 · P2｜选屏策略会选中虚拟/间接适配器
+
+`DesktopApplication` 在 `preferHighRefreshScreen` 下取 `QGuiApplication::screens()` 中**刷新率最高**的屏幕。当前无害（GameViewer/Oray 的 14 个虚拟输出全部 `attached=False`，不进 Qt 屏幕列表），但**一旦这些虚拟输出被挂进扩展桌面**（远程串流场景常见），144 Hz 的 GameViewer 会被选中，呈现节奏立刻失去证据资格——而且不报错，只会静默产出不可信的数字。建议让选屏显式排除虚拟/间接适配器，或在选中非物理适配器时给出可见警告。
+
+### B7 · P3｜`--ui-performance` 入参不还原引号
+
+探针的入参解析不还原 `Start-Process -ArgumentList` 写入的引号，含空格路径会被拆成多个源并失败为 `media-error:`（T5 期间用 8.3 短名绕过）。应用本身经对话框/拖放打开含空格路径不受影响，故只是证据工装的可用性缺陷。
+
+### 已完成（供对照）
+
+T0 证据基线、T1 图片配对原子提交、T2 原图不可变与尺寸语义、T3 工作区状态与命令路由、T4 图片后台加载与按需派生、T5 执行完毕（**观测层已交付，行为修复无落地**：候选缩略图门控被交替 A/B 证伪后完整回退）。
