@@ -194,6 +194,13 @@
 - 测试：`platform.ProcessTelemetryTests.*`（4 项，采样线程化/有界性/峰值/关停）、`platform.ComparisonSurfaceWarpTests.RetriesContendedRenderWithoutAnotherPublication`、`ui.ReviewControllerTests` 全量、`ctest --preset dev` 全量通过；format-check、lint 通过。
 - 范围与未做：未改协调器调度常量/缓存政策/缩略图采样/渲染循环配置；ReviewController 宽播报（currentTimecode/currentMediaTime 归一化缺失，播放中每帧额外触发 stateChanged）经静态确认存在但本轮不落地（影响面需单独回归与测试，已从本提交剔除）；seek P95 858–1108ms 为既有问题（B4），未动；本机 A/B 在 144Hz 屏选择下完成，环境记录在案。
 
+**T5 后续 2：GameDVR 开放 GOP 素材无法播放的定位与修复（2026-09-17）**
+
+- 现象：用户报告 `D:\Videos\Captures\王者荣耀世界 2026-06-01 13-25-17.mp4` 无法播放。应用报错 `The indexed timestamp did not identify decoded frame 57 (target 62062, decoded 63063)`，失败发生在软件回退后端（`all_d3d11va:false`，broker 忙时回退）；同文件 D3D11VA 路径因帧缓存命中模式不同而时过时不过，非确定性。
+- 机理（由真实素材包序列证实）：该 GameDVR 采集为 VFR + 开放 GOP——GOP 边界处 pre-keyframe 帧的 DTS（59560）早于下一 keyframe 的 DTS（61061），而其 PTS（62062）又小于 keyframe PTS（63063）。MP4 按 DTS 定位，`av_seek_frame(62062, BACKWARD)` 落在 61061 的 keyframe 上，其首个解码输出即 63063，越过目标 1001 tick（恰好一帧），严格 PTS 相等检查正确拒绝后硬失败；既有的"重开一次"恢复路径重复同样必然失败的定位。合成 libx264 夹具（bf1/2/3、pyramid、cgop、open-gop 尝试）均无法复现该结构，最终以环境变量门控的真实文件回归测试锁定（`SoftwareDecoderTests.ExactDecodeWalksEveryOrdinalOfProvidedGameDvrCapture`，未设置 `DVS_TEST_GAMEDVR_CAPTURE` 时跳过保持 CI 密封；逆向全序遍历在修复前稳定失败于 ordinal 521）。
+- 修复：`SoftwareDecoder` 与 `SignatureDecodeSession` 的精确解码在首次输出越过目标 PTS 时，改为回退到更早的索引显示序号（回退量 1 起倍增，上限 16 个序号）重新定位并向前解码到精确目标；PTS 相等检查仍是唯一接受条件，不引入"最近帧"替代；回退耗尽后保留原有重开与严格报错路径。`kMaximumSeekOrdinalBackOff = 16`。
+- 验证：真实素材全序号 exact 遍历由失败转为通过（57 秒→135 秒含回退 seek 的 547 帧全走通）；`media.S*` 全部 ctest 通过；应用探针对该素材 exit=0、`decoder_exact_seeks=2`、`display_interval_max_ms=25`、无 media-error；全量 `ctest --preset dev` 通过、format-check/lint 通过。
+- 范围与未做：未改索引构建、队列/缓存政策与调度常量；未把真实素材二进制入库（含个人信息，仅环境变量引用本地路径）；该素材 seek P95 与 B4 长尾问题仍然分开处理。
 ### T6 · P1｜文件夹审查上下文与多维可信度状态
 
 | 字段 | 可执行约定 |
