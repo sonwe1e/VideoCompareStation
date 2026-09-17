@@ -7,6 +7,8 @@
 #include "dvs/platform/RenderActivitySink.h"
 #include "dvs/ui/GraphicsBackend.h"
 
+#include "RenderRetry.h"
+
 #include <QMatrix4x4>
 #include <QQuickWindow>
 #include <QSGRenderNode>
@@ -288,7 +290,7 @@ public:
             .roi = presentationOptions_.roi,
             .referenceSlot = presentationOptions_.referenceSlot,
         };
-        static_cast<void>(renderer_.render(state));
+        detail::retryContendedRender(window_, renderer_.render(state));
     }
 
     void releaseResources() override {

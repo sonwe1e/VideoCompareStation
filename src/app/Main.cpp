@@ -1522,15 +1522,9 @@ runDesktop(int& argc,
         }
     });
 
-    QTimer telemetryPoll;
-    telemetryPoll.setInterval(250);
-    QObject::connect(&telemetryPoll, &QTimer::timeout, runtime->controller(), [&] {
-        const dvs::platform::ProcessTelemetry telemetry =
-            dvs::platform::sampleCurrentProcessTelemetry();
-        metrics.peakWorkingSetBytes =
-            std::max(metrics.peakWorkingSetBytes, telemetry.workingSetBytes);
-        metrics.peakThreads = std::max(metrics.peakThreads, telemetry.threadCount);
-    });
+    // OS thread enumeration can take several display intervals. Keep it off the GUI loop;
+    // the sampler owns its counters until the event loop has exited and the worker is joined.
+    dvs::platform::ProcessTelemetrySampler telemetrySampler;
 
     QTimer timeout;
     timeout.setSingleShot(true);
@@ -1538,13 +1532,15 @@ runDesktop(int& argc,
     QObject::connect(
         &timeout, &QTimer::timeout, runtime->controller(), [&] { fail("performance-timeout"); });
     poll.start();
-    telemetryPoll.start();
     timeout.start();
     int result = desktop.exec();
     poll.stop();
-    telemetryPoll.stop();
     timeout.stop();
     uiLoopHeartbeatTimer.stop();
+    const dvs::platform::ProcessTelemetry telemetryPeaks = telemetrySampler.stopAndTakePeaks();
+    metrics.peakWorkingSetBytes =
+        std::max(metrics.peakWorkingSetBytes, telemetryPeaks.workingSetBytes);
+    metrics.peakThreads = std::max(metrics.peakThreads, telemetryPeaks.threadCount);
 
     const dvs::platform::GpuTransferStatistics transfer = runtime->transferStatistics();
     const dvs::ui::RenderAckRelayStatistics relay = runtime->renderRelayStatistics();
@@ -2228,14 +2224,7 @@ runImageFolderEvidence(int& argc, char** argv, const ImageFolderInvocation& invo
         lastHeartbeatTimeMilliseconds = now;
     });
 
-    QTimer telemetryPoll;
-    telemetryPoll.setInterval(250);
-    QObject::connect(&telemetryPoll, &QTimer::timeout, runtime->controller(), [&] {
-        const dvs::platform::ProcessTelemetry telemetry =
-            dvs::platform::sampleCurrentProcessTelemetry();
-        peakWorkingSetBytes = std::max(peakWorkingSetBytes, telemetry.workingSetBytes);
-        peakThreads = std::max(peakThreads, telemetry.threadCount);
-    });
+    dvs::platform::ProcessTelemetrySampler telemetrySampler;
 
     QTimer timeout;
     timeout.setSingleShot(true);
@@ -2245,13 +2234,14 @@ runImageFolderEvidence(int& argc, char** argv, const ImageFolderInvocation& invo
 
     poll.start();
     heartbeatTimer.start();
-    telemetryPoll.start();
     timeout.start();
     int result = desktop.exec();
     poll.stop();
     heartbeatTimer.stop();
-    telemetryPoll.stop();
     timeout.stop();
+    const dvs::platform::ProcessTelemetry telemetryPeaks = telemetrySampler.stopAndTakePeaks();
+    peakWorkingSetBytes = std::max(peakWorkingSetBytes, telemetryPeaks.workingSetBytes);
+    peakThreads = std::max(peakThreads, telemetryPeaks.threadCount);
 
     QElapsedTimer shutdownTimer;
     shutdownTimer.start();

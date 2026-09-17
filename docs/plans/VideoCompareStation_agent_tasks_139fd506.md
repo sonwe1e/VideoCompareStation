@@ -185,6 +185,15 @@
 - 明确未做（避免越过实施边界）：未改 `kPlaybackCatchUpTolerance`/`kPlaybackPresentationLead` 等调度常量，未改 actor/cache 字节政策与预读，未改缩略图采样策略，未更换 Qt/FFmpeg 或渲染循环配置，未引入用户可见性能模式菜单。
 
 
+**T5 后续：用户报告卡顿的定位与修复（2026-09-17）**
+
+- 现象与复现：用户报告播放 `D:\Videos\2026-06-01 23-46-34.mp4` 卡顿/丢帧。先按 T0 口径复现：8 秒播放窗口内 ACK 间隔 P95 78–93ms、最长 169ms、>40ms 停顿 42 次/窗口（`out\t5-evidence\reported-stall-52e4f2975153489aa1d4b73074d048ea`），且停顿以 250ms 周期规律出现（早期帧 7/22/37/52… 间隔 61ms），渲染帧号 0 缺口/回退，FFmpeg 全量解码无错。丢帧计数为 0 属“整组未丢”，不是播放平滑。
+- 根因一（探针工装，影响证据与探针本身）：`Main.cpp` 两个性能探针在 GUI 线程每 250ms 调 `sampleCurrentProcessTelemetry()`，其中 `CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD)` 实测 8–19ms、随系统线程数增长，正好解释 250ms 周期的 ~61ms 停顿。修复：新增 `ProcessTelemetrySampler`（平台层，后台单线程采样，250ms 节奏不变，峰值仅在 join 后合并，异常隔离），探针 GUI 线程不再执行枚举。
+- 根因二（渲染活性缺陷，正常 GUI 同样暴露）：`ComparisonSurface::ComparisonRenderNode::render` 丢弃 `renderer_.render(state)` 的返回值；`Contended`（broker/mailbox try-lock 失败）不重试，且该次 update 已被消费，播放只能等 5 秒看门狗或下一次目标推进。修复：`RenderRetry.h` 对 `Contended` 结果 queued `QQuickWindow::update()` 一次；其余结果（含持续失败）不重试。
+- 验证（`out\t5-evidence\playback-fix-ab`，interleaved A/B 6 轮×8s，同机同素材：基线 exe `e6718644…` vs 修复 `bf8e86a1…`，配对差值 95%CI 不跨 0）：>40ms 停顿 32,32,33,32,32,32 → 4,5,1,0,0,7（Δmean −29.3，CI [−31.8, −26.8]）；显示间隔 P95 Δmean −66.2ms（CI [−75.8, −56.6]）；最长 ACK 间隔由基线 126–156ms 降至 33–154ms（其中 4/6 轮 ≤93ms），ui_loop_gap_max 129–152ms → 20–35ms；全部 12 次 `drop=0`、`render_canonical_regressions=0`。
+- 测试：`platform.ProcessTelemetryTests.*`（4 项，采样线程化/有界性/峰值/关停）、`platform.ComparisonSurfaceWarpTests.RetriesContendedRenderWithoutAnotherPublication`、`ui.ReviewControllerTests` 全量、`ctest --preset dev` 全量通过；format-check、lint 通过。
+- 范围与未做：未改协调器调度常量/缓存政策/缩略图采样/渲染循环配置；ReviewController 宽播报（currentTimecode/currentMediaTime 归一化缺失，播放中每帧额外触发 stateChanged）经静态确认存在但本轮不落地（影响面需单独回归与测试，已从本提交剔除）；seek P95 858–1108ms 为既有问题（B4），未动；本机 A/B 在 144Hz 屏选择下完成，环境记录在案。
+
 ### T6 · P1｜文件夹审查上下文与多维可信度状态
 
 | 字段 | 可执行约定 |
