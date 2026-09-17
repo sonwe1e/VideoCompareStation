@@ -1131,11 +1131,13 @@ TEST(ComparisonSurfaceWarpTests, RetriesContendedRenderWithoutAnotherPublication
 
     std::atomic<int> attempts{0};
     QObject::connect(
-        &harness.window, &QQuickWindow::afterRendering, &harness.window,
+        &harness.window,
+        &QQuickWindow::afterRendering,
+        &harness.window,
         [&] {
             if (attempts.fetch_add(1, std::memory_order_relaxed) == 0) {
                 detail::retryContendedRender(harness.window,
-                                            platform::ComparisonRenderResult::Contended);
+                                             platform::ComparisonRenderResult::Contended);
             }
         },
         Qt::DirectConnection);
