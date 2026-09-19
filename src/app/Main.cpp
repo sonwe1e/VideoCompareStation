@@ -1031,6 +1031,10 @@ runDesktop(int& argc,
     std::vector<qint64> heldStepMilliseconds;
     std::deque<qint64> heldStepSubmitTimes;
     std::size_t heldStepIndex = 0U;
+    // Submitted vs presented counts expose completion gaps the committed-frame poll cannot see
+    // (a step rejected or absorbed without a commit would otherwise only depress the sample
+    // count, letting a short window pass as a healthy one).
+    std::uint64_t heldStepSubmittedFrames = 0U;
     qint64 heldStepLastPresentedFrame = -1;
     qint64 heldStepSeekTarget = -1;
     std::uint64_t heldStepSequenceErrors = 0U;
@@ -1501,6 +1505,7 @@ runDesktop(int& argc,
                     return;
                 }
                 ++heldStepIndex;
+                ++heldStepSubmittedFrames;
                 heldStepCadenceMs();
             }
             return;
@@ -1620,6 +1625,10 @@ runDesktop(int& argc,
         metrics.playbackResponseMilliseconds < 0 || metrics.playbackResponseMilliseconds > 100 ||
         metrics.seekP95Milliseconds < 0 || metrics.seekP95Milliseconds > 500 ||
         metrics.warmStepP95Milliseconds < 0 ||
+        // Every held-window submission must produce a committed frame and a latency sample;
+        // otherwise a run that silently absorbs steps would report a healthy pass.
+        metrics.heldStepPresentedFrames != heldStepSubmittedFrames ||
+        heldStepMilliseconds.size() != heldStepSubmittedFrames ||
         (expectedSourceCount > 1U && metrics.analysisDecodedFrames == 0U) ||
         metrics.peakFrameBytes > kMaximumFrameBytes || !allHardware ||
         metrics.finalThreads > metrics.baselineThreads + 2U || !metrics.comparisonModeVerified ||
@@ -1700,6 +1709,8 @@ runDesktop(int& argc,
     addNumber(QStringLiteral("held_step_p95_ms"), metrics.heldStepP95Milliseconds);
     addNumber(QStringLiteral("held_step_p99_ms"), metrics.heldStepP99Milliseconds);
     addNumber(QStringLiteral("held_step_presented_frames"), metrics.heldStepPresentedFrames);
+    addNumber(QStringLiteral("held_step_submitted_frames"),
+              static_cast<std::uint64_t>(heldStepSubmittedFrames));
     addNumber(QStringLiteral("held_step_sequence_errors"), metrics.heldStepSequenceErrors);
     addNumber(QStringLiteral("held_step_generation_delta"), metrics.heldStepGenerationDelta);
     addNumber(QStringLiteral("held_step_exact_seek_delta"), metrics.heldStepExactSeekDelta);

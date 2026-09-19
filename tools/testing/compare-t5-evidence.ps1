@@ -56,9 +56,9 @@ if ($beforeRuns.Count -eq 0 -or $afterRuns.Count -eq 0) {
 $fields = @(
     'display_interval_p50_ms', 'display_interval_p95_ms', 'display_interval_p99_ms',
     'display_interval_max_ms', 'ui_loop_gap_p95_ms', 'ui_loop_gap_max_ms',
-    'seek_p95_ms', 'warm_step_p95_ms', 'drop_ratio', 'commit_rate_per_second',
-    'decoder_average_us', 'frameset_assembly_avg_us', 'peak_frame_bytes',
-    'trace_ready_to_commit_p50_us', 'trace_publish_to_ack_p50_us'
+    'seek_p95_ms', 'warm_step_p95_ms', 'held_step_p95_ms', 'drop_ratio',
+    'commit_rate_per_second', 'decoder_average_us', 'frameset_assembly_avg_us',
+    'peak_frame_bytes', 'trace_ready_to_commit_p50_us', 'trace_publish_to_ack_p50_us'
 )
 
 function Get-FieldStats {
@@ -125,8 +125,19 @@ foreach ($bundle in @(
         [pscustomobject]@{ Name = 'before'; Runs = $beforeRuns },
         [pscustomobject]@{ Name = 'after'; Runs = $afterRuns })) {
     foreach ($run in $bundle.Runs) {
-        Write-Output ("{0,-7} {1,-22} passed={2} drop={3} seek_p95={4} warm_step_p95={5} failure={6}" -f `
+        # Older bundles predate the held-step accounting fields; report them only when present so
+        # a before/after comparison against a baseline bundle cannot crash on the missing keys.
+        $heldP95 = $run.PSObject.Properties['held_step_p95_ms']
+        $heldPresented = $run.PSObject.Properties['held_step_presented_frames']
+        $heldSubmitted = $run.PSObject.Properties['held_step_submitted_frames']
+        $heldSummary = if ($null -ne $heldP95 -and $null -ne $heldPresented -and
+            $null -ne $heldSubmitted) {
+            "held_step_p95=$($heldP95.Value) held_presented=$($heldPresented.Value)/$($heldSubmitted.Value)"
+        } else {
+            'held_step_p95=n/a (older bundle)'
+        }
+        Write-Output ("{0,-7} {1,-22} passed={2} drop={3} seek_p95={4} warm_step_p95={5} {6} failure={7}" -f `
                 $bundle.Name, $run.run, $run.passed, $run.drop_ratio, $run.seek_p95_ms,
-                $run.warm_step_p95_ms, $run.failure)
+                $run.warm_step_p95_ms, $heldSummary, $run.failure)
     }
 }
