@@ -7,6 +7,7 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QImage>
+#include <QSemaphore>
 #include <QTemporaryDir>
 #include <QThread>
 #include <QUrl>
@@ -590,6 +591,126 @@ TEST(ImageReviewControllerTests, PrefetchWarmsCacheAndUserOpenUsesIt) {
     EXPECT_GE(stats.value(QStringLiteral("load_cache_hits")).toInt(), 2);
     EXPECT_LE(stats.value(QStringLiteral("load_cache_bytes")).toLongLong(),
               stats.value(QStringLiteral("load_cache_budget_bytes")).toLongLong());
+}
+
+TEST(ImageReviewControllerTests, BlockedDifferenceCannotPublishOrCacheAfterNewPairCommits) {
+    ensureCoreApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QUrl next = writeBytes(directory, QStringLiteral("new.bin"), "new");
+    ScopedStillImageLoader decoder{[](const QByteArray&, QImage* image, std::string*) {
+        *image = solidImage(QColor(30, 40, 50));
+        return true;
+    }};
+    ImageReviewController controller;
+    ASSERT_TRUE(
+        controller.openPairImages(solidImage(Qt::black), "oldA", solidImage(Qt::white), "oldB", 1));
+    auto* worker = controller.findChild<dvs::ui::ImagePairLoader*>();
+    ASSERT_NE(worker, nullptr);
+    QSemaphore entered;
+    QSemaphore release;
+    std::atomic<int> visitedRows{0};
+    worker->setDifferenceRowObserverForTesting([&](const int row) {
+        ++visitedRows;
+        if (row == 0) {
+            entered.release();
+            release.tryAcquire(1, 8000);
+        }
+    });
+    controller.setCompareMode(ImageReviewController::AbsDifference);
+    const bool blocked = entered.tryAcquire(1, 8000);
+    EXPECT_TRUE(blocked);
+    EXPECT_GT(controller.requestOpenPair(next, next, 2), 0);
+    EXPECT_TRUE(waitUntil([&] { return !controller.openPending(); }));
+    EXPECT_EQ(controller.committedPairId(), 2);
+    EXPECT_FALSE(controller.diffPending());
+    EXPECT_FALSE(controller.hasDiffResult());
+    release.release();
+    EXPECT_TRUE(waitUntil([&] { return worker->stats().activeRequests == 0; }));
+    EXPECT_EQ(visitedRows.load(), 1);
+    EXPECT_FALSE(controller.hasDiffResult());
+    EXPECT_EQ(controller.asyncStats().value("diff_cache_entries").toInt(), 0);
+    worker->setDifferenceRowObserverForTesting({});
+    controller.setCompareMode(ImageReviewController::AbsDifference);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    EXPECT_TRUE(controller.hasDiffResult());
+    EXPECT_EQ(controller.maxAbsDifference(), 0);
+    controller.setCompareMode(ImageReviewController::SideBySide);
+    controller.setCompareMode(ImageReviewController::AbsDifference);
+    EXPECT_EQ(controller.maxAbsDifference(), 0);
+    EXPECT_EQ(controller.asyncStats().value("diff_cache_hits").toInt(), 1);
+}
+
+TEST(ImageReviewControllerTests, FailedCandidateRetainsBlockedCommittedDifference) {
+    ensureCoreApplication();
+    ImageReviewController controller;
+    ASSERT_TRUE(controller.openPairImages(
+        solidImage(Qt::black), "a", solidImage(QColor(12, 0, 0)), "b", 7));
+    auto* worker = controller.findChild<dvs::ui::ImagePairLoader*>();
+    ASSERT_NE(worker, nullptr);
+    QSemaphore entered;
+    QSemaphore release;
+    worker->setDifferenceRowObserverForTesting([&](const int row) {
+        if (row == 0) {
+            entered.release();
+            release.tryAcquire(1, 8000);
+        }
+    });
+    controller.setCompareMode(ImageReviewController::AbsDifference);
+    EXPECT_TRUE(entered.tryAcquire(1, 8000));
+    EXPECT_GT(controller.requestOpenPair(QUrl::fromLocalFile("Z:/missing/a.png"),
+                                         QUrl::fromLocalFile("Z:/missing/b.png"),
+                                         8),
+              0);
+    EXPECT_TRUE(waitUntil([&] { return !controller.openPending(); }));
+    EXPECT_TRUE(controller.diffPending());
+    EXPECT_EQ(controller.committedPairId(), 7);
+    release.release();
+    EXPECT_TRUE(waitForControllerIdle(controller));
+    EXPECT_TRUE(controller.hasDiffResult());
+    EXPECT_EQ(controller.maxAbsDifference(), 12);
+}
+
+TEST(ImageReviewControllerTests, LoaderCoalescesQueueAndCancellationSkipsSecondImage) {
+    ensureCoreApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QUrl a = writeBytes(directory, "a.bin", "a");
+    const QUrl b = writeBytes(directory, "b.bin", "b");
+    QSemaphore entered;
+    QSemaphore release;
+    std::atomic<int> aCalls{0};
+    std::atomic<int> bCalls{0};
+    dvs::ui::ImagePairLoader loader;
+    dvs::ui::ImagePairLoader::DecodePolicy policy;
+    policy.loader = [&](const QByteArray& bytes, QImage* image, std::string*) {
+        if (bytes == "a" && ++aCalls <= 2) {
+            entered.release();
+            release.tryAcquire(1, 8000);
+        } else if (bytes == "b") {
+            ++bCalls;
+        }
+        *image = solidImage(Qt::green);
+        return true;
+    };
+    int completions = 0;
+    const auto handler = [&](dvs::ui::ImagePairLoader::Result) { ++completions; };
+    const quint64 first = loader.requestPair(a, b, 0, policy, handler);
+    const quint64 second = loader.requestPair(a, b, 1, policy, handler);
+    EXPECT_TRUE(entered.tryAcquire(2, 8000));
+    for (int row = 2; row < 102; ++row) {
+        loader.requestPair(a, b, row, policy, handler);
+        EXPECT_LE(loader.stats().pendingRequests, 1);
+        EXPECT_LE(loader.stats().activeRequests, 3);
+    }
+    loader.cancel(first);
+    loader.cancel(second);
+    release.release(2);
+    EXPECT_TRUE(waitUntil([&] { return loader.stats().activeRequests == 0; }));
+    EXPECT_EQ(aCalls.load(), 3);
+    EXPECT_EQ(bCalls.load(), 1);
+    EXPECT_EQ(completions, 1);
+    EXPECT_LE(loader.stats().cacheBytes, loader.stats().cacheBudgetBytes);
 }
 
 TEST(ImageReviewControllerTests, HeaderProbeRejectsOversizedBeforeDecoderThrows) {

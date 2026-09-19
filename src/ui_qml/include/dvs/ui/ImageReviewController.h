@@ -176,7 +176,9 @@ private:
 
     [[nodiscard]] ImagePairLoader::DecodePolicy currentDecodePolicy() const;
     void handleLoadFinished(ImagePairLoader::Result result);
-    void handleDifferenceFinished(ImagePairLoader::DifferenceResult result);
+    void handleDifferenceFinished(ImagePairLoader::DifferenceResult result,
+                                  quint64 sourceGeneration,
+                                  const QString& cacheKey);
     void commitLoadedPrimary(QImage image, QString label, QString identity);
     void commitLoadedSecondary(QImage image, QString label, QString identity);
     void commitLoadedPair(ImagePairLoader::Result result);

@@ -252,6 +252,10 @@ bool ImageFolderPairModel::openPairAt(const int row) {
     }
 
     if (asyncOpener_) {
+        if (pendingRequestId_ != 0 && pendingRow_ == row) {
+            return true;
+        }
+        cancelPendingOpen();
         QString immediateError;
         const int requestId = asyncOpener_(pair.leftUrl, pair.rightUrl, row, &immediateError);
         if (requestId <= 0) {
@@ -343,7 +347,8 @@ int ImageFolderPairModel::stepCompleteRow(const int delta) const {
         return -1;
     }
     const int count = static_cast<int>(rows_.size());
-    int row = currentPair_ >= 0 ? currentPair_ : 0;
+    const int desiredRow = pendingRequestId_ != 0 ? pendingRow_ : currentPair_;
+    int row = desiredRow >= 0 ? desiredRow : 0;
     for (int step = 0; step < count; ++step) {
         row = ((row + delta) % count + count) % count;
         if (rows_[static_cast<std::size_t>(row)].hasLeft &&

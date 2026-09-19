@@ -76,8 +76,12 @@ private:
                                      const ImagePairLoader::DecodePolicy& policy,
                                      QImage* image,
                                      QString* identity,
-                                     QString* error) {
+                                     QString* error,
+                                     const std::atomic_bool& cancelled) {
     if (image == nullptr) {
+        return false;
+    }
+    if (cancelled.load()) {
         return false;
     }
     const QString label = sourceLabel(url);
@@ -110,6 +114,9 @@ private:
         }
         return false;
     }
+    if (cancelled.load()) {
+        return false;
+    }
     QSize headerSize;
     bool haveHeader = false;
     if (policy.probe) {
@@ -127,6 +134,9 @@ private:
             return false;
         }
     }
+    if (cancelled.load()) {
+        return false;
+    }
     QImage decoded;
     bool decodedOk = false;
     std::string decoderError;
@@ -140,6 +150,9 @@ private:
             decoderError = "Still-image loader threw an unknown exception.";
             decodedOk = false;
         }
+    }
+    if (cancelled.load()) {
+        return false;
     }
     if (!decodedOk) {
         decoded = QImage{};
@@ -164,6 +177,9 @@ private:
         if (error) {
             *error = dimensionError;
         }
+        return false;
+    }
+    if (cancelled.load()) {
         return false;
     }
     if (decoded.format() != QImage::Format_RGBA8888) {
@@ -206,10 +222,13 @@ private:
     const int blue = clampChannel(qBlue(base) + (90 - qBlue(base)) * strength / 255);
     return qRgb(red, green, blue);
 }
-[[nodiscard]] ImagePairLoader::DifferenceResult computeDifference(QImage primary,
-                                                                  QImage secondary,
-                                                                  const int compareMode,
-                                                                  const bool resampleAllowed) {
+[[nodiscard]] ImagePairLoader::DifferenceResult
+computeDifference(QImage primary,
+                  QImage secondary,
+                  const int compareMode,
+                  const bool resampleAllowed,
+                  const std::atomic_bool& cancelled,
+                  const std::function<void(int)>& rowObserver) {
     ImagePairLoader::DifferenceResult result;
     if (primary.isNull() || secondary.isNull()) {
         result.error = QObject::tr("Image pair is empty.");
@@ -221,8 +240,17 @@ private:
         result.error = QObject::tr("Image pair is empty or too large to diff.");
         return result;
     }
+    if (cancelled.load()) {
+        return result;
+    }
     const QImage left = primary.convertToFormat(QImage::Format_ARGB32);
+    if (cancelled.load()) {
+        return result;
+    }
     QImage right = secondary.convertToFormat(QImage::Format_ARGB32);
+    if (cancelled.load()) {
+        return result;
+    }
     if (right.size() != left.size()) {
         if (!resampleAllowed) {
             result.error =
@@ -236,6 +264,9 @@ private:
         right = right.scaled(left.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
         result.resampled = true;
     }
+    if (cancelled.load()) {
+        return result;
+    }
     QImage output(left.width(), left.height(), QImage::Format_ARGB32);
     if (output.isNull()) {
         result.error = QObject::tr("Could not allocate difference image.");
@@ -246,6 +277,12 @@ private:
     int peakAlpha = 0;
     constexpr int kGain = 4;
     for (int y = 0; y < left.height(); ++y) {
+        if (rowObserver) {
+            rowObserver(y);
+        }
+        if (cancelled.load()) {
+            return result;
+        }
         const auto* leftLine = reinterpret_cast<const QRgb*>(left.constScanLine(y));
         const auto* rightLine = reinterpret_cast<const QRgb*>(right.constScanLine(y));
         auto* outLine = reinterpret_cast<QRgb*>(output.scanLine(y));
@@ -284,6 +321,7 @@ private:
 struct RequestState final {
     quint64 requestId = 0;
     bool prefetch = false;
+    bool difference = false;
     std::atomic_bool cancelled{false};
     ImagePairLoader::ResultHandler resultHandler;
     ImagePairLoader::DifferenceHandler differenceHandler;
@@ -399,26 +437,37 @@ public:
         job.requestId = requestId;
         auto state = std::make_shared<RequestState>();
         state->requestId = requestId;
+        state->difference = true;
         state->differenceHandler = std::move(handler);
         active_.emplace(requestId, state);
-        pool_.start(new FunctionRunnable([this, requestId, job = std::move(job), state]() mutable {
-            DifferenceResult result;
-            result.requestId = requestId;
-            if (!state->cancelled.load()) {
-                result = computeDifference(std::move(job.primary),
-                                           std::move(job.secondary),
-                                           job.compareMode,
-                                           job.resample);
-                result.requestId = requestId;
-            }
-            postDifferenceResult(std::move(result), std::move(state));
-        }));
+        schedule(state,
+                 [this,
+                  requestId,
+                  job = std::move(job),
+                  state,
+                  observer = differenceRowObserver_]() mutable {
+                     DifferenceResult result;
+                     result.requestId = requestId;
+                     if (!state->cancelled.load()) {
+                         result = computeDifference(std::move(job.primary),
+                                                    std::move(job.secondary),
+                                                    job.compareMode,
+                                                    job.resample,
+                                                    state->cancelled,
+                                                    observer);
+                         result.requestId = requestId;
+                     }
+                     postDifferenceResult(std::move(result), std::move(state));
+                 });
         return requestId;
     }
     void cancel(const quint64 requestId) {
         const auto iterator = active_.find(requestId);
         if (iterator != active_.end()) {
             iterator->second->cancelled.store(true);
+            if (pending_.erase(requestId) != 0) {
+                active_.erase(iterator);
+            }
         }
     }
     void cancelAll() {
@@ -426,14 +475,22 @@ public:
             static_cast<void>(id);
             state->cancelled.store(true);
         }
+        for (const auto& [id, job] : pending_) {
+            static_cast<void>(job);
+            active_.erase(id);
+        }
+        pending_.clear();
     }
     void cancelPrefetches() {
-        for (auto& [id, state] : active_) {
-            static_cast<void>(id);
+        for (auto iterator = active_.begin(); iterator != active_.end();) {
+            const auto state = iterator++->second;
             if (state->prefetch) {
-                state->cancelled.store(true);
+                cancel(state->requestId);
             }
         }
+    }
+    void setDifferenceRowObserverForTesting(std::function<void(int)> observer) {
+        differenceRowObserver_ = std::move(observer);
     }
     void setCacheBudgetBytes(const qint64 bytes) {
         cache_.setMaximumBytes(bytes);
@@ -454,10 +511,42 @@ public:
         result.cacheMisses = cache_.misses();
         result.activeRequests = static_cast<int>(active_.size());
         result.maxThreadCount = pool_.maxThreadCount();
+        result.pendingRequests = static_cast<int>(pending_.size());
         return result;
     }
 
 private:
+    void schedule(const std::shared_ptr<RequestState>& state, std::function<void()> job) {
+        // At most two running jobs and one pending job per class. Replacing a queued
+        // candidate releases its images immediately rather than feeding QThreadPool a backlog.
+        for (auto iterator = pending_.begin(); iterator != pending_.end();) {
+            const auto old = active_.at(iterator->first);
+            if (old->prefetch == state->prefetch && old->difference == state->difference) {
+                old->cancelled.store(true);
+                active_.erase(iterator->first);
+                iterator = pending_.erase(iterator);
+            } else {
+                ++iterator;
+            }
+        }
+        pending_.emplace(state->requestId, std::move(job));
+        dispatch();
+    }
+    void dispatch() {
+        while (running_ < pool_.maxThreadCount() && !pending_.empty()) {
+            auto next = pending_.begin();
+            for (auto iterator = pending_.begin(); iterator != pending_.end(); ++iterator) {
+                if (!active_.at(iterator->first)->prefetch) {
+                    next = iterator;
+                    break;
+                }
+            }
+            auto job = std::move(next->second);
+            pending_.erase(next);
+            ++running_;
+            pool_.start(new FunctionRunnable(std::move(job)));
+        }
+    }
     [[nodiscard]] QString cacheKey(const QString& identity) const {
         return identity + QStringLiteral("|decoded-rgba8");
     }
@@ -481,6 +570,7 @@ private:
         return std::nullopt;
     }
     [[nodiscard]] quint64 enqueueLoad(LoadJob job, ResultHandler handler, const bool prefetch) {
+        cancelPrefetches();
         job.requestId = nextRequestId_++;
         auto state = std::make_shared<RequestState>();
         state->requestId = job.requestId;
@@ -488,9 +578,9 @@ private:
         state->resultHandler = std::move(handler);
         const quint64 requestId = job.requestId;
         active_.emplace(requestId, state);
-        pool_.start(new FunctionRunnable([this, job = std::move(job), state]() mutable {
+        schedule(state, [this, job = std::move(job), state]() mutable {
             executeLoad(std::move(job), std::move(state));
-        }));
+        });
         return requestId;
     }
     void executeLoad(LoadJob job, std::shared_ptr<RequestState> state) {
@@ -502,8 +592,12 @@ private:
             if (job.kind != LoadJob::Kind::Secondary && !job.cachedPrimary.has_value()) {
                 QString error;
                 QString identity;
-                if (!loadImageFromDisk(
-                        job.primaryUrl, job.policy, &result.primary, &identity, &error)) {
+                if (!loadImageFromDisk(job.primaryUrl,
+                                       job.policy,
+                                       &result.primary,
+                                       &identity,
+                                       &error,
+                                       state->cancelled)) {
                     result.failedSide = 0;
                     result.error = error;
                 }
@@ -513,12 +607,16 @@ private:
             } else if (job.cachedPrimary.has_value()) {
                 result.primary = *job.cachedPrimary;
             }
-            if (result.error.isEmpty() && job.kind != LoadJob::Kind::Primary &&
-                !job.cachedSecondary.has_value()) {
+            if (!state->cancelled.load() && result.error.isEmpty() &&
+                job.kind != LoadJob::Kind::Primary && !job.cachedSecondary.has_value()) {
                 QString error;
                 QString identity;
-                if (!loadImageFromDisk(
-                        job.secondaryUrl, job.policy, &result.secondary, &identity, &error)) {
+                if (!loadImageFromDisk(job.secondaryUrl,
+                                       job.policy,
+                                       &result.secondary,
+                                       &identity,
+                                       &error,
+                                       state->cancelled)) {
                     result.failedSide = 1;
                     result.error = error;
                 }
@@ -552,6 +650,8 @@ private:
     }
     void finishLoad(Result result, const std::shared_ptr<RequestState>& state) {
         active_.erase(result.requestId);
+        --running_;
+        dispatch();
         if (!state || state->cancelled.load()) {
             return;
         }
@@ -577,6 +677,8 @@ private:
     }
     void finishDifference(DifferenceResult result, const std::shared_ptr<RequestState>& state) {
         active_.erase(result.requestId);
+        --running_;
+        dispatch();
         if (!state || state->cancelled.load()) {
             return;
         }
@@ -590,6 +692,9 @@ private:
                                     return static_cast<qint64>(image.sizeInBytes());
                                 }};
     std::map<quint64, std::shared_ptr<RequestState>> active_;
+    std::map<quint64, std::function<void()>> pending_;
+    std::function<void(int)> differenceRowObserver_;
+    int running_ = 0;
     quint64 nextRequestId_ = 1;
 };
 ImagePairLoader::ImagePairLoader(QObject* parent)
@@ -628,6 +733,9 @@ quint64 ImagePairLoader::requestDifference(QImage primary,
                                            DifferenceHandler handler) {
     return impl_->requestDifference(
         std::move(primary), std::move(secondary), compareMode, resample, std::move(handler));
+}
+void ImagePairLoader::setDifferenceRowObserverForTesting(std::function<void(int)> observer) {
+    impl_->setDifferenceRowObserverForTesting(std::move(observer));
 }
 void ImagePairLoader::cancel(const quint64 requestId) {
     impl_->cancel(requestId);

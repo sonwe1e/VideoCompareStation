@@ -128,6 +128,7 @@ struct ImageReviewController::AsyncState final {
     PendingKind pendingKind = PendingKind::None;
     int pendingPairId = -1;
     quint64 activeDifferenceRequestId = 0;
+    quint64 sourceGeneration = 0;
     bool differencePending = false;
     QString primaryIdentity;
     QString secondaryIdentity;
@@ -325,6 +326,7 @@ bool ImageReviewController::openPrimaryImage(QImage image, QString pathLabel) {
     }
     cancelPendingOpen();
     cancelDifferenceRequest();
+    ++async_->sourceGeneration;
     resetDifferenceState();
     primary_ = std::move(image);
     primaryPath_ = std::move(pathLabel);
@@ -350,6 +352,7 @@ bool ImageReviewController::openSecondaryImage(QImage image, QString pathLabel) 
     }
     cancelPendingOpen();
     cancelDifferenceRequest();
+    ++async_->sourceGeneration;
     resetDifferenceState();
     secondary_ = std::move(image);
     secondaryPath_ = std::move(pathLabel);
@@ -408,6 +411,7 @@ bool ImageReviewController::openPairImages(QImage primary,
     }
     cancelPendingOpen();
     cancelDifferenceRequest();
+    ++async_->sourceGeneration;
     resetDifferenceState();
     primary_ = std::move(primary);
     secondary_ = std::move(secondary);
@@ -593,6 +597,7 @@ void ImageReviewController::closeAll() {
         }
         cancelDifferenceRequest();
     }
+    ++async_->sourceGeneration;
     primary_ = QImage();
     secondary_ = QImage();
     diff_ = QImage();
@@ -747,6 +752,9 @@ void ImageReviewController::handleLoadFinished(ImagePairLoader::Result result) {
         return;
     }
 
+    // Failed candidates leave the committed pair and its pending difference intact.
+    cancelDifferenceRequest();
+    ++async_->sourceGeneration;
     errorText_.clear();
     switch (kind) {
     case AsyncState::PendingKind::Primary:
@@ -768,8 +776,11 @@ void ImageReviewController::handleLoadFinished(ImagePairLoader::Result result) {
     emit openFinished(requestId, pairId, true, QString{});
 }
 
-void ImageReviewController::handleDifferenceFinished(ImagePairLoader::DifferenceResult result) {
-    if (async_ == nullptr || result.requestId != async_->activeDifferenceRequestId) {
+void ImageReviewController::handleDifferenceFinished(ImagePairLoader::DifferenceResult result,
+                                                     const quint64 sourceGeneration,
+                                                     const QString& cacheKey) {
+    if (async_ == nullptr || result.requestId != async_->activeDifferenceRequestId ||
+        sourceGeneration != async_->sourceGeneration || cacheKey != differenceCacheKey()) {
         return;
     }
     async_->activeDifferenceRequestId = 0;
@@ -781,7 +792,7 @@ void ImageReviewController::handleDifferenceFinished(ImagePairLoader::Difference
     }
     DifferenceEntry entry;
     entry.result = result;
-    async_->diffCache.put(differenceCacheKey(), std::move(entry));
+    async_->diffCache.put(cacheKey, std::move(entry));
     applyDifferenceResult(result);
     errorText_.clear();
     bumpGeneration();
@@ -902,15 +913,17 @@ void ImageReviewController::requestDifferenceForCurrentMode() {
     cancelDifferenceRequest();
     resetDifferenceState();
     async_->differencePending = true;
+    const quint64 sourceGeneration = async_->sourceGeneration;
+    const QString cacheKey = differenceCacheKey();
+    async_->activeDifferenceRequestId = async_->loader.requestDifference(
+        primary_,
+        secondary_,
+        compareMode_,
+        resampleAllowed_,
+        [this, sourceGeneration, cacheKey](ImagePairLoader::DifferenceResult result) {
+            handleDifferenceFinished(std::move(result), sourceGeneration, cacheKey);
+        });
     emit stateChanged();
-    async_->activeDifferenceRequestId =
-        async_->loader.requestDifference(primary_,
-                                         secondary_,
-                                         compareMode_,
-                                         resampleAllowed_,
-                                         [this](ImagePairLoader::DifferenceResult result) {
-                                             handleDifferenceFinished(std::move(result));
-                                         });
 }
 
 void ImageReviewController::applyDifferenceResult(const ImagePairLoader::DifferenceResult& result) {

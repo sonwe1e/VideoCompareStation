@@ -1018,8 +1018,10 @@ domain::DeviceGeneration SoftwareDecoder::deviceGeneration() const noexcept {
 }
 
 void SoftwareDecoder::requestInterrupt() noexcept {
+    // Signal only: this can run on any thread while the decode worker owns every other Impl
+    // member. Worker-owned state such as sequentialReady is reset by the worker on its next
+    // decode or reopen, never from here.
     impl_->interrupted.store(true, std::memory_order_release);
-    impl_->sequentialReady = false;
 }
 
 void SoftwareDecoder::close() noexcept {

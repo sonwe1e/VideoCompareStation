@@ -1136,8 +1136,9 @@ TEST(ComparisonSurfaceWarpTests, RetriesContendedRenderWithoutAnotherPublication
         &harness.window,
         [&] {
             if (attempts.fetch_add(1, std::memory_order_relaxed) == 0) {
-                detail::retryContendedRender(harness.window,
-                                             platform::ComparisonRenderResult::Contended);
+                detail::RenderRetry retry;
+                retry.retryContendedRender(harness.window,
+                                           platform::ComparisonRenderResult::Contended);
             }
         },
         Qt::DirectConnection);

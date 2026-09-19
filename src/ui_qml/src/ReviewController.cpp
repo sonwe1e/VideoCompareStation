@@ -1690,6 +1690,12 @@ private:
                                            normalized.differenceEdges = view_.differenceEdges;
                                            normalized.canPrevious = view_.canPrevious;
                                            normalized.canNext = view_.canNext;
+                                           // Timecode/media time are derived from the frame
+                                           // position and canonical timeline, so they are
+                                           // frame-scoped state: their change must not widen a
+                                           // frame-only advance into a broad notification.
+                                           normalized.currentTimecode = view_.currentTimecode;
+                                           normalized.currentMediaTime = view_.currentMediaTime;
                                            return !(normalized == view_);
                                        }());
         if (changed) {

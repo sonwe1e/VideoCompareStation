@@ -77,6 +77,7 @@ public:
         quint64 cacheMisses = 0;
         int activeRequests = 0;
         int maxThreadCount = 0;
+        int pendingRequests = 0;
     };
 
     explicit ImagePairLoader(QObject* parent = nullptr);
@@ -105,6 +106,10 @@ public:
                               int compareMode,
                               bool resample,
                               DifferenceHandler handler);
+
+    // Test seam: copied into each request, invoked on its worker before each diff row.
+    // Production leaves this empty. The observer must not touch GUI state.
+    void setDifferenceRowObserverForTesting(std::function<void(int)> observer);
 
     void cancel(quint64 requestId);
     void cancelAll();

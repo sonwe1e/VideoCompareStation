@@ -5,6 +5,8 @@
 #include "dvs/ui/SourceIdentity.h"
 #include "dvs/ui/SourceListModel.h"
 
+#include "RuntimeBridges.h"
+
 #include <QCoreApplication>
 #include <QDir>
 #include <QEventLoop>
@@ -278,6 +280,80 @@ protected:
     }
 };
 
+TEST_F(ReviewControllerTests, ProjectionBridgeCoalescesWorkerBurstOnGuiThread) {
+    auto backend = std::make_shared<FakeBackend>();
+    ReviewController controller{dependenciesFor(backend)};
+    app::detail::ReviewProjectionBridge bridge;
+    bridge.bind(controller);
+    const auto before = backend->snapshotCalls;
+    std::thread producer{[&bridge] {
+        for (int index = 0; index < 100; ++index) {
+            bridge.notify();
+        }
+    }};
+    producer.join();
+    EXPECT_EQ(backend->snapshotCalls, before);
+    QCoreApplication::sendPostedEvents(&controller, QEvent::MetaCall);
+    EXPECT_EQ(backend->snapshotCalls, before + 1U);
+    EXPECT_EQ(backend->lastAccessThread, std::this_thread::get_id());
+    QCoreApplication::sendPostedEvents(&controller, QEvent::MetaCall);
+    EXPECT_EQ(backend->snapshotCalls, before + 1U);
+    bridge.unbind();
+    controller.stop();
+}
+
+TEST_F(ReviewControllerTests, ProjectionBridgePreservesNotificationDuringRefresh) {
+    auto backend = std::make_shared<FakeBackend>();
+    app::detail::ReviewProjectionBridge bridge;
+    auto dependencies = dependenciesFor(backend);
+    auto snapshot = dependencies.snapshot;
+    bool notifyDuringSnapshot = false;
+    dependencies.snapshot = [&] {
+        auto result = snapshot();
+        if (notifyDuringSnapshot) {
+            notifyDuringSnapshot = false;
+            std::thread producer{[&bridge] {
+                for (int index = 0; index < 100; ++index) {
+                    bridge.notify();
+                }
+            }};
+            producer.join();
+        }
+        return result;
+    };
+    ReviewController controller{std::move(dependencies)};
+    bridge.bind(controller);
+    const auto before = backend->snapshotCalls;
+    notifyDuringSnapshot = true;
+    bridge.notify();
+    QCoreApplication::sendPostedEvents(&controller, QEvent::MetaCall);
+    QCoreApplication::sendPostedEvents(&controller, QEvent::MetaCall);
+    EXPECT_EQ(backend->snapshotCalls, before + 2U);
+    QCoreApplication::sendPostedEvents(&controller, QEvent::MetaCall);
+    EXPECT_EQ(backend->snapshotCalls, before + 2U);
+    bridge.unbind();
+    controller.stop();
+}
+
+TEST_F(ReviewControllerTests, ProjectionBridgeInvalidatesQueuedWorkAcrossRebind) {
+    auto backend = std::make_shared<FakeBackend>();
+    ReviewController controller{dependenciesFor(backend)};
+    app::detail::ReviewProjectionBridge bridge;
+    bridge.bind(controller);
+    const auto before = backend->snapshotCalls;
+    bridge.notify();
+    bridge.unbind();
+    bridge.bind(controller);
+    bridge.notify();
+    QCoreApplication::sendPostedEvents(&controller, QEvent::MetaCall);
+    EXPECT_EQ(backend->snapshotCalls, before + 1U);
+    bridge.notify();
+    bridge.unbind();
+    QCoreApplication::sendPostedEvents(&controller, QEvent::MetaCall);
+    EXPECT_EQ(backend->snapshotCalls, before + 1U);
+    controller.stop();
+}
+
 TEST_F(ReviewControllerTests, ProjectsMediaTimeTimecodeAndDetailedSourceInformation) {
     auto backend = std::make_shared<FakeBackend>();
     backend->currentSnapshot =
@@ -366,6 +442,31 @@ TEST_F(ReviewControllerTests, ReviewsDroppedFilesInCppAndNormalizesUnicodePaths)
     ASSERT_EQ(urls.size(), 2);
     EXPECT_EQ(urls.front().toUrl().toLocalFile(), QFileInfo{sourceAPath}.canonicalFilePath());
     EXPECT_EQ(urls.back().toUrl().toLocalFile(), QFileInfo{sourceBPath}.canonicalFilePath());
+}
+
+TEST_F(ReviewControllerTests, FrameAdvanceEmitsFrameStateWithoutBroadStateNotification) {
+    auto backend = std::make_shared<FakeBackend>();
+    backend->currentSnapshot = readySnapshotWithSources({"C:/media/a.mp4", "C:/media/b.mp4"});
+    ReviewController controller{dependenciesFor(backend)};
+    int broadNotifications = 0;
+    int frameNotifications = 0;
+    QObject::connect(
+        &controller, &ReviewController::stateChanged, &controller, [&] { ++broadNotifications; });
+    QObject::connect(&controller, &ReviewController::frameStateChanged, &controller, [&] {
+        ++frameNotifications;
+    });
+
+    controller.refreshProjection();
+    const int initialBroad = broadNotifications;
+    const int initialFrame = frameNotifications;
+
+    backend->currentSnapshot.displayedFrame = domain::FrameId{1};
+    controller.refreshProjection();
+
+    EXPECT_GT(frameNotifications, initialFrame);
+    EXPECT_EQ(broadNotifications, initialBroad);
+    EXPECT_EQ(controller.currentFrame(), 1);
+    controller.stop();
 }
 
 TEST_F(ReviewControllerTests, RejectsDuplicateAndMissingDroppedFiles) {

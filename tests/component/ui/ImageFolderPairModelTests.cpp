@@ -270,6 +270,38 @@ TEST_F(ImageFolderPairModelTests, AsyncOpenAdvancesOnlyOnMatchingSuccess) {
     EXPECT_TRUE(model.errorText().isEmpty());
 }
 
+TEST_F(ImageFolderPairModelTests, PendingNavigationUsesNewestDesiredRowAndDoesNotRestartIt) {
+    for (const QString& name :
+         {QStringLiteral("a.png"), QStringLiteral("b.png"), QStringLiteral("c.png")}) {
+        static_cast<void>(writeFile(left_, name, "a"));
+        static_cast<void>(writeFile(right_, name, "b"));
+    }
+    ImageFolderPairModel model;
+    ASSERT_TRUE(model.loadFolders(folderUrl(left_), folderUrl(right_)));
+    int requests = 0;
+    std::vector<int> cancelled;
+    model.setAsyncPairOpener([&](const QUrl&, const QUrl&, int, QString*) { return ++requests; });
+    model.setAsyncPairCancel([&](const int request) { cancelled.push_back(request); });
+    model.setCurrentPair(0);
+    ASSERT_TRUE(model.openPairAt(model.stepCompleteRow(1)));
+    EXPECT_EQ(model.pendingPair(), 1);
+    EXPECT_TRUE(model.openPairAt(1));
+    EXPECT_EQ(requests, 1);
+    EXPECT_TRUE(cancelled.empty());
+    ASSERT_TRUE(model.openPairAt(model.stepCompleteRow(1)));
+    EXPECT_EQ(model.pendingPair(), 2);
+    EXPECT_EQ(model.currentPair(), 0);
+    ASSERT_EQ(cancelled.size(), 1U);
+    EXPECT_EQ(cancelled.front(), 1);
+    model.completePairOpen(1, true, {});
+    EXPECT_EQ(model.pendingPair(), 2);
+    EXPECT_EQ(model.stepCompleteRow(1), 0);
+    EXPECT_EQ(model.stepCompleteRow(-1), 1);
+    model.completePairOpen(2, true, {});
+    EXPECT_EQ(model.currentPair(), 2);
+    EXPECT_FALSE(model.openPending());
+}
+
 TEST_F(ImageFolderPairModelTests, CancelPendingAsyncOpenIgnoresLateCompletion) {
     static_cast<void>(writeFile(left_, "shot.png", "a"));
     static_cast<void>(writeFile(right_, "shot.png", "b"));

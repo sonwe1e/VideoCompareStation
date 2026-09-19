@@ -4,6 +4,7 @@ add_executable(
     dvs_ui_component_tests
     DiagnosticsProbeTests.cpp
     ReviewControllerTests.cpp
+    "${PROJECT_SOURCE_DIR}/src/app/RuntimeBridges.cpp"
     ReviewPreferencesControllerTests.cpp
     SourceIdentityTests.cpp
 )
@@ -11,11 +12,12 @@ target_link_libraries(
     dvs_ui_component_tests
     PRIVATE
         dvs_ui_qml
+        dvs_media_ffmpeg
         dvs::test_dependencies
 )
 target_include_directories(
     dvs_ui_component_tests
-    PRIVATE "${PROJECT_SOURCE_DIR}/src/ui_qml/src"
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/ui_qml/src" "${PROJECT_SOURCE_DIR}/src/app"
 )
 
 dvs_apply_project_warnings(dvs_ui_component_tests)
