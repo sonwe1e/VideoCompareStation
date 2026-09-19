@@ -4,6 +4,9 @@
 
 #include <Psapi.h>
 #include <TlHelp32.h>
+#include <algorithm>
+#include <stdexcept>
+#include <utility>
 
 namespace dvs::platform {
 namespace {
@@ -45,6 +48,53 @@ ProcessTelemetry sampleCurrentProcessTelemetry() noexcept {
         .threadCount = currentProcessThreadCount(),
         .workingSetBytes = currentProcessWorkingSetBytes(),
     };
+}
+
+ProcessTelemetrySampler::ProcessTelemetrySampler(Sample sample,
+                                                 const std::chrono::milliseconds interval)
+    : sample_(std::move(sample)), interval_(interval) {
+    if (!sample_ || interval_ <= std::chrono::milliseconds::zero()) {
+        throw std::invalid_argument{"Telemetry sampling requires a probe and positive interval."};
+    }
+    worker_ = std::thread{[this] { run(); }};
+}
+
+ProcessTelemetrySampler::~ProcessTelemetrySampler() {
+    static_cast<void>(stopAndTakePeaks());
+}
+
+ProcessTelemetry ProcessTelemetrySampler::stopAndTakePeaks() noexcept {
+    {
+        const std::lock_guard lock{mutex_};
+        stopping_ = true;
+    }
+    condition_.notify_one();
+    if (worker_.joinable()) {
+        worker_.join();
+    }
+    return peaks_;
+}
+
+void ProcessTelemetrySampler::run() noexcept {
+    auto deadline = std::chrono::steady_clock::now() + interval_;
+    std::unique_lock lock{mutex_};
+    while (!condition_.wait_until(lock, deadline, [this] { return stopping_; })) {
+        lock.unlock();
+        try {
+            const ProcessTelemetry value = sample_();
+            peaks_.threadCount = (std::max)(peaks_.threadCount, value.threadCount);
+            peaks_.workingSetBytes = (std::max)(peaks_.workingSetBytes, value.workingSetBytes);
+        } catch (...) {
+            // Telemetry is observational; a failed sample must not terminate playback.
+        }
+        // Preserve the cadence without queueing catch-up work after a slow enumeration.
+        deadline += interval_;
+        const auto now = std::chrono::steady_clock::now();
+        if (deadline <= now) {
+            deadline = now + interval_;
+        }
+        lock.lock();
+    }
 }
 
 } // namespace dvs::platform

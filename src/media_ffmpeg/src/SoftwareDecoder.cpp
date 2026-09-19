@@ -35,6 +35,14 @@ namespace {
 
 constexpr std::int64_t kExactFullDecodeTailFrames = 16;
 
+// How far an exact seek may retreat in display ordinals when the first decode after a backward
+// seek overshoots the target PTS. Open-GOP captures (GameDVR hardware encoders) place the
+// pre-keyframe B-frames of one GOP *after* the next GOP's keyframe in decode order, so the MP4
+// DTS-based seek lands on that later keyframe and its first output already passes the target.
+// The back-off doubles (1, 2, 4, ... ordinals) and stays bounded; the exact PTS equality check
+// remains the only acceptance condition, so this can never substitute a neighbouring frame.
+constexpr std::size_t kMaximumSeekOrdinalBackOff = 16U;
+
 struct InterruptState final {
     const std::atomic<bool>* requested = nullptr;
     const std::atomic<bool>* externalRequested = nullptr;
@@ -484,7 +492,8 @@ domain::Result<DecodedFrame>
 SoftwareDecoder::decodeInternal(const domain::FrameId frameId,
                                 const std::atomic<bool>& cancellationRequested,
                                 const bool continueSequentially,
-                                const bool allowTimelineRecovery) {
+                                const bool allowTimelineRecovery,
+                                const std::size_t seekOrdinalBackOff) {
     const domain::SourceId sourceId = impl_->sourceId;
     impl_->interrupted.store(cancellationRequested.load(std::memory_order_acquire),
                              std::memory_order_release);
@@ -528,8 +537,14 @@ SoftwareDecoder::decodeInternal(const domain::FrameId frameId,
                 static_cast<std::size_t>(frameId.value() - kExactFullDecodeTailFrames);
             fullDecodeTimestamp = (*impl_->presentationTimestamps)[fullDecodeFrame];
         }
+        // An ordinal back-off seeks to an earlier indexed display position so the decode can
+        // reach the exact target forward; the identity equality below still rejects anything
+        // but the target PTS.
+        const auto seekOrdinal = static_cast<std::size_t>(
+            frameId.value() - static_cast<std::int64_t>(seekOrdinalBackOff));
+        const std::int64_t seekTimestamp = (*impl_->presentationTimestamps)[seekOrdinal];
         const int seekResult = av_seek_frame(
-            impl_->format.get(), impl_->streamIndex, targetTimestamp, AVSEEK_FLAG_BACKWARD);
+            impl_->format.get(), impl_->streamIndex, seekTimestamp, AVSEEK_FLAG_BACKWARD);
         if (seekResult < 0) {
             return domain::Result<DecodedFrame>::failure(decodeError(
                 domain::MediaErrorCode::kMediaDecodeFailed,
@@ -604,17 +619,34 @@ SoftwareDecoder::decodeInternal(const domain::FrameId frameId,
             }
             if (timestamp > targetTimestamp) {
                 if (!continueSequentially && allowTimelineRecovery) {
+                    // Open-GOP captures can make the DTS-ordered keyframe seek overshoot the
+                    // indexed target (the target decodes after that keyframe). Re-seek to an
+                    // earlier display ordinal and decode forward to the exact target; when the
+                    // back-off is exhausted, fall through to the poisoned-demuxer reopen below
+                    // and finally to the strict timeline error.
+                    const std::size_t nextBackOff =
+                        seekOrdinalBackOff == 0U ? 1U : seekOrdinalBackOff * 2U;
+                    if (nextBackOff <= kMaximumSeekOrdinalBackOff &&
+                        static_cast<std::int64_t>(nextBackOff) <= frameId.value()) {
+                        return decodeInternal(domain::FrameId{frameId.value()},
+                                              cancellationRequested,
+                                              false,
+                                              true,
+                                              nextBackOff);
+                    }
                     // An FFmpeg demuxer interrupted by a superseding request can retain a
                     // poisoned read position even after av_seek_frame reports success. Reopening
                     // once restores the source to a deterministic state; a repeated mismatch is
                     // still surfaced as a real timeline error.
-                    const std::uint64_t seekAttempts = impl_->exactSeekCount;
-                    const domain::Status reopened = open(cancellationRequested);
-                    if (!reopened) {
-                        return domain::Result<DecodedFrame>::failure(reopened.error());
+                    if (seekOrdinalBackOff == 0U) {
+                        const std::uint64_t seekAttempts = impl_->exactSeekCount;
+                        const domain::Status reopened = open(cancellationRequested);
+                        if (!reopened) {
+                            return domain::Result<DecodedFrame>::failure(reopened.error());
+                        }
+                        impl_->exactSeekCount = seekAttempts;
+                        return decodeInternal(frameId, cancellationRequested, false, false);
                     }
-                    impl_->exactSeekCount = seekAttempts;
-                    return decodeInternal(frameId, cancellationRequested, false, false);
                 }
                 return domain::Result<DecodedFrame>::failure(
                     decodeError(domain::MediaErrorCode::kFrameTimelineInvalid,
@@ -986,8 +1018,10 @@ domain::DeviceGeneration SoftwareDecoder::deviceGeneration() const noexcept {
 }
 
 void SoftwareDecoder::requestInterrupt() noexcept {
+    // Signal only: this can run on any thread while the decode worker owns every other Impl
+    // member. Worker-owned state such as sequentialReady is reset by the worker on its next
+    // decode or reopen, never from here.
     impl_->interrupted.store(true, std::memory_order_release);
-    impl_->sequentialReady = false;
 }
 
 void SoftwareDecoder::close() noexcept {

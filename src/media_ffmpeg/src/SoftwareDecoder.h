@@ -60,7 +60,8 @@ private:
     decodeInternal(domain::FrameId frameId,
                    const std::atomic<bool>& cancellationRequested,
                    bool continueSequentially,
-                   bool allowTimelineRecovery);
+                   bool allowTimelineRecovery,
+                   std::size_t seekOrdinalBackOff = 0U);
 
     class Impl;
 

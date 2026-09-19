@@ -9,6 +9,8 @@
 #include "dvs/platform/RenderActivitySink.h"
 #include "dvs/ui/ComparisonSurface.h"
 
+#include "RenderRetry.h"
+
 #include <QColor>
 #include <QCoreApplication>
 #include <QElapsedTimer>
@@ -1120,6 +1122,29 @@ makeDummyAcknowledgement(const std::uint64_t requestId) {
         .context = makeContext(requestId),
         .frameId = domain::FrameId{static_cast<std::int64_t>(requestId)},
     };
+}
+
+TEST(ComparisonSurfaceWarpTests, RetriesContendedRenderWithoutAnotherPublication) {
+    SurfaceWarpHarness harness;
+    ASSERT_TRUE(harness.start());
+    static_cast<void>(harness.window.grabWindow());
+
+    std::atomic<int> attempts{0};
+    QObject::connect(
+        &harness.window,
+        &QQuickWindow::afterRendering,
+        &harness.window,
+        [&] {
+            if (attempts.fetch_add(1, std::memory_order_relaxed) == 0) {
+                detail::RenderRetry retry;
+                retry.retryContendedRender(harness.window,
+                                           platform::ComparisonRenderResult::Contended);
+            }
+        },
+        Qt::DirectConnection);
+    harness.requestRender();
+    EXPECT_TRUE(waitUntil([&] { return attempts.load(std::memory_order_relaxed) >= 2; }, 2s));
+    QObject::disconnect(&harness.window, nullptr, &harness.window, nullptr);
 }
 
 TEST(ComparisonSurfaceWarpTests, RendersUnequalAspectNv12AcrossAnOddSplitWithoutABlackSeam) {

@@ -69,6 +69,8 @@ Rectangle {
                 required property int sourceId
                 required property string sourceIdentity
                 required property string filename
+                required property string parentLabel
+                required property string fullPath
                 required property bool changedOnDisk
 
                 height: chips.height
@@ -168,11 +170,20 @@ Rectangle {
                     Text {
                         id: filenameLabel
 
-                        text: chip.filename
+                        text: chip.parentLabel.length > 0 ? "%1 (%2)".arg(chip.filename).arg(chip.parentLabel) : chip.filename
                         color: control.textColor
                         font.pixelSize: 12
                         elide: Text.ElideMiddle
                         Layout.fillWidth: true
+
+                        HoverHandler {
+                            id: filenameHover
+                        }
+
+                        VcsToolTip {
+                            visible: filenameHover.hovered && chip.fullPath.length > 0
+                            text: chip.fullPath
+                        }
                     }
                 }
 

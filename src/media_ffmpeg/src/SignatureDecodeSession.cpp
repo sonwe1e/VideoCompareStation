@@ -30,6 +30,11 @@ struct InterruptState final {
     const std::atomic<bool>* externalRequested = nullptr;
 };
 
+// Mirrors SoftwareDecoder's bounded exact-seek back-off: the first overshoot retreats one
+// display ordinal, then doubles, and gives up at this bound (falling through to the strict
+// timeline error rather than ever substituting a neighbouring frame).
+constexpr std::size_t kMaximumSeekOrdinalBackOff = 16U;
+
 struct TimelineIndexCancellationState final {
     const std::atomic<bool>* request = nullptr;
     const std::atomic<bool>* interrupted = nullptr;
@@ -366,7 +371,8 @@ domain::Result<application::FrameLumaSignature>
 SignatureDecodeSession::decodeInternal(const domain::FrameId frameId,
                                        const std::atomic<bool>& cancellationRequested,
                                        const bool continueSequentially,
-                                       const bool allowTimelineRecovery) {
+                                       const bool allowTimelineRecovery,
+                                       const std::size_t seekOrdinalBackOff) {
     impl_->interrupted.store(cancellationRequested.load(std::memory_order_acquire),
                              std::memory_order_release);
     if (cancellationRequested.load(std::memory_order_acquire)) {
@@ -398,8 +404,14 @@ SignatureDecodeSession::decodeInternal(const domain::FrameId frameId,
     const std::int64_t targetTimestamp =
         (*impl_->presentationTimestamps)[static_cast<std::size_t>(frameId.value())];
     if (!continueSequentially) {
+        // Mirror SoftwareDecoder's ordinal back-off: open-GOP captures can make the DTS-ordered
+        // keyframe seek overshoot the indexed target, so retreat to an earlier display ordinal
+        // and decode forward; the exact PTS comparison below stays the acceptance condition.
+        const auto seekOrdinal = static_cast<std::size_t>(
+            frameId.value() - static_cast<std::int64_t>(seekOrdinalBackOff));
+        const std::int64_t seekTimestamp = (*impl_->presentationTimestamps)[seekOrdinal];
         const int seekResult = av_seek_frame(
-            impl_->format.get(), impl_->streamIndex, targetTimestamp, AVSEEK_FLAG_BACKWARD);
+            impl_->format.get(), impl_->streamIndex, seekTimestamp, AVSEEK_FLAG_BACKWARD);
         if (seekResult < 0) {
             return domain::Result<application::FrameLumaSignature>::failure(decodeError(
                 domain::MediaErrorCode::kMediaDecodeFailed,
@@ -460,12 +472,21 @@ SignatureDecodeSession::decodeInternal(const domain::FrameId frameId,
             }
             if (timestamp > targetTimestamp) {
                 if (!continueSequentially && allowTimelineRecovery) {
-                    const domain::Status reopened = open(cancellationRequested);
-                    if (!reopened) {
-                        return domain::Result<application::FrameLumaSignature>::failure(
-                            reopened.error());
+                    const std::size_t nextBackOff =
+                        seekOrdinalBackOff == 0U ? 1U : seekOrdinalBackOff * 2U;
+                    if (nextBackOff <= kMaximumSeekOrdinalBackOff &&
+                        static_cast<std::int64_t>(nextBackOff) <= frameId.value()) {
+                        return decodeInternal(
+                            frameId, cancellationRequested, false, true, nextBackOff);
                     }
-                    return decodeInternal(frameId, cancellationRequested, false, false);
+                    if (seekOrdinalBackOff == 0U) {
+                        const domain::Status reopened = open(cancellationRequested);
+                        if (!reopened) {
+                            return domain::Result<application::FrameLumaSignature>::failure(
+                                reopened.error());
+                        }
+                        return decodeInternal(frameId, cancellationRequested, false, false);
+                    }
                 }
                 return domain::Result<application::FrameLumaSignature>::failure(
                     decodeError(domain::MediaErrorCode::kFrameTimelineInvalid,

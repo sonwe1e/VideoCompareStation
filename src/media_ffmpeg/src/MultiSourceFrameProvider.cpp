@@ -65,7 +65,10 @@ struct ProviderOperation final {
     std::atomic<ProviderOperationLifecycle> lifecycle = ProviderOperationLifecycle::kPending;
     std::atomic<application::CancellationReason> cancellationReason =
         application::CancellationReason::Superseded;
-    std::atomic<bool> cancellationRequested = false;
+    // Shared ownership so speculative decode work can keep the flag alive after this operation's
+    // last owner (the completion callback) is released.
+    std::shared_ptr<std::atomic<bool>> cancellationRequested =
+        std::make_shared<std::atomic<bool>>(false);
 
     ProviderOperation(const ProviderOperationKind kindValue,
                       ProviderRequest requestValue,
@@ -81,7 +84,7 @@ struct ProviderOperation final {
                                                std::memory_order_acquire)) {
             return false;
         }
-        cancellationRequested.store(true, std::memory_order_release);
+        cancellationRequested->store(true, std::memory_order_release);
         return true;
     }
 
@@ -835,7 +838,7 @@ private:
 
             for (std::size_t slot = 0; slot < decodeActors_.size(); ++slot) {
                 const domain::Status opened =
-                    decodeActors_[slot]->open(operation->cancellationRequested);
+                    decodeActors_[slot]->open(*operation->cancellationRequested);
                 if (operation->isCanceled()) {
                     closeDecodeActors();
                     postCanceled(operation);
@@ -1155,7 +1158,7 @@ private:
                             request.priority == application::FrameRequestPriority::Sequential
                                 ? std::uint8_t{3U}
                                 : std::uint8_t{0U},
-                        .cancellationRequested = &operation->cancellationRequested,
+                        .cancellationRequested = operation->cancellationRequested,
                         .context = request.context,
                     },
                     [this, operation, sourceId, frameId, matchKind, alignmentConfidence](

@@ -63,13 +63,27 @@ ApplicationWindow {
     readonly property bool chromeVisible: shell ? Boolean(shell.chromeVisible) : true
     readonly property bool drawerMode: alignmentBar.visible && root.width < 1120
     property int visibilityBeforeFullScreen: Window.Windowed
-    // 0 = video compare workspace, 1 = still-image workspace.
+    // 0 = video compare workspace, 1 = still-image workspace. Kept writable so existing
+    // automation can select the visible workspace; routing code should call activateWorkspace().
     property int workspaceMode: 0
-    readonly property bool imageWorkspaceActive: workspaceMode === 1
+    readonly property bool imageWorkspaceActive: workspaceSession.imageActive
+    // Folder-comparison state: two staged folder URLs, selection progress, sidebar toggle.
+    property url imageFolderLeftUrl: ""
+    property url imageFolderRightUrl: ""
+    property int imageFolderStage: 0
+    property bool imageFolderSidebarVisible: true
+    // T4 asynchronous image-open state. A request is pending until openFinished arrives;
+    // until then the previous committed pair stays visible and no workspace commit happens.
+    property int pendingImageRequestId: -1
+    property string pendingImageOpenKind: ""
+    property int pendingFolderPairRow: -1
     // Captured from the C++ context property so nested scopes never resolve a same-named
-    // Item property (ImageWorkspace.imageReview) into a circular binding.
+    // Item property (ImageWorkspace.imageReview) into a circular binding. The typeof guard
+    // keeps lightweight QML-only tests without the image context valid and warning-free.
     // qmllint disable unqualified
-    readonly property var stillImageController: imageReview
+    readonly property var stillImageController: typeof imageReview !== "undefined" ? imageReview : null
+    readonly property var folderPairModel: typeof imageFolderPairs !== "undefined" ? imageFolderPairs : null
+    // qmllint enable unqualified
     property string immersiveHudText: ""
     property bool immersiveHudVisible: false
     property bool manualHudPending: false
@@ -91,6 +105,49 @@ ApplicationWindow {
     readonly property bool dropFrameTimecode: Boolean(preferences && preferences.dropFrameTimecode)
     property int changedOnDiskAnnouncedGeneration: -1
 
+    // Single owner of workspace intent vs. committed content. activeMedia is the workspace
+    // the user is looking at; pendingMedia is a selector/staging intent and must never change
+    // the visible workspace until an open operation actually commits. committedMedia/Identity
+    // record the last successfully committed task so closing or switching never falls back to
+    // an older hidden canvas by accident.
+    QtObject {
+        id: workspaceSession
+
+        objectName: "workspaceSession"
+        readonly property int videoMedia: 0
+        readonly property int imageMedia: 1
+        readonly property int activeMedia: root.workspaceMode
+        property int pendingMedia: -1
+        property int committedMedia: 0
+        property string committedIdentity: ""
+        property int commitRevision: 0
+        readonly property bool videoActive: activeMedia === videoMedia
+        readonly property bool imageActive: activeMedia === imageMedia
+        readonly property bool openPending: pendingMedia >= 0
+
+        function beginOpen(media) {
+            pendingMedia = Number(media) === imageMedia ? imageMedia : videoMedia;
+        }
+
+        function cancelOpen() {
+            pendingMedia = -1;
+        }
+
+        function markCommitted(media, identity) {
+            committedMedia = Number(media) === imageMedia ? imageMedia : videoMedia;
+            committedIdentity = String(identity || "");
+            commitRevision += 1;
+            pendingMedia = -1;
+        }
+
+        function clearCommitted(media) {
+            if (committedMedia !== Number(media))
+                return;
+            committedIdentity = "";
+            commitRevision += 1;
+        }
+    }
+
     readonly property bool busy: Boolean(controller && controller.busy)
     readonly property bool framePending: Boolean(controller && controller.framePending)
     readonly property bool playing: Boolean(controller && controller.playing)
@@ -107,6 +164,9 @@ ApplicationWindow {
     readonly property bool sourceCMissing: Boolean(!controller || controller.sourceCMissing)
     readonly property int sourceCount: controller ? Number(controller.sourceCount) : 0
     readonly property bool singleMode: sourceCount === 1
+    readonly property bool imageHasContent: Boolean(stillImageController && (stillImageController.hasPrimary || stillImageController.hasSecondary))
+    readonly property bool videoHasSession: sourceCount > 0
+    readonly property bool activeTaskHasMedia: workspaceSession.imageActive ? imageHasContent : videoHasSession
     readonly property int preferredOscState: preferences ? Number(preferences.oscMode) : -1
     readonly property int oscState: sourceCount === 0 || !chromeVisible ? 2 : (preferredOscState >= 0 ? preferredOscState : (singleMode ? 1 : 0))
     readonly property bool transportHidden: oscState === 2 || !chromeVisible
@@ -257,8 +317,11 @@ ApplicationWindow {
     readonly property real timelineProgress: timelineDragging && timelinePreviewFrame >= 0 && totalFrames > 1 ? Number(timelinePreviewFrame) / (Number(totalFrames) - 1) : frameProgress
     readonly property bool timelineEnabled: graphicsReady && !busy && Boolean(controller && controller.canFirst) && totalFrames > 0
     readonly property bool anyMenuOpen: Boolean(applicationMenuBar && applicationMenuBar.anyMenuOpen) || Boolean(sourceBar && sourceBar.anyMenuOpen) || Boolean(viewerContextMenu && viewerContextMenu.anyMenuOpen)
-    readonly property int inputContext: reviewInputDialogs.modalVisible || anchorDialog.visible || shortcutHelp.visible ? 3 : (anyMenuOpen || focusIsPopup(root.activeFocusItem) ? 2 : (focusIsTextEditing(root.activeFocusItem) ? 1 : 0))
-    readonly property bool globalMediaShortcutsEnabled: inputContext === 0 && (!chromeVisible || !focusBlocksGlobalMediaShortcuts(root.activeFocusItem))
+    // Modal/input routing is intentionally computed in one place. Native image dialogs are
+    // included even though they are not Popups, so a selector opened from the video workspace
+    // can never let media shortcuts reach the hidden video session.
+    readonly property int inputContext: reviewInputDialogs.modalVisible || anchorDialog.visible || shortcutHelp.visible || imageSingleDialog.visible || imageAddDialog.visible || imagePairDialog.visible || imageFolderLeftDialog.visible || imageFolderRightDialog.visible ? 3 : (anyMenuOpen || focusIsPopup(root.activeFocusItem) ? 2 : (focusIsTextEditing(root.activeFocusItem) ? 1 : 0))
+    readonly property bool globalMediaShortcutsEnabled: workspaceSession.videoActive && inputContext === 0 && (!chromeVisible || !focusBlocksGlobalMediaShortcuts(root.activeFocusItem))
     readonly property bool presentationShortcutsEnabled: inputContext === 0
     readonly property bool frameErrorBannerVisible: hasErrors && currentFrame >= 0 && !busy && graphicsReady && Boolean(controller && controller.canFirst)
     readonly property string overlayTitle: busy ? qsTr("正在加载…") : (!graphicsReady ? qsTr("图形设备不可用") : (hasErrors ? qsTr("无法打开文件") : qsTr("把视频或图片拖到这里")))
@@ -518,13 +581,21 @@ ApplicationWindow {
             shell.cancelPendingAction();
     }
 
-    // After a menu action runs, hand keyboard control back to the viewer so transport shortcuts
-    // (Space, arrows, I/O) work immediately.
-    function returnFocusToViewer() {
+    // Focus follows the active workspace so the visible focus ring and the key receiving
+    // surface can never point at a hidden task.
+    function focusActiveWorkspace() {
         Qt.callLater(() => {
-            if (viewportFrame)
+            if (workspaceSession.imageActive) {
+                if (imageWorkspace)
+                    imageWorkspace.forceActiveFocus();
+            } else if (viewportFrame) {
                 viewportFrame.forceActiveFocus();
+            }
         });
+    }
+
+    function returnFocusToViewer() {
+        focusActiveWorkspace();
     }
 
     function showIntentMessage(message) {
@@ -536,52 +607,328 @@ ApplicationWindow {
         return shell && shell.enqueueStartupRequest(Number(kind), Array.from(urls));
     }
 
+    // Called before leaving video and again when video becomes active, so switching away and
+    // returning always restores an explicit paused state instead of a hidden playback clock.
+    function ensureVideoPaused() {
+        if (!controller || !controller.playing)
+            return true;
+        return Boolean(controller.pause());
+    }
+
+    function beginWorkspaceOpen(media) {
+        workspaceSession.beginOpen(media);
+        return true;
+    }
+
+    // T4: cancelling a pending selector/open must invalidate the candidate request, not
+    // merely hide the dialog. The already-committed canvas is untouched.
+    function cancelWorkspaceOpen() {
+        if (root.pendingImageRequestId > 0 && root.stillImageController) {
+            root.stillImageController.cancelOpenRequest(root.pendingImageRequestId);
+            root.pendingImageRequestId = -1;
+            root.pendingImageOpenKind = "";
+        }
+        if (root.pendingFolderPairRow >= 0 && root.folderPairModel) {
+            root.folderPairModel.cancelPendingOpen();
+            root.pendingFolderPairRow = -1;
+        }
+        workspaceSession.cancelOpen();
+        focusActiveWorkspace();
+        return true;
+    }
+
+    // T4 completion handler for direct image opens. The loader reports exactly one terminal
+    // for each accepted request; stale ids are ignored so N cannot override N+2.
+    function completeImageOpen(requestId, pairId, success, error) {
+        if (Number(requestId) !== Number(root.pendingImageRequestId))
+            return;
+        const kind = root.pendingImageOpenKind;
+        const target = root.stillImageController;
+        root.pendingImageRequestId = -1;
+        root.pendingImageOpenKind = "";
+        if (!success) {
+            const detail = String(error || "").length > 0 ? String(error) : qsTr("无法打开图片。");
+            root.dropError = detail;
+            root.showIntentMessage(detail);
+            workspaceSession.cancelOpen();
+            return;
+        }
+        if (!target)
+            return;
+        root.detachFolderSession();
+        const identity = kind === "single" ? target.primaryPath : target.primaryPath + "\n" + target.secondaryPath;
+        root.commitWorkspace(workspaceSession.imageMedia, identity);
+        root.dropError = "";
+    }
+
+    // Folder rows finish through ImageFolderPairModel. Commit the folder workspace only
+    // after the first candidate actually commits, preserving the previous task on failure.
+    function completeFolderPairOpen(row, success, error) {
+        if (Number(row) !== Number(root.pendingFolderPairRow))
+            return;
+        root.pendingFolderPairRow = -1;
+        if (!success) {
+            const detail = String(error || "").length > 0 ? String(error) : qsTr("无法打开图片对。");
+            root.dropError = detail;
+            root.showIntentMessage(detail);
+            workspaceSession.cancelOpen();
+            return;
+        }
+        const pairModel = root.folderPairModel;
+        if (!pairModel)
+            return;
+        root.dropError = "";
+        root.commitWorkspace(workspaceSession.imageMedia, pairModel.leftFolderPath + "\n" + pairModel.rightFolderPath);
+    }
+
+    // Pure view switch used after a commit or a close; it owns no media command by itself so
+    // an asynchronous open/close cannot be disturbed by a redundant pause command.
+    function showWorkspace(media) {
+        const target = Number(media) === workspaceSession.imageMedia ? workspaceSession.imageMedia : workspaceSession.videoMedia;
+        workspaceSession.pendingMedia = -1;
+        root.workspaceMode = target;
+        focusActiveWorkspace();
+        return true;
+    }
+
+    // Explicit workspace switch from the View menu. Leaving video or returning to it always
+    // lands on an explicit paused state; returning never resumes playback implicitly.
+    function activateWorkspace(media) {
+        ensureVideoPaused();
+        return showWorkspace(media);
+    }
+
+    // Selector/drop intents call this only after the candidate actually committed. Merely
+    // opening (or cancelling) a selector must not replace the committed workspace.
+    function commitWorkspace(media, identity) {
+        const target = Number(media) === workspaceSession.imageMedia ? workspaceSession.imageMedia : workspaceSession.videoMedia;
+        workspaceSession.markCommitted(target, identity);
+        if (target === workspaceSession.imageMedia)
+            ensureVideoPaused();
+        return showWorkspace(target);
+    }
+
+    // Ctrl+W / File-menu close. Only the active task is affected; a retained task in the other
+    // workspace stays alive and becomes visible if it has committed content.
+    function closeCurrentTask() {
+        if (workspaceSession.imageActive) {
+            const imageTarget = root.stillImageController;
+            if (!imageTarget || (!root.imageHasContent && root.pendingImageRequestId <= 0))
+                return false;
+            root.pendingImageRequestId = -1;
+            root.pendingImageOpenKind = "";
+            root.pendingFolderPairRow = -1;
+            if (imageTarget)
+                imageTarget.closeAll();
+            detachFolderSession();
+            workspaceSession.clearCommitted(workspaceSession.imageMedia);
+            showIntentMessage(qsTr("已关闭图片任务。"));
+            if (root.videoHasSession)
+                showWorkspace(workspaceSession.videoMedia);
+            else
+                focusActiveWorkspace();
+            return true;
+        }
+        if (!root.videoHasSession || !shell)
+            return false;
+        // ReviewShellController owns the source-topology intent, but a projector/sync race can
+        // leave its cached Active Sources empty while the media truth already has sources.
+        // Fall back to the controller in that specific case so Ctrl+W cannot leave the visible
+        // video task alive; normal non-empty shell state continues through the intent queue.
+        const shellHadSources = Boolean(shell.activeSources && shell.activeSources.length > 0);
+        if (!shell.closeSources())
+            return false;
+        if (!shellHadSources && root.videoHasSession && controller && Number(controller.sourceCount) > 0)
+            controller.closeSources();
+        workspaceSession.clearCommitted(workspaceSession.videoMedia);
+        showIntentMessage(qsTr("正在关闭视频…"));
+        if (root.imageHasContent)
+            showWorkspace(workspaceSession.imageMedia);
+        else
+            focusActiveWorkspace();
+        return true;
+    }
+
+    // Loose images are not part of the folder-pair task; clear its model so arrow keys (or a
+    // stale list selection) cannot navigate the previous folder session after a direct import.
+    // A detached session can have zero rows but still hold folder paths/error state, so clear
+    // those too instead of only checking pairCount.
+    function detachFolderSession() {
+        if (!root.folderPairModel)
+            return;
+        const hasFolderSession = root.folderPairModel.pairCount > 0 || root.folderPairModel.leftFolderPath.length > 0 || root.folderPairModel.rightFolderPath.length > 0 || root.folderPairModel.errorText.length > 0;
+        if (hasFolderSession)
+            root.folderPairModel.clear();
+    }
+
+    function requestOpenVideos() {
+        workspaceSession.beginOpen(workspaceSession.videoMedia);
+        reviewInputDialogs.openVideos();
+        return true;
+    }
+
+    function requestAddVideo() {
+        workspaceSession.beginOpen(workspaceSession.videoMedia);
+        reviewInputDialogs.openAddVideo();
+        return true;
+    }
+
+    function requestImageOpen() {
+        workspaceSession.beginOpen(workspaceSession.imageMedia);
+        imageSingleDialog.open();
+        return true;
+    }
+
+    function requestImagePairOpen() {
+        workspaceSession.beginOpen(workspaceSession.imageMedia);
+        imagePairDialog.open();
+        return true;
+    }
+
+    function requestImageAdd() {
+        workspaceSession.beginOpen(workspaceSession.imageMedia);
+        imageAddDialog.open();
+        return true;
+    }
+
+    function requestCompareFolders() {
+        workspaceSession.beginOpen(workspaceSession.imageMedia);
+        root.imageFolderStage = 0;
+        imageFolderLeftDialog.open();
+        return true;
+    }
+
     function performVideoReview(normalizedUrls) {
-        root.workspaceMode = 0;
+        if (!normalizedUrls || normalizedUrls.length === 0)
+            return false;
         if (normalizedUrls.length === 1) {
             dropError = "";
-            if (shell && shell.stageSources(normalizedUrls, 0))
-                shell.openStagedSources(false);
-            return;
+            if (!setDroppedVideoOrder(normalizedUrls) || !shell || !shell.openStagedSources(false)) {
+                workspaceSession.cancelOpen();
+                showIntentMessage(qsTr("无法打开该视频。"));
+                return false;
+            }
+            commitWorkspace(workspaceSession.videoMedia, normalizedUrls[0].toString());
+            return true;
         }
         dropError = "";
         if (!setDroppedVideoOrder(normalizedUrls)) {
+            workspaceSession.cancelOpen();
             showIntentMessage(qsTr("无法暂存这些视频。"));
-            return;
+            return false;
         }
         pendingComparisonPreservesPosition = false;
+        workspaceSession.beginOpen(workspaceSession.videoMedia);
         reviewInputDialogs.openComparison();
+        return true;
+    }
+
+    // Loads the two staged folder URLs into the pair model and opens the first comparable
+    // pair. The workspace commits only after the folder scan succeeds; an explicit valid
+    // folder choice still switches to the image workspace when no complete pair exists.
+    function loadFolderComparison() {
+        const pairModel = root.folderPairModel;
+        if (!pairModel)
+            return false;
+        const ok = pairModel.loadFolders(root.imageFolderLeftUrl, root.imageFolderRightUrl);
+        if (!ok) {
+            workspaceSession.cancelOpen();
+            dropError = pairModel.errorText;
+            return false;
+        }
+        const firstRow = pairModel.firstCompleteRow();
+        root.imageFolderSidebarVisible = true;
+        if (firstRow < 0) {
+            // A valid folder choice with no same-named pair still switches to the image
+            // workspace, with the sidebar showing the missing rows and the reason.
+            commitWorkspace(workspaceSession.imageMedia, pairModel.leftFolderPath + "\n" + pairModel.rightFolderPath);
+            dropError = qsTr("两个文件夹没有同名图片。");
+            return false;
+        }
+        dropError = "";
+        root.pendingFolderPairRow = firstRow;
+        if (!pairModel.openPairAt(firstRow)) {
+            // The controller rejected the candidate synchronously; surface the failure
+            // source instead of advancing the list selection.
+            root.pendingFolderPairRow = -1;
+            dropError = pairModel.errorText;
+            workspaceSession.cancelOpen();
+            return false;
+        }
+        if (!pairModel.openPending) {
+            // Synchronous opener (tests/embedding) already committed the first pair.
+            root.pendingFolderPairRow = -1;
+            commitWorkspace(workspaceSession.imageMedia, pairModel.leftFolderPath + "\n" + pairModel.rightFolderPath);
+        }
+        return true;
     }
 
     function performImageReview(normalizedUrls) {
-        root.workspaceMode = 1;
-        // Opening images replaces the current video review, mirroring how opening videos
-        // replaces an existing session. CloseSources runs as a background intent; the image
-        // workspace is what the user sees immediately.
-        if (root.sourceCount > 0 && shell)
-            shell.closeSources();
         const target = root.stillImageController;
-        if (!target || normalizedUrls.length === 0)
-            return;
-        target.openPrimary(normalizedUrls[0]);
-        if (normalizedUrls.length >= 2 && normalizedUrls[1])
-            target.openSecondary(normalizedUrls[1]);
+        if (!target || !normalizedUrls || normalizedUrls.length === 0)
+            return false;
+        // New candidate invalidates an older pending one; the visible canvas remains the
+        // previous committed pair until the new candidate actually decodes (T4).
+        if (root.pendingImageRequestId > 0)
+            target.cancelOpenRequest(root.pendingImageRequestId);
+        let requestId = -1;
+        let kind = "";
+        if (normalizedUrls.length === 1) {
+            requestId = Number(target.requestOpenPrimary(normalizedUrls[0]));
+            kind = "single";
+        } else {
+            requestId = Number(target.requestOpenPair(normalizedUrls[0], normalizedUrls[1], -1));
+            kind = "pair";
+        }
+        if (!(requestId > 0)) {
+            const detail = target.errorText.length > 0 ? String(target.errorText) : qsTr("无法打开图片。");
+            dropError = detail;
+            showIntentMessage(detail);
+            workspaceSession.cancelOpen();
+            return false;
+        }
+        root.pendingImageRequestId = requestId;
+        root.pendingImageOpenKind = kind;
+        dropError = "";
+        return true;
     }
-
     function reviewUrls(urls, allowSingleSourceAppend) {
         const reviewed = controller.handleDroppedUrls(urls);
         if (!reviewed.accepted) {
+            workspaceSession.cancelOpen();
             dropError = root.messageCatalog.droppedUrlError(reviewed.errorKey, reviewed.detail);
-            return;
+            return false;
         }
         const normalizedUrls = reviewed.urls;
         if (reviewed.kind === "images") {
+            const imageTarget = root.stillImageController;
+            if (allowSingleSourceAppend && imageTarget && imageTarget.hasPrimary && !imageTarget.hasSecondary && normalizedUrls.length === 1) {
+                const primary = imageTarget.primaryPath;
+                const candidate = decodeURIComponent(normalizedUrls[0].toString()).replace(/^file:[\/]{3}/, "");
+                if (primary.length > 0 && sameFilePath(primary, candidate)) {
+                    dropError = qsTr("该图片已打开。");
+                    return false;
+                }
+                dropError = "";
+                // T4: append candidate also goes through the async controller. A failed B
+                // keeps the current committed workspace and never commits a half-open task.
+                const appendRequestId = Number(imageTarget.requestOpenSecondary(normalizedUrls[0]));
+                if (!(appendRequestId > 0)) {
+                    const detail = imageTarget.errorText.length > 0 ? String(imageTarget.errorText) : qsTr("无法打开图片。");
+                    dropError = detail;
+                    showIntentMessage(detail);
+                    return false;
+                }
+                root.pendingImageRequestId = appendRequestId;
+                root.pendingImageOpenKind = "append";
+                return true;
+            }
             requestDestructiveAction({
                 "kind": "openImages",
                 "urls": normalizedUrls,
                 "external": false
             });
-            return;
+            return true;
         }
         if (normalizedUrls.length === 1) {
             const existing = activeSourceUrls();
@@ -590,32 +937,72 @@ ApplicationWindow {
                 for (const current of existing) {
                     if (current.toString() === candidate) {
                         dropError = qsTr("该视频已打开。");
-                        return;
+                        return false;
                     }
                 }
                 existing.push(normalizedUrls[0]);
                 dropError = "";
-                root.workspaceMode = 0;
-                setDroppedVideoOrder(existing);
+                // The confirmation dialog is still a pending open: keep the current workspace
+                // visible until the user accepts. Cancelling must preserve it untouched.
+                if (!setDroppedVideoOrder(existing))
+                    return false;
                 pendingComparisonPreservesPosition = true;
+                workspaceSession.beginOpen(workspaceSession.videoMedia);
                 reviewInputDialogs.openComparison();
-                return;
+                return true;
             }
             requestDestructiveAction({
                 "kind": "openVideos",
                 "urls": normalizedUrls,
                 "external": false
             });
-            return;
+            return true;
         }
         requestDestructiveAction({
             "kind": "openVideos",
             "urls": normalizedUrls,
             "external": false
         });
+        return true;
+    }
+
+    // Path comparison helper for drop-append guards: controller paths are plain local
+    // paths while staged URLs are file:/// form; compare case-insensitively on Windows.
+    function sameFilePath(left, right) {
+        const normalize = path => String(path || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+        return normalize(left) === normalize(right);
+    }
+
+    // Directory detection for folder drops. The C++ drop validator requires regular
+    // files, so folders are routed here before it runs. Returns the local paths of every
+    // dropped entry that is a directory, or an empty array when none are.
+    function droppedFolderPaths(urls) {
+        const folders = [];
+        for (const value of urls) {
+            const url = typeof value === "string" ? Qt.resolvedUrl(value) : value;
+            if (!root.controller || !root.controller.isFolderPath(url))
+                continue;
+            folders.push(url);
+        }
+        return folders;
     }
 
     function reviewDroppedUrls(urls) {
+        const folderPaths = droppedFolderPaths(urls);
+        if (folderPaths.length === 2) {
+            imageFolderLeftUrl = folderPaths[0];
+            imageFolderRightUrl = folderPaths[1];
+            loadFolderComparison();
+            return;
+        }
+        if (folderPaths.length === 1) {
+            dropError = qsTr("拖入两个文件夹可进行图片对比。");
+            return;
+        }
+        if (folderPaths.length > 2) {
+            dropError = qsTr("最多拖入两个文件夹。");
+            return;
+        }
         reviewUrls(urls, true);
     }
 
@@ -627,8 +1014,18 @@ ApplicationWindow {
         if (shell)
             shell.stagedReferenceIndex = referenceIndex;
         pendingNewReviewWantsThreeUp = Boolean(shell && shell.stagedSources.length === 3);
-        if (shell && !shell.openStagedSources(pendingComparisonPreservesPosition && sourceCount > 0))
+        const preservePosition = pendingComparisonPreservesPosition && sourceCount > 0;
+        const opened = Boolean(shell && shell.openStagedSources(preservePosition));
+        if (!opened) {
             pendingNewReviewWantsThreeUp = false;
+            workspaceSession.cancelOpen();
+            showIntentMessage(qsTr("无法打开暂存的视频源。"));
+            focusActiveWorkspace();
+            return false;
+        }
+        pendingComparisonPreservesPosition = false;
+        commitWorkspace(workspaceSession.videoMedia, "");
+        return true;
     }
 
     function activeSourceUrls() {
@@ -864,21 +1261,16 @@ ApplicationWindow {
         openManualAnchorsDialog: root.openManualAnchorsDialog
         sourceOffsets: root.sourceOffsets
         resetSourceOffsets: root.resetSourceOffsets
-        onOpenVideosRequested: reviewInputDialogs.openVideos()
-        onAddVideoRequested: reviewInputDialogs.openAddVideo()
-        onOpenImageRequested: {
-            root.workspaceMode = 1;
-            imageSingleDialog.open();
-        }
-        onAddImageRequested: {
-            root.workspaceMode = 1;
-            imageAddDialog.open();
-        }
-        onOpenImagePairRequested: {
-            root.workspaceMode = 1;
-            imagePairDialog.open();
-        }
-        onWorkspaceRequested: mode => root.workspaceMode = mode
+        videoHasSession: root.videoHasSession
+        imageHasSession: root.imageHasContent
+        onOpenVideosRequested: root.requestOpenVideos()
+        onAddVideoRequested: root.requestAddVideo()
+        onOpenImageRequested: root.requestImageOpen()
+        onAddImageRequested: root.requestImageAdd()
+        onOpenImagePairRequested: root.requestImagePairOpen()
+        onCompareImageFoldersRequested: root.requestCompareFolders()
+        onWorkspaceRequested: mode => root.activateWorkspace(mode)
+        onCloseCurrentRequested: root.closeCurrentTask()
         onDestructiveActionRequested: kind => root.requestDestructiveAction({
                 "kind": kind,
                 "external": false
@@ -903,7 +1295,6 @@ ApplicationWindow {
         currentFrame: root.currentFrame
         inFrame: root.inFrame
         outFrame: root.outFrame
-        sourceCount: root.sourceCount
         onWipePositionRequested: position => {
             root.wipePosition = position;
             if (!root.chromeVisible)
@@ -921,12 +1312,6 @@ ApplicationWindow {
         onInPointRequested: root.setInPoint()
         onOutPointRequested: root.setOutPoint()
         onSelectedRangePlaybackRequested: root.playSelectedRange()
-        onOpenVideosRequested: reviewInputDialogs.openVideos()
-        onAddVideoRequested: reviewInputDialogs.openAddVideo()
-        onCloseVideosRequested: root.requestDestructiveAction({
-            "kind": "closeReview",
-            "external": false
-        })
     }
 
     Shortcut {
@@ -939,6 +1324,57 @@ ApplicationWindow {
             if (root.shell)
                 root.shell.inspectorVisible = false;
         }
+    }
+
+    // Workspace-level shortcuts stay active across both workspaces; media transport shortcuts
+    // remain owned by ReviewShortcuts and are gated by globalMediaShortcutsEnabled.
+    Shortcut {
+        sequence: "Ctrl+O"
+        context: Qt.ApplicationShortcut
+        enabled: root.inputContext === 0
+        onActivated: root.requestOpenVideos()
+    }
+
+    Shortcut {
+        sequence: "Ctrl+Shift+O"
+        context: Qt.ApplicationShortcut
+        enabled: root.inputContext === 0 && root.videoHasSession && root.sourceCount < 3
+        onActivated: root.requestAddVideo()
+    }
+
+    Shortcut {
+        sequence: "Ctrl+I"
+        context: Qt.ApplicationShortcut
+        enabled: root.inputContext === 0
+        onActivated: root.requestImageOpen()
+    }
+
+    Shortcut {
+        sequence: "Ctrl+Shift+I"
+        context: Qt.ApplicationShortcut
+        enabled: root.inputContext === 0
+        onActivated: root.requestImagePairOpen()
+    }
+
+    Shortcut {
+        sequence: "Ctrl+Alt+I"
+        context: Qt.ApplicationShortcut
+        enabled: root.inputContext === 0 && root.imageHasContent && !Boolean(root.stillImageController && root.stillImageController.hasSecondary)
+        onActivated: root.requestImageAdd()
+    }
+
+    Shortcut {
+        sequence: "Ctrl+W"
+        context: Qt.ApplicationShortcut
+        enabled: root.inputContext === 0 && root.activeTaskHasMedia
+        onActivated: root.closeCurrentTask()
+    }
+
+    Shortcut {
+        sequence: "Ctrl+Shift+F"
+        context: Qt.ApplicationShortcut
+        enabled: root.inputContext === 0
+        onActivated: root.requestCompareFolders()
     }
 
     Timer {
@@ -998,6 +1434,22 @@ ApplicationWindow {
     }
 
     Connections {
+        target: root.stillImageController
+
+        function onOpenFinished(requestId, pairId, success, error) {
+            root.completeImageOpen(requestId, pairId, success, error);
+        }
+    }
+
+    Connections {
+        target: root.folderPairModel
+
+        function onPairOpenFinished(row, success, error) {
+            root.completeFolderPairOpen(row, success, error);
+        }
+    }
+
+    Connections {
         target: root.controller
 
         function onStateChanged() {
@@ -1028,10 +1480,19 @@ ApplicationWindow {
         pathNameFunction: root.sourcePathLabel
         initialReferenceIndex: root.pendingComparisonPreservesPosition ? root.canonicalSourceIndex : 0
         onOpenVideosAccepted: urls => root.openNewReviewUrls(urls)
+        onOpenVideosRejected: root.cancelWorkspaceOpen()
         onAddVideoAccepted: url => root.reviewDroppedUrls([url])
+        onAddVideoRejected: root.cancelWorkspaceOpen()
         onMoveRequested: (fromIndex, toIndex) => root.swapDroppedVideos(fromIndex, toIndex)
         onComparisonAccepted: referenceIndex => {
             root.openDroppedComparison(referenceIndex);
+        }
+        onComparisonRejected: {
+            if (root.shell)
+                root.shell.clearStagedSources();
+            root.pendingComparisonPreservesPosition = false;
+            root.pendingNewReviewWantsThreeUp = false;
+            root.cancelWorkspaceOpen();
         }
     }
 
@@ -1274,7 +1735,7 @@ ApplicationWindow {
             right: parent.right
             leftMargin: root.singleMode ? 8 : 0
         }
-        onAddRequested: reviewInputDialogs.openAddVideo()
+        onAddRequested: root.requestAddVideo()
         onRemoveRequested: sourceIdentity => root.removeSelectedSource(sourceIdentity)
         onReferenceRequested: sourceIdentity => root.changeReference(sourceIdentity)
         onViewerFocusRequested: root.returnFocusToViewer()
@@ -1409,6 +1870,8 @@ ApplicationWindow {
         differenceFirstSlot: root.differenceFirstSlot
         effectiveDifferenceEdge: root.differenceEdge
         sourceNames: [root.sourceAName, root.sourceBName, root.sourceCName]
+        sourceParentLabels: root.controller ? root.controller.sourceParentLabels : []
+        sourceFullPaths: root.controller ? root.controller.sourceFullPaths : []
         sourceMediaInfo: root.controller ? root.controller.sourceMediaInfo : []
         frameErrorBannerVisible: root.frameErrorBannerVisible
         errorDetail: root.errorDetails()
@@ -1438,6 +1901,8 @@ ApplicationWindow {
         objectName: "imageWorkspaceRoot"
         visible: root.imageWorkspaceActive
         controller: root.stillImageController
+        pairModel: root.folderPairModel
+        sidebarVisible: root.imageFolderSidebarVisible
         anchors {
             top: parent.top
             topMargin: root.chromeVisible ? 10 : 0
@@ -1447,18 +1912,34 @@ ApplicationWindow {
             right: parent.right
             rightMargin: root.chromeVisible ? 14 : 0
         }
-        onOpenImageRequested: {
-            root.workspaceMode = 1;
-            imageSingleDialog.open();
+        onOpenImageRequested: root.requestImageOpen()
+        onAddImageRequested: root.requestImageAdd()
+        onOpenPairRequested: root.requestImagePairOpen()
+        onCompareFoldersRequested: root.requestCompareFolders()
+        onToggleSidebarRequested: root.imageFolderSidebarVisible = !root.imageFolderSidebarVisible
+    }
+    NativeDialogs.FolderDialog {
+        id: imageFolderLeftDialog
+
+        objectName: "imageFolderLeftDialog"
+        title: qsTr("选择文件夹 A")
+        onAccepted: {
+            root.imageFolderLeftUrl = selectedFolder;
+            root.imageFolderStage = 1;
+            imageFolderRightDialog.open();
         }
-        onAddImageRequested: {
-            root.workspaceMode = 1;
-            imageAddDialog.open();
+        onRejected: root.cancelWorkspaceOpen()
+    }
+    NativeDialogs.FolderDialog {
+        id: imageFolderRightDialog
+
+        objectName: "imageFolderRightDialog"
+        title: qsTr("选择文件夹 B")
+        onAccepted: {
+            root.imageFolderRightUrl = selectedFolder;
+            root.loadFolderComparison();
         }
-        onOpenPairRequested: {
-            root.workspaceMode = 1;
-            imagePairDialog.open();
-        }
+        onRejected: root.cancelWorkspaceOpen()
     }
     NativeDialogs.FileDialog {
         id: imageSingleDialog
@@ -1472,6 +1953,7 @@ ApplicationWindow {
             if (picked && picked.toString().length > 0)
                 root.performImageReview([picked]);
         }
+        onRejected: root.cancelWorkspaceOpen()
     }
     NativeDialogs.FileDialog {
         id: imageAddDialog
@@ -1483,8 +1965,9 @@ ApplicationWindow {
         onAccepted: {
             const picked = selectedFile && selectedFile.toString().length > 0 ? selectedFile : currentFile;
             if (picked && picked.toString().length > 0)
-                root.stillImageController.openSecondary(picked);
+                root.reviewUrls([picked], true);
         }
+        onRejected: root.cancelWorkspaceOpen()
     }
     NativeDialogs.FileDialog {
         id: imagePairDialog
@@ -1497,6 +1980,7 @@ ApplicationWindow {
             const files = selectedFiles && selectedFiles.length > 0 ? selectedFiles : [selectedFile];
             root.performImageReview(files.filter(url => url && url.toString().length > 0));
         }
+        onRejected: root.cancelWorkspaceOpen()
     }
     EmptyReviewView {
         visible: !root.imageWorkspaceActive && root.sourceCount === 0 && !root.busy && root.graphicsReady && !root.hasErrors
@@ -1505,7 +1989,7 @@ ApplicationWindow {
         textColor: root.primaryTextColor
         mutedTextColor: root.mutedTextColor
         anchors.fill: viewportFrame
-        onOpenVideosRequested: reviewInputDialogs.openVideos()
+        onOpenVideosRequested: root.requestOpenVideos()
     }
     TimelineThumbnailCache {
         id: thumbnailCache
@@ -1580,7 +2064,7 @@ ApplicationWindow {
         // qmllint enable unqualified
         onEdgeRequested: edge => root.preferences.differenceEdge = edge
         onReferenceRequested: sourceIdentity => root.changeReference(sourceIdentity)
-        onOpenRequested: reviewInputDialogs.openVideos()
+        onOpenRequested: root.requestOpenVideos()
         onInspectorRequested: root.shell.inspectorVisible = true
         onFullScreenRequested: root.toggleFullScreen()
         onViewerFocusRequested: root.returnFocusToViewer()

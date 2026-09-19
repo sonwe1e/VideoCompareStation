@@ -23,6 +23,8 @@ VcsMenuBar {
     property int workspaceMode: 0
     property bool imageHasPrimary: false
     property bool imageHasSecondary: false
+    property bool videoHasSession: false
+    property bool imageHasSession: false
     // Alignment state and helpers live on the root; the Analyze menu hosts the actions that used
     // to live in the inspector's Alignment tab.
     property bool automaticAlignmentPending: false
@@ -40,7 +42,9 @@ VcsMenuBar {
     signal openImageRequested
     signal addImageRequested
     signal openImagePairRequested
+    signal compareImageFoldersRequested
     signal workspaceRequested(int mode)
+    signal closeCurrentRequested
     signal destructiveActionRequested(string kind)
     signal chromeToggleRequested
     signal fullScreenToggleRequested
@@ -101,11 +105,18 @@ VcsMenuBar {
             onTriggered: control.addImageRequested()
         }
         VcsMenuItem {
-            text: qsTr("关闭视频")
+            objectName: "compareImageFoldersMenuItem"
+            text: qsTr("对比文件夹…")
+            shortcutText: "Ctrl+Shift+F"
+            onTriggered: control.compareImageFoldersRequested()
+        }
+        VcsMenuItem {
+            objectName: "closeCurrentMenuItem"
+            text: control.workspaceMode === 1 ? qsTr("关闭图片工具") : qsTr("关闭视频")
             shortcutText: "Ctrl+W"
-            enabled: control.sourceCount > 0
+            enabled: control.workspaceMode === 1 ? control.imageHasSession : control.videoHasSession
             onTriggered: {
-                control.destructiveActionRequested("closeReview");
+                control.closeCurrentRequested();
                 control.returnViewerFocusAfterClose = true;
             }
         }

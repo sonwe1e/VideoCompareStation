@@ -7,6 +7,8 @@
 #include "dvs/platform/RenderActivitySink.h"
 #include "dvs/ui/GraphicsBackend.h"
 
+#include "RenderRetry.h"
+
 #include <QMatrix4x4>
 #include <QQuickWindow>
 #include <QSGRenderNode>
@@ -246,6 +248,7 @@ public:
             bindGraphicsBackendOnRenderThread(window_, *services_->deviceBroker);
         if (backendResult != GraphicsBackendResult::Ready &&
             backendResult != GraphicsBackendResult::AlreadyReady) {
+            retry_.retryContendedRender(window_, backendResult);
             return;
         }
         if (renderState == nullptr || renderState->projectionMatrix() == nullptr ||
@@ -288,7 +291,7 @@ public:
             .roi = presentationOptions_.roi,
             .referenceSlot = presentationOptions_.referenceSlot,
         };
-        static_cast<void>(renderer_.render(state));
+        retry_.retryContendedRender(window_, renderer_.render(state));
     }
 
     void releaseResources() override {
@@ -311,6 +314,7 @@ private:
     QQuickWindow& window_;
     std::shared_ptr<const ComparisonSurface::Services> services_;
     platform::D3d11ComparisonRenderer renderer_;
+    detail::RenderRetry retry_;
     QRectF bounds_;
     qreal devicePixelRatio_ = 1.0;
     PresentationOptions presentationOptions_;

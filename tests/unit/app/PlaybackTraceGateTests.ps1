@@ -1,3 +1,4 @@
+#requires -Version 7.0
 param(
     [Parameter(Mandatory = $true)]
     [string]$ModulePath,
@@ -458,7 +459,87 @@ try {
     }
     ++$assertionCount
 
-    Write-Output "PLAYBACK_TRACE_GATE_TESTS_OK assertions=$assertionCount"
+    
+    # T0 evidence baseline: Get-PlaybackTraceTimingSummary must separate submission
+    # (FrameSetReady -> RenderPublished) from presentation (Acknowledged -> Committed)
+    # per frame, report display-interval percentiles, and fail closed on incomplete captures.
+    $timingHappy = @(
+        $validHeader,
+        (New-TraceEventJson -Kind 4 -Timestamp 2 -Payload 12),
+        (New-TraceEventJson -Kind 6 -Timestamp 3 -Payload 12),
+        (New-TraceEventJson -Kind 7 -Timestamp 4 -Payload 12),
+        (New-TraceEventJson -Kind 8 -Timestamp 5 -Payload 12),
+        (New-TraceEventJson -Kind 4 -Timestamp 8 -Payload 13),
+        (New-TraceEventJson -Kind 6 -Timestamp 9 -Payload 13),
+        (New-TraceEventJson -Kind 7 -Timestamp 10 -Payload 13),
+        (New-TraceEventJson -Kind 8 -Timestamp 11 -Payload 13),
+        (New-TraceEventJson -Kind 4 -Timestamp 20 -Payload 14),
+        (New-TraceEventJson -Kind 6 -Timestamp 25 -Payload 14),
+        (New-TraceEventJson -Kind 7 -Timestamp 28 -Payload 14),
+        (New-TraceEventJson -Kind 8 -Timestamp 40 -Payload 14)
+    )
+    $timingHappyPath = Write-TraceCase -Name 'timing-happy' -Lines $timingHappy
+    [void](Test-PlaybackTraceFile -TracePath $timingHappyPath -ResultPrefix 'TEST_TIMING')
+    $timing = Get-PlaybackTraceTimingSummary -TracePath $timingHappyPath
+    if ($timing.FrameSetReadyCount -ne 3 -or $timing.RenderPublishedCount -ne 3 -or
+        $timing.PresentationAcknowledgedCount -ne 3 -or $timing.SnapshotCommittedCount -ne 3) {
+        throw 'Timing summary reported unexpected per-frame event counts.'
+    }
+    # Display intervals: 11-5=6, 40-11=29 -> sorted [6,29]. Nearest-rank index = N*q/100
+    # mirrors the C++ percentile convention: P50 = sorted[1] = 29, P95 = 29, Max = 29.
+    if ($timing.DisplayIntervalMicroseconds.Count -ne 2 -or
+        $timing.DisplayIntervalMicroseconds.P50 -ne 29 -or
+        $timing.DisplayIntervalMicroseconds.P95 -ne 29 -or
+        $timing.DisplayIntervalMicroseconds.Max -ne 29) {
+        throw 'Timing summary display intervals are incorrect.'
+    }
+    # Ready->commit: 5-2=3, 11-8=3, 40-20=20 -> P50=3, P95=20. Publish->ack: 4-3=1, 10-9=1,
+    # 28-25=3 -> P50=1, P95=3. Ack->commit: 1, 1, 12 -> P50=1, Max=12.
+    if ($timing.ReadyToCommitMicroseconds.P50 -ne 3 -or
+        $timing.ReadyToCommitMicroseconds.P95 -ne 20 -or
+        $timing.PublishToAckMicroseconds.P50 -ne 1 -or
+        $timing.PublishToAckMicroseconds.P95 -ne 3 -or
+        $timing.AckToCommitMicroseconds.Max -ne 12) {
+        throw 'Timing summary pipeline latencies are incorrect.'
+    }
+    # Commit rate: 3 commits spanning 40-5=35 us -> 3*1e6/35.
+    if ([math]::Abs($timing.CommitRatePerSecond - (3 * 1000000 / 35)) -gt 0.5) {
+        throw 'Timing summary commit rate is incorrect.'
+    }
+    ++$assertionCount
+
+    # A commit with UINT64_MAX payload (no displayed frame) must not count toward commits.
+    $timingMaxPayload = @(
+        $validHeader,
+        (New-TraceEventJson -Kind 8 -Timestamp 5 -Payload ([uint64]::MaxValue)),
+        (New-TraceEventJson -Kind 4 -Timestamp 6 -Payload 12),
+        (New-TraceEventJson -Kind 8 -Timestamp 9 -Payload 12)
+    )
+    $timingMaxPayloadPath = Write-TraceCase -Name 'timing-max-payload' -Lines $timingMaxPayload
+    [void](Test-PlaybackTraceFile -TracePath $timingMaxPayloadPath -ResultPrefix 'TEST_TIMING')
+    $timingMax = Get-PlaybackTraceTimingSummary -TracePath $timingMaxPayloadPath
+    if ($timingMax.SnapshotCommittedCount -ne 1 -or $timingMax.DisplayIntervalMicroseconds.Count -ne 0) {
+        throw 'Timing summary miscounted UINT64_MAX payload commits.'
+    }
+    ++$assertionCount
+
+    # Overflow markers make the capture incomplete; the analyzer must fail closed.
+    $timingOverflow = @(
+        $validHeader,
+        (New-TraceEventJson -Kind 4 -Timestamp 2 -Payload 12),
+        '{"overflow":true,"eventCount":1,"capacity":16384}'
+    )
+    $timingOverflowPath = Write-TraceCase -Name 'timing-overflow' -Lines $timingOverflow
+    try {
+        [void](Get-PlaybackTraceTimingSummary -TracePath $timingOverflowPath)
+        throw 'Timing summary unexpectedly accepted an overflowed trace.'
+    } catch {
+        if (-not $_.Exception.Message.Contains('PLAYBACK_TRACE_TIMING_OVERFLOW')) {
+            throw
+        }
+    }
+    ++$assertionCount
+Write-Output "PLAYBACK_TRACE_GATE_TESTS_OK assertions=$assertionCount"
 } finally {
     if ($hadPlaybackTrace) {
         $env:DVS_PLAYBACK_TRACE = $previousPlaybackTrace

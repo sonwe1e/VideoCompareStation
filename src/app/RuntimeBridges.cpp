@@ -42,23 +42,47 @@ void RenderActivityBridge::notifyAckBackpressured() noexcept {
 }
 
 void ReviewProjectionBridge::bind(ui::ReviewController& controller) noexcept {
-    std::scoped_lock lock(mutex_);
+    std::scoped_lock lock(*mutex_);
+    if (binding_) {
+        binding_->active = false;
+    }
     controller_ = &controller;
+    binding_ = std::make_shared<Binding>();
 }
 
 void ReviewProjectionBridge::unbind() noexcept {
-    std::scoped_lock lock(mutex_);
+    std::scoped_lock lock(*mutex_);
+    if (binding_) {
+        binding_->active = false;
+    }
     controller_ = nullptr;
+    binding_.reset();
 }
 
 void ReviewProjectionBridge::notify() noexcept {
-    std::scoped_lock lock(mutex_);
-    if (controller_ == nullptr) {
+    std::scoped_lock lock(*mutex_);
+    if (controller_ == nullptr || binding_->refreshPending) {
         return;
     }
+    binding_->refreshPending = true;
     ui::ReviewController* const controller = controller_;
-    static_cast<void>(QMetaObject::invokeMethod(
-        controller, [controller] { controller->refreshProjection(); }, Qt::QueuedConnection));
+    if (!QMetaObject::invokeMethod(
+            controller,
+            [controller, mutex = mutex_, binding = binding_] {
+                {
+                    std::scoped_lock drainLock(*mutex);
+                    if (!binding->active) {
+                        return;
+                    }
+                    // Clear before reading the projection so a producer racing that read can
+                    // queue one follow-up. The callback owns no bridge or controller lifetime.
+                    binding->refreshPending = false;
+                }
+                controller->refreshProjection();
+            },
+            Qt::QueuedConnection)) {
+        binding_->refreshPending = false;
+    }
 }
 
 void DecoderBackendStateCache::refresh(

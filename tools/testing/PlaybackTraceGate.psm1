@@ -1,3 +1,4 @@
+#requires -Version 7.0
 Set-StrictMode -Version Latest
 
 Import-Module (Join-Path $PSScriptRoot 'CommandLineArgument.psm1') -Force
@@ -611,5 +612,164 @@ function Invoke-PlaybackTraceGate {
     }
 }
 
+function Get-PlaybackTraceTimingSummary {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TracePath
+    )
+
+    # T0 evidence baseline: separates submission and presentation observation per canonical
+    # frame (FrameSetReady -> RenderPublished -> PresentationAcknowledged -> SnapshotCommitted)
+    # and reports the new-content display interval distribution (P50/P95/P99 + longest pause).
+    # Input must be a structurally valid schema-v1 file (call Test-PlaybackTraceFile first);
+    # overflow markers make the capture incomplete, so this analyzer fails closed.
+
+    if (-not (Test-Path -LiteralPath $TracePath -PathType Leaf)) {
+        throw "PLAYBACK_TRACE_TIMING_MISSING: expected trace at $TracePath"
+    }
+
+    $traceLines = @(Get-Content -LiteralPath $TracePath)
+    if ($traceLines.Count -lt 2) {
+        throw "PLAYBACK_TRACE_TIMING_INCOMPLETE: expected a header and at least one event at $TracePath"
+    }
+
+    # Per-frame event times keyed by identity-with-frame: "s|e|gen|dev|payload". Later events
+    # for the same key win (a frame may be republished while a prior ack is still outstanding).
+    $readyTimes = @{}
+    $publishedTimes = @{}
+    $ackTimes = @{}
+    $commitTimes = @{}
+    $commitOrder = [System.Collections.Generic.List[object]]::new()
+    $eventCount = 0
+
+    foreach ($line in ($traceLines | Select-Object -Skip 1)) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            continue
+        }
+        try {
+            $record = $line | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+            throw "PLAYBACK_TRACE_TIMING_INVALID_RECORD: $TracePath. $($_.Exception.Message)"
+        }
+        if ($null -ne $record.PSObject.Properties['overflow']) {
+            throw "PLAYBACK_TRACE_TIMING_OVERFLOW: incomplete capture at $TracePath"
+        }
+        $session = [uint64]$record.s
+        $epoch = [uint64]$record.e
+        $generation = [uint64]$record.gen
+        $device = [uint64]$record.dev
+        $payload = [uint64]$record.p
+        $kind = [int]$record.kind
+        $timestamp = [uint64]$record.t
+        $identityKey = "$session|$epoch|$generation|$device|$payload"
+        switch ($kind) {
+            4 { $readyTimes[$identityKey] = $timestamp }
+            6 { $publishedTimes[$identityKey] = $timestamp }
+            7 { $ackTimes[$identityKey] = $timestamp }
+            8 {
+                if ($payload -ne [decimal][uint64]::MaxValue) {
+                    $commitTimes[$identityKey] = $timestamp
+                    [void]$commitOrder.Add([pscustomobject]@{
+                            Time = $timestamp
+                            IdentityKey = $identityKey
+                        })
+                }
+            }
+        }
+        ++$eventCount
+    }
+    if ($eventCount -eq 0) {
+        throw "PLAYBACK_TRACE_TIMING_INCOMPLETE: no trace event was written to $TracePath."
+    }
+
+    $percentileSummary = {
+        param([System.Collections.Generic.List[object]]$Values)
+
+        $count = $Values.Count
+        if ($count -eq 0) {
+            return [pscustomobject]@{
+                Count = 0
+                P50 = $null
+                P95 = $null
+                P99 = $null
+                Max = $null
+            }
+        }
+        $sorted = @($Values | Sort-Object)
+        # Nearest-rank index mirrors the C++ percentile convention (truncating integer
+        # division, not PowerShell's banker's rounding of [int] casts).
+        $indexOf = { param($Quantile) [math]::Min([int][math]::Floor($count * $Quantile / 100), $count - 1) }
+        $index50 = & $indexOf 50
+        $index95 = & $indexOf 95
+        $index99 = & $indexOf 99
+        return [pscustomobject]@{
+            Count = $count
+            P50 = [double]$sorted[$index50]
+            P95 = [double]$sorted[$index95]
+            P99 = [double]$sorted[$index99]
+            Max = [double]$sorted[$count - 1]
+        }
+    }
+
+    $readyToCommit = [System.Collections.Generic.List[object]]::new()
+    $publishToCommit = [System.Collections.Generic.List[object]]::new()
+    $readyToPublish = [System.Collections.Generic.List[object]]::new()
+    $publishToAck = [System.Collections.Generic.List[object]]::new()
+    $ackToCommit = [System.Collections.Generic.List[object]]::new()
+    foreach ($key in $commitTimes.Keys) {
+        $commitTime = [uint64]$commitTimes[$key]
+        if ($readyTimes.ContainsKey($key)) {
+            $readyToCommit.Add([uint64]([decimal]$commitTime - [decimal]$readyTimes[$key]))
+            if ($publishedTimes.ContainsKey($key)) {
+                $readyToPublish.Add([uint64]([decimal]$publishedTimes[$key] - [decimal]$readyTimes[$key]))
+            }
+        }
+        if ($publishedTimes.ContainsKey($key)) {
+            $publishToCommit.Add([uint64]([decimal]$commitTime - [decimal]$publishedTimes[$key]))
+            if ($ackTimes.ContainsKey($key)) {
+                $publishToAck.Add([uint64]([decimal]$ackTimes[$key] - [decimal]$publishedTimes[$key]))
+            }
+        }
+        if ($ackTimes.ContainsKey($key)) {
+            $ackToCommit.Add([uint64]([decimal]$commitTime - [decimal]$ackTimes[$key]))
+        }
+    }
+
+    $displayIntervals = [System.Collections.Generic.List[object]]::new()
+    if ($commitOrder.Count -ge 2) {
+        $ordered = @($commitOrder | Sort-Object -Property Time)
+        for ($index = 1; $index -lt $ordered.Count; ++$index) {
+            $displayIntervals.Add([uint64]([decimal]$ordered[$index].Time -
+                                           [decimal]$ordered[$index - 1].Time))
+        }
+    }
+
+    $commitRatePerSecond = $null
+    if ($commitOrder.Count -ge 2) {
+        $ordered = @($commitOrder | Sort-Object -Property Time)
+        $spanMicroseconds = [decimal]$ordered[$ordered.Count - 1].Time -
+            [decimal]$ordered[0].Time
+        if ($spanMicroseconds -gt 0) {
+            $commitRatePerSecond = [double]($ordered.Count * 1000000 / $spanMicroseconds)
+        }
+    }
+
+    return [pscustomobject]@{
+        EventCount = $eventCount
+        FrameSetReadyCount = $readyTimes.Count
+        RenderPublishedCount = $publishedTimes.Count
+        PresentationAcknowledgedCount = $ackTimes.Count
+        SnapshotCommittedCount = $commitTimes.Count
+        DisplayIntervalMicroseconds = & $percentileSummary $displayIntervals
+        ReadyToCommitMicroseconds = & $percentileSummary $readyToCommit
+        PublishToCommitMicroseconds = & $percentileSummary $publishToCommit
+        ReadyToPublishMicroseconds = & $percentileSummary $readyToPublish
+        PublishToAckMicroseconds = & $percentileSummary $publishToAck
+        AckToCommitMicroseconds = & $percentileSummary $ackToCommit
+        CommitRatePerSecond = $commitRatePerSecond
+    }
+}
 Export-ModuleMember -Function Invoke-PlaybackTraceGate, Test-PlaybackTraceFile,
-Test-PlaybackTraceInvariants, ConvertTo-WindowsCommandLineArgument
+Test-PlaybackTraceInvariants, Get-PlaybackTraceTimingSummary,
+ConvertTo-WindowsCommandLineArgument

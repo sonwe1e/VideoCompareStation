@@ -5,8 +5,10 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavcodec/codec_id.h>
+#include <libavformat/avformat.h>
 #include <libavutil/error.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/mem.h>
 #include <libswscale/swscale.h>
 }
 
@@ -96,6 +98,50 @@ bool convertFrameToRgba(const AVFrame* frame, StillImage* image, std::string* er
     image->height = height;
     image->rgba = std::move(rgba);
     return true;
+}
+
+struct MemoryReader final {
+    const std::uint8_t* data = nullptr;
+    std::size_t size = 0;
+    std::size_t offset = 0;
+};
+
+int readMemoryPacket(void* opaque, std::uint8_t* buffer, const int bufferSize) {
+    auto* reader = static_cast<MemoryReader*>(opaque);
+    if (reader == nullptr || buffer == nullptr || bufferSize <= 0 ||
+        reader->offset >= reader->size) {
+        return AVERROR_EOF;
+    }
+    const std::size_t remaining = reader->size - reader->offset;
+    const auto requested = static_cast<std::size_t>(bufferSize);
+    const std::size_t toRead = std::min(requested, remaining);
+    std::memcpy(buffer, reader->data + reader->offset, toRead);
+    reader->offset += toRead;
+    return static_cast<int>(toRead);
+}
+
+int64_t seekMemoryPacket(void* opaque, const int64_t offset, const int whence) {
+    auto* reader = static_cast<MemoryReader*>(opaque);
+    if (reader == nullptr) {
+        return AVERROR(EINVAL);
+    }
+    if (whence == AVSEEK_SIZE) {
+        return static_cast<int64_t>(reader->size);
+    }
+    int64_t origin = 0;
+    if (whence == SEEK_CUR) {
+        origin = static_cast<int64_t>(reader->offset);
+    } else if (whence == SEEK_END) {
+        origin = static_cast<int64_t>(reader->size);
+    } else if (whence != SEEK_SET) {
+        return AVERROR(EINVAL);
+    }
+    const int64_t next = origin + offset;
+    if (next < 0 || next > static_cast<int64_t>(reader->size)) {
+        return AVERROR(EINVAL);
+    }
+    reader->offset = static_cast<std::size_t>(next);
+    return next;
 }
 
 bool decodeWholeBuffer(const std::uint8_t* data,
@@ -230,6 +276,68 @@ bool decodeStillImageFile(const std::string& path, StillImage* image, std::strin
         }
     }
     return convertFrameToRgba(frame.get(), image, error);
+}
+
+bool probeStillImageBytes(
+    const std::uint8_t* data, const std::size_t size, int* width, int* height, std::string* error) {
+    if (data == nullptr || size == 0U || width == nullptr || height == nullptr) {
+        setError(error, "Invalid still-image probe request.");
+        return false;
+    }
+    if (size > static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
+        setError(error, "Image file is too large.");
+        return false;
+    }
+
+    MemoryReader reader{data, size, 0};
+    constexpr int kIoBufferSize = 4096;
+    auto* ioBuffer = static_cast<std::uint8_t*>(av_malloc(kIoBufferSize));
+    if (ioBuffer == nullptr) {
+        setError(error, "Could not allocate image metadata buffer.");
+        return false;
+    }
+    AVIOContext* avio = avio_alloc_context(
+        ioBuffer, kIoBufferSize, 0, &reader, readMemoryPacket, nullptr, seekMemoryPacket);
+    if (avio == nullptr) {
+        av_free(ioBuffer);
+        setError(error, "Could not allocate image metadata reader.");
+        return false;
+    }
+
+    AVFormatContext* format = avformat_alloc_context();
+    if (format == nullptr) {
+        avio_context_free(&avio);
+        setError(error, "Could not allocate image metadata context.");
+        return false;
+    }
+    format->pb = avio;
+    format->flags |= AVFMT_FLAG_CUSTOM_IO;
+    const int openResult = avformat_open_input(&format, nullptr, nullptr, nullptr);
+    if (openResult < 0) {
+        avio_context_free(&avio);
+        setError(error, "Could not read image container metadata.");
+        return false;
+    }
+    const bool streamInfoOk = avformat_find_stream_info(format, nullptr) >= 0;
+    int streamIndex = -1;
+    if (streamInfoOk) {
+        streamIndex = av_find_best_stream(format, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    }
+    bool ok = false;
+    if (streamIndex >= 0 && format->streams != nullptr && format->streams[streamIndex] != nullptr) {
+        const AVCodecParameters* const parameters = format->streams[streamIndex]->codecpar;
+        if (parameters != nullptr && parameters->width > 0 && parameters->height > 0) {
+            *width = parameters->width;
+            *height = parameters->height;
+            ok = true;
+        }
+    }
+    avformat_close_input(&format);
+    avio_context_free(&avio);
+    if (!ok) {
+        setError(error, "Could not read image dimensions from the header.");
+    }
+    return ok;
 }
 
 } // namespace dvs::media
