@@ -131,6 +131,25 @@ QQuickWindow* menuPopupWindow(QObject* menu) {
     return contentItem->window();
 }
 
+// Hand-rolled 1x1 PNG bytes: the pair opener routes through the still-image decoder, so
+// every file must be a real image. A literal byte array avoids depending on the
+// imageformat plugins that minimal test deployments may not install.
+[[nodiscard]] bool writeTestPng(const QString& path) {
+    static const unsigned char kPngBytes[] = {
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+        0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+        0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08,
+        0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
+        0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    };
+    QFile file{path};
+    if (!file.open(QIODevice::WriteOnly)) {
+        return false;
+    }
+    return file.write(reinterpret_cast<const char*>(kPngBytes), sizeof(kPngBytes)) ==
+           static_cast<qint64>(sizeof(kPngBytes));
+}
+
 } // namespace
 
 namespace dvs::ui {
@@ -213,6 +232,13 @@ public:
             });
         folderPairs.setAsyncPairCancel(
             [this](const int requestId) { imageReview.cancelOpenRequest(requestId); });
+        folderPairs.setSingleSideOpener([this](const QUrl& url, const int row, QString* error) {
+            const int requestId = imageReview.requestOpenPrimary(url, row);
+            if (requestId <= 0 && error != nullptr) {
+                *error = imageReview.errorText();
+            }
+            return requestId;
+        });
         QObject::connect(
             &imageReview,
             &ImageReviewController::openFinished,
@@ -221,6 +247,8 @@ public:
                 const int requestId, const int pairId, const bool success, const QString& error) {
                 if (pairId >= 0) {
                     folderPairs.completePairOpen(static_cast<quint64>(requestId), success, error);
+                    folderPairs.completeSingleSideOpen(
+                        static_cast<quint64>(requestId), success, error);
                 }
             });
     }
@@ -2320,30 +2348,12 @@ TEST(MainQmlContractTests, ImageFolderComparisonLoadsSidebarAndOpensFirstPair) {
     const QString rightDir = QDir(tempDir.path()).filePath(QStringLiteral("folder_b"));
     ASSERT_TRUE(QDir{}.mkpath(leftDir));
     ASSERT_TRUE(QDir{}.mkpath(rightDir));
-    // Hand-rolled 1x1 PNG bytes: the pair opener routes through the still-image decoder,
-    // so every file must be a real image. A literal byte array avoids depending on the
-    // imageformat plugins that minimal test deployments may not install.
-    const unsigned char kPngBytes[] = {
-        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
-        0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
-        0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08,
-        0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
-        0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
-    };
-    const auto writePng = [&kPngBytes](const QString& path) {
-        QFile file{path};
-        if (!file.open(QIODevice::WriteOnly)) {
-            return false;
-        }
-        return file.write(reinterpret_cast<const char*>(kPngBytes), sizeof(kPngBytes)) ==
-               static_cast<qint64>(sizeof(kPngBytes));
-    };
     for (const QString& folder : {leftDir, rightDir}) {
         for (const char* name : {"frame001.png", "frame002.png"}) {
-            ASSERT_TRUE(writePng(QDir(folder).filePath(QString::fromLatin1(name))));
+            ASSERT_TRUE(writeTestPng(QDir(folder).filePath(QString::fromLatin1(name))));
         }
     }
-    ASSERT_TRUE(writePng(QDir(leftDir).filePath(QStringLiteral("frame003.png"))));
+    ASSERT_TRUE(writeTestPng(QDir(leftDir).filePath(QStringLiteral("frame003.png"))));
 
     auto snapshot = std::make_shared<application::SessionSnapshot>();
     snapshot->graphicsReady = true;
@@ -2382,6 +2392,13 @@ TEST(MainQmlContractTests, ImageFolderComparisonLoadsSidebarAndOpensFirstPair) {
         });
     folderPairs.setAsyncPairCancel(
         [&imageReview](const int requestId) { imageReview.cancelOpenRequest(requestId); });
+    folderPairs.setSingleSideOpener([&imageReview](const QUrl& url, const int row, QString* error) {
+        const int requestId = imageReview.requestOpenPrimary(url, row);
+        if (requestId <= 0 && error != nullptr) {
+            *error = imageReview.errorText();
+        }
+        return requestId;
+    });
     QObject::connect(
         &imageReview,
         &ImageReviewController::openFinished,
@@ -2390,6 +2407,7 @@ TEST(MainQmlContractTests, ImageFolderComparisonLoadsSidebarAndOpensFirstPair) {
             const int requestId, const int pairId, const bool success, const QString& error) {
             if (pairId >= 0) {
                 folderPairs.completePairOpen(static_cast<quint64>(requestId), success, error);
+                folderPairs.completeSingleSideOpen(static_cast<quint64>(requestId), success, error);
             }
         });
 
@@ -2492,6 +2510,227 @@ TEST(MainQmlContractTests, ImageFolderComparisonLoadsSidebarAndOpensFirstPair) {
     EXPECT_EQ(folderPairs.currentPair(), -1);
     EXPECT_FALSE(imageReview.hasSecondary());
     EXPECT_EQ(root->property("workspaceMode").toInt(), 1);
+}
+
+TEST(MainQmlContractTests, FolderSidebarExposesPairingContextAndOpensMissingSide) {
+    // T6: the sidebar states the pairing rule and outcome counts, a single-sided row
+    // opens the side that exists, the selection stays visible while stepping through a
+    // long folder, and the wipe halves carry their A/B identity.
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString leftDir = QDir(tempDir.path()).filePath(QStringLiteral("folder_a"));
+    const QString rightDir = QDir(tempDir.path()).filePath(QStringLiteral("folder_b"));
+    ASSERT_TRUE(QDir{}.mkpath(leftDir));
+    ASSERT_TRUE(QDir{}.mkpath(rightDir));
+    // Enough pairs to scroll: the sidebar viewport shows far fewer than 40 rows.
+    for (int index = 0; index < 40; ++index) {
+        const QString name = QStringLiteral("pair_%1.png").arg(index, 3, 10, QLatin1Char('0'));
+        ASSERT_TRUE(writeTestPng(QDir(leftDir).filePath(name)));
+        ASSERT_TRUE(writeTestPng(QDir(rightDir).filePath(name)));
+    }
+    ASSERT_TRUE(writeTestPng(QDir(rightDir).filePath(QStringLiteral("only_right.png"))));
+
+    auto snapshot = std::make_shared<application::SessionSnapshot>();
+    snapshot->graphicsReady = true;
+    snapshot->sessionState = domain::SessionState::kEmpty;
+    std::vector<application::PlaybackCommand> submitted;
+    std::vector<application::CommandTerminal> terminals;
+    ReviewController controller{
+        ReviewController::Dependencies{
+            .submit =
+                [&submitted](application::PlaybackCommand command) {
+                    submitted.push_back(std::move(command));
+                    return application::PortSubmitResult::Accepted;
+                },
+            .snapshot = [snapshot] { return snapshot; },
+            .takeCompletedCommands =
+                [&terminals] {
+                    std::vector<application::CommandTerminal> result = std::move(terminals);
+                    terminals.clear();
+                    return result;
+                },
+        },
+    };
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    ReviewShellController shell{controller, preferences};
+    ReviewSessionFacade facade{controller, preferences, shell};
+    ImageReviewController imageReview;
+    ImageFolderPairModel folderPairs;
+    folderPairs.setAsyncPairOpener(
+        [&imageReview](
+            const QUrl& primary, const QUrl& secondary, const int pairId, QString* error) {
+            const int requestId = imageReview.requestOpenPair(primary, secondary, pairId);
+            if (requestId <= 0 && error != nullptr) {
+                *error = imageReview.errorText();
+            }
+            return requestId;
+        });
+    folderPairs.setAsyncPairCancel(
+        [&imageReview](const int requestId) { imageReview.cancelOpenRequest(requestId); });
+    folderPairs.setSingleSideOpener([&imageReview](const QUrl& url, const int row, QString* error) {
+        const int requestId = imageReview.requestOpenPrimary(url, row);
+        if (requestId <= 0 && error != nullptr) {
+            *error = imageReview.errorText();
+        }
+        return requestId;
+    });
+    QObject::connect(
+        &imageReview,
+        &ImageReviewController::openFinished,
+        &folderPairs,
+        [&folderPairs](
+            const int requestId, const int pairId, const bool success, const QString& error) {
+            if (pairId >= 0) {
+                folderPairs.completePairOpen(static_cast<quint64>(requestId), success, error);
+                folderPairs.completeSingleSideOpen(static_cast<quint64>(requestId), success, error);
+            }
+        });
+
+    QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
+    engine.rootContext()->setContextProperty(QStringLiteral("imageReview"), &imageReview);
+    engine.rootContext()->setContextProperty(QStringLiteral("imageFolderPairs"), &folderPairs);
+    engine.addImageProvider(QStringLiteral("vcs-review"), new ReviewImageProvider(&imageReview));
+    QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
+    ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
+
+    std::unique_ptr<QObject> root{component.create()};
+    ASSERT_NE(root, nullptr) << componentErrors(component);
+    auto* const window = qobject_cast<QQuickWindow*>(root.get());
+    ASSERT_NE(window, nullptr);
+    window->resize(1280, 800);
+    QCoreApplication::processEvents();
+
+    root->setProperty("imageFolderLeftUrl", QUrl::fromLocalFile(QDir(leftDir).absolutePath()));
+    root->setProperty("imageFolderRightUrl", QUrl::fromLocalFile(QDir(rightDir).absolutePath()));
+    QVariant loadResult;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        root.get(), "loadFolderComparison", Q_RETURN_ARG(QVariant, loadResult)));
+    EXPECT_TRUE(loadResult.toBool());
+    // Rows sort as only_right.png, pair_000.png ... pair_039.png: the first complete
+    // pair is row 1.
+    QElapsedTimer firstPairTimer;
+    firstPairTimer.start();
+    while ((!imageReview.hasPair() || folderPairs.currentPair() != 1) &&
+           firstPairTimer.elapsed() < 8000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 2);
+        QThread::msleep(1U);
+    }
+    ASSERT_TRUE(imageReview.hasPair());
+    ASSERT_EQ(folderPairs.currentPair(), 1);
+    ASSERT_EQ(folderPairs.pairCount(), 41);
+
+    QObject* const workspace = root->findChild<QObject*>(QStringLiteral("imageWorkspaceRoot"));
+    ASSERT_NE(workspace, nullptr);
+    auto* const sidebar =
+        workspace->findChild<QQuickItem*>(QStringLiteral("folderPairSidebarHost"));
+    ASSERT_NE(sidebar, nullptr);
+    EXPECT_TRUE(sidebar->isVisible());
+
+    // The pairing rule and the outcome counts are stated, and "paired" never claims
+    // content equality: 40 complete rows plus one right-only single.
+    QObject* const ruleLabel = sidebar->findChild<QObject*>(QStringLiteral("folderPairRuleLabel"));
+    QObject* const countsLabel =
+        sidebar->findChild<QObject*>(QStringLiteral("folderPairCountsLabel"));
+    ASSERT_NE(ruleLabel, nullptr);
+    ASSERT_NE(countsLabel, nullptr);
+    EXPECT_TRUE(ruleLabel->property("text").toString().contains(QStringLiteral("大小写")));
+    EXPECT_EQ(countsLabel->property("text").toString(),
+              QStringLiteral("完整 40 · 缺失 1 · 大小写冲突 0"));
+
+    // The workspace status bar names the committed row.
+    QObject* const contextLabel =
+        workspace->findChild<QObject*>(QStringLiteral("imagePairContextLabel"));
+    ASSERT_NE(contextLabel, nullptr);
+    EXPECT_TRUE(contextLabel->property("visible").toBool());
+    EXPECT_TRUE(contextLabel->property("text").toString().contains(QStringLiteral("第 2/41 行")));
+    // The single-sided row 0 opens the side that exists: the canvas shows only that
+    // image and the list selection advances to the row it belongs to.
+    QVariant missingOpen;
+    ASSERT_TRUE(QMetaObject::invokeMethod(sidebar,
+                                          "openMissingSide",
+                                          Q_RETURN_ARG(QVariant, missingOpen),
+                                          Q_ARG(QVariant, QVariant{0})));
+    EXPECT_TRUE(missingOpen.toBool());
+    QElapsedTimer missingTimer;
+    missingTimer.start();
+    while ((!imageReview.hasPrimary() || imageReview.hasSecondary() ||
+            folderPairs.currentPair() != 0) &&
+           missingTimer.elapsed() < 8000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 2);
+        QThread::msleep(1U);
+    }
+    EXPECT_TRUE(imageReview.hasPrimary());
+    EXPECT_FALSE(imageReview.hasSecondary());
+    EXPECT_TRUE(imageReview.primaryPath().endsWith(QStringLiteral("only_right.png")));
+    EXPECT_EQ(folderPairs.currentPair(), 0);
+    EXPECT_TRUE(contextLabel->property("text").toString().contains(QStringLiteral("仅 B 存在")));
+    QObject* const positionLabel =
+        sidebar->findChild<QObject*>(QStringLiteral("folderPairPositionLabel"));
+    ASSERT_NE(positionLabel, nullptr);
+    EXPECT_EQ(positionLabel->property("text").toString(), QStringLiteral("1/41"));
+
+    // Back to a complete pair; the wipe halves carry their A/B identity, with the left
+    // half showing the secondary (B) image and the right half the primary (A).
+    QVariant stepBack;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        sidebar, "stepPair", Q_RETURN_ARG(QVariant, stepBack), Q_ARG(QVariant, QVariant{-1})));
+    QElapsedTimer wipeTimer;
+    wipeTimer.start();
+    while ((!imageReview.hasPair() || folderPairs.currentPair() != 40) &&
+           wipeTimer.elapsed() < 8000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 2);
+        QThread::msleep(1U);
+    }
+    ASSERT_TRUE(imageReview.hasPair());
+    imageReview.setCompareMode(ImageReviewController::Wipe);
+    for (int iteration = 0; iteration < 5; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    QObject* const wipeLeft = workspace->findChild<QObject*>(QStringLiteral("wipeIdentityLeft"));
+    QObject* const wipeRight = workspace->findChild<QObject*>(QStringLiteral("wipeIdentityRight"));
+    ASSERT_NE(wipeLeft, nullptr);
+    ASSERT_NE(wipeRight, nullptr);
+    const QString leftText = wipeLeft->property("text").toString();
+    const QString rightText = wipeRight->property("text").toString();
+    EXPECT_TRUE(leftText.startsWith(QStringLiteral("B · ")));
+    EXPECT_TRUE(rightText.startsWith(QStringLiteral("A · ")));
+    // Same-named files are disambiguated by parent folder: the left half must name the
+    // secondary's folder and the right half the primary's, never the reverse.
+    EXPECT_TRUE(leftText.contains(QStringLiteral("folder_b")));
+    EXPECT_TRUE(rightText.contains(QStringLiteral("folder_a")));
+    // Keyboard stepping keeps the selected row visible: after walking well past one
+    // viewport of rows, the committed row is still inside the list's visible window.
+    int steppedRow = 40;
+    for (int step = 0; step < 20; ++step) {
+        QVariant stepNext;
+        ASSERT_TRUE(QMetaObject::invokeMethod(
+            sidebar, "stepPair", Q_RETURN_ARG(QVariant, stepNext), Q_ARG(QVariant, QVariant{1})));
+        QElapsedTimer stepTimer;
+        stepTimer.start();
+        while (folderPairs.currentPair() == steppedRow && stepTimer.elapsed() < 8000) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 2);
+            QThread::msleep(1U);
+        }
+        ASSERT_NE(folderPairs.currentPair(), steppedRow) << "step " << step;
+        steppedRow = folderPairs.currentPair();
+    }
+    auto* const pairList = sidebar->findChild<QQuickItem*>(QStringLiteral("folderPairList"));
+    ASSERT_NE(pairList, nullptr);
+    for (int iteration = 0; iteration < 5; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    EXPECT_EQ(pairList->property("currentIndex").toInt(), steppedRow);
+    auto* const currentItem = pairList->property("currentItem").value<QQuickItem*>();
+    ASSERT_NE(currentItem, nullptr);
+    const qreal contentY = pairList->property("contentY").toDouble();
+    EXPECT_GE(currentItem->y() + currentItem->height(), contentY - 1.0);
+    EXPECT_LE(currentItem->y(), contentY + pairList->property("height").toDouble() + 1.0);
 }
 
 TEST(MainQmlContractTests, WorkspaceOpenIntentDoesNotOverrideCommittedWorkspace) {

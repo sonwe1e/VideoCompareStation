@@ -540,6 +540,8 @@ Rectangle {
                 // Diff mode on an unequal-size pair without resampling: no pixels are
                 // fabricated and no stats are pretended (T2). The controller errorText
                 // carries the exact sizes; the toggle in the toolbar opts into resampling.
+                // A retained diff mode on a same-size pair reports the in-flight
+                // computation instead of a false size complaint (T6).
                 Text {
                     objectName: "imageDiffUnavailableNotice"
                     visible: control.diffModeActive && control.imageReview && !control.imageReview.hasDiffResult
@@ -547,7 +549,13 @@ Rectangle {
                     width: parent.width * 0.7
                     horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.WordWrap
-                    text: qsTr("A 与 B 尺寸不同，未计算逐像素差异。可开启“重采样对齐差异”后再比较。")
+                    text: {
+                        if (control.imageReview && control.imageReview.diffPending)
+                            return qsTr("正在后台计算差异…");
+                        if (control.sizesDiffer)
+                            return qsTr("A 与 B 尺寸不同，未计算逐像素差异。可开启“重采样对齐差异”后再比较。");
+                        return qsTr("差异暂不可用。");
+                    }
                     color: Theme.warning
                     font.pixelSize: 13
                 }
@@ -618,6 +626,46 @@ Rectangle {
                             asynchronous: false
                             cache: false
                             smooth: control.zoom <= 2
+                        }
+                    }
+
+                    // T6: persistent A/B identity for the wipe halves. The left of the
+                    // split shows the secondary image and the right shows the primary, so
+                    // the labels name them in that order and can never be misread as
+                    // reversed while the split is dragged.
+                    Text {
+                        id: wipeIdentityLeft
+
+                        objectName: "wipeIdentityLeft"
+                        visible: control.hasPair && control.hasSecondary && width > 4
+                        text: control.hasSecondary ? qsTr("B · %1").arg(control.imageTitle(control.imageReview.secondaryPath, control.imageReview.primaryPath)) : ""
+                        color: Theme.primaryText
+                        font.pixelSize: 12
+                        font.weight: Font.DemiBold
+                        elide: Text.ElideRight
+                        width: Math.max(0, wipeOverlay.splitX - 20)
+                        anchors {
+                            top: parent.top
+                            left: parent.left
+                            margins: 10
+                        }
+                    }
+
+                    Text {
+                        id: wipeIdentityRight
+
+                        objectName: "wipeIdentityRight"
+                        visible: control.hasPair && width > 4
+                        text: control.hasPrimary ? qsTr("A · %1").arg(control.imageTitle(control.imageReview.primaryPath, control.imageReview.secondaryPath)) : ""
+                        color: Theme.primaryText
+                        font.pixelSize: 12
+                        font.weight: Font.DemiBold
+                        elide: Text.ElideRight
+                        width: Math.max(0, wipeOverlay.width - wipeOverlay.splitX - 20)
+                        anchors {
+                            top: parent.top
+                            right: parent.right
+                            margins: 10
                         }
                     }
 
@@ -696,6 +744,27 @@ Rectangle {
                 color: Theme.primaryText
                 font.pixelSize: 12
             }
+            // T6: current folder-row context — which row is committed, whether one side
+            // is missing, and whether the pairing is ambiguous.
+            Text {
+                objectName: "imagePairContextLabel"
+                visible: Boolean(control.pairModel && control.pairModel.pairCount > 0 && control.pairModel.currentPair >= 0)
+                text: {
+                    if (!control.pairModel || control.pairModel.currentPair < 0)
+                        return "";
+                    const info = control.pairModel.pairUrlsAt(Number(control.pairModel.currentPair));
+                    if (!info || info.row === undefined)
+                        return "";
+                    const parts = [qsTr("第 %1/%2 行").arg(Number(info.row) + 1).arg(control.pairModel.pairCount)];
+                    if (!info.hasBoth)
+                        parts.push(info.hasLeft ? qsTr("仅 A 存在") : qsTr("仅 B 存在"));
+                    if (info.caseConflict)
+                        parts.push(qsTr("大小写冲突"));
+                    return parts.join(" · ");
+                }
+                color: Theme.mutedText
+                font.pixelSize: 12
+            }
             Text {
                 visible: Boolean(control.cursorPixel && control.cursorPixel.valid)
                 text: control.cursorPixel && control.cursorPixel.valid ? qsTr("像素 (%1, %2)  R %3  G %4  B %5  A %6  %7").arg(control.cursorPixel.x).arg(control.cursorPixel.y).arg(control.cursorPixel.r).arg(control.cursorPixel.g).arg(control.cursorPixel.b).arg(control.cursorPixel.a).arg(control.cursorPixel.hex) : ""
@@ -720,6 +789,24 @@ Rectangle {
             text: qsTr("滚轮缩放 · 拖动平移")
             color: Theme.mutedText
             font.pixelSize: 11
+        }
+    }
+
+    // T4/T6: warm the next complete pair in the background after a successful folder
+    // commit, so stepping onto it is a cache hit. Bounded to one neighbour; a user
+    // request cancels outstanding prefetches and the visible pair never changes.
+    Connections {
+        target: control.pairModel
+
+        function onPairOpenFinished(row, success, error) {
+            if (!success || !control.imageReview || !control.pairModel)
+                return;
+            const next = control.pairModel.stepCompleteRow(1);
+            if (next < 0 || next === Number(row))
+                return;
+            const urls = control.pairModel.pairUrlsAt(next);
+            if (urls.hasLeft && urls.hasRight)
+                control.imageReview.prefetchPair(urls.leftUrl, urls.rightUrl);
         }
     }
 }

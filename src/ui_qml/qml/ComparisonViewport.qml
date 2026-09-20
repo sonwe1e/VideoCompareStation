@@ -20,6 +20,7 @@ Rectangle {
     required property int effectiveViewMode
     required property real wipePosition
     required property int selectedDifferenceExactness
+    required property var selectedDifferenceEdge
     required property bool differenceThresholdEnabled
     required property int differenceThresholdCode
     required property int differenceThresholdPolicy
@@ -99,6 +100,20 @@ Rectangle {
         if (exactness === 3)
             return qsTr("已时间对齐");
         return qsTr("不可用");
+    }
+
+    // T6: every applicable inexactness dimension is named side by side. The single
+    // exactness enum can only report the highest-priority reason, so a pair that is
+    // temporally aligned, spatially resampled and display-space converted at once
+    // would otherwise hide two of the three limitations.
+    function comparisonDimensionsLabel(edge) {
+        if (!edge || Number(edge.dimensionsAvailable) !== 1)
+            return qsTr("比较语义不可用");
+        const parts = [];
+        parts.push(Number(edge.temporalExact) === 1 ? qsTr("时间 精确索引") : qsTr("时间 已对齐"));
+        parts.push(Number(edge.spatialExact) === 1 ? qsTr("空间 原尺寸") : qsTr("空间 已重采样"));
+        parts.push(Number(edge.pixelExact) === 1 ? qsTr("像素 原码值") : qsTr("像素 显示空间转换"));
+        return parts.join(" · ");
     }
 
     function surfaceLabelGeometry(index) {
@@ -377,7 +392,7 @@ Rectangle {
             text: {
                 const parts = [];
                 if (control.differenceMode)
-                    parts.push(control.comparisonExactnessLabel(control.selectedDifferenceExactness));
+                    parts.push(control.comparisonDimensionsLabel(control.selectedDifferenceEdge));
                 if (dualVideoSurface.roiEnabled)
                     parts.push(qsTr("ROI 已启用"));
                 return parts.join(" · ");

@@ -1622,6 +1622,11 @@ private:
         for (std::size_t first = 0U; first < sourceRows.size(); ++first) {
             for (std::size_t second = first + 1U; second < sourceRows.size(); ++second) {
                 const int preferenceValue = first == 0U && second == 1U ? 0 : (first == 0U ? 1 : 2);
+                const application::ComparisonExactnessDimensions dimensions =
+                    snapshot_
+                        ? application::comparisonExactnessDimensions(
+                              *snapshot_, sourceRows[first].sourceId, sourceRows[second].sourceId)
+                        : application::ComparisonExactnessDimensions{};
                 next.differenceEdges.push_back(QVariantMap{
                     {QStringLiteral("label"),
                      QStringLiteral("%1 ↔ %2").arg(sourceName(sourceRows[first].sourceId),
@@ -1637,6 +1642,12 @@ private:
                                                                       sourceRows[first].sourceId,
                                                                       sourceRows[second].sourceId)
                                    : application::ComparisonExactness::Unavailable)},
+                    // T6: every inexactness dimension is projected independently so the
+                    // view can present them side by side instead of only the top enum.
+                    {QStringLiteral("dimensionsAvailable"), dimensions.available ? 1 : 0},
+                    {QStringLiteral("temporalExact"), dimensions.temporalExact ? 1 : 0},
+                    {QStringLiteral("spatialExact"), dimensions.spatialExact ? 1 : 0},
+                    {QStringLiteral("pixelExact"), dimensions.pixelExact ? 1 : 0},
                 });
             }
         }
