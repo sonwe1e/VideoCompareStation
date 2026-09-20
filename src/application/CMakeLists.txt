@@ -7,6 +7,7 @@ add_library(
         src/AlignmentWorkflow.cpp
         src/ComparisonExactness.cpp
         src/CoordinatorPublication.cpp
+        src/IssueRecord.cpp
         src/Module.cpp
         src/PlaybackCoordinator.cpp
         src/PlaybackTiming.cpp
