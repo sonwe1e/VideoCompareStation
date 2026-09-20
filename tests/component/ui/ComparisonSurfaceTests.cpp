@@ -2150,6 +2150,10 @@ TEST(ComparisonSurfaceWarpTests, AcknowledgesOnlyTheLatestReplacementAndRetriesA
               platform::PresentationAckPushResult::Accepted);
     ASSERT_EQ(harness.acknowledgementMailbox->tryPush(makeDummyAcknowledgement(92U)),
               platform::PresentationAckPushResult::Accepted);
+    ASSERT_EQ(harness.acknowledgementMailbox->tryPush(makeDummyAcknowledgement(93U)),
+              platform::PresentationAckPushResult::Accepted);
+    ASSERT_EQ(harness.acknowledgementMailbox->tryPush(makeDummyAcknowledgement(94U)),
+              platform::PresentationAckPushResult::Accepted);
 
     auto budget = std::make_shared<platform::FrameBudget>(16U * 1024U * 1024U);
     platform::GpuTransferActor actor{budget, harness.broker, harness.mailbox, harness.activitySink};
@@ -2195,10 +2199,19 @@ TEST(ComparisonSurfaceWarpTests, AcknowledgesOnlyTheLatestReplacementAndRetriesA
     EXPECT_GT(latest.pixelColor(latest.width() / 4, latest.height() / 2).red(), 180);
     EXPECT_EQ(harness.activitySink->acknowledgementNotifications.load(std::memory_order_relaxed),
               1U);
+    // Drain the remaining pre-filled dummies before the retried frame-10 acknowledgement.
     const std::optional<application::FrameSetPresented> dummyB =
         harness.acknowledgementMailbox->tryPop();
     ASSERT_TRUE(dummyB.has_value());
     EXPECT_EQ(dummyB->frameId, domain::FrameId{92});
+    const std::optional<application::FrameSetPresented> dummyC =
+        harness.acknowledgementMailbox->tryPop();
+    ASSERT_TRUE(dummyC.has_value());
+    EXPECT_EQ(dummyC->frameId, domain::FrameId{93});
+    const std::optional<application::FrameSetPresented> dummyD =
+        harness.acknowledgementMailbox->tryPop();
+    ASSERT_TRUE(dummyD.has_value());
+    EXPECT_EQ(dummyD->frameId, domain::FrameId{94});
     const std::optional<application::FrameSetPresented> presented =
         harness.acknowledgementMailbox->tryPop();
     ASSERT_TRUE(presented.has_value());

@@ -263,14 +263,20 @@ TEST(RenderAckRelayTests, BackpressureQueuesOneRenderRetryAfterCriticalPostRetur
               platform::PresentationAckPushResult::Accepted);
     ASSERT_EQ(relay.tryPublishAcknowledgement(makeAcknowledgement(3U, 3)),
               platform::PresentationAckPushResult::Accepted);
-    EXPECT_EQ(relay.tryPublishAcknowledgement(makeAcknowledgement(4U, 4)),
+    ASSERT_EQ(relay.tryPublishAcknowledgement(makeAcknowledgement(4U, 4)),
+              platform::PresentationAckPushResult::Accepted);
+    ASSERT_EQ(relay.tryPublishAcknowledgement(makeAcknowledgement(5U, 5)),
+              platform::PresentationAckPushResult::Accepted);
+    EXPECT_EQ(relay.tryPublishAcknowledgement(makeAcknowledgement(6U, 6)),
               platform::PresentationAckPushResult::Full);
 
     events->release();
     ASSERT_TRUE(events->waitUntilReturned(1s));
     EXPECT_TRUE(waitUntil([&relay] { return relay.statistics().itemUpdates == 1U; }, 1s));
+    // #2..#5 drain; the rejected #6 stays with the producer until the renderer retries it, so the
+    // relay pops exactly five acknowledgements while queueing one coalesced render retry.
     ASSERT_TRUE(
-        waitUntil([&relay] { return relay.statistics().acknowledgementsPopped == 3U; }, 1s));
+        waitUntil([&relay] { return relay.statistics().acknowledgementsPopped == 5U; }, 1s));
     EXPECT_EQ(relay.statistics().ackBackpressureNotifications, 1U);
     EXPECT_EQ(relay.statistics().renderRetryRequests, 1U);
     EXPECT_EQ(relay.statistics().updateRequests, 1U);

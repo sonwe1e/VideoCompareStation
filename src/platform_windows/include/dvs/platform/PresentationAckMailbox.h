@@ -18,10 +18,11 @@ enum class PresentationAckPushResult {
 
 // Fixed-capacity single-producer/single-consumer queue used between the render thread and its
 // relay. Full queues reject the new acknowledgement without overwriting either queued entry, so
-// the producer can retain and retry it without waiting.
+// the producer can retain and retry it without waiting. Capacity four absorbs roughly three vsync
+// periods of GUI-thread stall on a 120 Hz display before the renderer ever sees Full.
 class PresentationAckMailbox final {
 public:
-    static constexpr std::size_t kCapacity = 2U;
+    static constexpr std::size_t kCapacity = 4U;
 
     PresentationAckMailbox() noexcept = default;
 
