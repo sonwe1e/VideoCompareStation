@@ -115,5 +115,37 @@ TEST(ComparisonExactnessTests, TreatsChromaOrRgbNormalizationAsDisplaySpaceConve
     EXPECT_EQ(comparisonExactness(normalized, 0U, 1U), ComparisonExactness::DisplaySpaceConverted);
 }
 
+TEST(ComparisonExactnessTests, ReportsEveryInexactDimensionInsteadOfOnlyTheTopReason) {
+    // A pair can be temporally aligned, spatially resampled and display-space converted
+    // at once; the single enum names only the first, so the UI needs the decomposition.
+    SessionSnapshot multi = snapshot({1'280U, 720U}, domain::ColorMatrix::kBt601);
+    multi.presentedSources[1].matchKind = FrameMatchKind::AutoAligned;
+    const ComparisonExactnessDimensions dimensions = comparisonExactnessDimensions(multi, 0U, 1U);
+    EXPECT_TRUE(dimensions.available);
+    EXPECT_FALSE(dimensions.temporalExact);
+    EXPECT_FALSE(dimensions.spatialExact);
+    EXPECT_FALSE(dimensions.pixelExact);
+    // The enum still resolves to the highest-priority reason only.
+    EXPECT_EQ(comparisonExactness(multi, 0U, 1U), ComparisonExactness::TemporallyAligned);
+
+    const SessionSnapshot exact = snapshot();
+    const ComparisonExactnessDimensions exactDimensions =
+        comparisonExactnessDimensions(exact, 0U, 1U);
+    EXPECT_TRUE(exactDimensions.available);
+    EXPECT_TRUE(exactDimensions.temporalExact);
+    EXPECT_TRUE(exactDimensions.spatialExact);
+    EXPECT_TRUE(exactDimensions.pixelExact);
+
+    SessionSnapshot unavailable = snapshot();
+    unavailable.presentedSources[1].sourceFrameId.reset();
+    unavailable.presentedSources[1].matchKind = FrameMatchKind::Missing;
+    const ComparisonExactnessDimensions unavailableDimensions =
+        comparisonExactnessDimensions(unavailable, 0U, 1U);
+    EXPECT_FALSE(unavailableDimensions.available);
+    EXPECT_FALSE(unavailableDimensions.temporalExact);
+    EXPECT_FALSE(unavailableDimensions.spatialExact);
+    EXPECT_FALSE(unavailableDimensions.pixelExact);
+}
+
 } // namespace
 } // namespace dvs::application
