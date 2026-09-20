@@ -1622,9 +1622,38 @@ private:
             detail::addDuration(now,
                                 std::chrono::duration_cast<std::chrono::microseconds>(
                                     kMinimumPlaybackPreparationDelay));
-        const auto preferredRequestDue = detail::addDuration(
-            *due,
-            -std::chrono::duration_cast<std::chrono::microseconds>(kPlaybackPresentationLead));
+        // Scale the preparation lead to the current frame interval. A fixed 14 ms lead reaches past
+        // the previous frame boundary whenever one frame is shorter than 28 ms (about 36 fps and
+        // above), collapsing the window onto the 1 ms floor and stripping the request of its
+        // scheduling margin against the boundary. Capping the lead at half the interval keeps the
+        // request ahead of the boundary at a fixed offset for high-frame-rate sources while leaving
+        // sources at or below roughly 35 fps on the full 14 ms. VFR: the interval derives from the
+        // canonical timeline, so irregular spacing is honored frame by frame.
+        std::chrono::microseconds presentationLead =
+            std::chrono::duration_cast<std::chrono::microseconds>(kPlaybackPresentationLead);
+        if (target > playbackRun_->firstTarget) {
+            if (const auto previousDue = playbackDue(domain::FrameId{target.value() - 1})) {
+                // The clock's native duration is nanoseconds on this toolchain, so the interval
+                // must be narrowed to microseconds before it is compared with the lead; comparing
+                // raw nanosecond counts would inflate it a thousandfold and never cap anything.
+                const auto dueMicroseconds =
+                    std::chrono::duration_cast<std::chrono::microseconds>(due->time_since_epoch())
+                        .count();
+                const auto previousDueMicroseconds =
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        previousDue->time_since_epoch())
+                        .count();
+                if (const auto intervalMicroseconds =
+                        detail::checkedSubtract(dueMicroseconds, previousDueMicroseconds);
+                    intervalMicroseconds.has_value() && *intervalMicroseconds > 0) {
+                    const std::int64_t halfInterval = *intervalMicroseconds / 2;
+                    if (halfInterval < presentationLead.count()) {
+                        presentationLead = std::chrono::microseconds{halfInterval};
+                    }
+                }
+            }
+        }
+        const auto preferredRequestDue = detail::addDuration(*due, -presentationLead);
         if (!earliestRequestDue.has_value() || !preferredRequestDue.has_value()) {
             stopPlayback(coordinatorError(domain::MediaErrorCode::kArithmeticOverflow,
                                           "The playback preparation deadline overflowed."));

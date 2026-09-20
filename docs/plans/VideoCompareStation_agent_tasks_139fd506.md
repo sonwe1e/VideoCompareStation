@@ -201,6 +201,16 @@
 - 修复：`SoftwareDecoder` 与 `SignatureDecodeSession` 的精确解码在首次输出越过目标 PTS 时，改为回退到更早的索引显示序号（回退量 1 起倍增，上限 16 个序号）重新定位并向前解码到精确目标；PTS 相等检查仍是唯一接受条件，不引入"最近帧"替代；回退耗尽后保留原有重开与严格报错路径。`kMaximumSeekOrdinalBackOff = 16`。
 - 验证：真实素材全序号 exact 遍历由失败转为通过（57 秒→135 秒含回退 seek 的 547 帧全走通）；`media.S*` 全部 ctest 通过；应用探针对该素材 exit=0、`decoder_exact_seeks=2`、`display_interval_max_ms=25`、无 media-error；全量 `ctest --preset dev` 通过、format-check/lint 通过。
 - 范围与未做：未改索引构建、队列/缓存政策与调度常量；未把真实素材二进制入库（含个人信息，仅环境变量引用本地路径）；该素材 seek P95 与 B4 长尾问题仍然分开处理。
+
+**T5 后续 3：播放准备提前量随帧间隔自适应（2026-09-20）**
+
+- 背景：`PlaybackCoordinator` 的播放准备提前量是固定 14 ms。帧间隔小于约 28 ms（约 36 fps 以上）时，`due - lead` 落到上一帧边界之前，请求时刻被 `kMinimumPlaybackPreparationDelay` 地板（提交后 1 ms）接管，调度余量归零；120 fps 素材上每帧都在上一帧提交后 1 ms 请求，请求时刻随解码抖动漂移。
+- 修复：提前量改为 `min(14 ms, 上一帧到本帧间隔的一半)`；间隔取自 canonical timeline，VFR 按局部间隔逐帧计算；运行首帧（`target == firstTarget`）无窗内前驱，保持原值。**修复了树内一版实现的单位 bug**：间隔用 `time_since_epoch().count()`（本工具链为纳秒）直接当微秒与 14 ms 比较，放大一千倍导致封顶从未生效；现先 `duration_cast` 到微秒再比较。
+- 测试（`PlaybackCoordinatorTests`，fake clock + fake scheduler 确定性）：120 fps 第二个 cadence 请求落在边界前半个间隔（anchor+12'501us，固定提前量本会再次贴地）；60 fps 收敛到 8'333us 半间隔；30 fps 保持 14 ms 全量（anchor+19'334us，锚定既有行为）；VFR 第三帧按 19.8 ms 局部间隔封顶到 9'900us（69'800-9'900=59'900us，固定提前量本应为 55'800us）。
+- 验证：dev 全量 `ctest` 通过、`format-check`、`lint` 通过；nav gate（1080p60 夹具，12s）drop_ratio=0、display P50 17ms/P95 18ms/max 29ms、无 canonical gap/regression；**1080p120 交替 A/B（4 轮，同机同素材，`out\ab-lead\lead-120fps-dev`）两构型均 120.00 fps、P50 8.2ms、>40ms 停顿 0、gap/regression 0**，配对差值 fps ±0.16、P95 ±0.5ms、max −3.4..+0.3ms，全部在噪声内——即无回归，但该合成素材上无可测收益（其管线本就被 vsync/ACK  pacing，未出现请求贴地导致停顿的剖面）。
+- 既有问题（本次排除归因）：nav gate 的 `held_step_presented_frames != held_step_submitted_frames` 严格判据（491a199 引入）在本机对 T0 夹具稳定失败（本次改动 255/300、回退提前量封顶后 260/300、更早通过运行为 254/300），属 B5 同族的探针吸收排队步骤问题，与本改动无关，单独立项。
+- 范围与未做：未改 `kPlaybackCatchUpTolerance`、缓存/预读政策、缩略图采样、渲染循环配置。
+
 ### T6 · P1｜文件夹审查上下文与多维可信度状态
 
 | 字段 | 可执行约定 |
