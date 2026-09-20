@@ -12,13 +12,16 @@
 #include <memory>
 #include <vector>
 
-namespace dvs::ui {
+namespace dvs {
+namespace application {
+class IIssueRecordRepository;
+}
+namespace ui {
 class ComparisonSurface;
 class ReviewController;
 class ReviewPreferencesController;
-} // namespace dvs::ui
-
-namespace dvs::app {
+} // namespace ui
+namespace app {
 
 // Owns the complete direct-review adapter graph. The desktop host releases the QML scene graph
 // between prepareForSceneGraphRelease() and shutdownAfterSceneGraphRelease() so the render node
@@ -35,6 +38,9 @@ public:
 
     [[nodiscard]] ui::ReviewController* controller() noexcept;
     [[nodiscard]] ui::ReviewPreferencesController* preferences() noexcept;
+    // T7 issue-record persistence port owned by the composition root (architecture: ui_qml
+    // must not link persistence_json).
+    [[nodiscard]] application::IIssueRecordRepository* issueRecordRepository() noexcept;
     [[nodiscard]] bool attachSurface(ui::ComparisonSurface& surface) noexcept;
     [[nodiscard]] std::vector<media::DecoderBackendStatus> decoderBackendStatuses() const;
     [[nodiscard]] media::MediaProbeStatistics mediaProbeStatistics() const noexcept;
@@ -67,4 +73,5 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace dvs::app
+} // namespace app
+} // namespace dvs

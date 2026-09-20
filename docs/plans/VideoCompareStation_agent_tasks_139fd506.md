@@ -264,6 +264,15 @@
 | 回退 | 禁用自动恢复仍可读取/导出记录；版本化格式、不破坏已有设置；持久化失败不影响当前查看任务。 |
 
 
+**T7 验收记录（2026-09-21）**
+
+- 实现：只读问题记录 schema v1（`dvs::application::IssueRecord` / `IIssueRecordRepository`）；`persistence_json::IssueRecordRepository` 版本化 JSON + 原子发布，未知 `schemaVersion` 显式拒绝且不改写原文件；`ui::IssueLogController` 手动捕获/保存/加载/身份门控恢复；`Main.qml` 文件菜单 + 问题记录面板；截图字段固定 `kind=display-result`，不伪装原始像素。导出仅携带**已提交**帧/配对身份（`currentFrame>=0` / `hasPair`），无有效呈现时 `hasValidPresentation=false`，恢复评估为 `NoValidPresentation` 而不是假装可定位。
+- 架构：`ui_qml` 不链接 `persistence_json`（`cmake/Architecture.cmake` 允许表）；`ReviewRuntime` 拥有具体仓储，经 `DesktopApplication::setIssueRecordRepository` 注入。
+- 恢复语义：`matchIssueSourceIdentity` + `evaluateIssueRestore`——Matched/Ready；Missing/Modified/IncompleteIdentity → `RelocationRequired`（提示重定位，不打开错误文件）；旧 schema → 加载失败并解释。
+- 明确未做：无时间线剪辑、音频、批量转码、数据库、质量排名；自动会话恢复未做（工单允许“先手动”）。
+- 测试：application 4 项、persistence 4 项、IssueLogController 3 项（保存/加载、修改后重定位、旧 schema 拒绝）。`ctest --preset dev` **577/577** 通过；`format-check`、`lint`（含 qmllint `--max-warnings 0`）通过。
+- 遗留：视频侧多源 openSources 恢复路径依赖控制器同步 open 成功；截图文件本身未自动归档，仅记录 path + display-result 标记；QML 端到端菜单自动化探针未单列（契约测试覆盖 Main 实例化与既有工作区）。
+
 ## 证据索引
 
 - **E01** 审查 commit 与提交历史：https://github.com/sonwe1e/VideoCompareStation/commit/139fd5067d582a95beb2bcf99d2586099040a000
@@ -435,4 +444,4 @@ T5 期间顺带测出的**既有**问题，不随观测量改动变化。52 次�
 
 ### 已完成（供对照）
 
-T0 证据基线、T1 图片配对原子提交、T2 原图不可变与尺寸语义、T3 工作区状态与命令路由、T4 图片后台加载与按需派生、T5 执行完毕（**观测层已交付，行为修复无落地**：候选缩略图门控被交替 A/B 证伪后完整回退）、T6 文件夹审查上下文与多维可信度状态（2026-09-21，含 Release 探针冒烟与验收记录）。下一工单为 T7（P2）。
+T0 证据基线、T1 图片配对原子提交、T2 原图不可变与尺寸语义、T3 工作区状态与命令路由、T4 图片后台加载与按需派生、T5 执行完毕（**观测层已交付，行为修复无落地**：候选缩略图门控被交替 A/B 证伪后完整回退）、T6 文件夹审查上下文与多维可信度状态（2026-09-21）、T7 只读问题记录与身份门控恢复（2026-09-21，手动保存/加载 + schema v1 拒绝旧版本）。P1/P2 工单 T0–T7 均已交付验收记录。

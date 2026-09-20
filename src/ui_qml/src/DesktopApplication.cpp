@@ -4,6 +4,7 @@
 #include "dvs/ui/DiagnosticsProbe.h"
 #include "dvs/ui/ImageFolderPairModel.h"
 #include "dvs/ui/ImageReviewController.h"
+#include "dvs/ui/IssueLogController.h"
 #include "dvs/ui/ReviewController.h"
 #include "dvs/ui/ReviewImageProvider.h"
 #include "dvs/ui/ReviewPreferencesController.h"
@@ -81,6 +82,10 @@ public:
         releaseSceneGraph();
     }
 
+    void setIssueRecordRepository(application::IIssueRecordRepository* repository) noexcept {
+        issueRecordRepository_ = repository;
+    }
+
     [[nodiscard]] bool load(ReviewController& controller,
                             ReviewPreferencesController& preferences,
                             SurfaceBinder bindSurface) {
@@ -150,6 +155,12 @@ public:
             });
         engine->rootContext()->setContextProperty(QStringLiteral("imageFolderPairs"),
                                                   folderPairs_.get());
+        issueLog_ = std::make_unique<IssueLogController>(issueRecordRepository_);
+        issueLog_->setReviewController(&controller);
+        issueLog_->setPreferences(&preferences);
+        issueLog_->setFolderModel(folderPairs_.get());
+        issueLog_->setImageController(imageReview_.get());
+        engine->rootContext()->setContextProperty(QStringLiteral("issueLog"), issueLog_.get());
         // UI observation bridge: forwards QML scene-graph operations (timeline thumbnail grabs)
         // into the bounded trace buffer so playback evidence can correlate them with pipeline
         // timing. With tracing disabled every call is one atomic load and a branch.
@@ -211,6 +222,9 @@ public:
         engine_ = std::move(engine);
         window_ = window;
         surface_ = surface;
+        if (issueLog_ != nullptr && surface_ != nullptr) {
+            issueLog_->setVideoSurface(surface_);
+        }
         windowDestroyedConnection_ =
             QObject::connect(window, &QObject::destroyed, [this] { window_ = nullptr; });
         surfaceDestroyedConnection_ =
@@ -649,6 +663,8 @@ private:
     std::unique_ptr<ReviewSessionFacade> sessionFacade_;
     std::unique_ptr<ImageReviewController> imageReview_;
     std::unique_ptr<ImageFolderPairModel> folderPairs_;
+    application::IIssueRecordRepository* issueRecordRepository_ = nullptr;
+    std::unique_ptr<IssueLogController> issueLog_;
     std::unique_ptr<DiagnosticsProbe> diagnosticsProbe_;
     QQuickWindow* window_ = nullptr;
     ComparisonSurface* surface_ = nullptr;
@@ -667,6 +683,11 @@ bool DesktopApplication::load(ReviewController& controller,
                               ReviewPreferencesController& preferences,
                               SurfaceBinder bindSurface) {
     return impl_->load(controller, preferences, std::move(bindSurface));
+}
+
+void DesktopApplication::setIssueRecordRepository(
+    application::IIssueRecordRepository* repository) noexcept {
+    impl_->setIssueRecordRepository(repository);
 }
 
 int DesktopApplication::exec() {

@@ -2,6 +2,7 @@ add_library(
     dvs_ui_models
     STATIC
         include/dvs/ui/ImageFolderPairModel.h
+        include/dvs/ui/IssueLogController.h
         include/dvs/ui/ReviewController.h
         include/dvs/ui/ReviewPreferencesController.h
         include/dvs/ui/ReviewSessionFacade.h
@@ -9,6 +10,7 @@ add_library(
         include/dvs/ui/SourceIdentity.h
         include/dvs/ui/SourceListModel.h
         src/ImageFolderPairModel.cpp
+        src/IssueLogController.cpp
         src/ReviewController.cpp
         src/ReviewPreferencesController.cpp
         src/ReviewSessionFacade.cpp

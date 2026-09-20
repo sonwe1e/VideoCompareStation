@@ -3,6 +3,7 @@ include(GoogleTest)
 add_executable(
     dvs_ui_component_tests
     DiagnosticsProbeTests.cpp
+    IssueLogControllerTests.cpp
     ReviewControllerTests.cpp
     "${PROJECT_SOURCE_DIR}/src/app/RuntimeBridges.cpp"
     ReviewPreferencesControllerTests.cpp
@@ -13,6 +14,7 @@ target_link_libraries(
     PRIVATE
         dvs_ui_qml
         dvs_media_ffmpeg
+        dvs_persistence_json
         dvs::test_dependencies
 )
 target_include_directories(

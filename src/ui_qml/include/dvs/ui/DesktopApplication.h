@@ -10,7 +10,11 @@
 #include <string>
 #include <string_view>
 
-namespace dvs::ui {
+namespace dvs {
+namespace application {
+class IIssueRecordRepository;
+}
+namespace ui {
 
 class ComparisonSurface;
 class ReviewController;
@@ -41,6 +45,9 @@ public:
     [[nodiscard]] bool load(ReviewController& controller,
                             ReviewPreferencesController& preferences,
                             SurfaceBinder bindSurface);
+    // Optional T7 injection. Must be set before load(); the composition root owns the concrete
+    // persistence adapter so ui_qml never links persistence_json directly.
+    void setIssueRecordRepository(application::IIssueRecordRepository* repository) noexcept;
     [[nodiscard]] int exec();
     void exit(int exitCode) noexcept;
     [[nodiscard]] double activeScreenRefreshRate() const noexcept;
@@ -101,4 +108,5 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace dvs::ui
+} // namespace ui
+} // namespace dvs

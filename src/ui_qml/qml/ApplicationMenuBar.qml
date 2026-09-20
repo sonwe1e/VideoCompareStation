@@ -43,6 +43,10 @@ VcsMenuBar {
     signal addImageRequested
     signal openImagePairRequested
     signal compareImageFoldersRequested
+    signal issueLogCaptureRequested
+    signal issueLogToggleRequested
+    signal issueLogSaveRequested
+    signal issueLogLoadRequested
     signal workspaceRequested(int mode)
     signal closeCurrentRequested
     signal destructiveActionRequested(string kind)
@@ -109,6 +113,29 @@ VcsMenuBar {
             text: qsTr("对比文件夹…")
             shortcutText: "Ctrl+Shift+F"
             onTriggered: control.compareImageFoldersRequested()
+        }
+        VcsMenuSeparator {
+            objectName: "fileIssueSeparator"
+        }
+        VcsMenuItem {
+            objectName: "captureIssueMenuItem"
+            text: qsTr("记录当前问题")
+            onTriggered: control.issueLogCaptureRequested()
+        }
+        VcsMenuItem {
+            objectName: "toggleIssueLogMenuItem"
+            text: qsTr("问题记录面板")
+            onTriggered: control.issueLogToggleRequested()
+        }
+        VcsMenuItem {
+            objectName: "saveIssueLogMenuItem"
+            text: qsTr("保存问题记录…")
+            onTriggered: control.issueLogSaveRequested()
+        }
+        VcsMenuItem {
+            objectName: "loadIssueLogMenuItem"
+            text: qsTr("加载问题记录…")
+            onTriggered: control.issueLogLoadRequested()
         }
         VcsMenuItem {
             objectName: "closeCurrentMenuItem"

@@ -405,8 +405,12 @@ runDesktop(int& argc,
         }
     }
     std::unique_ptr<dvs::app::ReviewRuntime> runtime = dvs::app::ReviewRuntime::create();
-    if (!runtime || runtime->controller() == nullptr || runtime->preferences() == nullptr ||
-        !desktop.load(*runtime->controller(),
+    if (!runtime || runtime->controller() == nullptr || runtime->preferences() == nullptr) {
+        std::cerr << "DVS_UI_LOAD_FAILED\n";
+        return dvs::app::reportFatalStartup("DVS_UI_LOAD_FAILED", smokeMode);
+    }
+    desktop.setIssueRecordRepository(runtime->issueRecordRepository());
+    if (!desktop.load(*runtime->controller(),
                       *runtime->preferences(),
                       [&runtime](dvs::ui::ComparisonSurface& surface) {
                           return runtime->attachSurface(surface);

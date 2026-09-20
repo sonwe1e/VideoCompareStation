@@ -6,6 +6,7 @@
 #include "dvs/media/DecoderBackend.h"
 #include "dvs/media/MediaProbe.h"
 #include "dvs/media/MultiSourceFrameProvider.h"
+#include "dvs/persistence/IssueRecordRepository.h"
 #include "dvs/persistence/SettingsRepository.h"
 #include "dvs/platform/D3d11RenderChannel.h"
 #include "dvs/platform/FrameBudget.h"
@@ -256,6 +257,7 @@ public:
         renderChannel_ = std::make_shared<platform::D3d11RenderChannel>(transferActor_);
         mediaProbe_ = std::make_shared<media::MediaProbe>();
         settingsRepository_ = std::make_shared<persistence::SettingsRepository>();
+        issueRecordRepository_ = std::make_shared<persistence::IssueRecordRepository>();
         frameProvider_ = std::make_shared<media::MultiSourceFrameProvider>(
             *frameBudget_, 16U, false, deviceBroker_);
         decoderBackendStateCache_ = std::make_shared<DecoderBackendStateCache>();
@@ -338,6 +340,10 @@ public:
 
     [[nodiscard]] ui::ReviewPreferencesController* preferences() noexcept {
         return preferences_.get();
+    }
+
+    [[nodiscard]] application::IIssueRecordRepository* issueRecordRepository() noexcept {
+        return issueRecordRepository_.get();
     }
 
     [[nodiscard]] std::vector<media::DecoderBackendStatus> decoderBackendStatuses() const {
@@ -530,6 +536,7 @@ private:
     std::shared_ptr<platform::D3d11RenderChannel> renderChannel_;
     std::shared_ptr<media::MediaProbe> mediaProbe_;
     std::shared_ptr<application::ISettingsRepository> settingsRepository_;
+    std::shared_ptr<persistence::IssueRecordRepository> issueRecordRepository_;
     std::shared_ptr<media::MultiSourceFrameProvider> frameProvider_;
     std::shared_ptr<DecoderBackendStateCache> decoderBackendStateCache_;
     std::shared_ptr<media::AlignmentAnalysisService> alignmentAnalysisService_;
@@ -569,6 +576,10 @@ ui::ReviewController* ReviewRuntime::controller() noexcept {
 
 ui::ReviewPreferencesController* ReviewRuntime::preferences() noexcept {
     return impl_ ? impl_->preferences() : nullptr;
+}
+
+application::IIssueRecordRepository* ReviewRuntime::issueRecordRepository() noexcept {
+    return impl_ ? impl_->issueRecordRepository() : nullptr;
 }
 
 bool ReviewRuntime::attachSurface(ui::ComparisonSurface& surface) noexcept {
