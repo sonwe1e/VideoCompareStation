@@ -387,6 +387,13 @@ T5 期间顺带测出的**既有**问题，不随观测量改动变化。52 次�
 
 后续方向（均需在静音测量环境下先验证）：seek 取消改为非阻塞（让新一代请求顶替而不同步 drain，或把 cancel 并入请求队列由 worker 在同一 job 内切换）；遍历段考虑对已遍历窗口的有界复用/更近的关键帧定位。两者都不得放宽严格 PTS 相等接受条件。
 
+**修复与验证（2026-09-20）**：派发段的 89–133 ms 已定位并修复——**取消在途解码被误判为“解码器损坏”**：`SourceDecodeActor` 对任何解码失败（含取消产生的 `Frame decoding was interrupted/canceled`）标记 `needsReopen`，下一次精确解码先 `open()` 整个文件（avformat + 索引构建，实测 p50 87 ms、p95 104 ms），而 seek 前取消上一代在途解码正是最高频路径。修复：`SoftwareDecoder` 在中断路径上刷新 codec/demuxer 游标（与 seek 后清理同构）并记录 `lastDecodeInterrupted`；actor 仅对**非中断**失败标记重开。精确路径每次都会先 `av_seek_frame` 重新定位，顺序路径在失败后也已重置 `sequentialReady`，因此取消后无需重开。
+
+- 观测：`DecoderReopen`(kind 11) 由“预留未发射”改为实际发射（payload=触发重开的帧号），使该回归可被门禁/测试直接观测。
+- 测试：`SoftwareDecoderTests.InterruptedDecodeIsReportedAndLeavesTheDecoderReusable`（取消后解码器仍可用、PTS 精确）；`MultiSourceFrameProviderTests.SupersededExactRequestsDoNotReopenTheSources`（多源 supersede 序列零重开且后续帧集完整；无修复时稳定失败于 reopens=2）。
+- A/B（真实素材 1080p60，4 轮交替，`out\ab-reopen\runs`）：派发段 p50 102–105 ms → 18.8–20.9 ms（逐轮 −81…−86 ms），seek P95 817–870 ms → 723–745 ms（逐轮 −72…−133 ms）；播放指标不变（presented=360、drop=0、display P95=19 ms、max 27–31 ms）。
+- 遗留：seek P95 剩余 ~730 ms 主要是解码遍历段（素材 4.17 s 最大 GOP，内容决定），需单独方案（有界遍历窗口复用等），且必须先满足 B2 静音测量环境。
+
 ### B5 · P2｜held-step 序列错误按素材分化
 
 同为既有问题：held-step 序列错误在 T0 fixture 上多次为 0，而在真实素材上为 1–15。需要先区分这是"素材本身有重复/非单调 PTS"还是"顺序游标在长 GOP 上真的跳帧"，再决定是否修。按工单口径，连续播放允许整组跳过但**计数必须真实**，所以先要把计数与真实丢帧对齐。

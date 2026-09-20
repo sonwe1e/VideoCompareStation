@@ -1,3 +1,4 @@
+#include "dvs/application/PlaybackTrace.h"
 #include "dvs/domain/ComparisonSource.h"
 #include "dvs/domain/FrameTimeline.h"
 #include "dvs/media/AlignmentAnalysisService.h"
@@ -132,6 +133,10 @@ private:
 
 [[nodiscard]] std::filesystem::path fixture(const std::string_view name) {
     return std::filesystem::path{DVS_MEDIA_FIXTURE_DIR} / std::string{name};
+}
+
+[[nodiscard]] std::uint64_t reopenTraceClock() noexcept {
+    return 1U;
 }
 
 [[nodiscard]] application::PlaybackRequestContext
@@ -454,6 +459,72 @@ TEST(MultiSourceFrameProviderTests, KeepsOneStableDecodeWorkerPerSourceAcrossExa
         EXPECT_EQ(ready->set.sources().size(), open.sources.size());
         EXPECT_EQ(provider.decodeWorkerIdsForTesting(), initialWorkers);
     }
+}
+
+// A superseded exact request cancels the in-flight decode of the previous playback generation.
+// Cancellation is a clean stop, so the sources must not be reopened for it: every reopen costs a
+// full demux plus index rebuild (about 90 ms on a 1080p60 capture) and used to be paid on every
+// seek, which is most of the measured seek latency.
+TEST(MultiSourceFrameProviderTests, SupersededExactRequestsDoNotReopenTheSources) {
+    platform::FrameBudget budget{8U * 1024U * 1024U};
+    MultiSourceFrameProvider provider{budget};
+    const auto events = std::make_shared<RecordingEventSink>();
+    const application::FrameProviderOpenRequest open = makeOpenRequest(760U);
+
+    ASSERT_EQ(provider.submit(open, events), application::PortSubmitResult::Accepted);
+    ASSERT_TRUE(events->waitForEventCount(1U));
+
+    application::PlaybackTrace::instance().reset();
+    application::PlaybackTrace::instance().enable(reopenTraceClock);
+    const auto drainTrace = [] {
+        std::vector<application::TraceEvent> drained(256U);
+        const std::size_t count =
+            application::PlaybackTrace::instance().drain(drained.data(), drained.size());
+        drained.resize(count);
+        return drained;
+    };
+
+    const application::FrameRequest superseded{
+        .context = makeFrameContext(761U, 10U),
+        .frameId = domain::FrameId{5},
+        .priority = application::FrameRequestPriority::Exact,
+    };
+    ASSERT_EQ(provider.submit(superseded, events), application::PortSubmitResult::Accepted);
+    const application::FrameRequest newest{
+        .context = makeFrameContext(762U, 11U),
+        .frameId = domain::FrameId{8},
+        .priority = application::FrameRequestPriority::Exact,
+    };
+    ASSERT_EQ(provider.submit(newest, events), application::PortSubmitResult::Accepted);
+    ASSERT_TRUE(events->waitForEventCount(3U));
+    const std::optional<application::FrameSetReady> ready =
+        findFrameSetReady(events, newest.context);
+    ASSERT_TRUE(ready.has_value());
+    EXPECT_EQ(ready->set.sources().size(), open.sources.size());
+
+    // A later request must still decode correctly after the supersede, proving the decoders were
+    // left in a usable state rather than silently broken.
+    events->clear();
+    const application::FrameRequest following{
+        .context = makeFrameContext(763U, 12U),
+        .frameId = domain::FrameId{3},
+        .priority = application::FrameRequestPriority::Exact,
+    };
+    ASSERT_EQ(provider.submit(following, events), application::PortSubmitResult::Accepted);
+    ASSERT_TRUE(events->waitForEventCount(2U));
+    const std::optional<application::FrameSetReady> after =
+        findFrameSetReady(events, following.context);
+    ASSERT_TRUE(after.has_value());
+    EXPECT_EQ(after->set.sources().size(), open.sources.size());
+
+    const std::vector<application::TraceEvent> drained = drainTrace();
+    application::PlaybackTrace::instance().disable();
+    application::PlaybackTrace::instance().reset();
+    const std::size_t reopens = static_cast<std::size_t>(
+        std::count_if(drained.begin(), drained.end(), [](const application::TraceEvent& event) {
+            return event.kind == application::TraceEventKind::DecoderReopen;
+        }));
+    EXPECT_EQ(reopens, 0U);
 }
 
 TEST(MultiSourceFrameProviderTests, FrameSetCacheIgnoresRequestIdentityButHonorsAlignmentRevision) {

@@ -497,6 +497,33 @@ TEST(SoftwareDecoderTests, ContinuesForwardWithoutSeekingAndFallsBackForReverseT
     EXPECT_EQ(decoder.exactSeekCount(), 2U);
 }
 
+// A canceled decode is a clean stop, not corruption: the owning actor must not reopen the
+// source for it, so the decoder reports the interruption and stays reusable afterwards. Reopening
+// after every cancellation used to add a full demux plus index rebuild to every seek.
+TEST(SoftwareDecoderTests, InterruptedDecodeIsReportedAndLeavesTheDecoderReusable) {
+    platform::FrameBudget budget{2U * 1024U * 1024U};
+    SoftwareDecoder decoder{
+        0U, probeDescriptor(fixture("h264_a_320x180_30fps_12.mp4"), 0U), budget};
+    std::atomic<bool> canceled = false;
+
+    ASSERT_TRUE(decoder.open(canceled));
+    const auto warm = decoder.decodeExact(domain::FrameId{4}, canceled);
+    ASSERT_TRUE(warm);
+    EXPECT_FALSE(decoder.lastDecodeInterrupted());
+
+    canceled.store(true, std::memory_order_release);
+    const auto interrupted = decoder.decodeExact(domain::FrameId{9}, canceled);
+    EXPECT_FALSE(interrupted);
+    EXPECT_TRUE(decoder.lastDecodeInterrupted());
+
+    canceled.store(false, std::memory_order_release);
+    const auto resumed = decoder.decodeExact(domain::FrameId{9}, canceled);
+    ASSERT_TRUE(resumed);
+    EXPECT_FALSE(decoder.lastDecodeInterrupted());
+    EXPECT_EQ(resumed.value().presentationTime, domain::MediaTime{300000});
+    EXPECT_NE(frameHash(resumed.value()), frameHash(warm.value()));
+}
+
 TEST(SoftwareDecoderTests, SequentialMpeg4DecodePreservesBufferedPacketState) {
     platform::FrameBudget budget{1024U * 1024U};
     SoftwareDecoder decoder{1U, probeDescriptor(fixture("mpeg4_64x48_30fps_12.mp4"), 1U), budget};

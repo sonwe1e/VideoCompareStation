@@ -120,7 +120,7 @@ must not be treated as complete.
 | `8` | `SnapshotCommitted` | Displayed canonical position, or `UINT64_MAX` when absent. |
 | `9` | `CommandTerminal` | `CommandOutcome` value. |
 | `10` | `DecoderSeek` | Seek target position. |
-| `11` | `DecoderReopen` | Source identifier. Reserved; not currently emitted. |
+| `11` | `DecoderReopen` | Frame id whose request forced the reopen. Emitted by the source decode actor when a decoder is reopened before a request; the identity `req` carries the source id. A healthy navigation pattern emits none, because a canceled decode is a clean stop rather than corruption. |
 | `12` | `CacheHit` | Cached source-frame index. |
 | `13` | `DeviceGenerationChanged` | New device generation. |
 | `14` | `QmlGrabRequested` | Canonical frame the UI was showing when a scene-graph image grab was requested. |

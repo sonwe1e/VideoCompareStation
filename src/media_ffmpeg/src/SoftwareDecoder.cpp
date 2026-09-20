@@ -176,6 +176,25 @@ public:
         return avcodec_default_get_format(context, formats);
     }
 
+    void resetForReuse() noexcept {
+        // The same cleanup the exact path performs after av_seek_frame: drop buffered packets and
+        // frames and forget the sequential cursor, so the next request starts from a known state.
+        if (codec != nullptr) {
+            avcodec_flush_buffers(codec.get());
+        }
+        if (packet != nullptr) {
+            av_packet_unref(packet.get());
+        }
+        if (frame != nullptr) {
+            av_frame_unref(frame.get());
+        }
+        packetPending = false;
+        inputEnded = false;
+        flushSubmitted = false;
+        lastReturnedFrame.reset();
+        sequentialReady = false;
+    }
+
     domain::SourceId sourceId;
     domain::MediaDescriptor descriptor;
     platform::FrameBudget& frameBudget;
@@ -200,6 +219,7 @@ public:
     bool inputEnded = false;
     bool flushSubmitted = false;
     bool sequentialReady = false;
+    bool lastDecodeInterrupted = false;
     bool opened = false;
     bool hardwareRequested = false;
     media::DecoderBackend backend = media::DecoderBackend::Software;
@@ -497,7 +517,9 @@ SoftwareDecoder::decodeInternal(const domain::FrameId frameId,
     const domain::SourceId sourceId = impl_->sourceId;
     impl_->interrupted.store(cancellationRequested.load(std::memory_order_acquire),
                              std::memory_order_release);
+    impl_->lastDecodeInterrupted = false;
     if (cancellationRequested.load(std::memory_order_acquire)) {
+        impl_->lastDecodeInterrupted = true;
         return domain::Result<DecodedFrame>::failure(
             decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
                         sourceId,
@@ -558,18 +580,7 @@ SoftwareDecoder::decodeInternal(const domain::FrameId frameId,
             application::TraceIdentity{
                 .request = domain::RequestId{static_cast<std::uint64_t>(impl_->sourceId)}},
             static_cast<std::uint64_t>(frameId.value()));
-        avcodec_flush_buffers(impl_->codec.get());
-        if (impl_->packet != nullptr) {
-            av_packet_unref(impl_->packet.get());
-        }
-        if (impl_->frame != nullptr) {
-            av_frame_unref(impl_->frame.get());
-        }
-        impl_->packetPending = false;
-        impl_->inputEnded = false;
-        impl_->flushSubmitted = false;
-        impl_->lastReturnedFrame.reset();
-        impl_->sequentialReady = false;
+        impl_->resetForReuse();
     }
 
     if (impl_->packet == nullptr) {
@@ -594,6 +605,10 @@ SoftwareDecoder::decodeInternal(const domain::FrameId frameId,
     };
     for (;;) {
         if (interruptionRequested()) {
+            // A clean cancellation: flush the codec and demuxer cursors so the decoder stays
+            // reusable, and record that this failure was an interruption rather than corruption.
+            impl_->lastDecodeInterrupted = true;
+            impl_->resetForReuse();
             return domain::Result<DecodedFrame>::failure(
                 decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
                             sourceId,
@@ -1002,6 +1017,10 @@ SoftwareDecoder::decodeInternal(const domain::FrameId frameId,
 
 std::uint64_t SoftwareDecoder::exactSeekCount() const noexcept {
     return impl_->exactSeekCount;
+}
+
+bool SoftwareDecoder::lastDecodeInterrupted() const noexcept {
+    return impl_->lastDecodeInterrupted;
 }
 
 media::DecoderBackend SoftwareDecoder::backend() const noexcept {

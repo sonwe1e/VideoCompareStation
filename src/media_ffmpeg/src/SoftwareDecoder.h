@@ -48,6 +48,10 @@ public:
 
     // Internal diagnostic used by component tests to keep the sequential path honest.
     [[nodiscard]] std::uint64_t exactSeekCount() const noexcept;
+    // True when the most recent decode returned because the request was canceled or interrupted
+    // rather than because the source failed. An interrupted decode leaves the demuxer and codec
+    // in a clean, re-seekable state, so the owning actor must not reopen the source for it.
+    [[nodiscard]] bool lastDecodeInterrupted() const noexcept;
     [[nodiscard]] media::DecoderBackend backend() const noexcept;
     [[nodiscard]] std::string fallbackReason() const;
     [[nodiscard]] domain::DeviceGeneration deviceGeneration() const noexcept;
