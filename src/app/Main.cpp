@@ -1921,6 +1921,8 @@ runImageFolderEvidence(int& argc, char** argv, const ImageFolderInvocation& invo
         WaitingForFolderFirstPair,
         IteratingRows,
         WaitingForRowOpen,
+        SingleSideProbe,
+        WaitingForSingleSideOpen,
         DifferenceProbe,
         WaitingForDiffPairOpen,
         WaitingForDiff,
@@ -1947,6 +1949,13 @@ runImageFolderEvidence(int& argc, char** argv, const ImageFolderInvocation& invo
     int folderFirstRow = -1;
     int waitingRow = -1;
     int diffPairRow = -1;
+    int completeCountValue = 0;
+    int missingCountValue = 0;
+    int conflictCountValue = 0;
+    int singleSideRow = -1;
+    bool singleSideOpened = false;
+    bool singleSideAttempted = false;
+    std::string singleSideError;
     qint64 diffRecomputeMilliseconds = -1;
     int diffMaxAbsDifference = -1;
     double diffMeanAbsDifference = -1.0;
@@ -2051,6 +2060,9 @@ runImageFolderEvidence(int& argc, char** argv, const ImageFolderInvocation& invo
                 fail("folder-pair-count-invalid");
                 return;
             }
+            completeCountValue = model->completeCount();
+            missingCountValue = model->missingCount();
+            conflictCountValue = model->conflictCount();
             folderFirstRow = model->firstCompleteRow();
             if (folderFirstRow < 0) {
                 // No complete pair: the sidebar still gets a row walk with every row
@@ -2086,7 +2098,7 @@ runImageFolderEvidence(int& argc, char** argv, const ImageFolderInvocation& invo
                 return;
             }
             if (iterateRow >= model->pairCount()) {
-                stage = ImageStage::DifferenceProbe;
+                stage = ImageStage::SingleSideProbe;
                 return;
             }
             const int row = iterateRow;
@@ -2118,6 +2130,56 @@ runImageFolderEvidence(int& argc, char** argv, const ImageFolderInvocation& invo
             captureRow(waitingRow, openTimer.elapsed(), model->currentPair() == waitingRow);
             ++iterateRow;
             stage = ImageStage::IteratingRows;
+            return;
+        }
+        case ImageStage::SingleSideProbe: {
+            if (model == nullptr) {
+                fail("folder-model-missing");
+                return;
+            }
+            if (singleSideAttempted) {
+                stage = ImageStage::DifferenceProbe;
+                return;
+            }
+            for (int row = 0; row < model->pairCount(); ++row) {
+                const bool hasLeft =
+                    model->data(model->index(row, 0), dvs::ui::ImageFolderPairModel::HasLeftRole)
+                        .toBool();
+                const bool hasRight =
+                    model->data(model->index(row, 0), dvs::ui::ImageFolderPairModel::HasRightRole)
+                        .toBool();
+                if (hasLeft == hasRight) {
+                    continue;
+                }
+                singleSideRow = row;
+                singleSideAttempted = true;
+                openTimer.start();
+                if (!model->openSingleSideAt(row)) {
+                    singleSideOpened = false;
+                    singleSideError = model->errorText().toStdString();
+                    stage = ImageStage::DifferenceProbe;
+                    return;
+                }
+                stage = ImageStage::WaitingForSingleSideOpen;
+                return;
+            }
+            singleSideAttempted = true;
+            stage = ImageStage::DifferenceProbe;
+            return;
+        }
+        case ImageStage::WaitingForSingleSideOpen: {
+            if (model == nullptr) {
+                fail("folder-model-missing");
+                return;
+            }
+            if (model->openPending()) {
+                return;
+            }
+            singleSideOpened = model->currentPair() == singleSideRow;
+            if (!singleSideOpened) {
+                singleSideError = model->errorText().toStdString();
+            }
+            stage = ImageStage::DifferenceProbe;
             return;
         }
         case ImageStage::DifferenceProbe: {
@@ -2290,6 +2352,16 @@ runImageFolderEvidence(int& argc, char** argv, const ImageFolderInvocation& invo
     report.insert(QStringLiteral("right_folder"),
                   QString::fromStdString(invocation.right.string()));
     addNumber(QStringLiteral("pair_count"), model == nullptr ? 0 : model->pairCount());
+    addNumber(QStringLiteral("complete_count"), completeCountValue);
+    addNumber(QStringLiteral("missing_count"), missingCountValue);
+    addNumber(QStringLiteral("conflict_count"), conflictCountValue);
+    report.insert(QStringLiteral("single_side_probe"),
+                  QJsonObject{
+                      {QStringLiteral("attempted"), singleSideAttempted},
+                      {QStringLiteral("row"), singleSideRow},
+                      {QStringLiteral("opened"), singleSideOpened},
+                      {QStringLiteral("error"), QString::fromStdString(singleSideError)},
+                  });
     addNumber(QStringLiteral("load_folders_ms"), loadFoldersMilliseconds);
     QJsonArray rowArray;
     for (const ImageRowEvidence& row : rows) {

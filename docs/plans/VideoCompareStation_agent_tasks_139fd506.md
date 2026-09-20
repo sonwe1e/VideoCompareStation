@@ -225,6 +225,31 @@
 | 回退 | 低频详情可折叠或暂隐藏新筛选，但必要可信度警告/来源身份不可隐藏；不改旧序列化枚举数值。 |
 
 
+**T6 验收记录（2026-09-21）**
+
+- 环境：分支 `agent/image-folder-comparison`，HEAD `9a8ab48`（本记录落盘时工作区含未提交 T6 改动）；dev 构建于 2026-09-21；Release 探针构建见下方命令。`docs/engineering/behavior-baseline.md` 为播放引擎 Phase 0 冻结基线（C/H/G 条目均不覆盖文件夹审查上下文与图片配对 UX），**本轮无需同步**——T6 不改播放/解码/呈现语义；`comparisonExactness()` 枚举数值与优先级语义保持不变，旧序列化兼容。
+- C++ 实现：
+  - application：`ComparisonExactnessDimensions` + `comparisonExactnessDimensions()` 将时间/空间/像素三维独立分解；`comparisonExactness()` 重构为其上层投影，枚举语义逐分支不变，消除“单枚举最高优先级遮蔽其他不精确原因”。
+  - ReviewController：`differenceEdges` 投影新增 `dimensionsAvailable` / `temporalExact` / `spatialExact` / `pixelExact`。
+  - ImageFolderPairModel：`FolderSideScan` + 纯函数 `mergePairRows` 显式列出同名大小写冲突（所用文件名 + 冲突清单，不再静默任选）；新增 `completeCount` / `missingCount` / `conflictCount`；单侧行 `openSingleSideAt` / `completeSingleSideOpen`（与配对打开共用“仅匹配成功终态才推进选择”协议）；`pairUrlsAt(row)`。
+  - ImageReviewController：`requestOpenPrimary(url, pairId)` 携带行身份；配对提交保持观察上下文——同尺寸保留 `compareMode`（差异模式保留并为新对重算）与 zoom/pan；异尺寸回退并排并给出尺寸解释。
+- QML 实现：
+  - `FolderPairSidebar`：配对规则标签、完整/缺失/冲突计数、冲突 `?` 标记 + tooltip、单侧行可点击、`currentIndex` 绑定 + `positionViewAtIndex` 自动滚动、footer“打开中…”状态。
+  - `ImageWorkspace`：wipe 左右半区持久 A/B 身份标签（左=B 右=A，同名时带父目录消歧）；状态栏配对行上下文（第 N/M 行、仅 A/B 存在、冲突）；差异“计算中”与“尺寸不兼容”提示区分；邻接配对后台预读（T4 遗留，单邻居有界）。
+  - `ComparisonViewport`：分析状态改为时间/空间/像素三维并列显示。
+- 测试与门禁：新增模型 4 项（计数、冲突显式列出、`mergePairRows` 纯函数、单侧行打开）、控制器 2 项（同尺寸模式/位置保持、异尺寸回退解释）、精确度单元 1 项（`ReportsEveryInexactDimensionInsteadOfOnlyTheTopReason`）、QML 端到端 1 项（`FolderSidebarExposesPairingContextAndOpensMissingSide`：40 行键盘连续切换选中行可见、单侧打开、wipe 身份、计数标签）。更新既有 `BlockedDifferenceCannotPublishOrCacheAfterNewPairCommits`：模式保持后新差异会重算，契约相应调整；核心意图（旧差异结果不得在新配对发布/缓存）保留并加强。dev 全量 `ctest --preset dev` **566/566** 通过；`format-check`、`lint`（clang-tidy + qmllint `--max-warnings 0`）通过。
+- 实机困难（均已解决）：`--clean-first` 清空 `bin/` 后本机 vcpkg Qt 无 offscreen 平台插件，GUI 测试二进制 abort 挂起——全量重建恢复，测试须用默认 windows 平台（与 CI 一致）。NTFS 大小写不敏感导致两项冲突测试 `GTEST_SKIP`；冲突检测重构为纯函数 `mergePairRows` 后获得跨平台覆盖。新测试现场抓住两个真实 bug：`missingCount` 条件写反、qmllint 报 `selectedDifferenceEdge` 未声明——均已修复。
+- Release 探针冒烟（2026-09-21，`out/build/release/bin/VCStation.exe`，平台 windows）：
+  - 命令：`VCStation.exe --ui-image-folder <left> <right>`；原始 stderr/stdout 在 `out/t6-evidence/*.err|.out`，摘要 `*.summary.json`。
+  - 探针扩展：JSON 新增 `complete_count` / `missing_count` / `conflict_count` 与 `single_side_probe{attempted,row,opened,error}`。
+  - 夹具 `out/t6-image-fixture`（4 对完整同名 + 1 个仅右侧 `frame_005.png`）：`passed:true`、`pair_count=5`、`complete_count=4`、`missing_count=1`、`conflict_count=0`；4 对完整行 `opened:true`；`single_side_probe row=4 opened=true`（仅右侧文件可打开，无需资源管理器）；`load_folders_ms=3`；UI gap P95=2 ms / max=4 ms。
+  - T0 证据夹具 `out/evidence-fixtures/image-pairs`（10 行，含缺失/损坏/异尺寸）：`passed:true`、`pair_count=10`、`complete_count=7`、`missing_count=3`、`conflict_count=0`；损坏行 `corrupt.png`/`corruptR.png` 保持 `opened:false` 且 generation 不推进到新身份；`single_side_probe row=0`（`a.jpg` 仅右侧）`opened=true`；UI gap P95=4 ms / max=12 ms。
+  - `conflict_count=0` 符合本机 NTFS 大小写不敏感预期；冲突列出语义由 `mergePairRows` 单元测试覆盖。
+  - exe sha256：`BDDDCF661FB8621069C95C44919E6EA13A888D06DADD9218A9E19465866BDEF7`（`out/build/release/bin/VCStation.exe`）。
+  - 质量门（探针改动后）：`pwsh tools/build/build.ps1 -Preset dev -Target format-check,lint` 通过；dev 全量 ctest 566/566 于探针改动前同一工作区源码上通过（探针仅影响 `VCStation` 证据路径，不改单元/组件测试二进制语义）。
+- 遗留：视频侧多维可信度显示目前由单元/QML 测试覆盖，硬件素材上的可读性证据可选；本机 NTFS 下 `conflict_count` 预期为 0（冲突语义由 `mergePairRows` 单元测试覆盖）；根目录误放的 `VideoCompareStation_*.md` 副本与 `.zcode/` 不入库。
+- 明确未做：未改对齐算法，未引入自动模糊匹配；未增加四套并排设置栏；未改旧序列化枚举数值；未做时间线剪辑/音频/批量转码（属 T7 之外）。
+
 ### T7 · P2｜只读问题记录与轻量会话恢复
 
 | 字段 | 可执行约定 |
@@ -334,7 +359,7 @@
 
 ### B1 · P1｜T6 文件夹审查上下文与多维可信度状态
 
-未开工，**这是下一块关键路径**：前置依赖 T1/T2/T3 已全部交付，且它是剩余工单里唯一的 P1（T7 是 P2）。已对照现有代码核过差距，五处具体缺口：
+**已交付（2026-09-21），验收记录见 T6 小节。** 下列五处缺口均已关闭：
 
 1. `FolderPairSidebar.qml` 的 `MouseArea` 与 `selectRow` 对单侧行直接 `return`（`hasBoth` 为假时行 `opacity 0.55` 且不可选）——"检查缺失项无需资源管理器"这条验收目前过不了；
 2. 头部只有文件夹名，没有"完整 N / 仅 A N / 仅 B N / 失败 N"计数——"已配对≠内容相同"这个被点名的风险没有可见防线；
@@ -410,4 +435,4 @@ T5 期间顺带测出的**既有**问题，不随观测量改动变化。52 次�
 
 ### 已完成（供对照）
 
-T0 证据基线、T1 图片配对原子提交、T2 原图不可变与尺寸语义、T3 工作区状态与命令路由、T4 图片后台加载与按需派生、T5 执行完毕（**观测层已交付，行为修复无落地**：候选缩略图门控被交替 A/B 证伪后完整回退）。
+T0 证据基线、T1 图片配对原子提交、T2 原图不可变与尺寸语义、T3 工作区状态与命令路由、T4 图片后台加载与按需派生、T5 执行完毕（**观测层已交付，行为修复无落地**：候选缩略图门控被交替 A/B 证伪后完整回退）、T6 文件夹审查上下文与多维可信度状态（2026-09-21，含 Release 探针冒烟与验收记录）。下一工单为 T7（P2）。
