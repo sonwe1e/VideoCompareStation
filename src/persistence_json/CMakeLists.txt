@@ -1,6 +1,7 @@
 add_library(
     dvs_persistence_json
     STATIC
+        src/IssueRecordRepository.cpp
         src/Module.cpp
         src/SettingsRepository.cpp
 )

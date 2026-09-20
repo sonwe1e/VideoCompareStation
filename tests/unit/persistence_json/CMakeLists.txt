@@ -3,6 +3,7 @@ include(GoogleTest)
 add_executable(
     dvs_persistence_json_unit_tests
     CommitSemanticsTests.cpp
+    IssueRecordRepositoryTests.cpp
     SettingsRepositoryTests.cpp
 )
 target_link_libraries(
