@@ -380,9 +380,18 @@ T5 唯一未被排除的嫌疑项，也是当前所有 >40 ms 停顿的支配来
 
 T5 期间顺带测出的**既有**问题，不随观测量改动变化。52 次留存运行中该素材 `seek_p95` 稳定在 771–1079 ms，远超探针 500 ms 目标（T0 fixture 上为 124–245 ms）。工单里 `2000 ms` 追赶容忍常量与 prepare 提前量（`kPlaybackPresentationLead = 14 ms`）都不是已确认根因，动手前必须先做定位实验，并且不得把精确导航正确性开关化。
 
+**定位实验（2026-09-20，`out\reported-stall-recheck`，当前构建，同素材 8s 探针 + trace 切片）**：seek P95 818 ms 由两段构成——
+
+1. **派发段** `CommandAccepted → DecoderSeek` 中位 89 ms（20 个采样 seek 中 16 个落在 79–132 ms，最大 835 ms）。协调器侧 `beginSeek` 是同步直排（cancel 旧作用域 → generation+1 → 立即 submit），因此这 89 ms 在 provider/actor 内：`SourceDecodeActor::cancel` 用 `completion.get()` **同步等待** worker 处理取消 job（`SourceDecodeActor.cpp:225-233`），worker 线程优先级为 `THREAD_PRIORITY_BELOW_NORMAL`，取消排在当前在途解码之后；多源时按源串行等待。
+2. **解码遍历段** `DecoderSeek → FrameSetReady(目标)` 中位 126 ms、最大 830 ms。素材关键帧极稀：10.47 s 仅 4 个 I 帧（0 / 2.25 / 6.42 / 9.32 s，最大 GOP 4.17 s ≈ 250 帧），后退定位需从关键帧正向遍历；`FrameSetReady → commit` 仅 2–20 ms，排除渲染/ACK。
+
+后续方向（均需在静音测量环境下先验证）：seek 取消改为非阻塞（让新一代请求顶替而不同步 drain，或把 cancel 并入请求队列由 worker 在同一 job 内切换）；遍历段考虑对已遍历窗口的有界复用/更近的关键帧定位。两者都不得放宽严格 PTS 相等接受条件。
+
 ### B5 · P2｜held-step 序列错误按素材分化
 
 同为既有问题：held-step 序列错误在 T0 fixture 上多次为 0，而在真实素材上为 1–15。需要先区分这是"素材本身有重复/非单调 PTS"还是"顺序游标在长 GOP 上真的跳帧"，再决定是否修。按工单口径，连续播放允许整组跳过但**计数必须真实**，所以先要把计数与真实丢帧对齐。
+
+**补充（2026-09-20）**：491a199 引入的严格判据（`held_step_presented_frames == held_step_submitted_frames`）在本机稳定失败：1080p60 双夹具 255–260/300、1080p60 真实素材 295/300、1080p120 单夹具同样未满。剖面一致——探针按 cadence 提交 300 步，窗口结束时步进流仍有已接受未呈现的排队帧被静默丢弃（`finalizeHeldStep` 后不再等待 drain）。属探针窗口与协调器队列深度的测量口径问题，不是丢帧（drop_ratio=0、canonical gap/regression=0）。修法二选一：窗口结束后 drain 到非 busy 再 finalize，或把"已接受未呈现"计为 absorbed 而不是 fail；不得通过放宽呈现计数来放行。
 
 ### B6 · P2｜选屏策略会选中虚拟/间接适配器
 
