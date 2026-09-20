@@ -409,6 +409,8 @@ bool ImageReviewController::openPairImages(QImage primary,
         emit stateChanged();
         return false;
     }
+    const bool hadPrimary = hasPrimary();
+    const QSize previousPrimarySize = primary_.size();
     cancelPendingOpen();
     cancelDifferenceRequest();
     ++async_->sourceGeneration;
@@ -421,9 +423,23 @@ bool ImageReviewController::openPairImages(QImage primary,
     async_->secondaryIdentity = imageContentIdentity(secondary_);
     committedPairId_ = pairId;
     errorText_.clear();
-    compareMode_ = SideBySide;
-    resetView();
+    QString modeExplanation;
+    compareMode_ = retainedCompareModeFor(
+        hadPrimary, previousPrimarySize, primary_.size(), secondary_.size(), &modeExplanation);
+    if (!modeExplanation.isEmpty()) {
+        // The mode fell back because the new pair is not pixel-comparable; the reason
+        // stays visible instead of silently switching the user's selected mode (T6).
+        errorText_ = modeExplanation;
+    }
+    if (!retainsObservationPosition(hadPrimary)) {
+        resetView();
+    }
     bumpGeneration();
+    if (isDifferenceMode(compareMode_)) {
+        // A retained diff mode stays live: the new pair's difference is computed on
+        // demand in the background (T4/T6).
+        requestDifferenceForCurrentMode();
+    }
     return true;
 }
 
@@ -449,7 +465,7 @@ bool ImageReviewController::openPairAtomically(const QUrl& primary,
                           pairId);
 }
 
-int ImageReviewController::requestOpenPrimary(const QUrl& url) {
+int ImageReviewController::requestOpenPrimary(const QUrl& url, const int pairId) {
     const QString label = url.isLocalFile() ? url.toLocalFile() : url.toString();
     if (!url.isValid() || label.isEmpty()) {
         setError(tr("Invalid image path."));
@@ -458,9 +474,9 @@ int ImageReviewController::requestOpenPrimary(const QUrl& url) {
     cancelPendingOpen();
     async_->loader.cancelPrefetches();
     async_->pendingKind = AsyncState::PendingKind::Primary;
-    async_->pendingPairId = -1;
+    async_->pendingPairId = pairId;
     const quint64 requestId = async_->loader.requestPrimary(
-        url, -1, currentDecodePolicy(), [this](ImagePairLoader::Result result) {
+        url, pairId, currentDecodePolicy(), [this](ImagePairLoader::Result result) {
             handleLoadFinished(std::move(result));
         });
     async_->activeLoadRequestId = requestId;
@@ -798,6 +814,37 @@ void ImageReviewController::handleDifferenceFinished(ImagePairLoader::Difference
     bumpGeneration();
 }
 
+int ImageReviewController::retainedCompareModeFor(const bool hadPrimary,
+                                                  const QSize& previousPrimarySize,
+                                                  const QSize& newPrimarySize,
+                                                  const QSize& newSecondarySize,
+                                                  QString* explanation) const {
+    if (!hadPrimary) {
+        return SideBySide; // First pair: the established behaviour opens side by side.
+    }
+    if (previousPrimarySize == newPrimarySize) {
+        return compareMode_; // Same geometry: every mode stays meaningful.
+    }
+    if (isDifferenceMode(compareMode_) && !resampleAllowed_) {
+        if (explanation != nullptr) {
+            *explanation = tr("新配对尺寸不同（%1×%2 与 "
+                              "%3×%4），已切换回并排查看；逐像素差异需要相同尺寸或启用重采样。")
+                               .arg(newPrimarySize.width())
+                               .arg(newPrimarySize.height())
+                               .arg(newSecondarySize.width())
+                               .arg(newSecondarySize.height());
+        }
+        return SideBySide;
+    }
+    return compareMode_;
+}
+
+bool ImageReviewController::retainsObservationPosition(const bool hadPrimary) const noexcept {
+    // Zoom/pan are normalized observation state, so they stay meaningful across pair
+    // switches; only the very first pair (or an explicit reset) starts at the default.
+    return hadPrimary;
+}
+
 void ImageReviewController::commitLoadedPrimary(QImage image, QString label, QString identity) {
     primary_ = std::move(image);
     primaryPath_ = std::move(label);
@@ -826,6 +873,8 @@ void ImageReviewController::commitLoadedSecondary(QImage image, QString label, Q
 }
 
 void ImageReviewController::commitLoadedPair(ImagePairLoader::Result result) {
+    const bool hadPrimary = hasPrimary();
+    const QSize previousPrimarySize = primary_.size();
     primary_ = std::move(result.primary);
     secondary_ = std::move(result.secondary);
     primaryPath_ = std::move(result.primaryLabel);
@@ -836,10 +885,22 @@ void ImageReviewController::commitLoadedPair(ImagePairLoader::Result result) {
                                     ? imageContentIdentity(secondary_)
                                     : std::move(result.secondaryIdentity);
     committedPairId_ = result.pairId;
-    compareMode_ = SideBySide;
+    QString modeExplanation;
+    compareMode_ = retainedCompareModeFor(
+        hadPrimary, previousPrimarySize, primary_.size(), secondary_.size(), &modeExplanation);
+    if (!modeExplanation.isEmpty()) {
+        errorText_ = modeExplanation;
+    }
     resetDifferenceState();
-    resetView();
+    if (!retainsObservationPosition(hadPrimary)) {
+        resetView();
+    }
     bumpGeneration();
+    if (isDifferenceMode(compareMode_)) {
+        // A retained diff mode stays live: the new pair's difference is computed on
+        // demand in the background (T4/T6).
+        requestDifferenceForCurrentMode();
+    }
 }
 
 void ImageReviewController::cancelDifferenceRequest() {

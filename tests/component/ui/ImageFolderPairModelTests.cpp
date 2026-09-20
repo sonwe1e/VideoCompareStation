@@ -322,4 +322,202 @@ TEST_F(ImageFolderPairModelTests, CancelPendingAsyncOpenIgnoresLateCompletion) {
     model.completePairOpen(7U, true, QString{});
     EXPECT_EQ(model.currentPair(), -1);
 }
+TEST_F(ImageFolderPairModelTests, LoadFoldersReportsCountsForCompleteAndSingleRows) {
+    static_cast<void>(writeFile(left_, "pair_a.png", "a"));
+    static_cast<void>(writeFile(right_, "pair_a.png", "b"));
+    static_cast<void>(writeFile(left_, "left_only.png", "a"));
+    static_cast<void>(writeFile(right_, "right_only.png", "b"));
+
+    ImageFolderPairModel model;
+    ASSERT_TRUE(model.loadFolders(folderUrl(left_), folderUrl(right_)));
+    EXPECT_EQ(model.pairCount(), 3);
+    EXPECT_EQ(model.completeCount(), 1);
+    EXPECT_EQ(model.missingCount(), 2);
+    EXPECT_EQ(model.conflictCount(), 0);
+}
+
+TEST_F(ImageFolderPairModelTests, MergePairRowsListsCaseConflictsAndPairsCaseInsensitively) {
+    using dvs::ui::ImageFolderPairModel;
+    // Pure-function coverage for the case-conflict semantics, independent of the
+    // filesystem's case sensitivity (T6).
+    ImageFolderPairModel::FolderSideScan left;
+    left.entries.emplace(QStringLiteral("shot.png"), QUrl::fromLocalFile("C:/a/Shot.PNG"));
+    left.names[QStringLiteral("shot.png")] =
+        QStringList{QStringLiteral("Shot.PNG"), QStringLiteral("shot.png")};
+    left.entries.emplace(QStringLiteral("only_left.png"),
+                         QUrl::fromLocalFile("C:/a/only_left.png"));
+    left.names[QStringLiteral("only_left.png")] = QStringList{QStringLiteral("only_left.png")};
+
+    ImageFolderPairModel::FolderSideScan right;
+    right.entries.emplace(QStringLiteral("shot.png"), QUrl::fromLocalFile("C:/b/shot.png"));
+    right.names[QStringLiteral("shot.png")] = QStringList{QStringLiteral("shot.png")};
+    right.entries.emplace(QStringLiteral("only_right.png"),
+                          QUrl::fromLocalFile("C:/b/only_right.png"));
+    right.names[QStringLiteral("only_right.png")] = QStringList{QStringLiteral("only_right.png")};
+
+    const std::vector<ImageFolderPairModel::PairRow> rows =
+        ImageFolderPairModel::mergePairRows(left, right);
+    ASSERT_EQ(rows.size(), 3U);
+    // Sorted by name: only_left, only_right, shot.
+    EXPECT_EQ(rows[0].fileName, QStringLiteral("only_left.png"));
+    EXPECT_TRUE(rows[0].hasLeft);
+    EXPECT_FALSE(rows[0].hasRight);
+    EXPECT_FALSE(rows[0].caseConflict);
+    EXPECT_EQ(rows[1].fileName, QStringLiteral("only_right.png"));
+    EXPECT_TRUE(rows[1].hasRight);
+    EXPECT_FALSE(rows[1].hasLeft);
+    EXPECT_EQ(rows[2].fileName, QStringLiteral("Shot.PNG"));
+    EXPECT_TRUE(rows[2].hasLeft);
+    EXPECT_TRUE(rows[2].hasRight);
+    // The ambiguous A side is listed explicitly with the file actually used.
+    EXPECT_TRUE(rows[2].caseConflict);
+    EXPECT_TRUE(rows[2].caseConflictDetail.contains(QStringLiteral("A 侧")));
+    EXPECT_TRUE(rows[2].caseConflictDetail.contains(QStringLiteral("Shot.PNG")));
+    EXPECT_TRUE(rows[2].caseConflictDetail.contains(QStringLiteral("shot.png")));
+    EXPECT_EQ(rows[2].leftUrl, QUrl::fromLocalFile("C:/a/Shot.PNG"));
+    EXPECT_EQ(rows[2].rightUrl, QUrl::fromLocalFile("C:/b/shot.png"));
+}
+
+TEST_F(ImageFolderPairModelTests, CaseConflictingNamesAreListedExplicitlyNotSilentlyChosen) {
+    // "Shot.PNG" and "shot.png" in one folder fold to the same key: the row must say so
+    // instead of silently picking one of them (T6).
+    static_cast<void>(writeFile(left_, "Shot.PNG", "a"));
+    static_cast<void>(writeFile(left_, "shot.png", "a"));
+    static_cast<void>(writeFile(right_, "shot.png", "b"));
+    const QDir leftDir{left_.path()};
+    int shotEntries = 0;
+    for (const QString& name : leftDir.entryList(QDir::Files, QDir::Name | QDir::IgnoreCase)) {
+        if (name.toCaseFolded() == QStringLiteral("shot.png")) {
+            ++shotEntries;
+        }
+    }
+    if (shotEntries < 2) {
+        GTEST_SKIP() << "filesystem collapses case variants; cannot create a name conflict";
+    }
+
+    ImageFolderPairModel model;
+    ASSERT_TRUE(model.loadFolders(folderUrl(left_), folderUrl(right_)));
+    ASSERT_EQ(model.pairCount(), 1);
+    EXPECT_EQ(model.completeCount(), 1);
+    EXPECT_EQ(model.missingCount(), 0);
+    EXPECT_EQ(model.conflictCount(), 1);
+
+    const QModelIndex row = model.index(0, 0);
+    EXPECT_TRUE(model.data(row, ImageFolderPairModel::CaseConflictRole).toBool());
+    const QString detail = model.data(row, ImageFolderPairModel::CaseConflictDetailRole).toString();
+    EXPECT_TRUE(detail.contains(QStringLiteral("shot.png")));
+    EXPECT_TRUE(detail.contains(QStringLiteral("Shot.PNG")));
+    EXPECT_TRUE(detail.contains(QStringLiteral("A")));
+    // The chosen URL is one of the two conflicting files and is named in the detail, so
+    // the pairing is explicit rather than silent.
+    const QUrl chosen = model.data(row, ImageFolderPairModel::LeftPathRole).toUrl();
+    EXPECT_TRUE(detail.contains(QFileInfo{chosen.toLocalFile()}.fileName()));
+
+    const QVariantMap urls = model.pairUrlsAt(0);
+    EXPECT_EQ(urls.value(QStringLiteral("leftUrl")).toUrl(), chosen);
+    EXPECT_EQ(urls.value(QStringLiteral("rightUrl")).toUrl(),
+              model.data(row, ImageFolderPairModel::RightPathRole).toUrl());
+    EXPECT_TRUE(urls.value(QStringLiteral("hasBoth")).toBool());
+    EXPECT_TRUE(urls.value(QStringLiteral("caseConflict")).toBool());
+    EXPECT_TRUE(urls.value(QStringLiteral("caseConflictDetail")).toString() == detail);
+    EXPECT_TRUE(model.pairUrlsAt(-1).isEmpty());
+    EXPECT_TRUE(model.pairUrlsAt(model.pairCount()).isEmpty());
+}
+
+TEST_F(ImageFolderPairModelTests, CountsReportCompleteMissingAndConflictingRows) {
+    static_cast<void>(writeFile(left_, "pair.png", "a"));
+    static_cast<void>(writeFile(right_, "pair.png", "b"));
+    static_cast<void>(writeFile(left_, "left_only.png", "a"));
+    static_cast<void>(writeFile(right_, "Only_Right.png", "b"));
+    static_cast<void>(writeFile(right_, "only_right.png", "b"));
+    const QDir rightDir{right_.path()};
+    int onlyRightEntries = 0;
+    for (const QString& name : rightDir.entryList(QDir::Files, QDir::Name | QDir::IgnoreCase)) {
+        if (name.toCaseFolded() == QStringLiteral("only_right.png")) {
+            ++onlyRightEntries;
+        }
+    }
+    if (onlyRightEntries < 2) {
+        GTEST_SKIP() << "filesystem collapses case variants; cannot create a name conflict";
+    }
+
+    ImageFolderPairModel model;
+    ASSERT_TRUE(model.loadFolders(folderUrl(left_), folderUrl(right_)));
+    // pair.png is complete; left_only is left-only; the two case variants of
+    // only_right collapse into one explicit conflict row on the right side.
+    EXPECT_EQ(model.pairCount(), 3);
+    EXPECT_EQ(model.completeCount(), 1);
+    EXPECT_EQ(model.missingCount(), 2);
+    EXPECT_EQ(model.conflictCount(), 1);
+}
+
+TEST_F(ImageFolderPairModelTests, SingleSideRowOpensExistingSideAndAdvancesSelectionOnSuccess) {
+    static_cast<void>(writeFile(left_, "shot.png", "a"));
+    static_cast<void>(writeFile(right_, "shot.png", "b"));
+    static_cast<void>(writeFile(right_, "only_right.png", "b"));
+
+    ImageFolderPairModel model;
+    int nextRequestId = 100;
+    std::vector<QUrl> opened;
+    int lastRow = -1;
+    model.setSingleSideOpener(
+        [&opened, &lastRow, &nextRequestId](const QUrl& url, const int row, QString* error) {
+            opened.push_back(url);
+            lastRow = row;
+            if (error != nullptr) {
+                error->clear();
+            }
+            return nextRequestId;
+        });
+    int cancelledRequest = -1;
+    model.setAsyncPairCancel(
+        [&cancelledRequest](const int requestId) { cancelledRequest = requestId; });
+    ASSERT_TRUE(model.loadFolders(folderUrl(left_), folderUrl(right_)));
+    // Rows: only_right (right-only), shot (complete).
+    ASSERT_EQ(model.pairCount(), 2);
+    const int singleRow = 0;
+    EXPECT_FALSE(model.data(model.index(singleRow, 0), ImageFolderPairModel::HasLeftRole).toBool());
+    EXPECT_TRUE(model.data(model.index(singleRow, 0), ImageFolderPairModel::HasRightRole).toBool());
+
+    // Complete rows are not single-side opens.
+    EXPECT_FALSE(model.openSingleSideAt(1));
+    EXPECT_TRUE(opened.empty());
+    // Out-of-range rows are rejected.
+    EXPECT_FALSE(model.openSingleSideAt(-1));
+    EXPECT_FALSE(model.openSingleSideAt(model.pairCount()));
+
+    ASSERT_TRUE(model.openSingleSideAt(singleRow));
+    EXPECT_TRUE(model.openPending());
+    EXPECT_EQ(model.pendingPair(), singleRow);
+    ASSERT_EQ(opened.size(), 1U);
+    EXPECT_EQ(lastRow, singleRow);
+    EXPECT_EQ(opened.front().toLocalFile(),
+              QDir(right_.path()).filePath(QStringLiteral("only_right.png")));
+    EXPECT_EQ(model.currentPair(), -1);
+
+    // A stale completion cannot advance the selection.
+    model.completeSingleSideOpen(99U, true, QString{});
+    EXPECT_EQ(model.currentPair(), -1);
+
+    // Failure surfaces the source and keeps the selection.
+    model.completeSingleSideOpen(100U, false, QStringLiteral("文件损坏"));
+    EXPECT_FALSE(model.openPending());
+    EXPECT_EQ(model.currentPair(), -1);
+    EXPECT_EQ(model.errorText(), QStringLiteral("文件损坏"));
+
+    // Success advances the selection exactly once and clears the failure text.
+    ASSERT_TRUE(model.openSingleSideAt(singleRow));
+    model.completeSingleSideOpen(100U, true, QString{});
+    EXPECT_FALSE(model.openPending());
+    EXPECT_EQ(model.currentPair(), singleRow);
+    EXPECT_TRUE(model.errorText().isEmpty());
+
+    // Cancelling a pending single-side open ignores its late terminal.
+    ASSERT_TRUE(model.openSingleSideAt(singleRow));
+    model.cancelPendingOpen();
+    EXPECT_FALSE(model.openPending());
+    EXPECT_EQ(cancelledRequest, 100);
+    model.completeSingleSideOpen(100U, true, QString{});
+    EXPECT_EQ(model.currentPair(), singleRow);
+}
 } // namespace

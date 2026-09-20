@@ -609,10 +609,11 @@ TEST(ImageReviewControllerTests, BlockedDifferenceCannotPublishOrCacheAfterNewPa
     ASSERT_NE(worker, nullptr);
     QSemaphore entered;
     QSemaphore release;
-    std::atomic<int> visitedRows{0};
+    std::atomic<int> differenceRuns{0};
+    // Only the first difference job (the old pair's) blocks; later jobs run to
+    // completion so the retained-mode recompute for the new pair can be observed.
     worker->setDifferenceRowObserverForTesting([&](const int row) {
-        ++visitedRows;
-        if (row == 0) {
+        if (row == 0 && differenceRuns.fetch_add(1) == 0) {
             entered.release();
             release.tryAcquire(1, 8000);
         }
@@ -623,20 +624,24 @@ TEST(ImageReviewControllerTests, BlockedDifferenceCannotPublishOrCacheAfterNewPa
     EXPECT_GT(controller.requestOpenPair(next, next, 2), 0);
     EXPECT_TRUE(waitUntil([&] { return !controller.openPending(); }));
     EXPECT_EQ(controller.committedPairId(), 2);
-    EXPECT_FALSE(controller.diffPending());
-    EXPECT_FALSE(controller.hasDiffResult());
-    release.release();
-    EXPECT_TRUE(waitUntil([&] { return worker->stats().activeRequests == 0; }));
-    EXPECT_EQ(visitedRows.load(), 1);
-    EXPECT_FALSE(controller.hasDiffResult());
-    EXPECT_EQ(controller.asyncStats().value("diff_cache_entries").toInt(), 0);
-    worker->setDifferenceRowObserverForTesting({});
-    controller.setCompareMode(ImageReviewController::AbsDifference);
-    ASSERT_TRUE(waitForControllerIdle(controller));
+    // T6: the same-size pair switch retains the diff mode, so the new pair's
+    // difference is recomputed and published while the old job is still blocked.
+    EXPECT_TRUE(waitUntil([&controller] { return !controller.diffPending(); }));
     EXPECT_TRUE(controller.hasDiffResult());
     EXPECT_EQ(controller.maxAbsDifference(), 0);
+    EXPECT_EQ(controller.asyncStats().value("diff_cache_entries").toInt(), 1);
+    EXPECT_EQ(differenceRuns.load(), 2);
+
+    // The cancelled old job can no longer publish or cache under the new identity,
+    // even after it is finally allowed to finish.
+    release.release();
+    EXPECT_TRUE(waitUntil([&worker] { return worker->stats().activeRequests == 0; }));
+    EXPECT_EQ(controller.maxAbsDifference(), 0);
+    EXPECT_EQ(controller.asyncStats().value("diff_cache_entries").toInt(), 1);
+    worker->setDifferenceRowObserverForTesting({});
     controller.setCompareMode(ImageReviewController::SideBySide);
     controller.setCompareMode(ImageReviewController::AbsDifference);
+    ASSERT_TRUE(waitForControllerIdle(controller));
     EXPECT_EQ(controller.maxAbsDifference(), 0);
     EXPECT_EQ(controller.asyncStats().value("diff_cache_hits").toInt(), 1);
 }
@@ -745,5 +750,63 @@ TEST(ImageReviewControllerTests, HeaderProbeRejectsOversizedBeforeDecoderThrows)
     EXPECT_FALSE(controller.hasPair());
     EXPECT_FALSE(controller.errorText().isEmpty());
     EXPECT_EQ(decoderCalls.load(), 0);
+}
+TEST(ImageReviewControllerTests, SameSizePairSwitchKeepsModeAndObservationPosition) {
+    ensureCoreApplication();
+    ImageReviewController controller;
+    ASSERT_TRUE(controller.openPairImages(solidImage(QColor(10, 20, 30)),
+                                          QStringLiteral("a0.png"),
+                                          solidImage(QColor(40, 50, 60)),
+                                          QStringLiteral("b0.png"),
+                                          /*pairId=*/0));
+    controller.setCompareMode(ImageReviewController::AbsDifference);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    ASSERT_TRUE(controller.hasDiffResult());
+    controller.setZoom(3.0);
+    controller.panBy(0.1, 0.2);
+    const qreal pannedX = controller.panX();
+
+    // Same-size next pair: the diff mode and the observation position survive the switch.
+    ASSERT_TRUE(controller.openPairImages(solidImage(QColor(10, 20, 31)),
+                                          QStringLiteral("a1.png"),
+                                          solidImage(QColor(40, 50, 61)),
+                                          QStringLiteral("b1.png"),
+                                          /*pairId=*/1));
+    EXPECT_EQ(controller.committedPairId(), 1);
+    EXPECT_EQ(controller.compareMode(), static_cast<int>(ImageReviewController::AbsDifference));
+    EXPECT_DOUBLE_EQ(controller.zoom(), 3.0);
+    EXPECT_DOUBLE_EQ(controller.panX(), pannedX);
+    EXPECT_TRUE(controller.diffPending());
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    // The difference belongs to the new pair, not the old one.
+    ASSERT_TRUE(controller.hasDiffResult());
+    EXPECT_GT(controller.maxAbsDifference(), 0);
+}
+
+TEST(ImageReviewControllerTests, DifferentSizePairSwitchExplainsModeFallback) {
+    ensureCoreApplication();
+    ImageReviewController controller;
+    ASSERT_TRUE(controller.openPairImages(solidImage(QColor(10, 20, 30)),
+                                          QStringLiteral("a0.png"),
+                                          solidImage(QColor(40, 50, 60)),
+                                          QStringLiteral("b0.png"),
+                                          /*pairId=*/0));
+    controller.setCompareMode(ImageReviewController::AbsDifference);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+
+    QImage big(6, 6, QImage::Format_ARGB32);
+    big.fill(QColor(40, 50, 60));
+    ASSERT_TRUE(controller.openPairImages(big,
+                                          QStringLiteral("a1.png"),
+                                          solidImage(QColor(40, 50, 60)),
+                                          QStringLiteral("b1.png"),
+                                          /*pairId=*/1));
+    // A pixel comparison between different sizes would be false, so the mode falls back
+    // to side-by-side with an explicit explanation instead of pretending.
+    EXPECT_EQ(controller.compareMode(), static_cast<int>(ImageReviewController::SideBySide));
+    EXPECT_FALSE(controller.hasDiffResult());
+    EXPECT_TRUE(controller.errorText().contains(QStringLiteral("尺寸")));
+    EXPECT_DOUBLE_EQ(controller.zoom(), 1.0);
+    EXPECT_DOUBLE_EQ(controller.panX(), 0.5);
 }
 } // namespace

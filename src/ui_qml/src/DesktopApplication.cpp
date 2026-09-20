@@ -122,6 +122,17 @@ public:
         folderPairs_->setAsyncPairCancel([review = imageReview_.get()](const int requestId) {
             review->cancelOpenRequest(requestId);
         });
+        // T6: single-sided rows open the side that exists. The row identity rides on the
+        // request as pairId, so the completion can advance that row's selection; each
+        // terminal handler ignores request ids it does not own.
+        folderPairs_->setSingleSideOpener(
+            [review = imageReview_.get()](const QUrl& url, const int row, QString* error) {
+                const int requestId = review->requestOpenPrimary(url, row);
+                if (requestId <= 0 && error != nullptr) {
+                    *error = review->errorText();
+                }
+                return requestId;
+            });
         QObject::connect(
             imageReview_.get(),
             &ImageReviewController::openFinished,
@@ -130,8 +141,11 @@ public:
                 const int requestId, const int pairId, const bool success, const QString& error) {
                 if (pairId >= 0) {
                     // Folder rows use the row index as pairId; loose image opens use -1 and
-                    // must never move the sidebar selection.
+                    // must never move the sidebar selection. Pair and single-side pending
+                    // states each ignore request ids they do not own.
                     folderPairs->completePairOpen(static_cast<quint64>(requestId), success, error);
+                    folderPairs->completeSingleSideOpen(
+                        static_cast<quint64>(requestId), success, error);
                 }
             });
         engine->rootContext()->setContextProperty(QStringLiteral("imageFolderPairs"),

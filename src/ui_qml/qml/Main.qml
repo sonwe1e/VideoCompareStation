@@ -1852,6 +1852,7 @@ ApplicationWindow {
         effectiveViewMode: root.effectiveViewMode
         wipePosition: root.wipePosition
         selectedDifferenceExactness: root.selectedDifferenceExactness
+        selectedDifferenceEdge: root.selectedDifferenceEdge
         differenceThresholdEnabled: root.differenceThresholdEnabled
         differenceThresholdCode: root.differenceThresholdCode
         differenceThresholdPolicy: root.differenceThresholdPolicy

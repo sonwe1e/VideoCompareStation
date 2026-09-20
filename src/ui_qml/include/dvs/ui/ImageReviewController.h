@@ -141,7 +141,9 @@ public:
     // T4 asynchronous entries. Each returns a positive request id when accepted; the final
     // commit or error is delivered through openFinished on the GUI thread. A newer request
     // invalidates older candidates, so a late N cannot replace N+2.
-    Q_INVOKABLE int requestOpenPrimary(const QUrl& url);
+    // pairId carries the caller's row identity (folder single-side rows) so the
+    // completion can advance that list selection; loose opens keep the default -1.
+    Q_INVOKABLE int requestOpenPrimary(const QUrl& url, int pairId = -1);
     Q_INVOKABLE int requestOpenSecondary(const QUrl& url);
     Q_INVOKABLE int requestOpenPair(const QUrl& primary, const QUrl& secondary, int pairId = -1);
     Q_INVOKABLE void cancelPendingOpen();
@@ -182,6 +184,15 @@ private:
     void commitLoadedPrimary(QImage image, QString label, QString identity);
     void commitLoadedSecondary(QImage image, QString label, QString identity);
     void commitLoadedPair(ImagePairLoader::Result result);
+    // T6 observation-context retention for pair commits. hadPrimary/previousPrimarySize
+    // describe the state before the commit; the helpers decide the mode and view the new
+    // pair inherits so switching pairs keeps the user's observation position.
+    [[nodiscard]] int retainedCompareModeFor(bool hadPrimary,
+                                             const QSize& previousPrimarySize,
+                                             const QSize& newPrimarySize,
+                                             const QSize& newSecondarySize,
+                                             QString* explanation) const;
+    [[nodiscard]] bool retainsObservationPosition(bool hadPrimary) const noexcept;
     void cancelDifferenceRequest();
     void resetDifferenceState();
     void requestDifferenceForCurrentMode();
