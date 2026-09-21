@@ -3661,23 +3661,6 @@ TEST(PlaybackCoordinatorTests, ClampsAllEndpointCommandsForAOneFrameComparisonSe
     EXPECT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
     ASSERT_EQ(coordinator->snapshot()->canonicalFrameCount, 1U);
 
-    const auto completeEndpoint = [&](PlaybackCommand command, const std::size_t requestIndex) {
-        ASSERT_EQ(coordinator->submit(std::move(command)), PortSubmitResult::Accepted);
-        ASSERT_TRUE(provider->waitForFrameRequestCount(requestIndex + 1U));
-        const auto request = provider->frameRequest(requestIndex);
-        ASSERT_TRUE(request.has_value());
-        EXPECT_EQ(request->frameId, domain::FrameId{0});
-        ASSERT_TRUE(provider->postFrameReady(*request, makeFrameSet(domain::FrameId{0})));
-        ASSERT_TRUE(render->waitForPublishedCount(requestIndex + 1U));
-        ASSERT_TRUE(provider->postFrameSucceeded(*request));
-        presentPublished(coordinator, render, requestIndex);
-        const auto terminal = waitForTerminals(coordinator, 1U);
-        ASSERT_EQ(terminal.size(), 1U);
-        EXPECT_EQ(terminal.front().outcome, CommandOutcome::Succeeded);
-        EXPECT_EQ(coordinator->snapshot()->displayedFrame, domain::FrameId{0});
-    };
-
-    const auto ready = coordinator->snapshot();
     // -1 at the only frame is a boundary Busy (reverse stream), not a clamped Exact seek to 0.
     ASSERT_EQ(coordinator->submit(StepFramesCommand{
                   .context = commandContext(coordinator, domain::CommandId{2}),

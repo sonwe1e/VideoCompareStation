@@ -1584,6 +1584,70 @@ ApplicationWindow {
         return differenceEdges.length > 0 ? 0 : -1;
     }
 
+    // C-02/C-07: keep renderer edge preference and the session ComparisonPair in lockstep.
+    function applyDifferenceEdge(edge) {
+        if (!preferences)
+            return false;
+        const value = Number(edge);
+        preferences.differenceEdge = value;
+        if (controller && controller.applyComparisonPairFromEdge) {
+            const pairPolicy = preferences ? Number(preferences.defaultPairPolicy) : 2;
+            return Boolean(controller.applyComparisonPairFromEdge(value, pairPolicy));
+        }
+        return false;
+    }
+
+    function applyDefaultPairPolicy(policyCode) {
+        if (!preferences)
+            return false;
+        const value = Number(policyCode);
+        preferences.defaultPairPolicy = value;
+        if (controller && controller.applyComparisonPairFromEdge) {
+            const edge = Number(preferences.differenceEdge);
+            return Boolean(controller.applyComparisonPairFromEdge(edge, value));
+        }
+        return false;
+    }
+
+    function applyPlaybackPreferencesFromSettings() {
+        if (!controller || !preferences)
+            return;
+        if (controller.setPlaybackContinuityPolicy) {
+            const continuity = Number(preferences.playbackContinuityPolicy);
+            if (Number.isFinite(continuity))
+                controller.setPlaybackContinuityPolicy(continuity);
+        }
+        if (controller.applyComparisonPairFromEdge) {
+            const edge = Number(preferences.differenceEdge);
+            const pairPolicy = Number(preferences.defaultPairPolicy);
+            if (Number.isFinite(edge))
+                controller.applyComparisonPairFromEdge(edge, Number.isFinite(pairPolicy) ? pairPolicy : 2);
+        }
+    }
+
+    property string playbackPrefsAppliedKey: ""
+
+    function playbackPrefsSessionKey() {
+        if (!controller || !controller.graphicsReady || Number(controller.sourceCount) <= 0)
+            return "";
+        if (Number(controller.displayState) !== 2) // ReviewDisplayState::Ready
+            return "";
+        const identities = shell && shell.activeSourceIdentities ? String(shell.activeSourceIdentities) : "";
+        return identities.length > 0 ? identities : String(controller.sourceCount) + ":" + String(controller.canonicalSourceIndex);
+    }
+
+    Connections {
+        target: controller
+
+        function onStateChanged() {
+            const key = root.playbackPrefsSessionKey();
+            if (key.length === 0 || key === root.playbackPrefsAppliedKey)
+                return;
+            root.playbackPrefsAppliedKey = key;
+            root.applyPlaybackPreferencesFromSettings();
+        }
+    }
+
     function sourceOffsets() {
         const offsets = [];
 
@@ -1759,6 +1823,14 @@ ApplicationWindow {
         fullScreen: root.fullScreen
         shortcutPreset: root.shortcutPreset
         sourceIdentities: root.shell ? root.shell.activeSourceIdentities : []
+        playbackContinuityPolicy: {
+            if (!controller)
+                return 2;
+            const fromPref = root.preferences
+                ? Number(root.preferences.playbackContinuityPolicy) : 2;
+            const fromSession = Number(controller.playbackContinuityPolicy);
+            return Number.isFinite(fromSession) && controller.displayState === 2 ? fromSession : fromPref;
+        }
         workspaceMode: root.workspaceMode
         imageHasPrimary: Boolean(root.stillImageController && root.stillImageController.hasPrimary)
         imageHasSecondary: Boolean(root.stillImageController && root.stillImageController.hasSecondary)
@@ -2302,7 +2374,7 @@ ApplicationWindow {
             right: parent.right
         }
         onModeRequested: mode => root.preferences.viewMode = mode
-        onEdgeRequested: edge => root.preferences.differenceEdge = edge
+        onEdgeRequested: edge => root.applyDifferenceEdge(edge)
         onInspectorRequested: root.shell.inspectorVisible = !root.inspectorOpen
     }
     Rectangle {
@@ -2367,7 +2439,7 @@ ApplicationWindow {
             bottom: parent.bottom
             bottomMargin: 0
         }
-        onDifferenceEdgeRequested: edge => root.preferences.differenceEdge = edge
+        onDifferenceEdgeRequested: edge => root.applyDifferenceEdge(edge)
         onReferenceRequested: sourceIdentity => root.changeReference(sourceIdentity)
         onDifferenceThresholdEnabledRequested: enabled => root.differenceThresholdEnabled = enabled
         onDifferenceThresholdCodeRequested: code => root.differenceThresholdCode = code
@@ -2787,7 +2859,7 @@ ApplicationWindow {
 
         // qmllint enable unqualified
 
-        onEdgeRequested: edge => root.preferences.differenceEdge = edge
+        onEdgeRequested: edge => root.applyDifferenceEdge(edge)
         onReferenceRequested: sourceIdentity => root.changeReference(sourceIdentity)
         onOpenRequested: root.requestOpenVideos()
         onInspectorRequested: root.shell.inspectorVisible = true

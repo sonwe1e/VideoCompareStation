@@ -20,6 +20,8 @@ VcsMenuBar {
     required property bool fullScreen
     required property int shortcutPreset
     required property var sourceIdentities
+    // C-07 effective/requested continuity code (0 ReviewEveryFrame, 1 RealTime, 2 Contextual).
+    property int playbackContinuityPolicy: 2
     property int workspaceMode: 0
     property bool imageHasPrimary: false
     property bool imageHasSecondary: false
@@ -249,6 +251,10 @@ VcsMenuBar {
                 checked: Number(control.preferences.differenceEdge) === 0
                 onTriggered: {
                     control.preferences.differenceEdge = 0;
+                    if (control.controller && control.controller.applyComparisonPairFromEdge) {
+                        control.controller.applyComparisonPairFromEdge(
+                            0, Number(control.preferences.defaultPairPolicy));
+                    }
                     control.returnViewerFocusAfterClose = true;
                 }
             }
@@ -257,6 +263,10 @@ VcsMenuBar {
                 checked: Number(control.preferences.differenceEdge) === 1
                 onTriggered: {
                     control.preferences.differenceEdge = 1;
+                    if (control.controller && control.controller.applyComparisonPairFromEdge) {
+                        control.controller.applyComparisonPairFromEdge(
+                            1, Number(control.preferences.defaultPairPolicy));
+                    }
                     control.returnViewerFocusAfterClose = true;
                 }
             }
@@ -265,6 +275,102 @@ VcsMenuBar {
                 checked: Number(control.preferences.differenceEdge) === 2
                 onTriggered: {
                     control.preferences.differenceEdge = 2;
+                    if (control.controller && control.controller.applyComparisonPairFromEdge) {
+                        control.controller.applyComparisonPairFromEdge(
+                            2, Number(control.preferences.defaultPairPolicy));
+                    }
+                    control.returnViewerFocusAfterClose = true;
+                }
+            }
+            VcsMenu {
+                id: pairPolicyMenu
+
+                objectName: "defaultPairPolicyMenu"
+                title: qsTr("源对策略")
+                // Persist even without a live session so the next open uses this policy.
+                menuItemEnabled: true
+
+                VcsRadioMenuItem {
+                    objectName: "pairPolicyReferenceAndFirst"
+                    text: qsTr("基准 + 首个候选")
+                    checked: Number(control.preferences.defaultPairPolicy) === 0
+                    onTriggered: {
+                        control.preferences.defaultPairPolicy = 0;
+                        if (control.controller && control.controller.applyComparisonPairFromEdge) {
+                            control.controller.applyComparisonPairFromEdge(
+                                Number(control.preferences.differenceEdge), 0);
+                        }
+                        control.returnViewerFocusAfterClose = true;
+                    }
+                }
+                VcsRadioMenuItem {
+                    objectName: "pairPolicyLastTwo"
+                    text: qsTr("最后两个源")
+                    checked: Number(control.preferences.defaultPairPolicy) === 1
+                    onTriggered: {
+                        control.preferences.defaultPairPolicy = 1;
+                        if (control.controller && control.controller.applyComparisonPairFromEdge) {
+                            control.controller.applyComparisonPairFromEdge(
+                                Number(control.preferences.differenceEdge), 1);
+                        }
+                        control.returnViewerFocusAfterClose = true;
+                    }
+                }
+                VcsRadioMenuItem {
+                    objectName: "pairPolicyPreserve"
+                    text: qsTr("尽量保留当前源对")
+                    checked: Number(control.preferences.defaultPairPolicy) === 2
+                    onTriggered: {
+                        control.preferences.defaultPairPolicy = 2;
+                        if (control.controller && control.controller.applyComparisonPairFromEdge) {
+                            control.controller.applyComparisonPairFromEdge(
+                                Number(control.preferences.differenceEdge), 2);
+                        }
+                        control.returnViewerFocusAfterClose = true;
+                    }
+                }
+            }
+        }
+        VcsMenu {
+            id: continuityMenu
+
+            objectName: "playbackContinuityMenu"
+            title: qsTr("播放连续性")
+            menuItemEnabled: control.videoHasSession
+
+            VcsRadioMenuItem {
+                objectName: "continuityReviewEveryFrame"
+                text: qsTr("逐帧审阅")
+                checked: Number(control.playbackContinuityPolicy) === 0
+                onTriggered: {
+                    control.preferences.playbackContinuityPolicy = 0;
+                    if (control.controller && control.controller.setPlaybackContinuityPolicy) {
+                        control.controller.setPlaybackContinuityPolicy(0);
+                    }
+                    control.returnViewerFocusAfterClose = true;
+                }
+            }
+            VcsRadioMenuItem {
+                objectName: "continuityRealTime"
+                text: qsTr("实时跟播")
+                checked: Number(control.playbackContinuityPolicy) === 1
+                onTriggered: {
+                    control.preferences.playbackContinuityPolicy = 1;
+                    if (control.controller && control.controller.setPlaybackContinuityPolicy) {
+                        control.controller.setPlaybackContinuityPolicy(1);
+                    }
+                    control.returnViewerFocusAfterClose = true;
+                }
+            }
+            VcsRadioMenuItem {
+                objectName: "continuityContextual"
+                text: qsTr("按会话自适应")
+                checked: Number(control.playbackContinuityPolicy) === 2
+                onTriggered: {
+                    control.preferences.playbackContinuityPolicy = 2;
+                    if (control.controller && control.controller.setPlaybackContinuityPolicy) {
+                        control.controller.setPlaybackContinuityPolicy(2);
+                    }
                     control.returnViewerFocusAfterClose = true;
                 }
             }

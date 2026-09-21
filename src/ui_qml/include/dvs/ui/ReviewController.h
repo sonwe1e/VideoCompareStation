@@ -267,6 +267,11 @@ public:
     Q_INVOKABLE bool setPlaybackRange(qint64 inFrame, qint64 outFrame, bool loop);
     Q_INVOKABLE bool playRange(qint64 inFrame, qint64 outFrame);
     Q_INVOKABLE bool stopRangeLoop();
+    // C-07: domain::PlaybackContinuityPolicy code (0 ReviewEveryFrame, 1 RealTime, 2 Contextual).
+    Q_INVOKABLE bool setPlaybackContinuityPolicy(int policyCode);
+    // C-02: project a DifferenceEdge preference (0/1/2) onto a session ComparisonPair using
+    // the live differenceEdges list, then submit SetActiveComparisonPairCommand.
+    Q_INVOKABLE bool applyComparisonPairFromEdge(int preferenceValue, int pairPolicyCode = 2);
     Q_INVOKABLE void refreshProjection() noexcept;
     // Returns the snapshot-frozen identity for a source URL. The value is rebuilt only when the
     // validated comparison pointer changes, so callers see a stable string between commits.

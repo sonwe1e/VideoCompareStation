@@ -952,6 +952,85 @@ public:
         return true;
     }
 
+    // C-07: continuity is a coordinator side-channel; do not latch pendingCommand_ busy.
+    [[nodiscard]] bool submitPlaybackContinuityPolicy(const int policyCode) {
+        if (!onOwnerThread() || stopped_ || !snapshot_) {
+            return false;
+        }
+        const std::optional<application::CommandContext> context = allocateCommandContext();
+        if (!context.has_value()) {
+            return false;
+        }
+        try {
+            return dependencies_.submit(
+                       application::PlaybackCommand{application::SetPlaybackContinuityPolicyCommand{
+                           .context = *context,
+                           .policy = static_cast<domain::PlaybackContinuityPolicy>(policyCode),
+                       }}) == application::PortSubmitResult::Accepted;
+        } catch (...) {
+            return false;
+        }
+    }
+
+    [[nodiscard]] bool setPlaybackContinuityPolicy(const int policyCode) {
+        if (!onOwnerThread() || stopped_) {
+            return false;
+        }
+        refresh();
+        view_.playbackContinuityPolicy = policyCode;
+        desiredContinuityPolicy_ = policyCode;
+        view_.playbackContinuityPolicyName = QString::fromLatin1(
+            domain::playbackContinuityPolicyName(
+                static_cast<domain::PlaybackContinuityPolicy>(policyCode))
+                .data(),
+            static_cast<qsizetype>(domain::playbackContinuityPolicyName(
+                                       static_cast<domain::PlaybackContinuityPolicy>(policyCode))
+                                       .size()));
+        return submitPlaybackContinuityPolicy(policyCode);
+    }
+
+    [[nodiscard]] bool applyComparisonPairFromEdge(const int preferenceValue,
+                                                   const int pairPolicyCode) {
+        if (!onOwnerThread() || stopped_) {
+            return false;
+        }
+        refresh();
+        if (!snapshot_ || !snapshot_->validatedComparison) {
+            return false;
+        }
+        std::optional<domain::ComparisonPair> pair;
+        for (const QVariant& entry : view_.differenceEdges) {
+            const QVariantMap map = entry.toMap();
+            if (map.value(QStringLiteral("preferenceValue")).toInt() != preferenceValue) {
+                continue;
+            }
+            pair = domain::ComparisonPair{
+                .first = static_cast<domain::SourceId>(
+                    map.value(QStringLiteral("firstSourceId")).toULongLong()),
+                .second = static_cast<domain::SourceId>(
+                    map.value(QStringLiteral("secondSourceId")).toULongLong()),
+            };
+            break;
+        }
+        if (!pair.has_value() || !pair->isValid()) {
+            return false;
+        }
+        const std::optional<application::CommandContext> context = allocateCommandContext();
+        if (!context.has_value()) {
+            return false;
+        }
+        try {
+            return dependencies_.submit(
+                       application::PlaybackCommand{application::SetActiveComparisonPairCommand{
+                           .context = *context,
+                           .pair = pair,
+                           .policy = static_cast<domain::DefaultPairPolicy>(pairPolicyCode),
+                       }}) == application::PortSubmitResult::Accepted;
+        } catch (...) {
+            return false;
+        }
+    }
+
     [[nodiscard]] bool playRange(const qint64 inFrame, const qint64 outFrame) {
         if (inFrame < 0 || outFrame < inFrame) {
             return false;
@@ -2022,6 +2101,7 @@ private:
     QString candidateSourceBErrorKey_;
     QString candidateSourceCErrorKey_;
     std::optional<application::CommandContext> pendingCommand_;
+    int desiredContinuityPolicy_ = 2;
     bool pendingCommandClearsCandidateErrors_ = false;
     std::optional<application::CommandContext> pendingNavigationCommand_;
     std::optional<application::CommandContext> pendingTransportCommand_;
@@ -2500,6 +2580,15 @@ bool ReviewController::playRange(const qint64 inFrame, const qint64 outFrame) {
 
 bool ReviewController::stopRangeLoop() {
     return impl_->stopRangeLoop();
+}
+
+bool ReviewController::setPlaybackContinuityPolicy(const int policyCode) {
+    return impl_->setPlaybackContinuityPolicy(policyCode);
+}
+
+bool ReviewController::applyComparisonPairFromEdge(const int preferenceValue,
+                                                   const int pairPolicyCode) {
+    return impl_->applyComparisonPairFromEdge(preferenceValue, pairPolicyCode);
 }
 
 bool ReviewController::togglePlayback() {
