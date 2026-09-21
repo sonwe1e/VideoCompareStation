@@ -1112,6 +1112,25 @@ void markGraphicsReady(const std::shared_ptr<PlaybackCoordinator>& coordinator,
 [[nodiscard]] CommandContext commandContext(const std::shared_ptr<PlaybackCoordinator>& coordinator,
                                             domain::CommandId commandId);
 
+// C-07 default Contextual resolves multi-source to ReviewEveryFrame (no FrameSet skips).
+// Wall-clock catch-up tests must opt into RealTime explicitly.
+void requireRealTimeContinuity(const std::shared_ptr<PlaybackCoordinator>& coordinator,
+                               const domain::CommandId commandId = domain::CommandId{900}) {
+    ASSERT_EQ(coordinator->submit(SetPlaybackContinuityPolicyCommand{
+                  .context = commandContext(coordinator, commandId),
+                  .policy = domain::PlaybackContinuityPolicy::RealTime,
+              }),
+              PortSubmitResult::Accepted);
+    const std::vector<CommandTerminal> terminals = waitForTerminals(coordinator, 1U);
+    ASSERT_EQ(terminals.size(), 1U);
+    EXPECT_EQ(terminals.front().outcome, CommandOutcome::Succeeded);
+    const std::shared_ptr<const SessionSnapshot> snapshot = coordinator->snapshot();
+    ASSERT_NE(snapshot, nullptr);
+    EXPECT_EQ(snapshot->playbackContinuityPolicy, domain::PlaybackContinuityPolicy::RealTime);
+    EXPECT_EQ(snapshot->playbackContinuityPolicyEffective,
+              domain::PlaybackContinuityPolicy::RealTime);
+}
+
 TEST(PlaybackCoordinatorTests, CarriesNonFirstReferenceIdentityIntoProviderOpen) {
     const auto provider = std::make_shared<FakeFrameProvider>();
     const auto render = std::make_shared<FakeRenderChannel>();
@@ -2315,6 +2334,7 @@ TEST(PlaybackCoordinatorTests, SlowDecodeDropsCompleteFrameSetsWithOnePreparedSu
         makeCoordinator(provider, render, std::make_shared<FakeMediaProbe>(), scheduler, clock);
     markGraphicsReady(coordinator);
     openReady(coordinator, provider, render);
+    requireRealTimeContinuity(coordinator);
 
     ASSERT_EQ(coordinator->submit(
                   PlayCommand{.context = commandContext(coordinator, domain::CommandId{2})}),
@@ -2404,6 +2424,7 @@ TEST(PlaybackCoordinatorTests, FinalFrameAutoPausesAndPlayFromEndRestartsAtZero)
         makeCoordinator(provider, render, std::make_shared<FakeMediaProbe>(), scheduler, clock);
     markGraphicsReady(coordinator);
     openReady(coordinator, provider, render);
+    requireRealTimeContinuity(coordinator);
 
     ASSERT_EQ(coordinator->submit(
                   PlayCommand{.context = commandContext(coordinator, domain::CommandId{2})}),
@@ -4335,6 +4356,7 @@ TEST(PlaybackCoordinatorTests,
 
     openVfrReady(coordinator, probe, provider, render, timeline, descriptorA, descriptorB);
     markGraphicsReady(coordinator);
+    requireRealTimeContinuity(coordinator, domain::CommandId{901});
 
     const std::shared_ptr<const SessionSnapshot> ready = coordinator->snapshot();
     ASSERT_EQ(coordinator->submit(PlayCommand{
