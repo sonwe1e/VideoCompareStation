@@ -17,7 +17,6 @@ Item {
     required property int currentFrame
     required property int inFrame
     required property int outFrame
-    required property int sourceCount
     property alias actions: reviewActions
 
     signal wipePositionRequested(real position)
@@ -29,9 +28,6 @@ Item {
     signal inPointRequested
     signal outPointRequested
     signal selectedRangePlaybackRequested
-    signal openVideosRequested
-    signal addVideoRequested
-    signal closeVideosRequested
 
     visible: false
 
@@ -207,23 +203,5 @@ Item {
         context: Qt.ApplicationShortcut
         enabled: control.shortcutsEnabled && control.inFrame >= 0 && control.outFrame >= control.inFrame
         onActivated: control.selectedRangePlaybackRequested()
-    }
-    Shortcut {
-        sequence: "Ctrl+O"
-        context: Qt.ApplicationShortcut
-        enabled: control.shortcutsEnabled
-        onActivated: control.openVideosRequested()
-    }
-    Shortcut {
-        sequence: "Ctrl+Shift+O"
-        context: Qt.ApplicationShortcut
-        enabled: control.shortcutsEnabled && control.sourceCount > 0 && control.sourceCount < 3
-        onActivated: control.addVideoRequested()
-    }
-    Shortcut {
-        sequence: "Ctrl+W"
-        context: Qt.ApplicationShortcut
-        enabled: control.shortcutsEnabled && control.sourceCount > 0
-        onActivated: control.closeVideosRequested()
     }
 }

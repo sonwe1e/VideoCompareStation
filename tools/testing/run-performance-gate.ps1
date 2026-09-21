@@ -1,3 +1,4 @@
+#requires -Version 7.0
 param(
     [Parameter(Mandatory = $true)]
     [ValidateSet(
@@ -261,6 +262,8 @@ $heldStepSequentialRatio = [double]$json.held_step_sequential_ratio
 $heldStepExactSeekDelta = [int]$json.held_step_exact_seek_delta
 $heldStepDecoderReopenCount = [int]$json.held_step_decoder_reopen_count
 $heldStepP95 = [double]$json.held_step_p95_ms
+$heldStepSubmitted = [int]$json.held_step_submitted_frames
+$heldStepPresented = [int]$json.held_step_presented_frames
 
 if ($null -eq $json.held_step_sequence_errors) {
     throw "The $runName gate did not report held_step_sequence_errors; the HeldStepping stage did not run."
@@ -308,6 +311,19 @@ if ($heldStepDecoderReopenCount -ne 0) {
 # here; the sequence-error and sequential-ratio gates are the effective correctness signal. "0
 # partial FrameSets" is verified implicitly (a partial set would surface as a sequence error).
 
+# Held-window completion accounting: every submitted step must be presented. The executable
+# hard-fails on this too, but checking here keeps a mismatch visible in gate output even when
+# running an older binary, and documents the exact invariant being asserted.
+if ($null -eq $json.held_step_submitted_frames) {
+    throw "The $runName gate did not report held_step_submitted_frames; the probe binary is older than this gate."
+}
+if ($heldStepPresented -ne $heldStepSubmitted) {
+    throw (
+        "The $runName held-forward gate presented $heldStepPresented frames for " +
+        "$heldStepSubmitted submissions; every submission must commit exactly one frame."
+    )
+}
+
 # P95 threshold: recorded metric + soft warning. No 1.4.5 held-forward baseline exists yet, so the
 # absolute hardware-normalized threshold cannot be enforced (plan: "once baseline data exists").
 # Log the value so the first baseline is captured when this gate runs on reference hardware.
@@ -321,7 +337,8 @@ if ($heldStepP95 -lt 0) {
 
 $summaryTemplate =
     'DVS_GATE_PASSED profile={0} mode={1} duration={2}s presented={3} dropped={4} ' +
-    'seek_p95={5}ms shutdown={6}ms held_step_p95={7}ms sequential_ratio={8:N3}'
+    'seek_p95={5}ms shutdown={6}ms held_step_p95={7}ms sequential_ratio={8:N3} ' +
+    'held_step_presented={9}/{10}'
 Write-Output (
     $summaryTemplate -f
     $Profile,
@@ -332,5 +349,7 @@ Write-Output (
     $json.seek_p95_ms,
     $json.shutdown_ms,
     $json.held_step_p95_ms,
-    $json.held_step_sequential_ratio
+    $json.held_step_sequential_ratio,
+    $heldStepPresented,
+    $heldStepSubmitted
 )

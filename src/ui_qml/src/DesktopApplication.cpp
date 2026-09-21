@@ -1,7 +1,10 @@
 #include "dvs/ui/DesktopApplication.h"
 
 #include "dvs/ui/ComparisonSurface.h"
+#include "dvs/ui/DiagnosticsProbe.h"
+#include "dvs/ui/ImageFolderPairModel.h"
 #include "dvs/ui/ImageReviewController.h"
+#include "dvs/ui/IssueLogController.h"
 #include "dvs/ui/ReviewController.h"
 #include "dvs/ui/ReviewImageProvider.h"
 #include "dvs/ui/ReviewPreferencesController.h"
@@ -79,6 +82,10 @@ public:
         releaseSceneGraph();
     }
 
+    void setIssueRecordRepository(application::IIssueRecordRepository* repository) noexcept {
+        issueRecordRepository_ = repository;
+    }
+
     [[nodiscard]] bool load(ReviewController& controller,
                             ReviewPreferencesController& preferences,
                             SurfaceBinder bindSurface) {
@@ -105,6 +112,61 @@ public:
                                                   imageReview_.get());
         engine->addImageProvider(QStringLiteral("vcs-review"),
                                  new ReviewImageProvider(imageReview_.get()));
+        folderPairs_ = std::make_unique<ImageFolderPairModel>();
+        folderPairs_->setAsyncPairOpener(
+            [review = imageReview_.get()](
+                const QUrl& primary, const QUrl& secondary, const int pairId, QString* error) {
+                // T4: accept the candidate asynchronously. The controller keeps the previous
+                // committed pair visible until both sides decode, then emits openFinished once.
+                const int requestId = review->requestOpenPair(primary, secondary, pairId);
+                if (requestId <= 0 && error != nullptr) {
+                    *error = review->errorText();
+                }
+                return requestId;
+            });
+        folderPairs_->setAsyncPairCancel([review = imageReview_.get()](const int requestId) {
+            review->cancelOpenRequest(requestId);
+        });
+        // T6: single-sided rows open the side that exists. The row identity rides on the
+        // request as pairId, so the completion can advance that row's selection; each
+        // terminal handler ignores request ids it does not own.
+        folderPairs_->setSingleSideOpener(
+            [review = imageReview_.get()](const QUrl& url, const int row, QString* error) {
+                const int requestId = review->requestOpenPrimary(url, row);
+                if (requestId <= 0 && error != nullptr) {
+                    *error = review->errorText();
+                }
+                return requestId;
+            });
+        QObject::connect(
+            imageReview_.get(),
+            &ImageReviewController::openFinished,
+            folderPairs_.get(),
+            [folderPairs = folderPairs_.get()](
+                const int requestId, const int pairId, const bool success, const QString& error) {
+                if (pairId >= 0) {
+                    // Folder rows use the row index as pairId; loose image opens use -1 and
+                    // must never move the sidebar selection. Pair and single-side pending
+                    // states each ignore request ids they do not own.
+                    folderPairs->completePairOpen(static_cast<quint64>(requestId), success, error);
+                    folderPairs->completeSingleSideOpen(
+                        static_cast<quint64>(requestId), success, error);
+                }
+            });
+        engine->rootContext()->setContextProperty(QStringLiteral("imageFolderPairs"),
+                                                  folderPairs_.get());
+        issueLog_ = std::make_unique<IssueLogController>(issueRecordRepository_);
+        issueLog_->setReviewController(&controller);
+        issueLog_->setPreferences(&preferences);
+        issueLog_->setFolderModel(folderPairs_.get());
+        issueLog_->setImageController(imageReview_.get());
+        engine->rootContext()->setContextProperty(QStringLiteral("issueLog"), issueLog_.get());
+        // UI observation bridge: forwards QML scene-graph operations (timeline thumbnail grabs)
+        // into the bounded trace buffer so playback evidence can correlate them with pipeline
+        // timing. With tracing disabled every call is one atomic load and a branch.
+        diagnosticsProbe_ = std::make_unique<DiagnosticsProbe>();
+        engine->rootContext()->setContextProperty(QStringLiteral("dvsDiagnostics"),
+                                                  diagnosticsProbe_.get());
         const QMetaObject::Connection warningConnection = QObject::connect(
             engine.get(),
             &QQmlEngine::warnings,
@@ -160,6 +222,9 @@ public:
         engine_ = std::move(engine);
         window_ = window;
         surface_ = surface;
+        if (issueLog_ != nullptr && surface_ != nullptr) {
+            issueLog_->setVideoSurface(surface_);
+        }
         windowDestroyedConnection_ =
             QObject::connect(window, &QObject::destroyed, [this] { window_ = nullptr; });
         surfaceDestroyedConnection_ =
@@ -224,17 +289,55 @@ public:
             return false;
         }
         // Automation reports whether the UI accepted the action. Media validation failures are
-        // intentionally projected through ReviewController and asserted by the smoke state machine.
+        // intentionally projected through ReviewController and asserted by the smoke state machine,
+        // so a synchronous submit rejection must not be reported as an automation failure here.
         static_cast<void>(shellController_->openStagedSources(false));
+        static_cast<void>(
+            QMetaObject::invokeMethod(window_, "activateWorkspace", Q_ARG(QVariant, QVariant{0})));
         return true;
     }
 
     [[nodiscard]] bool openStillImageForAutomation(const QUrl& url) noexcept {
-        if (imageReview_ == nullptr || window_ == nullptr || !url.isValid()) {
+        if (window_ == nullptr || !url.isValid()) {
             return false;
         }
-        static_cast<void>(window_->setProperty("workspaceMode", 1));
-        return imageReview_->openPrimary(url);
+        // Route through the same QML commit boundary as the menu/drop paths so workspace
+        // intent and committed task identity stay consistent under automation.
+        QVariantList urls;
+        urls.push_back(url);
+        QVariant opened;
+        if (!QMetaObject::invokeMethod(window_,
+                                       "performImageReview",
+                                       Q_RETURN_ARG(QVariant, opened),
+                                       Q_ARG(QVariant, QVariant{urls}))) {
+            return false;
+        }
+        return opened.toBool();
+    }
+
+    [[nodiscard]] bool loadFolderComparisonForAutomation(const QUrl& left,
+                                                         const QUrl& right) noexcept {
+        if (folderPairs_ == nullptr || window_ == nullptr || !left.isValid() || !right.isValid()) {
+            return false;
+        }
+        if (!window_->setProperty("imageFolderLeftUrl", left) ||
+            !window_->setProperty("imageFolderRightUrl", right)) {
+            return false;
+        }
+        QVariant loaded;
+        if (!QMetaObject::invokeMethod(
+                window_, "loadFolderComparison", Q_RETURN_ARG(QVariant, loaded))) {
+            return false;
+        }
+        return loaded.toBool();
+    }
+
+    [[nodiscard]] QObject* imageReviewForAutomation() const noexcept {
+        return imageReview_.get();
+    }
+
+    [[nodiscard]] QObject* folderPairModelForAutomation() const noexcept {
+        return folderPairs_.get();
     }
 
     [[nodiscard]] bool clickControlForAutomation(const std::string_view objectName) noexcept {
@@ -559,6 +662,10 @@ private:
     std::unique_ptr<ReviewShellController> shellController_;
     std::unique_ptr<ReviewSessionFacade> sessionFacade_;
     std::unique_ptr<ImageReviewController> imageReview_;
+    std::unique_ptr<ImageFolderPairModel> folderPairs_;
+    application::IIssueRecordRepository* issueRecordRepository_ = nullptr;
+    std::unique_ptr<IssueLogController> issueLog_;
+    std::unique_ptr<DiagnosticsProbe> diagnosticsProbe_;
     QQuickWindow* window_ = nullptr;
     ComparisonSurface* surface_ = nullptr;
     double activeScreenRefreshRate_ = 0.0;
@@ -576,6 +683,11 @@ bool DesktopApplication::load(ReviewController& controller,
                               ReviewPreferencesController& preferences,
                               SurfaceBinder bindSurface) {
     return impl_->load(controller, preferences, std::move(bindSurface));
+}
+
+void DesktopApplication::setIssueRecordRepository(
+    application::IIssueRecordRepository* repository) noexcept {
+    impl_->setIssueRecordRepository(repository);
 }
 
 int DesktopApplication::exec() {
@@ -604,6 +716,19 @@ bool DesktopApplication::openSourcesForAutomation(const QList<QUrl>& sources) no
 
 bool DesktopApplication::openStillImageForAutomation(const QUrl& url) noexcept {
     return impl_->openStillImageForAutomation(url);
+}
+
+bool DesktopApplication::loadFolderComparisonForAutomation(const QUrl& left,
+                                                           const QUrl& right) noexcept {
+    return impl_->loadFolderComparisonForAutomation(left, right);
+}
+
+QObject* DesktopApplication::imageReviewForAutomation() const noexcept {
+    return impl_->imageReviewForAutomation();
+}
+
+QObject* DesktopApplication::folderPairModelForAutomation() const noexcept {
+    return impl_->folderPairModelForAutomation();
 }
 
 bool DesktopApplication::clickControlForAutomation(const std::string_view objectName) noexcept {

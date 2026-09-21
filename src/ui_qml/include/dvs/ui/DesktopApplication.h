@@ -10,7 +10,11 @@
 #include <string>
 #include <string_view>
 
-namespace dvs::ui {
+namespace dvs {
+namespace application {
+class IIssueRecordRepository;
+}
+namespace ui {
 
 class ComparisonSurface;
 class ReviewController;
@@ -41,6 +45,9 @@ public:
     [[nodiscard]] bool load(ReviewController& controller,
                             ReviewPreferencesController& preferences,
                             SurfaceBinder bindSurface);
+    // Optional T7 injection. Must be set before load(); the composition root owns the concrete
+    // persistence adapter so ui_qml never links persistence_json directly.
+    void setIssueRecordRepository(application::IIssueRecordRepository* repository) noexcept;
     [[nodiscard]] int exec();
     void exit(int exitCode) noexcept;
     [[nodiscard]] double activeScreenRefreshRate() const noexcept;
@@ -53,6 +60,15 @@ public:
     [[nodiscard]] bool openSourcesForAutomation(const QList<QUrl>& sources) noexcept;
     // Opens a still image in the image workspace (smoke/debug and CLI --open-still).
     [[nodiscard]] bool openStillImageForAutomation(const QUrl& url) noexcept;
+    // Loads two folders into the image-folder pair model and opens the first complete pair
+    // (P4 evidence automation). Returns false when the UI is not ready, the folders fail to
+    // load, or no complete pair exists.
+    [[nodiscard]] bool loadFolderComparisonForAutomation(const QUrl& left,
+                                                         const QUrl& right) noexcept;
+    // Automation accessors for the P4 image-folder evidence entry. Non-owning; the returned
+    // objects are valid for the lifetime of the DesktopApplication.
+    [[nodiscard]] QObject* imageReviewForAutomation() const noexcept;
+    [[nodiscard]] QObject* folderPairModelForAutomation() const noexcept;
     [[nodiscard]] bool clickControlForAutomation(std::string_view objectName) noexcept;
     [[nodiscard]] bool focusControlForAutomation(std::string_view objectName) noexcept;
     [[nodiscard]] bool clickTimelineForAutomation(double normalizedPosition) noexcept;
@@ -92,4 +108,5 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace dvs::ui
+} // namespace ui
+} // namespace dvs

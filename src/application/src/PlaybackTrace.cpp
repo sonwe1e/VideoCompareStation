@@ -14,11 +14,12 @@ void PlaybackTraceBuffer::setSink(ITraceSink* sink) noexcept {
 }
 
 bool PlaybackTraceBuffer::record(const TraceEvent event) noexcept {
-    std::unique_lock lock(mutex_, std::try_to_lock);
-    if (!lock.owns_lock()) {
-        overflow_.fetch_add(1U, std::memory_order_relaxed);
-        return false;
-    }
+    // Blocking lock: the critical section is a single-event copy (nanoseconds), and producers
+    // never touch the sink or do I/O here, so a brief serialization cannot stall playback.
+    // try-lock previously dropped events under producer-producer contention, which made
+    // multi-source traces (several decode workers + render + UI threads) fail the gate with
+    // sub-percent losses even when the ring was far from full.
+    std::lock_guard lock(mutex_);
     // Monotonic positions distinguish empty from full without sacrificing a queue slot.
     if (head_ - tail_ >= kCapacity) {
         overflow_.fetch_add(1U, std::memory_order_relaxed);

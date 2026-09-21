@@ -36,20 +36,24 @@ void expectAcknowledgement(const application::FrameSetPresented& actual,
     EXPECT_EQ(actual.frameId, expected.frameId);
 }
 
-TEST(PresentationAckMailboxTests, PreservesTwoEntriesUnderPressureWithoutOverwriting) {
+TEST(PresentationAckMailboxTests, PreservesFullCapacityUnderPressureWithoutOverwriting) {
     PresentationAckMailbox mailbox;
-    const application::FrameSetPresented first = makeAcknowledgement(1U);
-    const application::FrameSetPresented second = makeAcknowledgement(2U);
-    const application::FrameSetPresented third = makeAcknowledgement(3U);
+    const auto first = makeAcknowledgement(1U);
+    const auto second = makeAcknowledgement(2U);
+    const auto third = makeAcknowledgement(3U);
+    const auto fourth = makeAcknowledgement(4U);
+    const auto fifth = makeAcknowledgement(5U);
 
     ASSERT_EQ(mailbox.tryPush(first), PresentationAckPushResult::Accepted);
     ASSERT_EQ(mailbox.tryPush(second), PresentationAckPushResult::Accepted);
-    EXPECT_EQ(mailbox.tryPush(third), PresentationAckPushResult::Full);
+    ASSERT_EQ(mailbox.tryPush(third), PresentationAckPushResult::Accepted);
+    ASSERT_EQ(mailbox.tryPush(fourth), PresentationAckPushResult::Accepted);
+    EXPECT_EQ(mailbox.tryPush(fifth), PresentationAckPushResult::Full);
 
     std::optional<application::FrameSetPresented> popped = mailbox.tryPop();
     ASSERT_TRUE(popped.has_value());
     expectAcknowledgement(*popped, first);
-    ASSERT_EQ(mailbox.tryPush(third), PresentationAckPushResult::Accepted);
+    ASSERT_EQ(mailbox.tryPush(fifth), PresentationAckPushResult::Accepted);
 
     popped = mailbox.tryPop();
     ASSERT_TRUE(popped.has_value());
@@ -57,6 +61,12 @@ TEST(PresentationAckMailboxTests, PreservesTwoEntriesUnderPressureWithoutOverwri
     popped = mailbox.tryPop();
     ASSERT_TRUE(popped.has_value());
     expectAcknowledgement(*popped, third);
+    popped = mailbox.tryPop();
+    ASSERT_TRUE(popped.has_value());
+    expectAcknowledgement(*popped, fourth);
+    popped = mailbox.tryPop();
+    ASSERT_TRUE(popped.has_value());
+    expectAcknowledgement(*popped, fifth);
     EXPECT_FALSE(mailbox.tryPop().has_value());
 }
 

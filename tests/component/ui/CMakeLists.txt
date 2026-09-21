@@ -2,7 +2,10 @@ include(GoogleTest)
 
 add_executable(
     dvs_ui_component_tests
+    DiagnosticsProbeTests.cpp
+    IssueLogControllerTests.cpp
     ReviewControllerTests.cpp
+    "${PROJECT_SOURCE_DIR}/src/app/RuntimeBridges.cpp"
     ReviewPreferencesControllerTests.cpp
     SourceIdentityTests.cpp
 )
@@ -10,11 +13,13 @@ target_link_libraries(
     dvs_ui_component_tests
     PRIVATE
         dvs_ui_qml
+        dvs_media_ffmpeg
+        dvs_persistence_json
         dvs::test_dependencies
 )
 target_include_directories(
     dvs_ui_component_tests
-    PRIVATE "${PROJECT_SOURCE_DIR}/src/ui_qml/src"
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/ui_qml/src" "${PROJECT_SOURCE_DIR}/src/app"
 )
 
 dvs_apply_project_warnings(dvs_ui_component_tests)
@@ -49,6 +54,32 @@ set_target_properties(
 
 dvs_add_gtest(
     TARGET dvs_image_review_controller_tests
+    TEST_PREFIX "ui."
+    LAYER component
+    MODULE ui_qml
+    TIMEOUT 10
+)
+
+add_executable(
+    dvs_image_folder_pair_model_tests
+    ImageFolderPairModelTests.cpp
+)
+target_link_libraries(
+    dvs_image_folder_pair_model_tests
+    PRIVATE
+        dvs_ui_qml
+        dvs::qt_dependencies
+        dvs::test_dependencies
+)
+
+dvs_apply_project_warnings(dvs_image_folder_pair_model_tests)
+set_target_properties(
+    dvs_image_folder_pair_model_tests
+    PROPERTIES FOLDER "Tests/Component/UI"
+)
+
+dvs_add_gtest(
+    TARGET dvs_image_folder_pair_model_tests
     TEST_PREFIX "ui."
     LAYER component
     MODULE ui_qml
@@ -159,7 +190,7 @@ set_tests_properties(
         RUN_SERIAL TRUE
 )
 
-foreach(dvs_review_shell_test IN ITEMS empty_review_view player_osc timeline_tracks)
+foreach(dvs_review_shell_test IN ITEMS empty_review_view player_osc timeline_tracks timeline_thumbnail_cache)
     add_test(
         NAME "ui.${dvs_review_shell_test}"
         COMMAND

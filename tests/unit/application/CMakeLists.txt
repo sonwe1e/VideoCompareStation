@@ -6,6 +6,7 @@ add_executable(
     AlignmentWorkEstimatorTests.cpp
     ContractCompileTests.cpp
     ComparisonExactnessTests.cpp
+    IssueRecordTests.cpp
     PlaybackCoordinatorTests.cpp
     PlaybackTraceTests.cpp
     PrefetchSchedulerTests.cpp

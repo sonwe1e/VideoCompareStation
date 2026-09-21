@@ -354,6 +354,8 @@ struct ReviewView final {
     QString sourceBFilename;
     QString sourceCFilename;
     QVariantList sourceUrls;
+    QStringList sourceParentLabels;
+    QStringList sourceFullPaths;
     int sourceCount = 0;
     int canonicalSourceIndex = -1;
     int referenceSourceIndex = -1;
@@ -1525,6 +1527,13 @@ private:
         std::vector<SourceListRow> sourceRows;
         if (snapshot_) {
             sourceRows.reserve(snapshot_->sources.size());
+            // Same-named sources stay distinguishable by appending each parent folder to
+            // the filename; unique names keep the compact filename-only label.
+            std::vector<QString> rowFilenames;
+            rowFilenames.reserve(snapshot_->sources.size());
+            for (const application::SessionSourceView& source : snapshot_->sources) {
+                rowFilenames.push_back(QString::fromStdString(source.displayName));
+            }
             for (const application::SessionSourceView& source : snapshot_->sources) {
                 const auto presented =
                     std::find_if(snapshot_->presentedSources.begin(),
@@ -1565,10 +1574,22 @@ private:
                             // projection filesystem-free when an incomplete adapter omits it.
                             row.sourceIdentity = QDir::cleanPath(path).toCaseFolded();
                         }
+                        row.fullPath = path;
                         const auto changedOnDisk = changedOnDiskByPath_.constFind(frozenKey);
                         if (changedOnDisk != changedOnDiskByPath_.cend()) {
                             row.changedOnDisk = *changedOnDisk;
                         }
+                    }
+                    const QString displayName = QString::fromStdString(source.displayName);
+                    const std::size_t duplicateCount = std::count_if(
+                        rowFilenames.cbegin(),
+                        rowFilenames.cend(),
+                        [&displayName](const QString& value) {
+                            return value.compare(displayName, Qt::CaseInsensitive) == 0;
+                        });
+                    if (duplicateCount > 1U) {
+                        const QFileInfo info{row.fullPath};
+                        row.parentLabel = info.dir().dirName();
                     }
                 }
                 if (presented != snapshot_->presentedSources.end()) {
@@ -1589,10 +1610,23 @@ private:
                 }
                 sourceRows.push_back(std::move(row));
             }
+            // Per-slot hover/label extras: keep slot order (A/B/C) stable regardless of
+            // which sources survived validation.
+            next.sourceParentLabels.clear();
+            next.sourceFullPaths.clear();
+            for (const SourceListRow& row : sourceRows) {
+                next.sourceParentLabels.push_back(row.parentLabel);
+                next.sourceFullPaths.push_back(row.fullPath);
+            }
         }
         for (std::size_t first = 0U; first < sourceRows.size(); ++first) {
             for (std::size_t second = first + 1U; second < sourceRows.size(); ++second) {
                 const int preferenceValue = first == 0U && second == 1U ? 0 : (first == 0U ? 1 : 2);
+                const application::ComparisonExactnessDimensions dimensions =
+                    snapshot_
+                        ? application::comparisonExactnessDimensions(
+                              *snapshot_, sourceRows[first].sourceId, sourceRows[second].sourceId)
+                        : application::ComparisonExactnessDimensions{};
                 next.differenceEdges.push_back(QVariantMap{
                     {QStringLiteral("label"),
                      QStringLiteral("%1 ↔ %2").arg(sourceName(sourceRows[first].sourceId),
@@ -1608,6 +1642,12 @@ private:
                                                                       sourceRows[first].sourceId,
                                                                       sourceRows[second].sourceId)
                                    : application::ComparisonExactness::Unavailable)},
+                    // T6: every inexactness dimension is projected independently so the
+                    // view can present them side by side instead of only the top enum.
+                    {QStringLiteral("dimensionsAvailable"), dimensions.available ? 1 : 0},
+                    {QStringLiteral("temporalExact"), dimensions.temporalExact ? 1 : 0},
+                    {QStringLiteral("spatialExact"), dimensions.spatialExact ? 1 : 0},
+                    {QStringLiteral("pixelExact"), dimensions.pixelExact ? 1 : 0},
                 });
             }
         }
@@ -1661,6 +1701,12 @@ private:
                                            normalized.differenceEdges = view_.differenceEdges;
                                            normalized.canPrevious = view_.canPrevious;
                                            normalized.canNext = view_.canNext;
+                                           // Timecode/media time are derived from the frame
+                                           // position and canonical timeline, so they are
+                                           // frame-scoped state: their change must not widen a
+                                           // frame-only advance into a broad notification.
+                                           normalized.currentTimecode = view_.currentTimecode;
+                                           normalized.currentMediaTime = view_.currentMediaTime;
                                            return !(normalized == view_);
                                        }());
         if (changed) {
@@ -1866,6 +1912,14 @@ QString ReviewController::sourceCFilename() const {
 
 QVariantList ReviewController::sourceUrls() const {
     return impl_->view().sourceUrls;
+}
+
+QStringList ReviewController::sourceParentLabels() const {
+    return impl_->view().sourceParentLabels;
+}
+
+QStringList ReviewController::sourceFullPaths() const {
+    return impl_->view().sourceFullPaths;
 }
 
 QVariantList ReviewController::activeSources() const {
@@ -2157,6 +2211,14 @@ QVariantMap ReviewController::handleDroppedUrls(const QVariantList& urls) const 
         {QStringLiteral("kind"), allImages ? QStringLiteral("images") : QStringLiteral("videos")},
         {QStringLiteral("urls"), normalizedUrls},
     };
+}
+
+bool ReviewController::isFolderPath(const QUrl& url) const {
+    if (!url.isLocalFile()) {
+        return false;
+    }
+    const QFileInfo info{url.toLocalFile()};
+    return info.isDir();
 }
 
 bool ReviewController::first() {

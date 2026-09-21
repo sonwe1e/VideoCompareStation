@@ -36,7 +36,9 @@ struct SourceDecodeRequest final {
     SourceDecodePriority priority = SourceDecodePriority::Exact;
     bool continueSequentially = false;
     std::uint8_t readAheadCount = 0U;
-    const std::atomic<bool>* cancellationRequested = nullptr;
+    // Shared ownership: speculative read-ahead outlives the completion callback that is the
+    // provider's last guarantee the referenced flag storage stays alive.
+    std::shared_ptr<const std::atomic<bool>> cancellationRequested;
     std::optional<application::FrameRequestContext> context;
 };
 

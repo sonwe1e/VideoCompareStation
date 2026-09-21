@@ -503,6 +503,11 @@ void SourceDecodeActor::run() noexcept {
         domain::Result<DecodedFrame> result = domain::Result<DecodedFrame>::failure(
             actorError(sourceId_, "The source decoder could not be reopened after interruption."));
         if (selectedDecoderNeedsReopen) {
+            application::PlaybackTrace::instance().record(
+                application::TraceEventKind::DecoderReopen,
+                application::TraceIdentity{
+                    .request = domain::RequestId{static_cast<std::uint64_t>(sourceId_)}},
+                static_cast<std::uint64_t>(decode->request.frameId.value()));
             const domain::Status reopened =
                 selectedDecoder.open(*decode->request.cancellationRequested);
             if (reopened) {
@@ -518,10 +523,13 @@ void SourceDecodeActor::run() noexcept {
                          : selectedDecoder.decodeExact(decode->request.frameId,
                                                        *decode->request.cancellationRequested);
         }
-        if (!result) {
+        if (!result && !selectedDecoder.lastDecodeInterrupted()) {
             // FFmpeg may have stopped while an AVIO packet was only partially consumed. Reopen
             // from the actor before this decoder accepts another request; the decoder itself
             // remains a single-operation component and never mutates its lifecycle recursively.
+            // An interrupted decode is excluded: cancellation is a clean stop that already
+            // flushed the codec and demuxer state, and every exact request re-seeks before it
+            // decodes, so reopening would only re-open the same file for nothing.
             selectedDecoderNeedsReopen = true;
         }
         const auto decodeMicroseconds =

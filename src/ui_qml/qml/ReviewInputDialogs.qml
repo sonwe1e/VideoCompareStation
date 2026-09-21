@@ -14,7 +14,9 @@ Item {
     readonly property bool modalVisible: comparisonDialog.visible || videoFilesDialog.visible || addVideoDialog.visible
 
     signal openVideosAccepted(var urls)
+    signal openVideosRejected
     signal addVideoAccepted(url url)
+    signal addVideoRejected
     signal moveRequested(int fromIndex, int toIndex)
     signal comparisonAccepted(int referenceIndex)
     signal comparisonRejected
@@ -39,6 +41,7 @@ Item {
         fileMode: NativeDialogs.FileDialog.OpenFiles
         nameFilters: [qsTr("视频文件 (*.mp4 *.mkv *.mov *.avi *.m4v)"), qsTr("所有文件 (*)")]
         onAccepted: control.openVideosAccepted(selectedFiles)
+        onRejected: control.openVideosRejected()
     }
 
     NativeDialogs.FileDialog {
@@ -49,6 +52,7 @@ Item {
         fileMode: NativeDialogs.FileDialog.OpenFile
         nameFilters: [qsTr("视频文件 (*.mp4 *.mkv *.mov *.avi *.m4v)"), qsTr("所有文件 (*)")]
         onAccepted: control.addVideoAccepted(selectedFile)
+        onRejected: control.addVideoRejected()
     }
 
     DropConfirmationDialog {

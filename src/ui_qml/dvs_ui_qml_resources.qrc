@@ -26,6 +26,7 @@
         <file alias="WipeHandle.qml">qml/WipeHandle.qml</file>
         <file alias="EmptyReviewView.qml">qml/EmptyReviewView.qml</file>
         <file alias="ImageWorkspace.qml">qml/ImageWorkspace.qml</file>
+        <file alias="FolderPairSidebar.qml">qml/FolderPairSidebar.qml</file>
         <file alias="ActiveSourceStrip.qml">qml/ActiveSourceStrip.qml</file>
         <file alias="CompareModeBar.qml">qml/CompareModeBar.qml</file>
         <file alias="PlayerOsc.qml">qml/PlayerOsc.qml</file>

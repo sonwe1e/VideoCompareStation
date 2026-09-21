@@ -9,6 +9,8 @@
 #include "dvs/platform/RenderActivitySink.h"
 #include "dvs/ui/ComparisonSurface.h"
 
+#include "RenderRetry.h"
+
 #include <QColor>
 #include <QCoreApplication>
 #include <QElapsedTimer>
@@ -1122,6 +1124,29 @@ makeDummyAcknowledgement(const std::uint64_t requestId) {
     };
 }
 
+TEST(ComparisonSurfaceWarpTests, RetriesContendedRenderWithoutAnotherPublication) {
+    SurfaceWarpHarness harness;
+    ASSERT_TRUE(harness.start());
+    static_cast<void>(harness.window.grabWindow());
+
+    std::atomic<int> attempts{0};
+    QObject::connect(
+        &harness.window,
+        &QQuickWindow::afterRendering,
+        &harness.window,
+        [&] {
+            if (attempts.fetch_add(1, std::memory_order_relaxed) == 0) {
+                detail::RenderRetry retry;
+                retry.retryContendedRender(harness.window,
+                                           platform::ComparisonRenderResult::Contended);
+            }
+        },
+        Qt::DirectConnection);
+    harness.requestRender();
+    EXPECT_TRUE(waitUntil([&] { return attempts.load(std::memory_order_relaxed) >= 2; }, 2s));
+    QObject::disconnect(&harness.window, nullptr, &harness.window, nullptr);
+}
+
 TEST(ComparisonSurfaceWarpTests, RendersUnequalAspectNv12AcrossAnOddSplitWithoutABlackSeam) {
     SurfaceWarpHarness harness;
     ASSERT_TRUE(harness.start());
@@ -2125,6 +2150,10 @@ TEST(ComparisonSurfaceWarpTests, AcknowledgesOnlyTheLatestReplacementAndRetriesA
               platform::PresentationAckPushResult::Accepted);
     ASSERT_EQ(harness.acknowledgementMailbox->tryPush(makeDummyAcknowledgement(92U)),
               platform::PresentationAckPushResult::Accepted);
+    ASSERT_EQ(harness.acknowledgementMailbox->tryPush(makeDummyAcknowledgement(93U)),
+              platform::PresentationAckPushResult::Accepted);
+    ASSERT_EQ(harness.acknowledgementMailbox->tryPush(makeDummyAcknowledgement(94U)),
+              platform::PresentationAckPushResult::Accepted);
 
     auto budget = std::make_shared<platform::FrameBudget>(16U * 1024U * 1024U);
     platform::GpuTransferActor actor{budget, harness.broker, harness.mailbox, harness.activitySink};
@@ -2170,10 +2199,19 @@ TEST(ComparisonSurfaceWarpTests, AcknowledgesOnlyTheLatestReplacementAndRetriesA
     EXPECT_GT(latest.pixelColor(latest.width() / 4, latest.height() / 2).red(), 180);
     EXPECT_EQ(harness.activitySink->acknowledgementNotifications.load(std::memory_order_relaxed),
               1U);
+    // Drain the remaining pre-filled dummies before the retried frame-10 acknowledgement.
     const std::optional<application::FrameSetPresented> dummyB =
         harness.acknowledgementMailbox->tryPop();
     ASSERT_TRUE(dummyB.has_value());
     EXPECT_EQ(dummyB->frameId, domain::FrameId{92});
+    const std::optional<application::FrameSetPresented> dummyC =
+        harness.acknowledgementMailbox->tryPop();
+    ASSERT_TRUE(dummyC.has_value());
+    EXPECT_EQ(dummyC->frameId, domain::FrameId{93});
+    const std::optional<application::FrameSetPresented> dummyD =
+        harness.acknowledgementMailbox->tryPop();
+    ASSERT_TRUE(dummyD.has_value());
+    EXPECT_EQ(dummyD->frameId, domain::FrameId{94});
     const std::optional<application::FrameSetPresented> presented =
         harness.acknowledgementMailbox->tryPop();
     ASSERT_TRUE(presented.has_value());

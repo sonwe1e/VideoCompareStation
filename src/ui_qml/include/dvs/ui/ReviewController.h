@@ -33,6 +33,8 @@ class ReviewController final : public QObject {
     Q_PROPERTY(QString sourceBFilename READ sourceBFilename NOTIFY stateChanged)
     Q_PROPERTY(QString sourceCFilename READ sourceCFilename NOTIFY stateChanged)
     Q_PROPERTY(QVariantList sourceUrls READ sourceUrls NOTIFY stateChanged)
+    Q_PROPERTY(QStringList sourceParentLabels READ sourceParentLabels NOTIFY stateChanged)
+    Q_PROPERTY(QStringList sourceFullPaths READ sourceFullPaths NOTIFY stateChanged)
     Q_PROPERTY(QVariantList activeSources READ activeSources NOTIFY stateChanged)
     Q_PROPERTY(QAbstractItemModel* sources READ sources CONSTANT)
     Q_PROPERTY(int sourceCount READ sourceCount NOTIFY stateChanged)
@@ -137,6 +139,8 @@ public:
     [[nodiscard]] QString sourceBFilename() const;
     [[nodiscard]] QString sourceCFilename() const;
     [[nodiscard]] QVariantList sourceUrls() const;
+    [[nodiscard]] QStringList sourceParentLabels() const;
+    [[nodiscard]] QStringList sourceFullPaths() const;
     [[nodiscard]] QVariantList activeSources() const;
     [[nodiscard]] QAbstractItemModel* sources() const noexcept;
     [[nodiscard]] int sourceCount() const noexcept;
@@ -211,6 +215,9 @@ public:
     Q_INVOKABLE bool closeSources();
     Q_INVOKABLE void clearCandidateSourceErrors() noexcept;
     Q_INVOKABLE QVariantMap handleDroppedUrls(const QVariantList& urls) const;
+    // Whether the url refers to an existing local directory. Folder drops are routed to
+    // the image folder comparison before the file-only drop validation runs.
+    Q_INVOKABLE bool isFolderPath(const QUrl& url) const;
     Q_INVOKABLE bool first();
     Q_INVOKABLE bool previous();
     Q_INVOKABLE bool next();

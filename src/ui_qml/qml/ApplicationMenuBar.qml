@@ -23,6 +23,8 @@ VcsMenuBar {
     property int workspaceMode: 0
     property bool imageHasPrimary: false
     property bool imageHasSecondary: false
+    property bool videoHasSession: false
+    property bool imageHasSession: false
     // Alignment state and helpers live on the root; the Analyze menu hosts the actions that used
     // to live in the inspector's Alignment tab.
     property bool automaticAlignmentPending: false
@@ -40,7 +42,13 @@ VcsMenuBar {
     signal openImageRequested
     signal addImageRequested
     signal openImagePairRequested
+    signal compareImageFoldersRequested
+    signal issueLogCaptureRequested
+    signal issueLogToggleRequested
+    signal issueLogSaveRequested
+    signal issueLogLoadRequested
     signal workspaceRequested(int mode)
+    signal closeCurrentRequested
     signal destructiveActionRequested(string kind)
     signal chromeToggleRequested
     signal fullScreenToggleRequested
@@ -101,11 +109,41 @@ VcsMenuBar {
             onTriggered: control.addImageRequested()
         }
         VcsMenuItem {
-            text: qsTr("关闭视频")
+            objectName: "compareImageFoldersMenuItem"
+            text: qsTr("对比文件夹…")
+            shortcutText: "Ctrl+Shift+F"
+            onTriggered: control.compareImageFoldersRequested()
+        }
+        VcsMenuSeparator {
+            objectName: "fileIssueSeparator"
+        }
+        VcsMenuItem {
+            objectName: "captureIssueMenuItem"
+            text: qsTr("记录当前问题")
+            onTriggered: control.issueLogCaptureRequested()
+        }
+        VcsMenuItem {
+            objectName: "toggleIssueLogMenuItem"
+            text: qsTr("问题记录面板")
+            onTriggered: control.issueLogToggleRequested()
+        }
+        VcsMenuItem {
+            objectName: "saveIssueLogMenuItem"
+            text: qsTr("保存问题记录…")
+            onTriggered: control.issueLogSaveRequested()
+        }
+        VcsMenuItem {
+            objectName: "loadIssueLogMenuItem"
+            text: qsTr("加载问题记录…")
+            onTriggered: control.issueLogLoadRequested()
+        }
+        VcsMenuItem {
+            objectName: "closeCurrentMenuItem"
+            text: control.workspaceMode === 1 ? qsTr("关闭图片工具") : qsTr("关闭视频")
             shortcutText: "Ctrl+W"
-            enabled: control.sourceCount > 0
+            enabled: control.workspaceMode === 1 ? control.imageHasSession : control.videoHasSession
             onTriggered: {
-                control.destructiveActionRequested("closeReview");
+                control.closeCurrentRequested();
                 control.returnViewerFocusAfterClose = true;
             }
         }

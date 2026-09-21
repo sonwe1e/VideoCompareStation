@@ -31,6 +31,10 @@ QVariant SourceListModel::data(const QModelIndex& index, const int role) const {
         return row.role;
     case FilenameRole:
         return row.filename;
+    case ParentLabelRole:
+        return row.parentLabel;
+    case FullPathRole:
+        return row.fullPath;
     case ErrorRole:
         return row.errorKey;
     case CurrentSourceFrameRole:
@@ -58,6 +62,8 @@ QHash<int, QByteArray> SourceListModel::roleNames() const {
         {SourceIdentityRole, QByteArrayLiteral("sourceIdentity")},
         {RoleRole, QByteArrayLiteral("role")},
         {FilenameRole, QByteArrayLiteral("filename")},
+        {ParentLabelRole, QByteArrayLiteral("parentLabel")},
+        {FullPathRole, QByteArrayLiteral("fullPath")},
         {ErrorRole, QByteArrayLiteral("errorKey")},
         {CurrentSourceFrameRole, QByteArrayLiteral("currentSourceFrame")},
         {MatchKindRole, QByteArrayLiteral("matchKind")},
@@ -104,6 +110,12 @@ void SourceListModel::setRows(std::vector<SourceListRow> rows) {
         }
         if (before.filename != after.filename) {
             addRole(FilenameRole);
+        }
+        if (before.parentLabel != after.parentLabel) {
+            addRole(ParentLabelRole);
+        }
+        if (before.fullPath != after.fullPath) {
+            addRole(FullPathRole);
         }
         if (before.errorKey != after.errorKey) {
             addRole(ErrorRole);

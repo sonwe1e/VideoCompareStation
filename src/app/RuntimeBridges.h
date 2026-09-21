@@ -27,6 +27,7 @@ private:
     std::atomic<std::shared_ptr<platform::IRenderActivitySink>> sink_;
 };
 
+// Bind/unbind run on the controller's GUI thread; notify may run on any producer thread.
 class ReviewProjectionBridge final {
 public:
     void bind(ui::ReviewController& controller) noexcept;
@@ -34,8 +35,14 @@ public:
     void notify() noexcept;
 
 private:
-    std::mutex mutex_;
+    struct Binding {
+        bool active = true;
+        bool refreshPending = false;
+    };
+
+    std::shared_ptr<std::mutex> mutex_ = std::make_shared<std::mutex>();
     ui::ReviewController* controller_ = nullptr;
+    std::shared_ptr<Binding> binding_;
 };
 
 class DecoderBackendStateCache final {

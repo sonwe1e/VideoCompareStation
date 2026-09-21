@@ -1,12 +1,16 @@
 add_library(
     dvs_ui_models
     STATIC
+        include/dvs/ui/ImageFolderPairModel.h
+        include/dvs/ui/IssueLogController.h
         include/dvs/ui/ReviewController.h
         include/dvs/ui/ReviewPreferencesController.h
         include/dvs/ui/ReviewSessionFacade.h
         include/dvs/ui/ReviewShellController.h
         include/dvs/ui/SourceIdentity.h
         include/dvs/ui/SourceListModel.h
+        src/ImageFolderPairModel.cpp
+        src/IssueLogController.cpp
         src/ReviewController.cpp
         src/ReviewPreferencesController.cpp
         src/ReviewSessionFacade.cpp
@@ -40,17 +44,21 @@ if(DVS_BUILD_ADAPTERS)
         STATIC
             include/dvs/ui/ComparisonSurface.h
             include/dvs/ui/DesktopApplication.h
+            include/dvs/ui/DiagnosticsProbe.h
             include/dvs/ui/DirectCompare.h
             include/dvs/ui/GraphicsBackend.h
+            include/dvs/ui/ImagePairLoader.h
             include/dvs/ui/ImageReviewController.h
             include/dvs/ui/Module.h
             include/dvs/ui/RenderAckRelay.h
             include/dvs/ui/ReviewImageProvider.h
             include/dvs/ui/StillImageDecoder.h
             src/DesktopApplication.cpp
+            src/DiagnosticsProbe.cpp
             src/DirectCompare.cpp
             src/ComparisonSurface.cpp
             src/GraphicsBackend.cpp
+            src/ImagePairLoader.cpp
             src/ImageReviewController.cpp
             src/Module.cpp
             src/RenderAckRelay.cpp

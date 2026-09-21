@@ -18,12 +18,16 @@ Item {
             sourceId: 0
             sourceIdentity: "source-a"
             filename: "reference.mp4"
+            parentLabel: ""
+            fullPath: ""
             changedOnDisk: false
         }
         ListElement {
             sourceId: 1
             sourceIdentity: "source-b"
             filename: "prediction.mp4"
+            parentLabel: ""
+            fullPath: ""
             changedOnDisk: false
         }
     }
@@ -69,8 +73,8 @@ Item {
         function cleanup() {
             // Restore two-source model in case a test mutated it (e.g. Test B).
             sources.clear();
-            sources.append({sourceId: 0, sourceIdentity: "source-a", filename: "reference.mp4", changedOnDisk: false});
-            sources.append({sourceId: 1, sourceIdentity: "source-b", filename: "prediction.mp4", changedOnDisk: false});
+            sources.append({sourceId: 0, sourceIdentity: "source-a", filename: "reference.mp4", parentLabel: "", fullPath: "", changedOnDisk: false});
+            sources.append({sourceId: 1, sourceIdentity: "source-b", filename: "prediction.mp4", parentLabel: "", fullPath: "", changedOnDisk: false});
             strip.sourceCount = 2;
             wait(0);
 
@@ -146,7 +150,7 @@ Item {
 
             // Simulate external model teardown (e.g. shell closing all sources).
             sources.clear();
-            sources.append({sourceId: 0, sourceIdentity: "source-x", filename: "new.mp4", changedOnDisk: false});
+            sources.append({sourceId: 0, sourceIdentity: "source-x", filename: "new.mp4", parentLabel: "", fullPath: "", changedOnDisk: false});
             strip.sourceCount = 1;
             wait(0);
 
@@ -155,8 +159,8 @@ Item {
 
             // Restore two-source model so cleanup() does not crash.
             sources.clear();
-            sources.append({sourceId: 0, sourceIdentity: "source-a", filename: "reference.mp4", changedOnDisk: false});
-            sources.append({sourceId: 1, sourceIdentity: "source-b", filename: "prediction.mp4", changedOnDisk: false});
+            sources.append({sourceId: 0, sourceIdentity: "source-a", filename: "reference.mp4", parentLabel: "", fullPath: "", changedOnDisk: false});
+            sources.append({sourceId: 1, sourceIdentity: "source-b", filename: "prediction.mp4", parentLabel: "", fullPath: "", changedOnDisk: false});
             strip.sourceCount = 2;
             wait(0);
         }

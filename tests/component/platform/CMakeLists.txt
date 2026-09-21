@@ -7,6 +7,7 @@ add_executable(
     FrameBudgetTests.cpp
     FrameMailboxTests.cpp
     PresentationAckMailboxTests.cpp
+    ProcessTelemetryTests.cpp
     SourceIdentityServiceTests.cpp
     SteadyDeadlineSchedulerTests.cpp
     TraceSinkTests.cpp
@@ -54,6 +55,7 @@ target_include_directories(
     dvs_graphics_device_broker_component_tests
     PRIVATE
         "${PROJECT_SOURCE_DIR}/src/platform_windows/src"
+        "${PROJECT_SOURCE_DIR}/src/ui_qml/src"
         "${PROJECT_SOURCE_DIR}/tests/component/ui"
 )
 

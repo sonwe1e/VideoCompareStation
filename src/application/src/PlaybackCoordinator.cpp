@@ -570,6 +570,16 @@ private:
         };
     }
 
+    // Command terminals reference the identity under which the command was accepted, not the
+    // live state. An open command accepted in the initial epoch may complete only after the
+    // first open bumps the epoch; emitting its terminal under the live epoch would orphan both
+    // the acceptance and the terminal and break the command exactly-once invariant (03§4).
+    [[nodiscard]] TraceIdentity commandTraceIdentity(const CommandContext& context) const noexcept {
+        auto identity = makeTraceIdentity(context.commandId);
+        identity.epoch = context.sessionEpoch;
+        return identity;
+    }
+
     void emitTrace(TraceEventKind kind,
                    const TraceIdentity& identity,
                    std::uint64_t payload = 0U,
@@ -719,7 +729,15 @@ private:
             state_.displayedFrame.has_value()
                 ? static_cast<std::uint64_t>(state_.displayedFrame->value())
                 : UINT64_MAX;
-        emitTrace(TraceEventKind::SnapshotCommitted, makeTraceIdentity(), displayed);
+        // Emit a commit only when the displayed canonical position actually changed. Re-committing
+        // an unchanged frame after the generation advanced (e.g. interactive-step successor arming)
+        // is unrepresentable in the trace contract: a newer identity has no ACK for the older frame
+        // (ACK-before-commit) and the older identity is stale once a higher revision was observed
+        // (no stale commits). The canvas state publication below still happens on every notify.
+        if (state_.displayedFrame != lastCommittedDisplayedFrame_) {
+            emitTrace(TraceEventKind::SnapshotCommitted, makeTraceIdentity(), displayed);
+            lastCommittedDisplayedFrame_ = state_.displayedFrame;
+        }
         publication_.publish(state_, sequenceAlignmentMaps_);
         if (notify) {
             notifyStatePublished();
@@ -740,7 +758,7 @@ private:
                          const CommandOutcome outcome,
                          std::optional<domain::MediaError> error = std::nullopt) {
         emitTrace(TraceEventKind::CommandTerminal,
-                  makeTraceIdentity(context.commandId),
+                  commandTraceIdentity(context),
                   static_cast<std::uint64_t>(outcome));
         publication_.complete(CommandTerminal{
             .context = context,
@@ -780,7 +798,7 @@ private:
                        const CommandOutcome outcome,
                        domain::MediaError error) {
         emitTrace(TraceEventKind::CommandRejected,
-                  makeTraceIdentity(context.commandId),
+                  commandTraceIdentity(context),
                   static_cast<std::uint64_t>(outcome));
         publishError(error);
         completeCommand(context, outcome, std::move(error));
@@ -1018,6 +1036,11 @@ private:
         PlaybackRun stopped = std::move(*playbackRun_);
         playbackRun_.reset();
         lastPlaybackProjectionAt_.reset();
+        emitTrace(TraceEventKind::PlaybackRunStopped,
+                  makeTraceIdentity(),
+                  state_.displayedFrame.has_value()
+                      ? static_cast<std::uint64_t>(state_.displayedFrame->value())
+                      : UINT64_MAX);
         if (stopped.cadenceTimerId.has_value()) {
             static_cast<void>(dependencies_.deadlineScheduler->cancel(*stopped.cadenceTimerId));
         }
@@ -1599,9 +1622,38 @@ private:
             detail::addDuration(now,
                                 std::chrono::duration_cast<std::chrono::microseconds>(
                                     kMinimumPlaybackPreparationDelay));
-        const auto preferredRequestDue = detail::addDuration(
-            *due,
-            -std::chrono::duration_cast<std::chrono::microseconds>(kPlaybackPresentationLead));
+        // Scale the preparation lead to the current frame interval. A fixed 14 ms lead reaches past
+        // the previous frame boundary whenever one frame is shorter than 28 ms (about 36 fps and
+        // above), collapsing the window onto the 1 ms floor and stripping the request of its
+        // scheduling margin against the boundary. Capping the lead at half the interval keeps the
+        // request ahead of the boundary at a fixed offset for high-frame-rate sources while leaving
+        // sources at or below roughly 35 fps on the full 14 ms. VFR: the interval derives from the
+        // canonical timeline, so irregular spacing is honored frame by frame.
+        std::chrono::microseconds presentationLead =
+            std::chrono::duration_cast<std::chrono::microseconds>(kPlaybackPresentationLead);
+        if (target > playbackRun_->firstTarget) {
+            if (const auto previousDue = playbackDue(domain::FrameId{target.value() - 1})) {
+                // The clock's native duration is nanoseconds on this toolchain, so the interval
+                // must be narrowed to microseconds before it is compared with the lead; comparing
+                // raw nanosecond counts would inflate it a thousandfold and never cap anything.
+                const auto dueMicroseconds =
+                    std::chrono::duration_cast<std::chrono::microseconds>(due->time_since_epoch())
+                        .count();
+                const auto previousDueMicroseconds =
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        previousDue->time_since_epoch())
+                        .count();
+                if (const auto intervalMicroseconds =
+                        detail::checkedSubtract(dueMicroseconds, previousDueMicroseconds);
+                    intervalMicroseconds.has_value() && *intervalMicroseconds > 0) {
+                    const std::int64_t halfInterval = *intervalMicroseconds / 2;
+                    if (halfInterval < presentationLead.count()) {
+                        presentationLead = std::chrono::microseconds{halfInterval};
+                    }
+                }
+            }
+        }
+        const auto preferredRequestDue = detail::addDuration(*due, -presentationLead);
         if (!earliestRequestDue.has_value() || !preferredRequestDue.has_value()) {
             stopPlayback(coordinatorError(domain::MediaErrorCode::kArithmeticOverflow,
                                           "The playback preparation deadline overflowed."));
@@ -1683,6 +1735,9 @@ private:
         };
         lastPlaybackProjectionAt_ = playbackRun_->wallAnchor;
         state_.lastError.reset();
+        emitTrace(TraceEventKind::PlaybackRunStarted,
+                  makeTraceIdentity(),
+                  static_cast<std::uint64_t>(firstTarget.value()));
         if (!schedulePlaybackTarget(firstTarget)) {
             completeCommand(command.context, CommandOutcome::Failed, state_.lastError);
             return;
@@ -3019,6 +3074,9 @@ private:
             if (playbackRun_->preparedFrame.has_value()) {
                 dependencies_.directFrameProvider->cancel(playbackRun_->providerContext);
             }
+            emitTrace(TraceEventKind::PlaybackRunStopped,
+                      makeTraceIdentity(),
+                      static_cast<std::uint64_t>(displayedFrame.value()));
             playbackRun_.reset();
             lastPlaybackProjectionAt_.reset();
             state_.playbackState = domain::PlaybackState::kPaused;
@@ -3989,6 +4047,9 @@ private:
     std::optional<InteractiveStepRun> interactiveStepRun_;
     std::optional<std::chrono::steady_clock::time_point> lastPlaybackProjectionAt_;
     std::optional<std::chrono::steady_clock::time_point> lastInteractiveProjectionAt_;
+    // Displayed frame of the most recent SnapshotCommitted; identical re-commits are suppressed
+    // so every commit carries a payload with a prior ACK under the same identity (trace contract).
+    std::optional<domain::FrameId> lastCommittedDisplayedFrame_;
     std::optional<BackgroundAnalysis> analysisJob_;
     std::optional<AutomaticAlignmentProposal> automaticAlignmentProposal_;
     std::optional<AutomaticAlignmentUndoState> automaticAlignmentUndo_;

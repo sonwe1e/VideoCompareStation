@@ -120,9 +120,45 @@ must not be treated as complete.
 | `8` | `SnapshotCommitted` | Displayed canonical position, or `UINT64_MAX` when absent. |
 | `9` | `CommandTerminal` | `CommandOutcome` value. |
 | `10` | `DecoderSeek` | Seek target position. |
-| `11` | `DecoderReopen` | Source identifier. Reserved; not currently emitted. |
+| `11` | `DecoderReopen` | Frame id whose request forced the reopen. Emitted by the source decode actor when a decoder is reopened before a request; the identity `req` carries the source id. A healthy navigation pattern emits none, because a canceled decode is a clean stop rather than corruption. |
 | `12` | `CacheHit` | Cached source-frame index. |
 | `13` | `DeviceGenerationChanged` | New device generation. |
+| `14` | `QmlGrabRequested` | Canonical frame the UI was showing when a scene-graph image grab was requested. |
+| `15` | `QmlGrabCompleted` | Same frame payload when that grab delivered its result. |
+| `16` | `RenderDrawStarted` | Canonical frame the render thread began drawing. |
+| `17` | `RenderAckPublished` | Canonical frame whose presentation acknowledgement was admitted to the ack mailbox. |
+| `18` | `PlaybackRunStarted` | First target frame of a continuous playback run. |
+| `19` | `PlaybackRunStopped` | Last committed frame when the run ended, or `UINT64_MAX` when none committed. |
+
+`PlaybackRunStarted`/`PlaybackRunStopped` bound exactly one continuous playback run (`play` to
+pause/end/stop). One trace also contains the open, seek and step phases, and those phases commit
+frames too, so an analyzer that compares display intervals must isolate the bounded running window
+before attributing a stall to continuous playback. A run that is stopped by an error path still
+emits `PlaybackRunStopped`, so an unmatched start means the capture was truncated.
+
+`QmlGrabRequested`/`QmlGrabCompleted` are UI-originated observation events emitted through the QML
+`dvsDiagnostics` bridge (currently the timeline thumbnail cache's `grabToImage`). They carry no
+session/playback identity — the identity tuple is all zeros — so they must be correlated with the
+pipeline events by timestamp, never by identity. The pair bounds how long a grab's result was
+outstanding and lets an analyzer line grabs up against the frames that were late. Correlation alone
+is not causation: the T5 gate A/B measured the same stall profile with every playback-time grab
+suppressed, so a grab that merely overlaps a late frame is not evidence that it caused the delay.
+Payload `UINT64_MAX` means the UI did not know a frame number when the event was recorded.
+
+`RenderDrawStarted`/`RenderAckPublished` are renderer-side observation events emitted from
+`D3d11ComparisonRenderer` on the render thread, with the canonical frame id as the payload. They
+also carry no playback identity. Joined with `RenderPublished` (kind 6) and
+`PresentationAcknowledged` (kind 7) they bisect a late frame's presentation:
+
+| hop | meaning when it dominates a long display interval |
+| --- | --- |
+| `RenderPublished` → `RenderDrawStarted` | the scene graph never scheduled a render for an already-published frame (window/render-loop scheduling) |
+| `RenderDrawStarted` → `RenderAckPublished` | the draw itself was slow (GPU or device contention) |
+| `RenderAckPublished` → `PresentationAcknowledged` | the relay thread was late |
+| `FrameSetReady` → `RenderPublished` | the producer or the coordinator was late |
+
+Because these events come from different identity scopes, an analyzer must key them by frame id
+within a single playback run rather than by the identity tuple.
 
 `CommandAccepted` currently means that a command was nonduplicate and claimed by the coordinator;
 it is emitted before the remaining admission checks. A rejected claimed command may therefore
@@ -135,11 +171,14 @@ header remains exactly the one-field object shown above.
 
 ## Buffer and export behavior
 
-The implementation is a 16,384-event fixed-capacity MPSC queue guarded by a mutex:
+The implementation is a 65,536-event fixed-capacity MPSC queue guarded by a mutex:
 
 - playback coordination and source-decode actors may both be producers;
-- every producer attempts `try_lock` and drops rather than waiting on contention;
-- the queue also drops when its fixed capacity is exhausted;
+- producers serialize briefly on the queue lock for a single-event copy (nanoseconds) and never
+  touch the sink or perform I/O, so a short wait cannot stall playback;
+- the queue drops only when its fixed capacity is exhausted; 64K fills in under 20 s only at
+  three 60 fps sources with pathological event rates, so an overflow marker is a genuine anomaly
+  rather than the norm for evidence-length traces;
 - lost-event accounting is atomic; and
 - the single shutdown consumer copies batches of at most 256 events, releases the mutex, and
   performs sink I/O outside the producer critical section;
@@ -167,6 +206,12 @@ a lossless trace. An overflow marker is the explicit loss signal.
    `STALE_ARRIVAL_PUBLISHED`. Stale arrivals that are dropped (followed by a fresh ready) pass.
    Live `req` is coordinator-owned and remains `0`, so `ireq` is exported for correlation but is
    not part of the stale comparison.
+
+The coordinator suppresses a `SnapshotCommitted` whose displayed canonical position is unchanged
+since the previous commit (the canvas state publication still fires on every notify). A
+re-commit of an already-acked frame after the generation advanced would otherwise be
+unrepresentable in the contract: the newer identity has no ACK for the older frame (rule 2) and
+the older identity is stale once a higher revision was observed (rule 3).
 
 Overflow markers remain fail-closed. `PartialFrameSetCount` is reported as `0` because the
 single-line event stream cannot reconstruct multi-source FrameSet shape; structural FrameSet

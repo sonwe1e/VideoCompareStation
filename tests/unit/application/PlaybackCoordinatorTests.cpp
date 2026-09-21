@@ -1885,6 +1885,214 @@ TEST(PlaybackCoordinatorTests, PlayUsesAbsoluteRationalCadenceAndSequentialFrame
     EXPECT_EQ(following->frameId, domain::FrameId{3});
 }
 
+TEST(PlaybackCoordinatorTests, HighFrameRatePlayCapsThePreparationLeadAtHalfTheFrameInterval) {
+    const auto scheduler = std::make_shared<FakeDeadlineScheduler>();
+    const auto clock = std::make_shared<FakeSteadyClock>();
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator =
+        makeCoordinator(provider, render, std::make_shared<FakeMediaProbe>(), scheduler, clock);
+    markGraphicsReady(coordinator);
+    openReady(coordinator, provider, render, domain::CommandId{1}, 12, 120);
+
+    const auto ready = coordinator->snapshot();
+    ASSERT_EQ(coordinator->submit(PlayCommand{
+                  .context =
+                      CommandContext{
+                          .sessionId = ready->sessionId,
+                          .sessionEpoch = ready->sessionEpoch,
+                          .commandId = domain::CommandId{2},
+                      },
+              }),
+              PortSubmitResult::Accepted);
+    EXPECT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+
+    // The first frame of a run has no in-run predecessor, so the full lead applies and the
+    // 14000us reach past the anchor collapses onto the 1000us preparation floor.
+    ASSERT_TRUE(scheduler->waitForScheduleCount(2U));
+    const auto firstCadence = scheduler->request(1U);
+    ASSERT_TRUE(firstCadence.has_value());
+    EXPECT_EQ(firstCadence->due, clock->now() + 1'000us);
+
+    // 120 fps: consecutive frames are 8333us apart, so half the interval (4166us) is below the
+    // 14000us constant. The second request is capped at half the interval and stays ahead of its
+    // boundary by that amount: 16667 - 4166 = 12501us after the anchor. The fixed lead would have
+    // reached past the previous boundary and collapsed onto the floor again.
+    clock->set(firstCadence->due);
+    ASSERT_TRUE(scheduler->fire(1U));
+    ASSERT_TRUE(provider->waitForFrameRequestCount(2U));
+    const std::optional<FrameRequest> frame = provider->frameRequest(1U);
+    ASSERT_TRUE(frame.has_value());
+    EXPECT_EQ(frame->frameId, domain::FrameId{1});
+    EXPECT_EQ(frame->priority, FrameRequestPriority::Sequential);
+    ASSERT_TRUE(provider->postFrameReady(*frame, makeFrameSet(frame->frameId)));
+    ASSERT_TRUE(render->waitForPublishedCount(2U));
+    ASSERT_TRUE(provider->postFrameSucceeded(*frame));
+    presentPublished(coordinator, render, 1U);
+
+    ASSERT_TRUE(scheduler->waitForScheduleCount(4U));
+    const auto secondCadence = scheduler->request(3U);
+    ASSERT_TRUE(secondCadence.has_value());
+    EXPECT_EQ(secondCadence->due, clock->now() + 11'501us);
+    EXPECT_GT(secondCadence->due, clock->now() + 4'000us);
+}
+
+TEST(PlaybackCoordinatorTests, SixtyFpsPlayCapsThePreparationLeadAtHalfTheFrameInterval) {
+    const auto scheduler = std::make_shared<FakeDeadlineScheduler>();
+    const auto clock = std::make_shared<FakeSteadyClock>();
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator =
+        makeCoordinator(provider, render, std::make_shared<FakeMediaProbe>(), scheduler, clock);
+    markGraphicsReady(coordinator);
+    openReady(coordinator, provider, render, domain::CommandId{1}, 12, 60);
+
+    const auto ready = coordinator->snapshot();
+    ASSERT_EQ(coordinator->submit(PlayCommand{
+                  .context =
+                      CommandContext{
+                          .sessionId = ready->sessionId,
+                          .sessionEpoch = ready->sessionEpoch,
+                          .commandId = domain::CommandId{2},
+                      },
+              }),
+              PortSubmitResult::Accepted);
+    EXPECT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+
+    // 60 fps: the first frame's full 14000us lead still clears the anchor, leaving 16667 -
+    // 14000 = 2667us.
+    ASSERT_TRUE(scheduler->waitForScheduleCount(2U));
+    const auto firstCadence = scheduler->request(1U);
+    ASSERT_TRUE(firstCadence.has_value());
+    EXPECT_EQ(firstCadence->due, clock->now() + 2'667us);
+
+    // Frames are 16667us apart, so half the interval (8333us) is below the constant and the lead
+    // is capped: the second request keeps 8333us of margin before its boundary instead of the
+    // 14000us that would leave only 2667us of it.
+    clock->set(firstCadence->due);
+    ASSERT_TRUE(scheduler->fire(1U));
+    ASSERT_TRUE(provider->waitForFrameRequestCount(2U));
+    const std::optional<FrameRequest> frame = provider->frameRequest(1U);
+    ASSERT_TRUE(frame.has_value());
+    EXPECT_EQ(frame->frameId, domain::FrameId{1});
+    EXPECT_EQ(frame->priority, FrameRequestPriority::Sequential);
+    ASSERT_TRUE(provider->postFrameReady(*frame, makeFrameSet(frame->frameId)));
+    ASSERT_TRUE(render->waitForPublishedCount(2U));
+    ASSERT_TRUE(provider->postFrameSucceeded(*frame));
+    presentPublished(coordinator, render, 1U);
+
+    ASSERT_TRUE(scheduler->waitForScheduleCount(4U));
+    const auto secondCadence = scheduler->request(3U);
+    ASSERT_TRUE(secondCadence.has_value());
+    EXPECT_EQ(secondCadence->due, clock->now() + 22'334us);
+    EXPECT_GT(secondCadence->due, clock->now() + 8'000us);
+}
+
+TEST(PlaybackCoordinatorTests, ThirtyFpsPlayKeepsTheFullPreparationLead) {
+    const auto scheduler = std::make_shared<FakeDeadlineScheduler>();
+    const auto clock = std::make_shared<FakeSteadyClock>();
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator =
+        makeCoordinator(provider, render, std::make_shared<FakeMediaProbe>(), scheduler, clock);
+    markGraphicsReady(coordinator);
+    openReady(coordinator, provider, render);
+
+    const auto ready = coordinator->snapshot();
+    ASSERT_EQ(coordinator->submit(PlayCommand{
+                  .context =
+                      CommandContext{
+                          .sessionId = ready->sessionId,
+                          .sessionEpoch = ready->sessionEpoch,
+                          .commandId = domain::CommandId{2},
+                      },
+              }),
+              PortSubmitResult::Accepted);
+    EXPECT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+
+    // 30 fps: half the interval (16667us) exceeds the 14000us constant, so the full lead stays in
+    // place and the request lands 33334 - 14000 = 19334us after the anchor.
+    ASSERT_TRUE(scheduler->waitForScheduleCount(2U));
+    const auto firstCadence = scheduler->request(1U);
+    ASSERT_TRUE(firstCadence.has_value());
+    EXPECT_EQ(firstCadence->due, clock->now() + 19'334us);
+}
+
+TEST(PlaybackCoordinatorTests, VfrPlayCapsThePreparationLeadAtTheLocalFrameInterval) {
+    const auto scheduler = std::make_shared<FakeDeadlineScheduler>();
+    const auto clock = std::make_shared<FakeSteadyClock>();
+    const auto probe = std::make_shared<FakeMediaProbe>();
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator = makeCoordinator(provider, render, probe, scheduler, clock);
+
+    const std::shared_ptr<const domain::FrameTimeline> timeline = makeVfrTimeline();
+    ASSERT_NE(timeline, nullptr);
+    const domain::MediaDescriptor descriptorA =
+        makeVfrDescriptor("C:/media/a.mp4",
+                          domain::MediaExtent{.width = 320, .height = 180},
+                          4,
+                          domain::MediaTime{69800});
+    const domain::MediaDescriptor descriptorB =
+        makeDescriptor("C:/media/b.mp4", domain::MediaExtent{.width = 160, .height = 90}, 4);
+
+    openVfrReady(coordinator, probe, provider, render, timeline, descriptorA, descriptorB);
+    markGraphicsReady(coordinator);
+
+    const std::shared_ptr<const SessionSnapshot> ready = coordinator->snapshot();
+    ASSERT_EQ(coordinator->submit(PlayCommand{
+                  .context =
+                      CommandContext{
+                          .sessionId = ready->sessionId,
+                          .sessionEpoch = ready->sessionEpoch,
+                          .commandId = domain::CommandId{2},
+                      },
+              }),
+              PortSubmitResult::Accepted);
+    EXPECT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+
+    // The VFR timeline starts frames at 0/10000/50000/69800us. Frame 1 is one millisecond after
+    // the anchor, so its request collapses onto the 1000us preparation floor either way.
+    ASSERT_TRUE(scheduler->waitForScheduleCount(2U));
+    const auto firstCadence = scheduler->request(1U);
+    ASSERT_TRUE(firstCadence.has_value());
+    EXPECT_EQ(firstCadence->due, clock->now() + 1'000us);
+
+    clock->set(firstCadence->due);
+    ASSERT_TRUE(scheduler->fire(1U));
+    ASSERT_TRUE(provider->waitForFrameRequestCount(2U));
+    const std::optional<FrameRequest> frame = provider->frameRequest(1U);
+    ASSERT_TRUE(frame.has_value());
+    ASSERT_TRUE(provider->postFrameReady(*frame, makeFrameSet(frame->frameId)));
+    ASSERT_TRUE(render->waitForPublishedCount(2U));
+    presentPublished(coordinator, render, 1U);
+    ASSERT_TRUE(provider->postFrameSucceeded(*frame));
+
+    // Frame 2 is 40000us after frame 1, so half that interval (20000us) still exceeds the
+    // constant and the full 14000us lead applies: 50000 - 14000 = 36000us.
+    ASSERT_TRUE(scheduler->waitForScheduleCount(4U));
+    const auto secondCadence = scheduler->request(3U);
+    ASSERT_TRUE(secondCadence.has_value());
+    EXPECT_EQ(secondCadence->due, firstCadence->due + 35'000us);
+
+    clock->set(secondCadence->due);
+    ASSERT_TRUE(scheduler->fire(3U));
+    ASSERT_TRUE(provider->waitForFrameRequestCount(3U));
+    const std::optional<FrameRequest> next = provider->frameRequest(2U);
+    ASSERT_TRUE(next.has_value());
+    ASSERT_TRUE(provider->postFrameReady(*next, makeFrameSet(next->frameId)));
+    ASSERT_TRUE(render->waitForPublishedCount(3U));
+    presentPublished(coordinator, render, 2U);
+    ASSERT_TRUE(provider->postFrameSucceeded(*next));
+
+    // Frame 3 is only 19800us after frame 2, so the capped lead (9900us) applies against the
+    // irregular spacing: 69800 - 9900 = 59900us, not the flat 55800us a fixed lead would use.
+    ASSERT_TRUE(scheduler->waitForScheduleCount(6U));
+    const auto thirdCadence = scheduler->request(5U);
+    ASSERT_TRUE(thirdCadence.has_value());
+    EXPECT_EQ(thirdCadence->due, clock->now() + 23'900us);
+}
+
 TEST(PlaybackCoordinatorTests, PlayCommandScalesCadenceBySpeed) {
     const auto scheduler = std::make_shared<FakeDeadlineScheduler>();
     const auto clock = std::make_shared<FakeSteadyClock>();

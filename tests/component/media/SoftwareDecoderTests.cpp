@@ -16,6 +16,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <gtest/gtest.h>
 #include <memory>
@@ -496,6 +497,33 @@ TEST(SoftwareDecoderTests, ContinuesForwardWithoutSeekingAndFallsBackForReverseT
     EXPECT_EQ(decoder.exactSeekCount(), 2U);
 }
 
+// A canceled decode is a clean stop, not corruption: the owning actor must not reopen the
+// source for it, so the decoder reports the interruption and stays reusable afterwards. Reopening
+// after every cancellation used to add a full demux plus index rebuild to every seek.
+TEST(SoftwareDecoderTests, InterruptedDecodeIsReportedAndLeavesTheDecoderReusable) {
+    platform::FrameBudget budget{2U * 1024U * 1024U};
+    SoftwareDecoder decoder{
+        0U, probeDescriptor(fixture("h264_a_320x180_30fps_12.mp4"), 0U), budget};
+    std::atomic<bool> canceled = false;
+
+    ASSERT_TRUE(decoder.open(canceled));
+    const auto warm = decoder.decodeExact(domain::FrameId{4}, canceled);
+    ASSERT_TRUE(warm);
+    EXPECT_FALSE(decoder.lastDecodeInterrupted());
+
+    canceled.store(true, std::memory_order_release);
+    const auto interrupted = decoder.decodeExact(domain::FrameId{9}, canceled);
+    EXPECT_FALSE(interrupted);
+    EXPECT_TRUE(decoder.lastDecodeInterrupted());
+
+    canceled.store(false, std::memory_order_release);
+    const auto resumed = decoder.decodeExact(domain::FrameId{9}, canceled);
+    ASSERT_TRUE(resumed);
+    EXPECT_FALSE(decoder.lastDecodeInterrupted());
+    EXPECT_EQ(resumed.value().presentationTime, domain::MediaTime{300000});
+    EXPECT_NE(frameHash(resumed.value()), frameHash(warm.value()));
+}
+
 TEST(SoftwareDecoderTests, SequentialMpeg4DecodePreservesBufferedPacketState) {
     platform::FrameBudget budget{1024U * 1024U};
     SoftwareDecoder decoder{1U, probeDescriptor(fixture("mpeg4_64x48_30fps_12.mp4"), 1U), budget};
@@ -667,6 +695,43 @@ TEST(SoftwareDecoderTests, PreservesDisplayOrdinalsForANonZeroStreamStart) {
     ASSERT_TRUE(last);
     EXPECT_EQ(first.value().presentationTime, domain::MediaTime{1'000'000});
     EXPECT_EQ(last.value().presentationTime, domain::MediaTime{1'366'667});
+}
+
+// The original failure report: D:\Videos\Captures\王者荣耀世界 2026-06-01 13-25-17.mp4 failed as
+// "The indexed timestamp did not identify decoded frame 57 (target 62062, decoded 63063)" during
+// sequential playback after software fallback. Synthetic libx264 fixtures could not reproduce the
+// open-GOP structure, so the regression walks every display ordinal of a provided real capture
+// through exact seeks; skipped when the media is not configured so CI stays hermetic.
+TEST(SoftwareDecoderTests, ExactDecodeWalksEveryOrdinalOfProvidedGameDvrCapture) {
+    // std::getenv raises C4996 under /W4 /WX, so read the variable through the secure API.
+    char* configuredBuffer = nullptr;
+    std::size_t configuredSize = 0U;
+    errno_t configuredError =
+        _dupenv_s(&configuredBuffer, &configuredSize, "DVS_TEST_GAMEDVR_CAPTURE");
+    if (configuredError != 0 || configuredBuffer == nullptr || configuredSize == 0U) {
+        std::free(configuredBuffer);
+        GTEST_SKIP() << "DVS_TEST_GAMEDVR_CAPTURE not set or missing.";
+    }
+    const std::unique_ptr<char[]> configured{configuredBuffer};
+    if (!std::filesystem::exists(configured.get())) {
+        GTEST_SKIP() << "Configured capture does not exist: " << configured.get();
+    }
+    const std::filesystem::path path{configured.get()};
+    const auto descriptor = probeDescriptor(path, 0U);
+    platform::FrameBudget budget{64U * 1024U * 1024U};
+    SoftwareDecoder decoder{0U, descriptor, budget};
+    std::atomic<bool> canceled = false;
+    ASSERT_TRUE(decoder.open(canceled));
+
+    const std::int64_t count = static_cast<std::int64_t>(descriptor.frameCount.value);
+    // Reverse order maximizes the number of cold seeks across GOP boundaries; the original
+    // failure surfaced as overshoot exactly at such a boundary (frame 57, target 62062 us).
+    for (std::int64_t frame = count - 1; frame >= 0; --frame) {
+        const auto decoded = decoder.decodeExact(domain::FrameId{frame}, canceled);
+        ASSERT_TRUE(decoded) << "exact decode failed at display ordinal " << frame << ": "
+                             << decoded.error().technicalDetail;
+    }
+    EXPECT_EQ(budget.reservedBytes(), 0U);
 }
 
 TEST(SoftwareDecoderTests, ReportsWhySoftwareFallbackIsActiveWithoutASharedDevice) {

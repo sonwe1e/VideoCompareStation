@@ -3,12 +3,14 @@
 #include "dvs/domain/ComparisonValidator.h"
 #include "dvs/ui/ComparisonSurface.h"
 #include "dvs/ui/GraphicsBackend.h"
+#include "dvs/ui/ImageFolderPairModel.h"
 #include "dvs/ui/ImageReviewController.h"
 #include "dvs/ui/ReviewController.h"
 #include "dvs/ui/ReviewImageProvider.h"
 #include "dvs/ui/ReviewPreferencesController.h"
 #include "dvs/ui/ReviewSessionFacade.h"
 #include "dvs/ui/ReviewShellController.h"
+#include "dvs/ui/SourceListModel.h"
 
 #include <QColor>
 #include <QCoreApplication>
@@ -129,6 +131,25 @@ QQuickWindow* menuPopupWindow(QObject* menu) {
     return contentItem->window();
 }
 
+// Hand-rolled 1x1 PNG bytes: the pair opener routes through the still-image decoder, so
+// every file must be a real image. A literal byte array avoids depending on the
+// imageformat plugins that minimal test deployments may not install.
+[[nodiscard]] bool writeTestPng(const QString& path) {
+    static const unsigned char kPngBytes[] = {
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+        0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+        0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08,
+        0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
+        0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    };
+    QFile file{path};
+    if (!file.open(QIODevice::WriteOnly)) {
+        return false;
+    }
+    return file.write(reinterpret_cast<const char*>(kPngBytes), sizeof(kPngBytes)) ==
+           static_cast<qint64>(sizeof(kPngBytes));
+}
+
 } // namespace
 
 namespace dvs::ui {
@@ -149,6 +170,178 @@ public:
     }
 
     void cancel(const application::RequestContext&) noexcept override {}
+};
+
+// Shared QML/controller harness for the workspace-routing contracts. It keeps the two-source
+// video session, the still-image controller and the folder model alive for the whole test.
+class WorkspaceHarness final {
+public:
+    WorkspaceHarness() {
+        snapshot->graphicsReady = true;
+        snapshot->sessionState = domain::SessionState::kReady;
+        snapshot->playbackState = domain::PlaybackState::kPaused;
+        snapshot->displayedFrame = domain::FrameId{41};
+        snapshot->canonicalFrameCount = 100U;
+        snapshot->sources = {
+            application::SessionSourceView{
+                .sourceId = 0U,
+                .role = domain::ComparisonRole::kReference,
+                .displayName = "A",
+            },
+            application::SessionSourceView{
+                .sourceId = 1U,
+                .role = domain::ComparisonRole::kPrediction,
+                .displayName = "B",
+            },
+        };
+        snapshot->presentedSources = {
+            application::PresentedSourceState{
+                .sourceId = 0U,
+                .sourceFrameId = domain::FrameId{41},
+                .matchKind = application::FrameMatchKind::ExactIndex,
+            },
+            application::PresentedSourceState{
+                .sourceId = 1U,
+                .sourceFrameId = domain::FrameId{41},
+                .matchKind = application::FrameMatchKind::ExactIndex,
+            },
+        };
+        controller = std::make_unique<ReviewController>(ReviewController::Dependencies{
+            .submit =
+                [this](application::PlaybackCommand command) {
+                    submitted.push_back(std::move(command));
+                    return application::PortSubmitResult::Accepted;
+                },
+            .snapshot = [this] { return snapshot; },
+            .takeCompletedCommands =
+                [this] {
+                    std::vector<application::CommandTerminal> result = std::move(terminals);
+                    terminals.clear();
+                    return result;
+                },
+        });
+        shell = std::make_unique<ReviewShellController>(*controller, preferences);
+        facade = std::make_unique<ReviewSessionFacade>(*controller, preferences, *shell);
+        folderPairs.setAsyncPairOpener(
+            [this](const QUrl& primary, const QUrl& secondary, const int pairId, QString* error) {
+                const int requestId = imageReview.requestOpenPair(primary, secondary, pairId);
+                if (requestId <= 0 && error != nullptr) {
+                    *error = imageReview.errorText();
+                }
+                return requestId;
+            });
+        folderPairs.setAsyncPairCancel(
+            [this](const int requestId) { imageReview.cancelOpenRequest(requestId); });
+        folderPairs.setSingleSideOpener([this](const QUrl& url, const int row, QString* error) {
+            const int requestId = imageReview.requestOpenPrimary(url, row);
+            if (requestId <= 0 && error != nullptr) {
+                *error = imageReview.errorText();
+            }
+            return requestId;
+        });
+        QObject::connect(
+            &imageReview,
+            &ImageReviewController::openFinished,
+            &folderPairs,
+            [this](
+                const int requestId, const int pairId, const bool success, const QString& error) {
+                if (pairId >= 0) {
+                    folderPairs.completePairOpen(static_cast<quint64>(requestId), success, error);
+                    folderPairs.completeSingleSideOpen(
+                        static_cast<quint64>(requestId), success, error);
+                }
+            });
+    }
+
+    [[nodiscard]] bool create() {
+        const QString importPath =
+            QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml"));
+        engine.addImportPath(importPath);
+        engine.rootContext()->setContextProperty(QStringLiteral("reviewController"),
+                                                 controller.get());
+        engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
+        engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), shell.get());
+        engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), facade.get());
+        engine.rootContext()->setContextProperty(QStringLiteral("imageReview"), &imageReview);
+        engine.rootContext()->setContextProperty(QStringLiteral("imageFolderPairs"), &folderPairs);
+        engine.addImageProvider(QStringLiteral("vcs-review"),
+                                new ReviewImageProvider(&imageReview));
+        QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
+        if (component.status() != QQmlComponent::Ready) {
+            error = componentErrors(component);
+            return false;
+        }
+        root.reset(component.create());
+        if (!root) {
+            error = componentErrors(component);
+            return false;
+        }
+        window = qobject_cast<QQuickWindow*>(root.get());
+        if (!window) {
+            error = "Main.qml root is not a QQuickWindow";
+            return false;
+        }
+        window->resize(1280, 800);
+        settle();
+        return true;
+    }
+
+    [[nodiscard]] bool activateWorkspace(const int media) {
+        QVariant result;
+        return QMetaObject::invokeMethod(root.get(),
+                                         "activateWorkspace",
+                                         Q_RETURN_ARG(QVariant, result),
+                                         Q_ARG(QVariant, QVariant{media})) &&
+               result.toBool();
+    }
+
+    [[nodiscard]] bool beginWorkspaceOpen(const int media) {
+        QVariant result;
+        return QMetaObject::invokeMethod(root.get(),
+                                         "beginWorkspaceOpen",
+                                         Q_RETURN_ARG(QVariant, result),
+                                         Q_ARG(QVariant, QVariant{media})) &&
+               result.toBool();
+    }
+
+    [[nodiscard]] bool cancelWorkspaceOpen() {
+        QVariant result;
+        return QMetaObject::invokeMethod(
+                   root.get(), "cancelWorkspaceOpen", Q_RETURN_ARG(QVariant, result)) &&
+               result.toBool();
+    }
+
+    void settle(const int iterations = 5) {
+        for (int iteration = 0; iteration < iterations; ++iteration) {
+            QCoreApplication::processEvents();
+        }
+    }
+
+    template <typename Predicate>
+    [[nodiscard]] bool waitUntil(Predicate predicate, const int timeoutMilliseconds = 8000) {
+        QElapsedTimer timer;
+        timer.start();
+        while (!predicate() && timer.elapsed() < timeoutMilliseconds) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 2);
+            QThread::msleep(1U);
+        }
+        return predicate();
+    }
+
+    std::shared_ptr<application::SessionSnapshot> snapshot =
+        std::make_shared<application::SessionSnapshot>();
+    std::vector<application::PlaybackCommand> submitted;
+    std::vector<application::CommandTerminal> terminals;
+    std::unique_ptr<ReviewController> controller;
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    std::unique_ptr<ReviewShellController> shell;
+    std::unique_ptr<ReviewSessionFacade> facade;
+    ImageReviewController imageReview;
+    ImageFolderPairModel folderPairs;
+    QQmlEngine engine;
+    std::unique_ptr<QObject> root;
+    QQuickWindow* window = nullptr;
+    std::string error;
 };
 
 TEST(MainQmlContractTests, MapsEveryCurrentMediaErrorAndExcludesDeletedUiDomains) {
@@ -1914,6 +2107,779 @@ TEST(MainQmlContractTests, ImageWorkspaceReloadsViewportSourceAfterImageOpen) {
     EXPECT_EQ(imageItem->property("sourceSize").toSize(), QSize(64, 48));
 }
 
+TEST(MainQmlContractTests, ImageWorkspaceWipeHandleMovesSplitPosition) {
+    // Regression: ImageWorkspace wired WipeHandle.positionRequested to a method call on
+    // the controller (imageReview.setWipePosition(...)), but that method is only the
+    // Q_PROPERTY WRITE accessor — not Q_INVOKABLE — so QML threw a TypeError on every
+    // drag and the split line never moved. The handler must assign the wipePosition
+    // property instead, exactly like compareMode.
+    auto snapshot = std::make_shared<application::SessionSnapshot>();
+    snapshot->graphicsReady = true;
+    snapshot->sessionState = domain::SessionState::kEmpty;
+    std::vector<application::PlaybackCommand> submitted;
+    std::vector<application::CommandTerminal> terminals;
+    ReviewController controller{
+        ReviewController::Dependencies{
+            .submit =
+                [&submitted](application::PlaybackCommand command) {
+                    submitted.push_back(std::move(command));
+                    return application::PortSubmitResult::Accepted;
+                },
+            .snapshot = [snapshot] { return snapshot; },
+            .takeCompletedCommands =
+                [&terminals] {
+                    std::vector<application::CommandTerminal> result = std::move(terminals);
+                    terminals.clear();
+                    return result;
+                },
+        },
+    };
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    ReviewShellController shell{controller, preferences};
+    ReviewSessionFacade facade{controller, preferences, shell};
+    ImageReviewController imageReview;
+
+    QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
+    engine.rootContext()->setContextProperty(QStringLiteral("imageReview"), &imageReview);
+    engine.addImageProvider(QStringLiteral("vcs-review"), new ReviewImageProvider(&imageReview));
+    QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
+    ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
+
+    std::unique_ptr<QObject> root{component.create()};
+    ASSERT_NE(root, nullptr) << componentErrors(component);
+    auto* const window = qobject_cast<QQuickWindow*>(root.get());
+    ASSERT_NE(window, nullptr);
+    window->resize(960, 640);
+    window->show();
+    QCoreApplication::processEvents();
+
+    // A pair plus wipe mode reveals the split overlay and the shared WipeHandle.
+    QImage left(32, 32, QImage::Format_ARGB32);
+    left.fill(QColor(200, 30, 30));
+    QImage right(32, 32, QImage::Format_ARGB32);
+    right.fill(QColor(30, 30, 200));
+    ASSERT_TRUE(imageReview.openPrimaryImage(std::move(left), QStringLiteral("left")));
+    ASSERT_TRUE(imageReview.openSecondaryImage(std::move(right), QStringLiteral("right")));
+    imageReview.setCompareMode(ImageReviewController::Wipe);
+    QVariant workspaceActivated;
+    ASSERT_TRUE(QMetaObject::invokeMethod(root.get(),
+                                          "activateWorkspace",
+                                          Q_RETURN_ARG(QVariant, workspaceActivated),
+                                          Q_ARG(QVariant, QVariant{1})));
+    ASSERT_TRUE(workspaceActivated.toBool());
+    for (int iteration = 0; iteration < 5; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+
+    QObject* const workspace = root->findChild<QObject*>(QStringLiteral("imageWorkspaceRoot"));
+    ASSERT_NE(workspace, nullptr);
+    auto* const handle = workspace->findChild<QQuickItem*>(QStringLiteral("wipeHandle"));
+    auto* const overlay = workspace->findChild<QQuickItem*>(QStringLiteral("wipeOverlay"));
+    auto* const clip = workspace->findChild<QQuickItem*>(QStringLiteral("wipeClip"));
+    ASSERT_NE(handle, nullptr);
+    ASSERT_NE(overlay, nullptr);
+    ASSERT_NE(clip, nullptr);
+    EXPECT_TRUE(handle->isVisible()) << "wipe handle must be visible for a pair in wipe mode";
+
+    // updatePosition(sceneX) is the exact path DragHandler.onCentroidChanged drives; it
+    // emits positionRequested, whose handler must move the controller position.
+    const QPointF overlayOrigin = overlay->mapToScene(QPointF{0.0, 0.0});
+    for (const double requested : {0.25, 0.75}) {
+        const qreal sceneX = overlayOrigin.x() + overlay->width() * requested;
+        ASSERT_TRUE(
+            QMetaObject::invokeMethod(handle, "updatePosition", Q_ARG(QVariant, QVariant{sceneX})));
+        QCoreApplication::processEvents();
+        EXPECT_NEAR(imageReview.wipePosition(), requested, 1e-3)
+            << "dragging the split handle must update the controller wipe position";
+    }
+
+    // The on-screen split follows: the clip width and the handle center both track the
+    // requested position inside the overlay.
+    EXPECT_NEAR(clip->width(), overlay->width() * imageReview.wipePosition(), 1.0);
+    const QPointF handleCenter = handle->mapToScene(QPointF{handle->width() / 2.0, 0.0});
+    EXPECT_NEAR(
+        handleCenter.x(), overlayOrigin.x() + overlay->width() * imageReview.wipePosition(), 1.5);
+}
+
+TEST(MainQmlContractTests, SameNamedVideoSourcesExposeParentLabels) {
+    // Two sources with identical filenames from different folders must project a
+    // parent-folder label per slot so the viewport/strip can disambiguate them, while the
+    // full paths stay available for hover tooltips.
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const std::filesystem::path renderDir =
+        std::filesystem::path(tempDir.path().toStdWString()) / "render_v1";
+    const std::filesystem::path finalDir =
+        std::filesystem::path(tempDir.path().toStdWString()) / "render_final";
+    ASSERT_TRUE(std::filesystem::create_directory(renderDir));
+    ASSERT_TRUE(std::filesystem::create_directory(finalDir));
+    const std::array<std::filesystem::path, 2> paths = {renderDir / "shot.mp4",
+                                                        finalDir / "shot.mp4"};
+    for (const auto& path : paths) {
+        QFile file{QString::fromStdWString(path.wstring())};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("same-name-bytes", 15);
+    }
+
+    const auto rateResult = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rateResult);
+    const domain::RationalRate rate = rateResult.value();
+
+    std::vector<domain::ComparisonSource> comparisonSources;
+    for (std::size_t index = 0U; index < paths.size(); ++index) {
+        const QFileInfo info{QString::fromStdWString(paths[index].wstring())};
+        comparisonSources.push_back(domain::ComparisonSource{
+            .id = static_cast<domain::SourceId>(index),
+            .role = index == 0U ? domain::ComparisonRole::kReference
+                                : domain::ComparisonRole::kPrediction,
+            .descriptor =
+                domain::MediaDescriptor{
+                    .normalizedPath = paths[index],
+                    .extent = domain::MediaExtent{.width = 1'920U, .height = 1'080U},
+                    .frameRate = rate,
+                    .frameCount =
+                        domain::FrameCountInfo{
+                            .value = 12,
+                            .origin = domain::FrameCountOrigin::kReported,
+                        },
+                    .duration = domain::MediaTime{400'000},
+                    .codecId = "h264",
+                    .pixelFormatId = "nv12",
+                    .bitDepth = 8U,
+                    .decodeCapabilities =
+                        domain::DecodeCapabilities{
+                            .softwareDecode = true,
+                            .d3d11VaDecode = true,
+                        },
+                    .timingConfidence = domain::TimingConfidence::kVerifiedCfr,
+                    .sourceIdentity =
+                        domain::SourceFileIdentity{
+                            .byteSize = static_cast<std::uint64_t>(info.size()),
+                            .modifiedUtcMilliseconds = info.lastModified().toMSecsSinceEpoch(),
+                            .fingerprintSha256 = std::string(64U, '0'),
+                        },
+                },
+            .displayName = "shot.mp4",
+        });
+    }
+    auto validated = domain::ComparisonValidator::validate(std::move(comparisonSources));
+    ASSERT_TRUE(validated);
+
+    auto snapshot = std::make_shared<application::SessionSnapshot>();
+    snapshot->graphicsReady = true;
+    snapshot->sessionState = domain::SessionState::kReady;
+    snapshot->playbackState = domain::PlaybackState::kPaused;
+    snapshot->displayedFrame = domain::FrameId{0};
+    snapshot->validatedComparison =
+        std::make_shared<const domain::ValidatedComparisonSet>(std::move(validated).value().set);
+    snapshot->canonicalFrameCount =
+        static_cast<std::uint64_t>(snapshot->validatedComparison->canonicalFrameCount());
+    snapshot->canonicalTimeline = rate;
+    for (const auto& source : snapshot->validatedComparison->sources()) {
+        snapshot->sources.push_back(application::SessionSourceView{
+            .sourceId = source.id,
+            .role = source.role,
+            .displayName = source.displayName,
+        });
+        snapshot->presentedSources.push_back(application::PresentedSourceState{
+            .sourceId = source.id,
+            .sourceFrameId = domain::FrameId{0},
+            .matchKind = application::FrameMatchKind::ExactIndex,
+        });
+    }
+
+    std::vector<application::PlaybackCommand> submitted;
+    std::vector<application::CommandTerminal> terminals;
+    ReviewController controller{
+        ReviewController::Dependencies{
+            .submit =
+                [&submitted](application::PlaybackCommand command) {
+                    submitted.push_back(std::move(command));
+                    return application::PortSubmitResult::Accepted;
+                },
+            .snapshot = [snapshot] { return snapshot; },
+            .takeCompletedCommands =
+                [&terminals] {
+                    std::vector<application::CommandTerminal> result = std::move(terminals);
+                    terminals.clear();
+                    return result;
+                },
+        },
+    };
+    controller.refreshProjection();
+    QCoreApplication::processEvents();
+
+    const QStringList parentLabels = controller.sourceParentLabels();
+    const QStringList fullPaths = controller.sourceFullPaths();
+    ASSERT_EQ(parentLabels.size(), 2);
+    ASSERT_EQ(fullPaths.size(), 2);
+    EXPECT_EQ(parentLabels.at(0).toStdString(), "render_v1");
+    EXPECT_EQ(parentLabels.at(1).toStdString(), "render_final");
+    EXPECT_TRUE(fullPaths.at(0).endsWith(QStringLiteral("shot.mp4"), Qt::CaseInsensitive));
+    EXPECT_NE(fullPaths.at(0), fullPaths.at(1));
+
+    // The sources model exposes the same per-row data for the strip and viewport labels.
+    const QAbstractItemModel* model = controller.sources();
+    ASSERT_NE(model, nullptr);
+    ASSERT_EQ(model->rowCount(), 2);
+    const QModelIndex first = model->index(0, 0);
+    const QModelIndex second = model->index(1, 0);
+    EXPECT_EQ(first.data(SourceListModel::FilenameRole).toString().toStdString(), "shot.mp4");
+    EXPECT_EQ(first.data(SourceListModel::ParentLabelRole).toString().toStdString(), "render_v1");
+    EXPECT_EQ(second.data(SourceListModel::ParentLabelRole).toString().toStdString(),
+              "render_final");
+    EXPECT_TRUE(!first.data(SourceListModel::FullPathRole).toString().isEmpty());
+    EXPECT_TRUE(!second.data(SourceListModel::FullPathRole).toString().isEmpty());
+}
+
+TEST(MainQmlContractTests, ImageFolderComparisonLoadsSidebarAndOpensFirstPair) {
+    // End-to-end folder comparison: two folders with same-named images pair up, the
+    // sidebar becomes visible with one row per file, and the first complete pair opens in
+    // the image workspace with compare mode SideBySide.
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString leftDir = QDir(tempDir.path()).filePath(QStringLiteral("folder_a"));
+    const QString rightDir = QDir(tempDir.path()).filePath(QStringLiteral("folder_b"));
+    ASSERT_TRUE(QDir{}.mkpath(leftDir));
+    ASSERT_TRUE(QDir{}.mkpath(rightDir));
+    for (const QString& folder : {leftDir, rightDir}) {
+        for (const char* name : {"frame001.png", "frame002.png"}) {
+            ASSERT_TRUE(writeTestPng(QDir(folder).filePath(QString::fromLatin1(name))));
+        }
+    }
+    ASSERT_TRUE(writeTestPng(QDir(leftDir).filePath(QStringLiteral("frame003.png"))));
+
+    auto snapshot = std::make_shared<application::SessionSnapshot>();
+    snapshot->graphicsReady = true;
+    snapshot->sessionState = domain::SessionState::kEmpty;
+    std::vector<application::PlaybackCommand> submitted;
+    std::vector<application::CommandTerminal> terminals;
+    ReviewController controller{
+        ReviewController::Dependencies{
+            .submit =
+                [&submitted](application::PlaybackCommand command) {
+                    submitted.push_back(std::move(command));
+                    return application::PortSubmitResult::Accepted;
+                },
+            .snapshot = [snapshot] { return snapshot; },
+            .takeCompletedCommands =
+                [&terminals] {
+                    std::vector<application::CommandTerminal> result = std::move(terminals);
+                    terminals.clear();
+                    return result;
+                },
+        },
+    };
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    ReviewShellController shell{controller, preferences};
+    ReviewSessionFacade facade{controller, preferences, shell};
+    ImageReviewController imageReview;
+    ImageFolderPairModel folderPairs;
+    folderPairs.setAsyncPairOpener(
+        [&imageReview](
+            const QUrl& primary, const QUrl& secondary, const int pairId, QString* error) {
+            const int requestId = imageReview.requestOpenPair(primary, secondary, pairId);
+            if (requestId <= 0 && error != nullptr) {
+                *error = imageReview.errorText();
+            }
+            return requestId;
+        });
+    folderPairs.setAsyncPairCancel(
+        [&imageReview](const int requestId) { imageReview.cancelOpenRequest(requestId); });
+    folderPairs.setSingleSideOpener([&imageReview](const QUrl& url, const int row, QString* error) {
+        const int requestId = imageReview.requestOpenPrimary(url, row);
+        if (requestId <= 0 && error != nullptr) {
+            *error = imageReview.errorText();
+        }
+        return requestId;
+    });
+    QObject::connect(
+        &imageReview,
+        &ImageReviewController::openFinished,
+        &folderPairs,
+        [&folderPairs](
+            const int requestId, const int pairId, const bool success, const QString& error) {
+            if (pairId >= 0) {
+                folderPairs.completePairOpen(static_cast<quint64>(requestId), success, error);
+                folderPairs.completeSingleSideOpen(static_cast<quint64>(requestId), success, error);
+            }
+        });
+
+    QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
+    engine.rootContext()->setContextProperty(QStringLiteral("imageReview"), &imageReview);
+    engine.rootContext()->setContextProperty(QStringLiteral("imageFolderPairs"), &folderPairs);
+    engine.addImageProvider(QStringLiteral("vcs-review"), new ReviewImageProvider(&imageReview));
+    QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
+    ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
+
+    std::unique_ptr<QObject> root{component.create()};
+    ASSERT_NE(root, nullptr) << componentErrors(component);
+    auto* const window = qobject_cast<QQuickWindow*>(root.get());
+    ASSERT_NE(window, nullptr);
+    window->resize(1280, 800);
+    QCoreApplication::processEvents();
+
+    // The same function the FolderDialog accepted handler and the two-folder drop invoke.
+    root->setProperty("imageFolderLeftUrl", QUrl::fromLocalFile(QDir(leftDir).absolutePath()));
+    root->setProperty("imageFolderRightUrl", QUrl::fromLocalFile(QDir(rightDir).absolutePath()));
+    QVariant loadResult;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        root.get(), "loadFolderComparison", Q_RETURN_ARG(QVariant, loadResult)));
+    EXPECT_TRUE(loadResult.toBool());
+    // T4: loadFolderComparison returns when the candidate is accepted; the first pair is
+    // only committed after the worker finishes.
+    QElapsedTimer firstPairTimer;
+    firstPairTimer.start();
+    while ((!imageReview.hasPair() || folderPairs.currentPair() != 0) &&
+           firstPairTimer.elapsed() < 8000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 2);
+        QThread::msleep(1U);
+    }
+    ASSERT_TRUE(imageReview.hasPair());
+    ASSERT_EQ(folderPairs.currentPair(), 0);
+
+    // Three rows: two complete pairs plus the left-only single; first complete opens.
+    EXPECT_EQ(folderPairs.pairCount(), 3);
+    EXPECT_TRUE(imageReview.hasPair());
+    EXPECT_EQ(imageReview.compareMode(), static_cast<int>(ImageReviewController::SideBySide));
+    EXPECT_TRUE(
+        imageReview.primaryPath().endsWith(QStringLiteral("frame001.png"), Qt::CaseInsensitive));
+
+    QObject* const workspace = root->findChild<QObject*>(QStringLiteral("imageWorkspaceRoot"));
+    ASSERT_NE(workspace, nullptr);
+    auto* const sidebar =
+        workspace->findChild<QQuickItem*>(QStringLiteral("folderPairSidebarHost"));
+    ASSERT_NE(sidebar, nullptr);
+    EXPECT_TRUE(sidebar->isVisible()) << "sidebar must be visible after loading folders";
+    QObject* const positionLabel =
+        sidebar->findChild<QObject*>(QStringLiteral("folderPairPositionLabel"));
+    ASSERT_NE(positionLabel, nullptr);
+    EXPECT_EQ(positionLabel->property("text").toString(), QStringLiteral("1/3"));
+
+    // Step to the next pair through the sidebar's navigation entry point.
+    QVariant stepResult;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        sidebar, "stepPair", Q_RETURN_ARG(QVariant, stepResult), Q_ARG(QVariant, QVariant{1})));
+    QElapsedTimer stepTimer;
+    stepTimer.start();
+    while ((folderPairs.currentPair() != 1 ||
+            !imageReview.primaryPath().endsWith(QStringLiteral("frame002.png"),
+                                                Qt::CaseInsensitive)) &&
+           stepTimer.elapsed() < 8000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 2);
+        QThread::msleep(1U);
+    }
+    EXPECT_TRUE(
+        imageReview.primaryPath().endsWith(QStringLiteral("frame002.png"), Qt::CaseInsensitive));
+    EXPECT_EQ(folderPairs.currentPair(), 1);
+    // The single-sided row 2 must never open.
+    EXPECT_FALSE(folderPairs.openPairAt(2));
+
+    // A direct loose-image import leaves the folder task: its list selection and arrow-key
+    // navigation must detach so the canvas identity and the list can never diverge.
+    QVariantList looseUrls;
+    looseUrls.push_back(
+        QUrl::fromLocalFile(QDir(leftDir).filePath(QStringLiteral("frame003.png"))));
+    QVariant looseOpened;
+    ASSERT_TRUE(QMetaObject::invokeMethod(root.get(),
+                                          "performImageReview",
+                                          Q_RETURN_ARG(QVariant, looseOpened),
+                                          Q_ARG(QVariant, QVariant{looseUrls})));
+    EXPECT_TRUE(looseOpened.toBool());
+    QElapsedTimer looseTimer;
+    looseTimer.start();
+    while (
+        (!imageReview.hasPrimary() || imageReview.hasSecondary() || folderPairs.pairCount() != 0) &&
+        looseTimer.elapsed() < 8000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 2);
+        QThread::msleep(1U);
+    }
+    EXPECT_EQ(folderPairs.pairCount(), 0);
+    EXPECT_EQ(folderPairs.currentPair(), -1);
+    EXPECT_FALSE(imageReview.hasSecondary());
+    EXPECT_EQ(root->property("workspaceMode").toInt(), 1);
+}
+
+TEST(MainQmlContractTests, FolderSidebarExposesPairingContextAndOpensMissingSide) {
+    // T6: the sidebar states the pairing rule and outcome counts, a single-sided row
+    // opens the side that exists, the selection stays visible while stepping through a
+    // long folder, and the wipe halves carry their A/B identity.
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString leftDir = QDir(tempDir.path()).filePath(QStringLiteral("folder_a"));
+    const QString rightDir = QDir(tempDir.path()).filePath(QStringLiteral("folder_b"));
+    ASSERT_TRUE(QDir{}.mkpath(leftDir));
+    ASSERT_TRUE(QDir{}.mkpath(rightDir));
+    // Enough pairs to scroll: the sidebar viewport shows far fewer than 40 rows.
+    for (int index = 0; index < 40; ++index) {
+        const QString name = QStringLiteral("pair_%1.png").arg(index, 3, 10, QLatin1Char('0'));
+        ASSERT_TRUE(writeTestPng(QDir(leftDir).filePath(name)));
+        ASSERT_TRUE(writeTestPng(QDir(rightDir).filePath(name)));
+    }
+    ASSERT_TRUE(writeTestPng(QDir(rightDir).filePath(QStringLiteral("only_right.png"))));
+
+    auto snapshot = std::make_shared<application::SessionSnapshot>();
+    snapshot->graphicsReady = true;
+    snapshot->sessionState = domain::SessionState::kEmpty;
+    std::vector<application::PlaybackCommand> submitted;
+    std::vector<application::CommandTerminal> terminals;
+    ReviewController controller{
+        ReviewController::Dependencies{
+            .submit =
+                [&submitted](application::PlaybackCommand command) {
+                    submitted.push_back(std::move(command));
+                    return application::PortSubmitResult::Accepted;
+                },
+            .snapshot = [snapshot] { return snapshot; },
+            .takeCompletedCommands =
+                [&terminals] {
+                    std::vector<application::CommandTerminal> result = std::move(terminals);
+                    terminals.clear();
+                    return result;
+                },
+        },
+    };
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    ReviewShellController shell{controller, preferences};
+    ReviewSessionFacade facade{controller, preferences, shell};
+    ImageReviewController imageReview;
+    ImageFolderPairModel folderPairs;
+    folderPairs.setAsyncPairOpener(
+        [&imageReview](
+            const QUrl& primary, const QUrl& secondary, const int pairId, QString* error) {
+            const int requestId = imageReview.requestOpenPair(primary, secondary, pairId);
+            if (requestId <= 0 && error != nullptr) {
+                *error = imageReview.errorText();
+            }
+            return requestId;
+        });
+    folderPairs.setAsyncPairCancel(
+        [&imageReview](const int requestId) { imageReview.cancelOpenRequest(requestId); });
+    folderPairs.setSingleSideOpener([&imageReview](const QUrl& url, const int row, QString* error) {
+        const int requestId = imageReview.requestOpenPrimary(url, row);
+        if (requestId <= 0 && error != nullptr) {
+            *error = imageReview.errorText();
+        }
+        return requestId;
+    });
+    QObject::connect(
+        &imageReview,
+        &ImageReviewController::openFinished,
+        &folderPairs,
+        [&folderPairs](
+            const int requestId, const int pairId, const bool success, const QString& error) {
+            if (pairId >= 0) {
+                folderPairs.completePairOpen(static_cast<quint64>(requestId), success, error);
+                folderPairs.completeSingleSideOpen(static_cast<quint64>(requestId), success, error);
+            }
+        });
+
+    QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
+    engine.rootContext()->setContextProperty(QStringLiteral("imageReview"), &imageReview);
+    engine.rootContext()->setContextProperty(QStringLiteral("imageFolderPairs"), &folderPairs);
+    engine.addImageProvider(QStringLiteral("vcs-review"), new ReviewImageProvider(&imageReview));
+    QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
+    ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
+
+    std::unique_ptr<QObject> root{component.create()};
+    ASSERT_NE(root, nullptr) << componentErrors(component);
+    auto* const window = qobject_cast<QQuickWindow*>(root.get());
+    ASSERT_NE(window, nullptr);
+    window->resize(1280, 800);
+    QCoreApplication::processEvents();
+
+    root->setProperty("imageFolderLeftUrl", QUrl::fromLocalFile(QDir(leftDir).absolutePath()));
+    root->setProperty("imageFolderRightUrl", QUrl::fromLocalFile(QDir(rightDir).absolutePath()));
+    QVariant loadResult;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        root.get(), "loadFolderComparison", Q_RETURN_ARG(QVariant, loadResult)));
+    EXPECT_TRUE(loadResult.toBool());
+    // Rows sort as only_right.png, pair_000.png ... pair_039.png: the first complete
+    // pair is row 1.
+    QElapsedTimer firstPairTimer;
+    firstPairTimer.start();
+    while ((!imageReview.hasPair() || folderPairs.currentPair() != 1) &&
+           firstPairTimer.elapsed() < 8000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 2);
+        QThread::msleep(1U);
+    }
+    ASSERT_TRUE(imageReview.hasPair());
+    ASSERT_EQ(folderPairs.currentPair(), 1);
+    ASSERT_EQ(folderPairs.pairCount(), 41);
+
+    QObject* const workspace = root->findChild<QObject*>(QStringLiteral("imageWorkspaceRoot"));
+    ASSERT_NE(workspace, nullptr);
+    auto* const sidebar =
+        workspace->findChild<QQuickItem*>(QStringLiteral("folderPairSidebarHost"));
+    ASSERT_NE(sidebar, nullptr);
+    EXPECT_TRUE(sidebar->isVisible());
+
+    // The pairing rule and the outcome counts are stated, and "paired" never claims
+    // content equality: 40 complete rows plus one right-only single.
+    QObject* const ruleLabel = sidebar->findChild<QObject*>(QStringLiteral("folderPairRuleLabel"));
+    QObject* const countsLabel =
+        sidebar->findChild<QObject*>(QStringLiteral("folderPairCountsLabel"));
+    ASSERT_NE(ruleLabel, nullptr);
+    ASSERT_NE(countsLabel, nullptr);
+    EXPECT_TRUE(ruleLabel->property("text").toString().contains(QStringLiteral("大小写")));
+    EXPECT_EQ(countsLabel->property("text").toString(),
+              QStringLiteral("完整 40 · 缺失 1 · 大小写冲突 0"));
+
+    // The workspace status bar names the committed row.
+    QObject* const contextLabel =
+        workspace->findChild<QObject*>(QStringLiteral("imagePairContextLabel"));
+    ASSERT_NE(contextLabel, nullptr);
+    EXPECT_TRUE(contextLabel->property("visible").toBool());
+    EXPECT_TRUE(contextLabel->property("text").toString().contains(QStringLiteral("第 2/41 行")));
+    // The single-sided row 0 opens the side that exists: the canvas shows only that
+    // image and the list selection advances to the row it belongs to.
+    QVariant missingOpen;
+    ASSERT_TRUE(QMetaObject::invokeMethod(sidebar,
+                                          "openMissingSide",
+                                          Q_RETURN_ARG(QVariant, missingOpen),
+                                          Q_ARG(QVariant, QVariant{0})));
+    EXPECT_TRUE(missingOpen.toBool());
+    QElapsedTimer missingTimer;
+    missingTimer.start();
+    while ((!imageReview.hasPrimary() || imageReview.hasSecondary() ||
+            folderPairs.currentPair() != 0) &&
+           missingTimer.elapsed() < 8000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 2);
+        QThread::msleep(1U);
+    }
+    EXPECT_TRUE(imageReview.hasPrimary());
+    EXPECT_FALSE(imageReview.hasSecondary());
+    EXPECT_TRUE(imageReview.primaryPath().endsWith(QStringLiteral("only_right.png")));
+    EXPECT_EQ(folderPairs.currentPair(), 0);
+    EXPECT_TRUE(contextLabel->property("text").toString().contains(QStringLiteral("仅 B 存在")));
+    QObject* const positionLabel =
+        sidebar->findChild<QObject*>(QStringLiteral("folderPairPositionLabel"));
+    ASSERT_NE(positionLabel, nullptr);
+    EXPECT_EQ(positionLabel->property("text").toString(), QStringLiteral("1/41"));
+
+    // Back to a complete pair; the wipe halves carry their A/B identity, with the left
+    // half showing the secondary (B) image and the right half the primary (A).
+    QVariant stepBack;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        sidebar, "stepPair", Q_RETURN_ARG(QVariant, stepBack), Q_ARG(QVariant, QVariant{-1})));
+    QElapsedTimer wipeTimer;
+    wipeTimer.start();
+    while ((!imageReview.hasPair() || folderPairs.currentPair() != 40) &&
+           wipeTimer.elapsed() < 8000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 2);
+        QThread::msleep(1U);
+    }
+    ASSERT_TRUE(imageReview.hasPair());
+    imageReview.setCompareMode(ImageReviewController::Wipe);
+    for (int iteration = 0; iteration < 5; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    QObject* const wipeLeft = workspace->findChild<QObject*>(QStringLiteral("wipeIdentityLeft"));
+    QObject* const wipeRight = workspace->findChild<QObject*>(QStringLiteral("wipeIdentityRight"));
+    ASSERT_NE(wipeLeft, nullptr);
+    ASSERT_NE(wipeRight, nullptr);
+    const QString leftText = wipeLeft->property("text").toString();
+    const QString rightText = wipeRight->property("text").toString();
+    EXPECT_TRUE(leftText.startsWith(QStringLiteral("B · ")));
+    EXPECT_TRUE(rightText.startsWith(QStringLiteral("A · ")));
+    // Same-named files are disambiguated by parent folder: the left half must name the
+    // secondary's folder and the right half the primary's, never the reverse.
+    EXPECT_TRUE(leftText.contains(QStringLiteral("folder_b")));
+    EXPECT_TRUE(rightText.contains(QStringLiteral("folder_a")));
+    // Keyboard stepping keeps the selected row visible: after walking well past one
+    // viewport of rows, the committed row is still inside the list's visible window.
+    int steppedRow = 40;
+    for (int step = 0; step < 20; ++step) {
+        QVariant stepNext;
+        ASSERT_TRUE(QMetaObject::invokeMethod(
+            sidebar, "stepPair", Q_RETURN_ARG(QVariant, stepNext), Q_ARG(QVariant, QVariant{1})));
+        QElapsedTimer stepTimer;
+        stepTimer.start();
+        while (folderPairs.currentPair() == steppedRow && stepTimer.elapsed() < 8000) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 2);
+            QThread::msleep(1U);
+        }
+        ASSERT_NE(folderPairs.currentPair(), steppedRow) << "step " << step;
+        steppedRow = folderPairs.currentPair();
+    }
+    auto* const pairList = sidebar->findChild<QQuickItem*>(QStringLiteral("folderPairList"));
+    ASSERT_NE(pairList, nullptr);
+    for (int iteration = 0; iteration < 5; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    EXPECT_EQ(pairList->property("currentIndex").toInt(), steppedRow);
+    auto* const currentItem = pairList->property("currentItem").value<QQuickItem*>();
+    ASSERT_NE(currentItem, nullptr);
+    const qreal contentY = pairList->property("contentY").toDouble();
+    EXPECT_GE(currentItem->y() + currentItem->height(), contentY - 1.0);
+    EXPECT_LE(currentItem->y(), contentY + pairList->property("height").toDouble() + 1.0);
+}
+
+TEST(MainQmlContractTests, WorkspaceOpenIntentDoesNotOverrideCommittedWorkspace) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    QObject* const session = harness.root->findChild<QObject*>(QStringLiteral("workspaceSession"));
+    auto* const imageWorkspace =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
+    ASSERT_NE(session, nullptr);
+    ASSERT_NE(imageWorkspace, nullptr);
+
+    const int sourceCountBefore = harness.controller->sourceCount();
+    const auto displayedFrameBefore = harness.snapshot->displayedFrame;
+    ASSERT_TRUE(harness.beginWorkspaceOpen(1));
+    EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 0);
+    EXPECT_EQ(session->property("pendingMedia").toInt(), 1);
+    EXPECT_EQ(harness.controller->sourceCount(), sourceCountBefore);
+    EXPECT_EQ(harness.snapshot->displayedFrame, displayedFrameBefore);
+    EXPECT_FALSE(imageWorkspace->property("visible").toBool());
+
+    // Cancelling the selector/staging intent must leave the committed video workspace and its
+    // position untouched; it must not silently switch to an empty image workspace.
+    ASSERT_TRUE(harness.cancelWorkspaceOpen());
+    EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 0);
+    EXPECT_EQ(session->property("pendingMedia").toInt(), -1);
+    EXPECT_EQ(harness.controller->sourceCount(), sourceCountBefore);
+    EXPECT_EQ(harness.snapshot->displayedFrame, displayedFrameBefore);
+    EXPECT_FALSE(imageWorkspace->property("visible").toBool());
+}
+
+TEST(MainQmlContractTests, WorkspaceSwitchPausesAndRetainsVideoSession) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.snapshot->playbackState = domain::PlaybackState::kPlaying;
+    harness.controller->refreshProjection();
+    harness.settle();
+    ASSERT_TRUE(harness.controller->playing());
+    const int sourceCountBefore = harness.controller->sourceCount();
+    const int frameBefore = harness.controller->currentFrame();
+
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    ASSERT_FALSE(harness.submitted.empty());
+    const auto* const pause = std::get_if<application::PauseCommand>(&harness.submitted.back());
+    ASSERT_NE(pause, nullptr) << "leaving video must pause the hidden session";
+    EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 1);
+    EXPECT_EQ(harness.controller->sourceCount(), sourceCountBefore);
+    EXPECT_EQ(harness.controller->currentFrame(), frameBefore);
+
+    // Complete the pause terminal: the retained session is then an explicit paused session.
+    harness.terminals.push_back(application::CommandTerminal{
+        .context = application::commandContext(harness.submitted.back()),
+        .outcome = application::CommandOutcome::Succeeded,
+    });
+    harness.snapshot->playbackState = domain::PlaybackState::kPaused;
+    harness.controller->refreshProjection();
+    harness.settle();
+    ASSERT_FALSE(harness.controller->playing());
+
+    // Returning to video shows the same sources and does not issue a close command.
+    harness.submitted.clear();
+    ASSERT_TRUE(harness.activateWorkspace(0));
+    EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 0);
+    EXPECT_EQ(harness.controller->sourceCount(), sourceCountBefore);
+    EXPECT_TRUE(harness.submitted.empty());
+
+    // Even a stale "playing" projection is corrected on return: the workspace never resumes
+    // playback implicitly after being hidden behind the image task.
+    harness.snapshot->playbackState = domain::PlaybackState::kPlaying;
+    harness.controller->refreshProjection();
+    harness.settle();
+    ASSERT_TRUE(harness.controller->playing());
+    harness.submitted.clear();
+    ASSERT_TRUE(harness.activateWorkspace(0));
+    ASSERT_FALSE(harness.submitted.empty());
+    EXPECT_NE(std::get_if<application::PauseCommand>(&harness.submitted.back()), nullptr);
+}
+
+TEST(MainQmlContractTests, ImageWorkspaceArrowsDoNotDriveHiddenVideo) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    auto* const viewport =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("mediaViewportFocusTarget"));
+    auto* const imageWorkspace =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
+    ASSERT_NE(viewport, nullptr);
+    ASSERT_NE(imageWorkspace, nullptr);
+
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    harness.settle();
+    EXPECT_TRUE(imageWorkspace->property("visible").toBool());
+    EXPECT_TRUE(imageWorkspace->hasActiveFocus())
+        << "the image workspace must be the actual key receiver while it is visible";
+    const std::size_t submittedBefore = harness.submitted.size();
+    sendKey(*harness.window, Qt::Key_Right);
+    EXPECT_EQ(harness.submitted.size(), submittedBefore)
+        << "arrow keys in the image workspace must not step the hidden video";
+
+    ASSERT_TRUE(harness.activateWorkspace(0));
+    harness.settle();
+    EXPECT_TRUE(viewport->hasActiveFocus());
+    sendKey(*harness.window, Qt::Key_Right);
+    ASSERT_GT(harness.submitted.size(), submittedBefore);
+    const auto* const step = std::get_if<application::StepFramesCommand>(&harness.submitted.back());
+    ASSERT_NE(step, nullptr);
+    EXPECT_EQ(step->delta, 1);
+}
+
+TEST(MainQmlContractTests, CloseCurrentTaskOnlyClosesActiveWorkspace) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    QImage image(32, 32, QImage::Format_ARGB32);
+    image.fill(QColor(10, 20, 30));
+    ASSERT_TRUE(harness.imageReview.openPrimaryImage(std::move(image), QStringLiteral("image-a")));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    harness.settle();
+    ASSERT_TRUE(harness.imageReview.hasPrimary());
+
+    // Ctrl+W in the image workspace closes only that task and reveals the retained video.
+    sendKey(*harness.window, Qt::Key_W, Qt::ControlModifier);
+    harness.settle();
+    EXPECT_FALSE(harness.imageReview.hasPrimary());
+    EXPECT_EQ(harness.controller->sourceCount(), 2);
+    EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 0);
+
+    // Ctrl+W in the video workspace closes only the video task; the retained image is shown
+    // and remains loaded.
+    QImage retained(16, 16, QImage::Format_ARGB32);
+    retained.fill(QColor(40, 50, 60));
+    ASSERT_TRUE(
+        harness.imageReview.openPrimaryImage(std::move(retained), QStringLiteral("retained")));
+    ASSERT_TRUE(harness.activateWorkspace(0));
+    harness.settle();
+    EXPECT_EQ(harness.root->property("inputContext").toInt(), 0);
+    EXPECT_TRUE(harness.root->property("activeTaskHasMedia").toBool());
+    EXPECT_TRUE(harness.root->property("globalMediaShortcutsEnabled").toBool());
+    harness.submitted.clear();
+    sendKey(*harness.window, Qt::Key_W, Qt::ControlModifier);
+    harness.settle();
+    ASSERT_FALSE(harness.submitted.empty());
+    EXPECT_NE(std::get_if<application::CloseSessionCommand>(&harness.submitted.back()), nullptr);
+    EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 1);
+    EXPECT_TRUE(harness.imageReview.hasPrimary());
+}
 } // namespace
 } // namespace dvs::ui
 

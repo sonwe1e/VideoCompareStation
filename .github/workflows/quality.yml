@@ -27,15 +27,15 @@ jobs:
           persist-credentials: false
 
       - name: Check contributor guide
-        shell: powershell
+        shell: pwsh
         run: .\tools\quality\check-repository-guide.ps1
 
       - name: Check resource limit policy
-        shell: powershell
+        shell: pwsh
         run: .\tools\quality\check-resource-limits.ps1
 
       - name: Check coverage gate behavior
-        shell: powershell
+        shell: pwsh
         run: >-
           .\tools\quality\check-coverage.ps1
           -BuildDir tests\fixtures\coverage
@@ -66,7 +66,7 @@ jobs:
           arch: x64
 
       - name: Verify pinned toolchain
-        shell: powershell
+        shell: pwsh
         run: |
           $cmakeVersion = cmake --version | Select-Object -First 1
           if ($cmakeVersion -notmatch '^cmake version 4\.4(\.|$)') {
@@ -94,25 +94,25 @@ jobs:
           Get-Command cl.exe, ninja.exe, clang-format.exe, clang-tidy.exe -ErrorAction Stop
 
       - name: Configure development preset
-        shell: powershell
+        shell: pwsh
         run: >-
-          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake
+          pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake
           --preset dev --fresh
 
       - name: Build development preset
-        shell: powershell
+        shell: pwsh
         run: >-
-          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake
+          pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake
           --build --preset dev
 
       - name: Check formatting
-        shell: powershell
+        shell: pwsh
         run: >-
-          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake
+          pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake
           --build --preset dev --target format-check
 
       - name: Run static analysis
-        shell: powershell
+        shell: pwsh
         run: >-
-          powershell -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake
+          pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake
           --build --preset dev --target lint

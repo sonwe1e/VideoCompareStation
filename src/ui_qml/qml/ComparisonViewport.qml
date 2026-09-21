@@ -20,6 +20,7 @@ Rectangle {
     required property int effectiveViewMode
     required property real wipePosition
     required property int selectedDifferenceExactness
+    required property var selectedDifferenceEdge
     required property bool differenceThresholdEnabled
     required property int differenceThresholdCode
     required property int differenceThresholdPolicy
@@ -38,6 +39,8 @@ Rectangle {
     required property int differenceFirstSlot
     required property int effectiveDifferenceEdge
     required property var sourceNames
+    required property var sourceParentLabels
+    required property var sourceFullPaths
     required property var sourceMediaInfo
     required property bool frameErrorBannerVisible
     required property string errorDetail
@@ -79,6 +82,14 @@ Rectangle {
         return slot >= 0 && slot < control.sourceNames.length ? String(control.sourceNames[slot]) : "";
     }
 
+    function sourceParentLabel(slot) {
+        return slot >= 0 && slot < control.sourceParentLabels.length ? String(control.sourceParentLabels[slot]) : "";
+    }
+
+    function sourceFullPath(slot) {
+        return slot >= 0 && slot < control.sourceFullPaths.length ? String(control.sourceFullPaths[slot]) : "";
+    }
+
     function comparisonExactnessLabel(exactness) {
         if (exactness === 0)
             return qsTr("逐像素精确");
@@ -89,6 +100,20 @@ Rectangle {
         if (exactness === 3)
             return qsTr("已时间对齐");
         return qsTr("不可用");
+    }
+
+    // T6: every applicable inexactness dimension is named side by side. The single
+    // exactness enum can only report the highest-priority reason, so a pair that is
+    // temporally aligned, spatially resampled and display-space converted at once
+    // would otherwise hide two of the three limitations.
+    function comparisonDimensionsLabel(edge) {
+        if (!edge || Number(edge.dimensionsAvailable) !== 1)
+            return qsTr("比较语义不可用");
+        const parts = [];
+        parts.push(Number(edge.temporalExact) === 1 ? qsTr("时间 精确索引") : qsTr("时间 已对齐"));
+        parts.push(Number(edge.spatialExact) === 1 ? qsTr("空间 原尺寸") : qsTr("空间 已重采样"));
+        parts.push(Number(edge.pixelExact) === 1 ? qsTr("像素 原码值") : qsTr("像素 显示空间转换"));
+        return parts.join(" · ");
     }
 
     function surfaceLabelGeometry(index) {
@@ -367,7 +392,7 @@ Rectangle {
             text: {
                 const parts = [];
                 if (control.differenceMode)
-                    parts.push(control.comparisonExactnessLabel(control.selectedDifferenceExactness));
+                    parts.push(control.comparisonDimensionsLabel(control.selectedDifferenceEdge));
                 if (dualVideoSurface.roiEnabled)
                     parts.push(qsTr("ROI 已启用"));
                 return parts.join(" · ");
@@ -506,7 +531,11 @@ Rectangle {
 
                 Text {
                     visible: surfaceLabel.showFilename
-                    text: control.sourceFilename(Number(surfaceLabel.modelData.slot))
+                    text: {
+                        const parent = control.sourceParentLabel(surfaceLabel.sourceSlot);
+                        const name = control.sourceFilename(surfaceLabel.sourceSlot);
+                        return parent.length > 0 ? "%1 (%2)".arg(name).arg(parent) : name;
+                    }
                     color: control.primaryTextColor
                     font.pixelSize: 12
                     elide: Text.ElideMiddle
@@ -516,6 +545,15 @@ Rectangle {
                         right: parent.right
                         rightMargin: 10
                         verticalCenter: parent.verticalCenter
+                    }
+
+                    HoverHandler {
+                        id: surfaceLabelNameHover
+                    }
+
+                    VcsToolTip {
+                        visible: surfaceLabelNameHover.hovered && control.sourceFullPath(surfaceLabel.sourceSlot).length > 0
+                        text: control.sourceFullPath(surfaceLabel.sourceSlot)
                     }
                 }
             }

@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import QtQuick.Window
 import "VcsTheme.js" as Theme
 
 // Still-image workspace: single-image channel inspector + two-image DiffChecker.
@@ -8,13 +9,27 @@ Rectangle {
     id: control
 
     required property var controller
+    required property var pairModel
+    required property bool sidebarVisible
 
     signal openImageRequested
     signal addImageRequested
     signal openPairRequested
+    signal compareFoldersRequested
+    signal toggleSidebarRequested
+
+    // False = fit-window display; true = true-size display where 1 image pixel maps to
+    // 1 physical screen pixel (device-pixel-ratio aware). The two are separate commands
+    // (T2); the controller zoom multiplies whichever base is active.
+    property bool trueSize: false
 
     objectName: "imageWorkspace"
     color: "#06080d"
+    activeFocusOnTab: true
+    onVisibleChanged: {
+        if (visible)
+            Qt.callLater(() => control.forceActiveFocus());
+    }
 
     readonly property var imageReview: controller
     readonly property bool hasPrimary: Boolean(controller && controller.hasPrimary)
@@ -25,11 +40,57 @@ Rectangle {
     readonly property real zoom: imageReview ? Number(imageReview.zoom) : 1
     readonly property var cursorPixel: imageReview ? imageReview.cursorPixel : ({})
     readonly property string errorText: imageReview ? String(imageReview.errorText || "") : ""
+    readonly property bool hasFolders: Boolean(pairModel && pairModel.pairCount > 0)
+    readonly property bool sizesDiffer: Boolean(imageReview && imageReview.hasPair && imageReview.primaryWidth > 0 && imageReview.primaryWidth !== imageReview.secondaryWidth || imageReview && imageReview.hasPair && imageReview.primaryHeight > 0 && imageReview.primaryHeight !== imageReview.secondaryHeight)
+    readonly property bool diffModeActive: Boolean(imageReview && imageReview.hasPair && imageReview.compareMode >= 2 && imageReview.compareMode <= 4)
+
+    // Physical-percent of the active display scale: true-size is 1 image px per physical
+    // px (100%), fit shows the actual physical percentage of the fitted image.
+    readonly property real displayPercent: {
+        if (!imageReview || !imageReview.hasPrimary)
+            return 0;
+        const dpr = Window.window ? Window.window.devicePixelRatio : 1;
+        const base = control.trueSize ? 1 / dpr : (primaryViewport ? primaryViewport.fitScale : 1);
+        return Math.round(base * dpr * imageReview.zoom * 100);
+    }
+    readonly property string displayPercentMode: control.trueSize ? qsTr("真实尺寸") : qsTr("适应窗口")
 
     function modeButton(mode) {
         if (!imageReview)
             return;
         imageReview.compareMode = mode;
+    }
+
+    // File-name part of a controller path ("C:/dir/shot.png" -> "shot.png"); empty for
+    // injected test images whose path label carries no separator.
+    function imageFileName(pathValue) {
+        const text = String(pathValue || "");
+        const slash = Math.max(text.lastIndexOf("/"), text.lastIndexOf("\\"));
+        return slash >= 0 ? text.substring(slash + 1) : text;
+    }
+
+    // Parent-folder part of a controller path, used to disambiguate same-named images.
+    function imageParentLabel(pathValue) {
+        const text = String(pathValue || "");
+        const slash = Math.max(text.lastIndexOf("/"), text.lastIndexOf("\\"));
+        if (slash < 0)
+            return "";
+        const parent = text.substring(0, slash);
+        const parentSlash = Math.max(parent.lastIndexOf("/"), parent.lastIndexOf("\\"));
+        return parentSlash >= 0 ? parent.substring(parentSlash + 1) : parent;
+    }
+
+    // "shot.png" or "shot.png (render_v1)" when both images share the file name.
+    function imageTitle(pathValue, otherPathValue) {
+        const name = imageFileName(pathValue);
+        if (name.length === 0)
+            return "";
+        if (imageFileName(otherPathValue).localeCompare(name, Qt.CaseInsensitive) === 0) {
+            const parent = imageParentLabel(pathValue);
+            if (parent.length > 0)
+                return "%1 (%2)".arg(name).arg(parent);
+        }
+        return name;
     }
 
     function mapToImage(view, mouseX, mouseY) {
@@ -99,9 +160,14 @@ Rectangle {
         required property int slot
         property string imageUrl: ""
         property string label: ""
+        property string title: ""
+        property string titlePath: ""
         property point dragStart: Qt.point(0, 0)
 
         readonly property alias image: previewImage
+        // Fit scale of the displayed image (fit-window base), forwarded so the workspace
+        // status bar can report the physical display percentage.
+        readonly property real fitScale: previewImage ? previewImage.fitScale : 1
 
         clip: true
 
@@ -117,13 +183,20 @@ Rectangle {
             id: previewImage
 
             objectName: "imageViewport-" + viewport.slot
-            readonly property real baseScale: {
+            readonly property real fitScale: {
                 const sw = Math.max(1, sourceSize.width);
                 const sh = Math.max(1, sourceSize.height);
                 return Math.min(viewport.width / sw, viewport.height / sh);
             }
-            readonly property real drawWidth: sourceSize.width * baseScale * control.zoom
-            readonly property real drawHeight: sourceSize.height * baseScale * control.zoom
+            // True-size: 1 image pixel occupies 1 physical pixel, so the item's
+            // device-independent width is sourceSize / DPR (T2).
+            readonly property real trueSizeScale: {
+                const dpr = Window.window ? Window.window.devicePixelRatio : 1;
+                return 1 / dpr;
+            }
+            readonly property real effectiveBaseScale: control.trueSize ? trueSizeScale : fitScale
+            readonly property real drawWidth: sourceSize.width * effectiveBaseScale * control.zoom
+            readonly property real drawHeight: sourceSize.height * effectiveBaseScale * control.zoom
             x: (viewport.width - drawWidth) / 2 + (0.5 - (control.imageReview ? control.imageReview.panX : 0.5)) * drawWidth
             y: (viewport.height - drawHeight) / 2 + (0.5 - (control.imageReview ? control.imageReview.panY : 0.5)) * drawHeight
             width: drawWidth
@@ -135,15 +208,39 @@ Rectangle {
             smooth: control.zoom <= 2
         }
 
-        Text {
-            visible: viewport.label.length > 0
-            text: viewport.label
-            color: Theme.mutedText
-            font.pixelSize: 11
+        Column {
+            visible: viewport.label.length > 0 || viewport.title.length > 0
+            spacing: 2
             anchors {
                 top: parent.top
                 left: parent.left
                 margins: 10
+            }
+
+            Text {
+                visible: viewport.title.length > 0
+                objectName: "imageViewportTitle-" + viewport.slot
+                text: viewport.title
+                color: Theme.primaryText
+                font.pixelSize: 12
+                font.weight: Font.DemiBold
+                elide: Text.ElideMiddle
+
+                HoverHandler {
+                    id: viewportTitleHover
+                }
+
+                VcsToolTip {
+                    visible: viewportTitleHover.hovered && viewport.titlePath.length > 0
+                    text: viewport.titlePath
+                }
+            }
+
+            Text {
+                visible: viewport.label.length > 0
+                text: viewport.label
+                color: Theme.mutedText
+                font.pixelSize: 11
             }
         }
 
@@ -221,6 +318,25 @@ Rectangle {
                 onClicked: control.openPairRequested()
             }
             ReviewActionButton {
+                objectName: "imageCompareFoldersButton"
+                text: qsTr("对比文件夹…")
+                implicitHeight: 30
+                leftPadding: 12
+                rightPadding: 12
+                onClicked: control.compareFoldersRequested()
+            }
+            ReviewActionButton {
+                objectName: "imageToggleSidebarButton"
+                checkable: true
+                checked: control.sidebarVisible
+                text: control.sidebarVisible ? qsTr("隐藏列表") : qsTr("显示列表")
+                implicitHeight: 30
+                leftPadding: 12
+                rightPadding: 12
+                enabled: control.hasFolders
+                onClicked: control.toggleSidebarRequested()
+            }
+            ReviewActionButton {
                 objectName: "imageCloseButton"
                 text: qsTr("关闭图片")
                 implicitHeight: 30
@@ -237,6 +353,39 @@ Rectangle {
                 rightPadding: 12
                 enabled: control.hasPrimary
                 onClicked: control.imageReview.resetView()
+            }
+            ReviewActionButton {
+                objectName: "imageFitButton"
+                checkable: true
+                checked: !control.trueSize
+                text: qsTr("适应窗口")
+                implicitHeight: 30
+                leftPadding: 12
+                rightPadding: 12
+                enabled: control.hasPrimary
+                onClicked: control.trueSize = false
+            }
+            ReviewActionButton {
+                objectName: "imageTrueSizeButton"
+                checkable: true
+                checked: control.trueSize
+                text: qsTr("100% 真实尺寸")
+                implicitHeight: 30
+                leftPadding: 12
+                rightPadding: 12
+                enabled: control.hasPrimary
+                onClicked: control.trueSize = true
+            }
+            ReviewActionButton {
+                objectName: "imageResampleToggle"
+                checkable: true
+                checked: Boolean(control.imageReview && control.imageReview.resampleAllowed)
+                text: qsTr("重采样对齐差异")
+                implicitHeight: 30
+                leftPadding: 12
+                rightPadding: 12
+                visible: control.hasPair && control.sizesDiffer
+                onClicked: control.imageReview.resampleAllowed = !control.imageReview.resampleAllowed
             }
         }
 
@@ -276,6 +425,21 @@ Rectangle {
         }
     }
 
+    // Left/Right walk folder pairs when a comparison list is loaded; otherwise they are
+    // unused in this workspace (no frame stepping) and stay free for the shell.
+    Keys.onLeftPressed: event => {
+        if (control.hasFolders && folderPairSidebar) {
+            folderPairSidebar.stepPair(-1);
+            event.accepted = true;
+        }
+    }
+    Keys.onRightPressed: event => {
+        if (control.hasFolders && folderPairSidebar) {
+            folderPairSidebar.stepPair(1);
+            event.accepted = true;
+        }
+    }
+
     Item {
         id: stage
 
@@ -290,158 +454,266 @@ Rectangle {
             rightMargin: 12
         }
 
-        Text {
-            visible: !control.hasPrimary
-            anchors.centerIn: parent
-            text: qsTr("打开或拖入一张图片查看通道；打开两张图片可进行差异或分割线对比。")
-            color: Theme.mutedText
-            font.pixelSize: 16
-        }
-
         Row {
-            visible: control.hasPrimary && (control.compareMode === 0 || control.compareMode === 1 || !control.hasPair)
+            id: stageRow
+
             anchors.fill: parent
             spacing: 12
 
-            ImageViewport {
-                objectName: "primaryViewport"
-                slot: 2
-                width: control.compareMode === 1 && control.hasPair ? parent.width / 2 - 6 : parent.width
+            FolderPairSidebar {
+                id: folderPairSidebar
+
+                objectName: "folderPairSidebarHost"
+                visible: control.sidebarVisible && control.hasFolders
+                width: 250
                 height: parent.height
-                imageUrl: control.imageReview && control.imageReview.contentGeneration >= 0 ? control.imageReview.imageUrl(2) : ""
-                label: control.hasPrimary ? qsTr("A · %1×%2").arg(control.imageReview.primaryWidth).arg(control.imageReview.primaryHeight) : ""
-            }
-
-            ImageViewport {
-                objectName: "secondaryViewport"
-                slot: 3
-                visible: control.compareMode === 1 && control.hasPair
-                width: visible ? parent.width / 2 - 6 : 0
-                height: parent.height
-                imageUrl: control.imageReview && control.imageReview.contentGeneration >= 0 ? control.imageReview.imageUrl(3) : ""
-                label: control.hasSecondary ? qsTr("B · %1×%2").arg(control.imageReview.secondaryWidth).arg(control.imageReview.secondaryHeight) : ""
-            }
-        }
-
-        ImageViewport {
-            objectName: "diffViewport"
-            slot: 4
-            visible: control.hasPair && control.compareMode >= 2 && control.compareMode <= 4
-            anchors.fill: parent
-            imageUrl: control.imageReview && control.imageReview.contentGeneration >= 0 ? control.imageReview.imageUrl(4) : ""
-            label: {
-                if (!control.imageReview)
-                    return "";
-                const modeName = control.compareMode === 2 ? qsTr("绝对差异") : (control.compareMode === 3 ? qsTr("带符号差异") : qsTr("高亮"));
-                return qsTr("%1 · 峰值 %2 · 均值 %3").arg(modeName).arg(control.imageReview.maxAbsDifference).arg(control.imageReview.meanAbsDifference.toFixed(2));
-            }
-        }
-
-        // Split-line comparison: the secondary image is clipped at the split position and stacked
-        // over the primary, both drawn in the primary's geometry box so zoom/pan stay aligned.
-        Item {
-            id: wipeOverlay
-
-            objectName: "wipeOverlay"
-            visible: control.hasPair && control.compareMode === 5
-            anchors.fill: parent
-            clip: true
-
-            readonly property real baseScale: {
-                if (!control.imageReview)
-                    return 1;
-                const sw = Math.max(1, control.imageReview.primaryWidth);
-                const sh = Math.max(1, control.imageReview.primaryHeight);
-                return Math.min(width / sw, height / sh);
-            }
-            readonly property real drawWidth: control.imageReview ? control.imageReview.primaryWidth * baseScale * control.zoom : 0
-            readonly property real drawHeight: control.imageReview ? control.imageReview.primaryHeight * baseScale * control.zoom : 0
-            readonly property real drawX: (width - drawWidth) / 2 + (0.5 - (control.imageReview ? control.imageReview.panX : 0.5)) * drawWidth
-            readonly property real drawY: (height - drawHeight) / 2 + (0.5 - (control.imageReview ? control.imageReview.panY : 0.5)) * drawHeight
-            readonly property real splitX: width * control.wipePosition
-
-            Image {
-                id: wipePrimaryImage
-
-                objectName: "wipePrimaryImage"
-                x: wipeOverlay.drawX
-                y: wipeOverlay.drawY
-                width: wipeOverlay.drawWidth
-                height: wipeOverlay.drawHeight
-                source: control.imageReview && control.imageReview.contentGeneration >= 0 && wipeOverlay.visible ? control.imageReview.imageUrl(2) : ""
-                fillMode: Image.Stretch
-                asynchronous: false
-                cache: false
-                smooth: control.zoom <= 2
+                pairModel: control.pairModel
+                hasFolders: control.hasFolders
+                onPairSelected: row => control.forceActiveFocus()
+                onChangeFoldersRequested: control.compareFoldersRequested()
             }
 
             Item {
-                id: wipeClip
+                id: stageContent
 
-                objectName: "wipeClip"
-                width: Math.round(wipeOverlay.splitX)
-                height: wipeOverlay.height
-                clip: true
+                width: parent.width - (folderPairSidebar.visible ? folderPairSidebar.width + parent.spacing : 0)
+                height: parent.height
 
-                Image {
-                    id: wipeSecondaryImage
-
-                    objectName: "wipeSecondaryImage"
-                    x: wipeOverlay.drawX
-                    y: wipeOverlay.drawY
-                    width: wipeOverlay.drawWidth
-                    height: wipeOverlay.drawHeight
-                    source: control.imageReview && control.imageReview.contentGeneration >= 0 && wipeOverlay.visible ? control.imageReview.imageUrl(3) : ""
-                    fillMode: Image.Stretch
-                    asynchronous: false
-                    cache: false
-                    smooth: control.zoom <= 2
+                Text {
+                    visible: !control.hasPrimary
+                    anchors.centerIn: parent
+                    text: qsTr("打开或拖入一张图片查看通道；打开两张图片可进行差异或分割线对比。")
+                    color: Theme.mutedText
+                    font.pixelSize: 16
                 }
-            }
 
-            MouseArea {
-                anchors.fill: parent
-                hoverEnabled: true
-                acceptedButtons: Qt.LeftButton
-                property point dragStart: Qt.point(0, 0)
-                onPositionChanged: mouse => {
-                    if (pressed && control.imageReview) {
-                        const dx = (mouse.x - dragStart.x) / Math.max(1, width);
-                        const dy = (mouse.y - dragStart.y) / Math.max(1, height);
-                        control.imageReview.panBy(dx, dy);
-                        dragStart = Qt.point(mouse.x, mouse.y);
+                Row {
+                    visible: control.hasPrimary && (control.compareMode === 0 || control.compareMode === 1 || !control.hasPair)
+                    anchors.fill: parent
+                    spacing: 12
+
+                    ImageViewport {
+                        id: primaryViewport
+
+                        objectName: "primaryViewport"
+                        slot: 2
+                        width: control.compareMode === 1 && control.hasPair ? parent.width / 2 - 6 : parent.width
+                        height: parent.height
+                        imageUrl: control.imageReview && control.imageReview.contentGeneration >= 0 ? control.imageReview.imageUrl(2) : ""
+                        label: control.hasPrimary ? qsTr("A · %1×%2").arg(control.imageReview.primaryWidth).arg(control.imageReview.primaryHeight) : ""
+                        title: control.hasPrimary ? control.imageTitle(control.imageReview.primaryPath, control.imageReview.secondaryPath) : ""
+                        titlePath: control.hasPrimary ? String(control.imageReview.primaryPath || "") : ""
                     }
-                    const leftSide = mouse.x < wipeOverlay.splitX;
-                    control.applyHover({
-                        "image": leftSide ? wipeSecondaryImage : wipePrimaryImage
-                    }, mouse.x, mouse.y, leftSide ? 3 : 2);
-                }
-                onExited: {
-                    if (control.imageReview)
-                        control.imageReview.clearCursorPixel();
-                }
-                onPressed: mouse => {
-                    dragStart = Qt.point(mouse.x, mouse.y);
-                    control.forceActiveFocus();
-                }
-                onWheel: wheel => {
-                    if (!control.imageReview)
-                        return;
-                    const img = wheel.x < wipeOverlay.splitX ? wipeSecondaryImage : wipePrimaryImage;
-                    const mapped = control.mapToImage({
-                        "image": img
-                    }, wheel.x, wheel.y);
-                    const ax = mapped ? Math.max(0, Math.min(1, mapped.x / Math.max(1, img.sourceSize.width))) : 0.5;
-                    const ay = mapped ? Math.max(0, Math.min(1, mapped.y / Math.max(1, img.sourceSize.height))) : 0.5;
-                    control.imageReview.zoomBy(wheel.angleDelta.y > 0 ? 1.25 : 0.8, ax, ay);
-                    wheel.accepted = true;
-                }
-            }
 
-            WipeHandle {
-                surfaceItem: wipeOverlay
-                position: control.wipePosition
-                onPositionRequested: position => control.imageReview.setWipePosition(position)
+                    ImageViewport {
+                        objectName: "secondaryViewport"
+                        slot: 3
+                        visible: control.compareMode === 1 && control.hasPair
+                        width: visible ? parent.width / 2 - 6 : 0
+                        height: parent.height
+                        imageUrl: control.imageReview && control.imageReview.contentGeneration >= 0 ? control.imageReview.imageUrl(3) : ""
+                        label: control.hasSecondary ? qsTr("B · %1×%2").arg(control.imageReview.secondaryWidth).arg(control.imageReview.secondaryHeight) : ""
+                        title: control.hasSecondary ? control.imageTitle(control.imageReview.secondaryPath, control.imageReview.primaryPath) : ""
+                        titlePath: control.hasSecondary ? String(control.imageReview.secondaryPath || "") : ""
+                    }
+                }
+
+                ImageViewport {
+                    objectName: "diffViewport"
+                    slot: 4
+                    visible: control.hasPair && control.compareMode >= 2 && control.compareMode <= 4 && control.imageReview && control.imageReview.hasDiffResult
+                    anchors.fill: parent
+                    imageUrl: control.imageReview && control.imageReview.contentGeneration >= 0 ? control.imageReview.imageUrl(4) : ""
+                    label: {
+                        if (!control.imageReview || !control.imageReview.hasDiffResult)
+                            return "";
+                        const modeName = control.compareMode === 2 ? qsTr("绝对差异") : (control.compareMode === 3 ? qsTr("带符号差异") : qsTr("高亮"));
+                        let text = qsTr("%1 · 峰值 %2 · 均值 %3 · 统计 %4").arg(modeName).arg(control.imageReview.maxAbsDifference).arg(control.imageReview.meanAbsDifference.toFixed(2)).arg(control.imageReview.diffScopeText);
+                        if (control.imageReview.diffResampled)
+                            text += " · " + qsTr("已重采样对齐");
+                        if (control.imageReview.alphaDifferenceOnly)
+                            text += " · " + qsTr("RGB 相同，alpha 存在差异");
+                        return text;
+                    }
+                }
+
+                // Diff mode on an unequal-size pair without resampling: no pixels are
+                // fabricated and no stats are pretended (T2). The controller errorText
+                // carries the exact sizes; the toggle in the toolbar opts into resampling.
+                // A retained diff mode on a same-size pair reports the in-flight
+                // computation instead of a false size complaint (T6).
+                Text {
+                    objectName: "imageDiffUnavailableNotice"
+                    visible: control.diffModeActive && control.imageReview && !control.imageReview.hasDiffResult
+                    anchors.centerIn: parent
+                    width: parent.width * 0.7
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.WordWrap
+                    text: {
+                        if (control.imageReview && control.imageReview.diffPending)
+                            return qsTr("正在后台计算差异…");
+                        if (control.sizesDiffer)
+                            return qsTr("A 与 B 尺寸不同，未计算逐像素差异。可开启“重采样对齐差异”后再比较。");
+                        return qsTr("差异暂不可用。");
+                    }
+                    color: Theme.warning
+                    font.pixelSize: 13
+                }
+
+                // Split-line comparison: the secondary image is clipped at the split position and stacked
+                // over the primary, both drawn in the primary's geometry box so zoom/pan stay aligned.
+                Item {
+                    id: wipeOverlay
+
+                    objectName: "wipeOverlay"
+                    visible: control.hasPair && control.compareMode === 5
+                    anchors.fill: parent
+                    clip: true
+
+                    readonly property real fitScale: {
+                        if (!control.imageReview)
+                            return 1;
+                        const sw = Math.max(1, control.imageReview.primaryWidth);
+                        const sh = Math.max(1, control.imageReview.primaryHeight);
+                        return Math.min(width / sw, height / sh);
+                    }
+                    readonly property real effectiveBaseScale: {
+                        if (control.trueSize) {
+                            const dpr = Window.window ? Window.window.devicePixelRatio : 1;
+                            return 1 / dpr;
+                        }
+                        return fitScale;
+                    }
+                    readonly property real drawWidth: control.imageReview ? control.imageReview.primaryWidth * effectiveBaseScale * control.zoom : 0
+                    readonly property real drawHeight: control.imageReview ? control.imageReview.primaryHeight * effectiveBaseScale * control.zoom : 0
+                    readonly property real drawX: (width - drawWidth) / 2 + (0.5 - (control.imageReview ? control.imageReview.panX : 0.5)) * drawWidth
+                    readonly property real drawY: (height - drawHeight) / 2 + (0.5 - (control.imageReview ? control.imageReview.panY : 0.5)) * drawHeight
+                    readonly property real splitX: width * control.wipePosition
+
+                    Image {
+                        id: wipePrimaryImage
+
+                        objectName: "wipePrimaryImage"
+                        x: wipeOverlay.drawX
+                        y: wipeOverlay.drawY
+                        width: wipeOverlay.drawWidth
+                        height: wipeOverlay.drawHeight
+                        source: control.imageReview && control.imageReview.contentGeneration >= 0 && wipeOverlay.visible ? control.imageReview.imageUrl(2) : ""
+                        fillMode: Image.Stretch
+                        asynchronous: false
+                        cache: false
+                        smooth: control.zoom <= 2
+                    }
+
+                    Item {
+                        id: wipeClip
+
+                        objectName: "wipeClip"
+                        width: Math.round(wipeOverlay.splitX)
+                        height: wipeOverlay.height
+                        clip: true
+
+                        Image {
+                            id: wipeSecondaryImage
+
+                            objectName: "wipeSecondaryImage"
+                            x: wipeOverlay.drawX
+                            y: wipeOverlay.drawY
+                            width: wipeOverlay.drawWidth
+                            height: wipeOverlay.drawHeight
+                            source: control.imageReview && control.imageReview.contentGeneration >= 0 && wipeOverlay.visible ? control.imageReview.imageUrl(3) : ""
+                            fillMode: Image.Stretch
+                            asynchronous: false
+                            cache: false
+                            smooth: control.zoom <= 2
+                        }
+                    }
+
+                    // T6: persistent A/B identity for the wipe halves. The left of the
+                    // split shows the secondary image and the right shows the primary, so
+                    // the labels name them in that order and can never be misread as
+                    // reversed while the split is dragged.
+                    Text {
+                        id: wipeIdentityLeft
+
+                        objectName: "wipeIdentityLeft"
+                        visible: control.hasPair && control.hasSecondary && width > 4
+                        text: control.hasSecondary ? qsTr("B · %1").arg(control.imageTitle(control.imageReview.secondaryPath, control.imageReview.primaryPath)) : ""
+                        color: Theme.primaryText
+                        font.pixelSize: 12
+                        font.weight: Font.DemiBold
+                        elide: Text.ElideRight
+                        width: Math.max(0, wipeOverlay.splitX - 20)
+                        anchors {
+                            top: parent.top
+                            left: parent.left
+                            margins: 10
+                        }
+                    }
+
+                    Text {
+                        id: wipeIdentityRight
+
+                        objectName: "wipeIdentityRight"
+                        visible: control.hasPair && width > 4
+                        text: control.hasPrimary ? qsTr("A · %1").arg(control.imageTitle(control.imageReview.primaryPath, control.imageReview.secondaryPath)) : ""
+                        color: Theme.primaryText
+                        font.pixelSize: 12
+                        font.weight: Font.DemiBold
+                        elide: Text.ElideRight
+                        width: Math.max(0, wipeOverlay.width - wipeOverlay.splitX - 20)
+                        anchors {
+                            top: parent.top
+                            right: parent.right
+                            margins: 10
+                        }
+                    }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        acceptedButtons: Qt.LeftButton
+                        property point dragStart: Qt.point(0, 0)
+                        onPositionChanged: mouse => {
+                            if (pressed && control.imageReview) {
+                                const dx = (mouse.x - dragStart.x) / Math.max(1, width);
+                                const dy = (mouse.y - dragStart.y) / Math.max(1, height);
+                                control.imageReview.panBy(dx, dy);
+                                dragStart = Qt.point(mouse.x, mouse.y);
+                            }
+                            const leftSide = mouse.x < wipeOverlay.splitX;
+                            control.applyHover({
+                                "image": leftSide ? wipeSecondaryImage : wipePrimaryImage
+                            }, mouse.x, mouse.y, leftSide ? 3 : 2);
+                        }
+                        onExited: {
+                            if (control.imageReview)
+                                control.imageReview.clearCursorPixel();
+                        }
+                        onPressed: mouse => {
+                            dragStart = Qt.point(mouse.x, mouse.y);
+                            control.forceActiveFocus();
+                        }
+                        onWheel: wheel => {
+                            if (!control.imageReview)
+                                return;
+                            const img = wheel.x < wipeOverlay.splitX ? wipeSecondaryImage : wipePrimaryImage;
+                            const mapped = control.mapToImage({
+                                "image": img
+                            }, wheel.x, wheel.y);
+                            const ax = mapped ? Math.max(0, Math.min(1, mapped.x / Math.max(1, img.sourceSize.width))) : 0.5;
+                            const ay = mapped ? Math.max(0, Math.min(1, mapped.y / Math.max(1, img.sourceSize.height))) : 0.5;
+                            control.imageReview.zoomBy(wheel.angleDelta.y > 0 ? 1.25 : 0.8, ax, ay);
+                            wheel.accepted = true;
+                        }
+                    }
+
+                    WipeHandle {
+                        surfaceItem: wipeOverlay
+                        position: control.wipePosition
+                        onPositionRequested: position => control.imageReview.wipePosition = position
+                    }
+                }
             }
         }
     }
@@ -468,8 +740,29 @@ Rectangle {
             }
 
             Text {
-                text: qsTr("缩放 %1%").arg(Math.round(control.zoom * 100))
+                text: qsTr("缩放 %1%（%2）").arg(control.displayPercent).arg(control.displayPercentMode)
                 color: Theme.primaryText
+                font.pixelSize: 12
+            }
+            // T6: current folder-row context — which row is committed, whether one side
+            // is missing, and whether the pairing is ambiguous.
+            Text {
+                objectName: "imagePairContextLabel"
+                visible: Boolean(control.pairModel && control.pairModel.pairCount > 0 && control.pairModel.currentPair >= 0)
+                text: {
+                    if (!control.pairModel || control.pairModel.currentPair < 0)
+                        return "";
+                    const info = control.pairModel.pairUrlsAt(Number(control.pairModel.currentPair));
+                    if (!info || info.row === undefined)
+                        return "";
+                    const parts = [qsTr("第 %1/%2 行").arg(Number(info.row) + 1).arg(control.pairModel.pairCount)];
+                    if (!info.hasBoth)
+                        parts.push(info.hasLeft ? qsTr("仅 A 存在") : qsTr("仅 B 存在"));
+                    if (info.caseConflict)
+                        parts.push(qsTr("大小写冲突"));
+                    return parts.join(" · ");
+                }
+                color: Theme.mutedText
                 font.pixelSize: 12
             }
             Text {
@@ -496,6 +789,24 @@ Rectangle {
             text: qsTr("滚轮缩放 · 拖动平移")
             color: Theme.mutedText
             font.pixelSize: 11
+        }
+    }
+
+    // T4/T6: warm the next complete pair in the background after a successful folder
+    // commit, so stepping onto it is a cache hit. Bounded to one neighbour; a user
+    // request cancels outstanding prefetches and the visible pair never changes.
+    Connections {
+        target: control.pairModel
+
+        function onPairOpenFinished(row, success, error) {
+            if (!success || !control.imageReview || !control.pairModel)
+                return;
+            const next = control.pairModel.stepCompleteRow(1);
+            if (next < 0 || next === Number(row))
+                return;
+            const urls = control.pairModel.pairUrlsAt(next);
+            if (urls.hasLeft && urls.hasRight)
+                control.imageReview.prefetchPair(urls.leftUrl, urls.rightUrl);
         }
     }
 }

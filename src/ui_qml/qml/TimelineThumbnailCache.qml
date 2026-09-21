@@ -11,6 +11,9 @@ QtObject {
     required property int currentFrame
     required property int totalFrames
     required property var generation
+    // UI trace bridge (DiagnosticsProbe). Optional so a component test can supply a stub; when
+    // absent, or when tracing is disabled, recording is a no-op.
+    property var diagnostics: (typeof dvsDiagnostics !== "undefined") ? dvsDiagnostics : null
     property int targetWidth: 176
     property int targetHeight: 99
     property int maximumBytes: 8 * 1024 * 1024
@@ -45,7 +48,11 @@ QtObject {
             return;
         const requestedGeneration = generation;
         const requestedFrame = Number(frame);
+        if (diagnostics)
+            diagnostics.record("grab-requested", requestedFrame);
         sourceItem.grabToImage(result => {
+            if (diagnostics)
+                diagnostics.record("grab-completed", requestedFrame);
             if (requestedGeneration !== cache.generation || requestedFrame !== cache.currentFrame || !result || !result.url)
                 return;
             const nextUrls = Object.assign({}, cache.urls);
