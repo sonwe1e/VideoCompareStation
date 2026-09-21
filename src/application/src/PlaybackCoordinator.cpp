@@ -453,6 +453,11 @@ private:
         std::optional<PendingPlaybackFrame> preparedFrame;
         bool restartFromEnd = false;
         bool pauseRequested = false;
+        // Snapshot of session playback-range authority at run start (updated live by
+        // SetPlaybackRangeCommand). Targets must never leave this closed interval.
+        std::optional<PlaybackRange> range;
+        bool rangeLoop = false;
+        std::uint64_t completedLoops = 0U;
     };
 
     // A forward step stream: consecutive +1 steps that reuse the provider's Sequential decode path
@@ -466,10 +471,19 @@ private:
         PendingPlaybackFrame frame;
     };
 
+    // Direction of an interactive ±1 step stream. Forward uses Sequential decode; Reverse uses
+    // FrameRequestPriority::Reverse (exact/random-access at the provider) but still keeps one
+    // generation and a current+prepared pipeline so held-backward does not cancel per press.
+    enum class InteractiveStepDirection {
+        Forward,
+        Reverse,
+    };
+
     struct InteractiveStepRun final {
         // Stable for the whole run. All frames in one run share this generation, so the provider's
-        // Sequential cursor and read-ahead cache survive frame to frame.
+        // Sequential cursor / reverse-window cache survive frame to frame.
         PlaybackRequestContext providerContext;
+        InteractiveStepDirection direction = InteractiveStepDirection::Forward;
 
         // The frame currently committed to the renderer / waiting on provider + presentation.
         std::optional<PendingInteractiveStep> frame;
@@ -723,6 +737,18 @@ private:
         state_.canonicalTimeline = canonicalTimeline_;
         state_.playbackSpeed =
             playbackRun_.has_value() ? playbackRun_->speed : pendingPlaybackSpeed_.value_or(1.0);
+        state_.playbackRangeIn = playbackRange_.has_value()
+                                     ? std::optional{playbackRange_->inInclusive}
+                                     : std::nullopt;
+        state_.playbackRangeOut = playbackRange_.has_value()
+                                      ? std::optional{playbackRange_->outInclusive}
+                                      : std::nullopt;
+        state_.playbackRangeLoop = playbackRangeLoop_ && playbackRange_.has_value();
+        state_.playbackRangeLoopActive =
+            playbackRun_.has_value() && playbackRange_.has_value() && playbackRangeLoop_;
+        state_.playbackRangeCompletedLoops = playbackRun_.has_value()
+                                                 ? playbackRun_->completedLoops
+                                                 : playbackRangeCompletedLoops_;
         // Snapshot committed: carries the displayed frame as payload so a trace can verify the
         // frame only advanced after a matching PresentationACK (ACK-before-commit invariant).
         const std::uint64_t displayed =
@@ -812,6 +838,9 @@ private:
         state_.canonicalFrameCount = 0U;
         state_.sources.clear();
         state_.validatedComparison.reset();
+        playbackRange_.reset();
+        playbackRangeLoop_ = false;
+        playbackRangeCompletedLoops_ = 0U;
         state_.presentedSources.clear();
         state_.alignmentEstimates.clear();
         state_.sequenceAlignments.clear();
@@ -967,28 +996,44 @@ private:
                                    std::chrono::microseconds{scaledMicroseconds});
     }
 
+    [[nodiscard]] std::int64_t playbackCeiling(const PlaybackRun& run) const {
+        std::int64_t maximum = state_.canonicalFrameCount == 0U
+                                   ? 0
+                                   : static_cast<std::int64_t>(state_.canonicalFrameCount - 1U);
+        if (run.range.has_value()) {
+            maximum = (std::min)(maximum, run.range->outInclusive.value());
+        }
+        return maximum;
+    }
+
+    [[nodiscard]] std::int64_t playbackFloor(const PlaybackRun& run) const {
+        return run.range.has_value() ? run.range->inInclusive.value() : 0;
+    }
+
     [[nodiscard]] domain::FrameId
     playbackTargetAt(const std::chrono::steady_clock::time_point now) const {
         if (!playbackRun_.has_value() || !canonicalTimeline_.has_value()) {
             return domain::FrameId{0};
         }
         const PlaybackRun& run = *playbackRun_;
+        const std::int64_t maximum = playbackCeiling(run);
+        const std::int64_t minimum = playbackFloor(run);
         if (const auto nextDue = playbackDue(run.nextMinimum); nextDue.has_value()) {
             const auto catchUpDue = detail::addDuration(
                 *nextDue,
                 std::chrono::duration_cast<std::chrono::microseconds>(kPlaybackCatchUpTolerance));
             if (catchUpDue.has_value() && now <= *catchUpDue) {
-                return run.nextMinimum;
+                return domain::FrameId{(std::min)(maximum, (std::max)(minimum, run.nextMinimum.value()))};
             }
         }
         // Catch-up: the media time that should be showing now is the anchored frame's time plus
         // the wall-clock elapsed since anchoring. canonicalFrameAtOrBefore maps it back to a
         // display-order frame, then we clamp so the cadence never regresses and never passes the
-        // final frame. Long gaps land directly on the true next PTS instead of accumulating.
+        // final frame or a session playback-range Out point.
         const auto startAnchor =
             domain::canonicalFrameStartTime(*canonicalTimeline_, run.anchorFrame);
         if (!startAnchor) {
-            return run.nextMinimum;
+            return domain::FrameId{(std::min)(maximum, (std::max)(minimum, run.nextMinimum.value()))};
         }
         // elapsedMicroseconds can be negative only on a non-monotonic clock read; anchor on zero
         // so the computed media time never walks backward past the anchor frame.
@@ -996,9 +1041,8 @@ private:
             0, std::chrono::duration_cast<std::chrono::microseconds>(now - run.wallAnchor).count());
         const std::uint64_t frameCount = state_.canonicalFrameCount;
         if (frameCount == 0) {
-            return run.nextMinimum;
+            return domain::FrameId{(std::min)(maximum, (std::max)(minimum, run.nextMinimum.value()))};
         }
-        const std::int64_t maximum = static_cast<std::int64_t>(frameCount - 1U);
         domain::FrameId frame = run.nextMinimum;
         // Catch-up scales elapsed wall time by speed before mapping back onto the timeline, the
         // exact inverse of playbackDue's division: at 2x two media seconds pass per wall second.
@@ -1025,7 +1069,8 @@ private:
         } else {
             frame = domain::FrameId{maximum};
         }
-        return domain::FrameId{std::min(maximum, std::max(run.nextMinimum.value(), frame.value()))};
+        return domain::FrameId{
+            (std::min)(maximum, (std::max)(minimum, (std::max)(run.nextMinimum.value(), frame.value())))};
     }
 
     void stopPlayback(std::optional<domain::MediaError> error = std::nullopt,
@@ -1092,10 +1137,12 @@ private:
     }
 
     [[nodiscard]] PortSubmitResult submitInteractiveStepRequest(PendingPlaybackFrame& frame) {
+        const bool reverse = interactiveStepRun_.has_value() &&
+                             interactiveStepRun_->direction == InteractiveStepDirection::Reverse;
         const FrameRequest request{
             .context = frame.context,
             .frameId = frame.expectedFrame,
-            .priority = FrameRequestPriority::Sequential,
+            .priority = reverse ? FrameRequestPriority::Reverse : FrameRequestPriority::Sequential,
             .sourceOffsets = sourceMappingsFor(frame.expectedFrame),
             .alignmentRevision = state_.alignmentRevision,
         };
@@ -1130,9 +1177,9 @@ private:
         return true;
     }
 
-    // Promotes the next queued command to the prepared slot and submits its Sequential request, so
-    // the provider is already decoding the successor while the current frame is presenting. The
-    // command is only popped once the request is accepted, so a rejected request leaves it queued.
+    // Promotes the next queued command to the prepared slot and submits its request, so the
+    // provider is already decoding the successor (forward) or predecessor (reverse) while the
+    // current frame is presenting. The command is only popped once the request is accepted.
     void submitInteractiveStepSuccessor() {
         if (!interactiveStepRun_.has_value() || !interactiveStepRun_->frame.has_value()) {
             return;
@@ -1141,8 +1188,16 @@ private:
             interactiveStepRun_->queuedCommands.empty()) {
             return;
         }
-        const domain::FrameId target{interactiveStepRun_->frame->frame.expectedFrame.value() + 1};
-        PendingPlaybackFrame frame = makeInteractiveStepFrame(target);
+        const bool reverse =
+            interactiveStepRun_->direction == InteractiveStepDirection::Reverse;
+        const std::int64_t current =
+            interactiveStepRun_->frame->frame.expectedFrame.value();
+        const std::int64_t nextValue = reverse ? current - 1 : current + 1;
+        if (nextValue < 0 ||
+            static_cast<std::uint64_t>(nextValue) >= state_.canonicalFrameCount) {
+            return;
+        }
+        PendingPlaybackFrame frame = makeInteractiveStepFrame(domain::FrameId{nextValue});
         if (submitInteractiveStepRequest(frame) != PortSubmitResult::Accepted) {
             return;
         }
@@ -1251,10 +1306,13 @@ private:
         // empty (its request was rejected earlier); submit the next queued target as the current
         // frame.
         if (!interactiveStepRun_->queuedCommands.empty()) {
-            const domain::FrameId target{displayedFrame.value() + 1};
+            const bool reverse =
+                interactiveStepRun_->direction == InteractiveStepDirection::Reverse;
+            const std::int64_t nextValue =
+                reverse ? displayedFrame.value() - 1 : displayedFrame.value() + 1;
             PendingInteractiveStep next{
                 .command = interactiveStepRun_->queuedCommands.front(),
-                .frame = makeInteractiveStepFrame(target),
+                .frame = makeInteractiveStepFrame(domain::FrameId{nextValue}),
             };
             interactiveStepRun_->queuedCommands.pop_front();
             interactiveStepRun_->frame = std::move(next);
@@ -1277,7 +1335,7 @@ private:
         }
 
         // Clean drain: nothing left to present. Keep the provider generation warm (do not increment
-        // it) so the next +1 reuses the Sequential cursor and read-ahead cache.
+        // it) so the next +1 reuses the Sequential cursor / reverse-window cache.
         interactiveStepRun_.reset();
         lastInteractiveProjectionAt_.reset();
         state_.playbackState = domain::PlaybackState::kPaused;
@@ -1374,10 +1432,10 @@ private:
         publishSnapshot();
     }
 
-    // Begins a fresh interactive forward-step stream for the first +1. Stops any active playback,
+    // Begins a fresh interactive step stream for the first +1 or -1. Stops any active playback,
     // supersedes an in-flight exact seek, advances the generation once, and submits the first
-    // frame.
-    void beginInteractiveForwardStep(const StepFramesCommand& command) {
+    // frame. Forward uses Sequential; Reverse uses FrameRequestPriority::Reverse.
+    void beginInteractiveStepStream(const StepFramesCommand& command) {
         if (!sources_.has_value() || state_.sessionState != domain::SessionState::kReady) {
             rejectCommand(command.context,
                           CommandOutcome::Failed,
@@ -1386,19 +1444,28 @@ private:
                                            false));
             return;
         }
-        // Note: unlike beginPlay, forward stepping does not gate on graphicsReady. The old step
-        // path did not either, and the render channel will reject a frame publish if graphics are
-        // unavailable, failing the step through the normal terminal path.
-        const domain::FrameId displayed =
-            state_.displayedFrame.value_or(state_.requestedFrame.value_or(domain::FrameId{0}));
-        if (!displayed.isValid() ||
-            static_cast<std::uint64_t>(displayed.value()) + 1U >= state_.canonicalFrameCount) {
-            // At the canonical boundary there is no next frame; report Busy (the UI's canNext gate
-            // normally prevents this) rather than performing a no-op seek to the current frame.
+        const InteractiveStepDirection direction =
+            command.delta > 0 ? InteractiveStepDirection::Forward : InteractiveStepDirection::Reverse;
+        // Chain against the newest requested target when present (e.g. reverse after an
+        // unpresented forward step), matching the old Exact-seek step base.
+        const domain::FrameId base =
+            state_.requestedFrame.value_or(state_.displayedFrame.value_or(domain::FrameId{0}));
+        if (!base.isValid()) {
             completeCommand(command.context, CommandOutcome::Busy);
             return;
         }
-        const domain::FrameId target{displayed.value() + 1};
+        if (direction == InteractiveStepDirection::Forward) {
+            if (static_cast<std::uint64_t>(base.value()) + 1U >= state_.canonicalFrameCount) {
+                completeCommand(command.context, CommandOutcome::Busy);
+                return;
+            }
+        } else if (base.value() <= 0) {
+            completeCommand(command.context, CommandOutcome::Busy);
+            return;
+        }
+        const domain::FrameId target{direction == InteractiveStepDirection::Forward
+                                         ? base.value() + 1
+                                         : base.value() - 1};
 
         // Exactly one generation advance for the whole run: this is the largest single contributor
         // to eliminating the per-frame generation storm the old Exact-seek path produced.
@@ -1412,6 +1479,7 @@ private:
         };
         interactiveStepRun_ = InteractiveStepRun{
             .providerContext = providerContext,
+            .direction = direction,
             .frame = std::move(firstStep),
             .lastQueuedTarget = target,
         };
@@ -1431,34 +1499,59 @@ private:
         publishInteractiveSnapshot();
     }
 
-    // Enqueues a subsequent +1 onto an active interactive stream. Honors the input lookahead bound:
-    // once the queued target leads the displayed frame by more than kInteractiveStepInputLookahead,
-    // the command is reported Busy (the next keyboard repeat will retry) instead of queuing work
-    // that outlives the key release.
-    void enqueueInteractiveForwardStep(const StepFramesCommand& command) {
+    // Enqueues a subsequent +1/-1 onto an active interactive stream of the same direction.
+    // Honors the input lookahead bound so a keyboard auto-repeat cannot queue unbounded work.
+    void enqueueInteractiveStep(const StepFramesCommand& command) {
         if (!interactiveStepRun_.has_value()) {
-            beginInteractiveForwardStep(command);
+            beginInteractiveStepStream(command);
+            return;
+        }
+        const InteractiveStepDirection direction =
+            command.delta > 0 ? InteractiveStepDirection::Forward : InteractiveStepDirection::Reverse;
+        if (interactiveStepRun_->direction != direction) {
+            cancelInteractiveStepRun(InteractiveStepStopReason::NavigationSuperseded);
+            beginInteractiveStepStream(command);
             return;
         }
         const domain::FrameId displayed =
             state_.displayedFrame.value_or(state_.requestedFrame.value_or(domain::FrameId{0}));
-        const domain::FrameId nextTarget{interactiveStepRun_->lastQueuedTarget.value() + 1};
-        if (static_cast<std::uint64_t>(nextTarget.value()) >= state_.canonicalFrameCount) {
-            // The queued target would step past the last frame; report Busy instead of queuing work
-            // that can never be presented.
+        const std::int64_t last = interactiveStepRun_->lastQueuedTarget.value();
+        const std::int64_t nextValue =
+            direction == InteractiveStepDirection::Forward ? last + 1 : last - 1;
+        if (nextValue < 0 ||
+            static_cast<std::uint64_t>(nextValue) >= state_.canonicalFrameCount) {
             completeCommand(command.context, CommandOutcome::Busy);
             return;
         }
-        if (nextTarget.value() - displayed.value() >
-            static_cast<std::int64_t>(kInteractiveStepInputLookahead)) {
+        const std::int64_t lead = direction == InteractiveStepDirection::Forward
+                                      ? nextValue - displayed.value()
+                                      : displayed.value() - nextValue;
+        if (lead > static_cast<std::int64_t>(kInteractiveStepInputLookahead)) {
             completeCommand(command.context, CommandOutcome::Busy);
             return;
         }
-        interactiveStepRun_->lastQueuedTarget = nextTarget;
+        interactiveStepRun_->lastQueuedTarget = domain::FrameId{nextValue};
         interactiveStepRun_->queuedCommands.push_back(command.context);
-        state_.requestedFrame = nextTarget;
+        state_.requestedFrame = interactiveStepRun_->lastQueuedTarget;
         submitInteractiveStepSuccessor();
         publishInteractiveSnapshot();
+    }
+
+    // True when the command extends the active interactive ±1 stream of the same direction and
+    // must not cancel that stream (no generation storm on held keys).
+    [[nodiscard]] bool extendsActiveInteractiveStepStream(const PlaybackCommand& command) const {
+        if (!interactiveStepRun_.has_value()) {
+            return false;
+        }
+        const auto* const step = std::get_if<StepFramesCommand>(&command);
+        if (step == nullptr || step->delta == 0) {
+            return false;
+        }
+        const InteractiveStepDirection direction =
+            step->delta > 0 ? InteractiveStepDirection::Forward : InteractiveStepDirection::Reverse;
+        return interactiveStepRun_->direction == direction &&
+               ((direction == InteractiveStepDirection::Forward && step->delta == 1) ||
+                (direction == InteractiveStepDirection::Reverse && step->delta == -1));
     }
 
     // Handles a provider terminal for the interactive run's current or prepared frame. A canceled
@@ -1538,11 +1631,18 @@ private:
 
     void prepareFollowingPlaybackFrame(const domain::FrameId target) {
         if (!playbackRun_.has_value() || playbackRun_->pauseRequested ||
-            playbackRun_->preparedFrame.has_value() || !target.isValid() ||
-            static_cast<std::uint64_t>(target.value()) + 1U >= state_.canonicalFrameCount) {
+            playbackRun_->preparedFrame.has_value() || !target.isValid()) {
+            return;
+        }
+        const std::int64_t ceiling = playbackCeiling(*playbackRun_);
+        // Never prepare past the session playback-range Out point (or the canonical end).
+        if (target.value() >= ceiling) {
             return;
         }
         const domain::FrameId following{target.value() + 1};
+        if (following.value() > ceiling) {
+            return;
+        }
         playbackRun_->preparedFrame = PendingPlaybackFrame{
             .context =
                 FrameRequestContext{
@@ -1586,19 +1686,29 @@ private:
         if (!playbackRun_.has_value() || playbackRun_->frame.has_value()) {
             return false;
         }
+        domain::FrameId clamped = target;
+        if (playbackRun_->range.has_value()) {
+            const std::int64_t ceiling = playbackCeiling(*playbackRun_);
+            const std::int64_t floor = playbackFloor(*playbackRun_);
+            if (clamped.value() > ceiling) {
+                clamped = domain::FrameId{ceiling};
+            } else if (clamped.value() < floor) {
+                clamped = domain::FrameId{floor};
+            }
+        }
         if (playbackRun_->preparedFrame.has_value() &&
-            playbackRun_->preparedFrame->expectedFrame == target) {
+            playbackRun_->preparedFrame->expectedFrame == clamped) {
             playbackRun_->frame = std::move(playbackRun_->preparedFrame);
             playbackRun_->preparedFrame.reset();
             if (!armPlaybackPresentation(*playbackRun_->frame)) {
                 return false;
             }
             publishPlaybackFrameIfReady();
-            prepareFollowingPlaybackFrame(target);
+            prepareFollowingPlaybackFrame(clamped);
             return true;
         }
         playbackRun_->preparedFrame.reset();
-        return submitPlaybackFrame(target);
+        return submitPlaybackFrame(clamped);
     }
 
     [[nodiscard]] bool schedulePlaybackTarget(const domain::FrameId target) {
@@ -1715,9 +1825,42 @@ private:
             return;
         }
 
-        const std::int64_t maximum = static_cast<std::int64_t>(state_.canonicalFrameCount - 1U);
-        const bool restartFromEnd = state_.displayedFrame->value() == maximum;
-        const domain::FrameId firstTarget{restartFromEnd ? 0 : state_.displayedFrame->value() + 1};
+        const std::int64_t canonicalEnd =
+            static_cast<std::int64_t>(state_.canonicalFrameCount - 1U);
+        const std::int64_t displayedValue = state_.displayedFrame->value();
+        const domain::FrameId displayedFrame = *state_.displayedFrame;
+        bool restartFromEnd = false;
+        domain::FrameId firstTarget{displayedValue + 1};
+        domain::FrameId anchorFrame = displayedFrame;
+
+        if (playbackRange_.has_value()) {
+            const PlaybackRange& range = *playbackRange_;
+            const std::int64_t inValue = range.inInclusive.value();
+            const std::int64_t outValue = range.outInclusive.value();
+            if (inValue == outValue) {
+                if (displayedValue == inValue) {
+                    completeCommand(command.context, CommandOutcome::Succeeded);
+                    return;
+                }
+                firstTarget = range.inInclusive;
+                anchorFrame = range.inInclusive;
+            } else if (displayedValue < inValue || displayedValue > outValue ||
+                       (playbackRangeLoop_ && displayedValue == outValue)) {
+                // Play from outside the closed range (or loop restart from Out) begins at In.
+                firstTarget = range.inInclusive;
+                anchorFrame = range.inInclusive;
+            } else if (displayedValue == outValue) {
+                // Non-loop play already sitting on Out has nothing left to present in-range.
+                completeCommand(command.context, CommandOutcome::Succeeded);
+                return;
+            } else {
+                firstTarget = domain::FrameId{displayedValue + 1};
+            }
+        } else {
+            restartFromEnd = displayedValue == canonicalEnd;
+            firstTarget = restartFromEnd ? domain::FrameId{0} : domain::FrameId{displayedValue + 1};
+        }
+
         state_.playbackGeneration = increment(state_.playbackGeneration);
         const PlaybackRequestContext providerContext = currentPlaybackScope();
         const PlaybackRequestContext cadenceContext = makePlaybackContext();
@@ -1726,12 +1869,15 @@ private:
             .cadenceContext = cadenceContext,
             .firstTarget = firstTarget,
             .nextMinimum = firstTarget,
-            .anchorFrame = *state_.displayedFrame,
+            .anchorFrame = anchorFrame,
             .wallAnchor = dependencies_.clock->now(),
             // A rate chosen while paused overrides the rate carried by the play command, so
             // setPlaybackRate(2x) followed by play() starts at 2x regardless of defaults.
             .speed = pendingPlaybackSpeed_.value_or(command.speed),
             .restartFromEnd = restartFromEnd,
+            .range = playbackRange_,
+            .rangeLoop = playbackRangeLoop_ && playbackRange_.has_value(),
+            .completedLoops = playbackRangeCompletedLoops_,
         };
         lastPlaybackProjectionAt_ = playbackRun_->wallAnchor;
         state_.lastError.reset();
@@ -1791,6 +1937,123 @@ private:
         }
         publishSnapshot();
         completeCommand(command.context, CommandOutcome::Succeeded);
+    }
+
+    void beginSetPlaybackRange(const SetPlaybackRangeCommand& command) {
+        if (command.range.has_value()) {
+            if (!command.range->isValid()) {
+                rejectCommand(command.context,
+                              CommandOutcome::Failed,
+                              coordinatorError(domain::MediaErrorCode::kInvalidArgument,
+                                               "Playback range requires in <= out on the canonical timeline.",
+                                               false));
+                return;
+            }
+            if (state_.canonicalFrameCount == 0U ||
+                static_cast<std::uint64_t>(command.range->outInclusive.value()) >=
+                    state_.canonicalFrameCount) {
+                rejectCommand(command.context,
+                              CommandOutcome::Failed,
+                              coordinatorError(domain::MediaErrorCode::kInvalidFrameId,
+                                               "Playback range lies outside the canonical timeline.",
+                                               false));
+                return;
+            }
+            playbackRange_ = command.range;
+            playbackRangeLoop_ = command.loop;
+        } else {
+            playbackRange_.reset();
+            playbackRangeLoop_ = false;
+            playbackRangeCompletedLoops_ = 0U;
+        }
+        if (playbackRun_.has_value()) {
+            playbackRun_->range = playbackRange_;
+            playbackRun_->rangeLoop = playbackRangeLoop_ && playbackRange_.has_value();
+            if (!playbackRange_.has_value()) {
+                playbackRun_->completedLoops = 0U;
+            } else if (state_.displayedFrame.has_value()) {
+                const std::int64_t displayedValue = state_.displayedFrame->value();
+                const std::int64_t inValue = playbackRange_->inInclusive.value();
+                const std::int64_t outValue = playbackRange_->outInclusive.value();
+                if (displayedValue < inValue || displayedValue > outValue) {
+                    if (playbackRun_->rangeLoop && inValue < outValue) {
+                        playbackRun_->anchorFrame = playbackRange_->inInclusive;
+                        playbackRun_->firstTarget = playbackRange_->inInclusive;
+                        playbackRun_->nextMinimum = playbackRange_->inInclusive;
+                        playbackRun_->wallAnchor = dependencies_.clock->now();
+                        playbackRun_->restartFromEnd = false;
+                        if (playbackRun_->preparedFrame.has_value()) {
+                            dependencies_.directFrameProvider->cancel(playbackRun_->providerContext);
+                            playbackRun_->preparedFrame.reset();
+                        }
+                        if (!playbackRun_->frame.has_value()) {
+                            if (playbackRun_->cadenceTimerId.has_value()) {
+                                static_cast<void>(dependencies_.deadlineScheduler->cancel(
+                                    *playbackRun_->cadenceTimerId));
+                                playbackRun_->cadenceTimerId.reset();
+                            }
+                            static_cast<void>(schedulePlaybackTarget(playbackRange_->inInclusive));
+                        }
+                    } else if (!playbackRun_->rangeLoop) {
+                        stopPlayback();
+                    }
+                } else {
+                    const std::int64_t ceiling = playbackCeiling(*playbackRun_);
+                    if (playbackRun_->nextMinimum.value() > ceiling) {
+                        playbackRun_->nextMinimum = domain::FrameId{ceiling};
+                    }
+                }
+            }
+        }
+        publishSnapshot();
+        completeCommand(command.context, CommandOutcome::Succeeded);
+    }
+
+    void beginStartRangePlayback(const StartRangePlaybackCommand& command) {
+        if (!command.range.isValid()) {
+            rejectCommand(command.context,
+                          CommandOutcome::Failed,
+                          coordinatorError(domain::MediaErrorCode::kInvalidArgument,
+                                           "Playback range requires in <= out on the canonical timeline.",
+                                           false));
+            return;
+        }
+        if (state_.canonicalFrameCount == 0U ||
+            static_cast<std::uint64_t>(command.range.outInclusive.value()) >=
+                state_.canonicalFrameCount) {
+            rejectCommand(command.context,
+                          CommandOutcome::Failed,
+                          coordinatorError(domain::MediaErrorCode::kInvalidFrameId,
+                                           "Playback range lies outside the canonical timeline.",
+                                           false));
+            return;
+        }
+        playbackRange_ = command.range;
+        playbackRangeLoop_ = command.loop;
+        pendingPlaybackSpeed_ = command.speed;
+        if (interactiveStepRun_.has_value()) {
+            cancelInteractiveStepRun(InteractiveStepStopReason::PlaybackStarted);
+        }
+        if (playbackRun_.has_value()) {
+            stopPlayback();
+        }
+        if (pendingProbe_.has_value()) {
+            completeCommand(command.context, CommandOutcome::Busy);
+            return;
+        }
+        if (pending_.has_value()) {
+            if (pending_->phase == PendingPhase::kSeekingFrame) {
+                supersedePendingSeek();
+            } else {
+                completeCommand(command.context, CommandOutcome::Busy);
+                return;
+            }
+        }
+        publishSnapshot();
+        beginPlay(PlayCommand{
+            .context = command.context,
+            .speed = command.speed,
+        });
     }
 
     void submitFirstOrSeekFrame(const domain::FrameId frameId, const PendingPhase phase) {
@@ -1887,6 +2150,10 @@ private:
         state_.manualAlignmentAnchors.clear();
         sequenceAlignmentMaps_.clear();
         invalidateAutomaticAlignmentHistory();
+        // Topology/timeline rebuild invalidates any previously installed playback range.
+        playbackRange_.reset();
+        playbackRangeLoop_ = false;
+        playbackRangeCompletedLoops_ = 0U;
         canonicalTimeline_ = std::move(timeline);
         prefetchScheduler_.reset();
         state_.sessionState = domain::SessionState::kLoading;
@@ -2344,12 +2611,12 @@ private:
                                            false));
             return;
         }
-        // Forward +1 steps run on the interactive step stream: they keep one generation across the
-        // whole run and reuse the provider's Sequential decode path instead of canceling and
-        // re-seeking on every repeat. The first +1 begins the stream; later ones enqueue onto it.
-        // Non-forward steps (backward, multi-frame jumps) keep the old Exact-seek path.
-        if (command.delta == 1) {
-            enqueueInteractiveForwardStep(command);
+        // Forward +1 and reverse -1 steps run on the interactive step stream: they keep one
+        // generation across the whole run. Forward reuses Sequential decode; reverse uses
+        // FrameRequestPriority::Reverse (provider-side exact + reverse-window prefetch).
+        // Multi-frame jumps keep the Exact-seek path.
+        if (command.delta == 1 || command.delta == -1) {
+            enqueueInteractiveStep(command);
             return;
         }
         if (!sources_.has_value() || state_.canonicalFrameCount == 0U) {
@@ -2770,6 +3037,16 @@ private:
             beginSetPlaybackRate(std::get<SetPlaybackRateCommand>(command));
             return;
         }
+        if (std::holds_alternative<SetPlaybackRangeCommand>(command)) {
+            // Range installs/updates must pass while a playback run is active so loop authority
+            // and Out clamping can change without tearing down the session.
+            beginSetPlaybackRange(std::get<SetPlaybackRangeCommand>(command));
+            return;
+        }
+        if (std::holds_alternative<StartRangePlaybackCommand>(command)) {
+            beginStartRangePlayback(std::get<StartRangePlaybackCommand>(command));
+            return;
+        }
         const bool isOpenCommand = std::holds_alternative<OpenComparisonCommand>(command) ||
                                    std::holds_alternative<OpenDirectComparisonCommand>(command);
         const bool invalidatesAnalysis =
@@ -2804,10 +3081,37 @@ private:
             std::holds_alternative<RestoreSequenceAlignmentCommand>(command) ||
             std::holds_alternative<SetManualAlignmentAnchorCommand>(command) ||
             std::holds_alternative<ClearManualAlignmentAnchorsCommand>(command);
-        if (isNavigationCommand) {
+        // An interactive ±1 of the same direction extends the active stream and must not be
+        // treated as a navigational discontinuity that stops playback first. Other commands remain
+        // navigation (seek, ±N, direction flip, alignment, …).
+        if (isNavigationCommand && !extendsActiveInteractiveStepStream(command)) {
             if (pendingProbe_.has_value()) {
                 completeCommand(context, CommandOutcome::Busy);
                 return;
+            }
+            // Manual navigation outside an active range stops the loop but keeps the markers.
+            if (playbackRange_.has_value() && playbackRangeLoop_ &&
+                state_.displayedFrame.has_value()) {
+                const auto outsideRange = [this](const domain::FrameId target) {
+                    return target.value() < playbackRange_->inInclusive.value() ||
+                           target.value() > playbackRange_->outInclusive.value();
+                };
+                std::optional<domain::FrameId> navigationTarget;
+                if (const auto* seek = std::get_if<SeekFrameCommand>(&command)) {
+                    navigationTarget = seek->frameId;
+                } else if (const auto* step = std::get_if<StepFramesCommand>(&command)) {
+                    const std::int64_t current =
+                        state_.requestedFrame
+                            .value_or(state_.displayedFrame.value_or(domain::FrameId{0}))
+                            .value();
+                    navigationTarget = domain::FrameId{current + step->delta};
+                }
+                if (navigationTarget.has_value() && outsideRange(*navigationTarget)) {
+                    playbackRangeLoop_ = false;
+                    if (playbackRun_.has_value()) {
+                        playbackRun_->rangeLoop = false;
+                    }
+                }
             }
             // Frame navigation pauses an active playback run first, and supersedes an in-flight
             // exact seek so rapid presses coalesce onto the newest target (USERPLAN 3.1/6.2).
@@ -2822,21 +3126,29 @@ private:
                     return;
                 }
             }
-        }
-        // A forward +1 step extends an active interactive stream (handled in beginStep); any other
-        // navigation command is a discontinuity that invalidates the warm Sequential cursor, so the
-        // stream is torn down before the new exact navigation proceeds.
-        const bool isForwardStepPlusOne = std::holds_alternative<StepFramesCommand>(command) &&
-                                          std::get<StepFramesCommand>(command).delta == 1;
-        if (interactiveStepRun_.has_value() && !isForwardStepPlusOne) {
-            // Any non-+1 navigation command (backward step, seek, first/last, play, source
-            // topology/reference/alignment change) invalidates the warm Sequential cursor. This is
-            // a normal navigation supersede, not a coordinator error — tear down as a cancel.
-            cancelInteractiveStepRun(InteractiveStepStopReason::NavigationSuperseded);
-        }
-        if (pending_.has_value() || pendingProbe_.has_value() || playbackRun_.has_value()) {
+        } else if (pendingProbe_.has_value()) {
             completeCommand(context, CommandOutcome::Busy);
             return;
+        }
+        // An interactive ±1 of the same direction extends the active stream; any other navigation
+        // invalidates the warm cursor and tears the stream down before the new command proceeds.
+        if (isNavigationCommand && interactiveStepRun_.has_value() &&
+            !extendsActiveInteractiveStepStream(command)) {
+            // Preserve the newest requested target across the cancel so a direction-flip step can
+            // chain from it (e.g. forward +1 in flight then -1 lands on the same frame - 1).
+            const std::optional<domain::FrameId> preservedRequested = state_.requestedFrame;
+            cancelInteractiveStepRun(InteractiveStepStopReason::NavigationSuperseded);
+            if (std::holds_alternative<StepFramesCommand>(command) && preservedRequested.has_value()) {
+                state_.requestedFrame = preservedRequested;
+            }
+        }
+        if (pending_.has_value() || pendingProbe_.has_value() || playbackRun_.has_value()) {
+            // Extending an interactive stream must still be admitted: the stream itself is the
+            // active media operation, not a Busy condition.
+            if (!(isNavigationCommand && extendsActiveInteractiveStepStream(command))) {
+                completeCommand(context, CommandOutcome::Busy);
+                return;
+            }
         }
 
         std::visit(
@@ -2869,6 +3181,10 @@ private:
                     beginPlay(value);
                 } else if constexpr (std::is_same_v<Value, PauseCommand>) {
                     // Pause is handled before the general active-operation admission gate.
+                } else if constexpr (std::is_same_v<Value, SetPlaybackRangeCommand>) {
+                    // Handled before the general active-operation admission gate.
+                } else if constexpr (std::is_same_v<Value, StartRangePlaybackCommand>) {
+                    // Handled before the general active-operation admission gate.
                 } else if constexpr (std::is_same_v<Value, SetPlaybackRateCommand>) {
                     // Rate changes are handled before the general active-operation admission
                     // gate so they pass while playback runs.
@@ -3070,6 +3386,41 @@ private:
         state_.requestedFrame.reset();
         state_.lastError.reset();
         publishPlaybackSnapshot();
+        if (playbackRun_->range.has_value()) {
+            const PlaybackRange& range = *playbackRun_->range;
+            if (displayedFrame.value() >= range.outInclusive.value()) {
+                // Out is fully presented. Loop re-anchors inside the kernel; non-loop pauses.
+                // Single-frame ranges never spin: they present once and stop.
+                if (playbackRun_->rangeLoop && range.inInclusive.value() < range.outInclusive.value()) {
+                    if (playbackRun_->preparedFrame.has_value()) {
+                        dependencies_.directFrameProvider->cancel(playbackRun_->providerContext);
+                        playbackRun_->preparedFrame.reset();
+                    }
+                    playbackRun_->completedLoops += 1U;
+                    playbackRangeCompletedLoops_ = playbackRun_->completedLoops;
+                    playbackRun_->restartFromEnd = false;
+                    playbackRun_->anchorFrame = range.inInclusive;
+                    playbackRun_->firstTarget = range.inInclusive;
+                    playbackRun_->nextMinimum = range.inInclusive;
+                    playbackRun_->wallAnchor = dependencies_.clock->now();
+                    publishPlaybackSnapshot();
+                    static_cast<void>(schedulePlaybackTarget(range.inInclusive));
+                    return;
+                }
+                if (playbackRun_->preparedFrame.has_value()) {
+                    dependencies_.directFrameProvider->cancel(playbackRun_->providerContext);
+                }
+                emitTrace(TraceEventKind::PlaybackRunStopped,
+                          makeTraceIdentity(),
+                          static_cast<std::uint64_t>(displayedFrame.value()));
+                playbackRangeCompletedLoops_ = playbackRun_->completedLoops;
+                playbackRun_.reset();
+                lastPlaybackProjectionAt_.reset();
+                state_.playbackState = domain::PlaybackState::kPaused;
+                publishSnapshot();
+                return;
+            }
+        }
         if (pauseRequested || reachedEnd) {
             if (playbackRun_->preparedFrame.has_value()) {
                 dependencies_.directFrameProvider->cancel(playbackRun_->providerContext);
@@ -3077,6 +3428,8 @@ private:
             emitTrace(TraceEventKind::PlaybackRunStopped,
                       makeTraceIdentity(),
                       static_cast<std::uint64_t>(displayedFrame.value()));
+            playbackRangeCompletedLoops_ = playbackRun_.has_value() ? playbackRun_->completedLoops
+                                                                   : playbackRangeCompletedLoops_;
             playbackRun_.reset();
             lastPlaybackProjectionAt_.reset();
             state_.playbackState = domain::PlaybackState::kPaused;
@@ -3094,6 +3447,12 @@ private:
             playbackRun_->wallAnchor = dependencies_.clock->now();
         } else {
             playbackRun_->nextMinimum = domain::FrameId{displayedFrame.value() + 1};
+        }
+        if (playbackRun_->range.has_value()) {
+            const std::int64_t ceiling = playbackCeiling(*playbackRun_);
+            if (playbackRun_->nextMinimum.value() > ceiling) {
+                playbackRun_->nextMinimum = domain::FrameId{ceiling};
+            }
         }
         static_cast<void>(schedulePlaybackTarget(playbackTargetAt(dependencies_.clock->now())));
     }
@@ -4044,6 +4403,11 @@ private:
     std::optional<PlaybackRun> playbackRun_;
     // Rate chosen while paused; applied by the next PlayCommand so play resumes at this speed.
     std::optional<double> pendingPlaybackSpeed_;
+    // Session-level playback range authority. Survives pause; applied by the next PlayCommand and
+    // live-updated into an active PlaybackRun.
+    std::optional<PlaybackRange> playbackRange_;
+    bool playbackRangeLoop_ = false;
+    std::uint64_t playbackRangeCompletedLoops_ = 0U;
     std::optional<InteractiveStepRun> interactiveStepRun_;
     std::optional<std::chrono::steady_clock::time_point> lastPlaybackProjectionAt_;
     std::optional<std::chrono::steady_clock::time_point> lastInteractiveProjectionAt_;

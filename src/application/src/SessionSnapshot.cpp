@@ -18,6 +18,23 @@ bool SessionSnapshot::isConsistent() const noexcept {
     if (!validFrame(displayedFrame) || !validFrame(requestedFrame)) {
         return false;
     }
+    if (playbackRangeIn.has_value() != playbackRangeOut.has_value()) {
+        return false;
+    }
+    if (playbackRangeIn.has_value()) {
+        if (!playbackRangeIn->isValid() || !playbackRangeOut->isValid() ||
+            playbackRangeIn->value() > playbackRangeOut->value()) {
+            return false;
+        }
+        if (!validFrame(playbackRangeIn) || !validFrame(playbackRangeOut)) {
+            return false;
+        }
+        if (playbackRangeLoop && !playbackRangeIn.has_value()) {
+            return false;
+        }
+    } else if (playbackRangeLoop || playbackRangeLoopActive) {
+        return false;
+    }
     if (sources.size() > 3U) {
         return false;
     }

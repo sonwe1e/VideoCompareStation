@@ -1,5 +1,6 @@
 #include "dvs/ui/ReviewSessionFacade.h"
 
+#include "dvs/ui/PlaybackViewModel.h"
 #include "dvs/ui/ReviewController.h"
 #include "dvs/ui/ReviewPreferencesController.h"
 #include "dvs/ui/ReviewShellController.h"
@@ -10,7 +11,9 @@ ReviewSessionFacade::ReviewSessionFacade(ReviewController& review,
                                          ReviewPreferencesController& preferences,
                                          ReviewShellController& shell,
                                          QObject* const parent)
-    : QObject(parent), review_(review), preferences_(preferences), shell_(shell) {}
+    : QObject(parent), review_(review), preferences_(preferences), shell_(shell) {
+    playbackView_ = std::make_unique<PlaybackViewModel>(&review_, this);
+}
 
 ReviewShellController* ReviewSessionFacade::session() const noexcept {
     return &shell_;
@@ -18,6 +21,10 @@ ReviewShellController* ReviewSessionFacade::session() const noexcept {
 
 ReviewController* ReviewSessionFacade::playback() const noexcept {
     return &review_;
+}
+
+PlaybackViewModel* ReviewSessionFacade::playbackView() const noexcept {
+    return playbackView_.get();
 }
 
 ReviewController* ReviewSessionFacade::alignment() const noexcept {

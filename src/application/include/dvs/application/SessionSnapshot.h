@@ -56,6 +56,12 @@ struct SessionSnapshot final {
     // Visual playback rate: 1.0 real time. Published so the view layer can show and restore
     // the selected speed across pause/play cycles.
     double playbackSpeed = 1.0;
+    // Kernel-owned playback range. When set, presentation targets are clamped to [in, out].
+    std::optional<domain::FrameId> playbackRangeIn;
+    std::optional<domain::FrameId> playbackRangeOut;
+    bool playbackRangeLoop = false;
+    bool playbackRangeLoopActive = false;
+    std::uint64_t playbackRangeCompletedLoops = 0U;
     std::optional<domain::FrameId> displayedFrame;
     std::optional<domain::FrameId> requestedFrame;
     std::uint64_t canonicalFrameCount = 0;

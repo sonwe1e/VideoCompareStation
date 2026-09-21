@@ -20,6 +20,11 @@ enum class PortSubmitResult {
 enum class FrameRequestPriority {
     Exact,
     Sequential,
+    // Interactive reverse step (-1 stream). Decode remains exact/random-access at the provider
+    // (compressed video cannot decode backwards), but the coordinator keeps one generation and a
+    // current+prepared pipeline so held-backward does not storm Exact cancels the way the old
+    // per-step seek path did. Providers may warm a reverse window/prefetch for F-1, F-2, …
+    Reverse,
     Prefetch,
 };
 

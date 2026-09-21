@@ -364,6 +364,10 @@ struct ReviewView final {
     bool framePending = false;
     bool playing = false;
     qreal playbackRate = 1.0;
+    qint64 playbackRangeIn = -1;
+    qint64 playbackRangeOut = -1;
+    bool playbackRangeLoop = false;
+    bool playbackRangeLoopActive = false;
     bool graphicsReady = false;
     qint64 currentFrame = -1;
     qulonglong totalFrames = 0U;
@@ -896,6 +900,108 @@ public:
             });
     }
 
+    [[nodiscard]] bool setPlaybackRange(const qint64 inFrame,
+                                        const qint64 outFrame,
+                                        const bool loop) {
+        if (!onOwnerThread() || stopped_) {
+            return false;
+        }
+        refresh();
+        if (stopped_ || !(view_.canFirst || view_.totalFrames > 0U)) {
+            return false;
+        }
+        const std::optional<application::CommandContext> context = allocateCommandContext();
+        if (!context.has_value()) {
+            failClosed();
+            return false;
+        }
+        std::optional<application::PlaybackRange> range;
+        if (inFrame >= 0 && outFrame >= inFrame) {
+            range = application::PlaybackRange{
+                .inInclusive = domain::FrameId{inFrame},
+                .outInclusive = domain::FrameId{outFrame},
+            };
+        }
+        try {
+            if (dependencies_.submit(application::PlaybackCommand{application::SetPlaybackRangeCommand{
+                    .context = *context,
+                    .range = range,
+                    .loop = loop && range.has_value(),
+                }}) != application::PortSubmitResult::Accepted) {
+                return false;
+            }
+        } catch (...) {
+            failClosed();
+            return false;
+        }
+        // Optimistic local projection so playRange can immediately follow without waiting for the
+        // coordinator terminal; the next snapshot publication overwrites with authoritative state.
+        view_.playbackRangeIn = range.has_value() ? inFrame : -1;
+        view_.playbackRangeOut = range.has_value() ? outFrame : -1;
+        view_.playbackRangeLoop = range.has_value() && loop;
+        view_.playbackRangeLoopActive =
+            view_.playing && view_.playbackRangeLoop && range.has_value();
+        Q_EMIT owner_.stateChanged();
+        return true;
+    }
+
+    [[nodiscard]] bool playRange(const qint64 inFrame, const qint64 outFrame) {
+        if (inFrame < 0 || outFrame < inFrame) {
+            return false;
+        }
+        if (!onOwnerThread() || stopped_) {
+            return false;
+        }
+        refresh();
+        if (stopped_ || !(view_.canFirst || view_.totalFrames > 0U)) {
+            return false;
+        }
+        const std::optional<application::CommandContext> context = allocateCommandContext();
+        if (!context.has_value()) {
+            failClosed();
+            return false;
+        }
+        try {
+            if (dependencies_.submit(
+                    application::PlaybackCommand{application::StartRangePlaybackCommand{
+                        .context = *context,
+                        .range = application::PlaybackRange{
+                            .inInclusive = domain::FrameId{inFrame},
+                            .outInclusive = domain::FrameId{outFrame},
+                        },
+                        .loop = true,
+                        .speed = view_.playbackRate,
+                    }}) != application::PortSubmitResult::Accepted) {
+                return false;
+            }
+        } catch (...) {
+            failClosed();
+            return false;
+        }
+        view_.playbackRangeIn = inFrame;
+        view_.playbackRangeOut = outFrame;
+        view_.playbackRangeLoop = true;
+        view_.playbackRangeLoopActive = true;
+        Q_EMIT owner_.stateChanged();
+        return true;
+    }
+
+    [[nodiscard]] bool stopRangeLoop() {
+        const qint64 inFrame = view_.playbackRangeIn;
+        const qint64 outFrame = view_.playbackRangeOut;
+        if (inFrame >= 0 && outFrame >= inFrame) {
+            if (!setPlaybackRange(inFrame, outFrame, false)) {
+                return false;
+            }
+        }
+        if (view_.playing) {
+            return pause();
+        }
+        view_.playbackRangeLoopActive = false;
+        Q_EMIT owner_.stateChanged();
+        return true;
+    }
+
     [[nodiscard]] bool togglePlayback() {
         if (!onOwnerThread() || stopped_) {
             return false;
@@ -1271,6 +1377,14 @@ private:
             next.playing = snapshot_->playbackState == domain::PlaybackState::kPlaying ||
                            snapshot_->playbackState == domain::PlaybackState::kBuffering;
             next.playbackRate = snapshot_->playbackSpeed;
+            next.playbackRangeIn = snapshot_->playbackRangeIn.has_value()
+                                       ? static_cast<qint64>(snapshot_->playbackRangeIn->value())
+                                       : -1;
+            next.playbackRangeOut = snapshot_->playbackRangeOut.has_value()
+                                        ? static_cast<qint64>(snapshot_->playbackRangeOut->value())
+                                        : -1;
+            next.playbackRangeLoop = snapshot_->playbackRangeLoop;
+            next.playbackRangeLoopActive = snapshot_->playbackRangeLoopActive;
             next.alignmentRequired = snapshot_->alignmentRequired;
             next.automaticAlignmentPending = snapshot_->automaticAlignmentPending;
             next.canConfirmAutomaticAlignment = snapshot_->canConfirmAutomaticAlignment;
@@ -1962,6 +2076,22 @@ qreal ReviewController::playbackRate() const noexcept {
     return impl_->view().playbackRate;
 }
 
+qint64 ReviewController::playbackRangeIn() const noexcept {
+    return impl_->view().playbackRangeIn;
+}
+
+qint64 ReviewController::playbackRangeOut() const noexcept {
+    return impl_->view().playbackRangeOut;
+}
+
+bool ReviewController::playbackRangeLoop() const noexcept {
+    return impl_->view().playbackRangeLoop;
+}
+
+bool ReviewController::playbackRangeLoopActive() const noexcept {
+    return impl_->view().playbackRangeLoopActive;
+}
+
 bool ReviewController::graphicsReady() const noexcept {
     return impl_->view().graphicsReady;
 }
@@ -2307,6 +2437,20 @@ bool ReviewController::pause() {
 
 bool ReviewController::setPlaybackRate(const qreal rate) {
     return impl_->setPlaybackRate(rate);
+}
+
+bool ReviewController::setPlaybackRange(const qint64 inFrame,
+                                        const qint64 outFrame,
+                                        const bool loop) {
+    return impl_->setPlaybackRange(inFrame, outFrame, loop);
+}
+
+bool ReviewController::playRange(const qint64 inFrame, const qint64 outFrame) {
+    return impl_->playRange(inFrame, outFrame);
+}
+
+bool ReviewController::stopRangeLoop() {
+    return impl_->stopRangeLoop();
 }
 
 bool ReviewController::togglePlayback() {

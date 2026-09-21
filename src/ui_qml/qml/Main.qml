@@ -53,6 +53,7 @@ ApplicationWindow {
 
     readonly property var facade: reviewFacade
     readonly property var controller: facade ? facade.playback : null
+    readonly property var playbackVm: facade ? facade.playbackView : null
     readonly property var preferences: facade ? facade.comparison : null
     readonly property var shell: facade ? facade.shell : null
 
@@ -123,7 +124,8 @@ ApplicationWindow {
     readonly property int outFrame: shell ? Number(shell.outFrame) : -1
     readonly property real inMediaTime: shell ? Number(shell.inMediaTime) : -1
     readonly property real outMediaTime: shell ? Number(shell.outMediaTime) : -1
-    readonly property bool rangePlaybackActive: Boolean(shell && shell.rangePlaybackActive)
+    readonly property bool rangePlaybackActive: Boolean(controller && controller.playbackRangeLoopActive)
+        || Boolean(shell && shell.rangePlaybackActive && controller && controller.playbackRangeLoop)
     readonly property bool rangeStartPending: Boolean(shell && shell.rangeStartPending)
     property bool shortcutHelpVisible: false
     readonly property int shortcutPreset: preferences ? Number(preferences.shortcutPreset) : 0
@@ -417,24 +419,6 @@ ApplicationWindow {
 
             showImmersiveHud(frameText);
         }
-
-        if (rangeStartPending && Number(currentFrame) === inFrame && !busy) {
-            shell.setRangeStartPending(false);
-
-            Qt.callLater(() => {
-                if (rangePlaybackActive && controller && !controller.playing && !controller.play())
-                    stopRangeLoop(qsTr("无法启动播放，已停止循环播放。"));
-            });
-
-            return;
-        }
-
-        if (rangePlaybackActive && playing && outFrame >= inFrame && Number(currentFrame) >= outFrame) {
-            shell.setRangeStartPending(true);
-
-            if (!controller.seekFrame(inFrame))
-                stopRangeLoop(qsTr("无法到达入点，已停止循环播放。"));
-        }
     }
 
     onSourceCountChanged: {
@@ -520,8 +504,11 @@ ApplicationWindow {
 
             const mediaTime = controller ? Number(controller.mediaTimeForFrame(frame)) : -1;
 
-            if (shell.setRangeIn(frame, mediaTime))
+            if (shell.setRangeIn(frame, mediaTime)) {
+                syncApplicationRange();
+
                 showImmersiveHud(qsTr("入点 · 第 %1 帧").arg(frame + 1));
+            }
         }
     }
 
@@ -533,28 +520,36 @@ ApplicationWindow {
 
             const mediaTime = controller ? Number(controller.mediaTimeForFrame(frame)) : -1;
 
-            if (shell.setRangeOut(frame, mediaTime))
+            if (shell.setRangeOut(frame, mediaTime)) {
+                syncApplicationRange();
+
                 showImmersiveHud(qsTr("出点 · 第 %1 帧").arg(frame + 1));
+            }
         }
     }
 
+    function syncApplicationRange() {
+        if (!controller)
+            return;
+
+        const nextIn = shell ? Number(shell.inFrame) : -1;
+        const nextOut = shell ? Number(shell.outFrame) : -1;
+        const loop = Boolean(controller.playbackRangeLoop);
+
+        controller.setPlaybackRange(nextIn, nextOut, loop && nextIn >= 0 && nextOut >= nextIn);
+    }
+
     function playSelectedRange() {
-        if (inFrame < 0 || outFrame < inFrame || !controller || !shell)
+        if (inFrame < 0 || outFrame < inFrame || !controller)
             return false;
 
-        const seekRequired = Number(currentFrame) !== inFrame;
+        if (shell) {
+            shell.setRangePlaybackState(true, Number(currentFrame) !== inFrame);
+            shell.setRangeStartPending(false);
+        }
 
-        if (!shell.setRangePlaybackState(true, seekRequired))
-            return false;
-
-        if (seekRequired) {
-            if (!controller.seekFrame(inFrame)) {
-                stopRangeLoop(qsTr("无法到达入点，已停止循环播放。"));
-
-                return false;
-            }
-        } else if (!controller.play()) {
-            stopRangeLoop(qsTr("无法启动播放，已停止循环播放。"));
+        if (!controller.playRange(inFrame, outFrame)) {
+            stopRangeLoop(qsTr("无法启动范围循环播放。"));
 
             return false;
         }
@@ -565,6 +560,9 @@ ApplicationWindow {
     function clearSelectedRange() {
         if (shell)
             shell.clearRange();
+
+        if (controller)
+            controller.setPlaybackRange(-1, -1, false);
     }
 
     function remapReviewRange() {
@@ -576,6 +574,7 @@ ApplicationWindow {
         const mappedOut = outMediaTime >= 0 ? Number(controller.frameForMediaTime(outMediaTime)) : -1;
 
         shell.remapRange(mappedIn, mappedOut);
+        syncApplicationRange();
     }
 
     function revealOsc() {
@@ -583,15 +582,21 @@ ApplicationWindow {
     }
 
     function toggleRangeLoop() {
-        if (inFrame < 0 || outFrame < inFrame || !shell)
+        if (inFrame < 0 || outFrame < inFrame || !controller)
             return false;
 
         const nextActive = !rangePlaybackActive;
 
-        if (!shell.setRangePlaybackState(nextActive, false))
-            return false;
+        if (shell)
+            shell.setRangePlaybackState(nextActive, false);
 
-        if (!nextActive && controller && controller.playing && !controller.pause()) {
+        if (nextActive) {
+            if (!controller.playRange(inFrame, outFrame)) {
+                showIntentMessage(qsTr("无法启动范围循环播放。"));
+
+                return false;
+            }
+        } else if (!controller.stopRangeLoop()) {
             showIntentMessage(qsTr("循环播放已关闭，但无法暂停播放。"));
 
             return false;
@@ -607,7 +612,7 @@ ApplicationWindow {
             shell.setRangeStartPending(false);
         }
 
-        const paused = !controller || !controller.playing || controller.pause();
+        const paused = !controller || controller.stopRangeLoop();
 
         if (message.length > 0)
             showIntentMessage(message);

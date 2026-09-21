@@ -57,6 +57,7 @@ actorError(const domain::SourceId sourceId, std::string detail, const bool recov
 [[nodiscard]] std::size_t capacityFor(const SourceDecodePriority priority) noexcept {
     switch (priority) {
     case SourceDecodePriority::Exact:
+    case SourceDecodePriority::Reverse:
         return kExactCapacity;
     case SourceDecodePriority::Sequential:
         return kSequentialCapacity;
@@ -197,7 +198,8 @@ application::PortSubmitResult SourceDecodeActor::submit(SourceDecodeRequest requ
             }
         }
 
-        if (job.request.priority == SourceDecodePriority::Exact) {
+        if (job.request.priority == SourceDecodePriority::Exact ||
+            job.request.priority == SourceDecodePriority::Reverse) {
             while (!prefetchQueue_.empty()) {
                 displaced.push_back(std::move(prefetchQueue_.front()));
                 prefetchQueue_.pop_front();
@@ -281,6 +283,7 @@ std::deque<SourceDecodeActor::DecodeJob>&
 SourceDecodeActor::queueFor(const SourceDecodePriority priority) noexcept {
     switch (priority) {
     case SourceDecodePriority::Exact:
+    case SourceDecodePriority::Reverse:
         return exactQueue_;
     case SourceDecodePriority::Sequential:
         return sequentialQueue_;
@@ -381,6 +384,7 @@ void SourceDecodeActor::run() noexcept {
         }
 
         const bool retainInCache = decode->request.priority == SourceDecodePriority::Exact ||
+                                   decode->request.priority == SourceDecodePriority::Reverse ||
                                    decode->request.priority == SourceDecodePriority::Prefetch;
         const auto recordDecode = [this](const std::uint64_t decodeMicroseconds) {
             std::scoped_lock lock{mutex_};
@@ -496,10 +500,67 @@ void SourceDecodeActor::run() noexcept {
         const bool useDedicatedExactDecoder =
             exactDecoder_ != nullptr &&
             (decode->request.priority == SourceDecodePriority::Exact ||
+             decode->request.priority == SourceDecodePriority::Reverse ||
              decode->request.priority == SourceDecodePriority::Prefetch);
         SoftwareDecoder& selectedDecoder = useDedicatedExactDecoder ? *exactDecoder_ : *decoder_;
         bool& selectedDecoderNeedsReopen =
             useDedicatedExactDecoder ? exactDecoderNeedsReopen_ : decoderNeedsReopen_;
+        // Reverse held-step warm-up: after a Reverse decode, exact-decode F-1..F-N into the
+        // source cache so the next -1 hits cache instead of re-seeking the GOP head.
+        const auto fillReverseReadAhead = [this, &recordDecode, &selectedDecoder](
+                                              const SourceDecodeRequest& request,
+                                              const std::size_t frameBytes) {
+            if (request.priority != SourceDecodePriority::Reverse ||
+                request.readAheadCount == 0U || frameBytes == 0U) {
+                return;
+            }
+            const std::size_t cacheFrameCapacity = cache_.capacityBytes() / frameBytes;
+            if (cacheFrameCapacity < 2U) {
+                return;
+            }
+            const std::uint8_t effectiveReadAhead = static_cast<std::uint8_t>(
+                std::min<std::size_t>(request.readAheadCount, cacheFrameCapacity));
+            for (std::uint8_t offset = 1U; offset <= effectiveReadAhead; ++offset) {
+                bool urgentWorkQueued = false;
+                {
+                    const std::scoped_lock lock{mutex_};
+                    urgentWorkQueued = stopping_ || !controlQueue_.empty() ||
+                                       !exactQueue_.empty() || !sequentialQueue_.empty();
+                }
+                if (urgentWorkQueued ||
+                    request.cancellationRequested->load(std::memory_order_acquire)) {
+                    break;
+                }
+                const std::int64_t base = request.frameId.value();
+                if (base < static_cast<std::int64_t>(offset)) {
+                    break;
+                }
+                const domain::FrameId candidate{base - static_cast<std::int64_t>(offset)};
+                if (!candidate.isValid() || candidate.value() < 0) {
+                    break;
+                }
+                cacheKey_.sourceFrame = candidate;
+                if (cache_.find(cacheKey_).has_value()) {
+                    continue;
+                }
+                const auto started = std::chrono::steady_clock::now();
+                domain::Result<DecodedFrame> result =
+                    selectedDecoder.decodeExact(candidate, *request.cancellationRequested);
+                const auto elapsed = static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - started)
+                        .count());
+                recordDecode(elapsed);
+                if (!result) {
+                    break;
+                }
+                cache_.insert(cacheKey_,
+                              CachedSourceFrame{
+                                  .handle = result.value().handle,
+                                  .presentationTime = result.value().presentationTime,
+                              });
+            }
+        };
         domain::Result<DecodedFrame> result = domain::Result<DecodedFrame>::failure(
             actorError(sourceId_, "The source decoder could not be reopened after interruption."));
         if (selectedDecoderNeedsReopen) {
@@ -550,6 +611,7 @@ void SourceDecodeActor::run() noexcept {
         complete(std::move(*decode), std::move(result));
         if (decoded) {
             fillReadAhead(readAheadRequest, frameBytes);
+            fillReverseReadAhead(readAheadRequest, frameBytes);
         }
     }
     decoder_->close();

@@ -28,6 +28,9 @@ namespace dvs::media::internal {
 enum class SourceDecodePriority {
     Exact,
     Sequential,
+    // Reverse interactive step: same decoder/queue treatment as Exact (random access), kept
+    // distinct so admission and telemetry can tell reverse-step work from ordinary seeks.
+    Reverse,
     Prefetch,
 };
 
