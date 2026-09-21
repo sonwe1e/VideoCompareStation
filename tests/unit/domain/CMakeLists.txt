@@ -2,6 +2,7 @@ include(GoogleTest)
 
 add_executable(
     dvs_domain_unit_tests
+    ComparisonSelectionTests.cpp
     ComparisonValidatorTests.cpp
     FrameTimelineTests.cpp
     FrameTimelineCanonicalContractTests.cpp

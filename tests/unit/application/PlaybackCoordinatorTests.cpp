@@ -1152,10 +1152,12 @@ TEST(PlaybackCoordinatorTests, CarriesNonFirstReferenceIdentityIntoProviderOpen)
     ASSERT_TRUE(provider->waitForOpenRequestCount(1U));
     const std::optional<FrameProviderOpenRequest> open = provider->openRequest();
     ASSERT_TRUE(open.has_value());
-    EXPECT_EQ(open->canonicalSourceId, 1U);
+    EXPECT_EQ(open->canonicalSourceId, 0U);
     ASSERT_EQ(open->sources.size(), 2U);
     EXPECT_EQ(open->sources[0U].id, 0U);
     EXPECT_EQ(open->sources[1U].id, 1U);
+    EXPECT_EQ(open->sources[0U].role, domain::ComparisonRole::kPrediction);
+    EXPECT_EQ(open->sources[1U].role, domain::ComparisonRole::kReference);
 }
 
 TEST(PlaybackCoordinatorTests, SuccessfulExactPresentationSubmitsBoundedPrefetchRequests) {
@@ -5328,13 +5330,15 @@ TEST(PlaybackCoordinatorTests, ReverseStepUsesOneGenerationAcrossAdjacentCommand
 // source 1 as Reference (12 frames), and asserts the canonical frame count is unchanged. It is
 // expected to FAIL on the current code (today canonical follows the new Reference: 30 -> 12) and
 // pass once Phase 1 decouples Reference from TimelineMaster.
-TEST(PlaybackCoordinatorTests, DISABLED_ChangingReferenceDoesNotChangeTimelineMaster) {
+TEST(PlaybackCoordinatorTests, ChangingReferenceDoesNotChangeTimelineMaster) {
     const auto provider = std::make_shared<FakeFrameProvider>();
     const auto render = std::make_shared<FakeRenderChannel>();
     const auto coordinator = makeCoordinator(provider, render);
     ASSERT_NE(coordinator, nullptr);
+    markGraphicsReady(coordinator);
 
-    // First open: source 0 is Reference (30 frames) -> canonical follows it = 30 frames today.
+    // First open: source 0 is Reference (30 frames). Timeline master is session-order first
+    // (also 0), so canonical frame count is 30 either way.
     const std::shared_ptr<const SessionSnapshot> initial = coordinator->snapshot();
     ASSERT_EQ(
         coordinator->submit(OpenDirectComparisonCommand{
@@ -5366,6 +5370,7 @@ TEST(PlaybackCoordinatorTests, DISABLED_ChangingReferenceDoesNotChangeTimelineMa
     ASSERT_TRUE(provider->waitForOpenRequestCount(1U));
     std::optional<FrameProviderOpenRequest> open = provider->openRequest();
     ASSERT_TRUE(open.has_value());
+    EXPECT_EQ(open->canonicalSourceId, 0U);
     ASSERT_TRUE(provider->postOpenSucceeded(*open));
     ASSERT_TRUE(provider->waitForFrameRequestCount(1U));
     std::optional<FrameRequest> frame = provider->frameRequest(0U);
@@ -5376,9 +5381,10 @@ TEST(PlaybackCoordinatorTests, DISABLED_ChangingReferenceDoesNotChangeTimelineMa
     presentPublished(coordinator, render, 0U);
     ASSERT_EQ(waitForTerminals(coordinator, 1U).size(), 1U);
     const std::uint64_t canonicalBefore = coordinator->snapshot()->canonicalFrameCount;
+    ASSERT_EQ(canonicalBefore, 30U);
 
-    // Re-open with source 1 (12 frames) as Reference. Today canonical follows the new Reference
-    // and drops to 12; after Phase 1 the canonical master is independent and must stay at 30.
+    // Re-open with source 1 as Reference (12 frames). C-01: timeline master stays session-order
+    // first (source 0, 30 frames) even though Reference moved to the 12-frame source.
     const std::shared_ptr<const SessionSnapshot> before = coordinator->snapshot();
     ASSERT_EQ(
         coordinator->submit(OpenDirectComparisonCommand{
@@ -5407,23 +5413,28 @@ TEST(PlaybackCoordinatorTests, DISABLED_ChangingReferenceDoesNotChangeTimelineMa
                 },
         }),
         PortSubmitResult::Accepted);
-    ASSERT_TRUE(provider->waitForOpenRequestCount(1U));
-    open = provider->openRequest();
+    ASSERT_TRUE(provider->waitForOpenRequestCount(2U));
+    open = provider->openRequest(1U);
     ASSERT_TRUE(open.has_value());
+    EXPECT_EQ(open->canonicalSourceId, 0U);
     ASSERT_TRUE(provider->postOpenSucceeded(*open));
-    ASSERT_TRUE(provider->waitForFrameRequestCount(1U));
-    frame = provider->frameRequest(0U);
+    ASSERT_TRUE(provider->waitForFrameRequestCount(2U));
+    frame = provider->frameRequest(1U);
     ASSERT_TRUE(frame.has_value());
     ASSERT_TRUE(provider->postFrameReady(*frame, makeFrameSet(frame->frameId)));
-    ASSERT_TRUE(render->waitForPublishedCount(1U));
+    ASSERT_TRUE(render->waitForPublishedCount(2U));
     ASSERT_TRUE(provider->postFrameSucceeded(*frame));
-    presentPublished(coordinator, render, 0U);
+    presentPublished(coordinator, render, 1U);
     ASSERT_EQ(waitForTerminals(coordinator, 1U).size(), 1U);
-    const std::uint64_t canonicalAfter = coordinator->snapshot()->canonicalFrameCount;
 
-    EXPECT_EQ(canonicalBefore, canonicalAfter)
-        << "Changing which source is Reference must not change the canonical frame count "
-           "(today Reference == canonical, so the count follows the new Reference — a V2 target).";
+    const auto after = coordinator->snapshot();
+    ASSERT_NE(after->validatedComparison, nullptr);
+    EXPECT_EQ(after->canonicalFrameCount, canonicalBefore);
+    EXPECT_EQ(after->canonicalFrameCount, 30U);
+    EXPECT_EQ(after->validatedComparison->canonicalSourceId(), 0U);
+    EXPECT_EQ(after->validatedComparison->timelineMasterSourceId(), 0U);
+    ASSERT_TRUE(after->validatedComparison->referenceSourceId().has_value());
+    EXPECT_EQ(*after->validatedComparison->referenceSourceId(), 1U);
 }
 
 TEST(PlaybackCoordinatorTests, SetPlaybackRangePublishesSnapshotAndRejectsInvalidBounds) {
@@ -5438,10 +5449,11 @@ TEST(PlaybackCoordinatorTests, SetPlaybackRangePublishesSnapshotAndRejectsInvali
 
     ASSERT_EQ(coordinator->submit(SetPlaybackRangeCommand{
                   .context = commandContext(coordinator, domain::CommandId{2}),
-                  .range = PlaybackRange{
-                      .inInclusive = domain::FrameId{2},
-                      .outInclusive = domain::FrameId{5},
-                  },
+                  .range =
+                      PlaybackRange{
+                          .inInclusive = domain::FrameId{2},
+                          .outInclusive = domain::FrameId{5},
+                      },
                   .loop = true,
               }),
               PortSubmitResult::Accepted);
@@ -5456,10 +5468,11 @@ TEST(PlaybackCoordinatorTests, SetPlaybackRangePublishesSnapshotAndRejectsInvali
 
     ASSERT_EQ(coordinator->submit(SetPlaybackRangeCommand{
                   .context = commandContext(coordinator, domain::CommandId{3}),
-                  .range = PlaybackRange{
-                      .inInclusive = domain::FrameId{8},
-                      .outInclusive = domain::FrameId{4},
-                  },
+                  .range =
+                      PlaybackRange{
+                          .inInclusive = domain::FrameId{8},
+                          .outInclusive = domain::FrameId{4},
+                      },
                   .loop = true,
               }),
               PortSubmitResult::Accepted);
@@ -5494,10 +5507,11 @@ TEST(PlaybackCoordinatorTests, RangeLoopCatchUpNeverPresentsPastOutAndReanchorsI
 
     ASSERT_EQ(coordinator->submit(SetPlaybackRangeCommand{
                   .context = commandContext(coordinator, domain::CommandId{2}),
-                  .range = PlaybackRange{
-                      .inInclusive = domain::FrameId{0},
-                      .outInclusive = domain::FrameId{2},
-                  },
+                  .range =
+                      PlaybackRange{
+                          .inInclusive = domain::FrameId{0},
+                          .outInclusive = domain::FrameId{2},
+                      },
                   .loop = true,
               }),
               PortSubmitResult::Accepted);
@@ -5521,9 +5535,8 @@ TEST(PlaybackCoordinatorTests, RangeLoopCatchUpNeverPresentsPastOutAndReanchorsI
     ASSERT_TRUE(provider->postFrameReady(*firstPlayback, makeFrameSet(firstPlayback->frameId)));
     ASSERT_TRUE(render->waitForPublishedCount(2U));
     presentPublished(coordinator, render, 1U);
-    ASSERT_TRUE(waitUntil([&coordinator] {
-        return coordinator->snapshot()->displayedFrame == domain::FrameId{1};
-    }));
+    ASSERT_TRUE(waitUntil(
+        [&coordinator] { return coordinator->snapshot()->displayedFrame == domain::FrameId{1}; }));
 
     // Stall past catch-up tolerance; every subsequent provider request must stay <= Out.
     clock->advance(std::chrono::seconds{10});
@@ -5585,10 +5598,11 @@ TEST(PlaybackCoordinatorTests, RangeWithoutLoopPausesAtOutInsteadOfPassingIt) {
 
     ASSERT_EQ(coordinator->submit(SetPlaybackRangeCommand{
                   .context = commandContext(coordinator, domain::CommandId{2}),
-                  .range = PlaybackRange{
-                      .inInclusive = domain::FrameId{0},
-                      .outInclusive = domain::FrameId{1},
-                  },
+                  .range =
+                      PlaybackRange{
+                          .inInclusive = domain::FrameId{0},
+                          .outInclusive = domain::FrameId{1},
+                      },
                   .loop = false,
               }),
               PortSubmitResult::Accepted);
@@ -5639,10 +5653,11 @@ TEST(PlaybackCoordinatorTests, StartRangePlaybackFromOutsideRangeBeginsAtIn) {
 
     ASSERT_EQ(coordinator->submit(StartRangePlaybackCommand{
                   .context = commandContext(coordinator, domain::CommandId{2}),
-                  .range = PlaybackRange{
-                      .inInclusive = domain::FrameId{2},
-                      .outInclusive = domain::FrameId{4},
-                  },
+                  .range =
+                      PlaybackRange{
+                          .inInclusive = domain::FrameId{2},
+                          .outInclusive = domain::FrameId{4},
+                      },
                   .loop = true,
               }),
               PortSubmitResult::Accepted);
@@ -5677,8 +5692,7 @@ TEST(PlaybackCoordinatorTests, StartRangePlaybackFromOutsideRangeBeginsAtIn) {
             sawInRangeTarget = true;
         }
     }
-    EXPECT_TRUE(sawInRangeTarget)
-        << "Playing a range from outside must begin at In (frame 2)";
+    EXPECT_TRUE(sawInRangeTarget) << "Playing a range from outside must begin at In (frame 2)";
 }
 
 TEST(PlaybackCoordinatorTests, SingleFrameRangePlayDoesNotSpinAHighSpeedLoop) {
@@ -5694,10 +5708,11 @@ TEST(PlaybackCoordinatorTests, SingleFrameRangePlayDoesNotSpinAHighSpeedLoop) {
     // Single-frame range already sitting on In==Out must complete without starting a run.
     ASSERT_EQ(coordinator->submit(StartRangePlaybackCommand{
                   .context = commandContext(coordinator, domain::CommandId{2}),
-                  .range = PlaybackRange{
-                      .inInclusive = domain::FrameId{0},
-                      .outInclusive = domain::FrameId{0},
-                  },
+                  .range =
+                      PlaybackRange{
+                          .inInclusive = domain::FrameId{0},
+                          .outInclusive = domain::FrameId{0},
+                      },
                   .loop = true,
               }),
               PortSubmitResult::Accepted);

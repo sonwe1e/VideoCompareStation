@@ -1,6 +1,8 @@
 #include "dvs/ui/ReviewController.h"
 
 #include "dvs/application/ComparisonExactness.h"
+#include "dvs/domain/ComparisonSelection.h"
+#include "dvs/domain/PlaybackContinuityPolicy.h"
 #include "dvs/ui/SourceIdentity.h"
 #include "dvs/ui/SourceListModel.h"
 
@@ -403,6 +405,11 @@ struct ReviewView final {
     bool canUndoAutomaticAlignment = false;
     QVariantList compatibilityFindings;
     QVariantList differenceEdges;
+    // C-02/C-07 projections from the session snapshot.
+    int effectiveDifferenceEdge = 0;
+    int playbackContinuityPolicy = 0;
+    QString playbackContinuityPolicyName;
+    qulonglong playbackSkippedFrameSets = 0U;
     bool canOpen = false;
     bool canFirst = false;
     bool canPrevious = false;
@@ -900,9 +907,8 @@ public:
             });
     }
 
-    [[nodiscard]] bool setPlaybackRange(const qint64 inFrame,
-                                        const qint64 outFrame,
-                                        const bool loop) {
+    [[nodiscard]] bool
+    setPlaybackRange(const qint64 inFrame, const qint64 outFrame, const bool loop) {
         if (!onOwnerThread() || stopped_) {
             return false;
         }
@@ -923,11 +929,12 @@ public:
             };
         }
         try {
-            if (dependencies_.submit(application::PlaybackCommand{application::SetPlaybackRangeCommand{
-                    .context = *context,
-                    .range = range,
-                    .loop = loop && range.has_value(),
-                }}) != application::PortSubmitResult::Accepted) {
+            if (dependencies_.submit(
+                    application::PlaybackCommand{application::SetPlaybackRangeCommand{
+                        .context = *context,
+                        .range = range,
+                        .loop = loop && range.has_value(),
+                    }}) != application::PortSubmitResult::Accepted) {
                 return false;
             }
         } catch (...) {
@@ -965,10 +972,11 @@ public:
             if (dependencies_.submit(
                     application::PlaybackCommand{application::StartRangePlaybackCommand{
                         .context = *context,
-                        .range = application::PlaybackRange{
-                            .inInclusive = domain::FrameId{inFrame},
-                            .outInclusive = domain::FrameId{outFrame},
-                        },
+                        .range =
+                            application::PlaybackRange{
+                                .inInclusive = domain::FrameId{inFrame},
+                                .outInclusive = domain::FrameId{outFrame},
+                            },
                         .loop = true,
                         .speed = view_.playbackRate,
                     }}) != application::PortSubmitResult::Accepted) {
@@ -1284,8 +1292,15 @@ private:
             }
             if (snapshot_->validatedComparison) {
                 const std::vector<DecoderBackendState> decoderBackends = decoderBackendStates();
+                // C-01: canonicalSourceIndex is the timeline master, not the Reference role.
                 next.canonicalSourceIndex =
                     static_cast<int>(snapshot_->validatedComparison->canonicalSourceId());
+                if (snapshot_->validatedComparison->referenceSourceId().has_value()) {
+                    next.referenceSourceIndex =
+                        static_cast<int>(*snapshot_->validatedComparison->referenceSourceId());
+                } else {
+                    next.referenceSourceIndex = next.canonicalSourceIndex;
+                }
                 const domain::MediaDescriptor& canonical =
                     snapshot_->validatedComparison->canonicalDescriptor();
                 next.timingMode = timingModeName(canonical.timingConfidence);
@@ -1301,9 +1316,6 @@ private:
                         QString::fromStdWString(source.descriptor.normalizedPath.wstring());
                     next.sourceUrls.push_back(QUrl::fromLocalFile(sourcePath));
                     const QString filename = QFileInfo{sourcePath}.fileName();
-                    if (source.role == domain::ComparisonRole::kReference) {
-                        next.referenceSourceIndex = static_cast<int>(source.id);
-                    }
                     if (source.id == 0U) {
                         next.sourceAFilename = filename;
                     } else if (source.id == 1U) {
@@ -1765,6 +1777,27 @@ private:
                 });
             }
         }
+        // C-02/C-07: project session pair + continuity policy into the view model.
+        if (snapshot_ && snapshot_->activeComparisonPair.has_value() &&
+            snapshot_->validatedComparison) {
+            const auto ordinal = domain::comparisonPairEdgeOrdinal(
+                snapshot_->validatedComparison->sources(), *snapshot_->activeComparisonPair);
+            if (ordinal.has_value()) {
+                next.effectiveDifferenceEdge = static_cast<int>(*ordinal);
+            }
+        }
+        if (snapshot_) {
+            next.playbackContinuityPolicy =
+                static_cast<int>(snapshot_->playbackContinuityPolicyEffective);
+            next.playbackContinuityPolicyName = QString::fromLatin1(
+                domain::playbackContinuityPolicyName(snapshot_->playbackContinuityPolicyEffective)
+                    .data(),
+                static_cast<qsizetype>(domain::playbackContinuityPolicyName(
+                                           snapshot_->playbackContinuityPolicyEffective)
+                                           .size()));
+            next.playbackSkippedFrameSets =
+                static_cast<qulonglong>(snapshot_->playbackSkippedFrameSets);
+        }
         next.sourceCount = static_cast<int>(sourceRows.size());
         sourceModel_.setRows(std::move(sourceRows));
 
@@ -2054,6 +2087,22 @@ int ReviewController::canonicalSourceIndex() const noexcept {
 
 int ReviewController::referenceSourceIndex() const noexcept {
     return impl_->view().referenceSourceIndex;
+}
+
+QString ReviewController::playbackContinuityPolicyName() const {
+    return impl_->view().playbackContinuityPolicyName;
+}
+
+int ReviewController::playbackContinuityPolicy() const noexcept {
+    return impl_->view().playbackContinuityPolicy;
+}
+
+qulonglong ReviewController::playbackSkippedFrameSets() const noexcept {
+    return impl_->view().playbackSkippedFrameSets;
+}
+
+int ReviewController::effectiveDifferenceEdge() const noexcept {
+    return impl_->view().effectiveDifferenceEdge;
 }
 
 ReviewController::ReviewDisplayState ReviewController::displayState() const noexcept {

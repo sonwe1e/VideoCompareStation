@@ -1,7 +1,9 @@
 #pragma once
 
 #include "dvs/application/RequestContext.h"
+#include "dvs/domain/ComparisonSelection.h"
 #include "dvs/domain/Identifiers.h"
+#include "dvs/domain/PlaybackContinuityPolicy.h"
 
 #include <cstdint>
 #include <optional>
@@ -70,6 +72,20 @@ struct StartRangePlaybackCommand final {
     PlaybackRange range;
     bool loop = true;
     double speed = 1.0;
+};
+
+// C-07: explicit continuity policy. Contextual resolves at play time from source count.
+struct SetPlaybackContinuityPolicyCommand final {
+    CommandContext context;
+    domain::PlaybackContinuityPolicy policy = domain::PlaybackContinuityPolicy::Contextual;
+};
+
+// C-02: session comparison pair as stable source identities. Empty/nullopt clears to policy
+// default on the next topology rebuild.
+struct SetActiveComparisonPairCommand final {
+    CommandContext context;
+    std::optional<domain::ComparisonPair> pair;
+    domain::DefaultPairPolicy policy = domain::DefaultPairPolicy::PreserveIfAvailable;
 };
 
 } // namespace dvs::application

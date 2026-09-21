@@ -2,9 +2,11 @@
 
 #include "dvs/application/FrameSet.h"
 #include "dvs/application/RequestContext.h"
+#include "dvs/domain/ComparisonSelection.h"
 #include "dvs/domain/CompatibilityReport.h"
 #include "dvs/domain/FrameTimeline.h"
 #include "dvs/domain/MediaError.h"
+#include "dvs/domain/PlaybackContinuityPolicy.h"
 #include "dvs/domain/ValidatedComparisonSet.h"
 
 #include <cstdint>
@@ -56,6 +58,16 @@ struct SessionSnapshot final {
     // Visual playback rate: 1.0 real time. Published so the view layer can show and restore
     // the selected speed across pause/play cycles.
     double playbackSpeed = 1.0;
+    // C-07: active continuity mode (Contextual is resolved before publishing the effective
+    // policy). Status rail shows this plus skipped FrameSet count.
+    domain::PlaybackContinuityPolicy playbackContinuityPolicy =
+        domain::PlaybackContinuityPolicy::Contextual;
+    domain::PlaybackContinuityPolicy playbackContinuityPolicyEffective =
+        domain::PlaybackContinuityPolicy::ReviewEveryFrame;
+    std::uint64_t playbackSkippedFrameSets = 0U;
+    // C-02: session comparison pair as stable source identities; projected to DifferenceEdge
+    // only at the renderer boundary.
+    std::optional<domain::ComparisonPair> activeComparisonPair;
     // Kernel-owned playback range. When set, presentation targets are clamped to [in, out].
     std::optional<domain::FrameId> playbackRangeIn;
     std::optional<domain::FrameId> playbackRangeOut;

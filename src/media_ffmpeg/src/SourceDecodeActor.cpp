@@ -22,6 +22,13 @@ constexpr std::size_t kExactCapacity = 1U;
 constexpr std::size_t kSequentialCapacity = 2U;
 constexpr std::size_t kPrefetchCapacity = 8U;
 constexpr std::uint8_t kMaximumReadAheadCount = 4U;
+// ADR-003 Reverse GOP Window: request-side desire is capped so a single held-backward burst
+// cannot ask the actor to walk an unbounded GOP; the actor still shrinks to the byte budget.
+constexpr std::uint8_t kMaximumReverseWindowFrames = 48U;
+// Soft wall-clock budget for one reverse-window seed + sequential walk. The primary reverse
+// frame is already complete; this bound keeps held-backward from stalling the decode worker
+// on a long GOP when the next interactive target is already queued.
+constexpr std::uint64_t kReverseWindowBuildBudgetMicroseconds = 80'000U;
 constexpr std::uint32_t kExactSoftwareThreadCount = 4U;
 constexpr std::uint64_t kMaximumSoftwareExactFrameBytes = 8U * 1024U * 1024U;
 
@@ -157,7 +164,8 @@ SourceDecodeSubmission SourceDecodeActor::submit(SourceDecodeRequest request) {
 application::PortSubmitResult SourceDecodeActor::submit(SourceDecodeRequest request,
                                                         SourceDecodeCompletion completion) {
     if (request.cancellationRequested == nullptr || !request.frameId.isValid() ||
-        request.readAheadCount > kMaximumReadAheadCount || !completion) {
+        request.readAheadCount > kMaximumReadAheadCount ||
+        request.reverseWindowFrames > kMaximumReverseWindowFrames || !completion) {
         return application::PortSubmitResult::Closed;
     }
 
@@ -355,6 +363,12 @@ void SourceDecodeActor::run() noexcept {
                     cacheHitCount_ = 0U;
                     totalDecodeMicroseconds_ = 0U;
                     maximumDecodeMicroseconds_ = 0U;
+                    reverseWindowHitCount_ = 0U;
+                    reverseWindowBuildCount_ = 0U;
+                    reverseWindowBuiltFrameCount_ = 0U;
+                    reverseWindowBuildMicroseconds_ = 0U;
+                    reverseWindowBuildMaximumMicroseconds_ = 0U;
+                    reverseExactFallbackCount_ = 0U;
                     backendStatus_ = media::DecoderBackendStatus{
                         .sourceId = sourceId_,
                         .backend = decoder_->backend(),
@@ -403,7 +417,37 @@ void SourceDecodeActor::run() noexcept {
                                   (exactDecoder_ != nullptr ? exactDecoder_->exactSeekCount() : 0U),
                 .totalDecodeMicroseconds = totalDecodeMicroseconds_,
                 .maximumDecodeMicroseconds = maximumDecodeMicroseconds_,
+                .reverseWindowHitCount = reverseWindowHitCount_,
+                .reverseWindowBuildCount = reverseWindowBuildCount_,
+                .reverseWindowBuiltFrameCount = reverseWindowBuiltFrameCount_,
+                .reverseWindowBuildMicroseconds = reverseWindowBuildMicroseconds_,
+                .reverseWindowBuildMaximumMicroseconds = reverseWindowBuildMaximumMicroseconds_,
+                .reverseExactFallbackCount = reverseExactFallbackCount_,
             };
+        };
+        const auto refreshReverseMetrics = [this] {
+            std::scoped_lock lock{mutex_};
+            backendStatus_.reverseWindowHitCount = reverseWindowHitCount_;
+            backendStatus_.reverseWindowBuildCount = reverseWindowBuildCount_;
+            backendStatus_.reverseWindowBuiltFrameCount = reverseWindowBuiltFrameCount_;
+            backendStatus_.reverseWindowBuildMicroseconds = reverseWindowBuildMicroseconds_;
+            backendStatus_.reverseWindowBuildMaximumMicroseconds =
+                reverseWindowBuildMaximumMicroseconds_;
+            backendStatus_.reverseExactFallbackCount = reverseExactFallbackCount_;
+            backendStatus_.exactSeekCount =
+                decoder_->exactSeekCount() +
+                (exactDecoder_ != nullptr ? exactDecoder_->exactSeekCount() : 0U);
+        };
+        const auto reverseWorkInterrupted = [this](const SourceDecodeRequest& request) {
+            if (request.cancellationRequested != nullptr &&
+                request.cancellationRequested->load(std::memory_order_acquire)) {
+                return true;
+            }
+            const std::scoped_lock lock{mutex_};
+            // Do not treat an already-queued reverse successor as urgent: that is the normal
+            // held-backward pipeline the window exists to serve. Control/sequential work is a
+            // real interruption (open/close, or playback taking over the decoder).
+            return stopping_ || !controlQueue_.empty() || !sequentialQueue_.empty();
         };
         const auto fillReadAhead = [this, &recordDecode](const SourceDecodeRequest& request,
                                                          const std::size_t frameBytes) {
@@ -469,6 +513,11 @@ void SourceDecodeActor::run() noexcept {
             {
                 std::scoped_lock lock{mutex_};
                 ++cacheHitCount_;
+                if (decode->request.priority == SourceDecodePriority::Reverse) {
+                    // A reverse target served from the GOP-window cache is a window hit.
+                    ++reverseWindowHitCount_;
+                    backendStatus_.reverseWindowHitCount = reverseWindowHitCount_;
+                }
                 backendStatus_.cacheHitCount = cacheHitCount_;
             }
             if (decode->request.context.has_value()) {
@@ -490,6 +539,9 @@ void SourceDecodeActor::run() noexcept {
                          .presentationTime = cached->presentationTime,
                      }));
             fillReadAhead(readAheadRequest, frameBytes);
+            // Cache-hit reverse steps do NOT rebuild the GOP window: the window already covers
+            // this target. Exhaustion falls through to a Reverse cache-miss, which exact-seeds
+            // the next window below the new target (ADR-003).
             continue;
         }
 
@@ -505,62 +557,6 @@ void SourceDecodeActor::run() noexcept {
         SoftwareDecoder& selectedDecoder = useDedicatedExactDecoder ? *exactDecoder_ : *decoder_;
         bool& selectedDecoderNeedsReopen =
             useDedicatedExactDecoder ? exactDecoderNeedsReopen_ : decoderNeedsReopen_;
-        // Reverse held-step warm-up: after a Reverse decode, exact-decode F-1..F-N into the
-        // source cache so the next -1 hits cache instead of re-seeking the GOP head.
-        const auto fillReverseReadAhead = [this, &recordDecode, &selectedDecoder](
-                                              const SourceDecodeRequest& request,
-                                              const std::size_t frameBytes) {
-            if (request.priority != SourceDecodePriority::Reverse ||
-                request.readAheadCount == 0U || frameBytes == 0U) {
-                return;
-            }
-            const std::size_t cacheFrameCapacity = cache_.capacityBytes() / frameBytes;
-            if (cacheFrameCapacity < 2U) {
-                return;
-            }
-            const std::uint8_t effectiveReadAhead = static_cast<std::uint8_t>(
-                std::min<std::size_t>(request.readAheadCount, cacheFrameCapacity));
-            for (std::uint8_t offset = 1U; offset <= effectiveReadAhead; ++offset) {
-                bool urgentWorkQueued = false;
-                {
-                    const std::scoped_lock lock{mutex_};
-                    urgentWorkQueued = stopping_ || !controlQueue_.empty() ||
-                                       !exactQueue_.empty() || !sequentialQueue_.empty();
-                }
-                if (urgentWorkQueued ||
-                    request.cancellationRequested->load(std::memory_order_acquire)) {
-                    break;
-                }
-                const std::int64_t base = request.frameId.value();
-                if (base < static_cast<std::int64_t>(offset)) {
-                    break;
-                }
-                const domain::FrameId candidate{base - static_cast<std::int64_t>(offset)};
-                if (!candidate.isValid() || candidate.value() < 0) {
-                    break;
-                }
-                cacheKey_.sourceFrame = candidate;
-                if (cache_.find(cacheKey_).has_value()) {
-                    continue;
-                }
-                const auto started = std::chrono::steady_clock::now();
-                domain::Result<DecodedFrame> result =
-                    selectedDecoder.decodeExact(candidate, *request.cancellationRequested);
-                const auto elapsed = static_cast<std::uint64_t>(
-                    std::chrono::duration_cast<std::chrono::microseconds>(
-                        std::chrono::steady_clock::now() - started)
-                        .count());
-                recordDecode(elapsed);
-                if (!result) {
-                    break;
-                }
-                cache_.insert(cacheKey_,
-                              CachedSourceFrame{
-                                  .handle = result.value().handle,
-                                  .presentationTime = result.value().presentationTime,
-                              });
-            }
-        };
         domain::Result<DecodedFrame> result = domain::Result<DecodedFrame>::failure(
             actorError(sourceId_, "The source decoder could not be reopened after interruption."));
         if (selectedDecoderNeedsReopen) {
@@ -611,7 +607,12 @@ void SourceDecodeActor::run() noexcept {
         complete(std::move(*decode), std::move(result));
         if (decoded) {
             fillReadAhead(readAheadRequest, frameBytes);
-            fillReverseReadAhead(readAheadRequest, frameBytes);
+            fillReverseGopWindow(readAheadRequest,
+                                 frameBytes,
+                                 selectedDecoder,
+                                 recordDecode,
+                                 reverseWorkInterrupted,
+                                 refreshReverseMetrics);
         }
     }
     decoder_->close();
@@ -644,6 +645,161 @@ void SourceDecodeActor::complete(DecodeJob job, domain::Result<DecodedFrame> res
         job.completion(std::move(result));
     } catch (...) {
     }
+}
+
+void SourceDecodeActor::fillReverseGopWindow(
+    const SourceDecodeRequest& request,
+    const std::size_t frameBytes,
+    SoftwareDecoder& selectedDecoder,
+    const std::function<void(std::uint64_t)>& recordDecode,
+    const std::function<bool(const SourceDecodeRequest&)>& interrupted,
+    const std::function<void()>& refreshMetrics) noexcept {
+    if (request.priority != SourceDecodePriority::Reverse || request.reverseWindowFrames == 0U ||
+        frameBytes == 0U || !request.frameId.isValid()) {
+        return;
+    }
+    const std::int64_t base = request.frameId.value();
+    if (base <= 0) {
+        return;
+    }
+
+    const std::size_t cacheFrameCapacity = cache_.capacityBytes() / frameBytes;
+    // Held-backward hardware/size gate: a cache that cannot retain a useful multi-frame window
+    // must not block reverse steps on speculative builds. Per-step Exact remains correct.
+    if (cacheFrameCapacity < 2U) {
+        {
+            std::scoped_lock lock{mutex_};
+            ++reverseExactFallbackCount_;
+            backendStatus_.reverseExactFallbackCount = reverseExactFallbackCount_;
+        }
+        application::PlaybackTrace::instance().record(
+            application::TraceEventKind::ReverseExactFallback,
+            application::TraceIdentity{
+                .request = domain::RequestId{static_cast<std::uint64_t>(sourceId_)}},
+            static_cast<std::uint64_t>(base));
+        return;
+    }
+
+    const std::size_t budgetFrames = static_cast<std::size_t>(std::min<std::uint8_t>(
+        request.reverseWindowFrames,
+        static_cast<std::uint8_t>((std::min)(
+            cacheFrameCapacity, static_cast<std::size_t>(kMaximumReverseWindowFrames)))));
+    const std::int64_t windowStart =
+        (std::max)(std::int64_t{0}, base - static_cast<std::int64_t>(budgetFrames));
+
+    std::int64_t lowestMissing = base;
+    for (std::int64_t candidate = windowStart; candidate < base; ++candidate) {
+        cacheKey_.sourceFrame = domain::FrameId{candidate};
+        if (!cache_.find(cacheKey_).has_value()) {
+            lowestMissing = candidate;
+            break;
+        }
+    }
+    if (lowestMissing == base) {
+        {
+            std::scoped_lock lock{mutex_};
+            ++reverseWindowHitCount_;
+            backendStatus_.reverseWindowHitCount = reverseWindowHitCount_;
+        }
+        application::PlaybackTrace::instance().record(
+            application::TraceEventKind::ReverseWindowHit,
+            application::TraceIdentity{
+                .request = domain::RequestId{static_cast<std::uint64_t>(sourceId_)}},
+            static_cast<std::uint64_t>(base));
+        return;
+    }
+
+    if (interrupted(request)) {
+        {
+            std::scoped_lock lock{mutex_};
+            ++reverseExactFallbackCount_;
+            backendStatus_.reverseExactFallbackCount = reverseExactFallbackCount_;
+        }
+        application::PlaybackTrace::instance().record(
+            application::TraceEventKind::ReverseExactFallback,
+            application::TraceIdentity{
+                .request = domain::RequestId{static_cast<std::uint64_t>(sourceId_)}},
+            static_cast<std::uint64_t>(base));
+        return;
+    }
+
+    const auto buildStarted = std::chrono::steady_clock::now();
+    // ADR-006/ADR-003: one Exact seed at the lowest uncached reverse target, then sequential
+    // walk upward. A long GOP costs one seek instead of one seek per held-backward step.
+    cacheKey_.sourceFrame = domain::FrameId{lowestMissing};
+    domain::Result<DecodedFrame> seed =
+        selectedDecoder.decodeExact(domain::FrameId{lowestMissing}, *request.cancellationRequested);
+    if (!seed) {
+        {
+            std::scoped_lock lock{mutex_};
+            ++reverseExactFallbackCount_;
+            backendStatus_.reverseExactFallbackCount = reverseExactFallbackCount_;
+        }
+        application::PlaybackTrace::instance().record(
+            application::TraceEventKind::ReverseExactFallback,
+            application::TraceIdentity{
+                .request = domain::RequestId{static_cast<std::uint64_t>(sourceId_)}},
+            static_cast<std::uint64_t>(base));
+        return;
+    }
+    cache_.insert(cacheKey_,
+                  CachedSourceFrame{
+                      .handle = seed.value().handle,
+                      .presentationTime = seed.value().presentationTime,
+                  });
+    std::uint64_t builtFrames = 1U;
+
+    for (std::int64_t candidate = lowestMissing + 1; candidate < base; ++candidate) {
+        if (interrupted(request)) {
+            break;
+        }
+        const auto elapsed =
+            static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                           std::chrono::steady_clock::now() - buildStarted)
+                                           .count());
+        if (elapsed > kReverseWindowBuildBudgetMicroseconds) {
+            break;
+        }
+        const auto decodeStarted = std::chrono::steady_clock::now();
+        domain::Result<DecodedFrame> decoded = selectedDecoder.decodeSequential(
+            domain::FrameId{candidate}, *request.cancellationRequested);
+        const auto decodeElapsed =
+            static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                           std::chrono::steady_clock::now() - decodeStarted)
+                                           .count());
+        recordDecode(decodeElapsed);
+        if (!decoded) {
+            break;
+        }
+        cacheKey_.sourceFrame = domain::FrameId{candidate};
+        if (!cache_.find(cacheKey_).has_value()) {
+            cache_.insert(cacheKey_,
+                          CachedSourceFrame{
+                              .handle = decoded.value().handle,
+                              .presentationTime = decoded.value().presentationTime,
+                          });
+        }
+        ++builtFrames;
+    }
+
+    const auto buildMicroseconds =
+        static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                       std::chrono::steady_clock::now() - buildStarted)
+                                       .count());
+    {
+        std::scoped_lock lock{mutex_};
+        ++reverseWindowBuildCount_;
+        reverseWindowBuiltFrameCount_ += builtFrames;
+        reverseWindowBuildMicroseconds_ += buildMicroseconds;
+        reverseWindowBuildMaximumMicroseconds_ =
+            std::max(reverseWindowBuildMaximumMicroseconds_, buildMicroseconds);
+    }
+    refreshMetrics();
+    application::PlaybackTrace::instance().record(
+        application::TraceEventKind::ReverseWindowBuilt,
+        application::TraceIdentity{.request =
+                                       domain::RequestId{static_cast<std::uint64_t>(sourceId_)}},
+        builtFrames);
 }
 
 } // namespace dvs::media::internal

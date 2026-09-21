@@ -40,6 +40,12 @@ class ReviewController final : public QObject {
     Q_PROPERTY(int sourceCount READ sourceCount NOTIFY stateChanged)
     Q_PROPERTY(int canonicalSourceIndex READ canonicalSourceIndex NOTIFY stateChanged)
     Q_PROPERTY(int referenceSourceIndex READ referenceSourceIndex NOTIFY stateChanged)
+    Q_PROPERTY(
+        QString playbackContinuityPolicyName READ playbackContinuityPolicyName NOTIFY stateChanged)
+    Q_PROPERTY(int playbackContinuityPolicy READ playbackContinuityPolicy NOTIFY stateChanged)
+    Q_PROPERTY(
+        qulonglong playbackSkippedFrameSets READ playbackSkippedFrameSets NOTIFY stateChanged)
+    Q_PROPERTY(int effectiveDifferenceEdge READ effectiveDifferenceEdge NOTIFY stateChanged)
     Q_PROPERTY(ReviewDisplayState displayState READ displayState NOTIFY stateChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY stateChanged)
     Q_PROPERTY(bool framePending READ framePending NOTIFY stateChanged)
@@ -150,6 +156,10 @@ public:
     [[nodiscard]] int sourceCount() const noexcept;
     [[nodiscard]] int canonicalSourceIndex() const noexcept;
     [[nodiscard]] int referenceSourceIndex() const noexcept;
+    [[nodiscard]] QString playbackContinuityPolicyName() const;
+    [[nodiscard]] int playbackContinuityPolicy() const noexcept;
+    [[nodiscard]] qulonglong playbackSkippedFrameSets() const noexcept;
+    [[nodiscard]] int effectiveDifferenceEdge() const noexcept;
     [[nodiscard]] ReviewDisplayState displayState() const noexcept;
     [[nodiscard]] bool busy() const noexcept;
     [[nodiscard]] bool framePending() const noexcept;

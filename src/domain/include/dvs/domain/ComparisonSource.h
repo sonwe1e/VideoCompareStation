@@ -7,8 +7,10 @@
 
 namespace dvs::domain {
 
-// Role is user-assigned meaning, not position. A session may run with zero references (the first
-// input becomes the canonical timeline) or exactly one; two references are rejected.
+// Role is user-assigned comparison meaning, not timeline ownership (C-01). A session may run
+// with zero references or exactly one; two references are rejected. Assigning Reference does
+// not change which source owns the canonical timeline (session-order first, unless an open
+// command names an explicit timeline master later).
 enum class ComparisonRole {
     kReference,
     kPrediction,

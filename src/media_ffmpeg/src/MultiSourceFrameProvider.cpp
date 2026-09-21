@@ -1166,9 +1166,13 @@ private:
                         .readAheadCount =
                             request.priority == application::FrameRequestPriority::Sequential
                                 ? std::uint8_t{3U}
-                                : (request.priority == application::FrameRequestPriority::Reverse
-                                       ? std::uint8_t{4U}
-                                       : std::uint8_t{0U}),
+                                : std::uint8_t{0U},
+                        // ADR-003: held-backward asks for a bounded reverse GOP window; the
+                        // actor shrinks it to the per-source byte budget and falls back Exact.
+                        .reverseWindowFrames =
+                            request.priority == application::FrameRequestPriority::Reverse
+                                ? std::uint8_t{24U}
+                                : std::uint8_t{0U},
                         .cancellationRequested = operation->cancellationRequested,
                         .context = request.context,
                     },
