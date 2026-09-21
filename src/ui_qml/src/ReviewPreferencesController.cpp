@@ -37,6 +37,8 @@ constexpr std::string_view kDifferenceGainKey = "review.difference-gain";
 constexpr std::string_view kDifferenceEdgeKey = "review.difference-edge";
 constexpr std::string_view kDifferenceFilterKey = "review.difference-filter";
 constexpr std::string_view kOscModeKey = "review.osc-mode";
+constexpr std::string_view kPlaybackContinuityPolicyKey = "review.playback-continuity-policy";
+constexpr std::string_view kDefaultPairPolicyKey = "review.default-pair-policy";
 
 class SettingsEventQueue final : public application::IApplicationEventSink {
 public:
@@ -189,6 +191,14 @@ public:
         return oscMode_;
     }
 
+    [[nodiscard]] int playbackContinuityPolicy() const noexcept {
+        return playbackContinuityPolicy_;
+    }
+
+    [[nodiscard]] int defaultPairPolicy() const noexcept {
+        return defaultPairPolicy_;
+    }
+
     void setShortcutPreset(const int value) {
         if ((value != 0 && value != 1) || value == shortcutPreset_) {
             return;
@@ -245,6 +255,24 @@ public:
             return;
         }
         oscMode_ = value;
+        changed();
+    }
+
+    void setPlaybackContinuityPolicy(const int value) {
+        // 0 ReviewEveryFrame, 1 RealTime, 2 Contextual (domain::PlaybackContinuityPolicy).
+        if (value < 0 || value > 2 || value == playbackContinuityPolicy_) {
+            return;
+        }
+        playbackContinuityPolicy_ = value;
+        changed();
+    }
+
+    void setDefaultPairPolicy(const int value) {
+        // 0 ReferenceAndFirstCandidate, 1 LastTwoActiveSources, 2 PreserveIfAvailable.
+        if (value < 0 || value > 2 || value == defaultPairPolicy_) {
+            return;
+        }
+        defaultPairPolicy_ = value;
         changed();
     }
 
@@ -479,12 +507,36 @@ private:
                 nextOscMode = 2;
             }
         }
+        // C-07 continuity: domain enum codes 0/1/2; Contextual is the multi-source default.
+        int nextContinuity = 2;
+        if (const auto iterator = values.find(kPlaybackContinuityPolicyKey);
+            iterator != values.end()) {
+            if (iterator->second == "review-every-frame") {
+                nextContinuity = 0;
+            } else if (iterator->second == "real-time") {
+                nextContinuity = 1;
+            } else if (iterator->second == "contextual") {
+                nextContinuity = 2;
+            }
+        }
+        // C-02 pair policy: PreserveIfAvailable is the session-friendly default.
+        int nextPairPolicy = 2;
+        if (const auto iterator = values.find(kDefaultPairPolicyKey); iterator != values.end()) {
+            if (iterator->second == "reference-and-first-candidate") {
+                nextPairPolicy = 0;
+            } else if (iterator->second == "last-two-active-sources") {
+                nextPairPolicy = 1;
+            } else if (iterator->second == "preserve-if-available") {
+                nextPairPolicy = 2;
+            }
+        }
 
-        const bool changed = shortcutPreset_ != nextShortcutPreset ||
-                             dropFrameTimecode_ != nextDropFrameTimecode ||
-                             viewMode_ != nextViewMode || differenceMetric_ != nextMetric ||
-                             differenceGain_ != nextGain || differenceEdge_ != nextReference ||
-                             differenceFilter_ != nextFilter || oscMode_ != nextOscMode;
+        const bool changed =
+            shortcutPreset_ != nextShortcutPreset || dropFrameTimecode_ != nextDropFrameTimecode ||
+            viewMode_ != nextViewMode || differenceMetric_ != nextMetric ||
+            differenceGain_ != nextGain || differenceEdge_ != nextReference ||
+            differenceFilter_ != nextFilter || oscMode_ != nextOscMode ||
+            playbackContinuityPolicy_ != nextContinuity || defaultPairPolicy_ != nextPairPolicy;
         shortcutPreset_ = nextShortcutPreset;
         dropFrameTimecode_ = nextDropFrameTimecode;
         viewMode_ = nextViewMode;
@@ -493,6 +545,8 @@ private:
         differenceEdge_ = nextReference;
         differenceFilter_ = nextFilter;
         oscMode_ = nextOscMode;
+        playbackContinuityPolicy_ = nextContinuity;
+        defaultPairPolicy_ = nextPairPolicy;
         if (changed) {
             Q_EMIT owner_.preferencesChanged();
         }
@@ -566,6 +620,21 @@ private:
             oscModeName = "hidden";
         }
         values.insert_or_assign(std::string{kOscModeKey}, std::string{oscModeName});
+        const char* continuityName = "contextual";
+        if (playbackContinuityPolicy_ == 0) {
+            continuityName = "review-every-frame";
+        } else if (playbackContinuityPolicy_ == 1) {
+            continuityName = "real-time";
+        }
+        values.insert_or_assign(std::string{kPlaybackContinuityPolicyKey},
+                                std::string{continuityName});
+        const char* pairPolicyName = "preserve-if-available";
+        if (defaultPairPolicy_ == 0) {
+            pairPolicyName = "reference-and-first-candidate";
+        } else if (defaultPairPolicy_ == 1) {
+            pairPolicyName = "last-two-active-sources";
+        }
+        values.insert_or_assign(std::string{kDefaultPairPolicyKey}, std::string{pairPolicyName});
     }
 
     ReviewPreferencesController& owner_;
@@ -585,6 +654,8 @@ private:
     DifferenceEdge differenceEdge_ = DifferenceEdge::Edge0And1;
     DifferenceFilter differenceFilter_ = DifferenceFilter::Bilinear;
     int oscMode_ = -1;
+    int playbackContinuityPolicy_ = 2;
+    int defaultPairPolicy_ = 2;
     bool loadFinished_ = false;
     bool localChanges_ = false;
     bool dirty_ = false;
@@ -707,6 +778,22 @@ void ReviewPreferencesController::setDifferenceFilterCode(const int value) {
 
 void ReviewPreferencesController::setOscMode(const int value) {
     impl_->setOscMode(value);
+}
+
+int ReviewPreferencesController::playbackContinuityPolicy() const noexcept {
+    return impl_->playbackContinuityPolicy();
+}
+
+int ReviewPreferencesController::defaultPairPolicy() const noexcept {
+    return impl_->defaultPairPolicy();
+}
+
+void ReviewPreferencesController::setPlaybackContinuityPolicy(const int value) {
+    impl_->setPlaybackContinuityPolicy(value);
+}
+
+void ReviewPreferencesController::setDefaultPairPolicy(const int value) {
+    impl_->setDefaultPairPolicy(value);
 }
 
 void ReviewPreferencesController::stop() noexcept {

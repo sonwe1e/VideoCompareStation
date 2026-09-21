@@ -26,6 +26,10 @@ class ReviewPreferencesController final : public QObject {
     Q_PROPERTY(int differenceFilter READ differenceFilterCode WRITE setDifferenceFilterCode NOTIFY
                    preferencesChanged)
     Q_PROPERTY(int oscMode READ oscMode WRITE setOscMode NOTIFY preferencesChanged)
+    Q_PROPERTY(int playbackContinuityPolicy READ playbackContinuityPolicy WRITE
+                   setPlaybackContinuityPolicy NOTIFY preferencesChanged)
+    Q_PROPERTY(int defaultPairPolicy READ defaultPairPolicy WRITE setDefaultPairPolicy NOTIFY
+                   preferencesChanged)
 
 public:
     using ViewMode = presentation::ViewMode;
@@ -56,6 +60,10 @@ public:
     [[nodiscard]] int differenceEdgeCode() const noexcept;
     [[nodiscard]] int differenceFilterCode() const noexcept;
     [[nodiscard]] int oscMode() const noexcept;
+    // C-07: domain::PlaybackContinuityPolicy code (0 ReviewEveryFrame, 1 RealTime, 2 Contextual).
+    [[nodiscard]] int playbackContinuityPolicy() const noexcept;
+    // C-02: domain::DefaultPairPolicy code (0 Ref+First, 1 LastTwo, 2 PreserveIfAvailable).
+    [[nodiscard]] int defaultPairPolicy() const noexcept;
 
     void setShortcutPreset(int value);
     void setDropFrameTimecode(bool value);
@@ -70,6 +78,8 @@ public:
     void setDifferenceEdgeCode(int value);
     void setDifferenceFilterCode(int value);
     void setOscMode(int value);
+    void setPlaybackContinuityPolicy(int value);
+    void setDefaultPairPolicy(int value);
 
     Q_INVOKABLE void stop() noexcept;
     void processRepositoryEvents() noexcept;

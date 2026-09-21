@@ -6,9 +6,9 @@
 namespace dvs::domain {
 
 ValidatedComparisonSet::ValidatedComparisonSet(std::vector<ComparisonSource> sources,
-                                               const SourceId canonicalSourceId,
+                                               const SourceId timelineMasterSourceId,
                                                std::optional<SourceId> referenceSourceId)
-    : sources_(std::move(sources)), canonicalSourceId_(canonicalSourceId),
+    : sources_(std::move(sources)), timelineMasterSourceId_(timelineMasterSourceId),
       referenceSourceId_(referenceSourceId) {}
 
 std::span<const ComparisonSource> ValidatedComparisonSet::sources() const noexcept {
@@ -31,7 +31,11 @@ const ComparisonSource* ValidatedComparisonSet::find(const SourceId id) const no
 }
 
 SourceId ValidatedComparisonSet::canonicalSourceId() const noexcept {
-    return canonicalSourceId_;
+    return timelineMasterSourceId_;
+}
+
+SourceId ValidatedComparisonSet::timelineMasterSourceId() const noexcept {
+    return timelineMasterSourceId_;
 }
 
 std::optional<SourceId> ValidatedComparisonSet::referenceSourceId() const noexcept {
@@ -39,7 +43,7 @@ std::optional<SourceId> ValidatedComparisonSet::referenceSourceId() const noexce
 }
 
 const MediaDescriptor& ValidatedComparisonSet::canonicalDescriptor() const noexcept {
-    return find(canonicalSourceId_)->descriptor;
+    return find(timelineMasterSourceId_)->descriptor;
 }
 
 const std::optional<RationalRate>& ValidatedComparisonSet::canonicalRate() const noexcept {
@@ -184,7 +188,9 @@ Result<ComparisonValidation> ComparisonValidator::validate(std::vector<Compariso
         }
     }
 
-    const SourceId canonicalId = referenceId.value_or(sources.front().id);
+    // C-01: timeline master is independent of the Reference role. Session order's first
+    // source owns the canonical timeline; Reference is only the comparison baseline.
+    const SourceId timelineMasterId = sources.front().id;
 
     CompatibilityReport report;
     for (std::size_t index = 0; index < sources.size(); ++index) {
@@ -194,7 +200,7 @@ Result<ComparisonValidation> ComparisonValidator::validate(std::vector<Compariso
     }
 
     return Result<ComparisonValidation>::success(ComparisonValidation{
-        .set = ValidatedComparisonSet{std::move(sources), canonicalId, referenceId},
+        .set = ValidatedComparisonSet{std::move(sources), timelineMasterId, referenceId},
         .report = std::move(report),
     });
 }

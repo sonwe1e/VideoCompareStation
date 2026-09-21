@@ -53,6 +53,7 @@ ApplicationWindow {
 
     readonly property var facade: reviewFacade
     readonly property var controller: facade ? facade.playback : null
+    readonly property var playbackVm: facade ? facade.playbackView : null
     readonly property var preferences: facade ? facade.comparison : null
     readonly property var shell: facade ? facade.shell : null
 
@@ -123,7 +124,7 @@ ApplicationWindow {
     readonly property int outFrame: shell ? Number(shell.outFrame) : -1
     readonly property real inMediaTime: shell ? Number(shell.inMediaTime) : -1
     readonly property real outMediaTime: shell ? Number(shell.outMediaTime) : -1
-    readonly property bool rangePlaybackActive: Boolean(shell && shell.rangePlaybackActive)
+    readonly property bool rangePlaybackActive: Boolean(controller && controller.playbackRangeLoopActive) || Boolean(shell && shell.rangePlaybackActive && controller && controller.playbackRangeLoop)
     readonly property bool rangeStartPending: Boolean(shell && shell.rangeStartPending)
     property bool shortcutHelpVisible: false
     readonly property int shortcutPreset: preferences ? Number(preferences.shortcutPreset) : 0
@@ -371,6 +372,8 @@ ApplicationWindow {
 
     readonly property int droppedFrames: viewportFrame ? Number(viewportFrame.droppedFrames) : 0
     readonly property string droppedFramesText: droppedFrames > 0 ? qsTr("丢帧 %1").arg(droppedFrames) : ""
+    readonly property string playbackContinuityPolicyName: controller ? String(controller.playbackContinuityPolicyName || "") : ""
+    readonly property int playbackSkippedFrameSets: controller ? Number(controller.playbackSkippedFrameSets || 0) : 0
     readonly property real frameProgress: currentFrame >= 0 && totalFrames > 1 ? Math.max(0, Math.min(1, Number(currentFrame) / (Number(totalFrames) - 1))) : 0
     readonly property real timelineProgress: timelineDragging && timelinePreviewFrame >= 0 && totalFrames > 1 ? Number(timelinePreviewFrame) / (Number(totalFrames) - 1) : frameProgress
     readonly property bool timelineEnabled: graphicsReady && !busy && Boolean(controller && controller.canFirst) && totalFrames > 0
@@ -416,24 +419,6 @@ ApplicationWindow {
             manualHudPending = false;
 
             showImmersiveHud(frameText);
-        }
-
-        if (rangeStartPending && Number(currentFrame) === inFrame && !busy) {
-            shell.setRangeStartPending(false);
-
-            Qt.callLater(() => {
-                if (rangePlaybackActive && controller && !controller.playing && !controller.play())
-                    stopRangeLoop(qsTr("无法启动播放，已停止循环播放。"));
-            });
-
-            return;
-        }
-
-        if (rangePlaybackActive && playing && outFrame >= inFrame && Number(currentFrame) >= outFrame) {
-            shell.setRangeStartPending(true);
-
-            if (!controller.seekFrame(inFrame))
-                stopRangeLoop(qsTr("无法到达入点，已停止循环播放。"));
         }
     }
 
@@ -520,8 +505,11 @@ ApplicationWindow {
 
             const mediaTime = controller ? Number(controller.mediaTimeForFrame(frame)) : -1;
 
-            if (shell.setRangeIn(frame, mediaTime))
+            if (shell.setRangeIn(frame, mediaTime)) {
+                syncApplicationRange();
+
                 showImmersiveHud(qsTr("入点 · 第 %1 帧").arg(frame + 1));
+            }
         }
     }
 
@@ -533,28 +521,36 @@ ApplicationWindow {
 
             const mediaTime = controller ? Number(controller.mediaTimeForFrame(frame)) : -1;
 
-            if (shell.setRangeOut(frame, mediaTime))
+            if (shell.setRangeOut(frame, mediaTime)) {
+                syncApplicationRange();
+
                 showImmersiveHud(qsTr("出点 · 第 %1 帧").arg(frame + 1));
+            }
         }
     }
 
+    function syncApplicationRange() {
+        if (!controller)
+            return;
+
+        const nextIn = shell ? Number(shell.inFrame) : -1;
+        const nextOut = shell ? Number(shell.outFrame) : -1;
+        const loop = Boolean(controller.playbackRangeLoop);
+
+        controller.setPlaybackRange(nextIn, nextOut, loop && nextIn >= 0 && nextOut >= nextIn);
+    }
+
     function playSelectedRange() {
-        if (inFrame < 0 || outFrame < inFrame || !controller || !shell)
+        if (inFrame < 0 || outFrame < inFrame || !controller)
             return false;
 
-        const seekRequired = Number(currentFrame) !== inFrame;
+        if (shell) {
+            shell.setRangePlaybackState(true, Number(currentFrame) !== inFrame);
+            shell.setRangeStartPending(false);
+        }
 
-        if (!shell.setRangePlaybackState(true, seekRequired))
-            return false;
-
-        if (seekRequired) {
-            if (!controller.seekFrame(inFrame)) {
-                stopRangeLoop(qsTr("无法到达入点，已停止循环播放。"));
-
-                return false;
-            }
-        } else if (!controller.play()) {
-            stopRangeLoop(qsTr("无法启动播放，已停止循环播放。"));
+        if (!controller.playRange(inFrame, outFrame)) {
+            stopRangeLoop(qsTr("无法启动范围循环播放。"));
 
             return false;
         }
@@ -565,6 +561,9 @@ ApplicationWindow {
     function clearSelectedRange() {
         if (shell)
             shell.clearRange();
+
+        if (controller)
+            controller.setPlaybackRange(-1, -1, false);
     }
 
     function remapReviewRange() {
@@ -576,6 +575,7 @@ ApplicationWindow {
         const mappedOut = outMediaTime >= 0 ? Number(controller.frameForMediaTime(outMediaTime)) : -1;
 
         shell.remapRange(mappedIn, mappedOut);
+        syncApplicationRange();
     }
 
     function revealOsc() {
@@ -583,15 +583,21 @@ ApplicationWindow {
     }
 
     function toggleRangeLoop() {
-        if (inFrame < 0 || outFrame < inFrame || !shell)
+        if (inFrame < 0 || outFrame < inFrame || !controller)
             return false;
 
         const nextActive = !rangePlaybackActive;
 
-        if (!shell.setRangePlaybackState(nextActive, false))
-            return false;
+        if (shell)
+            shell.setRangePlaybackState(nextActive, false);
 
-        if (!nextActive && controller && controller.playing && !controller.pause()) {
+        if (nextActive) {
+            if (!controller.playRange(inFrame, outFrame)) {
+                showIntentMessage(qsTr("无法启动范围循环播放。"));
+
+                return false;
+            }
+        } else if (!controller.stopRangeLoop()) {
             showIntentMessage(qsTr("循环播放已关闭，但无法暂停播放。"));
 
             return false;
@@ -607,7 +613,7 @@ ApplicationWindow {
             shell.setRangeStartPending(false);
         }
 
-        const paused = !controller || !controller.playing || controller.pause();
+        const paused = !controller || controller.stopRangeLoop();
 
         if (message.length > 0)
             showIntentMessage(message);
@@ -1575,6 +1581,70 @@ ApplicationWindow {
         return differenceEdges.length > 0 ? 0 : -1;
     }
 
+    // C-02/C-07: keep renderer edge preference and the session ComparisonPair in lockstep.
+    function applyDifferenceEdge(edge) {
+        if (!preferences)
+            return false;
+        const value = Number(edge);
+        preferences.differenceEdge = value;
+        if (controller && controller.applyComparisonPairFromEdge) {
+            const pairPolicy = preferences ? Number(preferences.defaultPairPolicy) : 2;
+            return Boolean(controller.applyComparisonPairFromEdge(value, pairPolicy));
+        }
+        return false;
+    }
+
+    function applyDefaultPairPolicy(policyCode) {
+        if (!preferences)
+            return false;
+        const value = Number(policyCode);
+        preferences.defaultPairPolicy = value;
+        if (controller && controller.applyComparisonPairFromEdge) {
+            const edge = Number(preferences.differenceEdge);
+            return Boolean(controller.applyComparisonPairFromEdge(edge, value));
+        }
+        return false;
+    }
+
+    function applyPlaybackPreferencesFromSettings() {
+        if (!controller || !preferences)
+            return;
+        if (controller.setPlaybackContinuityPolicy) {
+            const continuity = Number(preferences.playbackContinuityPolicy);
+            if (Number.isFinite(continuity))
+                controller.setPlaybackContinuityPolicy(continuity);
+        }
+        if (controller.applyComparisonPairFromEdge) {
+            const edge = Number(preferences.differenceEdge);
+            const pairPolicy = Number(preferences.defaultPairPolicy);
+            if (Number.isFinite(edge))
+                controller.applyComparisonPairFromEdge(edge, Number.isFinite(pairPolicy) ? pairPolicy : 2);
+        }
+    }
+
+    property string playbackPrefsAppliedKey: ""
+
+    function playbackPrefsSessionKey() {
+        if (!controller || !controller.graphicsReady || Number(controller.sourceCount) <= 0)
+            return "";
+        if (Number(controller.displayState) !== 2) // ReviewDisplayState::Ready
+            return "";
+        const identities = shell && shell.activeSourceIdentities ? String(shell.activeSourceIdentities) : "";
+        return identities.length > 0 ? identities : String(controller.sourceCount) + ":" + String(controller.canonicalSourceIndex);
+    }
+
+    Connections {
+        target: controller
+
+        function onStateChanged() {
+            const key = root.playbackPrefsSessionKey();
+            if (key.length === 0 || key === root.playbackPrefsAppliedKey)
+                return;
+            root.playbackPrefsAppliedKey = key;
+            root.applyPlaybackPreferencesFromSettings();
+        }
+    }
+
     function sourceOffsets() {
         const offsets = [];
 
@@ -1750,6 +1820,13 @@ ApplicationWindow {
         fullScreen: root.fullScreen
         shortcutPreset: root.shortcutPreset
         sourceIdentities: root.shell ? root.shell.activeSourceIdentities : []
+        playbackContinuityPolicy: {
+            if (!controller)
+                return 2;
+            const fromPref = root.preferences ? Number(root.preferences.playbackContinuityPolicy) : 2;
+            const fromSession = Number(controller.playbackContinuityPolicy);
+            return Number.isFinite(fromSession) && controller.displayState === 2 ? fromSession : fromPref;
+        }
         workspaceMode: root.workspaceMode
         imageHasPrimary: Boolean(root.stillImageController && root.stillImageController.hasPrimary)
         imageHasSecondary: Boolean(root.stillImageController && root.stillImageController.hasSecondary)
@@ -2293,7 +2370,7 @@ ApplicationWindow {
             right: parent.right
         }
         onModeRequested: mode => root.preferences.viewMode = mode
-        onEdgeRequested: edge => root.preferences.differenceEdge = edge
+        onEdgeRequested: edge => root.applyDifferenceEdge(edge)
         onInspectorRequested: root.shell.inspectorVisible = !root.inspectorOpen
     }
     Rectangle {
@@ -2358,7 +2435,7 @@ ApplicationWindow {
             bottom: parent.bottom
             bottomMargin: 0
         }
-        onDifferenceEdgeRequested: edge => root.preferences.differenceEdge = edge
+        onDifferenceEdgeRequested: edge => root.applyDifferenceEdge(edge)
         onReferenceRequested: sourceIdentity => root.changeReference(sourceIdentity)
         onDifferenceThresholdEnabledRequested: enabled => root.differenceThresholdEnabled = enabled
         onDifferenceThresholdCodeRequested: code => root.differenceThresholdCode = code
@@ -2778,7 +2855,7 @@ ApplicationWindow {
 
         // qmllint enable unqualified
 
-        onEdgeRequested: edge => root.preferences.differenceEdge = edge
+        onEdgeRequested: edge => root.applyDifferenceEdge(edge)
         onReferenceRequested: sourceIdentity => root.changeReference(sourceIdentity)
         onOpenRequested: root.requestOpenVideos()
         onInspectorRequested: root.shell.inspectorVisible = true

@@ -130,8 +130,13 @@ Rectangle {
                 currentIndex: control.host.differenceEdgeIndex(control.host.differenceEdge)
                 Accessible.name: qsTr("差异源对")
                 onActivated: index => {
-                    if (control.host.preferences && index >= 0 && index < control.host.differenceEdges.length)
-                        control.host.preferences.differenceEdge = Number(control.host.differenceEdges[index].preferenceValue);
+                    if (index < 0 || index >= control.host.differenceEdges.length)
+                        return;
+                    const edge = Number(control.host.differenceEdges[index].preferenceValue);
+                    if (control.host.applyDifferenceEdge)
+                        control.host.applyDifferenceEdge(edge);
+                    else if (control.host.preferences)
+                        control.host.preferences.differenceEdge = edge;
                 }
             }
 

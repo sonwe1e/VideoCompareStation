@@ -76,6 +76,11 @@ enum class TraceEventKind : std::uint8_t {
     // a display-interval comparison has to do before attributing a stall to playback.
     PlaybackRunStarted = 18,
     PlaybackRunStopped = 19,
+    // Reverse GOP Window (ADR-003). Payload is the number of frames retained in the built
+    // window, or the reverse target frame id for Hit/Fallback so gates can correlate seeks.
+    ReverseWindowBuilt = 20,
+    ReverseWindowHit = 21,
+    ReverseExactFallback = 22,
 };
 
 // A single fixed-size trace event. Kept small and trivially copyable so it can live in a bounded

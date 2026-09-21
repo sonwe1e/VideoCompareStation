@@ -1112,6 +1112,25 @@ void markGraphicsReady(const std::shared_ptr<PlaybackCoordinator>& coordinator,
 [[nodiscard]] CommandContext commandContext(const std::shared_ptr<PlaybackCoordinator>& coordinator,
                                             domain::CommandId commandId);
 
+// C-07 default Contextual resolves multi-source to ReviewEveryFrame (no FrameSet skips).
+// Wall-clock catch-up tests must opt into RealTime explicitly.
+void requireRealTimeContinuity(const std::shared_ptr<PlaybackCoordinator>& coordinator,
+                               const domain::CommandId commandId = domain::CommandId{900}) {
+    ASSERT_EQ(coordinator->submit(SetPlaybackContinuityPolicyCommand{
+                  .context = commandContext(coordinator, commandId),
+                  .policy = domain::PlaybackContinuityPolicy::RealTime,
+              }),
+              PortSubmitResult::Accepted);
+    const std::vector<CommandTerminal> terminals = waitForTerminals(coordinator, 1U);
+    ASSERT_EQ(terminals.size(), 1U);
+    EXPECT_EQ(terminals.front().outcome, CommandOutcome::Succeeded);
+    const std::shared_ptr<const SessionSnapshot> snapshot = coordinator->snapshot();
+    ASSERT_NE(snapshot, nullptr);
+    EXPECT_EQ(snapshot->playbackContinuityPolicy, domain::PlaybackContinuityPolicy::RealTime);
+    EXPECT_EQ(snapshot->playbackContinuityPolicyEffective,
+              domain::PlaybackContinuityPolicy::RealTime);
+}
+
 TEST(PlaybackCoordinatorTests, CarriesNonFirstReferenceIdentityIntoProviderOpen) {
     const auto provider = std::make_shared<FakeFrameProvider>();
     const auto render = std::make_shared<FakeRenderChannel>();
@@ -1152,10 +1171,12 @@ TEST(PlaybackCoordinatorTests, CarriesNonFirstReferenceIdentityIntoProviderOpen)
     ASSERT_TRUE(provider->waitForOpenRequestCount(1U));
     const std::optional<FrameProviderOpenRequest> open = provider->openRequest();
     ASSERT_TRUE(open.has_value());
-    EXPECT_EQ(open->canonicalSourceId, 1U);
+    EXPECT_EQ(open->canonicalSourceId, 0U);
     ASSERT_EQ(open->sources.size(), 2U);
     EXPECT_EQ(open->sources[0U].id, 0U);
     EXPECT_EQ(open->sources[1U].id, 1U);
+    EXPECT_EQ(open->sources[0U].role, domain::ComparisonRole::kPrediction);
+    EXPECT_EQ(open->sources[1U].role, domain::ComparisonRole::kReference);
 }
 
 TEST(PlaybackCoordinatorTests, SuccessfulExactPresentationSubmitsBoundedPrefetchRequests) {
@@ -2313,6 +2334,7 @@ TEST(PlaybackCoordinatorTests, SlowDecodeDropsCompleteFrameSetsWithOnePreparedSu
         makeCoordinator(provider, render, std::make_shared<FakeMediaProbe>(), scheduler, clock);
     markGraphicsReady(coordinator);
     openReady(coordinator, provider, render);
+    requireRealTimeContinuity(coordinator);
 
     ASSERT_EQ(coordinator->submit(
                   PlayCommand{.context = commandContext(coordinator, domain::CommandId{2})}),
@@ -2402,6 +2424,7 @@ TEST(PlaybackCoordinatorTests, FinalFrameAutoPausesAndPlayFromEndRestartsAtZero)
         makeCoordinator(provider, render, std::make_shared<FakeMediaProbe>(), scheduler, clock);
     markGraphicsReady(coordinator);
     openReady(coordinator, provider, render);
+    requireRealTimeContinuity(coordinator);
 
     ASSERT_EQ(coordinator->submit(
                   PlayCommand{.context = commandContext(coordinator, domain::CommandId{2})}),
@@ -3659,37 +3682,17 @@ TEST(PlaybackCoordinatorTests, ClampsAllEndpointCommandsForAOneFrameComparisonSe
     EXPECT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
     ASSERT_EQ(coordinator->snapshot()->canonicalFrameCount, 1U);
 
-    const auto completeEndpoint = [&](PlaybackCommand command, const std::size_t requestIndex) {
-        ASSERT_EQ(coordinator->submit(std::move(command)), PortSubmitResult::Accepted);
-        ASSERT_TRUE(provider->waitForFrameRequestCount(requestIndex + 1U));
-        const auto request = provider->frameRequest(requestIndex);
-        ASSERT_TRUE(request.has_value());
-        EXPECT_EQ(request->frameId, domain::FrameId{0});
-        ASSERT_TRUE(provider->postFrameReady(*request, makeFrameSet(domain::FrameId{0})));
-        ASSERT_TRUE(render->waitForPublishedCount(requestIndex + 1U));
-        ASSERT_TRUE(provider->postFrameSucceeded(*request));
-        presentPublished(coordinator, render, requestIndex);
-        const auto terminal = waitForTerminals(coordinator, 1U);
-        ASSERT_EQ(terminal.size(), 1U);
-        EXPECT_EQ(terminal.front().outcome, CommandOutcome::Succeeded);
-        EXPECT_EQ(coordinator->snapshot()->displayedFrame, domain::FrameId{0});
-    };
-
-    const auto ready = coordinator->snapshot();
-    completeEndpoint(
-        StepFramesCommand{
-            .context =
-                CommandContext{
-                    .sessionId = ready->sessionId,
-                    .sessionEpoch = ready->sessionEpoch,
-                    .commandId = domain::CommandId{2},
-                },
-            .delta = -1,
-        },
-        1U);
-    // A +1 step on a one-frame set is at the canonical boundary: it must report Busy rather than
-    // clamping to a no-op seek to the current frame (v1.5 interactive-step semantics). It completes
-    // as Busy and, unlike the old clamp, submits no frame request.
+    // -1 at the only frame is a boundary Busy (reverse stream), not a clamped Exact seek to 0.
+    ASSERT_EQ(coordinator->submit(StepFramesCommand{
+                  .context = commandContext(coordinator, domain::CommandId{2}),
+                  .delta = -1,
+              }),
+              PortSubmitResult::Accepted);
+    const auto reverseBusy = waitForTerminals(coordinator, 1U);
+    ASSERT_EQ(reverseBusy.size(), 1U);
+    EXPECT_EQ(reverseBusy.front().outcome, CommandOutcome::Busy);
+    EXPECT_EQ(provider->frameRequestCount(), 1U);
+    // A +1 step on a one-frame set is at the canonical boundary: Busy, no frame request.
     ASSERT_EQ(coordinator->submit(StepFramesCommand{
                   .context = commandContext(coordinator, domain::CommandId{3}),
                   .delta = 1,
@@ -3699,31 +3702,10 @@ TEST(PlaybackCoordinatorTests, ClampsAllEndpointCommandsForAOneFrameComparisonSe
     ASSERT_EQ(boundaryBusy.size(), 1U);
     EXPECT_EQ(boundaryBusy.front().context.commandId, domain::CommandId{3});
     EXPECT_EQ(boundaryBusy.front().outcome, CommandOutcome::Busy);
-    EXPECT_EQ(provider->frameRequestCount(), 2U);
-    completeEndpoint(
-        FirstFrameCommand{
-            .context =
-                CommandContext{
-                    .sessionId = ready->sessionId,
-                    .sessionEpoch = ready->sessionEpoch,
-                    .commandId = domain::CommandId{4},
-                },
-        },
-        2U);
-    completeEndpoint(
-        LastFrameCommand{
-            .context =
-                CommandContext{
-                    .sessionId = ready->sessionId,
-                    .sessionEpoch = ready->sessionEpoch,
-                    .commandId = domain::CommandId{5},
-                },
-        },
-        3U);
-
+    EXPECT_EQ(provider->frameRequestCount(), 1U);
     markGraphicsReady(coordinator);
     ASSERT_EQ(coordinator->submit(PlayCommand{
-                  .context = commandContext(coordinator, domain::CommandId{6}),
+                  .context = commandContext(coordinator, domain::CommandId{4}),
               }),
               PortSubmitResult::Accepted);
     const auto rejectedPlay = waitForTerminals(coordinator, 1U);
@@ -3731,7 +3713,7 @@ TEST(PlaybackCoordinatorTests, ClampsAllEndpointCommandsForAOneFrameComparisonSe
     EXPECT_EQ(rejectedPlay.front().outcome, CommandOutcome::Failed);
     ASSERT_TRUE(rejectedPlay.front().error.has_value());
     EXPECT_EQ(rejectedPlay.front().error->code, domain::MediaErrorCode::kInvalidArgument);
-    EXPECT_EQ(provider->frameRequestCount(), 4U);
+    EXPECT_EQ(provider->frameRequestCount(), 1U);
     EXPECT_EQ(coordinator->snapshot()->playbackState, domain::PlaybackState::kPaused);
 }
 
@@ -4374,6 +4356,7 @@ TEST(PlaybackCoordinatorTests,
 
     openVfrReady(coordinator, probe, provider, render, timeline, descriptorA, descriptorB);
     markGraphicsReady(coordinator);
+    requireRealTimeContinuity(coordinator, domain::CommandId{901});
 
     const std::shared_ptr<const SessionSnapshot> ready = coordinator->snapshot();
     ASSERT_EQ(coordinator->submit(PlayCommand{
@@ -4624,9 +4607,9 @@ TEST(PlaybackCoordinatorTests, ForwardStepCompletesEachCommandAfterPresentation)
     EXPECT_EQ(terminals.front().outcome, CommandOutcome::Succeeded);
 }
 
-// A backward step while the forward stream is active tears the stream down and performs an exact
-// -1.
-TEST(PlaybackCoordinatorTests, BackwardStepStopsForwardStreamAndUsesExact) {
+// A backward step while the forward stream is active tears the stream down and starts a reverse
+// interactive stream (FrameRequestPriority::Reverse), not a per-step Exact-seek storm.
+TEST(PlaybackCoordinatorTests, BackwardStepStopsForwardStreamAndUsesReverse) {
     const auto provider = std::make_shared<FakeFrameProvider>();
     const auto render = std::make_shared<FakeRenderChannel>();
     const auto coordinator = makeCoordinator(provider, render);
@@ -4640,22 +4623,26 @@ TEST(PlaybackCoordinatorTests, BackwardStepStopsForwardStreamAndUsesExact) {
               PortSubmitResult::Accepted);
     ASSERT_TRUE(provider->waitForFrameRequestCount(2U));
 
-    // A backward step discontinues the forward stream and is carried out as an Exact seek.
+    // Present the forward step so the displayed frame is 1, then reverse.
+    const auto forward = provider->frameRequest(1U);
+    ASSERT_TRUE(forward.has_value());
+    EXPECT_EQ(forward->priority, FrameRequestPriority::Sequential);
+    presentInteractiveStep(coordinator, provider, render, forward, 1U);
+    ASSERT_TRUE(waitUntil(
+        [&coordinator] { return coordinator->snapshot()->displayedFrame == domain::FrameId{1}; }));
+
     ASSERT_EQ(coordinator->submit(StepFramesCommand{
                   .context = commandContext(coordinator, domain::CommandId{3}),
                   .delta = -1,
               }),
               PortSubmitResult::Accepted);
-    ASSERT_TRUE(waitUntil([&coordinator] {
-        return coordinator->snapshot()->playbackState == domain::PlaybackState::kSeeking;
-    }));
     ASSERT_TRUE(provider->waitForFrameRequestCount(3U));
     const std::optional<FrameRequest> backward = provider->frameRequest(2U);
     ASSERT_TRUE(backward.has_value());
     EXPECT_EQ(backward->frameId, domain::FrameId{0});
-    EXPECT_EQ(backward->priority, FrameRequestPriority::Exact);
+    EXPECT_EQ(backward->priority, FrameRequestPriority::Reverse);
 
-    presentInteractiveStep(coordinator, provider, render, backward, 1U);
+    presentInteractiveStep(coordinator, provider, render, backward, 2U);
     EXPECT_TRUE(waitUntil(
         [&coordinator] { return coordinator->snapshot()->displayedFrame == domain::FrameId{0}; }));
 }
@@ -4880,14 +4867,12 @@ TEST(PlaybackCoordinatorTests, SupersedingStepDoesNotSurfaceError) {
               }),
               PortSubmitResult::Accepted);
 
-    // The backward step seeks back to frame 0 (the displayed frame). Drive that exact seek to
-    // completion deterministically: the FakeFrameProvider never auto-responds and the
-    // FakeDeadlineScheduler never auto-fires, so without this the seek would hang in kSeeking
-    // until the 5s presentation deadline and the wait below would race it (flaky under load).
+    // Reverse stream chains from the unpresented forward target (1) down to frame 0.
     ASSERT_TRUE(provider->waitForFrameRequestCount(requestsBeforeSeek + 1U));
     const auto seek = provider->frameRequest(requestsBeforeSeek);
     ASSERT_TRUE(seek.has_value());
     ASSERT_EQ(seek->frameId, domain::FrameId{0});
+    EXPECT_EQ(seek->priority, FrameRequestPriority::Reverse);
     ASSERT_TRUE(provider->postFrameReady(*seek, makeFrameSet(seek->frameId)));
     ASSERT_TRUE(render->waitForPublishedCount(2U));
     ASSERT_TRUE(provider->postFrameSucceeded(*seek));
@@ -5238,68 +5223,58 @@ TEST(PlaybackCoordinatorTests, ForwardStepPreparedFrameMismatchRequeuesCommand) 
 }
 
 // Phase 0 baseline: held-backward stepping. Today every -1 step enters the Exact-seek path
-// (beginStep, PlaybackCoordinator.cpp:2135-2154), so a held backward key must still present every
-// intermediate canonical frame in order — no frame may be skipped, exactly as held-forward does.
-// This is the held-forward profile (plan 1.6 M1.1) applied in reverse; it is the measuring stick
-// Phase 3's bounded-Reverse-Window work is judged against. The fixture is single-source so the
-// canonical frame id equals the source frame id and "intermediate frame" is unambiguous.
-TEST(PlaybackCoordinatorTests, DISABLED_HeldBackwardPresentsEveryIntermediateFrame) {
+// C-03: held-backward presents every intermediate canonical frame via the reverse interactive
+// stream (one generation, FrameRequestPriority::Reverse), not per-step Exact seeks.
+TEST(PlaybackCoordinatorTests, HeldBackwardPresentsEveryIntermediateFrame) {
     const auto provider = std::make_shared<FakeFrameProvider>();
     const auto render = std::make_shared<FakeRenderChannel>();
     const auto coordinator = makeCoordinator(provider, render);
     ASSERT_NE(coordinator, nullptr);
-    // Open a single-source session with enough frames to step backward through.
     openReady(coordinator, provider, render, domain::CommandId{1}, /*secondFrameCount=*/12);
 
-    // Seek to a safe middle frame so backward steps cannot run past the start.
     ASSERT_EQ(coordinator->submit(SeekFrameCommand{
                   .context = commandContext(coordinator, domain::CommandId{2}),
                   .frameId = domain::FrameId{6},
               }),
               PortSubmitResult::Accepted);
-    EXPECT_TRUE(waitUntil(
+    ASSERT_TRUE(provider->waitForFrameRequestCount(2U));
+    const auto seekRequest = provider->frameRequest(1U);
+    ASSERT_TRUE(seekRequest.has_value());
+    ASSERT_EQ(seekRequest->frameId, domain::FrameId{6});
+    presentInteractiveStep(coordinator, provider, render, seekRequest, 1U);
+    ASSERT_TRUE(waitUntil(
         [&coordinator] { return coordinator->snapshot()->displayedFrame == domain::FrameId{6}; }));
 
     constexpr std::size_t stepCount = 5U;
     std::vector<domain::FrameId> presentedIds;
+    std::size_t renderIndex = 2U;
     domain::FrameId lastPresented = domain::FrameId{6};
-    // openReady published frame 0 (render index 0); each subsequent backward step publishes one
-    // more frame, so the render index advances by one per step.
-    std::size_t renderIndex = 1U;
     for (std::size_t i = 0U; i < stepCount; ++i) {
         const domain::FrameId target{lastPresented.value() - 1};
+        const std::size_t requestsBefore = provider->frameRequestCount();
         ASSERT_EQ(coordinator->submit(StepFramesCommand{
                       .context = commandContext(coordinator, domain::CommandId{3 + i}),
                       .delta = -1,
                   }),
                   PortSubmitResult::Accepted);
-        // The backward step is an Exact seek; wait for the provider to issue the request.
-        ASSERT_TRUE(waitUntil([&provider, target] {
-            const std::size_t count = provider->frameRequestCount();
-            for (std::size_t index = count; index-- > 0U;) {
-                const auto r = provider->frameRequest(index);
-                if (r.has_value() && r->frameId == target) {
-                    return true;
-                }
-            }
-            return false;
-        }));
-        // Find the newest request for the target and present it. There may be superseded requests
-        // for the same frame (generation changes on each Exact seek), so present the last one.
+        ASSERT_TRUE(provider->waitForFrameRequestCount(requestsBefore + 1U));
+        std::optional<FrameRequest> matched;
         for (std::size_t index = provider->frameRequestCount(); index-- > 0U;) {
-            const std::optional<FrameRequest> request = provider->frameRequest(index);
+            const auto request = provider->frameRequest(index);
             if (request.has_value() && request->frameId == target) {
-                presentInteractiveStep(coordinator, provider, render, request, renderIndex);
+                matched = request;
                 break;
             }
         }
+        ASSERT_TRUE(matched.has_value());
+        EXPECT_EQ(matched->priority, FrameRequestPriority::Reverse);
+        presentInteractiveStep(coordinator, provider, render, matched, renderIndex);
         EXPECT_TRUE(waitUntil(
             [&coordinator, target] { return coordinator->snapshot()->displayedFrame == target; }));
-        presentedIds.push_back(coordinator->snapshot()->displayedFrame.value());
+        presentedIds.push_back(target);
         lastPresented = target;
         ++renderIndex;
     }
-    // Every intermediate frame from 5 down to 1 must be presented in order, never skipped.
     const std::vector<domain::FrameId> expected{domain::FrameId{5},
                                                 domain::FrameId{4},
                                                 domain::FrameId{3},
@@ -5308,20 +5283,67 @@ TEST(PlaybackCoordinatorTests, DISABLED_HeldBackwardPresentsEveryIntermediateFra
     EXPECT_EQ(presentedIds, expected);
 }
 
-// Phase 0 baseline: a reference change must not alter the canonical timeline master. Today the
+TEST(PlaybackCoordinatorTests, ReverseStepUsesOneGenerationAcrossAdjacentCommands) {
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator = makeCoordinator(provider, render);
+    ASSERT_NE(coordinator, nullptr);
+    openReady(coordinator, provider, render);
+    ASSERT_EQ(coordinator->submit(SeekFrameCommand{
+                  .context = commandContext(coordinator, domain::CommandId{2}),
+                  .frameId = domain::FrameId{8},
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_TRUE(provider->waitForFrameRequestCount(2U));
+    presentInteractiveStep(coordinator, provider, render, provider->frameRequest(1U), 1U);
+    ASSERT_TRUE(waitUntil(
+        [&coordinator] { return coordinator->snapshot()->displayedFrame == domain::FrameId{8}; }));
+
+    const domain::PlaybackGeneration generationAtStart =
+        coordinator->snapshot()->playbackGeneration;
+    ASSERT_EQ(coordinator->submit(StepFramesCommand{
+                  .context = commandContext(coordinator, domain::CommandId{3}),
+                  .delta = -1,
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_EQ(coordinator->submit(StepFramesCommand{
+                  .context = commandContext(coordinator, domain::CommandId{4}),
+                  .delta = -1,
+              }),
+              PortSubmitResult::Accepted);
+
+    ASSERT_TRUE(provider->waitForFrameRequestCount(4U));
+    for (std::size_t index = 2U; index < 4U; ++index) {
+        const std::optional<FrameRequest> request = provider->frameRequest(index);
+        ASSERT_TRUE(request.has_value());
+        EXPECT_EQ(request->priority, FrameRequestPriority::Reverse);
+        EXPECT_EQ(request->context.playback.playbackGeneration,
+                  domain::PlaybackGeneration{generationAtStart.value() + 1U});
+    }
+    const auto current = provider->frameRequest(2U);
+    const auto prepared = provider->frameRequest(3U);
+    ASSERT_TRUE(current.has_value());
+    ASSERT_TRUE(prepared.has_value());
+    EXPECT_EQ(current->frameId, domain::FrameId{7});
+    EXPECT_EQ(prepared->frameId, domain::FrameId{6});
+}
+
+// Phase 0 baseline: a session's active Pair must not leak across topology changes. Today the Pair
 // Reference source IS the canonical source (ComparisonValidator.cpp:195), so changing Reference
 // (which today means re-opening with a different source carrying the Reference role) rebuilds the
 // timeline. This test opens with source 0 as Reference (canonical = 30 frames), then re-opens with
 // source 1 as Reference (12 frames), and asserts the canonical frame count is unchanged. It is
 // expected to FAIL on the current code (today canonical follows the new Reference: 30 -> 12) and
 // pass once Phase 1 decouples Reference from TimelineMaster.
-TEST(PlaybackCoordinatorTests, DISABLED_ChangingReferenceDoesNotChangeTimelineMaster) {
+TEST(PlaybackCoordinatorTests, ChangingReferenceDoesNotChangeTimelineMaster) {
     const auto provider = std::make_shared<FakeFrameProvider>();
     const auto render = std::make_shared<FakeRenderChannel>();
     const auto coordinator = makeCoordinator(provider, render);
     ASSERT_NE(coordinator, nullptr);
+    markGraphicsReady(coordinator);
 
-    // First open: source 0 is Reference (30 frames) -> canonical follows it = 30 frames today.
+    // First open: source 0 is Reference (30 frames). Timeline master is session-order first
+    // (also 0), so canonical frame count is 30 either way.
     const std::shared_ptr<const SessionSnapshot> initial = coordinator->snapshot();
     ASSERT_EQ(
         coordinator->submit(OpenDirectComparisonCommand{
@@ -5353,6 +5375,7 @@ TEST(PlaybackCoordinatorTests, DISABLED_ChangingReferenceDoesNotChangeTimelineMa
     ASSERT_TRUE(provider->waitForOpenRequestCount(1U));
     std::optional<FrameProviderOpenRequest> open = provider->openRequest();
     ASSERT_TRUE(open.has_value());
+    EXPECT_EQ(open->canonicalSourceId, 0U);
     ASSERT_TRUE(provider->postOpenSucceeded(*open));
     ASSERT_TRUE(provider->waitForFrameRequestCount(1U));
     std::optional<FrameRequest> frame = provider->frameRequest(0U);
@@ -5363,9 +5386,10 @@ TEST(PlaybackCoordinatorTests, DISABLED_ChangingReferenceDoesNotChangeTimelineMa
     presentPublished(coordinator, render, 0U);
     ASSERT_EQ(waitForTerminals(coordinator, 1U).size(), 1U);
     const std::uint64_t canonicalBefore = coordinator->snapshot()->canonicalFrameCount;
+    ASSERT_EQ(canonicalBefore, 30U);
 
-    // Re-open with source 1 (12 frames) as Reference. Today canonical follows the new Reference
-    // and drops to 12; after Phase 1 the canonical master is independent and must stay at 30.
+    // Re-open with source 1 as Reference (12 frames). C-01: timeline master stays session-order
+    // first (source 0, 30 frames) even though Reference moved to the 12-frame source.
     const std::shared_ptr<const SessionSnapshot> before = coordinator->snapshot();
     ASSERT_EQ(
         coordinator->submit(OpenDirectComparisonCommand{
@@ -5394,23 +5418,315 @@ TEST(PlaybackCoordinatorTests, DISABLED_ChangingReferenceDoesNotChangeTimelineMa
                 },
         }),
         PortSubmitResult::Accepted);
-    ASSERT_TRUE(provider->waitForOpenRequestCount(1U));
-    open = provider->openRequest();
+    ASSERT_TRUE(provider->waitForOpenRequestCount(2U));
+    open = provider->openRequest(1U);
     ASSERT_TRUE(open.has_value());
+    EXPECT_EQ(open->canonicalSourceId, 0U);
     ASSERT_TRUE(provider->postOpenSucceeded(*open));
-    ASSERT_TRUE(provider->waitForFrameRequestCount(1U));
-    frame = provider->frameRequest(0U);
+    ASSERT_TRUE(provider->waitForFrameRequestCount(2U));
+    frame = provider->frameRequest(1U);
     ASSERT_TRUE(frame.has_value());
     ASSERT_TRUE(provider->postFrameReady(*frame, makeFrameSet(frame->frameId)));
-    ASSERT_TRUE(render->waitForPublishedCount(1U));
+    ASSERT_TRUE(render->waitForPublishedCount(2U));
     ASSERT_TRUE(provider->postFrameSucceeded(*frame));
-    presentPublished(coordinator, render, 0U);
+    presentPublished(coordinator, render, 1U);
     ASSERT_EQ(waitForTerminals(coordinator, 1U).size(), 1U);
-    const std::uint64_t canonicalAfter = coordinator->snapshot()->canonicalFrameCount;
 
-    EXPECT_EQ(canonicalBefore, canonicalAfter)
-        << "Changing which source is Reference must not change the canonical frame count "
-           "(today Reference == canonical, so the count follows the new Reference — a V2 target).";
+    const auto after = coordinator->snapshot();
+    ASSERT_NE(after->validatedComparison, nullptr);
+    EXPECT_EQ(after->canonicalFrameCount, canonicalBefore);
+    EXPECT_EQ(after->canonicalFrameCount, 30U);
+    EXPECT_EQ(after->validatedComparison->canonicalSourceId(), 0U);
+    EXPECT_EQ(after->validatedComparison->timelineMasterSourceId(), 0U);
+    ASSERT_TRUE(after->validatedComparison->referenceSourceId().has_value());
+    EXPECT_EQ(*after->validatedComparison->referenceSourceId(), 1U);
+}
+
+TEST(PlaybackCoordinatorTests, SetPlaybackRangePublishesSnapshotAndRejectsInvalidBounds) {
+    const auto scheduler = std::make_shared<FakeDeadlineScheduler>();
+    const auto clock = std::make_shared<FakeSteadyClock>();
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator =
+        makeCoordinator(provider, render, std::make_shared<FakeMediaProbe>(), scheduler, clock);
+    markGraphicsReady(coordinator);
+    openReady(coordinator, provider, render);
+
+    ASSERT_EQ(coordinator->submit(SetPlaybackRangeCommand{
+                  .context = commandContext(coordinator, domain::CommandId{2}),
+                  .range =
+                      PlaybackRange{
+                          .inInclusive = domain::FrameId{2},
+                          .outInclusive = domain::FrameId{5},
+                      },
+                  .loop = true,
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+    const auto installed = coordinator->snapshot();
+    ASSERT_TRUE(installed->playbackRangeIn.has_value());
+    ASSERT_TRUE(installed->playbackRangeOut.has_value());
+    EXPECT_EQ(*installed->playbackRangeIn, domain::FrameId{2});
+    EXPECT_EQ(*installed->playbackRangeOut, domain::FrameId{5});
+    EXPECT_TRUE(installed->playbackRangeLoop);
+    EXPECT_TRUE(installed->isConsistent());
+
+    ASSERT_EQ(coordinator->submit(SetPlaybackRangeCommand{
+                  .context = commandContext(coordinator, domain::CommandId{3}),
+                  .range =
+                      PlaybackRange{
+                          .inInclusive = domain::FrameId{8},
+                          .outInclusive = domain::FrameId{4},
+                      },
+                  .loop = true,
+              }),
+              PortSubmitResult::Accepted);
+    const auto rejected = waitForTerminals(coordinator, 1U);
+    ASSERT_EQ(rejected.front().outcome, CommandOutcome::Failed);
+    EXPECT_EQ(*coordinator->snapshot()->playbackRangeIn, domain::FrameId{2});
+
+    ASSERT_EQ(coordinator->submit(SetPlaybackRangeCommand{
+                  .context = commandContext(coordinator, domain::CommandId{4}),
+                  .range = std::nullopt,
+                  .loop = false,
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+    const auto cleared = coordinator->snapshot();
+    EXPECT_FALSE(cleared->playbackRangeIn.has_value());
+    EXPECT_FALSE(cleared->playbackRangeOut.has_value());
+    EXPECT_FALSE(cleared->playbackRangeLoop);
+    EXPECT_TRUE(cleared->isConsistent());
+}
+
+// H-01: wall-clock catch-up / sequential prepare must never request a frame past range Out.
+TEST(PlaybackCoordinatorTests, RangeLoopCatchUpNeverPresentsPastOutAndReanchorsInKernel) {
+    const auto scheduler = std::make_shared<FakeDeadlineScheduler>();
+    const auto clock = std::make_shared<FakeSteadyClock>();
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator =
+        makeCoordinator(provider, render, std::make_shared<FakeMediaProbe>(), scheduler, clock);
+    markGraphicsReady(coordinator);
+    openReady(coordinator, provider, render, domain::CommandId{1}, 12, 30);
+
+    ASSERT_EQ(coordinator->submit(SetPlaybackRangeCommand{
+                  .context = commandContext(coordinator, domain::CommandId{2}),
+                  .range =
+                      PlaybackRange{
+                          .inInclusive = domain::FrameId{0},
+                          .outInclusive = domain::FrameId{2},
+                      },
+                  .loop = true,
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+
+    ASSERT_EQ(coordinator->submit(PlayCommand{
+                  .context = commandContext(coordinator, domain::CommandId{3}),
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+    ASSERT_TRUE(scheduler->waitForScheduleCount(2U));
+    const auto firstCadence = scheduler->request(1U);
+    ASSERT_TRUE(firstCadence.has_value());
+    clock->set(firstCadence->due);
+    ASSERT_TRUE(scheduler->fire(1U));
+    ASSERT_TRUE(provider->waitForFrameRequestCount(2U));
+    const auto firstPlayback = provider->frameRequest(1U);
+    ASSERT_TRUE(firstPlayback.has_value());
+    EXPECT_LE(firstPlayback->frameId.value(), 2);
+    ASSERT_TRUE(provider->postFrameSucceeded(*firstPlayback));
+    ASSERT_TRUE(provider->postFrameReady(*firstPlayback, makeFrameSet(firstPlayback->frameId)));
+    ASSERT_TRUE(render->waitForPublishedCount(2U));
+    presentPublished(coordinator, render, 1U);
+    ASSERT_TRUE(waitUntil(
+        [&coordinator] { return coordinator->snapshot()->displayedFrame == domain::FrameId{1}; }));
+
+    // Stall past catch-up tolerance; every subsequent provider request must stay <= Out.
+    clock->advance(std::chrono::seconds{10});
+    for (std::size_t index = 0U; index < scheduler->scheduleCount(); ++index) {
+        static_cast<void>(scheduler->fire(index));
+    }
+    for (std::size_t attempt = 0U; attempt < 30U; ++attempt) {
+        const std::size_t requestCount = provider->frameRequestCount();
+        for (std::size_t index = 0U; index < requestCount; ++index) {
+            const auto request = provider->frameRequest(index);
+            if (!request.has_value()) {
+                continue;
+            }
+            EXPECT_LE(request->frameId.value(), 2)
+                << "Range playback must never request a frame past Out";
+            if (request->frameId.value() > 2) {
+                continue;
+            }
+            const auto before = render->publishedCount();
+            static_cast<void>(provider->postFrameSucceeded(*request));
+            static_cast<void>(provider->postFrameReady(*request, makeFrameSet(request->frameId)));
+            if (render->publishedCount() > before) {
+                presentPublished(coordinator, render, before);
+            }
+        }
+        for (std::size_t index = 0U; index < scheduler->scheduleCount(); ++index) {
+            static_cast<void>(scheduler->fire(index));
+        }
+        const auto snapshot = coordinator->snapshot();
+        if (snapshot->displayedFrame.has_value() && snapshot->displayedFrame->value() == 2 &&
+            snapshot->playbackState == domain::PlaybackState::kPaused) {
+            break;
+        }
+        if (snapshot->displayedFrame.has_value() && snapshot->displayedFrame->value() == 0 &&
+            snapshot->playbackState == domain::PlaybackState::kPlaying) {
+            // Loop re-anchored at In after presenting Out — still must never have passed Out.
+            break;
+        }
+        std::this_thread::sleep_for(1ms);
+    }
+    for (std::size_t index = 0U; index < provider->frameRequestCount(); ++index) {
+        const auto request = provider->frameRequest(index);
+        if (request.has_value()) {
+            EXPECT_LE(request->frameId.value(), 2);
+        }
+    }
+    EXPECT_TRUE(coordinator->snapshot()->isConsistent());
+}
+
+TEST(PlaybackCoordinatorTests, RangeWithoutLoopPausesAtOutInsteadOfPassingIt) {
+    const auto scheduler = std::make_shared<FakeDeadlineScheduler>();
+    const auto clock = std::make_shared<FakeSteadyClock>();
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator =
+        makeCoordinator(provider, render, std::make_shared<FakeMediaProbe>(), scheduler, clock);
+    markGraphicsReady(coordinator);
+    openReady(coordinator, provider, render, domain::CommandId{1}, 12, 30);
+
+    ASSERT_EQ(coordinator->submit(SetPlaybackRangeCommand{
+                  .context = commandContext(coordinator, domain::CommandId{2}),
+                  .range =
+                      PlaybackRange{
+                          .inInclusive = domain::FrameId{0},
+                          .outInclusive = domain::FrameId{1},
+                      },
+                  .loop = false,
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+    ASSERT_EQ(coordinator->submit(PlayCommand{
+                  .context = commandContext(coordinator, domain::CommandId{3}),
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+    ASSERT_TRUE(scheduler->waitForScheduleCount(2U));
+    const auto cadence = scheduler->request(1U);
+    ASSERT_TRUE(cadence.has_value());
+    clock->set(cadence->due);
+    ASSERT_TRUE(scheduler->fire(1U));
+    ASSERT_TRUE(provider->waitForFrameRequestCount(2U));
+    const auto frame = provider->frameRequest(1U);
+    ASSERT_TRUE(frame.has_value());
+    EXPECT_EQ(frame->frameId, domain::FrameId{1});
+    ASSERT_TRUE(provider->postFrameSucceeded(*frame));
+    ASSERT_TRUE(provider->postFrameReady(*frame, makeFrameSet(frame->frameId)));
+    ASSERT_TRUE(render->waitForPublishedCount(2U));
+    presentPublished(coordinator, render, 1U);
+    ASSERT_TRUE(waitUntil([&coordinator] {
+        const auto snapshot = coordinator->snapshot();
+        return snapshot->displayedFrame == domain::FrameId{1} &&
+               snapshot->playbackState == domain::PlaybackState::kPaused;
+    }));
+    for (std::size_t index = 0U; index < provider->frameRequestCount(); ++index) {
+        const auto request = provider->frameRequest(index);
+        if (request.has_value()) {
+            EXPECT_LE(request->frameId.value(), 1);
+        }
+    }
+    EXPECT_TRUE(coordinator->snapshot()->isConsistent());
+}
+
+TEST(PlaybackCoordinatorTests, StartRangePlaybackFromOutsideRangeBeginsAtIn) {
+    const auto scheduler = std::make_shared<FakeDeadlineScheduler>();
+    const auto clock = std::make_shared<FakeSteadyClock>();
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator =
+        makeCoordinator(provider, render, std::make_shared<FakeMediaProbe>(), scheduler, clock);
+    markGraphicsReady(coordinator);
+    openReady(coordinator, provider, render, domain::CommandId{1}, 12, 30);
+    // openReady leaves displayed at frame 0 — outside the range we will install.
+    const std::size_t requestsBeforeRangePlay = provider->frameRequestCount();
+
+    ASSERT_EQ(coordinator->submit(StartRangePlaybackCommand{
+                  .context = commandContext(coordinator, domain::CommandId{2}),
+                  .range =
+                      PlaybackRange{
+                          .inInclusive = domain::FrameId{2},
+                          .outInclusive = domain::FrameId{4},
+                      },
+                  .loop = true,
+              }),
+              PortSubmitResult::Accepted);
+    const auto terminals = waitForTerminals(coordinator, 1U);
+    ASSERT_EQ(terminals.front().outcome, CommandOutcome::Succeeded);
+    const auto snapshot = coordinator->snapshot();
+    ASSERT_TRUE(snapshot->playbackRangeIn.has_value());
+    EXPECT_EQ(*snapshot->playbackRangeIn, domain::FrameId{2});
+    EXPECT_EQ(*snapshot->playbackRangeOut, domain::FrameId{4});
+    EXPECT_TRUE(snapshot->playbackRangeLoop);
+    // Immediate In activation lands in Buffering while the first FrameSet is in flight.
+    EXPECT_TRUE(snapshot->playbackState == domain::PlaybackState::kPlaying ||
+                snapshot->playbackState == domain::PlaybackState::kBuffering);
+    EXPECT_TRUE(snapshot->isConsistent());
+
+    for (std::size_t index = 0U; index < scheduler->scheduleCount(); ++index) {
+        static_cast<void>(scheduler->fire(index));
+    }
+    static_cast<void>(waitUntil([&provider, requestsBeforeRangePlay] {
+        return provider->frameRequestCount() > requestsBeforeRangePlay;
+    }));
+    bool sawInRangeTarget = false;
+    for (std::size_t index = requestsBeforeRangePlay; index < provider->frameRequestCount();
+         ++index) {
+        const auto request = provider->frameRequest(index);
+        if (!request.has_value()) {
+            continue;
+        }
+        EXPECT_LE(request->frameId.value(), 4)
+            << "Range playback must never request a frame past Out";
+        if (request->frameId == domain::FrameId{2}) {
+            sawInRangeTarget = true;
+        }
+    }
+    EXPECT_TRUE(sawInRangeTarget) << "Playing a range from outside must begin at In (frame 2)";
+}
+
+TEST(PlaybackCoordinatorTests, SingleFrameRangePlayDoesNotSpinAHighSpeedLoop) {
+    const auto scheduler = std::make_shared<FakeDeadlineScheduler>();
+    const auto clock = std::make_shared<FakeSteadyClock>();
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator =
+        makeCoordinator(provider, render, std::make_shared<FakeMediaProbe>(), scheduler, clock);
+    markGraphicsReady(coordinator);
+    openReady(coordinator, provider, render, domain::CommandId{1}, 12, 30);
+
+    // Single-frame range already sitting on In==Out must complete without starting a run.
+    ASSERT_EQ(coordinator->submit(StartRangePlaybackCommand{
+                  .context = commandContext(coordinator, domain::CommandId{2}),
+                  .range =
+                      PlaybackRange{
+                          .inInclusive = domain::FrameId{0},
+                          .outInclusive = domain::FrameId{0},
+                      },
+                  .loop = true,
+              }),
+              PortSubmitResult::Accepted);
+    const auto terminals = waitForTerminals(coordinator, 1U);
+    EXPECT_EQ(terminals.front().outcome, CommandOutcome::Succeeded);
+    EXPECT_EQ(coordinator->snapshot()->playbackState, domain::PlaybackState::kPaused);
+    EXPECT_TRUE(coordinator->snapshot()->playbackRangeIn.has_value());
+    EXPECT_EQ(*coordinator->snapshot()->playbackRangeIn, domain::FrameId{0});
+    EXPECT_EQ(*coordinator->snapshot()->playbackRangeOut, domain::FrameId{0});
 }
 
 // Phase 0 baseline: a session's active Pair must not leak across topology changes. Today the Pair

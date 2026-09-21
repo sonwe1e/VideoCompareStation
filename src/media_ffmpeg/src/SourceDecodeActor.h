@@ -28,6 +28,9 @@ namespace dvs::media::internal {
 enum class SourceDecodePriority {
     Exact,
     Sequential,
+    // Reverse interactive step: same decoder/queue treatment as Exact (random access), kept
+    // distinct so admission and telemetry can tell reverse-step work from ordinary seeks.
+    Reverse,
     Prefetch,
 };
 
@@ -36,6 +39,9 @@ struct SourceDecodeRequest final {
     SourceDecodePriority priority = SourceDecodePriority::Exact;
     bool continueSequentially = false;
     std::uint8_t readAheadCount = 0U;
+    // Desired Reverse GOP Window length (frames below the reverse target to retain). The actor
+    // shrinks this to the byte budget; 0 disables window construction for the request.
+    std::uint8_t reverseWindowFrames = 0U;
     // Shared ownership: speculative read-ahead outlives the completion callback that is the
     // provider's last guarantee the referenced flag storage stays alive.
     std::shared_ptr<const std::atomic<bool>> cancellationRequested;
@@ -106,6 +112,16 @@ private:
     void completeCanceled(DecodeJob job) noexcept;
     static void complete(DecodeJob job, domain::Result<DecodedFrame> result) noexcept;
 
+    // ADR-003 Reverse GOP Window: one seed-seek + sequential walk fills the source cache with
+    // reverse targets below `request.frameId`, so held-backward consumes cache instead of
+    // exact-seeking every step. Budget-insufficient builds fall back to per-step Exact.
+    void fillReverseGopWindow(const SourceDecodeRequest& request,
+                              std::size_t frameBytes,
+                              SoftwareDecoder& selectedDecoder,
+                              const std::function<void(std::uint64_t)>& recordDecode,
+                              const std::function<bool(const SourceDecodeRequest&)>& interrupted,
+                              const std::function<void()>& refreshMetrics) noexcept;
+
     domain::SourceId sourceId_;
     std::int64_t sourceFrameCount_ = 0;
     std::unique_ptr<SoftwareDecoder> decoder_;
@@ -131,6 +147,12 @@ private:
     std::uint64_t cacheHitCount_ = 0U;
     std::uint64_t totalDecodeMicroseconds_ = 0U;
     std::uint64_t maximumDecodeMicroseconds_ = 0U;
+    std::uint64_t reverseWindowHitCount_ = 0U;
+    std::uint64_t reverseWindowBuildCount_ = 0U;
+    std::uint64_t reverseWindowBuiltFrameCount_ = 0U;
+    std::uint64_t reverseWindowBuildMicroseconds_ = 0U;
+    std::uint64_t reverseWindowBuildMaximumMicroseconds_ = 0U;
+    std::uint64_t reverseExactFallbackCount_ = 0U;
     media::DecoderBackendStatus backendStatus_;
     SourceFrameCache cache_;
     SourceFrameCacheKey cacheKey_;

@@ -40,11 +40,21 @@ class ReviewController final : public QObject {
     Q_PROPERTY(int sourceCount READ sourceCount NOTIFY stateChanged)
     Q_PROPERTY(int canonicalSourceIndex READ canonicalSourceIndex NOTIFY stateChanged)
     Q_PROPERTY(int referenceSourceIndex READ referenceSourceIndex NOTIFY stateChanged)
+    Q_PROPERTY(
+        QString playbackContinuityPolicyName READ playbackContinuityPolicyName NOTIFY stateChanged)
+    Q_PROPERTY(int playbackContinuityPolicy READ playbackContinuityPolicy NOTIFY stateChanged)
+    Q_PROPERTY(
+        qulonglong playbackSkippedFrameSets READ playbackSkippedFrameSets NOTIFY stateChanged)
+    Q_PROPERTY(int effectiveDifferenceEdge READ effectiveDifferenceEdge NOTIFY stateChanged)
     Q_PROPERTY(ReviewDisplayState displayState READ displayState NOTIFY stateChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY stateChanged)
     Q_PROPERTY(bool framePending READ framePending NOTIFY stateChanged)
     Q_PROPERTY(bool playing READ playing NOTIFY stateChanged)
     Q_PROPERTY(qreal playbackRate READ playbackRate NOTIFY stateChanged)
+    Q_PROPERTY(qint64 playbackRangeIn READ playbackRangeIn NOTIFY stateChanged)
+    Q_PROPERTY(qint64 playbackRangeOut READ playbackRangeOut NOTIFY stateChanged)
+    Q_PROPERTY(bool playbackRangeLoop READ playbackRangeLoop NOTIFY stateChanged)
+    Q_PROPERTY(bool playbackRangeLoopActive READ playbackRangeLoopActive NOTIFY stateChanged)
     Q_PROPERTY(bool graphicsReady READ graphicsReady NOTIFY stateChanged)
     Q_PROPERTY(qint64 currentFrame READ currentFrame NOTIFY frameStateChanged)
     Q_PROPERTY(qulonglong totalFrames READ totalFrames NOTIFY stateChanged)
@@ -146,11 +156,19 @@ public:
     [[nodiscard]] int sourceCount() const noexcept;
     [[nodiscard]] int canonicalSourceIndex() const noexcept;
     [[nodiscard]] int referenceSourceIndex() const noexcept;
+    [[nodiscard]] QString playbackContinuityPolicyName() const;
+    [[nodiscard]] int playbackContinuityPolicy() const noexcept;
+    [[nodiscard]] qulonglong playbackSkippedFrameSets() const noexcept;
+    [[nodiscard]] int effectiveDifferenceEdge() const noexcept;
     [[nodiscard]] ReviewDisplayState displayState() const noexcept;
     [[nodiscard]] bool busy() const noexcept;
     [[nodiscard]] bool framePending() const noexcept;
     [[nodiscard]] bool playing() const noexcept;
     [[nodiscard]] qreal playbackRate() const noexcept;
+    [[nodiscard]] qint64 playbackRangeIn() const noexcept;
+    [[nodiscard]] qint64 playbackRangeOut() const noexcept;
+    [[nodiscard]] bool playbackRangeLoop() const noexcept;
+    [[nodiscard]] bool playbackRangeLoopActive() const noexcept;
     [[nodiscard]] bool graphicsReady() const noexcept;
     // Zero-based canonical frame ID. -1 means that no frame has been presented.
     [[nodiscard]] qint64 currentFrame() const noexcept;
@@ -244,6 +262,16 @@ public:
     // while paused (applied by the next play()).
     Q_INVOKABLE bool setPlaybackRate(qreal rate);
     Q_INVOKABLE bool togglePlayback();
+    // Kernel playback-range authority. in/out < 0 clears the range. loop only applies with a
+    // valid closed interval.
+    Q_INVOKABLE bool setPlaybackRange(qint64 inFrame, qint64 outFrame, bool loop);
+    Q_INVOKABLE bool playRange(qint64 inFrame, qint64 outFrame);
+    Q_INVOKABLE bool stopRangeLoop();
+    // C-07: domain::PlaybackContinuityPolicy code (0 ReviewEveryFrame, 1 RealTime, 2 Contextual).
+    Q_INVOKABLE bool setPlaybackContinuityPolicy(int policyCode);
+    // C-02: project a DifferenceEdge preference (0/1/2) onto a session ComparisonPair using
+    // the live differenceEdges list, then submit SetActiveComparisonPairCommand.
+    Q_INVOKABLE bool applyComparisonPairFromEdge(int preferenceValue, int pairPolicyCode = 2);
     Q_INVOKABLE void refreshProjection() noexcept;
     // Returns the snapshot-frozen identity for a source URL. The value is rebuilt only when the
     // validated comparison pointer changes, so callers see a stable string between commits.

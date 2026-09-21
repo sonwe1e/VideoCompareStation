@@ -506,5 +506,144 @@ TEST(SourceDecodeActorTests, ExternalInterruptSignalRacesSequentialDecodeSafely)
     ASSERT_TRUE(waitUntil([&actor] { return actor.completedDecodeCount() >= 3U; }));
 }
 
+// ADR-003 Reverse GOP Window: held-backward warm-up must be one seed-seek + sequential walk,
+// not one Exact seek per reverse target. Subsequent reverse steps inside the window hit cache.
+TEST(SourceDecodeActorTests, ReverseGopWindowBuildsCacheWithOneSeedSeek) {
+    platform::FrameBudget budget{16U * 1024U * 1024U};
+    std::atomic<bool> interrupted = false;
+    auto canceled = std::make_shared<std::atomic<bool>>(false);
+    SourceDecodeActor actor{
+        0U,
+        descriptor("h264_a_320x180_30fps_12.mp4"),
+        budget,
+        &interrupted,
+        false,
+        4U * 1024U * 1024U,
+    };
+    ASSERT_TRUE(actor.open(*canceled));
+
+    SourceDecodeSubmission reverse = actor.submit(SourceDecodeRequest{
+        .frameId = domain::FrameId{8},
+        .priority = SourceDecodePriority::Reverse,
+        .reverseWindowFrames = 6U,
+        .cancellationRequested = canceled,
+    });
+    ASSERT_EQ(reverse.status, application::PortSubmitResult::Accepted);
+    ASSERT_TRUE(reverse.completion.get());
+    // Primary reverse target 8: one Exact. Window seed at frame 2: one more Exact, then
+    // sequential walk fills 3..7 without additional seeks.
+    ASSERT_TRUE(
+        waitUntil([&actor] { return actor.backendStatus().reverseWindowBuildCount >= 1U; }));
+    const media::DecoderBackendStatus afterBuild = actor.backendStatus();
+    EXPECT_EQ(afterBuild.reverseWindowBuildCount, 1U);
+    EXPECT_GE(afterBuild.reverseWindowBuiltFrameCount, 2U);
+    EXPECT_LE(afterBuild.exactSeekCount, 3U);
+
+    // Reverse targets inside the window must be pure cache hits (no new exact seeks).
+    for (std::int64_t frame = 7; frame >= 2; --frame) {
+        SourceDecodeSubmission step = actor.submit(SourceDecodeRequest{
+            .frameId = domain::FrameId{frame},
+            .priority = SourceDecodePriority::Reverse,
+            .reverseWindowFrames = 6U,
+            .cancellationRequested = canceled,
+        });
+        ASSERT_EQ(step.status, application::PortSubmitResult::Accepted);
+        const auto decoded = step.completion.get();
+        ASSERT_TRUE(decoded) << decoded.error().technicalDetail;
+    }
+    const media::DecoderBackendStatus afterWalk = actor.backendStatus();
+    EXPECT_EQ(afterWalk.exactSeekCount, afterBuild.exactSeekCount);
+    EXPECT_GE(afterWalk.reverseWindowHitCount, 1U);
+    EXPECT_EQ(afterWalk.reverseExactFallbackCount, 0U);
+}
+
+// Held-backward hardware/size gate: when the source cache cannot retain a multi-frame window,
+// the actor falls back to per-step Exact instead of blocking on a speculative build.
+TEST(SourceDecodeActorTests, ReverseGopWindowFallsBackWhenCacheCannotHoldAWindow) {
+    platform::FrameBudget budget{16U * 1024U * 1024U};
+    std::atomic<bool> interrupted = false;
+    auto canceled = std::make_shared<std::atomic<bool>>(false);
+    // 320x180 NV12 is ~86 KiB/frame; 100 KiB cache cannot hold two frames.
+    SourceDecodeActor actor{
+        0U,
+        descriptor("h264_a_320x180_30fps_12.mp4"),
+        budget,
+        &interrupted,
+        false,
+        100U * 1024U,
+    };
+    ASSERT_TRUE(actor.open(*canceled));
+
+    SourceDecodeSubmission reverse = actor.submit(SourceDecodeRequest{
+        .frameId = domain::FrameId{6},
+        .priority = SourceDecodePriority::Reverse,
+        .reverseWindowFrames = 8U,
+        .cancellationRequested = canceled,
+    });
+    ASSERT_EQ(reverse.status, application::PortSubmitResult::Accepted);
+    ASSERT_TRUE(reverse.completion.get());
+    ASSERT_TRUE(
+        waitUntil([&actor] { return actor.backendStatus().reverseExactFallbackCount >= 1U; }));
+    EXPECT_EQ(actor.backendStatus().reverseWindowBuildCount, 0U);
+
+    // Exact fallback still produces the next reverse frame.
+    SourceDecodeSubmission next = actor.submit(SourceDecodeRequest{
+        .frameId = domain::FrameId{5},
+        .priority = SourceDecodePriority::Reverse,
+        .reverseWindowFrames = 8U,
+        .cancellationRequested = canceled,
+    });
+    ASSERT_EQ(next.status, application::PortSubmitResult::Accepted);
+    ASSERT_TRUE(next.completion.get());
+}
+
+// Window exhaustion at the left edge rebuilds with another single seed-seek rather than
+// abandoning reverse to a generation storm.
+TEST(SourceDecodeActorTests, ReverseGopWindowRebuildsAfterLeftEdgeExhaustion) {
+    platform::FrameBudget budget{16U * 1024U * 1024U};
+    std::atomic<bool> interrupted = false;
+    auto canceled = std::make_shared<std::atomic<bool>>(false);
+    SourceDecodeActor actor{
+        0U,
+        descriptor("h264_a_320x180_30fps_12.mp4"),
+        budget,
+        &interrupted,
+        false,
+        4U * 1024U * 1024U,
+    };
+    ASSERT_TRUE(actor.open(*canceled));
+
+    auto reverse = [&](const std::int64_t frame) {
+        SourceDecodeSubmission submitted = actor.submit(SourceDecodeRequest{
+            .frameId = domain::FrameId{frame},
+            .priority = SourceDecodePriority::Reverse,
+            .reverseWindowFrames = 3U,
+            .cancellationRequested = canceled,
+        });
+        ASSERT_EQ(submitted.status, application::PortSubmitResult::Accepted);
+        ASSERT_TRUE(submitted.completion.get());
+    };
+
+    reverse(5);
+    ASSERT_TRUE(
+        waitUntil([&actor] { return actor.backendStatus().reverseWindowBuildCount >= 1U; }));
+    const std::uint64_t seeksAfterFirstWindow = actor.backendStatus().exactSeekCount;
+
+    // Consume the first window (4, 3, 2) from cache.
+    reverse(4);
+    reverse(3);
+    reverse(2);
+    EXPECT_EQ(actor.backendStatus().exactSeekCount, seeksAfterFirstWindow);
+
+    // Frame 1 is below the first window: one new Exact primary + one new window seed.
+    reverse(1);
+    ASSERT_TRUE(
+        waitUntil([&actor] { return actor.backendStatus().reverseWindowBuildCount >= 2U; }));
+    const media::DecoderBackendStatus afterSecond = actor.backendStatus();
+    EXPECT_GE(afterSecond.exactSeekCount, seeksAfterFirstWindow);
+    // Second window should not cost one seek per remaining frame.
+    EXPECT_LE(afterSecond.exactSeekCount, seeksAfterFirstWindow + 3U);
+}
+
 } // namespace
 } // namespace dvs::media::internal

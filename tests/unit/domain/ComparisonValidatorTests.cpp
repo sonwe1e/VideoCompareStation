@@ -81,12 +81,14 @@ TEST(ComparisonValidatorTests, AcceptsSingleReviewSourceAsCanonical) {
     EXPECT_TRUE(result.value().report.isEmpty());
 }
 
-TEST(ComparisonValidatorTests, ReferenceRoleWinsCanonicalSelection) {
+TEST(ComparisonValidatorTests, ReferenceRoleDoesNotStealTimelineMaster) {
     const auto result =
         ComparisonValidator::validate({makeSource(0), makeSource(1, ComparisonRole::kReference)});
 
     ASSERT_TRUE(result.hasValue());
-    EXPECT_EQ(result.value().set.canonicalSourceId(), 1U);
+    // C-01: timeline master stays session-order first; Reference is comparison baseline only.
+    EXPECT_EQ(result.value().set.canonicalSourceId(), 0U);
+    EXPECT_EQ(result.value().set.timelineMasterSourceId(), 0U);
     ASSERT_TRUE(result.value().set.referenceSourceId().has_value());
     EXPECT_EQ(*result.value().set.referenceSourceId(), 1U);
 }

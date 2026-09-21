@@ -245,6 +245,8 @@ decodePriority(const application::FrameRequestPriority priority) noexcept {
         return internal::SourceDecodePriority::Exact;
     case application::FrameRequestPriority::Sequential:
         return internal::SourceDecodePriority::Sequential;
+    case application::FrameRequestPriority::Reverse:
+        return internal::SourceDecodePriority::Reverse;
     case application::FrameRequestPriority::Prefetch:
         return internal::SourceDecodePriority::Prefetch;
     }
@@ -356,6 +358,9 @@ public:
             } else {
                 switch (request.priority) {
                 case application::FrameRequestPriority::Exact:
+                case application::FrameRequestPriority::Reverse:
+                    // Reverse steps share the exact/random-access slot: latest-wins on the
+                    // active exact/decode so a held-backward burst never piles unbounded work.
                     latestExactFrame_ = request.frameId;
                     while (exactQueue_.size() >= kExactRequestSlots) {
                         cancelFrontLocked(
@@ -552,6 +557,7 @@ private:
     queueForPriority(const application::FrameRequestPriority priority) noexcept {
         switch (priority) {
         case application::FrameRequestPriority::Exact:
+        case application::FrameRequestPriority::Reverse:
             return exactQueue_;
         case application::FrameRequestPriority::Sequential:
             return sequentialQueue_;
@@ -631,7 +637,8 @@ private:
             return false;
         }
         const auto& request = std::get<application::FrameRequest>(activeOperation_->request);
-        return request.priority == application::FrameRequestPriority::Exact &&
+        return (request.priority == application::FrameRequestPriority::Exact ||
+                request.priority == application::FrameRequestPriority::Reverse) &&
                activeOperation_->requestCancellation(application::CancellationReason::Superseded);
     }
 
@@ -890,7 +897,8 @@ private:
         // Continuous playback has one set in flight and never re-requests an already presented
         // sequential frame. Retaining those CPU resources would make memory grow with playback
         // history. Prefetch is source-cache-only and must never retain a complete FrameSet.
-        if (request.priority != application::FrameRequestPriority::Exact) {
+        if (request.priority != application::FrameRequestPriority::Exact &&
+            request.priority != application::FrameRequestPriority::Reverse) {
             return;
         }
 
@@ -952,7 +960,8 @@ private:
 
     [[nodiscard]] std::optional<application::FrameSet>
     cachedSet(const application::FrameRequest& request) const {
-        if (request.priority != application::FrameRequestPriority::Exact) {
+        if (request.priority != application::FrameRequestPriority::Exact &&
+            request.priority != application::FrameRequestPriority::Reverse) {
             return std::nullopt;
         }
         const internal::FrameSetCacheKey key{
@@ -1157,6 +1166,12 @@ private:
                         .readAheadCount =
                             request.priority == application::FrameRequestPriority::Sequential
                                 ? std::uint8_t{3U}
+                                : std::uint8_t{0U},
+                        // ADR-003: held-backward asks for a bounded reverse GOP window; the
+                        // actor shrinks it to the per-source byte budget and falls back Exact.
+                        .reverseWindowFrames =
+                            request.priority == application::FrameRequestPriority::Reverse
+                                ? std::uint8_t{24U}
                                 : std::uint8_t{0U},
                         .cancellationRequested = operation->cancellationRequested,
                         .context = request.context,

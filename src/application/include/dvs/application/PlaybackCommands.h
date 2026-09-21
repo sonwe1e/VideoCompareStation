@@ -1,8 +1,12 @@
 #pragma once
 
 #include "dvs/application/RequestContext.h"
+#include "dvs/domain/ComparisonSelection.h"
+#include "dvs/domain/Identifiers.h"
+#include "dvs/domain/PlaybackContinuityPolicy.h"
 
 #include <cstdint>
+#include <optional>
 
 namespace dvs::application {
 
@@ -38,6 +42,50 @@ struct PauseCommand final {
 struct SetPlaybackRateCommand final {
     CommandContext context;
     double speed = 1.0;
+};
+
+// Closed canonical-frame interval used by kernel-native range playback. Inclusive on both ends.
+struct PlaybackRange final {
+    domain::FrameId inInclusive{0};
+    domain::FrameId outInclusive{0};
+
+    [[nodiscard]] bool isValid() const noexcept {
+        return inInclusive.isValid() && outInclusive.isValid() &&
+               inInclusive.value() <= outInclusive.value();
+    }
+
+    [[nodiscard]] bool operator==(const PlaybackRange&) const noexcept = default;
+};
+
+// Installs, replaces, or clears the session playback range. `loop` only applies when a valid
+// range is present. Clearing sends `range = nullopt` (loop is then ignored).
+struct SetPlaybackRangeCommand final {
+    CommandContext context;
+    std::optional<PlaybackRange> range;
+    bool loop = false;
+};
+
+// Atomically install a playback range (with loop intent) and start a playback run under that
+// range. Used by UI "play range" so range authority and the run start cannot race.
+struct StartRangePlaybackCommand final {
+    CommandContext context;
+    PlaybackRange range;
+    bool loop = true;
+    double speed = 1.0;
+};
+
+// C-07: explicit continuity policy. Contextual resolves at play time from source count.
+struct SetPlaybackContinuityPolicyCommand final {
+    CommandContext context;
+    domain::PlaybackContinuityPolicy policy = domain::PlaybackContinuityPolicy::Contextual;
+};
+
+// C-02: session comparison pair as stable source identities. Empty/nullopt clears to policy
+// default on the next topology rebuild.
+struct SetActiveComparisonPairCommand final {
+    CommandContext context;
+    std::optional<domain::ComparisonPair> pair;
+    domain::DefaultPairPolicy policy = domain::DefaultPairPolicy::PreserveIfAvailable;
 };
 
 } // namespace dvs::application
