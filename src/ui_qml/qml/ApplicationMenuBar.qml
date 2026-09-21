@@ -252,8 +252,7 @@ VcsMenuBar {
                 onTriggered: {
                     control.preferences.differenceEdge = 0;
                     if (control.controller && control.controller.applyComparisonPairFromEdge) {
-                        control.controller.applyComparisonPairFromEdge(
-                            0, Number(control.preferences.defaultPairPolicy));
+                        control.controller.applyComparisonPairFromEdge(0, Number(control.preferences.defaultPairPolicy));
                     }
                     control.returnViewerFocusAfterClose = true;
                 }
@@ -264,8 +263,7 @@ VcsMenuBar {
                 onTriggered: {
                     control.preferences.differenceEdge = 1;
                     if (control.controller && control.controller.applyComparisonPairFromEdge) {
-                        control.controller.applyComparisonPairFromEdge(
-                            1, Number(control.preferences.defaultPairPolicy));
+                        control.controller.applyComparisonPairFromEdge(1, Number(control.preferences.defaultPairPolicy));
                     }
                     control.returnViewerFocusAfterClose = true;
                 }
@@ -276,8 +274,7 @@ VcsMenuBar {
                 onTriggered: {
                     control.preferences.differenceEdge = 2;
                     if (control.controller && control.controller.applyComparisonPairFromEdge) {
-                        control.controller.applyComparisonPairFromEdge(
-                            2, Number(control.preferences.defaultPairPolicy));
+                        control.controller.applyComparisonPairFromEdge(2, Number(control.preferences.defaultPairPolicy));
                     }
                     control.returnViewerFocusAfterClose = true;
                 }
@@ -297,8 +294,7 @@ VcsMenuBar {
                     onTriggered: {
                         control.preferences.defaultPairPolicy = 0;
                         if (control.controller && control.controller.applyComparisonPairFromEdge) {
-                            control.controller.applyComparisonPairFromEdge(
-                                Number(control.preferences.differenceEdge), 0);
+                            control.controller.applyComparisonPairFromEdge(Number(control.preferences.differenceEdge), 0);
                         }
                         control.returnViewerFocusAfterClose = true;
                     }
@@ -310,8 +306,7 @@ VcsMenuBar {
                     onTriggered: {
                         control.preferences.defaultPairPolicy = 1;
                         if (control.controller && control.controller.applyComparisonPairFromEdge) {
-                            control.controller.applyComparisonPairFromEdge(
-                                Number(control.preferences.differenceEdge), 1);
+                            control.controller.applyComparisonPairFromEdge(Number(control.preferences.differenceEdge), 1);
                         }
                         control.returnViewerFocusAfterClose = true;
                     }
@@ -323,8 +318,7 @@ VcsMenuBar {
                     onTriggered: {
                         control.preferences.defaultPairPolicy = 2;
                         if (control.controller && control.controller.applyComparisonPairFromEdge) {
-                            control.controller.applyComparisonPairFromEdge(
-                                Number(control.preferences.differenceEdge), 2);
+                            control.controller.applyComparisonPairFromEdge(Number(control.preferences.differenceEdge), 2);
                         }
                         control.returnViewerFocusAfterClose = true;
                     }

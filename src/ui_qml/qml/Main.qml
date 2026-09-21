@@ -124,8 +124,7 @@ ApplicationWindow {
     readonly property int outFrame: shell ? Number(shell.outFrame) : -1
     readonly property real inMediaTime: shell ? Number(shell.inMediaTime) : -1
     readonly property real outMediaTime: shell ? Number(shell.outMediaTime) : -1
-    readonly property bool rangePlaybackActive: Boolean(controller && controller.playbackRangeLoopActive)
-        || Boolean(shell && shell.rangePlaybackActive && controller && controller.playbackRangeLoop)
+    readonly property bool rangePlaybackActive: Boolean(controller && controller.playbackRangeLoopActive) || Boolean(shell && shell.rangePlaybackActive && controller && controller.playbackRangeLoop)
     readonly property bool rangeStartPending: Boolean(shell && shell.rangeStartPending)
     property bool shortcutHelpVisible: false
     readonly property int shortcutPreset: preferences ? Number(preferences.shortcutPreset) : 0
@@ -373,10 +372,8 @@ ApplicationWindow {
 
     readonly property int droppedFrames: viewportFrame ? Number(viewportFrame.droppedFrames) : 0
     readonly property string droppedFramesText: droppedFrames > 0 ? qsTr("丢帧 %1").arg(droppedFrames) : ""
-    readonly property string playbackContinuityPolicyName: controller
-        ? String(controller.playbackContinuityPolicyName || "") : ""
-    readonly property int playbackSkippedFrameSets: controller
-        ? Number(controller.playbackSkippedFrameSets || 0) : 0
+    readonly property string playbackContinuityPolicyName: controller ? String(controller.playbackContinuityPolicyName || "") : ""
+    readonly property int playbackSkippedFrameSets: controller ? Number(controller.playbackSkippedFrameSets || 0) : 0
     readonly property real frameProgress: currentFrame >= 0 && totalFrames > 1 ? Math.max(0, Math.min(1, Number(currentFrame) / (Number(totalFrames) - 1))) : 0
     readonly property real timelineProgress: timelineDragging && timelinePreviewFrame >= 0 && totalFrames > 1 ? Number(timelinePreviewFrame) / (Number(totalFrames) - 1) : frameProgress
     readonly property bool timelineEnabled: graphicsReady && !busy && Boolean(controller && controller.canFirst) && totalFrames > 0
@@ -1826,8 +1823,7 @@ ApplicationWindow {
         playbackContinuityPolicy: {
             if (!controller)
                 return 2;
-            const fromPref = root.preferences
-                ? Number(root.preferences.playbackContinuityPolicy) : 2;
+            const fromPref = root.preferences ? Number(root.preferences.playbackContinuityPolicy) : 2;
             const fromSession = Number(controller.playbackContinuityPolicy);
             return Number.isFinite(fromSession) && controller.displayState === 2 ? fromSession : fromPref;
         }

@@ -6,6 +6,7 @@
 #include "dvs/ui/ReviewShellController.h"
 
 #include <QObject>
+
 #include <memory>
 
 namespace dvs::ui {

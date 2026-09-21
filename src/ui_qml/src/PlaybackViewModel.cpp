@@ -5,10 +5,8 @@ namespace dvs::ui {
 PlaybackViewModel::PlaybackViewModel(ReviewController* controller, QObject* parent)
     : QObject(parent), controller_(controller) {
     if (controller_ != nullptr) {
-        connect(controller_,
-                &ReviewController::stateChanged,
-                this,
-                &PlaybackViewModel::stateChanged);
+        connect(
+            controller_, &ReviewController::stateChanged, this, &PlaybackViewModel::stateChanged);
         connect(controller_,
                 &ReviewController::frameStateChanged,
                 this,

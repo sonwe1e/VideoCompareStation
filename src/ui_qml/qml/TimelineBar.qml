@@ -38,20 +38,19 @@ Rectangle {
 
     Text {
         objectName: "droppedFramesLabel"
-        visible: control.host.droppedFramesText.length > 0 ||
-                 (control.host.playbackContinuityPolicyName !== undefined &&
-                  control.host.playbackContinuityPolicyName.length > 0)
+        visible: control.host.droppedFramesText.length > 0 || (control.host.playbackContinuityPolicyName !== undefined && control.host.playbackContinuityPolicyName.length > 0)
         text: {
-            const policy = control.host.playbackContinuityPolicyName || ""
-            const drops = control.host.droppedFramesText || ""
-            const skipped = control.host.playbackSkippedFrameSets > 0
-                ? qsTr("跳过集 %1").arg(control.host.playbackSkippedFrameSets)
-                : ""
-            const parts = []
-            if (policy.length > 0) parts.push(policy)
-            if (drops.length > 0) parts.push(drops)
-            if (skipped.length > 0) parts.push(skipped)
-            return parts.join(" · ")
+            const policy = control.host.playbackContinuityPolicyName || "";
+            const drops = control.host.droppedFramesText || "";
+            const skipped = control.host.playbackSkippedFrameSets > 0 ? qsTr("跳过集 %1").arg(control.host.playbackSkippedFrameSets) : "";
+            const parts = [];
+            if (policy.length > 0)
+                parts.push(policy);
+            if (drops.length > 0)
+                parts.push(drops);
+            if (skipped.length > 0)
+                parts.push(skipped);
+            return parts.join(" · ");
         }
         color: "#f59e0b"
         font.pixelSize: 12
