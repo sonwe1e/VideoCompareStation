@@ -31,9 +31,9 @@ projection), never the reverse.
 
 | Policy | Behavior |
 |--------|----------|
-| ReviewEveryFrame | Never skip whole FrameSets; cadence slips |
-| RealTime | Skip complete FrameSets after the 2000 ms catch-up tolerance |
-| Contextual | Multi-source → ReviewEveryFrame; single-source → RealTime |
+| ReviewEveryFrame | Never skip whole FrameSets; cadence slips (explicit review) |
+| RealTime | Skip complete FrameSets after the 2000 ms catch-up tolerance (continuous default) |
+| Contextual | Smoothness-first → RealTime for every source count |
 
 The requested policy and the **effective** policy (after Contextual resolution) are published
 on `SessionSnapshot` together with `playbackSkippedFrameSets`. The timeline status rail shows

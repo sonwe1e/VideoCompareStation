@@ -159,6 +159,20 @@ The following work remains open or requires the intended Windows/D3D11VA runner:
   current shutdown-drained diagnostic was not designed to provide either property.
 - Measure tracing enabled versus disabled under contention. Loss is observable through overflow
   markers, but the tests do not establish an acceptable hardware-run loss rate or tracing cost.
+- Schema-v1 playback-trace kinds are `0`–`22`; `Test-PlaybackTraceFile` and the C++/PowerShell
+  round-trip tests keep that range aligned. Timing summaries separate prepare
+  (`FrameSetReady`→`RenderDrawStarted`), draw submit (`RenderDrawStarted`→`RenderAckPublished`),
+  and final present (`RenderAckPublished`→`PresentationAcknowledged`→`SnapshotCommitted`).
+  `RenderAckPublished` is CPU-side ack admission, not GPU completion or screen present. Software
+  observation of those hops is sufficient to attribute most late frames; only escalate to DXGI
+  Present / physical display-side sampling when the software stage split cannot explain the
+  stall.
+- Continuous playback defaults to smoothness-first RealTime (`Contextual` resolves to RealTime
+  for every source count). `ReviewEveryFrame` is the explicit retain-every-FrameSet review
+  option. Catch-up drops whole FrameSets on the comparison pair together, never per source.
+- Reverse-window fill budget covers the complete work including the seed `decodeExact`; a seed
+  that exceeds the budget skips the sequential walk. New exact seeks / playback preempts stale
+  reverse warmup.
 - On the interactive-desktop D3D11VA runner with a physical 120 Hz display, run the active
   `hardware-d3d11` and `performance-d3d11` presets described in
   [the runner guide](../self-hosted-runner.md). The matrix includes five-minute 1080p60 and
@@ -169,3 +183,7 @@ The following work remains open or requires the intended Windows/D3D11VA runner:
 - Confirm with target-hardware measurements that the cache index reduces lookup cost without
   regressing decode, memory, or frame-set behavior. Unit/component coverage alone is not that
   performance evidence.
+- Rebuild the Release baseline after the vcpkg VS-detection failure on this workstation
+  (`vcpkg visualstudio.cpp Value was null` during `cmake --preset release`); the 2026-09-21
+  `out/build/release/bin/VCStation.exe` remains the last known-good Release artifact until
+  reconfigure succeeds.

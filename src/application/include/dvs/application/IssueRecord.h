@@ -45,12 +45,24 @@ struct IssueSourceRef final {
     // Optional adapter fingerprint; empty means "not captured".
     std::string fingerprintSha256;
     // Video presentation payload. hasPresentation is false for image sides and for video
-    // sessions that never committed a frame.
+    // sessions that never committed a frame, and for a source that was Missing at capture.
     bool hasPresentation = false;
+    // The side's actual displayed frame on the canonical timeline, taken from the committed
+    // snapshot's PresentedSourceState::sourceFrameId. -1 when no frame was presented for this
+    // side (never the canonical frame written to every source).
     std::int64_t displayIndex = -1;
+    // Source presentation timestamp in microseconds, valid only when hasPresentation is true.
+    // PTS seconds = presentationTimestampTicks * timeBaseNumerator / timeBaseDenominator, with
+    // the stored convention timeBase 1/1'000'000 (i.e. ticks are microseconds).
     std::int64_t presentationTimestampTicks = -1;
     std::int32_t timeBaseNumerator = 1;
     std::int32_t timeBaseDenominator = 1;
+    // application::FrameMatchKind code for how this side mapped to the canonical position
+    // (0 ExactIndex, 1 GlobalOffset, 2 AutoAligned, 3 ManualAnchor, 4 Missing).
+    std::int32_t presentationMatchKind = 0;
+    // application::MissingReason code + 1 when the side was Missing at capture
+    // (1 AlignmentGap, 2 BeforeSourceStart, 3 AfterSourceEnd); 0 when not applicable.
+    std::int32_t presentationMissingReason = 0;
 };
 
 struct IssueViewContext final {

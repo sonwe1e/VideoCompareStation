@@ -45,11 +45,12 @@ Rectangle {
                 objectName: "referenceSourceCombo"
                 implicitWidth: 112
                 model: control.host.sourceCount >= 3 ? [qsTr("源 A"), qsTr("源 B"), qsTr("源 C")] : [qsTr("源 A"), qsTr("源 B")]
-                currentIndex: Math.max(0, control.host.canonicalSourceIndex)
+                // D08: follow the comparison reference, not the timeline master slot.
+                currentIndex: Math.max(0, control.host.referenceSourceIndex)
                 Accessible.name: qsTr("基准参考源")
                 onActivated: index => {
                     if (!control.host.changeReferenceAtIndex(index))
-                        currentIndex = Math.max(0, control.host.canonicalSourceIndex);
+                        currentIndex = Math.max(0, control.host.referenceSourceIndex);
                 }
             }
 
@@ -133,10 +134,9 @@ Rectangle {
                     if (index < 0 || index >= control.host.differenceEdges.length)
                         return;
                     const edge = Number(control.host.differenceEdges[index].preferenceValue);
+                    // D07: user selection always goes through the pair command path.
                     if (control.host.applyDifferenceEdge)
                         control.host.applyDifferenceEdge(edge);
-                    else if (control.host.preferences)
-                        control.host.preferences.differenceEdge = edge;
                 }
             }
 

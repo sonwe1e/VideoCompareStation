@@ -3,6 +3,10 @@ Set-StrictMode -Version Latest
 
 Import-Module (Join-Path $PSScriptRoot 'CommandLineArgument.psm1') -Force
 
+# Schema-v1 defined TraceEventKind values are 0..22 inclusive (PlaybackTrace.h /
+# docs/engineering/trace-schema.md). Unknown kinds stay fail-closed.
+$script:SchemaV1MaxKind = 22
+
 function Test-PlaybackTraceFile {
     [CmdletBinding()]
     param(
@@ -117,8 +121,22 @@ function Test-PlaybackTraceFile {
                 throw "$ResultPrefix`_TRACE_INVALID_EVENT: invalid $numericField at $TracePath."
             }
         }
-        # Optional additive incoming-identity fields (schema v1). Either all five are present or
-        # none are; partial sets are malformed.
+        # Optional additive fields (schema v1):
+        # - `run`: monotonic playback-run id (D06). Independent of the incoming-identity set.
+        # - incoming identity: either all five are present or none are; partial sets are malformed.
+        if ($null -ne $record.PSObject.Properties['run']) {
+            if (-not (& $isExactInteger $record.run)) {
+                throw "$ResultPrefix`_TRACE_INVALID_EVENT: run is not numeric at $TracePath."
+            }
+            try {
+                $runId = [uint64]$record.run
+            } catch {
+                throw "$ResultPrefix`_TRACE_INVALID_EVENT: invalid run at $TracePath."
+            }
+            if ([decimal]$record.run -ne [decimal]$runId) {
+                throw "$ResultPrefix`_TRACE_INVALID_EVENT: invalid run at $TracePath."
+            }
+        }
         $incomingFields = @('is', 'ie', 'igen', 'idev', 'ireq')
         $presentIncoming = @(
             $incomingFields | Where-Object {
@@ -160,7 +178,8 @@ function Test-PlaybackTraceFile {
             throw "$ResultPrefix`_TRACE_INVALID_EVENT: invalid kind at $TracePath."
         }
         if (-not (& $isExactInteger $record.kind) -or
-            [decimal]$record.kind -ne [decimal]$kind -or $kind -lt 0 -or $kind -gt 13) {
+            [decimal]$record.kind -ne [decimal]$kind -or $kind -lt 0 -or
+            $kind -gt $script:SchemaV1MaxKind) {
             throw "$ResultPrefix`_TRACE_INVALID_EVENT: kind is outside schema v1 at $TracePath."
         }
         if ($null -ne $record.cmd) {
@@ -275,6 +294,10 @@ function Test-PlaybackTraceInvariants {
         $device = [uint64]$record.dev
         $kind = [int]$record.kind
         $payload = [uint64]$record.p
+        $runId = 0
+        if ($null -ne $record.PSObject.Properties['run']) {
+            $runId = [uint64]$record.run
+        }
         $sessionKey = "$session|$epoch"
         $identityKey = "$session|$epoch|$topology|$timeline|$alignment|$generation|$device"
 
@@ -619,11 +642,16 @@ function Get-PlaybackTraceTimingSummary {
         [string]$TracePath
     )
 
-    # T0 evidence baseline: separates submission and presentation observation per canonical
-    # frame (FrameSetReady -> RenderPublished -> PresentationAcknowledged -> SnapshotCommitted)
-    # and reports the new-content display interval distribution (P50/P95/P99 + longest pause).
-    # Input must be a structurally valid schema-v1 file (call Test-PlaybackTraceFile first);
-    # overflow markers make the capture incomplete, so this analyzer fails closed.
+    # T0 evidence baseline: separates preparation, draw submission, and final presentation
+    # observation per canonical frame and reports the new-content display interval distribution
+    # (P50/P95/P99 + longest pause).
+    #   prepare      : FrameSetReady -> RenderPublished (and -> RenderDrawStarted when present)
+    #   draw submit  : RenderDrawStarted -> RenderAckPublished
+    #   final present: RenderAckPublished -> PresentationAcknowledged -> SnapshotCommitted
+    # Legacy hops (ReadyToPublish / PublishToAck / AckToCommit) remain for older captures that
+    # lack kinds 16/17. Input must be a structurally valid schema-v1 file (call
+    # Test-PlaybackTraceFile first); overflow markers make the capture incomplete, so this
+    # analyzer fails closed.
 
     if (-not (Test-Path -LiteralPath $TracePath -PathType Leaf)) {
         throw "PLAYBACK_TRACE_TIMING_MISSING: expected trace at $TracePath"
@@ -636,8 +664,12 @@ function Get-PlaybackTraceTimingSummary {
 
     # Per-frame event times keyed by identity-with-frame: "s|e|gen|dev|payload". Later events
     # for the same key win (a frame may be republished while a prior ack is still outstanding).
+    # Draw-stage events (kinds 16/17) carry empty identity and are keyed by frame payload only
+    # (trace-schema.md: correlate renderer-side observations by frame id within one run).
     $readyTimes = @{}
     $publishedTimes = @{}
+    $drawStartTimes = @{}
+    $drawAckTimes = @{}
     $ackTimes = @{}
     $commitTimes = @{}
     $commitOrder = [System.Collections.Generic.List[object]]::new()
@@ -662,10 +694,24 @@ function Get-PlaybackTraceTimingSummary {
         $payload = [uint64]$record.p
         $kind = [int]$record.kind
         $timestamp = [uint64]$record.t
+        $runId = 0
+        if ($null -ne $record.PSObject.Properties['run']) {
+            $runId = [uint64]$record.run
+        }
         $identityKey = "$session|$epoch|$generation|$device|$payload"
         switch ($kind) {
             4 { $readyTimes[$identityKey] = $timestamp }
             6 { $publishedTimes[$identityKey] = $timestamp }
+            # Draw-stage events (kinds 16/17) carry empty identity and are keyed by frame payload
+            # only (trace-schema.md). Also index run|frame when the producer stamped `run` (D06).
+            16 {
+                $drawStartTimes[$payload.ToString()] = $timestamp
+                if ($runId -ne 0) { $drawStartTimes["$runId|$payload"] = $timestamp }
+            }
+            17 {
+                $drawAckTimes[$payload.ToString()] = $timestamp
+                if ($runId -ne 0) { $drawAckTimes["$runId|$payload"] = $timestamp }
+            }
             7 { $ackTimes[$identityKey] = $timestamp }
             8 {
                 if ($payload -ne [decimal][uint64]::MaxValue) {
@@ -717,12 +763,21 @@ function Get-PlaybackTraceTimingSummary {
     $readyToPublish = [System.Collections.Generic.List[object]]::new()
     $publishToAck = [System.Collections.Generic.List[object]]::new()
     $ackToCommit = [System.Collections.Generic.List[object]]::new()
+    $prepareToDrawStart = [System.Collections.Generic.List[object]]::new()
+    $drawSubmit = [System.Collections.Generic.List[object]]::new()
+    $drawAckToPresent = [System.Collections.Generic.List[object]]::new()
     foreach ($key in $commitTimes.Keys) {
         $commitTime = [uint64]$commitTimes[$key]
+        $frameKey = $key.Split('|')[-1]
         if ($readyTimes.ContainsKey($key)) {
             $readyToCommit.Add([uint64]([decimal]$commitTime - [decimal]$readyTimes[$key]))
             if ($publishedTimes.ContainsKey($key)) {
                 $readyToPublish.Add([uint64]([decimal]$publishedTimes[$key] - [decimal]$readyTimes[$key]))
+            }
+            if ($drawStartTimes.ContainsKey($frameKey) -and
+                [decimal]$drawStartTimes[$frameKey] -ge [decimal]$readyTimes[$key]) {
+                $prepareToDrawStart.Add([uint64]([decimal]$drawStartTimes[$frameKey] -
+                                                  [decimal]$readyTimes[$key]))
             }
         }
         if ($publishedTimes.ContainsKey($key)) {
@@ -730,6 +785,14 @@ function Get-PlaybackTraceTimingSummary {
             if ($ackTimes.ContainsKey($key)) {
                 $publishToAck.Add([uint64]([decimal]$ackTimes[$key] - [decimal]$publishedTimes[$key]))
             }
+        }
+        if ($drawStartTimes.ContainsKey($frameKey) -and $drawAckTimes.ContainsKey($frameKey) -and
+            [decimal]$drawAckTimes[$frameKey] -ge [decimal]$drawStartTimes[$frameKey]) {
+            $drawSubmit.Add([uint64]([decimal]$drawAckTimes[$frameKey] - [decimal]$drawStartTimes[$frameKey]))
+        }
+        if ($drawAckTimes.ContainsKey($frameKey) -and $ackTimes.ContainsKey($key) -and
+            [decimal]$ackTimes[$key] -ge [decimal]$drawAckTimes[$frameKey]) {
+            $drawAckToPresent.Add([uint64]([decimal]$ackTimes[$key] - [decimal]$drawAckTimes[$frameKey]))
         }
         if ($ackTimes.ContainsKey($key)) {
             $ackToCommit.Add([uint64]([decimal]$commitTime - [decimal]$ackTimes[$key]))
@@ -759,6 +822,8 @@ function Get-PlaybackTraceTimingSummary {
         EventCount = $eventCount
         FrameSetReadyCount = $readyTimes.Count
         RenderPublishedCount = $publishedTimes.Count
+        RenderDrawStartedCount = $drawStartTimes.Count
+        RenderAckPublishedCount = $drawAckTimes.Count
         PresentationAcknowledgedCount = $ackTimes.Count
         SnapshotCommittedCount = $commitTimes.Count
         DisplayIntervalMicroseconds = & $percentileSummary $displayIntervals
@@ -767,6 +832,9 @@ function Get-PlaybackTraceTimingSummary {
         ReadyToPublishMicroseconds = & $percentileSummary $readyToPublish
         PublishToAckMicroseconds = & $percentileSummary $publishToAck
         AckToCommitMicroseconds = & $percentileSummary $ackToCommit
+        PrepareToDrawStartMicroseconds = & $percentileSummary $prepareToDrawStart
+        DrawSubmitMicroseconds = & $percentileSummary $drawSubmit
+        DrawAckToPresentMicroseconds = & $percentileSummary $drawAckToPresent
         CommitRatePerSecond = $commitRatePerSecond
     }
 }

@@ -26,6 +26,8 @@ struct TraceIdentity final {
     domain::DeviceGeneration device{0};
     domain::RequestId request{0};
     std::optional<domain::CommandId> command{};
+    // D06: monotonic playback-run id (1-based). 0 means "no active run" / not applicable.
+    std::uint64_t run{0};
 
     [[nodiscard]] bool operator==(const TraceIdentity&) const = default;
 };
@@ -82,6 +84,12 @@ enum class TraceEventKind : std::uint8_t {
     ReverseWindowHit = 21,
     ReverseExactFallback = 22,
 };
+
+// Schema-v1 defined kind range is 0..kSchemaV1MaxTraceEventKind inclusive. Keep
+// tools/testing/PlaybackTraceGate.psm1 (SchemaV1MaxKind) and docs/engineering/trace-schema.md
+// in sync; the gate rejects unknown kinds fail-closed.
+inline constexpr std::uint8_t kSchemaV1MaxTraceEventKind =
+    static_cast<std::uint8_t>(TraceEventKind::ReverseExactFallback);
 
 // A single fixed-size trace event. Kept small and trivially copyable so it can live in a bounded
 // ring buffer with no heap allocation and no variable-length payloads on the hot path.

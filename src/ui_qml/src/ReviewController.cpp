@@ -498,6 +498,11 @@ public:
         return lastSubmittedCommandId_;
     }
 
+    [[nodiscard]] std::shared_ptr<const application::SessionSnapshot>
+    currentSnapshot() const noexcept {
+        return snapshot_;
+    }
+
     [[nodiscard]] QString timecodeForFrame(const qint64 frame, const bool dropFrame) const {
         if (frame < 0 || !snapshot_ || !snapshot_->validatedComparison) {
             return QStringLiteral("00:00:00:00");
@@ -653,8 +658,9 @@ public:
 
     [[nodiscard]] bool changeReference(const int sourceIndex) {
         refresh();
+        // D08: Reference ≠ timeline master. Reject only re-selecting the current reference.
         if (sourceIndex < 0 || sourceIndex >= view_.sourceCount ||
-            sourceIndex == view_.canonicalSourceIndex || view_.sourceUrls.isEmpty()) {
+            sourceIndex == view_.referenceSourceIndex || view_.sourceUrls.isEmpty()) {
             return false;
         }
         return openSources(
@@ -1025,6 +1031,32 @@ public:
                            .context = *context,
                            .pair = pair,
                            .policy = static_cast<domain::DefaultPairPolicy>(pairPolicyCode),
+                       }}) == application::PortSubmitResult::Accepted;
+        } catch (...) {
+            return false;
+        }
+    }
+
+    // D07: preferences store only DefaultPairPolicy. Applying a policy re-resolves the pair
+    // without replaying a legacy A/B/C edge ordinal.
+    [[nodiscard]] bool applyDefaultPairPolicy(const int policyCode) {
+        if (!onOwnerThread() || stopped_) {
+            return false;
+        }
+        refresh();
+        if (!snapshot_ || !snapshot_->validatedComparison) {
+            return false;
+        }
+        const std::optional<application::CommandContext> context = allocateCommandContext();
+        if (!context.has_value()) {
+            return false;
+        }
+        try {
+            return dependencies_.submit(
+                       application::PlaybackCommand{application::SetActiveComparisonPairCommand{
+                           .context = *context,
+                           .pair = std::nullopt,
+                           .policy = static_cast<domain::DefaultPairPolicy>(policyCode),
                        }}) == application::PortSubmitResult::Accepted;
         } catch (...) {
             return false;
@@ -1445,12 +1477,20 @@ private:
                          colorRangeName(descriptor.colorMetadata.range)},
                         {QStringLiteral("decodeBackend"), decodeBackend},
                         {QStringLiteral("decodeFallbackReason"), decodeFallbackReason},
+                        // D08: project timeline master and reference independently.
+                        {QStringLiteral("isTimelineMaster"),
+                         source.id == snapshot_->validatedComparison->canonicalSourceId()},
+                        {QStringLiteral("isReference"),
+                         source.role == domain::ComparisonRole::kReference},
                         {QStringLiteral("role"),
-                         source.id == snapshot_->validatedComparison->canonicalSourceId()
-                             ? QStringLiteral("Canonical")
-                             : (source.role == domain::ComparisonRole::kReference
-                                    ? QStringLiteral("Reference")
-                                    : QStringLiteral("Prediction"))},
+                         source.id == snapshot_->validatedComparison->canonicalSourceId() &&
+                                 source.role == domain::ComparisonRole::kReference
+                             ? QStringLiteral("TimelineMaster+Reference")
+                             : (source.id == snapshot_->validatedComparison->canonicalSourceId()
+                                    ? QStringLiteral("TimelineMaster")
+                                    : (source.role == domain::ComparisonRole::kReference
+                                           ? QStringLiteral("Reference")
+                                           : QStringLiteral("Prediction")))},
                     });
                 }
             }
@@ -2229,6 +2269,11 @@ qint64 ReviewController::currentFrame() const noexcept {
     return impl_->view().currentFrame;
 }
 
+std::shared_ptr<const application::SessionSnapshot>
+ReviewController::currentSnapshot() const noexcept {
+    return impl_->currentSnapshot();
+}
+
 qulonglong ReviewController::totalFrames() const noexcept {
     return impl_->view().totalFrames;
 }
@@ -2589,6 +2634,10 @@ bool ReviewController::setPlaybackContinuityPolicy(const int policyCode) {
 bool ReviewController::applyComparisonPairFromEdge(const int preferenceValue,
                                                    const int pairPolicyCode) {
     return impl_->applyComparisonPairFromEdge(preferenceValue, pairPolicyCode);
+}
+
+bool ReviewController::applyDefaultPairPolicy(const int policyCode) {
+    return impl_->applyDefaultPairPolicy(policyCode);
 }
 
 bool ReviewController::togglePlayback() {

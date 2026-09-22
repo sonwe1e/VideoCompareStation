@@ -41,6 +41,9 @@ struct PresentedSourceState final {
     FrameMatchKind matchKind = FrameMatchKind::ExactIndex;
     float alignmentConfidence = 1.0F;
     std::optional<MissingReason> missingReason;
+    // Source-side presentation timestamp in microseconds, valid when sourceFrameId is set.
+    // Mirror of MappedSourceFrame::presentationTime on the committed frame set.
+    domain::MediaTime presentationTime{0};
 
     [[nodiscard]] bool operator==(const PresentedSourceState&) const = default;
 };
@@ -58,12 +61,12 @@ struct SessionSnapshot final {
     // Visual playback rate: 1.0 real time. Published so the view layer can show and restore
     // the selected speed across pause/play cycles.
     double playbackSpeed = 1.0;
-    // C-07: active continuity mode (Contextual is resolved before publishing the effective
-    // policy). Status rail shows this plus skipped FrameSet count.
+    // C-07/D03: active continuity mode (Contextual resolves to smoothness-first RealTime).
+    // ReviewEveryFrame is the explicit retain-every-FrameSet review option.
     domain::PlaybackContinuityPolicy playbackContinuityPolicy =
         domain::PlaybackContinuityPolicy::Contextual;
     domain::PlaybackContinuityPolicy playbackContinuityPolicyEffective =
-        domain::PlaybackContinuityPolicy::ReviewEveryFrame;
+        domain::PlaybackContinuityPolicy::RealTime;
     std::uint64_t playbackSkippedFrameSets = 0U;
     // C-02: session comparison pair as stable source identities; projected to DifferenceEdge
     // only at the renderer boundary.

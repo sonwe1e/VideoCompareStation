@@ -289,6 +289,16 @@ function Invoke-PerformanceRun {
             if ($null -ne $timing) { $timing.PublishToAckMicroseconds.P50 } else { $null }
         trace_ack_to_commit_p50_us =
             if ($null -ne $timing) { $timing.AckToCommitMicroseconds.P50 } else { $null }
+        trace_prepare_to_draw_start_p50_us =
+            if ($null -ne $timing) { $timing.PrepareToDrawStartMicroseconds.P50 } else { $null }
+        trace_draw_submit_p50_us =
+            if ($null -ne $timing) { $timing.DrawSubmitMicroseconds.P50 } else { $null }
+        trace_draw_ack_to_present_p50_us =
+            if ($null -ne $timing) { $timing.DrawAckToPresentMicroseconds.P50 } else { $null }
+        trace_render_draw_started_count =
+            if ($null -ne $timing) { $timing.RenderDrawStartedCount } else { $null }
+        trace_render_ack_published_count =
+            if ($null -ne $timing) { $timing.RenderAckPublishedCount } else { $null }
         trace_event_count = if ($null -ne $timing) { $timing.EventCount } else { $null }
         valid_cadence_evidence =
             $null -ne $metrics -and (Get-MetricField $metrics 'screen_refresh_hz') -ge 120
@@ -404,6 +414,11 @@ if (-not $SkipImages) {
             trace_ready_to_commit_p50_us = $null
             trace_publish_to_ack_p50_us = $null
             trace_ack_to_commit_p50_us = $null
+            trace_prepare_to_draw_start_p50_us = $null
+            trace_draw_submit_p50_us = $null
+            trace_draw_ack_to_present_p50_us = $null
+            trace_render_draw_started_count = $null
+            trace_render_ack_published_count = $null
             trace_event_count = $null
             pair_count = Get-MetricField $imageResult 'pair_count'
             load_folders_ms = Get-MetricField $imageResult 'load_folders_ms'
@@ -469,10 +484,13 @@ foreach ($entry in $runLog) {
     )
 }
 [void]$summaryLines.Add('')
-[void]$summaryLines.Add('## Trace pipeline timing (submit vs present, microseconds)')
+[void]$summaryLines.Add('## Trace pipeline timing (prepare / draw submit / final present, microseconds)')
 [void]$summaryLines.Add('')
-[void]$summaryLines.Add('| run | commits | commit_rate | disp_p50 | disp_p99 | ready->commit_p50 | publish->ack_p50 | ack->commit_p50 |')
-[void]$summaryLines.Add('|---|---|---|---|---|---|---|---|')
+[void]$summaryLines.Add(
+    '| run | commits | commit_rate | disp_p50 | disp_p99 | ready->commit_p50 | ' +
+    'prepare->draw_p50 | draw_submit_p50 | draw_ack->present_p50 | ack->commit_p50 |'
+)
+[void]$summaryLines.Add('|---|---|---|---|---|---|---|---|---|---|')
 foreach ($entry in $runLog) {
     if ($null -eq $entry.trace_event_count) {
         continue
@@ -480,7 +498,8 @@ foreach ($entry in $runLog) {
     [void]$summaryLines.Add(
         "| $($entry.run) | $($entry.trace_event_count) | $($entry.commit_rate_per_second) | " +
         "$($entry.trace_display_interval_p50_us) | $($entry.trace_display_interval_p99_us) | " +
-        "$($entry.trace_ready_to_commit_p50_us) | $($entry.trace_publish_to_ack_p50_us) | " +
+        "$($entry.trace_ready_to_commit_p50_us) | $($entry.trace_prepare_to_draw_start_p50_us) | " +
+        "$($entry.trace_draw_submit_p50_us) | $($entry.trace_draw_ack_to_present_p50_us) | " +
         "$($entry.trace_ack_to_commit_p50_us) |"
     )
 }

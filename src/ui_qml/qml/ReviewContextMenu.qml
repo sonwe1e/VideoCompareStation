@@ -7,6 +7,7 @@ VcsMenu {
 
     required property int sourceCount
     required property int canonicalSourceIndex
+    property int referenceSourceIndex: 0
     required property int currentViewMode
     required property bool fullScreen
     required property var differenceEdges
@@ -119,7 +120,7 @@ VcsMenu {
 
         VcsRadioMenuItem {
             text: qsTr("源 A")
-            checked: control.canonicalSourceIndex === 0
+            checked: control.referenceSourceIndex === 0
             onTriggered: {
                 control.changeReferenceByIndex(0);
                 control.returnViewerFocusAfterClose = true;
@@ -128,7 +129,7 @@ VcsMenu {
         VcsRadioMenuItem {
             text: qsTr("源 B")
             visible: control.sourceCount > 1
-            checked: control.canonicalSourceIndex === 1
+            checked: control.referenceSourceIndex === 1
             onTriggered: {
                 control.changeReferenceByIndex(1);
                 control.returnViewerFocusAfterClose = true;
@@ -137,7 +138,7 @@ VcsMenu {
         VcsRadioMenuItem {
             text: qsTr("源 C")
             visible: control.sourceCount > 2
-            checked: control.canonicalSourceIndex === 2
+            checked: control.referenceSourceIndex === 2
             onTriggered: {
                 control.changeReferenceByIndex(2);
                 control.returnViewerFocusAfterClose = true;

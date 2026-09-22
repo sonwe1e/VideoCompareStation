@@ -557,6 +557,64 @@ TEST(SourceDecodeActorTests, ReverseGopWindowBuildsCacheWithOneSeedSeek) {
     EXPECT_EQ(afterWalk.reverseExactFallbackCount, 0U);
 }
 
+// D04: window exhaustion past the built window falls through to a new seed (Exact fallback path
+// is only for hard failures; exhaustion rebuilds). Direction switch must not require a reopen.
+TEST(SourceDecodeActorTests, ReverseGopWindowExhaustionRebuildsAndDirectionSwitchStaysWarm) {
+    platform::FrameBudget budget{16U * 1024U * 1024U};
+    std::atomic<bool> interrupted = false;
+    auto canceled = std::make_shared<std::atomic<bool>>(false);
+    SourceDecodeActor actor{
+        0U,
+        descriptor("h264_a_320x180_30fps_12.mp4"),
+        budget,
+        &interrupted,
+        false,
+        4U * 1024U * 1024U,
+    };
+    ASSERT_TRUE(actor.open(*canceled));
+
+    SourceDecodeSubmission first = actor.submit(SourceDecodeRequest{
+        .frameId = domain::FrameId{10},
+        .priority = SourceDecodePriority::Reverse,
+        .reverseWindowFrames = 4U,
+        .cancellationRequested = canceled,
+    });
+    ASSERT_EQ(first.status, application::PortSubmitResult::Accepted);
+    ASSERT_TRUE(first.completion.get());
+    ASSERT_TRUE(
+        waitUntil([&actor] { return actor.backendStatus().reverseWindowBuildCount >= 1U; }));
+    const auto afterFirst = actor.backendStatus();
+    EXPECT_GE(afterFirst.reverseWindowBuiltFrameCount, 1U);
+
+    // Exhaustion: reverse target below the window start must rebuild rather than hard-fail.
+    SourceDecodeSubmission exhausted = actor.submit(SourceDecodeRequest{
+        .frameId = domain::FrameId{1},
+        .priority = SourceDecodePriority::Reverse,
+        .reverseWindowFrames = 4U,
+        .cancellationRequested = canceled,
+    });
+    ASSERT_EQ(exhausted.status, application::PortSubmitResult::Accepted);
+    ASSERT_TRUE(exhausted.completion.get());
+    ASSERT_TRUE(waitUntil([&actor, &afterFirst] {
+        return actor.backendStatus().reverseWindowBuildCount > afterFirst.reverseWindowBuildCount ||
+               actor.backendStatus().reverseExactFallbackCount >
+                   afterFirst.reverseExactFallbackCount ||
+               actor.backendStatus().reverseWindowHitCount > afterFirst.reverseWindowHitCount;
+    }));
+    EXPECT_EQ(actor.backendStatus().reverseExactFallbackCount,
+              afterFirst.reverseExactFallbackCount);
+
+    // Direction switch to forward sequential must succeed without forcing a decoder reopen storm.
+    SourceDecodeSubmission forward = actor.submit(SourceDecodeRequest{
+        .frameId = domain::FrameId{2},
+        .priority = SourceDecodePriority::Sequential,
+        .continueSequentially = true,
+        .cancellationRequested = canceled,
+    });
+    ASSERT_EQ(forward.status, application::PortSubmitResult::Accepted);
+    ASSERT_TRUE(forward.completion.get());
+}
+
 // Held-backward hardware/size gate: when the source cache cannot retain a multi-frame window,
 // the actor falls back to per-step Exact instead of blocking on a speculative build.
 TEST(SourceDecodeActorTests, ReverseGopWindowFallsBackWhenCacheCannotHoldAWindow) {

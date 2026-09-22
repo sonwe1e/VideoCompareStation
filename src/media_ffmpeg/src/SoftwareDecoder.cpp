@@ -247,6 +247,7 @@ domain::Status SoftwareDecoder::open(const std::atomic<bool>& cancellationReques
     impl_->interrupted.store(cancellationRequested.load(std::memory_order_acquire),
                              std::memory_order_release);
     if (cancellationRequested.load(std::memory_order_acquire)) {
+        impl_->lastDecodeInterrupted = true;
         return domain::Status::failure(decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
                                                    impl_->sourceId,
                                                    "Source decoder open was canceled.",
@@ -568,6 +569,16 @@ SoftwareDecoder::decodeInternal(const domain::FrameId frameId,
         const int seekResult = av_seek_frame(
             impl_->format.get(), impl_->streamIndex, seekTimestamp, AVSEEK_FLAG_BACKWARD);
         if (seekResult < 0) {
+            if (cancellationRequested.load(std::memory_order_acquire) ||
+                impl_->interrupted.load(std::memory_order_acquire)) {
+                impl_->lastDecodeInterrupted = true;
+                impl_->resetForReuse();
+                return domain::Result<DecodedFrame>::failure(
+                    decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
+                                sourceId,
+                                "Frame decoding was interrupted while seeking.",
+                                true));
+            }
             return domain::Result<DecodedFrame>::failure(decodeError(
                 domain::MediaErrorCode::kMediaDecodeFailed,
                 sourceId,
@@ -928,6 +939,15 @@ SoftwareDecoder::decodeInternal(const domain::FrameId frameId,
         }
 
         if (receiveResult != AVERROR(EAGAIN) && receiveResult != AVERROR_EOF) {
+            if (interruptionRequested()) {
+                impl_->lastDecodeInterrupted = true;
+                impl_->resetForReuse();
+                return domain::Result<DecodedFrame>::failure(
+                    decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
+                                sourceId,
+                                "Frame decoding was interrupted while receiving a frame.",
+                                true));
+            }
             return domain::Result<DecodedFrame>::failure(decodeError(
                 domain::MediaErrorCode::kMediaDecodeFailed,
                 sourceId,
@@ -946,6 +966,18 @@ SoftwareDecoder::decodeInternal(const domain::FrameId frameId,
                     break;
                 }
                 if (readResult < 0) {
+                    // D05: demux interrupt during av_read_frame surfaces as a negative code
+                    // that is not EOF. Classify an active cancellation as interruption rather
+                    // than media corruption so the provider does not reopen.
+                    if (interruptionRequested()) {
+                        impl_->lastDecodeInterrupted = true;
+                        impl_->resetForReuse();
+                        return domain::Result<DecodedFrame>::failure(
+                            decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
+                                        sourceId,
+                                        "Frame decoding was interrupted while reading a packet.",
+                                        true));
+                    }
                     return domain::Result<DecodedFrame>::failure(decodeError(
                         domain::MediaErrorCode::kMediaDecodeFailed,
                         sourceId,

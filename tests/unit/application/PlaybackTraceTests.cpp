@@ -126,6 +126,53 @@ protected:
 
 } // namespace
 
+TEST(PlaybackTraceTests, SchemaV1KindsAreAppendOnlyAndRoundTripThroughTheBuffer) {
+    static_assert(kSchemaV1MaxTraceEventKind == 22U);
+    EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::CommandAccepted), 0U);
+    EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::CommandRejected), 1U);
+    EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::ProviderSubmitted), 2U);
+    EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::ProviderCanceled), 3U);
+    EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::FrameSetReady), 4U);
+    EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::ProviderTerminal), 5U);
+    EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::RenderPublished), 6U);
+    EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::PresentationAcknowledged), 7U);
+    EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::SnapshotCommitted), 8U);
+    EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::CommandTerminal), 9U);
+    EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::DecoderSeek), 10U);
+    EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::DecoderReopen), 11U);
+    EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::CacheHit), 12U);
+    EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::DeviceGenerationChanged), 13U);
+    EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::QmlGrabRequested), 14U);
+    EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::QmlGrabCompleted), 15U);
+    EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::RenderDrawStarted), 16U);
+    EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::RenderAckPublished), 17U);
+    EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::PlaybackRunStarted), 18U);
+    EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::PlaybackRunStopped), 19U);
+    EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::ReverseWindowBuilt), 20U);
+    EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::ReverseWindowHit), 21U);
+    EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::ReverseExactFallback), 22U);
+
+    auto buffer = std::make_unique<PlaybackTraceBuffer>();
+    RecordingTraceSink sink;
+    buffer->setSink(&sink);
+
+    for (std::uint8_t kind = 0U; kind <= kSchemaV1MaxTraceEventKind; ++kind) {
+        const auto typed = static_cast<TraceEventKind>(kind);
+        ASSERT_TRUE(buffer->record(TraceEvent{
+            .identity = TraceIdentity{.request = domain::RequestId{kind}},
+            .kind = typed,
+            .timestampMicroseconds = kind,
+            .payload = kind,
+        }));
+    }
+    EXPECT_EQ(buffer->drainToSink(), static_cast<std::size_t>(kSchemaV1MaxTraceEventKind) + 1U);
+    ASSERT_EQ(sink.events.size(), static_cast<std::size_t>(kSchemaV1MaxTraceEventKind) + 1U);
+    for (std::uint8_t kind = 0U; kind <= kSchemaV1MaxTraceEventKind; ++kind) {
+        EXPECT_EQ(sink.events[kind].kind, static_cast<TraceEventKind>(kind));
+        EXPECT_EQ(sink.events[kind].payload, kind);
+    }
+}
+
 TEST(PlaybackTraceTests, BoundsTheQueueAndReportsEachOverflowOnlyOnce) {
     auto buffer = std::make_unique<PlaybackTraceBuffer>();
     RecordingTraceSink sink;

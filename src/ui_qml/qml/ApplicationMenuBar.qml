@@ -11,6 +11,8 @@ VcsMenuBar {
     required property int sourceCount
     required property bool busy
     required property int canonicalSourceIndex
+    property int referenceSourceIndex: 0
+    property int effectiveDifferenceEdge: 0
     required property int currentViewMode
     required property bool inspectorOpen
     required property bool graphicsReady
@@ -248,9 +250,9 @@ VcsMenuBar {
 
             VcsRadioMenuItem {
                 text: qsTr("A / B")
-                checked: Number(control.preferences.differenceEdge) === 0
+                // D07: checked state is the committed effective pair, not the preference slot.
+                checked: Number(control.effectiveDifferenceEdge) === 0
                 onTriggered: {
-                    control.preferences.differenceEdge = 0;
                     if (control.controller && control.controller.applyComparisonPairFromEdge) {
                         control.controller.applyComparisonPairFromEdge(0, Number(control.preferences.defaultPairPolicy));
                     }
@@ -259,9 +261,8 @@ VcsMenuBar {
             }
             VcsRadioMenuItem {
                 text: qsTr("A / C")
-                checked: Number(control.preferences.differenceEdge) === 1
+                checked: Number(control.effectiveDifferenceEdge) === 1
                 onTriggered: {
-                    control.preferences.differenceEdge = 1;
                     if (control.controller && control.controller.applyComparisonPairFromEdge) {
                         control.controller.applyComparisonPairFromEdge(1, Number(control.preferences.defaultPairPolicy));
                     }
@@ -270,9 +271,8 @@ VcsMenuBar {
             }
             VcsRadioMenuItem {
                 text: qsTr("B / C")
-                checked: Number(control.preferences.differenceEdge) === 2
+                checked: Number(control.effectiveDifferenceEdge) === 2
                 onTriggered: {
-                    control.preferences.differenceEdge = 2;
                     if (control.controller && control.controller.applyComparisonPairFromEdge) {
                         control.controller.applyComparisonPairFromEdge(2, Number(control.preferences.defaultPairPolicy));
                     }
@@ -293,8 +293,9 @@ VcsMenuBar {
                     checked: Number(control.preferences.defaultPairPolicy) === 0
                     onTriggered: {
                         control.preferences.defaultPairPolicy = 0;
-                        if (control.controller && control.controller.applyComparisonPairFromEdge) {
-                            control.controller.applyComparisonPairFromEdge(Number(control.preferences.differenceEdge), 0);
+                        // D07: apply policy only; never replay a stored A/B/C edge ordinal.
+                        if (control.controller && control.controller.applyDefaultPairPolicy) {
+                            control.controller.applyDefaultPairPolicy(0);
                         }
                         control.returnViewerFocusAfterClose = true;
                     }
@@ -305,8 +306,8 @@ VcsMenuBar {
                     checked: Number(control.preferences.defaultPairPolicy) === 1
                     onTriggered: {
                         control.preferences.defaultPairPolicy = 1;
-                        if (control.controller && control.controller.applyComparisonPairFromEdge) {
-                            control.controller.applyComparisonPairFromEdge(Number(control.preferences.differenceEdge), 1);
+                        if (control.controller && control.controller.applyDefaultPairPolicy) {
+                            control.controller.applyDefaultPairPolicy(1);
                         }
                         control.returnViewerFocusAfterClose = true;
                     }
@@ -317,8 +318,8 @@ VcsMenuBar {
                     checked: Number(control.preferences.defaultPairPolicy) === 2
                     onTriggered: {
                         control.preferences.defaultPairPolicy = 2;
-                        if (control.controller && control.controller.applyComparisonPairFromEdge) {
-                            control.controller.applyComparisonPairFromEdge(Number(control.preferences.differenceEdge), 2);
+                        if (control.controller && control.controller.applyDefaultPairPolicy) {
+                            control.controller.applyDefaultPairPolicy(2);
                         }
                         control.returnViewerFocusAfterClose = true;
                     }
@@ -378,7 +379,8 @@ VcsMenuBar {
 
             VcsRadioMenuItem {
                 text: qsTr("视频 A")
-                checked: control.canonicalSourceIndex === 0
+                // D08: checked by comparison reference, not timeline master.
+                checked: control.referenceSourceIndex === 0
                 onTriggered: {
                     control.changeReferenceByIndex(0);
                     control.returnViewerFocusAfterClose = true;
@@ -386,7 +388,7 @@ VcsMenuBar {
             }
             VcsRadioMenuItem {
                 text: qsTr("视频 B")
-                checked: control.canonicalSourceIndex === 1
+                checked: control.referenceSourceIndex === 1
                 onTriggered: {
                     control.changeReferenceByIndex(1);
                     control.returnViewerFocusAfterClose = true;
@@ -395,7 +397,7 @@ VcsMenuBar {
             VcsRadioMenuItem {
                 text: qsTr("视频 C")
                 visible: control.sourceCount > 2
-                checked: control.canonicalSourceIndex === 2
+                checked: control.referenceSourceIndex === 2
                 onTriggered: {
                     control.changeReferenceByIndex(2);
                     control.returnViewerFocusAfterClose = true;

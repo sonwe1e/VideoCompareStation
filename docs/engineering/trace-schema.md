@@ -75,6 +75,7 @@ coordinator-owned and therefore are not repeated here.
 
 | Field | Meaning |
 | --- | --- |
+| `run` | Optional monotonic playback-run id (D06). Present on coordinator playback events when a run is active. |
 | `is` | Incoming session identifier. |
 | `ie` | Incoming session epoch. |
 | `igen` | Incoming playback generation. |
@@ -129,12 +130,19 @@ must not be treated as complete.
 | `17` | `RenderAckPublished` | Canonical frame whose presentation acknowledgement was admitted to the ack mailbox. |
 | `18` | `PlaybackRunStarted` | First target frame of a continuous playback run. |
 | `19` | `PlaybackRunStopped` | Last committed frame when the run ended, or `UINT64_MAX` when none committed. |
+| `20` | `ReverseWindowBuilt` | Frames retained in the built reverse GOP window (ADR-003). |
+| `21` | `ReverseWindowHit` | Reverse target frame id served from the built window. |
+| `22` | `ReverseExactFallback` | Reverse target frame id that fell back to exact decode. |
 
 `PlaybackRunStarted`/`PlaybackRunStopped` bound exactly one continuous playback run (`play` to
 pause/end/stop). One trace also contains the open, seek and step phases, and those phases commit
 frames too, so an analyzer that compares display intervals must isolate the bounded running window
 before attributing a stall to continuous playback. A run that is stopped by an error path still
 emits `PlaybackRunStopped`, so an unmatched start means the capture was truncated.
+
+`ReverseWindowBuilt`/`ReverseWindowHit`/`ReverseExactFallback` (ADR-003) observe reverse GOP
+window construction and reuse. `Built` payload is the retained frame count; `Hit`/`Fallback`
+payload is the reverse target frame id so gates can correlate seeks with window state.
 
 `QmlGrabRequested`/`QmlGrabCompleted` are UI-originated observation events emitted through the QML
 `dvsDiagnostics` bridge (currently the timeline thumbnail cache's `grabToImage`). They carry no
@@ -160,11 +168,38 @@ also carry no playback identity. Joined with `RenderPublished` (kind 6) and
 Because these events come from different identity scopes, an analyzer must key them by frame id
 within a single playback run rather than by the identity tuple.
 
+### Metric naming (D06)
+
+Do not label these hops as "GPU time" without qualification:
+
+| hop | meaning |
+| --- | --- |
+| `FrameSetReady` → `RenderPublished` | producer/coordinator prepare (CPU) |
+| `RenderPublished` → `RenderDrawStarted` | scene-graph schedule latency (not GPU work) |
+| `RenderDrawStarted` → `RenderAckPublished` | CPU draw submit + command recording; `RenderAckPublished` is the CPU-side admission of the presentation acknowledgement, **not** a GPU completion fence and **not** a physical screen present |
+| `RenderAckPublished` → `PresentationAcknowledged` | ack relay to the coordinator |
+| `PresentationAcknowledged` → `SnapshotCommitted` | coordinator commit of the displayed frame |
+
+GPU completion and physical screen present are **not** in this schema. Only escalate to DXGI
+Present / display-side sampling when the software stage split cannot explain a stall.
+
+### Long runs and identity (D06)
+
+- The in-process buffer is 65,536 events. Long-running captures must use segmented
+  `DVS_PLAYBACK_TRACE` paths (restart the process or rotate the env path per segment) or accept
+  overflow markers as an explicit incomplete capture. There is no unbounded export.
+- `PlaybackRunStarted`/`PlaybackRunStopped` bound one continuous run. When `run` is present on
+  an event it is the monotonic playback-run id from the coordinator; correlate draw-stage events
+  (kinds 16/17) by frame payload **and** `run` so recycled frame numbers across runs stay distinct.
+- Live `req` remains coordinator-owned `0` on many events; `ireq` is the incoming request id.
+
 `CommandAccepted` currently means that a command was nonduplicate and claimed by the coordinator;
 it is emitted before the remaining admission checks. A rejected claimed command may therefore
 produce `CommandAccepted`, `CommandRejected`, and exactly one `CommandTerminal` record.
 
-Numeric values are append-only. Do not reorder or reuse them within schema version 1. Additive
+Numeric values are append-only. Do not reorder or reuse them within schema version 1. The
+defined schema-v1 range is `0`–`22` (`kSchemaV1MaxTraceEventKind` in `PlaybackTrace.h` and
+`SchemaV1MaxKind` in `PlaybackTraceGate.psm1`); unknown kinds remain fail-closed. Additive
 event fields may be introduced without changing the version; a semantic change to an existing
 field or event requires a new trace version and analyzer support for both versions. The version
 header remains exactly the one-field object shown above.

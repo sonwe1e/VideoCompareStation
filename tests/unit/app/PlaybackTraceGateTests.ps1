@@ -96,6 +96,31 @@ try {
         $validEvent.Replace('"cmd":null', '"cmd":18446744073709551615')
     )
 
+    # Schema-v1 defined kinds 0..22 must all round-trip structural validation.
+    # SchemaV1MaxKind in PlaybackTraceGate.psm1 is the single gate-side bound.
+    $schemaV1MaxKind = 22
+    for ($kind = 0; $kind -le $schemaV1MaxKind; ++$kind) {
+        Assert-TracePasses -Name ("defined-kind-$kind") -Lines @(
+            $validHeader,
+            ('{"t":1,"kind":' + $kind + ',"s":1,"e":1,"topo":1,"tl":1,"al":1,' +
+                '"gen":1,"dev":1,"req":1,"cmd":null,"p":0}')
+        )
+    }
+    $allDefinedKindLines = [System.Collections.Generic.List[string]]::new()
+    $allDefinedKindLines.Add($validHeader)
+    for ($kind = 0; $kind -le $schemaV1MaxKind; ++$kind) {
+        $allDefinedKindLines.Add(
+            ('{"t":' + ($kind + 1) + ',"kind":' + $kind + ',"s":1,"e":1,"topo":1,"tl":1,"al":1,' +
+                '"gen":1,"dev":1,"req":1,"cmd":null,"p":0}')
+        )
+    }
+    $allDefinedPath = Write-TraceCase -Name 'all-defined-kinds' -Lines $allDefinedKindLines.ToArray()
+    $allDefinedResult = Test-PlaybackTraceFile -TracePath $allDefinedPath -ResultPrefix 'TEST_GATE'
+    if ($allDefinedResult.EventCount -ne ($schemaV1MaxKind + 1)) {
+        throw "all-defined-kinds returned unexpected event count $($allDefinedResult.EventCount)."
+    }
+    ++$script:assertionCount
+
     Assert-TraceFails -Name 'header-bool' -Lines @('{"traceVersion":true}', $validEvent) `
         -ExpectedMessage 'TRACE_INVALID_HEADER'
     Assert-TraceFails -Name 'header-string' -Lines @('{"traceVersion":"1"}', $validEvent) `
@@ -122,7 +147,13 @@ try {
         -Lines @($validHeader, $validEvent.Replace('"req":8', '"req":1e-1000')) `
         -ExpectedMessage 'TRACE_INVALID_EVENT'
     Assert-TraceFails -Name 'kind-out-of-range' `
-        -Lines @($validHeader, $validEvent.Replace('"kind":13', '"kind":14')) `
+        -Lines @($validHeader, $validEvent.Replace('"kind":13', '"kind":23')) `
+        -ExpectedMessage 'TRACE_INVALID_EVENT'
+    Assert-TraceFails -Name 'kind-negative-out-of-range' `
+        -Lines @($validHeader, $validEvent.Replace('"kind":13', '"kind":-1')) `
+        -ExpectedMessage 'TRACE_INVALID_EVENT'
+    Assert-TraceFails -Name 'kind-overflow-out-of-range' `
+        -Lines @($validHeader, $validEvent.Replace('"kind":13', '"kind":256')) `
         -ExpectedMessage 'TRACE_INVALID_EVENT'
     Assert-TraceFails -Name 'command-string' `
         -Lines @($validHeader, $validEvent.Replace('"cmd":null', '"cmd":"1"')) `
@@ -150,6 +181,15 @@ try {
     Assert-TraceFails -Name 'partial-incoming-identity' -Lines @(
         $validHeader,
         ($validEvent.Substring(0, $validEvent.Length - 1) + ',"is":1}')
+    ) -ExpectedMessage 'TRACE_INVALID_EVENT'
+
+    Assert-TracePasses -Name 'valid-optional-run' -Lines @(
+        $validHeader,
+        ($validEvent.Substring(0, $validEvent.Length - 1) + ',"run":7}')
+    )
+    Assert-TraceFails -Name 'invalid-run' -Lines @(
+        $validHeader,
+        ($validEvent.Substring(0, $validEvent.Length - 1) + ',"run":-1}')
     ) -ExpectedMessage 'TRACE_INVALID_EVENT'
 
     function New-TraceEventJson {
@@ -505,6 +545,33 @@ try {
     # Commit rate: 3 commits spanning 40-5=35 us -> 3*1e6/35.
     if ([math]::Abs($timing.CommitRatePerSecond - (3 * 1000000 / 35)) -gt 0.5) {
         throw 'Timing summary commit rate is incorrect.'
+    }
+    ++$assertionCount
+
+    # Stage split for D02: prepare / draw submit / final present (kinds 16/17 when present).
+    $timingStages = @(
+        $validHeader,
+        (New-TraceEventJson -Kind 4 -Timestamp 10 -Payload 12),
+        (New-TraceEventJson -Kind 6 -Timestamp 12 -Payload 12),
+        (New-TraceEventJson -Kind 16 -Timestamp 15 -Payload 12),
+        (New-TraceEventJson -Kind 17 -Timestamp 18 -Payload 12),
+        (New-TraceEventJson -Kind 7 -Timestamp 20 -Payload 12),
+        (New-TraceEventJson -Kind 8 -Timestamp 25 -Payload 12)
+    )
+    $timingStagesPath = Write-TraceCase -Name 'timing-stages' -Lines $timingStages
+    [void](Test-PlaybackTraceFile -TracePath $timingStagesPath -ResultPrefix 'TEST_TIMING')
+    $timingStageSummary = Get-PlaybackTraceTimingSummary -TracePath $timingStagesPath
+    if ($timingStageSummary.RenderDrawStartedCount -ne 1 -or
+        $timingStageSummary.RenderAckPublishedCount -ne 1) {
+        throw 'Timing summary missed draw-stage observation events.'
+    }
+    # prepare->drawStart = 15-10=5; drawSubmit = 18-15=3; drawAck->present = 20-18=2;
+    # present->commit (ack->commit) = 25-20=5.
+    if ($timingStageSummary.PrepareToDrawStartMicroseconds.P50 -ne 5 -or
+        $timingStageSummary.DrawSubmitMicroseconds.P50 -ne 3 -or
+        $timingStageSummary.DrawAckToPresentMicroseconds.P50 -ne 2 -or
+        $timingStageSummary.AckToCommitMicroseconds.P50 -ne 5) {
+        throw 'Timing summary stage split (prepare/draw/present) is incorrect.'
     }
     ++$assertionCount
 

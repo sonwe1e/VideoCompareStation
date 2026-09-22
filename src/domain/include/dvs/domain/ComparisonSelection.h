@@ -41,6 +41,19 @@ enum class DefaultPairPolicy : std::uint8_t {
                                                    std::optional<ComparisonPair> preferred,
                                                    DefaultPairPolicy policy) noexcept;
 
+// D09: session-boundary stable media identity. SourceId remains the render-endpoint slot;
+// file identity (path + SourceFileIdentity) is the cross-topology media key.
+[[nodiscard]] bool sameMediaIdentity(const ComparisonSource& left,
+                                     const ComparisonSource& right) noexcept;
+
+// Remaps a preferred pair from a previous source list onto the next one by media identity.
+// Returns nullopt when either member cannot be matched to the same media; never invents a
+// pair from reused slot ordinals.
+[[nodiscard]] std::optional<ComparisonPair>
+remapComparisonPairByMediaIdentity(std::span<const ComparisonSource> previousSources,
+                                   std::optional<ComparisonPair> preferred,
+                                   std::span<const ComparisonSource> nextSources) noexcept;
+
 // Projects a pair onto the compact renderer DifferenceEdge ordinal (0↔1 / 0↔2 / 1↔2).
 // Returns nullopt when either member is missing or the pair is not two distinct loaded sources.
 [[nodiscard]] std::optional<std::uint8_t>

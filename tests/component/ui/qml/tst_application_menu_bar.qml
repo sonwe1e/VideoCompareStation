@@ -15,11 +15,23 @@ Item {
         id: controller
 
         property bool canFirst: true
+        property int lastPairEdge: -1
+        property int lastPairPolicy: -1
+        property int lastDefaultPairPolicy: -1
         function estimateAlignment() {
         }
         function analyzeSequenceAlignment() {
         }
         function cancelAlignmentAnalysis() {
+        }
+        function applyComparisonPairFromEdge(edge, policy) {
+            lastPairEdge = edge;
+            lastPairPolicy = policy;
+            return true;
+        }
+        function applyDefaultPairPolicy(policy) {
+            lastDefaultPairPolicy = policy;
+            return true;
         }
     }
 
@@ -28,6 +40,7 @@ Item {
 
         property int viewMode: 0
         property int differenceEdge: 0
+        property int defaultPairPolicy: 2
         property int shortcutPreset: 0
     }
 
@@ -51,6 +64,8 @@ Item {
         sourceCount: 2
         busy: false
         canonicalSourceIndex: 0
+        referenceSourceIndex: 0
+        effectiveDifferenceEdge: 0
         currentViewMode: 0
         inspectorOpen: false
         graphicsReady: true
@@ -120,44 +135,32 @@ Item {
 
         function test_two_video_compare_menu_collapses_three_video_rows() {
             const compareMenu = findChild(menuBar, "compareMenu");
+            const layoutMenu = findChild(menuBar, "layoutMenu");
+            const pairMenu = findChild(menuBar, "pairMenu");
+            const referenceMenu = findChild(menuBar, "referenceMenu");
             verify(compareMenu !== null);
+            verify(layoutMenu !== null);
+            verify(pairMenu !== null);
+            verify(referenceMenu !== null);
+
+            // Two-source sessions hide the three-up layout and pair submenus; reference stays.
             menuBar.sourceCount = 2;
+            tryCompare(layoutMenu, "menuItemVisible", false);
+            tryCompare(pairMenu, "menuItemVisible", false);
+            tryCompare(referenceMenu, "menuItemVisible", true);
+
             compareMenu.popup(root, 24, 24);
             tryCompare(compareMenu, "opened", true);
-
-            // Compare menu order: Side by side, Wipe, Difference, separator, Layout,
-            // Pair, Reference, separator, inspector row.
-            const modeSeparator = compareMenu.itemAt(3);
-            const layoutRow = compareMenu.itemAt(4);
-            const pairRow = compareMenu.itemAt(5);
-            const referenceRow = compareMenu.itemAt(6);
-            const inspectorSeparator = compareMenu.itemAt(7);
-            const inspectorRow = compareMenu.itemAt(8);
-            verify(modeSeparator !== null);
-            verify(layoutRow !== null);
-            verify(pairRow !== null);
-            verify(referenceRow !== null);
-            verify(inspectorSeparator !== null);
-            verify(inspectorRow !== null);
-
-            compare(modeSeparator.height, 11);
-            compare(layoutRow.visible, false);
-            compare(layoutRow.height, 0);
-            compare(pairRow.visible, false);
-            compare(pairRow.height, 0);
-            compare(referenceRow.text, "参考源");
-            compare(referenceRow.height, 35);
-            compare(inspectorSeparator.height, 11);
-            compare(inspectorRow.height, 35);
             const compactRowsHeight = menuRowsHeight(compareMenu);
-
             compareMenu.close();
             tryCompare(compareMenu, "opened", false);
+
+            // Three-source sessions restore both collapsed rows (two 35px menu rows).
             menuBar.sourceCount = 3;
+            tryCompare(layoutMenu, "menuItemVisible", true);
+            tryCompare(pairMenu, "menuItemVisible", true);
             compareMenu.popup(root, 24, 24);
             tryCompare(compareMenu, "opened", true);
-            tryCompare(layoutRow, "height", 35);
-            tryCompare(pairRow, "height", 35);
             compare(menuRowsHeight(compareMenu), compactRowsHeight + 70);
         }
 
@@ -213,6 +216,32 @@ Item {
                 menu.close();
                 tryCompare(menu, "opened", false);
             }
+        }
+
+        function test_pair_menu_uses_committed_edge_and_policy_command() {
+            menuBar.sourceCount = 3;
+            menuBar.effectiveDifferenceEdge = 1;
+            const pairMenu = findChild(menuBar, "pairMenu");
+            verify(pairMenu !== null);
+            pairMenu.popup(root, 24, 24);
+            tryCompare(pairMenu, "opened", true);
+
+            // User selection sends the pair command and does not write preference.differenceEdge.
+            const before = preferences.differenceEdge;
+            const edgeItem = pairMenu.itemAt(1);
+            verify(edgeItem !== null);
+            edgeItem.triggered();
+            compare(controller.lastPairEdge, 1);
+            compare(preferences.differenceEdge, before);
+
+            const policyMenu = findChild(menuBar, "defaultPairPolicyMenu");
+            verify(policyMenu !== null);
+            const policyItem = policyMenu.itemAt(0);
+            verify(policyItem !== null);
+            policyItem.triggered();
+            compare(controller.lastDefaultPairPolicy, 0);
+            compare(preferences.defaultPairPolicy, 0);
+            pairMenu.close();
         }
     }
 }

@@ -68,6 +68,10 @@ int ReviewShellController::canonicalSourceIndex() const noexcept {
     return canonicalSourceIndex_;
 }
 
+int ReviewShellController::referenceSourceIndex() const noexcept {
+    return referenceSourceIndex_;
+}
+
 qulonglong ReviewShellController::activeGeneration() const noexcept {
     return activeGeneration_;
 }
@@ -107,6 +111,14 @@ QString ReviewShellController::canonicalSourceIdentity() const {
         return {};
     }
     return identities[canonicalSourceIndex_];
+}
+
+QString ReviewShellController::referenceSourceIdentity() const {
+    const QStringList identities = activeSourceIdentities();
+    if (referenceSourceIndex_ < 0 || referenceSourceIndex_ >= identities.size()) {
+        return {};
+    }
+    return identities[referenceSourceIndex_];
 }
 
 QStringList ReviewShellController::pendingSourceIdentities() const {
@@ -294,7 +306,8 @@ bool ReviewShellController::queueRemoveActiveSource(const QString& sourceIdentit
     }
     QVariantList replacement = activeSources_;
     replacement.removeAt(sourceIndex);
-    int reference = canonicalSourceIndex_;
+    // D08: preserve the comparison reference across removal, not the timeline master slot.
+    int reference = referenceSourceIndex_ >= 0 ? referenceSourceIndex_ : canonicalSourceIndex_;
     if (reference == sourceIndex) {
         reference = 0;
     } else if (reference > sourceIndex) {
@@ -318,11 +331,16 @@ bool ReviewShellController::queueRemoveActiveSource(const QString& sourceIdentit
 bool ReviewShellController::changeReferenceByIdentity(const QString& sourceIdentity) {
     const QStringList identities = activeSourceIdentities();
     const int sourceIndex = identities.indexOf(sourceIdentity);
-    if (sourceIdentity.isEmpty() || sourceIndex < 0 || sourceIndex == canonicalSourceIndex_) {
+    if (sourceIdentity.isEmpty() || sourceIndex < 0) {
         return false;
     }
     if (hasPendingSourceIntent(ChangeReferenceIntent, sourceIdentity)) {
         return true;
+    }
+    // D08: Reference is independent of the timeline master. Reject only a no-op re-select of
+    // the current reference; assigning the timeline master as reference is always valid.
+    if (sourceIndex == referenceSourceIndex_) {
+        return false;
     }
     openIntent_ = ChangeReference;
     Q_EMIT stateChanged();
@@ -499,11 +517,15 @@ void ReviewShellController::synchronizeActiveSources(const bool advanceGeneratio
     }
     const QVariantList nextSources = review_.activeSources();
     const int nextCanonical = review_.canonicalSourceIndex();
-    if (activeSources_ == nextSources && canonicalSourceIndex_ == nextCanonical) {
+    // D08: track the comparison reference separately from the timeline master.
+    const int nextReference = review_.referenceSourceIndex();
+    if (activeSources_ == nextSources && canonicalSourceIndex_ == nextCanonical &&
+        referenceSourceIndex_ == nextReference) {
         return;
     }
     activeSources_ = nextSources;
     canonicalSourceIndex_ = nextCanonical;
+    referenceSourceIndex_ = nextReference;
     if (advanceGeneration) {
         ++activeGeneration_;
     }
@@ -515,7 +537,13 @@ void ReviewShellController::synchronizeActiveSources(const bool advanceGeneratio
     frozenActiveIdentities_ = std::move(nextIdentities);
     if (!review_.busy()) {
         stagedSources_ = activeSources_;
-        stagedReferenceIndex_ = activeSources_.isEmpty() ? 0 : std::max(0, canonicalSourceIndex_);
+        // Prefer the comparison reference as the next open's reference; fall back to timeline
+        // master.
+        stagedReferenceIndex_ = activeSources_.isEmpty()
+                                    ? 0
+                                    : std::max(0,
+                                               referenceSourceIndex_ >= 0 ? referenceSourceIndex_
+                                                                          : canonicalSourceIndex_);
     }
     Q_EMIT stateChanged();
 }
@@ -665,7 +693,11 @@ void ReviewShellController::finishIntent(const int outcome, const QString& error
         if (completed.kind == RemoveSourceIntent || completed.kind == ChangeReferenceIntent) {
             stagedSources_ = activeSources_;
             stagedReferenceIndex_ =
-                activeSources_.isEmpty() ? 0 : std::max(0, canonicalSourceIndex_);
+                activeSources_.isEmpty()
+                    ? 0
+                    : std::max(0,
+                               referenceSourceIndex_ >= 0 ? referenceSourceIndex_
+                                                          : canonicalSourceIndex_);
             openIntent_ = NewReview;
         }
     }
@@ -713,8 +745,10 @@ bool ReviewShellController::rebaseIntent(ReviewIntent& intent) const {
         intent.sources = std::move(rebased);
         intent.referenceIndex = rebasedIdentities.indexOf(intent.referenceIdentity);
         if (intent.referenceIndex < 0) {
+            const int fallbackReference =
+                referenceSourceIndex_ >= 0 ? referenceSourceIndex_ : canonicalSourceIndex_;
             intent.referenceIndex =
-                std::clamp(canonicalSourceIndex_, 0, static_cast<int>(intent.sources.size()) - 1);
+                std::clamp(fallbackReference, 0, static_cast<int>(intent.sources.size()) - 1);
         }
         return true;
     }
@@ -815,15 +849,16 @@ ReviewShellController::effectiveComparisonState() const noexcept {
 
     const int requestedView = preferences_ != nullptr ? static_cast<int>(preferences_->viewMode())
                                                       : static_cast<int>(ViewMode::SideBySide);
-    const int requestedEdge =
-        preferences_ != nullptr ? static_cast<int>(preferences_->differenceEdge()) : kEdge0And1;
+    // D07: the canvas/menu edge is the committed activeComparisonPair projection, never the
+    // legacy A/B/C preference slot. Preferences only store DefaultPairPolicy.
+    const int committedEdge = review_.effectiveDifferenceEdge();
     const ViewMode effectiveMode = presentation::effectiveViewMode(
         static_cast<ViewMode>(requestedView), static_cast<std::size_t>(sourceCount));
-    const bool validEdge = requestedEdge >= kEdge0And1 &&
-                           requestedEdge <= static_cast<int>(DifferenceEdge::Between1And2);
+    const bool validEdge = committedEdge >= kEdge0And1 &&
+                           committedEdge <= static_cast<int>(DifferenceEdge::Between1And2);
     return EffectiveComparisonState{
         .viewMode = static_cast<int>(effectiveMode),
-        .differenceEdge = sourceCount == 2 ? kEdge0And1 : (validEdge ? requestedEdge : kEdge0And1),
+        .differenceEdge = sourceCount == 2 ? kEdge0And1 : (validEdge ? committedEdge : kEdge0And1),
     };
 }
 

@@ -1112,8 +1112,25 @@ void markGraphicsReady(const std::shared_ptr<PlaybackCoordinator>& coordinator,
 [[nodiscard]] CommandContext commandContext(const std::shared_ptr<PlaybackCoordinator>& coordinator,
                                             domain::CommandId commandId);
 
-// C-07 default Contextual resolves multi-source to ReviewEveryFrame (no FrameSet skips).
-// Wall-clock catch-up tests must opt into RealTime explicitly.
+// C-07/D03: production default Contextual is smoothness-first RealTime. Tests that assert
+// sequential / every-frame presentation must opt into ReviewEveryFrame explicitly;
+// catch-up tests still call requireRealTimeContinuity after this helper.
+void requireReviewEveryFrameContinuity(const std::shared_ptr<PlaybackCoordinator>& coordinator,
+                                       const domain::CommandId commandId = domain::CommandId{800}) {
+    ASSERT_EQ(coordinator->submit(SetPlaybackContinuityPolicyCommand{
+                  .context = commandContext(coordinator, commandId),
+                  .policy = domain::PlaybackContinuityPolicy::ReviewEveryFrame,
+              }),
+              PortSubmitResult::Accepted);
+    const std::vector<CommandTerminal> terminals = waitForTerminals(coordinator, 1U);
+    ASSERT_EQ(terminals.size(), 1U);
+    EXPECT_EQ(terminals.front().outcome, CommandOutcome::Succeeded);
+    const auto snapshot = coordinator->snapshot();
+    ASSERT_NE(snapshot, nullptr);
+    EXPECT_EQ(snapshot->playbackContinuityPolicyEffective,
+              domain::PlaybackContinuityPolicy::ReviewEveryFrame);
+}
+
 void requireRealTimeContinuity(const std::shared_ptr<PlaybackCoordinator>& coordinator,
                                const domain::CommandId commandId = domain::CommandId{900}) {
     ASSERT_EQ(coordinator->submit(SetPlaybackContinuityPolicyCommand{
@@ -1754,15 +1771,21 @@ makeCoordinator(const std::shared_ptr<FakeFrameProvider>& provider,
                     std::make_shared<FakeDeadlineScheduler>(),
                 std::shared_ptr<ISteadyClock> clock = std::make_shared<FakeSteadyClock>(),
                 std::shared_ptr<IAlignmentAnalysisService> analysisService) {
-    return PlaybackCoordinator::create(domain::SessionId{91},
-                                       PlaybackCoordinator::Dependencies{
-                                           .mediaProbe = std::move(mediaProbe),
-                                           .directFrameProvider = provider,
-                                           .alignmentAnalysisService = std::move(analysisService),
-                                           .deadlineScheduler = std::move(deadlineScheduler),
-                                           .clock = std::move(clock),
-                                           .renderChannel = render,
-                                       });
+    auto coordinator =
+        PlaybackCoordinator::create(domain::SessionId{91},
+                                    PlaybackCoordinator::Dependencies{
+                                        .mediaProbe = std::move(mediaProbe),
+                                        .directFrameProvider = provider,
+                                        .alignmentAnalysisService = std::move(analysisService),
+                                        .deadlineScheduler = std::move(deadlineScheduler),
+                                        .clock = std::move(clock),
+                                        .renderChannel = render,
+                                    });
+    // D03: production Contextual is smoothness-first RealTime. Unit tests assert sequential /
+    // every-frame presentation and must opt into ReviewEveryFrame here; catch-up tests call
+    // requireRealTimeContinuity afterwards to switch back.
+    requireReviewEveryFrameContinuity(coordinator, domain::CommandId{799});
+    return coordinator;
 }
 
 void markGraphicsReady(const std::shared_ptr<PlaybackCoordinator>& coordinator,

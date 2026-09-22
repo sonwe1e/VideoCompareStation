@@ -438,6 +438,8 @@ private:
     };
 
     struct PlaybackRun final {
+        // D06: monotonic run id for trace correlation across recycled frame numbers.
+        std::uint64_t runId = 0U;
         PlaybackRequestContext providerContext;
         PlaybackRequestContext cadenceContext;
         domain::FrameId firstTarget;
@@ -583,6 +585,7 @@ private:
             .device = state_.deviceGeneration,
             .request = domain::RequestId{0},
             .command = command,
+            .run = playbackRun_.has_value() ? playbackRun_->runId : 0U,
         };
     }
 
@@ -1287,6 +1290,7 @@ private:
                 .matchKind = source.matchKind,
                 .alignmentConfidence = source.alignmentConfidence,
                 .missingReason = source.missingReason,
+                .presentationTime = source.presentationTime,
             });
         }
 
@@ -1877,6 +1881,7 @@ private:
         const PlaybackRequestContext providerContext = currentPlaybackScope();
         const PlaybackRequestContext cadenceContext = makePlaybackContext();
         playbackRun_ = PlaybackRun{
+            .runId = ++playbackRunId_,
             .providerContext = providerContext,
             .cadenceContext = cadenceContext,
             .firstTarget = firstTarget,
@@ -2188,6 +2193,13 @@ private:
                     domain::FrameId{std::clamp(mapped.value().value(), std::int64_t{0}, maximum)};
             }
         }
+        // D09: freeze the previous source list before the topology swap so the active pair can
+        // be remapped by media identity rather than reused slot ordinals.
+        std::vector<domain::ComparisonSource> previousSources;
+        if (sources_.has_value()) {
+            const std::span<const domain::ComparisonSource> current = sources_->sources();
+            previousSources.assign(current.begin(), current.end());
+        }
         if (sources_.has_value() || state_.displayedFrame.has_value()) {
             const PlaybackRequestContext previousScope = currentPlaybackScope();
             dependencies_.directFrameProvider->cancel(previousScope);
@@ -2226,10 +2238,16 @@ private:
                 .displayName = source.displayName,
             });
         }
-        // C-02: re-resolve the active pair from stable source identities after topology open.
+        // C-02/D09: remap the preferred pair through stable media identity first so a reused
+        // SourceId slot cannot silently become "the same" media, then re-resolve by policy.
+        const std::optional<domain::ComparisonPair> remappedPreferred =
+            previousSources.empty()
+                ? activeComparisonPair_
+                : domain::remapComparisonPairByMediaIdentity(
+                      previousSources, activeComparisonPair_, sources_->sources());
         activeComparisonPair_ = domain::resolveComparisonPair(sources_->sources(),
                                                               sources_->referenceSourceId(),
-                                                              activeComparisonPair_,
+                                                              remappedPreferred,
                                                               activePairPolicy_);
         state_.activeComparisonPair = activeComparisonPair_;
         state_.presentedSources.clear();
@@ -3346,6 +3364,7 @@ private:
                 .matchKind = source.matchKind,
                 .alignmentConfidence = source.alignmentConfidence,
                 .missingReason = source.missingReason,
+                .presentationTime = source.presentationTime,
             });
         }
         pending_.reset();
@@ -3454,6 +3473,7 @@ private:
                 .matchKind = source.matchKind,
                 .alignmentConfidence = source.alignmentConfidence,
                 .missingReason = source.missingReason,
+                .presentationTime = source.presentationTime,
             });
         }
         playbackRun_->frame.reset();
@@ -4490,12 +4510,14 @@ private:
     std::optional<PlaybackRange> playbackRange_;
     bool playbackRangeLoop_ = false;
     std::uint64_t playbackRangeCompletedLoops_ = 0U;
-    // C-07: requested continuity policy (Contextual resolves from source count at publish/play).
+    // C-07/D03: requested continuity policy (Contextual is smoothness-first RealTime).
     domain::PlaybackContinuityPolicy playbackContinuityPolicy_ =
         domain::PlaybackContinuityPolicy::Contextual;
     std::uint64_t playbackSkippedFrameSets_ = 0U;
     // C-02: session pair + preference policy used to re-resolve after topology changes.
     domain::DefaultPairPolicy activePairPolicy_ = domain::DefaultPairPolicy::PreserveIfAvailable;
+    // D06: monotonic playback-run id stamped on TraceIdentity.run for the whole PlaybackRun.
+    std::uint64_t playbackRunId_ = 0U;
     std::optional<domain::ComparisonPair> activeComparisonPair_;
     std::optional<InteractiveStepRun> interactiveStepRun_;
     std::optional<std::chrono::steady_clock::time_point> lastPlaybackProjectionAt_;

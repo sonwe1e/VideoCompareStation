@@ -74,7 +74,7 @@ struct StartRangePlaybackCommand final {
     double speed = 1.0;
 };
 
-// C-07: explicit continuity policy. Contextual resolves at play time from source count.
+// C-07/D03: explicit continuity policy. Contextual is smoothness-first (RealTime).
 struct SetPlaybackContinuityPolicyCommand final {
     CommandContext context;
     domain::PlaybackContinuityPolicy policy = domain::PlaybackContinuityPolicy::Contextual;

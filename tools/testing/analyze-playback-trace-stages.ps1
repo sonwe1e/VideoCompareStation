@@ -14,9 +14,12 @@
         (the scheduler deliberately waiting for the canonical frame boundary)?
 
     Stages per canonical frame (microseconds, from the schema-v1 monotonic `t` field):
-      ready_publish  : FrameSetReady -> RenderPublished
+      ready_publish  : FrameSetReady -> RenderPublished (prepare)
+      prepare_draw   : FrameSetReady -> RenderDrawStarted (prepare when kinds 16/17 present)
+      draw_submit    : RenderDrawStarted -> RenderAckPublished (draw submission)
+      draw_present   : RenderAckPublished -> PresentationAcknowledged (final present hop)
       publish_ack    : RenderPublished -> PresentationAcknowledged
-      ack_commit     : PresentationAcknowledged -> SnapshotCommitted
+      ack_commit     : PresentationAcknowledged -> SnapshotCommitted (final present / commit)
       ready_commit   : FrameSetReady -> SnapshotCommitted
       cadence_gap    : SnapshotCommitted(previous) -> SnapshotCommitted(current)
 
@@ -73,6 +76,8 @@ foreach ($path in $TracePath) {
 
     $ready = @{}
     $published = @{}
+    $drawStart = @{}
+    $drawAck = @{}
     $acked = @{}
     $committed = @{}
     $commitOrder = [System.Collections.Generic.List[object]]::new()
@@ -91,6 +96,8 @@ foreach ($path in $TracePath) {
                 $readyOrder.Add([pscustomobject]@{ Time = $timestamp; Key = $key; Payload = [uint64]$record.p })
             }
             6 { $published[$key] = $timestamp }
+            16 { $drawStart["$([uint64]$record.p)"] = $timestamp }
+            17 { $drawAck["$([uint64]$record.p)"] = $timestamp }
             7 { $acked[$key] = $timestamp }
             8 {
                 if ([uint64]$record.p -ne [uint64]::MaxValue) {
@@ -108,6 +115,9 @@ foreach ($path in $TracePath) {
     $publishToAck = [System.Collections.Generic.List[object]]::new()
     $ackToCommit = [System.Collections.Generic.List[object]]::new()
     $readyToCommit = [System.Collections.Generic.List[object]]::new()
+    $prepareToDrawStart = [System.Collections.Generic.List[object]]::new()
+    $drawSubmit = [System.Collections.Generic.List[object]]::new()
+    $drawAckToPresent = [System.Collections.Generic.List[object]]::new()
     $cadenceGap = [System.Collections.Generic.List[object]]::new()
     $residual = [System.Collections.Generic.List[object]]::new()
     $outliers = [System.Collections.Generic.List[object]]::new()
@@ -116,11 +126,23 @@ foreach ($path in $TracePath) {
     for ($index = 0; $index -lt $ordered.Count; ++$index) {
         $entry = $ordered[$index]
         $key = $entry.Key
+        $frameKey = "$($entry.Payload)"
         if ($ready.ContainsKey($key)) {
             $readyToCommit.Add([double](($entry.Time - $ready[$key]) / 1000))
+            if ($drawStart.ContainsKey($frameKey) -and $drawStart[$frameKey] -ge $ready[$key]) {
+                $prepareToDrawStart.Add([double](($drawStart[$frameKey] - $ready[$key]) / 1000))
+            }
         }
         if ($ready.ContainsKey($key) -and $published.ContainsKey($key)) {
             $readyToPublish.Add([double](($published[$key] - $ready[$key]) / 1000))
+        }
+        if ($drawStart.ContainsKey($frameKey) -and $drawAck.ContainsKey($frameKey) -and
+            $drawAck[$frameKey] -ge $drawStart[$frameKey]) {
+            $drawSubmit.Add([double](($drawAck[$frameKey] - $drawStart[$frameKey]) / 1000))
+        }
+        if ($drawAck.ContainsKey($frameKey) -and $acked.ContainsKey($key) -and
+            $acked[$key] -ge $drawAck[$frameKey]) {
+            $drawAckToPresent.Add([double](($acked[$key] - $drawAck[$frameKey]) / 1000))
         }
         if ($published.ContainsKey($key) -and $acked.ContainsKey($key)) {
             $publishToAck.Add([double](($acked[$key] - $published[$key]) / 1000))
@@ -220,6 +242,9 @@ foreach ($path in $TracePath) {
         IntervalHistogramMs    = $histogram
         CadenceGapMs           = Get-StageSummary $cadenceGap
         ReadyPublishUs         = Get-StageSummary $readyToPublish
+        PrepareToDrawStartUs   = Get-StageSummary $prepareToDrawStart
+        DrawSubmitUs           = Get-StageSummary $drawSubmit
+        DrawAckToPresentUs     = Get-StageSummary $drawAckToPresent
         PublishAckUs           = Get-StageSummary $publishToAck
         AckCommitUs            = Get-StageSummary $ackToCommit
         ReadyCommitMs          = Get-StageSummary $readyToCommit
@@ -239,8 +264,9 @@ foreach ($report in $reports) {
             $report.CommitRatePerSecond, $report.LateIntervalPercent)
     Write-Output ("    interval histogram (ms): " + (($report.IntervalHistogramMs.GetEnumerator() |
                 ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' '))
-    foreach ($stage in @('CadenceGapMs', 'ReadyPublishUs', 'PublishAckUs', 'AckCommitUs',
-            'ReadyCommitMs', 'CadenceResidualMs', 'GrabSpanUs')) {
+    foreach ($stage in @('CadenceGapMs', 'ReadyPublishUs', 'PrepareToDrawStartUs', 'DrawSubmitUs',
+            'DrawAckToPresentUs', 'PublishAckUs', 'AckCommitUs', 'ReadyCommitMs', 'CadenceResidualMs',
+            'GrabSpanUs')) {
         $summary = $report.$stage
         if ($null -eq $summary) { continue }
         Write-Output ("    {0,-18} n={1,-6} p50={2,-10:N2} p90={3,-10:N2} p95={4,-10:N2} p99={5,-10:N2} max={6,-10:N2}" -f `

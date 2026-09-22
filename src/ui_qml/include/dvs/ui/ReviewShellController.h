@@ -33,6 +33,8 @@ class ReviewShellController final : public QObject {
     Q_PROPERTY(QVariantMap activeIntent READ activeIntent NOTIFY stateChanged)
     Q_PROPERTY(QStringList activeSourceIdentities READ activeSourceIdentities NOTIFY stateChanged)
     Q_PROPERTY(QString canonicalSourceIdentity READ canonicalSourceIdentity NOTIFY stateChanged)
+    Q_PROPERTY(int referenceSourceIndex READ referenceSourceIndex NOTIFY stateChanged)
+    Q_PROPERTY(QString referenceSourceIdentity READ referenceSourceIdentity NOTIFY stateChanged)
     Q_PROPERTY(QStringList pendingSourceIdentities READ pendingSourceIdentities NOTIFY stateChanged)
     Q_PROPERTY(bool chromeVisible READ chromeVisible WRITE setChromeVisible NOTIFY stateChanged)
     Q_PROPERTY(
@@ -109,6 +111,8 @@ public:
     [[nodiscard]] QVariantMap activeIntent() const;
     [[nodiscard]] QStringList activeSourceIdentities() const;
     [[nodiscard]] QString canonicalSourceIdentity() const;
+    [[nodiscard]] int referenceSourceIndex() const noexcept;
+    [[nodiscard]] QString referenceSourceIdentity() const;
     [[nodiscard]] QStringList pendingSourceIdentities() const;
     [[nodiscard]] bool chromeVisible() const noexcept;
     [[nodiscard]] bool inspectorVisible() const noexcept;
@@ -193,6 +197,7 @@ private:
     QStringList frozenActiveIdentities_;
     QVariantList stagedSources_;
     int canonicalSourceIndex_ = -1;
+    int referenceSourceIndex_ = -1;
     qulonglong activeGeneration_ = 0U;
     int stagedReferenceIndex_ = 0;
     std::deque<ReviewIntent> reviewIntents_;
