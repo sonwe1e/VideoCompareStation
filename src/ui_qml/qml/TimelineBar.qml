@@ -42,14 +42,14 @@ Rectangle {
         text: {
             const policy = control.host.playbackContinuityPolicyName || "";
             const drops = control.host.droppedFramesText || "";
-            const skipped = control.host.playbackSkippedFrameSets > 0 ? qsTr("跳过集 %1").arg(control.host.playbackSkippedFrameSets) : "";
+            const skipped = control.host.playbackSkippedFrameSets > 0 ? qsTr("播放器跳过 %1 组").arg(control.host.playbackSkippedFrameSets) : "";
             const parts = [];
             if (policy.length > 0)
                 parts.push(policy);
-            if (drops.length > 0)
-                parts.push(drops);
             if (skipped.length > 0)
                 parts.push(skipped);
+            if (drops.length > 0)
+                parts.push(qsTr("呈现间隙 %1").arg(control.host.droppedFrames));
             return parts.join(" · ");
         }
         color: "#f59e0b"

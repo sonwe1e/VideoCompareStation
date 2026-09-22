@@ -154,6 +154,56 @@ Item {
             compare(previewSpy.signalArguments[0][0], 42);
         }
 
+        function test_playback_status_separates_three_phenomena() {
+            osc.revealActive = true;
+            osc.playbackModeLabel = "正常速度观看";
+            osc.playbackModeDetail = "落后超过约 2 秒时跳过整组追上时间";
+            osc.playbackTargetRate = 1.0;
+            osc.playbackPresentationRate = 0.72;
+            osc.playbackRunSkippedFrameSets = 3;
+            osc.playbackLagMilliseconds = 800;
+            osc.playbackCatchingUp = false;
+            osc.sourceDuplicateCount = 2;
+            osc.displayGapCount = 5;
+            osc.playing = true;
+            const status = findChild(osc, "playbackStatusText");
+            verify(status !== null);
+            verify(status.visible);
+            // Mode, target vs actual rate, player-side skips, lag, source duplicates and
+            // display gaps must appear as distinct labels so they cannot be conflated.
+            verify(status.text.indexOf("正常速度观看") >= 0);
+            verify(status.text.indexOf("目标 1.00×") >= 0);
+            verify(status.text.indexOf("实际 0.72×") >= 0);
+            verify(status.text.indexOf("播放器跳过 3 组") >= 0);
+            verify(status.text.indexOf("明显落后") >= 0);
+            verify(status.text.indexOf("源重复 2") >= 0);
+            verify(status.text.indexOf("呈现间隙 5") >= 0);
+            const hint = findChild(osc, "playbackStatusHint");
+            verify(hint !== null);
+            verify(hint.visible);
+            verify(hint.text.indexOf("不跳过") < 0);
+            verify(hint.text.indexOf("跳过整组") >= 0);
+        }
+
+        function test_review_every_frame_status_reports_no_skip() {
+            osc.revealActive = true;
+            osc.playbackModeLabel = "逐帧完整审查";
+            osc.playbackModeDetail = "不跳过整组；落后时放慢以保留每组画面";
+            osc.playbackTargetRate = 1.0;
+            osc.playbackPresentationRate = 0.4;
+            osc.playbackRunSkippedFrameSets = 0;
+            osc.playbackLagMilliseconds = 1500;
+            osc.playbackCatchingUp = false;
+            osc.sourceDuplicateCount = 0;
+            osc.displayGapCount = 0;
+            osc.playing = true;
+            const status = findChild(osc, "playbackStatusText");
+            verify(status !== null);
+            verify(status.text.indexOf("逐帧完整审查") >= 0);
+            verify(status.text.indexOf("播放器跳过") < 0);
+            verify(status.text.indexOf("明显落后") >= 0);
+        }
+
         function test_docked_is_always_enabled_without_wake_strip() {
             verify(dockedOsc.docked);
             verify(dockedOsc.controlsEnabled);

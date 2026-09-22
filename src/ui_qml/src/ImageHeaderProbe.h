@@ -167,12 +167,97 @@ namespace dvs::ui {
     return false;
 }
 
+// PNM family (PBM/PGM/PPM/PAM) dimension probe. The magic "P<n>" is followed by ASCII
+// integers; comments ('#') and whitespace are skipped. P1-P6 carry "<width> <height>"
+// directly, PAM (P7) uses "WIDTH n\nHEIGHT n\n" tokens until ENDHDR.
+[[nodiscard]] inline bool probePnmSize(const QByteArray& bytes, QSize* size) {
+    if (bytes.size() < 2 || bytes[0] != 'P' || bytes[1] < '1' || bytes[1] > '7') {
+        return false;
+    }
+    const auto* const data = reinterpret_cast<const uchar*>(bytes.constData());
+    const qsizetype length = bytes.size();
+    qsizetype offset = 2;
+    const auto skipWhitespaceAndComments = [&]() {
+        while (offset < length) {
+            const uchar c = data[offset];
+            if (c == '#') {
+                while (offset < length && data[offset] != '\n') {
+                    ++offset;
+                }
+                continue;
+            }
+            if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+                ++offset;
+                continue;
+            }
+            break;
+        }
+    };
+    const auto readInteger = [&](quint32* value) {
+        skipWhitespaceAndComments();
+        if (offset >= length || data[offset] < '0' || data[offset] > '9') {
+            return false;
+        }
+        quint32 parsed = 0;
+        while (offset < length && data[offset] >= '0' && data[offset] <= '9') {
+            parsed = parsed * 10U + static_cast<quint32>(data[offset] - '0');
+            if (parsed > 1000000U) {
+                return false;
+            }
+            ++offset;
+        }
+        *value = parsed;
+        return true;
+    };
+    if (bytes[1] == '7') {
+        // PAM: tokenized header, dimensions on "WIDTH"/"HEIGHT" lines until ENDHDR.
+        quint32 width = 0;
+        quint32 height = 0;
+        while (offset < length) {
+            skipWhitespaceAndComments();
+            const qsizetype tokenStart = offset;
+            while (offset < length && data[offset] != ' ' && data[offset] != '\t' &&
+                   data[offset] != '\r' && data[offset] != '\n') {
+                ++offset;
+            }
+            const QByteArray token = bytes.mid(tokenStart, offset - tokenStart);
+            if (token == QByteArrayLiteral("ENDHDR")) {
+                break;
+            }
+            if (token == QByteArrayLiteral("WIDTH")) {
+                if (!readInteger(&width)) {
+                    return false;
+                }
+            } else if (token == QByteArrayLiteral("HEIGHT")) {
+                if (!readInteger(&height)) {
+                    return false;
+                }
+            }
+        }
+        if (width == 0 || height == 0) {
+            return false;
+        }
+        *size = QSize(static_cast<int>(width), static_cast<int>(height));
+        return true;
+    }
+    quint32 width = 0;
+    quint32 height = 0;
+    if (!readInteger(&width) || !readInteger(&height)) {
+        return false;
+    }
+    if (width == 0 || height == 0) {
+        return false;
+    }
+    *size = QSize(static_cast<int>(width), static_cast<int>(height));
+    return true;
+}
+
 [[nodiscard]] inline bool probeImageHeader(const QByteArray& bytes, QSize* size) {
     if (bytes.isEmpty() || size == nullptr) {
         return false;
     }
     return probePngSize(bytes, size) || probeJpegSize(bytes, size) || probeGifSize(bytes, size) ||
-           probeBmpSize(bytes, size) || probeWebpSize(bytes, size);
+           probeBmpSize(bytes, size) || probeWebpSize(bytes, size) || probePnmSize(bytes, size);
 }
 
 } // namespace dvs::ui

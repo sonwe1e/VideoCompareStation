@@ -2105,6 +2105,18 @@ TEST(MainQmlContractTests, ImageWorkspaceReloadsViewportSourceAfterImageOpen) {
     EXPECT_EQ(imageItem->property("status").toInt(), 1)
         << "Image element must reach Ready after the source URL refreshes.";
     EXPECT_EQ(imageItem->property("sourceSize").toSize(), QSize(64, 48));
+
+    // Channel changes must refresh the provider URL even when the source image is unchanged.
+    imageReview.setViewMode(ImageReviewController::AlphaGrayView);
+    QCoreApplication::processEvents();
+    EXPECT_EQ(imageItem->property("source").toString(), imageReview.imageUrl(2));
+    EXPECT_NE(imageItem->property("source").toString(), QStringLiteral("image://vcs-review/2/1"));
+    EXPECT_EQ(imageItem->property("status").toInt(), 1);
+    const QString alphaUrl = imageItem->property("source").toString();
+    imageReview.setViewMode(ImageReviewController::RgbaView);
+    QCoreApplication::processEvents();
+    EXPECT_EQ(imageItem->property("source").toString(), imageReview.imageUrl(2));
+    EXPECT_NE(imageItem->property("source").toString(), alphaUrl);
 }
 
 TEST(MainQmlContractTests, ImageWorkspaceWipeHandleMovesSplitPosition) {
@@ -2879,6 +2891,387 @@ TEST(MainQmlContractTests, CloseCurrentTaskOnlyClosesActiveWorkspace) {
     EXPECT_NE(std::get_if<application::CloseSessionCommand>(&harness.submitted.back()), nullptr);
     EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 1);
     EXPECT_TRUE(harness.imageReview.hasPrimary());
+}
+
+TEST(MainQmlContractTests, EmptyReviewViewExposesImageAndFolderEntryPoints) {
+    WorkspaceHarness harness;
+    harness.snapshot->sources.clear();
+    harness.snapshot->presentedSources.clear();
+    harness.snapshot->sessionState = domain::SessionState::kEmpty;
+    harness.snapshot->displayedFrame.reset();
+    harness.snapshot->canonicalFrameCount = 0U;
+    harness.controller->refreshProjection();
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    auto* const openVideosBtn =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("emptyOpenVideosButton"));
+    ASSERT_NE(openVideosBtn, nullptr);
+    EXPECT_TRUE(openVideosBtn->isVisible());
+
+    auto* const openImageBtn =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("emptyOpenImageButton"));
+    ASSERT_NE(openImageBtn, nullptr);
+    EXPECT_TRUE(openImageBtn->isVisible());
+
+    auto* const compareFoldersBtn =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("emptyCompareFoldersButton"));
+    ASSERT_NE(compareFoldersBtn, nullptr);
+    EXPECT_TRUE(compareFoldersBtn->isVisible());
+}
+
+TEST(MainQmlContractTests, ImageWorkspaceZoomResetAndTrueSizeContract) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    QImage primary(64, 64, QImage::Format_ARGB32);
+    primary.fill(QColor(255, 0, 0));
+    QImage secondary(64, 64, QImage::Format_ARGB32);
+    secondary.fill(QColor(0, 255, 0));
+    ASSERT_TRUE(harness.imageReview.openPairImages(std::move(primary),
+                                                   QStringLiteral("primary"),
+                                                   std::move(secondary),
+                                                   QStringLiteral("secondary")));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    harness.settle();
+
+    auto* const imageWorkspace =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
+    ASSERT_NE(imageWorkspace, nullptr);
+
+    // Zoom to 300%
+    harness.imageReview.setZoom(3.0);
+    harness.settle();
+    EXPECT_DOUBLE_EQ(harness.imageReview.zoom(), 3.0);
+
+    // 100% button resets zoom to 1.0 and sets trueSize to true
+    auto* const trueSizeBtn =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageTrueSizeButton"));
+    ASSERT_NE(trueSizeBtn, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(trueSizeBtn, "clicked"));
+    harness.settle();
+    EXPECT_TRUE(imageWorkspace->property("trueSize").toBool());
+    EXPECT_DOUBLE_EQ(harness.imageReview.zoom(), 1.0);
+
+    // Zoom to 2.0 while in trueSize
+    harness.imageReview.setZoom(2.0);
+    harness.settle();
+    EXPECT_DOUBLE_EQ(harness.imageReview.zoom(), 2.0);
+
+    // Fit button resets trueSize to false and resets view (zoom 1.0, pan 0.5)
+    auto* const fitBtn = harness.root->findChild<QQuickItem*>(QStringLiteral("imageFitButton"));
+    ASSERT_NE(fitBtn, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(fitBtn, "clicked"));
+    harness.settle();
+    EXPECT_FALSE(imageWorkspace->property("trueSize").toBool());
+    EXPECT_DOUBLE_EQ(harness.imageReview.zoom(), 1.0);
+    EXPECT_DOUBLE_EQ(harness.imageReview.panX(), 0.5);
+    EXPECT_DOUBLE_EQ(harness.imageReview.panY(), 0.5);
+
+    // Reset view button resets trueSize to false and resets view
+    imageWorkspace->setProperty("trueSize", true);
+    harness.imageReview.setZoom(4.0);
+    harness.settle();
+    auto* const resetViewBtn =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageResetViewButton"));
+    ASSERT_NE(resetViewBtn, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(resetViewBtn, "clicked"));
+    harness.settle();
+    EXPECT_FALSE(imageWorkspace->property("trueSize").toBool());
+    EXPECT_DOUBLE_EQ(harness.imageReview.zoom(), 1.0);
+    EXPECT_DOUBLE_EQ(harness.imageReview.panX(), 0.5);
+}
+
+TEST(MainQmlContractTests, ImageWorkspaceInPlaceToggleAndFlickerContract) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    QImage primary(64, 64, QImage::Format_ARGB32);
+    primary.fill(QColor(255, 0, 0));
+    QImage secondary(64, 64, QImage::Format_ARGB32);
+    secondary.fill(QColor(0, 255, 0));
+    ASSERT_TRUE(harness.imageReview.openPairImages(std::move(primary),
+                                                   QStringLiteral("primary"),
+                                                   std::move(secondary),
+                                                   QStringLiteral("secondary")));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    harness.settle();
+
+    auto* const imageWorkspace =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
+    ASSERT_NE(imageWorkspace, nullptr);
+
+    // Switch to compareMode 0 (single / in-place)
+    harness.imageReview.setCompareMode(0);
+    harness.settle();
+
+    auto* const inPlaceBadge =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageInPlaceBadge"));
+    ASSERT_NE(inPlaceBadge, nullptr);
+    EXPECT_TRUE(inPlaceBadge->isVisible());
+
+    auto* const primaryViewport =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("primaryViewport"));
+    ASSERT_NE(primaryViewport, nullptr);
+    EXPECT_EQ(primaryViewport->property("slot").toInt(), 2);
+
+    // Toggle button switches to slot 3 (B)
+    auto* const toggleBtn =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageToggleSourceButton"));
+    ASSERT_NE(toggleBtn, nullptr);
+    EXPECT_TRUE(toggleBtn->isVisible());
+    ASSERT_TRUE(QMetaObject::invokeMethod(toggleBtn, "clicked"));
+    harness.settle();
+    EXPECT_EQ(primaryViewport->property("slot").toInt(), 3);
+    EXPECT_TRUE(imageWorkspace->property("singleViewShowSecondary").toBool());
+
+    // Toggle again returns to slot 2 (A)
+    ASSERT_TRUE(QMetaObject::invokeMethod(toggleBtn, "clicked"));
+    harness.settle();
+    EXPECT_EQ(primaryViewport->property("slot").toInt(), 2);
+    EXPECT_FALSE(imageWorkspace->property("singleViewShowSecondary").toBool());
+
+    // Flicker button toggles flickerActive
+    auto* const flickerBtn =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageFlickerButton"));
+    ASSERT_NE(flickerBtn, nullptr);
+    EXPECT_TRUE(flickerBtn->isVisible());
+    ASSERT_TRUE(QMetaObject::invokeMethod(flickerBtn, "clicked"));
+    harness.settle();
+    EXPECT_TRUE(imageWorkspace->property("flickerActive").toBool());
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(flickerBtn, "clicked"));
+    harness.settle();
+    EXPECT_FALSE(imageWorkspace->property("flickerActive").toBool());
+}
+
+TEST(MainQmlContractTests, ImageWorkspaceSyncedCrosshairExistsInSideBySide) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    QImage primary(64, 64, QImage::Format_ARGB32);
+    primary.fill(QColor(255, 0, 0));
+    QImage secondary(64, 64, QImage::Format_ARGB32);
+    secondary.fill(QColor(0, 255, 0));
+    ASSERT_TRUE(harness.imageReview.openPairImages(std::move(primary),
+                                                   QStringLiteral("primary"),
+                                                   std::move(secondary),
+                                                   QStringLiteral("secondary")));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    harness.settle();
+
+    harness.imageReview.setCompareMode(1); // SideBySide
+    harness.settle();
+
+    auto* const crosshair2 =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("syncedCrosshair-2"));
+    ASSERT_NE(crosshair2, nullptr);
+
+    auto* const crosshair3 =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("syncedCrosshair-3"));
+    ASSERT_NE(crosshair3, nullptr);
+}
+
+TEST(MainQmlContractTests, TimelineUncachedHoverShowsTimecodePillAndGuide) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    auto* const tracks = harness.root->findChild<QQuickItem*>(QStringLiteral("timelineSlider"));
+    ASSERT_NE(tracks, nullptr);
+
+    auto* const popup =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("timelineThumbnailPopup"));
+    ASSERT_NE(popup, nullptr);
+
+    auto* const hoverGuide =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("timelineHoverGuide"));
+    ASSERT_NE(hoverGuide, nullptr);
+
+    // Initial state: mouse not hovering timeline, popup and hover guide are not active/visible.
+    EXPECT_FALSE(popup->isVisible());
+    EXPECT_FALSE(hoverGuide->isVisible());
+
+    // Hover over frame 50 (uncached preview).
+    tracks->setProperty("hoverFrame", 50);
+    QMetaObject::invokeMethod(tracks, "previewRequested", Q_ARG(int, 50));
+    harness.settle();
+
+    // With our dual-mode implementation, even uncached frames display the compact timecode pill.
+    EXPECT_TRUE(popup->isVisible());
+    EXPECT_FALSE(popup->property("hasThumbnail").toBool());
+    EXPECT_TRUE(hoverGuide->isVisible());
+
+    auto* const timecodeText = popup->findChild<QObject*>(QStringLiteral("previewTimecodeText"));
+    ASSERT_NE(timecodeText, nullptr);
+    EXPECT_TRUE(timecodeText->property("text").toString().contains(QStringLiteral("第 51 帧")));
+
+    // When mouse exits the timeline, hover frame resets and popup hides.
+    tracks->setProperty("hoverFrame", -1);
+    harness.settle();
+    EXPECT_FALSE(popup->isVisible());
+    EXPECT_FALSE(hoverGuide->isVisible());
+}
+
+TEST(MainQmlContractTests, ImmersiveModeBottomEdgeWakesOverlayOsc) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    auto* const transport = harness.root->findChild<QQuickItem*>(QStringLiteral("transport"));
+    ASSERT_NE(transport, nullptr);
+    EXPECT_TRUE(transport->isVisible());
+
+    // Enter immersive mode by hiding chrome.
+    harness.shell->setChromeVisible(false);
+    harness.settle();
+    EXPECT_FALSE(harness.root->property("chromeVisible").toBool());
+    EXPECT_FALSE(transport->isVisible());
+
+    auto* const wakeStrip =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("immersiveWakeStrip"));
+    ASSERT_NE(wakeStrip, nullptr);
+    EXPECT_TRUE(wakeStrip->isVisible());
+
+    // Trigger edge wake.
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(), "revealImmersiveOsc"));
+    harness.settle();
+    EXPECT_TRUE(harness.root->property("immersiveOscRevealed").toBool());
+    EXPECT_TRUE(transport->isVisible());
+    EXPECT_EQ(harness.root->property("oscState").toInt(), 1);
+
+    // After resetting revealed state, transport hides again.
+    harness.root->setProperty("immersiveOscRevealed", false);
+    harness.settle();
+    EXPECT_FALSE(transport->isVisible());
+    EXPECT_EQ(harness.root->property("oscState").toInt(), 2);
+}
+
+TEST(MainQmlContractTests, ImageWorkspaceAlphaWorkflowAndBackgroundShortcutsContract) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    // Create an image pair with alpha transparency.
+    QImage primary(64, 64, QImage::Format_ARGB32);
+    primary.fill(QColor(255, 0, 0, 128));
+    QImage secondary(64, 64, QImage::Format_ARGB32);
+    secondary.fill(QColor(0, 255, 0, 200));
+    ASSERT_TRUE(harness.imageReview.openPairImages(std::move(primary),
+                                                   QStringLiteral("primary_with_alpha"),
+                                                   std::move(secondary),
+                                                   QStringLiteral("secondary_with_alpha")));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    harness.settle();
+
+    auto* const imageWorkspace =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
+    ASSERT_NE(imageWorkspace, nullptr);
+
+    // Initial state: viewMode = 0 (RgbaView), backgroundMode = 0 (Dark).
+    EXPECT_EQ(harness.imageReview.viewMode(), 0);
+    EXPECT_EQ(imageWorkspace->property("backgroundMode").toInt(), 0);
+
+    auto* const alphaBadge =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageAlphaObservationBadge"));
+    ASSERT_NE(alphaBadge, nullptr);
+    EXPECT_FALSE(alphaBadge->isVisible());
+
+    // Give focus to imageWorkspace so keyboard events reach it.
+    imageWorkspace->forceActiveFocus();
+    harness.settle();
+
+    // Press 'A' to toggle Alpha Gray view.
+    sendKey(*harness.window, Qt::Key_A);
+    harness.settle();
+    EXPECT_EQ(harness.imageReview.viewMode(), 1);
+    EXPECT_TRUE(alphaBadge->isVisible());
+
+    // Press 'A' again to toggle back to RGBA.
+    sendKey(*harness.window, Qt::Key_A);
+    harness.settle();
+    EXPECT_EQ(harness.imageReview.viewMode(), 0);
+    EXPECT_FALSE(alphaBadge->isVisible());
+
+    // Press 'O' to toggle RGB Opaque view.
+    sendKey(*harness.window, Qt::Key_O);
+    harness.settle();
+    EXPECT_EQ(harness.imageReview.viewMode(), 2);
+    EXPECT_TRUE(alphaBadge->isVisible());
+
+    // Press 'O' again to toggle back to RGBA.
+    sendKey(*harness.window, Qt::Key_O);
+    harness.settle();
+    EXPECT_EQ(harness.imageReview.viewMode(), 0);
+    EXPECT_FALSE(alphaBadge->isVisible());
+
+    // Press 'B' to cycle background mode: 0 -> 1 (Checkerboard).
+    sendKey(*harness.window, Qt::Key_B);
+    harness.settle();
+    EXPECT_EQ(imageWorkspace->property("backgroundMode").toInt(), 1);
+    EXPECT_TRUE(alphaBadge->isVisible());
+
+    // Press 'B' again: 1 -> 2 (Black).
+    sendKey(*harness.window, Qt::Key_B);
+    harness.settle();
+    EXPECT_EQ(imageWorkspace->property("backgroundMode").toInt(), 2);
+    EXPECT_TRUE(alphaBadge->isVisible());
+
+    // Press 'B' again: 2 -> 3 (White).
+    sendKey(*harness.window, Qt::Key_B);
+    harness.settle();
+    EXPECT_EQ(imageWorkspace->property("backgroundMode").toInt(), 3);
+    EXPECT_TRUE(alphaBadge->isVisible());
+
+    // Press 'B' again: 3 -> 0 (Dark).
+    sendKey(*harness.window, Qt::Key_B);
+    harness.settle();
+    EXPECT_EQ(imageWorkspace->property("backgroundMode").toInt(), 0);
+    EXPECT_FALSE(alphaBadge->isVisible());
+
+    // Cycle background button clicks cycle background.
+    auto* const cycleBgBtn =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageBgCycleButton"));
+    ASSERT_NE(cycleBgBtn, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(cycleBgBtn, "clicked"));
+    harness.settle();
+    EXPECT_EQ(imageWorkspace->property("backgroundMode").toInt(), 1);
+    EXPECT_TRUE(alphaBadge->isVisible());
+
+    // ModeChip click toggles: clicking Alpha Gray chip sets viewMode 1, clicking again resets to 0.
+    auto* const alphaGrayChip =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageViewAlphaGray"));
+    ASSERT_NE(alphaGrayChip, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(alphaGrayChip, "clicked"));
+    harness.settle();
+    EXPECT_EQ(harness.imageReview.viewMode(), 1);
+    EXPECT_TRUE(alphaBadge->isVisible());
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(alphaGrayChip, "clicked"));
+    harness.settle();
+    EXPECT_EQ(harness.imageReview.viewMode(), 0);
+    EXPECT_TRUE(alphaBadge->isVisible());
+
+    // Reset background to 0.
+    imageWorkspace->setProperty("backgroundMode", 0);
+    harness.settle();
+    EXPECT_FALSE(alphaBadge->isVisible());
+
+    // Verify shortcut help has imagePreset set when in image workspace.
+    auto* const shortcutHelp =
+        harness.root->findChild<QObject*>(QStringLiteral("shortcutHelpOverlay"));
+    ASSERT_NE(shortcutHelp, nullptr);
+    EXPECT_TRUE(shortcutHelp->property("imagePreset").toBool());
 }
 } // namespace
 } // namespace dvs::ui

@@ -24,29 +24,15 @@ if ($firstLine -cne '# Repository Guidelines') {
     $errors.Add("Expected exact first line '# Repository Guidelines'.")
 }
 
-$prose = [regex]::Replace(
-    $content,
-    '(?ms)^[ \t]*```[^\r\n]*\r?\n.*?^[ \t]*```[ \t]*(?:\r?\n|$)',
-    ''
-)
-$prose = [regex]::Replace(
-    $prose,
-    '(?ms)^[ \t]*~~~[^\r\n]*\r?\n.*?^[ \t]*~~~[ \t]*(?:\r?\n|$)',
-    ''
-)
-$wordPattern = "[A-Za-z0-9]+(?:['-][A-Za-z0-9]+)*"
-$wordCount = [regex]::Matches($prose, $wordPattern).Count
-$totalWordCount = [regex]::Matches($content, $wordPattern).Count
-if ($wordCount -lt 300 -or $wordCount -gt 380) {
-    $errors.Add("Expected 300-380 prose words after fenced-block removal; found $wordCount.")
-}
-if ($totalWordCount -lt 200 -or $totalWordCount -gt 400) {
-    $errors.Add("Expected 200-400 total words; found $totalWordCount.")
-}
-
+# Check the engineering contract, not a word count: useful routing and tool setup guidance
+# must be allowed to grow without weakening the architecture or performance requirements.
 $requiredTokens = @(
+    'docs/agent-guide.md',
+    'docs/product/visual-review.md',
+    'docs/engineering/visual-review-backlog.md',
     'domain',
     'application',
+    'presentation_contract',
     'platform_windows',
     'media_ffmpeg',
     'persistence_json',
@@ -62,6 +48,19 @@ $requiredTokens = @(
     'dvs::<module>',
     'qmlformat',
     'qmllint',
+    'clang-format',
+    '19.1.5',
+    'clang-tidy',
+    'PowerShell 7',
+    'pwsh',
+    'tools/build/env.ps1',
+    'tools/build/build.ps1',
+    'outer types',
+    'never enter core',
+    'Never block GUI/render threads',
+    'session/generation/request',
+    'transactionally',
+    'Preserve approved tests and performance gates',
     'Conventional Commits',
     'FFmpeg',
     'D3D11'
@@ -74,10 +73,14 @@ foreach ($token in $requiredTokens) {
 }
 
 $requiredCommands = @(
+    'pwsh tools/build/build.ps1 -Preset dev',
+    'pwsh tools/build/build.ps1 -Preset release -Test',
+    'pwsh tools/build/build.ps1 -Preset dev -Target format-check',
+    'pwsh tools/build/build.ps1 -Preset dev -Target lint',
     'cmake --preset dev',
     'cmake --build --preset dev',
     'ctest --preset dev --output-on-failure',
-    '.\out\build\dev\bin\VCStationCli.exe --startup-check',
+    '.\out\build\dev\bin\CompareStationCli.exe --startup-check',
     'cmake --build --preset dev --target format-check',
     'cmake --build --preset dev --target lint',
     'cmake --preset release',
@@ -106,6 +109,6 @@ if ($errors.Count -gt 0) {
 }
 
 Write-Host (
-    "Repository guide checks passed ($wordCount prose/$totalWordCount total words, " +
+    "Repository guide checks passed ($($requiredTokens.Count) required contract terms, " +
     "$($requiredCommands.Count) commands)."
 )

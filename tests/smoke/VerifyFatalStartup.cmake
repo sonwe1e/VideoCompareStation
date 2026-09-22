@@ -22,7 +22,7 @@ if(fatalResult EQUAL 0)
     message(FATAL_ERROR "The fatal-startup smoke path unexpectedly succeeded.")
 endif()
 
-set(logPath "${DVS_TEST_ROOT}/VCStation/logs/VCStation.log")
+set(logPath "${DVS_TEST_ROOT}/CompareStation/logs/CompareStation.log")
 if(NOT EXISTS "${logPath}" OR IS_DIRECTORY "${logPath}")
     message(
         FATAL_ERROR

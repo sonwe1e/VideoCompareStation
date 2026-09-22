@@ -401,7 +401,7 @@ runDesktop(int& argc,
         }
         if (brokerResult == dvs::app::StartupRequestBroker::StartResult::Failed) {
             return dvs::app::reportFatalStartup(
-                "The VCStation startup request broker could not be initialized.", false);
+                "The CompareStation startup request broker could not be initialized.", false);
         }
     }
     std::unique_ptr<dvs::app::ReviewRuntime> runtime = dvs::app::ReviewRuntime::create();
@@ -2746,36 +2746,54 @@ struct PopupProbeResult final {
 int main(int argc, char* argv[]) {
     // Qt imageformat plugins may omit PNG/JPEG on this deploy; route still-image open
     // through FFmpeg so File → Open image… works for common formats.
-    dvs::ui::ImageReviewController::setProcessStillImageLoader([](const QByteArray& bytes,
-                                                                  QImage* image,
-                                                                  std::string* error) {
-        if (bytes.isEmpty() || image == nullptr) {
-            if (error != nullptr) {
-                *error = "Empty image payload.";
+    dvs::ui::ImageReviewController::setProcessStillImageLoader(
+        [](const QByteArray& bytes,
+           QImage* image,
+           dvs::ui::StillImageSourceInfo* info,
+           std::string* error) {
+            if (bytes.isEmpty() || image == nullptr) {
+                if (error != nullptr) {
+                    *error = "Empty image payload.";
+                }
+                return false;
             }
-            return false;
-        }
-        dvs::media::StillImage still;
-        if (!dvs::media::decodeStillImageBytes(
-                reinterpret_cast<const std::uint8_t*>(bytes.constData()),
-                static_cast<std::size_t>(bytes.size()),
-                &still,
-                error)) {
-            return false;
-        }
-        if (still.width <= 0 || still.height <= 0 ||
-            still.rgba.size() != static_cast<std::size_t>(still.width) *
-                                     static_cast<std::size_t>(still.height) * 4U) {
-            if (error != nullptr) {
-                *error = "Decoded image buffer is invalid.";
+            dvs::media::StillImage still;
+            if (!dvs::media::decodeStillImageBytes(
+                    reinterpret_cast<const std::uint8_t*>(bytes.constData()),
+                    static_cast<std::size_t>(bytes.size()),
+                    &still,
+                    error)) {
+                return false;
             }
-            return false;
-        }
-        const QImage decoded(
-            still.rgba.data(), still.width, still.height, still.width * 4, QImage::Format_RGBA8888);
-        *image = decoded.copy();
-        return !image->isNull();
-    });
+            if (still.width <= 0 || still.height <= 0 ||
+                still.rgba.size() != static_cast<std::size_t>(still.width) *
+                                         static_cast<std::size_t>(still.height) * 4U) {
+                if (error != nullptr) {
+                    *error = "Decoded image buffer is invalid.";
+                }
+                return false;
+            }
+            const QImage decoded(still.rgba.data(),
+                                 still.width,
+                                 still.height,
+                                 still.width * 4,
+                                 QImage::Format_RGBA8888);
+            *image = decoded.copy();
+            if (info != nullptr) {
+                // The RGBA8 buffer is a display conversion; keep the source provenance so
+                // the UI never implies the sampled values are the file's original codes.
+                info->bitDepth = still.sourceBitDepth;
+                info->channels = still.sourceChannels;
+                info->hasAlpha = still.hasAlpha;
+                info->straightAlpha = true;
+                info->sourceFormat = QString::fromStdString(still.sourceFormat);
+                info->colorRange = still.colorRange;
+                info->displayConverted =
+                    still.sourceBitDepth != 8 || still.sourceChannels != 4 ||
+                    (!still.sourceFormat.empty() && still.sourceFormat != "rgba");
+            }
+            return !image->isNull();
+        });
     dvs::ui::ImageReviewController::setProcessStillImageProbe(
         [](const QByteArray& bytes, QSize* size) {
             if (bytes.isEmpty() || size == nullptr) {

@@ -19,7 +19,7 @@ public:
     [[nodiscard]] static PlatformResult<std::filesystem::path>
     absolutePath(const std::filesystem::path& path);
 
-    // Resolves %LOCALAPPDATA%\VCStation but does not create it. Call ensureDirectory at
+    // Resolves %LOCALAPPDATA%\CompareStation but does not create it. Call ensureDirectory at
     // the owning adapter boundary so tests can inject a temporary root without touching user data.
     [[nodiscard]] static PlatformResult<ApplicationDataPaths> applicationDataPaths();
 

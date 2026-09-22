@@ -4,6 +4,13 @@ Status: **implemented** (shipped in v1.6.0). Strict index, explicit manual globa
 offsets, confidence-gated automatic global offsets, bounded full-sequence mapping,
 manual anchors, and timeline diagnostics are available.
 
+Product interpretation (2026-09-22): strict frame-index equality is not proof of equal media time
+when rates or timestamps differ. For 30 fps input versus 60 fps prediction/GT, retain explicit
+index/offset/anchor behavior and state the chosen mapping; do not silently interpolate to hide
+model errors. Time-based comparison and the precision of its UI labels remain V-03 in the
+[current issue ledger](engineering/visual-review-backlog.md). Reference and timeline master are
+separate roles; see [ADR 0004](adr/0004-timeline-pair-continuity.md).
+
 Two comparison modes make sure automatic alignment can never mask inference errors:
 
 - **Strict Index Mode** (default, for model-output review): canonical frame `i` maps

@@ -11,6 +11,8 @@ Rectangle {
     property color mutedTextColor: Theme.mutedText
 
     signal openVideosRequested
+    signal openImageRequested
+    signal compareFoldersRequested
 
     objectName: "emptyReviewView"
     color: "transparent"
@@ -52,6 +54,22 @@ Rectangle {
                 text: qsTr("打开视频")
                 prominent: true
                 onClicked: control.openVideosRequested()
+            }
+
+            ReviewActionButton {
+                id: openImageButton
+
+                objectName: "emptyOpenImageButton"
+                text: qsTr("打开图片…")
+                onClicked: control.openImageRequested()
+            }
+
+            ReviewActionButton {
+                id: compareFoldersButton
+
+                objectName: "emptyCompareFoldersButton"
+                text: qsTr("对比文件夹…")
+                onClicked: control.compareFoldersRequested()
             }
         }
     }

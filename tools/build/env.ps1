@@ -1,78 +1,108 @@
 #requires -Version 7.0
-# env.ps1 — single source of truth for machine-local build defaults (VCStation).
-#
-# Usage (PowerShell 7 / pwsh):  . ./tools/build/env.ps1
-# Optional overrides:          . ./tools/build/env.ps1 -VcpkgRoot X:\vcpkg -VcvarsAll C:\...\vcvarsall.bat
-#
-# Dot-source this file (or run via the tools/build/build.ps1 wrapper). It:
-#   - sets $env:VCPKG_ROOT (used by the CMake base preset toolchain), and
-#   - exports $env:VCVARSALL_PATH and $env:NINJA_BIN so callers can wrap cmake in
-#     the MSVC developer environment.
-# Every repository PowerShell script carries `#requires -Version 7.0`; Windows
-# PowerShell 5.1 is not a supported shell for this project.
-
+# Resolve tools without machine-specific drive letters. Explicit overrides must be valid.
 [CmdletBinding()]
 param(
-    # Vcpkg root with scripts/buildsystems/vcpkg.cmake (default: $env:VCPKG_ROOT, then the
-    # machine-local default below).
     [string]$VcpkgRoot = '',
-    # Full path to vcvarsall.bat (default: auto-detected BuildTools/VS 2022 layout).
-    [string]$VcvarsAll = ''
+    [string]$VcvarsAll = '',
+    [string]$CMakeExecutable = '',
+    [string]$NinjaExecutable = ''
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-# --- Vcpkg ----------------------------------------------------------------
-# Test-Path/Join-Path throw for a drive that does not exist, so validation must not
-# propagate those (an injected/stale VCPKG_ROOT must degrade to the machine default).
+function Resolve-BuildFile {
+    param([string]$Path, [string]$Description)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "$Description not found: '$Path'. Supply its explicit build.ps1 parameter."
+    }
+    return (Resolve-Path -LiteralPath $Path).Path
+}
+
 function Test-VcpkgRoot {
     param([string]$Root)
     if (-not $Root) { return $false }
     try {
-        return Test-Path (Join-Path $Root 'scripts\buildsystems\vcpkg.cmake') -ErrorAction Stop
+        return Test-Path -LiteralPath (Join-Path $Root 'scripts/buildsystems/vcpkg.cmake') -PathType Leaf
     } catch {
         return $false
     }
 }
 
-if (-not $VcpkgRoot) {
-    $VcpkgRoot = if ($env:VCPKG_ROOT) { $env:VCPKG_ROOT } else { 'G:\Workspaces\vcpkg' }
+$buildRepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
+if ($VcpkgRoot) {
     if (-not (Test-VcpkgRoot $VcpkgRoot)) {
-        Write-Warning "Ignoring invalid VCPKG_ROOT '$VcpkgRoot' (no scripts/buildsystems/vcpkg.cmake); using default."
-        $VcpkgRoot = 'G:\Workspaces\vcpkg'
+        throw "Invalid -VcpkgRoot '$VcpkgRoot': scripts/buildsystems/vcpkg.cmake is missing."
+    }
+} else {
+    $vcpkgCommand = Get-Command vcpkg -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    $vcpkgCandidates = @(
+        $env:DVS_VCPKG_ROOT
+        $env:VCPKG_ROOT
+        $env:VCPKG_INSTALLATION_ROOT
+        $(if ($vcpkgCommand) { Split-Path $vcpkgCommand.Source -Parent })
+        (Join-Path (Split-Path $buildRepoRoot -Parent) 'vcpkg')
+    ) | Where-Object { $_ } | Select-Object -Unique
+    foreach ($candidate in $vcpkgCandidates) {
+        if (Test-VcpkgRoot $candidate) {
+            $VcpkgRoot = $candidate
+            break
+        }
+        Write-Warning "Ignoring unavailable vcpkg candidate '$candidate'."
+    }
+    if (-not $VcpkgRoot) {
+        throw 'vcpkg was not found. Pass -VcpkgRoot or set DVS_VCPKG_ROOT/VCPKG_ROOT.'
     }
 }
-if (-not (Test-VcpkgRoot $VcpkgRoot)) {
-    throw "VCPKG_ROOT '$VcpkgRoot' has no scripts/buildsystems/vcpkg.cmake; pass -VcpkgRoot or set the VCPKG_ROOT environment variable."
-}
-$env:VCPKG_ROOT = $VcpkgRoot
+$env:VCPKG_ROOT = (Resolve-Path -LiteralPath $VcpkgRoot).Path
 
-# --- MSVC / vcvarsall -----------------------------------------------------
+if (-not $VcvarsAll) { $VcvarsAll = $env:VCVARSALL_PATH }
+if (-not $VcvarsAll -and $env:VCINSTALLDIR) {
+    $VcvarsAll = Join-Path $env:VCINSTALLDIR 'Auxiliary/Build/vcvarsall.bat'
+}
 if (-not $VcvarsAll) {
-    $candidates = @(
-        'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat'
-        'C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat'
-        'C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvarsall.bat'
-        'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat'
-        'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat'
-    )
-    $VcvarsAll = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    $vswhere = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'Microsoft Visual Studio/Installer/vswhere.exe'
+    if (Test-Path -LiteralPath $vswhere -PathType Leaf) {
+        $vsInstallation = & $vswhere -latest -products '*' -version '[17.0,18.0)' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+        if ($LASTEXITCODE -ne 0) { throw "vswhere failed (exit $LASTEXITCODE)." }
+        if ($vsInstallation) {
+            $VcvarsAll = Join-Path ($vsInstallation | Select-Object -First 1) 'VC/Auxiliary/Build/vcvarsall.bat'
+        }
+    }
 }
-if (-not $VcvarsAll -or -not (Test-Path $VcvarsAll)) {
-    throw "vcvarsall.bat not found; pass -VcvarsAll or install VS 2022 BuildTools/Community/Professional/Enterprise."
-}
-$env:VCVARSALL_PATH = $VcvarsAll
+$env:VCVARSALL_PATH = Resolve-BuildFile $VcvarsAll 'Visual Studio 2022 vcvarsall.bat'
+$buildVcRoot = [System.IO.Path]::GetFullPath((Join-Path (Split-Path $env:VCVARSALL_PATH) '../..'))
+$buildVsRoot = Split-Path $buildVcRoot -Parent
 
-# --- Ninja ------------------------------------------------------------------
-# CMake's Ninja generator needs ninja on PATH at configure time. The machine-local
-# copy (msys2) is prepended only when no ninja is already discoverable.
-if (-not (Get-Command ninja -ErrorAction SilentlyContinue) -and
-    (Test-Path 'C:\msys64\ucrt64\bin\ninja.exe')) {
-    $env:PATH = 'C:\msys64\ucrt64\bin;' + $env:PATH
-    $env:NINJA_BIN = 'C:\msys64\ucrt64\bin\ninja.exe'
+function Resolve-BuildTool {
+    param([string]$Override, [string]$Name, [string]$Fallback)
+    if ($Override) { return Resolve-BuildFile $Override $Name }
+    $command = Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($command) { return $command.Source }
+    return Resolve-BuildFile $Fallback $Name
 }
 
-Write-Host ("build env: VCPKG_ROOT={0}" -f $env:VCPKG_ROOT)
-Write-Host ("build env: VCVARSALL={0}" -f $env:VCVARSALL_PATH)
-Write-Host ("build env: NINJA={0}" -f $(if ($env:NINJA_BIN) { $env:NINJA_BIN } else { 'PATH' }))
+if (-not $CMakeExecutable) { $CMakeExecutable = $env:CMAKE_EXECUTABLE }
+if (-not $NinjaExecutable) { $NinjaExecutable = $env:NINJA_BIN }
+$env:CMAKE_EXECUTABLE = Resolve-BuildTool $CMakeExecutable 'cmake.exe' (Join-Path $buildVsRoot 'Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe')
+$env:CTEST_EXECUTABLE = Resolve-BuildFile (Join-Path (Split-Path $env:CMAKE_EXECUTABLE) 'ctest.exe') 'ctest.exe (beside CMake)'
+$env:NINJA_BIN = Resolve-BuildTool $NinjaExecutable 'ninja.exe' (Join-Path $buildVsRoot 'Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe')
+
+$buildToolDirectories = @(
+    (Split-Path $env:CMAKE_EXECUTABLE)
+    (Split-Path $env:NINJA_BIN)
+    (Join-Path $buildVcRoot 'Tools/Llvm/x64/bin')
+) | Where-Object { Test-Path -LiteralPath $_ -PathType Container } | Select-Object -Unique
+$env:PATH = ($buildToolDirectories -join [System.IO.Path]::PathSeparator) +
+    [System.IO.Path]::PathSeparator + $env:PATH
+# The configure probe and every subsequent compile must agree on /showIncludes language.
+$env:VSLANG = '1033'
+
+Write-Host "build env: VCPKG_ROOT=$env:VCPKG_ROOT"
+Write-Host "build env: VCVARSALL=$env:VCVARSALL_PATH"
+Write-Host "build env: CMAKE=$env:CMAKE_EXECUTABLE"
+Write-Host "build env: CTEST=$env:CTEST_EXECUTABLE"
+Write-Host "build env: NINJA=$env:NINJA_BIN"
+Write-Host "build env: VSLANG=$env:VSLANG"

@@ -20,7 +20,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Executable = 'G:\Workspaces\Toy\out\build\release\bin\VCStation.exe',
+    [string]$Executable = 'G:\Workspaces\Toy\out\build\release\bin\CompareStation.exe',
     [string]$FixtureRoot = 'G:\Workspaces\Toy\out\evidence-fixtures',
     [string]$EvidenceRoot = 'G:\Workspaces\Toy\out\evidence',
     [string]$BuildType = 'Release',

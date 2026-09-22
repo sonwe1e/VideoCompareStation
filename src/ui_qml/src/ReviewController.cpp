@@ -322,6 +322,11 @@ struct LocalFileValidation final {
         QStringLiteral("webp"),
         QStringLiteral("tif"),
         QStringLiteral("tiff"),
+        QStringLiteral("pnm"),
+        QStringLiteral("ppm"),
+        QStringLiteral("pgm"),
+        QStringLiteral("pbm"),
+        QStringLiteral("pam"),
     };
     return kImageSuffixes.contains(suffix);
 }
@@ -410,6 +415,11 @@ struct ReviewView final {
     int playbackContinuityPolicy = 0;
     QString playbackContinuityPolicyName;
     qulonglong playbackSkippedFrameSets = 0U;
+    qulonglong playbackRunSkippedFrameSets = 0U;
+    qreal playbackTargetRate = 1.0;
+    qreal playbackPresentationRate = 0.0;
+    qint64 playbackLagMicroseconds = 0;
+    bool playbackCatchingUp = false;
     bool canOpen = false;
     bool canFirst = false;
     bool canPrevious = false;
@@ -1916,6 +1926,12 @@ private:
                                            .size()));
             next.playbackSkippedFrameSets =
                 static_cast<qulonglong>(snapshot_->playbackSkippedFrameSets);
+            next.playbackRunSkippedFrameSets =
+                static_cast<qulonglong>(snapshot_->playbackRunSkippedFrameSets);
+            next.playbackTargetRate = static_cast<qreal>(snapshot_->playbackTargetRate);
+            next.playbackPresentationRate = static_cast<qreal>(snapshot_->playbackPresentationRate);
+            next.playbackLagMicroseconds = static_cast<qint64>(snapshot_->playbackLagMicroseconds);
+            next.playbackCatchingUp = snapshot_->playbackCatchingUp;
         }
         next.sourceCount = static_cast<int>(sourceRows.size());
         sourceModel_.setRows(std::move(sourceRows));
@@ -2219,6 +2235,26 @@ int ReviewController::playbackContinuityPolicy() const noexcept {
 
 qulonglong ReviewController::playbackSkippedFrameSets() const noexcept {
     return impl_->view().playbackSkippedFrameSets;
+}
+
+qulonglong ReviewController::playbackRunSkippedFrameSets() const noexcept {
+    return impl_->view().playbackRunSkippedFrameSets;
+}
+
+qreal ReviewController::playbackTargetRate() const noexcept {
+    return impl_->view().playbackTargetRate;
+}
+
+qreal ReviewController::playbackPresentationRate() const noexcept {
+    return impl_->view().playbackPresentationRate;
+}
+
+qint64 ReviewController::playbackLagMicroseconds() const noexcept {
+    return impl_->view().playbackLagMicroseconds;
+}
+
+bool ReviewController::playbackCatchingUp() const noexcept {
+    return impl_->view().playbackCatchingUp;
 }
 
 int ReviewController::effectiveDifferenceEdge() const noexcept {

@@ -837,6 +837,13 @@ SoftwareDecoder::decodeInternal(const domain::FrameId frameId,
                         true));
                 }
 
+                // Display-space normalization contract: every source (RGB, 4:4:4, 4:2:2 or
+                // 4:2:0, 8- or 10-bit) is converted to the NV12/P010 4:2:0 display path with
+                // matrix/range-correct swscale. This is an explicit, consistent display
+                // conversion; sampled pixel values are display-converted and never original
+                // code values for RGB/4:4:4/4:2:2 sources. ComparisonExactness keeps the
+                // "display space converted" marking in sync with this path — do not remove
+                // that marking if this conversion stays.
                 const AVPixelFormat outputFormat = outputP010 ? AV_PIX_FMT_P010LE : AV_PIX_FMT_NV12;
                 SwsContext* const cached =
                     sws_getCachedContext(impl_->sws.release(),

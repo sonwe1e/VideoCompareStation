@@ -520,4 +520,23 @@ TEST_F(ImageFolderPairModelTests, SingleSideRowOpensExistingSideAndAdvancesSelec
     model.completeSingleSideOpen(100U, true, QString{});
     EXPECT_EQ(model.currentPair(), singleRow);
 }
+TEST_F(ImageFolderPairModelTests, RecognizesPnmFamilyAsFirstClassImages) {
+    // PNM (PPM/PGM/PBM) is a formally supported input, not a decode fallback: the folder
+    // walker must pair and count it like any other still image.
+    static_cast<void>(writeFile(left_, "shot.ppm", "a"));
+    static_cast<void>(writeFile(left_, "gray.pgm", "a"));
+    static_cast<void>(writeFile(left_, "bits.pbm", "a"));
+    static_cast<void>(writeFile(right_, "shot.ppm", "b"));
+    static_cast<void>(writeFile(right_, "gray.pgm", "b"));
+    static_cast<void>(writeFile(right_, "bits.pbm", "b"));
+    static_cast<void>(writeFile(left_, "notes.txt", "ignored"));
+
+    ImageFolderPairModel model;
+    ASSERT_TRUE(model.loadFolders(folderUrl(left_), folderUrl(right_)));
+    EXPECT_EQ(model.pairCount(), 3);
+    EXPECT_EQ(model.completeCount(), 3);
+    EXPECT_EQ(model.missingCount(), 0);
+    EXPECT_EQ(model.conflictCount(), 0);
+}
+
 } // namespace

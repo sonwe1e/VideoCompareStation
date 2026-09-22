@@ -34,6 +34,10 @@ jobs:
         shell: pwsh
         run: .\tools\quality\check-resource-limits.ps1
 
+      - name: Check build wrapper contracts
+        shell: pwsh
+        run: .\tools\quality\check-build-scripts.ps1
+
       - name: Check coverage gate behavior
         shell: pwsh
         run: >-

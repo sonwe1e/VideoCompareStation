@@ -19,11 +19,11 @@ $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'
 $cmakeLists = Get-Content -LiteralPath (Join-Path $repositoryRoot 'CMakeLists.txt') -Raw
 $versionMatch = [regex]::Match(
     $cmakeLists,
-    'project\s*\(\s*VCStation\s+VERSION\s+(?<version>\d+\.\d+\.\d+)\s+LANGUAGES\s+CXX\s*\)',
+    'project\s*\(\s*CompareStation\s+VERSION\s+(?<version>\d+\.\d+\.\d+)\s+LANGUAGES\s+CXX\s*\)',
     [Text.RegularExpressions.RegexOptions]::IgnoreCase
 )
 if (-not $versionMatch.Success) {
-    throw 'Could not resolve the VCStation project version from CMakeLists.txt.'
+    throw 'Could not resolve the CompareStation project version from CMakeLists.txt.'
 }
 
 $version = $versionMatch.Groups['version'].Value
@@ -66,7 +66,7 @@ if ($Executable) {
     }
 }
 
-$expectedBaseName = "VCStation-$version-windows-x64"
+$expectedBaseName = "CompareStation-$version-windows-x64"
 foreach ($artifact in @(
         @{ Path = $ZipPath; Extension = '.zip' },
         @{ Path = $MsiPath; Extension = '.msi' }
@@ -91,7 +91,7 @@ if ($MsiPath) {
         @((Resolve-Path -LiteralPath $MsiPath).Path, 0)
     )
     foreach ($property in @(
-            @{ Name = 'ProductName'; Expected = 'VCStation' },
+            @{ Name = 'ProductName'; Expected = 'CompareStation' },
             @{ Name = 'ProductVersion'; Expected = $version }
         )) {
         $query =

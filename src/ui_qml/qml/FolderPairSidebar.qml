@@ -58,6 +58,26 @@ Rectangle {
             selectRow(row);
     }
 
+    function stepFirst() {
+        if (!pairModel)
+            return;
+        const row = pairModel.firstCompleteRow();
+        if (row >= 0)
+            selectRow(row);
+    }
+
+    function stepLast() {
+        if (!pairModel || pairModel.pairCount === 0)
+            return;
+        for (let i = pairModel.pairCount - 1; i >= 0; --i) {
+            const urls = pairModel.pairUrlsAt(i);
+            if (urls && urls.hasBoth) {
+                selectRow(i);
+                return;
+            }
+        }
+    }
+
     Column {
         anchors.fill: parent
         spacing: 0

@@ -267,7 +267,7 @@ std::string IssueRecordRepository::encodeDocument(const std::vector<IssueRecord>
     }
     Json document = Json::object();
     document["schemaVersion"] = kIssueRecordSchemaVersion;
-    document["kind"] = "vcstation-issue-log";
+    document["kind"] = "comparestation-issue-log";
     document["records"] = std::move(recordsArray);
     std::string text = document.dump(2);
     text.push_back('\n');

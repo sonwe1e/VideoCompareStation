@@ -4,6 +4,7 @@
 #include <QImage>
 #include <QObject>
 #include <QSize>
+#include <QString>
 #include <QUrl>
 
 #include <cstdint>
@@ -13,6 +14,30 @@
 
 namespace dvs::ui {
 
+// Provenance of a decoded still image. The display buffer is always RGBA8 with straight
+// (unassociated) alpha; these fields describe the *source* the buffer was converted from, so
+// the UI never implies that a sampled pixel value is the file's original code value.
+struct StillImageSourceInfo final {
+    // Source bits per component before the display conversion (8/10/12/16…).
+    int bitDepth = 8;
+    // Decoded source channel count (1 = gray, 3 = RGB, 4 = RGBA).
+    int channels = 4;
+    // The decoded source frame carried an alpha channel.
+    bool hasAlpha = false;
+    // The decoded buffer's alpha is straight (unassociated). Premultiplied sources are
+    // interpreted as straight on decode; the two representations must never be subtracted
+    // against each other.
+    bool straightAlpha = true;
+    // FFmpeg pixel format name of the decoded source frame, e.g. "rgba", "gray16be",
+    // "rgb48be", "yuvj420p"; empty when unknown.
+    QString sourceFormat;
+    // FFmpeg AVCOL_RANGE of the source frame, or -1 when unknown.
+    int colorRange = -1;
+    // True when the source differs from the display buffer (bit depth, channels or color
+    // space), i.e. sampled pixels are display-converted values, not original code values.
+    bool displayConverted = false;
+};
+
 // Worker-off-thread still-image loader/difference service. Completion handlers always run on
 // this object's owning thread, so callers can commit results in one step without touching
 // QObject state from a decoder thread. A decoded QImage never changes after delivery.
@@ -20,9 +45,10 @@ class ImagePairLoader final : public QObject {
     Q_OBJECT
 
 public:
-    // Reads raw file bytes into an RGBA8 QImage. Injected by the app composition root so a
-    // minimal deployment does not depend on Qt imageformat plugins.
-    using ImageLoader = std::function<bool(const QByteArray&, QImage*, std::string*)>;
+    // Reads raw file bytes into an RGBA8 QImage plus its source provenance. Injected by the
+    // app composition root so a minimal deployment does not depend on Qt imageformat plugins.
+    using ImageLoader =
+        std::function<bool(const QByteArray&, QImage*, StillImageSourceInfo*, std::string*)>;
     // Returns true when the header dimensions could be read without decoding. False means
     // the header is unknown; the loader then falls back to the decoded image's dimensions.
     using ImageProbe = std::function<bool(const QByteArray&, QSize*)>;
@@ -40,6 +66,8 @@ public:
         bool secondaryOnly = false;
         QImage primary;
         QImage secondary;
+        StillImageSourceInfo primaryInfo;
+        StillImageSourceInfo secondaryInfo;
         QString primaryLabel;
         QString secondaryLabel;
         QString primaryIdentity;
@@ -59,6 +87,14 @@ public:
         QImage image;
         int maxAbsDifference = 0;
         double meanAbsDifference = 0.0;
+        // Alpha statistics cover the straight (unassociated) alpha channel of the decoded
+        // RGBA8 buffers. They are always accumulated, so an alpha-only regression is visible
+        // even when the RGB channels match.
+        int peakAlphaDifference = 0;
+        double meanAlphaDifference = 0.0;
+        qint64 alphaChangedPixels = 0;
+        // True when either side has at least one non-opaque pixel.
+        bool hasAlpha = false;
         bool resampled = false;
         bool alphaDifferenceOnly = false;
         QString error;

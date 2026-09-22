@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-VCStation distributes third-party runtime components under their respective
+CompareStation distributes third-party runtime components under their respective
 licenses. The package includes the exact license or copyright texts in this directory;
 those texts govern the corresponding components.
 

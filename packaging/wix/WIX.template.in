@@ -47,13 +47,13 @@
 
         <DirectoryRef Id="INSTALL_ROOT">
             <Component
-                Id="VCStationExplorerCommand"
+                Id="CompareStationExplorerCommand"
                 Guid="D20DA233-4317-45D8-B878-00BF4486F1C4"
                 Bitness="always64">
                 <RegistryValue
                     Root="HKLM"
                     Key="Software\Classes\CLSID\{3B790D74-E76E-4F28-A51D-2AB8C6BD107D}"
-                    Value="VCStation Explorer comparison command"
+                    Value="CompareStation Explorer comparison command"
                     Type="string"
                     KeyPath="yes"/>
                 <RegistryValue
@@ -69,91 +69,91 @@
                     Type="string"/>
                 <RegistryValue
                     Root="HKLM"
-                    Key="Software\Classes\SystemFileAssociations\.mp4\shell\VCStation.Compare"
+                    Key="Software\Classes\SystemFileAssociations\.mp4\shell\CompareStation.Compare"
                     Name="MUIVerb"
-                    Value="Compare with VCStation"
+                    Value="Compare with CompareStation"
                     Type="string"/>
                 <RegistryValue
                     Root="HKLM"
-                    Key="Software\Classes\SystemFileAssociations\.mp4\shell\VCStation.Compare"
+                    Key="Software\Classes\SystemFileAssociations\.mp4\shell\CompareStation.Compare"
                     Name="ExplorerCommandHandler"
                     Value="{3B790D74-E76E-4F28-A51D-2AB8C6BD107D}"
                     Type="string"/>
                 <RegistryValue
                     Root="HKLM"
-                    Key="Software\Classes\SystemFileAssociations\.mp4\shell\VCStation.Compare"
+                    Key="Software\Classes\SystemFileAssociations\.mp4\shell\CompareStation.Compare"
                     Name="MultiSelectModel"
                     Value="Player"
                     Type="string"/>
                 <RegistryValue
                     Root="HKLM"
-                    Key="Software\Classes\SystemFileAssociations\.mkv\shell\VCStation.Compare"
+                    Key="Software\Classes\SystemFileAssociations\.mkv\shell\CompareStation.Compare"
                     Name="MUIVerb"
-                    Value="Compare with VCStation"
+                    Value="Compare with CompareStation"
                     Type="string"/>
                 <RegistryValue
                     Root="HKLM"
-                    Key="Software\Classes\SystemFileAssociations\.mkv\shell\VCStation.Compare"
+                    Key="Software\Classes\SystemFileAssociations\.mkv\shell\CompareStation.Compare"
                     Name="ExplorerCommandHandler"
                     Value="{3B790D74-E76E-4F28-A51D-2AB8C6BD107D}"
                     Type="string"/>
                 <RegistryValue
                     Root="HKLM"
-                    Key="Software\Classes\SystemFileAssociations\.mkv\shell\VCStation.Compare"
+                    Key="Software\Classes\SystemFileAssociations\.mkv\shell\CompareStation.Compare"
                     Name="MultiSelectModel"
                     Value="Player"
                     Type="string"/>
                 <RegistryValue
                     Root="HKLM"
-                    Key="Software\Classes\SystemFileAssociations\.mov\shell\VCStation.Compare"
+                    Key="Software\Classes\SystemFileAssociations\.mov\shell\CompareStation.Compare"
                     Name="MUIVerb"
-                    Value="Compare with VCStation"
+                    Value="Compare with CompareStation"
                     Type="string"/>
                 <RegistryValue
                     Root="HKLM"
-                    Key="Software\Classes\SystemFileAssociations\.mov\shell\VCStation.Compare"
+                    Key="Software\Classes\SystemFileAssociations\.mov\shell\CompareStation.Compare"
                     Name="ExplorerCommandHandler"
                     Value="{3B790D74-E76E-4F28-A51D-2AB8C6BD107D}"
                     Type="string"/>
                 <RegistryValue
                     Root="HKLM"
-                    Key="Software\Classes\SystemFileAssociations\.mov\shell\VCStation.Compare"
+                    Key="Software\Classes\SystemFileAssociations\.mov\shell\CompareStation.Compare"
                     Name="MultiSelectModel"
                     Value="Player"
                     Type="string"/>
                 <RegistryValue
                     Root="HKLM"
-                    Key="Software\Classes\SystemFileAssociations\.avi\shell\VCStation.Compare"
+                    Key="Software\Classes\SystemFileAssociations\.avi\shell\CompareStation.Compare"
                     Name="MUIVerb"
-                    Value="Compare with VCStation"
+                    Value="Compare with CompareStation"
                     Type="string"/>
                 <RegistryValue
                     Root="HKLM"
-                    Key="Software\Classes\SystemFileAssociations\.avi\shell\VCStation.Compare"
+                    Key="Software\Classes\SystemFileAssociations\.avi\shell\CompareStation.Compare"
                     Name="ExplorerCommandHandler"
                     Value="{3B790D74-E76E-4F28-A51D-2AB8C6BD107D}"
                     Type="string"/>
                 <RegistryValue
                     Root="HKLM"
-                    Key="Software\Classes\SystemFileAssociations\.avi\shell\VCStation.Compare"
+                    Key="Software\Classes\SystemFileAssociations\.avi\shell\CompareStation.Compare"
                     Name="MultiSelectModel"
                     Value="Player"
                     Type="string"/>
                 <RegistryValue
                     Root="HKLM"
-                    Key="Software\Classes\SystemFileAssociations\.m4v\shell\VCStation.Compare"
+                    Key="Software\Classes\SystemFileAssociations\.m4v\shell\CompareStation.Compare"
                     Name="MUIVerb"
-                    Value="Compare with VCStation"
+                    Value="Compare with CompareStation"
                     Type="string"/>
                 <RegistryValue
                     Root="HKLM"
-                    Key="Software\Classes\SystemFileAssociations\.m4v\shell\VCStation.Compare"
+                    Key="Software\Classes\SystemFileAssociations\.m4v\shell\CompareStation.Compare"
                     Name="ExplorerCommandHandler"
                     Value="{3B790D74-E76E-4F28-A51D-2AB8C6BD107D}"
                     Type="string"/>
                 <RegistryValue
                     Root="HKLM"
-                    Key="Software\Classes\SystemFileAssociations\.m4v\shell\VCStation.Compare"
+                    Key="Software\Classes\SystemFileAssociations\.m4v\shell\CompareStation.Compare"
                     Name="MultiSelectModel"
                     Value="Player"
                     Type="string"/>
@@ -163,23 +163,23 @@
                     Action="removeOnUninstall"/>
                 <RemoveRegistryKey
                     Root="HKLM"
-                    Key="Software\Classes\SystemFileAssociations\.mp4\shell\VCStation.Compare"
+                    Key="Software\Classes\SystemFileAssociations\.mp4\shell\CompareStation.Compare"
                     Action="removeOnUninstall"/>
                 <RemoveRegistryKey
                     Root="HKLM"
-                    Key="Software\Classes\SystemFileAssociations\.mkv\shell\VCStation.Compare"
+                    Key="Software\Classes\SystemFileAssociations\.mkv\shell\CompareStation.Compare"
                     Action="removeOnUninstall"/>
                 <RemoveRegistryKey
                     Root="HKLM"
-                    Key="Software\Classes\SystemFileAssociations\.mov\shell\VCStation.Compare"
+                    Key="Software\Classes\SystemFileAssociations\.mov\shell\CompareStation.Compare"
                     Action="removeOnUninstall"/>
                 <RemoveRegistryKey
                     Root="HKLM"
-                    Key="Software\Classes\SystemFileAssociations\.avi\shell\VCStation.Compare"
+                    Key="Software\Classes\SystemFileAssociations\.avi\shell\CompareStation.Compare"
                     Action="removeOnUninstall"/>
                 <RemoveRegistryKey
                     Root="HKLM"
-                    Key="Software\Classes\SystemFileAssociations\.m4v\shell\VCStation.Compare"
+                    Key="Software\Classes\SystemFileAssociations\.m4v\shell\CompareStation.Compare"
                     Action="removeOnUninstall"/>
                 <RemoveRegistryKey
                     Root="HKLM"
@@ -187,34 +187,34 @@
                     Action="removeOnInstall"/>
                 <RemoveRegistryKey
                     Root="HKLM"
-                    Key="Software\Classes\VCStation.Project"
+                    Key="Software\Classes\CompareStation.Project"
                     Action="removeOnInstall"/>
                 <RemoveRegistryKey
                     Root="HKLM"
-                    Key="Software\Classes\Applications\VCStation.exe\SupportedTypes"
+                    Key="Software\Classes\Applications\CompareStation.exe\SupportedTypes"
                     Action="removeOnInstall"/>
             </Component>
         </DirectoryRef>
 
         <StandardDirectory Id="ProgramMenuFolder">
-            <Directory Id="VCStationProgramMenuFolder" Name="VCStation">
+            <Directory Id="CompareStationProgramMenuFolder" Name="CompareStation">
                 <Component
-                    Id="VCStationStartMenuShortcut"
+                    Id="CompareStationStartMenuShortcut"
                     Guid="6DD95669-3B96-4888-B35D-0C3F7F777AD5"
                     Bitness="always64">
                     <Shortcut
-                        Id="VCStationStartMenuEntry"
-                        Name="VCStation"
-                        Description="VCStation - VideoCompareStation"
-                        Target="[INSTALL_ROOT]VCStation.exe"
+                        Id="CompareStationStartMenuEntry"
+                        Name="CompareStation"
+                        Description="CompareStation"
+                        Target="[INSTALL_ROOT]CompareStation.exe"
                         WorkingDirectory="INSTALL_ROOT"/>
                     <RemoveFolder
-                        Id="RemoveVCStationProgramMenuFolder"
-                        Directory="VCStationProgramMenuFolder"
+                        Id="RemoveCompareStationProgramMenuFolder"
+                        Directory="CompareStationProgramMenuFolder"
                         On="uninstall"/>
                     <RegistryValue
                         Root="HKCU"
-                        Key="Software\VCStation\Installer"
+                        Key="Software\CompareStation\Installer"
                         Name="StartMenuShortcut"
                         Value="1"
                         Type="integer"
@@ -224,8 +224,8 @@
         </StandardDirectory>
 
         <FeatureRef Id="ProductFeature">
-            <ComponentRef Id="VCStationExplorerCommand"/>
-            <ComponentRef Id="VCStationStartMenuShortcut"/>
+            <ComponentRef Id="CompareStationExplorerCommand"/>
+            <ComponentRef Id="CompareStationStartMenuShortcut"/>
         </FeatureRef>
 
         <ui:WixUI Id="$(var.CPACK_WIX_UI_REF)" />

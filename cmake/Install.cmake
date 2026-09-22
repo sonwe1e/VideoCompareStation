@@ -5,11 +5,11 @@ set(CMAKE_INSTALL_UCRT_LIBRARIES TRUE)
 include(InstallRequiredSystemLibraries)
 
 install(
-    TARGETS VCStation VCStationCli VCStationShell
+    TARGETS CompareStation CompareStationCli CompareStationShell
     RUNTIME_DEPENDENCIES
         DIRECTORIES
-            "$<TARGET_FILE_DIR:VCStation>"
-            "$<TARGET_FILE_DIR:VCStationCli>"
+            "$<TARGET_FILE_DIR:CompareStation>"
+            "$<TARGET_FILE_DIR:CompareStationCli>"
         PRE_EXCLUDE_REGEXES
             "^api-ms-win-.*"
             "^ext-ms-.*"
@@ -19,7 +19,7 @@ install(
 )
 
 qt6_generate_deploy_script(
-    TARGET VCStation
+    TARGET CompareStation
     NAME dvs_qt_runtime
     OUTPUT_SCRIPT dvs_qt_deploy_script
     CONTENT "
@@ -27,7 +27,7 @@ set(QT_DEPLOY_BIN_DIR \".\")
 set(QT_DEPLOY_PLUGINS_DIR \".\")
 set(QT_DEPLOY_QML_DIR \"qml\")
 qt6_deploy_runtime_dependencies(
-    EXECUTABLE \"$<TARGET_FILE:VCStation>\"
+    EXECUTABLE \"$<TARGET_FILE:CompareStation>\"
     GENERATE_QT_CONF
     NO_TRANSLATIONS
     DEPLOY_TOOL_OPTIONS

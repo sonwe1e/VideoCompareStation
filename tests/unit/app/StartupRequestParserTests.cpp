@@ -11,7 +11,7 @@ namespace dvs::app {
 namespace {
 
 TEST(StartupRequestParserTests, ParsesEmptyLaunch) {
-    const StartupRequestParseResult result = parseStartupRequest({QStringLiteral("VCStation.exe")});
+    const StartupRequestParseResult result = parseStartupRequest({QStringLiteral("CompareStation.exe")});
 
     ASSERT_TRUE(result);
     EXPECT_EQ(result.request->kind, StartupRequest::Kind::Empty);
@@ -20,7 +20,7 @@ TEST(StartupRequestParserTests, ParsesEmptyLaunch) {
 
 TEST(StartupRequestParserTests, ParsesUnicodeSinglePlaybackWithoutNarrowing) {
     const StartupRequestParseResult result =
-        parseStartupRequest({QStringLiteral("VCStation.exe"),
+        parseStartupRequest({QStringLiteral("CompareStation.exe"),
                              QStringLiteral("--play"),
                              QStringLiteral(R"(C:\视频 工作区\源 甲.mp4)")});
 
@@ -32,11 +32,11 @@ TEST(StartupRequestParserTests, ParsesUnicodeSinglePlaybackWithoutNarrowing) {
 }
 
 TEST(StartupRequestParserTests, ParsesTwoAndThreeSourceComparison) {
-    const auto two = parseStartupRequest({QStringLiteral("VCStation.exe"),
+    const auto two = parseStartupRequest({QStringLiteral("CompareStation.exe"),
                                           QStringLiteral("--compare"),
                                           QStringLiteral(R"(C:\a one.mp4)"),
                                           QStringLiteral(R"(D:\b two.mkv)")});
-    const auto three = parseStartupRequest({QStringLiteral("VCStation.exe"),
+    const auto three = parseStartupRequest({QStringLiteral("CompareStation.exe"),
                                             QStringLiteral("--compare"),
                                             QStringLiteral(R"(C:\a.mp4)"),
                                             QStringLiteral(R"(C:\b.mp4)"),
@@ -52,11 +52,11 @@ TEST(StartupRequestParserTests, ParsesTwoAndThreeSourceComparison) {
 
 TEST(StartupRequestParserTests, ParsesOneTwoAndThreeBareVideoPaths) {
     const auto one = parseStartupRequest(
-        {QStringLiteral("VCStation.exe"), QStringLiteral(R"(C:\one video.mp4)")});
-    const auto two = parseStartupRequest({QStringLiteral("VCStation.exe"),
+        {QStringLiteral("CompareStation.exe"), QStringLiteral(R"(C:\one video.mp4)")});
+    const auto two = parseStartupRequest({QStringLiteral("CompareStation.exe"),
                                           QStringLiteral(R"(C:\one.mp4)"),
                                           QStringLiteral(R"(D:\two.mkv)")});
-    const auto three = parseStartupRequest({QStringLiteral("VCStation.exe"),
+    const auto three = parseStartupRequest({QStringLiteral("CompareStation.exe"),
                                             QStringLiteral(R"(C:\one.mp4)"),
                                             QStringLiteral(R"(D:\two.mkv)"),
                                             QStringLiteral(R"(E:\three.mov)")});
@@ -73,18 +73,18 @@ TEST(StartupRequestParserTests, ParsesOneTwoAndThreeBareVideoPaths) {
 
 TEST(StartupRequestParserTests, RejectsAmbiguousOrOutOfRangeArguments) {
     EXPECT_FALSE(parseStartupRequest(
-        {QStringLiteral("VCStation.exe"), QStringLiteral("--compare"), QStringLiteral("one.mp4")}));
-    EXPECT_FALSE(parseStartupRequest({QStringLiteral("VCStation.exe"),
+        {QStringLiteral("CompareStation.exe"), QStringLiteral("--compare"), QStringLiteral("one.mp4")}));
+    EXPECT_FALSE(parseStartupRequest({QStringLiteral("CompareStation.exe"),
                                       QStringLiteral("--play"),
                                       QStringLiteral("one.mp4"),
                                       QStringLiteral("two.mp4")}));
-    EXPECT_FALSE(parseStartupRequest({QStringLiteral("VCStation.exe"),
+    EXPECT_FALSE(parseStartupRequest({QStringLiteral("CompareStation.exe"),
                                       QStringLiteral("one.mp4"),
                                       QStringLiteral("two.mp4"),
                                       QStringLiteral("three.mp4"),
                                       QStringLiteral("four.mp4")}));
     EXPECT_FALSE(
-        parseStartupRequest({QStringLiteral("VCStation.exe"), QStringLiteral("--unknown")}));
+        parseStartupRequest({QStringLiteral("CompareStation.exe"), QStringLiteral("--unknown")}));
 }
 
 TEST(StartupRequestParserTests, BoundedJsonRoundTripPreservesUnicodePaths) {

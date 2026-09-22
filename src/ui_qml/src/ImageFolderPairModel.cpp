@@ -23,6 +23,12 @@ const QStringList& stillImageSuffixes() {
         QStringLiteral("webp"),
         QStringLiteral("tif"),
         QStringLiteral("tiff"),
+        // PNM family (PBM/PGM/PPM/PAM) is a first-class input, not a decode fallback.
+        QStringLiteral("pnm"),
+        QStringLiteral("ppm"),
+        QStringLiteral("pgm"),
+        QStringLiteral("pbm"),
+        QStringLiteral("pam"),
     };
     return kSuffixes;
 }

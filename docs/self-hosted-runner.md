@@ -1,6 +1,6 @@
 # Windows self-hosted runner
 
-VCStation 的原生 CI 需要一台处于登录状态的 Windows x64 工作站。常规
+CompareStation 的原生 CI 需要一台处于登录状态的 Windows x64 工作站。常规
 Debug/Release、format/lint 使用 `dvs-toolchain-4.4` 标签，D3D11VA 与五分钟性能门禁
 使用 `dvs-gpu` 标签；同一台工作站可以同时拥有这两个标签。
 
@@ -32,8 +32,8 @@ G:\GitHubActions\tools\wix\wix.exe extension add `
 把 `G:\GitHubActions\tools\wix` 加入 runner 用户的 `PATH`。`v1.4.5` 的发布合同明确为
 无 Authenticode 签名；runner 不需要签名证书或 `signtool.exe`。MSI 是 per-machine，
 因此执行 `packaged-smoke` 的交互式 runner 进程仍必须以管理员身份启动；测试会
-拒绝覆盖机器上已有的 VCStation 安装，并在结束时卸载自己的测试安装。
-Release workflow 会下载 `VCStation-1.2.0-windows-x64.msi`，完成启动/关闭、设置保留
+拒绝覆盖机器上已有的 CompareStation 安装，并在结束时卸载自己的测试安装。
+Release workflow 会下载 `CompareStation-1.2.0-windows-x64.msi`，完成启动/关闭、设置保留
 和两路有效 A/B Pair 检查后再安装 1.4.5，并验证旧 `.dvsproj` 注册消失，以及 ARP、
 快捷方式、文件关联和版本化 Explorer Shell COM 注册正确。
 
@@ -53,7 +53,7 @@ SHA-256 d59123a43003e357b0805b5d0f611d0bd2f65ab67d51bd070dd4e7a0f685c162
 ```powershell
 $runnerRoot = 'G:\GitHubActions\Toy-runner'
 $token = gh api --method POST `
-  repos/sonwe1e/VideoCompareStation/actions/runners/registration-token --jq .token
+  repos/sonwe1e/CompareStation/actions/runners/registration-token --jq .token
 
 Set-Location $runnerRoot
 .\config.cmd --unattended `

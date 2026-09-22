@@ -35,7 +35,7 @@ namespace {
 }
 
 [[nodiscard]] std::filesystem::path startupLogPath() {
-    return localAppDataDirectory() / L"VCStation" / L"logs" / L"VCStation.log";
+    return localAppDataDirectory() / L"CompareStation" / L"logs" / L"CompareStation.log";
 }
 
 [[nodiscard]] bool appendStartupLog(const std::filesystem::path& logPath,
@@ -64,7 +64,7 @@ namespace {
 void showStartupDialog(const std::filesystem::path& logPath, const bool logWritten) noexcept {
     try {
         std::wostringstream message;
-        message << L"VCStation could not start.";
+        message << L"CompareStation could not start.";
         if (logWritten) {
             message << L"\n\nDetails were written to:\n" << logPath.wstring();
         } else {
@@ -72,12 +72,12 @@ void showStartupDialog(const std::filesystem::path& logPath, const bool logWritt
         }
         static_cast<void>(MessageBoxW(nullptr,
                                       message.str().c_str(),
-                                      L"VCStation startup error",
+                                      L"CompareStation startup error",
                                       MB_OK | MB_ICONERROR | MB_TASKMODAL | MB_SETFOREGROUND));
     } catch (...) {
         static_cast<void>(MessageBoxW(nullptr,
-                                      L"VCStation could not start.",
-                                      L"VCStation startup error",
+                                      L"CompareStation could not start.",
+                                      L"CompareStation startup error",
                                       MB_OK | MB_ICONERROR | MB_TASKMODAL | MB_SETFOREGROUND));
     }
 }

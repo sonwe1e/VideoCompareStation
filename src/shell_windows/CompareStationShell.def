@@ -1,4 +1,4 @@
-LIBRARY "VCStationShell"
+LIBRARY "CompareStationShell"
 EXPORTS
     DllCanUnloadNow
     DllGetClassObject

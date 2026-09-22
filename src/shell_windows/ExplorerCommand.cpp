@@ -58,7 +58,7 @@ namespace {
         return {};
     }
     modulePath.resize(length);
-    return std::filesystem::path{modulePath}.parent_path() / L"VCStation.exe";
+    return std::filesystem::path{modulePath}.parent_path() / L"CompareStation.exe";
 }
 
 } // namespace
@@ -101,9 +101,9 @@ HRESULT ExplorerCommand::GetTitle(IShellItemArray* const selection, LPWSTR* cons
         return E_POINTER;
     }
     const std::size_t count = selectedPaths(selection).size();
-    const wchar_t* value = count == 1U   ? L"Open in VCStation"
-                           : count == 3U ? L"Compare 3 videos with VCStation"
-                                         : L"Compare with VCStation";
+    const wchar_t* value = count == 1U   ? L"Open in CompareStation"
+                           : count == 3U ? L"Compare 3 videos with CompareStation"
+                                         : L"Compare with CompareStation";
     return SHStrDupW(value, title);
 }
 

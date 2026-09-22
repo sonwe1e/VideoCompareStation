@@ -340,7 +340,7 @@ TEST_F(IssueLogControllerTests, OldSchemaLoadFailsWithExplanation) {
     {
         QFile file{path};
         ASSERT_TRUE(file.open(QIODevice::WriteOnly));
-        file.write(R"({"schemaVersion":0,"kind":"vcstation-issue-log","records":[]})");
+        file.write(R"({"schemaVersion":0,"kind":"comparestation-issue-log","records":[]})");
     }
     EXPECT_FALSE(controller_->loadIssues(QUrl::fromLocalFile(path)));
     EXPECT_NE(

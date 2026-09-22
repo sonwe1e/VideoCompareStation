@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 4.4 FATAL_ERROR)
 
-project(VCStation VERSION 1.6.0 LANGUAGES CXX)
+project(CompareStation VERSION 1.6.0 LANGUAGES CXX)
 
 option(DVS_BUILD_DESKTOP "Build the Windows desktop application and packaging" ON)
 option(DVS_BUILD_ADAPTERS "Build Windows, FFmpeg, and JSON adapters" ON)
@@ -12,7 +12,7 @@ if(DVS_BUILD_DESKTOP AND (NOT DVS_BUILD_ADAPTERS OR NOT DVS_BUILD_UI))
 endif()
 
 if((DVS_BUILD_DESKTOP OR DVS_BUILD_ADAPTERS OR DVS_BUILD_UI) AND NOT WIN32)
-    message(FATAL_ERROR "VCStation supports Windows only.")
+    message(FATAL_ERROR "CompareStation supports Windows only.")
 endif()
 
 if(NOT CMAKE_GENERATOR STREQUAL "Ninja")
@@ -24,12 +24,12 @@ if(CMAKE_CONFIGURATION_TYPES)
 endif()
 
 if((DVS_BUILD_DESKTOP OR DVS_BUILD_ADAPTERS OR DVS_BUILD_UI) AND NOT MSVC)
-    message(FATAL_ERROR "VCStation requires the MSVC 2022 compiler.")
+    message(FATAL_ERROR "CompareStation requires the MSVC 2022 compiler.")
 endif()
 
 if((DVS_BUILD_DESKTOP OR DVS_BUILD_ADAPTERS OR DVS_BUILD_UI) AND
    NOT MSVC_TOOLSET_VERSION STREQUAL "143")
-    message(FATAL_ERROR "VCStation requires the Visual Studio 2022 v143 toolset.")
+    message(FATAL_ERROR "CompareStation requires the Visual Studio 2022 v143 toolset.")
 endif()
 
 if(DVS_BUILD_DESKTOP OR DVS_BUILD_ADAPTERS OR DVS_BUILD_UI)
@@ -39,14 +39,14 @@ if(DVS_BUILD_DESKTOP OR DVS_BUILD_ADAPTERS OR DVS_BUILD_UI)
     cmake_path(NORMAL_PATH CMAKE_AR OUTPUT_VARIABLE _dvs_configured_archiver)
     if(NOT _dvs_configured_archiver STREQUAL _dvs_expected_archiver)
         message(FATAL_ERROR
-            "VCStation requires the MSVC archiver '${_dvs_expected_archiver}', but CMAKE_AR is "
+            "CompareStation requires the MSVC archiver '${_dvs_expected_archiver}', but CMAKE_AR is "
             "'${CMAKE_AR}'. Run CMake from a Visual Studio developer shell with "
             "'cmake --fresh --preset dev'.")
     endif()
 endif()
 
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
-    message(FATAL_ERROR "VCStation requires a 64-bit compiler environment.")
+    message(FATAL_ERROR "CompareStation requires a 64-bit compiler environment.")
 endif()
 
 if((DVS_BUILD_DESKTOP OR DVS_BUILD_ADAPTERS OR DVS_BUILD_UI) AND
@@ -63,11 +63,11 @@ if(MSVC)
 endif()
 
 set(DVS_SHELL_BINARY_BASENAME
-    "VCStationShell-${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}"
-    CACHE INTERNAL "Versioned VCStation Explorer shell binary base name")
+    "CompareStationShell-${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}"
+    CACHE INTERNAL "Versioned CompareStation Explorer shell binary base name")
 set(DVS_SHELL_BINARY_NAME
     "${DVS_SHELL_BINARY_BASENAME}.dll"
-    CACHE INTERNAL "Versioned VCStation Explorer shell binary file name")
+    CACHE INTERNAL "Versioned CompareStation Explorer shell binary file name")
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/release-metadata.json.in"
     "${CMAKE_CURRENT_BINARY_DIR}/release-metadata.json"
@@ -84,7 +84,7 @@ set(
     DVS_PREVIOUS_RELEASE_1_2_MSI
     "$ENV{DVS_PREVIOUS_RELEASE_1_2_MSI}"
     CACHE FILEPATH
-    "Optional VCStation 1.2.0 MSI used by the real packaged upgrade test"
+    "Optional CompareStation 1.2.0 MSI used by the real packaged upgrade test"
 )
 
 if(DVS_ENABLE_ASAN AND DVS_ENABLE_COVERAGE)

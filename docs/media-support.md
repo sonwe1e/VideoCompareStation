@@ -1,7 +1,10 @@
 # Media Support
 
-Status: **current 1.6 contract** — all three stages (software correctness, format compatibility, D3D11VA hardware decode) are implemented. VP9, AV1, HDR/tone mapping, audio, and additional video
-encoding work are intentionally outside this release.
+Video baseline: **main @ 0a74c46**, reviewed 2026-09-22. The three implementation stages below
+exist in code; actual performance and release claims require evidence for the tested SHA.
+VP9, AV1 and HDR/tone mapping are outside this baseline. AV1/VP9 are candidates for the current
+compatibility work; audio/subtitles are outside the current product scope, not planned playback requirements.
+See [product intent](product/visual-review.md) and the [issue ledger](engineering/visual-review-backlog.md).
 
 ## What opens today
 
@@ -9,9 +12,9 @@ The probe (`src/media_ffmpeg/src/MediaProbe.cpp`) accepts exactly:
 
 | Dimension | Accepted | Rejected with |
 |---|---|---|
-| Codec | H.264, HEVC, MPEG-4 Part 2 (and a decoder must exist) | `kUnsupportedCodec` (L304-318) |
+| Codec | H.264, HEVC, MPEG-4 Part 2 (and a decoder must exist) | `kUnsupportedCodec` in `MediaProbe.cpp` |
 | Pixel format | 8/10-bit YUV 4:2:0/4:2:2/4:4:4 and 8-bit RGB | unsupported depth/layout → `kUnsupportedPixelFormat` |
-| Transfer | SDR only — PQ (SMPTE2084) and HLG are rejected | `kUnsupportedPixelFormat` (L160-166) |
+| Transfer | SDR only — PQ (SMPTE2084) and HLG are rejected | `kUnsupportedPixelFormat` in transfer validation |
 | Color matrix | BT.709, BT.601, RGB, Unspecified (normalized/inferred as needed) | unsupported matrix → `kUnsupportedPixelFormat` |
 | Geometry | right-angle rotation and positive SAR | arbitrary rotation or invalid metadata → rejected |
 | Decode | Software fallback plus D3D11VA when the codec and shared Qt D3D11 device support it | backend and fallback reason remain queryable per source |
@@ -27,10 +30,30 @@ Containers are whatever FFmpeg opens when the stream passes these gates. VFR,
 non-zero start PTS, and B-frame display reordering use the display-order PTS index.
 
 "Encoding format is not fixed" cannot be solved by widening a file-extension filter;
-the gates above are the complete 1.4 contract.
+the gates above define the reviewed video baseline.
 
-VCStation does not decode or play audio. It uses video timestamps as the playback clock and is
+CompareStation does not decode or play audio. It uses video timestamps as the playback clock and is
 presented in the UI as visual playback only.
+
+## Still images and inspection fidelity
+
+The application injects its image loader in `src/app/Main.cpp`; the main decoder is
+`src/media_ffmpeg/src/StillImageDecoder.cpp`, with a Qt fallback in `ImagePairLoader.cpp`.
+The separate stb implementation under `ui_qml` is not the application's complete support matrix.
+
+| Capability | Committed baseline `0a74c46` | Working-tree observation on 2026-09-22, not a release claim |
+|---|---|---|
+| PNG/JPEG/BMP/GIF/WebP/TIFF | Explicit decoder and file-entry paths | Retained; verify actual variants and packaged decoder availability |
+| PNM/PBM/PGM/PPM/PAM | No complete first-class entry contract | P1–P7 decoding/probing and folder recognition added; PNM-family dialogs expanded but `.pam` still missing from their filters |
+| Pixel representation | Decoded RGBA8 | Still RGBA8; source depth/format/conversion labels added, not original 16-bit sampling |
+| Alpha | RGBA sampling; RGB differences with Alpha-only hint | Alpha grayscale, opaque RGB, Alpha difference/statistics and checker/black/white backgrounds added; awaiting end-to-end validation |
+| Color profiles | No complete ICC management pipeline | Still a gap; metadata labels do not implement color management |
+| Animated/multipage files | Still-image workflow | Do not infer animation, page selection or image-sequence playback from recognizing GIF/WebP/TIFF |
+
+All working-tree observations must be rechecked against the current diff. The documentation task
+did not run new decoder/Alpha tests. Use ledger I-01/I-02/I-03/I-06 for acceptance conditions.
+Source numeric values, decoded RGBA8 samples and background-composited appearance are distinct.
+Straight/premultiplied Alpha interpretation needs format-specific validation before making fidelity claims.
 
 ## Capability layering
 

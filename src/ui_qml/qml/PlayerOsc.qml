@@ -13,6 +13,18 @@ Item {
     property string sourceLabel
     required property bool playing
     property real playbackRate: 1
+    // C-07 playback status rail. Bound by Main.qml; defaults keep standalone QML tests working.
+    property string playbackModeLabel: ""
+    property string playbackModeDetail: ""
+    property real playbackTargetRate: 1
+    property real playbackPresentationRate: 0
+    property int playbackRunSkippedFrameSets: 0
+    property int playbackLagMilliseconds: 0
+    property bool playbackCatchingUp: false
+    property int displayGapCount: 0
+    property int sourceDuplicateCount: 0
+    property string sourceRateText: ""
+    property string statusLegend: qsTr("三类现象相互独立：源重复帧＝文件内容本身；播放器跳过＝为追时间丢掉整组；呈现间隙＝显示管线未跟上刷新。")
     required property bool timelineEnabled
     required property int currentFrame
     required property int totalFrames
@@ -38,6 +50,7 @@ Item {
 
     signal previewRequested(int frame)
     signal seekRequested(int frame)
+    signal overlayHidden
 
     objectName: "transport"
     // Height is the content stack, expressed directly so it never depends on an anchored
@@ -55,11 +68,41 @@ Item {
         revealActive = controllerState === 0;
     }
 
+    onRevealActiveChanged: {
+        if (!revealActive)
+            overlayHidden();
+    }
+
     function reveal() {
         if (controllerState !== 1)
             return;
         revealActive = true;
         hideTimer.restart();
+    }
+
+    function markerLabelForFrame(frame) {
+        if (frame < 0)
+            return "";
+        if (control.inFrame >= 0 && frame === control.inFrame)
+            return qsTr("入点标记");
+        if (control.outFrame >= 0 && frame === control.outFrame)
+            return qsTr("出点标记");
+        for (let i = 0; i < control.markers.length; ++i) {
+            const m = control.markers[i];
+            if (Math.abs(Number(m.frame) - frame) <= 1) {
+                const kind = String(m.kind);
+                if (kind === "anchor")
+                    return qsTr("人工锚点");
+                if (kind === "duplicate")
+                    return qsTr("源重复帧");
+                if (kind === "missing")
+                    return qsTr("源缺失帧");
+                if (kind === "extra")
+                    return qsTr("冗余帧");
+                return qsTr("分析标记");
+            }
+        }
+        return "";
     }
 
     Rectangle {
@@ -150,6 +193,78 @@ Item {
             }
         }
 
+        // C-07 playback status rail. Separates source duplicates, player FrameSet skips, and
+        // display/present gaps so a stall is never mistaken for algorithm judder.
+        Text {
+            id: statusText
+
+            objectName: "playbackStatusText"
+            visible: control.playbackModeLabel.length > 0
+            height: visible ? implicitHeight : 0
+            elide: Text.ElideRight
+            text: {
+                const parts = [];
+                if (control.playbackModeLabel.length > 0)
+                    parts.push(control.playbackModeLabel);
+                const target = control.playbackTargetRate;
+                const actual = control.playbackPresentationRate;
+                if (control.playing && actual > 0)
+                    parts.push(qsTr("目标 %1× · 实际 %2×").arg(target.toFixed(2)).arg(actual.toFixed(2)));
+                else
+                    parts.push(qsTr("目标 %1×").arg(target.toFixed(2)));
+                if (control.playbackRunSkippedFrameSets > 0 || control.playbackCatchingUp)
+                    parts.push(qsTr("播放器跳过 %1 组").arg(control.playbackRunSkippedFrameSets));
+                const lagMs = control.playbackLagMilliseconds;
+                if (control.playbackCatchingUp)
+                    parts.push(qsTr("追赶中"));
+                else if (lagMs >= 500)
+                    parts.push(qsTr("明显落后 %1s").arg((lagMs / 1000).toFixed(1)));
+                else if (lagMs >= 200)
+                    parts.push(qsTr("落后 %1s").arg((lagMs / 1000).toFixed(1)));
+                if (control.sourceDuplicateCount > 0)
+                    parts.push(qsTr("源重复 %1").arg(control.sourceDuplicateCount));
+                if (control.displayGapCount > 0)
+                    parts.push(qsTr("呈现间隙 %1").arg(control.displayGapCount));
+                return parts.join(" · ");
+            }
+            color: {
+                if (control.playbackCatchingUp || control.playbackLagMilliseconds >= 500 || control.playbackRunSkippedFrameSets > 0)
+                    return Theme.warning;
+                return Theme.mutedText;
+            }
+            font.pixelSize: 11
+            Accessible.name: text
+            Accessible.description: (control.playbackModeDetail.length > 0 ? control.playbackModeDetail + "。" : "") + control.statusLegend
+            anchors {
+                left: parent.left
+                leftMargin: 16
+                right: parent.right
+                rightMargin: 16
+                top: readout.bottom
+                topMargin: 2
+            }
+        }
+
+        Text {
+            id: statusHint
+
+            objectName: "playbackStatusHint"
+            visible: statusText.visible && control.playbackModeDetail.length > 0
+            height: visible ? implicitHeight : 0
+            text: control.playbackModeDetail + (control.sourceRateText.length > 0 ? " · " + control.sourceRateText : "")
+            color: Theme.disabledText
+            font.pixelSize: 10
+            elide: Text.ElideRight
+            anchors {
+                left: parent.left
+                leftMargin: 16
+                right: parent.right
+                rightMargin: 16
+                top: statusText.bottom
+                topMargin: 1
+            }
+        }
+
         TimelineTracks {
             id: tracks
 
@@ -164,7 +279,7 @@ Item {
                 leftMargin: 16
                 right: parent.right
                 rightMargin: 16
-                top: readout.bottom
+                top: statusHint.visible ? statusHint.bottom : (statusText.visible ? statusText.bottom : readout.bottom)
                 topMargin: 2
             }
             onPreviewRequested: frame => control.previewRequested(frame)
@@ -172,14 +287,14 @@ Item {
         }
 
         TimelineThumbnailPopup {
-            // Only show a hover preview when a thumbnail for the sampled frame actually exists;
-            // showing timecode text over a placeholder teaches nothing while hovering a timeline
-            // whose frames have not been cached yet.
-            visible: tracks.hoverFrame >= 0 && control.previewThumbnailSource.toString().length > 0
+            id: thumbnailPopup
+
+            objectName: "timelineThumbnailPopup"
+            visible: tracks.hoverFrame >= 0 && control.totalFrames > 0 && (control.previewThumbnailSource.toString().length > 0 || control.previewTimecode.length > 0)
             previewFrame: Math.max(0, control.previewFrame)
             previewTimecode: control.previewTimecode
             thumbnailSource: control.previewThumbnailSource
-            comparisonState: control.markers.length > 0 ? qsTr("已有分析标记") : ""
+            comparisonState: control.markerLabelForFrame(tracks.hoverFrame)
             x: Math.max(8, Math.min(control.width - width - 8, tracks.x + tracks.positionForFrame(tracks.hoverFrame) * tracks.width - width / 2))
             y: -height - 6
             z: 20

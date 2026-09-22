@@ -180,7 +180,7 @@ jobs:
           }
           $wixPath | Out-File $env:GITHUB_PATH -Encoding utf8 -Append
 
-          $previousRoot = Join-Path $env:RUNNER_TEMP "vcstation-previous-${{ github.run_id }}"
+          $previousRoot = Join-Path $env:RUNNER_TEMP "comparestation-previous-${{ github.run_id }}"
           New-Item -ItemType Directory -Path $previousRoot -Force | Out-Null
           $previousReleases = @(
             @{
@@ -227,12 +227,12 @@ jobs:
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cpack --preset release-zip
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cpack --preset release-msi
           $version = '${{ needs.validate-version.outputs.version }}'
-          $zip = Resolve-Path ".\out\package\zip\VCStation-$version-windows-x64.zip"
-          $msi = Resolve-Path ".\out\package\msi\VCStation-$version-windows-x64.msi"
+          $zip = Resolve-Path ".\out\package\zip\CompareStation-$version-windows-x64.zip"
+          $msi = Resolve-Path ".\out\package\msi\CompareStation-$version-windows-x64.msi"
           wix msi validate $msi.Path
           .\tools\release\verify-release-version.ps1 `
             -Tag $env:GITHUB_REF_NAME `
-            -Executable '.\out\build\release\bin\VCStation.exe' `
+            -Executable '.\out\build\release\bin\CompareStation.exe' `
             -ZipPath $zip.Path `
             -MsiPath $msi.Path
           "DVS_RELEASE_ZIP=$($zip.Path)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
@@ -259,6 +259,6 @@ jobs:
           draft: true
           body_path: docs/releases/v1.6.0.md
           files: |
-            out/package/zip/VCStation-${{ needs.validate-version.outputs.version }}-windows-x64.zip
-            out/package/msi/VCStation-${{ needs.validate-version.outputs.version }}-windows-x64.msi
+            out/package/zip/CompareStation-${{ needs.validate-version.outputs.version }}-windows-x64.zip
+            out/package/msi/CompareStation-${{ needs.validate-version.outputs.version }}-windows-x64.msi
             out/package/SHA256SUMS.txt

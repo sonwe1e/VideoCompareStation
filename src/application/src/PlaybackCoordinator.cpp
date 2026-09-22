@@ -737,6 +737,54 @@ private:
         return fps >= 50.0 ? ExactPrefetchWindow{.ahead = 1U, .behind = 0U} : ExactPrefetchWindow{};
     }
 
+    // C-07 status rail: expose how well the run is keeping the wall-clock target so the UI can
+    // report achieved presentation instead of silently absorbing catch-up skips or slow-play.
+    void updatePlaybackPresentationMetrics() noexcept {
+        state_.playbackTargetRate =
+            playbackRun_.has_value() ? playbackRun_->speed : pendingPlaybackSpeed_.value_or(1.0);
+        state_.playbackPresentationRate = 0.0;
+        state_.playbackLagMicroseconds = 0;
+        state_.playbackCatchingUp = false;
+        if (!playbackRun_.has_value() || !canonicalTimeline_.has_value() ||
+            !state_.displayedFrame.has_value()) {
+            return;
+        }
+        const PlaybackRun& run = *playbackRun_;
+        const auto now = dependencies_.clock->now();
+        const auto wallUs =
+            std::chrono::duration_cast<std::chrono::microseconds>(now - run.wallAnchor).count();
+        if (wallUs <= 0) {
+            return;
+        }
+        const auto anchorStart =
+            domain::canonicalFrameStartTime(*canonicalTimeline_, run.anchorFrame);
+        const auto displayedStart =
+            domain::canonicalFrameStartTime(*canonicalTimeline_, *state_.displayedFrame);
+        if (!anchorStart || !displayedStart) {
+            return;
+        }
+        const std::int64_t mediaUs =
+            displayedStart.value().microseconds() - anchorStart.value().microseconds();
+        state_.playbackPresentationRate =
+            static_cast<double>(mediaUs) / static_cast<double>(wallUs);
+        // Expected media position at this wall instant is wall * speed (playbackDue's inverse).
+        const double expectedMediaUs = static_cast<double>(wallUs) * run.speed;
+        const double lagUs = expectedMediaUs - static_cast<double>(mediaUs);
+        if (std::isfinite(lagUs) &&
+            lagUs >= static_cast<double>(std::numeric_limits<std::int64_t>::min()) &&
+            lagUs <= static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
+            state_.playbackLagMicroseconds = static_cast<std::int64_t>(lagUs);
+        }
+        const domain::PlaybackContinuityPolicy effective = domain::resolveContinuityPolicy(
+            playbackContinuityPolicy_, static_cast<std::size_t>(state_.sources.size()));
+        if (effective != domain::PlaybackContinuityPolicy::RealTime) {
+            return;
+        }
+        // Catch-up is active once wall-clock recovery would jump past the sequential minimum.
+        const domain::FrameId nextTarget = playbackTargetAt(now);
+        state_.playbackCatchingUp = nextTarget.value() > run.nextMinimum.value();
+    }
+
     void publishSnapshot(const bool notify = true) {
         state_.alignmentOffsets = alignmentOffsets_;
         state_.canonicalTimeline = canonicalTimeline_;
@@ -746,6 +794,8 @@ private:
         state_.playbackContinuityPolicyEffective = domain::resolveContinuityPolicy(
             playbackContinuityPolicy_, static_cast<std::size_t>(state_.sources.size()));
         state_.playbackSkippedFrameSets = playbackSkippedFrameSets_;
+        state_.playbackRunSkippedFrameSets = playbackRunSkippedFrameSets_;
+        updatePlaybackPresentationMetrics();
         state_.activeComparisonPair = activeComparisonPair_;
         state_.playbackRangeIn =
             playbackRange_.has_value() ? std::optional{playbackRange_->inInclusive} : std::nullopt;
@@ -1698,6 +1748,21 @@ private:
         return true;
     }
 
+    // C-07: every whole-FrameSet jump past nextMinimum is a player-side skip. Counting here
+    // (the single activation choke point) covers both the post-commit catch-up and the first
+    // cadence tick that lands past the sequential minimum.
+    void notePlaybackSkipIfJumping(const domain::FrameId target) noexcept {
+        if (!playbackRun_.has_value()) {
+            return;
+        }
+        const std::int64_t minimum = playbackRun_->nextMinimum.value();
+        if (target.value() > minimum) {
+            const std::uint64_t skipped = static_cast<std::uint64_t>(target.value() - minimum);
+            playbackSkippedFrameSets_ += skipped;
+            playbackRunSkippedFrameSets_ += skipped;
+        }
+    }
+
     [[nodiscard]] bool activatePlaybackTarget(const domain::FrameId target) {
         if (!playbackRun_.has_value() || playbackRun_->frame.has_value()) {
             return false;
@@ -1712,6 +1777,7 @@ private:
                 clamped = domain::FrameId{floor};
             }
         }
+        notePlaybackSkipIfJumping(clamped);
         if (playbackRun_->preparedFrame.has_value() &&
             playbackRun_->preparedFrame->expectedFrame == clamped) {
             playbackRun_->frame = std::move(playbackRun_->preparedFrame);
@@ -1896,6 +1962,7 @@ private:
             .rangeLoop = playbackRangeLoop_ && playbackRange_.has_value(),
             .completedLoops = playbackRangeCompletedLoops_,
         };
+        playbackRunSkippedFrameSets_ = 0U;
         lastPlaybackProjectionAt_ = playbackRun_->wallAnchor;
         state_.lastError.reset();
         emitTrace(TraceEventKind::PlaybackRunStarted,
@@ -3551,11 +3618,6 @@ private:
             }
         }
         const domain::FrameId nextTarget = playbackTargetAt(dependencies_.clock->now());
-        // C-07: wall-clock catch-up that advances past nextMinimum skips whole FrameSets.
-        if (playbackRun_.has_value() && nextTarget.value() > playbackRun_->nextMinimum.value()) {
-            playbackSkippedFrameSets_ +=
-                static_cast<std::uint64_t>(nextTarget.value() - playbackRun_->nextMinimum.value());
-        }
         static_cast<void>(schedulePlaybackTarget(nextTarget));
     }
 
@@ -4514,6 +4576,7 @@ private:
     domain::PlaybackContinuityPolicy playbackContinuityPolicy_ =
         domain::PlaybackContinuityPolicy::Contextual;
     std::uint64_t playbackSkippedFrameSets_ = 0U;
+    std::uint64_t playbackRunSkippedFrameSets_ = 0U;
     // C-02: session pair + preference policy used to re-resolve after topology changes.
     domain::DefaultPairPolicy activePairPolicy_ = domain::DefaultPairPolicy::PreserveIfAvailable;
     // D06: monotonic playback-run id stamped on TraceIdentity.run for the whole PlaybackRun.

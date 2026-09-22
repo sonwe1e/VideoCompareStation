@@ -51,6 +51,6 @@
         <file alias="pause.svg">../../assets/icons/pause.svg</file>
     </qresource>
     <qresource prefix="/branding">
-        <file alias="vcstation-icon.png">../../assets/branding/vcstation-icon.png</file>
+        <file alias="comparestation-icon.png">../../assets/branding/comparestation-icon.png</file>
     </qresource>
 </RCC>

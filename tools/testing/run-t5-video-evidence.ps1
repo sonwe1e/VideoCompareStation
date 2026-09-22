@@ -18,7 +18,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Executable = 'G:\Workspaces\Toy\out\build\release\bin\VCStation.exe',
+    [string]$Executable = 'G:\Workspaces\Toy\out\build\release\bin\CompareStation.exe',
     [string]$Video = 'D:\Videos\2026-06-01 23-46-34.mp4',
     # The performance entry's argument parser does not honour the quotes Start-Process writes
     # around an argument containing spaces, so a spaced source path is split into extra sources

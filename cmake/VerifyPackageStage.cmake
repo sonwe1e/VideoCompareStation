@@ -12,8 +12,8 @@ endif()
 
 set(
     requiredFiles
-    "VCStation.exe"
-    "VCStationCli.exe"
+    "CompareStation.exe"
+    "CompareStationCli.exe"
     "Qt6Core.dll"
     "Qt6Gui.dll"
     "Qt6Qml.dll"
@@ -23,8 +23,8 @@ set(
     "avutil-60.dll"
     "swscale-9.dll"
     "platforms/qwindows.dll"
-    "assets/branding/vcstation-icon.png"
-    "assets/branding/vcstation.ico"
+    "assets/branding/comparestation-icon.png"
+    "assets/branding/comparestation.ico"
     "licenses/THIRD_PARTY_NOTICES.md"
     "licenses/vcpkg/ffmpeg.txt"
 )
@@ -53,8 +53,8 @@ foreach(forbiddenTool IN ITEMS ffmpeg.exe ffprobe.exe)
 endforeach()
 
 include("${CMAKE_CURRENT_LIST_DIR}/VerifyPeSubsystem.cmake")
-dvs_verify_pe_subsystem("${stageRoot}/VCStation.exe" WINDOWS_GUI)
-dvs_verify_pe_subsystem("${stageRoot}/VCStationCli.exe" WINDOWS_CUI)
+dvs_verify_pe_subsystem("${stageRoot}/CompareStation.exe" WINDOWS_GUI)
+dvs_verify_pe_subsystem("${stageRoot}/CompareStationCli.exe" WINDOWS_CUI)
 
 if(NOT IS_DIRECTORY "${stageRoot}/qml/QtQuick")
     message(FATAL_ERROR "Package staging is missing the QtQuick QML import tree.")
@@ -70,7 +70,7 @@ if(NOT notices MATCHES "FFmpeg" OR NOT notices MATCHES "GPL")
 endif()
 
 execute_process(
-    COMMAND "${stageRoot}/VCStationCli.exe" --probe
+    COMMAND "${stageRoot}/CompareStationCli.exe" --probe
             "${CMAKE_CURRENT_LIST_DIR}/../tests/fixtures/media/h264_a_320x180_30fps_12.mp4"
     WORKING_DIRECTORY "${stageRoot}"
     RESULT_VARIABLE startupResult

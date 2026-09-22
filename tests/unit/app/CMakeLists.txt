@@ -23,14 +23,13 @@ dvs_add_gtest(
     TIMEOUT 10
 )
 
-find_program(DVS_TEST_POWERSHELL_EXECUTABLE NAMES pwsh powershell REQUIRED)
 dvs_add_test(
     NAME app.playback-trace-gate-schema
     LAYER unit
     MODULE app
     TIMEOUT 20
     COMMAND
-        "${DVS_TEST_POWERSHELL_EXECUTABLE}"
+        "${DVS_POWERSHELL_EXECUTABLE}"
         -NoLogo
         -NoProfile
         -File "${CMAKE_CURRENT_SOURCE_DIR}/PlaybackTraceGateTests.ps1"

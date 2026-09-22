@@ -1,5 +1,14 @@
 # Repository Guidelines
 
+## Agent Start Here
+
+Read [docs/agent-guide.md](docs/agent-guide.md) first for the code/test routing map,
+[product intent](docs/product/visual-review.md), and the
+[current issue ledger](docs/engineering/visual-review-backlog.md).
+The product covers silent video/image viewing and quality comparison; audio and subtitles
+are outside the current scope. Check HEAD and the working-tree diff before treating an issue
+as open or fixed. Older playback plans describe earlier baselines, not current completion status.
+
 ## Project Structure and Dependencies
 
 `src/domain` owns rules; `src/application` owns ports. `src/presentation_contract` owns
@@ -10,24 +19,26 @@ never enter core. Tests live under `tests/<layer>/<module>`, shared helpers in `
 ## Build, Test, and Package Commands
 
 Repo scripts require PowerShell 7 (`pwsh`) via `#requires -Version 7.0`; CI runs
-`shell: pwsh`. Windows PowerShell 5.1 is unsupported. Machine-local tool paths (vcpkg, MSVC
-`vcvarsall.bat`, ninja) live in `tools/build/env.ps1`, overridable via parameters/environment.
+`shell: pwsh`. Windows PowerShell 5.1 is unsupported. Tool discovery and overrides are
+centralized in `tools/build/env.ps1`; do not hardcode machine paths. See
+[docs/building.md](docs/building.md) for diagnostics and cache recovery.
 Use the wrapper:
 
 ```powershell
 pwsh tools/build/build.ps1 -Preset dev
 pwsh tools/build/build.ps1 -Preset release -Test
-pwsh tools/build/build.ps1 -Preset dev -FormatCheck -Lint
+pwsh tools/build/build.ps1 -Preset dev -Target format-check
+pwsh tools/build/build.ps1 -Preset dev -Target lint
 pwsh tools/build/build.ps1 -Preset dev -Test -TestRegex 'ui.ImageReviewControllerTests'
 ```
 
-Raw preset commands remain valid inside the wrapper's vcvarsall shell:
+Raw preset commands require a configured MSVC x64 developer environment:
 
 ```powershell
 cmake --preset dev
 cmake --build --preset dev
 ctest --preset dev --output-on-failure
-.\out\build\dev\bin\VCStationCli.exe --startup-check
+.\out\build\dev\bin\CompareStationCli.exe --startup-check
 cmake --build --preset dev --target format-check
 cmake --build --preset dev --target lint
 cmake --preset release

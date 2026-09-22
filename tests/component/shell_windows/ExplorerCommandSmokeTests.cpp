@@ -311,7 +311,7 @@ TEST(ExplorerCommandSmokeTests, InvokesRealComServerWithUnicodeCompareArguments)
     const std::filesystem::path captured = directory / L"captured-arguments.bin";
     const std::filesystem::path shellDll = environmentPath(L"DVS_SHELL_TEST_DLL");
     const std::filesystem::path copiedDll = directory / shellDll.filename();
-    const std::filesystem::path copiedProbe = directory / L"VCStation.exe";
+    const std::filesystem::path copiedProbe = directory / L"CompareStation.exe";
     writeFixture(first);
     writeFixture(second);
     ASSERT_TRUE(CopyFileW(shellDll.c_str(), copiedDll.c_str(), FALSE));
@@ -333,7 +333,7 @@ TEST(ExplorerCommandSmokeTests, InvokesRealComServerWithUnicodeCompareArguments)
         }
         const std::vector<std::wstring> arguments = readCapturedArguments(captured);
         ASSERT_EQ(arguments.size(), 3U);
-        EXPECT_EQ(std::filesystem::path{arguments[0]}.filename(), L"VCStation.exe");
+        EXPECT_EQ(std::filesystem::path{arguments[0]}.filename(), L"CompareStation.exe");
         EXPECT_EQ(arguments[1], first.wstring());
         EXPECT_EQ(arguments[2], second.wstring());
     }

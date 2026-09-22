@@ -1,6 +1,6 @@
 .pragma library
 
-// Static semantic tokens for VCStation's dark desktop theme. Keep state colours here so
+// Static semantic tokens for CompareStation's dark desktop theme. Keep state colours here so
 // controls rendered by different Qt Quick Controls styles cannot silently drift apart.
 var canvas = "#090d14"
 var window = "#0b1018"

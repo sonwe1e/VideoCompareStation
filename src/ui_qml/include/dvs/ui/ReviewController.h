@@ -45,6 +45,12 @@ class ReviewController final : public QObject {
     Q_PROPERTY(int playbackContinuityPolicy READ playbackContinuityPolicy NOTIFY stateChanged)
     Q_PROPERTY(
         qulonglong playbackSkippedFrameSets READ playbackSkippedFrameSets NOTIFY stateChanged)
+    Q_PROPERTY(
+        qulonglong playbackRunSkippedFrameSets READ playbackRunSkippedFrameSets NOTIFY stateChanged)
+    Q_PROPERTY(qreal playbackTargetRate READ playbackTargetRate NOTIFY stateChanged)
+    Q_PROPERTY(qreal playbackPresentationRate READ playbackPresentationRate NOTIFY stateChanged)
+    Q_PROPERTY(qint64 playbackLagMicroseconds READ playbackLagMicroseconds NOTIFY stateChanged)
+    Q_PROPERTY(bool playbackCatchingUp READ playbackCatchingUp NOTIFY stateChanged)
     Q_PROPERTY(int effectiveDifferenceEdge READ effectiveDifferenceEdge NOTIFY stateChanged)
     Q_PROPERTY(ReviewDisplayState displayState READ displayState NOTIFY stateChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY stateChanged)
@@ -159,6 +165,11 @@ public:
     [[nodiscard]] QString playbackContinuityPolicyName() const;
     [[nodiscard]] int playbackContinuityPolicy() const noexcept;
     [[nodiscard]] qulonglong playbackSkippedFrameSets() const noexcept;
+    [[nodiscard]] qulonglong playbackRunSkippedFrameSets() const noexcept;
+    [[nodiscard]] qreal playbackTargetRate() const noexcept;
+    [[nodiscard]] qreal playbackPresentationRate() const noexcept;
+    [[nodiscard]] qint64 playbackLagMicroseconds() const noexcept;
+    [[nodiscard]] bool playbackCatchingUp() const noexcept;
     [[nodiscard]] int effectiveDifferenceEdge() const noexcept;
     [[nodiscard]] ReviewDisplayState displayState() const noexcept;
     [[nodiscard]] bool busy() const noexcept;

@@ -3,7 +3,7 @@ dvs_add_test(
     LAYER e2e
     MODULE app
     TIMEOUT 10
-    COMMAND $<TARGET_FILE:VCStationCli> --startup-check
+    COMMAND $<TARGET_FILE:CompareStationCli> --startup-check
 )
 
 dvs_add_test(
@@ -28,7 +28,7 @@ dvs_add_test(
     TIMEOUT 10
     COMMAND
         ${CMAKE_COMMAND}
-        "-DDVS_PE_EXECUTABLE=$<TARGET_FILE:VCStation>"
+        "-DDVS_PE_EXECUTABLE=$<TARGET_FILE:CompareStation>"
         -DDVS_PE_EXPECTED_SUBSYSTEM=WINDOWS_GUI
         -P
         "${PROJECT_SOURCE_DIR}/cmake/VerifyPeSubsystem.cmake"
@@ -41,7 +41,7 @@ dvs_add_test(
     TIMEOUT 10
     COMMAND
         ${CMAKE_COMMAND}
-        "-DDVS_GUI_EXECUTABLE=$<TARGET_FILE:VCStation>"
+        "-DDVS_GUI_EXECUTABLE=$<TARGET_FILE:CompareStation>"
         -P
         "${CMAKE_CURRENT_SOURCE_DIR}/VerifyGuiStderr.cmake"
 )
@@ -53,7 +53,7 @@ dvs_add_test(
     TIMEOUT 10
     COMMAND
         ${CMAKE_COMMAND}
-        "-DDVS_PE_EXECUTABLE=$<TARGET_FILE:VCStationCli>"
+        "-DDVS_PE_EXECUTABLE=$<TARGET_FILE:CompareStationCli>"
         -DDVS_PE_EXPECTED_SUBSYSTEM=WINDOWS_CUI
         -P
         "${PROJECT_SOURCE_DIR}/cmake/VerifyPeSubsystem.cmake"
@@ -66,7 +66,7 @@ dvs_add_test(
     TIMEOUT 10
     COMMAND
         ${CMAKE_COMMAND}
-        "-DDVS_GUI_EXECUTABLE=$<TARGET_FILE:VCStation>"
+        "-DDVS_GUI_EXECUTABLE=$<TARGET_FILE:CompareStation>"
         "-DDVS_TEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/fatal-startup"
         -P
         "${CMAKE_CURRENT_SOURCE_DIR}/VerifyFatalStartup.cmake"
@@ -79,7 +79,7 @@ dvs_add_test(
     TIMEOUT 10
     COMMAND
         ${CMAKE_COMMAND}
-        "-DDVS_CLI_EXECUTABLE=$<TARGET_FILE:VCStationCli>"
+        "-DDVS_CLI_EXECUTABLE=$<TARGET_FILE:CompareStationCli>"
         "-DDVS_SOURCE_A=${PROJECT_SOURCE_DIR}/tests/fixtures/media/h264_a_320x180_30fps_12.mp4"
         "-DDVS_SOURCE_B=${PROJECT_SOURCE_DIR}/tests/fixtures/media/h264_b_160x90_30fps_12.mp4"
         -P
@@ -92,7 +92,7 @@ dvs_add_test(
     MODULE app
     TIMEOUT 40
     COMMAND
-        $<TARGET_FILE:VCStation>
+        $<TARGET_FILE:CompareStation>
         --ui-smoke
         "${PROJECT_SOURCE_DIR}/tests/fixtures/media/h264_a_320x180_30fps_12.mp4"
         "${PROJECT_SOURCE_DIR}/tests/fixtures/media/h264_b_160x90_30fps_12.mp4"
@@ -104,7 +104,7 @@ dvs_add_test(
     MODULE app
     TIMEOUT 40
     COMMAND
-        $<TARGET_FILE:VCStation>
+        $<TARGET_FILE:CompareStation>
         --ui-smoke
         "${PROJECT_SOURCE_DIR}/tests/fixtures/media/h264_a_320x180_30fps_12.mp4"
 )
@@ -115,7 +115,7 @@ dvs_add_test(
     MODULE app
     TIMEOUT 40
     COMMAND
-        $<TARGET_FILE:VCStation>
+        $<TARGET_FILE:CompareStation>
         --ui-smoke
         "${PROJECT_SOURCE_DIR}/tests/fixtures/media/h264_a_320x180_30fps_12.mp4"
         "${PROJECT_SOURCE_DIR}/tests/fixtures/media/h264_b_160x90_30fps_12.mp4"
@@ -129,7 +129,7 @@ dvs_add_test(
     LAYER e2e
     MODULE app
     TIMEOUT 9
-    COMMAND $<TARGET_FILE:VCStation> --ui-smoke
+    COMMAND $<TARGET_FILE:CompareStation> --ui-smoke
 )
 
 dvs_add_test(
@@ -138,7 +138,7 @@ dvs_add_test(
     MODULE app
     TIMEOUT 9
     COMMAND
-        $<TARGET_FILE:VCStation>
+        $<TARGET_FILE:CompareStation>
         --ui-shutdown-smoke
         "${PROJECT_SOURCE_DIR}/tests/fixtures/media/h264_a_320x180_30fps_12.mp4"
         "${PROJECT_SOURCE_DIR}/tests/fixtures/media/h264_b_160x90_30fps_12.mp4"
@@ -150,7 +150,7 @@ dvs_add_test(
     MODULE app
     TIMEOUT 10
     COMMAND
-        $<TARGET_FILE:VCStationCli>
+        $<TARGET_FILE:CompareStationCli>
         --compare
         "${PROJECT_SOURCE_DIR}/tests/fixtures/media/h264_a_320x180_30fps_12.mp4"
         "${PROJECT_SOURCE_DIR}/tests/fixtures/media/h264_b_160x90_30fps_12.mp4"
@@ -164,12 +164,12 @@ dvs_add_test(
     MODULE app
     TIMEOUT 180
     COMMAND
-        powershell.exe
+        "${DVS_POWERSHELL_EXECUTABLE}"
         -NoLogo
         -NoProfile
         -ExecutionPolicy Bypass
         -File "${CMAKE_CURRENT_SOURCE_DIR}/VerifyMsiPackage.ps1"
-        -MsiPath "${PROJECT_SOURCE_DIR}/out/package/msi/VCStation-${PROJECT_VERSION}-windows-x64.msi"
+        -MsiPath "${PROJECT_SOURCE_DIR}/out/package/msi/CompareStation-${PROJECT_VERSION}-windows-x64.msi"
         -ExpectedVersion "${PROJECT_VERSION}"
         -ExpectedShellBinaryName "${DVS_SHELL_BINARY_NAME}"
         -ProbeFixture
@@ -179,7 +179,7 @@ set_tests_properties(
     package.msi-install-association
     PROPERTIES
         RUN_SERIAL TRUE
-        RESOURCE_LOCK vcstation-machine-install
+        RESOURCE_LOCK comparestation-machine-install
 )
 
 function(dvs_add_msi_upgrade_test previous_version previous_msi)
@@ -189,12 +189,12 @@ function(dvs_add_msi_upgrade_test previous_version previous_msi)
         MODULE app
         TIMEOUT 300
         COMMAND
-            powershell.exe
+            "${DVS_POWERSHELL_EXECUTABLE}"
             -NoLogo
             -NoProfile
             -ExecutionPolicy Bypass
             -File "${CMAKE_CURRENT_SOURCE_DIR}/VerifyMsiPackage.ps1"
-            -MsiPath "${PROJECT_SOURCE_DIR}/out/package/msi/VCStation-${PROJECT_VERSION}-windows-x64.msi"
+            -MsiPath "${PROJECT_SOURCE_DIR}/out/package/msi/CompareStation-${PROJECT_VERSION}-windows-x64.msi"
             -ExpectedVersion "${PROJECT_VERSION}"
             -ExpectedShellBinaryName "${DVS_SHELL_BINARY_NAME}"
             -ProbeFixture
@@ -208,7 +208,7 @@ function(dvs_add_msi_upgrade_test previous_version previous_msi)
         package.msi-upgrade-from-${previous_version}
         PROPERTIES
             RUN_SERIAL TRUE
-            RESOURCE_LOCK vcstation-machine-install
+            RESOURCE_LOCK comparestation-machine-install
     )
 endfunction()
 
@@ -228,12 +228,12 @@ foreach(scale_label scale_value IN ZIP_LISTS
         MODULE app
         TIMEOUT 120
         COMMAND
-            powershell.exe
+            "${DVS_POWERSHELL_EXECUTABLE}"
             -NoLogo
             -NoProfile
             -ExecutionPolicy Bypass
             -File "${CMAKE_CURRENT_SOURCE_DIR}/VerifyPopupPixels.ps1"
-            -Executable "$<TARGET_FILE:VCStation>"
+            -Executable "$<TARGET_FILE:CompareStation>"
             "${PROJECT_SOURCE_DIR}/tests/fixtures/media/h264_a_320x180_30fps_12.mp4"
             "${PROJECT_SOURCE_DIR}/tests/fixtures/media/h264_b_160x90_30fps_12.mp4"
             "${PROJECT_SOURCE_DIR}/tests/fixtures/media/h265_a_320x180_30fps_12.mp4"
@@ -243,7 +243,7 @@ foreach(scale_label scale_value IN ZIP_LISTS
         PROPERTIES
             ENVIRONMENT "QT_SCALE_FACTOR=${scale_value}"
             RUN_SERIAL TRUE
-            RESOURCE_LOCK vcstation-machine-install
+            RESOURCE_LOCK comparestation-machine-install
     )
 endforeach()
 
@@ -253,12 +253,12 @@ dvs_add_test(
     MODULE app
     TIMEOUT 240
     COMMAND
-        powershell.exe
+        "${DVS_POWERSHELL_EXECUTABLE}"
         -NoLogo
         -NoProfile
         -ExecutionPolicy Bypass
         -File "${CMAKE_CURRENT_SOURCE_DIR}/ShutdownSoak.ps1"
-        -Executable "$<TARGET_FILE:VCStation>"
+        -Executable "$<TARGET_FILE:CompareStation>"
         -SourceA
         "${PROJECT_SOURCE_DIR}/tests/fixtures/media/h264_a_320x180_30fps_12.mp4"
         -SourceB

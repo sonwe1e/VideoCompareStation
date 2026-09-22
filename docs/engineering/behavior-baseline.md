@@ -1,5 +1,11 @@
 # Behavior Baseline (Phase 0)
 
+> Historical baseline, not a current defect list. For current work start with the
+> [agent guide](../agent-guide.md) and [issue ledger](visual-review-backlog.md).
+> Reference/master separation, pair identity, reverse GOP work, and playback policies have
+> subsequent implementations; see [ADR 0003](../adr/0003-reverse-gop-window.md) and
+> [ADR 0004](../adr/0004-timeline-pair-continuity.md). Recheck code before reopening old findings.
+
 > Frozen behavioral facts about the current `main @ d04339c` playback/compare engine, recorded
 > before the optimization plan changes anything. Each item is tagged **C** (confirmed from code),
 > **H** (high-probability, needs hardware/runtime confirmation), or **G** (capability gap). The

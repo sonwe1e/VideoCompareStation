@@ -16,7 +16,7 @@ target_link_libraries(
     dvs_shell_component_tests
     PRIVATE dvs::test_dependencies dvs::test_support ole32 shell32 shlwapi
 )
-add_dependencies(dvs_shell_component_tests VCStationShell dvs_shell_invoke_probe)
+add_dependencies(dvs_shell_component_tests CompareStationShell dvs_shell_invoke_probe)
 
 dvs_apply_project_warnings(dvs_shell_component_tests)
 set_target_properties(
@@ -31,6 +31,6 @@ dvs_add_gtest(
     MODULE shell_windows
     TIMEOUT 15
     ENVIRONMENT
-        "DVS_SHELL_TEST_DLL=$<TARGET_FILE:VCStationShell>"
+        "DVS_SHELL_TEST_DLL=$<TARGET_FILE:CompareStationShell>"
         "DVS_SHELL_TEST_PROBE_EXE=$<TARGET_FILE:dvs_shell_invoke_probe>"
 )

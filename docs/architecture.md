@@ -1,5 +1,10 @@
 # Target Architecture
 
+Current product scope and issue status: [product intent](product/visual-review.md),
+[agent routing guide](agent-guide.md), and [issue ledger](engineering/visual-review-backlog.md).
+The phase numbers below refer to the historical architecture rollout, not completion of every
+item in the later playback-overhaul plan or the current four-workflow product requirements.
+
 Focused references: [state ownership](architecture/state-ownership.md),
 [dependency rules](architecture/dependency-rules.md),
 [feature change impact](architecture/feature-change-impact.md), and
@@ -10,7 +15,7 @@ Status: **phases 0–6 implemented and locally validated**. The FrameSet model,
 multi-source decode/render pipeline, three-up/reference-focus layouts, selectable
 difference edges, confidence-gated global/sequence alignment, manual anchors, and
 timeline diagnostics are in the codebase today. The GUI project open/save/relink loop and
-schema v4 were removed — VCStation manages only the current open 1–3 video session and does
+schema v4 were removed — CompareStation manages only the current open 1–3 video session and does
 not persist projects. The review surface includes synchronized pan/zoom, ROI,
 threshold masks, the four-panel analysis grid, exact-plane difference with a persistent
 exactness classification, P010/10-bit software decode, broader YUV/RGB normalization,
@@ -24,7 +29,7 @@ P010 fixtures retain local 10-bit and zero-copy correctness coverage without an 
 The historical A/B design is archived in
 [design/architecture-overview.md](design/architecture-overview.md).
 
-VCStation (VideoCompareStation) is a frame-exact Windows video workstation. It directly plays one
+CompareStation is a frame-exact Windows video workstation. It directly plays one
 source, or presents one canonical frame position across two to three sources atomically with
 explicit alignment state and pairwise difference maps.
 
@@ -44,8 +49,8 @@ The hardcoded `FramePair` (two mandatory A/B frames) is replaced by `FrameSet`:
   can always say what kind of comparison the user is looking at.
 - Difference maps select a `DifferenceEdge` (any two sources) instead of assuming A−B.
 
-`SourcePairValidator` splits into a per-source `SourceValidator` (is this one video
-openable and indexable — Fatal otherwise) and a `CompatibilityReport` over the set
+Per-source probe/descriptor validation checks whether a video is openable and indexable.
+`ComparisonValidator` validates the source set and produces a `CompatibilityReport`
 whose findings are graded **Fatal / Warning / Alignment-required**. Mismatched frame
 counts, rates, durations, resolutions, or color metadata are warnings that annotate
 the session, not reasons to refuse to open it.
@@ -62,8 +67,8 @@ QML
 ReviewSessionFacade / ReviewController / SourceListModel
   ├── active/staged sources, queued intents, startup FIFO, UI chrome, range state
   │
-ComparisonCoordinator          (session, epoch, command/request identity,
-  ├── AlignmentService          stale-result filtering — kept from PlaybackCoordinator)
+PlaybackCoordinator            (session, epoch, command/request identity,
+  ├── alignment workflows       stale-result filtering; one coordinator loop)
   ├── SourceDecodeActor[Reference]
   ├── SourceDecodeActor[Prediction1]
   └── SourceDecodeActor[Prediction2]
@@ -110,7 +115,7 @@ corner radius, surface margin, labels, and analysis controls.
 ## Frame-step semantics
 
 A/D and Left/Right always mean canonical frame ±1 and go through
-`ComparisonCoordinator::seekFrame()`. Rapid presses coalesce into a newest-target
+the seek/step command path in `PlaybackCoordinator`. Rapid presses coalesce into a newest-target
 frame with superseded requests cancelled — never swallowed by a `busy` flag, never a
 cache-cursor move. Playing → first frame-step pauses, then seeks.
 

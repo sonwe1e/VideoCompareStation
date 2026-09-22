@@ -11,7 +11,7 @@ param(
     [string] $ProbeFixture,
 
     [Parameter(Mandatory = $true)]
-    [ValidatePattern('^VCStationShell-[0-9]+\.[0-9]+\.dll$')]
+    [ValidatePattern('^CompareStationShell-[0-9]+\.[0-9]+\.dll$')]
     [string] $ExpectedShellBinaryName,
 
     [string] $PreviousMsiPath,
@@ -89,10 +89,10 @@ function Find-CommonShortcut {
 
 function Test-LegacyProjectRegistration {
     $extensionKey = 'Registry::HKEY_LOCAL_MACHINE\Software\Classes\.dvsproj'
-    $projectKey = 'Registry::HKEY_LOCAL_MACHINE\Software\Classes\VCStation.Project'
+    $projectKey = 'Registry::HKEY_LOCAL_MACHINE\Software\Classes\CompareStation.Project'
     $supportedTypesKey = (
         'Registry::HKEY_LOCAL_MACHINE\Software\Classes\Applications\' +
-        'VCStation.exe\SupportedTypes'
+        'CompareStation.exe\SupportedTypes'
     )
     $supportedType = Get-ItemPropertyValue `
         -LiteralPath $supportedTypesKey `
@@ -130,18 +130,18 @@ if (-not (Test-IsAdministrator)) {
     throw 'The per-machine MSI packaged smoke requires an elevated self-hosted runner.'
 }
 
-$existing = Get-InstalledProduct -DisplayName @('VCStation', 'DualVideoStudio')
+$existing = Get-InstalledProduct -DisplayName @('CompareStation', 'VCStation', 'DualVideoStudio')
 if ($existing) {
     throw (
-        'Refusing to replace an existing VCStation or DualVideoStudio installation on this ' +
-        'machine.'
+        'Refusing to replace an existing CompareStation, VCStation, or DualVideoStudio ' +
+        'installation on this machine.'
     )
 }
 
 $artifactRoot = Join-Path (Split-Path -Parent $MsiPath) 'packaged-smoke'
 New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
 $activeMsi = if ($PreviousMsiPath) { $PreviousMsiPath } else { $MsiPath }
-$settingsPath = Join-Path $env:LOCALAPPDATA 'VCStation\settings.json'
+$settingsPath = Join-Path $env:LOCALAPPDATA 'CompareStation\settings.json'
 $settingsBackup = Join-Path $artifactRoot 'settings-before-upgrade.json'
 $settingsExistedBefore = Test-Path -LiteralPath $settingsPath -PathType Leaf
 $settingsProbeHash = $null
@@ -156,10 +156,10 @@ try {
         -Log (Join-Path $artifactRoot 'install.log')
 
     if ($PreviousMsiPath) {
-        $previousProducts = Get-InstalledProduct -DisplayName @('VCStation')
+        $previousProducts = Get-InstalledProduct -DisplayName @('CompareStation', 'VCStation')
         if ($previousProducts.Count -ne 1) {
             throw (
-                'The previous MSI did not register exactly one VCStation product. ' +
+                'The previous MSI did not register exactly one CompareStation/VCStation product. ' +
                 "Found $($previousProducts.Count)."
             )
         }
@@ -175,9 +175,12 @@ try {
                 '.dvsproj registration.'
             )
         }
-        $previousGui = Join-Path $env:ProgramFiles 'VCStation\VCStation.exe'
-        if (-not (Test-Path -LiteralPath $previousGui -PathType Leaf)) {
-            throw "The previous installed executable is missing: $previousGui"
+        $previousGui = @(
+            (Join-Path $env:ProgramFiles 'CompareStation\CompareStation.exe'),
+            (Join-Path $env:ProgramFiles 'VCStation\VCStation.exe')
+        ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+        if (-not $previousGui) {
+            throw 'The previous installed executable is missing under CompareStation or VCStation.'
         }
         $previousLaunch = Start-Process `
             -FilePath $previousGui `
@@ -186,7 +189,7 @@ try {
             -Wait
         if ($previousLaunch.ExitCode -ne 0) {
             throw (
-                "The VCStation $PreviousExpectedVersion launch/close probe failed with " +
+                "The CompareStation $PreviousExpectedVersion launch/close probe failed with " +
                 "$($previousLaunch.ExitCode)."
             )
         }
@@ -208,25 +211,25 @@ try {
             -Log (Join-Path $artifactRoot "upgrade-from-$PreviousExpectedVersion.log")
 
         $remainingPrevious = @(
-            Get-InstalledProduct -DisplayName @('VCStation') |
+            Get-InstalledProduct -DisplayName @('CompareStation', 'VCStation') |
                 Where-Object { $_.DisplayVersion -ceq $PreviousExpectedVersion }
         )
         if ($remainingPrevious) {
-            throw "The VCStation $PreviousExpectedVersion ARP entry remained after the upgrade."
+            throw "The CompareStation $PreviousExpectedVersion ARP entry remained after the upgrade."
         }
         Assert-NoLegacyProjectRegistration
         if (-not (Test-Path -LiteralPath $settingsPath -PathType Leaf) -or
             (Get-FileHash -LiteralPath $settingsPath -Algorithm SHA256).Hash -cne
                 $settingsProbeHash) {
             throw (
-                "The VCStation settings file changed during the $PreviousExpectedVersion to " +
+                "The CompareStation settings file changed during the $PreviousExpectedVersion to " +
                 "$ExpectedVersion upgrade."
             )
         }
         if ($PairProbeFixture) {
-            $upgradedGui = Join-Path $env:ProgramFiles 'VCStation\VCStation.exe'
+            $upgradedGui = Join-Path $env:ProgramFiles 'CompareStation\CompareStation.exe'
             if (-not (Test-Path -LiteralPath $upgradedGui -PathType Leaf)) {
-                throw "The upgraded VCStation executable is missing: $upgradedGui"
+                throw "The upgraded CompareStation executable is missing: $upgradedGui"
             }
             $upgradeSettingsLaunch = Start-Process `
                 -FilePath $upgradedGui `
@@ -235,7 +238,7 @@ try {
                 -Wait
             if ($upgradeSettingsLaunch.ExitCode -ne 0) {
                 throw (
-                    "The upgraded VCStation effective A/B pair probe failed with " +
+                    "The upgraded CompareStation effective A/B pair probe failed with " +
                     "$($upgradeSettingsLaunch.ExitCode)."
                 )
             }
@@ -250,20 +253,20 @@ try {
 
     Assert-NoLegacyProjectRegistration
 
-    $currentProducts = Get-InstalledProduct -DisplayName @('VCStation')
+    $currentProducts = Get-InstalledProduct -DisplayName @('CompareStation')
     if ($currentProducts.Count -ne 1) {
-        throw "Expected one VCStation ARP entry, found $($currentProducts.Count)."
+        throw "Expected one CompareStation ARP entry, found $($currentProducts.Count)."
     }
     if ($currentProducts[0].DisplayVersion -cne $ExpectedVersion) {
         throw (
-            "Expected VCStation ARP version $ExpectedVersion, found " +
+            "Expected CompareStation ARP version $ExpectedVersion, found " +
             "'$($currentProducts[0].DisplayVersion)'."
         )
     }
 
-    $installRoot = Join-Path $env:ProgramFiles 'VCStation'
-    $gui = Join-Path $installRoot 'VCStation.exe'
-    $cli = Join-Path $installRoot 'VCStationCli.exe'
+    $installRoot = Join-Path $env:ProgramFiles 'CompareStation'
+    $gui = Join-Path $installRoot 'CompareStation.exe'
+    $cli = Join-Path $installRoot 'CompareStationCli.exe'
     $shell = Join-Path $installRoot $ExpectedShellBinaryName
     foreach ($path in @($gui, $cli, $shell)) {
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
@@ -271,9 +274,9 @@ try {
         }
     }
 
-    $shortcut = Find-CommonShortcut -Name 'VCStation.lnk'
+    $shortcut = Find-CommonShortcut -Name 'CompareStation.lnk'
     if (-not $shortcut) {
-        throw 'The MSI did not create the VCStation Start Menu shortcut.'
+        throw 'The MSI did not create the CompareStation Start Menu shortcut.'
     }
 
     $shellClsid = '{3B790D74-E76E-4F28-A51D-2AB8C6BD107D}'
@@ -281,12 +284,12 @@ try {
         -LiteralPath "Registry::HKEY_LOCAL_MACHINE\Software\Classes\CLSID\$shellClsid\InprocServer32" `
         -Name '(default)'
     if ([IO.Path]::GetFullPath($shellServer) -cne [IO.Path]::GetFullPath($shell)) {
-        throw "Unexpected VCStation Explorer command server: $shellServer"
+        throw "Unexpected CompareStation Explorer command server: $shellServer"
     }
     foreach ($videoExtension in @('.mp4', '.mkv', '.mov', '.avi', '.m4v')) {
         $verbKey = (
             'Registry::HKEY_LOCAL_MACHINE\Software\Classes\SystemFileAssociations\' +
-            "$videoExtension\shell\VCStation.Compare"
+            "$videoExtension\shell\CompareStation.Compare"
         )
         $handler = Get-ItemPropertyValue `
             -LiteralPath $verbKey `
@@ -316,7 +319,7 @@ try {
 finally {
     $cleanupFailures = [Collections.Generic.List[string]]::new()
     $installedCurrent = @(
-        Get-InstalledProduct -DisplayName @('VCStation') |
+        Get-InstalledProduct -DisplayName @('CompareStation') |
             Where-Object { $_.DisplayVersion -ceq $ExpectedVersion }
     )
     if ($installedCurrent) {
@@ -331,7 +334,7 @@ finally {
         }
     }
     $installedPrevious = @(
-        Get-InstalledProduct -DisplayName @('VCStation') |
+        Get-InstalledProduct -DisplayName @('CompareStation') |
             Where-Object { $_.DisplayVersion -ceq $PreviousExpectedVersion }
     )
     if ($PreviousMsiPath -and $installedPrevious) {
@@ -358,14 +361,14 @@ finally {
 }
 
 foreach ($remainingGui in @(
-        (Join-Path $env:ProgramFiles 'VCStation\VCStation.exe'),
+        (Join-Path $env:ProgramFiles 'CompareStation\CompareStation.exe'),
         (Join-Path $env:ProgramFiles 'DualVideoStudio\DualVideoStudio.exe')
     )) {
     if (Test-Path -LiteralPath $remainingGui -PathType Leaf) {
         throw "Installed executable remained after uninstall: $remainingGui"
     }
 }
-$remainingProducts = Get-InstalledProduct -DisplayName @('VCStation', 'DualVideoStudio')
+$remainingProducts = Get-InstalledProduct -DisplayName @('CompareStation', 'VCStation', 'DualVideoStudio')
 if ($remainingProducts) {
     throw (
         'An ARP entry remained after uninstall: ' +
@@ -378,18 +381,18 @@ $shellClsidPath = (
     '{3B790D74-E76E-4F28-A51D-2AB8C6BD107D}'
 )
 if (Test-Path -LiteralPath $shellClsidPath) {
-    throw 'The VCStation Explorer command COM registration remained after uninstall.'
+    throw 'The CompareStation Explorer command COM registration remained after uninstall.'
 }
 foreach ($videoExtension in @('.mp4', '.mkv', '.mov', '.avi', '.m4v')) {
     $verbKey = (
         'Registry::HKEY_LOCAL_MACHINE\Software\Classes\SystemFileAssociations\' +
-        "$videoExtension\shell\VCStation.Compare"
+        "$videoExtension\shell\CompareStation.Compare"
     )
     if (Test-Path -LiteralPath $verbKey) {
         throw "The Explorer command registration remained for $videoExtension."
     }
 }
-foreach ($shortcutName in @('VCStation.lnk', 'DualVideoStudio.lnk')) {
+foreach ($shortcutName in @('CompareStation.lnk', 'DualVideoStudio.lnk')) {
     $shortcut = Find-CommonShortcut -Name $shortcutName
     if ($shortcut) {
         throw "Start Menu shortcut remained after uninstall: $($shortcut.FullName)"
@@ -398,5 +401,5 @@ foreach ($shortcutName in @('VCStation.lnk', 'DualVideoStudio.lnk')) {
 
 $mode = if ($PreviousMsiPath) { 'upgrade' } else { 'install' }
 Write-Host (
-    "VCStation MSI $mode, Shell command, association, probe, ARP, and uninstall checks passed."
+    "CompareStation MSI $mode, Shell command, association, probe, ARP, and uninstall checks passed."
 )

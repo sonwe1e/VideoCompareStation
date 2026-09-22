@@ -65,6 +65,36 @@ Item {
         }
     }
 
+    Repeater {
+        model: 9
+
+        delegate: Rectangle {
+            required property int index
+            readonly property real fraction: (index + 1) / 10.0
+            width: 1
+            height: (index === 4) ? 5 : 3
+            color: Theme.disabledText
+            opacity: 0.45
+            x: Math.round(fraction * control.width)
+            anchors.bottom: mainRail.top
+            anchors.bottomMargin: 2
+        }
+    }
+
+    Rectangle {
+        id: hoverScrubberGuide
+
+        objectName: "timelineHoverGuide"
+        visible: control.hoverFrame >= 0 && control.enabled && control.totalFrames > 0
+        width: 1
+        height: 15
+        color: "#93c5fd"
+        opacity: 0.85
+        z: 3
+        x: Math.max(0, Math.min(control.width - 1, control.positionForFrame(control.hoverFrame) * control.width))
+        anchors.verticalCenter: mainRail.verticalCenter
+    }
+
     Rectangle {
         objectName: "rangeHighlight"
         visible: control.inFrame >= 0 && control.outFrame >= control.inFrame && control.totalFrames > 1 && control.outFrame >= control.windowStartFrame && control.inFrame <= control.windowStartFrame + control.visibleFrameCount - 1
@@ -164,6 +194,11 @@ Item {
             } else if (control.zoomFactor > 1) {
                 const direction = wheel.angleDelta.y > 0 ? -1 : 1;
                 control.panFrames(direction * Math.max(1, Math.round(control.visibleFrameCount / 10)));
+            } else if (control.totalFrames > 0) {
+                const step = (wheel.modifiers & Qt.ShiftModifier) ? (wheel.angleDelta.y > 0 ? 5 : -5) : (wheel.angleDelta.y > 0 ? 1 : -1);
+                const current = Math.round(control.progress * Math.max(0, control.totalFrames - 1));
+                const target = Math.max(0, Math.min(control.totalFrames - 1, current + step));
+                control.seekRequested(target);
             }
             wheel.accepted = true;
         }

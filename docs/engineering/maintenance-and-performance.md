@@ -116,10 +116,10 @@ The two playback gate entry points are:
 
 ```powershell
 .\tools\testing\run-navigation-gate.ps1 `
-    -Executable .\out\build\dev\bin\VCStation.exe `
+    -Executable .\out\build\dev\bin\CompareStation.exe `
     -Fixtures @('D:\media\a.mp4', 'D:\media\b.mp4')
 .\tools\testing\run-comparison-semantics-gate.ps1 `
-    -Executable .\out\build\dev\bin\VCStation.exe `
+    -Executable .\out\build\dev\bin\CompareStation.exe `
     -Fixtures @('D:\media\a.mp4', 'D:\media\b.mp4')
 ```
 
@@ -127,26 +127,14 @@ They propagate the child result and reject a missing, malformed, empty, or overf
 Passing either script does not prove the three asynchronous invariants described in the trace
 schema.
 
-## Local build environment notes (this workstation)
+## Local build environment notes
 
-The checkout lives at `G:\Workspaces\Toy`. The vcpkg toolchain root is the slim clone at
-`G:\Workspaces\vcpkg` (`scripts/`, `ports/`, `triplets/`, `vcpkg.exe`). The Qt 6.11.1 / FFmpeg /
-GTest installed tree is `G:\Workspaces\Toy\out\vcpkg\x64-windows`.
-
-- Configure with `VCPKG_ROOT=G:\Workspaces\vcpkg`, `-DVCPKG_MANIFEST_INSTALL=OFF`, and
-  `VCPKG_INSTALLED_DIR=G:/Workspaces/Toy/out/vcpkg`. A plain `cmake --preset dev` re-validates
-  packages and can remove the installed qtdeclarative before a doomed rebuild.
-- `C:\src\vcpkg` (the previous full clone with buildtrees) was deleted after the G-drive
-  installed tree was verified; the old `I:\WorkStations\vcpkg` external drive is offline.
-- If qtdeclarative is ever missing again, restore from a staged package copy into
-  `out\vcpkg\x64-windows` (Qt 6 CMake configs are relocatable). Rebuilding it requires a short
-  `VCPKG_INSTALLED_DIR` so object paths stay under 260 characters.
-- The machine PATH contains `C:\msys64\ucrt64\bin` (GNU toolchain); cmake must never see it, or it
-  picks `g++` and the project's MSVC check fails. Do the PATH surgery in PowerShell before calling
-  `cmd /c`: cmd's `set PATH=...;%PATH%` line exceeds its 8191-character limit with the full user
-  PATH and fails silently.
-- `cmake --build --preset dev` must run with `clang-format`/`clang-tidy` available
-  (`...\BuildTools\VC\Tools\Llvm\x64\bin`); the `dev` preset's quality targets require them.
+Current tool discovery, dependency setup, and cache recovery are documented in
+[the build guide](../building.md). Use the wrapper instead of copying workstation paths.
+The current workstation has a slim vcpkg tree without Git history and an existing dependency
+installation; reconfiguration here requires the explicit `-UseInstalledDependencies` switch.
+Normal full checkouts and CI use manifest installation. Older ad-hoc PATH surgery and package
+copying notes are not the supported build procedure.
 
 ## Outstanding evidence and follow-up
 
@@ -185,5 +173,5 @@ The following work remains open or requires the intended Windows/D3D11VA runner:
   performance evidence.
 - Rebuild the Release baseline after the vcpkg VS-detection failure on this workstation
   (`vcpkg visualstudio.cpp Value was null` during `cmake --preset release`); the 2026-09-21
-  `out/build/release/bin/VCStation.exe` remains the last known-good Release artifact until
+  `out/build/release/bin/CompareStation.exe` remains the last known-good Release artifact until
   reconfigure succeeds.

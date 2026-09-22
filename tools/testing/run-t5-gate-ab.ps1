@@ -45,7 +45,7 @@ if (-not (Test-Path -LiteralPath $VideoRunPath -PathType Leaf)) {
     throw "Video not found at $VideoRunPath"
 }
 
-# A VCStation.exe outside its deployment directory cannot load Qt/FFmpeg and dies with
+# A CompareStation.exe outside its deployment directory cannot load Qt/FFmpeg and dies with
 # STATUS_DLL_NOT_FOUND before producing any output. Stage both variants next to the deployment
 # they were built against and run them from there.
 $deploymentRoot = Split-Path -Parent $UngatedExecutable
@@ -53,8 +53,8 @@ if (-not (Test-Path -LiteralPath (Join-Path $deploymentRoot 'Qt6Core.dll') -Path
     $deploymentRoot = 'G:\Workspaces\Toy\out\build\release\bin'
     Write-Output "T5_GATE_AB_STAGING staged=$deploymentRoot"
 }
-$ungatedStaged = Join-Path $deploymentRoot 'VCStation-t5-ab-ungated.exe'
-$gatedStaged = Join-Path $deploymentRoot 'VCStation-t5-ab-gated.exe'
+$ungatedStaged = Join-Path $deploymentRoot 'CompareStation-t5-ab-ungated.exe'
+$gatedStaged = Join-Path $deploymentRoot 'CompareStation-t5-ab-gated.exe'
 Copy-Item -LiteralPath $UngatedExecutable -Destination $ungatedStaged -Force
 Copy-Item -LiteralPath $GatedExecutable -Destination $gatedStaged -Force
 if ((Get-FileHash -LiteralPath $ungatedStaged).Hash -eq (Get-FileHash -LiteralPath $gatedStaged).Hash) {

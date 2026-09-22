@@ -72,10 +72,10 @@ public:
           application_(argc, argv) {
         initializeQmlResources();
         registerQmlTypes();
-        application_.setApplicationDisplayName(QStringLiteral("VCStation - VideoCompareStation"));
-        application_.setApplicationName(QStringLiteral("VCStation"));
-        application_.setOrganizationName(QStringLiteral("VCStation"));
-        application_.setWindowIcon(QIcon{QStringLiteral(":/branding/vcstation-icon.png")});
+        application_.setApplicationDisplayName(QStringLiteral("CompareStation"));
+        application_.setApplicationName(QStringLiteral("CompareStation"));
+        application_.setOrganizationName(QStringLiteral("CompareStation"));
+        application_.setWindowIcon(QIcon{QStringLiteral(":/branding/comparestation-icon.png")});
     }
 
     ~Impl() {

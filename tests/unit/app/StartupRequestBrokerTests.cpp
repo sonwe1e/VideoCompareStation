@@ -41,7 +41,7 @@ template <typename Predicate>
 
 TEST(StartupRequestBrokerTests, ForwardsUnicodeComparisonToExistingPrimary) {
     ensureCoreApplication();
-    const QString endpoint = QStringLiteral("VCStation.StartupRequest.Test.%1")
+    const QString endpoint = QStringLiteral("CompareStation.StartupRequest.Test.%1")
                                  .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
     StartupRequestBroker primary{endpoint};
     std::optional<StartupRequest> received;
@@ -75,7 +75,7 @@ TEST(StartupRequestBrokerTests, ForwardsUnicodeComparisonToExistingPrimary) {
 
 TEST(StartupRequestBrokerTests, QueuesForwardedRequestUntilPrimaryRegistersHandler) {
     ensureCoreApplication();
-    const QString endpoint = QStringLiteral("VCStation.StartupRequest.Test.%1")
+    const QString endpoint = QStringLiteral("CompareStation.StartupRequest.Test.%1")
                                  .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
     StartupRequestBroker primary{endpoint};
     ASSERT_EQ(primary.startOrForward(StartupRequest{}), StartupRequestBroker::StartResult::Primary);
@@ -111,7 +111,7 @@ TEST(StartupRequestBrokerTests, QueuesForwardedRequestUntilPrimaryRegistersHandl
 
 TEST(StartupRequestBrokerTests, RejectsForwardedRequestWhenInteractionQueueIsFull) {
     ensureCoreApplication();
-    const QString endpoint = QStringLiteral("VCStation.StartupRequest.Test.%1")
+    const QString endpoint = QStringLiteral("CompareStation.StartupRequest.Test.%1")
                                  .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
     StartupRequestBroker primary{endpoint};
     primary.setRequestHandler([](StartupRequest) { return false; });

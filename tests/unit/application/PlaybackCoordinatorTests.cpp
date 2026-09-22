@@ -4412,6 +4412,81 @@ TEST(PlaybackCoordinatorTests,
     ASSERT_TRUE(waitUntil(
         [&coordinator] { return coordinator->snapshot()->displayedFrame == domain::FrameId{3}; }));
     EXPECT_EQ(coordinator->snapshot()->playbackState, domain::PlaybackState::kPaused);
+    // C-07 status rail: catch-up must be observable as player-side FrameSet skips, scoped to
+    // the play run and accumulated for the session. 0→3 skips two complete sets (1 and 2).
+    const std::shared_ptr<const SessionSnapshot> afterCatchUp = coordinator->snapshot();
+    EXPECT_EQ(afterCatchUp->playbackRunSkippedFrameSets, 2U);
+    EXPECT_EQ(afterCatchUp->playbackSkippedFrameSets, 2U);
+    EXPECT_EQ(afterCatchUp->playbackTargetRate, 1.0);
+}
+
+TEST(PlaybackCoordinatorTests, ReviewEveryFrameNeverSkipsUnderLoadAndReportsGrowingLag) {
+    const auto scheduler = std::make_shared<FakeDeadlineScheduler>();
+    const auto clock = std::make_shared<FakeSteadyClock>();
+    const auto probe = std::make_shared<FakeMediaProbe>();
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator = makeCoordinator(provider, render, probe, scheduler, clock);
+
+    const std::shared_ptr<const domain::FrameTimeline> timeline = makeVfrTimeline();
+    ASSERT_NE(timeline, nullptr);
+    const domain::MediaDescriptor descriptorA =
+        makeVfrDescriptor("C:/media/a.mp4",
+                          domain::MediaExtent{.width = 320, .height = 180},
+                          4,
+                          domain::MediaTime{69800});
+    const domain::MediaDescriptor descriptorB =
+        makeDescriptor("C:/media/b.mp4", domain::MediaExtent{.width = 160, .height = 90}, 4);
+
+    openVfrReady(coordinator, probe, provider, render, timeline, descriptorA, descriptorB);
+    markGraphicsReady(coordinator);
+    requireReviewEveryFrameContinuity(coordinator, domain::CommandId{911});
+
+    const std::shared_ptr<const SessionSnapshot> ready = coordinator->snapshot();
+    ASSERT_EQ(coordinator->submit(PlayCommand{
+                  .context =
+                      CommandContext{
+                          .sessionId = ready->sessionId,
+                          .sessionEpoch = ready->sessionEpoch,
+                          .commandId = domain::CommandId{2},
+                      },
+              }),
+              PortSubmitResult::Accepted);
+    EXPECT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+
+    ASSERT_TRUE(scheduler->waitForScheduleCount(2U));
+    const std::optional<DeadlineRequest> firstCadence = scheduler->request(1U);
+    ASSERT_TRUE(firstCadence.has_value());
+
+    // Far beyond the real-time catch-up tolerance. ReviewEveryFrame must still request the
+    // sequential next frame and must not count a player skip.
+    clock->set(firstCadence->due + 2500ms);
+    ASSERT_TRUE(scheduler->fire(1U));
+    ASSERT_TRUE(provider->waitForFrameRequestCount(2U));
+    const std::optional<FrameRequest> sequential = provider->frameRequest(1U);
+    ASSERT_TRUE(sequential.has_value());
+    EXPECT_EQ(sequential->frameId, domain::FrameId{1});
+    EXPECT_EQ(sequential->priority, FrameRequestPriority::Sequential);
+
+    ASSERT_TRUE(provider->postFrameReady(*sequential, makeFrameSet(sequential->frameId)));
+    ASSERT_TRUE(render->waitForPublishedCount(2U));
+    presentPublished(coordinator, render, 1U);
+    ASSERT_TRUE(provider->postFrameSucceeded(*sequential));
+    ASSERT_TRUE(waitUntil(
+        [&coordinator] { return coordinator->snapshot()->displayedFrame == domain::FrameId{1}; }));
+
+    const std::shared_ptr<const SessionSnapshot> after = coordinator->snapshot();
+    // Still running under ReviewEveryFrame: Playing or Buffering (prepared successor in flight),
+    // never auto-paused and never a player-side skip.
+    EXPECT_TRUE(after->playbackState == domain::PlaybackState::kPlaying ||
+                after->playbackState == domain::PlaybackState::kBuffering);
+    EXPECT_EQ(after->playbackRunSkippedFrameSets, 0U);
+    EXPECT_EQ(after->playbackSkippedFrameSets, 0U);
+    EXPECT_FALSE(after->playbackCatchingUp);
+    // Wall-clock target has advanced 2.5s while only the first set is on screen: lag is the
+    // status-rail signal for "slow-play under ReviewEveryFrame", never a silent skip.
+    EXPECT_GT(after->playbackLagMicroseconds, 2'000'000);
+    EXPECT_LT(after->playbackPresentationRate, 1.0);
 }
 
 // ---------------------------------------------------------------------------

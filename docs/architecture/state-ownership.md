@@ -4,7 +4,7 @@
 > the table are exposed by `ReviewSessionFacade`, which currently backs each with an existing
 > controller; see the migration note at the end of this page.
 
-VCStation keeps one immutable `SessionSnapshot` as media truth. UI objects project that snapshot;
+CompareStation keeps one immutable `SessionSnapshot` as media truth. UI objects project that snapshot;
 they do not query decoder or renderer workers directly.
 
 | State | Owner | Notes |

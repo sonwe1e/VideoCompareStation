@@ -7,7 +7,7 @@ param(
     [Parameter(Mandatory = $true, Position = 1, ValueFromRemainingArguments = $true)]
     [string[]] $Sources,
 
-    [string] $InstalledExeName = 'VCStation.exe'
+    [string] $InstalledExeName = 'CompareStation.exe'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -16,7 +16,7 @@ $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path (Join-Path $PSScriptRoot '..\..\tools\testing') 'CommandLineArgument.psm1') -Force
 
 # Resolve the executable path. When running against an installed package, the caller passes the
-# full path to VCStation.exe. When running from the build tree, the generator expression resolves
+# full path to CompareStation.exe. When running from the build tree, the generator expression resolves
 # it at configure time.
 if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
     throw "Popup pixel probe executable not found: $Executable"

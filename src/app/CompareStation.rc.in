@@ -1,8 +1,8 @@
 #include <windows.h>
 
-#define IDI_VCSTATION 101
+#define IDI_COMPARESTATION 101
 
-IDI_VCSTATION ICON "@PROJECT_SOURCE_DIR@/assets/branding/vcstation.ico"
+IDI_COMPARESTATION ICON "@PROJECT_SOURCE_DIR@/assets/branding/comparestation.ico"
 
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
@@ -21,12 +21,12 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "CompanyName", "VCStation Contributors"
-            VALUE "FileDescription", "VCStation - VideoCompareStation"
+            VALUE "CompanyName", "CompareStation Contributors"
+            VALUE "FileDescription", "CompareStation"
             VALUE "FileVersion", "@PROJECT_VERSION@"
-            VALUE "InternalName", "VCStation"
-            VALUE "OriginalFilename", "VCStation.exe"
-            VALUE "ProductName", "VCStation (VideoCompareStation)"
+            VALUE "InternalName", "CompareStation"
+            VALUE "OriginalFilename", "CompareStation.exe"
+            VALUE "ProductName", "CompareStation"
             VALUE "ProductVersion", "@PROJECT_VERSION@"
         END
     END

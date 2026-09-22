@@ -406,7 +406,8 @@ TEST(ImageReviewControllerTests, AsyncPairOpenReturnsImmediatelyAndRejectsLateN)
 
     std::atomic<int> loaderCalls{0};
     ScopedStillImageLoader loader{
-        [&loaderCalls](const QByteArray& bytes, QImage* image, std::string*) {
+        [&loaderCalls](
+            const QByteArray& bytes, QImage* image, dvs::ui::StillImageSourceInfo*, std::string*) {
             ++loaderCalls;
             if (bytes.startsWith("slow")) {
                 QThread::msleep(250); // Missing on GUI thread in a passing T4.
@@ -456,7 +457,10 @@ TEST(ImageReviewControllerTests, AsyncCandidateFailureKeepsPreviousPair) {
     const QUrl badB = writeBytes(directory, QStringLiteral("badB.bin"), QByteArrayLiteral("badB1"));
     ASSERT_FALSE(oldA.isEmpty() || oldB.isEmpty() || newA.isEmpty() || badB.isEmpty());
 
-    ScopedStillImageLoader loader{[](const QByteArray& bytes, QImage* image, std::string* error) {
+    ScopedStillImageLoader loader{[](const QByteArray& bytes,
+                                     QImage* image,
+                                     dvs::ui::StillImageSourceInfo*,
+                                     std::string* error) {
         if (bytes.startsWith("bad")) {
             if (error != nullptr) {
                 *error = "B side corrupt";
@@ -499,14 +503,15 @@ TEST(ImageReviewControllerTests, CancelledOrClosedOpenNeverPublishesLateResult) 
     ASSERT_FALSE(slowA.isEmpty() || slowB.isEmpty());
 
     std::atomic<bool> started{false};
-    ScopedStillImageLoader loader{[&started](const QByteArray&, QImage* image, std::string*) {
-        started.store(true);
-        QThread::msleep(200);
-        QImage decoded(2, 2, QImage::Format_RGBA8888);
-        decoded.fill(Qt::red);
-        *image = decoded;
-        return true;
-    }};
+    ScopedStillImageLoader loader{
+        [&started](const QByteArray&, QImage* image, dvs::ui::StillImageSourceInfo*, std::string*) {
+            started.store(true);
+            QThread::msleep(200);
+            QImage decoded(2, 2, QImage::Format_RGBA8888);
+            decoded.fill(Qt::red);
+            *image = decoded;
+            return true;
+        }};
 
     ImageReviewController controller;
     const int requestId = controller.requestOpenPair(slowA, slowB, 5);
@@ -564,7 +569,8 @@ TEST(ImageReviewControllerTests, PrefetchWarmsCacheAndUserOpenUsesIt) {
 
     std::atomic<int> decodeCalls{0};
     ScopedStillImageLoader loader{
-        [&decodeCalls](const QByteArray& bytes, QImage* image, std::string*) {
+        [&decodeCalls](
+            const QByteArray& bytes, QImage* image, dvs::ui::StillImageSourceInfo*, std::string*) {
             ++decodeCalls;
             QImage decoded(2, 2, QImage::Format_RGBA8888);
             decoded.fill(bytes.startsWith("prefetchA") ? QColor(1, 2, 3) : QColor(4, 5, 6));
@@ -598,10 +604,11 @@ TEST(ImageReviewControllerTests, BlockedDifferenceCannotPublishOrCacheAfterNewPa
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
     const QUrl next = writeBytes(directory, QStringLiteral("new.bin"), "new");
-    ScopedStillImageLoader decoder{[](const QByteArray&, QImage* image, std::string*) {
-        *image = solidImage(QColor(30, 40, 50));
-        return true;
-    }};
+    ScopedStillImageLoader decoder{
+        [](const QByteArray&, QImage* image, dvs::ui::StillImageSourceInfo*, std::string*) {
+            *image = solidImage(QColor(30, 40, 50));
+            return true;
+        }};
     ImageReviewController controller;
     ASSERT_TRUE(
         controller.openPairImages(solidImage(Qt::black), "oldA", solidImage(Qt::white), "oldB", 1));
@@ -688,16 +695,17 @@ TEST(ImageReviewControllerTests, LoaderCoalescesQueueAndCancellationSkipsSecondI
     std::atomic<int> bCalls{0};
     dvs::ui::ImagePairLoader loader;
     dvs::ui::ImagePairLoader::DecodePolicy policy;
-    policy.loader = [&](const QByteArray& bytes, QImage* image, std::string*) {
-        if (bytes == "a" && ++aCalls <= 2) {
-            entered.release();
-            release.tryAcquire(1, 8000);
-        } else if (bytes == "b") {
-            ++bCalls;
-        }
-        *image = solidImage(Qt::green);
-        return true;
-    };
+    policy.loader =
+        [&](const QByteArray& bytes, QImage* image, dvs::ui::StillImageSourceInfo*, std::string*) {
+            if (bytes == "a" && ++aCalls <= 2) {
+                entered.release();
+                release.tryAcquire(1, 8000);
+            } else if (bytes == "b") {
+                ++bCalls;
+            }
+            *image = solidImage(Qt::green);
+            return true;
+        };
     int completions = 0;
     const auto handler = [&](dvs::ui::ImagePairLoader::Result) { ++completions; };
     const quint64 first = loader.requestPair(a, b, 0, policy, handler);
@@ -736,13 +744,15 @@ TEST(ImageReviewControllerTests, HeaderProbeRejectsOversizedBeforeDecoderThrows)
         *size = QSize(20000, 20000);
         return true;
     });
-    ScopedStillImageLoader loader{[&decoderCalls](const QByteArray&, QImage* image, std::string*) {
-        ++decoderCalls;
-        QImage decoded(2, 2, QImage::Format_RGBA8888);
-        decoded.fill(Qt::green);
-        *image = decoded;
-        return true;
-    }};
+    ScopedStillImageLoader loader{
+        [&decoderCalls](
+            const QByteArray&, QImage* image, dvs::ui::StillImageSourceInfo*, std::string*) {
+            ++decoderCalls;
+            QImage decoded(2, 2, QImage::Format_RGBA8888);
+            decoded.fill(Qt::green);
+            *image = decoded;
+            return true;
+        }};
 
     ImageReviewController controller;
     ASSERT_GT(controller.requestOpenPair(hugeA, hugeB, 1), 0);
@@ -809,4 +819,167 @@ TEST(ImageReviewControllerTests, DifferentSizePairSwitchExplainsModeFallback) {
     EXPECT_DOUBLE_EQ(controller.zoom(), 1.0);
     EXPECT_DOUBLE_EQ(controller.panX(), 0.5);
 }
+
+TEST(ImageReviewControllerTests, SourceProvenanceSurvivesInjectionAndLabelsDisplayConversion) {
+    ImageReviewController controller;
+    dvs::ui::StillImageSourceInfo gray;
+    gray.bitDepth = 16;
+    gray.channels = 1;
+    gray.hasAlpha = false;
+    gray.sourceFormat = QStringLiteral("gray16be");
+    gray.displayConverted = true;
+    ASSERT_TRUE(
+        controller.openPrimaryImage(solidImage(QColor(20, 40, 60)), QStringLiteral("left"), gray));
+    EXPECT_EQ(controller.primaryBitDepth(), 16);
+    EXPECT_EQ(controller.primaryChannels(), 1);
+    // A loader-reported gray source stays gray even though the display buffer is RGBA8.
+    EXPECT_FALSE(controller.primaryHasAlpha());
+    EXPECT_EQ(controller.primarySourceFormat(), QStringLiteral("gray16be"));
+    EXPECT_TRUE(controller.primaryDisplayConverted());
+
+    // Consistent RGBA provenance: alpha present, no display conversion.
+    dvs::ui::StillImageSourceInfo rgba;
+    rgba.hasAlpha = true;
+    rgba.sourceFormat = QStringLiteral("rgba");
+    ASSERT_TRUE(controller.openSecondaryImage(
+        solidImage(QColor(1, 2, 3, 128)), QStringLiteral("right"), rgba));
+    EXPECT_TRUE(controller.secondaryHasAlpha());
+    EXPECT_FALSE(controller.secondaryDisplayConverted());
+
+    // Unknown provenance (direct injection): hasAlpha falls back to the buffer.
+    controller.closeAll();
+    ASSERT_TRUE(
+        controller.openSecondaryImage(solidImage(QColor(1, 2, 3, 128)), QStringLiteral("right")));
+    EXPECT_TRUE(controller.secondaryHasAlpha());
+}
+
+TEST(ImageReviewControllerTests, AsyncSingleImageOpensRetainProvenanceIncludingCacheHits) {
+    ensureCoreApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QUrl grayUrl =
+        writeBytes(directory, QStringLiteral("gray.bin"), QByteArrayLiteral("gray"));
+    const QUrl rgbaUrl =
+        writeBytes(directory, QStringLiteral("rgba.bin"), QByteArrayLiteral("rgba"));
+    ASSERT_FALSE(grayUrl.isEmpty() || rgbaUrl.isEmpty());
+    std::atomic<int> loaderCalls{0};
+    ScopedStillImageLoader loader{[&loaderCalls](const QByteArray& bytes,
+                                                 QImage* image,
+                                                 dvs::ui::StillImageSourceInfo* info,
+                                                 std::string*) {
+        ++loaderCalls;
+        const bool gray = bytes == QByteArrayLiteral("gray");
+        *image = solidImage(QColor(20, 40, 60, gray ? 255 : 128));
+        info->bitDepth = gray ? 16 : 8;
+        info->channels = gray ? 1 : 4;
+        info->hasAlpha = !gray;
+        info->sourceFormat = gray ? QStringLiteral("gray16be") : QStringLiteral("rgba");
+        return true;
+    }};
+    ImageReviewController controller;
+    for (int iteration = 0; iteration < 2; ++iteration) {
+        ASSERT_GT(controller.requestOpenPrimary(grayUrl), 0);
+        ASSERT_TRUE(waitForControllerIdle(controller));
+        EXPECT_EQ(controller.primaryBitDepth(), 16);
+        EXPECT_EQ(controller.primaryChannels(), 1);
+        EXPECT_EQ(controller.primarySourceFormat(), QStringLiteral("gray16be"));
+        EXPECT_FALSE(controller.primaryHasAlpha());
+        EXPECT_TRUE(controller.primaryDisplayConverted());
+
+        ASSERT_GT(controller.requestOpenSecondary(rgbaUrl), 0);
+        ASSERT_TRUE(waitForControllerIdle(controller));
+        EXPECT_EQ(controller.secondaryBitDepth(), 8);
+        EXPECT_EQ(controller.secondaryChannels(), 4);
+        EXPECT_EQ(controller.secondarySourceFormat(), QStringLiteral("rgba"));
+        EXPECT_TRUE(controller.secondaryHasAlpha());
+        EXPECT_FALSE(controller.secondaryDisplayConverted());
+        // Adding the second image must preserve the first image's provenance.
+        EXPECT_EQ(controller.primaryBitDepth(), 16);
+    }
+    EXPECT_EQ(loaderCalls.load(), 2);
+}
+
+TEST(ImageReviewControllerTests, AlphaDifferenceModeReportsStatsAndOutputsAlphaMap) {
+    ImageReviewController controller;
+    QImage left(2, 2, QImage::Format_ARGB32);
+    left.fill(qRgba(10, 20, 30, 255));
+    QImage right(2, 2, QImage::Format_ARGB32);
+    right.fill(qRgba(10, 20, 30, 223)); // RGB identical, alpha 32 lower.
+    ASSERT_TRUE(controller.openPairImages(left, QStringLiteral("a"), right, QStringLiteral("b")));
+
+    controller.setCompareMode(ImageReviewController::AlphaDifference);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    ASSERT_TRUE(controller.hasDiffResult());
+    // RGB untouched by the alpha-only edit.
+    EXPECT_EQ(controller.maxAbsDifference(), 0);
+    EXPECT_TRUE(controller.alphaDifferenceOnly());
+    EXPECT_TRUE(controller.diffHasAlpha());
+    EXPECT_EQ(controller.peakAlphaDifference(), 32);
+    EXPECT_NEAR(controller.meanAlphaDifference(), 32.0, 1e-9);
+    EXPECT_EQ(controller.alphaChangedPixels(), 4);
+
+    // The diff image is a grayscale alpha map: |255-223| * 4 = 128.
+    const QVariantMap alphaMap =
+        controller.samplePixel(ImageReviewController::DisplayDiffSlot, 0, 0);
+    ASSERT_TRUE(alphaMap.value(QStringLiteral("valid")).toBool());
+    EXPECT_EQ(alphaMap.value(QStringLiteral("r")).toInt(), 128);
+    EXPECT_EQ(alphaMap.value(QStringLiteral("g")).toInt(), 128);
+    EXPECT_EQ(alphaMap.value(QStringLiteral("b")).toInt(), 128);
+    EXPECT_EQ(alphaMap.value(QStringLiteral("a")).toInt(), 255);
+}
+
+TEST(ImageReviewControllerTests, AlphaStatsStayVisibleWhenRgbMatchesCompletely) {
+    ImageReviewController controller;
+    QImage left(2, 2, QImage::Format_ARGB32);
+    left.fill(qRgba(200, 100, 50, 255));
+    QImage right(2, 2, QImage::Format_ARGB32);
+    right.fill(qRgba(200, 100, 50, 200));
+    ASSERT_TRUE(controller.openPairImages(left, QStringLiteral("a"), right, QStringLiteral("b")));
+
+    // AbsDifference ignores alpha in its output but must still surface the alpha
+    // regression so a transparency-only change is never reported as "no difference".
+    controller.setCompareMode(ImageReviewController::AbsDifference);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    EXPECT_EQ(controller.maxAbsDifference(), 0);
+    EXPECT_TRUE(controller.alphaDifferenceOnly());
+    EXPECT_EQ(controller.peakAlphaDifference(), 55);
+    EXPECT_EQ(controller.alphaChangedPixels(), 4);
+}
+
+TEST(ImageReviewControllerTests, ChannelViewsIsolateAlphaAndRgbWithoutMutatingSource) {
+    ImageReviewController controller;
+    QImage source(2, 2, QImage::Format_ARGB32);
+    source.setPixel(0, 0, qRgba(10, 20, 30, 255));
+    source.setPixel(1, 0, qRgba(40, 50, 60, 128));
+    source.setPixel(0, 1, qRgba(70, 80, 90, 64));
+    source.setPixel(1, 1, qRgba(100, 110, 120, 0));
+    ASSERT_TRUE(controller.openPrimaryImage(source, QStringLiteral("a")));
+
+    controller.setViewMode(ImageReviewController::AlphaGrayView);
+    const QImage alphaView = controller.imageForSlot(ImageReviewController::PrimarySlot);
+    ASSERT_FALSE(alphaView.isNull());
+    EXPECT_EQ(qRed(alphaView.pixel(0, 0)), 255);
+    EXPECT_EQ(qRed(alphaView.pixel(1, 0)), 128);
+    EXPECT_EQ(qRed(alphaView.pixel(1, 1)), 0);
+    EXPECT_EQ(qAlpha(alphaView.pixel(1, 1)), 255); // view is opaque; brightness = alpha.
+    const QVariantMap alphaSample =
+        controller.samplePixel(ImageReviewController::PrimarySlot, 1, 0);
+    EXPECT_EQ(alphaSample.value(QStringLiteral("channelView")).toString(),
+              QStringLiteral("alphaGray"));
+    EXPECT_EQ(alphaSample.value(QStringLiteral("alphaPercent")).toString(), QStringLiteral("50.2"));
+
+    controller.setViewMode(ImageReviewController::RgbOpaqueView);
+    const QImage rgbView = controller.imageForSlot(ImageReviewController::PrimarySlot);
+    ASSERT_FALSE(rgbView.isNull());
+    // Colors hidden in the transparent region become visible; alpha forced opaque.
+    EXPECT_EQ(qRed(rgbView.pixel(1, 1)), 100);
+    EXPECT_EQ(qAlpha(rgbView.pixel(1, 1)), 255);
+
+    // The observation mode never mutates the committed source image.
+    controller.setViewMode(ImageReviewController::RgbaView);
+    const QImage original = controller.imageForSlot(ImageReviewController::PrimarySlot);
+    EXPECT_EQ(qAlpha(original.pixel(1, 1)), 0);
+    EXPECT_EQ(qRed(original.pixel(1, 1)), 100);
+}
+
 } // namespace

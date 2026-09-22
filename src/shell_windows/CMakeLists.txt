@@ -1,26 +1,26 @@
 configure_file(
-    VCStationShell.rc.in
-    "${CMAKE_CURRENT_BINARY_DIR}/VCStationShell.rc"
+    CompareStationShell.rc.in
+    "${CMAKE_CURRENT_BINARY_DIR}/CompareStationShell.rc"
     @ONLY
 )
 
 add_library(
-    VCStationShell
+    CompareStationShell
     SHARED
     ClassFactory.cpp
     ExplorerCommand.cpp
     ExplorerCommand.h
     ExplorerCommandSupport.cpp
     ExplorerCommandSupport.h
-    VCStationShell.def
-    "${CMAKE_CURRENT_BINARY_DIR}/VCStationShell.rc"
+    CompareStationShell.def
+    "${CMAKE_CURRENT_BINARY_DIR}/CompareStationShell.rc"
 )
-target_link_libraries(VCStationShell PRIVATE ole32 shell32 shlwapi)
+target_link_libraries(CompareStationShell PRIVATE ole32 shell32 shlwapi)
 
-dvs_apply_project_warnings(VCStationShell)
-dvs_register_architecture_target(VCStationShell)
+dvs_apply_project_warnings(CompareStationShell)
+dvs_register_architecture_target(CompareStationShell)
 set_target_properties(
-    VCStationShell
+    CompareStationShell
     PROPERTIES
         FOLDER "Application"
         PREFIX ""

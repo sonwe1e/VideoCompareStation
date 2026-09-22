@@ -9,10 +9,12 @@ extern "C" {
 #include <libavutil/error.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/mem.h>
+#include <libavutil/pixdesc.h>
 #include <libswscale/swscale.h>
 }
 
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <limits>
 #include <string>
@@ -49,6 +51,26 @@ void setError(std::string* error, const char* message) {
     }
     if (size >= 4U && data[0] == 'M' && data[1] == 'M' && data[2] == 0x00 && data[3] == 0x2A) {
         return AV_CODEC_ID_TIFF;
+    }
+    // PNM family (PBM/PGM/PPM/PAM): magic is 'P' followed by '1'..'7' and whitespace.
+    // FFmpeg exposes no AV_CODEC_ID_PNM umbrella; pick the concrete subtype from the digit.
+    if (size >= 2U && data[0] == 'P' && data[1] >= '1' && data[1] <= '7' &&
+        (size == 2U || std::isspace(static_cast<unsigned char>(data[2])) != 0)) {
+        switch (data[1]) {
+        case '1':
+        case '4':
+            return AV_CODEC_ID_PBM;
+        case '2':
+        case '5':
+            return AV_CODEC_ID_PGM;
+        case '3':
+        case '6':
+            return AV_CODEC_ID_PPM;
+        case '7':
+            return AV_CODEC_ID_PAM;
+        default:
+            return AV_CODEC_ID_NONE;
+        }
     }
     return AV_CODEC_ID_NONE;
 }
@@ -97,6 +119,20 @@ bool convertFrameToRgba(const AVFrame* frame, StillImage* image, std::string* er
     image->width = width;
     image->height = height;
     image->rgba = std::move(rgba);
+
+    // Source provenance: the RGBA8 buffer is a display conversion, not the file's original
+    // code values. Record what the frame actually was so callers can label sampling honestly.
+    const AVPixFmtDescriptor* const sourceDescriptor =
+        av_pix_fmt_desc_get(static_cast<AVPixelFormat>(frame->format));
+    if (sourceDescriptor != nullptr) {
+        image->sourceBitDepth = sourceDescriptor->comp[0].depth;
+        image->sourceChannels = sourceDescriptor->nb_components;
+        image->hasAlpha = (sourceDescriptor->flags & AV_PIX_FMT_FLAG_ALPHA) != 0;
+        const char* const formatName =
+            av_get_pix_fmt_name(static_cast<AVPixelFormat>(frame->format));
+        image->sourceFormat = formatName != nullptr ? formatName : std::string{};
+    }
+    image->colorRange = frame->color_range;
     return true;
 }
 

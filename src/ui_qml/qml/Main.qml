@@ -22,7 +22,7 @@ ApplicationWindow {
     minimumWidth: 960
     minimumHeight: 640
     visible: false
-    title: qsTr("VCStation — 视频对比工作站")
+    title: qsTr("CompareStation — 视频对比工作站")
     color: Theme.window
 
     readonly property color panelColor: Theme.menu
@@ -204,8 +204,9 @@ ApplicationWindow {
     readonly property bool videoHasSession: sourceCount > 0
     readonly property bool activeTaskHasMedia: workspaceSession.imageActive ? imageHasContent : videoHasSession
     readonly property int preferredOscState: preferences ? Number(preferences.oscMode) : -1
-    readonly property int oscState: sourceCount === 0 || !chromeVisible ? 2 : (preferredOscState >= 0 ? preferredOscState : (singleMode ? 1 : 0))
-    readonly property bool transportHidden: oscState === 2 || !chromeVisible
+    property bool immersiveOscRevealed: false
+    readonly property int oscState: sourceCount === 0 ? 2 : (!chromeVisible ? (immersiveOscRevealed ? 1 : 2) : (preferredOscState >= 0 ? preferredOscState : (singleMode ? 1 : 0)))
+    readonly property bool transportHidden: oscState === 2
     readonly property bool transportDocked: !transportHidden && oscState === 0
     readonly property bool transportOverlay: !transportHidden && oscState === 1
     readonly property int transportDockHeight: transportDocked ? transport.height + 8 : 0
@@ -371,9 +372,37 @@ ApplicationWindow {
     // relay has actually observed a gap.
 
     readonly property int droppedFrames: viewportFrame ? Number(viewportFrame.droppedFrames) : 0
-    readonly property string droppedFramesText: droppedFrames > 0 ? qsTr("丢帧 %1").arg(droppedFrames) : ""
+    readonly property string droppedFramesText: droppedFrames > 0 ? qsTr("呈现间隙 %1").arg(droppedFrames) : ""
     readonly property string playbackContinuityPolicyName: controller ? String(controller.playbackContinuityPolicyName || "") : ""
     readonly property int playbackSkippedFrameSets: controller ? Number(controller.playbackSkippedFrameSets || 0) : 0
+    readonly property int playbackRunSkippedFrameSets: controller ? Number(controller.playbackRunSkippedFrameSets || 0) : 0
+    readonly property real playbackTargetRate: controller ? Number(controller.playbackTargetRate || 1) : 1
+    readonly property real playbackPresentationRate: controller ? Number(controller.playbackPresentationRate || 0) : 0
+    readonly property int playbackLagMilliseconds: controller ? Math.round(Number(controller.playbackLagMicroseconds || 0) / 1000) : 0
+    readonly property bool playbackCatchingUp: controller ? Boolean(controller.playbackCatchingUp) : false
+    readonly property int sourceDuplicateCount: {
+        if (!alignmentTimelineMarkers)
+            return 0;
+        let n = 0;
+        for (let i = 0; i < alignmentTimelineMarkers.length; ++i) {
+            const marker = alignmentTimelineMarkers[i];
+            if (marker && marker.kind === "duplicate")
+                ++n;
+        }
+        return n;
+    }
+    readonly property string playbackModeLabel: {
+        const policy = Number(controller ? controller.playbackContinuityPolicy : 2);
+        return policy === 0 ? qsTr("逐帧完整审查") : qsTr("正常速度观看");
+    }
+    readonly property string playbackModeDetail: {
+        const policy = Number(controller ? controller.playbackContinuityPolicy : 2);
+        return policy === 0 ? qsTr("不跳过整组；落后时放慢以保留每组画面") : qsTr("落后超过约 2 秒时跳过整组追上时间");
+    }
+    readonly property string sourceRateText: {
+        const rate = controller ? String(controller.rationalFrameRate || "") : "";
+        return rate.length > 0 ? qsTr("源 %1 · 屏刷新无法逐帧呈现时以逐帧审查核对单帧").arg(rate) : "";
+    }
     readonly property real frameProgress: currentFrame >= 0 && totalFrames > 1 ? Math.max(0, Math.min(1, Number(currentFrame) / (Number(totalFrames) - 1))) : 0
     readonly property real timelineProgress: timelineDragging && timelinePreviewFrame >= 0 && totalFrames > 1 ? Number(timelinePreviewFrame) / (Number(totalFrames) - 1) : frameProgress
     readonly property bool timelineEnabled: graphicsReady && !busy && Boolean(controller && controller.canFirst) && totalFrames > 0
@@ -400,8 +429,9 @@ ApplicationWindow {
 
     // hover frame; when nothing is cached the popup stays hidden (see PlayerOsc).
 
+    readonly property int effectivePreviewFrame: timelinePreviewFrame >= 0 ? timelinePreviewFrame : timelinePreviewSampleFrame
     readonly property int timelinePreviewSampleFrame: timelinePreviewFrame >= 0 && totalFrames > 0 ? thumbnailCache.nearestSample(timelinePreviewFrame) : -1
-    readonly property string previewTimecode: controller && timelinePreviewSampleFrame >= 0 ? controller.timecodeForFrame(timelinePreviewSampleFrame, dropFrameTimecode) : "00:00:00:00"
+    readonly property string previewTimecode: controller && effectivePreviewFrame >= 0 ? controller.timecodeForFrame(effectivePreviewFrame, dropFrameTimecode) : "00:00:00:00"
     readonly property bool roiEnabled: Boolean(viewportFrame && viewportFrame.roiEnabled)
 
     onFramePendingChanged: {
@@ -579,7 +609,29 @@ ApplicationWindow {
     }
 
     function revealOsc() {
-        transport.reveal();
+        if (!chromeVisible) {
+            revealImmersiveOsc();
+        } else {
+            transport.reveal();
+        }
+    }
+
+    function revealImmersiveOsc() {
+        if (!imageWorkspaceActive && !chromeVisible && sourceCount > 0) {
+            immersiveOscRevealed = true;
+            immersiveOscTimer.restart();
+            transport.reveal();
+        }
+    }
+
+    Timer {
+        id: immersiveOscTimer
+
+        interval: 2500
+        repeat: false
+        onTriggered: {
+            root.immersiveOscRevealed = false;
+        }
     }
 
     function toggleRangeLoop() {
@@ -2563,7 +2615,7 @@ ApplicationWindow {
         objectName: "imageSingleDialog"
         title: qsTr("打开图片")
         fileMode: NativeDialogs.FileDialog.OpenFile
-        nameFilters: [qsTr("图片 (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tif *.tiff)"), qsTr("所有文件 (*)")]
+        nameFilters: [qsTr("图片 (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tif *.tiff *.pnm *.ppm *.pgm *.pbm)"), qsTr("所有文件 (*)")]
         onAccepted: {
             const picked = selectedFile && selectedFile.toString().length > 0 ? selectedFile : currentFile;
 
@@ -2578,7 +2630,7 @@ ApplicationWindow {
         objectName: "imageAddDialog"
         title: qsTr("添加图片")
         fileMode: NativeDialogs.FileDialog.OpenFile
-        nameFilters: [qsTr("图片 (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tif *.tiff)"), qsTr("所有文件 (*)")]
+        nameFilters: [qsTr("图片 (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tif *.tiff *.pnm *.ppm *.pgm *.pbm)"), qsTr("所有文件 (*)")]
         onAccepted: {
             const picked = selectedFile && selectedFile.toString().length > 0 ? selectedFile : currentFile;
 
@@ -2593,7 +2645,7 @@ ApplicationWindow {
         objectName: "imagePairDialog"
         title: qsTr("打开图片对")
         fileMode: NativeDialogs.FileDialog.OpenFiles
-        nameFilters: [qsTr("图片 (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tif *.tiff)"), qsTr("所有文件 (*)")]
+        nameFilters: [qsTr("图片 (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tif *.tiff *.pnm *.ppm *.pgm *.pbm)"), qsTr("所有文件 (*)")]
         onAccepted: {
             const files = selectedFiles && selectedFiles.length > 0 ? selectedFiles : [selectedFile];
 
@@ -2778,6 +2830,8 @@ ApplicationWindow {
         mutedTextColor: root.mutedTextColor
         anchors.fill: viewportFrame
         onOpenVideosRequested: root.requestOpenVideos()
+        onOpenImageRequested: root.requestImageOpen()
+        onCompareFoldersRequested: root.requestCompareFolders()
     }
     TimelineThumbnailCache {
         id: thumbnailCache
@@ -2796,6 +2850,16 @@ ApplicationWindow {
         sourceLabel: root.sourceAName
         playing: root.playing
         playbackRate: root.controller ? Number(root.controller.playbackRate) : 1
+        playbackModeLabel: root.playbackModeLabel
+        playbackModeDetail: root.playbackModeDetail
+        playbackTargetRate: root.playbackTargetRate
+        playbackPresentationRate: root.playbackPresentationRate
+        playbackRunSkippedFrameSets: root.playbackRunSkippedFrameSets
+        playbackLagMilliseconds: root.playbackLagMilliseconds
+        playbackCatchingUp: root.playbackCatchingUp
+        displayGapCount: Number(root.droppedFrames)
+        sourceDuplicateCount: root.sourceDuplicateCount
+        sourceRateText: root.sourceRateText
         timelineEnabled: root.timelineEnabled
         currentFrame: Number(root.currentFrame)
         totalFrames: Number(root.totalFrames)
@@ -2813,13 +2877,17 @@ ApplicationWindow {
         inFrame: root.inFrame
         outFrame: root.outFrame
         loopRangeActive: root.rangePlaybackActive
-        previewFrame: root.timelinePreviewSampleFrame
+        previewFrame: root.effectivePreviewFrame
         previewTimecode: root.previewTimecode
         previewThumbnailSource: thumbnailCache.urlForFrame(root.timelinePreviewFrame)
         anchors {
             left: viewportFrame.left
             right: root.drawerMode ? alignmentBar.left : viewportFrame.right
             bottom: parent.bottom
+        }
+        onOverlayHidden: {
+            if (!root.chromeVisible)
+                root.immersiveOscRevealed = false;
         }
         onSeekRequested: frame => {
             root.revealOsc();
@@ -2835,6 +2903,7 @@ ApplicationWindow {
         id: shortcutHelp
 
         playerPreset: root.shortcutPreset === 1
+        imagePreset: root.imageWorkspaceActive
     }
 
     ReviewContextMenu {
@@ -3043,6 +3112,26 @@ ApplicationWindow {
             }
         }
     }
+    Item {
+        id: immersiveWakeStrip
+
+        objectName: "immersiveWakeStrip"
+        visible: !root.imageWorkspaceActive && !root.chromeVisible && root.sourceCount > 0
+        z: 970
+        height: 14
+        anchors {
+            left: parent.left
+            right: parent.right
+            bottom: parent.bottom
+        }
+
+        HoverHandler {
+            onHoveredChanged: {
+                if (hovered)
+                    root.revealImmersiveOsc();
+            }
+        }
+    }
     DropArea {
         id: workspaceDropArea
 
@@ -3076,7 +3165,7 @@ ApplicationWindow {
             anchors.centerIn: parent
 
             Text {
-                text: qsTr("松开即可在 VCStation 中打开")
+                text: qsTr("松开即可在 CompareStation 中打开")
                 color: root.primaryTextColor
                 font.pixelSize: 24
                 font.bold: true

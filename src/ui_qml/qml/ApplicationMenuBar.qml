@@ -335,7 +335,7 @@ VcsMenuBar {
 
             VcsRadioMenuItem {
                 objectName: "continuityReviewEveryFrame"
-                text: qsTr("逐帧审阅")
+                text: qsTr("逐帧完整审查 · 不跳过")
                 checked: Number(control.playbackContinuityPolicy) === 0
                 onTriggered: {
                     control.preferences.playbackContinuityPolicy = 0;
@@ -347,7 +347,7 @@ VcsMenuBar {
             }
             VcsRadioMenuItem {
                 objectName: "continuityRealTime"
-                text: qsTr("实时跟播")
+                text: qsTr("正常速度观看 · 落后超 2s 可跳过")
                 checked: Number(control.playbackContinuityPolicy) === 1
                 onTriggered: {
                     control.preferences.playbackContinuityPolicy = 1;
@@ -359,7 +359,7 @@ VcsMenuBar {
             }
             VcsRadioMenuItem {
                 objectName: "continuityContextual"
-                text: qsTr("按会话自适应")
+                text: qsTr("按会话自适应 · 多源默认跟播")
                 checked: Number(control.playbackContinuityPolicy) === 2
                 onTriggered: {
                     control.preferences.playbackContinuityPolicy = 2;

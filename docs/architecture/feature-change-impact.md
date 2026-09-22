@@ -2,6 +2,9 @@
 
 Use this map to keep future feature work inside the smallest stable capability boundary.
 
+For actual file/test entry points use the [agent guide](../agent-guide.md); current product
+gaps and acceptance conditions live in the [issue ledger](../engineering/visual-review-backlog.md).
+
 | Feature | Primary implementation boundary | Presentation boundary | Runtime impact |
 | --- | --- | --- | --- |
 | Playback speed | Playback workflow and cadence | Playback capability | Add a clock policy |

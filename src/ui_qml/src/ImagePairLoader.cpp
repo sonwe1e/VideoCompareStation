@@ -75,6 +75,7 @@ private:
 [[nodiscard]] bool loadImageFromDisk(const QUrl& url,
                                      const ImagePairLoader::DecodePolicy& policy,
                                      QImage* image,
+                                     StillImageSourceInfo* info,
                                      QString* identity,
                                      QString* error,
                                      const std::atomic_bool& cancelled) {
@@ -142,7 +143,7 @@ private:
     std::string decoderError;
     if (policy.loader) {
         try {
-            decodedOk = policy.loader(bytes, &decoded, &decoderError);
+            decodedOk = policy.loader(bytes, &decoded, info, &decoderError);
         } catch (const std::exception& exception) {
             decoderError = exception.what();
             decodedOk = false;
@@ -164,6 +165,12 @@ private:
                         : QString::fromStdString(decoderError);
             }
             return false;
+        }
+        // Qt's own loader gives no source provenance beyond the decoded format.
+        if (info != nullptr) {
+            info->sourceFormat = QStringLiteral("rgba8 (qt)");
+            info->channels = 4;
+            info->hasAlpha = decoded.hasAlphaChannel();
         }
     }
     if (decoded.isNull()) {
@@ -190,6 +197,20 @@ private:
             *error = QObject::tr("Decoded image conversion failed.");
         }
         return false;
+    }
+    if (info != nullptr) {
+        // Only fall back to the buffer when the source provenance is unknown: a loader-
+        // reported gray source (hasAlpha=false) must not be re-labeled alpha just because
+        // the display buffer is RGBA8.
+        if (info->sourceFormat.isEmpty()) {
+            info->hasAlpha = decoded.hasAlphaChannel();
+            info->channels = 4;
+        }
+        // Display conversion happened whenever the source bit depth, channel layout or
+        // format differs from plain 8-bit RGBA; the provider fills the real source fields.
+        info->displayConverted =
+            info->bitDepth != 8 || info->channels != 4 ||
+            (!info->sourceFormat.isEmpty() && info->sourceFormat != QStringLiteral("rgba"));
     }
     *image = std::move(decoded);
     return true;
@@ -221,6 +242,12 @@ private:
     const int green = clampChannel(qGreen(base) + (40 - qGreen(base)) * strength / 255);
     const int blue = clampChannel(qBlue(base) + (90 - qBlue(base)) * strength / 255);
     return qRgb(red, green, blue);
+}
+// Alpha difference map: brightness encodes |alphaA - alphaB| × gain as a grayscale value.
+// Both buffers carry straight (unassociated) alpha, so the subtraction is representation-safe.
+[[nodiscard]] QRgb alphaDiffPixel(const QRgb a, const QRgb b, const int gain) noexcept {
+    const int delta = clampChannel(std::abs(qAlpha(a) - qAlpha(b)) * gain);
+    return qRgb(delta, delta, delta);
 }
 [[nodiscard]] ImagePairLoader::DifferenceResult
 computeDifference(QImage primary,
@@ -273,8 +300,11 @@ computeDifference(QImage primary,
         return result;
     }
     qint64 sum = 0;
+    qint64 alphaSum = 0;
+    qint64 alphaChanged = 0;
     int peak = 0;
     int peakAlpha = 0;
+    bool hasAlpha = false;
     constexpr int kGain = 4;
     for (int y = 0; y < left.height(); ++y) {
         if (rowObserver) {
@@ -296,12 +326,24 @@ computeDifference(QImage primary,
             sum += delta;
             peak = std::max(peak, delta);
             peakAlpha = std::max(peakAlpha, alphaDelta);
+            // Alpha statistics cover the straight (unassociated) alpha of both decoded
+            // buffers, so a transparency regression is visible even when RGB matches.
+            alphaSum += alphaDelta;
+            if (alphaDelta > 0) {
+                ++alphaChanged;
+            }
+            if (qAlpha(a) < 255 || qAlpha(b) < 255) {
+                hasAlpha = true;
+            }
             switch (compareMode) {
             case 3: // ImageReviewController::SignedDifference
                 outLine[x] = signedDiffPixel(a, b, kGain);
                 break;
             case 4: // ImageReviewController::Highlight
                 outLine[x] = highlightPixel(a, b, kGain);
+                break;
+            case 6: // ImageReviewController::AlphaDifference
+                outLine[x] = alphaDiffPixel(a, b, kGain);
                 break;
             case 2: // ImageReviewController::AbsDifference
             default:
@@ -315,6 +357,10 @@ computeDifference(QImage primary,
     result.image = std::move(output);
     result.maxAbsDifference = peak;
     result.meanAbsDifference = pixelCount > 0 ? static_cast<double>(sum) / pixelCount : 0.0;
+    result.peakAlphaDifference = peakAlpha;
+    result.meanAlphaDifference = pixelCount > 0 ? static_cast<double>(alphaSum) / pixelCount : 0.0;
+    result.alphaChangedPixels = alphaChanged;
+    result.hasAlpha = hasAlpha;
     result.alphaDifferenceOnly = peak == 0 && peakAlpha > 0;
     return result;
 }
@@ -325,6 +371,12 @@ struct RequestState final {
     std::atomic_bool cancelled{false};
     ImagePairLoader::ResultHandler resultHandler;
     ImagePairLoader::DifferenceHandler differenceHandler;
+};
+// Decoded image plus its source provenance, cached together so a cache hit never loses the
+// metadata that separates display-converted samples from original code values.
+struct DecodedCacheEntry final {
+    QImage image;
+    StillImageSourceInfo info;
 };
 struct LoadJob final {
     enum class Kind {
@@ -340,8 +392,8 @@ struct LoadJob final {
     int pairId = -1;
     QString primaryIdentity;
     QString secondaryIdentity;
-    std::optional<QImage> cachedPrimary;
-    std::optional<QImage> cachedSecondary;
+    std::optional<DecodedCacheEntry> cachedPrimary;
+    std::optional<DecodedCacheEntry> cachedSecondary;
     ImagePairLoader::DecodePolicy policy;
 };
 struct DifferenceJob final {
@@ -559,13 +611,13 @@ private:
                    ? QStringLiteral("url:%1|policy:%2").arg(url.toString()).arg(revision)
                    : identity;
     }
-    [[nodiscard]] std::optional<QImage> lookup(const QString& identity) {
+    [[nodiscard]] std::optional<DecodedCacheEntry> lookup(const QString& identity) {
         if (identity.isEmpty()) {
             return std::nullopt;
         }
-        QImage image;
-        if (cache_.get(cacheKey(identity), &image) && !image.isNull()) {
-            return image;
+        DecodedCacheEntry entry;
+        if (cache_.get(cacheKey(identity), &entry) && !entry.image.isNull()) {
+            return entry;
         }
         return std::nullopt;
     }
@@ -595,6 +647,7 @@ private:
                 if (!loadImageFromDisk(job.primaryUrl,
                                        job.policy,
                                        &result.primary,
+                                       &result.primaryInfo,
                                        &identity,
                                        &error,
                                        state->cancelled)) {
@@ -605,7 +658,8 @@ private:
                     job.primaryIdentity = identity;
                 }
             } else if (job.cachedPrimary.has_value()) {
-                result.primary = *job.cachedPrimary;
+                result.primary = job.cachedPrimary->image;
+                result.primaryInfo = job.cachedPrimary->info;
             }
             if (!state->cancelled.load() && result.error.isEmpty() &&
                 job.kind != LoadJob::Kind::Primary && !job.cachedSecondary.has_value()) {
@@ -614,6 +668,7 @@ private:
                 if (!loadImageFromDisk(job.secondaryUrl,
                                        job.policy,
                                        &result.secondary,
+                                       &result.secondaryInfo,
                                        &identity,
                                        &error,
                                        state->cancelled)) {
@@ -624,7 +679,8 @@ private:
                     job.secondaryIdentity = identity;
                 }
             } else if (job.cachedSecondary.has_value()) {
-                result.secondary = *job.cachedSecondary;
+                result.secondary = job.cachedSecondary->image;
+                result.secondaryInfo = job.cachedSecondary->info;
             }
         }
         if (job.kind == LoadJob::Kind::Primary) {
@@ -657,10 +713,12 @@ private:
         }
         if (result.succeeded()) {
             if (!result.primary.isNull() && !result.primaryIdentity.isEmpty()) {
-                cache_.put(cacheKey(result.primaryIdentity), result.primary);
+                cache_.put(cacheKey(result.primaryIdentity),
+                           DecodedCacheEntry{result.primary, result.primaryInfo});
             }
             if (!result.secondary.isNull() && !result.secondaryIdentity.isEmpty()) {
-                cache_.put(cacheKey(result.secondaryIdentity), result.secondary);
+                cache_.put(cacheKey(result.secondaryIdentity),
+                           DecodedCacheEntry{result.secondary, result.secondaryInfo});
             }
         }
         if (!state->prefetch && state->resultHandler) {
@@ -688,9 +746,10 @@ private:
     }
     ImagePairLoader* owner_ = nullptr;
     QThreadPool pool_;
-    ByteLruCache<QImage> cache_{128LL * 1024LL * 1024LL, [](const QImage& image) {
-                                    return static_cast<qint64>(image.sizeInBytes());
-                                }};
+    ByteLruCache<DecodedCacheEntry> cache_{
+        128LL * 1024LL * 1024LL, [](const DecodedCacheEntry& entry) {
+            return static_cast<qint64>(entry.image.sizeInBytes());
+        }};
     std::map<quint64, std::shared_ptr<RequestState>> active_;
     std::map<quint64, std::function<void()>> pending_;
     std::function<void(int)> differenceRowObserver_;

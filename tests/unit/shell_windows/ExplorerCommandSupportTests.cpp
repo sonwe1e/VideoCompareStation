@@ -44,7 +44,7 @@ TEST(ExplorerCommandSupportTests, AcceptsSupportedVideoExtensionsCaseInsensitive
 }
 
 TEST(ExplorerCommandSupportTests, BuildsUnicodeReviewCommandWithWindowsRoundTripQuoting) {
-    const std::filesystem::path executable = LR"(C:\Program Files\VCStation\VCStation.exe)";
+    const std::filesystem::path executable = LR"(C:\Program Files\CompareStation\CompareStation.exe)";
     const std::array<std::filesystem::path, 2U> sources{
         std::filesystem::path{LR"(C:\素材\甲 视频.mp4)"},
         std::filesystem::path{LR"(D:\素材\乙 视频.mkv)"},
@@ -58,7 +58,7 @@ TEST(ExplorerCommandSupportTests, BuildsUnicodeReviewCommandWithWindowsRoundTrip
 }
 
 TEST(ExplorerCommandSupportTests, AcceptsOneToThreeSourcesAndRejectsOtherCounts) {
-    const std::filesystem::path executable = LR"(C:\VCStation\VCStation.exe)";
+    const std::filesystem::path executable = LR"(C:\CompareStation\CompareStation.exe)";
     const std::array<std::filesystem::path, 1U> oneSource{
         std::filesystem::path{LR"(C:\clips\a.mp4)"},
     };

@@ -67,7 +67,24 @@ struct SessionSnapshot final {
         domain::PlaybackContinuityPolicy::Contextual;
     domain::PlaybackContinuityPolicy playbackContinuityPolicyEffective =
         domain::PlaybackContinuityPolicy::RealTime;
+    // Player-side complete FrameSet skips (wall-clock catch-up). Distinct from source-content
+    // duplicates and from display/present gaps: those are reported separately so a stall is never
+    // misread as algorithm judder.
     std::uint64_t playbackSkippedFrameSets = 0U;
+    // Same counter scoped to the current Play interval (reset when a PlaybackRun starts).
+    std::uint64_t playbackRunSkippedFrameSets = 0U;
+    // Target visual rate (1.0 = real time). Mirror of playbackSpeed for status-rail symmetry
+    // with playbackPresentationRate.
+    double playbackTargetRate = 1.0;
+    // Measured presentation rate in media-seconds per wall-second since the run anchor. 1.0
+    // keeps media time with the wall clock at 1x; 2.0 is 2x. Zero when not playing.
+    double playbackPresentationRate = 0.0;
+    // Positive when the displayed media position lags the wall-clock target (behind schedule).
+    // Negative means ahead (possible after catch-up overshoot).
+    std::int64_t playbackLagMicroseconds = 0;
+    // True while the real-time policy is actively skipping whole FrameSets to recover the
+    // wall-clock anchor. Always false under ReviewEveryFrame.
+    bool playbackCatchingUp = false;
     // C-02: session comparison pair as stable source identities; projected to DifferenceEdge
     // only at the renderer boundary.
     std::optional<domain::ComparisonPair> activeComparisonPair;

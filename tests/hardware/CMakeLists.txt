@@ -1,10 +1,3 @@
-if(DEFINED DVS_POWERSHELL_EXECUTABLE AND
-   NOT EXISTS "${DVS_POWERSHELL_EXECUTABLE}")
-    unset(DVS_POWERSHELL_EXECUTABLE CACHE)
-endif()
-
-find_program(DVS_POWERSHELL_EXECUTABLE NAMES pwsh powershell REQUIRED)
-
 dvs_add_test(
     NAME hardware.d3d11va_decode
     LAYER hardware
@@ -50,7 +43,7 @@ foreach(dvs_comparison_mode IN ITEMS wipe diff)
             -ComparisonMode
             "${dvs_comparison_mode}"
             -Executable
-            $<TARGET_FILE:VCStation>
+            $<TARGET_FILE:CompareStation>
             -DurationSeconds
             300
     )
@@ -84,7 +77,7 @@ dvs_add_test(
         -RunName
         1080p60-2source-mode-switch-wipe
         -Executable
-        $<TARGET_FILE:VCStation>
+        $<TARGET_FILE:CompareStation>
         -DurationSeconds
         300
 )
@@ -115,7 +108,7 @@ dvs_add_test(
         wipe
         -RequireRetainedFrame
         -Executable
-        $<TARGET_FILE:VCStation>
+        $<TARGET_FILE:CompareStation>
         -DurationSeconds
         300
 )
@@ -141,7 +134,7 @@ dvs_add_test(
         -Profile
         1080p60-1source
         -Executable
-        $<TARGET_FILE:VCStation>
+        $<TARGET_FILE:CompareStation>
         -DurationSeconds
         300
 )
@@ -167,7 +160,7 @@ dvs_add_test(
         -Profile
         1080p60-2source
         -Executable
-        $<TARGET_FILE:VCStation>
+        $<TARGET_FILE:CompareStation>
         -DurationSeconds
         300
 )
@@ -193,7 +186,7 @@ dvs_add_test(
         -Profile
         1080p60
         -Executable
-        $<TARGET_FILE:VCStation>
+        $<TARGET_FILE:CompareStation>
         -DurationSeconds
         300
 )
@@ -220,7 +213,7 @@ foreach(profile IN ITEMS 1080p120-1source 1080p120-2source 1080p120-3source)
             -Profile
             "${profile}"
             -Executable
-            $<TARGET_FILE:VCStation>
+            $<TARGET_FILE:CompareStation>
             -DurationSeconds
             60
     )

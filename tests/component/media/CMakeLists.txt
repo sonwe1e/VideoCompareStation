@@ -11,6 +11,7 @@ add_executable(
     SourceDecodeActorTests.cpp
     SourceFrameCacheTests.cpp
     SoftwareDecoderTests.cpp
+    StillImageDecoderTests.cpp
 )
 target_link_libraries(
     dvs_media_component_tests

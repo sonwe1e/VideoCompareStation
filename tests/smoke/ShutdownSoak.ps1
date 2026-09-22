@@ -31,11 +31,11 @@ for ($iteration = 1; $iteration -le $Iterations; ++$iteration) {
 
     if (-not $process.WaitForExit(10000)) {
         $process.Kill($true)
-        throw "VCStation shutdown soak iteration $iteration exceeded 10 seconds."
+        throw "CompareStation shutdown soak iteration $iteration exceeded 10 seconds."
     }
     if ($process.ExitCode -ne 0) {
-        throw "VCStation shutdown soak iteration $iteration exited with $($process.ExitCode)."
+        throw "CompareStation shutdown soak iteration $iteration exited with $($process.ExitCode)."
     }
 }
 
-Write-Host "VCStation shutdown soak passed $Iterations iterations."
+Write-Host "CompareStation shutdown soak passed $Iterations iterations."

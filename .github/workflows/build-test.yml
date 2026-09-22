@@ -103,7 +103,7 @@ jobs:
         shell: pwsh
         run: >-
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1
-          ".\out\build\${{ matrix.preset }}\bin\VCStationCli.exe"
+          ".\out\build\${{ matrix.preset }}\bin\CompareStationCli.exe"
           --startup-check
 
       - name: Windows core-only build and tests

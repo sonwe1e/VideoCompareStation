@@ -27,7 +27,7 @@ constexpr std::size_t kMaximumPendingRequests = 8U;
         QCryptographicHash::hash(QDir::homePath().toUtf8(), QCryptographicHash::Sha256)
             .toHex()
             .first(16);
-    return QStringLiteral("VCStation.StartupRequest.v1.%1").arg(QString::fromLatin1(userIdentity));
+    return QStringLiteral("CompareStation.StartupRequest.v1.%1").arg(QString::fromLatin1(userIdentity));
 }
 
 [[nodiscard]] QString lockFilePath(const QString& endpointName) {
@@ -36,7 +36,7 @@ constexpr std::size_t kMaximumPendingRequests = 8U;
             .toHex()
             .first(24);
     return QDir::temp().filePath(
-        QStringLiteral("VCStation.StartupRequest.%1.lock").arg(QString::fromLatin1(endpointHash)));
+        QStringLiteral("CompareStation.StartupRequest.%1.lock").arg(QString::fromLatin1(endpointHash)));
 }
 
 } // namespace

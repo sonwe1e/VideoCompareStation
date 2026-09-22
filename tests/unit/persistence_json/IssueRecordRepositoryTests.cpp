@@ -91,7 +91,7 @@ TEST_F(IssueRecordRepositoryTests, RejectsUnsupportedSchemaWithoutTouchingFile) 
     fs::create_directories(documentPath().parent_path(), errorCode);
     {
         std::ofstream stream{documentPath(), std::ios::binary | std::ios::trunc};
-        stream << R"({"schemaVersion":0,"kind":"vcstation-issue-log","records":[]})" << '\n';
+        stream << R"({"schemaVersion":0,"kind":"comparestation-issue-log","records":[]})" << '\n';
     }
     const auto before = fs::file_size(documentPath());
     const application::IssueRecordIoResult loaded = repository.load(documentPath());
@@ -115,7 +115,7 @@ TEST_F(IssueRecordRepositoryTests, RejectsCorruptJsonWithExplanation) {
 
 TEST_F(IssueRecordRepositoryTests, EncodeDecodeHelpersRejectOldEntrySchema) {
     const std::string text =
-        R"({"schemaVersion":1,"kind":"vcstation-issue-log","records":[{"schemaVersion":0,"kind":"video"}]})";
+        R"({"schemaVersion":1,"kind":"comparestation-issue-log","records":[{"schemaVersion":0,"kind":"video"}]})";
     const IssueRecordDocument document = IssueRecordRepository::decodeDocument(text);
     EXPECT_FALSE(document.ok);
     EXPECT_TRUE(document.records.empty());

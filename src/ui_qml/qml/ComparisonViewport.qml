@@ -154,7 +154,7 @@ Rectangle {
             id: dualVideoSurface
 
             objectName: "dualVideoSurface"
-            Accessible.name: qsTr("VCStation 同步对比画面")
+            Accessible.name: qsTr("CompareStation 同步对比画面")
             viewMode: control.effectiveViewMode
             differenceMetric: control.preferences ? control.preferences.differenceMetric : ComparisonSurface.RgbAbsolute
             differenceGain: control.preferences ? control.preferences.differenceGain : ComparisonSurface.Gain1x
@@ -354,7 +354,12 @@ Rectangle {
             control.roiSelecting = false;
             control.roiPanel = -1;
         }
-        onDoubleClicked: control.fullScreenToggleRequested()
+        onDoubleClicked: {
+            if (control.roiEnabled)
+                control.clearRoi();
+            else
+                control.fullScreenToggleRequested();
+        }
     }
 
     Rectangle {

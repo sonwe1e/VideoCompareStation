@@ -19,7 +19,7 @@ the output JSONL path. For example:
 
 ```powershell
 $env:DVS_PLAYBACK_TRACE = Join-Path $PWD "out\playback-trace.jsonl"
-.\out\build\dev\bin\VCStation.exe
+.\out\build\dev\bin\CompareStation.exe
 Remove-Item Env:DVS_PLAYBACK_TRACE
 ```
 

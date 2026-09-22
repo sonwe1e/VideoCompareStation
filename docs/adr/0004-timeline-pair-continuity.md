@@ -36,9 +36,15 @@ projection), never the reverse.
 | Contextual | Smoothness-first → RealTime for every source count |
 
 The requested policy and the **effective** policy (after Contextual resolution) are published
-on `SessionSnapshot` together with `playbackSkippedFrameSets`. The timeline status rail shows
-the effective mode name and skip count. Interactive stepping is unaffected (always presents
-every intermediate frame).
+on `SessionSnapshot` together with `playbackSkippedFrameSets`. Interactive stepping retains its
+own exact-step, cancellation and presentation contract; playback catch-up does not define it.
+
+Implementation audit, 2026-09-22: at `main @ 0a74c46` the status text existed in legacy
+`TimelineBar.qml`, while the active shell instantiated `PlayerOsc.qml` without that connection.
+The reviewed uncommitted working tree adds the connection and additional counters. Their
+measurement semantics and acceptance remain tracked as V-01/V-02 in the
+[current ledger](../engineering/visual-review-backlog.md); this ADR does not certify UI delivery
+or equate canonical frame-ID gaps with physical display refresh losses.
 
 ## Consequences
 

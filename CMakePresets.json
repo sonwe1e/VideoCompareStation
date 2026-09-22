@@ -28,12 +28,13 @@
         },
         "VCPKG_HOST_TRIPLET": "x64-windows",
         "VCPKG_INSTALLED_DIR": "${sourceDir}/out/vcpkg",
-        "VCPKG_MANIFEST_INSTALL": false,
+        "VCPKG_MANIFEST_INSTALL": true,
         "VCPKG_TARGET_TRIPLET": "x64-windows"
       },
       "environment": {
         "CMAKE_BUILD_PARALLEL_LEVEL": "4",
         "CTEST_PARALLEL_LEVEL": "1",
+        "VSLANG": "1033",
         "VCPKG_FEATURE_FLAGS": "manifests,versions,binarycaching",
         "VCPKG_MAX_CONCURRENCY": "4"
       }
@@ -67,7 +68,7 @@
         "DVS_BUILD_UI": false,
         "DVS_ENABLE_QUALITY_TOOLS": false,
         "VCPKG_INSTALLED_DIR": "${sourceDir}/out/vcpkg-core",
-        "VCPKG_MANIFEST_INSTALL": false,
+        "VCPKG_MANIFEST_INSTALL": true,
         "VCPKG_MANIFEST_NO_DEFAULT_FEATURES": true
       }
     },

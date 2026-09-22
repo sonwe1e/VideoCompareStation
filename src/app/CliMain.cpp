@@ -98,9 +98,9 @@ void printError(const dvs::domain::MediaError& error) {
 
 void printUsage() {
     std::cerr << "Usage:\n"
-              << "  VCStationCli --startup-check\n"
-              << "  VCStationCli --probe <source>\n"
-              << "  VCStationCli --compare <source-a> <source-b> "
+              << "  CompareStationCli --startup-check\n"
+              << "  CompareStationCli --probe <source>\n"
+              << "  CompareStationCli --compare <source-a> <source-b> "
                  "[--frame <zero-based-frame>]\n";
 }
 

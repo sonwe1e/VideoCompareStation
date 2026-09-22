@@ -46,9 +46,9 @@ function(_dvs_allowed_dependencies target outputVariable)
         )
     elseif(target STREQUAL "dvs_persistence_json")
         set(allowed dvs_application dvs_windows_support)
-    elseif(target STREQUAL "VCStationShell")
+    elseif(target STREQUAL "CompareStationShell")
         set(allowed)
-    elseif(target MATCHES "^VCStation(Cli)?$")
+    elseif(target MATCHES "^CompareStation(Cli)?$")
         set(
             allowed
             dvs_platform_windows

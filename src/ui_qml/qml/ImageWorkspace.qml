@@ -42,7 +42,79 @@ Rectangle {
     readonly property string errorText: imageReview ? String(imageReview.errorText || "") : ""
     readonly property bool hasFolders: Boolean(pairModel && pairModel.pairCount > 0)
     readonly property bool sizesDiffer: Boolean(imageReview && imageReview.hasPair && imageReview.primaryWidth > 0 && imageReview.primaryWidth !== imageReview.secondaryWidth || imageReview && imageReview.hasPair && imageReview.primaryHeight > 0 && imageReview.primaryHeight !== imageReview.secondaryHeight)
-    readonly property bool diffModeActive: Boolean(imageReview && imageReview.hasPair && imageReview.compareMode >= 2 && imageReview.compareMode <= 4)
+    // Alpha difference (6) is a per-pixel diff over the straight-alpha channel.
+    readonly property bool diffModeActive: Boolean(imageReview && imageReview.hasPair && imageReview.compareMode >= 2 && (imageReview.compareMode <= 4 || imageReview.compareMode === 6))
+    readonly property int viewMode: imageReview ? Number(imageReview.viewMode) : 0
+    // Background under transparent regions: 0 = dark, 1 = checkerboard, 2 = black, 3 = white.
+    property int backgroundMode: 0
+    property bool singleViewShowSecondary: false
+    property bool flickerActive: false
+    property int flickerIntervalMs: 400
+    property var hoverPoint: null
+
+    onHasPairChanged: {
+        if (!hasPair) {
+            flickerActive = false;
+            singleViewShowSecondary = false;
+            hoverPoint = null;
+        }
+    }
+    onCompareModeChanged: {
+        if (compareMode !== 0 && flickerActive)
+            flickerActive = false;
+    }
+
+    function toggleSinglePairSource() {
+        if (!hasPair)
+            return;
+        if (compareMode !== 0) {
+            modeButton(0);
+            singleViewShowSecondary = true;
+        } else {
+            singleViewShowSecondary = !singleViewShowSecondary;
+        }
+    }
+
+    function toggleFlicker() {
+        if (!hasPair)
+            return;
+        if (flickerActive) {
+            flickerActive = false;
+            singleViewShowSecondary = false;
+        } else {
+            if (compareMode !== 0)
+                modeButton(0);
+            flickerActive = true;
+            singleViewShowSecondary = true;
+            flickerTimer.restart();
+        }
+    }
+
+    Timer {
+        id: flickerTimer
+        interval: control.flickerIntervalMs
+        repeat: true
+        running: control.flickerActive && control.hasPair
+        onTriggered: {
+            control.singleViewShowSecondary = !control.singleViewShowSecondary;
+        }
+    }
+
+    function toggleAlphaView() {
+        if (!imageReview || !hasPrimary)
+            return;
+        imageReview.viewMode = (imageReview.viewMode === 1 ? 0 : 1);
+    }
+
+    function toggleRgbOpaqueView() {
+        if (!imageReview || !hasPrimary)
+            return;
+        imageReview.viewMode = (imageReview.viewMode === 2 ? 0 : 2);
+    }
+
+    function cycleBackgroundMode() {
+        backgroundMode = (backgroundMode + 1) % 4;
+    }
 
     // Physical-percent of the active display scale: true-size is 1 image px per physical
     // px (100%), fit shows the actual physical percentage of the fitted image.
@@ -53,7 +125,12 @@ Rectangle {
         const base = control.trueSize ? 1 / dpr : (primaryViewport ? primaryViewport.fitScale : 1);
         return Math.round(base * dpr * imageReview.zoom * 100);
     }
-    readonly property string displayPercentMode: control.trueSize ? qsTr("真实尺寸") : qsTr("适应窗口")
+    readonly property string displayPercentMode: {
+        if (control.trueSize) {
+            return (control.imageReview && Math.abs(control.imageReview.zoom - 1.0) < 0.001) ? qsTr("100% 真实尺寸") : qsTr("1:1 像素基准");
+        }
+        return qsTr("适应窗口");
+    }
 
     function modeButton(mode) {
         if (!imageReview)
@@ -93,6 +170,20 @@ Rectangle {
         return name;
     }
 
+    // Short source descriptor for the A/B labels, e.g. "16-bit gray16be · 显示转换 · α".
+    function sourceSummary(bitDepth, format, hasAlpha, displayConverted) {
+        let text = "";
+        if (bitDepth > 8)
+            text = qsTr("%1-bit").arg(bitDepth) + (format ? " " + format : "");
+        else
+            text = format && format.length > 0 && format !== "rgba" ? format : "RGBA8";
+        if (hasAlpha)
+            text += " · α";
+        if (displayConverted)
+            text += " · " + qsTr("显示转换");
+        return text;
+    }
+
     function mapToImage(view, mouseX, mouseY) {
         const img = view.image;
         if (!imageReview || !img || img.sourceSize.width <= 0 || img.sourceSize.height <= 0)
@@ -114,28 +205,77 @@ Rectangle {
             return;
         if (slot < 0) {
             imageReview.clearCursorPixel();
+            control.hoverPoint = null;
             return;
         }
         const mapped = mapToImage(view, mouseX, mouseY);
         if (!mapped) {
             imageReview.clearCursorPixel();
+            control.hoverPoint = null;
             return;
         }
         imageReview.updateCursorPixel(slot, mapped.x, mapped.y);
+        const img = view.image;
+        if (img && img.sourceSize.width > 0 && img.sourceSize.height > 0) {
+            control.hoverPoint = {
+                "sourceSlot": slot,
+                "normX": Math.max(0, Math.min(1, mapped.x / img.sourceSize.width)),
+                "normY": Math.max(0, Math.min(1, mapped.y / img.sourceSize.height)),
+                "imgX": Math.round(mapped.x),
+                "imgY": Math.round(mapped.y)
+            };
+        } else {
+            control.hoverPoint = null;
+        }
+    }
+
+    // Deterministic checkerboard behind transparent regions (cell scaled to the viewport),
+    // so partial alpha reads as a blend against known colors instead of the dark void.
+    component CheckerboardBackground: Canvas {
+        onWidthChanged: requestPaint()
+        onHeightChanged: requestPaint()
+        onPaint: {
+            const ctx = getContext("2d");
+            if (!ctx)
+                return;
+            const cell = Math.max(8, Math.min(16, Math.round(Math.max(width, height) / 56)));
+            ctx.fillStyle = "#22262e";
+            ctx.fillRect(0, 0, width, height);
+            ctx.fillStyle = "#383e4a";
+            for (let y = 0; y < height; y += cell) {
+                const offset = (y / cell) % 2 === 0 ? 0 : cell;
+                for (let x = offset; x < width; x += cell * 2)
+                    ctx.fillRect(x, y, cell, cell);
+            }
+        }
     }
 
     component ModeChip: ReviewActionButton {
         id: chip
 
         required property int modeValue
+        // 0 = compare mode, 1 = channel observation, 2 = background under alpha.
+        property int selectGroup: 0
+        property int chipWidth: 108
         checkable: true
-        checked: control.compareMode === modeValue
+        checked: selectGroup === 0 ? control.compareMode === modeValue : selectGroup === 1 ? control.viewMode === modeValue : control.backgroundMode === modeValue
         implicitHeight: 30
-        implicitWidth: 108
+        implicitWidth: chipWidth
         leftPadding: 10
         rightPadding: 10
-        enabled: control.hasPrimary && (modeValue === 0 || modeValue === 1 || control.hasPair)
-        onClicked: control.modeButton(modeValue)
+        enabled: selectGroup === 0 ? (control.hasPrimary && (modeValue === 0 || modeValue === 1 || control.hasPair)) : control.hasPrimary
+        onClicked: {
+            if (selectGroup === 0) {
+                control.modeButton(modeValue);
+            } else if (selectGroup === 1) {
+                if (control.imageReview && control.imageReview.viewMode === modeValue && modeValue !== 0)
+                    control.imageReview.viewMode = 0;
+                else if (control.imageReview)
+                    control.imageReview.viewMode = modeValue;
+            } else {
+                control.backgroundMode = modeValue;
+            }
+        }
 
         contentItem: Text {
             text: chip.text
@@ -174,6 +314,25 @@ Rectangle {
         Rectangle {
             anchors.fill: parent
             color: "#090d14"
+            visible: control.backgroundMode === 0
+        }
+        Rectangle {
+            anchors.fill: parent
+            color: "black"
+            visible: control.backgroundMode === 2
+        }
+        Rectangle {
+            anchors.fill: parent
+            color: "white"
+            visible: control.backgroundMode === 3
+        }
+        CheckerboardBackground {
+            anchors.fill: parent
+            visible: control.backgroundMode === 1
+        }
+        Rectangle {
+            anchors.fill: parent
+            color: "transparent"
             border.color: Theme.border
             border.width: 1
             radius: 6
@@ -244,10 +403,98 @@ Rectangle {
             }
         }
 
+        Item {
+            id: syncedCrosshair
+            objectName: "syncedCrosshair-" + viewport.slot
+            anchors.fill: parent
+            visible: Boolean(control.hoverPoint && control.hasPair && control.compareMode === 1 && previewImage.status === Image.Ready)
+            z: 15
+
+            readonly property real targetX: control.hoverPoint ? previewImage.x + control.hoverPoint.normX * previewImage.width : 0
+            readonly property real targetY: control.hoverPoint ? previewImage.y + control.hoverPoint.normY * previewImage.height : 0
+            readonly property bool isHoveredSource: Boolean(control.hoverPoint && control.hoverPoint.sourceSlot === viewport.slot)
+
+            // Vertical hairline
+            Rectangle {
+                x: Math.round(syncedCrosshair.targetX)
+                y: Math.max(0, previewImage.y)
+                width: 1
+                height: Math.min(viewport.height, previewImage.height)
+                color: syncedCrosshair.isHoveredSource ? "#55ffffff" : "#d9facc15"
+            }
+
+            // Horizontal hairline
+            Rectangle {
+                x: Math.max(0, previewImage.x)
+                y: Math.round(syncedCrosshair.targetY)
+                width: Math.min(viewport.width, previewImage.width)
+                height: 1
+                color: syncedCrosshair.isHoveredSource ? "#55ffffff" : "#d9facc15"
+            }
+
+            // Synced target reticle (shown on the mirror/other viewport)
+            Rectangle {
+                visible: !syncedCrosshair.isHoveredSource
+                x: Math.round(syncedCrosshair.targetX - 9)
+                y: Math.round(syncedCrosshair.targetY - 9)
+                width: 18
+                height: 18
+                radius: 9
+                color: "transparent"
+                border.color: "#facc15"
+                border.width: 1.5
+            }
+
+            Rectangle {
+                visible: !syncedCrosshair.isHoveredSource
+                x: Math.round(syncedCrosshair.targetX - 2)
+                y: Math.round(syncedCrosshair.targetY - 2)
+                width: 4
+                height: 4
+                radius: 2
+                color: "#facc15"
+            }
+
+            // Coordinate tag on the synced viewport
+            Rectangle {
+                visible: !syncedCrosshair.isHoveredSource && control.hoverPoint !== null
+                x: Math.min(viewport.width - width - 8, Math.max(8, Math.round(syncedCrosshair.targetX + 12)))
+                y: Math.min(viewport.height - height - 8, Math.max(8, Math.round(syncedCrosshair.targetY + 12)))
+                width: coordText.implicitWidth + 8
+                height: 18
+                radius: 3
+                color: "#d91e293b"
+                border.color: "#facc15"
+                border.width: 1
+
+                Text {
+                    id: coordText
+                    anchors.centerIn: parent
+                    text: control.hoverPoint ? "%1, %2".arg(control.hoverPoint.imgX).arg(control.hoverPoint.imgY) : ""
+                    color: "#facc15"
+                    font.pixelSize: 10
+                    font.family: "Consolas"
+                    font.weight: Font.Bold
+                }
+            }
+
+            // Subtle center pip for the hovered viewport
+            Rectangle {
+                visible: syncedCrosshair.isHoveredSource
+                x: Math.round(syncedCrosshair.targetX - 2)
+                y: Math.round(syncedCrosshair.targetY - 2)
+                width: 4
+                height: 4
+                radius: 2
+                color: "#ffffff"
+                opacity: 0.8
+            }
+        }
+
         MouseArea {
             anchors.fill: parent
             hoverEnabled: true
-            acceptedButtons: Qt.LeftButton
+            acceptedButtons: Qt.LeftButton | Qt.MiddleButton
             onPositionChanged: mouse => {
                 if (pressed && control.imageReview) {
                     const dx = (mouse.x - viewport.dragStart.x) / Math.max(1, width);
@@ -260,10 +507,22 @@ Rectangle {
             onExited: {
                 if (control.imageReview)
                     control.imageReview.clearCursorPixel();
+                control.hoverPoint = null;
             }
             onPressed: mouse => {
                 viewport.dragStart = Qt.point(mouse.x, mouse.y);
                 control.forceActiveFocus();
+            }
+            onDoubleClicked: mouse => {
+                if (control.trueSize) {
+                    control.trueSize = false;
+                    if (control.imageReview)
+                        control.imageReview.resetView();
+                } else {
+                    control.trueSize = true;
+                    if (control.imageReview)
+                        control.imageReview.setZoom(1.0);
+                }
             }
             onWheel: wheel => {
                 if (!control.imageReview)
@@ -352,7 +611,11 @@ Rectangle {
                 leftPadding: 12
                 rightPadding: 12
                 enabled: control.hasPrimary
-                onClicked: control.imageReview.resetView()
+                onClicked: {
+                    control.trueSize = false;
+                    if (control.imageReview)
+                        control.imageReview.resetView();
+                }
             }
             ReviewActionButton {
                 objectName: "imageFitButton"
@@ -363,7 +626,11 @@ Rectangle {
                 leftPadding: 12
                 rightPadding: 12
                 enabled: control.hasPrimary
-                onClicked: control.trueSize = false
+                onClicked: {
+                    control.trueSize = false;
+                    if (control.imageReview)
+                        control.imageReview.resetView();
+                }
             }
             ReviewActionButton {
                 objectName: "imageTrueSizeButton"
@@ -374,7 +641,11 @@ Rectangle {
                 leftPadding: 12
                 rightPadding: 12
                 enabled: control.hasPrimary
-                onClicked: control.trueSize = true
+                onClicked: {
+                    control.trueSize = true;
+                    if (control.imageReview)
+                        control.imageReview.setZoom(1.0);
+                }
             }
             ReviewActionButton {
                 objectName: "imageResampleToggle"
@@ -394,13 +665,38 @@ Rectangle {
 
             ModeChip {
                 objectName: "imageModePrimary"
-                text: qsTr("查看")
+                text: control.hasPair ? qsTr("单图/切换") : qsTr("查看")
                 modeValue: 0
             }
             ModeChip {
                 objectName: "imageModeSide"
                 text: qsTr("并排")
                 modeValue: 1
+            }
+            ReviewActionButton {
+                objectName: "imageToggleSourceButton"
+                visible: control.hasPair
+                implicitHeight: 30
+                leftPadding: 8
+                rightPadding: 8
+                text: control.compareMode === 0 && control.singleViewShowSecondary ? qsTr("切至 A") : qsTr("切至 B")
+                onClicked: control.toggleSinglePairSource()
+            }
+            ReviewActionButton {
+                objectName: "imageFlickerButton"
+                visible: control.hasPair
+                checkable: true
+                checked: control.flickerActive
+                implicitHeight: 30
+                leftPadding: 8
+                rightPadding: 8
+                text: control.flickerActive ? qsTr("停止闪烁") : qsTr("闪烁 (Flicker)")
+                onClicked: control.toggleFlicker()
+            }
+            ModeChip {
+                objectName: "imageModeWipe"
+                text: qsTr("分割线")
+                modeValue: 5
             }
             ModeChip {
                 objectName: "imageModeAbsDiff"
@@ -418,15 +714,129 @@ Rectangle {
                 modeValue: 4
             }
             ModeChip {
-                objectName: "imageModeWipe"
-                text: qsTr("分割线")
-                modeValue: 5
+                objectName: "imageModeAlphaDiff"
+                text: qsTr("Alpha 差异")
+                modeValue: 6
+                chipWidth: 96
+                visible: Boolean(control.imageReview && control.hasPair && (control.imageReview.primaryHasAlpha || control.imageReview.secondaryHasAlpha))
+            }
+        }
+
+        Row {
+            spacing: 6
+
+            Text {
+                height: 30
+                verticalAlignment: Text.AlignVCenter
+                text: qsTr("观察")
+                color: Theme.mutedText
+                font.pixelSize: 12
+            }
+            ModeChip {
+                objectName: "imageViewRgba"
+                text: qsTr("RGBA")
+                modeValue: 0
+                selectGroup: 1
+                chipWidth: 76
+            }
+            ModeChip {
+                objectName: "imageViewAlphaGray"
+                text: qsTr("Alpha 灰度 (A)")
+                modeValue: 1
+                selectGroup: 1
+                chipWidth: 116
+            }
+            ModeChip {
+                objectName: "imageViewRgbOpaque"
+                text: qsTr("RGB 忽略透明度 (O)")
+                modeValue: 2
+                selectGroup: 1
+                chipWidth: 148
+            }
+
+            Item {
+                width: 10
+                height: 1
+            }
+
+            Text {
+                height: 30
+                verticalAlignment: Text.AlignVCenter
+                text: qsTr("背景")
+                color: Theme.mutedText
+                font.pixelSize: 12
+            }
+            ModeChip {
+                objectName: "imageBgDark"
+                text: qsTr("深色")
+                modeValue: 0
+                selectGroup: 2
+                chipWidth: 64
+            }
+            ModeChip {
+                objectName: "imageBgChecker"
+                text: qsTr("棋盘格")
+                modeValue: 1
+                selectGroup: 2
+                chipWidth: 76
+            }
+            ModeChip {
+                objectName: "imageBgBlack"
+                text: qsTr("黑底")
+                modeValue: 2
+                selectGroup: 2
+                chipWidth: 64
+            }
+            ModeChip {
+                objectName: "imageBgWhite"
+                text: qsTr("白底")
+                modeValue: 3
+                selectGroup: 2
+                chipWidth: 64
+            }
+            ReviewActionButton {
+                objectName: "imageBgCycleButton"
+                text: qsTr("循环背景 (B)")
+                implicitHeight: 30
+                leftPadding: 8
+                rightPadding: 8
+                enabled: control.hasPrimary
+                onClicked: control.cycleBackgroundMode()
+            }
+
+            Rectangle {
+                visible: Boolean(control.imageReview && control.hasPrimary && (control.imageReview.primaryHasAlpha || control.imageReview.secondaryHasAlpha))
+                height: 24
+                radius: 4
+                color: "#1e293b"
+                border.color: "#38bdf8"
+                border.width: 1
+                anchors.verticalCenter: parent.verticalCenter
+
+                Row {
+                    anchors.centerIn: parent
+                    leftPadding: 6
+                    rightPadding: 6
+                    spacing: 4
+
+                    Text {
+                        text: "α"
+                        color: "#38bdf8"
+                        font.pixelSize: 12
+                        font.weight: Font.Bold
+                    }
+                    Text {
+                        text: qsTr("直通（未预乘）")
+                        color: "#e2e8f0"
+                        font.pixelSize: 11
+                    }
+                }
             }
         }
     }
 
-    // Left/Right walk folder pairs when a comparison list is loaded; otherwise they are
-    // unused in this workspace (no frame stepping) and stay free for the shell.
+    // Left/Right/Up/Down walk folder pairs when a comparison list is loaded; Home/End jump
+    // to the first/last complete pair.
     Keys.onLeftPressed: event => {
         if (control.hasFolders && folderPairSidebar) {
             folderPairSidebar.stepPair(-1);
@@ -437,6 +847,70 @@ Rectangle {
         if (control.hasFolders && folderPairSidebar) {
             folderPairSidebar.stepPair(1);
             event.accepted = true;
+        }
+    }
+    Keys.onUpPressed: event => {
+        if (control.hasFolders && folderPairSidebar) {
+            folderPairSidebar.stepPair(-1);
+            event.accepted = true;
+        }
+    }
+    Keys.onDownPressed: event => {
+        if (control.hasFolders && folderPairSidebar) {
+            folderPairSidebar.stepPair(1);
+            event.accepted = true;
+        }
+    }
+    // Space hold-to-compare: temporarily shows secondary image (B/Prediction) in single view.
+    Keys.onSpacePressed: event => {
+        if (control.hasPair && !event.isAutoRepeat && !control.flickerActive) {
+            if (control.compareMode === 0) {
+                control.singleViewShowSecondary = true;
+                event.accepted = true;
+            }
+        }
+    }
+    Keys.onReleased: event => {
+        if (event.key === Qt.Key_Space) {
+            if (control.hasPair && !event.isAutoRepeat && !control.flickerActive) {
+                if (control.compareMode === 0) {
+                    control.singleViewShowSecondary = false;
+                    event.accepted = true;
+                }
+            }
+        }
+    }
+    Keys.onPressed: event => {
+        if (event.key === Qt.Key_Home) {
+            if (control.hasFolders && folderPairSidebar) {
+                folderPairSidebar.stepFirst();
+                event.accepted = true;
+            }
+        } else if (event.key === Qt.Key_End) {
+            if (control.hasFolders && folderPairSidebar) {
+                folderPairSidebar.stepLast();
+                event.accepted = true;
+            }
+        } else if (event.key === Qt.Key_T || event.key === Qt.Key_Tab || event.key === Qt.Key_QuoteLeft) {
+            if (control.hasPair) {
+                control.toggleSinglePairSource();
+                event.accepted = true;
+            }
+        } else if ((event.modifiers === Qt.NoModifier || event.modifiers === Qt.KeypadModifier) && event.key === Qt.Key_A) {
+            if (control.hasPrimary) {
+                control.toggleAlphaView();
+                event.accepted = true;
+            }
+        } else if ((event.modifiers === Qt.NoModifier || event.modifiers === Qt.KeypadModifier) && event.key === Qt.Key_B) {
+            if (control.hasPrimary) {
+                control.cycleBackgroundMode();
+                event.accepted = true;
+            }
+        } else if ((event.modifiers === Qt.NoModifier || event.modifiers === Qt.KeypadModifier) && event.key === Qt.Key_O) {
+            if (control.hasPrimary) {
+                control.toggleRgbOpaqueView();
+                event.accepted = true;
+            }
         }
     }
 
@@ -487,6 +961,129 @@ Rectangle {
                     font.pixelSize: 16
                 }
 
+                // In-place A/B compare and Flicker HUD badge
+                Rectangle {
+                    id: imageInPlaceBadge
+                    objectName: "imageInPlaceBadge"
+                    visible: control.hasPair && control.compareMode === 0
+                    z: 30
+                    height: 32
+                    radius: 6
+                    color: control.singleViewShowSecondary ? "#d90284c7" : "#d916a34a"
+                    border.color: "#ffffff"
+                    border.width: 1
+                    anchors {
+                        top: parent.top
+                        right: parent.right
+                        margins: 14
+                    }
+
+                    Row {
+                        spacing: 8
+                        anchors.centerIn: parent
+                        leftPadding: 10
+                        rightPadding: 10
+
+                        Text {
+                            text: control.flickerActive ? (control.singleViewShowSecondary ? qsTr("⚡ 闪烁对比 · 候选 B") : qsTr("⚡ 闪烁对比 · 基准 A")) : (control.singleViewShowSecondary ? qsTr("原地对比 · 当前：B (候选)") : qsTr("原地对比 · 当前：A (基准)"))
+                            color: "#ffffff"
+                            font.pixelSize: 12
+                            font.weight: Font.Bold
+                        }
+
+                        Text {
+                            visible: !control.flickerActive
+                            text: qsTr("按住空格切换 · 按 T 切换")
+                            color: "#e2e8f0"
+                            font.pixelSize: 11
+                        }
+
+                        Text {
+                            visible: control.flickerActive
+                            text: qsTr("点击停止")
+                            color: "#fef08a"
+                            font.pixelSize: 11
+                            font.weight: Font.DemiBold
+                        }
+                    }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: {
+                            if (control.flickerActive)
+                                control.toggleFlicker();
+                            else
+                                control.toggleSinglePairSource();
+                        }
+                    }
+                }
+
+                // Alpha & Background observation HUD badge
+                Rectangle {
+                    id: imageAlphaObservationBadge
+                    objectName: "imageAlphaObservationBadge"
+                    visible: control.hasPrimary && (control.viewMode !== 0 || control.backgroundMode !== 0)
+                    z: 30
+                    height: 32
+                    radius: 6
+                    color: control.viewMode === 1 ? "#d92563eb" : (control.viewMode === 2 ? "#d97c3aed" : "#d9334155")
+                    border.color: "#ffffff"
+                    border.width: 1
+                    anchors {
+                        top: parent.top
+                        right: imageInPlaceBadge.visible ? imageInPlaceBadge.left : parent.right
+                        rightMargin: imageInPlaceBadge.visible ? 10 : 14
+                        topMargin: 14
+                    }
+
+                    Row {
+                        spacing: 8
+                        anchors.centerIn: parent
+                        leftPadding: 10
+                        rightPadding: 10
+
+                        Text {
+                            id: imageAlphaObservationText
+                            objectName: "imageAlphaObservationText"
+                            text: {
+                                if (control.viewMode === 1)
+                                    return qsTr("🔲 观察：Alpha 灰度通道");
+                                if (control.viewMode === 2)
+                                    return qsTr("👁️ 观察：RGB 忽略透明度");
+                                const bgNames = [qsTr("深色底"), qsTr("棋盘格底"), qsTr("黑底"), qsTr("白底")];
+                                return qsTr("🎨 背景：%1").arg(bgNames[control.backgroundMode] || "");
+                            }
+                            color: "#ffffff"
+                            font.pixelSize: 12
+                            font.weight: Font.Bold
+                        }
+
+                        Text {
+                            text: {
+                                if (control.viewMode === 1)
+                                    return qsTr("按 A 还原 RGBA · 点击还原");
+                                if (control.viewMode === 2)
+                                    return qsTr("按 O 还原 RGBA · 点击还原");
+                                return qsTr("按 B 切换 · 点击切换");
+                            }
+                            color: "#e2e8f0"
+                            font.pixelSize: 11
+                        }
+                    }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: {
+                            if (control.viewMode !== 0) {
+                                if (control.imageReview)
+                                    control.imageReview.viewMode = 0;
+                            } else {
+                                control.cycleBackgroundMode();
+                            }
+                        }
+                    }
+                }
+
                 Row {
                     visible: control.hasPrimary && (control.compareMode === 0 || control.compareMode === 1 || !control.hasPair)
                     anchors.fill: parent
@@ -496,13 +1093,25 @@ Rectangle {
                         id: primaryViewport
 
                         objectName: "primaryViewport"
-                        slot: 2
+                        slot: (control.compareMode === 0 && control.hasPair && control.singleViewShowSecondary) ? 3 : 2
                         width: control.compareMode === 1 && control.hasPair ? parent.width / 2 - 6 : parent.width
                         height: parent.height
-                        imageUrl: control.imageReview && control.imageReview.contentGeneration >= 0 ? control.imageReview.imageUrl(2) : ""
-                        label: control.hasPrimary ? qsTr("A · %1×%2").arg(control.imageReview.primaryWidth).arg(control.imageReview.primaryHeight) : ""
-                        title: control.hasPrimary ? control.imageTitle(control.imageReview.primaryPath, control.imageReview.secondaryPath) : ""
-                        titlePath: control.hasPrimary ? String(control.imageReview.primaryPath || "") : ""
+                        imageUrl: control.imageReview && control.imageReview.contentGeneration >= 0 ? control.imageReview.imageUrl(slot) : ""
+                        label: {
+                            if (slot === 3)
+                                return control.hasSecondary ? qsTr("B · %1×%2 · %3").arg(control.imageReview.secondaryWidth).arg(control.imageReview.secondaryHeight).arg(control.sourceSummary(control.imageReview.secondaryBitDepth, control.imageReview.secondarySourceFormat, control.imageReview.secondaryHasAlpha, control.imageReview.secondaryDisplayConverted)) : "";
+                            return control.hasPrimary ? qsTr("A · %1×%2 · %3").arg(control.imageReview.primaryWidth).arg(control.imageReview.primaryHeight).arg(control.sourceSummary(control.imageReview.primaryBitDepth, control.imageReview.primarySourceFormat, control.imageReview.primaryHasAlpha, control.imageReview.primaryDisplayConverted)) : "";
+                        }
+                        title: {
+                            if (slot === 3)
+                                return control.hasSecondary ? control.imageTitle(control.imageReview.secondaryPath, control.imageReview.primaryPath) : "";
+                            return control.hasPrimary ? control.imageTitle(control.imageReview.primaryPath, control.imageReview.secondaryPath) : "";
+                        }
+                        titlePath: {
+                            if (slot === 3)
+                                return control.hasSecondary ? String(control.imageReview.secondaryPath || "") : "";
+                            return control.hasPrimary ? String(control.imageReview.primaryPath || "") : "";
+                        }
                     }
 
                     ImageViewport {
@@ -512,7 +1121,7 @@ Rectangle {
                         width: visible ? parent.width / 2 - 6 : 0
                         height: parent.height
                         imageUrl: control.imageReview && control.imageReview.contentGeneration >= 0 ? control.imageReview.imageUrl(3) : ""
-                        label: control.hasSecondary ? qsTr("B · %1×%2").arg(control.imageReview.secondaryWidth).arg(control.imageReview.secondaryHeight) : ""
+                        label: control.hasSecondary ? qsTr("B · %1×%2 · %3").arg(control.imageReview.secondaryWidth).arg(control.imageReview.secondaryHeight).arg(control.sourceSummary(control.imageReview.secondaryBitDepth, control.imageReview.secondarySourceFormat, control.imageReview.secondaryHasAlpha, control.imageReview.secondaryDisplayConverted)) : ""
                         title: control.hasSecondary ? control.imageTitle(control.imageReview.secondaryPath, control.imageReview.primaryPath) : ""
                         titlePath: control.hasSecondary ? String(control.imageReview.secondaryPath || "") : ""
                     }
@@ -521,14 +1130,19 @@ Rectangle {
                 ImageViewport {
                     objectName: "diffViewport"
                     slot: 4
-                    visible: control.hasPair && control.compareMode >= 2 && control.compareMode <= 4 && control.imageReview && control.imageReview.hasDiffResult
+                    visible: control.hasPair && control.imageReview && control.imageReview.hasDiffResult && (control.compareMode >= 2 && control.compareMode <= 4 || control.compareMode === 6)
                     anchors.fill: parent
                     imageUrl: control.imageReview && control.imageReview.contentGeneration >= 0 ? control.imageReview.imageUrl(4) : ""
                     label: {
                         if (!control.imageReview || !control.imageReview.hasDiffResult)
                             return "";
-                        const modeName = control.compareMode === 2 ? qsTr("绝对差异") : (control.compareMode === 3 ? qsTr("带符号差异") : qsTr("高亮"));
-                        let text = qsTr("%1 · 峰值 %2 · 均值 %3 · 统计 %4").arg(modeName).arg(control.imageReview.maxAbsDifference).arg(control.imageReview.meanAbsDifference.toFixed(2)).arg(control.imageReview.diffScopeText);
+                        const alphaMode = control.compareMode === 6;
+                        const modeName = control.compareMode === 2 ? qsTr("绝对差异") : (control.compareMode === 3 ? qsTr("带符号差异") : (control.compareMode === 4 ? qsTr("高亮") : qsTr("Alpha 差异")));
+                        let text;
+                        if (alphaMode)
+                            text = qsTr("%1 · 峰值 α %2 · 均值 α %3 · 变化像素 %4 · 统计 %5").arg(modeName).arg(control.imageReview.peakAlphaDifference).arg(control.imageReview.meanAlphaDifference.toFixed(2)).arg(control.imageReview.alphaChangedPixels).arg(control.imageReview.diffScopeText);
+                        else
+                            text = qsTr("%1 · 峰值 %2 · 均值 %3 · 统计 %4").arg(modeName).arg(control.imageReview.maxAbsDifference).arg(control.imageReview.meanAbsDifference.toFixed(2)).arg(control.imageReview.diffScopeText);
                         if (control.imageReview.diffResampled)
                             text += " · " + qsTr("已重采样对齐");
                         if (control.imageReview.alphaDifferenceOnly)
@@ -542,22 +1156,43 @@ Rectangle {
                 // carries the exact sizes; the toggle in the toolbar opts into resampling.
                 // A retained diff mode on a same-size pair reports the in-flight
                 // computation instead of a false size complaint (T6).
-                Text {
+                Column {
+                    id: diffNoticeColumn
                     objectName: "imageDiffUnavailableNotice"
                     visible: control.diffModeActive && control.imageReview && !control.imageReview.hasDiffResult
                     anchors.centerIn: parent
                     width: parent.width * 0.7
-                    horizontalAlignment: Text.AlignHCenter
-                    wrapMode: Text.WordWrap
-                    text: {
-                        if (control.imageReview && control.imageReview.diffPending)
-                            return qsTr("正在后台计算差异…");
-                        if (control.sizesDiffer)
-                            return qsTr("A 与 B 尺寸不同，未计算逐像素差异。可开启“重采样对齐差异”后再比较。");
-                        return qsTr("差异暂不可用。");
+                    spacing: 12
+
+                    Text {
+                        width: parent.width
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.WordWrap
+                        text: {
+                            if (control.imageReview && control.imageReview.diffPending)
+                                return qsTr("正在后台计算差异…");
+                            if (control.sizesDiffer)
+                                return qsTr("A 与 B 尺寸不同，未计算逐像素差异。可开启“重采样对齐差异”后再比较。");
+                            return qsTr("差异暂不可用。");
+                        }
+                        color: Theme.warning
+                        font.pixelSize: 13
                     }
-                    color: Theme.warning
-                    font.pixelSize: 13
+
+                    ReviewActionButton {
+                        objectName: "diffEnableResampleButton"
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        visible: control.sizesDiffer && control.imageReview && !control.imageReview.resampleAllowed
+                        text: qsTr("开启重采样对齐")
+                        prominent: true
+                        implicitHeight: 28
+                        leftPadding: 12
+                        rightPadding: 12
+                        onClicked: {
+                            if (control.imageReview)
+                                control.imageReview.resampleAllowed = true;
+                        }
+                    }
                 }
 
                 // Split-line comparison: the secondary image is clipped at the split position and stacked
@@ -569,6 +1204,26 @@ Rectangle {
                     visible: control.hasPair && control.compareMode === 5
                     anchors.fill: parent
                     clip: true
+
+                    Rectangle {
+                        anchors.fill: parent
+                        color: "#090d14"
+                        visible: control.backgroundMode === 0
+                    }
+                    Rectangle {
+                        anchors.fill: parent
+                        color: "black"
+                        visible: control.backgroundMode === 2
+                    }
+                    Rectangle {
+                        anchors.fill: parent
+                        color: "white"
+                        visible: control.backgroundMode === 3
+                    }
+                    CheckerboardBackground {
+                        anchors.fill: parent
+                        visible: control.backgroundMode === 1
+                    }
 
                     readonly property real fitScale: {
                         if (!control.imageReview)
@@ -672,7 +1327,7 @@ Rectangle {
                     MouseArea {
                         anchors.fill: parent
                         hoverEnabled: true
-                        acceptedButtons: Qt.LeftButton
+                        acceptedButtons: Qt.LeftButton | Qt.MiddleButton
                         property point dragStart: Qt.point(0, 0)
                         onPositionChanged: mouse => {
                             if (pressed && control.imageReview) {
@@ -693,6 +1348,17 @@ Rectangle {
                         onPressed: mouse => {
                             dragStart = Qt.point(mouse.x, mouse.y);
                             control.forceActiveFocus();
+                        }
+                        onDoubleClicked: mouse => {
+                            if (control.trueSize) {
+                                control.trueSize = false;
+                                if (control.imageReview)
+                                    control.imageReview.resetView();
+                            } else {
+                                control.trueSize = true;
+                                if (control.imageReview)
+                                    control.imageReview.setZoom(1.0);
+                            }
                         }
                         onWheel: wheel => {
                             if (!control.imageReview)
@@ -767,7 +1433,16 @@ Rectangle {
             }
             Text {
                 visible: Boolean(control.cursorPixel && control.cursorPixel.valid)
-                text: control.cursorPixel && control.cursorPixel.valid ? qsTr("像素 (%1, %2)  R %3  G %4  B %5  A %6  %7").arg(control.cursorPixel.x).arg(control.cursorPixel.y).arg(control.cursorPixel.r).arg(control.cursorPixel.g).arg(control.cursorPixel.b).arg(control.cursorPixel.a).arg(control.cursorPixel.hex) : ""
+                text: {
+                    if (!control.cursorPixel || !control.cursorPixel.valid)
+                        return "";
+                    let t = qsTr("像素 (%1, %2)  R %3  G %4  B %5  A %6  %7  α %8%").arg(control.cursorPixel.x).arg(control.cursorPixel.y).arg(control.cursorPixel.r).arg(control.cursorPixel.g).arg(control.cursorPixel.b).arg(control.cursorPixel.a).arg(control.cursorPixel.hex).arg(control.cursorPixel.alphaPercent);
+                    if (control.cursorPixel.channelView === "alphaGray")
+                        t += " · " + qsTr("Alpha 灰度");
+                    else if (control.cursorPixel.channelView === "rgbOpaque")
+                        t += " · " + qsTr("RGB 忽略透明度");
+                    return t;
+                }
                 color: Theme.primaryText
                 font.pixelSize: 12
                 font.family: "Consolas"

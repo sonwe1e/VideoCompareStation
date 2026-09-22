@@ -51,7 +51,10 @@ std::atomic<quint64> g_loaderRevision{1U};
 }
 
 [[nodiscard]] bool isDifferenceMode(const int mode) noexcept {
-    return mode >= ImageReviewController::AbsDifference && mode <= ImageReviewController::Highlight;
+    // Wipe (5) is a spatial comparison, not a per-pixel diff request.
+    return mode >= ImageReviewController::AbsDifference &&
+           (mode <= ImageReviewController::Highlight ||
+            mode == ImageReviewController::AlphaDifference);
 }
 
 [[nodiscard]] bool dimensionsWithinBudget(const int width, const int height, QString* error) {
@@ -89,6 +92,7 @@ std::atomic<quint64> g_loaderRevision{1U};
 }
 
 [[nodiscard]] QVariantMap pixelMap(const int x, const int y, const QRgb pixel) {
+    const int alpha = qAlpha(pixel);
     return QVariantMap{
         {QStringLiteral("valid"), true},
         {QStringLiteral("x"), x},
@@ -96,7 +100,11 @@ std::atomic<quint64> g_loaderRevision{1U};
         {QStringLiteral("r"), qRed(pixel)},
         {QStringLiteral("g"), qGreen(pixel)},
         {QStringLiteral("b"), qBlue(pixel)},
-        {QStringLiteral("a"), qAlpha(pixel)},
+        {QStringLiteral("a"), alpha},
+        // Normalized alpha readout: A=128 → "50.2%". Always relative to the decoded
+        // straight-alpha buffer, never to a premultiplied representation.
+        {QStringLiteral("alphaPercent"),
+         QString::number(static_cast<double>(alpha) / 255.0 * 100.0, 'f', 1)},
         {QStringLiteral("hex"), QColor(pixel).name(QColor::HexRgb).toUpper()},
     };
 }
@@ -195,6 +203,24 @@ int ImageReviewController::compareMode() const noexcept {
     return compareMode_;
 }
 
+int ImageReviewController::viewMode() const noexcept {
+    return viewMode_;
+}
+
+void ImageReviewController::setViewMode(const int mode) {
+    if (mode < RgbaView || mode > RgbOpaqueView || viewMode_ == mode) {
+        return;
+    }
+    viewMode_ = mode;
+    // Derived channel views are invalidated so the next display/sample re-derives them.
+    viewCacheGeneration_ = -1;
+    viewCacheMode_ = -1;
+    primaryViewCache_ = QImage();
+    secondaryViewCache_ = QImage();
+    clearCursorPixel();
+    bumpGeneration();
+}
+
 bool ImageReviewController::openPending() const noexcept {
     return async_ != nullptr && async_->activeLoadRequestId != 0;
 }
@@ -204,7 +230,7 @@ bool ImageReviewController::diffPending() const noexcept {
 }
 
 void ImageReviewController::setCompareMode(const int mode) {
-    if (mode < PrimaryOnly || mode > Wipe) {
+    if (mode < PrimaryOnly || mode > AlphaDifference) {
         return;
     }
     if (compareMode_ == mode) {
@@ -288,6 +314,62 @@ bool ImageReviewController::alphaDifferenceOnly() const noexcept {
     return alphaDifferenceOnly_;
 }
 
+int ImageReviewController::peakAlphaDifference() const noexcept {
+    return peakAlphaDifference_;
+}
+
+double ImageReviewController::meanAlphaDifference() const noexcept {
+    return meanAlphaDifference_;
+}
+
+qint64 ImageReviewController::alphaChangedPixels() const noexcept {
+    return alphaChangedPixels_;
+}
+
+bool ImageReviewController::diffHasAlpha() const noexcept {
+    return diffHasAlpha_;
+}
+
+int ImageReviewController::primaryBitDepth() const noexcept {
+    return primaryInfo_.bitDepth;
+}
+
+int ImageReviewController::primaryChannels() const noexcept {
+    return primaryInfo_.channels;
+}
+
+bool ImageReviewController::primaryHasAlpha() const noexcept {
+    return primaryInfo_.hasAlpha;
+}
+
+QString ImageReviewController::primarySourceFormat() const {
+    return primaryInfo_.sourceFormat;
+}
+
+bool ImageReviewController::primaryDisplayConverted() const noexcept {
+    return primaryInfo_.displayConverted;
+}
+
+int ImageReviewController::secondaryBitDepth() const noexcept {
+    return secondaryInfo_.bitDepth;
+}
+
+int ImageReviewController::secondaryChannels() const noexcept {
+    return secondaryInfo_.channels;
+}
+
+bool ImageReviewController::secondaryHasAlpha() const noexcept {
+    return secondaryInfo_.hasAlpha;
+}
+
+QString ImageReviewController::secondarySourceFormat() const {
+    return secondaryInfo_.sourceFormat;
+}
+
+bool ImageReviewController::secondaryDisplayConverted() const noexcept {
+    return secondaryInfo_.displayConverted;
+}
+
 bool ImageReviewController::resampleAllowed() const noexcept {
     return resampleAllowed_;
 }
@@ -308,13 +390,28 @@ void ImageReviewController::setResampleAllowed(const bool allowed) {
 
 QString ImageReviewController::diffScopeText() const {
     // T2 scope contract: the decoder path is RGBA8 (stb_image / FFmpeg) and the diff
-    // statistics cover per-pixel RGB max deltas. 16-bit original code values are not
-    // retained, so equality claims are always scoped to decoded RGBA8, never to source
-    // code values.
+    // statistics cover per-pixel deltas of that display buffer. 16-bit original code values
+    // are not retained, so equality claims are always scoped to decoded RGBA8, never to
+    // source code values. Alpha is straight (unassociated): both sides are compared in the
+    // same representation, and premultiplied sources are interpreted as straight on decode,
+    // so a difference between the two representations is never judged as a broken asset.
+    if (compareMode_ == AlphaDifference) {
+        return tr("解码后 RGBA8（直通 alpha）；差异为 alpha 差值，非 RGB");
+    }
+    if (diffHasAlpha_ || primaryHasAlpha() || secondaryHasAlpha()) {
+        return tr("解码后 RGBA8；差异统计为 RGB（不含 alpha）；alpha 为直通值");
+    }
     return tr("解码后 RGBA8；差异统计为 RGB（不含 alpha）");
 }
 
+// Callers that inject a buffer without decoder metadata retain unknown provenance.
 bool ImageReviewController::openPrimaryImage(QImage image, QString pathLabel) {
+    return openPrimaryImage(std::move(image), std::move(pathLabel), StillImageSourceInfo{});
+}
+
+bool ImageReviewController::openPrimaryImage(QImage image,
+                                             QString pathLabel,
+                                             StillImageSourceInfo info) {
     if (image.isNull()) {
         setError(tr("Could not open image."));
         return false;
@@ -330,6 +427,14 @@ bool ImageReviewController::openPrimaryImage(QImage image, QString pathLabel) {
     resetDifferenceState();
     primary_ = std::move(image);
     primaryPath_ = std::move(pathLabel);
+    primaryInfo_ = std::move(info);
+    // Only fall back to the buffer when the source provenance is unknown: a loader-reported
+    // gray source (hasAlpha=false) must not be re-labeled alpha just because the display
+    // buffer is RGBA8.
+    if (primaryInfo_.sourceFormat.isEmpty()) {
+        primaryInfo_.hasAlpha = primary_.hasAlphaChannel();
+        primaryInfo_.channels = 4;
+    }
     async_->primaryIdentity = imageContentIdentity(primary_);
     errorText_.clear();
     if (compareMode_ != PrimaryOnly && compareMode_ != SideBySide && !hasPair()) {
@@ -341,6 +446,12 @@ bool ImageReviewController::openPrimaryImage(QImage image, QString pathLabel) {
 }
 
 bool ImageReviewController::openSecondaryImage(QImage image, QString pathLabel) {
+    return openSecondaryImage(std::move(image), std::move(pathLabel), StillImageSourceInfo{});
+}
+
+bool ImageReviewController::openSecondaryImage(QImage image,
+                                               QString pathLabel,
+                                               StillImageSourceInfo info) {
     if (image.isNull()) {
         setError(tr("Could not open image."));
         return false;
@@ -356,6 +467,11 @@ bool ImageReviewController::openSecondaryImage(QImage image, QString pathLabel) 
     resetDifferenceState();
     secondary_ = std::move(image);
     secondaryPath_ = std::move(pathLabel);
+    secondaryInfo_ = std::move(info);
+    if (secondaryInfo_.sourceFormat.isEmpty()) {
+        secondaryInfo_.hasAlpha = secondary_.hasAlphaChannel();
+        secondaryInfo_.channels = 4;
+    }
     async_->secondaryIdentity = imageContentIdentity(secondary_);
     errorText_.clear();
     if (compareMode_ == PrimaryOnly && hasPair()) {
@@ -367,24 +483,26 @@ bool ImageReviewController::openSecondaryImage(QImage image, QString pathLabel) 
 
 bool ImageReviewController::openPrimary(const QUrl& url) {
     QImage image;
+    StillImageSourceInfo info;
     QString error;
-    if (!loadChecked(url, &image, &error)) {
+    if (!loadChecked(url, &image, &info, &error)) {
         setError(error);
         return false;
     }
-    return openPrimaryImage(std::move(image),
-                            url.isLocalFile() ? url.toLocalFile() : url.toString());
+    return openPrimaryImage(
+        std::move(image), url.isLocalFile() ? url.toLocalFile() : url.toString(), std::move(info));
 }
 
 bool ImageReviewController::openSecondary(const QUrl& url) {
     QImage image;
+    StillImageSourceInfo info;
     QString error;
-    if (!loadChecked(url, &image, &error)) {
+    if (!loadChecked(url, &image, &info, &error)) {
         setError(error);
         return false;
     }
-    return openSecondaryImage(std::move(image),
-                              url.isLocalFile() ? url.toLocalFile() : url.toString());
+    return openSecondaryImage(
+        std::move(image), url.isLocalFile() ? url.toLocalFile() : url.toString(), std::move(info));
 }
 
 bool ImageReviewController::openPairImages(QImage primary,
@@ -392,6 +510,22 @@ bool ImageReviewController::openPairImages(QImage primary,
                                            QImage secondary,
                                            QString secondaryLabel,
                                            const int pairId) {
+    return openPairImages(std::move(primary),
+                          std::move(primaryLabel),
+                          std::move(secondary),
+                          std::move(secondaryLabel),
+                          pairId,
+                          StillImageSourceInfo{},
+                          StillImageSourceInfo{});
+}
+
+bool ImageReviewController::openPairImages(QImage primary,
+                                           QString primaryLabel,
+                                           QImage secondary,
+                                           QString secondaryLabel,
+                                           const int pairId,
+                                           StillImageSourceInfo primaryInfo,
+                                           StillImageSourceInfo secondaryInfo) {
     // Validate both sides before touching any member: a failed candidate must leave the
     // previous committed pair (or the explicit empty state) fully intact (T1 atomicity).
     if (primary.isNull() || secondary.isNull()) {
@@ -419,6 +553,16 @@ bool ImageReviewController::openPairImages(QImage primary,
     secondary_ = std::move(secondary);
     primaryPath_ = std::move(primaryLabel);
     secondaryPath_ = std::move(secondaryLabel);
+    primaryInfo_ = std::move(primaryInfo);
+    secondaryInfo_ = std::move(secondaryInfo);
+    if (primaryInfo_.sourceFormat.isEmpty()) {
+        primaryInfo_.hasAlpha = primary_.hasAlphaChannel();
+        primaryInfo_.channels = 4;
+    }
+    if (secondaryInfo_.sourceFormat.isEmpty()) {
+        secondaryInfo_.hasAlpha = secondary_.hasAlphaChannel();
+        secondaryInfo_.channels = 4;
+    }
     async_->primaryIdentity = imageContentIdentity(primary_);
     async_->secondaryIdentity = imageContentIdentity(secondary_);
     committedPairId_ = pairId;
@@ -447,14 +591,16 @@ bool ImageReviewController::openPairAtomically(const QUrl& primary,
                                                const QUrl& secondary,
                                                const int pairId) {
     QImage primaryImage;
+    StillImageSourceInfo primaryInfo;
     QString primaryError;
-    if (!loadChecked(primary, &primaryImage, &primaryError)) {
+    if (!loadChecked(primary, &primaryImage, &primaryInfo, &primaryError)) {
         setError(tr("无法打开 A：%1").arg(primaryError));
         return false;
     }
     QImage secondaryImage;
+    StillImageSourceInfo secondaryInfo;
     QString secondaryError;
-    if (!loadChecked(secondary, &secondaryImage, &secondaryError)) {
+    if (!loadChecked(secondary, &secondaryImage, &secondaryInfo, &secondaryError)) {
         setError(tr("无法打开 B：%1").arg(secondaryError));
         return false;
     }
@@ -462,7 +608,9 @@ bool ImageReviewController::openPairAtomically(const QUrl& primary,
                           primary.isLocalFile() ? primary.toLocalFile() : primary.toString(),
                           std::move(secondaryImage),
                           secondary.isLocalFile() ? secondary.toLocalFile() : secondary.toString(),
-                          pairId);
+                          pairId,
+                          std::move(primaryInfo),
+                          std::move(secondaryInfo));
 }
 
 int ImageReviewController::requestOpenPrimary(const QUrl& url, const int pairId) {
@@ -619,14 +767,25 @@ void ImageReviewController::closeAll() {
     diff_ = QImage();
     primaryPath_.clear();
     secondaryPath_.clear();
+    primaryInfo_ = StillImageSourceInfo{};
+    secondaryInfo_ = StillImageSourceInfo{};
     errorText_.clear();
     compareMode_ = PrimaryOnly;
+    viewMode_ = RgbaView;
     committedPairId_ = -1;
     maxAbsDifference_ = 0;
     meanAbsDifference_ = 0.0;
+    peakAlphaDifference_ = 0;
+    meanAlphaDifference_ = 0.0;
+    alphaChangedPixels_ = 0;
     hasDiffResult_ = false;
     diffResampled_ = false;
     alphaDifferenceOnly_ = false;
+    diffHasAlpha_ = false;
+    primaryViewCache_ = QImage();
+    secondaryViewCache_ = QImage();
+    viewCacheGeneration_ = -1;
+    viewCacheMode_ = -1;
     async_->primaryIdentity.clear();
     async_->secondaryIdentity.clear();
     clearCursorPixel();
@@ -691,11 +850,27 @@ QVariantMap ImageReviewController::samplePixel(const int imageSlot,
         return {{QStringLiteral("valid"), false}};
     }
     QVariantMap result = pixelMap(x, y, image.pixel(x, y));
+    // In the alpha-gray view the pixel brightness IS the source alpha and the buffer is
+    // opaque; report the true alpha value/percent from the brightness so the readout shows
+    // A=128 → 50.2% instead of the forced opaque 255.
+    if (imageSlot != DisplayDiffSlot && viewMode_ == AlphaGrayView) {
+        const int sourceAlpha = qRed(image.pixel(x, y));
+        result[QStringLiteral("a")] = sourceAlpha;
+        result[QStringLiteral("alphaPercent")] =
+            QString::number(static_cast<double>(sourceAlpha) / 255.0 * 100.0, 'f', 1);
+    }
     // Sampling source label: original pixels for the primary/secondary slots, derived
     // pixels for the diff slot (T2 原图/派生取样来源).
     result.insert(QStringLiteral("source"),
                   imageSlot == DisplayDiffSlot ? QStringLiteral("diff")
                                                : QStringLiteral("original"));
+    // The channel view may alter what the RGB values mean; name it so the readout is
+    // never mistaken for plain RGBA.
+    if (imageSlot != DisplayDiffSlot && viewMode_ == AlphaGrayView) {
+        result.insert(QStringLiteral("channelView"), QStringLiteral("alphaGray"));
+    } else if (imageSlot != DisplayDiffSlot && viewMode_ == RgbOpaqueView) {
+        result.insert(QStringLiteral("channelView"), QStringLiteral("rgbOpaque"));
+    }
     return result;
 }
 
@@ -776,12 +951,14 @@ void ImageReviewController::handleLoadFinished(ImagePairLoader::Result result) {
     case AsyncState::PendingKind::Primary:
         commitLoadedPrimary(std::move(result.primary),
                             std::move(result.primaryLabel),
-                            std::move(result.primaryIdentity));
+                            std::move(result.primaryIdentity),
+                            std::move(result.primaryInfo));
         break;
     case AsyncState::PendingKind::Secondary:
         commitLoadedSecondary(std::move(result.secondary),
                               std::move(result.secondaryLabel),
-                              std::move(result.secondaryIdentity));
+                              std::move(result.secondaryIdentity),
+                              std::move(result.secondaryInfo));
         break;
     case AsyncState::PendingKind::Pair:
         commitLoadedPair(std::move(result));
@@ -845,11 +1022,20 @@ bool ImageReviewController::retainsObservationPosition(const bool hadPrimary) co
     return hadPrimary;
 }
 
-void ImageReviewController::commitLoadedPrimary(QImage image, QString label, QString identity) {
+void ImageReviewController::commitLoadedPrimary(QImage image,
+                                                QString label,
+                                                QString identity,
+                                                StillImageSourceInfo info) {
     primary_ = std::move(image);
     primaryPath_ = std::move(label);
     secondary_ = QImage();
     secondaryPath_.clear();
+    primaryInfo_ = std::move(info);
+    if (primaryInfo_.sourceFormat.isEmpty()) {
+        primaryInfo_.hasAlpha = primary_.hasAlphaChannel();
+        primaryInfo_.channels = 4;
+    }
+    secondaryInfo_ = StillImageSourceInfo{};
     async_->primaryIdentity =
         identity.isEmpty() ? imageContentIdentity(primary_) : std::move(identity);
     async_->secondaryIdentity.clear();
@@ -860,9 +1046,17 @@ void ImageReviewController::commitLoadedPrimary(QImage image, QString label, QSt
     bumpGeneration();
 }
 
-void ImageReviewController::commitLoadedSecondary(QImage image, QString label, QString identity) {
+void ImageReviewController::commitLoadedSecondary(QImage image,
+                                                  QString label,
+                                                  QString identity,
+                                                  StillImageSourceInfo info) {
     secondary_ = std::move(image);
     secondaryPath_ = std::move(label);
+    secondaryInfo_ = std::move(info);
+    if (secondaryInfo_.sourceFormat.isEmpty()) {
+        secondaryInfo_.hasAlpha = secondary_.hasAlphaChannel();
+        secondaryInfo_.channels = 4;
+    }
     async_->secondaryIdentity =
         identity.isEmpty() ? imageContentIdentity(secondary_) : std::move(identity);
     resetDifferenceState();
@@ -879,6 +1073,16 @@ void ImageReviewController::commitLoadedPair(ImagePairLoader::Result result) {
     secondary_ = std::move(result.secondary);
     primaryPath_ = std::move(result.primaryLabel);
     secondaryPath_ = std::move(result.secondaryLabel);
+    primaryInfo_ = result.primaryInfo;
+    secondaryInfo_ = result.secondaryInfo;
+    if (primaryInfo_.sourceFormat.isEmpty()) {
+        primaryInfo_.hasAlpha = primary_.hasAlphaChannel();
+        primaryInfo_.channels = 4;
+    }
+    if (secondaryInfo_.sourceFormat.isEmpty()) {
+        secondaryInfo_.hasAlpha = secondary_.hasAlphaChannel();
+        secondaryInfo_.channels = 4;
+    }
     async_->primaryIdentity = result.primaryIdentity.isEmpty() ? imageContentIdentity(primary_)
                                                                : std::move(result.primaryIdentity);
     async_->secondaryIdentity = result.secondaryIdentity.isEmpty()
@@ -918,9 +1122,13 @@ void ImageReviewController::resetDifferenceState() {
     diff_ = QImage();
     maxAbsDifference_ = 0;
     meanAbsDifference_ = 0.0;
+    peakAlphaDifference_ = 0;
+    meanAlphaDifference_ = 0.0;
+    alphaChangedPixels_ = 0;
     hasDiffResult_ = false;
     diffResampled_ = false;
     alphaDifferenceOnly_ = false;
+    diffHasAlpha_ = false;
 }
 
 QString ImageReviewController::differenceCacheKey() const {
@@ -991,19 +1199,23 @@ void ImageReviewController::applyDifferenceResult(const ImagePairLoader::Differe
     diff_ = result.image;
     maxAbsDifference_ = result.maxAbsDifference;
     meanAbsDifference_ = result.meanAbsDifference;
+    peakAlphaDifference_ = result.peakAlphaDifference;
+    meanAlphaDifference_ = result.meanAlphaDifference;
+    alphaChangedPixels_ = result.alphaChangedPixels;
     hasDiffResult_ = !diff_.isNull();
     diffResampled_ = result.resampled;
     alphaDifferenceOnly_ = result.alphaDifferenceOnly;
+    diffHasAlpha_ = result.hasAlpha;
 }
 
 QImage ImageReviewController::displayImage(const int slot) const {
     switch (slot) {
     case PrimarySlot:
     case DisplayPrimarySlot:
-        return primary_;
+        return channelView(primary_, viewMode_, true);
     case SecondarySlot:
     case DisplaySecondarySlot:
-        return secondary_;
+        return channelView(secondary_, viewMode_, false);
     case DisplayDiffSlot:
         return diff_;
     default:
@@ -1011,7 +1223,50 @@ QImage ImageReviewController::displayImage(const int slot) const {
     }
 }
 
-bool ImageReviewController::loadChecked(const QUrl& url, QImage* image, QString* error) {
+QImage ImageReviewController::channelView(const QImage& source,
+                                          const int mode,
+                                          const bool primarySide) const {
+    if (source.isNull() || mode == RgbaView) {
+        return source;
+    }
+    // One derived view per side and mode; invalidated on commit and view mode changes.
+    QImage& cache = primarySide ? primaryViewCache_ : secondaryViewCache_;
+    if (viewCacheGeneration_ != contentGeneration_ || viewCacheMode_ != mode) {
+        viewCacheGeneration_ = contentGeneration_;
+        viewCacheMode_ = mode;
+        primaryViewCache_ = QImage();
+        secondaryViewCache_ = QImage();
+    }
+    if (!cache.isNull() && cache.size() == source.size()) {
+        return cache;
+    }
+    QImage view(source.size(), QImage::Format_ARGB32);
+    if (view.isNull()) {
+        return source;
+    }
+    for (int y = 0; y < source.height(); ++y) {
+        const auto* sourceLine = reinterpret_cast<const QRgb*>(source.constScanLine(y));
+        auto* viewLine = reinterpret_cast<QRgb*>(view.scanLine(y));
+        for (int x = 0; x < source.width(); ++x) {
+            const QRgb pixel = sourceLine[x];
+            if (mode == AlphaGrayView) {
+                // Mask shape and gradient: brightness equals alpha, fully opaque.
+                const int alpha = qAlpha(pixel);
+                viewLine[x] = qRgb(alpha, alpha, alpha);
+            } else { // RgbOpaqueView
+                // Colors hidden in transparent regions: RGB unchanged, alpha forced opaque.
+                viewLine[x] = qRgb(qRed(pixel), qGreen(pixel), qBlue(pixel));
+            }
+        }
+    }
+    cache = view;
+    return cache;
+}
+
+bool ImageReviewController::loadChecked(const QUrl& url,
+                                        QImage* image,
+                                        StillImageSourceInfo* info,
+                                        QString* error) {
     if (!url.isValid()) {
         if (error) {
             *error = tr("Invalid image path.");
@@ -1052,7 +1307,7 @@ bool ImageReviewController::loadChecked(const QUrl& url, QImage* image, QString*
             std::string loaderError;
             if (loader) {
                 try {
-                    decoded = loader(bytes, &loaded, &loaderError);
+                    decoded = loader(bytes, &loaded, info, &loaderError);
                 } catch (...) {
                     decoded = false;
                     loaderError = "Still-image loader threw an unknown exception.";
@@ -1073,6 +1328,13 @@ bool ImageReviewController::loadChecked(const QUrl& url, QImage* image, QString*
                                            QImage::Format_RGBA8888);
                     loaded = converted.copy();
                     decoded = !loaded.isNull();
+                    if (decoded && info != nullptr) {
+                        // stb fallback is a plain 8-bit RGBA display conversion.
+                        *info = StillImageSourceInfo{};
+                        info->sourceFormat = QStringLiteral("rgba8 (stb)");
+                        info->channels = 4;
+                        info->hasAlpha = loaded.hasAlphaChannel();
+                    }
                 } else if (error && !loaderFailed) {
                     *error = QString::fromStdString(decodeError);
                 }
@@ -1088,6 +1350,13 @@ bool ImageReviewController::loadChecked(const QUrl& url, QImage* image, QString*
                 }
             } else if (!loaded.isNull()) {
                 decoded = true;
+                if (info != nullptr && info->sourceFormat.isEmpty()) {
+                    // Qt's own loader gives no source provenance beyond the display buffer.
+                    *info = StillImageSourceInfo{};
+                    info->sourceFormat = QStringLiteral("rgba8 (qt)");
+                    info->channels = 4;
+                    info->hasAlpha = loaded.hasAlphaChannel();
+                }
             }
         }
     }
@@ -1103,6 +1372,15 @@ bool ImageReviewController::loadChecked(const QUrl& url, QImage* image, QString*
             *error = dimensionError;
         }
         return false;
+    }
+    if (info != nullptr) {
+        if (info->sourceFormat.isEmpty()) {
+            info->hasAlpha = loaded.hasAlphaChannel();
+            info->channels = 4;
+        }
+        info->displayConverted =
+            info->bitDepth != 8 || info->channels != 4 ||
+            (!info->sourceFormat.isEmpty() && info->sourceFormat != QStringLiteral("rgba"));
     }
     *image = std::move(loaded);
     return true;
