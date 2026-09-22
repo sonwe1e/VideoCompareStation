@@ -5729,35 +5729,122 @@ TEST(PlaybackCoordinatorTests, SingleFrameRangePlayDoesNotSpinAHighSpeedLoop) {
     EXPECT_EQ(*coordinator->snapshot()->playbackRangeOut, domain::FrameId{0});
 }
 
-// Phase 0 baseline: a session's active Pair must not leak across topology changes. Today the Pair
-// is persisted as a global ordinal preference (ReviewPreferencesController.cpp:37), so removing and
-// re-adding a source can silently restore a stale pair. This test asserts the active pair (as the
-// set of source ids in the effective comparison edge) is re-derived from stable source identity,
-// not restored from a stale ordinal. Expected to FAIL on current code; passes after Phase 1.
-TEST(PlaybackCoordinatorTests, DISABLED_SessionPairDoesNotLeakAcrossTopology) {
-    // The persistence/ordinal mechanism lives in ReviewPreferencesController + shell; at the
-    // coordinator level the observable is the effective comparison edge's source ids. We assert
-    // that after a topology shrink + grow, the effective edge is re-derived from the current
-    // sources rather than restored from a stale ordinal. Modeled on the v1.4.2 black-screen
-    // regression covered by MainQmlContractTests.InstantiatesRootAndSeparatesManualAlignmentStates.
+// C-02: active Pair is re-resolved from stable source identities after topology changes.
+// A preferred pair whose members disappeared must not be restored as a stale ordinal when the
+// missing source is later re-added (v1.4.2 black-screen class of bugs).
+namespace {
+
+void completeDirectOpen(const std::shared_ptr<PlaybackCoordinator>& coordinator,
+                        const std::shared_ptr<FakeFrameProvider>& provider,
+                        const std::shared_ptr<FakeRenderChannel>& render,
+                        const std::size_t openIndex,
+                        const std::size_t frameIndex,
+                        const std::size_t renderIndex) {
+    ASSERT_TRUE(provider->waitForOpenRequestCount(openIndex + 1U));
+    const auto open = provider->openRequest(openIndex);
+    ASSERT_TRUE(open.has_value());
+    ASSERT_TRUE(provider->postOpenSucceeded(*open));
+    ASSERT_TRUE(provider->waitForFrameRequestCount(frameIndex + 1U));
+    const auto frame = provider->frameRequest(frameIndex);
+    ASSERT_TRUE(frame.has_value());
+    ASSERT_TRUE(provider->postFrameReady(*frame, makeFrameSet(frame->frameId)));
+    ASSERT_TRUE(render->waitForPublishedCount(renderIndex + 1U));
+    ASSERT_TRUE(provider->postFrameSucceeded(*frame));
+    presentPublished(coordinator, render, renderIndex);
+    ASSERT_EQ(waitForTerminals(coordinator, 1U).size(), 1U);
+}
+
+[[nodiscard]] bool snapshotHasSource(const SessionSnapshot& snapshot, const domain::SourceId id) {
+    return std::any_of(snapshot.sources.begin(), snapshot.sources.end(), [id](const auto& source) {
+        return source.sourceId == id;
+    });
+}
+
+} // namespace
+
+TEST(PlaybackCoordinatorTests, SessionPairDoesNotLeakAcrossTopology) {
     const auto provider = std::make_shared<FakeFrameProvider>();
     const auto render = std::make_shared<FakeRenderChannel>();
     const auto coordinator = makeCoordinator(provider, render);
     ASSERT_NE(coordinator, nullptr);
-    openReady(coordinator, provider, render);
+    markGraphicsReady(coordinator);
 
-    // Capture the effective comparison edge's source ids in the 2-source session.
-    const auto snapshot2 = coordinator->snapshot();
-    ASSERT_EQ(snapshot2->sources.size(), 2U);
-    // Both sources are present and valid for comparison; the effective edge must reference real,
-    // currently-loaded source ids (never a stale ordinal pointing at a missing slot).
-    const domain::SourceId firstId = snapshot2->sources.front().sourceId;
-    const domain::SourceId secondId = snapshot2->sources.back().sourceId;
-    EXPECT_NE(firstId, secondId);
-    // The canonical source must be one of the loaded sources (identity, not a stale ordinal).
-    ASSERT_NE(snapshot2->validatedComparison, nullptr);
-    const domain::SourceId canonical = snapshot2->validatedComparison->canonicalSourceId();
-    EXPECT_TRUE(canonical == firstId || canonical == secondId);
+    const auto source = [](const domain::SourceId id, const char* name) {
+        return domain::ComparisonSource{
+            .id = id,
+            .role = domain::ComparisonRole::kPrediction,
+            .descriptor =
+                makeDescriptor(name, domain::MediaExtent{.width = 320, .height = 180}, 12, 30),
+            .displayName = name,
+        };
+    };
+
+    const std::shared_ptr<const SessionSnapshot> initial = coordinator->snapshot();
+    ASSERT_EQ(coordinator->submit(OpenDirectComparisonCommand{
+                  .context =
+                      CommandContext{
+                          .sessionId = initial->sessionId,
+                          .sessionEpoch = initial->sessionEpoch,
+                          .commandId = domain::CommandId{1},
+                      },
+                  .sources = {source(0U, "a.mp4"), source(1U, "b.mp4"), source(2U, "c.mp4")},
+              }),
+              PortSubmitResult::Accepted);
+    completeDirectOpen(coordinator, provider, render, 0U, 0U, 0U);
+
+    // Pin the active pair to A/C (0,2) — the ordinal that would black-screen on a 2-source set.
+    ASSERT_EQ(coordinator->submit(SetActiveComparisonPairCommand{
+                  .context = commandContext(coordinator, domain::CommandId{2}),
+                  .pair = domain::ComparisonPair{0U, 2U},
+                  .policy = domain::DefaultPairPolicy::PreserveIfAvailable,
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+    const auto pinned = coordinator->snapshot();
+    ASSERT_TRUE(pinned->activeComparisonPair.has_value());
+    EXPECT_EQ(pinned->activeComparisonPair->first, 0U);
+    EXPECT_EQ(pinned->activeComparisonPair->second, 2U);
+
+    // Shrink: drop source 2. Stale (0,2) must not survive.
+    const auto beforeShrink = coordinator->snapshot();
+    ASSERT_EQ(coordinator->submit(OpenDirectComparisonCommand{
+                  .context =
+                      CommandContext{
+                          .sessionId = beforeShrink->sessionId,
+                          .sessionEpoch = beforeShrink->sessionEpoch,
+                          .commandId = domain::CommandId{3},
+                      },
+                  .sources = {source(0U, "a.mp4"), source(1U, "b.mp4")},
+              }),
+              PortSubmitResult::Accepted);
+    completeDirectOpen(coordinator, provider, render, 1U, 1U, 1U);
+    const auto shrunk = coordinator->snapshot();
+    ASSERT_TRUE(shrunk->activeComparisonPair.has_value());
+    EXPECT_TRUE(snapshotHasSource(*shrunk, shrunk->activeComparisonPair->first));
+    EXPECT_TRUE(snapshotHasSource(*shrunk, shrunk->activeComparisonPair->second));
+    EXPECT_FALSE(shrunk->activeComparisonPair->contains(2U));
+
+    // Grow: re-add source 2. PreserveIfAvailable must keep the live post-shrink pair (0,1),
+    // never resurrect the stale (0,2) preference from before the shrink.
+    const auto liveAfterShrink = *shrunk->activeComparisonPair;
+    const auto beforeGrow = coordinator->snapshot();
+    ASSERT_EQ(coordinator->submit(OpenDirectComparisonCommand{
+                  .context =
+                      CommandContext{
+                          .sessionId = beforeGrow->sessionId,
+                          .sessionEpoch = beforeGrow->sessionEpoch,
+                          .commandId = domain::CommandId{4},
+                      },
+                  .sources = {source(0U, "a.mp4"), source(1U, "b.mp4"), source(2U, "c.mp4")},
+              }),
+              PortSubmitResult::Accepted);
+    completeDirectOpen(coordinator, provider, render, 2U, 2U, 2U);
+    const auto grown = coordinator->snapshot();
+    ASSERT_TRUE(grown->activeComparisonPair.has_value());
+    EXPECT_EQ(grown->activeComparisonPair->first, liveAfterShrink.first);
+    EXPECT_EQ(grown->activeComparisonPair->second, liveAfterShrink.second);
+    EXPECT_TRUE(snapshotHasSource(*grown, grown->activeComparisonPair->first));
+    EXPECT_TRUE(snapshotHasSource(*grown, grown->activeComparisonPair->second));
 }
 
 } // namespace
