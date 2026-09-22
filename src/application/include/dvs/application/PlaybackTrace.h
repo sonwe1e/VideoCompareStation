@@ -83,6 +83,12 @@ enum class TraceEventKind : std::uint8_t {
     ReverseExactFallback = 22,
 };
 
+// Schema-v1 defined kind range is 0..kSchemaV1MaxTraceEventKind inclusive. Keep
+// tools/testing/PlaybackTraceGate.psm1 (SchemaV1MaxKind) and docs/engineering/trace-schema.md
+// in sync; the gate rejects unknown kinds fail-closed.
+inline constexpr std::uint8_t kSchemaV1MaxTraceEventKind =
+    static_cast<std::uint8_t>(TraceEventKind::ReverseExactFallback);
+
 // A single fixed-size trace event. Kept small and trivially copyable so it can live in a bounded
 // ring buffer with no heap allocation and no variable-length payloads on the hot path.
 // `payload` carries event-specific data (e.g. a frame id, a request kind) and is interpreted

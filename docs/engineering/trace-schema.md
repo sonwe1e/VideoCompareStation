@@ -129,12 +129,19 @@ must not be treated as complete.
 | `17` | `RenderAckPublished` | Canonical frame whose presentation acknowledgement was admitted to the ack mailbox. |
 | `18` | `PlaybackRunStarted` | First target frame of a continuous playback run. |
 | `19` | `PlaybackRunStopped` | Last committed frame when the run ended, or `UINT64_MAX` when none committed. |
+| `20` | `ReverseWindowBuilt` | Frames retained in the built reverse GOP window (ADR-003). |
+| `21` | `ReverseWindowHit` | Reverse target frame id served from the built window. |
+| `22` | `ReverseExactFallback` | Reverse target frame id that fell back to exact decode. |
 
 `PlaybackRunStarted`/`PlaybackRunStopped` bound exactly one continuous playback run (`play` to
 pause/end/stop). One trace also contains the open, seek and step phases, and those phases commit
 frames too, so an analyzer that compares display intervals must isolate the bounded running window
 before attributing a stall to continuous playback. A run that is stopped by an error path still
 emits `PlaybackRunStopped`, so an unmatched start means the capture was truncated.
+
+`ReverseWindowBuilt`/`ReverseWindowHit`/`ReverseExactFallback` (ADR-003) observe reverse GOP
+window construction and reuse. `Built` payload is the retained frame count; `Hit`/`Fallback`
+payload is the reverse target frame id so gates can correlate seeks with window state.
 
 `QmlGrabRequested`/`QmlGrabCompleted` are UI-originated observation events emitted through the QML
 `dvsDiagnostics` bridge (currently the timeline thumbnail cache's `grabToImage`). They carry no
@@ -164,7 +171,9 @@ within a single playback run rather than by the identity tuple.
 it is emitted before the remaining admission checks. A rejected claimed command may therefore
 produce `CommandAccepted`, `CommandRejected`, and exactly one `CommandTerminal` record.
 
-Numeric values are append-only. Do not reorder or reuse them within schema version 1. Additive
+Numeric values are append-only. Do not reorder or reuse them within schema version 1. The
+defined schema-v1 range is `0`–`22` (`kSchemaV1MaxTraceEventKind` in `PlaybackTrace.h` and
+`SchemaV1MaxKind` in `PlaybackTraceGate.psm1`); unknown kinds remain fail-closed. Additive
 event fields may be introduced without changing the version; a semantic change to an existing
 field or event requires a new trace version and analyzer support for both versions. The version
 header remains exactly the one-field object shown above.
