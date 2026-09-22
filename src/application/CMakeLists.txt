@@ -6,6 +6,7 @@ add_library(
         src/AlignmentWorkEstimator.cpp
         src/AlignmentWorkflow.cpp
         src/ComparisonExactness.cpp
+        src/ComparisonMetrics.cpp
         src/CoordinatorPublication.cpp
         src/IssueRecord.cpp
         src/Module.cpp

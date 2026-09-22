@@ -3,6 +3,7 @@ add_library(
     STATIC
         src/ComparisonSelection.cpp
         src/ComparisonValidator.cpp
+        src/PixelDifference.cpp
         src/FrameTimeline.cpp
         src/MediaDescriptor.cpp
         src/MediaError.cpp
