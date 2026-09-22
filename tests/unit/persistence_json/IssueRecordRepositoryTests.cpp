@@ -40,7 +40,21 @@ protected:
         source.modifiedUtcMilliseconds = 20;
         source.hasPresentation = true;
         source.displayIndex = 3;
+        source.presentationTimestampTicks = 133'000;
+        source.timeBaseNumerator = 1;
+        source.timeBaseDenominator = 1'000'000;
+        source.presentationMatchKind = 2; // AutoAligned
+        source.presentationMissingReason = 0;
         record.sources.push_back(source);
+        application::IssueSourceRef missing;
+        missing.path = "C:/media/b.mp4";
+        missing.byteSize = 11;
+        missing.modifiedUtcMilliseconds = 21;
+        missing.hasPresentation = false;
+        missing.displayIndex = -1;
+        missing.presentationMatchKind = 4;     // Missing
+        missing.presentationMissingReason = 1; // AlignmentGap
+        record.sources.push_back(missing);
         return record;
     }
 
@@ -56,8 +70,19 @@ TEST_F(IssueRecordRepositoryTests, RoundTripsVersionedDocument) {
     ASSERT_EQ(loaded.records.size(), 1U);
     EXPECT_EQ(loaded.records.front().note, "sample");
     EXPECT_TRUE(loaded.records.front().hasValidPresentation);
-    ASSERT_EQ(loaded.records.front().sources.size(), 1U);
-    EXPECT_EQ(loaded.records.front().sources.front().displayIndex, 3);
+    ASSERT_EQ(loaded.records.front().sources.size(), 2U);
+    const application::IssueSourceRef& first = loaded.records.front().sources.front();
+    EXPECT_EQ(first.displayIndex, 3);
+    EXPECT_EQ(first.presentationTimestampTicks, 133'000);
+    EXPECT_EQ(first.timeBaseNumerator, 1);
+    EXPECT_EQ(first.timeBaseDenominator, 1'000'000);
+    EXPECT_EQ(first.presentationMatchKind, 2);
+    EXPECT_EQ(first.presentationMissingReason, 0);
+    const application::IssueSourceRef& missing = loaded.records.front().sources.back();
+    EXPECT_FALSE(missing.hasPresentation);
+    EXPECT_EQ(missing.displayIndex, -1);
+    EXPECT_EQ(missing.presentationMatchKind, 4);
+    EXPECT_EQ(missing.presentationMissingReason, 1);
 }
 
 TEST_F(IssueRecordRepositoryTests, RejectsUnsupportedSchemaWithoutTouchingFile) {

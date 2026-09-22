@@ -41,6 +41,8 @@ Item {
         singleMode: false
         canonicalSourceIndex: 0
         canonicalSourceIdentity: "source-a"
+        referenceSourceIndex: 0
+        referenceSourceIdentity: "source-a"
         pendingSourceIdentities: []
         sourceIdentities: ["source-a", "source-b"]
     }

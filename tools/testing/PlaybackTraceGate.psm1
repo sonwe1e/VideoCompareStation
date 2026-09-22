@@ -121,8 +121,22 @@ function Test-PlaybackTraceFile {
                 throw "$ResultPrefix`_TRACE_INVALID_EVENT: invalid $numericField at $TracePath."
             }
         }
-        # Optional additive incoming-identity fields (schema v1). Either all five are present or
-        # none are; partial sets are malformed.
+        # Optional additive fields (schema v1):
+        # - `run`: monotonic playback-run id (D06). Independent of the incoming-identity set.
+        # - incoming identity: either all five are present or none are; partial sets are malformed.
+        if ($null -ne $record.PSObject.Properties['run']) {
+            if (-not (& $isExactInteger $record.run)) {
+                throw "$ResultPrefix`_TRACE_INVALID_EVENT: run is not numeric at $TracePath."
+            }
+            try {
+                $runId = [uint64]$record.run
+            } catch {
+                throw "$ResultPrefix`_TRACE_INVALID_EVENT: invalid run at $TracePath."
+            }
+            if ([decimal]$record.run -ne [decimal]$runId) {
+                throw "$ResultPrefix`_TRACE_INVALID_EVENT: invalid run at $TracePath."
+            }
+        }
         $incomingFields = @('is', 'ie', 'igen', 'idev', 'ireq')
         $presentIncoming = @(
             $incomingFields | Where-Object {
@@ -280,6 +294,10 @@ function Test-PlaybackTraceInvariants {
         $device = [uint64]$record.dev
         $kind = [int]$record.kind
         $payload = [uint64]$record.p
+        $runId = 0
+        if ($null -ne $record.PSObject.Properties['run']) {
+            $runId = [uint64]$record.run
+        }
         $sessionKey = "$session|$epoch"
         $identityKey = "$session|$epoch|$topology|$timeline|$alignment|$generation|$device"
 
@@ -676,12 +694,24 @@ function Get-PlaybackTraceTimingSummary {
         $payload = [uint64]$record.p
         $kind = [int]$record.kind
         $timestamp = [uint64]$record.t
+        $runId = 0
+        if ($null -ne $record.PSObject.Properties['run']) {
+            $runId = [uint64]$record.run
+        }
         $identityKey = "$session|$epoch|$generation|$device|$payload"
         switch ($kind) {
             4 { $readyTimes[$identityKey] = $timestamp }
             6 { $publishedTimes[$identityKey] = $timestamp }
-            16 { $drawStartTimes[$payload.ToString()] = $timestamp }
-            17 { $drawAckTimes[$payload.ToString()] = $timestamp }
+            # Draw-stage events (kinds 16/17) carry empty identity and are keyed by frame payload
+            # only (trace-schema.md). Also index run|frame when the producer stamped `run` (D06).
+            16 {
+                $drawStartTimes[$payload.ToString()] = $timestamp
+                if ($runId -ne 0) { $drawStartTimes["$runId|$payload"] = $timestamp }
+            }
+            17 {
+                $drawAckTimes[$payload.ToString()] = $timestamp
+                if ($runId -ne 0) { $drawAckTimes["$runId|$payload"] = $timestamp }
+            }
             7 { $ackTimes[$identityKey] = $timestamp }
             8 {
                 if ($payload -ne [decimal][uint64]::MaxValue) {

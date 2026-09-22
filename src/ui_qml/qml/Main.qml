@@ -1134,10 +1134,12 @@ ApplicationWindow {
             if (root.preferences) {
                 if (payload.viewMode !== undefined)
                     root.preferences.viewModeCode = Number(payload.viewMode);
-
-                if (payload.differenceEdge !== undefined)
-                    root.preferences.differenceEdgeCode = Number(payload.differenceEdge);
             }
+
+            // D07: restore the issue's pair as an explicit command after open, not as a
+            // preference replay on every subsequent session.
+            if (payload.differenceEdge !== undefined)
+                root.applyDifferenceEdge(Number(payload.differenceEdge));
 
             if (payload.frame !== undefined && root.controller)
                 root.controller.seekFrame(Number(payload.frame));
@@ -1581,17 +1583,14 @@ ApplicationWindow {
         return differenceEdges.length > 0 ? 0 : -1;
     }
 
-    // C-02/C-07: keep renderer edge preference and the session ComparisonPair in lockstep.
+    // D07: user selection sends SetActiveComparisonPairCommand. Preferences only store
+    // DefaultPairPolicy; canvas/menus read the committed effective pair.
     function applyDifferenceEdge(edge) {
-        if (!preferences)
+        if (!controller || !controller.applyComparisonPairFromEdge)
             return false;
         const value = Number(edge);
-        preferences.differenceEdge = value;
-        if (controller && controller.applyComparisonPairFromEdge) {
-            const pairPolicy = preferences ? Number(preferences.defaultPairPolicy) : 2;
-            return Boolean(controller.applyComparisonPairFromEdge(value, pairPolicy));
-        }
-        return false;
+        const pairPolicy = preferences ? Number(preferences.defaultPairPolicy) : 2;
+        return Boolean(controller.applyComparisonPairFromEdge(value, Number.isFinite(pairPolicy) ? pairPolicy : 2));
     }
 
     function applyDefaultPairPolicy(policyCode) {
@@ -1599,10 +1598,8 @@ ApplicationWindow {
             return false;
         const value = Number(policyCode);
         preferences.defaultPairPolicy = value;
-        if (controller && controller.applyComparisonPairFromEdge) {
-            const edge = Number(preferences.differenceEdge);
-            return Boolean(controller.applyComparisonPairFromEdge(edge, value));
-        }
+        if (controller && controller.applyDefaultPairPolicy)
+            return Boolean(controller.applyDefaultPairPolicy(value));
         return false;
     }
 
@@ -1614,11 +1611,11 @@ ApplicationWindow {
             if (Number.isFinite(continuity))
                 controller.setPlaybackContinuityPolicy(continuity);
         }
-        if (controller.applyComparisonPairFromEdge) {
-            const edge = Number(preferences.differenceEdge);
+        // D07: do not replay a legacy A/B/C edge ordinal after open. Only the default pair policy.
+        if (controller.applyDefaultPairPolicy) {
             const pairPolicy = Number(preferences.defaultPairPolicy);
-            if (Number.isFinite(edge))
-                controller.applyComparisonPairFromEdge(edge, Number.isFinite(pairPolicy) ? pairPolicy : 2);
+            if (Number.isFinite(pairPolicy))
+                controller.applyDefaultPairPolicy(pairPolicy);
         }
     }
 
@@ -1634,7 +1631,7 @@ ApplicationWindow {
     }
 
     Connections {
-        target: controller
+        target: root.controller
 
         function onStateChanged() {
             const key = root.playbackPrefsSessionKey();
@@ -1811,6 +1808,8 @@ ApplicationWindow {
         sourceCount: root.sourceCount
         busy: root.busy
         canonicalSourceIndex: root.canonicalSourceIndex
+        referenceSourceIndex: root.referenceSourceIndex
+        effectiveDifferenceEdge: root.differenceEdge
         currentViewMode: root.effectiveViewMode
         inspectorOpen: root.inspectorOpen
         graphicsReady: root.graphicsReady
@@ -2333,6 +2332,8 @@ ApplicationWindow {
         singleMode: root.singleMode
         canonicalSourceIndex: root.canonicalSourceIndex
         canonicalSourceIdentity: root.shell ? root.shell.canonicalSourceIdentity : ""
+        referenceSourceIndex: root.referenceSourceIndex
+        referenceSourceIdentity: root.shell ? root.shell.referenceSourceIdentity : ""
         pendingSourceIdentities: root.shell ? root.shell.pendingSourceIdentities : []
         sourceIdentities: root.shell ? root.shell.activeSourceIdentities : []
         z: 30
@@ -2841,6 +2842,7 @@ ApplicationWindow {
 
         sourceCount: root.sourceCount
         canonicalSourceIndex: root.canonicalSourceIndex
+        referenceSourceIndex: root.referenceSourceIndex
         currentViewMode: root.effectiveViewMode
         fullScreen: root.fullScreen
         differenceEdges: root.differenceEdges

@@ -597,7 +597,9 @@ TEST_F(ReviewControllerTests, FailedCandidateOpenLeavesActiveSourcesAndReference
     ReviewController controller{dependenciesFor(backend)};
 
     ASSERT_EQ(controller.sourceCount(), 2);
-    ASSERT_EQ(controller.canonicalSourceIndex(), 1);
+    // D08: timeline master stays the first source; reference is the chosen baseline.
+    ASSERT_EQ(controller.canonicalSourceIndex(), 0);
+    ASSERT_EQ(controller.referenceSourceIndex(), 1);
     const QVariantList activeSources = controller.sourceUrls();
     ASSERT_EQ(activeSources.size(), 2);
 
@@ -607,7 +609,8 @@ TEST_F(ReviewControllerTests, FailedCandidateOpenLeavesActiveSourcesAndReference
         0));
     EXPECT_EQ(controller.sourceUrls(), activeSources);
     EXPECT_EQ(controller.sourceCount(), 2);
-    EXPECT_EQ(controller.canonicalSourceIndex(), 1);
+    EXPECT_EQ(controller.canonicalSourceIndex(), 0);
+    EXPECT_EQ(controller.referenceSourceIndex(), 1);
     EXPECT_EQ(controller.sourceBErrorKey(), QStringLiteral("source-missing"));
     EXPECT_TRUE(backend->submitted.empty());
     controller.stop();
@@ -694,7 +697,9 @@ TEST_F(ReviewControllerTests, ShellKeepsActiveAndStagedSourcesSeparateDuringAReb
     controller.refreshProjection();
     EXPECT_FALSE(controller.busy());
     EXPECT_EQ(shell.activeSources().size(), 3);
-    EXPECT_EQ(shell.canonicalSourceIndex(), 2);
+    // D08: staged reference 2 is the comparison baseline; timeline master remains source 0.
+    EXPECT_EQ(shell.canonicalSourceIndex(), 0);
+    EXPECT_EQ(shell.referenceSourceIndex(), 2);
     controller.stop();
 }
 

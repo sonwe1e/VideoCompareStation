@@ -47,6 +47,8 @@ constexpr std::uintmax_t kMaximumIssueDocumentBytes = 2U * 1024U * 1024U;
     value["presentationTimestampTicks"] = source.presentationTimestampTicks;
     value["timeBaseNumerator"] = source.timeBaseNumerator;
     value["timeBaseDenominator"] = source.timeBaseDenominator;
+    value["presentationMatchKind"] = source.presentationMatchKind;
+    value["presentationMissingReason"] = source.presentationMissingReason;
     return value;
 }
 
@@ -80,6 +82,14 @@ constexpr std::uintmax_t kMaximumIssueDocumentBytes = 2U * 1024U * 1024U;
     }
     if (value.contains("timeBaseDenominator") && value["timeBaseDenominator"].is_number_integer()) {
         source.timeBaseDenominator = value["timeBaseDenominator"].get<std::int32_t>();
+    }
+    if (value.contains("presentationMatchKind") &&
+        value["presentationMatchKind"].is_number_integer()) {
+        source.presentationMatchKind = value["presentationMatchKind"].get<std::int32_t>();
+    }
+    if (value.contains("presentationMissingReason") &&
+        value["presentationMissingReason"].is_number_integer()) {
+        source.presentationMissingReason = value["presentationMissingReason"].get<std::int32_t>();
     }
     return source;
 }

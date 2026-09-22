@@ -14,12 +14,14 @@
 namespace dvs::ui {
 namespace {
 
+using application::FrameMatchKind;
 using application::IssueRecord;
 using application::IssueRecordKind;
 using application::IssueRestoreDecision;
 using application::IssueSourceRef;
 using application::kIssueRecordSchemaVersion;
 using application::ObservedSourceIdentity;
+using application::PresentedSourceState;
 
 [[nodiscard]] std::string fromQString(const QString& value) {
     return value.toStdString();
@@ -27,6 +29,19 @@ using application::ObservedSourceIdentity;
 
 [[nodiscard]] QString toQString(const std::string& value) {
     return QString::fromStdString(value);
+}
+
+// Position of the canonical source inside record.sources. sources are recorded in sourceId order
+// (0, 1, 2), so the canonical index is a valid position whenever the record is well formed.
+[[nodiscard]] std::size_t canonicalSourcePosition(const IssueRecord& record) {
+    if (record.sources.empty()) {
+        return 0U;
+    }
+    const std::int64_t canonical = record.canonicalSourceIndex;
+    if (canonical >= 0 && static_cast<std::size_t>(canonical) < record.sources.size()) {
+        return static_cast<std::size_t>(canonical);
+    }
+    return 0U;
 }
 
 [[nodiscard]] IssueSourceRef observeAsRecorded(const QString& path) {
@@ -123,7 +138,9 @@ QString IssueLogController::summarize(const IssueRecord& record) {
     const QString frameText =
         record.hasValidPresentation
             ? QStringLiteral("frame %1")
-                  .arg(record.sources.empty() ? 0 : record.sources.front().displayIndex)
+                  .arg(record.sources.empty()
+                           ? 0
+                           : record.sources[canonicalSourcePosition(record)].displayIndex)
             : QStringLiteral("no-presentation");
     return QStringLiteral("video · %1 · %2 source(s)").arg(frameText).arg(record.sources.size());
 }
@@ -148,22 +165,56 @@ bool IssueLogController::captureVideoIssue(StoredIssue& issue, const QString& no
         record.sources.push_back(source);
     }
 
-    // Identity of the *committed* presentation only. Pending/uncommitted candidates never
-    // export a frame number as if it were valid. currentFrame() == -1 means no frame presented.
-    const bool hasFrame = review_->currentFrame() >= 0;
+    // Capture per-side presentation from the single committed snapshot backing the projection.
+    // One side may be offset (GlobalOffset/AutoAligned/ManualAnchor) or Missing while the
+    // canonical frame is still displayed; each recorded source carries its own actual frame,
+    // PTS and mapping kind instead of the canonical frame number repeated across every side.
+    const std::shared_ptr<const application::SessionSnapshot> snapshot = review_->currentSnapshot();
+    const bool hasFrame = snapshot != nullptr && snapshot->displayedFrame.has_value();
     record.hasValidPresentation = hasFrame && !record.sources.empty();
-    if (record.hasValidPresentation) {
-        const qint64 frame = review_->currentFrame();
-        for (IssueSourceRef& source : record.sources) {
+    if (snapshot != nullptr) {
+        record.alignmentRevision = snapshot->alignmentRevision;
+        for (std::size_t index = 0U; index < record.sources.size(); ++index) {
+            IssueSourceRef& source = record.sources[index];
+            const PresentedSourceState* presented = nullptr;
+            for (const PresentedSourceState& candidate : snapshot->presentedSources) {
+                if (candidate.sourceId == index) {
+                    presented = &candidate;
+                    break;
+                }
+            }
+            if (presented == nullptr) {
+                // No committed mapping entry for this side: never claim a presented frame.
+                source.hasPresentation = false;
+                source.displayIndex = -1;
+                source.presentationMatchKind =
+                    static_cast<std::int32_t>(application::FrameMatchKind::Missing);
+                continue;
+            }
+            if (!presented->sourceFrameId.has_value()) {
+                source.hasPresentation = false;
+                source.displayIndex = -1;
+                source.presentationMatchKind = static_cast<std::int32_t>(presented->matchKind);
+                if (presented->missingReason.has_value()) {
+                    // Stored as enum value + 1 so 0 means "not applicable".
+                    source.presentationMissingReason =
+                        static_cast<std::int32_t>(*presented->missingReason) + 1;
+                }
+                continue;
+            }
             source.hasPresentation = true;
-            source.displayIndex = frame;
+            source.displayIndex = presented->sourceFrameId->value();
+            source.presentationTimestampTicks = presented->presentationTime.microseconds();
+            source.timeBaseNumerator = 1;
+            source.timeBaseDenominator = 1'000'000;
+            source.presentationMatchKind = static_cast<std::int32_t>(presented->matchKind);
         }
     }
     record.canonicalSourceIndex = review_->canonicalSourceIndex();
-    record.alignmentRevision = 0U;
     if (preferences_ != nullptr) {
         record.view.viewMode = preferences_->viewModeCode();
-        record.view.differenceEdge = preferences_->differenceEdgeCode();
+        // D07: record the committed effective pair edge, not the legacy preference slot.
+        record.view.differenceEdge = review_->effectiveDifferenceEdge();
     }
     if (videoSurface_ != nullptr) {
         record.view.roiEnabled = videoSurface_->property("roiEnabled").toBool();
@@ -421,8 +472,9 @@ QVariantMap IssueLogController::performRestore(const StoredIssue& issue) {
         result.insert(QStringLiteral("rowIndex"), issue.record.rowIndex);
         if (issue.record.kind == IssueRecordKind::Video && issue.record.hasValidPresentation &&
             !issue.record.sources.empty()) {
-            result.insert(QStringLiteral("frame"),
-                          static_cast<qint64>(issue.record.sources.front().displayIndex));
+            const IssueSourceRef& canonical =
+                issue.record.sources[canonicalSourcePosition(issue.record)];
+            result.insert(QStringLiteral("frame"), static_cast<qint64>(canonical.displayIndex));
         }
         Q_EMIT restoreRequested(result);
         setStatus(QStringLiteral("问题记录可恢复"));

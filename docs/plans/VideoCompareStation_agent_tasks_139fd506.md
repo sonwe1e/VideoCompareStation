@@ -272,6 +272,8 @@
 - 明确未做：无时间线剪辑、音频、批量转码、数据库、质量排名；自动会话恢复未做（工单允许“先手动”）。
 - 测试：application 4 项、persistence 4 项、IssueLogController 3 项（保存/加载、修改后重定位、旧 schema 拒绝）。`ctest --preset dev` **577/577** 通过；`format-check`、`lint`（含 qmllint `--max-warnings 0`）通过。
 - 遗留：视频侧多源 openSources 恢复路径依赖控制器同步 open 成功；截图文件本身未自动归档，仅记录 path + display-result 标记；QML 端到端菜单自动化探针未单列（契约测试覆盖 Main 实例化与既有工作区）。
+- D10（P0，审查修复）：问题记录此前把 `review_->currentFrame()` 写给每个来源并全部标为已呈现、`alignmentRevision` 固定 0，偏移/自动对齐/Missing 场景会被记录成三侧同帧号。修复：`ReviewController::currentSnapshot()` 暴露当前投影背后的同一已提交快照；`captureVideoIssue` 逐侧从 `presentedSources` 采集实际 `sourceFrameId`（`displayIndex`）、PTS（`presentationTimestampTicks` 微秒 + timebase 1/1e6）、`presentationMatchKind`（FrameMatchKind 码）与 Missing 原因（`presentationMissingReason`，枚举值+1，0=不适用）；`alignmentRevision` 记录快照真实值；`PresentedSourceState` 新增 `presentationTime` 由协调器三处帧组发布点填充。恢复/摘要改取规范源（`canonicalSourceIndex`）的帧号，不再用 `sources.front()`。schema 保持 v1，新增字段读取时缺失即回退默认，旧文件可继续加载。新增组件测试 2 项（偏移+AutoAligned 双侧帧/PTS/映射与 alignmentRevision 落盘往返、Missing 侧不声称帧且恢复定位规范帧）与持久化往返字段断言。
+- D10 验证（2026-09-22）：全量 `cmake --build --preset dev --clean-first` 零警告后，`IssueLogControllerTests` 5/5、`IssueRecordRepositoryTests` 4/4、`ReviewControllerTests` 44/46（2 项失败为已提交 C-01 语义变更下旧期望未更新：`canonicalSourceIndex` 不再等于 Reference，与 D10 无关）。排查期间另定位并确认：此前 34 项 `ReviewControllerTests` + 2 项新测试的 SEH 0xc0000005 崩溃为**陈旧对象文件 + 工具集版本不一致**（MSVC 14.44.35207 与 35228 并存，9/21 编译的测试 TU 未随当前工具链重编）所致，非 D10 代码引入；`--clean-first` 全量重建后崩溃全部消失。
 
 ## 证据索引
 

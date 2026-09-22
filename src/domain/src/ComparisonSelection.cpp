@@ -72,6 +72,55 @@ ComparisonPair resolveComparisonPair(const std::span<const ComparisonSource> sou
     return lastTwoActive(sources);
 }
 
+bool sameMediaIdentity(const ComparisonSource& left, const ComparisonSource& right) noexcept {
+    const auto& leftIdentity = left.descriptor.sourceIdentity;
+    const auto& rightIdentity = right.descriptor.sourceIdentity;
+    const bool leftComplete = leftIdentity.has_value() && leftIdentity->isComplete();
+    const bool rightComplete = rightIdentity.has_value() && rightIdentity->isComplete();
+    if (leftComplete && rightComplete) {
+        return leftIdentity->byteSize == rightIdentity->byteSize &&
+               leftIdentity->modifiedUtcMilliseconds == rightIdentity->modifiedUtcMilliseconds &&
+               leftIdentity->fingerprintSha256 == rightIdentity->fingerprintSha256;
+    }
+    return left.descriptor.normalizedPath == right.descriptor.normalizedPath;
+}
+
+std::optional<ComparisonPair>
+remapComparisonPairByMediaIdentity(const std::span<const ComparisonSource> previousSources,
+                                   const std::optional<ComparisonPair> preferred,
+                                   const std::span<const ComparisonSource> nextSources) noexcept {
+    if (!preferred.has_value() || !preferred->isValid()) {
+        return std::nullopt;
+    }
+    const ComparisonSource* previousFirst = nullptr;
+    const ComparisonSource* previousSecond = nullptr;
+    for (const ComparisonSource& source : previousSources) {
+        if (source.id == preferred->first) {
+            previousFirst = &source;
+        } else if (source.id == preferred->second) {
+            previousSecond = &source;
+        }
+    }
+    if (previousFirst == nullptr || previousSecond == nullptr) {
+        return std::nullopt;
+    }
+    const ComparisonSource* nextFirst = nullptr;
+    const ComparisonSource* nextSecond = nullptr;
+    for (const ComparisonSource& source : nextSources) {
+        if (nextFirst == nullptr && sameMediaIdentity(*previousFirst, source)) {
+            nextFirst = &source;
+            continue;
+        }
+        if (nextSecond == nullptr && sameMediaIdentity(*previousSecond, source)) {
+            nextSecond = &source;
+        }
+    }
+    if (nextFirst == nullptr || nextSecond == nullptr || nextFirst->id == nextSecond->id) {
+        return std::nullopt;
+    }
+    return ComparisonPair{nextFirst->id, nextSecond->id};
+}
+
 std::optional<std::uint8_t>
 comparisonPairEdgeOrdinal(const std::span<const ComparisonSource> sources,
                           const ComparisonPair& pair) noexcept {

@@ -163,9 +163,16 @@ The following work remains open or requires the intended Windows/D3D11VA runner:
   round-trip tests keep that range aligned. Timing summaries separate prepare
   (`FrameSetReady`→`RenderDrawStarted`), draw submit (`RenderDrawStarted`→`RenderAckPublished`),
   and final present (`RenderAckPublished`→`PresentationAcknowledged`→`SnapshotCommitted`).
-  Software observation of those hops is sufficient to attribute most late frames; only escalate
-  to DXGI Present / physical display-side sampling when the software stage split cannot explain
-  the stall.
+  `RenderAckPublished` is CPU-side ack admission, not GPU completion or screen present. Software
+  observation of those hops is sufficient to attribute most late frames; only escalate to DXGI
+  Present / physical display-side sampling when the software stage split cannot explain the
+  stall.
+- Continuous playback defaults to smoothness-first RealTime (`Contextual` resolves to RealTime
+  for every source count). `ReviewEveryFrame` is the explicit retain-every-FrameSet review
+  option. Catch-up drops whole FrameSets on the comparison pair together, never per source.
+- Reverse-window fill budget covers the complete work including the seed `decodeExact`; a seed
+  that exceeds the budget skips the sequential walk. New exact seeks / playback preempts stale
+  reverse warmup.
 - On the interactive-desktop D3D11VA runner with a physical 120 Hz display, run the active
   `hardware-d3d11` and `performance-d3d11` presets described in
   [the runner guide](../self-hosted-runner.md). The matrix includes five-minute 1080p60 and

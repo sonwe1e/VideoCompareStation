@@ -507,7 +507,7 @@ private:
                 nextOscMode = 2;
             }
         }
-        // C-07 continuity: domain enum codes 0/1/2; Contextual is the multi-source default.
+        // C-07 continuity: domain enum codes 0/1/2; Contextual is smoothness-first RealTime.
         int nextContinuity = 2;
         if (const auto iterator = values.find(kPlaybackContinuityPolicyKey);
             iterator != values.end()) {

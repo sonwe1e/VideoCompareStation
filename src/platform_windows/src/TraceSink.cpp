@@ -38,8 +38,19 @@ namespace {
         }
         commandText = commandBuffer;
     }
-    char incomingBuffer[160];
+    char incomingBuffer[192];
     incomingBuffer[0] = '\0';
+    char runBuffer[32];
+    runBuffer[0] = '\0';
+    if (event.identity.run != 0U) {
+        const int runLength = std::snprintf(runBuffer,
+                                            sizeof(runBuffer),
+                                            R"(,"run":%llu)",
+                                            static_cast<unsigned long long>(event.identity.run));
+        if (runLength <= 0 || runLength >= static_cast<int>(sizeof(runBuffer))) {
+            return false;
+        }
+    }
     if (event.incoming.has_value()) {
         const int incomingLength =
             std::snprintf(incomingBuffer,
@@ -61,7 +72,7 @@ namespace {
         std::snprintf(buffer,
                       capacity,
                       R"({"t":%llu,"kind":%u,"s":%llu,"e":%llu,"topo":%llu,"tl":%llu,)"
-                      R"("al":%llu,"gen":%llu,"dev":%llu,"req":%llu,"cmd":%s,"p":%llu%s})"
+                      R"("al":%llu,"gen":%llu,"dev":%llu,"req":%llu,"cmd":%s,"p":%llu%s%s})"
                       "\n",
                       static_cast<unsigned long long>(event.timestampMicroseconds),
                       static_cast<unsigned>(event.kind),
@@ -75,6 +86,7 @@ namespace {
                       static_cast<unsigned long long>(event.identity.request.value()),
                       commandText,
                       static_cast<unsigned long long>(event.payload),
+                      runBuffer,
                       incomingBuffer);
     return written > 0 && written < static_cast<int>(capacity) ? written : 0;
 }

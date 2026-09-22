@@ -172,6 +172,12 @@ public:
     [[nodiscard]] bool graphicsReady() const noexcept;
     // Zero-based canonical frame ID. -1 means that no frame has been presented.
     [[nodiscard]] qint64 currentFrame() const noexcept;
+    // The immutable application snapshot backing the current projection, or nullptr before any
+    // snapshot has been published. Issue capture reads per-source presentation state from this
+    // single committed snapshot so recorded frames, PTS, missing flags and mapping are always
+    // self-consistent.
+    [[nodiscard]] std::shared_ptr<const application::SessionSnapshot>
+    currentSnapshot() const noexcept;
     [[nodiscard]] qulonglong totalFrames() const noexcept;
     [[nodiscard]] int oneSecondStepFrames() const noexcept;
     [[nodiscard]] qint64 currentMediaTime() const noexcept;
@@ -272,6 +278,8 @@ public:
     // C-02: project a DifferenceEdge preference (0/1/2) onto a session ComparisonPair using
     // the live differenceEdges list, then submit SetActiveComparisonPairCommand.
     Q_INVOKABLE bool applyComparisonPairFromEdge(int preferenceValue, int pairPolicyCode = 2);
+    // D07: apply DefaultPairPolicy only; never replay a stored A/B/C edge ordinal.
+    Q_INVOKABLE bool applyDefaultPairPolicy(int policyCode);
     Q_INVOKABLE void refreshProjection() noexcept;
     // Returns the snapshot-frozen identity for a source URL. The value is rebuilt only when the
     // validated comparison pointer changes, so callers see a stable string between commits.

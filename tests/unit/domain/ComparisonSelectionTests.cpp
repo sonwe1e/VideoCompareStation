@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace dvs::domain {
@@ -14,14 +15,18 @@ namespace {
     return std::move(result).value();
 }
 
-[[nodiscard]] ComparisonSource makeSource(const SourceId id,
-                                          const ComparisonRole role = ComparisonRole::kPrediction) {
+[[nodiscard]] ComparisonSource
+makeSource(const SourceId id,
+           std::string path,
+           const ComparisonRole role = ComparisonRole::kPrediction,
+           std::optional<SourceFileIdentity> identity = std::nullopt) {
+    const std::string displayName = path;
     return ComparisonSource{
         .id = id,
         .role = role,
         .descriptor =
             MediaDescriptor{
-                .normalizedPath = "s" + std::to_string(id) + ".mp4",
+                .normalizedPath = std::move(path),
                 .extent = MediaExtent{.width = 320, .height = 180},
                 .frameRate = makeRate(),
                 .frameCount = FrameCountInfo{.value = 12, .origin = FrameCountOrigin::kReported},
@@ -33,9 +38,23 @@ namespace {
                 .decodeCapabilities =
                     DecodeCapabilities{.softwareDecode = true, .d3d11VaDecode = false},
                 .timingConfidence = TimingConfidence::kDeclaredCfr,
-                .sourceIdentity = std::nullopt,
+                .sourceIdentity = identity,
             },
-        .displayName = "s" + std::to_string(id),
+        .displayName = displayName,
+    };
+}
+
+[[nodiscard]] ComparisonSource makeSource(const SourceId id,
+                                          const ComparisonRole role = ComparisonRole::kPrediction) {
+    return makeSource(id, "s" + std::to_string(id) + ".mp4", role, std::nullopt);
+}
+
+[[nodiscard]] SourceFileIdentity
+makeIdentity(const std::uint64_t byteSize, const std::int64_t modifiedMs, std::string fingerprint) {
+    return SourceFileIdentity{
+        .byteSize = byteSize,
+        .modifiedUtcMilliseconds = modifiedMs,
+        .fingerprintSha256 = std::move(fingerprint),
     };
 }
 
@@ -97,13 +116,80 @@ TEST(ComparisonSelectionTests, EdgeOrdinalProjectsSessionOrderPair) {
     EXPECT_FALSE(comparisonPairEdgeOrdinal(sources, ComparisonPair{0, 9}).has_value());
 }
 
-TEST(ComparisonSelectionTests, ContinuityPolicyResolvesContextualBySourceCount) {
+TEST(ComparisonSelectionTests, RemapKeepsPairByMediaPathAcrossSlotReuse) {
+    // Previous session: A=0, B=1, C=2 with pair B/C. After removing A, B=0, C=1.
+    const std::vector<ComparisonSource> previous{
+        makeSource(0, "a.mp4"),
+        makeSource(1, "b.mp4"),
+        makeSource(2, "c.mp4"),
+    };
+    const std::vector<ComparisonSource> next{
+        makeSource(0, "b.mp4"),
+        makeSource(1, "c.mp4"),
+    };
+    const auto remapped = remapComparisonPairByMediaIdentity(previous, ComparisonPair{1, 2}, next);
+    ASSERT_TRUE(remapped.has_value());
+    EXPECT_EQ(remapped->first, 0U);
+    EXPECT_EQ(remapped->second, 1U);
+}
+
+TEST(ComparisonSelectionTests, RemapDropsPairWhenReplacementIsDifferentMedia) {
+    // Preferred pair A/B (slots 0,1). Replacing B with C leaves the same slot numbers but
+    // different media — the pair must not be preserved as if it were still A/B.
+    const std::vector<ComparisonSource> previous{
+        makeSource(0, "a.mp4"),
+        makeSource(1, "b.mp4"),
+    };
+    const std::vector<ComparisonSource> next{
+        makeSource(0, "a.mp4"),
+        makeSource(1, "c.mp4"),
+    };
+    EXPECT_FALSE(
+        remapComparisonPairByMediaIdentity(previous, ComparisonPair{0, 1}, next).has_value());
+}
+
+TEST(ComparisonSelectionTests, RemapPrefersCompleteSourceFileIdentity) {
+    const auto identityA = makeIdentity(100, 1'000, std::string(64, 'a'));
+    const auto identityB = makeIdentity(200, 2'000, std::string(64, 'b'));
+    const auto identityB2 = makeIdentity(200, 2'000, std::string(64, 'b'));
+    const std::vector<ComparisonSource> previous{
+        makeSource(0, "same.mp4", ComparisonRole::kPrediction, identityA),
+        makeSource(1, "same.mp4", ComparisonRole::kPrediction, identityB),
+    };
+    // Same path on disk but distinct fingerprints: slots must not be treated as the same media.
+    const auto identityOther = makeIdentity(200, 2'000, std::string(64, 'c'));
+    const std::vector<ComparisonSource> nextSamePathDifferentContent{
+        makeSource(0, "same.mp4", ComparisonRole::kPrediction, identityOther),
+        makeSource(1, "other.mp4", ComparisonRole::kPrediction, identityA),
+    };
+    EXPECT_FALSE(remapComparisonPairByMediaIdentity(
+                     previous, ComparisonPair{0, 1}, nextSamePathDifferentContent)
+                     .has_value());
+
+    const std::vector<ComparisonSource> nextIdentityMatch{
+        makeSource(0, "other.mp4", ComparisonRole::kPrediction, identityB2),
+        makeSource(1, "same.mp4", ComparisonRole::kPrediction, identityA),
+    };
+    const auto remapped =
+        remapComparisonPairByMediaIdentity(previous, ComparisonPair{0, 1}, nextIdentityMatch);
+    ASSERT_TRUE(remapped.has_value());
+    EXPECT_EQ(remapped->first, 1U);
+    EXPECT_EQ(remapped->second, 0U);
+}
+
+TEST(ComparisonSelectionTests, ContinuityPolicyResolvesContextualToSmoothnessFirst) {
     EXPECT_EQ(resolveContinuityPolicy(PlaybackContinuityPolicy::Contextual, 1U),
               PlaybackContinuityPolicy::RealTime);
     EXPECT_EQ(resolveContinuityPolicy(PlaybackContinuityPolicy::Contextual, 2U),
-              PlaybackContinuityPolicy::ReviewEveryFrame);
+              PlaybackContinuityPolicy::RealTime);
+    EXPECT_EQ(resolveContinuityPolicy(PlaybackContinuityPolicy::Contextual, 3U),
+              PlaybackContinuityPolicy::RealTime);
     EXPECT_EQ(resolveContinuityPolicy(PlaybackContinuityPolicy::RealTime, 3U),
               PlaybackContinuityPolicy::RealTime);
+    EXPECT_EQ(resolveContinuityPolicy(PlaybackContinuityPolicy::ReviewEveryFrame, 1U),
+              PlaybackContinuityPolicy::ReviewEveryFrame);
+    EXPECT_EQ(resolveContinuityPolicy(PlaybackContinuityPolicy::ReviewEveryFrame, 2U),
+              PlaybackContinuityPolicy::ReviewEveryFrame);
 }
 
 } // namespace dvs::domain

@@ -183,6 +183,15 @@ try {
         ($validEvent.Substring(0, $validEvent.Length - 1) + ',"is":1}')
     ) -ExpectedMessage 'TRACE_INVALID_EVENT'
 
+    Assert-TracePasses -Name 'valid-optional-run' -Lines @(
+        $validHeader,
+        ($validEvent.Substring(0, $validEvent.Length - 1) + ',"run":7}')
+    )
+    Assert-TraceFails -Name 'invalid-run' -Lines @(
+        $validHeader,
+        ($validEvent.Substring(0, $validEvent.Length - 1) + ',"run":-1}')
+    ) -ExpectedMessage 'TRACE_INVALID_EVENT'
+
     function New-TraceEventJson {
         param(
             [int]$Kind,

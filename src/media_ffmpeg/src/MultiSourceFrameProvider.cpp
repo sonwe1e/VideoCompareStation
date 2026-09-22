@@ -176,6 +176,11 @@ void postCanceled(const std::shared_ptr<ProviderOperation>& operation) noexcept 
 
 void postFailed(const std::shared_ptr<ProviderOperation>& operation,
                 domain::MediaError error) noexcept {
+    // D05: a live cancellation at the failure exit is a cancel terminal, not corruption.
+    if (operation->isCanceled()) {
+        postCanceled(operation);
+        return;
+    }
     if (!operation->claimTerminal()) {
         postCanceled(operation);
         return;

@@ -26,6 +26,8 @@ struct TraceIdentity final {
     domain::DeviceGeneration device{0};
     domain::RequestId request{0};
     std::optional<domain::CommandId> command{};
+    // D06: monotonic playback-run id (1-based). 0 means "no active run" / not applicable.
+    std::uint64_t run{0};
 
     [[nodiscard]] bool operator==(const TraceIdentity&) const = default;
 };

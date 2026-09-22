@@ -500,6 +500,21 @@ TEST(SoftwareDecoderTests, ContinuesForwardWithoutSeekingAndFallsBackForReverseT
 // A canceled decode is a clean stop, not corruption: the owning actor must not reopen the
 // source for it, so the decoder reports the interruption and stays reusable afterwards. Reopening
 // after every cancellation used to add a full demux plus index rebuild to every seek.
+TEST(SoftwareDecoderTests, CancelBeforeEntryIsInterruptionNotCorruption) {
+    // D05: a cancellation already visible at the decode entry must classify as interruption
+    // (recoverable, lastDecodeInterrupted) rather than a media failure that would force reopen.
+    platform::FrameBudget budget{1024U * 1024U};
+    SoftwareDecoder decoder{
+        0U, probeDescriptor(fixture("h264_a_320x180_30fps_12.mp4"), 0U), budget};
+    std::atomic<bool> canceledFlag = true;
+    const auto opened = decoder.open(canceledFlag);
+    EXPECT_FALSE(opened);
+    EXPECT_TRUE(decoder.lastDecodeInterrupted());
+    const auto decoded = decoder.decodeExact(domain::FrameId{0}, canceledFlag);
+    EXPECT_FALSE(decoded);
+    EXPECT_TRUE(decoder.lastDecodeInterrupted());
+}
+
 TEST(SoftwareDecoderTests, InterruptedDecodeIsReportedAndLeavesTheDecoderReusable) {
     platform::FrameBudget budget{2U * 1024U * 1024U};
     SoftwareDecoder decoder{

@@ -29,6 +29,8 @@ constexpr std::uint8_t kMaximumReverseWindowFrames = 48U;
 // frame is already complete; this bound keeps held-backward from stalling the decode worker
 // on a long GOP when the next interactive target is already queued.
 constexpr std::uint64_t kReverseWindowBuildBudgetMicroseconds = 80'000U;
+// D04: the budget covers the complete fill including the mandatory seed decodeExact. A seed
+// that already exceeded it skips the sequential walk so the wait is never "seed + full budget".
 constexpr std::uint32_t kExactSoftwareThreadCount = 4U;
 constexpr std::uint64_t kMaximumSoftwareExactFrameBytes = 8U * 1024U * 1024U;
 
@@ -444,10 +446,11 @@ void SourceDecodeActor::run() noexcept {
                 return true;
             }
             const std::scoped_lock lock{mutex_};
-            // Do not treat an already-queued reverse successor as urgent: that is the normal
-            // held-backward pipeline the window exists to serve. Control/sequential work is a
-            // real interruption (open/close, or playback taking over the decoder).
-            return stopping_ || !controlQueue_.empty() || !sequentialQueue_.empty();
+            // Stale reverse warmup must yield to playback, a new exact seek, open/close, or
+            // sequential work. An already-queued reverse successor is the normal held-backward
+            // pipeline the window exists to serve and is not an interruption (D04).
+            return stopping_ || !controlQueue_.empty() || !exactQueue_.empty() ||
+                   !sequentialQueue_.empty();
         };
         const auto fillReadAhead = [this, &recordDecode](const SourceDecodeRequest& request,
                                                          const std::size_t frameBytes) {
@@ -748,6 +751,29 @@ void SourceDecodeActor::fillReverseGopWindow(
                       .presentationTime = seed.value().presentationTime,
                   });
     std::uint64_t builtFrames = 1U;
+
+    // D04: a newer seek/playback after the seed abandons the remaining walk immediately.
+    if (interrupted(request)) {
+        const auto partialMicroseconds =
+            static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                           std::chrono::steady_clock::now() - buildStarted)
+                                           .count());
+        {
+            std::scoped_lock lock{mutex_};
+            ++reverseWindowBuildCount_;
+            reverseWindowBuiltFrameCount_ += builtFrames;
+            reverseWindowBuildMicroseconds_ += partialMicroseconds;
+            reverseWindowBuildMaximumMicroseconds_ =
+                std::max(reverseWindowBuildMaximumMicroseconds_, partialMicroseconds);
+        }
+        refreshMetrics();
+        application::PlaybackTrace::instance().record(
+            application::TraceEventKind::ReverseWindowBuilt,
+            application::TraceIdentity{
+                .request = domain::RequestId{static_cast<std::uint64_t>(sourceId_)}},
+            builtFrames);
+        return;
+    }
 
     for (std::int64_t candidate = lowestMissing + 1; candidate < base; ++candidate) {
         if (interrupted(request)) {

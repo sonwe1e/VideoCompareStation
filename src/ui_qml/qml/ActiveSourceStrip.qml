@@ -13,6 +13,8 @@ Rectangle {
     required property bool singleMode
     required property int canonicalSourceIndex
     required property string canonicalSourceIdentity
+    required property int referenceSourceIndex
+    required property string referenceSourceIdentity
     required property var pendingSourceIdentities
     required property var sourceIdentities
     property color panelColor: Theme.panel
@@ -77,18 +79,20 @@ Rectangle {
                 // Explicit label width: RowLayout.fillWidth children do not feed back into an
                 // implicit width, so sum the pieces here to size the chip from the real text.
                 readonly property real chipLabelPlainWidth: letterLabel.implicitWidth + separatorOne.implicitWidth + filenameLabel.implicitWidth + 10
-                readonly property real chipLabelCanonicalWidth: chipLabelPlainWidth + referenceTag.implicitWidth + separatorTwo.implicitWidth + 10
-                width: Math.min(280, Math.max(128, (chip.isCanonical ? chipLabelCanonicalWidth : chipLabelPlainWidth) + (control.singleMode ? 24 : 84)))
+                readonly property real chipLabelTaggedWidth: chipLabelPlainWidth + (chip.isReference ? referenceTag.implicitWidth + separatorTwo.implicitWidth + 10 : 0) + (chip.isTimelineMaster ? masterTag.implicitWidth + separatorThree.implicitWidth + 10 : 0)
+                width: Math.min(280, Math.max(128, ((chip.isReference || chip.isTimelineMaster) ? chipLabelTaggedWidth : chipLabelPlainWidth) + (control.singleMode ? 24 : 84)))
                 radius: 8
                 readonly property string resolvedSourceIdentity: chip.sourceIdentity.length > 0 ? chip.sourceIdentity : (chip.sourceId >= 0 && chip.sourceId < control.sourceIdentities.length ? String(control.sourceIdentities[chip.sourceId]) : "")
-                readonly property bool isCanonical: chip.resolvedSourceIdentity.length > 0 ? chip.resolvedSourceIdentity === control.canonicalSourceIdentity : chip.sourceId === control.canonicalSourceIndex
+                // D08: timeline master and comparison reference are independent projections.
+                readonly property bool isTimelineMaster: chip.resolvedSourceIdentity.length > 0 ? chip.resolvedSourceIdentity === control.canonicalSourceIdentity : chip.sourceId === control.canonicalSourceIndex
+                readonly property bool isReference: chip.resolvedSourceIdentity.length > 0 ? (control.referenceSourceIdentity.length > 0 ? chip.resolvedSourceIdentity === control.referenceSourceIdentity : chip.sourceId === control.referenceSourceIndex) : chip.sourceId === control.referenceSourceIndex
                 readonly property bool pending: control.pendingSourceIdentities.indexOf(chip.resolvedSourceIdentity) >= 0 || requestQueued
                 property bool requestQueued: false
-                color: chip.isCanonical ? Theme.controlChecked : Theme.raisedPanel
-                border.color: chip.isCanonical ? control.accentColor : control.borderColor
+                color: chip.isReference ? Theme.controlChecked : Theme.raisedPanel
+                border.color: chip.isReference ? control.accentColor : control.borderColor
 
                 function requestReference() {
-                    if (chip.pending || chip.isCanonical || chip.resolvedSourceIdentity.length === 0)
+                    if (chip.pending || chip.isReference || chip.resolvedSourceIdentity.length === 0)
                         return;
                     chip.requestQueued = true;
                     control.returnViewerFocusAfterClose = true;
@@ -139,16 +143,45 @@ Rectangle {
                         font.pixelSize: 12
                     }
                     Text {
+                        id: masterTag
+
+                        objectName: "sourceTimelineMasterTag-" + chip.sourceId
+                        visible: chip.isTimelineMaster
+                        text: qsTr("主时间线")
+                        color: control.mutedTextColor
+                        font.pixelSize: 11
+                        font.weight: Font.DemiBold
+                        Accessible.name: qsTr("时间线主源")
+                        Accessible.description: qsTr("会话时间轴与帧号由它决定")
+
+                        HoverHandler {
+                            id: masterTagHover
+                        }
+
+                        VcsToolTip {
+                            visible: masterTagHover.hovered
+                            text: qsTr("时间线主源")
+                        }
+                    }
+                    Text {
+                        id: separatorThree
+
+                        visible: chip.isTimelineMaster && chip.isReference
+                        text: "·"
+                        color: control.mutedTextColor
+                        font.pixelSize: 12
+                    }
+                    Text {
                         id: referenceTag
 
                         objectName: "sourceReferenceTag-" + chip.sourceId
-                        visible: chip.isCanonical
+                        visible: chip.isReference
                         text: qsTr("参考")
                         color: control.accentColor
                         font.pixelSize: 11
                         font.weight: Font.DemiBold
                         Accessible.name: qsTr("参考源")
-                        Accessible.description: qsTr("以它为帧号基准的参考源")
+                        Accessible.description: qsTr("对比基准参考源")
 
                         HoverHandler {
                             id: referenceTagHover
@@ -162,7 +195,7 @@ Rectangle {
                     Text {
                         id: separatorTwo
 
-                        visible: chip.isCanonical
+                        visible: chip.isReference
                         text: "·"
                         color: control.mutedTextColor
                         font.pixelSize: 12
@@ -286,7 +319,8 @@ Rectangle {
                             id: useAsReferenceItem
 
                             objectName: "makeReferenceAction-" + chip.sourceId
-                            visible: !chip.isCanonical
+                            // D08: any non-reference source (including the timeline master) can be reference.
+                            visible: !chip.isReference
                             text: qsTr("设为参考源")
                             enabled: !chip.pending
                             onTriggered: chip.requestReference()

@@ -75,6 +75,7 @@ coordinator-owned and therefore are not repeated here.
 
 | Field | Meaning |
 | --- | --- |
+| `run` | Optional monotonic playback-run id (D06). Present on coordinator playback events when a run is active. |
 | `is` | Incoming session identifier. |
 | `ie` | Incoming session epoch. |
 | `igen` | Incoming playback generation. |
@@ -166,6 +167,31 @@ also carry no playback identity. Joined with `RenderPublished` (kind 6) and
 
 Because these events come from different identity scopes, an analyzer must key them by frame id
 within a single playback run rather than by the identity tuple.
+
+### Metric naming (D06)
+
+Do not label these hops as "GPU time" without qualification:
+
+| hop | meaning |
+| --- | --- |
+| `FrameSetReady` → `RenderPublished` | producer/coordinator prepare (CPU) |
+| `RenderPublished` → `RenderDrawStarted` | scene-graph schedule latency (not GPU work) |
+| `RenderDrawStarted` → `RenderAckPublished` | CPU draw submit + command recording; `RenderAckPublished` is the CPU-side admission of the presentation acknowledgement, **not** a GPU completion fence and **not** a physical screen present |
+| `RenderAckPublished` → `PresentationAcknowledged` | ack relay to the coordinator |
+| `PresentationAcknowledged` → `SnapshotCommitted` | coordinator commit of the displayed frame |
+
+GPU completion and physical screen present are **not** in this schema. Only escalate to DXGI
+Present / display-side sampling when the software stage split cannot explain a stall.
+
+### Long runs and identity (D06)
+
+- The in-process buffer is 65,536 events. Long-running captures must use segmented
+  `DVS_PLAYBACK_TRACE` paths (restart the process or rotate the env path per segment) or accept
+  overflow markers as an explicit incomplete capture. There is no unbounded export.
+- `PlaybackRunStarted`/`PlaybackRunStopped` bound one continuous run. When `run` is present on
+  an event it is the monotonic playback-run id from the coordinator; correlate draw-stage events
+  (kinds 16/17) by frame payload **and** `run` so recycled frame numbers across runs stay distinct.
+- Live `req` remains coordinator-owned `0` on many events; `ireq` is the incoming request id.
 
 `CommandAccepted` currently means that a command was nonduplicate and claimed by the coordinator;
 it is emitted before the remaining admission checks. A rejected claimed command may therefore
