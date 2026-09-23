@@ -77,7 +77,8 @@ PlatformResult<ApplicationDataPaths> WindowsPaths::applicationDataPaths() {
                       "SHGetKnownFolderPath(FOLDERID_LocalAppData) failed."));
     }
 
-    const std::filesystem::path userDataDirectory = std::filesystem::path{rawPath} / L"CompareStation";
+    const std::filesystem::path userDataDirectory =
+        std::filesystem::path{rawPath} / L"CompareStation";
     CoTaskMemFree(rawPath);
 
     return PlatformResult<ApplicationDataPaths>::success(ApplicationDataPaths{

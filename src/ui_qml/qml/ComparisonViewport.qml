@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Window
 // qmllint disable import
 import Dvs.Ui 1.0
 
@@ -405,6 +406,67 @@ Rectangle {
             color: control.selectedDifferenceExactness === 0 ? "#86efac" : "#facc15"
             font.pixelSize: 11
             anchors.centerIn: parent
+        }
+    }
+
+    // Effective pixel-scale badge (parity with the image workspace's percent readout). The
+    // surface zoom is relative to the fitted layout, so 1:1 needs the panel rect, the source's
+    // pixel extent, and the window DPR. "100% 真实尺寸" marks exact physical 1:1; clicking
+    // either jumps to 1:1 (zoom in) or back to the fitted viewport.
+    Rectangle {
+        id: pixelScaleBadge
+
+        objectName: "viewportPixelScaleBadge"
+        visible: control.chromeVisible && pixelScaleBadge.sourceExtent > 0 && pixelScaleBadge.panelWidth > 0
+        z: 30
+        radius: 5
+        color: pixelScaleBadge.pixelExact ? "#dc122b1f" : "#dc171e2a"
+        border.color: pixelScaleBadge.pixelExact ? "#86efac" : control.borderColor
+        height: 28
+        width: pixelScaleLabel.implicitWidth + 18
+        anchors {
+            left: parent.left
+            leftMargin: 12
+            bottom: parent.bottom
+            bottomMargin: 12
+        }
+
+        readonly property var firstPanel: dualVideoSurface.sourcePanelRects.length > 0 ? dualVideoSurface.sourcePanelRects[0] : null
+        readonly property real panelWidth: firstPanel ? Number(firstPanel.width) : 0
+        // Rotation swaps the effective extent along the panel width; sample aspect ratio is
+        // not compensated (rare, and the badge is an orientation hint, not a measurement).
+        readonly property real sourceExtent: {
+            if (control.sourceMediaInfo.length === 0)
+                return 0;
+            const info = control.sourceMediaInfo[0];
+            const rotation = Number(info.rotationDegrees);
+            return (rotation === 90 || rotation === 270) ? Number(info.height) : Number(info.width);
+        }
+        readonly property real devicePixelRatio: Window.window ? Window.window.devicePixelRatio : 1
+        readonly property real effectivePercent: sourceExtent > 0 && panelWidth > 0 ? (panelWidth / sourceExtent) * dualVideoSurface.viewScale * devicePixelRatio * 100 : 0
+        readonly property bool pixelExact: Math.abs(effectivePercent - 100) < 2.5
+
+        Label {
+            id: pixelScaleLabel
+
+            text: pixelScaleBadge.pixelExact ? qsTr("100% 真实尺寸") : qsTr("画面 %1%").arg(Math.round(pixelScaleBadge.effectivePercent))
+            color: pixelScaleBadge.pixelExact ? "#86efac" : control.mutedTextColor
+            font.pixelSize: 11
+            anchors.centerIn: parent
+        }
+
+        MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: {
+                if (pixelScaleBadge.pixelExact || pixelScaleBadge.effectivePercent > 100) {
+                    dualVideoSurface.resetViewport();
+                    return;
+                }
+                // Zoom toward 1:1 physical pixels; zoomAt clamps to the surface scale range.
+                const factor = 100 / Math.max(1, pixelScaleBadge.effectivePercent);
+                dualVideoSurface.zoomAt(0.5, 0.5, factor);
+            }
         }
     }
 

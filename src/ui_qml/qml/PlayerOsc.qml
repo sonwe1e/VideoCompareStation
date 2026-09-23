@@ -11,6 +11,8 @@ Item {
     // the component also instantiates standalone (e.g. in QML unit tests) without binding it.
     property bool docked: false
     property string sourceLabel
+    // PairMetricsController context object; optional so standalone QML tests keep working.
+    property var metrics: null
     required property bool playing
     property real playbackRate: 1
     // C-07 playback status rail. Bound by Main.qml; defaults keep standalone QML tests working.
@@ -191,6 +193,28 @@ Item {
                 color: control.loopRangeActive ? "#7dd3fc" : "#9fc3ff"
                 font.pixelSize: 11
             }
+            // V-07 compact pair-metrics readout. Sits next to the timecode so the current
+            // frame's MAE/PSNR answer "how different is this frame" without opening the
+            // inspector. Hidden entirely when metrics are unavailable (single source or no
+            // service), including in standalone QML tests.
+            Text {
+                objectName: "metricsSummaryText"
+
+                visible: control.metrics !== null && control.metrics.available
+                text: {
+                    if (control.metrics === null)
+                        return "";
+                    if (!control.metrics.hasCurrentSample)
+                        return control.metrics.sampling ? qsTr("指标 采样中…") : qsTr("指标 未采样");
+                    if (!control.metrics.currentComparable)
+                        return qsTr("指标 不可比");
+                    const psnr = control.metrics.currentPsnrDb >= 999.0 ? qsTr("∞") : control.metrics.currentPsnrDb.toFixed(1) + qsTr(" dB");
+                    return qsTr("MAE %1 · PSNR %2").arg(control.metrics.currentMae.toFixed(2)).arg(psnr);
+                }
+                color: Theme.warning
+                font.pixelSize: 11
+                font.family: "Consolas"
+            }
         }
 
         // C-07 playback status rail. Separates source duplicates, player FrameSet skips, and
@@ -265,6 +289,26 @@ Item {
             }
         }
 
+        // V-07 metric timeline lane. Optional (metrics may be null in standalone tests); when
+        // present it sits between the status rail and the slider. The control's height is
+        // content-driven via tracks.y, so the lane automatically grows the OSC panel.
+        MetricTimelineLane {
+            id: metricLane
+
+            metrics: control.metrics
+            totalFrames: control.totalFrames
+            progress: control.progress
+            anchors {
+                left: parent.left
+                leftMargin: 16
+                right: parent.right
+                rightMargin: 16
+                top: statusHint.visible ? statusHint.bottom : (statusText.visible ? statusText.bottom : readout.bottom)
+                topMargin: 2
+            }
+            onSeekRequested: frame => control.seekRequested(frame)
+        }
+
         TimelineTracks {
             id: tracks
 
@@ -279,7 +323,7 @@ Item {
                 leftMargin: 16
                 right: parent.right
                 rightMargin: 16
-                top: statusHint.visible ? statusHint.bottom : (statusText.visible ? statusText.bottom : readout.bottom)
+                top: metricLane.visible ? metricLane.bottom : (statusHint.visible ? statusHint.bottom : (statusText.visible ? statusText.bottom : readout.bottom))
                 topMargin: 2
             }
             onPreviewRequested: frame => control.previewRequested(frame)

@@ -5,6 +5,7 @@
 #include "dvs/ui/ImageFolderPairModel.h"
 #include "dvs/ui/ImageReviewController.h"
 #include "dvs/ui/IssueLogController.h"
+#include "dvs/ui/PairMetricsController.h"
 #include "dvs/ui/ReviewController.h"
 #include "dvs/ui/ReviewImageProvider.h"
 #include "dvs/ui/ReviewPreferencesController.h"
@@ -88,7 +89,8 @@ public:
 
     [[nodiscard]] bool load(ReviewController& controller,
                             ReviewPreferencesController& preferences,
-                            SurfaceBinder bindSurface) {
+                            SurfaceBinder bindSurface,
+                            PairMetricsController* pairMetrics) {
         if (engine_ || !bindSurface) {
             return false;
         }
@@ -100,6 +102,11 @@ public:
         engine->rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
         engine->rootContext()->setContextProperty(QStringLiteral("reviewPreferences"),
                                                   &preferences);
+        // Pair metrics stay optional so isolated harnesses can load the shell without a
+        // metrics service; the QML guards every read on the context property being set.
+        if (pairMetrics != nullptr) {
+            engine->rootContext()->setContextProperty(QStringLiteral("pairMetrics"), pairMetrics);
+        }
         shellController_ = std::make_unique<ReviewShellController>(controller, preferences);
         engine->rootContext()->setContextProperty(QStringLiteral("reviewSession"),
                                                   shellController_.get());
@@ -681,8 +688,9 @@ DesktopApplication::~DesktopApplication() = default;
 
 bool DesktopApplication::load(ReviewController& controller,
                               ReviewPreferencesController& preferences,
-                              SurfaceBinder bindSurface) {
-    return impl_->load(controller, preferences, std::move(bindSurface));
+                              SurfaceBinder bindSurface,
+                              PairMetricsController* pairMetrics) {
+    return impl_->load(controller, preferences, std::move(bindSurface), pairMetrics);
 }
 
 void DesktopApplication::setIssueRecordRepository(

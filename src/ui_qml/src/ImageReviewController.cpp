@@ -266,6 +266,18 @@ void ImageReviewController::setWipePosition(const qreal position) {
     }
 }
 
+qreal ImageReviewController::fadePosition() const noexcept {
+    return fadePosition_;
+}
+
+void ImageReviewController::setFadePosition(const qreal position) {
+    const qreal clamped = std::max(0.0, std::min(1.0, position));
+    if (!qFuzzyCompare(clamped, fadePosition_)) {
+        fadePosition_ = clamped;
+        emit viewChanged();
+    }
+}
+
 qreal ImageReviewController::zoom() const noexcept {
     return zoom_;
 }
@@ -426,6 +438,8 @@ bool ImageReviewController::openPrimaryImage(QImage image,
     ++async_->sourceGeneration;
     resetDifferenceState();
     primary_ = std::move(image);
+    // Direct injection carries no original-depth sidecar; clear any stale one.
+    primaryNative_ = QImage();
     primaryPath_ = std::move(pathLabel);
     primaryInfo_ = std::move(info);
     // Only fall back to the buffer when the source provenance is unknown: a loader-reported
@@ -466,6 +480,7 @@ bool ImageReviewController::openSecondaryImage(QImage image,
     ++async_->sourceGeneration;
     resetDifferenceState();
     secondary_ = std::move(image);
+    secondaryNative_ = QImage();
     secondaryPath_ = std::move(pathLabel);
     secondaryInfo_ = std::move(info);
     if (secondaryInfo_.sourceFormat.isEmpty()) {
@@ -483,26 +498,39 @@ bool ImageReviewController::openSecondaryImage(QImage image,
 
 bool ImageReviewController::openPrimary(const QUrl& url) {
     QImage image;
+    QImage nativeImage;
     StillImageSourceInfo info;
     QString error;
-    if (!loadChecked(url, &image, &info, &error)) {
+    if (!loadChecked(url, &image, &nativeImage, &info, &error)) {
         setError(error);
         return false;
     }
-    return openPrimaryImage(
-        std::move(image), url.isLocalFile() ? url.toLocalFile() : url.toString(), std::move(info));
+    if (!openPrimaryImage(std::move(image),
+                          url.isLocalFile() ? url.toLocalFile() : url.toString(),
+                          std::move(info))) {
+        return false;
+    }
+    // The injection overload clears the sidecar; restore the one loaded with this image.
+    primaryNative_ = std::move(nativeImage);
+    return true;
 }
 
 bool ImageReviewController::openSecondary(const QUrl& url) {
     QImage image;
+    QImage nativeImage;
     StillImageSourceInfo info;
     QString error;
-    if (!loadChecked(url, &image, &info, &error)) {
+    if (!loadChecked(url, &image, &nativeImage, &info, &error)) {
         setError(error);
         return false;
     }
-    return openSecondaryImage(
-        std::move(image), url.isLocalFile() ? url.toLocalFile() : url.toString(), std::move(info));
+    if (!openSecondaryImage(std::move(image),
+                            url.isLocalFile() ? url.toLocalFile() : url.toString(),
+                            std::move(info))) {
+        return false;
+    }
+    secondaryNative_ = std::move(nativeImage);
+    return true;
 }
 
 bool ImageReviewController::openPairImages(QImage primary,
@@ -551,6 +579,8 @@ bool ImageReviewController::openPairImages(QImage primary,
     resetDifferenceState();
     primary_ = std::move(primary);
     secondary_ = std::move(secondary);
+    primaryNative_ = QImage();
+    secondaryNative_ = QImage();
     primaryPath_ = std::move(primaryLabel);
     secondaryPath_ = std::move(secondaryLabel);
     primaryInfo_ = std::move(primaryInfo);
@@ -591,26 +621,34 @@ bool ImageReviewController::openPairAtomically(const QUrl& primary,
                                                const QUrl& secondary,
                                                const int pairId) {
     QImage primaryImage;
+    QImage primaryNative;
     StillImageSourceInfo primaryInfo;
     QString primaryError;
-    if (!loadChecked(primary, &primaryImage, &primaryInfo, &primaryError)) {
+    if (!loadChecked(primary, &primaryImage, &primaryNative, &primaryInfo, &primaryError)) {
         setError(tr("无法打开 A：%1").arg(primaryError));
         return false;
     }
     QImage secondaryImage;
+    QImage secondaryNative;
     StillImageSourceInfo secondaryInfo;
     QString secondaryError;
-    if (!loadChecked(secondary, &secondaryImage, &secondaryInfo, &secondaryError)) {
+    if (!loadChecked(
+            secondary, &secondaryImage, &secondaryNative, &secondaryInfo, &secondaryError)) {
         setError(tr("无法打开 B：%1").arg(secondaryError));
         return false;
     }
-    return openPairImages(std::move(primaryImage),
-                          primary.isLocalFile() ? primary.toLocalFile() : primary.toString(),
-                          std::move(secondaryImage),
-                          secondary.isLocalFile() ? secondary.toLocalFile() : secondary.toString(),
-                          pairId,
-                          std::move(primaryInfo),
-                          std::move(secondaryInfo));
+    if (!openPairImages(std::move(primaryImage),
+                        primary.isLocalFile() ? primary.toLocalFile() : primary.toString(),
+                        std::move(secondaryImage),
+                        secondary.isLocalFile() ? secondary.toLocalFile() : secondary.toString(),
+                        pairId,
+                        std::move(primaryInfo),
+                        std::move(secondaryInfo))) {
+        return false;
+    }
+    primaryNative_ = std::move(primaryNative);
+    secondaryNative_ = std::move(secondaryNative);
+    return true;
 }
 
 int ImageReviewController::requestOpenPrimary(const QUrl& url, const int pairId) {
@@ -764,6 +802,8 @@ void ImageReviewController::closeAll() {
     ++async_->sourceGeneration;
     primary_ = QImage();
     secondary_ = QImage();
+    primaryNative_ = QImage();
+    secondaryNative_ = QImage();
     diff_ = QImage();
     primaryPath_.clear();
     secondaryPath_.clear();
@@ -871,6 +911,24 @@ QVariantMap ImageReviewController::samplePixel(const int imageSlot,
     } else if (imageSlot != DisplayDiffSlot && viewMode_ == RgbOpaqueView) {
         result.insert(QStringLiteral("channelView"), QStringLiteral("rgbOpaque"));
     }
+    // High-bit-depth sidecar (I-02): when sampling a raw side in plain RGBA view, report the
+    // original-depth code values alongside the 8-bit display values so a 16-bit source never
+    // reads back as "already quantized" numbers.
+    if (imageSlot != DisplayDiffSlot && viewMode_ == RgbaView) {
+        const QImage& native =
+            imageSlot == DisplaySecondarySlot ? secondaryNative_ : primaryNative_;
+        const StillImageSourceInfo& sideInfo =
+            imageSlot == DisplaySecondarySlot ? secondaryInfo_ : primaryInfo_;
+        if (!native.isNull() && x < native.width() && y < native.height()) {
+            // QImage::pixel() would truncate 64-bit formats; go through the color API.
+            const QRgba64 sample = native.pixelColor(x, y).rgba64();
+            result.insert(QStringLiteral("nativeBitDepth"), sideInfo.bitDepth);
+            result.insert(QStringLiteral("r16"), static_cast<int>(sample.red()));
+            result.insert(QStringLiteral("g16"), static_cast<int>(sample.green()));
+            result.insert(QStringLiteral("b16"), static_cast<int>(sample.blue()));
+            result.insert(QStringLiteral("a16"), static_cast<int>(sample.alpha()));
+        }
+    }
     return result;
 }
 
@@ -949,12 +1007,14 @@ void ImageReviewController::handleLoadFinished(ImagePairLoader::Result result) {
     errorText_.clear();
     switch (kind) {
     case AsyncState::PendingKind::Primary:
+        primaryNative_ = std::move(result.primaryNative);
         commitLoadedPrimary(std::move(result.primary),
                             std::move(result.primaryLabel),
                             std::move(result.primaryIdentity),
                             std::move(result.primaryInfo));
         break;
     case AsyncState::PendingKind::Secondary:
+        secondaryNative_ = std::move(result.secondaryNative);
         commitLoadedSecondary(std::move(result.secondary),
                               std::move(result.secondaryLabel),
                               std::move(result.secondaryIdentity),
@@ -1030,6 +1090,7 @@ void ImageReviewController::commitLoadedPrimary(QImage image,
     primaryPath_ = std::move(label);
     secondary_ = QImage();
     secondaryPath_.clear();
+    secondaryNative_ = QImage();
     primaryInfo_ = std::move(info);
     if (primaryInfo_.sourceFormat.isEmpty()) {
         primaryInfo_.hasAlpha = primary_.hasAlphaChannel();
@@ -1071,6 +1132,8 @@ void ImageReviewController::commitLoadedPair(ImagePairLoader::Result result) {
     const QSize previousPrimarySize = primary_.size();
     primary_ = std::move(result.primary);
     secondary_ = std::move(result.secondary);
+    primaryNative_ = std::move(result.primaryNative);
+    secondaryNative_ = std::move(result.secondaryNative);
     primaryPath_ = std::move(result.primaryLabel);
     secondaryPath_ = std::move(result.secondaryLabel);
     primaryInfo_ = result.primaryInfo;
@@ -1229,6 +1292,11 @@ QImage ImageReviewController::channelView(const QImage& source,
     if (source.isNull() || mode == RgbaView) {
         return source;
     }
+    // I-06: the QML image provider builds this view on its own thread while hover sampling
+    // reads it on the GUI thread. The cache (including the invalidation counters) is shared
+    // mutable state, so every access must hold the lock; whichever thread arrives first pays
+    // the single build, and hover afterwards reads a cached view without a GUI stall.
+    const std::lock_guard lock{viewCacheMutex_};
     // One derived view per side and mode; invalidated on commit and view mode changes.
     QImage& cache = primarySide ? primaryViewCache_ : secondaryViewCache_;
     if (viewCacheGeneration_ != contentGeneration_ || viewCacheMode_ != mode) {
@@ -1265,6 +1333,7 @@ QImage ImageReviewController::channelView(const QImage& source,
 
 bool ImageReviewController::loadChecked(const QUrl& url,
                                         QImage* image,
+                                        QImage* nativeImage,
                                         StillImageSourceInfo* info,
                                         QString* error) {
     if (!url.isValid()) {
@@ -1307,7 +1376,7 @@ bool ImageReviewController::loadChecked(const QUrl& url,
             std::string loaderError;
             if (loader) {
                 try {
-                    decoded = loader(bytes, &loaded, info, &loaderError);
+                    decoded = loader(bytes, &loaded, nativeImage, info, &loaderError);
                 } catch (...) {
                     decoded = false;
                     loaderError = "Still-image loader threw an unknown exception.";

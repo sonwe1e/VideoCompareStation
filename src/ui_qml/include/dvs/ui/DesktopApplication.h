@@ -17,6 +17,7 @@ class IIssueRecordRepository;
 namespace ui {
 
 class ComparisonSurface;
+class PairMetricsController;
 class ReviewController;
 class ReviewPreferencesController;
 
@@ -44,7 +45,8 @@ public:
 
     [[nodiscard]] bool load(ReviewController& controller,
                             ReviewPreferencesController& preferences,
-                            SurfaceBinder bindSurface);
+                            SurfaceBinder bindSurface,
+                            PairMetricsController* pairMetrics = nullptr);
     // Optional T7 injection. Must be set before load(); the composition root owns the concrete
     // persistence adapter so ui_qml never links persistence_json directly.
     void setIssueRecordRepository(application::IIssueRecordRepository* repository) noexcept;

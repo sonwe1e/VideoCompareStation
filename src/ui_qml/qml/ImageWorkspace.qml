@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Window
 import "VcsTheme.js" as Theme
 
@@ -137,6 +138,18 @@ Rectangle {
             return;
         imageReview.compareMode = mode;
     }
+
+    // View selection mirrors the old chip toggle: picking the active view returns to RGBA,
+    // so Alpha Gray (A) and RGB Opaque (O) keep acting as toggles from the dropdown too.
+    function setViewMode(mode) {
+        if (!imageReview)
+            return;
+        imageReview.viewMode = (imageReview.viewMode === mode && mode !== 0) ? 0 : mode;
+    }
+
+    readonly property string viewModeLabel: viewMode === 1 ? qsTr("Alpha 灰度") : (viewMode === 2 ? qsTr("RGB 忽略") : qsTr("RGBA"))
+    readonly property string backgroundModeLabel: backgroundMode === 1 ? qsTr("背景·棋盘格") : (backgroundMode === 2 ? qsTr("背景·黑底") : (backgroundMode === 3 ? qsTr("背景·白底") : qsTr("背景·深色")))
+    readonly property string advancedDiffLabel: compareMode === 3 ? qsTr("带符号差异") : (compareMode === 4 ? qsTr("高亮") : (compareMode === 6 ? qsTr("Alpha 差异") : qsTr("更多")))
 
     // File-name part of a controller path ("C:/dir/shot.png" -> "shot.png"); empty for
     // injected test images whose path label carries no separator.
@@ -545,8 +558,10 @@ Rectangle {
             right: parent.right
             margins: 12
         }
-        spacing: 10
+        spacing: 8
 
+        // Row A — file and view commands. Opening variants live behind one dropdown so the
+        // top edge never grows past a single row; sidebar toggling only appears with folders.
         Row {
             spacing: 8
 
@@ -560,40 +575,35 @@ Rectangle {
                 onClicked: control.openImageRequested()
             }
             ReviewActionButton {
-                objectName: "imageAddButton"
-                text: qsTr("添加图片…")
-                implicitHeight: 30
-                leftPadding: 12
-                rightPadding: 12
-                enabled: control.hasPrimary && !control.hasSecondary
-                onClicked: control.addImageRequested()
-            }
-            ReviewActionButton {
                 objectName: "imageOpenPairButton"
-                text: qsTr("打开图片对…")
+                text: qsTr("打开图片对… ▾")
                 implicitHeight: 30
                 leftPadding: 12
                 rightPadding: 12
-                onClicked: control.openPairRequested()
-            }
-            ReviewActionButton {
-                objectName: "imageCompareFoldersButton"
-                text: qsTr("对比文件夹…")
-                implicitHeight: 30
-                leftPadding: 12
-                rightPadding: 12
-                onClicked: control.compareFoldersRequested()
-            }
-            ReviewActionButton {
-                objectName: "imageToggleSidebarButton"
-                checkable: true
-                checked: control.sidebarVisible
-                text: control.sidebarVisible ? qsTr("隐藏列表") : qsTr("显示列表")
-                implicitHeight: 30
-                leftPadding: 12
-                rightPadding: 12
-                enabled: control.hasFolders
-                onClicked: control.toggleSidebarRequested()
+                onClicked: openPairMenu.open()
+
+                VcsMenu {
+                    id: openPairMenu
+                    menuWidth: 220
+
+                    VcsMenuItem {
+                        objectName: "imageOpenPairMenuItem"
+                        text: qsTr("打开图片对…")
+                        onTriggered: control.openPairRequested()
+                    }
+                    VcsMenuItem {
+                        objectName: "imageCompareFoldersMenuItem"
+                        text: qsTr("对比文件夹…")
+                        onTriggered: control.compareFoldersRequested()
+                    }
+                    VcsMenuSeparator {}
+                    VcsMenuItem {
+                        objectName: "imageAddMenuItem"
+                        text: qsTr("添加图片…")
+                        enabled: control.hasPrimary && !control.hasSecondary
+                        onTriggered: control.addImageRequested()
+                    }
+                }
             }
             ReviewActionButton {
                 objectName: "imageCloseButton"
@@ -605,26 +615,32 @@ Rectangle {
                 onClicked: control.imageReview.closeAll()
             }
             ReviewActionButton {
-                objectName: "imageResetViewButton"
-                text: qsTr("重置视图")
+                objectName: "imageToggleSidebarButton"
+                checkable: true
+                checked: control.sidebarVisible
+                text: control.sidebarVisible ? qsTr("隐藏列表") : qsTr("显示列表")
                 implicitHeight: 30
                 leftPadding: 12
                 rightPadding: 12
-                enabled: control.hasPrimary
-                onClicked: {
-                    control.trueSize = false;
-                    if (control.imageReview)
-                        control.imageReview.resetView();
-                }
+                visible: control.hasFolders
+                onClicked: control.toggleSidebarRequested()
             }
+
+            Rectangle {
+                width: 1
+                height: 22
+                color: Theme.border
+                anchors.verticalCenter: parent.verticalCenter
+            }
+
             ReviewActionButton {
                 objectName: "imageFitButton"
                 checkable: true
                 checked: !control.trueSize
                 text: qsTr("适应窗口")
                 implicitHeight: 30
-                leftPadding: 12
-                rightPadding: 12
+                leftPadding: 10
+                rightPadding: 10
                 enabled: control.hasPrimary
                 onClicked: {
                     control.trueSize = false;
@@ -636,10 +652,10 @@ Rectangle {
                 objectName: "imageTrueSizeButton"
                 checkable: true
                 checked: control.trueSize
-                text: qsTr("100% 真实尺寸")
+                text: qsTr("100%")
                 implicitHeight: 30
-                leftPadding: 12
-                rightPadding: 12
+                leftPadding: 10
+                rightPadding: 10
                 enabled: control.hasPrimary
                 onClicked: {
                     control.trueSize = true;
@@ -648,20 +664,36 @@ Rectangle {
                 }
             }
             ReviewActionButton {
+                objectName: "imageResetViewButton"
+                text: qsTr("重置视图")
+                implicitHeight: 30
+                leftPadding: 10
+                rightPadding: 10
+                enabled: control.hasPrimary
+                onClicked: {
+                    control.trueSize = false;
+                    if (control.imageReview)
+                        control.imageReview.resetView();
+                }
+            }
+            ReviewActionButton {
                 objectName: "imageResampleToggle"
                 checkable: true
                 checked: Boolean(control.imageReview && control.imageReview.resampleAllowed)
-                text: qsTr("重采样对齐差异")
+                text: qsTr("重采样·")
                 implicitHeight: 30
-                leftPadding: 12
-                rightPadding: 12
+                leftPadding: 8
+                rightPadding: 8
                 visible: control.hasPair && control.sizesDiffer
                 onClicked: control.imageReview.resampleAllowed = !control.imageReview.resampleAllowed
             }
         }
 
+        // Row B — comparison layout, difference analysis and observation. Mutually exclusive
+        // modes stay grouped; secondary modes collapse into "more" menus like the video bar,
+        // so a pair never shows the full control surface at once.
         Row {
-            spacing: 6
+            spacing: 8
 
             ModeChip {
                 objectName: "imageModePrimary"
@@ -672,127 +704,155 @@ Rectangle {
                 objectName: "imageModeSide"
                 text: qsTr("并排")
                 modeValue: 1
+                visible: control.hasPair
+            }
+            ModeChip {
+                objectName: "imageModeWipe"
+                text: qsTr("分割线")
+                modeValue: 5
+                visible: control.hasPair
+            }
+            ModeChip {
+                objectName: "imageModeFade"
+                text: qsTr("淡化")
+                modeValue: 7
+                visible: control.hasPair
             }
             ReviewActionButton {
                 objectName: "imageToggleSourceButton"
-                visible: control.hasPair
+                visible: control.hasPair && control.compareMode === 0
                 implicitHeight: 30
                 leftPadding: 8
                 rightPadding: 8
                 text: control.compareMode === 0 && control.singleViewShowSecondary ? qsTr("切至 A") : qsTr("切至 B")
                 onClicked: control.toggleSinglePairSource()
             }
-            ReviewActionButton {
-                objectName: "imageFlickerButton"
+
+            Rectangle {
                 visible: control.hasPair
-                checkable: true
-                checked: control.flickerActive
-                implicitHeight: 30
-                leftPadding: 8
-                rightPadding: 8
-                text: control.flickerActive ? qsTr("停止闪烁") : qsTr("闪烁 (Flicker)")
-                onClicked: control.toggleFlicker()
+                width: 1
+                height: 22
+                color: Theme.border
+                anchors.verticalCenter: parent.verticalCenter
             }
-            ModeChip {
-                objectName: "imageModeWipe"
-                text: qsTr("分割线")
-                modeValue: 5
-            }
+
             ModeChip {
                 objectName: "imageModeAbsDiff"
                 text: qsTr("绝对差异")
                 modeValue: 2
+                visible: control.hasPair
             }
-            ModeChip {
-                objectName: "imageModeSignedDiff"
-                text: qsTr("带符号差异")
-                modeValue: 3
-            }
-            ModeChip {
-                objectName: "imageModeHighlight"
-                text: qsTr("高亮")
-                modeValue: 4
-            }
-            ModeChip {
-                objectName: "imageModeAlphaDiff"
-                text: qsTr("Alpha 差异")
-                modeValue: 6
-                chipWidth: 96
-                visible: Boolean(control.imageReview && control.hasPair && (control.imageReview.primaryHasAlpha || control.imageReview.secondaryHasAlpha))
-            }
-        }
+            ReviewActionButton {
+                objectName: "imageMoreDiffButton"
+                text: control.advancedDiffLabel + " ▾"
+                implicitHeight: 30
+                leftPadding: 8
+                rightPadding: 8
+                visible: control.hasPair
+                onClicked: diffMenu.open()
 
-        Row {
-            spacing: 6
+                VcsMenu {
+                    id: diffMenu
+                    menuWidth: 220
 
-            Text {
-                height: 30
-                verticalAlignment: Text.AlignVCenter
-                text: qsTr("观察")
-                color: Theme.mutedText
-                font.pixelSize: 12
-            }
-            ModeChip {
-                objectName: "imageViewRgba"
-                text: qsTr("RGBA")
-                modeValue: 0
-                selectGroup: 1
-                chipWidth: 76
-            }
-            ModeChip {
-                objectName: "imageViewAlphaGray"
-                text: qsTr("Alpha 灰度 (A)")
-                modeValue: 1
-                selectGroup: 1
-                chipWidth: 116
-            }
-            ModeChip {
-                objectName: "imageViewRgbOpaque"
-                text: qsTr("RGB 忽略透明度 (O)")
-                modeValue: 2
-                selectGroup: 1
-                chipWidth: 148
+                    VcsRadioMenuItem {
+                        objectName: "imageModeSignedDiff"
+                        text: qsTr("带符号差异")
+                        checked: control.compareMode === 3
+                        onTriggered: control.modeButton(3)
+                    }
+                    VcsRadioMenuItem {
+                        objectName: "imageModeHighlight"
+                        text: qsTr("高亮")
+                        checked: control.compareMode === 4
+                        onTriggered: control.modeButton(4)
+                    }
+                    VcsRadioMenuItem {
+                        objectName: "imageModeAlphaDiff"
+                        text: qsTr("Alpha 差异")
+                        enabled: Boolean(control.imageReview && (control.imageReview.primaryHasAlpha || control.imageReview.secondaryHasAlpha))
+                        checked: control.compareMode === 6
+                        onTriggered: control.modeButton(6)
+                    }
+                }
             }
 
-            Item {
-                width: 10
-                height: 1
+            Rectangle {
+                width: 1
+                height: 22
+                color: Theme.border
+                anchors.verticalCenter: parent.verticalCenter
             }
 
-            Text {
-                height: 30
-                verticalAlignment: Text.AlignVCenter
-                text: qsTr("背景")
-                color: Theme.mutedText
-                font.pixelSize: 12
+            ReviewActionButton {
+                objectName: "imageViewModeButton"
+                text: control.viewModeLabel + " ▾"
+                implicitHeight: 30
+                leftPadding: 8
+                rightPadding: 8
+                onClicked: viewMenu.open()
+
+                VcsMenu {
+                    id: viewMenu
+                    menuWidth: 230
+
+                    VcsRadioMenuItem {
+                        objectName: "imageViewRgba"
+                        text: qsTr("RGBA")
+                        checked: control.viewMode === 0
+                        onTriggered: control.setViewMode(0)
+                    }
+                    VcsRadioMenuItem {
+                        objectName: "imageViewAlphaGray"
+                        text: qsTr("Alpha 灰度 (A)")
+                        checked: control.viewMode === 1
+                        onTriggered: control.setViewMode(1)
+                    }
+                    VcsRadioMenuItem {
+                        objectName: "imageViewRgbOpaque"
+                        text: qsTr("RGB 忽略透明度 (O)")
+                        checked: control.viewMode === 2
+                        onTriggered: control.setViewMode(2)
+                    }
+                }
             }
-            ModeChip {
-                objectName: "imageBgDark"
-                text: qsTr("深色")
-                modeValue: 0
-                selectGroup: 2
-                chipWidth: 64
-            }
-            ModeChip {
-                objectName: "imageBgChecker"
-                text: qsTr("棋盘格")
-                modeValue: 1
-                selectGroup: 2
-                chipWidth: 76
-            }
-            ModeChip {
-                objectName: "imageBgBlack"
-                text: qsTr("黑底")
-                modeValue: 2
-                selectGroup: 2
-                chipWidth: 64
-            }
-            ModeChip {
-                objectName: "imageBgWhite"
-                text: qsTr("白底")
-                modeValue: 3
-                selectGroup: 2
-                chipWidth: 64
+            ReviewActionButton {
+                objectName: "imageBackgroundButton"
+                text: control.backgroundModeLabel + " ▾"
+                implicitHeight: 30
+                leftPadding: 8
+                rightPadding: 8
+                onClicked: bgMenu.open()
+
+                VcsMenu {
+                    id: bgMenu
+                    menuWidth: 200
+
+                    VcsRadioMenuItem {
+                        objectName: "imageBgDark"
+                        text: qsTr("深色")
+                        checked: control.backgroundMode === 0
+                        onTriggered: control.backgroundMode = 0
+                    }
+                    VcsRadioMenuItem {
+                        objectName: "imageBgChecker"
+                        text: qsTr("棋盘格")
+                        checked: control.backgroundMode === 1
+                        onTriggered: control.backgroundMode = 1
+                    }
+                    VcsRadioMenuItem {
+                        objectName: "imageBgBlack"
+                        text: qsTr("黑底")
+                        checked: control.backgroundMode === 2
+                        onTriggered: control.backgroundMode = 2
+                    }
+                    VcsRadioMenuItem {
+                        objectName: "imageBgWhite"
+                        text: qsTr("白底")
+                        checked: control.backgroundMode === 3
+                        onTriggered: control.backgroundMode = 3
+                    }
+                }
             }
             ReviewActionButton {
                 objectName: "imageBgCycleButton"
@@ -803,34 +863,16 @@ Rectangle {
                 enabled: control.hasPrimary
                 onClicked: control.cycleBackgroundMode()
             }
-
-            Rectangle {
-                visible: Boolean(control.imageReview && control.hasPrimary && (control.imageReview.primaryHasAlpha || control.imageReview.secondaryHasAlpha))
-                height: 24
-                radius: 4
-                color: "#1e293b"
-                border.color: "#38bdf8"
-                border.width: 1
-                anchors.verticalCenter: parent.verticalCenter
-
-                Row {
-                    anchors.centerIn: parent
-                    leftPadding: 6
-                    rightPadding: 6
-                    spacing: 4
-
-                    Text {
-                        text: "α"
-                        color: "#38bdf8"
-                        font.pixelSize: 12
-                        font.weight: Font.Bold
-                    }
-                    Text {
-                        text: qsTr("直通（未预乘）")
-                        color: "#e2e8f0"
-                        font.pixelSize: 11
-                    }
-                }
+            ReviewActionButton {
+                objectName: "imageFlickerButton"
+                visible: control.hasPair
+                checkable: true
+                checked: control.flickerActive
+                implicitHeight: 30
+                leftPadding: 8
+                rightPadding: 8
+                text: control.flickerActive ? qsTr("停止闪烁") : qsTr("闪烁")
+                onClicked: control.toggleFlicker()
             }
         }
     }
@@ -1147,6 +1189,12 @@ Rectangle {
                             text += " · " + qsTr("已重采样对齐");
                         if (control.imageReview.alphaDifferenceOnly)
                             text += " · " + qsTr("RGB 相同，alpha 存在差异");
+                        // I-01/I-05 semantics: stats are raw per-pixel max channel deltas
+                        // (unamplified); only the difference image is amplified ×4 for
+                        // visibility, and the definition intentionally differs from the video
+                        // side's RGB-mean metrics.
+                        if (!alphaMode)
+                            text += " · " + qsTr("图放大 ×4，统计为原始值");
                         return text;
                     }
                 }
@@ -1380,10 +1428,221 @@ Rectangle {
                         onPositionRequested: position => control.imageReview.wipePosition = position
                     }
                 }
+
+                // Fade comparison (T-batch 2a): both images stacked in the primary's geometry
+                // box; the secondary's opacity is the fade position. Pure presentation — the
+                // decoded buffers and the difference pipeline are untouched, and zoom/pan/
+                // true-size behave exactly like the wipe layout.
+                Item {
+                    id: fadeOverlay
+
+                    objectName: "fadeOverlay"
+                    visible: control.hasPair && control.compareMode === 7
+                    anchors.fill: parent
+                    clip: true
+
+                    Rectangle {
+                        anchors.fill: parent
+                        color: "#090d14"
+                        visible: control.backgroundMode === 0
+                    }
+                    Rectangle {
+                        anchors.fill: parent
+                        color: "black"
+                        visible: control.backgroundMode === 2
+                    }
+                    Rectangle {
+                        anchors.fill: parent
+                        color: "white"
+                        visible: control.backgroundMode === 3
+                    }
+                    CheckerboardBackground {
+                        anchors.fill: parent
+                        visible: control.backgroundMode === 1
+                    }
+
+                    readonly property real fitScale: {
+                        if (!control.imageReview)
+                            return 1;
+                        const sw = Math.max(1, control.imageReview.primaryWidth);
+                        const sh = Math.max(1, control.imageReview.primaryHeight);
+                        return Math.min(width / sw, height / sh);
+                    }
+                    readonly property real effectiveBaseScale: {
+                        if (control.trueSize) {
+                            const dpr = Window.window ? Window.window.devicePixelRatio : 1;
+                            return 1 / dpr;
+                        }
+                        return fitScale;
+                    }
+                    readonly property real drawWidth: control.imageReview ? control.imageReview.primaryWidth * effectiveBaseScale * control.zoom : 0
+                    readonly property real drawHeight: control.imageReview ? control.imageReview.primaryHeight * effectiveBaseScale * control.zoom : 0
+                    readonly property real drawX: (width - drawWidth) / 2 + (0.5 - (control.imageReview ? control.imageReview.panX : 0.5)) * drawWidth
+                    readonly property real drawY: (height - drawHeight) / 2 + (0.5 - (control.imageReview ? control.imageReview.panY : 0.5)) * drawHeight
+
+                    Image {
+                        id: fadePrimaryImage
+
+                        objectName: "fadePrimaryImage"
+                        x: fadeOverlay.drawX
+                        y: fadeOverlay.drawY
+                        width: fadeOverlay.drawWidth
+                        height: fadeOverlay.drawHeight
+                        source: control.imageReview && control.imageReview.contentGeneration >= 0 && fadeOverlay.visible ? control.imageReview.imageUrl(2) : ""
+                        fillMode: Image.Stretch
+                        asynchronous: false
+                        cache: false
+                        smooth: control.zoom <= 2
+                    }
+
+                    Image {
+                        id: fadeSecondaryImage
+
+                        objectName: "fadeSecondaryImage"
+                        x: fadeOverlay.drawX
+                        y: fadeOverlay.drawY
+                        width: fadeOverlay.drawWidth
+                        height: fadeOverlay.drawHeight
+                        source: control.imageReview && control.imageReview.contentGeneration >= 0 && fadeOverlay.visible ? control.imageReview.imageUrl(3) : ""
+                        // A non-square source over a square primary geometry would stretch;
+                        // mirror the wipe layout, which also draws both sides in the primary's
+                        // box (the resample toggle governs the diff modes instead).
+                        fillMode: Image.Stretch
+                        asynchronous: false
+                        cache: false
+                        smooth: control.zoom <= 2
+                        opacity: control.imageReview ? control.imageReview.fadePosition : 0
+                    }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+                        property point dragStart: Qt.point(0, 0)
+                        onPositionChanged: mouse => {
+                            if (pressed && control.imageReview) {
+                                const dx = (mouse.x - dragStart.x) / Math.max(1, width);
+                                const dy = (mouse.y - dragStart.y) / Math.max(1, height);
+                                control.imageReview.panBy(dx, dy);
+                                dragStart = Qt.point(mouse.x, mouse.y);
+                            }
+                            // Hover readout samples the primary; the blended pixel value has
+                            // no single-source meaning at intermediate positions.
+                            control.applyHover({
+                                "image": fadePrimaryImage
+                            }, mouse.x, mouse.y, 2);
+                        }
+                        onExited: {
+                            if (control.imageReview)
+                                control.imageReview.clearCursorPixel();
+                        }
+                        onPressed: mouse => {
+                            dragStart = Qt.point(mouse.x, mouse.y);
+                            control.forceActiveFocus();
+                        }
+                        onDoubleClicked: mouse => {
+                            if (control.trueSize) {
+                                control.trueSize = false;
+                                if (control.imageReview)
+                                    control.imageReview.resetView();
+                            } else {
+                                control.trueSize = true;
+                                if (control.imageReview)
+                                    control.imageReview.setZoom(1.0);
+                            }
+                        }
+                        onWheel: wheel => {
+                            if (!control.imageReview)
+                                return;
+                            const mapped = control.mapToImage({
+                                "image": fadePrimaryImage
+                            }, wheel.x, wheel.y);
+                            const ax = mapped ? Math.max(0, Math.min(1, mapped.x / Math.max(1, fadePrimaryImage.sourceSize.width))) : 0.5;
+                            const ay = mapped ? Math.max(0, Math.min(1, mapped.y / Math.max(1, fadePrimaryImage.sourceSize.height))) : 0.5;
+                            control.imageReview.zoomBy(wheel.angleDelta.y > 0 ? 1.25 : 0.8, ax, ay);
+                            wheel.accepted = true;
+                        }
+                    }
+                }
             }
         }
     }
 
+    // Fade blend control floats over the viewport so it never occupies toolbar space;
+    // 0 shows A, 1 shows B, and the readout names both sides so the direction cannot be
+    // misread while dragging (semantics unchanged from the previous inline slider).
+    Rectangle {
+        id: fadeSliderOverlay
+
+        visible: control.hasPair && control.compareMode === 7
+        height: 40
+        radius: 8
+        color: "#d910141b"
+        border.color: Theme.menuBorder
+        anchors {
+            right: stage.right
+            bottom: stage.bottom
+            margins: 14
+        }
+        z: 20
+
+        Row {
+            spacing: 10
+            anchors.centerIn: parent
+
+            Text {
+                height: 30
+                verticalAlignment: Text.AlignVCenter
+                text: qsTr("淡化 · A %1% / B %2%").arg(Math.round((1 - (control.imageReview ? control.imageReview.fadePosition : 0.5)) * 100)).arg(Math.round((control.imageReview ? control.imageReview.fadePosition : 0.5) * 100))
+                color: Theme.mutedText
+                font.pixelSize: 12
+            }
+            Slider {
+                id: imageFadeSlider
+
+                objectName: "imageFadeSlider"
+                width: 170
+                height: 30
+                from: 0
+                to: 1
+                value: control.imageReview ? control.imageReview.fadePosition : 0.5
+                padding: 6
+                onMoved: {
+                    if (control.imageReview)
+                        control.imageReview.fadePosition = value;
+                }
+
+                background: Rectangle {
+                    x: imageFadeSlider.leftPadding + (imageFadeSlider.horizontal ? 0 : (imageFadeSlider.availableWidth - width) / 2)
+                    y: imageFadeSlider.topPadding + (imageFadeSlider.horizontal ? (imageFadeSlider.availableHeight - height) / 2 : 0)
+                    width: imageFadeSlider.horizontal ? imageFadeSlider.availableWidth : implicitWidth
+                    height: imageFadeSlider.horizontal ? implicitHeight : imageFadeSlider.availableHeight
+                    implicitWidth: 200
+                    implicitHeight: 6
+                    radius: 3
+                    color: Theme.menuBorder
+
+                    Rectangle {
+                        y: imageFadeSlider.horizontal ? 0 : imageFadeSlider.visualPosition * parent.height
+                        width: imageFadeSlider.horizontal ? imageFadeSlider.position * parent.width : 6
+                        height: imageFadeSlider.horizontal ? 6 : imageFadeSlider.position * parent.height
+                        radius: 3
+                        color: Theme.accent
+                    }
+                }
+
+                handle: Rectangle {
+                    x: imageFadeSlider.leftPadding + imageFadeSlider.visualPosition * (imageFadeSlider.availableWidth - width)
+                    y: imageFadeSlider.topPadding + imageFadeSlider.availableHeight / 2 - height / 2
+                    implicitWidth: 14
+                    implicitHeight: 14
+                    radius: 7
+                    color: imageFadeSlider.pressed ? Theme.accent : "#d8e2f2"
+                    border.color: Theme.border
+                }
+            }
+        }
+    }
     Rectangle {
         id: statusBar
 
@@ -1441,6 +1700,10 @@ Rectangle {
                         t += " · " + qsTr("Alpha 灰度");
                     else if (control.cursorPixel.channelView === "rgbOpaque")
                         t += " · " + qsTr("RGB 忽略透明度");
+                    // I-02: a >8-bit source also reports its original-depth code values so the
+                    // readout never implies the 8-bit display numbers are the file's codes.
+                    if (control.cursorPixel.nativeBitDepth !== undefined && control.cursorPixel.nativeBitDepth > 8)
+                        t += " · " + qsTr("原始 %1-bit：R %2 G %3 B %4").arg(control.cursorPixel.nativeBitDepth).arg(control.cursorPixel.r16).arg(control.cursorPixel.g16).arg(control.cursorPixel.b16);
                     return t;
                 }
                 color: Theme.primaryText
@@ -1455,15 +1718,48 @@ Rectangle {
             }
         }
 
-        Text {
+        Row {
             anchors {
                 right: parent.right
                 rightMargin: 14
                 verticalCenter: parent.verticalCenter
             }
-            text: qsTr("滚轮缩放 · 拖动平移")
-            color: Theme.mutedText
-            font.pixelSize: 11
+            spacing: 12
+
+            Rectangle {
+                visible: Boolean(control.imageReview && control.hasPrimary && (control.imageReview.primaryHasAlpha || control.imageReview.secondaryHasAlpha))
+                height: 22
+                radius: 4
+                color: "#1e293b"
+                border.color: "#38bdf8"
+                border.width: 1
+                anchors.verticalCenter: parent.verticalCenter
+
+                Row {
+                    anchors.centerIn: parent
+                    leftPadding: 6
+                    rightPadding: 6
+                    spacing: 4
+
+                    Text {
+                        text: "α"
+                        color: "#38bdf8"
+                        font.pixelSize: 12
+                        font.weight: Font.Bold
+                    }
+                    Text {
+                        text: qsTr("直通（未预乘）")
+                        color: "#e2e8f0"
+                        font.pixelSize: 11
+                    }
+                }
+            }
+
+            Text {
+                text: qsTr("滚轮缩放 · 拖动平移")
+                color: Theme.mutedText
+                font.pixelSize: 11
+            }
         }
     }
 

@@ -1,15 +1,20 @@
 # 视觉审查问题台账
 
-更新：2026-09-22。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-09-22（第二轮）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
 
 ## 基线、状态与阅读方法
 
 - 已提交基线：`main @ 0a74c466f3bef7aa8becf77463efaa424de15c55`。
-- 当次工作区有独立于文档任务的未提交实现：播放状态栏、Alpha、图片来源信息、PNM 等。
-  “工作区”是当次源码快照；后续必须重新运行 `git status`、`git diff`，不能据此认定已合入。
-- 本次文档更新只做源码／diff／测试内容核查，没有执行这些新实现的功能或硬件验收。
-  前次基线的 52 项定向测试通过，不覆盖此后的新 diff，不构成当前验收证据。
+- 2026-09-22 第二轮工作区（未提交）：V-07 视频指标全链路（`PairMetrics.h` 端口、
+  `PairMetricsService`/`PairMetricsDecodeSession` 独立解码服务、`PairMetricsController` GUI 投影、
+  检查器读数 + OSC 摘要 + 时间轴指标泳道）；I-02 高位深 sidecar 取样；I-03 对话框补 `*.pam`；
+  I-06 `channelView` 跨线程缓存加互斥；图片 Fade 模式；视频视口 1:1 像素比例徽章；
+  图片差异统计语义标注。单测/组件测试（`PairMetricsServiceTests`、`PairMetricsControllerTests`、
+  `ImageReviewControllerTests` 含 16-bit 用例）已通过；硬件验收未执行。
+- 用户已拍板（2026-09-22）：图片不做三图对比（C-01 关闭，理由"图片不做3图"）；
+  AV1/VP9（V-04）暂不需要，降为延后池；视频对比不做 Fade/Flicker（原计划批次 1c 取消）。
+  后续必须重新运行 `git status`、`git diff`，不能据此认定已合入。
 - **已在基线**：有实现及调用路径；**工作区实现**：有未提交代码，不表示通过验收；
   **待实现**：缺少所需能力；**待验证**：行为、语义或性能尚需实验。
 - **P0** 优先消除误导比较结论的风险；**P1** 完成核心工作流；**P2** 后续分析能力。
@@ -25,14 +30,14 @@
 | V-04 | 常见编码为什么打不开？ | P1 | H.264/HEVC/MPEG-4 Part 2 已有；AV1/VP9 待扩展 | `MediaProbe.cpp`、`vcpkg.json` |
 | V-05 | 显示转换会不会改变细节？ | P0 | 转换及部分精确性标记已有；原始保真路径待扩展 | `SoftwareDecoder.cpp` |
 | V-06 | 未播放位置没有缩略图 | P1 | 工作区已优化：未缓存悬停优雅降级为时间码胶囊与准星线、Jog Wheel 滚轮微调；合约测试已通过 | `TimelineThumbnailPopup.qml`、`TimelineTracks.qml` |
-| V-07 | MAE/PSNR 能否实际用于视频评估？ | P2 | 公式基础已有；像素获取、UI、区间统计未接通 | `ComparisonMetrics.*`、ADR 0005 |
+| V-07 | MAE/PSNR 能否实际用于视频评估？ | P2 | 第二轮工作区已接通全链路（独立解码服务 + 检查器读数 + OSC + 时间轴指标泳道）；组件测试通过，硬件验收待做 | `PairMetrics.*`、`PairMetricsController`、`MetricTimelineLane.qml` |
 | I-01 | 透明度哪里错了，贴背景后怎样？ | P1 | 工作区已完善：A/B/O 快捷键直通切换、高对比棋盘格/黑白底、HUD 观察浮动状态徽标与 QML 合约测试；通过验证 | `ImageWorkspace.qml`、`ImageReviewController` |
-| I-02 | 读数是原始高位深值吗？颜色可信吗？ | P0 | 工作区补来源标签；仍 RGBA8，无完整 ICC 链 | `StillImageDecoder.cpp`：`convertFrameToRgba` |
-| I-03 | PNM 是否所有入口都能打开？ | P1 | 工作区已补解码／探测／多数入口；需格式矩阵验收 | `ImageHeaderProbe.h`、`Main.qml` |
+| I-02 | 读数是原始高位深值吗？颜色可信吗？ | P0 | 第二轮工作区已加 RGBA64 sidecar 原始取样（16-bit 用例通过）；ICC 仍无 | `StillImageDecoder.cpp`：`convertFrameToRgba`、`ImageReviewController::samplePixel` |
+| I-03 | PNM 是否所有入口都能打开？ | P1 | 第二轮工作区已补三个对话框的 `*.pam` 过滤器；格式矩阵验收仍待做 | `ImageHeaderProbe.h`、`Main.qml` |
 | I-04 | 点击 100% 后仍是放大状态 | P1 | 工作区已修复：100% 重置 zoom=1.0、适应窗口与双击重置；合约测试已通过 | `ImageWorkspace.qml`：`imageTrueSizeButton` |
-| I-05 | 图片“平均差异”和视频 MAE 是否同义？ | P0 | 两种现有算法不同，标签／溯源待统一 | `ImagePairLoader::computeDifference` |
-| I-06 | 切换大图通道会不会卡 UI？ | P1 | 工作区有同步通道变换与派生缓存；延迟待验证 | `ImageReviewController::channelView` |
-| C-01 | GT＋两个 Prediction 如何比较？ | P1 | 视频三源布局已有；图片三素材模型待实现 | `ImageReviewController.h`、`CompareModeBar.qml` |
+| I-05 | 图片“平均差异”和视频 MAE 是否同义？ | P0 | 第二轮工作区已在统计读数标注“图放大 ×4，统计为原始值”；两套定义仍未统一（迁移 presentation_contract 另立项） | `ImagePairLoader::computeDifference` |
+| I-06 | 切换大图通道会不会卡 UI？ | P1 | 第二轮工作区已为 `channelView` 缓存加互斥（提供器线程与 GUI 并发安全）；大图延迟实测待做 | `ImageReviewController::channelView` |
+| C-01 | GT＋两个 Prediction 如何比较？ | P1 | 用户 2026-09-22 拍板：图片不做三图对比，条目关闭 | `ImageReviewController.h`、`CompareModeBar.qml` |
 | C-02 | 如何找插帧形变、重影、时间跳变？ | P1/P2 | 工作区已实现原地 A/B 切换、Flicker 闪烁对比与并排同步准星；合约测试已通过 | `ImageWorkspace.qml`：原地切换/Flicker/同步准星 |
 | U-01 | 不知道从哪里开始、功能藏在哪里 | P1 | 工作区已完成首屏入口、Diff 直达重采样、全屏沉浸底部边缘唤醒 OSC 与时间轴手势优化；合约测试已通过 | `EmptyReviewView.qml`、`Main.qml`、`PlayerOsc.qml` |
 | A-01 | 改动状态容易漏接或重复拥有 | 随功能推进 | 分层已有；capability 实现仍集中 | `ReviewSessionFacade`、状态所有权说明 |
@@ -110,11 +115,25 @@
 
 - **证据**：`computeRgbAbsoluteMetrics`、`scoreActivePairRgbAbsolute` 有 MAE/MSE/PSNR 基础，
   但没有完整视频像素获取、SessionSnapshot／UI 或区间统计链，见 [ADR 0005](../adr/0005-pixel-difference-metrics.md)。
-- **方向**：先选择适配器像素 port 或离线统计路径，附比较对、实际帧、公式、位深、区域和转换来源；
-  不阻塞 GUI/render。生成帧筛选、误差曲线、最差帧和导出在基础链路后实施。
+- **第二轮工作区进展（2026-09-22，未提交）**：
+  1. 新增 `application::IPairMetricsService` 端口（`PairMetrics.h`）：请求携带 `PlaybackRequestContext`
+     身份、双源、对齐偏移、帧区间与坏点阈值；结果以带身份的批次异步发布。
+  2. `media::PairMetricsService` + `PairMetricsDecodeSession`：独立于播放管线的双源软解会话
+     （不占 FrameBudget/渲染缓存），中心向外采样顺序、分批发布、最新请求优先并协作取消旧作业、
+     会话跨作业复用；RGBA 转换与显示路径同矩阵约定。
+  3. `ui::PairMetricsController`：GUI 线程投影，线程安全接收器 + 过期批次按
+     （会话/纪元/源对/对齐版本/阈值）校验丢弃；暂停时窗口 ±150 帧预取（泳道开启时），
+     播放时单帧节流采样；提供 `samplePoints` 桶化曲线、`peakFrames` 局部极大查询。
+  4. UI：检查器"差异"页当前帧指标块（MAE/MSE/PSNR/最大绝对差/坏点占比与数量/参与像素，
+     指标名固定 `cpu-rgb-absolute-v1`，阈值与 GPU 高亮共享）；OSC 紧凑读数；
+     `MetricTimelineLane.qml` 可收起泳道（MAE 曲线 + 峰值标记点击跳转 + 播放头指示）。
 - **退出条件**：同图无限 PSNR、缺帧／错误尺寸 unavailable；不可用项不当作零误差平均；
-  换 pair／seek 后陈旧结果被丢弃；显示增益不影响原统计值。
-- **验证入口**：`PixelDifferenceTests.cpp`、`ComparisonMetricsTests.cpp` 与后续端到端用例。
+  换 pair／seek 后陈旧结果被丢弃；显示增益不影响原统计值。组件测试已覆盖以上语义；
+  真实素材下的数值对拍与性能（1080p60 窗口采样耗时）待硬件验收。
+- **验证入口**：`PairMetricsServiceTests.cpp`（8 用例：同源零误差、跨编码可比、越界/尺寸不匹配
+  不可比、非法请求拒绝、新请求打断、取消静默、会话复用）、`PairMetricsControllerTests.cpp`
+  （7 用例：无对不可用、暂停单帧/泳道窗口请求、批次读数、纪元变更丢陈旧、阈值重建缓存、
+  峰值与桶化查询）、既有 `PixelDifferenceTests.cpp`、`ComparisonMetricsTests.cpp`。
 
 ## 图片：证据与退出条件
 
@@ -135,15 +154,23 @@
 
 - **证据**：`StillImageDecoder.cpp` 中的 `convertFrameToRgba` 仍输出 `AV_PIX_FMT_RGBA`；工作区新增来源格式、
   位深、通道和转换标签，没有保留可取样的原始 16 位数据，也未建立完整 ICC 链。
-- **方向**：短期准确标注“解码后 RGBA8”；原始高位深取样与色彩管理按需求另行实现，不用标签替代能力。
-- **退出条件**：16 位输入显示正确来源信息，取样值明确属于 RGBA8；需要原始数据时保留对应缓冲和码值；
-  ICC 样本只有在确定转换契约并验证后才声称颜色正确。
-- **验证入口**：`StillImageDecoderTests.cpp`、`ImageReviewControllerTests.cpp` 的 provenance 用例。
+- **第二轮工作区进展（2026-09-22，未提交）**：
+  1. `StillImage` 新增 `rgba16` sidecar：源位深 >8 时同步转换出 RGBA64LE 原始码值缓冲；
+  2. 加载链路（`ImagePairLoader` 加载器签名 + `Result`/缓存条目、`Main.cpp` 组合根、
+     同步与异步两条打开路径）全程携带 sidecar，缓存字节核算包含 sidecar；
+  3. `ImageReviewController::samplePixel` 在 RGBA 视图对 A/B 原图输出
+     `nativeBitDepth/r16/g16/b16/a16`，`ImageWorkspace` 读数显示"原始 %1-bit：R… G… B…"；
+  4. 直接注入路径（`openPairImages` 等）显式清空 sidecar，杜绝陈旧原始值。
+- **退出条件**：16 位输入显示正确来源信息，取样值明确属于 RGBA8；需要原始数据时保留对应缓冲和码值
+  （现已满足：>8-bit 源同时给出显示值与原始码值）；ICC 样本只有在确定转换契约并验证后才声称颜色正确（仍待实现）。
+- **验证入口**：`StillImageDecoderTests.cpp`、`ImageReviewControllerTests.cpp`
+  `HighBitDepthSourceReportsNativeSampleValues`（16-bit 码值精确断言）。
 
 ### I-03 PNM 与图片入口一致性
 
 - **证据**：工作区新增 P1–P7 识别、头尺寸探测、文件夹及 PNM/PPM/PGM/PBM 对话框入口。
   当次检查 `.pam` 已进入解码／文件夹，但三个图片对话框过滤器仍缺该扩展名。
+- **第二轮工作区进展（2026-09-22，未提交）**：三个图片对话框过滤器已补 `*.pam`。
 - **退出条件**：逐项验证 PBM/PGM/PPM 的文本／二进制、PAM、8/16 位、注释、损坏和超大尺寸输入；
   单图／双图／拖放／文件夹／发布包一致。“PPNM”暂按 PNM，真实样例到来后修订范围。
 - **验证入口**：`StillImageDecoderTests.cpp`（工作区新增并已登记 CMake）、
@@ -167,6 +194,10 @@
 
 - **证据**：工作区 `ImageReviewController::channelView` 在每次换图或切换观察模式后首次生成派生通道时，
   同步分配并遍历整图；同一模式后续可使用派生缓存；`imageForSlot`／`samplePixel` 调用链会触及它。
+- **第二轮工作区进展（2026-09-22，未提交）**：确认 QML 图片提供器线程与 GUI 悬停取样会并发进入
+  `channelView` 的可变缓存（原实现无锁，存在数据竞争）。已为缓存与失效计数加互斥
+  （`viewCacheMutex_`）：先到线程承担唯一一次构建，显示路径本就在提供器线程预热，
+  悬停随后读缓存。8K 大图的冷构建延迟实测仍待做。
 - **待验证**：缓存降低重复开销，但不能证明首次大图操作满足 UI 延迟要求。
 - **退出条件**：在允许尺寸／内存范围的大图上测首次切换、连续切换、悬停取样、换图取消；
   满足既有 100 ms UI 响应门禁。需要后台化时保留 generation/request 校验和有界缓存。
@@ -176,6 +207,9 @@
 ### C-01 GT＋两个 Prediction
 
 - **已有**：视频三联、参考聚焦、分析网格和任意两源比较；图片仍是 primary/secondary 与双文件夹模型。
+- **状态（2026-09-22）**：用户拍板“图片不做 3 图”，本条目关闭。图片对比维持双图模型；
+  若未来需求重现，以下设计建议与退出条件仍有效，且视频侧三源模型（ThreeUp/ReferenceFocus/
+  DifferenceEdge）是现成参照。
 - **建议**：图片改为素材列表＋参考素材＋活动候选，共享视口；默认固定 GT 切候选，辅以三联和双误差图。
   布局是提案，不能据此直接扩成 8/16 路或引入第三份独立播放时钟。
 - **退出条件**：切 GT／候选时素材身份、缩放、ROI、坐标和视频时间可追踪；
@@ -189,7 +223,9 @@
 - **工作区进展**：已为图片对比工作流完整实现：
   1. 原地 A/B 快速切换（单图模式下可直接通过工具栏按钮或键盘快捷键 `Space` 按住对比、`T` / `Tab` / `` ` `` 单击切换），完全杜绝来回扭头造成的视觉记忆衰减；
   2. 自动交替 Flicker 闪烁对比（可暂停/可调节频率，顶部 HUD 明确指示当前显示源与闪烁状态）；
-  3. 并排模式跨图同步十字准星（Hover 时镜像侧精准投影目标瞄准环、辅助十字线与图像像素坐标，彻底消除并排观察微小伪影时的视线寻找负担）。
+  3. 并排模式跨图同步十字准星（Hover 时镜像侧精准投影目标瞄准环、辅助十字线与图像像素坐标，彻底消除并排观察微小伪影时的视线寻找负担）；
+  4. 第二轮（2026-09-22，未提交）：淡化 Fade 模式（`ImageReviewController::Fade`，A/B 在主图几何盒内按
+     `fadePosition` 透明度叠加，工具栏芯片 + 滑杆 + A/B 百分比读数，纯呈现层不触碰差异管线）。
 - **验证入口**：`MainQmlContractTests.cpp` 中 `ImageWorkspaceInPlaceToggleAndFlickerContract` 与 `ImageWorkspaceSyncedCrosshairExistsInSideBySide` 用例已通过验证。
 
 ### U-01 功能可发现性

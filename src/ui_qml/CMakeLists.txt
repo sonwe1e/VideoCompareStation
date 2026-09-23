@@ -3,6 +3,7 @@ add_library(
     STATIC
         include/dvs/ui/ImageFolderPairModel.h
         include/dvs/ui/IssueLogController.h
+        include/dvs/ui/PairMetricsController.h
         include/dvs/ui/PlaybackViewModel.h
         include/dvs/ui/ReviewController.h
         include/dvs/ui/ReviewPreferencesController.h
@@ -12,6 +13,7 @@ add_library(
         include/dvs/ui/SourceListModel.h
         src/ImageFolderPairModel.cpp
         src/IssueLogController.cpp
+        src/PairMetricsController.cpp
         src/PlaybackViewModel.cpp
         src/ReviewController.cpp
         src/ReviewPreferencesController.cpp

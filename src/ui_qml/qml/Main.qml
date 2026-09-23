@@ -107,6 +107,9 @@ ApplicationWindow {
 
     readonly property var stillImageController: typeof imageReview !== "undefined" ? imageReview : null
     readonly property var folderPairModel: typeof imageFolderPairs !== "undefined" ? imageFolderPairs : null
+    // V-07 pair-metrics controller from the composition root; the typeof guard keeps
+    // lightweight QML-only tests (no metrics service) valid and warning-free.
+    readonly property var pairMetricsModel: typeof pairMetrics !== "undefined" ? pairMetrics : null
 
     // qmllint enable unqualified
 
@@ -2455,6 +2458,7 @@ ApplicationWindow {
 
         controller: root.controller
         preferences: root.preferences
+        metrics: root.pairMetricsModel
         session: root.shell
         borderColor: root.borderColor
         primaryTextColor: root.primaryTextColor
@@ -2615,7 +2619,7 @@ ApplicationWindow {
         objectName: "imageSingleDialog"
         title: qsTr("打开图片")
         fileMode: NativeDialogs.FileDialog.OpenFile
-        nameFilters: [qsTr("图片 (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tif *.tiff *.pnm *.ppm *.pgm *.pbm)"), qsTr("所有文件 (*)")]
+        nameFilters: [qsTr("图片 (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tif *.tiff *.pnm *.ppm *.pgm *.pbm *.pam)"), qsTr("所有文件 (*)")]
         onAccepted: {
             const picked = selectedFile && selectedFile.toString().length > 0 ? selectedFile : currentFile;
 
@@ -2630,7 +2634,7 @@ ApplicationWindow {
         objectName: "imageAddDialog"
         title: qsTr("添加图片")
         fileMode: NativeDialogs.FileDialog.OpenFile
-        nameFilters: [qsTr("图片 (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tif *.tiff *.pnm *.ppm *.pgm *.pbm)"), qsTr("所有文件 (*)")]
+        nameFilters: [qsTr("图片 (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tif *.tiff *.pnm *.ppm *.pgm *.pbm *.pam)"), qsTr("所有文件 (*)")]
         onAccepted: {
             const picked = selectedFile && selectedFile.toString().length > 0 ? selectedFile : currentFile;
 
@@ -2645,7 +2649,7 @@ ApplicationWindow {
         objectName: "imagePairDialog"
         title: qsTr("打开图片对")
         fileMode: NativeDialogs.FileDialog.OpenFiles
-        nameFilters: [qsTr("图片 (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tif *.tiff *.pnm *.ppm *.pgm *.pbm)"), qsTr("所有文件 (*)")]
+        nameFilters: [qsTr("图片 (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tif *.tiff *.pnm *.ppm *.pgm *.pbm *.pam)"), qsTr("所有文件 (*)")]
         onAccepted: {
             const files = selectedFiles && selectedFiles.length > 0 ? selectedFiles : [selectedFile];
 
@@ -2848,6 +2852,7 @@ ApplicationWindow {
         controllerState: root.imageWorkspaceActive ? 2 : root.oscState
         docked: root.transportDocked
         sourceLabel: root.sourceAName
+        metrics: root.pairMetricsModel
         playing: root.playing
         playbackRate: root.controller ? Number(root.controller.playbackRate) : 1
         playbackModeLabel: root.playbackModeLabel

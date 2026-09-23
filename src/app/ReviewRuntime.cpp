@@ -6,6 +6,7 @@
 #include "dvs/media/DecoderBackend.h"
 #include "dvs/media/MediaProbe.h"
 #include "dvs/media/MultiSourceFrameProvider.h"
+#include "dvs/media/PairMetricsService.h"
 #include "dvs/persistence/IssueRecordRepository.h"
 #include "dvs/persistence/SettingsRepository.h"
 #include "dvs/platform/D3d11RenderChannel.h"
@@ -17,6 +18,7 @@
 #include "dvs/platform/RenderActivitySink.h"
 #include "dvs/platform/SteadyDeadlineScheduler.h"
 #include "dvs/ui/ComparisonSurface.h"
+#include "dvs/ui/PairMetricsController.h"
 #include "dvs/ui/RenderAckRelay.h"
 #include "dvs/ui/ReviewController.h"
 #include "dvs/ui/ReviewPreferencesController.h"
@@ -154,6 +156,7 @@ public:
         // dependency that a late decoder operation can access.
         deadlineScheduler.reset();
         alignmentAnalysisService.reset();
+        pairMetricsService.reset();
         frameProvider.reset();
         mediaProbe.reset();
         settingsRepository.reset();
@@ -217,6 +220,7 @@ public:
     std::shared_ptr<application::IApplicationEventSink> coordinatorEventSink;
     std::shared_ptr<platform::SteadyDeadlineScheduler> deadlineScheduler;
     std::shared_ptr<media::AlignmentAnalysisService> alignmentAnalysisService;
+    std::shared_ptr<media::PairMetricsService> pairMetricsService;
     std::shared_ptr<media::MultiSourceFrameProvider> frameProvider;
     std::shared_ptr<media::MediaProbe> mediaProbe;
     std::shared_ptr<application::ISettingsRepository> settingsRepository;
@@ -322,6 +326,20 @@ public:
             .eventDriven = true,
         });
         projectionBridge_->bind(*controller_);
+        pairMetricsService_ = std::make_shared<media::PairMetricsService>();
+        pairMetrics_ = std::make_unique<ui::PairMetricsController>(
+            ui::PairMetricsController::Dependencies{
+                .snapshot =
+                    [weakCoordinator] {
+                        if (const auto coordinator = weakCoordinator.lock()) {
+                            return coordinator->snapshot();
+                        }
+                        return std::shared_ptr<const application::SessionSnapshot>{};
+                    },
+                .service = pairMetricsService_.get(),
+            },
+            controller_.get());
+        pairMetrics_->attachReviewController(*controller_);
         preferences_ = std::make_unique<ui::ReviewPreferencesController>(settingsRepository_);
         graphicsPump_ = std::make_unique<GraphicsNotificationPump>(
             deviceBroker_,
@@ -340,6 +358,10 @@ public:
 
     [[nodiscard]] ui::ReviewPreferencesController* preferences() noexcept {
         return preferences_.get();
+    }
+
+    [[nodiscard]] ui::PairMetricsController* pairMetrics() noexcept {
+        return pairMetrics_.get();
     }
 
     [[nodiscard]] application::IIssueRecordRepository* issueRecordRepository() noexcept {
@@ -425,6 +447,9 @@ public:
         if (controller_) {
             controller_->stop();
         }
+        if (pairMetrics_) {
+            pairMetrics_->stop();
+        }
         if (preferences_) {
             preferences_->stop();
         }
@@ -476,6 +501,7 @@ public:
         work->coordinatorEventSink = std::move(coordinatorEventSink_);
         work->deadlineScheduler = std::move(deadlineScheduler_);
         work->alignmentAnalysisService = std::move(alignmentAnalysisService_);
+        work->pairMetricsService = std::move(pairMetricsService_);
         work->frameProvider = std::move(frameProvider_);
         work->mediaProbe = std::move(mediaProbe_);
         work->settingsRepository = std::move(settingsRepository_);
@@ -540,6 +566,7 @@ private:
     std::shared_ptr<media::MultiSourceFrameProvider> frameProvider_;
     std::shared_ptr<DecoderBackendStateCache> decoderBackendStateCache_;
     std::shared_ptr<media::AlignmentAnalysisService> alignmentAnalysisService_;
+    std::shared_ptr<media::PairMetricsService> pairMetricsService_;
     std::shared_ptr<platform::SteadyDeadlineScheduler> deadlineScheduler_;
     std::shared_ptr<platform::SystemSteadyClock> clock_;
     std::shared_ptr<application::PlaybackCoordinator> coordinator_;
@@ -547,6 +574,7 @@ private:
     std::shared_ptr<ui::RenderAckRelay> acknowledgementRelay_;
     std::unique_ptr<GraphicsNotificationPump> graphicsPump_;
     std::unique_ptr<ui::ReviewController> controller_;
+    std::unique_ptr<ui::PairMetricsController> pairMetrics_;
     std::unique_ptr<ui::ReviewPreferencesController> preferences_;
     ui::ComparisonSurface* surface_ = nullptr;
     QMetaObject::Connection surfaceDestroyedConnection_;
@@ -576,6 +604,10 @@ ui::ReviewController* ReviewRuntime::controller() noexcept {
 
 ui::ReviewPreferencesController* ReviewRuntime::preferences() noexcept {
     return impl_ ? impl_->preferences() : nullptr;
+}
+
+ui::PairMetricsController* ReviewRuntime::pairMetrics() noexcept {
+    return impl_ ? impl_->pairMetrics() : nullptr;
 }
 
 application::IIssueRecordRepository* ReviewRuntime::issueRecordRepository() noexcept {

@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 
@@ -33,6 +34,9 @@ class ImageReviewController final : public QObject {
     Q_PROPERTY(int compareMode READ compareMode WRITE setCompareMode NOTIFY stateChanged)
     Q_PROPERTY(int viewMode READ viewMode WRITE setViewMode NOTIFY stateChanged)
     Q_PROPERTY(qreal wipePosition READ wipePosition WRITE setWipePosition NOTIFY viewChanged)
+    // Fade blend position for the two-image Fade mode: 0 shows A, 1 shows B. View-only state,
+    // never touches the decoded buffers or the difference pipeline.
+    Q_PROPERTY(qreal fadePosition READ fadePosition WRITE setFadePosition NOTIFY viewChanged)
     Q_PROPERTY(qreal zoom READ zoom NOTIFY viewChanged)
     Q_PROPERTY(qreal panX READ panX NOTIFY viewChanged)
     Q_PROPERTY(qreal panY READ panY NOTIFY viewChanged)
@@ -74,6 +78,7 @@ public:
     // provenance; leave it null to discard.
     using StillImageLoader = std::function<bool(const QByteArray& fileBytes,
                                                 QImage* image,
+                                                QImage* nativeImage,
                                                 StillImageSourceInfo* info,
                                                 std::string* error)>;
     static void setProcessStillImageLoader(StillImageLoader loader);
@@ -90,6 +95,7 @@ public:
         Highlight = 4,
         Wipe = 5,
         AlphaDifference = 6,
+        Fade = 7,
     };
     Q_ENUM(CompareMode)
 
@@ -129,6 +135,8 @@ public:
     void setViewMode(int mode);
     [[nodiscard]] qreal wipePosition() const noexcept;
     void setWipePosition(qreal position);
+    [[nodiscard]] qreal fadePosition() const noexcept;
+    void setFadePosition(qreal position);
     [[nodiscard]] qreal zoom() const noexcept;
     [[nodiscard]] qreal panX() const noexcept;
     [[nodiscard]] qreal panY() const noexcept;
@@ -235,8 +243,11 @@ private:
 
     void setError(QString text);
     void bumpGeneration();
-    [[nodiscard]] static bool
-    loadChecked(const QUrl& url, QImage* image, StillImageSourceInfo* info, QString* error);
+    [[nodiscard]] static bool loadChecked(const QUrl& url,
+                                          QImage* image,
+                                          QImage* nativeImage,
+                                          StillImageSourceInfo* info,
+                                          QString* error);
     [[nodiscard]] QImage displayImage(int slot) const;
     // Derived channel view of a decoded buffer for the active observation mode. Result is
     // cached across calls and invalidated when the generation or view mode changes.
@@ -269,6 +280,10 @@ private:
 
     QImage primary_;
     QImage secondary_;
+    // Original-depth RGBA64 sidecars (null for 8-bit sources). Owned with the same lifetime
+    // as the display buffers so pixel sampling can always report honest code values.
+    QImage primaryNative_;
+    QImage secondaryNative_;
     QImage diff_;
     QString primaryPath_;
     QString secondaryPath_;
@@ -276,6 +291,7 @@ private:
     int compareMode_ = PrimaryOnly;
     int viewMode_ = RgbaView;
     qreal wipePosition_ = 0.5;
+    qreal fadePosition_ = 0.5;
     int contentGeneration_ = 0;
     int maxAbsDifference_ = 0;
     double meanAbsDifference_ = 0.0;
@@ -286,7 +302,9 @@ private:
     StillImageSourceInfo primaryInfo_;
     StillImageSourceInfo secondaryInfo_;
     // Derived channel views of primary_/secondary_ for the active viewMode_, invalidated by
-    // generation bumps and view mode changes.
+    // generation bumps and view mode changes. Guarded by viewCacheMutex_: the QML image
+    // provider thread and GUI hover sampling reach channelView() concurrently.
+    mutable std::mutex viewCacheMutex_;
     mutable QImage primaryViewCache_;
     mutable QImage secondaryViewCache_;
     mutable int viewCacheGeneration_ = -1;

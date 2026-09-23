@@ -133,6 +133,39 @@ bool convertFrameToRgba(const AVFrame* frame, StillImage* image, std::string* er
         image->sourceFormat = formatName != nullptr ? formatName : std::string{};
     }
     image->colorRange = frame->color_range;
+
+    // High-bit-depth sidecar: keep the original-depth samples so pixel sampling can report
+    // code values that were not quantized to 8 bits by the display conversion. Both source
+    // and sidecar come from the same decoder frame, so the buffers always agree per pixel.
+    if (image->sourceBitDepth > 8) {
+        const auto rowEntries = static_cast<std::size_t>(width) * 4U;
+        std::vector<std::uint16_t> rgba16(rowEntries * static_cast<std::size_t>(height));
+        SwsContext* const nativeScaler = sws_getContext(width,
+                                                        height,
+                                                        static_cast<AVPixelFormat>(frame->format),
+                                                        width,
+                                                        height,
+                                                        AV_PIX_FMT_RGBA64LE,
+                                                        SWS_BILINEAR,
+                                                        nullptr,
+                                                        nullptr,
+                                                        nullptr);
+        if (nativeScaler == nullptr) {
+            setError(error, "Could not create high-depth image converter.");
+            return false;
+        }
+        std::uint8_t* nativeDestination[4] = {
+            reinterpret_cast<std::uint8_t*>(rgba16.data()), nullptr, nullptr, nullptr};
+        const int nativeStride[4] = {static_cast<int>(rowEntries * 2U), 0, 0, 0};
+        const int nativeScaled = sws_scale(
+            nativeScaler, frame->data, frame->linesize, 0, height, nativeDestination, nativeStride);
+        sws_freeContext(nativeScaler);
+        if (nativeScaled != height) {
+            setError(error, "High-depth image conversion failed.");
+            return false;
+        }
+        image->rgba16 = std::move(rgba16);
+    }
     return true;
 }
 

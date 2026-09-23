@@ -1,0 +1,633 @@
+#include "PairMetricsDecodeSession.h"
+
+#include "dvs/platform/SourceIdentityService.h"
+#include "dvs/platform/WindowsPaths.h"
+
+#include "AvRaii.h"
+#include "FrameTimelineIndex.h"
+
+extern "C" {
+#include <libavutil/error.h>
+#include <libavutil/mathematics.h>
+#include <libavutil/pixdesc.h>
+}
+
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace dvs::media::internal {
+namespace {
+
+struct InterruptState final {
+    const std::atomic<bool>* requested = nullptr;
+    const std::atomic<bool>* externalRequested = nullptr;
+};
+
+// Mirrors SoftwareDecoder/SignatureDecodeSession bounded exact-seek back-off.
+constexpr std::size_t kMaximumSeekOrdinalBackOff = 16U;
+
+struct TimelineIndexCancellationState final {
+    const std::atomic<bool>* request = nullptr;
+    const std::atomic<bool>* interrupted = nullptr;
+};
+
+[[nodiscard]] int interruptCallback(void* const opaque) noexcept {
+    const auto* const state = static_cast<const InterruptState*>(opaque);
+    if (state == nullptr) {
+        return 0;
+    }
+    const auto requested = [](const std::atomic<bool>* const flag) {
+        return flag != nullptr && flag->load(std::memory_order_acquire);
+    };
+    return requested(state->requested) || requested(state->externalRequested) ? 1 : 0;
+}
+
+[[nodiscard]] bool timelineIndexCancellationRequested(const void* const opaque) noexcept {
+    const auto* const state = static_cast<const TimelineIndexCancellationState*>(opaque);
+    if (state == nullptr) {
+        return false;
+    }
+    const auto requested = [](const std::atomic<bool>* const flag) {
+        return flag != nullptr && flag->load(std::memory_order_acquire);
+    };
+    return requested(state->request) || requested(state->interrupted);
+}
+
+[[nodiscard]] domain::MediaError decodeError(const domain::MediaErrorCode code,
+                                             const domain::SourceId sourceId,
+                                             std::string detail,
+                                             const bool recoverable = false) {
+    return domain::makeMediaError(
+        code, domain::MediaOperation::kMediaDecode, sourceId, recoverable, std::move(detail));
+}
+
+[[nodiscard]] std::string ffmpegError(const int errorCode) {
+    char buffer[AV_ERROR_MAX_STRING_SIZE]{};
+    if (av_strerror(errorCode, buffer, sizeof(buffer)) < 0) {
+        return "FFmpeg returned error " + std::to_string(errorCode) + ".";
+    }
+    return std::string{buffer};
+}
+
+[[nodiscard]] int swsColorSpace(const domain::ColorMetadata& metadata) noexcept {
+    return metadata.matrix == domain::ColorMatrix::kBt709 ? SWS_CS_ITU709 : SWS_CS_ITU601;
+}
+
+// Converts one decoded frame to tightly packed RGBA8. The conversion mirrors the display
+// normalization contract (matrix/range-correct swscale) so measured differences describe the
+// pixels the renderer shows; both sources of a pair always use the same conversion.
+[[nodiscard]] std::optional<PairMetricsDecodeSession::RgbaFrame>
+rgbaFromFrame(const AVFrame& frame,
+              SwsContextPtr& scaleContext,
+              const domain::ColorMetadata& colorMetadata) noexcept {
+    if (frame.width <= 0 || frame.height <= 0) {
+        return std::nullopt;
+    }
+    const auto sourceFormat = static_cast<AVPixelFormat>(frame.format);
+    if (sourceFormat == AV_PIX_FMT_NONE || sws_isSupportedInput(sourceFormat) == 0) {
+        return std::nullopt;
+    }
+
+    PairMetricsDecodeSession::RgbaFrame output;
+    output.width = static_cast<std::uint32_t>(frame.width);
+    output.height = static_cast<std::uint32_t>(frame.height);
+    const std::size_t stride = static_cast<std::size_t>(frame.width) * 4U;
+    output.pixels.assign(stride * static_cast<std::size_t>(frame.height), 0U);
+
+    SwsContext* const scaled = sws_getCachedContext(scaleContext.release(),
+                                                    frame.width,
+                                                    frame.height,
+                                                    sourceFormat,
+                                                    frame.width,
+                                                    frame.height,
+                                                    AV_PIX_FMT_RGBA,
+                                                    SWS_BILINEAR,
+                                                    nullptr,
+                                                    nullptr,
+                                                    nullptr);
+    scaleContext.reset(scaled);
+    if (scaleContext == nullptr) {
+        return std::nullopt;
+    }
+    const AVPixFmtDescriptor* const sourcePixelDescriptor = av_pix_fmt_desc_get(sourceFormat);
+    const bool sourceRgb = sourcePixelDescriptor != nullptr &&
+                           (sourcePixelDescriptor->flags & AV_PIX_FMT_FLAG_RGB) != 0;
+    const int* const coefficients = sws_getCoefficients(swsColorSpace(colorMetadata));
+    const int sourceFullRange = sourceRgb || frame.color_range == AVCOL_RANGE_JPEG ? 1 : 0;
+    // RGBA output is always full range; the pair-metrics contract measures display-converted
+    // values, so the destination range is intentionally independent of the source declaration.
+    if (coefficients == nullptr || sws_setColorspaceDetails(scaleContext.get(),
+                                                            coefficients,
+                                                            sourceFullRange,
+                                                            coefficients,
+                                                            1,
+                                                            0,
+                                                            1 << 16,
+                                                            1 << 16) < 0) {
+        return std::nullopt;
+    }
+
+    std::array<std::uint8_t*, 4U> destinationData{output.pixels.data(), nullptr, nullptr, nullptr};
+    std::array<int, 4U> destinationLines{static_cast<int>(stride), 0, 0, 0};
+    const int rows = sws_scale(scaleContext.get(),
+                               frame.data,
+                               frame.linesize,
+                               0,
+                               frame.height,
+                               destinationData.data(),
+                               destinationLines.data());
+    if (rows != frame.height) {
+        return std::nullopt;
+    }
+    return output;
+}
+
+} // namespace
+
+class PairMetricsDecodeSession::Impl final {
+public:
+    Impl(const domain::SourceId sourceIdValue, domain::MediaDescriptor descriptorValue)
+        : sourceId(sourceIdValue), descriptor(std::move(descriptorValue)),
+          interruptState{.requested = &interrupted} {}
+
+    domain::SourceId sourceId;
+    domain::MediaDescriptor descriptor;
+    std::atomic<bool> interrupted = false;
+    InterruptState interruptState;
+    AvFormatContextPtr format;
+    AvCodecContextPtr codec;
+    AvPacketPtr packet;
+    AvFramePtr frame;
+    SwsContextPtr scaleContext;
+    int streamIndex = -1;
+    AVRational timeBase{};
+    std::shared_ptr<const std::vector<std::int64_t>> presentationTimestamps;
+    std::optional<domain::FrameId> lastReturnedFrame;
+    bool packetPending = false;
+    bool inputEnded = false;
+    bool flushSubmitted = false;
+    bool sequentialReady = false;
+    bool opened = false;
+};
+
+PairMetricsDecodeSession::PairMetricsDecodeSession(const domain::SourceId sourceId,
+                                                   domain::MediaDescriptor descriptor)
+    : impl_(std::make_unique<Impl>(sourceId, std::move(descriptor))) {}
+
+PairMetricsDecodeSession::~PairMetricsDecodeSession() {
+    close();
+}
+
+domain::Status PairMetricsDecodeSession::open(const std::atomic<bool>& cancellationRequested) {
+    close();
+    impl_->interrupted.store(cancellationRequested.load(std::memory_order_acquire),
+                             std::memory_order_release);
+    if (cancellationRequested.load(std::memory_order_acquire)) {
+        return domain::Status::failure(decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
+                                                   impl_->sourceId,
+                                                   "Pair-metrics decoder open was canceled.",
+                                                   true));
+    }
+    if (!impl_->descriptor.sourceIdentity.has_value() ||
+        !impl_->descriptor.sourceIdentity->isComplete()) {
+        return domain::Status::failure(
+            decodeError(domain::MediaErrorCode::kInvalidMediaDescriptor,
+                        impl_->sourceId,
+                        "A pair-metrics decoder requires a complete probed source identity."));
+    }
+
+    const auto identity =
+        platform::SourceIdentityService::verify(impl_->descriptor.normalizedPath,
+                                                *impl_->descriptor.sourceIdentity,
+                                                impl_->sourceId,
+                                                domain::MediaOperation::kMediaDecode);
+    if (!identity) {
+        return identity;
+    }
+    const auto normalizedPath =
+        platform::WindowsPaths::absolutePath(impl_->descriptor.normalizedPath);
+    if (!normalizedPath) {
+        return domain::Status::failure(decodeError(domain::MediaErrorCode::kMediaOpenFailed,
+                                                   impl_->sourceId,
+                                                   "Could not normalize the source path: " +
+                                                       normalizedPath.error().technicalDetail));
+    }
+    const std::u8string pathUtf8 = normalizedPath.value().u8string();
+    const std::string inputUrl{reinterpret_cast<const char*>(pathUtf8.data()), pathUtf8.size()};
+
+    AVFormatContext* rawFormat = avformat_alloc_context();
+    if (rawFormat == nullptr) {
+        return domain::Status::failure(
+            decodeError(domain::MediaErrorCode::kMediaOpenFailed,
+                        impl_->sourceId,
+                        "FFmpeg could not allocate a pair-metrics format context."));
+    }
+    rawFormat->interrupt_callback.callback = interruptCallback;
+    rawFormat->interrupt_callback.opaque = &impl_->interruptState;
+    const int openResult = avformat_open_input(&rawFormat, inputUrl.c_str(), nullptr, nullptr);
+    if (openResult < 0) {
+        if (rawFormat != nullptr) {
+            avformat_close_input(&rawFormat);
+        }
+        return domain::Status::failure(
+            decodeError(domain::MediaErrorCode::kMediaOpenFailed,
+                        impl_->sourceId,
+                        "FFmpeg could not open the pair-metrics source: " + ffmpegError(openResult),
+                        true));
+    }
+    AvFormatContextPtr openedFormat{rawFormat};
+
+    const int streamInfoResult = avformat_find_stream_info(openedFormat.get(), nullptr);
+    if (streamInfoResult < 0) {
+        return domain::Status::failure(
+            decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
+                        impl_->sourceId,
+                        "FFmpeg could not read pair-metrics stream information: " +
+                            ffmpegError(streamInfoResult),
+                        true));
+    }
+    const int selectedStream =
+        av_find_best_stream(openedFormat.get(), AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    if (selectedStream < 0 ||
+        static_cast<unsigned int>(selectedStream) >= openedFormat->nb_streams) {
+        return domain::Status::failure(
+            decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
+                        impl_->sourceId,
+                        "The pair-metrics source has no readable video stream.",
+                        true));
+    }
+    const AVStream* const stream = openedFormat->streams[selectedStream];
+    if (stream == nullptr || stream->codecpar == nullptr || stream->codecpar->width <= 0 ||
+        stream->codecpar->height <= 0) {
+        return domain::Status::failure(
+            decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
+                        impl_->sourceId,
+                        "The selected pair-metrics video stream is incomplete."));
+    }
+    if (static_cast<std::uint32_t>(stream->codecpar->width) != impl_->descriptor.extent.width ||
+        static_cast<std::uint32_t>(stream->codecpar->height) != impl_->descriptor.extent.height) {
+        return domain::Status::failure(
+            decodeError(domain::MediaErrorCode::kSourceFingerprintMismatch,
+                        impl_->sourceId,
+                        "Pair-metrics source geometry changed after media probing.",
+                        true));
+    }
+
+    const AVCodec* const decoder = avcodec_find_decoder(stream->codecpar->codec_id);
+    if (decoder == nullptr) {
+        return domain::Status::failure(
+            decodeError(domain::MediaErrorCode::kUnsupportedCodec,
+                        impl_->sourceId,
+                        "FFmpeg has no pair-metrics decoder for the source codec.",
+                        true));
+    }
+    AvCodecContextPtr openedCodec{avcodec_alloc_context3(decoder)};
+    if (openedCodec == nullptr) {
+        return domain::Status::failure(
+            decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
+                        impl_->sourceId,
+                        "FFmpeg could not allocate a pair-metrics codec context."));
+    }
+    const int parameterResult = avcodec_parameters_to_context(openedCodec.get(), stream->codecpar);
+    if (parameterResult < 0) {
+        return domain::Status::failure(
+            decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
+                        impl_->sourceId,
+                        "FFmpeg could not transfer pair-metrics codec parameters: " +
+                            ffmpegError(parameterResult)));
+    }
+    const int codecOpenResult = avcodec_open2(openedCodec.get(), decoder, nullptr);
+    if (codecOpenResult < 0) {
+        return domain::Status::failure(decodeError(
+            domain::MediaErrorCode::kMediaDecodeFailed,
+            impl_->sourceId,
+            "FFmpeg could not open the pair-metrics decoder: " + ffmpegError(codecOpenResult),
+            true));
+    }
+
+    impl_->format = std::move(openedFormat);
+    impl_->codec = std::move(openedCodec);
+    impl_->streamIndex = selectedStream;
+    impl_->timeBase = stream->time_base;
+    impl_->opened = true;
+
+    TimelineIndexCancellationState indexCancellation{
+        .request = &cancellationRequested,
+        .interrupted = &impl_->interrupted,
+    };
+    auto timestamps = buildPresentationTimestampIndex(TimestampIndexRequest{
+        .sourcePath = impl_->descriptor.normalizedPath,
+        .sourceId = impl_->sourceId,
+        .operation = domain::MediaOperation::kMediaDecode,
+        .expectedFrameCount = impl_->descriptor.frameCount.value,
+        .sourceIdentity = impl_->descriptor.sourceIdentity,
+        .streamIndex = selectedStream,
+        .timeBase =
+            TimelineRational{
+                .numerator = stream->time_base.num,
+                .denominator = stream->time_base.den,
+            },
+        .cancellation =
+            TimelineCancellation{
+                .isRequested = timelineIndexCancellationRequested,
+                .context = &indexCancellation,
+            },
+    });
+    if (!timestamps) {
+        close();
+        return domain::Status::failure(timestamps.error());
+    }
+    impl_->presentationTimestamps = std::move(timestamps).value();
+    impl_->interrupted.store(false, std::memory_order_release);
+    return domain::Status::success();
+}
+
+domain::Result<PairMetricsDecodeSession::RgbaFrame>
+PairMetricsDecodeSession::decodeRgba(const domain::FrameId frameId,
+                                     const std::atomic<bool>& cancellationRequested) {
+    const bool sequential = impl_->sequentialReady && impl_->lastReturnedFrame.has_value() &&
+                            frameId.isValid() &&
+                            frameId.value() == impl_->lastReturnedFrame->value() + 1;
+    auto result = decodeInternal(frameId, cancellationRequested, sequential, true);
+    if (!result) {
+        impl_->sequentialReady = false;
+    }
+    return result;
+}
+
+void PairMetricsDecodeSession::requestInterrupt() noexcept {
+    impl_->interrupted.store(true, std::memory_order_release);
+}
+
+void PairMetricsDecodeSession::close() noexcept {
+    impl_->scaleContext.reset();
+    impl_->frame.reset();
+    impl_->packet.reset();
+    impl_->codec.reset();
+    impl_->format.reset();
+    impl_->presentationTimestamps.reset();
+    impl_->streamIndex = -1;
+    impl_->lastReturnedFrame.reset();
+    impl_->packetPending = false;
+    impl_->inputEnded = false;
+    impl_->flushSubmitted = false;
+    impl_->sequentialReady = false;
+    impl_->opened = false;
+}
+
+bool PairMetricsDecodeSession::matches(const domain::MediaDescriptor& descriptor) const noexcept {
+    if (!impl_->opened) {
+        return false;
+    }
+    return impl_->descriptor.normalizedPath == descriptor.normalizedPath &&
+           impl_->descriptor.extent.width == descriptor.extent.width &&
+           impl_->descriptor.extent.height == descriptor.extent.height &&
+           impl_->descriptor.frameCount.value == descriptor.frameCount.value;
+}
+
+bool PairMetricsDecodeSession::isOpen() const noexcept {
+    return impl_->opened;
+}
+
+domain::Result<PairMetricsDecodeSession::RgbaFrame>
+PairMetricsDecodeSession::decodeInternal(const domain::FrameId frameId,
+                                         const std::atomic<bool>& cancellationRequested,
+                                         const bool continueSequentially,
+                                         const bool allowTimelineRecovery,
+                                         const std::size_t seekOrdinalBackOff) {
+    impl_->interrupted.store(cancellationRequested.load(std::memory_order_acquire),
+                             std::memory_order_release);
+    if (cancellationRequested.load(std::memory_order_acquire)) {
+        return domain::Result<RgbaFrame>::failure(
+            decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
+                        impl_->sourceId,
+                        "Pair-metrics decoding was canceled.",
+                        true));
+    }
+    if (!impl_->opened || impl_->format == nullptr || impl_->codec == nullptr) {
+        return domain::Result<RgbaFrame>::failure(
+            decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
+                        impl_->sourceId,
+                        "Pair-metrics decoder is not open."));
+    }
+    if (!frameId.isValid() || frameId.value() >= impl_->descriptor.frameCount.value) {
+        return domain::Result<RgbaFrame>::failure(
+            decodeError(domain::MediaErrorCode::kInvalidFrameId,
+                        impl_->sourceId,
+                        "Requested pair-metrics frame is outside the source timeline."));
+    }
+    if (!impl_->presentationTimestamps) {
+        return domain::Result<RgbaFrame>::failure(
+            decodeError(domain::MediaErrorCode::kFrameTimelineInvalid,
+                        impl_->sourceId,
+                        "Pair-metrics decoder has no presentation timestamp index.",
+                        true));
+    }
+    const std::int64_t targetTimestamp =
+        (*impl_->presentationTimestamps)[static_cast<std::size_t>(frameId.value())];
+    if (!continueSequentially) {
+        const auto seekOrdinal = static_cast<std::size_t>(
+            frameId.value() - static_cast<std::int64_t>(seekOrdinalBackOff));
+        const std::int64_t seekTimestamp = (*impl_->presentationTimestamps)[seekOrdinal];
+        const int seekResult = av_seek_frame(
+            impl_->format.get(), impl_->streamIndex, seekTimestamp, AVSEEK_FLAG_BACKWARD);
+        if (seekResult < 0) {
+            return domain::Result<RgbaFrame>::failure(decodeError(
+                domain::MediaErrorCode::kMediaDecodeFailed,
+                impl_->sourceId,
+                "FFmpeg could not seek for pair-metrics extraction: " + ffmpegError(seekResult),
+                true));
+        }
+        avcodec_flush_buffers(impl_->codec.get());
+        if (impl_->packet != nullptr) {
+            av_packet_unref(impl_->packet.get());
+        }
+        if (impl_->frame != nullptr) {
+            av_frame_unref(impl_->frame.get());
+        }
+        impl_->packetPending = false;
+        impl_->inputEnded = false;
+        impl_->flushSubmitted = false;
+        impl_->lastReturnedFrame.reset();
+        impl_->sequentialReady = false;
+    }
+    if (impl_->packet == nullptr) {
+        impl_->packet.reset(av_packet_alloc());
+    }
+    if (impl_->frame == nullptr) {
+        impl_->frame.reset(av_frame_alloc());
+    }
+    if (impl_->packet == nullptr || impl_->frame == nullptr) {
+        return domain::Result<RgbaFrame>::failure(
+            decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
+                        impl_->sourceId,
+                        "FFmpeg could not allocate pair-metrics decode buffers."));
+    }
+
+    for (;;) {
+        if (cancellationRequested.load(std::memory_order_acquire) ||
+            impl_->interrupted.load(std::memory_order_acquire)) {
+            return domain::Result<RgbaFrame>::failure(
+                decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
+                            impl_->sourceId,
+                            "Pair-metrics decoding was interrupted.",
+                            true));
+        }
+        const int receiveResult = avcodec_receive_frame(impl_->codec.get(), impl_->frame.get());
+        if (receiveResult == 0) {
+            const std::int64_t timestamp = impl_->frame->best_effort_timestamp != AV_NOPTS_VALUE
+                                               ? impl_->frame->best_effort_timestamp
+                                               : impl_->frame->pts;
+            if (timestamp == AV_NOPTS_VALUE) {
+                return domain::Result<RgbaFrame>::failure(
+                    decodeError(domain::MediaErrorCode::kFrameTimelineInvalid,
+                                impl_->sourceId,
+                                "A pair-metrics frame has no presentation timestamp.",
+                                true));
+            }
+            if (timestamp < targetTimestamp) {
+                av_frame_unref(impl_->frame.get());
+                continue;
+            }
+            if (timestamp > targetTimestamp) {
+                if (!continueSequentially && allowTimelineRecovery) {
+                    const std::size_t nextBackOff =
+                        seekOrdinalBackOff == 0U ? 1U : seekOrdinalBackOff * 2U;
+                    if (nextBackOff <= kMaximumSeekOrdinalBackOff &&
+                        static_cast<std::int64_t>(nextBackOff) <= frameId.value()) {
+                        return decodeInternal(
+                            frameId, cancellationRequested, false, true, nextBackOff);
+                    }
+                    if (seekOrdinalBackOff == 0U) {
+                        const domain::Status reopened = open(cancellationRequested);
+                        if (!reopened) {
+                            return domain::Result<RgbaFrame>::failure(reopened.error());
+                        }
+                        return decodeInternal(frameId, cancellationRequested, false, false);
+                    }
+                }
+                return domain::Result<RgbaFrame>::failure(
+                    decodeError(domain::MediaErrorCode::kFrameTimelineInvalid,
+                                impl_->sourceId,
+                                "The indexed timestamp did not identify pair-metrics frame " +
+                                    std::to_string(frameId.value()) + ".",
+                                true));
+            }
+            const auto pixelFormat = static_cast<AVPixelFormat>(impl_->frame->format);
+            if (pixelFormat == AV_PIX_FMT_NONE || sws_isSupportedInput(pixelFormat) == 0) {
+                return domain::Result<RgbaFrame>::failure(
+                    decodeError(domain::MediaErrorCode::kUnsupportedPixelFormat,
+                                impl_->sourceId,
+                                "The pair-metrics decoder produced a format that cannot be "
+                                "converted to RGBA.",
+                                true));
+            }
+            if (impl_->frame->width <= 0 || impl_->frame->height <= 0 ||
+                static_cast<std::uint32_t>(impl_->frame->width) != impl_->descriptor.extent.width ||
+                static_cast<std::uint32_t>(impl_->frame->height) !=
+                    impl_->descriptor.extent.height) {
+                return domain::Result<RgbaFrame>::failure(
+                    decodeError(domain::MediaErrorCode::kSourceFingerprintMismatch,
+                                impl_->sourceId,
+                                "Decoded pair-metrics geometry changed after media probing.",
+                                true));
+            }
+            auto rgba =
+                rgbaFromFrame(*impl_->frame, impl_->scaleContext, impl_->descriptor.colorMetadata);
+            av_frame_unref(impl_->frame.get());
+            if (!rgba.has_value()) {
+                return domain::Result<RgbaFrame>::failure(
+                    decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
+                                impl_->sourceId,
+                                "Decoder-owned pixels could not be converted for pair metrics."));
+            }
+            impl_->lastReturnedFrame = frameId;
+            impl_->sequentialReady = true;
+            return domain::Result<RgbaFrame>::success(std::move(*rgba));
+        }
+        if (receiveResult != AVERROR(EAGAIN) && receiveResult != AVERROR_EOF) {
+            return domain::Result<RgbaFrame>::failure(decodeError(
+                domain::MediaErrorCode::kMediaDecodeFailed,
+                impl_->sourceId,
+                "FFmpeg could not receive a pair-metrics frame: " + ffmpegError(receiveResult),
+                true));
+        }
+        if (receiveResult == AVERROR_EOF) {
+            break;
+        }
+        if (!impl_->packetPending && !impl_->inputEnded) {
+            for (;;) {
+                const int readResult = av_read_frame(impl_->format.get(), impl_->packet.get());
+                if (readResult == AVERROR_EOF) {
+                    impl_->inputEnded = true;
+                    break;
+                }
+                if (readResult < 0) {
+                    return domain::Result<RgbaFrame>::failure(decodeError(
+                        domain::MediaErrorCode::kMediaDecodeFailed,
+                        impl_->sourceId,
+                        "FFmpeg could not read a pair-metrics packet: " + ffmpegError(readResult),
+                        true));
+                }
+                if (impl_->packet->stream_index == impl_->streamIndex) {
+                    impl_->packetPending = true;
+                    break;
+                }
+                av_packet_unref(impl_->packet.get());
+            }
+        }
+        if (impl_->packetPending) {
+            const int sendResult = avcodec_send_packet(impl_->codec.get(), impl_->packet.get());
+            if (sendResult == 0) {
+                av_packet_unref(impl_->packet.get());
+                impl_->packetPending = false;
+                continue;
+            }
+            if (sendResult == AVERROR(EAGAIN)) {
+                continue;
+            }
+            return domain::Result<RgbaFrame>::failure(decodeError(
+                domain::MediaErrorCode::kMediaDecodeFailed,
+                impl_->sourceId,
+                "FFmpeg could not submit a pair-metrics packet: " + ffmpegError(sendResult),
+                true));
+        }
+        if (impl_->inputEnded && !impl_->flushSubmitted) {
+            const int flushResult = avcodec_send_packet(impl_->codec.get(), nullptr);
+            if (flushResult == 0 || flushResult == AVERROR_EOF) {
+                impl_->flushSubmitted = true;
+                continue;
+            }
+            if (flushResult == AVERROR(EAGAIN)) {
+                continue;
+            }
+            return domain::Result<RgbaFrame>::failure(decodeError(
+                domain::MediaErrorCode::kMediaDecodeFailed,
+                impl_->sourceId,
+                "FFmpeg could not flush the pair-metrics decoder: " + ffmpegError(flushResult),
+                true));
+        }
+        if (impl_->inputEnded && impl_->flushSubmitted) {
+            return domain::Result<RgbaFrame>::failure(
+                decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
+                            impl_->sourceId,
+                            "Pair-metrics decoder requested input after flush.",
+                            true));
+        }
+    }
+    return domain::Result<RgbaFrame>::failure(
+        decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
+                    impl_->sourceId,
+                    "Pair-metrics decoding ended before the requested frame.",
+                    true));
+}
+
+} // namespace dvs::media::internal

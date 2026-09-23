@@ -3248,16 +3248,17 @@ TEST(MainQmlContractTests, ImageWorkspaceAlphaWorkflowAndBackgroundShortcutsCont
     EXPECT_EQ(imageWorkspace->property("backgroundMode").toInt(), 1);
     EXPECT_TRUE(alphaBadge->isVisible());
 
-    // ModeChip click toggles: clicking Alpha Gray chip sets viewMode 1, clicking again resets to 0.
-    auto* const alphaGrayChip =
+    // View-mode menu item toggles: triggering "Alpha Gray" sets viewMode 1, triggering
+    // again returns to RGBA (the chip was promoted into the 观察 dropdown menu).
+    auto* const alphaGrayItem =
         harness.root->findChild<QQuickItem*>(QStringLiteral("imageViewAlphaGray"));
-    ASSERT_NE(alphaGrayChip, nullptr);
-    ASSERT_TRUE(QMetaObject::invokeMethod(alphaGrayChip, "clicked"));
+    ASSERT_NE(alphaGrayItem, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(alphaGrayItem, "triggered"));
     harness.settle();
     EXPECT_EQ(harness.imageReview.viewMode(), 1);
     EXPECT_TRUE(alphaBadge->isVisible());
 
-    ASSERT_TRUE(QMetaObject::invokeMethod(alphaGrayChip, "clicked"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(alphaGrayItem, "triggered"));
     harness.settle();
     EXPECT_EQ(harness.imageReview.viewMode(), 0);
     EXPECT_TRUE(alphaBadge->isVisible());

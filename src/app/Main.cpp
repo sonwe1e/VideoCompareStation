@@ -410,11 +410,13 @@ runDesktop(int& argc,
         return dvs::app::reportFatalStartup("DVS_UI_LOAD_FAILED", smokeMode);
     }
     desktop.setIssueRecordRepository(runtime->issueRecordRepository());
-    if (!desktop.load(*runtime->controller(),
-                      *runtime->preferences(),
-                      [&runtime](dvs::ui::ComparisonSurface& surface) {
-                          return runtime->attachSurface(surface);
-                      })) {
+    if (!desktop.load(
+            *runtime->controller(),
+            *runtime->preferences(),
+            [&runtime](dvs::ui::ComparisonSurface& surface) {
+                return runtime->attachSurface(surface);
+            },
+            runtime->pairMetrics())) {
         std::cerr << "DVS_UI_LOAD_FAILED\n";
         if (runtime) {
             runtime->prepareForSceneGraphRelease();
@@ -2749,6 +2751,7 @@ int main(int argc, char* argv[]) {
     dvs::ui::ImageReviewController::setProcessStillImageLoader(
         [](const QByteArray& bytes,
            QImage* image,
+           QImage* nativeImage,
            dvs::ui::StillImageSourceInfo* info,
            std::string* error) {
             if (bytes.isEmpty() || image == nullptr) {
@@ -2779,6 +2782,20 @@ int main(int argc, char* argv[]) {
                                  still.width * 4,
                                  QImage::Format_RGBA8888);
             *image = decoded.copy();
+            // Original-depth sidecar for sources beyond 8 bits: RGBA64LE is byte-identical to
+            // QImage::Format_RGBA64 on little-endian, and a constructed QImage never pads rows
+            // for 8-byte-per-pixel formats, so a single copy fills it.
+            if (nativeImage != nullptr &&
+                still.rgba16.size() == static_cast<std::size_t>(still.width) *
+                                           static_cast<std::size_t>(still.height) * 4U) {
+                QImage native(still.width, still.height, QImage::Format_RGBA64);
+                if (!native.isNull()) {
+                    std::memcpy(native.bits(),
+                                still.rgba16.data(),
+                                still.rgba16.size() * sizeof(std::uint16_t));
+                    *nativeImage = std::move(native);
+                }
+            }
             if (info != nullptr) {
                 // The RGBA8 buffer is a display conversion; keep the source provenance so
                 // the UI never implies the sampled values are the file's original codes.

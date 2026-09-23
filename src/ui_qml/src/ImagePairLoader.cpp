@@ -75,6 +75,7 @@ private:
 [[nodiscard]] bool loadImageFromDisk(const QUrl& url,
                                      const ImagePairLoader::DecodePolicy& policy,
                                      QImage* image,
+                                     QImage* nativeImage,
                                      StillImageSourceInfo* info,
                                      QString* identity,
                                      QString* error,
@@ -139,11 +140,12 @@ private:
         return false;
     }
     QImage decoded;
+    QImage nativeDecoded;
     bool decodedOk = false;
     std::string decoderError;
     if (policy.loader) {
         try {
-            decodedOk = policy.loader(bytes, &decoded, info, &decoderError);
+            decodedOk = policy.loader(bytes, &decoded, &nativeDecoded, info, &decoderError);
         } catch (const std::exception& exception) {
             decoderError = exception.what();
             decodedOk = false;
@@ -213,6 +215,9 @@ private:
             (!info->sourceFormat.isEmpty() && info->sourceFormat != QStringLiteral("rgba"));
     }
     *image = std::move(decoded);
+    if (nativeImage != nullptr) {
+        *nativeImage = std::move(nativeDecoded);
+    }
     return true;
 }
 [[nodiscard]] int clampChannel(const int value) noexcept {
@@ -373,9 +378,11 @@ struct RequestState final {
     ImagePairLoader::DifferenceHandler differenceHandler;
 };
 // Decoded image plus its source provenance, cached together so a cache hit never loses the
-// metadata that separates display-converted samples from original code values.
+// metadata that separates display-converted samples from original code values. The native
+// RGBA64 sidecar rides along for high-bit-depth sources.
 struct DecodedCacheEntry final {
     QImage image;
+    QImage native;
     StillImageSourceInfo info;
 };
 struct LoadJob final {
@@ -647,6 +654,7 @@ private:
                 if (!loadImageFromDisk(job.primaryUrl,
                                        job.policy,
                                        &result.primary,
+                                       &result.primaryNative,
                                        &result.primaryInfo,
                                        &identity,
                                        &error,
@@ -659,6 +667,7 @@ private:
                 }
             } else if (job.cachedPrimary.has_value()) {
                 result.primary = job.cachedPrimary->image;
+                result.primaryNative = job.cachedPrimary->native;
                 result.primaryInfo = job.cachedPrimary->info;
             }
             if (!state->cancelled.load() && result.error.isEmpty() &&
@@ -668,6 +677,7 @@ private:
                 if (!loadImageFromDisk(job.secondaryUrl,
                                        job.policy,
                                        &result.secondary,
+                                       &result.secondaryNative,
                                        &result.secondaryInfo,
                                        &identity,
                                        &error,
@@ -680,6 +690,7 @@ private:
                 }
             } else if (job.cachedSecondary.has_value()) {
                 result.secondary = job.cachedSecondary->image;
+                result.secondaryNative = job.cachedSecondary->native;
                 result.secondaryInfo = job.cachedSecondary->info;
             }
         }
@@ -713,12 +724,14 @@ private:
         }
         if (result.succeeded()) {
             if (!result.primary.isNull() && !result.primaryIdentity.isEmpty()) {
-                cache_.put(cacheKey(result.primaryIdentity),
-                           DecodedCacheEntry{result.primary, result.primaryInfo});
+                cache_.put(
+                    cacheKey(result.primaryIdentity),
+                    DecodedCacheEntry{result.primary, result.primaryNative, result.primaryInfo});
             }
             if (!result.secondary.isNull() && !result.secondaryIdentity.isEmpty()) {
                 cache_.put(cacheKey(result.secondaryIdentity),
-                           DecodedCacheEntry{result.secondary, result.secondaryInfo});
+                           DecodedCacheEntry{
+                               result.secondary, result.secondaryNative, result.secondaryInfo});
             }
         }
         if (!state->prefetch && state->resultHandler) {
@@ -748,7 +761,10 @@ private:
     QThreadPool pool_;
     ByteLruCache<DecodedCacheEntry> cache_{
         128LL * 1024LL * 1024LL, [](const DecodedCacheEntry& entry) {
-            return static_cast<qint64>(entry.image.sizeInBytes());
+            // The RGBA64 sidecar is part of the entry's footprint, not an extra cache: a
+            // high-bit-depth image that no longer fits evicts itself as one unit.
+            return static_cast<qint64>(entry.image.sizeInBytes()) +
+                   static_cast<qint64>(entry.native.sizeInBytes());
         }};
     std::map<quint64, std::shared_ptr<RequestState>> active_;
     std::map<quint64, std::function<void()>> pending_;

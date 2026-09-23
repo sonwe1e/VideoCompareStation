@@ -8,6 +8,8 @@ add_library(
         src/FrameSetAssembler.cpp
         src/FrameTimelineIndex.cpp
         src/MediaProbe.cpp
+        src/PairMetricsDecodeSession.cpp
+        src/PairMetricsService.cpp
         src/SourceDecodeActor.cpp
         src/SourceFrameCache.cpp
         src/SoftwareDecoder.cpp

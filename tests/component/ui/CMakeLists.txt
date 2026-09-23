@@ -4,6 +4,7 @@ add_executable(
     dvs_ui_component_tests
     DiagnosticsProbeTests.cpp
     IssueLogControllerTests.cpp
+    PairMetricsControllerTests.cpp
     ReviewControllerTests.cpp
     "${PROJECT_SOURCE_DIR}/src/app/RuntimeBridges.cpp"
     ReviewPreferencesControllerTests.cpp

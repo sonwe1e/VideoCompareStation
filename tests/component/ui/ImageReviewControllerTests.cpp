@@ -390,6 +390,59 @@ writeBytes(const QTemporaryDir& directory, const QString& name, const QByteArray
     return QUrl::fromLocalFile(path);
 }
 
+TEST(ImageReviewControllerTests, HighBitDepthSourceReportsNativeSampleValues) {
+    // I-02: a >8-bit source must sample its original-depth code values, not only the
+    // quantized 8-bit display buffer.
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QUrl url = writeBytes(directory, QStringLiteral("deep.bin"), QByteArrayLiteral("rgb48"));
+    ASSERT_FALSE(url.isEmpty());
+    ScopedStillImageLoader loader{[](const QByteArray& bytes,
+                                     QImage* image,
+                                     QImage* nativeImage,
+                                     dvs::ui::StillImageSourceInfo* info,
+                                     std::string*) {
+        if (!bytes.startsWith("rgb48")) {
+            return false;
+        }
+        *image = solidImage(QColor(128, 128, 128));
+        if (info != nullptr) {
+            info->bitDepth = 16;
+            info->channels = 3;
+            info->hasAlpha = false;
+            info->sourceFormat = QStringLiteral("rgb48le");
+            info->displayConverted = true;
+        }
+        if (nativeImage != nullptr) {
+            QImage native(4, 4, QImage::Format_RGBA64);
+            if (!native.isNull()) {
+                // QImage::fill is ambiguous for QRgba64 on this Qt; fill the buffer directly.
+                auto* const samples = reinterpret_cast<QRgba64*>(native.bits());
+                std::fill(samples,
+                          samples + native.sizeInBytes() / sizeof(QRgba64),
+                          qRgba64(40000, 30000, 20000, 60000));
+            }
+            *nativeImage = std::move(native);
+        }
+        return true;
+    }};
+    ImageReviewController controller;
+    ASSERT_GT(controller.requestOpenPrimary(url), 0);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    EXPECT_EQ(controller.primaryBitDepth(), 16);
+
+    const QVariantMap pixel = controller.samplePixel(ImageReviewController::PrimarySlot, 0, 0);
+    ASSERT_TRUE(pixel.value(QStringLiteral("valid")).toBool());
+    // 8-bit display values stay available…
+    EXPECT_EQ(pixel.value(QStringLiteral("r")).toInt(), 128);
+    // …alongside the unquantized 16-bit code values.
+    EXPECT_EQ(pixel.value(QStringLiteral("nativeBitDepth")).toInt(), 16);
+    EXPECT_EQ(pixel.value(QStringLiteral("r16")).toInt(), 40000);
+    EXPECT_EQ(pixel.value(QStringLiteral("g16")).toInt(), 30000);
+    EXPECT_EQ(pixel.value(QStringLiteral("b16")).toInt(), 20000);
+    EXPECT_EQ(pixel.value(QStringLiteral("a16")).toInt(), 60000);
+}
+
 TEST(ImageReviewControllerTests, AsyncPairOpenReturnsImmediatelyAndRejectsLateN) {
     ensureCoreApplication();
     QTemporaryDir directory;
@@ -405,18 +458,20 @@ TEST(ImageReviewControllerTests, AsyncPairOpenReturnsImmediatelyAndRejectsLateN)
     ASSERT_FALSE(slowA.isEmpty() || slowB.isEmpty() || fastA.isEmpty() || fastB.isEmpty());
 
     std::atomic<int> loaderCalls{0};
-    ScopedStillImageLoader loader{
-        [&loaderCalls](
-            const QByteArray& bytes, QImage* image, dvs::ui::StillImageSourceInfo*, std::string*) {
-            ++loaderCalls;
-            if (bytes.startsWith("slow")) {
-                QThread::msleep(250); // Missing on GUI thread in a passing T4.
-            }
-            QImage decoded(2, 2, QImage::Format_RGBA8888);
-            decoded.fill(bytes.startsWith("slow") ? QColor(10, 20, 30) : QColor(200, 210, 220));
-            *image = decoded;
-            return true;
-        }};
+    ScopedStillImageLoader loader{[&loaderCalls](const QByteArray& bytes,
+                                                 QImage* image,
+                                                 QImage*,
+                                                 dvs::ui::StillImageSourceInfo*,
+                                                 std::string*) {
+        ++loaderCalls;
+        if (bytes.startsWith("slow")) {
+            QThread::msleep(250); // Missing on GUI thread in a passing T4.
+        }
+        QImage decoded(2, 2, QImage::Format_RGBA8888);
+        decoded.fill(bytes.startsWith("slow") ? QColor(10, 20, 30) : QColor(200, 210, 220));
+        *image = decoded;
+        return true;
+    }};
 
     ImageReviewController controller;
     QElapsedTimer acceptanceTimer;
@@ -459,6 +514,7 @@ TEST(ImageReviewControllerTests, AsyncCandidateFailureKeepsPreviousPair) {
 
     ScopedStillImageLoader loader{[](const QByteArray& bytes,
                                      QImage* image,
+                                     QImage*,
                                      dvs::ui::StillImageSourceInfo*,
                                      std::string* error) {
         if (bytes.startsWith("bad")) {
@@ -503,15 +559,18 @@ TEST(ImageReviewControllerTests, CancelledOrClosedOpenNeverPublishesLateResult) 
     ASSERT_FALSE(slowA.isEmpty() || slowB.isEmpty());
 
     std::atomic<bool> started{false};
-    ScopedStillImageLoader loader{
-        [&started](const QByteArray&, QImage* image, dvs::ui::StillImageSourceInfo*, std::string*) {
-            started.store(true);
-            QThread::msleep(200);
-            QImage decoded(2, 2, QImage::Format_RGBA8888);
-            decoded.fill(Qt::red);
-            *image = decoded;
-            return true;
-        }};
+    ScopedStillImageLoader loader{[&started](const QByteArray&,
+                                             QImage* image,
+                                             QImage*,
+                                             dvs::ui::StillImageSourceInfo*,
+                                             std::string*) {
+        started.store(true);
+        QThread::msleep(200);
+        QImage decoded(2, 2, QImage::Format_RGBA8888);
+        decoded.fill(Qt::red);
+        *image = decoded;
+        return true;
+    }};
 
     ImageReviewController controller;
     const int requestId = controller.requestOpenPair(slowA, slowB, 5);
@@ -568,15 +627,17 @@ TEST(ImageReviewControllerTests, PrefetchWarmsCacheAndUserOpenUsesIt) {
     ASSERT_FALSE(left.isEmpty() || right.isEmpty());
 
     std::atomic<int> decodeCalls{0};
-    ScopedStillImageLoader loader{
-        [&decodeCalls](
-            const QByteArray& bytes, QImage* image, dvs::ui::StillImageSourceInfo*, std::string*) {
-            ++decodeCalls;
-            QImage decoded(2, 2, QImage::Format_RGBA8888);
-            decoded.fill(bytes.startsWith("prefetchA") ? QColor(1, 2, 3) : QColor(4, 5, 6));
-            *image = decoded;
-            return true;
-        }};
+    ScopedStillImageLoader loader{[&decodeCalls](const QByteArray& bytes,
+                                                 QImage* image,
+                                                 QImage*,
+                                                 dvs::ui::StillImageSourceInfo*,
+                                                 std::string*) {
+        ++decodeCalls;
+        QImage decoded(2, 2, QImage::Format_RGBA8888);
+        decoded.fill(bytes.startsWith("prefetchA") ? QColor(1, 2, 3) : QColor(4, 5, 6));
+        *image = decoded;
+        return true;
+    }};
 
     ImageReviewController controller;
     controller.clearAsyncCaches();
@@ -604,11 +665,14 @@ TEST(ImageReviewControllerTests, BlockedDifferenceCannotPublishOrCacheAfterNewPa
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
     const QUrl next = writeBytes(directory, QStringLiteral("new.bin"), "new");
-    ScopedStillImageLoader decoder{
-        [](const QByteArray&, QImage* image, dvs::ui::StillImageSourceInfo*, std::string*) {
-            *image = solidImage(QColor(30, 40, 50));
-            return true;
-        }};
+    ScopedStillImageLoader decoder{[](const QByteArray&,
+                                      QImage* image,
+                                      QImage*,
+                                      dvs::ui::StillImageSourceInfo*,
+                                      std::string*) {
+        *image = solidImage(QColor(30, 40, 50));
+        return true;
+    }};
     ImageReviewController controller;
     ASSERT_TRUE(
         controller.openPairImages(solidImage(Qt::black), "oldA", solidImage(Qt::white), "oldB", 1));
@@ -695,17 +759,20 @@ TEST(ImageReviewControllerTests, LoaderCoalescesQueueAndCancellationSkipsSecondI
     std::atomic<int> bCalls{0};
     dvs::ui::ImagePairLoader loader;
     dvs::ui::ImagePairLoader::DecodePolicy policy;
-    policy.loader =
-        [&](const QByteArray& bytes, QImage* image, dvs::ui::StillImageSourceInfo*, std::string*) {
-            if (bytes == "a" && ++aCalls <= 2) {
-                entered.release();
-                release.tryAcquire(1, 8000);
-            } else if (bytes == "b") {
-                ++bCalls;
-            }
-            *image = solidImage(Qt::green);
-            return true;
-        };
+    policy.loader = [&](const QByteArray& bytes,
+                        QImage* image,
+                        QImage*,
+                        dvs::ui::StillImageSourceInfo*,
+                        std::string*) {
+        if (bytes == "a" && ++aCalls <= 2) {
+            entered.release();
+            release.tryAcquire(1, 8000);
+        } else if (bytes == "b") {
+            ++bCalls;
+        }
+        *image = solidImage(Qt::green);
+        return true;
+    };
     int completions = 0;
     const auto handler = [&](dvs::ui::ImagePairLoader::Result) { ++completions; };
     const quint64 first = loader.requestPair(a, b, 0, policy, handler);
@@ -744,15 +811,17 @@ TEST(ImageReviewControllerTests, HeaderProbeRejectsOversizedBeforeDecoderThrows)
         *size = QSize(20000, 20000);
         return true;
     });
-    ScopedStillImageLoader loader{
-        [&decoderCalls](
-            const QByteArray&, QImage* image, dvs::ui::StillImageSourceInfo*, std::string*) {
-            ++decoderCalls;
-            QImage decoded(2, 2, QImage::Format_RGBA8888);
-            decoded.fill(Qt::green);
-            *image = decoded;
-            return true;
-        }};
+    ScopedStillImageLoader loader{[&decoderCalls](const QByteArray&,
+                                                  QImage* image,
+                                                  QImage*,
+                                                  dvs::ui::StillImageSourceInfo*,
+                                                  std::string*) {
+        ++decoderCalls;
+        QImage decoded(2, 2, QImage::Format_RGBA8888);
+        decoded.fill(Qt::green);
+        *image = decoded;
+        return true;
+    }};
 
     ImageReviewController controller;
     ASSERT_GT(controller.requestOpenPair(hugeA, hugeB, 1), 0);
@@ -865,6 +934,7 @@ TEST(ImageReviewControllerTests, AsyncSingleImageOpensRetainProvenanceIncludingC
     std::atomic<int> loaderCalls{0};
     ScopedStillImageLoader loader{[&loaderCalls](const QByteArray& bytes,
                                                  QImage* image,
+                                                 QImage*,
                                                  dvs::ui::StillImageSourceInfo* info,
                                                  std::string*) {
         ++loaderCalls;

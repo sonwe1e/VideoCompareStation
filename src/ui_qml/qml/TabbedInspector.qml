@@ -14,6 +14,9 @@ Rectangle {
 
     required property var controller
     required property var preferences
+    // V-07 pair-metrics projection from the composition root; optional so standalone QML
+    // tests (no metrics service) keep instantiating the inspector without warnings.
+    property var metrics: null
     required property var session
     required property color borderColor
     required property color primaryTextColor
@@ -68,6 +71,23 @@ Rectangle {
                 return index;
         }
         return 0;
+    }
+
+    // Read-only rows for the current frame's pair metrics. The metric identity comes from the
+    // service (cpu-rgb-absolute-v1); the UI never invents its own formula name or numbers.
+    function metricsRows() {
+        if (control.metrics === null || !control.metrics.available)
+            return [];
+        if (control.metrics.errorKey.length > 0)
+            return [[qsTr("状态"), qsTr("指标不可用")]];
+        if (!control.metrics.hasCurrentSample)
+            return [[qsTr("状态"), control.metrics.sampling ? qsTr("采样中…") : qsTr("未采样")]];
+        if (!control.metrics.currentComparable)
+            return [[qsTr("状态"), qsTr("当前帧不可比")]];
+        const psnr = control.metrics.currentPsnrDb >= 999.0 ? qsTr("∞（完全一致）") : control.metrics.currentPsnrDb.toFixed(2) + qsTr(" dB");
+        const ratioPercent = control.metrics.currentMismatchRatio * 100.0;
+        const ratioText = ratioPercent >= 0.01 ? ratioPercent.toFixed(2) + "%" : "< 0.01%";
+        return [[qsTr("平均绝对差 MAE"), control.metrics.currentMae.toFixed(3)], [qsTr("均方误差 MSE"), control.metrics.currentMse.toFixed(3)], [qsTr("峰值信噪比 PSNR"), psnr], [qsTr("最大绝对差"), control.metrics.currentMaxAbsError.toFixed(0)], [qsTr("坏点占比（阈值 %1）").arg(control.metrics.threshold), ratioText], [qsTr("坏点数"), String(control.metrics.currentMismatchPixels)], [qsTr("参与像素"), String(control.metrics.currentPixelCount)]];
     }
 
     component DarkTabButton: TabButton {
@@ -289,7 +309,13 @@ Rectangle {
                     value: control.differenceThresholdCode
                     editable: true
                     Accessible.name: qsTr("差异阈值（8 位码值）")
-                    onValueModified: control.differenceThresholdCodeRequested(value)
+                    onValueModified: {
+                        control.differenceThresholdCodeRequested(value);
+                        // The same threshold drives the GPU highlight and the CPU bad-pixel
+                        // count so "阈值" means one thing across both readouts.
+                        if (control.metrics !== null)
+                            control.metrics.threshold = value;
+                    }
                 }
                 ToolbarCombo {
                     visible: control.differenceMode && control.differenceThresholdEnabled
@@ -297,6 +323,64 @@ Rectangle {
                     model: [qsTr("亮度"), qsTr("任一通道"), qsTr("全部通道")]
                     currentIndex: control.differenceThresholdPolicy
                     onActivated: index => control.differenceThresholdPolicyRequested(index)
+                }
+
+                // V-07 current-frame pair metrics. Read-only projection of the independent
+                // metrics service; values arrive asynchronously, so transient states
+                // ("sampling", "not comparable") are honest instead of stale numbers.
+                Rectangle {
+                    objectName: "metricsReadoutBlock"
+
+                    visible: control.differenceMode && control.metrics !== null && control.metrics.available
+                    width: parent.width
+                    height: visible ? metricsColumn.implicitHeight + 20 : 0
+                    radius: 6
+                    color: "#0f1622"
+                    border.color: control.borderColor
+                    border.width: 1
+
+                    Column {
+                        id: metricsColumn
+
+                        spacing: 3
+                        x: 10
+                        y: 10
+                        width: parent.width - 20
+
+                        Label {
+                            text: qsTr("当前帧指标 · %1").arg(control.metrics ? control.metrics.metricId : "")
+                            color: control.mutedTextColor
+                            font.pixelSize: 11
+                        }
+
+                        Repeater {
+                            model: control.metricsRows()
+
+                            delegate: RowLayout {
+                                id: metricsRow
+
+                                required property var modelData
+
+                                width: metricsColumn.width
+                                spacing: 8
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: metricsRow.modelData[0]
+                                    color: control.mutedTextColor
+                                    font.pixelSize: 11
+                                    elide: Text.ElideRight
+                                }
+
+                                Label {
+                                    text: metricsRow.modelData[1]
+                                    color: control.primaryTextColor
+                                    font.pixelSize: 11
+                                    font.family: "Consolas"
+                                }
+                            }
+                        }
+                    }
                 }
 
                 Label {

@@ -47,8 +47,13 @@ class ImagePairLoader final : public QObject {
 public:
     // Reads raw file bytes into an RGBA8 QImage plus its source provenance. Injected by the
     // app composition root so a minimal deployment does not depend on Qt imageformat plugins.
-    using ImageLoader =
-        std::function<bool(const QByteArray&, QImage*, StillImageSourceInfo*, std::string*)>;
+    // nativeImage, when non-null on return, carries the original-depth RGBA64 samples (empty
+    // for 8-bit sources whose display buffer already holds the original code values).
+    using ImageLoader = std::function<bool(const QByteArray&,
+                                           QImage* image,
+                                           QImage* nativeImage,
+                                           StillImageSourceInfo* info,
+                                           std::string* error)>;
     // Returns true when the header dimensions could be read without decoding. False means
     // the header is unknown; the loader then falls back to the decoded image's dimensions.
     using ImageProbe = std::function<bool(const QByteArray&, QSize*)>;
@@ -66,6 +71,9 @@ public:
         bool secondaryOnly = false;
         QImage primary;
         QImage secondary;
+        // Original-depth RGBA64 sidecars; null QImages when the source is 8-bit.
+        QImage primaryNative;
+        QImage secondaryNative;
         StillImageSourceInfo primaryInfo;
         StillImageSourceInfo secondaryInfo;
         QString primaryLabel;

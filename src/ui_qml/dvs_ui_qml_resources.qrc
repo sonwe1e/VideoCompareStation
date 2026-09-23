@@ -29,6 +29,7 @@
         <file alias="FolderPairSidebar.qml">qml/FolderPairSidebar.qml</file>
         <file alias="ActiveSourceStrip.qml">qml/ActiveSourceStrip.qml</file>
         <file alias="CompareModeBar.qml">qml/CompareModeBar.qml</file>
+        <file alias="MetricTimelineLane.qml">qml/MetricTimelineLane.qml</file>
         <file alias="PlayerOsc.qml">qml/PlayerOsc.qml</file>
         <!-- Viewer-native commands and timeline chrome. -->
         <file alias="ReviewContextMenu.qml">qml/ReviewContextMenu.qml</file>

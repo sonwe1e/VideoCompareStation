@@ -17,6 +17,10 @@ struct StillImage final {
     // below describe the decoded frame the buffer was converted from, so callers can tell
     // display values from original code values (e.g. a 16-bit PGM shows as 8-bit RGBA here).
     std::vector<std::uint8_t> rgba;
+    // Original-depth sidecar: tightly packed row-major RGBA64LE (16 bits per component),
+    // produced only when the decoded source carries more than 8 bits per component. Empty
+    // for 8-bit sources, where the display buffer already holds the original code values.
+    std::vector<std::uint16_t> rgba16;
     // Bits per component of the decoded source frame (8/10/12/16…).
     int sourceBitDepth = 8;
     // Decoded source channel count (1 = gray, 3 = RGB, 4 = RGBA).

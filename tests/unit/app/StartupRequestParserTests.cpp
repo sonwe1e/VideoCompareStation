@@ -11,7 +11,8 @@ namespace dvs::app {
 namespace {
 
 TEST(StartupRequestParserTests, ParsesEmptyLaunch) {
-    const StartupRequestParseResult result = parseStartupRequest({QStringLiteral("CompareStation.exe")});
+    const StartupRequestParseResult result =
+        parseStartupRequest({QStringLiteral("CompareStation.exe")});
 
     ASSERT_TRUE(result);
     EXPECT_EQ(result.request->kind, StartupRequest::Kind::Empty);
@@ -72,8 +73,9 @@ TEST(StartupRequestParserTests, ParsesOneTwoAndThreeBareVideoPaths) {
 }
 
 TEST(StartupRequestParserTests, RejectsAmbiguousOrOutOfRangeArguments) {
-    EXPECT_FALSE(parseStartupRequest(
-        {QStringLiteral("CompareStation.exe"), QStringLiteral("--compare"), QStringLiteral("one.mp4")}));
+    EXPECT_FALSE(parseStartupRequest({QStringLiteral("CompareStation.exe"),
+                                      QStringLiteral("--compare"),
+                                      QStringLiteral("one.mp4")}));
     EXPECT_FALSE(parseStartupRequest({QStringLiteral("CompareStation.exe"),
                                       QStringLiteral("--play"),
                                       QStringLiteral("one.mp4"),
