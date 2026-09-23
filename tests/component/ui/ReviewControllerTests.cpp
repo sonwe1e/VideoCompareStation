@@ -444,6 +444,40 @@ TEST_F(ReviewControllerTests, ReviewsDroppedFilesInCppAndNormalizesUnicodePaths)
     EXPECT_EQ(urls.back().toUrl().toLocalFile(), QFileInfo{sourceBPath}.canonicalFilePath());
 }
 
+TEST_F(ReviewControllerTests, RejectsExtraOrMixedImagesWithoutSilentlyDroppingFiles) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString first = createFile(directory, QStringLiteral("first.png"));
+    const QString second = createFile(directory, QStringLiteral("second.png"));
+    const QString third = createFile(directory, QStringLiteral("third.png"));
+    const QString video = createFile(directory, QStringLiteral("clip.mp4"));
+    ASSERT_FALSE(first.isEmpty());
+    ASSERT_FALSE(second.isEmpty());
+    ASSERT_FALSE(third.isEmpty());
+    ASSERT_FALSE(video.isEmpty());
+
+    auto backend = std::make_shared<FakeBackend>();
+    ReviewController controller{dependenciesFor(backend)};
+    const QUrl firstUrl = QUrl::fromLocalFile(first);
+    const QUrl secondUrl = QUrl::fromLocalFile(second);
+
+    const QVariantMap pair = controller.handleDroppedUrls({firstUrl, secondUrl});
+    EXPECT_TRUE(pair.value(QStringLiteral("accepted")).toBool());
+    EXPECT_EQ(pair.value(QStringLiteral("kind")).toString(), QStringLiteral("images"));
+    EXPECT_EQ(pair.value(QStringLiteral("urls")).toList().size(), 2);
+
+    const QVariantMap extra =
+        controller.handleDroppedUrls({firstUrl, secondUrl, QUrl::fromLocalFile(third)});
+    EXPECT_FALSE(extra.value(QStringLiteral("accepted")).toBool());
+    EXPECT_EQ(extra.value(QStringLiteral("errorKey")).toString(),
+              QStringLiteral("drop-too-many-images"));
+
+    const QVariantMap mixed = controller.handleDroppedUrls({firstUrl, QUrl::fromLocalFile(video)});
+    EXPECT_FALSE(mixed.value(QStringLiteral("accepted")).toBool());
+    EXPECT_EQ(mixed.value(QStringLiteral("errorKey")).toString(),
+              QStringLiteral("drop-mixed-media"));
+}
+
 TEST_F(ReviewControllerTests, FrameAdvanceEmitsFrameStateWithoutBroadStateNotification) {
     auto backend = std::make_shared<FakeBackend>();
     backend->currentSnapshot = readySnapshotWithSources({"C:/media/a.mp4", "C:/media/b.mp4"});

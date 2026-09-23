@@ -2538,13 +2538,20 @@ QVariantMap ReviewController::handleDroppedUrls(const QVariantList& urls) const 
     if (urls.isEmpty()) {
         return rejectedDrop(QStringLiteral("drop-empty"));
     }
+
     if (urls.size() > 3) {
-        return rejectedDrop(QStringLiteral("drop-too-many"));
+        const bool allImages = std::all_of(urls.cbegin(), urls.cend(), [](const QVariant& value) {
+            return isStillImageFile(value.toUrl());
+        });
+        return rejectedDrop(allImages ? QStringLiteral("drop-too-many-images")
+                                      : QStringLiteral("drop-too-many"));
     }
 
     QVariantList normalizedUrls;
     normalizedUrls.reserve(urls.size());
     QSet<QString> uniquePaths;
+    bool allImages = true;
+    bool anyImages = false;
 
     for (const QVariant& value : urls) {
         const LocalFileValidation validated = validateLocalFile(value.toUrl());
@@ -2562,15 +2569,18 @@ QVariantMap ReviewController::handleDroppedUrls(const QVariantList& urls) const 
             return rejectedDrop(QStringLiteral("drop-duplicate"), candidate.filename);
         }
         uniquePaths.insert(comparisonPath);
-        normalizedUrls.push_back(QUrl::fromLocalFile(canonicalPath));
+        const QUrl normalizedUrl = QUrl::fromLocalFile(canonicalPath);
+        const bool image = isStillImageFile(normalizedUrl);
+        allImages = allImages && image;
+        anyImages = anyImages || image;
+        normalizedUrls.push_back(normalizedUrl);
     }
 
-    bool allImages = true;
-    for (const QVariant& value : urls) {
-        if (!isStillImageFile(value.toUrl())) {
-            allImages = false;
-            break;
-        }
+    if (allImages && urls.size() > 2) {
+        return rejectedDrop(QStringLiteral("drop-too-many-images"));
+    }
+    if (anyImages && !allImages) {
+        return rejectedDrop(QStringLiteral("drop-mixed-media"));
     }
 
     return QVariantMap{

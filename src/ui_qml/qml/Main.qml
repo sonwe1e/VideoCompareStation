@@ -1288,8 +1288,16 @@ ApplicationWindow {
     function performImageReview(normalizedUrls) {
         const target = root.stillImageController;
 
-        if (!target || !normalizedUrls || normalizedUrls.length === 0)
+        if (!target)
             return false;
+        if (!normalizedUrls || normalizedUrls.length < 1 || normalizedUrls.length > 2) {
+            const detail = qsTr("一次只能打开一张或两张图片。");
+
+            dropError = detail;
+            showIntentMessage(detail);
+            cancelWorkspaceOpen();
+            return false;
+        }
 
         // New candidate invalidates an older pending one; the visible canvas remains the
 
@@ -1331,6 +1339,20 @@ ApplicationWindow {
         dropError = "";
 
         return true;
+    }
+    function performImagePairSelection(urls) {
+        const selected = urls ? Array.from(urls).filter(url => url && url.toString().length > 0) : [];
+
+        if (selected.length !== 2) {
+            const detail = qsTr("图片对需要恰好两张图片，请重新选择。");
+
+            dropError = detail;
+            showIntentMessage(detail);
+            cancelWorkspaceOpen();
+            return false;
+        }
+
+        return performImageReview(selected);
     }
     function reviewUrls(urls, allowSingleSourceAppend) {
         const reviewed = controller.handleDroppedUrls(urls);
@@ -2653,7 +2675,7 @@ ApplicationWindow {
         onAccepted: {
             const files = selectedFiles && selectedFiles.length > 0 ? selectedFiles : [selectedFile];
 
-            root.performImageReview(files.filter(url => url && url.toString().length > 0));
+            root.performImagePairSelection(files);
         }
         onRejected: root.cancelWorkspaceOpen()
     }
@@ -3186,6 +3208,47 @@ ApplicationWindow {
         }
     }
 
+    Rectangle {
+        id: imageOpenProgress
+        objectName: "imageOpenProgress"
+        visible: root.pendingImageRequestId > 0 && root.dropError.length === 0
+        z: 1090
+        width: progressRow.implicitWidth + 28
+        height: 42
+        radius: 7
+        color: "#f0351f2a"
+        border.color: root.accentColor
+        anchors {
+            top: parent.top
+            topMargin: 18
+            horizontalCenter: parent.horizontalCenter
+        }
+
+        Row {
+            id: progressRow
+            spacing: 10
+            anchors.centerIn: parent
+
+            BusyIndicator {
+                running: imageOpenProgress.visible
+                width: 22
+                height: 22
+            }
+            Text {
+                text: root.pendingImageOpenKind === "append" ? qsTr("正在添加图片…") : qsTr("正在打开图片…")
+                color: root.primaryTextColor
+                anchors.verticalCenter: parent.verticalCenter
+            }
+            ReviewActionButton {
+                text: qsTr("取消")
+                implicitWidth: 58
+                implicitHeight: 28
+                leftPadding: 8
+                rightPadding: 8
+                onClicked: root.cancelWorkspaceOpen()
+            }
+        }
+    }
     Rectangle {
         visible: root.dropError.length > 0
         z: 1100

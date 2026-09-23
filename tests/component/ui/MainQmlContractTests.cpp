@@ -2773,6 +2773,35 @@ TEST(MainQmlContractTests, WorkspaceOpenIntentDoesNotOverrideCommittedWorkspace)
     EXPECT_FALSE(imageWorkspace->property("visible").toBool());
 }
 
+TEST(MainQmlContractTests, InvalidImagePairSelectionKeepsCurrentWorkspace) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    QObject* const session = harness.root->findChild<QObject*>(QStringLiteral("workspaceSession"));
+    ASSERT_NE(session, nullptr);
+
+    const QVariantList oneImage{QUrl{QStringLiteral("file:///first.png")}};
+    QVariantList threeImages = oneImage;
+    threeImages.push_back(QUrl{QStringLiteral("file:///second.png")});
+    threeImages.push_back(QUrl{QStringLiteral("file:///third.png")});
+    const auto rejectsWithoutSwitching = [&](const char* method, const QVariantList& urls) {
+        ASSERT_TRUE(harness.beginWorkspaceOpen(1));
+        QVariant result;
+        ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                              method,
+                                              Q_RETURN_ARG(QVariant, result),
+                                              Q_ARG(QVariant, QVariant{urls})));
+        EXPECT_FALSE(result.toBool());
+        EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 0);
+        EXPECT_EQ(session->property("pendingMedia").toInt(), -1);
+        EXPECT_FALSE(harness.imageReview.hasPrimary());
+        EXPECT_FALSE(harness.root->property("dropError").toString().isEmpty());
+    };
+
+    rejectsWithoutSwitching("performImagePairSelection", oneImage);
+    rejectsWithoutSwitching("performImagePairSelection", threeImages);
+    rejectsWithoutSwitching("performImageReview", threeImages);
+}
+
 TEST(MainQmlContractTests, WorkspaceSwitchPausesAndRetainsVideoSession) {
     WorkspaceHarness harness;
     ASSERT_TRUE(harness.create()) << harness.error;

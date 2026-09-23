@@ -668,7 +668,8 @@ Rectangle {
                 objectName: "imageResampleToggle"
                 checkable: true
                 checked: Boolean(control.imageReview && control.imageReview.resampleAllowed)
-                text: qsTr("重采样·")
+                text: checked ? qsTr("重采样：开") : qsTr("重采样：关")
+                helpText: qsTr("仅当两张图片尺寸不同时使用。\n开启后将 B 缩放到 A 的尺寸再计算差异，结果不再是原尺寸的逐像素比较。")
                 implicitHeight: 30
                 leftPadding: 8
                 rightPadding: 8

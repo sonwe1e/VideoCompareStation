@@ -7,6 +7,10 @@ QtObject {
             return qsTr("没有拖入任何文件。");
         case "drop-too-many":
             return qsTr("最多拖入三个视频文件。");
+        case "drop-too-many-images":
+            return qsTr("一次最多拖入两张图片；请选择两张进行对比。");
+        case "drop-mixed-media":
+            return qsTr("请分别打开图片和视频，不要混合拖入。");
         case "drop-invalid-local":
             return qsTr("只能拖入本地文件。");
         case "drop-missing":
@@ -14,7 +18,7 @@ QtObject {
         case "drop-duplicate":
             return qsTr("同一文件被重复拖入：%1").arg(detail);
         default:
-            return qsTr("拖入的视频无法打开。");
+            return qsTr("拖入的文件无法打开。");
         }
     }
 

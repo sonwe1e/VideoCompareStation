@@ -5,7 +5,7 @@
 
 ## 基线、状态与阅读方法
 
-- 本轮起点：`HEAD @ bee9bad`。以下 2026-09-22 的实现已纳入提交，
+- 本轮起点：`HEAD @ 7299eda`。以下 2026-09-22 的实现已纳入提交，
   发布和硬件验收状态仍分别核对。
 - 2026-09-23 当前工作区：修正播放计数说明；图片 RGB 均值统一为三通道 MAE；
   视频时间精确性同时核对源时间戳；首屏增加双图入口；手动闪烁拖动阈值和窄窗状态栏已调整。
@@ -43,7 +43,7 @@
 | I-06 | 切换大图通道会不会卡 UI？ | P1 | 悬停取样已改为单像素计算，不再等待整图派生缓存；切换显示的大图延迟仍待实测 | `ImageReviewController::channelView`、`samplePixel` |
 | C-01 | GT＋两个 Prediction 如何比较？ | P1 | 用户 2026-09-22 拍板：图片不做三图对比，条目关闭 | `ImageReviewController.h`、`CompareModeBar.qml` |
 | C-02 | 如何找插帧形变、重影、时间跳变？ | P1/P2 | 手动 A/B 切换已加拖动阈值；淡化隐藏；真实素材实窗验收待做 | `ImageWorkspace.qml`：手动切换/同步准星 |
-| U-01 | 不知道从哪里开始、功能藏在哪里 | P1 | 首屏现有视频、单图、双图、文件夹入口；Diff 直达重采样与沉浸控制已接线；实窗验收待做 | `EmptyReviewView.qml`、`Main.qml`、`PlayerOsc.qml` |
+| U-01 | 不知道从哪里开始、功能藏在哪里 | P1 | 首屏入口、Diff 直达重采样与沉浸控制已接线；图片数量和混合拖入的误导已修正；实窗验收待做 | `EmptyReviewView.qml`、`Main.qml`、`PlayerOsc.qml` |
 | A-01 | 改动状态容易漏接或重复拥有 | 随功能推进 | 分层已有；capability 实现仍集中 | `ReviewSessionFacade`、状态所有权说明 |
 | E-01 | 构建反复出错、工具路径失效、重新链接后启动崩溃 | P0 | 已修复，本机开发测试及质量门禁验证完成 | `tools/build/build.ps1`、`env.ps1`、`cmake/CheckMsvcDependencies.cmake` |
 
@@ -236,6 +236,8 @@
   2. 差异图分辨率不一致的禁用提示条中内嵌一键“启用重采样并对比”快捷操作按钮；
   3. 文件夹侧边栏增加首项与末项一键跳转导航函数；
   4. 全屏与纯净模式（`!chromeVisible`）下新增屏幕底边感应唤醒条（`immersiveWakeStrip`），鼠标移至底端平滑滑出悬浮式 `PlayerOsc` 播放控制条，支持沉浸状态下直接拖拽进度与调速，鼠标移开 1.5 秒后自动平滑淡出。
+- **2026-09-23 图片入口修正**：打开图片对要求恰好两张；三张及更多图片、图片与视频混合拖入直接提示，不再只打开前两张或错误进入视频流程。被拒绝的选择不改变当前画布。等待解码时显示进度状态和取消入口。尺寸不同时的重采样开关显示状态，并解释差异计算已缩放 B。
+- **本轮验证**：`ui.ReviewControllerTests` 与 `ui.MainQmlContractTests` 共 70 项通过、4 项既有禁用；`format-check`、全量 `lint` 与最终 QML lint 通过。加载提示仍需在真实大图上检查视觉效果。
 - **验证入口**：`MainQmlContractTests.cpp` 中 `EmptyReviewViewExposesImageAndFolderEntryPoints` 与 `ImmersiveModeBottomEdgeWakesOverlayOsc` 用例已通过验证。
 
 ### A-01 状态所有权与增量维护
