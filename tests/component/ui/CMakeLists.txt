@@ -158,6 +158,20 @@ foreach(dvs_scale_factor ${dvs_dpi_scale_factors})
 endforeach()
 
 set(dvs_wipe_handle_qml_test "${CMAKE_CURRENT_SOURCE_DIR}/qml/tst_wipe_handle.qml")
+add_test(
+    NAME ui.ImageWorkspaceManual
+    COMMAND
+        "$<TARGET_FILE:Qt6::qmltestrunner>"
+        -input "${CMAKE_CURRENT_SOURCE_DIR}/qml/tst_image_workspace_manual.qml"
+)
+set_tests_properties(
+    ui.ImageWorkspaceManual
+    PROPERTIES
+        LABELS "component;ui_qml"
+        TIMEOUT 20
+        RUN_SERIAL TRUE
+        ENVIRONMENT "QSG_RHI_BACKEND=d3d11;QSG_RENDER_LOOP=basic;QT_QUICK_CONTROLS_STYLE=Basic"
+)
 foreach(dvs_scale_factor ${dvs_dpi_scale_factors})
     string(REPLACE "." "_" dvs_scale_name "${dvs_scale_factor}")
     add_test(
