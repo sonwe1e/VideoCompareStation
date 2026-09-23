@@ -350,7 +350,7 @@ ApplicationWindow {
             return qsTr("无法对比第 %1 帧，因为 %2 缺失。").arg(Number(currentFrame) + 1).arg(missing.join(qsTr(" 和 ")));
 
         if (differenceMode && exactPlaneMode && selectedDifferenceExactness !== 0)
-            return qsTr("逐像素精确差异要求分辨率、像素格式、位深、色彩元数据一致，并使用 ExactIndex 映射。");
+            return qsTr("逐像素精确差异要求分辨率、像素格式、位深、色彩元数据一致，且两侧使用 ExactIndex 映射并具有相同时间戳。");
 
         return "";
     }
@@ -2835,6 +2835,7 @@ ApplicationWindow {
         anchors.fill: viewportFrame
         onOpenVideosRequested: root.requestOpenVideos()
         onOpenImageRequested: root.requestImageOpen()
+        onOpenImagePairRequested: root.requestImagePairOpen()
         onCompareFoldersRequested: root.requestCompareFolders()
     }
     TimelineThumbnailCache {

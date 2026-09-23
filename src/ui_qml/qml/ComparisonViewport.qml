@@ -99,7 +99,7 @@ Rectangle {
         if (exactness === 2)
             return qsTr("已空间重采样");
         if (exactness === 3)
-            return qsTr("已时间对齐");
+            return qsTr("帧映射或时间戳不同");
         return qsTr("不可用");
     }
 
@@ -111,10 +111,20 @@ Rectangle {
         if (!edge || Number(edge.dimensionsAvailable) !== 1)
             return qsTr("比较语义不可用");
         const parts = [];
-        parts.push(Number(edge.temporalExact) === 1 ? qsTr("时间 精确索引") : qsTr("时间 已对齐"));
+        parts.push(Number(edge.temporalExact) === 1 ? qsTr("时间 索引及时间戳一致") : qsTr("时间 映射或时间戳不同"));
         parts.push(Number(edge.spatialExact) === 1 ? qsTr("空间 原尺寸") : qsTr("空间 已重采样"));
         parts.push(Number(edge.pixelExact) === 1 ? qsTr("像素 原码值") : qsTr("像素 显示空间转换"));
         return parts.join(" · ");
+    }
+
+    function comparisonFrameTimesLabel(edge) {
+        if (!edge || Number(edge.dimensionsAvailable) !== 1)
+            return "";
+        const firstFrame = Number(edge.firstSourceFrame);
+        const secondFrame = Number(edge.secondSourceFrame);
+        if (firstFrame < 0 || secondFrame < 0)
+            return "";
+        return qsTr("源 %1 第 %2 帧 / %3 ms；源 %4 第 %5 帧 / %6 ms").arg(Number(edge.firstSourceId) + 1).arg(firstFrame + 1).arg((Number(edge.firstPresentationTimeUs) / 1000).toFixed(2)).arg(Number(edge.secondSourceId) + 1).arg(secondFrame + 1).arg((Number(edge.secondPresentationTimeUs) / 1000).toFixed(2));
     }
 
     function surfaceLabelGeometry(index) {
@@ -380,7 +390,7 @@ Rectangle {
         objectName: "analysisControlsChrome"
         visible: control.chromeVisible && (control.differenceMode || dualVideoSurface.roiEnabled)
         z: 30
-        width: analysisStatus.implicitWidth + 18
+        width: Math.min(Math.max(0, parent.width - 24), analysisStatus.implicitWidth + 18)
         height: 28
         radius: 5
         color: "#dc171e2a"
@@ -391,6 +401,12 @@ Rectangle {
             bottom: parent.bottom
             bottomMargin: 12
         }
+
+        HoverHandler {
+            id: analysisChromeHover
+        }
+        ToolTip.visible: analysisChromeHover.hovered && control.differenceMode
+        ToolTip.text: control.comparisonFrameTimesLabel(control.selectedDifferenceEdge)
 
         Label {
             id: analysisStatus
@@ -405,6 +421,8 @@ Rectangle {
             }
             color: control.selectedDifferenceExactness === 0 ? "#86efac" : "#facc15"
             font.pixelSize: 11
+            width: Math.max(0, parent.width - 18)
+            elide: Text.ElideRight
             anchors.centerIn: parent
         }
     }

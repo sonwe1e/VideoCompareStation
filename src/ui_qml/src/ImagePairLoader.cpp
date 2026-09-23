@@ -304,7 +304,7 @@ computeDifference(QImage primary,
         result.error = QObject::tr("Could not allocate difference image.");
         return result;
     }
-    qint64 sum = 0;
+    qint64 rgbAbsSum = 0;
     qint64 alphaSum = 0;
     qint64 alphaChanged = 0;
     int peak = 0;
@@ -324,11 +324,12 @@ computeDifference(QImage primary,
         for (int x = 0; x < left.width(); ++x) {
             const QRgb a = leftLine[x];
             const QRgb b = rightLine[x];
-            const int delta = std::max({std::abs(qRed(a) - qRed(b)),
-                                        std::abs(qGreen(a) - qGreen(b)),
-                                        std::abs(qBlue(a) - qBlue(b))});
+            const int redDelta = std::abs(qRed(a) - qRed(b));
+            const int greenDelta = std::abs(qGreen(a) - qGreen(b));
+            const int blueDelta = std::abs(qBlue(a) - qBlue(b));
+            const int delta = std::max({redDelta, greenDelta, blueDelta});
             const int alphaDelta = std::abs(qAlpha(a) - qAlpha(b));
-            sum += delta;
+            rgbAbsSum += redDelta + greenDelta + blueDelta;
             peak = std::max(peak, delta);
             peakAlpha = std::max(peakAlpha, alphaDelta);
             // Alpha statistics cover the straight (unassociated) alpha of both decoded
@@ -361,7 +362,8 @@ computeDifference(QImage primary,
         static_cast<qint64>(left.width()) * static_cast<qint64>(left.height());
     result.image = std::move(output);
     result.maxAbsDifference = peak;
-    result.meanAbsDifference = pixelCount > 0 ? static_cast<double>(sum) / pixelCount : 0.0;
+    result.meanAbsDifference =
+        pixelCount > 0 ? static_cast<double>(rgbAbsSum) / (pixelCount * 3) : 0.0;
     result.peakAlphaDifference = peakAlpha;
     result.meanAlphaDifference = pixelCount > 0 ? static_cast<double>(alphaSum) / pixelCount : 0.0;
     result.alphaChangedPixels = alphaChanged;

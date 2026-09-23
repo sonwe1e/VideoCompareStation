@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
 import QtQuick.Window
 import "VcsTheme.js" as Theme
 
@@ -286,6 +287,7 @@ Rectangle {
         property string title: ""
         property string titlePath: ""
         property point dragStart: Qt.point(0, 0)
+        property bool dragActive: false
         property point pressStart: Qt.point(0, 0)
 
         readonly property alias image: previewImage
@@ -481,15 +483,19 @@ Rectangle {
             hoverEnabled: true
             acceptedButtons: Qt.LeftButton | Qt.MiddleButton
             onClicked: mouse => {
-                if (mouse.button === Qt.LeftButton && control.compareMode === 0 && control.hasPair && Math.hypot(mouse.x - viewport.pressStart.x, mouse.y - viewport.pressStart.y) < 5)
+                if (mouse.button === Qt.LeftButton && control.compareMode === 0 && control.hasPair && !viewport.dragActive)
                     control.toggleSinglePairSource();
             }
             onPositionChanged: mouse => {
                 if (pressed && control.imageReview) {
-                    const dx = (mouse.x - viewport.dragStart.x) / Math.max(1, width);
-                    const dy = (mouse.y - viewport.dragStart.y) / Math.max(1, height);
-                    control.imageReview.panBy(dx, dy);
-                    viewport.dragStart = Qt.point(mouse.x, mouse.y);
+                    if (!viewport.dragActive && Math.hypot(mouse.x - viewport.pressStart.x, mouse.y - viewport.pressStart.y) >= 5)
+                        viewport.dragActive = true;
+                    if (viewport.dragActive) {
+                        const dx = (mouse.x - viewport.dragStart.x) / Math.max(1, width);
+                        const dy = (mouse.y - viewport.dragStart.y) / Math.max(1, height);
+                        control.imageReview.panBy(dx, dy);
+                        viewport.dragStart = Qt.point(mouse.x, mouse.y);
+                    }
                 }
                 control.applyHover(viewport, mouse.x, mouse.y, viewport.slot);
             }
@@ -501,9 +507,14 @@ Rectangle {
             onPressed: mouse => {
                 viewport.dragStart = Qt.point(mouse.x, mouse.y);
                 viewport.pressStart = Qt.point(mouse.x, mouse.y);
+                viewport.dragActive = false;
                 control.forceActiveFocus();
             }
             onDoubleClicked: mouse => {
+                // Qt sends a click before the double-click event. Keep the selected A/B
+                // source unchanged when the user invokes the zoom gesture.
+                if (mouse.button === Qt.LeftButton && control.compareMode === 0 && control.hasPair)
+                    control.toggleSinglePairSource();
                 if (control.trueSize) {
                     control.trueSize = false;
                     if (control.imageReview)
@@ -1102,15 +1113,14 @@ Rectangle {
                         if (alphaMode)
                             text = qsTr("%1 · 峰值 α %2 · 均值 α %3 · 变化像素 %4 · 统计 %5").arg(modeName).arg(control.imageReview.peakAlphaDifference).arg(control.imageReview.meanAlphaDifference.toFixed(2)).arg(control.imageReview.alphaChangedPixels).arg(control.imageReview.diffScopeText);
                         else
-                            text = qsTr("%1 · 峰值 %2 · 均值 %3 · 统计 %4").arg(modeName).arg(control.imageReview.maxAbsDifference).arg(control.imageReview.meanAbsDifference.toFixed(2)).arg(control.imageReview.diffScopeText);
+                            text = qsTr("%1 · 峰值 %2 · RGB MAE %3 · 统计 %4").arg(modeName).arg(control.imageReview.maxAbsDifference).arg(control.imageReview.meanAbsDifference.toFixed(2)).arg(control.imageReview.diffScopeText);
                         if (control.imageReview.diffResampled)
                             text += " · " + qsTr("已重采样对齐");
                         if (control.imageReview.alphaDifferenceOnly)
                             text += " · " + qsTr("RGB 相同，alpha 存在差异");
-                        // I-01/I-05 semantics: stats are raw per-pixel max channel deltas
-                        // (unamplified); only the difference image is amplified ×4 for
-                        // visibility, and the definition intentionally differs from the video
-                        // side's RGB-mean metrics.
+                        // The peak uses the largest RGB channel delta; RGB MAE averages all
+                        // three channel deltas, matching the video metric. Only the difference
+                        // image is amplified ×4 for visibility.
                         if (!alphaMode)
                             text += " · " + qsTr("图放大 ×4，统计为原始值");
                         return text;
@@ -1574,11 +1584,15 @@ Rectangle {
             bottom: parent.bottom
         }
 
-        Row {
-            spacing: 18
+        RowLayout {
+            id: statusDetails
+            objectName: "imageStatusDetails"
+            spacing: 12
             anchors {
                 left: parent.left
                 leftMargin: 14
+                right: statusHints.left
+                rightMargin: 12
                 verticalCenter: parent.verticalCenter
             }
 
@@ -1586,6 +1600,7 @@ Rectangle {
                 text: qsTr("缩放 %1%（%2）").arg(control.displayPercent).arg(control.displayPercentMode)
                 color: Theme.primaryText
                 font.pixelSize: 12
+                Layout.maximumWidth: implicitWidth
             }
             // T6: current folder-row context — which row is committed, whether one side
             // is missing, and whether the pairing is ambiguous.
@@ -1607,8 +1622,12 @@ Rectangle {
                 }
                 color: Theme.mutedText
                 font.pixelSize: 12
+                elide: Text.ElideRight
+                Layout.maximumWidth: Math.min(implicitWidth, 160)
             }
             Text {
+                id: pixelReadout
+                objectName: "imagePixelReadout"
                 visible: Boolean(control.cursorPixel && control.cursorPixel.valid)
                 text: {
                     if (!control.cursorPixel || !control.cursorPixel.valid)
@@ -1627,16 +1646,29 @@ Rectangle {
                 color: Theme.primaryText
                 font.pixelSize: 12
                 font.family: "Consolas"
+                elide: Text.ElideRight
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                HoverHandler {
+                    id: pixelReadoutHover
+                }
+                ToolTip.visible: pixelReadoutHover.hovered && pixelReadout.truncated
+                ToolTip.text: text
             }
             Text {
                 visible: control.errorText.length > 0
                 text: control.errorText
                 color: Theme.error
                 font.pixelSize: 12
+                elide: Text.ElideRight
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
             }
         }
 
         Row {
+            id: statusHints
+            objectName: "imageStatusHints"
             anchors {
                 right: parent.right
                 rightMargin: 14
@@ -1674,6 +1706,7 @@ Rectangle {
             }
 
             Text {
+                visible: statusBar.width >= 1120
                 text: qsTr("滚轮缩放 · 拖动平移")
                 color: Theme.mutedText
                 font.pixelSize: 11

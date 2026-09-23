@@ -43,7 +43,8 @@ comparisonExactnessDimensions(const SessionSnapshot& snapshot,
     // Each dimension is derived independently so the projection never hides one
     // inexactness reason behind another (T6 multi-dimensional trust state).
     dimensions.temporalExact = presentedA->matchKind == FrameMatchKind::ExactIndex &&
-                               presentedB->matchKind == FrameMatchKind::ExactIndex;
+                               presentedB->matchKind == FrameMatchKind::ExactIndex &&
+                               presentedA->presentationTime == presentedB->presentationTime;
     const domain::MediaDescriptor& descriptorA = sourceA->descriptor;
     const domain::MediaDescriptor& descriptorB = sourceB->descriptor;
     dimensions.spatialExact = descriptorA.extent == descriptorB.extent &&

@@ -5,8 +5,11 @@
 
 ## 基线、状态与阅读方法
 
-- 已提交基线：`main @ c30886b`。以下 2026-09-22 的实现已纳入该提交，
+- 本轮起点：`HEAD @ bee9bad`。以下 2026-09-22 的实现已纳入提交，
   发布和硬件验收状态仍分别核对。
+- 2026-09-23 当前工作区：修正播放计数说明；图片 RGB 均值统一为三通道 MAE；
+  视频时间精确性同时核对源时间戳；首屏增加双图入口；手动闪烁拖动阈值和窄窗状态栏已调整。
+  对应定向测试 108 项通过、4 项原有禁用；硬件和 Release 验收仍待做。
 - 2026-09-22 第二轮实现：V-07 视频指标全链路（`PairMetrics.h` 端口、
   `PairMetricsService`/`PairMetricsDecodeSession` 独立解码服务、`PairMetricsController` GUI 投影、
   检查器读数 + OSC 摘要 + 时间轴指标泳道）；I-02 高位深 sidecar 取样；I-03 对话框补 `*.pam`；
@@ -25,24 +28,24 @@
 
 | ID | 用户问题 | 优先级 | 当次状态 | 先检查 |
 |---|---|---|---|---|
-| V-01 | 是素材卡顿，还是播放器没有跟上？ | P0 | 基线缺当前控件接线；工作区已接线，统计含义待验证 | `Main.qml` → `PlayerOsc.qml`；`RenderAckRelay.cpp` |
+| V-01 | 是素材卡顿，还是播放器没有跟上？ | P0 | 已接线并修正计数解释；真实负载下统计含义待验证 | `Main.qml` → `PlayerOsc.qml`；`RenderAckRelay.cpp` |
 | V-02 | 倍速／过载时为何变慢或突然追赶？ | P0 | 两种策略已有；2 秒阈值和实际体验待验证 | `PlaybackCoordinator::playbackTargetAt` |
-| V-03 | 30/60 fps、VFR 比较是否同一时刻？ | P0 | 索引／偏移／锚点已有；时间对应语义待完善 | `MultiSourceFrameProvider.cpp`、`ComparisonExactness.cpp` |
+| V-03 | 30/60 fps、VFR 比较是否同一时刻？ | P0 | 精确性增加源 PTS 一致条件并显示双源帧号/时间；完整时间映射待完善 | `MultiSourceFrameProvider.cpp`、`ComparisonExactness.cpp` |
 | V-04 | 常见编码为什么打不开？ | P1 | H.264/HEVC/MPEG-4 Part 2 已有；AV1/VP9 待扩展 | `MediaProbe.cpp`、`vcpkg.json` |
 | V-05 | 显示转换会不会改变细节？ | P0 | 转换及部分精确性标记已有；原始保真路径待扩展 | `SoftwareDecoder.cpp` |
-| V-06 | 未播放位置没有缩略图 | P1 | 工作区已优化：未缓存悬停优雅降级为时间码胶囊与准星线、Jog Wheel 滚轮微调；合约测试已通过 | `TimelineThumbnailPopup.qml`、`TimelineTracks.qml` |
-| V-07 | MAE/PSNR 能否实际用于视频评估？ | P2 | 第二轮工作区已接通全链路（独立解码服务 + 检查器读数 + OSC + 时间轴指标泳道）；组件测试通过，硬件验收待做 | `PairMetrics.*`、`PairMetricsController`、`MetricTimelineLane.qml` |
-| I-01 | 透明度哪里错了，贴背景后怎样？ | P1 | 工作区已完善：A/B/O 快捷键直通切换、高对比棋盘格/黑白底、HUD 观察浮动状态徽标与 QML 合约测试；通过验证 | `ImageWorkspace.qml`、`ImageReviewController` |
-| I-02 | 读数是原始高位深值吗？颜色可信吗？ | P0 | 第二轮工作区已加 RGBA64 sidecar 原始取样（16-bit 用例通过）；ICC 仍无 | `StillImageDecoder.cpp`：`convertFrameToRgba`、`ImageReviewController::samplePixel` |
-| I-03 | PNM 是否所有入口都能打开？ | P1 | 第二轮工作区已补三个对话框的 `*.pam` 过滤器；格式矩阵验收仍待做 | `ImageHeaderProbe.h`、`Main.qml` |
-| I-04 | 点击 100% 后仍是放大状态 | P1 | 工作区已修复：100% 重置 zoom=1.0、适应窗口与双击重置；合约测试已通过 | `ImageWorkspace.qml`：`imageTrueSizeButton` |
-| I-05 | 图片“平均差异”和视频 MAE 是否同义？ | P0 | 第二轮工作区已在统计读数标注“图放大 ×4，统计为原始值”；两套定义仍未统一（迁移 presentation_contract 另立项） | `ImagePairLoader::computeDifference` |
-| I-06 | 切换大图通道会不会卡 UI？ | P1 | 第二轮工作区已为 `channelView` 缓存加互斥（提供器线程与 GUI 并发安全）；大图延迟实测待做 | `ImageReviewController::channelView` |
+| V-06 | 未播放位置没有缩略图 | P1 | 未缓存悬停降级为时间码胶囊与准星线，Jog Wheel 可滚轮微调；合约测试已通过 | `TimelineThumbnailPopup.qml`、`TimelineTracks.qml` |
+| V-07 | MAE/PSNR 能否实际用于视频评估？ | P2 | 独立解码服务、检查器读数、OSC 和时间轴指标泳道已接通；组件测试通过，硬件验收待做 | `PairMetrics.*`、`PairMetricsController`、`MetricTimelineLane.qml` |
+| I-01 | 透明度哪里错了，贴背景后怎样？ | P1 | A/B/O 快捷键、高对比背景与观察状态浮标已实现；QML 合约测试通过 | `ImageWorkspace.qml`、`ImageReviewController` |
+| I-02 | 读数是原始高位深值吗？颜色可信吗？ | P0 | 已加 RGBA64 sidecar 原始取样（16-bit 用例通过）；ICC 仍无 | `StillImageDecoder.cpp`：`convertFrameToRgba`、`ImageReviewController::samplePixel` |
+| I-03 | PNM 是否所有入口都能打开？ | P1 | 三个对话框已补 `*.pam` 过滤器；格式矩阵验收仍待做 | `ImageHeaderProbe.h`、`Main.qml` |
+| I-04 | 点击 100% 后仍是放大状态 | P1 | 100% 重置 zoom=1.0，适应窗口与双击重置；合约测试已通过 | `ImageWorkspace.qml`：`imageTrueSizeButton` |
+| I-05 | 图片“平均差异”和视频 MAE 是否同义？ | P0 | 图片 RGB 均值已统一为三通道 MAE，峰值仍为最大通道差；定向测试通过 | `ImagePairLoader::computeDifference` |
+| I-06 | 切换大图通道会不会卡 UI？ | P1 | 悬停取样已改为单像素计算，不再等待整图派生缓存；切换显示的大图延迟仍待实测 | `ImageReviewController::channelView`、`samplePixel` |
 | C-01 | GT＋两个 Prediction 如何比较？ | P1 | 用户 2026-09-22 拍板：图片不做三图对比，条目关闭 | `ImageReviewController.h`、`CompareModeBar.qml` |
-| C-02 | 如何找插帧形变、重影、时间跳变？ | P1/P2 | 图片改为点击画面或按空格手动切换 A/B；淡化隐藏，并排准星保留；真实素材实窗验收待做 | `ImageWorkspace.qml`：手动切换/同步准星 |
-| U-01 | 不知道从哪里开始、功能藏在哪里 | P1 | 工作区已完成首屏入口、Diff 直达重采样、全屏沉浸底部边缘唤醒 OSC 与时间轴手势优化；合约测试已通过 | `EmptyReviewView.qml`、`Main.qml`、`PlayerOsc.qml` |
+| C-02 | 如何找插帧形变、重影、时间跳变？ | P1/P2 | 手动 A/B 切换已加拖动阈值；淡化隐藏；真实素材实窗验收待做 | `ImageWorkspace.qml`：手动切换/同步准星 |
+| U-01 | 不知道从哪里开始、功能藏在哪里 | P1 | 首屏现有视频、单图、双图、文件夹入口；Diff 直达重采样与沉浸控制已接线；实窗验收待做 | `EmptyReviewView.qml`、`Main.qml`、`PlayerOsc.qml` |
 | A-01 | 改动状态容易漏接或重复拥有 | 随功能推进 | 分层已有；capability 实现仍集中 | `ReviewSessionFacade`、状态所有权说明 |
-| E-01 | 构建反复出错、工具路径失效、重新链接后启动崩溃 | P0 | 工作区已修复，本机开发测试及质量门禁验证完成 | `tools/build/build.ps1`、`env.ps1`、`cmake/CheckMsvcDependencies.cmake` |
+| E-01 | 构建反复出错、工具路径失效、重新链接后启动崩溃 | P0 | 已修复，本机开发测试及质量门禁验证完成 | `tools/build/build.ps1`、`env.ps1`、`cmake/CheckMsvcDependencies.cmake` |
 
 下文路径相对仓库根目录；无目录的 UI 文件按 [路由表](../agent-guide.md) 查找。
 问题 ID 保持稳定，后续关闭或拆分时保留原 ID 和后继链接。
@@ -52,7 +55,7 @@
 ### V-01 播放状态与统计含义
 
 - **证据**：基线状态展示在未被当前主界面实例化的 `TimelineBar.qml`。
-  工作区已通过 `SessionSnapshot` → `ReviewController` → `Main.qml` → `PlayerOsc` 接入目标／实际倍率、落后量、追赶与跳过组数。
+  已通过 `SessionSnapshot` → `ReviewController` → `Main.qml` → `PlayerOsc` 接入目标／实际倍率、落后量、追赶与跳过组数。
 - **剩余问题**：`displayGapCount` 来自 `ComparisonSurface.droppedFrames` → `ReviewRuntime` →
   `RenderAckRelay::canonicalFrameGaps`，计算的是呈现 ACK 的 canonical 帧号间隙，可能与追赶跳过重合，
   不是物理屏幕刷新丢失测量。`sourceDuplicateCount` 来自数量受限的对齐时间线标记，
@@ -76,7 +79,8 @@
 ### V-03 帧序号与时间对应
 
 - **证据**：`MultiSourceFrameProvider` 默认 `mappedFrame = canonicalFrame + offset`；
-  `comparisonExactnessDimensions` 的 `temporalExact` 主要判断双方 `ExactIndex`。
+  `comparisonExactnessDimensions` 的 `temporalExact` 现在要求双方 `ExactIndex` 且源 PTS 相同。
+  比较浮标可悬停查看两侧实际帧号与源 PTS；这不会自动建立跨帧率映射。
   当前已有全局偏移、序列分析、人工锚点，GT 也已与时间线主源分离。
 - **方向**：明确“按序号”“按时间”“人工／生成帧映射”的规则。保留严格索引审查，
   不擅自对齐或补帧掩盖模型缺陷；未知时间关系不能标成同一时刻精确。
@@ -106,7 +110,7 @@
 ### V-06 独立缩略图与定位预览
 
 - **证据**：`TimelineThumbnailCache.qml::capture` 对已经显示的画布 `grabToImage`，`urlForFrame` 对未缓存位置返回空。原界面在未缓存帧上悬停时完全不显示浮动提示。
-- **工作区进展**：
+- **已实现**：
   1. 重构 `TimelineThumbnailPopup.qml` 实现双模态呈现：有缓存时显示完整缩略图与时间码，未缓存时优雅降级为紧凑型时间码胶囊（Compact Timecode Pill），无论何时悬停均能显示精准时间码、帧号及标记点标签（入点/出点/人工锚点等），消除时间轴悬停盲区；
   2. `TimelineTracks.qml` 新增悬停垂直准星参考线（`timelineHoverGuide`）与底纹微刻度（Tick Marks）；
   3. 支持时间轴滚轮逐帧微调（Jog Wheel，滚轮向上前进 1 帧、向下后退 1 帧，Shift 步进 5 帧）。
@@ -116,7 +120,7 @@
 
 - **证据**：`computeRgbAbsoluteMetrics`、`scoreActivePairRgbAbsolute` 有 MAE/MSE/PSNR 基础，
   但没有完整视频像素获取、SessionSnapshot／UI 或区间统计链，见 [ADR 0005](../adr/0005-pixel-difference-metrics.md)。
-- **第二轮工作区进展（2026-09-22，未提交）**：
+- **2026-09-22 已提交实现**：
   1. 新增 `application::IPairMetricsService` 端口（`PairMetrics.h`）：请求携带 `PlaybackRequestContext`
      身份、双源、对齐偏移、帧区间与坏点阈值；结果以带身份的批次异步发布。
   2. `media::PairMetricsService` + `PairMetricsDecodeSession`：独立于播放管线的双源软解会话
@@ -140,9 +144,9 @@
 
 ### I-01 Alpha 工作流
 
-- **证据**：基线只有 RGBA 取样、RGB 差异和 Alpha-only 提示；工作区已加入 Alpha 灰度、
+- **证据**：早期基线只有 RGBA 取样、RGB 差异和 Alpha-only 提示；后续已加入 Alpha 灰度、
   忽略透明度 RGB、Alpha 差异、峰值／均值／变化像素和黑白／棋盘背景。
-- **工作区进展**：
+- **已实现**：
   1. 交互增强：`A` 与 `O` 分别切换 Alpha 灰度和忽略透明度 RGB；背景由下拉菜单直接选择深色、棋盘格、黑底或白底；按 2026-09-23 反馈移除循环背景按钮和 `B` 循环键。保留“α 直通（未预乘）”徽标；
   2. 棋盘格对比度升级：将画布背景 Canvas 替换为专业中性灰阶双色网格（`#22262e` / `#383e4a`），大幅提升半透明边界与镂空细节可辨识度；
   3. 观察态状态浮标（`imageAlphaObservationBadge`）：在激活非默认观察通道或背景时，于视口顶部实时浮现状态与快捷还原提示，支持点击一键复位；
@@ -155,7 +159,7 @@
 
 - **证据**：`StillImageDecoder.cpp` 中的 `convertFrameToRgba` 仍输出 `AV_PIX_FMT_RGBA`；工作区新增来源格式、
   位深、通道和转换标签，没有保留可取样的原始 16 位数据，也未建立完整 ICC 链。
-- **第二轮工作区进展（2026-09-22，未提交）**：
+- **2026-09-22 已提交实现**：
   1. `StillImage` 新增 `rgba16` sidecar：源位深 >8 时同步转换出 RGBA64LE 原始码值缓冲；
   2. 加载链路（`ImagePairLoader` 加载器签名 + `Result`/缓存条目、`Main.cpp` 组合根、
      同步与异步两条打开路径）全程携带 sidecar，缓存字节核算包含 sidecar；
@@ -171,7 +175,7 @@
 
 - **证据**：工作区新增 P1–P7 识别、头尺寸探测、文件夹及 PNM/PPM/PGM/PBM 对话框入口。
   当次检查 `.pam` 已进入解码／文件夹，但三个图片对话框过滤器仍缺该扩展名。
-- **第二轮工作区进展（2026-09-22，未提交）**：三个图片对话框过滤器已补 `*.pam`。
+- **2026-09-22 已提交实现**：三个图片对话框过滤器已补 `*.pam`。
 - **退出条件**：逐项验证 PBM/PGM/PPM 的文本／二进制、PAM、8/16 位、注释、损坏和超大尺寸输入；
   单图／双图／拖放／文件夹／发布包一致。“PPNM”暂按 PNM，真实样例到来后修订范围。
 - **验证入口**：`StillImageDecoderTests.cpp`（工作区新增并已登记 CMake）、
@@ -180,25 +184,26 @@
 ### I-04 100% 与适应窗口
 
 - **证据**：原 `ImageWorkspace.qml::imageTrueSizeButton` 仅切换 `trueSize`，已有 zoom 仍乘到基础比例上。
-- **工作区进展**：已修复 `imageTrueSizeButton` 将 `zoom` 同步重置为 1.0（实现 1 图像像素 = 1 物理像素）；“适应窗口”与“重置视图”按钮恢复完整画面；支持双击在 100% 真实尺寸与适应窗口间快速往返切换；支持鼠标中键无缝拖拽平移。
+- **已实现**：`imageTrueSizeButton` 将 `zoom` 同步重置为 1.0（实现 1 图像像素 = 1 物理像素）；“适应窗口”与“重置视图”按钮恢复完整画面；支持双击在 100% 真实尺寸与适应窗口间快速往返切换；支持鼠标中键无缝拖拽平移。
 - **验证入口**：`MainQmlContractTests.cpp` 中 `ImageWorkspaceZoomResetAndTrueSizeContract` 用例已通过验证。
 
 ### I-05 图片统计定义
 
-- **证据**：`ImagePairLoader::computeDifference` 的 `meanAbsDifference` 是每像素
-  `max(|ΔR|,|ΔG|,|ΔB|)` 再平均；domain MAE 是三个通道全部样本平均。显示增益固定 4，统计未乘增益。
-- **退出条件**：标签／公式 ID 明确区分两种定义；RGB delta=(3,6,9) 的单像素案例分别为 9 与 6。
+- **现状**：`ImagePairLoader::computeDifference` 的 `meanAbsDifference` 已改为 RGB 三通道
+  全部样本的平均绝对差，与视频 MAE 同义；峰值仍取单像素最大通道差。显示增益固定 4，统计未乘增益。
+- **退出条件**：RGB delta=(3,6,9) 的单像素案例峰值为 9、MAE 为 6；展示标签分别标明。
   Alpha 独立统计，不混入 RGB MAE。不同尺寸默认拒绝逐像素差异；允许重采样时记录方向与方法。
 - **验证入口**：`ImageReviewControllerTests.cpp`、`PixelDifferenceTests.cpp`，及指标展示／导出契约。
 
 ### I-06 大图通道切换延迟
 
-- **证据**：工作区 `ImageReviewController::channelView` 在每次换图或切换观察模式后首次生成派生通道时，
-  同步分配并遍历整图；同一模式后续可使用派生缓存；`imageForSlot`／`samplePixel` 调用链会触及它。
-- **第二轮工作区进展（2026-09-22，未提交）**：确认 QML 图片提供器线程与 GUI 悬停取样会并发进入
+- **证据**：`ImageReviewController::channelView` 在每次换图或切换观察模式后首次生成派生通道时，
+  同步分配并遍历整图；同一模式后续可使用派生缓存。悬停 `samplePixel` 已改为直接从原图
+  派生单像素读数，不再进入整图缓存与其互斥锁。
+- **2026-09-22 已提交实现**：当时确认 QML 图片提供器线程与 GUI 悬停取样会并发进入
   `channelView` 的可变缓存（原实现无锁，存在数据竞争）。已为缓存与失效计数加互斥
   （`viewCacheMutex_`）：先到线程承担唯一一次构建，显示路径本就在提供器线程预热，
-  悬停随后读缓存。8K 大图的冷构建延迟实测仍待做。
+  悬停现在不读派生缓存。8K 大图的冷构建延迟实测仍待做。
 - **待验证**：缓存降低重复开销，但不能证明首次大图操作满足 UI 延迟要求。
 - **退出条件**：在允许尺寸／内存范围的大图上测首次切换、连续切换、悬停取样、换图取消；
   满足既有 100 ms UI 响应门禁。需要后台化时保留 generation/request 校验和有界缓存。
@@ -209,14 +214,7 @@
 
 - **已有**：视频三联、参考聚焦、分析网格和任意两源比较；图片仍是 primary/secondary 与双文件夹模型。
 - **状态（2026-09-22）**：用户拍板“图片不做 3 图”，本条目关闭。图片对比维持双图模型；
-  若未来需求重现，以下设计建议与退出条件仍有效，且视频侧三源模型（ThreeUp/ReferenceFocus/
-  DifferenceEdge）是现成参照。
-- **建议**：图片改为素材列表＋参考素材＋活动候选，共享视口；默认固定 GT 切候选，辅以三联和双误差图。
-  布局是提案，不能据此直接扩成 8/16 路或引入第三份独立播放时钟。
-- **退出条件**：切 GT／候选时素材身份、缩放、ROI、坐标和视频时间可追踪；
-  慢加载、失败、缺图、文件夹同名冲突不发布混合素材；两个误差图使用同一色阶和指标。
-- **入口**：`ImageReviewController`、`ImagePairLoader`、`ImageFolderPairModel`；视频复用
-  `ComparisonSelection`、`CompareModeBar`、`D3d11ComparisonRenderer`。
+  视频侧三源模型（ThreeUp/ReferenceFocus/DifferenceEdge）独立保留。
 
 ### C-02 插帧审查与切换模式
 
@@ -233,7 +231,7 @@
 ### U-01 功能可发现性
 
 - **证据**：原空白页仅有打开视频按钮；图片常用对比和文件夹对比入口藏匿较深；差异图在分辨率不一致时不可用但缺乏直接操作引导；全屏或纯净模式（Tab/H）下播放控制条完全消失且无法唤醒。
-- **工作区进展**：
+- **已实现**：
   1. 空白视图（`EmptyReviewView.qml`）新增首屏“打开图片…”与“对比文件夹…”直达卡片按钮，打通图片首屏链路；
   2. 差异图分辨率不一致的禁用提示条中内嵌一键“启用重采样并对比”快捷操作按钮；
   3. 文件夹侧边栏增加首项与末项一键跳转导航函数；

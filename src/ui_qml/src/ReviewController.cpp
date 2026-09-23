@@ -1876,6 +1876,21 @@ private:
         }
         for (std::size_t first = 0U; first < sourceRows.size(); ++first) {
             for (std::size_t second = first + 1U; second < sourceRows.size(); ++second) {
+                const auto presentedFor = [this](const domain::SourceId sourceId)
+                    -> const application::PresentedSourceState* {
+                    if (!snapshot_) {
+                        return nullptr;
+                    }
+                    const auto it =
+                        std::find_if(snapshot_->presentedSources.begin(),
+                                     snapshot_->presentedSources.end(),
+                                     [sourceId](const application::PresentedSourceState& source) {
+                                         return source.sourceId == sourceId;
+                                     });
+                    return it == snapshot_->presentedSources.end() ? nullptr : &*it;
+                };
+                const auto* const firstPresented = presentedFor(sourceRows[first].sourceId);
+                const auto* const secondPresented = presentedFor(sourceRows[second].sourceId);
                 const int preferenceValue = first == 0U && second == 1U ? 0 : (first == 0U ? 1 : 2);
                 const application::ComparisonExactnessDimensions dimensions =
                     snapshot_
@@ -1903,6 +1918,18 @@ private:
                     {QStringLiteral("temporalExact"), dimensions.temporalExact ? 1 : 0},
                     {QStringLiteral("spatialExact"), dimensions.spatialExact ? 1 : 0},
                     {QStringLiteral("pixelExact"), dimensions.pixelExact ? 1 : 0},
+                    {QStringLiteral("firstSourceFrame"),
+                     sourceRows[first].currentSourceFrame.value_or(-1)},
+                    {QStringLiteral("secondSourceFrame"),
+                     sourceRows[second].currentSourceFrame.value_or(-1)},
+                    {QStringLiteral("firstPresentationTimeUs"),
+                     firstPresented && firstPresented->sourceFrameId.has_value()
+                         ? firstPresented->presentationTime.microseconds()
+                         : 0},
+                    {QStringLiteral("secondPresentationTimeUs"),
+                     secondPresented && secondPresented->sourceFrameId.has_value()
+                         ? secondPresented->presentationTime.microseconds()
+                         : 0},
                 });
             }
         }

@@ -12,6 +12,7 @@ Rectangle {
 
     signal openVideosRequested
     signal openImageRequested
+    signal openImagePairRequested
     signal compareFoldersRequested
 
     objectName: "emptyReviewView"
@@ -62,6 +63,12 @@ Rectangle {
                 objectName: "emptyOpenImageButton"
                 text: qsTr("打开图片…")
                 onClicked: control.openImageRequested()
+            }
+
+            ReviewActionButton {
+                objectName: "emptyOpenImagePairButton"
+                text: qsTr("对比两张图片…")
+                onClicked: control.openImagePairRequested()
             }
 
             ReviewActionButton {

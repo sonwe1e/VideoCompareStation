@@ -176,8 +176,10 @@ Item {
             verify(status.text.indexOf("实际 0.72×") >= 0);
             verify(status.text.indexOf("播放器跳过 3 组") >= 0);
             verify(status.text.indexOf("明显落后") >= 0);
-            verify(status.text.indexOf("源重复 2") >= 0);
+            verify(status.text.indexOf("重复标记 2") >= 0);
             verify(status.text.indexOf("呈现间隙 5") >= 0);
+            verify(osc.statusLegend.indexOf("可能与播放器跳过重合") >= 0);
+            verify(osc.statusLegend.indexOf("不能相加") >= 0);
             const hint = findChild(osc, "playbackStatusHint");
             verify(hint !== null);
             verify(hint.visible);

@@ -302,8 +302,8 @@ private:
     StillImageSourceInfo primaryInfo_;
     StillImageSourceInfo secondaryInfo_;
     // Derived channel views of primary_/secondary_ for the active viewMode_, invalidated by
-    // generation bumps and view mode changes. Guarded by viewCacheMutex_: the QML image
-    // provider thread and GUI hover sampling reach channelView() concurrently.
+    // generation bumps and view mode changes. Hover sampling derives only one pixel and never
+    // enters this cache; image provider requests can still overlap one another.
     mutable std::mutex viewCacheMutex_;
     mutable QImage primaryViewCache_;
     mutable QImage secondaryViewCache_;

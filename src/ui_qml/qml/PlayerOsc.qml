@@ -26,7 +26,7 @@ Item {
     property int displayGapCount: 0
     property int sourceDuplicateCount: 0
     property string sourceRateText: ""
-    property string statusLegend: qsTr("三类现象相互独立：源重复帧＝文件内容本身；播放器跳过＝为追时间丢掉整组；呈现间隙＝显示管线未跟上刷新。")
+    property string statusLegend: qsTr("源重复数来自有限的对齐标记；播放器跳过数表示追赶时跳过的完整帧组；呈现间隙表示呈现确认的帧号间隔，可能与播放器跳过重合。三项不能相加，也不代表显示器实际漏刷次数。")
     required property bool timelineEnabled
     required property int currentFrame
     required property int totalFrames
@@ -246,7 +246,7 @@ Item {
                 else if (lagMs >= 200)
                     parts.push(qsTr("落后 %1s").arg((lagMs / 1000).toFixed(1)));
                 if (control.sourceDuplicateCount > 0)
-                    parts.push(qsTr("源重复 %1").arg(control.sourceDuplicateCount));
+                    parts.push(qsTr("重复标记 %1").arg(control.sourceDuplicateCount));
                 if (control.displayGapCount > 0)
                     parts.push(qsTr("呈现间隙 %1").arg(control.displayGapCount));
                 return parts.join(" · ");

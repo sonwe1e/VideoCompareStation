@@ -107,6 +107,19 @@ TEST(ImageReviewControllerTests, DiffPairComputesPeakAndSignedMidpoint) {
     EXPECT_EQ(signedPixel.value(QStringLiteral("r")).toInt(), 128);
 }
 
+TEST(ImageReviewControllerTests, RgbMeanAbsoluteDifferenceUsesAllChannelSamples) {
+    ImageReviewController controller;
+    ASSERT_TRUE(
+        controller.openPrimaryImage(solidImage(QColor(10, 20, 30)), QStringLiteral("left")));
+    ASSERT_TRUE(
+        controller.openSecondaryImage(solidImage(QColor(13, 26, 39)), QStringLiteral("right")));
+
+    controller.setCompareMode(ImageReviewController::AbsDifference);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    EXPECT_EQ(controller.maxAbsDifference(), 9);
+    EXPECT_NEAR(controller.meanAbsDifference(), 6.0, 1e-9);
+}
+
 TEST(ImageReviewControllerTests, HighlightAndAbsDifferenceProduceOutput) {
     ImageReviewController controller;
     ASSERT_TRUE(controller.openPrimaryImage(solidImage(QColor(0, 0, 0)), QStringLiteral("left")));

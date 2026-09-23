@@ -169,5 +169,17 @@ TEST(ComparisonExactnessTests, ReportsEveryInexactDimensionInsteadOfOnlyTheTopRe
     EXPECT_FALSE(unavailableDimensions.pixelExact);
 }
 
+TEST(ComparisonExactnessTests, SameFrameIndexAtDifferentPresentationTimesIsNotTemporalExact) {
+    SessionSnapshot differentTimes = snapshot();
+    differentTimes.presentedSources[0].presentationTime = domain::MediaTime{33'333};
+    differentTimes.presentedSources[1].presentationTime = domain::MediaTime{16'667};
+
+    const ComparisonExactnessDimensions dimensions =
+        comparisonExactnessDimensions(differentTimes, 0U, 1U);
+    EXPECT_TRUE(dimensions.available);
+    EXPECT_FALSE(dimensions.temporalExact);
+    EXPECT_EQ(comparisonExactness(differentTimes, 0U, 1U), ComparisonExactness::TemporallyAligned);
+}
+
 } // namespace
 } // namespace dvs::application

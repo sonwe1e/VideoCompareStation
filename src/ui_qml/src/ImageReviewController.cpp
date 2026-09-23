@@ -880,21 +880,45 @@ void ImageReviewController::setZoom(const qreal value) {
 QVariantMap ImageReviewController::samplePixel(const int imageSlot,
                                                const qreal imageX,
                                                const qreal imageY) const {
-    const QImage image = displayImage(imageSlot);
-    if (image.isNull() || !std::isfinite(imageX) || !std::isfinite(imageY)) {
+    const QImage* image = nullptr;
+    switch (imageSlot) {
+    case PrimarySlot:
+    case DisplayPrimarySlot:
+        image = &primary_;
+        break;
+    case SecondarySlot:
+    case DisplaySecondarySlot:
+        image = &secondary_;
+        break;
+    case DisplayDiffSlot:
+        image = &diff_;
+        break;
+    default:
+        break;
+    }
+    if (image == nullptr || image->isNull() || !std::isfinite(imageX) || !std::isfinite(imageY)) {
         return {{QStringLiteral("valid"), false}};
     }
     const int x = static_cast<int>(std::floor(imageX));
     const int y = static_cast<int>(std::floor(imageY));
-    if (x < 0 || y < 0 || x >= image.width() || y >= image.height()) {
+    if (x < 0 || y < 0 || x >= image->width() || y >= image->height()) {
         return {{QStringLiteral("valid"), false}};
     }
-    QVariantMap result = pixelMap(x, y, image.pixel(x, y));
+    // Hover sampling runs on the GUI thread. Derive one observed pixel directly instead
+    // of waiting for the image provider to build and lock an entire channel-view image.
+    QRgb pixel = image->pixel(x, y);
+    if (imageSlot != DisplayDiffSlot && viewMode_ == AlphaGrayView) {
+        const int alpha = qAlpha(pixel);
+        pixel = qRgb(alpha, alpha, alpha);
+    } else if (imageSlot != DisplayDiffSlot && viewMode_ == RgbOpaqueView) {
+        pixel = qRgb(qRed(pixel), qGreen(pixel), qBlue(pixel));
+    }
+    QVariantMap result = pixelMap(x, y, pixel);
     // In the alpha-gray view the pixel brightness IS the source alpha and the buffer is
     // opaque; report the true alpha value/percent from the brightness so the readout shows
     // A=128 → 50.2% instead of the forced opaque 255.
     if (imageSlot != DisplayDiffSlot && viewMode_ == AlphaGrayView) {
-        const int sourceAlpha = qRed(image.pixel(x, y));
+        const int sourceAlpha = qRed(pixel);
         result[QStringLiteral("a")] = sourceAlpha;
         result[QStringLiteral("alphaPercent")] =
             QString::number(static_cast<double>(sourceAlpha) / 255.0 * 100.0, 'f', 1);

@@ -1398,12 +1398,14 @@ TEST_F(ReviewControllerTests, ProjectsDisplayFramesGraphicsAndRoleSpecificErrorK
             .sourceId = 0U,
             .sourceFrameId = domain::FrameId{2},
             .matchKind = application::FrameMatchKind::ExactIndex,
+            .presentationTime = domain::MediaTime{33'333},
         },
         application::PresentedSourceState{
             .sourceId = 1U,
             .sourceFrameId = domain::FrameId{3},
             .matchKind = application::FrameMatchKind::AutoAligned,
             .alignmentConfidence = 0.64F,
+            .presentationTime = domain::MediaTime{16'667},
         },
         application::PresentedSourceState{
             .sourceId = 2U,
@@ -1554,6 +1556,11 @@ TEST_F(ReviewControllerTests, ProjectsDisplayFramesGraphicsAndRoleSpecificErrorK
     EXPECT_EQ(differenceEdges[1].toMap().value(QStringLiteral("label")).toString(),
               QStringLiteral("A ↔ C"));
     EXPECT_EQ(differenceEdges[1].toMap().value(QStringLiteral("preferenceValue")).toInt(), 1);
+    const QVariantMap firstEdge = differenceEdges[0].toMap();
+    EXPECT_EQ(firstEdge.value(QStringLiteral("firstSourceFrame")).toLongLong(), 2);
+    EXPECT_EQ(firstEdge.value(QStringLiteral("secondSourceFrame")).toLongLong(), 3);
+    EXPECT_EQ(firstEdge.value(QStringLiteral("firstPresentationTimeUs")).toLongLong(), 33'333);
+    EXPECT_EQ(firstEdge.value(QStringLiteral("secondPresentationTimeUs")).toLongLong(), 16'667);
     EXPECT_EQ(controller.sourceAErrorKey(), QStringLiteral("media-probe-failed"));
     EXPECT_TRUE(controller.sourceBErrorKey().isEmpty());
     EXPECT_TRUE(controller.pairErrorKey().isEmpty());

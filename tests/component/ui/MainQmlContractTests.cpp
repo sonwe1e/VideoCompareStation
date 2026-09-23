@@ -2915,6 +2915,11 @@ TEST(MainQmlContractTests, EmptyReviewViewExposesImageAndFolderEntryPoints) {
     ASSERT_NE(openImageBtn, nullptr);
     EXPECT_TRUE(openImageBtn->isVisible());
 
+    auto* const openImagePairBtn =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("emptyOpenImagePairButton"));
+    ASSERT_NE(openImagePairBtn, nullptr);
+    EXPECT_TRUE(openImagePairBtn->isVisible());
+
     auto* const compareFoldersBtn =
         harness.root->findChild<QQuickItem*>(QStringLiteral("emptyCompareFoldersButton"));
     ASSERT_NE(compareFoldersBtn, nullptr);
