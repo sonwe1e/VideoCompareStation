@@ -75,6 +75,7 @@ public:
         registerQmlTypes();
         application_.setApplicationDisplayName(QStringLiteral("CompareStation"));
         application_.setApplicationName(QStringLiteral("CompareStation"));
+        application_.setApplicationVersion(QString::fromLatin1(DVS_PROJECT_VERSION));
         application_.setOrganizationName(QStringLiteral("CompareStation"));
         application_.setWindowIcon(QIcon{QStringLiteral(":/branding/comparestation-icon.png")});
     }

@@ -71,6 +71,8 @@ if(DVS_BUILD_ADAPTERS)
     )
     add_library(dvs::ui_d3d11_bridge ALIAS dvs_ui_d3d11_bridge)
 
+    target_compile_definitions(dvs_ui_d3d11_bridge PRIVATE DVS_PROJECT_VERSION="${PROJECT_VERSION}")
+
     target_include_directories(
         dvs_ui_d3d11_bridge
         PUBLIC

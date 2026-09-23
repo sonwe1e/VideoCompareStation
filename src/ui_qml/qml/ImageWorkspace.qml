@@ -49,20 +49,17 @@ Rectangle {
     // Background under transparent regions: 0 = dark, 1 = checkerboard, 2 = black, 3 = white.
     property int backgroundMode: 0
     property bool singleViewShowSecondary: false
-    property bool flickerActive: false
-    property int flickerIntervalMs: 400
     property var hoverPoint: null
 
     onHasPairChanged: {
         if (!hasPair) {
-            flickerActive = false;
             singleViewShowSecondary = false;
             hoverPoint = null;
         }
     }
     onCompareModeChanged: {
-        if (compareMode !== 0 && flickerActive)
-            flickerActive = false;
+        if (compareMode !== 0)
+            singleViewShowSecondary = false;
     }
 
     function toggleSinglePairSource() {
@@ -76,31 +73,6 @@ Rectangle {
         }
     }
 
-    function toggleFlicker() {
-        if (!hasPair)
-            return;
-        if (flickerActive) {
-            flickerActive = false;
-            singleViewShowSecondary = false;
-        } else {
-            if (compareMode !== 0)
-                modeButton(0);
-            flickerActive = true;
-            singleViewShowSecondary = true;
-            flickerTimer.restart();
-        }
-    }
-
-    Timer {
-        id: flickerTimer
-        interval: control.flickerIntervalMs
-        repeat: true
-        running: control.flickerActive && control.hasPair
-        onTriggered: {
-            control.singleViewShowSecondary = !control.singleViewShowSecondary;
-        }
-    }
-
     function toggleAlphaView() {
         if (!imageReview || !hasPrimary)
             return;
@@ -111,10 +83,6 @@ Rectangle {
         if (!imageReview || !hasPrimary)
             return;
         imageReview.viewMode = (imageReview.viewMode === 2 ? 0 : 2);
-    }
-
-    function cycleBackgroundMode() {
-        backgroundMode = (backgroundMode + 1) % 4;
     }
 
     // Physical-percent of the active display scale: true-size is 1 image px per physical
@@ -136,6 +104,8 @@ Rectangle {
     function modeButton(mode) {
         if (!imageReview)
             return;
+        if (mode === 0 && compareMode !== 0)
+            singleViewShowSecondary = false;
         imageReview.compareMode = mode;
     }
 
@@ -149,7 +119,7 @@ Rectangle {
 
     readonly property string viewModeLabel: viewMode === 1 ? qsTr("Alpha 灰度") : (viewMode === 2 ? qsTr("RGB 忽略") : qsTr("RGBA"))
     readonly property string backgroundModeLabel: backgroundMode === 1 ? qsTr("背景·棋盘格") : (backgroundMode === 2 ? qsTr("背景·黑底") : (backgroundMode === 3 ? qsTr("背景·白底") : qsTr("背景·深色")))
-    readonly property string advancedDiffLabel: compareMode === 3 ? qsTr("带符号差异") : (compareMode === 4 ? qsTr("高亮") : (compareMode === 6 ? qsTr("Alpha 差异") : qsTr("更多")))
+    readonly property string diffModeLabel: compareMode === 2 ? qsTr("差异·绝对差异") : (compareMode === 3 ? qsTr("差异·带符号") : (compareMode === 4 ? qsTr("差异·高亮") : (compareMode === 6 ? qsTr("差异·Alpha") : qsTr("差异·选择"))))
 
     // File-name part of a controller path ("C:/dir/shot.png" -> "shot.png"); empty for
     // injected test images whose path label carries no separator.
@@ -316,6 +286,7 @@ Rectangle {
         property string title: ""
         property string titlePath: ""
         property point dragStart: Qt.point(0, 0)
+        property point pressStart: Qt.point(0, 0)
 
         readonly property alias image: previewImage
         // Fit scale of the displayed image (fit-window base), forwarded so the workspace
@@ -505,9 +476,14 @@ Rectangle {
         }
 
         MouseArea {
+            objectName: "imageCanvasMouseArea-" + viewport.slot
             anchors.fill: parent
             hoverEnabled: true
             acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+            onClicked: mouse => {
+                if (mouse.button === Qt.LeftButton && control.compareMode === 0 && control.hasPair && Math.hypot(mouse.x - viewport.pressStart.x, mouse.y - viewport.pressStart.y) < 5)
+                    control.toggleSinglePairSource();
+            }
             onPositionChanged: mouse => {
                 if (pressed && control.imageReview) {
                     const dx = (mouse.x - viewport.dragStart.x) / Math.max(1, width);
@@ -524,6 +500,7 @@ Rectangle {
             }
             onPressed: mouse => {
                 viewport.dragStart = Qt.point(mouse.x, mouse.y);
+                viewport.pressStart = Qt.point(mouse.x, mouse.y);
                 control.forceActiveFocus();
             }
             onDoubleClicked: mouse => {
@@ -697,7 +674,7 @@ Rectangle {
 
             ModeChip {
                 objectName: "imageModePrimary"
-                text: control.hasPair ? qsTr("单图/切换") : qsTr("查看")
+                text: control.hasPair ? qsTr("手动闪烁") : qsTr("查看")
                 modeValue: 0
             }
             ModeChip {
@@ -716,7 +693,7 @@ Rectangle {
                 objectName: "imageModeFade"
                 text: qsTr("淡化")
                 modeValue: 7
-                visible: control.hasPair
+                visible: false
             }
             ReviewActionButton {
                 objectName: "imageToggleSourceButton"
@@ -736,15 +713,9 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
             }
 
-            ModeChip {
-                objectName: "imageModeAbsDiff"
-                text: qsTr("绝对差异")
-                modeValue: 2
-                visible: control.hasPair
-            }
             ReviewActionButton {
-                objectName: "imageMoreDiffButton"
-                text: control.advancedDiffLabel + " ▾"
+                objectName: "imageDiffModeButton"
+                text: control.diffModeLabel + " ▾"
                 implicitHeight: 30
                 leftPadding: 8
                 rightPadding: 8
@@ -755,6 +726,12 @@ Rectangle {
                     id: diffMenu
                     menuWidth: 220
 
+                    VcsRadioMenuItem {
+                        objectName: "imageModeAbsDiff"
+                        text: qsTr("绝对差异")
+                        checked: control.compareMode === 2
+                        onTriggered: control.modeButton(2)
+                    }
                     VcsRadioMenuItem {
                         objectName: "imageModeSignedDiff"
                         text: qsTr("带符号差异")
@@ -854,26 +831,6 @@ Rectangle {
                     }
                 }
             }
-            ReviewActionButton {
-                objectName: "imageBgCycleButton"
-                text: qsTr("循环背景 (B)")
-                implicitHeight: 30
-                leftPadding: 8
-                rightPadding: 8
-                enabled: control.hasPrimary
-                onClicked: control.cycleBackgroundMode()
-            }
-            ReviewActionButton {
-                objectName: "imageFlickerButton"
-                visible: control.hasPair
-                checkable: true
-                checked: control.flickerActive
-                implicitHeight: 30
-                leftPadding: 8
-                rightPadding: 8
-                text: control.flickerActive ? qsTr("停止闪烁") : qsTr("闪烁")
-                onClicked: control.toggleFlicker()
-            }
         }
     }
 
@@ -903,23 +860,11 @@ Rectangle {
             event.accepted = true;
         }
     }
-    // Space hold-to-compare: temporarily shows secondary image (B/Prediction) in single view.
+    // Manual in-place comparison: each press switches the displayed source.
     Keys.onSpacePressed: event => {
-        if (control.hasPair && !event.isAutoRepeat && !control.flickerActive) {
-            if (control.compareMode === 0) {
-                control.singleViewShowSecondary = true;
-                event.accepted = true;
-            }
-        }
-    }
-    Keys.onReleased: event => {
-        if (event.key === Qt.Key_Space) {
-            if (control.hasPair && !event.isAutoRepeat && !control.flickerActive) {
-                if (control.compareMode === 0) {
-                    control.singleViewShowSecondary = false;
-                    event.accepted = true;
-                }
-            }
+        if (control.hasPair && control.compareMode === 0 && !event.isAutoRepeat) {
+            control.toggleSinglePairSource();
+            event.accepted = true;
         }
     }
     Keys.onPressed: event => {
@@ -933,19 +878,14 @@ Rectangle {
                 folderPairSidebar.stepLast();
                 event.accepted = true;
             }
-        } else if (event.key === Qt.Key_T || event.key === Qt.Key_Tab || event.key === Qt.Key_QuoteLeft) {
-            if (control.hasPair) {
+        } else if (event.key === Qt.Key_T || event.key === Qt.Key_QuoteLeft) {
+            if (control.hasPair && !event.isAutoRepeat) {
                 control.toggleSinglePairSource();
                 event.accepted = true;
             }
         } else if ((event.modifiers === Qt.NoModifier || event.modifiers === Qt.KeypadModifier) && event.key === Qt.Key_A) {
             if (control.hasPrimary) {
                 control.toggleAlphaView();
-                event.accepted = true;
-            }
-        } else if ((event.modifiers === Qt.NoModifier || event.modifiers === Qt.KeypadModifier) && event.key === Qt.Key_B) {
-            if (control.hasPrimary) {
-                control.cycleBackgroundMode();
                 event.accepted = true;
             }
         } else if ((event.modifiers === Qt.NoModifier || event.modifiers === Qt.KeypadModifier) && event.key === Qt.Key_O) {
@@ -1003,12 +943,13 @@ Rectangle {
                     font.pixelSize: 16
                 }
 
-                // In-place A/B compare and Flicker HUD badge
+                // Manual A/B comparison badge stays inside the image stage.
                 Rectangle {
                     id: imageInPlaceBadge
                     objectName: "imageInPlaceBadge"
                     visible: control.hasPair && control.compareMode === 0
                     z: 30
+                    width: Math.min(stageContent.width - 28, inPlaceBadgeText.implicitWidth + 20)
                     height: 32
                     radius: 6
                     color: control.singleViewShowSecondary ? "#d90284c7" : "#d916a34a"
@@ -1020,43 +961,20 @@ Rectangle {
                         margins: 14
                     }
 
-                    Row {
-                        spacing: 8
+                    Text {
+                        id: inPlaceBadgeText
                         anchors.centerIn: parent
-                        leftPadding: 10
-                        rightPadding: 10
-
-                        Text {
-                            text: control.flickerActive ? (control.singleViewShowSecondary ? qsTr("⚡ 闪烁对比 · 候选 B") : qsTr("⚡ 闪烁对比 · 基准 A")) : (control.singleViewShowSecondary ? qsTr("原地对比 · 当前：B (候选)") : qsTr("原地对比 · 当前：A (基准)"))
-                            color: "#ffffff"
-                            font.pixelSize: 12
-                            font.weight: Font.Bold
-                        }
-
-                        Text {
-                            visible: !control.flickerActive
-                            text: qsTr("按住空格切换 · 按 T 切换")
-                            color: "#e2e8f0"
-                            font.pixelSize: 11
-                        }
-
-                        Text {
-                            visible: control.flickerActive
-                            text: qsTr("点击停止")
-                            color: "#fef08a"
-                            font.pixelSize: 11
-                            font.weight: Font.DemiBold
-                        }
+                        width: Math.max(0, parent.width - 20)
+                        text: control.singleViewShowSecondary ? qsTr("当前 B · 点击画面或按空格切换") : qsTr("当前 A · 点击画面或按空格切换")
+                        elide: Text.ElideRight
+                        color: "#ffffff"
+                        font.pixelSize: 12
+                        font.weight: Font.DemiBold
                     }
 
                     MouseArea {
                         anchors.fill: parent
-                        onClicked: {
-                            if (control.flickerActive)
-                                control.toggleFlicker();
-                            else
-                                control.toggleSinglePairSource();
-                        }
+                        onClicked: control.toggleSinglePairSource()
                     }
                 }
 
@@ -1066,6 +984,7 @@ Rectangle {
                     objectName: "imageAlphaObservationBadge"
                     visible: control.hasPrimary && (control.viewMode !== 0 || control.backgroundMode !== 0)
                     z: 30
+                    width: Math.min(stageContent.width - (imageInPlaceBadge.visible ? imageInPlaceBadge.width + 52 : 28), alphaBadgeContent.implicitWidth + 20)
                     height: 32
                     radius: 6
                     color: control.viewMode === 1 ? "#d92563eb" : (control.viewMode === 2 ? "#d97c3aed" : "#d9334155")
@@ -1079,10 +998,9 @@ Rectangle {
                     }
 
                     Row {
+                        id: alphaBadgeContent
                         spacing: 8
                         anchors.centerIn: parent
-                        leftPadding: 10
-                        rightPadding: 10
 
                         Text {
                             id: imageAlphaObservationText
@@ -1106,7 +1024,7 @@ Rectangle {
                                     return qsTr("按 A 还原 RGBA · 点击还原");
                                 if (control.viewMode === 2)
                                     return qsTr("按 O 还原 RGBA · 点击还原");
-                                return qsTr("按 B 切换 · 点击切换");
+                                return qsTr("点击还原深色背景");
                             }
                             color: "#e2e8f0"
                             font.pixelSize: 11
@@ -1120,7 +1038,7 @@ Rectangle {
                                 if (control.imageReview)
                                     control.imageReview.viewMode = 0;
                             } else {
-                                control.cycleBackgroundMode();
+                                control.backgroundMode = 0;
                             }
                         }
                     }

@@ -11,6 +11,7 @@ Agent 从 [快速定位指南](docs/agent-guide.md) 开始；当前需求见
 产品架构、工程说明和历史资料统一从 [docs/README.md](docs/README.md) 进入。
 [docs/architecture.md](docs/architecture.md) 描述技术约束，[docs/releases/](docs/releases/) 记录各版本发布范围；旧实现已从主线移除，
 需要时可通过 Git 历史查阅。
+[版本号与提交约定](docs/versioning.md)说明开发版本、Git 提交和发布标签的关系。
 
 ---
 
@@ -110,8 +111,8 @@ ctest --preset performance-d3d11 --output-on-failure
 ```
 
 Release workflow 生成明确标注为未签名的 ZIP、MSI、EXE、CLI 与
-`CompareStationShell-1.6.dll`，并执行真实
-安装、`1.2.0→1.6.0` 升级、A/B Pair 设置回归与 shutdown soak 门禁；SHA-256 只用于
+`CompareStationShell-1.7.dll`，并执行真实
+安装、`1.2.0→1.7.0` 升级、A/B Pair 设置回归与 shutdown soak 门禁；SHA-256 只用于
 校验完整性，不代表
 发布者身份。runner 标签、素材清单与发布合同详见
 [docs/self-hosted-runner.md](docs/self-hosted-runner.md)。

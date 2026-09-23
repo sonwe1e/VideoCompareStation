@@ -1,12 +1,13 @@
 # 视觉审查问题台账
 
-更新：2026-09-22（第二轮）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-09-23。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
 
 ## 基线、状态与阅读方法
 
-- 已提交基线：`main @ 0a74c466f3bef7aa8becf77463efaa424de15c55`。
-- 2026-09-22 第二轮工作区（未提交）：V-07 视频指标全链路（`PairMetrics.h` 端口、
+- 已提交基线：`main @ c30886b`。以下 2026-09-22 的实现已纳入该提交，
+  发布和硬件验收状态仍分别核对。
+- 2026-09-22 第二轮实现：V-07 视频指标全链路（`PairMetrics.h` 端口、
   `PairMetricsService`/`PairMetricsDecodeSession` 独立解码服务、`PairMetricsController` GUI 投影、
   检查器读数 + OSC 摘要 + 时间轴指标泳道）；I-02 高位深 sidecar 取样；I-03 对话框补 `*.pam`；
   I-06 `channelView` 跨线程缓存加互斥；图片 Fade 模式；视频视口 1:1 像素比例徽章；
@@ -38,7 +39,7 @@
 | I-05 | 图片“平均差异”和视频 MAE 是否同义？ | P0 | 第二轮工作区已在统计读数标注“图放大 ×4，统计为原始值”；两套定义仍未统一（迁移 presentation_contract 另立项） | `ImagePairLoader::computeDifference` |
 | I-06 | 切换大图通道会不会卡 UI？ | P1 | 第二轮工作区已为 `channelView` 缓存加互斥（提供器线程与 GUI 并发安全）；大图延迟实测待做 | `ImageReviewController::channelView` |
 | C-01 | GT＋两个 Prediction 如何比较？ | P1 | 用户 2026-09-22 拍板：图片不做三图对比，条目关闭 | `ImageReviewController.h`、`CompareModeBar.qml` |
-| C-02 | 如何找插帧形变、重影、时间跳变？ | P1/P2 | 工作区已实现原地 A/B 切换、Flicker 闪烁对比与并排同步准星；合约测试已通过 | `ImageWorkspace.qml`：原地切换/Flicker/同步准星 |
+| C-02 | 如何找插帧形变、重影、时间跳变？ | P1/P2 | 图片改为点击画面或按空格手动切换 A/B；淡化隐藏，并排准星保留；鼠标实窗验收待做 | `ImageWorkspace.qml`：手动切换/同步准星 |
 | U-01 | 不知道从哪里开始、功能藏在哪里 | P1 | 工作区已完成首屏入口、Diff 直达重采样、全屏沉浸底部边缘唤醒 OSC 与时间轴手势优化；合约测试已通过 | `EmptyReviewView.qml`、`Main.qml`、`PlayerOsc.qml` |
 | A-01 | 改动状态容易漏接或重复拥有 | 随功能推进 | 分层已有；capability 实现仍集中 | `ReviewSessionFacade`、状态所有权说明 |
 | E-01 | 构建反复出错、工具路径失效、重新链接后启动崩溃 | P0 | 工作区已修复，本机开发测试及质量门禁验证完成 | `tools/build/build.ps1`、`env.ps1`、`cmake/CheckMsvcDependencies.cmake` |
@@ -142,7 +143,7 @@
 - **证据**：基线只有 RGBA 取样、RGB 差异和 Alpha-only 提示；工作区已加入 Alpha 灰度、
   忽略透明度 RGB、Alpha 差异、峰值／均值／变化像素和黑白／棋盘背景。
 - **工作区进展**：
-  1. 交互增强：新增快捷键 `A`（快速在 RGBA 与独立 Alpha 灰度通道间往返切换）、`O`（快速在 RGBA 与忽略透明度 RGB 间切换）、`B`（循环切换深色/高对比棋盘格/黑底/白底）；工具栏增设快捷键提示与“循环背景 (B)”操作按钮，以及图片包含 Alpha 通道时的“α 直通（未预乘）”指示徽标；
+  1. 交互增强：`A` 与 `O` 分别切换 Alpha 灰度和忽略透明度 RGB；背景由下拉菜单直接选择深色、棋盘格、黑底或白底；按 2026-09-23 反馈移除循环背景按钮和 `B` 循环键。保留“α 直通（未预乘）”徽标；
   2. 棋盘格对比度升级：将画布背景 Canvas 替换为专业中性灰阶双色网格（`#22262e` / `#383e4a`），大幅提升半透明边界与镂空细节可辨识度；
   3. 观察态状态浮标（`imageAlphaObservationBadge`）：在激活非默认观察通道或背景时，于视口顶部实时浮现状态与快捷还原提示，支持点击一键复位；
   4. 快捷键帮助覆盖层：`ShortcutHelpOverlay` 深度整合图片工作区预设，展示图像与透明度检查全套快捷键。
@@ -220,13 +221,14 @@
 ### C-02 插帧审查与切换模式
 
 - **已有**：视频局部放大、平移、ROI、区间循环、高亮及问题记录，不应重新当作缺失能力实现。
-- **工作区进展**：已为图片对比工作流完整实现：
-  1. 原地 A/B 快速切换（单图模式下可直接通过工具栏按钮或键盘快捷键 `Space` 按住对比、`T` / `Tab` / `` ` `` 单击切换），完全杜绝来回扭头造成的视觉记忆衰减；
-  2. 自动交替 Flicker 闪烁对比（可暂停/可调节频率，顶部 HUD 明确指示当前显示源与闪烁状态）；
+- **2026-09-23 调整**：
+  1. 图片单图对比改为手动闪烁：默认 A，点击画面、按 `Space` 或 `T` 在 A/B 间切换；不自动计时交替。顶部 HUD 显示当前源并限制宽度；
+  2. 差异模式收为显示当前选项的下拉菜单；淡化入口隐藏。原淡化按钮无效的直接原因是控制器拒绝模式值 `7`；
   3. 并排模式跨图同步十字准星（Hover 时镜像侧精准投影目标瞄准环、辅助十字线与图像像素坐标，彻底消除并排观察微小伪影时的视线寻找负担）；
-  4. 第二轮（2026-09-22，未提交）：淡化 Fade 模式（`ImageReviewController::Fade`，A/B 在主图几何盒内按
-     `fadePosition` 透明度叠加，工具栏芯片 + 滑杆 + A/B 百分比读数，纯呈现层不触碰差异管线）。
-- **验证入口**：`MainQmlContractTests.cpp` 中 `ImageWorkspaceInPlaceToggleAndFlickerContract` 与 `ImageWorkspaceSyncedCrosshairExistsInSideBySide` 用例已通过验证。
+- **验证入口**：`MainQmlContractTests.cpp` 的 `ImageWorkspaceManualFlickerContract`、`ImageWorkspaceAlphaAndBackgroundSelectionContract` 与并排准星用例；鼠标合成事件在当前测试窗口未送达画布，点击动作需实窗验收。
+- **本轮验证**：`dev` 全套 648 项可运行测试中，除版本切换导致的发布契约元数据缺项外均通过；
+  补齐 `1.7.0` 发布契约后该项定向重测通过。`format-check`、`lint` 与版本/EXE 校验通过。
+  3 项环境跳过、4 项原有禁用；鼠标实窗、Release 包及硬件性能未验收。
 
 ### U-01 功能可发现性
 

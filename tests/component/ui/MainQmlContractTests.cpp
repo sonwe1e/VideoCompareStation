@@ -2985,7 +2985,7 @@ TEST(MainQmlContractTests, ImageWorkspaceZoomResetAndTrueSizeContract) {
     EXPECT_DOUBLE_EQ(harness.imageReview.panX(), 0.5);
 }
 
-TEST(MainQmlContractTests, ImageWorkspaceInPlaceToggleAndFlickerContract) {
+TEST(MainQmlContractTests, ImageWorkspaceManualFlickerContract) {
     WorkspaceHarness harness;
     ASSERT_TRUE(harness.create()) << harness.error;
     harness.window->show();
@@ -3036,18 +3036,46 @@ TEST(MainQmlContractTests, ImageWorkspaceInPlaceToggleAndFlickerContract) {
     EXPECT_EQ(primaryViewport->property("slot").toInt(), 2);
     EXPECT_FALSE(imageWorkspace->property("singleViewShowSecondary").toBool());
 
-    // Flicker button toggles flickerActive
-    auto* const flickerBtn =
-        harness.root->findChild<QQuickItem*>(QStringLiteral("imageFlickerButton"));
-    ASSERT_NE(flickerBtn, nullptr);
-    EXPECT_TRUE(flickerBtn->isVisible());
-    ASSERT_TRUE(QMetaObject::invokeMethod(flickerBtn, "clicked"));
-    harness.settle();
-    EXPECT_TRUE(imageWorkspace->property("flickerActive").toBool());
+    // The canvas exposes a full-size click target; Space switches A/B without auto playback.
+    auto* const canvasArea =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageCanvasMouseArea-2"));
+    ASSERT_NE(canvasArea, nullptr);
+    EXPECT_TRUE(canvasArea->isVisible());
+    EXPECT_GT(canvasArea->width(), 100);
 
-    ASSERT_TRUE(QMetaObject::invokeMethod(flickerBtn, "clicked"));
+    imageWorkspace->forceActiveFocus();
+    sendKey(*harness.window, Qt::Key_Space);
     harness.settle();
-    EXPECT_FALSE(imageWorkspace->property("flickerActive").toBool());
+    EXPECT_EQ(primaryViewport->property("slot").toInt(), 3);
+    sendKey(*harness.window, Qt::Key_Space);
+    harness.settle();
+    EXPECT_EQ(primaryViewport->property("slot").toInt(), 2);
+
+    auto* const fadeBtn = harness.root->findChild<QQuickItem*>(QStringLiteral("imageModeFade"));
+    ASSERT_NE(fadeBtn, nullptr);
+    EXPECT_FALSE(fadeBtn->isVisible());
+
+    auto* const badgeText =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageInPlaceBadge"));
+    ASSERT_NE(badgeText, nullptr);
+    EXPECT_LE(badgeText->x() + badgeText->width(), badgeText->parentItem()->width());
+
+    auto* const diffButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageDiffModeButton"));
+    auto* const absDiff = harness.root->findChild<QObject*>(QStringLiteral("imageModeAbsDiff"));
+    ASSERT_NE(diffButton, nullptr);
+    ASSERT_NE(absDiff, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(absDiff, "triggered"));
+    harness.settle();
+    EXPECT_EQ(harness.imageReview.compareMode(), 2);
+    EXPECT_TRUE(diffButton->property("text").toString().contains(QStringLiteral("绝对差异")));
+
+    auto* const manualMode =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageModePrimary"));
+    ASSERT_NE(manualMode, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(manualMode, "clicked"));
+    harness.settle();
+    EXPECT_EQ(primaryViewport->property("slot").toInt(), 2);
 }
 
 TEST(MainQmlContractTests, ImageWorkspaceSyncedCrosshairExistsInSideBySide) {
@@ -3156,7 +3184,7 @@ TEST(MainQmlContractTests, ImmersiveModeBottomEdgeWakesOverlayOsc) {
     EXPECT_EQ(harness.root->property("oscState").toInt(), 2);
 }
 
-TEST(MainQmlContractTests, ImageWorkspaceAlphaWorkflowAndBackgroundShortcutsContract) {
+TEST(MainQmlContractTests, ImageWorkspaceAlphaAndBackgroundSelectionContract) {
     WorkspaceHarness harness;
     ASSERT_TRUE(harness.create()) << harness.error;
     harness.window->show();
@@ -3215,38 +3243,33 @@ TEST(MainQmlContractTests, ImageWorkspaceAlphaWorkflowAndBackgroundShortcutsCont
     EXPECT_EQ(harness.imageReview.viewMode(), 0);
     EXPECT_FALSE(alphaBadge->isVisible());
 
-    // Press 'B' to cycle background mode: 0 -> 1 (Checkerboard).
-    sendKey(*harness.window, Qt::Key_B);
+    // Background changes through the explicit menu selection.
+    auto* const checkerItem =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageBgChecker"));
+    ASSERT_NE(checkerItem, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(checkerItem, "triggered"));
     harness.settle();
     EXPECT_EQ(imageWorkspace->property("backgroundMode").toInt(), 1);
     EXPECT_TRUE(alphaBadge->isVisible());
 
-    // Press 'B' again: 1 -> 2 (Black).
+    // The old cycling shortcut no longer changes the selected background.
     sendKey(*harness.window, Qt::Key_B);
+    harness.settle();
+    EXPECT_EQ(imageWorkspace->property("backgroundMode").toInt(), 1);
+
+    auto* const blackItem = harness.root->findChild<QQuickItem*>(QStringLiteral("imageBgBlack"));
+    ASSERT_NE(blackItem, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(blackItem, "triggered"));
     harness.settle();
     EXPECT_EQ(imageWorkspace->property("backgroundMode").toInt(), 2);
     EXPECT_TRUE(alphaBadge->isVisible());
 
-    // Press 'B' again: 2 -> 3 (White).
-    sendKey(*harness.window, Qt::Key_B);
-    harness.settle();
-    EXPECT_EQ(imageWorkspace->property("backgroundMode").toInt(), 3);
-    EXPECT_TRUE(alphaBadge->isVisible());
-
-    // Press 'B' again: 3 -> 0 (Dark).
-    sendKey(*harness.window, Qt::Key_B);
+    auto* const darkItem = harness.root->findChild<QQuickItem*>(QStringLiteral("imageBgDark"));
+    ASSERT_NE(darkItem, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(darkItem, "triggered"));
     harness.settle();
     EXPECT_EQ(imageWorkspace->property("backgroundMode").toInt(), 0);
     EXPECT_FALSE(alphaBadge->isVisible());
-
-    // Cycle background button clicks cycle background.
-    auto* const cycleBgBtn =
-        harness.root->findChild<QQuickItem*>(QStringLiteral("imageBgCycleButton"));
-    ASSERT_NE(cycleBgBtn, nullptr);
-    ASSERT_TRUE(QMetaObject::invokeMethod(cycleBgBtn, "clicked"));
-    harness.settle();
-    EXPECT_EQ(imageWorkspace->property("backgroundMode").toInt(), 1);
-    EXPECT_TRUE(alphaBadge->isVisible());
 
     // View-mode menu item toggles: triggering "Alpha Gray" sets viewMode 1, triggering
     // again returns to RGBA (the chip was promoted into the 观察 dropdown menu).
@@ -3261,7 +3284,7 @@ TEST(MainQmlContractTests, ImageWorkspaceAlphaWorkflowAndBackgroundShortcutsCont
     ASSERT_TRUE(QMetaObject::invokeMethod(alphaGrayItem, "triggered"));
     harness.settle();
     EXPECT_EQ(harness.imageReview.viewMode(), 0);
-    EXPECT_TRUE(alphaBadge->isVisible());
+    EXPECT_FALSE(alphaBadge->isVisible());
 
     // Reset background to 0.
     imageWorkspace->setProperty("backgroundMode", 0);

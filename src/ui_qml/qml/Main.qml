@@ -22,7 +22,7 @@ ApplicationWindow {
     minimumWidth: 960
     minimumHeight: 640
     visible: false
-    title: qsTr("CompareStation — 视频对比工作站")
+    title: Qt.application.version.length > 0 ? qsTr("CompareStation %1 — 视觉审查").arg(Qt.application.version) : qsTr("CompareStation — 视觉审查")
     color: Theme.window
 
     readonly property color panelColor: Theme.menu
