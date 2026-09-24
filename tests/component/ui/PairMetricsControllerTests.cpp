@@ -301,5 +301,103 @@ TEST_F(PairMetricsControllerTests, PeakFramesAndSamplePointsProjectCache) {
     EXPECT_TRUE(strongestProjected);
 }
 
+TEST_F(PairMetricsControllerTests, TimestampModePrefersSourceTimelineAndAppliesUserOffset) {
+    // Canonical source 1 is CFR 30 fps. Source 2 declares a 30 fps average rate but carries a
+    // probed VFR timeline ({0, 10000, 20000, 30000, 40000} us); the timeline must win over the
+    // average-rate guess, and the active user offset must be applied on top.
+    auto timeline = domain::FrameTimeline::create({domain::MediaTime{0},
+                                                   domain::MediaTime{10'000},
+                                                   domain::MediaTime{20'000},
+                                                   domain::MediaTime{30'000},
+                                                   domain::MediaTime{40'000}});
+    ASSERT_TRUE(timeline.hasValue());
+
+    const auto validation =
+        domain::ComparisonValidator::validate({makeSource(domain::SourceId{1}, 320, 180, 12),
+                                               makeSource(domain::SourceId{2}, 320, 180, 12)});
+    ASSERT_TRUE(validation.hasValue());
+    snapshot_ = std::make_shared<application::SessionSnapshot>();
+    snapshot_->sessionId = domain::SessionId{1};
+    snapshot_->sessionEpoch = domain::SessionEpoch{1};
+    snapshot_->playbackGeneration = domain::PlaybackGeneration{1};
+    snapshot_->displayedFrame = domain::FrameId{1};
+    snapshot_->canonicalFrameCount = 12U;
+    snapshot_->alignmentRevision = 4U;
+    snapshot_->alignmentMode = application::AlignmentMode::Timestamp;
+    auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate.hasValue());
+    snapshot_->canonicalTimeline = std::move(rate).value();
+    snapshot_->sourceTimelines = {application::SourceTimelineView{
+        domain::SourceId{2},
+        std::make_shared<const domain::FrameTimeline>(std::move(timeline).value()),
+    }};
+    snapshot_->alignmentOffsets = {application::SourceFrameOffset{domain::SourceId{1}, 0},
+                                   application::SourceFrameOffset{domain::SourceId{2}, 1}};
+    snapshot_->activeComparisonPair =
+        domain::ComparisonPair{domain::SourceId{1}, domain::SourceId{2}};
+    snapshot_->validatedComparison =
+        std::make_shared<const domain::ValidatedComparisonSet>(std::move(validation).value().set);
+
+    controller_->refresh();
+    processUntil([&] { return !service_.requests.empty(); }, 1000);
+    ASSERT_EQ(service_.requests.size(), 1U);
+    const application::PairMetricsRequest& request = service_.requests.front();
+    ASSERT_EQ(request.firstFrame, domain::FrameId{1});
+    ASSERT_EQ(request.lastFrame, domain::FrameId{1});
+    ASSERT_EQ(request.mappedSourceFrames.size(), 2U);
+    // The canonical source maps frame-for-frame (no time round-trip).
+    EXPECT_EQ(request.mappedSourceFrames[0], 1);
+    // Canonical time 33333 us -> timeline frame 3 (the 30 fps guess would say frame 1),
+    // plus the +1 user offset -> frame 4.
+    EXPECT_EQ(request.mappedSourceFrames[1], 4);
+
+    // A canonical time past the timeline's estimated end (40000 + 10000 us) is Missing, so
+    // metrics mark the sample non-comparable instead of measuring the held last frame.
+    snapshot_->displayedFrame = domain::FrameId{4};
+    controller_->refresh();
+    processUntil([&] { return service_.requests.size() >= 2U; }, 1000);
+    ASSERT_GE(service_.requests.size(), 2U);
+    const application::PairMetricsRequest& beyond = service_.requests.back();
+    ASSERT_EQ(beyond.firstFrame, domain::FrameId{4});
+    ASSERT_EQ(beyond.mappedSourceFrames.size(), 2U);
+    EXPECT_EQ(beyond.mappedSourceFrames[0], 4);
+    EXPECT_EQ(beyond.mappedSourceFrames[1], -1);
+}
+
+TEST_F(PairMetricsControllerTests, SequenceMappingWindowPreservesOffsetsGapsAndReviewSegments) {
+    installTwoSourceSession(3, 12U);
+    application::SequenceAlignmentResult sequence;
+    sequence.sourceId = domain::SourceId{2};
+    for (std::int64_t frame = 0; frame < 12; ++frame) {
+        sequence.entries.push_back(application::SequenceAlignmentEntry{
+            .canonicalFrameId = domain::FrameId{frame},
+            .sourceFrameId = domain::FrameId{frame + 1},
+            .matchKind = application::FrameMatchKind::AutoAligned,
+            .confidence = 1.0F});
+    }
+    sequence.entries[4].sourceFrameId.reset();
+    sequence.segments = {application::SequenceAlignmentSegment{
+                             .firstCanonicalFrame = domain::FrameId{0},
+                             .lastCanonicalFrame = domain::FrameId{5},
+                             .state = application::AlignmentSegmentState::Accepted},
+                         application::SequenceAlignmentSegment{
+                             .firstCanonicalFrame = domain::FrameId{6},
+                             .lastCanonicalFrame = domain::FrameId{11},
+                             .state = application::AlignmentSegmentState::ReviewRequired}};
+    snapshot_->sequenceAlignmentMaps =
+        std::make_shared<const std::vector<application::SequenceAlignmentResult>>(
+            std::vector<application::SequenceAlignmentResult>{sequence});
+    controller_->setLaneEnabled(true);
+    controller_->refresh();
+    processUntil([&] { return !service_.requests.empty(); }, 1000);
+    ASSERT_EQ(service_.requests.size(), 1U);
+    const auto& mapped = service_.requests.front().mappedSourceFrames;
+    ASSERT_EQ(mapped.size(), 24U);
+    EXPECT_EQ(mapped[6], 3);
+    EXPECT_EQ(mapped[7], 4);
+    EXPECT_EQ(mapped[9], -1);
+    EXPECT_EQ(mapped[13], 6);
+}
+
 } // namespace
 } // namespace dvs::ui

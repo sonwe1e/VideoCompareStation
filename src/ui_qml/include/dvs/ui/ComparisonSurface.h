@@ -174,6 +174,9 @@ public:
     Q_INVOKABLE void zoomAt(qreal normalizedX, qreal normalizedY, qreal factor);
     Q_INVOKABLE void panBy(qreal normalizedDeltaX, qreal normalizedDeltaY);
     Q_INVOKABLE void resetViewport();
+    // Fits a normalized source-space rect into the viewport (same product gesture as the
+    // image workspace marquee zoom).
+    Q_INVOKABLE void zoomToNormalizedRect(qreal left, qreal top, qreal right, qreal bottom);
     Q_INVOKABLE void setRoiNormalized(qreal left, qreal top, qreal right, qreal bottom);
     Q_INVOKABLE void clearRoi();
     Q_INVOKABLE void restoreViewport(qreal centerX,

@@ -8,6 +8,7 @@ add_library(
         src/ComparisonExactness.cpp
         src/ComparisonMetrics.cpp
         src/CoordinatorPublication.cpp
+        src/FrameMapping.cpp
         src/IssueRecord.cpp
         src/Module.cpp
         src/PlaybackCoordinator.cpp

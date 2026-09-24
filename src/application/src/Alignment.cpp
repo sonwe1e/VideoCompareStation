@@ -993,4 +993,33 @@ std::optional<SourceFrameOffset> mapFrameWithAnchors(const SourceAlignmentAnchor
     };
 }
 
+bool canonicalTimeBeyondSourceTimeline(const domain::FrameTimeline& timeline,
+                                       const domain::MediaTime canonicalTime) noexcept {
+    const std::int64_t frameCount = timeline.frameCount();
+    if (frameCount <= 0) {
+        return true;
+    }
+    const auto lastStart = timeline.frameStartTime(domain::FrameId{frameCount - 1});
+    if (!lastStart.hasValue()) {
+        return false;
+    }
+    const std::int64_t lastStartUs = lastStart.value().microseconds();
+    if (canonicalTime.microseconds() < lastStartUs) {
+        return false;
+    }
+    std::optional<std::int64_t> intervalUs;
+    if (frameCount >= 2) {
+        const auto previousStart = timeline.frameStartTime(domain::FrameId{frameCount - 2});
+        if (previousStart.hasValue()) {
+            intervalUs = lastStartUs - previousStart.value().microseconds();
+        }
+    }
+    if (!intervalUs.has_value() || *intervalUs <= 0) {
+        // A single-frame timeline has no observable cadence; keep the held frame instead of
+        // guessing an end.
+        return false;
+    }
+    return canonicalTime.microseconds() >= lastStartUs + *intervalUs;
+}
+
 } // namespace dvs::application

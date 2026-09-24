@@ -412,7 +412,7 @@ struct ReviewView final {
     QVariantList differenceEdges;
     // C-02/C-07 projections from the session snapshot.
     int effectiveDifferenceEdge = 0;
-    int playbackContinuityPolicy = 0;
+    int playbackContinuityPolicy = 1;
     QString playbackContinuityPolicyName;
     qulonglong playbackSkippedFrameSets = 0U;
     qulonglong playbackRunSkippedFrameSets = 0U;
@@ -427,6 +427,10 @@ struct ReviewView final {
     bool canLast = false;
     bool canPlay = false;
     bool canPause = false;
+    int alignmentMode = 0;
+    QString alignmentModeName = QStringLiteral("按帧号 (1:1)");
+    QString currentInexactReason;
+    QVariantMap activePairTimeInfo;
 
     [[nodiscard]] bool operator==(const ReviewView&) const = default;
 
@@ -436,7 +440,10 @@ struct ReviewView final {
                frameMappingStatus == other.frameMappingStatus &&
                autoAlignmentActive == other.autoAlignmentActive &&
                differenceEdges == other.differenceEdges && canPrevious == other.canPrevious &&
-               canNext == other.canNext;
+               canNext == other.canNext && alignmentMode == other.alignmentMode &&
+               alignmentModeName == other.alignmentModeName &&
+               currentInexactReason == other.currentInexactReason &&
+               activePairTimeInfo == other.activePairTimeInfo;
     }
 };
 
@@ -1005,6 +1012,30 @@ public:
         return submitPlaybackContinuityPolicy(policyCode);
     }
 
+    [[nodiscard]] bool setAlignmentMode(const int modeCode) {
+        if (!onOwnerThread() || stopped_) {
+            return false;
+        }
+        refresh();
+        if (modeCode < 0 || modeCode > 2) {
+            return false;
+        }
+        const auto mode = static_cast<application::AlignmentMode>(modeCode);
+        const std::optional<application::CommandContext> context = allocateCommandContext();
+        if (!context.has_value()) {
+            return false;
+        }
+        try {
+            return dependencies_.submit(
+                       application::PlaybackCommand{application::SetAlignmentModeCommand{
+                           .context = *context,
+                           .mode = mode,
+                       }}) == application::PortSubmitResult::Accepted;
+        } catch (...) {
+            return false;
+        }
+    }
+
     [[nodiscard]] bool applyComparisonPairFromEdge(const int preferenceValue,
                                                    const int pairPolicyCode) {
         if (!onOwnerThread() || stopped_) {
@@ -1571,7 +1602,9 @@ private:
                         QStringLiteral("%1: Missing frame (%2)").arg(currentSourceName, reason));
                 } else if ((source.matchKind == application::FrameMatchKind::GlobalOffset ||
                             source.matchKind == application::FrameMatchKind::AutoAligned ||
-                            source.matchKind == application::FrameMatchKind::ManualAnchor) &&
+                            source.matchKind == application::FrameMatchKind::ManualAnchor ||
+                            source.matchKind == application::FrameMatchKind::TimeAligned ||
+                            source.matchKind == application::FrameMatchKind::ExactIndex) &&
                            source.sourceFrameId.has_value()) {
                     const qint64 offset = next.currentFrame >= 0
                                               ? source.sourceFrameId->value() - next.currentFrame
@@ -1581,6 +1614,10 @@ private:
                         origin = QStringLiteral("auto");
                     } else if (source.matchKind == application::FrameMatchKind::ManualAnchor) {
                         origin = QStringLiteral("anchor");
+                    } else if (source.matchKind == application::FrameMatchKind::TimeAligned) {
+                        origin = QStringLiteral("time");
+                    } else if (source.matchKind == application::FrameMatchKind::ExactIndex) {
+                        origin = QStringLiteral("index");
                     }
                     mappingParts.push_back(
                         QStringLiteral("%1: source frame %2 (%3 offset %4%5, %6%)")
@@ -1930,6 +1967,30 @@ private:
                      secondPresented && secondPresented->sourceFrameId.has_value()
                          ? secondPresented->presentationTime.microseconds()
                          : 0},
+                    {QStringLiteral("inexactReason"),
+                     QString::fromStdString(dimensions.inexactReason)},
+                    {QStringLiteral("primarySlot"), static_cast<int>(first)},
+                    {QStringLiteral("secondarySlot"), static_cast<int>(second)},
+                    {QStringLiteral("aligned"), dimensions.available ? 1 : 0},
+                    {QStringLiteral("primaryFrame"),
+                     sourceRows[first].currentSourceFrame.value_or(-1)},
+                    {QStringLiteral("secondaryFrame"),
+                     sourceRows[second].currentSourceFrame.value_or(-1)},
+                    {QStringLiteral("primaryPtsMs"),
+                     firstPresented && firstPresented->sourceFrameId.has_value()
+                         ? firstPresented->presentationTime.microseconds() / 1000.0
+                         : 0.0},
+                    {QStringLiteral("secondaryPtsMs"),
+                     secondPresented && secondPresented->sourceFrameId.has_value()
+                         ? secondPresented->presentationTime.microseconds() / 1000.0
+                         : 0.0},
+                    {QStringLiteral("deltaMs"),
+                     (secondPresented && secondPresented->sourceFrameId.has_value()
+                          ? secondPresented->presentationTime.microseconds() / 1000.0
+                          : 0.0) -
+                         (firstPresented && firstPresented->sourceFrameId.has_value()
+                              ? firstPresented->presentationTime.microseconds() / 1000.0
+                              : 0.0)},
                 });
             }
         }
@@ -1942,7 +2003,28 @@ private:
                 next.effectiveDifferenceEdge = static_cast<int>(*ordinal);
             }
         }
+        if (next.effectiveDifferenceEdge >= 0 &&
+            next.effectiveDifferenceEdge < static_cast<int>(next.differenceEdges.size())) {
+            const QVariantMap edgeMap = next.differenceEdges[next.effectiveDifferenceEdge].toMap();
+            next.currentInexactReason = edgeMap.value(QStringLiteral("inexactReason")).toString();
+            next.activePairTimeInfo = edgeMap;
+        } else {
+            next.currentInexactReason.clear();
+            next.activePairTimeInfo.clear();
+        }
         if (snapshot_) {
+            next.alignmentMode = static_cast<int>(snapshot_->alignmentMode);
+            switch (snapshot_->alignmentMode) {
+            case application::AlignmentMode::FrameIndex:
+                next.alignmentModeName = QStringLiteral("按帧号 (1:1)");
+                break;
+            case application::AlignmentMode::Timestamp:
+                next.alignmentModeName = QStringLiteral("按时间 (PTS)");
+                break;
+            case application::AlignmentMode::ManualAnchor:
+                next.alignmentModeName = QStringLiteral("人工锚点");
+                break;
+            }
             next.playbackContinuityPolicy =
                 static_cast<int>(snapshot_->playbackContinuityPolicyEffective);
             next.playbackContinuityPolicyName = QString::fromLatin1(
@@ -2469,6 +2551,22 @@ QVariantList ReviewController::differenceEdges() const {
     return impl_->view().differenceEdges;
 }
 
+int ReviewController::alignmentMode() const noexcept {
+    return impl_->view().alignmentMode;
+}
+
+QString ReviewController::alignmentModeName() const {
+    return impl_->view().alignmentModeName;
+}
+
+QString ReviewController::currentInexactReason() const {
+    return impl_->view().currentInexactReason;
+}
+
+QVariantMap ReviewController::activePairTimeInfo() const {
+    return impl_->view().activePairTimeInfo;
+}
+
 bool ReviewController::canOpen() const noexcept {
     return impl_->view().canOpen;
 }
@@ -2672,6 +2770,10 @@ bool ReviewController::setManualAlignmentAnchor(const int sourceIndex,
 
 bool ReviewController::clearManualAlignmentAnchors() {
     return impl_->clearManualAlignmentAnchors();
+}
+
+bool ReviewController::setAlignmentMode(const int mode) {
+    return impl_->setAlignmentMode(mode);
 }
 
 bool ReviewController::play() {

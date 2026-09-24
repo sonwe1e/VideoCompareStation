@@ -31,6 +31,7 @@ using PlaybackCommand = std::variant<OpenComparisonCommand,
                                      RestoreSequenceAlignmentCommand,
                                      SetManualAlignmentAnchorCommand,
                                      ClearManualAlignmentAnchorsCommand,
+                                     SetAlignmentModeCommand,
                                      CloseSessionCommand>;
 
 [[nodiscard]] inline const CommandContext& commandContext(const PlaybackCommand& command) noexcept {

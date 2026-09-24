@@ -723,6 +723,35 @@ void ComparisonSurface::resetViewport() {
     update();
 }
 
+void ComparisonSurface::zoomToNormalizedRect(const qreal left,
+                                             const qreal top,
+                                             const qreal right,
+                                             const qreal bottom) {
+    if (!std::isfinite(left) || !std::isfinite(top) || !std::isfinite(right) ||
+        !std::isfinite(bottom)) {
+        return;
+    }
+    const qreal normalizedLeft = std::clamp((std::min)(left, right), 0.0, 1.0);
+    const qreal normalizedTop = std::clamp((std::min)(top, bottom), 0.0, 1.0);
+    const qreal normalizedRight = std::clamp((std::max)(left, right), 0.0, 1.0);
+    const qreal normalizedBottom = std::clamp((std::max)(top, bottom), 0.0, 1.0);
+    const qreal boxWidth = normalizedRight - normalizedLeft;
+    const qreal boxHeight = normalizedBottom - normalizedTop;
+    if (boxWidth < 0.005 || boxHeight < 0.005) {
+        return;
+    }
+    // Fit the larger box dimension so the whole selection stays visible.
+    const qreal nextScale = std::clamp(1.0 / (std::max)(boxWidth, boxHeight), 1.0, 64.0);
+    const qreal visible = 1.0 / nextScale;
+    const qreal centerX = (normalizedLeft + normalizedRight) * 0.5;
+    const qreal centerY = (normalizedTop + normalizedBottom) * 0.5;
+    viewScale_ = nextScale;
+    viewCenterX_ = std::clamp(centerX, visible * 0.5, 1.0 - visible * 0.5);
+    viewCenterY_ = std::clamp(centerY, visible * 0.5, 1.0 - visible * 0.5);
+    emit viewportChanged();
+    update();
+}
+
 void ComparisonSurface::setRoiNormalized(const qreal left,
                                          const qreal top,
                                          const qreal right,

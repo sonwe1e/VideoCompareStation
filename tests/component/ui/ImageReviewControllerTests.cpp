@@ -14,7 +14,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <future>
 #include <gtest/gtest.h>
+#include <iostream>
 #include <string>
 
 namespace {
@@ -1029,6 +1031,51 @@ TEST(ImageReviewControllerTests, AlphaStatsStayVisibleWhenRgbMatchesCompletely) 
     EXPECT_EQ(controller.alphaChangedPixels(), 4);
 }
 
+TEST(ImageReviewControllerTests, LargeImageChannelBuildKeepsHoverResponsiveAndReplacesCleanly) {
+    ensureCoreApplication();
+    ImageReviewController controller;
+    QImage primary(7680, 4320, QImage::Format_ARGB32);
+    QImage secondary(7680, 4320, QImage::Format_ARGB32);
+    ASSERT_FALSE(primary.isNull());
+    ASSERT_FALSE(secondary.isNull());
+    primary.fill(QColor(10, 20, 30, 128));
+    secondary.fill(QColor(40, 50, 60, 64));
+    ASSERT_TRUE(controller.openPairImages(
+        std::move(primary), QStringLiteral("8k-a"), std::move(secondary), QStringLiteral("8k-b")));
+    qint64 maximumHoverUs = 0;
+    for (const int mode : {ImageReviewController::AlphaGrayView,
+                           ImageReviewController::RgbOpaqueView,
+                           ImageReviewController::AlphaGrayView}) {
+        controller.setViewMode(mode);
+        QElapsedTimer cold;
+        cold.start();
+        auto build = std::async(std::launch::async, [&controller] {
+            return controller.imageForSlot(ImageReviewController::PrimarySlot);
+        });
+        for (int sample = 0; sample < 100; ++sample) {
+            QElapsedTimer hover;
+            hover.start();
+            const auto pixel = controller.samplePixel(ImageReviewController::PrimarySlot, 100, 100);
+            maximumHoverUs = std::max(maximumHoverUs, hover.nsecsElapsed() / 1000);
+            EXPECT_TRUE(pixel.value(QStringLiteral("valid")).toBool());
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 1);
+        }
+        const QImage view = build.get();
+        ASSERT_EQ(view.size(), QSize(7680, 4320));
+        EXPECT_EQ(qAlpha(view.pixel(100, 100)), 255);
+        std::cout << "8K channel mode=" << mode << " cold_ms=" << cold.elapsed() << '\n';
+    }
+    std::cout << "8K hover_max_us=" << maximumHoverUs << '\n';
+    EXPECT_LT(maximumHoverUs, 100'000);
+    ASSERT_TRUE(controller.swapSides());
+    controller.setViewMode(ImageReviewController::AlphaGrayView);
+    EXPECT_EQ(qRed(controller.imageForSlot(ImageReviewController::PrimarySlot).pixel(0, 0)), 64);
+    ASSERT_TRUE(controller.openPrimaryImage(solidImage(QColor(1, 2, 3, 200)),
+                                            QStringLiteral("replacement")));
+    controller.setViewMode(ImageReviewController::AlphaGrayView);
+    EXPECT_EQ(qRed(controller.imageForSlot(ImageReviewController::PrimarySlot).pixel(0, 0)), 200);
+}
+
 TEST(ImageReviewControllerTests, ChannelViewsIsolateAlphaAndRgbWithoutMutatingSource) {
     ImageReviewController controller;
     QImage source(2, 2, QImage::Format_ARGB32);
@@ -1063,6 +1110,197 @@ TEST(ImageReviewControllerTests, ChannelViewsIsolateAlphaAndRgbWithoutMutatingSo
     const QImage original = controller.imageForSlot(ImageReviewController::PrimarySlot);
     EXPECT_EQ(qAlpha(original.pixel(1, 1)), 0);
     EXPECT_EQ(qRed(original.pixel(1, 1)), 100);
+}
+
+TEST(ImageReviewControllerTests, SwapSidesExchangesSidesAndKeepsPairIdentity) {
+    ImageReviewController controller;
+    ASSERT_TRUE(controller.openPairImages(solidImage(Qt::red),
+                                          QStringLiteral("left.png"),
+                                          solidImage(Qt::blue),
+                                          QStringLiteral("right.png"),
+                                          7));
+    controller.setZoom(2.5);
+    const qreal panX = controller.panX();
+    ASSERT_TRUE(controller.swapSides());
+    EXPECT_EQ(controller.primaryPath(), QStringLiteral("right.png"));
+    EXPECT_EQ(controller.secondaryPath(), QStringLiteral("left.png"));
+    EXPECT_EQ(controller.committedPairId(), 7);
+    EXPECT_DOUBLE_EQ(controller.zoom(), 2.5);
+    EXPECT_DOUBLE_EQ(controller.panX(), panX);
+    const QImage primary = controller.imageForSlot(ImageReviewController::PrimarySlot);
+    const QImage secondary = controller.imageForSlot(ImageReviewController::SecondarySlot);
+    EXPECT_EQ(primary.pixel(0, 0), QColor(Qt::blue).rgb());
+    EXPECT_EQ(secondary.pixel(0, 0), QColor(Qt::red).rgb());
+    // Second swap restores the original orientation.
+    ASSERT_TRUE(controller.swapSides());
+    EXPECT_EQ(controller.primaryPath(), QStringLiteral("left.png"));
+    EXPECT_EQ(controller.secondaryPath(), QStringLiteral("right.png"));
+    EXPECT_EQ(controller.committedPairId(), 7);
+}
+
+TEST(ImageReviewControllerTests, SwapSidesRequiresAnOpenPair) {
+    ImageReviewController controller;
+    EXPECT_FALSE(controller.swapSides());
+    EXPECT_FALSE(controller.errorText().isEmpty());
+    ASSERT_TRUE(controller.openPrimaryImage(solidImage(Qt::red), QStringLiteral("only.png")));
+    EXPECT_FALSE(controller.swapSides());
+}
+
+TEST(ImageReviewControllerTests, ReplacePrimaryKeepsSecondaryAndPairIdentity) {
+    ensureCoreApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QUrl replacement =
+        writeBytes(directory, QStringLiteral("newA.bin"), QByteArrayLiteral("newA"));
+    ASSERT_FALSE(replacement.isEmpty());
+    ScopedStillImageLoader loader{[](const QByteArray& bytes,
+                                     QImage* image,
+                                     QImage*,
+                                     dvs::ui::StillImageSourceInfo*,
+                                     std::string*) {
+        if (bytes != QByteArrayLiteral("newA")) {
+            return false;
+        }
+        *image = solidImage(QColor(1, 2, 3));
+        return true;
+    }};
+
+    ImageReviewController controller;
+    ASSERT_TRUE(controller.openPairImages(solidImage(Qt::red),
+                                          QStringLiteral("oldA.png"),
+                                          solidImage(Qt::blue),
+                                          QStringLiteral("oldB.png"),
+                                          11));
+    controller.setZoom(3.0);
+    ASSERT_GT(controller.requestReplacePrimary(replacement), 0);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    EXPECT_TRUE(controller.primaryPath().endsWith(QStringLiteral("newA.bin")));
+    EXPECT_EQ(controller.secondaryPath(), QStringLiteral("oldB.png"));
+    EXPECT_EQ(controller.committedPairId(), 11);
+    EXPECT_DOUBLE_EQ(controller.zoom(), 3.0);
+    const QImage secondary = controller.imageForSlot(ImageReviewController::SecondarySlot);
+    EXPECT_EQ(secondary.pixel(0, 0), QColor(Qt::blue).rgb());
+}
+
+TEST(ImageReviewControllerTests, ReplaceSecondaryKeepsPrimaryAndPairIdentity) {
+    ensureCoreApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QUrl replacement =
+        writeBytes(directory, QStringLiteral("newB.bin"), QByteArrayLiteral("newB"));
+    ASSERT_FALSE(replacement.isEmpty());
+    ScopedStillImageLoader loader{[](const QByteArray& bytes,
+                                     QImage* image,
+                                     QImage*,
+                                     dvs::ui::StillImageSourceInfo*,
+                                     std::string*) {
+        if (bytes != QByteArrayLiteral("newB")) {
+            return false;
+        }
+        *image = solidImage(QColor(9, 8, 7));
+        return true;
+    }};
+
+    ImageReviewController controller;
+    ASSERT_TRUE(controller.openPairImages(solidImage(Qt::red),
+                                          QStringLiteral("oldA.png"),
+                                          solidImage(Qt::blue),
+                                          QStringLiteral("oldB.png"),
+                                          13));
+    ASSERT_GT(controller.requestReplaceSecondary(replacement), 0);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    EXPECT_EQ(controller.primaryPath(), QStringLiteral("oldA.png"));
+    EXPECT_TRUE(controller.secondaryPath().endsWith(QStringLiteral("newB.bin")));
+    EXPECT_EQ(controller.committedPairId(), 13);
+    const QImage primary = controller.imageForSlot(ImageReviewController::PrimarySlot);
+    EXPECT_EQ(primary.pixel(0, 0), QColor(Qt::red).rgb());
+}
+
+TEST(ImageReviewControllerTests, FailedSideReplaceKeepsPreviousSide) {
+    ensureCoreApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QUrl good = writeBytes(directory, QStringLiteral("good.bin"), QByteArrayLiteral("good"));
+    const QUrl bad = writeBytes(directory, QStringLiteral("bad.bin"), QByteArrayLiteral("bad"));
+    ASSERT_FALSE(good.isEmpty() || bad.isEmpty());
+    ScopedStillImageLoader loader{[](const QByteArray& bytes,
+                                     QImage* image,
+                                     QImage*,
+                                     dvs::ui::StillImageSourceInfo*,
+                                     std::string* error) {
+        if (bytes == QByteArrayLiteral("bad")) {
+            if (error != nullptr) {
+                *error = "corrupt";
+            }
+            return false;
+        }
+        *image = solidImage(QColor(5, 6, 7));
+        return true;
+    }};
+
+    ImageReviewController controller;
+    ASSERT_TRUE(controller.openPairImages(solidImage(Qt::red),
+                                          QStringLiteral("oldA.png"),
+                                          solidImage(Qt::blue),
+                                          QStringLiteral("oldB.png"),
+                                          3));
+    ASSERT_GT(controller.requestReplacePrimary(bad), 0);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    EXPECT_FALSE(controller.errorText().isEmpty());
+    EXPECT_EQ(controller.primaryPath(), QStringLiteral("oldA.png"));
+    EXPECT_EQ(controller.secondaryPath(), QStringLiteral("oldB.png"));
+    EXPECT_EQ(controller.committedPairId(), 3);
+
+    ASSERT_GT(controller.requestReplaceSecondary(good), 0);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    EXPECT_TRUE(controller.errorText().isEmpty());
+    EXPECT_EQ(controller.primaryPath(), QStringLiteral("oldA.png"));
+    EXPECT_TRUE(controller.secondaryPath().endsWith(QStringLiteral("good.bin")));
+}
+
+TEST(ImageReviewControllerTests, SwapSidesRecomputesSignedDifferenceDirection) {
+    ImageReviewController controller;
+    QImage left(1, 1, QImage::Format_ARGB32);
+    left.fill(qRgba(10, 0, 0, 255));
+    QImage right(1, 1, QImage::Format_ARGB32);
+    right.fill(qRgba(40, 0, 0, 255));
+    ASSERT_TRUE(controller.openPairImages(left, QStringLiteral("a"), right, QStringLiteral("b")));
+    controller.setCompareMode(ImageReviewController::AbsDifference);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    ASSERT_TRUE(controller.hasDiffResult());
+    EXPECT_EQ(controller.maxAbsDifference(), 30);
+
+    ASSERT_TRUE(controller.swapSides());
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    // Abs difference is symmetric, but the pair orientation (and signed mode) flips.
+    ASSERT_TRUE(controller.hasDiffResult());
+    EXPECT_EQ(controller.maxAbsDifference(), 30);
+    EXPECT_EQ(controller.primaryPath(), QStringLiteral("b"));
+    EXPECT_EQ(controller.secondaryPath(), QStringLiteral("a"));
+}
+
+TEST(ImageReviewControllerTests, ZoomToRectCalculatesCenterPanAndClampedZoom) {
+    ImageReviewController controller;
+    QImage left(100, 100, QImage::Format_ARGB32);
+    left.fill(Qt::black);
+    ASSERT_TRUE(controller.openPrimaryImage(left, QStringLiteral("test.png")));
+
+    EXPECT_DOUBLE_EQ(controller.zoom(), 1.0);
+    EXPECT_DOUBLE_EQ(controller.panX(), 0.5);
+    EXPECT_DOUBLE_EQ(controller.panY(), 0.5);
+
+    // Zoom into rect from (0.2, 0.3) to (0.6, 0.7)
+    // rectW = 0.4, rectH = 0.4 -> factor = 2.5
+    // center = (0.4, 0.5)
+    controller.zoomToRect(0.2, 0.3, 0.6, 0.7);
+
+    EXPECT_NEAR(controller.panX(), 0.4, 1e-4);
+    EXPECT_NEAR(controller.panY(), 0.5, 1e-4);
+    EXPECT_NEAR(controller.zoom(), 2.5, 1e-4);
+
+    // Tiny rect is ignored (guard against accidental clicks)
+    controller.zoomToRect(0.4, 0.4, 0.401, 0.401);
+    EXPECT_NEAR(controller.zoom(), 2.5, 1e-4);
 }
 
 } // namespace

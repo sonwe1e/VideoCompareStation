@@ -7,6 +7,7 @@
 #include "dvs/media/MediaProbe.h"
 #include "dvs/media/MultiSourceFrameProvider.h"
 #include "dvs/media/PairMetricsService.h"
+#include "dvs/media/PreviewThumbnailService.h"
 #include "dvs/persistence/IssueRecordRepository.h"
 #include "dvs/persistence/SettingsRepository.h"
 #include "dvs/platform/D3d11RenderChannel.h"
@@ -19,6 +20,7 @@
 #include "dvs/platform/SteadyDeadlineScheduler.h"
 #include "dvs/ui/ComparisonSurface.h"
 #include "dvs/ui/PairMetricsController.h"
+#include "dvs/ui/PreviewThumbnailController.h"
 #include "dvs/ui/RenderAckRelay.h"
 #include "dvs/ui/ReviewController.h"
 #include "dvs/ui/ReviewPreferencesController.h"
@@ -221,6 +223,7 @@ public:
     std::shared_ptr<platform::SteadyDeadlineScheduler> deadlineScheduler;
     std::shared_ptr<media::AlignmentAnalysisService> alignmentAnalysisService;
     std::shared_ptr<media::PairMetricsService> pairMetricsService;
+    std::shared_ptr<media::PreviewThumbnailService> previewThumbnailService;
     std::shared_ptr<media::MultiSourceFrameProvider> frameProvider;
     std::shared_ptr<media::MediaProbe> mediaProbe;
     std::shared_ptr<application::ISettingsRepository> settingsRepository;
@@ -340,6 +343,18 @@ public:
             },
             controller_.get());
         pairMetrics_->attachReviewController(*controller_);
+        previewThumbnailService_ = std::make_shared<media::PreviewThumbnailService>();
+        previewThumbnails_ = std::make_unique<ui::PreviewThumbnailController>(
+            ui::PreviewThumbnailController::Dependencies{
+                .snapshot =
+                    [weakCoordinator] {
+                        if (const auto coordinator = weakCoordinator.lock()) {
+                            return coordinator->snapshot();
+                        }
+                        return std::shared_ptr<const application::SessionSnapshot>{};
+                    },
+                .service = previewThumbnailService_.get(),
+            });
         preferences_ = std::make_unique<ui::ReviewPreferencesController>(settingsRepository_);
         graphicsPump_ = std::make_unique<GraphicsNotificationPump>(
             deviceBroker_,
@@ -362,6 +377,10 @@ public:
 
     [[nodiscard]] ui::PairMetricsController* pairMetrics() noexcept {
         return pairMetrics_.get();
+    }
+
+    [[nodiscard]] ui::PreviewThumbnailController* previewThumbnails() noexcept {
+        return previewThumbnails_.get();
     }
 
     [[nodiscard]] application::IIssueRecordRepository* issueRecordRepository() noexcept {
@@ -450,6 +469,9 @@ public:
         if (pairMetrics_) {
             pairMetrics_->stop();
         }
+        if (previewThumbnails_) {
+            previewThumbnails_->stop();
+        }
         if (preferences_) {
             preferences_->stop();
         }
@@ -502,6 +524,7 @@ public:
         work->deadlineScheduler = std::move(deadlineScheduler_);
         work->alignmentAnalysisService = std::move(alignmentAnalysisService_);
         work->pairMetricsService = std::move(pairMetricsService_);
+        work->previewThumbnailService = std::move(previewThumbnailService_);
         work->frameProvider = std::move(frameProvider_);
         work->mediaProbe = std::move(mediaProbe_);
         work->settingsRepository = std::move(settingsRepository_);
@@ -567,6 +590,7 @@ private:
     std::shared_ptr<DecoderBackendStateCache> decoderBackendStateCache_;
     std::shared_ptr<media::AlignmentAnalysisService> alignmentAnalysisService_;
     std::shared_ptr<media::PairMetricsService> pairMetricsService_;
+    std::shared_ptr<media::PreviewThumbnailService> previewThumbnailService_;
     std::shared_ptr<platform::SteadyDeadlineScheduler> deadlineScheduler_;
     std::shared_ptr<platform::SystemSteadyClock> clock_;
     std::shared_ptr<application::PlaybackCoordinator> coordinator_;
@@ -575,6 +599,7 @@ private:
     std::unique_ptr<GraphicsNotificationPump> graphicsPump_;
     std::unique_ptr<ui::ReviewController> controller_;
     std::unique_ptr<ui::PairMetricsController> pairMetrics_;
+    std::unique_ptr<ui::PreviewThumbnailController> previewThumbnails_;
     std::unique_ptr<ui::ReviewPreferencesController> preferences_;
     ui::ComparisonSurface* surface_ = nullptr;
     QMetaObject::Connection surfaceDestroyedConnection_;
@@ -608,6 +633,10 @@ ui::ReviewPreferencesController* ReviewRuntime::preferences() noexcept {
 
 ui::PairMetricsController* ReviewRuntime::pairMetrics() noexcept {
     return impl_ ? impl_->pairMetrics() : nullptr;
+}
+
+ui::PreviewThumbnailController* ReviewRuntime::previewThumbnails() noexcept {
+    return impl_ ? impl_->previewThumbnails() : nullptr;
 }
 
 application::IIssueRecordRepository* ReviewRuntime::issueRecordRepository() noexcept {

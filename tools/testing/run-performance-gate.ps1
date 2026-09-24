@@ -24,6 +24,8 @@ param(
 
     [switch]$RequireRetainedFrame,
 
+    [switch]$ReviewLoad,
+
     [string]$FixtureRoot = $env:DVS_PERFORMANCE_FIXTURE_ROOT,
 
     [string]$LogRoot,
@@ -133,6 +135,9 @@ foreach ($logPath in @($stderrPath, $stdoutPath)) {
     }
 }
 $arguments = @('--ui-performance') + $fixtures + @('--seconds', $DurationSeconds, '--mode', $ComparisonMode)
+if ($ReviewLoad) {
+    $arguments += '--review-load'
+}
 $commandLineArguments = (
     $arguments | ForEach-Object { ConvertTo-WindowsCommandLineArgument -Value ([string]$_) }
 ) -join ' '

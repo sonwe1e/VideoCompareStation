@@ -51,7 +51,12 @@ Rectangle {
     required property string overlayTitle
     required property string overlayDetail
 
+    property string alignmentModeName: ""
+    property string inexactReason: ""
+
     property bool roiSelecting: false
+    // Shift marquee zooms to the selection (product "放大"); Alt marquee sets comparison ROI.
+    property bool roiModeIsZoom: true
     property int roiPanel: -1
     property real roiStartX: 0
     property real roiStartY: 0
@@ -97,7 +102,7 @@ Rectangle {
         if (exactness === 1)
             return qsTr("已做显示空间转换");
         if (exactness === 2)
-            return qsTr("已空间重采样");
+            return qsTr("空间对应不一致");
         if (exactness === 3)
             return qsTr("帧映射或时间戳不同");
         return qsTr("不可用");
@@ -112,19 +117,24 @@ Rectangle {
             return qsTr("比较语义不可用");
         const parts = [];
         parts.push(Number(edge.temporalExact) === 1 ? qsTr("时间 索引及时间戳一致") : qsTr("时间 映射或时间戳不同"));
-        parts.push(Number(edge.spatialExact) === 1 ? qsTr("空间 原尺寸") : qsTr("空间 已重采样"));
+        parts.push(Number(edge.spatialExact) === 1 ? qsTr("空间 原尺寸") : qsTr("空间 尺寸或几何不同"));
         parts.push(Number(edge.pixelExact) === 1 ? qsTr("像素 原码值") : qsTr("像素 显示空间转换"));
         return parts.join(" · ");
     }
 
     function comparisonFrameTimesLabel(edge) {
-        if (!edge || Number(edge.dimensionsAvailable) !== 1)
+        if (!edge)
             return "";
         const firstFrame = Number(edge.firstSourceFrame);
         const secondFrame = Number(edge.secondSourceFrame);
-        if (firstFrame < 0 || secondFrame < 0)
-            return "";
-        return qsTr("源 %1 第 %2 帧 / %3 ms；源 %4 第 %5 帧 / %6 ms").arg(Number(edge.firstSourceId) + 1).arg(firstFrame + 1).arg((Number(edge.firstPresentationTimeUs) / 1000).toFixed(2)).arg(Number(edge.secondSourceId) + 1).arg(secondFrame + 1).arg((Number(edge.secondPresentationTimeUs) / 1000).toFixed(2));
+        const firstId = Number(edge.firstSourceId) + 1;
+        const secondId = Number(edge.secondSourceId) + 1;
+        const firstText = firstFrame >= 0 ? qsTr("源 %1 第 %2 帧 / %3 ms").arg(firstId).arg(firstFrame + 1).arg((Number(edge.firstPresentationTimeUs) / 1000).toFixed(2)) : qsTr("源 %1 缺失").arg(firstId);
+        const secondText = secondFrame >= 0 ? qsTr("源 %2 第 %3 帧 / %4 ms").arg(secondId).arg(secondFrame + 1).arg((Number(edge.secondPresentationTimeUs) / 1000).toFixed(2)) : qsTr("源 %1 缺失").arg(secondId);
+        let text = firstText + "；" + secondText;
+        if (control.inexactReason.length > 0)
+            text += "\n" + qsTr("⚠️ 无法精确对应原因：%1").arg(control.inexactReason);
+        return text;
     }
 
     function surfaceLabelGeometry(index) {
@@ -335,7 +345,16 @@ Rectangle {
             control.panLastX = point.x;
             control.panLastY = point.y;
             if ((mouse.modifiers & Qt.ShiftModifier) !== 0) {
+                // Unified with the image workspace: Shift+drag zooms to the marquee.
                 control.roiSelecting = true;
+                control.roiModeIsZoom = true;
+                control.roiStartX = mouse.x;
+                control.roiStartY = mouse.y;
+                control.roiCurrentX = mouse.x;
+                control.roiCurrentY = mouse.y;
+            } else if ((mouse.modifiers & Qt.AltModifier) !== 0) {
+                control.roiSelecting = true;
+                control.roiModeIsZoom = false;
                 control.roiStartX = mouse.x;
                 control.roiStartY = mouse.y;
                 control.roiCurrentX = mouse.x;
@@ -359,10 +378,15 @@ Rectangle {
             if (control.roiSelecting) {
                 const start = control.panelPoint(control.roiStartX, control.roiStartY);
                 const end = control.panelPoint(mouse.x, mouse.y);
-                if (start.insideContent && end.insideContent && start.panel === end.panel && start.sourceX !== undefined && start.sourceY !== undefined && end.sourceX !== undefined && end.sourceY !== undefined)
-                    dualVideoSurface.setRoiNormalized(start.sourceX, start.sourceY, end.sourceX, end.sourceY);
+                if (start.insideContent && end.insideContent && start.panel === end.panel && start.sourceX !== undefined && start.sourceY !== undefined && end.sourceX !== undefined && end.sourceY !== undefined) {
+                    if (control.roiModeIsZoom)
+                        dualVideoSurface.zoomToNormalizedRect(start.sourceX, start.sourceY, end.sourceX, end.sourceY);
+                    else
+                        dualVideoSurface.setRoiNormalized(start.sourceX, start.sourceY, end.sourceX, end.sourceY);
+                }
             }
             control.roiSelecting = false;
+            control.roiModeIsZoom = true;
             control.roiPanel = -1;
         }
         onDoubleClicked: {
@@ -388,7 +412,7 @@ Rectangle {
         id: analysisChrome
 
         objectName: "analysisControlsChrome"
-        visible: control.chromeVisible && (control.differenceMode || dualVideoSurface.roiEnabled)
+        visible: control.chromeVisible && (control.differenceMode || dualVideoSurface.roiEnabled || control.alignmentModeName.length > 0 || control.differenceThresholdEnabled)
         z: 30
         width: Math.min(Math.max(0, parent.width - 24), analysisStatus.implicitWidth + 18)
         height: 28
@@ -405,7 +429,7 @@ Rectangle {
         HoverHandler {
             id: analysisChromeHover
         }
-        ToolTip.visible: analysisChromeHover.hovered && control.differenceMode
+        ToolTip.visible: analysisChromeHover.hovered && (control.differenceMode || control.alignmentModeName.length > 0)
         ToolTip.text: control.comparisonFrameTimesLabel(control.selectedDifferenceEdge)
 
         Label {
@@ -413,13 +437,17 @@ Rectangle {
 
             text: {
                 const parts = [];
+                if (control.alignmentModeName.length > 0)
+                    parts.push(qsTr("对齐：%1").arg(control.alignmentModeName));
                 if (control.differenceMode)
                     parts.push(control.comparisonDimensionsLabel(control.selectedDifferenceEdge));
+                if (control.differenceThresholdEnabled)
+                    parts.push(qsTr("阈值已启用 (%1)").arg(control.differenceThresholdCode));
                 if (dualVideoSurface.roiEnabled)
                     parts.push(qsTr("ROI 已启用"));
                 return parts.join(" · ");
             }
-            color: control.selectedDifferenceExactness === 0 ? "#86efac" : "#facc15"
+            color: control.inexactReason.length > 0 ? "#facc15" : (control.selectedDifferenceExactness === 0 ? "#86efac" : "#facc15")
             font.pixelSize: 11
             width: Math.max(0, parent.width - 18)
             elide: Text.ElideRight
@@ -488,6 +516,75 @@ Rectangle {
         }
     }
 
+    // Fit / reset commands, same product verbs as the image workspace toolbar.
+    Row {
+        id: viewCommandRow
+
+        objectName: "viewportViewCommands"
+        visible: control.chromeVisible
+        z: 30
+        spacing: 6
+        anchors {
+            left: parent.left
+            leftMargin: 12
+            bottom: pixelScaleBadge.top
+            bottomMargin: 8
+        }
+
+        Rectangle {
+            objectName: "viewportFitButton"
+            width: fitLabel.implicitWidth + 16
+            height: 24
+            radius: 4
+            color: "#dc171e2a"
+            border.color: control.borderColor
+
+            Label {
+                id: fitLabel
+
+                text: qsTr("适应窗口")
+                color: control.mutedTextColor
+                font.pixelSize: 11
+                anchors.centerIn: parent
+            }
+
+            MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: dualVideoSurface.resetViewport()
+            }
+        }
+
+        Rectangle {
+            objectName: "viewportResetButton"
+            width: resetLabel.implicitWidth + 16
+            height: 24
+            radius: 4
+            color: "#dc171e2a"
+            border.color: control.borderColor
+
+            Label {
+                id: resetLabel
+
+                text: qsTr("重置视图")
+                color: control.mutedTextColor
+                font.pixelSize: 11
+                anchors.centerIn: parent
+            }
+
+            MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                // Full observation reset: fit the view AND drop the ROI, so 差异/指标 return
+                // to the whole-frame baseline (适应窗口 keeps the ROI).
+                onClicked: {
+                    dualVideoSurface.clearRoi();
+                    dualVideoSurface.resetViewport();
+                }
+            }
+        }
+    }
+
     Rectangle {
         id: differenceUnavailableOverlay
 
@@ -551,6 +648,35 @@ Rectangle {
             text: control.combinedAlignmentStatus
             color: "#ffd2d2"
             font.pixelSize: 12
+            font.weight: Font.DemiBold
+            anchors.centerIn: parent
+        }
+    }
+
+    Rectangle {
+        id: inexactDifferenceBanner
+
+        objectName: "inexactDifferenceBanner"
+        visible: control.chromeVisible && control.differenceMode && control.inexactReason.length > 0
+        radius: 5
+        color: "#d9352618"
+        border.color: "#eab308"
+        border.width: 1
+        height: inexactBannerText.implicitHeight + 10
+        width: Math.min(parent.width - 24, inexactBannerText.implicitWidth + 20)
+        z: 20
+        anchors {
+            top: alignmentStatus.visible ? alignmentStatus.bottom : parent.top
+            topMargin: alignmentStatus.visible ? 8 : 12
+            horizontalCenter: parent.horizontalCenter
+        }
+
+        Text {
+            id: inexactBannerText
+
+            text: qsTr("⚠️ 对比非精确对应：%1").arg(control.inexactReason)
+            color: "#fef08a"
+            font.pixelSize: 11
             font.weight: Font.DemiBold
             anchors.centerIn: parent
         }

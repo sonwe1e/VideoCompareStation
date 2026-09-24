@@ -1588,6 +1588,7 @@ TEST(PlaybackCoordinatorAlignmentTests,
     const auto published = coordinator->acceptedSequenceAlignments();
     ASSERT_NE(published, nullptr);
     EXPECT_EQ(*published, *cached);
+    EXPECT_EQ(snapshot->sequenceAlignmentMaps, published);
 }
 
 TEST(PlaybackCoordinatorAlignmentTests, KeepsAmbiguousSequenceDiagnosticsWithoutReseeking) {
@@ -5943,6 +5944,313 @@ TEST(PlaybackCoordinatorTests, SessionPairDoesNotLeakAcrossTopology) {
     EXPECT_EQ(grown->activeComparisonPair->second, liveAfterShrink.second);
     EXPECT_TRUE(snapshotHasSource(*grown, grown->activeComparisonPair->first));
     EXPECT_TRUE(snapshotHasSource(*grown, grown->activeComparisonPair->second));
+}
+
+TEST(PlaybackCoordinatorTests, SetAlignmentModeSwitchesModeAndCalculatesMappings) {
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator = makeCoordinator(provider, render);
+    ASSERT_NE(coordinator, nullptr);
+    markGraphicsReady(coordinator);
+    openReady(coordinator, provider, render);
+
+    const auto initial = coordinator->snapshot();
+    EXPECT_EQ(initial->alignmentMode, AlignmentMode::FrameIndex);
+
+    auto completeSeek =
+        [&](const uint32_t reqIndex, const uint32_t pubCount, const uint32_t pubIndex) {
+            ASSERT_TRUE(provider->waitForFrameRequestCount(reqIndex + 1U));
+            const auto frame = provider->frameRequest(reqIndex);
+            ASSERT_TRUE(frame.has_value());
+            ASSERT_TRUE(provider->postFrameReady(*frame, makeFrameSet(frame->frameId)));
+            ASSERT_TRUE(render->waitForPublishedCount(pubCount));
+            ASSERT_TRUE(provider->postFrameSucceeded(*frame));
+            presentPublished(coordinator, render, pubIndex);
+        };
+
+    // Switch to Timestamp alignment
+    ASSERT_EQ(coordinator->submit(SetAlignmentModeCommand{
+                  .context = commandContext(coordinator, domain::CommandId{2}),
+                  .mode = AlignmentMode::Timestamp,
+              }),
+              PortSubmitResult::Accepted);
+    completeSeek(1U, 2U, 1U);
+    const auto terminals = waitForTerminals(coordinator, 1U);
+    ASSERT_EQ(terminals.size(), 1U);
+    EXPECT_EQ(terminals.front().outcome, CommandOutcome::Succeeded);
+
+    const auto timestampSnap = coordinator->snapshot();
+    EXPECT_EQ(timestampSnap->alignmentMode, AlignmentMode::Timestamp);
+    {
+        ASSERT_TRUE(provider->waitForFrameRequestCount(2U));
+        const auto mapped = provider->frameRequest(1U);
+        ASSERT_TRUE(mapped.has_value());
+        ASSERT_FALSE(mapped->sourceOffsets.empty());
+        bool sawTimeAligned = false;
+        for (const auto& offset : mapped->sourceOffsets) {
+            if (offset.matchKind == FrameMatchKind::TimeAligned ||
+                offset.matchKind == FrameMatchKind::ExactIndex ||
+                offset.matchKind == FrameMatchKind::Missing) {
+                sawTimeAligned = true;
+            }
+        }
+        EXPECT_TRUE(sawTimeAligned);
+    }
+
+    // Switch to ManualAnchor alignment
+    ASSERT_EQ(coordinator->submit(SetAlignmentModeCommand{
+                  .context = commandContext(coordinator, domain::CommandId{3}),
+                  .mode = AlignmentMode::ManualAnchor,
+              }),
+              PortSubmitResult::Accepted);
+    completeSeek(2U, 3U, 2U);
+    const auto terminals2 = waitForTerminals(coordinator, 1U);
+    ASSERT_EQ(terminals2.size(), 1U);
+    EXPECT_EQ(terminals2.front().outcome, CommandOutcome::Succeeded);
+
+    const auto anchorSnap = coordinator->snapshot();
+    EXPECT_EQ(anchorSnap->alignmentMode, AlignmentMode::ManualAnchor);
+
+    // Switch back to FrameIndex
+    ASSERT_EQ(coordinator->submit(SetAlignmentModeCommand{
+                  .context = commandContext(coordinator, domain::CommandId{4}),
+                  .mode = AlignmentMode::FrameIndex,
+              }),
+              PortSubmitResult::Accepted);
+    completeSeek(3U, 4U, 3U);
+    const auto terminals3 = waitForTerminals(coordinator, 1U);
+    ASSERT_EQ(terminals3.size(), 1U);
+    EXPECT_EQ(terminals3.front().outcome, CommandOutcome::Succeeded);
+
+    const auto frameSnap = coordinator->snapshot();
+    EXPECT_EQ(frameSnap->alignmentMode, AlignmentMode::FrameIndex);
+}
+
+TEST(PlaybackCoordinatorTests, ResubmittingSameAnchorInOtherModeStillBumpsAlignmentRevision) {
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator = makeCoordinator(provider, render);
+    ASSERT_NE(coordinator, nullptr);
+    markGraphicsReady(coordinator);
+    openReady(coordinator, provider, render);
+
+    auto completeSeek =
+        [&](const uint32_t reqIndex, const uint32_t pubCount, const uint32_t pubIndex) {
+            ASSERT_TRUE(provider->waitForFrameRequestCount(reqIndex + 1U));
+            const auto frame = provider->frameRequest(reqIndex);
+            ASSERT_TRUE(frame.has_value());
+            ASSERT_TRUE(provider->postFrameReady(*frame, makeFrameSet(frame->frameId)));
+            ASSERT_TRUE(render->waitForPublishedCount(pubCount));
+            ASSERT_TRUE(provider->postFrameSucceeded(*frame));
+            presentPublished(coordinator, render, pubIndex);
+        };
+
+    const auto submitAnchor = [&coordinator](const domain::CommandId commandId,
+                                             const std::int64_t canonical,
+                                             const std::int64_t source) {
+        return coordinator->submit(SetManualAlignmentAnchorCommand{
+            .context = commandContext(coordinator, commandId),
+            .sourceId = 1U,
+            .anchor =
+                ManualAlignmentAnchor{
+                    .canonicalFrameId = domain::FrameId{canonical},
+                    .sourceFrameId = domain::FrameId{source},
+                },
+        });
+    };
+
+    // Anchoring once switches to ManualAnchor mode and advances the alignment identity.
+    ASSERT_EQ(submitAnchor(domain::CommandId{2}, 4, 5), PortSubmitResult::Accepted);
+    completeSeek(1U, 2U, 1U);
+    {
+        const std::vector<CommandTerminal> terminals = waitForTerminals(coordinator, 1U);
+        ASSERT_EQ(terminals.size(), 1U);
+        EXPECT_EQ(terminals.front().outcome, CommandOutcome::Succeeded);
+    }
+    const std::uint64_t revisionAfterAnchor = coordinator->snapshot()->alignmentRevision;
+
+    // Switching to Timestamp advances the identity again.
+    ASSERT_EQ(coordinator->submit(SetAlignmentModeCommand{
+                  .context = commandContext(coordinator, domain::CommandId{3}),
+                  .mode = AlignmentMode::Timestamp,
+              }),
+              PortSubmitResult::Accepted);
+    completeSeek(2U, 3U, 2U);
+    {
+        const std::vector<CommandTerminal> terminals = waitForTerminals(coordinator, 1U);
+        ASSERT_EQ(terminals.size(), 1U);
+        EXPECT_EQ(terminals.front().outcome, CommandOutcome::Succeeded);
+    }
+    const std::uint64_t revisionAfterModeSwitch = coordinator->snapshot()->alignmentRevision;
+    ASSERT_GT(revisionAfterModeSwitch, revisionAfterAnchor);
+
+    // Re-asserting the SAME anchor leaves the anchor set unchanged but switches the effective
+    // mapping from time mapping back to anchor interpolation. The alignment identity must
+    // advance with it, or async work keyed by the old revision (frames, metrics caches)
+    // would be accepted as current.
+    ASSERT_EQ(submitAnchor(domain::CommandId{4}, 4, 5), PortSubmitResult::Accepted);
+    completeSeek(3U, 4U, 3U);
+    {
+        const std::vector<CommandTerminal> terminals = waitForTerminals(coordinator, 1U);
+        ASSERT_EQ(terminals.size(), 1U);
+        EXPECT_EQ(terminals.front().outcome, CommandOutcome::Succeeded);
+    }
+    const auto resnapshotted = coordinator->snapshot();
+    EXPECT_GT(resnapshotted->alignmentRevision, revisionAfterModeSwitch);
+    EXPECT_EQ(resnapshotted->alignmentMode, AlignmentMode::ManualAnchor);
+}
+
+TEST(PlaybackCoordinatorTests, TimestampModeMarksSecondaryMissingBeyondVfrTimelineEnd) {
+    const auto probe = std::make_shared<FakeMediaProbe>();
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator = makeCoordinator(provider, render, probe);
+    markGraphicsReady(coordinator);
+
+    // Canonical source 0: CFR 30 fps with 4 frames -> frame starts 0/33333/66666/100000 us.
+    const domain::MediaDescriptor descriptorA =
+        makeDescriptor("C:/media/a.mp4", domain::MediaExtent{.width = 320, .height = 180}, 4);
+    // Secondary source 1: VFR timeline {0, 10000, 20000, 30000} us. The last inter-frame gap
+    // (10 ms) puts its estimated content end at 40 ms, long before the canonical content.
+    const domain::MediaDescriptor descriptorB =
+        makeVfrDescriptor("C:/media/b.mp4",
+                          domain::MediaExtent{.width = 160, .height = 90},
+                          4,
+                          domain::MediaTime{40'000});
+    auto shortTimeline = domain::FrameTimeline::create({domain::MediaTime{0},
+                                                        domain::MediaTime{10'000},
+                                                        domain::MediaTime{20'000},
+                                                        domain::MediaTime{30'000}});
+    ASSERT_TRUE(shortTimeline.hasValue());
+    const auto timeline =
+        std::make_shared<const domain::FrameTimeline>(std::move(shortTimeline).value());
+
+    const std::shared_ptr<const SessionSnapshot> initial = coordinator->snapshot();
+    ASSERT_NE(initial, nullptr);
+    ASSERT_EQ(coordinator->submit(OpenComparisonCommand{
+                  .context =
+                      CommandContext{
+                          .sessionId = initial->sessionId,
+                          .sessionEpoch = initial->sessionEpoch,
+                          .commandId = domain::CommandId{1},
+                      },
+                  .sources =
+                      {
+                          OpenComparisonSource{
+                              .path = "C:/media/a.mp4",
+                              .role = domain::ComparisonRole::kPrediction,
+                              .displayName = "a",
+                          },
+                          OpenComparisonSource{
+                              .path = "C:/media/b.mp4",
+                              .role = domain::ComparisonRole::kPrediction,
+                              .displayName = "b",
+                          },
+                      },
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_TRUE(probe->waitForRequestCount(2U));
+    const std::optional<MediaProbeRequest> requestA = probe->request(0U);
+    const std::optional<MediaProbeRequest> requestB = probe->request(1U);
+    ASSERT_TRUE(requestA.has_value());
+    ASSERT_TRUE(requestB.has_value());
+
+    // Source 0 is CFR: no runtime timeline. Source 1 is VFR: its probe publishes the
+    // timeline the coordinator must consult for Timestamp alignment.
+    ASSERT_TRUE(probe->postCompleted(0U, descriptorA));
+    ASSERT_TRUE(probe->postSucceeded(0U));
+    const std::shared_ptr<IApplicationEventSink> sinkB = probe->lockEventSink(1U);
+    ASSERT_NE(sinkB, nullptr);
+    ASSERT_EQ(sinkB->postCritical(ApplicationEvent{ProbeCompleted{
+                  .context = requestB->context,
+                  .sourceId = domain::SourceId{1},
+                  .descriptor = descriptorB,
+                  .timeline = timeline,
+              }}),
+              EventPostResult::Accepted);
+    ASSERT_TRUE(probe->postSucceeded(1U));
+
+    ASSERT_TRUE(provider->waitForOpenRequestCount(1U));
+    const std::optional<FrameProviderOpenRequest> open = provider->openRequest();
+    ASSERT_TRUE(open.has_value());
+    EXPECT_FALSE(domain::isVariableFrameRate(open->timeline));
+    ASSERT_TRUE(provider->postOpenSucceeded(*open));
+    ASSERT_TRUE(provider->waitForFrameRequestCount(1U));
+    const std::optional<FrameRequest> frame = provider->frameRequest(0U);
+    ASSERT_TRUE(frame.has_value());
+    ASSERT_TRUE(provider->postFrameReady(*frame, makeFrameSet(frame->frameId)));
+    ASSERT_TRUE(render->waitForPublishedCount(1U));
+    ASSERT_TRUE(provider->postFrameSucceeded(*frame));
+    presentPublished(coordinator, render, 0U);
+    {
+        const std::vector<CommandTerminal> terminals = waitForTerminals(coordinator, 1U);
+        ASSERT_EQ(terminals.size(), 1U);
+        EXPECT_EQ(terminals.front().outcome, CommandOutcome::Succeeded);
+    }
+
+    auto completeSeek =
+        [&](const uint32_t reqIndex, const uint32_t pubCount, const uint32_t pubIndex) {
+            ASSERT_TRUE(provider->waitForFrameRequestCount(reqIndex + 1U));
+            const auto seekFrame = provider->frameRequest(reqIndex);
+            ASSERT_TRUE(seekFrame.has_value());
+            ASSERT_TRUE(provider->postFrameReady(*seekFrame, makeFrameSet(seekFrame->frameId)));
+            ASSERT_TRUE(render->waitForPublishedCount(pubCount));
+            ASSERT_TRUE(provider->postFrameSucceeded(*seekFrame));
+            presentPublished(coordinator, render, pubIndex);
+            const std::vector<CommandTerminal> terminals = waitForTerminals(coordinator, 1U);
+            ASSERT_EQ(terminals.size(), 1U);
+            EXPECT_EQ(terminals.front().outcome, CommandOutcome::Succeeded);
+        };
+
+    // Timestamp alignment at frame 0 (0 us): inside the timeline -> TimeAligned 1:1.
+    ASSERT_EQ(coordinator->submit(SetAlignmentModeCommand{
+                  .context = commandContext(coordinator, domain::CommandId{2}),
+                  .mode = AlignmentMode::Timestamp,
+              }),
+              PortSubmitResult::Accepted);
+    completeSeek(1U, 2U, 1U);
+    {
+        const auto mapped = provider->frameRequest(1U);
+        ASSERT_TRUE(mapped.has_value());
+        ASSERT_EQ(mapped->sourceOffsets.size(), 1U);
+        EXPECT_EQ(mapped->sourceOffsets.front().sourceId, domain::SourceId{1});
+        EXPECT_EQ(mapped->sourceOffsets.front().matchKind, FrameMatchKind::TimeAligned);
+        EXPECT_EQ(mapped->sourceOffsets.front().frames, 0);
+    }
+
+    // Canonical frame 1 starts at 33333 us: inside the last timeline frame's display
+    // interval [30000, 40000) -> TimeAligned onto secondary frame 3.
+    ASSERT_EQ(coordinator->submit(SeekFrameCommand{
+                  .context = commandContext(coordinator, domain::CommandId{3}),
+                  .frameId = domain::FrameId{1},
+              }),
+              PortSubmitResult::Accepted);
+    completeSeek(2U, 3U, 2U);
+    {
+        const auto mapped = provider->frameRequest(2U);
+        ASSERT_TRUE(mapped.has_value());
+        ASSERT_EQ(mapped->sourceOffsets.size(), 1U);
+        EXPECT_EQ(mapped->sourceOffsets.front().sourceId, domain::SourceId{1});
+        EXPECT_EQ(mapped->sourceOffsets.front().matchKind, FrameMatchKind::TimeAligned);
+        EXPECT_EQ(mapped->sourceOffsets.front().frames, 2);
+    }
+
+    // Canonical frame 2 starts at 66666 us: past the timeline's estimated end (40000 us) ->
+    // Missing, matching the CFR out-of-range rule instead of holding the last frame.
+    ASSERT_EQ(coordinator->submit(SeekFrameCommand{
+                  .context = commandContext(coordinator, domain::CommandId{4}),
+                  .frameId = domain::FrameId{2},
+              }),
+              PortSubmitResult::Accepted);
+    completeSeek(3U, 4U, 3U);
+    {
+        const auto mapped = provider->frameRequest(3U);
+        ASSERT_TRUE(mapped.has_value());
+        ASSERT_EQ(mapped->sourceOffsets.size(), 1U);
+        EXPECT_EQ(mapped->sourceOffsets.front().sourceId, domain::SourceId{1});
+        EXPECT_EQ(mapped->sourceOffsets.front().matchKind, FrameMatchKind::Missing);
+        EXPECT_EQ(mapped->sourceOffsets.front().frames, 0);
+    }
 }
 
 } // namespace

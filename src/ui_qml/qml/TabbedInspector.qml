@@ -87,7 +87,10 @@ Rectangle {
         const psnr = control.metrics.currentPsnrDb >= 999.0 ? qsTr("∞（完全一致）") : control.metrics.currentPsnrDb.toFixed(2) + qsTr(" dB");
         const ratioPercent = control.metrics.currentMismatchRatio * 100.0;
         const ratioText = ratioPercent >= 0.01 ? ratioPercent.toFixed(2) + "%" : "< 0.01%";
-        return [[qsTr("平均绝对差 MAE"), control.metrics.currentMae.toFixed(3)], [qsTr("均方误差 MSE"), control.metrics.currentMse.toFixed(3)], [qsTr("峰值信噪比 PSNR"), psnr], [qsTr("最大绝对差"), control.metrics.currentMaxAbsError.toFixed(0)], [qsTr("坏点占比（阈值 %1）").arg(control.metrics.threshold), ratioText], [qsTr("坏点数"), String(control.metrics.currentMismatchPixels)], [qsTr("参与像素"), String(control.metrics.currentPixelCount)]];
+        const rows = [[qsTr("平均绝对差 MAE"), control.metrics.currentMae.toFixed(3)], [qsTr("均方误差 MSE"), control.metrics.currentMse.toFixed(3)], [qsTr("峰值信噪比 PSNR"), psnr], [qsTr("最大绝对差"), control.metrics.currentMaxAbsError.toFixed(0)], [qsTr("坏点占比（阈值 %1）").arg(control.metrics.threshold), ratioText], [qsTr("坏点数"), String(control.metrics.currentMismatchPixels)], [qsTr("参与像素"), String(control.metrics.currentPixelCount)]];
+        if (control.controller && control.controller.currentInexactReason && control.controller.currentInexactReason.length > 0)
+            rows.unshift([qsTr("对齐/采样说明"), control.controller.currentInexactReason]);
+        return rows;
     }
 
     component DarkTabButton: TabButton {
@@ -219,6 +222,145 @@ Rectangle {
                     color: control.primaryTextColor
                     font.pixelSize: 16
                     font.weight: Font.DemiBold
+                }
+
+                Label {
+                    text: qsTr("对齐方式")
+                    color: control.mutedTextColor
+                }
+                ToolbarCombo {
+                    id: alignmentModeCombo
+                    objectName: "inspectorAlignmentModeCombo"
+                    width: parent.width
+                    model: [qsTr("按帧号 (1:1)"), qsTr("按时间 (PTS)"), qsTr("人工锚点")]
+                    currentIndex: control.controller ? control.controller.alignmentMode : 0
+                    onActivated: index => {
+                        if (control.controller)
+                            control.controller.setAlignmentMode(index);
+                    }
+                }
+
+                Rectangle {
+                    id: activePairTimeBlock
+                    objectName: "activePairTimeBlock"
+                    visible: Boolean(control.controller && control.controller.activePairTimeInfo && control.controller.activePairTimeInfo.aligned)
+                    width: parent.width
+                    height: visible ? activePairTimeColumn.implicitHeight + 16 : 0
+                    radius: 6
+                    color: "#0f1622"
+                    border.color: control.borderColor
+                    border.width: 1
+
+                    readonly property var pairInfo: control.controller ? control.controller.activePairTimeInfo : ({})
+                    readonly property int pSlot: pairInfo && pairInfo.primarySlot !== undefined ? Number(pairInfo.primarySlot) : 0
+                    readonly property int sSlot: pairInfo && pairInfo.secondarySlot !== undefined ? Number(pairInfo.secondarySlot) : 1
+                    readonly property int pFrame: pairInfo && pairInfo.primaryFrame !== undefined ? Number(pairInfo.primaryFrame) : -1
+                    readonly property int sFrame: pairInfo && pairInfo.secondaryFrame !== undefined ? Number(pairInfo.secondaryFrame) : -1
+                    readonly property real pPts: pairInfo && pairInfo.primaryPtsMs !== undefined ? Number(pairInfo.primaryPtsMs) : 0.0
+                    readonly property real sPts: pairInfo && pairInfo.secondaryPtsMs !== undefined ? Number(pairInfo.secondaryPtsMs) : 0.0
+                    readonly property real delta: pairInfo && pairInfo.deltaMs !== undefined ? Number(pairInfo.deltaMs) : 0.0
+
+                    Column {
+                        id: activePairTimeColumn
+                        spacing: 4
+                        x: 10
+                        y: 8
+                        width: parent.width - 20
+
+                        Label {
+                            text: qsTr("对比对时间与帧号")
+                            color: control.mutedTextColor
+                            font.pixelSize: 11
+                            font.weight: Font.DemiBold
+                        }
+
+                        RowLayout {
+                            width: parent.width
+                            Label {
+                                text: qsTr("源 %1（基准）").arg(String.fromCharCode(65 + activePairTimeBlock.pSlot))
+                                color: Theme.accent
+                                font.pixelSize: 11
+                            }
+                            Item {
+                                Layout.fillWidth: true
+                            }
+                            Label {
+                                text: qsTr("第 %1 帧 (%2 ms)").arg(activePairTimeBlock.pFrame + 1).arg(activePairTimeBlock.pPts.toFixed(2))
+                                color: control.primaryTextColor
+                                font.pixelSize: 11
+                            }
+                        }
+
+                        RowLayout {
+                            width: parent.width
+                            Label {
+                                text: qsTr("源 %1（对比）").arg(String.fromCharCode(65 + activePairTimeBlock.sSlot))
+                                color: Theme.accent
+                                font.pixelSize: 11
+                            }
+                            Item {
+                                Layout.fillWidth: true
+                            }
+                            Label {
+                                text: qsTr("第 %1 帧 (%2 ms)").arg(activePairTimeBlock.sFrame + 1).arg(activePairTimeBlock.sPts.toFixed(2))
+                                color: control.primaryTextColor
+                                font.pixelSize: 11
+                            }
+                        }
+
+                        RowLayout {
+                            width: parent.width
+                            visible: Math.abs(activePairTimeBlock.delta) > 0.001
+                            Label {
+                                text: qsTr("时间偏差 Δ")
+                                color: control.mutedTextColor
+                                font.pixelSize: 11
+                            }
+                            Item {
+                                Layout.fillWidth: true
+                            }
+                            Label {
+                                text: qsTr("%1 ms").arg((activePairTimeBlock.delta >= 0 ? "+" : "") + activePairTimeBlock.delta.toFixed(2))
+                                color: Math.abs(activePairTimeBlock.delta) > 1.0 ? "#facc15" : control.mutedTextColor
+                                font.pixelSize: 11
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    id: inexactReasonBlock
+                    objectName: "inspectorInexactReasonBlock"
+                    visible: Boolean(control.controller && control.controller.currentInexactReason && control.controller.currentInexactReason.length > 0)
+                    width: parent.width
+                    height: visible ? inexactReasonCol.implicitHeight + 16 : 0
+                    radius: 6
+                    color: "#261c12"
+                    border.color: "#eab308"
+                    border.width: 1
+
+                    Column {
+                        id: inexactReasonCol
+                        spacing: 3
+                        x: 10
+                        y: 8
+                        width: parent.width - 20
+
+                        Label {
+                            text: qsTr("⚠️ 无法精确对应原因")
+                            color: "#fef08a"
+                            font.pixelSize: 11
+                            font.weight: Font.DemiBold
+                        }
+
+                        Label {
+                            width: parent.width
+                            text: control.controller ? control.controller.currentInexactReason : ""
+                            color: "#fef9c3"
+                            font.pixelSize: 11
+                            wrapMode: Text.Wrap
+                        }
+                    }
                 }
 
                 Label {

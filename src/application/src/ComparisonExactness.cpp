@@ -3,7 +3,10 @@
 #include "dvs/application/SessionSnapshot.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace dvs::application {
 namespace {
@@ -16,10 +19,9 @@ namespace {
 } // namespace
 
 // T6: multi-dimensional decomposition of comparison exactness (see header).
-ComparisonExactnessDimensions
-comparisonExactnessDimensions(const SessionSnapshot& snapshot,
-                              const domain::SourceId first,
-                              const domain::SourceId second) noexcept {
+ComparisonExactnessDimensions comparisonExactnessDimensions(const SessionSnapshot& snapshot,
+                                                            const domain::SourceId first,
+                                                            const domain::SourceId second) {
     ComparisonExactnessDimensions dimensions;
     if (first == second || !snapshot.validatedComparison || !snapshot.displayedFrame.has_value()) {
         return dimensions;
@@ -57,6 +59,52 @@ comparisonExactnessDimensions(const SessionSnapshot& snapshot,
         descriptorA.colorMetadata.range == descriptorB.colorMetadata.range &&
         descriptorA.colorMetadata.transfer == descriptorB.colorMetadata.transfer &&
         preservesNormalizedPlaneCodes(descriptorA.pixelFormatId);
+
+    std::vector<std::string> reasons;
+    if (!dimensions.temporalExact) {
+        if (presentedA->presentationTime != presentedB->presentationTime) {
+            const auto diffUs = std::abs(presentedA->presentationTime.microseconds() -
+                                         presentedB->presentationTime.microseconds());
+            reasons.push_back("时间戳不一致 (相差 " + std::to_string(diffUs / 1000) + " ms)");
+        }
+        if (presentedA->matchKind != FrameMatchKind::ExactIndex ||
+            presentedB->matchKind != FrameMatchKind::ExactIndex) {
+            if (presentedA->matchKind == FrameMatchKind::TimeAligned ||
+                presentedB->matchKind == FrameMatchKind::TimeAligned) {
+                reasons.push_back("按时间映射 (非严格帧号对应)");
+            } else {
+                reasons.push_back("非基准严格索引映射");
+            }
+        }
+    }
+    if (!dimensions.spatialExact) {
+        if (descriptorA.extent != descriptorB.extent) {
+            reasons.push_back("尺寸不同 (" + std::to_string(descriptorA.extent.width) + "x" +
+                              std::to_string(descriptorA.extent.height) + " 与 " +
+                              std::to_string(descriptorB.extent.width) + "x" +
+                              std::to_string(descriptorB.extent.height) + "，非同尺寸像素对应)");
+        } else {
+            reasons.push_back("像素宽高比或旋转不同，几何对应不一致");
+        }
+    }
+    if (!dimensions.pixelExact) {
+        if (descriptorA.pixelFormatId != descriptorB.pixelFormatId ||
+            descriptorA.bitDepth != descriptorB.bitDepth) {
+            reasons.push_back("像素格式或位深不同 (" + descriptorA.pixelFormatId + " " +
+                              std::to_string(descriptorA.bitDepth) + "-bit 与 " +
+                              descriptorB.pixelFormatId + " " +
+                              std::to_string(descriptorB.bitDepth) + "-bit)");
+        } else {
+            reasons.push_back("显示空间转换 (非原生直通码值)");
+        }
+    }
+    for (std::size_t i = 0; i < reasons.size(); ++i) {
+        if (i > 0) {
+            dimensions.inexactReason += " · ";
+        }
+        dimensions.inexactReason += reasons[i];
+    }
+
     return dimensions;
 }
 

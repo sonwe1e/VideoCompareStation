@@ -595,7 +595,9 @@ TEST(MainQmlContractTests, InstantiatesRootAndSeparatesManualAlignmentStates) {
     EXPECT_GT(transport->width(), 0.0);
     EXPECT_GT(firstButton->width(), 0.0);
     EXPECT_GT(lastButton->width(), 0.0);
-    EXPECT_FALSE(analysisChrome->property("visible").toBool());
+    // The alignment chip (对齐：…) is always present in a video session, so the analysis
+    // chrome stays visible even without difference/ROI/threshold conditions.
+    EXPECT_TRUE(analysisChrome->property("visible").toBool());
     EXPECT_EQ(surfaceLabelRepeater->property("count").toInt(), 2);
     EXPECT_EQ(activeSourceRepeater->property("count").toInt(), 2);
     EXPECT_EQ(root->property("availableViewModes").toList().size(), 3);
@@ -3216,6 +3218,58 @@ TEST(MainQmlContractTests, ImmersiveModeBottomEdgeWakesOverlayOsc) {
     harness.settle();
     EXPECT_FALSE(transport->isVisible());
     EXPECT_EQ(harness.root->property("oscState").toInt(), 2);
+}
+
+TEST(MainQmlContractTests, HighBitDepthAlphaIsVisibleInPixelReadout) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+    auto* workspace = harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
+    auto* readout = harness.root->findChild<QQuickItem*>(QStringLiteral("imagePixelReadout"));
+    ASSERT_NE(workspace, nullptr);
+    ASSERT_NE(readout, nullptr);
+    struct LoaderReset final {
+        ~LoaderReset() {
+            ImageReviewController::setProcessStillImageLoader({});
+        }
+    } reset;
+    ImageReviewController::setProcessStillImageLoader([](const QByteArray&,
+                                                         QImage* image,
+                                                         QImage* native,
+                                                         StillImageSourceInfo* info,
+                                                         std::string*) {
+        *image = QImage(1, 1, QImage::Format_ARGB32);
+        image->fill(QColor(0, 0, 0, 128));
+        *native = QImage(1, 1, QImage::Format_RGBA64);
+        *reinterpret_cast<QRgba64*>(native->bits()) = qRgba64(0, 0, 0, 32768);
+        info->bitDepth = 16;
+        info->hasAlpha = true;
+        info->channels = 4;
+        info->sourceFormat = QStringLiteral("rgba64le");
+        info->displayConverted = true;
+        return true;
+    });
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto path = directory.filePath(QStringLiteral("deep.png"));
+    QImage input(1, 1, QImage::Format_ARGB32);
+    input.fill(Qt::transparent);
+    ASSERT_TRUE(input.save(path));
+    ASSERT_TRUE(harness.imageReview.openPrimary(QUrl::fromLocalFile(path)));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    harness.settle();
+    harness.imageReview.updateCursorPixel(ImageReviewController::PrimarySlot, 0, 0);
+    harness.settle();
+    const auto text = readout->property("text").toString();
+    EXPECT_TRUE(text.contains(QStringLiteral("A 32768"))) << text.toStdString();
+    EXPECT_TRUE(text.contains(QStringLiteral("50.0008%"))) << text.toStdString();
+    const auto evidenceDirectory = qEnvironmentVariable("DVS_REVIEW_EVIDENCE_DIR");
+    if (!evidenceDirectory.isEmpty()) {
+        ASSERT_TRUE(QDir().mkpath(evidenceDirectory));
+        ASSERT_TRUE(harness.window->grabWindow().save(
+            QDir(evidenceDirectory).filePath(QStringLiteral("high-depth-alpha.png"))));
+    }
 }
 
 TEST(MainQmlContractTests, ImageWorkspaceAlphaAndBackgroundSelectionContract) {

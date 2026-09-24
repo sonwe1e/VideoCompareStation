@@ -629,6 +629,19 @@ TEST(ComparisonSurfacePropertyTests, ValidatesThresholdAndSynchronizedViewportMu
     EXPECT_GE(viewportChanges, 4);
 }
 
+TEST(ComparisonSurfacePropertyTests, ZoomToNormalizedRectFitsSelectionAndCentersView) {
+    ComparisonSurface surface;
+    surface.zoomToNormalizedRect(0.2, 0.3, 0.6, 0.7);
+    // Box is 0.4 x 0.4 → scale 1/0.4 = 2.5, centered at (0.4, 0.5).
+    EXPECT_DOUBLE_EQ(surface.viewScale(), 2.5);
+    EXPECT_NEAR(surface.viewCenterX(), 0.4, 1e-6);
+    EXPECT_NEAR(surface.viewCenterY(), 0.5, 1e-6);
+
+    const qreal scaleBefore = surface.viewScale();
+    surface.zoomToNormalizedRect(0.4, 0.4, 0.401, 0.401);
+    EXPECT_DOUBLE_EQ(surface.viewScale(), scaleBefore);
+}
+
 class CountingActivitySink final : public platform::IRenderActivitySink {
 public:
     void notifyFramePublished() noexcept override {

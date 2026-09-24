@@ -77,14 +77,52 @@ QtObject {
         }, Qt.size(targetWidth, targetHeight));
     }
 
-    function urlForFrame(frame) {
-        const sample = nearestSample(frame);
-        const value = urls[sample];
-        if (value !== undefined) {
-            touch(sample);
-            return value;
+    function previewInfoForFrame(frame) {
+        if (frame < 0 || totalFrames <= 0) {
+            return {
+                url: "",
+                sampleFrame: -1,
+                isExact: false
+            };
         }
-        return "";
+        const target = Number(frame);
+        const sample = nearestSample(target);
+        if (urls[sample] !== undefined) {
+            touch(sample);
+            return {
+                url: urls[sample],
+                sampleFrame: sample,
+                isExact: sample === target
+            };
+        }
+        let closestSample = -1;
+        let minDiff = Infinity;
+        const keys = Object.keys(urls);
+        for (let i = 0; i < keys.length; ++i) {
+            const k = Number(keys[i]);
+            const diff = Math.abs(k - target);
+            if (diff < minDiff) {
+                minDiff = diff;
+                closestSample = k;
+            }
+        }
+        // Only borrow a neighbour sample within one grid step; farther frames would mislead.
+        if (closestSample >= 0 && urls[closestSample] !== undefined && Math.abs(closestSample - target) <= sampleInterval) {
+            return {
+                url: urls[closestSample],
+                sampleFrame: closestSample,
+                isExact: false
+            };
+        }
+        return {
+            url: "",
+            sampleFrame: -1,
+            isExact: false
+        };
+    }
+
+    function urlForFrame(frame) {
+        return previewInfoForFrame(frame).url;
     }
 
     onCurrentFrameChanged: capture(currentFrame)

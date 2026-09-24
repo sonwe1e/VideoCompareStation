@@ -3,6 +3,7 @@
 #include "dvs/domain/ComparisonSource.h"
 
 #include <cstdint>
+#include <string>
 
 namespace dvs::application {
 
@@ -29,10 +30,13 @@ struct ComparisonExactnessDimensions final {
     // Pixel format, bit depth and color metadata match on a normalized-plane code path,
     // so the comparison is on original code values, not a display-space conversion.
     bool pixelExact = false;
+    // Human-readable explanation when comparison cannot be exact.
+    std::string inexactReason;
 };
 
+// Builds human-readable inexactness reasons, so it may allocate and is not noexcept.
 [[nodiscard]] ComparisonExactnessDimensions comparisonExactnessDimensions(
-    const SessionSnapshot& snapshot, domain::SourceId first, domain::SourceId second) noexcept;
+    const SessionSnapshot& snapshot, domain::SourceId first, domain::SourceId second);
 
 [[nodiscard]] ComparisonExactness comparisonExactness(const SessionSnapshot& snapshot,
                                                       domain::SourceId first,

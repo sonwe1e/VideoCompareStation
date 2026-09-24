@@ -112,6 +112,7 @@ protected:
             .sources = {first, second},
             .offsets = {application::SourceFrameOffset{first.id, 0},
                         application::SourceFrameOffset{second.id, secondOffset}},
+            .mappedSourceFrames = {},
             .alignmentRevision = 1U,
             .firstFrame = domain::FrameId{firstFrame},
             .lastFrame = domain::FrameId{lastFrame},

@@ -60,20 +60,20 @@ std::atomic<quint64> g_loaderRevision{1U};
 [[nodiscard]] bool dimensionsWithinBudget(const int width, const int height, QString* error) {
     if (width <= 0 || height <= 0) {
         if (error != nullptr) {
-            *error = QObject::tr("Image dimensions are empty.");
+            *error = QObject::tr("图像尺寸为空。");
         }
         return false;
     }
     if (width > kMaxImageEdge || height > kMaxImageEdge) {
         if (error != nullptr) {
-            *error = QObject::tr("Image is larger than %1 px on a side.").arg(kMaxImageEdge);
+            *error = QObject::tr("图像单边超过 %1 像素。").arg(kMaxImageEdge);
         }
         return false;
     }
     const qint64 decodedBytes = static_cast<qint64>(width) * static_cast<qint64>(height) * 4LL;
     if (decodedBytes > kMaxDecodedImageBytes) {
         if (error != nullptr) {
-            *error = QObject::tr("Image exceeds the decoded-image memory budget.");
+            *error = QObject::tr("图像超出解码内存预算。");
         }
         return false;
     }
@@ -123,6 +123,8 @@ struct ImageReviewController::AsyncState final {
         Primary,
         Secondary,
         Pair,
+        ReplacePrimary,
+        ReplaceSecondary,
     };
 
     ImagePairLoader loader;
@@ -240,7 +242,7 @@ void ImageReviewController::setCompareMode(const int mode) {
         // Preserve an existing failure source (e.g. a failed pair open); only fill the
         // generic hint when nothing else explains the state (T1 error-text retention).
         if (errorText_.isEmpty()) {
-            setError(tr("Open a second image to compare."));
+            setError(tr("请打开第二张图片进行对比。"));
         }
         return;
     }
@@ -425,7 +427,7 @@ bool ImageReviewController::openPrimaryImage(QImage image,
                                              QString pathLabel,
                                              StillImageSourceInfo info) {
     if (image.isNull()) {
-        setError(tr("Could not open image."));
+        setError(tr("无法打开图片。"));
         return false;
     }
     QString dimensionError;
@@ -467,7 +469,7 @@ bool ImageReviewController::openSecondaryImage(QImage image,
                                                QString pathLabel,
                                                StillImageSourceInfo info) {
     if (image.isNull()) {
-        setError(tr("Could not open image."));
+        setError(tr("无法打开图片。"));
         return false;
     }
     QString dimensionError;
@@ -557,12 +559,12 @@ bool ImageReviewController::openPairImages(QImage primary,
     // Validate both sides before touching any member: a failed candidate must leave the
     // previous committed pair (or the explicit empty state) fully intact (T1 atomicity).
     if (primary.isNull() || secondary.isNull()) {
-        setError(tr("Could not open image."));
+        setError(tr("无法打开图片。"));
         return false;
     }
     if (primary.width() > kMaxImageEdge || primary.height() > kMaxImageEdge ||
         secondary.width() > kMaxImageEdge || secondary.height() > kMaxImageEdge) {
-        setError(tr("Image is larger than %1 px on a side.").arg(kMaxImageEdge));
+        setError(tr("图像单边超过 %1 像素。").arg(kMaxImageEdge));
         return false;
     }
     if (!dimensionsWithinBudget(primary.width(), primary.height(), &errorText_) ||
@@ -654,7 +656,7 @@ bool ImageReviewController::openPairAtomically(const QUrl& primary,
 int ImageReviewController::requestOpenPrimary(const QUrl& url, const int pairId) {
     const QString label = url.isLocalFile() ? url.toLocalFile() : url.toString();
     if (!url.isValid() || label.isEmpty()) {
-        setError(tr("Invalid image path."));
+        setError(tr("图片路径无效。"));
         return -1;
     }
     cancelPendingOpen();
@@ -673,12 +675,12 @@ int ImageReviewController::requestOpenPrimary(const QUrl& url, const int pairId)
 
 int ImageReviewController::requestOpenSecondary(const QUrl& url) {
     if (!hasPrimary()) {
-        setError(tr("Open a first image to compare."));
+        setError(tr("请先打开一张图片。"));
         return -1;
     }
     const QString label = url.isLocalFile() ? url.toLocalFile() : url.toString();
     if (!url.isValid() || label.isEmpty()) {
-        setError(tr("Invalid image path."));
+        setError(tr("图片路径无效。"));
         return -1;
     }
     cancelPendingOpen();
@@ -703,7 +705,7 @@ int ImageReviewController::requestOpenPair(const QUrl& primary,
         secondary.isLocalFile() ? secondary.toLocalFile() : secondary.toString();
     if (!primary.isValid() || !secondary.isValid() || primaryLabel.isEmpty() ||
         secondaryLabel.isEmpty()) {
-        setError(tr("Invalid image path."));
+        setError(tr("图片路径无效。"));
         return -1;
     }
     cancelPendingOpen();
@@ -718,6 +720,79 @@ int ImageReviewController::requestOpenPair(const QUrl& primary,
     errorText_.clear();
     emit stateChanged();
     return static_cast<int>(requestId);
+}
+
+int ImageReviewController::requestReplacePrimary(const QUrl& url) {
+    const QString label = url.isLocalFile() ? url.toLocalFile() : url.toString();
+    if (!url.isValid() || label.isEmpty()) {
+        setError(tr("图片路径无效。"));
+        return -1;
+    }
+    if (!hasPrimary()) {
+        setError(tr("请先打开一张图片。"));
+        return -1;
+    }
+    cancelPendingOpen();
+    async_->loader.cancelPrefetches();
+    async_->pendingKind = AsyncState::PendingKind::ReplacePrimary;
+    // pairId is not forwarded: a slot replace must not rewrite committedPairId.
+    async_->pendingPairId = committedPairId_;
+    const quint64 requestId = async_->loader.requestPrimary(
+        url, committedPairId_, currentDecodePolicy(), [this](ImagePairLoader::Result result) {
+            handleLoadFinished(std::move(result));
+        });
+    async_->activeLoadRequestId = requestId;
+    errorText_.clear();
+    emit stateChanged();
+    return static_cast<int>(requestId);
+}
+
+int ImageReviewController::requestReplaceSecondary(const QUrl& url) {
+    if (!hasPrimary()) {
+        setError(tr("请先打开一张图片。"));
+        return -1;
+    }
+    const QString label = url.isLocalFile() ? url.toLocalFile() : url.toString();
+    if (!url.isValid() || label.isEmpty()) {
+        setError(tr("图片路径无效。"));
+        return -1;
+    }
+    cancelPendingOpen();
+    async_->loader.cancelPrefetches();
+    // Same load path as append-B; the ReplaceSecondary commit keeps A and pair identity.
+    async_->pendingKind = AsyncState::PendingKind::ReplaceSecondary;
+    async_->pendingPairId = committedPairId_;
+    const quint64 requestId = async_->loader.requestSecondary(
+        url, committedPairId_, currentDecodePolicy(), [this](ImagePairLoader::Result result) {
+            handleLoadFinished(std::move(result));
+        });
+    async_->activeLoadRequestId = requestId;
+    errorText_.clear();
+    emit stateChanged();
+    return static_cast<int>(requestId);
+}
+
+bool ImageReviewController::swapSides() {
+    if (!hasPair()) {
+        if (errorText_.isEmpty()) {
+            setError(tr("请打开第二张图片进行对比。"));
+        }
+        return false;
+    }
+    cancelPendingOpen();
+    cancelDifferenceRequest();
+    ++async_->sourceGeneration;
+    std::swap(primary_, secondary_);
+    std::swap(primaryNative_, secondaryNative_);
+    std::swap(primaryPath_, secondaryPath_);
+    std::swap(primaryInfo_, secondaryInfo_);
+    std::swap(async_->primaryIdentity, async_->secondaryIdentity);
+    // committedPairId_ and zoom/pan stay: this is an orientation flip, not a new commit.
+    errorText_.clear();
+    resetDifferenceState();
+    bumpGeneration();
+    refreshDifferenceAfterSideChange();
+    return true;
 }
 
 void ImageReviewController::cancelPendingOpen() {
@@ -859,6 +934,31 @@ void ImageReviewController::zoomBy(const qreal factor,
     emit viewChanged();
 }
 
+void ImageReviewController::zoomToRect(const qreal normalizedX0,
+                                       const qreal normalizedY0,
+                                       const qreal normalizedX1,
+                                       const qreal normalizedY1) {
+    if (!std::isfinite(normalizedX0) || !std::isfinite(normalizedY0) ||
+        !std::isfinite(normalizedX1) || !std::isfinite(normalizedY1)) {
+        return;
+    }
+    const qreal minX = std::clamp(std::min(normalizedX0, normalizedX1), 0.0, 1.0);
+    const qreal maxX = std::clamp(std::max(normalizedX0, normalizedX1), 0.0, 1.0);
+    const qreal minY = std::clamp(std::min(normalizedY0, normalizedY1), 0.0, 1.0);
+    const qreal maxY = std::clamp(std::max(normalizedY0, normalizedY1), 0.0, 1.0);
+    const qreal boxW = maxX - minX;
+    const qreal boxH = maxY - minY;
+    if (boxW < 0.005 || boxH < 0.005) {
+        return;
+    }
+    const qreal factor = std::min(1.0 / boxW, 1.0 / boxH);
+    const qreal next = clampZoom(factor);
+    panX_ = std::clamp((minX + maxX) * 0.5, 0.0, 1.0);
+    panY_ = std::clamp((minY + maxY) * 0.5, 0.0, 1.0);
+    zoom_ = next;
+    emit viewChanged();
+}
+
 void ImageReviewController::panBy(const qreal deltaNormalizedX, const qreal deltaNormalizedY) {
     if (!std::isfinite(deltaNormalizedX) || !std::isfinite(deltaNormalizedY)) {
         return;
@@ -939,10 +1039,10 @@ QVariantMap ImageReviewController::samplePixel(const int imageSlot,
     // original-depth code values alongside the 8-bit display values so a 16-bit source never
     // reads back as "already quantized" numbers.
     if (imageSlot != DisplayDiffSlot && viewMode_ == RgbaView) {
-        const QImage& native =
-            imageSlot == DisplaySecondarySlot ? secondaryNative_ : primaryNative_;
-        const StillImageSourceInfo& sideInfo =
-            imageSlot == DisplaySecondarySlot ? secondaryInfo_ : primaryInfo_;
+        const bool sampleSecondary =
+            imageSlot == SecondarySlot || imageSlot == DisplaySecondarySlot;
+        const QImage& native = sampleSecondary ? secondaryNative_ : primaryNative_;
+        const StillImageSourceInfo& sideInfo = sampleSecondary ? secondaryInfo_ : primaryInfo_;
         if (!native.isNull() && x < native.width() && y < native.height()) {
             // QImage::pixel() would truncate 64-bit formats; go through the color API.
             const QRgba64 sample = native.pixelColor(x, y).rgba64();
@@ -1047,6 +1147,20 @@ void ImageReviewController::handleLoadFinished(ImagePairLoader::Result result) {
     case AsyncState::PendingKind::Pair:
         commitLoadedPair(std::move(result));
         break;
+    case AsyncState::PendingKind::ReplacePrimary:
+        primaryNative_ = std::move(result.primaryNative);
+        commitReplacePrimary(std::move(result.primary),
+                             std::move(result.primaryLabel),
+                             std::move(result.primaryIdentity),
+                             std::move(result.primaryInfo));
+        break;
+    case AsyncState::PendingKind::ReplaceSecondary:
+        secondaryNative_ = std::move(result.secondaryNative);
+        commitReplaceSecondary(std::move(result.secondary),
+                               std::move(result.secondaryLabel),
+                               std::move(result.secondaryIdentity),
+                               std::move(result.secondaryInfo));
+        break;
     case AsyncState::PendingKind::None:
         break;
     }
@@ -1149,6 +1263,86 @@ void ImageReviewController::commitLoadedSecondary(QImage image,
         compareMode_ = SideBySide;
     }
     bumpGeneration();
+    refreshDifferenceAfterSideChange();
+}
+
+void ImageReviewController::commitReplacePrimary(QImage image,
+                                                 QString label,
+                                                 QString identity,
+                                                 StillImageSourceInfo info) {
+    primary_ = std::move(image);
+    primaryPath_ = std::move(label);
+    primaryInfo_ = std::move(info);
+    if (primaryInfo_.sourceFormat.isEmpty()) {
+        primaryInfo_.hasAlpha = primary_.hasAlphaChannel();
+        primaryInfo_.channels = 4;
+    }
+    async_->primaryIdentity =
+        identity.isEmpty() ? imageContentIdentity(primary_) : std::move(identity);
+    // committedPairId_ is intentionally unchanged: a slot replace is not a new pair commit.
+    // Observation position (zoom/pan/mode) is retained unless the new side makes a
+    // non-resampled pixel diff impossible.
+    if (isDifferenceMode(compareMode_) && !resampleAllowed_ &&
+        primary_.size() != secondary_.size()) {
+        errorText_ = tr("A 与 B 尺寸不同（%1×%2 与 %3×%4），已切换回并排查看；"
+                        "逐像素差异需要相同尺寸或启用重采样。")
+                         .arg(primary_.width())
+                         .arg(primary_.height())
+                         .arg(secondary_.width())
+                         .arg(secondary_.height());
+        compareMode_ = SideBySide;
+    } else {
+        errorText_.clear();
+    }
+    resetDifferenceState();
+    bumpGeneration();
+    refreshDifferenceAfterSideChange();
+}
+
+void ImageReviewController::commitReplaceSecondary(QImage image,
+                                                   QString label,
+                                                   QString identity,
+                                                   StillImageSourceInfo info) {
+    secondary_ = std::move(image);
+    secondaryPath_ = std::move(label);
+    secondaryInfo_ = std::move(info);
+    if (secondaryInfo_.sourceFormat.isEmpty()) {
+        secondaryInfo_.hasAlpha = secondary_.hasAlphaChannel();
+        secondaryInfo_.channels = 4;
+    }
+    async_->secondaryIdentity =
+        identity.isEmpty() ? imageContentIdentity(secondary_) : std::move(identity);
+    // committedPairId_ is intentionally unchanged: a slot replace is not a new pair commit.
+    if (compareMode_ == PrimaryOnly && hasPair()) {
+        compareMode_ = SideBySide;
+    }
+    if (isDifferenceMode(compareMode_) && !resampleAllowed_ &&
+        primary_.size() != secondary_.size()) {
+        errorText_ = tr("A 与 B 尺寸不同（%1×%2 与 %3×%4），已切换回并排查看；"
+                        "逐像素差异需要相同尺寸或启用重采样。")
+                         .arg(primary_.width())
+                         .arg(primary_.height())
+                         .arg(secondary_.width())
+                         .arg(secondary_.height());
+        compareMode_ = SideBySide;
+    } else {
+        errorText_.clear();
+    }
+    resetDifferenceState();
+    bumpGeneration();
+    refreshDifferenceAfterSideChange();
+}
+
+void ImageReviewController::refreshDifferenceAfterSideChange() {
+    if (isDifferenceMode(compareMode_) && hasPair()) {
+        requestDifferenceForCurrentMode();
+        return;
+    }
+    if (isDifferenceMode(compareMode_)) {
+        cancelDifferenceRequest();
+        resetDifferenceState();
+        emit stateChanged();
+    }
 }
 
 void ImageReviewController::commitLoadedPair(ImagePairLoader::Result result) {
@@ -1362,14 +1556,14 @@ bool ImageReviewController::loadChecked(const QUrl& url,
                                         QString* error) {
     if (!url.isValid()) {
         if (error) {
-            *error = tr("Invalid image path.");
+            *error = tr("图片路径无效。");
         }
         return false;
     }
     const QString localPath = url.isLocalFile() ? url.toLocalFile() : url.toString();
     if (localPath.isEmpty()) {
         if (error) {
-            *error = tr("Invalid image path.");
+            *error = tr("图片路径无效。");
         }
         return false;
     }
@@ -1437,8 +1631,7 @@ bool ImageReviewController::loadChecked(const QUrl& url,
                     if (!loaderError.empty()) {
                         *error = QString::fromStdString(loaderError);
                     } else if (error->isEmpty()) {
-                        *error =
-                            tr("Could not open image: %1").arg(QFileInfo(localPath).fileName());
+                        *error = tr("无法打开图片：%1").arg(QFileInfo(localPath).fileName());
                     }
                 }
             } else if (!loaded.isNull()) {
@@ -1455,7 +1648,7 @@ bool ImageReviewController::loadChecked(const QUrl& url,
     }
     if (!decoded && (!loaded.load(localPath) || loaded.isNull())) {
         if (error) {
-            *error = tr("Could not open image: %1").arg(QFileInfo(localPath).fileName());
+            *error = tr("无法打开图片：%1").arg(QFileInfo(localPath).fileName());
         }
         return false;
     }

@@ -14,6 +14,7 @@ Item {
     required property int shortcutPreset
     required property bool fullScreen
     required property bool chromeVisible
+    property var preferences: null
     required property int currentFrame
     required property int inFrame
     required property int outFrame
@@ -35,6 +36,7 @@ Item {
         id: reviewActions
 
         controller: control.controller
+        preferences: control.preferences
         shortcutsEnabled: control.shortcutsEnabled
         oneSecondStepFrames: control.oneSecondStepFrames
         wipeEnabled: control.wipeEnabled

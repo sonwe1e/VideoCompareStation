@@ -98,4 +98,20 @@ QtObject {
             return;
         wipePositionRequested(Math.max(0, Math.min(1, wipePosition + delta)));
     }
+
+    property var preferences: null
+
+    function setPlaybackContinuityPolicy(policy) {
+        if (preferences)
+            preferences.playbackContinuityPolicy = policy;
+        if (controller && typeof controller.setPlaybackContinuityPolicy === "function")
+            controller.setPlaybackContinuityPolicy(policy);
+    }
+
+    function stepFrames(delta) {
+        if (controller && typeof controller.stepFrames === "function") {
+            manualNavigationRequested();
+            controller.stepFrames(delta);
+        }
+    }
 }

@@ -10,6 +10,7 @@ add_library(
         src/MediaProbe.cpp
         src/PairMetricsDecodeSession.cpp
         src/PairMetricsService.cpp
+        src/PreviewThumbnailService.cpp
         src/SourceDecodeActor.cpp
         src/SourceFrameCache.cpp
         src/SoftwareDecoder.cpp

@@ -75,7 +75,9 @@ Item {
         function test_cached_sample_is_not_re_captured() {
             cache.currentFrame = 10;
             compare(grabTarget.grabRequests, 1);
-            cache.urls = Object.assign({}, cache.urls, { 10: "image://stub/10" });
+            cache.urls = Object.assign({}, cache.urls, {
+                10: "image://stub/10"
+            });
             cache.currentFrame = 15;
             cache.currentFrame = 10;
             compare(grabTarget.grabRequests, 2, "only the uncached sample 15 may start a grab");
@@ -106,11 +108,33 @@ Item {
         // A new generation replaces the content, so cached samples from the previous generation
         // must not survive it.
         function test_generation_change_resets_cache() {
-            cache.urls = Object.assign({}, cache.urls, { 25: "image://stub/25" });
+            cache.urls = Object.assign({}, cache.urls, {
+                25: "image://stub/25"
+            });
             cache.accountedBytes = 1024;
             cache.generation = 2;
             compare(cache.urlForFrame(25), "");
             compare(cache.accountedBytes, 0);
+        }
+
+        // isExact means "this image is the hovered frame", not "a grid sample is cached".
+        function test_preview_info_marks_only_identical_sample_as_exact() {
+            cache.urls = Object.assign({}, cache.urls, {
+                10: "image://stub/10"
+            });
+            const exact = cache.previewInfoForFrame(10);
+            compare(exact.isExact, true);
+            compare(exact.sampleFrame, 10);
+
+            const near = cache.previewInfoForFrame(12);
+            compare(near.isExact, false);
+            compare(near.sampleFrame, 10);
+            compare(near.url, "image://stub/10");
+
+            // Beyond one sample interval the neighbour must not be borrowed.
+            const far = cache.previewInfoForFrame(30);
+            compare(far.url, "");
+            compare(far.isExact, false);
         }
     }
 }

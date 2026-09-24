@@ -5,6 +5,7 @@ add_executable(
     DiagnosticsProbeTests.cpp
     IssueLogControllerTests.cpp
     PairMetricsControllerTests.cpp
+    PreviewThumbnailControllerTests.cpp
     ReviewControllerTests.cpp
     "${PROJECT_SOURCE_DIR}/src/app/RuntimeBridges.cpp"
     ReviewPreferencesControllerTests.cpp

@@ -19,6 +19,7 @@ class IIssueRecordRepository;
 namespace ui {
 class ComparisonSurface;
 class PairMetricsController;
+class PreviewThumbnailController;
 class ReviewController;
 class ReviewPreferencesController;
 } // namespace ui
@@ -41,6 +42,8 @@ public:
     [[nodiscard]] ui::ReviewPreferencesController* preferences() noexcept;
     // GUI-thread pair-metrics projection over the independent media metrics service.
     [[nodiscard]] ui::PairMetricsController* pairMetrics() noexcept;
+    // GUI-thread timeline hover thumbnails decoded outside the playback pipeline.
+    [[nodiscard]] ui::PreviewThumbnailController* previewThumbnails() noexcept;
     // T7 issue-record persistence port owned by the composition root (architecture: ui_qml
     // must not link persistence_json).
     [[nodiscard]] application::IIssueRecordRepository* issueRecordRepository() noexcept;

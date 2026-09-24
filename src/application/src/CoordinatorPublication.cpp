@@ -25,7 +25,7 @@ CoordinatorPublication::acceptedSequenceAlignments() const {
 void CoordinatorPublication::publish(
     const SessionSnapshot& state,
     const std::vector<SequenceAlignmentResult>& sequenceAlignmentMaps) {
-    auto snapshot = std::make_shared<const SessionSnapshot>(state);
+    auto snapshot = std::make_shared<SessionSnapshot>(state);
 
     std::scoped_lock lock(mutex_);
     if (sequenceAlignmentRevision_ != state.alignmentRevision) {
@@ -33,6 +33,7 @@ void CoordinatorPublication::publish(
             std::make_shared<const std::vector<SequenceAlignmentResult>>(sequenceAlignmentMaps);
         sequenceAlignmentRevision_ = state.alignmentRevision;
     }
+    snapshot->sequenceAlignmentMaps = sequenceAlignmentMaps_;
     snapshot_ = std::move(snapshot);
 }
 

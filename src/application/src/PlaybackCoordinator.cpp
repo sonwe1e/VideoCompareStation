@@ -1,6 +1,7 @@
 #include "dvs/application/PlaybackCoordinator.h"
 
 #include "dvs/application/AlignmentCacheIdentity.h"
+#include "dvs/application/FrameMapping.h"
 #include "dvs/application/PlaybackTrace.h"
 #include "dvs/application/PrefetchScheduler.h"
 #include "dvs/domain/ComparisonSelection.h"
@@ -29,6 +30,7 @@
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -620,72 +622,22 @@ private:
 
     [[nodiscard]] std::vector<SourceFrameOffset>
     sourceMappingsFor(const domain::FrameId canonicalFrame) const {
-        std::vector<SourceFrameOffset> mappings = alignmentOffsets_;
-        for (const SequenceAlignmentResult& map : sequenceAlignmentMaps_) {
-            if (!canonicalFrame.isValid() ||
-                static_cast<std::size_t>(canonicalFrame.value()) >= map.entries.size()) {
-                continue;
-            }
-            const auto segment =
-                std::find_if(map.segments.begin(),
-                             map.segments.end(),
-                             [canonicalFrame](const SequenceAlignmentSegment& value) {
-                                 return value.firstCanonicalFrame <= canonicalFrame &&
-                                        canonicalFrame <= value.lastCanonicalFrame;
-                             });
-            if (segment != map.segments.end() &&
-                segment->state != AlignmentSegmentState::Accepted) {
-                continue;
-            }
-            const SequenceAlignmentEntry& entry =
-                map.entries[static_cast<std::size_t>(canonicalFrame.value())];
-            if (entry.canonicalFrameId != canonicalFrame) {
-                continue;
-            }
-            SourceFrameOffset mapping{
-                .sourceId = map.sourceId,
-                .frames = 0,
-                .matchKind = entry.matchKind,
-                .confidence = entry.confidence,
-            };
-            if (entry.sourceFrameId.has_value()) {
-                mapping.frames = entry.sourceFrameId->value() - canonicalFrame.value();
-            } else {
-                mapping.matchKind = FrameMatchKind::Missing;
-            }
-            const auto existing = std::find_if(
-                mappings.begin(), mappings.end(), [&map](const SourceFrameOffset& offset) {
-                    return offset.sourceId == map.sourceId;
-                });
-            if (existing == mappings.end()) {
-                mappings.push_back(mapping);
-            } else {
-                *existing = mapping;
-            }
+        std::vector<SourceTimelineView> timelines;
+        timelines.reserve(sourceTimelines_.size());
+        for (const auto& [sourceId, timeline] : sourceTimelines_) {
+            timelines.push_back(SourceTimelineView{sourceId, timeline});
         }
-        if (sources_.has_value()) {
-            for (const SourceAlignmentAnchors& anchors : state_.manualAlignmentAnchors) {
-                const domain::ComparisonSource* const source = sources_->find(anchors.sourceId);
-                if (source == nullptr) {
-                    continue;
-                }
-                const auto mapping = mapFrameWithAnchors(
-                    anchors, canonicalFrame, source->descriptor.frameCount.value);
-                if (!mapping.has_value()) {
-                    continue;
-                }
-                const auto existing = std::find_if(
-                    mappings.begin(), mappings.end(), [&anchors](const SourceFrameOffset& offset) {
-                        return offset.sourceId == anchors.sourceId;
-                    });
-                if (existing == mappings.end()) {
-                    mappings.push_back(*mapping);
-                } else {
-                    *existing = *mapping;
-                }
-            }
-        }
-        return mappings;
+        return resolveSourceFrameMappings(
+            FrameMappingContext{
+                .sources = sources_.has_value() ? &*sources_ : nullptr,
+                .canonicalTimeline = canonicalTimeline_,
+                .offsets = alignmentOffsets_,
+                .mode = state_.alignmentMode,
+                .sequenceMaps = sequenceAlignmentMaps_,
+                .anchors = state_.manualAlignmentAnchors,
+                .timelines = timelines,
+            },
+            canonicalFrame);
     }
 
     void submitPrefetch(const std::vector<domain::FrameId>& targets) {
@@ -788,6 +740,13 @@ private:
     void publishSnapshot(const bool notify = true) {
         state_.alignmentOffsets = alignmentOffsets_;
         state_.canonicalTimeline = canonicalTimeline_;
+        state_.sourceTimelines.clear();
+        state_.sourceTimelines.reserve(sourceTimelines_.size());
+        for (const auto& [sourceId, timeline] : sourceTimelines_) {
+            if (timeline != nullptr) {
+                state_.sourceTimelines.push_back(SourceTimelineView{sourceId, timeline});
+            }
+        }
         state_.playbackSpeed =
             playbackRun_.has_value() ? playbackRun_->speed : pendingPlaybackSpeed_.value_or(1.0);
         state_.playbackContinuityPolicy = playbackContinuityPolicy_;
@@ -908,6 +867,7 @@ private:
         state_.alignmentAnalysisCompletedUnits = 0U;
         state_.alignmentAnalysisWork = {};
         state_.manualAlignmentAnchors.clear();
+        state_.alignmentMode = AlignmentMode::FrameIndex;
         state_.compatibilityFindings.clear();
         state_.alignmentRequired = false;
         invalidateAutomaticAlignmentHistory();
@@ -917,6 +877,7 @@ private:
         alignmentOffsets_.clear();
         sequenceAlignmentMaps_.clear();
         canonicalTimeline_.reset();
+        sourceTimelines_.clear();
         prefetchScheduler_.reset();
     }
 
@@ -2502,6 +2463,15 @@ private:
         PendingProbe completed = std::move(*pendingProbe_);
         pendingProbe_.reset();
 
+        // Keep every VFR probe timeline so Timestamp alignment can map non-canonical sources
+        // by presentation time instead of a CFR average-rate guess.
+        sourceTimelines_.clear();
+        for (const auto& slot : completed.slots) {
+            if (slot.timeline.has_value() && *slot.timeline) {
+                sourceTimelines_[slot.sourceId] = *slot.timeline;
+            }
+        }
+
         // Build the ComparisonSource vector from the completed probe slots, preserving the
         // submission-order source ids, roles, and display names from the original command.
         std::vector<domain::ComparisonSource> comparisonSources;
@@ -3052,9 +3022,15 @@ private:
             }
         }
         const bool mappingChanged = next != state_.manualAlignmentAnchors;
+        // Re-asserting an existing anchor while another mode was active still changes the
+        // effective mapping (time/index based -> anchor interpolation); the alignment
+        // identity must advance with it or stale async work keyed by the old revision would
+        // be accepted as current.
+        const bool modeChanged = state_.alignmentMode != AlignmentMode::ManualAnchor;
         invalidateAutomaticAlignmentHistory();
         state_.manualAlignmentAnchors = std::move(next);
-        if (mappingChanged) {
+        state_.alignmentMode = AlignmentMode::ManualAnchor;
+        if (mappingChanged || modeChanged) {
             state_.alignmentRevision = increment(state_.alignmentRevision);
             prefetchScheduler_.reset();
         }
@@ -3077,6 +3053,30 @@ private:
         }
         invalidateAutomaticAlignmentHistory();
         state_.manualAlignmentAnchors.clear();
+        // Clearing anchors must not silently rewrite an explicit Timestamp/FrameIndex choice.
+        if (state_.alignmentMode == AlignmentMode::ManualAnchor) {
+            state_.alignmentMode = AlignmentMode::FrameIndex;
+        }
+        state_.alignmentRevision = increment(state_.alignmentRevision);
+        prefetchScheduler_.reset();
+        beginSeek(command.context, *state_.displayedFrame);
+    }
+
+    void beginSetAlignmentMode(const SetAlignmentModeCommand& command) {
+        if (!sources_.has_value() || state_.sessionState != domain::SessionState::kReady ||
+            !state_.displayedFrame.has_value()) {
+            rejectCommand(command.context,
+                          CommandOutcome::Failed,
+                          coordinatorError(domain::MediaErrorCode::kInvalidArgument,
+                                           "Alignment mode change requires a ready comparison set.",
+                                           false));
+            return;
+        }
+        if (state_.alignmentMode == command.mode) {
+            completeCommand(command.context, CommandOutcome::Succeeded);
+            return;
+        }
+        state_.alignmentMode = command.mode;
         state_.alignmentRevision = increment(state_.alignmentRevision);
         prefetchScheduler_.reset();
         beginSeek(command.context, *state_.displayedFrame);
@@ -3156,7 +3156,8 @@ private:
             std::holds_alternative<UndoAutomaticAlignmentCommand>(command) ||
             std::holds_alternative<RestoreSequenceAlignmentCommand>(command) ||
             std::holds_alternative<SetManualAlignmentAnchorCommand>(command) ||
-            std::holds_alternative<ClearManualAlignmentAnchorsCommand>(command);
+            std::holds_alternative<ClearManualAlignmentAnchorsCommand>(command) ||
+            std::holds_alternative<SetAlignmentModeCommand>(command);
         if (isAlignmentCommand && sources_.has_value() && sources_->sourceCount() < 2U) {
             completeCommand(
                 context,
@@ -3235,7 +3236,8 @@ private:
             std::holds_alternative<UndoAutomaticAlignmentCommand>(command) ||
             std::holds_alternative<RestoreSequenceAlignmentCommand>(command) ||
             std::holds_alternative<SetManualAlignmentAnchorCommand>(command) ||
-            std::holds_alternative<ClearManualAlignmentAnchorsCommand>(command);
+            std::holds_alternative<ClearManualAlignmentAnchorsCommand>(command) ||
+            std::holds_alternative<SetAlignmentModeCommand>(command);
         // An interactive ±1 of the same direction extends the active stream and must not be
         // treated as a navigational discontinuity that stops playback first. Other commands remain
         // navigation (seek, ±N, direction flip, alignment, …).
@@ -3366,6 +3368,8 @@ private:
                     beginSetManualAnchor(value);
                 } else if constexpr (std::is_same_v<Value, ClearManualAlignmentAnchorsCommand>) {
                     beginClearManualAnchors(value);
+                } else if constexpr (std::is_same_v<Value, SetAlignmentModeCommand>) {
+                    beginSetAlignmentMode(value);
                 } else if constexpr (std::is_same_v<Value, CloseSessionCommand>) {
                     beginClose(value);
                 }
@@ -4561,6 +4565,9 @@ private:
     std::vector<SourceFrameOffset> alignmentOffsets_;
     std::vector<SequenceAlignmentResult> sequenceAlignmentMaps_;
     std::optional<domain::CanonicalTimeline> canonicalTimeline_;
+    // Per-source VFR timelines published by MediaProbe (CFR sources leave this empty).
+    std::unordered_map<domain::SourceId, std::shared_ptr<const domain::FrameTimeline>>
+        sourceTimelines_;
     std::optional<PendingCommand> pending_;
     std::optional<ReadySessionBackup> openRollback_;
     std::optional<PendingProbe> pendingProbe_;

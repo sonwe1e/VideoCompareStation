@@ -98,6 +98,10 @@ class ReviewController final : public QObject {
     Q_PROPERTY(bool canUndoAutomaticAlignment READ canUndoAutomaticAlignment NOTIFY stateChanged)
     Q_PROPERTY(QVariantList compatibilityFindings READ compatibilityFindings NOTIFY stateChanged)
     Q_PROPERTY(QVariantList differenceEdges READ differenceEdges NOTIFY frameStateChanged)
+    Q_PROPERTY(int alignmentMode READ alignmentMode NOTIFY stateChanged)
+    Q_PROPERTY(QString alignmentModeName READ alignmentModeName NOTIFY stateChanged)
+    Q_PROPERTY(QString currentInexactReason READ currentInexactReason NOTIFY frameStateChanged)
+    Q_PROPERTY(QVariantMap activePairTimeInfo READ activePairTimeInfo NOTIFY frameStateChanged)
     Q_PROPERTY(bool canOpen READ canOpen NOTIFY stateChanged)
     Q_PROPERTY(bool canFirst READ canFirst NOTIFY stateChanged)
     Q_PROPERTY(bool canPrevious READ canPrevious NOTIFY frameStateChanged)
@@ -222,6 +226,10 @@ public:
     [[nodiscard]] bool canUndoAutomaticAlignment() const noexcept;
     [[nodiscard]] QVariantList compatibilityFindings() const;
     [[nodiscard]] QVariantList differenceEdges() const;
+    [[nodiscard]] int alignmentMode() const noexcept;
+    [[nodiscard]] QString alignmentModeName() const;
+    [[nodiscard]] QString currentInexactReason() const;
+    [[nodiscard]] QVariantMap activePairTimeInfo() const;
     [[nodiscard]] bool canOpen() const noexcept;
     [[nodiscard]] bool canFirst() const noexcept;
     [[nodiscard]] bool canPrevious() const noexcept;
@@ -273,6 +281,7 @@ public:
     Q_INVOKABLE bool
     setManualAlignmentAnchor(int sourceIndex, qint64 canonicalFrame, qint64 sourceFrame);
     Q_INVOKABLE bool clearManualAlignmentAnchors();
+    Q_INVOKABLE bool setAlignmentMode(int mode);
     Q_INVOKABLE bool play();
     Q_INVOKABLE bool pause();
     // Selects the visual playback rate. Accepted while playing (re-anchors the cadence) and

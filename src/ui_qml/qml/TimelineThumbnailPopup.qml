@@ -10,11 +10,13 @@ Rectangle {
     required property string previewTimecode
     property string comparisonState: ""
     property url thumbnailSource: ""
+    property bool isApproximate: false
+    property int sampleFrame: -1
     readonly property bool hasThumbnail: control.thumbnailSource.toString().length > 0
 
     objectName: "timelineThumbnailPopup"
     width: hasThumbnail ? 184 : Math.max(148, contentCol.implicitWidth + 24)
-    height: hasThumbnail ? 112 : (contentCol.implicitHeight + 14)
+    height: hasThumbnail ? (control.isApproximate ? 124 : 112) : (contentCol.implicitHeight + 14)
     radius: hasThumbnail ? 7 : 16
     color: Theme.thumbnailPanel
     border.color: hasThumbnail ? "#50637f" : "#6080b0"
@@ -89,6 +91,17 @@ Rectangle {
             text: control.comparisonState
             visible: text.length > 0
             color: "#9fc3ff"
+            font.pixelSize: 10
+            anchors.horizontalCenter: control.hasThumbnail ? undefined : parent.horizontalCenter
+        }
+
+        Text {
+            id: approximateBadge
+
+            objectName: "previewApproximateBadge"
+            text: qsTr("预览 · 邻近第 %1 帧").arg(control.sampleFrame + 1)
+            visible: control.sampleFrame >= 0 && control.sampleFrame !== control.previewFrame
+            color: "#f59e0b"
             font.pixelSize: 10
             anchors.horizontalCenter: control.hasThumbnail ? undefined : parent.horizontalCenter
         }

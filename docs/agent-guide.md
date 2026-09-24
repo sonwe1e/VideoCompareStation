@@ -40,6 +40,7 @@
 | 图片打不开、PNM、位深或颜色不对 | `src/app/Main.cpp` 注入 loader → `src/media_ffmpeg/src/StillImageDecoder.cpp`；`ImagePairLoader.cpp`、`ImageHeaderProbe.h`、`ImageFolderPairModel.cpp`；`Main.qml` 文件入口 | `tests/component/ui/ImageReviewControllerTests.cpp`、`ImageFolderPairModelTests.cpp`；工作区新增的 `StillImageDecoderTests.cpp`，先确认已纳入构建 |
 | 透明边缘、RGBA 数值、Alpha 差异 | `ImageWorkspace.qml` → `ImageReviewController.cpp`：`samplePixel`、`displayImage` → `ImagePairLoader.cpp`：`computeDifference` | `tests/component/ui/ImageReviewControllerTests.cpp`；台账 `I-01`、`I-02`、`I-06` |
 | 图片 100%、手动 A/B 闪烁、分割线 | `ImageWorkspace.qml`、`ImageReviewController.h/.cpp`、`ImageFolderPairModel.cpp` | `MainQmlContractTests.cpp`、`ImageReviewControllerTests.cpp`；台账 `I-04`、`C-01`、`C-02` |
+| 对调 A/B、只替换一张图 | `ImageReviewController::swapSides`、`requestReplacePrimary/Secondary`；`ImageWorkspace.qml`、`Main.qml` 换图对话框 | `ImageReviewControllerTests` 的 `SwapSides*`/`Replace*`；台账 `U-02` |
 | MAE／PSNR、统计和误差图含义 | `src/domain/src/PixelDifference.cpp`；`src/application/include/dvs/application/ComparisonMetrics.h`；图片另查 `ImagePairLoader.cpp` | `PixelDifferenceTests.cpp`、`ComparisonMetricsTests.cpp`；[指标 ADR](adr/0005-pixel-difference-metrics.md) |
 | 记录问题、截图、恢复观察位置 | `src/ui_qml/src/IssueLogController.cpp` → `src/application/include/dvs/application/IssueRecord.h` → `src/persistence_json/src/IssueRecordRepository.cpp` | `IssueLogControllerTests.cpp`、`IssueRecordTests.cpp`、`IssueRecordRepositoryTests.cpp` |
 | 不知道功能在哪里、模式太多 | `EmptyReviewView.qml`、`ApplicationMenuBar.qml`、`CompareModeBar.qml`、`TabbedInspector.qml`、`ImageWorkspace.qml` | 对应 QML 测试与 `MainQmlContractTests.cpp`；按产品工作流做人工验收 |
@@ -57,6 +58,8 @@
 - `ComparisonCoordinator` 是旧架构图中的概念名；当前实现类仍是 `PlaybackCoordinator`。
 - `ReviewSessionFacade` 中多个 capability 仍转发同一个控制器，不能把接口预留当作拆分已完成。
 - 时间线主源、GT 参考源、当前比较对是不同角色。改变 GT 不应改变时间轴，A/B/C 槽位不应充当跨会话文件身份。
+- 图片 `requestOpenPrimary` 会清空 B（新的单图任务）；「只换 A」用 `requestReplacePrimary`。
+  对调与单侧替换不改写 `committedPairId`。
 - 渲染了差异图，不等于已经接通 MAE/PSNR；有解码器，不等于有格式验收或无损显示路径。
 - 源重复帧、播放器跳过完整帧组、呈现间隙、DF 时间码分别解释。无检测结果应显示未知，不应当作零缺陷。
 

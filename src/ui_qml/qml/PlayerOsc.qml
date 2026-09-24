@@ -47,6 +47,9 @@ Item {
     property int previewFrame: -1
     property string previewTimecode: "00:00:00:00"
     property url previewThumbnailSource: ""
+    property bool previewIsApproximate: false
+    property int previewSampleFrame: -1
+    property int playbackContinuityPolicy: 1
     property bool revealActive: controllerState === 0
     readonly property bool controlsEnabled: control.docked || control.controllerState === 0 || control.revealActive
 
@@ -55,14 +58,7 @@ Item {
     signal overlayHidden
 
     objectName: "transport"
-    // Height is the content stack, expressed directly so it never depends on an anchored
-    // child (anchoring the height to the TransportBar while the TransportBar anchors back to the
-    // panel is a binding loop — Qt bails and collapses the whole control to 0, the bug that
-    // prompted this fix). The TransportBar therefore anchors to the tracks with a 13 px top margin
-    // (which clears the playhead thumb's ~6 px overflow below the 42 px tracks); the control height
-    // is tracks.y + tracks height + that margin + TransportBar height (34 px) + a 5 px bottom inset.
-    // transportDockHeight (Main.qml) reads this height.
-    height: Math.max(0, tracks.y) + tracks.height + 13 + 34 + 5
+    height: Math.max(0, tracks.y) + tracks.height + 13 + transport.implicitHeight + 5
     visible: controllerState !== 2
 
     onControllerStateChanged: {
@@ -338,6 +334,8 @@ Item {
             previewFrame: Math.max(0, control.previewFrame)
             previewTimecode: control.previewTimecode
             thumbnailSource: control.previewThumbnailSource
+            isApproximate: control.previewIsApproximate
+            sampleFrame: control.previewSampleFrame
             comparisonState: control.markerLabelForFrame(tracks.hoverFrame)
             x: Math.max(8, Math.min(control.width - width - 8, tracks.x + tracks.positionForFrame(tracks.hoverFrame) * tracks.width - width / 2))
             y: -height - 6
@@ -367,6 +365,9 @@ Item {
             canLast: control.canLast
             playing: control.playing
             playbackRate: control.playbackRate
+            playbackContinuityPolicy: control.playbackContinuityPolicy
+            currentFrame: control.currentFrame
+            totalFrames: control.totalFrames
             focusTarget: control.focusTarget
             onFirstRequested: control.actions.firstFrame()
             onPreviousSecondRequested: control.actions.stepBackwardSecond()
@@ -376,6 +377,14 @@ Item {
             onPlaybackRateRequested: rate => {
                 if (control.actions && typeof control.actions.setPlaybackRate === "function")
                     control.actions.setPlaybackRate(rate);
+            }
+            onContinuityPolicyRequested: policy => {
+                if (control.actions && typeof control.actions.setPlaybackContinuityPolicy === "function")
+                    control.actions.setPlaybackContinuityPolicy(policy);
+            }
+            onStepFramesRequested: delta => {
+                if (control.actions && typeof control.actions.stepFrames === "function")
+                    control.actions.stepFrames(delta);
             }
             onNextRequested: control.actions.nextFrame()
             onNextFiveRequested: control.actions.stepForwardFive()

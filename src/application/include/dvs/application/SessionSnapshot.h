@@ -27,6 +27,15 @@ struct SessionSourceView final {
     [[nodiscard]] bool operator==(const SessionSourceView&) const = default;
 };
 
+// Probed per-source VFR display timeline. The shared mapping resolver consults these before
+// descriptor frame rates for both playback and analysis.
+struct SourceTimelineView final {
+    domain::SourceId sourceId = 0;
+    std::shared_ptr<const domain::FrameTimeline> timeline;
+
+    [[nodiscard]] bool operator==(const SourceTimelineView&) const = default;
+};
+
 struct CompatibilityFindingView final {
     domain::CompatibilitySeverity severity = domain::CompatibilitySeverity::kWarning;
     domain::MediaErrorCode code = domain::MediaErrorCode::kInvalidArgument;
@@ -98,12 +107,15 @@ struct SessionSnapshot final {
     std::optional<domain::FrameId> requestedFrame;
     std::uint64_t canonicalFrameCount = 0;
     std::optional<domain::CanonicalTimeline> canonicalTimeline;
+    std::vector<SourceTimelineView> sourceTimelines;
     std::vector<SessionSourceView> sources;
     std::shared_ptr<const domain::ValidatedComparisonSet> validatedComparison;
     std::vector<PresentedSourceState> presentedSources;
     std::vector<SourceFrameOffset> alignmentOffsets;
     std::vector<GlobalOffsetEstimate> alignmentEstimates;
     std::uint64_t alignmentRevision = 0U;
+    // Shared immutable mapping: O(1) snapshot publication, no per-frame entries copy.
+    std::shared_ptr<const std::vector<SequenceAlignmentResult>> sequenceAlignmentMaps;
     std::vector<SequenceAlignmentSummary> sequenceAlignments;
     std::optional<AlignmentAnalysisJobId> alignmentAnalysisJobId;
     std::optional<AlignmentAnalysisKind> alignmentAnalysisKind;
@@ -112,6 +124,7 @@ struct SessionSnapshot final {
     AlignmentWorkEstimate alignmentAnalysisWork;
     std::vector<SourceAlignmentAnchors> manualAlignmentAnchors;
     std::vector<CompatibilityFindingView> compatibilityFindings;
+    AlignmentMode alignmentMode = AlignmentMode::FrameIndex;
     bool alignmentRequired = false;
     bool automaticAlignmentPending = false;
     bool canConfirmAutomaticAlignment = false;

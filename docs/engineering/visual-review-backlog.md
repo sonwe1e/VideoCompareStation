@@ -1,15 +1,77 @@
 # 视觉审查问题台账
 
-更新：2026-09-23。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-09-24。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+
+## 2026-09-24 本地审查执行（1 / 2 / 3）
+
+基线为 3af4ee7 加既有未提交工作区；本次不提交、不覆盖已有工作，不代表发布验收。
+
+- **V-03 / V-07**：新增应用层 FrameMapping，播放和指标共用时间、序列、人工锚点映射。
+  指标通过快照共享 CoordinatorPublication 原有的不可变序列缓存，不再在接受序列对齐后退回
+  固定偏移，也不逐帧复制整段映射。新增缺帧、待确认区段及共享发布身份回归。
+- **V-05**：精确性原因和视频徽标改为描述尺寸/几何差异，不凭输入属性声称“已重采样”。
+  图片原有基于实际 diffResampled 的状态保持不变。
+- **V-06**：失败的悬停解码释放对应在途请求，允许再次悬停重试；旧请求失败不释放新请求。
+  不增加无限自动重试，保留去抖与会话校验。
+- **I-02**：图片状态栏显示转换后 16-bit Alpha 码值和四位小数百分比；仍明确区分显示 RGBA8。
+  当前 Alpha 差异统计仍基于显示缓冲，不宣称高位深差异统计或 ICC 支持。
+- **I-06**：8K 双图后台通道构建、连续切换、悬停取样、对调和替换回归通过。
+  本机 dev 样例冷构建 144–207 ms，100 次悬停单次最大约 22.25 ms；这不是所有大图的性能保证。
+- **自动验证**：定向 181 项通过，4 项原有禁用；新增 Alpha 实窗读数测试通过。
+  日志 out/local-review-final-tests.log；截图 out/local-review-evidence/high-depth-alpha.png。
+- **组合验证入口**：--ui-performance ... --review-load 或性能脚本的 -ReviewLoad，
+  开启指标并每 500 ms 提交一次独立预览，报告请求/完成/指标样本计数；原有门槛不放宽。
+  三源短测真实 D3D11VA、19 次预览完成且指标有结果，但连续步进阶段发生五秒呈现超时，
+  因此该轮门禁失败，不能据此宣布组合体验通过。详细结果见本次后续验证记录。
+
+### 本轮验证明细
+
+- 全量 dev：out/local-review-full-tests.log，682 个条目中 675 通过、3 环境跳过、4 原有禁用。
+  跳过为 Game DVR 素材缺失和两个大小写冲突文件系统用例。没有关闭或放宽既有测试。
+- 格式、C++ clang-tidy 和零警告 qmllint 通过：out/local-review-final-format.log、
+  out/local-review-lint.log、out/local-review-final-qml-lint.log。
+- 实际双路 7680×4320 PNG（Alpha 128/129）的可见窗口文件夹流程通过：
+  打开 660 ms、差异重算 5644 ms、正确识别 alpha_difference_only，关闭/重新打开成功。
+  峰值 working set 1608073216 字节，UI 心跳 P95 2 ms、最大 149 ms；最大值高于 100 ms，
+  不将功能通过当作所有交互性能达标。结果 out/local-review-images/visible-stderr.log。
+  首次隐藏窗口测试停在 graphicsReady，未开始读取文件夹；该超时不是 8K 解码失败证据。
+- 三源 10 秒对照（不加 review load）也发生连续逐帧五秒呈现超时，与组合短测一致。
+  对照 seek P95 212 ms、组合短测 231 ms；两者 D3D11VA、整组跳帧计数为零且无拆组，
+  但完整门禁均失败，不能据此归因于指标/预览，或宣称连续步进已验收。
+  对照跟踪 out/local-review-performance/baseline-trace.jsonl，结果位于 results/ 目录。
+- 三源 1080p60 五分钟组合测试（302 秒含 2 秒预热）已完成，门禁失败：
+  全部 D3D11VA；预览请求 570 次、结果 569 次，指标样本 9 个；seek P95 216 ms。
+  连续步进提交 87 帧、呈现 1 帧后发生同样的五秒超时，后续分析阶段未执行。
+  UI 心跳 P95 63 ms、P99 95 ms、最大 1072 ms；呈现间隔最大 1095 ms。
+  虽整组跳帧计数为零、未观察到拆组，仍存在长停顿，不能用零计数证明播放流畅。
+  peak_frame_bytes 为 74649600，进程峰值 working set 为 669712384 字节；正常退出用时 272 ms。
+  完整结果：out/local-review-performance/results/combined-5min-stderr.log。
+  后续优先排查连续步进的请求/呈现确认链及长 UI 停顿；当前证据尚不能确定根因。
+- 新组合入口是验证负载，不是新用户工作流；--review-load 开启指标并周期请求预览，
+  原有基线行为和门槛保持不变。所有运行均为 dev，而非 Release 包；素材是既有 75 秒
+  frame-id 测试视频无损流复制重复到 330 秒。源码/素材哈希在 manifest.json 中。
 
 ## 基线、状态与阅读方法
 
 - 本轮起点：`HEAD @ 7299eda`。以下 2026-09-22 的实现已纳入提交，
   发布和硬件验收状态仍分别核对。
-- 2026-09-23 当前工作区：修正播放计数说明；图片 RGB 均值统一为三通道 MAE；
+- 2026-09-24 当前工作区四项核心产品交互优化（审查后修订，勿按“全部完成”验收）：
+  1. 视频对比对齐与精确性原因：新增按帧号 / 按时间 / 人工锚点模式；Timestamp 用源
+     `frameAtOrBefore`/VFR timeline 映射，缺时间基标 Missing；Provider 已放行
+     `TimeAligned`/`ExactIndex`；检查器时间块字段已接线。指标窗口已按 Timestamp/ManualAnchor 逐帧映射（`mappedSourceFrames`）。
+  2. 视频播放控制与预览：控制条提供「流畅观看 / 逐帧检查」（写入 preferences）；悬停近似图
+     仅在一格采样距内借用，`isExact` 仅当图=悬停帧；暂停相邻帧步进条 [-3]~[+3]。
+     未播放帧已有独立解码悬停预览（`PreviewThumbnailService`，时间线主源）；
+     无缓存时回退时间码胶囊。多源对比条带预览仍待做。
+  3. 图片框选放大与显示说明：Shift+拖动框选并 `zoomToRect` 同步 A/B；框选后不再误切 A/B；
+     状态栏为「显示缓冲 RGBA8」+ 重采样徽章，明确未应用 ICC；高位深读数标注为转换后 16-bit。
+  4. 共同交互：对齐/阈值条件在视口 chrome 常显；图片三键齐全。视频侧已补「适应窗口/重置视图」；
+     Shift+拖动与图片一致为框选放大，ROI 改为 Alt+拖动。重采样已移出主工具栏，
+     改为状态徽章条件开关并持续显示。
+- 2026-09-23 前期工作区：修正播放计数说明；图片 RGB 均值统一为三通道 MAE；
   视频时间精确性同时核对源时间戳；首屏增加双图入口；手动闪烁拖动阈值和窄窗状态栏已调整。
-  对应定向测试 108 项通过、4 项原有禁用；硬件和 Release 验收仍待做。
+  新增 U-02 图片对调 A/B 与单侧替换。对应定向测试通过；硬件和 Release 验收仍待做。
 - 2026-09-22 第二轮实现：V-07 视频指标全链路（`PairMetrics.h` 端口、
   `PairMetricsService`/`PairMetricsDecodeSession` 独立解码服务、`PairMetricsController` GUI 投影、
   检查器读数 + OSC 摘要 + 时间轴指标泳道）；I-02 高位深 sidecar 取样；I-03 对话框补 `*.pam`；
@@ -44,6 +106,7 @@
 | C-01 | GT＋两个 Prediction 如何比较？ | P1 | 用户 2026-09-22 拍板：图片不做三图对比，条目关闭 | `ImageReviewController.h`、`CompareModeBar.qml` |
 | C-02 | 如何找插帧形变、重影、时间跳变？ | P1/P2 | 手动 A/B 切换已加拖动阈值；淡化隐藏；真实素材实窗验收待做 | `ImageWorkspace.qml`：手动切换/同步准星 |
 | U-01 | 不知道从哪里开始、功能藏在哪里 | P1 | 首屏入口、Diff 直达重采样与沉浸控制已接线；图片数量和混合拖入的误导已修正；实窗验收待做 | `EmptyReviewView.qml`、`Main.qml`、`PlayerOsc.qml` |
+| U-02 | 反复选文件：对调 A/B、只换一张 | P1 | 对调与单侧替换已接线；控制器测试通过；实窗验收待做 | `ImageReviewController::swapSides/requestReplace*`、`ImageWorkspace.qml`、`Main.qml` |
 | A-01 | 改动状态容易漏接或重复拥有 | 随功能推进 | 分层已有；capability 实现仍集中 | `ReviewSessionFacade`、状态所有权说明 |
 | E-01 | 构建反复出错、工具路径失效、重新链接后启动崩溃 | P0 | 已修复，本机开发测试及质量门禁验证完成 | `tools/build/build.ps1`、`env.ps1`、`cmake/CheckMsvcDependencies.cmake` |
 
@@ -239,6 +302,24 @@
 - **2026-09-23 图片入口修正**：打开图片对要求恰好两张；三张及更多图片、图片与视频混合拖入直接提示，不再只打开前两张或错误进入视频流程。被拒绝的选择不改变当前画布。等待解码时显示进度状态和取消入口。尺寸不同时的重采样开关显示状态，并解释差异计算已缩放 B。
 - **本轮验证**：`ui.ReviewControllerTests` 与 `ui.MainQmlContractTests` 共 70 项通过、4 项既有禁用；`format-check`、全量 `lint` 与最终 QML lint 通过。加载提示仍需在真实大图上检查视觉效果。
 - **验证入口**：`MainQmlContractTests.cpp` 中 `EmptyReviewViewExposesImageAndFolderEntryPoints` 与 `ImmersiveModeBottomEdgeWakesOverlayOsc` 用例已通过验证。
+
+### U-02 图片槽位：对调 A/B 与只换一张
+
+- **证据**：打开图片对后必须整对重选才能换方向或换一侧；`requestOpenPrimary` 会清空 B，
+  不能表达「只换 A」。审查 E35 也指出缺少指定槽位替换。
+- **已实现**：
+  1. `ImageReviewController::swapSides()`：交换 A/B（缓冲、路径、来源信息、identity），
+     不改 `committedPairId`、zoom/pan；带符号差异/分割线/淡化方向随新 A/B 角色更新。
+  2. `requestReplacePrimary` / `requestReplaceSecondary`：只替换命名侧；另一侧、
+     `committedPairId` 与观察位置保留；失败保留原侧（沿用 T1 单侧语义，不是新的原子配对提交）。
+     `requestOpenPrimary` 仍是「打开新的单图」并清空 B。
+  3. UI：`ImageWorkspace` 工具栏「对调 A/B」「换图…」与打开菜单项；`Main.qml`
+     替换 A/B 对话框与 `completeImageOpen` 的 replace 分支（不拆文件夹会话、不覆盖工作区）。
+- **边界**：对调是会话内方向，不改写文件夹配对身份。单侧替换后画布可能与文件夹行路径不一致，
+  这是有意保留的 T1 语义；文件夹导航仍按行配对。
+- **本轮验证**：`ui.ImageReviewControllerTests` 39/39（含 6 项新用例）、
+  `ui.MainQmlContractTests` 23/23 通过；`format-check`、`lint` 通过。实窗验收待做。
+- **验证入口**：`ImageReviewControllerTests` 的 `SwapSides*`、`Replace*`、`FailedSideReplace*`。
 
 ### A-01 状态所有权与增量维护
 

@@ -11,6 +11,8 @@
 #include "dvs/ui/GraphicsBackend.h"
 #include "dvs/ui/ImageFolderPairModel.h"
 #include "dvs/ui/ImageReviewController.h"
+#include "dvs/ui/PairMetricsController.h"
+#include "dvs/ui/PreviewThumbnailController.h"
 #include "dvs/ui/ReviewController.h"
 #include "dvs/ui/ReviewPreferencesController.h"
 #include "dvs/ui/SourceListModel.h"
@@ -91,6 +93,7 @@ struct PerformanceInvocation final {
     SmokeSources sources;
     std::chrono::seconds duration;
     PerformanceComparisonMode comparisonMode = PerformanceComparisonMode::Side;
+    bool reviewLoad = false;
 };
 
 struct PerformanceMetrics final {
@@ -258,8 +261,14 @@ void installPlaybackTrace(dvs::app::ReviewRuntime& runtime) {
     std::vector<std::filesystem::path> sourcePaths;
     std::optional<std::chrono::seconds> duration;
     PerformanceComparisonMode comparisonMode = PerformanceComparisonMode::Side;
+    bool reviewLoad = false;
     for (int index = 2; index < argc;) {
         const std::string_view argument{argv[index]};
+        if (argument == "--review-load") {
+            reviewLoad = true;
+            ++index;
+            continue;
+        }
         if (argument == "--seconds") {
             if (duration.has_value() || index + 1 >= argc) {
                 return std::nullopt;
@@ -290,7 +299,7 @@ void installPlaybackTrace(dvs::app::ReviewRuntime& runtime) {
         sourcePaths.emplace_back(argv[index]);
         ++index;
     }
-    if (sourcePaths.empty() || !duration.has_value() ||
+    if (sourcePaths.empty() || !duration.has_value() || (reviewLoad && sourcePaths.size() < 2U) ||
         (comparisonMode != PerformanceComparisonMode::Side && sourcePaths.size() < 2U)) {
         return std::nullopt;
     }
@@ -305,6 +314,7 @@ void installPlaybackTrace(dvs::app::ReviewRuntime& runtime) {
         .sources = std::move(sources),
         .duration = *duration,
         .comparisonMode = comparisonMode,
+        .reviewLoad = reviewLoad,
     };
 }
 
@@ -416,7 +426,8 @@ runDesktop(int& argc,
             [&runtime](dvs::ui::ComparisonSurface& surface) {
                 return runtime->attachSurface(surface);
             },
-            runtime->pairMetrics())) {
+            runtime->pairMetrics(),
+            runtime->previewThumbnails())) {
         std::cerr << "DVS_UI_LOAD_FAILED\n";
         if (runtime) {
             runtime->prepareForSceneGraphRelease();
@@ -948,7 +959,8 @@ runDesktop(int& argc,
                                  char** argv,
                                  const SmokeSources& sources,
                                  const std::chrono::seconds duration,
-                                 const PerformanceComparisonMode comparisonMode) {
+                                 const PerformanceComparisonMode comparisonMode,
+                                 const bool reviewLoad) {
     constexpr auto kWarmup = std::chrono::seconds{2};
     constexpr std::size_t kMaximumFrameBytes = 256U * 1024U * 1024U;
     dvs::ui::configureGraphicsBackend();
@@ -963,11 +975,14 @@ runDesktop(int& argc,
     };
     std::unique_ptr<dvs::app::ReviewRuntime> runtime = dvs::app::ReviewRuntime::create();
     if (!runtime || runtime->controller() == nullptr || runtime->preferences() == nullptr ||
-        !desktop.load(*runtime->controller(),
-                      *runtime->preferences(),
-                      [&runtime](dvs::ui::ComparisonSurface& surface) {
-                          return runtime->attachSurface(surface);
-                      })) {
+        !desktop.load(
+            *runtime->controller(),
+            *runtime->preferences(),
+            [&runtime](dvs::ui::ComparisonSurface& surface) {
+                return runtime->attachSurface(surface);
+            },
+            reviewLoad ? runtime->pairMetrics() : nullptr,
+            reviewLoad ? runtime->previewThumbnails() : nullptr)) {
         writeStandardError("DVS_PERFORMANCE_UI_LOAD_FAILED\n");
         if (runtime) {
             runtime->prepareForSceneGraphRelease();
@@ -994,6 +1009,29 @@ runDesktop(int& argc,
         Analyzing,
     };
     Stage stage = Stage::WaitingForGraphics;
+    qint64 reviewPreviewRequests = 0;
+    qint64 reviewPreviewResults = 0;
+    qint64 reviewMetricSamples = 0;
+    qint64 lastReviewRequestMs = -500;
+    if (reviewLoad) {
+        QObject::connect(runtime->previewThumbnails(),
+                         &dvs::ui::PreviewThumbnailController::thumbnailReady,
+                         runtime->controller(),
+                         [&](qint64) {
+                             if (stage == Stage::Running) {
+                                 ++reviewPreviewResults;
+                             }
+                         });
+        QObject::connect(runtime->pairMetrics(),
+                         &dvs::ui::PairMetricsController::samplesChanged,
+                         runtime->controller(),
+                         [&] {
+                             if (stage == Stage::Running) {
+                                 reviewMetricSamples = std::max(
+                                     reviewMetricSamples, runtime->pairMetrics()->sampleCount());
+                             }
+                         });
+    }
     PerformanceMetrics metrics;
     QElapsedTimer responseTimer;
     QElapsedTimer openTimer;
@@ -1339,9 +1377,20 @@ runDesktop(int& argc,
             lastHeartbeatTimeMilliseconds = -1;
             uiLoopHeartbeatTimer.start();
             stage = Stage::Running;
+            if (reviewLoad) {
+                runtime->pairMetrics()->setLaneEnabled(true);
+            }
             return;
         case Stage::Running:
             sampleFrame();
+            if (reviewLoad && playbackTimer.elapsed() - lastReviewRequestMs >= 500) {
+                lastReviewRequestMs = playbackTimer.elapsed();
+                const qint64 count = static_cast<qint64>(controller.totalFrames());
+                if (count > 0) {
+                    runtime->previewThumbnails()->request((reviewPreviewRequests * 137) % count);
+                    ++reviewPreviewRequests;
+                }
+            }
             if (!controller.playing() && playbackTimer.elapsed() < duration.count() * 1000) {
                 fail("playback-ended-before-duration");
                 return;
@@ -1627,7 +1676,8 @@ runDesktop(int& argc,
             ? 0.0
             : static_cast<double>(metrics.analysisDecodedFrames) * 1000.0 /
                   static_cast<double>(metrics.analysisMilliseconds);
-    if (!completed || metrics.sourceSplitObservations != 0U || dropRatio > 0.005 ||
+    if ((reviewLoad && (reviewPreviewResults == 0 || reviewMetricSamples == 0)) || !completed ||
+        metrics.sourceSplitObservations != 0U || dropRatio > 0.005 ||
         metrics.playbackResponseMilliseconds < 0 || metrics.playbackResponseMilliseconds > 100 ||
         metrics.seekP95Milliseconds < 0 || metrics.seekP95Milliseconds > 500 ||
         metrics.warmStepP95Milliseconds < 0 ||
@@ -1702,6 +1752,10 @@ runDesktop(int& argc,
               static_cast<double>(metrics.uiLoopGapMicroseconds.size()));
     addNumber(QStringLiteral("open_first_frame_ms"), metrics.openFirstFrameMilliseconds);
     addNumber(QStringLiteral("playback_response_ms"), metrics.playbackResponseMilliseconds);
+    report.insert(QStringLiteral("review_load"), reviewLoad);
+    addNumber(QStringLiteral("review_preview_requests"), reviewPreviewRequests);
+    addNumber(QStringLiteral("review_preview_results"), reviewPreviewResults);
+    addNumber(QStringLiteral("review_metric_samples"), reviewMetricSamples);
     addNumber(QStringLiteral("cold_seek_p50_ms"), metrics.seekP50Milliseconds);
     addNumber(QStringLiteral("seek_p95_ms"), metrics.seekP95Milliseconds);
     QJsonArray seekSamples;
@@ -2899,11 +2953,16 @@ int main(int argc, char* argv[]) {
             if (!invocation.has_value()) {
                 return dvs::app::reportFatalStartup(
                     "Usage: --ui-performance <one to three sources> --seconds <5-3600> "
-                    "[--mode side|wipe|diff]. Wipe and diff require at least two sources.",
+                    "[--mode side|wipe|diff] [--review-load]. Comparison/review load requires two "
+                    "sources.",
                     true);
             }
-            return runPerformance(
-                argc, argv, invocation->sources, invocation->duration, invocation->comparisonMode);
+            return runPerformance(argc,
+                                  argv,
+                                  invocation->sources,
+                                  invocation->duration,
+                                  invocation->comparisonMode,
+                                  invocation->reviewLoad);
         }
         if (argc == 4 && std::string_view{argv[1]} == "--ui-image-folder") {
             const std::optional<ImageFolderInvocation> invocation =

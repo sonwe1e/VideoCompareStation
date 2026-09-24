@@ -29,6 +29,10 @@ struct PairMetricsRequest final {
     PlaybackRequestContext context;
     std::vector<domain::ComparisonSource> sources;
     std::vector<SourceFrameOffset> offsets;
+    // Optional dense mapping for Timestamp/ManualAnchor (offsets vary per frame). Layout is
+    // sources-major within each canonical frame: index = (frame-firstFrame)*sources.size() + slot.
+    // A value of -1 means Missing. When empty the service uses constant `offsets`.
+    std::vector<std::int64_t> mappedSourceFrames;
     std::uint64_t alignmentRevision = 0U;
     domain::FrameId firstFrame{0};
     domain::FrameId lastFrame{0};
@@ -36,6 +40,12 @@ struct PairMetricsRequest final {
 
     [[nodiscard]] bool isValid() const noexcept {
         if (sources.size() != 2U || firstFrame.value() > lastFrame.value()) {
+            return false;
+        }
+        const auto frameCount =
+            static_cast<std::size_t>(lastFrame.value() - firstFrame.value() + 1);
+        if (!mappedSourceFrames.empty() &&
+            mappedSourceFrames.size() != frameCount * sources.size()) {
             return false;
         }
         for (const domain::ComparisonSource& source : sources) {
@@ -46,7 +56,7 @@ struct PairMetricsRequest final {
                     break;
                 }
             }
-            if (!offsetFound) {
+            if (!offsetFound && mappedSourceFrames.empty()) {
                 return false;
             }
         }

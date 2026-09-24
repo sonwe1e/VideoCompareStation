@@ -172,6 +172,10 @@ public:
 
     Q_INVOKABLE bool openPrimary(const QUrl& url);
     Q_INVOKABLE bool openSecondary(const QUrl& url);
+    // Session-local A/B orientation flip. Swaps both sides (buffers, paths, provenance)
+    // without touching committedPairId, zoom/pan, or the folder row. Direction-sensitive
+    // views (signed difference, wipe/fade labels) follow the swapped A/B roles.
+    Q_INVOKABLE bool swapSides();
     // Opens both sides as one transaction: every validation runs before any state changes,
     // and on success the pair, paths and committedPairId switch in a single generation bump.
     // On failure the previous pair (or the explicit empty state) is fully retained and the
@@ -196,6 +200,8 @@ public:
     Q_INVOKABLE void closeAll();
     Q_INVOKABLE void resetView();
     Q_INVOKABLE void zoomBy(qreal factor, qreal anchorNormalizedX, qreal anchorNormalizedY);
+    Q_INVOKABLE void
+    zoomToRect(qreal normalizedX0, qreal normalizedY0, qreal normalizedX1, qreal normalizedY1);
     Q_INVOKABLE void panBy(qreal deltaNormalizedX, qreal deltaNormalizedY);
     Q_INVOKABLE void setZoom(qreal value);
     Q_INVOKABLE QVariantMap samplePixel(int imageSlot, qreal imageX, qreal imageY) const;
@@ -211,6 +217,12 @@ public:
     Q_INVOKABLE int requestOpenPrimary(const QUrl& url, int pairId = -1);
     Q_INVOKABLE int requestOpenSecondary(const QUrl& url);
     Q_INVOKABLE int requestOpenPair(const QUrl& primary, const QUrl& secondary, int pairId = -1);
+    // Single-side slot replace: only the named side is swapped in. The other side,
+    // committedPairId and the observation position stay put (T1). Failure keeps the
+    // previous side fully intact. requestOpenPrimary remains "open a new first image"
+    // and still clears B; use these when the user means "换 A / 换 B".
+    Q_INVOKABLE int requestReplacePrimary(const QUrl& url);
+    Q_INVOKABLE int requestReplaceSecondary(const QUrl& url);
     Q_INVOKABLE void cancelPendingOpen();
     Q_INVOKABLE void cancelOpenRequest(int requestId);
     // One bounded neighbour read. It only warms the decoded-image cache; it never changes
@@ -263,6 +275,15 @@ private:
     void
     commitLoadedSecondary(QImage image, QString label, QString identity, StillImageSourceInfo info);
     void commitLoadedPair(ImagePairLoader::Result result);
+    // Single-side replace commits. Unlike commitLoadedPrimary these never clear the other
+    // side or rewrite committedPairId.
+    void
+    commitReplacePrimary(QImage image, QString label, QString identity, StillImageSourceInfo info);
+    void commitReplaceSecondary(QImage image,
+                                QString label,
+                                QString identity,
+                                StillImageSourceInfo info);
+    void refreshDifferenceAfterSideChange();
     // T6 observation-context retention for pair commits. hadPrimary/previousPrimarySize
     // describe the state before the commit; the helpers decide the mode and view the new
     // pair inherits so switching pairs keeps the user's observation position.

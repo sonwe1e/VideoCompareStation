@@ -43,7 +43,7 @@ void appendFloat(std::uint64_t& hash, const float value) noexcept {
 [[nodiscard]] bool validMatchKind(const FrameMatchKind kind) noexcept {
     return kind == FrameMatchKind::ExactIndex || kind == FrameMatchKind::GlobalOffset ||
            kind == FrameMatchKind::AutoAligned || kind == FrameMatchKind::ManualAnchor ||
-           kind == FrameMatchKind::Missing;
+           kind == FrameMatchKind::Missing || kind == FrameMatchKind::TimeAligned;
 }
 
 [[nodiscard]] bool validSegmentState(const AlignmentSegmentState state) noexcept {

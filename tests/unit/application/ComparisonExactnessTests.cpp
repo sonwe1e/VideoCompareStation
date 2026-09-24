@@ -179,6 +179,28 @@ TEST(ComparisonExactnessTests, SameFrameIndexAtDifferentPresentationTimesIsNotTe
     EXPECT_TRUE(dimensions.available);
     EXPECT_FALSE(dimensions.temporalExact);
     EXPECT_EQ(comparisonExactness(differentTimes, 0U, 1U), ComparisonExactness::TemporallyAligned);
+    EXPECT_NE(dimensions.inexactReason.find("时间戳不一致"), std::string::npos);
+}
+
+TEST(ComparisonExactnessTests, TimeAlignedMappingExplainsNonIndexCorrespondence) {
+    SessionSnapshot timeMapped = snapshot();
+    timeMapped.presentedSources[0].matchKind = FrameMatchKind::ExactIndex;
+    timeMapped.presentedSources[1].matchKind = FrameMatchKind::TimeAligned;
+    timeMapped.presentedSources[0].presentationTime = domain::MediaTime{0};
+    timeMapped.presentedSources[1].presentationTime = domain::MediaTime{0};
+
+    const ComparisonExactnessDimensions dimensions =
+        comparisonExactnessDimensions(timeMapped, 0U, 1U);
+    EXPECT_TRUE(dimensions.available);
+    EXPECT_FALSE(dimensions.temporalExact);
+    EXPECT_NE(dimensions.inexactReason.find("按时间映射"), std::string::npos);
+}
+
+TEST(ComparisonExactnessTests, GeometryMismatchDoesNotClaimResamplingWasApplied) {
+    const auto dimensions = comparisonExactnessDimensions(snapshot({1'280U, 720U}), 0U, 1U);
+    EXPECT_FALSE(dimensions.spatialExact);
+    EXPECT_EQ(dimensions.inexactReason.find("已重采样"), std::string::npos);
+    EXPECT_NE(dimensions.inexactReason.find("尺寸不同"), std::string::npos);
 }
 
 } // namespace

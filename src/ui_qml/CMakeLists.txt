@@ -5,6 +5,7 @@ add_library(
         include/dvs/ui/IssueLogController.h
         include/dvs/ui/PairMetricsController.h
         include/dvs/ui/PlaybackViewModel.h
+        include/dvs/ui/PreviewThumbnailController.h
         include/dvs/ui/ReviewController.h
         include/dvs/ui/ReviewPreferencesController.h
         include/dvs/ui/ReviewSessionFacade.h
@@ -15,6 +16,7 @@ add_library(
         src/IssueLogController.cpp
         src/PairMetricsController.cpp
         src/PlaybackViewModel.cpp
+        src/PreviewThumbnailController.cpp
         src/ReviewController.cpp
         src/ReviewPreferencesController.cpp
         src/ReviewSessionFacade.cpp

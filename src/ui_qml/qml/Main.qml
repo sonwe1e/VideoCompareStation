@@ -417,7 +417,7 @@ ApplicationWindow {
 
     // can never let media shortcuts reach the hidden video session.
 
-    readonly property int inputContext: reviewInputDialogs.modalVisible || anchorDialog.visible || shortcutHelp.visible || imageSingleDialog.visible || imageAddDialog.visible || imagePairDialog.visible || imageFolderLeftDialog.visible || imageFolderRightDialog.visible ? 3 : (anyMenuOpen || focusIsPopup(root.activeFocusItem) ? 2 : (focusIsTextEditing(root.activeFocusItem) ? 1 : 0))
+    readonly property int inputContext: reviewInputDialogs.modalVisible || anchorDialog.visible || shortcutHelp.visible || imageSingleDialog.visible || imageAddDialog.visible || imagePairDialog.visible || imageReplacePrimaryDialog.visible || imageReplaceSecondaryDialog.visible || imageFolderLeftDialog.visible || imageFolderRightDialog.visible ? 3 : (anyMenuOpen || focusIsPopup(root.activeFocusItem) ? 2 : (focusIsTextEditing(root.activeFocusItem) ? 1 : 0))
     readonly property bool globalMediaShortcutsEnabled: workspaceSession.videoActive && inputContext === 0 && (!chromeVisible || !focusBlocksGlobalMediaShortcuts(root.activeFocusItem))
     readonly property bool presentationShortcutsEnabled: inputContext === 0
     readonly property bool frameErrorBannerVisible: hasErrors && currentFrame >= 0 && !busy && graphicsReady && Boolean(controller && controller.canFirst)
@@ -432,7 +432,15 @@ ApplicationWindow {
 
     // hover frame; when nothing is cached the popup stays hidden (see PlayerOsc).
 
+    readonly property var previewInfo: thumbnailCache.previewInfoForFrame(timelinePreviewFrame)
+    // qmllint disable unqualified
+    readonly property var previewThumbnailsModel: typeof previewThumbnails !== "undefined" ? previewThumbnails : null
+    // qmllint enable unqualified
     readonly property int effectivePreviewFrame: timelinePreviewFrame >= 0 ? timelinePreviewFrame : timelinePreviewSampleFrame
+    onTimelinePreviewFrameChanged: {
+        if (root.previewThumbnailsModel && root.timelinePreviewFrame >= 0)
+            root.previewThumbnailsModel.request(root.timelinePreviewFrame);
+    }
     readonly property int timelinePreviewSampleFrame: timelinePreviewFrame >= 0 && totalFrames > 0 ? thumbnailCache.nearestSample(timelinePreviewFrame) : -1
     readonly property string previewTimecode: controller && effectivePreviewFrame >= 0 ? controller.timecodeForFrame(effectivePreviewFrame, dropFrameTimecode) : "00:00:00:00"
     readonly property bool roiEnabled: Boolean(viewportFrame && viewportFrame.roiEnabled)
@@ -865,6 +873,19 @@ ApplicationWindow {
 
         root.pendingImageOpenKind = "";
 
+        if (kind === "replaceA" || kind === "replaceB") {
+            if (!success) {
+                const replaceDetail = String(error || "").length > 0 ? String(error) : qsTr("无法打开图片。");
+                root.dropError = replaceDetail;
+                root.showIntentMessage(replaceDetail);
+                return;
+            }
+            // Slot replace keeps the current workspace and folder session; only the
+            // canvas side content changes (T1 single-side semantics).
+            root.dropError = "";
+            return;
+        }
+
         if (!success) {
             const detail = String(error || "").length > 0 ? String(error) : qsTr("无法打开图片。");
 
@@ -1088,6 +1109,65 @@ ApplicationWindow {
 
         imageAddDialog.open();
 
+        return true;
+    }
+
+    function requestImageSwapSides() {
+        const target = root.stillImageController;
+        if (!target || !target.hasPair)
+            return false;
+        if (!target.swapSides()) {
+            const detail = target.errorText.length > 0 ? String(target.errorText) : qsTr("无法对调 A/B。");
+            dropError = detail;
+            showIntentMessage(detail);
+            return false;
+        }
+        dropError = "";
+        return true;
+    }
+
+    function requestImageReplacePrimary() {
+        const target = root.stillImageController;
+        if (!target || !target.hasPrimary)
+            return false;
+        // In-place slot replace: no workspace beginOpen — failure must not tear down
+        // the already-committed image workspace.
+        imageReplacePrimaryDialog.open();
+        return true;
+    }
+
+    function requestImageReplaceSecondary() {
+        const target = root.stillImageController;
+        if (!target || !target.hasPrimary)
+            return false;
+        imageReplaceSecondaryDialog.open();
+        return true;
+    }
+
+    function performImageSideReplace(url, side) {
+        const target = root.stillImageController;
+        if (!target || !target.hasPrimary || !url || url.toString().length === 0)
+            return false;
+        if (root.pendingImageRequestId > 0)
+            target.cancelOpenRequest(root.pendingImageRequestId);
+        let requestId = -1;
+        let kind = "";
+        if (side === "a") {
+            requestId = Number(target.requestReplacePrimary(url));
+            kind = "replaceA";
+        } else {
+            requestId = Number(target.requestReplaceSecondary(url));
+            kind = "replaceB";
+        }
+        if (!(requestId > 0)) {
+            const detail = target.errorText.length > 0 ? String(target.errorText) : qsTr("无法打开图片。");
+            dropError = detail;
+            showIntentMessage(detail);
+            return false;
+        }
+        root.pendingImageRequestId = requestId;
+        root.pendingImageOpenKind = kind;
+        dropError = "";
         return true;
     }
 
@@ -1942,6 +2022,7 @@ ApplicationWindow {
         id: reviewShortcuts
 
         controller: root.controller
+        preferences: root.preferences
         shortcutsEnabled: root.globalMediaShortcutsEnabled
         presentationShortcutsEnabled: root.presentationShortcutsEnabled
         oneSecondStepFrames: root.oneSecondStepFrames
@@ -2539,6 +2620,8 @@ ApplicationWindow {
         mutedTextColor: root.mutedTextColor
         errorColor: root.errorColor
         chromeVisible: root.chromeVisible
+        alignmentModeName: root.controller ? root.controller.alignmentModeName : ""
+        inexactReason: root.controller ? root.controller.currentInexactReason : ""
         effectiveViewMode: root.effectiveViewMode
         wipePosition: root.wipePosition
         selectedDifferenceExactness: root.selectedDifferenceExactness
@@ -2608,6 +2691,9 @@ ApplicationWindow {
         onOpenPairRequested: root.requestImagePairOpen()
         onCompareFoldersRequested: root.requestCompareFolders()
         onToggleSidebarRequested: root.imageFolderSidebarVisible = !root.imageFolderSidebarVisible
+        onSwapSidesRequested: root.requestImageSwapSides()
+        onReplacePrimaryRequested: root.requestImageReplacePrimary()
+        onReplaceSecondaryRequested: root.requestImageReplaceSecondary()
     }
     NativeDialogs.FolderDialog {
         id: imageFolderLeftDialog
@@ -2664,6 +2750,34 @@ ApplicationWindow {
                 root.reviewUrls([picked], true);
         }
         onRejected: root.cancelWorkspaceOpen()
+    }
+    NativeDialogs.FileDialog {
+        id: imageReplacePrimaryDialog
+
+        objectName: "imageReplacePrimaryDialog"
+        title: qsTr("替换 A")
+        fileMode: NativeDialogs.FileDialog.OpenFile
+        nameFilters: [qsTr("图片 (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tif *.tiff *.pnm *.ppm *.pgm *.pbm *.pam)"), qsTr("所有文件 (*)")]
+        onAccepted: {
+            const picked = selectedFile && selectedFile.toString().length > 0 ? selectedFile : currentFile;
+
+            if (picked && picked.toString().length > 0)
+                root.performImageSideReplace(picked, "a");
+        }
+    }
+    NativeDialogs.FileDialog {
+        id: imageReplaceSecondaryDialog
+
+        objectName: "imageReplaceSecondaryDialog"
+        title: qsTr("替换 B")
+        fileMode: NativeDialogs.FileDialog.OpenFile
+        nameFilters: [qsTr("图片 (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tif *.tiff *.pnm *.ppm *.pgm *.pbm *.pam)"), qsTr("所有文件 (*)")]
+        onAccepted: {
+            const picked = selectedFile && selectedFile.toString().length > 0 ? selectedFile : currentFile;
+
+            if (picked && picked.toString().length > 0)
+                root.performImageSideReplace(picked, "b");
+        }
     }
     NativeDialogs.FileDialog {
         id: imagePairDialog
@@ -2907,7 +3021,23 @@ ApplicationWindow {
         loopRangeActive: root.rangePlaybackActive
         previewFrame: root.effectivePreviewFrame
         previewTimecode: root.previewTimecode
-        previewThumbnailSource: thumbnailCache.urlForFrame(root.timelinePreviewFrame)
+        previewThumbnailSource: {
+            // `generation` participates so a session switch (decoded-cache reset) and every
+            // finished decode re-evaluate this binding even when the hover frame is unchanged.
+            if (root.previewThumbnailsModel && root.previewThumbnailsModel.generation > 0 && root.timelinePreviewFrame >= 0) {
+                const decoded = root.previewThumbnailsModel.urlForFrame(root.timelinePreviewFrame);
+                if (decoded && decoded.toString().length > 0)
+                    return decoded;
+            }
+            return root.previewInfo ? root.previewInfo.url : "";
+        }
+        previewIsApproximate: {
+            if (root.previewThumbnailsModel && root.previewThumbnailsModel.generation > 0 && root.timelinePreviewFrame >= 0 && root.previewThumbnailsModel.hasThumbnail(root.timelinePreviewFrame))
+                return false;
+            return root.previewInfo ? !root.previewInfo.isExact : false;
+        }
+        previewSampleFrame: root.previewInfo ? root.previewInfo.sampleFrame : -1
+        playbackContinuityPolicy: root.controller ? root.controller.playbackContinuityPolicy : 1
         anchors {
             left: viewportFrame.left
             right: root.drawerMode ? alignmentBar.left : viewportFrame.right
@@ -3235,7 +3365,15 @@ ApplicationWindow {
                 height: 22
             }
             Text {
-                text: root.pendingImageOpenKind === "append" ? qsTr("正在添加图片…") : qsTr("正在打开图片…")
+                text: {
+                    if (root.pendingImageOpenKind === "append")
+                        return qsTr("正在添加图片…");
+                    if (root.pendingImageOpenKind === "replaceA")
+                        return qsTr("正在替换 A…");
+                    if (root.pendingImageOpenKind === "replaceB")
+                        return qsTr("正在替换 B…");
+                    return qsTr("正在打开图片…");
+                }
                 color: root.primaryTextColor
                 anchors.verticalCenter: parent.verticalCenter
             }

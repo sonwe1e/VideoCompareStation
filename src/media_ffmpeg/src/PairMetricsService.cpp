@@ -254,13 +254,21 @@ private:
         std::array<internal::PairMetricsDecodeSession::RgbaFrame, 2U> frames{};
         for (std::size_t index = 0; index < 2U; ++index) {
             const domain::ComparisonSource& source = job.request.sources[index];
-            const std::optional<std::int64_t> offset =
-                offsetForSource(job.request.offsets, source.id);
-            if (!offset.has_value()) {
-                sample.comparable = false;
-                return sample;
+            std::int64_t mapped = -1;
+            if (!job.request.mappedSourceFrames.empty()) {
+                const auto windowOffset =
+                    static_cast<std::size_t>(frameId.value() - job.request.firstFrame.value());
+                mapped = job.request
+                             .mappedSourceFrames[windowOffset * job.request.sources.size() + index];
+            } else {
+                const std::optional<std::int64_t> offset =
+                    offsetForSource(job.request.offsets, source.id);
+                if (!offset.has_value()) {
+                    sample.comparable = false;
+                    return sample;
+                }
+                mapped = frameId.value() + *offset;
             }
-            const std::int64_t mapped = frameId.value() + *offset;
             if (mapped < 0 || mapped >= source.descriptor.frameCount.value) {
                 sample.comparable = false;
                 return sample;

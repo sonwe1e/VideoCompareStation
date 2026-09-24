@@ -91,7 +91,8 @@ public:
     [[nodiscard]] bool load(ReviewController& controller,
                             ReviewPreferencesController& preferences,
                             SurfaceBinder bindSurface,
-                            PairMetricsController* pairMetrics) {
+                            PairMetricsController* pairMetrics,
+                            PreviewThumbnailController* previewThumbnails) {
         if (engine_ || !bindSurface) {
             return false;
         }
@@ -107,6 +108,12 @@ public:
         // metrics service; the QML guards every read on the context property being set.
         if (pairMetrics != nullptr) {
             engine->rootContext()->setContextProperty(QStringLiteral("pairMetrics"), pairMetrics);
+        }
+        if (previewThumbnails != nullptr) {
+            engine->rootContext()->setContextProperty(QStringLiteral("previewThumbnails"),
+                                                      previewThumbnails);
+            engine->addImageProvider(QStringLiteral("timeline-preview"),
+                                     new TimelinePreviewImageProvider(previewThumbnails));
         }
         shellController_ = std::make_unique<ReviewShellController>(controller, preferences);
         engine->rootContext()->setContextProperty(QStringLiteral("reviewSession"),
@@ -690,8 +697,10 @@ DesktopApplication::~DesktopApplication() = default;
 bool DesktopApplication::load(ReviewController& controller,
                               ReviewPreferencesController& preferences,
                               SurfaceBinder bindSurface,
-                              PairMetricsController* pairMetrics) {
-    return impl_->load(controller, preferences, std::move(bindSurface), pairMetrics);
+                              PairMetricsController* pairMetrics,
+                              PreviewThumbnailController* previewThumbnails) {
+    return impl_->load(
+        controller, preferences, std::move(bindSurface), pairMetrics, previewThumbnails);
 }
 
 void DesktopApplication::setIssueRecordRepository(

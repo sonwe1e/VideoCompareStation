@@ -48,4 +48,9 @@ struct ClearManualAlignmentAnchorsCommand final {
     CommandContext context;
 };
 
+struct SetAlignmentModeCommand final {
+    CommandContext context;
+    AlignmentMode mode = AlignmentMode::FrameIndex;
+};
+
 } // namespace dvs::application

@@ -1,6 +1,7 @@
 #include "dvs/ui/PairMetricsController.h"
 
 #include "dvs/application/ComparisonMetrics.h"
+#include "dvs/application/FrameMapping.h"
 #include "dvs/ui/ReviewController.h"
 
 #include <QMetaObject>
@@ -10,6 +11,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <limits>
+#include <optional>
 #include <utility>
 
 namespace dvs::ui {
@@ -28,6 +30,56 @@ constexpr std::size_t kMaximumCachedSamples = 65'536U;
                                   const domain::SourceId scopeSecond) noexcept {
     return (first == scopeFirst && second == scopeSecond) ||
            (first == scopeSecond && second == scopeFirst);
+}
+
+[[nodiscard]] std::vector<std::int64_t>
+buildMappedSourceFrames(const application::SessionSnapshot& snapshot,
+                        const std::vector<domain::ComparisonSource>& sources,
+                        const domain::FrameId firstFrame,
+                        const domain::FrameId lastFrame) {
+    const auto frameCount = static_cast<std::size_t>(lastFrame.value() - firstFrame.value() + 1);
+    std::vector<std::int64_t> mapped(frameCount * sources.size(), -1);
+    const application::FrameMappingContext context{
+        .sources = snapshot.validatedComparison.get(),
+        .canonicalTimeline = snapshot.canonicalTimeline,
+        .offsets = snapshot.alignmentOffsets,
+        .mode = snapshot.alignmentMode,
+        .sequenceMaps =
+            snapshot.sequenceAlignmentMaps
+                ? std::span<const application::SequenceAlignmentResult>{*snapshot
+                                                                             .sequenceAlignmentMaps}
+                : std::span<const application::SequenceAlignmentResult>{},
+        .anchors = snapshot.manualAlignmentAnchors,
+        .timelines = snapshot.sourceTimelines,
+    };
+    for (std::size_t index = 0; index < frameCount; ++index) {
+        const domain::FrameId canonical{firstFrame.value() + static_cast<std::int64_t>(index)};
+        const auto mappings = application::resolveSourceFrameMappings(context, canonical);
+        for (std::size_t slot = 0; slot < sources.size(); ++slot) {
+            const auto& source = sources[slot];
+            const auto mapping =
+                std::find_if(mappings.begin(), mappings.end(), [&source](const auto& value) {
+                    return value.sourceId == source.id;
+                });
+            if (mapping != mappings.end() &&
+                mapping->matchKind == application::FrameMatchKind::Missing) {
+                continue;
+            }
+            const auto offset = mapping == mappings.end() ? 0 : mapping->frames;
+            const auto frame = canonical.value();
+            if ((offset < 0 && offset < -frame) ||
+                (offset > 0 && frame > (std::numeric_limits<std::int64_t>::max)() - offset)) {
+                continue;
+            }
+            const auto target = frame + offset;
+            if (source.descriptor.frameCount.value > 0 &&
+                target >= source.descriptor.frameCount.value) {
+                continue;
+            }
+            mapped[index * sources.size() + slot] = target;
+        }
+    }
+    return mapped;
 }
 
 } // namespace
@@ -508,6 +560,10 @@ void PairMetricsController::submitRequest() {
                 snapshot->playbackGeneration},
         .sources = {*first, *second},
         .offsets = snapshot->alignmentOffsets,
+        .mappedSourceFrames = buildMappedSourceFrames(*snapshot,
+                                                      {*first, *second},
+                                                      domain::FrameId{bestRunFirst},
+                                                      domain::FrameId{bestRunLast}),
         .alignmentRevision = snapshot->alignmentRevision,
         .firstFrame = domain::FrameId{bestRunFirst},
         .lastFrame = domain::FrameId{bestRunLast},

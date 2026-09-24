@@ -19,6 +19,9 @@ Rectangle {
     signal openPairRequested
     signal compareFoldersRequested
     signal toggleSidebarRequested
+    signal swapSidesRequested
+    signal replacePrimaryRequested
+    signal replaceSecondaryRequested
 
     // False = fit-window display; true = true-size display where 1 image pixel maps to
     // 1 physical screen pixel (device-pixel-ratio aware). The two are separate commands
@@ -289,6 +292,10 @@ Rectangle {
         property point dragStart: Qt.point(0, 0)
         property bool dragActive: false
         property point pressStart: Qt.point(0, 0)
+        property bool marqueeActive: false
+        property bool suppressClickAfterMarquee: false
+        property point marqueeStart: Qt.point(0, 0)
+        property point marqueeCurrent: Qt.point(0, 0)
 
         readonly property alias image: previewImage
         // Fit scale of the displayed image (fit-window base), forwarded so the workspace
@@ -477,17 +484,37 @@ Rectangle {
             }
         }
 
+        Rectangle {
+            id: marqueeRect
+            visible: viewport.marqueeActive
+            z: 25
+            x: Math.min(viewport.marqueeStart.x, viewport.marqueeCurrent.x)
+            y: Math.min(viewport.marqueeStart.y, viewport.marqueeCurrent.y)
+            width: Math.abs(viewport.marqueeCurrent.x - viewport.marqueeStart.x)
+            height: Math.abs(viewport.marqueeCurrent.y - viewport.marqueeStart.y)
+            color: "#224b8df8"
+            border.color: Theme.accent
+            border.width: 1
+        }
+
         MouseArea {
+            id: viewportMouseArea
             objectName: "imageCanvasMouseArea-" + viewport.slot
             anchors.fill: parent
             hoverEnabled: true
             acceptedButtons: Qt.LeftButton | Qt.MiddleButton
             onClicked: mouse => {
-                if (mouse.button === Qt.LeftButton && control.compareMode === 0 && control.hasPair && !viewport.dragActive)
+                if (viewport.suppressClickAfterMarquee) {
+                    viewport.suppressClickAfterMarquee = false;
+                    return;
+                }
+                if (mouse.button === Qt.LeftButton && control.compareMode === 0 && control.hasPair && !viewport.dragActive && !viewport.marqueeActive)
                     control.toggleSinglePairSource();
             }
             onPositionChanged: mouse => {
-                if (pressed && control.imageReview) {
+                if (viewport.marqueeActive) {
+                    viewport.marqueeCurrent = Qt.point(mouse.x, mouse.y);
+                } else if (pressed && control.imageReview) {
                     if (!viewport.dragActive && Math.hypot(mouse.x - viewport.pressStart.x, mouse.y - viewport.pressStart.y) >= 5)
                         viewport.dragActive = true;
                     if (viewport.dragActive) {
@@ -505,10 +532,42 @@ Rectangle {
                 control.hoverPoint = null;
             }
             onPressed: mouse => {
-                viewport.dragStart = Qt.point(mouse.x, mouse.y);
-                viewport.pressStart = Qt.point(mouse.x, mouse.y);
-                viewport.dragActive = false;
+                if (mouse.button === Qt.LeftButton && (mouse.modifiers & Qt.ShiftModifier)) {
+                    viewport.marqueeActive = true;
+                    viewport.marqueeStart = Qt.point(mouse.x, mouse.y);
+                    viewport.marqueeCurrent = Qt.point(mouse.x, mouse.y);
+                    viewport.dragActive = false;
+                } else {
+                    viewport.marqueeActive = false;
+                    viewport.dragStart = Qt.point(mouse.x, mouse.y);
+                    viewport.pressStart = Qt.point(mouse.x, mouse.y);
+                    viewport.dragActive = false;
+                }
                 control.forceActiveFocus();
+            }
+            onReleased: mouse => {
+                if (viewport.marqueeActive) {
+                    viewport.marqueeActive = false;
+                    viewport.suppressClickAfterMarquee = true;
+                    const left = Math.min(viewport.marqueeStart.x, viewport.marqueeCurrent.x);
+                    const right = Math.max(viewport.marqueeStart.x, viewport.marqueeCurrent.x);
+                    const top = Math.min(viewport.marqueeStart.y, viewport.marqueeCurrent.y);
+                    const bottom = Math.max(viewport.marqueeStart.y, viewport.marqueeCurrent.y);
+                    if (Math.abs(right - left) >= 8 && Math.abs(bottom - top) >= 8 && previewImage.sourceSize.width > 0 && previewImage.sourceSize.height > 0) {
+                        const m0 = control.mapToImage(viewport, left, top);
+                        const m1 = control.mapToImage(viewport, right, bottom);
+                        if (m0 && m1) {
+                            const sw = previewImage.sourceSize.width;
+                            const sh = previewImage.sourceSize.height;
+                            const normX0 = Math.max(0, Math.min(1, m0.x / sw));
+                            const normY0 = Math.max(0, Math.min(1, m0.y / sh));
+                            const normX1 = Math.max(0, Math.min(1, m1.x / sw));
+                            const normY1 = Math.max(0, Math.min(1, m1.y / sh));
+                            if (control.imageReview)
+                                control.imageReview.zoomToRect(normX0, normY0, normX1, normY1);
+                        }
+                    }
+                }
             }
             onDoubleClicked: mouse => {
                 // Qt sends a click before the double-click event. Keep the selected A/B
@@ -591,6 +650,27 @@ Rectangle {
                         enabled: control.hasPrimary && !control.hasSecondary
                         onTriggered: control.addImageRequested()
                     }
+                    VcsMenuSeparator {
+                        visible: control.hasPrimary
+                    }
+                    VcsMenuItem {
+                        objectName: "imageSwapSidesMenuItem"
+                        text: qsTr("对调 A / B")
+                        enabled: control.hasPair
+                        onTriggered: control.swapSidesRequested()
+                    }
+                    VcsMenuItem {
+                        objectName: "imageReplacePrimaryMenuItem"
+                        text: qsTr("替换 A…")
+                        enabled: control.hasPrimary
+                        onTriggered: control.replacePrimaryRequested()
+                    }
+                    VcsMenuItem {
+                        objectName: "imageReplaceSecondaryMenuItem"
+                        text: qsTr("替换 B…")
+                        enabled: control.hasPrimary
+                        onTriggered: control.replaceSecondaryRequested()
+                    }
                 }
             }
             ReviewActionButton {
@@ -664,18 +744,6 @@ Rectangle {
                         control.imageReview.resetView();
                 }
             }
-            ReviewActionButton {
-                objectName: "imageResampleToggle"
-                checkable: true
-                checked: Boolean(control.imageReview && control.imageReview.resampleAllowed)
-                text: checked ? qsTr("重采样：开") : qsTr("重采样：关")
-                helpText: qsTr("仅当两张图片尺寸不同时使用。\n开启后将 B 缩放到 A 的尺寸再计算差异，结果不再是原尺寸的逐像素比较。")
-                implicitHeight: 30
-                leftPadding: 8
-                rightPadding: 8
-                visible: control.hasPair && control.sizesDiffer
-                onClicked: control.imageReview.resampleAllowed = !control.imageReview.resampleAllowed
-            }
         }
 
         // Row B — comparison layout, difference analysis and observation. Mutually exclusive
@@ -715,6 +783,47 @@ Rectangle {
                 rightPadding: 8
                 text: control.compareMode === 0 && control.singleViewShowSecondary ? qsTr("切至 A") : qsTr("切至 B")
                 onClicked: control.toggleSinglePairSource()
+            }
+
+            ReviewActionButton {
+                objectName: "imageSwapSidesButton"
+                visible: control.hasPair
+                implicitHeight: 30
+                leftPadding: 8
+                rightPadding: 8
+                text: qsTr("对调 A/B")
+                helpText: qsTr("交换 A 与 B 的槽位方向。\n不改变文件夹配对身份；带符号差异、分割线与淡化会跟随新的 A/B 方向。")
+                onClicked: control.swapSidesRequested()
+            }
+
+            ReviewActionButton {
+                objectName: "imageReplaceSidesButton"
+                text: qsTr("换图… ▾")
+                implicitHeight: 30
+                leftPadding: 8
+                rightPadding: 8
+                visible: control.hasPrimary
+                enabled: control.hasPrimary
+                helpText: qsTr("只替换其中一侧，另一侧保持不变。失败时原图保留。")
+                onClicked: replaceSidesMenu.open()
+
+                VcsMenu {
+                    id: replaceSidesMenu
+                    menuWidth: 180
+
+                    VcsMenuItem {
+                        objectName: "imageReplacePrimaryButton"
+                        text: qsTr("替换 A…")
+                        enabled: control.hasPrimary
+                        onTriggered: control.replacePrimaryRequested()
+                    }
+                    VcsMenuItem {
+                        objectName: "imageReplaceSecondaryButton"
+                        text: control.hasSecondary ? qsTr("替换 B…") : qsTr("添加 B…")
+                        enabled: control.hasPrimary
+                        onTriggered: control.replaceSecondaryRequested()
+                    }
+                }
             }
 
             Rectangle {
@@ -1221,6 +1330,22 @@ Rectangle {
                     readonly property real drawX: (width - drawWidth) / 2 + (0.5 - (control.imageReview ? control.imageReview.panX : 0.5)) * drawWidth
                     readonly property real drawY: (height - drawHeight) / 2 + (0.5 - (control.imageReview ? control.imageReview.panY : 0.5)) * drawHeight
                     readonly property real splitX: width * control.wipePosition
+                    property bool marqueeActive: false
+                    property point marqueeStart: Qt.point(0, 0)
+                    property point marqueeCurrent: Qt.point(0, 0)
+
+                    Rectangle {
+                        id: wipeMarqueeRect
+                        visible: wipeOverlay.marqueeActive
+                        z: 25
+                        x: Math.min(wipeOverlay.marqueeStart.x, wipeOverlay.marqueeCurrent.x)
+                        y: Math.min(wipeOverlay.marqueeStart.y, wipeOverlay.marqueeCurrent.y)
+                        width: Math.abs(wipeOverlay.marqueeCurrent.x - wipeOverlay.marqueeStart.x)
+                        height: Math.abs(wipeOverlay.marqueeCurrent.y - wipeOverlay.marqueeStart.y)
+                        color: "#224b8df8"
+                        border.color: Theme.accent
+                        border.width: 1
+                    }
 
                     Image {
                         id: wipePrimaryImage
@@ -1307,7 +1432,9 @@ Rectangle {
                         acceptedButtons: Qt.LeftButton | Qt.MiddleButton
                         property point dragStart: Qt.point(0, 0)
                         onPositionChanged: mouse => {
-                            if (pressed && control.imageReview) {
+                            if (wipeOverlay.marqueeActive) {
+                                wipeOverlay.marqueeCurrent = Qt.point(mouse.x, mouse.y);
+                            } else if (pressed && control.imageReview) {
                                 const dx = (mouse.x - dragStart.x) / Math.max(1, width);
                                 const dy = (mouse.y - dragStart.y) / Math.max(1, height);
                                 control.imageReview.panBy(dx, dy);
@@ -1323,8 +1450,42 @@ Rectangle {
                                 control.imageReview.clearCursorPixel();
                         }
                         onPressed: mouse => {
-                            dragStart = Qt.point(mouse.x, mouse.y);
+                            if (mouse.button === Qt.LeftButton && (mouse.modifiers & Qt.ShiftModifier)) {
+                                wipeOverlay.marqueeActive = true;
+                                wipeOverlay.marqueeStart = Qt.point(mouse.x, mouse.y);
+                                wipeOverlay.marqueeCurrent = Qt.point(mouse.x, mouse.y);
+                            } else {
+                                wipeOverlay.marqueeActive = false;
+                                dragStart = Qt.point(mouse.x, mouse.y);
+                            }
                             control.forceActiveFocus();
+                        }
+                        onReleased: mouse => {
+                            if (wipeOverlay.marqueeActive) {
+                                wipeOverlay.marqueeActive = false;
+                                const left = Math.min(wipeOverlay.marqueeStart.x, wipeOverlay.marqueeCurrent.x);
+                                const right = Math.max(wipeOverlay.marqueeStart.x, wipeOverlay.marqueeCurrent.x);
+                                const top = Math.min(wipeOverlay.marqueeStart.y, wipeOverlay.marqueeCurrent.y);
+                                const bottom = Math.max(wipeOverlay.marqueeStart.y, wipeOverlay.marqueeCurrent.y);
+                                if (Math.abs(right - left) >= 8 && Math.abs(bottom - top) >= 8 && wipePrimaryImage.sourceSize.width > 0 && wipePrimaryImage.sourceSize.height > 0) {
+                                    const m0 = control.mapToImage({
+                                        "image": wipePrimaryImage
+                                    }, left, top);
+                                    const m1 = control.mapToImage({
+                                        "image": wipePrimaryImage
+                                    }, right, bottom);
+                                    if (m0 && m1) {
+                                        const sw = wipePrimaryImage.sourceSize.width;
+                                        const sh = wipePrimaryImage.sourceSize.height;
+                                        const normX0 = Math.max(0, Math.min(1, m0.x / sw));
+                                        const normY0 = Math.max(0, Math.min(1, m0.y / sh));
+                                        const normX1 = Math.max(0, Math.min(1, m1.x / sw));
+                                        const normY1 = Math.max(0, Math.min(1, m1.y / sh));
+                                        if (control.imageReview)
+                                            control.imageReview.zoomToRect(normX0, normY0, normX1, normY1);
+                                    }
+                                }
+                            }
                         }
                         onDoubleClicked: mouse => {
                             if (control.trueSize) {
@@ -1408,6 +1569,22 @@ Rectangle {
                     readonly property real drawHeight: control.imageReview ? control.imageReview.primaryHeight * effectiveBaseScale * control.zoom : 0
                     readonly property real drawX: (width - drawWidth) / 2 + (0.5 - (control.imageReview ? control.imageReview.panX : 0.5)) * drawWidth
                     readonly property real drawY: (height - drawHeight) / 2 + (0.5 - (control.imageReview ? control.imageReview.panY : 0.5)) * drawHeight
+                    property bool marqueeActive: false
+                    property point marqueeStart: Qt.point(0, 0)
+                    property point marqueeCurrent: Qt.point(0, 0)
+
+                    Rectangle {
+                        id: fadeMarqueeRect
+                        visible: fadeOverlay.marqueeActive
+                        z: 25
+                        x: Math.min(fadeOverlay.marqueeStart.x, fadeOverlay.marqueeCurrent.x)
+                        y: Math.min(fadeOverlay.marqueeStart.y, fadeOverlay.marqueeCurrent.y)
+                        width: Math.abs(fadeOverlay.marqueeCurrent.x - fadeOverlay.marqueeStart.x)
+                        height: Math.abs(fadeOverlay.marqueeCurrent.y - fadeOverlay.marqueeStart.y)
+                        color: "#224b8df8"
+                        border.color: Theme.accent
+                        border.width: 1
+                    }
 
                     Image {
                         id: fadePrimaryImage
@@ -1449,7 +1626,9 @@ Rectangle {
                         acceptedButtons: Qt.LeftButton | Qt.MiddleButton
                         property point dragStart: Qt.point(0, 0)
                         onPositionChanged: mouse => {
-                            if (pressed && control.imageReview) {
+                            if (fadeOverlay.marqueeActive) {
+                                fadeOverlay.marqueeCurrent = Qt.point(mouse.x, mouse.y);
+                            } else if (pressed && control.imageReview) {
                                 const dx = (mouse.x - dragStart.x) / Math.max(1, width);
                                 const dy = (mouse.y - dragStart.y) / Math.max(1, height);
                                 control.imageReview.panBy(dx, dy);
@@ -1466,8 +1645,42 @@ Rectangle {
                                 control.imageReview.clearCursorPixel();
                         }
                         onPressed: mouse => {
-                            dragStart = Qt.point(mouse.x, mouse.y);
+                            if (mouse.button === Qt.LeftButton && (mouse.modifiers & Qt.ShiftModifier)) {
+                                fadeOverlay.marqueeActive = true;
+                                fadeOverlay.marqueeStart = Qt.point(mouse.x, mouse.y);
+                                fadeOverlay.marqueeCurrent = Qt.point(mouse.x, mouse.y);
+                            } else {
+                                fadeOverlay.marqueeActive = false;
+                                dragStart = Qt.point(mouse.x, mouse.y);
+                            }
                             control.forceActiveFocus();
+                        }
+                        onReleased: mouse => {
+                            if (fadeOverlay.marqueeActive) {
+                                fadeOverlay.marqueeActive = false;
+                                const left = Math.min(fadeOverlay.marqueeStart.x, fadeOverlay.marqueeCurrent.x);
+                                const right = Math.max(fadeOverlay.marqueeStart.x, fadeOverlay.marqueeCurrent.x);
+                                const top = Math.min(fadeOverlay.marqueeStart.y, fadeOverlay.marqueeCurrent.y);
+                                const bottom = Math.max(fadeOverlay.marqueeStart.y, fadeOverlay.marqueeCurrent.y);
+                                if (Math.abs(right - left) >= 8 && Math.abs(bottom - top) >= 8 && fadePrimaryImage.sourceSize.width > 0 && fadePrimaryImage.sourceSize.height > 0) {
+                                    const m0 = control.mapToImage({
+                                        "image": fadePrimaryImage
+                                    }, left, top);
+                                    const m1 = control.mapToImage({
+                                        "image": fadePrimaryImage
+                                    }, right, bottom);
+                                    if (m0 && m1) {
+                                        const sw = fadePrimaryImage.sourceSize.width;
+                                        const sh = fadePrimaryImage.sourceSize.height;
+                                        const normX0 = Math.max(0, Math.min(1, m0.x / sw));
+                                        const normY0 = Math.max(0, Math.min(1, m0.y / sh));
+                                        const normX1 = Math.max(0, Math.min(1, m1.x / sw));
+                                        const normY1 = Math.max(0, Math.min(1, m1.y / sh));
+                                        if (control.imageReview)
+                                            control.imageReview.zoomToRect(normX0, normY0, normX1, normY1);
+                                    }
+                                }
+                            }
                         }
                         onDoubleClicked: mouse => {
                             if (control.trueSize) {
@@ -1633,7 +1846,11 @@ Rectangle {
                 text: {
                     if (!control.cursorPixel || !control.cursorPixel.valid)
                         return "";
-                    let t = qsTr("像素 (%1, %2)  R %3  G %4  B %5  A %6  %7  α %8%").arg(control.cursorPixel.x).arg(control.cursorPixel.y).arg(control.cursorPixel.r).arg(control.cursorPixel.g).arg(control.cursorPixel.b).arg(control.cursorPixel.a).arg(control.cursorPixel.hex).arg(control.cursorPixel.alphaPercent);
+                    let t = "";
+                    if (control.imageReview && (control.imageReview.primaryDisplayConverted || control.imageReview.secondaryDisplayConverted))
+                        t = qsTr("像素 (%1, %2) [显示 RGBA8: R %3 G %4 B %5 A %6 %7 α %8%]").arg(control.cursorPixel.x).arg(control.cursorPixel.y).arg(control.cursorPixel.r).arg(control.cursorPixel.g).arg(control.cursorPixel.b).arg(control.cursorPixel.a).arg(control.cursorPixel.hex).arg(control.cursorPixel.alphaPercent);
+                    else
+                        t = qsTr("像素 (%1, %2)  R %3  G %4  B %5  A %6  %7  α %8%").arg(control.cursorPixel.x).arg(control.cursorPixel.y).arg(control.cursorPixel.r).arg(control.cursorPixel.g).arg(control.cursorPixel.b).arg(control.cursorPixel.a).arg(control.cursorPixel.hex).arg(control.cursorPixel.alphaPercent);
                     if (control.cursorPixel.channelView === "alphaGray")
                         t += " · " + qsTr("Alpha 灰度");
                     else if (control.cursorPixel.channelView === "rgbOpaque")
@@ -1641,7 +1858,7 @@ Rectangle {
                     // I-02: a >8-bit source also reports its original-depth code values so the
                     // readout never implies the 8-bit display numbers are the file's codes.
                     if (control.cursorPixel.nativeBitDepth !== undefined && control.cursorPixel.nativeBitDepth > 8)
-                        t += " · " + qsTr("原始 %1-bit：R %2 G %3 B %4").arg(control.cursorPixel.nativeBitDepth).arg(control.cursorPixel.r16).arg(control.cursorPixel.g16).arg(control.cursorPixel.b16);
+                        t += " · " + qsTr("源 %1-bit → 转换后 16-bit：A %2（%3%） R %4 G %5 B %6").arg(control.cursorPixel.nativeBitDepth).arg(control.cursorPixel.a16).arg((Number(control.cursorPixel.a16) / 65535 * 100).toFixed(4)).arg(control.cursorPixel.r16).arg(control.cursorPixel.g16).arg(control.cursorPixel.b16);
                     return t;
                 }
                 color: Theme.primaryText
@@ -1678,6 +1895,91 @@ Rectangle {
             spacing: 12
 
             Rectangle {
+                id: displayConversionBadge
+                objectName: "displayConversionBadge"
+                visible: Boolean(control.imageReview && control.hasPrimary && (control.imageReview.primaryDisplayConverted || control.imageReview.secondaryDisplayConverted))
+                height: 22
+                radius: 4
+                color: "#2a1e12"
+                border.color: "#f59e0b"
+                border.width: 1
+                anchors.verticalCenter: parent.verticalCenter
+
+                Row {
+                    anchors.centerIn: parent
+                    leftPadding: 6
+                    rightPadding: 6
+                    spacing: 4
+
+                    Text {
+                        text: "🎨"
+                        font.pixelSize: 11
+                    }
+                    Text {
+                        text: qsTr("显示缓冲 RGBA8")
+                        color: "#fef3c7"
+                        font.pixelSize: 11
+                    }
+                }
+
+                HoverHandler {
+                    id: displayConversionHover
+                }
+
+                VcsToolTip {
+                    visible: displayConversionHover.hovered
+                    text: qsTr("像素格式/位深已转换到 RGBA8 显示缓冲，不是文件平面原始码值。\n未应用 ICC/颜色配置文件；YUV→RGB 使用解码器默认系数，颜色外观不作色彩管理承诺。\n高位深源请参考像素状态栏的转换后 16-bit 码值。")
+                }
+            }
+
+            Rectangle {
+                id: resampleBadge
+                objectName: "imageResampleBadge"
+                visible: Boolean(control.imageReview && control.hasPair && (control.imageReview.diffResampled || (control.sizesDiffer && control.imageReview.resampleAllowed)))
+                height: 22
+                radius: 4
+                color: "#2a1e12"
+                border.color: "#f59e0b"
+                border.width: 1
+                anchors.verticalCenter: parent.verticalCenter
+
+                Row {
+                    anchors.centerIn: parent
+                    leftPadding: 6
+                    rightPadding: 6
+                    spacing: 4
+
+                    Text {
+                        text: "📐"
+                        font.pixelSize: 11
+                    }
+                    Text {
+                        text: control.imageReview && control.imageReview.diffResampled ? qsTr("空间已重采样") : qsTr("重采样：开")
+                        color: "#fef3c7"
+                        font.pixelSize: 11
+                    }
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        if (control.imageReview)
+                            control.imageReview.resampleAllowed = !control.imageReview.resampleAllowed;
+                    }
+                }
+
+                HoverHandler {
+                    id: resampleBadgeHover
+                }
+
+                VcsToolTip {
+                    visible: resampleBadgeHover.hovered
+                    text: control.imageReview && control.imageReview.diffResampled ? qsTr("对比两侧图片尺寸不同，差异计算已对次图像进行双线性空间重采样。\n点击关闭重采样。") : qsTr("已开启重采样对齐（尺寸不同时将 B 缩放到 A 再算差异）。\n点击关闭。")
+                }
+            }
+
+            Rectangle {
                 visible: Boolean(control.imageReview && control.hasPrimary && (control.imageReview.primaryHasAlpha || control.imageReview.secondaryHasAlpha))
                 height: 22
                 radius: 4
@@ -1708,7 +2010,7 @@ Rectangle {
 
             Text {
                 visible: statusBar.width >= 1120
-                text: qsTr("滚轮缩放 · 拖动平移")
+                text: qsTr("滚轮缩放 · 拖动平移 · Shift+拖动框选放大")
                 color: Theme.mutedText
                 font.pixelSize: 11
             }

@@ -1088,10 +1088,12 @@ private:
                     [&offset](const auto& other) { return other.sourceId == offset.sourceId; });
                 const bool confidenceValid = offset.confidence >= 0.0F && offset.confidence <= 1.0F;
                 const bool kindValid =
+                    offset.matchKind == application::FrameMatchKind::ExactIndex ||
                     offset.matchKind == application::FrameMatchKind::GlobalOffset ||
                     offset.matchKind == application::FrameMatchKind::AutoAligned ||
                     offset.matchKind == application::FrameMatchKind::ManualAnchor ||
-                    offset.matchKind == application::FrameMatchKind::Missing;
+                    offset.matchKind == application::FrameMatchKind::Missing ||
+                    offset.matchKind == application::FrameMatchKind::TimeAligned;
                 if (!known || duplicate || !confidenceValid || !kindValid ||
                     (offset.matchKind == application::FrameMatchKind::Missing &&
                      offset.frames != 0)) {

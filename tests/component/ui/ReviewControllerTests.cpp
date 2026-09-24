@@ -2046,5 +2046,41 @@ TEST_F(ReviewControllerTests, StopAndExpiredBackendFailClosedWithoutFurtherAcces
     EXPECT_FALSE(expiringController.next());
 }
 
+TEST_F(ReviewControllerTests, ProjectsAlignmentModeAndSubmitsSetAlignmentModeCommand) {
+    auto backend = std::make_shared<FakeBackend>();
+    backend->currentSnapshot = readySnapshot(2, 8U);
+    ReviewController controller{dependenciesFor(backend)};
+
+    EXPECT_EQ(controller.alignmentMode(), 0);
+    EXPECT_EQ(controller.alignmentModeName(), QStringLiteral("按帧号 (1:1)"));
+
+    ASSERT_TRUE(controller.setAlignmentMode(1));
+    ASSERT_FALSE(backend->submitted.empty());
+    ASSERT_TRUE(
+        std::holds_alternative<application::SetAlignmentModeCommand>(backend->submitted.back()));
+    const auto& cmd = std::get<application::SetAlignmentModeCommand>(backend->submitted.back());
+    EXPECT_EQ(cmd.mode, application::AlignmentMode::Timestamp);
+
+    backend->currentSnapshot.alignmentMode = application::AlignmentMode::Timestamp;
+    completeLastCommand(backend);
+    ASSERT_TRUE(waitUntil([&controller] {
+        return controller.alignmentMode() == 1 &&
+               controller.alignmentModeName() == QStringLiteral("按时间 (PTS)");
+    }));
+
+    ASSERT_TRUE(controller.setAlignmentMode(2));
+    ASSERT_TRUE(
+        std::holds_alternative<application::SetAlignmentModeCommand>(backend->submitted.back()));
+    const auto& cmd2 = std::get<application::SetAlignmentModeCommand>(backend->submitted.back());
+    EXPECT_EQ(cmd2.mode, application::AlignmentMode::ManualAnchor);
+
+    backend->currentSnapshot.alignmentMode = application::AlignmentMode::ManualAnchor;
+    completeLastCommand(backend);
+    ASSERT_TRUE(waitUntil([&controller] {
+        return controller.alignmentMode() == 2 &&
+               controller.alignmentModeName() == QStringLiteral("人工锚点");
+    }));
+}
+
 } // namespace
 } // namespace dvs::ui

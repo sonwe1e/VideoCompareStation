@@ -7,6 +7,7 @@ add_executable(
     FrameTimelineIndexTests.cpp
     MediaProbeTests.cpp
     PairMetricsServiceTests.cpp
+    PreviewThumbnailServiceTests.cpp
     ProbeTimelineContractTests.cpp
     SignatureCacheTests.cpp
     SourceDecodeActorTests.cpp

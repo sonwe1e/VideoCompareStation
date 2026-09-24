@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dvs/domain/FrameTimeline.h"
 #include "dvs/domain/Identifiers.h"
 
 #include <array>
@@ -48,14 +49,21 @@ inline constexpr std::size_t kAlignmentFeatureGridHeight = 8U;
 inline constexpr std::size_t kAlignmentFeatureGridCells =
     kAlignmentFeatureGridWidth * kAlignmentFeatureGridHeight;
 
+enum class AlignmentMode {
+    FrameIndex,
+    Timestamp,
+    ManualAnchor,
+};
+
 // How a source's frame was mapped to the canonical frame position. The UI presents this state so
 // auto-aligned views are never mistaken for strict same-frame comparisons.
 enum class FrameMatchKind {
-    ExactIndex,
-    GlobalOffset,
-    AutoAligned,
-    ManualAnchor,
-    Missing,
+    ExactIndex = 0,
+    GlobalOffset = 1,
+    AutoAligned = 2,
+    ManualAnchor = 3,
+    Missing = 4,
+    TimeAligned = 5,
 };
 
 // Explicit mapping from a canonical frame i to source frame i + offset. Zero means strict-index
@@ -185,8 +193,8 @@ struct SequenceAlignmentResult final {
 };
 
 // UI-facing analysis projection. It intentionally excludes the O(N) entries vector; the
-// coordinator retains that immutable mapping internally and snapshots carry only bounded review
-// evidence needed by the 16 ms projection path.
+// coordinator retains the mapping and publishes a shared immutable reference for analysis.
+// UI summaries carry only bounded review evidence needed by the 16 ms projection path.
 struct SequenceAlignmentLowConfidenceRun final {
     domain::FrameId firstCanonicalFrame{0};
     domain::FrameId lastCanonicalFrame{0};
@@ -258,5 +266,14 @@ alignFrameSequences(domain::SourceId targetSourceId,
 mapFrameWithAnchors(const SourceAlignmentAnchors& anchors,
                     domain::FrameId canonicalFrame,
                     std::int64_t sourceFrameCount) noexcept;
+
+// Timestamp alignment: a VFR timeline's last frame has no successor to bound its display
+// interval, so its end is estimated from the last inter-frame gap. A canonical time at or
+// past that end has no frame in this source and must be treated as Missing — the same rule
+// the CFR path gets from its out-of-range bounds check — instead of holding the last frame.
+// Times inside the indexed range are never "beyond" (frameAtOrBefore already resolved them),
+// and a cadence that cannot be estimated keeps the held last frame rather than guessing.
+[[nodiscard]] bool canonicalTimeBeyondSourceTimeline(const domain::FrameTimeline& timeline,
+                                                     domain::MediaTime canonicalTime) noexcept;
 
 } // namespace dvs::application
