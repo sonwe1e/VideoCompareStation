@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
 import QtQuick.Window
 import "VcsTheme.js" as Theme
@@ -57,6 +58,14 @@ Rectangle {
     property int backgroundMode: 1
     property bool singleViewShowSecondary: false
     property var hoverPoint: null
+    // Step-3 image editing: optional controller (absent in isolated harnesses). The session
+    // always starts from the committed original, and the workspace only *displays* the
+    // working copy — comparison and difference statistics keep using the originals.
+    property var imageEdit: null
+    readonly property bool editModeActive: Boolean(imageEdit && imageEdit.active)
+    readonly property int editSourceSlot: editModeActive ? Number(imageEdit.sourceSlot) : -1
+    // Crop selection in image pixels (null while nothing is selected).
+    property var cropSelection: null
 
     onHasPairChanged: {
         if (!hasPair) {
@@ -224,6 +233,66 @@ Rectangle {
         }
     }
 
+    // ---- Step-3 image editing -------------------------------------------------------
+    // The session always starts from the committed original of the side on screen; the
+    // original buffer and the source file are never written to, and edits are saved as a
+    // copy. Crop geometry is captured in image pixels (mapToImage), so zoom or pan cannot
+    // drift the selection.
+
+    function editDisplayedSlot() {
+        return (compareMode === 0 && hasPair && singleViewShowSecondary) ? 3 : 2;
+    }
+
+    function beginImageEdit() {
+        if (!imageEdit)
+            return false;
+        const slot = control.editDisplayedSlot();
+        const path = slot === 3 ? control.imageReview.secondaryPath : control.imageReview.primaryPath;
+        control.cropSelection = null;
+        return Boolean(imageEdit.beginSession(slot, String(path || ""), String(path || "")));
+    }
+
+    function finishImageEdit() {
+        control.cropSelection = null;
+        if (imageEdit)
+            imageEdit.endSession();
+    }
+
+    function applyCropSelection() {
+        if (!imageEdit || !imageEdit.active || !control.cropSelection)
+            return false;
+        const selection = control.cropSelection;
+        const applied = Boolean(imageEdit.cropToImageRect(selection.x, selection.y, selection.width, selection.height));
+        if (applied) {
+            control.cropSelection = null;
+            if (control.imageReview)
+                control.imageReview.resetView();
+        }
+        return applied;
+    }
+
+    // Converts a drag in one viewport into an image-pixel crop selection.
+    function updateCropSelection(view) {
+        if (!imageEdit || !imageEdit.active)
+            return;
+        const m0 = mapToImage(view, Math.min(view.cropStart.x, view.cropCurrent.x), Math.min(view.cropStart.y, view.cropCurrent.y));
+        const m1 = mapToImage(view, Math.max(view.cropStart.x, view.cropCurrent.x), Math.max(view.cropStart.y, view.cropCurrent.y));
+        if (!m0 || !m1)
+            return;
+        const width = Math.max(0, Math.round(m1.x - m0.x));
+        const height = Math.max(0, Math.round(m1.y - m0.y));
+        if (width < 2 || height < 2) {
+            control.cropSelection = null;
+            return;
+        }
+        control.cropSelection = {
+            "x": Math.max(0, Math.round(m0.x)),
+            "y": Math.max(0, Math.round(m0.y)),
+            "width": width,
+            "height": height
+        };
+    }
+
     // Deterministic checkerboard behind transparent regions (cell scaled to the viewport),
     // so partial alpha reads as a blend against known colors instead of the dark void. Both
     // tones are true neutral grays at the previous lightness levels; the old #22262e/#383e4a
@@ -306,6 +375,10 @@ Rectangle {
         property bool suppressClickAfterMarquee: false
         property point marqueeStart: Qt.point(0, 0)
         property point marqueeCurrent: Qt.point(0, 0)
+        // Step-3 crop selection drag (edit mode only; left button, no modifier).
+        property bool cropActive: false
+        property point cropStart: Qt.point(0, 0)
+        property point cropCurrent: Qt.point(0, 0)
 
         readonly property alias image: previewImage
         // Fit scale of the displayed image (fit-window base), forwarded so the workspace
@@ -507,6 +580,22 @@ Rectangle {
             border.width: 1
         }
 
+        // Crop selection while dragging in edit mode; the applied selection is kept as a
+        // workspace-level image-pixel rect so it survives further zooming.
+        Rectangle {
+            id: cropRect
+            objectName: "imageCropRect-" + viewport.slot
+            visible: viewport.cropActive
+            z: 26
+            x: Math.min(viewport.cropStart.x, viewport.cropCurrent.x)
+            y: Math.min(viewport.cropStart.y, viewport.cropCurrent.y)
+            width: Math.abs(viewport.cropCurrent.x - viewport.cropStart.x)
+            height: Math.abs(viewport.cropCurrent.y - viewport.cropStart.y)
+            color: "#2214b8a6"
+            border.color: "#5eead4"
+            border.width: 1
+        }
+
         MouseArea {
             id: viewportMouseArea
             objectName: "imageCanvasMouseArea-" + viewport.slot
@@ -518,11 +607,14 @@ Rectangle {
                     viewport.suppressClickAfterMarquee = false;
                     return;
                 }
-                if (mouse.button === Qt.LeftButton && control.compareMode === 0 && control.hasPair && !viewport.dragActive && !viewport.marqueeActive)
+                if (mouse.button === Qt.LeftButton && !control.editModeActive && control.compareMode === 0 && control.hasPair && !viewport.dragActive && !viewport.marqueeActive)
                     control.toggleSinglePairSource();
             }
             onPositionChanged: mouse => {
-                if (viewport.marqueeActive) {
+                if (viewport.cropActive) {
+                    viewport.cropCurrent = Qt.point(mouse.x, mouse.y);
+                    control.updateCropSelection(viewport);
+                } else if (viewport.marqueeActive) {
                     viewport.marqueeCurrent = Qt.point(mouse.x, mouse.y);
                 } else if (pressed && control.imageReview) {
                     if (!viewport.dragActive && Math.hypot(mouse.x - viewport.pressStart.x, mouse.y - viewport.pressStart.y) >= 5)
@@ -542,12 +634,22 @@ Rectangle {
                 control.hoverPoint = null;
             }
             onPressed: mouse => {
-                if (mouse.button === Qt.LeftButton && (mouse.modifiers & Qt.ShiftModifier)) {
+                // Edit mode: the left button draws the crop selection (the review's rule),
+                // the middle button keeps panning below. View mode keeps the old gestures.
+                if (control.editModeActive && mouse.button === Qt.LeftButton && !(mouse.modifiers & Qt.ShiftModifier)) {
+                    viewport.cropActive = true;
+                    viewport.cropStart = Qt.point(mouse.x, mouse.y);
+                    viewport.cropCurrent = Qt.point(mouse.x, mouse.y);
+                    viewport.marqueeActive = false;
+                    viewport.dragActive = false;
+                } else if (mouse.button === Qt.LeftButton && (mouse.modifiers & Qt.ShiftModifier)) {
+                    viewport.cropActive = false;
                     viewport.marqueeActive = true;
                     viewport.marqueeStart = Qt.point(mouse.x, mouse.y);
                     viewport.marqueeCurrent = Qt.point(mouse.x, mouse.y);
                     viewport.dragActive = false;
                 } else {
+                    viewport.cropActive = false;
                     viewport.marqueeActive = false;
                     viewport.dragStart = Qt.point(mouse.x, mouse.y);
                     viewport.pressStart = Qt.point(mouse.x, mouse.y);
@@ -556,6 +658,11 @@ Rectangle {
                 control.forceActiveFocus();
             }
             onReleased: mouse => {
+                if (viewport.cropActive) {
+                    viewport.cropActive = false;
+                    viewport.suppressClickAfterMarquee = true;
+                    control.updateCropSelection(viewport);
+                }
                 if (viewport.marqueeActive) {
                     viewport.marqueeActive = false;
                     viewport.suppressClickAfterMarquee = true;
@@ -1027,6 +1134,89 @@ Rectangle {
                 }
             }
         }
+
+        // Row C — step-3 image editing. The original file is never written to: the session
+        // edits a working copy and saving always produces a new file. Crop geometry is
+        // captured in image pixels, so zooming or panning cannot drift the selection.
+        Row {
+            id: editRow
+            objectName: "imageEditRow"
+            spacing: 8
+            visible: control.hasPrimary && control.imageEdit !== null
+
+            ReviewActionButton {
+                objectName: "imageEditStartButton"
+                checkable: true
+                checked: control.editModeActive
+                text: control.editModeActive ? qsTr("结束编辑") : qsTr("编辑画面")
+                implicitHeight: 30
+                leftPadding: 10
+                rightPadding: 10
+                helpText: qsTr("在原图的副本上编辑；原文件保持不变，编辑结果必须另存为副本。")
+                onClicked: {
+                    if (control.editModeActive)
+                        control.finishImageEdit();
+                    else
+                        control.beginImageEdit();
+                }
+            }
+            ReviewActionButton {
+                objectName: "imageEditApplyCropButton"
+                visible: control.editModeActive
+                text: control.cropSelection ? qsTr("应用裁剪 %1×%2").arg(control.cropSelection.width).arg(control.cropSelection.height) : qsTr("应用裁剪")
+                enabled: control.cropSelection !== null && control.imageEdit && control.imageEdit.active
+                implicitHeight: 30
+                leftPadding: 10
+                rightPadding: 10
+                helpText: qsTr("编辑模式下左键框选裁剪区域，中键仍可平移。")
+                onClicked: control.applyCropSelection()
+            }
+            ReviewActionButton {
+                objectName: "imageEditUndoButton"
+                visible: control.editModeActive
+                text: qsTr("撤销")
+                enabled: control.imageEdit && control.imageEdit.canUndo
+                implicitHeight: 30
+                leftPadding: 10
+                rightPadding: 10
+                onClicked: {
+                    if (control.imageEdit)
+                        control.imageEdit.undo();
+                }
+            }
+            ReviewActionButton {
+                objectName: "imageEditRedoButton"
+                visible: control.editModeActive
+                text: qsTr("重做")
+                enabled: control.imageEdit && control.imageEdit.canRedo
+                implicitHeight: 30
+                leftPadding: 10
+                rightPadding: 10
+                onClicked: {
+                    if (control.imageEdit)
+                        control.imageEdit.redo();
+                }
+            }
+            ReviewActionButton {
+                objectName: "imageEditSaveCopyButton"
+                visible: control.editModeActive
+                text: qsTr("另存副本…")
+                implicitHeight: 30
+                leftPadding: 10
+                rightPadding: 10
+                onClicked: editSaveDialog.open()
+            }
+            Text {
+                objectName: "imageEditStatusText"
+                visible: control.editModeActive
+                anchors.verticalCenter: parent.verticalCenter
+                text: control.imageEdit ? String(control.imageEdit.lastStatus || "") : ""
+                color: Theme.mutedText
+                font.pixelSize: 11
+                elide: Text.ElideRight
+                width: Math.min(520, implicitWidth)
+            }
+        }
     }
 
     // Left/Right/Up/Down walk folder pairs when a comparison list is loaded; Home/End jump
@@ -1251,7 +1441,9 @@ Rectangle {
                         slot: (control.compareMode === 0 && control.hasPair && control.singleViewShowSecondary) ? 3 : 2
                         width: control.compareMode === 1 && control.hasPair ? parent.width / 2 - 6 : parent.width
                         height: parent.height
-                        imageUrl: control.imageReview && control.imageReview.contentGeneration >= 0 ? control.imageReview.imageUrl(slot) : ""
+                        // While editing, the pane shows the working copy; the compared
+                        // originals (and every difference statistic) stay untouched.
+                        imageUrl: control.editModeActive && control.editSourceSlot === slot && control.imageEdit ? control.imageEdit.editedImageUrl : (control.imageReview && control.imageReview.contentGeneration >= 0 ? control.imageReview.imageUrl(slot) : "")
                         label: {
                             if (slot === 3)
                                 return control.hasSecondary ? qsTr("B · %1×%2 · %3").arg(control.imageReview.secondaryWidth).arg(control.imageReview.secondaryHeight).arg(control.sourceSummary(control.imageReview.secondaryBitDepth, control.imageReview.secondarySourceFormat, control.imageReview.secondaryHasAlpha, control.imageReview.secondaryDisplayConverted)) : "";
@@ -2110,6 +2302,25 @@ Rectangle {
             const urls = control.pairModel.pairUrlsAt(next);
             if (urls.hasLeft && urls.hasRight)
                 control.imageReview.prefetchPair(urls.leftUrl, urls.rightUrl);
+        }
+    }
+
+    // Editing always writes a new file. PNG is the default because it keeps transparency;
+    // a JPEG target needs an explicit background and this build reports it honestly when
+    // the JPEG encoder is unavailable.
+    FileDialog {
+        id: editSaveDialog
+        objectName: "imageEditSaveDialog"
+        title: qsTr("另存编辑副本")
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "png"
+        nameFilters: [qsTr("PNG 图片 (*.png)"), qsTr("JPEG 图片 (*.jpg *.jpeg)")]
+        onAccepted: {
+            if (!control.imageEdit)
+                return;
+            const path = String(selectedFile);
+            const jpeg = /\.jpe?g$/i.test(path);
+            control.imageEdit.saveCopy(selectedFile, jpeg, jpeg ? "#ffffff" : "transparent");
         }
     }
 }

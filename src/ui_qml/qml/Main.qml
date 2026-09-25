@@ -107,6 +107,9 @@ ApplicationWindow {
     // qmllint disable unqualified
 
     readonly property var stillImageController: typeof imageReview !== "undefined" ? imageReview : null
+    // Step-3 image editing service from the composition root; the typeof guard keeps
+    // lightweight QML-only harnesses valid (they simply see no edit tools).
+    readonly property var imageEditService: typeof imageEdit !== "undefined" ? imageEdit : null
     readonly property var folderPairModel: typeof imageFolderPairs !== "undefined" ? imageFolderPairs : null
     // V-07 pair-metrics controller from the composition root; the typeof guard keeps
     // lightweight QML-only tests (no metrics service) valid and warning-free.
@@ -2787,6 +2790,7 @@ ApplicationWindow {
         objectName: "imageWorkspaceRoot"
         visible: root.imageWorkspaceActive
         controller: root.stillImageController
+        imageEdit: root.imageEditService
         pairModel: root.folderPairModel
         sidebarVisible: root.imageFolderSidebarVisible
         anchors {

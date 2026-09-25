@@ -1192,6 +1192,21 @@ QImage ImageReviewController::imageForSlot(const int imageSlot) const {
     return displayImage(imageSlot);
 }
 
+QImage ImageReviewController::rawImageForSlot(const int imageSlot) const {
+    switch (imageSlot) {
+    case PrimarySlot:
+    case DisplayPrimarySlot:
+        return primary_;
+    case SecondarySlot:
+    case DisplaySecondarySlot:
+        return secondary_;
+    case DisplayDiffSlot:
+        return diff_;
+    default:
+        return {};
+    }
+}
+
 void ImageReviewController::setError(QString text) {
     errorText_ = std::move(text);
     emit stateChanged();
