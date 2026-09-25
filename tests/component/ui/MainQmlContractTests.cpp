@@ -1989,6 +1989,130 @@ TEST(MainQmlContractTests, SwitchingCandidateKeepsReferenceAnchoredPairAndObserv
     EXPECT_DOUBLE_EQ(root->property("wipePosition").toDouble(), parkedWipe);
 }
 
+// Step-2 difference entry: the 差异 button offers the two flavors the review named —
+// overlay highlight and pure diff — in one dropdown, and while Difference mode is active
+// a hold-to-peek button toggles the surface's differenceSuppressed state (raw first
+// source instead of the difference pass) without any mode or metric change.
+TEST(MainQmlContractTests, DifferenceButtonOffersFlavorsAndPeekTogglesSuppression) {
+    auto snapshot = std::make_shared<application::SessionSnapshot>();
+    snapshot->graphicsReady = true;
+    snapshot->sessionState = domain::SessionState::kReady;
+    snapshot->playbackState = domain::PlaybackState::kPaused;
+    snapshot->displayedFrame = domain::FrameId{0};
+    snapshot->canonicalFrameCount = 10U;
+    snapshot->sources = {
+        application::SessionSourceView{
+            .sourceId = 0U,
+            .role = domain::ComparisonRole::kReference,
+            .displayName = "A",
+        },
+        application::SessionSourceView{
+            .sourceId = 1U,
+            .role = domain::ComparisonRole::kPrediction,
+            .displayName = "B",
+        },
+    };
+    snapshot->presentedSources = {
+        application::PresentedSourceState{
+            .sourceId = 0U,
+            .sourceFrameId = domain::FrameId{0},
+            .matchKind = application::FrameMatchKind::ExactIndex,
+        },
+        application::PresentedSourceState{
+            .sourceId = 1U,
+            .sourceFrameId = domain::FrameId{0},
+            .matchKind = application::FrameMatchKind::ExactIndex,
+        },
+    };
+    std::vector<application::PlaybackCommand> submitted;
+    ReviewController controller{
+        ReviewController::Dependencies{
+            .submit =
+                [&submitted](application::PlaybackCommand command) {
+                    submitted.push_back(std::move(command));
+                    return application::PortSubmitResult::Accepted;
+                },
+            .snapshot = [snapshot] { return snapshot; },
+            .takeCompletedCommands = [] { return std::vector<application::CommandTerminal>{}; },
+        },
+    };
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    ReviewShellController shell{controller, preferences};
+    ReviewSessionFacade facade{controller, preferences, shell};
+
+    QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
+    QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
+    ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
+
+    std::unique_ptr<QObject> root{component.create()};
+    ASSERT_NE(root, nullptr) << componentErrors(component);
+    auto* const window = qobject_cast<QQuickWindow*>(root.get());
+    ASSERT_NE(window, nullptr);
+    window->resize(1440, 900);
+    window->show();
+    QCoreApplication::processEvents();
+
+    auto* const diffButton = root->findChild<QQuickItem*>(QStringLiteral("diffModeButton"));
+    ASSERT_NE(diffButton, nullptr);
+    EXPECT_TRUE(diffButton->isVisible());
+    auto* const highlightItem =
+        root->findChild<QQuickItem*>(QStringLiteral("diffHighlightMenuItem"));
+    auto* const pureItem = root->findChild<QQuickItem*>(QStringLiteral("diffPureMenuItem"));
+    ASSERT_NE(highlightItem, nullptr);
+    ASSERT_NE(pureItem, nullptr);
+    auto* const peekButton = root->findChild<QQuickItem*>(QStringLiteral("differencePeekButton"));
+    ASSERT_NE(peekButton, nullptr);
+    auto* const surfaceItem = root->findChild<QQuickItem*>(QStringLiteral("dualVideoSurface"));
+    ASSERT_NE(surfaceItem, nullptr);
+
+    // Side-by-side: the peek button is hidden; the diff button shows the plain label.
+    EXPECT_EQ(root->property("effectiveViewMode").toInt(), ComparisonSurface::SideBySide);
+    EXPECT_FALSE(peekButton->isVisible());
+    EXPECT_FALSE(surfaceItem->property("differenceSuppressed").toBool());
+
+    // Overlay highlight: enters Difference mode with the Highlight metric, and the
+    // button names the active flavor.
+    ASSERT_TRUE(QMetaObject::invokeMethod(highlightItem, "triggered"));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(static_cast<int>(preferences.viewMode()),
+              static_cast<int>(ReviewPreferencesController::ViewMode::Difference));
+    EXPECT_EQ(static_cast<int>(preferences.differenceMetric()),
+              static_cast<int>(ComparisonSurface::Highlight));
+    EXPECT_EQ(root->property("effectiveViewMode").toInt(), ComparisonSurface::Difference);
+    EXPECT_TRUE(diffButton->property("text").toString().contains(QStringLiteral("叠加高亮")));
+    EXPECT_TRUE(peekButton->isVisible());
+
+    // Hold-to-peek: pressed suppresses the difference pass on the surface; released
+    // restores it — no mode or metric change in between.
+    ASSERT_TRUE(QMetaObject::invokeMethod(peekButton, "pressed"));
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(surfaceItem->property("differenceSuppressed").toBool());
+    ASSERT_TRUE(QMetaObject::invokeMethod(peekButton, "released"));
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(surfaceItem->property("differenceSuppressed").toBool());
+    EXPECT_EQ(static_cast<int>(preferences.differenceMetric()),
+              static_cast<int>(ComparisonSurface::Highlight));
+    EXPECT_EQ(root->property("effectiveViewMode").toInt(), ComparisonSurface::Difference);
+
+    // Pure diff: same mode, RgbAbsolute metric, flavor label follows.
+    ASSERT_TRUE(QMetaObject::invokeMethod(pureItem, "triggered"));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(static_cast<int>(preferences.differenceMetric()),
+              static_cast<int>(ComparisonSurface::RgbAbsolute));
+    EXPECT_TRUE(diffButton->property("text").toString().contains(QStringLiteral("纯差异图")));
+
+    // Leaving Difference mode hides the peek button again.
+    preferences.setViewMode(ReviewPreferencesController::ViewMode::SideBySide);
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(peekButton->isVisible());
+}
+
 // Phase 0 baseline: the Range Loop must never present a frame outside [In,Out]. Today the loop is
 // driven by Main.qml::onCurrentFrameChanged reacting to displayedFrame, with no kernel Range clamp,
 // so after a >2000ms stall catch-up can present Out+Δ before QML seeks back. This QML-level test

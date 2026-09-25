@@ -55,6 +55,7 @@ struct PresentationOptions final {
     bool thresholdEnabled = false;
     float threshold = 0.0F;
     platform::SurfaceThresholdPolicy thresholdPolicy = platform::SurfaceThresholdPolicy::AnyChannel;
+    bool differenceSuppressed = false;
     platform::SurfaceViewTransform viewTransform;
     bool roiEnabled = false;
     platform::SurfaceNormalizedRect roi;
@@ -103,6 +104,7 @@ nativeDifferenceFilter(const ComparisonSurface::DifferenceFilter value) noexcept
         .thresholdEnabled = surface.thresholdEnabled(),
         .threshold = static_cast<float>(surface.threshold()),
         .thresholdPolicy = nativeThresholdPolicy(surface.thresholdPolicy()),
+        .differenceSuppressed = surface.differenceSuppressed(),
         .viewTransform =
             platform::SurfaceViewTransform{
                 .centerX = static_cast<float>(surface.viewCenterX()),
@@ -286,6 +288,7 @@ public:
             .thresholdEnabled = presentationOptions_.thresholdEnabled,
             .threshold = presentationOptions_.threshold,
             .thresholdPolicy = presentationOptions_.thresholdPolicy,
+            .differenceSuppressed = presentationOptions_.differenceSuppressed,
             .viewTransform = presentationOptions_.viewTransform,
             .roiEnabled = presentationOptions_.roiEnabled,
             .roi = presentationOptions_.roi,
@@ -841,6 +844,19 @@ void ComparisonSurface::setReferenceSlot(const int value) {
     referenceSlot_ = value;
     emit referenceSlotChanged();
     emit presentationGeometryChanged();
+    update();
+}
+
+bool ComparisonSurface::differenceSuppressed() const noexcept {
+    return differenceSuppressed_;
+}
+
+void ComparisonSurface::setDifferenceSuppressed(const bool value) {
+    if (differenceSuppressed_ == value) {
+        return;
+    }
+    differenceSuppressed_ = value;
+    emit differenceSuppressedChanged();
     update();
 }
 

@@ -113,6 +113,10 @@ struct SurfaceRenderState final {
     bool thresholdEnabled = false;
     float threshold = 0.0F;
     SurfaceThresholdPolicy thresholdPolicy = SurfaceThresholdPolicy::AnyChannel;
+    // Hold-to-peek ("按住看原图"): while true the difference pass is replaced by the raw
+    // first source of the active pair, aspect-fit into the same rect. Transient UI state;
+    // never persisted.
+    bool differenceSuppressed = false;
     SurfaceViewTransform viewTransform;
     bool roiEnabled = false;
     SurfaceNormalizedRect roi;

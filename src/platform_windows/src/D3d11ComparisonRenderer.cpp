@@ -1292,6 +1292,13 @@ private:
                 }
                 return true;
             }
+            // Hold-to-peek: while suppressed the difference pass is replaced by the raw
+            // first source of the pair — same aspect fit and letterboxing the difference
+            // canvas uses — so the user can check the unmodified pixels under the overlay
+            // without leaving the mode or losing the viewport.
+            if (state.differenceSuppressed) {
+                return appendRegionDraw(bounds, *edgeFirst, *edgeFirstBacking);
+            }
             const auto [contentWidth, contentHeight] =
                 transformedExtent(edgeFirst->geometry(), state.roiEnabled, state.roi);
             const SurfaceRect destination = aspectFitRectFloat(bounds, contentWidth, contentHeight);

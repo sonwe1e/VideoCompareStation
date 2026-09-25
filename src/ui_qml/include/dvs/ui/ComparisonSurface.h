@@ -50,6 +50,10 @@ class ComparisonSurface : public QQuickItem {
     Q_PROPERTY(qreal threshold READ threshold WRITE setThreshold NOTIFY thresholdChanged)
     Q_PROPERTY(ThresholdPolicy thresholdPolicy READ thresholdPolicy WRITE setThresholdPolicy NOTIFY
                    thresholdChanged)
+    // Hold-to-peek: while true the difference pass is replaced by the raw first source of
+    // the active pair. Transient UI state (button hold); never persisted.
+    Q_PROPERTY(bool differenceSuppressed READ differenceSuppressed WRITE setDifferenceSuppressed
+                   NOTIFY differenceSuppressedChanged)
     Q_PROPERTY(qreal viewCenterX READ viewCenterX NOTIFY viewportChanged)
     Q_PROPERTY(qreal viewCenterY READ viewCenterY NOTIFY viewportChanged)
     Q_PROPERTY(qreal viewScale READ viewScale NOTIFY viewportChanged)
@@ -169,6 +173,8 @@ public:
     [[nodiscard]] qreal roiBottom() const noexcept;
     [[nodiscard]] int referenceSlot() const noexcept;
     void setReferenceSlot(int value);
+    [[nodiscard]] bool differenceSuppressed() const noexcept;
+    void setDifferenceSuppressed(bool value);
     [[nodiscard]] qulonglong droppedFrames() const noexcept;
 
     Q_INVOKABLE void zoomAt(qreal normalizedX, qreal normalizedY, qreal factor);
@@ -211,6 +217,7 @@ signals:
     void thresholdChanged();
     void viewportChanged();
     void referenceSlotChanged();
+    void differenceSuppressedChanged();
     void droppedFramesChanged();
 
 protected:
@@ -238,6 +245,7 @@ private:
     qreal viewCenterX_ = 0.5;
     qreal viewCenterY_ = 0.5;
     qreal viewScale_ = 1.0;
+    bool differenceSuppressed_ = false;
     bool roiEnabled_ = false;
     qreal roiLeft_ = 0.0;
     qreal roiTop_ = 0.0;
