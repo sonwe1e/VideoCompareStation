@@ -3321,14 +3321,25 @@ TEST(MainQmlContractTests, ImageWorkspaceAlphaAndBackgroundSelectionContract) {
         harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
     ASSERT_NE(imageWorkspace, nullptr);
 
-    // Initial state: viewMode = 0 (RgbaView), backgroundMode = 0 (Dark).
+    // Initial state: viewMode = 0 (RgbaView), backgroundMode = 1 (neutral checkerboard —
+    // the default, so the content area never tints color judgment of translucent pixels).
     EXPECT_EQ(harness.imageReview.viewMode(), 0);
-    EXPECT_EQ(imageWorkspace->property("backgroundMode").toInt(), 0);
+    EXPECT_EQ(imageWorkspace->property("backgroundMode").toInt(), 1);
 
     auto* const alphaBadge =
         harness.root->findChild<QQuickItem*>(QStringLiteral("imageAlphaObservationBadge"));
     ASSERT_NE(alphaBadge, nullptr);
     EXPECT_FALSE(alphaBadge->isVisible());
+
+    // Evidence capture for the visible default-background change (same env-gated pattern
+    // as the high-depth alpha and fade-mode shots): the default state renders the neutral
+    // checkerboard behind the translucent pair, with no observation badge.
+    const auto evidenceDirectory = qEnvironmentVariable("DVS_REVIEW_EVIDENCE_DIR");
+    if (!evidenceDirectory.isEmpty()) {
+        ASSERT_TRUE(QDir().mkpath(evidenceDirectory));
+        ASSERT_TRUE(harness.window->grabWindow().save(
+            QDir(evidenceDirectory).filePath(QStringLiteral("image-default-checkerboard.png"))));
+    }
 
     // Give focus to imageWorkspace so keyboard events reach it.
     imageWorkspace->forceActiveFocus();
@@ -3358,14 +3369,15 @@ TEST(MainQmlContractTests, ImageWorkspaceAlphaAndBackgroundSelectionContract) {
     EXPECT_EQ(harness.imageReview.viewMode(), 0);
     EXPECT_FALSE(alphaBadge->isVisible());
 
-    // Background changes through the explicit menu selection.
+    // Background changes through the explicit menu selection. The checkerboard IS the
+    // default now, so selecting it explicitly keeps the observation badge hidden.
     auto* const checkerItem =
         harness.root->findChild<QQuickItem*>(QStringLiteral("imageBgChecker"));
     ASSERT_NE(checkerItem, nullptr);
     ASSERT_TRUE(QMetaObject::invokeMethod(checkerItem, "triggered"));
     harness.settle();
     EXPECT_EQ(imageWorkspace->property("backgroundMode").toInt(), 1);
-    EXPECT_TRUE(alphaBadge->isVisible());
+    EXPECT_FALSE(alphaBadge->isVisible());
 
     // The old cycling shortcut no longer changes the selected background.
     sendKey(*harness.window, Qt::Key_B);
@@ -3384,6 +3396,11 @@ TEST(MainQmlContractTests, ImageWorkspaceAlphaAndBackgroundSelectionContract) {
     ASSERT_TRUE(QMetaObject::invokeMethod(darkItem, "triggered"));
     harness.settle();
     EXPECT_EQ(imageWorkspace->property("backgroundMode").toInt(), 0);
+    // Dark is no longer the default, so it counts as an active observation background.
+    EXPECT_TRUE(alphaBadge->isVisible());
+    // Returning to the default checkerboard hides the badge again.
+    imageWorkspace->setProperty("backgroundMode", 1);
+    harness.settle();
     EXPECT_FALSE(alphaBadge->isVisible());
 
     // View-mode menu item toggles: triggering "Alpha Gray" sets viewMode 1, triggering
@@ -3401,8 +3418,8 @@ TEST(MainQmlContractTests, ImageWorkspaceAlphaAndBackgroundSelectionContract) {
     EXPECT_EQ(harness.imageReview.viewMode(), 0);
     EXPECT_FALSE(alphaBadge->isVisible());
 
-    // Reset background to 0.
-    imageWorkspace->setProperty("backgroundMode", 0);
+    // Reset background to the default (neutral checkerboard).
+    imageWorkspace->setProperty("backgroundMode", 1);
     harness.settle();
     EXPECT_FALSE(alphaBadge->isVisible());
 
