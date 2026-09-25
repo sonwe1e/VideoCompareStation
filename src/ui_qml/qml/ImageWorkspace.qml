@@ -778,7 +778,7 @@ Rectangle {
                 objectName: "imageModeFade"
                 text: qsTr("淡化")
                 modeValue: 7
-                visible: false
+                visible: control.hasPair
             }
             ReviewActionButton {
                 objectName: "imageToggleSourceButton"

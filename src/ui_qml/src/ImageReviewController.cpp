@@ -232,7 +232,9 @@ bool ImageReviewController::diffPending() const noexcept {
 }
 
 void ImageReviewController::setCompareMode(const int mode) {
-    if (mode < PrimaryOnly || mode > AlphaDifference) {
+    // Fade (7) is a presentation-only comparison mode; it must pass the range guard so the
+    // QML entry point can actually engage it instead of silently no-oping.
+    if (mode < PrimaryOnly || mode > Fade) {
         return;
     }
     if (compareMode_ == mode) {
@@ -1655,22 +1657,32 @@ QImage ImageReviewController::channelView(const QImage& source,
     if (!cache.isNull() && cache.size() == source.size()) {
         return cache;
     }
+    // The decode pipeline stores every buffer as Format_RGBA8888 (byte order R,G,B,A),
+    // but QRgb is the 0xAARRGGBB integer: reinterpreting those scan lines as QRgb swaps
+    // red and blue on little-endian targets (alpha happens to stay aligned, which is why
+    // the alpha-gray view looked right while "ignore alpha" showed swapped colors).
+    // ImagePairLoader's analysis path already reads explicit RGBA8888 bytes for the same
+    // reason; normalize the format once (a shallow copy for RGBA8888 buffers) so injected
+    // ARGB32 images take the same correct path as production buffers.
+    const QImage canonical = source.format() == QImage::Format_RGBA8888
+                                 ? source
+                                 : source.convertToFormat(QImage::Format_RGBA8888);
     QImage view(source.size(), QImage::Format_ARGB32);
-    if (view.isNull()) {
+    if (canonical.isNull() || view.isNull()) {
         return source;
     }
-    for (int y = 0; y < source.height(); ++y) {
-        const auto* sourceLine = reinterpret_cast<const QRgb*>(source.constScanLine(y));
+    for (int y = 0; y < canonical.height(); ++y) {
+        const uchar* sourceLine = canonical.constScanLine(y);
         auto* viewLine = reinterpret_cast<QRgb*>(view.scanLine(y));
-        for (int x = 0; x < source.width(); ++x) {
-            const QRgb pixel = sourceLine[x];
+        for (int x = 0; x < canonical.width(); ++x) {
+            const uchar* const pixel = sourceLine + static_cast<std::size_t>(x) * 4U;
             if (mode == AlphaGrayView) {
                 // Mask shape and gradient: brightness equals alpha, fully opaque.
-                const int alpha = qAlpha(pixel);
+                const int alpha = pixel[3];
                 viewLine[x] = qRgb(alpha, alpha, alpha);
             } else { // RgbOpaqueView
                 // Colors hidden in transparent regions: RGB unchanged, alpha forced opaque.
-                viewLine[x] = qRgb(qRed(pixel), qGreen(pixel), qBlue(pixel));
+                viewLine[x] = qRgb(pixel[0], pixel[1], pixel[2]);
             }
         }
     }
