@@ -18,6 +18,9 @@ Item {
     required property int currentFrame
     required property int inFrame
     required property int outFrame
+    // Step-2 "固定 GT 切候选": available with three sources in a pair mode; the actual
+    // availability (workspace + input focus) still flows through shortcutsEnabled.
+    required property bool candidateSwitchEnabled
     property alias actions: reviewActions
 
     signal wipePositionRequested(real position)
@@ -29,6 +32,7 @@ Item {
     signal inPointRequested
     signal outPointRequested
     signal selectedRangePlaybackRequested
+    signal candidateSwitchRequested
 
     visible: false
 
@@ -199,6 +203,14 @@ Item {
         context: Qt.ApplicationShortcut
         enabled: control.shortcutsEnabled && control.currentFrame >= 0
         onActivated: control.outPointRequested()
+    }
+    // Step-2 "固定 GT 切候选": flip the candidate side of the active pair against the
+    // fixed reference without moving the observation position (C for Candidate).
+    Shortcut {
+        sequence: "C"
+        context: Qt.ApplicationShortcut
+        enabled: control.shortcutsEnabled && control.candidateSwitchEnabled
+        onActivated: control.candidateSwitchRequested()
     }
     Shortcut {
         sequence: "\\"

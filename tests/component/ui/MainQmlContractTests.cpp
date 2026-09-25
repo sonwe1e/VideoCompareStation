@@ -1784,6 +1784,211 @@ TEST(MainQmlContractTests, NestedPopupMouseTraversal) {
     processLayout();
 }
 
+// Step-2 acceptance "找到一次缺陷后，切对象不用重新定位": with three sources and a fixed
+// reference (GT), switching the candidate must flip the active pair between the two
+// reference-anchored edges while the frame, zoom/pan and the wipe split stay untouched.
+// Entering from a prediction-vs-prediction pair keeps the displayed primary slot and brings
+// GT in; the C shortcut drives the same switch as the toolbar button.
+TEST(MainQmlContractTests, SwitchingCandidateKeepsReferenceAnchoredPairAndObservation) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const std::array<std::filesystem::path, 3> sourcePaths = {
+        std::filesystem::path(tempDir.path().toStdWString()) / "predA.mp4",
+        std::filesystem::path(tempDir.path().toStdWString()) / "groundTruth.mp4",
+        std::filesystem::path(tempDir.path().toStdWString()) / "predC.mp4",
+    };
+    for (const auto& path : sourcePaths) {
+        QFile file{QString::fromStdWString(path.wstring())};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(QByteArray("switch-bytes-") + path.filename().string().c_str());
+    }
+
+    const auto rateResult = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rateResult);
+    const domain::RationalRate rate = rateResult.value();
+
+    std::vector<domain::ComparisonSource> comparisonSources;
+    for (std::size_t index = 0U; index < sourcePaths.size(); ++index) {
+        const QFileInfo info{QString::fromStdWString(sourcePaths[index].wstring())};
+        comparisonSources.push_back(domain::ComparisonSource{
+            .id = static_cast<domain::SourceId>(index),
+            // Slot 1 is the reference (GT); slots 0 and 2 are the two predictions.
+            .role = index == 1U ? domain::ComparisonRole::kReference
+                                : domain::ComparisonRole::kPrediction,
+            .descriptor =
+                domain::MediaDescriptor{
+                    .normalizedPath = sourcePaths[index],
+                    .extent = domain::MediaExtent{.width = 1'920U, .height = 1'080U},
+                    .frameRate = rate,
+                    .frameCount =
+                        domain::FrameCountInfo{
+                            .value = 12,
+                            .origin = domain::FrameCountOrigin::kReported,
+                        },
+                    .duration = domain::MediaTime{400'000},
+                    .codecId = "h264",
+                    .pixelFormatId = "nv12",
+                    .bitDepth = 8U,
+                    .decodeCapabilities =
+                        domain::DecodeCapabilities{
+                            .softwareDecode = true,
+                            .d3d11VaDecode = true,
+                        },
+                    .timingConfidence = domain::TimingConfidence::kVerifiedCfr,
+                    .sourceIdentity =
+                        domain::SourceFileIdentity{
+                            .byteSize = static_cast<std::uint64_t>(info.size()),
+                            .modifiedUtcMilliseconds = info.lastModified().toMSecsSinceEpoch(),
+                            .fingerprintSha256 = std::string(64U, '0'),
+                        },
+                },
+            .displayName = std::string{"Source "} + static_cast<char>('A' + index),
+        });
+    }
+    auto validated = domain::ComparisonValidator::validate(std::move(comparisonSources));
+    ASSERT_TRUE(validated);
+
+    auto snapshot = std::make_shared<application::SessionSnapshot>();
+    snapshot->graphicsReady = true;
+    snapshot->sessionState = domain::SessionState::kReady;
+    snapshot->playbackState = domain::PlaybackState::kPaused;
+    snapshot->displayedFrame = domain::FrameId{0};
+    snapshot->validatedComparison =
+        std::make_shared<const domain::ValidatedComparisonSet>(std::move(validated).value().set);
+    snapshot->canonicalFrameCount =
+        static_cast<std::uint64_t>(snapshot->validatedComparison->canonicalFrameCount());
+    snapshot->canonicalTimeline = rate;
+    for (const auto& source : snapshot->validatedComparison->sources()) {
+        snapshot->sources.push_back(application::SessionSourceView{
+            .sourceId = source.id,
+            .role = source.role,
+            .displayName = source.displayName,
+        });
+        snapshot->presentedSources.push_back(application::PresentedSourceState{
+            .sourceId = source.id,
+            .sourceFrameId = domain::FrameId{0},
+            .matchKind = application::FrameMatchKind::ExactIndex,
+        });
+    }
+    // Start on the GT-anchored pair {predA(0), GT(1)} — renderer edge ordinal 0.
+    snapshot->activeComparisonPair = domain::ComparisonPair{
+        .first = domain::SourceId{0U},
+        .second = domain::SourceId{1U},
+    };
+
+    std::vector<application::PlaybackCommand> submitted;
+    ReviewController controller{
+        ReviewController::Dependencies{
+            // The fake session applies the pair selection to the snapshot, exactly like
+            // the application layer would, so the projection reflects each switch.
+            .submit =
+                [&submitted, &snapshot](application::PlaybackCommand command) {
+                    if (const auto* const pairCommand =
+                            std::get_if<application::SetActiveComparisonPairCommand>(&command);
+                        pairCommand != nullptr && pairCommand->pair.has_value()) {
+                        snapshot->activeComparisonPair = *pairCommand->pair;
+                    }
+                    submitted.push_back(std::move(command));
+                    return application::PortSubmitResult::Accepted;
+                },
+            .snapshot = [snapshot] { return snapshot; },
+            .takeCompletedCommands = [] { return std::vector<application::CommandTerminal>{}; },
+        },
+    };
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    preferences.setViewMode(ReviewPreferencesController::ViewMode::Wipe);
+    ReviewShellController shell{controller, preferences};
+    ReviewSessionFacade facade{controller, preferences, shell};
+
+    QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
+    QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
+    ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
+
+    std::unique_ptr<QObject> root{component.create()};
+    ASSERT_NE(root, nullptr) << componentErrors(component);
+    auto* const window = qobject_cast<QQuickWindow*>(root.get());
+    ASSERT_NE(window, nullptr);
+    window->resize(1440, 900);
+    window->show();
+    QCoreApplication::processEvents();
+
+    ASSERT_EQ(root->property("sourceCount").toInt(), 3);
+    EXPECT_EQ(root->property("referenceSourceIndex").toInt(), 1);
+    EXPECT_EQ(root->property("differenceEdge").toInt(), ComparisonSurface::Edge0And1);
+
+    auto* const switchButton =
+        root->findChild<QQuickItem*>(QStringLiteral("switchCandidateButton"));
+    ASSERT_NE(switchButton, nullptr);
+    EXPECT_TRUE(switchButton->isVisible());
+    auto* const surfaceItem = root->findChild<QQuickItem*>(QStringLiteral("dualVideoSurface"));
+    ASSERT_NE(surfaceItem, nullptr);
+    auto* const surface = qobject_cast<ComparisonSurface*>(surfaceItem);
+    ASSERT_NE(surface, nullptr);
+    auto* const viewport = root->findChild<QQuickItem*>(QStringLiteral("mediaViewportFocusTarget"));
+    ASSERT_NE(viewport, nullptr);
+
+    // Locate a defect: zoom in and park the wipe split somewhere specific.
+    surface->zoomAt(0.5, 0.5, 2.0);
+    const qreal zoomedScale = surface->viewScale();
+    EXPECT_GT(zoomedScale, 1.0);
+    root->setProperty("wipePosition", 0.3);
+    QCoreApplication::processEvents();
+    const qreal parkedWipe = root->property("wipePosition").toDouble();
+    EXPECT_DOUBLE_EQ(parkedWipe, 0.3);
+
+    // Switch the candidate: the pair flips to the other GT-anchored edge {GT(1), predC(2)}
+    // (edge ordinal 2) while the zoom and the split stay exactly where they were.
+    ASSERT_TRUE(QMetaObject::invokeMethod(switchButton, "clicked"));
+    controller.refreshProjection();
+    QCoreApplication::processEvents();
+    EXPECT_EQ(root->property("differenceEdge").toInt(), ComparisonSurface::Edge1And2);
+    EXPECT_DOUBLE_EQ(surface->viewScale(), zoomedScale);
+    EXPECT_DOUBLE_EQ(root->property("wipePosition").toDouble(), parkedWipe);
+    ASSERT_FALSE(submitted.empty());
+    EXPECT_NE(std::get_if<application::SetActiveComparisonPairCommand>(&submitted.back()), nullptr);
+
+    // Switch back: the pair returns to {predA(0), GT(1)} with the observation intact.
+    ASSERT_TRUE(QMetaObject::invokeMethod(switchButton, "clicked"));
+    controller.refreshProjection();
+    QCoreApplication::processEvents();
+    EXPECT_EQ(root->property("differenceEdge").toInt(), ComparisonSurface::Edge0And1);
+    EXPECT_DOUBLE_EQ(surface->viewScale(), zoomedScale);
+    EXPECT_DOUBLE_EQ(root->property("wipePosition").toDouble(), parkedWipe);
+
+    // Entering from a prediction-vs-prediction pair {predA(0), predC(2)}: the switch keeps
+    // the currently displayed primary slot (predA) and brings GT in on the anchored edge.
+    snapshot->activeComparisonPair = domain::ComparisonPair{
+        .first = domain::SourceId{0U},
+        .second = domain::SourceId{2U},
+    };
+    controller.refreshProjection();
+    QCoreApplication::processEvents();
+    EXPECT_EQ(root->property("differenceEdge").toInt(), ComparisonSurface::Edge0And2);
+    ASSERT_TRUE(QMetaObject::invokeMethod(switchButton, "clicked"));
+    controller.refreshProjection();
+    QCoreApplication::processEvents();
+    EXPECT_EQ(root->property("differenceEdge").toInt(), ComparisonSurface::Edge0And1);
+    EXPECT_DOUBLE_EQ(surface->viewScale(), zoomedScale);
+
+    // The keyboard path (C) drives the same switch with the observation still intact.
+    viewport->forceActiveFocus();
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(root->property("globalMediaShortcutsEnabled").toBool());
+    sendKey(*window, Qt::Key_C);
+    controller.refreshProjection();
+    QCoreApplication::processEvents();
+    EXPECT_EQ(root->property("differenceEdge").toInt(), ComparisonSurface::Edge1And2);
+    EXPECT_DOUBLE_EQ(surface->viewScale(), zoomedScale);
+    EXPECT_DOUBLE_EQ(root->property("wipePosition").toDouble(), parkedWipe);
+}
+
 // Phase 0 baseline: the Range Loop must never present a frame outside [In,Out]. Today the loop is
 // driven by Main.qml::onCurrentFrameChanged reacting to displayedFrame, with no kernel Range clamp,
 // so after a >2000ms stall catch-up can present Out+Δ before QML seeks back. This QML-level test

@@ -3,6 +3,29 @@
 更新：2026-09-25。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
 
+## 2026-09-25 三源候选快捷切换（P1 · 实施第二步「做好比较」，基线 `220cf67` + 本轮工作区）
+
+对应 2026-09-25 审查 §五与实施顺序第二步：验收标准「找到一次缺陷后，切对象不用重新定位」。
+三联（ThreeUp）、参考聚焦（ReferenceFocus）、联动缩放／平移、ROI、高亮与热力图此前已在
+基线（见「已有能力」），本轮补齐候选切换的操作面：此前换候选要打开「对比对」下拉两步选择，
+且没有快捷键。
+
+- **切候选（固定 GT）**：`Main.qml::switchCandidateEdge()` 在三源会话把当前配对切换到另一条
+  参考（GT）锚定的边——只提交新的 `SetActiveComparisonPairCommand` 配对选择，当前帧、
+  缩放／平移与分割线位置不动（这些状态本就不随 differenceEdge 变化，本轮用契约测试把该
+  语义钉死）。从「双预测互比」（配对不含参考）进入切换时，保留当前主画面槽位并把 GT 带入，
+  画面不跳。
+- **入口**：`CompareModeBar` 在分割线／差异／分析网格模式（配对相关）且三源时显示「切候选」
+  按钮（`switchCandidateButton`）；`ReviewShortcuts` 新增 `C` 快捷键（沿用
+  `globalMediaShortcutsEnabled` 的焦点／工作区门控）；两个视频预设的帮助浮层均已列出。
+- **测试**：新增 `SwitchingCandidateKeepsReferenceAnchoredPairAndObservation`（三源假会话、
+  参考=槽位 1）：按钮与快捷键两条路径都断言配对在 Edge0And1 ↔ Edge1And2 之间翻转、
+  `viewScale`／`wipePosition` 逐次保持不变、从 Edge0And2 进入时落到 Edge0And1，并核对提交的
+  是 SetActiveComparisonPairCommand。定向 ui.MainQmlContractTests／player_osc／
+  ImageWorkspaceManual、format-check、lint 见本轮日志。
+- **第二步余项（下一轮）**：差异按钮三选项（原图叠加高亮／纯差异图＋按住临时隐藏）、
+  带标注的对比图导出、固定 GT 文件夹＋切换预测文件夹的对比实验流程。
+
 ## 2026-09-25 图片内容区默认中性灰棋盘格（P1，基线 `04f26c3` + 本轮工作区）
 
 对应 2026-09-25 审查 §二.2 与实施顺序第一步：为「正常 RGBA 偏蓝」排查先落地地面工作——
@@ -424,7 +447,8 @@
 
 - **已有**：视频三联、参考聚焦、分析网格和任意两源比较；图片仍是 primary/secondary 与双文件夹模型。
 - **状态（2026-09-22）**：用户拍板“图片不做 3 图”，本条目关闭。图片对比维持双图模型；
-  视频侧三源模型（ThreeUp/ReferenceFocus/DifferenceEdge）独立保留。
+  视频侧三源模型（ThreeUp/ReferenceFocus/DifferenceEdge）独立保留（2026-09-25 增加「切候选」
+  按钮与 `C` 快捷键，固定参考切换候选且保留观察位置，见顶部记录）。
 
 ### C-02 插帧审查与切换模式
 

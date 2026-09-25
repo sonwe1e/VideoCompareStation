@@ -23,6 +23,9 @@ Rectangle {
 
     signal modeRequested(int mode)
     signal edgeRequested(int preferenceValue)
+    // Step-2 "固定 GT 切候选": one action flips the candidate side against the fixed
+    // reference; Main keeps the frame, zoom/pan and wipe split untouched.
+    signal switchCandidateRequested
     signal inspectorRequested
 
     // qmllint disable import unqualified unresolved-type
@@ -82,6 +85,20 @@ Rectangle {
                 if (index >= 0 && index < control.differenceEdges.length)
                     control.edgeRequested(Number(control.differenceEdges[index].preferenceValue));
             }
+        }
+
+        VcsToolButton {
+            id: switchCandidateButton
+
+            objectName: "switchCandidateButton"
+            text: qsTr("切候选")
+            visible: control.sourceCount === 3 && control.pairRelevant
+            enabled: !control.busy
+            implicitWidth: 78
+            implicitHeight: 30
+            labelPixelSize: 12
+            Accessible.name: qsTr("固定参考切换候选")
+            onClicked: control.switchCandidateRequested()
         }
 
         VcsToolButton {
