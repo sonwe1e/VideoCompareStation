@@ -2532,6 +2532,198 @@ TEST(MainQmlContractTests, ImageEditBrushAndMosaicToolsEditTheWorkingCopy) {
     ASSERT_TRUE(QMetaObject::invokeMethod(startButton, "clicked"));
 }
 
+// Step-3 third increment: fill/clear are one-shot rect edits, and the annotation tools build
+// a flat list that renders into the working copy — selectable, movable and deletable, all on
+// the same bounded history, with the committed original untouched throughout.
+TEST(MainQmlContractTests, ImageEditAnnotationAndFillToolsEditTheWorkingCopy) {
+    WorkspaceHarness harness;
+    harness.withImageEdit = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    QImage primary(96, 64, QImage::Format_ARGB32);
+    primary.fill(QColor(10, 20, 30));
+    QImage secondary(32, 32, QImage::Format_ARGB32);
+    secondary.fill(QColor(40, 40, 40));
+    ASSERT_TRUE(harness.imageReview.openPairImages(std::move(primary),
+                                                   QStringLiteral("a.png"),
+                                                   std::move(secondary),
+                                                   QStringLiteral("b.png")));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    harness.settle();
+
+    auto* const workspace =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
+    auto* const viewport = harness.root->findChild<QQuickItem*>(QStringLiteral("primaryViewport"));
+    auto* const preview = harness.root->findChild<QQuickItem*>(QStringLiteral("imageViewport-2"));
+    auto* const startButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditStartButton"));
+    auto* const rectTool =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditToolRectButton"));
+    auto* const arrowTool =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditToolArrowButton"));
+    auto* const textTool =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditToolTextButton"));
+    auto* const selectTool =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditToolSelectButton"));
+    auto* const fillTool =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditToolFillButton"));
+    auto* const clearTool =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditToolClearButton"));
+    auto* const deleteButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditDeleteAnnotationButton"));
+    auto* const clearAllButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditClearAnnotationsButton"));
+    auto* const undoButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditUndoButton"));
+    ASSERT_NE(workspace, nullptr);
+    ASSERT_NE(viewport, nullptr);
+    ASSERT_NE(preview, nullptr);
+    ASSERT_NE(startButton, nullptr);
+    ASSERT_NE(rectTool, nullptr);
+    ASSERT_NE(arrowTool, nullptr);
+    ASSERT_NE(textTool, nullptr);
+    ASSERT_NE(selectTool, nullptr);
+    ASSERT_NE(fillTool, nullptr);
+    ASSERT_NE(clearTool, nullptr);
+    ASSERT_NE(deleteButton, nullptr);
+    ASSERT_NE(clearAllButton, nullptr);
+    ASSERT_NE(undoButton, nullptr);
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(startButton, "clicked"));
+    harness.settle();
+
+    const qreal scale =
+        preview->width() / static_cast<qreal>(preview->property("sourceSize").toSize().width());
+    ASSERT_GT(scale, 0.0);
+    const QVariant viewportArgument = QVariant::fromValue(static_cast<QObject*>(viewport));
+    const auto toViewportX = [&](const qreal imageX) {
+        return QVariant{preview->x() + (imageX * scale)};
+    };
+    const auto toViewportY = [&](const qreal imageY) {
+        return QVariant{preview->y() + (imageY * scale)};
+    };
+    const auto toViewportPoint = [&](const qreal imageX, const qreal imageY) {
+        return QPointF{preview->x() + (imageX * scale), preview->y() + (imageY * scale)};
+    };
+    QVariant applied;
+    const auto dragRect = [&](const qreal x0, const qreal y0, const qreal x1, const qreal y1) {
+        viewport->setProperty("cropStart", toViewportPoint(x0, y0));
+        viewport->setProperty("cropCurrent", toViewportPoint(x1, y1));
+        return QMetaObject::invokeMethod(
+            workspace, "updateCropSelection", Q_ARG(QVariant, viewportArgument));
+    };
+    const auto applyRect = [&]() {
+        return QMetaObject::invokeMethod(
+            workspace, "applyRectTool", Q_RETURN_ARG(QVariant, applied));
+    };
+
+    // Rectangle annotation: the tool commits on release, so the list grows immediately.
+    ASSERT_TRUE(QMetaObject::invokeMethod(rectTool, "clicked"));
+    harness.settle();
+    EXPECT_EQ(workspace->property("editTool").toString(), QStringLiteral("rect"));
+    ASSERT_TRUE(dragRect(10, 10, 40, 30));
+    ASSERT_TRUE(applyRect());
+    EXPECT_TRUE(applied.toBool());
+    harness.settle();
+    EXPECT_EQ(harness.imageEdit.annotationCount(), 1);
+    EXPECT_TRUE(workspace->property("cropSelection").toMap().isEmpty());
+    EXPECT_GT(harness.imageEdit.editedImage().pixelColor(20, 10).red(), 180);
+
+    // Arrow annotation on top of it.
+    ASSERT_TRUE(QMetaObject::invokeMethod(arrowTool, "clicked"));
+    ASSERT_TRUE(dragRect(50, 40, 80, 40));
+    ASSERT_TRUE(applyRect());
+    harness.settle();
+    EXPECT_EQ(harness.imageEdit.annotationCount(), 2);
+
+    // Text annotation: typed content placed by a click.
+    ASSERT_TRUE(QMetaObject::invokeMethod(textTool, "clicked"));
+    workspace->setProperty("annotationText", QStringLiteral("AB"));
+    workspace->setProperty("annotationTextSize", 20);
+    ASSERT_TRUE(QMetaObject::invokeMethod(workspace,
+                                          "placeTextAt",
+                                          Q_ARG(QVariant, viewportArgument),
+                                          Q_ARG(QVariant, toViewportX(8)),
+                                          Q_ARG(QVariant, toViewportY(58))));
+    harness.settle();
+    EXPECT_EQ(harness.imageEdit.annotationCount(), 3);
+
+    // Select tool: a click on empty space clears the selection, then dragging the rectangle
+    // moves it — one history step for the whole gesture.
+    ASSERT_TRUE(QMetaObject::invokeMethod(selectTool, "clicked"));
+    harness.settle();
+    EXPECT_TRUE(deleteButton->isVisible());
+    ASSERT_TRUE(QMetaObject::invokeMethod(workspace,
+                                          "beginAnnotationDrag",
+                                          Q_ARG(QVariant, viewportArgument),
+                                          Q_ARG(QVariant, toViewportX(90)),
+                                          Q_ARG(QVariant, toViewportY(60))));
+    EXPECT_EQ(harness.imageEdit.selectedAnnotation(), -1);
+    EXPECT_FALSE(deleteButton->property("enabled").toBool());
+    ASSERT_TRUE(QMetaObject::invokeMethod(workspace,
+                                          "beginAnnotationDrag",
+                                          Q_ARG(QVariant, viewportArgument),
+                                          Q_ARG(QVariant, toViewportX(20)),
+                                          Q_ARG(QVariant, toViewportY(10))));
+    EXPECT_EQ(harness.imageEdit.selectedAnnotation(), 0);
+    ASSERT_TRUE(QMetaObject::invokeMethod(workspace,
+                                          "continueAnnotationDrag",
+                                          Q_ARG(QVariant, viewportArgument),
+                                          Q_ARG(QVariant, toViewportX(25)),
+                                          Q_ARG(QVariant, toViewportY(18))));
+    ASSERT_TRUE(QMetaObject::invokeMethod(workspace, "endAnnotationDrag"));
+    harness.settle();
+    EXPECT_EQ(harness.imageEdit.editedImage().pixelColor(20, 10), QColor(10, 20, 30));
+    EXPECT_GT(harness.imageEdit.editedImage().pixelColor(25, 18).red(), 180);
+    ASSERT_TRUE(QMetaObject::invokeMethod(undoButton, "clicked"));
+    harness.settle();
+    EXPECT_GT(harness.imageEdit.editedImage().pixelColor(20, 10).red(), 180);
+
+    EXPECT_TRUE(deleteButton->property("enabled").toBool());
+    ASSERT_TRUE(QMetaObject::invokeMethod(deleteButton, "clicked"));
+    harness.settle();
+    EXPECT_EQ(harness.imageEdit.annotationCount(), 2);
+    ASSERT_TRUE(QMetaObject::invokeMethod(undoButton, "clicked"));
+    harness.settle();
+    EXPECT_EQ(harness.imageEdit.annotationCount(), 3);
+
+    // Fill then clear the same region: opaque block first, transparent after.
+    ASSERT_TRUE(QMetaObject::invokeMethod(fillTool, "clicked"));
+    ASSERT_TRUE(dragRect(60, 5, 80, 20));
+    ASSERT_TRUE(applyRect());
+    harness.settle();
+    const QColor fillColor = harness.imageEdit.editedImage().pixelColor(70, 12);
+    EXPECT_EQ(fillColor.alpha(), 255);
+    EXPECT_GT(fillColor.red(), 180);
+    EXPECT_EQ(harness.imageEdit.undoLabel(), QStringLiteral("填充"));
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(clearTool, "clicked"));
+    ASSERT_TRUE(dragRect(60, 5, 80, 20));
+    ASSERT_TRUE(applyRect());
+    harness.settle();
+    EXPECT_EQ(harness.imageEdit.editedImage().pixelColor(70, 12).alpha(), 0);
+    EXPECT_EQ(harness.imageEdit.undoLabel(), QStringLiteral("清除"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(undoButton, "clicked"));
+    harness.settle();
+    EXPECT_EQ(harness.imageEdit.editedImage().pixelColor(70, 12).alpha(), 255);
+
+    // Clear-all is one step, and the committed original never carried any of this.
+    ASSERT_TRUE(QMetaObject::invokeMethod(selectTool, "clicked"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(clearAllButton, "clicked"));
+    harness.settle();
+    EXPECT_EQ(harness.imageEdit.annotationCount(), 0);
+    ASSERT_TRUE(QMetaObject::invokeMethod(undoButton, "clicked"));
+    harness.settle();
+    EXPECT_EQ(harness.imageEdit.annotationCount(), 3);
+    const QImage original = harness.imageReview.rawImageForSlot(ImageReviewController::PrimarySlot);
+    EXPECT_EQ(original.pixelColor(20, 10), QColor(10, 20, 30));
+    EXPECT_EQ(original.pixelColor(70, 12).alpha(), 255);
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(startButton, "clicked"));
+}
+
 // Phase 0 baseline: the Range Loop must never present a frame outside [In,Out]. Today the loop is
 // driven by Main.qml::onCurrentFrameChanged reacting to displayedFrame, with no kernel Range clamp,
 // so after a >2000ms stall catch-up can present Out+Δ before QML seeks back. This QML-level test

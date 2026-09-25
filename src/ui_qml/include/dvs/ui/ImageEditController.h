@@ -37,6 +37,10 @@ class ImageEditController final : public QObject {
     Q_PROPERTY(QString editedImageUrl READ editedImageUrl NOTIFY imageChanged)
     // True while a brush stroke is being drawn (the workspace shows a live preview).
     Q_PROPERTY(bool strokeActive READ strokeActive NOTIFY stateChanged)
+    // Flat annotation list state: count and selected index (-1 when nothing is selected).
+    // The newest annotation is drawn last, so it sits on top.
+    Q_PROPERTY(int annotationCount READ annotationCount NOTIFY annotationsChanged)
+    Q_PROPERTY(int selectedAnnotation READ selectedAnnotation NOTIFY annotationsChanged)
     Q_PROPERTY(QString lastStatus READ lastStatus NOTIFY statusChanged)
 public:
     // Decoded original for one display slot, injected by the composition root so the
@@ -81,6 +85,27 @@ public:
     [[nodiscard]] bool strokeActive() const noexcept;
     // Mosaic: pixelates an image-pixel rect into opaque blocks of the given size.
     Q_INVOKABLE bool mosaicImageRect(int x, int y, int width, int height, int blockSize);
+    // Fill / clear an image-pixel rect: an opaque colour block (the review's preferred way
+    // to mask sensitive content) or transparent pixels. Both are undoable pixel edits.
+    Q_INVOKABLE bool fillImageRect(int x, int y, int width, int height, const QColor& color);
+    Q_INVOKABLE bool clearImageRect(int x, int y, int width, int height);
+    // Annotations live above the pixel edits as a flat, bounded list — deliberately not a
+    // layer panel. They are rendered into the displayed and saved image but never into the
+    // comparison metrics or the difference pipeline. Geometry is in image pixels.
+    Q_INVOKABLE bool
+    addArrow(int fromX, int fromY, int toX, int toY, const QColor& color, int width);
+    Q_INVOKABLE bool
+    addRectangle(int fromX, int fromY, int toX, int toY, const QColor& color, int width);
+    Q_INVOKABLE bool addText(int x, int y, const QString& text, const QColor& color, int pixelSize);
+    Q_INVOKABLE bool selectAnnotationAt(int x, int y);
+    // Drag gesture: the live preview never touches the history — one gesture commits one
+    // move step on release.
+    Q_INVOKABLE bool beginAnnotationDrag(int x, int y);
+    Q_INVOKABLE bool dragAnnotationTo(int x, int y);
+    Q_INVOKABLE bool endAnnotationDrag();
+    Q_INVOKABLE bool moveSelectedAnnotation(int deltaX, int deltaY);
+    Q_INVOKABLE bool deleteSelectedAnnotation();
+    Q_INVOKABLE void clearAnnotations();
     Q_INVOKABLE bool undo();
     Q_INVOKABLE bool redo();
     // Cache-busting URL of the working copy for the dvs-edit image provider.
@@ -98,6 +123,8 @@ public:
     // Bounded history depth (default 8). Exposed for tests.
     void setHistoryLimit(int steps);
     [[nodiscard]] int historyLimit() const noexcept;
+    [[nodiscard]] int annotationCount() const noexcept;
+    [[nodiscard]] int selectedAnnotation() const noexcept;
 
     // Provider and test access to the current buffers.
     [[nodiscard]] QImage editedImage() const;
@@ -107,6 +134,7 @@ signals:
     void stateChanged();
     void imageChanged();
     void historyChanged();
+    void annotationsChanged();
     void statusChanged();
 
 private:

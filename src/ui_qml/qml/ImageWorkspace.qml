@@ -66,13 +66,17 @@ Rectangle {
     readonly property int editSourceSlot: editModeActive ? Number(imageEdit.sourceSlot) : -1
     // Selection in image pixels (null while nothing is selected); shared by crop and mosaic.
     property var cropSelection: null
-    // Active editing tool: "crop", "brush" or "mosaic". Geometry always travels in image
-    // pixels, so switching tool or zooming never drifts a selection or a stroke.
+    // Active editing tool: "crop", "brush", "mosaic", "fill", "clear", "rect", "arrow",
+    // "text" or "select". Geometry always travels in image pixels, so switching tool or
+    // zooming never drifts a selection, a stroke or an annotation.
     property string editTool: "crop"
     property color brushColor: "#ff3b30"
     property int brushWidth: 4
     property real brushOpacity: 1.0
     property int mosaicBlock: 8
+    // Text annotations: typed content and pixel size (the width slider doubles as 字号).
+    property string annotationText: ""
+    property int annotationTextSize: 28
 
     onHasPairChanged: {
         if (!hasPair) {
@@ -311,25 +315,99 @@ Rectangle {
             imageEdit.endStroke();
     }
 
-    // Converts a drag in one viewport into an image-pixel crop selection.
+    // One-shot rect tools apply on release (undo covers a mistake); crop and mosaic keep the
+    // selection until the apply button, because their parameters are worth adjusting first.
+    function applyRectTool() {
+        if (!imageEdit || !imageEdit.active || !control.cropSelection)
+            return false;
+        const selection = control.cropSelection;
+        const x = selection.x;
+        const y = selection.y;
+        const right = x + selection.width;
+        const bottom = y + selection.height;
+        let handled = true;
+        switch (control.editTool) {
+        case "fill":
+            imageEdit.fillImageRect(x, y, selection.width, selection.height, control.brushColor);
+            break;
+        case "clear":
+            imageEdit.clearImageRect(x, y, selection.width, selection.height);
+            break;
+        case "rect":
+            imageEdit.addRectangle(x, y, right, bottom, control.brushColor, control.brushWidth);
+            break;
+        case "arrow":
+            // Arrows keep the drawn direction, so they use the raw endpoints.
+            imageEdit.addArrow(selection.fromX, selection.fromY, selection.toX, selection.toY, control.brushColor, control.brushWidth);
+            break;
+        default:
+            handled = false;
+            break;
+        }
+        if (handled)
+            control.cropSelection = null;
+        return handled;
+    }
+
+    function placeTextAt(view, mouseX, mouseY) {
+        if (!imageEdit || !imageEdit.active)
+            return false;
+        const mapped = mapToImage(view, mouseX, mouseY);
+        if (!mapped)
+            return false;
+        return Boolean(imageEdit.addText(Math.round(mapped.x), Math.round(mapped.y), control.annotationText, control.brushColor, control.annotationTextSize));
+    }
+
+    function beginAnnotationDrag(view, mouseX, mouseY) {
+        if (!imageEdit || !imageEdit.active)
+            return false;
+        const mapped = mapToImage(view, mouseX, mouseY);
+        if (!mapped)
+            return false;
+        return Boolean(imageEdit.beginAnnotationDrag(Math.round(mapped.x), Math.round(mapped.y)));
+    }
+
+    function continueAnnotationDrag(view, mouseX, mouseY) {
+        if (!imageEdit || !imageEdit.active)
+            return;
+        const mapped = mapToImage(view, mouseX, mouseY);
+        if (mapped)
+            imageEdit.dragAnnotationTo(Math.round(mapped.x), Math.round(mapped.y));
+    }
+
+    function endAnnotationDrag() {
+        if (imageEdit && imageEdit.active)
+            imageEdit.endAnnotationDrag();
+    }
+
+    // Converts a drag in one viewport into an image-pixel selection. Rect tools need a real
+    // box; an arrow only needs a direction, so a purely horizontal or vertical arrow is
+    // valid and the raw drag endpoints are kept for it (normalising would lose the
+    // direction the user drew).
     function updateCropSelection(view) {
         if (!imageEdit || !imageEdit.active)
             return;
-        const m0 = mapToImage(view, Math.min(view.cropStart.x, view.cropCurrent.x), Math.min(view.cropStart.y, view.cropCurrent.y));
-        const m1 = mapToImage(view, Math.max(view.cropStart.x, view.cropCurrent.x), Math.max(view.cropStart.y, view.cropCurrent.y));
+        const m0 = mapToImage(view, view.cropStart.x, view.cropStart.y);
+        const m1 = mapToImage(view, view.cropCurrent.x, view.cropCurrent.y);
         if (!m0 || !m1)
             return;
-        const width = Math.max(0, Math.round(m1.x - m0.x));
-        const height = Math.max(0, Math.round(m1.y - m0.y));
-        if (width < 2 || height < 2) {
+        const deltaX = m1.x - m0.x;
+        const deltaY = m1.y - m0.y;
+        const isArrow = control.editTool === "arrow";
+        const tooSmall = isArrow ? Math.hypot(deltaX, deltaY) < 3 : (Math.abs(deltaX) < 2 || Math.abs(deltaY) < 2);
+        if (tooSmall) {
             control.cropSelection = null;
             return;
         }
         control.cropSelection = {
-            "x": Math.max(0, Math.round(m0.x)),
-            "y": Math.max(0, Math.round(m0.y)),
-            "width": width,
-            "height": height
+            "fromX": Math.round(m0.x),
+            "fromY": Math.round(m0.y),
+            "toX": Math.round(m1.x),
+            "toY": Math.round(m1.y),
+            "x": Math.max(0, Math.round(Math.min(m0.x, m1.x))),
+            "y": Math.max(0, Math.round(Math.min(m0.y, m1.y))),
+            "width": Math.max(1, Math.round(Math.abs(deltaX))),
+            "height": Math.max(1, Math.round(Math.abs(deltaY)))
         };
     }
 
@@ -419,6 +497,8 @@ Rectangle {
         property bool cropActive: false
         property point cropStart: Qt.point(0, 0)
         property point cropCurrent: Qt.point(0, 0)
+        // Annotation drag gesture (select tool) and the text-click guard.
+        property bool annotationDragActive: false
 
         readonly property alias image: previewImage
         // Fit scale of the displayed image (fit-window base), forwarded so the workspace
@@ -653,6 +733,8 @@ Rectangle {
             onPositionChanged: mouse => {
                 if (control.editModeActive && control.imageEdit && control.imageEdit.strokeActive) {
                     control.continueBrushStroke(viewport, mouse.x, mouse.y);
+                } else if (viewport.annotationDragActive) {
+                    control.continueAnnotationDrag(viewport, mouse.x, mouse.y);
                 } else if (viewport.cropActive) {
                     viewport.cropCurrent = Qt.point(mouse.x, mouse.y);
                     control.updateCropSelection(viewport);
@@ -676,15 +758,22 @@ Rectangle {
                 control.hoverPoint = null;
             }
             onPressed: mouse => {
-                // Edit mode: the left button draws with the active tool (brush paints, crop
-                // and mosaic select a rect), while the middle button keeps panning below.
-                // View mode keeps the old gestures untouched.
+                // Edit mode: the left button runs the active tool (brush paints, select
+                // drags an annotation, text places on click, everything else selects a
+                // rect), while the middle button keeps panning below. View mode keeps the
+                // old gestures untouched.
                 if (control.editModeActive && mouse.button === Qt.LeftButton && !(mouse.modifiers & Qt.ShiftModifier)) {
                     viewport.marqueeActive = false;
                     viewport.dragActive = false;
+                    viewport.cropActive = false;
+                    viewport.annotationDragActive = false;
+                    viewport.pressStart = Qt.point(mouse.x, mouse.y);
                     if (control.editTool === "brush") {
-                        viewport.cropActive = false;
                         control.beginBrushStroke(viewport, mouse.x, mouse.y);
+                    } else if (control.editTool === "select") {
+                        viewport.annotationDragActive = control.beginAnnotationDrag(viewport, mouse.x, mouse.y);
+                    } else if (control.editTool === "text") {
+                        // Placed on release, so a press that turns into a drag is ignored.
                     } else {
                         viewport.cropActive = true;
                         viewport.cropStart = Qt.point(mouse.x, mouse.y);
@@ -692,6 +781,7 @@ Rectangle {
                     }
                 } else if (mouse.button === Qt.LeftButton && (mouse.modifiers & Qt.ShiftModifier)) {
                     viewport.cropActive = false;
+                    viewport.annotationDragActive = false;
                     viewport.marqueeActive = true;
                     viewport.marqueeStart = Qt.point(mouse.x, mouse.y);
                     viewport.marqueeCurrent = Qt.point(mouse.x, mouse.y);
@@ -707,10 +797,21 @@ Rectangle {
             }
             onReleased: mouse => {
                 control.endBrushStroke();
+                if (viewport.annotationDragActive) {
+                    viewport.annotationDragActive = false;
+                    viewport.suppressClickAfterMarquee = true;
+                    control.endAnnotationDrag();
+                }
                 if (viewport.cropActive) {
                     viewport.cropActive = false;
                     viewport.suppressClickAfterMarquee = true;
                     control.updateCropSelection(viewport);
+                    // Fill/clear/rect/arrow are one-shot: they commit on release. Crop and
+                    // mosaic keep the selection for the apply button.
+                    control.applyRectTool();
+                }
+                if (control.editModeActive && control.editTool === "text" && Math.hypot(mouse.x - viewport.pressStart.x, mouse.y - viewport.pressStart.y) < 5) {
+                    control.placeTextAt(viewport, mouse.x, mouse.y);
                 }
                 if (viewport.marqueeActive) {
                     viewport.marqueeActive = false;
@@ -1244,8 +1345,133 @@ Rectangle {
                 onClicked: control.editTool = "mosaic"
             }
             ReviewActionButton {
+                objectName: "imageEditToolFillButton"
+                visible: control.editModeActive
+                checkable: true
+                checked: control.editTool === "fill"
+                text: qsTr("填充")
+                implicitHeight: 30
+                leftPadding: 10
+                rightPadding: 10
+                helpText: qsTr("用当前颜色填满框选区域；遮挡敏感内容时优先用不透明色块。")
+                onClicked: control.editTool = "fill"
+            }
+            ReviewActionButton {
+                objectName: "imageEditToolClearButton"
+                visible: control.editModeActive
+                checkable: true
+                checked: control.editTool === "clear"
+                text: qsTr("清除")
+                implicitHeight: 30
+                leftPadding: 10
+                rightPadding: 10
+                helpText: qsTr("把框选区域清除为透明（用于调整透明区域）。")
+                onClicked: control.editTool = "clear"
+            }
+            ReviewActionButton {
+                objectName: "imageEditToolRectButton"
+                visible: control.editModeActive
+                checkable: true
+                checked: control.editTool === "rect"
+                text: qsTr("矩形")
+                implicitHeight: 30
+                leftPadding: 10
+                rightPadding: 10
+                onClicked: control.editTool = "rect"
+            }
+            ReviewActionButton {
+                objectName: "imageEditToolArrowButton"
+                visible: control.editModeActive
+                checkable: true
+                checked: control.editTool === "arrow"
+                text: qsTr("箭头")
+                implicitHeight: 30
+                leftPadding: 10
+                rightPadding: 10
+                onClicked: control.editTool = "arrow"
+            }
+            ReviewActionButton {
+                objectName: "imageEditToolTextButton"
+                visible: control.editModeActive
+                checkable: true
+                checked: control.editTool === "text"
+                text: qsTr("文字")
+                implicitHeight: 30
+                leftPadding: 10
+                rightPadding: 10
+                onClicked: control.editTool = "text"
+            }
+            ReviewActionButton {
+                objectName: "imageEditToolSelectButton"
+                visible: control.editModeActive
+                checkable: true
+                checked: control.editTool === "select"
+                text: qsTr("选择")
+                implicitHeight: 30
+                leftPadding: 10
+                rightPadding: 10
+                helpText: qsTr("点击选中标注后可拖动；Delete 键或「删除标注」可删除。")
+                onClicked: control.editTool = "select"
+            }
+            ReviewActionButton {
+                objectName: "imageEditUndoButton"
+                visible: control.editModeActive
+                text: qsTr("撤销")
+                enabled: control.imageEdit && control.imageEdit.canUndo
+                implicitHeight: 30
+                leftPadding: 10
+                rightPadding: 10
+                onClicked: {
+                    if (control.imageEdit)
+                        control.imageEdit.undo();
+                }
+            }
+            ReviewActionButton {
+                objectName: "imageEditRedoButton"
+                visible: control.editModeActive
+                text: qsTr("重做")
+                enabled: control.imageEdit && control.imageEdit.canRedo
+                implicitHeight: 30
+                leftPadding: 10
+                rightPadding: 10
+                onClicked: {
+                    if (control.imageEdit)
+                        control.imageEdit.redo();
+                }
+            }
+            ReviewActionButton {
+                objectName: "imageEditSaveCopyButton"
+                visible: control.editModeActive
+                text: qsTr("另存副本…")
+                implicitHeight: 30
+                leftPadding: 10
+                rightPadding: 10
+                onClicked: editSaveDialog.open()
+            }
+            Text {
+                objectName: "imageEditStatusText"
+                visible: control.editModeActive
+                height: 30
+                verticalAlignment: Text.AlignVCenter
+                text: control.imageEdit ? String(control.imageEdit.lastStatus || "") : ""
+                color: Theme.mutedText
+                font.pixelSize: 11
+                elide: Text.ElideRight
+                width: Math.min(360, implicitWidth)
+            }
+        }
+
+        // Row D — parameters for the active tool. Keeping them on their own row stops the
+        // tool switch from clipping the actions on narrower windows.
+        Row {
+            id: editParamsRow
+            objectName: "imageEditParamsRow"
+            spacing: 8
+            visible: control.hasPrimary && control.editModeActive
+
+            ReviewActionButton {
                 objectName: "imageEditBrushColorButton"
-                visible: control.editModeActive && control.editTool === "brush"
+                visible: control.editTool === "brush" || control.editTool === "fill" || control.editTool === "rect" || control.editTool === "arrow" || control.editTool === "text"
                 text: qsTr("颜色 ▾")
                 implicitHeight: 30
                 leftPadding: 8
@@ -1296,16 +1522,16 @@ Rectangle {
             }
             Text {
                 objectName: "imageEditBrushWidthLabel"
-                visible: control.editModeActive && control.editTool === "brush"
+                visible: control.editTool === "brush" || control.editTool === "rect" || control.editTool === "arrow"
                 height: 30
                 verticalAlignment: Text.AlignVCenter
-                text: qsTr("粗细 %1").arg(control.brushWidth)
+                text: control.editTool === "brush" ? qsTr("粗细 %1").arg(control.brushWidth) : qsTr("线宽 %1").arg(control.brushWidth)
                 color: Theme.mutedText
                 font.pixelSize: 11
             }
             Slider {
                 objectName: "imageEditBrushWidthSlider"
-                visible: control.editModeActive && control.editTool === "brush"
+                visible: control.editTool === "brush" || control.editTool === "rect" || control.editTool === "arrow"
                 width: 96
                 height: 30
                 from: 1
@@ -1316,7 +1542,7 @@ Rectangle {
             }
             Text {
                 objectName: "imageEditBrushOpacityLabel"
-                visible: control.editModeActive && control.editTool === "brush"
+                visible: control.editTool === "brush"
                 height: 30
                 verticalAlignment: Text.AlignVCenter
                 text: qsTr("透明 %1%").arg(Math.round(control.brushOpacity * 100))
@@ -1325,7 +1551,7 @@ Rectangle {
             }
             Slider {
                 objectName: "imageEditBrushOpacitySlider"
-                visible: control.editModeActive && control.editTool === "brush"
+                visible: control.editTool === "brush"
                 width: 96
                 height: 30
                 from: 0.05
@@ -1336,7 +1562,7 @@ Rectangle {
             }
             Text {
                 objectName: "imageEditMosaicBlockLabel"
-                visible: control.editModeActive && control.editTool === "mosaic"
+                visible: control.editTool === "mosaic"
                 height: 30
                 verticalAlignment: Text.AlignVCenter
                 text: qsTr("块大小 %1").arg(control.mosaicBlock)
@@ -1345,7 +1571,7 @@ Rectangle {
             }
             Slider {
                 objectName: "imageEditMosaicBlockSlider"
-                visible: control.editModeActive && control.editTool === "mosaic"
+                visible: control.editTool === "mosaic"
                 width: 120
                 height: 30
                 from: 2
@@ -1354,9 +1580,48 @@ Rectangle {
                 value: control.mosaicBlock
                 onMoved: control.mosaicBlock = Math.round(value)
             }
+            Text {
+                objectName: "imageEditAnnotationTextLabel"
+                visible: control.editTool === "text"
+                height: 30
+                verticalAlignment: Text.AlignVCenter
+                text: qsTr("文字")
+                color: Theme.mutedText
+                font.pixelSize: 11
+            }
+            TextField {
+                objectName: "imageEditAnnotationTextField"
+                visible: control.editTool === "text"
+                width: 180
+                height: 30
+                placeholderText: qsTr("输入标注文字，再点击画面放置")
+                text: control.annotationText
+                font.pixelSize: 12
+                onTextEdited: control.annotationText = text
+            }
+            Text {
+                objectName: "imageEditAnnotationTextSizeLabel"
+                visible: control.editTool === "text"
+                height: 30
+                verticalAlignment: Text.AlignVCenter
+                text: qsTr("字号 %1").arg(control.annotationTextSize)
+                color: Theme.mutedText
+                font.pixelSize: 11
+            }
+            Slider {
+                objectName: "imageEditAnnotationTextSizeSlider"
+                visible: control.editTool === "text"
+                width: 110
+                height: 30
+                from: 10
+                to: 160
+                stepSize: 1
+                value: control.annotationTextSize
+                onMoved: control.annotationTextSize = Math.round(value)
+            }
             ReviewActionButton {
                 objectName: "imageEditApplyCropButton"
-                visible: control.editModeActive && control.editTool !== "brush"
+                visible: control.editTool === "crop" || control.editTool === "mosaic"
                 text: control.cropSelection ? (control.editTool === "mosaic" ? qsTr("应用马赛克 %1×%2").arg(control.cropSelection.width).arg(control.cropSelection.height) : qsTr("应用裁剪 %1×%2").arg(control.cropSelection.width).arg(control.cropSelection.height)) : (control.editTool === "mosaic" ? qsTr("应用马赛克") : qsTr("应用裁剪"))
                 enabled: control.cropSelection !== null && control.imageEdit && control.imageEdit.active
                 implicitHeight: 30
@@ -1366,50 +1631,39 @@ Rectangle {
                 onClicked: control.applyCropSelection()
             }
             ReviewActionButton {
-                objectName: "imageEditUndoButton"
-                visible: control.editModeActive
-                text: qsTr("撤销")
-                enabled: control.imageEdit && control.imageEdit.canUndo
+                objectName: "imageEditDeleteAnnotationButton"
+                visible: control.editTool === "select"
+                text: qsTr("删除标注")
+                enabled: control.imageEdit && control.imageEdit.selectedAnnotation >= 0
                 implicitHeight: 30
                 leftPadding: 10
                 rightPadding: 10
                 onClicked: {
                     if (control.imageEdit)
-                        control.imageEdit.undo();
+                        control.imageEdit.deleteSelectedAnnotation();
                 }
             }
             ReviewActionButton {
-                objectName: "imageEditRedoButton"
-                visible: control.editModeActive
-                text: qsTr("重做")
-                enabled: control.imageEdit && control.imageEdit.canRedo
+                objectName: "imageEditClearAnnotationsButton"
+                visible: control.editTool === "select"
+                text: qsTr("清除全部标注")
+                enabled: control.imageEdit && control.imageEdit.annotationCount > 0
                 implicitHeight: 30
                 leftPadding: 10
                 rightPadding: 10
                 onClicked: {
                     if (control.imageEdit)
-                        control.imageEdit.redo();
+                        control.imageEdit.clearAnnotations();
                 }
-            }
-            ReviewActionButton {
-                objectName: "imageEditSaveCopyButton"
-                visible: control.editModeActive
-                text: qsTr("另存副本…")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                onClicked: editSaveDialog.open()
             }
             Text {
-                objectName: "imageEditStatusText"
-                visible: control.editModeActive
+                objectName: "imageEditAnnotationCountText"
+                visible: control.editTool === "select"
                 height: 30
                 verticalAlignment: Text.AlignVCenter
-                text: control.imageEdit ? String(control.imageEdit.lastStatus || "") : ""
+                text: control.imageEdit ? qsTr("标注 %1 个").arg(control.imageEdit.annotationCount) : ""
                 color: Theme.mutedText
                 font.pixelSize: 11
-                elide: Text.ElideRight
-                width: Math.min(420, implicitWidth)
             }
         }
     }
@@ -1473,6 +1727,9 @@ Rectangle {
                 control.toggleRgbOpaqueView();
                 event.accepted = true;
             }
+        } else if ((event.key === Qt.Key_Delete || event.key === Qt.Key_Backspace) && control.editModeActive && control.imageEdit && control.imageEdit.selectedAnnotation >= 0) {
+            control.imageEdit.deleteSelectedAnnotation();
+            event.accepted = true;
         }
     }
 
