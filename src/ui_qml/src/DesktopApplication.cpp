@@ -3,6 +3,8 @@
 #include "dvs/ui/ComparisonExportController.h"
 #include "dvs/ui/ComparisonSurface.h"
 #include "dvs/ui/DiagnosticsProbe.h"
+#include "dvs/ui/EditImageProvider.h"
+#include "dvs/ui/ImageEditController.h"
 #include "dvs/ui/ImageFolderPairModel.h"
 #include "dvs/ui/ImageReviewController.h"
 #include "dvs/ui/IssueLogController.h"
@@ -128,6 +130,15 @@ public:
                                                   imageReview_.get());
         engine->addImageProvider(QStringLiteral("vcs-review"),
                                  new ReviewImageProvider(imageReview_.get()));
+        // Step-3 image editing: an edit session always starts from the committed decoded
+        // buffer (never a derived channel view) and saves to a copy.
+        imageEdit_ = std::make_unique<ImageEditController>();
+        imageEdit_->setSourceImageProvider([review = imageReview_.get()](const int slot) {
+            return review->rawImageForSlot(slot);
+        });
+        engine->rootContext()->setContextProperty(QStringLiteral("imageEdit"), imageEdit_.get());
+        engine->addImageProvider(QStringLiteral("dvs-edit"),
+                                 new EditImageProvider(imageEdit_.get()));
         folderPairs_ = std::make_unique<ImageFolderPairModel>();
         folderPairs_->setAsyncPairOpener(
             [review = imageReview_.get()](
@@ -688,6 +699,7 @@ private:
     application::IIssueRecordRepository* issueRecordRepository_ = nullptr;
     std::unique_ptr<IssueLogController> issueLog_;
     std::unique_ptr<ComparisonExportController> comparisonExport_;
+    std::unique_ptr<ImageEditController> imageEdit_;
     std::unique_ptr<DiagnosticsProbe> diagnosticsProbe_;
     QQuickWindow* window_ = nullptr;
     ComparisonSurface* surface_ = nullptr;

@@ -53,7 +53,9 @@ if(DVS_BUILD_ADAPTERS)
             include/dvs/ui/DesktopApplication.h
             include/dvs/ui/DiagnosticsProbe.h
             include/dvs/ui/DirectCompare.h
+            include/dvs/ui/EditImageProvider.h
             include/dvs/ui/GraphicsBackend.h
+            include/dvs/ui/ImageEditController.h
             include/dvs/ui/ImagePairLoader.h
             include/dvs/ui/ImageReviewController.h
             include/dvs/ui/Module.h
@@ -65,7 +67,9 @@ if(DVS_BUILD_ADAPTERS)
             src/DiagnosticsProbe.cpp
             src/DirectCompare.cpp
             src/ComparisonSurface.cpp
+            src/EditImageProvider.cpp
             src/GraphicsBackend.cpp
+            src/ImageEditController.cpp
             src/ImagePairLoader.cpp
             src/ImageReviewController.cpp
             src/Module.cpp

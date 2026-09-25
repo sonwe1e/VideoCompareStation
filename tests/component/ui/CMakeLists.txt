@@ -63,6 +63,32 @@ dvs_add_gtest(
 )
 
 add_executable(
+    dvs_image_edit_controller_tests
+    ImageEditControllerTests.cpp
+)
+target_link_libraries(
+    dvs_image_edit_controller_tests
+    PRIVATE
+        dvs_ui_qml
+        dvs::qt_dependencies
+        dvs::test_dependencies
+)
+
+dvs_apply_project_warnings(dvs_image_edit_controller_tests)
+set_target_properties(
+    dvs_image_edit_controller_tests
+    PROPERTIES FOLDER "Tests/Component/UI"
+)
+
+dvs_add_gtest(
+    TARGET dvs_image_edit_controller_tests
+    TEST_PREFIX "ui."
+    LAYER component
+    MODULE ui_qml
+    TIMEOUT 10
+)
+
+add_executable(
     dvs_image_folder_pair_model_tests
     ImageFolderPairModelTests.cpp
 )

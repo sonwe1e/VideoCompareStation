@@ -281,6 +281,10 @@ public:
 
     // Used by ReviewImageProvider. Thread: GUI only (still images are CPU-resident).
     [[nodiscard]] QImage imageForSlot(int imageSlot) const;
+    // Committed decoded buffer without the channel observation view. Editing and other
+    // "original pixels" consumers must use this: a derived Alpha-gray/RGB-opaque view is
+    // a presentation artifact and must never be edited or re-saved as the source.
+    [[nodiscard]] QImage rawImageForSlot(int imageSlot) const;
 
 signals:
     void stateChanged();

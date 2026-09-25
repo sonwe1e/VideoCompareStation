@@ -3,7 +3,9 @@
 #include "dvs/domain/ComparisonValidator.h"
 #include "dvs/ui/ComparisonExportController.h"
 #include "dvs/ui/ComparisonSurface.h"
+#include "dvs/ui/EditImageProvider.h"
 #include "dvs/ui/GraphicsBackend.h"
+#include "dvs/ui/ImageEditController.h"
 #include "dvs/ui/ImageFolderPairModel.h"
 #include "dvs/ui/ImageReviewController.h"
 #include "dvs/ui/ReviewController.h"
@@ -268,6 +270,12 @@ public:
         engine.rootContext()->setContextProperty(QStringLiteral("imageFolderPairs"), &folderPairs);
         engine.addImageProvider(QStringLiteral("vcs-review"),
                                 new ReviewImageProvider(&imageReview));
+        if (withImageEdit) {
+            imageEdit.setSourceImageProvider(
+                [this](const int slot) { return imageReview.rawImageForSlot(slot); });
+            engine.rootContext()->setContextProperty(QStringLiteral("imageEdit"), &imageEdit);
+            engine.addImageProvider(QStringLiteral("dvs-edit"), new EditImageProvider(&imageEdit));
+        }
         QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
         if (component.status() != QQmlComponent::Ready) {
             error = componentErrors(component);
@@ -340,6 +348,9 @@ public:
     std::unique_ptr<ReviewSessionFacade> facade;
     ImageReviewController imageReview;
     ImageFolderPairModel folderPairs;
+    // Step-3 editing stays opt-in so harnesses that predate it keep their exact layout.
+    ImageEditController imageEdit;
+    bool withImageEdit = false;
     QQmlEngine engine;
     std::unique_ptr<QObject> root;
     QQuickWindow* window = nullptr;
@@ -2286,6 +2297,113 @@ TEST(MainQmlContractTests, CopyComparisonButtonPutsLabeledViewportOnClipboard) {
     EXPECT_EQ(bytes[3], 'G');
     EXPECT_TRUE(exportController.lastStatus().contains(QStringLiteral("已保存")))
         << exportController.lastStatus().toStdString();
+}
+
+// Step-3 image editing: entering edit mode shows the working copy in the pane, a crop drag
+// in viewport coordinates becomes an image-pixel crop, undo/redo walk it, and the committed
+// original buffer stays untouched.
+TEST(MainQmlContractTests, ImageEditModeCropsAWorkingCopyAndKeepsTheOriginal) {
+    WorkspaceHarness harness;
+    harness.withImageEdit = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    QImage primary(64, 48, QImage::Format_ARGB32);
+    primary.fill(QColor(180, 40, 60, 200));
+    QImage secondary(32, 32, QImage::Format_ARGB32);
+    secondary.fill(QColor(20, 160, 90));
+    ASSERT_TRUE(harness.imageReview.openPairImages(std::move(primary),
+                                                   QStringLiteral("a.png"),
+                                                   std::move(secondary),
+                                                   QStringLiteral("b.png")));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    harness.settle();
+
+    auto* const workspace =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
+    ASSERT_NE(workspace, nullptr);
+    auto* const startButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditStartButton"));
+    ASSERT_NE(startButton, nullptr);
+    EXPECT_TRUE(startButton->isVisible());
+    auto* const applyCrop =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditApplyCropButton"));
+    auto* const undoButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditUndoButton"));
+    auto* const redoButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditRedoButton"));
+    ASSERT_NE(applyCrop, nullptr);
+    ASSERT_NE(undoButton, nullptr);
+    ASSERT_NE(redoButton, nullptr);
+    auto* const viewport = harness.root->findChild<QQuickItem*>(QStringLiteral("primaryViewport"));
+    auto* const preview = harness.root->findChild<QQuickItem*>(QStringLiteral("imageViewport-2"));
+    ASSERT_NE(viewport, nullptr);
+    ASSERT_NE(preview, nullptr);
+
+    // Entering edit mode starts the session from the committed original.
+    ASSERT_TRUE(QMetaObject::invokeMethod(startButton, "clicked"));
+    harness.settle();
+    EXPECT_TRUE(harness.imageEdit.active());
+    EXPECT_TRUE(workspace->property("editModeActive").toBool());
+    EXPECT_EQ(harness.imageEdit.imageWidth(), 64);
+    EXPECT_EQ(harness.imageEdit.imageHeight(), 48);
+    EXPECT_TRUE(applyCrop->isVisible());
+    EXPECT_FALSE(undoButton->property("enabled").toBool());
+    // The pane now serves the working copy through the edit provider.
+    const QString editedSource = preview->property("source").toString();
+    EXPECT_TRUE(editedSource.startsWith(QStringLiteral("image://dvs-edit/")))
+        << editedSource.toStdString();
+
+    // A drag in viewport coordinates maps to an image-pixel selection.
+    const qreal scale =
+        preview->width() / static_cast<qreal>(preview->property("sourceSize").toSize().width());
+    ASSERT_GT(scale, 0.0);
+    viewport->setProperty("cropStart", QPointF{preview->x() + 8 * scale, preview->y() + 6 * scale});
+    viewport->setProperty("cropCurrent",
+                          QPointF{preview->x() + 40 * scale, preview->y() + 30 * scale});
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        workspace,
+        "updateCropSelection",
+        Q_ARG(QVariant, QVariant::fromValue(static_cast<QObject*>(viewport)))));
+    const QVariantMap selection = workspace->property("cropSelection").toMap();
+    ASSERT_FALSE(selection.isEmpty());
+    EXPECT_NEAR(selection.value(QStringLiteral("x")).toInt(), 8, 1);
+    EXPECT_NEAR(selection.value(QStringLiteral("y")).toInt(), 6, 1);
+    EXPECT_NEAR(selection.value(QStringLiteral("width")).toInt(), 32, 1);
+    EXPECT_NEAR(selection.value(QStringLiteral("height")).toInt(), 24, 1);
+    EXPECT_TRUE(applyCrop->property("enabled").toBool());
+
+    // Applying the crop edits the working copy only.
+    ASSERT_TRUE(QMetaObject::invokeMethod(applyCrop, "clicked"));
+    harness.settle();
+    EXPECT_EQ(harness.imageEdit.imageWidth(), 32);
+    EXPECT_EQ(harness.imageEdit.imageHeight(), 24);
+    EXPECT_TRUE(harness.imageEdit.dirty());
+    EXPECT_TRUE(undoButton->property("enabled").toBool());
+    EXPECT_TRUE(workspace->property("cropSelection").toMap().isEmpty());
+    EXPECT_EQ(harness.imageReview.rawImageForSlot(ImageReviewController::PrimarySlot).size(),
+              QSize(64, 48));
+
+    // Undo/redo walk the crop while the original keeps its pixels.
+    ASSERT_TRUE(QMetaObject::invokeMethod(undoButton, "clicked"));
+    harness.settle();
+    EXPECT_EQ(harness.imageEdit.imageWidth(), 64);
+    EXPECT_EQ(harness.imageEdit.imageHeight(), 48);
+    EXPECT_EQ(harness.imageReview.rawImageForSlot(ImageReviewController::PrimarySlot).size(),
+              QSize(64, 48));
+    ASSERT_TRUE(QMetaObject::invokeMethod(redoButton, "clicked"));
+    harness.settle();
+    EXPECT_EQ(harness.imageEdit.imageWidth(), 32);
+
+    // Leaving edit mode drops the session and restores the committed pane source.
+    ASSERT_TRUE(QMetaObject::invokeMethod(startButton, "clicked"));
+    harness.settle();
+    EXPECT_FALSE(harness.imageEdit.active());
+    EXPECT_FALSE(workspace->property("editModeActive").toBool());
+    EXPECT_TRUE(
+        preview->property("source").toString().startsWith(QStringLiteral("image://vcs-review/")))
+        << preview->property("source").toString().toStdString();
 }
 
 // Phase 0 baseline: the Range Loop must never present a frame outside [In,Out]. Today the loop is
