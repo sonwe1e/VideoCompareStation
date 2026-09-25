@@ -1,5 +1,6 @@
 #include "dvs/ui/DesktopApplication.h"
 
+#include "dvs/ui/ComparisonExportController.h"
 #include "dvs/ui/ComparisonSurface.h"
 #include "dvs/ui/DiagnosticsProbe.h"
 #include "dvs/ui/ImageFolderPairModel.h"
@@ -176,6 +177,12 @@ public:
         issueLog_->setFolderModel(folderPairs_.get());
         issueLog_->setImageController(imageReview_.get());
         engine->rootContext()->setContextProperty(QStringLiteral("issueLog"), issueLog_.get());
+        // Step-2 comparison export: clipboard/save capture of the comparison viewport
+        // with an annotation bar. Optional so isolated harnesses can omit it; Main.qml
+        // guards every read on the context property being set.
+        comparisonExport_ = std::make_unique<ComparisonExportController>();
+        engine->rootContext()->setContextProperty(QStringLiteral("comparisonExport"),
+                                                  comparisonExport_.get());
         // UI observation bridge: forwards QML scene-graph operations (timeline thumbnail grabs)
         // into the bounded trace buffer so playback evidence can correlate them with pipeline
         // timing. With tracing disabled every call is one atomic load and a branch.
@@ -680,6 +687,7 @@ private:
     std::unique_ptr<ImageFolderPairModel> folderPairs_;
     application::IIssueRecordRepository* issueRecordRepository_ = nullptr;
     std::unique_ptr<IssueLogController> issueLog_;
+    std::unique_ptr<ComparisonExportController> comparisonExport_;
     std::unique_ptr<DiagnosticsProbe> diagnosticsProbe_;
     QQuickWindow* window_ = nullptr;
     ComparisonSurface* surface_ = nullptr;

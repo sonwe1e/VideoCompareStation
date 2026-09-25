@@ -79,6 +79,7 @@ ApplicationWindow {
     property bool issueLogPanelVisible: false
     // qmllint disable unqualified
     readonly property var issueLogModel: typeof issueLog !== "undefined" ? issueLog : null
+    readonly property var comparisonExportService: typeof comparisonExport !== "undefined" ? comparisonExport : null
     // qmllint enable unqualified
     readonly property bool imageWorkspaceActive: workspaceSession.imageActive
 
@@ -1245,6 +1246,62 @@ ApplicationWindow {
         if (ok)
             root.issueLogPanelVisible = true;
 
+        return ok;
+    }
+
+    // Step-2 comparison export: the caption names the compared sources (GT and
+    // predictions), the observation context and a timestamp, so the pasted image stands
+    // alone in a report. The capture itself is the presented display result, cropped to
+    // the comparison viewport — never original code values.
+    function comparisonCaptionLines() {
+        const lines = [];
+        const names = [sourceAName, sourceBName, sourceCName];
+        if (sourceCount === 3 && referenceSourceIndex >= 0 && referenceSourceIndex < 3 && names[referenceSourceIndex] && names[referenceSourceIndex].length > 0) {
+            const others = [];
+            for (let index = 0; index < 3; ++index) {
+                if (index !== referenceSourceIndex && names[index] && names[index].length > 0)
+                    others.push(names[index]);
+            }
+            lines.push(qsTr("GT：%1 · 预测：%2").arg(names[referenceSourceIndex]).arg(others.join(" / ")));
+        } else {
+            const present = [];
+            for (let index = 0; index < sourceCount; ++index) {
+                if (names[index] && names[index].length > 0)
+                    present.push(names[index]);
+            }
+            if (present.length > 0)
+                lines.push(present.join(" · "));
+        }
+        const modeNames = {
+            0: qsTr("并排"),
+            1: qsTr("三联"),
+            2: qsTr("参考聚焦"),
+            3: qsTr("差异"),
+            4: qsTr("分析网格"),
+            5: qsTr("分割线"),
+            6: qsTr("单画面"),
+            7: qsTr("淡化")
+        };
+        let context = modeNames[effectiveViewMode] || "";
+        if (currentFrame >= 0)
+            context += qsTr(" · 第 %1 帧").arg(currentFrame + 1);
+        if (sourceCount === 3 && selectedDifferenceEdge)
+            context += " · " + String(selectedDifferenceEdge.label || "");
+        if (differenceThresholdEnabled)
+            context += qsTr(" · 阈值 %1").arg(differenceThresholdCode);
+        if (context.length > 0)
+            lines.push(context);
+        lines.push(qsTr("CompareStation · %1").arg(Qt.formatDateTime(new Date(), "yyyy-MM-dd hh:mm")));
+        return lines;
+    }
+
+    function copyComparisonImage() {
+        if (!comparisonExportService) {
+            root.showImmersiveHud(qsTr("复制对比图不可用"));
+            return false;
+        }
+        const ok = Boolean(comparisonExportService.copyComparison(viewportFrame, comparisonCaptionLines()));
+        root.showImmersiveHud(ok ? qsTr("已复制对比图（含标注）") : qsTr("复制失败：%1").arg(comparisonExportService.lastStatus));
         return ok;
     }
 
@@ -2583,6 +2640,7 @@ ApplicationWindow {
         // qmllint enable unqualified
         onDifferencePeekChanged: held => root.differencePeekActive = held
         onSwitchCandidateRequested: root.switchCandidateEdge()
+        onCopyComparisonRequested: root.copyComparisonImage()
         onInspectorRequested: root.shell.inspectorVisible = !root.inspectorOpen
     }
     Rectangle {

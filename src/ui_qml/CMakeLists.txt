@@ -48,6 +48,7 @@ if(DVS_BUILD_ADAPTERS)
     add_library(
         dvs_ui_d3d11_bridge
         STATIC
+            include/dvs/ui/ComparisonExportController.h
             include/dvs/ui/ComparisonSurface.h
             include/dvs/ui/DesktopApplication.h
             include/dvs/ui/DiagnosticsProbe.h
@@ -59,6 +60,7 @@ if(DVS_BUILD_ADAPTERS)
             include/dvs/ui/RenderAckRelay.h
             include/dvs/ui/ReviewImageProvider.h
             include/dvs/ui/StillImageDecoder.h
+            src/ComparisonExportController.cpp
             src/DesktopApplication.cpp
             src/DiagnosticsProbe.cpp
             src/DirectCompare.cpp
