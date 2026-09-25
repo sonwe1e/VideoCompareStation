@@ -64,8 +64,15 @@ Rectangle {
     property var imageEdit: null
     readonly property bool editModeActive: Boolean(imageEdit && imageEdit.active)
     readonly property int editSourceSlot: editModeActive ? Number(imageEdit.sourceSlot) : -1
-    // Crop selection in image pixels (null while nothing is selected).
+    // Selection in image pixels (null while nothing is selected); shared by crop and mosaic.
     property var cropSelection: null
+    // Active editing tool: "crop", "brush" or "mosaic". Geometry always travels in image
+    // pixels, so switching tool or zooming never drifts a selection or a stroke.
+    property string editTool: "crop"
+    property color brushColor: "#ff3b30"
+    property int brushWidth: 4
+    property real brushOpacity: 1.0
+    property int mosaicBlock: 8
 
     onHasPairChanged: {
         if (!hasPair) {
@@ -262,13 +269,46 @@ Rectangle {
         if (!imageEdit || !imageEdit.active || !control.cropSelection)
             return false;
         const selection = control.cropSelection;
-        const applied = Boolean(imageEdit.cropToImageRect(selection.x, selection.y, selection.width, selection.height));
+        let applied = false;
+        if (control.editTool === "mosaic") {
+            applied = Boolean(imageEdit.mosaicImageRect(selection.x, selection.y, selection.width, selection.height, control.mosaicBlock));
+        } else {
+            applied = Boolean(imageEdit.cropToImageRect(selection.x, selection.y, selection.width, selection.height));
+        }
         if (applied) {
             control.cropSelection = null;
-            if (control.imageReview)
+            // Only a crop changes the geometry; a mosaic leaves the view where it was.
+            if (control.editTool !== "mosaic" && control.imageReview)
                 control.imageReview.resetView();
         }
         return applied;
+    }
+
+    // Brush: the stroke is painted live into the working copy, but the whole gesture is
+    // committed as one history step on release. Points are mapped to image pixels here, so
+    // the controller never sees viewport coordinates.
+    function beginBrushStroke(view, mouseX, mouseY) {
+        if (!imageEdit || !imageEdit.active)
+            return;
+        const mapped = mapToImage(view, mouseX, mouseY);
+        if (!mapped)
+            return;
+        if (!imageEdit.beginStroke(control.brushColor, control.brushWidth, control.brushOpacity))
+            return;
+        imageEdit.strokeTo(Math.round(mapped.x), Math.round(mapped.y));
+    }
+
+    function continueBrushStroke(view, mouseX, mouseY) {
+        if (!imageEdit || !imageEdit.strokeActive)
+            return;
+        const mapped = mapToImage(view, mouseX, mouseY);
+        if (mapped)
+            imageEdit.strokeTo(Math.round(mapped.x), Math.round(mapped.y));
+    }
+
+    function endBrushStroke() {
+        if (imageEdit && imageEdit.strokeActive)
+            imageEdit.endStroke();
     }
 
     // Converts a drag in one viewport into an image-pixel crop selection.
@@ -611,7 +651,9 @@ Rectangle {
                     control.toggleSinglePairSource();
             }
             onPositionChanged: mouse => {
-                if (viewport.cropActive) {
+                if (control.editModeActive && control.imageEdit && control.imageEdit.strokeActive) {
+                    control.continueBrushStroke(viewport, mouse.x, mouse.y);
+                } else if (viewport.cropActive) {
                     viewport.cropCurrent = Qt.point(mouse.x, mouse.y);
                     control.updateCropSelection(viewport);
                 } else if (viewport.marqueeActive) {
@@ -634,14 +676,20 @@ Rectangle {
                 control.hoverPoint = null;
             }
             onPressed: mouse => {
-                // Edit mode: the left button draws the crop selection (the review's rule),
-                // the middle button keeps panning below. View mode keeps the old gestures.
+                // Edit mode: the left button draws with the active tool (brush paints, crop
+                // and mosaic select a rect), while the middle button keeps panning below.
+                // View mode keeps the old gestures untouched.
                 if (control.editModeActive && mouse.button === Qt.LeftButton && !(mouse.modifiers & Qt.ShiftModifier)) {
-                    viewport.cropActive = true;
-                    viewport.cropStart = Qt.point(mouse.x, mouse.y);
-                    viewport.cropCurrent = Qt.point(mouse.x, mouse.y);
                     viewport.marqueeActive = false;
                     viewport.dragActive = false;
+                    if (control.editTool === "brush") {
+                        viewport.cropActive = false;
+                        control.beginBrushStroke(viewport, mouse.x, mouse.y);
+                    } else {
+                        viewport.cropActive = true;
+                        viewport.cropStart = Qt.point(mouse.x, mouse.y);
+                        viewport.cropCurrent = Qt.point(mouse.x, mouse.y);
+                    }
                 } else if (mouse.button === Qt.LeftButton && (mouse.modifiers & Qt.ShiftModifier)) {
                     viewport.cropActive = false;
                     viewport.marqueeActive = true;
@@ -658,6 +706,7 @@ Rectangle {
                 control.forceActiveFocus();
             }
             onReleased: mouse => {
+                control.endBrushStroke();
                 if (viewport.cropActive) {
                     viewport.cropActive = false;
                     viewport.suppressClickAfterMarquee = true;
@@ -1136,8 +1185,9 @@ Rectangle {
         }
 
         // Row C — step-3 image editing. The original file is never written to: the session
-        // edits a working copy and saving always produces a new file. Crop geometry is
-        // captured in image pixels, so zooming or panning cannot drift the selection.
+        // edits a working copy and saving always produces a new file. Every tool takes its
+        // geometry in image pixels, so zooming or panning cannot drift a selection or a
+        // stroke. The tool only changes what the left button does; middle-drag still pans.
         Row {
             id: editRow
             objectName: "imageEditRow"
@@ -1161,14 +1211,158 @@ Rectangle {
                 }
             }
             ReviewActionButton {
-                objectName: "imageEditApplyCropButton"
+                objectName: "imageEditToolCropButton"
                 visible: control.editModeActive
-                text: control.cropSelection ? qsTr("应用裁剪 %1×%2").arg(control.cropSelection.width).arg(control.cropSelection.height) : qsTr("应用裁剪")
+                checkable: true
+                checked: control.editTool === "crop"
+                text: qsTr("裁剪")
+                implicitHeight: 30
+                leftPadding: 10
+                rightPadding: 10
+                onClicked: control.editTool = "crop"
+            }
+            ReviewActionButton {
+                objectName: "imageEditToolBrushButton"
+                visible: control.editModeActive
+                checkable: true
+                checked: control.editTool === "brush"
+                text: qsTr("画笔")
+                implicitHeight: 30
+                leftPadding: 10
+                rightPadding: 10
+                onClicked: control.editTool = "brush"
+            }
+            ReviewActionButton {
+                objectName: "imageEditToolMosaicButton"
+                visible: control.editModeActive
+                checkable: true
+                checked: control.editTool === "mosaic"
+                text: qsTr("马赛克")
+                implicitHeight: 30
+                leftPadding: 10
+                rightPadding: 10
+                onClicked: control.editTool = "mosaic"
+            }
+            ReviewActionButton {
+                objectName: "imageEditBrushColorButton"
+                visible: control.editModeActive && control.editTool === "brush"
+                text: qsTr("颜色 ▾")
+                implicitHeight: 30
+                leftPadding: 8
+                rightPadding: 8
+                onClicked: brushColorMenu.open()
+
+                VcsMenu {
+                    id: brushColorMenu
+                    menuWidth: 150
+
+                    VcsRadioMenuItem {
+                        objectName: "imageEditBrushColorRed"
+                        text: qsTr("红")
+                        checked: control.brushColor === "#ff3b30"
+                        onTriggered: control.brushColor = "#ff3b30"
+                    }
+                    VcsRadioMenuItem {
+                        objectName: "imageEditBrushColorYellow"
+                        text: qsTr("黄")
+                        checked: control.brushColor === "#ffd60a"
+                        onTriggered: control.brushColor = "#ffd60a"
+                    }
+                    VcsRadioMenuItem {
+                        objectName: "imageEditBrushColorGreen"
+                        text: qsTr("绿")
+                        checked: control.brushColor === "#34c759"
+                        onTriggered: control.brushColor = "#34c759"
+                    }
+                    VcsRadioMenuItem {
+                        objectName: "imageEditBrushColorCyan"
+                        text: qsTr("青")
+                        checked: control.brushColor === "#32ade6"
+                        onTriggered: control.brushColor = "#32ade6"
+                    }
+                    VcsRadioMenuItem {
+                        objectName: "imageEditBrushColorWhite"
+                        text: qsTr("白")
+                        checked: control.brushColor === "#ffffff"
+                        onTriggered: control.brushColor = "#ffffff"
+                    }
+                    VcsRadioMenuItem {
+                        objectName: "imageEditBrushColorBlack"
+                        text: qsTr("黑")
+                        checked: control.brushColor === "#000000"
+                        onTriggered: control.brushColor = "#000000"
+                    }
+                }
+            }
+            Text {
+                objectName: "imageEditBrushWidthLabel"
+                visible: control.editModeActive && control.editTool === "brush"
+                height: 30
+                verticalAlignment: Text.AlignVCenter
+                text: qsTr("粗细 %1").arg(control.brushWidth)
+                color: Theme.mutedText
+                font.pixelSize: 11
+            }
+            Slider {
+                objectName: "imageEditBrushWidthSlider"
+                visible: control.editModeActive && control.editTool === "brush"
+                width: 96
+                height: 30
+                from: 1
+                to: 64
+                stepSize: 1
+                value: control.brushWidth
+                onMoved: control.brushWidth = Math.round(value)
+            }
+            Text {
+                objectName: "imageEditBrushOpacityLabel"
+                visible: control.editModeActive && control.editTool === "brush"
+                height: 30
+                verticalAlignment: Text.AlignVCenter
+                text: qsTr("透明 %1%").arg(Math.round(control.brushOpacity * 100))
+                color: Theme.mutedText
+                font.pixelSize: 11
+            }
+            Slider {
+                objectName: "imageEditBrushOpacitySlider"
+                visible: control.editModeActive && control.editTool === "brush"
+                width: 96
+                height: 30
+                from: 0.05
+                to: 1
+                stepSize: 0.05
+                value: control.brushOpacity
+                onMoved: control.brushOpacity = value
+            }
+            Text {
+                objectName: "imageEditMosaicBlockLabel"
+                visible: control.editModeActive && control.editTool === "mosaic"
+                height: 30
+                verticalAlignment: Text.AlignVCenter
+                text: qsTr("块大小 %1").arg(control.mosaicBlock)
+                color: Theme.mutedText
+                font.pixelSize: 11
+            }
+            Slider {
+                objectName: "imageEditMosaicBlockSlider"
+                visible: control.editModeActive && control.editTool === "mosaic"
+                width: 120
+                height: 30
+                from: 2
+                to: 48
+                stepSize: 1
+                value: control.mosaicBlock
+                onMoved: control.mosaicBlock = Math.round(value)
+            }
+            ReviewActionButton {
+                objectName: "imageEditApplyCropButton"
+                visible: control.editModeActive && control.editTool !== "brush"
+                text: control.cropSelection ? (control.editTool === "mosaic" ? qsTr("应用马赛克 %1×%2").arg(control.cropSelection.width).arg(control.cropSelection.height) : qsTr("应用裁剪 %1×%2").arg(control.cropSelection.width).arg(control.cropSelection.height)) : (control.editTool === "mosaic" ? qsTr("应用马赛克") : qsTr("应用裁剪"))
                 enabled: control.cropSelection !== null && control.imageEdit && control.imageEdit.active
                 implicitHeight: 30
                 leftPadding: 10
                 rightPadding: 10
-                helpText: qsTr("编辑模式下左键框选裁剪区域，中键仍可平移。")
+                helpText: qsTr("编辑模式下左键框选区域，中键仍可平移；画笔工具下左键直接涂画。")
                 onClicked: control.applyCropSelection()
             }
             ReviewActionButton {
@@ -1209,12 +1403,13 @@ Rectangle {
             Text {
                 objectName: "imageEditStatusText"
                 visible: control.editModeActive
-                anchors.verticalCenter: parent.verticalCenter
+                height: 30
+                verticalAlignment: Text.AlignVCenter
                 text: control.imageEdit ? String(control.imageEdit.lastStatus || "") : ""
                 color: Theme.mutedText
                 font.pixelSize: 11
                 elide: Text.ElideRight
-                width: Math.min(520, implicitWidth)
+                width: Math.min(420, implicitWidth)
             }
         }
     }

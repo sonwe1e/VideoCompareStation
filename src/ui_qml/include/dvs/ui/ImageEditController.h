@@ -35,6 +35,8 @@ class ImageEditController final : public QObject {
     // Cache-busting URL of the working copy for the dvs-edit image provider; changes with
     // every edit so a QML Image binding reloads without any manual invalidation.
     Q_PROPERTY(QString editedImageUrl READ editedImageUrl NOTIFY imageChanged)
+    // True while a brush stroke is being drawn (the workspace shows a live preview).
+    Q_PROPERTY(bool strokeActive READ strokeActive NOTIFY stateChanged)
     Q_PROPERTY(QString lastStatus READ lastStatus NOTIFY statusChanged)
 public:
     // Decoded original for one display slot, injected by the composition root so the
@@ -69,6 +71,16 @@ public:
     // Crops the working copy to an image-pixel rect, clamped to the current image. The
     // rect is in image coordinates, never viewport coordinates.
     Q_INVOKABLE bool cropToImageRect(int x, int y, int width, int height);
+    // Brush. One stroke is one undo step; the stroke is painted live into the working copy
+    // and committed with a dirty-rect patch, so history never stores a full image per
+    // stroke. Points are image pixels: a zoomed or panned viewport cannot drift them.
+    // Opacity is 0..1 and width is in image pixels.
+    Q_INVOKABLE bool beginStroke(const QColor& color, int width, qreal opacity);
+    Q_INVOKABLE bool strokeTo(int x, int y);
+    Q_INVOKABLE bool endStroke();
+    [[nodiscard]] bool strokeActive() const noexcept;
+    // Mosaic: pixelates an image-pixel rect into opaque blocks of the given size.
+    Q_INVOKABLE bool mosaicImageRect(int x, int y, int width, int height, int blockSize);
     Q_INVOKABLE bool undo();
     Q_INVOKABLE bool redo();
     // Cache-busting URL of the working copy for the dvs-edit image provider.

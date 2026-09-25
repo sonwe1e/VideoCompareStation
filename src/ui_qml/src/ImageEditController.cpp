@@ -1,9 +1,12 @@
 #include "dvs/ui/ImageEditController.h"
 
 #include <QBuffer>
+#include <QColor>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QPainter>
+#include <QPen>
 #include <QPoint>
 #include <QRect>
 #include <QSaveFile>
@@ -19,6 +22,11 @@ namespace {
 constexpr int kDefaultHistoryLimit = 8;
 constexpr int kMaximumHistoryLimit = 64;
 constexpr int kMaximumImageEdge = 16384;
+// A live brush preview bumps the provider revision, and the QML Image re-uploads the whole
+// buffer on each bump. Throttling keeps a stroke responsive without flooding the GPU.
+constexpr int kStrokePreviewIntervalMs = 66;
+constexpr int kMaximumBrushWidth = 256;
+constexpr int kMaximumMosaicBlock = 64;
 
 [[nodiscard]] QString targetSuffix(const QUrl& target) {
     const QString path = target.isLocalFile() ? target.toLocalFile() : target.toString();
@@ -54,6 +62,40 @@ public:
         QImage previous_;
     };
 
+    // One undoable pixel edit that stayed inside a rect (brush stroke, mosaic). Only the
+    // dirty rect is retained, so a stroke costs its own footprint instead of a full image.
+    class PatchCommand final : public QUndoCommand {
+    public:
+        PatchCommand(Impl* owner, const QRect rect, QImage before, QImage after, QString label)
+            : owner_(owner), rect_(rect), before_(std::move(before)), after_(std::move(after)) {
+            setText(std::move(label));
+        }
+
+        void undo() override {
+            blit(before_);
+        }
+
+        void redo() override {
+            blit(after_);
+        }
+
+    private:
+        void blit(const QImage& patch) {
+            if (patch.isNull() || rect_.isEmpty()) {
+                return;
+            }
+            QPainter painter(&owner_->working);
+            // Source (not SourceOver) so undo restores alpha exactly rather than blending.
+            painter.setCompositionMode(QPainter::CompositionMode_Source);
+            painter.drawImage(rect_.topLeft(), patch);
+        }
+
+        Impl* owner_;
+        QRect rect_;
+        QImage before_;
+        QImage after_;
+    };
+
     SourceImageProvider sourceProvider;
     QImage original;
     QImage working;
@@ -63,6 +105,43 @@ public:
     int revision = 0;
     QString status;
     QUndoStack history;
+    // Live brush stroke: the base buffer is transient (released when the stroke commits)
+    // and only the stroke's dirty rect enters the history.
+    QImage strokeBase;
+    QRect strokeBounds;
+    QPoint strokeLast{-1, -1};
+    QElapsedTimer strokePreviewClock;
+    bool strokeOpen = false;
+    QColor strokeColor{Qt::red};
+    int strokeWidth = 4;
+    qreal strokeOpacity = 1.0;
+
+    [[nodiscard]] QRect strokeDirtyRect() const {
+        if (!strokeBounds.isValid()) {
+            return {};
+        }
+        const int margin = (strokeWidth / 2) + 2;
+        return strokeBounds.adjusted(-margin, -margin, margin, margin)
+            .intersected(QRect{0, 0, working.width(), working.height()});
+    }
+
+    void paintSegment(const QPoint& from, const QPoint& to) {
+        QPainter painter(&working);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setOpacity(std::clamp(strokeOpacity, 0.05, 1.0));
+        if (from == to) {
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(strokeColor);
+            painter.drawEllipse(QPointF{from}, strokeWidth / 2.0, strokeWidth / 2.0);
+            return;
+        }
+        QPen pen{strokeColor};
+        pen.setWidth(strokeWidth);
+        pen.setCapStyle(Qt::RoundCap);
+        pen.setJoinStyle(Qt::RoundJoin);
+        painter.setPen(pen);
+        painter.drawLine(from, to);
+    }
 };
 
 ImageEditController::ImageEditController(QObject* parent) : QObject(parent), impl_(nullptr) {
@@ -191,6 +270,12 @@ void ImageEditController::endSession() {
     impl_->slot = -1;
     impl_->label.clear();
     impl_->sourcePath.clear();
+    // A session can end mid-stroke (workspace closed); the stroke preview buffer must not
+    // outlive it.
+    impl_->strokeOpen = false;
+    impl_->strokeBase = QImage();
+    impl_->strokeBounds = QRect{};
+    impl_->strokeLast = QPoint{-1, -1};
     impl_->history.setClean();
     ++impl_->revision;
     emit stateChanged();
@@ -224,6 +309,131 @@ bool ImageEditController::cropToImageRect(const int x,
     }
     impl_->history.push(new Impl::CropCommand(impl_.get(), bounded));
     setStatus(tr("已裁剪为 %1×%2").arg(bounded.width()).arg(bounded.height()));
+    return true;
+}
+
+bool ImageEditController::beginStroke(const QColor& color, const int width, const qreal opacity) {
+    if (!active()) {
+        setStatus(tr("没有正在编辑的图片。"));
+        return false;
+    }
+    if (!color.isValid()) {
+        setStatus(tr("画笔颜色无效。"));
+        return false;
+    }
+    if (impl_->strokeOpen) {
+        // Never leave a stale stroke open: it would blur two gestures into one history step.
+        endStroke();
+    }
+    impl_->strokeColor = color;
+    impl_->strokeWidth = std::clamp(width, 1, kMaximumBrushWidth);
+    impl_->strokeOpacity = std::clamp(opacity, 0.05, 1.0);
+    // Transient base buffer for the undo patch; released as soon as the stroke commits.
+    impl_->strokeBase = impl_->working;
+    impl_->strokeBounds = QRect{};
+    impl_->strokeLast = QPoint{-1, -1};
+    impl_->strokeOpen = true;
+    impl_->strokePreviewClock.start();
+    emit stateChanged();
+    return true;
+}
+
+bool ImageEditController::strokeTo(const int x, const int y) {
+    if (!impl_->strokeOpen) {
+        setStatus(tr("没有正在进行的笔画。"));
+        return false;
+    }
+    if (impl_->working.isNull()) {
+        return false;
+    }
+    const QPoint point{std::clamp(x, 0, impl_->working.width() - 1),
+                       std::clamp(y, 0, impl_->working.height() - 1)};
+    if (impl_->strokeLast.x() < 0) {
+        impl_->strokeLast = point;
+        impl_->strokeBounds = QRect{point, point};
+        impl_->paintSegment(point, point);
+    } else {
+        impl_->strokeBounds = impl_->strokeBounds.united(QRect{impl_->strokeLast, point});
+        impl_->paintSegment(impl_->strokeLast, point);
+        impl_->strokeLast = point;
+    }
+    if (!impl_->strokePreviewClock.isValid() ||
+        impl_->strokePreviewClock.elapsed() >= kStrokePreviewIntervalMs) {
+        impl_->strokePreviewClock.restart();
+        ++impl_->revision;
+        emit imageChanged();
+    }
+    return true;
+}
+
+bool ImageEditController::endStroke() {
+    if (!impl_->strokeOpen) {
+        setStatus(tr("没有正在进行的笔画。"));
+        return false;
+    }
+    impl_->strokeOpen = false;
+    const QRect dirty = impl_->strokeDirtyRect();
+    if (!dirty.isEmpty()) {
+        impl_->history.push(new Impl::PatchCommand(impl_.get(),
+                                                   dirty,
+                                                   impl_->strokeBase.copy(dirty),
+                                                   impl_->working.copy(dirty),
+                                                   tr("画笔")));
+    } else {
+        ++impl_->revision;
+        emit imageChanged();
+    }
+    impl_->strokeBase = QImage();
+    impl_->strokeBounds = QRect{};
+    impl_->strokeLast = QPoint{-1, -1};
+    emit stateChanged();
+    setStatus(dirty.isEmpty() ? tr("笔画没有产生改动。") : tr("已完成笔画。"));
+    return true;
+}
+
+bool ImageEditController::strokeActive() const noexcept {
+    return impl_->strokeOpen;
+}
+
+bool ImageEditController::mosaicImageRect(
+    const int x, const int y, const int width, const int height, const int blockSize) {
+    if (!active()) {
+        setStatus(tr("没有正在编辑的图片。"));
+        return false;
+    }
+    if (width <= 0 || height <= 0) {
+        setStatus(tr("马赛克区域为空。"));
+        return false;
+    }
+    const QRect bounded = QRect{x, y, width, height}.intersected(
+        QRect{0, 0, impl_->working.width(), impl_->working.height()});
+    if (bounded.isEmpty()) {
+        setStatus(tr("马赛克区域超出图片范围。"));
+        return false;
+    }
+    const int block =
+        std::clamp(blockSize, 2, std::max(2, std::min(bounded.width(), bounded.height())));
+    // Nearest-neighbour down/up scaling is the deterministic pixelate: each block keeps one
+    // sampled colour, and the blocks stay opaque so the region really is obscured.
+    const QImage pixelated =
+        impl_->working.copy(bounded)
+            .scaled(std::max(1, bounded.width() / block),
+                    std::max(1, bounded.height() / block),
+                    Qt::IgnoreAspectRatio,
+                    Qt::FastTransformation)
+            .scaled(bounded.size(), Qt::IgnoreAspectRatio, Qt::FastTransformation);
+    QImage after = impl_->working.copy(bounded);
+    {
+        QPainter painter(&after);
+        painter.setCompositionMode(QPainter::CompositionMode_Source);
+        painter.drawImage(0, 0, pixelated);
+    }
+    impl_->history.push(new Impl::PatchCommand(
+        impl_.get(), bounded, impl_->working.copy(bounded), std::move(after), tr("马赛克")));
+    setStatus(tr("已对 %1×%2 区域应用马赛克（块 %3 像素）")
+                  .arg(bounded.width())
+                  .arg(bounded.height())
+                  .arg(block));
     return true;
 }
 
