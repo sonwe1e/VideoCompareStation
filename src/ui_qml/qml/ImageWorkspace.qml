@@ -51,7 +51,10 @@ Rectangle {
     readonly property bool diffModeActive: Boolean(imageReview && imageReview.hasPair && imageReview.compareMode >= 2 && (imageReview.compareMode <= 4 || imageReview.compareMode === 6))
     readonly property int viewMode: imageReview ? Number(imageReview.viewMode) : 0
     // Background under transparent regions: 0 = dark, 1 = checkerboard, 2 = black, 3 = white.
-    property int backgroundMode: 0
+    // The neutral checkerboard is the default so the content area never tints color judgment
+    // of semi-transparent pixels (the dark option keeps its blue-leaning #090d14 as an
+    // explicit choice; the app chrome keeps the dark theme).
+    property int backgroundMode: 1
     property bool singleViewShowSecondary: false
     property var hoverPoint: null
 
@@ -222,7 +225,9 @@ Rectangle {
     }
 
     // Deterministic checkerboard behind transparent regions (cell scaled to the viewport),
-    // so partial alpha reads as a blend against known colors instead of the dark void.
+    // so partial alpha reads as a blend against known colors instead of the dark void. Both
+    // tones are true neutral grays at the previous lightness levels; the old #22262e/#383e4a
+    // pair leaned blue and could tint color judgment.
     component CheckerboardBackground: Canvas {
         onWidthChanged: requestPaint()
         onHeightChanged: requestPaint()
@@ -231,9 +236,9 @@ Rectangle {
             if (!ctx)
                 return;
             const cell = Math.max(8, Math.min(16, Math.round(Math.max(width, height) / 56)));
-            ctx.fillStyle = "#22262e";
+            ctx.fillStyle = "#272727";
             ctx.fillRect(0, 0, width, height);
-            ctx.fillStyle = "#383e4a";
+            ctx.fillStyle = "#404040";
             for (let y = 0; y < height; y += cell) {
                 const offset = (y / cell) % 2 === 0 ? 0 : cell;
                 for (let x = offset; x < width; x += cell * 2)
@@ -1172,7 +1177,7 @@ Rectangle {
                 Rectangle {
                     id: imageAlphaObservationBadge
                     objectName: "imageAlphaObservationBadge"
-                    visible: control.hasPrimary && (control.viewMode !== 0 || control.backgroundMode !== 0)
+                    visible: control.hasPrimary && (control.viewMode !== 0 || control.backgroundMode !== 1)
                     z: 30
                     width: Math.min(stageContent.width - (imageInPlaceBadge.visible ? imageInPlaceBadge.width + 52 : 28), alphaBadgeContent.implicitWidth + 20)
                     height: 32
@@ -1214,7 +1219,7 @@ Rectangle {
                                     return qsTr("按 A 还原 RGBA · 点击还原");
                                 if (control.viewMode === 2)
                                     return qsTr("按 O 还原 RGBA · 点击还原");
-                                return qsTr("点击还原深色背景");
+                                return qsTr("点击还原棋盘格背景");
                             }
                             color: "#e2e8f0"
                             font.pixelSize: 11
@@ -1228,7 +1233,7 @@ Rectangle {
                                 if (control.imageReview)
                                     control.imageReview.viewMode = 0;
                             } else {
-                                control.backgroundMode = 0;
+                                control.backgroundMode = 1;
                             }
                         }
                     }
