@@ -1,6 +1,7 @@
 #include "dvs/application/Alignment.h"
 #include "dvs/application/SessionSnapshot.h"
 #include "dvs/domain/ComparisonValidator.h"
+#include "dvs/ui/ComparisonExportController.h"
 #include "dvs/ui/ComparisonSurface.h"
 #include "dvs/ui/GraphicsBackend.h"
 #include "dvs/ui/ImageFolderPairModel.h"
@@ -12,6 +13,7 @@
 #include "dvs/ui/ReviewShellController.h"
 #include "dvs/ui/SourceListModel.h"
 
+#include <QClipboard>
 #include <QColor>
 #include <QCoreApplication>
 #include <QDir>
@@ -2111,6 +2113,179 @@ TEST(MainQmlContractTests, DifferenceButtonOffersFlavorsAndPeekTogglesSuppressio
     preferences.setViewMode(ReviewPreferencesController::ViewMode::SideBySide);
     QCoreApplication::processEvents();
     EXPECT_FALSE(peekButton->isVisible());
+}
+
+// Step-2 comparison export: the composed capture is the exact viewport crop plus a
+// neutral-gray caption bar (true grays — an exported image must not tint color judgment).
+TEST(MainQmlContractTests, ComparisonExportComposesCaptionBarInNeutralGray) {
+    QImage windowCapture(64, 32, QImage::Format_RGBA8888);
+    windowCapture.fill(QColor{200, 40, 30});
+    const QRect viewportRect{8, 4, 48, 24};
+    const QStringList caption{QStringLiteral("GT:a.mp4 / P:b.mp4"),
+                              QStringLiteral("split - frame 12")};
+
+    const QImage composed = ComparisonExportController::composeLabeledCapture(
+        windowCapture, viewportRect, caption, 1.0);
+    ASSERT_FALSE(composed.isNull());
+    EXPECT_EQ(composed.width(), 48);
+    const int barHeight = ComparisonExportController::captionBarHeight(2, 1.0);
+    EXPECT_GT(barHeight, 0);
+    EXPECT_EQ(composed.height(), 24 + barHeight);
+
+    // The viewport part is the exact crop of the source capture.
+    EXPECT_EQ(composed.pixelColor(24, 12), QColor(200, 40, 30));
+
+    // The bar background is true neutral gray and clearly darker than the content.
+    const QColor bar = composed.pixelColor(4, 24 + barHeight / 2);
+    EXPECT_EQ(bar.red(), bar.green());
+    EXPECT_EQ(bar.green(), bar.blue());
+    EXPECT_LT(bar.lightness(), 64);
+
+    // The elided caption text actually drew ink into the bar.
+    int inkPixels = 0;
+    for (int y = 24; y < composed.height(); ++y) {
+        for (int x = 0; x < composed.width(); ++x) {
+            if (composed.pixelColor(x, y).lightness() > bar.lightness() + 40) {
+                ++inkPixels;
+            }
+        }
+    }
+    EXPECT_GT(inkPixels, 20);
+
+    // An empty caption returns the bare crop; an empty crop returns a null image.
+    EXPECT_EQ(
+        ComparisonExportController::composeLabeledCapture(windowCapture, viewportRect, {}, 1.0)
+            .height(),
+        24);
+    EXPECT_TRUE(ComparisonExportController::composeLabeledCapture(
+                    windowCapture, QRect{100, 100, 10, 10}, caption, 1.0)
+                    .isNull());
+}
+
+// Step-2 comparison export wiring: the toolbar button composes the labeled viewport
+// capture onto the clipboard, and the controller saves the same composition as a PNG.
+TEST(MainQmlContractTests, CopyComparisonButtonPutsLabeledViewportOnClipboard) {
+    auto snapshot = std::make_shared<application::SessionSnapshot>();
+    snapshot->graphicsReady = true;
+    snapshot->sessionState = domain::SessionState::kReady;
+    snapshot->playbackState = domain::PlaybackState::kPaused;
+    snapshot->displayedFrame = domain::FrameId{11};
+    snapshot->canonicalFrameCount = 12U;
+    snapshot->sources = {
+        application::SessionSourceView{
+            .sourceId = 0U,
+            .role = domain::ComparisonRole::kReference,
+            .displayName = "A",
+        },
+        application::SessionSourceView{
+            .sourceId = 1U,
+            .role = domain::ComparisonRole::kPrediction,
+            .displayName = "B",
+        },
+    };
+    snapshot->presentedSources = {
+        application::PresentedSourceState{
+            .sourceId = 0U,
+            .sourceFrameId = domain::FrameId{11},
+            .matchKind = application::FrameMatchKind::ExactIndex,
+        },
+        application::PresentedSourceState{
+            .sourceId = 1U,
+            .sourceFrameId = domain::FrameId{11},
+            .matchKind = application::FrameMatchKind::ExactIndex,
+        },
+    };
+    std::vector<application::PlaybackCommand> submitted;
+    ReviewController controller{
+        ReviewController::Dependencies{
+            .submit =
+                [&submitted](application::PlaybackCommand command) {
+                    submitted.push_back(std::move(command));
+                    return application::PortSubmitResult::Accepted;
+                },
+            .snapshot = [snapshot] { return snapshot; },
+            .takeCompletedCommands = [] { return std::vector<application::CommandTerminal>{}; },
+        },
+    };
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    preferences.setViewMode(ReviewPreferencesController::ViewMode::Wipe);
+    ReviewShellController shell{controller, preferences};
+    ReviewSessionFacade facade{controller, preferences, shell};
+    ComparisonExportController exportController;
+
+    QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
+    engine.rootContext()->setContextProperty(QStringLiteral("comparisonExport"), &exportController);
+    QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
+    ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
+
+    std::unique_ptr<QObject> root{component.create()};
+    ASSERT_NE(root, nullptr) << componentErrors(component);
+    auto* const window = qobject_cast<QQuickWindow*>(root.get());
+    ASSERT_NE(window, nullptr);
+    window->resize(1440, 900);
+    window->show();
+    QCoreApplication::processEvents();
+
+    auto* const copyButton = root->findChild<QQuickItem*>(QStringLiteral("copyComparisonButton"));
+    ASSERT_NE(copyButton, nullptr);
+    EXPECT_TRUE(copyButton->isVisible());
+    auto* const viewport = root->findChild<QQuickItem*>(QStringLiteral("mediaViewportFocusTarget"));
+    ASSERT_NE(viewport, nullptr);
+
+    // A sentinel makes the clipboard state deterministic before the copy. The Windows
+    // OLE clipboard completes asynchronously, so pump events between writes and retry
+    // the copy when another process briefly holds the clipboard.
+    QImage sentinel(3, 3, QImage::Format_RGBA8888);
+    sentinel.fill(Qt::black);
+    QGuiApplication::clipboard()->setImage(sentinel);
+    for (int iteration = 0; iteration < 10; ++iteration) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        QThread::msleep(10U);
+    }
+
+    QImage pasted;
+    for (int attempt = 0; attempt < 3 && pasted.isNull(); ++attempt) {
+        ASSERT_TRUE(QMetaObject::invokeMethod(copyButton, "clicked"));
+        for (int iteration = 0; iteration < 10; ++iteration) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+            QThread::msleep(10U);
+        }
+        pasted = QGuiApplication::clipboard()->image();
+    }
+    ASSERT_FALSE(pasted.isNull());
+    EXPECT_NE(pasted.size(), QSize(3, 3));
+    // The capture is the viewport's device-pixel rect plus the caption bar.
+    const qreal devicePixelRatio = window->devicePixelRatio();
+    EXPECT_NEAR(pasted.width(), viewport->width() * devicePixelRatio, 3.0);
+    EXPECT_GT(pasted.height(), qRound(viewport->height() * devicePixelRatio));
+    EXPECT_TRUE(exportController.lastStatus().contains(QStringLiteral("已复制")))
+        << exportController.lastStatus().toStdString();
+
+    // The same composition saves transactionally as a PNG file.
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("comparison.png"));
+    ASSERT_TRUE(
+        exportController.saveComparison(viewport,
+                                        QStringList{QStringLiteral("A"), QStringLiteral("B")},
+                                        QUrl::fromLocalFile(path)));
+    QFile saved{path};
+    ASSERT_TRUE(saved.open(QIODevice::ReadOnly));
+    const QByteArray bytes = saved.readAll();
+    ASSERT_GT(bytes.size(), 1000);
+    // PNG magic: the saved file is a real PNG.
+    EXPECT_EQ(static_cast<std::uint8_t>(bytes[0]), 0x89U);
+    EXPECT_EQ(bytes[1], 'P');
+    EXPECT_EQ(bytes[2], 'N');
+    EXPECT_EQ(bytes[3], 'G');
+    EXPECT_TRUE(exportController.lastStatus().contains(QStringLiteral("已保存")))
+        << exportController.lastStatus().toStdString();
 }
 
 // Phase 0 baseline: the Range Loop must never present a frame outside [In,Out]. Today the loop is

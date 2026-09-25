@@ -33,6 +33,8 @@ Rectangle {
     // Step-2 "固定 GT 切候选": one action flips the candidate side against the fixed
     // reference; Main keeps the frame, zoom/pan and wipe split untouched.
     signal switchCandidateRequested
+    // Step-2 comparison export: one action copies the labeled comparison capture.
+    signal copyComparisonRequested
     signal inspectorRequested
 
     // qmllint disable import unqualified unresolved-type
@@ -270,6 +272,25 @@ Rectangle {
         anchors {
             right: parent.right
             rightMargin: 12
+            verticalCenter: parent.verticalCenter
+        }
+    }
+
+    // Step-2 comparison export: copies the comparison viewport plus an annotation bar
+    // (source names, observation context) to the clipboard in one action.
+    VcsToolButton {
+        id: copyComparisonButton
+
+        objectName: "copyComparisonButton"
+        text: qsTr("复制对比图")
+        enabled: !control.busy
+        implicitWidth: 104
+        implicitHeight: 30
+        labelPixelSize: 12
+        onClicked: control.copyComparisonRequested()
+        anchors {
+            right: inspectorToggleButton.left
+            rightMargin: 8
             verticalCenter: parent.verticalCenter
         }
     }
