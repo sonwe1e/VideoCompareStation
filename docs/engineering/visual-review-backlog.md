@@ -3,6 +3,39 @@
 更新：2026-09-25。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
 
+## 2026-09-25 图片通道视图与淡化切换修复（P0，基线 `85be854` + 本轮工作区）
+
+对应 2026-09-25 审查 §二：两处已确认缺陷的修复与回归验证。**正常 RGBA 视图「偏蓝」的
+最终根因仍未确认**，本轮不把它与通道读取错误合并——`RgbaView` 不经过 `channelView()`
+（直接返回原图），Alpha 灰度视图碰巧正确；深色底 `#090d14` 对半透明区域的合成影响仍是
+待验证假设，等待用户提供问题原图与含通道模式/背景设置的截图后再排查。
+
+- **通道派生视图 R/B 读反（误导颜色判断，I-02）**：解码链路统一输出
+  `Format_RGBA8888`，而 `ImageReviewController::channelView()` 把每行直接
+  `reinterpret_cast<const QRgb*>` 后使用 `qRed/qGreen/qBlue/qAlpha`。`QRgb` 是
+  `0xAARRGGBB` 整数，小端目标上这样读会把 R/B 对调、Alpha 恰好对齐——「忽略 Alpha
+  查看 RGB」红蓝颠倒而 Alpha 灰度看起来正常。`ImagePairLoader::analyzeDifference()`
+  早已注明该陷阱并改为显式 RGBA8888 字节读取；本次把 `channelView()` 统一到同一
+  口径（按格式归一后按 R,G,B,A 字节取值，RGBA8888 缓冲归一为零拷贝浅拷贝）。
+  回归测试 `ChannelViewsReadRgba8888BuffersInTrueChannelOrder` 注入 RGBA8888 缓冲
+  （生产格式），断言暖色/冷色像素在两侧派生视图中的真实通道值；既有 ARGB32 注入
+  用例继续通过（此前正是 ARGB32 注入让该缺陷对测试套件不可见）。
+- **淡化（Fade）切换被控制器拒绝（C-02）**：枚举定义 `Fade = 7`，但
+  `setCompareMode()` 以 `AlphaDifference = 6` 为上限，进入模式 7 直接返回——
+  2026-09-22 一轮把 Fade 记为可用并不准确，入口随后被隐藏。本轮上限放宽到 `Fade`
+  并恢复工具栏入口（`visible: hasPair`）；`retainedCompareModeFor` 本就把 Fade 当
+  纯显示模式保留，换对后观察模式不丢。按「点按钮后真的发生了什么」补契约验证：
+  `ImageWorkspaceManualFlickerContract` 现在点击 `imageModeFade` 后断言
+  `compareMode === 7`、`fadeOverlay`/`imageFadeSlider` 可见，再切回手动闪烁。
+  控制器测试 `CompareModeAcceptsFadeAndKeepsItViewOnly` 同时覆盖无配对拒绝、
+  有配对进入、纯显示（不触发差异管线）与 fadePosition 语义。
+- **测试**：`pwsh tools/build/build.ps1 -Preset dev -Test -TestRegex
+  'ui.(ImageReviewControllerTests|MainQmlContractTests)'` —— 选择 75 项：
+  `ui.ImageReviewControllerTests` 47/47 通过（含 2 项新用例），
+  `ui.MainQmlContractTests` 24 通过 + 4 项既有禁用，零失败；格式与 lint 门禁通过
+  （out/pr-channel-fade-tests.log、out/pr-channel-fade-format.log、
+  out/pr-channel-fade-lint.log）。实窗与 Release 验收仍按既有要求单独执行。
+
 ## 2026-09-25 读数与显示口径第二批（P1，基线 `68212f7` + 本轮工作区）
 
 按审查 §2.4（P1 部分）与 §2.5 修改图片差异链路与口径标注。用户已确认实际素材范围为
@@ -310,6 +343,10 @@
   3. `ImageReviewController::samplePixel` 在 RGBA 视图对 A/B 原图输出
      `nativeBitDepth/r16/g16/b16/a16`，`ImageWorkspace` 读数显示"原始 %1-bit：R… G… B…"；
   4. 直接注入路径（`openPairImages` 等）显式清空 sidecar，杜绝陈旧原始值。
+- **2026-09-25 补充**：`channelView()` 派生视图曾按 `QRgb` 误读 RGBA8888 缓冲导致 R/B
+  对调（「忽略 Alpha 查看 RGB」红蓝颠倒、Alpha 灰度碰巧正确），已改为按真实字节序读取
+  并有 RGBA8888 注入回归用例；正常 RGBA 视图的「偏蓝」与此无关（`RgbaView` 直接返回
+  原图），根因仍待用户样例排查（见顶部记录）。
 - **退出条件**：16 位输入显示正确来源信息，取样值明确属于 RGBA8；需要原始数据时保留对应缓冲和码值
   （现已满足：>8-bit 源同时给出显示值与原始码值）；ICC 样本只有在确定转换契约并验证后才声称颜色正确（仍待实现）。
 - **验证入口**：`StillImageDecoderTests.cpp`、`ImageReviewControllerTests.cpp`
@@ -375,7 +412,7 @@
 - **已有**：视频局部放大、平移、ROI、区间循环、高亮及问题记录，不应重新当作缺失能力实现。
 - **2026-09-23 调整**：
   1. 图片单图对比改为手动闪烁：默认 A，点击画面、按 `Space` 或 `T` 在 A/B 间切换；不自动计时交替。顶部 HUD 显示当前源并限制宽度；
-  2. 差异模式收为显示当前选项的下拉菜单；淡化入口隐藏。原淡化按钮无效的直接原因是控制器拒绝模式值 `7`；
+  2. 差异模式收为显示当前选项的下拉菜单；淡化入口隐藏。原淡化按钮无效的直接原因是控制器拒绝模式值 `7`（2026-09-25 已修复并恢复入口，点击链路经契约测试验证，见顶部记录）；
   3. 并排模式跨图同步十字准星（Hover 时镜像侧精准投影目标瞄准环、辅助十字线与图像像素坐标，彻底消除并排观察微小伪影时的视线寻找负担）；
 - **验证入口**：`MainQmlContractTests.cpp` 的 `ImageWorkspaceManualFlickerContract`、`ImageWorkspaceAlphaAndBackgroundSelectionContract` 与并排准星用例；`tst_image_workspace_manual.qml` 用 Qt Quick 鼠标点击画布两次，验证 A→B→A。
 - **本轮验证**：`dev` 全套 648 项可运行测试中，除版本切换导致的发布契约元数据缺项外均通过；

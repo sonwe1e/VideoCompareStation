@@ -3087,9 +3087,36 @@ TEST(MainQmlContractTests, ImageWorkspaceManualFlickerContract) {
     harness.settle();
     EXPECT_EQ(primaryViewport->property("slot").toInt(), 2);
 
+    // The Fade chip is visible again and clicking it must actually engage the mode: the
+    // controller used to reject compareMode 7, so the entry was hidden (C-02).
     auto* const fadeBtn = harness.root->findChild<QQuickItem*>(QStringLiteral("imageModeFade"));
     ASSERT_NE(fadeBtn, nullptr);
-    EXPECT_FALSE(fadeBtn->isVisible());
+    EXPECT_TRUE(fadeBtn->isVisible());
+    ASSERT_TRUE(QMetaObject::invokeMethod(fadeBtn, "clicked"));
+    harness.settle();
+    EXPECT_EQ(harness.imageReview.compareMode(), 7);
+    auto* const fadeOverlay = harness.root->findChild<QQuickItem*>(QStringLiteral("fadeOverlay"));
+    ASSERT_NE(fadeOverlay, nullptr);
+    EXPECT_TRUE(fadeOverlay->isVisible());
+    auto* const fadeSlider =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageFadeSlider"));
+    ASSERT_NE(fadeSlider, nullptr);
+    EXPECT_TRUE(fadeSlider->isVisible());
+    // Optional evidence capture for the visible QML change (same env-gated pattern as the
+    // high-depth alpha readout): the shot shows the restored chip, overlay and slider.
+    const auto evidenceDirectory = qEnvironmentVariable("DVS_REVIEW_EVIDENCE_DIR");
+    if (!evidenceDirectory.isEmpty()) {
+        ASSERT_TRUE(QDir().mkpath(evidenceDirectory));
+        ASSERT_TRUE(harness.window->grabWindow().save(
+            QDir(evidenceDirectory).filePath(QStringLiteral("image-fade-mode.png"))));
+    }
+    // Back to manual flicker: the mode leaves Fade and the primary viewport is restored.
+    auto* const manualChip =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageModePrimary"));
+    ASSERT_NE(manualChip, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(manualChip, "clicked"));
+    harness.settle();
+    EXPECT_EQ(harness.imageReview.compareMode(), 0);
 
     auto* const badgeText =
         harness.root->findChild<QQuickItem*>(QStringLiteral("imageInPlaceBadge"));

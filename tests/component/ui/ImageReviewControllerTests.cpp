@@ -1112,6 +1112,75 @@ TEST(ImageReviewControllerTests, ChannelViewsIsolateAlphaAndRgbWithoutMutatingSo
     EXPECT_EQ(qRed(original.pixel(1, 1)), 100);
 }
 
+TEST(ImageReviewControllerTests, ChannelViewsReadRgba8888BuffersInTrueChannelOrder) {
+    ImageReviewController controller;
+    // Production buffers arrive as Format_RGBA8888 (byte order R,G,B,A). The channel views
+    // used to reinterpret those scan lines as QRgb, which swaps red and blue on
+    // little-endian targets; a red-dominant opaque pixel must never read back as blue.
+    QImage primary(2, 1, QImage::Format_RGBA8888);
+    ASSERT_FALSE(primary.isNull());
+    primary.setPixelColor(0, 0, QColor(200, 40, 30, 255));
+    primary.setPixelColor(1, 0, QColor(10, 20, 220, 96));
+    QImage secondary(1, 1, QImage::Format_RGBA8888);
+    ASSERT_FALSE(secondary.isNull());
+    secondary.setPixelColor(0, 0, QColor(5, 210, 15, 128));
+    ASSERT_TRUE(controller.openPairImages(std::move(primary),
+                                          QStringLiteral("rgba8888-a"),
+                                          std::move(secondary),
+                                          QStringLiteral("rgba8888-b")));
+
+    controller.setViewMode(ImageReviewController::RgbOpaqueView);
+    const QImage primaryView = controller.imageForSlot(ImageReviewController::PrimarySlot);
+    ASSERT_FALSE(primaryView.isNull());
+    EXPECT_EQ(qRed(primaryView.pixel(0, 0)), 200);
+    EXPECT_EQ(qGreen(primaryView.pixel(0, 0)), 40);
+    EXPECT_EQ(qBlue(primaryView.pixel(0, 0)), 30);
+    EXPECT_EQ(qAlpha(primaryView.pixel(0, 0)), 255);
+    EXPECT_EQ(qRed(primaryView.pixel(1, 0)), 10);
+    EXPECT_EQ(qGreen(primaryView.pixel(1, 0)), 20);
+    EXPECT_EQ(qBlue(primaryView.pixel(1, 0)), 220);
+    EXPECT_EQ(qAlpha(primaryView.pixel(1, 0)), 255);
+    const QImage secondaryView = controller.imageForSlot(ImageReviewController::SecondarySlot);
+    ASSERT_FALSE(secondaryView.isNull());
+    EXPECT_EQ(qRed(secondaryView.pixel(0, 0)), 5);
+    EXPECT_EQ(qGreen(secondaryView.pixel(0, 0)), 210);
+    EXPECT_EQ(qBlue(secondaryView.pixel(0, 0)), 15);
+    EXPECT_EQ(qAlpha(secondaryView.pixel(0, 0)), 255);
+
+    controller.setViewMode(ImageReviewController::AlphaGrayView);
+    const QImage alphaView = controller.imageForSlot(ImageReviewController::PrimarySlot);
+    ASSERT_FALSE(alphaView.isNull());
+    EXPECT_EQ(qRed(alphaView.pixel(0, 0)), 255);
+    EXPECT_EQ(qRed(alphaView.pixel(1, 0)), 96);
+    EXPECT_EQ(qAlpha(alphaView.pixel(1, 0)), 255);
+}
+
+TEST(ImageReviewControllerTests, CompareModeAcceptsFadeAndKeepsItViewOnly) {
+    ImageReviewController controller;
+    // Without a pair, Fade is rejected exactly like the other comparison modes.
+    controller.setCompareMode(ImageReviewController::Fade);
+    EXPECT_EQ(controller.compareMode(), static_cast<int>(ImageReviewController::PrimaryOnly));
+    EXPECT_FALSE(controller.errorText().isEmpty());
+
+    ASSERT_TRUE(controller.openPairImages(solidImage(QColor(10, 20, 30, 255)),
+                                          QStringLiteral("fade-a"),
+                                          solidImage(QColor(40, 50, 60, 255)),
+                                          QStringLiteral("fade-b")));
+    // The controller used to cap setCompareMode at AlphaDifference, so switching to Fade
+    // silently no-opped. The switch must actually engage the mode.
+    controller.setCompareMode(ImageReviewController::Fade);
+    EXPECT_EQ(controller.compareMode(), static_cast<int>(ImageReviewController::Fade));
+    EXPECT_TRUE(controller.errorText().isEmpty());
+    // Fade is presentation-only: no difference result is claimed and nothing pends.
+    EXPECT_FALSE(controller.hasDiffResult());
+    EXPECT_FALSE(controller.diffPending());
+    controller.setFadePosition(0.25);
+    EXPECT_DOUBLE_EQ(controller.fadePosition(), 0.25);
+    // Switching away is a plain view change.
+    controller.setCompareMode(ImageReviewController::PrimaryOnly);
+    EXPECT_EQ(controller.compareMode(), static_cast<int>(ImageReviewController::PrimaryOnly));
+}
+
 TEST(ImageReviewControllerTests, SwapSidesExchangesSidesAndKeepsPairIdentity) {
     ImageReviewController controller;
     ASSERT_TRUE(controller.openPairImages(solidImage(Qt::red),
