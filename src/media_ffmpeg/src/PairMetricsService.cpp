@@ -140,8 +140,9 @@ private:
     };
 
     // Session slot reuse: an open session survives across jobs while the addressed media,
-    // geometry, and frame count stay identical; otherwise the slot reopens. Owned by the
-    // worker thread only; the mutex only guards the interruption registry below.
+    // geometry, frame count, and file identity stay identical; otherwise the slot is rebuilt
+    // from the new source. Owned by the worker thread only; the mutex only guards the
+    // interruption registry below.
     struct SessionSlot final {
         std::unique_ptr<internal::PairMetricsDecodeSession> session;
     };
@@ -217,19 +218,29 @@ private:
             return false;
         }
         sessions_.resize(job.request.sources.size());
-        // Allocate every slot first so the interruption registry only ever holds live pointers.
+        // Rebind every slot to the request's sources before opening anything. open() replays
+        // the descriptor captured at construction, so reusing a session that served another
+        // source would decode the previous file while publishing results for this pair; the
+        // slot must be rebuilt from the current source instead. The interruption registry is
+        // empty between jobs, so replacing a session here never dangles a registered pointer.
         for (std::size_t index = 0; index < sessions_.size(); ++index) {
-            if (sessions_[index].session == nullptr) {
-                const domain::ComparisonSource& source = job.request.sources[index];
+            const domain::ComparisonSource& source = job.request.sources[index];
+            const internal::PairMetricsDecodeSession* const existing =
+                sessions_[index].session.get();
+            // The source id is part of reuse: a session attributes decode errors to its
+            // constructed source, so serving a different slot role requires a rebuild too.
+            const bool reusable = existing != nullptr && existing->isOpen() &&
+                                  existing->sourceId() == source.id &&
+                                  existing->matches(source.descriptor);
+            if (!reusable) {
                 sessions_[index].session = std::make_unique<internal::PairMetricsDecodeSession>(
                     source.id, source.descriptor);
             }
         }
         registerActiveSessions();
         for (std::size_t index = 0; index < sessions_.size(); ++index) {
-            const domain::ComparisonSource& source = job.request.sources[index];
             internal::PairMetricsDecodeSession& session = *sessions_[index].session;
-            if (session.isOpen() && session.matches(source.descriptor)) {
+            if (session.isOpen()) {
                 continue;
             }
             const domain::Status opened = session.open(job.superseded);
@@ -300,8 +311,12 @@ private:
                                        frames[1].height,
                                        static_cast<std::size_t>(frames[1].width) * 4U};
         const domain::ComparisonPair pair{job.request.sources[0].id, job.request.sources[1].id};
-        const auto scored = application::scoreActivePairRgbAbsolute(
-            pair, frameId, first, second, job.request.mismatchThreshold);
+        const auto scored = application::scoreActivePairRgbAbsolute(pair,
+                                                                    frameId,
+                                                                    first,
+                                                                    second,
+                                                                    job.request.mismatchThreshold,
+                                                                    job.request.mismatchPolicy);
         if (!scored.has_value()) {
             sample.comparable = false;
             return sample;
@@ -317,6 +332,7 @@ private:
             .sources = job.request.sources,
             .alignmentRevision = job.request.alignmentRevision,
             .mismatchThreshold = job.request.mismatchThreshold,
+            .mismatchPolicy = job.request.mismatchPolicy,
             .metricId = std::string{application::kRgbAbsoluteMetricId},
             .samples = {},
             .finalBatch = false,

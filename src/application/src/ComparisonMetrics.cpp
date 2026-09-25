@@ -7,11 +7,13 @@ scoreActivePairRgbAbsolute(const domain::ComparisonPair pair,
                            const domain::FrameId frameId,
                            const domain::Rgba8View first,
                            const domain::Rgba8View second,
-                           const std::uint8_t mismatchThreshold) noexcept {
+                           const std::uint8_t mismatchThreshold,
+                           const domain::MismatchPolicy mismatchPolicy) noexcept {
     if (!pair.isValid() || !frameId.isValid()) {
         return std::nullopt;
     }
-    const auto metrics = domain::computeRgbAbsoluteMetrics(first, second, mismatchThreshold);
+    const auto metrics =
+        domain::computeRgbAbsoluteMetrics(first, second, mismatchThreshold, mismatchPolicy);
     if (!metrics.has_value()) {
         return std::nullopt;
     }

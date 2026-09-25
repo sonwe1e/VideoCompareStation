@@ -24,11 +24,12 @@ struct ActivePairFrameMetrics final {
 
 // Pure scoring helper. Pixel buffers come from adapters; this never owns decode or GPU types.
 // Returns nullopt when the pair is invalid or either view is unusable/mismatched.
-[[nodiscard]] std::optional<ActivePairFrameMetrics>
-scoreActivePairRgbAbsolute(domain::ComparisonPair pair,
-                           domain::FrameId frameId,
-                           domain::Rgba8View first,
-                           domain::Rgba8View second,
-                           std::uint8_t mismatchThreshold = 0U) noexcept;
+[[nodiscard]] std::optional<ActivePairFrameMetrics> scoreActivePairRgbAbsolute(
+    domain::ComparisonPair pair,
+    domain::FrameId frameId,
+    domain::Rgba8View first,
+    domain::Rgba8View second,
+    std::uint8_t mismatchThreshold = 0U,
+    domain::MismatchPolicy mismatchPolicy = domain::MismatchPolicy::AnyChannel) noexcept;
 
 } // namespace dvs::application

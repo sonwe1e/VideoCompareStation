@@ -127,7 +127,7 @@ protected:
 } // namespace
 
 TEST(PlaybackTraceTests, SchemaV1KindsAreAppendOnlyAndRoundTripThroughTheBuffer) {
-    static_assert(kSchemaV1MaxTraceEventKind == 22U);
+    static_assert(kSchemaV1MaxTraceEventKind == 24U);
     EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::CommandAccepted), 0U);
     EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::CommandRejected), 1U);
     EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::ProviderSubmitted), 2U);
@@ -151,6 +151,8 @@ TEST(PlaybackTraceTests, SchemaV1KindsAreAppendOnlyAndRoundTripThroughTheBuffer)
     EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::ReverseWindowBuilt), 20U);
     EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::ReverseWindowHit), 21U);
     EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::ReverseExactFallback), 22U);
+    EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::SourceDecodeStarted), 23U);
+    EXPECT_EQ(static_cast<std::uint8_t>(TraceEventKind::SourceDecodeCompleted), 24U);
 
     auto buffer = std::make_unique<PlaybackTraceBuffer>();
     RecordingTraceSink sink;

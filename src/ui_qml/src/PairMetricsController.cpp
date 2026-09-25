@@ -252,6 +252,24 @@ void PairMetricsController::setThreshold(const int value) {
     refresh();
 }
 
+int PairMetricsController::thresholdPolicy() const noexcept {
+    return static_cast<int>(thresholdPolicy_);
+}
+
+void PairMetricsController::setThresholdPolicy(const int value) {
+    // Mirrors presentation::ThresholdPolicy values; unsupported values are ignored instead of
+    // being clamped so the statistics never apply a rule the highlight does not show.
+    const auto policy = static_cast<domain::MismatchPolicy>(value);
+    if (value < static_cast<int>(domain::MismatchPolicy::LumaOnly) ||
+        value > static_cast<int>(domain::MismatchPolicy::AllChannels) ||
+        thresholdPolicy_ == policy) {
+        return;
+    }
+    thresholdPolicy_ = policy;
+    emit thresholdPolicyChanged();
+    refresh();
+}
+
 qint64 PairMetricsController::sampleCount() const noexcept {
     return static_cast<qint64>(samples_.size());
 }
@@ -292,7 +310,8 @@ void PairMetricsController::refresh() {
                      pair.first,
                      pair.second,
                      snapshot->alignmentRevision,
-                     threshold_};
+                     threshold_,
+                     thresholdPolicy_};
         available = true;
     }
     const bool availabilityChanged = available != available_;
@@ -568,6 +587,7 @@ void PairMetricsController::submitRequest() {
         .firstFrame = domain::FrameId{bestRunFirst},
         .lastFrame = domain::FrameId{bestRunLast},
         .mismatchThreshold = static_cast<std::uint8_t>(threshold_),
+        .mismatchPolicy = thresholdPolicy_,
     };
 
     if (dependencies_.service == nullptr) {
@@ -611,7 +631,7 @@ void PairMetricsController::drainSink() {
             batch.context.request.sessionEpoch != scope_->sessionEpoch ||
             batch.alignmentRevision != scope_->alignmentRevision ||
             batch.mismatchThreshold != static_cast<std::uint8_t>(threshold_) ||
-            batch.sources.size() != 2U ||
+            batch.mismatchPolicy != thresholdPolicy_ || batch.sources.size() != 2U ||
             !sameSourcePair(batch.sources[0].id,
                             batch.sources[1].id,
                             scope_->firstSource,

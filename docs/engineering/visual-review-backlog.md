@@ -1,7 +1,49 @@
 # 视觉审查问题台账
 
-更新：2026-09-24。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-09-25。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+
+## 2026-09-25 结果可信第一批（基线 `cd79a2a` + 本轮工作区）
+
+三项 P0 修复：指标会话复用、阈值/通道策略统一、连续逐帧停顿。全量 dev 测试、
+格式与 lint 见本轮验证记录；硬件门禁证据见下。
+
+- **指标会话复用缺陷（误导比较结论，最高优先）**：`PairMetricsService::prepareSessions`
+  原来只在会话为空时构造解码会话；素材不匹配时调用旧会话的 `open()`，而 `open()` 重放
+  **构造时**保存的旧 descriptor，于是 A/B → A/C 切换后第二槽实际解码 B 的文件、结果却按
+  A/C 发布。现在不匹配的槽位整体重建（新 descriptor 构造新会话），`matches()` 复用判定
+  加入完整文件身份（byteSize/mtime/SHA-256 指纹）与 source id。回归测试
+  `SwitchingComparisonPairRebindsDecodeSessions` 用三段同几何素材连续切换
+  A/B → A/C → B/C → A/B，末次测量必须与首次完全一致；判别前提（两对指标不同）在测试内
+  运行时断言，不依赖对 fixture 内容的先验知识。
+- **高亮与坏点统计的策略语义统一**：界面阈值策略（亮度／任一通道／全部通道）此前只传给
+  GPU 高亮，`computeRgbAbsoluteMetrics()` 固定按任一通道统计。现在
+  `domain::MismatchPolicy`（值序与 `presentation::ThresholdPolicy` 一致）贯通
+  `PairMetricsRequest/Batch` → 服务 → `PairMetricsController`：同一策略同时驱动渲染过滤与
+  坏点判定，CPU 判定按 8 位码值逐条镜像 GPU 着色器（亮度=BT.709 加权、AllChannels=min、
+  AnyChannel=max，`>=` 阈值判过；阈值 0 不把相同像素计入）。策略变化清缓存重采样、回包
+  策略不匹配即丢弃；读数行显示“坏点占比（任一通道 ≥ 阈值 N）”明确口径。
+- **连续逐帧五秒超时（根因定位并修复）**：先用新增 trace 事件（`ProviderSubmitted`
+  kind 2 启用发射；新增 `SourceDecodeStarted/Completed` kind 23/24，schema v1 上限 22→24，
+  gate 与测试同步）在 10 秒三源组合负载上复现并定位：中点 seek（9900）后第一步命中预取
+  缓存，其 read-ahead 在**主解码器**上 `decodeSequential(9902)`，而主解码器游标停在播放
+  位置（约 606）——“顺序”解码从 606 逐帧走到 9902（约 9300 帧 ≈ 5.2 s，与 5 s 呈现期限
+  吻合，三路同时阻塞、被超时 interrupt 同时释放，排队的主请求随后 1 ms 完成）。
+  seek/预取走专用 exact 解码器，主解码器无人追赶。修复：`decodeSequential` 增加步长上限
+  （默认 16 帧，`kDefaultMaximumSequentialStrideFrames`，可注入供测试），超限改走有界
+  seek。回归测试 `SequentialDecodeBeyondTheStrideSeeksInsteadOfWalking`。
+- **门禁残留竞态（修复步进停顿后暴露）**：harness 计数在最后一步提交与 ~33 ms 节流的
+  状态投影通知之间存在竞态，299/300 误报（trace 证明 300/300 全部提交）。
+  `kHeldStepFinalGraceMs = 250` 有界宽限等待最后帧被观察到。
+- **本机证据（dev 构建、144 Hz、D3D11VA 三路 1080p60、`--review-load` 组合负载、15 秒）**：
+  修复前 `held_step` 69 提交/1 呈现、五秒呈现超时门禁失败；修复后 **300/300 呈现、
+  p95 63 ms、p99 71 ms、最大显示间隔 67 ms、零丢帧、seek P95 213 ms、UI 间隔 P95 51 ms，
+  门禁通过（exit 0）**。trace 证据：`out/local-review-performance/{new-kinds,stride-fix,final}-smoke-trace.jsonl`
+  与分析脚本同目录。这是本机 dev 证据，不能替代 runner 上的发布门禁（300 秒、Release），
+  但失败签名与已记录的 2026-09-24 五分钟门禁完全一致，根因链条完整。
+- 既有 `held_step_*` 指标为何漏报：被打断的解码调用不进入 `decoder_maximum_us`（观测到
+  55 ms 上限而实际阻塞 5.2 s），顺序追赶也不产生任何 trace 事件——这正是本轮补
+  kind 23/24 的原因。硬件复测时应保留 trace 以便直接分拣呈现链各跳延迟。
 
 ## 2026-09-24 本地审查执行（1 / 2 / 3）
 
@@ -47,7 +89,8 @@
   虽整组跳帧计数为零、未观察到拆组，仍存在长停顿，不能用零计数证明播放流畅。
   peak_frame_bytes 为 74649600，进程峰值 working set 为 669712384 字节；正常退出用时 272 ms。
   完整结果：out/local-review-performance/results/combined-5min-stderr.log。
-  后续优先排查连续步进的请求/呈现确认链及长 UI 停顿；当前证据尚不能确定根因。
+  连续步进的根因已于 2026-09-25 定位并修复（顺序解码从陈旧游标全量追赶），见顶部本轮记录；
+  该五分钟门禁失败在本机 15 秒复现中同一签名，修复后通过。
 - 新组合入口是验证负载，不是新用户工作流；--review-load 开启指标并周期请求预览，
   原有基线行为和门槛保持不变。所有运行均为 dev，而非 Release 包；素材是既有 75 秒
   frame-id 测试视频无损流复制重复到 330 秒。源码/素材哈希在 manifest.json 中。
@@ -91,12 +134,12 @@
 | ID | 用户问题 | 优先级 | 当次状态 | 先检查 |
 |---|---|---|---|---|
 | V-01 | 是素材卡顿，还是播放器没有跟上？ | P0 | 已接线并修正计数解释；真实负载下统计含义待验证 | `Main.qml` → `PlayerOsc.qml`；`RenderAckRelay.cpp` |
-| V-02 | 倍速／过载时为何变慢或突然追赶？ | P0 | 两种策略已有；2 秒阈值和实际体验待验证 | `PlaybackCoordinator::playbackTargetAt` |
+| V-02 | 倍速／过载时为何变慢或突然追赶？ | P0 | 两种策略已有；连续逐帧五秒超时根因已修复（2026-09-25，陈旧游标全量追赶），runner 发布门禁待复测 | `PlaybackCoordinator::playbackTargetAt`、`SoftwareDecoder::decodeSequential` |
 | V-03 | 30/60 fps、VFR 比较是否同一时刻？ | P0 | 精确性增加源 PTS 一致条件并显示双源帧号/时间；完整时间映射待完善 | `MultiSourceFrameProvider.cpp`、`ComparisonExactness.cpp` |
 | V-04 | 常见编码为什么打不开？ | P1 | H.264/HEVC/MPEG-4 Part 2 已有；AV1/VP9 待扩展 | `MediaProbe.cpp`、`vcpkg.json` |
 | V-05 | 显示转换会不会改变细节？ | P0 | 转换及部分精确性标记已有；原始保真路径待扩展 | `SoftwareDecoder.cpp` |
 | V-06 | 未播放位置没有缩略图 | P1 | 未缓存悬停降级为时间码胶囊与准星线，Jog Wheel 可滚轮微调；合约测试已通过 | `TimelineThumbnailPopup.qml`、`TimelineTracks.qml` |
-| V-07 | MAE/PSNR 能否实际用于视频评估？ | P2 | 独立解码服务、检查器读数、OSC 和时间轴指标泳道已接通；组件测试通过，硬件验收待做 | `PairMetrics.*`、`PairMetricsController`、`MetricTimelineLane.qml` |
+| V-07 | MAE/PSNR 能否实际用于视频评估？ | P2 | 独立解码服务、检查器读数、OSC 和时间轴指标泳道已接通；切换比较对的会话复用缺陷与阈值/通道策略口径已修复（2026-09-25）；硬件验收待做 | `PairMetrics.*`、`PairMetricsController`、`MetricTimelineLane.qml` |
 | I-01 | 透明度哪里错了，贴背景后怎样？ | P1 | A/B/O 快捷键、高对比背景与观察状态浮标已实现；QML 合约测试通过 | `ImageWorkspace.qml`、`ImageReviewController` |
 | I-02 | 读数是原始高位深值吗？颜色可信吗？ | P0 | 已加 RGBA64 sidecar 原始取样（16-bit 用例通过）；ICC 仍无 | `StillImageDecoder.cpp`：`convertFrameToRgba`、`ImageReviewController::samplePixel` |
 | I-03 | PNM 是否所有入口都能打开？ | P1 | 三个对话框已补 `*.pam` 过滤器；格式矩阵验收仍待做 | `ImageHeaderProbe.h`、`Main.qml` |

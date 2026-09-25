@@ -4,6 +4,7 @@
 
 #include "dvs/media/MultiSourceFrameProvider.h"
 
+#include "dvs/application/PlaybackTrace.h"
 #include "dvs/domain/FrameTimeline.h"
 #include "dvs/platform/FrameBudget.h"
 #include "dvs/platform/GraphicsDeviceBroker.h"
@@ -417,6 +418,18 @@ public:
             interruptRequested_.store(true, std::memory_order_release);
         }
         postCanceledAll(displaced);
+        // Kind 2 records the admission point of this frame request: the identity `req` carries
+        // the frame request id, so a stalled step can be proven to have reached the provider
+        // (versus never being submitted by the coordinator); the payload is the priority.
+        application::PlaybackTrace::instance().record(
+            application::TraceEventKind::ProviderSubmitted,
+            application::TraceIdentity{
+                .session = request.context.playback.request.sessionId,
+                .epoch = request.context.playback.request.sessionEpoch,
+                .generation = request.context.playback.playbackGeneration,
+                .request = request.context.playback.request.requestId,
+            },
+            static_cast<std::uint64_t>(request.priority));
         condition_.notify_one();
         return application::PortSubmitResult::Accepted;
     }

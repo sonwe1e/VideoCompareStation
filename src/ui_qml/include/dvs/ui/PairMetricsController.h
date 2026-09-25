@@ -43,6 +43,8 @@ class PairMetricsController final : public QObject {
     Q_PROPERTY(QString metricId READ metricId NOTIFY stateChanged)
     Q_PROPERTY(QString errorKey READ errorKey NOTIFY stateChanged)
     Q_PROPERTY(int threshold READ threshold WRITE setThreshold NOTIFY thresholdChanged)
+    Q_PROPERTY(int thresholdPolicy READ thresholdPolicy WRITE setThresholdPolicy NOTIFY
+                   thresholdPolicyChanged)
     Q_PROPERTY(qint64 sampleCount READ sampleCount NOTIFY samplesChanged)
     Q_PROPERTY(qint64 sampleFirstFrame READ sampleFirstFrame NOTIFY samplesChanged)
     Q_PROPERTY(qint64 sampleLastFrame READ sampleLastFrame NOTIFY samplesChanged)
@@ -79,6 +81,11 @@ public:
     [[nodiscard]] QString errorKey() const;
     [[nodiscard]] int threshold() const noexcept;
     void setThreshold(int value);
+    // Channel policy for the bad-pixel predicate; accepts the presentation::ThresholdPolicy
+    // values (0 = luma, 1 = any channel, 2 = all channels). Other values are ignored so the
+    // statistics never invent a policy the renderer does not support.
+    [[nodiscard]] int thresholdPolicy() const noexcept;
+    void setThresholdPolicy(int value);
     [[nodiscard]] qint64 sampleCount() const noexcept;
     [[nodiscard]] qint64 sampleFirstFrame() const noexcept;
     [[nodiscard]] qint64 sampleLastFrame() const noexcept;
@@ -108,6 +115,7 @@ Q_SIGNALS:
     void stateChanged();
     void samplesChanged();
     void thresholdChanged();
+    void thresholdPolicyChanged();
 
 private:
     class Sink final : public application::IPairMetricsSink {
@@ -141,6 +149,7 @@ private:
         domain::SourceId secondSource = 0;
         std::uint64_t alignmentRevision = 0U;
         int threshold = 0;
+        domain::MismatchPolicy policy = domain::MismatchPolicy::AnyChannel;
 
         [[nodiscard]] bool operator==(const Scope&) const noexcept = default;
     };
@@ -172,6 +181,7 @@ private:
     bool available_ = false;
     QString errorKey_;
     int threshold_ = 0;
+    domain::MismatchPolicy thresholdPolicy_ = domain::MismatchPolicy::AnyChannel;
     qint64 sampleFirstFrame_ = -1;
     qint64 sampleLastFrame_ = -1;
     qreal sampleMaxMae_ = 0.0;

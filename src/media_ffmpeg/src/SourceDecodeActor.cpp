@@ -63,6 +63,26 @@ actorError(const domain::SourceId sourceId, std::string detail, const bool recov
                                   std::move(detail));
 }
 
+// Decode-stage observation (trace kinds 23/24). Payload is the source frame id being decoded;
+// the identity `req` carries the source id so a stalled actor is attributable, while
+// session/epoch/generation come from the request context when present. A Started without its
+// Completed is the signature of a decoder call that never returned.
+void emitDecodeStageTrace(const application::TraceEventKind kind,
+                          const SourceDecodeRequest& request,
+                          const domain::SourceId sourceId,
+                          const domain::FrameId frameId) noexcept {
+    application::TraceIdentity identity{
+        .request = domain::RequestId{static_cast<std::uint64_t>(sourceId)},
+    };
+    if (request.context.has_value()) {
+        identity.session = request.context->playback.request.sessionId;
+        identity.epoch = request.context->playback.request.sessionEpoch;
+        identity.generation = request.context->playback.playbackGeneration;
+    }
+    application::PlaybackTrace::instance().record(
+        kind, identity, static_cast<std::uint64_t>(frameId.value()));
+}
+
 [[nodiscard]] std::size_t capacityFor(const SourceDecodePriority priority) noexcept {
     switch (priority) {
     case SourceDecodePriority::Exact:
@@ -494,8 +514,16 @@ void SourceDecodeActor::run() noexcept {
                 }
 
                 const auto started = std::chrono::steady_clock::now();
+                emitDecodeStageTrace(application::TraceEventKind::SourceDecodeStarted,
+                                     request,
+                                     sourceId_,
+                                     candidate);
                 domain::Result<DecodedFrame> result =
                     decoder_->decodeSequential(candidate, *request.cancellationRequested);
+                emitDecodeStageTrace(application::TraceEventKind::SourceDecodeCompleted,
+                                     request,
+                                     sourceId_,
+                                     candidate);
                 const auto elapsed = static_cast<std::uint64_t>(
                     std::chrono::duration_cast<std::chrono::microseconds>(
                         std::chrono::steady_clock::now() - started)
@@ -577,11 +605,19 @@ void SourceDecodeActor::run() noexcept {
             }
         }
         if (!selectedDecoderNeedsReopen) {
+            emitDecodeStageTrace(application::TraceEventKind::SourceDecodeStarted,
+                                 decode->request,
+                                 sourceId_,
+                                 decode->request.frameId);
             result = preferSequentialDecode
                          ? selectedDecoder.decodeSequential(decode->request.frameId,
                                                             *decode->request.cancellationRequested)
                          : selectedDecoder.decodeExact(decode->request.frameId,
                                                        *decode->request.cancellationRequested);
+            emitDecodeStageTrace(application::TraceEventKind::SourceDecodeCompleted,
+                                 decode->request,
+                                 sourceId_,
+                                 decode->request.frameId);
         }
         if (!result && !selectedDecoder.lastDecodeInterrupted()) {
             // FFmpeg may have stopped while an AVIO packet was only partially consumed. Reopen
@@ -730,8 +766,16 @@ void SourceDecodeActor::fillReverseGopWindow(
     // ADR-006/ADR-003: one Exact seed at the lowest uncached reverse target, then sequential
     // walk upward. A long GOP costs one seek instead of one seek per held-backward step.
     cacheKey_.sourceFrame = domain::FrameId{lowestMissing};
+    emitDecodeStageTrace(application::TraceEventKind::SourceDecodeStarted,
+                         request,
+                         sourceId_,
+                         domain::FrameId{lowestMissing});
     domain::Result<DecodedFrame> seed =
         selectedDecoder.decodeExact(domain::FrameId{lowestMissing}, *request.cancellationRequested);
+    emitDecodeStageTrace(application::TraceEventKind::SourceDecodeCompleted,
+                         request,
+                         sourceId_,
+                         domain::FrameId{lowestMissing});
     if (!seed) {
         {
             std::scoped_lock lock{mutex_};
@@ -787,8 +831,16 @@ void SourceDecodeActor::fillReverseGopWindow(
             break;
         }
         const auto decodeStarted = std::chrono::steady_clock::now();
+        emitDecodeStageTrace(application::TraceEventKind::SourceDecodeStarted,
+                             request,
+                             sourceId_,
+                             domain::FrameId{candidate});
         domain::Result<DecodedFrame> decoded = selectedDecoder.decodeSequential(
             domain::FrameId{candidate}, *request.cancellationRequested);
+        emitDecodeStageTrace(application::TraceEventKind::SourceDecodeCompleted,
+                             request,
+                             sourceId_,
+                             domain::FrameId{candidate});
         const auto decodeElapsed =
             static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
                                            std::chrono::steady_clock::now() - decodeStarted)

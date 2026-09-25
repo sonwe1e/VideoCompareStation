@@ -146,7 +146,8 @@ public:
          platform::FrameBudget& frameBudget,
          const std::atomic<bool>* const externalInterrupt,
          std::shared_ptr<platform::GraphicsDeviceBroker> deviceBrokerValue,
-         const std::uint32_t softwareThreadCountValue)
+         const std::uint32_t softwareThreadCountValue,
+         const std::int64_t maximumSequentialStrideValue)
         : sourceId(sourceIdValue), descriptor(std::move(descriptorValue)), frameBudget(frameBudget),
           deviceBroker(std::move(deviceBrokerValue)),
           factory(frameBudget,
@@ -156,7 +157,8 @@ public:
                       .sampleAspectDenominator = descriptor.sampleAspectRatio.denominator,
                   }),
           interruptState{.requested = &interrupted, .externalRequested = externalInterrupt},
-          bufferPool(3U), softwareThreadCount(softwareThreadCountValue) {}
+          bufferPool(3U), softwareThreadCount(softwareThreadCountValue),
+          maximumSequentialStride(maximumSequentialStrideValue) {}
 
     [[nodiscard]] static AVPixelFormat
     selectHardwareFormat(AVCodecContext* const context,
@@ -225,6 +227,8 @@ public:
     media::DecoderBackend backend = media::DecoderBackend::Software;
     std::string fallbackReason;
     std::uint32_t softwareThreadCount = 0U;
+    // Forward-walk bound for decodeSequential; see kDefaultMaximumSequentialStrideFrames.
+    std::int64_t maximumSequentialStride = kDefaultMaximumSequentialStrideFrames;
 };
 
 SoftwareDecoder::SoftwareDecoder(const domain::SourceId sourceId,
@@ -232,13 +236,15 @@ SoftwareDecoder::SoftwareDecoder(const domain::SourceId sourceId,
                                  platform::FrameBudget& frameBudget,
                                  const std::atomic<bool>* const externalInterrupt,
                                  std::shared_ptr<platform::GraphicsDeviceBroker> deviceBroker,
-                                 const std::uint32_t softwareThreadCount)
+                                 const std::uint32_t softwareThreadCount,
+                                 const std::int64_t maximumSequentialStride)
     : impl_(std::make_unique<Impl>(sourceId,
                                    std::move(descriptor),
                                    frameBudget,
                                    externalInterrupt,
                                    std::move(deviceBroker),
-                                   softwareThreadCount)) {}
+                                   softwareThreadCount,
+                                   maximumSequentialStride)) {}
 
 SoftwareDecoder::~SoftwareDecoder() = default;
 
@@ -499,9 +505,18 @@ SoftwareDecoder::decodeExact(const domain::FrameId frameId,
 domain::Result<DecodedFrame>
 SoftwareDecoder::decodeSequential(const domain::FrameId frameId,
                                   const std::atomic<bool>& cancellationRequested) {
+    // Bounded forward walk: a sequential target may continue from the cursor only while it stays
+    // within the configured stride. Further ahead, the decode seeks instead. Without the bound,
+    // a request issued while the cursor was parked far behind (seeks and prefetches are served
+    // by the dedicated exact decoder, so the main decoder's cursor only follows playback and
+    // read-ahead) walked and decoded every intermediate frame — at 1080p60 that is seconds for a
+    // post-seek step and stalls the interactive presentation deadline.
+    const std::int64_t stride = impl_->lastReturnedFrame.has_value() && frameId.isValid()
+                                    ? frameId.value() - impl_->lastReturnedFrame->value()
+                                    : 0;
     const bool continueSequentially = impl_->sequentialReady &&
                                       impl_->lastReturnedFrame.has_value() && frameId.isValid() &&
-                                      frameId.value() > impl_->lastReturnedFrame->value();
+                                      stride > 0 && stride <= impl_->maximumSequentialStride;
     auto result = decodeInternal(frameId, cancellationRequested, continueSequentially, true);
     if (!result) {
         impl_->sequentialReady = false;

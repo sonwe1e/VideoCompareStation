@@ -112,7 +112,7 @@ must not be treated as complete.
 | --- | --- | --- |
 | `0` | `CommandAccepted` | `0`. |
 | `1` | `CommandRejected` | `CommandOutcome` value. |
-| `2` | `ProviderSubmitted` | Request priority. Reserved; not currently emitted. |
+| `2` | `ProviderSubmitted` | `FrameRequestPriority` value. Emitted when the multi-source provider admits a frame request; the identity `req` carries the frame request id and session/epoch/generation come from the request context. Joins with `FrameSetReady` to measure provider admission-to-ready latency and proves whether a stalled request ever reached the provider. |
 | `3` | `ProviderCanceled` | `CancellationReason` value. Reserved; not currently emitted. |
 | `4` | `FrameSetReady` | Completed canonical position. |
 | `5` | `ProviderTerminal` | `RequestTerminal` variant index. |
@@ -133,6 +133,16 @@ must not be treated as complete.
 | `20` | `ReverseWindowBuilt` | Frames retained in the built reverse GOP window (ADR-003). |
 | `21` | `ReverseWindowHit` | Reverse target frame id served from the built window. |
 | `22` | `ReverseExactFallback` | Reverse target frame id that fell back to exact decode. |
+| `23` | `SourceDecodeStarted` | Source frame id whose decoder call began inside a decode actor (main decode, read-ahead fill, or reverse-window fill). The identity `req` carries the source id; session/epoch/generation come from the request context when present. |
+| `24` | `SourceDecodeCompleted` | Same source frame id when that decoder call returned. |
+
+`SourceDecodeStarted`/`SourceDecodeCompleted` bisect the decode stage of the presentation
+chain. A `Started` without its `Completed` is the signature of a decoder call that never
+returned (a hang inside FFmpeg/D3D11VA); a long `Started`→`Completed` gap is slow decode
+work; a queued request with no `Started` at all was never dequeued by the actor. Joined with
+`ProviderSubmitted` (kind 2) these events answer, for a stalled interactive step, whether the
+request reached the provider, which source actor picked it up, and whether the decoder call
+returned — the three facts required before blaming rendering, the relay, or the coordinator.
 
 `PlaybackRunStarted`/`PlaybackRunStopped` bound exactly one continuous playback run (`play` to
 pause/end/stop). One trace also contains the open, seek and step phases, and those phases commit
@@ -198,7 +208,7 @@ it is emitted before the remaining admission checks. A rejected claimed command 
 produce `CommandAccepted`, `CommandRejected`, and exactly one `CommandTerminal` record.
 
 Numeric values are append-only. Do not reorder or reuse them within schema version 1. The
-defined schema-v1 range is `0`–`22` (`kSchemaV1MaxTraceEventKind` in `PlaybackTrace.h` and
+defined schema-v1 range is `0`–`24` (`kSchemaV1MaxTraceEventKind` in `PlaybackTrace.h` and
 `SchemaV1MaxKind` in `PlaybackTraceGate.psm1`); unknown kinds remain fail-closed. Additive
 event fields may be introduced without changing the version; a semantic change to an existing
 field or event requires a new trace version and analyzer support for both versions. The version

@@ -5,9 +5,52 @@
 #include <cstdlib>
 
 namespace dvs::domain {
+namespace {
 
-std::optional<PixelDifferenceMetrics> computeRgbAbsoluteMetrics(
-    const Rgba8View first, const Rgba8View second, const std::uint8_t mismatchThreshold) noexcept {
+// BT.709 luma weights, matching the GPU difference shader's commonBt709Luma so the LumaOnly
+// policy counts exactly the pixels the threshold filter keeps on screen.
+constexpr double kLumaWeightR = 0.2126;
+constexpr double kLumaWeightG = 0.7152;
+constexpr double kLumaWeightB = 0.0722;
+
+// Mismatch predicate in 8-bit code values, mirroring the GPU filter's `sample >= threshold`
+// comparison. The `sample > 0` guard keeps threshold 0 from counting identical pixels; under
+// AllChannels the pixel must differ in every channel, under LumaOnly only the weighted luma
+// delta of the signed channel differences decides.
+[[nodiscard]] bool policyMismatch(const int deltaR,
+                                  const int deltaG,
+                                  const int deltaB,
+                                  const std::uint8_t mismatchThreshold,
+                                  const MismatchPolicy policy) noexcept {
+    const double absR = std::abs(deltaR);
+    const double absG = std::abs(deltaG);
+    const double absB = std::abs(deltaB);
+    const double threshold = static_cast<double>(mismatchThreshold);
+    switch (policy) {
+    case MismatchPolicy::LumaOnly: {
+        const double lumaDelta = std::abs(kLumaWeightR * static_cast<double>(deltaR) +
+                                          kLumaWeightG * static_cast<double>(deltaG) +
+                                          kLumaWeightB * static_cast<double>(deltaB));
+        return lumaDelta > 0.0 && lumaDelta >= threshold;
+    }
+    case MismatchPolicy::AllChannels: {
+        const double smallest = std::min(absR, std::min(absG, absB));
+        return smallest > 0.0 && smallest >= threshold;
+    }
+    case MismatchPolicy::AnyChannel:
+        break;
+    }
+    const double largest = std::max(absR, std::max(absG, absB));
+    return largest > 0.0 && largest >= threshold;
+}
+
+} // namespace
+
+std::optional<PixelDifferenceMetrics>
+computeRgbAbsoluteMetrics(const Rgba8View first,
+                          const Rgba8View second,
+                          const std::uint8_t mismatchThreshold,
+                          const MismatchPolicy policy) noexcept {
     if (!first.isValid() || !second.isValid() || first.width != second.width ||
         first.height != second.height) {
         return std::nullopt;
@@ -28,18 +71,18 @@ std::optional<PixelDifferenceMetrics> computeRgbAbsoluteMetrics(
         const std::uint8_t* secondRow = second.pixels + y * second.strideBytes;
         for (std::size_t x = 0; x < first.width; ++x) {
             const std::size_t offset = x * 4U;
-            bool pixelMismatch = false;
+            int channelDeltas[3] = {0, 0, 0};
             for (std::size_t channel = 0; channel < 3U; ++channel) {
                 const int delta = static_cast<int>(firstRow[offset + channel]) -
                                   static_cast<int>(secondRow[offset + channel]);
+                channelDeltas[channel] = delta;
                 const double absolute = static_cast<double>(std::abs(delta));
                 absSum += absolute;
                 squareSum += absolute * absolute;
                 maxAbs = std::max(maxAbs, absolute);
-                if (absolute > 0.0 && absolute >= static_cast<double>(mismatchThreshold)) {
-                    pixelMismatch = true;
-                }
             }
+            const bool pixelMismatch = policyMismatch(
+                channelDeltas[0], channelDeltas[1], channelDeltas[2], mismatchThreshold, policy);
             if (pixelMismatch) {
                 ++mismatchPixels;
             }

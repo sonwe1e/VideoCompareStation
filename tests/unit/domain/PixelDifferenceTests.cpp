@@ -63,6 +63,83 @@ TEST(PixelDifferenceTests, MismatchThresholdIgnoresSubThresholdChannels) {
     EXPECT_GT(tolerant->mae, 0.0);
 }
 
+TEST(PixelDifferenceTests, MismatchThresholdBoundaryTreatsEqualityAsMismatch) {
+    // One pixel below the threshold, one exactly at it, one above it, plus identical pixels.
+    std::vector<std::uint8_t> first{
+        10U, 10U, 10U, 255U, 10U, 10U, 10U, 255U, 10U, 10U, 10U, 255U, 10U, 10U, 10U, 255U};
+    std::vector<std::uint8_t> second{
+        5U, 10U, 10U, 255U, 30U, 10U, 10U, 255U, 31U, 10U, 10U, 255U, 10U, 10U, 10U, 255U};
+    const auto metrics =
+        computeRgbAbsoluteMetrics(makeView(first, 4, 1), makeView(second, 4, 1), 20U);
+    ASSERT_TRUE(metrics.has_value());
+    // Deltas 5 (below), 20 (equal), 21 (above), 0 (identical): equality must count.
+    EXPECT_EQ(metrics->mismatchPixels, 2U);
+    EXPECT_EQ(metrics->mismatchRatio, 0.5);
+}
+
+TEST(PixelDifferenceTests, AllChannelsPolicyRequiresEveryChannelToReachThreshold) {
+    // Pixel 0 differs in one channel only, pixel 1 in all three (30/20/10 vs threshold 10).
+    std::vector<std::uint8_t> first{100U, 100U, 100U, 255U, 100U, 100U, 100U, 255U};
+    std::vector<std::uint8_t> second{130U, 100U, 100U, 255U, 130U, 120U, 110U, 255U};
+    const auto anyPolicy = computeRgbAbsoluteMetrics(
+        makeView(first, 2, 1), makeView(second, 2, 1), 10U, MismatchPolicy::AnyChannel);
+    ASSERT_TRUE(anyPolicy.has_value());
+    EXPECT_EQ(anyPolicy->mismatchPixels, 2U);
+
+    const auto allPolicy = computeRgbAbsoluteMetrics(
+        makeView(first, 2, 1), makeView(second, 2, 1), 10U, MismatchPolicy::AllChannels);
+    ASSERT_TRUE(allPolicy.has_value());
+    // The single-channel pixel has min channel delta 0, so AllChannels must not count it.
+    EXPECT_EQ(allPolicy->mismatchPixels, 1U);
+
+    // Threshold 0 under AllChannels still requires a difference in every channel: pixel 0 has
+    // two unchanged channels, so only pixel 1 counts.
+    const auto allPolicyZero = computeRgbAbsoluteMetrics(
+        makeView(first, 2, 1), makeView(second, 2, 1), 0U, MismatchPolicy::AllChannels);
+    ASSERT_TRUE(allPolicyZero.has_value());
+    EXPECT_EQ(allPolicyZero->mismatchPixels, 1U);
+}
+
+TEST(PixelDifferenceTests, LumaOnlyPolicyUsesBt709WeightedDelta) {
+    // Pixel 0: R +100 and G -30 nearly cancel in BT.709 luma (|0.2126*100 - 0.7152*30| =
+    // 0.196 code values) while every channel policy sees a large delta. Pixel 1: G +50 alone
+    // gives a luma delta of 35.76 code values.
+    std::vector<std::uint8_t> first{100U, 100U, 100U, 255U, 100U, 100U, 100U, 255U};
+    std::vector<std::uint8_t> second{200U, 70U, 100U, 255U, 100U, 150U, 100U, 255U};
+    const auto lumaPolicy = computeRgbAbsoluteMetrics(
+        makeView(first, 2, 1), makeView(second, 2, 1), 1U, MismatchPolicy::LumaOnly);
+    ASSERT_TRUE(lumaPolicy.has_value());
+    // Pixel 0's weighted luma delta stays below 1, so LumaOnly must not count it.
+    EXPECT_EQ(lumaPolicy->mismatchPixels, 1U);
+
+    const auto anyPolicy = computeRgbAbsoluteMetrics(
+        makeView(first, 2, 1), makeView(second, 2, 1), 1U, MismatchPolicy::AnyChannel);
+    ASSERT_TRUE(anyPolicy.has_value());
+    EXPECT_EQ(anyPolicy->mismatchPixels, 2U);
+
+    // Raising the threshold past pixel 1's luma delta (35.76) removes it as well.
+    const auto lumaPolicyStrict = computeRgbAbsoluteMetrics(
+        makeView(first, 2, 1), makeView(second, 2, 1), 36U, MismatchPolicy::LumaOnly);
+    ASSERT_TRUE(lumaPolicyStrict.has_value());
+    EXPECT_EQ(lumaPolicyStrict->mismatchPixels, 0U);
+}
+
+TEST(PixelDifferenceTests, IdenticalPixelsNeverMismatchUnderAnyPolicyOrThreshold) {
+    std::vector<std::uint8_t> first(3U * 4U, 77U);
+    std::vector<std::uint8_t> second = first;
+    for (const auto policy :
+         {MismatchPolicy::LumaOnly, MismatchPolicy::AnyChannel, MismatchPolicy::AllChannels}) {
+        for (const std::uint8_t threshold :
+             {std::uint8_t{0U}, std::uint8_t{1U}, std::uint8_t{255U}}) {
+            const auto metrics = computeRgbAbsoluteMetrics(
+                makeView(first, 3, 1), makeView(second, 3, 1), threshold, policy);
+            ASSERT_TRUE(metrics.has_value());
+            EXPECT_EQ(metrics->mismatchPixels, 0U);
+            EXPECT_EQ(metrics->mismatchRatio, 0.0);
+        }
+    }
+}
+
 TEST(PixelDifferenceTests, RejectsMismatchedOrInvalidViews) {
     std::vector<std::uint8_t> first(16U, 0U);
     std::vector<std::uint8_t> smaller(8U, 0U);

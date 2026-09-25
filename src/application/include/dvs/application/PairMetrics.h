@@ -37,6 +37,9 @@ struct PairMetricsRequest final {
     domain::FrameId firstFrame{0};
     domain::FrameId lastFrame{0};
     std::uint8_t mismatchThreshold = 0U;
+    // Channel policy for the bad-pixel predicate. Must mirror the threshold policy the UI
+    // applied to the difference highlight so statistics and highlight describe one rule.
+    domain::MismatchPolicy mismatchPolicy = domain::MismatchPolicy::AnyChannel;
 
     [[nodiscard]] bool isValid() const noexcept {
         if (sources.size() != 2U || firstFrame.value() > lastFrame.value()) {
@@ -71,6 +74,7 @@ struct PairMetricsBatch final {
     std::vector<domain::ComparisonSource> sources;
     std::uint64_t alignmentRevision = 0U;
     std::uint8_t mismatchThreshold = 0U;
+    domain::MismatchPolicy mismatchPolicy = domain::MismatchPolicy::AnyChannel;
     // Provenance-stable formula identity (kRgbAbsoluteMetricId). The UI must display this
     // instead of inventing its own formula name.
     std::string metricId;

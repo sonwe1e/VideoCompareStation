@@ -94,6 +94,7 @@ public:
             .sources = request.sources,
             .alignmentRevision = request.alignmentRevision,
             .mismatchThreshold = request.mismatchThreshold,
+            .mismatchPolicy = request.mismatchPolicy,
             .metricId = std::string{application::kRgbAbsoluteMetricId},
             .samples = std::move(samples),
             .finalBatch = finalBatch,
@@ -259,6 +260,63 @@ TEST_F(PairMetricsControllerTests, ThresholdChangeClearsCacheAndResamples) {
     EXPECT_EQ(controller_->sampleCount(), 0);
     ASSERT_GE(service_.requests.size(), 2U);
     EXPECT_EQ(service_.requests.back().mismatchThreshold, 12U);
+}
+
+TEST_F(PairMetricsControllerTests, ThresholdPolicyChangeClearsCacheAndResamples) {
+    installTwoSourceSession(3, 12U);
+    controller_->refresh();
+    processUntil([&] { return !service_.requests.empty(); }, 1000);
+    application::PairMetricsSample sample;
+    sample.canonicalFrameId = domain::FrameId{3};
+    sample.comparable = true;
+    sample.metrics.mae = 2.0;
+    service_.deliver(service_.makeBatch(service_.requests.front(), {sample}));
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    ASSERT_EQ(controller_->sampleCount(), 1);
+    EXPECT_EQ(controller_->thresholdPolicy(), 1);
+
+    // The policy accepts the presentation::ThresholdPolicy values; anything else is ignored
+    // so the statistics never apply a rule the highlight does not show.
+    controller_->setThresholdPolicy(7);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    EXPECT_EQ(controller_->thresholdPolicy(), 1);
+    EXPECT_EQ(service_.requests.size(), 1U);
+    EXPECT_EQ(controller_->sampleCount(), 1);
+
+    controller_->setThresholdPolicy(2);
+    processUntil([&] { return service_.requests.size() >= 2U; }, 1000);
+
+    EXPECT_EQ(controller_->sampleCount(), 0);
+    ASSERT_GE(service_.requests.size(), 2U);
+    EXPECT_EQ(service_.requests.back().mismatchPolicy, domain::MismatchPolicy::AllChannels);
+    EXPECT_EQ(controller_->thresholdPolicy(), 2);
+}
+
+TEST_F(PairMetricsControllerTests, BatchWithForeignMismatchPolicyIsDropped) {
+    installTwoSourceSession(3, 12U);
+    controller_->refresh();
+    processUntil([&] { return !service_.requests.empty(); }, 1000);
+    ASSERT_EQ(service_.requests.size(), 1U);
+    const application::PairMetricsRequest request = service_.requests.front();
+
+    controller_->setThresholdPolicy(2);
+    processUntil([&] { return service_.requests.size() >= 2U; }, 1000);
+    ASSERT_GE(service_.requests.size(), 2U);
+
+    // A batch computed under the old policy must not feed the new policy's readout, exactly
+    // like a stale threshold: the numbers would describe a different predicate.
+    application::PairMetricsBatch staleBatch = service_.makeBatch(request, {});
+    staleBatch.mismatchPolicy = domain::MismatchPolicy::AnyChannel;
+    application::PairMetricsSample sample;
+    sample.canonicalFrameId = domain::FrameId{3};
+    sample.comparable = true;
+    sample.metrics.mae = 9.0;
+    staleBatch.samples.push_back(sample);
+    service_.deliver(staleBatch);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+
+    EXPECT_EQ(controller_->sampleCount(), 0);
+    EXPECT_FALSE(controller_->hasCurrentSample());
 }
 
 TEST_F(PairMetricsControllerTests, PeakFramesAndSamplePointsProjectCache) {

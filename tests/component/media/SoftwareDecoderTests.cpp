@@ -556,6 +556,46 @@ TEST(SoftwareDecoderTests, SequentialMpeg4DecodePreservesBufferedPacketState) {
     EXPECT_NE(frameHash(second.value()), frameHash(middle.value()));
 }
 
+TEST(SoftwareDecoderTests, SequentialDecodeBeyondTheStrideSeeksInsteadOfWalking) {
+    // Regression: a sequential target far beyond the decoder's parked cursor used to walk and
+    // decode every intermediate frame. After a seek phase served by the dedicated exact decoder
+    // the main decoder's cursor sits at the playback position, so a post-seek read-ahead walked
+    // thousands of frames at 1080p60 and stalled the interactive step past its five-second
+    // presentation deadline. The stride bound makes such a request seek instead.
+    platform::FrameBudget budget{1024U * 1024U};
+    SoftwareDecoder decoder{0U,
+                            probeDescriptor(fixture("h264_a_320x180_30fps_12.mp4"), 0U),
+                            budget,
+                            nullptr,
+                            {},
+                            0U,
+                            /*maximumSequentialStride=*/2};
+    std::atomic<bool> canceled = false;
+
+    ASSERT_TRUE(decoder.open(canceled));
+    const auto anchor = decoder.decodeExact(domain::FrameId{0}, canceled);
+    ASSERT_TRUE(anchor);
+    ASSERT_EQ(decoder.exactSeekCount(), 1U);
+
+    // Within the stride the sequential path continues without a new seek.
+    const auto adjacent = decoder.decodeSequential(domain::FrameId{1}, canceled);
+    ASSERT_TRUE(adjacent);
+    EXPECT_EQ(decoder.exactSeekCount(), 1U);
+
+    // Six frames ahead exceeds the injected stride of two, so the decode must seek rather than
+    // walk frames 2..5; the seek count advances and the exact frame still comes back.
+    const auto farTarget = decoder.decodeSequential(domain::FrameId{6}, canceled);
+    ASSERT_TRUE(farTarget);
+    EXPECT_EQ(decoder.exactSeekCount(), 2U);
+    EXPECT_NE(frameHash(adjacent.value()), frameHash(farTarget.value()));
+
+    // A target one frame ahead of the new cursor is sequential again.
+    const auto next = decoder.decodeSequential(domain::FrameId{7}, canceled);
+    ASSERT_TRUE(next);
+    EXPECT_EQ(decoder.exactSeekCount(), 2U);
+    EXPECT_NE(frameHash(farTarget.value()), frameHash(next.value()));
+}
+
 TEST(SoftwareDecoderTests, LazilyIndexesAnEndGapAndReturnsTheExactFinalOrdinal) {
     platform::FrameBudget budget{1024U * 1024U};
     SoftwareDecoder decoder{

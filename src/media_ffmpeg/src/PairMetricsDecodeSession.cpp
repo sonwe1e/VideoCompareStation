@@ -387,14 +387,33 @@ bool PairMetricsDecodeSession::matches(const domain::MediaDescriptor& descriptor
     if (!impl_->opened) {
         return false;
     }
-    return impl_->descriptor.normalizedPath == descriptor.normalizedPath &&
-           impl_->descriptor.extent.width == descriptor.extent.width &&
-           impl_->descriptor.extent.height == descriptor.extent.height &&
-           impl_->descriptor.frameCount.value == descriptor.frameCount.value;
+    if (impl_->descriptor.normalizedPath != descriptor.normalizedPath ||
+        impl_->descriptor.extent.width != descriptor.extent.width ||
+        impl_->descriptor.extent.height != descriptor.extent.height ||
+        impl_->descriptor.frameCount.value != descriptor.frameCount.value) {
+        return false;
+    }
+    // Complete file identities must agree: the same path can hold different bytes after a
+    // re-encode or replacement, and geometry plus frame count alone do not identify media.
+    const std::optional<domain::SourceFileIdentity>& current = impl_->descriptor.sourceIdentity;
+    const std::optional<domain::SourceFileIdentity>& requested = descriptor.sourceIdentity;
+    if (current.has_value() && requested.has_value() && current->isComplete() &&
+        requested->isComplete()) {
+        return current->byteSize == requested->byteSize &&
+               current->modifiedUtcMilliseconds == requested->modifiedUtcMilliseconds &&
+               current->fingerprintSha256 == requested->fingerprintSha256;
+    }
+    // An open session always verified a complete identity; a request without one can only be
+    // matched by path and geometry, exactly like a fresh probe of the same file.
+    return true;
 }
 
 bool PairMetricsDecodeSession::isOpen() const noexcept {
     return impl_->opened;
+}
+
+domain::SourceId PairMetricsDecodeSession::sourceId() const noexcept {
+    return impl_->sourceId;
 }
 
 domain::Result<PairMetricsDecodeSession::RgbaFrame>

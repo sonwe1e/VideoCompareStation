@@ -44,6 +44,7 @@ public:
     // geometry, and frame count).
     [[nodiscard]] bool matches(const domain::MediaDescriptor& descriptor) const noexcept;
     [[nodiscard]] bool isOpen() const noexcept;
+    [[nodiscard]] domain::SourceId sourceId() const noexcept;
 
 private:
     [[nodiscard]] domain::Result<RgbaFrame>

@@ -1,6 +1,6 @@
 # Agent 快速定位指南
 
-更新日期：2026-09-22。用途：先定位产品问题，再进入最小相关代码和验证入口。
+更新日期：2026-09-25。用途：先定位产品问题，再进入最小相关代码和验证入口。
 这不是完整架构说明，也不是发布验收记录。
 
 ## 开始工作前的五分钟
@@ -29,7 +29,7 @@
 
 | 用户现象／任务 | 首要入口与继续追踪 | 验证入口 |
 |---|---|---|
-| 卡顿、倍速不准、播放变慢、跳帧统计 | `src/application/src/PlaybackCoordinator.cpp`：`playbackTargetAt`、呈现 ACK 提交；`SessionSnapshot.h` → `ReviewController.cpp` → `Main.qml` → `PlayerOsc.qml` | `tests/unit/application/PlaybackCoordinatorTests.cpp`；`tests/component/ui/qml/tst_player_osc.qml`；真实硬件门禁 |
+| 卡顿、倍速不准、播放变慢、跳帧统计 | `src/application/src/PlaybackCoordinator.cpp`：`playbackTargetAt`、呈现 ACK 提交；`src/media_ffmpeg/src/SoftwareDecoder.cpp`：`decodeSequential` 步长上限（陈旧游标全量追赶是 2026-09-25 修复的连续逐帧停顿根因）；trace 事件见 `docs/engineering/trace-schema.md`（kind 2/23/24 分拣提交→解码→呈现各跳） | `tests/unit/application/PlaybackCoordinatorTests.cpp`；`tests/component/media/SoftwareDecoderTests.cpp`；`tests/component/ui/qml/tst_player_osc.qml`；真实硬件门禁 |
 | 点时间轴、快速逐帧、倒退、区间循环 | `ReviewActions.qml`、`TimelineTracks.qml` → `PlaybackCoordinator.cpp` → `src/media_ffmpeg/src/SourceDecodeActor.cpp`、`SoftwareDecoder.cpp` | `PlaybackCoordinatorTests.cpp`、`SourceDecodeActorTests.cpp`；[反向 GOP ADR](adr/0003-reverse-gop-window.md) |
 | 悬停未播放位置无缩略图 | `TimelineThumbnailCache.qml`：`capture`、`urlForFrame`；`TimelineThumbnailPopup.qml` | `tests/component/ui/qml/tst_timeline_thumbnail_cache.qml`；台账 `V-06` |
 | GT／候选切换后比较错对象 | `src/domain/src/ComparisonSelection.cpp`、`ComparisonValidator.cpp`；`PlaybackCoordinator.cpp`；`CompareModeBar.qml` | `ComparisonSelectionTests.cpp`、`PlaybackCoordinatorTests.cpp`；[比较语义 ADR](adr/0004-timeline-pair-continuity.md) |

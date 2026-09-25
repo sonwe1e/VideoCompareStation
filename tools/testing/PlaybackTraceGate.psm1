@@ -3,9 +3,9 @@ Set-StrictMode -Version Latest
 
 Import-Module (Join-Path $PSScriptRoot 'CommandLineArgument.psm1') -Force
 
-# Schema-v1 defined TraceEventKind values are 0..22 inclusive (PlaybackTrace.h /
+# Schema-v1 defined TraceEventKind values are 0..24 inclusive (PlaybackTrace.h /
 # docs/engineering/trace-schema.md). Unknown kinds stay fail-closed.
-$script:SchemaV1MaxKind = 22
+$script:SchemaV1MaxKind = 24
 
 function Test-PlaybackTraceFile {
     [CmdletBinding()]

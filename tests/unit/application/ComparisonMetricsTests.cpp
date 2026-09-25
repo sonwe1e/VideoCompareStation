@@ -42,4 +42,28 @@ TEST(ComparisonMetricsTests, RejectsInvalidPairOrMismatchedGeometry) {
             .has_value());
 }
 
+TEST(ComparisonMetricsTests, MismatchPolicyDrivesBadPixelCount) {
+    // Only R differs, so AnyChannel counts the pixel while AllChannels does not; the policy
+    // must reach the domain predicate, not just ride along on the request.
+    std::vector<std::uint8_t> first{100U, 100U, 100U, 255U};
+    std::vector<std::uint8_t> second{130U, 100U, 100U, 255U};
+    const auto anyPolicy = scoreActivePairRgbAbsolute(domain::ComparisonPair{0, 1},
+                                                      domain::FrameId{0},
+                                                      makeView(first),
+                                                      makeView(second),
+                                                      10U,
+                                                      domain::MismatchPolicy::AnyChannel);
+    ASSERT_TRUE(anyPolicy.has_value());
+    EXPECT_EQ(anyPolicy->metrics.mismatchPixels, 1U);
+
+    const auto allPolicy = scoreActivePairRgbAbsolute(domain::ComparisonPair{0, 1},
+                                                      domain::FrameId{0},
+                                                      makeView(first),
+                                                      makeView(second),
+                                                      10U,
+                                                      domain::MismatchPolicy::AllChannels);
+    ASSERT_TRUE(allPolicy.has_value());
+    EXPECT_EQ(allPolicy->metrics.mismatchPixels, 0U);
+}
+
 } // namespace dvs::application

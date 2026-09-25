@@ -83,13 +83,21 @@ enum class TraceEventKind : std::uint8_t {
     ReverseWindowBuilt = 20,
     ReverseWindowHit = 21,
     ReverseExactFallback = 22,
+    // Source-decode stage boundaries inside a decode actor, including read-ahead and reverse
+    // window fills. Payload is the source frame id being decoded; the identity's `req` carries
+    // the source id (matching DecoderSeek) while session/epoch/generation come from the request
+    // context when present. A Started without a matching Completed is the signature of a decoder
+    // call that never returned — the exact evidence needed to separate "the decode hung" from
+    // "the request was never dequeued" in a stalled interactive step.
+    SourceDecodeStarted = 23,
+    SourceDecodeCompleted = 24,
 };
 
 // Schema-v1 defined kind range is 0..kSchemaV1MaxTraceEventKind inclusive. Keep
 // tools/testing/PlaybackTraceGate.psm1 (SchemaV1MaxKind) and docs/engineering/trace-schema.md
 // in sync; the gate rejects unknown kinds fail-closed.
 inline constexpr std::uint8_t kSchemaV1MaxTraceEventKind =
-    static_cast<std::uint8_t>(TraceEventKind::ReverseExactFallback);
+    static_cast<std::uint8_t>(TraceEventKind::SourceDecodeCompleted);
 
 // A single fixed-size trace event. Kept small and trivially copyable so it can live in a bounded
 // ring buffer with no heap allocation and no variable-length payloads on the hot path.

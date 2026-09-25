@@ -1072,6 +1072,11 @@ runDesktop(int& argc,
     // +/- 5 ms jitter keeps the interval in 29-39 ms (25.6-34.5 Hz), inside the 25-35 Hz band.
     static constexpr qint64 kHeldStepCadenceBaseMs = 34U;
     static constexpr qint64 kHeldStepCadenceJitterMs = 5U;
+    // The final step's commit can race the projection notify (throttled to ~33 ms): the command
+    // terminal clears `busy` before the polled currentFrame observes the last presented frame.
+    // Finalization waits out that race, bounded so a genuinely missing presentation still fails
+    // the exact submitted/presented gate instead of hanging the phase.
+    static constexpr qint64 kHeldStepFinalGraceMs = 250U;
     std::vector<qint64> heldStepMilliseconds;
     std::deque<qint64> heldStepSubmitTimes;
     std::size_t heldStepIndex = 0U;
@@ -1528,6 +1533,13 @@ runDesktop(int& argc,
             } // end presented-frame detection scope
             if (heldStepIndex >= heldStepSamples) {
                 if (controller.busy()) {
+                    return;
+                }
+                // Wait out the projection-notify race for the final step's presented frame
+                // (see kHeldStepFinalGraceMs). The presented-frame poll above runs on every
+                // tick, so the grace only needs to cover the notify throttle plus scheduling.
+                if (metrics.heldStepPresentedFrames < heldStepSubmittedFrames &&
+                    heldStepTimer.elapsed() - heldStepNextDeadlineMs < kHeldStepFinalGraceMs) {
                     return;
                 }
                 heldStepProviderEnd = runtime->frameProviderStatistics();

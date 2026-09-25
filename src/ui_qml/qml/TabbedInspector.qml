@@ -75,6 +75,19 @@ Rectangle {
 
     // Read-only rows for the current frame's pair metrics. The metric identity comes from the
     // service (cpu-rgb-absolute-v1); the UI never invents its own formula name or numbers.
+    // The bad-pixel row names the channel policy so the count never reads as a different rule
+    // than the threshold highlight right next to it.
+    function metricsThresholdPolicyName() {
+        if (control.metrics === null)
+            return "";
+        const policy = Number(control.metrics.thresholdPolicy);
+        if (policy === 0)
+            return qsTr("亮度");
+        if (policy === 2)
+            return qsTr("全部通道");
+        return qsTr("任一通道");
+    }
+
     function metricsRows() {
         if (control.metrics === null || !control.metrics.available)
             return [];
@@ -87,7 +100,8 @@ Rectangle {
         const psnr = control.metrics.currentPsnrDb >= 999.0 ? qsTr("∞（完全一致）") : control.metrics.currentPsnrDb.toFixed(2) + qsTr(" dB");
         const ratioPercent = control.metrics.currentMismatchRatio * 100.0;
         const ratioText = ratioPercent >= 0.01 ? ratioPercent.toFixed(2) + "%" : "< 0.01%";
-        const rows = [[qsTr("平均绝对差 MAE"), control.metrics.currentMae.toFixed(3)], [qsTr("均方误差 MSE"), control.metrics.currentMse.toFixed(3)], [qsTr("峰值信噪比 PSNR"), psnr], [qsTr("最大绝对差"), control.metrics.currentMaxAbsError.toFixed(0)], [qsTr("坏点占比（阈值 %1）").arg(control.metrics.threshold), ratioText], [qsTr("坏点数"), String(control.metrics.currentMismatchPixels)], [qsTr("参与像素"), String(control.metrics.currentPixelCount)]];
+        const mismatchRow = qsTr("坏点占比（%1 ≥ 阈值 %2）").arg(metricsThresholdPolicyName()).arg(control.metrics.threshold);
+        const rows = [[qsTr("平均绝对差 MAE"), control.metrics.currentMae.toFixed(3)], [qsTr("均方误差 MSE"), control.metrics.currentMse.toFixed(3)], [qsTr("峰值信噪比 PSNR"), psnr], [qsTr("最大绝对差"), control.metrics.currentMaxAbsError.toFixed(0)], mismatchRow, [qsTr("坏点数"), String(control.metrics.currentMismatchPixels)], [qsTr("参与像素"), String(control.metrics.currentPixelCount)]];
         if (control.controller && control.controller.currentInexactReason && control.controller.currentInexactReason.length > 0)
             rows.unshift([qsTr("对齐/采样说明"), control.controller.currentInexactReason]);
         return rows;
@@ -464,7 +478,13 @@ Rectangle {
                     width: parent.width
                     model: [qsTr("亮度"), qsTr("任一通道"), qsTr("全部通道")]
                     currentIndex: control.differenceThresholdPolicy
-                    onActivated: index => control.differenceThresholdPolicyRequested(index)
+                    onActivated: index => {
+                        control.differenceThresholdPolicyRequested(index);
+                        // The policy drives the GPU highlight filter and the CPU bad-pixel
+                        // predicate with one rule, mirroring the shared threshold above.
+                        if (control.metrics !== null)
+                            control.metrics.thresholdPolicy = index;
+                    }
                 }
 
                 // V-07 current-frame pair metrics. Read-only projection of the independent

@@ -23,6 +23,14 @@ struct DecodedFrame final {
     domain::MediaTime presentationTime;
 };
 
+// Default bound on how far decodeSequential may walk forward from the decoder's parked cursor
+// before it seeks instead. Read-ahead (≤4 frames), interactive steps (+1), and the reverse
+// window walk (+1) all stay well inside it; beyond it a bounded seek is always cheaper than
+// decoding every intermediate frame. Without this bound, a sequential request issued while the
+// cursor was parked far behind (for example after seeks served by the dedicated exact decoder)
+// walked thousands of frames and stalled interactive steps past their presentation deadline.
+inline constexpr std::int64_t kDefaultMaximumSequentialStrideFrames = 16;
+
 // One decoder owns one demuxer and codec context. It is intentionally used only by the provider
 // actor that created it; no source pair ever shares seek or packet state.
 class SoftwareDecoder final {
@@ -32,7 +40,8 @@ public:
                     platform::FrameBudget& frameBudget,
                     const std::atomic<bool>* externalInterrupt = nullptr,
                     std::shared_ptr<platform::GraphicsDeviceBroker> deviceBroker = {},
-                    std::uint32_t softwareThreadCount = 0U);
+                    std::uint32_t softwareThreadCount = 0U,
+                    std::int64_t maximumSequentialStride = kDefaultMaximumSequentialStrideFrames);
     ~SoftwareDecoder();
 
     SoftwareDecoder(const SoftwareDecoder&) = delete;
@@ -43,6 +52,9 @@ public:
     [[nodiscard]] domain::Status open(const std::atomic<bool>& cancellationRequested);
     [[nodiscard]] domain::Result<DecodedFrame>
     decodeExact(domain::FrameId frameId, const std::atomic<bool>& cancellationRequested);
+    // Continues from the decoder's cursor only while the target lies within the configured
+    // sequential stride; a target further ahead seeks (with the bounded ordinal back-off)
+    // instead of walking and decoding every intermediate frame.
     [[nodiscard]] domain::Result<DecodedFrame>
     decodeSequential(domain::FrameId frameId, const std::atomic<bool>& cancellationRequested);
 

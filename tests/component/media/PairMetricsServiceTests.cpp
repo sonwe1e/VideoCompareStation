@@ -7,6 +7,7 @@
 #include "dvs/media/MediaProbe.h"
 #include "dvs/media/PairMetricsService.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -18,6 +19,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace dvs::media {
@@ -119,6 +121,27 @@ protected:
             .mismatchThreshold = 4U,
         };
         return request;
+    }
+
+    // Submits one request on the reused service instance and returns the summed MAE of its
+    // samples, mirroring how the GUI switches the active pair without recreating the service.
+    [[nodiscard]] double submitAndCollectMae(const domain::ComparisonSource& first,
+                                             const domain::ComparisonSource& second,
+                                             const std::uint64_t requestId) {
+        const auto sink = std::make_shared<CollectingSink>();
+        EXPECT_EQ(service.submit(makeRequest(first, second, 0, 3, 0, requestId), sink),
+                  application::PortSubmitResult::Accepted);
+        EXPECT_TRUE(sink->waitForCompletion(std::chrono::seconds{5}));
+        EXPECT_FALSE(sink->failure().has_value());
+        EXPECT_EQ(sink->totalSampleCount(), 4U);
+        double maeSum = 0.0;
+        for (const application::PairMetricsBatch& batch : sink->batches()) {
+            for (const application::PairMetricsSample& sample : batch.samples) {
+                EXPECT_TRUE(sample.comparable);
+                maeSum += sample.metrics.mae;
+            }
+        }
+        return maeSum;
     }
 };
 
@@ -292,6 +315,93 @@ TEST_F(PairMetricsServiceTests, SessionReuseSkipsReopenBetweenJobs) {
     ASSERT_TRUE(secondSink->waitForCompletion(std::chrono::seconds{5}));
     EXPECT_GT(service.decodedFrameCountForTesting(), decodedAfterFirstJob);
     EXPECT_GT(secondSink->totalSampleCount(), 0U);
+}
+
+TEST_F(PairMetricsServiceTests, SwitchingComparisonPairRebindsDecodeSessions) {
+    // Regression: a decode slot that served another source used to reopen the descriptor
+    // captured at its construction, so after A/B -> A/C the second slot silently decoded B
+    // while the service published the numbers as the A/C pair. Switching pairs on one reused
+    // service instance must always measure the requested sources.
+    const domain::ComparisonSource a =
+        probeSource(fixture("h264_a_320x180_30fps_12.mp4"), domain::SourceId{1});
+    const domain::ComparisonSource b =
+        probeSource(fixture("h265_a_320x180_30fps_12.mp4"), domain::SourceId{2});
+    // Same geometry and frame count, clearly different pixel content (a different clip).
+    const domain::ComparisonSource c =
+        probeSource(fixture("h264_rate_mismatch_320x180_24fps_12.mp4"), domain::SourceId{3});
+
+    const double firstAbMae = submitAndCollectMae(a, b, 1U);
+    const double acMae = submitAndCollectMae(a, c, 2U);
+    // Discriminating precondition: the pairs must measure differently, otherwise a
+    // wrong-source decode could hide behind identical numbers.
+    ASSERT_NE(acMae, firstAbMae);
+    const double bcMae = submitAndCollectMae(b, c, 3U);
+    ASSERT_NE(bcMae, firstAbMae);
+    ASSERT_NE(bcMae, acMae);
+
+    // Switching back to the first pair must reproduce its measurement exactly: the slot that
+    // served C has to rebind to B instead of replaying C's (or A's) file.
+    const double secondAbMae = submitAndCollectMae(a, b, 4U);
+    EXPECT_DOUBLE_EQ(secondAbMae, firstAbMae);
+}
+
+TEST_F(PairMetricsServiceTests, IdenticalSourcesStayZeroErrorUnderEveryMismatchPolicy) {
+    const domain::ComparisonSource first =
+        probeSource(fixture("h264_a_320x180_30fps_12.mp4"), domain::SourceId{1});
+    const domain::ComparisonSource second =
+        probeSource(fixture("h264_a_320x180_30fps_12.mp4"), domain::SourceId{2});
+    for (const domain::MismatchPolicy policy : {domain::MismatchPolicy::LumaOnly,
+                                                domain::MismatchPolicy::AnyChannel,
+                                                domain::MismatchPolicy::AllChannels}) {
+        application::PairMetricsRequest request = makeRequest(first, second, 0, 2, 0, 1U);
+        request.mismatchPolicy = policy;
+        const auto sink = std::make_shared<CollectingSink>();
+        ASSERT_EQ(service.submit(request, sink), application::PortSubmitResult::Accepted);
+        ASSERT_TRUE(sink->waitForCompletion(std::chrono::seconds{5}));
+        ASSERT_FALSE(sink->failure().has_value());
+        for (const application::PairMetricsBatch& batch : sink->batches()) {
+            // The batch must echo the policy so stale-policy results are identifiable.
+            EXPECT_EQ(batch.mismatchPolicy, policy);
+            for (const application::PairMetricsSample& sample : batch.samples) {
+                ASSERT_TRUE(sample.comparable);
+                EXPECT_EQ(sample.metrics.mismatchPixels, 0U);
+                EXPECT_DOUBLE_EQ(sample.metrics.mae, 0.0);
+            }
+        }
+    }
+}
+
+TEST_F(PairMetricsServiceTests, MismatchPolicyChangesBadPixelCountOnDifferentSources) {
+    const domain::ComparisonSource first =
+        probeSource(fixture("h264_a_320x180_30fps_12.mp4"), domain::SourceId{1});
+    const domain::ComparisonSource second =
+        probeSource(fixture("h264_rate_mismatch_320x180_24fps_12.mp4"), domain::SourceId{2});
+    std::uint64_t anyChannelPixels = 0U;
+    std::uint64_t lumaOnlyPixels = 0U;
+    std::uint64_t allChannelsPixels = 0U;
+    const std::array<std::pair<domain::MismatchPolicy, std::uint64_t*>, 3U> cases = {
+        {{domain::MismatchPolicy::AnyChannel, &anyChannelPixels},
+         {domain::MismatchPolicy::LumaOnly, &lumaOnlyPixels},
+         {domain::MismatchPolicy::AllChannels, &allChannelsPixels}}};
+    for (const auto& [policy, pixelCount] : cases) {
+        application::PairMetricsRequest request = makeRequest(first, second, 0, 0, 0, 1U);
+        request.mismatchThreshold = 30U;
+        request.mismatchPolicy = policy;
+        const auto sink = std::make_shared<CollectingSink>();
+        ASSERT_EQ(service.submit(request, sink), application::PortSubmitResult::Accepted);
+        ASSERT_TRUE(sink->waitForCompletion(std::chrono::seconds{5}));
+        ASSERT_FALSE(sink->failure().has_value());
+        const std::vector<application::PairMetricsBatch> batches = sink->batches();
+        ASSERT_EQ(batches.size(), 1U);
+        ASSERT_EQ(batches.front().samples.size(), 1U);
+        ASSERT_TRUE(batches.front().samples.front().comparable);
+        *pixelCount = batches.front().samples.front().metrics.mismatchPixels;
+    }
+    // Both narrower policies are subsets of AnyChannel at the same threshold: the luma sample
+    // never exceeds the max channel delta, and AllChannels requires every channel to pass.
+    EXPECT_LE(lumaOnlyPixels, anyChannelPixels);
+    EXPECT_LE(allChannelsPixels, anyChannelPixels);
+    EXPECT_GT(anyChannelPixels, 0U);
 }
 
 } // namespace

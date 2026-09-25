@@ -96,9 +96,9 @@ try {
         $validEvent.Replace('"cmd":null', '"cmd":18446744073709551615')
     )
 
-    # Schema-v1 defined kinds 0..22 must all round-trip structural validation.
+    # Schema-v1 defined kinds 0..24 must all round-trip structural validation.
     # SchemaV1MaxKind in PlaybackTraceGate.psm1 is the single gate-side bound.
-    $schemaV1MaxKind = 22
+    $schemaV1MaxKind = 24
     for ($kind = 0; $kind -le $schemaV1MaxKind; ++$kind) {
         Assert-TracePasses -Name ("defined-kind-$kind") -Lines @(
             $validHeader,
@@ -147,7 +147,7 @@ try {
         -Lines @($validHeader, $validEvent.Replace('"req":8', '"req":1e-1000')) `
         -ExpectedMessage 'TRACE_INVALID_EVENT'
     Assert-TraceFails -Name 'kind-out-of-range' `
-        -Lines @($validHeader, $validEvent.Replace('"kind":13', '"kind":23')) `
+        -Lines @($validHeader, $validEvent.Replace('"kind":13', '"kind":25')) `
         -ExpectedMessage 'TRACE_INVALID_EVENT'
     Assert-TraceFails -Name 'kind-negative-out-of-range' `
         -Lines @($validHeader, $validEvent.Replace('"kind":13', '"kind":-1')) `
