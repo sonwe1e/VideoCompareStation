@@ -3,6 +3,33 @@
 更新：2026-09-25。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
 
+## 2026-09-25 图片轻编辑第一增补（P1 · 实施第三步，基线 `957ea22` + 本轮工作区）
+
+对应 2026-09-25 审查 §三与产品目标新增的 §5：先立编辑架构（原图不变、撤销/重做、另存
+副本），再补画笔/马赛克（第二增补）与填充/箭头文字（第三增补）。
+
+- **`ImageEditController`（新，ui_qml）**：会话从**已提交解码缓冲**开始（新增
+  `ImageReviewController::rawImageForSlot`，明确排除派生通道视图作为编辑源），原图深拷贝
+  后不再写入；`QUndoStack` 承载有界历史（默认 8 步、可配置），裁剪命令保存裁剪前缓冲以便
+  撤销；`editedImageUrl` 是随每次改动变化的属性（`dvs-edit` 图像提供器），`saveCopy` 用
+  `QSaveFile` 事务性写盘、**拒绝写入会话来源文件**，并按格式执行透明规则。
+- **JPEG 背景规则的现状（重要）**：本仓库的 vcpkg Qt6 **未包含 qjpeg 插件**
+  （`out/vcpkg/x64-windows/Qt6/plugins/imageformats` 只有 gif/ico/svg），因此 JPEG 保存
+  在此构建中不可用。控制器实现并单测了「JPEG＋含透明 ⇒ 必须先选合成背景」的规则
+  （`flattenOntoBackground` 静态可测），编码器缺失时如实返回「当前构建未包含 JPEG 编码器，
+  请另存为 PNG」，不写坏文件。**后续项**：接入 qjpeg 或 FFmpeg 编码后再开 JPEG 另存 UI。
+- **QML**：`ImageWorkspace` 新增编辑行（编辑画面/应用裁剪/撤销/重做/另存副本…＋状态文本）、
+  编辑模式下的裁剪框选（左键框选、中键仍平移、Shift+拖动仍是放大）、裁剪可视化矩形、
+  编辑副本通过 `dvs-edit` 提供器显示于原槽位（对比与统计仍用原图）；控制器以可选上下文
+  属性 `imageEdit` 注入，缺失时整行隐藏（轻量 QML 夹具不受影响）。
+- **测试**：新增 `ui.ImageEditControllerTests`（10 项：原图不可变、裁剪钳制与退化矩形、
+  撤销/重做与标签、历史上限、PNG 保透明与不覆盖源、JPEG 背景规则与编码器缺失分支、
+  `flattenOntoBackground` 合成、退出会话、URL 失效）；契约测试
+  `ImageEditModeCropsAWorkingCopyAndKeepsTheOriginal`（进入编辑→面板切到编辑提供器→
+  视口拖动换算成图像像素选区→应用→撤销/重做→已提交原图尺寸不变→退出恢复原面板源）。
+  定向套件、format、lint 见本轮日志。
+- **余项**：第二增补画笔＋马赛克；第三增补填充/清除＋箭头/矩形/文字标注；JPEG 编码器接入。
+
 ## 2026-09-25 一键复制带标注对比图（P1 · 实施第二步「做好比较」余项二，基线 `5b1ced8` + 本轮工作区）
 
 对应 2026-09-25 审查 §五最后一项：「一键复制／导出带 GT、预测名称、局部裁剪和标注的
