@@ -2406,6 +2406,132 @@ TEST(MainQmlContractTests, ImageEditModeCropsAWorkingCopyAndKeepsTheOriginal) {
         << preview->property("source").toString().toStdString();
 }
 
+// Step-3 second increment: the brush paints through the workspace in image coordinates and
+// the mosaic obscures a selected region; both share the same bounded undo history as crop.
+TEST(MainQmlContractTests, ImageEditBrushAndMosaicToolsEditTheWorkingCopy) {
+    WorkspaceHarness harness;
+    harness.withImageEdit = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    QImage primary(64, 48, QImage::Format_ARGB32);
+    primary.fill(QColor(10, 20, 30));
+    QImage secondary(32, 32, QImage::Format_ARGB32);
+    secondary.fill(QColor(40, 40, 40));
+    ASSERT_TRUE(harness.imageReview.openPairImages(std::move(primary),
+                                                   QStringLiteral("a.png"),
+                                                   std::move(secondary),
+                                                   QStringLiteral("b.png")));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    harness.settle();
+
+    auto* const workspace =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
+    auto* const viewport = harness.root->findChild<QQuickItem*>(QStringLiteral("primaryViewport"));
+    auto* const preview = harness.root->findChild<QQuickItem*>(QStringLiteral("imageViewport-2"));
+    auto* const startButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditStartButton"));
+    auto* const brushTool =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditToolBrushButton"));
+    auto* const mosaicTool =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditToolMosaicButton"));
+    auto* const applyButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditApplyCropButton"));
+    auto* const undoButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditUndoButton"));
+    auto* const brushOpacitySlider =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditBrushOpacitySlider"));
+    ASSERT_NE(workspace, nullptr);
+    ASSERT_NE(viewport, nullptr);
+    ASSERT_NE(preview, nullptr);
+    ASSERT_NE(startButton, nullptr);
+    ASSERT_NE(brushTool, nullptr);
+    ASSERT_NE(mosaicTool, nullptr);
+    ASSERT_NE(applyButton, nullptr);
+    ASSERT_NE(undoButton, nullptr);
+    ASSERT_NE(brushOpacitySlider, nullptr);
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(startButton, "clicked"));
+    harness.settle();
+
+    // Brush tool: the tool switch changes what the left button does and shows its controls.
+    ASSERT_TRUE(QMetaObject::invokeMethod(brushTool, "clicked"));
+    harness.settle();
+    EXPECT_EQ(workspace->property("editTool").toString(), QStringLiteral("brush"));
+    EXPECT_TRUE(brushOpacitySlider->isVisible());
+    EXPECT_FALSE(applyButton->isVisible());
+
+    const qreal scale =
+        preview->width() / static_cast<qreal>(preview->property("sourceSize").toSize().width());
+    ASSERT_GT(scale, 0.0);
+    const QVariant viewportArgument = QVariant::fromValue(static_cast<QObject*>(viewport));
+    // The workspace functions take (view, mouseX, mouseY) — two numbers, not a point.
+    const auto toViewportX = [&](const qreal imageX) {
+        return QVariant{preview->x() + (imageX * scale)};
+    };
+    const auto toViewportY = [&](const qreal imageY) {
+        return QVariant{preview->y() + (imageY * scale)};
+    };
+    const auto toViewportPoint = [&](const qreal imageX, const qreal imageY) {
+        return QPointF{preview->x() + (imageX * scale), preview->y() + (imageY * scale)};
+    };
+    ASSERT_TRUE(QMetaObject::invokeMethod(workspace,
+                                          "beginBrushStroke",
+                                          Q_ARG(QVariant, viewportArgument),
+                                          Q_ARG(QVariant, toViewportX(10)),
+                                          Q_ARG(QVariant, toViewportY(10))));
+    EXPECT_TRUE(harness.imageEdit.strokeActive());
+    ASSERT_TRUE(QMetaObject::invokeMethod(workspace,
+                                          "continueBrushStroke",
+                                          Q_ARG(QVariant, viewportArgument),
+                                          Q_ARG(QVariant, toViewportX(40)),
+                                          Q_ARG(QVariant, toViewportY(10))));
+    ASSERT_TRUE(QMetaObject::invokeMethod(workspace, "endBrushStroke"));
+    harness.settle();
+    EXPECT_FALSE(harness.imageEdit.strokeActive());
+
+    const QImage painted = harness.imageEdit.editedImage();
+    const QColor strokePixel = painted.pixelColor(25, 10);
+    EXPECT_GT(strokePixel.red(), 200);
+    EXPECT_LT(strokePixel.green(), 90);
+    EXPECT_EQ(painted.pixelColor(25, 40), QColor(10, 20, 30));
+    EXPECT_TRUE(undoButton->property("enabled").toBool());
+
+    // Mosaic tool: a rect selection becomes blocky opaque pixels; nothing outside moves.
+    ASSERT_TRUE(QMetaObject::invokeMethod(mosaicTool, "clicked"));
+    harness.settle();
+    EXPECT_EQ(workspace->property("editTool").toString(), QStringLiteral("mosaic"));
+    EXPECT_TRUE(applyButton->isVisible());
+    EXPECT_TRUE(applyButton->property("text").toString().contains(QStringLiteral("马赛克")));
+    workspace->setProperty("mosaicBlock", 8);
+    viewport->setProperty("cropStart", toViewportPoint(24, 24));
+    viewport->setProperty("cropCurrent", toViewportPoint(40, 40));
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        workspace, "updateCropSelection", Q_ARG(QVariant, viewportArgument)));
+    ASSERT_TRUE(QMetaObject::invokeMethod(applyButton, "clicked"));
+    harness.settle();
+
+    const QImage mosaic = harness.imageEdit.editedImage();
+    EXPECT_EQ(mosaic.pixelColor(25, 25), mosaic.pixelColor(30, 30));
+    EXPECT_EQ(mosaic.pixelColor(25, 25).alpha(), 255);
+    EXPECT_EQ(mosaic.pixelColor(4, 4), QColor(10, 20, 30));
+    EXPECT_TRUE(workspace->property("cropSelection").toMap().isEmpty());
+
+    // Both tools share one ordered history: two undos return to the committed original.
+    ASSERT_TRUE(QMetaObject::invokeMethod(undoButton, "clicked"));
+    harness.settle();
+    ASSERT_TRUE(QMetaObject::invokeMethod(undoButton, "clicked"));
+    harness.settle();
+    EXPECT_FALSE(harness.imageEdit.canUndo());
+    EXPECT_FALSE(harness.imageEdit.dirty());
+    EXPECT_EQ(harness.imageEdit.editedImage().pixelColor(25, 10), QColor(10, 20, 30));
+    EXPECT_EQ(
+        harness.imageReview.rawImageForSlot(ImageReviewController::PrimarySlot).pixelColor(25, 10),
+        QColor(10, 20, 30));
+    ASSERT_TRUE(QMetaObject::invokeMethod(startButton, "clicked"));
+}
+
 // Phase 0 baseline: the Range Loop must never present a frame outside [In,Out]. Today the loop is
 // driven by Main.qml::onCurrentFrameChanged reacting to displayedFrame, with no kernel Range clamp,
 // so after a >2000ms stall catch-up can present Out+Δ before QML seeks back. This QML-level test

@@ -9,6 +9,7 @@
 #include <QTemporaryDir>
 #include <QUrl>
 
+#include <algorithm>
 #include <gtest/gtest.h>
 
 namespace {
@@ -315,4 +316,189 @@ TEST(ImageEditControllerTests, EditedImageUrlTracksEveryImageChange) {
     const QString undoneUrl = controller.editedImageUrl();
     EXPECT_NE(croppedUrl, undoneUrl);
     EXPECT_NE(beginUrl, undoneUrl);
+}
+
+namespace {
+
+[[nodiscard]] QImage solidImage(const int width, const int height, const QColor& color) {
+    QImage image(width, height, QImage::Format_ARGB32);
+    image.fill(color);
+    return image;
+}
+
+// A horizontal gradient makes both "changed" and "untouched" pixels easy to assert.
+[[nodiscard]] QImage gradientImage(const int width, const int height) {
+    QImage image(width, height, QImage::Format_ARGB32);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const int value = (x * 255) / std::max(1, width - 1);
+            image.setPixelColor(x, y, QColor(value, value, value));
+        }
+    }
+    return image;
+}
+
+} // namespace
+
+TEST(ImageEditControllerTests, BrushStrokePaintsAtImageCoordinatesAndUndoesExactly) {
+    ImageEditController controller;
+    const QImage source = gradientImage(40, 30);
+    setSource(controller, source);
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+
+    // A pre-existing edit outside the stroke proves the undo patch is dirty-rect scoped and
+    // does not restore a whole stale image over unrelated pixels.
+    ASSERT_TRUE(controller.mosaicImageRect(0, 20, 10, 8, 4));
+    const QColor mosaicPixel = controller.editedImage().pixelColor(4, 24);
+
+    ASSERT_TRUE(controller.beginStroke(QColor(255, 0, 0), 8, 1.0));
+    EXPECT_TRUE(controller.strokeActive());
+    ASSERT_TRUE(controller.strokeTo(5, 5));
+    ASSERT_TRUE(controller.strokeTo(20, 5));
+    ASSERT_TRUE(controller.strokeTo(30, 12));
+    ASSERT_TRUE(controller.endStroke());
+    EXPECT_FALSE(controller.strokeActive());
+
+    // Stroke pixels are the brush colour; the untouched gradient and the earlier mosaic
+    // survive.
+    const QImage painted = controller.editedImage();
+    const QColor onStroke = painted.pixelColor(20, 5);
+    EXPECT_GT(onStroke.red(), 200);
+    EXPECT_LT(onStroke.green(), 60);
+    EXPECT_LT(onStroke.blue(), 60);
+    EXPECT_EQ(painted.pixelColor(20, 25), source.pixelColor(20, 25));
+    EXPECT_EQ(painted.pixelColor(4, 24), mosaicPixel);
+    EXPECT_TRUE(controller.dirty());
+    EXPECT_EQ(controller.undoLabel(), QStringLiteral("画笔"));
+
+    // Undo restores exactly the stroke footprint (and nothing else); redo re-applies it.
+    ASSERT_TRUE(controller.undo());
+    const QImage undone = controller.editedImage();
+    EXPECT_EQ(undone.pixelColor(20, 5), source.pixelColor(20, 5));
+    EXPECT_EQ(undone.pixelColor(4, 24), mosaicPixel);
+    ASSERT_TRUE(controller.redo());
+    EXPECT_GT(controller.editedImage().pixelColor(20, 5).red(), 200);
+
+    // The immutable original never received a pixel.
+    EXPECT_EQ(controller.sourceImage().pixelColor(20, 5), source.pixelColor(20, 5));
+}
+
+TEST(ImageEditControllerTests, OneStrokeIsOneUndoStepRegardlessOfSegmentCount) {
+    ImageEditController controller;
+    setSource(controller, solidImage(32, 32, QColor(0, 0, 0)));
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+
+    ASSERT_TRUE(controller.beginStroke(QColor(0, 255, 0), 4, 1.0));
+    for (int x = 2; x < 30; ++x) {
+        ASSERT_TRUE(controller.strokeTo(x, 16));
+    }
+    ASSERT_TRUE(controller.endStroke());
+
+    // A single undo returns to the pristine image: the whole gesture is one history step.
+    ASSERT_TRUE(controller.undo());
+    EXPECT_FALSE(controller.canUndo());
+    EXPECT_FALSE(controller.dirty());
+    EXPECT_EQ(controller.editedImage().pixelColor(16, 16), QColor(0, 0, 0));
+}
+
+TEST(ImageEditControllerTests, BrushWidthAndOpacityShapeTheStroke) {
+    ImageEditController controller;
+    setSource(controller, solidImage(40, 40, QColor(0, 0, 0)));
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+
+    // Opaque thin stroke: the centre line is the pure brush colour, a pixel 6 px away is not.
+    ASSERT_TRUE(controller.beginStroke(QColor(255, 255, 255), 3, 1.0));
+    ASSERT_TRUE(controller.strokeTo(5, 20));
+    ASSERT_TRUE(controller.strokeTo(35, 20));
+    ASSERT_TRUE(controller.endStroke());
+    EXPECT_GT(controller.editedImage().pixelColor(20, 20).red(), 240);
+    EXPECT_EQ(controller.editedImage().pixelColor(20, 26), QColor(0, 0, 0));
+    ASSERT_TRUE(controller.undo());
+
+    // Half-opacity: the same geometry lands as a blend instead of pure white.
+    ASSERT_TRUE(controller.beginStroke(QColor(255, 255, 255), 3, 0.5));
+    ASSERT_TRUE(controller.strokeTo(5, 20));
+    ASSERT_TRUE(controller.strokeTo(35, 20));
+    ASSERT_TRUE(controller.endStroke());
+    const int blended = controller.editedImage().pixelColor(20, 20).red();
+    EXPECT_GT(blended, 90);
+    EXPECT_LT(blended, 170);
+
+    // Width is a diameter: a wide stroke covers a pixel the thin one left alone.
+    ASSERT_TRUE(controller.undo());
+    ASSERT_TRUE(controller.beginStroke(QColor(255, 255, 255), 16, 1.0));
+    ASSERT_TRUE(controller.strokeTo(5, 20));
+    ASSERT_TRUE(controller.strokeTo(35, 20));
+    ASSERT_TRUE(controller.endStroke());
+    EXPECT_GT(controller.editedImage().pixelColor(20, 26).red(), 240);
+}
+
+TEST(ImageEditControllerTests, MosaicObscuresTheRegionAndUndoes) {
+    ImageEditController controller;
+    const QImage source = gradientImage(48, 24);
+    setSource(controller, source);
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+    const QImage before = controller.editedImage();
+
+    ASSERT_TRUE(controller.mosaicImageRect(8, 4, 24, 12, 8));
+    const QImage mosaic = controller.editedImage();
+    // The gradient is gone: pixels inside one block share a value, and the region is opaque.
+    EXPECT_EQ(mosaic.pixelColor(8, 4), mosaic.pixelColor(14, 10));
+    EXPECT_EQ(mosaic.pixelColor(8, 4).alpha(), 255);
+    // Outside the rect nothing moved.
+    EXPECT_EQ(mosaic.pixelColor(40, 20), before.pixelColor(40, 20));
+    EXPECT_EQ(controller.undoLabel(), QStringLiteral("马赛克"));
+
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.editedImage(), before);
+    ASSERT_TRUE(controller.redo());
+    EXPECT_EQ(controller.editedImage(), mosaic);
+    EXPECT_EQ(controller.sourceImage(), source);
+}
+
+TEST(ImageEditControllerTests, BrushAndMosaicShareOneOrderedHistory) {
+    ImageEditController controller;
+    setSource(controller, solidImage(40, 40, QColor(20, 20, 20)));
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+
+    ASSERT_TRUE(controller.beginStroke(QColor(200, 0, 0), 6, 1.0));
+    ASSERT_TRUE(controller.strokeTo(10, 10));
+    ASSERT_TRUE(controller.strokeTo(30, 10));
+    ASSERT_TRUE(controller.endStroke());
+    ASSERT_TRUE(controller.mosaicImageRect(6, 24, 20, 10, 6));
+
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.undoLabel(), QStringLiteral("画笔"));
+    ASSERT_TRUE(controller.undo());
+    EXPECT_FALSE(controller.canUndo());
+    EXPECT_FALSE(controller.dirty());
+    EXPECT_EQ(controller.editedImage().pixelColor(20, 10), QColor(20, 20, 20));
+    EXPECT_EQ(controller.editedImage().pixelColor(16, 28), QColor(20, 20, 20));
+}
+
+TEST(ImageEditControllerTests, PixelToolsRejectWithoutASession) {
+    ImageEditController controller;
+    QImage probe = solidImage(8, 8, QColor(0, 0, 0));
+    setSource(controller, probe);
+
+    EXPECT_FALSE(controller.beginStroke(QColor(255, 0, 0), 4, 1.0));
+    EXPECT_FALSE(controller.strokeTo(1, 1));
+    EXPECT_FALSE(controller.endStroke());
+    EXPECT_FALSE(controller.mosaicImageRect(0, 0, 4, 4, 4));
+    EXPECT_FALSE(controller.strokeActive());
+    EXPECT_FALSE(controller.lastStatus().isEmpty());
+
+    // A session that ends mid-stroke cannot leave the stroke flag behind.
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+    ASSERT_TRUE(controller.beginStroke(QColor(255, 0, 0), 4, 1.0));
+    ASSERT_TRUE(controller.strokeTo(2, 2));
+    controller.endSession();
+    EXPECT_FALSE(controller.strokeActive());
+    EXPECT_TRUE(controller.editedImage().isNull());
 }
