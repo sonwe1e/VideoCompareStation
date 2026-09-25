@@ -158,6 +158,9 @@ Rectangle {
     }
 
     // Short source descriptor for the A/B labels, e.g. "16-bit gray16be · 显示转换 · α".
+    // The suffix names the path the samples travelled: a display-converted source is watched
+    // through the RGBA8 conversion, so its code values are a viewing path, not a numeric review
+    // of the file's own planes.
     function sourceSummary(bitDepth, format, hasAlpha, displayConverted) {
         let text = "";
         if (bitDepth > 8)
@@ -167,7 +170,9 @@ Rectangle {
         if (hasAlpha)
             text += " · α";
         if (displayConverted)
-            text += " · " + qsTr("显示转换");
+            text += " · " + qsTr("观看路径：显示转换（非原始平面）");
+        else
+            text += " · " + qsTr("数值审查路径：原码值");
         return text;
     }
 
@@ -882,6 +887,70 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
             }
 
+            // Difference display gain. It amplifies only the rendered image; the peak/MAE
+            // readouts stay raw 8-bit deltas, so two candidates compared at the same gain remain
+            // visually comparable and the numbers never follow the display setting.
+            ReviewActionButton {
+                objectName: "imageDiffGainButton"
+                text: qsTr("差异放大 ×%1 ▾").arg(control.imageReview ? control.imageReview.diffGain : 4)
+                implicitHeight: 30
+                leftPadding: 8
+                rightPadding: 8
+                visible: control.diffModeActive
+                onClicked: diffGainMenu.open()
+
+                VcsMenu {
+                    id: diffGainMenu
+                    menuWidth: 230
+
+                    VcsRadioMenuItem {
+                        objectName: "imageDiffGain1"
+                        text: qsTr("×1 · 原始差值（不放大）")
+                        checked: control.imageReview && control.imageReview.diffGain === 1
+                        onTriggered: {
+                            if (control.imageReview)
+                                control.imageReview.diffGain = 1;
+                        }
+                    }
+                    VcsRadioMenuItem {
+                        objectName: "imageDiffGain2"
+                        text: qsTr("×2")
+                        checked: control.imageReview && control.imageReview.diffGain === 2
+                        onTriggered: {
+                            if (control.imageReview)
+                                control.imageReview.diffGain = 2;
+                        }
+                    }
+                    VcsRadioMenuItem {
+                        objectName: "imageDiffGain4"
+                        text: qsTr("×4（默认）")
+                        checked: control.imageReview && control.imageReview.diffGain === 4
+                        onTriggered: {
+                            if (control.imageReview)
+                                control.imageReview.diffGain = 4;
+                        }
+                    }
+                    VcsRadioMenuItem {
+                        objectName: "imageDiffGain8"
+                        text: qsTr("×8")
+                        checked: control.imageReview && control.imageReview.diffGain === 8
+                        onTriggered: {
+                            if (control.imageReview)
+                                control.imageReview.diffGain = 8;
+                        }
+                    }
+                    VcsRadioMenuItem {
+                        objectName: "imageDiffGain16"
+                        text: qsTr("×16")
+                        checked: control.imageReview && control.imageReview.diffGain === 16
+                        onTriggered: {
+                            if (control.imageReview)
+                                control.imageReview.diffGain = 16;
+                        }
+                    }
+                }
+            }
+
             ReviewActionButton {
                 objectName: "imageViewModeButton"
                 text: control.viewModeLabel + " ▾"
@@ -1228,11 +1297,15 @@ Rectangle {
                             text += " · " + qsTr("已重采样对齐");
                         if (control.imageReview.alphaDifferenceOnly)
                             text += " · " + qsTr("RGB 相同，alpha 存在差异");
-                        // The peak uses the largest RGB channel delta; RGB MAE averages all
-                        // three channel deltas, matching the video metric. Only the difference
-                        // image is amplified ×4 for visibility.
-                        if (!alphaMode)
-                            text += " · " + qsTr("图放大 ×4，统计为原始值");
+                        // Converted 16-bit statistics: the numbers that stay meaningful when the
+                        // RGBA8 display buffer cannot show the difference. The peak uses the
+                        // largest RGB channel delta and the MAE averages all three channel deltas,
+                        // matching the video metric; the gain sentence lives in diffScopeText and
+                        // reports the gain actually in use.
+                        if (control.imageReview.nativeStatsText.length > 0)
+                            text += " · " + control.imageReview.nativeStatsText;
+                        if (control.imageReview.displayEqualButNativeDifferent)
+                            text += " · " + qsTr("⚠️ 显示缓冲看不出该差异，只有读数能看出");
                         return text;
                     }
                 }

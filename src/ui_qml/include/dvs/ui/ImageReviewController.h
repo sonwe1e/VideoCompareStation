@@ -55,9 +55,23 @@ class ImageReviewController final : public QObject {
     Q_PROPERTY(bool diffHasAlpha READ diffHasAlpha NOTIFY stateChanged)
     Q_PROPERTY(
         bool resampleAllowed READ resampleAllowed WRITE setResampleAllowed NOTIFY stateChanged)
+    Q_PROPERTY(int diffGain READ diffGain WRITE setDiffGain NOTIFY stateChanged)
     Q_PROPERTY(QString diffScopeText READ diffScopeText NOTIFY stateChanged)
     Q_PROPERTY(bool openPending READ openPending NOTIFY stateChanged)
     Q_PROPERTY(bool diffPending READ diffPending NOTIFY stateChanged)
+    // Converted 16-bit statistics: the numbers that stay meaningful when the RGBA8 display
+    // buffer cannot show the difference.
+    Q_PROPERTY(bool nativeStatsAvailable READ nativeStatsAvailable NOTIFY stateChanged)
+    Q_PROPERTY(int nativeMaxAbsDifference READ nativeMaxAbsDifference NOTIFY stateChanged)
+    Q_PROPERTY(double nativeMeanAbsDifference READ nativeMeanAbsDifference NOTIFY stateChanged)
+    Q_PROPERTY(int nativePeakAlphaDifference READ nativePeakAlphaDifference NOTIFY stateChanged)
+    Q_PROPERTY(qint64 nativeChangedPixels READ nativeChangedPixels NOTIFY stateChanged)
+    Q_PROPERTY(qint64 nativeBeyondDisplayPixels READ nativeBeyondDisplayPixels NOTIFY stateChanged)
+    Q_PROPERTY(
+        bool displayEqualButNativeDifferent READ displayEqualButNativeDifferent NOTIFY stateChanged)
+    Q_PROPERTY(QString nativeStatsText READ nativeStatsText NOTIFY stateChanged)
+    Q_PROPERTY(qint64 workingSetBudgetBytes READ workingSetBudgetBytes WRITE
+                   setWorkingSetBudgetBytes NOTIFY stateChanged)
     // Source provenance of each side: bit depth, decoded format and alpha presence, so the
     // UI can distinguish original code values from display-converted RGBA8 samples.
     Q_PROPERTY(int primaryBitDepth READ primaryBitDepth NOTIFY stateChanged)
@@ -155,9 +169,34 @@ public:
     [[nodiscard]] bool diffHasAlpha() const noexcept;
     [[nodiscard]] bool resampleAllowed() const noexcept;
     void setResampleAllowed(bool allowed);
+    // Display-only amplification of the rendered difference image. The statistics stay raw
+    // 8-bit deltas, so changing the gain never changes a number and different candidates stay
+    // comparable while they share one gain.
+    [[nodiscard]] int diffGain() const noexcept;
+    void setDiffGain(int gain);
     [[nodiscard]] QString diffScopeText() const;
     [[nodiscard]] bool openPending() const noexcept;
     [[nodiscard]] bool diffPending() const noexcept;
+
+    // Converted RGBA64 (16-bit) statistics of the current pair. Available only when both sides
+    // carry an original-depth sidecar and no resampling occurred. These are decoder-converted
+    // 16-bit code values, never raw file planes.
+    [[nodiscard]] bool nativeStatsAvailable() const noexcept;
+    [[nodiscard]] int nativeMaxAbsDifference() const noexcept;
+    [[nodiscard]] double nativeMeanAbsDifference() const noexcept;
+    [[nodiscard]] int nativePeakAlphaDifference() const noexcept;
+    [[nodiscard]] qint64 nativeChangedPixels() const noexcept;
+    [[nodiscard]] qint64 nativeBeyondDisplayPixels() const noexcept;
+    [[nodiscard]] bool displayEqualButNativeDifferent() const noexcept;
+    // One sentence naming which path the readouts come from and whether the display buffer hid a
+    // difference. Empty when no high-depth statistics exist for the current pair.
+    [[nodiscard]] QString nativeStatsText() const;
+
+    // Whole-working-set ceiling for one compared pair (display buffers, RGBA64 sidecars, the
+    // per-pair analysis field and the derived difference image). Distinct from the decoded-image
+    // cache budget: this is the peak residency the diff pipeline needs, not a cache size.
+    [[nodiscard]] qint64 workingSetBudgetBytes() const noexcept;
+    void setWorkingSetBudgetBytes(qint64 bytes);
 
     [[nodiscard]] int primaryBitDepth() const noexcept;
     [[nodiscard]] int primaryChannels() const noexcept;
@@ -339,6 +378,13 @@ private:
     bool alphaDifferenceOnly_ = false;
     bool diffHasAlpha_ = false;
     bool resampleAllowed_ = false;
+    int diffGain_ = kDefaultDifferenceGain;
+    bool nativeStatsAvailable_ = false;
+    int nativeMaxAbsDifference_ = 0;
+    double nativeMeanAbsDifference_ = 0.0;
+    int nativePeakAlphaDifference_ = 0;
+    qint64 nativeChangedPixels_ = 0;
+    qint64 nativeBeyondDisplayPixels_ = 0;
     qreal zoom_ = 1.0;
     qreal panX_ = 0.5;
     qreal panY_ = 0.5;

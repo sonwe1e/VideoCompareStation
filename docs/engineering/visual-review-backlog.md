@@ -3,6 +3,44 @@
 更新：2026-09-25。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
 
+## 2026-09-25 读数与显示口径第二批（P1，基线 `68212f7` + 本轮工作区）
+
+按审查 §2.4（P1 部分）与 §2.5 修改图片差异链路与口径标注。用户已确认实际素材范围为
+视频 ≤2K、基本不存在 16-bit 图片，因此本轮**没有**做 8K 专项调优，也**没有**扩展编码格式。
+
+- **差异增益不再是写死的 ×4**：`ImagePairLoader::DifferenceOptions.gain`（1–16，默认 4）贯通
+  控制器 `diffGain` 与图片工具栏「差异放大」菜单。增益只作用于渲染出的差异图，
+  峰值／RGB MAE／alpha 统计始终是原始 8-bit 差值；`diffScopeText` 与读数行显示当前倍率。
+  越界值收敛到 1/16，不会静默关闭放大。
+- **每对素材只分析一次**：`analyzeDifference()` 生成 canonical 差值场（逐通道精确幅值
+  RGBA8888 + 1 字节符号位图）并同时算出全部统计；`renderDifference()` 只读该差值场生成
+  绝对／带符号／高亮／Alpha 变体。切模式、改增益、重采样开关变化不再重读两侧素材、不再重算
+  统计。顺带移除了原先两次整图 `Format_ARGB32` 转换副本（解码缓冲本来就是 RGBA8888，
+  只有格式不同才转换）。分析缓存按缓冲身份（`QImage::cacheKey`）+ 重采样判定失效，
+  提交新配对、`clearCache()`、`closeAll()` 都会释放，绝不按文件名复用。
+- **内存按整个工作集核算**：新增 `estimateSingleImageWorkingSet`／`estimatePairWorkingSet`
+  （显示缓冲 + RGBA64 sidecar + 差值场 + 符号位图 + 派生差异图 + 重采样副本），
+  `kImagePairWorkingSetBudgetBytes` 默认 1536 MiB、可用 `setWorkingSetBudgetBytes` 配置；
+  超限时差异任务直接报错并给出估算值。`asyncStats()` 暴露分项
+  （`working_set_*`、`analysis_runs`、`analysis_reuses`、`render_runs`）。
+  旧的 `宽×高×4` 检查仍只保证单张解码缓冲，不再被当作配对峰值。
+- **高位深差异统计（P1 部分）**：两侧都有同尺寸 RGBA64 sidecar 且未重采样时，
+  `DifferenceResult` 额外给出 16-bit 峰值／均值／alpha／差异像素数，以及
+  `nativeBeyondDisplayPixels`（RGBA8 相同、转换后 16-bit 不同的像素数）。读数行与
+  `diffScopeText` 标注“转换后 RGBA16 码值”，并提示“显示缓冲看不出该差异”。
+  重采样后不再声称像素级 16-bit 对应。
+- **观看路径／数值审查路径口径**：视频检查器的像素维度与图片来源摘要都改为显式两分——
+  原始码值 = 数值审查路径；经过显示空间转换 = 观看路径且非原码值比较。
+  ICC 仍未实现，属于未覆盖能力，本轮不作任何颜色管理声明。
+- **本机证据（7680×4320 合成 RGBA8888 配对，dev 构建，一次性基准后已移除该用例）**：
+  首次差异（分析 + 首帧渲染）3073 ms；随后切增益 1352 ms、切模式 1385 ms，
+  `analysis_runs=1`、`analysis_reuses=2`，工作集估算 538 MiB。这是本机 dev 观测，
+  不是 Release 承诺；按实际 ≤2K 素材折算约首次 ~190 ms、每次显示变体 ~85 ms。
+- **测试**：新增 `DifferenceGainAmplifiesDisplayButNotStatistics`、
+  `HighDepthStatisticsDetectDifferenceTheDisplayCannotShow`、
+  `PairWorkingSetEstimateCountsSidecarsAnalysisAndDerivedImage`、
+  `DifferenceRefusesPairBeyondWorkingSetBudget`；`ui.ImageReviewControllerTests` 45/45 通过。
+
 ## 2026-09-25 结果可信第一批（基线 `cd79a2a` + 本轮工作区）
 
 三项 P0 修复：指标会话复用、阈值/通道策略统一、连续逐帧停顿。全量 dev 测试、
@@ -137,15 +175,15 @@
 | V-02 | 倍速／过载时为何变慢或突然追赶？ | P0 | 两种策略已有；连续逐帧五秒超时根因已修复（2026-09-25，陈旧游标全量追赶），runner 发布门禁待复测 | `PlaybackCoordinator::playbackTargetAt`、`SoftwareDecoder::decodeSequential` |
 | V-03 | 30/60 fps、VFR 比较是否同一时刻？ | P0 | 精确性增加源 PTS 一致条件并显示双源帧号/时间；完整时间映射待完善 | `MultiSourceFrameProvider.cpp`、`ComparisonExactness.cpp` |
 | V-04 | 常见编码为什么打不开？ | P1 | H.264/HEVC/MPEG-4 Part 2 已有；AV1/VP9 待扩展 | `MediaProbe.cpp`、`vcpkg.json` |
-| V-05 | 显示转换会不会改变细节？ | P0 | 转换及部分精确性标记已有；原始保真路径待扩展 | `SoftwareDecoder.cpp` |
+| V-05 | 显示转换会不会改变细节？ | P0 | 转换及部分精确性标记已有；检查器与图片摘要改为显式区分“观看路径／数值审查路径”（2026-09-25）；原始保真路径待扩展 | `SoftwareDecoder.cpp`、`ComparisonViewport.qml`、`ImageWorkspace.qml` |
 | V-06 | 未播放位置没有缩略图 | P1 | 未缓存悬停降级为时间码胶囊与准星线，Jog Wheel 可滚轮微调；合约测试已通过 | `TimelineThumbnailPopup.qml`、`TimelineTracks.qml` |
 | V-07 | MAE/PSNR 能否实际用于视频评估？ | P2 | 独立解码服务、检查器读数、OSC 和时间轴指标泳道已接通；切换比较对的会话复用缺陷与阈值/通道策略口径已修复（2026-09-25）；硬件验收待做 | `PairMetrics.*`、`PairMetricsController`、`MetricTimelineLane.qml` |
 | I-01 | 透明度哪里错了，贴背景后怎样？ | P1 | A/B/O 快捷键、高对比背景与观察状态浮标已实现；QML 合约测试通过 | `ImageWorkspace.qml`、`ImageReviewController` |
-| I-02 | 读数是原始高位深值吗？颜色可信吗？ | P0 | 已加 RGBA64 sidecar 原始取样（16-bit 用例通过）；ICC 仍无 | `StillImageDecoder.cpp`：`convertFrameToRgba`、`ImageReviewController::samplePixel` |
+| I-02 | 读数是原始高位深值吗？颜色可信吗？ | P0 | 已加 RGBA64 sidecar 原始取样（16-bit 用例通过）；差异统计新增“转换后 RGBA16”口径与“显示缓冲看不到的差异”提示（2026-09-25）；ICC 仍无 | `StillImageDecoder.cpp`：`convertFrameToRgba`、`ImageReviewController::samplePixel/nativeStatsText` |
 | I-03 | PNM 是否所有入口都能打开？ | P1 | 三个对话框已补 `*.pam` 过滤器；格式矩阵验收仍待做 | `ImageHeaderProbe.h`、`Main.qml` |
 | I-04 | 点击 100% 后仍是放大状态 | P1 | 100% 重置 zoom=1.0，适应窗口与双击重置；合约测试已通过 | `ImageWorkspace.qml`：`imageTrueSizeButton` |
-| I-05 | 图片“平均差异”和视频 MAE 是否同义？ | P0 | 图片 RGB 均值已统一为三通道 MAE，峰值仍为最大通道差；定向测试通过 | `ImagePairLoader::computeDifference` |
-| I-06 | 切换大图通道会不会卡 UI？ | P1 | 悬停取样已改为单像素计算，不再等待整图派生缓存；切换显示的大图延迟仍待实测 | `ImageReviewController::channelView`、`samplePixel` |
+| I-05 | 图片“平均差异”和视频 MAE 是否同义？ | P0 | 图片 RGB 均值已统一为三通道 MAE，峰值仍为最大通道差；差异改为每对素材一次分析、增益与模式只改渲染（2026-09-25，增益 1–16 可调，统计不随增益变化） | `ImagePairLoader::analyzeDifference`、`renderDifference` |
+| I-06 | 切换大图通道会不会卡 UI？ | P1 | 悬停取样已改为单像素计算，不再等待整图派生缓存；切模式／改增益只重渲染差值场，不再重读素材；用户确认实际素材 ≤2K，未做 8K 专项调优 | `ImageReviewController::channelView`、`samplePixel`、`diffGain` |
 | C-01 | GT＋两个 Prediction 如何比较？ | P1 | 用户 2026-09-22 拍板：图片不做三图对比，条目关闭 | `ImageReviewController.h`、`CompareModeBar.qml` |
 | C-02 | 如何找插帧形变、重影、时间跳变？ | P1/P2 | 手动 A/B 切换已加拖动阈值；淡化隐藏；真实素材实窗验收待做 | `ImageWorkspace.qml`：手动切换/同步准星 |
 | U-01 | 不知道从哪里开始、功能藏在哪里 | P1 | 首屏入口、Diff 直达重采样与沉浸控制已接线；图片数量和混合拖入的误导已修正；实窗验收待做 | `EmptyReviewView.qml`、`Main.qml`、`PlayerOsc.qml` |
@@ -295,11 +333,17 @@
 
 ### I-05 图片统计定义
 
-- **现状**：`ImagePairLoader::computeDifference` 的 `meanAbsDifference` 已改为 RGB 三通道
-  全部样本的平均绝对差，与视频 MAE 同义；峰值仍取单像素最大通道差。显示增益固定 4，统计未乘增益。
+- **现状**：`ImagePairLoader::analyzeDifference` 的 `meanAbsDifference` 是 RGB 三通道全部样本的
+  平均绝对差，与视频 MAE 同义；峰值仍取单像素最大通道差。增益是显示参数（`diffGain`，
+  1–16，默认 4），只放大渲染出的差异图，统计始终是原始 8-bit 差值。
+- **2026-09-25**：分析（差值场 + 全部统计）每对素材只做一次并缓存，`renderDifference` 按
+  模式／增益派生显示变体；`nativeStatsText` 另外给出“转换后 RGBA16”口径与
+  “RGBA8 相同、16-bit 不同”的像素数。重采样后不提供 16-bit 像素级统计。
 - **退出条件**：RGB delta=(3,6,9) 的单像素案例峰值为 9、MAE 为 6；展示标签分别标明。
   Alpha 独立统计，不混入 RGB MAE。不同尺寸默认拒绝逐像素差异；允许重采样时记录方向与方法。
-- **验证入口**：`ImageReviewControllerTests.cpp`、`PixelDifferenceTests.cpp`，及指标展示／导出契约。
+- **验证入口**：`ImageReviewControllerTests.cpp`（`DifferenceGainAmplifiesDisplayButNotStatistics`、
+  `HighDepthStatisticsDetectDifferenceTheDisplayCannotShow`）、`PixelDifferenceTests.cpp`，
+  及指标展示／导出契约。
 
 ### I-06 大图通道切换延迟
 
@@ -309,8 +353,12 @@
 - **2026-09-22 已提交实现**：当时确认 QML 图片提供器线程与 GUI 悬停取样会并发进入
   `channelView` 的可变缓存（原实现无锁，存在数据竞争）。已为缓存与失效计数加互斥
   （`viewCacheMutex_`）：先到线程承担唯一一次构建，显示路径本就在提供器线程预热，
-  悬停现在不读派生缓存。8K 大图的冷构建延迟实测仍待做。
-- **待验证**：缓存降低重复开销，但不能证明首次大图操作满足 UI 延迟要求。
+  悬停现在不读派生缓存。
+- **2026-09-25**：差异链路改为每对素材一次分析、切模式／改增益只重渲染差值场，也不再产生
+  两次整图 `Format_ARGB32` 转换副本。工作集改为按显示缓冲 + sidecar + 差值场 + 派生图整体
+  核算（`estimatePairWorkingSet`、`working_set_*` 统计）。用户确认实际素材 ≤2K，
+  8K 未做专项调优；一次性 7680×4320 dev 基准记录在顶部第二批。
+- **待验证**：缓存与复用降低重复开销，但不能证明首次大图操作满足 UI 延迟要求。
 - **退出条件**：在允许尺寸／内存范围的大图上测首次切换、连续切换、悬停取样、换图取消；
   满足既有 100 ms UI 响应门禁。需要后台化时保留 generation/request 校验和有界缓存。
 

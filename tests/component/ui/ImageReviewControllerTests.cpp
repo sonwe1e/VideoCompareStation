@@ -1303,4 +1303,203 @@ TEST(ImageReviewControllerTests, ZoomToRectCalculatesCenterPanAndClampedZoom) {
     EXPECT_NEAR(controller.zoom(), 2.5, 1e-4);
 }
 
+TEST(ImageReviewControllerTests, DifferenceGainAmplifiesDisplayButNotStatistics) {
+    // §2.5: the gain is a display parameter. Switching it must re-render the image, reuse the
+    // pair analysis instead of re-reading both sources, and leave every statistic untouched.
+    ImageReviewController controller;
+    ASSERT_TRUE(
+        controller.openPrimaryImage(solidImage(QColor(20, 40, 60)), QStringLiteral("left")));
+    ASSERT_TRUE(
+        controller.openSecondaryImage(solidImage(QColor(20, 40, 80)), QStringLiteral("right")));
+    EXPECT_EQ(controller.diffGain(), 4);
+
+    controller.setCompareMode(ImageReviewController::AbsDifference);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    ASSERT_TRUE(controller.hasDiffResult());
+    // Blue delta is 20: ×4 clamps to 80, the raw peak stays 20.
+    EXPECT_EQ(controller.maxAbsDifference(), 20);
+    EXPECT_EQ(controller.samplePixel(ImageReviewController::DisplayDiffSlot, 0, 0)
+                  .value(QStringLiteral("b"))
+                  .toInt(),
+              80);
+    const int analysisRunsAfterFirstDiff =
+        controller.asyncStats().value(QStringLiteral("analysis_runs")).toInt();
+    ASSERT_GE(analysisRunsAfterFirstDiff, 1);
+
+    controller.setDiffGain(1);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    EXPECT_EQ(controller.samplePixel(ImageReviewController::DisplayDiffSlot, 0, 0)
+                  .value(QStringLiteral("b"))
+                  .toInt(),
+              20);
+    EXPECT_EQ(controller.maxAbsDifference(), 20);
+    // The mean averages all three channel deltas over every pixel: only blue moved, so the
+    // per-pixel mean is 20/3 regardless of the display gain.
+    EXPECT_NEAR(controller.meanAbsDifference(), 20.0 / 3.0, 1e-9);
+
+    controller.setDiffGain(16);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    EXPECT_EQ(controller.samplePixel(ImageReviewController::DisplayDiffSlot, 0, 0)
+                  .value(QStringLiteral("b"))
+                  .toInt(),
+              255);
+    EXPECT_EQ(controller.maxAbsDifference(), 20);
+
+    // A mode switch is another display variant of the same pair analysis.
+    controller.setCompareMode(ImageReviewController::Highlight);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    EXPECT_EQ(controller.maxAbsDifference(), 20);
+
+    // Out-of-range values clamp instead of silently disabling the amplification.
+    controller.setDiffGain(999);
+    EXPECT_EQ(controller.diffGain(), 16);
+    controller.setDiffGain(0);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    EXPECT_EQ(controller.diffGain(), 1);
+
+    // Re-rendering for a new gain or mode reuses the pair analysis; it must never re-read the
+    // sources or recompute a statistic. A gain whose render is already cached is served by the
+    // controller's display cache and does not reach the loader at all, which is why the reuse
+    // count tracks the variants that actually had to be re-rendered.
+    const QVariantMap stats = controller.asyncStats();
+    EXPECT_EQ(stats.value(QStringLiteral("analysis_runs")).toInt(), analysisRunsAfterFirstDiff);
+    EXPECT_GE(stats.value(QStringLiteral("analysis_reuses")).toInt(), 3);
+}
+
+TEST(ImageReviewControllerTests, HighDepthStatisticsDetectDifferenceTheDisplayCannotShow) {
+    // §2.4: two sources whose RGBA8 display samples are identical but whose converted RGBA64
+    // code values differ. The display statistics legitimately report equality; the high-depth
+    // statistics must still report the difference and say which path saw it.
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QUrl left =
+        writeBytes(directory, QStringLiteral("deepA.bin"), QByteArrayLiteral("deepA"));
+    const QUrl right =
+        writeBytes(directory, QStringLiteral("deepB.bin"), QByteArrayLiteral("deepB"));
+    ASSERT_FALSE(left.isEmpty());
+    ASSERT_FALSE(right.isEmpty());
+    ScopedStillImageLoader loader{[](const QByteArray& bytes,
+                                     QImage* image,
+                                     QImage* nativeImage,
+                                     dvs::ui::StillImageSourceInfo* info,
+                                     std::string*) {
+        if (!bytes.startsWith("deep")) {
+            return false;
+        }
+        const bool second = bytes.endsWith("B");
+        // Identical display samples on both sides: the RGBA8 quantization hides the difference.
+        *image = solidImage(QColor(1, 2, 3));
+        if (info != nullptr) {
+            info->bitDepth = 16;
+            info->channels = 3;
+            info->hasAlpha = false;
+            info->sourceFormat = QStringLiteral("rgb48le");
+            info->displayConverted = true;
+        }
+        if (nativeImage != nullptr) {
+            QImage native(4, 4, QImage::Format_RGBA64);
+            if (!native.isNull()) {
+                auto* const samples = reinterpret_cast<QRgba64*>(native.bits());
+                // One code value apart: the same 8-bit bucket, a different 16-bit sample.
+                std::fill(samples,
+                          samples + native.sizeInBytes() / sizeof(QRgba64),
+                          second ? qRgba64(257, 258, 259, 65535) : qRgba64(256, 257, 258, 65535));
+            }
+            *nativeImage = std::move(native);
+        }
+        return true;
+    }};
+    ImageReviewController controller;
+    ASSERT_GT(controller.requestOpenPair(left, right, 11), 0);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    ASSERT_TRUE(controller.hasPair());
+
+    controller.setCompareMode(ImageReviewController::AbsDifference);
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    ASSERT_TRUE(controller.hasDiffResult());
+
+    // The display path is genuinely identical, so its statistics must not be inflated.
+    EXPECT_EQ(controller.maxAbsDifference(), 0);
+    EXPECT_DOUBLE_EQ(controller.meanAbsDifference(), 0.0);
+
+    EXPECT_TRUE(controller.nativeStatsAvailable());
+    EXPECT_EQ(controller.nativeMaxAbsDifference(), 1);
+    EXPECT_NEAR(controller.nativeMeanAbsDifference(), 1.0, 1e-9);
+    EXPECT_EQ(controller.nativeChangedPixels(), 16);
+    EXPECT_EQ(controller.nativeBeyondDisplayPixels(), 16);
+    EXPECT_TRUE(controller.displayEqualButNativeDifferent());
+    EXPECT_TRUE(controller.nativeStatsText().contains(QStringLiteral("RGBA16")));
+    EXPECT_TRUE(controller.diffScopeText().contains(QStringLiteral("RGBA16")));
+}
+
+TEST(ImageReviewControllerTests, PairWorkingSetEstimateCountsSidecarsAnalysisAndDerivedImage) {
+    const dvs::ui::ImageWorkingSetEstimate single =
+        dvs::ui::estimateSingleImageWorkingSet(100, 100, true);
+    EXPECT_EQ(single.displayBytes, 40000);
+    EXPECT_EQ(single.nativeBytes, 80000);
+    EXPECT_EQ(single.totalBytes, 120000);
+
+    const dvs::ui::ImageWorkingSetEstimate pair =
+        dvs::ui::estimatePairWorkingSet(QSize(100, 100), QSize(100, 100), true, false);
+    EXPECT_EQ(pair.displayBytes, 80000);
+    EXPECT_EQ(pair.nativeBytes, 160000);
+    // The analysis field is 4 bytes per pixel plus a 1-byte sign map, the derived ARGB32
+    // difference image another 4.
+    EXPECT_EQ(pair.analysisBytes, 50000);
+    EXPECT_EQ(pair.derivedBytes, 40000);
+    EXPECT_EQ(pair.resampleBytes, 0);
+    EXPECT_EQ(pair.totalBytes, 330000);
+
+    // A mismatched pair that is resampled pays one extra scaled copy of the target extent.
+    const dvs::ui::ImageWorkingSetEstimate resampled =
+        dvs::ui::estimatePairWorkingSet(QSize(100, 100), QSize(50, 200), true, true);
+    EXPECT_EQ(resampled.displayBytes, (10000LL + 10000LL) * 4LL);
+    EXPECT_EQ(resampled.resampleBytes, 40000);
+    EXPECT_EQ(resampled.totalBytes, 370000);
+}
+
+TEST(ImageReviewControllerTests, DifferenceRefusesPairBeyondWorkingSetBudget) {
+    ensureCoreApplication();
+    dvs::ui::ImagePairLoader loader;
+    // 64 bytes cannot hold even a 4x4 pair's display buffers, analysis field and derived image.
+    loader.setWorkingSetBudgetBytes(64);
+    EXPECT_EQ(loader.workingSetBudgetBytes(), 64);
+
+    std::optional<dvs::ui::ImagePairLoader::DifferenceResult> result;
+    dvs::ui::ImagePairLoader::DifferenceOptions options;
+    options.compareMode = ImageReviewController::AbsDifference;
+    ASSERT_GT(loader.requestDifference(solidImage(QColor(0, 0, 0)),
+                                       solidImage(QColor(10, 10, 10)),
+                                       QImage{},
+                                       QImage{},
+                                       options,
+                                       [&result](dvs::ui::ImagePairLoader::DifferenceResult value) {
+                                           result = std::move(value);
+                                       }),
+              0);
+    ASSERT_TRUE(waitUntil([&result] { return result.has_value(); }));
+    EXPECT_FALSE(result->succeeded());
+    EXPECT_TRUE(result->error.contains(QStringLiteral("预算")));
+    const dvs::ui::ImagePairLoader::Stats stats = loader.stats();
+    EXPECT_GT(stats.workingSet.totalBytes, stats.workingSetBudgetBytes);
+
+    // The same pair succeeds once the budget admits it: the refusal is accounting, not a
+    // decoding failure.
+    loader.setWorkingSetBudgetBytes(dvs::ui::kImagePairWorkingSetBudgetBytes);
+    result.reset();
+    ASSERT_GT(loader.requestDifference(solidImage(QColor(0, 0, 0)),
+                                       solidImage(QColor(10, 10, 10)),
+                                       QImage{},
+                                       QImage{},
+                                       options,
+                                       [&result](dvs::ui::ImagePairLoader::DifferenceResult value) {
+                                           result = std::move(value);
+                                       }),
+              0);
+    ASSERT_TRUE(waitUntil([&result] { return result.has_value(); }));
+    ASSERT_TRUE(result->succeeded());
+    EXPECT_EQ(result->maxAbsDifference, 10);
+    EXPECT_EQ(result->gain, 4);
+}
+
 } // namespace

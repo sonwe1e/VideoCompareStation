@@ -98,9 +98,9 @@ Rectangle {
 
     function comparisonExactnessLabel(exactness) {
         if (exactness === 0)
-            return qsTr("逐像素精确");
+            return qsTr("数值审查路径：逐像素精确");
         if (exactness === 1)
-            return qsTr("已做显示空间转换");
+            return qsTr("观看路径：已做显示空间转换");
         if (exactness === 2)
             return qsTr("空间对应不一致");
         if (exactness === 3)
@@ -111,14 +111,16 @@ Rectangle {
     // T6: every applicable inexactness dimension is named side by side. The single
     // exactness enum can only report the highest-priority reason, so a pair that is
     // temporally aligned, spatially resampled and display-space converted at once
-    // would otherwise hide two of the three limitations.
+    // would otherwise hide two of the three limitations. The pixel dimension is phrased as the
+    // two questions a reviewer decides between: the viewing path (what the display shows after
+    // normalization) and the numeric review path (the source's own plane code values).
     function comparisonDimensionsLabel(edge) {
         if (!edge || Number(edge.dimensionsAvailable) !== 1)
             return qsTr("比较语义不可用");
         const parts = [];
         parts.push(Number(edge.temporalExact) === 1 ? qsTr("时间 索引及时间戳一致") : qsTr("时间 映射或时间戳不同"));
         parts.push(Number(edge.spatialExact) === 1 ? qsTr("空间 原尺寸") : qsTr("空间 尺寸或几何不同"));
-        parts.push(Number(edge.pixelExact) === 1 ? qsTr("像素 原码值") : qsTr("像素 显示空间转换"));
+        parts.push(Number(edge.pixelExact) === 1 ? qsTr("像素 数值审查路径（原码值）") : qsTr("像素 观看路径（已做显示转换，非原码值）"));
         return parts.join(" · ");
     }
 

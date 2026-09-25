@@ -55,6 +55,27 @@ did not run new decoder/Alpha tests. Use ledger I-01/I-02/I-03/I-06 for acceptan
 Source numeric values, decoded RGBA8 samples and background-composited appearance are distinct.
 Straight/premultiplied Alpha interpretation needs format-specific validation before making fidelity claims.
 
+## Still-image difference pipeline
+
+The per-pair difference is split into one analysis and per-variant renders
+(`ImagePairLoader::analyzeDifference` / `renderDifference`, 2026-09-25):
+
+- The **analysis** reads both decoded RGBA8 display buffers once and produces a canonical delta
+  field (exact per-channel magnitudes plus one sign byte) together with every statistic. It is
+  cached per buffer identity and released when the committed pair changes.
+- A **render** derives one display variant (absolute, signed, highlight, alpha) at the selected
+  gain. Switching mode or gain re-renders from the field: it does not re-read the sources, does
+  not convert formats again, and cannot change a statistic.
+- The **gain** (1–16, default 4) is display-only. Peak, RGB MAE and alpha statistics are always
+  raw 8-bit deltas of the display buffer.
+- When both sides carry a same-size converted RGBA64 sidecar and no resampling occurred, the
+  result also reports 16-bit statistics, including the pixels whose RGBA8 samples are equal while
+  the 16-bit code values differ. Those values are **decoder-converted RGBA16 code values, not raw
+  file planes**, and the readout says so. Resampled pairs get no pixel-level 16-bit statistics.
+- Memory is accounted as the pair's whole working set (display buffers, sidecars, delta field,
+  sign map, derived image, resample copy), not as one `width*height*4` buffer; the estimate and
+  budget are reported in `asyncStats()`.
+
 ## Capability layering
 
 Input support is split into three independently judged capabilities, replacing the

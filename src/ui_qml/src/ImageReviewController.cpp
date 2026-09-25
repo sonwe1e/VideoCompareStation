@@ -388,6 +388,72 @@ bool ImageReviewController::resampleAllowed() const noexcept {
     return resampleAllowed_;
 }
 
+int ImageReviewController::diffGain() const noexcept {
+    return diffGain_;
+}
+
+void ImageReviewController::setDiffGain(const int gain) {
+    const int clamped = std::clamp(gain, kMinimumDifferenceGain, kMaximumDifferenceGain);
+    if (diffGain_ == clamped) {
+        return;
+    }
+    diffGain_ = clamped;
+    if (isDifferenceMode(compareMode_) && hasPair() && hasDiffResult_) {
+        // The pair analysis (and therefore every statistic) is unchanged; only the display
+        // variant is re-rendered from the cached field.
+        requestDifferenceForCurrentMode();
+        return;
+    }
+    emit stateChanged();
+}
+
+bool ImageReviewController::nativeStatsAvailable() const noexcept {
+    return nativeStatsAvailable_;
+}
+
+int ImageReviewController::nativeMaxAbsDifference() const noexcept {
+    return nativeMaxAbsDifference_;
+}
+
+double ImageReviewController::nativeMeanAbsDifference() const noexcept {
+    return nativeMeanAbsDifference_;
+}
+
+int ImageReviewController::nativePeakAlphaDifference() const noexcept {
+    return nativePeakAlphaDifference_;
+}
+
+qint64 ImageReviewController::nativeChangedPixels() const noexcept {
+    return nativeChangedPixels_;
+}
+
+qint64 ImageReviewController::nativeBeyondDisplayPixels() const noexcept {
+    return nativeBeyondDisplayPixels_;
+}
+
+bool ImageReviewController::displayEqualButNativeDifferent() const noexcept {
+    return nativeBeyondDisplayPixels_ > 0;
+}
+
+QString ImageReviewController::nativeStatsText() const {
+    if (!nativeStatsAvailable_) {
+        return {};
+    }
+    // "Converted RGBA16" is deliberate: the sidecar is a decoder conversion of the source
+    // plane, so these are not raw file channel values even though they carry 16 bits.
+    QString text = tr("转换后 RGBA16 码值：峰值 %1 · 均值 %2 · 差异像素 %3")
+                       .arg(nativeMaxAbsDifference_)
+                       .arg(nativeMeanAbsDifference_, 0, 'f', 2)
+                       .arg(nativeChangedPixels_);
+    if (nativePeakAlphaDifference_ > 0) {
+        text += tr(" · 峰值 α %1").arg(nativePeakAlphaDifference_);
+    }
+    if (nativeBeyondDisplayPixels_ > 0) {
+        text += tr(" · 其中 %1 像素在 RGBA8 显示缓冲上相同").arg(nativeBeyondDisplayPixels_);
+    }
+    return text;
+}
+
 void ImageReviewController::setResampleAllowed(const bool allowed) {
     if (resampleAllowed_ == allowed) {
         return;
@@ -403,19 +469,23 @@ void ImageReviewController::setResampleAllowed(const bool allowed) {
 }
 
 QString ImageReviewController::diffScopeText() const {
-    // T2 scope contract: the decoder path is RGBA8 (stb_image / FFmpeg) and the diff
-    // statistics cover per-pixel deltas of that display buffer. 16-bit original code values
-    // are not retained, so equality claims are always scoped to decoded RGBA8, never to
-    // source code values. Alpha is straight (unassociated): both sides are compared in the
-    // same representation, and premultiplied sources are interpreted as straight on decode,
-    // so a difference between the two representations is never judged as a broken asset.
+    // Scope contract: the difference image and every statistic are computed from the decoded
+    // RGBA8 display buffers, and the rendered image is amplified by diffGain while the numbers
+    // stay raw 8-bit deltas. Converted RGBA64 sidecars are reported separately; they are not raw
+    // file planes. Alpha is straight (unassociated) on both sides, so a difference between a
+    // premultiplied and a straight representation is never judged as a broken asset.
     if (compareMode_ == AlphaDifference) {
-        return tr("解码后 RGBA8（直通 alpha）；差异为 alpha 差值，非 RGB");
+        return tr("解码后 RGBA8（直通 alpha）；差异为 alpha 差值，非 RGB；图放大 ×%1")
+            .arg(diffGain_);
     }
-    if (diffHasAlpha_ || primaryHasAlpha() || secondaryHasAlpha()) {
-        return tr("解码后 RGBA8；差异统计为 RGB（不含 alpha）；alpha 为直通值");
+    QString text = tr("解码后 RGBA8（直通 alpha）；图放大 ×%1，统计为原始值").arg(diffGain_);
+    text += (diffHasAlpha_ || primaryHasAlpha() || secondaryHasAlpha())
+                ? tr("；差异统计为 RGB（不含 alpha），alpha 为直通值")
+                : tr("；差异统计为 RGB（不含 alpha）");
+    if (nativeStatsAvailable_) {
+        text += tr("；另见转换后 RGBA16 统计");
     }
-    return tr("解码后 RGBA8；差异统计为 RGB（不含 alpha）");
+    return text;
 }
 
 // Callers that inject a buffer without decoder metadata retain unknown provenance.
@@ -437,6 +507,9 @@ bool ImageReviewController::openPrimaryImage(QImage image,
     }
     cancelPendingOpen();
     cancelDifferenceRequest();
+    // New content: the previous pair's analysis field (and the buffers it pins) must not be
+    // reused even when the replacement is filed under the same name.
+    async_->loader.clearAnalysisCache();
     ++async_->sourceGeneration;
     resetDifferenceState();
     primary_ = std::move(image);
@@ -479,6 +552,7 @@ bool ImageReviewController::openSecondaryImage(QImage image,
     }
     cancelPendingOpen();
     cancelDifferenceRequest();
+    async_->loader.clearAnalysisCache();
     ++async_->sourceGeneration;
     resetDifferenceState();
     secondary_ = std::move(image);
@@ -577,6 +651,7 @@ bool ImageReviewController::openPairImages(QImage primary,
     const QSize previousPrimarySize = primary_.size();
     cancelPendingOpen();
     cancelDifferenceRequest();
+    async_->loader.clearAnalysisCache();
     ++async_->sourceGeneration;
     resetDifferenceState();
     primary_ = std::move(primary);
@@ -849,9 +924,38 @@ QVariantMap ImageReviewController::asyncStats() const {
     result.insert(QStringLiteral("diff_cache_entries"), async_->diffCache.size());
     result.insert(QStringLiteral("diff_cache_hits"), async_->diffCache.hits());
     result.insert(QStringLiteral("diff_cache_misses"), async_->diffCache.misses());
+    // Per-pair analysis reuse and whole-working-set accounting. "analysis_runs" counts the full
+    // passes over both sources (plus sidecars); "analysis_reuses" counts the mode/gain changes
+    // that only re-rendered a variant from the cached field.
+    result.insert(QStringLiteral("analysis_runs"), loaderStats.analysisRuns);
+    result.insert(QStringLiteral("analysis_reuses"), loaderStats.analysisReuses);
+    result.insert(QStringLiteral("render_runs"), loaderStats.renderRuns);
+    result.insert(QStringLiteral("working_set_bytes"), loaderStats.workingSet.totalBytes);
+    result.insert(QStringLiteral("working_set_display_bytes"), loaderStats.workingSet.displayBytes);
+    result.insert(QStringLiteral("working_set_native_bytes"), loaderStats.workingSet.nativeBytes);
+    result.insert(QStringLiteral("working_set_analysis_bytes"),
+                  loaderStats.workingSet.analysisBytes);
+    result.insert(QStringLiteral("working_set_derived_bytes"), loaderStats.workingSet.derivedBytes);
+    result.insert(QStringLiteral("working_set_resample_bytes"),
+                  loaderStats.workingSet.resampleBytes);
+    result.insert(QStringLiteral("working_set_budget_bytes"), loaderStats.workingSetBudgetBytes);
+    result.insert(QStringLiteral("diff_gain"), diffGain_);
     result.insert(QStringLiteral("open_pending"), openPending());
     result.insert(QStringLiteral("diff_pending"), diffPending());
     return result;
+}
+
+qint64 ImageReviewController::workingSetBudgetBytes() const noexcept {
+    return async_ == nullptr ? kImagePairWorkingSetBudgetBytes
+                             : async_->loader.workingSetBudgetBytes();
+}
+
+void ImageReviewController::setWorkingSetBudgetBytes(const qint64 bytes) {
+    if (async_ == nullptr) {
+        return;
+    }
+    async_->loader.setWorkingSetBudgetBytes(bytes);
+    emit stateChanged();
 }
 
 void ImageReviewController::clearAsyncCaches() {
@@ -873,6 +977,9 @@ void ImageReviewController::closeAll() {
             async_->pendingPairId = -1;
         }
         cancelDifferenceRequest();
+        // No pair is committed any more, so the analysis field and its source buffers are
+        // released instead of being retained for a comparison that no longer exists.
+        async_->loader.clearAnalysisCache();
     }
     ++async_->sourceGeneration;
     primary_ = QImage();
@@ -1410,6 +1517,12 @@ void ImageReviewController::resetDifferenceState() {
     diffResampled_ = false;
     alphaDifferenceOnly_ = false;
     diffHasAlpha_ = false;
+    nativeStatsAvailable_ = false;
+    nativeMaxAbsDifference_ = 0;
+    nativeMeanAbsDifference_ = 0.0;
+    nativePeakAlphaDifference_ = 0;
+    nativeChangedPixels_ = 0;
+    nativeBeyondDisplayPixels_ = 0;
 }
 
 QString ImageReviewController::differenceCacheKey() const {
@@ -1420,10 +1533,15 @@ QString ImageReviewController::differenceCacheKey() const {
                                           ? async_->secondaryIdentity
                                           : imageContentIdentity(secondary_);
     const bool sizesDiffer = primary_.size() != secondary_.size();
-    return QStringLiteral("diff-v1|%1|%2|mode:%3|resample:%4|target:%5x%6|sizesDiffer:%7")
+    // The gain is part of the key because the rendered image depends on it, but it only ever
+    // changes the display variant: the cached pair analysis is keyed independently inside the
+    // loader. Including the sidecar identities keeps a same-buffer pair separate from a
+    // re-decoded one.
+    return QStringLiteral("diff-v2|%1|%2|mode:%3|gain:%4|resample:%5|target:%6x%7|sizesDiffer:%8")
         .arg(primaryIdentity,
              secondaryIdentity,
              QString::number(compareMode_),
+             QString::number(diffGain_),
              resampleAllowed_ ? QStringLiteral("on") : QStringLiteral("off"))
         .arg(primary_.width())
         .arg(primary_.height())
@@ -1465,11 +1583,16 @@ void ImageReviewController::requestDifferenceForCurrentMode() {
     async_->differencePending = true;
     const quint64 sourceGeneration = async_->sourceGeneration;
     const QString cacheKey = differenceCacheKey();
+    ImagePairLoader::DifferenceOptions options;
+    options.compareMode = compareMode_;
+    options.resample = resampleAllowed_;
+    options.gain = diffGain_;
     async_->activeDifferenceRequestId = async_->loader.requestDifference(
         primary_,
         secondary_,
-        compareMode_,
-        resampleAllowed_,
+        primaryNative_,
+        secondaryNative_,
+        options,
         [this, sourceGeneration, cacheKey](ImagePairLoader::DifferenceResult result) {
             handleDifferenceFinished(std::move(result), sourceGeneration, cacheKey);
         });
@@ -1487,6 +1610,12 @@ void ImageReviewController::applyDifferenceResult(const ImagePairLoader::Differe
     diffResampled_ = result.resampled;
     alphaDifferenceOnly_ = result.alphaDifferenceOnly;
     diffHasAlpha_ = result.hasAlpha;
+    nativeStatsAvailable_ = result.nativeAvailable;
+    nativeMaxAbsDifference_ = result.nativeMaxAbsDifference;
+    nativeMeanAbsDifference_ = result.nativeMeanAbsDifference;
+    nativePeakAlphaDifference_ = result.nativePeakAlphaDifference;
+    nativeChangedPixels_ = result.nativeChangedPixels;
+    nativeBeyondDisplayPixels_ = result.nativeBeyondDisplayPixels;
 }
 
 QImage ImageReviewController::displayImage(const int slot) const {
