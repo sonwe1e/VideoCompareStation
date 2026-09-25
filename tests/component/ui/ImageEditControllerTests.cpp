@@ -1,10 +1,10 @@
 #include "dvs/ui/ImageEditController.h"
 
 #include <QColor>
-#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QImage>
 #include <QTemporaryDir>
 #include <QUrl>
@@ -16,21 +16,23 @@ namespace {
 
 using dvs::ui::ImageEditController;
 
-void ensureCoreApplication() {
-    if (QCoreApplication::instance() != nullptr) {
+// Annotation rendering uses QFont/QFontMetrics, which need a QGuiApplication rather than a
+// bare QCoreApplication.
+void ensureGuiApplication() {
+    if (QGuiApplication::instance() != nullptr) {
         return;
     }
     static int argumentCount = 1;
     static char applicationName[] = "ImageEditControllerTests";
     static char* arguments[] = {applicationName, nullptr};
-    static QCoreApplication application{argumentCount, arguments};
+    static QGuiApplication application{argumentCount, arguments};
     static_cast<void>(application);
 }
 
 class CoreApplicationEnvironment final : public ::testing::Environment {
 public:
     void SetUp() override {
-        ensureCoreApplication();
+        ensureGuiApplication();
     }
 };
 
@@ -501,4 +503,184 @@ TEST(ImageEditControllerTests, PixelToolsRejectWithoutASession) {
     controller.endSession();
     EXPECT_FALSE(controller.strokeActive());
     EXPECT_TRUE(controller.editedImage().isNull());
+}
+
+TEST(ImageEditControllerTests, FillAndClearEditTheRectAndUndoExactly) {
+    ImageEditController controller;
+    const QImage source = solidImage(32, 32, QColor(10, 20, 30));
+    setSource(controller, source);
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+
+    ASSERT_TRUE(controller.fillImageRect(4, 4, 10, 10, QColor(220, 40, 40)));
+    const QImage filled = controller.editedImage();
+    EXPECT_EQ(filled.pixelColor(8, 8), QColor(220, 40, 40));
+    EXPECT_EQ(filled.pixelColor(8, 8).alpha(), 255);
+    EXPECT_EQ(filled.pixelColor(20, 20), QColor(10, 20, 30));
+    EXPECT_EQ(controller.undoLabel(), QStringLiteral("填充"));
+
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.editedImage(), source);
+    ASSERT_TRUE(controller.redo());
+    EXPECT_EQ(controller.editedImage(), filled);
+
+    // Clear punches the rect to transparent without touching anything else.
+    ASSERT_TRUE(controller.clearImageRect(4, 4, 10, 10));
+    const QImage cleared = controller.editedImage();
+    EXPECT_EQ(cleared.pixelColor(8, 8).alpha(), 0);
+    EXPECT_EQ(cleared.pixelColor(20, 20), QColor(10, 20, 30));
+    EXPECT_EQ(controller.undoLabel(), QStringLiteral("清除"));
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.editedImage(), filled);
+
+    // Degenerate and out-of-bounds rects are refused, not silently applied.
+    EXPECT_FALSE(controller.fillImageRect(0, 0, 0, 5, QColor(Qt::red)));
+    EXPECT_FALSE(controller.clearImageRect(100, 100, 4, 4));
+    EXPECT_FALSE(controller.fillImageRect(0, 0, 4, 4, QColor()));
+}
+
+TEST(ImageEditControllerTests, AnnotationsRenderIntoLedgerImagesButNotTheOriginal) {
+    ImageEditController controller;
+    const QImage source = solidImage(64, 48, QColor(0, 0, 0));
+    setSource(controller, source);
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+    EXPECT_EQ(controller.annotationCount(), 0);
+    EXPECT_EQ(controller.selectedAnnotation(), -1);
+
+    // Rectangle outline in red, 3 px wide.
+    ASSERT_TRUE(controller.addRectangle(10, 10, 30, 30, QColor(255, 0, 0), 3));
+    EXPECT_EQ(controller.annotationCount(), 1);
+    EXPECT_EQ(controller.selectedAnnotation(), 0);
+    const QImage withRectangle = controller.editedImage();
+    // A 3 px pen centres on the path, so the fully covered row is y == 10 (y == 11 is the
+    // antialiased half-coverage row).
+    EXPECT_GT(withRectangle.pixelColor(20, 10).red(), 180);
+    EXPECT_LT(withRectangle.pixelColor(20, 10).green(), 80);
+    EXPECT_EQ(withRectangle.pixelColor(20, 20).red(), 0); // outline only, interior untouched
+
+    // Arrow from (10, 40) to (50, 40).
+    ASSERT_TRUE(controller.addArrow(10, 40, 50, 40, QColor(0, 255, 0), 3));
+    EXPECT_EQ(controller.annotationCount(), 2);
+    EXPECT_GT(controller.editedImage().pixelColor(30, 40).green(), 180);
+
+    // Text is drawn at the requested pixel size.
+    ASSERT_TRUE(controller.addText(6, 20, QStringLiteral("AB"), QColor(255, 255, 0), 24));
+    EXPECT_EQ(controller.annotationCount(), 3);
+    const QImage withText = controller.editedImage();
+    int textInk = 0;
+    for (int y = 0; y < 30; ++y) {
+        for (int x = 0; x < 60; ++x) {
+            const QColor pixel = withText.pixelColor(x, y);
+            if (pixel.red() > 180 && pixel.green() > 180 && pixel.blue() < 90) {
+                ++textInk;
+            }
+        }
+    }
+    EXPECT_GT(textInk, 10);
+
+    // The immutable original and the saved-copy source never carry annotations.
+    EXPECT_EQ(controller.sourceImage(), source);
+    EXPECT_FALSE(controller.addText(4, 4, QStringLiteral("   "), QColor(Qt::white), 20));
+    EXPECT_FALSE(controller.addRectangle(4, 4, 4, 4, QColor(Qt::white), 2));
+}
+
+TEST(ImageEditControllerTests, AnnotationsAreSelectableMovableAndDeletable) {
+    ImageEditController controller;
+    setSource(controller, solidImage(80, 60, QColor(0, 0, 0)));
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+    ASSERT_TRUE(controller.addRectangle(10, 10, 30, 30, QColor(255, 0, 0), 3));
+
+    // Hit test picks the annotation, a miss clears the selection.
+    EXPECT_TRUE(controller.selectAnnotationAt(20, 11));
+    EXPECT_EQ(controller.selectedAnnotation(), 0);
+    EXPECT_FALSE(controller.selectAnnotationAt(70, 55));
+    EXPECT_EQ(controller.selectedAnnotation(), -1);
+    EXPECT_FALSE(controller.moveSelectedAnnotation(5, 5));
+    EXPECT_FALSE(controller.deleteSelectedAnnotation());
+
+    ASSERT_TRUE(controller.selectAnnotationAt(20, 11));
+    ASSERT_TRUE(controller.moveSelectedAnnotation(10, 5));
+    // The outline moved: the old top edge is now background, the new centre row is red.
+    EXPECT_EQ(controller.editedImage().pixelColor(20, 10).red(), 0);
+    EXPECT_GT(controller.editedImage().pixelColor(30, 15).red(), 180);
+    ASSERT_TRUE(controller.undo());
+    EXPECT_GT(controller.editedImage().pixelColor(20, 10).red(), 180);
+
+    ASSERT_TRUE(controller.deleteSelectedAnnotation());
+    EXPECT_EQ(controller.annotationCount(), 0);
+    EXPECT_FALSE(controller.editedImage().isNull());
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.annotationCount(), 1);
+
+    controller.clearAnnotations();
+    EXPECT_EQ(controller.annotationCount(), 0);
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.annotationCount(), 1);
+}
+
+TEST(ImageEditControllerTests, AnnotationDragGestureCommitsOneHistoryStep) {
+    ImageEditController controller;
+    setSource(controller, solidImage(80, 60, QColor(0, 0, 0)));
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+    ASSERT_TRUE(controller.addRectangle(10, 10, 30, 30, QColor(255, 0, 0), 3));
+
+    ASSERT_TRUE(controller.beginAnnotationDrag(20, 11));
+    ASSERT_TRUE(controller.dragAnnotationTo(25, 15));
+    ASSERT_TRUE(controller.dragAnnotationTo(30, 20));
+    ASSERT_TRUE(controller.dragAnnotationTo(35, 25));
+    ASSERT_TRUE(controller.endAnnotationDrag());
+
+    // One undo returns to the pre-drag position, not to an intermediate one.
+    ASSERT_TRUE(controller.undo());
+    EXPECT_GT(controller.editedImage().pixelColor(20, 10).red(), 180);
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.annotationCount(), 0);
+
+    // A drag with no movement commits nothing, so one undo removes the add itself.
+    ASSERT_TRUE(controller.redo());
+    ASSERT_TRUE(controller.beginAnnotationDrag(20, 11));
+    EXPECT_FALSE(controller.endAnnotationDrag());
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.annotationCount(), 0);
+    EXPECT_FALSE(controller.canUndo());
+    EXPECT_FALSE(controller.beginAnnotationDrag(70, 55));
+}
+
+TEST(ImageEditControllerTests, CropTranslatesSurvivingAnnotationsAndDropsTheRest) {
+    ImageEditController controller;
+    setSource(controller, solidImage(80, 80, QColor(0, 0, 0)));
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+    ASSERT_TRUE(controller.addRectangle(40, 40, 60, 60, QColor(255, 0, 0), 3));
+    ASSERT_TRUE(controller.addRectangle(2, 2, 8, 8, QColor(0, 255, 0), 3));
+    EXPECT_EQ(controller.annotationCount(), 2);
+
+    ASSERT_TRUE(controller.cropToImageRect(20, 20, 40, 40));
+    // The far annotation fell outside the kept area; the other followed the crop exactly.
+    EXPECT_EQ(controller.annotationCount(), 1);
+    const QImage cropped = controller.editedImage();
+    EXPECT_EQ(cropped.size(), QSize(40, 40));
+    EXPECT_GT(cropped.pixelColor(20, 21).red(), 180);
+
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.annotationCount(), 2);
+    EXPECT_EQ(controller.editedImage().size(), QSize(80, 80));
+    EXPECT_GT(controller.editedImage().pixelColor(40, 41).red(), 180);
+}
+
+TEST(ImageEditControllerTests, AnnotationCountIsBounded) {
+    ImageEditController controller;
+    setSource(controller, solidImage(16, 16, QColor(0, 0, 0)));
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+
+    for (int index = 0; index < 64; ++index) {
+        ASSERT_TRUE(controller.addRectangle(1, 1, 14, 14, QColor(255, 0, 0), 1)) << index;
+    }
+    EXPECT_EQ(controller.annotationCount(), 64);
+    EXPECT_FALSE(controller.addArrow(1, 1, 14, 14, QColor(255, 0, 0), 1));
+    EXPECT_TRUE(controller.lastStatus().contains(QStringLiteral("上限")));
 }
