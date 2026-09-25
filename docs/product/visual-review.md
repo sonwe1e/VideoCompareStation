@@ -80,6 +80,9 @@ CompareStation 是面向本地素材的开源视觉质量审查工具，用户�
 
 建议样例覆盖仅 Alpha 不同、RGB 与 Alpha 同时不同、完全透明像素内含不同 RGB、
 半透明边缘贴黑白背景，以及高位深输入；检查数值与最终合成外观是否一致。
+2026-09-25 起图片内容区默认使用**中性灰棋盘格**（双色 `#272727`/`#404040`，与旧棋盘格
+亮度一致但去掉蓝灰倾向）：默认背景不给半透明内容的颜色判断引入偏色，深色底仍是显式
+选项，应用外框保持深色主题。正常 RGBA 视图「偏蓝」的最终根因仍待真实样例确认。
 实现入口为 [ImageWorkspace.qml](../../src/ui_qml/qml/ImageWorkspace.qml)、
 [ImagePairLoader.cpp](../../src/ui_qml/src/ImagePairLoader.cpp) 和
 [StillImageDecoder.cpp](../../src/media_ffmpeg/src/StillImageDecoder.cpp)。
