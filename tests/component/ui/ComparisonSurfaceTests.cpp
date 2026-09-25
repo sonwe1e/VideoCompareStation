@@ -564,6 +564,33 @@ TEST(ComparisonSurfacePropertyTests, ExposesTypedDifferenceDefaultsAndNotifiesOn
     EXPECT_EQ(referenceSlotChanges, 1);
 }
 
+TEST(ComparisonSurfacePropertyTests, DifferenceSuppressedDefaultsFalseAndNotifiesOnlyOnChange) {
+    ComparisonSurface surface;
+
+    EXPECT_FALSE(surface.differenceSuppressed());
+    int suppressedChanges = 0;
+    int geometryChanges = 0;
+    QObject::connect(
+        &surface, &ComparisonSurface::differenceSuppressedChanged, [&] { ++suppressedChanges; });
+    QObject::connect(
+        &surface, &ComparisonSurface::presentationGeometryChanged, [&] { ++geometryChanges; });
+
+    surface.setDifferenceSuppressed(true);
+    EXPECT_TRUE(surface.differenceSuppressed());
+    EXPECT_EQ(suppressedChanges, 1);
+    // Hold-to-peek is transient presentation state: the panel layout must not move while
+    // the button is held, so no geometry invalidation may fire.
+    EXPECT_EQ(geometryChanges, 0);
+
+    surface.setDifferenceSuppressed(true);
+    EXPECT_EQ(suppressedChanges, 1);
+
+    surface.setDifferenceSuppressed(false);
+    EXPECT_FALSE(surface.differenceSuppressed());
+    EXPECT_EQ(suppressedChanges, 2);
+    EXPECT_EQ(geometryChanges, 0);
+}
+
 TEST(ComparisonSurfacePropertyTests, ClampsWipePositionAndNotifiesOnlyOnChange) {
     ComparisonSurface surface;
     int changes = 0;
@@ -2075,6 +2102,49 @@ TEST(ComparisonSurfaceWarpTests, RendersIdenticalFramesBlackForEveryDifferenceMe
     EXPECT_FALSE(harness.acknowledgementMailbox->tryPop().has_value());
     EXPECT_EQ(harness.activitySink->acknowledgementNotifications.load(std::memory_order_relaxed),
               1U);
+
+    harness.releaseRenderer();
+    EXPECT_TRUE(actor.shutdown(2s));
+}
+
+// Step-2 hold-to-peek: while suppressed the difference pass must be replaced by the raw
+// first source of the active pair — same rect, same fit — and releasing restores the
+// difference. A (32, 224) luma pair makes the two outcomes clearly distinguishable:
+// the absolute difference is a bright ~205 gray, the raw first source a dark ~19 gray.
+TEST(ComparisonSurfaceWarpTests, DifferencePeekReplacesThePassWithTheRawFirstSource) {
+    SurfaceWarpHarness harness;
+    harness.surface.setViewMode(ComparisonSurface::Difference);
+    ASSERT_TRUE(harness.start());
+
+    auto budget = std::make_shared<platform::FrameBudget>(16U * 1024U * 1024U);
+    platform::GpuTransferActor actor{budget, harness.broker, harness.mailbox, harness.activitySink};
+    std::optional<application::FrameSet> pair =
+        makeSolidSet(*budget, domain::FrameId{36}, 32U, 224U);
+    ASSERT_TRUE(pair.has_value());
+    ASSERT_EQ(actor.submit(makeContext(36U), std::move(*pair)),
+              platform::GpuTransferSubmitResult::Accepted);
+    ASSERT_TRUE(actor.waitUntilIdle(5s));
+
+    const QImage difference = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+    ASSERT_FALSE(difference.isNull());
+    const QColor differenceCenter =
+        difference.pixelColor(difference.width() / 2, difference.height() / 2);
+    expectColorNear(differenceCenter, QColor{205, 205, 205}, 4);
+
+    // Holding the peek button: the raw first source (BT.601 limited, luma 32 → ~19 gray)
+    // replaces the difference in the same rect; the viewport/fit must not move.
+    harness.surface.setDifferenceSuppressed(true);
+    const QImage peek = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+    ASSERT_FALSE(peek.isNull());
+    expectColorNear(peek.pixelColor(peek.width() / 2, peek.height() / 2), QColor{19, 19, 19}, 4);
+
+    // Releasing restores the exact difference image.
+    harness.surface.setDifferenceSuppressed(false);
+    const QImage restored = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+    ASSERT_FALSE(restored.isNull());
+    expectColorNear(
+        restored.pixelColor(restored.width() / 2, restored.height() / 2), differenceCenter, 2);
+    EXPECT_TRUE(harness.acknowledgementMailbox->tryPop().has_value());
 
     harness.releaseRenderer();
     EXPECT_TRUE(actor.shutdown(2s));

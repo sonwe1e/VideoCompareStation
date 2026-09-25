@@ -3,6 +3,30 @@
 更新：2026-09-25。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
 
+## 2026-09-25 差异按钮三选项与按住看原图（P1 · 实施第二步「做好比较」余项一，基线 `05b2686` + 本轮工作区）
+
+对应 2026-09-25 审查 §五「差异高亮应该帮助找问题」：让「差异」按钮直接提供审查点名的
+观察口径，并提供不进菜单的临时隐藏。上轮已核实着色器（`Nv12ToRgb.hlsl`）中 Highlight
+指标本就是「保留 A 路原图＋按增益对超阈值区域红色 tint」，与审查描述一致，本轮只做接线。
+
+- **「差异」按钮改为下拉**（复用图片工作区 C-02 的既有模式）：`CompareModeBar` 的
+  `diffModeButton` 从单一模式按钮改为下拉，提供「纯差异图」（Difference + RgbAbsolute）
+  与「原图叠加高亮」（Difference + Highlight）；激活时按钮文字带当前口径，其他指标
+  （带符号／热力图等）保持普通「差异」标签并仍从检查器选择，阈值／增益沿用检查器的
+  三路共享设置。选口径同时写 `preferences.viewMode` 与 `differenceMetric`。
+- **按住看原图（hold-to-peek）**：`ComparisonSurface` 新增瞬态 `differenceSuppressed`
+  属性（不持久化、不改布局，契约测试断言不触发 presentationGeometryChanged），经
+  `SurfaceRenderState.differenceSuppressed` 进入渲染器；`appendDifference` 在抑制时改为
+  按同一画布绘制当前配对第一路原始画面（同 aspect fit 与 letterbox），松开恢复差异。
+  入口为差异模式下的「按住看原图」按钮（`onPressed`/`onReleased`/`onCanceled`）。
+- **测试**：`DifferenceSuppressedDefaultsFalseAndNotifiesOnlyOnChange`（属性语义）、
+  `DifferencePeekReplacesThePassWithTheRawFirstSource`（WARP 真实像素：32/224 灰阶对
+  差异≈205、按住≈19、松开逐位还原）、`DifferenceButtonOffersFlavorsAndPeekTogglesSuppression`
+  （契约：口径切换写偏好并反映按钮文案；按住/松开切换 surface 抑制态且模式与指标不变；
+  离开差异模式隐藏按钮）。定向套件、format、lint 见本轮日志。
+- **第二步余项（下一轮）**：带标注的对比图导出、固定 GT 文件夹＋切换预测文件夹的
+  对比实验流程。
+
 ## 2026-09-25 三源候选快捷切换（P1 · 实施第二步「做好比较」，基线 `220cf67` + 本轮工作区）
 
 对应 2026-09-25 审查 §五与实施顺序第二步：验收标准「找到一次缺陷后，切对象不用重新定位」。
@@ -23,7 +47,7 @@
   `viewScale`／`wipePosition` 逐次保持不变、从 Edge0And2 进入时落到 Edge0And1，并核对提交的
   是 SetActiveComparisonPairCommand。定向 ui.MainQmlContractTests／player_osc／
   ImageWorkspaceManual、format-check、lint 见本轮日志。
-- **第二步余项（下一轮）**：差异按钮三选项（原图叠加高亮／纯差异图＋按住临时隐藏）、
+- **第二步余项**：差异按钮三选项与按住看原图已在下一轮落地（见顶部记录）；仍待做的是
   带标注的对比图导出、固定 GT 文件夹＋切换预测文件夹的对比实验流程。
 
 ## 2026-09-25 图片内容区默认中性灰棋盘格（P1，基线 `04f26c3` + 本轮工作区）

@@ -25,6 +25,9 @@ Rectangle {
     required property bool differenceThresholdEnabled
     required property int differenceThresholdCode
     required property int differenceThresholdPolicy
+    // Hold-to-peek: while true the difference pass is replaced by the raw first source
+    // of the active pair (transient button-hold state, never persisted).
+    required property bool differenceSuppressed
     required property int referenceSourceIndex
     required property int sourceCount
     required property bool wipeMode
@@ -188,6 +191,7 @@ Rectangle {
             thresholdEnabled: control.differenceThresholdEnabled
             threshold: Number(control.differenceThresholdCode) / 255
             thresholdPolicy: control.differenceThresholdPolicy
+            differenceSuppressed: control.differenceSuppressed
             referenceSlot: control.referenceSourceIndex >= 0 ? control.referenceSourceIndex : 0
             sourceDisplayInfo: control.sourceMediaInfo
             anchors.fill: parent

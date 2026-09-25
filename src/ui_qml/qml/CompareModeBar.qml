@@ -12,6 +12,7 @@ Rectangle {
 
     required property int sourceCount
     required property int currentMode
+    required property int differenceMetric
     required property var differenceEdges
     required property int currentEdgeIndex
     required property bool inspectorOpen
@@ -23,6 +24,12 @@ Rectangle {
 
     signal modeRequested(int mode)
     signal edgeRequested(int preferenceValue)
+    // Step-2 difference entry: one control offers the two flavors the review named —
+    // overlay-highlight to locate defects on the original, pure diff for distribution.
+    signal differenceViewRequested(int metric)
+    // Hold-to-peek: while the button is held the surface replaces the difference pass
+    // with the raw first source of the active pair; releasing restores the difference.
+    signal differencePeekChanged(bool held)
     // Step-2 "固定 GT 切候选": one action flips the candidate side against the fixed
     // reference; Main keeps the frame, zoom/pan and wipe split untouched.
     signal switchCandidateRequested
@@ -32,6 +39,9 @@ Rectangle {
     readonly property bool pairRelevant: currentMode === ComparisonSurface.Wipe || currentMode === ComparisonSurface.Difference || currentMode === ComparisonSurface.AnalysisGrid
     readonly property bool advancedMode: currentMode === ComparisonSurface.ThreeUp || currentMode === ComparisonSurface.ReferenceFocus || currentMode === ComparisonSurface.AnalysisGrid
     readonly property string advancedModeLabel: currentMode === ComparisonSurface.ThreeUp ? qsTr("三联") : (currentMode === ComparisonSurface.ReferenceFocus ? qsTr("参考聚焦") : (currentMode === ComparisonSurface.AnalysisGrid ? qsTr("分析网格") : ""))
+    // The button names the active quick flavor; other metrics (signed/heatmap/...) keep
+    // the plain "差异" label and stay selectable from the inspector.
+    readonly property string differenceFlavorLabel: currentMode === ComparisonSurface.Difference ? (differenceMetric === ComparisonSurface.Highlight ? qsTr("叠加高亮") : (differenceMetric === ComparisonSurface.RgbAbsolute ? qsTr("纯差异图") : "")) : ""
     // qmllint enable import unqualified unresolved-type
 
     objectName: "compareModeBar"
@@ -59,10 +69,27 @@ Rectangle {
             text: qsTr("分割线")
             modeValue: ComparisonSurface.Wipe
         }
-        ModeButton {
+        // Step-2 difference entry: the button itself offers the flavors the review named
+        // (overlay highlight / pure diff), mirroring the image workspace's diff dropdown.
+        DiffModeButton {
             objectName: "diffModeButton"
-            text: qsTr("差异")
-            modeValue: ComparisonSurface.Difference
+            text: control.differenceFlavorLabel.length > 0 ? qsTr("差异·%1 ▾").arg(control.differenceFlavorLabel) : qsTr("差异 ▾")
+        }
+        // Hold-to-peek: while held the surface shows the raw first source of the active
+        // pair instead of the difference pass; releasing restores the difference view.
+        VcsToolButton {
+            id: differencePeekButton
+
+            objectName: "differencePeekButton"
+            text: qsTr("按住看原图")
+            visible: control.currentMode === ComparisonSurface.Difference
+            enabled: !control.busy
+            implicitWidth: 104
+            implicitHeight: 30
+            labelPixelSize: 12
+            onPressed: control.differencePeekChanged(true)
+            onReleased: control.differencePeekChanged(false)
+            onCanceled: control.differencePeekChanged(false)
         }
         // qmllint enable import unqualified unresolved-type
 
@@ -178,6 +205,58 @@ Rectangle {
             border.color: modeButton.activeFocus ? Theme.accent : (modeButton.checked ? Theme.accent : Theme.controlBorder)
         }
     }
+
+    // qmllint disable import unqualified unresolved-type
+    component DiffModeButton: ReviewActionButton {
+        id: diffModeButton
+
+        checkable: true
+        checked: control.currentMode === ComparisonSurface.Difference
+        implicitHeight: 30
+        implicitWidth: control.differenceFlavorLabel.length > 0 ? 132 : 84
+        enabled: !control.busy
+        leftPadding: 10
+        rightPadding: 10
+        onClicked: diffFlavorMenu.open()
+
+        contentItem: Text {
+            text: diffModeButton.text
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            color: !diffModeButton.enabled ? Theme.disabledText : (diffModeButton.checked || diffModeButton.hovered ? Theme.primaryText : Theme.mutedText)
+            font.pixelSize: 12
+            font.weight: diffModeButton.checked ? Font.DemiBold : Font.Normal
+            elide: Text.ElideRight
+        }
+
+        background: Rectangle {
+            radius: 5
+            color: !diffModeButton.enabled ? Theme.disabledPanel : (diffModeButton.checked ? Theme.controlChecked : (diffModeButton.down ? Theme.controlPressed : (diffModeButton.hovered ? Theme.controlHover : Theme.control)))
+            border.width: diffModeButton.activeFocus ? 2 : 1
+            border.color: diffModeButton.activeFocus ? Theme.accent : (diffModeButton.checked ? Theme.accent : Theme.controlBorder)
+        }
+
+        VcsMenu {
+            id: diffFlavorMenu
+            menuWidth: 220
+
+            VcsRadioMenuItem {
+                objectName: "diffPureMenuItem"
+
+                text: qsTr("纯差异图")
+                checked: control.currentMode === ComparisonSurface.Difference && control.differenceMetric === ComparisonSurface.RgbAbsolute
+                onTriggered: control.differenceViewRequested(ComparisonSurface.RgbAbsolute)
+            }
+            VcsRadioMenuItem {
+                objectName: "diffHighlightMenuItem"
+
+                text: qsTr("原图叠加高亮")
+                checked: control.currentMode === ComparisonSurface.Difference && control.differenceMetric === ComparisonSurface.Highlight
+                onTriggered: control.differenceViewRequested(ComparisonSurface.Highlight)
+            }
+        }
+    }
+    // qmllint enable import unqualified unresolved-type
 
     ReviewActionButton {
         id: inspectorToggleButton

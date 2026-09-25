@@ -118,6 +118,9 @@ ApplicationWindow {
     property bool manualHudPending: false
     property bool showFramePending: false
     property real wipePosition: 0.5
+    // Hold-to-peek ("按住看原图"): while the toolbar button is held, the difference pass
+    // is replaced by the raw first source of the active pair. Transient; not persisted.
+    property bool differencePeekActive: false
     property bool pendingComparisonPreservesPosition: false
     property bool pendingNewReviewWantsThreeUp: false
     property string dropError: ""
@@ -2555,6 +2558,9 @@ ApplicationWindow {
         visible: !root.imageWorkspaceActive && root.sourceCount > 1
         sourceCount: root.sourceCount
         currentMode: root.effectiveViewMode
+        // qmllint disable unqualified
+        differenceMetric: root.preferences ? Number(root.preferences.differenceMetric) : ComparisonSurface.RgbAbsolute
+        // qmllint enable unqualified
         differenceEdges: root.differenceEdges
         currentEdgeIndex: root.differenceEdgeIndex(root.differenceEdge)
         inspectorOpen: root.inspectorOpen
@@ -2569,6 +2575,13 @@ ApplicationWindow {
         }
         onModeRequested: mode => root.preferences.viewMode = mode
         onEdgeRequested: edge => root.applyDifferenceEdge(edge)
+        // qmllint disable unqualified
+        onDifferenceViewRequested: metric => {
+            root.preferences.viewMode = ComparisonSurface.Difference;
+            root.preferences.differenceMetric = metric;
+        }
+        // qmllint enable unqualified
+        onDifferencePeekChanged: held => root.differencePeekActive = held
         onSwitchCandidateRequested: root.switchCandidateEdge()
         onInspectorRequested: root.shell.inspectorVisible = !root.inspectorOpen
     }
@@ -2669,6 +2682,7 @@ ApplicationWindow {
         differenceThresholdEnabled: root.differenceThresholdEnabled
         differenceThresholdCode: root.differenceThresholdCode
         differenceThresholdPolicy: root.differenceThresholdPolicy
+        differenceSuppressed: root.differencePeekActive
         referenceSourceIndex: root.referenceSourceIndex
         sourceCount: root.sourceCount
         wipeMode: root.wipeMode
