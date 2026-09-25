@@ -322,6 +322,9 @@ ApplicationWindow {
     property bool differenceThresholdEnabled: false
     property int differenceThresholdCode: 0
     property int differenceThresholdPolicy: 1
+    // Step-2 "固定 GT 切候选": pair modes (wipe / difference / analysis grid) with three
+    // sources can flip the candidate side against the fixed reference in one action.
+    readonly property bool candidateSwitchAvailable: sourceCount === 3 && (wipeMode || differenceMode)
     readonly property var selectedDifferenceEdge: {
         for (const edge of differenceEdges) {
             if (Number(edge.preferenceValue) === differenceEdge)
@@ -1750,6 +1753,40 @@ ApplicationWindow {
         return Boolean(controller.applyComparisonPairFromEdge(value, Number.isFinite(pairPolicy) ? pairPolicy : 2));
     }
 
+    // Step-2 core interaction "固定 GT 切候选": flip the active pair to the other edge
+    // anchored on the reference (GT) source. Only the pair selection changes — the current
+    // frame, zoom/pan and the wipe split stay exactly where they are, so a defect located
+    // once stays on screen while the candidate side swaps. Entering from a
+    // prediction-vs-prediction pair keeps the currently displayed primary slot as the
+    // candidate so nothing jumps.
+    function switchCandidateEdge() {
+        if (sourceCount !== 3)
+            return false;
+        const reference = referenceSourceIndex >= 0 ? referenceSourceIndex : 0;
+        let current = null;
+        for (let index = 0; index < differenceEdges.length; ++index) {
+            if (Number(differenceEdges[index].preferenceValue) === differenceEdge)
+                current = differenceEdges[index];
+        }
+        if (!current)
+            return false;
+        const primary = Number(current.primarySlot);
+        const currentHasReference = primary === reference || Number(current.secondarySlot) === reference;
+        for (let index = 0; index < differenceEdges.length; ++index) {
+            const edge = differenceEdges[index];
+            const first = Number(edge.primarySlot);
+            const second = Number(edge.secondarySlot);
+            if (first !== reference && second !== reference)
+                continue;
+            if (Number(edge.preferenceValue) === differenceEdge)
+                continue;
+            if (!currentHasReference && first !== primary && second !== primary)
+                continue;
+            return applyDifferenceEdge(Number(edge.preferenceValue));
+        }
+        return false;
+    }
+
     function applyDefaultPairPolicy(policyCode) {
         if (!preferences)
             return false;
@@ -2034,6 +2071,7 @@ ApplicationWindow {
         currentFrame: root.currentFrame
         inFrame: root.inFrame
         outFrame: root.outFrame
+        candidateSwitchEnabled: root.candidateSwitchAvailable
         onWipePositionRequested: position => {
             root.wipePosition = position;
 
@@ -2053,6 +2091,7 @@ ApplicationWindow {
         onInPointRequested: root.setInPoint()
         onOutPointRequested: root.setOutPoint()
         onSelectedRangePlaybackRequested: root.playSelectedRange()
+        onCandidateSwitchRequested: root.switchCandidateEdge()
     }
 
     Shortcut {
@@ -2530,6 +2569,7 @@ ApplicationWindow {
         }
         onModeRequested: mode => root.preferences.viewMode = mode
         onEdgeRequested: edge => root.applyDifferenceEdge(edge)
+        onSwitchCandidateRequested: root.switchCandidateEdge()
         onInspectorRequested: root.shell.inspectorVisible = !root.inspectorOpen
     }
     Rectangle {
