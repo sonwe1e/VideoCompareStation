@@ -12,8 +12,9 @@
 
 namespace dvs {
 namespace application {
+class IClipExporter;
 class IIssueRecordRepository;
-}
+} // namespace application
 namespace ui {
 
 class ComparisonSurface;
@@ -52,6 +53,9 @@ public:
     // Optional T7 injection. Must be set before load(); the composition root owns the concrete
     // persistence adapter so ui_qml never links persistence_json directly.
     void setIssueRecordRepository(application::IIssueRecordRepository* repository) noexcept;
+    // Optional clip-export injection. Must be set before load(); when absent the range export
+    // controls stay hidden and the `clipExport` context property is never published.
+    void setClipExporter(std::shared_ptr<application::IClipExporter> exporter) noexcept;
     [[nodiscard]] int exec();
     void exit(int exitCode) noexcept;
     [[nodiscard]] double activeScreenRefreshRate() const noexcept;

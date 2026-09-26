@@ -2,6 +2,7 @@ include(GoogleTest)
 
 add_executable(
     dvs_media_component_tests
+    ClipExportWriterTests.cpp
     MultiSourceFrameProviderTests.cpp
     FrameSetAssemblerTests.cpp
     FrameTimelineIndexTests.cpp

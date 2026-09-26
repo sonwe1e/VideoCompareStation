@@ -5,6 +5,7 @@ add_library(
         src/AlignmentCacheIdentity.cpp
         src/AlignmentWorkEstimator.cpp
         src/AlignmentWorkflow.cpp
+        src/ClipExportPlanner.cpp
         src/ComparisonExactness.cpp
         src/ComparisonMetrics.cpp
         src/CoordinatorPublication.cpp

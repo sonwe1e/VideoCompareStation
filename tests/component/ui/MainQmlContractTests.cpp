@@ -1,6 +1,7 @@
 #include "dvs/application/Alignment.h"
 #include "dvs/application/SessionSnapshot.h"
 #include "dvs/domain/ComparisonValidator.h"
+#include "dvs/ui/ClipExportController.h"
 #include "dvs/ui/ComparisonExportController.h"
 #include "dvs/ui/ComparisonSurface.h"
 #include "dvs/ui/EditImageProvider.h"
@@ -49,6 +50,7 @@
 #include <filesystem>
 #include <gtest/gtest.h>
 #include <memory>
+#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -201,6 +203,129 @@ public:
     void cancel(const application::RequestContext&) noexcept override {}
 };
 
+// Records the demux/remux work the GUI asked for and finishes instantly, so a contract test can
+// assert the request that crossed the QML boundary without decoding or writing anything. Both
+// entry points are called from the controller's worker thread, hence the mutex around the record.
+class RecordingClipExporter final : public application::IClipExporter {
+public:
+    [[nodiscard]] std::vector<std::int64_t>
+    keyframeTimes(const std::filesystem::path& sourcePath,
+                  const std::atomic_bool& cancelRequested) override {
+        const std::lock_guard guard{mutex};
+        queriedSources.push_back(sourcePath);
+        if (cancelRequested.load()) {
+            return {};
+        }
+        return keyframes;
+    }
+
+    [[nodiscard]] application::ClipExportReport
+    perform(const application::ClipExportJob& job,
+            const std::atomic_bool& cancelRequested) override {
+        const std::lock_guard guard{mutex};
+        jobs.push_back(job);
+        application::ClipExportReport report{};
+        report.requestId = job.requestId;
+        report.outcome = cancelRequested.load() ? application::ClipExportOutcome::kCanceled
+                                                : application::ClipExportOutcome::kCompleted;
+        report.packetsWritten = 5;
+        return report;
+    }
+
+    [[nodiscard]] std::vector<application::ClipExportJob> performedJobs() const {
+        const std::lock_guard guard{mutex};
+        return jobs;
+    }
+
+    [[nodiscard]] std::vector<std::filesystem::path> queriedSourcePaths() const {
+        const std::lock_guard guard{mutex};
+        return queriedSources;
+    }
+
+    // Single GOP starting at time zero: the aligned plan must pre-roll back to it, which is the
+    // behaviour the dialog documents to the user.
+    std::vector<std::int64_t> keyframes{0};
+
+private:
+    mutable std::mutex mutex;
+    std::vector<std::filesystem::path> queriedSources;
+    std::vector<application::ClipExportJob> jobs;
+};
+
+// Installs a validated video comparison on a snapshot. Clip export resolves its source through the
+// validated set (canonical source id, descriptor path, canonical rate), so a snapshot whose
+// `sources` are bare SessionSourceView entries can never export anything - the same reason the
+// real composition root publishes the validated set with every projection.
+[[nodiscard]] bool
+installValidatedVideoSet(const std::shared_ptr<application::SessionSnapshot>& snapshot,
+                         const std::vector<std::filesystem::path>& paths,
+                         const domain::RationalRate& rate,
+                         const std::int64_t frameCount,
+                         const std::int64_t durationMicroseconds) {
+    std::vector<domain::ComparisonSource> sources;
+    for (std::size_t index = 0U; index < paths.size(); ++index) {
+        const QFileInfo info{QString::fromStdWString(paths[index].wstring())};
+        sources.push_back(domain::ComparisonSource{
+            .id = static_cast<domain::SourceId>(index),
+            .role = index == 0U ? domain::ComparisonRole::kReference
+                                : domain::ComparisonRole::kPrediction,
+            .descriptor =
+                domain::MediaDescriptor{
+                    .normalizedPath = paths[index],
+                    .extent = domain::MediaExtent{.width = 1'920U, .height = 1'080U},
+                    .frameRate = rate,
+                    .frameCount =
+                        domain::FrameCountInfo{
+                            .value = frameCount,
+                            .origin = domain::FrameCountOrigin::kReported,
+                        },
+                    .duration = domain::MediaTime{durationMicroseconds},
+                    .codecId = "h264",
+                    .pixelFormatId = "nv12",
+                    .bitDepth = 8U,
+                    .decodeCapabilities =
+                        domain::DecodeCapabilities{
+                            .softwareDecode = true,
+                            .d3d11VaDecode = true,
+                        },
+                    .timingConfidence = domain::TimingConfidence::kVerifiedCfr,
+                    .sourceIdentity =
+                        domain::SourceFileIdentity{
+                            .byteSize = static_cast<std::uint64_t>(info.size()),
+                            .modifiedUtcMilliseconds = info.lastModified().toMSecsSinceEpoch(),
+                            .fingerprintSha256 = std::string(64U, '0'),
+                        },
+                },
+            .displayName = std::string{"Source "} + static_cast<char>('A' + index),
+        });
+    }
+
+    auto validated = domain::ComparisonValidator::validate(std::move(sources));
+    if (!validated) {
+        return false;
+    }
+    snapshot->validatedComparison =
+        std::make_shared<const domain::ValidatedComparisonSet>(std::move(validated).value().set);
+    snapshot->canonicalFrameCount =
+        static_cast<std::uint64_t>(snapshot->validatedComparison->canonicalFrameCount());
+    snapshot->canonicalTimeline = rate;
+    snapshot->sources.clear();
+    snapshot->presentedSources.clear();
+    for (const auto& source : snapshot->validatedComparison->sources()) {
+        snapshot->sources.push_back(application::SessionSourceView{
+            .sourceId = source.id,
+            .role = source.role,
+            .displayName = source.displayName,
+        });
+        snapshot->presentedSources.push_back(application::PresentedSourceState{
+            .sourceId = source.id,
+            .sourceFrameId = domain::FrameId{0},
+            .matchKind = application::FrameMatchKind::ExactIndex,
+        });
+    }
+    return true;
+}
+
 // Shared QML/controller harness for the workspace-routing contracts. It keeps the two-source
 // video session, the still-image controller and the folder model alive for the whole test.
 class WorkspaceHarness final {
@@ -301,6 +426,14 @@ public:
             engine.rootContext()->setContextProperty(QStringLiteral("imageEdit"), &imageEdit);
             engine.addImageProvider(QStringLiteral("dvs-edit"), new EditImageProvider(&imageEdit));
         }
+        if (withClipExport) {
+            clipExport = std::make_unique<ClipExportController>(ClipExportController::Dependencies{
+                .snapshot = [this] { return snapshot; },
+                .exporter = clipExporter,
+            });
+            engine.rootContext()->setContextProperty(QStringLiteral("clipExport"),
+                                                     clipExport.get());
+        }
         QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
         if (component.status() != QQmlComponent::Ready) {
             error = componentErrors(component);
@@ -376,6 +509,11 @@ public:
     // Step-3 editing stays opt-in so harnesses that predate it keep their exact layout.
     ImageEditController imageEdit;
     bool withImageEdit = false;
+    // Clip export is opt-in for the same reason, and for one more: with no exporter the context
+    // property is absent, which is exactly the composition-root state the transport must survive.
+    std::shared_ptr<RecordingClipExporter> clipExporter = std::make_shared<RecordingClipExporter>();
+    std::unique_ptr<ClipExportController> clipExport;
+    bool withClipExport = false;
     QQmlEngine engine;
     std::unique_ptr<QObject> root;
     QQuickWindow* window = nullptr;
@@ -1106,6 +1244,359 @@ TEST(MainQmlContractTests, DockedTransportResolvesContextuallyAndClearsViewport)
     EXPECT_FALSE(transport->isVisible());
     EXPECT_FALSE(transport->property("controlsEnabled").toBool())
         << "hidden auto-hide panel must expose controlsEnabled == false";
+}
+
+// The transport's range row is the second entry point to the in/out range (the inspector and the
+// I / O / \ shortcuts being the others). These contracts pin the chips to the very same session
+// range state so the row cannot drift into a parallel, decorative copy of it.
+TEST(MainQmlContractTests, TransportRangeRowMarksInAndOutFromTheCurrentFrame) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    ASSERT_TRUE(harness.root->property("transportDocked").toBool())
+        << "range row evidence assumes the docked transport of a two-source session";
+
+    auto* const markIn = harness.root->findChild<QObject*>(QStringLiteral("transportMarkInButton"));
+    auto* const markOut =
+        harness.root->findChild<QObject*>(QStringLiteral("transportMarkOutButton"));
+    auto* const playRange =
+        harness.root->findChild<QObject*>(QStringLiteral("transportPlayRangeButton"));
+    auto* const loopRange =
+        harness.root->findChild<QObject*>(QStringLiteral("transportLoopRangeButton"));
+    auto* const clearRange =
+        harness.root->findChild<QObject*>(QStringLiteral("transportClearRangeButton"));
+    auto* const label = harness.root->findChild<QObject*>(QStringLiteral("transportRangeLabel"));
+    ASSERT_NE(markIn, nullptr);
+    ASSERT_NE(markOut, nullptr);
+    ASSERT_NE(playRange, nullptr);
+    ASSERT_NE(loopRange, nullptr);
+    ASSERT_NE(clearRange, nullptr);
+    ASSERT_NE(label, nullptr);
+
+    // A session without endpoints: only the two mark chips are usable, and the label teaches the
+    // shortcut instead of leaving five unexplained grey chips.
+    EXPECT_EQ(harness.shell->inFrame(), -1);
+    EXPECT_EQ(harness.shell->outFrame(), -1);
+    EXPECT_TRUE(markIn->property("chipEnabled").toBool());
+    EXPECT_TRUE(markOut->property("chipEnabled").toBool());
+    EXPECT_FALSE(playRange->property("chipEnabled").toBool());
+    EXPECT_FALSE(loopRange->property("chipEnabled").toBool());
+    EXPECT_FALSE(clearRange->property("chipEnabled").toBool());
+    EXPECT_EQ(label->property("text").toString(), QStringLiteral("未设区间（I / O 设点）"));
+
+    // Mark the in point at the displayed frame (41, injected by the shared harness) and check the
+    // media time travels with it.
+    ASSERT_TRUE(QMetaObject::invokeMethod(markIn, "clicked"));
+    harness.settle();
+    EXPECT_EQ(harness.shell->inFrame(), 41);
+    EXPECT_DOUBLE_EQ(harness.shell->inMediaTime(),
+                     static_cast<double>(harness.controller->mediaTimeForFrame(41)));
+    // An open-ended range cannot be played or looped, but can be cleared.
+    EXPECT_FALSE(playRange->property("chipEnabled").toBool());
+    EXPECT_TRUE(clearRange->property("chipEnabled").toBool());
+    EXPECT_EQ(label->property("text").toString(), QStringLiteral("入 42 · 出 —（区间无效）"))
+        << "an in point alone is not a range";
+
+    // Seek to frame 47 and mark the matching out point.
+    harness.snapshot->displayedFrame = domain::FrameId{47};
+    harness.controller->refreshProjection();
+    harness.settle();
+    ASSERT_TRUE(QMetaObject::invokeMethod(markOut, "clicked"));
+    harness.settle();
+    EXPECT_EQ(harness.shell->inFrame(), 41);
+    EXPECT_EQ(harness.shell->outFrame(), 47);
+    EXPECT_DOUBLE_EQ(harness.shell->outMediaTime(),
+                     static_cast<double>(harness.controller->mediaTimeForFrame(47)));
+    EXPECT_TRUE(playRange->property("chipEnabled").toBool());
+    EXPECT_TRUE(loopRange->property("chipEnabled").toBool());
+    EXPECT_EQ(label->property("text").toString(), QStringLiteral("入 42 · 出 48 · 7 帧"));
+
+    // The chips and the transport read the same range: the row forwards what the shell holds.
+    auto* const transportBar = harness.root->findChild<QQuickItem*>(QStringLiteral("transportBar"));
+    ASSERT_NE(transportBar, nullptr);
+    EXPECT_TRUE(transportBar->property("rangeControlsVisible").toBool());
+    EXPECT_EQ(transportBar->property("rangeInFrame").toInt(), 41);
+    EXPECT_EQ(transportBar->property("rangeOutFrame").toInt(), 47);
+    EXPECT_FALSE(transportBar->property("rangeLoopActive").toBool());
+}
+
+TEST(MainQmlContractTests, TransportRangeRowPlaysAndLoopsTheMarkedRange) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    harness.shell->setRangeIn(41, static_cast<double>(harness.controller->mediaTimeForFrame(41)));
+    harness.shell->setRangeOut(47, static_cast<double>(harness.controller->mediaTimeForFrame(47)));
+    harness.settle();
+
+    auto* const playRange =
+        harness.root->findChild<QObject*>(QStringLiteral("transportPlayRangeButton"));
+    auto* const loopRange =
+        harness.root->findChild<QObject*>(QStringLiteral("transportLoopRangeButton"));
+    auto* const label = harness.root->findChild<QObject*>(QStringLiteral("transportRangeLabel"));
+    ASSERT_NE(playRange, nullptr);
+    ASSERT_NE(loopRange, nullptr);
+    ASSERT_NE(label, nullptr);
+
+    // "Play range" installs the range and starts the run in one command, with the canonical frame
+    // numbers the chips collected - not a re-derived, off-by-one range.
+    ASSERT_TRUE(QMetaObject::invokeMethod(playRange, "clicked"));
+    harness.settle();
+    EXPECT_TRUE(harness.shell->rangePlaybackActive());
+    ASSERT_FALSE(harness.submitted.empty());
+    const auto* const start =
+        std::get_if<application::StartRangePlaybackCommand>(&harness.submitted.back());
+    ASSERT_NE(start, nullptr);
+    EXPECT_EQ(start->range.inInclusive.value(), 41);
+    EXPECT_EQ(start->range.outInclusive.value(), 47);
+    EXPECT_TRUE(start->loop);
+
+    // Range-loop display state is projection-driven, exactly like every other playback field: the
+    // chips light up when the session snapshot reports the loop, never from the button press
+    // alone. Mirror the accepted command into the harness snapshot the way the coordinator would.
+    harness.snapshot->playbackRangeIn = domain::FrameId{41};
+    harness.snapshot->playbackRangeOut = domain::FrameId{47};
+    harness.snapshot->playbackRangeLoop = true;
+    harness.snapshot->playbackRangeLoopActive = true;
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_TRUE(harness.root->property("rangePlaybackActive").toBool());
+    EXPECT_TRUE(loopRange->property("chipActive").toBool());
+    EXPECT_TRUE(label->property("text").toString().endsWith(QStringLiteral("· 循环")));
+
+    // Optional evidence capture for the visible QML change: a complete, loop-active range row is
+    // the state worth reviewing, captured at the default window size and at the supported floor.
+    const auto evidenceDirectory = qEnvironmentVariable("DVS_REVIEW_EVIDENCE_DIR");
+    if (!evidenceDirectory.isEmpty()) {
+        ASSERT_TRUE(QDir().mkpath(evidenceDirectory));
+        ASSERT_TRUE(harness.window->grabWindow().save(
+            QDir(evidenceDirectory).filePath(QStringLiteral("transport-range-row.png"))));
+        // Main.qml sets minimumWidth 960; the range row shares the transport column, so it must
+        // stay complete next to the seven adjacent-frame chips.
+        harness.window->resize(960, 640);
+        harness.settle();
+        ASSERT_TRUE(harness.window->grabWindow().save(
+            QDir(evidenceDirectory).filePath(QStringLiteral("transport-range-row-min-width.png"))));
+        harness.window->resize(1280, 800);
+        harness.settle();
+    }
+
+    // Clicking the active loop chip stops the loop. The stop is a real command, not a view flip:
+    // the range stays installed with loop off, so the endpoints survive.
+    const auto submittedBeforeStop = harness.submitted.size();
+    ASSERT_TRUE(QMetaObject::invokeMethod(loopRange, "clicked"));
+    harness.settle();
+    EXPECT_FALSE(harness.shell->rangePlaybackActive());
+    ASSERT_GT(harness.submitted.size(), submittedBeforeStop);
+    const auto* const stop =
+        std::get_if<application::SetPlaybackRangeCommand>(&harness.submitted.back());
+    ASSERT_NE(stop, nullptr);
+    ASSERT_TRUE(stop->range.has_value());
+    EXPECT_EQ(stop->range->inInclusive.value(), 41);
+    EXPECT_EQ(stop->range->outInclusive.value(), 47);
+    EXPECT_FALSE(stop->loop);
+
+    // The chip and the label clear once the snapshot agrees (the projection is authoritative for
+    // every playback field, the range loop included), and the endpoints stay untouched.
+    harness.snapshot->playbackRangeLoop = false;
+    harness.snapshot->playbackRangeLoopActive = false;
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_FALSE(harness.root->property("rangePlaybackActive").toBool());
+    EXPECT_FALSE(loopRange->property("chipActive").toBool());
+    EXPECT_EQ(label->property("text").toString(), QStringLiteral("入 42 · 出 48 · 7 帧"));
+    EXPECT_EQ(harness.shell->inFrame(), 41);
+    EXPECT_EQ(harness.shell->outFrame(), 47);
+    EXPECT_TRUE(playRange->property("chipEnabled").toBool());
+}
+
+// The export chip is the only way into a clip export, and it must hand the controller the range the
+// user marked - the same inclusive endpoints the transport shows, never a re-derived pair. The fake
+// exporter completes instantly, so the whole QML -> controller -> adapter path runs in-process.
+TEST(MainQmlContractTests, ExportRangeButtonStartsAClipExport) {
+    QTemporaryDir temporaryDirectory;
+    ASSERT_TRUE(temporaryDirectory.isValid());
+    std::vector<std::filesystem::path> sourcePaths;
+    for (const char* name : {"clip_source_a.mp4", "clip_source_b.mp4"}) {
+        const QString path = temporaryDirectory.filePath(QString::fromLatin1(name));
+        QFile file{path};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        ASSERT_EQ(file.write("fake-clip-source", 16), 16);
+        file.close();
+        sourcePaths.push_back(std::filesystem::path{path.toStdWString()});
+    }
+
+    WorkspaceHarness harness;
+    harness.withClipExport = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    auto* const exportChip =
+        harness.root->findChild<QObject*>(QStringLiteral("transportExportRangeButton"));
+    ASSERT_NE(exportChip, nullptr);
+    // The composition root published a service, so the chip belongs to the row...
+    EXPECT_TRUE(exportChip->property("visible").toBool());
+    EXPECT_EQ(exportChip->property("chipText").toString(), QStringLiteral("导出"));
+    // ...while the row still gates it: with no endpoints there is nothing to export, and saying so
+    // is the chip's job instead of opening an empty dialog.
+    EXPECT_FALSE(exportChip->property("chipEnabled").toBool());
+    ASSERT_TRUE(QMetaObject::invokeMethod(exportChip, "clicked"));
+    harness.settle();
+    EXPECT_EQ(harness.root->property("immersiveHudText").toString(),
+              QStringLiteral("没有可导出的区间：请先设置入点与出点。"));
+    EXPECT_TRUE(harness.clipExporter->performedJobs().empty());
+
+    // A validated canonical source plus a marked range is what makes a session exportable.
+    const auto rateResult = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rateResult);
+    ASSERT_TRUE(
+        installValidatedVideoSet(harness.snapshot, sourcePaths, rateResult.value(), 12, 400'000));
+    harness.snapshot->displayedFrame = domain::FrameId{3};
+    harness.snapshot->playbackRangeIn = domain::FrameId{3};
+    harness.snapshot->playbackRangeOut = domain::FrameId{7};
+    harness.controller->refreshProjection();
+    harness.settle();
+    harness.shell->setRangeIn(3, static_cast<double>(harness.controller->mediaTimeForFrame(3)));
+    harness.shell->setRangeOut(7, static_cast<double>(harness.controller->mediaTimeForFrame(7)));
+    harness.settle();
+
+    ASSERT_NE(harness.clipExport, nullptr);
+    EXPECT_TRUE(harness.clipExport->canExport());
+    EXPECT_EQ(harness.clipExport->rangeSummary(), QStringLiteral("入 4 · 出 8 · 5 帧"));
+    EXPECT_EQ(harness.clipExport->suggestedFileName(),
+              QStringLiteral("clip_source_a_clip_4-8.mp4"));
+    EXPECT_TRUE(exportChip->property("chipEnabled").toBool());
+
+    // Optional evidence capture for the visible QML change: the idle chip inside the range row is
+    // the state a reviewer sees first, then the dialog itself at the default size and at the
+    // supported width floor (Main.qml sets minimumWidth 960).
+    const auto evidenceDirectory = qEnvironmentVariable("DVS_REVIEW_EVIDENCE_DIR");
+    if (!evidenceDirectory.isEmpty()) {
+        ASSERT_TRUE(QDir().mkpath(evidenceDirectory));
+        ASSERT_TRUE(harness.window->grabWindow().save(
+            QDir(evidenceDirectory).filePath(QStringLiteral("transport-export-chip.png"))));
+    }
+
+    // Clicking the chip opens the dialog, which reads the very same range off the service.
+    ASSERT_TRUE(QMetaObject::invokeMethod(exportChip, "clicked"));
+    harness.settle();
+    auto* const popup = harness.root->findChild<QObject*>(QStringLiteral("clipExportPopup"));
+    ASSERT_NE(popup, nullptr);
+    EXPECT_TRUE(popup->property("visible").toBool());
+    // The picker is part of the dialog but must never open by itself: a test cannot answer a system
+    // modal, and neither can a user who only wanted to read the range before committing to a file.
+    auto* const picker =
+        harness.root->findChild<QObject*>(QStringLiteral("clipExportTargetDialog"));
+    ASSERT_NE(picker, nullptr);
+    EXPECT_FALSE(picker->property("visible").toBool());
+
+    // The dialog must show the range as it is now, not as it was at the last export: the range
+    // lives on the shell, and marking an in point emits no controller notification, so this is
+    // the assertion that keeps the dialog from silently going stale.
+    auto* const exportDialog =
+        harness.root->findChild<QObject*>(QStringLiteral("clipExportDialog"));
+    ASSERT_NE(exportDialog, nullptr);
+    EXPECT_EQ(exportDialog->property("rangeSummary").toString(),
+              QStringLiteral("入 4 · 出 8 · 5 帧"));
+    EXPECT_EQ(exportDialog->property("fileName").toString(),
+              QStringLiteral("clip_source_a_clip_4-8.mp4"));
+
+    if (!evidenceDirectory.isEmpty()) {
+        ASSERT_TRUE(harness.window->grabWindow().save(
+            QDir(evidenceDirectory).filePath(QStringLiteral("clip-export-dialog.png"))));
+        harness.window->resize(960, 640);
+        harness.settle();
+        ASSERT_TRUE(harness.window->grabWindow().save(
+            QDir(evidenceDirectory).filePath(QStringLiteral("clip-export-dialog-min-width.png"))));
+        harness.window->resize(1280, 800);
+        harness.settle();
+    }
+
+    // Accepting the picker calls exactly this, so the path under test is the dialog's own path. The
+    // destination must be a real local file URL, which is also why the controller is strict about
+    // it.
+    const QString targetPath = temporaryDirectory.filePath(QStringLiteral("clip_4-8.mp4"));
+    ASSERT_TRUE(harness.clipExport->exportRange(QUrl::fromLocalFile(targetPath)));
+    EXPECT_TRUE(harness.clipExport->busy());
+    EXPECT_TRUE(harness.waitUntil([&harness] { return !harness.clipExport->busy(); }));
+
+    const auto jobs = harness.clipExporter->performedJobs();
+    ASSERT_EQ(jobs.size(), 1U);
+    EXPECT_EQ(jobs.front().sourcePath, sourcePaths.front());
+    EXPECT_EQ(jobs.front().outputPath, std::filesystem::path{targetPath.toStdWString()});
+    EXPECT_NE(jobs.front().requestId, application::kInvalidClipExportRequestId);
+    // Frame 3 starts at 100 ms, but the only keyframe is at zero, so the copy starts there and the
+    // plan records the pre-roll the dialog warns about. The end is the start of the frame after the
+    // out point, kept exclusive.
+    EXPECT_EQ(jobs.front().plan.startMicroseconds, 0);
+    EXPECT_EQ(jobs.front().plan.startShiftMicroseconds, -100'000);
+    ASSERT_TRUE(jobs.front().plan.endMicroseconds.has_value());
+    EXPECT_EQ(*jobs.front().plan.endMicroseconds, 266'667);
+    ASSERT_TRUE(jobs.front().plan.firstExportedFrame.has_value());
+    EXPECT_EQ(jobs.front().plan.firstExportedFrame->value(), 0);
+    EXPECT_EQ(jobs.front().plan.requestedFrameCount, 5);
+    EXPECT_EQ(harness.clipExporter->queriedSourcePaths().size(), 1U);
+
+    // The outcome lands once, in both channels the user can see.
+    EXPECT_EQ(harness.root->property("immersiveHudText").toString(),
+              QStringLiteral("已导出所选区间。"));
+    EXPECT_EQ(harness.clipExport->lastStatus(), QStringLiteral("已导出所选区间。"));
+    EXPECT_EQ(harness.clipExport->lastOutputPath(), QDir::toNativeSeparators(targetPath));
+    EXPECT_TRUE(harness.clipExport->lastFailureDetail().isEmpty());
+    EXPECT_DOUBLE_EQ(harness.clipExport->progress(), 1.0);
+    // The chip returns to its idle label, and the dialog stayed open on the result so the user can
+    // see where the file went.
+    EXPECT_EQ(exportChip->property("chipText").toString(), QStringLiteral("导出"));
+    EXPECT_FALSE(exportChip->property("chipActive").toBool());
+    EXPECT_TRUE(popup->property("visible").toBool());
+}
+
+TEST(MainQmlContractTests, TransportRangeRowClearsTheRangeAndGatesChipsWithoutMedia) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    harness.shell->setRangeIn(41, static_cast<double>(harness.controller->mediaTimeForFrame(41)));
+    harness.shell->setRangeOut(47, static_cast<double>(harness.controller->mediaTimeForFrame(47)));
+    harness.settle();
+
+    auto* const markIn = harness.root->findChild<QObject*>(QStringLiteral("transportMarkInButton"));
+    auto* const playRange =
+        harness.root->findChild<QObject*>(QStringLiteral("transportPlayRangeButton"));
+    auto* const clearRange =
+        harness.root->findChild<QObject*>(QStringLiteral("transportClearRangeButton"));
+    auto* const label = harness.root->findChild<QObject*>(QStringLiteral("transportRangeLabel"));
+    ASSERT_NE(markIn, nullptr);
+    ASSERT_NE(playRange, nullptr);
+    ASSERT_NE(clearRange, nullptr);
+    ASSERT_NE(label, nullptr);
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(clearRange, "clicked"));
+    harness.settle();
+    EXPECT_EQ(harness.shell->inFrame(), -1);
+    EXPECT_EQ(harness.shell->outFrame(), -1);
+    EXPECT_EQ(label->property("text").toString(), QStringLiteral("未设区间（I / O 设点）"));
+    EXPECT_FALSE(playRange->property("chipEnabled").toBool());
+    EXPECT_FALSE(clearRange->property("chipEnabled").toBool());
+    // Clearing the range must not strand the session in range playback.
+    EXPECT_FALSE(harness.root->property("rangePlaybackActive").toBool());
+
+    // Closing the session hides the transport and disables marking, so the row can never act on a
+    // frame that does not exist.
+    harness.snapshot->sessionState = domain::SessionState::kEmpty;
+    harness.snapshot->sources.clear();
+    harness.snapshot->presentedSources.clear();
+    harness.snapshot->displayedFrame.reset();
+    harness.snapshot->canonicalFrameCount = 0U;
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_TRUE(harness.root->property("transportHidden").toBool());
+    EXPECT_FALSE(markIn->property("chipEnabled").toBool());
 }
 
 TEST(MainQmlContractTests, ShowsIntentMessageOnSynchronousRejection) {

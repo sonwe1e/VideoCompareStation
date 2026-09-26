@@ -32,6 +32,7 @@
         <file alias="CompareModeBar.qml">qml/CompareModeBar.qml</file>
         <file alias="MetricTimelineLane.qml">qml/MetricTimelineLane.qml</file>
         <file alias="PlayerOsc.qml">qml/PlayerOsc.qml</file>
+        <file alias="ClipExportDialog.qml">qml/ClipExportDialog.qml</file>
         <!-- Viewer-native commands and timeline chrome. -->
         <file alias="ReviewContextMenu.qml">qml/ReviewContextMenu.qml</file>
         <file alias="ShortcutHelpOverlay.qml">qml/ShortcutHelpOverlay.qml</file>

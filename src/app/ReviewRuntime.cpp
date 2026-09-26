@@ -3,6 +3,7 @@
 #include "dvs/application/Commands.h"
 #include "dvs/application/PlaybackCoordinator.h"
 #include "dvs/media/AlignmentAnalysisService.h"
+#include "dvs/media/ClipExportWriter.h"
 #include "dvs/media/DecoderBackend.h"
 #include "dvs/media/MediaProbe.h"
 #include "dvs/media/MultiSourceFrameProvider.h"
@@ -161,6 +162,7 @@ public:
         pairMetricsService.reset();
         frameProvider.reset();
         mediaProbe.reset();
+        clipExporter.reset();
         settingsRepository.reset();
         clock.reset();
         renderChannel.reset();
@@ -226,6 +228,7 @@ public:
     std::shared_ptr<media::PreviewThumbnailService> previewThumbnailService;
     std::shared_ptr<media::MultiSourceFrameProvider> frameProvider;
     std::shared_ptr<media::MediaProbe> mediaProbe;
+    std::shared_ptr<media::ClipExportWriter> clipExporter;
     std::shared_ptr<application::ISettingsRepository> settingsRepository;
     std::shared_ptr<platform::SystemSteadyClock> clock;
     std::shared_ptr<platform::D3d11RenderChannel> renderChannel;
@@ -263,6 +266,7 @@ public:
             frameBudget_, deviceBroker_, frameMailbox_, activityBridge_);
         renderChannel_ = std::make_shared<platform::D3d11RenderChannel>(transferActor_);
         mediaProbe_ = std::make_shared<media::MediaProbe>();
+        clipExporter_ = std::make_shared<media::ClipExportWriter>();
         settingsRepository_ = std::make_shared<persistence::SettingsRepository>();
         issueRecordRepository_ = std::make_shared<persistence::IssueRecordRepository>();
         frameProvider_ = std::make_shared<media::MultiSourceFrameProvider>(
@@ -385,6 +389,11 @@ public:
 
     [[nodiscard]] application::IIssueRecordRepository* issueRecordRepository() noexcept {
         return issueRecordRepository_.get();
+    }
+
+    // Shared (not raw): a running export keeps the writer alive across the teardown hand-off.
+    [[nodiscard]] std::shared_ptr<application::IClipExporter> clipExporter() const noexcept {
+        return clipExporter_;
     }
 
     [[nodiscard]] std::vector<media::DecoderBackendStatus> decoderBackendStatuses() const {
@@ -527,6 +536,7 @@ public:
         work->previewThumbnailService = std::move(previewThumbnailService_);
         work->frameProvider = std::move(frameProvider_);
         work->mediaProbe = std::move(mediaProbe_);
+        work->clipExporter = std::move(clipExporter_);
         work->settingsRepository = std::move(settingsRepository_);
         work->clock = std::move(clock_);
         work->renderChannel = std::move(renderChannel_);
@@ -584,6 +594,7 @@ private:
     std::shared_ptr<platform::GpuTransferActor> transferActor_;
     std::shared_ptr<platform::D3d11RenderChannel> renderChannel_;
     std::shared_ptr<media::MediaProbe> mediaProbe_;
+    std::shared_ptr<media::ClipExportWriter> clipExporter_;
     std::shared_ptr<application::ISettingsRepository> settingsRepository_;
     std::shared_ptr<persistence::IssueRecordRepository> issueRecordRepository_;
     std::shared_ptr<media::MultiSourceFrameProvider> frameProvider_;
@@ -641,6 +652,10 @@ ui::PreviewThumbnailController* ReviewRuntime::previewThumbnails() noexcept {
 
 application::IIssueRecordRepository* ReviewRuntime::issueRecordRepository() noexcept {
     return impl_ ? impl_->issueRecordRepository() : nullptr;
+}
+
+std::shared_ptr<application::IClipExporter> ReviewRuntime::clipExporter() const noexcept {
+    return impl_ ? impl_->clipExporter() : nullptr;
 }
 
 bool ReviewRuntime::attachSurface(ui::ComparisonSurface& surface) noexcept {

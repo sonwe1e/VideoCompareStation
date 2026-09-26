@@ -1,5 +1,6 @@
 #include "dvs/ui/DesktopApplication.h"
 
+#include "dvs/ui/ClipExportController.h"
 #include "dvs/ui/ComparisonExportController.h"
 #include "dvs/ui/ComparisonSurface.h"
 #include "dvs/ui/DiagnosticsProbe.h"
@@ -89,6 +90,10 @@ public:
 
     void setIssueRecordRepository(application::IIssueRecordRepository* repository) noexcept {
         issueRecordRepository_ = repository;
+    }
+
+    void setClipExporter(std::shared_ptr<application::IClipExporter> exporter) noexcept {
+        clipExporter_ = std::move(exporter);
     }
 
     [[nodiscard]] bool load(ReviewController& controller,
@@ -194,6 +199,17 @@ public:
         comparisonExport_ = std::make_unique<ComparisonExportController>();
         engine->rootContext()->setContextProperty(QStringLiteral("comparisonExport"),
                                                   comparisonExport_.get());
+        // Range clip export: only offered when the composition root injected an exporter
+        // adapter (ui_qml never links media_ffmpeg). Main.qml guards every read on the
+        // context property being set, so isolated harnesses can omit it.
+        if (clipExporter_) {
+            clipExport_ = std::make_unique<ClipExportController>(ClipExportController::Dependencies{
+                .snapshot = [&controller] { return controller.currentSnapshot(); },
+                .exporter = clipExporter_,
+            });
+            engine->rootContext()->setContextProperty(QStringLiteral("clipExport"),
+                                                      clipExport_.get());
+        }
         // UI observation bridge: forwards QML scene-graph operations (timeline thumbnail grabs)
         // into the bounded trace buffer so playback evidence can correlate them with pipeline
         // timing. With tracing disabled every call is one atomic load and a branch.
@@ -699,6 +715,8 @@ private:
     application::IIssueRecordRepository* issueRecordRepository_ = nullptr;
     std::unique_ptr<IssueLogController> issueLog_;
     std::unique_ptr<ComparisonExportController> comparisonExport_;
+    std::shared_ptr<application::IClipExporter> clipExporter_;
+    std::unique_ptr<ClipExportController> clipExport_;
     std::unique_ptr<ImageEditController> imageEdit_;
     std::unique_ptr<DiagnosticsProbe> diagnosticsProbe_;
     QQuickWindow* window_ = nullptr;
@@ -726,6 +744,11 @@ bool DesktopApplication::load(ReviewController& controller,
 void DesktopApplication::setIssueRecordRepository(
     application::IIssueRecordRepository* repository) noexcept {
     impl_->setIssueRecordRepository(repository);
+}
+
+void DesktopApplication::setClipExporter(
+    std::shared_ptr<application::IClipExporter> exporter) noexcept {
+    impl_->setClipExporter(std::move(exporter));
 }
 
 int DesktopApplication::exec() {

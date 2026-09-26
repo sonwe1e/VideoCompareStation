@@ -80,6 +80,10 @@ ApplicationWindow {
     // qmllint disable unqualified
     readonly property var issueLogModel: typeof issueLog !== "undefined" ? issueLog : null
     readonly property var comparisonExportService: typeof comparisonExport !== "undefined" ? comparisonExport : null
+    // Range clip-export controller from the composition root. Only the composition root knows
+    // whether a lossless exporter exists, so its presence alone decides whether the transport
+    // shows an export chip; the typeof guard keeps lightweight QML-only harnesses valid.
+    readonly property var clipExportService: typeof clipExport !== "undefined" ? clipExport : null
     // qmllint enable unqualified
     readonly property bool imageWorkspaceActive: workspaceSession.imageActive
 
@@ -136,6 +140,18 @@ ApplicationWindow {
     readonly property real outMediaTime: shell ? Number(shell.outMediaTime) : -1
     readonly property bool rangePlaybackActive: Boolean(controller && controller.playbackRangeLoopActive) || Boolean(shell && shell.rangePlaybackActive && controller && controller.playbackRangeLoop)
     readonly property bool rangeStartPending: Boolean(shell && shell.rangeStartPending)
+    // Lossless range-clip export gates. The QML range state participates because the controller
+    // only notifies on its own busy/status changes: a range marked after load would otherwise
+    // leave a stale binding behind.
+    readonly property bool rangeExportVisible: root.clipExportService !== null
+    readonly property bool rangeExportEnabled: {
+        // `canExport` carries the parts only the session knows (a video session, a canonical source
+        // and a usable file path); the endpoints are checked here so the gate also follows the
+        // range the user is currently marking.
+        if (root.clipExportService === null || root.inFrame < 0 || root.outFrame < root.inFrame)
+            return false;
+        return Boolean(root.clipExportService.canExport);
+    }
     property bool shortcutHelpVisible: false
     readonly property int shortcutPreset: preferences ? Number(preferences.shortcutPreset) : 0
     readonly property bool dropFrameTimecode: Boolean(preferences && preferences.dropFrameTimecode)
@@ -615,6 +631,23 @@ ApplicationWindow {
 
         if (controller)
             controller.setPlaybackRange(-1, -1, false);
+    }
+
+    // Opens the export dialog. Returns false (with a status line) when there is nothing to export,
+    // so the chip can never lead to a dead-end dialog.
+    function openClipExportDialog() {
+        if (!clipExportService || !clipExportDialog)
+            return false;
+
+        if (!rangeExportEnabled) {
+            showImmersiveHud(qsTr("没有可导出的区间：请先设置入点与出点。"));
+
+            return false;
+        }
+
+        clipExportDialog.open();
+
+        return true;
     }
 
     function remapReviewRange() {
@@ -2940,6 +2973,26 @@ ApplicationWindow {
             }
         }
     }
+    // Lossless range-clip export. The dialog owns the destination picker and the progress readout;
+    // the host owns the two things that must happen outside it: an outcome line in the status HUD,
+    // and surfacing the adapter's own message when an export fails while the dialog is closed.
+    ClipExportDialog {
+        id: clipExportDialog
+
+        service: root.clipExportService
+    }
+    Connections {
+        target: root.clipExportService
+        enabled: root.clipExportService !== null
+        function onExportFinished(succeeded, message) {
+            root.showImmersiveHud(message);
+
+            // A cancel is deliberate and stays silent; a real failure reopens the dialog so the
+            // technical detail is readable instead of disappearing with the popup.
+            if (!succeeded && clipExportDialog.failureDetail.length > 0)
+                clipExportDialog.open();
+        }
+    }
     Rectangle {
         id: issueLogPanel
 
@@ -3135,6 +3188,10 @@ ApplicationWindow {
         inFrame: root.inFrame
         outFrame: root.outFrame
         loopRangeActive: root.rangePlaybackActive
+        rangeExportVisible: root.rangeExportVisible
+        rangeExportEnabled: root.rangeExportEnabled
+        rangeExportBusy: root.clipExportService !== null && Boolean(root.clipExportService.busy)
+        rangeExportProgress: root.clipExportService !== null ? Number(root.clipExportService.progress) : 0
         previewFrame: root.effectivePreviewFrame
         previewTimecode: root.previewTimecode
         previewThumbnailSource: {
@@ -3163,6 +3220,14 @@ ApplicationWindow {
             if (!root.chromeVisible)
                 root.immersiveOscRevealed = false;
         }
+        // Transport range row intents. These reuse the very same range functions the inspector
+        // buttons and the I / O / \ shortcuts call, so every entry point shares one range state.
+        onMarkInRequested: root.setInPoint()
+        onMarkOutRequested: root.setOutPoint()
+        onPlayRangeRequested: root.playSelectedRange()
+        onRangeLoopRequested: root.toggleRangeLoop()
+        onClearRangeRequested: root.clearSelectedRange()
+        onExportRangeRequested: root.openClipExportDialog()
         onSeekRequested: frame => {
             root.revealOsc();
 
