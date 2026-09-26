@@ -328,6 +328,15 @@ namespace {
     return image;
 }
 
+// A genuinely opaque source: Format_RGB32 has no alpha channel at all, which is what the
+// "cannot fill with transparency" rule keys on. An ARGB32 buffer with alpha 255 still has a
+// channel and would take a transparent fill.
+[[nodiscard]] QImage opaqueImage(const int width, const int height, const QColor& color) {
+    QImage image(width, height, QImage::Format_RGB32);
+    image.fill(color);
+    return image;
+}
+
 // A horizontal gradient makes both "changed" and "untouched" pixels easy to assert.
 [[nodiscard]] QImage gradientImage(const int width, const int height) {
     QImage image(width, height, QImage::Format_ARGB32);
@@ -683,4 +692,322 @@ TEST(ImageEditControllerTests, AnnotationCountIsBounded) {
     EXPECT_EQ(controller.annotationCount(), 64);
     EXPECT_FALSE(controller.addArrow(1, 1, 14, 14, QColor(255, 0, 0), 1));
     EXPECT_TRUE(controller.lastStatus().contains(QStringLiteral("上限")));
+}
+
+TEST(ImageEditControllerTests, ResizeChangesPixelDimensionsAndResamplesPixels) {
+    ImageEditController controller;
+    setSource(controller, solidImage(40, 30, QColor(10, 20, 30)));
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+    EXPECT_EQ(controller.canvasWidth(), 40);
+    EXPECT_EQ(controller.canvasHeight(), 30);
+
+    ASSERT_TRUE(controller.resizeImage(100, 75));
+    EXPECT_EQ(controller.imageWidth(), 100);
+    EXPECT_EQ(controller.imageHeight(), 75);
+    EXPECT_EQ(controller.canvasWidth(), 100);
+    EXPECT_EQ(controller.canvasHeight(), 75);
+    EXPECT_EQ(controller.undoLabel(), QStringLiteral("缩放"));
+    EXPECT_TRUE(controller.dirty());
+
+    // A solid colour survives the resample, so this checks the resampled buffer is the one
+    // being served — not merely that a size field changed.
+    const QImage resized = controller.editedImage();
+    ASSERT_EQ(resized.size(), QSize(100, 75));
+    EXPECT_EQ(resized.pixelColor(50, 40), QColor(10, 20, 30));
+    EXPECT_EQ(resized.pixelColor(0, 0), QColor(10, 20, 30));
+    // The immutable original keeps its own dimensions.
+    EXPECT_EQ(controller.sourceImage().size(), QSize(40, 30));
+}
+
+TEST(ImageEditControllerTests, ResizeIsOneUndoStepAndRestoresExactPixels) {
+    ImageEditController controller;
+    const QImage source = cornerImage(40, 30);
+    setSource(controller, source);
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+
+    ASSERT_TRUE(controller.resizeImage(13, 7));
+    ASSERT_TRUE(controller.resizeImage(70, 21));
+    EXPECT_EQ(controller.imageWidth(), 70);
+
+    // Undo restores the pre-resize buffer byte for byte, so a redo would be pixel-identical
+    // too; a nearest-neighbour step is enough to show the pipeline is untouched.
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.imageWidth(), 13);
+    EXPECT_EQ(controller.imageHeight(), 7);
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.editedImage(), source);
+    EXPECT_FALSE(controller.canUndo());
+}
+
+TEST(ImageEditControllerTests, ResizeClampsToTheSupportedEdgeRangeAndRejectsTheNoOp) {
+    ImageEditController controller;
+    setSource(controller, cornerImage(20, 20));
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+
+    // Same size in, same size out: no history entry, so the following undo has nothing to
+    // do rather than silently walking past a phantom step.
+    EXPECT_FALSE(controller.resizeImage(20, 20));
+    EXPECT_FALSE(controller.canUndo());
+    EXPECT_TRUE(controller.lastStatus().contains(QStringLiteral("相同")));
+
+    // Zero/negative and oversized requests are clamped, never rejected with a broken state.
+    ASSERT_TRUE(controller.resizeImage(0, -5));
+    EXPECT_EQ(controller.imageWidth(), ImageEditController::minimumImageEdge());
+    EXPECT_EQ(controller.imageHeight(), ImageEditController::minimumImageEdge());
+    ASSERT_TRUE(controller.undo());
+
+    ASSERT_TRUE(controller.resizeImage(999999, 999999));
+    EXPECT_EQ(controller.imageWidth(), ImageEditController::maximumImageEdge());
+    EXPECT_EQ(controller.imageHeight(), ImageEditController::maximumImageEdge());
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.imageWidth(), 20);
+}
+
+TEST(ImageEditControllerTests, ResizeScalesAnnotationGeometryAndTextSize) {
+    ImageEditController controller;
+    setSource(controller, solidImage(40, 30, QColor(0, 0, 0)));
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+    ASSERT_TRUE(controller.addRectangle(5, 5, 15, 15, QColor(255, 0, 0), 2));
+    ASSERT_TRUE(controller.addText(2, 2, QStringLiteral("AB"), QColor(0, 255, 0), 10));
+
+    // 2x in both axes: a 2px rectangle border at 5..15 lands at 10..30, so (10, 20) is on
+    // the scaled left edge and (20, 20) is inside the scaled rectangle. The previous
+    // (25, 25) corner is now well inside the shape rather than on a border.
+    ASSERT_TRUE(controller.resizeImage(80, 60));
+    const QImage scaled = controller.editedImage();
+    ASSERT_EQ(scaled.size(), QSize(80, 60));
+    EXPECT_GT(scaled.pixelColor(10, 20).red(), 180);
+    EXPECT_GT(scaled.pixelColor(20, 9).red(), 180);
+    EXPECT_LT(scaled.pixelColor(20, 20).red(), 180);
+    // The text annotation was scaled too, not dropped: it is still listed and still paints.
+    EXPECT_EQ(controller.annotationCount(), 2);
+    bool sawText = false;
+    for (int y = 0; y < scaled.height() && !sawText; ++y) {
+        for (int x = 0; x < scaled.width(); ++x) {
+            if (scaled.pixelColor(x, y).green() > 180) {
+                sawText = true;
+                break;
+            }
+        }
+    }
+    EXPECT_TRUE(sawText);
+
+    // Undo restores the geometry, so the annotations follow the pixels in both directions:
+    // the un-scaled rectangle is up to 10 px wide again, not 20.
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.editedImage().size(), QSize(40, 30));
+    EXPECT_GT(controller.editedImage().pixelColor(5, 10).red(), 180);
+    EXPECT_EQ(controller.annotationCount(), 2);
+}
+
+TEST(ImageEditControllerTests, PadCentresTheImageAndFillsTheRemainder) {
+    ImageEditController controller;
+    setSource(controller, cornerImage(20, 20));
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+
+    const QColor fill{200, 100, 50, 255};
+    ASSERT_TRUE(controller.padToCanvas(40, 30, fill));
+    EXPECT_EQ(controller.canvasWidth(), 40);
+    EXPECT_EQ(controller.canvasHeight(), 30);
+    EXPECT_EQ(controller.undoLabel(), QStringLiteral("填充画布"));
+
+    const QImage padded = controller.editedImage();
+    ASSERT_EQ(padded.size(), QSize(40, 30));
+    // The image sits in the middle: a 20x20 image on a 40x30 canvas starts at (10, 5), so
+    // the one-pixel ring around that rect is fill and the rect corners are the source's.
+    const QImage source = cornerImage(20, 20);
+    EXPECT_EQ(padded.pixelColor(9, 4), fill);
+    EXPECT_EQ(padded.pixelColor(10, 4), fill);
+    EXPECT_EQ(padded.pixelColor(30, 25), fill);
+    EXPECT_EQ(padded.pixelColor(29, 25), fill);
+    EXPECT_EQ(padded.pixelColor(10, 5), source.pixelColor(0, 0));
+    EXPECT_EQ(padded.pixelColor(29, 24), source.pixelColor(19, 19));
+    EXPECT_EQ(padded.pixelColor(15, 10), source.pixelColor(5, 5));
+}
+
+TEST(ImageEditControllerTests, PadIsOneUndoStepAndShiftsAnnotationsByTheCentringOffset) {
+    ImageEditController controller;
+    setSource(controller, solidImage(20, 20, QColor(0, 0, 0)));
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+    ASSERT_TRUE(controller.addRectangle(2, 2, 8, 8, QColor(255, 0, 0), 2));
+
+    ASSERT_TRUE(controller.padToCanvas(40, 40, QColor(0, 0, 255)));
+    const QImage padded = controller.editedImage();
+    ASSERT_EQ(padded.size(), QSize(40, 40));
+    // The rectangle moved by the centring offset (10, 10): 2..8 became 12..18.
+    EXPECT_GT(padded.pixelColor(15, 12).red(), 180);
+    EXPECT_GT(padded.pixelColor(12, 15).red(), 180);
+    EXPECT_EQ(padded.pixelColor(5, 5), QColor(0, 0, 255));
+
+    ASSERT_TRUE(controller.undo());
+    const QImage restored = controller.editedImage();
+    ASSERT_EQ(restored.size(), QSize(20, 20));
+    EXPECT_GT(restored.pixelColor(5, 2).red(), 180);
+    EXPECT_EQ(restored.pixelColor(15, 15), QColor(0, 0, 0));
+}
+
+TEST(ImageEditControllerTests, PadRejectsATransparentFillWhenTheImageHasNoAlpha) {
+    ImageEditController controller;
+    setSource(controller, opaqueImage(16, 16, QColor(0, 0, 0)));
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+    EXPECT_FALSE(controller.imageHasAlpha());
+
+    EXPECT_FALSE(controller.padToCanvas(20, 20, QColor(Qt::transparent)));
+    EXPECT_EQ(controller.canvasWidth(), 16);
+    EXPECT_FALSE(controller.canUndo());
+    EXPECT_TRUE(controller.lastStatus().contains(QStringLiteral("透明")));
+
+    // An opaque fill is fine on the same image.
+    ASSERT_TRUE(controller.padToCanvas(20, 20, QColor(Qt::white)));
+    EXPECT_EQ(controller.canvasWidth(), 20);
+}
+
+TEST(ImageEditControllerTests, PadAcceptsTransparencyWhenTheImageHasAlpha) {
+    ImageEditController controller;
+    setSource(controller, alphaImage(16, 16));
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+    EXPECT_TRUE(controller.imageHasAlpha());
+
+    ASSERT_TRUE(controller.padToCanvas(20, 20, QColor(Qt::transparent)));
+    const QImage padded = controller.editedImage();
+    ASSERT_EQ(padded.size(), QSize(20, 20));
+    // The border is fully transparent, and the pasted pixels kept their own alpha: a
+    // SourceOver paste would have made the transparent original show a blended ghost.
+    EXPECT_EQ(padded.pixelColor(0, 0).alpha(), 0);
+    EXPECT_EQ(padded.pixelColor(10, 10).alpha(), 128);
+
+    // A padding target smaller than the image is a crop, and crop is a different tool.
+    EXPECT_FALSE(controller.padToCanvas(8, 30, QColor(Qt::white)));
+    EXPECT_EQ(controller.canvasWidth(), 20);
+    EXPECT_TRUE(controller.lastStatus().contains(QStringLiteral("不能小于")));
+}
+
+TEST(ImageEditControllerTests, CropResizeAndPadComposeInOneOrderedHistory) {
+    ImageEditController controller;
+    setSource(controller, cornerImage(60, 40));
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+
+    ASSERT_TRUE(controller.cropToImageRect(0, 0, 30, 20));
+    EXPECT_EQ(controller.undoLabel(), QStringLiteral("裁剪"));
+    ASSERT_TRUE(controller.resizeImage(90, 60));
+    EXPECT_EQ(controller.undoLabel(), QStringLiteral("缩放"));
+    ASSERT_TRUE(controller.padToCanvas(120, 80, QColor(Qt::black)));
+    EXPECT_EQ(controller.undoLabel(), QStringLiteral("填充画布"));
+
+    EXPECT_EQ(controller.imageWidth(), 120);
+    EXPECT_EQ(controller.imageHeight(), 80);
+
+    // Each undo walks exactly one step back through the three different step kinds.
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.editedImage().size(), QSize(90, 60));
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.editedImage().size(), QSize(30, 20));
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.editedImage(), cornerImage(60, 40));
+    EXPECT_FALSE(controller.canUndo());
+}
+
+TEST(ImageEditControllerTests, HistoryByteBudgetPrunesTheOldestRetainedBuffer) {
+    ImageEditController controller;
+    setSource(controller, cornerImage(40, 40));
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+
+    // Each step keeps roughly one 40x40 ARGB buffer; a budget of one and a half buffers
+    // forces the oldest step out even though the depth limit would have kept eight.
+    ASSERT_EQ(controller.historyLimit(), 8);
+    controller.setHistoryByteBudget(40 * 40 * 4 + (40 * 40 * 4 / 2));
+    EXPECT_EQ(controller.historyByteBudget(), 40 * 40 * 4 + (40 * 40 * 4 / 2));
+
+    ASSERT_TRUE(controller.cropToImageRect(0, 0, 35, 35));
+    ASSERT_TRUE(controller.cropToImageRect(0, 0, 30, 30));
+    ASSERT_TRUE(controller.cropToImageRect(0, 0, 25, 25));
+    EXPECT_EQ(controller.imageWidth(), 25);
+
+    ASSERT_TRUE(controller.undo());
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.imageWidth(), 35);
+    // The oldest step was pruned for memory, so the full original is not reachable.
+    EXPECT_FALSE(controller.canUndo());
+}
+
+TEST(ImageEditControllerTests, HistoryByteBudgetAlwaysKeepsTheStepJustPushed) {
+    ImageEditController controller;
+    setSource(controller, cornerImage(30, 30));
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+
+    // A budget smaller than a single buffer must not delete the step that was just pushed,
+    // or a large image would leave the user unable to undo anything at all.
+    controller.setHistoryByteBudget(1);
+    ASSERT_TRUE(controller.cropToImageRect(0, 0, 20, 20));
+    EXPECT_TRUE(controller.canUndo());
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.imageWidth(), 30);
+    EXPECT_FALSE(controller.canUndo());
+
+    // The requested depth is restored for the next session, not left at whatever the byte
+    // budget shrank it to.
+    controller.endSession();
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+    EXPECT_EQ(controller.historyLimit(), 8);
+}
+
+TEST(ImageEditControllerTests, HistoryDepthLimitPrunesTheOldestSteps) {
+    ImageEditController controller;
+    setSource(controller, cornerImage(40, 40));
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+
+    controller.setHistoryLimit(3);
+    EXPECT_EQ(controller.historyLimit(), 3);
+    ASSERT_TRUE(controller.cropToImageRect(0, 0, 36, 36));
+    ASSERT_TRUE(controller.cropToImageRect(0, 0, 32, 32));
+    ASSERT_TRUE(controller.cropToImageRect(0, 0, 28, 28));
+    ASSERT_TRUE(controller.cropToImageRect(0, 0, 24, 24));
+
+    // Four steps were taken and the depth limit is three, so only the newest three remain.
+    ASSERT_TRUE(controller.undo());
+    ASSERT_TRUE(controller.undo());
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.imageWidth(), 36);
+    EXPECT_FALSE(controller.canUndo());
+    // The pruned step was still the saved state? No: the session began clean at the original,
+    // and that state is unreachable now, so the document must report unsaved changes.
+    EXPECT_TRUE(controller.dirty());
+}
+
+TEST(ImageEditControllerTests, HistoryByteBudgetChargesOnlyBufferRetainingSteps) {
+    ImageEditController controller;
+    setSource(controller, cornerImage(40, 40));
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+
+    // Annotation steps hold a coordinate pair, not a buffer, so they cost nothing against the
+    // budget and must not be pruned by a budget that only a crop can exhaust.
+    controller.setHistoryByteBudget(40 * 40 * 4 * 3);
+    ASSERT_TRUE(controller.addRectangle(1, 1, 10, 10, QColor(Qt::red), 2));
+    ASSERT_TRUE(controller.addRectangle(2, 2, 12, 12, QColor(Qt::green), 2));
+    ASSERT_TRUE(controller.cropToImageRect(0, 0, 30, 30));
+    EXPECT_EQ(controller.annotationCount(), 2);
+
+    // Annotations are coordinates in image pixels, so a crop that drops them would also have
+    // to renumber the list; they must survive the crop and the undo.
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.editedImage().size(), QSize(40, 40));
+    EXPECT_EQ(controller.annotationCount(), 2);
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.annotationCount(), 1);
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.annotationCount(), 0);
 }

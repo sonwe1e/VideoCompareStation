@@ -135,6 +135,31 @@ QQuickWindow* menuPopupWindow(QObject* menu) {
     return contentItem->window();
 }
 
+// The image editor keeps the three most-used tools on the row and folds mosaic/fill/clear/
+// rect/arrow/text into the 「更多工具」 menu, so a test that wants one of those must open the
+// menu the way a user would. Menu rows live in the popup's content object, which only exists
+// once the menu opens, so this opens first and looks up second.
+QQuickItem* openEditToolsItem(QObject* root, const QString& objectName) {
+    auto* const menuButton =
+        root->findChild<QQuickItem*>(QStringLiteral("imageEditMoreToolsButton"));
+    if (!menuButton) {
+        return nullptr;
+    }
+    QMetaObject::invokeMethod(menuButton, "clicked");
+    return root->findChild<QQuickItem*>(objectName);
+}
+
+// Types a new value into an editable SpinBox. Assigning `value` straight from C++ only moves
+// the control, because a SpinBox reports a user edit through valueModified; forcing that
+// signal is the programmatic equivalent of committing an edit in the field.
+[[nodiscard]] bool typeSpinBoxValue(QQuickItem* field, int value) {
+    if (!field) {
+        return false;
+    }
+    field->setProperty("value", value);
+    return QMetaObject::invokeMethod(field, "valueModified");
+}
+
 // Hand-rolled 1x1 PNG bytes: the pair opener routes through the still-image decoder, so
 // every file must be a real image. A literal byte array avoids depending on the
 // imageformat plugins that minimal test deployments may not install.
@@ -2434,8 +2459,6 @@ TEST(MainQmlContractTests, ImageEditBrushAndMosaicToolsEditTheWorkingCopy) {
         harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditStartButton"));
     auto* const brushTool =
         harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditToolBrushButton"));
-    auto* const mosaicTool =
-        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditToolMosaicButton"));
     auto* const applyButton =
         harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditApplyCropButton"));
     auto* const undoButton =
@@ -2447,13 +2470,22 @@ TEST(MainQmlContractTests, ImageEditBrushAndMosaicToolsEditTheWorkingCopy) {
     ASSERT_NE(preview, nullptr);
     ASSERT_NE(startButton, nullptr);
     ASSERT_NE(brushTool, nullptr);
-    ASSERT_NE(mosaicTool, nullptr);
     ASSERT_NE(applyButton, nullptr);
     ASSERT_NE(undoButton, nullptr);
     ASSERT_NE(brushOpacitySlider, nullptr);
 
     ASSERT_TRUE(QMetaObject::invokeMethod(startButton, "clicked"));
     harness.settle();
+
+    // Mosaic now lives behind 「更多工具」; the menu must open before its row exists.
+    auto* const mosaicTool =
+        openEditToolsItem(harness.root.get(), QStringLiteral("imageEditToolMosaicButton"));
+    ASSERT_NE(mosaicTool, nullptr);
+    // The dropdown button names the active tool, so the selection is not hidden.
+    auto* const moreToolsButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditMoreToolsButton"));
+    ASSERT_NE(moreToolsButton, nullptr);
+    EXPECT_TRUE(moreToolsButton->property("text").toString().contains(QStringLiteral("裁剪")));
 
     // Brush tool: the tool switch changes what the left button does and shows its controls.
     ASSERT_TRUE(QMetaObject::invokeMethod(brushTool, "clicked"));
@@ -2559,18 +2591,10 @@ TEST(MainQmlContractTests, ImageEditAnnotationAndFillToolsEditTheWorkingCopy) {
     auto* const preview = harness.root->findChild<QQuickItem*>(QStringLiteral("imageViewport-2"));
     auto* const startButton =
         harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditStartButton"));
-    auto* const rectTool =
-        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditToolRectButton"));
-    auto* const arrowTool =
-        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditToolArrowButton"));
-    auto* const textTool =
-        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditToolTextButton"));
+    // Only the select tool stays on the row; rect/arrow/text and fill/clear moved into the
+    // 「更多工具」 dropdown together with their delete/clear-all actions.
     auto* const selectTool =
         harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditToolSelectButton"));
-    auto* const fillTool =
-        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditToolFillButton"));
-    auto* const clearTool =
-        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditToolClearButton"));
     auto* const deleteButton =
         harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditDeleteAnnotationButton"));
     auto* const clearAllButton =
@@ -2581,18 +2605,29 @@ TEST(MainQmlContractTests, ImageEditAnnotationAndFillToolsEditTheWorkingCopy) {
     ASSERT_NE(viewport, nullptr);
     ASSERT_NE(preview, nullptr);
     ASSERT_NE(startButton, nullptr);
-    ASSERT_NE(rectTool, nullptr);
-    ASSERT_NE(arrowTool, nullptr);
-    ASSERT_NE(textTool, nullptr);
     ASSERT_NE(selectTool, nullptr);
-    ASSERT_NE(fillTool, nullptr);
-    ASSERT_NE(clearTool, nullptr);
     ASSERT_NE(deleteButton, nullptr);
     ASSERT_NE(clearAllButton, nullptr);
     ASSERT_NE(undoButton, nullptr);
 
     ASSERT_TRUE(QMetaObject::invokeMethod(startButton, "clicked"));
     harness.settle();
+
+    auto* const rectTool =
+        openEditToolsItem(harness.root.get(), QStringLiteral("imageEditToolRectButton"));
+    ASSERT_NE(rectTool, nullptr);
+    auto* const arrowTool =
+        openEditToolsItem(harness.root.get(), QStringLiteral("imageEditToolArrowButton"));
+    ASSERT_NE(arrowTool, nullptr);
+    auto* const textTool =
+        openEditToolsItem(harness.root.get(), QStringLiteral("imageEditToolTextButton"));
+    ASSERT_NE(textTool, nullptr);
+    auto* const fillTool =
+        openEditToolsItem(harness.root.get(), QStringLiteral("imageEditToolFillButton"));
+    ASSERT_NE(fillTool, nullptr);
+    auto* const clearTool =
+        openEditToolsItem(harness.root.get(), QStringLiteral("imageEditToolClearButton"));
+    ASSERT_NE(clearTool, nullptr);
 
     const qreal scale =
         preview->width() / static_cast<qreal>(preview->property("sourceSize").toSize().width());
@@ -2722,6 +2757,202 @@ TEST(MainQmlContractTests, ImageEditAnnotationAndFillToolsEditTheWorkingCopy) {
     EXPECT_EQ(original.pixelColor(70, 12).alpha(), 255);
 
     ASSERT_TRUE(QMetaObject::invokeMethod(startButton, "clicked"));
+}
+
+// Phase-1 UI increment: the pixel-size and canvas-fill work moves off the header row into two
+// small dialogs. Both still funnel through the same controller, so the contract that matters is
+// unchanged: the working copy resizes or the original is centred on a larger canvas, the source
+// file is never touched, and each action is exactly one undo step.
+TEST(MainQmlContractTests, ImageEditScaleDialogResizesTheWorkingCopy) {
+    WorkspaceHarness harness;
+    harness.withImageEdit = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    QImage primary(96, 64, QImage::Format_ARGB32);
+    primary.fill(QColor(30, 90, 150));
+    QImage secondary(32, 32, QImage::Format_ARGB32);
+    secondary.fill(QColor(40, 40, 40));
+    ASSERT_TRUE(harness.imageReview.openPairImages(std::move(primary),
+                                                   QStringLiteral("a.png"),
+                                                   std::move(secondary),
+                                                   QStringLiteral("b.png")));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    harness.settle();
+
+    auto* const startButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditStartButton"));
+    auto* const scaleButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditScaleButton"));
+    auto* const undoButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditUndoButton"));
+    ASSERT_NE(startButton, nullptr);
+    ASSERT_NE(scaleButton, nullptr);
+    ASSERT_NE(undoButton, nullptr);
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(startButton, "clicked"));
+    harness.settle();
+    EXPECT_TRUE(scaleButton->isVisible());
+
+    // Optional evidence capture for the visible QML change: the header row after the tool
+    // trim, still inside edit mode so every action for this step is on screen.
+    const auto evidenceDirectory = qEnvironmentVariable("DVS_REVIEW_EVIDENCE_DIR");
+    if (!evidenceDirectory.isEmpty()) {
+        ASSERT_TRUE(QDir().mkpath(evidenceDirectory));
+        ASSERT_TRUE(harness.window->grabWindow().save(
+            QDir(evidenceDirectory).filePath(QStringLiteral("image-edit-header.png"))));
+        // The header row is the widest element in edit mode; it must stay complete at the
+        // window's minimum width (Main.qml sets minimumWidth 960).
+        harness.window->resize(960, 640);
+        harness.settle();
+        ASSERT_TRUE(harness.window->grabWindow().save(
+            QDir(evidenceDirectory).filePath(QStringLiteral("image-edit-header-min-width.png"))));
+        harness.window->resize(1280, 800);
+        harness.settle();
+    }
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(scaleButton, "clicked"));
+    harness.settle();
+    // The shell derives from Popup, not Item, so it is looked up as a plain object.
+    auto* const dialog = harness.root->findChild<QObject*>(QStringLiteral("imageEditScaleDialog"));
+    auto* const widthField =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditScaleWidthField"));
+    auto* const heightField =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditScaleHeightField"));
+    auto* const lockAspect =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditScaleLockAspect"));
+    auto* const applyButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditScaleApplyButton"));
+    ASSERT_NE(dialog, nullptr);
+    ASSERT_NE(widthField, nullptr);
+    ASSERT_NE(heightField, nullptr);
+    ASSERT_NE(lockAspect, nullptr);
+    ASSERT_NE(applyButton, nullptr);
+    EXPECT_TRUE(dialog->property("visible").toBool());
+    EXPECT_EQ(widthField->property("value").toInt(), 96);
+    EXPECT_EQ(heightField->property("value").toInt(), 64);
+    EXPECT_TRUE(lockAspect->property("checked").toBool());
+
+    if (!evidenceDirectory.isEmpty()) {
+        ASSERT_TRUE(harness.window->grabWindow().save(
+            QDir(evidenceDirectory).filePath(QStringLiteral("image-edit-scale-dialog.png"))));
+    }
+
+    // With the aspect locked, one edited edge recomputes the other by the ratio the dialog
+    // opened with (96:64 = 3:2).
+    ASSERT_TRUE(typeSpinBoxValue(heightField, 48));
+    harness.settle();
+    EXPECT_EQ(widthField->property("value").toInt(), 72);
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(applyButton, "clicked"));
+    harness.settle();
+    EXPECT_FALSE(dialog->property("visible").toBool());
+    EXPECT_EQ(harness.imageEdit.imageWidth(), 72);
+    EXPECT_EQ(harness.imageEdit.imageHeight(), 48);
+    EXPECT_EQ(harness.imageEdit.undoLabel(), QStringLiteral("缩放"));
+    EXPECT_TRUE(undoButton->property("enabled").toBool());
+
+    // The committed original keeps its own size; leaving edit mode drops the working copy.
+    ASSERT_TRUE(QMetaObject::invokeMethod(undoButton, "clicked"));
+    harness.settle();
+    EXPECT_EQ(harness.imageEdit.imageWidth(), 96);
+    EXPECT_EQ(harness.imageEdit.imageHeight(), 64);
+    EXPECT_EQ(harness.imageReview.rawImageForSlot(ImageReviewController::PrimarySlot).size(),
+              QSize(96, 64));
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(startButton, "clicked"));
+    harness.settle();
+    EXPECT_FALSE(harness.imageEdit.active());
+}
+
+// The canvas-fill dialog's contract: the image keeps its pixels and lands in the middle of the
+// requested canvas, the ring is the chosen colour, and the step is one undo away.
+TEST(MainQmlContractTests, ImageEditFillDialogPadsTheCanvasAndKeepsTheImage) {
+    WorkspaceHarness harness;
+    harness.withImageEdit = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    QImage primary(64, 48, QImage::Format_ARGB32);
+    primary.fill(QColor(200, 60, 40));
+    QImage secondary(32, 32, QImage::Format_ARGB32);
+    secondary.fill(QColor(40, 40, 40));
+    ASSERT_TRUE(harness.imageReview.openPairImages(std::move(primary),
+                                                   QStringLiteral("a.png"),
+                                                   std::move(secondary),
+                                                   QStringLiteral("b.png")));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    harness.settle();
+
+    auto* const workspace =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
+    auto* const startButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditStartButton"));
+    auto* const fillCanvasButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditFillButton"));
+    auto* const undoButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditUndoButton"));
+    ASSERT_NE(workspace, nullptr);
+    ASSERT_NE(startButton, nullptr);
+    ASSERT_NE(fillCanvasButton, nullptr);
+    ASSERT_NE(undoButton, nullptr);
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(startButton, "clicked"));
+    harness.settle();
+    ASSERT_TRUE(QMetaObject::invokeMethod(fillCanvasButton, "clicked"));
+    harness.settle();
+
+    auto* const dialog = harness.root->findChild<QObject*>(QStringLiteral("imageEditFillDialog"));
+    auto* const widthField =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditFillWidthField"));
+    auto* const heightField =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditFillHeightField"));
+    auto* const applyButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditFillApplyButton"));
+    ASSERT_NE(dialog, nullptr);
+    ASSERT_NE(widthField, nullptr);
+    ASSERT_NE(heightField, nullptr);
+    ASSERT_NE(applyButton, nullptr);
+    EXPECT_TRUE(dialog->property("visible").toBool());
+    EXPECT_EQ(widthField->property("value").toInt(), 64);
+    EXPECT_EQ(heightField->property("value").toInt(), 48);
+
+    // Optional evidence capture: the canvas dialog with its target size and colour swatches.
+    const auto evidenceDirectory = qEnvironmentVariable("DVS_REVIEW_EVIDENCE_DIR");
+    if (!evidenceDirectory.isEmpty()) {
+        ASSERT_TRUE(QDir().mkpath(evidenceDirectory));
+        ASSERT_TRUE(harness.window->grabWindow().save(
+            QDir(evidenceDirectory).filePath(QStringLiteral("image-edit-fill-dialog.png"))));
+    }
+
+    // Black is the pre-selected ring colour; the image is 64x48 placed at (8,8) on 80x64.
+    ASSERT_TRUE(typeSpinBoxValue(widthField, 80));
+    ASSERT_TRUE(typeSpinBoxValue(heightField, 64));
+    harness.settle();
+    ASSERT_TRUE(QMetaObject::invokeMethod(applyButton, "clicked"));
+    harness.settle();
+    EXPECT_FALSE(dialog->property("visible").toBool());
+    EXPECT_EQ(harness.imageEdit.imageWidth(), 80);
+    EXPECT_EQ(harness.imageEdit.imageHeight(), 64);
+    EXPECT_EQ(harness.imageEdit.undoLabel(), QStringLiteral("填充画布"));
+
+    const QImage padded = harness.imageEdit.editedImage();
+    EXPECT_EQ(padded.pixelColor(0, 0), QColor(0, 0, 0));
+    EXPECT_EQ(padded.pixelColor(79, 63), QColor(0, 0, 0));
+    EXPECT_EQ(padded.pixelColor(40, 32), QColor(200, 60, 40));
+    EXPECT_EQ(padded.pixelColor(8, 8), QColor(200, 60, 40));
+
+    // One undo restores the original geometry and the original buffer stays untouched.
+    ASSERT_TRUE(QMetaObject::invokeMethod(undoButton, "clicked"));
+    harness.settle();
+    EXPECT_EQ(harness.imageEdit.editedImage().size(), QSize(64, 48));
+    EXPECT_EQ(harness.imageReview.rawImageForSlot(ImageReviewController::PrimarySlot).size(),
+              QSize(64, 48));
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(startButton, "clicked"));
+    harness.settle();
 }
 
 // Phase 0 baseline: the Range Loop must never present a frame outside [In,Out]. Today the loop is

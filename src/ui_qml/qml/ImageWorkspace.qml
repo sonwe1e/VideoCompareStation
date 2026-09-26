@@ -254,6 +254,54 @@ Rectangle {
         return (compareMode === 0 && hasPair && singleViewShowSecondary) ? 3 : 2;
     }
 
+    // Label of the tool that is actually selected, so a tool living inside the 「更多工具」
+    // dropdown is still readable from the closed row.
+    function imageEditToolLabel(tool) {
+        switch (String(tool || "")) {
+        case "crop":
+            return qsTr("裁剪");
+        case "brush":
+            return qsTr("画笔");
+        case "select":
+            return qsTr("选择");
+        case "mosaic":
+            return qsTr("马赛克");
+        case "fill":
+            return qsTr("填充");
+        case "clear":
+            return qsTr("清除");
+        case "rect":
+            return qsTr("矩形");
+        case "arrow":
+            return qsTr("箭头");
+        case "text":
+            return qsTr("文字");
+        default:
+            return qsTr("更多工具");
+        }
+    }
+
+    // Both dialogs edit the same working copy through the same controller, so the result of
+    // each is reported in the shared status line rather than in the dialog, which closes on
+    // apply.
+    function applyImageScale(width, height, smooth) {
+        if (!imageEdit)
+            return false;
+        const applied = Boolean(imageEdit.resizeImage(width, height, smooth));
+        if (applied && imageReview)
+            imageReview.resetView();
+        return applied;
+    }
+
+    function applyImageCanvasFill(width, height, fillColor) {
+        if (!imageEdit)
+            return false;
+        const applied = Boolean(imageEdit.padToCanvas(width, height, fillColor));
+        if (applied && imageReview)
+            imageReview.resetView();
+        return applied;
+    }
+
     function beginImageEdit() {
         if (!imageEdit)
             return false;
@@ -1295,14 +1343,11 @@ Rectangle {
             spacing: 8
             visible: control.hasPrimary && control.imageEdit !== null
 
-            ReviewActionButton {
+            EditButton {
                 objectName: "imageEditStartButton"
                 checkable: true
                 checked: control.editModeActive
                 text: control.editModeActive ? qsTr("结束编辑") : qsTr("编辑画面")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
                 helpText: qsTr("在原图的副本上编辑；原文件保持不变，编辑结果必须另存为副本。")
                 onClicked: {
                     if (control.editModeActive)
@@ -1311,141 +1356,156 @@ Rectangle {
                         control.beginImageEdit();
                 }
             }
-            ReviewActionButton {
+            EditButton {
                 objectName: "imageEditToolCropButton"
                 visible: control.editModeActive
                 checkable: true
                 checked: control.editTool === "crop"
                 text: qsTr("裁剪")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
                 onClicked: control.editTool = "crop"
             }
-            ReviewActionButton {
+            EditButton {
                 objectName: "imageEditToolBrushButton"
                 visible: control.editModeActive
                 checkable: true
                 checked: control.editTool === "brush"
                 text: qsTr("画笔")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
                 onClicked: control.editTool = "brush"
             }
-            ReviewActionButton {
-                objectName: "imageEditToolMosaicButton"
-                visible: control.editModeActive
-                checkable: true
-                checked: control.editTool === "mosaic"
-                text: qsTr("马赛克")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                onClicked: control.editTool = "mosaic"
-            }
-            ReviewActionButton {
-                objectName: "imageEditToolFillButton"
-                visible: control.editModeActive
-                checkable: true
-                checked: control.editTool === "fill"
-                text: qsTr("填充")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                helpText: qsTr("用当前颜色填满框选区域；遮挡敏感内容时优先用不透明色块。")
-                onClicked: control.editTool = "fill"
-            }
-            ReviewActionButton {
-                objectName: "imageEditToolClearButton"
-                visible: control.editModeActive
-                checkable: true
-                checked: control.editTool === "clear"
-                text: qsTr("清除")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                helpText: qsTr("把框选区域清除为透明（用于调整透明区域）。")
-                onClicked: control.editTool = "clear"
-            }
-            ReviewActionButton {
-                objectName: "imageEditToolRectButton"
-                visible: control.editModeActive
-                checkable: true
-                checked: control.editTool === "rect"
-                text: qsTr("矩形")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                onClicked: control.editTool = "rect"
-            }
-            ReviewActionButton {
-                objectName: "imageEditToolArrowButton"
-                visible: control.editModeActive
-                checkable: true
-                checked: control.editTool === "arrow"
-                text: qsTr("箭头")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                onClicked: control.editTool = "arrow"
-            }
-            ReviewActionButton {
-                objectName: "imageEditToolTextButton"
-                visible: control.editModeActive
-                checkable: true
-                checked: control.editTool === "text"
-                text: qsTr("文字")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                onClicked: control.editTool = "text"
-            }
-            ReviewActionButton {
+            EditButton {
                 objectName: "imageEditToolSelectButton"
                 visible: control.editModeActive
                 checkable: true
                 checked: control.editTool === "select"
                 text: qsTr("选择")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
                 helpText: qsTr("点击选中标注后可拖动；Delete 键或「删除标注」可删除。")
                 onClicked: control.editTool = "select"
             }
-            ReviewActionButton {
+
+            // Whole-image geometry, not a brush: these change the working copy's size rather
+            // than the pixels under the cursor, so they sit next to the tool menu instead of
+            // inside it.
+            EditButton {
+                objectName: "imageEditScaleButton"
+                visible: control.editModeActive
+                text: qsTr("缩放…")
+                helpText: qsTr("把画面重采样到指定的像素尺寸；锁定比例时改一边会自动推算另一边。")
+                onClicked: imageEditDialogs.openScale()
+            }
+            EditButton {
+                objectName: "imageEditFillButton"
+                visible: control.editModeActive
+                text: qsTr("填充画布…")
+                helpText: qsTr("把原图居中放到更大的画布上，四周用指定颜色补齐。")
+                onClicked: imageEditDialogs.openFill()
+            }
+
+            // The remaining tools share one dropdown. Two-thirds of the row used to be tool
+            // buttons, which made the row the widest thing in the header and pushed 撤销/重做
+            // past the window edge at 900 px. The button carries the active tool's name so a
+            // hidden-but-selected tool is never invisible.
+            EditButton {
+                objectName: "imageEditMoreToolsButton"
+                visible: control.editModeActive
+                text: control.imageEditToolLabel(control.editTool) + " ▾"
+                helpText: qsTr("马赛克、填充、清除、矩形、箭头、文字与标注管理。")
+                onClicked: moreToolsMenu.open()
+
+                VcsMenu {
+                    id: moreToolsMenu
+
+                    objectName: "imageEditMoreToolsMenu"
+                    menuWidth: 240
+
+                    VcsMenuItem {
+                        objectName: "imageEditToolMosaicButton"
+                        text: qsTr("马赛克")
+                        checkable: true
+                        checked: control.editTool === "mosaic"
+                        onTriggered: control.editTool = "mosaic"
+                    }
+                    VcsMenuItem {
+                        objectName: "imageEditToolFillButton"
+                        text: qsTr("填充")
+                        checkable: true
+                        checked: control.editTool === "fill"
+                        onTriggered: control.editTool = "fill"
+                    }
+                    VcsMenuItem {
+                        objectName: "imageEditToolClearButton"
+                        text: qsTr("清除")
+                        checkable: true
+                        checked: control.editTool === "clear"
+                        onTriggered: control.editTool = "clear"
+                    }
+                    VcsMenuItem {
+                        objectName: "imageEditToolRectButton"
+                        text: qsTr("矩形")
+                        checkable: true
+                        checked: control.editTool === "rect"
+                        onTriggered: control.editTool = "rect"
+                    }
+                    VcsMenuItem {
+                        objectName: "imageEditToolArrowButton"
+                        text: qsTr("箭头")
+                        checkable: true
+                        checked: control.editTool === "arrow"
+                        onTriggered: control.editTool = "arrow"
+                    }
+                    VcsMenuItem {
+                        objectName: "imageEditToolTextButton"
+                        text: qsTr("文字")
+                        checkable: true
+                        checked: control.editTool === "text"
+                        onTriggered: control.editTool = "text"
+                    }
+
+                    VcsMenuSeparator {}
+
+                    VcsMenuItem {
+                        objectName: "imageEditDeleteAnnotationMenuItem"
+                        text: qsTr("删除选中标注")
+                        enabled: control.imageEdit !== null && control.imageEdit.selectedAnnotation >= 0
+                        onTriggered: {
+                            if (control.imageEdit)
+                                control.imageEdit.deleteSelectedAnnotation();
+                        }
+                    }
+                    VcsMenuItem {
+                        objectName: "imageEditClearAnnotationsMenuItem"
+                        text: qsTr("清空所有标注")
+                        enabled: control.imageEdit !== null && control.imageEdit.annotationCount > 0
+                        onTriggered: {
+                            if (control.imageEdit)
+                                control.imageEdit.clearAnnotations();
+                        }
+                    }
+                }
+            }
+            EditButton {
                 objectName: "imageEditUndoButton"
                 visible: control.editModeActive
                 text: qsTr("撤销")
                 enabled: control.imageEdit && control.imageEdit.canUndo
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
                 onClicked: {
                     if (control.imageEdit)
                         control.imageEdit.undo();
                 }
             }
-            ReviewActionButton {
+            EditButton {
                 objectName: "imageEditRedoButton"
                 visible: control.editModeActive
                 text: qsTr("重做")
                 enabled: control.imageEdit && control.imageEdit.canRedo
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
                 onClicked: {
                     if (control.imageEdit)
                         control.imageEdit.redo();
                 }
             }
-            ReviewActionButton {
+            EditButton {
                 objectName: "imageEditSaveCopyButton"
                 visible: control.editModeActive
                 text: qsTr("另存副本…")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
                 onClicked: editSaveDialog.open()
             }
             Text {
@@ -1457,7 +1517,7 @@ Rectangle {
                 color: Theme.mutedText
                 font.pixelSize: 11
                 elide: Text.ElideRight
-                width: Math.min(360, implicitWidth)
+                width: Math.min(240, implicitWidth)
             }
         }
 
@@ -1666,6 +1726,18 @@ Rectangle {
                 font.pixelSize: 11
             }
         }
+    }
+
+    // Header buttons size to their label instead of the shared 112 px floor: the row
+    // is the widest thing in the header and 重做/另存副本 used to clip past the window
+    // edge well above the 960 px minimum width.
+    component EditButton: ReviewActionButton {
+        implicitHeight: 30
+        leftPadding: 10
+        rightPadding: 10
+        // implicitContentWidth does not notify, so a binding to it keeps the value it had
+        // during construction; bind the label's own width instead.
+        implicitWidth: Math.max(64, contentItem.implicitWidth + leftPadding + rightPadding + 8)
     }
 
     // Left/Right/Up/Down walk folder pairs when a comparison list is loaded; Home/End jump
@@ -2754,6 +2826,25 @@ Rectangle {
             const urls = control.pairModel.pairUrlsAt(next);
             if (urls.hasLeft && urls.hasRight)
                 control.imageReview.prefetchPair(urls.leftUrl, urls.rightUrl);
+        }
+    }
+
+    // Resize and canvas-fill dialogs. They live here rather than inside the row so that
+    // closing the dropdown cannot destroy a half-filled-in size.
+    ImageEditDialogs {
+        id: imageEditDialogs
+
+        imageEdit: control.imageEdit
+        imageWidth: control.imageEdit ? control.imageEdit.imageWidth : 0
+        imageHeight: control.imageEdit ? control.imageEdit.imageHeight : 0
+        maximumEdge: control.imageEdit ? control.imageEdit.maximumEdge : 16384
+        minimumEdge: control.imageEdit ? control.imageEdit.minimumEdge : 1
+
+        onScaleApplied: function (width, height, smooth) {
+            return control.applyImageScale(width, height, smooth);
+        }
+        onFillApplied: function (width, height, fillColor) {
+            return control.applyImageCanvasFill(width, height, fillColor);
         }
     }
 
