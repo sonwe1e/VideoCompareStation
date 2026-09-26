@@ -1,7 +1,153 @@
 # 视觉审查问题台账
 
-更新：2026-09-25。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-09-26。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+
+## 2026-09-26 视频第六增补：区间导出＝无损流拷贝裁剪（P1 · 实施第三步，基线 `02cf55e` + 本轮工作区）
+
+对应产品目标 §3 新增的「区间导出」。用户把视频编辑收窄为「选定起点/终点裁剪 + 缩放」，
+第五增补让区间一步可达，本轮补上它的**结果**：把入点到出点导出成一个可独立播放的片段。
+
+- **为什么是流拷贝**：本轮不做解码、不做重新编码，按包（packet）复制，因此片段与源素材
+  逐帧一致，分辨率、帧率、编码不变。两条代价必须在界面上讲清楚，不能让人事后才发现：
+  视频只能在关键帧处开始拷贝（入点在关键帧之间时片段会比入点早开始，计划里记录这段
+  前滚 `startShiftMicroseconds` 与 `firstExportedFrame`）；B 帧素材为了让解码正确，会带上
+  显示顺序晚于出点的参考帧（结尾可能多出几帧）。精确成帧裁剪属于第四步重新编码。
+- **应用层（纯函数、可单测）**：`application/ClipExport.h` 定义
+  `ClipExportPlan`/`planClipExport`/`alignClipExportStart`、`ClipExportJob`、
+  `ClipExportReport` 与端口 `IClipExporter`（`keyframeTimes`/`perform`，都带
+  `std::atomic_bool` 取消标志）。结束时间是「出点下一帧的起点」（**独占**），到文件末尾时
+  为 `nullopt`；对齐取「不大于请求起点的最大关键帧」，若素材没有更早的关键帧则保持原起点
+  （此时 shift 为正），对齐后越界则拒绝而不是偷偷延长。
+- **适配器**：`media_ffmpeg/ClipExportWriter`（`AvRaii.h` 管 FFmpeg 资源，不外泄类型）。
+  `keyframeTimes` 优先读 `stss` 索引（FFmpeg 8 的 `avformat_index_get_entries_count`/
+  `avformat_index_get_entry`），没有索引时退回扫包；`perform` 反向 seek 到计划起点，
+  在**第一个关键帧包**处才创建输出（仅 mp4/mov 加 `movflags=+faststart`），以首包 pts 归一化
+  时间戳，`dts >= 结束时间` 停止、`pts < 结束时间` 才写入，越界参考包先缓存再在结尾补写。
+  写临时文件 `<stem>.<requestId>.partial<ext>`，成功后才改名——失败/取消不留半成品；
+  取消在每个关键帧读取与每个包之间检查。
+- **控制器 `ui_qml/ClipExportController`（纯应用端口，不链 ffmpeg）**：`exportRange(QUrl)`
+  在 GUI 线程把整个作业（规范源路径、`CanonicalTimeline`、规范帧数、区间、目标路径）拍成
+  `Request` 再交给一个 `jthread`，工作线程**不读快照**；进度与结果用带请求号的 queued 调用
+  回到 GUI 线程，过期结果按请求号丢弃；同一时刻只允许一个导出。导出源固定取
+  `validatedComparison` 的**规范源**（时间线主源）路径与其规范时间，不用 `sourceFullPaths()`
+  ——那只是槽位顺序，可能在用户对调 A/B 后与规范源不一致。
+- **界面**：走带条区间行新增「导出」芯片（`transportExportRangeButton`，导出中显示
+  「导出中 nn%」并点亮），点击打开 `ClipExportDialog.qml`（`clipExportPopup`）：区间摘要、
+  建议文件名（`<源名>_clip_<入>-<出><扩展名>`）、状态行、结果路径、失败原因，以及上面两条
+  限制说明；目标位置用原生保存框（`clipExportTargetDialog`），按钮为「停止导出」（仅导出中
+  出现）、「关闭」、「选择位置…」。区间不完整时芯片禁用并给沉浸式提示「没有可导出的区间…」；
+  没有导出端口时（未来精简构建）芯片整体不出现。
+- **坑**：`ClipExportController` 的 `canExport`/`rangeSummary` 只在 `stateChanged` 上发信号，
+  而 QML 的区间状态来自 shell，所以 `rangeExportEnabled` 必须同时读**实时的**
+  `root.inFrame`/`root.outFrame`，不能只绑 `canExport`，否则设完入点后芯片还停在禁用态。
+  对话框同样受影响：设点不会触发 `stateChanged`，首次证据截图抓到的就是残留的
+  「未设区间」——`ClipExportDialog` 现在在每次 `open()` 时自增 `rangeRevision`，迫使区间
+  摘要与建议文件名的绑定重新读取，契约测试直接断言对话框里显示的是当前区间。
+  另外 `CanonicalTimeline` 是 `std::variant<RationalRate, …>`，而 `RationalRate` 没有默认
+  构造，所以 `Request::timeline` 用 `std::optional` 承载，不能直接当成员。
+- **测试**：
+  `application.ClipExportPlannerTests`（7 项：拒绝非法帧数/倒置/越界区间、结束时间独占、
+  无关键帧表报 `kMediaProbeFailed`、取前一个关键帧、对齐后越界拒绝）；
+  `media.ClipExportWriterTests`（6 项：真实 fixture 导出计划区间、包数与起点前滚断言、
+  取消不落盘、临时文件改名、无 `stss` 素材的关键帧回退、越界参考帧补写）；
+  `ui.MainQmlContractTests.ExportRangeButtonStartsAClipExport`（无区间时芯片禁用并提示、
+  有规范源与区间后芯片可用、点击打开对话框、原生选择框**不自开**、直接走
+  `dialog.onAccepted` 调的同一个 `exportRange()` 后由记录型假 exporter 断言收到的作业：
+  源＝规范源、起点前滚到 0、`startShiftMicroseconds = -100000`、独占结束 266667 µs、
+  请求号非 0、完成态 HUD/状态/输出路径一致）。
+- **证据**：`out/evidence/transport-export-chip.png`（1280px：区间行里的「导出」芯片）、
+  `clip-export-dialog.png`（1280px：对话框打开，区间摘要 + 建议文件名 + 两条限制说明）、
+  `clip-export-dialog-min-width.png`（960px 最小宽度：对话框宽度取 460px 上限并与走带条共存）。
+- **剩余限制**：精确成帧需第四步重新编码（`h264_mf` 等编码器运行时探测后再做）；中间切点
+  的关键帧数学只有规划层单测覆盖——测试素材都是单关键帧，端到端只验证了「回到文件开头」
+  这一种前滚；`vcpkg.json` 未变（依旧没有 encoder/avfilter）。
+- **旧账**：「启动时提示『磁盘上的视频文件已变化』」的 tooltip、对比模式芯片行在 960px
+  溢出，均为既有现象，本轮未引入亦未处理。
+
+## 2026-09-26 视频第五增补：区间标记与循环（P1 · 实施第三步，基线 `02cf55e` + 本轮工作区）
+
+对应产品目标 §3 新增的「区间标记与循环」。用户把视频编辑收窄为「选定起点/终点裁剪 +
+缩放」，本轮只做前一半的**可见状态**：区间从此在走带条上一步可达，不再依赖弹窗或记忆。
+
+- **走带条新区间行**：`TransportBar` 增加 `transportRangeRow`，五个芯片
+  （`transportMarkInButton` 入点、`transportMarkOutButton` 出点、
+  `transportPlayRangeButton` 播放区间、`transportLoopRangeButton` 循环、
+  `transportClearRangeButton` 清除）加一个状态文本 `transportRangeLabel`。芯片沿用
+  连续性芯片的视觉（`#0f172a`/`#2563eb`/`#26364d`），活动态蓝底，`ToolTip.delay: 650`
+  给出快捷键提示；文本三态：`未设区间（I / O 设点）` → `入 42 · 出 —（区间无效）` →
+  `入 42 · 出 48 · 7 帧`（循环时追加 ` · 循环`）。帧号一律 1-based，未设端点显示 `—`。
+- **区间语义**：端点各自独立可设，闭区间；有效条件是 `inFrame >= 0 && outFrame >= inFrame`，
+  所以只设一端或倒置时文本明确写「区间无效」。门控：标记两芯片要 `canMarkRange`
+  （`timelineEnabled && currentFrame >= 0`），播放/循环要区间完整，清除只要有任一端点；
+  没有媒体时整行隐藏且芯片禁用。无音频、无字幕的产品边界不变。
+- **状态来源与单一事实源**：区间真值仍在 `ReviewShellController`
+  （`inFrame()`/`outFrame()`/`rangePlaybackActive()`），走带条只读投影；
+  新增 `markInRequested`/`markOutRequested`/`playRangeRequested`/`rangeLoopRequested`/
+  `clearRangeRequested` 五个信号，`PlayerOsc` 原样转发，`Main.qml` 接到既有
+  `setInPoint`/`setOutPoint`/`playSelectedRange`/`toggleRangeLoop`/`clearSelectedRange`。
+  循环开关的停止路径复用 `stopRangeLoop()`——它提交 `SetPlaybackRangeCommand`（区间保留、
+  只把 loop 置 false），不会悄悄清空用户刚设的端点。键盘 `I`/`O`/`\` 不变，循环仍只有芯片。
+- **坑（本轮最大的一个）**：`ReviewController` 的 `projectionTimer_` 每拍用快照重建视图，
+  任何只写在视图层的区间状态会被下一拍抹掉。契约测试因此必须先断言**提交的命令**
+  （`StartRangePlaybackCommand` / `SetPlaybackRangeCommand`）与 shell 状态表示意图，再把
+  已被接受的状态镜像进快照、`refreshProjection()` 后再断言芯片与文本——这与其它播放
+  字段一样是投影驱动，不是测试绕过。
+- **测试**：`ui.MainQmlContractTests` 新增
+  `TransportRangeRowMarksInAndOutFromTheCurrentFrame`（芯片设点 41→47、标签三态流转、
+  `inMediaTime()` 与 `mediaTimeForFrame(41)` 一致）、
+  `TransportRangeRowPlaysAndLoopsTheMarkedRange`（播放提交 `StartRangePlaybackCommand{41,47,loop=true}`、
+  循环芯片活动、停止提交 loop=false 且端点保留）、
+  `TransportRangeRowClearsTheRangeAndGatesChipsWithoutMedia`（清除归零、无媒体时隐藏与禁用）。
+  定向套件（`ui.MainQmlContractTests|ui.ImageEditControllerTests`，75 项）100% 通过，4 项既有
+  禁用未动；`format-check`、`lint` 通过。
+- **证据**：`out/evidence/transport-range-row.png`（1280px 默认宽度：区间行在播放按钮下方，
+  循环芯片活动态、蓝色区间带落在时间轴上）、`transport-range-row-min-width.png`
+  （960px 最小宽度：整行完整不溢出）。
+- **剩余限制**：对比模式芯片行在 960px 仍溢出（第三增补已记录的旧问题，非本轮引入）；
+  启动时提示「磁盘上的视频文件已变化」的 tooltip 为既有现象，本轮未处理；区间导出
+  （无损流拷贝裁剪）已由第六增补落地，本轮只做可见状态与循环播放。
+
+## 2026-09-26 图片轻编辑第四增补：缩放、填充画布与精简工具栏（P1 · 实施第三步，基线 `02cf55e` + 本轮工作区）
+
+对应产品目标 §5 新增的两行。用户收窄了编辑范围——图片编辑就是「裁剪、缩放、填充」，
+并要求界面更简洁精炼。本轮把两个整图几何操作落地为各自的撤销步，同时把编辑工具栏
+从九个同权按钮压到三个常用按钮加一个下拉菜单。
+
+- **缩放（像素尺寸重采样）**：`resizeImage(w, h, smooth)`，`ResampleCommand` 一步撤销；
+  默认 `Qt::SmoothTransformation`，像素级需求可切 `FastTransformation`；标注几何与文字
+  字号按比例缩放（下限 1px）；尺寸不变时如实提示且不产生历史步骤。边长限制
+  [1, 16384] 由控制器统一把关。
+- **填充画布（居中补边）**：`padToCanvas(w, h, color)`，`CanvasCommand` 一步撤销；原图
+  居中放入 W×H 画布、余量用指定颜色按 `CompositionMode_Source` 填充（保留 alpha），
+  标注随居中偏移平移且不丢弃；画布小于原图时拒绝并提示，透明填充仅当图像有透明
+  通道时可用。画布格式按 `working.hasAlphaChannel()` 取 ARGB32/RGB32。
+- **历史从 QUndoStack 换为私有有界 `History`**：裁剪/缩放/填充画布会整体保留上一个
+  缓冲，只有计数上限会留下大缓冲；新增字节预算（默认 256 MiB，可配置），`prune()` 保证
+  刚压入的步骤永不被剪掉。`maximumEdge`/`minimumEdge` 作为 QML 常量属性暴露给对话框。
+- **对话框（新 `ImageEditDialogs.qml`）**：缩放对话框——宽/高 SpinBox（`IntValidator`、
+  锁定比例联动另一边、50/100/200% 预设、平滑重采样开关）；填充画布对话框——宽/高 +
+  黑/白/中灰/透明色样（透明样用棋盘格 data-URI、无透明通道时警示不可保存为不透明
+  副本）。对话框故意不预判「画布小于原图」，由控制器拒绝（单一事实源），只预提示
+  透明填充。沿用 `ReviewInputDialogs` 的 DialogShell 壳（遮罩居中、底部取消/应用）。
+- **工具栏精简**：马赛克/填充/清除/矩形/箭头/文字与标注管理收进「更多工具」
+  `VcsMenu`，菜单按钮始终显示当前工具名（隐藏中的工具不会不可见）；新增内联
+  `component EditButton` 按文字宽度收缩按钮（突破 `ReviewActionButton` 的 112px 下限）。
+  **坑**：`Control.implicitContentWidth` 没有 change 信号，绑定到它在构造期就定格为 0；
+  必须绑 `contentItem.implicitWidth`。960px 最小宽度下编辑行完整可见（状态文本允许
+  省略号）；对比模式芯片行在 960px 仍溢出，是本轮之前就存在的旧问题。
+- **测试**：`ui.ImageEditControllerTests` 增至 35 项（缩放尺寸/平滑/标注随动、无操作
+  拒绝、填充居中与余量颜色、拒绝更小画布、透明通道门槛、撤销一步还原、字节预算剪枝）；
+  契约测试新增 `ImageEditScaleDialogResizesTheWorkingCopy` 与
+  `ImageEditFillDialogPadsTheCanvasAndKeepsTheImage` 走完整链路（开对话框 → 改尺寸 →
+  应用 → 逐像素断言 → 撤销还原）。`SpinBox.valueModified` 只对用户输入触发，测试用
+  `typeSpinBoxValue` 助手强制信号。定向套件（`ui.ImageEditControllerTests|ui.
+  MainQmlContractTests`，68 项）100% 通过；`format-check`、`lint` 通过。
+- **证据**：`out/evidence/image-edit-header.png`（默认宽度编辑行）、
+  `image-edit-header-min-width.png`（960px 最小宽度）、`image-edit-scale-dialog.png`、
+  `image-edit-fill-dialog.png`。
+- **剩余限制**：JPEG 编码器接入（第一增补记录）；填充画布不支持任意锚点（产品明确
+  不做）；工具栏重组提案 HTML（工作区未跟踪文件）本轮仅作参考、未采纳其多行分组方案。
 
 ## 2026-09-25 图片轻编辑第三增补：填充/清除与标注（P1 · 实施第三步，基线 `1f51487` + 本轮工作区）
 

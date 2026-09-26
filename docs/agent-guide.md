@@ -43,6 +43,7 @@
 | 对调 A/B、只替换一张图 | `ImageReviewController::swapSides`、`requestReplacePrimary/Secondary`；`ImageWorkspace.qml`、`Main.qml` 换图对话框 | `ImageReviewControllerTests` 的 `SwapSides*`/`Replace*`；台账 `U-02` |
 | MAE／PSNR、统计和误差图含义 | `src/domain/src/PixelDifference.cpp`；`src/application/include/dvs/application/ComparisonMetrics.h`；图片另查 `ImagePairLoader.cpp`（`DifferenceOptions::gain` 只改渲染，统计为原始 8-bit 差值；工作集见 `estimatePairWorkingSet`） | `PixelDifferenceTests.cpp`、`ComparisonMetricsTests.cpp`、`ImageReviewControllerTests.cpp`；[指标 ADR](adr/0005-pixel-difference-metrics.md) |
 | 记录问题、截图、恢复观察位置 | `src/ui_qml/src/IssueLogController.cpp` → `src/application/include/dvs/application/IssueRecord.h` → `src/persistence_json/src/IssueRecordRepository.cpp` | `IssueLogControllerTests.cpp`、`IssueRecordTests.cpp`、`IssueRecordRepositoryTests.cpp` |
+| 把入点到出点导出成片段（无损流拷贝裁剪）、导出失败或起点不在入点 | `TransportBar.qml`／`PlayerOsc.qml` 的「导出」芯片 → `ClipExportDialog.qml` → `ClipExportController.cpp`：`exportRange`（源取 `ValidatedComparisonSet` 的规范源）→ `src/application/src/ClipExportPlanner.cpp`（计划与关键帧对齐）→ `src/media_ffmpeg/src/ClipExportWriter.cpp`（按包复制、临时文件改名） | `ui.MainQmlContractTests.ExportRangeButtonStartsAClipExport`、`tests/component/media/ClipExportWriterTests.cpp`、`tests/unit/application/ClipExportPlannerTests.cpp`；台账「视频第六增补」、产品目标 §3 的两条限制 |
 | 不知道功能在哪里、模式太多 | `EmptyReviewView.qml`、`ApplicationMenuBar.qml`、`CompareModeBar.qml`、`TabbedInspector.qml`、`ImageWorkspace.qml` | 对应 QML 测试与 `MainQmlContractTests.cpp`；按产品工作流做人工验收 |
 
 表中无前缀的 UI 文件位于 `src/ui_qml/qml`、`src/ui_qml/src` 或 `src/ui_qml/include/dvs/ui`；
