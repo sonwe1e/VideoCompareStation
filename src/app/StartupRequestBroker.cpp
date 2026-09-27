@@ -20,6 +20,8 @@ constexpr qsizetype kMaximumFrameBytes = 64 * 1024;
 constexpr int kConnectAttemptMilliseconds = 50;
 constexpr int kConnectWindowMilliseconds = 1000;
 constexpr int kAcknowledgementTimeoutMilliseconds = 1000;
+constexpr int kElectionWindowMilliseconds = 1000;
+constexpr int kElectionAttemptMilliseconds = 10;
 constexpr std::size_t kMaximumPendingRequests = 8U;
 
 [[nodiscard]] QString serverName() {
@@ -56,8 +58,7 @@ public:
             return StartResult::Primary;
         }
         if (electionLock_.tryLock(0)) {
-            static_cast<void>(QLocalServer::removeServer(endpointName_));
-            if (server_.listen(endpointName_)) {
+            if (tryBecomePrimary()) {
                 return StartResult::Primary;
             }
             electionLock_.unlock();
@@ -101,15 +102,23 @@ public:
                                                                 : StartResult::Failed;
         }
 
-        if (!electionLock_.tryLock(0)) {
-            return StartResult::Failed;
-        }
-        static_cast<void>(QLocalServer::removeServer(endpointName_));
-        if (!server_.listen(endpointName_)) {
-            electionLock_.unlock();
-            return StartResult::Failed;
-        }
-        return StartResult::Primary;
+        // Nobody answered on the endpoint, but the election lock is held. Its owner may be a
+        // process that has taken the lock and has not started listening yet, or one that is going
+        // away; wait out the same window the connect path tolerates before declaring the start
+        // failed.
+        QElapsedTimer electionWindow;
+        electionWindow.start();
+        do {
+            if (electionLock_.tryLock(0)) {
+                if (tryBecomePrimary()) {
+                    return StartResult::Primary;
+                }
+                electionLock_.unlock();
+                return StartResult::Failed;
+            }
+            QThread::msleep(kElectionAttemptMilliseconds);
+        } while (electionWindow.elapsed() < kElectionWindowMilliseconds);
+        return StartResult::Failed;
     }
 
     void setRequestHandler(std::function<bool(StartupRequest)> handler) {
@@ -125,6 +134,24 @@ public:
     }
 
 private:
+    // A previous instance that crashed, or that was killed, leaves its endpoint name behind for a
+    // moment while the operating system tears the local server down, so `listen` can fail even
+    // though the election lock is ours. Retry inside the window the connect path already tolerates:
+    // refusing on the first attempt turned "relaunch right after a crash" into a fatal startup
+    // error.
+    [[nodiscard]] bool tryBecomePrimary() {
+        QElapsedTimer listenWindow;
+        listenWindow.start();
+        do {
+            static_cast<void>(QLocalServer::removeServer(endpointName_));
+            if (server_.listen(endpointName_)) {
+                return true;
+            }
+            QThread::msleep(kElectionAttemptMilliseconds);
+        } while (listenWindow.elapsed() < kElectionWindowMilliseconds);
+        return false;
+    }
+
     void acceptConnections() {
         while (QLocalSocket* socket = server_.nextPendingConnection()) {
             buffers_.insert(socket, {});
