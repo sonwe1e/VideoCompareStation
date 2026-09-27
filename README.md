@@ -111,8 +111,8 @@ ctest --preset performance-d3d11 --output-on-failure
 ```
 
 Release workflow 生成明确标注为未签名的 ZIP、MSI、EXE、CLI 与
-`CompareStationShell-1.7.dll`，并执行真实
-安装、`1.2.0→1.7.0` 升级、A/B Pair 设置回归与 shutdown soak 门禁；SHA-256 只用于
+`CompareStationShell-1.9.dll`，并执行真实
+安装、`1.2.0→1.9.0` 升级、A/B Pair 设置回归与 shutdown soak 门禁；SHA-256 只用于
 校验完整性，不代表
 发布者身份。runner 标签、素材清单与发布合同详见
 [docs/self-hosted-runner.md](docs/self-hosted-runner.md)。
