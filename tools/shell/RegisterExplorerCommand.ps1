@@ -25,8 +25,9 @@ extracted release ZIP. Required unless -Uninstall is used.
 Removes the keys this script writes, so the command disappears for the current user.
 
 .PARAMETER Extensions
-Extensions that get the command. The default is the set the shipped handler accepts; keep it in
-sync with kSupportedExtensions in src/shell_windows/ExplorerCommandSupport.cpp.
+Extensions that get the command. The default is the set the shipped handler accepts - five video
+and eight still-image extensions; keep it in sync with kSupportedVideoExtensions and
+kSupportedImageExtensions in src/shell_windows/ExplorerCommandSupport.cpp.
 
 .EXAMPLE
 pwsh tools/shell/RegisterExplorerCommand.ps1 -InstallRoot 'D:\apps\CompareStation-1.8.0'
@@ -40,7 +41,10 @@ param(
 
     [switch] $Uninstall,
 
-    [string[]] $Extensions = @('.mp4', '.mkv', '.mov', '.avi', '.m4v')
+    [string[]] $Extensions = @(
+        '.mp4', '.mkv', '.mov', '.avi', '.m4v',
+        '.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp', '.tif', '.tiff'
+    )
 )
 
 $ErrorActionPreference = 'Stop'
