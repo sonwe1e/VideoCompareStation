@@ -5,6 +5,7 @@ import QtQuick.Controls
 import QtQuick.Dialogs as NativeDialogs
 import QtQuick.Window
 import "VcsTheme.js" as Theme
+import "MediaLabels.js" as MediaLabels
 
 // Dvs.Ui is registered by the C++ host before this document is loaded.
 
@@ -478,35 +479,13 @@ ApplicationWindow {
     }
 
     function fileName(fileUrl) {
-        const decodedUrl = decodeURIComponent(fileUrl.toString());
-
-        const separator = Math.max(decodedUrl.lastIndexOf("/"), decodedUrl.lastIndexOf("\\"));
-
-        return decodedUrl.substring(separator + 1);
+        return MediaLabels.fileName(MediaLabels.localPathFromUrl(fileUrl));
     }
 
     // Parent-directory label used when same-named files from different folders must stay distinct.
 
     function sourcePathLabel(fileUrl) {
-        const decodedUrl = decodeURIComponent(String(fileUrl));
-
-        let path = decodedUrl;
-
-        if (path.startsWith("file:///"))
-            path = path.substring(8);
-        else if (path.startsWith("file://"))
-            path = path.substring(7);
-
-        const separator = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-
-        if (separator < 0)
-            return "";
-
-        const rest = path.substring(0, separator);
-
-        const parentSeparator = Math.max(rest.lastIndexOf("/"), rest.lastIndexOf("\\"));
-
-        return parentSeparator >= 0 ? rest.substring(parentSeparator + 1) : rest;
+        return MediaLabels.parentFolderLabel(MediaLabels.localPathFromUrl(fileUrl));
     }
 
     function setInPoint() {

@@ -6,6 +6,7 @@ import QtQuick.Dialogs
 import QtQuick.Layouts
 import QtQuick.Window
 import "VcsTheme.js" as Theme
+import "MediaLabels.js" as MediaLabels
 
 // Still-image workspace: single-image channel inspector + two-image DiffChecker.
 Rectangle {
@@ -165,20 +166,12 @@ Rectangle {
     // File-name part of a controller path ("C:/dir/shot.png" -> "shot.png"); empty for
     // injected test images whose path label carries no separator.
     function imageFileName(pathValue) {
-        const text = String(pathValue || "");
-        const slash = Math.max(text.lastIndexOf("/"), text.lastIndexOf("\\"));
-        return slash >= 0 ? text.substring(slash + 1) : text;
+        return MediaLabels.fileName(pathValue);
     }
 
     // Parent-folder part of a controller path, used to disambiguate same-named images.
     function imageParentLabel(pathValue) {
-        const text = String(pathValue || "");
-        const slash = Math.max(text.lastIndexOf("/"), text.lastIndexOf("\\"));
-        if (slash < 0)
-            return "";
-        const parent = text.substring(0, slash);
-        const parentSlash = Math.max(parent.lastIndexOf("/"), parent.lastIndexOf("\\"));
-        return parentSlash >= 0 ? parent.substring(parentSlash + 1) : parent;
+        return MediaLabels.parentFolderLabel(pathValue);
     }
 
     // "shot.png" or "shot.png (render_v1)" when both images share the file name.
