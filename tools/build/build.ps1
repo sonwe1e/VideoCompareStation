@@ -98,8 +98,14 @@ function Get-CacheProblems {
         CMAKE_MAKE_PROGRAM = $env:NINJA_BIN
     }
     foreach ($key in $expected.Keys) {
-        if ($cache.ContainsKey($key) -and
-            [System.IO.Path]::GetFullPath($cache[$key]) -ine
+        if (-not $cache.ContainsKey($key)) { continue }
+        if ([string]::IsNullOrWhiteSpace($cache[$key])) {
+            # A configure that failed midway can leave an empty value behind; treat that
+            # cache as stale instead of crashing on GetFullPath('').
+            "$key is empty; the cache is from a failed configure."
+            continue
+        }
+        if ([System.IO.Path]::GetFullPath($cache[$key]) -ine
             [System.IO.Path]::GetFullPath($expected[$key])) {
             "$key is '$($cache[$key])'; selected '$($expected[$key])'."
         }
