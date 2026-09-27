@@ -139,12 +139,12 @@ jobs:
         with:
           arch: x64
 
-      - name: Verify unsigned 1.8.1 release scope
+      - name: Verify unsigned 1.9.0 release scope
         shell: pwsh
         run: |
-          if ($env:GITHUB_REF_NAME -cne 'v1.8.1') {
+          if ($env:GITHUB_REF_NAME -cne 'v1.9.0') {
             throw (
-              'This workflow currently publishes only the explicitly unsigned v1.8.1 build.'
+              'This workflow currently publishes only the explicitly unsigned v1.9.0 build.'
             )
           }
 
@@ -219,7 +219,7 @@ jobs:
         uses: softprops/action-gh-release@6da8fa9354ddfdc4aeace5fc48d7f679b5214090 # v2.4.1
         with:
           draft: true
-          body_path: docs/releases/v1.8.1.md
+          body_path: docs/releases/v1.9.0.md
           files: |
             out/package/zip/CompareStation-${{ needs.validate-version.outputs.version }}-windows-x64.zip
             out/package/SHA256SUMS.txt
