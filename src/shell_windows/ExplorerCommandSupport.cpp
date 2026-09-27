@@ -16,7 +16,7 @@ constexpr std::array<std::wstring_view, 5U> kSupportedVideoExtensions{
     L".m4v",
 };
 
-constexpr std::array<std::wstring_view, 8U> kSupportedImageExtensions{
+constexpr std::array<std::wstring_view, 13U> kSupportedImageExtensions{
     L".png",
     L".jpg",
     L".jpeg",
@@ -25,6 +25,11 @@ constexpr std::array<std::wstring_view, 8U> kSupportedImageExtensions{
     L".webp",
     L".tif",
     L".tiff",
+    L".pnm",
+    L".ppm",
+    L".pgm",
+    L".pbm",
+    L".pam",
 };
 
 [[nodiscard]] bool hasExtension(const std::filesystem::path& path,

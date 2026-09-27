@@ -17,6 +17,15 @@ TEST(MediaPathsTests, RecognizesStillImageExtensionsCaseInsensitively) {
     EXPECT_TRUE(isStillImagePath(LR"(C:\shots\f.webp)"));
     EXPECT_TRUE(isStillImagePath(LR"(C:\shots\g.tif)"));
     EXPECT_TRUE(isStillImagePath(LR"(C:\shots\h.tiff)"));
+    // The PNM family decodes for real, so it routes like any other still image instead of reaching
+    // the video probe on the command line.
+    EXPECT_TRUE(isStillImagePath(LR"(C:\shots\i.pnm)"));
+    EXPECT_TRUE(isStillImagePath(LR"(C:\shots\j.PPM)"));
+    EXPECT_TRUE(isStillImagePath(LR"(C:\shots\k.pgm)"));
+    EXPECT_TRUE(isStillImagePath(LR"(C:\shots\l.pbm)"));
+    EXPECT_TRUE(isStillImagePath(LR"(C:\shots\m.pam)"));
+    // The list the folder model and the review controller build their filters from is this one.
+    EXPECT_EQ(stillImageExtensions().size(), 13U);
 }
 
 TEST(MediaPathsTests, RecognizesVideoExtensionsCaseInsensitively) {

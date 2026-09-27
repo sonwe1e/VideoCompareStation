@@ -52,7 +52,7 @@ Keep outputs in `out/`.
 The ZIP is the only published package; there is no MSI to maintain. Installing means unpacking the
 ZIP, and the Explorer "Compare with CompareStation" command comes from
 `tools/shell/RegisterExplorerCommand.ps1`, which writes per-user keys under
-`HKCU\Software\Classes` and needs no administrator rights. It covers five video and eight
+`HKCU\Software\Classes` and needs no administrator rights. It covers five video and thirteen
 still-image extensions: one file opens for review, two videos or two images open as a comparison,
 and any other selection - a directory, a network path, a mixed pair, three images - keeps the
 command hidden. `-Uninstall` removes the keys again.

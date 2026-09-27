@@ -77,7 +77,7 @@ Item {
         objectName: "clipExportTargetDialog"
         title: qsTr("导出区间片段")
         fileMode: NativeDialogs.FileDialog.SaveFile
-        nameFilters: [qsTr("视频文件 (*.mp4 *.mov *.mkv)"), qsTr("所有文件 (*)")]
+        nameFilters: [qsTr("视频文件 (*.mp4 *.mkv *.mov *.avi *.m4v)"), qsTr("所有文件 (*)")]
         onAccepted: {
             const picked = selectedFile && selectedFile.toString().length > 0 ? selectedFile : currentFile;
 

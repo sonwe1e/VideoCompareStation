@@ -1,5 +1,7 @@
 #include "dvs/ui/ImageFolderPairModel.h"
 
+#include "dvs/application/MediaPaths.h"
+
 #include <QDir>
 #include <QFileInfo>
 #include <QHash>
@@ -8,28 +10,23 @@
 
 #include <algorithm>
 #include <map>
+#include <string_view>
 #include <utility>
 
 namespace dvs::ui {
 namespace {
 
+// One still-image list, owned by application::MediaPaths. This used to be a private copy, and the
+// command-line routing rule had already drifted away from it.
 const QStringList& stillImageSuffixes() {
-    static const QStringList kSuffixes = {
-        QStringLiteral("png"),
-        QStringLiteral("jpg"),
-        QStringLiteral("jpeg"),
-        QStringLiteral("bmp"),
-        QStringLiteral("gif"),
-        QStringLiteral("webp"),
-        QStringLiteral("tif"),
-        QStringLiteral("tiff"),
-        // PNM family (PBM/PGM/PPM/PAM) is a first-class input, not a decode fallback.
-        QStringLiteral("pnm"),
-        QStringLiteral("ppm"),
-        QStringLiteral("pgm"),
-        QStringLiteral("pbm"),
-        QStringLiteral("pam"),
-    };
+    static const QStringList kSuffixes = [] {
+        QStringList suffixes;
+        for (const std::wstring_view extension : application::stillImageExtensions()) {
+            suffixes.push_back(QString::fromWCharArray(
+                extension.data() + 1, static_cast<qsizetype>(extension.size() - 1)));
+        }
+        return suffixes;
+    }();
     return kSuffixes;
 }
 
