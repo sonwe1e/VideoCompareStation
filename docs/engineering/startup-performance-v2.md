@@ -151,18 +151,46 @@ pwsh tools/testing/measure-startup.ps1 -Label baseline-onefile -Rounds 5 -Warmup
 5. Step 0/1 已提交；全量 dev 套件 767/767 通过（其中 `quality.release-contract` 的存量
    版本串不同步——README 停在 1.7、vcpkg.json 停在 1.7.0——已同步到 1.9.0 修复）。
    vcpkg manifest 版本变化会在下一次 configure 时从二进制缓存重装一次依赖。
-6. **本机 MSVC 14.44 英文语言资源缺失**（工具集 bin 下只有 2052/ 中文目录，1033/ 英文目录
-   不存在）：cl 输出中文且 `VSLANG=1033` 失效；CMake 4.4.0 把 cl 的 UTF-8 中文
-   `/showIncludes` 前缀错误解码成乱码，生成的 build.ninja 不含 `deps = msvc`，
-   新编译的对象没有头文件依赖记录 → `quality.msvc_dependencies` 红灯。此前未暴露是因为
-   增量构建沿用 `.ninja_deps` 里的历史记录；任何全量重编都会复现。
-   修复需在 VS Installer 为 BuildTools 补装英文语言包。修复前：本机全量重编后的树该门禁红，
-   功能测试不受影响（Step 2 实验轮全量套件 766/767，唯一红灯即此项）。
-7. **本机 vcpkg 根（G:\Workspaces\vcpkg）无 git 库**（zip 解压版），且 G:\.git 是无效仓库：
-   任何 manifest 指纹变化触发的依赖重解析都会在版本库查找处失败。本地构建需
+6. **~~本机 MSVC 14.44 英文语言资源缺失~~ 已修复（2026-09-28）。** 原始缺陷：工具集
+   `bin/Host*/<arch>/` 下只有 `2052/`，而 `cl.exe` 只在 `1033/` 存在时才输出英文，因此
+   `VSLANG=1033` 完全失效（逐字比对过：VSLANG=1033 与 2052 的诊断文本一致）。此时 cl 经管道
+   输出**中文 GBK 字节**（注意：与"CMake 把 UTF-8 解成乱码"的说法相反——`cl.exe` 在**管道**上
+   输出的是 GBK，只有重定向到**文件**时才是 UTF-8），CMake 4.4.0 按控制台代码页解码后再以
+   UTF-8 写入 `CMakeFiles/rules.ninja` 的 `msvc_deps_prefix`，于是 Ninja 匹配不到
+   `/showIncludes` 行 → 新编译对象全部没有头文件依赖记录 → `quality.msvc_dependencies` 红灯，
+   且头文件改动不再触发重编。此前未暴露是因为增量构建沿用 `.ninja_deps` 里的历史记录；任何
+   全量重编都会复现（实测 368 个对象中 360 个 `#deps 0`）。
+   注意 **`deps = msvc` 本身始终存在**（184 条，位于 `CMakeFiles/rules.ninja`，不在
+   `build.ninja`），坏掉的只有前缀值——按"缺少 deps = msvc"排查会走错方向；也**不要**指望
+   `-Fresh` 修复它，那只会白跑一次全量重编。
+   修复方式：VS Installer 没有"MSVC 语言包"组件（`--add …LangPack.en-US` 会返回 87）
+   ——MSVC 的诊断资源是按语言拆分的独立资源包（`Microsoft.VC.<ver>.<vs>.Tools.Host*.Target*.Res.base`
+   ，如 `en-US`、`zh-CN`），每个仅约 225 KB，只含该语言的 8 个 `*ui.dll`。用
+   `tools/build/InstallMsvcEnglishResources.ps1`（需管理员）从 installer 自身缓存的频道清单
+   取这 4 个 en-US 包、校验 SHA256 后解压到工具集。
+   修复后实测：`msvc_deps_prefix` 与 cl 实际输出（`Note: including file: `）逐字节一致；
+   全量重编后 368 个对象中 362 个有健康记录（其余 6 个为门禁不检查的构建期工具）；
+   5 个门禁对象 `#deps` 分别为 7/31/191/170/343；`quality.msvc_dependencies` 与
+   `quality.msvc_dependency_contracts` 通过；改动一个 domain 头文件触发 124 步重编、30.5 秒
+   （修复前会静默不重编）。`build.ps1 -Doctor` 与每次构建开头的环境自检会持续守卫该契约：
+   逐字节比对 cl 实际输出与生成规则，不合即报错并给出修复指令。
+7. **本机 vcpkg 根（G:\Workspaces\vcpkg）无 git 库**（zip 解压版），且 `G:\.git` 是无效仓库：
+   builtin registry 通过 git 读取端口与 baseline，因此任何 manifest 指纹变化触发的依赖重解析
+   都会失败（实测报错为 `--git-dir "G:\.git" read-tree … failed` 与
+   `failed to git show versions/baseline.json`）。本地构建需
    `build.ps1 -UseInstalledDependencies`（`VCPKG_MANIFEST_INSTALL=OFF`，直接用已装好的
-   out/vcpkg 树）；2.0.0 版本提升时的本地构建同样如此。
-8. **本地 cpack 产物含 25 MB 的 vc_redist.x64.exe**（`InstallRequiredSystemLibraries` 路径），
-   本地当前管线输出的 ZIP 为 59.77 MiB / 解压 110.48 MiB / 274 文件，与 v1.9.0 基线
-   （26.63 MiB / 66.4 MiB / 310 文件）明显不符。Step 8 发布前必须查清差异来源
-   （疑似 CMake 版本行为差异），否则体积维度的前后对照无法对齐。
+   out/vcpkg 树，实测 12.48 GB / 157 个包，依赖齐全）；2.0.0 版本提升时的本地构建同样如此。
+8. **cpack 体积差异已查清，不是管线问题，也不需要修复。** `cmake/Install.cmake` 的
+   `InstallRequiredSystemLibraries` 只安装 CRT/UCRT DLL，CMake 4.4.0 的该模块全文不含任何
+   `.exe` 安装路径；`out/build/release/cmake_install.cmake` 中 `vc_redist` 出现 0 次，仓库
+   代码也从不引用它。59.77 MiB 那个包（`out/packages/CompareStation-1.9.0-pre-step2.zip`）
+   多出的 24.45 MB `vc_redist.x64.exe` 是**从别处手工拷入 staging 的一次性产物**（同一字节数的
+   副本还留在 `out/package/zip/VCStation-1.6.0-windows-x64/` 与 `out/migration/…`）；
+   它同时还多了 `dxcompiler.dll`(14.3 MB) 与 `d3dcompiler_47.dll`(4.7 MB)，故
+   59.77 − 24.45 = 35.3 而非 26.63。正常 `-Preset release` + `cpack --preset release-zip`
+   产出的 26.63 MiB 才是基线。原第 8 条"疑似 CMake 版本行为差异"的结论作废。
+   **实测复核（2026-09-28）**：干净跑
+   `build.ps1 -Preset release -UseInstalledDependencies` 后 `cpack --preset release-zip`，
+   产出 `out/package/zip/CompareStation-1.9.0-windows-x64.zip` =
+   **26.63 MiB / 310 条目 / 解压 66.42 MiB / 无 vc_redist**，与基线逐项吻合
+   （27919730 vs 27923994 bytes，差 0.004 MiB 属正常构建抖动）。体积维度可直接用于前后对照。

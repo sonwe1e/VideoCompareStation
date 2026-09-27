@@ -102,19 +102,42 @@ function Get-CacheProblems {
         if ([string]::IsNullOrWhiteSpace($cache[$key])) {
             # A configure that failed midway can leave an empty value behind; treat that
             # cache as stale instead of crashing on GetFullPath('').
-            "$key is empty; the cache is from a failed configure."
+            [pscustomobject]@{ Kind = 'stale'; Message = "$key is empty; the cache is from a failed configure." }
             continue
         }
         if ([System.IO.Path]::GetFullPath($cache[$key]) -ine
             [System.IO.Path]::GetFullPath($expected[$key])) {
-            "$key is '$($cache[$key])'; selected '$($expected[$key])'."
+            if ($key -eq 'CMAKE_TOOLCHAIN_FILE') {
+                $cachedRoot = Get-VcpkgRootFromToolchain $cache[$key]
+                if (Test-VcpkgCmakeEquivalent $cachedRoot $env:VCPKG_ROOT) { continue }
+                if ($cachedRoot -and
+                    (Test-Path -LiteralPath (Join-Path $cachedRoot 'scripts/buildsystems/vcpkg.cmake') -PathType Leaf) -and
+                    (-not (Test-Path -LiteralPath (Join-Path $cachedRoot 'versions/baseline.json') -PathType Leaf))) {
+                    # A different toolchain path is not stale-cache evidence when the cached
+                    # vcpkg cannot resolve versions at all: the cache stays usable as long as
+                    # dependency installation is off, which is not what -Fresh changes.
+                    [pscustomobject]@{
+                        Kind = 'incomplete-vcpkg'
+                        Message = ("CMAKE_TOOLCHAIN_FILE uses '$cachedRoot', which ships no" +
+                            ' versions/baseline.json and therefore cannot resolve the manifest.')
+                    }
+                    continue
+                }
+            }
+            [pscustomobject]@{
+                Kind = 'stale'
+                Message = "$key is '$($cache[$key])'; selected '$($expected[$key])'."
+            }
         }
     }
     foreach ($key in @('CMAKE_CXX_COMPILER', 'CMAKE_AR', 'CLANG_FORMAT_EXECUTABLE',
             'CLANG_TIDY_EXECUTABLE', 'QMLFORMAT_EXECUTABLE', 'QMLLINT_EXECUTABLE')) {
         if ($cache.ContainsKey($key) -and
             -not (Test-Path -LiteralPath $cache[$key] -PathType Leaf)) {
-            "$key points to an unavailable tool: '$($cache[$key])'."
+            [pscustomobject]@{
+                Kind = 'stale'
+                Message = "$key points to an unavailable tool: '$($cache[$key])'."
+            }
         }
     }
 }
@@ -127,6 +150,25 @@ function Test-HeaderDependencies {
             "-DDVS_NINJA_EXECUTABLE=$env:NINJA_BIN", '-P',
             (Join-Path $repoRoot 'cmake/CheckMsvcDependencies.cmake'))
     }
+}
+
+function Assert-BuildEnvironment {
+    # Turns environment defects that used to surface as a red quality gate, a deep vcpkg error,
+    # or an avoidable full rebuild into one explicit verdict with the exact remedy. Checks are
+    # read-only, so this runs before the lock is meaningful and before anything is written.
+    param([bool]$FatalErrors)
+    $findings = @(Invoke-BuildEnvironmentChecks $binaryDir)
+    Show-BuildEnvironmentFindings $findings
+    $errors = @($findings | Where-Object { $_.Level -eq 'error' })
+    if ($errors.Count -eq 0) { return }
+    $separator = [Environment]::NewLine
+    $detail = (($errors | ForEach-Object { $_.Message }) -join $separator) + $separator +
+        (($errors | Where-Object { $_.Fix } | ForEach-Object { $_.Fix } |
+            Select-Object -Unique | ForEach-Object { "Fix: $_" }) -join $separator)
+    if ($FatalErrors) {
+        throw "The build environment cannot produce correct incremental builds.$separator$detail"
+    }
+    Write-Warning "The build environment has problems that affect incremental builds.$separator$detail"
 }
 
 $buildLock = $null
@@ -145,16 +187,36 @@ try {
     Import-VcEnvironment
     $cacheProblems = @(Get-CacheProblems)
     if ($cacheProblems.Count -gt 0) {
-        $diagnostic = ($cacheProblems -join [Environment]::NewLine) +
-            [Environment]::NewLine +
-            "Run build.ps1 -Preset $Preset -Fresh to reconfigure and rebuild generated outputs."
-        if (-not $Fresh -or $Doctor) { throw $diagnostic }
+        $separator = [Environment]::NewLine
+        $staleProblems = @($cacheProblems | Where-Object { $_.Kind -eq 'stale' })
+        # A cached vcpkg root that cannot resolve versions is a capability problem, not a
+        # stale cache: dependency installation has to stay off, which -Fresh does not do.
+        $incompleteProblems = @($cacheProblems | Where-Object { $_.Kind -eq 'incomplete-vcpkg' })
+        $messages = @($cacheProblems | ForEach-Object { $_.Message })
+        if ($staleProblems.Count -gt 0) {
+            $messages += "Run build.ps1 -Preset $Preset -Fresh to reconfigure and rebuild generated outputs."
+        }
+        if ($incompleteProblems.Count -gt 0) {
+            $messages += ("Reconfigure with -Preset $Preset -UseInstalledDependencies so the existing" +
+                ' out/vcpkg install tree is reused instead of resolving the manifest.')
+            $messages += ("The resolved vcpkg root '$env:VCPKG_ROOT' has no .git either, so manifest" +
+                ' resolution is unavailable on this machine and dependency installation stays off.')
+        }
+        $diagnostic = $messages -join $separator
+        $blocked = ($staleProblems.Count -gt 0) -or
+            ($incompleteProblems.Count -gt 0 -and -not $UseInstalledDependencies)
+        if ($blocked -and (-not $Fresh -or $Doctor -or
+                ($incompleteProblems.Count -gt 0 -and $staleProblems.Count -eq 0))) {
+            throw $diagnostic
+        }
         Write-Warning $diagnostic
     }
     if ($Doctor) {
         Invoke-BuildTool $env:CMAKE_EXECUTABLE @('--version')
         Invoke-BuildTool $env:CTEST_EXECUTABLE @('--version')
         Invoke-BuildTool $env:NINJA_BIN @('--version')
+        # A broken environment is what -Doctor exists to find, so it fails here.
+        Assert-BuildEnvironment -FatalErrors $true
         Test-HeaderDependencies
         Write-Host "Build environment OK: preset=$Preset; repository=$repoRoot"
         return
@@ -162,6 +224,10 @@ try {
     if ($TestOnly -and -not (Test-Path -LiteralPath $cacheFile)) {
         throw 'No configured build exists. Run with -Test to build before testing.'
     }
+    # Outside -Doctor the findings are advisory: the build and the post-build header
+    # dependency gate remain the authority, and failing early would misreport a recoverable
+    # machine state as a source problem.
+    Assert-BuildEnvironment -FatalErrors $false
     if (-not $Fresh) { Test-HeaderDependencies }
     if (-not $TestOnly) {
         if ($Fresh -or $Configure -or $UseInstalledDependencies -or -not (Test-Path -LiteralPath $cacheFile)) {
