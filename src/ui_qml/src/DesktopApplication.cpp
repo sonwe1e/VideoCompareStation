@@ -16,6 +16,7 @@
 #include "dvs/ui/ReviewPreferencesController.h"
 #include "dvs/ui/ReviewSessionFacade.h"
 #include "dvs/ui/ReviewShellController.h"
+#include "dvs/ui/StartupMilestone.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -106,6 +107,7 @@ public:
         if (engine_ || !bindSurface) {
             return false;
         }
+        markStartupMilestone("load-enter");
 
         qmlWarnings_.clear();
         auto engine = std::make_unique<QQmlApplicationEngine>();
@@ -225,7 +227,9 @@ public:
             [this](const QList<QQmlError>& warnings) {
                 qmlWarnings_.insert(qmlWarnings_.end(), warnings.cbegin(), warnings.cend());
             });
+        markStartupMilestone("context-ready");
         engine->load(QUrl{QStringLiteral("qrc:/qml/Main.qml")});
+        markStartupMilestone("qml-loaded");
         static_cast<void>(QObject::disconnect(warningConnection));
         if (engine->rootObjects().size() != 1) {
             reportWarnings(qmlWarnings_);
@@ -241,6 +245,22 @@ public:
             reportWarnings(qmlWarnings_);
             return false;
         }
+        markStartupMilestone("surface-bound");
+        // Fires on the render thread while show() may still be blocking the GUI thread;
+        // DirectConnection keeps the mark at the true signal time instead of queueing it
+        // into the event loop that has not started yet.
+        auto sceneGraphInitializedMarked = std::make_shared<bool>(false);
+        QObject::connect(
+            window,
+            &QQuickWindow::sceneGraphInitialized,
+            window,
+            [sceneGraphInitializedMarked] {
+                if (!*sceneGraphInitializedMarked) {
+                    *sceneGraphInitializedMarked = true;
+                    markStartupMilestone("sg-initialized");
+                }
+            },
+            Qt::DirectConnection);
 
         QQuickGraphicsConfiguration configuration;
         configuration.setPreferSoftwareDevice(options_.preferSoftwareDevice);
@@ -280,7 +300,9 @@ public:
             QObject::connect(window, &QObject::destroyed, [this] { window_ = nullptr; });
         surfaceDestroyedConnection_ =
             QObject::connect(surface, &QObject::destroyed, [this] { surface_ = nullptr; });
+        markStartupMilestone("show-enter");
         window_->show();
+        markStartupMilestone("post-show");
         window_->raise();
         window_->requestActivate();
         window_->requestUpdate();
@@ -288,6 +310,7 @@ public:
         if (window_->screen() != nullptr) {
             activeScreenRefreshRate_ = window_->screen()->refreshRate();
         }
+        markStartupMilestone("window-shown");
         return true;
     }
 

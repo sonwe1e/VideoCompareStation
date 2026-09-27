@@ -61,6 +61,7 @@ if(DVS_BUILD_ADAPTERS)
             include/dvs/ui/Module.h
             include/dvs/ui/RenderAckRelay.h
             include/dvs/ui/ReviewImageProvider.h
+            include/dvs/ui/StartupMilestone.h
             include/dvs/ui/StillImageDecoder.h
             src/ComparisonExportController.cpp
             src/DesktopApplication.cpp
@@ -75,6 +76,7 @@ if(DVS_BUILD_ADAPTERS)
             src/Module.cpp
             src/RenderAckRelay.cpp
             src/ReviewImageProvider.cpp
+            src/StartupMilestone.cpp
             src/StillImageDecoder.cpp
     )
     add_library(dvs::ui_d3d11_bridge ALIAS dvs_ui_d3d11_bridge)

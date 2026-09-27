@@ -16,6 +16,7 @@
 #include "dvs/ui/ReviewController.h"
 #include "dvs/ui/ReviewPreferencesController.h"
 #include "dvs/ui/SourceListModel.h"
+#include "dvs/ui/StartupMilestone.h"
 
 #include "PlaybackTraceEnvironment.h"
 #include "ReviewRuntime.h"
@@ -381,7 +382,9 @@ runDesktop(int& argc,
            const std::optional<SmokeSources>& smokeSources = std::nullopt,
            const bool shutdownDuringOpen = false,
            const std::optional<std::filesystem::path>& stillImage = std::nullopt) {
+    dvs::ui::markStartupMilestone("runDesktop-enter");
     dvs::ui::configureGraphicsBackend();
+    dvs::ui::markStartupMilestone("graphics-backend");
     if (stillImage.has_value()) {
         std::ofstream early{
             std::filesystem::path{std::filesystem::temp_directory_path() / "dvs_still_open.log"}};
@@ -395,6 +398,7 @@ runDesktop(int& argc,
             .preferSoftwareDevice = smokeMode,
         },
     };
+    dvs::ui::markStartupMilestone("qguiapplication");
     std::unique_ptr<dvs::app::StartupRequestBroker> startupBroker;
     dvs::app::StartupRequest startupRequest;
     if (!smokeMode && !stillImage.has_value()) {
@@ -414,7 +418,9 @@ runDesktop(int& argc,
                 "The CompareStation startup request broker could not be initialized.", false);
         }
     }
+    dvs::ui::markStartupMilestone("broker");
     std::unique_ptr<dvs::app::ReviewRuntime> runtime = dvs::app::ReviewRuntime::create();
+    dvs::ui::markStartupMilestone("runtime-create");
     if (!runtime || runtime->controller() == nullptr || runtime->preferences() == nullptr) {
         std::cerr << "DVS_UI_LOAD_FAILED\n";
         return dvs::app::reportFatalStartup("DVS_UI_LOAD_FAILED", smokeMode);
@@ -442,6 +448,7 @@ runDesktop(int& argc,
         }
         return dvs::app::reportFatalStartup("DVS_UI_LOAD_FAILED", smokeMode);
     }
+    dvs::ui::markStartupMilestone("qml-load-returned");
     if (!smokeMode && !stillImage.has_value() && !applyStartupRequest(startupRequest, desktop)) {
         runtime->prepareForSceneGraphRelease();
         desktop.releaseSceneGraph();
@@ -451,6 +458,9 @@ runDesktop(int& argc,
         }
         return dvs::app::reportFatalStartup("The requested startup action could not be opened.",
                                             false);
+    }
+    if (!smokeMode && !stillImage.has_value()) {
+        dvs::ui::markStartupMilestone("startup-request");
     }
     if (stillImage.has_value()) {
         std::ofstream log{
@@ -801,6 +811,7 @@ runDesktop(int& argc,
     // Default-off Phase 0 trace. The sink is drained by the background runtime shutdown work.
     installPlaybackTrace(*runtime);
 
+    dvs::ui::markStartupMilestone("exec");
     int result = desktop.exec();
     smokePoll.stop();
     smokeTimeout.stop();
