@@ -125,4 +125,6 @@ pwsh tools/testing/measure-startup.ps1 -Label baseline-onefile -Rounds 5 -Warmup
 2. **首帧层未接入**：带文件"到首帧"需 playback trace kind 0/4/8，Step 5 动手前补齐。
 3. P95 = 5 轮最大值，样本小；结论以中位数为主。
 4. dev 构建数据只用于机制验证（QML 段 1570 ms），不进基线表。
-5. Step 0/1 改动尚未提交；全量测试套件结果见提交说明。
+5. Step 0/1 已提交；全量 dev 套件 767/767 通过（其中 `quality.release-contract` 的存量
+   版本串不同步——README 停在 1.7、vcpkg.json 停在 1.7.0——已同步到 1.9.0 修复）。
+   vcpkg manifest 版本变化会在下一次 configure 时从二进制缓存重装一次依赖。
