@@ -99,18 +99,6 @@ Rectangle {
         return slot >= 0 && slot < control.sourceFullPaths.length ? String(control.sourceFullPaths[slot]) : "";
     }
 
-    function comparisonExactnessLabel(exactness) {
-        if (exactness === 0)
-            return qsTr("数值审查路径：逐像素精确");
-        if (exactness === 1)
-            return qsTr("观看路径：已做显示空间转换");
-        if (exactness === 2)
-            return qsTr("空间对应不一致");
-        if (exactness === 3)
-            return qsTr("帧映射或时间戳不同");
-        return qsTr("不可用");
-    }
-
     // T6: every applicable inexactness dimension is named side by side. The single
     // exactness enum can only report the highest-priority reason, so a pair that is
     // temporally aligned, spatially resampled and display-space converted at once

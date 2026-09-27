@@ -10,8 +10,6 @@
         <file alias="ReviewActions.qml">qml/ReviewActions.qml</file>
         <file alias="ReviewInputDialogs.qml">qml/ReviewInputDialogs.qml</file>
         <file alias="ReviewShortcuts.qml">qml/ReviewShortcuts.qml</file>
-        <file alias="ComparisonToolbar.qml">qml/ComparisonToolbar.qml</file>
-        <file alias="TimelineBar.qml">qml/TimelineBar.qml</file>
         <file alias="ComparisonViewport.qml">qml/ComparisonViewport.qml</file>
         <file alias="VcsMenuBar.qml">qml/VcsMenuBar.qml</file>
         <file alias="VcsMenu.qml">qml/VcsMenu.qml</file>

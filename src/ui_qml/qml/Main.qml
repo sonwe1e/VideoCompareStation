@@ -53,7 +53,6 @@ ApplicationWindow {
 
     readonly property var facade: reviewFacade
     readonly property var controller: facade ? facade.playback : null
-    readonly property var playbackVm: facade ? facade.playbackView : null
     readonly property var preferences: facade ? facade.comparison : null
     readonly property var shell: facade ? facade.shell : null
 
@@ -133,13 +132,11 @@ ApplicationWindow {
     property bool pendingNewReviewWantsThreeUp: false
     property string dropError: ""
     property string intentMessage: ""
-    readonly property var pendingDestructiveAction: shell && shell.hasPendingAction ? shell.pendingAction : null
     readonly property int inFrame: shell ? Number(shell.inFrame) : -1
     readonly property int outFrame: shell ? Number(shell.outFrame) : -1
     readonly property real inMediaTime: shell ? Number(shell.inMediaTime) : -1
     readonly property real outMediaTime: shell ? Number(shell.outMediaTime) : -1
     readonly property bool rangePlaybackActive: Boolean(controller && controller.playbackRangeLoopActive) || Boolean(shell && shell.rangePlaybackActive && controller && controller.playbackRangeLoop)
-    readonly property bool rangeStartPending: Boolean(shell && shell.rangeStartPending)
     // Lossless range-clip export gates. The QML range state participates because the controller
     // only notifies on its own busy/status changes: a range marked after load would otherwise
     // leave a stale binding behind.
@@ -152,7 +149,6 @@ ApplicationWindow {
             return false;
         return Boolean(root.clipExportService.canExport);
     }
-    property bool shortcutHelpVisible: false
     readonly property int shortcutPreset: preferences ? Number(preferences.shortcutPreset) : 0
     readonly property bool dropFrameTimecode: Boolean(preferences && preferences.dropFrameTimecode)
     property int changedOnDiskAnnouncedGeneration: -1
@@ -234,7 +230,6 @@ ApplicationWindow {
     readonly property int oscState: sourceCount === 0 ? 2 : (!chromeVisible ? (immersiveOscRevealed ? 1 : 2) : (preferredOscState >= 0 ? preferredOscState : (singleMode ? 1 : 0)))
     readonly property bool transportHidden: oscState === 2
     readonly property bool transportDocked: !transportHidden && oscState === 0
-    readonly property bool transportOverlay: !transportHidden && oscState === 1
     readonly property int transportDockHeight: transportDocked ? transport.height + 8 : 0
     readonly property string pairErrorKey: controller ? controller.pairErrorKey : ""
     readonly property string frameMappingStatus: controller ? controller.frameMappingStatus : ""
@@ -245,7 +240,6 @@ ApplicationWindow {
     readonly property string manualAnchorStatus: controller ? controller.manualAnchorStatus : ""
     readonly property var alignmentTimelineMarkers: controller ? controller.alignmentTimelineMarkers : []
     readonly property bool manualAnchorActive: Boolean(controller && controller.manualAnchorActive)
-    readonly property bool alignmentRequired: Boolean(controller && controller.alignmentRequired)
     readonly property bool automaticAlignmentPending: Boolean(controller && controller.automaticAlignmentPending)
     readonly property bool canConfirmAutomaticAlignment: Boolean(controller && controller.canConfirmAutomaticAlignment)
     readonly property bool canUndoAutomaticAlignment: Boolean(controller && controller.canUndoAutomaticAlignment)
@@ -288,55 +282,9 @@ ApplicationWindow {
     // qmllint disable unqualified
 
     readonly property int effectiveViewMode: shell ? Number(shell.effectiveViewMode) : (singleMode ? ComparisonSurface.Single : ComparisonSurface.SideBySide)
-    readonly property var availableViewModes: sourceCount <= 1 ? [
-        {
-            "label": qsTr("单画面"),
-            "value": ComparisonSurface.Single
-        }
-    ] : sourceCount === 2 ? [
-        {
-            "label": qsTr("并排"),
-            "value": ComparisonSurface.SideBySide
-        },
-        {
-            "label": qsTr("分割线对比"),
-            "value": ComparisonSurface.Wipe
-        },
-        {
-            "label": qsTr("差异"),
-            "value": ComparisonSurface.Difference
-        }
-    ] : [
-        {
-            "label": qsTr("并排"),
-            "value": ComparisonSurface.SideBySide
-        },
-        {
-            "label": qsTr("三联"),
-            "value": ComparisonSurface.ThreeUp
-        },
-        {
-            "label": qsTr("参考聚焦"),
-            "value": ComparisonSurface.ReferenceFocus
-        },
-        {
-            "label": qsTr("差异"),
-            "value": ComparisonSurface.Difference
-        },
-        {
-            "label": qsTr("分析网格"),
-            "value": ComparisonSurface.AnalysisGrid
-        },
-        {
-            "label": qsTr("分割线对比"),
-            "value": ComparisonSurface.Wipe
-        }
-    ]
     readonly property bool analysisGridMode: effectiveViewMode === ComparisonSurface.AnalysisGrid
     readonly property bool differenceMode: effectiveViewMode === ComparisonSurface.Difference || analysisGridMode
     readonly property bool wipeMode: effectiveViewMode === ComparisonSurface.Wipe
-    readonly property bool sideBySideMode: effectiveViewMode === ComparisonSurface.SideBySide
-    readonly property bool threeUpMode: effectiveViewMode === ComparisonSurface.ThreeUp
     readonly property int threeUpViewMode: ComparisonSurface.ThreeUp
 
     // qmllint enable unqualified
@@ -401,9 +349,6 @@ ApplicationWindow {
     // relay has actually observed a gap.
 
     readonly property int droppedFrames: viewportFrame ? Number(viewportFrame.droppedFrames) : 0
-    readonly property string droppedFramesText: droppedFrames > 0 ? qsTr("呈现间隙 %1").arg(droppedFrames) : ""
-    readonly property string playbackContinuityPolicyName: controller ? String(controller.playbackContinuityPolicyName || "") : ""
-    readonly property int playbackSkippedFrameSets: controller ? Number(controller.playbackSkippedFrameSets || 0) : 0
     readonly property int playbackRunSkippedFrameSets: controller ? Number(controller.playbackRunSkippedFrameSets || 0) : 0
     readonly property real playbackTargetRate: controller ? Number(controller.playbackTargetRate || 1) : 1
     readonly property real playbackPresentationRate: controller ? Number(controller.playbackPresentationRate || 0) : 0
@@ -821,11 +766,6 @@ ApplicationWindow {
 
         if (action.kind === "exit")
             close();
-    }
-
-    function cancelPendingDestructiveAction() {
-        if (shell)
-            shell.cancelPendingAction();
     }
 
     // Focus follows the active workspace so the visible focus ring and the key receiving
@@ -1760,13 +1700,6 @@ ApplicationWindow {
         return ok;
     }
 
-    function changeReferenceAtIndex(index) {
-        if (!shell || index < 0 || index >= shell.activeSourceIdentities.length)
-            return false;
-
-        return changeReference(String(shell.activeSourceIdentities[index]));
-    }
-
     function showImmersiveHud(message) {
         immersiveHudText = message;
 
@@ -1970,43 +1903,6 @@ ApplicationWindow {
             next[sourceId] = 0;
 
         sourceOffsetValues = next;
-    }
-
-    function resetCanonicalSourceOffset() {
-        const canonicalSourceId = canonicalSourceIndex >= 0 ? canonicalSourceIndex : 0;
-
-        updateSourceOffset(canonicalSourceId, 0);
-    }
-
-    function frameAtTimelinePosition(position) {
-        if (totalFrames <= 1)
-            return 0;
-
-        const normalized = Math.max(0, Math.min(1, position));
-
-        return Math.round(normalized * (Number(totalFrames) - 1));
-    }
-
-    function alignmentMarkerColor(kind) {
-        if (kind === "missing")
-            return "#f87171";
-
-        if (kind === "duplicate")
-            return "#fb923c";
-
-        if (kind === "extra")
-            return "#c084fc";
-
-        if (kind === "anchor")
-            return "#22d3ee";
-
-        if (kind === "rejected-segment")
-            return "#dc2626";
-
-        if (kind === "review-segment")
-            return "#facc15";
-
-        return "#facc15";
     }
 
     function focusBlocksGlobalMediaShortcuts(item) {
