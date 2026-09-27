@@ -43,6 +43,20 @@ TEST(ExplorerCommandSupportTests, AcceptsSupportedVideoExtensionsCaseInsensitive
     EXPECT_FALSE(hasSupportedVideoExtension(L"C:\\clips\\review.txt"));
 }
 
+TEST(ExplorerCommandSupportTests, AcceptsSupportedImageExtensionsCaseInsensitively) {
+    EXPECT_TRUE(hasSupportedImageExtension(LR"(C:\shots\review.PNG)"));
+    EXPECT_TRUE(hasSupportedImageExtension(LR"(C:\shots\review.JpEg)"));
+    EXPECT_TRUE(hasSupportedImageExtension(LR"(C:\shots\review.tiff)"));
+    // The PNM family decodes for real, so it offers the command like any other still image.
+    EXPECT_TRUE(hasSupportedImageExtension(LR"(C:\shots\review.ppm)"));
+    EXPECT_TRUE(hasSupportedImageExtension(LR"(C:\shots\review.PAM)"));
+    EXPECT_TRUE(isSupportedMediaExtension(LR"(C:\shots\review.webp)"));
+    EXPECT_TRUE(isSupportedMediaExtension(LR"(C:\clips\review.mp4)"));
+    EXPECT_FALSE(hasSupportedImageExtension(LR"(C:\shots\review.mp4)"));
+    EXPECT_FALSE(hasSupportedVideoExtension(LR"(C:\shots\review.png)"));
+    EXPECT_FALSE(isSupportedMediaExtension(LR"(C:\shots\review.txt)"));
+}
+
 TEST(ExplorerCommandSupportTests, BuildsUnicodeReviewCommandWithWindowsRoundTripQuoting) {
     const std::filesystem::path executable =
         LR"(C:\Program Files\CompareStation\CompareStation.exe)";
@@ -75,17 +89,6 @@ TEST(ExplorerCommandSupportTests, AcceptsOneToThreeSourcesAndRejectsOtherCounts)
     EXPECT_TRUE(
         buildReviewCommandLine(executable, std::span<const std::filesystem::path>{}).empty());
     EXPECT_TRUE(buildReviewCommandLine(executable, fourSources).empty());
-}
-
-TEST(ExplorerCommandSupportTests, AcceptsSupportedImageExtensionsCaseInsensitively) {
-    EXPECT_TRUE(hasSupportedImageExtension(LR"(C:\shots\review.PNG)"));
-    EXPECT_TRUE(hasSupportedImageExtension(LR"(C:\shots\review.JpEg)"));
-    EXPECT_TRUE(hasSupportedImageExtension(LR"(C:\shots\review.tiff)"));
-    EXPECT_TRUE(isSupportedMediaExtension(LR"(C:\shots\review.webp)"));
-    EXPECT_TRUE(isSupportedMediaExtension(LR"(C:\clips\review.mp4)"));
-    EXPECT_FALSE(hasSupportedImageExtension(LR"(C:\shots\review.mp4)"));
-    EXPECT_FALSE(hasSupportedVideoExtension(LR"(C:\shots\review.png)"));
-    EXPECT_FALSE(isSupportedMediaExtension(LR"(C:\shots\review.txt)"));
 }
 
 TEST(ExplorerCommandSupportTests, ClassifiesTheSelectionsTheCommandCanServe) {

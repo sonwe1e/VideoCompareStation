@@ -13,9 +13,10 @@ CompareStation — 免安装使用说明
        pwsh -NoProfile -File .\RegisterExplorerCommand.ps1 -InstallRoot .
 
    它会为当前用户注册右键命令，写入 HKCU\Software\Classes，不需要管理员权限。覆盖 5 种
-   视频（.mp4 .mkv .mov .avi .m4v）与 8 种图片（.png .jpg .jpeg .bmp .gif .webp .tif
-   .tiff）：选中一个文件就打开它，选中两个视频或两张图片直接进入对比。选中目录、网络
-   路径、图片与视频混选、三张以上图片或超过三个文件时，该项自动隐藏。
+   视频（.mp4 .mkv .mov .avi .m4v）与 13 种图片（.png .jpg .jpeg .bmp .gif .webp .tif
+   .tiff .pnm .ppm .pgm .pbm .pam）：选中一个文件就打开它，选中两个视频或两张图片直接
+   进入对比。选中目录、网络路径、图片与视频混选、三张以上图片或超过三个文件时，该项
+   自动隐藏。
 
    取消注册：
 

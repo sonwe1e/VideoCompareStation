@@ -10,7 +10,10 @@
 namespace dvs::application {
 namespace {
 
-constexpr std::array<std::wstring_view, 8U> kStillImageExtensions{
+// PNM (PBM/PGM/PPM/PAM) is a first-class decoded input, not a fallback, so it belongs in the
+// routing list as much as in the folder scan: a .ppm handed to the command line used to reach the
+// video probe while the same file dropped on the window opened as an image.
+constexpr std::array<std::wstring_view, 13U> kStillImageExtensions{
     L".png",
     L".jpg",
     L".jpeg",
@@ -19,6 +22,11 @@ constexpr std::array<std::wstring_view, 8U> kStillImageExtensions{
     L".webp",
     L".tif",
     L".tiff",
+    L".pnm",
+    L".ppm",
+    L".pgm",
+    L".pbm",
+    L".pam",
 };
 
 constexpr std::array<std::wstring_view, 5U> kVideoExtensions{
@@ -39,6 +47,10 @@ constexpr std::array<std::wstring_view, 5U> kVideoExtensions{
 }
 
 } // namespace
+
+std::span<const std::wstring_view> stillImageExtensions() {
+    return kStillImageExtensions;
+}
 
 bool isStillImagePath(const std::filesystem::path& path) {
     return hasExtension(path, kStillImageExtensions);

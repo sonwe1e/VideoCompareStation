@@ -26,7 +26,7 @@ Removes the keys this script writes, so the command disappears for the current u
 
 .PARAMETER Extensions
 Extensions that get the command. The default is the set the shipped handler accepts - five video
-and eight still-image extensions; keep it in sync with kSupportedVideoExtensions and
+and thirteen still-image extensions; keep it in sync with kSupportedVideoExtensions and
 kSupportedImageExtensions in src/shell_windows/ExplorerCommandSupport.cpp.
 
 .EXAMPLE
@@ -43,7 +43,8 @@ param(
 
     [string[]] $Extensions = @(
         '.mp4', '.mkv', '.mov', '.avi', '.m4v',
-        '.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp', '.tif', '.tiff'
+        '.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp', '.tif', '.tiff',
+        '.pnm', '.ppm', '.pgm', '.pbm', '.pam'
     )
 )
 

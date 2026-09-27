@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <span>
+#include <string_view>
 
 namespace dvs::application {
 
@@ -9,8 +10,12 @@ namespace dvs::application {
 // three files on its command line, and a still image has to reach the image workspace instead of
 // the video session runner, which would hand it to FFmpeg and fail.
 //
-// The Explorer command extension keeps its own copy of these sets because it is a leaf COM server
-// with no link to this module; keep it and tools/shell/RegisterExplorerCommand.ps1 in sync.
+// This is the application's one still-image list: the folder model and the review controller used
+// to carry private copies that had already drifted from the routing rule. The Explorer command
+// extension keeps its own copy because it is a leaf COM server with no link to this module; keep it
+// and tools/shell/RegisterExplorerCommand.ps1 in sync with stillImageExtensions().
+[[nodiscard]] std::span<const std::wstring_view> stillImageExtensions();
+
 [[nodiscard]] bool isStillImagePath(const std::filesystem::path& path);
 
 [[nodiscard]] bool isVideoPath(const std::filesystem::path& path);

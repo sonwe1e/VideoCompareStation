@@ -1,6 +1,7 @@
 #include "dvs/ui/ReviewController.h"
 
 #include "dvs/application/ComparisonExactness.h"
+#include "dvs/application/MediaPaths.h"
 #include "dvs/domain/ComparisonSelection.h"
 #include "dvs/domain/PlaybackContinuityPolicy.h"
 #include "dvs/ui/SourceIdentity.h"
@@ -312,23 +313,9 @@ struct LocalFileValidation final {
 }
 
 [[nodiscard]] bool isStillImageFile(const QUrl& url) {
-    const QString suffix = QFileInfo{url.toLocalFile()}.suffix().toLower();
-    static const QStringList kImageSuffixes = {
-        QStringLiteral("png"),
-        QStringLiteral("jpg"),
-        QStringLiteral("jpeg"),
-        QStringLiteral("bmp"),
-        QStringLiteral("gif"),
-        QStringLiteral("webp"),
-        QStringLiteral("tif"),
-        QStringLiteral("tiff"),
-        QStringLiteral("pnm"),
-        QStringLiteral("ppm"),
-        QStringLiteral("pgm"),
-        QStringLiteral("pbm"),
-        QStringLiteral("pam"),
-    };
-    return kImageSuffixes.contains(suffix);
+    // One still-image list, owned by application::MediaPaths; the folder scan, the dialogs and the
+    // command-line routing rule all answer this question the same way now.
+    return application::isStillImagePath(std::filesystem::path{url.toLocalFile().toStdWString()});
 }
 
 [[nodiscard]] QVariantMap rejectedDrop(const QString& errorKey, const QString& detail = {}) {
