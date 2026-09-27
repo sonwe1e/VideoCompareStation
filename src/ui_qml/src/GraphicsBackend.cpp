@@ -65,11 +65,10 @@ void configureGraphicsBackend() noexcept {
         static_cast<void>(qputenv("QT_QPA_UPDATE_IDLE_TIME", QByteArrayLiteral("0")));
     }
     // Main.qml customizes control backgrounds. The Windows native style rejects those
-    // customizations and retries style images on every rendered frame, so use the lightweight
-    // deployed Basic style unless the caller explicitly selected another one.
-    if (!qEnvironmentVariableIsSet("QT_QUICK_CONTROLS_STYLE")) {
-        static_cast<void>(qputenv("QT_QUICK_CONTROLS_STYLE", QByteArrayLiteral("Basic")));
-    }
+    // customizations and retries style images on every rendered frame, so the application ships
+    // the lightweight Basic style and pins it: leaving QT_QUICK_CONTROLS_STYLE overridable would
+    // let a caller ask for a style the package deliberately no longer contains.
+    static_cast<void>(qputenv("QT_QUICK_CONTROLS_STYLE", QByteArrayLiteral("Basic")));
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Direct3D11);
 }
 

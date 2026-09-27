@@ -32,9 +32,40 @@ qt6_deploy_runtime_dependencies(
     NO_TRANSLATIONS
     DEPLOY_TOOL_OPTIONS
         --qmldir \"${PROJECT_SOURCE_DIR}/src/ui_qml/qml\"
+        --skip-plugin-types qmltooling,generic
+        --no-quickcontrols2fusion
+        --no-quickcontrols2fusionstyleimpl
+        --no-quickcontrols2imagine
+        --no-quickcontrols2imaginestyleimpl
+        --no-quickcontrols2material
+        --no-quickcontrols2materialstyleimpl
+        --no-quickcontrols2universal
+        --no-quickcontrols2universalstyleimpl
+        --no-quickcontrols2windowsstyleimpl
+        --no-quickcontrols2fluentwinui3styleimpl
 )"
 )
+# The deployment above is deliberately narrower than windeployqt's default: GraphicsBackend pins
+# the Basic style, so the other five Quick Controls styles - their plugin libraries and their 1200
+# QML files - are weight no build ever loads, and the qmltooling debugger plugins belong to a
+# developer machine, not a release. Add a style back here the day the application ships it.
 install(SCRIPT "${dvs_qt_deploy_script}" COMPONENT Runtime)
+
+# windeployqt copies the whole QtQuick/Controls module, including every style it can find. The
+# application pins the Basic style (see GraphicsBackend), so the other five trees - 1195 files apiece
+# of plugin libraries and image assets - would be shipped and never read. The library flags above
+# stop the plugin DLLs; this removes the QML trees, at install time, so `cmake --install` and CPack
+# produce the same layout. VerifyPackageStage.cmake fails closed if one comes back.
+set(DVS_UNSHIPPED_QML_STYLES FluentWinUI3 Fusion Imagine Material Universal Windows)
+install(
+    CODE "
+foreach(style IN ITEMS ${DVS_UNSHIPPED_QML_STYLES})
+    file(REMOVE_RECURSE \"\${CMAKE_INSTALL_PREFIX}/qml/QtQuick/Controls/\${style}\")
+    file(REMOVE_RECURSE \"\${CMAKE_INSTALL_PREFIX}/qml/QtQuick/Dialogs/quickimpl/qml/+\${style}\")
+endforeach()
+"
+    COMPONENT Runtime
+)
 
 set(DVS_VCPKG_SHARE_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share")
 foreach(

@@ -132,5 +132,24 @@ TEST(StartupRequestBrokerTests, RejectsForwardedRequestWhenInteractionQueueIsFul
     EXPECT_EQ(forwarded.get(), StartupRequestBroker::StartResult::Failed);
 }
 
+TEST(StartupRequestBrokerTests, StartsAgainAfterThePreviousPrimaryIsGone) {
+    ensureCoreApplication();
+    const QString endpoint = QStringLiteral("CompareStation.StartupRequest.Test.%1")
+                                 .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    const StartupRequest request{
+        .kind = StartupRequest::Kind::PlaySingle,
+        .sources = {std::filesystem::path{LR"(C:\media\relaunch.mp4)"}},
+    };
+    {
+        StartupRequestBroker first{endpoint};
+        ASSERT_EQ(first.startOrForward(request), StartupRequestBroker::StartResult::Primary);
+    }
+    // The endpoint name and the election lock outlive their owner for a moment after a crash or a
+    // kill, and the relaunch has to win the election again rather than report a fatal startup
+    // error.
+    StartupRequestBroker second{endpoint};
+    EXPECT_EQ(second.startOrForward(request), StartupRequestBroker::StartResult::Primary);
+}
+
 } // namespace
 } // namespace dvs::app
