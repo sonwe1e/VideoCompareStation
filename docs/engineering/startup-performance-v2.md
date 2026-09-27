@@ -275,6 +275,24 @@ Step 6 亦复用）：
 对 Step 6 的含义：本基线"接受→首帧"仅 38 ms（暖缓存、小文件）——首开软解竞争若存在，
 需要更大码流/冷缓存才能显形；trace 的 kind 23/24（解码起止）已可取数。
 
+## Step 6（首开软解竞争诊断）结论：未观察到（2026-09-28 实测）
+
+计划的假设是：首次打开时解码器 `tryLease()` 可能发生在场景图 `adoptQtDevice()` 之前，
+撞上 Busy/Unavailable 而**静默回退软解**（`SoftwareDecoder::open` 的 fallbackReason 路径）。
+
+代码路径分析 + 两组实测（临时在开箱收尾处打印 backend/fallbackReason，跑完即回退）：
+
+- **结构上不可能竞争**：解码器打开的前提是 `canOpen = graphicsReady && …`（Step 5 已证），
+  而 graphicsReady 依赖 `adoptQtDevice`（sg-initialized，~700 ms）；打开发生在 ~800 ms
+  （kind 0 之后）。租约窗口（adopt 持锁的微秒级片段）与打开时刻相隔 ~100 ms。
+- **单源首开**：主解码器 + 精确解码器均 `backend=d3d11va fallback=""`；trace 无 kind 11
+  （DecoderReopen，即无代际竞争重开）。
+- **三源并发首开**（竞争最强场景：6 个解码器同时开箱 + 渲染器活跃）：全部
+  `backend=d3d11va`、零 fallbackReason、零重开。
+
+按计划决策门（"确认不了就不动"）：**不改代码**，发布说明记"未观察到"。诊断数据：
+`out/startup-measurements/step6-diag*.{stderr.txt,trace.jsonl}`（单源/三源）。
+
 ## 已知限制与待办
 
 1. **冷启动未测**：本表全部为热缓存。冷启动协议待定义（重启后首轮即测、不预热）。
