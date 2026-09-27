@@ -52,6 +52,34 @@ foreach(forbiddenTool IN ITEMS ffmpeg.exe ffprobe.exe)
     endif()
 endforeach()
 
+# GraphicsBackend pins the Basic style, so every other Quick Controls tree must have been pruned
+# during installation. A deployment that quietly copies them back would ship 1195 unread files,
+# most of them FluentWinUI3's image assets.
+foreach(
+    unshippedStyle
+    IN ITEMS
+        FluentWinUI3
+        Fusion
+        Imagine
+        Material
+        Universal
+        Windows
+)
+    if(EXISTS "${stageRoot}/qml/QtQuick/Controls/${unshippedStyle}")
+        message(
+            FATAL_ERROR
+            "Package staging must not contain the unshipped '${unshippedStyle}' Quick Controls "
+            "style. Ship it only together with a change to the pinned style."
+        )
+    endif()
+    if(EXISTS "${stageRoot}/qml/QtQuick/Dialogs/quickimpl/qml/+${unshippedStyle}")
+        message(
+            FATAL_ERROR
+            "Package staging must not contain the '${unshippedStyle}' Qt Quick Dialogs overrides."
+        )
+    endif()
+endforeach()
+
 include("${CMAKE_CURRENT_LIST_DIR}/VerifyPeSubsystem.cmake")
 dvs_verify_pe_subsystem("${stageRoot}/CompareStation.exe" WINDOWS_GUI)
 dvs_verify_pe_subsystem("${stageRoot}/CompareStationCli.exe" WINDOWS_CUI)
