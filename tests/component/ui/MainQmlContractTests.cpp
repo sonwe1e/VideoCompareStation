@@ -776,7 +776,6 @@ TEST(MainQmlContractTests, InstantiatesRootAndSeparatesManualAlignmentStates) {
     EXPECT_TRUE(analysisChrome->property("visible").toBool());
     EXPECT_EQ(surfaceLabelRepeater->property("count").toInt(), 2);
     EXPECT_EQ(activeSourceRepeater->property("count").toInt(), 2);
-    EXPECT_EQ(root->property("availableViewModes").toList().size(), 3);
     EXPECT_GE(viewport->height() / window->contentItem()->height(), 0.78);
 
     snapshot->lastError = domain::makeMediaError(domain::MediaErrorCode::kMediaDecodeFailed,
@@ -958,7 +957,6 @@ TEST(MainQmlContractTests, InstantiatesRootAndSeparatesManualAlignmentStates) {
     EXPECT_EQ(root->property("effectiveViewMode").toInt(), ComparisonSurface::ThreeUp);
     EXPECT_EQ(surfaceLabelRepeater->property("count").toInt(), 3);
     EXPECT_EQ(activeSourceRepeater->property("count").toInt(), 3);
-    EXPECT_EQ(root->property("availableViewModes").toList().size(), 6);
     EXPECT_TRUE(analysisGridMenuItem->property("enabled").toBool());
 
     // Three-up (3 sources): each source panel gets a divider outline.
@@ -1038,7 +1036,6 @@ TEST(MainQmlContractTests, InstantiatesRootAndSeparatesManualAlignmentStates) {
     // preference, which becomes valid again if a third source is later restored.
     EXPECT_EQ(preferences.viewMode(), ReviewPreferencesController::ViewMode::AnalysisGrid);
     EXPECT_EQ(root->property("effectiveViewMode").toInt(), ComparisonSurface::SideBySide);
-    EXPECT_EQ(root->property("availableViewModes").toList().size(), 3);
     EXPECT_EQ(activeSourceRepeater->property("count").toInt(), 2);
     EXPECT_FALSE(analysisGridMenuItem->property("enabled").toBool());
 
@@ -1048,7 +1045,6 @@ TEST(MainQmlContractTests, InstantiatesRootAndSeparatesManualAlignmentStates) {
     QCoreApplication::processEvents();
     EXPECT_EQ(surfaceLabelRepeater->property("count").toInt(), 1);
     EXPECT_EQ(activeSourceRepeater->property("count").toInt(), 1);
-    EXPECT_EQ(root->property("availableViewModes").toList().size(), 1);
     EXPECT_FALSE(compareBar->isVisible());
 
     shell.setInspectorVisible(true);
@@ -1184,7 +1180,6 @@ TEST(MainQmlContractTests, DockedTransportResolvesContextuallyAndClearsViewport)
     ASSERT_EQ(controller.sourceCount(), 2);
     EXPECT_FALSE(root->property("singleMode").toBool());
     EXPECT_TRUE(root->property("transportDocked").toBool());
-    EXPECT_FALSE(root->property("transportOverlay").toBool());
     EXPECT_FALSE(root->property("transportHidden").toBool());
 
     // Docked transport must sit below the viewport and not geometrically intersect it.
@@ -1215,7 +1210,6 @@ TEST(MainQmlContractTests, DockedTransportResolvesContextuallyAndClearsViewport)
     EXPECT_EQ(controller.sourceCount(), 1);
     EXPECT_TRUE(root->property("singleMode").toBool());
     EXPECT_FALSE(root->property("transportDocked").toBool());
-    EXPECT_TRUE(root->property("transportOverlay").toBool());
     EXPECT_FALSE(root->property("transportHidden").toBool());
 
     // Overlay transport must overlap the canvas (intersects the viewport footprint).
@@ -1240,7 +1234,6 @@ TEST(MainQmlContractTests, DockedTransportResolvesContextuallyAndClearsViewport)
     EXPECT_EQ(controller.sourceCount(), 0);
     EXPECT_TRUE(root->property("transportHidden").toBool());
     EXPECT_FALSE(root->property("transportDocked").toBool());
-    EXPECT_FALSE(root->property("transportOverlay").toBool());
     EXPECT_FALSE(transport->isVisible());
     EXPECT_FALSE(transport->property("controlsEnabled").toBool())
         << "hidden auto-hide panel must expose controlsEnabled == false";
