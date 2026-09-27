@@ -57,8 +57,14 @@ pwsh tools/build/build.ps1 -Preset dev -Configure -UseInstalledDependencies
 
 该选项传入 `VCPKG_MANIFEST_INSTALL=OFF`，CMake 仍检查必需包；它不会安装缺失依赖。
 后续 `-Configure` 不加此选项会恢复 preset 的自动安装。
-当前工作站的 vcpkg 是无 `.git` 的精简目录，已安装 Qt/FFmpeg/GTest，因此本机重配置使用此选项。
-这不是 CI 或新机器的默认设置。
+
+vcpkg 的 builtin registry 通过 git 读取端口和 baseline，所以 manifest 模式要求 vcpkg 根
+**自身**是一个 git 仓库。给根补仓库时**必须全量克隆**：`--filter=blob:none` 的 blobless 克隆
+体积小得多，但缺 blob 时会按需联网拉取，一旦网络不可用就变成难以归因的失败，比明确报错更糟。
+若根确实没有 `.git`，环境自检会报出该能力缺失并提示本地改用
+`-UseInstalledDependencies`（`VCPKG_MANIFEST_INSTALL=OFF`，直接用已装好的 `out/vcpkg` 树）。
+当前工作站两者都可用：已为该根补上真实 git 仓库（含 baseline ref），本地仍推荐预装模式，
+因为它更快、更确定。这不是 CI 或新机器的默认设置。
 
 移动工作区、切换工具、升级编译器或发现头文件变化不触发重编时：
 

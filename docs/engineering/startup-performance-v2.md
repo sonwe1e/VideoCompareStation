@@ -174,12 +174,21 @@ pwsh tools/testing/measure-startup.ps1 -Label baseline-onefile -Rounds 5 -Warmup
    `quality.msvc_dependency_contracts` 通过；改动一个 domain 头文件触发 124 步重编、30.5 秒
    （修复前会静默不重编）。`build.ps1 -Doctor` 与每次构建开头的环境自检会持续守卫该契约：
    逐字节比对 cl 实际输出与生成规则，不合即报错并给出修复指令。
-7. **本机 vcpkg 根（G:\Workspaces\vcpkg）无 git 库**（zip 解压版），且 `G:\.git` 是无效仓库：
-   builtin registry 通过 git 读取端口与 baseline，因此任何 manifest 指纹变化触发的依赖重解析
-   都会失败（实测报错为 `--git-dir "G:\.git" read-tree … failed` 与
-   `failed to git show versions/baseline.json`）。本地构建需
-   `build.ps1 -UseInstalledDependencies`（`VCPKG_MANIFEST_INSTALL=OFF`，直接用已装好的
-   out/vcpkg 树，实测 12.48 GB / 157 个包，依赖齐全）；2.0.0 版本提升时的本地构建同样如此。
+7. **~~本机 vcpkg 根无 git 库~~ 已修复（2026-09-28）。** 原始缺陷：`G:\Workspaces\vcpkg` 是
+   zip 解压版、没有 `.git`（而 `G:\.git` 是无效仓库），builtin registry 却通过 git 读取端口与
+   baseline，所以任何 manifest 指纹变化触发的依赖重解析都会失败（实测报错
+   `--git-dir "G:\.git" read-tree … failed` 与 `failed to git show versions/baseline.json`）。
+   修复：为该根补上 microsoft/vcpkg 的真实 git 仓库（全量克隆实测 74 秒 / 142.8 MB，本机保留
+   121.8 MB 的 `.git`），并为 `vcpkg-configuration.json` 声明的 baseline commit
+   `e6ed7c5b…` 建 `refs/dvs/baseline`，避免将来 `git gc` 把它当悬空对象清理。
+   注意**必须用全量克隆**：`--filter=blob:none` 的 blobless 克隆虽然只要 7.5 MB，但缺 blob 时
+   会按需联网（本机报 `getaddrinfo() thread failed to start` + `could not fetch … from
+   promisor remote`），把"明确失败"变成"不可预测地联网后失败"，是这个环境下更糟的状态。
+   验证：`vcpkg install --dry-run` 从 fail(exit 1) 变为完整解析出依赖图（exit 0，17.8 秒，
+   ffmpeg 8.1.2#3 / qtbase 6.11.1 / gtest / nlohmann-json 等），且无任何 git 或网络错误。
+   本地构建**仍推荐** `build.ps1 -UseInstalledDependencies`（`VCPKG_MANIFEST_INSTALL=OFF`，
+   直接用已装好的 out/vcpkg 树，实测 12.48 GB / 157 个包，依赖齐全）——它更快也更确定；
+   但现在这是**性能选择而非唯一出路**，manifest 变更时多了一条可用路径。
 8. **cpack 体积差异已查清，不是管线问题，也不需要修复。** `cmake/Install.cmake` 的
    `InstallRequiredSystemLibraries` 只安装 CRT/UCRT DLL，CMake 4.4.0 的该模块全文不含任何
    `.exe` 安装路径；`out/build/release/cmake_install.cmake` 中 `vc_redist` 出现 0 次，仓库
