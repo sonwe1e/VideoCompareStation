@@ -219,7 +219,7 @@ jobs:
         uses: softprops/action-gh-release@6da8fa9354ddfdc4aeace5fc48d7f679b5214090 # v2.4.1
         with:
           draft: true
-          body_path: docs/releases/v1.9.0.md
+          body_path: docs/releases/v2.0.0.md
           files: |
             out/package/zip/CompareStation-${{ needs.validate-version.outputs.version }}-windows-x64.zip
             out/package/SHA256SUMS.txt

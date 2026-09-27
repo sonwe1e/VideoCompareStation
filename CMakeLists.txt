@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 4.4 FATAL_ERROR)
 
-project(CompareStation VERSION 1.9.0 LANGUAGES CXX)
+project(CompareStation VERSION 2.0.0 LANGUAGES CXX)
 
 option(DVS_BUILD_DESKTOP "Build the Windows desktop application and packaging" ON)
 option(DVS_BUILD_ADAPTERS "Build Windows, FFmpeg, and JSON adapters" ON)
