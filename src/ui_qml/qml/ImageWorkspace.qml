@@ -89,6 +89,20 @@ Rectangle {
             singleViewShowSecondary = false;
     }
 
+    // A lazily instantiated workspace (video-first sessions build this tree only when the
+    // image workspace activates) creates its Flows inside an already-sized parent chain:
+    // each Flow lays out once at its width-0 creation state, and the re-layout Qt performs
+    // on width changes is frame-driven — it never happens in a window that is not exposed
+    // yet. Force the rows to lay out synchronously so the panel never keeps a stale
+    // vertical layout: once here, where the widths settle during creation, and on every
+    // later width change (chrome margins, window resizes) through each row's handler.
+    Component.onCompleted: {
+        fileRow.forceLayout();
+        modeRow.forceLayout();
+        editRow.forceLayout();
+        editParamsRow.forceLayout();
+    }
+
     function toggleSinglePairSource() {
         if (!hasPair)
             return;
@@ -1039,6 +1053,8 @@ Rectangle {
                 objectName: "imageFileRow"
                 width: parent.width
                 spacing: 8
+                // See the forceLayout note in Component.onCompleted above.
+                onWidthChanged: forceLayout()
 
                 ReviewActionButton {
                     objectName: "imageOpenButton"
@@ -1159,6 +1175,8 @@ Rectangle {
                 objectName: "imageModeRow"
                 width: parent.width
                 spacing: 8
+                // See the forceLayout note in Component.onCompleted above.
+                onWidthChanged: forceLayout()
 
                 ModeChip {
                     objectName: "imageModePrimary"
@@ -1449,6 +1467,8 @@ Rectangle {
                         width: parent.width
                         spacing: 6
                         visible: control.hasPrimary && control.imageEdit !== null
+                        // See the forceLayout note in Component.onCompleted above.
+                        onWidthChanged: forceLayout()
 
                         EditButton {
                             objectName: "imageEditStartButton"
@@ -1675,6 +1695,8 @@ Rectangle {
                             objectName: "imageEditParamsRow"
                             spacing: 8
                             visible: control.hasPrimary && control.editModeActive
+                            // See the forceLayout note in Component.onCompleted above.
+                            onWidthChanged: forceLayout()
 
                             anchors {
                                 left: parent.left

@@ -2748,15 +2748,22 @@ ApplicationWindow {
         onContextMenuRequested: root.openViewerContextMenu()
         onFullScreenToggleRequested: root.toggleFullScreen()
     }
-    ImageWorkspace {
-        id: imageWorkspace
+    // The still-image workspace is built on first activation and stays resident: video review
+    // sessions never pay for it, and an image launch activates it during the initial binding
+    // pass exactly as before. Typed view like reviewInputDialogs above.
+    // qmllint disable incompatible-type
+    readonly property ImageWorkspace imageWorkspace: imageWorkspaceLoader.item
+    // qmllint enable incompatible-type
 
-        objectName: "imageWorkspaceRoot"
-        visible: root.imageWorkspaceActive
-        controller: root.stillImageController
-        imageEdit: root.imageEditService
-        pairModel: root.folderPairModel
-        sidebarVisible: root.imageFolderSidebarVisible
+    Loader {
+        id: imageWorkspaceLoader
+
+        property bool keepActive: false
+
+        active: root.imageWorkspaceActive || keepActive
+
+        onLoaded: keepActive = true
+
         anchors {
             top: parent.top
             topMargin: root.chromeVisible ? 10 : 0
@@ -2766,14 +2773,30 @@ ApplicationWindow {
             right: parent.right
             rightMargin: root.chromeVisible ? 14 : 0
         }
-        onOpenImageRequested: root.requestImageOpen()
-        onAddImageRequested: root.requestImageAdd()
-        onOpenPairRequested: root.requestImagePairOpen()
-        onCompareFoldersRequested: root.requestCompareFolders()
-        onToggleSidebarRequested: root.imageFolderSidebarVisible = !root.imageFolderSidebarVisible
-        onSwapSidesRequested: root.requestImageSwapSides()
-        onReplacePrimaryRequested: root.requestImageReplacePrimary()
-        onReplaceSecondaryRequested: root.requestImageReplaceSecondary()
+
+        sourceComponent: imageWorkspaceComponent
+    }
+
+    Component {
+        id: imageWorkspaceComponent
+
+        ImageWorkspace {
+            objectName: "imageWorkspaceRoot"
+            anchors.fill: parent
+            visible: root.imageWorkspaceActive
+            controller: root.stillImageController
+            imageEdit: root.imageEditService
+            pairModel: root.folderPairModel
+            sidebarVisible: root.imageFolderSidebarVisible
+            onOpenImageRequested: root.requestImageOpen()
+            onAddImageRequested: root.requestImageAdd()
+            onOpenPairRequested: root.requestImagePairOpen()
+            onCompareFoldersRequested: root.requestCompareFolders()
+            onToggleSidebarRequested: root.imageFolderSidebarVisible = !root.imageFolderSidebarVisible
+            onSwapSidesRequested: root.requestImageSwapSides()
+            onReplacePrimaryRequested: root.requestImageReplacePrimary()
+            onReplaceSecondaryRequested: root.requestImageReplaceSecondary()
+        }
     }
     NativeDialogs.FolderDialog {
         id: imageFolderLeftDialog

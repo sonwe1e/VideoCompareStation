@@ -707,12 +707,6 @@ TEST(MainQmlContractTests, InstantiatesRootAndSeparatesManualAlignmentStates) {
     QObject* const activeSourceRepeater =
         root->findChild<QObject*>(QStringLiteral("activeSourceRepeater"));
     QObject* const timeline = root->findChild<QObject*>(QStringLiteral("timelineSlider"));
-    QObject* const setInButton = root->findChild<QObject*>(QStringLiteral("setInButton"));
-    QObject* const setOutButton = root->findChild<QObject*>(QStringLiteral("setOutButton"));
-    QObject* const clearRangeButton = root->findChild<QObject*>(QStringLiteral("clearRangeButton"));
-    QObject* const loopRangeButton = root->findChild<QObject*>(QStringLiteral("loopRangeButton"));
-    QObject* const mediaInfoRepeater =
-        root->findChild<QObject*>(QStringLiteral("mediaInfoRepeater"));
     QObject* const shortcutHelp = root->findChild<QObject*>(QStringLiteral("shortcutHelpOverlay"));
     QObject* const contextViewMenu = root->findChild<QObject*>(QStringLiteral("contextViewMenu"));
     QObject* const reviewContextMenu =
@@ -746,11 +740,6 @@ TEST(MainQmlContractTests, InstantiatesRootAndSeparatesManualAlignmentStates) {
     ASSERT_NE(frameErrorBanner, nullptr);
     ASSERT_NE(activeSourceRepeater, nullptr);
     ASSERT_NE(timeline, nullptr);
-    ASSERT_NE(setInButton, nullptr);
-    ASSERT_NE(setOutButton, nullptr);
-    ASSERT_NE(clearRangeButton, nullptr);
-    ASSERT_NE(loopRangeButton, nullptr);
-    ASSERT_NE(mediaInfoRepeater, nullptr);
     ASSERT_NE(shortcutHelp, nullptr);
     ASSERT_NE(contextViewMenu, nullptr);
     ASSERT_NE(reviewContextMenu, nullptr);
@@ -1013,6 +1002,19 @@ TEST(MainQmlContractTests, InstantiatesRootAndSeparatesManualAlignmentStates) {
     // In multi-source the TabbedInspector exposes the Compare/Review/Info tabs.
     shell.setInspectorVisible(true);
     QCoreApplication::processEvents();
+    // The inspector's tab tree is instantiated on first open, so its children are looked up
+    // after the open, exactly like a user reaching them through the inspector toggle.
+    QObject* const setInButton = root->findChild<QObject*>(QStringLiteral("setInButton"));
+    QObject* const setOutButton = root->findChild<QObject*>(QStringLiteral("setOutButton"));
+    QObject* const clearRangeButton = root->findChild<QObject*>(QStringLiteral("clearRangeButton"));
+    QObject* const loopRangeButton = root->findChild<QObject*>(QStringLiteral("loopRangeButton"));
+    QObject* const mediaInfoRepeater =
+        root->findChild<QObject*>(QStringLiteral("mediaInfoRepeater"));
+    ASSERT_NE(setInButton, nullptr);
+    ASSERT_NE(setOutButton, nullptr);
+    ASSERT_NE(clearRangeButton, nullptr);
+    ASSERT_NE(loopRangeButton, nullptr);
+    ASSERT_NE(mediaInfoRepeater, nullptr);
     QObject* const inspectorTabBar =
         tabbedInspector->findChild<QObject*>(QStringLiteral("inspectorTabBar"));
     ASSERT_NE(inspectorTabBar, nullptr);
@@ -3737,6 +3739,16 @@ TEST(MainQmlContractTests, ImageWorkspaceReloadsViewportSourceAfterImageOpen) {
     window->resize(960, 640);
     QCoreApplication::processEvents();
 
+    // The image workspace is instantiated on first activation, and this test inspects the
+    // viewport before any image is opened, so activate the (empty) workspace first.
+    QVariant imageWorkspaceActivated;
+    ASSERT_TRUE(QMetaObject::invokeMethod(root.get(),
+                                          "activateWorkspace",
+                                          Q_RETURN_ARG(QVariant, imageWorkspaceActivated),
+                                          Q_ARG(QVariant, QVariant{1})));
+    ASSERT_TRUE(imageWorkspaceActivated.toBool());
+    QCoreApplication::processEvents();
+
     auto* const viewport = root->findChild<QQuickItem*>(QStringLiteral("primaryViewport"));
     auto* const imageItem = root->findChild<QQuickItem*>(QStringLiteral("imageViewport-2"));
     ASSERT_NE(viewport, nullptr);
@@ -4275,6 +4287,18 @@ TEST(MainQmlContractTests, FolderSidebarExposesPairingContextAndOpensMissingSide
     window->resize(1280, 800);
     QCoreApplication::processEvents();
 
+    // The image workspace is instantiated on first activation, and this environment never
+    // renders frames (positioner relayouts are frame-driven), so the workspace must be
+    // created while the layout is still stable — before the folder flow starts changing
+    // content state. A real session settles the same layouts on its first rendered frame.
+    QVariant workspaceActivatedEarly;
+    ASSERT_TRUE(QMetaObject::invokeMethod(root.get(),
+                                          "activateWorkspace",
+                                          Q_RETURN_ARG(QVariant, workspaceActivatedEarly),
+                                          Q_ARG(QVariant, QVariant{1})));
+    ASSERT_TRUE(workspaceActivatedEarly.toBool());
+    QCoreApplication::processEvents();
+
     root->setProperty("imageFolderLeftUrl", QUrl::fromLocalFile(QDir(leftDir).absolutePath()));
     root->setProperty("imageFolderRightUrl", QUrl::fromLocalFile(QDir(rightDir).absolutePath()));
     QVariant loadResult;
@@ -4397,6 +4421,7 @@ TEST(MainQmlContractTests, FolderSidebarExposesPairingContextAndOpensMissingSide
     EXPECT_EQ(pairList->property("currentIndex").toInt(), steppedRow);
     auto* const currentItem = pairList->property("currentItem").value<QQuickItem*>();
     ASSERT_NE(currentItem, nullptr);
+
     const qreal contentY = pairList->property("contentY").toDouble();
     EXPECT_GE(currentItem->y() + currentItem->height(), contentY - 1.0);
     EXPECT_LE(currentItem->y(), contentY + pairList->property("height").toDouble() + 1.0);
@@ -4406,9 +4431,14 @@ TEST(MainQmlContractTests, WorkspaceOpenIntentDoesNotOverrideCommittedWorkspace)
     WorkspaceHarness harness;
     ASSERT_TRUE(harness.create()) << harness.error;
     QObject* const session = harness.root->findChild<QObject*>(QStringLiteral("workspaceSession"));
+    ASSERT_NE(session, nullptr);
+    // The image workspace is instantiated on first activation; activate it once and return
+    // to the committed video workspace so the hidden-panel assertions below address the
+    // real item instead of an absent one.
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    ASSERT_TRUE(harness.activateWorkspace(0));
     auto* const imageWorkspace =
         harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
-    ASSERT_NE(session, nullptr);
     ASSERT_NE(imageWorkspace, nullptr);
 
     const int sourceCountBefore = harness.controller->sourceCount();
@@ -4514,13 +4544,14 @@ TEST(MainQmlContractTests, ImageWorkspaceArrowsDoNotDriveHiddenVideo) {
 
     auto* const viewport =
         harness.root->findChild<QQuickItem*>(QStringLiteral("mediaViewportFocusTarget"));
-    auto* const imageWorkspace =
-        harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
     ASSERT_NE(viewport, nullptr);
-    ASSERT_NE(imageWorkspace, nullptr);
 
     ASSERT_TRUE(harness.activateWorkspace(1));
     harness.settle();
+    // The image workspace is instantiated on first activation, so the lookup follows it.
+    auto* const imageWorkspace =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
+    ASSERT_NE(imageWorkspace, nullptr);
     EXPECT_TRUE(imageWorkspace->property("visible").toBool());
     EXPECT_TRUE(imageWorkspace->hasActiveFocus())
         << "the image workspace must be the actual key receiver while it is visible";
@@ -4906,6 +4937,10 @@ TEST(MainQmlContractTests, HighBitDepthAlphaIsVisibleInPixelReadout) {
     WorkspaceHarness harness;
     ASSERT_TRUE(harness.create()) << harness.error;
     harness.window->show();
+    harness.settle();
+    // The image workspace is instantiated on first activation, and this test inspects the
+    // pixel readout before and after an image opens, so activate the workspace up front.
+    ASSERT_TRUE(harness.activateWorkspace(1));
     harness.settle();
     auto* workspace = harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
     auto* readout = harness.root->findChild<QQuickItem*>(QStringLiteral("imagePixelReadout"));

@@ -189,6 +189,53 @@ pwsh tools/testing/measure-startup.ps1 -Label baseline-onefile -Rounds 5 -Warmup
 图像工作区/打开检查器**之后**（`imageWorkspaceRoot`、`tabbedInspector` 系列），
 契约面比本批更宽松；按 0.11 ms/对象外推是下一个主要削减点，清单方法照搬本节。
 
+## Step 4（延迟加载 B：ImageWorkspace + TabbedInspector）完成（2026-09-28 同日 A/B 实测）
+
+清单结论（契约面比 Step 3 深得多，两件用了**不同**的延迟结构）：
+
+- **ImageWorkspace（2874 行，~150 objectName）**：多个测试在**未激活**工作区的状态下就
+  findChild 其子树（#691 直接查 `primaryViewport`，#696/#699/#707 查 `imageWorkspaceRoot`）。
+  → 整体 Loader 化（`active: imageWorkspaceActive || keepActive`，图片启动时在初始绑定
+  求值中照常构建）+ 4 处测试改为先经 `activateWorkspace` 激活再查找。
+- **TabbedInspector（774 行）**：#669 装载即断言根 objectName；`DrawerScrim…` 测试用其
+  `parentItem()` 作布局探针并依赖闭合的锚定链。→ **组件内内容延迟**：根 Rectangle
+  （objectName / 几何 / 父子链逐字节不变）常驻，TabBar+StackLayout 全部包进
+  `Loader { active: visible || contentReady; anchors.fill: parent }`，`effectiveTab` 经
+  内容项转发（关闭状态下报 Review 页）。#669 仅把 5 个检查器子项
+  （setIn/setOut/clear/loop/mediaInfoRepeater）的查找移到首次打开之后；DrawerScrim 零改动。
+
+本轮实测踩出的两个 Qt 行为（都有逐项证据，后续任何懒加载都适用）：
+
+1. **Loader 不会把已载入项压到自身尺寸**：ImageWorkspace 根无自身几何，包进 Loader 后
+   整棵树 0×0——侧栏高度塌成负数、`folderPairList` contentY=-78。修法：包装内显式
+   `anchors.fill: parent`。
+2. **positioner 的重排是帧驱动的**：懒创建的 Flow 在宽度 0 状态完成首次布局后，后续宽度
+   变化（chrome 边距翻转、窗口 resize）在**没有渲染帧的窗口里永远不会触发重排**（实测
+   事后 resize 也无效）——命令面板保持竖排 734 px、侧栏 56 px。`forceLayout()` 可同步
+   修复 Flow（实测 296→30）；Column 无此方法，其重排同样只在下一帧。修法：4 个 Flow
+   `onWidthChanged: forceLayout()` + 完成时统一 forceLayout。**真实应用始终渲染，激活后
+   首帧即自愈**；同步 force 的意义是让无渲染环境也确定。
+3. **契约测试环境渲染 0 帧**（`frameSwapped` 计数实测为 0，即使 `show()` + 秒级事件泵）：
+   一切帧驱动行为在该环境都不发生——#695 因此改为在 folder 流程前先激活空工作区（创建
+   发生在布局仍稳定时），并如实注明原因。
+
+同日背靠背 A/B（无文件、release、5 轮 + 1 预热；A = Step 3 提交 `fcd92be`）：
+
+| 段（中位 / P95，ms） | A（Step 3） | B（Step 4） | Δ |
+|---|---|---|---|
+| context-ready→qml-loaded | 549.7 / 552.7 | 521.4 / 525.5 | **−28.3 / −27.2** |
+| spawn→exec（内部钟） | 803.2 / 814.2 | 765.3 / 770.6 | **−37.9 / −43.6** |
+| show-enter→sg-initialized | 153.3 / 154.3 | 153.0 / 158.8 | 无漂移（对照组） |
+| sg-initialized→post-show | 64.4 / 65.6 | 50.2 / 50.6 | −14.2（更小的首同步，疑真实现） |
+
+- **首开成本**：移出启动路径的实例化工作 ≈ 42 ms（QML 段 28 + 首同步 14），在首次激活
+  图片工作区 / 首次打开检查器时一次性支付，之后（keepActive）免费——远低于可感知阈值。
+- **Step 3+4 累计**：QML 段 577.3（9-27 基线，跨日稳定段）→ 562.7 → **521.4**
+  （**−55.9 ms，−9.7%**）；同日链验证的端到端收益 −18.1 + −37.9 = **−56.0 ms**。
+- 门禁：全量 767/767、`qmllint --max-warnings 0`、`format-check`、`lint` 全绿。
+- 数据：`out/startup-measurements/step4-nofile-20260928-032720`（B）、
+  `out/startup-measurements/step4-ab-baseline-nofile-20260928-032809`（A）。
+
 ## 已知限制与待办
 
 1. **冷启动未测**：本表全部为热缓存。冷启动协议待定义（重启后首轮即测、不预热）。
