@@ -34,6 +34,38 @@ constexpr std::uintmax_t kMaximumIssueDocumentBytes = 2U * 1024U * 1024U;
     return kind == IssueRecordKind::ImagePair ? "image-pair" : "video";
 }
 
+// Typed readers for the defensive parse ladder: each assigns only when the key exists and
+// carries the expected JSON type, so a missing or mistyped field keeps the record default -
+// the behavior every hand-rolled contains()+is_X() chain below used to spell out. The bool
+// return is informational for the few sites that branch on the field being present.
+bool readString(const Json& value, const char* const key, std::string* out) {
+    const auto field = value.find(key);
+    if (field == value.end() || !field->is_string()) {
+        return false;
+    }
+    *out = field->get<std::string>();
+    return true;
+}
+
+template <typename Integer>
+bool readInteger(const Json& value, const char* const key, Integer* out) {
+    const auto field = value.find(key);
+    if (field == value.end() || !field->is_number_integer()) {
+        return false;
+    }
+    *out = field->get<Integer>();
+    return true;
+}
+
+bool readBoolean(const Json& value, const char* const key, bool* out) {
+    const auto field = value.find(key);
+    if (field == value.end() || !field->is_boolean()) {
+        return false;
+    }
+    *out = field->get<bool>();
+    return true;
+}
+
 [[nodiscard]] Json sourceToJson(const application::IssueSourceRef& source) {
     Json value = Json::object();
     value["path"] = source.path;
@@ -54,43 +86,17 @@ constexpr std::uintmax_t kMaximumIssueDocumentBytes = 2U * 1024U * 1024U;
 
 [[nodiscard]] application::IssueSourceRef sourceFromJson(const Json& value) {
     application::IssueSourceRef source;
-    if (value.contains("path") && value["path"].is_string()) {
-        source.path = value["path"].get<std::string>();
-    }
-    if (value.contains("byteSize") && value["byteSize"].is_number_integer()) {
-        source.byteSize = value["byteSize"].get<std::int64_t>();
-    }
-    if (value.contains("modifiedUtcMilliseconds") &&
-        value["modifiedUtcMilliseconds"].is_number_integer()) {
-        source.modifiedUtcMilliseconds = value["modifiedUtcMilliseconds"].get<std::int64_t>();
-    }
-    if (value.contains("fingerprintSha256") && value["fingerprintSha256"].is_string()) {
-        source.fingerprintSha256 = value["fingerprintSha256"].get<std::string>();
-    }
-    if (value.contains("hasPresentation") && value["hasPresentation"].is_boolean()) {
-        source.hasPresentation = value["hasPresentation"].get<bool>();
-    }
-    if (value.contains("displayIndex") && value["displayIndex"].is_number_integer()) {
-        source.displayIndex = value["displayIndex"].get<std::int64_t>();
-    }
-    if (value.contains("presentationTimestampTicks") &&
-        value["presentationTimestampTicks"].is_number_integer()) {
-        source.presentationTimestampTicks = value["presentationTimestampTicks"].get<std::int64_t>();
-    }
-    if (value.contains("timeBaseNumerator") && value["timeBaseNumerator"].is_number_integer()) {
-        source.timeBaseNumerator = value["timeBaseNumerator"].get<std::int32_t>();
-    }
-    if (value.contains("timeBaseDenominator") && value["timeBaseDenominator"].is_number_integer()) {
-        source.timeBaseDenominator = value["timeBaseDenominator"].get<std::int32_t>();
-    }
-    if (value.contains("presentationMatchKind") &&
-        value["presentationMatchKind"].is_number_integer()) {
-        source.presentationMatchKind = value["presentationMatchKind"].get<std::int32_t>();
-    }
-    if (value.contains("presentationMissingReason") &&
-        value["presentationMissingReason"].is_number_integer()) {
-        source.presentationMissingReason = value["presentationMissingReason"].get<std::int32_t>();
-    }
+    readString(value, "path", &source.path);
+    readInteger(value, "byteSize", &source.byteSize);
+    readInteger(value, "modifiedUtcMilliseconds", &source.modifiedUtcMilliseconds);
+    readString(value, "fingerprintSha256", &source.fingerprintSha256);
+    readBoolean(value, "hasPresentation", &source.hasPresentation);
+    readInteger(value, "displayIndex", &source.displayIndex);
+    readInteger(value, "presentationTimestampTicks", &source.presentationTimestampTicks);
+    readInteger(value, "timeBaseNumerator", &source.timeBaseNumerator);
+    readInteger(value, "timeBaseDenominator", &source.timeBaseDenominator);
+    readInteger(value, "presentationMatchKind", &source.presentationMatchKind);
+    readInteger(value, "presentationMissingReason", &source.presentationMissingReason);
     return source;
 }
 
@@ -143,38 +149,24 @@ constexpr std::uintmax_t kMaximumIssueDocumentBytes = 2U * 1024U * 1024U;
 
 [[nodiscard]] IssueRecord recordFromJson(const Json& value) {
     IssueRecord record;
-    if (value.contains("schemaVersion") && value["schemaVersion"].is_number_integer()) {
-        record.schemaVersion = value["schemaVersion"].get<std::int64_t>();
-    }
-    if (value.contains("kind") && value["kind"].is_string()) {
-        const std::string kind = value["kind"].get<std::string>();
+    readInteger(value, "schemaVersion", &record.schemaVersion);
+    std::string kind;
+    if (readString(value, "kind", &kind)) {
         record.kind = kind == "image-pair" ? IssueRecordKind::ImagePair : IssueRecordKind::Video;
     }
-    if (value.contains("createdAtUtcMilliseconds") &&
-        value["createdAtUtcMilliseconds"].is_number_integer()) {
-        record.createdAtUtcMilliseconds = value["createdAtUtcMilliseconds"].get<std::int64_t>();
-    }
-    if (value.contains("note") && value["note"].is_string()) {
-        record.note = value["note"].get<std::string>();
-    }
+    readInteger(value, "createdAtUtcMilliseconds", &record.createdAtUtcMilliseconds);
+    readString(value, "note", &record.note);
     if (value.contains("screenshot") && value["screenshot"].is_object()) {
         const Json& screenshot = value["screenshot"];
         record.screenshotIsDisplayResult = true;
-        if (screenshot.contains("path") && screenshot["path"].is_string()) {
-            record.screenshotPath = screenshot["path"].get<std::string>();
-        }
-        if (screenshot.contains("kind") && screenshot["kind"].is_string() &&
-            screenshot["kind"].get<std::string>() != "display-result") {
+        readString(screenshot, "path", &record.screenshotPath);
+        std::string screenshotKind;
+        if (readString(screenshot, "kind", &screenshotKind) && screenshotKind != "display-result") {
             record.screenshotIsDisplayResult = false;
         }
     }
-    if (value.contains("hasValidPresentation") && value["hasValidPresentation"].is_boolean()) {
-        record.hasValidPresentation = value["hasValidPresentation"].get<bool>();
-    }
-    if (value.contains("canonicalSourceIndex") &&
-        value["canonicalSourceIndex"].is_number_integer()) {
-        record.canonicalSourceIndex = value["canonicalSourceIndex"].get<std::int32_t>();
-    }
+    readBoolean(value, "hasValidPresentation", &record.hasValidPresentation);
+    readInteger(value, "canonicalSourceIndex", &record.canonicalSourceIndex);
     if (value.contains("alignmentRevision") && value["alignmentRevision"].is_number_unsigned()) {
         record.alignmentRevision = value["alignmentRevision"].get<std::uint64_t>();
     } else if (value.contains("alignmentRevision") &&
@@ -199,9 +191,7 @@ constexpr std::uintmax_t kMaximumIssueDocumentBytes = 2U * 1024U * 1024U;
         };
         record.view.viewMode = readInteger("viewMode", 0);
         record.view.differenceEdge = readInteger("differenceEdge", 0);
-        if (view.contains("roiEnabled") && view["roiEnabled"].is_boolean()) {
-            record.view.roiEnabled = view["roiEnabled"].get<bool>();
-        }
+        readBoolean(view, "roiEnabled", &record.view.roiEnabled);
         record.view.roiLeft = readNumber("roiLeft", 0.0);
         record.view.roiTop = readNumber("roiTop", 0.0);
         record.view.roiRight = readNumber("roiRight", 1.0);
@@ -212,9 +202,7 @@ constexpr std::uintmax_t kMaximumIssueDocumentBytes = 2U * 1024U * 1024U;
         record.view.compareMode = readInteger("compareMode", 0);
         record.view.panX = readNumber("panX", 0.5);
         record.view.panY = readNumber("panY", 0.5);
-        if (view.contains("resampleAllowed") && view["resampleAllowed"].is_boolean()) {
-            record.view.resampleAllowed = view["resampleAllowed"].get<bool>();
-        }
+        readBoolean(view, "resampleAllowed", &record.view.resampleAllowed);
     }
     if (value.contains("sources") && value["sources"].is_array()) {
         for (const Json& sourceValue : value["sources"]) {
@@ -234,9 +222,7 @@ constexpr std::uintmax_t kMaximumIssueDocumentBytes = 2U * 1024U * 1024U;
         record.leftPath = readString("leftPath");
         record.rightPath = readString("rightPath");
         record.fileName = readString("fileName");
-        if (pair.contains("rowIndex") && pair["rowIndex"].is_number_integer()) {
-            record.rowIndex = pair["rowIndex"].get<std::int32_t>();
-        }
+        readInteger(pair, "rowIndex", &record.rowIndex);
     }
     return record;
 }
