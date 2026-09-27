@@ -85,14 +85,15 @@ Item {
         property string chipHelp: ""
         property bool chipEnabled: true
         property bool chipActive: false
+        property bool prominent: false
 
         signal clicked
 
         implicitWidth: chipLabel.implicitWidth + (control.compact ? 16 : 20)
         implicitHeight: control.compact ? 24 : 28
         radius: 4
-        color: !chip.chipEnabled ? "#0f172a" : (chip.chipActive ? "#2563eb" : (chipMouse.containsMouse ? "#26364d" : "#1e293b"))
-        border.color: !chip.chipEnabled ? "#1e293b" : (chip.chipActive ? "#3b82f6" : "#334155")
+        color: !chip.chipEnabled ? "#0f172a" : (chip.chipActive ? "#2563eb" : (chip.prominent ? (chipMouse.containsMouse ? "#065f46" : "#064e3b") : (chipMouse.containsMouse ? "#26364d" : "#1e293b")))
+        border.color: !chip.chipEnabled ? "#1e293b" : (chip.chipActive ? "#3b82f6" : (chip.prominent ? "#059669" : "#334155"))
         opacity: chip.chipEnabled ? 1.0 : 0.5
 
         Accessible.role: Accessible.Button
@@ -105,8 +106,8 @@ Item {
             anchors.centerIn: parent
             text: chip.chipText
             font.pixelSize: control.compact ? 11 : 12
-            font.weight: chip.chipActive ? Font.DemiBold : Font.Normal
-            color: !chip.chipEnabled ? "#64748b" : (chip.chipActive ? "#ffffff" : "#94a3b8")
+            font.weight: chip.chipActive || chip.prominent ? Font.DemiBold : Font.Normal
+            color: !chip.chipEnabled ? "#64748b" : (chip.chipActive ? "#ffffff" : (chip.prominent ? "#34d399" : "#94a3b8"))
         }
 
         MouseArea {
@@ -390,6 +391,7 @@ Item {
             RangeChip {
                 objectName: "transportExportRangeButton"
                 visible: control.rangeExportVisible
+                prominent: true
                 chipText: control.rangeExportBusy ? qsTr("导出中 %1%").arg(Math.round(control.rangeExportProgress * 100)) : qsTr("导出")
                 chipHelp: qsTr("把入点到出点导出为无损片段（起点对齐到前一个关键帧）")
                 chipEnabled: control.rangeExportEnabled || control.rangeExportBusy

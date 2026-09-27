@@ -139,15 +139,39 @@ Item {
                         }
                     }
 
-                    Text {
-                        text: qsTr("导出区间片段")
-                        color: Theme.primaryText
-                        font.pixelSize: 15
-                        font.weight: Font.DemiBold
+                    Row {
                         anchors {
                             left: parent.left
                             leftMargin: 20
                             verticalCenter: parent.verticalCenter
+                        }
+                        spacing: 10
+
+                        Text {
+                            text: qsTr("导出区间片段")
+                            color: Theme.primaryText
+                            font.pixelSize: 15
+                            font.weight: Font.DemiBold
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        Rectangle {
+                            anchors.verticalCenter: parent.verticalCenter
+                            implicitWidth: streamCopyText.implicitWidth + 12
+                            implicitHeight: 20
+                            radius: 4
+                            color: "#064e3b"
+                            border.width: 1
+                            border.color: "#059669"
+
+                            Text {
+                                id: streamCopyText
+                                anchors.centerIn: parent
+                                text: qsTr("无损流拷贝 · Stream Copy")
+                                font.pixelSize: 10
+                                font.weight: Font.DemiBold
+                                color: "#34d399"
+                            }
                         }
                     }
                 }
@@ -165,35 +189,66 @@ Item {
                             topMargin: 16
                             horizontalCenter: parent.horizontalCenter
                         }
-                        spacing: 10
+                        spacing: 12
 
-                        Text {
+                        // Structured Metadata Card
+                        Rectangle {
                             width: parent.width
-                            text: control.rangeSummary.length > 0 ? control.rangeSummary : qsTr("未设区间")
-                            color: Theme.primaryText
-                            font.pixelSize: 14
-                            elide: Text.ElideRight
-                        }
+                            implicitHeight: infoCol.implicitHeight + 18
+                            radius: 6
+                            color: "#111622"
+                            border.width: 1
+                            border.color: "#1e293b"
 
-                        Row {
-                            width: parent.width
-                            spacing: 8
+                            Column {
+                                id: infoCol
+                                width: parent.width - 20
+                                anchors.centerIn: parent
+                                spacing: 8
 
-                            Text {
-                                text: qsTr("导出为")
-                                color: Theme.mutedText
-                                font.pixelSize: 12
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
+                                Row {
+                                    spacing: 8
+                                    width: parent.width
 
-                            Text {
-                                width: parent.width - 54
-                                text: control.fileName.length > 0 ? control.fileName : qsTr("（待选择）")
-                                color: control.fileName.length > 0 ? Theme.primaryText : Theme.disabledText
-                                font.family: "Consolas"
-                                font.pixelSize: 12
-                                elide: Text.ElideMiddle
-                                anchors.verticalCenter: parent.verticalCenter
+                                    Text {
+                                        text: qsTr("导出区间：")
+                                        color: Theme.mutedText
+                                        font.pixelSize: 12
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+
+                                    Text {
+                                        width: parent.width - 70
+                                        text: control.rangeSummary.length > 0 ? control.rangeSummary : qsTr("未设区间")
+                                        color: Theme.primaryText
+                                        font.pixelSize: 13
+                                        font.weight: Font.DemiBold
+                                        elide: Text.ElideRight
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                }
+
+                                Row {
+                                    width: parent.width
+                                    spacing: 8
+
+                                    Text {
+                                        text: qsTr("目标文件：")
+                                        color: Theme.mutedText
+                                        font.pixelSize: 12
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+
+                                    Text {
+                                        width: parent.width - 70
+                                        text: control.fileName.length > 0 ? control.fileName : qsTr("（待选择）")
+                                        color: control.fileName.length > 0 ? Theme.primaryText : Theme.disabledText
+                                        font.family: "Consolas"
+                                        font.pixelSize: 12
+                                        elide: Text.ElideMiddle
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                }
                             }
                         }
 
@@ -201,30 +256,31 @@ Item {
                         // the export runs, so cancelling is an informed decision rather than a guess.
                         Item {
                             width: parent.width
-                            height: 16
+                            height: 18
                             visible: control.busy
 
                             Rectangle {
                                 id: progressTrack
 
-                                width: parent.width - 46
-                                height: 6
-                                radius: 3
+                                width: parent.width - 48
+                                height: 8
+                                radius: 4
                                 color: Theme.control
                                 anchors.verticalCenter: parent.verticalCenter
 
                                 Rectangle {
                                     width: Math.round(progressTrack.width * control.progress)
                                     height: parent.height
-                                    radius: 3
+                                    radius: 4
                                     color: Theme.accent
                                 }
                             }
 
                             Text {
                                 text: control.progressPercent + "%"
-                                color: Theme.mutedText
+                                color: Theme.accent
                                 font.pixelSize: 11
+                                font.weight: Font.DemiBold
                                 anchors {
                                     right: parent.right
                                     verticalCenter: parent.verticalCenter
@@ -262,19 +318,37 @@ Item {
                             wrapMode: Text.WordWrap
                         }
 
+                        // Keyframe & Stream Copy Information Card
                         Rectangle {
                             width: parent.width
-                            height: 1
-                            color: Theme.menuBorder
-                        }
+                            implicitHeight: tipCol.implicitHeight + 16
+                            radius: 6
+                            color: Qt.rgba(30 / 255, 41 / 255, 59 / 255, 0.45)
+                            border.width: 1
+                            border.color: "#334155"
 
-                        Text {
-                            width: parent.width
-                            text: qsTr("· 无损流拷贝保持原始编码、分辨率与帧率。\n· 起点会对齐到前一个关键帧，片段可能比入点稍早开始；B 帧素材的结尾可能多出几帧参考帧。要精确成帧需要重新编码，尚未提供。")
-                            color: Theme.mutedText
-                            font.pixelSize: 11
-                            lineHeight: 1.35
-                            wrapMode: Text.WordWrap
+                            Column {
+                                id: tipCol
+                                width: parent.width - 20
+                                anchors.centerIn: parent
+                                spacing: 4
+
+                                Text {
+                                    text: qsTr("ℹ️ 无损剪辑特性说明：")
+                                    color: "#93c5fd"
+                                    font.pixelSize: 11
+                                    font.weight: Font.DemiBold
+                                }
+
+                                Text {
+                                    width: parent.width
+                                    text: qsTr("• 无损流拷贝保持原始编码、分辨率与帧率。\n• 起点会对齐到前一个关键帧，片段可能比入点稍早开始；B 帧素材的结尾可能多出几帧参考帧。要精确成帧需要重新编码，尚未提供。")
+                                    color: "#94a3b8"
+                                    font.pixelSize: 11
+                                    lineHeight: 1.35
+                                    wrapMode: Text.WordWrap
+                                }
+                            }
                         }
                     }
                 }
