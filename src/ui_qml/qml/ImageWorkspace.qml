@@ -213,6 +213,45 @@ Rectangle {
         return text;
     }
 
+    // Shared viewport geometry: the slot viewports and the wipe/fade overlays all compute the
+    // fit scale, the true-size base and the pan-centered draw origin with the same formulas,
+    // so they live here once instead of drifting apart per copy.
+    function imageFitScale(containerWidth, containerHeight, imageWidth, imageHeight) {
+        const sourceWidth = Math.max(1, imageWidth);
+        const sourceHeight = Math.max(1, imageHeight);
+        return Math.min(containerWidth / sourceWidth, containerHeight / sourceHeight);
+    }
+
+    // True-size: 1 image pixel occupies 1 physical pixel, so the device-independent scale is
+    // 1 / DPR (T2).
+    function imageTrueSizeScale() {
+        const dpr = Window.window ? Window.window.devicePixelRatio : 1;
+        return 1 / dpr;
+    }
+
+    // Position of one edge of the drawn image rect: centered, then shifted by the pan offset
+    // (0.5 = centered).
+    function imageDrawEdge(containerSize, drawSize, pan) {
+        return (containerSize - drawSize) / 2 + (0.5 - pan) * drawSize;
+    }
+
+    // The drag-selection rectangle, shared by the slot viewports and the wipe/fade overlays.
+    component ImageMarqueeRect: Rectangle {
+        required property bool active
+        required property point start
+        required property point current
+
+        z: 25
+        visible: active
+        x: Math.min(start.x, current.x)
+        y: Math.min(start.y, current.y)
+        width: Math.abs(current.x - start.x)
+        height: Math.abs(current.y - start.y)
+        color: "#224b8df8"
+        border.color: Theme.accent
+        border.width: 1
+    }
+
     function mapToImage(view, mouseX, mouseY) {
         const img = view.image;
         if (!imageReview || !img || img.sourceSize.width <= 0 || img.sourceSize.height <= 0)
@@ -670,22 +709,13 @@ Rectangle {
             id: previewImage
 
             objectName: "imageViewport-" + viewport.slot
-            readonly property real fitScale: {
-                const sw = Math.max(1, sourceSize.width);
-                const sh = Math.max(1, sourceSize.height);
-                return Math.min(viewport.width / sw, viewport.height / sh);
-            }
-            // True-size: 1 image pixel occupies 1 physical pixel, so the item's
-            // device-independent width is sourceSize / DPR (T2).
-            readonly property real trueSizeScale: {
-                const dpr = Window.window ? Window.window.devicePixelRatio : 1;
-                return 1 / dpr;
-            }
+            readonly property real fitScale: control.imageFitScale(viewport.width, viewport.height, sourceSize.width, sourceSize.height)
+            readonly property real trueSizeScale: control.imageTrueSizeScale()
             readonly property real effectiveBaseScale: control.trueSize ? trueSizeScale : fitScale
             readonly property real drawWidth: sourceSize.width * effectiveBaseScale * control.zoom
             readonly property real drawHeight: sourceSize.height * effectiveBaseScale * control.zoom
-            x: (viewport.width - drawWidth) / 2 + (0.5 - (control.imageReview ? control.imageReview.panX : 0.5)) * drawWidth
-            y: (viewport.height - drawHeight) / 2 + (0.5 - (control.imageReview ? control.imageReview.panY : 0.5)) * drawHeight
+            x: control.imageDrawEdge(viewport.width, drawWidth, control.imageReview ? control.imageReview.panX : 0.5)
+            y: control.imageDrawEdge(viewport.height, drawHeight, control.imageReview ? control.imageReview.panY : 0.5)
             width: drawWidth
             height: drawHeight
             source: viewport.imageUrl
@@ -837,17 +867,10 @@ Rectangle {
             }
         }
 
-        Rectangle {
-            id: marqueeRect
-            visible: viewport.marqueeActive
-            z: 25
-            x: Math.min(viewport.marqueeStart.x, viewport.marqueeCurrent.x)
-            y: Math.min(viewport.marqueeStart.y, viewport.marqueeCurrent.y)
-            width: Math.abs(viewport.marqueeCurrent.x - viewport.marqueeStart.x)
-            height: Math.abs(viewport.marqueeCurrent.y - viewport.marqueeStart.y)
-            color: "#224b8df8"
-            border.color: Theme.accent
-            border.width: 1
+        ImageMarqueeRect {
+            active: viewport.marqueeActive
+            start: viewport.marqueeStart
+            current: viewport.marqueeCurrent
         }
 
         // Crop selection while dragging in edit mode; the applied selection is kept as a
@@ -2367,40 +2390,21 @@ Rectangle {
                         visible: control.backgroundMode === 1
                     }
 
-                    readonly property real fitScale: {
-                        if (!control.imageReview)
-                            return 1;
-                        const sw = Math.max(1, control.imageReview.primaryWidth);
-                        const sh = Math.max(1, control.imageReview.primaryHeight);
-                        return Math.min(width / sw, height / sh);
-                    }
-                    readonly property real effectiveBaseScale: {
-                        if (control.trueSize) {
-                            const dpr = Window.window ? Window.window.devicePixelRatio : 1;
-                            return 1 / dpr;
-                        }
-                        return fitScale;
-                    }
+                    readonly property real fitScale: control.imageReview ? control.imageFitScale(width, height, control.imageReview.primaryWidth, control.imageReview.primaryHeight) : 1
+                    readonly property real effectiveBaseScale: control.trueSize ? control.imageTrueSizeScale() : fitScale
                     readonly property real drawWidth: control.imageReview ? control.imageReview.primaryWidth * effectiveBaseScale * control.zoom : 0
                     readonly property real drawHeight: control.imageReview ? control.imageReview.primaryHeight * effectiveBaseScale * control.zoom : 0
-                    readonly property real drawX: (width - drawWidth) / 2 + (0.5 - (control.imageReview ? control.imageReview.panX : 0.5)) * drawWidth
-                    readonly property real drawY: (height - drawHeight) / 2 + (0.5 - (control.imageReview ? control.imageReview.panY : 0.5)) * drawHeight
+                    readonly property real drawX: control.imageDrawEdge(width, drawWidth, control.imageReview ? control.imageReview.panX : 0.5)
+                    readonly property real drawY: control.imageDrawEdge(height, drawHeight, control.imageReview ? control.imageReview.panY : 0.5)
                     readonly property real splitX: width * control.wipePosition
                     property bool marqueeActive: false
                     property point marqueeStart: Qt.point(0, 0)
                     property point marqueeCurrent: Qt.point(0, 0)
 
-                    Rectangle {
-                        id: wipeMarqueeRect
-                        visible: wipeOverlay.marqueeActive
-                        z: 25
-                        x: Math.min(wipeOverlay.marqueeStart.x, wipeOverlay.marqueeCurrent.x)
-                        y: Math.min(wipeOverlay.marqueeStart.y, wipeOverlay.marqueeCurrent.y)
-                        width: Math.abs(wipeOverlay.marqueeCurrent.x - wipeOverlay.marqueeStart.x)
-                        height: Math.abs(wipeOverlay.marqueeCurrent.y - wipeOverlay.marqueeStart.y)
-                        color: "#224b8df8"
-                        border.color: Theme.accent
-                        border.width: 1
+                    ImageMarqueeRect {
+                        active: wipeOverlay.marqueeActive
+                        start: wipeOverlay.marqueeStart
+                        current: wipeOverlay.marqueeCurrent
                     }
 
                     Image {
@@ -2630,39 +2634,20 @@ Rectangle {
                         visible: control.backgroundMode === 1
                     }
 
-                    readonly property real fitScale: {
-                        if (!control.imageReview)
-                            return 1;
-                        const sw = Math.max(1, control.imageReview.primaryWidth);
-                        const sh = Math.max(1, control.imageReview.primaryHeight);
-                        return Math.min(width / sw, height / sh);
-                    }
-                    readonly property real effectiveBaseScale: {
-                        if (control.trueSize) {
-                            const dpr = Window.window ? Window.window.devicePixelRatio : 1;
-                            return 1 / dpr;
-                        }
-                        return fitScale;
-                    }
+                    readonly property real fitScale: control.imageReview ? control.imageFitScale(width, height, control.imageReview.primaryWidth, control.imageReview.primaryHeight) : 1
+                    readonly property real effectiveBaseScale: control.trueSize ? control.imageTrueSizeScale() : fitScale
                     readonly property real drawWidth: control.imageReview ? control.imageReview.primaryWidth * effectiveBaseScale * control.zoom : 0
                     readonly property real drawHeight: control.imageReview ? control.imageReview.primaryHeight * effectiveBaseScale * control.zoom : 0
-                    readonly property real drawX: (width - drawWidth) / 2 + (0.5 - (control.imageReview ? control.imageReview.panX : 0.5)) * drawWidth
-                    readonly property real drawY: (height - drawHeight) / 2 + (0.5 - (control.imageReview ? control.imageReview.panY : 0.5)) * drawHeight
+                    readonly property real drawX: control.imageDrawEdge(width, drawWidth, control.imageReview ? control.imageReview.panX : 0.5)
+                    readonly property real drawY: control.imageDrawEdge(height, drawHeight, control.imageReview ? control.imageReview.panY : 0.5)
                     property bool marqueeActive: false
                     property point marqueeStart: Qt.point(0, 0)
                     property point marqueeCurrent: Qt.point(0, 0)
 
-                    Rectangle {
-                        id: fadeMarqueeRect
-                        visible: fadeOverlay.marqueeActive
-                        z: 25
-                        x: Math.min(fadeOverlay.marqueeStart.x, fadeOverlay.marqueeCurrent.x)
-                        y: Math.min(fadeOverlay.marqueeStart.y, fadeOverlay.marqueeCurrent.y)
-                        width: Math.abs(fadeOverlay.marqueeCurrent.x - fadeOverlay.marqueeStart.x)
-                        height: Math.abs(fadeOverlay.marqueeCurrent.y - fadeOverlay.marqueeStart.y)
-                        color: "#224b8df8"
-                        border.color: Theme.accent
-                        border.width: 1
+                    ImageMarqueeRect {
+                        active: fadeOverlay.marqueeActive
+                        start: fadeOverlay.marqueeStart
+                        current: fadeOverlay.marqueeCurrent
                     }
 
                     Image {
