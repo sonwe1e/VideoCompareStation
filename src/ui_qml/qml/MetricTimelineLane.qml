@@ -120,7 +120,7 @@ Item {
                 }
                 if (!started)
                     return;
-                context.strokeStyle = "#f87171";
+                context.strokeStyle = Theme.error;
                 context.lineWidth = 1;
                 context.stroke();
             }

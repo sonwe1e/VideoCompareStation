@@ -680,7 +680,7 @@ Rectangle {
 
         Rectangle {
             anchors.fill: parent
-            color: "#090d14"
+            color: Theme.canvas
             visible: control.backgroundMode === 0
         }
         Rectangle {
@@ -2372,7 +2372,7 @@ Rectangle {
 
                     Rectangle {
                         anchors.fill: parent
-                        color: "#090d14"
+                        color: Theme.canvas
                         visible: control.backgroundMode === 0
                     }
                     Rectangle {
@@ -2616,7 +2616,7 @@ Rectangle {
 
                     Rectangle {
                         anchors.fill: parent
-                        color: "#090d14"
+                        color: Theme.canvas
                         visible: control.backgroundMode === 0
                     }
                     Rectangle {
