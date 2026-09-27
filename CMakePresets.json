@@ -277,14 +277,6 @@
         "ZIP"
       ],
       "packageDirectory": "${sourceDir}/out/package/zip"
-    },
-    {
-      "name": "release-msi",
-      "configurePreset": "release",
-      "generators": [
-        "WIX"
-      ],
-      "packageDirectory": "${sourceDir}/out/package/msi"
     }
   ]
 }

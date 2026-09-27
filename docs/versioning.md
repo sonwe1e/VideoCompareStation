@@ -1,7 +1,7 @@
 # 版本号与代码提交
 
 CompareStation 使用 `主版本.次版本.修订号`。版本号写在仓库根目录的
-`CMakeLists.txt`；Windows 程序文件信息、ZIP/MSI 文件名和发布校验都从这里读取。
+`CMakeLists.txt`；Windows 程序文件信息、ZIP 文件名和发布校验都从这里读取。
 窗口标题也显示当前构建版本。
 
 - 每次代码提交保留独立的 Git SHA，并用 Conventional Commits 描述改动；不为每次提交递增产品版本。

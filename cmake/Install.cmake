@@ -69,3 +69,13 @@ endif()
 if(EXISTS "${PROJECT_SOURCE_DIR}/licenses")
     install(DIRECTORY "${PROJECT_SOURCE_DIR}/licenses/" DESTINATION licenses COMPONENT Runtime)
 endif()
+
+# The ZIP is the only package, so the unpacked build has to be able to install itself: ship the
+# per-user Explorer registration script and the notes that explain it.
+install(
+    FILES
+        "${PROJECT_SOURCE_DIR}/packaging/INSTALL.txt"
+        "${PROJECT_SOURCE_DIR}/tools/shell/RegisterExplorerCommand.ps1"
+    DESTINATION .
+    COMPONENT Runtime
+)

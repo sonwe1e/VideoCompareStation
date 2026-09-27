@@ -44,10 +44,15 @@ cmake --build --preset dev --target lint
 cmake --preset release
 cmake --build --preset release
 cpack --preset release-zip
-cpack --preset release-msi
+pwsh tools/shell/RegisterExplorerCommand.ps1 -InstallRoot out\build\release\bin
 ```
 
 Keep outputs in `out/`.
+
+The ZIP is the only published package; there is no MSI to maintain. Installing means unpacking the
+ZIP, and the Explorer "Compare with CompareStation" command for `.mp4`, `.mkv`, `.mov`, `.avi` and
+`.m4v` comes from `tools/shell/RegisterExplorerCommand.ps1`, which writes per-user keys under
+`HKCU\Software\Classes` and needs no administrator rights. `-Uninstall` removes them again.
 
 ## Coding Style and Naming
 
