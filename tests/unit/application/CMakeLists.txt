@@ -4,6 +4,7 @@ add_executable(
     dvs_application_unit_tests
     AlignmentTests.cpp
     AlignmentWorkEstimatorTests.cpp
+    ClipExportPlannerTests.cpp
     ContractCompileTests.cpp
     ComparisonExactnessTests.cpp
     ComparisonMetricsTests.cpp

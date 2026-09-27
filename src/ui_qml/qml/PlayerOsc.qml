@@ -44,6 +44,13 @@ Item {
     property int inFrame: -1
     property int outFrame: -1
     property bool loopRangeActive: false
+    // Range clip export, forwarded to the transport chip. The host owns the export adapter, so the
+    // OSC only relays visibility, gate and progress.
+    property bool rangeExportVisible: false
+    property bool rangeExportEnabled: false
+    property bool rangeExportBusy: false
+    property real rangeExportProgress: 0
+    readonly property bool canMarkRange: control.timelineEnabled && control.currentFrame >= 0
     property int previewFrame: -1
     property string previewTimecode: "00:00:00:00"
     property url previewThumbnailSource: ""
@@ -56,6 +63,14 @@ Item {
     signal previewRequested(int frame)
     signal seekRequested(int frame)
     signal overlayHidden
+    // In/out range intents. Forwarded verbatim from the transport's range row; the host (Main.qml)
+    // owns the range mutation functions, so the OSC never touches session state directly.
+    signal markInRequested
+    signal markOutRequested
+    signal playRangeRequested
+    signal rangeLoopRequested
+    signal clearRangeRequested
+    signal exportRangeRequested
 
     objectName: "transport"
     height: Math.max(0, tracks.y) + tracks.height + 13 + transport.implicitHeight + 5
@@ -183,12 +198,9 @@ Item {
                 color: Theme.mutedText
                 font.pixelSize: 12
             }
-            Text {
-                visible: control.inFrame >= 0 || control.outFrame >= 0
-                text: qsTr("入点 %1  出点 %2%3").arg(control.inFrame >= 0 ? control.inFrame + 1 : "—").arg(control.outFrame >= 0 ? control.outFrame + 1 : "—").arg(control.loopRangeActive ? qsTr("  ·  循环") : "")
-                color: control.loopRangeActive ? "#7dd3fc" : "#9fc3ff"
-                font.pixelSize: 11
-            }
+            // The in/out range readout moved into the transport's range row
+            // (`transportRangeLabel`): endpoints, their buttons and the frame count now sit in one
+            // cluster instead of being split between the status rail and the transport.
             // V-07 compact pair-metrics readout. Sits next to the timecode so the current
             // frame's MAE/PSNR answer "how different is this frame" without opening the
             // inspector. Hidden entirely when metrics are unavailable (single source or no
@@ -369,6 +381,21 @@ Item {
             currentFrame: control.currentFrame
             totalFrames: control.totalFrames
             focusTarget: control.focusTarget
+            rangeControlsVisible: true
+            canMarkRange: control.canMarkRange
+            rangeInFrame: control.inFrame
+            rangeOutFrame: control.outFrame
+            rangeLoopActive: control.loopRangeActive
+            rangeExportVisible: control.rangeExportVisible
+            rangeExportEnabled: control.rangeExportEnabled
+            rangeExportBusy: control.rangeExportBusy
+            rangeExportProgress: control.rangeExportProgress
+            onExportRangeRequested: control.exportRangeRequested()
+            onMarkInRequested: control.markInRequested()
+            onMarkOutRequested: control.markOutRequested()
+            onPlayRangeRequested: control.playRangeRequested()
+            onRangeLoopRequested: control.rangeLoopRequested()
+            onClearRangeRequested: control.clearRangeRequested()
             onFirstRequested: control.actions.firstFrame()
             onPreviousSecondRequested: control.actions.stepBackwardSecond()
             onPreviousFiveRequested: control.actions.stepBackwardFive()

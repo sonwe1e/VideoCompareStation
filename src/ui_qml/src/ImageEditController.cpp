@@ -13,10 +13,11 @@
 #include <QRect>
 #include <QSaveFile>
 #include <QUndoCommand>
-#include <QUndoStack>
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -26,6 +27,17 @@ namespace {
 constexpr int kDefaultHistoryLimit = 8;
 constexpr int kMaximumHistoryLimit = 64;
 constexpr int kMaximumImageEdge = 16384;
+constexpr int kMinimumImageEdge = 1;
+// Clean index sentinel: -1 means "nothing on the stack is the saved state".
+constexpr int kNotClean = -1;
+// Crop, resize and pad each retain a whole pre-step buffer, so depth alone cannot bound
+// memory on a large image. The budget matches the decoded-frame cache ceiling; a step
+// bigger than the budget is still kept (history must stay usable), it just means the next
+// step prunes everything older.
+constexpr qint64 kDefaultHistoryByteBudget = 256LL * 1024 * 1024;
+[[nodiscard]] qint64 imageBytes(const QImage& image) noexcept {
+    return static_cast<qint64>(image.sizeInBytes());
+}
 // A live brush preview bumps the provider revision, and the QML Image re-uploads the whole
 // buffer on each bump. Throttling keeps a stroke responsive without flooding the GPU.
 constexpr int kStrokePreviewIntervalMs = 66;
@@ -53,6 +65,12 @@ constexpr int kAnnotationHitTolerance = 5;
 
 class ImageEditController::Impl final {
 public:
+    explicit Impl(ImageEditController& owner) : controller(owner) {}
+
+    // The controller emits through here: a history step changes pixels, annotations and the
+    // undo/redo labels all at once, so one place has to notify all of them.
+    ImageEditController& controller;
+
     enum class AnnotationKind {
         Arrow,
         Rectangle,
@@ -70,11 +88,181 @@ public:
         QString text;
     };
 
+    // A history step that keeps whole image buffers alive. The byte budget needs to know how
+    // much each retained step costs, and only these steps can be large.
+    class BufferRetainingCommand : public QUndoCommand {
+    public:
+        using QUndoCommand::QUndoCommand;
+
+        [[nodiscard]] virtual qint64 retainedBytes() const noexcept = 0;
+    };
+
+    // The undo stack, with the one thing QUndoStack cannot do for us: a byte budget.
+    //
+    // QUndoStack only bounds depth, and its setUndoLimit() is documented to take effect only
+    // while the stack is empty, so a stack holding several crops or resamples cannot be made
+    // to release the oldest buffers at all. Crop, resize and pad each keep a whole previous
+    // image alive, which on a large photo is the difference between a few megabytes and a
+    // gigabyte, so depth alone is not a sufficient bound here.
+    //
+    // Semantics match QUndoStack otherwise: pushing after an undo discards the redo tail,
+    // an index marks the current position, and a clean index records the saved state. Pruning
+    // always drops the oldest commands first and never the command just pushed, so the
+    // newest edit stays undoable even when it alone exceeds the budget.
+    class History final {
+    public:
+        // Called after any change to the current index: a push, an undo or a redo.
+        std::function<void()> onChanged;
+
+        void push(std::unique_ptr<QUndoCommand> command) {
+            command->redo();
+            const qint64 retained = retainedBytesOf(*command);
+            if (index_ < std::ssize(commands_)) {
+                // Anything that had been undone can no longer be redone.
+                commands_.erase(commands_.begin() + index_, commands_.end());
+                if (cleanIndex_ > index_) {
+                    cleanIndex_ = kNotClean;
+                }
+            }
+            commands_.push_back(std::move(command));
+            ++index_;
+            retainedBytes_ += retained;
+            prune();
+            notify();
+        }
+
+        void undo() {
+            if (!canUndo()) {
+                return;
+            }
+            --index_;
+            commands_[static_cast<std::size_t>(index_)]->undo();
+            notify();
+        }
+
+        void redo() {
+            if (!canRedo()) {
+                return;
+            }
+            commands_[static_cast<std::size_t>(index_)]->redo();
+            ++index_;
+            notify();
+        }
+
+        void clear() {
+            commands_.clear();
+            index_ = 0;
+            cleanIndex_ = 0;
+            retainedBytes_ = 0;
+        }
+
+        void setClean() noexcept {
+            cleanIndex_ = index_;
+        }
+
+        [[nodiscard]] bool isClean() const noexcept {
+            return cleanIndex_ == index_;
+        }
+
+        [[nodiscard]] bool canUndo() const noexcept {
+            return index_ > 0;
+        }
+
+        [[nodiscard]] bool canRedo() const noexcept {
+            return index_ < std::ssize(commands_);
+        }
+
+        [[nodiscard]] QString undoText() const {
+            return canUndo() ? commands_[static_cast<std::size_t>(index_ - 1)]->text() : QString();
+        }
+
+        [[nodiscard]] QString redoText() const {
+            return canRedo() ? commands_[static_cast<std::size_t>(index_)]->text() : QString();
+        }
+
+    public:
+        // Requested depth. Lowering it prunes immediately, like QUndoStack would at push time.
+        void setDepthLimit(const int limit) {
+            depthLimit_ = std::max(1, limit);
+            prune();
+        }
+
+        [[nodiscard]] int depthLimit() const noexcept {
+            return depthLimit_;
+        }
+
+        void setByteBudget(const qint64 budget) noexcept {
+            byteBudget_ = budget;
+        }
+
+        [[nodiscard]] qint64 byteBudget() const noexcept {
+            return byteBudget_;
+        }
+
+        [[nodiscard]] qint64 retainedBytes() const noexcept {
+            return retainedBytes_;
+        }
+
+        // Drops the oldest steps until both bounds hold. The newest step always survives: the
+        // depth loop stops at one command and the byte loop stops once it is the only one
+        // left, which is why a single oversized edit is still undoable.
+        void prune() {
+            while (count() > depthLimit_) {
+                dropOldest();
+            }
+            while (byteBudget_ > 0 && retainedBytes_ > byteBudget_ && count() > 1) {
+                dropOldest();
+            }
+            // Dropping resets the index; the running total might have been charging commands
+            // that the redo-tail erase already removed.
+            recountRetainedBytes();
+        }
+
+    private:
+        [[nodiscard]] int count() const noexcept {
+            return static_cast<int>(commands_.size());
+        }
+
+        void dropOldest() {
+            commands_.erase(commands_.begin());
+            --index_;
+            if (cleanIndex_ >= 0) {
+                --cleanIndex_;
+            }
+        }
+
+        void recountRetainedBytes() noexcept {
+            qint64 total = 0;
+            for (const std::unique_ptr<QUndoCommand>& command : commands_) {
+                total += retainedBytesOf(*command);
+            }
+            retainedBytes_ = total;
+        }
+
+        [[nodiscard]] static qint64 retainedBytesOf(const QUndoCommand& command) noexcept {
+            const auto* buffer = dynamic_cast<const BufferRetainingCommand*>(&command);
+            return buffer != nullptr ? buffer->retainedBytes() : 0;
+        }
+
+        void notify() {
+            if (onChanged) {
+                onChanged();
+            }
+        }
+
+        std::vector<std::unique_ptr<QUndoCommand>> commands_;
+        int index_ = 0;
+        int cleanIndex_ = 0;
+        int depthLimit_ = kDefaultHistoryLimit;
+        qint64 byteBudget_ = 0;
+        qint64 retainedBytes_ = 0;
+    };
+
     // One undoable crop. A crop that removed pixels can only be undone from the previous
     // buffer, so each step retains the pre-crop image; the bounded history limit keeps
     // that retention predictable (8 steps by default). Annotations are geometry, so the
     // step stores their previous and translated positions instead of any pixels.
-    class CropCommand final : public QUndoCommand {
+    class CropCommand final : public BufferRetainingCommand {
     public:
         CropCommand(Impl* owner, const QRect rect)
             : owner_(owner), rect_(rect), previousImage_(owner->working),
@@ -93,6 +281,11 @@ public:
             owner_->working = owner_->working.copy(rect_);
             owner_->annotations = next_;
             owner_->selectedAnnotation = -1;
+        }
+
+        // Bytes this step keeps alive until it leaves the history.
+        [[nodiscard]] qint64 retainedBytes() const noexcept override {
+            return imageBytes(previousImage_);
         }
 
     private:
@@ -116,6 +309,141 @@ public:
 
         Impl* owner_;
         QRect rect_;
+        QImage previousImage_;
+        std::vector<Annotation> previous_;
+        std::vector<Annotation> next_;
+    };
+
+    // One undoable resample ("缩放"): the pixel dimensions change, so the step retains the
+    // previous buffer exactly like a crop. Annotations are geometry, so their coordinates
+    // and text sizes are scaled instead of pixel-copied; the same rule keeps a later crop
+    // from drifting them.
+    class ResampleCommand final : public BufferRetainingCommand {
+    public:
+        ResampleCommand(Impl* owner, const QSize target, const bool smooth)
+            : owner_(owner), target_(target), smooth_(smooth), previousImage_(owner->working),
+              previous_(owner->annotations) {
+            setText(ImageEditController::tr("缩放"));
+            next_ = scaled(previous_, previousImage_.size(), target_);
+        }
+
+        void undo() override {
+            owner_->working = previousImage_;
+            owner_->annotations = previous_;
+            owner_->selectedAnnotation = -1;
+        }
+
+        void redo() override {
+            owner_->working =
+                previousImage_.scaled(target_,
+                                      Qt::IgnoreAspectRatio,
+                                      smooth_ ? Qt::SmoothTransformation : Qt::FastTransformation);
+            owner_->annotations = next_;
+            owner_->selectedAnnotation = -1;
+        }
+
+        // Bytes this step keeps alive until it leaves the history.
+        [[nodiscard]] qint64 retainedBytes() const noexcept override {
+            return imageBytes(previousImage_);
+        }
+
+    private:
+        // Scales annotation geometry by the same factor as the pixels. Coordinates round to
+        // the nearest pixel of the new canvas and text size keeps at least one pixel so a
+        // heavily downscaled label stays selectable and deletable.
+        [[nodiscard]] static std::vector<Annotation>
+        scaled(const std::vector<Annotation>& source, const QSize from, const QSize target) {
+            std::vector<Annotation> result;
+            if (from.isEmpty() || target.isEmpty()) {
+                return result;
+            }
+            const qreal scaleX = static_cast<qreal>(target.width()) / from.width();
+            const qreal scaleY = static_cast<qreal>(target.height()) / from.height();
+            result.reserve(source.size());
+            for (const Annotation& annotation : source) {
+                Annotation scaled = annotation;
+                scaled.from = QPoint{static_cast<int>(std::lround(annotation.from.x() * scaleX)),
+                                     static_cast<int>(std::lround(annotation.from.y() * scaleY))};
+                scaled.to = QPoint{static_cast<int>(std::lround(annotation.to.x() * scaleX)),
+                                   static_cast<int>(std::lround(annotation.to.y() * scaleY))};
+                scaled.width = std::max(
+                    1, static_cast<int>(std::lround(annotation.width * std::min(scaleX, scaleY))));
+                const qreal textScale =
+                    annotation.kind == AnnotationKind::Text ? scaleY : std::min(scaleX, scaleY);
+                scaled.size =
+                    std::max(1, static_cast<int>(std::lround(annotation.size * textScale)));
+                result.push_back(std::move(scaled));
+            }
+            return result;
+        }
+
+        Impl* owner_;
+        QSize target_;
+        bool smooth_ = true;
+        QImage previousImage_;
+        std::vector<Annotation> previous_;
+        std::vector<Annotation> next_;
+    };
+
+    // One undoable canvas change ("填充"): the working copy is pasted into the centre of a
+    // new width x height canvas and the surrounding pixels are filled with a chosen colour.
+    // Annotations shift by the centring offset; nothing is dropped, because the image itself
+    // is never cut.
+    class CanvasCommand final : public BufferRetainingCommand {
+    public:
+        CanvasCommand(Impl* owner, const QSize target, const QColor& fill)
+            : owner_(owner), target_(target), fill_(fill), previousImage_(owner->working),
+              previous_(owner->annotations) {
+            setText(ImageEditController::tr("填充画布"));
+            next_ = shifted(previous_, previousImage_.size(), target_);
+        }
+
+        void undo() override {
+            owner_->working = previousImage_;
+            owner_->annotations = previous_;
+            owner_->selectedAnnotation = -1;
+        }
+
+        void redo() override {
+            QImage canvas{target_, previousImage_.format()};
+            canvas.fill(fill_);
+            const QPoint offset{(target_.width() - previousImage_.width()) / 2,
+                                (target_.height() - previousImage_.height()) / 2};
+            QPainter painter(&canvas);
+            // Source keeps the pasted pixels exactly as they are, transparent ones included;
+            // SourceOver would blend them with the fill and silently change the image.
+            painter.setCompositionMode(QPainter::CompositionMode_Source);
+            painter.drawImage(offset, previousImage_);
+            painter.end();
+            owner_->working = std::move(canvas);
+            owner_->annotations = next_;
+            owner_->selectedAnnotation = -1;
+        }
+
+        // Bytes this step keeps alive until it leaves the history.
+        [[nodiscard]] qint64 retainedBytes() const noexcept override {
+            return imageBytes(previousImage_);
+        }
+
+    private:
+        [[nodiscard]] static std::vector<Annotation>
+        shifted(const std::vector<Annotation>& source, const QSize from, const QSize target) {
+            const QPoint offset{(target.width() - from.width()) / 2,
+                                (target.height() - from.height()) / 2};
+            std::vector<Annotation> result;
+            result.reserve(source.size());
+            for (const Annotation& annotation : source) {
+                Annotation moved = annotation;
+                moved.from += offset;
+                moved.to += offset;
+                result.push_back(std::move(moved));
+            }
+            return result;
+        }
+
+        Impl* owner_;
+        QSize target_;
+        QColor fill_;
         QImage previousImage_;
         std::vector<Annotation> previous_;
         std::vector<Annotation> next_;
@@ -284,7 +612,10 @@ public:
     QString sourcePath;
     int revision = 0;
     QString status;
-    QUndoStack history;
+    History history;
+    // The depth the user asked for. The byte budget may lower the effective limit, so the
+    // requested depth is kept separately and re-applied to every new session.
+    int sessionHistoryLimit = kDefaultHistoryLimit;
     // Live brush stroke: the base buffer is transient (released when the stroke commits)
     // and only the stroke's dirty rect enters the history.
     QImage strokeBase;
@@ -413,6 +744,25 @@ public:
         }
     }
 
+    // Pushes one history step. All steps go through here so the byte budget and the
+    // change notification stay in one place: the History charges whatever the command
+    // retains and prunes the oldest buffers when that exceeds the budget.
+    void pushStep(std::unique_ptr<QUndoCommand> command) {
+        history.push(std::move(command));
+    }
+
+    // Everything the history changes has to make the composite, the undo/redo labels and the
+    // dirty flag agree again. One hook, so pruning inside the history cannot leave the UI
+    // showing a step that is gone.
+    void extendHistory() {
+        rebuildComposite();
+        ++revision;
+        emit controller.stateChanged();
+        emit controller.imageChanged();
+        emit controller.annotationsChanged();
+        emit controller.historyChanged();
+    }
+
     // Rebuilds the displayed/saved image from the pixel edits plus the annotation list. A
     // list without annotations shares the working buffer instead of copying it.
     void rebuildComposite() {
@@ -466,20 +816,13 @@ public:
 };
 
 ImageEditController::ImageEditController(QObject* parent) : QObject(parent), impl_(nullptr) {
-    impl_ = std::make_unique<Impl>();
-    impl_->history.setUndoLimit(kDefaultHistoryLimit);
-    QObject::connect(&impl_->history, &QUndoStack::indexChanged, this, [this] {
-        // Every history step may have changed pixels, annotations, or both; the composite is
-        // what the provider serves, so rebuild it before anything can read it.
-        impl_->rebuildComposite();
-        ++impl_->revision;
-        emit imageChanged();
-        emit annotationsChanged();
-        emit historyChanged();
-        emit stateChanged();
-    });
-    QObject::connect(
-        &impl_->history, &QUndoStack::cleanChanged, this, [this] { emit stateChanged(); });
+    impl_ = std::make_unique<Impl>(*this);
+    impl_->history.setDepthLimit(kDefaultHistoryLimit);
+    impl_->history.setByteBudget(kDefaultHistoryByteBudget);
+    // Every history step may have changed pixels, annotations, or both; the composite is
+    // what the provider serves, so rebuild it before anything can read it. The hook also
+    // fires from inside a push, so it must not push anything itself.
+    impl_->history.onChanged = [this] { impl_->extendHistory(); };
 }
 
 ImageEditController::~ImageEditController() = default;
@@ -513,6 +856,14 @@ int ImageEditController::imageWidth() const noexcept {
 }
 
 int ImageEditController::imageHeight() const noexcept {
+    return impl_->working.height();
+}
+
+int ImageEditController::canvasWidth() const noexcept {
+    return impl_->working.width();
+}
+
+int ImageEditController::canvasHeight() const noexcept {
     return impl_->working.height();
 }
 
@@ -550,14 +901,40 @@ QString ImageEditController::lastStatus() const {
 
 void ImageEditController::setHistoryLimit(const int steps) {
     const int bounded = std::clamp(steps, 1, kMaximumHistoryLimit);
-    if (impl_->history.undoLimit() == bounded) {
+    impl_->sessionHistoryLimit = bounded;
+    if (impl_->history.depthLimit() == bounded) {
         return;
     }
-    impl_->history.setUndoLimit(bounded);
+    impl_->history.setDepthLimit(bounded);
 }
 
 int ImageEditController::historyLimit() const noexcept {
-    return impl_->history.undoLimit();
+    return impl_->history.depthLimit();
+}
+
+void ImageEditController::setHistoryByteBudget(const qint64 bytes) {
+    impl_->history.setByteBudget(bytes <= 0 ? 0 : bytes);
+    impl_->history.prune();
+}
+
+qint64 ImageEditController::historyByteBudget() const noexcept {
+    return impl_->history.byteBudget();
+}
+
+int ImageEditController::maximumImageEdge() noexcept {
+    return kMaximumImageEdge;
+}
+
+int ImageEditController::minimumImageEdge() noexcept {
+    return kMinimumImageEdge;
+}
+
+int ImageEditController::maximumEdge() const noexcept {
+    return kMaximumImageEdge;
+}
+
+int ImageEditController::minimumEdge() const noexcept {
+    return kMinimumImageEdge;
 }
 
 bool ImageEditController::beginSession(const int slot,
@@ -585,6 +962,9 @@ bool ImageEditController::beginSession(const int slot,
     impl_->label = label;
     impl_->sourcePath = sourceUrl.isLocalFile() ? sourceUrl.toLocalFile() : sourceUrl.toString();
     impl_->history.clear();
+    // A fresh session starts from the user's configured depth, not from whatever the byte
+    // budget shrank it to during the previous image.
+    impl_->history.setDepthLimit(impl_->sessionHistoryLimit);
     impl_->history.setClean();
     impl_->rebuildComposite();
     ++impl_->revision;
@@ -601,6 +981,7 @@ void ImageEditController::endSession() {
         return;
     }
     impl_->history.clear();
+    impl_->history.setDepthLimit(impl_->sessionHistoryLimit);
     impl_->original = QImage();
     impl_->working = QImage();
     impl_->composite = QImage();
@@ -646,8 +1027,62 @@ bool ImageEditController::cropToImageRect(const int x,
         setStatus(tr("裁剪区域与当前图片相同。"));
         return false;
     }
-    impl_->history.push(new Impl::CropCommand(impl_.get(), bounded));
+    impl_->pushStep(std::make_unique<Impl::CropCommand>(impl_.get(), bounded));
     setStatus(tr("已裁剪为 %1×%2").arg(bounded.width()).arg(bounded.height()));
+    return true;
+}
+
+bool ImageEditController::resizeImage(const int width, const int height, const bool smooth) {
+    if (!active()) {
+        setStatus(tr("没有正在编辑的图片。"));
+        return false;
+    }
+    const int targetWidth = std::clamp(width, kMinimumImageEdge, kMaximumImageEdge);
+    const int targetHeight = std::clamp(height, kMinimumImageEdge, kMaximumImageEdge);
+    if (targetWidth == impl_->working.width() && targetHeight == impl_->working.height()) {
+        setStatus(
+            width != targetWidth || height != targetHeight
+                ? tr("尺寸已钳制到 %1×%2，与当前图片相同。").arg(targetWidth).arg(targetHeight)
+                : tr("尺寸与当前图片相同。"));
+        return false;
+    }
+    impl_->pushStep(std::make_unique<Impl::ResampleCommand>(
+        impl_.get(), QSize{targetWidth, targetHeight}, smooth));
+    setStatus(tr("已缩放为 %1×%2").arg(targetWidth).arg(targetHeight));
+    return true;
+}
+
+bool ImageEditController::padToCanvas(const int width, const int height, const QColor& fillColor) {
+    if (!active()) {
+        setStatus(tr("没有正在编辑的图片。"));
+        return false;
+    }
+    if (!fillColor.isValid()) {
+        setStatus(tr("填充颜色无效。"));
+        return false;
+    }
+    // Padding means "put the image in the middle of a bigger canvas"; a smaller canvas would
+    // silently cut pixels, which is what crop is for.
+    if (width < impl_->working.width() || height < impl_->working.height()) {
+        setStatus(tr("画布不能小于当前图片（%1×%2）。")
+                      .arg(impl_->working.width())
+                      .arg(impl_->working.height()));
+        return false;
+    }
+    const int targetWidth = std::clamp(width, kMinimumImageEdge, kMaximumImageEdge);
+    const int targetHeight = std::clamp(height, kMinimumImageEdge, kMaximumImageEdge);
+    if (targetWidth == impl_->working.width() && targetHeight == impl_->working.height()) {
+        setStatus(tr("画布与当前图片相同。"));
+        return false;
+    }
+    if (fillColor.alpha() < 255 && !impl_->working.hasAlphaChannel()) {
+        setStatus(tr("当前图片没有透明通道，无法用透明色填充；请先转换为带透明通道的图片，"
+                     "或选择不透明颜色。"));
+        return false;
+    }
+    impl_->pushStep(std::make_unique<Impl::CanvasCommand>(
+        impl_.get(), QSize{targetWidth, targetHeight}, fillColor));
+    setStatus(tr("已填充为 %1×%2 画布，原图居中。").arg(targetWidth).arg(targetHeight));
     return true;
 }
 
@@ -714,11 +1149,11 @@ bool ImageEditController::endStroke() {
     impl_->strokeOpen = false;
     const QRect dirty = impl_->strokeDirtyRect();
     if (!dirty.isEmpty()) {
-        impl_->history.push(new Impl::PatchCommand(impl_.get(),
-                                                   dirty,
-                                                   impl_->strokeBase.copy(dirty),
-                                                   impl_->working.copy(dirty),
-                                                   tr("画笔")));
+        impl_->pushStep(std::make_unique<Impl::PatchCommand>(impl_.get(),
+                                                             dirty,
+                                                             impl_->strokeBase.copy(dirty),
+                                                             impl_->working.copy(dirty),
+                                                             tr("画笔")));
     } else {
         impl_->rebuildComposite();
         ++impl_->revision;
@@ -769,7 +1204,7 @@ bool ImageEditController::mosaicImageRect(
         painter.setCompositionMode(QPainter::CompositionMode_Source);
         painter.drawImage(0, 0, pixelated);
     }
-    impl_->history.push(new Impl::PatchCommand(
+    impl_->pushStep(std::make_unique<Impl::PatchCommand>(
         impl_.get(), bounded, impl_->working.copy(bounded), std::move(after), tr("马赛克")));
     setStatus(tr("已对 %1×%2 区域应用马赛克（块 %3 像素）")
                   .arg(bounded.width())
@@ -797,7 +1232,7 @@ bool ImageEditController::fillImageRect(
     // An opaque colour block is the review's preferred way to mask sensitive content.
     QImage after = impl_->working.copy(bounded);
     after.fill(color);
-    impl_->history.push(new Impl::PatchCommand(
+    impl_->pushStep(std::make_unique<Impl::PatchCommand>(
         impl_.get(), bounded, impl_->working.copy(bounded), std::move(after), tr("填充")));
     setStatus(tr("已填充 %1×%2 区域").arg(bounded.width()).arg(bounded.height()));
     return true;
@@ -819,7 +1254,7 @@ bool ImageEditController::clearImageRect(const int x,
     }
     QImage after = impl_->working.copy(bounded);
     after.fill(Qt::transparent);
-    impl_->history.push(new Impl::PatchCommand(
+    impl_->pushStep(std::make_unique<Impl::PatchCommand>(
         impl_.get(), bounded, impl_->working.copy(bounded), std::move(after), tr("清除")));
     setStatus(tr("已把 %1×%2 区域清除为透明").arg(bounded.width()).arg(bounded.height()));
     return true;
@@ -856,7 +1291,8 @@ bool ImageEditController::addArrow(const int fromX,
     annotation.to = to;
     annotation.color = color;
     annotation.width = std::clamp(width, 1, kMaximumAnnotationWidth);
-    impl_->history.push(new Impl::AddAnnotationCommand(impl_.get(), std::move(annotation)));
+    impl_->pushStep(
+        std::make_unique<Impl::AddAnnotationCommand>(impl_.get(), std::move(annotation)));
     setStatus(tr("已添加箭头标注。"));
     return true;
 }
@@ -892,7 +1328,8 @@ bool ImageEditController::addRectangle(const int fromX,
     annotation.to = rect.bottomRight();
     annotation.color = color;
     annotation.width = std::clamp(width, 1, kMaximumAnnotationWidth);
-    impl_->history.push(new Impl::AddAnnotationCommand(impl_.get(), std::move(annotation)));
+    impl_->pushStep(
+        std::make_unique<Impl::AddAnnotationCommand>(impl_.get(), std::move(annotation)));
     setStatus(tr("已添加矩形标注。"));
     return true;
 }
@@ -924,7 +1361,8 @@ bool ImageEditController::addText(
     annotation.size = std::clamp(pixelSize, 8, kMaximumTextSize);
     annotation.width = std::max(1, annotation.size / 12);
     annotation.text = trimmed;
-    impl_->history.push(new Impl::AddAnnotationCommand(impl_.get(), std::move(annotation)));
+    impl_->pushStep(
+        std::make_unique<Impl::AddAnnotationCommand>(impl_.get(), std::move(annotation)));
     setStatus(tr("已添加文字标注。"));
     return true;
 }
@@ -1018,13 +1456,13 @@ bool ImageEditController::endAnnotationDrag() {
     // One gesture is one history step: the live preview above never touched the stack.
     impl_->annotations[static_cast<std::size_t>(index)].from = impl_->dragOriginalFrom;
     impl_->annotations[static_cast<std::size_t>(index)].to = impl_->dragOriginalTo;
-    impl_->history.push(
-        new Impl::MoveAnnotationCommand(impl_.get(),
-                                        index,
-                                        impl_->dragOriginalFrom,
-                                        impl_->dragOriginalTo,
-                                        impl_->dragOriginalFrom + impl_->dragAppliedDelta,
-                                        impl_->dragOriginalTo + impl_->dragAppliedDelta));
+    impl_->pushStep(std::make_unique<Impl::MoveAnnotationCommand>(
+        impl_.get(),
+        index,
+        impl_->dragOriginalFrom,
+        impl_->dragOriginalTo,
+        impl_->dragOriginalFrom + impl_->dragAppliedDelta,
+        impl_->dragOriginalTo + impl_->dragAppliedDelta));
     impl_->dragAppliedDelta = QPoint{0, 0};
     setStatus(tr("已移动标注。"));
     return true;
@@ -1051,13 +1489,13 @@ bool ImageEditController::moveSelectedAnnotation(const int deltaX, const int del
         setStatus(tr("标注已在画面边界内。"));
         return false;
     }
-    impl_->history.push(
-        new Impl::MoveAnnotationCommand(impl_.get(),
-                                        index,
-                                        annotation.from,
-                                        annotation.to,
-                                        annotation.from + QPoint{clampedX, clampedY},
-                                        annotation.to + QPoint{clampedX, clampedY}));
+    impl_->pushStep(
+        std::make_unique<Impl::MoveAnnotationCommand>(impl_.get(),
+                                                      index,
+                                                      annotation.from,
+                                                      annotation.to,
+                                                      annotation.from + QPoint{clampedX, clampedY},
+                                                      annotation.to + QPoint{clampedX, clampedY}));
     setStatus(tr("已移动标注。"));
     return true;
 }
@@ -1072,7 +1510,7 @@ bool ImageEditController::deleteSelectedAnnotation() {
         setStatus(tr("请先选中一个标注。"));
         return false;
     }
-    impl_->history.push(new Impl::DeleteAnnotationCommand(
+    impl_->pushStep(std::make_unique<Impl::DeleteAnnotationCommand>(
         impl_.get(), index, impl_->annotations[static_cast<std::size_t>(index)]));
     setStatus(tr("已删除标注。"));
     return true;
@@ -1082,7 +1520,8 @@ void ImageEditController::clearAnnotations() {
     if (!active() || impl_->annotations.empty()) {
         return;
     }
-    impl_->history.push(new Impl::ClearAnnotationsCommand(impl_.get(), impl_->annotations));
+    impl_->pushStep(
+        std::make_unique<Impl::ClearAnnotationsCommand>(impl_.get(), impl_->annotations));
     setStatus(tr("已清除全部标注。"));
 }
 

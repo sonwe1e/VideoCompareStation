@@ -21,6 +21,21 @@ struct AvFormatContextDeleter final {
 
 using AvFormatContextPtr = std::unique_ptr<AVFormatContext, AvFormatContextDeleter>;
 
+// Output contexts own an AVIOContext opened by avio_open2, which avformat_free_context frees
+// structurally but does not close, so the handle is released first.
+struct AvOutputFormatContextDeleter final {
+    void operator()(AVFormatContext* context) const noexcept {
+        if (context != nullptr) {
+            if (context->pb != nullptr) {
+                avio_closep(&context->pb);
+            }
+            avformat_free_context(context);
+        }
+    }
+};
+
+using AvOutputFormatContextPtr = std::unique_ptr<AVFormatContext, AvOutputFormatContextDeleter>;
+
 struct AvCodecContextDeleter final {
     void operator()(AVCodecContext* context) const noexcept {
         if (context != nullptr) {

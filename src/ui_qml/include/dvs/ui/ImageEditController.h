@@ -13,8 +13,10 @@ namespace dvs::ui {
 
 // Lightweight still-image editing over the review workspace. The decoded original stays
 // immutable; every tool edits a working copy, every operation is undoable through a
-// bounded history, and saving always writes a new file. Crop and annotation geometry is
-// expressed in image pixels, so a zoomed or panned viewport cannot drift a selection.
+// bounded history, and saving always writes a new file. Crop, resample, canvas and
+// annotation geometry is expressed in image pixels, so a zoomed or panned viewport cannot
+// drift a selection. The three geometry steps the review actually asked for are crop,
+// resize (change the pixel dimensions) and pad (centre the image on a new canvas).
 //
 // Editing is deliberately separate from comparison: the workspace may show the edited
 // copy, but the difference pipeline and metrics keep using the committed originals.
@@ -27,7 +29,16 @@ class ImageEditController final : public QObject {
     Q_PROPERTY(QString sourceLabel READ sourceLabel NOTIFY stateChanged)
     Q_PROPERTY(int imageWidth READ imageWidth NOTIFY imageChanged)
     Q_PROPERTY(int imageHeight READ imageHeight NOTIFY imageChanged)
+    // Pixel dimensions of the current canvas. Same values as imageWidth/imageHeight — the
+    // canvas is the working image — but named for the scale/pad dialogs, where "canvas"
+    // reads unambiguously as "the size the next step starts from".
+    Q_PROPERTY(int canvasWidth READ canvasWidth NOTIFY imageChanged)
+    Q_PROPERTY(int canvasHeight READ canvasHeight NOTIFY imageChanged)
     Q_PROPERTY(bool imageHasAlpha READ imageHasAlpha NOTIFY imageChanged)
+    // Edge limits the resize and canvas-fill dialogs validate against. Exposed as a property
+    // so QML reads the same clamp the controller enforces instead of repeating the numbers.
+    Q_PROPERTY(int maximumEdge READ maximumEdge CONSTANT)
+    Q_PROPERTY(int minimumEdge READ minimumEdge CONSTANT)
     Q_PROPERTY(bool canUndo READ canUndo NOTIFY historyChanged)
     Q_PROPERTY(bool canRedo READ canRedo NOTIFY historyChanged)
     Q_PROPERTY(QString undoLabel READ undoLabel NOTIFY historyChanged)
@@ -59,7 +70,11 @@ public:
     [[nodiscard]] QString sourceLabel() const;
     [[nodiscard]] int imageWidth() const noexcept;
     [[nodiscard]] int imageHeight() const noexcept;
+    [[nodiscard]] int canvasWidth() const noexcept;
+    [[nodiscard]] int canvasHeight() const noexcept;
     [[nodiscard]] bool imageHasAlpha() const noexcept;
+    [[nodiscard]] int maximumEdge() const noexcept;
+    [[nodiscard]] int minimumEdge() const noexcept;
     [[nodiscard]] bool canUndo() const noexcept;
     [[nodiscard]] bool canRedo() const noexcept;
     [[nodiscard]] QString undoLabel() const;
@@ -75,6 +90,19 @@ public:
     // Crops the working copy to an image-pixel rect, clamped to the current image. The
     // rect is in image coordinates, never viewport coordinates.
     Q_INVOKABLE bool cropToImageRect(int x, int y, int width, int height);
+    // Resize: changes the pixel dimensions of the working copy (this is the review's
+    // "缩放", not a viewport zoom) and resamples the pixels. Aspect ratio is the caller's
+    // business; this only clamps both edges to the supported range and refuses a no-op.
+    // Annotation geometry and text size scale with the image, one history step in total.
+    Q_INVOKABLE bool resizeImage(int width, int height, bool smooth = true);
+    // Pad: centres the working copy on a new width x height canvas and fills the remaining
+    // pixels with the given colour (transparent when asked). The canvas may not be smaller
+    // than the current image. Annotations shift by the centring offset, one history step.
+    Q_INVOKABLE bool padToCanvas(int width, int height, const QColor& fillColor);
+    // Largest edge this controller will resample or pad to, and the smallest; exposed so the
+    // dialogs can clamp their inputs against the same rule the controller enforces.
+    [[nodiscard]] static int maximumImageEdge() noexcept;
+    [[nodiscard]] static int minimumImageEdge() noexcept;
     // Brush. One stroke is one undo step; the stroke is painted live into the working copy
     // and committed with a dirty-rect patch, so history never stores a full image per
     // stroke. Points are image pixels: a zoomed or panned viewport cannot drift them.
@@ -123,6 +151,12 @@ public:
     // Bounded history depth (default 8). Exposed for tests.
     void setHistoryLimit(int steps);
     [[nodiscard]] int historyLimit() const noexcept;
+    // Byte budget for the retained history (default 256 MiB, matching the decoded-frame
+    // cache ceiling). Crop, resize and pad keep a whole pre-step buffer, so a byte cap is
+    // what actually bounds memory on a large image. A single step is always kept, so the
+    // budget can never make history unusable; exposed mainly for tests.
+    void setHistoryByteBudget(qint64 bytes);
+    [[nodiscard]] qint64 historyByteBudget() const noexcept;
     [[nodiscard]] int annotationCount() const noexcept;
     [[nodiscard]] int selectedAnnotation() const noexcept;
 

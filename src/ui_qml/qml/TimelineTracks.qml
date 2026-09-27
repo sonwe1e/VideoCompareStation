@@ -102,11 +102,64 @@ Item {
         readonly property real visibleOut: Math.max(control.windowStartFrame, Math.min(control.windowStartFrame + control.visibleFrameCount - 1, control.outFrame))
         x: Math.max(0, control.positionForFrame(visibleIn) * control.width)
         width: visibleOut < visibleIn ? 0 : Math.max(2, (visibleOut - visibleIn) / Math.max(1, control.visibleFrameCount - 1) * control.width)
-        height: 9
+        height: 11
         radius: 2
         color: "#536dfe"
-        opacity: 0.3
-        y: mainRail.y - 2
+        opacity: 0.35
+        y: mainRail.y - 3
+
+        // Professional In-point bracket handle ([)
+        Item {
+            visible: control.inFrame >= control.windowStartFrame
+            width: 4
+            height: parent.height
+            anchors.left: parent.left
+
+            Rectangle {
+                width: 2
+                height: parent.height
+                color: "#93c5fd"
+            }
+            Rectangle {
+                width: 4
+                height: 2
+                color: "#93c5fd"
+            }
+            Rectangle {
+                width: 4
+                height: 2
+                anchors.bottom: parent.bottom
+                color: "#93c5fd"
+            }
+        }
+
+        // Professional Out-point bracket handle (])
+        Item {
+            visible: control.outFrame <= control.windowStartFrame + control.visibleFrameCount - 1
+            width: 4
+            height: parent.height
+            anchors.right: parent.right
+
+            Rectangle {
+                width: 2
+                height: parent.height
+                anchors.right: parent.right
+                color: "#93c5fd"
+            }
+            Rectangle {
+                width: 4
+                height: 2
+                anchors.right: parent.right
+                color: "#93c5fd"
+            }
+            Rectangle {
+                width: 4
+                height: 2
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                color: "#93c5fd"
+            }
+        }
     }
 
     Repeater {

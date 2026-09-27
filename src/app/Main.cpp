@@ -420,6 +420,7 @@ runDesktop(int& argc,
         return dvs::app::reportFatalStartup("DVS_UI_LOAD_FAILED", smokeMode);
     }
     desktop.setIssueRecordRepository(runtime->issueRecordRepository());
+    desktop.setClipExporter(runtime->clipExporter());
     if (!desktop.load(
             *runtime->controller(),
             *runtime->preferences(),

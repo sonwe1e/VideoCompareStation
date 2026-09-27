@@ -254,6 +254,54 @@ Rectangle {
         return (compareMode === 0 && hasPair && singleViewShowSecondary) ? 3 : 2;
     }
 
+    // Label of the tool that is actually selected, so a tool living inside the 「更多工具」
+    // dropdown is still readable from the closed row.
+    function imageEditToolLabel(tool) {
+        switch (String(tool || "")) {
+        case "crop":
+            return qsTr("裁剪");
+        case "brush":
+            return qsTr("画笔");
+        case "select":
+            return qsTr("选择");
+        case "mosaic":
+            return qsTr("马赛克");
+        case "fill":
+            return qsTr("填充");
+        case "clear":
+            return qsTr("清除");
+        case "rect":
+            return qsTr("矩形");
+        case "arrow":
+            return qsTr("箭头");
+        case "text":
+            return qsTr("文字");
+        default:
+            return qsTr("更多工具");
+        }
+    }
+
+    // Both dialogs edit the same working copy through the same controller, so the result of
+    // each is reported in the shared status line rather than in the dialog, which closes on
+    // apply.
+    function applyImageScale(width, height, smooth) {
+        if (!imageEdit)
+            return false;
+        const applied = Boolean(imageEdit.resizeImage(width, height, smooth));
+        if (applied && imageReview)
+            imageReview.resetView();
+        return applied;
+    }
+
+    function applyImageCanvasFill(width, height, fillColor) {
+        if (!imageEdit)
+            return false;
+        const applied = Boolean(imageEdit.padToCanvas(width, height, fillColor));
+        if (applied && imageReview)
+            imageReview.resetView();
+        return applied;
+    }
+
     function beginImageEdit() {
         if (!imageEdit)
             return false;
@@ -478,6 +526,76 @@ Rectangle {
         }
     }
 
+    // Hairline between button groups inside a wrapping header row. A positioner hands every
+    // child its own y, so a bare 1x22 rectangle would sit against the top edge instead of on
+    // the row's centre line; this wrapper carries the row height and centres the line in it.
+    component RowSeparator: Item {
+        property int hairlineHeight: 22
+
+        width: 1
+        height: 30
+
+        Rectangle {
+            width: 1
+            height: parent.hairlineHeight
+            color: Theme.border
+            anchors.verticalCenter: parent.verticalCenter
+        }
+    }
+
+    // Shared status-bar chip: a dark raised plate with a hairline border, where the semantic
+    // colour lives in one 6 px dot (or a single glyph) instead of a whole saturated pill. A row
+    // of them then reads as one instrument strip rather than a rainbow of one-off badges.
+    component StatusBadge: Rectangle {
+        id: badge
+
+        property string text: ""
+        property string glyph: ""
+        property color dotColor: Theme.mutedText
+        property color glyphColor: Theme.mutedText
+        property bool dotVisible: true
+
+        height: 22
+        implicitWidth: badgeContent.implicitWidth + 20
+        radius: 4
+        color: Theme.raisedPanel
+        border.width: 1
+        border.color: Theme.border
+        anchors.verticalCenter: parent.verticalCenter
+
+        Row {
+            id: badgeContent
+
+            anchors.centerIn: parent
+            spacing: 6
+
+            Rectangle {
+                visible: badge.dotVisible && badge.glyph.length === 0
+                width: 6
+                height: 6
+                radius: 3
+                color: badge.dotColor
+                anchors.verticalCenter: parent.verticalCenter
+            }
+
+            Text {
+                visible: badge.glyph.length > 0
+                text: badge.glyph
+                color: badge.glyphColor
+                font.pixelSize: 12
+                font.weight: Font.Bold
+                anchors.verticalCenter: parent.verticalCenter
+            }
+
+            Text {
+                text: badge.text
+                color: Theme.primaryText
+                font.pixelSize: 11
+                anchors.verticalCenter: parent.verticalCenter
+            }
+        }
+    }
+
     component ImageViewport: Item {
         id: viewport
 
@@ -563,39 +681,57 @@ Rectangle {
             smooth: control.zoom <= 2
         }
 
-        Column {
+        // The title and the size/format readout sit on the image itself, so they get a
+        // translucent plate: readable over bright or busy content, and it never takes canvas
+        // input away from panning, marquee selection or tool strokes underneath.
+        Rectangle {
             visible: viewport.label.length > 0 || viewport.title.length > 0
-            spacing: 2
+            width: Math.min(viewportLabelColumn.implicitWidth + 16, Math.max(200, viewport.width - 60))
+            height: viewportLabelColumn.implicitHeight + 10
+            radius: 5
+            color: "#b3060c14"
+            border.width: 1
+            border.color: "#332b3850"
             anchors {
                 top: parent.top
                 left: parent.left
                 margins: 10
             }
 
-            Text {
-                visible: viewport.title.length > 0
-                objectName: "imageViewportTitle-" + viewport.slot
-                text: viewport.title
-                color: Theme.primaryText
-                font.pixelSize: 12
-                font.weight: Font.DemiBold
-                elide: Text.ElideMiddle
+            Column {
+                id: viewportLabelColumn
 
-                HoverHandler {
-                    id: viewportTitleHover
+                spacing: 2
+                anchors.centerIn: parent
+
+                Text {
+                    visible: viewport.title.length > 0
+                    objectName: "imageViewportTitle-" + viewport.slot
+                    text: viewport.title
+                    color: Theme.primaryText
+                    font.pixelSize: 12
+                    font.weight: Font.DemiBold
+                    elide: Text.ElideMiddle
+                    width: Math.min(implicitWidth, Math.max(160, viewport.width - 76))
+
+                    HoverHandler {
+                        id: viewportTitleHover
+                    }
+
+                    VcsToolTip {
+                        visible: viewportTitleHover.hovered && viewport.titlePath.length > 0
+                        text: viewport.titlePath
+                    }
                 }
 
-                VcsToolTip {
-                    visible: viewportTitleHover.hovered && viewport.titlePath.length > 0
-                    text: viewport.titlePath
+                Text {
+                    visible: viewport.label.length > 0
+                    text: viewport.label
+                    color: Theme.mutedText
+                    font.pixelSize: 11
+                    elide: Text.ElideRight
+                    width: Math.min(implicitWidth, Math.max(160, viewport.width - 76))
                 }
-            }
-
-            Text {
-                visible: viewport.label.length > 0
-                text: viewport.label
-                color: Theme.mutedText
-                font.pixelSize: 11
             }
         }
 
@@ -863,809 +999,920 @@ Rectangle {
         }
     }
 
-    Column {
-        id: headerColumn
+    // The command surface is one raised panel rather than rows floating on the canvas: file,
+    // view, comparison and edit commands belong to a single tool area, and the panel edge gives
+    // the wrapping rows a visible boundary at every window width.
+    Rectangle {
+        id: commandPanel
 
+        objectName: "imageCommandPanel"
         anchors {
             top: parent.top
             left: parent.left
             right: parent.right
             margins: 12
         }
-        spacing: 8
+        height: commandColumn.implicitHeight + 20
+        radius: 8
+        color: Theme.panel
+        border.width: 1
+        border.color: Theme.border
 
-        // Row A — file and view commands. Opening variants live behind one dropdown so the
-        // top edge never grows past a single row; sidebar toggling only appears with folders.
-        Row {
+        Column {
+            id: commandColumn
+
+            anchors {
+                top: parent.top
+                topMargin: 10
+                left: parent.left
+                leftMargin: 10
+                right: parent.right
+                rightMargin: 10
+            }
             spacing: 8
 
-            ReviewActionButton {
-                objectName: "imageOpenButton"
-                text: qsTr("打开图片…")
-                prominent: true
-                implicitHeight: 30
-                leftPadding: 12
-                rightPadding: 12
-                onClicked: control.openImageRequested()
+            // Row A — file and view commands. Opening variants live behind one dropdown so the
+            // top edge never grows past a single row; sidebar toggling only appears with folders.
+            Flow {
+                id: fileRow
+
+                objectName: "imageFileRow"
+                width: parent.width
+                spacing: 8
+
+                ReviewActionButton {
+                    objectName: "imageOpenButton"
+                    text: qsTr("打开图片…")
+                    prominent: true
+                    implicitHeight: 30
+                    leftPadding: 12
+                    rightPadding: 12
+                    onClicked: control.openImageRequested()
+                }
+                ReviewActionButton {
+                    objectName: "imageOpenPairButton"
+                    text: qsTr("打开图片对… ▾")
+                    implicitHeight: 30
+                    leftPadding: 12
+                    rightPadding: 12
+                    onClicked: openPairMenu.open()
+
+                    VcsMenu {
+                        id: openPairMenu
+                        menuWidth: 220
+
+                        VcsMenuItem {
+                            objectName: "imageOpenPairMenuItem"
+                            text: qsTr("打开图片对…")
+                            onTriggered: control.openPairRequested()
+                        }
+                        VcsMenuItem {
+                            objectName: "imageCompareFoldersMenuItem"
+                            text: qsTr("对比文件夹…")
+                            onTriggered: control.compareFoldersRequested()
+                        }
+                        VcsMenuSeparator {}
+                        VcsMenuItem {
+                            objectName: "imageAddMenuItem"
+                            text: qsTr("添加图片…")
+                            enabled: control.hasPrimary && !control.hasSecondary
+                            onTriggered: control.addImageRequested()
+                        }
+                    }
+                }
+                ReviewActionButton {
+                    objectName: "imageCloseButton"
+                    text: qsTr("关闭图片")
+                    implicitHeight: 30
+                    leftPadding: 12
+                    rightPadding: 12
+                    enabled: control.hasPrimary
+                    onClicked: control.imageReview.closeAll()
+                }
+                ReviewActionButton {
+                    objectName: "imageFitButton"
+                    checkable: true
+                    checked: !control.trueSize
+                    text: qsTr("适应窗口")
+                    implicitHeight: 30
+                    leftPadding: 10
+                    rightPadding: 10
+                    enabled: control.hasPrimary
+                    onClicked: {
+                        control.trueSize = false;
+                        if (control.imageReview)
+                            control.imageReview.resetView();
+                    }
+                }
+                ReviewActionButton {
+                    objectName: "imageTrueSizeButton"
+                    checkable: true
+                    checked: control.trueSize
+                    text: qsTr("100%")
+                    implicitHeight: 30
+                    leftPadding: 10
+                    rightPadding: 10
+                    enabled: control.hasPrimary
+                    onClicked: {
+                        control.trueSize = true;
+                        if (control.imageReview)
+                            control.imageReview.setZoom(1.0);
+                    }
+                }
+                ReviewActionButton {
+                    objectName: "imageResetViewButton"
+                    text: qsTr("重置视图")
+                    implicitHeight: 30
+                    leftPadding: 10
+                    rightPadding: 10
+                    enabled: control.hasPrimary
+                    onClicked: {
+                        control.trueSize = false;
+                        if (control.imageReview)
+                            control.imageReview.resetView();
+                    }
+                }
+
+                RowSeparator {
+                    visible: control.hasFolders
+                }
+
+                ReviewActionButton {
+                    objectName: "imageToggleSidebarButton"
+                    checkable: true
+                    checked: control.sidebarVisible
+                    text: control.sidebarVisible ? qsTr("隐藏列表") : qsTr("显示列表")
+                    implicitHeight: 30
+                    leftPadding: 10
+                    rightPadding: 10
+                    visible: control.hasFolders
+                    onClicked: control.toggleSidebarRequested()
+                }
             }
-            ReviewActionButton {
-                objectName: "imageOpenPairButton"
-                text: qsTr("打开图片对… ▾")
-                implicitHeight: 30
-                leftPadding: 12
-                rightPadding: 12
-                onClicked: openPairMenu.open()
 
-                VcsMenu {
-                    id: openPairMenu
-                    menuWidth: 220
+            // Row B — comparison layout, difference analysis and observation. Mutually exclusive
+            // modes stay grouped; secondary modes collapse into "more" menus like the video bar,
+            // so a pair never shows the full control surface at once.
+            Flow {
+                id: modeRow
 
-                    VcsMenuItem {
-                        objectName: "imageOpenPairMenuItem"
-                        text: qsTr("打开图片对…")
-                        onTriggered: control.openPairRequested()
+                objectName: "imageModeRow"
+                width: parent.width
+                spacing: 8
+
+                ModeChip {
+                    objectName: "imageModePrimary"
+                    text: control.hasPair ? qsTr("手动闪烁") : qsTr("查看")
+                    modeValue: 0
+                }
+                ModeChip {
+                    objectName: "imageModeSide"
+                    text: qsTr("并排")
+                    modeValue: 1
+                    visible: control.hasPair
+                }
+                ModeChip {
+                    objectName: "imageModeWipe"
+                    text: qsTr("分割线")
+                    modeValue: 5
+                    visible: control.hasPair
+                }
+                ModeChip {
+                    objectName: "imageModeFade"
+                    text: qsTr("淡化")
+                    modeValue: 7
+                    visible: control.hasPair
+                }
+                ReviewActionButton {
+                    objectName: "imageToggleSourceButton"
+                    visible: control.hasPair && control.compareMode === 0
+                    implicitHeight: 30
+                    leftPadding: 8
+                    rightPadding: 8
+                    text: control.compareMode === 0 && control.singleViewShowSecondary ? qsTr("切至 A") : qsTr("切至 B")
+                    onClicked: control.toggleSinglePairSource()
+                }
+                ReviewActionButton {
+                    objectName: "imageSwapSidesButton"
+                    visible: control.hasPair
+                    implicitHeight: 30
+                    leftPadding: 8
+                    rightPadding: 8
+                    text: qsTr("对调 A/B")
+                    helpText: qsTr("交换 A 与 B 的槽位方向。\n不改变文件夹配对身份；带符号差异、分割线与淡化会跟随新的 A/B 方向。")
+                    onClicked: control.swapSidesRequested()
+                }
+
+                ReviewActionButton {
+                    objectName: "imageReplaceSidesButton"
+                    text: qsTr("换图… ▾")
+                    implicitHeight: 30
+                    leftPadding: 8
+                    rightPadding: 8
+                    visible: control.hasPrimary
+                    enabled: control.hasPrimary
+                    helpText: qsTr("只替换其中一侧，另一侧保持不变。失败时原图保留。")
+                    onClicked: replaceSidesMenu.open()
+
+                    VcsMenu {
+                        id: replaceSidesMenu
+                        menuWidth: 180
+
+                        VcsMenuItem {
+                            objectName: "imageReplacePrimaryButton"
+                            text: qsTr("替换 A…")
+                            enabled: control.hasPrimary
+                            onTriggered: control.replacePrimaryRequested()
+                        }
+                        VcsMenuItem {
+                            objectName: "imageReplaceSecondaryButton"
+                            text: control.hasSecondary ? qsTr("替换 B…") : qsTr("添加 B…")
+                            enabled: control.hasPrimary
+                            onTriggered: control.replaceSecondaryRequested()
+                        }
                     }
-                    VcsMenuItem {
-                        objectName: "imageCompareFoldersMenuItem"
-                        text: qsTr("对比文件夹…")
-                        onTriggered: control.compareFoldersRequested()
+                }
+
+                RowSeparator {
+                    visible: control.hasPair
+                }
+
+                ReviewActionButton {
+                    objectName: "imageDiffModeButton"
+                    text: control.diffModeLabel + " ▾"
+                    implicitHeight: 30
+                    leftPadding: 8
+                    rightPadding: 8
+                    visible: control.hasPair
+                    onClicked: diffMenu.open()
+
+                    VcsMenu {
+                        id: diffMenu
+                        menuWidth: 220
+
+                        VcsRadioMenuItem {
+                            objectName: "imageModeAbsDiff"
+                            text: qsTr("绝对差异")
+                            checked: control.compareMode === 2
+                            onTriggered: control.modeButton(2)
+                        }
+                        VcsRadioMenuItem {
+                            objectName: "imageModeSignedDiff"
+                            text: qsTr("带符号差异")
+                            checked: control.compareMode === 3
+                            onTriggered: control.modeButton(3)
+                        }
+                        VcsRadioMenuItem {
+                            objectName: "imageModeHighlight"
+                            text: qsTr("高亮")
+                            checked: control.compareMode === 4
+                            onTriggered: control.modeButton(4)
+                        }
+                        VcsRadioMenuItem {
+                            objectName: "imageModeAlphaDiff"
+                            text: qsTr("Alpha 差异")
+                            enabled: Boolean(control.imageReview && (control.imageReview.primaryHasAlpha || control.imageReview.secondaryHasAlpha))
+                            checked: control.compareMode === 6
+                            onTriggered: control.modeButton(6)
+                        }
                     }
-                    VcsMenuSeparator {}
-                    VcsMenuItem {
-                        objectName: "imageAddMenuItem"
-                        text: qsTr("添加图片…")
-                        enabled: control.hasPrimary && !control.hasSecondary
-                        onTriggered: control.addImageRequested()
+                }
+
+                RowSeparator {}
+
+                // Difference display gain. It amplifies only the rendered image; the peak/MAE
+                // readouts stay raw 8-bit deltas, so two candidates compared at the same gain remain
+                // visually comparable and the numbers never follow the display setting.
+                ReviewActionButton {
+                    objectName: "imageDiffGainButton"
+                    text: qsTr("差异放大 ×%1 ▾").arg(control.imageReview ? control.imageReview.diffGain : 4)
+                    implicitHeight: 30
+                    leftPadding: 8
+                    rightPadding: 8
+                    visible: control.diffModeActive
+                    helpText: qsTr("只放大显示，方便看清弱差异；峰值/平均差异读数仍是原始差值。")
+                    onClicked: diffGainMenu.open()
+
+                    VcsMenu {
+                        id: diffGainMenu
+                        menuWidth: 230
+
+                        VcsRadioMenuItem {
+                            objectName: "imageDiffGain1"
+                            text: qsTr("×1 · 原始差值（不放大）")
+                            checked: control.imageReview && control.imageReview.diffGain === 1
+                            onTriggered: {
+                                if (control.imageReview)
+                                    control.imageReview.diffGain = 1;
+                            }
+                        }
+                        VcsRadioMenuItem {
+                            objectName: "imageDiffGain2"
+                            text: qsTr("×2")
+                            checked: control.imageReview && control.imageReview.diffGain === 2
+                            onTriggered: {
+                                if (control.imageReview)
+                                    control.imageReview.diffGain = 2;
+                            }
+                        }
+                        VcsRadioMenuItem {
+                            objectName: "imageDiffGain4"
+                            text: qsTr("×4（默认）")
+                            checked: control.imageReview && control.imageReview.diffGain === 4
+                            onTriggered: {
+                                if (control.imageReview)
+                                    control.imageReview.diffGain = 4;
+                            }
+                        }
+                        VcsRadioMenuItem {
+                            objectName: "imageDiffGain8"
+                            text: qsTr("×8")
+                            checked: control.imageReview && control.imageReview.diffGain === 8
+                            onTriggered: {
+                                if (control.imageReview)
+                                    control.imageReview.diffGain = 8;
+                            }
+                        }
+                        VcsRadioMenuItem {
+                            objectName: "imageDiffGain16"
+                            text: qsTr("×16")
+                            checked: control.imageReview && control.imageReview.diffGain === 16
+                            onTriggered: {
+                                if (control.imageReview)
+                                    control.imageReview.diffGain = 16;
+                            }
+                        }
                     }
-                    VcsMenuSeparator {
-                        visible: control.hasPrimary
+                }
+
+                ReviewActionButton {
+                    objectName: "imageViewModeButton"
+                    text: control.viewModeLabel + " ▾"
+                    implicitHeight: 30
+                    leftPadding: 8
+                    rightPadding: 8
+                    helpText: qsTr("显示通道：正常 RGBA，或只观察 Alpha 灰度、忽略透明度。快捷键 A / O。")
+                    onClicked: viewMenu.open()
+
+                    VcsMenu {
+                        id: viewMenu
+                        menuWidth: 230
+
+                        VcsRadioMenuItem {
+                            objectName: "imageViewRgba"
+                            text: qsTr("RGBA")
+                            checked: control.viewMode === 0
+                            onTriggered: control.setViewMode(0)
+                        }
+                        VcsRadioMenuItem {
+                            objectName: "imageViewAlphaGray"
+                            text: qsTr("Alpha 灰度 (A)")
+                            checked: control.viewMode === 1
+                            onTriggered: control.setViewMode(1)
+                        }
+                        VcsRadioMenuItem {
+                            objectName: "imageViewRgbOpaque"
+                            text: qsTr("RGB 忽略透明度 (O)")
+                            checked: control.viewMode === 2
+                            onTriggered: control.setViewMode(2)
+                        }
                     }
-                    VcsMenuItem {
-                        objectName: "imageSwapSidesMenuItem"
-                        text: qsTr("对调 A / B")
-                        enabled: control.hasPair
-                        onTriggered: control.swapSidesRequested()
-                    }
-                    VcsMenuItem {
-                        objectName: "imageReplacePrimaryMenuItem"
-                        text: qsTr("替换 A…")
-                        enabled: control.hasPrimary
-                        onTriggered: control.replacePrimaryRequested()
-                    }
-                    VcsMenuItem {
-                        objectName: "imageReplaceSecondaryMenuItem"
-                        text: qsTr("替换 B…")
-                        enabled: control.hasPrimary
-                        onTriggered: control.replaceSecondaryRequested()
+                }
+                ReviewActionButton {
+                    objectName: "imageBackgroundButton"
+                    text: control.backgroundModeLabel + " ▾"
+                    implicitHeight: 30
+                    leftPadding: 8
+                    rightPadding: 8
+                    helpText: qsTr("图片背后的底色，用来判断透明区域；不影响像素读数。")
+                    onClicked: bgMenu.open()
+
+                    VcsMenu {
+                        id: bgMenu
+                        menuWidth: 200
+
+                        VcsRadioMenuItem {
+                            objectName: "imageBgDark"
+                            text: qsTr("深色")
+                            checked: control.backgroundMode === 0
+                            onTriggered: control.backgroundMode = 0
+                        }
+                        VcsRadioMenuItem {
+                            objectName: "imageBgChecker"
+                            text: qsTr("棋盘格")
+                            checked: control.backgroundMode === 1
+                            onTriggered: control.backgroundMode = 1
+                        }
+                        VcsRadioMenuItem {
+                            objectName: "imageBgBlack"
+                            text: qsTr("黑底")
+                            checked: control.backgroundMode === 2
+                            onTriggered: control.backgroundMode = 2
+                        }
+                        VcsRadioMenuItem {
+                            objectName: "imageBgWhite"
+                            text: qsTr("白底")
+                            checked: control.backgroundMode === 3
+                            onTriggered: control.backgroundMode = 3
+                        }
                     }
                 }
             }
-            ReviewActionButton {
-                objectName: "imageCloseButton"
-                text: qsTr("关闭图片")
-                implicitHeight: 30
-                leftPadding: 12
-                rightPadding: 12
-                enabled: control.hasPrimary
-                onClicked: control.imageReview.closeAll()
-            }
-            ReviewActionButton {
-                objectName: "imageToggleSidebarButton"
-                checkable: true
-                checked: control.sidebarVisible
-                text: control.sidebarVisible ? qsTr("隐藏列表") : qsTr("显示列表")
-                implicitHeight: 30
-                leftPadding: 12
-                rightPadding: 12
-                visible: control.hasFolders
-                onClicked: control.toggleSidebarRequested()
-            }
 
+            // Row C — step-3 image editing suite. The original file is never written to: the session
+            // edits a working copy and saving always produces a new file. Every tool takes its
+            // geometry in image pixels, so zooming or panning cannot drift a selection or a
+            // stroke. The tool only changes what the left button does; middle-drag still pans.
             Rectangle {
-                width: 1
-                height: 22
-                color: Theme.border
-                anchors.verticalCenter: parent.verticalCenter
-            }
+                id: editSuite
 
-            ReviewActionButton {
-                objectName: "imageFitButton"
-                checkable: true
-                checked: !control.trueSize
-                text: qsTr("适应窗口")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                enabled: control.hasPrimary
-                onClicked: {
-                    control.trueSize = false;
-                    if (control.imageReview)
-                        control.imageReview.resetView();
-                }
-            }
-            ReviewActionButton {
-                objectName: "imageTrueSizeButton"
-                checkable: true
-                checked: control.trueSize
-                text: qsTr("100%")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                enabled: control.hasPrimary
-                onClicked: {
-                    control.trueSize = true;
-                    if (control.imageReview)
-                        control.imageReview.setZoom(1.0);
-                }
-            }
-            ReviewActionButton {
-                objectName: "imageResetViewButton"
-                text: qsTr("重置视图")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                enabled: control.hasPrimary
-                onClicked: {
-                    control.trueSize = false;
-                    if (control.imageReview)
-                        control.imageReview.resetView();
+                visible: control.hasPrimary && control.imageEdit !== null
+                width: parent.width
+                height: editRibbon.implicitHeight + (control.editModeActive ? 16 : 0)
+                radius: 6
+                color: control.editModeActive ? Theme.raisedPanel : "transparent"
+
+                Column {
+                    id: editRibbon
+
+                    anchors {
+                        left: parent.left
+                        right: parent.right
+                        top: parent.top
+                        margins: control.editModeActive ? 8 : 0
+                    }
+                    spacing: 8
+
+                    Flow {
+                        id: editRow
+                        objectName: "imageEditRow"
+                        width: parent.width
+                        spacing: 6
+                        visible: control.hasPrimary && control.imageEdit !== null
+
+                        EditButton {
+                            objectName: "imageEditStartButton"
+                            checkable: true
+                            checked: control.editModeActive
+                            prominent: control.editModeActive
+                            text: control.editModeActive ? qsTr("结束编辑") : qsTr("编辑画面")
+                            helpText: qsTr("在原图的副本上编辑；原文件保持不变，编辑结果必须另存为副本。")
+                            onClicked: {
+                                if (control.editModeActive)
+                                    control.finishImageEdit();
+                                else
+                                    control.beginImageEdit();
+                            }
+                        }
+
+                        RowSeparator {
+                            visible: control.editModeActive
+                            hairlineHeight: 20
+                        }
+
+                        EditButton {
+                            objectName: "imageEditToolCropButton"
+                            visible: control.editModeActive
+                            checkable: true
+                            checked: control.editTool === "crop"
+                            text: qsTr("裁剪")
+                            onClicked: control.editTool = "crop"
+                        }
+                        EditButton {
+                            objectName: "imageEditToolBrushButton"
+                            visible: control.editModeActive
+                            checkable: true
+                            checked: control.editTool === "brush"
+                            text: qsTr("画笔")
+                            onClicked: control.editTool = "brush"
+                        }
+                        EditButton {
+                            objectName: "imageEditToolSelectButton"
+                            visible: control.editModeActive
+                            checkable: true
+                            checked: control.editTool === "select"
+                            text: qsTr("选择")
+                            helpText: qsTr("点击选中标注后可拖动；Delete 键或「删除标注」可删除。")
+                            onClicked: control.editTool = "select"
+                        }
+
+                        RowSeparator {
+                            visible: control.editModeActive
+                            hairlineHeight: 20
+                        }
+
+                        // Whole-image geometry, not a brush: these change the working copy's size rather
+                        // than the pixels under the cursor, so they sit next to the tool menu instead of
+                        // inside it.
+                        EditButton {
+                            objectName: "imageEditScaleButton"
+                            visible: control.editModeActive
+                            text: qsTr("缩放…")
+                            helpText: qsTr("把画面重采样到指定的像素尺寸；锁定比例时改一边会自动推算另一边。")
+                            onClicked: imageEditDialogs.openScale()
+                        }
+                        EditButton {
+                            objectName: "imageEditFillButton"
+                            visible: control.editModeActive
+                            text: qsTr("填充画布…")
+                            helpText: qsTr("把原图居中放到更大的画布上，四周用指定颜色补齐。")
+                            onClicked: imageEditDialogs.openFill()
+                        }
+
+                        RowSeparator {
+                            visible: control.editModeActive
+                            hairlineHeight: 20
+                        }
+
+                        // The remaining tools share one dropdown. Two-thirds of the row used to be tool
+                        // buttons, which made the row the widest thing in the header and pushed 撤销/重做
+                        // past the window edge at 900 px. The button carries the active tool's name so a
+                        // hidden-but-selected tool is never invisible.
+                        EditButton {
+                            objectName: "imageEditMoreToolsButton"
+                            visible: control.editModeActive
+                            text: control.imageEditToolLabel(control.editTool) + " ▾"
+                            helpText: qsTr("马赛克、填充、清除、矩形、箭头、文字与标注管理。")
+                            onClicked: moreToolsMenu.open()
+
+                            VcsMenu {
+                                id: moreToolsMenu
+
+                                objectName: "imageEditMoreToolsMenu"
+                                menuWidth: 240
+
+                                VcsMenuItem {
+                                    objectName: "imageEditToolMosaicButton"
+                                    text: qsTr("马赛克")
+                                    checkable: true
+                                    checked: control.editTool === "mosaic"
+                                    onTriggered: control.editTool = "mosaic"
+                                }
+                                VcsMenuItem {
+                                    objectName: "imageEditToolFillButton"
+                                    text: qsTr("填充")
+                                    checkable: true
+                                    checked: control.editTool === "fill"
+                                    onTriggered: control.editTool = "fill"
+                                }
+                                VcsMenuItem {
+                                    objectName: "imageEditToolClearButton"
+                                    text: qsTr("清除")
+                                    checkable: true
+                                    checked: control.editTool === "clear"
+                                    onTriggered: control.editTool = "clear"
+                                }
+                                VcsMenuItem {
+                                    objectName: "imageEditToolRectButton"
+                                    text: qsTr("矩形")
+                                    checkable: true
+                                    checked: control.editTool === "rect"
+                                    onTriggered: control.editTool = "rect"
+                                }
+                                VcsMenuItem {
+                                    objectName: "imageEditToolArrowButton"
+                                    text: qsTr("箭头")
+                                    checkable: true
+                                    checked: control.editTool === "arrow"
+                                    onTriggered: control.editTool = "arrow"
+                                }
+                                VcsMenuItem {
+                                    objectName: "imageEditToolTextButton"
+                                    text: qsTr("文字")
+                                    checkable: true
+                                    checked: control.editTool === "text"
+                                    onTriggered: control.editTool = "text"
+                                }
+
+                                VcsMenuSeparator {}
+
+                                VcsMenuItem {
+                                    objectName: "imageEditDeleteAnnotationMenuItem"
+                                    text: qsTr("删除选中标注")
+                                    enabled: control.imageEdit !== null && control.imageEdit.selectedAnnotation >= 0
+                                    onTriggered: {
+                                        if (control.imageEdit)
+                                            control.imageEdit.deleteSelectedAnnotation();
+                                    }
+                                }
+                                VcsMenuItem {
+                                    objectName: "imageEditClearAnnotationsMenuItem"
+                                    text: qsTr("清空所有标注")
+                                    enabled: control.imageEdit !== null && control.imageEdit.annotationCount > 0
+                                    onTriggered: {
+                                        if (control.imageEdit)
+                                            control.imageEdit.clearAnnotations();
+                                    }
+                                }
+                            }
+                        }
+
+                        RowSeparator {
+                            visible: control.editModeActive
+                            hairlineHeight: 20
+                        }
+
+                        EditButton {
+                            objectName: "imageEditUndoButton"
+                            visible: control.editModeActive
+                            text: qsTr("撤销")
+                            enabled: control.imageEdit && control.imageEdit.canUndo
+                            onClicked: {
+                                if (control.imageEdit)
+                                    control.imageEdit.undo();
+                            }
+                        }
+                        EditButton {
+                            objectName: "imageEditRedoButton"
+                            visible: control.editModeActive
+                            text: qsTr("重做")
+                            enabled: control.imageEdit && control.imageEdit.canRedo
+                            onClicked: {
+                                if (control.imageEdit)
+                                    control.imageEdit.redo();
+                            }
+                        }
+
+                        RowSeparator {
+                            visible: control.editModeActive
+                            hairlineHeight: 20
+                        }
+
+                        EditButton {
+                            objectName: "imageEditSaveCopyButton"
+                            visible: control.editModeActive
+                            prominent: true
+                            text: qsTr("另存副本…")
+                            onClicked: editSaveDialog.open()
+                        }
+                        Text {
+                            objectName: "imageEditStatusText"
+                            visible: control.editModeActive
+                            height: 30
+                            verticalAlignment: Text.AlignVCenter
+                            text: control.imageEdit ? String(control.imageEdit.lastStatus || "") : ""
+                            color: Theme.mutedText
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                            width: Math.min(240, implicitWidth)
+                        }
+                    }
+
+                    // Row D — parameters for the active tool. The plate uses the canvas colour so the
+                    // strip reads as a recessed well inside the raised edit ribbon, and it wraps
+                    // instead of clipping once a tool carries more controls than fit on one line.
+                    Rectangle {
+                        visible: control.hasPrimary && control.editModeActive
+                        width: parent.width
+                        height: editParamsRow.implicitHeight + 12
+                        radius: 6
+                        color: Theme.canvas
+                        border.width: 1
+                        border.color: Theme.border
+
+                        Flow {
+                            id: editParamsRow
+                            objectName: "imageEditParamsRow"
+                            spacing: 8
+                            visible: control.hasPrimary && control.editModeActive
+
+                            anchors {
+                                left: parent.left
+                                right: parent.right
+                                leftMargin: 10
+                                rightMargin: 10
+                                verticalCenter: parent.verticalCenter
+                            }
+
+                            ReviewActionButton {
+                                objectName: "imageEditBrushColorButton"
+                                visible: control.editTool === "brush" || control.editTool === "fill" || control.editTool === "rect" || control.editTool === "arrow" || control.editTool === "text"
+                                text: qsTr("颜色 ▾")
+                                implicitHeight: 30
+                                leftPadding: 24
+                                rightPadding: 8
+                                onClicked: brushColorMenu.open()
+
+                                Rectangle {
+                                    width: 10
+                                    height: 10
+                                    radius: 5
+                                    color: control.brushColor
+                                    border.width: 1
+                                    border.color: "#ffffff"
+                                    opacity: 0.9
+                                    anchors {
+                                        left: parent.left
+                                        leftMargin: 8
+                                        verticalCenter: parent.verticalCenter
+                                    }
+                                }
+
+                                VcsMenu {
+                                    id: brushColorMenu
+                                    menuWidth: 150
+
+                                    VcsRadioMenuItem {
+                                        objectName: "imageEditBrushColorRed"
+                                        text: qsTr("红")
+                                        checked: control.brushColor === "#ff3b30"
+                                        onTriggered: control.brushColor = "#ff3b30"
+                                    }
+                                    VcsRadioMenuItem {
+                                        objectName: "imageEditBrushColorYellow"
+                                        text: qsTr("黄")
+                                        checked: control.brushColor === "#ffd60a"
+                                        onTriggered: control.brushColor = "#ffd60a"
+                                    }
+                                    VcsRadioMenuItem {
+                                        objectName: "imageEditBrushColorGreen"
+                                        text: qsTr("绿")
+                                        checked: control.brushColor === "#34c759"
+                                        onTriggered: control.brushColor = "#34c759"
+                                    }
+                                    VcsRadioMenuItem {
+                                        objectName: "imageEditBrushColorCyan"
+                                        text: qsTr("青")
+                                        checked: control.brushColor === "#32ade6"
+                                        onTriggered: control.brushColor = "#32ade6"
+                                    }
+                                    VcsRadioMenuItem {
+                                        objectName: "imageEditBrushColorWhite"
+                                        text: qsTr("白")
+                                        checked: control.brushColor === "#ffffff"
+                                        onTriggered: control.brushColor = "#ffffff"
+                                    }
+                                    VcsRadioMenuItem {
+                                        objectName: "imageEditBrushColorBlack"
+                                        text: qsTr("黑")
+                                        checked: control.brushColor === "#000000"
+                                        onTriggered: control.brushColor = "#000000"
+                                    }
+                                }
+                            }
+                            Text {
+                                objectName: "imageEditBrushWidthLabel"
+                                visible: control.editTool === "brush" || control.editTool === "rect" || control.editTool === "arrow"
+                                height: 30
+                                verticalAlignment: Text.AlignVCenter
+                                text: control.editTool === "brush" ? qsTr("粗细 %1").arg(control.brushWidth) : qsTr("线宽 %1").arg(control.brushWidth)
+                                color: Theme.mutedText
+                                font.pixelSize: 11
+                            }
+                            Slider {
+                                objectName: "imageEditBrushWidthSlider"
+                                visible: control.editTool === "brush" || control.editTool === "rect" || control.editTool === "arrow"
+                                width: 96
+                                height: 30
+                                from: 1
+                                to: 64
+                                stepSize: 1
+                                value: control.brushWidth
+                                onMoved: control.brushWidth = Math.round(value)
+                            }
+                            Text {
+                                objectName: "imageEditBrushOpacityLabel"
+                                visible: control.editTool === "brush"
+                                height: 30
+                                verticalAlignment: Text.AlignVCenter
+                                text: qsTr("透明 %1%").arg(Math.round(control.brushOpacity * 100))
+                                color: Theme.mutedText
+                                font.pixelSize: 11
+                            }
+                            Slider {
+                                objectName: "imageEditBrushOpacitySlider"
+                                visible: control.editTool === "brush"
+                                width: 96
+                                height: 30
+                                from: 0.05
+                                to: 1
+                                stepSize: 0.05
+                                value: control.brushOpacity
+                                onMoved: control.brushOpacity = value
+                            }
+                            Text {
+                                objectName: "imageEditMosaicBlockLabel"
+                                visible: control.editTool === "mosaic"
+                                height: 30
+                                verticalAlignment: Text.AlignVCenter
+                                text: qsTr("块大小 %1").arg(control.mosaicBlock)
+                                color: Theme.mutedText
+                                font.pixelSize: 11
+                            }
+                            Slider {
+                                objectName: "imageEditMosaicBlockSlider"
+                                visible: control.editTool === "mosaic"
+                                width: 120
+                                height: 30
+                                from: 2
+                                to: 48
+                                stepSize: 1
+                                value: control.mosaicBlock
+                                onMoved: control.mosaicBlock = Math.round(value)
+                            }
+                            Text {
+                                objectName: "imageEditAnnotationTextLabel"
+                                visible: control.editTool === "text"
+                                height: 30
+                                verticalAlignment: Text.AlignVCenter
+                                text: qsTr("文字")
+                                color: Theme.mutedText
+                                font.pixelSize: 11
+                            }
+                            TextField {
+                                objectName: "imageEditAnnotationTextField"
+                                visible: control.editTool === "text"
+                                width: 180
+                                height: 30
+                                placeholderText: qsTr("输入标注文字，再点击画面放置")
+                                text: control.annotationText
+                                font.pixelSize: 12
+                                onTextEdited: control.annotationText = text
+                            }
+                            Text {
+                                objectName: "imageEditAnnotationTextSizeLabel"
+                                visible: control.editTool === "text"
+                                height: 30
+                                verticalAlignment: Text.AlignVCenter
+                                text: qsTr("字号 %1").arg(control.annotationTextSize)
+                                color: Theme.mutedText
+                                font.pixelSize: 11
+                            }
+                            Slider {
+                                objectName: "imageEditAnnotationTextSizeSlider"
+                                visible: control.editTool === "text"
+                                width: 110
+                                height: 30
+                                from: 10
+                                to: 160
+                                stepSize: 1
+                                value: control.annotationTextSize
+                                onMoved: control.annotationTextSize = Math.round(value)
+                            }
+                            ReviewActionButton {
+                                objectName: "imageEditApplyCropButton"
+                                visible: control.editTool === "crop" || control.editTool === "mosaic"
+                                prominent: true
+                                text: control.cropSelection ? (control.editTool === "mosaic" ? qsTr("应用马赛克 %1×%2").arg(control.cropSelection.width).arg(control.cropSelection.height) : qsTr("应用裁剪 %1×%2").arg(control.cropSelection.width).arg(control.cropSelection.height)) : (control.editTool === "mosaic" ? qsTr("应用马赛克") : qsTr("应用裁剪"))
+                                enabled: control.cropSelection !== null && control.imageEdit && control.imageEdit.active
+                                implicitHeight: 30
+                                leftPadding: 10
+                                rightPadding: 10
+                                helpText: qsTr("编辑模式下左键框选区域，中键仍可平移；画笔工具下左键直接涂画。")
+                                onClicked: control.applyCropSelection()
+                            }
+                            ReviewActionButton {
+                                objectName: "imageEditDeleteAnnotationButton"
+                                visible: control.editTool === "select"
+                                text: qsTr("删除标注")
+                                enabled: control.imageEdit && control.imageEdit.selectedAnnotation >= 0
+                                implicitHeight: 30
+                                leftPadding: 10
+                                rightPadding: 10
+                                onClicked: {
+                                    if (control.imageEdit)
+                                        control.imageEdit.deleteSelectedAnnotation();
+                                }
+                            }
+                            ReviewActionButton {
+                                objectName: "imageEditClearAnnotationsButton"
+                                visible: control.editTool === "select"
+                                text: qsTr("清除全部标注")
+                                enabled: control.imageEdit && control.imageEdit.annotationCount > 0
+                                implicitHeight: 30
+                                leftPadding: 10
+                                rightPadding: 10
+                                onClicked: {
+                                    if (control.imageEdit)
+                                        control.imageEdit.clearAnnotations();
+                                }
+                            }
+                            Text {
+                                objectName: "imageEditAnnotationCountText"
+                                visible: control.editTool === "select"
+                                height: 30
+                                verticalAlignment: Text.AlignVCenter
+                                text: control.imageEdit ? qsTr("标注 %1 个").arg(control.imageEdit.annotationCount) : ""
+                                color: Theme.mutedText
+                                font.pixelSize: 11
+                            }
+                        }
+                    }
                 }
             }
         }
+    }
 
-        // Row B — comparison layout, difference analysis and observation. Mutually exclusive
-        // modes stay grouped; secondary modes collapse into "more" menus like the video bar,
-        // so a pair never shows the full control surface at once.
-        Row {
-            spacing: 8
-
-            ModeChip {
-                objectName: "imageModePrimary"
-                text: control.hasPair ? qsTr("手动闪烁") : qsTr("查看")
-                modeValue: 0
-            }
-            ModeChip {
-                objectName: "imageModeSide"
-                text: qsTr("并排")
-                modeValue: 1
-                visible: control.hasPair
-            }
-            ModeChip {
-                objectName: "imageModeWipe"
-                text: qsTr("分割线")
-                modeValue: 5
-                visible: control.hasPair
-            }
-            ModeChip {
-                objectName: "imageModeFade"
-                text: qsTr("淡化")
-                modeValue: 7
-                visible: control.hasPair
-            }
-            ReviewActionButton {
-                objectName: "imageToggleSourceButton"
-                visible: control.hasPair && control.compareMode === 0
-                implicitHeight: 30
-                leftPadding: 8
-                rightPadding: 8
-                text: control.compareMode === 0 && control.singleViewShowSecondary ? qsTr("切至 A") : qsTr("切至 B")
-                onClicked: control.toggleSinglePairSource()
-            }
-
-            ReviewActionButton {
-                objectName: "imageSwapSidesButton"
-                visible: control.hasPair
-                implicitHeight: 30
-                leftPadding: 8
-                rightPadding: 8
-                text: qsTr("对调 A/B")
-                helpText: qsTr("交换 A 与 B 的槽位方向。\n不改变文件夹配对身份；带符号差异、分割线与淡化会跟随新的 A/B 方向。")
-                onClicked: control.swapSidesRequested()
-            }
-
-            ReviewActionButton {
-                objectName: "imageReplaceSidesButton"
-                text: qsTr("换图… ▾")
-                implicitHeight: 30
-                leftPadding: 8
-                rightPadding: 8
-                visible: control.hasPrimary
-                enabled: control.hasPrimary
-                helpText: qsTr("只替换其中一侧，另一侧保持不变。失败时原图保留。")
-                onClicked: replaceSidesMenu.open()
-
-                VcsMenu {
-                    id: replaceSidesMenu
-                    menuWidth: 180
-
-                    VcsMenuItem {
-                        objectName: "imageReplacePrimaryButton"
-                        text: qsTr("替换 A…")
-                        enabled: control.hasPrimary
-                        onTriggered: control.replacePrimaryRequested()
-                    }
-                    VcsMenuItem {
-                        objectName: "imageReplaceSecondaryButton"
-                        text: control.hasSecondary ? qsTr("替换 B…") : qsTr("添加 B…")
-                        enabled: control.hasPrimary
-                        onTriggered: control.replaceSecondaryRequested()
-                    }
-                }
-            }
-
-            Rectangle {
-                visible: control.hasPair
-                width: 1
-                height: 22
-                color: Theme.border
-                anchors.verticalCenter: parent.verticalCenter
-            }
-
-            ReviewActionButton {
-                objectName: "imageDiffModeButton"
-                text: control.diffModeLabel + " ▾"
-                implicitHeight: 30
-                leftPadding: 8
-                rightPadding: 8
-                visible: control.hasPair
-                onClicked: diffMenu.open()
-
-                VcsMenu {
-                    id: diffMenu
-                    menuWidth: 220
-
-                    VcsRadioMenuItem {
-                        objectName: "imageModeAbsDiff"
-                        text: qsTr("绝对差异")
-                        checked: control.compareMode === 2
-                        onTriggered: control.modeButton(2)
-                    }
-                    VcsRadioMenuItem {
-                        objectName: "imageModeSignedDiff"
-                        text: qsTr("带符号差异")
-                        checked: control.compareMode === 3
-                        onTriggered: control.modeButton(3)
-                    }
-                    VcsRadioMenuItem {
-                        objectName: "imageModeHighlight"
-                        text: qsTr("高亮")
-                        checked: control.compareMode === 4
-                        onTriggered: control.modeButton(4)
-                    }
-                    VcsRadioMenuItem {
-                        objectName: "imageModeAlphaDiff"
-                        text: qsTr("Alpha 差异")
-                        enabled: Boolean(control.imageReview && (control.imageReview.primaryHasAlpha || control.imageReview.secondaryHasAlpha))
-                        checked: control.compareMode === 6
-                        onTriggered: control.modeButton(6)
-                    }
-                }
-            }
-
-            Rectangle {
-                width: 1
-                height: 22
-                color: Theme.border
-                anchors.verticalCenter: parent.verticalCenter
-            }
-
-            // Difference display gain. It amplifies only the rendered image; the peak/MAE
-            // readouts stay raw 8-bit deltas, so two candidates compared at the same gain remain
-            // visually comparable and the numbers never follow the display setting.
-            ReviewActionButton {
-                objectName: "imageDiffGainButton"
-                text: qsTr("差异放大 ×%1 ▾").arg(control.imageReview ? control.imageReview.diffGain : 4)
-                implicitHeight: 30
-                leftPadding: 8
-                rightPadding: 8
-                visible: control.diffModeActive
-                onClicked: diffGainMenu.open()
-
-                VcsMenu {
-                    id: diffGainMenu
-                    menuWidth: 230
-
-                    VcsRadioMenuItem {
-                        objectName: "imageDiffGain1"
-                        text: qsTr("×1 · 原始差值（不放大）")
-                        checked: control.imageReview && control.imageReview.diffGain === 1
-                        onTriggered: {
-                            if (control.imageReview)
-                                control.imageReview.diffGain = 1;
-                        }
-                    }
-                    VcsRadioMenuItem {
-                        objectName: "imageDiffGain2"
-                        text: qsTr("×2")
-                        checked: control.imageReview && control.imageReview.diffGain === 2
-                        onTriggered: {
-                            if (control.imageReview)
-                                control.imageReview.diffGain = 2;
-                        }
-                    }
-                    VcsRadioMenuItem {
-                        objectName: "imageDiffGain4"
-                        text: qsTr("×4（默认）")
-                        checked: control.imageReview && control.imageReview.diffGain === 4
-                        onTriggered: {
-                            if (control.imageReview)
-                                control.imageReview.diffGain = 4;
-                        }
-                    }
-                    VcsRadioMenuItem {
-                        objectName: "imageDiffGain8"
-                        text: qsTr("×8")
-                        checked: control.imageReview && control.imageReview.diffGain === 8
-                        onTriggered: {
-                            if (control.imageReview)
-                                control.imageReview.diffGain = 8;
-                        }
-                    }
-                    VcsRadioMenuItem {
-                        objectName: "imageDiffGain16"
-                        text: qsTr("×16")
-                        checked: control.imageReview && control.imageReview.diffGain === 16
-                        onTriggered: {
-                            if (control.imageReview)
-                                control.imageReview.diffGain = 16;
-                        }
-                    }
-                }
-            }
-
-            ReviewActionButton {
-                objectName: "imageViewModeButton"
-                text: control.viewModeLabel + " ▾"
-                implicitHeight: 30
-                leftPadding: 8
-                rightPadding: 8
-                onClicked: viewMenu.open()
-
-                VcsMenu {
-                    id: viewMenu
-                    menuWidth: 230
-
-                    VcsRadioMenuItem {
-                        objectName: "imageViewRgba"
-                        text: qsTr("RGBA")
-                        checked: control.viewMode === 0
-                        onTriggered: control.setViewMode(0)
-                    }
-                    VcsRadioMenuItem {
-                        objectName: "imageViewAlphaGray"
-                        text: qsTr("Alpha 灰度 (A)")
-                        checked: control.viewMode === 1
-                        onTriggered: control.setViewMode(1)
-                    }
-                    VcsRadioMenuItem {
-                        objectName: "imageViewRgbOpaque"
-                        text: qsTr("RGB 忽略透明度 (O)")
-                        checked: control.viewMode === 2
-                        onTriggered: control.setViewMode(2)
-                    }
-                }
-            }
-            ReviewActionButton {
-                objectName: "imageBackgroundButton"
-                text: control.backgroundModeLabel + " ▾"
-                implicitHeight: 30
-                leftPadding: 8
-                rightPadding: 8
-                onClicked: bgMenu.open()
-
-                VcsMenu {
-                    id: bgMenu
-                    menuWidth: 200
-
-                    VcsRadioMenuItem {
-                        objectName: "imageBgDark"
-                        text: qsTr("深色")
-                        checked: control.backgroundMode === 0
-                        onTriggered: control.backgroundMode = 0
-                    }
-                    VcsRadioMenuItem {
-                        objectName: "imageBgChecker"
-                        text: qsTr("棋盘格")
-                        checked: control.backgroundMode === 1
-                        onTriggered: control.backgroundMode = 1
-                    }
-                    VcsRadioMenuItem {
-                        objectName: "imageBgBlack"
-                        text: qsTr("黑底")
-                        checked: control.backgroundMode === 2
-                        onTriggered: control.backgroundMode = 2
-                    }
-                    VcsRadioMenuItem {
-                        objectName: "imageBgWhite"
-                        text: qsTr("白底")
-                        checked: control.backgroundMode === 3
-                        onTriggered: control.backgroundMode = 3
-                    }
-                }
-            }
-        }
-
-        // Row C — step-3 image editing. The original file is never written to: the session
-        // edits a working copy and saving always produces a new file. Every tool takes its
-        // geometry in image pixels, so zooming or panning cannot drift a selection or a
-        // stroke. The tool only changes what the left button does; middle-drag still pans.
-        Row {
-            id: editRow
-            objectName: "imageEditRow"
-            spacing: 8
-            visible: control.hasPrimary && control.imageEdit !== null
-
-            ReviewActionButton {
-                objectName: "imageEditStartButton"
-                checkable: true
-                checked: control.editModeActive
-                text: control.editModeActive ? qsTr("结束编辑") : qsTr("编辑画面")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                helpText: qsTr("在原图的副本上编辑；原文件保持不变，编辑结果必须另存为副本。")
-                onClicked: {
-                    if (control.editModeActive)
-                        control.finishImageEdit();
-                    else
-                        control.beginImageEdit();
-                }
-            }
-            ReviewActionButton {
-                objectName: "imageEditToolCropButton"
-                visible: control.editModeActive
-                checkable: true
-                checked: control.editTool === "crop"
-                text: qsTr("裁剪")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                onClicked: control.editTool = "crop"
-            }
-            ReviewActionButton {
-                objectName: "imageEditToolBrushButton"
-                visible: control.editModeActive
-                checkable: true
-                checked: control.editTool === "brush"
-                text: qsTr("画笔")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                onClicked: control.editTool = "brush"
-            }
-            ReviewActionButton {
-                objectName: "imageEditToolMosaicButton"
-                visible: control.editModeActive
-                checkable: true
-                checked: control.editTool === "mosaic"
-                text: qsTr("马赛克")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                onClicked: control.editTool = "mosaic"
-            }
-            ReviewActionButton {
-                objectName: "imageEditToolFillButton"
-                visible: control.editModeActive
-                checkable: true
-                checked: control.editTool === "fill"
-                text: qsTr("填充")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                helpText: qsTr("用当前颜色填满框选区域；遮挡敏感内容时优先用不透明色块。")
-                onClicked: control.editTool = "fill"
-            }
-            ReviewActionButton {
-                objectName: "imageEditToolClearButton"
-                visible: control.editModeActive
-                checkable: true
-                checked: control.editTool === "clear"
-                text: qsTr("清除")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                helpText: qsTr("把框选区域清除为透明（用于调整透明区域）。")
-                onClicked: control.editTool = "clear"
-            }
-            ReviewActionButton {
-                objectName: "imageEditToolRectButton"
-                visible: control.editModeActive
-                checkable: true
-                checked: control.editTool === "rect"
-                text: qsTr("矩形")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                onClicked: control.editTool = "rect"
-            }
-            ReviewActionButton {
-                objectName: "imageEditToolArrowButton"
-                visible: control.editModeActive
-                checkable: true
-                checked: control.editTool === "arrow"
-                text: qsTr("箭头")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                onClicked: control.editTool = "arrow"
-            }
-            ReviewActionButton {
-                objectName: "imageEditToolTextButton"
-                visible: control.editModeActive
-                checkable: true
-                checked: control.editTool === "text"
-                text: qsTr("文字")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                onClicked: control.editTool = "text"
-            }
-            ReviewActionButton {
-                objectName: "imageEditToolSelectButton"
-                visible: control.editModeActive
-                checkable: true
-                checked: control.editTool === "select"
-                text: qsTr("选择")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                helpText: qsTr("点击选中标注后可拖动；Delete 键或「删除标注」可删除。")
-                onClicked: control.editTool = "select"
-            }
-            ReviewActionButton {
-                objectName: "imageEditUndoButton"
-                visible: control.editModeActive
-                text: qsTr("撤销")
-                enabled: control.imageEdit && control.imageEdit.canUndo
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                onClicked: {
-                    if (control.imageEdit)
-                        control.imageEdit.undo();
-                }
-            }
-            ReviewActionButton {
-                objectName: "imageEditRedoButton"
-                visible: control.editModeActive
-                text: qsTr("重做")
-                enabled: control.imageEdit && control.imageEdit.canRedo
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                onClicked: {
-                    if (control.imageEdit)
-                        control.imageEdit.redo();
-                }
-            }
-            ReviewActionButton {
-                objectName: "imageEditSaveCopyButton"
-                visible: control.editModeActive
-                text: qsTr("另存副本…")
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                onClicked: editSaveDialog.open()
-            }
-            Text {
-                objectName: "imageEditStatusText"
-                visible: control.editModeActive
-                height: 30
-                verticalAlignment: Text.AlignVCenter
-                text: control.imageEdit ? String(control.imageEdit.lastStatus || "") : ""
-                color: Theme.mutedText
-                font.pixelSize: 11
-                elide: Text.ElideRight
-                width: Math.min(360, implicitWidth)
-            }
-        }
-
-        // Row D — parameters for the active tool. Keeping them on their own row stops the
-        // tool switch from clipping the actions on narrower windows.
-        Row {
-            id: editParamsRow
-            objectName: "imageEditParamsRow"
-            spacing: 8
-            visible: control.hasPrimary && control.editModeActive
-
-            ReviewActionButton {
-                objectName: "imageEditBrushColorButton"
-                visible: control.editTool === "brush" || control.editTool === "fill" || control.editTool === "rect" || control.editTool === "arrow" || control.editTool === "text"
-                text: qsTr("颜色 ▾")
-                implicitHeight: 30
-                leftPadding: 8
-                rightPadding: 8
-                onClicked: brushColorMenu.open()
-
-                VcsMenu {
-                    id: brushColorMenu
-                    menuWidth: 150
-
-                    VcsRadioMenuItem {
-                        objectName: "imageEditBrushColorRed"
-                        text: qsTr("红")
-                        checked: control.brushColor === "#ff3b30"
-                        onTriggered: control.brushColor = "#ff3b30"
-                    }
-                    VcsRadioMenuItem {
-                        objectName: "imageEditBrushColorYellow"
-                        text: qsTr("黄")
-                        checked: control.brushColor === "#ffd60a"
-                        onTriggered: control.brushColor = "#ffd60a"
-                    }
-                    VcsRadioMenuItem {
-                        objectName: "imageEditBrushColorGreen"
-                        text: qsTr("绿")
-                        checked: control.brushColor === "#34c759"
-                        onTriggered: control.brushColor = "#34c759"
-                    }
-                    VcsRadioMenuItem {
-                        objectName: "imageEditBrushColorCyan"
-                        text: qsTr("青")
-                        checked: control.brushColor === "#32ade6"
-                        onTriggered: control.brushColor = "#32ade6"
-                    }
-                    VcsRadioMenuItem {
-                        objectName: "imageEditBrushColorWhite"
-                        text: qsTr("白")
-                        checked: control.brushColor === "#ffffff"
-                        onTriggered: control.brushColor = "#ffffff"
-                    }
-                    VcsRadioMenuItem {
-                        objectName: "imageEditBrushColorBlack"
-                        text: qsTr("黑")
-                        checked: control.brushColor === "#000000"
-                        onTriggered: control.brushColor = "#000000"
-                    }
-                }
-            }
-            Text {
-                objectName: "imageEditBrushWidthLabel"
-                visible: control.editTool === "brush" || control.editTool === "rect" || control.editTool === "arrow"
-                height: 30
-                verticalAlignment: Text.AlignVCenter
-                text: control.editTool === "brush" ? qsTr("粗细 %1").arg(control.brushWidth) : qsTr("线宽 %1").arg(control.brushWidth)
-                color: Theme.mutedText
-                font.pixelSize: 11
-            }
-            Slider {
-                objectName: "imageEditBrushWidthSlider"
-                visible: control.editTool === "brush" || control.editTool === "rect" || control.editTool === "arrow"
-                width: 96
-                height: 30
-                from: 1
-                to: 64
-                stepSize: 1
-                value: control.brushWidth
-                onMoved: control.brushWidth = Math.round(value)
-            }
-            Text {
-                objectName: "imageEditBrushOpacityLabel"
-                visible: control.editTool === "brush"
-                height: 30
-                verticalAlignment: Text.AlignVCenter
-                text: qsTr("透明 %1%").arg(Math.round(control.brushOpacity * 100))
-                color: Theme.mutedText
-                font.pixelSize: 11
-            }
-            Slider {
-                objectName: "imageEditBrushOpacitySlider"
-                visible: control.editTool === "brush"
-                width: 96
-                height: 30
-                from: 0.05
-                to: 1
-                stepSize: 0.05
-                value: control.brushOpacity
-                onMoved: control.brushOpacity = value
-            }
-            Text {
-                objectName: "imageEditMosaicBlockLabel"
-                visible: control.editTool === "mosaic"
-                height: 30
-                verticalAlignment: Text.AlignVCenter
-                text: qsTr("块大小 %1").arg(control.mosaicBlock)
-                color: Theme.mutedText
-                font.pixelSize: 11
-            }
-            Slider {
-                objectName: "imageEditMosaicBlockSlider"
-                visible: control.editTool === "mosaic"
-                width: 120
-                height: 30
-                from: 2
-                to: 48
-                stepSize: 1
-                value: control.mosaicBlock
-                onMoved: control.mosaicBlock = Math.round(value)
-            }
-            Text {
-                objectName: "imageEditAnnotationTextLabel"
-                visible: control.editTool === "text"
-                height: 30
-                verticalAlignment: Text.AlignVCenter
-                text: qsTr("文字")
-                color: Theme.mutedText
-                font.pixelSize: 11
-            }
-            TextField {
-                objectName: "imageEditAnnotationTextField"
-                visible: control.editTool === "text"
-                width: 180
-                height: 30
-                placeholderText: qsTr("输入标注文字，再点击画面放置")
-                text: control.annotationText
-                font.pixelSize: 12
-                onTextEdited: control.annotationText = text
-            }
-            Text {
-                objectName: "imageEditAnnotationTextSizeLabel"
-                visible: control.editTool === "text"
-                height: 30
-                verticalAlignment: Text.AlignVCenter
-                text: qsTr("字号 %1").arg(control.annotationTextSize)
-                color: Theme.mutedText
-                font.pixelSize: 11
-            }
-            Slider {
-                objectName: "imageEditAnnotationTextSizeSlider"
-                visible: control.editTool === "text"
-                width: 110
-                height: 30
-                from: 10
-                to: 160
-                stepSize: 1
-                value: control.annotationTextSize
-                onMoved: control.annotationTextSize = Math.round(value)
-            }
-            ReviewActionButton {
-                objectName: "imageEditApplyCropButton"
-                visible: control.editTool === "crop" || control.editTool === "mosaic"
-                text: control.cropSelection ? (control.editTool === "mosaic" ? qsTr("应用马赛克 %1×%2").arg(control.cropSelection.width).arg(control.cropSelection.height) : qsTr("应用裁剪 %1×%2").arg(control.cropSelection.width).arg(control.cropSelection.height)) : (control.editTool === "mosaic" ? qsTr("应用马赛克") : qsTr("应用裁剪"))
-                enabled: control.cropSelection !== null && control.imageEdit && control.imageEdit.active
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                helpText: qsTr("编辑模式下左键框选区域，中键仍可平移；画笔工具下左键直接涂画。")
-                onClicked: control.applyCropSelection()
-            }
-            ReviewActionButton {
-                objectName: "imageEditDeleteAnnotationButton"
-                visible: control.editTool === "select"
-                text: qsTr("删除标注")
-                enabled: control.imageEdit && control.imageEdit.selectedAnnotation >= 0
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                onClicked: {
-                    if (control.imageEdit)
-                        control.imageEdit.deleteSelectedAnnotation();
-                }
-            }
-            ReviewActionButton {
-                objectName: "imageEditClearAnnotationsButton"
-                visible: control.editTool === "select"
-                text: qsTr("清除全部标注")
-                enabled: control.imageEdit && control.imageEdit.annotationCount > 0
-                implicitHeight: 30
-                leftPadding: 10
-                rightPadding: 10
-                onClicked: {
-                    if (control.imageEdit)
-                        control.imageEdit.clearAnnotations();
-                }
-            }
-            Text {
-                objectName: "imageEditAnnotationCountText"
-                visible: control.editTool === "select"
-                height: 30
-                verticalAlignment: Text.AlignVCenter
-                text: control.imageEdit ? qsTr("标注 %1 个").arg(control.imageEdit.annotationCount) : ""
-                color: Theme.mutedText
-                font.pixelSize: 11
-            }
-        }
+    // Header buttons size to their label instead of the shared 112 px floor: the row
+    // is the widest thing in the header and 重做/另存副本 used to clip past the window
+    // edge well above the 960 px minimum width.
+    component EditButton: ReviewActionButton {
+        implicitHeight: 30
+        leftPadding: 10
+        rightPadding: 10
+        // implicitContentWidth does not notify, so a binding to it keeps the value it had
+        // during construction; bind the label's own width instead.
+        implicitWidth: Math.max(64, contentItem.implicitWidth + leftPadding + rightPadding + 8)
     }
 
     // Left/Right/Up/Down walk folder pairs when a comparison list is loaded; Home/End jump
@@ -1737,7 +1984,7 @@ Rectangle {
         id: stage
 
         anchors {
-            top: headerColumn.bottom
+            top: commandPanel.bottom
             topMargin: 12
             left: parent.left
             right: parent.right
@@ -1772,41 +2019,82 @@ Rectangle {
                 width: parent.width - (folderPairSidebar.visible ? folderPairSidebar.width + parent.spacing : 0)
                 height: parent.height
 
-                Text {
+                // Empty state: a headline that names the state and a second line that spells out
+                // both workflows, instead of one run-on sentence in flat grey.
+                Column {
                     visible: !control.hasPrimary
+                    width: Math.min(stageContent.width - 48, 460)
+                    spacing: 10
                     anchors.centerIn: parent
-                    text: qsTr("打开或拖入一张图片查看通道；打开两张图片可进行差异或分割线对比。")
-                    color: Theme.mutedText
-                    font.pixelSize: 16
+
+                    Text {
+                        width: parent.width
+                        text: qsTr("还没有打开图片")
+                        color: Theme.primaryText
+                        font.pixelSize: 17
+                        font.weight: Font.DemiBold
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+
+                    Text {
+                        width: parent.width
+                        text: qsTr("「打开图片…」查看单张的通道与透明度；\n「打开图片对…」载入 A / B 后可做差异、分割线与淡化对比。")
+                        color: Theme.mutedText
+                        font.pixelSize: 12
+                        lineHeight: 1.4
+                        wrapMode: Text.WordWrap
+                        horizontalAlignment: Text.AlignHCenter
+                    }
                 }
 
-                // Manual A/B comparison badge stays inside the image stage.
+                // Manual A/B comparison badge stays inside the image stage. A dark translucent
+                // plate plus an identity dot (A = accent blue, B = amber) states the active side
+                // the way the rest of the app does, instead of a saturated green/teal pill that
+                // competed with the imagery it sits on.
                 Rectangle {
                     id: imageInPlaceBadge
                     objectName: "imageInPlaceBadge"
                     visible: control.hasPair && control.compareMode === 0
                     z: 30
-                    width: Math.min(stageContent.width - 28, inPlaceBadgeText.implicitWidth + 20)
-                    height: 32
+                    width: Math.min(stageContent.width - 28, inPlaceBadgeContent.implicitWidth + 20)
+                    height: 28
                     radius: 6
-                    color: control.singleViewShowSecondary ? "#d90284c7" : "#d916a34a"
-                    border.color: "#ffffff"
+                    color: "#e00f151f"
                     border.width: 1
+                    border.color: control.singleViewShowSecondary ? "#80f2b03c" : "#7a4b8df8"
                     anchors {
                         top: parent.top
                         right: parent.right
                         margins: 14
                     }
 
-                    Text {
-                        id: inPlaceBadgeText
+                    Row {
+                        id: inPlaceBadgeContent
+                        spacing: 7
                         anchors.centerIn: parent
-                        width: Math.max(0, parent.width - 20)
-                        text: control.singleViewShowSecondary ? qsTr("当前 B · 点击画面或按空格切换") : qsTr("当前 A · 点击画面或按空格切换")
-                        elide: Text.ElideRight
-                        color: "#ffffff"
-                        font.pixelSize: 12
-                        font.weight: Font.DemiBold
+
+                        Rectangle {
+                            width: 7
+                            height: 7
+                            radius: 3.5
+                            color: control.singleViewShowSecondary ? "#f2b03c" : Theme.accent
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        Text {
+                            text: control.singleViewShowSecondary ? qsTr("当前 B") : qsTr("当前 A")
+                            color: Theme.primaryText
+                            font.pixelSize: 12
+                            font.weight: Font.DemiBold
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        Text {
+                            text: qsTr("点击画面或按空格切换")
+                            color: Theme.mutedText
+                            font.pixelSize: 11
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
                     }
 
                     MouseArea {
@@ -1815,18 +2103,26 @@ Rectangle {
                     }
                 }
 
-                // Alpha & Background observation HUD badge
+                // Alpha & background observation HUD badge. Same plate as the A/B badge so the
+                // two never look like unrelated widgets; the dot carries the state colour and the
+                // text names the state in words.
                 Rectangle {
                     id: imageAlphaObservationBadge
                     objectName: "imageAlphaObservationBadge"
                     visible: control.hasPrimary && (control.viewMode !== 0 || control.backgroundMode !== 1)
                     z: 30
                     width: Math.min(stageContent.width - (imageInPlaceBadge.visible ? imageInPlaceBadge.width + 52 : 28), alphaBadgeContent.implicitWidth + 20)
-                    height: 32
+                    height: 28
                     radius: 6
-                    color: control.viewMode === 1 ? "#d92563eb" : (control.viewMode === 2 ? "#d97c3aed" : "#d9334155")
-                    border.color: "#ffffff"
+                    color: "#e00f151f"
                     border.width: 1
+                    border.color: {
+                        if (control.viewMode === 1)
+                            return "#7a7dd3fc";
+                        if (control.viewMode === 2)
+                            return "#7aefbf83";
+                        return "#7a4b8df8";
+                    }
                     anchors {
                         top: parent.top
                         right: imageInPlaceBadge.visible ? imageInPlaceBadge.left : parent.right
@@ -1836,35 +2132,51 @@ Rectangle {
 
                     Row {
                         id: alphaBadgeContent
-                        spacing: 8
+                        spacing: 7
                         anchors.centerIn: parent
+
+                        Rectangle {
+                            width: 7
+                            height: 7
+                            radius: 3.5
+                            color: {
+                                if (control.viewMode === 1)
+                                    return Theme.information;
+                                if (control.viewMode === 2)
+                                    return Theme.warning;
+                                return Theme.accent;
+                            }
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
 
                         Text {
                             id: imageAlphaObservationText
                             objectName: "imageAlphaObservationText"
                             text: {
                                 if (control.viewMode === 1)
-                                    return qsTr("🔲 观察：Alpha 灰度通道");
+                                    return qsTr("观察 · Alpha 灰度");
                                 if (control.viewMode === 2)
-                                    return qsTr("👁️ 观察：RGB 忽略透明度");
+                                    return qsTr("观察 · RGB 忽略透明度");
                                 const bgNames = [qsTr("深色底"), qsTr("棋盘格底"), qsTr("黑底"), qsTr("白底")];
-                                return qsTr("🎨 背景：%1").arg(bgNames[control.backgroundMode] || "");
+                                return qsTr("背景 · %1").arg(bgNames[control.backgroundMode] || "");
                             }
-                            color: "#ffffff"
+                            color: Theme.primaryText
                             font.pixelSize: 12
-                            font.weight: Font.Bold
+                            font.weight: Font.DemiBold
+                            anchors.verticalCenter: parent.verticalCenter
                         }
 
                         Text {
                             text: {
                                 if (control.viewMode === 1)
-                                    return qsTr("按 A 还原 RGBA · 点击还原");
+                                    return qsTr("按 A 或点击还原 RGBA");
                                 if (control.viewMode === 2)
-                                    return qsTr("按 O 还原 RGBA · 点击还原");
+                                    return qsTr("按 O 或点击还原 RGBA");
                                 return qsTr("点击还原棋盘格背景");
                             }
-                            color: "#e2e8f0"
+                            color: Theme.mutedText
                             font.pixelSize: 11
+                            anchors.verticalCenter: parent.verticalCenter
                         }
                     }
 
@@ -2111,40 +2423,63 @@ Rectangle {
                     // T6: persistent A/B identity for the wipe halves. The left of the
                     // split shows the secondary image and the right shows the primary, so
                     // the labels name them in that order and can never be misread as
-                    // reversed while the split is dragged.
-                    Text {
-                        id: wipeIdentityLeft
-
-                        objectName: "wipeIdentityLeft"
-                        visible: control.hasPair && control.hasSecondary && width > 4
-                        text: control.hasSecondary ? qsTr("B · %1").arg(control.imageTitle(control.imageReview.secondaryPath, control.imageReview.primaryPath)) : ""
-                        color: Theme.primaryText
-                        font.pixelSize: 12
-                        font.weight: Font.DemiBold
-                        elide: Text.ElideRight
-                        width: Math.max(0, wipeOverlay.splitX - 20)
+                    // reversed while the split is dragged. Both ride on translucent plates
+                    // like the viewport labels, so they stay readable over bright imagery.
+                    Rectangle {
+                        visible: control.hasPair && control.hasSecondary && wipeOverlay.splitX > 44
+                        width: wipeIdentityLeft.width + 16
+                        height: wipeIdentityLeft.implicitHeight + 10
+                        radius: 5
+                        color: "#b3060c14"
+                        border.width: 1
+                        border.color: "#332b3850"
                         anchors {
                             top: parent.top
                             left: parent.left
                             margins: 10
                         }
+
+                        Text {
+                            id: wipeIdentityLeft
+
+                            objectName: "wipeIdentityLeft"
+                            visible: width > 4
+                            text: control.hasSecondary ? qsTr("B · %1").arg(control.imageTitle(control.imageReview.secondaryPath, control.imageReview.primaryPath)) : ""
+                            color: Theme.primaryText
+                            font.pixelSize: 12
+                            font.weight: Font.DemiBold
+                            elide: Text.ElideRight
+                            width: Math.max(0, wipeOverlay.splitX - 36)
+                            anchors.centerIn: parent
+                        }
                     }
 
-                    Text {
-                        id: wipeIdentityRight
-
-                        objectName: "wipeIdentityRight"
-                        visible: control.hasPair && width > 4
-                        text: control.hasPrimary ? qsTr("A · %1").arg(control.imageTitle(control.imageReview.primaryPath, control.imageReview.secondaryPath)) : ""
-                        color: Theme.primaryText
-                        font.pixelSize: 12
-                        font.weight: Font.DemiBold
-                        elide: Text.ElideRight
-                        width: Math.max(0, wipeOverlay.width - wipeOverlay.splitX - 20)
+                    Rectangle {
+                        visible: control.hasPair && (wipeOverlay.width - wipeOverlay.splitX) > 44
+                        width: wipeIdentityRight.width + 16
+                        height: wipeIdentityRight.implicitHeight + 10
+                        radius: 5
+                        color: "#b3060c14"
+                        border.width: 1
+                        border.color: "#332b3850"
                         anchors {
                             top: parent.top
                             right: parent.right
                             margins: 10
+                        }
+
+                        Text {
+                            id: wipeIdentityRight
+
+                            objectName: "wipeIdentityRight"
+                            visible: width > 4
+                            text: control.hasPrimary ? qsTr("A · %1").arg(control.imageTitle(control.imageReview.primaryPath, control.imageReview.secondaryPath)) : ""
+                            color: Theme.primaryText
+                            font.pixelSize: 12
+                            font.weight: Font.DemiBold
+                            elide: Text.ElideRight
+                            width: Math.max(0, wipeOverlay.width - wipeOverlay.splitX - 36)
+                            anchors.centerIn: parent
                         }
                     }
 
@@ -2342,6 +2677,36 @@ Rectangle {
                         opacity: control.imageReview ? control.imageReview.fadePosition : 0
                     }
 
+                    // Identity for the blended pair: the fade chip reports the mix, this
+                    // plate names what A and B actually are — same style as the viewport
+                    // labels, and it never intercepts pan or marquee input.
+                    Rectangle {
+                        visible: control.hasPair
+                        width: Math.min(fadeIdentityText.implicitWidth + 16, Math.max(200, fadeOverlay.width - 60))
+                        height: fadeIdentityText.implicitHeight + 10
+                        radius: 5
+                        color: "#b3060c14"
+                        border.width: 1
+                        border.color: "#332b3850"
+                        anchors {
+                            top: parent.top
+                            left: parent.left
+                            margins: 10
+                        }
+
+                        Text {
+                            id: fadeIdentityText
+
+                            text: control.hasPair ? qsTr("A · %1 ↔ B · %2").arg(control.imageTitle(control.imageReview.primaryPath, control.imageReview.secondaryPath)).arg(control.imageTitle(control.imageReview.secondaryPath, control.imageReview.primaryPath)) : ""
+                            color: Theme.primaryText
+                            font.pixelSize: 12
+                            font.weight: Font.DemiBold
+                            elide: Text.ElideMiddle
+                            width: Math.min(implicitWidth, Math.max(160, fadeOverlay.width - 76))
+                            anchors.centerIn: parent
+                        }
+                    }
+
                     MouseArea {
                         anchors.fill: parent
                         hoverEnabled: true
@@ -2439,10 +2804,12 @@ Rectangle {
         id: fadeSliderOverlay
 
         visible: control.hasPair && control.compareMode === 7
-        height: 40
-        radius: 8
-        color: "#d910141b"
-        border.color: Theme.menuBorder
+        width: fadeRow.implicitWidth + 24
+        height: 36
+        radius: 6
+        color: "#e00f151f"
+        border.width: 1
+        border.color: Theme.border
         anchors {
             right: stage.right
             bottom: stage.bottom
@@ -2451,10 +2818,15 @@ Rectangle {
         z: 20
 
         Row {
+            id: fadeRow
+
             spacing: 10
             anchors.centerIn: parent
 
             Text {
+                // Fixed width: a readout that resizes with its own digits would make the whole
+                // chip jitter under the cursor while the slider is being dragged.
+                width: 156
                 height: 30
                 verticalAlignment: Text.AlignVCenter
                 text: qsTr("淡化 · A %1% / B %2%").arg(Math.round((1 - (control.imageReview ? control.imageReview.fadePosition : 0.5)) * 100)).arg(Math.round((control.imageReview ? control.imageReview.fadePosition : 0.5) * 100))
@@ -2616,33 +2988,12 @@ Rectangle {
             }
             spacing: 12
 
-            Rectangle {
+            StatusBadge {
                 id: displayConversionBadge
                 objectName: "displayConversionBadge"
                 visible: Boolean(control.imageReview && control.hasPrimary && (control.imageReview.primaryDisplayConverted || control.imageReview.secondaryDisplayConverted))
-                height: 22
-                radius: 4
-                color: "#2a1e12"
-                border.color: "#f59e0b"
-                border.width: 1
-                anchors.verticalCenter: parent.verticalCenter
-
-                Row {
-                    anchors.centerIn: parent
-                    leftPadding: 6
-                    rightPadding: 6
-                    spacing: 4
-
-                    Text {
-                        text: "🎨"
-                        font.pixelSize: 11
-                    }
-                    Text {
-                        text: qsTr("显示缓冲 RGBA8")
-                        color: "#fef3c7"
-                        font.pixelSize: 11
-                    }
-                }
+                text: qsTr("显示缓冲 RGBA8")
+                dotColor: Theme.warning
 
                 HoverHandler {
                     id: displayConversionHover
@@ -2654,33 +3005,12 @@ Rectangle {
                 }
             }
 
-            Rectangle {
+            StatusBadge {
                 id: resampleBadge
                 objectName: "imageResampleBadge"
                 visible: Boolean(control.imageReview && control.hasPair && (control.imageReview.diffResampled || (control.sizesDiffer && control.imageReview.resampleAllowed)))
-                height: 22
-                radius: 4
-                color: "#2a1e12"
-                border.color: "#f59e0b"
-                border.width: 1
-                anchors.verticalCenter: parent.verticalCenter
-
-                Row {
-                    anchors.centerIn: parent
-                    leftPadding: 6
-                    rightPadding: 6
-                    spacing: 4
-
-                    Text {
-                        text: "📐"
-                        font.pixelSize: 11
-                    }
-                    Text {
-                        text: control.imageReview && control.imageReview.diffResampled ? qsTr("空间已重采样") : qsTr("重采样：开")
-                        color: "#fef3c7"
-                        font.pixelSize: 11
-                    }
-                }
+                text: control.imageReview && control.imageReview.diffResampled ? qsTr("空间已重采样") : qsTr("重采样：开")
+                dotColor: Theme.warning
 
                 MouseArea {
                     anchors.fill: parent
@@ -2701,33 +3031,11 @@ Rectangle {
                 }
             }
 
-            Rectangle {
+            StatusBadge {
                 visible: Boolean(control.imageReview && control.hasPrimary && (control.imageReview.primaryHasAlpha || control.imageReview.secondaryHasAlpha))
-                height: 22
-                radius: 4
-                color: "#1e293b"
-                border.color: "#38bdf8"
-                border.width: 1
-                anchors.verticalCenter: parent.verticalCenter
-
-                Row {
-                    anchors.centerIn: parent
-                    leftPadding: 6
-                    rightPadding: 6
-                    spacing: 4
-
-                    Text {
-                        text: "α"
-                        color: "#38bdf8"
-                        font.pixelSize: 12
-                        font.weight: Font.Bold
-                    }
-                    Text {
-                        text: qsTr("直通（未预乘）")
-                        color: "#e2e8f0"
-                        font.pixelSize: 11
-                    }
-                }
+                text: qsTr("直通（未预乘）")
+                glyph: "α"
+                glyphColor: Theme.information
             }
 
             Text {
@@ -2754,6 +3062,25 @@ Rectangle {
             const urls = control.pairModel.pairUrlsAt(next);
             if (urls.hasLeft && urls.hasRight)
                 control.imageReview.prefetchPair(urls.leftUrl, urls.rightUrl);
+        }
+    }
+
+    // Resize and canvas-fill dialogs. They live here rather than inside the row so that
+    // closing the dropdown cannot destroy a half-filled-in size.
+    ImageEditDialogs {
+        id: imageEditDialogs
+
+        imageEdit: control.imageEdit
+        imageWidth: control.imageEdit ? control.imageEdit.imageWidth : 0
+        imageHeight: control.imageEdit ? control.imageEdit.imageHeight : 0
+        maximumEdge: control.imageEdit ? control.imageEdit.maximumEdge : 16384
+        minimumEdge: control.imageEdit ? control.imageEdit.minimumEdge : 1
+
+        onScaleApplied: function (width, height, smooth) {
+            return control.applyImageScale(width, height, smooth);
+        }
+        onFillApplied: function (width, height, fillColor) {
+            return control.applyImageCanvasFill(width, height, fillColor);
         }
     }
 

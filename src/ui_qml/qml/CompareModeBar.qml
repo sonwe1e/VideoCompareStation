@@ -86,6 +86,7 @@ Rectangle {
             text: qsTr("按住看原图")
             visible: control.currentMode === ComparisonSurface.Difference
             enabled: !control.busy
+            prominent: pressed
             implicitWidth: 104
             implicitHeight: 30
             labelPixelSize: 12
@@ -94,6 +95,14 @@ Rectangle {
             onCanceled: control.differencePeekChanged(false)
         }
         // qmllint enable import unqualified unresolved-type
+
+        Rectangle {
+            visible: control.sourceCount === 3 && control.pairRelevant
+            width: 1
+            height: 20
+            color: Theme.border
+            anchors.verticalCenter: parent.verticalCenter
+        }
 
         ToolbarCombo {
             id: pairComboBox
@@ -202,7 +211,7 @@ Rectangle {
 
         background: Rectangle {
             radius: 5
-            color: !modeButton.enabled ? Theme.disabledPanel : (modeButton.checked ? Theme.controlChecked : (modeButton.down ? Theme.controlPressed : (modeButton.hovered ? Theme.controlHover : Theme.control)))
+            color: !modeButton.enabled ? Theme.disabledPanel : (modeButton.checked ? "#1e3a66" : (modeButton.down ? Theme.controlPressed : (modeButton.hovered ? Theme.controlHover : Theme.control)))
             border.width: modeButton.activeFocus ? 2 : 1
             border.color: modeButton.activeFocus ? Theme.accent : (modeButton.checked ? Theme.accent : Theme.controlBorder)
         }
@@ -233,7 +242,7 @@ Rectangle {
 
         background: Rectangle {
             radius: 5
-            color: !diffModeButton.enabled ? Theme.disabledPanel : (diffModeButton.checked ? Theme.controlChecked : (diffModeButton.down ? Theme.controlPressed : (diffModeButton.hovered ? Theme.controlHover : Theme.control)))
+            color: !diffModeButton.enabled ? Theme.disabledPanel : (diffModeButton.checked ? "#1e3a66" : (diffModeButton.down ? Theme.controlPressed : (diffModeButton.hovered ? Theme.controlHover : Theme.control)))
             border.width: diffModeButton.activeFocus ? 2 : 1
             border.color: diffModeButton.activeFocus ? Theme.accent : (diffModeButton.checked ? Theme.accent : Theme.controlBorder)
         }
@@ -268,6 +277,7 @@ Rectangle {
         implicitHeight: 30
         leftPadding: 12
         rightPadding: 12
+        prominent: control.inspectorOpen
         onClicked: control.inspectorRequested()
         anchors {
             right: parent.right

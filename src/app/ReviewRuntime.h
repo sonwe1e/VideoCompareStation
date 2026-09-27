@@ -14,8 +14,9 @@
 
 namespace dvs {
 namespace application {
+class IClipExporter;
 class IIssueRecordRepository;
-}
+} // namespace application
 namespace ui {
 class ComparisonSurface;
 class PairMetricsController;
@@ -47,6 +48,9 @@ public:
     // T7 issue-record persistence port owned by the composition root (architecture: ui_qml
     // must not link persistence_json).
     [[nodiscard]] application::IIssueRecordRepository* issueRecordRepository() noexcept;
+    // Lossless range clip-export port owned by the composition root (architecture: ui_qml must not
+    // link media_ffmpeg). Shared so a running export survives the teardown hand-off.
+    [[nodiscard]] std::shared_ptr<application::IClipExporter> clipExporter() const noexcept;
     [[nodiscard]] bool attachSurface(ui::ComparisonSurface& surface) noexcept;
     [[nodiscard]] std::vector<media::DecoderBackendStatus> decoderBackendStatuses() const;
     [[nodiscard]] media::MediaProbeStatistics mediaProbeStatistics() const noexcept;

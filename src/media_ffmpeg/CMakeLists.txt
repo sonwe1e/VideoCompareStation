@@ -2,6 +2,7 @@ add_library(
     dvs_media_ffmpeg
     STATIC
         src/AlignmentAnalysisService.cpp
+        src/ClipExportWriter.cpp
         src/Module.cpp
         src/MultiSourceFrameProvider.cpp
         src/PresentationIndexCache.cpp

@@ -1,6 +1,7 @@
 add_library(
     dvs_ui_models
     STATIC
+        include/dvs/ui/ClipExportController.h
         include/dvs/ui/ImageFolderPairModel.h
         include/dvs/ui/IssueLogController.h
         include/dvs/ui/PairMetricsController.h
@@ -12,6 +13,7 @@ add_library(
         include/dvs/ui/ReviewShellController.h
         include/dvs/ui/SourceIdentity.h
         include/dvs/ui/SourceListModel.h
+        src/ClipExportController.cpp
         src/ImageFolderPairModel.cpp
         src/IssueLogController.cpp
         src/PairMetricsController.cpp
