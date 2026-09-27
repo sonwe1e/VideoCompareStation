@@ -236,10 +236,50 @@ pwsh tools/testing/measure-startup.ps1 -Label baseline-onefile -Rounds 5 -Warmup
 - 数据：`out/startup-measurements/step4-nofile-20260928-032720`（B）、
   `out/startup-measurements/step4-ab-baseline-nofile-20260928-032809`（A）。
 
+## Step 5（启动请求提前）实验结论：架构性取消（2026-09-28 实测 + 首帧层落地）
+
+按计划先补齐首帧层：`measure-startup.ps1` 现在为每轮设置 `DVS_PLAYBACK_TRACE`，解析首个
+kind 0（CommandAccepted）/ 4（FrameSetReady）/ 8（SnapshotCommitted）事件并与 spawn 钟对齐
+（trace 与里程碑同用 steady_clock，零偏移拼接）。然后把启动请求提交移到 show() 之前
+（`DesktopApplication::load` 增加 pre-show 钩子）实测：
+
+1. **pre-show 提交被应用层拒绝**：`ReviewController::openSources` 的门是
+   `canOpen = graphicsReady && !busy && …`，而 graphicsReady 依赖场景图初始化创建的
+   D3D11 设备——show() 之前恒为 false。实测：无 startup-request 里程碑、无 kind 0 事件、
+   应用走致命退出路径（错误弹窗挂住直到被杀，exit -1、14/16 里程碑），与代码路径吻合。
+2. **"排队到 graphics-ready 再提交"也拿不到收益**：主线程在 show() 内阻塞到 ~749 ms，
+   任何主线程机制（含意图队列冲刷）最早也只能在 post-show 处理——而当前提交点就在那里
+   （750.5 ms）。真正的并行需要 worker 侧无设备探测（probe 先行、解码器开箱等设备），
+   属设备生命周期架构改造——计划明确的非目标。
+3. **计划预估的 ~250 ms 并行收益架构上不可得**。首帧层给出的真实串行链：窗口可见
+   588.8 → exec 750.7 → 命令接受 793.9 → **首帧提交 832.3 ms**（中位）；打开本身仅
+   ~38 ms（接受→首帧），GPU 段（154 ms）与打开按设计顺序执行。
+
+**保留产出：首帧测量层 + 带文件基线**（四格完成定义"启动前后对照"的带文件数据来源，
+Step 6 亦复用）：
+
+| 指标（带文件，中位 / P95，ms） | 值 |
+|---|---|
+| spawn → 窗口可见 | 588.8 / 590.9 |
+| spawn → exec | 762.7 / 777.8 |
+| spawn → 命令接受（kind 0） | 793.9 / 810.0 |
+| spawn → 首帧集就绪（kind 4） | 832.0 / 852.0 |
+| spawn → 首帧提交（kind 8） | **832.3 / 852.2** |
+| "可见但空白"窗口（窗口→首帧） | ~243 |
+
+- 应用侧改动全部回退（pre-show 钩子随之移除——无提交者即死代码）；测量脚本保留。
+- 含钩子版本曾全量 767/767 通过（冒烟即真实带文件启动路径），回退仅撤实现、不改结论。
+- 数据：`out/startup-measurements/step5-cancelled-onefile-20260928-035731`（正常流程基线）、
+  `out/startup-measurements/step5-onefile-20260928-035027`（pre-show 被拒的失败证据）。
+
+对 Step 6 的含义：本基线"接受→首帧"仅 38 ms（暖缓存、小文件）——首开软解竞争若存在，
+需要更大码流/冷缓存才能显形；trace 的 kind 23/24（解码起止）已可取数。
+
 ## 已知限制与待办
 
 1. **冷启动未测**：本表全部为热缓存。冷启动协议待定义（重启后首轮即测、不预热）。
-2. **首帧层未接入**：带文件"到首帧"需 playback trace kind 0/4/8，Step 5 动手前补齐。
+2. **~~首帧层未接入~~ 已接入（2026-09-28）**：`measure-startup.ps1` 解析
+   `DVS_PLAYBACK_TRACE` 的首个 kind 0/4/8 事件并与 spawn 钟对齐；带文件基线见 Step 5 节。
 3. P95 = 5 轮最大值，样本小；结论以中位数为主。
 4. dev 构建数据只用于机制验证（QML 段 1570 ms），不进基线表。
 5. Step 0/1 已提交；全量 dev 套件 767/767 通过（其中 `quality.release-contract` 的存量

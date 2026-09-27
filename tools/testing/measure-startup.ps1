@@ -19,6 +19,10 @@
       clock as System.Diagnostics.Stopwatch, so the log and the poll loop can be joined.
       An alignment outside the sanity window is reported as null instead of trusted.
     - internal: every [startup] milestone with the delta to its predecessor.
+    - first frame: when a launch argument opens media, DVS_PLAYBACK_TRACE captures the
+      playback trace; the first trace events of kind 0 (CommandAccepted), 4 (FrameSetReady)
+      and 8 (SnapshotCommitted) are reported as spawn-aligned times. The trace clock is the
+      same steady clock as the milestone log, so the three layers join without offsets.
 
     Percentiles are nearest-rank: with 5 measured rounds P95 equals the maximum. The
     sequential launch loop measures the warm-cache path; record that alongside results.
@@ -146,8 +150,11 @@ $argumentText = (@($LaunchArgument) | ForEach-Object {
 function Invoke-StartupLaunch {
     param([int]$Index)
     $stderrPath = Join-Path $runDir ('round-{0:d2}.stderr.txt' -f $Index)
+    $tracePath = Join-Path $runDir ('round-{0:d2}.trace.jsonl' -f $Index)
     $previousTiming = $env:DVS_STARTUP_TIMING
+    $previousTrace = $env:DVS_PLAYBACK_TRACE
     $env:DVS_STARTUP_TIMING = '1'
+    $env:DVS_PLAYBACK_TRACE = $tracePath
     $process = $null
     $windowUs = $null
     $timedOut = $false
@@ -205,6 +212,11 @@ function Invoke-StartupLaunch {
         } else {
             Remove-Item Env:DVS_STARTUP_TIMING -ErrorAction SilentlyContinue
         }
+        if ($null -ne $previousTrace) {
+            $env:DVS_PLAYBACK_TRACE = $previousTrace
+        } else {
+            Remove-Item Env:DVS_PLAYBACK_TRACE -ErrorAction SilentlyContinue
+        }
     }
 
     $milestones = [System.Collections.Generic.List[object]]::new()
@@ -240,6 +252,22 @@ function Invoke-StartupLaunch {
         }
     }
 
+    # Playback trace: first event per requested kind, joined onto the spawn timeline via the
+    # shared steady clock. Kinds: 0 CommandAccepted, 4 FrameSetReady, 8 SnapshotCommitted.
+    $traceFirstByKind = @{}
+    if (Test-Path -LiteralPath $tracePath -PathType Leaf) {
+        foreach ($line in [IO.File]::ReadLines($tracePath)) {
+            if ($line -notmatch '^\{"t":(\d+),"kind":(\d+),') { continue }
+            $kind = [int]$Matches[2]
+            if ($traceFirstByKind.ContainsKey($kind)) { continue }
+            if ($kind -ne 0 -and $kind -ne 4 -and $kind -ne 8) { continue }
+            $delta = [double]$Matches[1] - $spawnQpcUs
+            if ($delta -ge 0 -and $delta -le $qpcSanityMaxUs) {
+                $traceFirstByKind[$kind] = [math]::Round($delta, 3)
+            }
+        }
+    }
+
     return [pscustomobject]@{
         Index = $Index
         WindowUs = $windowUs
@@ -251,6 +279,10 @@ function Invoke-StartupLaunch {
         Segments = $segments
         SpawnToFirstMarkUs = $spawnToFirstUs
         SpawnToExecUs = $spawnToExecUs
+        TracePath = $tracePath
+        TraceCommandAcceptedUs = if ($traceFirstByKind.ContainsKey(0)) { $traceFirstByKind[0] } else { $null }
+        TraceFrameSetReadyUs = if ($traceFirstByKind.ContainsKey(4)) { $traceFirstByKind[4] } else { $null }
+        TraceSnapshotCommittedUs = if ($traceFirstByKind.ContainsKey(8)) { $traceFirstByKind[8] } else { $null }
         Valid = ($null -ne $windowUs) -and (-not $timedOut) -and ($milestones.Count -gt 0)
     }
 }
@@ -304,12 +336,27 @@ $externalFirstMark = Get-StartupAggregate @($validMeasured |
 $externalExec = Get-StartupAggregate @($validMeasured |
     Where-Object { $null -ne $_.SpawnToExecUs } | ForEach-Object { [double]$_.SpawnToExecUs })
 
+$traceCommandAccepted = Get-StartupAggregate @($validMeasured |
+    Where-Object { $null -ne $_.TraceCommandAcceptedUs } |
+    ForEach-Object { [double]$_.TraceCommandAcceptedUs })
+$traceFrameSetReady = Get-StartupAggregate @($validMeasured |
+    Where-Object { $null -ne $_.TraceFrameSetReadyUs } |
+    ForEach-Object { [double]$_.TraceFrameSetReadyUs })
+$traceSnapshotCommitted = Get-StartupAggregate @($validMeasured |
+    Where-Object { $null -ne $_.TraceSnapshotCommittedUs } |
+    ForEach-Object { [double]$_.TraceSnapshotCommittedUs })
+
 $summary = [pscustomobject]@{
     environment = $environment
     external = [pscustomobject]@{
         spawn_to_window = $externalWindow
         spawn_to_first_mark = $externalFirstMark
         spawn_to_exec = $externalExec
+    }
+    first_frame = [pscustomobject]@{
+        spawn_to_command_accepted = $traceCommandAccepted
+        spawn_to_frame_set_ready = $traceFrameSetReady
+        spawn_to_snapshot_committed = $traceSnapshotCommitted
     }
     segments = $segmentAggregates
     milestones_since_first_mark = $milestoneAggregates
@@ -346,6 +393,17 @@ $report = [System.Text.StringBuilder]::new()
 [void]$report.AppendLine((Format-StartupRow 'spawn -> exec mark (QPC aligned)' $externalExec))
 [void]$report.AppendLine('```')
 [void]$report.AppendLine()
+if ($null -ne $traceSnapshotCommitted -or $null -ne $traceFrameSetReady -or
+    $null -ne $traceCommandAccepted) {
+    [void]$report.AppendLine('## First frame (playback trace)')
+    [void]$report.AppendLine()
+    [void]$report.AppendLine('```')
+    [void]$report.AppendLine((Format-StartupRow 'spawn -> command accepted (kind 0)' $traceCommandAccepted))
+    [void]$report.AppendLine((Format-StartupRow 'spawn -> first frame set ready (kind 4)' $traceFrameSetReady))
+    [void]$report.AppendLine((Format-StartupRow 'spawn -> first snapshot committed (kind 8)' $traceSnapshotCommitted))
+    [void]$report.AppendLine('```')
+    [void]$report.AppendLine()
+}
 [void]$report.AppendLine('## Internal segments')
 [void]$report.AppendLine()
 [void]$report.AppendLine('```')
@@ -363,7 +421,7 @@ foreach ($name in $milestoneAggregates.Keys) {
 }
 [void]$report.AppendLine('```')
 [void]$report.AppendLine()
-[void]$report.AppendLine("Raw per-round stderr and JSON: $runDir")
+[void]$report.AppendLine("Raw per-round stderr, playback traces and JSON: $runDir")
 
 $reportPath = Join-Path $runDir 'summary.md'
 $report.ToString() | Set-Content -LiteralPath $reportPath -Encoding utf8
