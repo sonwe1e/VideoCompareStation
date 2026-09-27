@@ -119,6 +119,29 @@ pwsh tools/testing/measure-startup.ps1 -Label baseline-onefile -Rounds 5 -Warmup
    并行——计划预估的 ~250 ms 收益与本段实测吻合。
 4. 带文件与无文件结构一致；启动请求本身仅 ~2 ms，媒体打开完全发生在 exec 之后。
 
+## Step 2（QML 预编译）实验结论：取消（2026-09-27 第二轮实测）
+
+按计划把 QML 资源从 qrc 迁到 `qt_add_qml_module`（`TARGET_PATH "qml"` + 每文件
+`QT_RESOURCE_ALIAS`，保住 `qrc:/qml/<file>` 全部 URL；独立静态库目标承载生成代码以避开
+/W4 /WX 对生成代码的 C4702；架构表加两条），UI 套件 766/767 全绿，机制完全打通。两个实测：
+
+1. **NO_PLUGIN 静态库的 cachegen payload 会被链接器丢弃**：exe 仅 +2 KB，引擎静默回退到
+   源码资源（此状态 QML 段 561.3 ms ≈ 基线 577.3 ms，纯噪声）。必须在模块库之外的翻译单元
+   显式 `Q_INIT_RESOURCE(qmlcache_dvs_ui_qml_shell)` 才能把 ~2.9 MB 编译单元拉进 exe。
+2. **链入缓存单元后 QML 段 582.6 ms vs 基线 577.3 ms——零收益，exe +2.9 MB。**
+   561 KB QML 的解析+字节码编译本身只值 ≤20 ms；该段由**整树实例化**主导（数百个对象的
+   C++ 构造 + 属性初始化 + 绑定装配）。qmlcachegen 只省掉前者。
+
+按决策门（"QML 编译段 <80 ms → Step 2 取消"）回退全部 Step 2 改动，回到 `0df097d` 状态。
+本轮保留：构建脚本对空缓存值的健壮性修复；本节的归因修正。修正后的杠杆排序：
+
+- **Step 3/4（延迟加载）是 577 ms 段唯一真正的削减手段**——少实例化对象；
+- Step 5（启动请求提前）的 259 ms GPU 初始化段并行收益不受影响，预估仍 ~250 ms；
+- 术语修正：context-ready→qml-loaded 段不应再称"QML 编译段"，应称"QML 装载+整树实例化段"。
+
+实验数据：`out/startup-measurements/step2-nofile-*`（payload 未链入）、
+`out/startup-measurements/step2b-nofile-*`（链入后，exe 5191 KB）。
+
 ## 已知限制与待办
 
 1. **冷启动未测**：本表全部为热缓存。冷启动协议待定义（重启后首轮即测、不预热）。
@@ -128,3 +151,18 @@ pwsh tools/testing/measure-startup.ps1 -Label baseline-onefile -Rounds 5 -Warmup
 5. Step 0/1 已提交；全量 dev 套件 767/767 通过（其中 `quality.release-contract` 的存量
    版本串不同步——README 停在 1.7、vcpkg.json 停在 1.7.0——已同步到 1.9.0 修复）。
    vcpkg manifest 版本变化会在下一次 configure 时从二进制缓存重装一次依赖。
+6. **本机 MSVC 14.44 英文语言资源缺失**（工具集 bin 下只有 2052/ 中文目录，1033/ 英文目录
+   不存在）：cl 输出中文且 `VSLANG=1033` 失效；CMake 4.4.0 把 cl 的 UTF-8 中文
+   `/showIncludes` 前缀错误解码成乱码，生成的 build.ninja 不含 `deps = msvc`，
+   新编译的对象没有头文件依赖记录 → `quality.msvc_dependencies` 红灯。此前未暴露是因为
+   增量构建沿用 `.ninja_deps` 里的历史记录；任何全量重编都会复现。
+   修复需在 VS Installer 为 BuildTools 补装英文语言包。修复前：本机全量重编后的树该门禁红，
+   功能测试不受影响（Step 2 实验轮全量套件 766/767，唯一红灯即此项）。
+7. **本机 vcpkg 根（G:\Workspaces\vcpkg）无 git 库**（zip 解压版），且 G:\.git 是无效仓库：
+   任何 manifest 指纹变化触发的依赖重解析都会在版本库查找处失败。本地构建需
+   `build.ps1 -UseInstalledDependencies`（`VCPKG_MANIFEST_INSTALL=OFF`，直接用已装好的
+   out/vcpkg 树）；2.0.0 版本提升时的本地构建同样如此。
+8. **本地 cpack 产物含 25 MB 的 vc_redist.x64.exe**（`InstallRequiredSystemLibraries` 路径），
+   本地当前管线输出的 ZIP 为 59.77 MiB / 解压 110.48 MiB / 274 文件，与 v1.9.0 基线
+   （26.63 MiB / 66.4 MiB / 310 文件）明显不符。Step 8 发布前必须查清差异来源
+   （疑似 CMake 版本行为差异），否则体积维度的前后对照无法对齐。
