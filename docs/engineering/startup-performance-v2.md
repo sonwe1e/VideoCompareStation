@@ -142,6 +142,53 @@ pwsh tools/testing/measure-startup.ps1 -Label baseline-onefile -Rounds 5 -Warmup
 实验数据：`out/startup-measurements/step2-nofile-*`（payload 未链入）、
 `out/startup-measurements/step2b-nofile-*`（链入后，exe 5191 KB）。
 
+## Step 3（延迟加载 A：弹窗/对话框）完成（2026-09-28 同日 A/B 实测）
+
+前置的 objectName 断言清单结论（清单先于改动，决定实施范围）：
+
+| 组件（急切对象数约计） | 测试断言时机 | 处置 |
+|---|---|---|
+| ClipExportDialog（~50） | 测试只在点击导出 chip **之后** findChild | 整体 Loader 化 |
+| ReviewInputDialogs + DropConfirmationDialog（~50） | **无** Main.qml 级断言（QML 测试自建实例） | 整体 Loader 化 |
+| ShortcutHelpOverlay（~35） | 仅断言**根** objectName 与根属性 | 根 Popup 常驻，内容表 Loader 化 |
+| ReviewContextMenu（~15） | 契约测试 `InstantiatesRootAndSeparatesManualAlignmentStates` 装载即断言 7 个子 objectName | **维持急切**（见下） |
+
+实现（`Main.qml` + `ShortcutHelpOverlay.qml`，零测试改动）：
+
+- 两个 `Loader { active: false }` + `Component` 包装；打开路径先 `active = true` 再
+  `open()`（Loader 同步建项，首次打开付一次实例化，之后常驻，与原行为等价）。
+  `inputContext` 改读 `Boolean(reviewInputDialogs && reviewInputDialogs.modalVisible)`；
+  导出失败重开走同一入口并加空项守卫。
+- `Loader.item` 对 qmllint 只是 QObject：所有成员访问经
+  `readonly property <类型> x: loader.item` 类型化视图（声明行带定向
+  `qmllint disable incompatible-type`——linter 看不见 Loader 实例化的具体类型——
+  下游访问保持类型检查）。
+- ShortcutHelpOverlay：根 Popup 常驻（objectName / `visible` / preset 属性继续满足
+  装载即断言），`contentItem` 换 `Loader { active: opened || contentReady }`，
+  首次打开后常驻。
+
+同日背靠背 A/B（同机、无文件、release、5 轮 + 1 预热）：
+
+| 段（中位 / P95，ms） | 基线（同日） | Step 3 | Δ |
+|---|---|---|---|
+| context-ready→qml-loaded | 577.8 / 589.9 | 562.7 / 572.7 | **−15.1 / −17.2** |
+| spawn→exec（内部钟） | 850.6 / 890.5 | 832.5 / 840.6 | **−18.1 / −49.9** |
+| spawn→window（外部） | 633.8 / 650.7 | 622.1 / 637.2 | −11.7 / −13.5 |
+
+- **教训（跨日对比陷阱）**：昨日基线的 sg-init 段 196 ms 在今日基线为 171 ms（环境漂移），
+  而 QML 段跨日稳定（577.3 / 577.8）。**归因一律以同日 A/B 为准**，跨日数字只作参考。
+- **每对象实例化成本 ≈ 0.11 ms**（~135 个延迟对象 / 15.1 ms）→ ReviewContextMenu
+  ~15 个对象 ≈ 2 ms，低于噪声底（±5 ms），不值得为此改契约测试的装载即断言。维持急切。
+- 门禁：受影响测试全绿（MainQmlContractTests、DropConfirmationDialog 缩放、app 冒烟）；
+  `qmllint --max-warnings 0`、`format-check`、`lint` 通过；随后全量套件复核。
+- 数据：`out/startup-measurements/step3-ab-baseline-nofile-20260928-014103`（基线 A）、
+  `out/startup-measurements/step3-nofile-20260928-013922`（Step 3 B）。
+
+对 Step 4 的含义：剩余 ~563 ms 段里 ImageWorkspace（`Main.qml` L2751，仅 `visible:`
+门控）与 TabbedInspector（L2637，同）仍是急切实例化——两件的断言都发生在切换到
+图像工作区/打开检查器**之后**（`imageWorkspaceRoot`、`tabbedInspector` 系列），
+契约面比本批更宽松；按 0.11 ms/对象外推是下一个主要削减点，清单方法照搬本节。
+
 ## 已知限制与待办
 
 1. **冷启动未测**：本表全部为热缓存。冷启动协议待定义（重启后首轮即测、不预热）。

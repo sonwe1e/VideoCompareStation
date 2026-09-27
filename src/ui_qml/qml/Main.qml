@@ -388,7 +388,7 @@ ApplicationWindow {
 
     // can never let media shortcuts reach the hidden video session.
 
-    readonly property int inputContext: reviewInputDialogs.modalVisible || anchorDialog.visible || shortcutHelp.visible || imageSingleDialog.visible || imageAddDialog.visible || imagePairDialog.visible || imageReplacePrimaryDialog.visible || imageReplaceSecondaryDialog.visible || imageFolderLeftDialog.visible || imageFolderRightDialog.visible ? 3 : (anyMenuOpen || focusIsPopup(root.activeFocusItem) ? 2 : (focusIsTextEditing(root.activeFocusItem) ? 1 : 0))
+    readonly property int inputContext: Boolean(reviewInputDialogs && reviewInputDialogs.modalVisible) || anchorDialog.visible || shortcutHelp.visible || imageSingleDialog.visible || imageAddDialog.visible || imagePairDialog.visible || imageReplacePrimaryDialog.visible || imageReplaceSecondaryDialog.visible || imageFolderLeftDialog.visible || imageFolderRightDialog.visible ? 3 : (anyMenuOpen || focusIsPopup(root.activeFocusItem) ? 2 : (focusIsTextEditing(root.activeFocusItem) ? 1 : 0))
     readonly property bool globalMediaShortcutsEnabled: workspaceSession.videoActive && inputContext === 0 && (!chromeVisible || !focusBlocksGlobalMediaShortcuts(root.activeFocusItem))
     readonly property bool presentationShortcutsEnabled: inputContext === 0
     readonly property bool frameErrorBannerVisible: hasErrors && currentFrame >= 0 && !busy && graphicsReady && Boolean(controller && controller.canFirst)
@@ -581,7 +581,7 @@ ApplicationWindow {
     // Opens the export dialog. Returns false (with a status line) when there is nothing to export,
     // so the chip can never lead to a dead-end dialog.
     function openClipExportDialog() {
-        if (!clipExportService || !clipExportDialog)
+        if (!clipExportService)
             return false;
 
         if (!rangeExportEnabled) {
@@ -589,6 +589,11 @@ ApplicationWindow {
 
             return false;
         }
+
+        clipExportDialogLoader.active = true;
+
+        if (!clipExportDialog)
+            return false;
 
         clipExportDialog.open();
 
@@ -1055,10 +1060,19 @@ ApplicationWindow {
             root.folderPairModel.clear();
     }
 
+    // Instantiates the input-dialog cluster on first use (synchronous Loader activation) and
+    // returns it; every open path funnels through here so the lazy dialog stays an
+    // implementation detail of the host.
+    function ensureReviewInputDialogs() {
+        reviewInputDialogsLoader.active = true;
+
+        return reviewInputDialogs;
+    }
+
     function requestOpenVideos() {
         workspaceSession.beginOpen(workspaceSession.videoMedia);
 
-        reviewInputDialogs.openVideos();
+        ensureReviewInputDialogs().openVideos();
 
         return true;
     }
@@ -1066,7 +1080,7 @@ ApplicationWindow {
     function requestAddVideo() {
         workspaceSession.beginOpen(workspaceSession.videoMedia);
 
-        reviewInputDialogs.openAddVideo();
+        ensureReviewInputDialogs().openAddVideo();
 
         return true;
     }
@@ -1198,7 +1212,7 @@ ApplicationWindow {
 
         workspaceSession.beginOpen(workspaceSession.videoMedia);
 
-        reviewInputDialogs.openComparison();
+        ensureReviewInputDialogs().openComparison();
 
         return true;
     }
@@ -1563,7 +1577,7 @@ ApplicationWindow {
 
                 workspaceSession.beginOpen(workspaceSession.videoMedia);
 
-                reviewInputDialogs.openComparison();
+                ensureReviewInputDialogs().openComparison();
 
                 return true;
             }
@@ -2262,30 +2276,51 @@ ApplicationWindow {
         }
     }
 
-    ReviewInputDialogs {
-        id: reviewInputDialogs
+    // The video input-dialog cluster (two native pickers plus the drop-confirmation popup)
+    // exists only once an open/add/drop flow starts: until then its tree is dead chrome on
+    // the startup path. Activation is synchronous, so the first open pays one instantiation
+    // and the dialog then stays resident for the session, exactly as before.
+    // Typed view of the lazily instantiated dialog cluster: Loader.item is only a QObject to
+    // the linter, so member access goes through this property and stays type-checked. The
+    // linter cannot see which component the Loader instantiates, hence the local disable.
+    // qmllint disable incompatible-type
+    readonly property ReviewInputDialogs reviewInputDialogs: reviewInputDialogsLoader.item
+    // qmllint enable incompatible-type
 
-        stagedVideos: root.shell ? root.shell.stagedSources : []
-        fileNameFunction: root.fileName
-        pathNameFunction: root.sourcePathLabel
-        initialReferenceIndex: root.pendingComparisonPreservesPosition ? root.canonicalSourceIndex : 0
-        onOpenVideosAccepted: urls => root.openNewReviewUrls(urls)
-        onOpenVideosRejected: root.cancelWorkspaceOpen()
-        onAddVideoAccepted: url => root.reviewDroppedUrls([url])
-        onAddVideoRejected: root.cancelWorkspaceOpen()
-        onMoveRequested: (fromIndex, toIndex) => root.swapDroppedVideos(fromIndex, toIndex)
-        onComparisonAccepted: referenceIndex => {
-            root.openDroppedComparison(referenceIndex);
-        }
-        onComparisonRejected: {
-            if (root.shell)
-                root.shell.clearStagedSources();
+    Loader {
+        id: reviewInputDialogsLoader
 
-            root.pendingComparisonPreservesPosition = false;
+        active: false
 
-            root.pendingNewReviewWantsThreeUp = false;
+        sourceComponent: reviewInputDialogsComponent
+    }
 
-            root.cancelWorkspaceOpen();
+    Component {
+        id: reviewInputDialogsComponent
+
+        ReviewInputDialogs {
+            stagedVideos: root.shell ? root.shell.stagedSources : []
+            fileNameFunction: root.fileName
+            pathNameFunction: root.sourcePathLabel
+            initialReferenceIndex: root.pendingComparisonPreservesPosition ? root.canonicalSourceIndex : 0
+            onOpenVideosAccepted: urls => root.openNewReviewUrls(urls)
+            onOpenVideosRejected: root.cancelWorkspaceOpen()
+            onAddVideoAccepted: url => root.reviewDroppedUrls([url])
+            onAddVideoRejected: root.cancelWorkspaceOpen()
+            onMoveRequested: (fromIndex, toIndex) => root.swapDroppedVideos(fromIndex, toIndex)
+            onComparisonAccepted: referenceIndex => {
+                root.openDroppedComparison(referenceIndex);
+            }
+            onComparisonRejected: {
+                if (root.shell)
+                    root.shell.clearStagedSources();
+
+                root.pendingComparisonPreservesPosition = false;
+
+                root.pendingNewReviewWantsThreeUp = false;
+
+                root.cancelWorkspaceOpen();
+            }
         }
     }
 
@@ -2872,10 +2907,27 @@ ApplicationWindow {
     // Lossless range-clip export. The dialog owns the destination picker and the progress readout;
     // the host owns the two things that must happen outside it: an outcome line in the status HUD,
     // and surfacing the adapter's own message when an export fails while the dialog is closed.
-    ClipExportDialog {
-        id: clipExportDialog
+    // The dialog tree is instantiated on first use: the export chip gates it behind a validated
+    // range, so until an export is requested it is pure startup cost.
+    // Typed view of the lazily instantiated export dialog; see reviewInputDialogs above.
+    // qmllint disable incompatible-type
+    readonly property ClipExportDialog clipExportDialog: clipExportDialogLoader.item
+    // qmllint enable incompatible-type
 
-        service: root.clipExportService
+    Loader {
+        id: clipExportDialogLoader
+
+        active: false
+
+        sourceComponent: clipExportDialogComponent
+    }
+
+    Component {
+        id: clipExportDialogComponent
+
+        ClipExportDialog {
+            service: root.clipExportService
+        }
     }
     Connections {
         target: root.clipExportService
@@ -2885,8 +2937,8 @@ ApplicationWindow {
 
             // A cancel is deliberate and stays silent; a real failure reopens the dialog so the
             // technical detail is readable instead of disappearing with the popup.
-            if (!succeeded && clipExportDialog.failureDetail.length > 0)
-                clipExportDialog.open();
+            if (!succeeded && root.clipExportDialog && root.clipExportDialog.failureDetail.length > 0)
+                root.clipExportDialog.open();
         }
     }
     Rectangle {
