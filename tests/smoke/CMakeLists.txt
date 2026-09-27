@@ -158,64 +158,6 @@ dvs_add_test(
         11
 )
 
-dvs_add_test(
-    NAME package.msi-install-association
-    LAYER packaged
-    MODULE app
-    TIMEOUT 180
-    COMMAND
-        "${DVS_POWERSHELL_EXECUTABLE}"
-        -NoLogo
-        -NoProfile
-        -ExecutionPolicy Bypass
-        -File "${CMAKE_CURRENT_SOURCE_DIR}/VerifyMsiPackage.ps1"
-        -MsiPath "${PROJECT_SOURCE_DIR}/out/package/msi/CompareStation-${PROJECT_VERSION}-windows-x64.msi"
-        -ExpectedVersion "${PROJECT_VERSION}"
-        -ExpectedShellBinaryName "${DVS_SHELL_BINARY_NAME}"
-        -ProbeFixture
-        "${PROJECT_SOURCE_DIR}/tests/fixtures/media/h264_a_320x180_30fps_12.mp4"
-)
-set_tests_properties(
-    package.msi-install-association
-    PROPERTIES
-        RUN_SERIAL TRUE
-        RESOURCE_LOCK comparestation-machine-install
-)
-
-function(dvs_add_msi_upgrade_test previous_version previous_msi)
-    dvs_add_test(
-        NAME package.msi-upgrade-from-${previous_version}
-        LAYER packaged
-        MODULE app
-        TIMEOUT 300
-        COMMAND
-            "${DVS_POWERSHELL_EXECUTABLE}"
-            -NoLogo
-            -NoProfile
-            -ExecutionPolicy Bypass
-            -File "${CMAKE_CURRENT_SOURCE_DIR}/VerifyMsiPackage.ps1"
-            -MsiPath "${PROJECT_SOURCE_DIR}/out/package/msi/CompareStation-${PROJECT_VERSION}-windows-x64.msi"
-            -ExpectedVersion "${PROJECT_VERSION}"
-            -ExpectedShellBinaryName "${DVS_SHELL_BINARY_NAME}"
-            -ProbeFixture
-            "${PROJECT_SOURCE_DIR}/tests/fixtures/media/h264_a_320x180_30fps_12.mp4"
-            -PairProbeFixture
-            "${PROJECT_SOURCE_DIR}/tests/fixtures/media/h264_b_160x90_30fps_12.mp4"
-            -PreviousMsiPath "${previous_msi}"
-            -PreviousExpectedVersion "${previous_version}"
-    )
-    set_tests_properties(
-        package.msi-upgrade-from-${previous_version}
-        PROPERTIES
-            RUN_SERIAL TRUE
-            RESOURCE_LOCK comparestation-machine-install
-    )
-endfunction()
-
-if(DVS_PREVIOUS_RELEASE_1_2_MSI)
-    dvs_add_msi_upgrade_test(1.2.0 "${DVS_PREVIOUS_RELEASE_1_2_MSI}")
-endif()
-
 set(DVS_POPUP_PIXEL_SCALE_LABELS "100" "125" "150")
 set(DVS_POPUP_PIXEL_SCALE_VALUES "1" "1.25" "1.5")
 foreach(scale_label scale_value IN ZIP_LISTS

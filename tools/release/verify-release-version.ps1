@@ -7,9 +7,7 @@ param(
 
     [string] $Executable,
 
-    [string] $ZipPath,
-
-    [string] $MsiPath
+    [string] $ZipPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -68,8 +66,7 @@ if ($Executable) {
 
 $expectedBaseName = "CompareStation-$version-windows-x64"
 foreach ($artifact in @(
-        @{ Path = $ZipPath; Extension = '.zip' },
-        @{ Path = $MsiPath; Extension = '.msi' }
+        @{ Path = $ZipPath; Extension = '.zip' }
     )) {
     if (-not $artifact.Path) {
         continue
@@ -78,49 +75,6 @@ foreach ($artifact in @(
     $expectedName = "$expectedBaseName$($artifact.Extension)"
     if ([IO.Path]::GetFileName($resolvedArtifact) -cne $expectedName) {
         throw "Release artifact must be named '$expectedName': $resolvedArtifact"
-    }
-}
-
-if ($MsiPath) {
-    $installer = New-Object -ComObject WindowsInstaller.Installer
-    $database = $installer.GetType().InvokeMember(
-        'OpenDatabase',
-        'InvokeMethod',
-        $null,
-        $installer,
-        @((Resolve-Path -LiteralPath $MsiPath).Path, 0)
-    )
-    foreach ($property in @(
-            @{ Name = 'ProductName'; Expected = 'CompareStation' },
-            @{ Name = 'ProductVersion'; Expected = $version }
-        )) {
-        $query =
-            "SELECT ``Value`` FROM ``Property`` WHERE ``Property``='$($property.Name)'"
-        $view = $database.GetType().InvokeMember(
-            'OpenView',
-            'InvokeMethod',
-            $null,
-            $database,
-            @($query)
-        )
-        $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null)
-        $record = $view.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $view, $null)
-        if (-not $record) {
-            throw "MSI property '$($property.Name)' is missing."
-        }
-        $value = $record.GetType().InvokeMember(
-            'StringData',
-            'GetProperty',
-            $null,
-            $record,
-            1
-        )
-        if ($value -cne $property.Expected) {
-            throw (
-                "MSI property '$($property.Name)' is '$value', expected " +
-                "'$($property.Expected)'."
-            )
-        }
     }
 }
 

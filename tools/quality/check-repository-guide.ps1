@@ -86,7 +86,7 @@ $requiredCommands = @(
     'cmake --preset release',
     'cmake --build --preset release',
     'cpack --preset release-zip',
-    'cpack --preset release-msi'
+    'pwsh tools/shell/RegisterExplorerCommand.ps1 -InstallRoot out\build\release\bin'
 )
 
 foreach ($command in $requiredCommands) {

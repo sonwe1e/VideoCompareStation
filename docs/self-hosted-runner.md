@@ -11,31 +11,18 @@ Debug/Release、format/lint 使用 `dvs-toolchain-4.4` 标签，D3D11VA 与五�
 - Windows x64、NVIDIA GeForce RTX 4090，驱动 `32.0.16.1074`；
 - Visual Studio 2022 Build Tools 与 MSVC v143；
 - CMake 4.4.0、Ninja 1.13.2、Git 2.47.1；
-- vcpkg 位于 `G:\Workspaces\vcpkg`（安装树：`G:\Workspaces\Toy\out\vcpkg`）；
-- 本地打包另有免管理员安装的 .NET SDK 8.0.423、WiX 4.0.4 与
-  `WixToolset.UI.wixext` 4.0.4。
+- vcpkg 位于 `G:\Workspaces\vcpkg`（安装树：`G:\Workspaces\Toy\out\vcpkg`）。
 
-普通 build/test runner 不依赖 .NET SDK 或 WiX；只有生成 MSI 时才需要这两项。本机
-原先缺少的 CI 基础设施只有 GitHub Actions runner 本体、runner 注册和九个长时素材的
+本机原先缺少的 CI 基础设施只有 GitHub Actions runner 本体、runner 注册和九个长时素材的
 稳定目录。
 
-若重新配置机器，MSI 工具链使用以下固定版本：
-
-```powershell
-winget install --id Microsoft.DotNet.SDK.8 --exact --silent `
-  --accept-package-agreements --accept-source-agreements
-dotnet tool install wix --tool-path G:\GitHubActions\tools\wix --version 4.0.4
-G:\GitHubActions\tools\wix\wix.exe extension add `
-  --global WixToolset.UI.wixext/4.0.4
-```
-
-把 `G:\GitHubActions\tools\wix` 加入 runner 用户的 `PATH`。`v1.4.5` 的发布合同明确为
-无 Authenticode 签名；runner 不需要签名证书或 `signtool.exe`。MSI 是 per-machine，
-因此执行 `packaged-smoke` 的交互式 runner 进程仍必须以管理员身份启动；测试会
-拒绝覆盖机器上已有的 CompareStation 安装，并在结束时卸载自己的测试安装。
-Release workflow 会下载 `CompareStation-1.2.0-windows-x64.msi`，完成启动/关闭、设置保留
-和两路有效 A/B Pair 检查后再安装 1.4.5，并验证旧 `.dvsproj` 注册消失，以及 ARP、
-快捷方式、文件关联和版本化 Explorer Shell COM 注册正确。
+发布包只有 Windows x64 ZIP，不再有 MSI：免安装打包、`packaged-smoke` 与 `shutdown-soak`
+都不需要管理员权限、.NET SDK 或 WiX。资源管理器右键命令由随 ZIP 一起发布的
+`tools/shell/RegisterExplorerCommand.ps1` 按用户注册到 `HKCU\Software\Classes`。历史上的
+MSI 升级门禁（下载 `CompareStation-1.2.0-windows-x64.msi`，验证启动/关闭与设置保留，再检查
+旧 `.dvsproj` 注册消失以及 ARP、快捷方式、文件关联和版本化 Explorer Shell COM 注册）随之
+移除；过期版本不再维护。`v1.4.5` 的发布合同明确为无 Authenticode 签名，runner 仍然不需要
+签名证书或 `signtool.exe`。
 
 ## 固定下载
 
