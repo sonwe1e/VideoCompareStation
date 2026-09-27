@@ -77,5 +77,47 @@ TEST(ExplorerCommandSupportTests, AcceptsOneToThreeSourcesAndRejectsOtherCounts)
     EXPECT_TRUE(buildReviewCommandLine(executable, fourSources).empty());
 }
 
+TEST(ExplorerCommandSupportTests, AcceptsSupportedImageExtensionsCaseInsensitively) {
+    EXPECT_TRUE(hasSupportedImageExtension(LR"(C:\shots\review.PNG)"));
+    EXPECT_TRUE(hasSupportedImageExtension(LR"(C:\shots\review.JpEg)"));
+    EXPECT_TRUE(hasSupportedImageExtension(LR"(C:\shots\review.tiff)"));
+    EXPECT_TRUE(isSupportedMediaExtension(LR"(C:\shots\review.webp)"));
+    EXPECT_TRUE(isSupportedMediaExtension(LR"(C:\clips\review.mp4)"));
+    EXPECT_FALSE(hasSupportedImageExtension(LR"(C:\shots\review.mp4)"));
+    EXPECT_FALSE(hasSupportedVideoExtension(LR"(C:\shots\review.png)"));
+    EXPECT_FALSE(isSupportedMediaExtension(LR"(C:\shots\review.txt)"));
+}
+
+TEST(ExplorerCommandSupportTests, ClassifiesTheSelectionsTheCommandCanServe) {
+    const std::array<std::filesystem::path, 1U> oneVideo{
+        std::filesystem::path{LR"(C:\clips\a.mp4)"}};
+    const std::array<std::filesystem::path, 1U> oneImage{
+        std::filesystem::path{LR"(C:\shots\a.png)"}};
+    const std::array<std::filesystem::path, 2U> videoPair{
+        oneVideo[0], std::filesystem::path{LR"(C:\clips\b.mkv)"}};
+    const std::array<std::filesystem::path, 2U> imagePair{
+        oneImage[0], std::filesystem::path{LR"(C:\shots\b.JPG)"}};
+    const std::array<std::filesystem::path, 3U> videoTrio{
+        videoPair[0], videoPair[1], std::filesystem::path{LR"(C:\clips\c.mov)"}};
+    const std::array<std::filesystem::path, 3U> imageTrio{
+        imagePair[0], imagePair[1], std::filesystem::path{LR"(C:\shots\c.tif)"}};
+    const std::array<std::filesystem::path, 2U> mixed{oneVideo[0], oneImage[0]};
+    const std::array<std::filesystem::path, 1U> unknown{
+        std::filesystem::path{LR"(C:\docs\notes.txt)"}};
+
+    EXPECT_EQ(classifySelection(oneVideo), SelectionKind::SingleVideo);
+    EXPECT_EQ(classifySelection(oneImage), SelectionKind::SingleImage);
+    EXPECT_EQ(classifySelection(videoPair), SelectionKind::VideoPair);
+    EXPECT_EQ(classifySelection(imagePair), SelectionKind::ImagePair);
+    EXPECT_EQ(classifySelection(videoTrio), SelectionKind::VideoTrio);
+    // The image workspace has two sides, so a third image has nowhere to go, and mixing a video
+    // with an image would send one of them down a path that cannot decode it.
+    EXPECT_EQ(classifySelection(imageTrio), SelectionKind::Unsupported);
+    EXPECT_EQ(classifySelection(mixed), SelectionKind::Unsupported);
+    EXPECT_EQ(classifySelection(unknown), SelectionKind::Unsupported);
+    EXPECT_EQ(classifySelection(std::span<const std::filesystem::path>{}),
+              SelectionKind::Unsupported);
+}
+
 } // namespace
 } // namespace dvs::shell

@@ -11,6 +11,7 @@ add_library(
         src/CoordinatorPublication.cpp
         src/FrameMapping.cpp
         src/IssueRecord.cpp
+        src/MediaPaths.cpp
         src/Module.cpp
         src/PlaybackCoordinator.cpp
         src/PlaybackTiming.cpp

@@ -8,13 +8,33 @@
 namespace dvs::shell {
 namespace {
 
-constexpr std::array<std::wstring_view, 5U> kSupportedExtensions{
+constexpr std::array<std::wstring_view, 5U> kSupportedVideoExtensions{
     L".mp4",
     L".mkv",
     L".mov",
     L".avi",
     L".m4v",
 };
+
+constexpr std::array<std::wstring_view, 8U> kSupportedImageExtensions{
+    L".png",
+    L".jpg",
+    L".jpeg",
+    L".bmp",
+    L".gif",
+    L".webp",
+    L".tif",
+    L".tiff",
+};
+
+[[nodiscard]] bool hasExtension(const std::filesystem::path& path,
+                                const std::span<const std::wstring_view> extensions) {
+    std::wstring extension = path.extension().wstring();
+    for (wchar_t& character : extension) {
+        character = static_cast<wchar_t>(std::towlower(character));
+    }
+    return std::ranges::find(extensions, std::wstring_view{extension}) != extensions.end();
+}
 
 [[nodiscard]] std::wstring quoteWindowsArgument(const std::wstring_view argument) {
     std::wstring quoted;
@@ -43,11 +63,51 @@ constexpr std::array<std::wstring_view, 5U> kSupportedExtensions{
 } // namespace
 
 bool hasSupportedVideoExtension(const std::filesystem::path& path) {
-    std::wstring extension = path.extension().wstring();
-    for (wchar_t& character : extension) {
-        character = static_cast<wchar_t>(std::towlower(character));
+    return hasExtension(path, kSupportedVideoExtensions);
+}
+
+bool hasSupportedImageExtension(const std::filesystem::path& path) {
+    return hasExtension(path, kSupportedImageExtensions);
+}
+
+bool isSupportedMediaExtension(const std::filesystem::path& path) {
+    return hasSupportedVideoExtension(path) || hasSupportedImageExtension(path);
+}
+
+SelectionKind classifySelection(const std::span<const std::filesystem::path> paths) {
+    if (paths.empty() || paths.size() > 3U) {
+        return SelectionKind::Unsupported;
     }
-    return std::ranges::find(kSupportedExtensions, extension) != kSupportedExtensions.end();
+    bool allVideo = true;
+    bool allImage = true;
+    for (const std::filesystem::path& path : paths) {
+        allVideo = allVideo && hasSupportedVideoExtension(path);
+        allImage = allImage && hasSupportedImageExtension(path);
+    }
+    if (allVideo) {
+        switch (paths.size()) {
+        case 1U:
+            return SelectionKind::SingleVideo;
+        case 2U:
+            return SelectionKind::VideoPair;
+        default:
+            return SelectionKind::VideoTrio;
+        }
+    }
+    if (allImage) {
+        // The image workspace has two sides, so a third image has nowhere to go; the command stays
+        // hidden instead of opening a pair and silently dropping the rest.
+        switch (paths.size()) {
+        case 1U:
+            return SelectionKind::SingleImage;
+        case 2U:
+            return SelectionKind::ImagePair;
+        default:
+            return SelectionKind::Unsupported;
+        }
+    }
+    // Mixing a video with an image would put one of them on a path that cannot decode it.
+    return SelectionKind::Unsupported;
 }
 
 std::wstring buildReviewCommandLine(const std::filesystem::path& executable,

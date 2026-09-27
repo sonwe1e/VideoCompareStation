@@ -41,11 +41,16 @@ namespace {
         const DWORD attributes = GetFileAttributesW(path.c_str());
         if (attributes == INVALID_FILE_ATTRIBUTES ||
             (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0U ||
-            PathIsNetworkPathW(path.c_str()) != FALSE || !hasSupportedVideoExtension(path)) {
+            PathIsNetworkPathW(path.c_str()) != FALSE || !isSupportedMediaExtension(path)) {
             paths.clear();
             return paths;
         }
         paths.push_back(std::move(path));
+    }
+    // The count alone is not enough: one video plus one image, or three images, has to stay hidden
+    // rather than reach an application path that cannot open it.
+    if (classifySelection(paths) == SelectionKind::Unsupported) {
+        paths.clear();
     }
     return paths;
 }
@@ -59,6 +64,39 @@ namespace {
     }
     modulePath.resize(length);
     return std::filesystem::path{modulePath}.parent_path() / L"CompareStation.exe";
+}
+
+[[nodiscard]] const wchar_t* titleFor(const SelectionKind kind) noexcept {
+    switch (kind) {
+    case SelectionKind::SingleVideo:
+    case SelectionKind::SingleImage:
+        return L"Open in CompareStation";
+    case SelectionKind::VideoTrio:
+        return L"Compare 3 videos with CompareStation";
+    case SelectionKind::VideoPair:
+    case SelectionKind::ImagePair:
+    case SelectionKind::Unsupported:
+        break;
+    }
+    return L"Compare with CompareStation";
+}
+
+[[nodiscard]] const wchar_t* toolTipFor(const SelectionKind kind) noexcept {
+    switch (kind) {
+    case SelectionKind::SingleVideo:
+        return L"Open the selected video for visual review";
+    case SelectionKind::SingleImage:
+        return L"Open the selected image for visual review";
+    case SelectionKind::VideoPair:
+        return L"Compare the two selected videos frame by frame";
+    case SelectionKind::ImagePair:
+        return L"Compare the two selected images side by side";
+    case SelectionKind::VideoTrio:
+        return L"Compare the three selected videos frame by frame";
+    case SelectionKind::Unsupported:
+        break;
+    }
+    return L"Compare the selected files with CompareStation";
 }
 
 } // namespace
@@ -100,11 +138,7 @@ HRESULT ExplorerCommand::GetTitle(IShellItemArray* const selection, LPWSTR* cons
     if (title == nullptr) {
         return E_POINTER;
     }
-    const std::size_t count = selectedPaths(selection).size();
-    const wchar_t* value = count == 1U   ? L"Open in CompareStation"
-                           : count == 3U ? L"Compare 3 videos with CompareStation"
-                                         : L"Compare with CompareStation";
-    return SHStrDupW(value, title);
+    return SHStrDupW(titleFor(classifySelection(selectedPaths(selection))), title);
 }
 
 HRESULT ExplorerCommand::GetIcon(IShellItemArray*, LPWSTR* const icon) noexcept {
@@ -125,11 +159,7 @@ HRESULT ExplorerCommand::GetToolTip(IShellItemArray* const selection,
     if (toolTip == nullptr) {
         return E_POINTER;
     }
-    const std::size_t count = selectedPaths(selection).size();
-    const wchar_t* value = count == 1U   ? L"Open the selected video for visual review"
-                           : count == 3U ? L"Compare the three selected videos frame by frame"
-                                         : L"Compare the two selected videos frame by frame";
-    return SHStrDupW(value, toolTip);
+    return SHStrDupW(toolTipFor(classifySelection(selectedPaths(selection))), toolTip);
 }
 
 HRESULT ExplorerCommand::GetCanonicalName(GUID* const commandName) noexcept {
@@ -147,8 +177,9 @@ HRESULT ExplorerCommand::GetState(IShellItemArray* const selection,
         return E_POINTER;
     }
     try {
-        const std::size_t count = selectedPaths(selection).size();
-        *state = count >= 1U && count <= 3U ? ECS_ENABLED : ECS_HIDDEN;
+        *state = classifySelection(selectedPaths(selection)) == SelectionKind::Unsupported
+                     ? ECS_HIDDEN
+                     : ECS_ENABLED;
     } catch (...) {
         *state = ECS_HIDDEN;
     }

@@ -9,6 +9,7 @@ add_executable(
     ComparisonExactnessTests.cpp
     ComparisonMetricsTests.cpp
     IssueRecordTests.cpp
+    MediaPathsTests.cpp
     PlaybackCoordinatorTests.cpp
     PlaybackTraceTests.cpp
     PrefetchSchedulerTests.cpp

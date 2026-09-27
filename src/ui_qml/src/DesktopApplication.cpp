@@ -1,5 +1,6 @@
 #include "dvs/ui/DesktopApplication.h"
 
+#include "dvs/application/MediaPaths.h"
 #include "dvs/ui/ClipExportController.h"
 #include "dvs/ui/ComparisonExportController.h"
 #include "dvs/ui/ComparisonSurface.h"
@@ -43,6 +44,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -308,12 +310,49 @@ public:
         if (window_ == nullptr || shellController_ == nullptr || kind < 0) {
             return false;
         }
+        if (isStillImageInvocation(files)) {
+            return openStillImages(files);
+        }
         QVariantList values;
         values.reserve(files.size());
         for (const QUrl& file : files) {
             values.push_back(file);
         }
         return shellController_->enqueueStartupRequest(kind, values);
+    }
+
+    // One or two still images belong to the image workspace, not to the video session runner: a PNG
+    // handed to the video path is probed by FFmpeg and fails. Every other selection, including a
+    // mixed one, keeps the video route it had before.
+    [[nodiscard]] static bool isStillImageInvocation(const QList<QUrl>& files) {
+        std::vector<std::filesystem::path> paths;
+        paths.reserve(static_cast<std::size_t>(files.size()));
+        for (const QUrl& file : files) {
+            const QString localPath = file.toLocalFile();
+            if (localPath.isEmpty()) {
+                return false;
+            }
+            paths.emplace_back(localPath.toStdWString());
+        }
+        return application::isStillImageInvocation(paths);
+    }
+
+    // Route through the same QML commit boundary as the menu, drop and automation paths so
+    // workspace intent and committed task identity stay consistent.
+    [[nodiscard]] bool openStillImages(const QList<QUrl>& files) {
+        QVariantList urls;
+        urls.reserve(files.size());
+        for (const QUrl& file : files) {
+            urls.push_back(file);
+        }
+        QVariant opened;
+        if (!QMetaObject::invokeMethod(window_,
+                                       "performImageReview",
+                                       Q_RETURN_ARG(QVariant, opened),
+                                       Q_ARG(QVariant, QVariant{urls}))) {
+            return false;
+        }
+        return opened.toBool();
     }
 
     void activateWindow() noexcept {
