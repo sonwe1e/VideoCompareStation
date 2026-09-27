@@ -108,11 +108,74 @@ terminalContext(const application::RequestTerminal& terminal) noexcept {
         terminal);
 }
 
-template <typename Enum>
+// One named option per persisted enum value. The tables below are the single source for both
+// directions of the settings mapping: parsing a stored string and writing the stored string,
+// so the two can never drift apart.
+template <typename Enum> struct NamedEnumOption {
+    std::string_view text;
+    Enum value;
+};
+
+constexpr NamedEnumOption<ReviewPreferencesController::ViewMode> kViewModeOptions[] = {
+    {"side-by-side", ReviewPreferencesController::ViewMode::SideBySide},
+    {"three-up", ReviewPreferencesController::ViewMode::ThreeUp},
+    {"reference-focus", ReviewPreferencesController::ViewMode::ReferenceFocus},
+    {"difference", ReviewPreferencesController::ViewMode::Difference},
+    {"analysis-grid", ReviewPreferencesController::ViewMode::AnalysisGrid},
+    {"wipe", ReviewPreferencesController::ViewMode::Wipe},
+    {"fade", ReviewPreferencesController::ViewMode::Fade},
+};
+constexpr NamedEnumOption<ReviewPreferencesController::DifferenceMetric>
+    kDifferenceMetricOptions[] = {
+        {"rgb-absolute", ReviewPreferencesController::DifferenceMetric::RgbAbsolute},
+        {"luma", ReviewPreferencesController::DifferenceMetric::Luma},
+        {"chroma", ReviewPreferencesController::DifferenceMetric::Chroma},
+        {"heatmap", ReviewPreferencesController::DifferenceMetric::Heatmap},
+        {"exact-planes", ReviewPreferencesController::DifferenceMetric::ExactPlanes},
+        {"signed-subtract", ReviewPreferencesController::DifferenceMetric::SignedSubtract},
+        {"highlight", ReviewPreferencesController::DifferenceMetric::Highlight},
+};
+constexpr NamedEnumOption<ReviewPreferencesController::DifferenceGain> kDifferenceGainOptions[] = {
+    {"1x", ReviewPreferencesController::DifferenceGain::Gain1x},
+    {"2x", ReviewPreferencesController::DifferenceGain::Gain2x},
+    {"4x", ReviewPreferencesController::DifferenceGain::Gain4x},
+    {"8x", ReviewPreferencesController::DifferenceGain::Gain8x},
+    {"16x", ReviewPreferencesController::DifferenceGain::Gain16x},
+};
+constexpr NamedEnumOption<ReviewPreferencesController::DifferenceEdge> kDifferenceEdgeOptions[] = {
+    {"0-1", ReviewPreferencesController::DifferenceEdge::Edge0And1},
+    {"0-2", ReviewPreferencesController::DifferenceEdge::Edge0And2},
+    {"1-2", ReviewPreferencesController::DifferenceEdge::Edge1And2},
+};
+constexpr NamedEnumOption<ReviewPreferencesController::DifferenceFilter>
+    kDifferenceFilterOptions[] = {
+        {"nearest", ReviewPreferencesController::DifferenceFilter::Nearest},
+        {"bilinear", ReviewPreferencesController::DifferenceFilter::Bilinear},
+        {"bicubic", ReviewPreferencesController::DifferenceFilter::Bicubic},
+};
+// The osc mode, continuity policy and default pair policy persist as named int codes; the
+// unset sentinel (-1 for the osc mode) maps to the trailing default name on write.
+constexpr NamedEnumOption<int> kOscModeOptions[] = {
+    {"pinned", 0},
+    {"auto", 1},
+    {"hidden", 2},
+};
+constexpr NamedEnumOption<int> kContinuityPolicyOptions[] = {
+    {"review-every-frame", 0},
+    {"real-time", 1},
+    {"contextual", 2},
+};
+constexpr NamedEnumOption<int> kPairPolicyOptions[] = {
+    {"reference-and-first-candidate", 0},
+    {"last-two-active-sources", 1},
+    {"preserve-if-available", 2},
+};
+
+template <typename Enum, std::size_t optionCount>
 [[nodiscard]] std::optional<Enum>
 parseEnum(const std::map<std::string, std::string, std::less<>>& values,
           const std::string_view key,
-          const std::initializer_list<std::pair<std::string_view, Enum>> options) {
+          const NamedEnumOption<Enum> (&options)[optionCount]) {
     const auto iterator = values.find(key);
     if (iterator == values.end()) {
         return std::nullopt;
@@ -123,6 +186,21 @@ parseEnum(const std::map<std::string, std::string, std::less<>>& values,
         }
     }
     return std::nullopt;
+}
+
+template <typename Enum, std::size_t optionCount>
+void writeEnum(std::map<std::string, std::string, std::less<>>& values,
+               const std::string_view key,
+               const NamedEnumOption<Enum> (&options)[optionCount],
+               const Enum value,
+               const std::string_view fallbackText) {
+    for (const auto& [text, optionValue] : options) {
+        if (optionValue == value) {
+            values.insert_or_assign(std::string{key}, std::string{text});
+            return;
+        }
+    }
+    values.insert_or_assign(std::string{key}, std::string{fallbackText});
 }
 
 } // namespace
@@ -452,84 +530,28 @@ private:
         }
         const bool nextDropFrameTimecode = values.find(kDropFrameTimecodeKey) != values.end() &&
                                            values.find(kDropFrameTimecodeKey)->second == "true";
-        const ViewMode nextViewMode =
-            parseEnum<ViewMode>(values,
-                                kViewModeKey,
-                                {{"side-by-side", ViewMode::SideBySide},
-                                 {"three-up", ViewMode::ThreeUp},
-                                 {"reference-focus", ViewMode::ReferenceFocus},
-                                 {"difference", ViewMode::Difference},
-                                 {"analysis-grid", ViewMode::AnalysisGrid},
-                                 {"wipe", ViewMode::Wipe},
-                                 {"fade", ViewMode::Fade}})
-                .value_or(ViewMode::SideBySide);
+        const ViewMode nextViewMode = parseEnum<ViewMode>(values, kViewModeKey, kViewModeOptions)
+                                          .value_or(ViewMode::SideBySide);
         const DifferenceMetric nextMetric =
-            parseEnum<DifferenceMetric>(values,
-                                        kDifferenceMetricKey,
-                                        {{"rgb-absolute", DifferenceMetric::RgbAbsolute},
-                                         {"luma", DifferenceMetric::Luma},
-                                         {"chroma", DifferenceMetric::Chroma},
-                                         {"heatmap", DifferenceMetric::Heatmap},
-                                         {"exact-planes", DifferenceMetric::ExactPlanes},
-                                         {"signed-subtract", DifferenceMetric::SignedSubtract},
-                                         {"highlight", DifferenceMetric::Highlight}})
+            parseEnum<DifferenceMetric>(values, kDifferenceMetricKey, kDifferenceMetricOptions)
                 .value_or(DifferenceMetric::RgbAbsolute);
         const DifferenceGain nextGain =
-            parseEnum<DifferenceGain>(values,
-                                      kDifferenceGainKey,
-                                      {{"1x", DifferenceGain::Gain1x},
-                                       {"2x", DifferenceGain::Gain2x},
-                                       {"4x", DifferenceGain::Gain4x},
-                                       {"8x", DifferenceGain::Gain8x},
-                                       {"16x", DifferenceGain::Gain16x}})
+            parseEnum<DifferenceGain>(values, kDifferenceGainKey, kDifferenceGainOptions)
                 .value_or(DifferenceGain::Gain1x);
         const DifferenceEdge nextReference =
-            parseEnum<DifferenceEdge>(values,
-                                      kDifferenceEdgeKey,
-                                      {{"0-1", DifferenceEdge::Edge0And1},
-                                       {"0-2", DifferenceEdge::Edge0And2},
-                                       {"1-2", DifferenceEdge::Edge1And2}})
+            parseEnum<DifferenceEdge>(values, kDifferenceEdgeKey, kDifferenceEdgeOptions)
                 .value_or(DifferenceEdge::Edge0And1);
         const DifferenceFilter nextFilter =
-            parseEnum<DifferenceFilter>(values,
-                                        kDifferenceFilterKey,
-                                        {{"nearest", DifferenceFilter::Nearest},
-                                         {"bilinear", DifferenceFilter::Bilinear},
-                                         {"bicubic", DifferenceFilter::Bicubic}})
+            parseEnum<DifferenceFilter>(values, kDifferenceFilterKey, kDifferenceFilterOptions)
                 .value_or(DifferenceFilter::Bilinear);
-        int nextOscMode = -1;
-        if (const auto iterator = values.find(kOscModeKey); iterator != values.end()) {
-            if (iterator->second == "pinned") {
-                nextOscMode = 0;
-            } else if (iterator->second == "auto") {
-                nextOscMode = 1;
-            } else if (iterator->second == "hidden") {
-                nextOscMode = 2;
-            }
-        }
+        const int nextOscMode = parseEnum<int>(values, kOscModeKey, kOscModeOptions).value_or(-1);
         // C-07 continuity: domain enum codes 0/1/2; Contextual is smoothness-first RealTime.
-        int nextContinuity = 2;
-        if (const auto iterator = values.find(kPlaybackContinuityPolicyKey);
-            iterator != values.end()) {
-            if (iterator->second == "review-every-frame") {
-                nextContinuity = 0;
-            } else if (iterator->second == "real-time") {
-                nextContinuity = 1;
-            } else if (iterator->second == "contextual") {
-                nextContinuity = 2;
-            }
-        }
+        const int nextContinuity =
+            parseEnum<int>(values, kPlaybackContinuityPolicyKey, kContinuityPolicyOptions)
+                .value_or(2);
         // C-02 pair policy: PreserveIfAvailable is the session-friendly default.
-        int nextPairPolicy = 2;
-        if (const auto iterator = values.find(kDefaultPairPolicyKey); iterator != values.end()) {
-            if (iterator->second == "reference-and-first-candidate") {
-                nextPairPolicy = 0;
-            } else if (iterator->second == "last-two-active-sources") {
-                nextPairPolicy = 1;
-            } else if (iterator->second == "preserve-if-available") {
-                nextPairPolicy = 2;
-            }
-        }
+        const int nextPairPolicy =
+            parseEnum<int>(values, kDefaultPairPolicyKey, kPairPolicyOptions).value_or(2);
 
         const bool changed =
             shortcutPreset_ != nextShortcutPreset || dropFrameTimecode_ != nextDropFrameTimecode ||
@@ -558,83 +580,27 @@ private:
                                 shortcutPreset_ == 1 ? "player" : "review");
         values.insert_or_assign(std::string{kDropFrameTimecodeKey},
                                 dropFrameTimecode_ ? "true" : "false");
-        const char* viewModeName = "side-by-side";
-        switch (viewMode_) {
-        case ViewMode::ThreeUp:
-            viewModeName = "three-up";
-            break;
-        case ViewMode::ReferenceFocus:
-            viewModeName = "reference-focus";
-            break;
-        case ViewMode::Difference:
-            viewModeName = "difference";
-            break;
-        case ViewMode::AnalysisGrid:
-            viewModeName = "analysis-grid";
-            break;
-        case ViewMode::Wipe:
-            viewModeName = "wipe";
-            break;
-        case ViewMode::Fade:
-            viewModeName = "fade";
-            break;
-        case ViewMode::SideBySide:
-            break;
-        }
-        values.insert_or_assign(std::string{kViewModeKey}, std::string{viewModeName});
-        static constexpr std::string_view metrics[] = {"rgb-absolute",
-                                                       "luma",
-                                                       "chroma",
-                                                       "heatmap",
-                                                       "exact-planes",
-                                                       "signed-subtract",
-                                                       "highlight"};
-        static constexpr std::string_view gains[] = {"1x", "2x", "4x", "8x", "16x"};
-        static constexpr std::string_view filters[] = {"nearest", "bilinear", "bicubic"};
-        const auto metricIndex = static_cast<std::size_t>(differenceMetric_);
-        values.insert_or_assign(
-            std::string{kDifferenceMetricKey},
-            std::string{metricIndex < std::size(metrics) ? metrics[metricIndex] : metrics[0]});
-        values.insert_or_assign(std::string{kDifferenceGainKey},
-                                std::string{gains[static_cast<std::size_t>(differenceGain_)]});
-        const char* edgeName = "0-1";
-        switch (differenceEdge_) {
-        case DifferenceEdge::Edge0And2:
-            edgeName = "0-2";
-            break;
-        case DifferenceEdge::Edge1And2:
-            edgeName = "1-2";
-            break;
-        case DifferenceEdge::Edge0And1:
-            break;
-        }
-        values.insert_or_assign(std::string{kDifferenceEdgeKey}, std::string{edgeName});
-        values.insert_or_assign(std::string{kDifferenceFilterKey},
-                                std::string{filters[static_cast<std::size_t>(differenceFilter_)]});
-        const char* oscModeName = "contextual";
-        if (oscMode_ == 0) {
-            oscModeName = "pinned";
-        } else if (oscMode_ == 1) {
-            oscModeName = "auto";
-        } else if (oscMode_ == 2) {
-            oscModeName = "hidden";
-        }
-        values.insert_or_assign(std::string{kOscModeKey}, std::string{oscModeName});
-        const char* continuityName = "contextual";
-        if (playbackContinuityPolicy_ == 0) {
-            continuityName = "review-every-frame";
-        } else if (playbackContinuityPolicy_ == 1) {
-            continuityName = "real-time";
-        }
-        values.insert_or_assign(std::string{kPlaybackContinuityPolicyKey},
-                                std::string{continuityName});
-        const char* pairPolicyName = "preserve-if-available";
-        if (defaultPairPolicy_ == 0) {
-            pairPolicyName = "reference-and-first-candidate";
-        } else if (defaultPairPolicy_ == 1) {
-            pairPolicyName = "last-two-active-sources";
-        }
-        values.insert_or_assign(std::string{kDefaultPairPolicyKey}, std::string{pairPolicyName});
+        writeEnum(values, kViewModeKey, kViewModeOptions, viewMode_, "side-by-side");
+        writeEnum(values,
+                  kDifferenceMetricKey,
+                  kDifferenceMetricOptions,
+                  differenceMetric_,
+                  "rgb-absolute");
+        writeEnum(values, kDifferenceGainKey, kDifferenceGainOptions, differenceGain_, "1x");
+        writeEnum(values, kDifferenceEdgeKey, kDifferenceEdgeOptions, differenceEdge_, "0-1");
+        writeEnum(
+            values, kDifferenceFilterKey, kDifferenceFilterOptions, differenceFilter_, "bilinear");
+        writeEnum(values, kOscModeKey, kOscModeOptions, oscMode_, "contextual");
+        writeEnum(values,
+                  kPlaybackContinuityPolicyKey,
+                  kContinuityPolicyOptions,
+                  playbackContinuityPolicy_,
+                  "contextual");
+        writeEnum(values,
+                  kDefaultPairPolicyKey,
+                  kPairPolicyOptions,
+                  defaultPairPolicy_,
+                  "preserve-if-available");
     }
 
     ReviewPreferencesController& owner_;
