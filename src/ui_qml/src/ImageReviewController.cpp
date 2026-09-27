@@ -1,7 +1,5 @@
 #include "dvs/ui/ImageReviewController.h"
 
-#include "dvs/ui/StillImageDecoder.h"
-
 #include "ByteLruCache.h"
 #include "ImageHeaderProbe.h"
 
@@ -1746,7 +1744,6 @@ bool ImageReviewController::loadChecked(const QUrl& url,
             }
 
             const StillImageLoader loader = processStillImageLoader();
-            bool loaderFailed = false;
             std::string loaderError;
             if (loader) {
                 try {
@@ -1754,32 +1751,6 @@ bool ImageReviewController::loadChecked(const QUrl& url,
                 } catch (...) {
                     decoded = false;
                     loaderError = "Still-image loader threw an unknown exception.";
-                }
-                loaderFailed = !decoded;
-            }
-            if (!decoded) {
-                StillImage still;
-                std::string decodeError;
-                if (decodeStillImageBytes(reinterpret_cast<const std::uint8_t*>(bytes.constData()),
-                                          static_cast<std::size_t>(bytes.size()),
-                                          &still,
-                                          &decodeError)) {
-                    const QImage converted(still.rgba.data(),
-                                           still.width,
-                                           still.height,
-                                           still.width * 4,
-                                           QImage::Format_RGBA8888);
-                    loaded = converted.copy();
-                    decoded = !loaded.isNull();
-                    if (decoded && info != nullptr) {
-                        // stb fallback is a plain 8-bit RGBA display conversion.
-                        *info = StillImageSourceInfo{};
-                        info->sourceFormat = QStringLiteral("rgba8 (stb)");
-                        info->channels = 4;
-                        info->hasAlpha = loaded.hasAlphaChannel();
-                    }
-                } else if (error && !loaderFailed) {
-                    *error = QString::fromStdString(decodeError);
                 }
             }
             if (!decoded && (!loaded.loadFromData(bytes) || loaded.isNull())) {
