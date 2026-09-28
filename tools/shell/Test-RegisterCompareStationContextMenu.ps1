@@ -19,7 +19,10 @@ Covered:
      changes nothing;
   7. "RegisterCompareStationContextMenu.cmd -Uninstall", the command INSTALL.txt documents,
      removes the CLSID and every verb key again, running it a second time still exits 0, and the
-     decision to stay off is recorded so the application does not add the entry back.
+     decision to stay off is recorded so the application does not add the entry back;
+  8. a second copy of this command left under the per-extension <ext>\shell key - the form a user's
+     menu shows as a second, identical entry - is removed by registering and by uninstalling, while
+     another tool's verb on the same extension and the entry this registration owns are not.
 
 It only writes the repository's own per-user keys (HKCU\Software\Classes\CLSID\{3B790D74-...} and
 SystemFileAssociations\<ext>\shell\CompareStation.Compare), the real per-user marker at
@@ -142,10 +145,47 @@ function Remove-Registration {
         # An interrupted run must not leave the shared parents behind either.
         Remove-KeyIfUnused "HKCU:\Software\Classes\SystemFileAssociations\$extension\shell"
         Remove-KeyIfUnused "HKCU:\Software\Classes\SystemFileAssociations\$extension"
+        # The per-extension parent is part of the same association chain, so a copy left there is
+        # just as much a second menu entry as one under SystemFileAssociations.
+        $perExtensionVerb = "HKCU:\Software\Classes\$extension\shell"
+        if (Test-Path -LiteralPath $perExtensionVerb) {
+            Remove-Item -LiteralPath $perExtensionVerb -Recurse -Force
+        }
+        Remove-KeyIfUnused "HKCU:\Software\Classes\$extension\shell"
+        Remove-KeyIfUnused "HKCU:\Software\Classes\$extension"
     }
     $clsidKey = "HKCU:\Software\Classes\CLSID\$clsid"
     if (Test-Path -LiteralPath $clsidKey) {
         Remove-Item -LiteralPath $clsidKey -Recurse -Force
+    }
+}
+
+# Plants a verb under the per-extension key that binds this command, which is what an earlier
+# layout or a hand edit leaves behind and what the user sees as a second, identical menu entry.
+# The shape is a switch and not a nullable string on purpose: a [string] parameter turns $null into
+# an empty string, which planted the command shape with an empty command line - a key no sweep would
+# ever match, and a check that would then pass for the wrong reason.
+function Set-SecondCopyVerb {
+    param(
+        [string] $Extension,
+        [string] $Name,
+        [switch] $AsCommandLine,
+        [string] $CommandText = ''
+    )
+
+    $verbKey = "HKCU:\Software\Classes\$Extension\shell\$Name"
+    if ($AsCommandLine) {
+        $commandKey = Join-Path $verbKey 'command'
+        New-Item -Path $commandKey -Force | Out-Null
+        New-ItemProperty -LiteralPath $commandKey -Name '(default)' -Value $CommandText `
+            -PropertyType String -Force | Out-Null
+    }
+    else {
+        New-Item -Path $verbKey -Force | Out-Null
+        New-ItemProperty -LiteralPath $verbKey -Name 'ExplorerCommandHandler' -Value $clsid `
+            -PropertyType String -Force | Out-Null
+        New-ItemProperty -LiteralPath $verbKey -Name 'MUIVerb' `
+            -Value $expectedVerbValues['MUIVerb'] -PropertyType String -Force | Out-Null
     }
 }
 
@@ -458,6 +498,49 @@ try {
     $repeatUninstall = Invoke-CommandFile -CommandFile $sandboxWrapper -Arguments @('-Uninstall')
     Assert-That 'uninstalling twice exits 0' ((Get-ExitCode $repeatUninstall) -eq 0) `
         "exit code $(Get-ExitCode $repeatUninstall)"
+
+    # 9. A second copy of this command anywhere in the per-user classes root is a second menu entry:
+    #    a file's menu is built from every verb in its association chain, and the per-extension key
+    #    <ext>\shell is part of that chain just like SystemFileAssociations. Registering has to take
+    #    such a copy away, and has to take away nothing else.
+    Set-SecondCopyVerb -Extension '.mp4' -Name 'CompareStation.Open'
+    Set-SecondCopyVerb -Extension '.mkv' -Name 'CompareStation.Legacy' -AsCommandLine `
+        -CommandText "`"$sandboxExecutable`" `"%1`""
+    $neighbourVerb = "HKCU:\Software\Classes\.mp4\shell\SomeOtherPlayer"
+    New-Item -Path $neighbourVerb -Force | Out-Null
+    New-ItemProperty -LiteralPath $neighbourVerb -Name 'ExplorerCommandHandler' `
+        -Value '{11111111-2222-3333-4444-555555555555}' -PropertyType String -Force | Out-Null
+    # The sweep can only be judged on the shape it is meant to see, so the planted keys are read
+    # back before anything is expected to remove them.
+    $plantedHandler = (Get-ItemProperty -LiteralPath `
+            'HKCU:\Software\Classes\.mp4\shell\CompareStation.Open').PSObject.Properties['ExplorerCommandHandler']
+    Assert-That 'the planted second copy really is a command handler key' `
+        ($null -ne $plantedHandler -and $plantedHandler.Value -ceq $clsid)
+    $plantedCommand = (Get-Item -LiteralPath `
+            'HKCU:\Software\Classes\.mkv\shell\CompareStation.Legacy\command').GetValue('')
+    Assert-That 'the planted command line really launches this application' `
+        ($plantedCommand -like "*$sandboxExecutable*") $plantedCommand
+
+    $sweepRun = Invoke-CommandFile -CommandFile $sandboxWrapper
+    Assert-That 'registering takes the second copy away' `
+        (-not (Test-Path -LiteralPath 'HKCU:\Software\Classes\.mp4\shell\CompareStation.Open'))
+    Assert-That 'registering takes a leftover command line away' `
+        (-not (Test-Path -LiteralPath 'HKCU:\Software\Classes\.mkv\shell\CompareStation.Legacy'))
+    Assert-That 'registering says how many copies it removed' ($sweepRun -match 'stale_verbs=2') $sweepRun
+    Assert-That "another tool's verb is left alone" (Test-Path -LiteralPath $neighbourVerb)
+    Assert-That 'the entry the user is meant to see survives' `
+        ((Get-RegisteredVerbValue -Extension '.mp4' -Property 'ExplorerCommandHandler') -ceq $clsid)
+    Assert-That 'the emptied per-extension key is reclaimed' `
+        (-not (Test-Path -LiteralPath 'HKCU:\Software\Classes\.mkv\shell'))
+
+    # The documented removal has to take the same copies with it, or the entry simply comes back the
+    # next time anybody registers it.
+    Set-SecondCopyVerb -Extension '.avi' -Name 'CompareStation.Open'
+    $sweepUninstall = Invoke-CommandFile -CommandFile $sandboxWrapper -Arguments @('-Uninstall')
+    Assert-That 'uninstall takes a second copy away' `
+        (-not (Test-Path -LiteralPath 'HKCU:\Software\Classes\.avi\shell\CompareStation.Open'))
+    Assert-That 'uninstall says how many copies it removed' `
+        ($sweepUninstall -match 'stale_verbs=1') $sweepUninstall
 }
 finally {
     $disabled = Join-Path $workPath $disabledScriptName

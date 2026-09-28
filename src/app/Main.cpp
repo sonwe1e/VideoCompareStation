@@ -24,6 +24,7 @@
 #include "StartupFailureReporter.h"
 #include "StartupRequest.h"
 #include "StartupRequestBroker.h"
+#include "StartupRequestDispatch.h"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -357,11 +358,27 @@ void installPlaybackTrace(dvs::app::ReviewRuntime& runtime) {
     return QUrl::fromLocalFile(QString::fromStdWString(path.wstring()));
 }
 
+// What goes into the startup log when a request could not be opened. It names the sources, because
+// "the request failed" on its own cannot be told apart from any other launch that failed, and the
+// file is the part a user recognises.
+[[nodiscard]] std::string describeStartupRequestFailure(const dvs::app::StartupRequest& request) {
+    std::string detail = "The requested startup action could not be opened.";
+    detail += " kind=";
+    detail += request.kind == dvs::app::StartupRequest::Kind::Compare ? "compare" : "play-single";
+    detail += " sources=";
+    detail += std::to_string(request.sources.size());
+    for (const std::filesystem::path& source : request.sources) {
+        detail += " |";
+        detail += source.string();
+    }
+    return detail;
+}
+
 [[nodiscard]] bool applyStartupRequest(const dvs::app::StartupRequest& request,
                                        dvs::ui::DesktopApplication& desktop) {
-    desktop.activateWindow();
     switch (request.kind) {
     case dvs::app::StartupRequest::Kind::Empty:
+        desktop.activateWindow();
         return true;
     case dvs::app::StartupRequest::Kind::PlaySingle:
     case dvs::app::StartupRequest::Kind::Compare: {
@@ -370,7 +387,14 @@ void installPlaybackTrace(dvs::app::ReviewRuntime& runtime) {
         for (const auto& source : request.sources) {
             sources.push_back(localFileUrl(source));
         }
-        return desktop.enqueueStartupRequest(static_cast<int>(request.kind), sources);
+        if (!desktop.enqueueStartupRequest(static_cast<int>(request.kind), sources)) {
+            return false;
+        }
+        // Raised only once the session has taken the request: a request that is still waiting is
+        // offered again, and bringing the window forward for every attempt would be a flicker the
+        // user never asked for.
+        desktop.activateWindow();
+        return true;
     }
     }
     return false;
@@ -462,18 +486,27 @@ runDesktop(int& argc,
             writeStandardError("DVS_SHELL_REGISTRATION_FAILED " + registration.error + "\n");
         }
     }
-    if (!smokeMode && !stillImage.has_value() && !applyStartupRequest(startupRequest, desktop)) {
-        runtime->prepareForSceneGraphRelease();
-        desktop.releaseSceneGraph();
-        if (!runtime->shutdownAfterSceneGraphRelease()) {
-            writeStandardError("DVS_RUNTIME_SHUTDOWN_TIMEOUT\n");
-            std::_Exit(EXIT_FAILURE);
-        }
-        return dvs::app::reportFatalStartup("The requested startup action could not be opened.",
-                                            false);
-    }
+    // The request that came with the launch is answered here, and a request that a running instance
+    // forwards later is answered by the same dispatcher. Offering it once, at this fixed point, was
+    // a race the user lost whenever the review session had not adopted its graphics device yet: the
+    // session refuses an open until it can, and the refusal ended the process. The dispatcher keeps
+    // offering instead, and a request the session really cannot take is reported without closing
+    // the window the user is already looking at.
+    std::unique_ptr<dvs::app::StartupRequestDispatcher> startupDispatcher;
     if (!smokeMode && !stillImage.has_value()) {
-        dvs::ui::markStartupMilestone("startup-request");
+        startupDispatcher = std::make_unique<dvs::app::StartupRequestDispatcher>(
+            [&desktop](dvs::app::StartupRequest request) {
+                return applyStartupRequest(request, desktop);
+            },
+            [controller = runtime->controller()] { return controller->canOpen(); },
+            [](const dvs::app::StartupRequest& request) {
+                dvs::app::logStartupProblem(describeStartupRequestFailure(request));
+            });
+        if (startupDispatcher->submit(startupRequest)) {
+            dvs::ui::markStartupMilestone("startup-request");
+        } else {
+            writeStandardError("DVS_STARTUP_REQUEST_DROPPED\n");
+        }
     }
     if (stillImage.has_value()) {
         std::ofstream log{
@@ -492,9 +525,20 @@ runDesktop(int& argc,
         });
     }
     if (startupBroker) {
-        startupBroker->setRequestHandler([&desktop](dvs::app::StartupRequest request) {
-            return applyStartupRequest(request, desktop);
-        });
+        if (startupDispatcher) {
+            // A forwarded request goes through the same queue as the one this process started
+            // with. Answering it here is what stops the process that forwarded it from reporting a
+            // failure when this instance is briefly busy: it is accepted, and applied when the
+            // session can take it.
+            startupBroker->setRequestHandler(
+                [dispatcher = startupDispatcher.get()](dvs::app::StartupRequest request) {
+                    return dispatcher->submit(std::move(request));
+                });
+        } else {
+            startupBroker->setRequestHandler([&desktop](dvs::app::StartupRequest request) {
+                return applyStartupRequest(request, desktop);
+            });
+        }
     }
     QTimer smokePoll;
     QTimer smokeTimeout;
@@ -831,6 +875,11 @@ runDesktop(int& argc,
     if (smokeMode && !smokeCompleted) {
         std::cerr << "DVS_UI_SMOKE_INCOMPLETE\n";
         result = EXIT_FAILURE;
+    }
+    // A waiting request has nowhere left to go once the event loop has ended, and the scene graph
+    // it would be offered to is about to be released.
+    if (startupDispatcher) {
+        startupDispatcher->stop();
     }
     runtime->prepareForSceneGraphRelease();
     desktop.releaseSceneGraph();

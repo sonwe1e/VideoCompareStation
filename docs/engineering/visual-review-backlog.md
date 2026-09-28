@@ -1,7 +1,58 @@
 # 视觉审查问题台账
 
-更新：2026-09-26。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-09-28。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+
+## 2026-09-28 资源管理器右键视频出现两个入口，且两个都报「启动动作无法打开」
+
+用户报告：视频文件右键菜单里出现两个 CompareStation 入口，点任意一个都弹出
+`fatal the requested startup action could not be opened.`。两件事分别处理，都按产品行为修，不留手工绕过。
+
+- **「无法打开」的根因**：`src/app/Main.cpp` 过去在**一个固定时刻**提交启动请求，提交被拒就当致命错误
+  处理——`reportFatalStartup` 弹框 + 写日志 + 进程退出，所以用户看到的是「弹框后应用挂住」。
+  被拒的窗口是真实存在的：评审会话要等图形设备就绪（`ReviewView::canOpen` 要求 `graphicsReady`），
+  而就绪通知由专用图形泵线程异步送达，本机实测 `sg-initialized +777 ms` → 提交 `+829 ms`，
+  52 ms 的余量里胜负全看调度。
+- **修法**：新增 `src/app/StartupRequestDispatch.{h,cpp}` 的 `StartupRequestDispatcher`——一次提交，
+  被拒且会话会就绪时按 50 ms 重试，上限 10 s；会话就绪后仍拒绝才算失败，且失败只记
+  `DVS_STARTUP_PROBLEM` 日志行并向 stderr 报告，**不再终止进程**。同时修正了原代码的顺序错误：
+  窗口此前先 `show()` 再提交，现在先提交成功再激活窗口，窗口不会为一次被拒的打开动作先亮出来。
+  队列上限 8，溢出时丢最旧的一条并同样只报告不退出。里程碑 `startup-request` 仍打在提交时刻，
+  16 个基线里程碑不变。
+- **两个入口的根因**：右键菜单按文件关联链拼装，`HKCU\Software\Classes\.<ext>\shell` 与
+  `SystemFileAssociations\.<ext>\shell` 都在链上，任何一份遗留的同命令注册都会渲染出第二个同样标题的
+  入口。现在每次启动都清扫两处父键下**指向本命令**的 verb（按 `ExplorerCommandHandler` 指向本 CLSID，
+  或 `command` 默认值里含 `comparestation.exe`，一律按「指向什么」判断，绝不按键名），保留本命令自己的
+  verb，别的工具的 verb 一律不动；清空后的父键按既有规则回收。`-Uninstall` 同样带走遗留副本，
+  `tools/shell/RegisterExplorerCommand.ps1` 的注册与卸载两条路径都做同样的清扫并报告 `stale_verbs=`。
+- **证据**：`tests/unit/app/StartupRequestDispatchTests.cpp` 10 项（新，`dvs_app_unit_tests`）；
+  `tests/unit/shell_windows/ExplorerCommandRegistrationTests.cpp` +5 项（`shell_windows` 18 → 23）。
+  判别力：`out/verification/startup-repro/mutate.ps1` **12 个变异体**全部让对应断言失败、控制组全绿
+  ——C++ 侧 8 个（永不报告、无重试定时器、越过队列头部就投递、清扫只扫一个父键两遍、认不出遗留副本、
+  卸载不清扫、连别人的 verb 一起删、用户已关闭仍然清扫），脚本侧 4 个（注册不清扫、只扫一个父键、
+  见 key 就删、`-Uninstall` 不清扫）。`tools/shell/Test-RegisterCompareStationContextMenu.ps1`
+  49 → **59 项**，新增 10 项覆盖脚本侧的清扫；其中两项是**先读回刚种下的副本形状**再断言
+  （见下）。
+- **过程中被抓到的一个静默通过**：清扫用例的种键辅助函数原本用 `[string] $CommandLine = $null`
+  区分两种形状，而 PowerShell 会把 `$null` 变成空字符串，于是实际种下的是「空的 `command` 值」——
+  一个清扫永远不会匹配的键，用例却因为「种下了、还在」而通过。改为 `[switch] -AsCommandLine`，
+  并加两项断言先把种下的形状读回验证（handler 真的是本 CLSID、命令行真的是本程序），
+  否则这条用例测的根本不是它声称测的东西。
+- **本轮真实门禁**：`pwsh tools/build/build.ps1 -Preset dev` 通过；`-Test` **796/797 通过**（唯一失败是
+  与本轮无关的既有红灯，见下）；`-Target format-check` 通过；`-Target lint` 通过；
+  `app.*` 端到端 36/36 通过（含走真实带文件启动路径的 `app.ui-shell-smoke`）。
+- **真实注册表上的端到端复核**：把一份副本 verb 写到 `HKCU\Software\Classes\.mp4\shell\CompareStation.Open`
+  再启动应用，副本被清掉、自有条目仍在；带文件真实启动的里程碑为
+  `sg-initialized +1422 ms` → `startup-request +1576 ms`，日志里没有新的 `fatal` 行，进程不再退出。
+- **与本轮无关的既有红灯**：`quality.release-contract` 要求 `.github/workflows/release.yml` 发布
+  `v2.0.1` 并指向 `docs/releases/v2.0.1.md`，而该工作流仍写着 `v1.9.0`。本轮未触碰
+  `.github/`、`docs/releases/`、`packaging/`（`git status` 对这三处 0 项），该红灯在 HEAD 上即存在。
+- **仍未在本机验证**：用户机器上的实际观感与注册表实况——本机此前 `HKCU\Software\Classes` 下没有任何
+  CompareStation 键，无法复现第二个入口。若注册表干净而菜单仍是两个，那是 Windows 11 把同一个 verb
+  同时画进新菜单和「显示更多选项」，属 shell 行为而非产品缺陷。机器级（HKLM）旧注册需要管理员才能清除，
+  这一点无法由应用侧自愈。
+- **对用户机器的提示**：验证过程中本机的每用户注册项被反复写入与清除，当前 `HKCU` 下已无任何
+  CompareStation 注册项；下次启动任意构建会自动重新注册，无需手工处理。
 
 ## 2026-09-28 把本轮踩过的弯路变成会失败的检查
 

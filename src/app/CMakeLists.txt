@@ -14,6 +14,8 @@ add_executable(
     StartupRequest.h
     StartupRequestBroker.cpp
     StartupRequestBroker.h
+    StartupRequestDispatch.cpp
+    StartupRequestDispatch.h
     StartupFailureReporter.cpp
     StartupFailureReporter.h
     "${CMAKE_CURRENT_BINARY_DIR}/CompareStation.rc"

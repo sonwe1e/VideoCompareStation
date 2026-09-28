@@ -157,6 +157,75 @@ $verbKeys = @(
     }
 )
 
+function Get-RegistryString {
+    param([string] $Path, [string] $Name)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+        return $null
+    }
+    $properties = Get-ItemProperty -LiteralPath $Path -ErrorAction SilentlyContinue
+    if ($null -eq $properties) {
+        return $null
+    }
+    # Reading a value by member access throws under Set-StrictMode -Version Latest when the value is
+    # not there, which would abort the whole sweep on the first key that has no such value. The
+    # property collection is the lookup that answers "absent" instead.
+    $property = $properties.PSObject.Properties[$Name]
+    if ($null -eq $property -or $property.Value -isnot [string]) {
+        return $null
+    }
+    return $property.Value
+}
+
+# Every verb key that binds this command, wherever it sits in the per-user classes root. A file's
+# right-click menu is built from every verb in its association chain, and the per-extension key
+# `<ext>\shell` is part of that chain just like SystemFileAssociations, so a copy left there is a
+# second, identical entry in the menu. Two shapes have pointed at this application: the COM handler
+# below and a plain command line from an earlier layout. Both are recognised by what they point at,
+# never by the key's name, so a neighbour registered by another tool is never touched.
+function Get-CompareStationVerbKey {
+    param([string] $ShellKeyPath)
+
+    if (-not (Test-Path -LiteralPath $ShellKeyPath -PathType Container)) {
+        return
+    }
+    foreach ($child in Get-ChildItem -LiteralPath $ShellKeyPath) {
+        if ($child.PSChildName -eq $verbKeyName) {
+            continue
+        }
+        $handler = Get-RegistryString -Path $child.PSPath -Name 'ExplorerCommandHandler'
+        if ($null -ne $handler -and $handler.Trim() -eq $explorerCommandClsid) {
+            $child.PSPath
+            continue
+        }
+        $line = Get-RegistryString -Path (Join-Path $child.PSPath 'command') -Name '(default)'
+        if ($null -ne $line -and $line.ToLowerInvariant().Contains('comparestation.exe')) {
+            $child.PSPath
+        }
+    }
+}
+
+function Remove-StaleCompareStationVerbs {
+    param([string[]] $ExtensionList)
+
+    $removed = 0
+    foreach ($extension in $ExtensionList) {
+        foreach ($shellKeyPath in @(
+                (Join-Path $classesRoot "$extension\shell"),
+                (Join-Path $classesRoot "SystemFileAssociations\$extension\shell"))) {
+            foreach ($stale in @(Get-CompareStationVerbKey -ShellKeyPath $shellKeyPath)) {
+                if ($PSCmdlet.ShouldProcess($stale, 'remove a second copy of the CompareStation verb')) {
+                    Remove-Item -LiteralPath $stale -Recurse -Force
+                    $removed++
+                }
+                Remove-KeyIfEmpty $shellKeyPath
+                Remove-KeyIfEmpty (Split-Path -Path $shellKeyPath -Parent)
+            }
+        }
+    }
+    return $removed
+}
+
 if ($Uninstall) {
     # Record the decision before removing anything: if this run is interrupted halfway, the next
     # launch has to stay out of the user's way instead of adding the keys back.
@@ -174,6 +243,9 @@ if ($Uninstall) {
             Remove-KeyIfEmpty (Split-Path -Path (Split-Path -Path $verbKey -Parent) -Parent)
         }
     }
+    # A copy of the command this run does not own is still this command: leaving it behind would
+    # only bring the entry back the next time anybody registered it.
+    $staleRemoved = Remove-StaleCompareStationVerbs -ExtensionList $Extensions
     if (Test-Path -LiteralPath $clsidKey) {
         if ($PSCmdlet.ShouldProcess($clsidKey, 'unregister the Explorer command server')) {
             Remove-Item -LiteralPath $clsidKey -Recurse -Force
@@ -182,7 +254,7 @@ if ($Uninstall) {
     if ($PSCmdlet.ShouldProcess('shell32.dll', 'notify the shell that associations changed')) {
         Invoke-ShellAssociationChanged
     }
-    Write-Output "DVS_EXPLORER_COMMAND_REMOVED extensions=$($Extensions -join ',')"
+    Write-Output "DVS_EXPLORER_COMMAND_REMOVED extensions=$($Extensions -join ',') stale_verbs=$staleRemoved"
     return
 }
 
@@ -228,6 +300,11 @@ if ($PSCmdlet.ShouldProcess('shell32.dll', 'notify the shell that associations c
     Invoke-ShellAssociationChanged
 }
 
+# The entry the user is meant to see is the one this script owns. A second copy elsewhere in the
+# per-user classes root would show up as a second identical menu entry, so registering also removes
+# it - exactly what the application does on its own next launch.
+$staleRemoved = Remove-StaleCompareStationVerbs -ExtensionList $Extensions
+
 # Read the keys back so a silent failure cannot pass as success. A dry run writes nothing, so the
 # read-back only makes sense for a real registration.
 if (-not $WhatIfPreference) {
@@ -249,4 +326,4 @@ if (-not $WhatIfPreference) {
     }
 }
 
-Write-Output "DVS_EXPLORER_COMMAND_REGISTERED root=$installRootPath extensions=$($Extensions -join ',')"
+Write-Output "DVS_EXPLORER_COMMAND_REGISTERED root=$installRootPath extensions=$($Extensions -join ',') stale_verbs=$staleRemoved"

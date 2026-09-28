@@ -64,7 +64,7 @@ pwsh tools/testing/measure-startup.ps1 -Label baseline-onefile -Rounds 5 -Warmup
 | `post-show` | window->show() 返回 | show() 全部完成 |
 | `window-shown` | raise/activate/update 之后 | 进入事件循环前的最后一步 |
 | `qml-load-returned` | desktop.load() 返回 runDesktop | 装载阶段结束 |
-| `startup-request` | applyStartupRequest 返回 | 启动请求已提交（空启动也标记相位） |
+| `startup-request` | 启动请求被**接受**（dispatcher 提交成功，可能在窗口可见之后） | 启动请求已提交（空启动也标记相位） |
 | `exec` | desktop.exec() 调用前（含 trace 安装） | 事件循环起点 |
 
 ## 基线表（release，热缓存，中位 / P95，单位 ms）
@@ -247,6 +247,10 @@ kind 0（CommandAccepted）/ 4（FrameSetReady）/ 8（SnapshotCommitted）事�
    `canOpen = graphicsReady && !busy && …`，而 graphicsReady 依赖场景图初始化创建的
    D3D11 设备——show() 之前恒为 false。实测：无 startup-request 里程碑、无 kind 0 事件、
    应用走致命退出路径（错误弹窗挂住直到被杀，exit -1、14/16 里程碑），与代码路径吻合。
+   **2026-09-28 修正**：致命退出是当时「被拒即无路可走」的结果，不是必然的失败模式。
+   `StartupRequestDispatcher` 现在按 50 ms 重试到 10 s 上限，只在会话就绪后仍被拒才算失败，
+   且失败只记日志不再退出（详见 `docs/engineering/visual-review-backlog.md` 同日条目）。
+   这条记录描述的是当次实验的观测，不是产品现状。
 2. **"排队到 graphics-ready 再提交"也拿不到收益**：主线程在 show() 内阻塞到 ~749 ms，
    任何主线程机制（含意图队列冲刷）最早也只能在 post-show 处理——而当前提交点就在那里
    （750.5 ms）。真正的并行需要 worker 侧无设备探测（probe 先行、解码器开箱等设备），

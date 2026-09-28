@@ -2,6 +2,7 @@
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -39,6 +40,7 @@ namespace {
 }
 
 [[nodiscard]] bool appendStartupLog(const std::filesystem::path& logPath,
+                                    const std::string_view severity,
                                     const std::string_view technicalDetail) {
     std::error_code error;
     std::filesystem::create_directories(logPath.parent_path(), error);
@@ -56,7 +58,8 @@ namespace {
     stream << std::setfill('0') << std::setw(4) << now.wYear << '-' << std::setw(2) << now.wMonth
            << '-' << std::setw(2) << now.wDay << 'T' << std::setw(2) << now.wHour << ':'
            << std::setw(2) << now.wMinute << ':' << std::setw(2) << now.wSecond << '.'
-           << std::setw(3) << now.wMilliseconds << "Z fatal " << technicalDetail << '\n';
+           << std::setw(3) << now.wMilliseconds << "Z " << severity << ' ' << technicalDetail
+           << '\n';
     stream.flush();
     return stream.good();
 }
@@ -89,7 +92,7 @@ int reportFatalStartup(const std::string_view technicalDetail, const bool suppre
     bool logWritten = false;
     try {
         logPath = startupLogPath();
-        logWritten = appendStartupLog(logPath, technicalDetail);
+        logWritten = appendStartupLog(logPath, "fatal", technicalDetail);
     } catch (...) {
         logWritten = false;
     }
@@ -98,6 +101,22 @@ int reportFatalStartup(const std::string_view technicalDetail, const bool suppre
         showStartupDialog(logPath, logWritten);
     }
     return EXIT_FAILURE;
+}
+
+void logStartupProblem(const std::string_view technicalDetail) noexcept {
+    try {
+        // Standard error first: a launch started from Explorer's context menu has no console, but
+        // a launch started from a terminal does, and that is where a user looks first.
+        std::fflush(stdout);
+        std::fprintf(stderr,
+                     "DVS_STARTUP_PROBLEM %.*s\n",
+                     static_cast<int>(technicalDetail.size()),
+                     technicalDetail.data());
+        std::fflush(stderr);
+        static_cast<void>(appendStartupLog(startupLogPath(), "problem", technicalDetail));
+    } catch (...) {
+        // Recording the problem must never become a second one.
+    }
 }
 
 } // namespace dvs::app

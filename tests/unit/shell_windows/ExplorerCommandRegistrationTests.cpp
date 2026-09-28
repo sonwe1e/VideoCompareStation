@@ -181,6 +181,41 @@ void writeStringValue(const ExplorerRegistrationRoots& roots,
     RegCloseKey(key);
 }
 
+// The keys a test writes by hand are the ones an earlier layout, another tool, or a user would have
+// left behind, so they are created the way the system would create them rather than through the
+// registration this suite is testing.
+void createScratchKey(const std::wstring& relative) {
+    HKEY key = nullptr;
+    const std::wstring path = scratchSubtree() + L"\\Classes\\" + relative;
+    ASSERT_EQ(RegCreateKeyExW(HKEY_CURRENT_USER,
+                              path.c_str(),
+                              0U,
+                              nullptr,
+                              REG_OPTION_NON_VOLATILE,
+                              KEY_WRITE,
+                              nullptr,
+                              &key,
+                              nullptr),
+              ERROR_SUCCESS)
+        << narrow(path);
+    RegCloseKey(key);
+}
+
+void writeScratchString(const std::wstring& relative,
+                        const wchar_t* const name,
+                        const std::wstring& value) {
+    HKEY key = nullptr;
+    const std::wstring path = scratchSubtree() + L"\\Classes\\" + relative;
+    ASSERT_EQ(RegOpenKeyExW(HKEY_CURRENT_USER, path.c_str(), 0U, KEY_SET_VALUE, &key),
+              ERROR_SUCCESS)
+        << narrow(path);
+    const DWORD bytes = static_cast<DWORD>((value.size() + 1U) * sizeof(wchar_t));
+    ASSERT_EQ(
+        RegSetValueExW(key, name, 0U, REG_SZ, reinterpret_cast<const BYTE*>(value.c_str()), bytes),
+        ERROR_SUCCESS);
+    RegCloseKey(key);
+}
+
 class ExplorerCommandRegistrationTests : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -516,6 +551,97 @@ TEST_F(ExplorerCommandRegistrationTests, RefusesToWriteWithoutBothTargets) {
     // to this scratch root here, so even the shared CLSID parent key has to be absent.
     EXPECT_FALSE(keyExists(roots_, L"CLSID"));
     EXPECT_FALSE(keyExists(roots_, verbKey(L".png")));
+}
+
+TEST_F(ExplorerCommandRegistrationTests, RemovesASecondCopyOfTheCommandUnderTheSameExtension) {
+    // A file's menu is built from every verb in its association chain, and the per-extension key
+    // is part of that chain next to the SystemFileAssociations one. A copy left there is therefore
+    // a second, identical entry in the menu - the one a user cannot tell from the first.
+    ASSERT_EQ(ensureExplorerCommandRegistered(targets_, roots_).state,
+              ExplorerRegistrationState::Registered);
+    const std::wstring leftover = L".mp4\\shell\\CompareStation.Open";
+    createScratchKey(leftover);
+    writeScratchString(leftover, L"ExplorerCommandHandler", registeredClsid(roots_));
+    ASSERT_TRUE(keyExists(roots_, leftover));
+
+    // The second launch is the one that repairs it, so the repair cannot depend on the run that
+    // wrote the registration.
+    EXPECT_EQ(ensureExplorerCommandRegistered(targets_, roots_).state,
+              ExplorerRegistrationState::AlreadyCurrent);
+    EXPECT_FALSE(keyExists(roots_, leftover));
+    // The parents this registration alone created go with it...
+    EXPECT_FALSE(keyExists(roots_, L".mp4\\shell"));
+    EXPECT_FALSE(keyExists(roots_, L".mp4"));
+    // ...and the entry the user is meant to see is untouched.
+    EXPECT_TRUE(keyExists(roots_, verbKey(L".mp4")));
+}
+
+TEST_F(ExplorerCommandRegistrationTests, RemovesALeftoverCommandLineUnderTheSameExtension) {
+    // An earlier layout registered a plain command line instead of the COM handler. It launches
+    // the same application and shows the same title, so it is a second entry by any measure that
+    // matters to the user.
+    ASSERT_EQ(ensureExplorerCommandRegistered(targets_, roots_).state,
+              ExplorerRegistrationState::Registered);
+    const std::wstring leftover = L".mkv\\shell\\CompareStation.Legacy\\command";
+    createScratchKey(leftover);
+    writeScratchString(leftover, nullptr, L"\"" + targets_.executable.wstring() + LR"( " "%1")");
+
+    EXPECT_EQ(ensureExplorerCommandRegistered(targets_, roots_).state,
+              ExplorerRegistrationState::AlreadyCurrent);
+    EXPECT_FALSE(keyExists(roots_, L".mkv\\shell\\CompareStation.Legacy"));
+    EXPECT_FALSE(keyExists(roots_, L".mkv\\shell"));
+    EXPECT_TRUE(keyExists(roots_, verbKey(L".mkv")));
+}
+
+TEST_F(ExplorerCommandRegistrationTests, LeavesAnotherToolsVerbOnTheSameExtensionAlone) {
+    // The sweep is allowed to remove a copy of this command and nothing else: a neighbouring verb
+    // on the same extension belongs to whoever registered it, and the entry this registration owns
+    // has to survive the sweep that runs on every launch - a sweep that took it with it would
+    // delete the menu entry it is supposed to keep.
+    ASSERT_EQ(ensureExplorerCommandRegistered(targets_, roots_).state,
+              ExplorerRegistrationState::Registered);
+    const std::wstring neighbour = L".avi\\shell\\SomeOtherPlayer";
+    createScratchKey(neighbour);
+    writeScratchString(
+        neighbour, L"ExplorerCommandHandler", L"{99999999-8888-7777-6666-555555555555}");
+
+    EXPECT_EQ(ensureExplorerCommandRegistered(targets_, roots_).state,
+              ExplorerRegistrationState::AlreadyCurrent);
+    EXPECT_TRUE(keyExists(roots_, neighbour));
+    EXPECT_TRUE(keyExists(roots_, L".avi\\shell"));
+    expectValue(roots_, verbKey(L".avi"), L"ExplorerCommandHandler", registeredClsid(roots_));
+}
+
+TEST_F(ExplorerCommandRegistrationTests, RemovalTakesTheSecondCopyOfTheCommandWithIt) {
+    // A documented removal that left a copy behind would only hide the entry again the next time
+    // anybody registered it, and the user would be right to call that a lie.
+    ASSERT_EQ(ensureExplorerCommandRegistered(targets_, roots_).state,
+              ExplorerRegistrationState::Registered);
+    const std::wstring leftover = L".png\\shell\\CompareStation.Open";
+    createScratchKey(leftover);
+    writeScratchString(leftover, L"ExplorerCommandHandler", registeredClsid(roots_));
+
+    ASSERT_EQ(removeExplorerCommandRegistration(roots_).state, ExplorerRegistrationState::Removed);
+    EXPECT_FALSE(keyExists(roots_, leftover));
+    EXPECT_FALSE(keyExists(roots_, L".png\\shell"));
+    EXPECT_FALSE(keyExists(roots_, verbKey(L".png")));
+}
+
+TEST_F(ExplorerCommandRegistrationTests, SweepsNothingWhileTheUserHasTurnedTheEntryOff) {
+    // A user who removed the entry did not ask for their other keys to be rewritten, and a launch
+    // that found the marker has to leave the whole per-user surface exactly as it found it.
+    ASSERT_EQ(ensureExplorerCommandRegistered(targets_, roots_).state,
+              ExplorerRegistrationState::Registered);
+    const std::wstring leftover = L".webp\\shell\\CompareStation.Open";
+    createScratchKey(leftover);
+    writeScratchString(leftover, L"ExplorerCommandHandler", registeredClsid(roots_));
+    ASSERT_EQ(setExplorerCommandEnabled(false, roots_).state,
+              ExplorerRegistrationState::DisabledByUser);
+
+    EXPECT_EQ(ensureExplorerCommandRegistered(targets_, roots_).state,
+              ExplorerRegistrationState::DisabledByUser);
+    EXPECT_TRUE(keyExists(roots_, leftover));
+    EXPECT_TRUE(keyExists(roots_, verbKey(L".png")));
 }
 
 } // namespace

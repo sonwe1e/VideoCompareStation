@@ -4,10 +4,12 @@ add_executable(
     dvs_app_unit_tests
     PlaybackTraceEnvironmentTests.cpp
     StartupRequestBrokerTests.cpp
+    StartupRequestDispatchTests.cpp
     StartupRequestParserTests.cpp
     "${PROJECT_SOURCE_DIR}/src/app/PlaybackTraceEnvironment.cpp"
     "${PROJECT_SOURCE_DIR}/src/app/StartupRequest.cpp"
     "${PROJECT_SOURCE_DIR}/src/app/StartupRequestBroker.cpp"
+    "${PROJECT_SOURCE_DIR}/src/app/StartupRequestDispatch.cpp"
 )
 target_include_directories(dvs_app_unit_tests PRIVATE "${PROJECT_SOURCE_DIR}/src/app")
 target_link_libraries(dvs_app_unit_tests PRIVATE Qt6::Core Qt6::Network dvs::test_dependencies)

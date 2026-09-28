@@ -11,9 +11,11 @@
 #include <combaseapi.h>
 #include <cstddef>
 #include <cwctype>
+#include <iterator>
 #include <optional>
 #include <string_view>
 #include <system_error>
+#include <vector>
 #include <windows.h>
 
 namespace dvs::shell {
@@ -207,6 +209,19 @@ private:
     return path;
 }
 
+// The second place a verb for the same extension can bind this command. A key here is part of the
+// same association chain as the SystemFileAssociations one, so a leftover copy of the command
+// there shows up as a second entry in the menu for every file of that type - the two entries are
+// indistinguishable to the user because both carry the same title.
+[[nodiscard]] std::wstring perExtensionShellKeyPath(const ExplorerRegistrationRoots& roots,
+                                                    const std::wstring_view extension) {
+    std::wstring path = roots.classes;
+    path += L"\\";
+    path.append(extension);
+    path += L"\\shell";
+    return path;
+}
+
 // True only when a key holds neither subkeys nor values, including its unnamed default value. This
 // is the condition for removing a key this registration shares with other tools.
 [[nodiscard]] bool isEmptyKey(const std::wstring& path) {
@@ -297,6 +312,106 @@ writeDwordValue(const HKEY key, const wchar_t* const name, const DWORD value) {
 valueEquals(const HKEY key, const wchar_t* const name, const std::wstring_view expected) {
     const std::optional<std::wstring> actual = readStringValue(key, name);
     return actual.has_value() && std::wstring_view{*actual} == expected;
+}
+
+// True when a verb key is a copy of this command rather than another tool's entry. Two shapes have
+// pointed at this application: the COM handler this build writes, and a plain command line left by
+// an earlier layout that named the executable. Both are recognised by what they point at, never by
+// the key's name, so a leftover is recognised whatever it happens to be called.
+[[nodiscard]] bool bindsThisCommand(const std::wstring& verbPath) {
+    RegistryKey key;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, verbPath.c_str(), 0U, KEY_READ, key.receive()) !=
+        ERROR_SUCCESS) {
+        return false;
+    }
+    if (valueEquals(key.get(), L"ExplorerCommandHandler", clsidText())) {
+        return true;
+    }
+    RegistryKey command;
+    const std::wstring commandPath = verbPath + L"\\command";
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, commandPath.c_str(), 0U, KEY_READ, command.receive()) !=
+        ERROR_SUCCESS) {
+        return false;
+    }
+    const std::optional<std::wstring> line = readStringValue(command.get(), nullptr);
+    if (!line.has_value()) {
+        return false;
+    }
+    std::wstring lowered;
+    lowered.reserve(line->size());
+    for (const wchar_t character : *line) {
+        lowered.push_back(static_cast<wchar_t>(std::towlower(character)));
+    }
+    return lowered.find(L"comparestation.exe") != std::wstring::npos ||
+           lowered.find(L"vcstation.exe") != std::wstring::npos;
+}
+
+// Every verb name under one shell key, so a parent can be swept without guessing at names.
+[[nodiscard]] std::vector<std::wstring> verbNamesUnder(const std::wstring& shellPath) {
+    std::vector<std::wstring> names;
+    RegistryKey shell;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, shellPath.c_str(), 0U, KEY_READ, shell.receive()) !=
+        ERROR_SUCCESS) {
+        return names;
+    }
+    for (DWORD index = 0U;; ++index) {
+        wchar_t name[256]{};
+        DWORD length = static_cast<DWORD>(std::size(name));
+        const LSTATUS status =
+            RegEnumKeyExW(shell.get(), index, name, &length, nullptr, nullptr, nullptr, nullptr);
+        if (status == ERROR_NO_MORE_ITEMS) {
+            return names;
+        }
+        if (status != ERROR_SUCCESS) {
+            return names;
+        }
+        names.emplace_back(name, length);
+    }
+}
+
+// Removes every verb under `shellPath` that binds this command except `kVerbKeyName`, and drops the
+// parents it emptied. A file's menu is built from every verb in its association chain, so a second
+// copy of this command is a second identical entry there - the one the user cannot tell apart from
+// the first. The sweep runs over the two parents a verb for one extension can live under, because
+// both are part of that chain.
+ExplorerRegistrationResult sweepDuplicateVerbs(const ExplorerRegistrationRoots& roots) {
+    ExplorerRegistrationResult result{ExplorerRegistrationState::Registered, {}};
+    forEachRegisteredExtension([&](const std::wstring_view extension) {
+        if (result.state != ExplorerRegistrationState::Registered) {
+            return;
+        }
+        for (const std::wstring& shellPath :
+             {shellKeyPath(roots, extension), perExtensionShellKeyPath(roots, extension)}) {
+            for (const std::wstring& name : verbNamesUnder(shellPath)) {
+                if (name == kVerbKeyName) {
+                    continue;
+                }
+                const std::wstring verbPath = shellPath + L"\\" + name;
+                if (!bindsThisCommand(verbPath)) {
+                    continue;
+                }
+                const LSTATUS status = RegDeleteTreeW(HKEY_CURRENT_USER, verbPath.c_str());
+                if (status != ERROR_SUCCESS && status != ERROR_FILE_NOT_FOUND &&
+                    status != ERROR_PATH_NOT_FOUND) {
+                    result.state = ExplorerRegistrationState::Failed;
+                    result.error = describeFailure(verbPath, status);
+                    return;
+                }
+                if (isEmptyKey(shellPath)) {
+                    static_cast<void>(RegDeleteKeyW(HKEY_CURRENT_USER, shellPath.c_str()));
+                }
+                const std::wstring extensionParent = extensionKeyPath(roots, extension);
+                if (isEmptyKey(extensionParent)) {
+                    static_cast<void>(RegDeleteKeyW(HKEY_CURRENT_USER, extensionParent.c_str()));
+                }
+                const std::wstring classesParent = roots.classes + L"\\" + std::wstring{extension};
+                if (isEmptyKey(classesParent)) {
+                    static_cast<void>(RegDeleteKeyW(HKEY_CURRENT_USER, classesParent.c_str()));
+                }
+            }
+        }
+    });
+    return result;
 }
 
 // True only when every key already describes this installation, including the extension list. A
@@ -532,6 +647,12 @@ removeExplorerCommandRegistration(const ExplorerRegistrationRoots& roots) {
     if (result.state == ExplorerRegistrationState::Failed) {
         return result;
     }
+    // A leftover copy of the command is still this command, so a documented removal that left one
+    // behind would only hide the entry again the next time somebody registered it.
+    const ExplorerRegistrationResult sweep = sweepDuplicateVerbs(roots);
+    if (sweep.state == ExplorerRegistrationState::Failed) {
+        return sweep;
+    }
     const std::wstring path = clsidKeyPath(roots, clsid);
     const LSTATUS status = RegDeleteTreeW(HKEY_CURRENT_USER, path.c_str());
     if (status != ERROR_SUCCESS && status != ERROR_FILE_NOT_FOUND &&
@@ -565,10 +686,18 @@ ensureExplorerCommandRegistered(const ExplorerRegistrationTargets& targets,
                 "the command can only be registered from a directory that holds CompareStation.exe "
                 "and its shell library"};
     }
-    if (registrationMatches(targets, roots)) {
-        return {ExplorerRegistrationState::AlreadyCurrent, {}};
+    // The sweep runs on every launch, not only when something had to be written: a second copy of
+    // the command can appear at any time - a key an earlier layout wrote, or one copied by hand -
+    // and the promise this registration makes is that the entry it owns is the entry the user sees.
+    const ExplorerRegistrationResult registration =
+        registrationMatches(targets, roots)
+            ? ExplorerRegistrationResult{ExplorerRegistrationState::AlreadyCurrent, {}}
+            : writeRegistration(targets, roots);
+    if (registration.state == ExplorerRegistrationState::Failed) {
+        return registration;
     }
-    return writeRegistration(targets, roots);
+    const ExplorerRegistrationResult sweep = sweepDuplicateVerbs(roots);
+    return sweep.state == ExplorerRegistrationState::Failed ? sweep : registration;
 }
 
 ExplorerRegistrationTargets installationTargetsFor(const std::filesystem::path& executable,
