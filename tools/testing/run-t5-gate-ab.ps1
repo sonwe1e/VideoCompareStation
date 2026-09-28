@@ -26,7 +26,7 @@ param(
     [Parameter(Mandatory = $true)][string]$GatedExecutable,
     [string]$VideoRunPath = 'D:\Videos\20BFE9~1.MP4',
     [string]$Video = 'D:\Videos\2026-06-01 23-46-34.mp4',
-    [string]$EvidenceRoot = 'G:\Workspaces\Toy\out\t5-evidence',
+    [string]$EvidenceRoot = (Join-Path $PSScriptRoot '..\..\out\t5-evidence'),
     [string]$Label = 'gate-ab-interleaved',
     [int]$Rounds = 4,
     [int]$Seconds = 8,
@@ -50,7 +50,7 @@ if (-not (Test-Path -LiteralPath $VideoRunPath -PathType Leaf)) {
 # they were built against and run them from there.
 $deploymentRoot = Split-Path -Parent $UngatedExecutable
 if (-not (Test-Path -LiteralPath (Join-Path $deploymentRoot 'Qt6Core.dll') -PathType Leaf)) {
-    $deploymentRoot = 'G:\Workspaces\Toy\out\build\release\bin'
+    $deploymentRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\out\build\release\bin'))
     Write-Output "T5_GATE_AB_STAGING staged=$deploymentRoot"
 }
 $ungatedStaged = Join-Path $deploymentRoot 'CompareStation-t5-ab-ungated.exe'

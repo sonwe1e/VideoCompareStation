@@ -20,9 +20,11 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Executable = 'G:\Workspaces\Toy\out\build\release\bin\CompareStation.exe',
-    [string]$FixtureRoot = 'G:\Workspaces\Toy\out\evidence-fixtures',
-    [string]$EvidenceRoot = 'G:\Workspaces\Toy\out\evidence',
+    # Derived from this script's own location, never hardcoded: a moved or renamed checkout must not
+    # leave these pointing at a directory that no longer exists.
+    [string]$Executable = (Join-Path $PSScriptRoot '..\..\out\build\release\bin\CompareStation.exe'),
+    [string]$FixtureRoot = (Join-Path $PSScriptRoot '..\..\out\evidence-fixtures'),
+    [string]$EvidenceRoot = (Join-Path $PSScriptRoot '..\..\out\evidence'),
     [string]$BuildType = 'Release',
     [int]$ShortSeconds = 15,
     [int]$LongSeconds = 60,
@@ -34,6 +36,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# Every path below is derived from the script's own location, so the tools keep working after the
+# checkout moves or is renamed.
+$repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 
 if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
     throw "Executable not found at $Executable"
@@ -56,7 +62,7 @@ if (-not (Test-Path -LiteralPath $imageLeft) -or -not (Test-Path -LiteralPath $i
     throw 'Image-pair fixture folders are missing.'
 }
 
-Import-Module -Name 'G:\Workspaces\Toy\tools\testing\PlaybackTraceGate.psm1' -Force
+Import-Module -Name (Join-Path $PSScriptRoot 'PlaybackTraceGate.psm1') -Force
 
 $runDir = Join-Path $EvidenceRoot ("baseline-" + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 [void][System.IO.Directory]::CreateDirectory($runDir)
@@ -108,9 +114,9 @@ function Get-EnvironmentManifest {
     $gitBranch = 'unknown'
     $gitDirty = $null
     try {
-        $gitSha = (& git -C 'G:\Workspaces\Toy' rev-parse HEAD 2>&1 | Select-Object -First 1)
-        $gitBranch = (& git -C 'G:\Workspaces\Toy' branch --show-current 2>&1 | Select-Object -First 1)
-        $dirtyLines = @(& git -C 'G:\Workspaces\Toy' status --porcelain 2>&1)
+        $gitSha = (& git -C $repositoryRoot rev-parse HEAD 2>&1 | Select-Object -First 1)
+        $gitBranch = (& git -C $repositoryRoot branch --show-current 2>&1 | Select-Object -First 1)
+        $dirtyLines = @(& git -C $repositoryRoot status --porcelain 2>&1)
         $gitDirty = $dirtyLines.Count -gt 0
     } catch {
         $gitDirty = $null
@@ -145,7 +151,7 @@ function Get-EnvironmentManifest {
         git_sha = $gitSha
         git_branch = $gitBranch
         git_dirty = $gitDirty
-        repository = 'G:\Workspaces\Toy'
+        repository = $repositoryRoot
         build_type = $BuildType
         executable = $Executable
         executable_sha256 = Get-FileSha256 $Executable

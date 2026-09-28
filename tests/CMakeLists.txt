@@ -46,6 +46,32 @@ if(DVS_BUILD_DESKTOP)
             -NoProfile
             -File "${PROJECT_SOURCE_DIR}/tools/quality/check-build-scripts.ps1"
     )
+
+    # Both run in the default test suite so the rules they encode cannot silently lapse: a formatter
+    # applied to the wrong file type, and a machine path left behind by a moved or renamed checkout.
+    dvs_add_test(
+        NAME quality.script-integrity
+        LAYER unit
+        MODULE app
+        TIMEOUT 60
+        COMMAND
+            "${DVS_POWERSHELL_EXECUTABLE}"
+            -NoLogo
+            -NoProfile
+            -File "${PROJECT_SOURCE_DIR}/tools/quality/check-script-integrity.ps1"
+    )
+
+    dvs_add_test(
+        NAME quality.hardcoded-paths
+        LAYER unit
+        MODULE app
+        TIMEOUT 60
+        COMMAND
+            "${DVS_POWERSHELL_EXECUTABLE}"
+            -NoLogo
+            -NoProfile
+            -File "${PROJECT_SOURCE_DIR}/tools/quality/check-hardcoded-paths.ps1"
+    )
 endif()
 
 add_subdirectory(unit)
