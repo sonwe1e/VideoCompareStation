@@ -43,6 +43,7 @@ jobs:
         run: >-
           .\tools\quality\check-coverage.ps1
           -BuildDir tests\fixtures\coverage
+          -SourceRoot tests\fixtures\coverage\src
           -ReportPath tests\fixtures\coverage\sample.cobertura.xml
           -Module All
           -Minimum 75.0
