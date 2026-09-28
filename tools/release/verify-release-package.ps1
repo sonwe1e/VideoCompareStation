@@ -23,7 +23,7 @@ Nothing here starts the application or writes the registry.
 
 .EXAMPLE
 pwsh -NoProfile -File tools/release/verify-release-package.ps1
-pwsh -NoProfile -File tools/release/verify-release-package.ps1 -ZipPath out\package\zip\CompareStation-2.0.0-windows-x64.zip
+pwsh -NoProfile -File tools/release/verify-release-package.ps1 -ZipPath out\package\zip\CompareStation-2.0.1-windows-x64.zip
 #>
 [CmdletBinding()]
 param(
