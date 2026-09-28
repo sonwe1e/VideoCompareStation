@@ -11,6 +11,8 @@ pwsh tools/build/build.ps1 -Preset dev -Test
 pwsh tools/build/build.ps1 -Preset dev -Target format-check
 pwsh tools/build/build.ps1 -Preset dev -Target lint
 pwsh tools/quality/check-build-scripts.ps1
+pwsh tools/quality/check-script-integrity.ps1
+pwsh tools/quality/check-hardcoded-paths.ps1
 ```
 
 `-Doctor` 只读检查所选工具、缓存路径、已有生产对象的头文件依赖和下方环境自检结论；没有对象时
@@ -24,6 +26,23 @@ pwsh tools/quality/check-build-scripts.ps1
 同一 preset 的包装器构建和测试互斥，避免 smoke 正在运行 EXE 时重新链接造成 LNK1168。
 不要同时绕过包装器运行同目录的 Ninja/CTest。日志实时输出；需要保存时重定向到 `out/`。
 静态分析会建立所需生产目标，因此也应与测试串行执行。
+
+## 移动或重命名工作区
+
+CMake 缓存里存的是**绝对路径**，所以工作区被移动或改名后，旧缓存会继续指向已经不存在的目录，
+表现成「代码明明没问题，构建却失败」。恢复只需要丢弃缓存重配一次：
+
+```powershell
+pwsh tools/build/build.ps1 -Preset dev -Fresh
+```
+
+依赖安装树要慢得多：`out/vcpkg` 一旦不完整（或依赖声明变化），ffmpeg 与 Qt6 就得从源码重建，
+本机实测光 Qt6 就要几十分钟；这段时间 configure 之后的 ctest、format-check、lint 全都被挡住。
+**先把重建放到后台跑起来，再动代码**，把等待与实现重叠掉。
+
+脚本里不得硬编码机器路径，一律从 `$PSScriptRoot` 推导（工具发现仍集中在 `tools/build/env.ps1`）。
+`tools/quality/check-hardcoded-paths.ps1` 在 `ctest` 中拦截这类路径，改名留下的过期默认值不会再
+潜伏到下次运行才暴露。
 
 ## 工具来源与覆盖
 

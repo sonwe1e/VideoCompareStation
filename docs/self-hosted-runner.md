@@ -11,14 +11,16 @@ Debug/Release、format/lint 使用 `dvs-toolchain-4.4` 标签，D3D11VA 与五�
 - Windows x64、NVIDIA GeForce RTX 4090，驱动 `32.0.16.1074`；
 - Visual Studio 2022 Build Tools 与 MSVC v143；
 - CMake 4.4.0、Ninja 1.13.2、Git 2.47.1；
-- vcpkg 位于 `G:\Workspaces\vcpkg`（安装树：`G:\Workspaces\Toy\out\vcpkg`）。
+- vcpkg 位于 `G:\Workspaces\vcpkg`（安装树：`G:\Workspaces\CompareStation\out\vcpkg`）。
 
 本机原先缺少的 CI 基础设施只有 GitHub Actions runner 本体、runner 注册和九个长时素材的
 稳定目录。
 
 发布包只有 Windows x64 ZIP，不再有 MSI：免安装打包、`packaged-smoke` 与 `shutdown-soak`
-都不需要管理员权限、.NET SDK 或 WiX。资源管理器右键命令由随 ZIP 一起发布的
-`tools/shell/RegisterExplorerCommand.ps1` 按用户注册到 `HKCU\Software\Classes`。历史上的
+都不需要管理员权限、.NET SDK 或 WiX。资源管理器右键命令由应用自身在启动时按用户注册到
+`HKCU\Software\Classes`（并随目录移动自愈，`DVS_DISABLE_SHELL_REGISTRATION=1` 可跳过），
+随 ZIP 一起发布的 `tools/shell/RegisterExplorerCommand.ps1` 保留给无人值守安装与显式卸载。
+历史上的
 MSI 升级门禁（下载 `CompareStation-1.2.0-windows-x64.msi`，验证启动/关闭与设置保留，再检查
 旧 `.dvsproj` 注册消失以及 ARP、快捷方式、文件关联和版本化 Explorer Shell COM 注册）随之
 移除；过期版本不再维护。`v1.4.5` 的发布合同明确为无 Authenticode 签名，runner 仍然不需要

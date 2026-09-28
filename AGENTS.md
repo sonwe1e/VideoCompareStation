@@ -44,26 +44,37 @@ cmake --build --preset dev --target lint
 cmake --preset release
 cmake --build --preset release
 cpack --preset release-zip
+pwsh tools/release/verify-release-package.ps1
 pwsh tools/shell/RegisterExplorerCommand.ps1 -InstallRoot out\build\release\bin
 ```
 
-Keep outputs in `out/`.
+Keep outputs in `out/`. Verification harnesses live in the repository test suite
+(`tests/<layer>/<module>`); `out/verification/` holds one-off probes, mutation scripts and run logs,
+never a second copy of a suite. `pwsh tools/quality/check-script-integrity.ps1` and
+`pwsh tools/quality/check-hardcoded-paths.ps1` run inside `ctest` and keep script files and machine
+paths honest. Moving or renaming the checkout needs `-Fresh`; see [docs/building.md](docs/building.md).
 
 The ZIP is the only published package; there is no MSI to maintain. Installing means unpacking the
-ZIP, and the Explorer "Compare with CompareStation" command comes from
-`tools/shell/RegisterExplorerCommand.ps1`, which writes per-user keys under
-`HKCU\Software\Classes` and needs no administrator rights. It covers five video and thirteen
-still-image extensions: one file opens for review, two videos or two images open as a comparison,
-and any other selection - a directory, a network path, a mixed pair, three images - keeps the
-command hidden. `-Uninstall` removes the keys again.
+ZIP: on startup the application itself registers the Explorer "Compare with CompareStation" command
+for the current user under `HKCU\Software\Classes`, repairs it when the directory moves, and records
+the user's own choice in `HKCU\Software\CompareStation\ExplorerContextMenu` so that `-Uninstall`
+stays in effect; `DVS_DISABLE_SHELL_REGISTRATION=1` skips the check. The script
+`tools/shell/RegisterExplorerCommand.ps1` does the same job on demand for unattended installs, and
+`RegisterCompareStationContextMenu.cmd` is the double-click entry point for users who do not open a
+terminal. It covers five video and thirteen still-image extensions: one file opens for review, two
+videos or two images open as a comparison, and any other selection - a directory, a network path, a
+mixed pair, three images - keeps the command hidden. `-Uninstall` removes the keys again.
 
 ## Coding Style and Naming
 
 Indent C++/QML four spaces, JSON/YAML two, cap C++ at 100 columns. Attached braces,
 left-bound pointers, deterministic includes, `clang-format` 19.1.5, `qmlformat`; matching
-`clang-tidy` and warning-fatal `qmllint` must pass. C++ types and files use `PascalCase`,
-functions and variables `lowerCamelCase`, constants `kPascalCase`, namespaces `dvs::<module>`.
-QML components use `PascalCase.qml`; IDs and properties `lowerCamelCase`.
+`clang-tidy` and warning-fatal `qmllint` must pass. A formatter only ever touches the file types it
+owns - run them through the `format-check` and `lint` targets rather than by hand, because
+clang-format reads an unknown extension as C++ and has destroyed a `.ps1` that way. C++ types and
+files use `PascalCase`, functions and variables `lowerCamelCase`, constants `kPascalCase`,
+namespaces `dvs::<module>`. QML components use `PascalCase.qml`; IDs and properties
+`lowerCamelCase`.
 
 ## Testing and Performance
 
@@ -82,4 +93,7 @@ performance evidence for media/render work and screenshots for visible QML chang
 
 Never block GUI/render threads, publish partial frame sets, or omit session/generation/request
 identity on asynchronous work. Hide FFmpeg/D3D11 types behind adapters. Write files
-transactionally. Preserve approved tests and performance gates.
+transactionally. Preserve approved tests and performance gates. Fix the product behaviour rather
+than the manual workaround. An assertion is coverage only if it fails once the behaviour is broken:
+attach mutation evidence for every new assertion. A script must assert its own check count so that
+a missing anchor cannot turn its checks into silent passes.

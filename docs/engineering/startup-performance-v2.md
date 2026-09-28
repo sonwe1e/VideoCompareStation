@@ -25,7 +25,7 @@
 ```powershell
 pwsh tools/testing/measure-startup.ps1 -Label baseline-nofile -Rounds 5 -Warmup 1
 pwsh tools/testing/measure-startup.ps1 -Label baseline-onefile -Rounds 5 -Warmup 1 `
-    -LaunchArgument 'G:\Workspaces\Toy\out\evidence-fixtures\media\frameid_1080p60_a.mp4'
+    -LaunchArgument 'out\evidence-fixtures\media\frameid_1080p60_a.mp4'
 ```
 
 产物（原始 stderr + JSON + Markdown）落盘 `out/startup-measurements/<label>-<时间戳>/`。
