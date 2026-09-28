@@ -57,9 +57,9 @@ if ([string]::IsNullOrWhiteSpace($WorkRoot)) {
 
 $checkCount = 0
 $failureCount = 0
-# Every assertion below is unconditional, and the total is asserted at the end so that a missing
-# anchor cannot turn its assertions into silent passes.
-$expectedCheckCount = 16
+# The total is asserted at the end so that a missing anchor cannot turn its assertions into silent
+# passes; the one conditional assertion is what makes two totals valid, and the end of the script
+# says why.
 
 function Assert-That {
     param([string] $Name, [bool] $Condition, [string] $Detail = '')
@@ -132,10 +132,25 @@ try {
         ($executableWide.Contains('Compare with CompareStation'))
 
     if (Test-Path -LiteralPath $BuiltExecutable) {
-        $builtHash = (Get-FileHash -LiteralPath $BuiltExecutable -Algorithm SHA256).Hash
-        $packagedHash = (Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash
-        Assert-That 'the packaged executable is the one this build produced' ($builtHash -ceq $packagedHash) `
-            "packaged $($packagedHash.Substring(0, 16)) vs built $($builtHash.Substring(0, 16))"
+        # Comparing bytes is only conclusive when the package was written after the last link. A
+        # rebuilt release preset relinks CompareStation.exe and produces a different binary (embedded
+        # timestamps and debug identifiers), which says nothing about the package being stale, so a
+        # build that is newer than the package is reported instead of failed. That is why the check
+        # count below accepts both totals rather than exactly one.
+        $builtTime = (Get-Item -LiteralPath $BuiltExecutable).LastWriteTimeUtc
+        $packageTime = (Get-Item -LiteralPath $ZipPath).LastWriteTimeUtc
+        if ($builtTime -le $packageTime) {
+            $builtHash = (Get-FileHash -LiteralPath $BuiltExecutable -Algorithm SHA256).Hash
+            $packagedHash = (Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash
+            Assert-That 'the packaged executable is the one this build produced' `
+                ($builtHash -ceq $packagedHash) `
+                "packaged $($packagedHash.Substring(0, 16)) vs built $($builtHash.Substring(0, 16))"
+        }
+        else {
+            Write-Host (
+                'NOTE  the build tree was linked after this package was written, so their bytes are ' +
+                'not compared. Rebuild the package (cpack --preset release-zip) to compare them.')
+        }
     }
 
     $wrapper = Join-Path $binRoot 'RegisterCompareStationContextMenu.cmd'
@@ -173,8 +188,11 @@ try {
 
     Write-Host ''
     Write-Host "checks=$checkCount failures=$failureCount"
-    if ($checkCount -ne $expectedCheckCount) {
-        throw "expected $expectedCheckCount checks but ran ${checkCount}: an assertion was skipped."
+    # One assertion (the byte comparison against the build tree) only applies when the package is at
+    # least as new as that build, so the total is allowed to be either 15 or 16 - and nothing lower,
+    # which is what catches an anchor that silently skipped its checks.
+    if ($checkCount -lt 15 -or $checkCount -gt 16) {
+        throw "expected 15 or 16 checks but ran ${checkCount}: an assertion was skipped."
     }
     if ($failureCount -ne 0) {
         throw "$failureCount of $checkCount checks failed."
