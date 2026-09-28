@@ -71,6 +71,14 @@ bool hasSupportedVideoExtension(const std::filesystem::path& path) {
     return hasExtension(path, kSupportedVideoExtensions);
 }
 
+std::span<const std::wstring_view> supportedVideoExtensions() {
+    return kSupportedVideoExtensions;
+}
+
+std::span<const std::wstring_view> supportedImageExtensions() {
+    return kSupportedImageExtensions;
+}
+
 bool hasSupportedImageExtension(const std::filesystem::path& path) {
     return hasExtension(path, kSupportedImageExtensions);
 }

@@ -25,6 +25,8 @@ set(
     dvs_platform_windows
     dvs_media_ffmpeg
     dvs_persistence_json
+    # The per-user Explorer registration runs at startup, so the application links it directly.
+    dvs_shell_registration
     dvs_ui_qml
 )
 
@@ -36,6 +38,10 @@ foreach(target CompareStation CompareStationCli)
 endforeach()
 
 target_link_libraries(CompareStation PRIVATE Qt6::Network user32)
+
+# The registration points Explorer at the shell library of this product version, so the version has
+# to reach the code that builds that path. The shell DLL name already carries the same number.
+target_compile_definitions(CompareStation PRIVATE DVS_PROJECT_VERSION="${PROJECT_VERSION}")
 
 add_custom_command(
     TARGET CompareStation

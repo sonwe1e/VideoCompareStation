@@ -3,6 +3,77 @@
 更新：2026-09-26。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
 
+## 2026-09-28 把本轮踩过的弯路变成会失败的检查
+
+同一轮工作的真实成本不在功能，而在三类会复发的操作问题。它们过去只靠文档约定，现已固化进门禁：
+
+- **格式化工具只碰自己负责的文件类型**：clang-format 把未知扩展名当 C++ 处理，据此把一个 470 行的
+  `.ps1` 整个重排坏，那还是该测试套件的唯一副本。新检查
+  `tools/quality/check-script-integrity.ps1`（CTest 用例 `quality.script-integrity`）要求每个
+  `.ps1/.psm1` 都能被 PowerShell 解析、每个 `.cmd/.bat` 都是纯 ASCII + CRLF（cmd.exe 按 OEM 代码页
+  读取，裸 LF 会破坏标签扫描——这正是「`-Uninstall` 反而再注册一次」的成因形态）。
+- **不硬编码机器路径**：AGENTS.md 早有此要求却无人执行，改名后 `tools/testing/` 里 16 处默认值仍指向
+  `G:\Workspaces\Toy`，要等工具真正跑起来才暴露。新检查 `check-hardcoded-paths.ps1`
+  （CTest 用例 `quality.hardcoded-paths`）只扫 git 未忽略的仓库文件（`CMakeUserPresets.json` 这类
+  本机覆盖文件按设计豁免），要求路径一律从 `$PSScriptRoot` 派生。本轮已改掉那 16 处，并修掉两份文档
+  里的过期路径。
+- **断言必须可判别**：新断言要附变异证据；检查脚本要断言自己的检查总数，缺锚点不得把断言变成静默
+  通过（复验曾用一个「少跑 3 条断言仍打印成功 token」的变体证明了这一风险）。
+- AGENTS.md 增补上述规则，并写进指南检查器的必需条款（37 → 44 条）；`docs/building.md` 增补
+  「移动或重命名工作区」（`-Fresh`）与「先把依赖重建挂后台，再动代码」。
+- **证据**：两道新检查都已在 `ctest` 中通过（`quality.script-integrity` 0.5 s、
+  `quality.hardcoded-paths` 0.7 s，遍历时剪枝掉 `out/`，否则单是枚举 vcpkg 树就要 24 s），并且都用
+  人为违规验证过判别力：3 条路径违规与 3 条脚本 Encoding/语法违规各自被抓、退出码 1，清理后重新通过。
+
+## 2026-09-28 免安装包自行注册资源管理器右键项（工作区由 `Toy` 改名而来）
+
+发布包没有安装程序，右键项过去只能靠用户手动执行包内脚本。现在应用启动时自己注册并按用户
+修复，解压即用；用户显式取消注册后不再自动加回。
+
+- **定位**：注册实现属 shell 适配器（`src/shell_windows/ExplorerCommandRegistration.cpp` 与
+  `include/dvs/shell/ExplorerCommandRegistration.h`，新静态库 `dvs_shell_registration`）；
+  `src/app/Main.cpp` 只在 `!smokeMode` 时组合调用——所有 smoke/测试模式的参数都以 `smokeMode=true`
+  进入 `runDesktop`，故不写注册表；`--open-still`（资源管理器菜单自己发起的真实启动）仍是
+  `smokeMode=false`，会走同一段代码。扩展名清单复用 `ExplorerCommandSupport` 的既有 18 项
+  （5 视频 + 13 图片），没有第二份拷贝。
+- **自愈**：每次启动核对 CLSID 的 `InprocServer32` 与 18 个 verb 的 4 个值；不一致才重写。目录
+  移动、注册项被外部清理都属于这一类——正是此前「右键项静默消失」的根因形态。一致时**完全不写**。
+  注册前先确认 `CompareStation.exe` 与对应版本的 shell DLL **确实在磁盘上**：否则会写进一个
+  Explorer 加载不了的路径，而此后每次比对都「一致」，自愈承诺就永久落空。
+- **取消注册闭环**：`-Uninstall` 写 `HKCU\Software\CompareStation\ExplorerContextMenu=0`（DWord），
+  启动路径读到 0 就不再加回；重新执行注册脚本写回 1。该值也接受手写文本形式（`0`/`false`/`no`），
+  否则用 RegEdit 写下的字符串会被当成「开启」。`DVS_DISABLE_SHELL_REGISTRATION=1` 让某次启动
+  完全不碰注册表。
+- **只删自己的东西**：共享的 `CLSID` 父键永不删除，只删本命令的 `CLSID` 子键与 18 个 verb；
+  清理 `SystemFileAssociations\<ext>` 与 `<ext>\shell` 这两个共享父键前，同时要求**无子键且无值**
+  ——`RegDeleteKeyW` 会拒绝有子键的键，却会删掉只带值的键，只看子键会删掉别的工具写在父键上的值。
+- **同轮修掉的既有缺陷**：`RegisterExplorerCommand.ps1` 的 `Remove-KeyIfEmpty` 在
+  `Set-StrictMode -Version Latest` 下抛异常，`-Uninstall` 只删掉第一个扩展就中断（即「可卸载」
+  从未真正成立）；双击入口 `.cmd` 不转发 `%*`，文档里的 `-Uninstall` 会反向再注册一次；`pause`
+  被两条错误守卫（带引号的 `if not exist "con"`、`call )` 把 ERRORLEVEL 设成 1）变成不可达代码，
+  双击后窗口一闪而过。
+- **验证**：`tests/unit/shell_windows/ExplorerCommandRegistrationTests.cpp` 13 项（原先 8 项，按三轮复验
+  发现补齐：shell DLL 缺失时拒绝注册、共享父键上「别的工具写的值」不得被牵连、文本形式的关闭标记、
+  版本号推导、环境逃生门不改动真实注册项、用户已关闭优先于文件缺失），加同文件 5 项既有支持测试，
+  合计 18/18。判别力用变异体现验：8 个变异体（去掉空键判定、只修一半的空键判定、去掉存在性检查、
+  忽略文本标记、永不清父键、放宽版本 minor、忽略逃生门、把用户判定挪回文件检查之后）全部让对应断言
+  失败，控制组全绿。`tools/shell/Test-RegisterCompareStationContextMenu.ps1` 49 项；跨组件契约
+  `out/verification/startup-registration-contract/contract.ps1` 16 项，验证「脚本写的标记 ↔ 应用读的
+  标记」一致（含标记必须是 DWord，否则应用会把「已关闭」读成「开启」）以及**卸载后应用不再加回**。
+- **本轮真实门禁**（重装依赖、重新 configure 之后）：`pwsh tools/build/build.ps1 -Preset dev` 通过
+  （431/431，含架构校验与全部测试目标）；`-Test` 全量 **780/780 通过**，其中 `shell_windows` 20 项
+  （含 `ExplorerCommandSmokeTests` 两项在真实 COM 服务器上的组件测试）与 `app.ui-shell-smoke` 均通过；
+  `-Target format-check` 通过（C++ clang-format + QML qmlformat + MSVC 依赖检查）；`-Target lint` 通过。
+- **证据**：上述 CMake 门禁的真实输出；另有 `out/verification/shell-registration-tests/`（仓库 gtest
+  18/18 与顺序变异体，均用项目同款 `/W4 /WX /permissive- /utf-8 /std:c++20` 独立编译运行）、
+  `out/verification/startup-probe/`（契约用启动探针，另含只编译不运行的调用形状复现，专门覆盖
+  `Main.cpp` 把窄 `DVS_PROJECT_VERSION` 交给版本参数的写法——复验指出这一层此前无人编译）、
+  `out/verification/startup-registration-contract/`、`out/verification/self-registration-review/`
+  （三轮独立复验报告与变异框架）。独立验证员三轮复验：第一轮发现应用目标版本参数编译不过的
+  BLOCKER 与三处自愈/卸载缺陷，第二轮发现 F2 断言没有判别力与校验顺序问题，第三轮全部 PASS。
+  仍未在本机验证的部分：真实 GUI 首次启动（会弹出窗口且 dev 目录未部署 `qoffscreen` 平台插件）、
+  Explorer 里的实际观感、覆盖率与 cpack 布局。
+
 ## 2026-09-26 图片工作区编辑与对比界面整理（交互/审美一轮收口，基线 `02cf55e` + 本轮工作区）
 
 按「使用体验与视觉质量优先」对 `ImageWorkspace.qml` 做一次性整理，不动交互语义与快捷键。

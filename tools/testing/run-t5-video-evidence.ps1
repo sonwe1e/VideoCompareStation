@@ -18,15 +18,15 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Executable = 'G:\Workspaces\Toy\out\build\release\bin\CompareStation.exe',
+    [string]$Executable = (Join-Path $PSScriptRoot '..\..\out\build\release\bin\CompareStation.exe'),
     [string]$Video = 'D:\Videos\2026-06-01 23-46-34.mp4',
     # The performance entry's argument parser does not honour the quotes Start-Process writes
     # around an argument containing spaces, so a spaced source path is split into extra sources
     # and the run fails as a media error. The 8.3 short name identifies the same file without
     # spaces; VideoRunPath overrides it when the volume has 8.3 generation disabled.
     [string]$VideoRunPath = 'D:\Videos\20BFE9~1.MP4',
-    [string]$FixtureRoot = 'G:\Workspaces\Toy\out\evidence-fixtures',
-    [string]$EvidenceRoot = 'G:\Workspaces\Toy\out\t5-evidence',
+    [string]$FixtureRoot = (Join-Path $PSScriptRoot '..\..\out\evidence-fixtures'),
+    [string]$EvidenceRoot = (Join-Path $PSScriptRoot '..\..\out\t5-evidence'),
     [string]$Label = 'baseline',
     [int]$Seconds = 8,
     [int]$Repeats = 3,
@@ -69,8 +69,10 @@ function Get-MetricField {
 }
 
 # --- environment ---------------------------------------------------------------
-$gitSha = (& git -C 'G:\Workspaces\Toy' rev-parse HEAD 2>&1 | Select-Object -First 1)
-$gitBranch = (& git -C 'G:\Workspaces\Toy' branch --show-current 2>&1 | Select-Object -First 1)
+# Derived from this script's own location so the checkout can move or be renamed.
+$repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+$gitSha = (& git -C $repositoryRoot rev-parse HEAD 2>&1 | Select-Object -First 1)
+$gitBranch = (& git -C $repositoryRoot branch --show-current 2>&1 | Select-Object -First 1)
 $gpuLines = @(Get-CimInstance Win32_VideoController | ForEach-Object {
         "$($_.Name) | $($_.CurrentHorizontalResolution)x$($_.CurrentVerticalResolution) @ " +
         "$($_.CurrentRefreshRate)Hz | $($_.DriverVersion)"

@@ -37,7 +37,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Ffprobe,
 
-    [string]$FixtureRoot = 'G:\Workspaces\Toy\out\evidence-fixtures',
+    # Derived, never hardcoded: a moved or renamed checkout must not leave this pointing at a
+    # directory that no longer exists.
+    [string]$FixtureRoot = (Join-Path $PSScriptRoot '..\..\out\evidence-fixtures'),
 
     [int]$VideoSeconds = 75,
 

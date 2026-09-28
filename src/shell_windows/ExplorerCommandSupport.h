@@ -24,6 +24,13 @@ enum class SelectionKind {
 [[nodiscard]] bool hasSupportedImageExtension(const std::filesystem::path& path);
 [[nodiscard]] bool isSupportedMediaExtension(const std::filesystem::path& path);
 
+// The two extension sets themselves, for the code that has to write the per-user registration. It
+// reads these instead of keeping a copy, so the entry can never be offered for a file the handler
+// then refuses - which is exactly how the shipped registration script and the handler drifted
+// apart.
+[[nodiscard]] std::span<const std::wstring_view> supportedVideoExtensions();
+[[nodiscard]] std::span<const std::wstring_view> supportedImageExtensions();
+
 [[nodiscard]] SelectionKind classifySelection(std::span<const std::filesystem::path> paths);
 
 [[nodiscard]] std::wstring

@@ -63,7 +63,15 @@ $requiredTokens = @(
     'Preserve approved tests and performance gates',
     'Conventional Commits',
     'FFmpeg',
-    'D3D11'
+    'D3D11',
+    # Enforced because each one records a detour this repository actually took.
+    'docs/building.md',
+    'never a second copy of a suite',
+    'clang-format reads an unknown extension as C++',
+    'check-script-integrity.ps1',
+    'check-hardcoded-paths.ps1',
+    'fails once the behaviour is broken',
+    'assert its own check count'
 )
 
 foreach ($token in $requiredTokens) {
@@ -86,6 +94,7 @@ $requiredCommands = @(
     'cmake --preset release',
     'cmake --build --preset release',
     'cpack --preset release-zip',
+    'pwsh tools/release/verify-release-package.ps1',
     'pwsh tools/shell/RegisterExplorerCommand.ps1 -InstallRoot out\build\release\bin'
 )
 
