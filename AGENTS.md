@@ -96,4 +96,6 @@ identity on asynchronous work. Hide FFmpeg/D3D11 types behind adapters. Write fi
 transactionally. Preserve approved tests and performance gates. Fix the product behaviour rather
 than the manual workaround. An assertion is coverage only if it fails once the behaviour is broken:
 attach mutation evidence for every new assertion. A script must assert its own check count so that
-a missing anchor cannot turn its checks into silent passes.
+a missing anchor cannot turn its checks into silent passes. Read an artifact back before a later
+step publishes or consumes it: a scratch path can already hold an older copy, and a publish command
+will ship that copy without complaining.
