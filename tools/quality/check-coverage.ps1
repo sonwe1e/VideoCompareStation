@@ -10,17 +10,19 @@ param(
     [ValidateRange(0.0, 100.0)]
     [double] $Minimum = 80.0,
 
-    [string[]] $ReportPath
+    [string[]] $ReportPath,
+
+    # The tree whose sources the report has to cover, and the base that relative report file names
+    # resolve against. It defaults to the build's own sources. The fixture run points it at a
+    # fixture tree so that exercising this gate does not depend on the live source list, where every
+    # newly added file turned the workflow red until the fixture was updated.
+    [string] $SourceRoot = "src"
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
-$repositoryPrefix = $repositoryRoot.TrimEnd(
-    [System.IO.Path]::DirectorySeparatorChar,
-    [System.IO.Path]::AltDirectorySeparatorChar
-) + [System.IO.Path]::DirectorySeparatorChar
 $resolvedBuildDir = if ([System.IO.Path]::IsPathRooted($BuildDir)) {
     [System.IO.Path]::GetFullPath($BuildDir)
 } else {
@@ -30,6 +32,24 @@ $resolvedBuildDir = if ([System.IO.Path]::IsPathRooted($BuildDir)) {
 if (-not (Test-Path -LiteralPath $resolvedBuildDir -PathType Container)) {
     throw "Coverage build directory does not exist: $resolvedBuildDir"
 }
+
+$resolvedSourceRoot = if ([System.IO.Path]::IsPathRooted($SourceRoot)) {
+    [System.IO.Path]::GetFullPath($SourceRoot)
+} else {
+    [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot $SourceRoot))
+}
+if (-not (Test-Path -LiteralPath $resolvedSourceRoot -PathType Container)) {
+    throw "Coverage source root does not exist: $resolvedSourceRoot"
+}
+
+# Report file names are relative to the tree that contains the source root: the repository root for
+# a real build (the default 'src' makes that identical to the previous behaviour), or the fixture
+# root when the fixture tree is measured.
+$sourceParent = Split-Path -Parent $resolvedSourceRoot
+$sourceParentPrefix = $sourceParent.TrimEnd(
+    [System.IO.Path]::DirectorySeparatorChar,
+    [System.IO.Path]::AltDirectorySeparatorChar
+) + [System.IO.Path]::DirectorySeparatorChar
 
 if ($Module -contains "All" -and $Module.Count -ne 1) {
     throw "Select 'All' alone, or select domain/application explicitly."
@@ -52,17 +72,17 @@ function Resolve-ReportPath {
     return [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot $Path))
 }
 
-function Get-RepositoryRelativePath {
+function Get-SourceRelativePath {
     param([Parameter(Mandatory)][string] $Path)
 
     $fullPath = [System.IO.Path]::GetFullPath($Path)
     if (-not $fullPath.StartsWith(
-        $repositoryPrefix,
+        $sourceParentPrefix,
         [System.StringComparison]::OrdinalIgnoreCase
     )) {
         return $null
     }
-    return $fullPath.Substring($repositoryPrefix.Length)
+    return $fullPath.Substring($sourceParentPrefix.Length)
 }
 
 [string[]] $reports = if ($null -ne $ReportPath -and $ReportPath.Length -gt 0) {
@@ -110,11 +130,11 @@ function Resolve-CoveredSource {
             $resolvedRoot = if ([System.IO.Path]::IsPathRooted($sourceRoot)) {
                 $sourceRoot
             } else {
-                Join-Path $repositoryRoot $sourceRoot
+                Join-Path $sourceParent $sourceRoot
             }
             $candidates.Add((Join-Path $resolvedRoot $FileName))
         }
-        $candidates.Add((Join-Path $repositoryRoot $FileName))
+        $candidates.Add((Join-Path $sourceParent $FileName))
     }
 
     foreach ($candidate in $candidates) {
@@ -122,7 +142,7 @@ function Resolve-CoveredSource {
         if (-not (Test-Path -LiteralPath $absolutePath -PathType Leaf)) {
             continue
         }
-        $relativePath = Get-RepositoryRelativePath -Path $absolutePath
+        $relativePath = Get-SourceRelativePath -Path $absolutePath
         if ($null -eq $relativePath) {
             continue
         }
@@ -142,7 +162,7 @@ function Resolve-CoveredSource {
     }
 
     if ($lowerName -match "(^|/)src/(domain|application)/") {
-        throw "Coverage source '$FileName' does not map to an existing repository file."
+        throw "Coverage source '$FileName' does not map to an existing file under $sourceParent."
     }
     return $null
 }
@@ -188,13 +208,13 @@ foreach ($report in $reports) {
 }
 
 foreach ($selectedModule in $selectedModules) {
-    $sourceRoot = Join-Path $repositoryRoot "src\$selectedModule"
-    $expectedSources = @(Get-ChildItem -LiteralPath $sourceRoot -Recurse -File -Filter "*.cpp")
+    $moduleSourceRoot = Join-Path $resolvedSourceRoot $selectedModule
+    $expectedSources = @(Get-ChildItem -LiteralPath $moduleSourceRoot -Recurse -File -Filter "*.cpp" -ErrorAction SilentlyContinue)
     if ($expectedSources.Count -eq 0) {
-        throw "Module '$selectedModule' has no C++ source files to measure."
+        throw "Module '$selectedModule' has no C++ source files to measure under $moduleSourceRoot."
     }
     foreach ($expectedSource in $expectedSources) {
-        $relativePath = (Get-RepositoryRelativePath -Path $expectedSource.FullName).
+        $relativePath = (Get-SourceRelativePath -Path $expectedSource.FullName).
             Replace("\", "/").ToLowerInvariant()
         if (-not $reportedSources.ContainsKey("$selectedModule|$relativePath")) {
             throw "Coverage report omitted compiled source: $relativePath"
