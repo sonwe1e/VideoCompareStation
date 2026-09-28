@@ -31,14 +31,31 @@ if(NOT EXISTS "${release_notes}")
 endif()
 
 file(READ "${DVS_SOURCE_DIR}/.github/workflows/release.yml" workflow)
-foreach(required_text IN ITEMS
-        "v${DVS_EXPECTED_VERSION}"
-        "body_path: docs/releases/v${DVS_EXPECTED_VERSION}.md")
-    string(FIND "${workflow}" "${required_text}" position)
-    if(position EQUAL -1)
-        message(FATAL_ERROR "Release workflow is missing '${required_text}'.")
+# The version has to appear in the workflow itself, so the publish scope cannot name one build
+# while the body belongs to another.
+string(FIND "${workflow}" "v${DVS_EXPECTED_VERSION}" version_position)
+if(version_position EQUAL -1)
+    message(FATAL_ERROR "Release workflow is missing 'v${DVS_EXPECTED_VERSION}'.")
+endif()
+# The body path may be spelled out for this version or derived from the validated version. Both
+# publish the notes of the tag being built, and the derived form is what keeps a later tag from
+# republishing the previous version's notes - the defect v2.0.1 removed. A path that names neither
+# this version nor the derived expression is a release that ships somebody else's notes.
+set(body_path_literal "body_path: docs/releases/v${DVS_EXPECTED_VERSION}.md")
+# The derived path is written the way the workflow writes it, with the dollar-brace expression
+# escaped so CMake reads it as text rather than as a variable reference.
+set(body_path_derived "body_path: docs/releases/v\${{ needs.validate-version.outputs.version }}.md")
+set(body_path_accepted 0)
+foreach(candidate IN ITEMS "${body_path_literal}" "${body_path_derived}")
+    string(FIND "${workflow}" "${candidate}" body_position)
+    if(NOT body_position EQUAL -1)
+        set(body_path_accepted 1)
     endif()
 endforeach()
+if(NOT body_path_accepted)
+    message(FATAL_ERROR
+        "Release workflow body_path must be '${body_path_literal}' or '${body_path_derived}'.")
+endif()
 
 file(READ "${DVS_SOURCE_DIR}/README.md" readme)
 foreach(required_text IN ITEMS

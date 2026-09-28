@@ -139,12 +139,18 @@ jobs:
         with:
           arch: x64
 
-      - name: Verify unsigned 1.9.0 release scope
+      - name: Verify unsigned release scope
         shell: pwsh
         run: |
-          if ($env:GITHUB_REF_NAME -cne 'v1.9.0') {
+          # This workflow produces an explicitly unsigned build: no signing certificate is
+          # configured for this runner, and the release metadata has to keep "signed" false.
+          # The guard names the one tag it is allowed to publish so that a tag cannot silently
+          # turn into a release nobody verified. Widen it deliberately, one version at a time.
+          $allowed = @('v2.0.2')
+          if ($env:GITHUB_REF_NAME -cnotin $allowed) {
             throw (
-              'This workflow currently publishes only the explicitly unsigned v1.9.0 build.'
+              "This workflow publishes only the explicitly unsigned build(s): " +
+              ($allowed -join ', ')
             )
           }
 
