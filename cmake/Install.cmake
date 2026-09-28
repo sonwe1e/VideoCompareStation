@@ -102,10 +102,14 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/licenses")
 endif()
 
 # The ZIP is the only package, so the unpacked build has to be able to install itself: ship the
-# per-user Explorer registration script and the notes that explain it.
+# double-click entry point, the per-user Explorer registration script it calls, and the notes that
+# explain both. RegisterExplorerCommand.ps1 stays because INSTALL.txt documents it for scripted and
+# unattended registration; the .cmd wrapper is what a user with no terminal experience reaches for.
 install(
     FILES
         "${PROJECT_SOURCE_DIR}/packaging/INSTALL.txt"
+        "${PROJECT_SOURCE_DIR}/tools/shell/RegisterCompareStationContextMenu.cmd"
+        "${PROJECT_SOURCE_DIR}/tools/shell/RegisterCompareStationContextMenu.ps1"
         "${PROJECT_SOURCE_DIR}/tools/shell/RegisterExplorerCommand.ps1"
     DESTINATION .
     COMPONENT Runtime

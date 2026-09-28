@@ -62,6 +62,13 @@ $classesRoot = 'HKCU:\Software\Classes'
 $clsidKey = Join-Path $classesRoot "CLSID\$explorerCommandClsid"
 $inprocKey = Join-Path $clsidKey 'InprocServer32'
 
+# The application keeps the entry registered by itself, so removing it has to record that decision
+# somewhere the next launch reads. Without this value an explicit -Uninstall would be undone the
+# first time the user opened the program again. The name and location match
+# src/shell_windows/ExplorerCommandRegistration.h.
+$settingsKey = 'HKCU:\Software\CompareStation'
+$enabledValueName = 'ExplorerContextMenu'
+
 function Get-ShellBinary {
     param([string] $Root, [string] $Executable)
 
@@ -105,6 +112,17 @@ function Set-RegistryString {
     Set-ItemProperty -LiteralPath $Path -Name $Name -Value $Value
 }
 
+function Set-ExplorerCommandEnabled {
+    param([bool] $Enabled)
+
+    if (-not (Test-Path -LiteralPath $settingsKey)) {
+        New-Item -Path $settingsKey -Force | Out-Null
+    }
+    $value = if ($Enabled) { 1 } else { 0 }
+    New-ItemProperty -LiteralPath $settingsKey -Name $enabledValueName -PropertyType DWord `
+        -Value $value -Force | Out-Null
+}
+
 function Invoke-ShellAssociationChanged {
     if (-not ('DvsShell.ShellNotify' -as [type])) {
         Add-Type -Namespace 'DvsShell' -Name 'ShellNotify' -MemberDefinition @'
@@ -123,8 +141,12 @@ function Remove-KeyIfEmpty {
     if (-not (Test-Path -LiteralPath $Path)) {
         return
     }
+    # Get-ItemProperty rather than (Get-Item).Property: a registry key that holds nothing but its
+    # unnamed default value has no Property member, and under Set-StrictMode -Version Latest the
+    # member access throws instead of returning nothing - which aborted an -Uninstall run after the
+    # first extension and left every other verb key behind.
     if (@(Get-ChildItem -LiteralPath $Path).Count -eq 0 -and
-        @(Get-Item -LiteralPath $Path).Property.Count -eq 0) {
+        @(Get-ItemProperty -LiteralPath $Path).Count -eq 0) {
         Remove-Item -LiteralPath $Path -Force
     }
 }
@@ -136,6 +158,11 @@ $verbKeys = @(
 )
 
 if ($Uninstall) {
+    # Record the decision before removing anything: if this run is interrupted halfway, the next
+    # launch has to stay out of the user's way instead of adding the keys back.
+    if ($PSCmdlet.ShouldProcess($settingsKey, 'record that the Explorer command stays off')) {
+        Set-ExplorerCommandEnabled -Enabled $false
+    }
     foreach ($extension in $Extensions) {
         $verbKey = Join-Path $classesRoot "SystemFileAssociations\$extension\shell\$verbKeyName"
         if (-not (Test-Path -LiteralPath $verbKey)) {
@@ -177,6 +204,9 @@ if ($PSCmdlet.ShouldProcess($clsidKey, 'register the Explorer command server')) 
     Set-RegistryString -Path $inprocKey -Name '(default)' -Value $shellBinary
     Set-RegistryString -Path $inprocKey -Name 'ThreadingModel' -Value 'Apartment'
 }
+if ($PSCmdlet.ShouldProcess($settingsKey, 'record that the Explorer command is wanted')) {
+    Set-ExplorerCommandEnabled -Enabled $true
+}
 
 $expected = [ordered]@{
     'MUIVerb'                = $menuText
@@ -212,6 +242,10 @@ if (-not $WhatIfPreference) {
     $registeredServer = (Get-ItemProperty -LiteralPath $inprocKey).'(default)'
     if ($registeredServer -cne $shellBinary) {
         throw "Registered server is '$registeredServer', expected '$shellBinary'."
+    }
+    $enabled = (Get-ItemProperty -LiteralPath $settingsKey -Name $enabledValueName).$enabledValueName
+    if ($enabled -ne 1) {
+        throw "Registry value '$enabledValueName' under '$settingsKey' is '$enabled', expected 1."
     }
 }
 

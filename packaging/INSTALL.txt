@@ -5,30 +5,33 @@ CompareStation — 免安装使用说明
 
    双击 CompareStation.exe。程序不写系统目录，也不需要安装。
 
-2. 把 CompareStation 加进资源管理器右键菜单（可选）
+2. 资源管理器右键菜单
 
-   本包不提供安装程序。要获得「Compare with CompareStation」右键项，在本目录打开
-   PowerShell 7 执行：
+   启动时程序会自己把「Compare with CompareStation」注册到当前用户（写 HKCU\Software\Classes，
+   只对当前用户生效，不需要管理员权限）。所以解压后第一次运行就自动拥有右键项，不需要先执行
+   任何命令。每次启动都会核对一遍：目录被移动后注册项会改指新位置，被外部清理掉也会补回。
+
+   覆盖 5 种视频（.mp4 .mkv .mov .avi .m4v）与 13 种图片（.png .jpg .jpeg .bmp .gif .webp
+   .tif .tiff .pnm .ppm .pgm .pbm .pam）：选中一个文件就打开它，选中两个视频或两张图片直接
+   进入对比。选中目录、网络路径、图片与视频混选、三张以上图片或超过三个文件时，该项自动隐藏。
+
+   不想让它写注册表，先把环境变量 DVS_DISABLE_SHELL_REGISTRATION 设为 1 再启动。
+
+   取消注册（任选其一；命令行方式都要在本目录下执行）：
+
+       .\RegisterCompareStationContextMenu.cmd -Uninstall
+       pwsh -NoProfile -File .\RegisterExplorerCommand.ps1 -Uninstall
+
+   取消之后程序会记住这个决定，不会再自动加回。要重新打开，执行：
 
        pwsh -NoProfile -File .\RegisterExplorerCommand.ps1 -InstallRoot .
 
-   它会为当前用户注册右键命令，写入 HKCU\Software\Classes，不需要管理员权限。覆盖 5 种
-   视频（.mp4 .mkv .mov .avi .m4v）与 13 种图片（.png .jpg .jpeg .bmp .gif .webp .tif
-   .tiff .pnm .ppm .pgm .pbm .pam）：选中一个文件就打开它，选中两个视频或两张图片直接
-   进入对比。选中目录、网络路径、图片与视频混选、三张以上图片或超过三个文件时，该项
-   自动隐藏。
+   三点注意：
 
-   取消注册：
-
-       pwsh -NoProfile -File .\RegisterExplorerCommand.ps1 -Uninstall
-
-   两点注意：
-
-   - 注册记录的是本目录的绝对路径。移动或删除本目录后右键项会失效，重新执行上面的
-     注册命令即可。
+   - 注册记录的是本目录的绝对路径。移动目录后启动一次即可自动修复；也可以先取消注册再移动。
    - Windows 11 把这类命令放在右键菜单的「显示更多选项」里。
-
-   脚本要求 PowerShell 7（pwsh）；Windows 自带的 Windows PowerShell 5.1 不支持。
+   - 上面两条命令行需要 PowerShell 7（pwsh）；Windows 自带的 Windows PowerShell 5.1 不支持。
+     启动时的自动注册不依赖 PowerShell。
 
 3. 未签名
 

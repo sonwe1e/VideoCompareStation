@@ -6,6 +6,7 @@
 #include "dvs/media/StillImageDecoder.h"
 #include "dvs/platform/ProcessTelemetry.h"
 #include "dvs/platform/TraceSink.h"
+#include "dvs/shell/ExplorerCommandRegistration.h"
 #include "dvs/ui/ComparisonSurface.h"
 #include "dvs/ui/DesktopApplication.h"
 #include "dvs/ui/GraphicsBackend.h"
@@ -449,6 +450,18 @@ runDesktop(int& argc,
         return dvs::app::reportFatalStartup("DVS_UI_LOAD_FAILED", smokeMode);
     }
     dvs::ui::markStartupMilestone("qml-load-returned");
+    // The package has no installer, so the per-user Explorer entry is created here. This runs only
+    // for a real session - every smoke and test mode sets smokeMode - and it repairs the keys when
+    // the unpacked directory moved, which is the failure that used to leave the menu entry silently
+    // missing. A refused registry write must never stop a start.
+    if (!smokeMode) {
+        const dvs::shell::ExplorerRegistrationResult registration =
+            dvs::shell::ensureRunningInstallationRegistered(DVS_PROJECT_VERSION);
+        dvs::ui::markStartupMilestone("shell-registration");
+        if (registration.state == dvs::shell::ExplorerRegistrationState::Failed) {
+            writeStandardError("DVS_SHELL_REGISTRATION_FAILED " + registration.error + "\n");
+        }
+    }
     if (!smokeMode && !stillImage.has_value() && !applyStartupRequest(startupRequest, desktop)) {
         runtime->prepareForSceneGraphRelease();
         desktop.releaseSceneGraph();

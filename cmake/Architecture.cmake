@@ -48,6 +48,9 @@ function(_dvs_allowed_dependencies target outputVariable)
         set(allowed dvs_application dvs_windows_support)
     elseif(target STREQUAL "CompareStationShell")
         set(allowed)
+    elseif(target STREQUAL "dvs_shell_registration")
+        # Leaf adapter: the per-user Explorer registration depends on nothing else in the project.
+        set(allowed)
     elseif(target MATCHES "^CompareStation(Cli)?$")
         set(
             allowed
@@ -56,6 +59,7 @@ function(_dvs_allowed_dependencies target outputVariable)
             dvs_graphics_d3d11
             dvs_media_ffmpeg
             dvs_persistence_json
+            dvs_shell_registration
             dvs_ui_qml
             dvs_ui_models
             dvs_ui_d3d11_bridge
