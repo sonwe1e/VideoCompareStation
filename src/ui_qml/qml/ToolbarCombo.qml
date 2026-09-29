@@ -54,7 +54,7 @@ T.ComboBox {
 
         background: Rectangle {
             objectName: "toolbarComboDelegateBackground-" + delegateControl.index
-            radius: 3
+            radius: 5
             color: delegateControl.highlighted || delegateControl.hovered || control.currentIndex === delegateControl.index ? control.highlightColor : control.panelColor
         }
     }
@@ -86,17 +86,17 @@ T.ComboBox {
         objectName: "toolbarComboBackground"
         implicitWidth: 122
         implicitHeight: 34
-        radius: 5
+        radius: 6
         color: control.enabled ? control.panelColor : control.disabledPanelColor
         border.width: control.activeFocus ? 2 : 1
-        border.color: control.activeFocus ? control.focusColor : control.borderColor
+        border.color: control.activeFocus ? control.focusColor : (control.hovered ? Theme.borderHover : control.borderColor)
     }
 
     popup: T.Popup {
         id: comboPopup
 
         objectName: "toolbarComboPopup"
-        y: control.height + 2
+        y: control.height + 3
         width: control.width
         implicitHeight: contentItem.implicitHeight + topPadding + bottomPadding
         height: Math.min(implicitHeight, 260)
@@ -120,10 +120,10 @@ T.ComboBox {
 
         background: Rectangle {
             objectName: "toolbarComboPopupBackground"
-            radius: 5
-            color: control.panelColor
+            radius: 8
+            color: Theme.menu
             border.width: 1
-            border.color: control.borderColor
+            border.color: Theme.menuBorder
         }
     }
 }

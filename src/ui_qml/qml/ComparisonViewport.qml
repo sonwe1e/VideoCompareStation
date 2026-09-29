@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Window
+import "VcsTheme.js" as Theme
 // qmllint disable import
 import Dvs.Ui 1.0
 
@@ -78,6 +79,9 @@ Rectangle {
     // The var-typed `surface` alias defeats qmllint's type resolution from other files, so the
     // drop counter is re-exposed as a plain int computed here where ComparisonSurface resolves.
     readonly property int droppedFrames: dualVideoSurface.droppedFrames
+    // Status banners stack under the source label row (12 px inset + 42 px plate + 8 px gap), so a
+    // centred banner never covers a panel's identity label.
+    readonly property real stageBannerTop: control.chromeVisible ? 62 : 12
 
     function clearRoi() {
         dualVideoSurface.clearRoi();
@@ -441,7 +445,9 @@ Rectangle {
                     parts.push(qsTr("ROI 已启用"));
                 return parts.join(" · ");
             }
-            color: control.inexactReason.length > 0 ? "#facc15" : (control.selectedDifferenceExactness === 0 ? "#86efac" : "#facc15")
+            // Exactness describes the pixel comparison (format, colour space, geometry), so only
+            // difference mode is tinted; plain side-by-side viewing stays neutral.
+            color: !control.differenceMode ? Theme.secondaryText : (control.inexactReason.length === 0 && control.selectedDifferenceExactness === 0 ? Theme.success : Theme.warning)
             font.pixelSize: 11
             width: Math.max(0, parent.width - 18)
             elide: Text.ElideRight
@@ -461,7 +467,7 @@ Rectangle {
         z: 30
         radius: 5
         color: pixelScaleBadge.pixelExact ? "#dc122b1f" : "#dc171e2a"
-        border.color: pixelScaleBadge.pixelExact ? "#86efac" : control.borderColor
+        border.color: pixelScaleBadge.pixelExact ? Theme.success : control.borderColor
         height: 28
         width: pixelScaleLabel.implicitWidth + 18
         anchors {
@@ -490,7 +496,7 @@ Rectangle {
             id: pixelScaleLabel
 
             text: pixelScaleBadge.pixelExact ? qsTr("100% 真实尺寸") : qsTr("画面 %1%").arg(Math.round(pixelScaleBadge.effectivePercent))
-            color: pixelScaleBadge.pixelExact ? "#86efac" : control.mutedTextColor
+            color: pixelScaleBadge.pixelExact ? Theme.success : control.mutedTextColor
             font.pixelSize: 11
             anchors.centerIn: parent
         }
@@ -624,25 +630,29 @@ Rectangle {
         id: alignmentStatus
 
         visible: control.chromeVisible && control.combinedAlignmentStatus.length > 0
-        radius: 5
-        color: "#d9232c3d"
-        border.color: control.errorColor
+        // The mapping readout is on for every aligned session, so it uses the neutral stage plate;
+        // red stays reserved for the real failure banners.
+        radius: Theme.radiusMedium
+        color: Theme.stageLabel
+        border.color: Theme.stageLabelBorder
         height: mappingStatusText.implicitHeight + 14
         width: Math.min(parent.width - 24, mappingStatusText.implicitWidth + 24)
         z: 20
         anchors {
             top: parent.top
-            topMargin: 12
+            topMargin: control.stageBannerTop
             horizontalCenter: parent.horizontalCenter
         }
 
         Text {
             id: mappingStatusText
 
+            width: Math.min(implicitWidth, alignmentStatus.width - 24)
             text: control.combinedAlignmentStatus
-            color: "#ffd2d2"
+            color: Theme.secondaryText
             font.pixelSize: 12
-            font.weight: Font.DemiBold
+            font.weight: Font.Medium
+            elide: Text.ElideRight
             anchors.centerIn: parent
         }
     }
@@ -661,7 +671,7 @@ Rectangle {
         z: 20
         anchors {
             top: alignmentStatus.visible ? alignmentStatus.bottom : parent.top
-            topMargin: alignmentStatus.visible ? 8 : 12
+            topMargin: alignmentStatus.visible ? 8 : control.stageBannerTop
             horizontalCenter: parent.horizontalCenter
         }
 
@@ -710,15 +720,16 @@ Rectangle {
                 y: Number(modelData.y) + 12
                 width: compactBadge ? 44 : Math.min(280, Math.max(80, panelWidth - 24))
                 height: compactBadge ? 36 : 42
-                radius: 5
-                color: "#d9111721"
-                border.color: "#663a4a62"
+                radius: 8
+                color: Theme.oscGlass
+                border.width: 1
+                border.color: Theme.sourceBorder(surfaceLabel.sourceSlot)
 
                 Rectangle {
                     width: 26
                     height: 26
-                    radius: 4
-                    color: control.accentColor
+                    radius: 5
+                    color: Theme.sourceColor(surfaceLabel.sourceSlot)
                     anchors {
                         left: parent.left
                         leftMargin: surfaceLabel.compactBadge ? 9 : 8
@@ -728,7 +739,7 @@ Rectangle {
                     Text {
                         anchors.centerIn: parent
                         text: String.fromCharCode(65 + Number(surfaceLabel.modelData.slot))
-                        color: "white"
+                        color: Theme.sourceInk
                         font.bold: true
                         font.pixelSize: 13
                     }
@@ -779,7 +790,7 @@ Rectangle {
         Accessible.name: qsTr("帧未变化。%1").arg(control.errorDetail)
         anchors {
             top: parent.top
-            topMargin: alignmentStatus.visible ? alignmentStatus.height + 20 : 12
+            topMargin: alignmentStatus.visible ? control.stageBannerTop + alignmentStatus.height + 8 : control.stageBannerTop
             horizontalCenter: parent.horizontalCenter
         }
 

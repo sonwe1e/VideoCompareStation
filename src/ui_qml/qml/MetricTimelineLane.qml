@@ -33,7 +33,8 @@ Item {
 
         text: qsTr("差异指标 MAE")
         color: Theme.mutedText
-        font.pixelSize: 10
+        font.pixelSize: 11
+        font.weight: Font.DemiBold
         anchors {
             left: parent.left
             verticalCenter: headerRow.verticalCenter
@@ -53,7 +54,8 @@ Item {
             objectName: "metricLaneToggle"
             text: lane.metrics && lane.metrics.laneEnabled ? qsTr("收起 ▴") : qsTr("展开 ▾")
             color: Theme.accent
-            font.pixelSize: 10
+            font.pixelSize: 11
+            font.weight: Font.DemiBold
 
             MouseArea {
                 anchors.fill: parent
@@ -80,8 +82,8 @@ Item {
 
         Rectangle {
             anchors.fill: parent
-            color: "#101722"
-            radius: 3
+            color: Theme.canvas
+            radius: 6
             border.color: Theme.border
             border.width: 1
         }
@@ -154,8 +156,8 @@ Item {
                 radius: 3
                 x: Math.max(0, Math.min(curveArea.width - width, markerX))
                 y: 1
-                color: "#fbbf24"
-                border.color: "#78350f"
+                color: Theme.warning
+                border.color: Theme.warningBorder
                 border.width: 1
 
                 HoverHandler {

@@ -15,20 +15,20 @@ Rectangle {
     readonly property bool hasThumbnail: control.thumbnailSource.toString().length > 0
 
     objectName: "timelineThumbnailPopup"
-    width: hasThumbnail ? 184 : Math.max(148, contentCol.implicitWidth + 24)
-    height: hasThumbnail ? (control.isApproximate ? 124 : 112) : (contentCol.implicitHeight + 14)
-    radius: hasThumbnail ? 7 : 16
+    width: hasThumbnail ? 192 : Math.max(152, contentCol.implicitWidth + 24)
+    height: hasThumbnail ? (control.isApproximate ? 126 : 114) : (contentCol.implicitHeight + 14)
+    radius: hasThumbnail ? 10 : 16
     color: Theme.thumbnailPanel
-    border.color: hasThumbnail ? "#50637f" : "#6080b0"
+    border.color: hasThumbnail ? Theme.border : Theme.oscBorder
 
     Rectangle {
         id: imageContainer
 
         visible: control.hasThumbnail
         width: parent.width - 12
-        height: 66
-        radius: 4
-        color: Theme.canvas
+        height: 68
+        radius: 6
+        color: Theme.thumbnailWell
         anchors {
             top: parent.top
             topMargin: 6
@@ -90,7 +90,7 @@ Rectangle {
             objectName: "previewComparisonStateText"
             text: control.comparisonState
             visible: text.length > 0
-            color: "#9fc3ff"
+            color: Theme.accentText
             font.pixelSize: 10
             anchors.horizontalCenter: control.hasThumbnail ? undefined : parent.horizontalCenter
         }
@@ -101,7 +101,7 @@ Rectangle {
             objectName: "previewApproximateBadge"
             text: qsTr("预览 · 邻近第 %1 帧").arg(control.sampleFrame + 1)
             visible: control.sampleFrame >= 0 && control.sampleFrame !== control.previewFrame
-            color: "#f59e0b"
+            color: Theme.warning
             font.pixelSize: 10
             anchors.horizontalCenter: control.hasThumbnail ? undefined : parent.horizontalCenter
         }

@@ -2,38 +2,119 @@
 
 // Static semantic tokens for CompareStation's dark desktop theme. Keep state colours here so
 // controls rendered by different Qt Quick Controls styles cannot silently drift apart.
-var canvas = "#090d14"
-var window = "#0b1018"
-var panel = "#111823"
-var menu = "#171e2a"
-var raisedPanel = "#1d2635"
-var disabledPanel = "#202938"
-var control = "#253247"
-var controlChecked = "#243f68"
-var controlHover = "#2d69bf"
-var controlPressed = "#285da9"
 
-var primaryText = "#f3f6fb"
-var mutedText = "#93a2ba"
-var disabledText = "#637086"
+// Surfaces, darkest to lightest. The review stage sits below the chrome so footage keeps the
+// strongest contrast; every raised layer is one step lighter than the layer it sits on.
+var canvas = "#0b0f17"
+var window = "#111722"
+// The DWM caption colour in DesktopApplication.cpp mirrors this value; change both together.
+var headerBackground = "#111722"
+var panel = "#151c28"
+var panelElevated = "#19212f"
+var menu = "#1a2231"
+var raisedPanel = "#1e2737"
+var disabledPanel = "#1a2230"
+
+// Neutral control states. Checked controls carry an accent-tinted fill, hover never does.
+var control = "#232e40"
+var controlHover = "#2c394e"
+var controlPressed = "#1f2a3b"
+var controlChecked = "#1d3a66"
+
+var primaryText = "#f1f5f9"
+var secondaryText = "#cbd5e1"
+var mutedText = "#94a3b8"
+var disabledText = "#64748b"
 var inverseText = "#ffffff"
 
-var accent = "#4b8df8"
-var accentHover = "#4f94ff"
-var accentPressed = "#2662bd"
-var focus = "#72a7fa"
-var strongFocus = "#b7d3ff"
-var border = "#303d51"
-var controlBorder = "#3b4d67"
-var menuBorder = "#40516a"
-var disabledBorder = "#2a3444"
+// accent is for borders, indicators and focus; filled buttons use accentFill so white labels
+// keep an AA contrast ratio, and accentText is the readable accent for text on dark panels.
+var accent = "#3b82f6"
+var accentText = "#7cb4ff"
+var accentFill = "#2563eb"
+var accentHover = "#2f6ff0"
+var accentPressed = "#1d4ed8"
+var focus = "#60a5fa"
+var strongFocus = "#bfdbfe"
+
+var border = "#263244"
+var borderHover = "#40526d"
+var controlBorder = "#334259"
+var menuBorder = "#34445c"
+var disabledBorder = "#212b3a"
 
 var error = "#f87171"
-var warning = "#efbf83"
-var success = "#8ce2c2"
-var information = "#7dd3fc"
+var warning = "#fbbf24"
+var warningPanel = "#241b0d"
+var warningBorder = "#7c5a14"
+var warningText = "#fde68a"
+var success = "#34d399"
+var successFill = "#065f46"
+var successFillHover = "#047857"
+var successBorder = "#10b981"
+var information = "#38bdf8"
 
 // These alpha-bearing colours are intentional semantic overlays, not popup backgrounds.
-var modalScrim = "#99060a10"
-var oscPanel = "#ed111823"
-var thumbnailPanel = "#f0171e2a"
+var modalScrim = "#b3070a10"
+var oscPanel = "#ed151c28"
+var thumbnailPanel = "#f21a2231"
+var thumbnailWell = "#05080d"
+
+// Translucent overlays drawn on top of footage: they must stay legible over bright pixels.
+var stageLabel = "#c7090d15"
+var stageLabelBorder = "#2d3b50"
+var oscGlass = "#eb141b27"
+var oscBorder = "#33435b"
+var oscGlassHover = "#f21a2332"
+
+var timelineRail = "#243146"
+// In/out band: accentText at 30 % alpha, so the brackets drawn on top of it stay fully opaque.
+var rangeBand = "#4d7cb4ff"
+var keycap = "#111827"
+var keycapBorder = "#2f3d52"
+
+// Shape and interaction tokens.
+var radiusSmall = 4
+var radiusMedium = 6
+var radiusLarge = 8
+var radiusCard = 12
+var radiusPill = 999
+
+var fluentHover = "#14ffffff"
+var fluentPressed = "#0cffffff"
+var subtleBorder = "#1fffffff"
+
+// Source identity follows the application icon: A is sky, B is orange, C is violet. Use the
+// helpers so chips, badges, labels and cards cannot assign different colours to one slot.
+var sourceA = "#38bdf8"
+var sourceABackground = "#0b2536"
+var sourceABorder = "#0e7fb8"
+
+var sourceB = "#fb923c"
+var sourceBBackground = "#33190a"
+var sourceBBorder = "#c2560f"
+
+var sourceC = "#a78bfa"
+var sourceCBackground = "#241640"
+var sourceCBorder = "#7c5ce0"
+
+// Dark text for letters drawn on a filled source colour.
+var sourceInk = "#0b0f17"
+
+function sourceColor(slot) {
+    return slot === 0 ? sourceA : (slot === 1 ? sourceB : sourceC);
+}
+
+function sourceBackground(slot) {
+    return slot === 0 ? sourceABackground : (slot === 1 ? sourceBBackground : sourceCBackground);
+}
+
+function sourceBorder(slot) {
+    return slot === 0 ? sourceABorder : (slot === 1 ? sourceBBorder : sourceCBorder);
+}
+
+// Maps a source label such as "A" or "源 B" to its slot; -1 when no letter is present.
+function slotForLabel(label) {
+    const match = /[ABC]/.exec(String(label || ""));
+    return match ? match[0].charCodeAt(0) - 65 : -1;
+}

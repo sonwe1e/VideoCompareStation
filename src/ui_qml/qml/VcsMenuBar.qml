@@ -7,8 +7,8 @@ import "VcsTheme.js" as Theme
 MenuBar {
     id: control
 
-    property color menuBarColor: Theme.menu
-    property color menuBarBorderColor: Theme.menuBorder
+    property color menuBarColor: Theme.headerBackground
+    property color menuBarBorderColor: "transparent"
     property color textColor: Theme.primaryText
     property color mutedTextColor: Theme.mutedText
     property color accentColor: Theme.controlPressed
@@ -19,10 +19,10 @@ MenuBar {
         objectName: menu && menu.objectName.length > 0 ? menu.objectName + "Button" : ""
         enabled: Boolean(menu && menu.enabled)
 
-        leftPadding: 12
-        rightPadding: 12
-        topPadding: 7
-        bottomPadding: 7
+        leftPadding: 10
+        rightPadding: 10
+        topPadding: 5
+        bottomPadding: 5
 
         contentItem: Text {
             text: topLevelItem.text
@@ -33,10 +33,26 @@ MenuBar {
         }
 
         background: Rectangle {
-            radius: 3
-            color: topLevelItem.enabled && (topLevelItem.highlighted || topLevelItem.down || topLevelItem.activeFocus) ? control.accentColor : "transparent"
+            radius: Theme.radiusMedium
+            color: {
+                if (!topLevelItem.enabled)
+                    return "transparent";
+                if (topLevelItem.highlighted || topLevelItem.down)
+                    return control.accentColor;
+                if (topLevelItem.activeFocus)
+                    return Theme.controlHover;
+                if (topLevelItem.hovered)
+                    return Theme.fluentHover;
+                return "transparent";
+            }
             border.width: topLevelItem.activeFocus ? 1 : 0
             border.color: Theme.focus
+
+            Behavior on color {
+                ColorAnimation {
+                    duration: 120
+                }
+            }
         }
     }
 
@@ -45,6 +61,7 @@ MenuBar {
 
         Rectangle {
             height: 1
+            visible: control.menuBarBorderColor.a > 0
             color: control.menuBarBorderColor
             anchors {
                 bottom: parent.bottom

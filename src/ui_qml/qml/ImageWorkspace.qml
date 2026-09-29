@@ -564,11 +564,39 @@ Rectangle {
             font.weight: chip.checked ? Font.DemiBold : Font.Normal
         }
 
+        // Same toggle language as the video CompareModeBar: quiet at rest, a light surface on
+        // hover, and the accent-tinted fill reserved for the selected option of each group.
         background: Rectangle {
-            radius: 5
-            color: !chip.enabled ? Theme.disabledPanel : (chip.checked ? Theme.controlChecked : (chip.down ? Theme.controlPressed : (chip.hovered ? Theme.controlHover : Theme.control)))
+            radius: Theme.radiusMedium
+            color: {
+                if (!chip.enabled)
+                    return "transparent";
+                if (chip.checked)
+                    return Theme.controlChecked;
+                if (chip.down)
+                    return Theme.fluentPressed;
+                if (chip.hovered)
+                    return Theme.fluentHover;
+                return "transparent";
+            }
             border.width: chip.activeFocus ? 2 : 1
-            border.color: chip.activeFocus ? Theme.accent : (chip.checked ? Theme.accent : Theme.controlBorder)
+            border.color: {
+                if (chip.activeFocus)
+                    return Theme.focus;
+                if (!chip.enabled)
+                    return "transparent";
+                if (chip.checked)
+                    return Theme.accent;
+                if (chip.hovered)
+                    return Theme.subtleBorder;
+                return "transparent";
+            }
+
+            Behavior on color {
+                ColorAnimation {
+                    duration: 100
+                }
+            }
         }
     }
 
@@ -603,7 +631,7 @@ Rectangle {
 
         height: 22
         implicitWidth: badgeContent.implicitWidth + 20
-        radius: 4
+        radius: 6
         color: Theme.raisedPanel
         border.width: 1
         border.color: Theme.border
@@ -723,12 +751,12 @@ Rectangle {
         // input away from panning, marquee selection or tool strokes underneath.
         Rectangle {
             visible: viewport.label.length > 0 || viewport.title.length > 0
-            width: Math.min(viewportLabelColumn.implicitWidth + 16, Math.max(200, viewport.width - 60))
-            height: viewportLabelColumn.implicitHeight + 10
-            radius: 5
-            color: "#b3060c14"
+            width: Math.min(viewportLabelColumn.implicitWidth + 18, Math.max(200, viewport.width - 60))
+            height: viewportLabelColumn.implicitHeight + 12
+            radius: 8
+            color: Theme.stageLabel
             border.width: 1
-            border.color: "#332b3850"
+            border.color: Theme.stageLabelBorder
             anchors {
                 top: parent.top
                 left: parent.left
@@ -1043,8 +1071,8 @@ Rectangle {
             margins: 12
         }
         height: commandColumn.implicitHeight + 20
-        radius: 8
-        color: Theme.panel
+        radius: 10
+        color: Theme.panelElevated
         border.width: 1
         border.color: Theme.border
 
@@ -2097,9 +2125,9 @@ Rectangle {
                     width: Math.min(stageContent.width - 28, inPlaceBadgeContent.implicitWidth + 20)
                     height: 28
                     radius: 6
-                    color: "#e00f151f"
+                    color: Theme.oscGlass
                     border.width: 1
-                    border.color: control.singleViewShowSecondary ? "#80f2b03c" : "#7a4b8df8"
+                    border.color: control.singleViewShowSecondary ? Theme.sourceBBorder : Theme.sourceABorder
                     anchors {
                         top: parent.top
                         right: parent.right
@@ -2115,7 +2143,7 @@ Rectangle {
                             width: 7
                             height: 7
                             radius: 3.5
-                            color: control.singleViewShowSecondary ? "#f2b03c" : Theme.accent
+                            color: control.singleViewShowSecondary ? Theme.sourceB : Theme.sourceA
                             anchors.verticalCenter: parent.verticalCenter
                         }
 
@@ -2152,7 +2180,7 @@ Rectangle {
                     width: Math.min(stageContent.width - (imageInPlaceBadge.visible ? imageInPlaceBadge.width + 52 : 28), alphaBadgeContent.implicitWidth + 20)
                     height: 28
                     radius: 6
-                    color: "#e00f151f"
+                    color: Theme.oscGlass
                     border.width: 1
                     border.color: {
                         if (control.viewMode === 1)
@@ -2446,12 +2474,12 @@ Rectangle {
                     // like the viewport labels, so they stay readable over bright imagery.
                     Rectangle {
                         visible: control.hasPair && control.hasSecondary && wipeOverlay.splitX > 44
-                        width: wipeIdentityLeft.width + 16
-                        height: wipeIdentityLeft.implicitHeight + 10
-                        radius: 5
-                        color: "#b3060c14"
+                        width: wipeIdentityLeft.width + 18
+                        height: wipeIdentityLeft.implicitHeight + 12
+                        radius: 8
+                        color: Theme.stageLabel
                         border.width: 1
-                        border.color: "#332b3850"
+                        border.color: Theme.stageLabelBorder
                         anchors {
                             top: parent.top
                             left: parent.left
@@ -2475,12 +2503,12 @@ Rectangle {
 
                     Rectangle {
                         visible: control.hasPair && (wipeOverlay.width - wipeOverlay.splitX) > 44
-                        width: wipeIdentityRight.width + 16
-                        height: wipeIdentityRight.implicitHeight + 10
-                        radius: 5
-                        color: "#b3060c14"
+                        width: wipeIdentityRight.width + 18
+                        height: wipeIdentityRight.implicitHeight + 12
+                        radius: 8
+                        color: Theme.stageLabel
                         border.width: 1
-                        border.color: "#332b3850"
+                        border.color: Theme.stageLabelBorder
                         anchors {
                             top: parent.top
                             right: parent.right
@@ -2806,8 +2834,8 @@ Rectangle {
         visible: control.hasPair && control.compareMode === 7
         width: fadeRow.implicitWidth + 24
         height: 36
-        radius: 6
-        color: "#e00f151f"
+        radius: 8
+        color: Theme.oscGlass
         border.width: 1
         border.color: Theme.border
         anchors {

@@ -114,10 +114,11 @@ Rectangle {
     component DarkTabButton: TabButton {
         id: darkTabButton
 
+        implicitHeight: 30
         leftPadding: 10
         rightPadding: 10
-        topPadding: 8
-        bottomPadding: 8
+        topPadding: 0
+        bottomPadding: 0
 
         contentItem: Text {
             text: darkTabButton.text
@@ -130,18 +131,26 @@ Rectangle {
         }
 
         background: Rectangle {
-            color: darkTabButton.checked ? Theme.controlChecked : (darkTabButton.hovered ? Theme.control : "transparent")
+            radius: 6
+            color: darkTabButton.checked ? Theme.controlChecked : (darkTabButton.hovered ? Theme.fluentHover : "transparent")
+
+            Behavior on color {
+                ColorAnimation {
+                    duration: 100
+                }
+            }
 
             Rectangle {
                 visible: darkTabButton.checked
                 height: 2
+                radius: 1
                 color: Theme.accent
                 anchors {
                     left: parent.left
                     right: parent.right
                     bottom: parent.bottom
-                    leftMargin: 8
-                    rightMargin: 8
+                    leftMargin: 10
+                    rightMargin: 10
                 }
             }
         }
@@ -166,10 +175,16 @@ Rectangle {
             y: darkCheckBox.height / 2 - height / 2
             implicitWidth: 16
             implicitHeight: 16
-            radius: 3
+            radius: 4
             color: darkCheckBox.checked ? Theme.accent : Theme.raisedPanel
             border.color: darkCheckBox.checked ? Theme.accent : (darkCheckBox.hovered ? Theme.accent : Theme.menuBorder)
             border.width: 1
+
+            Behavior on color {
+                ColorAnimation {
+                    duration: 100
+                }
+            }
 
             Text {
                 anchors.centerIn: parent
@@ -211,6 +226,8 @@ Rectangle {
 
                 objectName: "inspectorTabBar"
                 width: parent.width
+                implicitHeight: 38
+                padding: 4
                 background: Rectangle {
                     color: Theme.menu
 
@@ -288,10 +305,10 @@ Rectangle {
                             objectName: "activePairTimeBlock"
                             visible: Boolean(control.controller && control.controller.activePairTimeInfo && control.controller.activePairTimeInfo.aligned)
                             width: parent.width
-                            height: visible ? activePairTimeColumn.implicitHeight + 16 : 0
-                            radius: 6
-                            color: "#0f1622"
-                            border.color: control.borderColor
+                            height: visible ? activePairTimeColumn.implicitHeight + 18 : 0
+                            radius: 8
+                            color: Theme.panelElevated
+                            border.color: Theme.border
                             border.width: 1
 
                             readonly property var pairInfo: control.controller ? control.controller.activePairTimeInfo : ({})
@@ -305,9 +322,9 @@ Rectangle {
 
                             Column {
                                 id: activePairTimeColumn
-                                spacing: 4
+                                spacing: 5
                                 x: 10
-                                y: 8
+                                y: 9
                                 width: parent.width - 20
 
                                 Label {
@@ -321,8 +338,9 @@ Rectangle {
                                     width: parent.width
                                     Label {
                                         text: qsTr("源 %1（基准）").arg(String.fromCharCode(65 + activePairTimeBlock.pSlot))
-                                        color: Theme.accent
+                                        color: Theme.sourceColor(activePairTimeBlock.pSlot)
                                         font.pixelSize: 11
+                                        font.weight: Font.DemiBold
                                     }
                                     Item {
                                         Layout.fillWidth: true
@@ -331,6 +349,7 @@ Rectangle {
                                         text: qsTr("第 %1 帧 (%2 ms)").arg(activePairTimeBlock.pFrame + 1).arg(activePairTimeBlock.pPts.toFixed(2))
                                         color: control.primaryTextColor
                                         font.pixelSize: 11
+                                        font.family: "Consolas"
                                     }
                                 }
 
@@ -338,8 +357,9 @@ Rectangle {
                                     width: parent.width
                                     Label {
                                         text: qsTr("源 %1（对比）").arg(String.fromCharCode(65 + activePairTimeBlock.sSlot))
-                                        color: Theme.accent
+                                        color: Theme.sourceColor(activePairTimeBlock.sSlot)
                                         font.pixelSize: 11
+                                        font.weight: Font.DemiBold
                                     }
                                     Item {
                                         Layout.fillWidth: true
@@ -348,6 +368,7 @@ Rectangle {
                                         text: qsTr("第 %1 帧 (%2 ms)").arg(activePairTimeBlock.sFrame + 1).arg(activePairTimeBlock.sPts.toFixed(2))
                                         color: control.primaryTextColor
                                         font.pixelSize: 11
+                                        font.family: "Consolas"
                                     }
                                 }
 
@@ -364,8 +385,9 @@ Rectangle {
                                     }
                                     Label {
                                         text: qsTr("%1 ms").arg((activePairTimeBlock.delta >= 0 ? "+" : "") + activePairTimeBlock.delta.toFixed(2))
-                                        color: Math.abs(activePairTimeBlock.delta) > 1.0 ? "#facc15" : control.mutedTextColor
+                                        color: Math.abs(activePairTimeBlock.delta) > 1.0 ? Theme.warning : control.mutedTextColor
                                         font.pixelSize: 11
+                                        font.family: "Consolas"
                                     }
                                 }
                             }
@@ -377,9 +399,9 @@ Rectangle {
                             visible: Boolean(control.controller && control.controller.currentInexactReason && control.controller.currentInexactReason.length > 0)
                             width: parent.width
                             height: visible ? inexactReasonCol.implicitHeight + 16 : 0
-                            radius: 6
-                            color: "#261c12"
-                            border.color: "#eab308"
+                            radius: 8
+                            color: Theme.warningPanel
+                            border.color: Theme.warningBorder
                             border.width: 1
 
                             Column {
@@ -391,7 +413,7 @@ Rectangle {
 
                                 Label {
                                     text: qsTr("⚠️ 无法精确对应原因")
-                                    color: "#fef08a"
+                                    color: Theme.warning
                                     font.pixelSize: 11
                                     font.weight: Font.DemiBold
                                 }
@@ -399,7 +421,7 @@ Rectangle {
                                 Label {
                                     width: parent.width
                                     text: control.controller ? control.controller.currentInexactReason : ""
-                                    color: "#fef9c3"
+                                    color: Theme.warningText
                                     font.pixelSize: 11
                                     wrapMode: Text.Wrap
                                 }
@@ -525,23 +547,24 @@ Rectangle {
                             visible: control.differenceMode && control.metrics !== null && control.metrics.available
                             width: parent.width
                             height: visible ? metricsColumn.implicitHeight + 20 : 0
-                            radius: 6
-                            color: "#0f1622"
-                            border.color: control.borderColor
+                            radius: 8
+                            color: Theme.panelElevated
+                            border.color: Theme.border
                             border.width: 1
 
                             Column {
                                 id: metricsColumn
 
-                                spacing: 3
+                                spacing: 4
                                 x: 10
                                 y: 10
                                 width: parent.width - 20
 
                                 Label {
                                     text: qsTr("当前帧指标 · %1").arg(control.metrics ? control.metrics.metricId : "")
-                                    color: control.mutedTextColor
+                                    color: Theme.accent
                                     font.pixelSize: 11
+                                    font.weight: Font.DemiBold
                                 }
 
                                 Repeater {
@@ -596,15 +619,15 @@ Rectangle {
                                 width: wipeSlider.horizontal ? wipeSlider.availableWidth : implicitWidth
                                 height: wipeSlider.horizontal ? implicitHeight : wipeSlider.availableHeight
                                 implicitWidth: 200
-                                implicitHeight: 6
-                                radius: 3
+                                implicitHeight: 4
+                                radius: 2
                                 color: Theme.menuBorder
 
                                 Rectangle {
                                     y: wipeSlider.horizontal ? 0 : wipeSlider.visualPosition * parent.height
-                                    width: wipeSlider.horizontal ? wipeSlider.position * parent.width : 6
-                                    height: wipeSlider.horizontal ? 6 : wipeSlider.position * parent.height
-                                    radius: 3
+                                    width: wipeSlider.horizontal ? wipeSlider.position * parent.width : 4
+                                    height: wipeSlider.horizontal ? 4 : wipeSlider.position * parent.height
+                                    radius: 2
                                     color: Theme.accent
                                 }
                             }
@@ -614,10 +637,10 @@ Rectangle {
                                 y: wipeSlider.topPadding + (wipeSlider.horizontal ? (wipeSlider.availableHeight - height) / 2 : wipeSlider.visualPosition * (wipeSlider.availableHeight - height))
                                 implicitWidth: 16
                                 implicitHeight: 16
-                                radius: width / 2
-                                color: wipeSlider.pressed ? Theme.controlPressed : Theme.accent
-                                border.width: wipeSlider.activeFocus ? 2 : 1
-                                border.color: wipeSlider.activeFocus ? Theme.strongFocus : Theme.primaryText
+                                radius: 8
+                                color: "#ffffff"
+                                border.width: wipeSlider.pressed ? 4 : (wipeSlider.activeFocus ? 3 : 2.5)
+                                border.color: Theme.accent
                             }
                         }
 
@@ -775,21 +798,58 @@ Rectangle {
 
                                 required property var modelData
                                 width: infoColumn.width
-                                height: mediaInfo.implicitHeight + 20
-                                radius: 6
-                                color: Theme.raisedPanel
-                                border.color: control.borderColor
+                                height: mediaCardCol.implicitHeight + 20
+                                radius: 8
+                                color: Theme.panelElevated
+                                border.color: Theme.border
+                                border.width: 1
 
-                                Label {
-                                    id: mediaInfo
+                                Column {
+                                    id: mediaCardCol
                                     width: parent.width - 20
                                     x: 10
                                     y: 10
-                                    wrapMode: Text.Wrap
-                                    readonly property string decoderFallbackSuffix: mediaCard.modelData.decodeFallbackReason ? qsTr(" (%1)").arg(String(mediaCard.modelData.decodeFallbackReason)) : ""
-                                    text: qsTr("源 %1 · %2\n%3 × %4 · %5 · %6 帧\n%7 · %8 · %9 位\n%10 · %11 · %12\n解码：%13%14 · 角色：%15").arg(String(mediaCard.modelData.label)).arg(String(mediaCard.modelData.filename)).arg(Number(mediaCard.modelData.width)).arg(Number(mediaCard.modelData.height)).arg(String(mediaCard.modelData.frameRate)).arg(Number(mediaCard.modelData.frameCount)).arg(String(mediaCard.modelData.timingMode)).arg(String(mediaCard.modelData.codec)).arg(Number(mediaCard.modelData.bitDepth)).arg(String(mediaCard.modelData.pixelFormat)).arg(String(mediaCard.modelData.colorMatrix)).arg(String(mediaCard.modelData.colorRange)).arg(String(mediaCard.modelData.decodeBackend)).arg(decoderFallbackSuffix).arg(String(mediaCard.modelData.role))
-                                    color: control.mutedTextColor
-                                    font.pixelSize: 11
+                                    spacing: 6
+
+                                    RowLayout {
+                                        width: parent.width
+                                        spacing: 6
+
+                                        Rectangle {
+                                            implicitWidth: 18
+                                            implicitHeight: 18
+                                            radius: 4
+                                            color: Theme.sourceBackground(Theme.slotForLabel(mediaCard.modelData.label))
+                                            border.width: 1
+                                            border.color: Theme.sourceBorder(Theme.slotForLabel(mediaCard.modelData.label))
+                                            Text {
+                                                anchors.centerIn: parent
+                                                text: String(mediaCard.modelData.label || "")
+                                                color: Theme.sourceColor(Theme.slotForLabel(mediaCard.modelData.label))
+                                                font.pixelSize: 11
+                                                font.bold: true
+                                            }
+                                        }
+
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: String(mediaCard.modelData.filename || "")
+                                            color: Theme.primaryText
+                                            font.pixelSize: 12
+                                            font.weight: Font.DemiBold
+                                            elide: Text.ElideMiddle
+                                        }
+                                    }
+
+                                    Label {
+                                        id: mediaInfo
+                                        width: parent.width
+                                        wrapMode: Text.Wrap
+                                        readonly property string decoderFallbackSuffix: mediaCard.modelData.decodeFallbackReason ? qsTr(" (%1)").arg(String(mediaCard.modelData.decodeFallbackReason)) : ""
+                                        text: qsTr("%1 × %2 · %3 · %4 帧\n%5 · %6 · %7 位\n%8 · %9 · %10\n解码：%11%12 · 角色：%13").arg(Number(mediaCard.modelData.width)).arg(Number(mediaCard.modelData.height)).arg(String(mediaCard.modelData.frameRate)).arg(Number(mediaCard.modelData.frameCount)).arg(String(mediaCard.modelData.timingMode)).arg(String(mediaCard.modelData.codec)).arg(Number(mediaCard.modelData.bitDepth)).arg(String(mediaCard.modelData.pixelFormat)).arg(String(mediaCard.modelData.colorMatrix)).arg(String(mediaCard.modelData.colorRange)).arg(String(mediaCard.modelData.decodeBackend)).arg(decoderFallbackSuffix).arg(String(mediaCard.modelData.role))
+                                        color: control.mutedTextColor
+                                        font.pixelSize: 11
+                                    }
                                 }
                             }
                         }

@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Controls
+import "VcsTheme.js" as Theme
 
 Item {
     id: control
@@ -68,10 +69,13 @@ Item {
     component TransportButton: VcsToolButton {
         id: button
 
-        implicitWidth: control.compact ? 38 : 48
-        implicitHeight: control.compact ? 34 : 42
-        iconExtent: control.compact ? 20 : 24
+        implicitWidth: control.compact ? 36 : 44
+        implicitHeight: control.compact ? 32 : 38
+        iconExtent: control.compact ? 18 : 22
+        controlRadius: control.compact ? 6 : 8
         toolTipDelay: 650
+        // Centred on the taller play button so every icon in the row shares one centre line.
+        anchors.verticalCenter: parent.verticalCenter
     }
 
     // In/out range chip. Sized from the label text instead of a fixed width so the four short
@@ -91,10 +95,22 @@ Item {
 
         implicitWidth: chipLabel.implicitWidth + (control.compact ? 16 : 20)
         implicitHeight: control.compact ? 24 : 28
-        radius: 4
-        color: !chip.chipEnabled ? "#0f172a" : (chip.chipActive ? "#2563eb" : (chip.prominent ? (chipMouse.containsMouse ? "#065f46" : "#064e3b") : (chipMouse.containsMouse ? "#26364d" : "#1e293b")))
-        border.color: !chip.chipEnabled ? "#1e293b" : (chip.chipActive ? "#3b82f6" : (chip.prominent ? "#059669" : "#334155"))
-        opacity: chip.chipEnabled ? 1.0 : 0.5
+        radius: Theme.radiusMedium
+        // Neutral chips read as ordinary controls; export keeps a green edge because it is the only
+        // chip that writes a file.
+        color: !chip.chipEnabled ? Theme.disabledPanel : (chip.chipActive ? Theme.accentFill : (chipMouse.containsMouse ? Theme.controlHover : Theme.control))
+        border.color: !chip.chipEnabled ? Theme.disabledBorder : (chip.chipActive ? Theme.accent : (chip.prominent ? (chipMouse.containsMouse ? Theme.successBorder : Theme.successFill) : (chipMouse.containsMouse ? Theme.borderHover : Theme.controlBorder)))
+
+        Behavior on color {
+            ColorAnimation {
+                duration: 120
+            }
+        }
+        Behavior on border.color {
+            ColorAnimation {
+                duration: 120
+            }
+        }
 
         Accessible.role: Accessible.Button
         Accessible.name: chip.chipText
@@ -107,7 +123,7 @@ Item {
             text: chip.chipText
             font.pixelSize: control.compact ? 11 : 12
             font.weight: chip.chipActive || chip.prominent ? Font.DemiBold : Font.Normal
-            color: !chip.chipEnabled ? "#64748b" : (chip.chipActive ? "#ffffff" : (chip.prominent ? "#34d399" : "#94a3b8"))
+            color: !chip.chipEnabled ? Theme.disabledText : (chip.chipActive ? Theme.inverseText : (chip.prominent ? Theme.success : (chipMouse.containsMouse ? Theme.primaryText : Theme.secondaryText)))
         }
 
         MouseArea {
@@ -125,6 +141,60 @@ Item {
 
         ToolTip.visible: chip.chipHelp.length > 0 && chipMouse.containsMouse
         ToolTip.text: chip.chipHelp
+        ToolTip.delay: 650
+    }
+
+    // One segment of the playback continuity switch. Same toggle language as the compare mode
+    // bar: transparent at rest, a quiet wash on hover, and the checked tint with an accent edge.
+    component ContinuityOption: Rectangle {
+        id: option
+
+        property int policyCode: 0
+        property string optionText: ""
+        property string optionHelp: ""
+        readonly property bool isSelected: control.playbackContinuityPolicy === option.policyCode
+
+        implicitWidth: control.compact ? 58 : 66
+        implicitHeight: control.compact ? 22 : 28
+        radius: Theme.radiusSmall
+        color: option.isSelected ? Theme.controlChecked : (optionMouse.pressed ? Theme.fluentPressed : (optionMouse.containsMouse ? Theme.fluentHover : "transparent"))
+        border.width: 1
+        border.color: option.isSelected ? Theme.accent : "transparent"
+
+        Behavior on color {
+            ColorAnimation {
+                duration: 100
+            }
+        }
+
+        Accessible.role: Accessible.RadioButton
+        Accessible.name: option.optionText
+        Accessible.description: option.optionHelp
+        Accessible.checkable: true
+        Accessible.checked: option.isSelected
+
+        Text {
+            anchors.centerIn: parent
+            text: option.optionText
+            font.pixelSize: control.compact ? 11 : 12
+            font.weight: option.isSelected ? Font.DemiBold : Font.Normal
+            color: option.isSelected ? Theme.primaryText : (optionMouse.containsMouse ? Theme.primaryText : Theme.mutedText)
+        }
+
+        MouseArea {
+            id: optionMouse
+
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: {
+                control.continuityPolicyRequested(option.policyCode);
+                control.restoreFocus();
+            }
+        }
+
+        ToolTip.visible: option.optionHelp.length > 0 && optionMouse.containsMouse
+        ToolTip.text: option.optionHelp
         ToolTip.delay: 650
     }
 
@@ -187,7 +257,11 @@ Item {
                 id: playbackButton
 
                 objectName: "playbackButton"
-                implicitWidth: control.compact ? 42 : 54
+                prominent: true
+                implicitWidth: control.compact ? 46 : 56
+                implicitHeight: control.compact ? 36 : 44
+                iconExtent: control.compact ? 20 : 24
+                controlRadius: control.compact ? 18 : 22
                 iconSource: control.playing ? "qrc:/icons/pause.svg" : "qrc:/icons/play.svg"
                 helpText: control.playing ? qsTr("暂停\n快捷键：空格") : qsTr("播放\n快捷键：空格")
                 enabled: control.playing ? control.canPause : control.canPlay
@@ -212,7 +286,11 @@ Item {
                 id: playbackRateCombo
 
                 objectName: "playbackRateCombo"
-                implicitWidth: control.compact ? 58 : 68
+                // Sized from the widest rate label: a fixed 58/68 px left the current rate elided to "…".
+                implicitWidth: Math.ceil(rateLabelMetrics.advanceWidth) + playbackRateCombo.leftPadding + playbackRateCombo.rightPadding + 4
+                // Same height as the continuity switch beside it, so the row's boxed controls line up.
+                implicitHeight: control.compact ? 28 : 34
+                anchors.verticalCenter: parent.verticalCenter
                 model: [qsTr("0.25×"), qsTr("0.5×"), qsTr("1×"), qsTr("1.5×"), qsTr("2×"), qsTr("4×")]
                 currentIndex: {
                     const rate = control.playbackRate;
@@ -233,6 +311,13 @@ Item {
                     const ladder = [0.25, 0.5, 1, 1.5, 2, 4];
                     control.playbackRateRequested(ladder[index]);
                     control.restoreFocus();
+                }
+
+                TextMetrics {
+                    id: rateLabelMetrics
+
+                    font: playbackRateCombo.font
+                    text: qsTr("0.25×")
                 }
             }
             TransportButton {
@@ -268,66 +353,35 @@ Item {
                 }
             }
 
-            Row {
-                id: continuityGroup
-
+            // Segmented switch: both options share one well so they read as a single choice.
+            Rectangle {
                 objectName: "continuityPolicyToggleGroup"
-                spacing: 2
+                implicitWidth: continuityGroup.implicitWidth + 6
+                implicitHeight: continuityGroup.implicitHeight + 6
+                radius: Theme.radiusMedium
+                color: Theme.window
+                border.width: 1
+                border.color: Theme.controlBorder
                 anchors.verticalCenter: parent.verticalCenter
 
-                Rectangle {
-                    id: realTimeBtn
+                Row {
+                    id: continuityGroup
 
-                    objectName: "realTimeContinuityButton"
-                    implicitWidth: control.compact ? 60 : 70
-                    implicitHeight: control.compact ? 28 : 34
-                    radius: 4
-                    color: control.playbackContinuityPolicy === 1 ? "#2563eb" : "#1e293b"
-                    border.color: control.playbackContinuityPolicy === 1 ? "#3b82f6" : "#334155"
+                    spacing: 2
+                    anchors.centerIn: parent
 
-                    Text {
-                        anchors.centerIn: parent
-                        text: qsTr("流畅观看")
-                        font.pixelSize: control.compact ? 11 : 12
-                        font.weight: control.playbackContinuityPolicy === 1 ? Font.DemiBold : Font.Normal
-                        color: control.playbackContinuityPolicy === 1 ? "#ffffff" : "#94a3b8"
+                    ContinuityOption {
+                        objectName: "realTimeContinuityButton"
+                        policyCode: 1
+                        optionText: qsTr("流畅观看")
+                        optionHelp: qsTr("保持实时节奏；解码跟不上时整组跳帧")
                     }
 
-                    MouseArea {
-                        anchors.fill: parent
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            control.continuityPolicyRequested(1);
-                            control.restoreFocus();
-                        }
-                    }
-                }
-
-                Rectangle {
-                    id: reviewEveryFrameBtn
-
-                    objectName: "reviewEveryFrameContinuityButton"
-                    implicitWidth: control.compact ? 60 : 70
-                    implicitHeight: control.compact ? 28 : 34
-                    radius: 4
-                    color: control.playbackContinuityPolicy === 0 ? "#2563eb" : "#1e293b"
-                    border.color: control.playbackContinuityPolicy === 0 ? "#3b82f6" : "#334155"
-
-                    Text {
-                        anchors.centerIn: parent
-                        text: qsTr("逐帧检查")
-                        font.pixelSize: control.compact ? 11 : 12
-                        font.weight: control.playbackContinuityPolicy === 0 ? Font.DemiBold : Font.Normal
-                        color: control.playbackContinuityPolicy === 0 ? "#ffffff" : "#94a3b8"
-                    }
-
-                    MouseArea {
-                        anchors.fill: parent
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            control.continuityPolicyRequested(0);
-                            control.restoreFocus();
-                        }
+                    ContinuityOption {
+                        objectName: "reviewEveryFrameContinuityButton"
+                        policyCode: 0
+                        optionText: qsTr("逐帧检查")
+                        optionHelp: qsTr("每一帧都显示，不跳帧；负载高时播放会变慢")
                     }
                 }
             }
@@ -415,7 +469,7 @@ Item {
                     const frameCount = control.rangeOutFrame - control.rangeInFrame + 1;
                     return qsTr("入 %1 · 出 %2 · %3 帧%4").arg(inText).arg(outText).arg(frameCount).arg(control.rangeLoopActive ? qsTr(" · 循环") : "");
                 }
-                color: control.hasCompleteRange ? (control.rangeLoopActive ? "#7dd3fc" : "#9fc3ff") : "#64748b"
+                color: control.hasCompleteRange ? Theme.accentText : Theme.mutedText
                 font.family: "Consolas"
                 font.pixelSize: control.compact ? 10 : 11
                 // Cap instead of overflowing: the row has no clip, and a three-digit frame count
@@ -437,7 +491,7 @@ Item {
             Text {
                 text: qsTr("相邻帧：")
                 font.pixelSize: 10
-                color: "#64748b"
+                color: Theme.mutedText
                 anchors.verticalCenter: parent.verticalCenter
             }
 
@@ -454,21 +508,24 @@ Item {
 
                     implicitWidth: adjacentItem.isCurrent ? 58 : 30
                     implicitHeight: 20
-                    radius: 3
-                    color: adjacentItem.isCurrent ? "#3b82f6" : (adjacentItem.isValid ? "#1e293b" : "#0f172a")
-                    border.color: adjacentItem.isCurrent ? "#60a5fa" : (adjacentItem.isValid ? "#334155" : "#1e293b")
-                    opacity: adjacentItem.isValid ? 1.0 : 0.35
+                    radius: Theme.radiusSmall
+                    color: adjacentItem.isCurrent ? Theme.accentFill : (!adjacentItem.isValid ? Theme.disabledPanel : (adjacentMouse.containsMouse ? Theme.controlHover : Theme.control))
+                    border.color: adjacentItem.isCurrent ? Theme.accent : (!adjacentItem.isValid ? Theme.disabledBorder : (adjacentMouse.containsMouse ? Theme.borderHover : Theme.controlBorder))
+                    opacity: adjacentItem.isValid ? 1.0 : 0.4
 
                     Text {
                         anchors.centerIn: parent
                         text: adjacentItem.isCurrent ? qsTr("当前 %1").arg(adjacentItem.targetFrame + 1) : (adjacentItem.delta > 0 ? "+" + adjacentItem.delta : String(adjacentItem.delta))
                         font.pixelSize: 10
                         font.weight: adjacentItem.isCurrent ? Font.DemiBold : Font.Normal
-                        color: adjacentItem.isCurrent ? "#ffffff" : "#94a3b8"
+                        color: adjacentItem.isCurrent ? Theme.inverseText : (adjacentMouse.containsMouse ? Theme.primaryText : Theme.mutedText)
                     }
 
                     MouseArea {
+                        id: adjacentMouse
+
                         anchors.fill: parent
+                        hoverEnabled: true
                         enabled: !adjacentItem.isCurrent && adjacentItem.isValid
                         cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
                         onClicked: {

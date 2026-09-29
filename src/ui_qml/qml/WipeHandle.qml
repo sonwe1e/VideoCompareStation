@@ -28,46 +28,71 @@ Item {
             positionRequested(Math.max(0, Math.min(1, point.x / Math.max(1, surfaceItem.width))));
     }
 
+    // A faint dark halo keeps the white split line visible over bright footage.
     Rectangle {
-        id: rail
-
-        objectName: "wipeRail"
-        width: 3
+        width: 4
         height: parent.height
-        color: Theme.inverseText
+        color: "#4d000000"
         anchors.centerIn: parent
     }
 
     Rectangle {
+        id: rail
+
+        objectName: "wipeRail"
+        width: 2
+        height: parent.height
+        color: drag.active || hover.hovered ? Theme.accent : Theme.inverseText
+        opacity: drag.active || hover.hovered ? 1.0 : 0.8
+        anchors.centerIn: parent
+
+        Behavior on color {
+            ColorAnimation {
+                duration: 120
+            }
+        }
+    }
+
+    Rectangle {
+        id: knob
         objectName: "wipeKnob"
         width: 20
         height: 84
         radius: 10
-        scale: drag.active ? 1.08 : 1.0
-        color: hover.hovered ? "#ff31445d" : "#ff233246"
-        border.width: 2
-        border.color: Theme.inverseText
+        // No hover scale: a scaled edge and 2 px grip bars land on fractional pixels and blur.
+        color: drag.active ? Theme.controlChecked : (hover.hovered ? Theme.controlHover : Theme.raisedPanel)
+        border.width: 1.5
+        border.color: drag.active || hover.hovered ? Theme.accent : Theme.mutedText
         anchors.centerIn: parent
 
-        Behavior on scale {
-            NumberAnimation {
-                duration: 90
+        Behavior on color {
+            ColorAnimation {
+                duration: 120
+            }
+        }
+        Behavior on border.color {
+            ColorAnimation {
+                duration: 120
             }
         }
 
-        Column {
+        // Grip: two short bars read as "drag me" without the cramped arrow glyphs.
+        Row {
             spacing: 4
             anchors.centerIn: parent
 
-            Repeater {
-                model: 3
+            Rectangle {
+                width: 2
+                height: 20
+                radius: 1
+                color: drag.active || hover.hovered ? Theme.primaryText : Theme.secondaryText
+            }
 
-                Rectangle {
-                    width: 4
-                    height: 4
-                    radius: 2
-                    color: Theme.inverseText
-                }
+            Rectangle {
+                width: 2
+                height: 20
+                radius: 1
+                color: drag.active || hover.hovered ? Theme.primaryText : Theme.secondaryText
             }
         }
     }
