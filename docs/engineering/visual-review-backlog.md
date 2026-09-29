@@ -1,7 +1,60 @@
 # 视觉审查问题台账
 
-更新：2026-09-28。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-09-29。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+
+## 2026-09-29 审查外壳 slate 配色与交互收口（基线 `e5d811e` v2.0.2 + 分支 `feat/slate-ui-polish`）
+
+把视频与图片两个工作区统一到一套 slate 语义色，并在真实窗口里逐屏修掉对齐、截断与误报色，
+交互语义与快捷键不变。三个提交：`efab1e6`（配色与逐屏修正）、`1793b02`（原生标题栏）、
+`63b0415`（二次启动唤回最小化窗口）。
+
+- **语义色集中**：`VcsTheme.js` 承载整套调色板——表面由 canvas 到 raisedPanel 逐级提亮；控件四态
+  （checked 带强调色填充，hover 不带）；强调色拆成边框 / 填充 / 文字三值，白字落在 `accentFill` 上
+  保持 AA 对比度；另有成功 / 警告两族、画面上的半透明浮板色与圆角 token。源身份色跟随应用图标
+  （A 天蓝、B 橙、C 紫），统一经 `sourceColor/sourceBackground/sourceBorder` 取色，芯片、徽标与
+  身份牌不会再给同一槽位不同颜色。菜单栏、源条、对比栏、视口浮层、播放条、时间线、缩略图、
+  检查器、图片工作区、文件夹侧栏、拖放确认框、空状态与快捷键浮层都改读 token。
+- **逐屏走查修掉的问题**：倍速下拉原先固定 58/68 px 宽，当前倍速被省略成「…」，现按最宽标签
+  「0.25×」用 `TextMetrics` 定宽，高度与旁边的连续性开关一致（28/34）；播放条按钮以较高的播放键为
+  基准垂直居中，整行共用一条中线；时间映射读数原是压在身份牌上的红框横幅，现为身份牌下方的中性
+  浮板（`stageBannerTop` 62/12），红色只留给真正的失败横幅；分析徽标的精确度着色只在差异模式
+  生效，并排查看不再出现假警告；时间线入出点区间的透明度改放进颜色 alpha 而不是 `opacity`，
+  叠在上面的括号保持完全不透明。
+- **原生标题栏**：Windows 上向 DWM 请求沉浸式深色边框与圆角，标题栏底色 / 文字色取
+  `Theme.headerBackground`（`#111722`）/ `Theme.primaryText`（`#f1f5f9`），与菜单栏读成同一条
+  页眉，`VcsTheme.js` 注明两处须同改。不请求 Mica：窗口自绘不透明背景，Mica 透不出来。冒烟模式
+  跳过该调用，UI 桥接库新增链接 `dwmapi`。
+- **二次启动唤回窗口**：启动代理把第二次启动的文件交给已运行实例，而它的 `activateWindow()` 只调
+  `show()`/`raise()`/`requestActivate()`，最小化的窗口会一直停在最小化状态，文件在看不见的地方
+  打开。现只清除最小化标志（最大化 / 全屏保持原样），Windows 上首次显示与交接时另调
+  `SetForegroundWindow`。
+- **坑**：`Row` 的子项默认顶对齐，高度不同的控件并排时要各自写
+  `anchors.verticalCenter: parent.verticalCenter`，否则整行上沿对齐、中线错开；下拉的 contentItem
+  是自定义 Text 时，定宽要用 `TextMetrics` 实测最宽标签，不能指望控件自己估宽；截图若落在
+  `ColorAnimation`（100/120 ms）起点，拍到的是过渡前的底色，判断状态色要等过渡结束——本轮就因此
+  一度数错了编辑态的实心主按钮数量。
+- **本轮真实门禁**：`pwsh tools/build/build.ps1 -Preset dev` 通过；`-Target format-check` 通过；
+  `-Target lint` 通过（qmllint 零告警）；`ctest -R '^ui\.'` **267/267**（4 项禁用、2 项跳过，均为
+  既有状态）；中间提交 `1793b02` 单独编译 `dvs_ui_d3d11_bridge` 通过。`tst_drop_confirmation_dialog`
+  改为期待新的页头色 `Theme.panel`。
+- **复核 4 项禁用用例**（`--gtest_also_run_disabled_tests` 直接运行）：RangeLoop 用例驱动的是假内核，
+  判定 `presentedOutsideRange` 为真；真实保证由 `PlaybackCoordinatorTests` 的 5 个区间用例覆盖
+  （5/5 通过），该用例已过时、应删除。WipeHandle 与 Timeline 的无障碍尚未实现（`Accessible.role`
+  0 ≠ 8，WipeHandle 不能 Tab 聚焦，Timeline 的 value 0 ≠ 5）。拖动 scrub 合并未实现（`seekCommands`
+  19 ≠ `scrubCount` 20），属后续工作。另：连续性开关从来不能 Tab 聚焦，菜单里有等价入口。
+- **真实窗口试用**：用户启动构建体验后反馈「之前一些没解决的问题，现在都修好了」。
+- **证据**：`out/evidence/ui-polish-20260929/` 12 张——`transport-range-row(-min-width)`、
+  `transport-export-chip`、`clip-export-dialog(-min-width)`、`image-edit-header(-min-width)`、
+  `image-edit-scale-dialog`、`image-edit-fill-dialog`、`image-fade-mode`、`high-depth-alpha`、
+  `image-default-checkerboard`（1280 px 默认宽与 960 px 最小宽）。09-26 的旧图留在 `out/evidence/`
+  根目录作前后对照。
+- **剩余限制（下一轮）**：QML 里仍有约 100 处写死的十六进制色（`ComparisonViewport`、
+  `ImageWorkspace`、`Main`、`ClipExportDialog`、`TimelineTracks` 等；画笔色板与棋盘格是内容色，
+  应保留字面量）；提示气泡与意图队列的 `topMargin` 固定为 58，会压住图片工具栏 B 行和视频对比栏；
+  图片编辑态「打开图片… / 结束编辑 / 另存副本…」三个同时是实心主按钮；视频视口身份牌宽度只随面板
+  （80–280 px），不像图片身份牌那样按内容收拢；二次启动的前台交接未经跨进程实测，第二次启动没有为
+  接收进程调用 `AllowSetForegroundWindow`，前台锁仍可能把交接降级为任务栏闪烁。
 
 ## 2026-09-28 资源管理器右键视频出现两个入口，且两个都报「启动动作无法打开」
 
