@@ -367,6 +367,14 @@ public:
         markStartupMilestone("post-show");
         window_->raise();
         window_->requestActivate();
+#if defined(_WIN32)
+        if (!options_.smokeMode) {
+            // Also ask the shell directly so a launch from Explorer lands in front.
+            if (const auto hwnd = reinterpret_cast<HWND>(window_->winId()); hwnd != nullptr) {
+                ::SetForegroundWindow(hwnd);
+            }
+        }
+#endif
         window_->requestUpdate();
         surface_->update();
         if (window_->screen() != nullptr) {
@@ -444,9 +452,21 @@ public:
         if (window_ == nullptr) {
             return;
         }
+        // Restore a minimised window without touching its other states: a maximised or
+        // full-screen review must stay that way when another file is sent to it.
+        if (Qt::WindowStates states = window_->windowStates();
+            states.testFlag(Qt::WindowMinimized)) {
+            states.setFlag(Qt::WindowMinimized, false);
+            window_->setWindowStates(states);
+        }
         window_->show();
         window_->raise();
         window_->requestActivate();
+#if defined(_WIN32)
+        if (const auto hwnd = reinterpret_cast<HWND>(window_->winId()); hwnd != nullptr) {
+            ::SetForegroundWindow(hwnd);
+        }
+#endif
     }
 
     [[nodiscard]] bool openSourcesForAutomation(const QList<QUrl>& sources) noexcept {
