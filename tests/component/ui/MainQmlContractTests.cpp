@@ -485,6 +485,17 @@ public:
         }
     }
 
+    // settle() only drains the queue, so a 100-120 ms colour Behavior is still at its start
+    // colour when grabWindow() runs; evidence captures wait the transitions out first.
+    void settleAnimations(const int milliseconds = 250) {
+        QElapsedTimer timer;
+        timer.start();
+        while (timer.elapsed() < milliseconds) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+            QThread::msleep(5U);
+        }
+    }
+
     template <typename Predicate>
     [[nodiscard]] bool waitUntil(Predicate predicate, const int timeoutMilliseconds = 8000) {
         QElapsedTimer timer;
@@ -3273,19 +3284,31 @@ TEST(MainQmlContractTests, ImageEditScaleDialogResizesTheWorkingCopy) {
         harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditScaleButton"));
     auto* const undoButton =
         harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditUndoButton"));
+    auto* const openButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageOpenButton"));
+    auto* const saveCopyButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditSaveCopyButton"));
     ASSERT_NE(startButton, nullptr);
     ASSERT_NE(scaleButton, nullptr);
     ASSERT_NE(undoButton, nullptr);
+    ASSERT_NE(openButton, nullptr);
+    ASSERT_NE(saveCopyButton, nullptr);
+    EXPECT_TRUE(openButton->property("prominent").toBool());
 
     ASSERT_TRUE(QMetaObject::invokeMethod(startButton, "clicked"));
     harness.settle();
     EXPECT_TRUE(scaleButton->isVisible());
+    // One filled button per view: while editing, 另存副本… is the primary action and
+    // 打开图片… steps back to a neutral button.
+    EXPECT_FALSE(openButton->property("prominent").toBool());
+    EXPECT_TRUE(saveCopyButton->property("prominent").toBool());
 
     // Optional evidence capture for the visible QML change: the header row after the tool
     // trim, still inside edit mode so every action for this step is on screen.
     const auto evidenceDirectory = qEnvironmentVariable("DVS_REVIEW_EVIDENCE_DIR");
     if (!evidenceDirectory.isEmpty()) {
         ASSERT_TRUE(QDir().mkpath(evidenceDirectory));
+        harness.settleAnimations();
         ASSERT_TRUE(harness.window->grabWindow().save(
             QDir(evidenceDirectory).filePath(QStringLiteral("image-edit-header.png"))));
         // The header row is the widest element in edit mode; it must stay complete at the
@@ -4793,6 +4816,7 @@ TEST(MainQmlContractTests, ImageWorkspaceManualFlickerContract) {
     const auto evidenceDirectory = qEnvironmentVariable("DVS_REVIEW_EVIDENCE_DIR");
     if (!evidenceDirectory.isEmpty()) {
         ASSERT_TRUE(QDir().mkpath(evidenceDirectory));
+        harness.settleAnimations();
         ASSERT_TRUE(harness.window->grabWindow().save(
             QDir(evidenceDirectory).filePath(QStringLiteral("image-fade-mode.png"))));
     }

@@ -32,7 +32,6 @@ ApplicationWindow {
     readonly property color accentColor: Theme.accent
     readonly property color mutedTextColor: Theme.mutedText
     readonly property color primaryTextColor: Theme.primaryText
-    readonly property color errorColor: Theme.error
 
     palette {
         window: root.panelColor
@@ -2675,7 +2674,6 @@ ApplicationWindow {
         accentColor: root.accentColor
         primaryTextColor: root.primaryTextColor
         mutedTextColor: root.mutedTextColor
-        errorColor: root.errorColor
         chromeVisible: root.chromeVisible
         alignmentModeName: root.controller ? root.controller.alignmentModeName : ""
         inexactReason: root.controller ? root.controller.currentInexactReason : ""
@@ -2950,8 +2948,8 @@ ApplicationWindow {
         visible: root.issueLogPanelVisible && root.issueLogModel
         z: 60
         width: 320
-        color: "#161a1f"
-        border.color: "#3a4450"
+        color: Theme.panel
+        border.color: Theme.menuBorder
         border.width: 1
         radius: 6
         anchors {
@@ -2974,7 +2972,7 @@ ApplicationWindow {
 
                 Text {
                     text: qsTr("问题记录")
-                    color: "#e8eef5"
+                    color: root.primaryTextColor
                     font.pixelSize: 13
                     font.weight: Font.DemiBold
                     anchors.verticalCenter: parent.verticalCenter
@@ -2994,7 +2992,7 @@ ApplicationWindow {
                 width: parent.width
                 wrapMode: Text.Wrap
                 text: root.issueLogModel ? root.issueLogModel.statusText : ""
-                color: "#9fb0c0"
+                color: root.mutedTextColor
                 font.pixelSize: 11
                 objectName: "issueLogStatusText"
             }
@@ -3003,7 +3001,7 @@ ApplicationWindow {
                 wrapMode: Text.Wrap
                 visible: root.issueLogModel && root.issueLogModel.lastError.length > 0
                 text: root.issueLogModel ? root.issueLogModel.lastError : ""
-                color: "#f0a0a0"
+                color: Theme.errorText
                 font.pixelSize: 11
                 objectName: "issueLogErrorText"
             }
@@ -3023,20 +3021,20 @@ ApplicationWindow {
 
                     width: issueLogList.width
                     height: 44
-                    color: "#1e252d"
-                    border.color: "#33404d"
+                    color: Theme.raisedPanel
+                    border.color: Theme.border
                     radius: 4
                     Column {
                         anchors.fill: parent
                         anchors.margins: 6
                         Text {
                             text: root.issueLogModel ? String(root.issueLogModel.issueAt(issueLogRow.index).summary || "") : ""
-                            color: "#d7e2ec"
+                            color: root.primaryTextColor
                             font.pixelSize: 12
                         }
                         Text {
                             text: root.issueLogModel ? String(root.issueLogModel.issueAt(issueLogRow.index).note || "") : ""
-                            color: "#8a9aab"
+                            color: root.mutedTextColor
                             font.pixelSize: 10
                             elide: Text.ElideRight
                             width: parent.width
@@ -3223,124 +3221,217 @@ ApplicationWindow {
         onViewerFocusRequested: root.returnFocusToViewer()
     }
 
-    Rectangle {
-        id: intentQueuePanel
+    // Transient notices share one stack at the bottom of the stage, above the stage's own
+    // bottom controls and a floating transport, so they never cover the header toolbars. With
+    // the chrome hidden the stack sits under the restore pill, clear of the immersive HUD.
+    Column {
+        id: notificationStack
 
-        readonly property var runningIntent: root.shell ? root.shell.activeIntent : ({})
-        readonly property var queued: root.shell ? root.shell.queuedIntents : []
-        visible: Number(runningIntent.id || 0) > 0 || queued.length > 0
-        z: 890
-        width: 286
-        height: queueColumn.implicitHeight + 20
-        radius: 7
-        color: "#f21d2635"
-        border.color: root.borderColor
-        anchors {
-            top: parent.top
-            right: parent.right
-            topMargin: root.chromeVisible ? 58 : 18
-            rightMargin: 18
+        objectName: "notificationStack"
+        readonly property real stageLeft: root.imageWorkspaceActive ? imageWorkspaceLoader.x : viewportFrame.x
+        readonly property real stageRight: {
+            if (root.imageWorkspaceActive)
+                return imageWorkspaceLoader.x + imageWorkspaceLoader.width;
+            return root.drawerMode ? alignmentBar.x : viewportFrame.x + viewportFrame.width;
         }
-
-        Column {
-            id: queueColumn
-
-            spacing: 7
-            anchors {
-                left: parent.left
-                right: parent.right
-                top: parent.top
-                margins: 10
+        readonly property real stageFloor: {
+            if (root.imageWorkspaceActive) {
+                const inset = root.imageWorkspace ? root.imageWorkspace.bottomControlsInset : 0;
+                return imageWorkspaceLoader.y + imageWorkspaceLoader.height - inset;
             }
+            const viewportFloor = viewportFrame.y + viewportFrame.height - viewportFrame.bottomControlsInset;
+            return transport.visible && !root.transportDocked ? Math.min(viewportFloor, transport.y) : viewportFloor;
+        }
+        readonly property real noticeWidth: Math.max(0, Math.min(560, (root.chromeVisible ? notificationStack.stageRight - notificationStack.stageLeft : root.width) - 48))
+
+        z: 990
+        spacing: 8
+        x: Math.round((root.chromeVisible ? (notificationStack.stageLeft + notificationStack.stageRight) / 2 : root.width / 2) - notificationStack.width / 2)
+        y: Math.round(root.chromeVisible ? notificationStack.stageFloor - 12 - notificationStack.height : chromeRestorePill.y + chromeRestorePill.height + 10)
+
+        Rectangle {
+            visible: root.intentMessage.length > 0
+            width: Math.min(notificationStack.noticeWidth, intentToastText.implicitWidth + 32)
+            height: intentToastText.paintedHeight + 20
+            radius: Theme.radiusLarge
+            color: Theme.oscGlass
+            border.color: Theme.oscBorder
+            anchors.horizontalCenter: parent.horizontalCenter
 
             Text {
-                visible: Number(intentQueuePanel.runningIntent.id || 0) > 0
-                text: qsTr("处理中 · %1").arg(root.messageCatalog.intentKindText(intentQueuePanel.runningIntent.kind, intentQueuePanel.runningIntent.sourceCount))
-                color: root.primaryTextColor
-                font.pixelSize: 12
-                elide: Text.ElideRight
-                width: parent.width
-            }
+                id: intentToastText
 
-            Row {
-                visible: intentQueuePanel.queued.length > 0
-                width: parent.width
+                anchors.centerIn: parent
+                width: Math.max(0, parent.width - 32)
+                text: root.intentMessage
+                color: root.primaryTextColor
+                font.pixelSize: 13
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.Wrap
+            }
+        }
+
+        Rectangle {
+            id: intentQueuePanel
+
+            readonly property var runningIntent: root.shell ? root.shell.activeIntent : ({})
+            readonly property var queued: root.shell ? root.shell.queuedIntents : []
+            visible: Number(runningIntent.id || 0) > 0 || queued.length > 0
+            width: 286
+            height: queueColumn.implicitHeight + 20
+            radius: Theme.radiusLarge
+            color: Theme.oscGlass
+            border.color: Theme.oscBorder
+            anchors.horizontalCenter: parent.horizontalCenter
+
+            Column {
+                id: queueColumn
+
+                spacing: 7
+                anchors {
+                    left: parent.left
+                    right: parent.right
+                    top: parent.top
+                    margins: 10
+                }
 
                 Text {
-                    text: qsTr("%1 个请求排队中").arg(intentQueuePanel.queued.length)
-                    color: root.mutedTextColor
+                    visible: Number(intentQueuePanel.runningIntent.id || 0) > 0
+                    text: qsTr("处理中 · %1").arg(root.messageCatalog.intentKindText(intentQueuePanel.runningIntent.kind, intentQueuePanel.runningIntent.sourceCount))
+                    color: root.primaryTextColor
                     font.pixelSize: 12
-                    width: parent.width - cancelAllButton.width
-                    anchors.verticalCenter: parent.verticalCenter
+                    elide: Text.ElideRight
+                    width: parent.width
                 }
 
-                VcsToolButton {
-                    id: cancelAllButton
-
-                    text: qsTr("全部取消")
-                    implicitWidth: 74
-                    implicitHeight: 24
-                    labelPixelSize: 11
-                    onClicked: root.shell.cancelAllQueuedIntents()
-                }
-            }
-
-            Repeater {
-                model: intentQueuePanel.queued
-
-                delegate: Row {
-                    id: queuedIntentRow
-
-                    required property var modelData
-                    width: queueColumn.width
+                Row {
+                    visible: intentQueuePanel.queued.length > 0
+                    width: parent.width
 
                     Text {
-                        text: root.messageCatalog.intentKindText(queuedIntentRow.modelData.kind, queuedIntentRow.modelData.sourceCount)
-                        color: root.primaryTextColor
-                        font.pixelSize: 11
-                        elide: Text.ElideRight
-                        width: parent.width - cancelQueuedButton.width
+                        text: qsTr("%1 个请求排队中").arg(intentQueuePanel.queued.length)
+                        color: root.mutedTextColor
+                        font.pixelSize: 12
+                        width: parent.width - cancelAllButton.width
                         anchors.verticalCenter: parent.verticalCenter
                     }
 
                     VcsToolButton {
-                        id: cancelQueuedButton
+                        id: cancelAllButton
 
-                        text: qsTr("取消")
-                        implicitWidth: 58
-                        implicitHeight: 22
+                        text: qsTr("全部取消")
+                        implicitWidth: 74
+                        implicitHeight: 24
                         labelPixelSize: 11
-                        onClicked: root.shell.cancelQueuedIntent(queuedIntentRow.modelData.id)
+                        onClicked: root.shell.cancelAllQueuedIntents()
+                    }
+                }
+
+                Repeater {
+                    model: intentQueuePanel.queued
+
+                    delegate: Row {
+                        id: queuedIntentRow
+
+                        required property var modelData
+                        width: queueColumn.width
+
+                        Text {
+                            text: root.messageCatalog.intentKindText(queuedIntentRow.modelData.kind, queuedIntentRow.modelData.sourceCount)
+                            color: root.primaryTextColor
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                            width: parent.width - cancelQueuedButton.width
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        VcsToolButton {
+                            id: cancelQueuedButton
+
+                            text: qsTr("取消")
+                            implicitWidth: 58
+                            implicitHeight: 22
+                            labelPixelSize: 11
+                            onClicked: root.shell.cancelQueuedIntent(queuedIntentRow.modelData.id)
+                        }
                     }
                 }
             }
         }
-    }
 
-    Rectangle {
-        visible: root.intentMessage.length > 0
-        z: 900
-        radius: 6
-        color: "#ed1d2635"
-        border.color: root.borderColor
-        width: Math.max(0, Math.min(root.width - 48, intentToastText.implicitWidth + 32))
-        height: intentToastText.paintedHeight + 20
-        anchors {
-            horizontalCenter: parent.horizontalCenter
-            top: parent.top
-            topMargin: root.chromeVisible ? 58 : 18
+        Rectangle {
+            id: imageOpenProgress
+
+            objectName: "imageOpenProgress"
+            // Opening a file is progress, not a failure, so this notice stays neutral.
+            visible: root.pendingImageRequestId > 0 && root.dropError.length === 0
+            width: progressRow.implicitWidth + 28
+            height: 42
+            radius: Theme.radiusLarge
+            color: Theme.oscGlass
+            border.color: Theme.oscBorder
+            anchors.horizontalCenter: parent.horizontalCenter
+
+            Row {
+                id: progressRow
+
+                spacing: 10
+                anchors.centerIn: parent
+
+                BusyIndicator {
+                    running: imageOpenProgress.visible
+                    width: 22
+                    height: 22
+                }
+                Text {
+                    text: {
+                        if (root.pendingImageOpenKind === "append")
+                            return qsTr("正在添加图片…");
+                        if (root.pendingImageOpenKind === "replaceA")
+                            return qsTr("正在替换 A…");
+                        if (root.pendingImageOpenKind === "replaceB")
+                            return qsTr("正在替换 B…");
+                        return qsTr("正在打开图片…");
+                    }
+                    color: root.primaryTextColor
+                    font.pixelSize: 13
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ReviewActionButton {
+                    text: qsTr("取消")
+                    implicitWidth: 58
+                    implicitHeight: 28
+                    leftPadding: 8
+                    rightPadding: 8
+                    onClicked: root.cancelWorkspaceOpen()
+                }
+            }
         }
 
-        Text {
-            id: intentToastText
+        // A failed open is a real failure, so this is the one notice drawn in the error family.
+        Rectangle {
+            visible: root.dropError.length > 0
+            width: Math.min(notificationStack.noticeWidth, dropErrorText.implicitWidth + 34)
+            height: dropErrorText.implicitHeight + 26
+            radius: Theme.radiusLarge
+            color: Theme.errorPanel
+            border.color: Theme.errorBorder
+            anchors.horizontalCenter: parent.horizontalCenter
 
-            anchors.centerIn: parent
-            width: Math.max(0, parent.width - 32)
-            text: root.intentMessage
-            color: root.primaryTextColor
-            font.pixelSize: 13
-            horizontalAlignment: Text.AlignHCenter
-            wrapMode: Text.Wrap
+            Text {
+                id: dropErrorText
+
+                width: parent.width - 34
+                text: root.dropError
+                color: Theme.errorText
+                font.pixelSize: 13
+                wrapMode: Text.Wrap
+                anchors.centerIn: parent
+            }
+
+            TapHandler {
+                onTapped: root.dropError = ""
+            }
         }
     }
     Rectangle {
@@ -3358,8 +3449,8 @@ ApplicationWindow {
         z: 980
         height: 32
         radius: 16
-        color: restorePillHover.hovered ? "#e61d2635" : "#c21d2635"
-        border.color: "#46597a"
+        color: restorePillHover.hovered ? Theme.oscGlassHover : Theme.oscGlass
+        border.color: Theme.oscBorder
         border.width: 1
         opacity: restorePillHover.hovered ? 1.0 : 0.62
         anchors {
@@ -3445,7 +3536,7 @@ ApplicationWindow {
         z: 1000
         enabled: false
         visible: workspaceDropArea.containsDrag
-        color: "#df0b1421"
+        color: Theme.dropScrim
         border.width: 3
         border.color: root.accentColor
 
@@ -3466,84 +3557,6 @@ ApplicationWindow {
                 font.pixelSize: 14
                 anchors.horizontalCenter: parent.horizontalCenter
             }
-        }
-    }
-
-    Rectangle {
-        id: imageOpenProgress
-        objectName: "imageOpenProgress"
-        visible: root.pendingImageRequestId > 0 && root.dropError.length === 0
-        z: 1090
-        width: progressRow.implicitWidth + 28
-        height: 42
-        radius: 7
-        color: "#f0351f2a"
-        border.color: root.accentColor
-        anchors {
-            top: parent.top
-            topMargin: 18
-            horizontalCenter: parent.horizontalCenter
-        }
-
-        Row {
-            id: progressRow
-            spacing: 10
-            anchors.centerIn: parent
-
-            BusyIndicator {
-                running: imageOpenProgress.visible
-                width: 22
-                height: 22
-            }
-            Text {
-                text: {
-                    if (root.pendingImageOpenKind === "append")
-                        return qsTr("正在添加图片…");
-                    if (root.pendingImageOpenKind === "replaceA")
-                        return qsTr("正在替换 A…");
-                    if (root.pendingImageOpenKind === "replaceB")
-                        return qsTr("正在替换 B…");
-                    return qsTr("正在打开图片…");
-                }
-                color: root.primaryTextColor
-                anchors.verticalCenter: parent.verticalCenter
-            }
-            ReviewActionButton {
-                text: qsTr("取消")
-                implicitWidth: 58
-                implicitHeight: 28
-                leftPadding: 8
-                rightPadding: 8
-                onClicked: root.cancelWorkspaceOpen()
-            }
-        }
-    }
-    Rectangle {
-        visible: root.dropError.length > 0
-        z: 1100
-        width: Math.min(parent.width - 48, 620)
-        height: dropErrorText.implicitHeight + 26
-        radius: 7
-        color: "#f0351f2a"
-        border.color: "#a9503f4a"
-        anchors {
-            top: parent.top
-            topMargin: 18
-            horizontalCenter: parent.horizontalCenter
-        }
-
-        Text {
-            id: dropErrorText
-
-            width: parent.width - 34
-            text: root.dropError
-            color: "#ffb4b4"
-            wrapMode: Text.WordWrap
-            anchors.centerIn: parent
-        }
-
-        TapHandler {
-            onTapped: root.dropError = ""
         }
     }
 }

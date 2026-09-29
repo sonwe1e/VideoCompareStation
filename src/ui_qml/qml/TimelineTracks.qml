@@ -191,7 +191,7 @@ Item {
             x: Math.max(0, Math.min(control.width - width, trackPosition * control.width - width / 2))
             y: mainRail.y - (height - mainRail.height) / 2
             radius: 2
-            color: kind === "missing" ? Theme.error : (kind === "duplicate" ? "#fb923c" : (kind === "extra" ? "#c084fc" : (kind === "anchor" ? "#22d3ee" : "#facc15")))
+            color: Theme.timelineMarkerColor(kind)
 
             HoverHandler {
                 id: markerHover

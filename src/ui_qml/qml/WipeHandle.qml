@@ -32,7 +32,7 @@ Item {
     Rectangle {
         width: 4
         height: parent.height
-        color: "#4d000000"
+        color: Theme.lineHalo
         anchors.centerIn: parent
     }
 

@@ -638,7 +638,7 @@ Rectangle {
                                 implicitWidth: 16
                                 implicitHeight: 16
                                 radius: 8
-                                color: "#ffffff"
+                                color: Theme.primaryText
                                 border.width: wipeSlider.pressed ? 4 : (wipeSlider.activeFocus ? 3 : 2.5)
                                 border.color: Theme.accent
                             }

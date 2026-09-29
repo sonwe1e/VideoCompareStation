@@ -12,6 +12,10 @@ Button {
     property bool prominent: false
     property color textColor: Theme.primaryText
     property color accentColor: Theme.accent
+    // `checked` mirrors state the caller owns (a mode, a tool). Qt flips `checked` itself
+    // before onClicked, so re-clicking the selected option would drop its highlight while the
+    // state stays selected; undo that flip and leave the caller's binding in charge.
+    property bool mirrorsState: false
 
     implicitWidth: Math.max(112, contentItem.implicitWidth + 34)
     implicitHeight: 40
@@ -20,6 +24,10 @@ Button {
     activeFocusOnTab: true
     // A pressed button sinks slightly; hover only changes colour so borders stay pixel-aligned.
     scale: control.down ? 0.98 : 1.0
+    onToggled: {
+        if (control.mirrorsState)
+            control.toggle();
+    }
 
     Behavior on scale {
         NumberAnimation {
@@ -38,6 +46,8 @@ Button {
         elide: Text.ElideRight
     }
 
+    // A checked toggle takes the same accent-tinted fill as the mode chips; its fill holds
+    // steady under hover and press so the selection never flickers.
     background: Rectangle {
         radius: Theme.radiusMedium
         color: {
@@ -45,15 +55,17 @@ Button {
                 return Theme.disabledPanel;
             if (control.prominent)
                 return control.down ? Theme.accentPressed : (control.hovered ? Theme.accentHover : Theme.accentFill);
+            if (control.checked)
+                return Theme.controlChecked;
             return control.down ? Theme.controlPressed : (control.hovered ? Theme.controlHover : Theme.control);
         }
         border.width: control.activeFocus ? 2 : 1
         border.color: {
             if (control.activeFocus)
-                return control.prominent ? Theme.strongFocus : control.accentColor;
+                return control.prominent || control.checked ? Theme.strongFocus : control.accentColor;
             if (!control.enabled)
                 return Theme.disabledBorder;
-            if (control.prominent)
+            if (control.prominent || control.checked)
                 return control.hovered ? Theme.focus : Theme.accent;
             return control.hovered ? Theme.borderHover : Theme.controlBorder;
         }

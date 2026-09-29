@@ -17,7 +17,6 @@ Rectangle {
     required property color accentColor
     required property color primaryTextColor
     required property color mutedTextColor
-    required property color errorColor
     required property bool chromeVisible
     required property int effectiveViewMode
     required property real wipePosition
@@ -82,6 +81,9 @@ Rectangle {
     // Status banners stack under the source label row (12 px inset + 42 px plate + 8 px gap), so a
     // centred banner never covers a panel's identity label.
     readonly property real stageBannerTop: control.chromeVisible ? 62 : 12
+    // Distance from the viewport's bottom edge to the top of the fit/reset row, the highest of
+    // the bottom stage controls; Main floats its notices above this line.
+    readonly property real bottomControlsInset: control.height - viewCommandRow.y
 
     function clearRoi() {
         dualVideoSurface.clearRoi();
@@ -149,7 +151,7 @@ Rectangle {
 
     objectName: "mediaViewportFocusTarget"
     focus: true
-    color: "#06080d"
+    color: Theme.stageWell
     border.color: control.borderColor
     border.width: control.chromeVisible ? 1 : 0
     radius: control.chromeVisible ? 7 : 0
@@ -204,8 +206,7 @@ Rectangle {
             height: Math.round(Number(modelData.height))
             color: "transparent"
             border.width: 1
-            border.color: "#d8e2f2"
-            opacity: 0.75
+            border.color: Theme.stageDivider
             z: 8
         }
     }
@@ -221,22 +222,26 @@ Rectangle {
     Repeater {
         model: !control.chromeVisible && control.sourceCount > 1 ? dualVideoSurface.sourcePanelRects : []
 
+        // Immersive letters keep each source's identity colour, like the full labels do.
         Rectangle {
+            id: immersiveLetter
+
             required property var modelData
+            readonly property int slot: Number(modelData.slot)
 
             x: Math.max(8, Math.min(parent.width - width - 8, Number(modelData.x) + 8))
             y: 8
             width: 30
             height: 26
-            radius: 4
-            color: "#b3243f68"
-            border.color: "#804b8df8"
+            radius: Theme.radiusSmall
+            color: Theme.stageLabel
+            border.color: Theme.sourceBorder(immersiveLetter.slot)
             z: 10
 
             Text {
                 anchors.centerIn: parent
-                text: String.fromCharCode(65 + Number(parent.modelData.slot))
-                color: "white"
+                text: String.fromCharCode(65 + immersiveLetter.slot)
+                color: Theme.sourceColor(immersiveLetter.slot)
                 font.bold: true
                 font.pixelSize: 12
             }
@@ -251,8 +256,8 @@ Rectangle {
         width: immersiveHudLabel.implicitWidth + 24
         height: 34
         radius: 6
-        color: "#dc111923"
-        border.color: "#803d4d64"
+        color: Theme.oscGlass
+        border.color: Theme.oscBorder
         anchors {
             bottom: parent.bottom
             bottomMargin: 18
@@ -280,8 +285,8 @@ Rectangle {
         visible: control.showFramePending && control.currentFrame >= 0
         z: 40
         radius: 12
-        color: "#dc1d2635"
-        border.color: control.borderColor
+        color: Theme.oscGlass
+        border.color: Theme.oscBorder
         width: pendingRow.implicitWidth + 22
         height: 30
         anchors {
@@ -401,7 +406,7 @@ Rectangle {
         y: Math.min(control.roiStartY, control.roiCurrentY)
         width: Math.abs(control.roiCurrentX - control.roiStartX)
         height: Math.abs(control.roiCurrentY - control.roiStartY)
-        color: "#224b8df8"
+        color: Theme.selectionFill
         border.color: control.accentColor
         border.width: 1
     }
@@ -415,8 +420,8 @@ Rectangle {
         width: Math.min(Math.max(0, parent.width - 24), analysisStatus.implicitWidth + 18)
         height: 28
         radius: 5
-        color: "#dc171e2a"
-        border.color: control.borderColor
+        color: Theme.oscGlass
+        border.color: Theme.oscBorder
         anchors {
             right: parent.right
             rightMargin: 12
@@ -466,8 +471,9 @@ Rectangle {
         visible: control.chromeVisible && pixelScaleBadge.sourceExtent > 0 && pixelScaleBadge.panelWidth > 0
         z: 30
         radius: 5
-        color: pixelScaleBadge.pixelExact ? "#dc122b1f" : "#dc171e2a"
-        border.color: pixelScaleBadge.pixelExact ? Theme.success : control.borderColor
+        // Same glass as the other stage plates; exact 1:1 is told by the green edge and label.
+        color: pixelScaleMouse.containsMouse ? Theme.oscGlassHover : Theme.oscGlass
+        border.color: pixelScaleBadge.pixelExact ? Theme.success : Theme.oscBorder
         height: 28
         width: pixelScaleLabel.implicitWidth + 18
         anchors {
@@ -502,7 +508,10 @@ Rectangle {
         }
 
         MouseArea {
+            id: pixelScaleMouse
+
             anchors.fill: parent
+            hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             onClicked: {
                 if (pixelScaleBadge.pixelExact || pixelScaleBadge.effectivePercent > 100) {
@@ -536,20 +545,23 @@ Rectangle {
             width: fitLabel.implicitWidth + 16
             height: 24
             radius: 4
-            color: "#dc171e2a"
-            border.color: control.borderColor
+            color: fitMouse.containsMouse ? Theme.oscGlassHover : Theme.oscGlass
+            border.color: fitMouse.containsMouse ? Theme.borderHover : Theme.oscBorder
 
             Label {
                 id: fitLabel
 
                 text: qsTr("适应窗口")
-                color: control.mutedTextColor
+                color: fitMouse.containsMouse ? control.primaryTextColor : control.mutedTextColor
                 font.pixelSize: 11
                 anchors.centerIn: parent
             }
 
             MouseArea {
+                id: fitMouse
+
                 anchors.fill: parent
+                hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onClicked: dualVideoSurface.resetViewport()
             }
@@ -560,20 +572,23 @@ Rectangle {
             width: resetLabel.implicitWidth + 16
             height: 24
             radius: 4
-            color: "#dc171e2a"
-            border.color: control.borderColor
+            color: resetMouse.containsMouse ? Theme.oscGlassHover : Theme.oscGlass
+            border.color: resetMouse.containsMouse ? Theme.borderHover : Theme.oscBorder
 
             Label {
                 id: resetLabel
 
                 text: qsTr("重置视图")
-                color: control.mutedTextColor
+                color: resetMouse.containsMouse ? control.primaryTextColor : control.mutedTextColor
                 font.pixelSize: 11
                 anchors.centerIn: parent
             }
 
             MouseArea {
+                id: resetMouse
+
                 anchors.fill: parent
+                hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 // Full observation reset: fit the view AND drop the ROI, so 差异/指标 return
                 // to the whole-frame baseline (适应窗口 keeps the ROI).
@@ -593,8 +608,9 @@ Rectangle {
         width: Math.min(parent.width - 48, 460)
         height: unavailableColumn.implicitHeight + 32
         radius: 8
-        color: "#e6121822"
-        border.color: control.errorColor
+        // A missing frame or an inexact pairing is a limit of the material, not a failure.
+        color: Theme.warningPanel
+        border.color: Theme.warningBorder
         border.width: 1
         z: 40
         anchors.centerIn: parent
@@ -620,7 +636,7 @@ Rectangle {
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
                 text: control.differenceUnavailableDetail
-                color: "#fca5a5"
+                color: Theme.warningText
                 font.pixelSize: 13
             }
         }
@@ -663,8 +679,8 @@ Rectangle {
         objectName: "inexactDifferenceBanner"
         visible: control.chromeVisible && control.differenceMode && control.inexactReason.length > 0
         radius: 5
-        color: "#d9352618"
-        border.color: "#eab308"
+        color: Theme.warningPanel
+        border.color: Theme.warningBorder
         border.width: 1
         height: inexactBannerText.implicitHeight + 10
         width: Math.min(parent.width - 24, inexactBannerText.implicitWidth + 20)
@@ -679,7 +695,7 @@ Rectangle {
             id: inexactBannerText
 
             text: qsTr("⚠️ 对比非精确对应：%1").arg(control.inexactReason)
-            color: "#fef08a"
+            color: Theme.warningText
             font.pixelSize: 11
             font.weight: Font.DemiBold
             anchors.centerIn: parent
@@ -718,7 +734,9 @@ Rectangle {
                 visible: wipeBadge || control.singleMode || panelWidth >= 80
                 x: wipeBadge ? (Number(modelData.slot) === control.differenceFirstSlot ? 12 : parent.width - width - 12) : Number(modelData.x) + 12
                 y: Number(modelData.y) + 12
-                width: compactBadge ? 44 : Math.min(280, Math.max(80, panelWidth - 24))
+                // The plate hugs the file name (46 px letter column + 10 px end inset) and only
+                // elides once the name outgrows the panel or the 280 px cap.
+                width: compactBadge ? 44 : Math.min(280, Math.max(80, panelWidth - 24), Math.max(80, surfaceLabelName.implicitWidth + 56))
                 height: compactBadge ? 36 : 42
                 radius: 8
                 color: Theme.oscGlass
@@ -746,6 +764,8 @@ Rectangle {
                 }
 
                 Text {
+                    id: surfaceLabelName
+
                     visible: surfaceLabel.showFilename
                     text: {
                         const parent = control.sourceParentLabel(surfaceLabel.sourceSlot);
@@ -784,8 +804,8 @@ Rectangle {
         height: frameErrorBannerColumn.implicitHeight + 20
         radius: 6
         visible: control.frameErrorBannerVisible
-        color: "#e6351f2a"
-        border.color: "#b9503f4a"
+        color: Theme.errorPanel
+        border.color: Theme.errorBorder
         z: 40
         Accessible.name: qsTr("帧未变化。%1").arg(control.errorDetail)
         anchors {
@@ -804,7 +824,7 @@ Rectangle {
             Text {
                 width: parent.width
                 text: qsTr("帧未变化")
-                color: "#ffb4b4"
+                color: Theme.errorText
                 font.pixelSize: 13
                 font.weight: Font.DemiBold
             }
@@ -828,8 +848,8 @@ Rectangle {
         height: overlayColumn.implicitHeight + 32
         radius: 7
         visible: control.overlayVisible
-        color: control.hasErrors && !control.busy ? "#ee351f2a" : "#ed151d29"
-        border.color: control.hasErrors && !control.busy ? "#a9503f4a" : "#a43d4d64"
+        color: control.hasErrors && !control.busy ? Theme.errorPanel : Theme.oscGlass
+        border.color: control.hasErrors && !control.busy ? Theme.errorBorder : Theme.oscBorder
         anchors.centerIn: parent
 
         Column {
@@ -852,7 +872,7 @@ Rectangle {
                 width: parent.width
                 horizontalAlignment: Text.AlignHCenter
                 text: control.overlayTitle
-                color: control.hasErrors && !control.busy ? "#ffb4b4" : control.primaryTextColor
+                color: control.hasErrors && !control.busy ? Theme.errorText : control.primaryTextColor
                 font.pixelSize: 17
                 font.weight: Font.DemiBold
                 wrapMode: Text.Wrap

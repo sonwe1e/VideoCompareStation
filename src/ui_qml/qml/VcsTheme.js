@@ -43,7 +43,12 @@ var controlBorder = "#334259"
 var menuBorder = "#34445c"
 var disabledBorder = "#212b3a"
 
+// Red is reserved for real failures (a decode error, a failed save). Limits and unavailable
+// states such as a missing frame or an inexact pairing use the warning family instead.
 var error = "#f87171"
+var errorPanel = "#2a1216"
+var errorBorder = "#b91c1c"
+var errorText = "#fca5a5"
 var warning = "#fbbf24"
 var warningPanel = "#241b0d"
 var warningBorder = "#7c5a14"
@@ -52,6 +57,8 @@ var success = "#34d399"
 var successFill = "#065f46"
 var successFillHover = "#047857"
 var successBorder = "#10b981"
+// Badge ground for success-coloured text; successFill is too light for it to reach AA.
+var successPanel = "#064e3b"
 var information = "#38bdf8"
 
 // These alpha-bearing colours are intentional semantic overlays, not popup backgrounds.
@@ -66,10 +73,34 @@ var stageLabelBorder = "#2d3b50"
 var oscGlass = "#eb141b27"
 var oscBorder = "#33435b"
 var oscGlassHover = "#f21a2332"
+// Drag-and-drop scrim. Heavier than modalScrim so the drop hint stays legible over bright
+// footage; nothing behind it needs to be read while a file is being dragged.
+var dropScrim = "#df0b1421"
+
+// The stage itself: the well behind footage and the marks drawn on the picture. Their
+// translucency lives in the colour, never in `opacity`, so child items cannot fade with them.
+var stageWell = "#06080d"
+var stageDivider = "#bfd8e2f2"
+var lineHalo = "#4d000000"
+var selectionFill = "#223b82f6"
+var cropFill = "#2214b8a6"
+var cropBorder = "#5eead4"
+// Pixel probe. Yellow stays clear of the accent-blue selection, the teal crop and every
+// source hue; the pointer's own panel gets a faint white line so it never hides the cursor.
+var probe = "#facc15"
+var probeLine = "#d9facc15"
+var probeLineMuted = "#55ffffff"
+var probePip = "#ccffffff"
 
 var timelineRail = "#243146"
 // In/out band: accentText at 30 % alpha, so the brackets drawn on top of it stay fully opaque.
 var rangeBand = "#4d7cb4ff"
+// Alignment markers. A missing frame is a real gap and uses error; the other kinds only need
+// to be told apart from each other.
+var markerDuplicate = "#fb923c"
+var markerExtra = "#c084fc"
+var markerAnchor = "#22d3ee"
+var markerOther = "#facc15"
 var keycap = "#111827"
 var keycapBorder = "#2f3d52"
 
@@ -111,6 +142,16 @@ function sourceBackground(slot) {
 
 function sourceBorder(slot) {
     return slot === 0 ? sourceABorder : (slot === 1 ? sourceBBorder : sourceCBorder);
+}
+
+function timelineMarkerColor(kind) {
+    if (kind === "missing")
+        return error;
+    if (kind === "duplicate")
+        return markerDuplicate;
+    if (kind === "extra")
+        return markerExtra;
+    return kind === "anchor" ? markerAnchor : markerOther;
 }
 
 // Maps a source label such as "A" or "源 B" to its slot; -1 when no letter is present.

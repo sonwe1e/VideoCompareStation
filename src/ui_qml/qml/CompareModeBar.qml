@@ -203,6 +203,7 @@ Rectangle {
         required property int modeValue
         checkable: true
         checked: control.currentMode === modeValue
+        mirrorsState: true
         implicitHeight: 30
         implicitWidth: 64
         enabled: !control.busy
@@ -265,6 +266,8 @@ Rectangle {
 
         checkable: true
         checked: control.currentMode === ComparisonSurface.Difference
+        // Opening the flavour menu must not light the button up before a flavour is chosen.
+        mirrorsState: true
         implicitHeight: 30
         implicitWidth: control.differenceFlavorLabel.length > 0 ? 132 : 84
         enabled: !control.busy
