@@ -401,15 +401,14 @@ Item {
 
             ReviewActionButton {
                 objectName: "imageEditScaleSmooth"
-                checkable: true
-                checked: control.scaleSmooth
+                // Two equal choices named by the label, so neither one is drawn as "on".
                 text: control.scaleSmooth ? qsTr("平滑重采样") : qsTr("最近邻（像素精确）")
                 implicitHeight: 28
                 implicitWidth: 188
                 leftPadding: 10
                 rightPadding: 10
                 helpText: qsTr("平滑适合缩放照片；最近邻只复制原像素，适合像素画与逐像素对比。")
-                onClicked: control.scaleSmooth = checked
+                onClicked: control.scaleSmooth = !control.scaleSmooth
             }
         }
     }

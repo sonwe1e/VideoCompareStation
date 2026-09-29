@@ -38,9 +38,11 @@ Popup {
 
     onOpened: control.contentReady = true
 
+    // Opaque like every other popup surface, so dimmed footage never bleeds through the text.
     background: Rectangle {
         color: Theme.menu
-        radius: 10
+        radius: Theme.radiusCard
+        border.width: 1
         border.color: Theme.menuBorder
     }
 
@@ -54,43 +56,82 @@ Popup {
         id: shortcutTable
 
         Column {
-            spacing: 12
+            spacing: 14
 
-            Label {
-                text: qsTr("键盘快捷键")
-                color: Theme.primaryText
-                font.pixelSize: 20
-                font.weight: Font.DemiBold
+            Item {
+                width: parent.width
+                height: helpTitle.implicitHeight
+
+                Label {
+                    id: helpTitle
+
+                    text: qsTr("键盘快捷键")
+                    color: Theme.primaryText
+                    font.pixelSize: 20
+                    font.weight: Font.DemiBold
+                }
+                Label {
+                    text: qsTr("Esc 关闭")
+                    color: Theme.disabledText
+                    font.pixelSize: 12
+                    anchors {
+                        right: parent.right
+                        verticalCenter: parent.verticalCenter
+                    }
+                }
             }
             Label {
                 text: control.imagePreset ? qsTr("图像与透明度检查快捷键") : (control.playerPreset ? qsTr("播放器快捷键") : qsTr("逐帧检查快捷键"))
-                color: "#9fc3ff"
+                color: Theme.accentText
                 font.pixelSize: 12
+                font.weight: Font.DemiBold
             }
             GridLayout {
                 width: parent.width
                 columns: 2
                 columnSpacing: 22
-                rowSpacing: 7
+                rowSpacing: 8
 
                 Repeater {
                     model: control.shortcutModel
 
                     delegate: RowLayout {
+                        id: shortcutRow
                         required property var modelData
                         Layout.columnSpan: 2
                         Layout.fillWidth: true
+                        spacing: 12
+
+                        // Keys sit left-aligned in a fixed column as keycaps sized to their
+                        // text, so descriptions start on one edge and short keys stay compact.
+                        Item {
+                            Layout.preferredWidth: 150
+                            implicitHeight: 24
+
+                            Rectangle {
+                                width: Math.min(parent.width, keyLabel.implicitWidth + 16)
+                                height: parent.height
+                                radius: Theme.radiusSmall
+                                color: Theme.keycap
+                                border.width: 1
+                                border.color: Theme.keycapBorder
+
+                                Label {
+                                    id: keyLabel
+
+                                    anchors.centerIn: parent
+                                    text: String(shortcutRow.modelData[0])
+                                    color: Theme.primaryText
+                                    font.pixelSize: 12
+                                    font.weight: Font.DemiBold
+                                }
+                            }
+                        }
 
                         Label {
-                            Layout.preferredWidth: 180
-                            text: String(parent.modelData[0])
-                            color: "#9fc3ff"
-                            font.pixelSize: 13
-                        }
-                        Label {
                             Layout.fillWidth: true
-                            text: String(parent.modelData[1])
-                            color: "#d8e2f2"
+                            text: String(shortcutRow.modelData[1])
+                            color: Theme.secondaryText
                             font.pixelSize: 13
                         }
                     }

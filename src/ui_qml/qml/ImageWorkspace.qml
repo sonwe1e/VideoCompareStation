@@ -30,8 +30,12 @@ Rectangle {
     // (T2); the controller zoom multiplies whichever base is active.
     property bool trueSize: false
 
+    // Distance from the workspace's bottom edge to the top of the stage's bottom controls;
+    // Main floats its notices above this line so they never cover the stage chrome.
+    readonly property real bottomControlsInset: fadeSliderOverlay.visible ? control.height - fadeSliderOverlay.y : control.height - (stage.y + stage.height)
+
     objectName: "imageWorkspace"
-    color: "#06080d"
+    color: Theme.stageWell
     activeFocusOnTab: true
     onVisibleChanged: {
         if (visible)
@@ -240,7 +244,7 @@ Rectangle {
         y: Math.min(start.y, current.y)
         width: Math.abs(current.x - start.x)
         height: Math.abs(current.y - start.y)
-        color: "#224b8df8"
+        color: Theme.selectionFill
         border.color: Theme.accent
         border.width: 1
     }
@@ -537,6 +541,7 @@ Rectangle {
         property int chipWidth: 108
         checkable: true
         checked: selectGroup === 0 ? control.compareMode === modeValue : selectGroup === 1 ? control.viewMode === modeValue : control.backgroundMode === modeValue
+        mirrorsState: true
         implicitHeight: 30
         implicitWidth: chipWidth
         leftPadding: 10
@@ -564,11 +569,39 @@ Rectangle {
             font.weight: chip.checked ? Font.DemiBold : Font.Normal
         }
 
+        // Same toggle language as the video CompareModeBar: quiet at rest, a light surface on
+        // hover, and the accent-tinted fill reserved for the selected option of each group.
         background: Rectangle {
-            radius: 5
-            color: !chip.enabled ? Theme.disabledPanel : (chip.checked ? Theme.controlChecked : (chip.down ? Theme.controlPressed : (chip.hovered ? Theme.controlHover : Theme.control)))
+            radius: Theme.radiusMedium
+            color: {
+                if (!chip.enabled)
+                    return "transparent";
+                if (chip.checked)
+                    return Theme.controlChecked;
+                if (chip.down)
+                    return Theme.fluentPressed;
+                if (chip.hovered)
+                    return Theme.fluentHover;
+                return "transparent";
+            }
             border.width: chip.activeFocus ? 2 : 1
-            border.color: chip.activeFocus ? Theme.accent : (chip.checked ? Theme.accent : Theme.controlBorder)
+            border.color: {
+                if (chip.activeFocus)
+                    return Theme.focus;
+                if (!chip.enabled)
+                    return "transparent";
+                if (chip.checked)
+                    return Theme.accent;
+                if (chip.hovered)
+                    return Theme.subtleBorder;
+                return "transparent";
+            }
+
+            Behavior on color {
+                ColorAnimation {
+                    duration: 100
+                }
+            }
         }
     }
 
@@ -603,7 +636,7 @@ Rectangle {
 
         height: 22
         implicitWidth: badgeContent.implicitWidth + 20
-        radius: 4
+        radius: 6
         color: Theme.raisedPanel
         border.width: 1
         border.color: Theme.border
@@ -723,12 +756,12 @@ Rectangle {
         // input away from panning, marquee selection or tool strokes underneath.
         Rectangle {
             visible: viewport.label.length > 0 || viewport.title.length > 0
-            width: Math.min(viewportLabelColumn.implicitWidth + 16, Math.max(200, viewport.width - 60))
-            height: viewportLabelColumn.implicitHeight + 10
-            radius: 5
-            color: "#b3060c14"
+            width: Math.min(viewportLabelColumn.implicitWidth + 18, Math.max(200, viewport.width - 60))
+            height: viewportLabelColumn.implicitHeight + 12
+            radius: 8
+            color: Theme.stageLabel
             border.width: 1
-            border.color: "#332b3850"
+            border.color: Theme.stageLabelBorder
             anchors {
                 top: parent.top
                 left: parent.left
@@ -789,7 +822,7 @@ Rectangle {
                 y: Math.max(0, previewImage.y)
                 width: 1
                 height: Math.min(viewport.height, previewImage.height)
-                color: syncedCrosshair.isHoveredSource ? "#55ffffff" : "#d9facc15"
+                color: syncedCrosshair.isHoveredSource ? Theme.probeLineMuted : Theme.probeLine
             }
 
             // Horizontal hairline
@@ -798,7 +831,7 @@ Rectangle {
                 y: Math.round(syncedCrosshair.targetY)
                 width: Math.min(viewport.width, previewImage.width)
                 height: 1
-                color: syncedCrosshair.isHoveredSource ? "#55ffffff" : "#d9facc15"
+                color: syncedCrosshair.isHoveredSource ? Theme.probeLineMuted : Theme.probeLine
             }
 
             // Synced target reticle (shown on the mirror/other viewport)
@@ -810,7 +843,7 @@ Rectangle {
                 height: 18
                 radius: 9
                 color: "transparent"
-                border.color: "#facc15"
+                border.color: Theme.probe
                 border.width: 1.5
             }
 
@@ -821,7 +854,7 @@ Rectangle {
                 width: 4
                 height: 4
                 radius: 2
-                color: "#facc15"
+                color: Theme.probe
             }
 
             // Coordinate tag on the synced viewport
@@ -832,15 +865,15 @@ Rectangle {
                 width: coordText.implicitWidth + 8
                 height: 18
                 radius: 3
-                color: "#d91e293b"
-                border.color: "#facc15"
+                color: Theme.oscGlass
+                border.color: Theme.probe
                 border.width: 1
 
                 Text {
                     id: coordText
                     anchors.centerIn: parent
                     text: control.hoverPoint ? "%1, %2".arg(control.hoverPoint.imgX).arg(control.hoverPoint.imgY) : ""
-                    color: "#facc15"
+                    color: Theme.probe
                     font.pixelSize: 10
                     font.family: "Consolas"
                     font.weight: Font.Bold
@@ -855,8 +888,7 @@ Rectangle {
                 width: 4
                 height: 4
                 radius: 2
-                color: "#ffffff"
-                opacity: 0.8
+                color: Theme.probePip
             }
         }
 
@@ -877,8 +909,8 @@ Rectangle {
             y: Math.min(viewport.cropStart.y, viewport.cropCurrent.y)
             width: Math.abs(viewport.cropCurrent.x - viewport.cropStart.x)
             height: Math.abs(viewport.cropCurrent.y - viewport.cropStart.y)
-            color: "#2214b8a6"
-            border.color: "#5eead4"
+            color: Theme.cropFill
+            border.color: Theme.cropBorder
             border.width: 1
         }
 
@@ -1043,8 +1075,8 @@ Rectangle {
             margins: 12
         }
         height: commandColumn.implicitHeight + 20
-        radius: 8
-        color: Theme.panel
+        radius: 10
+        color: Theme.panelElevated
         border.width: 1
         border.color: Theme.border
 
@@ -1075,7 +1107,8 @@ Rectangle {
                 ReviewActionButton {
                     objectName: "imageOpenButton"
                     text: qsTr("打开图片…")
-                    prominent: true
+                    // Edit mode has its own primary action (另存副本…); one filled button per view.
+                    prominent: !control.editModeActive
                     implicitHeight: 30
                     leftPadding: 12
                     rightPadding: 12
@@ -1125,6 +1158,7 @@ Rectangle {
                     objectName: "imageFitButton"
                     checkable: true
                     checked: !control.trueSize
+                    mirrorsState: true
                     text: qsTr("适应窗口")
                     implicitHeight: 30
                     leftPadding: 10
@@ -1140,6 +1174,7 @@ Rectangle {
                     objectName: "imageTrueSizeButton"
                     checkable: true
                     checked: control.trueSize
+                    mirrorsState: true
                     text: qsTr("100%")
                     implicitHeight: 30
                     leftPadding: 10
@@ -1171,8 +1206,7 @@ Rectangle {
 
                 ReviewActionButton {
                     objectName: "imageToggleSidebarButton"
-                    checkable: true
-                    checked: control.sidebarVisible
+                    // The label names the action it performs, so the button carries no checked tint.
                     text: control.sidebarVisible ? qsTr("隐藏列表") : qsTr("显示列表")
                     implicitHeight: 30
                     leftPadding: 10
@@ -1488,9 +1522,7 @@ Rectangle {
 
                         EditButton {
                             objectName: "imageEditStartButton"
-                            checkable: true
-                            checked: control.editModeActive
-                            prominent: control.editModeActive
+                            // An action label, not a state: the filled button while editing is 另存副本….
                             text: control.editModeActive ? qsTr("结束编辑") : qsTr("编辑画面")
                             helpText: qsTr("在原图的副本上编辑；原文件保持不变，编辑结果必须另存为副本。")
                             onClicked: {
@@ -1511,6 +1543,7 @@ Rectangle {
                             visible: control.editModeActive
                             checkable: true
                             checked: control.editTool === "crop"
+                            mirrorsState: true
                             text: qsTr("裁剪")
                             onClicked: control.editTool = "crop"
                         }
@@ -1519,6 +1552,7 @@ Rectangle {
                             visible: control.editModeActive
                             checkable: true
                             checked: control.editTool === "brush"
+                            mirrorsState: true
                             text: qsTr("画笔")
                             onClicked: control.editTool = "brush"
                         }
@@ -1527,6 +1561,7 @@ Rectangle {
                             visible: control.editModeActive
                             checkable: true
                             checked: control.editTool === "select"
+                            mirrorsState: true
                             text: qsTr("选择")
                             helpText: qsTr("点击选中标注后可拖动；Delete 键或「删除标注」可删除。")
                             onClicked: control.editTool = "select"
@@ -1577,45 +1612,41 @@ Rectangle {
                                 objectName: "imageEditMoreToolsMenu"
                                 menuWidth: 240
 
-                                VcsMenuItem {
+                                // Radio rows: the tools are exclusive, and an exclusive item
+                                // stays checked when the active tool is chosen again.
+                                VcsRadioMenuItem {
                                     objectName: "imageEditToolMosaicButton"
                                     text: qsTr("马赛克")
-                                    checkable: true
                                     checked: control.editTool === "mosaic"
                                     onTriggered: control.editTool = "mosaic"
                                 }
-                                VcsMenuItem {
+                                VcsRadioMenuItem {
                                     objectName: "imageEditToolFillButton"
                                     text: qsTr("填充")
-                                    checkable: true
                                     checked: control.editTool === "fill"
                                     onTriggered: control.editTool = "fill"
                                 }
-                                VcsMenuItem {
+                                VcsRadioMenuItem {
                                     objectName: "imageEditToolClearButton"
                                     text: qsTr("清除")
-                                    checkable: true
                                     checked: control.editTool === "clear"
                                     onTriggered: control.editTool = "clear"
                                 }
-                                VcsMenuItem {
+                                VcsRadioMenuItem {
                                     objectName: "imageEditToolRectButton"
                                     text: qsTr("矩形")
-                                    checkable: true
                                     checked: control.editTool === "rect"
                                     onTriggered: control.editTool = "rect"
                                 }
-                                VcsMenuItem {
+                                VcsRadioMenuItem {
                                     objectName: "imageEditToolArrowButton"
                                     text: qsTr("箭头")
-                                    checkable: true
                                     checked: control.editTool === "arrow"
                                     onTriggered: control.editTool = "arrow"
                                 }
-                                VcsMenuItem {
+                                VcsRadioMenuItem {
                                     objectName: "imageEditToolTextButton"
                                     text: qsTr("文字")
-                                    checkable: true
                                     checked: control.editTool === "text"
                                     onTriggered: control.editTool = "text"
                                 }
@@ -1735,10 +1766,10 @@ Rectangle {
                                     width: 10
                                     height: 10
                                     radius: 5
+                                    // Full strength: the swatch previews the exact colour the brush paints.
                                     color: control.brushColor
                                     border.width: 1
-                                    border.color: "#ffffff"
-                                    opacity: 0.9
+                                    border.color: Theme.primaryText
                                     anchors {
                                         left: parent.left
                                         leftMargin: 8
@@ -2097,9 +2128,9 @@ Rectangle {
                     width: Math.min(stageContent.width - 28, inPlaceBadgeContent.implicitWidth + 20)
                     height: 28
                     radius: 6
-                    color: "#e00f151f"
+                    color: Theme.oscGlass
                     border.width: 1
-                    border.color: control.singleViewShowSecondary ? "#80f2b03c" : "#7a4b8df8"
+                    border.color: control.singleViewShowSecondary ? Theme.sourceBBorder : Theme.sourceABorder
                     anchors {
                         top: parent.top
                         right: parent.right
@@ -2115,7 +2146,7 @@ Rectangle {
                             width: 7
                             height: 7
                             radius: 3.5
-                            color: control.singleViewShowSecondary ? "#f2b03c" : Theme.accent
+                            color: control.singleViewShowSecondary ? Theme.sourceB : Theme.sourceA
                             anchors.verticalCenter: parent.verticalCenter
                         }
 
@@ -2152,15 +2183,10 @@ Rectangle {
                     width: Math.min(stageContent.width - (imageInPlaceBadge.visible ? imageInPlaceBadge.width + 52 : 28), alphaBadgeContent.implicitWidth + 20)
                     height: 28
                     radius: 6
-                    color: "#e00f151f"
+                    color: Theme.oscGlass
                     border.width: 1
-                    border.color: {
-                        if (control.viewMode === 1)
-                            return "#7a7dd3fc";
-                        if (control.viewMode === 2)
-                            return "#7aefbf83";
-                        return "#7a4b8df8";
-                    }
+                    // The dot carries the state; the plate matches the other stage badges.
+                    border.color: Theme.oscBorder
                     anchors {
                         top: parent.top
                         right: imageInPlaceBadge.visible ? imageInPlaceBadge.left : parent.right
@@ -2446,12 +2472,12 @@ Rectangle {
                     // like the viewport labels, so they stay readable over bright imagery.
                     Rectangle {
                         visible: control.hasPair && control.hasSecondary && wipeOverlay.splitX > 44
-                        width: wipeIdentityLeft.width + 16
-                        height: wipeIdentityLeft.implicitHeight + 10
-                        radius: 5
-                        color: "#b3060c14"
+                        width: wipeIdentityLeft.width + 18
+                        height: wipeIdentityLeft.implicitHeight + 12
+                        radius: 8
+                        color: Theme.stageLabel
                         border.width: 1
-                        border.color: "#332b3850"
+                        border.color: Theme.stageLabelBorder
                         anchors {
                             top: parent.top
                             left: parent.left
@@ -2475,12 +2501,12 @@ Rectangle {
 
                     Rectangle {
                         visible: control.hasPair && (wipeOverlay.width - wipeOverlay.splitX) > 44
-                        width: wipeIdentityRight.width + 16
-                        height: wipeIdentityRight.implicitHeight + 10
-                        radius: 5
-                        color: "#b3060c14"
+                        width: wipeIdentityRight.width + 18
+                        height: wipeIdentityRight.implicitHeight + 12
+                        radius: 8
+                        color: Theme.stageLabel
                         border.width: 1
-                        border.color: "#332b3850"
+                        border.color: Theme.stageLabelBorder
                         anchors {
                             top: parent.top
                             right: parent.right
@@ -2685,9 +2711,9 @@ Rectangle {
                         width: Math.min(fadeIdentityText.implicitWidth + 16, Math.max(200, fadeOverlay.width - 60))
                         height: fadeIdentityText.implicitHeight + 10
                         radius: 5
-                        color: "#b3060c14"
+                        color: Theme.stageLabel
                         border.width: 1
-                        border.color: "#332b3850"
+                        border.color: Theme.stageLabelBorder
                         anchors {
                             top: parent.top
                             left: parent.left
@@ -2806,10 +2832,10 @@ Rectangle {
         visible: control.hasPair && control.compareMode === 7
         width: fadeRow.implicitWidth + 24
         height: 36
-        radius: 6
-        color: "#e00f151f"
+        radius: 8
+        color: Theme.oscGlass
         border.width: 1
-        border.color: Theme.border
+        border.color: Theme.oscBorder
         anchors {
             right: stage.right
             bottom: stage.bottom
@@ -2873,7 +2899,7 @@ Rectangle {
                     implicitWidth: 14
                     implicitHeight: 14
                     radius: 7
-                    color: imageFadeSlider.pressed ? Theme.accent : "#d8e2f2"
+                    color: imageFadeSlider.pressed ? Theme.accent : Theme.primaryText
                     border.color: Theme.border
                 }
             }

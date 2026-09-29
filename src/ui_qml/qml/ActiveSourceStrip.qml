@@ -33,10 +33,10 @@ Rectangle {
     readonly property bool anyMenuOpen: openMenuCount > 0
 
     objectName: "activeSourceStrip"
-    height: sourceCount > 1 ? 42 : 0
+    height: sourceCount > 1 ? 40 : 0
     visible: sourceCount > 1
-    color: singleMode ? "transparent" : panelColor
-    border.color: singleMode ? "transparent" : borderColor
+    color: "transparent"
+    border.color: "transparent"
     opacity: singleMode && !sourceHover.hovered ? 0.68 : 1.0
 
     Behavior on opacity {
@@ -78,7 +78,7 @@ Rectangle {
                 height: chips.height
                 // Explicit label width: RowLayout.fillWidth children do not feed back into an
                 // implicit width, so sum the pieces here to size the chip from the real text.
-                readonly property real chipLabelPlainWidth: letterLabel.implicitWidth + separatorOne.implicitWidth + filenameLabel.implicitWidth + 10
+                readonly property real chipLabelPlainWidth: letterBadge.width + separatorOne.implicitWidth + filenameLabel.implicitWidth + 10
                 readonly property real chipLabelTaggedWidth: chipLabelPlainWidth + (chip.isReference ? referenceTag.implicitWidth + separatorTwo.implicitWidth + 10 : 0) + (chip.isTimelineMaster ? masterTag.implicitWidth + separatorThree.implicitWidth + 10 : 0)
                 width: Math.min(280, Math.max(128, ((chip.isReference || chip.isTimelineMaster) ? chipLabelTaggedWidth : chipLabelPlainWidth) + (control.singleMode ? 24 : 84)))
                 radius: 8
@@ -88,8 +88,18 @@ Rectangle {
                 readonly property bool isReference: chip.resolvedSourceIdentity.length > 0 ? (control.referenceSourceIdentity.length > 0 ? chip.resolvedSourceIdentity === control.referenceSourceIdentity : chip.sourceId === control.referenceSourceIndex) : chip.sourceId === control.referenceSourceIndex
                 readonly property bool pending: control.pendingSourceIdentities.indexOf(chip.resolvedSourceIdentity) >= 0 || requestQueued
                 property bool requestQueued: false
-                color: chip.isReference ? Theme.controlChecked : Theme.raisedPanel
-                border.color: chip.isReference ? control.accentColor : control.borderColor
+
+                readonly property color sourceAccent: Theme.sourceColor(chip.sourceId)
+                readonly property color sourceBg: Theme.sourceBackground(chip.sourceId)
+                readonly property color sourceBorder: Theme.sourceBorder(chip.sourceId)
+
+                color: chip.isReference ? chip.sourceBg : Theme.raisedPanel
+                border.color: chip.isReference ? chip.sourceAccent : (chipHover.hovered ? chip.sourceBorder : Theme.border)
+                border.width: chip.isReference ? 1.5 : 1
+
+                HoverHandler {
+                    id: chipHover
+                }
 
                 function requestReference() {
                     if (chip.pending || chip.isReference || chip.resolvedSourceIdentity.length === 0)
@@ -127,14 +137,24 @@ Rectangle {
                         verticalCenter: parent.verticalCenter
                     }
 
-                    Text {
-                        id: letterLabel
+                    Rectangle {
+                        id: letterBadge
+                        implicitWidth: 18
+                        implicitHeight: 18
+                        Layout.alignment: Qt.AlignVCenter
+                        radius: 4
+                        color: chip.isReference ? chip.sourceAccent : Theme.fluentHover
 
-                        text: String.fromCharCode(65 + chip.sourceId)
-                        color: control.textColor
-                        font.pixelSize: 12
-                        font.weight: Font.DemiBold
+                        Text {
+                            id: letterLabel
+                            anchors.centerIn: parent
+                            text: String.fromCharCode(65 + chip.sourceId)
+                            color: chip.isReference ? Theme.sourceInk : chip.sourceAccent
+                            font.pixelSize: 11
+                            font.weight: Font.Bold
+                        }
                     }
+
                     Text {
                         id: separatorOne
 
@@ -177,7 +197,8 @@ Rectangle {
                         objectName: "sourceReferenceTag-" + chip.sourceId
                         visible: chip.isReference
                         text: qsTr("参考")
-                        color: control.accentColor
+                        // The reference chip is drawn entirely in its source colour.
+                        color: chip.sourceAccent
                         font.pixelSize: 11
                         font.weight: Font.DemiBold
                         Accessible.name: qsTr("参考源")
@@ -247,9 +268,9 @@ Rectangle {
                         width: 24
                         height: 24
                         radius: 6
-                        color: "#3d2e10"
+                        color: Theme.warningPanel
                         border.width: 1
-                        border.color: "#b08630"
+                        border.color: Theme.warningBorder
                         Accessible.name: qsTr("视频文件已在磁盘上被修改")
                         VcsToolTip {
                             visible: changedOnDiskHover.hovered
@@ -263,7 +284,7 @@ Rectangle {
                         Text {
                             anchors.centerIn: parent
                             text: "!"
-                            color: "#e6a817"
+                            color: Theme.warning
                             font.pixelSize: 11
                             font.weight: Font.DemiBold
                         }

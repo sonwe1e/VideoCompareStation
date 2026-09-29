@@ -104,7 +104,13 @@ MenuItem {
     }
 
     background: Rectangle {
-        radius: 3
+        radius: Theme.radiusSmall
         color: control.hovered || control.highlighted ? control.hoverColor : "transparent"
+
+        Behavior on color {
+            ColorAnimation {
+                duration: 100
+            }
+        }
     }
 }

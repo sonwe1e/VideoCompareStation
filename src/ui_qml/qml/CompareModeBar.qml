@@ -49,8 +49,19 @@ Rectangle {
     objectName: "compareModeBar"
     height: sourceCount > 1 ? 40 : 0
     visible: sourceCount > 1
-    color: panelColor
-    border.color: borderColor
+    color: "transparent"
+    border.color: "transparent"
+
+    // The mode bar is the last chrome row above the stage; one hairline separates the two.
+    Rectangle {
+        height: 1
+        color: Theme.border
+        anchors {
+            left: parent.left
+            right: parent.right
+            bottom: parent.bottom
+        }
+    }
 
     Row {
         spacing: 6
@@ -192,6 +203,7 @@ Rectangle {
         required property int modeValue
         checkable: true
         checked: control.currentMode === modeValue
+        mirrorsState: true
         implicitHeight: 30
         implicitWidth: 64
         enabled: !control.busy
@@ -210,10 +222,41 @@ Rectangle {
         }
 
         background: Rectangle {
-            radius: 5
-            color: !modeButton.enabled ? Theme.disabledPanel : (modeButton.checked ? "#1e3a66" : (modeButton.down ? Theme.controlPressed : (modeButton.hovered ? Theme.controlHover : Theme.control)))
+            radius: Theme.radiusMedium
+            color: {
+                if (!modeButton.enabled)
+                    return "transparent";
+                if (modeButton.checked)
+                    return Theme.controlChecked;
+                if (modeButton.down)
+                    return Theme.fluentPressed;
+                if (modeButton.hovered)
+                    return Theme.fluentHover;
+                return "transparent";
+            }
             border.width: modeButton.activeFocus ? 2 : 1
-            border.color: modeButton.activeFocus ? Theme.accent : (modeButton.checked ? Theme.accent : Theme.controlBorder)
+            border.color: {
+                if (modeButton.activeFocus)
+                    return Theme.focus;
+                if (!modeButton.enabled)
+                    return "transparent";
+                if (modeButton.checked)
+                    return Theme.accent;
+                if (modeButton.hovered)
+                    return Theme.subtleBorder;
+                return "transparent";
+            }
+
+            Behavior on color {
+                ColorAnimation {
+                    duration: 120
+                }
+            }
+            Behavior on border.color {
+                ColorAnimation {
+                    duration: 120
+                }
+            }
         }
     }
 
@@ -223,6 +266,8 @@ Rectangle {
 
         checkable: true
         checked: control.currentMode === ComparisonSurface.Difference
+        // Opening the flavour menu must not light the button up before a flavour is chosen.
+        mirrorsState: true
         implicitHeight: 30
         implicitWidth: control.differenceFlavorLabel.length > 0 ? 132 : 84
         enabled: !control.busy
@@ -241,10 +286,41 @@ Rectangle {
         }
 
         background: Rectangle {
-            radius: 5
-            color: !diffModeButton.enabled ? Theme.disabledPanel : (diffModeButton.checked ? "#1e3a66" : (diffModeButton.down ? Theme.controlPressed : (diffModeButton.hovered ? Theme.controlHover : Theme.control)))
+            radius: Theme.radiusMedium
+            color: {
+                if (!diffModeButton.enabled)
+                    return "transparent";
+                if (diffModeButton.checked)
+                    return Theme.controlChecked;
+                if (diffModeButton.down)
+                    return Theme.fluentPressed;
+                if (diffModeButton.hovered)
+                    return Theme.fluentHover;
+                return "transparent";
+            }
             border.width: diffModeButton.activeFocus ? 2 : 1
-            border.color: diffModeButton.activeFocus ? Theme.accent : (diffModeButton.checked ? Theme.accent : Theme.controlBorder)
+            border.color: {
+                if (diffModeButton.activeFocus)
+                    return Theme.focus;
+                if (!diffModeButton.enabled)
+                    return "transparent";
+                if (diffModeButton.checked)
+                    return Theme.accent;
+                if (diffModeButton.hovered)
+                    return Theme.subtleBorder;
+                return "transparent";
+            }
+
+            Behavior on color {
+                ColorAnimation {
+                    duration: 120
+                }
+            }
+            Behavior on border.color {
+                ColorAnimation {
+                    duration: 120
+                }
+            }
         }
 
         VcsMenu {

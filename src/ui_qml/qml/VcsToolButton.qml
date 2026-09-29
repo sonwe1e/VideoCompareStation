@@ -18,6 +18,9 @@ ToolButton {
     implicitWidth: 34
     implicitHeight: 34
     padding: 0
+    // Tool buttons sit on toolbars and the player OSC, so they rest without a fill and only
+    // show a surface on hover; the prominent variant is the one filled action in its group.
+    flat: true
     activeFocusOnTab: true
     Accessible.name: helpText.length > 0 ? helpText.split("\n")[0] : text
     Accessible.description: helpText
@@ -30,7 +33,20 @@ ToolButton {
             sourceSize.width: control.iconExtent
             sourceSize.height: control.iconExtent
             fillMode: Image.PreserveAspectFit
-            opacity: control.enabled ? 1.0 : 0.35
+            opacity: !control.enabled ? 0.35 : (control.prominent || control.hovered ? 1.0 : 0.86)
+            scale: control.down ? 0.92 : 1.0
+
+            Behavior on scale {
+                NumberAnimation {
+                    duration: 80
+                    easing.type: Easing.OutQuad
+                }
+            }
+            Behavior on opacity {
+                NumberAnimation {
+                    duration: 120
+                }
+            }
         }
 
         Text {
@@ -39,7 +55,7 @@ ToolButton {
             text: control.text
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
-            color: control.enabled ? Theme.primaryText : Theme.disabledText
+            color: !control.enabled ? Theme.disabledText : (control.prominent ? Theme.inverseText : Theme.primaryText)
             font.pixelSize: control.labelPixelSize
             font.weight: Font.DemiBold
         }
@@ -47,9 +63,38 @@ ToolButton {
 
     background: Rectangle {
         radius: control.controlRadius
-        color: !control.enabled ? Theme.disabledPanel : (control.down ? (control.prominent ? Theme.accentPressed : Theme.controlPressed) : (control.hovered ? (control.prominent ? Theme.accentHover : Theme.controlHover) : (control.prominent ? Theme.accent : Theme.control)))
+        color: {
+            if (!control.enabled)
+                return control.flat ? "transparent" : Theme.disabledPanel;
+            if (control.prominent)
+                return control.down ? Theme.accentPressed : (control.hovered ? Theme.accentHover : Theme.accentFill);
+            if (control.flat)
+                return control.down ? Theme.fluentPressed : (control.hovered ? Theme.fluentHover : "transparent");
+            return control.down ? Theme.controlPressed : (control.hovered ? Theme.controlHover : Theme.control);
+        }
         border.width: control.activeFocus ? 2 : 1
-        border.color: control.activeFocus ? (control.prominent ? Theme.strongFocus : Theme.accent) : (control.enabled ? (control.prominent ? Theme.focus : Theme.controlBorder) : Theme.disabledBorder)
+        border.color: {
+            if (control.activeFocus)
+                return control.prominent ? Theme.strongFocus : Theme.focus;
+            if (!control.enabled)
+                return control.flat ? "transparent" : Theme.disabledBorder;
+            if (control.prominent)
+                return control.hovered ? Theme.focus : Theme.accent;
+            if (control.flat)
+                return control.hovered ? Theme.subtleBorder : "transparent";
+            return Theme.controlBorder;
+        }
+
+        Behavior on color {
+            ColorAnimation {
+                duration: 120
+            }
+        }
+        Behavior on border.color {
+            ColorAnimation {
+                duration: 120
+            }
+        }
     }
 
     VcsToolTip {

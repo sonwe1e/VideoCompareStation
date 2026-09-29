@@ -168,16 +168,27 @@ Popup {
                                 width: parent.width
                                 spacing: 8
 
-                                Text {
-                                    width: 34
-                                    text: String.fromCharCode(65 + droppedRow.index)
-                                    color: "#ff9fc3ff"
-                                    font.bold: true
+                                Rectangle {
+                                    width: 24
+                                    height: 24
+                                    radius: 5
+                                    color: Theme.sourceBackground(droppedRow.index)
+                                    border.width: 1
+                                    border.color: Theme.sourceBorder(droppedRow.index)
                                     anchors.verticalCenter: parent.verticalCenter
+
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: String.fromCharCode(65 + droppedRow.index)
+                                        color: Theme.sourceColor(droppedRow.index)
+                                        font.pixelSize: 11
+                                        font.bold: true
+                                    }
                                 }
+
                                 Text {
                                     objectName: "dropSourceName-" + droppedRow.index
-                                    width: parent.width - 162
+                                    width: parent.width - 152
                                     text: control.sourceNameAt(droppedRow.index)
                                     color: Theme.primaryText
                                     elide: Text.ElideMiddle

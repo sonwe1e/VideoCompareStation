@@ -52,12 +52,69 @@
 #include <utility>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
+// clang-format off
+#include <windows.h>
+#include <dwmapi.h>
+// clang-format on
+#endif
+
 void initializeQmlResources() {
     Q_INIT_RESOURCE(dvs_ui_qml_resources);
 }
 
 namespace dvs::ui {
 namespace {
+
+#if defined(_WIN32)
+void applyWindowsNativeChrome(QQuickWindow* const window) noexcept {
+    if (window == nullptr) {
+        return;
+    }
+    const auto hwnd = reinterpret_cast<HWND>(window->winId());
+    if (hwnd == nullptr) {
+        return;
+    }
+
+    const auto setAttr = [hwnd](const DWORD attr, const auto* const val) noexcept {
+        static_cast<void>(::DwmSetWindowAttribute(hwnd, attr, val, sizeof(*val)));
+    };
+
+    // 1. Windows 11 / Windows 10 Immersive Dark Mode for window frame and caption.
+    const BOOL darkMode = TRUE;
+    constexpr DWORD kDwmwaUseImmersiveDarkMode = 20;
+    constexpr DWORD kDwmwaUseImmersiveDarkModeBefore20H1 = 19;
+    if (FAILED(::DwmSetWindowAttribute(
+            hwnd, kDwmwaUseImmersiveDarkMode, &darkMode, sizeof(darkMode)))) {
+        setAttr(kDwmwaUseImmersiveDarkModeBefore20H1, &darkMode);
+    }
+
+    // 2. Windows 11 Rounded Corners: DWMWA_WINDOW_CORNER_PREFERENCE (33) -> DWMWCP_ROUND (2).
+    constexpr DWORD kDwmwaWindowCornerPreference = 33;
+    constexpr DWORD kDwmwcpRound = 2;
+    setAttr(kDwmwaWindowCornerPreference, &kDwmwcpRound);
+
+    // 3. Caption colour matches Theme.headerBackground (#111722) in VcsTheme.js, so the title
+    //    bar and the menu bar read as one header. No system backdrop is requested: the window
+    //    paints an opaque background, so Mica would never show through.
+    constexpr DWORD kDwmwaCaptionColor = 35;
+    constexpr COLORREF kCaptionColor = RGB(17, 23, 34);
+    setAttr(kDwmwaCaptionColor, &kCaptionColor);
+
+    // 4. Caption text matches Theme.primaryText (#f1f5f9).
+    constexpr DWORD kDwmwaTextColor = 36;
+    constexpr COLORREF kTextColor = RGB(241, 245, 249);
+    setAttr(kDwmwaTextColor, &kTextColor);
+}
+#endif
 
 void registerQmlTypes() {
     static std::once_flag registered;
@@ -300,11 +357,24 @@ public:
             QObject::connect(window, &QObject::destroyed, [this] { window_ = nullptr; });
         surfaceDestroyedConnection_ =
             QObject::connect(surface, &QObject::destroyed, [this] { surface_ = nullptr; });
+#if defined(_WIN32)
+        if (!options_.smokeMode) {
+            applyWindowsNativeChrome(window_);
+        }
+#endif
         markStartupMilestone("show-enter");
         window_->show();
         markStartupMilestone("post-show");
         window_->raise();
         window_->requestActivate();
+#if defined(_WIN32)
+        if (!options_.smokeMode) {
+            // Also ask the shell directly so a launch from Explorer lands in front.
+            if (const auto hwnd = reinterpret_cast<HWND>(window_->winId()); hwnd != nullptr) {
+                ::SetForegroundWindow(hwnd);
+            }
+        }
+#endif
         window_->requestUpdate();
         surface_->update();
         if (window_->screen() != nullptr) {
@@ -382,9 +452,21 @@ public:
         if (window_ == nullptr) {
             return;
         }
+        // Restore a minimised window without touching its other states: a maximised or
+        // full-screen review must stay that way when another file is sent to it.
+        if (Qt::WindowStates states = window_->windowStates();
+            states.testFlag(Qt::WindowMinimized)) {
+            states.setFlag(Qt::WindowMinimized, false);
+            window_->setWindowStates(states);
+        }
         window_->show();
         window_->raise();
         window_->requestActivate();
+#if defined(_WIN32)
+        if (const auto hwnd = reinterpret_cast<HWND>(window_->winId()); hwnd != nullptr) {
+            ::SetForegroundWindow(hwnd);
+        }
+#endif
     }
 
     [[nodiscard]] bool openSourcesForAutomation(const QList<QUrl>& sources) noexcept {

@@ -96,6 +96,8 @@ if(DVS_BUILD_ADAPTERS)
             dvs_graphics_d3d11
             dvs_presentation_contract
             dvs::qt_dependencies
+        PRIVATE
+            dwmapi
     )
 
     qt6_add_resources(dvs_ui_qml_resource_sources dvs_ui_qml_resources.qrc)

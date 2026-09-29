@@ -91,6 +91,16 @@ Rectangle {
             height: headerColumn.implicitHeight + 20
             color: Theme.raisedPanel
 
+            Rectangle {
+                anchors {
+                    left: parent.left
+                    right: parent.right
+                    bottom: parent.bottom
+                }
+                height: 1
+                color: Theme.border
+            }
+
             Column {
                 id: headerColumn
 
@@ -227,8 +237,28 @@ Rectangle {
                         objectName: "folderPairRow-" + index
                         width: pairList.width
                         height: 34
-                        color: pairRow.hasBoth ? (pairRow.index === control.currentRow ? Theme.controlChecked : (rowHover.hovered ? Theme.control : "transparent")) : "transparent"
+                        radius: 6
+                        color: pairRow.hasBoth ? (pairRow.index === control.currentRow ? Theme.controlChecked : (rowHover.hovered ? Theme.fluentHover : "transparent")) : "transparent"
                         opacity: pairRow.hasBoth ? 1.0 : 0.55
+
+                        Behavior on color {
+                            ColorAnimation {
+                                duration: 100
+                            }
+                        }
+
+                        Rectangle {
+                            visible: pairRow.index === control.currentRow
+                            width: 3
+                            height: 16
+                            radius: 1.5
+                            color: Theme.accent
+                            anchors {
+                                left: parent.left
+                                leftMargin: 2
+                                verticalCenter: parent.verticalCenter
+                            }
+                        }
 
                         Rectangle {
                             id: statusDot
@@ -330,8 +360,18 @@ Rectangle {
 
             objectName: "folderPairFooter"
             width: parent.width
-            height: 44
+            height: 46
             color: Theme.raisedPanel
+
+            Rectangle {
+                anchors {
+                    left: parent.left
+                    right: parent.right
+                    top: parent.top
+                }
+                height: 1
+                color: Theme.border
+            }
 
             Row {
                 spacing: 6

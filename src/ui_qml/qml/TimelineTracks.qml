@@ -54,14 +54,27 @@ Item {
     Rectangle {
         id: mainRail
 
-        height: 5
-        radius: 2.5
-        color: Theme.border
+        height: timelineMouse.containsMouse || control.dragging ? 6 : 4
+        radius: height / 2
+        color: Theme.timelineRail
         anchors {
             left: parent.left
             right: parent.right
             bottom: parent.bottom
             bottomMargin: 5
+        }
+
+        Behavior on height {
+            NumberAnimation {
+                duration: 120
+                easing.type: Easing.OutQuad
+            }
+        }
+        Behavior on radius {
+            NumberAnimation {
+                duration: 120
+                easing.type: Easing.OutQuad
+            }
         }
     }
 
@@ -88,7 +101,7 @@ Item {
         visible: control.hoverFrame >= 0 && control.enabled && control.totalFrames > 0
         width: 1
         height: 15
-        color: "#93c5fd"
+        color: Theme.accentText
         opacity: 0.85
         z: 3
         x: Math.max(0, Math.min(control.width - 1, control.positionForFrame(control.hoverFrame) * control.width))
@@ -104,8 +117,8 @@ Item {
         width: visibleOut < visibleIn ? 0 : Math.max(2, (visibleOut - visibleIn) / Math.max(1, control.visibleFrameCount - 1) * control.width)
         height: 11
         radius: 2
-        color: "#536dfe"
-        opacity: 0.35
+        // Translucency lives in the colour, not in `opacity`, so the child brackets stay crisp.
+        color: Theme.rangeBand
         y: mainRail.y - 3
 
         // Professional In-point bracket handle ([)
@@ -118,18 +131,18 @@ Item {
             Rectangle {
                 width: 2
                 height: parent.height
-                color: "#93c5fd"
+                color: Theme.accentText
             }
             Rectangle {
                 width: 4
                 height: 2
-                color: "#93c5fd"
+                color: Theme.accentText
             }
             Rectangle {
                 width: 4
                 height: 2
                 anchors.bottom: parent.bottom
-                color: "#93c5fd"
+                color: Theme.accentText
             }
         }
 
@@ -144,20 +157,20 @@ Item {
                 width: 2
                 height: parent.height
                 anchors.right: parent.right
-                color: "#93c5fd"
+                color: Theme.accentText
             }
             Rectangle {
                 width: 4
                 height: 2
                 anchors.right: parent.right
-                color: "#93c5fd"
+                color: Theme.accentText
             }
             Rectangle {
                 width: 4
                 height: 2
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
-                color: "#93c5fd"
+                color: Theme.accentText
             }
         }
     }
@@ -178,7 +191,7 @@ Item {
             x: Math.max(0, Math.min(control.width - width, trackPosition * control.width - width / 2))
             y: mainRail.y - (height - mainRail.height) / 2
             radius: 2
-            color: kind === "missing" ? Theme.error : (kind === "duplicate" ? "#fb923c" : (kind === "extra" ? "#c084fc" : (kind === "anchor" ? "#22d3ee" : "#facc15")))
+            color: Theme.timelineMarkerColor(kind)
 
             HoverHandler {
                 id: markerHover
@@ -206,17 +219,28 @@ Item {
         // The playhead thumb. Its full box (including the ~6 px that extend below the rail) must
         // clear the transport bar above which TimelineTracks sits — see PlayerOsc's content-driven
         // height, which reserves exactly this much vertical room.
+        id: playheadThumbItem
         objectName: "playheadThumb"
         width: 13
         height: 13
         radius: 6.5
         x: Math.max(0, Math.min(control.width - width, control.positionForFrame(Math.round(control.progress * Math.max(0, control.totalFrames - 1))) * control.width - width / 2))
-        color: control.enabled ? Theme.accent : Theme.disabledText
-        border.color: "#d8e2f2"
+        color: control.enabled ? Theme.inverseText : Theme.disabledText
+        border.width: 2.5
+        border.color: control.enabled ? Theme.accent : Theme.disabledBorder
         anchors.verticalCenter: mainRail.verticalCenter
+        scale: control.dragging ? 1.25 : (timelineMouse.containsMouse ? 1.15 : 1.0)
+
+        Behavior on scale {
+            NumberAnimation {
+                duration: 100
+                easing.type: Easing.OutQuad
+            }
+        }
     }
 
     MouseArea {
+        id: timelineMouse
         anchors.fill: parent
         hoverEnabled: true
         enabled: control.enabled

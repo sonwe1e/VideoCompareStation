@@ -100,9 +100,10 @@ Item {
             const headerX = Math.round(headerPoint.x * scaleX);
             const headerY = Math.round(headerPoint.y * scaleY);
             compare(opened.alpha(headerX, headerY), 255);
-            fuzzyCompare(opened.red(headerX, headerY), 17, 3);
-            fuzzyCompare(opened.green(headerX, headerY), 24, 3);
-            fuzzyCompare(opened.blue(headerX, headerY), 35, 3);
+            // Theme.panel (#151c28): the header paints its own opaque surface over the magenta.
+            fuzzyCompare(opened.red(headerX, headerY), 21, 3);
+            fuzzyCompare(opened.green(headerX, headerY), 28, 3);
+            fuzzyCompare(opened.blue(headerX, headerY), 40, 3);
 
             // Sample just below the header and just above the footer: both must stay opaque.
             const midHeaderPoint = header.mapToItem(windowContent, header.width / 2, header.height + 6);

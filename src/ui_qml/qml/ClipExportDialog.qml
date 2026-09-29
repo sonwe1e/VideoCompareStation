@@ -160,9 +160,9 @@ Item {
                             implicitWidth: streamCopyText.implicitWidth + 12
                             implicitHeight: 20
                             radius: 4
-                            color: "#064e3b"
+                            color: Theme.successPanel
                             border.width: 1
-                            border.color: "#059669"
+                            border.color: Theme.successBorder
 
                             Text {
                                 id: streamCopyText
@@ -170,7 +170,7 @@ Item {
                                 text: qsTr("无损流拷贝 · Stream Copy")
                                 font.pixelSize: 10
                                 font.weight: Font.DemiBold
-                                color: "#34d399"
+                                color: Theme.success
                             }
                         }
                     }
@@ -196,9 +196,9 @@ Item {
                             width: parent.width
                             implicitHeight: infoCol.implicitHeight + 18
                             radius: 6
-                            color: "#111622"
+                            color: Theme.window
                             border.width: 1
-                            border.color: "#1e293b"
+                            border.color: Theme.border
 
                             Column {
                                 id: infoCol
@@ -323,9 +323,9 @@ Item {
                             width: parent.width
                             implicitHeight: tipCol.implicitHeight + 16
                             radius: 6
-                            color: Qt.rgba(30 / 255, 41 / 255, 59 / 255, 0.45)
+                            color: Theme.raisedPanel
                             border.width: 1
-                            border.color: "#334155"
+                            border.color: Theme.controlBorder
 
                             Column {
                                 id: tipCol
@@ -335,7 +335,7 @@ Item {
 
                                 Text {
                                     text: qsTr("ℹ️ 无损剪辑特性说明：")
-                                    color: "#93c5fd"
+                                    color: Theme.accentText
                                     font.pixelSize: 11
                                     font.weight: Font.DemiBold
                                 }
@@ -343,7 +343,7 @@ Item {
                                 Text {
                                     width: parent.width
                                     text: qsTr("• 无损流拷贝保持原始编码、分辨率与帧率。\n• 起点会对齐到前一个关键帧，片段可能比入点稍早开始；B 帧素材的结尾可能多出几帧参考帧。要精确成帧需要重新编码，尚未提供。")
-                                    color: "#94a3b8"
+                                    color: Theme.mutedText
                                     font.pixelSize: 11
                                     lineHeight: 1.35
                                     wrapMode: Text.WordWrap
