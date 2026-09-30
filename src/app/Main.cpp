@@ -1162,6 +1162,7 @@ runDesktop(int& argc,
     qint64 heldStepSeekTarget = -1;
     std::uint64_t heldStepSequenceErrors = 0U;
     bool heldStepSeekedToMiddle = false;
+    bool heldStepPrimed = false;
     QElapsedTimer heldStepTimer;
     qint64 heldStepNextDeadlineMs = 0;
     std::optional<dvs::media::FrameProviderStatistics> heldStepProviderBaseline;
@@ -1374,9 +1375,23 @@ runDesktop(int& argc,
             metrics.peakThreads = metrics.baselineThreads;
             if (expectedSourceCount > 1U) {
                 comparisonFrameBeforeSwitch = controller.currentFrame();
+                // Do not let a persisted layout silently satisfy the requested-mode check.
+                // Non-side profiles must make a real transition from the side-by-side view.
+                if (comparisonMode != PerformanceComparisonMode::Side &&
+                    !desktop.clickControlForAutomation("sideModeButton")) {
+                    fail("comparison-baseline-click-rejected");
+                    return;
+                }
                 if (!desktop.clickControlForAutomation(
                         performanceModeControlName(comparisonMode))) {
                     fail("comparison-mode-click-rejected");
+                    return;
+                }
+                // Difference is a flavour menu, not a direct mode toggle. Exercise the real
+                // user path and select pure difference before validating the surface and pixels.
+                if (comparisonMode == PerformanceComparisonMode::Difference &&
+                    !desktop.clickControlForAutomation("diffPureMenuItem")) {
+                    fail("comparison-difference-choice-rejected");
                     return;
                 }
                 stage = Stage::WaitingForComparisonMode;
@@ -1477,6 +1492,11 @@ runDesktop(int& argc,
             if (!playbackRelayBaseline.has_value() &&
                 playbackTimer.elapsed() >= kWarmup.count() * 1000) {
                 playbackRelayBaseline = runtime->renderRelayStatistics();
+                // Menu selection, shader initialization and optional metrics workers belong to
+                // warm-up. Compare thread growth against the same configured operating mode,
+                // not the pre-selection side-by-side scene.
+                metrics.baselineThreads =
+                    dvs::platform::sampleCurrentProcessTelemetry().threadCount;
             }
             if (playbackTimer.elapsed() < duration.count() * 1000) {
                 return;
@@ -1564,6 +1584,17 @@ runDesktop(int& argc,
                     return;
                 }
                 if (controller.busy() || controller.currentFrame() != heldStepSeekTarget) {
+                    return;
+                }
+                if (!heldStepPrimed) {
+                    // Starting a stream after the middle seek is a discontinuity and advances
+                    // its generation once. Prime and present that first step before sampling
+                    // the 300-step steady-state window, just as playback excludes warm-up.
+                    heldStepPrimed = true;
+                    ++heldStepSeekTarget;
+                    if (!controller.stepFrames(1)) {
+                        fail("held-step-prime-rejected");
+                    }
                     return;
                 }
                 heldStepSeekedToMiddle = true;

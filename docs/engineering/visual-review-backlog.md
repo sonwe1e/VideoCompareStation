@@ -3,6 +3,27 @@
 更新：2026-09-30。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
 
+## 2026-09-30 2.0.3 发布门禁：空闲间隙步进与差异菜单验证（基线 `02dffa7` + 本轮工作区）
+
+- **实际红灯，不归因于远控**：物理 RTX 4090／120 Hz 下，D3D11VA 与 zero-copy 用例通过，
+  Wipe、切模式保留帧、旋转 Wipe 的 300 帧均提交／呈现且无序列错误，但 generation delta 为
+  300；Diff 只打开下拉菜单、不选择口径，模式验证超时。原始失败证据保存在
+  `out/verification/release-2.0.3/failed-02dffa7/`。
+- **产品修复**：`PlaybackCoordinator` 的 clean drain 原来清掉整个 step run，下一次按键重新
+  进入 `beginInteractiveStepStream` 无条件取消 provider／递增 generation。新增仅包含完整身份
+  与显示帧／方向的 warm cursor；空闲相邻步进复用，seek（即使目标为同帧）、方向切换、设备／
+  会话／拓扑／时间线／对齐版本变化不复用。没有保留帧引用或隐藏活动任务，request 身份仍独立。
+- **验证驱动修复**：先从并排开始，再打开差异菜单选择 `diffPureMenuItem`，避免保存的模式造成
+  静默通过；真实 surface 模式／像素／保留帧检查不变。线程基线移到同模式预热完成边界，
+  而非未激活菜单／着色器／指标 worker 的初始布局；步进首帧在初始化边界呈现后开始完整
+  300 帧稳态计数，generation=0、顺序比例、exact seek／cancel／reopen 与所有性能阈值不变。
+- **定向证据**：协调器 87/87（新增空闲正向、空闲反向、同帧 seek、方向切换 4 项）；4 个游标
+  变异与 3 个驱动变异均检出，恢复控制组通过。短 Diff 门禁模式／像素／保留帧验证通过、
+  300/300 呈现、generation delta=0。变异过程中保留源文件字节备份并在 finally 恢复。
+- **发布状态**：短测不是五分钟 Release 通过证据；完整 dev／Release、质量、硬件／性能、
+  DPI／关闭 soak 与 ZIP 校验重新绑定修复后的候选 SHA，全部通过才推送并公开 2.0.3。
+  日志仍在 `out/verification/release-2.0.3/`，最终结果以发布页为准。
+
 ## 2026-09-30 ZIP 升级后的旧右键入口与启动路径（S-01／S-02，基线 `35449f1` + 本轮工作区）
 
 用户反馈：打开视频时 Windows 提示找不到 MP4；解压 2.0.1 与 2.0.2 后右键入口堆叠。

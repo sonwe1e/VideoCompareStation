@@ -4544,6 +4544,135 @@ TEST(PlaybackCoordinatorTests, ForwardStepUsesOneGenerationAcrossAdjacentCommand
     }
 }
 
+TEST(PlaybackCoordinatorTests, DrainedForwardStepsReuseWarmGeneration) {
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator = makeCoordinator(provider, render);
+    openReady(coordinator, provider, render);
+    std::optional<domain::PlaybackGeneration> generation;
+    std::size_t cancellations = 0U;
+    for (std::size_t index = 1U; index <= 3U; ++index) {
+        ASSERT_EQ(coordinator->submit(StepFramesCommand{
+                      .context = commandContext(coordinator, domain::CommandId{index + 1U}),
+                      .delta = 1,
+                  }),
+                  PortSubmitResult::Accepted);
+        ASSERT_TRUE(provider->waitForFrameRequestCount(index + 1U));
+        const auto request = provider->frameRequest(index);
+        ASSERT_TRUE(request.has_value());
+        if (generation.has_value()) {
+            EXPECT_EQ(request->context.playback.playbackGeneration, *generation);
+            EXPECT_EQ(provider->canceledContexts().size(), cancellations);
+        }
+        presentInteractiveStep(coordinator, provider, render, request, index);
+        ASSERT_TRUE(waitUntil([&] {
+            return coordinator->snapshot()->playbackState == domain::PlaybackState::kPaused;
+        }));
+        generation = request->context.playback.playbackGeneration;
+        cancellations = provider->canceledContexts().size();
+    }
+}
+
+TEST(PlaybackCoordinatorTests, DrainedReverseStepsReuseWarmGeneration) {
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator = makeCoordinator(provider, render);
+    openReady(coordinator, provider, render);
+    ASSERT_EQ(coordinator->submit(SeekFrameCommand{
+                  .context = commandContext(coordinator, domain::CommandId{2}),
+                  .frameId = domain::FrameId{4},
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_TRUE(provider->waitForFrameRequestCount(2U));
+    presentInteractiveStep(coordinator, provider, render, provider->frameRequest(1U), 1U);
+    ASSERT_TRUE(waitUntil(
+        [&] { return coordinator->snapshot()->playbackState == domain::PlaybackState::kPaused; }));
+    std::optional<domain::PlaybackGeneration> generation;
+    for (std::size_t index = 2U; index <= 3U; ++index) {
+        ASSERT_EQ(coordinator->submit(StepFramesCommand{
+                      .context = commandContext(coordinator, domain::CommandId{index + 1U}),
+                      .delta = -1,
+                  }),
+                  PortSubmitResult::Accepted);
+        ASSERT_TRUE(provider->waitForFrameRequestCount(index + 1U));
+        const auto request = provider->frameRequest(index);
+        ASSERT_TRUE(request.has_value());
+        if (generation.has_value()) {
+            EXPECT_EQ(request->context.playback.playbackGeneration, *generation);
+        }
+        presentInteractiveStep(coordinator, provider, render, request, index);
+        ASSERT_TRUE(waitUntil([&] {
+            return coordinator->snapshot()->playbackState == domain::PlaybackState::kPaused;
+        }));
+        generation = request->context.playback.playbackGeneration;
+    }
+}
+
+TEST(PlaybackCoordinatorTests, DrainedCursorDoesNotSurviveASeekToTheSameFrame) {
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator = makeCoordinator(provider, render);
+    openReady(coordinator, provider, render);
+    ASSERT_EQ(coordinator->submit(StepFramesCommand{
+                  .context = commandContext(coordinator, domain::CommandId{2}),
+                  .delta = 1,
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_TRUE(provider->waitForFrameRequestCount(2U));
+    presentInteractiveStep(coordinator, provider, render, provider->frameRequest(1U), 1U);
+    ASSERT_TRUE(waitUntil(
+        [&] { return coordinator->snapshot()->playbackState == domain::PlaybackState::kPaused; }));
+    ASSERT_EQ(coordinator->submit(SeekFrameCommand{
+                  .context = commandContext(coordinator, domain::CommandId{3}),
+                  .frameId = domain::FrameId{1},
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_TRUE(provider->waitForFrameRequestCount(3U));
+    presentInteractiveStep(coordinator, provider, render, provider->frameRequest(2U), 2U);
+    ASSERT_TRUE(waitUntil(
+        [&] { return coordinator->snapshot()->playbackState == domain::PlaybackState::kPaused; }));
+    const auto seekGeneration = coordinator->snapshot()->playbackGeneration;
+    ASSERT_EQ(coordinator->submit(StepFramesCommand{
+                  .context = commandContext(coordinator, domain::CommandId{4}),
+                  .delta = 1,
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_TRUE(provider->waitForFrameRequestCount(4U));
+    const auto request = provider->frameRequest(3U);
+    ASSERT_TRUE(request.has_value());
+    EXPECT_EQ(request->context.playback.playbackGeneration,
+              domain::PlaybackGeneration{seekGeneration.value() + 1U});
+}
+
+TEST(PlaybackCoordinatorTests, DrainedCursorDoesNotSurviveADirectionChange) {
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator = makeCoordinator(provider, render);
+    openReady(coordinator, provider, render);
+    ASSERT_EQ(coordinator->submit(StepFramesCommand{
+                  .context = commandContext(coordinator, domain::CommandId{2}),
+                  .delta = 1,
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_TRUE(provider->waitForFrameRequestCount(2U));
+    const auto forward = provider->frameRequest(1U);
+    ASSERT_TRUE(forward.has_value());
+    presentInteractiveStep(coordinator, provider, render, forward, 1U);
+    ASSERT_TRUE(waitUntil(
+        [&] { return coordinator->snapshot()->playbackState == domain::PlaybackState::kPaused; }));
+    ASSERT_EQ(coordinator->submit(StepFramesCommand{
+                  .context = commandContext(coordinator, domain::CommandId{3}),
+                  .delta = -1,
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_TRUE(provider->waitForFrameRequestCount(3U));
+    const auto reverse = provider->frameRequest(2U);
+    ASSERT_TRUE(reverse.has_value());
+    EXPECT_EQ(
+        reverse->context.playback.playbackGeneration,
+        domain::PlaybackGeneration{forward->context.playback.playbackGeneration.value() + 1U});
+}
+
 TEST(PlaybackCoordinatorTests, ForwardStepDoesNotSupersedeInFlightSequentialFrame) {
     const auto provider = std::make_shared<FakeFrameProvider>();
     const auto render = std::make_shared<FakeRenderChannel>();

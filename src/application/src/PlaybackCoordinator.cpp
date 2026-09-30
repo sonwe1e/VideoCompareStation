@@ -485,6 +485,16 @@ private:
         Reverse,
     };
 
+    // Identity only: retaining a drained cursor must not retain decoded frames or pending work.
+    struct WarmInteractiveStepCursor final {
+        FrameRequestContext context;
+        InteractiveStepDirection direction;
+        domain::FrameId displayedFrame;
+        domain::TopologyRevision topologyRevision;
+        domain::TimelineRevision timelineRevision;
+        std::uint64_t alignmentRevision = 0U;
+    };
+
     struct InteractiveStepRun final {
         // Stable for the whole run. All frames in one run share this generation, so the provider's
         // Sequential cursor / reverse-window cache survive frame to frame.
@@ -1361,8 +1371,20 @@ private:
             return;
         }
 
-        // Clean drain: nothing left to present. Keep the provider generation warm (do not increment
-        // it) so the next +1 reuses the Sequential cursor / reverse-window cache.
+        // Preserve the identity of the warm cursor across an idle gap between key repeats. The
+        // next adjacent step may reuse it only if direction, frame and every revision still match.
+        warmInteractiveStepCursor_ = WarmInteractiveStepCursor{
+            .context =
+                FrameRequestContext{
+                    .playback = interactiveStepRun_->providerContext,
+                    .deviceGeneration = state_.deviceGeneration,
+                },
+            .direction = interactiveStepRun_->direction,
+            .displayedFrame = displayedFrame,
+            .topologyRevision = topologyRevision_,
+            .timelineRevision = timelineRevision_,
+            .alignmentRevision = state_.alignmentRevision,
+        };
         interactiveStepRun_.reset();
         lastInteractiveProjectionAt_.reset();
         state_.playbackState = domain::PlaybackState::kPaused;
@@ -1459,9 +1481,9 @@ private:
         publishSnapshot();
     }
 
-    // Begins a fresh interactive step stream for the first +1 or -1. Stops any active playback,
-    // supersedes an in-flight exact seek, advances the generation once, and submits the first
-    // frame. Forward uses Sequential; Reverse uses FrameRequestPriority::Reverse.
+    // Begins an interactive stream after an idle gap. A genuine discontinuity advances the
+    // generation once; a cleanly drained adjacent step reuses its validated warm identity.
+    // Forward uses Sequential; reverse uses FrameRequestPriority::Reverse.
     void beginInteractiveStepStream(const StepFramesCommand& command) {
         if (!sources_.has_value() || state_.sessionState != domain::SessionState::kReady) {
             rejectCommand(command.context,
@@ -1494,10 +1516,21 @@ private:
         const domain::FrameId target{
             direction == InteractiveStepDirection::Forward ? base.value() + 1 : base.value() - 1};
 
-        // Exactly one generation advance for the whole run: this is the largest single contributor
-        // to eliminating the per-frame generation storm the old Exact-seek path produced.
-        dependencies_.directFrameProvider->cancel(currentPlaybackScope());
-        state_.playbackGeneration = increment(state_.playbackGeneration);
+        const bool reusesWarmCursor =
+            warmInteractiveStepCursor_.has_value() &&
+            warmInteractiveStepCursor_->context.playback == currentPlaybackScope() &&
+            warmInteractiveStepCursor_->context.deviceGeneration == state_.deviceGeneration &&
+            warmInteractiveStepCursor_->direction == direction &&
+            warmInteractiveStepCursor_->displayedFrame == base &&
+            warmInteractiveStepCursor_->topologyRevision == topologyRevision_ &&
+            warmInteractiveStepCursor_->timelineRevision == timelineRevision_ &&
+            warmInteractiveStepCursor_->alignmentRevision == state_.alignmentRevision &&
+            state_.playbackState == domain::PlaybackState::kPaused;
+        warmInteractiveStepCursor_.reset();
+        if (!reusesWarmCursor) {
+            dependencies_.directFrameProvider->cancel(currentPlaybackScope());
+            state_.playbackGeneration = increment(state_.playbackGeneration);
+        }
 
         const PlaybackRequestContext providerContext = currentPlaybackScope();
         PendingInteractiveStep firstStep{
@@ -4590,6 +4623,7 @@ private:
     std::uint64_t playbackRunId_ = 0U;
     std::optional<domain::ComparisonPair> activeComparisonPair_;
     std::optional<InteractiveStepRun> interactiveStepRun_;
+    std::optional<WarmInteractiveStepCursor> warmInteractiveStepCursor_;
     std::optional<std::chrono::steady_clock::time_point> lastPlaybackProjectionAt_;
     std::optional<std::chrono::steady_clock::time_point> lastInteractiveProjectionAt_;
     // Displayed frame of the most recent SnapshotCommitted; identical re-commits are suppressed
