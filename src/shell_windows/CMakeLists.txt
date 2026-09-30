@@ -21,7 +21,7 @@ target_include_directories(
     PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
 )
-target_link_libraries(dvs_shell_registration PUBLIC advapi32 ole32)
+target_link_libraries(dvs_shell_registration PUBLIC advapi32 ole32 shell32)
 
 dvs_apply_project_warnings(dvs_shell_registration)
 dvs_register_architecture_target(dvs_shell_registration)
@@ -38,7 +38,7 @@ add_library(
     CompareStationShell.def
     "${CMAKE_CURRENT_BINARY_DIR}/CompareStationShell.rc"
 )
-target_link_libraries(CompareStationShell PRIVATE ole32 shell32 shlwapi)
+target_link_libraries(CompareStationShell PRIVATE advapi32 ole32 shell32 shlwapi)
 
 dvs_apply_project_warnings(CompareStationShell)
 dvs_register_architecture_target(CompareStationShell)

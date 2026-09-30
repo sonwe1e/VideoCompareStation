@@ -184,13 +184,14 @@ function Get-RegistryString {
 # below and a plain command line from an earlier layout. Both are recognised by what they point at,
 # never by the key's name, so a neighbour registered by another tool is never touched.
 function Get-CompareStationVerbKey {
-    param([string] $ShellKeyPath)
+    param([string] $ShellKeyPath, [bool] $KeepCurrent)
 
     if (-not (Test-Path -LiteralPath $ShellKeyPath -PathType Container)) {
         return
     }
     foreach ($child in Get-ChildItem -LiteralPath $ShellKeyPath) {
-        if ($child.PSChildName -eq $verbKeyName) {
+        # The same verb name under a different association is a duplicate, not our current entry.
+        if ($KeepCurrent -and $verbKeys -contains $child.Name.Replace('HKEY_CURRENT_USER', 'HKCU:')) {
             continue
         }
         $handler = Get-RegistryString -Path $child.PSPath -Name 'ExplorerCommandHandler'
@@ -199,27 +200,35 @@ function Get-CompareStationVerbKey {
             continue
         }
         $line = Get-RegistryString -Path (Join-Path $child.PSPath 'command') -Name '(default)'
-        if ($null -ne $line -and $line.ToLowerInvariant().Contains('comparestation.exe')) {
-            $child.PSPath
+        if ($null -ne $line -and $line -match '^\s*(?:"(?<exe>[^"]+)"|(?<exe>[^\s]+))') {
+            # Match the executable, not an argument mentioning our name or a similarly named tool.
+            $leaf = [System.IO.Path]::GetFileName($Matches.exe).TrimEnd(' ', '.')
+            if ($leaf -in @('CompareStation.exe', 'VCStation.exe')) {
+                $child.PSPath
+            }
         }
     }
 }
 
 function Remove-StaleCompareStationVerbs {
-    param([string[]] $ExtensionList)
+    param([bool] $KeepCurrent)
 
     $removed = 0
-    foreach ($extension in $ExtensionList) {
-        foreach ($shellKeyPath in @(
-                (Join-Path $classesRoot "$extension\shell"),
-                (Join-Path $classesRoot "SystemFileAssociations\$extension\shell"))) {
-            foreach ($stale in @(Get-CompareStationVerbKey -ShellKeyPath $shellKeyPath)) {
+    # Include extension keys, versioned ProgIDs and generic file associations. Do not recursively
+    # sweep the registry: only verb locations in the file-association chain, matched by target.
+    foreach ($parent in @($classesRoot, (Join-Path $classesRoot 'SystemFileAssociations'))) {
+        if (-not (Test-Path -LiteralPath $parent)) {
+            continue
+        }
+        foreach ($association in @(Get-ChildItem -LiteralPath $parent)) {
+            $shellKeyPath = Join-Path $association.PSPath 'shell'
+            foreach ($stale in @(Get-CompareStationVerbKey -ShellKeyPath $shellKeyPath -KeepCurrent $KeepCurrent)) {
                 if ($PSCmdlet.ShouldProcess($stale, 'remove a second copy of the CompareStation verb')) {
                     Remove-Item -LiteralPath $stale -Recurse -Force
                     $removed++
+                    Remove-KeyIfEmpty $shellKeyPath
+                    Remove-KeyIfEmpty $association.PSPath
                 }
-                Remove-KeyIfEmpty $shellKeyPath
-                Remove-KeyIfEmpty (Split-Path -Path $shellKeyPath -Parent)
             }
         }
     }
@@ -245,7 +254,7 @@ if ($Uninstall) {
     }
     # A copy of the command this run does not own is still this command: leaving it behind would
     # only bring the entry back the next time anybody registered it.
-    $staleRemoved = Remove-StaleCompareStationVerbs -ExtensionList $Extensions
+    $staleRemoved = Remove-StaleCompareStationVerbs -KeepCurrent $false
     if (Test-Path -LiteralPath $clsidKey) {
         if ($PSCmdlet.ShouldProcess($clsidKey, 'unregister the Explorer command server')) {
             Remove-Item -LiteralPath $clsidKey -Recurse -Force
@@ -294,16 +303,16 @@ foreach ($extension in $Extensions) {
     foreach ($name in $expected.Keys) {
         Set-RegistryString -Path $verbKey -Name $name -Value $expected[$name]
     }
-}
-
-if ($PSCmdlet.ShouldProcess('shell32.dll', 'notify the shell that associations changed')) {
-    Invoke-ShellAssociationChanged
+    $legacyCommand = Join-Path $verbKey 'command'
+    if (Test-Path -LiteralPath $legacyCommand) {
+        Remove-Item -LiteralPath $legacyCommand -Recurse -Force
+    }
 }
 
 # The entry the user is meant to see is the one this script owns. A second copy elsewhere in the
 # per-user classes root would show up as a second identical menu entry, so registering also removes
 # it - exactly what the application does on its own next launch.
-$staleRemoved = Remove-StaleCompareStationVerbs -ExtensionList $Extensions
+$staleRemoved = Remove-StaleCompareStationVerbs -KeepCurrent $true
 
 # Read the keys back so a silent failure cannot pass as success. A dry run writes nothing, so the
 # read-back only makes sense for a real registration.
@@ -324,6 +333,11 @@ if (-not $WhatIfPreference) {
     if ($enabled -ne 1) {
         throw "Registry value '$enabledValueName' under '$settingsKey' is '$enabled', expected 1."
     }
+}
+
+# Invalidate Explorer's cache only after both registration and legacy cleanup have completed.
+if ($PSCmdlet.ShouldProcess('shell32.dll', 'notify the shell that associations changed')) {
+    Invoke-ShellAssociationChanged
 }
 
 Write-Output "DVS_EXPLORER_COMMAND_REGISTERED root=$installRootPath extensions=$($Extensions -join ',') stale_verbs=$staleRemoved"

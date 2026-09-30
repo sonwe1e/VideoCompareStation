@@ -6,6 +6,7 @@
 #define NOMINMAX
 #endif
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -207,6 +208,84 @@ private:
     IExplorerCommand* command_ = nullptr;
 };
 
+// Redirect only this test process to an isolated hive. No real shell registration is read or
+// changed, and the launched argument probe does not access the registry.
+class ScopedUserRegistry final {
+public:
+    ScopedUserRegistry() {
+        path_ =
+            L"Software\\CompareStationShellSmokeTests\\" + std::to_wstring(GetCurrentProcessId());
+        installed_ = RegCreateKeyExW(HKEY_CURRENT_USER,
+                                     path_.c_str(),
+                                     0U,
+                                     nullptr,
+                                     REG_OPTION_NON_VOLATILE,
+                                     KEY_ALL_ACCESS,
+                                     nullptr,
+                                     &root_,
+                                     nullptr) == ERROR_SUCCESS &&
+                     RegOverridePredefKey(HKEY_CURRENT_USER, root_) == ERROR_SUCCESS;
+    }
+
+    ~ScopedUserRegistry() {
+        if (installed_) {
+            static_cast<void>(RegOverridePredefKey(HKEY_CURRENT_USER, nullptr));
+        }
+        if (root_ != nullptr) {
+            RegCloseKey(root_);
+            static_cast<void>(RegDeleteTreeW(HKEY_CURRENT_USER, path_.c_str()));
+            static_cast<void>(
+                RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\CompareStationShellSmokeTests"));
+        }
+    }
+
+    [[nodiscard]] bool installed() const noexcept {
+        return installed_;
+    }
+
+private:
+    std::wstring path_;
+    HKEY root_{nullptr};
+    bool installed_{false};
+};
+
+void registerShellPath(const std::filesystem::path& dllPath) {
+    std::array<wchar_t, 64U> clsid{};
+    ASSERT_GT(StringFromGUID2(kExplorerCommandClsid, clsid.data(), static_cast<int>(clsid.size())),
+              1);
+    const std::wstring path =
+        L"Software\\Classes\\CLSID\\" + std::wstring{clsid.data()} + L"\\InprocServer32";
+    HKEY key = nullptr;
+    ASSERT_EQ(RegCreateKeyExW(HKEY_CURRENT_USER,
+                              path.c_str(),
+                              0U,
+                              nullptr,
+                              REG_OPTION_NON_VOLATILE,
+                              KEY_ALL_ACCESS,
+                              nullptr,
+                              &key,
+                              nullptr),
+              ERROR_SUCCESS);
+    const std::wstring value = dllPath.wstring();
+    const DWORD bytes = static_cast<DWORD>((value.size() + 1U) * sizeof(wchar_t));
+    const LSTATUS status = RegSetValueExW(
+        key, nullptr, 0U, REG_SZ, reinterpret_cast<const BYTE*>(value.c_str()), bytes);
+    RegCloseKey(key);
+    ASSERT_EQ(status, ERROR_SUCCESS);
+    std::wstring stored(value.size() + 1U, L'\0');
+    DWORD readBytes = bytes;
+    ASSERT_EQ(RegGetValueW(HKEY_CURRENT_USER,
+                           path.c_str(),
+                           nullptr,
+                           RRF_RT_REG_SZ,
+                           nullptr,
+                           stored.data(),
+                           &readBytes),
+              ERROR_SUCCESS);
+    stored.resize(value.size());
+    ASSERT_EQ(stored, value);
+}
+
 class ScopedEnvironmentVariable final {
 public:
     ScopedEnvironmentVariable(const wchar_t* name, const wchar_t* value) : name_(name) {
@@ -317,6 +396,8 @@ TEST(ExplorerCommandSmokeTests, InvokesRealComServerWithUnicodeCompareArguments)
     ASSERT_TRUE(CopyFileW(shellDll.c_str(), copiedDll.c_str(), FALSE));
     ASSERT_TRUE(CopyFileW(
         environmentPath(L"DVS_SHELL_TEST_PROBE_EXE").c_str(), copiedProbe.c_str(), FALSE));
+    const ScopedUserRegistry registry;
+    ASSERT_TRUE(registry.installed());
     const ScopedEnvironmentVariable captureEnvironment{L"DVS_SHELL_TEST_CAPTURE_FILE",
                                                        captured.c_str()};
     ASSERT_TRUE(captureEnvironment.installed());
@@ -337,6 +418,51 @@ TEST(ExplorerCommandSmokeTests, InvokesRealComServerWithUnicodeCompareArguments)
         EXPECT_EQ(arguments[1], first.wstring());
         EXPECT_EQ(arguments[2], second.wstring());
     }
+}
+
+TEST(ExplorerCommandSmokeTests, CachedComServerInvokesTheNewlyRegisteredInstallation) {
+    const dvs::test::ScopedTemporaryDirectory temporaryDirectory{"dvs-shell-upgrade"};
+    const std::filesystem::path& directory = temporaryDirectory.path();
+    const std::filesystem::path oldRoot = directory / L"CompareStation 2.0.1";
+    const std::filesystem::path newRoot = directory / L"新版 CompareStation 2.0.2";
+    ASSERT_TRUE(std::filesystem::create_directory(oldRoot));
+    ASSERT_TRUE(std::filesystem::create_directory(newRoot));
+    const std::filesystem::path shellDll = environmentPath(L"DVS_SHELL_TEST_DLL");
+    const std::filesystem::path cachedDll = oldRoot / shellDll.filename();
+    const std::filesystem::path activeDll = newRoot / shellDll.filename();
+    const std::filesystem::path activeExecutable = newRoot / L"CompareStation.exe";
+    ASSERT_TRUE(CopyFileW(shellDll.c_str(), cachedDll.c_str(), FALSE));
+    ASSERT_TRUE(CopyFileW(shellDll.c_str(), activeDll.c_str(), FALSE));
+    ASSERT_TRUE(CopyFileW(
+        environmentPath(L"DVS_SHELL_TEST_PROBE_EXE").c_str(), activeExecutable.c_str(), FALSE));
+    const std::filesystem::path video = directory / L"中文 空格 & 视频.mp4";
+    const std::filesystem::path captured = directory / L"captured.bin";
+    writeFixture(video);
+    const ScopedUserRegistry registry;
+    ASSERT_TRUE(registry.installed());
+    const ScopedEnvironmentVariable captureEnvironment{L"DVS_SHELL_TEST_CAPTURE_FILE",
+                                                       captured.c_str()};
+    ASSERT_TRUE(captureEnvironment.installed());
+
+    LoadedExplorerCommand loaded{cachedDll};
+    ASSERT_NE(loaded.command(), nullptr);
+    // Load the old server first, then replace the registration while Explorer still holds it.
+    registerShellPath(activeDll);
+    ASSERT_FALSE(std::filesystem::exists(oldRoot / L"CompareStation.exe"));
+    auto* selection = new TestShellItemArray{{video}};
+    const HRESULT result = loaded.command()->Invoke(selection, nullptr);
+    selection->Release();
+    ASSERT_EQ(result, S_OK);
+    std::vector<std::wstring> arguments;
+    for (int attempt = 0; attempt < 250 && arguments.empty(); ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{20});
+        if (std::filesystem::exists(captured)) {
+            arguments = readCapturedArguments(captured);
+        }
+    }
+    ASSERT_EQ(arguments.size(), 2U);
+    EXPECT_EQ(arguments[0], activeExecutable.wstring());
+    EXPECT_EQ(arguments[1], video.wstring());
 }
 
 } // namespace

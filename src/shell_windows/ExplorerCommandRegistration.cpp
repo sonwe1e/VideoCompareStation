@@ -13,6 +13,8 @@
 #include <cwctype>
 #include <iterator>
 #include <optional>
+#include <shellapi.h>
+#include <shlobj.h>
 #include <string_view>
 #include <system_error>
 #include <vector>
@@ -209,19 +211,6 @@ private:
     return path;
 }
 
-// The second place a verb for the same extension can bind this command. A key here is part of the
-// same association chain as the SystemFileAssociations one, so a leftover copy of the command
-// there shows up as a second entry in the menu for every file of that type - the two entries are
-// indistinguishable to the user because both carry the same title.
-[[nodiscard]] std::wstring perExtensionShellKeyPath(const ExplorerRegistrationRoots& roots,
-                                                    const std::wstring_view extension) {
-    std::wstring path = roots.classes;
-    path += L"\\";
-    path.append(extension);
-    path += L"\\shell";
-    return path;
-}
-
 // True only when a key holds neither subkeys nor values, including its unnamed default value. This
 // is the condition for removing a key this registration shares with other tools.
 [[nodiscard]] bool isEmptyKey(const std::wstring& path) {
@@ -337,17 +326,25 @@ valueEquals(const HKEY key, const wchar_t* const name, const std::wstring_view e
     if (!line.has_value()) {
         return false;
     }
-    std::wstring lowered;
-    lowered.reserve(line->size());
-    for (const wchar_t character : *line) {
-        lowered.push_back(static_cast<wchar_t>(std::towlower(character)));
+    int count = 0;
+    wchar_t** arguments = CommandLineToArgvW(line->c_str(), &count);
+    if (arguments == nullptr) {
+        return false;
     }
-    return lowered.find(L"comparestation.exe") != std::wstring::npos ||
-           lowered.find(L"vcstation.exe") != std::wstring::npos;
+    std::wstring executable =
+        count > 0 ? std::filesystem::path{arguments[0]}.filename().wstring() : L"";
+    LocalFree(arguments);
+    // Older plain-command registrations included a trailing space inside the executable quotes.
+    // Win32 normalizes trailing spaces/dots on ordinary file names; recognize that legacy shape.
+    while (!executable.empty() && (executable.back() == L' ' || executable.back() == L'.')) {
+        executable.pop_back();
+    }
+    return _wcsicmp(executable.c_str(), L"CompareStation.exe") == 0 ||
+           _wcsicmp(executable.c_str(), L"VCStation.exe") == 0;
 }
 
-// Every verb name under one shell key, so a parent can be swept without guessing at names.
-[[nodiscard]] std::vector<std::wstring> verbNamesUnder(const std::wstring& shellPath) {
+// Enumerate before deleting: removing a child while enumerating would skip the next index.
+[[nodiscard]] std::vector<std::wstring> subkeyNamesUnder(const std::wstring& shellPath) {
     std::vector<std::wstring> names;
     RegistryKey shell;
     if (RegOpenKeyExW(HKEY_CURRENT_USER, shellPath.c_str(), 0U, KEY_READ, shell.receive()) !=
@@ -369,49 +366,57 @@ valueEquals(const HKEY key, const wchar_t* const name, const std::wstring_view e
     }
 }
 
-// Removes every verb under `shellPath` that binds this command except `kVerbKeyName`, and drops the
-// parents it emptied. A file's menu is built from every verb in its association chain, so a second
-// copy of this command is a second identical entry there - the one the user cannot tell apart from
-// the first. The sweep runs over the two parents a verb for one extension can live under, because
-// both are part of that chain.
-ExplorerRegistrationResult sweepDuplicateVerbs(const ExplorerRegistrationRoots& roots) {
-    ExplorerRegistrationResult result{ExplorerRegistrationState::Registered, {}};
-    forEachRegisteredExtension([&](const std::wstring_view extension) {
-        if (result.state != ExplorerRegistrationState::Registered) {
-            return;
-        }
-        for (const std::wstring& shellPath :
-             {shellKeyPath(roots, extension), perExtensionShellKeyPath(roots, extension)}) {
-            for (const std::wstring& name : verbNamesUnder(shellPath)) {
-                if (name == kVerbKeyName) {
-                    continue;
-                }
+// Keep only the exact canonical paths, not every key with the canonical name: .mp4\\shell and a
+// versioned ProgID's shell are different places in the association chain and render extra entries.
+ExplorerRegistrationResult sweepDuplicateVerbs(const ExplorerRegistrationRoots& roots,
+                                               const bool keepCurrent) {
+    std::vector<std::wstring> retained;
+    if (keepCurrent) {
+        forEachRegisteredExtension([&](const std::wstring_view extension) {
+            retained.push_back(verbKeyPath(roots, extension));
+        });
+    }
+    ExplorerRegistrationResult result{ExplorerRegistrationState::AlreadyCurrent, {}};
+    for (const std::wstring& parent :
+         {roots.classes, roots.classes + L"\\SystemFileAssociations"}) {
+        for (const std::wstring& association : subkeyNamesUnder(parent)) {
+            const std::wstring associationPath = parent + L"\\" + association;
+            const std::wstring shellPath = associationPath + L"\\shell";
+            bool removedAny = false;
+            for (const std::wstring& name : subkeyNamesUnder(shellPath)) {
                 const std::wstring verbPath = shellPath + L"\\" + name;
-                if (!bindsThisCommand(verbPath)) {
+                bool isRetained = false;
+                for (const std::wstring& current : retained) {
+                    isRetained = isRetained || _wcsicmp(verbPath.c_str(), current.c_str()) == 0;
+                }
+                if (isRetained || !bindsThisCommand(verbPath)) {
                     continue;
                 }
                 const LSTATUS status = RegDeleteTreeW(HKEY_CURRENT_USER, verbPath.c_str());
                 if (status != ERROR_SUCCESS && status != ERROR_FILE_NOT_FOUND &&
                     status != ERROR_PATH_NOT_FOUND) {
-                    result.state = ExplorerRegistrationState::Failed;
-                    result.error = describeFailure(verbPath, status);
-                    return;
+                    return {ExplorerRegistrationState::Failed, describeFailure(verbPath, status)};
                 }
+                result.state = ExplorerRegistrationState::Registered;
+                removedAny = true;
+            }
+            if (removedAny) {
                 if (isEmptyKey(shellPath)) {
                     static_cast<void>(RegDeleteKeyW(HKEY_CURRENT_USER, shellPath.c_str()));
                 }
-                const std::wstring extensionParent = extensionKeyPath(roots, extension);
-                if (isEmptyKey(extensionParent)) {
-                    static_cast<void>(RegDeleteKeyW(HKEY_CURRENT_USER, extensionParent.c_str()));
-                }
-                const std::wstring classesParent = roots.classes + L"\\" + std::wstring{extension};
-                if (isEmptyKey(classesParent)) {
-                    static_cast<void>(RegDeleteKeyW(HKEY_CURRENT_USER, classesParent.c_str()));
+                if (isEmptyKey(associationPath)) {
+                    static_cast<void>(RegDeleteKeyW(HKEY_CURRENT_USER, associationPath.c_str()));
                 }
             }
         }
-    });
+    }
     return result;
+}
+
+void notifyAssociationsChanged() {
+    // Explorer caches associations and COM servers. Startup must invalidate that cache just like
+    // the script does, without waiting on Explorer from the GUI thread.
+    SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST | SHCNF_FLUSHNOWAIT, nullptr, nullptr);
 }
 
 // True only when every key already describes this installation, including the extension list. A
@@ -466,7 +471,13 @@ ExplorerRegistrationResult sweepDuplicateVerbs(const ExplorerRegistrationRoots& 
             allExtensionsMatch = false;
             return;
         }
-        allExtensionsMatch = valueEquals(key.get(), L"MUIVerb", kMenuText) &&
+        RegistryKey legacyCommand;
+        const std::wstring commandPath = verbKeyPath(roots, extension) + L"\\command";
+        const bool hasLegacyCommand =
+            RegOpenKeyExW(
+                HKEY_CURRENT_USER, commandPath.c_str(), 0U, KEY_READ, legacyCommand.receive()) ==
+            ERROR_SUCCESS;
+        allExtensionsMatch = !hasLegacyCommand && valueEquals(key.get(), L"MUIVerb", kMenuText) &&
                              valueEquals(key.get(), L"Icon", icon) &&
                              valueEquals(key.get(), L"ExplorerCommandHandler", clsid) &&
                              valueEquals(key.get(), L"MultiSelectModel", kSelectionModel);
@@ -550,6 +561,15 @@ writeRegistration(const ExplorerRegistrationTargets& targets,
         }
         if (status == ERROR_SUCCESS) {
             status = writeStringValue(key.get(), L"MultiSelectModel", kSelectionModel);
+        }
+        if (status == ERROR_SUCCESS) {
+            // This verb is exclusively owned by us. A plain-command child from an older layout
+            // must not survive the switch to a COM handler with an obsolete executable path.
+            const LSTATUS removed =
+                RegDeleteTreeW(HKEY_CURRENT_USER, (path + L"\\command").c_str());
+            if (removed != ERROR_FILE_NOT_FOUND && removed != ERROR_PATH_NOT_FOUND) {
+                status = removed;
+            }
         }
         if (status != ERROR_SUCCESS) {
             result.state = ExplorerRegistrationState::Failed;
@@ -649,7 +669,7 @@ removeExplorerCommandRegistration(const ExplorerRegistrationRoots& roots) {
     }
     // A leftover copy of the command is still this command, so a documented removal that left one
     // behind would only hide the entry again the next time somebody registered it.
-    const ExplorerRegistrationResult sweep = sweepDuplicateVerbs(roots);
+    const ExplorerRegistrationResult sweep = sweepDuplicateVerbs(roots, false);
     if (sweep.state == ExplorerRegistrationState::Failed) {
         return sweep;
     }
@@ -659,6 +679,7 @@ removeExplorerCommandRegistration(const ExplorerRegistrationRoots& roots) {
         status != ERROR_PATH_NOT_FOUND) {
         return {ExplorerRegistrationState::Failed, describeFailure(path, status)};
     }
+    notifyAssociationsChanged();
     return result;
 }
 
@@ -696,7 +717,11 @@ ensureExplorerCommandRegistered(const ExplorerRegistrationTargets& targets,
     if (registration.state == ExplorerRegistrationState::Failed) {
         return registration;
     }
-    const ExplorerRegistrationResult sweep = sweepDuplicateVerbs(roots);
+    const ExplorerRegistrationResult sweep = sweepDuplicateVerbs(roots, true);
+    if (registration.state == ExplorerRegistrationState::Registered ||
+        sweep.state == ExplorerRegistrationState::Registered) {
+        notifyAssociationsChanged();
+    }
     return sweep.state == ExplorerRegistrationState::Failed ? sweep : registration;
 }
 

@@ -37,6 +37,9 @@ param(
     [Parameter(Mandatory)]
     [string] $PackageRoot,
 
+    # Lets one-off mutation drivers exercise this same suite without replacing repository sources.
+    [string] $RegistrationScriptPath = (Join-Path $PSScriptRoot 'RegisterExplorerCommand.ps1'),
+
     # Process-unique on purpose: two runs of this test used to share one scratch directory, and the
     # second run deleted the first run's sandbox mid-test, turning a healthy package into a bogus
     # "sandbox package was deleted" failure.
@@ -65,7 +68,7 @@ $workPath = [System.IO.Path]::GetFullPath($WorkRoot)
 $toolsRoot = (Resolve-Path -LiteralPath $PSScriptRoot).Path
 $wrapper = Join-Path $toolsRoot 'RegisterCompareStationContextMenu.cmd'
 $wrapperScript = Join-Path $toolsRoot 'RegisterCompareStationContextMenu.ps1'
-$registrationScript = Join-Path $toolsRoot 'RegisterExplorerCommand.ps1'
+$registrationScript = (Resolve-Path -LiteralPath $RegistrationScriptPath).Path
 $disabledScriptName = 'RegisterCompareStationContextMenu.ps1.disabled'
 
 # The application keeps the entry registered by itself, so the registration script records the
@@ -148,11 +151,25 @@ function Remove-Registration {
         # The per-extension parent is part of the same association chain, so a copy left there is
         # just as much a second menu entry as one under SystemFileAssociations.
         $perExtensionVerb = "HKCU:\Software\Classes\$extension\shell"
-        if (Test-Path -LiteralPath $perExtensionVerb) {
-            Remove-Item -LiteralPath $perExtensionVerb -Recurse -Force
+        foreach ($name in @('CompareStation.Open', 'CompareStation.Legacy', 'SomeOtherPlayer',
+                'CompareStation.Compare', 'OldVCStation', 'TestOtherPlayer', 'TestSimilarName')) {
+            $testVerb = Join-Path $perExtensionVerb $name
+            if (Test-Path -LiteralPath $testVerb) {
+                Remove-Item -LiteralPath $testVerb -Recurse -Force
+            }
         }
         Remove-KeyIfUnused "HKCU:\Software\Classes\$extension\shell"
         Remove-KeyIfUnused "HKCU:\Software\Classes\$extension"
+    }
+    foreach ($relative in @(
+            'CompareStationTest.Legacy.2.0.1\shell\CompareStation.Compare',
+            'SystemFileAssociations\.m4v\shell\CompareStation.Compare-2.0.1')) {
+        $testVerb = Join-Path 'HKCU:\Software\Classes' $relative
+        if (Test-Path -LiteralPath $testVerb) {
+            Remove-Item -LiteralPath $testVerb -Recurse -Force
+            Remove-KeyIfUnused (Split-Path -Path $testVerb -Parent)
+            Remove-KeyIfUnused (Split-Path -Path (Split-Path -Path $testVerb -Parent) -Parent)
+        }
     }
     $clsidKey = "HKCU:\Software\Classes\CLSID\$clsid"
     if (Test-Path -LiteralPath $clsidKey) {
@@ -243,12 +260,13 @@ function Copy-Package {
     New-Item -ItemType Directory -Path $Destination -Force | Out-Null
     Copy-Item -Path (Join-Path $script:packagePath '*') -Destination $Destination -Recurse -Force
     foreach ($name in @(
-            'RegisterExplorerCommand.ps1',
             'RegisterCompareStationContextMenu.ps1',
             'RegisterCompareStationContextMenu.cmd'
         )) {
         Copy-Item -LiteralPath (Join-Path $script:toolsRoot $name) -Destination $Destination -Force
     }
+    Copy-Item -LiteralPath $script:registrationScript `
+        -Destination (Join-Path $Destination 'RegisterExplorerCommand.ps1') -Force
     Copy-Item -LiteralPath (Join-Path $script:toolsRoot '..\..\packaging\INSTALL.txt') `
         -Destination $Destination -Force
 }
@@ -399,7 +417,8 @@ try {
     New-Item -ItemType Directory -Path $brokenRoot -Force | Out-Null
     Copy-Item -LiteralPath $wrapper -Destination $brokenRoot -Force
     Copy-Item -LiteralPath $wrapperScript -Destination $brokenRoot -Force
-    Copy-Item -LiteralPath $registrationScript -Destination $brokenRoot -Force
+    Copy-Item -LiteralPath $registrationScript `
+        -Destination (Join-Path $brokenRoot 'RegisterExplorerCommand.ps1') -Force
     $brokenOutput = Invoke-CommandFile -CommandFile (Join-Path $brokenRoot 'RegisterCompareStationContextMenu.cmd')
     Assert-That 'a package without CompareStation.exe is refused' `
         ($brokenOutput -match 'CompareStation\.exe') $brokenOutput
@@ -541,6 +560,79 @@ try {
         (-not (Test-Path -LiteralPath 'HKCU:\Software\Classes\.avi\shell\CompareStation.Open'))
     Assert-That 'uninstall says how many copies it removed' `
         ($sweepUninstall -match 'stale_verbs=1') $sweepUninstall
+
+    # Same-named verbs at other locations, versioned ProgIDs and the former executable name.
+    $upgradeCases = @(
+        @{ Extension = '.mov'; Name = $verbKeyName },
+        @{ Extension = 'SystemFileAssociations\.m4v'; Name = 'CompareStation.Compare-2.0.1' },
+        @{ Extension = 'CompareStationTest.Legacy.2.0.1'; Name = $verbKeyName },
+        @{ Extension = '.webp'; Name = 'OldVCStation'; AsCommandLine = $true;
+            CommandText = '"C:\gone\VCStation.exe" "%1"' }
+    )
+    foreach ($case in $upgradeCases) {
+        $path = "HKCU:\Software\Classes\$($case.Extension)\shell\$($case.Name)"
+        Set-SecondCopyVerb @case
+        $target = if ($case.ContainsKey('AsCommandLine')) {
+            (Get-Item -LiteralPath (Join-Path $path 'command')).GetValue('')
+        }
+        else {
+            (Get-ItemProperty -LiteralPath $path).ExplorerCommandHandler
+        }
+        Assert-That "upgrade fixture has the expected target: $path" `
+            ($target -eq $clsid -or $target -eq '"C:\gone\VCStation.exe" "%1"')
+        $upgradeRun = Invoke-CommandFile -CommandFile $sandboxWrapper
+        Assert-That "register removes the old association: $path" `
+            ((Get-ExitCode $upgradeRun) -eq 0 -and -not (Test-Path -LiteralPath $path)) $upgradeRun
+        Set-SecondCopyVerb @case
+        $removeRun = Invoke-CommandFile -CommandFile $sandboxWrapper -Arguments @('-Uninstall')
+        Assert-That "uninstall removes the old association: $path" `
+            ((Get-ExitCode $removeRun) -eq 0 -and -not (Test-Path -LiteralPath $path)) $removeRun
+        Assert-That "uninstall reclaims the emptied parent: $path" `
+            (-not (Test-Path -LiteralPath (Split-Path -Path $path -Parent)))
+    }
+
+    $null = Invoke-CommandFile -CommandFile $sandboxWrapper
+    $canonicalCommand = "HKCU:\Software\Classes\SystemFileAssociations\.mp4\shell\$verbKeyName\command"
+    New-Item -Path $canonicalCommand -Force | Out-Null
+    Set-Item -LiteralPath $canonicalCommand -Value '"C:\gone\CompareStation.exe" "%1"'
+    Assert-That 'canonical legacy command fixture is read back' `
+        ((Get-Item -LiteralPath $canonicalCommand).GetValue('') -eq '"C:\gone\CompareStation.exe" "%1"')
+    $null = Invoke-CommandFile -CommandFile $sandboxWrapper
+    Assert-That 'registration replaces a canonical legacy command with the COM handler' `
+        (-not (Test-Path -LiteralPath $canonicalCommand) -and
+            (Get-RegisteredVerbValue -Extension '.mp4' -Property 'ExplorerCommandHandler') -eq $clsid)
+
+    $foreignCases = @(
+        @{ Extension = '.avi'; Name = 'TestOtherPlayer'; AsCommandLine = $true;
+            CommandText = '"C:\other\Player.exe" "C:\CompareStation.exe"' },
+        @{ Extension = '.avi'; Name = 'TestSimilarName'; AsCommandLine = $true;
+            CommandText = '"C:\other\NotCompareStation.exe" "%1"' }
+    )
+    foreach ($case in $foreignCases) {
+        Set-SecondCopyVerb @case
+        $path = "HKCU:\Software\Classes\$($case.Extension)\shell\$($case.Name)\command"
+        Assert-That "foreign fixture is read back: $($case.Name)" `
+            ((Get-Item -LiteralPath $path).GetValue('') -eq $case.CommandText)
+    }
+    $null = Invoke-CommandFile -CommandFile $sandboxWrapper
+    foreach ($case in $foreignCases) {
+        $path = "HKCU:\Software\Classes\$($case.Extension)\shell\$($case.Name)\command"
+        Assert-That "foreign executable survives: $($case.Name)" `
+            ((Test-Path -LiteralPath $path) -and
+                (Get-Item -LiteralPath $path).GetValue('') -eq $case.CommandText)
+    }
+
+    Set-SecondCopyVerb -Extension '.mov' -Name $verbKeyName
+    & $registrationScript -InstallRoot $sandboxRoot -WhatIf | Out-Null
+    Assert-That 'WhatIf leaves the same-named legacy verb intact' `
+        (Test-Path -LiteralPath "HKCU:\Software\Classes\.mov\shell\$verbKeyName")
+    $upgradedRun = Invoke-CommandFile -CommandFile $probeWrapper
+    Assert-That 'a second ZIP directory registers successfully' ((Get-ExitCode $upgradedRun) -eq 0)
+    Assert-That 'a second ZIP replaces the registered server instead of adding another' `
+        ((Get-ItemProperty -LiteralPath "HKCU:\Software\Classes\CLSID\$clsid\InprocServer32").'(default)' -eq $probeServer)
+    Assert-That 'a second ZIP keeps only its canonical menu and icon' `
+        (-not (Test-Path -LiteralPath "HKCU:\Software\Classes\.mov\shell\$verbKeyName") -and
+            (Get-RegisteredVerbValue -Extension '.mov' -Property 'Icon') -eq "$probeExecutable,0")
 }
 finally {
     $disabled = Join-Path $workPath $disabledScriptName
@@ -553,6 +645,9 @@ finally {
 
 Write-Host ''
 Write-Host "checks=$checkCount failures=$failureCount"
+if ($checkCount -ne 85) {
+    throw "Expected 85 checks, executed $checkCount. A test anchor or scenario is missing."
+}
 if ($failureCount -ne 0) {
     throw "$failureCount of $checkCount checks failed."
 }

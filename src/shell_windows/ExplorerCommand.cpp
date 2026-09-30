@@ -2,6 +2,7 @@
 
 #include "ExplorerCommandSupport.h"
 
+#include <array>
 #include <filesystem>
 #include <shellapi.h>
 #include <shlwapi.h>
@@ -56,6 +57,38 @@ namespace {
 }
 
 [[nodiscard]] std::filesystem::path executablePath() {
+    // Explorer can keep this DLL loaded after a newer ZIP takes over the registration. Resolve
+    // the current per-user installation at invocation time, not the cached DLL's old directory.
+    std::array<wchar_t, 64U> clsid{};
+    if (StringFromGUID2(kExplorerCommandClsid, clsid.data(), static_cast<int>(clsid.size())) > 1) {
+        const std::wstring inproc =
+            L"Software\\Classes\\CLSID\\" + std::wstring{clsid.data()} + L"\\InprocServer32";
+        DWORD bytes = 0U;
+        if (RegGetValueW(HKEY_CURRENT_USER,
+                         inproc.c_str(),
+                         nullptr,
+                         RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ,
+                         nullptr,
+                         nullptr,
+                         &bytes) == ERROR_SUCCESS) {
+            std::wstring registered(bytes / sizeof(wchar_t), L'\0');
+            if (RegGetValueW(HKEY_CURRENT_USER,
+                             inproc.c_str(),
+                             nullptr,
+                             RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ,
+                             nullptr,
+                             registered.data(),
+                             &bytes) == ERROR_SUCCESS) {
+                while (!registered.empty() && registered.back() == L'\0') {
+                    registered.pop_back();
+                }
+                if (!registered.empty()) {
+                    return std::filesystem::path{registered}.parent_path() / L"CompareStation.exe";
+                }
+            }
+        }
+    }
+    // No registration (e.g. direct COM component tests): use the installation holding this DLL.
     std::wstring modulePath(32768U, L'\0');
     const DWORD length =
         GetModuleFileNameW(gModule, modulePath.data(), static_cast<DWORD>(modulePath.size()));

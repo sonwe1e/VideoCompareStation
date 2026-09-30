@@ -84,14 +84,13 @@ cmake --preset release
 cmake --build --preset release
 ctest --preset release --output-on-failure
 cpack --preset release-zip
-cpack --preset release-msi
 ctest --preset shutdown-soak --output-on-failure
 ctest --preset packaged-smoke --output-on-failure
 ```
 
-MSI 生成还要求 .NET SDK 8、WiX 4.0.4 与 `WixToolset.UI.wixext` 4.0.4；
-`packaged-smoke` 会真实安装 per-machine MSI，因此 runner 必须提升权限且不能已有
-CompareStation 安装。详细配置见
+只发布免安装 ZIP，不需要 .NET SDK、WiX 或管理员权限。
+`packaged-smoke` 验证三种 DPI 下的弹出控件像素，`shutdown-soak` 验证重复打开与关闭。
+详细配置见
 [docs/self-hosted-runner.md](docs/self-hosted-runner.md)。
 
 ---
@@ -110,11 +109,11 @@ ctest --preset hardware-d3d11 --output-on-failure
 ctest --preset performance-d3d11 --output-on-failure
 ```
 
-Release workflow 生成明确标注为未签名的 ZIP、MSI、EXE、CLI 与
-`CompareStationShell-2.0.dll`，并执行真实
-安装、`1.2.0→2.0.2` 升级、A/B Pair 设置回归与 shutdown soak 门禁；SHA-256 只用于
-校验完整性，不代表
-发布者身份。runner 标签、素材清单与发布合同详见
+Release workflow 生成明确标注为未签名的 ZIP，包内包含 EXE、CLI 与
+`CompareStationShell-2.0.dll`。历史版本链更新到 `1.2.0→2.0.3`；本次补丁不改变静音
+查看与比较范围，修复 ZIP 升级后的右键入口去重与启动路径，首次启动新版时接管当前用户的菜单。
+发布前执行 Release 测试、硬件与性能门禁、DPI 像素验证和 shutdown soak；SHA-256
+只用于校验完整性，不代表发布者身份。runner 标签、素材清单与发布合同详见
 [docs/self-hosted-runner.md](docs/self-hosted-runner.md)。
 
 ---

@@ -627,6 +627,81 @@ TEST_F(ExplorerCommandRegistrationTests, RemovalTakesTheSecondCopyOfTheCommandWi
     EXPECT_FALSE(keyExists(roots_, verbKey(L".png")));
 }
 
+TEST_F(ExplorerCommandRegistrationTests, UpgradeRemovesSameNamedAndVersionedAssociationVerbs) {
+    ASSERT_EQ(ensureExplorerCommandRegistered(targets_, roots_).state,
+              ExplorerRegistrationState::Registered);
+    const std::wstring clsid = registeredClsid(roots_);
+    const std::array<std::wstring, 3U> leftovers{
+        L".mp4\\shell\\CompareStation.Compare",
+        L"CompareStation.Video.2.0.1\\shell\\CompareStation.Compare",
+        L"SystemFileAssociations\\.mp4\\shell\\CompareStation.Compare-2.0.1",
+    };
+    for (const std::wstring& leftover : leftovers) {
+        createScratchKey(leftover);
+        writeScratchString(leftover, L"ExplorerCommandHandler", clsid);
+        ASSERT_EQ(readString(roots_, leftover, L"ExplorerCommandHandler"), clsid);
+    }
+    const ExplorerRegistrationTargets upgraded{movedRoot_ / "CompareStation.exe",
+                                               movedRoot_ / "CompareStationShell-9.9.dll"};
+    ASSERT_EQ(ensureExplorerCommandRegistered(upgraded, roots_).state,
+              ExplorerRegistrationState::Registered);
+    for (const std::wstring& leftover : leftovers) {
+        EXPECT_FALSE(keyExists(roots_, leftover)) << narrow(leftover);
+    }
+    expectValue(roots_, verbKey(L".mp4"), L"Icon", upgraded.executable.wstring() + L",0");
+    expectValue(
+        roots_, L"CLSID\\" + clsid + L"\\InprocServer32", nullptr, upgraded.shellLibrary.wstring());
+
+    // Repeated upgrades replace the one registration, not a new entry per ZIP directory.
+    ASSERT_EQ(ensureExplorerCommandRegistered(targets_, roots_).state,
+              ExplorerRegistrationState::Registered);
+    expectValue(roots_, verbKey(L".mp4"), L"Icon", targets_.executable.wstring() + L",0");
+}
+
+TEST_F(ExplorerCommandRegistrationTests, UninstallRemovesSameNamedAssociationVerbs) {
+    ASSERT_EQ(ensureExplorerCommandRegistered(targets_, roots_).state,
+              ExplorerRegistrationState::Registered);
+    const std::wstring leftover = L".mp4\\shell\\CompareStation.Compare";
+    createScratchKey(leftover);
+    writeScratchString(leftover, L"ExplorerCommandHandler", registeredClsid(roots_));
+    ASSERT_EQ(removeExplorerCommandRegistration(roots_).state, ExplorerRegistrationState::Removed);
+    EXPECT_FALSE(keyExists(roots_, leftover));
+}
+
+TEST_F(ExplorerCommandRegistrationTests, RepairsALegacyCommandOnTheCanonicalVerb) {
+    ASSERT_EQ(ensureExplorerCommandRegistered(targets_, roots_).state,
+              ExplorerRegistrationState::Registered);
+    const std::wstring command = verbKey(L".mp4") + L"\\command";
+    createScratchKey(command);
+    writeScratchString(command, nullptr, LR"("C:\gone\CompareStation.exe" "%1")");
+    ASSERT_EQ(ensureExplorerCommandRegistered(targets_, roots_).state,
+              ExplorerRegistrationState::Registered);
+    EXPECT_FALSE(keyExists(roots_, command));
+    EXPECT_TRUE(keyExists(roots_, verbKey(L".mp4")));
+}
+
+TEST_F(ExplorerCommandRegistrationTests, MatchesLegacyExecutableNotArgumentsOrSimilarNames) {
+    const std::array<std::wstring, 3U> verbs{
+        L".mp4\\shell\\OldVCStation",
+        L".mp4\\shell\\OtherTool",
+        L".mp4\\shell\\SimilarName",
+    };
+    const std::array<std::wstring, 3U> commands{
+        LR"("C:\old\VCStation.exe" "%1")",
+        LR"("C:\other\Player.exe" "C:\CompareStation.exe")",
+        LR"("C:\other\NotCompareStation.exe" "%1")",
+    };
+    for (std::size_t index = 0U; index < verbs.size(); ++index) {
+        createScratchKey(verbs[index] + L"\\command");
+        writeScratchString(verbs[index] + L"\\command", nullptr, commands[index]);
+    }
+    ASSERT_EQ(ensureExplorerCommandRegistered(targets_, roots_).state,
+              ExplorerRegistrationState::Registered);
+    EXPECT_FALSE(keyExists(roots_, verbs[0]));
+    EXPECT_EQ(readString(roots_, verbs[1] + L"\\command", nullptr), commands[1]);
+    EXPECT_EQ(readString(roots_, verbs[2] + L"\\command", nullptr), commands[2]);
+}
+
 TEST_F(ExplorerCommandRegistrationTests, SweepsNothingWhileTheUserHasTurnedTheEntryOff) {
     // A user who removed the entry did not ask for their other keys to be rewritten, and a launch
     // that found the marker has to leave the whole per-user surface exactly as it found it.

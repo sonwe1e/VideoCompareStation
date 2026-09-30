@@ -1,7 +1,37 @@
 # 视觉审查问题台账
 
-更新：2026-09-29。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-09-30。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+
+## 2026-09-30 ZIP 升级后的旧右键入口与启动路径（S-01／S-02，基线 `35449f1` + 本轮工作区）
+
+用户反馈：打开视频时 Windows 提示找不到 MP4；解压 2.0.1 与 2.0.2 后右键入口堆叠。
+本轮不改视频解码或现有视频项目 Demo 工作区，修复 shell 适配器与对应注册脚本。
+
+- **S-01 · 升级后的启动路径**：`ExplorerCommand::executablePath` 过去只取已加载 DLL 的目录。
+  Explorer 持有旧 DLL 时，即使新 ZIP 已接管注册，仍会找旧目录的 EXE；删掉旧目录中的程序会使
+  `CreateProcessW` 失败。现在每次调用读取当前用户 CLSID 的 `InprocServer32`，从当前注册目录
+  定位 EXE；没有注册时才回退到 DLL 目录。真实 COM 测试先加载旧目录 DLL，再注册新目录，旧目录
+  不放 EXE；实际启动探针读回的新 EXE 路径和中文、空格、`&` 文件名均正确。
+  此故障形态已复现并验证，**用户那条 Windows 提示的具体入口和原始路径仍待确认**，不能把它
+  当作所有“找不到文件”情况的结论。
+- **S-02 · 菜单去重**：原清扫按键名排除所有 `CompareStation.Compare`，漏掉别处的同名旧入口。
+  现在只保留 18 个规范注册的**完整路径**，扫描扩展名、SystemFileAssociations 和 ProgID 的 shell
+  verb，按本命令 CLSID／实际启动的 EXE 判断归属；覆盖版本化键名与旧 `VCStation.exe`。
+  普通播放器的参数提到 CompareStation，或 EXE 只是相似名称，都不会被删。规范 verb 上遗留的
+  `command` 子键也会被移除，避免保留旧程序路径。卸载走相同清扫，没有“同名”豁免。
+- **接管时机与缓存**：启动新版／运行其注册脚本时接管一个稳定 CLSID 与一套菜单，而非每个 ZIP
+  一套；仅解压但从未启动不执行注册。旧 ZIP 文件本身不会被删，也不改 Windows 默认打开方式。
+  应用在注册修复／清扫改变内容后异步发送 `SHCNE_ASSOCCHANGED`；脚本在清扫和读回之后通知。
+  用户关闭标记、环境逃生门、WhatIf、共享父键与其他工具的 verb 保留。
+- **验证**：`pwsh tools/build/build.ps1 -Preset dev -Test -TestRegex '(shell_windows\.|app\.)'`
+  **66/66**；`-Target format-check` 与 `-Target lint` 通过；脚本真实注册／卸载测试 **85/85**
+  （现在强制检查数量），
+  脚本完整性与硬编码路径检查通过。变异证据 **13/13**（C++ 8、脚本 5），均让相应断言失败，
+  恢复控制组 C++ 27/27、缓存 COM 1/1、脚本 85/85；源码不在变异过程中被替换。
+  证据：`out/verification/shell-upgrade/`。真实 Explorer 菜单观感、用户机器上的错误提示与
+  HKLM 管理员注册不在本机验证范围内。2.0.3 发布阶段的完整日志另记在
+  `out/verification/release-2.0.3/`；最终门禁结果与交付状态以发布页为准。
 
 ## 2026-09-29 slate 收口第二轮：选中态、通知栈与余下写死色（分支 `feat/slate-ui-polish`）
 
