@@ -1,5 +1,4 @@
-# CPack 4.4 supplies this staging path to CPACK_PRE_BUILD_SCRIPTS. The repository exercises
-# both package generators before release.
+# CPack 4.4 supplies this staging path to CPACK_PRE_BUILD_SCRIPTS for the published ZIP.
 if(NOT DEFINED CPACK_TEMPORARY_INSTALL_DIRECTORY OR
    CPACK_TEMPORARY_INSTALL_DIRECTORY STREQUAL "" OR
    NOT IS_ABSOLUTE "${CPACK_TEMPORARY_INSTALL_DIRECTORY}")
@@ -43,14 +42,8 @@ foreach(relativePath IN LISTS requiredFiles)
     endif()
 endforeach()
 
-foreach(forbiddenTool IN ITEMS ffmpeg.exe ffprobe.exe)
-    if(EXISTS "${stageRoot}/${forbiddenTool}")
-        message(
-            FATAL_ERROR
-            "Package staging must not contain the unused external tool '${forbiddenTool}'."
-        )
-    endif()
-endforeach()
+include("${CMAKE_CURRENT_LIST_DIR}/VerifyRuntimePayload.cmake")
+dvs_verify_runtime_payload("${stageRoot}")
 
 # GraphicsBackend pins the Basic style, so every other Quick Controls tree must have been pruned
 # during installation. A deployment that quietly copies them back would ship 1195 unread files,

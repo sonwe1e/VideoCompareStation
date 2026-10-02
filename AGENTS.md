@@ -65,6 +65,12 @@ terminal. It covers five video and thirteen still-image extensions: one file ope
 videos or two images open as a comparison, and any other selection - a directory, a network path, a
 mixed pair, three images - keeps the command hidden. `-Uninstall` removes the keys again.
 
+Package only the runtime dependencies, resources, licenses, and user entry points the current
+product needs. Automatic Qt deployment is not an approval to ship extra installers, unused graphics
+compilers, tools, symbols, or test media. Keep required app-local CRT/UCRT DLLs, enforce the CPack
+runtime-payload gate, and explain per-file additions against the preceding ZIP before release.
+See [the packaging policy](docs/building.md#zip-只打包必要运行时) for evidence and validation requirements.
+
 ## Coding Style and Naming
 
 Indent C++/QML four spaces, JSON/YAML two, cap C++ at 100 columns. Attached braces,

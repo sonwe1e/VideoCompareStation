@@ -379,11 +379,11 @@ Step 6 亦复用）：
    本地构建**仍推荐** `build.ps1 -UseInstalledDependencies`（`VCPKG_MANIFEST_INSTALL=OFF`，
    直接用已装好的 out/vcpkg 树，实测 12.48 GB / 157 个包，依赖齐全）——它更快也更确定；
    但现在这是**性能选择而非唯一出路**，manifest 变更时多了一条可用路径。
-8. **cpack 体积差异已查清，不是管线问题，也不需要修复。** `cmake/Install.cmake` 的
+8. **当时的 cpack 体积复核（后续结论修正见下）。** `cmake/Install.cmake` 的
    `InstallRequiredSystemLibraries` 只安装 CRT/UCRT DLL，CMake 4.4.0 的该模块全文不含任何
    `.exe` 安装路径；`out/build/release/cmake_install.cmake` 中 `vc_redist` 出现 0 次，仓库
    代码也从不引用它。59.77 MiB 那个包（`out/packages/CompareStation-1.9.0-pre-step2.zip`）
-   多出的 24.45 MB `vc_redist.x64.exe` 是**从别处手工拷入 staging 的一次性产物**（同一字节数的
+   多出的 24.45 MB `vc_redist.x64.exe` 当时被归因为**从别处手工拷入 staging 的一次性产物**（同一字节数的
    副本还留在 `out/package/zip/VCStation-1.6.0-windows-x64/` 与 `out/migration/…`）；
    它同时还多了 `dxcompiler.dll`(14.3 MB) 与 `d3dcompiler_47.dll`(4.7 MB)，故
    59.77 − 24.45 = 35.3 而非 26.63。正常 `-Preset release` + `cpack --preset release-zip`
@@ -393,3 +393,8 @@ Step 6 亦复用）：
    产出 `out/package/zip/CompareStation-1.9.0-windows-x64.zip` =
    **26.63 MiB / 310 条目 / 解压 66.42 MiB / 无 vc_redist**，与基线逐项吻合
    （27919730 vs 27923994 bytes，差 0.004 MiB 属正常构建抖动）。体积维度可直接用于前后对照。
+   **2026-09-30 修正**：2.0.3 标准 CPack 日志明确记录 `windeployqt` 自动部署
+   `vc_redist.x64.exe`、`dxcompiler.dll`、`d3dcompiler_47.dll`、`dxil.dll`，包再次增至
+   59.8 MiB；因此“只可能手工拷入／不需要管线修复”的推断不能成立。现在显式关闭 Qt 的重复
+   CRT 安装器与系统图形编译器复制，保留必要的 app-local DLL，并通过 staging 门禁拒绝回退。
+   后续以 [必要运行时打包规则](../building.md#zip-只打包必要运行时) 为准，不沿用本条旧归因。

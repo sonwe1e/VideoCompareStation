@@ -22,6 +22,19 @@ dvs_add_test(
 )
 
 dvs_add_test(
+    NAME quality.runtime-payload
+    LAYER e2e
+    MODULE app
+    TIMEOUT 30
+    COMMAND
+        ${CMAKE_COMMAND}
+        "-DDVS_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+        "-DDVS_TEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/runtime-payload-tests"
+        -P
+        "${CMAKE_CURRENT_SOURCE_DIR}/VerifyRuntimePayloadTests.cmake"
+)
+
+dvs_add_test(
     NAME app.gui-pe-subsystem
     LAYER e2e
     MODULE app

@@ -30,7 +30,10 @@ qt6_deploy_runtime_dependencies(
     EXECUTABLE \"$<TARGET_FILE:CompareStation>\"
     GENERATE_QT_CONF
     NO_TRANSLATIONS
+    NO_COMPILER_RUNTIME
     DEPLOY_TOOL_OPTIONS
+        --no-system-d3d-compiler
+        --no-system-dxc-compiler
         --qmldir \"${PROJECT_SOURCE_DIR}/src/ui_qml/qml\"
         --skip-plugin-types qmltooling,generic
         --no-quickcontrols2fusion
@@ -45,6 +48,10 @@ qt6_deploy_runtime_dependencies(
         --no-quickcontrols2fluentwinui3styleimpl
 )"
 )
+# InstallRequiredSystemLibraries above supplies the app-local CRT/UCRT DLLs. Qt must not add a
+# second runtime installer. GraphicsBackend pins D3D11; DXC/DXIL belong to an unshipped D3D12 path,
+# and D3DCompiler_47 is supplied by supported Windows 10/11 systems. HlslHeaderCompiler runs only
+# at build time, so its compiler is not a packaged application dependency.
 # The deployment above is deliberately narrower than windeployqt's default: GraphicsBackend pins
 # the Basic style, so the other five Quick Controls styles - their plugin libraries and their 1200
 # QML files - are weight no build ever loads, and the qmltooling debugger plugins belong to a

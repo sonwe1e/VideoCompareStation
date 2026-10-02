@@ -19,7 +19,8 @@ Agent 从 [快速定位指南](docs/agent-guide.md) 开始；当前需求见
 
 启动后可直接拖入 1～3 个视频：单个视频直接以暂停的首帧铺满审查视口，两路或三路
 素材会先确认 A/B/C 顺序和 Reference。也可以从 File 菜单选择 Open videos… 打开视频，
-或用 Add video… 向当前会话追加。
+或用 Add video… 向当前会话追加。首屏／文件菜单的「从文件夹选视频…」和 `Ctrl+Alt+O`
+可列出本地顶层目录中的视频；点击成功后静音播放，支持手动上一项／下一项，不在 EOF 自动连播。
 CompareStation 只管理当前打开的 1～3 个视频（会话），不保存项目、没有 `.dvsproj`，
 关闭窗口时不会提示保存；OSC 模式、快捷键方案和默认 Diff Filter 等偏好自动保存到
 Settings。它是静音视觉审查工具：读取视频画面，但不解码或播放音频。
@@ -110,10 +111,13 @@ ctest --preset performance-d3d11 --output-on-failure
 ```
 
 Release workflow 生成明确标注为未签名的 ZIP，包内包含 EXE、CLI 与
-`CompareStationShell-2.0.dll`。历史版本链更新到 `1.2.0→2.0.3`；本次补丁不改变静音
-查看与比较范围，修复 ZIP 升级后的右键入口去重与启动路径，首次启动新版时接管当前用户的菜单。
-发布前执行 Release 测试、硬件与性能门禁、DPI 像素验证和 shutdown soak；SHA-256
-只用于校验完整性，不代表发布者身份。runner 标签、素材清单与发布合同详见
+`CompareStationShell-2.1.dll`。历史版本链更新到 `1.2.0→2.1.0`；本次新增本地视频文件夹入口，
+并优化指标窗口解码与阈值／通道口径复用。首次启动新版时接管当前用户的右键菜单。
+标准发布流程执行 Release 测试、硬件与性能门禁、DPI 像素验证和 shutdown soak。
+**2.1.0 的维护者授权例外**：不执行本地硬件长测；GitHub Windows 自托管 runner 离线时
+直接发布本地 Release ZIP。具体已执行与未执行项见 [发布说明](docs/releases/v2.1.0.md)，
+不把 CI 排队或旧版本证据写成通过。SHA-256 只用于校验完整性，不代表发布者身份。
+runner 标签、素材清单与发布合同详见
 [docs/self-hosted-runner.md](docs/self-hosted-runner.md)。
 
 ---

@@ -1,0 +1,43 @@
+include_guard(GLOBAL)
+
+# Shared by CPack's staging gate and the isolated policy regressions. This is a runtime policy,
+# not a byte-size cap: add a dependency only with its real call path and package validation.
+function(dvs_verify_runtime_payload stageRoot)
+    set(requiredRuntimes vcruntime140.dll vcruntime140_1.dll msvcp140.dll ucrtbase.dll)
+    list(LENGTH requiredRuntimes runtimeCount)
+    if(NOT runtimeCount EQUAL 4)
+        message(FATAL_ERROR "The app-local runtime policy must check exactly four runtime DLLs.")
+    endif()
+    foreach(runtime IN LISTS requiredRuntimes)
+        set(runtimePath "${stageRoot}/${runtime}")
+        if(NOT EXISTS "${runtimePath}" OR IS_DIRECTORY "${runtimePath}")
+            message(FATAL_ERROR "Required app-local runtime is missing: ${runtime}")
+        endif()
+        file(SIZE "${runtimePath}" runtimeSize)
+        if(runtimeSize EQUAL 0)
+            message(FATAL_ERROR "Required app-local runtime is empty: ${runtime}")
+        endif()
+    endforeach()
+
+    file(GLOB_RECURSE payloadFiles LIST_DIRECTORIES FALSE "${stageRoot}/*")
+    foreach(installedPath IN LISTS payloadFiles)
+        file(RELATIVE_PATH relativePath "${stageRoot}" "${installedPath}")
+        string(TOLOWER "${relativePath}" normalizedPath)
+        cmake_path(GET normalizedPath FILENAME fileName)
+        if(normalizedPath MATCHES "\\.exe$" AND
+           NOT normalizedPath STREQUAL "comparestation.exe" AND
+           NOT normalizedPath STREQUAL "comparestationcli.exe")
+            message(FATAL_ERROR "Unused tool or installer in runtime payload: ${relativePath}")
+        endif()
+        if(normalizedPath MATCHES "\\.(pdb|ilk)$")
+            message(FATAL_ERROR "Development artifact in runtime payload: ${relativePath}")
+        endif()
+        if(fileName STREQUAL "dxcompiler.dll" OR fileName STREQUAL "dxil.dll" OR
+           fileName STREQUAL "d3dcompiler_47.dll")
+            message(FATAL_ERROR "Unshipped graphics compiler in runtime payload: ${relativePath}")
+        endif()
+        if(normalizedPath MATCHES "(^|/)(qmltooling|generic)/")
+            message(FATAL_ERROR "Unshipped Qt plugin in runtime payload: ${relativePath}")
+        endif()
+    endforeach()
+endfunction()

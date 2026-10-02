@@ -1,0 +1,96 @@
+foreach(required IN ITEMS DVS_SOURCE_DIR DVS_TEST_ROOT)
+    if(NOT DEFINED ${required})
+        message(FATAL_ERROR "${required} is required.")
+    endif()
+endforeach()
+if(NOT DEFINED DVS_RUNTIME_POLICY)
+    set(DVS_RUNTIME_POLICY "${DVS_SOURCE_DIR}/cmake/VerifyRuntimePayload.cmake")
+endif()
+
+# The child checks one isolated payload; a mutation may substitute a scratch policy, never the
+# production build tree. No executable or registry entry is used by these policy regressions.
+if(DEFINED DVS_PAYLOAD_ROOT)
+    include("${DVS_RUNTIME_POLICY}")
+    dvs_verify_runtime_payload("${DVS_PAYLOAD_ROOT}")
+    return()
+endif()
+
+set(stageRoot "${DVS_TEST_ROOT}/runtime payload")
+file(REMOVE_RECURSE "${stageRoot}")
+file(MAKE_DIRECTORY "${stageRoot}")
+set(runtimeFiles vcruntime140.dll vcruntime140_1.dll msvcp140.dll ucrtbase.dll)
+foreach(runtime IN LISTS runtimeFiles)
+    file(WRITE "${stageRoot}/${runtime}" "fixture runtime")
+endforeach()
+file(WRITE "${stageRoot}/CompareStation.exe" "fixture GUI")
+file(WRITE "${stageRoot}/CompareStationCli.exe" "fixture CLI")
+
+set(checkCount 0)
+function(check_payload caseName expectedSuccess expectedDiagnostic)
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}"
+            "-DDVS_SOURCE_DIR=${DVS_SOURCE_DIR}"
+            "-DDVS_TEST_ROOT=${DVS_TEST_ROOT}"
+            "-DDVS_RUNTIME_POLICY=${DVS_RUNTIME_POLICY}"
+            "-DDVS_PAYLOAD_ROOT=${stageRoot}"
+            -P "${CMAKE_CURRENT_LIST_FILE}"
+        RESULT_VARIABLE result
+        OUTPUT_VARIABLE output
+        ERROR_VARIABLE error
+        TIMEOUT 10
+    )
+    if(expectedSuccess)
+        if(NOT result EQUAL 0)
+            message(FATAL_ERROR "${caseName}: valid runtime payload was rejected: ${output}${error}")
+        endif()
+    else()
+        if(result EQUAL 0)
+            message(FATAL_ERROR "${caseName}: broken runtime payload was accepted.")
+        endif()
+        string(FIND "${output}${error}" "${expectedDiagnostic}" diagnosticPosition)
+        if(diagnosticPosition EQUAL -1)
+            message(FATAL_ERROR "${caseName}: wrong failure: ${output}${error}")
+        endif()
+    endif()
+    math(EXPR nextCount "${checkCount} + 1")
+    set(checkCount "${nextCount}" PARENT_SCOPE)
+endfunction()
+
+check_payload(clean TRUE "")
+foreach(unusedExecutable IN ITEMS
+        vc_redist.x64.exe tools/vc_redist.x86.exe FFmpeg.EXE tools/ffprobe.exe tools/extra.exe)
+    file(WRITE "${stageRoot}/${unusedExecutable}" "unused installer or tool")
+    check_payload("${unusedExecutable}" FALSE "Unused tool or installer in runtime payload:")
+    file(REMOVE "${stageRoot}/${unusedExecutable}")
+endforeach()
+foreach(developmentArtifact IN ITEMS CompareStation.PDB symbols/CompareStation.pdb CompareStation.ilk)
+    file(WRITE "${stageRoot}/${developmentArtifact}" "unused development artifact")
+    check_payload("${developmentArtifact}" FALSE "Development artifact in runtime payload:")
+    file(REMOVE "${stageRoot}/${developmentArtifact}")
+endforeach()
+foreach(graphicsCompiler IN ITEMS DXCOMPILER.DLL graphics/dxil.dll d3dcompiler_47.dll)
+    file(WRITE "${stageRoot}/${graphicsCompiler}" "unused compiler")
+    check_payload("${graphicsCompiler}" FALSE "Unshipped graphics compiler in runtime payload:")
+    file(REMOVE "${stageRoot}/${graphicsCompiler}")
+endforeach()
+foreach(unshippedPlugin IN ITEMS qmltooling/qmldbg_debugger.dll generic/plugin.dll)
+    file(WRITE "${stageRoot}/${unshippedPlugin}" "unused plugin")
+    check_payload("${unshippedPlugin}" FALSE "Unshipped Qt plugin in runtime payload:")
+    file(REMOVE "${stageRoot}/${unshippedPlugin}")
+endforeach()
+foreach(runtime IN LISTS runtimeFiles)
+    file(REMOVE "${stageRoot}/${runtime}")
+    check_payload("missing ${runtime}" FALSE "Required app-local runtime is missing: ${runtime}")
+    file(WRITE "${stageRoot}/${runtime}" "")
+    check_payload("empty ${runtime}" FALSE "Required app-local runtime is empty: ${runtime}")
+    file(REMOVE "${stageRoot}/${runtime}")
+    file(MAKE_DIRECTORY "${stageRoot}/${runtime}")
+    check_payload("directory ${runtime}" FALSE "Required app-local runtime is missing: ${runtime}")
+    file(REMOVE_RECURSE "${stageRoot}/${runtime}")
+    file(WRITE "${stageRoot}/${runtime}" "fixture runtime")
+endforeach()
+check_payload(restored TRUE "")
+if(NOT checkCount EQUAL 27)
+    message(FATAL_ERROR "Expected 27 runtime payload checks, ran ${checkCount}.")
+endif()
+message(STATUS "Runtime payload policy: checks=${checkCount} failures=0")

@@ -146,6 +146,40 @@ domain 正常、UI 仍混用旧类布局。尚未构建的可选目标跳过检�
 `-Fresh` 只会重新配置到同一个根并在安装依赖时失败。若两个 vcpkg 根的 `vcpkg.cmake` 内容与
 `versions/baseline.json` 都一致（VS 会附带一份自带 vcpkg），则视为可互换，不触发无谓的全量重编。
 
+## ZIP 只打包必要运行时
+
+这是后续所有发布的固定规则：**只随包交付当前产品实际需要的程序、运行时、资源及许可证**。
+Qt／CMake 自动复制了某个文件，不等于该文件已获准进入发布包；也不能只为缩小体积删除依赖。
+
+- 保留 GUI／CLI、版本对应的 shell DLL、实际加载的 Qt／FFmpeg DLL 和 QML 模块、Basic 控件
+  样式、品牌资源、第三方许可证，以及右键注册入口和安装说明。
+- CRT／UCRT 采用程序旁的 DLL，由 `InstallRequiredSystemLibraries` 部署。Qt 使用
+  `NO_COMPILER_RUNTIME`，不再附带重复的 `vc_redist.x64.exe` 等运行库安装器；不能连 DLL 一起删。
+- 当前 `GraphicsBackend` 固定 Direct3D 11；产品没有 D3D12 路径，不随包交付
+  `dxcompiler.dll`／`dxil.dll`。支持的 Windows 10／11 自带 D3DCompiler_47，Qt 使用
+  `--no-system-d3d-compiler`／`--no-system-dxc-compiler`，不重复复制系统编译器。
+  `HlslHeaderCompiler` 在构建时生成着色器字节码，不是用户侧运行程序。
+- 不交付开发符号（PDB／ILK）、调试插件、未启用的控件样式、外部 ffmpeg／ffprobe 工具、
+  测试和性能素材、构建缓存或旧版本文件。新增产品功能确实需要其中某项时，先修改对应规则。
+
+实现入口是 `cmake/Install.cmake`；`cmake/VerifyRuntimePayload.cmake` 由 CPack staging 门禁调用，
+拒绝多余 EXE、图形编译器、开发符号和未交付插件，同时要求四个关键 app-local CRT／UCRT DLL
+非空。`quality.runtime-payload` 用隔离目录验证缺失、空文件、目录伪装、大小写及嵌套路径，
+并强制断言 **27** 个检查，防止规则回退或测试静默少跑。
+
+每次发布必须：
+
+1. 从当前候选构建和标准 CPack 流程生成 ZIP，不手工删包内文件后冒充同一候选。
+2. 对比上一发布的 ZIP 清单、压缩前／后大小；逐项解释新增文件，不能仅报告总大小。
+   新增依赖须附真实调用／动态加载依据；图形后端或最低 Windows 版本变更须同时更新部署策略。
+3. 在解压后的包上验证 CLI 启动、媒体打开、QML 导入／对话框和图形渲染；检查包内字节与当前
+   构建一致。干净 Windows 环境验证不得借用开发机 PATH、Qt 安装树或预装 VC++ 运行库。
+4. 保留既有硬件／性能和其他发布门禁。精简包验证不代替这些门禁，旧候选证据不认证新候选。
+
+本轮 2.0.2 → 2.0.3 草稿的差异证据为 27,908,959 → 62,665,162 bytes；新增的四个文件
+`vc_redist.x64.exe`、`dxcompiler.dll`、`d3dcompiler_47.dll`、`dxil.dll` 贡献 34,752,984 bytes
+压缩体积，几乎占全部增量。此次规则收紧解决的是部署范围，不是降低产品功能或修改压缩率。
+
 ## 修改完成前
 
 按改动运行相关测试、format-check、lint，并检查实际执行数量。
