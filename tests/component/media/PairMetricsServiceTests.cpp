@@ -7,6 +7,7 @@
 #include "dvs/media/MediaProbe.h"
 #include "dvs/media/PairMetricsService.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -14,7 +15,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <gtest/gtest.h>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -50,7 +53,12 @@ namespace {
 // service worker, so the collection is mutex-guarded and completion-driven.
 class CollectingSink final : public application::IPairMetricsSink {
 public:
+    explicit CollectingSink(std::function<void()> onBatch = {}) : onBatch_(std::move(onBatch)) {}
+
     void onPairMetricsBatch(application::PairMetricsBatch batch) override {
+        if (onBatch_) {
+            onBatch_();
+        }
         std::scoped_lock lock(mutex_);
         batches_.push_back(std::move(batch));
         if (batches_.back().finalBatch) {
@@ -64,6 +72,11 @@ public:
         failure_ = std::move(failure);
         completed_ = true;
         condition_.notify_all();
+    }
+
+    [[nodiscard]] bool waitForBatch(const std::chrono::milliseconds timeout) {
+        std::unique_lock lock(mutex_);
+        return condition_.wait_for(lock, timeout, [this] { return !batches_.empty(); });
     }
 
     [[nodiscard]] bool waitForCompletion(const std::chrono::milliseconds timeout) {
@@ -91,6 +104,7 @@ public:
     }
 
 private:
+    std::function<void()> onBatch_;
     std::mutex mutex_;
     std::condition_variable condition_;
     bool completed_ = false;
@@ -118,7 +132,6 @@ protected:
             .alignmentRevision = 1U,
             .firstFrame = domain::FrameId{firstFrame},
             .lastFrame = domain::FrameId{lastFrame},
-            .mismatchThreshold = 4U,
         };
         return request;
     }
@@ -138,7 +151,7 @@ protected:
         for (const application::PairMetricsBatch& batch : sink->batches()) {
             for (const application::PairMetricsSample& sample : batch.samples) {
                 EXPECT_TRUE(sample.comparable);
-                maeSum += sample.metrics.mae;
+                maeSum += sample.analysis.metrics.mae;
             }
         }
         return maeSum;
@@ -165,12 +178,12 @@ TEST_F(PairMetricsServiceTests, IdenticalSourcesReportZeroError) {
     for (const application::PairMetricsBatch& batch : batches) {
         for (const application::PairMetricsSample& sample : batch.samples) {
             EXPECT_TRUE(sample.comparable);
-            EXPECT_DOUBLE_EQ(sample.metrics.mae, 0.0);
-            EXPECT_DOUBLE_EQ(sample.metrics.mse, 0.0);
-            EXPECT_DOUBLE_EQ(sample.metrics.psnrDb, domain::kInfinitePsnrDb);
-            EXPECT_EQ(sample.metrics.maxAbsError, 0U);
-            EXPECT_EQ(sample.metrics.mismatchPixels, 0U);
-            EXPECT_EQ(sample.metrics.pixelCount,
+            EXPECT_DOUBLE_EQ(sample.analysis.metrics.mae, 0.0);
+            EXPECT_DOUBLE_EQ(sample.analysis.metrics.mse, 0.0);
+            EXPECT_DOUBLE_EQ(sample.analysis.metrics.psnrDb, domain::kInfinitePsnrDb);
+            EXPECT_EQ(sample.analysis.metrics.maxAbsError, 0U);
+            EXPECT_EQ(sample.analysis.metricsAt(0).mismatchPixels, 0U);
+            EXPECT_EQ(sample.analysis.metrics.pixelCount,
                       static_cast<std::uint64_t>(first.descriptor.extent.width) *
                           first.descriptor.extent.height);
         }
@@ -180,6 +193,124 @@ TEST_F(PairMetricsServiceTests, IdenticalSourcesReportZeroError) {
         hasFinalBatch = hasFinalBatch || batch.finalBatch;
     }
     EXPECT_TRUE(hasFinalBatch);
+}
+
+TEST_F(PairMetricsServiceTests, UnprioritizedWindowUsesOneForwardRunPerSource) {
+    const auto first = probeSource(fixture("h264_a_320x180_30fps_12.mp4"), 1);
+    const auto second = probeSource(fixture("h265_a_320x180_30fps_12.mp4"), 2);
+    const auto sink = std::make_shared<CollectingSink>();
+    ASSERT_EQ(service.submit(makeRequest(first, second, 0, 11), sink),
+              application::PortSubmitResult::Accepted);
+    ASSERT_TRUE(sink->waitForCompletion(std::chrono::seconds{5}));
+    ASSERT_FALSE(sink->failure().has_value());
+    const auto batches = sink->batches();
+    ASSERT_EQ(batches.size(), 1U);
+    std::vector<domain::FrameId> actual;
+    std::vector<domain::FrameId> expected;
+    for (const auto& sample : batches.front().samples) {
+        actual.push_back(sample.canonicalFrameId);
+    }
+    for (std::int64_t frame = 0; frame < 12; ++frame) {
+        expected.emplace_back(frame);
+    }
+    EXPECT_EQ(actual, expected);
+    const auto work = service.workStats();
+    EXPECT_EQ(work.seekCount, 2U);
+    EXPECT_EQ(work.decodedFrames, 24U);
+    EXPECT_EQ(work.sampledFrames, 24U);
+    EXPECT_EQ(work.publishedBatches, 1U);
+}
+
+TEST_F(PairMetricsServiceTests, PriorityPublishesImmediatelyAndPreservesEveryMappedSample) {
+    const auto first = probeSource(fixture("h264_a_320x180_30fps_12.mp4"), 1);
+    const auto second = probeSource(fixture("h265_a_320x180_30fps_12.mp4"), 2);
+    const auto referenceSink = std::make_shared<CollectingSink>();
+    ASSERT_EQ(service.submit(makeRequest(first, second, 0, 10, 1), referenceSink),
+              application::PortSubmitResult::Accepted);
+    ASSERT_TRUE(referenceSink->waitForCompletion(std::chrono::seconds{5}));
+    ASSERT_FALSE(referenceSink->failure().has_value());
+    std::vector<application::PairMetricsSample> expectedSamples;
+    for (const auto& batch : referenceSink->batches()) {
+        expectedSamples.insert(expectedSamples.end(), batch.samples.begin(), batch.samples.end());
+    }
+    const auto byFrame = [](const auto& left, const auto& right) {
+        return left.canonicalFrameId < right.canonicalFrameId;
+    };
+    std::sort(expectedSamples.begin(), expectedSamples.end(), byFrame);
+    // A mapping gap must stay unavailable; the reordered job must not hide it or fill it with
+    // another frame. All other dense mappings must reproduce the offset-based reference.
+    ASSERT_EQ(expectedSamples.size(), 11U);
+    expectedSamples[5] = application::PairMetricsSample{.canonicalFrameId = domain::FrameId{5}};
+    for (const std::int64_t priority : {0, 3, 10}) {
+        SCOPED_TRACE(priority);
+        PairMetricsService focusedService;
+        auto request = makeRequest(first, second, 0, 10, 100, 2);
+        request.priorityFrame = domain::FrameId{priority};
+        for (std::int64_t frame = 0; frame <= 10; ++frame) {
+            request.mappedSourceFrames.push_back(frame);
+            request.mappedSourceFrames.push_back(frame == 5 ? -1 : frame + 1);
+        }
+        const auto sink = std::make_shared<CollectingSink>();
+        ASSERT_EQ(focusedService.submit(request, sink), application::PortSubmitResult::Accepted);
+        ASSERT_TRUE(sink->waitForCompletion(std::chrono::seconds{5}));
+        ASSERT_FALSE(sink->failure().has_value());
+        const auto batches = sink->batches();
+        ASSERT_GE(batches.size(), 2U);
+        ASSERT_EQ(batches.front().samples.size(), 1U);
+        EXPECT_EQ(batches.front().samples.front().canonicalFrameId, domain::FrameId{priority});
+        EXPECT_FALSE(batches.front().finalBatch);
+        EXPECT_EQ(batches.front().context, request.context);
+        std::vector<application::PairMetricsSample> samples;
+        std::vector<domain::FrameId> order;
+        for (const auto& batch : batches) {
+            samples.insert(samples.end(), batch.samples.begin(), batch.samples.end());
+            for (const auto& sample : batch.samples) {
+                order.push_back(sample.canonicalFrameId);
+            }
+        }
+        std::vector<domain::FrameId> expectedOrder{domain::FrameId{priority}};
+        for (std::int64_t frame = priority + 1; frame <= 10; ++frame) {
+            expectedOrder.emplace_back(frame);
+        }
+        for (std::int64_t frame = 0; frame < priority; ++frame) {
+            expectedOrder.emplace_back(frame);
+        }
+        EXPECT_EQ(order, expectedOrder);
+        std::sort(samples.begin(), samples.end(), byFrame);
+        EXPECT_EQ(samples, expectedSamples);
+    }
+}
+
+TEST_F(PairMetricsServiceTests, CancelAfterPriorityBatchStopsBeforeWindowDecode) {
+    const auto first = probeSource(fixture("h264_a_320x180_30fps_12.mp4"), 1);
+    const auto second = probeSource(fixture("h265_a_320x180_30fps_12.mp4"), 2);
+    auto request = makeRequest(first, second, 0, 11);
+    request.priorityFrame = domain::FrameId{3};
+    // Cancellation from the worker callback is deterministic: the rest of the window must
+    // neither decode nor publish, rather than relying on a race against the calling thread.
+    const auto sink = std::make_shared<CollectingSink>([&] { service.cancel(request.context); });
+    ASSERT_EQ(service.submit(request, sink), application::PortSubmitResult::Accepted);
+    ASSERT_TRUE(sink->waitForBatch(std::chrono::seconds{5}));
+    EXPECT_FALSE(sink->waitForCompletion(std::chrono::milliseconds{200}));
+    EXPECT_EQ(sink->totalSampleCount(), 1U);
+    EXPECT_EQ(service.workStats().sampledFrames, 2U);
+    EXPECT_EQ(service.workStats().publishedBatches, 1U);
+}
+
+TEST_F(PairMetricsServiceTests, SinglePriorityFrameCompletesInItsFirstBatch) {
+    const auto first = probeSource(fixture("h264_a_320x180_30fps_12.mp4"), 1);
+    const auto second = probeSource(fixture("h265_a_320x180_30fps_12.mp4"), 2);
+    auto request = makeRequest(first, second, 3, 3);
+    request.priorityFrame = domain::FrameId{3};
+    const auto sink = std::make_shared<CollectingSink>();
+    ASSERT_EQ(service.submit(request, sink), application::PortSubmitResult::Accepted);
+    ASSERT_TRUE(sink->waitForCompletion(std::chrono::seconds{5}));
+    ASSERT_FALSE(sink->failure().has_value());
+    const auto batches = sink->batches();
+    ASSERT_EQ(batches.size(), 1U);
+    ASSERT_EQ(batches.front().samples.size(), 1U);
+    EXPECT_EQ(batches.front().samples.front().canonicalFrameId, domain::FrameId{3});
+    EXPECT_TRUE(batches.front().finalBatch);
 }
 
 TEST_F(PairMetricsServiceTests, DifferentSourcesReportComparableSamples) {
@@ -199,8 +330,8 @@ TEST_F(PairMetricsServiceTests, DifferentSourcesReportComparableSamples) {
         for (const application::PairMetricsSample& sample : batch.samples) {
             if (sample.comparable) {
                 ++comparableCount;
-                EXPECT_GE(sample.metrics.mae, 0.0);
-                EXPECT_GT(sample.metrics.pixelCount, 0U);
+                EXPECT_GE(sample.analysis.metrics.mae, 0.0);
+                EXPECT_GT(sample.analysis.metrics.pixelCount, 0U);
             }
         }
     }
@@ -264,6 +395,18 @@ TEST_F(PairMetricsServiceTests, InvalidRequestsAreRejected) {
     request.offsets = {application::SourceFrameOffset{first.id, 0}};
     EXPECT_EQ(service.submit(request, sink), application::PortSubmitResult::Closed);
 
+    for (const std::int64_t invalid : {-1LL, (std::numeric_limits<std::int64_t>::max)()}) {
+        request = makeRequest(first, second, invalid, invalid);
+        ASSERT_FALSE(request.isValid());
+        EXPECT_EQ(service.submit(request, sink), application::PortSubmitResult::Closed);
+    }
+    for (const std::int64_t priority : {-1, 3}) {
+        request = makeRequest(first, second, 0, 2);
+        request.priorityFrame = domain::FrameId{priority};
+        ASSERT_FALSE(request.isValid());
+        EXPECT_EQ(service.submit(request, sink), application::PortSubmitResult::Closed);
+    }
+
     EXPECT_EQ(service.submit(makeRequest(first, second, 0, 2, 0, 1U), nullptr),
               application::PortSubmitResult::Closed);
 }
@@ -307,13 +450,13 @@ TEST_F(PairMetricsServiceTests, SessionReuseSkipsReopenBetweenJobs) {
     ASSERT_EQ(service.submit(makeRequest(first, second, 0, 0, 0, 1U), firstSink),
               application::PortSubmitResult::Accepted);
     ASSERT_TRUE(firstSink->waitForCompletion(std::chrono::seconds{5}));
-    const std::uint64_t decodedAfterFirstJob = service.decodedFrameCountForTesting();
+    const std::uint64_t decodedAfterFirstJob = service.workStats().sampledFrames;
 
     const auto secondSink = std::make_shared<CollectingSink>();
     ASSERT_EQ(service.submit(makeRequest(first, second, 1, 1, 0, 2U), secondSink),
               application::PortSubmitResult::Accepted);
     ASSERT_TRUE(secondSink->waitForCompletion(std::chrono::seconds{5}));
-    EXPECT_GT(service.decodedFrameCountForTesting(), decodedAfterFirstJob);
+    EXPECT_GT(service.workStats().sampledFrames, decodedAfterFirstJob);
     EXPECT_GT(secondSink->totalSampleCount(), 0U);
 }
 
@@ -350,22 +493,19 @@ TEST_F(PairMetricsServiceTests, IdenticalSourcesStayZeroErrorUnderEveryMismatchP
         probeSource(fixture("h264_a_320x180_30fps_12.mp4"), domain::SourceId{1});
     const domain::ComparisonSource second =
         probeSource(fixture("h264_a_320x180_30fps_12.mp4"), domain::SourceId{2});
-    for (const domain::MismatchPolicy policy : {domain::MismatchPolicy::LumaOnly,
-                                                domain::MismatchPolicy::AnyChannel,
-                                                domain::MismatchPolicy::AllChannels}) {
-        application::PairMetricsRequest request = makeRequest(first, second, 0, 2, 0, 1U);
-        request.mismatchPolicy = policy;
-        const auto sink = std::make_shared<CollectingSink>();
-        ASSERT_EQ(service.submit(request, sink), application::PortSubmitResult::Accepted);
-        ASSERT_TRUE(sink->waitForCompletion(std::chrono::seconds{5}));
-        ASSERT_FALSE(sink->failure().has_value());
-        for (const application::PairMetricsBatch& batch : sink->batches()) {
-            // The batch must echo the policy so stale-policy results are identifiable.
-            EXPECT_EQ(batch.mismatchPolicy, policy);
-            for (const application::PairMetricsSample& sample : batch.samples) {
-                ASSERT_TRUE(sample.comparable);
-                EXPECT_EQ(sample.metrics.mismatchPixels, 0U);
-                EXPECT_DOUBLE_EQ(sample.metrics.mae, 0.0);
+    const auto sink = std::make_shared<CollectingSink>();
+    ASSERT_EQ(service.submit(makeRequest(first, second, 0, 2), sink),
+              application::PortSubmitResult::Accepted);
+    ASSERT_TRUE(sink->waitForCompletion(std::chrono::seconds{5}));
+    ASSERT_FALSE(sink->failure().has_value());
+    for (const auto& batch : sink->batches()) {
+        for (const auto& sample : batch.samples) {
+            ASSERT_TRUE(sample.comparable);
+            for (const auto policy : {domain::MismatchPolicy::LumaOnly,
+                                      domain::MismatchPolicy::AnyChannel,
+                                      domain::MismatchPolicy::AllChannels}) {
+                EXPECT_EQ(sample.analysis.metricsAt(0, policy).mismatchPixels, 0U);
+                EXPECT_DOUBLE_EQ(sample.analysis.metrics.mae, 0.0);
             }
         }
     }
@@ -383,19 +523,17 @@ TEST_F(PairMetricsServiceTests, MismatchPolicyChangesBadPixelCountOnDifferentSou
         {{domain::MismatchPolicy::AnyChannel, &anyChannelPixels},
          {domain::MismatchPolicy::LumaOnly, &lumaOnlyPixels},
          {domain::MismatchPolicy::AllChannels, &allChannelsPixels}}};
+    const auto sink = std::make_shared<CollectingSink>();
+    ASSERT_EQ(service.submit(makeRequest(first, second, 0, 0), sink),
+              application::PortSubmitResult::Accepted);
+    ASSERT_TRUE(sink->waitForCompletion(std::chrono::seconds{5}));
+    ASSERT_FALSE(sink->failure().has_value());
+    const auto batches = sink->batches();
+    ASSERT_EQ(batches.size(), 1U);
+    ASSERT_EQ(batches.front().samples.size(), 1U);
+    ASSERT_TRUE(batches.front().samples.front().comparable);
     for (const auto& [policy, pixelCount] : cases) {
-        application::PairMetricsRequest request = makeRequest(first, second, 0, 0, 0, 1U);
-        request.mismatchThreshold = 30U;
-        request.mismatchPolicy = policy;
-        const auto sink = std::make_shared<CollectingSink>();
-        ASSERT_EQ(service.submit(request, sink), application::PortSubmitResult::Accepted);
-        ASSERT_TRUE(sink->waitForCompletion(std::chrono::seconds{5}));
-        ASSERT_FALSE(sink->failure().has_value());
-        const std::vector<application::PairMetricsBatch> batches = sink->batches();
-        ASSERT_EQ(batches.size(), 1U);
-        ASSERT_EQ(batches.front().samples.size(), 1U);
-        ASSERT_TRUE(batches.front().samples.front().comparable);
-        *pixelCount = batches.front().samples.front().metrics.mismatchPixels;
+        *pixelCount = batches.front().samples.front().analysis.metricsAt(30, policy).mismatchPixels;
     }
     // Both narrower policies are subsets of AnyChannel at the same threshold: the luma sample
     // never exceeds the max channel delta, and AllChannels requires every channel to pass.

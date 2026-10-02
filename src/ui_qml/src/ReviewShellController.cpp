@@ -548,12 +548,25 @@ void ReviewShellController::synchronizeActiveSources(const bool advanceGeneratio
     Q_EMIT stateChanged();
 }
 
-bool ReviewShellController::submitOrQueue(ReviewIntent intent) {
+qulonglong ReviewShellController::openVideo(const QUrl& source) {
+    if (!source.isLocalFile()) {
+        return 0;
+    }
+    qulonglong id = 0;
+    const bool accepted = submitOrQueue(
+        ReviewIntent{.kind = OpenSourcesIntent, .sources = {source}, .referenceIndex = 0}, &id);
+    return accepted ? id : 0;
+}
+
+bool ReviewShellController::submitOrQueue(ReviewIntent intent, qulonglong* const acceptedId) {
     intent.id = allocateIntentId();
     if (intent.id == 0U) {
         Q_EMIT intentEvent(
             0U, RejectedStatus, intent.kind, InvalidIntentError, intent.sources.size());
         return false;
+    }
+    if (acceptedId != nullptr) {
+        *acceptedId = intent.id;
     }
     intent.expectedGeneration = activeGeneration_;
     intent.expectedSources = activeSourceIdentities();
@@ -572,8 +585,18 @@ bool ReviewShellController::submitOrQueue(ReviewIntent intent) {
         }
     }
 
-    if (review_.busy() || activeIntent_.has_value() || !reviewIntents_.empty()) {
-        return enqueueIntent(std::move(intent));
+    // busy is foreground-only. Playing, a pending Play/Pause and a drained-but-not-yet-
+    // acknowledged frame can all prohibit Open while busy remains false. Keep the user's
+    // source intent until the controller's existing canOpen gate becomes true.
+    const bool waitsForTransport =
+        intent.kind != CloseSourcesIntent && review_.graphicsReady() && !review_.canOpen();
+    if (review_.busy() || activeIntent_.has_value() || !reviewIntents_.empty() ||
+        waitsForTransport) {
+        const bool queued = enqueueIntent(std::move(intent));
+        if (queued) {
+            QMetaObject::invokeMethod(this, [this] { drainIntentQueue(); }, Qt::QueuedConnection);
+        }
+        return queued;
     }
     if (!submitIntent(intent)) {
         Q_EMIT intentEvent(
@@ -667,6 +690,33 @@ bool ReviewShellController::enqueueIntent(ReviewIntent intent) {
 
 void ReviewShellController::drainIntentQueue() {
     if (review_.busy() || activeIntent_.has_value() || reviewIntents_.empty()) {
+        return;
+    }
+    if (reviewIntents_.front().kind != CloseSourcesIntent && review_.graphicsReady() &&
+        !review_.canOpen()) {
+        // Request Pause only when it is available: another transport command may still own
+        // the gate. Its matching terminal and the final frame drain wake this queue through
+        // stateChanged. Never pop an Open merely because foreground busy is already false.
+        const auto waitingId = reviewIntents_.front().id;
+        if (review_.canPause() && !review_.pause() && !reviewIntents_.empty() &&
+            reviewIntents_.front().id == waitingId) {
+            const ReviewIntent rejected = std::move(reviewIntents_.front());
+            reviewIntents_.pop_front();
+            Q_EMIT stateChanged();
+            Q_EMIT intentEvent(rejected.id,
+                               RejectedStatus,
+                               rejected.kind,
+                               SubmissionRejectedError,
+                               rejected.sources.size());
+            Q_EMIT intentFinished(rejected.id,
+                                  rejected.kind,
+                                  static_cast<int>(application::CommandOutcome::Failed),
+                                  QString{});
+            if (!reviewIntents_.empty()) {
+                QMetaObject::invokeMethod(
+                    this, [this] { drainIntentQueue(); }, Qt::QueuedConnection);
+            }
+        }
         return;
     }
     ReviewIntent intent = std::move(reviewIntents_.front());

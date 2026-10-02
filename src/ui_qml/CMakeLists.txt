@@ -12,6 +12,7 @@ add_library(
         include/dvs/ui/ReviewShellController.h
         include/dvs/ui/SourceIdentity.h
         include/dvs/ui/SourceListModel.h
+        include/dvs/ui/VideoFolderModel.h
         src/ClipExportController.cpp
         src/ImageFolderPairModel.cpp
         src/IssueLogController.cpp
@@ -23,6 +24,7 @@ add_library(
         src/ReviewShellController.cpp
         src/SourceIdentity.cpp
         src/SourceListModel.cpp
+        src/VideoFolderModel.cpp
 )
 add_library(dvs::ui_models ALIAS dvs_ui_models)
 

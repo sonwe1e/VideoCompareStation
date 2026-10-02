@@ -15,10 +15,12 @@
 #include "dvs/ui/ReviewSessionFacade.h"
 #include "dvs/ui/ReviewShellController.h"
 #include "dvs/ui/SourceListModel.h"
+#include "dvs/ui/VideoFolderModel.h"
 
 #include <QClipboard>
 #include <QColor>
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -418,6 +420,10 @@ public:
         engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), facade.get());
         engine.rootContext()->setContextProperty(QStringLiteral("imageReview"), &imageReview);
         engine.rootContext()->setContextProperty(QStringLiteral("imageFolderPairs"), &folderPairs);
+        if (withVideoFolder) {
+            videoFolder.attachPlayback(*controller, *shell);
+            engine.rootContext()->setContextProperty(QStringLiteral("videoFolder"), &videoFolder);
+        }
         engine.addImageProvider(QStringLiteral("vcs-review"),
                                 new ReviewImageProvider(&imageReview));
         if (withImageEdit) {
@@ -452,6 +458,16 @@ public:
         window->resize(1280, 800);
         settle();
         return true;
+    }
+
+    [[nodiscard]] bool commitWorkspace(const int media, const QString& identity) {
+        QVariant result;
+        return QMetaObject::invokeMethod(root.get(),
+                                         "commitWorkspace",
+                                         Q_RETURN_ARG(QVariant, result),
+                                         Q_ARG(QVariant, QVariant{media}),
+                                         Q_ARG(QVariant, QVariant{identity})) &&
+               result.toBool();
     }
 
     [[nodiscard]] bool activateWorkspace(const int media) {
@@ -517,6 +533,8 @@ public:
     std::unique_ptr<ReviewSessionFacade> facade;
     ImageReviewController imageReview;
     ImageFolderPairModel folderPairs;
+    VideoFolderModel videoFolder;
+    bool withVideoFolder = false;
     // Step-3 editing stays opt-in so harnesses that predate it keep their exact layout.
     ImageEditController imageEdit;
     bool withImageEdit = false;
@@ -4450,6 +4468,172 @@ TEST(MainQmlContractTests, FolderSidebarExposesPairingContextAndOpensMissingSide
     EXPECT_LE(currentItem->y(), contentY + pairList->property("height").toDouble() + 1.0);
 }
 
+TEST(MainQmlContractTests, StartupVideoOpenCommitsWorkspaceOnlyAfterSuccess) {
+    for (const int sourceCount : {1, 2, 3}) {
+        SCOPED_TRACE(sourceCount);
+        WorkspaceHarness harness;
+        ASSERT_TRUE(harness.create()) << harness.error;
+        harness.window->show();
+        QImage retained{16, 16, QImage::Format_ARGB32};
+        retained.fill(QColor(10, 20, 30));
+        ASSERT_TRUE(harness.imageReview.openPrimaryImage(std::move(retained),
+                                                         QStringLiteral("retained-image")));
+        ASSERT_TRUE(harness.commitWorkspace(1, QStringLiteral("retained-image")));
+        harness.settle();
+        QObject* const session =
+            harness.root->findChild<QObject*>(QStringLiteral("workspaceSession"));
+        auto* const imageWorkspace =
+            harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
+        auto* const viewport =
+            harness.root->findChild<QQuickItem*>(QStringLiteral("mediaViewportFocusTarget"));
+        ASSERT_NE(session, nullptr);
+        ASSERT_NE(imageWorkspace, nullptr);
+        ASSERT_NE(viewport, nullptr);
+        const int revisionBefore = session->property("commitRevision").toInt();
+
+        QTemporaryDir directory;
+        ASSERT_TRUE(directory.isValid());
+        QVariantList urls;
+        std::vector<std::filesystem::path> paths;
+        QStringList expectedIdentity;
+        for (int index = 0; index < sourceCount; ++index) {
+            const QString path = directory.filePath(QStringLiteral("startup_%1.mp4").arg(index));
+            // The fake media backend supplies validated video descriptors; these bytes only
+            // establish existing local files for ReviewController's synchronous path validation.
+            ASSERT_TRUE(writeTestPng(path));
+            const QUrl url = QUrl::fromLocalFile(path);
+            urls.push_back(url);
+            paths.emplace_back(path.toStdWString());
+            expectedIdentity.push_back(url.toString());
+        }
+        // DesktopApplication uses this same entry point for normal CLI and shell requests,
+        // unlike the automation path which explicitly activates the video workspace.
+        ASSERT_TRUE(harness.shell->enqueueStartupRequest(sourceCount == 1 ? 1 : 2, urls));
+        const application::CommandContext context =
+            application::commandContext(harness.submitted.back());
+        harness.settle();
+        EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 1);
+        EXPECT_EQ(session->property("commitRevision").toInt(), revisionBefore);
+        EXPECT_TRUE(imageWorkspace->hasActiveFocus());
+        // The real open command needs a first-frame ACK before its successful terminal.
+        // Its surface must render beneath the retained image task without accepting input.
+        EXPECT_TRUE(viewport->isVisible());
+        EXPECT_FALSE(viewport->isEnabled());
+
+        ASSERT_TRUE(installValidatedVideoSet(
+            harness.snapshot, paths, domain::RationalRate::create(30, 1).value(), 100, 3'333'334));
+        harness.snapshot->displayedFrame = domain::FrameId{0};
+        harness.terminals.push_back(application::CommandTerminal{
+            .context = context,
+            .outcome = application::CommandOutcome::Succeeded,
+        });
+        harness.controller->refreshProjection();
+        harness.settle();
+        EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 0);
+        EXPECT_EQ(session->property("committedMedia").toInt(), 0);
+        EXPECT_EQ(session->property("committedIdentity").toString(),
+                  expectedIdentity.join(QStringLiteral("\n")));
+        EXPECT_EQ(session->property("commitRevision").toInt(), revisionBefore + 1);
+        EXPECT_FALSE(imageWorkspace->isVisible());
+        EXPECT_TRUE(viewport->hasActiveFocus());
+        EXPECT_TRUE(viewport->isEnabled());
+        EXPECT_EQ(harness.imageReview.primaryPath(), QStringLiteral("retained-image"));
+    }
+}
+
+TEST(MainQmlContractTests, UnsuccessfulStartupVideoOpenKeepsImageWorkspace) {
+    for (const auto outcome :
+         {application::CommandOutcome::Failed, application::CommandOutcome::Canceled}) {
+        SCOPED_TRACE(static_cast<int>(outcome));
+        WorkspaceHarness harness;
+        ASSERT_TRUE(harness.create()) << harness.error;
+        harness.window->show();
+        QImage retained{16, 16, QImage::Format_ARGB32};
+        retained.fill(QColor(10, 20, 30));
+        ASSERT_TRUE(harness.imageReview.openPrimaryImage(std::move(retained),
+                                                         QStringLiteral("retained-image")));
+        ASSERT_TRUE(harness.commitWorkspace(1, QStringLiteral("retained-image")));
+        harness.settle();
+        QObject* const session =
+            harness.root->findChild<QObject*>(QStringLiteral("workspaceSession"));
+        auto* const imageWorkspace =
+            harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
+        ASSERT_NE(session, nullptr);
+        ASSERT_NE(imageWorkspace, nullptr);
+        const int revisionBefore = session->property("commitRevision").toInt();
+        const QString identityBefore = session->property("committedIdentity").toString();
+        QTemporaryDir directory;
+        ASSERT_TRUE(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("startup.mp4"));
+        ASSERT_TRUE(writeTestPng(path));
+        ASSERT_TRUE(harness.shell->enqueueStartupRequest(1, {QUrl::fromLocalFile(path)}));
+        harness.terminals.push_back(application::CommandTerminal{
+            .context = application::commandContext(harness.submitted.back()),
+            .outcome = outcome,
+        });
+        harness.controller->refreshProjection();
+        harness.settle();
+        EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 1);
+        EXPECT_EQ(session->property("commitRevision").toInt(), revisionBefore);
+        EXPECT_EQ(session->property("committedIdentity").toString(), identityBefore);
+        EXPECT_TRUE(imageWorkspace->isVisible());
+        EXPECT_TRUE(imageWorkspace->hasActiveFocus());
+        EXPECT_EQ(harness.imageReview.primaryPath(), QStringLiteral("retained-image"));
+    }
+}
+
+TEST(MainQmlContractTests, ClosingRetainedVideoDoesNotReplaceImageWorkspace) {
+    WorkspaceHarness harness;
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString videoPath = directory.filePath(QStringLiteral("retained.mp4"));
+    ASSERT_TRUE(writeTestPng(videoPath));
+    ASSERT_TRUE(installValidatedVideoSet(harness.snapshot,
+                                         {std::filesystem::path{videoPath.toStdWString()}},
+                                         domain::RationalRate::create(30, 1).value(),
+                                         100,
+                                         3'333'334));
+    harness.snapshot->displayedFrame = domain::FrameId{0};
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    QImage retained{16, 16, QImage::Format_ARGB32};
+    retained.fill(QColor(10, 20, 30));
+    ASSERT_TRUE(harness.imageReview.openPrimaryImage(std::move(retained),
+                                                     QStringLiteral("retained-image")));
+    ASSERT_TRUE(harness.commitWorkspace(1, QStringLiteral("retained-image")));
+    harness.settle();
+    QObject* const session = harness.root->findChild<QObject*>(QStringLiteral("workspaceSession"));
+    auto* const imageWorkspace =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
+    ASSERT_NE(session, nullptr);
+    ASSERT_NE(imageWorkspace, nullptr);
+    const int revisionBefore = session->property("commitRevision").toInt();
+    const QString identityBefore = session->property("committedIdentity").toString();
+
+    ASSERT_TRUE(harness.shell->closeSources());
+    const application::CommandContext context =
+        application::commandContext(harness.submitted.back());
+    harness.snapshot->sessionState = domain::SessionState::kEmpty;
+    harness.snapshot->sources.clear();
+    harness.snapshot->presentedSources.clear();
+    harness.snapshot->validatedComparison.reset();
+    harness.snapshot->canonicalTimeline.reset();
+    harness.snapshot->displayedFrame.reset();
+    harness.snapshot->canonicalFrameCount = 0U;
+    harness.terminals.push_back(application::CommandTerminal{
+        .context = context,
+        .outcome = application::CommandOutcome::Succeeded,
+    });
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 1);
+    EXPECT_EQ(session->property("commitRevision").toInt(), revisionBefore);
+    EXPECT_EQ(session->property("committedIdentity").toString(), identityBefore);
+    EXPECT_TRUE(imageWorkspace->isVisible());
+    EXPECT_TRUE(imageWorkspace->hasActiveFocus());
+    EXPECT_EQ(harness.imageReview.primaryPath(), QStringLiteral("retained-image"));
+}
+
 TEST(MainQmlContractTests, WorkspaceOpenIntentDoesNotOverrideCommittedWorkspace) {
     WorkspaceHarness harness;
     ASSERT_TRUE(harness.create()) << harness.error;
@@ -5143,6 +5327,193 @@ TEST(MainQmlContractTests, ImageWorkspaceAlphaAndBackgroundSelectionContract) {
     ASSERT_NE(shortcutHelp, nullptr);
     EXPECT_TRUE(shortcutHelp->property("imagePreset").toBool());
 }
+TEST(MainQmlContractTests, VideoFolderEntryOpensModalPickerWithoutChangingWorkspace) {
+    WorkspaceHarness harness;
+    harness.withVideoFolder = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.root->setProperty("workspaceMode", 1);
+    harness.settle();
+    const auto before = harness.submitted.size();
+    auto* const entry =
+        harness.root->findChild<QObject*>(QStringLiteral("openVideoFolderMenuItem"));
+    ASSERT_NE(entry, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(entry, "triggered"));
+    harness.settle();
+    auto* const picker = harness.root->findChild<QObject*>(QStringLiteral("videoFolderDialog"));
+    ASSERT_NE(picker, nullptr);
+    EXPECT_TRUE(picker->property("visible").toBool());
+    EXPECT_EQ(harness.root->property("inputContext").toInt(), 3);
+    EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 1);
+    ASSERT_TRUE(QMetaObject::invokeMethod(picker, "reject"));
+    harness.settle();
+    EXPECT_EQ(harness.submitted.size(), before);
+    EXPECT_NE(harness.root->findChild<QObject*>(QStringLiteral("emptyOpenVideoFolderButton")),
+              nullptr);
+}
+
+TEST(MainQmlContractTests, VideoFolderRowOpensOneSourceThenPlaysOnlyAfterSuccess) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    for (const auto* name : {"clip1.mp4", "clip2.mp4", "clip10.mp4"}) {
+        QFile file{directory.filePath(QString::fromLatin1(name))};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_EQ(file.write("fake"), 4);
+    }
+    WorkspaceHarness harness;
+    harness.withVideoFolder = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.root->setProperty("workspaceMode", 1);
+    harness.root->setProperty("videoFolderSidebarVisible", true);
+    harness.window->show();
+    ASSERT_TRUE(harness.videoFolder.loadFolder(QUrl::fromLocalFile(directory.path())));
+    ASSERT_TRUE(harness.waitUntil([&] { return !harness.videoFolder.scanning(); }));
+    harness.settle();
+    auto* const fileList = harness.root->findChild<QObject*>(QStringLiteral("videoFolderFileList"));
+    ASSERT_NE(fileList, nullptr);
+    QQuickItem* row = nullptr;
+    ASSERT_TRUE(harness.waitUntil([&] {
+        QMetaObject::invokeMethod(
+            fileList, "itemAtIndex", Q_RETURN_ARG(QQuickItem*, row), Q_ARG(int, 1));
+        return row != nullptr;
+    }));
+    EXPECT_EQ(row->objectName(), "videoFolderRow-1");
+    harness.submitted.clear();
+    ASSERT_TRUE(QMetaObject::invokeMethod(row, "clicked"));
+    ASSERT_EQ(harness.submitted.size(), 1U);
+    const auto* const open = std::get_if<application::OpenComparisonCommand>(&harness.submitted[0]);
+    ASSERT_NE(open, nullptr);
+    ASSERT_EQ(open->sources.size(), 1U);
+    const auto path = std::filesystem::path{directory.filePath("clip2.mp4").toStdWString()};
+    EXPECT_EQ(open->sources.front().path, path);
+    EXPECT_FALSE(open->preserveDisplayedTime);
+    EXPECT_EQ(open->intent, application::OpenReviewIntent::NewReview);
+    EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 1);
+    const auto context = open->context;
+    auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate.hasValue());
+    ASSERT_TRUE(installValidatedVideoSet(harness.snapshot, {path}, rate.value(), 100, 3'333'333));
+    const auto sourceViews = harness.snapshot->validatedComparison->sources();
+    std::vector<domain::ComparisonSource> sources{sourceViews.begin(), sourceViews.end()};
+    QFile opened{QString::fromStdWString(path.wstring())};
+    ASSERT_TRUE(opened.open(QIODevice::ReadOnly));
+    sources.front().descriptor.sourceIdentity->fingerprintSha256 =
+        QCryptographicHash::hash(opened.readAll(), QCryptographicHash::Sha256)
+            .toHex()
+            .toStdString();
+    auto validated = domain::ComparisonValidator::validate(std::move(sources));
+    ASSERT_TRUE(validated.hasValue());
+    harness.snapshot->validatedComparison =
+        std::make_shared<const domain::ValidatedComparisonSet>(std::move(validated).value().set);
+    harness.snapshot->sessionId = context.sessionId;
+    harness.snapshot->sessionEpoch = context.sessionEpoch;
+    harness.snapshot->displayedFrame = domain::FrameId{0};
+    harness.terminals.push_back(
+        {.context = context, .outcome = application::CommandOutcome::Succeeded});
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_EQ(std::count_if(harness.submitted.begin(),
+                            harness.submitted.end(),
+                            [](const auto& command) {
+                                return std::holds_alternative<application::PlayCommand>(command);
+                            }),
+              1);
+    EXPECT_EQ(harness.videoFolder.currentRow(), 1);
+    EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 0);
+    auto* const list = harness.root->findChild<QQuickItem*>(QStringLiteral("videoFolderSidebar"));
+    auto* const viewport =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("mediaViewportFocusTarget"));
+    ASSERT_NE(list, nullptr);
+    ASSERT_NE(viewport, nullptr);
+    EXPECT_LE(list->mapToScene({list->width(), 0}).x(), viewport->mapToScene({0, 0}).x());
+    const QString evidence = qEnvironmentVariable("DVS_VIDEO_FOLDER_EVIDENCE_DIR");
+    if (!evidence.isEmpty()) {
+        harness.settleAnimations();
+        ASSERT_TRUE(QDir{}.mkpath(evidence));
+        const auto image = harness.window->grabWindow();
+        ASSERT_FALSE(image.isNull());
+        ASSERT_TRUE(image.save(QDir{evidence}.filePath(QStringLiteral("folder-sidebar.png"))));
+    }
+    harness.shell->setChromeVisible(false);
+    harness.settle();
+    EXPECT_FALSE(harness.root->property("videoFolderListVisible").toBool());
+}
+
+TEST(MainQmlContractTests, VideoFolderFailureKeepsWorkspaceAndSourcesWithoutPlaying) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    QFile file{directory.filePath("broken.mp4")};
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    WorkspaceHarness harness;
+    harness.withVideoFolder = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.root->setProperty("workspaceMode", 1);
+    ASSERT_TRUE(harness.videoFolder.loadFolder(QUrl::fromLocalFile(directory.path())));
+    ASSERT_TRUE(harness.waitUntil([&] { return !harness.videoFolder.scanning(); }));
+    const auto original = harness.shell->activeSources();
+    harness.submitted.clear();
+    QVariant accepted;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "openFolderVideo",
+                                          Q_RETURN_ARG(QVariant, accepted),
+                                          Q_ARG(QVariant, QVariant{0})));
+    ASSERT_TRUE(accepted.toBool());
+    ASSERT_EQ(harness.submitted.size(), 1U);
+    const auto context = application::commandContext(harness.submitted.front());
+    harness.terminals.push_back(
+        {.context = context,
+         .outcome = application::CommandOutcome::Failed,
+         .error = domain::makeMediaError(domain::MediaErrorCode::kMediaOpenFailed,
+                                         domain::MediaOperation::kMediaProbe,
+                                         std::nullopt,
+                                         true)});
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_EQ(harness.shell->activeSources(), original);
+    EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 1);
+    EXPECT_EQ(harness.videoFolder.currentRow(), -1);
+    EXPECT_FALSE(harness.videoFolder.openPending());
+    EXPECT_EQ(harness.videoFolder.errorText(), "media-open-failed");
+    EXPECT_EQ(std::count_if(harness.submitted.begin(),
+                            harness.submitted.end(),
+                            [](const auto& command) {
+                                return std::holds_alternative<application::PlayCommand>(command);
+                            }),
+              0);
+}
+
+TEST(MainQmlContractTests, NewerNonBrowserIntentSuppressesOldFolderAutoplay) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    QFile file{directory.filePath("clip1.mp4")};
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    WorkspaceHarness harness;
+    harness.withVideoFolder = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    ASSERT_TRUE(harness.videoFolder.loadFolder(QUrl::fromLocalFile(directory.path())));
+    ASSERT_TRUE(harness.waitUntil([&] { return !harness.videoFolder.scanning(); }));
+    harness.submitted.clear();
+    ASSERT_TRUE(harness.videoFolder.openAt(0));
+    const auto context = application::commandContext(harness.submitted.front());
+    ASSERT_NE(harness.shell->openVideo(QUrl::fromLocalFile(directory.filePath("clip2.mp4"))), 0U);
+    EXPECT_FALSE(harness.videoFolder.openPending());
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate.hasValue());
+    const auto path = std::filesystem::path{file.fileName().toStdWString()};
+    ASSERT_TRUE(installValidatedVideoSet(harness.snapshot, {path}, rate.value(), 100, 3'333'333));
+    harness.snapshot->sessionId = context.sessionId;
+    harness.snapshot->sessionEpoch = context.sessionEpoch;
+    harness.terminals.push_back(
+        {.context = context, .outcome = application::CommandOutcome::Succeeded});
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_EQ(std::count_if(harness.submitted.begin(),
+                            harness.submitted.end(),
+                            [](const auto& command) {
+                                return std::holds_alternative<application::PlayCommand>(command);
+                            }),
+              0);
+}
+
 } // namespace
 } // namespace dvs::ui
 

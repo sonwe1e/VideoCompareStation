@@ -10,6 +10,7 @@ Rectangle {
     property color textColor: Theme.primaryText
     property color mutedTextColor: Theme.mutedText
 
+    signal openVideoFolderRequested
     signal openVideosRequested
     signal openImageRequested
     signal openImagePairRequested
@@ -19,7 +20,7 @@ Rectangle {
     color: "transparent"
 
     // One quiet drop card: the mark and headline say what the window is for, the buttons are
-    // the four ways in, and the silent-playback note is a footnote rather than a callout.
+    // the entry points, and the silent-playback note is a footnote rather than a callout.
     Rectangle {
         id: card
 
@@ -139,6 +140,16 @@ Rectangle {
                 }
             }
 
+            Item {
+                width: 1
+                height: 10
+            }
+            ReviewActionButton {
+                objectName: "emptyOpenVideoFolderButton"
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: qsTr("从文件夹选视频…")
+                onClicked: control.openVideoFolderRequested()
+            }
             Item {
                 width: 1
                 height: 22

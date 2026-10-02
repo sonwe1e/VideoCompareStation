@@ -35,33 +35,6 @@ offsetForSource(const std::vector<application::SourceFrameOffset>& offsets,
     return found->frames;
 }
 
-// Center-out canonical order: the playhead frame is scored first, then alternating successors
-// and predecessors, so the most relevant readout arrives before the window edges.
-[[nodiscard]] std::vector<domain::FrameId>
-centerOutFrameOrder(const application::PairMetricsRequest& request) noexcept {
-    const std::int64_t first = request.firstFrame.value();
-    const std::int64_t last = request.lastFrame.value();
-    const std::int64_t center = first + (last - first) / 2;
-    std::vector<domain::FrameId> order;
-    order.reserve(static_cast<std::size_t>(last - first + 1));
-    auto append = [&order](const std::int64_t frame) { order.push_back(domain::FrameId{frame}); };
-    append(center);
-    for (std::int64_t radius = 1;; ++radius) {
-        const bool hasAfter = center + radius <= last;
-        const bool hasBefore = center - radius >= first;
-        if (!hasAfter && !hasBefore) {
-            break;
-        }
-        if (hasAfter) {
-            append(center + radius);
-        }
-        if (hasBefore) {
-            append(center - radius);
-        }
-    }
-    return order;
-}
-
 } // namespace
 
 class PairMetricsService::Impl final {
@@ -117,12 +90,13 @@ public:
         }
     }
 
-    [[nodiscard]] std::uint64_t decodedFrameCount() const noexcept {
-        return decodedFrameCount_.load(std::memory_order_acquire);
-    }
-
-    [[nodiscard]] std::uint64_t publishedBatchCount() const noexcept {
-        return publishedBatchCount_.load(std::memory_order_acquire);
+    [[nodiscard]] WorkStats workStats() const noexcept {
+        return WorkStats{
+            .seekCount = seekCount_.load(std::memory_order_acquire),
+            .decodedFrames = decodedFrameCount_.load(std::memory_order_acquire),
+            .sampledFrames = sampledFrameCount_.load(std::memory_order_acquire),
+            .publishedBatches = publishedBatchCount_.load(std::memory_order_acquire),
+        };
     }
 
 private:
@@ -191,21 +165,49 @@ private:
         }
 
         application::PairMetricsBatch batch = makeBatch(job);
-        for (const domain::FrameId frameId : centerOutFrameOrder(job.request)) {
+        const auto append = [&](const domain::FrameId frameId) {
             if (job.superseded.load(std::memory_order_acquire)) {
-                return;
+                return false;
             }
             const auto sample = scoreFrame(job, frameId);
             if (!sample.has_value()) {
-                return;
+                return false;
             }
             batch.samples.push_back(*sample);
-            if (batch.samples.size() >= kBatchSampleCount) {
-                publish(job, std::move(batch));
-                if (job.superseded.load(std::memory_order_acquire)) {
+            return true;
+        };
+        const std::int64_t first = job.request.firstFrame.value();
+        const std::int64_t last = job.request.lastFrame.value();
+        std::array<std::pair<std::int64_t, std::int64_t>, 2U> runs{{{first, last}, {1, 0}}};
+        if (job.request.priorityFrame.has_value()) {
+            const auto priority = *job.request.priorityFrame;
+            if (!append(priority)) {
+                return;
+            }
+            // Do not make the readout wait for 16 samples. A one-position request completes
+            // here; a window continues with at most two forward runs and bounded batch storage.
+            batch.finalBatch = first == last;
+            publish(job, std::move(batch));
+            if (first == last || job.superseded.load(std::memory_order_acquire)) {
+                return;
+            }
+            batch = makeBatch(job);
+            runs = {{{priority.value() + 1, last}, {first, priority.value() - 1}}};
+        }
+        // Publication priority is separate from decode order. Alternating predecessor and
+        // successor requests forced a seek/flush for almost every position on long-GOP media.
+        for (const auto& [runFirst, runLast] : runs) {
+            for (std::int64_t frame = runFirst; frame <= runLast; ++frame) {
+                if (!append(domain::FrameId{frame})) {
                     return;
                 }
-                batch = makeBatch(job);
+                if (batch.samples.size() >= kBatchSampleCount) {
+                    publish(job, std::move(batch));
+                    if (job.superseded.load(std::memory_order_acquire)) {
+                        return;
+                    }
+                    batch = makeBatch(job);
+                }
             }
         }
         batch.finalBatch = true;
@@ -284,8 +286,13 @@ private:
                 sample.comparable = false;
                 return sample;
             }
-            auto decoded =
-                sessions_[index].session->decodeRgba(domain::FrameId{mapped}, job.superseded);
+            internal::PairMetricsDecodeSession& session = *sessions_[index].session;
+            const auto before = session.workStats();
+            auto decoded = session.decodeRgba(domain::FrameId{mapped}, job.superseded);
+            const auto after = session.workStats();
+            seekCount_.fetch_add(after.seekCount - before.seekCount, std::memory_order_release);
+            decodedFrameCount_.fetch_add(after.decodedFrames - before.decodedFrames,
+                                         std::memory_order_release);
             if (!decoded) {
                 if (job.superseded.load(std::memory_order_acquire)) {
                     return std::nullopt;
@@ -293,7 +300,7 @@ private:
                 postFailure(job, decoded.error());
                 return std::nullopt;
             }
-            decodedFrameCount_.fetch_add(1U, std::memory_order_release);
+            sampledFrameCount_.fetch_add(1U, std::memory_order_release);
             frames[index] = std::move(decoded).value();
         }
         if (frames[0].isEmpty() || frames[1].isEmpty() || frames[0].width != frames[1].width ||
@@ -311,18 +318,13 @@ private:
                                        frames[1].height,
                                        static_cast<std::size_t>(frames[1].width) * 4U};
         const domain::ComparisonPair pair{job.request.sources[0].id, job.request.sources[1].id};
-        const auto scored = application::scoreActivePairRgbAbsolute(pair,
-                                                                    frameId,
-                                                                    first,
-                                                                    second,
-                                                                    job.request.mismatchThreshold,
-                                                                    job.request.mismatchPolicy);
+        const auto scored = application::analyzeActivePairRgbAbsolute(pair, frameId, first, second);
         if (!scored.has_value()) {
             sample.comparable = false;
             return sample;
         }
         sample.comparable = true;
-        sample.metrics = scored->metrics;
+        sample.analysis = scored->analysis;
         return sample;
     }
 
@@ -331,8 +333,6 @@ private:
             .context = job.request.context,
             .sources = job.request.sources,
             .alignmentRevision = job.request.alignmentRevision,
-            .mismatchThreshold = job.request.mismatchThreshold,
-            .mismatchPolicy = job.request.mismatchPolicy,
             .metricId = std::string{application::kRgbAbsoluteMetricId},
             .samples = {},
             .finalBatch = false,
@@ -340,6 +340,9 @@ private:
     }
 
     void publish(const Job& job, application::PairMetricsBatch&& batch) {
+        if (job.superseded.load(std::memory_order_acquire)) {
+            return;
+        }
         const std::shared_ptr<application::IPairMetricsSink> sink = job.sink.lock();
         if (sink == nullptr) {
             return;
@@ -383,7 +386,9 @@ private:
     std::vector<internal::PairMetricsDecodeSession*> activeSessions_;
     std::vector<SessionSlot> sessions_;
     std::atomic<bool> closed_ = false;
+    std::atomic<std::uint64_t> seekCount_{0U};
     std::atomic<std::uint64_t> decodedFrameCount_{0U};
+    std::atomic<std::uint64_t> sampledFrameCount_{0U};
     std::atomic<std::uint64_t> publishedBatchCount_{0U};
     std::thread worker_;
 };
@@ -403,12 +408,8 @@ void PairMetricsService::cancel(const application::PlaybackRequestContext& conte
     impl_->cancel(context);
 }
 
-std::uint64_t PairMetricsService::decodedFrameCountForTesting() const noexcept {
-    return impl_->decodedFrameCount();
-}
-
-std::uint64_t PairMetricsService::publishedBatchCountForTesting() const noexcept {
-    return impl_->publishedBatchCount();
+PairMetricsService::WorkStats PairMetricsService::workStats() const noexcept {
+    return impl_->workStats();
 }
 
 } // namespace dvs::media

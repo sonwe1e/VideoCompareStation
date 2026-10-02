@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <functional>
 #include <gtest/gtest.h>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -42,6 +43,17 @@ void processUntil(const std::function<bool()>& predicate, const int timeoutMilli
             break;
         }
     }
+}
+
+[[nodiscard]] application::PairMetricsSample thresholdSample(const std::int64_t frame = 3) {
+    const std::vector<std::uint8_t> first{0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255};
+    const std::vector<std::uint8_t> second{10, 0, 0, 0, 20, 20, 20, 255, 0, 0, 0, 255};
+    const auto analysis =
+        domain::computeRgbAbsoluteAnalysis({first.data(), 3, 1, 12}, {second.data(), 3, 1, 12});
+    EXPECT_TRUE(analysis.has_value());
+    return application::PairMetricsSample{.canonicalFrameId = domain::FrameId{frame},
+                                          .comparable = true,
+                                          .analysis = analysis.value()};
 }
 
 [[nodiscard]] domain::ComparisonSource makeSource(const domain::SourceId id,
@@ -93,8 +105,6 @@ public:
             .context = request.context,
             .sources = request.sources,
             .alignmentRevision = request.alignmentRevision,
-            .mismatchThreshold = request.mismatchThreshold,
-            .mismatchPolicy = request.mismatchPolicy,
             .metricId = std::string{application::kRgbAbsoluteMetricId},
             .samples = std::move(samples),
             .finalBatch = finalBatch,
@@ -180,6 +190,39 @@ TEST_F(PairMetricsControllerTests, LaneEnabledWidensSamplingWindow) {
     ASSERT_EQ(service_.requests.size(), 1U);
     EXPECT_EQ(service_.requests.front().firstFrame, domain::FrameId{0});
     EXPECT_EQ(service_.requests.front().lastFrame, domain::FrameId{11});
+    EXPECT_EQ(service_.requests.front().priorityFrame, domain::FrameId{3});
+}
+
+TEST_F(PairMetricsControllerTests, ClippedWindowPrioritizesActualPlayhead) {
+    installTwoSourceSession(3, 1000U);
+    controller_->setLaneEnabled(true);
+    controller_->refresh();
+    processUntil([&] { return !service_.requests.empty(); }, 1000);
+    ASSERT_EQ(service_.requests.size(), 1U);
+    const auto& request = service_.requests.front();
+    EXPECT_EQ(request.firstFrame, domain::FrameId{0});
+    EXPECT_EQ(request.lastFrame, domain::FrameId{153});
+    // The clipped window's midpoint is 76, not the frame actually on screen.
+    EXPECT_EQ(request.priorityFrame, domain::FrameId{3});
+}
+
+TEST_F(PairMetricsControllerTests, CachedPlayheadPrioritizesNearestMissingPosition) {
+    installTwoSourceSession(3, 12U);
+    controller_->setLaneEnabled(true);
+    controller_->refresh();
+    processUntil([&] { return !service_.requests.empty(); }, 1000);
+    ASSERT_EQ(service_.requests.size(), 1U);
+    service_.deliver(
+        service_.makeBatch(service_.requests.front(),
+                           {application::PairMetricsSample{.canonicalFrameId = domain::FrameId{3},
+                                                           .comparable = true}}));
+    controller_->refresh();
+    processUntil([&] { return service_.requests.size() >= 2U; }, 1000);
+    ASSERT_EQ(service_.requests.size(), 2U);
+    const auto& request = service_.requests.back();
+    EXPECT_EQ(request.firstFrame, domain::FrameId{0});
+    EXPECT_EQ(request.lastFrame, domain::FrameId{2});
+    EXPECT_EQ(request.priorityFrame, domain::FrameId{2});
 }
 
 TEST_F(PairMetricsControllerTests, ValidBatchUpdatesReadoutAndClearsSampling) {
@@ -191,13 +234,12 @@ TEST_F(PairMetricsControllerTests, ValidBatchUpdatesReadoutAndClearsSampling) {
     application::PairMetricsSample sample;
     sample.canonicalFrameId = domain::FrameId{3};
     sample.comparable = true;
-    sample.metrics.mae = 1.5;
-    sample.metrics.mse = 4.0;
-    sample.metrics.psnrDb = 42.0;
-    sample.metrics.maxAbsError = 12U;
-    sample.metrics.mismatchRatio = 0.25;
-    sample.metrics.mismatchPixels = 14400U;
-    sample.metrics.pixelCount = 57600U;
+    sample.analysis.metrics.mae = 1.5;
+    sample.analysis.metrics.mse = 4.0;
+    sample.analysis.metrics.psnrDb = 42.0;
+    sample.analysis.metrics.maxAbsError = 12U;
+    sample.analysis.mismatchCounts[1][0] = 14400U;
+    sample.analysis.metrics.pixelCount = 57600U;
     service_.deliver(service_.makeBatch(service_.requests.front(), {sample}));
     QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
 
@@ -234,7 +276,7 @@ TEST_F(PairMetricsControllerTests, StaleBatchIsDroppedAfterEpochChange) {
     application::PairMetricsSample sample;
     sample.canonicalFrameId = domain::FrameId{3};
     sample.comparable = true;
-    sample.metrics.mae = 9.0;
+    sample.analysis.metrics.mae = 9.0;
     service_.deliver(service_.makeBatch(staleRequest, {sample}));
     QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
 
@@ -242,81 +284,281 @@ TEST_F(PairMetricsControllerTests, StaleBatchIsDroppedAfterEpochChange) {
     EXPECT_FALSE(controller_->hasCurrentSample());
 }
 
-TEST_F(PairMetricsControllerTests, ThresholdChangeClearsCacheAndResamples) {
-    installTwoSourceSession(3, 12U);
-    controller_->refresh();
-    processUntil([&] { return !service_.requests.empty(); }, 1000);
-    application::PairMetricsSample sample;
-    sample.canonicalFrameId = domain::FrameId{3};
-    sample.comparable = true;
-    sample.metrics.mae = 2.0;
-    service_.deliver(service_.makeBatch(service_.requests.front(), {sample}));
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    ASSERT_EQ(controller_->sampleCount(), 1);
-
-    controller_->setThreshold(12);
-    processUntil([&] { return service_.requests.size() >= 2U; }, 1000);
-
-    EXPECT_EQ(controller_->sampleCount(), 0);
-    ASSERT_GE(service_.requests.size(), 2U);
-    EXPECT_EQ(service_.requests.back().mismatchThreshold, 12U);
-}
-
-TEST_F(PairMetricsControllerTests, ThresholdPolicyChangeClearsCacheAndResamples) {
-    installTwoSourceSession(3, 12U);
-    controller_->refresh();
-    processUntil([&] { return !service_.requests.empty(); }, 1000);
-    application::PairMetricsSample sample;
-    sample.canonicalFrameId = domain::FrameId{3};
-    sample.comparable = true;
-    sample.metrics.mae = 2.0;
-    service_.deliver(service_.makeBatch(service_.requests.front(), {sample}));
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    ASSERT_EQ(controller_->sampleCount(), 1);
-    EXPECT_EQ(controller_->thresholdPolicy(), 1);
-
-    // The policy accepts the presentation::ThresholdPolicy values; anything else is ignored
-    // so the statistics never apply a rule the highlight does not show.
-    controller_->setThresholdPolicy(7);
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    EXPECT_EQ(controller_->thresholdPolicy(), 1);
-    EXPECT_EQ(service_.requests.size(), 1U);
-    EXPECT_EQ(controller_->sampleCount(), 1);
-
-    controller_->setThresholdPolicy(2);
-    processUntil([&] { return service_.requests.size() >= 2U; }, 1000);
-
-    EXPECT_EQ(controller_->sampleCount(), 0);
-    ASSERT_GE(service_.requests.size(), 2U);
-    EXPECT_EQ(service_.requests.back().mismatchPolicy, domain::MismatchPolicy::AllChannels);
-    EXPECT_EQ(controller_->thresholdPolicy(), 2);
-}
-
-TEST_F(PairMetricsControllerTests, BatchWithForeignMismatchPolicyIsDropped) {
-    installTwoSourceSession(3, 12U);
+TEST_F(PairMetricsControllerTests, ThresholdChangeReusesAnalysisWithoutResampling) {
+    installTwoSourceSession();
     controller_->refresh();
     processUntil([&] { return !service_.requests.empty(); }, 1000);
     ASSERT_EQ(service_.requests.size(), 1U);
-    const application::PairMetricsRequest request = service_.requests.front();
+    const auto sample = thresholdSample();
+    service_.deliver(service_.makeBatch(service_.requests.front(), {sample}));
+    ASSERT_EQ(controller_->currentMismatchPixels(), 2U);
+    int stateNotifications = 0;
+    QObject::connect(
+        controller_.get(), &PairMetricsController::stateChanged, [&] { ++stateNotifications; });
+    controller_->setThreshold(12);
+    EXPECT_EQ(controller_->currentMismatchPixels(), 1U);
+    EXPECT_DOUBLE_EQ(controller_->currentMismatchRatio(), 1.0 / 3.0);
+    EXPECT_DOUBLE_EQ(controller_->currentMae(), sample.analysis.metrics.mae);
+    EXPECT_GT(stateNotifications, 0);
+    controller_->setThreshold(999);
+    EXPECT_EQ(controller_->threshold(), 255);
+    EXPECT_EQ(controller_->currentMismatchPixels(), 0U);
+    controller_->setThreshold(-1);
+    EXPECT_EQ(controller_->threshold(), 0);
+    EXPECT_EQ(controller_->currentMismatchPixels(), 2U);
+    processUntil([&] { return service_.requests.size() > 1U; }, 250);
+    EXPECT_EQ(controller_->sampleCount(), 1);
+    EXPECT_EQ(service_.requests.size(), 1U);
+    EXPECT_EQ(service_.cancelCount, 0);
+}
 
+TEST_F(PairMetricsControllerTests, ThresholdPolicyChangeReusesAnalysisWithoutResampling) {
+    installTwoSourceSession();
+    controller_->refresh();
+    processUntil([&] { return !service_.requests.empty(); }, 1000);
+    ASSERT_EQ(service_.requests.size(), 1U);
+    service_.deliver(service_.makeBatch(service_.requests.front(), {thresholdSample()}));
+    controller_->setThresholdPolicy(7);
+    EXPECT_EQ(controller_->thresholdPolicy(), 1);
+    EXPECT_EQ(controller_->currentMismatchPixels(), 2U);
     controller_->setThresholdPolicy(2);
+    EXPECT_EQ(controller_->currentMismatchPixels(), 1U);
+    EXPECT_EQ(controller_->thresholdPolicy(), 2);
+    controller_->setThresholdPolicy(0);
+    controller_->setThreshold(3);
+    EXPECT_EQ(controller_->currentMismatchPixels(), 1U);
+    processUntil([&] { return service_.requests.size() > 1U; }, 250);
+    EXPECT_EQ(controller_->sampleCount(), 1);
+    EXPECT_EQ(service_.requests.size(), 1U);
+    EXPECT_EQ(service_.cancelCount, 0);
+}
+
+TEST_F(PairMetricsControllerTests, PredicateChangeAcceptsInflightAnalysisUnderNewPredicate) {
+    installTwoSourceSession();
+    controller_->refresh();
+    processUntil([&] { return !service_.requests.empty(); }, 1000);
+    ASSERT_EQ(service_.requests.size(), 1U);
+    const auto request = service_.requests.front();
+    controller_->setThresholdPolicy(0);
+    controller_->setThreshold(3);
+    EXPECT_TRUE(controller_->sampling());
+    service_.deliver(service_.makeBatch(request, {thresholdSample()}));
+    EXPECT_TRUE(controller_->hasCurrentSample());
+    EXPECT_EQ(controller_->currentMismatchPixels(), 1U);
+    EXPECT_FALSE(controller_->sampling());
+    processUntil([&] { return service_.requests.size() > 1U; }, 250);
+    EXPECT_EQ(service_.requests.size(), 1U);
+    EXPECT_EQ(service_.cancelCount, 0);
+}
+
+TEST_F(PairMetricsControllerTests, AnalysisCacheEvictsDistantFramesAndKeepsCurrentReadout) {
+    installTwoSourceSession();
+    controller_ = std::make_unique<PairMetricsController>(PairMetricsController::Dependencies{
+        .snapshot = [this] { return snapshot_; }, .service = &service_, .maximumCachedSamples = 3});
+    controller_->refresh();
+    processUntil([&] { return !service_.requests.empty(); }, 1000);
+    ASSERT_EQ(service_.requests.size(), 1U);
+    std::vector<application::PairMetricsSample> samples;
+    for (const std::int64_t frame : {0, 2, 10}) {
+        auto sample = thresholdSample(frame);
+        sample.analysis.metrics.mae = frame == 10 ? 100.0 : static_cast<double>(frame + 1);
+        samples.push_back(sample);
+    }
+    auto partial = service_.makeBatch(service_.requests.front(), samples);
+    partial.finalBatch = false;
+    service_.deliver(partial);
+    EXPECT_DOUBLE_EQ(controller_->sampleMaxMae(), 100.0);
+    auto current = thresholdSample(3);
+    current.analysis.metrics.mae = 4.0;
+    service_.deliver(service_.makeBatch(service_.requests.front(), {current}));
+    EXPECT_EQ(controller_->sampleCount(), 3);
+    EXPECT_TRUE(controller_->hasCurrentSample());
+    EXPECT_DOUBLE_EQ(controller_->currentMae(), 4.0);
+    EXPECT_DOUBLE_EQ(controller_->maeAt(10), -1.0);
+    EXPECT_EQ(controller_->sampleFirstFrame(), 0);
+    EXPECT_EQ(controller_->sampleLastFrame(), 3);
+    EXPECT_DOUBLE_EQ(controller_->sampleMaxMae(), 4.0);
+
+    snapshot_->displayedFrame = domain::FrameId{10};
+    controller_->refresh();
     processUntil([&] { return service_.requests.size() >= 2U; }, 1000);
-    ASSERT_GE(service_.requests.size(), 2U);
+    ASSERT_EQ(service_.requests.size(), 2U);
+    auto sample = thresholdSample(10);
+    sample.analysis.metrics.mae = 11.0;
+    service_.deliver(service_.makeBatch(service_.requests.back(), {sample}));
+    EXPECT_EQ(controller_->sampleCount(), 3);
+    EXPECT_EQ(controller_->sampleFirstFrame(), 2);
+    EXPECT_EQ(controller_->sampleLastFrame(), 10);
+    EXPECT_DOUBLE_EQ(controller_->sampleMaxMae(), 11.0);
+    EXPECT_DOUBLE_EQ(controller_->currentMae(), 11.0);
+}
 
-    // A batch computed under the old policy must not feed the new policy's readout, exactly
-    // like a stale threshold: the numbers would describe a different predicate.
-    application::PairMetricsBatch staleBatch = service_.makeBatch(request, {});
-    staleBatch.mismatchPolicy = domain::MismatchPolicy::AnyChannel;
-    application::PairMetricsSample sample;
-    sample.canonicalFrameId = domain::FrameId{3};
-    sample.comparable = true;
-    sample.metrics.mae = 9.0;
-    staleBatch.samples.push_back(sample);
-    service_.deliver(staleBatch);
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+TEST_F(PairMetricsControllerTests, ZeroCacheLimitStillRetainsOneCurrentAnalysis) {
+    installTwoSourceSession();
+    controller_ = std::make_unique<PairMetricsController>(PairMetricsController::Dependencies{
+        .snapshot = [this] { return snapshot_; }, .service = &service_, .maximumCachedSamples = 0});
+    controller_->refresh();
+    processUntil([&] { return !service_.requests.empty(); }, 1000);
+    ASSERT_EQ(service_.requests.size(), 1U);
+    service_.deliver(service_.makeBatch(
+        service_.requests.front(), {thresholdSample(2), thresholdSample(3), thresholdSample(4)}));
+    EXPECT_EQ(controller_->sampleCount(), 1);
+    EXPECT_EQ(controller_->sampleFirstFrame(), 3);
+    EXPECT_TRUE(controller_->hasCurrentSample());
+}
 
+TEST_F(PairMetricsControllerTests, RequestedCacheLimitCannotExceedHardMemoryBudget) {
+    installTwoSourceSession(3, 8192);
+    controller_ = std::make_unique<PairMetricsController>(PairMetricsController::Dependencies{
+        .snapshot = [this] { return snapshot_; },
+        .service = &service_,
+        .maximumCachedSamples = std::numeric_limits<std::size_t>::max()});
+    controller_->refresh();
+    processUntil([&] { return !service_.requests.empty(); }, 1000);
+    ASSERT_EQ(service_.requests.size(), 1U);
+    std::vector<application::PairMetricsSample> samples;
+    for (std::int64_t frame = 0; frame <= 4096; ++frame) {
+        samples.push_back(thresholdSample(frame));
+    }
+    service_.deliver(service_.makeBatch(service_.requests.front(), samples));
+    EXPECT_EQ(controller_->sampleCount(), 4096);
+    EXPECT_EQ(controller_->sampleFirstFrame(), 0);
+    EXPECT_EQ(controller_->sampleLastFrame(), 4095);
+    EXPECT_TRUE(controller_->hasCurrentSample());
+}
+
+TEST_F(PairMetricsControllerTests, InputChangesInvalidateAnalysisButPredicateChangesDoNot) {
+    installTwoSourceSession();
+    controller_->refresh();
+    processUntil([&] { return !service_.requests.empty(); }, 1000);
+    ASSERT_EQ(service_.requests.size(), 1U);
+    service_.deliver(service_.makeBatch(service_.requests.front(), {thresholdSample()}));
+    snapshot_->alignmentRevision = 5U;
+    controller_->refresh();
     EXPECT_EQ(controller_->sampleCount(), 0);
-    EXPECT_FALSE(controller_->hasCurrentSample());
+    processUntil([&] { return service_.requests.size() >= 2U; }, 1000);
+    ASSERT_EQ(service_.requests.size(), 2U);
+    service_.deliver(service_.makeBatch(service_.requests.back(), {thresholdSample()}));
+    snapshot_->activeComparisonPair = domain::ComparisonPair{2, 1};
+    controller_->refresh();
+    EXPECT_EQ(controller_->sampleCount(), 0);
+    processUntil([&] { return service_.requests.size() >= 3U; }, 1000);
+    ASSERT_EQ(service_.requests.size(), 3U);
+    EXPECT_EQ(service_.requests.back().sources.front().id, 2U);
+}
+
+TEST_F(PairMetricsControllerTests, MaterialAndMappingHandlesArePartOfAnalysisIdentity) {
+    installTwoSourceSession();
+    controller_->refresh();
+    processUntil([&] { return !service_.requests.empty(); }, 1000);
+    ASSERT_EQ(service_.requests.size(), 1U);
+    const std::vector<std::function<void()>> changes{
+        [this] {
+            auto first = makeSource(1U, 320, 180, 12);
+            first.descriptor.normalizedPath = "new-a.mp4";
+            auto comparison =
+                domain::ComparisonValidator::validate({first, makeSource(2U, 320, 180, 12)});
+            ASSERT_TRUE(comparison.hasValue());
+            snapshot_->validatedComparison = std::make_shared<const domain::ValidatedComparisonSet>(
+                std::move(comparison.value().set));
+        },
+        [this] {
+            std::vector<domain::MediaTime> times;
+            for (int frame = 0; frame < 12; ++frame) {
+                times.emplace_back(frame * 33333);
+            }
+            auto timeline = domain::FrameTimeline::create(std::move(times));
+            ASSERT_TRUE(timeline.hasValue());
+            snapshot_->sourceTimelines = {
+                {2, std::make_shared<const domain::FrameTimeline>(std::move(timeline.value()))}};
+        },
+        [this] { snapshot_->alignmentOffsets.back().frames = 1; },
+        [this] {
+            auto rate = domain::RationalRate::create(24, 1);
+            ASSERT_TRUE(rate.hasValue());
+            snapshot_->canonicalTimeline = rate.value();
+        },
+        [this] { snapshot_->canonicalFrameCount = 11; },
+        [this] {
+            snapshot_->sequenceAlignmentMaps =
+                std::make_shared<const std::vector<application::SequenceAlignmentResult>>();
+        }};
+    for (const auto& change : changes) {
+        const auto previousRequests = service_.requests.size();
+        service_.deliver(service_.makeBatch(service_.requests.back(), {thresholdSample()}));
+        ASSERT_EQ(controller_->sampleCount(), 1);
+        change();
+        controller_->refresh();
+        EXPECT_EQ(controller_->sampleCount(), 0);
+        processUntil([&] { return service_.requests.size() > previousRequests; }, 1000);
+        ASSERT_EQ(service_.requests.size(), previousRequests + 1U);
+    }
+    service_.deliver(service_.makeBatch(service_.requests.back(), {thresholdSample()}));
+    snapshot_->alignmentMode = application::AlignmentMode::Timestamp;
+    controller_->refresh();
+    EXPECT_EQ(controller_->sampleCount(), 0);
+}
+
+TEST_F(PairMetricsControllerTests, ForeignRequestResultsCannotFinishOrPoisonCurrentWork) {
+    installTwoSourceSession();
+    controller_->refresh();
+    processUntil([&] { return !service_.requests.empty(); }, 1000);
+    ASSERT_EQ(service_.requests.size(), 1U);
+    const auto request = service_.requests.front();
+    for (const bool changeGeneration : {false, true}) {
+        auto foreign = request;
+        if (changeGeneration) {
+            foreign.context.playbackGeneration = domain::PlaybackGeneration{2};
+        } else {
+            foreign.context.request.requestId = domain::RequestId{999};
+        }
+        service_.deliver(service_.makeBatch(foreign, {thresholdSample()}));
+        application::PairMetricsFailure failure{.context = foreign.context};
+        failure.error.userMessageKey = "foreignFailure";
+        service_.sinks.back()->onPairMetricsFailure(failure);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        EXPECT_EQ(controller_->sampleCount(), 0);
+        EXPECT_TRUE(controller_->sampling());
+        EXPECT_TRUE(controller_->errorKey().isEmpty());
+    }
+    service_.deliver(service_.makeBatch(request, {thresholdSample()}));
+    EXPECT_TRUE(controller_->hasCurrentSample());
+    EXPECT_FALSE(controller_->sampling());
+    EXPECT_TRUE(controller_->errorKey().isEmpty());
+}
+
+TEST_F(PairMetricsControllerTests, CurrentFailureIsConsumedOnlyOnceAcrossQueuedWakes) {
+    installTwoSourceSession();
+    controller_->refresh();
+    processUntil([&] { return !service_.requests.empty(); }, 1000);
+    ASSERT_EQ(service_.requests.size(), 1U);
+    application::PairMetricsFailure failure{.context = service_.requests.front().context};
+    failure.error.userMessageKey = "currentFailure";
+    service_.sinks.back()->onPairMetricsFailure(failure);
+    service_.sinks.back()->onPairMetricsFailure(failure);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    EXPECT_EQ(controller_->errorKey(), QStringLiteral("currentFailure"));
+    EXPECT_FALSE(controller_->sampling());
+}
+
+TEST_F(PairMetricsControllerTests, MissingAndMalformedPositionsDoNotBecomeComparable) {
+    installTwoSourceSession();
+    controller_->refresh();
+    processUntil([&] { return !service_.requests.empty(); }, 1000);
+    ASSERT_EQ(service_.requests.size(), 1U);
+    service_.deliver(service_.makeBatch(
+        service_.requests.front(),
+        {application::PairMetricsSample{.canonicalFrameId = domain::FrameId{3}},
+         application::PairMetricsSample{.canonicalFrameId = domain::FrameId{-1}}}));
+    controller_->setThreshold(255);
+    controller_->setThresholdPolicy(2);
+    EXPECT_EQ(controller_->sampleCount(), 1);
+    EXPECT_TRUE(controller_->hasCurrentSample());
+    EXPECT_FALSE(controller_->currentComparable());
+    const auto points = controller_->samplePoints(1);
+    ASSERT_FALSE(points.isEmpty());
+    EXPECT_FALSE(points.front().toMap().value("comparable").toBool());
+    EXPECT_EQ(service_.cancelCount, 0);
 }
 
 TEST_F(PairMetricsControllerTests, PeakFramesAndSamplePointsProjectCache) {
@@ -329,7 +571,7 @@ TEST_F(PairMetricsControllerTests, PeakFramesAndSamplePointsProjectCache) {
         application::PairMetricsSample sample;
         sample.canonicalFrameId = domain::FrameId{frame};
         sample.comparable = true;
-        sample.metrics.mae = frame == 6 ? 8.0 : 1.0;
+        sample.analysis.metrics.mae = frame == 6 ? 8.0 : 1.0;
         samples.push_back(sample);
     }
     service_.deliver(service_.makeBatch(service_.requests.front(), std::move(samples)));

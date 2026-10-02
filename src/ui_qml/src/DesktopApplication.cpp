@@ -17,6 +17,7 @@
 #include "dvs/ui/ReviewSessionFacade.h"
 #include "dvs/ui/ReviewShellController.h"
 #include "dvs/ui/StartupMilestone.h"
+#include "dvs/ui/VideoFolderModel.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -187,6 +188,10 @@ public:
         shellController_ = std::make_unique<ReviewShellController>(controller, preferences);
         engine->rootContext()->setContextProperty(QStringLiteral("reviewSession"),
                                                   shellController_.get());
+        videoFolder_ = std::make_unique<VideoFolderModel>();
+        videoFolder_->attachPlayback(controller, *shellController_);
+        engine->rootContext()->setContextProperty(QStringLiteral("videoFolder"),
+                                                  videoFolder_.get());
         sessionFacade_ =
             std::make_unique<ReviewSessionFacade>(controller, preferences, *shellController_);
         engine->rootContext()->setContextProperty(QStringLiteral("reviewFacade"),
@@ -853,6 +858,7 @@ private:
     QGuiApplication application_;
     std::unique_ptr<QQmlApplicationEngine> engine_;
     std::unique_ptr<ReviewShellController> shellController_;
+    std::unique_ptr<VideoFolderModel> videoFolder_;
     std::unique_ptr<ReviewSessionFacade> sessionFacade_;
     std::unique_ptr<ImageReviewController> imageReview_;
     std::unique_ptr<ImageFolderPairModel> folderPairs_;

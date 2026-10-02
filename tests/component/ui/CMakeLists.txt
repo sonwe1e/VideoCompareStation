@@ -10,6 +10,7 @@ add_executable(
     "${PROJECT_SOURCE_DIR}/src/app/RuntimeBridges.cpp"
     ReviewPreferencesControllerTests.cpp
     SourceIdentityTests.cpp
+    VideoFolderModelTests.cpp
 )
 target_link_libraries(
     dvs_ui_component_tests
@@ -36,6 +37,14 @@ dvs_add_gtest(
 )
 
 if(DVS_BUILD_ADAPTERS)
+target_sources(dvs_ui_component_tests PRIVATE PairMetricsThresholdReuseTests.cpp)
+target_include_directories(
+    dvs_ui_component_tests PRIVATE "${PROJECT_SOURCE_DIR}/src/media_ffmpeg/src"
+)
+target_compile_definitions(
+    dvs_ui_component_tests PRIVATE DVS_MEDIA_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures/media"
+)
+
 add_executable(
     dvs_image_review_controller_tests
     ImageReviewControllerTests.cpp

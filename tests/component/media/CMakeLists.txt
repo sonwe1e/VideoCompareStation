@@ -44,3 +44,20 @@ dvs_add_gtest(
     EXTRA_LABELS media_software
     TIMEOUT 10
 )
+
+# Opt-in assessment benchmark. Never substitute it for the real D3D11VA playback gates.
+add_executable(dvs_pair_metrics_performance_tests PairMetricsPerformanceTests.cpp)
+target_link_libraries(
+    dvs_pair_metrics_performance_tests
+    PRIVATE dvs_media_ffmpeg dvs::test_dependencies
+)
+dvs_apply_project_warnings(dvs_pair_metrics_performance_tests)
+set_target_properties(dvs_pair_metrics_performance_tests PROPERTIES FOLDER "Tests/Performance")
+dvs_add_gtest(
+    TARGET dvs_pair_metrics_performance_tests
+    TEST_PREFIX "metrics-performance."
+    LAYER component
+    MODULE media_ffmpeg
+    EXTRA_LABELS performance media_software
+    TIMEOUT 600
+)

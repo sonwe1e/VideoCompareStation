@@ -15,6 +15,14 @@ namespace dvs::media {
 // does not reopen demuxers.
 class PairMetricsService final : public application::IPairMetricsService {
 public:
+    struct WorkStats final {
+        // Actual decoder work, not just the frames successfully returned to the scorer.
+        std::uint64_t seekCount = 0;
+        std::uint64_t decodedFrames = 0;
+        std::uint64_t sampledFrames = 0;
+        std::uint64_t publishedBatches = 0;
+    };
+
     explicit PairMetricsService(std::size_t queueCapacity = 1U);
     ~PairMetricsService() override;
 
@@ -28,8 +36,8 @@ public:
            std::shared_ptr<application::IPairMetricsSink> sink) override;
     void cancel(const application::PlaybackRequestContext& context) noexcept override;
 
-    [[nodiscard]] std::uint64_t decodedFrameCountForTesting() const noexcept;
-    [[nodiscard]] std::uint64_t publishedBatchCountForTesting() const noexcept;
+    // Thread-safe cumulative telemetry. Read after completion for a stable work total.
+    [[nodiscard]] WorkStats workStats() const noexcept;
 
 private:
     class Impl;

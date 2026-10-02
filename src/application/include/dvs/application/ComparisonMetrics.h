@@ -32,4 +32,18 @@ struct ActivePairFrameMetrics final {
     std::uint8_t mismatchThreshold = 0U,
     domain::MismatchPolicy mismatchPolicy = domain::MismatchPolicy::AnyChannel) noexcept;
 
+// Same provenance binding as the scalar scorer, with a reusable threshold-independent result.
+struct ActivePairFrameAnalysis final {
+    domain::ComparisonPair pair{};
+    domain::FrameId frameId{0};
+    domain::RgbAbsoluteAnalysis analysis{};
+    std::string_view metricId = kRgbAbsoluteMetricId;
+};
+
+[[nodiscard]] std::optional<ActivePairFrameAnalysis>
+analyzeActivePairRgbAbsolute(domain::ComparisonPair pair,
+                             domain::FrameId frameId,
+                             domain::Rgba8View first,
+                             domain::Rgba8View second) noexcept;
+
 } // namespace dvs::application

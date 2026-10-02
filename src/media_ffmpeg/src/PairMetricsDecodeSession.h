@@ -26,6 +26,11 @@ public:
         }
     };
 
+    struct WorkStats final {
+        std::uint64_t seekCount = 0;
+        std::uint64_t decodedFrames = 0;
+    };
+
     PairMetricsDecodeSession(domain::SourceId sourceId, domain::MediaDescriptor descriptor);
     ~PairMetricsDecodeSession();
 
@@ -45,6 +50,8 @@ public:
     [[nodiscard]] bool matches(const domain::MediaDescriptor& descriptor) const noexcept;
     [[nodiscard]] bool isOpen() const noexcept;
     [[nodiscard]] domain::SourceId sourceId() const noexcept;
+    // Worker-thread-only lifetime counters, including seek pre-roll and recovery work.
+    [[nodiscard]] WorkStats workStats() const noexcept;
 
 private:
     [[nodiscard]] domain::Result<RgbaFrame>

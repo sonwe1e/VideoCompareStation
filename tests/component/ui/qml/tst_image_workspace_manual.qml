@@ -128,8 +128,12 @@ Item {
             verify(hints !== null);
             verify(pixel !== null);
             tryCompare(pixel, "visible", true);
-            verify(details.x + details.width <= hints.x);
-            verify(pixel.width <= details.width);
+            // Let the text/layout change reach the event loop before checking geometry:
+            // an immediate predicate can pass on the old width. Do not require an idle
+            // polish queue or a new GPU frame just to verify this layout constraint.
+            wait(100);
+            tryVerify(() => details.x + details.width <= hints.x);
+            tryVerify(() => pixel.width <= details.width);
             imageReview.cursorPixel = ({});
         }
     }

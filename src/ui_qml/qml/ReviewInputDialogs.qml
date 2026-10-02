@@ -11,8 +11,10 @@ Item {
     property var pathNameFunction: null
     required property int initialReferenceIndex
     readonly property bool comparisonVisible: comparisonDialog.visible
-    readonly property bool modalVisible: comparisonDialog.visible || videoFilesDialog.visible || addVideoDialog.visible
+    readonly property bool modalVisible: comparisonDialog.visible || videoFilesDialog.visible || addVideoDialog.visible || videoFolderDialog.visible
 
+    signal videoFolderAccepted(url folder)
+    signal videoFolderRejected
     signal openVideosAccepted(var urls)
     signal openVideosRejected
     signal addVideoAccepted(url url)
@@ -25,12 +27,24 @@ Item {
         videoFilesDialog.open();
     }
 
+    function openVideoFolder() {
+        videoFolderDialog.open();
+    }
+
     function openAddVideo() {
         addVideoDialog.open();
     }
 
     function openComparison() {
         comparisonDialog.open();
+    }
+
+    NativeDialogs.FolderDialog {
+        id: videoFolderDialog
+        objectName: "videoFolderDialog"
+        title: qsTr("选择视频文件夹")
+        onAccepted: control.videoFolderAccepted(selectedFolder)
+        onRejected: control.videoFolderRejected()
     }
 
     NativeDialogs.FileDialog {

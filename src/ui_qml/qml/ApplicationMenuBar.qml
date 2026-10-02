@@ -27,6 +27,8 @@ VcsMenuBar {
     property int workspaceMode: 0
     property bool imageHasPrimary: false
     property bool imageHasSecondary: false
+    property bool videoFolderAvailable: false
+    property bool videoFolderVisible: false
     property bool videoHasSession: false
     property bool imageHasSession: false
     // Alignment state and helpers live on the root; the Analyze menu hosts the actions that used
@@ -41,6 +43,8 @@ VcsMenuBar {
     property var sourceOffsets: null
     property var resetSourceOffsets: null
 
+    signal openVideoFolderRequested
+    signal videoFolderToggleRequested
     signal openVideosRequested
     signal addVideoRequested
     signal openImageRequested
@@ -83,6 +87,13 @@ VcsMenuBar {
             text: qsTr("打开视频…")
             shortcutText: "Ctrl+O"
             onTriggered: control.openVideosRequested()
+        }
+        VcsMenuItem {
+            objectName: "openVideoFolderMenuItem"
+            text: qsTr("从文件夹选视频…")
+            shortcutText: "Ctrl+Alt+O"
+            enabled: control.videoFolderAvailable
+            onTriggered: control.openVideoFolderRequested()
         }
         VcsMenuItem {
             text: qsTr("添加视频…")
@@ -519,6 +530,12 @@ VcsMenuBar {
                 control.chromeToggleRequested();
                 control.returnViewerFocusAfterClose = true;
             }
+        }
+        VcsMenuItem {
+            objectName: "toggleVideoFolderMenuItem"
+            text: control.videoFolderVisible ? qsTr("隐藏视频文件夹列表") : qsTr("显示视频文件夹列表")
+            enabled: control.videoFolderAvailable
+            onTriggered: control.videoFolderToggleRequested()
         }
         VcsMenuItem {
             text: control.fullScreen ? qsTr("退出全屏 · F11") : qsTr("进入全屏 · F11")

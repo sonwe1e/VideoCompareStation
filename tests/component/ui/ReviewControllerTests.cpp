@@ -4,6 +4,7 @@
 #include "dvs/ui/ReviewShellController.h"
 #include "dvs/ui/SourceIdentity.h"
 #include "dvs/ui/SourceListModel.h"
+#include "dvs/ui/VideoFolderModel.h"
 
 #include "RuntimeBridges.h"
 
@@ -2080,6 +2081,207 @@ TEST_F(ReviewControllerTests, ProjectsAlignmentModeAndSubmitsSetAlignmentModeCom
         return controller.alignmentMode() == 2 &&
                controller.alignmentModeName() == QStringLiteral("人工锚点");
     }));
+}
+
+// Exercise the production folder/controller/shell route, including transport terminals that
+// do not set the controller's foreground busy bit. No decoder or presentation ACK is faked by
+// the product: this harness supplies immutable snapshots and matching command terminals.
+class FolderTransportHarness final {
+public:
+    bool initialize() {
+        if (!directory.isValid()) {
+            return false;
+        }
+        for (const auto* name : {"clip1.mp4", "clip2.mp4", "clip3.mp4"}) {
+            const QString path = createFile(directory, QString::fromLatin1(name));
+            if (path.isEmpty()) {
+                return false;
+            }
+            urls.push_back(QUrl::fromLocalFile(path));
+        }
+        backend->currentSnapshot = readySnapshotWithSources({pathAt(0)});
+        controller = std::make_unique<ReviewController>(dependenciesFor(backend));
+        shell = std::make_unique<ReviewShellController>(*controller);
+        folder.attachPlayback(*controller, *shell);
+        return folder.loadFolder(QUrl::fromLocalFile(directory.path())) &&
+               waitUntil([this] { return !folder.scanning(); }) && folder.fileCount() == 3;
+    }
+    std::filesystem::path pathAt(const int row) const {
+        return std::filesystem::path{
+            urls[static_cast<std::size_t>(row)].toLocalFile().toStdWString()};
+    }
+    void completeLast(
+        const application::CommandOutcome outcome = application::CommandOutcome::Succeeded) {
+        backend->terminals.push_back(
+            {.context = application::commandContext(backend->submitted.back()),
+             .outcome = outcome});
+        controller->refreshProjection();
+    }
+    void paused(const bool draining = false) {
+        backend->currentSnapshot.playbackState = domain::PlaybackState::kPaused;
+        backend->currentSnapshot.requestedFrame =
+            draining ? backend->currentSnapshot.displayedFrame : std::nullopt;
+    }
+    void playing() {
+        backend->currentSnapshot.playbackState = domain::PlaybackState::kPlaying;
+    }
+    void openSucceeded(const int row) {
+        backend->currentSnapshot = readySnapshotWithSources({pathAt(row)});
+        completeLast();
+    }
+
+    QTemporaryDir directory;
+    std::vector<QUrl> urls;
+    std::shared_ptr<FakeBackend> backend = std::make_shared<FakeBackend>();
+    std::unique_ptr<ReviewController> controller;
+    std::unique_ptr<ReviewShellController> shell;
+    VideoFolderModel folder;
+};
+
+TEST_F(ReviewControllerTests, FolderOpenPausesPlayingVideoAndWaitsForTransportAndDrain) {
+    FolderTransportHarness h;
+    ASSERT_TRUE(h.initialize());
+    h.playing();
+    h.controller->refreshProjection();
+    ASSERT_FALSE(h.controller->canOpen());
+    ASSERT_FALSE(h.controller->busy());
+    ASSERT_TRUE(h.folder.openAt(1));
+    EXPECT_TRUE(h.folder.errorText().isEmpty());
+    EXPECT_TRUE(h.folder.openPending());
+    EXPECT_EQ(h.folder.currentRow(), 0);
+    ASSERT_TRUE(waitUntil([&] { return !h.backend->submitted.empty(); }));
+    ASSERT_EQ(h.backend->submitted.size(), 1U);
+    ASSERT_TRUE(std::holds_alternative<application::PauseCommand>(h.backend->submitted.back()));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(h.backend->submitted.size(), 1U);
+    h.paused(true); // requested == displayed still means a playback run is draining.
+    h.completeLast();
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(h.controller->framePending());
+    EXPECT_FALSE(h.controller->canOpen());
+    EXPECT_EQ(h.backend->submitted.size(), 1U);
+    EXPECT_EQ(h.shell->queuedIntentCount(), 1);
+    h.backend->currentSnapshot.requestedFrame.reset();
+    h.controller->refreshProjection();
+    ASSERT_TRUE(waitUntil([&] { return h.backend->submitted.size() == 2U; }));
+    const auto* const open =
+        std::get_if<application::OpenComparisonCommand>(&h.backend->submitted.back());
+    ASSERT_NE(open, nullptr);
+    ASSERT_EQ(open->sources.size(), 1U);
+    EXPECT_EQ(open->sources.front().path, h.pathAt(1));
+    EXPECT_EQ(h.folder.currentRow(), 0);
+    EXPECT_TRUE(h.folder.openPending());
+    h.openSucceeded(1);
+    ASSERT_EQ(h.backend->submitted.size(), 3U);
+    EXPECT_TRUE(std::holds_alternative<application::PlayCommand>(h.backend->submitted.back()));
+    EXPECT_EQ(h.folder.currentRow(), 1);
+    EXPECT_FALSE(h.folder.openPending());
+    EXPECT_TRUE(h.folder.errorText().isEmpty());
+}
+
+TEST_F(ReviewControllerTests, FolderOpenWaitsForExistingPauseAndIgnoresForeignTerminal) {
+    FolderTransportHarness h;
+    ASSERT_TRUE(h.initialize());
+    h.playing();
+    h.controller->refreshProjection();
+    ASSERT_TRUE(h.controller->pause());
+    const auto pauseContext = application::commandContext(h.backend->submitted.back());
+    ASSERT_TRUE(h.folder.openAt(2));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(h.backend->submitted.size(), 1U);
+    auto foreign = pauseContext;
+    foreign.sessionEpoch = domain::SessionEpoch{pauseContext.sessionEpoch.value() + 1U};
+    h.paused();
+    h.backend->terminals.push_back(
+        {.context = foreign, .outcome = application::CommandOutcome::Succeeded});
+    h.controller->refreshProjection();
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(h.controller->canOpen());
+    EXPECT_EQ(h.backend->submitted.size(), 1U);
+    EXPECT_TRUE(h.folder.openPending());
+    h.backend->terminals.push_back(
+        {.context = pauseContext, .outcome = application::CommandOutcome::Succeeded});
+    h.controller->refreshProjection();
+    ASSERT_TRUE(waitUntil([&] { return h.backend->submitted.size() == 2U; }));
+    ASSERT_TRUE(
+        std::holds_alternative<application::OpenComparisonCommand>(h.backend->submitted.back()));
+    EXPECT_EQ(h.shell->queuedIntentCount(), 0);
+}
+
+TEST_F(ReviewControllerTests, FolderOpenDuringPendingPlayCoalescesToLatestSelection) {
+    FolderTransportHarness h;
+    ASSERT_TRUE(h.initialize());
+    ASSERT_TRUE(h.controller->play());
+    ASSERT_TRUE(h.folder.openAt(1));
+    ASSERT_TRUE(h.folder.openAt(2));
+    EXPECT_EQ(h.shell->queuedIntentCount(), 1);
+    EXPECT_EQ(h.folder.pendingRow(), 2);
+    QCoreApplication::processEvents();
+    EXPECT_EQ(h.backend->submitted.size(), 1U);
+    h.playing();
+    h.completeLast();
+    ASSERT_TRUE(waitUntil([&] { return h.backend->submitted.size() == 2U; }));
+    ASSERT_TRUE(std::holds_alternative<application::PauseCommand>(h.backend->submitted.back()));
+    h.paused();
+    h.completeLast();
+    ASSERT_TRUE(waitUntil([&] { return h.backend->submitted.size() == 3U; }));
+    const auto* const open =
+        std::get_if<application::OpenComparisonCommand>(&h.backend->submitted.back());
+    ASSERT_NE(open, nullptr);
+    EXPECT_EQ(open->sources.front().path, h.pathAt(2));
+    h.openSucceeded(2);
+    EXPECT_EQ(h.folder.currentRow(), 2);
+    EXPECT_FALSE(h.folder.openPending());
+}
+
+TEST_F(ReviewControllerTests, FolderOpenCancellationDuringPauseDoesNotOpenLater) {
+    FolderTransportHarness h;
+    ASSERT_TRUE(h.initialize());
+    h.playing();
+    h.controller->refreshProjection();
+    ASSERT_TRUE(h.folder.openAt(1));
+    ASSERT_TRUE(waitUntil([&] { return !h.backend->submitted.empty(); }));
+    h.folder.cancelPendingOpen();
+    EXPECT_EQ(h.shell->queuedIntentCount(), 0);
+    h.paused();
+    h.completeLast();
+    QCoreApplication::processEvents();
+    EXPECT_EQ(h.backend->submitted.size(), 1U);
+    EXPECT_FALSE(h.folder.openPending());
+    EXPECT_EQ(h.folder.currentRow(), 0);
+}
+
+TEST_F(ReviewControllerTests, FolderOpenReportsPauseRejectionWithoutPoisoningQueue) {
+    FolderTransportHarness h;
+    ASSERT_TRUE(h.initialize());
+    h.playing();
+    h.controller->refreshProjection();
+    h.backend->submitResult = application::PortSubmitResult::Closed;
+    ASSERT_TRUE(h.folder.openAt(1));
+    ASSERT_TRUE(waitUntil([&] { return !h.folder.openPending(); }));
+    EXPECT_FALSE(h.folder.errorText().isEmpty());
+    EXPECT_EQ(h.folder.currentRow(), 0);
+    EXPECT_EQ(h.shell->queuedIntentCount(), 0);
+    h.backend->submitResult = application::PortSubmitResult::Accepted;
+    h.paused();
+    h.controller->refreshProjection();
+    ASSERT_TRUE(h.folder.openAt(2));
+    EXPECT_TRUE(h.folder.errorText().isEmpty());
+    ASSERT_TRUE(
+        std::holds_alternative<application::OpenComparisonCommand>(h.backend->submitted.back()));
+    EXPECT_TRUE(h.folder.openPending());
+}
+
+TEST_F(ReviewControllerTests, FolderOpenWithoutGraphicsFailsRatherThanWaitingForever) {
+    FolderTransportHarness h;
+    ASSERT_TRUE(h.initialize());
+    h.backend->currentSnapshot.graphicsReady = false;
+    h.controller->refreshProjection();
+    EXPECT_FALSE(h.folder.openAt(1));
+    EXPECT_FALSE(h.folder.openPending());
+    EXPECT_EQ(h.shell->queuedIntentCount(), 0);
+    EXPECT_TRUE(h.backend->submitted.empty());
+    EXPECT_EQ(h.folder.currentRow(), 0);
 }
 
 } // namespace

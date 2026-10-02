@@ -25,4 +25,20 @@ scoreActivePairRgbAbsolute(const domain::ComparisonPair pair,
     };
 }
 
+std::optional<ActivePairFrameAnalysis>
+analyzeActivePairRgbAbsolute(const domain::ComparisonPair pair,
+                             const domain::FrameId frameId,
+                             const domain::Rgba8View first,
+                             const domain::Rgba8View second) noexcept {
+    if (!pair.isValid() || !frameId.isValid()) {
+        return std::nullopt;
+    }
+    const auto analysis = domain::computeRgbAbsoluteAnalysis(first, second);
+    if (!analysis.has_value()) {
+        return std::nullopt;
+    }
+    return ActivePairFrameAnalysis{
+        .pair = pair, .frameId = frameId, .analysis = *analysis, .metricId = kRgbAbsoluteMetricId};
+}
+
 } // namespace dvs::application

@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QStringList>
+#include <QUrl>
 #include <QVariantList>
 #include <QVariantMap>
 
@@ -134,6 +135,9 @@ public:
     Q_INVOKABLE void clearStagedSources();
     Q_INVOKABLE bool moveStagedSource(int fromIndex, int toIndex);
     Q_INVOKABLE bool openStagedSources(bool preserveDisplayedTime);
+    // One browser activation, serialized with all other source intents. The returned identity
+    // is echoed by intentFinished; submitting it neither changes selection nor starts playback.
+    Q_INVOKABLE qulonglong openVideo(const QUrl& source);
     Q_INVOKABLE bool removeActiveSource(int sourceIndex);
     Q_INVOKABLE bool removeActiveSourceByIdentity(const QString& sourceIdentity);
     Q_INVOKABLE bool changeReferenceByIdentity(const QString& sourceIdentity);
@@ -176,7 +180,7 @@ private:
     };
 
     void synchronizeActiveSources(bool advanceGeneration = false);
-    [[nodiscard]] bool submitOrQueue(ReviewIntent intent);
+    [[nodiscard]] bool submitOrQueue(ReviewIntent intent, qulonglong* acceptedId = nullptr);
     [[nodiscard]] bool submitIntent(ReviewIntent& intent);
     [[nodiscard]] bool enqueueIntent(ReviewIntent intent);
     void drainIntentQueue();

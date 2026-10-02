@@ -1,7 +1,139 @@
 # 视觉审查问题台账
 
-更新：2026-09-30。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-10-02。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+
+## 2026-10-02 日常视频文件夹浏览（V-08，工作区已实现，未发布）
+
+- **用户优先级**：先补类似日常播放器的「从文件夹选视频并播放」，暂不推进 CLI 或异常区间评测。
+- **交付行为**：首屏／文件菜单／`Ctrl+Alt+O` 选择本地顶层目录；五种视频扩展名自然排序，中文
+  路径保留。点击单视频 NewReview，匹配成功终态后播放；上一项／下一项手动、不绕回、不连播。
+  列表可收起、纯净模式隐藏；浏览目录不替换工作区，失败不标错当前文件或丢掉已有画面。
+- **代码依据**：`VideoFolderModel.h/.cpp`、`ReviewShellController::openVideo`、
+  `VideoFolderSidebar.qml`、`ReviewInputDialogs.qml`、`Main.qml`、`DesktopApplication.cpp`。
+  默认一个后台 worker＋一个 latest queued job，有界 100,000 个文件；GUI 不做目录 I/O／排序／
+  join。取消／代次 fence 与单项 intent 身份隔离；FrameSet 与 ACK-before-commit 未改。
+- **回归**：新增 Model 15＋主界面契约 4＝**19/19**；**40/40** 运行时断言变异检出，构建失败不
+  计为检出，逐字节恢复与读回通过；39≠40 的缺项 guard 拒绝执行。完整 lint、format-check 通过。
+  恢复重建后默认 dev 选中 **853 项：846 实际通过、3 原有 skipped、4 原有 disabled、0 failed**。
+- **全量发现的测试时序问题**：既有 `ImageWorkspaceManual` 在 RowLayout polish 前读到像素文字
+  941 px＞920 px，布局完成后 762 px。相关产品文件与 HEAD 相同，未改产品布局；在原两条宽度
+  断言前等待 `waitForPolish`，不放宽断言。删掉等待的 QtTest 变异 1/1 检出，字节恢复与最终
+  全量通过；首次失败、两次复查和探针证据全部保留。
+- **证据／边界**：`out/verification/video-folder-browser/`，Qt 测试窗口截图
+  `folder-sidebar.png` 展示列表布局，不是实际视频画质／屏幕 ACK 证据。详见
+  [协议、范围与验证](video-folder-browser.md)。不做递归、缩略图／媒体库、目录监视、自动连播、
+  音频／字幕；已交给内核的活动 Open 不强行终止，取消仅抑制旧自动播放与排队项。
+  真实用户素材／硬件长测／覆盖率／发布 ZIP 未验收，未提交／未发布，既有工作区保留。
+
+### V-08 后续：播放中换项「无法提交视频打开请求」（工作区已修复）
+
+- **确定复现**：busy 是前台命令状态，不覆盖 playing、在途 Play/Pause 与旧帧 drain；此时
+  canOpen=false，原 shell 按 busy=false 立即提交／出队 Open，浏览器收到 intent ID 0。
+- **产品修复**：`ReviewShellController::submitOrQueue/drainIntentQueue` 保留有界素材 intent，
+  canPause 就绪时异步暂停，在途 transport 与旧帧收尾后按 canOpen 出队；不能用 framePending
+  代替完整门禁。匹配 Open 成功后才播放，取消／最新选项／实际源高亮、Close 优先级保留。
+  Pause 提交拒绝结束排队项，graphics 未就绪仍立即拒绝，不绕过呈现 ACK 或阻塞 GUI。
+- **回归**：新增生产 folder/controller/shell 路由 **6 项**，修复前 5/6 失败；修复后定向
+  **113 实际通过＋4 原有 disabled**；**10/10** 构建成功后由运行时断言检出，9≠10 缺项 guard
+  拒绝执行，源码恢复与读回通过。默认 dev 最终 **859 项：852 实际通过、3 skipped、4 disabled、
+  0 failed**，完整 lint／format-check 通过，桌面程序已重建。
+- **测试时序补正**：首轮全量的旧图片测试因 polish 持续 scheduled 超时；改为先让 text/layout
+  更新进入事件循环、再有界检查原两条几何条件，不要求队列空闲或额外 GPU 帧。产品布局未改；
+  像素读数越界／状态栏覆盖提示区 **2/2 QtTest 产品变异**检出，产品源逐字节恢复。
+- **证据／限制**：`out/verification/video-folder-open-transport/`，首轮失败与复查均保留；详见
+  [后续修复协议](video-folder-browser.md#播放中换项提交失败修复)。快照／终态由测试注入，不替代
+  用户具体 `videos` 素材重试、屏幕 ACK、硬件长测或发布 ZIP 验收；未提交、未发布。
+
+## 2026-10-01 本机正常入口复核：图片工作区接收视频不切换（S-03，P0，本机已修复）
+
+- **需求与基线**：用户报告另一台机器打不开，要求先测本机。首轮只测试和记录，不修改产品源码。
+  源码为 `4a67d1b`，另有既有打包策略工作区；Release 增量构建无待编译目标。
+- **明确复现**：先正常打开两张 PNG，再以普通文件参数转发两段视频，或调用当前 HKCU 注册的真实
+  `IExplorerCommand::Invoke` 发送两段视频。转发进程退出码／COM HRESULT 均为 0，但目标 HWND
+  可访问树仍有 `imageOpenButton` 等图片工具，没有视频走带条；trace 有 `FrameSetReady` 和
+  `RenderPublished`，没有 `RenderDrawStarted`／`PresentationAcknowledged`。现有 ZIP 与当前
+  Release 构建均复现；不是仅凭窗口存在就判定打开成功。
+- **修复前代码依据**：`DesktopApplication::enqueueStartupRequest` 的图片分支调用
+  `performImageReview`，视频分支直接入 shell intent。`Main.qml::onIntentFinished` 成功打开视频时
+  只重置视口，没有提交视频工作区；`workspaceMode` 不随 sourceCount 自动改变。既有
+  `--ui-smoke` 自动化入口额外调用 `activateWorkspace(0)`，所以掩盖这个真实入口遗漏。
+- **控制场景**：每个构建记录 12 个正常入口场景，目标 HWND 观察均成功。冷启动的单图／双图、
+  单视频／双视频进入对应工作区，视频有呈现 ACK；视频转图片正常。右键场景直接调用已注册的 COM
+  服务器，不等同于已经人工检查 Explorer 菜单观感或缓存的历史 DLL。主测试进程关闭后无遗留实例，
+  测试用 `DVS_DISABLE_SHELL_REGISTRATION=1` 保留原注册位置，18 个规范入口仍指向同一 CLSID。
+- **回归数量**：`pwsh tools/build/build.ps1 -Preset release -Test -TestRegex
+  '^(shell_windows\.|app\.|ui\.(ImageReviewControllerTests|ImageFolderPairModelTests|MainQmlContractTests|ReviewControllerTests|ImageWorkspaceManual)|media\.(MediaProbeTests|SoftwareDecoderTests|StillImageDecoderTests))'`
+  选中 262 项：**255 实际通过、3 skipped、4 disabled、0 failed**。CTest 的“100% out of 258”
+  包含 skipped，不能写成 258 项实际执行通过。未执行完整五分钟硬件／性能门禁。
+- **发布包区别**：现有 2.0.3 ZIP SHA-256 为
+  `496CD581CDBED41A03CE17E6F6AF6E4CAA660E5E0103458D35C33CCD8C9EEBB6`；静态包校验 15/15。
+  ZIP 内 EXE 与当前构建哈希不同，分别实际测试，不将此包冒充当前工作区重新打包结果。
+- **证据**：`out/verification/local-open-2026-10-01T06-40-24-786Z/` 的 `target-window/`（ZIP
+  正常入口）、`current-window/`（当前 Release）、`release-targeted.log` 和 `summary.md`。
+  桌面截图被其他窗口遮挡，已标记为无效，不作为产品画面证据；PowerShell 内直接加载 UIA 的
+  探针也因自身程序集解析错误失败，最终以独立目标 HWND UIA helper 的有效结果为准。
+  一次性观察脚本的 12 场景数量 guard 控制组通过，故意删一个场景的变异被拒绝；未新增产品断言。
+- **修复范围边界**：另一台机器的具体失败仍未复现，需绑定其 ZIP、素材、入口与日志；
+  本机这个故障不能解释所有打不开。
+
+### 用户授权后的修复与复验
+
+- **修复**：`Main.qml` 在成功 `OpenSourcesIntent` 结束、shell 已采纳源集后，记录完整视频 URL
+  身份，提交视频工作区并恢复其按键接收器。外部 startup 请求提交时不切换图片任务；失败／取消不修改图片
+  工作区身份、修订号、焦点或图片内容，关闭后台保留的视频也不替换前台图片任务。
+- **首帧等待环**：首次仅增加成功回调提交，控制器回归通过，正常入口仍失败。真实 Open 要等待
+  首帧呈现 ACK，隐藏的 viewport 却不能产生 ACK。现仅在视频打开 intent 活动期间让 surface
+  在图片任务后方参与渲染，同时禁用其输入；成功终态才切换前台任务并启用视频输入。没有绕过
+  ACK-before-commit、伪造成功、清空图片任务或新增 GUI／渲染线程等待。
+- **正式回归**：`MainQmlContractTests` 新增 3 项，调用生产 shell 的正常 startup 请求入口，
+  覆盖单／双／三视频、成功前 surface 可渲染但不接收输入、成功提交与焦点、失败／取消保留图片、
+  关闭后台视频。25 个新增行为检查全部有失败变异证据：15/15 接线／身份／焦点／保留内容／
+  首帧可达性变异检出；前后控制组均 3/3，源文件字节恢复校验通过。检查数量 guard 控制组通过，
+  故意少一变异时以 14≠15 拒绝执行。
+- **最终门禁**：Release 默认测试 preset 选中 815 项，**808 实际通过、3 skipped、4 disabled、
+  0 failed**；未包含被 preset 排除的硬件／性能／打包／soak 长测。最终 format-check 与 lint
+  通过。CTest 记录解析也检查 815 个唯一用例，删一条记录的变异以 814≠815 拒绝汇总。
+- **正常入口复验**：当前 Release 与新 ZIP 各记录 12 个场景，无观察错误或强制结束。原来失败的
+  CLI 转发与已注册 `IExplorerCommand::Invoke` 图片→视频场景均切到视频工具，且有真实
+  `RenderDrawStarted`、`PresentationAcknowledged` 及 Open 成功终态；反向转图片与冷启动控制
+  场景仍正常。不是 `--ui-smoke`，没有自动化额外切工作区。包观察里的 shell 冷启动仍指向
+  原注册的 Release；已有 ZIP 主实例时，COM 请求实际转发到该 ZIP 实例，注册位置未改动。
+- **测试包**：`out/verification/s03-fix-20261001-162914/package/CompareStation-2.0.3-s03-preview-windows-x64.zip`，
+  27,911,491 bytes（26.6 MiB），SHA-256
+  `4C8666AB81778298093E362CF930A6194E30D4D16331BFBCAD379214DAD572A6`。
+  标准 CPack 必要运行时门禁通过，包静态校验 16/16，解压 EXE 与本轮构建字节相同。
+  载荷无新增文件；按既有 P-01 策略去掉四个多余文件，保留所需 app-local CRT／UCRT。
+  两个 EXE 与旧 ZIP 不同，旧 ZIP 本就不是当前构建，不能把所有二进制差异归因于 S-03。
+  没有覆盖原 ZIP、修改版本／标签或上传发布附件；此包仅用于复测，不是新的正式发布认证。
+- **证据与限制**：`out/verification/s03-fix-20261001-162914/summary.md` 与同目录完整日志、
+  `mutation-results.json`、`real-open-final/`、`package-real-open/`。`real-open/` 保留首次仅补
+  成功回调仍失败的证据。截图尝试因前景 HWND 不匹配被排除，不冒充实际桌面像素证据；结论绑定
+  目标 HWND 可访问树与呈现 trace。真实 Explorer 菜单点击、历史 DLL 缓存、另一台机器与完整
+  五分钟硬件／性能验证仍未完成。测试结束无残留应用实例，原 shell DLL 注册位置保留。
+
+## 2026-09-30 必要运行时 ZIP 策略（P-01，基线 `4a67d1b` + 本轮工作区）
+
+- **用户要求**：后续打包只交付当前产品必需的运行时；将规则写入文档并持续执行，不仅手工
+  精简一次 ZIP。规则见 [构建指南](../building.md#zip-只打包必要运行时) 与根目录 AGENTS。
+- **实际体积差异**：2.0.2 为 27,908,959 bytes，2.0.3 草稿为 62,665,162 bytes；只新增
+  `vc_redist.x64.exe`、`dxcompiler.dll`、`d3dcompiler_47.dll`、`dxil.dll` 四项，占
+  34,752,984 bytes 压缩体积。CPack 日志证实来自 Qt 自动部署，而不是程序本体增长或 PDB。
+  `startup-performance-v2.md` 中“只能是手工拷入”的旧归因已标注修正。
+- **实现**：`InstallRequiredSystemLibraries` 保留 app-local CRT／UCRT；Qt 显式关闭重复安装器
+  和系统图形编译器复制。当前后端固定 D3D11，应用着色器在构建期生成；DXC／DXIL 不属于已交付
+  D3D12 路径，D3DCompiler_47 使用 Windows 10／11 系统组件。新增依赖或更换后端时需重新论证。
+- **防回退**：CPack 调用 `VerifyRuntimePayload.cmake`，拒绝额外 EXE（包括嵌套路径）、
+  开发符号、未交付图形编译器／插件，四个关键 CRT／UCRT DLL 必须非空。新增
+  `quality.runtime-payload` 27/27，14 个策略／检查计数故障变异全部检出，恢复控制组 27/27；
+  另将 CPack 调用策略的接线移除，证明原门禁拒绝的额外安装器会被接受，接线变异 1/1 检出，
+  恢复后完整 staging 控制组通过。
+- **本轮验证**：Release 定向 7/7、质量 8/8，format-check／lint／diff-check 通过；标准 CPack 在独立验证目录产出 27,911,207 bytes
+  （26.6 MiB）ZIP，包校验 16/16、解压载荷／二进制读回 11/11、CLI 启动／媒体探测和
+  单／双／三源 WARP 界面 smoke 通过。证据在 `out/verification/runtime-payload/`。
+- **边界**：这是打包工作区预览，不是新的发布候选认证；没有移动已推送的 v2.0.3 标签或替换
+  GitHub 草稿附件。干净 Windows 机器和完整硬件／性能验收仍须绑定后续候选，不能以本机 smoke
+  或旧版本证据替代。
 
 ## 2026-09-30 2.0.3 发布门禁：空闲间隙步进与差异菜单验证（基线 `02dffa7` + 本轮工作区）
 
@@ -826,7 +958,7 @@
 | V-04 | 常见编码为什么打不开？ | P1 | H.264/HEVC/MPEG-4 Part 2 已有；AV1/VP9 待扩展 | `MediaProbe.cpp`、`vcpkg.json` |
 | V-05 | 显示转换会不会改变细节？ | P0 | 转换及部分精确性标记已有；检查器与图片摘要改为显式区分“观看路径／数值审查路径”（2026-09-25）；原始保真路径待扩展 | `SoftwareDecoder.cpp`、`ComparisonViewport.qml`、`ImageWorkspace.qml` |
 | V-06 | 未播放位置没有缩略图 | P1 | 未缓存悬停降级为时间码胶囊与准星线，Jog Wheel 可滚轮微调；合约测试已通过 | `TimelineThumbnailPopup.qml`、`TimelineTracks.qml` |
-| V-07 | MAE/PSNR 能否实际用于视频评估？ | P2 | 独立解码服务、检查器读数、OSC 和时间轴指标泳道已接通；切换比较对的会话复用缺陷与阈值/通道策略口径已修复（2026-09-25）；硬件验收待做 | `PairMetrics.*`、`PairMetricsController`、`MetricTimelineLane.qml` |
+| V-07 | MAE/PSNR 能否实际用于视频评估？ | P2 | 独立解码服务、检查器读数、OSC 和指标泳道已接通；源对复用与阈值/通道口径已修复；2026-10-01 工作区改为当前帧先发布＋顺序窗口，合成 1080p60 CPU 评测实测提速；真实素材与硬件验收待做 | `PairMetrics.*`、`PairMetricsController`、`MetricTimelineLane.qml`；[窗口证据](pair-metrics-window-performance.md) |
 | I-01 | 透明度哪里错了，贴背景后怎样？ | P1 | A/B/O 快捷键、高对比背景与观察状态浮标已实现；QML 合约测试通过 | `ImageWorkspace.qml`、`ImageReviewController` |
 | I-02 | 读数是原始高位深值吗？颜色可信吗？ | P0 | 已加 RGBA64 sidecar 原始取样（16-bit 用例通过）；差异统计新增“转换后 RGBA16”口径与“显示缓冲看不到的差异”提示（2026-09-25）；ICC 仍无 | `StillImageDecoder.cpp`：`convertFrameToRgba`、`ImageReviewController::samplePixel/nativeStatsText` |
 | I-03 | PNM 是否所有入口都能打开？ | P1 | 三个对话框已补 `*.pam` 过滤器；格式矩阵验收仍待做 | `ImageHeaderProbe.h`、`Main.qml` |
@@ -911,8 +1043,8 @@
 
 ### V-07 视频量化指标
 
-- **证据**：`computeRgbAbsoluteMetrics`、`scoreActivePairRgbAbsolute` 有 MAE/MSE/PSNR 基础，
-  但没有完整视频像素获取、SessionSnapshot／UI 或区间统计链，见 [ADR 0005](../adr/0005-pixel-difference-metrics.md)。
+- **基础定义**：`computeRgbAbsoluteMetrics`、`scoreActivePairRgbAbsolute` 提供 MAE/MSE/PSNR
+  标量参考，见 [ADR 0005](../adr/0005-pixel-difference-metrics.md)；端到端集成与后续优化见下文。
 - **2026-09-22 已提交实现**：
   1. 新增 `application::IPairMetricsService` 端口（`PairMetrics.h`）：请求携带 `PlaybackRequestContext`
      身份、双源、对齐偏移、帧区间与坏点阈值；结果以带身份的批次异步发布。
@@ -925,13 +1057,35 @@
   4. UI：检查器"差异"页当前帧指标块（MAE/MSE/PSNR/最大绝对差/坏点占比与数量/参与像素，
      指标名固定 `cpu-rgb-absolute-v1`，阈值与 GPU 高亮共享）；OSC 紧凑读数；
      `MetricTimelineLane.qml` 可收起泳道（MAE 曲线 + 峰值标记点击跳转 + 播放头指示）。
+- **2026-10-01 第一批工作区实现（基线 `4a67d1b`，未提交）**：
+  1. 新增可选 `priorityFrame`；当前帧立即单样本发布，余下窗口以 suffix／prefix 两个升序区间
+     处理，无优先帧则整段升序。GUI 显式传实际播放头或缺口内最近位置，不再用窗口中点冒充。
+  2. 工作量计数覆盖实际 seek 与解码前滚，不再把“成功返回帧数”误称全部解码成本。
+  3. 同日 Release 双源 H.264 1080p60、GOP=60、301 帧合成样例，1 轮预热＋5 轮测量：
+     最终候选完整窗口中位 82737.80 → 7205.01 ms，首批 4356.27 → 346.80 ms；seek 600 → 4，
+     实际解码帧 18240 → 662，仍为 301 个 canonical 样本，MAE 汇总一致。
+  4. 定向 28 项通过；20/20 mutation 检出后恢复源字节，再跑全量开发测试：821 项选择，
+     814 通过、3 原有跳过、4 原有禁用、零失败；format-check／lint 通过。
+     [完整协议、数值回归与 mutation 对应证据](pair-metrics-window-performance.md)。
+  5. 本批未做阈值缓存、区间 CLI 或异常区间导航；CPU 合成样例不替代真实素材或硬件门禁。
+- **2026-10-01 第二批工作区实现（同一基线，未提交）**：
+  1. 新增阈值无关 RGB 分析与三种策略的累计分布，保留独立 CPU 标量参考；请求／批次
+     不再携带显示阈值。控制器改阈值／策略只查询并通知，在途分析与已缓存结果均可复用。
+  2. 缓存以不可变素材／实际映射及对齐输入隔离；提交结果匹配完整当前分析请求身份。
+     分析缓存硬限 4096 项、约 25 MiB，淘汰远端并重算范围／峰值，不清空当前读数。
+  3. 最终同协议 Release 完整窗口中位 7205.01 → 7923.09 ms（首次分析成本 +9.97%）；
+     全 301 帧 × 256 阈值 × 3 策略的 231168 次查询中位 0.8662 ms，seek／解码不增加。
+     真实控制器组件确认阈值调整提交次数仍为 1、seek 4 → 4、解码 30 → 30。
+  4. 定向 53 项；46/46 mutation 运行时检出；恢复后全量开发选择 834 项，
+     827 通过、3 原有跳过、4 原有禁用、零失败，format-check／lint 通过。
+     [复用边界、首次成本和逐组反例证据](pair-metrics-threshold-reuse.md)。
+  5. 仍未实现区间 CLI／异常区间导航，未验收真实素材、覆盖率、D3D11VA 性能或 release ZIP。
 - **退出条件**：同图无限 PSNR、缺帧／错误尺寸 unavailable；不可用项不当作零误差平均；
   换 pair／seek 后陈旧结果被丢弃；显示增益不影响原统计值。组件测试已覆盖以上语义；
   真实素材下的数值对拍与性能（1080p60 窗口采样耗时）待硬件验收。
-- **验证入口**：`PairMetricsServiceTests.cpp`（8 用例：同源零误差、跨编码可比、越界/尺寸不匹配
-  不可比、非法请求拒绝、新请求打断、取消静默、会话复用）、`PairMetricsControllerTests.cpp`
-  （7 用例：无对不可用、暂停单帧/泳道窗口请求、批次读数、纪元变更丢陈旧、阈值重建缓存、
-  峰值与桶化查询）、既有 `PixelDifferenceTests.cpp`、`ComparisonMetricsTests.cpp`。
+- **验证入口**：`PairMetricsServiceTests.cpp`（15 项）、`PairMetricsControllerTests.cpp`（13 项）、
+  `PairMetricsPerformanceTests.cpp`（显式素材、独立 performance 标签），以及既有
+  `PixelDifferenceTests.cpp`、`ComparisonMetricsTests.cpp`。
 
 ## 图片：证据与退出条件
 

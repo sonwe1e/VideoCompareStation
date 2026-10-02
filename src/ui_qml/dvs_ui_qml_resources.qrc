@@ -27,6 +27,7 @@
         <file alias="ImageWorkspace.qml">qml/ImageWorkspace.qml</file>
         <file alias="ImageEditDialogs.qml">qml/ImageEditDialogs.qml</file>
         <file alias="FolderPairSidebar.qml">qml/FolderPairSidebar.qml</file>
+        <file alias="VideoFolderSidebar.qml">qml/VideoFolderSidebar.qml</file>
         <file alias="ActiveSourceStrip.qml">qml/ActiveSourceStrip.qml</file>
         <file alias="CompareModeBar.qml">qml/CompareModeBar.qml</file>
         <file alias="MetricTimelineLane.qml">qml/MetricTimelineLane.qml</file>

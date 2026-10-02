@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -56,6 +57,25 @@ computeRgbAbsoluteMetrics(Rgba8View first,
                           Rgba8View second,
                           std::uint8_t mismatchThreshold = 0U,
                           MismatchPolicy policy = MismatchPolicy::AnyChannel) noexcept;
+
+// Threshold-independent analysis. Each policy stores cumulative counts for all integer
+// thresholds [0,255], so a new display predicate needs no pixels and no new analysis pass.
+// Only positive policy deltas enter the distribution: luma deltas in (0,1) count at threshold
+// zero but not at one. Alpha is excluded, just like the independent scalar reference above.
+struct RgbAbsoluteAnalysis final {
+    // Only threshold-independent fields are populated here. Read mismatch counts/ratios via
+    // metricsAt(), never from this base summary.
+    PixelDifferenceMetrics metrics{};
+    std::array<std::array<std::uint64_t, 256U>, 3U> mismatchCounts{};
+
+    [[nodiscard]] PixelDifferenceMetrics
+    metricsAt(std::uint8_t threshold,
+              MismatchPolicy policy = MismatchPolicy::AnyChannel) const noexcept;
+    [[nodiscard]] bool operator==(const RgbAbsoluteAnalysis&) const = default;
+};
+
+[[nodiscard]] std::optional<RgbAbsoluteAnalysis>
+computeRgbAbsoluteAnalysis(Rgba8View first, Rgba8View second) noexcept;
 
 // Identical buffers report mse=0 and psnrDb = kInfinitePsnrDb.
 inline constexpr double kInfinitePsnrDb = 1000.0;

@@ -1,6 +1,6 @@
 # Agent 快速定位指南
 
-更新日期：2026-09-25。用途：先定位产品问题，再进入最小相关代码和验证入口。
+更新日期：2026-10-02。用途：先定位产品问题，再进入最小相关代码和验证入口。
 这不是完整架构说明，也不是发布验收记录。
 
 ## 开始工作前的五分钟
@@ -36,11 +36,13 @@
 | 不同帧率或 VFR 看起来不同步 | `src/media_ffmpeg/src/MultiSourceFrameProvider.cpp`；`src/application/src/Alignment.cpp`、`ComparisonExactness.cpp`；`ComparisonViewport.qml` | `ComparisonExactnessTests.cpp`、`AlignmentTests.cpp`、`MultiSourceFrameProviderTests.cpp`；[对齐说明](alignment.md) |
 | 滚轮缩放、拖动、框选、分割线不对 | `ComparisonViewport.qml` → `ComparisonSurface.cpp` → `src/platform_windows/src/D3d11ComparisonRenderer.cpp` | `tests/component/ui/ComparisonSurfaceTests.cpp`、`MainQmlContractTests.cpp`、`qml/tst_wipe_handle.qml` |
 | 热力图、高亮、阈值或颜色结果不可信 | `TabbedInspector.qml`、`src/presentation_contract/include/dvs/presentation/ComparisonContract.h`；`D3d11ComparisonRenderer.cpp`；`SoftwareDecoder.cpp` | `tests/unit/presentation_contract/ComparisonContractTests.cpp`；平台像素回读测试；台账 `V-04`、`V-05` |
+| 从文件夹选视频、上一项／下一项、点击后播放 | `VideoFolderModel.cpp` → `ReviewShellController::openVideo` → `ReviewController`；`VideoFolderSidebar.qml`、`ReviewInputDialogs.qml`、`Main.qml`；`DesktopApplication.cpp` 调用 `VideoFolderModel::attachPlayback` 接线 | `VideoFolderModelTests.cpp`、`MainQmlContractTests` 的 `VideoFolder*`／`NewerNonBrowser*`；[范围与证据](engineering/video-folder-browser.md) |
 | 视频格式打不开／软解回退 | `src/media_ffmpeg/src/MediaProbe.cpp` → `SoftwareDecoder.cpp`；`vcpkg.json` | `tests/component/media/MediaProbeTests.cpp`、`SoftwareDecoderTests.cpp`；[支持范围](media-support.md) |
 | 图片打不开、PNM、位深或颜色不对 | `src/app/Main.cpp` 注入 loader → `src/media_ffmpeg/src/StillImageDecoder.cpp`；`ImagePairLoader.cpp`、`ImageHeaderProbe.h`、`ImageFolderPairModel.cpp`；`Main.qml` 文件入口 | `tests/component/ui/ImageReviewControllerTests.cpp`、`ImageFolderPairModelTests.cpp`；工作区新增的 `StillImageDecoderTests.cpp`，先确认已纳入构建 |
 | 透明边缘、RGBA 数值、Alpha 差异 | `ImageWorkspace.qml` → `ImageReviewController.cpp`：`samplePixel`、`displayImage` → `ImagePairLoader.cpp`：`analyzeDifference`（差值场与全部统计）、`renderDifference`（按模式/增益派生显示变体） | `tests/component/ui/ImageReviewControllerTests.cpp`；台账 `I-01`、`I-02`、`I-06` |
 | 图片 100%、手动 A/B 闪烁、分割线 | `ImageWorkspace.qml`、`ImageReviewController.h/.cpp`、`ImageFolderPairModel.cpp` | `MainQmlContractTests.cpp`、`ImageReviewControllerTests.cpp`；台账 `I-04`、`C-01`、`C-02` |
 | 对调 A/B、只替换一张图 | `ImageReviewController::swapSides`、`requestReplacePrimary/Secondary`；`ImageWorkspace.qml`、`Main.qml` 换图对话框 | `ImageReviewControllerTests` 的 `SwapSides*`/`Replace*`；台账 `U-02` |
+| 视频阈值／策略复用、分析缓存和异步采样 | `PixelDifference.cpp`、`ComparisonMetrics.cpp`、`PairMetricsService.cpp`、`PairMetricsController.cpp` | `PixelDifferenceTests.cpp`、`ComparisonMetricsTests.cpp`、`PairMetricsControllerTests.cpp`、`PairMetricsThresholdReuseTests.cpp`；[复用协议与反例](engineering/pair-metrics-threshold-reuse.md) |
 | MAE／PSNR、统计和误差图含义 | `src/domain/src/PixelDifference.cpp`；`src/application/include/dvs/application/ComparisonMetrics.h`；图片另查 `ImagePairLoader.cpp`（`DifferenceOptions::gain` 只改渲染，统计为原始 8-bit 差值；工作集见 `estimatePairWorkingSet`） | `PixelDifferenceTests.cpp`、`ComparisonMetricsTests.cpp`、`ImageReviewControllerTests.cpp`；[指标 ADR](adr/0005-pixel-difference-metrics.md) |
 | 记录问题、截图、恢复观察位置 | `src/ui_qml/src/IssueLogController.cpp` → `src/application/include/dvs/application/IssueRecord.h` → `src/persistence_json/src/IssueRecordRepository.cpp` | `IssueLogControllerTests.cpp`、`IssueRecordTests.cpp`、`IssueRecordRepositoryTests.cpp` |
 | 把入点到出点导出成片段（无损流拷贝裁剪）、导出失败或起点不在入点 | `TransportBar.qml`／`PlayerOsc.qml` 的「导出」芯片 → `ClipExportDialog.qml` → `ClipExportController.cpp`：`exportRange`（源取 `ValidatedComparisonSet` 的规范源）→ `src/application/src/ClipExportPlanner.cpp`（计划与关键帧对齐）→ `src/media_ffmpeg/src/ClipExportWriter.cpp`（按包复制、临时文件改名） | `ui.MainQmlContractTests.ExportRangeButtonStartsAClipExport`、`tests/component/media/ClipExportWriterTests.cpp`、`tests/unit/application/ClipExportPlannerTests.cpp`；台账「视频第六增补」、产品目标 §3 的两条限制 |

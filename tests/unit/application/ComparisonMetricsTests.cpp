@@ -66,4 +66,31 @@ TEST(ComparisonMetricsTests, MismatchPolicyDrivesBadPixelCount) {
     EXPECT_EQ(allPolicy->metrics.mismatchPixels, 0U);
 }
 
+TEST(ComparisonMetricsTests, AnalysisRetainsProvenanceAndQueriesScalarDefinition) {
+    std::vector<std::uint8_t> first{100, 100, 100, 255};
+    std::vector<std::uint8_t> second{130, 100, 100, 0};
+    const auto analysis = analyzeActivePairRgbAbsolute(
+        domain::ComparisonPair{0, 2}, domain::FrameId{7}, makeView(first), makeView(second));
+    ASSERT_TRUE(analysis.has_value());
+    EXPECT_EQ(analysis->pair, (domain::ComparisonPair{0, 2}));
+    EXPECT_EQ(analysis->frameId, domain::FrameId{7});
+    EXPECT_EQ(analysis->metricId, kRgbAbsoluteMetricId);
+    const auto reference = scoreActivePairRgbAbsolute(
+        domain::ComparisonPair{0, 2}, domain::FrameId{7}, makeView(first), makeView(second), 30);
+    ASSERT_TRUE(reference.has_value());
+    EXPECT_EQ(analysis->analysis.metricsAt(30), reference->metrics);
+    EXPECT_FALSE(
+        analyzeActivePairRgbAbsolute(
+            domain::ComparisonPair{1, 1}, domain::FrameId{7}, makeView(first), makeView(second))
+            .has_value());
+    EXPECT_FALSE(
+        analyzeActivePairRgbAbsolute(
+            domain::ComparisonPair{0, 2}, domain::FrameId{-1}, makeView(first), makeView(second))
+            .has_value());
+    EXPECT_FALSE(
+        analyzeActivePairRgbAbsolute(
+            domain::ComparisonPair{0, 2}, domain::FrameId{7}, domain::Rgba8View{}, makeView(second))
+            .has_value());
+}
+
 } // namespace dvs::application

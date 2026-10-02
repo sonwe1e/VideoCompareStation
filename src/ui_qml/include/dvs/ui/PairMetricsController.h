@@ -7,6 +7,7 @@
 #include <QString>
 #include <QVariantList>
 
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -54,6 +55,9 @@ public:
     struct Dependencies final {
         std::function<std::shared_ptr<const application::SessionSnapshot>()> snapshot;
         application::IPairMetricsService* service = nullptr;
+        // Default retained analyses are about 25 MiB, separate from the decoded-frame budget.
+        // Tests may use a smaller limit; values outside [1,4096] are clamped.
+        std::size_t maximumCachedSamples = 4096U;
     };
 
     explicit PairMetricsController(Dependencies dependencies, QObject* parent = nullptr);
@@ -139,7 +143,7 @@ private:
 
     struct Sample final {
         bool comparable = false;
-        domain::PixelDifferenceMetrics metrics{};
+        domain::RgbAbsoluteAnalysis analysis{};
     };
 
     struct Scope final {
@@ -148,8 +152,15 @@ private:
         domain::SourceId firstSource = 0;
         domain::SourceId secondSource = 0;
         std::uint64_t alignmentRevision = 0U;
-        int threshold = 0;
-        domain::MismatchPolicy policy = domain::MismatchPolicy::AnyChannel;
+        // Immutable material/mapping handles are cheap identities: no per-frame map hashing
+        // or copying on the GUI thread. A newly probed timeline must not reuse old analysis.
+        std::shared_ptr<const domain::ValidatedComparisonSet> comparison;
+        std::uint64_t canonicalFrameCount = 0U;
+        std::optional<domain::CanonicalTimeline> canonicalTimeline;
+        std::vector<application::SourceTimelineView> sourceTimelines;
+        std::vector<application::SourceFrameOffset> alignmentOffsets;
+        std::shared_ptr<const std::vector<application::SequenceAlignmentResult>> sequenceMaps;
+        application::AlignmentMode alignmentMode = application::AlignmentMode::FrameIndex;
 
         [[nodiscard]] bool operator==(const Scope&) const noexcept = default;
     };
@@ -161,6 +172,7 @@ private:
     void drainSink();
     void applyScopeChange(const std::optional<Scope>& next);
     void resetInflight() noexcept;
+    void trimCache();
     [[nodiscard]] const Sample* currentSample() const noexcept;
 
     Dependencies dependencies_;

@@ -164,4 +164,63 @@ TEST(PixelDifferenceTests, StridePaddingIsIgnored) {
     EXPECT_EQ(metrics->mismatchPixels, 1U);
 }
 
+TEST(PixelDifferenceTests, AnalysisMatchesScalarForEveryThresholdAndPolicy) {
+    std::vector<std::uint8_t> first;
+    std::vector<std::uint8_t> second;
+    // Include zero, exact threshold, maximum delta, signed cancellation and fractional luma,
+    // then deterministic mixed channel values. Alpha differences must never enter any count.
+    first = {0, 0, 0, 0, 0, 0, 0, 255, 100, 100, 100, 255, 0, 0, 0, 255};
+    second = {0, 0, 0, 255, 255, 255, 255, 0, 200, 70, 100, 255, 20, 20, 20, 255};
+    for (std::size_t pixel = 0; pixel < 512U; ++pixel) {
+        for (std::size_t channel = 0; channel < 4U; ++channel) {
+            first.push_back(static_cast<std::uint8_t>((pixel * 17U + channel * 53U) % 256U));
+            second.push_back(static_cast<std::uint8_t>((pixel * 89U + channel * 31U) % 256U));
+        }
+    }
+    const auto a = makeView(first, first.size() / 4U, 1);
+    const auto b = makeView(second, second.size() / 4U, 1);
+    const auto analysis = computeRgbAbsoluteAnalysis(a, b);
+    ASSERT_TRUE(analysis.has_value());
+    for (const auto policy :
+         {MismatchPolicy::LumaOnly, MismatchPolicy::AnyChannel, MismatchPolicy::AllChannels}) {
+        for (int threshold = 0; threshold <= 255; ++threshold) {
+            SCOPED_TRACE(threshold);
+            SCOPED_TRACE(static_cast<int>(policy));
+            const auto reference =
+                computeRgbAbsoluteMetrics(a, b, static_cast<std::uint8_t>(threshold), policy);
+            ASSERT_TRUE(reference.has_value());
+            EXPECT_EQ(analysis->metricsAt(static_cast<std::uint8_t>(threshold), policy),
+                      *reference);
+        }
+    }
+}
+
+TEST(PixelDifferenceTests, AnalysisPreservesFractionalLumaAndIgnoresPadding) {
+    // Two rows with different stride lengths; alpha and padding differ, but only the first
+    // row's signed RGB cancellation has a positive luma delta of 0.196.
+    const std::array<std::uint8_t, 16> first{
+        100, 100, 100, 255, 9, 9, 9, 9, 0, 0, 0, 255, 9, 9, 9, 9};
+    const std::array<std::uint8_t, 24> second{200, 70, 100, 0, 8, 8, 8, 8, 8, 8, 8, 8,
+                                              0,   0,  0,   0, 8, 8, 8, 8, 8, 8, 8, 8};
+    const Rgba8View a{first.data(), 1, 2, 8};
+    const Rgba8View b{second.data(), 1, 2, 12};
+    const auto analysis = computeRgbAbsoluteAnalysis(a, b);
+    ASSERT_TRUE(analysis.has_value());
+    EXPECT_EQ(analysis->metricsAt(0, MismatchPolicy::LumaOnly).mismatchPixels, 1U);
+    EXPECT_EQ(analysis->metricsAt(1, MismatchPolicy::LumaOnly).mismatchPixels, 0U);
+    EXPECT_EQ(analysis->metricsAt(0, MismatchPolicy::AllChannels).mismatchPixels, 0U);
+    EXPECT_EQ(analysis->metricsAt(0), *computeRgbAbsoluteMetrics(a, b));
+    EXPECT_EQ(RgbAbsoluteAnalysis{}.metricsAt(0).mismatchRatio, 0.0);
+}
+
+TEST(PixelDifferenceTests, AnalysisRejectsInvalidViewsAndGeometry) {
+    std::vector<std::uint8_t> first(16U, 0U);
+    const auto view = makeView(first, 2, 2);
+    EXPECT_FALSE(computeRgbAbsoluteAnalysis(Rgba8View{}, view).has_value());
+    EXPECT_FALSE(computeRgbAbsoluteAnalysis(view, makeView(first, 1, 2)).has_value());
+    auto badStride = view;
+    badStride.strideBytes = 4;
+    EXPECT_FALSE(computeRgbAbsoluteAnalysis(view, badStride).has_value());
+}
+
 } // namespace dvs::domain

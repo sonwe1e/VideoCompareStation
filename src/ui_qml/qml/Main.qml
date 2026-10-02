@@ -114,6 +114,10 @@ ApplicationWindow {
     // lightweight QML-only harnesses valid (they simply see no edit tools).
     readonly property var imageEditService: typeof imageEdit !== "undefined" ? imageEdit : null
     readonly property var folderPairModel: typeof imageFolderPairs !== "undefined" ? imageFolderPairs : null
+    readonly property var videoFolderModel: typeof videoFolder !== "undefined" ? videoFolder : null
+    property bool videoFolderSidebarVisible: false
+    readonly property bool videoFolderListVisible: videoFolderModel !== null && videoFolderSidebarVisible && chromeVisible
+    readonly property real videoFolderInset: videoFolderListVisible ? 268 : 0
     // V-07 pair-metrics controller from the composition root; the typeof guard keeps
     // lightweight QML-only tests (no metrics service) valid and warning-free.
     readonly property var pairMetricsModel: typeof pairMetrics !== "undefined" ? pairMetrics : null
@@ -1045,6 +1049,41 @@ ApplicationWindow {
         reviewInputDialogsLoader.active = true;
 
         return reviewInputDialogs;
+    }
+
+    function requestOpenVideoFolder() {
+        if (!videoFolderModel)
+            return false;
+        ensureReviewInputDialogs().openVideoFolder();
+        return true;
+    }
+
+    function loadVideoFolder(folder) {
+        if (!videoFolderModel)
+            return false;
+        videoFolderSidebarVisible = true;
+        return videoFolderModel.loadFolder(folder);
+    }
+
+    function openFolderVideo(row) {
+        if (!videoFolderModel || videoFolderModel.scanning || row < 0 || row >= videoFolderModel.fileCount)
+            return false;
+        cancelWorkspaceOpen();
+        workspaceSession.beginOpen(workspaceSession.videoMedia);
+        if (!videoFolderModel.openAt(Number(row))) {
+            workspaceSession.cancelOpen();
+            return false;
+        }
+        pendingNewReviewWantsThreeUp = false;
+        return true;
+    }
+
+    function stepFolderVideo(delta) {
+        if (!videoFolderModel || delta === 0)
+            return false;
+        const anchor = videoFolderModel.openPending ? videoFolderModel.pendingRow : videoFolderModel.currentRow;
+        const row = anchor < 0 ? (delta > 0 ? 0 : videoFolderModel.fileCount - 1) : anchor + (delta > 0 ? 1 : -1);
+        return openFolderVideo(row);
     }
 
     function requestOpenVideos() {
@@ -2016,12 +2055,16 @@ ApplicationWindow {
         openManualAnchorsDialog: root.openManualAnchorsDialog
         sourceOffsets: root.sourceOffsets
         resetSourceOffsets: root.resetSourceOffsets
+        videoFolderAvailable: root.videoFolderModel !== null
+        videoFolderVisible: root.videoFolderSidebarVisible
         videoHasSession: root.videoHasSession
         imageHasSession: root.imageHasContent
         onIssueLogCaptureRequested: root.captureIssueLog()
         onIssueLogToggleRequested: root.issueLogPanelVisible = !root.issueLogPanelVisible
         onIssueLogSaveRequested: issueSaveDialog.open()
         onIssueLogLoadRequested: issueLoadDialog.open()
+        onOpenVideoFolderRequested: root.requestOpenVideoFolder()
+        onVideoFolderToggleRequested: root.videoFolderSidebarVisible = !root.videoFolderSidebarVisible
         onOpenVideosRequested: root.requestOpenVideos()
         onAddVideoRequested: root.requestAddVideo()
         onOpenImageRequested: root.requestImageOpen()
@@ -2096,6 +2139,13 @@ ApplicationWindow {
     // Workspace-level shortcuts stay active across both workspaces; media transport shortcuts
 
     // remain owned by ReviewShortcuts and are gated by globalMediaShortcutsEnabled.
+
+    Shortcut {
+        sequence: "Ctrl+Alt+O"
+        context: Qt.ApplicationShortcut
+        enabled: root.inputContext === 0 && root.videoFolderModel !== null
+        onActivated: root.requestOpenVideoFolder()
+    }
 
     Shortcut {
         sequence: "Ctrl+O"
@@ -2182,8 +2232,11 @@ ApplicationWindow {
 
         function onIntentFinished(intentId, kind, outcome, errorKey) {
             if (Number(outcome) !== 0) {
-                if (Number(kind) === 0)
+                if (Number(kind) === 0) {
                     root.pendingNewReviewWantsThreeUp = false;
+                    if (!root.videoFolderModel || !root.videoFolderModel.openPending)
+                        workspaceSession.cancelOpen();
+                }
 
                 root.showIntentMessage(errorKey.length > 0 ? root.messageCatalog.errorMessage(errorKey) : qsTr("检查请求失败。"));
 
@@ -2197,6 +2250,10 @@ ApplicationWindow {
                 root.pendingNewReviewWantsThreeUp = false;
 
                 root.resetReviewVisualState();
+                // Normal CLI/shell opens bypass the selectors. Commit their workspace only
+                // after the shell has adopted the successful source set, not on submission.
+                const identity = root.activeSourceUrls().map(url => url.toString()).join("\n");
+                root.commitWorkspace(workspaceSession.videoMedia, identity);
             } else if (Number(kind) === 3) {
                 root.showIntentMessage(qsTr("已移除视频。"));
             } else if (Number(kind) === 4) {
@@ -2281,6 +2338,8 @@ ApplicationWindow {
             fileNameFunction: root.fileName
             pathNameFunction: root.sourcePathLabel
             initialReferenceIndex: root.pendingComparisonPreservesPosition ? root.canonicalSourceIndex : 0
+            onVideoFolderAccepted: folder => root.loadVideoFolder(folder)
+            onVideoFolderRejected: root.focusActiveWorkspace()
             onOpenVideosAccepted: urls => root.openNewReviewUrls(urls)
             onOpenVideosRejected: root.cancelWorkspaceOpen()
             onAddVideoAccepted: url => root.reviewDroppedUrls([url])
@@ -2668,7 +2727,10 @@ ApplicationWindow {
     ComparisonViewport {
         id: viewportFrame
 
-        visible: !root.imageWorkspaceActive
+        // An open completes only after its first presentation ACK. Keep the surface drawable
+        // behind the current image task while opening, without switching its UI or key receiver.
+        visible: !root.imageWorkspaceActive || Boolean(root.shell && Number(root.shell.activeIntent.kind) === 0)
+        enabled: !root.imageWorkspaceActive
         preferences: root.preferences
         borderColor: root.borderColor
         accentColor: root.accentColor
@@ -2716,7 +2778,7 @@ ApplicationWindow {
             bottom: parent.bottom
             bottomMargin: root.transportDocked ? root.transportDockHeight : 0
             left: parent.left
-            leftMargin: root.chromeVisible ? 14 : 0
+            leftMargin: (root.chromeVisible ? 14 : 0) + root.videoFolderInset
             right: alignmentBar.visible && root.width >= 1120 ? alignmentBar.left : parent.right
             rightMargin: root.chromeVisible ? 14 : 0
         }
@@ -2733,6 +2795,31 @@ ApplicationWindow {
     // qmllint enable incompatible-type
 
     Loader {
+        id: videoFolderSidebarLoader
+        active: root.videoFolderListVisible
+        visible: active
+        width: 260
+        z: 36
+        anchors.left: parent.left
+        anchors.leftMargin: 14
+        anchors.top: parent.top
+        anchors.topMargin: root.imageWorkspaceActive ? 10 : (root.chromeVisible && !root.singleMode ? sourceBar.height + comparisonBar.height + 6 : 0)
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: root.imageWorkspaceActive ? 0 : (root.transportDocked ? root.transportDockHeight : 0)
+        sourceComponent: VideoFolderSidebar {
+            folderModel: root.videoFolderModel
+            errorText: {
+                const text = root.videoFolderModel ? root.videoFolderModel.errorText : "";
+                return /^[a-z][a-z0-9-]+$/.test(text) ? root.messageCatalog.errorMessage(text) : text;
+            }
+            onChooseFolderRequested: root.requestOpenVideoFolder()
+            onFileRequested: row => root.openFolderVideo(row)
+            onStepRequested: delta => root.stepFolderVideo(delta)
+            onCloseRequested: root.videoFolderSidebarVisible = false
+        }
+    }
+
+    Loader {
         id: imageWorkspaceLoader
 
         property bool keepActive: false
@@ -2746,7 +2833,7 @@ ApplicationWindow {
             topMargin: root.chromeVisible ? 10 : 0
             bottom: parent.bottom
             left: parent.left
-            leftMargin: root.chromeVisible ? 14 : 0
+            leftMargin: (root.chromeVisible ? 14 : 0) + root.videoFolderInset
             right: parent.right
             rightMargin: root.chromeVisible ? 14 : 0
         }
@@ -3086,6 +3173,7 @@ ApplicationWindow {
         textColor: root.primaryTextColor
         mutedTextColor: root.mutedTextColor
         anchors.fill: viewportFrame
+        onOpenVideoFolderRequested: root.requestOpenVideoFolder()
         onOpenVideosRequested: root.requestOpenVideos()
         onOpenImageRequested: root.requestImageOpen()
         onOpenImagePairRequested: root.requestImagePairOpen()

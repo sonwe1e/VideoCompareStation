@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <utility>
@@ -21,8 +22,9 @@ namespace {
 constexpr std::int64_t kLaneRadiusFrames = 150;
 // Debounce between user interaction and submitting a metrics request.
 constexpr int kRequestDebounceMilliseconds = 150;
-// Hard cache bound. A session needing more samples clears and resamples around the playhead.
-constexpr std::size_t kMaximumCachedSamples = 65'536U;
+// Each reusable analysis carries three 256-bin uint64 distributions. Bound retention to
+// roughly 25 MiB plus map nodes, evicting distant positions rather than clearing the readout.
+constexpr std::size_t kMaximumCachedSamples = 4096U;
 
 [[nodiscard]] bool sameSourcePair(const domain::SourceId first,
                                   const domain::SourceId second,
@@ -125,7 +127,7 @@ void PairMetricsController::Sink::close() noexcept {
 
 std::optional<application::PairMetricsFailure> PairMetricsController::Sink::takeFailure() {
     std::scoped_lock lock(mutex_);
-    return std::move(failure_);
+    return std::exchange(failure_, std::nullopt);
 }
 
 std::vector<application::PairMetricsBatch> PairMetricsController::Sink::takeBatches() {
@@ -142,6 +144,8 @@ std::vector<application::PairMetricsBatch> PairMetricsController::Sink::takeBatc
 PairMetricsController::PairMetricsController(Dependencies dependencies, QObject* parent)
     : QObject(parent), dependencies_(std::move(dependencies)),
       sink_(std::make_shared<Sink>(*this)) {
+    dependencies_.maximumCachedSamples =
+        std::clamp(dependencies_.maximumCachedSamples, std::size_t{1}, kMaximumCachedSamples);
     metricId_ = QString::fromStdString(std::string{application::kRgbAbsoluteMetricId});
     requestTimer_ = new QTimer(this);
     requestTimer_->setSingleShot(true);
@@ -197,37 +201,43 @@ bool PairMetricsController::currentComparable() const noexcept {
 
 qreal PairMetricsController::currentMae() const noexcept {
     const Sample* const sample = currentSample();
-    return sample != nullptr ? sample->metrics.mae : 0.0;
+    return sample != nullptr ? sample->analysis.metrics.mae : 0.0;
 }
 
 qreal PairMetricsController::currentMse() const noexcept {
     const Sample* const sample = currentSample();
-    return sample != nullptr ? sample->metrics.mse : 0.0;
+    return sample != nullptr ? sample->analysis.metrics.mse : 0.0;
 }
 
 qreal PairMetricsController::currentPsnrDb() const noexcept {
     const Sample* const sample = currentSample();
-    return sample != nullptr ? sample->metrics.psnrDb : 0.0;
+    return sample != nullptr ? sample->analysis.metrics.psnrDb : 0.0;
 }
 
 qreal PairMetricsController::currentMaxAbsError() const noexcept {
     const Sample* const sample = currentSample();
-    return sample != nullptr ? sample->metrics.maxAbsError : 0.0;
+    return sample != nullptr ? sample->analysis.metrics.maxAbsError : 0.0;
 }
 
 qreal PairMetricsController::currentMismatchRatio() const noexcept {
     const Sample* const sample = currentSample();
-    return sample != nullptr ? sample->metrics.mismatchRatio : 0.0;
+    return sample != nullptr
+               ? sample->analysis.metricsAt(static_cast<std::uint8_t>(threshold_), thresholdPolicy_)
+                     .mismatchRatio
+               : 0.0;
 }
 
 qulonglong PairMetricsController::currentMismatchPixels() const noexcept {
     const Sample* const sample = currentSample();
-    return sample != nullptr ? sample->metrics.mismatchPixels : 0U;
+    return sample != nullptr
+               ? sample->analysis.metricsAt(static_cast<std::uint8_t>(threshold_), thresholdPolicy_)
+                     .mismatchPixels
+               : 0U;
 }
 
 qulonglong PairMetricsController::currentPixelCount() const noexcept {
     const Sample* const sample = currentSample();
-    return sample != nullptr ? sample->metrics.pixelCount : 0U;
+    return sample != nullptr ? sample->analysis.metrics.pixelCount : 0U;
 }
 
 QString PairMetricsController::metricId() const {
@@ -249,7 +259,7 @@ void PairMetricsController::setThreshold(const int value) {
     }
     threshold_ = clamped;
     emit thresholdChanged();
-    refresh();
+    emit stateChanged();
 }
 
 int PairMetricsController::thresholdPolicy() const noexcept {
@@ -267,7 +277,7 @@ void PairMetricsController::setThresholdPolicy(const int value) {
     }
     thresholdPolicy_ = policy;
     emit thresholdPolicyChanged();
-    refresh();
+    emit stateChanged();
 }
 
 qint64 PairMetricsController::sampleCount() const noexcept {
@@ -305,13 +315,18 @@ void PairMetricsController::refresh() {
     if (snapshot && snapshot->validatedComparison && snapshot->activeComparisonPair.has_value() &&
         snapshot->validatedComparison->sourceCount() >= 2U) {
         const domain::ComparisonPair& pair = *snapshot->activeComparisonPair;
-        next = Scope{snapshot->sessionId,
-                     snapshot->sessionEpoch,
-                     pair.first,
-                     pair.second,
-                     snapshot->alignmentRevision,
-                     threshold_,
-                     thresholdPolicy_};
+        next = Scope{.sessionId = snapshot->sessionId,
+                     .sessionEpoch = snapshot->sessionEpoch,
+                     .firstSource = pair.first,
+                     .secondSource = pair.second,
+                     .alignmentRevision = snapshot->alignmentRevision,
+                     .comparison = snapshot->validatedComparison,
+                     .canonicalFrameCount = snapshot->canonicalFrameCount,
+                     .canonicalTimeline = snapshot->canonicalTimeline,
+                     .sourceTimelines = snapshot->sourceTimelines,
+                     .alignmentOffsets = snapshot->alignmentOffsets,
+                     .sequenceMaps = snapshot->sequenceAlignmentMaps,
+                     .alignmentMode = snapshot->alignmentMode};
         available = true;
     }
     const bool availabilityChanged = available != available_;
@@ -332,7 +347,7 @@ void PairMetricsController::clear() {
 
 qreal PairMetricsController::maeAt(const qint64 frame) const {
     const auto found = samples_.find(frame);
-    return found == samples_.end() ? -1.0 : found->second.metrics.mae;
+    return found == samples_.end() ? -1.0 : found->second.analysis.metrics.mae;
 }
 
 bool PairMetricsController::comparableAt(const qint64 frame) const {
@@ -352,7 +367,7 @@ QVariantList PairMetricsController::peakFrames(const int maximumCount,
     };
     std::vector<Candidate> candidates;
     for (const auto& [frame, sample] : samples_) {
-        if (!sample.comparable || sample.metrics.mae <= 0.0) {
+        if (!sample.comparable || sample.analysis.metrics.mae <= 0.0) {
             continue;
         }
         // A frame is a peak only when it strictly dominates every comparable neighbor in the
@@ -371,13 +386,13 @@ QVariantList PairMetricsController::peakFrames(const int maximumCount,
             if (!iterator->second.comparable) {
                 continue;
             }
-            if (iterator->second.metrics.mae >= sample.metrics.mae) {
+            if (iterator->second.analysis.metrics.mae >= sample.analysis.metrics.mae) {
                 isPeak = false;
                 break;
             }
         }
         if (isPeak) {
-            candidates.push_back(Candidate{frame, sample.metrics.mae});
+            candidates.push_back(Candidate{frame, sample.analysis.metrics.mae});
         }
     }
     std::sort(candidates.begin(),
@@ -423,8 +438,8 @@ QVariantList PairMetricsController::samplePoints(const int maximumPoints) const 
              ++iterator) {
             if (iterator->second.comparable) {
                 anyComparable = true;
-                if (iterator->second.metrics.mae > strongestMae) {
-                    strongestMae = iterator->second.metrics.mae;
+                if (iterator->second.analysis.metrics.mae > strongestMae) {
+                    strongestMae = iterator->second.analysis.metrics.mae;
                     strongestFrame = iterator->first;
                 }
             }
@@ -586,8 +601,7 @@ void PairMetricsController::submitRequest() {
         .alignmentRevision = snapshot->alignmentRevision,
         .firstFrame = domain::FrameId{bestRunFirst},
         .lastFrame = domain::FrameId{bestRunLast},
-        .mismatchThreshold = static_cast<std::uint8_t>(threshold_),
-        .mismatchPolicy = thresholdPolicy_,
+        .priorityFrame = domain::FrameId{std::clamp(center, bestRunFirst, bestRunLast)},
     };
 
     if (dependencies_.service == nullptr) {
@@ -610,6 +624,34 @@ void PairMetricsController::submitRequest() {
     emit stateChanged();
 }
 
+void PairMetricsController::trimCache() {
+    std::int64_t center = samples_.empty() ? 0 : samples_.begin()->first;
+    if (dependencies_.snapshot) {
+        const auto snapshot = dependencies_.snapshot();
+        if (snapshot && snapshot->displayedFrame.has_value() &&
+            snapshot->displayedFrame->isValid()) {
+            center = snapshot->displayedFrame->value();
+        }
+    }
+    while (samples_.size() > dependencies_.maximumCachedSamples) {
+        const auto first = samples_.begin();
+        const auto last = std::prev(samples_.end());
+        const auto distance = [center](const std::int64_t frame) {
+            return frame > center ? frame - center : center - frame;
+        };
+        samples_.erase(distance(first->first) > distance(last->first) ? first : last);
+    }
+    sampleFirstFrame_ = samples_.empty() ? -1 : samples_.begin()->first;
+    sampleLastFrame_ = samples_.empty() ? -1 : samples_.rbegin()->first;
+    sampleMaxMae_ = 0.0;
+    for (const auto& [frame, sample] : samples_) {
+        static_cast<void>(frame);
+        if (sample.comparable) {
+            sampleMaxMae_ = std::max<qreal>(sampleMaxMae_, sample.analysis.metrics.mae);
+        }
+    }
+}
+
 void PairMetricsController::drainSink() {
     if (sink_ == nullptr) {
         return;
@@ -618,7 +660,7 @@ void PairMetricsController::drainSink() {
     const std::vector<application::PairMetricsBatch> batches = sink_->takeBatches();
 
     bool stateChangedNow = false;
-    if (failure.has_value()) {
+    if (failure.has_value() && hasLastRequest_ && failure->context == lastRequestContext_) {
         errorKey_ = QString::fromStdString(failure->error.userMessageKey);
         sampling_ = false;
         resetInflight();
@@ -627,11 +669,10 @@ void PairMetricsController::drainSink() {
 
     bool samplesChangedNow = false;
     for (const application::PairMetricsBatch& batch : batches) {
-        if (!scope_.has_value() || batch.context.request.sessionId != scope_->sessionId ||
+        if (!scope_.has_value() || !hasLastRequest_ || batch.context != lastRequestContext_ ||
+            batch.context.request.sessionId != scope_->sessionId ||
             batch.context.request.sessionEpoch != scope_->sessionEpoch ||
-            batch.alignmentRevision != scope_->alignmentRevision ||
-            batch.mismatchThreshold != static_cast<std::uint8_t>(threshold_) ||
-            batch.mismatchPolicy != thresholdPolicy_ || batch.sources.size() != 2U ||
+            batch.alignmentRevision != scope_->alignmentRevision || batch.sources.size() != 2U ||
             !sameSourcePair(batch.sources[0].id,
                             batch.sources[1].id,
                             scope_->firstSource,
@@ -642,17 +683,11 @@ void PairMetricsController::drainSink() {
             metricId_ = QString::fromStdString(batch.metricId);
         }
         for (const application::PairMetricsSample& sample : batch.samples) {
+            if (!sample.canonicalFrameId.isValid()) {
+                continue;
+            }
             const std::int64_t frame = sample.canonicalFrameId.value();
-            samples_.insert_or_assign(frame, Sample{sample.comparable, sample.metrics});
-            if (sample.comparable) {
-                sampleMaxMae_ = std::max<qreal>(sampleMaxMae_, sample.metrics.mae);
-            }
-            if (sampleFirstFrame_ < 0 || frame < sampleFirstFrame_) {
-                sampleFirstFrame_ = frame;
-            }
-            if (frame > sampleLastFrame_) {
-                sampleLastFrame_ = frame;
-            }
+            samples_.insert_or_assign(frame, Sample{sample.comparable, sample.analysis});
             samplesChangedNow = true;
         }
         if (batch.finalBatch) {
@@ -662,17 +697,8 @@ void PairMetricsController::drainSink() {
         stateChangedNow = true;
     }
 
-    if (samples_.size() > kMaximumCachedSamples) {
-        if (hasLastRequest_ && dependencies_.service != nullptr) {
-            dependencies_.service->cancel(lastRequestContext_);
-        }
-        hasLastRequest_ = false;
-        resetInflight();
-        samples_.clear();
-        sampleFirstFrame_ = -1;
-        sampleLastFrame_ = -1;
-        sampleMaxMae_ = 0.0;
-        samplesChangedNow = true;
+    if (samplesChangedNow) {
+        trimCache();
     }
 
     if (stateChangedNow) {

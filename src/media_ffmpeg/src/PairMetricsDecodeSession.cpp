@@ -176,6 +176,7 @@ public:
     bool flushSubmitted = false;
     bool sequentialReady = false;
     bool opened = false;
+    WorkStats work;
 };
 
 PairMetricsDecodeSession::PairMetricsDecodeSession(const domain::SourceId sourceId,
@@ -416,6 +417,10 @@ domain::SourceId PairMetricsDecodeSession::sourceId() const noexcept {
     return impl_->sourceId;
 }
 
+PairMetricsDecodeSession::WorkStats PairMetricsDecodeSession::workStats() const noexcept {
+    return impl_->work;
+}
+
 domain::Result<PairMetricsDecodeSession::RgbaFrame>
 PairMetricsDecodeSession::decodeInternal(const domain::FrameId frameId,
                                          const std::atomic<bool>& cancellationRequested,
@@ -456,6 +461,7 @@ PairMetricsDecodeSession::decodeInternal(const domain::FrameId frameId,
         const auto seekOrdinal = static_cast<std::size_t>(
             frameId.value() - static_cast<std::int64_t>(seekOrdinalBackOff));
         const std::int64_t seekTimestamp = (*impl_->presentationTimestamps)[seekOrdinal];
+        ++impl_->work.seekCount;
         const int seekResult = av_seek_frame(
             impl_->format.get(), impl_->streamIndex, seekTimestamp, AVSEEK_FLAG_BACKWARD);
         if (seekResult < 0) {
@@ -502,6 +508,7 @@ PairMetricsDecodeSession::decodeInternal(const domain::FrameId frameId,
         }
         const int receiveResult = avcodec_receive_frame(impl_->codec.get(), impl_->frame.get());
         if (receiveResult == 0) {
+            ++impl_->work.decodedFrames;
             const std::int64_t timestamp = impl_->frame->best_effort_timestamp != AV_NOPTS_VALUE
                                                ? impl_->frame->best_effort_timestamp
                                                : impl_->frame->pts;
