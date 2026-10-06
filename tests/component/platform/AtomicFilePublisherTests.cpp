@@ -246,6 +246,57 @@ TEST(AtomicFilePublisherTests, PreservesBothCopiesWhenPartialReplacementRecovery
     EXPECT_EQ(readTextFile(backup), "old");
 }
 
+TEST(AtomicFilePublisherTests, ExternalWriterMustCloseAndFlushBeforePublication) {
+    dvs::test::ScopedTemporaryDirectory directory{"dvs-atomic-test"};
+    const auto destination = directory.path() / "external.dat";
+    auto transaction = AtomicFilePublisher::begin(destination, testIdentity());
+    ASSERT_TRUE(transaction);
+    ASSERT_TRUE(transaction.value()->prepareForExternalWrite());
+    EXPECT_FALSE(transaction.value()->prepareForExternalWrite());
+    const std::string replacement = "external output";
+    EXPECT_FALSE(transaction.value()->write(asBytes(replacement)));
+    writeTextFile(transaction.value()->temporaryPath(), replacement);
+    EXPECT_FALSE(transaction.value()->publishNew());
+    EXPECT_FALSE(std::filesystem::exists(destination));
+    ASSERT_TRUE(transaction.value()->flush());
+    ASSERT_TRUE(transaction.value()->publishNew());
+    EXPECT_EQ(readTextFile(destination), replacement);
+}
+
+TEST(AtomicFilePublisherTests, MissingExternalOutputCannotBeRecreatedByFlush) {
+    dvs::test::ScopedTemporaryDirectory directory{"dvs-atomic-test"};
+    const auto destination = directory.path() / "external.dat";
+    writeTextFile(destination, "old");
+    auto transaction = AtomicFilePublisher::begin(destination, testIdentity());
+    ASSERT_TRUE(transaction);
+    ASSERT_TRUE(transaction.value()->prepareForExternalWrite());
+    ASSERT_TRUE(std::filesystem::remove(transaction.value()->temporaryPath()));
+    const auto flushed = transaction.value()->flush();
+    EXPECT_FALSE(flushed);
+    EXPECT_FALSE(transaction.value()->publishReplacingExisting());
+    EXPECT_EQ(readTextFile(destination), "old");
+    EXPECT_FALSE(std::filesystem::exists(transaction.value()->temporaryPath()));
+}
+
+TEST(AtomicFilePublisherTests, ExternalWriterHoldingTheFilePreventsFlush) {
+    dvs::test::ScopedTemporaryDirectory directory{"dvs-atomic-test"};
+    const auto destination = directory.path() / "external.dat";
+    auto transaction = AtomicFilePublisher::begin(destination, testIdentity());
+    ASSERT_TRUE(transaction);
+    ASSERT_TRUE(transaction.value()->prepareForExternalWrite());
+    const auto temporary = transaction.value()->temporaryPath();
+    const HANDLE writer = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr,
+                                      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    ASSERT_NE(writer, INVALID_HANDLE_VALUE);
+    const auto flushed = transaction.value()->flush();
+    EXPECT_TRUE(CloseHandle(writer));
+    EXPECT_FALSE(flushed);
+    EXPECT_FALSE(transaction.value()->publishNew());
+    EXPECT_FALSE(std::filesystem::exists(destination));
+    EXPECT_TRUE(transaction.value()->abandon());
+    EXPECT_FALSE(std::filesystem::exists(temporary));
+}
+
 TEST(PlatformResultTests, CarriesPlatformErrorAsEitherValueOrFailure) {
     const PlatformError valuePayload{
         .code = PlatformErrorCode::kWriteFailed,

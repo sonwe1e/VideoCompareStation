@@ -484,8 +484,10 @@
   `avformat_index_get_entry`），没有索引时退回扫包；`perform` 反向 seek 到计划起点，
   在**第一个关键帧包**处才创建输出（仅 mp4/mov 加 `movflags=+faststart`），以首包 pts 归一化
   时间戳，`dts >= 结束时间` 停止、`pts < 结束时间` 才写入，越界参考包先缓存再在结尾补写。
-  写临时文件 `<stem>.<requestId>.partial<ext>`，成功后才改名——失败/取消不留半成品；
-  取消在每个关键帧读取与每个包之间检查。
+  2026-10-06 后续修正：改用现有 `AtomicFilePublisher` 的独占临时文件，检查 AVIO 关闭与
+  flush 后再提交，移除失败时删除旧目标的回退；取消在提交前保留旧文件。普通失败清理临时
+  文件；恢复失败则保留原文件备份和新片段并报告路径。云端协议与故障测试通过，Windows
+  文件锁、Unicode 与固定依赖验收仍待完成，见 [导出提交保护](clip-export-publication.md)。
 - **控制器 `ui_qml/ClipExportController`（纯应用端口，不链 ffmpeg）**：`exportRange(QUrl)`
   在 GUI 线程把整个作业（规范源路径、`CanonicalTimeline`、规范帧数、区间、目标路径）拍成
   `Request` 再交给一个 `jthread`，工作线程**不读快照**；进度与结果用带请求号的 queued 调用

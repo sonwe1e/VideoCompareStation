@@ -1,6 +1,8 @@
 #include "dvs/media/ClipExportWriter.h"
 
 #include "AvRaii.h"
+#include "ClipExportWriterTestHooks.h"
+#include "dvs/platform/AtomicFilePublisher.h"
 
 extern "C" {
 #include <libavutil/dict.h>
@@ -21,6 +23,8 @@ extern "C" {
 
 namespace dvs::media {
 namespace {
+
+std::atomic<testing::ClipExportCloseCallback> closeOutputCallback{&avio_closep};
 
 struct CancelState final {
     const std::atomic_bool* cancelRequested = nullptr;
@@ -61,43 +65,6 @@ struct CancelState final {
     report.packetsWritten = packetsWritten;
     report.technicalDetail = std::move(detail);
     return report;
-}
-
-// Removes an abandoned work file. Disarmed once the file has been moved onto the target.
-class ScopedWorkFile final {
-public:
-    explicit ScopedWorkFile(std::filesystem::path path) : path_(std::move(path)) {}
-    ~ScopedWorkFile() {
-        release();
-    }
-
-    ScopedWorkFile(const ScopedWorkFile&) = delete;
-    ScopedWorkFile& operator=(const ScopedWorkFile&) = delete;
-    ScopedWorkFile(ScopedWorkFile&&) = delete;
-    ScopedWorkFile& operator=(ScopedWorkFile&&) = delete;
-
-    void release() noexcept {
-        if (!armed_) {
-            return;
-        }
-        armed_ = false;
-        std::error_code ignored;
-        std::filesystem::remove(path_, ignored);
-    }
-
-private:
-    std::filesystem::path path_;
-    bool armed_ = true;
-};
-
-// `clip.4.partial.mp4`: the suffix keeps the target's extension because the muxer is chosen by
-// guessing the container from the file name.
-[[nodiscard]] std::filesystem::path workFilePath(const std::filesystem::path& outputPath,
-                                                 const application::ClipExportRequestId requestId) {
-    std::filesystem::path work = outputPath.parent_path() / outputPath.stem();
-    work += "." + std::to_string(requestId) + ".partial";
-    work += outputPath.extension();
-    return work;
 }
 
 [[nodiscard]] bool muxerSupportsFaststart(const char* const muxerName) noexcept {
@@ -225,6 +192,7 @@ struct ClipCopyState final {
     AVStream* sourceStream = nullptr;
     int sourceStreamIndex = -1;
     const std::filesystem::path* workPath = nullptr;
+    const std::filesystem::path* targetPath = nullptr;
     const CancelState* cancelState = nullptr;
     std::int64_t packetsWritten = 0;
     std::int64_t firstPresentationMicroseconds = 0;
@@ -246,8 +214,14 @@ struct ClipCopyState final {
         }
         AVFormatContext* rawOutput = nullptr;
         const std::string workUrl = narrow(*state.workPath);
+        const std::string targetUrl = narrow(*state.targetPath);
+        const AVOutputFormat* const format = av_guess_format(nullptr, targetUrl.c_str(), nullptr);
+        if (format == nullptr) {
+            state.failureDetail = "FFmpeg could not pick an output container for " + targetUrl;
+            return false;
+        }
         const int allocateResult =
-            avformat_alloc_output_context2(&rawOutput, nullptr, nullptr, workUrl.c_str());
+            avformat_alloc_output_context2(&rawOutput, format, nullptr, workUrl.c_str());
         if (allocateResult < 0 || rawOutput == nullptr) {
             state.failureDetail = "FFmpeg could not pick an output container for " + workUrl +
                                   ": " + ffmpegError(allocateResult);
@@ -495,10 +469,39 @@ application::ClipExportReport ClipExportWriter::perform(const application::ClipE
                          startMicroseconds
                    : 0);
 
-    const std::filesystem::path workPath = workFilePath(job.outputPath, job.requestId);
-    ScopedWorkFile workFile{workPath};
-    std::error_code directoryError;
-    std::filesystem::create_directories(workPath.parent_path(), directoryError);
+    std::error_code pathError;
+    if (!job.outputPath.parent_path().empty()) {
+        std::filesystem::create_directories(job.outputPath.parent_path(), pathError);
+    }
+    if (pathError) {
+        return makeReport(job,
+                          application::ClipExportOutcome::kFailed,
+                          0,
+                          "The clip directory could not be created: " + pathError.message());
+    }
+    const bool replaceExisting = std::filesystem::exists(job.outputPath, pathError);
+    if (pathError) {
+        return makeReport(job,
+                          application::ClipExportOutcome::kFailed,
+                          0,
+                          "The clip destination could not be inspected: " + pathError.message());
+    }
+    auto transaction = platform::AtomicFilePublisher::begin(
+        job.outputPath, {.operation = "clip", .ownerId = "export", .revision = job.requestId});
+    if (!transaction) {
+        return makeReport(job,
+                          application::ClipExportOutcome::kFailed,
+                          0,
+                          transaction.error().technicalDetail);
+    }
+    const auto prepare = transaction.value()->prepareForExternalWrite();
+    if (!prepare) {
+        return makeReport(job,
+                          application::ClipExportOutcome::kFailed,
+                          0,
+                          prepare.error().technicalDetail);
+    }
+    const std::filesystem::path& workPath = transaction.value()->temporaryPath();
 
     internal::AvPacketPtr packet{av_packet_alloc()};
     if (!packet) {
@@ -511,6 +514,7 @@ application::ClipExportReport ClipExportWriter::perform(const application::ClipE
     copyState.presentationOrigin = opened.presentationOrigin;
     copyState.sourceStreamIndex = opened.videoStreamIndex;
     copyState.workPath = &workPath;
+    copyState.targetPath = &job.outputPath;
     copyState.cancelState = &cancelState;
     copyState.firstPresentationMicroseconds = startMicroseconds;
 
@@ -633,24 +637,42 @@ application::ClipExportReport ClipExportWriter::perform(const application::ClipE
                           copyState.packetsWritten,
                           "FFmpeg could not finalize the clip: " + ffmpegError(trailerResult));
     }
-    // The output handle has to be closed before the file can be moved onto the target.
+    // Closing flushes AVIO's buffered data and can fail even after a successful trailer.
+    // Clear pb here so the context deleter cannot silently close it a second time.
+    const int closeResult =
+        closeOutputCallback.load(std::memory_order_acquire)(&copyState.output->pb);
     copyState.output.reset();
-
-    std::error_code renameError;
-    std::filesystem::rename(workPath, job.outputPath, renameError);
-    if (renameError) {
-        std::error_code ignored;
-        std::filesystem::remove(job.outputPath, ignored);
-        std::filesystem::rename(workPath, job.outputPath, renameError);
-        if (renameError) {
-            return makeReport(job,
-                              application::ClipExportOutcome::kFailed,
-                              copyState.packetsWritten,
-                              "The finished clip could not be moved onto the target: " +
-                                  renameError.message());
-        }
+    if (isCanceled(cancelRequested)) {
+        return makeReport(
+            job, application::ClipExportOutcome::kCanceled, copyState.packetsWritten, {});
     }
-    workFile.release();
+    if (closeResult < 0) {
+        return makeReport(job,
+                          application::ClipExportOutcome::kFailed,
+                          copyState.packetsWritten,
+                          "FFmpeg could not close the clip: " + ffmpegError(closeResult));
+    }
+    const auto flushed = transaction.value()->flush();
+    if (!flushed) {
+        return makeReport(job,
+                          application::ClipExportOutcome::kFailed,
+                          copyState.packetsWritten,
+                          flushed.error().technicalDetail);
+    }
+    // Publication is the commit point. Cancellation before it leaves the old target intact;
+    // cancellation after a successful commit cannot undo a completed export.
+    if (isCanceled(cancelRequested)) {
+        return makeReport(
+            job, application::ClipExportOutcome::kCanceled, copyState.packetsWritten, {});
+    }
+    const auto published = replaceExisting ? transaction.value()->publishReplacingExisting()
+                                           : transaction.value()->publishNew();
+    if (!published) {
+        return makeReport(job,
+                          application::ClipExportOutcome::kFailed,
+                          copyState.packetsWritten,
+                          published.error().technicalDetail);
+    }
 
     if (job.progress) {
         job.progress(1.0);
@@ -660,5 +682,18 @@ application::ClipExportReport ClipExportWriter::perform(const application::ClipE
     report.firstPresentationMicroseconds = copyState.firstPresentationMicroseconds;
     return report;
 }
+
+namespace testing {
+
+ScopedClipExportCloseOverride::ScopedClipExportCloseOverride(
+    const ClipExportCloseCallback close) noexcept
+    : previous_(closeOutputCallback.exchange(close == nullptr ? &avio_closep : close,
+                                             std::memory_order_acq_rel)) {}
+
+ScopedClipExportCloseOverride::~ScopedClipExportCloseOverride() {
+    closeOutputCallback.store(previous_, std::memory_order_release);
+}
+
+} // namespace testing
 
 } // namespace dvs::media
