@@ -29,8 +29,9 @@ struct ClipExportPlan final {
     // Closed canonical-frame interval the user asked for. Inclusive on both ends, exactly like
     // kernel range playback, so "export what I just played" cannot drift by one frame.
     PlaybackRange requestedRange{};
-    // Container-aligned copy span. Start is a keyframe presentation time; the end is exclusive
-    // and empty when the clip runs to the end of the stream (an unknown/unnameable instant).
+    // Container-aligned copy span on the frame-zero-normalized timeline. Start is a keyframe
+    // presentation time; the end is exclusive and empty when the clip runs to the end of the stream
+    // (an unknown/unnameable instant).
     std::int64_t startMicroseconds = 0;
     std::optional<std::int64_t> endMicroseconds;
     // Negative when the copy start moved earlier than the requested in-point (pre-roll over the
@@ -52,8 +53,8 @@ struct ClipExportPlan final {
     const domain::CanonicalTimeline& timeline, std::int64_t frameCount, PlaybackRange requested);
 
 // Moves the plan's start onto the latest keyframe at or before the requested start. `keyframeTimes`
-// must be ascending presentation times in microseconds as reported by the demuxer. A request that
-// falls after every keyframe of its own span is rejected rather than silently exporting nothing.
+// must be ascending presentation times in microseconds relative to the first source frame. A
+// request with no usable keyframe is rejected rather than silently exporting nothing.
 [[nodiscard]] domain::Result<ClipExportPlan>
 alignClipExportStart(const domain::CanonicalTimeline& timeline,
                      ClipExportPlan plan,
@@ -83,9 +84,9 @@ struct ClipExportReport final {
     ClipExportRequestId requestId = kInvalidClipExportRequestId;
     ClipExportOutcome outcome = ClipExportOutcome::kFailed;
     std::int64_t packetsWritten = 0;
-    // Presentation time of the first copied packet in source media time. The write normalizes
-    // this instant to zero in the output, so the clip always starts at 0; when the start was
-    // pre-rolled onto an earlier keyframe this is smaller than the requested in-point.
+    // Presentation time of the first copied packet relative to the first source frame. When the
+    // start was pre-rolled onto an earlier keyframe this is smaller than the requested in-point.
+    // Output timestamps are rebased separately on the first copied decode timestamp.
     std::int64_t firstPresentationMicroseconds = 0;
     // Diagnostic only; never shown as a user-visible label.
     std::string technicalDetail;
@@ -104,10 +105,10 @@ public:
     virtual ~IClipExporter() = default;
 
     // Demux-only query of the source's video keyframes: ascending presentation times in
-    // microseconds, empty when the container exposes no keyframe information. It decodes nothing,
-    // but it does read the file, so it runs on the same worker thread as perform() and honours the
-    // same cooperative cancellation—an empty result therefore also means "stopped early", and the
-    // caller is the one that knows which of the two it asked for.
+    // microseconds relative to the first source frame, empty when no keyframe information is
+    // available. It decodes nothing, but reads the file on the same worker thread as perform() and
+    // honours the same cooperative cancellation. An empty result also means "stopped early";
+    // the caller knows which of the two it asked for.
     [[nodiscard]] virtual std::vector<std::int64_t>
     keyframeTimes(const std::filesystem::path& sourcePath,
                   const std::atomic_bool& cancelRequested) = 0;

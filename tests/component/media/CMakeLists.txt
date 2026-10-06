@@ -2,6 +2,7 @@ include(GoogleTest)
 
 add_executable(
     dvs_media_component_tests
+    ClipExportOriginTests.cpp
     ClipExportWriterTests.cpp
     MultiSourceFrameProviderTests.cpp
     FrameSetAssemblerTests.cpp
@@ -20,6 +21,7 @@ target_link_libraries(
     dvs_media_component_tests
     PRIVATE
         dvs_media_ffmpeg
+        dvs::ffmpeg_dependencies
         dvs::test_dependencies
 )
 target_compile_definitions(

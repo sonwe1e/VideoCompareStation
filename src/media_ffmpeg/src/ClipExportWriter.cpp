@@ -12,6 +12,7 @@ extern "C" {
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -113,8 +114,46 @@ struct OpenedInput final {
     internal::AvFormatContextPtr context;
     AVStream* videoStream = nullptr;
     int videoStreamIndex = -1;
+    std::int64_t presentationOrigin = 0;
     std::string error;
 };
+
+// AVStream::start_time is the first presentation timestamp, not the first decode timestamp.
+// Some demuxers cannot provide it. Match playback's display-order origin in that case by taking
+// the minimum video PTS, then rewind. This remains a demux-only operation on the export worker.
+[[nodiscard]] std::optional<std::int64_t>
+presentationOrigin(AVFormatContext* const input,
+                   const int streamIndex,
+                   const std::atomic_bool& cancelRequested) {
+    const AVStream& stream = *input->streams[streamIndex];
+    if (stream.start_time != AV_NOPTS_VALUE) {
+        return stream.start_time;
+    }
+
+    internal::AvPacketPtr packet{av_packet_alloc()};
+    if (!packet) {
+        return std::nullopt;
+    }
+    std::optional<std::int64_t> first;
+    while (!isCanceled(cancelRequested)) {
+        const int result = av_read_frame(input, packet.get());
+        if (result == AVERROR_EOF) {
+            break;
+        }
+        if (result < 0) {
+            return std::nullopt;
+        }
+        if (packet->stream_index == streamIndex && packet->pts != AV_NOPTS_VALUE) {
+            first = first.has_value() ? std::min(*first, packet->pts) : packet->pts;
+        }
+        av_packet_unref(packet.get());
+    }
+    if (isCanceled(cancelRequested) || !first.has_value() ||
+        av_seek_frame(input, streamIndex, *first, AVSEEK_FLAG_BACKWARD) < 0) {
+        return std::nullopt;
+    }
+    return first;
+}
 
 [[nodiscard]] OpenedInput openVideoInput(const std::filesystem::path& sourcePath,
                                          const CancelState& cancelState) {
@@ -163,6 +202,14 @@ struct OpenedInput final {
         opened.error = "The selected video stream carries no codec parameters.";
         return opened;
     }
+    const auto origin =
+        presentationOrigin(opened.context.get(), streamIndex, *cancelState.cancelRequested);
+    if (!origin.has_value()) {
+        opened.error = "FFmpeg could not establish the video presentation-time origin.";
+        opened.context.reset();
+        return opened;
+    }
+    opened.presentationOrigin = *origin;
     opened.videoStream = stream;
     opened.videoStreamIndex = streamIndex;
     return opened;
@@ -182,6 +229,7 @@ struct ClipCopyState final {
     std::int64_t packetsWritten = 0;
     std::int64_t firstPresentationMicroseconds = 0;
     std::int64_t timestampBase = 0;
+    std::int64_t presentationOrigin = 0;
     bool headerWritten = false;
     std::string failureDetail;
 };
@@ -251,7 +299,9 @@ struct ClipCopyState final {
         state.timestampBase = packet->dts != AV_NOPTS_VALUE ? packet->dts : packet->pts;
         if (packet->pts != AV_NOPTS_VALUE) {
             state.firstPresentationMicroseconds =
-                av_rescale_q(packet->pts, state.sourceStream->time_base, kMicrosecondsBase);
+                av_rescale_q(packet->pts - state.presentationOrigin,
+                             state.sourceStream->time_base,
+                             kMicrosecondsBase);
         }
     }
 
@@ -313,11 +363,14 @@ std::vector<std::int64_t> ClipExportWriter::keyframeTimes(const std::filesystem:
             }
 
             const std::int64_t fallbackTime = std::max<std::int64_t>(
-                av_rescale_q(entry->timestamp, stream.time_base, kMicrosecondsBase), 0);
-            // A leading sync sample can carry a negative seek timestamp: it stands for the decode
-            // timestamp of the first frame, one reorder delay before the presentation origin. The
-            // clamp keeps such an entry on the first frame instead of seeking before the stream.
-            const std::int64_t seekTimestamp = std::max<std::int64_t>(entry->timestamp, 0);
+                av_rescale_q(entry->timestamp - opened.presentationOrigin,
+                             stream.time_base,
+                             kMicrosecondsBase),
+                0);
+            // A leading sync sample can precede the first presentation timestamp by the reorder
+            // delay. Clamp to the stream's origin, which is not necessarily timestamp zero.
+            const std::int64_t seekTimestamp =
+                std::max(entry->timestamp, opened.presentationOrigin);
             const int seekResult = av_seek_frame(
                 opened.context.get(), opened.videoStreamIndex, seekTimestamp, AVSEEK_FLAG_BACKWARD);
             if (seekResult < 0) {
@@ -333,7 +386,8 @@ std::vector<std::int64_t> ClipExportWriter::keyframeTimes(const std::filesystem:
                 times.push_back(fallbackTime);
                 continue;
             }
-            times.push_back(av_rescale_q(pts, stream.time_base, kMicrosecondsBase));
+            times.push_back(av_rescale_q(
+                pts - opened.presentationOrigin, stream.time_base, kMicrosecondsBase));
             av_packet_unref(packet.get());
         }
     } else {
@@ -346,7 +400,8 @@ std::vector<std::int64_t> ClipExportWriter::keyframeTimes(const std::filesystem:
             const std::int64_t pts = packet->pts != AV_NOPTS_VALUE ? packet->pts : packet->dts;
             if (packet->stream_index == opened.videoStreamIndex && pts != AV_NOPTS_VALUE &&
                 (packet->flags & AV_PKT_FLAG_KEY) != 0) {
-                times.push_back(av_rescale_q(pts, stream.time_base, kMicrosecondsBase));
+                times.push_back(av_rescale_q(
+                    pts - opened.presentationOrigin, stream.time_base, kMicrosecondsBase));
             }
             av_packet_unref(packet.get());
         }
@@ -381,13 +436,20 @@ application::ClipExportReport ClipExportWriter::perform(const application::ClipE
     }
     OpenedInput opened = openVideoInput(job.sourcePath, cancelState);
     if (!opened.context) {
-        return makeReport(job, application::ClipExportOutcome::kFailed, 0, std::move(opened.error));
+        return makeReport(job,
+                          isCanceled(cancelRequested) ? application::ClipExportOutcome::kCanceled
+                                                      : application::ClipExportOutcome::kFailed,
+                          0,
+                          std::move(opened.error));
     }
     AVStream* const videoStream = opened.videoStream;
 
     const std::int64_t startMicroseconds = job.plan.startMicroseconds;
-    const int seekResult =
-        av_seek_frame(opened.context.get(), -1, startMicroseconds, AVSEEK_FLAG_BACKWARD);
+    const std::int64_t startPts =
+        opened.presentationOrigin +
+        av_rescale_q(startMicroseconds, kMicrosecondsBase, videoStream->time_base);
+    const int seekResult = av_seek_frame(
+        opened.context.get(), opened.videoStreamIndex, startPts, AVSEEK_FLAG_BACKWARD);
     if (seekResult < 0) {
         // A cancellation that lands during the seek interrupts it; that is not a broken source.
         if (isCanceled(cancelRequested)) {
@@ -405,12 +467,17 @@ application::ClipExportReport ClipExportWriter::perform(const application::ClipE
     // a timebase rescale would only add a rounding opportunity to skip that very keyframe.
     const std::int64_t endPts =
         job.plan.endMicroseconds.has_value()
-            ? av_rescale_q(*job.plan.endMicroseconds, kMicrosecondsBase, videoStream->time_base)
+            ? opened.presentationOrigin +
+                  av_rescale_q(*job.plan.endMicroseconds, kMicrosecondsBase, videoStream->time_base)
             : 0;
     const std::int64_t spanMicroseconds =
         job.plan.endMicroseconds.has_value()
             ? *job.plan.endMicroseconds - startMicroseconds
-            : (opened.context->duration > 0 ? opened.context->duration - startMicroseconds : 0);
+            : (videoStream->duration > 0
+                   ? av_rescale_q(
+                         videoStream->duration, videoStream->time_base, kMicrosecondsBase) -
+                         startMicroseconds
+                   : 0);
 
     const std::filesystem::path workPath = workFilePath(job.outputPath, job.requestId);
     ScopedWorkFile workFile{workPath};
@@ -425,6 +492,7 @@ application::ClipExportReport ClipExportWriter::perform(const application::ClipE
 
     ClipCopyState copyState;
     copyState.sourceStream = videoStream;
+    copyState.presentationOrigin = opened.presentationOrigin;
     copyState.sourceStreamIndex = opened.videoStreamIndex;
     copyState.workPath = &workPath;
     copyState.cancelState = &cancelState;
@@ -469,7 +537,7 @@ application::ClipExportReport ClipExportWriter::perform(const application::ClipE
         const std::int64_t decodeCursor =
             packet->dts != AV_NOPTS_VALUE
                 ? packet->dts
-                : (packet->pts != AV_NOPTS_VALUE ? packet->pts : startMicroseconds);
+                : (packet->pts != AV_NOPTS_VALUE ? packet->pts : startPts);
         const std::int64_t presentationCursor =
             packet->pts != AV_NOPTS_VALUE ? packet->pts : decodeCursor;
         if (job.plan.endMicroseconds.has_value() && decodeCursor >= endPts) {
@@ -510,7 +578,9 @@ application::ClipExportReport ClipExportWriter::perform(const application::ClipE
         if (job.progress && spanMicroseconds > 0) {
             const double fraction = std::clamp(
                 static_cast<double>(
-                    av_rescale_q(presentationCursor, videoStream->time_base, kMicrosecondsBase) -
+                    av_rescale_q(presentationCursor - opened.presentationOrigin,
+                                 videoStream->time_base,
+                                 kMicrosecondsBase) -
                     startMicroseconds) /
                     static_cast<double>(spanMicroseconds),
                 0.0,
