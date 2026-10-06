@@ -24,6 +24,9 @@ public:
     // Returns the first integer microsecond at or after the exact rational frame boundary.
     // Paired with frameAtOrBefore(), this makes each returned start time map back to its FrameId.
     [[nodiscard]] Result<MediaTime> frameStartTime(FrameId frameId) const;
+    // Nearest whole microsecond, with exact halves rounded up, for matching packet presentation
+    // times. This is not a canonical lower bound; frameStartTime() keeps its ceiling contract.
+    [[nodiscard]] Result<MediaTime> frameStartTimeRounded(FrameId frameId) const;
     [[nodiscard]] Result<FrameId> frameAtOrBefore(MediaTime time) const;
     [[nodiscard]] Result<MediaTime> frameIntervalCeiling() const;
 

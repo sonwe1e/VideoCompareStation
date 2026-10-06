@@ -105,8 +105,10 @@ are a sanity check, not high-bitrate, slow-storage or Windows performance accept
   enumeration alone is not proof of successful TS or negative-origin export
 - The planner has a pre-existing rounded frame-label issue at 24000/1001: the key at frame 16
   can report `firstExportedFrame=15` after microsecond conversion, although the actual export
-  starts at frame 16. This separate reporting issue is not changed here
-- The existing VFR UI restriction and target remove/rename failure window remain open
+  starts at frame 16. This separate reporting issue was unchanged in that patch; the subsequent
+  [frame-metadata correction](clip-export-frame-metadata.md) covers nearest-microsecond rounding
+- The VFR UI restriction remains separate. The target remove/rename failure window present at
+  that patch's baseline is addressed by the later [publication repair](clip-export-publication.md)
 
 Run the supported Windows wrapper before platform acceptance:
 

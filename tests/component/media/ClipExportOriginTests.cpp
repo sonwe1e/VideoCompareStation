@@ -84,7 +84,9 @@ struct PresentedPacket final {
 [[nodiscard]] bool writeRepeatedGops(const std::filesystem::path& source,
                                      const std::filesystem::path& target,
                                      const int gopCount,
-                                     const std::int64_t originTicks) {
+                                     const std::int64_t originTicks,
+                                     const AVRational rate = AVRational{30000, 1001},
+                                     const bool keyframesOnly = false) {
     const auto sourceUtf8 = source.u8string();
     const std::string sourceUrl{reinterpret_cast<const char*>(sourceUtf8.data()),
                                 sourceUtf8.size()};
@@ -115,6 +117,13 @@ struct PresentedPacket final {
     if (packets.size() != 12U) {
         return false;
     }
+    if (keyframesOnly) {
+        if ((packets.front()->flags & AV_PKT_FLAG_KEY) == 0) {
+            return false;
+        }
+        // Repeating an independent IDR gives one-frame GOPs without an encoder dependency.
+        packets.resize(1U);
+    }
 
     const auto targetUtf8 = target.u8string();
     const std::string targetUrl{reinterpret_cast<const char*>(targetUtf8.data()),
@@ -130,21 +139,24 @@ struct PresentedPacket final {
         avcodec_parameters_copy(outputStream->codecpar, inputStream->codecpar) < 0) {
         return false;
     }
-    outputStream->time_base = AVRational{1, 30000};
-    outputStream->avg_frame_rate = AVRational{30000, 1001};
+    outputStream->time_base = AVRational{1, rate.num};
+    outputStream->avg_frame_rate = rate;
     outputStream->codecpar->codec_tag = 0;
     if (avio_open2(&output->pb, targetUrl.c_str(), AVIO_FLAG_WRITE, nullptr, nullptr) < 0) {
         return false;
     }
     AVDictionary* options = nullptr;
-    av_dict_set(&options, "movie_timescale", "30000", 0);
+    av_dict_set_int(&options, "movie_timescale", rate.num, 0);
+    av_dict_set_int(&options, "video_track_timescale", rate.num, 0);
     const int headerResult = avformat_write_header(output.get(), &options);
     av_dict_free(&options);
     if (headerResult < 0) {
         return false;
     }
     for (int gop = 0; gop < gopCount; ++gop) {
-        const std::int64_t offset = originTicks + static_cast<std::int64_t>(gop) * 12 * 1001;
+        const std::int64_t offset =
+            originTicks + static_cast<std::int64_t>(gop) *
+                              static_cast<std::int64_t>(packets.size()) * rate.den;
         for (const auto& original : packets) {
             if (av_packet_ref(packet.get(), original.get()) < 0) {
                 return false;
@@ -153,11 +165,11 @@ struct PresentedPacket final {
                 av_rescale_q(packet->pts, inputStream->time_base, AVRational{1, 30});
             const auto frameDts =
                 av_rescale_q(packet->dts, inputStream->time_base, AVRational{1, 30});
-            packet->pts = offset + framePts * 1001;
-            packet->dts = offset + frameDts * 1001;
-            packet->duration = 1001;
+            packet->pts = keyframesOnly ? offset : offset + framePts * rate.den;
+            packet->dts = keyframesOnly ? offset : offset + frameDts * rate.den;
+            packet->duration = rate.den;
             packet->pos = -1;
-            av_packet_rescale_ts(packet.get(), AVRational{1, 30000}, outputStream->time_base);
+            av_packet_rescale_ts(packet.get(), AVRational{1, rate.num}, outputStream->time_base);
             if (av_interleaved_write_frame(output.get(), packet.get()) < 0) {
                 return false;
             }
@@ -284,6 +296,65 @@ TEST_P(ClipExportOriginTests, FindsEveryIndexedKeyframeIncludingTheFinalGop) {
             }
             EXPECT_EQ(presentedPackets(target), expected);
             EXPECT_EQ(report.packetsWritten, static_cast<std::int64_t>(count));
+        }
+    }
+}
+
+TEST_P(ClipExportOriginTests, ReportsTheActualFrameAtRoundedPacketTimes) {
+    const auto fixture = std::filesystem::path{DVS_MEDIA_FIXTURE_DIR} /
+                         "h264_a_320x180_30fps_12.mp4";
+    const auto [inFrame, outFrame] = GetParam();
+    const int firstFrame = inFrame + 1;
+    const std::atomic_bool cancel{false};
+    ClipExportWriter writer;
+    for (const auto rate : {AVRational{24000, 1001}, AVRational{30000, 1001},
+                           AVRational{60000, 1001}, AVRational{25, 1}}) {
+        const domain::CanonicalTimeline timeline{
+            domain::RationalRate::create(rate.num, rate.den).value()};
+        for (const std::int64_t origin : {0, rate.num * 5, rate.num * 5 + 4}) {
+            SCOPED_TRACE(testing::Message() << rate.num << '/' << rate.den << " origin=" << origin);
+            const auto source = workspace_ / "rounded.mp4";
+            const auto target = workspace_ / "rounded-clip.mp4";
+            ASSERT_TRUE(writeRepeatedGops(fixture, source, 12, origin, rate, true));
+            const auto keys = writer.keyframeTimes(source, cancel);
+            ASSERT_EQ(keys.size(), 12U);
+            const auto planned = application::planClipExport(
+                timeline, 12, {domain::FrameId{firstFrame}, domain::FrameId{outFrame}});
+            ASSERT_TRUE(planned.hasValue());
+            const auto aligned = application::alignClipExportStart(timeline, planned.value(), keys);
+            ASSERT_TRUE(aligned.hasValue());
+            EXPECT_EQ(aligned.value().firstExportedFrame, domain::FrameId{firstFrame});
+            EXPECT_EQ(aligned.value().startMicroseconds,
+                      keys[static_cast<std::size_t>(firstFrame)]);
+            EXPECT_EQ(aligned.value().endMicroseconds, planned.value().endMicroseconds);
+
+            application::ClipExportJob job;
+            job.requestId = 93U;
+            job.sourcePath = source;
+            job.outputPath = target;
+            job.plan = aligned.value();
+            const auto report = writer.perform(job, cancel);
+            ASSERT_EQ(report.outcome, application::ClipExportOutcome::kCompleted)
+                << report.technicalDetail;
+            EXPECT_EQ(report.firstPresentationMicroseconds, aligned.value().startMicroseconds);
+            EXPECT_EQ(report.packetsWritten, outFrame - firstFrame + 1);
+            std::int64_t actualOrigin = AV_NOPTS_VALUE;
+            auto expected = presentedPackets(source, &actualOrigin);
+            EXPECT_EQ(actualOrigin, origin);
+            ASSERT_EQ(expected.size(), 12U);
+            expected.resize(static_cast<std::size_t>(outFrame + 1));
+            expected.erase(expected.begin(), expected.begin() + firstFrame);
+            const auto actual = presentedPackets(target);
+            ASSERT_EQ(actual.size(), expected.size());
+            for (std::size_t index = 0; index < actual.size(); ++index) {
+                // The IDRs deliberately have identical pixels; packet time and position in the
+                // source establish the ordinal, while bytes prove a lossless remux.
+                EXPECT_EQ(actual[index].bytes, expected[index].bytes);
+                EXPECT_EQ(actual[index].microseconds,
+                          av_rescale_q(static_cast<std::int64_t>(index),
+                                       AVRational{rate.den, rate.num},
+                                       AVRational{1, AV_TIME_BASE}));
+            }
         }
     }
 }

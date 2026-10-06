@@ -1,5 +1,6 @@
 #include "dvs/domain/RationalRate.h"
 
+#include <array>
 #include <cstdint>
 #include <gtest/gtest.h>
 #include <limits>
@@ -57,9 +58,52 @@ TEST(RationalRateTests, UsesFloorForFrameBoundaryConversions) {
     EXPECT_EQ(invalidFrame.error().code, MediaErrorCode::kInvalidFrameId);
 }
 
+TEST(RationalRateTests, RoundsPresentationTimesWithoutChangingCanonicalCeilings) {
+    const auto fractional = RationalRate::create(30000, 1001).value();
+    const std::array expected{std::int64_t{0}, std::int64_t{33367}, std::int64_t{66733}};
+    for (std::int64_t frame = 0; frame < 3; ++frame) {
+        const auto rounded = fractional.frameStartTimeRounded(FrameId{frame});
+        ASSERT_TRUE(rounded.hasValue());
+        EXPECT_EQ(rounded.value().microseconds(), expected[static_cast<std::size_t>(frame)]);
+    }
+    EXPECT_EQ(fractional.frameStartTime(FrameId{2}).value().microseconds(), 66734);
+    EXPECT_EQ(fractional.frameAtOrBefore(MediaTime{66733}).value(), FrameId{1});
+    EXPECT_EQ(RationalRate::create(128, 1).value().frameStartTimeRounded(FrameId{1}).value(),
+              MediaTime{7813});
+    EXPECT_EQ(RationalRate::create(25, 1).value().frameStartTimeRounded(FrameId{1}).value(),
+              MediaTime{40000});
+    EXPECT_EQ(fractional.frameStartTimeRounded(FrameId{2'000'000'000}).value(),
+              MediaTime{66'733'333'333'333});
+}
+
+TEST(RationalRateTests, RejectsInvalidAndOverflowingRoundedPresentationTimes) {
+    const auto rate = RationalRate::create(1, 1).value();
+    for (const auto frame : {std::int64_t{-1}, std::numeric_limits<std::int64_t>::max()}) {
+        const auto invalid = rate.frameStartTimeRounded(FrameId{frame});
+        ASSERT_FALSE(invalid.hasValue());
+        EXPECT_EQ(invalid.error().code, MediaErrorCode::kInvalidFrameId);
+    }
+    const auto overflow =
+        rate.frameStartTimeRounded(FrameId{std::numeric_limits<std::int64_t>::max() - 1});
+    ASSERT_FALSE(overflow.hasValue());
+    EXPECT_EQ(overflow.error().code, MediaErrorCode::kArithmeticOverflow);
+
+    constexpr auto maximum = std::numeric_limits<std::int64_t>::max();
+    const auto exactMaximum = RationalRate::create(1'000'000, maximum).value();
+    const auto exact = exactMaximum.frameStartTimeRounded(FrameId{1});
+    ASSERT_TRUE(exact.hasValue());
+    EXPECT_EQ(exact.value().microseconds(), maximum);
+    const auto nearMaximum = RationalRate::create(2'000'000, 6'148'914'691'236'517'205).value();
+    const auto carryOverflow = nearMaximum.frameStartTimeRounded(FrameId{3});
+    ASSERT_FALSE(carryOverflow.hasValue());
+    EXPECT_EQ(carryOverflow.error().code, MediaErrorCode::kArithmeticOverflow);
+}
+
 TEST(RationalRateTests, RejectsInvalidRatesAndUnrepresentableConversions) {
     EXPECT_FALSE(RationalRate::create(0, 1).hasValue());
     EXPECT_FALSE(RationalRate::create(1, 0).hasValue());
+    EXPECT_FALSE(RationalRate::create(-1, 1).hasValue());
+    EXPECT_FALSE(RationalRate::create(1, -1).hasValue());
 
     const auto rateResult = RationalRate::create(1, 1);
     ASSERT_TRUE(rateResult.hasValue());

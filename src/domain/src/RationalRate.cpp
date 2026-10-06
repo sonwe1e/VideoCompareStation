@@ -175,6 +175,29 @@ Result<MediaTime> RationalRate::frameStartTime(const FrameId frameId) const {
     return Result<MediaTime>::success(MediaTime{microseconds});
 }
 
+Result<MediaTime> RationalRate::frameStartTimeRounded(const FrameId frameId) const {
+    if (!frameId.isValid()) {
+        return Result<MediaTime>::failure(rationalError(MediaErrorCode::kInvalidFrameId,
+                                                        "Frame ID must be zero-based and finite."));
+    }
+
+    std::int64_t microseconds = 0;
+    std::int64_t remainder = 0;
+    if (!multiplyFactorsAndDivide({frameId.value(), denominator_, kMicrosecondsPerSecond},
+                                  numerator_,
+                                  &microseconds,
+                                  &remainder)) {
+        return Result<MediaTime>::failure(rationalError(
+            MediaErrorCode::kArithmeticOverflow, "Frame-to-microsecond conversion overflowed."));
+    }
+    // Compare without doubling the remainder or adding one to a possibly maximal numerator.
+    if (remainder >= numerator_ - remainder && !addChecked(microseconds, 1, &microseconds)) {
+        return Result<MediaTime>::failure(rationalError(
+            MediaErrorCode::kArithmeticOverflow, "Frame-to-microsecond rounding overflowed."));
+    }
+    return Result<MediaTime>::success(MediaTime{microseconds});
+}
+
 Result<FrameId> RationalRate::frameAtOrBefore(const MediaTime time) const {
     if (time.microseconds() < 0) {
         return Result<FrameId>::failure(

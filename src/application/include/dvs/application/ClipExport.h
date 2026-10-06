@@ -38,8 +38,9 @@ struct ClipExportPlan final {
     // preceding frames of the GOP), positive when the requested in-point precedes the first
     // keyframe. Zero means the request already landed on a keyframe.
     std::int64_t startShiftMicroseconds = 0;
-    // Canonical frame the copy actually starts on, when the demuxer's keyframe time maps back
-    // onto the canonical timeline. Empty for a variable-rate timeline that cannot name it.
+    // Canonical frame the copy starts on, allowing nearest-microsecond rounding of a rational
+    // frame boundary. Other times retain at-or-before mapping; coarse container timestamps do
+    // not establish an exact frame identity. Empty when the timeline cannot name a frame.
     std::optional<domain::FrameId> firstExportedFrame;
     std::int64_t requestedFrameCount = 0;
 
