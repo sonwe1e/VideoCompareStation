@@ -4,6 +4,7 @@
 #include "AvRaii.h"
 
 extern "C" {
+#include <libavutil/dict.h>
 #include <libavutil/mathematics.h>
 }
 
@@ -30,7 +31,8 @@ struct PresentedPacket final {
 
 // Compare the actual compressed frame identities and their spacing, independently of the
 // writer's packet counter. Each file's first presentation timestamp is its local origin.
-[[nodiscard]] std::vector<PresentedPacket> presentedPackets(const std::filesystem::path& path) {
+[[nodiscard]] std::vector<PresentedPacket> presentedPackets(
+    const std::filesystem::path& path, std::int64_t* const rawOrigin = nullptr) {
     const std::u8string utf8 = path.u8string();
     const std::string url{reinterpret_cast<const char*>(utf8.data()), utf8.size()};
     AVFormatContext* raw = nullptr;
@@ -65,6 +67,9 @@ struct PresentedPacket final {
     });
     if (!result.empty()) {
         const std::int64_t origin = result.front().microseconds;
+        if (rawOrigin != nullptr) {
+            *rawOrigin = origin;
+        }
         for (PresentedPacket& value : result) {
             value.microseconds = av_rescale_q(value.microseconds - origin,
                                               input->streams[streamIndex]->time_base,
@@ -72,6 +77,93 @@ struct PresentedPacket final {
         }
     }
     return result;
+}
+
+// Reuse the checked-in 12-frame closed GOP without adding an encoder or CLI dependency.
+// At 30000/1001 fps, individual frame endpoints need rounding in the microsecond plan.
+[[nodiscard]] bool writeRepeatedGops(const std::filesystem::path& source,
+                                     const std::filesystem::path& target,
+                                     const int gopCount,
+                                     const std::int64_t originTicks) {
+    const auto sourceUtf8 = source.u8string();
+    const std::string sourceUrl{reinterpret_cast<const char*>(sourceUtf8.data()),
+                                sourceUtf8.size()};
+    AVFormatContext* rawInput = nullptr;
+    if (avformat_open_input(&rawInput, sourceUrl.c_str(), nullptr, nullptr) < 0) {
+        return false;
+    }
+    internal::AvFormatContextPtr input{rawInput};
+    if (avformat_find_stream_info(input.get(), nullptr) < 0 || input->nb_streams != 1) {
+        return false;
+    }
+    AVStream* const inputStream = input->streams[0];
+    std::vector<internal::AvPacketPtr> packets;
+    internal::AvPacketPtr packet{av_packet_alloc()};
+    if (!packet) {
+        return false;
+    }
+    while (av_read_frame(input.get(), packet.get()) >= 0) {
+        if (packet->pts == AV_NOPTS_VALUE || packet->dts == AV_NOPTS_VALUE) {
+            return false;
+        }
+        packets.emplace_back(av_packet_clone(packet.get()));
+        if (!packets.back()) {
+            return false;
+        }
+        av_packet_unref(packet.get());
+    }
+    if (packets.size() != 12U) {
+        return false;
+    }
+
+    const auto targetUtf8 = target.u8string();
+    const std::string targetUrl{reinterpret_cast<const char*>(targetUtf8.data()),
+                                targetUtf8.size()};
+    AVFormatContext* rawOutput = nullptr;
+    if (avformat_alloc_output_context2(&rawOutput, nullptr, "mp4", targetUrl.c_str()) < 0 ||
+        rawOutput == nullptr) {
+        return false;
+    }
+    internal::AvOutputFormatContextPtr output{rawOutput};
+    AVStream* const outputStream = avformat_new_stream(output.get(), nullptr);
+    if (outputStream == nullptr ||
+        avcodec_parameters_copy(outputStream->codecpar, inputStream->codecpar) < 0) {
+        return false;
+    }
+    outputStream->time_base = AVRational{1, 30000};
+    outputStream->avg_frame_rate = AVRational{30000, 1001};
+    outputStream->codecpar->codec_tag = 0;
+    if (avio_open2(&output->pb, targetUrl.c_str(), AVIO_FLAG_WRITE, nullptr, nullptr) < 0) {
+        return false;
+    }
+    AVDictionary* options = nullptr;
+    av_dict_set(&options, "movie_timescale", "30000", 0);
+    const int headerResult = avformat_write_header(output.get(), &options);
+    av_dict_free(&options);
+    if (headerResult < 0) {
+        return false;
+    }
+    for (int gop = 0; gop < gopCount; ++gop) {
+        const std::int64_t offset = originTicks + static_cast<std::int64_t>(gop) * 12 * 1001;
+        for (const auto& original : packets) {
+            if (av_packet_ref(packet.get(), original.get()) < 0) {
+                return false;
+            }
+            const auto framePts =
+                av_rescale_q(packet->pts, inputStream->time_base, AVRational{1, 30});
+            const auto frameDts =
+                av_rescale_q(packet->dts, inputStream->time_base, AVRational{1, 30});
+            packet->pts = offset + framePts * 1001;
+            packet->dts = offset + frameDts * 1001;
+            packet->duration = 1001;
+            packet->pos = -1;
+            av_packet_rescale_ts(packet.get(), AVRational{1, 30000}, outputStream->time_base);
+            if (av_interleaved_write_frame(output.get(), packet.get()) < 0) {
+                return false;
+            }
+        }
+    }
+    return av_write_trailer(output.get()) >= 0;
 }
 
 class ClipExportOriginTests : public testing::TestWithParam<std::pair<int, int>> {
@@ -135,6 +227,65 @@ TEST_P(ClipExportOriginTests, ExportsTheSelectedFramesFromANonzeroPresentationOr
     EXPECT_GT(progress[1], 0.0);
     EXPECT_LT(progress[1], 1.0);
     EXPECT_DOUBLE_EQ(progress.back(), 1.0);
+}
+
+TEST_P(ClipExportOriginTests, FindsEveryIndexedKeyframeIncludingTheFinalGop) {
+    const auto fixture = std::filesystem::path{DVS_MEDIA_FIXTURE_DIR} /
+                         "h264_a_320x180_30fps_12.mp4";
+    const domain::CanonicalTimeline timeline{domain::RationalRate::create(30000, 1001).value()};
+    const auto [inFrame, outFrame] = GetParam();
+    const std::atomic_bool cancel{false};
+    ClipExportWriter writer;
+    for (const int gopCount : {1, 6}) {
+        for (const std::int64_t origin : {0, 150000, 150004}) {
+            SCOPED_TRACE(testing::Message() << "gops=" << gopCount << " origin=" << origin);
+            const auto source = workspace_ / "indexed.mp4";
+            const auto target = workspace_ / "last-gop.mp4";
+            ASSERT_TRUE(writeRepeatedGops(fixture, source, gopCount, origin));
+            const auto keyframes = writer.keyframeTimes(source, cancel);
+            std::vector<std::int64_t> expectedKeys;
+            for (int gop = 0; gop < gopCount; ++gop) {
+                expectedKeys.push_back(static_cast<std::int64_t>(gop) * 400400);
+            }
+            EXPECT_EQ(keyframes, expectedKeys);
+
+            const int firstFrame = (gopCount - 1) * 12;
+            const auto planned = application::planClipExport(
+                timeline,
+                gopCount * 12,
+                {domain::FrameId{firstFrame + inFrame}, domain::FrameId{firstFrame + outFrame}});
+            ASSERT_TRUE(planned.hasValue());
+            const auto aligned =
+                application::alignClipExportStart(timeline, planned.value(), keyframes);
+            ASSERT_TRUE(aligned.hasValue());
+            EXPECT_EQ(aligned.value().startMicroseconds, expectedKeys.back());
+
+            application::ClipExportJob job;
+            job.requestId = 92U;
+            job.sourcePath = source;
+            job.outputPath = target;
+            job.plan = aligned.value();
+            const auto report = writer.perform(job, cancel);
+            ASSERT_EQ(report.outcome, application::ClipExportOutcome::kCompleted)
+                << report.technicalDetail;
+            EXPECT_EQ(report.firstPresentationMicroseconds, expectedKeys.back());
+
+            std::int64_t actualOrigin = AV_NOPTS_VALUE;
+            auto expected = presentedPackets(source, &actualOrigin);
+            EXPECT_EQ(actualOrigin, origin);
+            ASSERT_EQ(expected.size(), static_cast<std::size_t>(gopCount * 12));
+            expected.erase(expected.begin(), expected.begin() + firstFrame);
+            // Frame 7 still requires frame 8, even when cutting inside the final GOP.
+            const std::size_t count = outFrame == 4 ? 5U : (outFrame == 7 ? 9U : 12U);
+            expected.resize(count);
+            const auto firstTime = expected.front().microseconds;
+            for (auto& value : expected) {
+                value.microseconds -= firstTime;
+            }
+            EXPECT_EQ(presentedPackets(target), expected);
+            EXPECT_EQ(report.packetsWritten, static_cast<std::int64_t>(count));
+        }
+    }
 }
 
 INSTANTIATE_TEST_SUITE_P(FirstMiddleLast,

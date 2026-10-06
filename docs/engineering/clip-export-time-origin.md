@@ -60,7 +60,8 @@ The review also confirmed two pre-existing limits, neither fixed nor hidden by t
 
 - On that multi-GOP MP4, keyframe lookup omits the final keyframe at frame 75. A selection late
   in the final GOP therefore pre-rolls farther than necessary. The unmodified writer reproduces
-  it; selected frames remain present. Fix the index-to-presentation lookup separately
+  it; selected frames remain present. The subsequent [indexed-keyframe correction](clip-export-final-keyframe.md)
+  fixes the verified MP4 path separately, with its additional packet-I/O cost documented
 - On generated MPEG-TS, backward seeking to the first presentation timestamp can skip the first
   GOP's keyframe and make export report an empty span. The unmodified writer reproduces this on
   the zero-origin control. Fixed-writer probes at zero, +5 and −5 seconds failed equivalently.

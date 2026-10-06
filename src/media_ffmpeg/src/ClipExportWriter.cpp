@@ -344,51 +344,67 @@ std::vector<std::int64_t> ClipExportWriter::keyframeTimes(const std::filesystem:
 
     const int indexEntryCount = avformat_index_get_entries_count(&stream);
     if (indexEntryCount > 0) {
-        // The plan aligns in presentation time, while a container index stores seek timestamps,
-        // which are decode-order values for a reordered stream (MP4 keeps the DTS of the sync
-        // sample, so it sits a reorder delay before the frame it decodes to). Every sync entry is
-        // therefore resolved by seeking to it and reading the presentation time of the packet it
-        // lands on: the same seek the export itself performs, which keeps the plan and the copy
-        // agreeing on where the clip starts.
-        for (int index = 0; index < indexEntryCount; ++index) {
+        // Index timestamps are demuxer-specific: MP4 stores DTS, but its seek accepts PTS.
+        // A backward seek can therefore land one GOP before the indexed keyframe. Resolve the
+        // entry by walking forward to its byte position, then read the keyframe's actual PTS.
+        // Cluster-based indexes can point before the packet, so accept positions at or after it.
+        std::int64_t previousPosition = -1;
+        bool scanToEnd = false;
+        for (int index = 0; index < indexEntryCount && !scanToEnd; ++index) {
             if (isCanceled(cancelRequested)) {
                 return {};
             }
             const AVIndexEntry* const entry = avformat_index_get_entry(&stream, index);
             if (entry == nullptr) {
-                break;
+                return {};
             }
             if ((entry->flags & AVINDEX_KEYFRAME) == 0) {
                 continue;
             }
-
-            const std::int64_t fallbackTime = std::max<std::int64_t>(
-                av_rescale_q(entry->timestamp - opened.presentationOrigin,
-                             stream.time_base,
-                             kMicrosecondsBase),
-                0);
-            // A leading sync sample can precede the first presentation timestamp by the reorder
-            // delay. Clamp to the stream's origin, which is not necessarily timestamp zero.
+            // Seeking/reading can grow the demuxer's index and invalidate the entry pointer.
+            const std::int64_t indexedPosition = entry->pos;
             const std::int64_t seekTimestamp =
                 std::max(entry->timestamp, opened.presentationOrigin);
             const int seekResult = av_seek_frame(
                 opened.context.get(), opened.videoStreamIndex, seekTimestamp, AVSEEK_FLAG_BACKWARD);
             if (seekResult < 0) {
-                times.push_back(fallbackTime);
-                continue;
+                return {};
             }
 
-            const int readResult = av_read_frame(opened.context.get(), packet.get());
-            const std::int64_t pts = packet->pts != AV_NOPTS_VALUE ? packet->pts : packet->dts;
-            if (readResult < 0 || packet->stream_index != opened.videoStreamIndex ||
-                pts == AV_NOPTS_VALUE) {
+            while (!isCanceled(cancelRequested)) {
+                const int readResult = av_read_frame(opened.context.get(), packet.get());
+                if (readResult < 0) {
+                    if (scanToEnd && readResult == AVERROR_EOF) {
+                        break;
+                    }
+                    // A failed lookup must not turn an index DTS into a made-up presentation time.
+                    return {};
+                }
+                if (packet->stream_index == opened.videoStreamIndex && packet->pos >= 0 &&
+                    packet->pos < previousPosition) {
+                    // An imprecise seek can revisit older GOPs. Finish with one forward scan
+                    // instead of repeatedly rescanning the same prefix for later index entries.
+                    scanToEnd = true;
+                }
+                const std::int64_t pts = packet->pts != AV_NOPTS_VALUE ? packet->pts : packet->dts;
+                const bool beforeEntry = !scanToEnd && indexedPosition >= 0 && packet->pos >= 0 &&
+                                         packet->pos < indexedPosition;
+                const bool found = packet->stream_index == opened.videoStreamIndex &&
+                                   (packet->flags & AV_PKT_FLAG_KEY) != 0 &&
+                                   pts != AV_NOPTS_VALUE && !beforeEntry;
+                if (found) {
+                    times.push_back(av_rescale_q(
+                        pts - opened.presentationOrigin, stream.time_base, kMicrosecondsBase));
+                    previousPosition = packet->pos;
+                }
                 av_packet_unref(packet.get());
-                times.push_back(fallbackTime);
-                continue;
+                if (found && !scanToEnd) {
+                    break;
+                }
             }
-            times.push_back(av_rescale_q(
-                pts - opened.presentationOrigin, stream.time_base, kMicrosecondsBase));
-            av_packet_unref(packet.get());
+        }
+        if (isCanceled(cancelRequested)) {
+            return {};
         }
     } else {
         // No index to consult: fall back to walking the packets, which decodes nothing either.
