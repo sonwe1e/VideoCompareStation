@@ -54,6 +54,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -478,13 +479,23 @@ runDesktop(int& argc,
     // for a real session - every smoke and test mode sets smokeMode - and it repairs the keys when
     // the unpacked directory moved, which is the failure that used to leave the menu entry silently
     // missing. A refused registry write must never stop a start.
+    //
+    // Measured at ~18 ms of synchronous registry work on the GUI thread, sitting between the first
+    // presented frame and the event loop - i.e. straight inside the window-appearance budget. It is
+    // now a worker: the work itself is unchanged (same call, same repair rule, failure still only
+    // logged), it is simply no longer serialised in front of `exec`. The thread is joined when
+    // runDesktop returns, so a session can never exit while a registration write is in flight.
+    // The milestone stays on the main path and now measures the spawn, not the work.
+    std::jthread shellRegistration;
     if (!smokeMode) {
-        const dvs::shell::ExplorerRegistrationResult registration =
-            dvs::shell::ensureRunningInstallationRegistered(DVS_PROJECT_VERSION);
+        shellRegistration = std::jthread([] {
+            const dvs::shell::ExplorerRegistrationResult registration =
+                dvs::shell::ensureRunningInstallationRegistered(DVS_PROJECT_VERSION);
+            if (registration.state == dvs::shell::ExplorerRegistrationState::Failed) {
+                writeStandardError("DVS_SHELL_REGISTRATION_FAILED " + registration.error + "\n");
+            }
+        });
         dvs::ui::markStartupMilestone("shell-registration");
-        if (registration.state == dvs::shell::ExplorerRegistrationState::Failed) {
-            writeStandardError("DVS_SHELL_REGISTRATION_FAILED " + registration.error + "\n");
-        }
     }
     // The request that came with the launch is answered here, and a request that a running instance
     // forwards later is answered by the same dispatcher. Offering it once, at this fixed point, was

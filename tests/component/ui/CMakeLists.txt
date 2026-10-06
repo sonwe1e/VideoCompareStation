@@ -10,6 +10,7 @@ add_executable(
     "${PROJECT_SOURCE_DIR}/src/app/RuntimeBridges.cpp"
     ReviewPreferencesControllerTests.cpp
     SourceIdentityTests.cpp
+    StartupSplashTests.cpp
     VideoFolderModelTests.cpp
 )
 target_link_libraries(
@@ -241,7 +242,7 @@ set_tests_properties(
         RUN_SERIAL TRUE
 )
 
-foreach(dvs_review_shell_test IN ITEMS empty_review_view player_osc timeline_tracks timeline_thumbnail_cache review_action_button)
+foreach(dvs_review_shell_test IN ITEMS empty_review_view player_osc timeline_tracks timeline_thumbnail_cache review_action_button vcs_theme)
     add_test(
         NAME "ui.${dvs_review_shell_test}"
         COMMAND

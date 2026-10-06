@@ -49,6 +49,12 @@ class ReviewShellController final : public QObject {
     Q_PROPERTY(double outMediaTime READ outMediaTime NOTIFY stateChanged)
     Q_PROPERTY(bool rangePlaybackActive READ rangePlaybackActive NOTIFY stateChanged)
     Q_PROPERTY(bool rangeStartPending READ rangeStartPending NOTIFY stateChanged)
+    // C2. Display order and selection are a view concern kept here, in the shell, precisely so that
+    // they cannot reach media truth. Both are keyed by frozen source identity, never by index, so
+    // rearranging the list can never change a source's role, the pairing, or the reference.
+    Q_PROPERTY(QStringList displaySourceIdentities READ displaySourceIdentities NOTIFY stateChanged)
+    Q_PROPERTY(
+        QStringList selectedSourceIdentities READ selectedSourceIdentities NOTIFY stateChanged)
 
 public:
     enum OpenIntent {
@@ -126,6 +132,8 @@ public:
     [[nodiscard]] double outMediaTime() const noexcept;
     [[nodiscard]] bool rangePlaybackActive() const noexcept;
     [[nodiscard]] bool rangeStartPending() const noexcept;
+    [[nodiscard]] QStringList displaySourceIdentities() const;
+    [[nodiscard]] QStringList selectedSourceIdentities() const;
 
     void setStagedReferenceIndex(int sourceIndex);
     void setChromeVisible(bool visible);
@@ -154,6 +162,19 @@ public:
     Q_INVOKABLE void clearRange();
     Q_INVOKABLE bool setRangePlaybackState(bool active, bool startPending);
     Q_INVOKABLE void setRangeStartPending(bool pending);
+    // Reorders the list as the user sees it and nothing else. Both indices address the display
+    // order published by displaySourceIdentities. The underlying active set, its order, the
+    // reference and the pairing are deliberately left alone - reordering those is a different
+    // decision that the product has not made. Returns false and changes nothing when an index is
+    // out of range.
+    Q_INVOKABLE bool moveSourceInDisplayOrder(int fromIndex, int toIndex);
+    Q_INVOKABLE void setSourceSelected(const QString& sourceIdentity, bool selected);
+    Q_INVOKABLE void toggleSourceSelection(const QString& sourceIdentity);
+    Q_INVOKABLE void clearSourceSelection();
+    // Removes every selected source by identity, newest selection last, and reports how many were
+    // actually removed. Identities that left the active set in the meantime are skipped rather than
+    // failing the whole batch.
+    Q_INVOKABLE int removeSelectedSources();
 
 Q_SIGNALS:
     void stateChanged();
@@ -218,6 +239,8 @@ private:
     double outMediaTime_ = -1.0;
     bool rangePlaybackActive_ = false;
     bool rangeStartPending_ = false;
+    QStringList displaySourceIdentities_;
+    QStringList selectedSourceIdentities_;
 };
 
 } // namespace dvs::ui

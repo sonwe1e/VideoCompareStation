@@ -113,6 +113,10 @@ Item {
             try {
                 osc.revealActive = false;
                 compare(osc.controlsEnabled, false);
+                // The cursor gate has to open: with no tree under the cursor the OSC must still
+                // decide the cursor is outside the controls, otherwise the fix for the progress bar
+                // would disable auto-hide outright.
+                verify(!osc.pointerInsidePanel, "no tree under the cursor means no cursor on the controls");
                 osc.reveal();
                 verify(osc.controlsEnabled);
                 verify(panel.enabled);
@@ -122,6 +126,70 @@ Item {
             } finally {
                 root.visible = true;
             }
+        }
+
+        // The auto-hide gate is a cursor gate, not a timer gate. The host calls transport.reveal()
+        // on every transport seek (scrubbing the bar, the wheel over the bar), so a countdown that
+        // ignores the cursor fades the progress bar out from under the pointer. This is the defect
+        // the user reported: hovering the bar used to make it disappear.
+        function test_hovering_the_progress_bar_keeps_it_visible_under_the_cursor() {
+            const panel = findChild(osc, "oscPanel");
+            const timeline = findChild(osc, "timelineSlider");
+            verify(panel !== null);
+            verify(timeline !== null);
+            osc.revealActive = true;
+
+            // Rest the cursor on the progress bar.
+            mouseMove(timeline, timeline.width / 2, timeline.height / 2);
+            wait(50);
+            // Precondition: the OSC itself has to know the cursor is on the controls.
+            verify(osc.pointerInsidePanel, "a cursor on the progress bar must report as inside the panel");
+            verify(osc.controlsEnabled);
+
+            // Re-reveal exactly like a transport seek does, then wait past the 1200 ms interval.
+            osc.reveal();
+            wait(1600);
+            verify(osc.revealActive, "the bar stayed revealed with the cursor on it");
+            verify(osc.controlsEnabled);
+            compare(panel.opacity, 1.0);
+        }
+
+        // The countdown must not only be blocked under the cursor: it also has to resume the moment
+        // the controls are no longer under it. A countdown that only ever stops (or that only one
+        // hover source can arm) left the bar stuck visible after a scrub was dragged out of the
+        // panel and released, which reads as "the overlay can't be dismissed".
+        function test_releasing_a_scrub_outside_the_panel_hides_the_bar_again() {
+            const timeline = findChild(osc, "timelineSlider");
+            verify(timeline !== null);
+            osc.revealActive = true;
+
+            const scrubX = timeline.width / 2;
+            const scrubY = timeline.height / 2;
+            mouseMove(timeline, scrubX, scrubY);
+            wait(50);
+            mousePress(timeline, scrubX, scrubY, Qt.LeftButton);
+            wait(50);
+            // Drag the playhead out of the panel, then release: the grab is gone and the cursor is
+            // off the controls, so the countdown owns the next hide.
+            mouseMove(root, mouseXOfPanelOutside(), mouseYAbovePanel());
+            wait(50);
+            // While the drag is live the scrub itself counts as "on the controls"; only the release
+            // hands the countdown back.
+            verify(osc.pointerInsidePanel, "a live scrub counts as the cursor being on the controls");
+            mouseRelease(timeline, scrubX, scrubY, Qt.LeftButton);
+            wait(50);
+            verify(!osc.pointerInsidePanel, "released off the controls, the cursor is outside");
+            tryCompare(osc, "controlsEnabled", false, 3000);
+        }
+
+        function mouseXOfPanelOutside() {
+            const panel = findChild(osc, "oscPanel");
+            return panel ? panel.mapToItem(root, panel.width / 2, panel.height / 2).x : 0;
+        }
+
+        function mouseYAbovePanel() {
+            const panel = findChild(osc, "oscPanel");
+            return panel ? Math.max(0, panel.mapToItem(root, 0, 0).y - 20) : 0;
         }
 
         function test_compact_layout_does_not_overlap() {
@@ -204,6 +272,46 @@ Item {
             verify(status.text.indexOf("逐帧完整审查") >= 0);
             verify(status.text.indexOf("播放器跳过") < 0);
             verify(status.text.indexOf("明显落后") >= 0);
+        }
+
+        function test_status_says_unmeasured_before_the_run_presents_a_frame() {
+            osc.revealActive = true;
+            osc.playbackModeLabel = "连续";
+            osc.playbackModeDetail = "";
+            osc.playbackTargetRate = 1.0;
+            osc.playbackPresentationRate = 0;
+            osc.playbackRunSkippedFrameSets = 0;
+            osc.playbackRunPresentedFrames = 0;
+            osc.playbackLagMilliseconds = 0;
+            osc.playbackCatchingUp = false;
+            osc.sourceDuplicateCount = 0;
+            osc.displayGapCount = 0;
+            osc.playing = false;
+            const status = findChild(osc, "playbackStatusText");
+            verify(status !== null);
+            // Nothing has been observed yet, so a zero skip count is not evidence of a clean run.
+            // The rail has to say so rather than print nothing and let silence read as "no drops".
+            verify(status.text.indexOf("尚未测量") >= 0);
+        }
+
+        function test_status_drops_unmeasured_marker_once_the_run_has_samples() {
+            osc.revealActive = true;
+            osc.playbackModeLabel = "连续";
+            osc.playbackModeDetail = "";
+            osc.playbackTargetRate = 1.0;
+            osc.playbackPresentationRate = 1.0;
+            osc.playbackRunSkippedFrameSets = 0;
+            osc.playbackRunPresentedFrames = 120;
+            osc.playbackLagMilliseconds = 0;
+            osc.playbackCatchingUp = false;
+            osc.sourceDuplicateCount = 0;
+            osc.displayGapCount = 0;
+            osc.playing = false;
+            const status = findChild(osc, "playbackStatusText");
+            verify(status !== null);
+            // 120 frames presented and still no skip: now silence IS the measurement.
+            verify(status.text.indexOf("尚未测量") < 0);
+            verify(status.text.indexOf("播放器跳过") < 0);
         }
 
         function test_docked_is_always_enabled_without_wake_strip() {

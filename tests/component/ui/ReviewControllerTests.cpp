@@ -1007,6 +1007,134 @@ TEST_F(ReviewControllerTests, ShellUsesSourceIdentityForOperationsAndRollsBackFa
     controller.stop();
 }
 
+TEST_F(ReviewControllerTests, DisplayOrderReorderingNeverTouchesRoleReferenceOrTheActiveSet) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString sourceA = createFile(directory, QStringLiteral("order_a.mp4"));
+    const QString sourceB = createFile(directory, QStringLiteral("order_b.mp4"));
+    const QString sourceC = createFile(directory, QStringLiteral("order_c.mp4"));
+
+    auto backend = std::make_shared<FakeBackend>();
+    backend->currentSnapshot =
+        readySnapshotWithSources({std::filesystem::path{sourceA.toStdWString()},
+                                  std::filesystem::path{sourceB.toStdWString()},
+                                  std::filesystem::path{sourceC.toStdWString()}});
+    ReviewController controller{dependenciesFor(backend)};
+    ReviewShellController shell{controller};
+
+    ASSERT_EQ(shell.displaySourceIdentities().size(), 3);
+    const QStringList openedOrder = shell.activeSourceIdentities();
+    const QVariantList activeBefore = shell.activeSources();
+    const int canonicalBefore = shell.canonicalSourceIndex();
+    const int referenceBefore = shell.referenceSourceIndex();
+    const qulonglong generationBefore = shell.activeGeneration();
+
+    // Move the last source to the front, the way a drag to the head of the strip would.
+    ASSERT_TRUE(shell.moveSourceInDisplayOrder(2, 0));
+    EXPECT_EQ(shell.displaySourceIdentities().at(0), openedOrder.at(2));
+    EXPECT_EQ(shell.displaySourceIdentities().at(1), openedOrder.at(0));
+    EXPECT_EQ(shell.displaySourceIdentities().at(2), openedOrder.at(1));
+
+    // The point of C2: the list the user sees moved, and nothing that decides what a source *means*
+    // moved with it. Source order drives the A/B/C role, Theme.sourceColor, the alignment offsets
+    // and the pairing, so a reorder that reached any of those would silently change the review.
+    EXPECT_EQ(shell.activeSourceIdentities(), openedOrder);
+    EXPECT_EQ(shell.activeSources(), activeBefore);
+    EXPECT_EQ(shell.canonicalSourceIndex(), canonicalBefore);
+    EXPECT_EQ(shell.referenceSourceIndex(), referenceBefore);
+    EXPECT_EQ(shell.activeGeneration(), generationBefore);
+    EXPECT_EQ(shell.stagedSources(), shell.activeSources());
+    EXPECT_TRUE(backend->submitted.empty())
+        << "reordering the view must not submit a media command";
+
+    // Out-of-range indices are rejected instead of clamped into a move nobody asked for.
+    EXPECT_FALSE(shell.moveSourceInDisplayOrder(0, 9));
+    EXPECT_FALSE(shell.moveSourceInDisplayOrder(-1, 0));
+    EXPECT_FALSE(shell.moveSourceInDisplayOrder(1, 1));
+    EXPECT_EQ(shell.displaySourceIdentities().at(0), openedOrder.at(2));
+
+    // A second move composes with the first rather than resetting to the opened order.
+    ASSERT_TRUE(shell.moveSourceInDisplayOrder(0, 2));
+    EXPECT_EQ(shell.displaySourceIdentities().at(2), openedOrder.at(2));
+    EXPECT_EQ(shell.activeSourceIdentities(), openedOrder);
+    controller.stop();
+}
+
+// Selection is identity-keyed, survives a display move, and never silently carries across a change
+// to the active set - the user did not select the sources a new open brought in.
+TEST_F(ReviewControllerTests, SelectionSurvivesReorderAndIsDroppedWhenTheActiveSetChanges) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString sourceA = createFile(directory, QStringLiteral("select_a.mp4"));
+    const QString sourceB = createFile(directory, QStringLiteral("select_b.mp4"));
+
+    auto backend = std::make_shared<FakeBackend>();
+    backend->currentSnapshot =
+        readySnapshotWithSources({std::filesystem::path{sourceA.toStdWString()},
+                                  std::filesystem::path{sourceB.toStdWString()}});
+    ReviewController controller{dependenciesFor(backend)};
+    ReviewShellController shell{controller};
+
+    const QStringList identities = shell.activeSourceIdentities();
+    ASSERT_EQ(identities.size(), 2);
+    shell.setSourceSelected(identities.at(0), true);
+    shell.toggleSourceSelection(identities.at(1));
+    EXPECT_EQ(shell.selectedSourceIdentities(), identities);
+
+    // Reordering the view must not drop the selection.
+    ASSERT_TRUE(shell.moveSourceInDisplayOrder(0, 1));
+    EXPECT_EQ(shell.selectedSourceIdentities(), identities);
+
+    // An identity that is not open cannot be selected, so a stale view cannot smuggle one in.
+    shell.setSourceSelected(QStringLiteral("not-open"), true);
+    EXPECT_EQ(shell.selectedSourceIdentities().size(), 2);
+
+    // A topology change drops the selection: the user never selected the sources a new open brought
+    // in. Driven through the backend snapshot, because that is what actually republishes the set -
+    // completing the removal command alone leaves the shell still showing the old pair.
+    backend->currentSnapshot =
+        readySnapshotWithSources({std::filesystem::path{sourceB.toStdWString()}});
+    controller.refreshProjection();
+    EXPECT_EQ(shell.activeSourceIdentities(), QStringList{identities.at(1)});
+    EXPECT_TRUE(shell.selectedSourceIdentities().isEmpty());
+    EXPECT_EQ(shell.displaySourceIdentities(), QStringList{identities.at(1)});
+    controller.stop();
+}
+
+// Batch removal goes through the same identity-keyed operation as a single removal, so the intent
+// queue, the pending set and the rollback all behave the same. This also pins that the count comes
+// from what was actually removed.
+TEST_F(ReviewControllerTests, RemovingTheSelectionRemovesEachSelectedSourceByIdentity) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString sourceA = createFile(directory, QStringLiteral("batch_a.mp4"));
+    const QString sourceB = createFile(directory, QStringLiteral("batch_b.mp4"));
+
+    auto backend = std::make_shared<FakeBackend>();
+    backend->currentSnapshot =
+        readySnapshotWithSources({std::filesystem::path{sourceA.toStdWString()},
+                                  std::filesystem::path{sourceB.toStdWString()}});
+    ReviewController controller{dependenciesFor(backend)};
+    ReviewShellController shell{controller};
+
+    const QStringList identities = shell.activeSourceIdentities();
+    ASSERT_EQ(identities.size(), 2);
+    // Nothing selected: removing is a no-op, not an error and not a removal of everything.
+    EXPECT_EQ(shell.removeSelectedSources(), 0);
+    EXPECT_TRUE(backend->submitted.empty());
+
+    shell.setSourceSelected(identities.at(0), true);
+    shell.setSourceSelected(identities.at(1), true);
+    EXPECT_EQ(shell.removeSelectedSources(), 2);
+    EXPECT_EQ(shell.selectedSourceIdentities().size(), 0);
+    // The shell serialises topology intents: the first removal is submitted, the second waits its
+    // turn. Both were accepted, which is what the returned count reports.
+    EXPECT_EQ(backend->submitted.size(), 1U);
+    EXPECT_EQ(shell.pendingSourceIdentities().size(), 2);
+    EXPECT_EQ(shell.queuedIntentCount(), 1);
+    controller.stop();
+}
+
 TEST_F(ReviewControllerTests, FrozenIdentityStaysStableWhenFileChangesOnDisk) {
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());

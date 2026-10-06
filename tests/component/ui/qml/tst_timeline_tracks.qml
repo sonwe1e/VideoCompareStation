@@ -37,5 +37,17 @@ Item {
             verify(expected >= tracks.windowStartFrame);
             verify(expected < tracks.windowStartFrame + tracks.visibleFrameCount);
         }
+
+        // The OSC's auto-hide countdown asks this. "The pointer is on the timeline" has to survive
+        // a scrub that carries the cursor past the bar's edge: Qt drops containsMouse from the
+        // timeline's own mouse area while its grab drags outside it, so hover alone would fade the
+        // bar out from under a live scrub.
+        function test_pointer_inside_survives_a_scrub_outside_the_bar() {
+            verify(!tracks.pointerInside, "no pointer and no scrub reads as outside");
+            tracks.dragging = true;
+            verify(tracks.pointerInside, "a live scrub counts as the pointer being on the timeline");
+            tracks.dragging = false;
+            verify(!tracks.pointerInside, "ending the scrub restores the outside reading");
+        }
     }
 }

@@ -17,6 +17,7 @@
 #include "dvs/ui/ReviewSessionFacade.h"
 #include "dvs/ui/ReviewShellController.h"
 #include "dvs/ui/StartupMilestone.h"
+#include "dvs/ui/StartupSplash.h"
 #include "dvs/ui/VideoFolderModel.h"
 
 #include <QCoreApplication>
@@ -84,6 +85,9 @@ void applyWindowsNativeChrome(QQuickWindow* const window) noexcept {
     if (hwnd == nullptr) {
         return;
     }
+    // Measured split: creating the native handle here (before show()) is the suspected cost, not
+    // the four DWM attribute round-trips. See docs/engineering/startup-performance-v2.md.
+    markStartupMilestone("native-hwnd");
 
     const auto setAttr = [hwnd](const DWORD attr, const auto* const val) noexcept {
         static_cast<void>(::DwmSetWindowAttribute(hwnd, attr, val, sizeof(*val)));
@@ -114,6 +118,7 @@ void applyWindowsNativeChrome(QQuickWindow* const window) noexcept {
     constexpr DWORD kDwmwaTextColor = 36;
     constexpr COLORREF kTextColor = RGB(241, 245, 249);
     setAttr(kDwmwaTextColor, &kTextColor);
+    markStartupMilestone("native-attrs");
 }
 #endif
 
@@ -166,6 +171,26 @@ public:
             return false;
         }
         markStartupMilestone("load-enter");
+
+        // B2: the splash is a guard, not a plain local, so every `return false`
+        // below dismisses it on the way out and no early failure can leave an
+        // orphan window on screen. On success the ownership moves to splash_,
+        // which survives past window->show() and is dismissed by the
+        // sceneGraphInitialized handler, because the window is still blank for
+        // ~180 ms after show().
+        auto splash = std::make_unique<StartupSplash>();
+        if (!options_.smokeMode) {
+            splash->show("CompareStation", QObject::tr("正在准备审阅环境").toStdString());
+        }
+        struct SplashGuard final {
+            std::unique_ptr<StartupSplash> pending;
+            ~SplashGuard() {
+                if (pending) {
+                    pending->requestDismiss();
+                    pending->join();
+                }
+            }
+        } splashGuard{std::move(splash)};
 
         qmlWarnings_.clear();
         auto engine = std::make_unique<QQmlApplicationEngine>();
@@ -316,10 +341,16 @@ public:
             window,
             &QQuickWindow::sceneGraphInitialized,
             window,
-            [sceneGraphInitializedMarked] {
+            [sceneGraphInitializedMarked, this] {
                 if (!*sceneGraphInitializedMarked) {
                     *sceneGraphInitializedMarked = true;
                     markStartupMilestone("sg-initialized");
+                    // The main window has a first frame, so the splash has done
+                    // its job. requestDismiss() is non-blocking and safe from
+                    // this render thread; exec() joins the worker.
+                    if (splash_ != nullptr) {
+                        splash_->requestDismiss();
+                    }
                 }
             },
             Qt::DirectConnection);
@@ -328,6 +359,7 @@ public:
         configuration.setPreferSoftwareDevice(options_.preferSoftwareDevice);
         configuration.setDepthBufferFor2D(true);
         window->setGraphicsConfiguration(configuration);
+        markStartupMilestone("graphics-config");
         if (options_.preferHighRefreshScreen) {
             const QList<QScreen*> screens = QGuiApplication::screens();
             const auto selected = std::max_element(
@@ -342,6 +374,7 @@ public:
                 activeScreenRefreshRate_ = (*selected)->refreshRate();
             }
         }
+        markStartupMilestone("screen-select");
         if (options_.smokeMode) {
             window->setFlags(Qt::Tool | Qt::FramelessWindowHint);
             window->setOpacity(0.0);
@@ -362,11 +395,19 @@ public:
             QObject::connect(window, &QObject::destroyed, [this] { window_ = nullptr; });
         surfaceDestroyedConnection_ =
             QObject::connect(surface, &QObject::destroyed, [this] { surface_ = nullptr; });
+// Native chrome stays BEFORE show(). An A/B ran moving it after show() (B0-fix trial):
+// the 22 ms winId() cost did not disappear, it was absorbed by show() instead, and
+// show-enter -> sg-initialized grew from ~168 ms to ~214-235 ms while the window still
+// appeared no earlier. post-show -> native-hwnd measuring 0.2 ms confirms show()
+// creates the HWND anyway, so deferring only relocated the cost and added a
+// title-bar flash risk. Kept pre-show on that evidence.
+// See docs/engineering/startup-performance-v2.md (Step 8).
 #if defined(_WIN32)
         if (!options_.smokeMode) {
             applyWindowsNativeChrome(window_);
         }
 #endif
+        markStartupMilestone("native-chrome");
         markStartupMilestone("show-enter");
         window_->show();
         markStartupMilestone("post-show");
@@ -386,12 +427,23 @@ public:
             activeScreenRefreshRate_ = window_->screen()->refreshRate();
         }
         markStartupMilestone("window-shown");
+        // Hand the splash to the object that outlives load(). The guard below
+        // then has nothing to dismiss.
+        splash_ = std::move(splashGuard.pending);
         return true;
     }
 
     [[nodiscard]] int exec() {
         if (!engine_ || window_ == nullptr) {
             return EXIT_FAILURE;
+        }
+        // The splash worker owns an HWND and its own message loop. Joining here
+        // is safe: the render thread has already asked it to close and it is
+        // idle, so this is not a wait on a busy thread.
+        if (splash_ != nullptr) {
+            splash_->requestDismiss();
+            splash_->join();
+            splash_.reset();
         }
         return application_.exec();
     }
@@ -857,6 +909,7 @@ private:
     bool nativeMenuWindowsDisabled_ = false;
     QGuiApplication application_;
     std::unique_ptr<QQmlApplicationEngine> engine_;
+    std::unique_ptr<StartupSplash> splash_;
     std::unique_ptr<ReviewShellController> shellController_;
     std::unique_ptr<VideoFolderModel> videoFolder_;
     std::unique_ptr<ReviewSessionFacade> sessionFacade_;

@@ -77,7 +77,11 @@ Rectangle {
     readonly property bool roiEnabled: dualVideoSurface.roiEnabled
     // The var-typed `surface` alias defeats qmllint's type resolution from other files, so the
     // drop counter is re-exposed as a plain int computed here where ComparisonSurface resolves.
-    readonly property int droppedFrames: dualVideoSurface.droppedFrames
+    readonly property real droppedFrames: dualVideoSurface.droppedFrames
+    // How much of the bottom edge the floating transport covers. Main owns the transport geometry,
+    // so it measures the overlap and hands the number in; the viewport only needs to know how far
+    // to lift its own bottom controls. 0 when the transport is docked or hidden.
+    property real bottomOverlayInset: 0
     // Status banners stack under the source label row (12 px inset + 42 px plate + 8 px gap), so a
     // centred banner never covers a panel's identity label.
     readonly property real stageBannerTop: control.chromeVisible ? 62 : 12
@@ -480,7 +484,7 @@ Rectangle {
             left: parent.left
             leftMargin: 12
             bottom: parent.bottom
-            bottomMargin: 12
+            bottomMargin: 12 + control.bottomOverlayInset
         }
 
         readonly property var firstPanel: dualVideoSurface.sourcePanelRects.length > 0 ? dualVideoSurface.sourcePanelRects[0] : null

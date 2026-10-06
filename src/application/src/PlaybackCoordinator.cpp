@@ -764,6 +764,7 @@ private:
             playbackContinuityPolicy_, static_cast<std::size_t>(state_.sources.size()));
         state_.playbackSkippedFrameSets = playbackSkippedFrameSets_;
         state_.playbackRunSkippedFrameSets = playbackRunSkippedFrameSets_;
+        state_.playbackRunPresentedFrames = playbackRunPresentedFrames_;
         updatePlaybackPresentationMetrics();
         state_.activeComparisonPair = activeComparisonPair_;
         state_.playbackRangeIn =
@@ -1957,6 +1958,7 @@ private:
             .completedLoops = playbackRangeCompletedLoops_,
         };
         playbackRunSkippedFrameSets_ = 0U;
+        playbackRunPresentedFrames_ = 0U;
         lastPlaybackProjectionAt_ = playbackRun_->wallAnchor;
         state_.lastError.reset();
         emitTrace(TraceEventKind::PlaybackRunStarted,
@@ -3581,6 +3583,9 @@ private:
             });
         }
         playbackRun_->frame.reset();
+        // Coverage for this run: this frame completed publish + present + timer, so every per-run
+        // counter now has at least one real sample behind it.
+        ++playbackRunPresentedFrames_;
         state_.displayedFrame = displayedFrame;
         state_.requestedFrame.reset();
         state_.lastError.reset();
@@ -4617,6 +4622,8 @@ private:
         domain::PlaybackContinuityPolicy::Contextual;
     std::uint64_t playbackSkippedFrameSets_ = 0U;
     std::uint64_t playbackRunSkippedFrameSets_ = 0U;
+    // Frames this run finished presenting; the coverage signal behind "未测量 vs 零缺陷".
+    std::uint64_t playbackRunPresentedFrames_ = 0U;
     // C-02: session pair + preference policy used to re-resolve after topology changes.
     domain::DefaultPairPolicy activePairPolicy_ = domain::DefaultPairPolicy::PreserveIfAvailable;
     // D06: monotonic playback-run id stamped on TraceIdentity.run for the whole PlaybackRun.

@@ -136,6 +136,12 @@ ApplicationWindow {
     property bool pendingNewReviewWantsThreeUp: false
     property string dropError: ""
     property string intentMessage: ""
+    // C1 resume: the identity currently open, and the one identity a restore has already been
+    // attempted for. The guard is per-identity rather than per-session so that reopening the same
+    // file inside one window still resumes, but a reload of the same file does not fight the
+    // position the user is already at.
+    readonly property string resumeSourceIdentity: controller ? String(controller.currentSourceIdentity || "") : ""
+    property string resumeAttemptedIdentity: ""
     readonly property int inFrame: shell ? Number(shell.inFrame) : -1
     readonly property int outFrame: shell ? Number(shell.outFrame) : -1
     readonly property real inMediaTime: shell ? Number(shell.inMediaTime) : -1
@@ -235,6 +241,18 @@ ApplicationWindow {
     readonly property bool transportHidden: oscState === 2
     readonly property bool transportDocked: !transportHidden && oscState === 0
     readonly property int transportDockHeight: transportDocked ? transport.height + 8 : 0
+    // How far the floating transport rises into the stage from the viewport's bottom edge. When the
+    // transport is docked it occupies its own band below the viewport and the viewport's own corner
+    // controls need no extra room; when it floats over the stage, the viewport lifts its fit/reset row
+    // and pixel-scale badge above it. Without this the row sat at y=568 under a transport spanning
+    // 437..640 at the 960 px minimum width - permanently unreachable.
+    // See ui.MainQmlContractTests.NarrowWindowKeepsViewportCornerControlsReachable.
+    readonly property real transportOverlayInset: {
+        if (transportHidden || transportDocked || transport.y <= 0)
+            return 0;
+        const viewportFloor = viewportFrame.y + viewportFrame.height;
+        return Math.max(0, viewportFloor - transport.y) + 8;
+    }
     readonly property string pairErrorKey: controller ? controller.pairErrorKey : ""
     readonly property string frameMappingStatus: controller ? controller.frameMappingStatus : ""
     readonly property string alignmentEstimateStatus: controller ? controller.alignmentEstimateStatus : ""
@@ -354,6 +372,9 @@ ApplicationWindow {
 
     readonly property int droppedFrames: viewportFrame ? Number(viewportFrame.droppedFrames) : 0
     readonly property int playbackRunSkippedFrameSets: controller ? Number(controller.playbackRunSkippedFrameSets || 0) : 0
+    // Frames the current run actually finished presenting. 0 means nothing has been observed yet,
+    // so the skip count next to it is "not measured", not "clean" (product section 2).
+    readonly property int playbackRunPresentedFrames: controller ? Number(controller.playbackRunPresentedFrames || 0) : 0
     readonly property real playbackTargetRate: controller ? Number(controller.playbackTargetRate || 1) : 1
     readonly property real playbackPresentationRate: controller ? Number(controller.playbackPresentationRate || 0) : 0
     readonly property int playbackLagMilliseconds: controller ? Math.round(Number(controller.playbackLagMicroseconds || 0) / 1000) : 0
@@ -436,10 +457,17 @@ ApplicationWindow {
 
             showImmersiveHud(frameText);
         }
+
+        // C1 resume: record the position the user actually reached, keyed by the identity of the
+        // file that produced it. Debounced through a timer rather than written per frame, because
+        // the settings save is already debounced and a per-frame write would turn scrubbing into
+        // disk IO.
+        resumeRecordTimer.restart();
     }
 
     onSourceCountChanged: {
         Qt.callLater(remapReviewRange);
+        Qt.callLater(attemptResume);
     }
 
     onCanonicalSourceIndexChanged: {
@@ -447,6 +475,8 @@ ApplicationWindow {
 
         revealOsc();
     }
+
+    onResumeSourceIdentityChanged: Qt.callLater(attemptResume)
 
     onHasErrorsChanged: {
         if (hasErrors)
@@ -464,7 +494,12 @@ ApplicationWindow {
 
     // by the host shutdown path; the review session needs no persistence guard.
 
-    onClosing: {}
+    onClosing: {
+        // C1: the debounce can still be pending when the window goes away, and the last thing the
+        // user did was move the playhead. Record synchronously so the position survives the close.
+        resumeRecordTimer.stop();
+        root.recordResumePosition();
+    }
 
     // Fade was removed from the video compare modes; fall back to Wipe for persisted preferences
 
@@ -616,6 +651,15 @@ ApplicationWindow {
         interval: 2500
         repeat: false
         onTriggered: {
+            // Immersive chrome hides on a timer too, and that timer has to respect the cursor the
+            // same way the OSC's own countdown does: the transport is fully usable under the
+            // pointer (dragging the timeline, changing the rate), so hiding it there reads as a
+            // break. Re-check instead; leaving the controls re-arms this immediately through the
+            // OSC's own hover-leave path.
+            if (transport.pointerInsidePanel) {
+                immersiveOscTimer.restart();
+                return;
+            }
             root.immersiveOscRevealed = false;
         }
     }
@@ -778,6 +822,40 @@ ApplicationWindow {
         intentMessage = String(message);
 
         intentMessageTimer.restart();
+    }
+
+    function recordResumePosition() {
+        if (!preferences || resumeSourceIdentity.length === 0 || currentFrame < 0)
+            return;
+        // Frame 0 is the position a fresh open already lands on; storing it would grow the settings
+        // document with entries that restore nothing.
+        preferences.rememberResumeFrame(resumeSourceIdentity, currentFrame);
+    }
+
+    function frameTextFor(frame) {
+        const value = Number(frame);
+        return value >= 0 ? qsTr("第 %1 帧").arg(value + 1) : qsTr("未知位置");
+    }
+
+    function attemptResume() {
+        if (!controller || !preferences)
+            return;
+        const identity = resumeSourceIdentity;
+        if (identity.length === 0)
+            return;
+        resumeAttemptedIdentity = identity;
+        if (sourceCount <= 0 || currentFrame !== 0)
+            return;
+        const stored = Number(preferences.resumeFrameFor(identity));
+        if (!(stored > 0))
+            return;
+        // The stored frame is only meaningful inside this timeline; a stale entry from a shorter
+        // version of the same file must not push the playhead past the end.
+        if (totalFrames > 0 && stored >= totalFrames)
+            return;
+        if (!controller.seekFrame(stored))
+            return;
+        showIntentMessage(qsTr("已恢复到上次位置 %1").arg(frameTextFor(stored)));
     }
 
     function enqueueStartupRequest(kind, urls) {
@@ -2212,6 +2290,17 @@ ApplicationWindow {
         onTriggered: root.intentMessage = ""
     }
 
+    // C1 resume writes are debounced well below the settings save debounce so scrubbing never turns
+    // into disk IO, but still short enough that closing the window moments after moving the
+    // playhead does not lose the position.
+    Timer {
+        id: resumeRecordTimer
+
+        interval: 1500
+        repeat: false
+        onTriggered: root.recordResumePosition()
+    }
+
     Timer {
         id: immersiveHudTimer
 
@@ -2597,6 +2686,8 @@ ApplicationWindow {
         referenceSourceIdentity: root.shell ? root.shell.referenceSourceIdentity : ""
         pendingSourceIdentities: root.shell ? root.shell.pendingSourceIdentities : []
         sourceIdentities: root.shell ? root.shell.activeSourceIdentities : []
+        displayOrder: root.shell ? root.shell.displaySourceIdentities : []
+        selectedIdentities: root.shell ? root.shell.selectedSourceIdentities : []
         z: 30
         borderColor: root.borderColor
         accentColor: root.accentColor
@@ -2611,6 +2702,22 @@ ApplicationWindow {
         onAddRequested: root.requestAddVideo()
         onRemoveRequested: sourceIdentity => root.removeSelectedSource(sourceIdentity)
         onReferenceRequested: sourceIdentity => root.changeReference(sourceIdentity)
+        onMoveRequested: (fromIndex, toIndex) => {
+            if (root.shell)
+                root.shell.moveSourceInDisplayOrder(fromIndex, toIndex);
+        }
+        onSelectionToggled: sourceIdentity => {
+            if (root.shell)
+                root.shell.toggleSourceSelection(sourceIdentity);
+        }
+        onSelectionCleared: {
+            if (root.shell)
+                root.shell.clearSourceSelection();
+        }
+        onRemoveSelectedRequested: {
+            if (root.shell)
+                root.shell.removeSelectedSources();
+        }
         onViewerFocusRequested: root.returnFocusToViewer()
     }
     CompareModeBar {
@@ -2737,6 +2844,9 @@ ApplicationWindow {
         primaryTextColor: root.primaryTextColor
         mutedTextColor: root.mutedTextColor
         chromeVisible: root.chromeVisible
+        // Lift the viewport's own corner controls clear of the floating transport. 0 when the
+        // transport is docked or hidden, so the docked layout is byte-for-byte unchanged.
+        bottomOverlayInset: root.transportOverlayInset
         alignmentModeName: root.controller ? root.controller.alignmentModeName : ""
         inexactReason: root.controller ? root.controller.currentInexactReason : ""
         effectiveViewMode: root.effectiveViewMode
@@ -3202,6 +3312,7 @@ ApplicationWindow {
         playbackTargetRate: root.playbackTargetRate
         playbackPresentationRate: root.playbackPresentationRate
         playbackRunSkippedFrameSets: root.playbackRunSkippedFrameSets
+        playbackRunPresentedFrames: root.playbackRunPresentedFrames
         playbackLagMilliseconds: root.playbackLagMilliseconds
         playbackCatchingUp: root.playbackCatchingUp
         displayGapCount: Number(root.droppedFrames)

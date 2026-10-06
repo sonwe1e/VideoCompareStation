@@ -59,7 +59,13 @@ var successFillHover = "#047857"
 var successBorder = "#10b981"
 // Badge ground for success-coloured text; successFill is too light for it to reach AA.
 var successPanel = "#064e3b"
-var information = "#38bdf8"
+// Neutral "this is extra information", not a state: the Alpha channel-view dot and the timeline
+// zoom readout. It used to be #38bdf8, byte-identical to sourceA, so an image-workspace badge
+// read as "source A". Green is the one saturated hue band still clear of all three sources.
+// It shares a family with `success`, which is deliberate and constrained: the two never render
+// in the same component (success grounds toasts, information dots a channel badge), and
+// `ui.vcs_theme` pins the separation from every source identity colour.
+var information = "#22c55e"
 
 // These alpha-bearing colours are intentional semantic overlays, not popup backgrounds.
 var modalScrim = "#b3070a10"
@@ -97,10 +103,17 @@ var timelineRail = "#243146"
 var rangeBand = "#4d7cb4ff"
 // Alignment markers. A missing frame is a real gap and uses error; the other kinds only need
 // to be told apart from each other.
-var markerDuplicate = "#fb923c"
-var markerExtra = "#c084fc"
-var markerAnchor = "#22d3ee"
-var markerOther = "#facc15"
+//
+// These four deliberately sit outside the A/B/C source-identity hues (sky #38bdf8 198 deg,
+// orange #fb923c 27 deg, violet #a78bfa 255 deg). The rail is 4-11 px wide, so a marker that
+// merely *resembles* a source chip reads as "this is source B" instead of "this frame repeated":
+// duplicate and information used to be byte-identical to sourceB and sourceA, and extra was
+// ~6 deg from sourceC. Anchor and other are near-neutral, which separates them from every
+// saturated hue by chroma rather than by hue. `ui.vcs_theme` asserts the separation.
+var markerDuplicate = "#a3e635"
+var markerExtra = "#f0abfc"
+var markerAnchor = "#e2e8f0"
+var markerOther = "#a8a29e"
 var keycap = "#111827"
 var keycapBorder = "#2f3d52"
 

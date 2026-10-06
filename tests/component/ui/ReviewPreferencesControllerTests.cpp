@@ -260,5 +260,87 @@ TEST_F(ReviewPreferencesControllerTests, FlushesLatestChangeAndClosesLateEventsD
         application::EventPostResult::Closed);
 }
 
+// The FakeSettingsRepository publishes loadEvents from submit(), i.e. before the load has actually
+// been applied. Waiting on that pointer is not a readiness condition, so the resume tests wait on a
+// sentinel key instead: "review.osc-mode" projects oscMode() to 1 only after applyKnownValues has
+// run, which is exactly the moment settings_.values starts reflecting the document.
+template <typename Controller> [[nodiscard]] bool waitForSettingsApplied(Controller& controller) {
+    return waitForPreferences([&controller] { return controller.oscMode() == 1; });
+}
+
+TEST_F(ReviewPreferencesControllerTests, ResumeEntryIsKeyedByFullSourceIdentity) {
+    auto repository = std::make_shared<FakeSettingsRepository>();
+    repository->autoCompleteSaves = true;
+    ReviewPreferencesController controller{repository};
+    application::SettingsSnapshot settings;
+    settings.values.emplace("review.osc-mode", "auto");
+    repository->completeLoad(std::move(settings));
+    ASSERT_TRUE(waitForSettingsApplied(controller));
+
+    // Same path, different mtime/size: a different identity, so the second file must not inherit
+    // the first one's position. This is the whole reason resume binds the identity rather than the
+    // filename.
+    const QString originalIdentity = QStringLiteral("c:/clips/a.mp4|1048576|1757000000000");
+    const QString editedIdentity = QStringLiteral("c:/clips/a.mp4|2097152|1757000099000");
+    const QString otherFile = QStringLiteral("c:/clips/b.mp4|1048576|1757000000000");
+
+    EXPECT_EQ(controller.resumeFrameFor(originalIdentity), -1);
+    controller.rememberResumeFrame(originalIdentity, 4210);
+    EXPECT_EQ(controller.resumeFrameFor(originalIdentity), 4210);
+    EXPECT_EQ(controller.resumeFrameFor(editedIdentity), -1);
+    EXPECT_EQ(controller.resumeFrameFor(otherFile), -1);
+
+    controller.forgetResumeFrame(originalIdentity);
+    EXPECT_EQ(controller.resumeFrameFor(originalIdentity), -1);
+    controller.stop();
+}
+
+TEST_F(ReviewPreferencesControllerTests, ResumeIgnoresMalformedEntriesInsteadOfGuessing) {
+    auto repository = std::make_shared<FakeSettingsRepository>();
+    ReviewPreferencesController controller{repository};
+    application::SettingsSnapshot settings;
+    settings.values.emplace("review.osc-mode", "auto");
+    // Hand-edited or truncated payload. Resuming a guessed position would be worse than starting
+    // at the beginning, so every malformed shape has to read as "no entry".
+    settings.values.emplace("resume.c:/clips/a.mp4|1|2", "not-a-number:10");
+    settings.values.emplace("resume.c:/clips/b.mp4|1|2", "123:also-not-a-number");
+    settings.values.emplace("resume.c:/clips/c.mp4|1|2", "no-separator-at-all");
+    settings.values.emplace("resume.c:/clips/d.mp4|1|2", "123:-5");
+    settings.values.emplace("resume.c:/clips/e.mp4|1|2", "123:99");
+    repository->completeLoad(std::move(settings));
+    ASSERT_TRUE(waitForSettingsApplied(controller));
+
+    EXPECT_EQ(controller.resumeFrameFor(QStringLiteral("c:/clips/a.mp4|1|2")), -1);
+    EXPECT_EQ(controller.resumeFrameFor(QStringLiteral("c:/clips/b.mp4|1|2")), -1);
+    EXPECT_EQ(controller.resumeFrameFor(QStringLiteral("c:/clips/c.mp4|1|2")), -1);
+    EXPECT_EQ(controller.resumeFrameFor(QStringLiteral("c:/clips/d.mp4|1|2")), -1);
+    EXPECT_EQ(controller.resumeFrameFor(QStringLiteral("c:/clips/e.mp4|1|2")), 99);
+    controller.stop();
+}
+
+TEST_F(ReviewPreferencesControllerTests, ResumeEntriesAreCappedByDroppingTheOldest) {
+    auto repository = std::make_shared<FakeSettingsRepository>();
+    ReviewPreferencesController controller{repository};
+    application::SettingsSnapshot settings;
+    settings.values.emplace("review.osc-mode", "auto");
+    repository->completeLoad(std::move(settings));
+    ASSERT_TRUE(waitForSettingsApplied(controller));
+
+    // The cap exists so the settings document cannot grow without bound across a long life. Writing
+    // past it must evict the oldest entries rather than grow forever.
+    for (int index = 0; index < 64; ++index) {
+        controller.rememberResumeFrame(QStringLiteral("c:/clips/clip%1.mp4|1|1").arg(index),
+                                       index + 1);
+    }
+
+    // 64 writes against a cap of 48 leaves clip16..clip63, in strict write order, because the
+    // recency stamp is monotonic rather than a clock reading that ties inside one millisecond.
+    EXPECT_EQ(controller.resumeFrameFor(QStringLiteral("c:/clips/clip63.mp4|1|1")), 64);
+    EXPECT_EQ(controller.resumeFrameFor(QStringLiteral("c:/clips/clip16.mp4|1|1")), 17);
+    // clip15 is the least recently touched survivor group and is the first to go.
+    EXPECT_EQ(controller.resumeFrameFor(QStringLiteral("c:/clips/clip15.mp4|1|1")), -1);
+    controller.stop();
+}
+
 } // namespace
 } // namespace dvs::ui

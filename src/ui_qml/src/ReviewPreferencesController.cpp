@@ -5,6 +5,7 @@
 #include <QThread>
 #include <QTimer>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -39,6 +40,21 @@ constexpr std::string_view kDifferenceFilterKey = "review.difference-filter";
 constexpr std::string_view kOscModeKey = "review.osc-mode";
 constexpr std::string_view kPlaybackContinuityPolicyKey = "review.playback-continuity-policy";
 constexpr std::string_view kDefaultPairPolicyKey = "review.default-pair-policy";
+
+// C1 resume entries reuse the settings document instead of a second store. The key carries the
+// path|size|mtime identity (so an edited or replaced file never resumes onto the wrong position)
+// and the value carries "<lastTouchedMillis>:<frame>", so eviction can order by recency without a
+// second index. 48 entries is far more review sessions than anyone keeps in rotation and still
+// bounds the document at a few kilobytes.
+constexpr std::string_view kResumeKeyPrefix = "resume.";
+constexpr std::size_t kResumeEntryCap = 48;
+
+// QML hands back the identity already case-folded by SourceIdentity, so the key stays a plain
+// concat and never re-normalises. An identity containing a ':' cannot collide with the value
+// separator because the value is only ever parsed as "<millis>:<frame>" after the "resume." prefix.
+[[nodiscard]] std::string resumeKeyFor(const QString& sourceIdentity) {
+    return std::string{kResumeKeyPrefix} + sourceIdentity.toStdString();
+}
 
 class SettingsEventQueue final : public application::IApplicationEventSink {
 public:
@@ -522,6 +538,90 @@ private:
         }
     }
 
+public:
+    void rememberResumeFrame(const std::string& key, qint64 frame) {
+        if (!loadFinished_ || stopped_ || stopping_) {
+            return;
+        }
+        const qint64 now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::system_clock::now().time_since_epoch())
+                               .count();
+        // Recency stamp, not a clock reading: eviction picks the smallest stamp, so two writes
+        // inside one millisecond must still order. Without this the tie falls back to the key and
+        // eviction stops meaning "least recently touched" exactly when writes arrive in a burst -
+        // which is what a resume-record debounce does while the user scrubs.
+        lastResumeStamp_ = std::max(now, lastResumeStamp_ + 1);
+        const std::string payload = std::to_string(lastResumeStamp_) + ":" + std::to_string(frame);
+        const auto [iterator, inserted] = settings_.values.insert_or_assign(key, payload);
+        if (!inserted && iterator->second == payload) {
+            return;
+        }
+        evictOverflowingResumeEntries();
+        changed();
+    }
+
+    void forgetResumeFrame(const std::string& key) {
+        if (!loadFinished_ || stopped_ || stopping_) {
+            return;
+        }
+        if (settings_.values.erase(key) == 0U) {
+            return;
+        }
+        changed();
+    }
+
+    [[nodiscard]] std::optional<std::pair<qint64, qint64>>
+    readResumeEntry(const std::string& key) const {
+        const auto iterator = settings_.values.find(key);
+        if (iterator == settings_.values.end()) {
+            return std::nullopt;
+        }
+        const std::string_view payload{iterator->second};
+        const auto separator = payload.find(':');
+        if (separator == std::string_view::npos) {
+            return std::nullopt;
+        }
+        bool touchedOk = false;
+        bool frameOk = false;
+        const qint64 touched = QString::fromStdString(std::string{payload.substr(0, separator)})
+                                   .toLongLong(&touchedOk);
+        const qint64 frame =
+            QString::fromStdString(std::string{payload.substr(separator + 1)}).toLongLong(&frameOk);
+        // A malformed entry is treated as absent rather than guessed at: resuming a hand-edited or
+        // corrupted position would be worse than starting at the beginning.
+        if (!touchedOk || !frameOk || frame < 0) {
+            return std::nullopt;
+        }
+        return std::make_pair(touched, frame);
+    }
+
+    void evictOverflowingResumeEntries() {
+        std::vector<std::pair<qint64, std::string>> resumeEntries;
+        resumeEntries.reserve(settings_.values.size());
+        for (const auto& [key, value] : settings_.values) {
+            if (!key.starts_with(std::string{kResumeKeyPrefix})) {
+                continue;
+            }
+            bool ok = false;
+            qint64 touched = QString::fromStdString(value).section(':', 0, 0).toLongLong(&ok);
+            if (!ok) {
+                touched = 0;
+            }
+            resumeEntries.emplace_back(touched, key);
+        }
+        if (resumeEntries.size() <= kResumeEntryCap) {
+            return;
+        }
+        // Oldest first, then by key so the eviction order is deterministic for equal timestamps
+        // and a test can predict exactly which entries survive.
+        std::sort(resumeEntries.begin(), resumeEntries.end());
+        const std::size_t excess = resumeEntries.size() - kResumeEntryCap;
+        for (std::size_t index = 0; index < excess; ++index) {
+            settings_.values.erase(resumeEntries[index].second);
+        }
+    }
+
+private:
     void applyKnownValues(const std::map<std::string, std::string, std::less<>>& values) {
         int nextShortcutPreset = 0;
         if (const auto iterator = values.find(kShortcutPresetKey);
@@ -612,6 +712,8 @@ private:
     std::optional<application::RequestContext> pendingLoad_;
     std::optional<application::RequestContext> pendingSave_;
     std::uint64_t nextRequestId_ = 1U;
+    // Strictly increasing recency stamp for resume entries; see rememberResumeFrame.
+    qint64 lastResumeStamp_ = std::numeric_limits<qint64>::min();
     int shortcutPreset_ = 0;
     bool dropFrameTimecode_ = false;
     ViewMode viewMode_ = ViewMode::SideBySide;
@@ -760,6 +862,30 @@ void ReviewPreferencesController::setPlaybackContinuityPolicy(const int value) {
 
 void ReviewPreferencesController::setDefaultPairPolicy(const int value) {
     impl_->setDefaultPairPolicy(value);
+}
+
+qint64 ReviewPreferencesController::resumeFrameFor(const QString& sourceIdentity) const {
+    if (sourceIdentity.isEmpty() || thread() != QThread::currentThread()) {
+        return -1;
+    }
+    const std::optional<std::pair<qint64, qint64>> entry =
+        impl_->readResumeEntry(resumeKeyFor(sourceIdentity));
+    return entry.has_value() ? entry->second : -1;
+}
+
+void ReviewPreferencesController::rememberResumeFrame(const QString& sourceIdentity,
+                                                      const qint64 frame) {
+    if (sourceIdentity.isEmpty() || frame < 0 || thread() != QThread::currentThread()) {
+        return;
+    }
+    impl_->rememberResumeFrame(resumeKeyFor(sourceIdentity), frame);
+}
+
+void ReviewPreferencesController::forgetResumeFrame(const QString& sourceIdentity) {
+    if (sourceIdentity.isEmpty() || thread() != QThread::currentThread()) {
+        return;
+    }
+    impl_->forgetResumeFrame(resumeKeyFor(sourceIdentity));
 }
 
 void ReviewPreferencesController::stop() noexcept {

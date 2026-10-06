@@ -31,6 +31,105 @@ Rectangle {
     property int openMenuCount: 0
     property bool returnViewerFocusAfterClose: false
     readonly property bool anyMenuOpen: openMenuCount > 0
+    // C2. The order the user sees, and the sources they have selected. Both are keyed by frozen
+    // source identity so that arranging the list cannot reach media truth - the chip keeps its
+    // sourceId, and with it its A/B/C role, its accent colour and its pairing.
+    property var displayOrder: []
+    property var selectedIdentities: []
+    readonly property bool anySelected: control.selectedIdentities.length > 0
+    signal moveRequested(int fromIndex, int toIndex)
+    signal selectionToggled(string sourceIdentity)
+    signal selectionCleared
+    signal removeSelectedRequested
+    readonly property real chipSpacing: 7
+    // A press has to travel this far before it counts as a drag, so an ordinary click on a chip
+    // (which opens its menu) is never mistaken for the start of a reorder.
+    readonly property real dragThreshold: 12
+
+    // Resolves a released drag to a target index in the display order and asks for the move. The
+    // controller rejects an index it does not have, so a drop past either end is simply not a move
+    // rather than a move to a clamped position the user did not choose.
+    function commitDrag(fromIndex, dropCentreX) {
+        if (fromIndex < 0 || control.displayOrder.length === 0)
+            return;
+        let cursor = 12;
+        let target = 0;
+        for (let position = 0; position < control.displayOrder.length; ++position) {
+            const identity = String(control.displayOrder[position]);
+            const existing = chips.children.find(child => child.resolvedSourceIdentity === identity);
+            const width = existing ? existing.width : 128;
+            const centre = cursor + width / 2;
+            if (dropCentreX > centre) {
+                target = position + 1;
+            } else {
+                target = position;
+                break;
+            }
+            cursor += width + control.chipSpacing;
+        }
+        if (target > control.displayOrder.length - 1)
+            target = control.displayOrder.length - 1;
+        if (target !== fromIndex)
+            control.moveRequested(fromIndex, target);
+    }
+
+    // Positions are bindings, not an imperative pass. A Row would place its children in model order,
+    // and the display order is exactly what may differ from it, so each chip computes its own x from
+    // the order and the widths ahead of it. That matters because a chip's width is derived from its
+    // label and settles a frame or more after the delegate appears: an imperative reposition
+    // scheduled from a signal runs once, too early, and leaves every chip at a position computed
+    // from stale widths. A binding re-evaluates on its own whenever the order or any width changes.
+    function chipStartX(position) {
+        let cursor = 12;
+        for (let index = 0; index < position; ++index) {
+            const preceding = chipAt(control.displayOrder[index]);
+            if (preceding)
+                cursor += preceding.width + control.chipSpacing;
+        }
+        return cursor;
+    }
+
+    // The chip showing one identity, or null when that source has no chip yet. A chip whose identity
+    // is missing from the display order falls back to model order so it is still on screen rather
+    // than stacked on top of another chip.
+    function chipAt(identity) {
+        const wanted = String(identity);
+        let fallback = null;
+        for (let index = 0; index < chips.children.length; ++index) {
+            const child = chips.children[index];
+            if (child.objectName === "addSourceChipButton" || child.objectName === "removeSelectedChipButton")
+                continue;
+            if (child.resolvedSourceIdentity === wanted)
+                return child;
+            if (!fallback)
+                fallback = child;
+        }
+        return fallback;
+    }
+
+    // The trailing buttons follow the chips; the second one starts where the first ends.
+    readonly property real trailingButtonX: {
+        let cursor = 12;
+        for (let index = 0; index < chips.children.length; ++index) {
+            const child = chips.children[index];
+            if (child.objectName === "addSourceChipButton" || child.objectName === "removeSelectedChipButton")
+                continue;
+            if (child.width > 0.0)
+                cursor += child.width + control.chipSpacing;
+        }
+        return cursor;
+    }
+
+    // No repositioning hooks: every position is a binding, so there is nothing to schedule.
+
+    // Clicking the chip body toggles its selection. The chip body had no click target before this, so
+    // nothing that used to work moves; the chip menu stays on the overflow button, and a plain
+    // selection needs no modifier key, which also keeps it reachable from a keyboard.
+    function chipClicked(chip) {
+        if (chip.resolvedSourceIdentity.length === 0)
+            return;
+        control.selectionToggled(chip.resolvedSourceIdentity);
+    }
 
     objectName: "activeSourceStrip"
     height: sourceCount > 1 ? 40 : 0
@@ -49,10 +148,9 @@ Rectangle {
         id: sourceHover
     }
 
-    Row {
+    Item {
         id: chips
 
-        spacing: 7
         anchors {
             fill: parent
             leftMargin: 12
@@ -88,17 +186,65 @@ Rectangle {
                 readonly property bool isReference: chip.resolvedSourceIdentity.length > 0 ? (control.referenceSourceIdentity.length > 0 ? chip.resolvedSourceIdentity === control.referenceSourceIdentity : chip.sourceId === control.referenceSourceIndex) : chip.sourceId === control.referenceSourceIndex
                 readonly property bool pending: control.pendingSourceIdentities.indexOf(chip.resolvedSourceIdentity) >= 0 || requestQueued
                 property bool requestQueued: false
+                readonly property bool selected: control.selectedIdentities.indexOf(chip.resolvedSourceIdentity) >= 0
+                // Drag state. A drag starts only from a plain press that is not a modifier-click,
+                // so ctrl-clicking to select never also starts a reorder.
+                property bool dragArmed: false
+                property int dragFromIndex: -1
+                property real dragOffset: 0
+                readonly property int displayIndex: control.displayOrder.indexOf(chip.resolvedSourceIdentity)
+                // The chip's place in the display order, computed as a binding so it follows the
+                // order and the widths ahead of it. A chip the display order does not mention yet
+                // falls to the end rather than sitting on top of another chip.
+                readonly property real layoutX: chip.displayIndex >= 0 ? control.chipStartX(chip.displayIndex) : control.chipStartX(control.sourceCount)
+                x: chip.layoutX
 
                 readonly property color sourceAccent: Theme.sourceColor(chip.sourceId)
                 readonly property color sourceBg: Theme.sourceBackground(chip.sourceId)
                 readonly property color sourceBorder: Theme.sourceBorder(chip.sourceId)
 
-                color: chip.isReference ? chip.sourceBg : Theme.raisedPanel
-                border.color: chip.isReference ? chip.sourceAccent : (chipHover.hovered ? chip.sourceBorder : Theme.border)
-                border.width: chip.isReference ? 1.5 : 1
+                color: chip.selected ? chip.sourceBg : (chip.isReference ? chip.sourceBg : Theme.raisedPanel)
+                border.color: chip.selected ? chip.sourceAccent : (chip.isReference ? chip.sourceAccent : (chipHover.hovered ? chip.sourceBorder : Theme.border))
+                border.width: (chip.selected || chip.isReference) ? 1.5 : 1
+
+                // The drag is resolved on release rather than continuously: the chip follows the
+                // pointer as a single offset, and only a release past the threshold commits a move.
+                // Living reordering during the drag would need the strip to animate around a moving
+                // pointer, and this build has no way to confirm that looks right.
+                DragHandler {
+                    id: chipDrag
+
+                    target: null
+                    property real pressX: 0
+                    readonly property real travelled: chip.x - chipDrag.pressX
+
+                    onActiveChanged: {
+                        if (active) {
+                            chip.dragArmed = true;
+                            chip.dragFromIndex = chip.displayIndex;
+                            chipDrag.pressX = chip.x;
+                        } else if (chip.dragArmed) {
+                            chip.dragArmed = false;
+                            if (Math.abs(chipDrag.travelled) >= control.dragThreshold)
+                                control.commitDrag(chip.dragFromIndex, chipDrag.pressX + chipDrag.travelled + chip.width / 2);
+                        }
+                    }
+                }
 
                 HoverHandler {
                     id: chipHover
+                }
+
+                TapHandler {
+                    // Left button only. The chip's overflow button and the add button are children and
+                    // consume their own clicks first, so this handler sees presses on the chip body
+                    // alone and does not steal the menu from them.
+                    acceptedButtons: Qt.LeftButton
+                    gesturePolicy: TapHandler.DragThreshold
+
+                    onTapped: function (eventPoint, button) {
+                        control.chipClicked(chip);
+                    }
                 }
 
                 function requestReference() {
@@ -365,12 +511,29 @@ Rectangle {
 
             objectName: "addSourceChipButton"
             visible: control.sourceCount < 3
+            x: control.trailingButtonX
             width: 34
             height: chips.height
             text: "+"
             enabled: true
             helpText: qsTr("添加视频")
             onClicked: control.addRequested()
+            controlRadius: 8
+        }
+
+        VcsToolButton {
+            id: removeSelectedChipButton
+
+            objectName: "removeSelectedChipButton"
+            visible: control.anySelected
+            x: control.trailingButtonX + (addSourceChipButton.visible ? addSourceChipButton.width + control.chipSpacing : 0)
+            width: 34
+            height: chips.height
+            text: "−"
+            enabled: true
+            helpText: qsTr("移除所选（%1）").arg(control.selectedIdentities.length)
+            Accessible.name: helpText
+            onClicked: control.removeSelectedRequested()
             controlRadius: 8
         }
     }

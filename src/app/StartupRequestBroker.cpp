@@ -1,5 +1,6 @@
 #include "StartupRequestBroker.h"
 
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QElapsedTimer>
@@ -13,6 +14,15 @@
 #include <deque>
 #include <utility>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+// clang-format off
+#include <windows.h>
+// clang-format on
+#endif
+
 namespace dvs::app {
 namespace {
 
@@ -23,6 +33,52 @@ constexpr int kAcknowledgementTimeoutMilliseconds = 1000;
 constexpr int kElectionWindowMilliseconds = 1000;
 constexpr int kElectionAttemptMilliseconds = 10;
 constexpr std::size_t kMaximumPendingRequests = 8U;
+constexpr QByteArrayView kGreetingPrefix = "PID ";
+
+// Windows only lets a process take the foreground if it already owns it or was started by the
+// foreground process. A forwarding launch is neither, so its SetForegroundWindow fails and the
+// window the user just opened a file into never comes forward - measured, not assumed: the primary
+// stayed behind while the forwarding process exited 0. Only the foreground process can hand that
+// right over, and the primary is the one that needs it, so the forwarding process has to grant it.
+// The primary announces its process id in a greeting the moment the connection is accepted, and the
+// forwarder grants before it writes anything.
+void grantForegroundToPrimary(const qint64 primaryPid) noexcept {
+#if defined(_WIN32)
+    if (primaryPid > 0) {
+        ::AllowSetForegroundWindow(static_cast<DWORD>(primaryPid));
+    }
+#else
+    static_cast<void>(primaryPid);
+#endif
+}
+
+// Reads the server's greeting line and returns the advertised process id, or 0 when the server
+// spoke some other protocol. Bounded by the same window the acknowledgement read already uses so an
+// unexpected peer cannot stall a launch.
+[[nodiscard]] qint64 readPrimaryPid(QLocalSocket& socket) {
+    QByteArray greeting;
+    QElapsedTimer window;
+    window.start();
+    do {
+        if (socket.bytesAvailable() == 0) {
+            static_cast<void>(socket.waitForReadyRead(kConnectAttemptMilliseconds));
+        }
+        greeting.append(socket.readAll());
+        if (greeting.contains('\n')) {
+            break;
+        }
+    } while (socket.state() == QLocalSocket::ConnectedState &&
+             window.elapsed() < kAcknowledgementTimeoutMilliseconds);
+    const qsizetype terminator = greeting.indexOf('\n');
+    if (terminator <= 0 || !greeting.startsWith(kGreetingPrefix)) {
+        return 0;
+    }
+    return QString::fromLatin1(
+               greeting.mid(static_cast<qsizetype>(kGreetingPrefix.size()),
+                            terminator - static_cast<qsizetype>(kGreetingPrefix.size())))
+        .trimmed()
+        .toLongLong();
+}
 
 [[nodiscard]] QString serverName() {
     const QByteArray userIdentity =
@@ -77,6 +133,7 @@ public:
             QThread::msleep(10U);
         } while (connectWindow.elapsed() < kConnectWindowMilliseconds);
         if (socket.state() == QLocalSocket::ConnectedState) {
+            grantForegroundToPrimary(readPrimaryPid(socket));
             QByteArray payload = encodeStartupRequest(request);
             if (payload.isEmpty()) {
                 return StartResult::Failed;
@@ -154,6 +211,13 @@ private:
 
     void acceptConnections() {
         while (QLocalSocket* socket = server_.nextPendingConnection()) {
+            // Speak first: the forwarder cannot grant this process the foreground right until it
+            // knows which process it is, and it has to grant before it sends the request that makes
+            // this process try to come forward.
+            static_cast<void>(socket->write(QByteArrayLiteral("PID ") +
+                                            QByteArray::number(QCoreApplication::applicationPid()) +
+                                            QByteArrayLiteral("\n")));
+            static_cast<void>(socket->flush());
             buffers_.insert(socket, {});
             QObject::connect(
                 socket, &QLocalSocket::readyRead, &owner_, [this, socket] { readFrom(*socket); });

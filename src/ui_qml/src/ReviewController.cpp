@@ -403,6 +403,7 @@ struct ReviewView final {
     QString playbackContinuityPolicyName;
     qulonglong playbackSkippedFrameSets = 0U;
     qulonglong playbackRunSkippedFrameSets = 0U;
+    qulonglong playbackRunPresentedFrames = 0U;
     qreal playbackTargetRate = 1.0;
     qreal playbackPresentationRate = 0.0;
     qint64 playbackLagMicroseconds = 0;
@@ -2024,6 +2025,8 @@ private:
                 static_cast<qulonglong>(snapshot_->playbackSkippedFrameSets);
             next.playbackRunSkippedFrameSets =
                 static_cast<qulonglong>(snapshot_->playbackRunSkippedFrameSets);
+            next.playbackRunPresentedFrames =
+                static_cast<qulonglong>(snapshot_->playbackRunPresentedFrames);
             next.playbackTargetRate = static_cast<qreal>(snapshot_->playbackTargetRate);
             next.playbackPresentationRate = static_cast<qreal>(snapshot_->playbackPresentationRate);
             next.playbackLagMicroseconds = static_cast<qint64>(snapshot_->playbackLagMicroseconds);
@@ -2335,6 +2338,10 @@ qulonglong ReviewController::playbackSkippedFrameSets() const noexcept {
 
 qulonglong ReviewController::playbackRunSkippedFrameSets() const noexcept {
     return impl_->view().playbackRunSkippedFrameSets;
+}
+
+qulonglong ReviewController::playbackRunPresentedFrames() const noexcept {
+    return impl_->view().playbackRunPresentedFrames;
 }
 
 qreal ReviewController::playbackTargetRate() const noexcept {
@@ -2812,6 +2819,18 @@ void ReviewController::refreshProjection() noexcept {
 
 QString ReviewController::frozenSourceIdentity(const QUrl& source) const {
     return impl_->frozenSourceIdentity(source);
+}
+
+QString ReviewController::currentSourceIdentity() const {
+    const auto view = impl_->view();
+    if (view.sourceUrls.isEmpty()) {
+        return {};
+    }
+    const int index = view.canonicalSourceIndex;
+    if (index < 0 || index >= view.sourceUrls.size()) {
+        return {};
+    }
+    return impl_->frozenSourceIdentity(view.sourceUrls.at(index).toUrl());
 }
 
 void ReviewController::stop() noexcept {

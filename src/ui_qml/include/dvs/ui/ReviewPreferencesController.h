@@ -82,6 +82,15 @@ public:
     void setDefaultPairPolicy(int value);
 
     Q_INVOKABLE void stop() noexcept;
+
+    // Resume (C1): per-source last watched frame, keyed by the path|size|mtime identity so an
+    // edited or replaced file never resumes onto the wrong position. Entries live in the existing
+    // settings document under a "resume." prefix rather than a second store, and the oldest are
+    // evicted past kResumeEntryCap so the file cannot grow without bound.
+    Q_INVOKABLE qint64 resumeFrameFor(const QString& sourceIdentity) const;
+    Q_INVOKABLE void rememberResumeFrame(const QString& sourceIdentity, qint64 frame);
+    Q_INVOKABLE void forgetResumeFrame(const QString& sourceIdentity);
+
     void processRepositoryEvents() noexcept;
 
 Q_SIGNALS:

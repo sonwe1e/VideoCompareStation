@@ -1,6 +1,6 @@
 # 启动性能基线与归因（v2.0 计划 · Step 0/1）
 
-更新日期：2026-09-27。测量对象：`main @ 8ffa577` + 工作区 Step 0/1 启动埋点改动（未提交）。
+更新日期：2026-10-04（追加「Step 8 · v2.1.0 当前 SHA 重测」一节）。测量对象：`main @ 8ffa577` + 工作区 Step 0/1 启动埋点改动（未提交）。
 本文是 v2.0 优化计划（启动 / 体积 / 体验 / 清理 / 发布）中启动维度的唯一数据出处：
 所有优化的前后对照必须来自同一脚本、同一构建类型（release）、同一素材。
 上一轮会话中口头的 663–836 ms 区间已被本基线取代；`baseline2-*` 两轮（16 里程碑粒度）
@@ -330,6 +330,263 @@ Step 6 亦复用）：
 
 按计划决策门（"确认不了就不动"）：**不改代码**，发布说明记"未观察到"。诊断数据：
 `out/startup-measurements/step6-diag*.{stderr.txt,trace.jsonl}`（单源/三源）。
+
+## Step 8 · v2.1.0 当前 SHA 重测（B0，2026-10-04）
+
+上文所有表格都绑定 `8ffa577`（v2.0.0 时期）。Step 3/4/5 之后的代码没有再测过，
+「830 ms + 230 ms 空白窗」这两个数字属于 **v2.0.0 时代**，不是产品现状。本节把基线
+重新绑定到发布 tag。
+
+- **SHA**：`267adca6114c912796465944a51468598b8f0762`（tag `v2.1.0`），工作树在
+  `src/` 上无改动（仓库根有 5 个与本轮无关的未跟踪文件，测量脚本计入 dirty 条目）。
+- **构建**：`build.ps1 -Preset release -UseInstalledDependencies` 增量，**零编译目标**
+  （只重新生成 dyndep），exe 与该 SHA 一致。
+- **环境**：与 2026-09-27 基线同一台机器（i7-13700KF / RTX 4090 / 2 个虚拟显示适配器）。
+- **协议**：同脚本、同 release、同素材 `frameid_1080p60_a.mp4`，5 轮 + 1 预热，热缓存。
+- **数据**：`out/startup-measurements/b0-baseline-{nofile,onefile}-20261004-1210{53,130}/`。
+
+### 关键指标（中位 / P95，ms）
+
+| 指标 | 无文件 | 带单视频 |
+|---|---|---|
+| spawn → 窗口可见（外部 1 ms 轮询） | 645.8 / 660.2 | 643.0 / 687.8 |
+| spawn → 事件循环（exec，可交互） | 872.9 / 889.7 | 874.3 / 933.0 |
+| spawn → 命令接受（kind 0） | — | 906.5 / 967.7 |
+| spawn → 首帧集就绪（kind 4） | — | 949.4 / 987.5 |
+| spawn → 首帧提交（kind 8） | — | **949.9 / 990.6** |
+| **"可见但空白"窗口（窗口 → 首帧提交）** | — | **~307** |
+
+**结论 1：现状比 830/230 更差。** 当前 SHA 首帧提交 949.9 ms、空白窗 ~307 ms；
+v2.0.0 记录为 835.1 ms / ~243 ms。但按本文档 L178 的教训（环境日间漂移可达 ~25 ms），
+**跨月数字不能直接判定为回归**——`show-enter → sg-initialized` 在 153–196 ms 间波动即为例证。
+要判定 v2.1.0 是否真的比 v2.0.0 慢，必须重跑 `8ffa577` 的同日 A/B；本轮不做该结论。
+
+**结论 2：出现两段此前从未被单独归因的开销**（v2.0.0 表中不存在或仅有 0.2 ms）：
+
+| 段 | v2.0.0 记录 | 当前 SHA（中位 / P95） | 说明 |
+|---|---|---|---|
+| `surface-bound → show-enter` | 0.2 / 0.3 | **23.4 / 25.0** | `DesktopApplication.cpp` 里 `setGraphicsConfiguration`、`preferHighRefreshScreen` 的 `QGuiApplication::screens()` + `setScreen/setPosition`、`applyWindowsNativeChrome` |
+| `qml-load-returned → shell-registration` | （里程碑不存在） | **17.8 / 18.3** | `Main.cpp` 启动时的资源管理器命令自愈注册 |
+
+两段合计 **~41 ms**，位于 QML 装载之后、事件循环之前，属于既有串行路径上的新增可见成本，
+比继续在 QML 段做延迟加载更便宜可摘。两者都必须先做 A/B 归因再改，不得直接删。
+
+### B0c/B0d · 两段新增开销的细粒度归因（同日，只加埋点不改行为）
+
+在 `surface-bound → show-enter` 之间补三个里程碑（`graphics-config`、`screen-select`、
+`native-chrome`），确认 `surface-bound → graphics-config` = 0.2 ms、
+`graphics-config → screen-select` = 0.1 ms、`native-chrome → show-enter` = 0.2 ms——
+**23.4 ms 全部落在 `applyWindowsNativeChrome()` 这一个函数里**。再把该函数内部拆成
+`native-hwnd`（`window->winId()` 之后）与 `native-attrs`（四次 `DwmSetWindowAttribute`
+之后）两段，得到决定性结论：
+
+| 段 | 中位 / P95（ms） | 归因 |
+|---|---|---|
+| `screen-select → native-hwnd` | **22.4 / 23.3** | `window->winId()` 在 `show()` 之前强制物化 HWND |
+| `native-hwnd → native-attrs` | 0.2 / 0.3 | 四次 DWM 属性设置，可忽略 |
+
+即**代价不是 DWM 属性，而是「提前造窗口」**。数据：
+`out/startup-measurements/b0c-attrib-nofile-20261004-121429/`、
+`b0d-chrome-split-20261004-121537/`。
+
+### 本轮实施的两处修复与一处**被实测否决**的修复
+
+1. **【否决并已回退】把 `applyWindowsNativeChrome` 移到 `show()` 之后。**
+   假设是"那 22 ms 只是提前物化，挪回去就是净赚"。同日 A/B **证伪了这个假设**：
+
+   | 段 | 修复前（B0d） | 修复后（B0-fix） |
+   |---|---|---|
+   | `screen-select → native-hwnd`（造 HWND） | **22.4** | （该段已不存在） |
+   | `show-enter → sg-initialized` | **168.1** | **213.9 / 235.2** |
+   | `post-show → native-hwnd` | （不存在） | **0.2** |
+   | spawn → 窗口可见（无文件） | 642.8 | **689.5**（更晚） |
+
+   代价没有消失，只是从 `show()` 之前搬进了 `show()` 内部，而且搬进去的比搬出来的更多
+   （+46 ~ +67 ms vs −22 ms）。`post-show → native-hwnd` 只有 0.2 ms 是决定性证据：
+   **`show()` 本来就会建 HWND**，提前建并不会替它省掉任何工作。
+   窗口出现反而更晚，且引入标题栏晚一帧生效的闪白风险。**已按证据回退，保留原有位置**，
+   代码注释里写明这次否决，避免下一个人再犯同样的改动。
+
+2. **【保留】Explorer 自愈注册改为 worker 线程。** `ensureRunningInstallationRegistered`
+   原本 ~18 ms 同步注册表工作卡在「首帧已呈现」与「`exec` 起步」之间。现在由 `std::jthread`
+   执行，调用、修复规则、失败只记日志的语义不变，`runDesktop` 返回时 join。
+   **口径变更**：`shell-registration` 里程碑现在测的是线程派生（约 0.1–0.2 ms），不再测注册耗时；
+   注册本身的正确性由 `shell_windows.ExplorerCommandRegistrationTests` 与
+   `tools/shell/Test-RegisterCompareStationContextMenu.ps1` 负责，不由启动测量负责。
+
+   这条收益是**同一份运行内的分段对比**，不受跨轮环境漂移影响：
+   `qml-load-returned → shell-registration` 由 **18.0 ms → 0.1/0.2 ms**。
+   注意：同轮的 spawn→exec 总数不可直接对比（该轮整体更慢，`context-ready → qml-loaded`
+   从 560.6 漂到 600.6），所以**只按段认收益，不按总数认收益**。
+
+3. **保留细粒度里程碑**（`graphics-config`、`screen-select`、`native-hwnd`、`native-attrs`、
+   `native-chrome`）。它们只在 `DVS_STARTUP_TIMING` 设置时输出，平时零开销，
+   且是上面那次否决的唯一依据。`b1-fixed-*` 是被否决版本的数据，**保留作为反例**。
+
+**结论 3：主项结构未变。** `context-ready → qml-loaded` = 560.6 ms 仍是最大单项
+（v2.0.0 为 518.2，跨月不作结论）；`show-enter → sg-initialized` = 170.0 ms、
+`sg-initialized → post-show` = 52.3 ms 落在历史区间内。Step 5「启动请求提前架构性取消」
+的结论仍然成立：`startup-request` 里程碑仍在 `window-shown` 之后。
+
+### Step 8 探针结果 · 延迟加载这条路**不成立**（2026-10-04 同日 A/B）
+
+计划里 Step 8 想「把重组件改延迟加载，砍掉 `context-ready → qml-loaded` 的 550 ms」。
+同日 A/B 把它否掉了，数据如下（同一天、同一脚本、warm cache、5 轮 + 1 warmup）。
+
+**实验一 · 摘掉最大的那个组件。** `ImageWorkspace.qml` 是全仓最大的 QML（148.6 KB），
+启动时已经用 `Loader` 懒实例化，但内联 `Component { ImageWorkspace { … } }` 在**编译期**
+就要解析该类型。把整个 Component 体换成 `Item {}` 再测：
+
+| 变体 | `context-ready → qml-loaded`（中位 / P95） |
+|---|---|
+| 去掉 `ImageWorkspace`（含 FolderPairSidebar / ImageEditDialogs 的连带编译） | 551.5 / 569.1 |
+| 原样 | 563.8 / 604.5 |
+
+差 ~12 ms，落在该段运行间漂移内。**「提前编译大组件」不是这 550 ms 的成因。**
+
+**实验二 · 引擎与 import 预热占多少。** 在 `engine->load()` 前用一个一次性
+`QQmlComponent` 加载 `import QtQuick / import QtQuick.Controls / Item {}` 并打点：
+
+| 段 | 中位 / P95 |
+|---|---|
+| `context-ready → qml-warm`（引擎 + Controls 导入 + 样式初始化） | **12.2 / 12.4** |
+| `qml-warm → qml-loaded`（Main.qml 自身编译 + 建树） | **550.7 / 556.6** |
+
+**结论**：这 550 ms 既不是引擎/import 预热（12 ms），也不是被提前拉进来的大组件（~12 ms），
+而是 **Main.qml 自身编译 + 实例化**；而其中最大的单文件只占 ~12 ms，说明成本是
+**弥散在整个对象树**上的，没有单点热点。
+
+因此按组件逐个改 `Loader` 只能拿到**成比例的小切片**，却要动 objectName 契约、绑定与焦点顺序 ——
+**投入产出不成立，本轮不做**。真正对「空白窗」这个用户可见问题有效的，是**覆盖**这 550 ms
+而不是压缩它（即启动画面）。工程没有 `qt_add_qml_module` / `qmlcachegen`，全部 QML 运行时编译；
+若要压缩，正确的方向是给 QML 加预编译缓存，而不是拆组件。
+
+证据目录：`out/startup-measurements/b1-probe-nostub-nofile-20261004-140340/`、
+`b1-probe-withimageworkspace-nofile-20261004-140431/`、`b1-probe-warm-20261004-140529/`。
+
+## Step 9 · B2 启动画面（2026-10-04 实现）
+
+既然 550 ms 压不下去（B1 已证伪），就**盖住**它直到第一帧真正画出来。
+
+**为什么必须是原生窗口而不是 QML。** 这段时间里 GUI 线程一直在 `engine->load()` 里同步阻塞，
+事件循环还没跑。`QQuickWindow` 在事件循环启动前画不出任何东西 —— 一个 QML 启动画面自己就是
+另一个空白窗。所以 `StartupSplash` 自带**独立线程**和**自己的 HWND**，用 GDI 直接绘制，
+在该线程上跑自己的消息循环。
+
+**实现要点**
+
+- `src/ui_qml/src/StartupSplash.cpp`：`WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE`
+  + `WS_POPUP`。不进任务栏/alt-tab，不抢焦点（主窗口几百毫秒后才 `show()` 并激活）。
+- **不阻塞 GUI 线程**：`requestDismiss()` 只置原子标志 + `PostMessage`，任何线程可调；
+  只有 `join()` 会等，而它只在 `exec()` 里调用，那时 worker 已空闲。
+- **所有提前返回都能撤掉它**：`DesktopApplication::load()` 里 splash 是**守卫对象**，
+  每个 `return false` 出栈即撤；成功后所有权移交 `splash_`，由 `sceneGraphInitialized`
+  （DirectConnection，可在渲染线程调）撤。
+- **smoke 模式不显示**（`options_.smokeMode`）。
+- 背景色 `#090d14` 与 `Theme.background` 一致，撤到主窗口不是亮度跳变。
+- 失败即降级为「没有启动画面」，绝不阻塞或中断启动。
+
+**实测（同日、release、warm cache、5 轮 + 1 warmup，带 1080p60 素材）**
+
+| 指标 | 值（中位 / P95） |
+|---|---|
+| `spawn → splash-painted`（启动画面首帧真正上屏） | **57.1 / 68.0 ms** |
+| `spawn → window`（工具枚举到的**审阅**窗口） | 642.6 / 646.1 ms |
+| `spawn → sg-initialized` | 791.4 / 795.1 ms |
+| `spawn → first snapshot committed (kind 8)` | 940.1 / 945.3 ms |
+
+启动画面从 **~57 ms** 一直挂到首帧（`sg-initialized`），覆盖约 **734 ms**。
+
+**踩到并修掉的一个回归（必须记）**：第一版 splash 是**无主**顶层窗口，于是
+`Process.CloseMainWindow()` —— 也就是 `measure-startup.ps1` 结束每轮时的关闭动作 —— 按枚举顺序
+把 `WM_CLOSE` 发给了**启动画面**而不是审阅窗口。表现为：每轮 `exit=-1`（10 s 等不到退出后被
+`Kill(true)` 硬杀）、**播放 trace 一个都不落盘**。发现方式是注意到加 splash 之后所有带文件的
+运行都丢失了 trace，回查 `summary.json` 的 `exitCode` 才定位到硬杀。
+修法：先建一个**从不显示的隐藏 owner 窗口**，把 splash 作为**被拥有的窗口**创建
+（`kSplashOwnerClassName`）。被拥有的窗口会被「进程主窗口」搜索跳过，于是关闭进程关的是审阅窗口，
+应用优雅退出、`exit=0`、trace 恢复。回归断言：
+`ui.StartupSplashTests.SplashWindowIsOwnedSoItIsNeverTheProcessMainWindow`。
+
+**一个必须说清的度量陷阱**：修复之后 `spawn → window` 从 77 ms **变回** 642 ms。
+这不是倒退 —— 被拥有的窗口本来就不该被「找主窗口」的枚举命中，那 77 ms 测的是工具误抓了 splash。
+现在 `spawn → window` 如实报告审阅窗口的 642 ms，splash 的上屏时刻改由新增的
+`splash-painted` 里程碑记录（它在 splash 自己的线程上打点，不依赖外部窗口枚举）。
+
+**未变**：主窗口时点与各 segment 与 B2 之前一致（`show-enter → sg-initialized` 171.7 ms vs 之前
+184.0 ms，属运行间漂移）。按 L178，只有 segment 级差值可归因，这里没有任何 segment 变化。
+
+证据：`out/startup-measurements/b2-splash-onefile-20261004-143150/`（无主，有回归）、
+`b3-owned-onefile-20261004-144218/`、`b3-splashmark-onefile-20261004-144428/`（修复后）。
+测试：`ui.StartupSplashTests` **5/5**；变异 2/2（去掉 `WM_CLOSE` 的 `DestroyWindow` → 3/4 失败；
+去掉 `WS_EX_NOACTIVATE` → 焦点断言失败），产品文件按字节还原。
+**未验证**：本环境拿不到屏幕确认，启动画面的**观感**（位置、字号、留白）未经人眼或截图核对。
+
+## Step 10 · B3 worker 侧预探测 —— **收益不足，不做**（2026-10-04 实测）
+
+B3 想让探测与 550 ms 的 QML 段、~172 ms 的设备初始化重叠。先测余量再决定要不要动媒体路径。
+
+当前架构下探测本身**已经是异步的**：`MediaProbe` 有 2 个 worker，`submit` 即发即忘，且
+**没有结果缓存** —— 所以「预探测」若不做缓存就是重复劳动，做缓存则要在解码适配器里引入
+按文件身份失效的语义（路径 + 字节数 + mtime），是一块新的正确性表面。
+
+**余量实测（当前 SHA，带 1080p60 素材，播放 trace 时间线，以 kind 0 CommandAccepted 为 0）**
+
+| 事件 | 相对时间 |
+|---|---|
+| kind 0 CommandAccepted | 0 ms |
+| kind 2 | +14.6 ms |
+| kind 4 FrameSetReady | +42.5 ms |
+| kind 8 SnapshotCommitted | +42.7 ms |
+
+**整条「打开」只有 ~42.7 ms**，而 kind 2 → kind 4 的 ~28 ms 里 1080p60 的解码占大头，探测只是其中
+一小段。即使预探测做到完美，上限也只有个位数毫秒，占 ~940 ms 总启动的 **<1%**。
+
+这与 Step 5（2026-09-28）在当时基线上独立得到的「打开本身仅 ~38 ms」一致 —— 本次是在当前 SHA
+上复现了同一结论，不是新判断。**为 <1% 在媒体路径上加缓存不值得，B3 本轮不做。**
+
+对比之下真正的量级：`context-ready → qml-loaded` 550 ms（需 qmlcachegen，见 Step 8）、
+`show-enter → sg-initialized` ~172 ms（设备生命周期架构改动）。这两项都远大于 B3 的全部余量。
+
+证据：`out/startup-measurements/b3-splashmark-onefile-20261004-144428/`（含 trace）。
+
+### 一个真缺陷：splash 的拆卸存在竞态挂起（2026-10-04 发现，**根因是推断，未复现**）
+
+全量 CTest 跑出一次超时：
+`ui.StartupSplashTests.DestructionRemovesTheWindowWithoutAnExplicitDismiss (Timeout)`。
+再次单跑 8/8 通过，此后再未复现，**根因未确证**。按代码推断出的机制是：
+
+`requestDismiss()` 只在 `hwnd_` 非空时 `PostMessage(WM_CLOSE)`。worker 在
+`CreateWindowExW` **之前**重查过标志，但在 `hwnd_` 存储之前还有一段窗口；这段时间里
+`requestDismiss()` 读到空句柄、不发任何消息，而 worker 随即进入 `GetMessage` **无超时阻塞**，
+`join()` 永不返回。生产里对应「启动期间被拆掉的启动会卡死在那里」。
+
+改为 worker 的消息循环**每轮重读标志并带超时等待**（`MsgWaitForMultipleObjects` +
+`kPollMilliseconds = 50`），拆卸不再依赖调用方与句柄在同一瞬间可见；原先
+`CreateWindowExW` 之前的那次重查仍然保留，它只是让晚到的 splash 根本不出现。
+
+**但必须说清：这一改动没有测试覆盖。** 写了一个 150 次「建了就扔」的压力测试，并做了两个变异
+（去掉轮询恢复成阻塞 `GetMessage`；保留超时等待但不读标志）—— **两个变异都存活**。
+原因明确：`std::thread` 的启动开销远大于那段竞态窗口，析构几乎总是先到，worker 走早退分支，
+根本进不了窗口。所以
+`ui.StartupSplashTests.RepeatedCreateAndDropNeverLeavesAWindowBehind` 是**反复丢弃的冒烟测试
+（断言后置条件：无残留窗口），不是该竞态的覆盖**。轮询循环作为**加固**保留，不作为「已验证行为」
+记账。若将来要真正覆盖，需要一个测试钩子把 worker 停在标志重查与句柄发布之间 —— 本轮没加。
+
+证据：`out/verification/a4b-foreground-handover/mutate-splash-strand.ps1`（含负面结论）。
+
+### 编译坑 · 含 windows.h 的编译单元不能用多行流式断言
+
+`StartupSplashTests.cpp` 一开始报 `C1903`（`-scanDependencies` 下连底层诊断都看不到）。
+绕过 `-scanDependencies` 单独编译才拿到真因：**C1057 unexpected end of file in macro
+expansion** —— 只要该 TU 包含 `<windows.h>`，下面这种跨行写法就会让预处理器跟丢宏展开：
+
+```cpp
+EXPECT_TRUE(x)
+    << "message";          // 断言与消息必须写在同一物理行
+```
+
+与 `ASSERT_`/`EXPECT_` 无关，与括号无关（单独测过），与 `windows.h` 的包含顺序也无关。
+`MainQmlContractTests.cpp` 能这么写是因为它没有包含 `windows.h`。规则已写进该测试文件头部。
 
 ## 已知限制与待办
 

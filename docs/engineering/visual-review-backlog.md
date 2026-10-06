@@ -1,7 +1,297 @@
 # 视觉审查问题台账
 
-更新：2026-10-02。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-10-04。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+
+## 2026-10-05 播放控制条：鼠标在进度条上时控制条淡出（U-03，工作区已修复，未提交）
+
+用户报告「在播放器界面，鼠标在进度条上时进度条也会消失」。复现的不是「悬停被子控件抢走」，
+而是**倒计时本身不看光标**：主机每做一次走带调用 `transport.reveal()`（拖动进度条、在进度条上
+滚轮），该函数无条件 `hideTimer.restart()`；1.2 秒后计时器把面板淡出，光标还在进度条上。
+- **修复**：`PlayerOsc.qml` 新增 `pointerInsidePanel`（面板 `HoverHandler` **或**时间轴
+  `pointerInside`），让「光标是否在控件上」成为倒计时的唯一前置条件：
+  - `reveal()` 只在光标不在控件上时才重新计票；
+  - `hideTimer.onTriggered` 加 `&& !pointerInsidePanel`，倒计时只能把光标已离开的条淡出；
+  - `onPointerInsidePanelChanged` 成为唯一的重置点，光标离开控件（移出面板、松手、拖拽中
+    掉 grab）都重新计票，避免只停在拖拽释放后卡在可见状态。
+  - `TimelineTracks.qml` 新增 `pointerInside`（`containsMouse || dragging`）：拖拽中光标
+    被拖出面板时 Qt 会撤销鼠标区 hover，但 grab 仍在，这段时间棒必须算「在控件上」。
+  - `Main.qml` 沉浸态 `immersiveOscTimer` 同样改为光标在控件上则延期重检。
+- **测试**（`ui.player_osc 12/12`、`ui.timeline_tracks 5/5`）：新增
+  `test_hovering_the_progress_bar_keeps_it_visible_under_the_cursor`、
+  `test_releasing_a_scrub_outside_the_panel_hides_the_bar_again`、
+  `test_pointer_inside_survives_a_scrub_outside_the_bar`，并在原有自动隐藏测试中反证
+  光标门没有被彻底关死（无光标时仍会淡出）。
+- **变异证据**：`reveal()` 无条件 restart → 新悬停测试 FAIL；
+  `pointerInside` 去掉 `|| dragging` → 时间轴拖拽测试 FAIL；
+  `onPointerInsidePanelChanged` 去掉 else 分支 → 释放淡出测试 FAIL。三处均单点失效。
+- **门禁**：`ui.MainQmlContractTests` CTest **48/48 通过**（`gtest_discover_tests`
+  逐例注册，各自 20 s 超时；整二进制一次跑 48 例会出现与本改动无关的跨用例偶发失败）；
+  dev `format-check`、`lint`（`--max-warnings 0`）通过。
+- **顺带发现**：`tests/component/ui/qml/tst_timeline_tracks.qml` 的 `markers` 数组自 HEAD 起
+  就不符合 `qmlformat -w 4`（预先存在的偏差，不在本轮格式门禁范围内，未替它改格式）。
+
+## 2026-10-04 三项收口开工：视觉长尾、启动速度、播放器完备度（工作区，未提交）
+
+用户按三项打分要求修复：UI 视觉完成度 7（token 化完成、布局长尾未清）、启动速度 5
+（830 ms + 230 ms 空白窗）、通用播放器完备度 3.5（列表/续播/网络流/滤镜全无）。
+本节记录开工当天的核实结果与已完成项；范围决定见下方「范围决定」。
+
+- **范围决定**：用户选定**本轮只做 C-A**（续播、列表增强、播放状态可见化）。C4 网络流与
+  C5 滤镜**不在本轮**，作为独立立项记录在文末。产品范围
+  [「不要因播放器这一名称而默认扩展媒体库」](../product/visual-review.md) 保持原样，未改写。
+- **token 化确实已完成**：`src/ui_qml/qml` 全目录只剩 **19 处**十六进制字面量，集中在
+  `ImageWorkspace.qml`(18) 与 `ImageEditDialogs.qml`(1)，均为画笔色板/棋盘格/白底等内容色。
+  **A 区的剩余工作是色相与布局，不是 token**，不应再排 token 化任务。
+
+### 本轮验收状态与未完成项（不当作计划已完成）
+
+- **已完成并有证据**：V-09 色相（变异 5/5）、V-10 窄窗遮挡（复现→修复→45/45）、
+  S-04 启动基线重绑 + 注册 worker 化（分段 −17.8 ms）、
+  **C1 续播**（身份绑定 + 有界存储 + 显式告知，3 条单测 + 1 条全链路契约测试）、
+  **C3 未测量 vs 零缺陷**（新 `playbackRunPresentedFrames` 信号，变异 2/2）、
+  **B2 启动画面**（自带线程的原生窗口，`spawn → splash-painted` **57.1 ms**，覆盖到首帧约 734 ms，
+  测试 5/5 + 变异 2/2；并修掉它自己引入的一个回归，见启动文档 Step 9）、
+  **B1 已用 A/B 证伪并撤回**（不是优化）、
+  **B3 预探测已用实测判定收益 <1%，撤回**（不是未做）、
+  **A4 芯片行溢出已用测试推翻并更正台账说法**（不是修复）。
+- **门禁**：dev `format-check` 通过、`lint` 零告警、
+  `^(ui\.|shell_windows\.|app\.)` 回归 CTest 报 **100% / 391**
+  （注册 395，过滤外 4；391 中 385 实跑通过 + 2 skipped + 4 disabled 为既有状态）。
+- **本轮未开始，不要当成已做**：
+  - **A3** 通知栈窄窗与右侧面板重叠——未取证。现有 `Main.qml` 的 `stageRight` 已扣除抽屉宽度，
+    台账那条「可能重叠」**未复现也未关闭**，只是没动。
+  - **A4b** 二次启动前台交接——**已实现授权，但端到端在本环境无法验证**。先更正一条旧记录：
+    之前写的「`AllowSetForegroundWindow` 调用点已存在」是错的，代码里**根本没有**。
+    实测（`out/verification/a4b-foreground-handover/probe.ps1`）：第二个进程转发成功（exit 0），
+    主实例窗口**始终不是前台**。修法：主实例在 accept 时先自报 `PID <pid>`，转发进程在写入请求
+    **之前**读这一行并 `AllowSetForegroundWindow(primaryPid)` —— 只有前台进程（或由它启动的进程）
+    才有权授予前台资格，而双击启动的转发进程恰好持有这个资格。
+    **仍然未验证**：本环境的进程由测试工具拉起、不具前台资格，`AllowSetForegroundWindow` 是空操作，
+    修复前后实测都是「窗口没上前台」（诊断日志确认授权已发出、`SetForegroundWindow` 已调用）。
+    也就是说**这里的失败是环境造成的，不能当作产品修复成功的证据，也不能当作修复前缺陷的证据**。
+    已验证的只有协议半边：握手的 `PID ` 招呼行由
+    `app.StartupRequestBrokerTests.PrimaryAnnouncesItsProcessIdBeforeTheForwarderSends` 断言，
+    变异（删掉招呼行写入）1/1 失败并按字节还原。真实验收需要在 Explorer 里双击一次。
+  - **B1** QML 延迟加载（Step 8）——**已证伪，不要重开**。见
+    [startup-performance-v2.md](startup-performance-v2.md) 的 Step 8 探针：摘掉全仓最大的
+    `ImageWorkspace.qml`（148.6 KB）只差 ~12 ms；`context-ready → qml-warm` 仅 12.2 ms。
+    550 ms 是 Main.qml 自身编译+建树且**弥散分布**，逐个改 `Loader` 只能拿成比例小切片。
+  - **B3** worker 侧预探测——**不做**。当前 SHA 实测：命令接受→首帧提交仅 **42.7 ms**，
+    其中 1080p60 解码占大头，预探测上限 <1%；而 `MediaProbe` 无结果缓存，要预探测就得在解码
+    适配器里引入按文件身份失效的缓存语义。见启动文档 Step 10。
+  - **C2 列表增强**——**控制器层与 QML 接线都已实现**。不再等拍板，按建议的安全范围落地：
+    重排**只改显示顺序**，多选走**既有操作**。
+    - 新增（`ReviewShellController`）：`displaySourceIdentities` / `selectedSourceIdentities`、
+      `moveSourceInDisplayOrder(from,to)`、`setSourceSelected` / `toggleSourceSelection` /
+      `clearSourceSelection`、`removeSelectedSources()`。全部以**冻结 source identity** 为键，
+      不接受索引寻址，所以重排**碰不到** `sourceId` 驱动的 A/B/C 角色、`Theme.sourceColor`、
+      对齐偏移与配对策略；`activeSources` 顺序、`canonicalSourceIndex`、`referenceSourceIndex`、
+      `activeGeneration` 一律不动，且重排**不提交任何媒体命令**。拓扑一变，显示顺序复位、选择清空
+      （用户没有选中新打开的源）。
+    - 测试：`ReviewControllerTests` 3 个（重排不碰角色/参考/active 集合且不提交命令；越界索引被拒、
+      二次重排可叠加；选择跨重排保留、拓扑变更后清空、未打开 identity 无法被选中；批量删除按
+      identity 走同一条队列，第二个意图排队而非同时提交）。变异 **3/3** 被杀
+      （重排吃掉 active 顺序 / 拓扑不变时不复位 / 选择不再限制在已打开的 identity），
+      产品文件每次按字节还原。证据 `out/verification/c2/mutate-display-order.ps1`。
+    - **QML 接线**：`ActiveSourceStrip.qml` 由 `Row` 自动布局改为**声明式 x 绑定**
+      （`chipStartX(position)` / 每个 chip 的 `layoutX`）—— 这是必须的：`Row` 按 model 顺序排布，
+      而显示顺序正是可能与它不同的那一维；命令式 `Qt.callLater(repositionChips)` 在实测中**不稳定**
+      （芯片宽度由标签算出、要晚一帧才稳定，按钮式重排会按过期宽度定位，测试抓到过一次
+      `12 vs 437`），绑定则随顺序或任一宽度变化自动重算，无时机可错。
+      芯片体点击 = 切换选中（此前芯片体**根本没有点击目标**，所以没有行为被夺走；源菜单仍在 ⋯ 按钮上，
+      不需要修饰键、键盘也可达）；有选中时出现「− 删除所选」按钮；拖拽超过 12 px 阈值后**在抬起时**
+      解析目标索引并请求移动（不做拖拽过程中的实时让位动画 —— 本环境无法目视确认其观感）。
+      Main.qml 把 `displayOrder` / `selectedIdentities` 接到 shell，并接上 move / toggle / clear /
+      removeSelected 四个信号。
+    - 测试：`ui.MainQmlContractTests.StripChipsFollowDisplayOrderWithoutChangingTheirSourceId` ——
+      芯片 x 沿显示顺序**严格递增**、每个 chip 的 `sourceId` 不变、chip 实例不重建、「删除所选」
+      按钮随选择出现/隐藏、选择不提交任何媒体命令。变异 **2/2** 被杀
+      （`displayIndex` 退回 `sourceId`；`layoutX` 钉死为常量），QML 按字节还原。
+      证据 `out/verification/c2/mutate-strip-qml.ps1`。
+    - **踩到的两个取证陷阱（已修，脚本里留了防再犯的断言）**：
+      ① 变异脚本最初指向 `dvs_ui_component_tests.exe`，而 `MainQmlContractTests` 在
+      `dvs_main_qml_contract_tests.exe` —— 过滤器匹配不到任何测试、gtest 退出 0，于是**每个变异都被
+      误读成「存活」**。现在脚本会先断言「被过滤的测试确实跑了」再记结论。
+      ② 测试原本用「取 x 最小者」判断顺序；若芯片根本没被定位（x 全为 0），最小者恰好是遍历顺序的
+      第一个，也就恰好等于期望值 —— 完全忽略顺序的芯片行也能通过。已改为**成对严格递增**断言。
+    - **未验证**：拖拽交互与选中高亮只有几何/属性断言，**没有屏幕确认**，观感（拖拽时的反馈、
+      选中态对比度、「−」按钮位置）未经人眼核对。
+- **未验收边界**：全部工作区改动**未提交、未发布**；A1/A2 是几何与配色断言，**不是像素或屏幕
+  ACK 证据**；B2 启动画面的**生命周期与时序已验证，但观感（位置/字号/留白）未做屏幕确认**；
+  A4b 的**前台交接只有协议半边有证据，真实前台行为在本环境无法验证**（需在 Explorer 里双击一次）；
+  splash 拆卸竞态的轮询循环是**加固，没有测试覆盖**（两个变异都存活，见启动文档）；
+  C2 的拖拽与选中只有几何/属性断言，**观感未经屏幕确认**；
+  启动结论绑定本次 release 构建与同一天测量，**不外推到其它 SHA 或机器**。
+
+### C3 ·「无检测结果」不能被读成「零缺陷」（已实现）
+
+- **台账/评分对齐**：C 区「播放丢帧组可见化」的读数（目标/实际倍率、跳过组数、落后、追赶中、
+  重复标记、呈现间隙）**本来就存在**，真正缺的是产品文档 §2 那一半：
+  「无检测结果应显示未知，不应当作零缺陷」。计数为 0 时这些项被直接省略 →
+  用户把「没显示」读成「没问题」。**所以这是新增信号，不是重画。**
+- **新增信号**：`SessionSnapshot.playbackRunPresentedFrames` —— 当前 Play 区间**已完成呈现**的
+  FrameSet 数。落点是 `PlaybackCoordinator::commitPlaybackFrameIfComplete()`，即
+  publish + present + presentationTimer 三者都完成的那一刻，是「已有可测样本」的准确判据；
+  在 `startPlaybackRun` 处与 `playbackRunSkippedFrameSets_` 一起清零。
+- **读法**：`playbackRunPresentedFrames === 0` → 状态栏显式追加「本次播放尚未测量」；
+  一旦有过样本，标记消失，此时的沉默**才是**测量结论。
+- **变异证据**：`out/verification/c3-unmeasured-status-mutation/mutate.ps1`
+  （2 突变 + 1 对照，自断言 `checks run: 3 (expected 3)`）：
+  - `remove-unmeasured-marker`（删掉整行）→ **detected**
+  - `always-claim-unmeasured`（`=== 0` 改成恒真，等于永远喊「未测量」）→ **detected**
+  - 对照（还原后）→ **通过**；`PlayerOsc.qml` **逐字节恢复**
+  - 判别性取证：失败日志精确落在
+    `FAIL! qmltestrunner::PlayerOsc::test_status_says_unmeasured_before_the_run_presents_a_frame()`，
+    且为 `9 passed, 1 failed` —— **只有目标用例红，没有连带失败**。
+
+### C1 · 续播（已实现）
+
+- **绑定身份而不是文件名**：沿用既有 `SourceIdentity`（`路径|字节数|mtime`，已 case-fold）。
+  同名同路径但被替换/编辑过的文件**不会**继承上一份的位置 —— 这正是不能用文件名做键的原因。
+  `ReviewController.currentSourceIdentity` 取 canonical 源的**冻结**身份，文件在会话期间被改动
+  仍匹配它被打开时的那条记录。
+- **存哪**：复用**现有 settings 文档**（`SettingsSnapshot` 本来就是 key/value 边界），
+  前缀 `resume.`，值为 `"<递增戳>:<帧>"`。不新建第二个存储层 —— 否则要再加一套 port + adapter。
+- **有界**：`kResumeEntryCap = 48`，超出按最久未动淘汰，避免设置文件无限增长。
+  这里的戳**不是时钟读数而是单调递增值**：同一毫秒内的连写（正是拖动播放头时的抖动去重行为）
+  不会打平，否则淘汰会退化成按 key 字典序，那不叫「最久未动」。
+- **何时恢复**：仅当身份变化/源数量变化、且 `currentFrame === 0`（即还停在开头）、
+  且记录帧 `< totalFrames`（防止旧版本文件的时间轴把播放头推到界外）。
+  **显式告知**：复用既有 `showIntentMessage`，提示「已恢复到上次位置 第 N 帧」——
+  静默跳转和「程序丢了我��位置」在界面上无法区分。
+- **写入时机**：`currentFrame` 变化后 **1500 ms 去抖**（不是每帧写，否则拖动变成磁盘 IO）；
+  关窗时 `onClosing` 同步补记一次，避免「刚拖动就关窗」丢位置。
+- **损坏条目按「无记录」处理**，不猜位置：宁可从头开始，也不要跳到一个被猜出来的位置。
+- **测试**：
+  - `ui.ReviewPreferencesControllerTests` 三条 —— 身份隔离（同路径不同 mtime 互不继承）、
+    损坏条目一律读作无记录（5 种畸形形态）、48 条上限淘汰最旧。
+  - `ui.MainQmlContractTests.ResumeRestoresRecordedPositionAndStaysOffForeignOrStaleEntries` ——
+    真实临时文件 + 真实 `ReviewController`/`ReviewPreferencesController`/Main.qml 全链路：
+    匹配身份**恰好 seek 一次**、提示非空、越界条目**不**生效。
+- **过程中修掉的两个真缺陷**（都是先由测试暴露，不是先改代码）：
+  1. 同毫秒连写使淘汰退化（见上），修在产品侧；
+  2. `currentSourceIdentity` 原本只声明为 `Q_INVOKABLE`，QML 读属性拿到空值 —— 必须要是
+     带 `NOTIFY` 的 `Q_PROPERTY`，绑定才会随状态更新。
+- **未做**：跨进程/重启端到端手工验证；设置文档并发写入的极端情况未压测。
+
+### A4 · 960 px 芯片行溢出 —— **不成立，已用测试推翻**（原台账说法有误）
+
+- 原记录称对比模式芯片行在 960 px 会溢出。**实测不成立**，不予修复：
+  `ui.MainQmlContractTests.ActiveSourceStripKeepsEveryChipReachableAtMinimumWidth`
+  在真实三源对比 + Main.qml 声明的 960 px 最小宽度下测得
+  `chip = 12,31 258.95x28`、`277.95,31 166.95x28`、`451.9,31 166.95x28`，
+  添加按钮 `12,31 34x28` —— **全部落在 strip（宽 960）内**。
+- **为什么装得下**：芯片宽度是 `Math.min(280, …)`，**单芯片封顶 280 px**，
+  3×280 + 34（添加）+ 6×7（间距）+ 2×12（边距）≈ **940 px < 960 px**。
+  也就是说封顶值恰好保证了不溢出，台账作者（我）此前**只看了下限 `Math.max(128, …)`，
+  没看上限 `Math.min(280, …)`**。
+- **边界**：本测试只覆盖 ≤3 源（产品上限）与 ≤960 px 宽度。
+  中文文件名会拉大 `chipLabelPlainWidth`，但受 280 封顶约束，仍不会溢出。
+  更窄的窗口（<940）本轮未测，Main.qml 也未声明更低的下限。
+- **测试保留**：它是「这个说法被推翻」的证据，绿了也不能删。
+- 顺带修正两个测试自身缺陷（都不是产品问题）：`QQuickRepeater` 虽是 `QQuickItem`，
+  但 delegate 挂在它的 **parent**（chip Row）上；对 Repeater 取 `childItems()` 得到 0。
+  以及 `QRectF::contains()` 按定义**拒绝空矩形**，Repeater 自身那个 0×0 记账项必须剔除，
+  否则会以「不可达」之名误报。
+
+### V-09 · 时间线标记与信息色同源身份撞色（已修，变异 5/5）
+
+- **缺陷**：`Theme.markerDuplicate` `#fb923c` 与 `sourceB` **逐字节相同**；
+  `Theme.information` `#38bdf8` 与 `sourceA` **逐字节相同**；`markerExtra` `#c084fc` 与
+  `sourceC` `#a78bfa` 相差约 6°。另自查发现 `markerAnchor` `#22d3ee` 与 `sourceA` 仅差 10°，
+  `markerOther` `#facc15` 与 `probe` 相同——两处未被台账记录，同属一类。
+- **影响**：时间线标记只有 4–11 px 宽，Alpha 徽标只有 7 px；「看着像源 B」与「这就是源 B」
+  在这个尺寸上无法区分，直接违反「红色只给失败」之外的读图约定。
+- **修法**：标记族整体移出 A/B/C 三个源色相带（天蓝 198°、橙 27°、紫 255°）——
+  `duplicate #a3e635`（青柠 83°）、`extra #f0abfc`（品红 291°）、`anchor #e2e8f0`（近中性亮）、
+  `other #a8a29e`（近中性暗）；`information #22c55e`。anchor/other 走**彩度**分离而非色相分离，
+  因为灰色本来就落在任意色相位置上。
+- **验证**：新增 `tst_vcs_theme.qml`／CTest `ui.vcs_theme`，4 个用例断言「色相距离 ≥30° 或
+  彩度差 ≥0.30」，并保留 `missing` 必须仍为 `error` 红的断言。**变异 5/5 检出**（逐条退回
+  A1 之前的颜色，每次都被对应用例抓住），对照组通过，`VcsTheme.js` 逐字节恢复。
+  脚本自检检查数 6（5 变异 + 1 对照）。
+- **过程中的两个坑（都记下来）**：
+  1. `build.ps1 -TestOnly` **不能**与 `-UseInstalledDependencies` 同用，wrapper 会直接抛错。
+     首版脚本因此把 6 次「wrapper 失败」全部误记成 5/5 检出——**是控制组抓到的**。
+  2. `build.ps1` 会把 ctest 失败**重新抛成 `Exception:`**，所以「日志里有没有 Exception」
+     不能用来判断 wrapper 是否真的跑了测试；必须看有没有 `Test project` 与结果行。
+- **证据**：`out/verification/a1-theme-hue-mutation/`（`mutate.ps1` + 6 份运行日志）。
+
+### S-04 · 启动基线重新绑定当前 SHA，并摘掉两段从未归因的主线程开销
+
+- **为什么重测**：台账与启动文档里所有数字都绑定 `8ffa577`（v2.0.0 时期）。当前 HEAD 是
+  `267adca`（tag `v2.1.0`），**从未测过**。「830 ms + 230 ms 空白窗」是 v2.0.0 的数，不是现状。
+- **现状实测**（同脚本、同 release、同素材、热缓存、5 轮 + 1 预热）：
+  首帧提交 **949.9 / 990.6 ms**，「可见但空白」窗口 **~307 ms**（窗口 643.0 → 首帧 949.9）。
+  比记录的 835.1 / ~243 更差；但按启动文档 L178 的日间漂移教训，**不据此判定为回归**，
+  要判定必须重跑 `8ffa577` 的同日 A/B。
+- **归因**：此前从未单独测过的 `surface-bound → show-enter` = 23.4 ms **全部**在
+  `applyWindowsNativeChrome()` 里；再拆开后确认是 `window->winId()`（**22.4 ms**，
+  在 `show()` 之前强制物化 HWND），四次 `DwmSetWindowAttribute` 只有 0.2 ms。
+  另一段 `qml-load-returned → shell-registration` = 18.0 ms 是启动时同步的资源管理器自愈注册。
+- **修复一（保留）：Explorer 自愈注册改为 worker 线程。** 调用、修复规则、失败只记日志的语义
+  全部不变，`runDesktop` 返回时 join，会话不会在注册写入进行中退出。
+  收益按**同一份运行内的分段**认定：`qml-load-returned → shell-registration` **18.0 → 0.1/0.2 ms**。
+  不按总数认定——同轮整体更慢（QML 段漂到 600.6），跨轮总数不可比。
+  **口径变更**：该里程碑从此测线程派生，注册正确性改由 `shell_windows.ExplorerCommandRegistrationTests`
+  与注册脚本测试负责，不由启动测量负责。
+- **修复二（**被实测否决，已回退**）：把 `applyWindowsNativeChrome` 移到 `show()` 之后。
+  假设是"22 ms 只是提前物化，挪回去即净赚"。**同日 A/B 证伪**：`show-enter → sg-initialized`
+  从 168.1 涨到 **213.9/235.2 ms**，spawn→窗口从 642.8 反而变成 **689.5**（更晚）；
+  `post-show → native-hwnd` 仅 0.2 ms 是决定性证据——**`show()` 本来就会建 HWND**，
+  提前建不会替它省任何工作，只是把成本搬进更贵的调用并引入标题栏闪白风险。已回退，
+  代码注释写明这次否决；`b1-fixed-*` 数据作为反例保留。
+- **保留细粒度里程碑**（`graphics-config`/`screen-select`/`native-hwnd`/`native-attrs`/
+  `native-chrome`），仅在 `DVS_STARTUP_TIMING` 设置时输出，平时零开销。
+- **证据**：`out/startup-measurements/b0-{nofile,onefile}-20261004-1210{53,130}/`（基线）、
+  `b0c-attrib-nofile-20261004-121429/`、`b0d-chrome-split-20261004-121537/`（归因）、
+  `b1-fixed-{nofile,onefile}-20261004-*`（**否决反例**）、`b1-final-{nofile,onefile}-20261004-1255*/`
+  （保留项后的终态）。完整表与口径写入 `startup-performance-v2.md` Step 8。
+- **终态复测（保留项落地后）**：
+
+  | 指标（中位 / P95） | 基线 B0 | 终态 B1 |
+  |---|---|---|
+  | `qml-load-returned → shell-registration` | 18.0 / 18.3 | **0.1 / 0.2** |
+  | spawn → 窗口可见（无文件 / 带文件） | 645.8 / 643.0 | 626.2 / 625.7 |
+  | spawn → `exec`（无文件 / 带文件） | 872.9 / 874.3 | 846.8 / 852.5 |
+  | spawn → 首帧提交（带文件） | 949.9 / 990.6 | 924.9 / 954.1 |
+  | 可见但空白窗口（带文件） | ~307 | ~299 |
+  | `show-enter → sg-initialized` | 170.0 / 174.2 | 182.8 / 187.2 |
+
+  **只认分段，不认总数**：`shell-registration` 的 −17.8 ms 在两次独立运行里都稳定复现，
+  是本次唯一可归因的收益。总数那 −18~−25 ms 里混着运行间漂移（`show-enter → sg-initialized`
+  这次反而 182.8 vs 170.0，虽仍落在历史 153–196 区间内），**不作为结论宣称**。
+- **下一步**：QML 装载段 ~550 ms 与 `show-enter → sg-initialized` ~180 ms 仍是两个大头；
+  前者只能靠继续延迟加载（Step 8），后者属设备生命周期架构改动，本轮不承诺。
+  要做 A/B 必须同一天跑同一脚本，跨日数字只作参考。
+
+### 范围外（本轮不做，独立立项）
+
+- **C4 网络流（rtsp/http/smb）**：`ReviewController.cpp:295` 要求 `isLocalFile()`、
+  `ReviewShellController.cpp:552` 拒绝非本地，这是**主动拒绝**不是遗漏。放开它要处理超时、
+  断线重连、代次失效，以及**不可 seek 的素材**与现有精确导航/帧组语义的冲突——现有整套
+  比较语义建立在「可精确定位到帧」上，网络流不满足该前提。
+- **C5 滤镜（锐化/去色度/去噪）**：`vcpkg.json` 无 avfilter/encoder。且必须保证滤镜只作用于
+  显示路径，**绝不进入比较与统计管线**，否则违反「差异统计始终是原始 8-bit 差值」的既有约定
+  （[指标 ADR](adr/0005-pixel-difference-metrics.md)）。
+
+### V-10 · 窄窗悬浮播放条盖住视口「适应窗口/重置视图」（已复现并修复）
+
+- **台账原记录**："悬浮播放条在约 1100 px 以下可能压住视口左下角的适应 / 重置行（既有）"——
+  一直标为"可能"，从未复现过。本轮补上复现。
+- **确定复现**：新增 `ui.MainQmlContractTests.NarrowWindowKeepsViewportCornerControlsReachable`
+  在 `Main.qml` 声明的 960 px 最小宽、单源（唯一的悬浮拓扑）下测几何。修复前实测
+  `transport = 14,437 932x203`、`viewportViewCommands = 26,568 126x24`：
+  传输条纵向占 437–640，横向占 14–946，把整行 fit/reset **完全覆盖**且不可点击。
+- **修法**：不在 `ComparisonViewport` 里猜传输条位置（它拿不到），由 `Main.qml` 测量重叠并把
+  高度交给视口——新增 `root.transportOverlayInset`（仅在**悬浮**且可见时非零）与
+  `ComparisonViewport.bottomOverlayInset`，`pixelScaleBadge` 的 `bottomMargin` 变为
+  `12 + bottomOverlayInset`，`viewCommandRow` 原本就锚在徽标上方，自动跟随上移。
+  **停靠与隐藏两种状态下 inset 恒为 0**，停靠布局逐字节不变。
+- **回归**：修复前该用例失败、其余 46 条通过；修复后 `ui.MainQmlContractTests` **45/45 通过**
+  （注册 49 项，4 项 disabled 为既有状态，与本轮无关）。
+- **边界**：这是几何断言，不是像素证据；窄窗下按钮是否被别的元素遮住仍需截图复核。
 
 ## 2026-10-02 日常视频文件夹浏览（V-08，工作区已实现，未发布）
 
@@ -971,6 +1261,7 @@
 | U-02 | 反复选文件：对调 A/B、只换一张 | P1 | 对调与单侧替换已接线；控制器测试通过；实窗验收待做 | `ImageReviewController::swapSides/requestReplace*`、`ImageWorkspace.qml`、`Main.qml` |
 | A-01 | 改动状态容易漏接或重复拥有 | 随功能推进 | 分层已有；capability 实现仍集中 | `ReviewSessionFacade`、状态所有权说明 |
 | E-01 | 构建反复出错、工具路径失效、重新链接后启动崩溃 | P0 | 已修复，本机开发测试及质量门禁验证完成 | `tools/build/build.ps1`、`env.ps1`、`cmake/CheckMsvcDependencies.cmake` |
+| U-03 | 鼠标放在进度条上，播放控制条还是会淡出 | P1 | 已复现并修复（倒计时不看光标，主机每次走带都重新计票）；光标在控件上即不淡出，移开照旧淡出 | `PlayerOsc.qml`：`pointerInsidePanel`、`reveal`、`hideTimer`；`TimelineTracks.qml`：`pointerInside` |
 
 下文路径相对仓库根目录；无目录的 UI 文件按 [路由表](../agent-guide.md) 查找。
 问题 ID 保持稳定，后续关闭或拆分时保留原 ID 和后继链接。
@@ -1226,6 +1517,33 @@
 - **本轮验证**：`ui.ImageReviewControllerTests` 39/39（含 6 项新用例）、
   `ui.MainQmlContractTests` 23/23 通过；`format-check`、`lint` 通过。实窗验收待做。
 - **验证入口**：`ImageReviewControllerTests` 的 `SwapSides*`、`Replace*`、`FailedSideReplace*`。
+
+### U-03 鼠标放在进度条上，控制条仍会淡出
+
+- **现象与复现**：悬浮式播放控制条（`controllerState === 1`）下，把光标停在进度条上，
+  约 1.2 秒后整块面板淡出，光标下面直接空了。
+- **根因**：不是「悬停被进度条子控件抢走」。真正的链路是
+  `ComparisonViewport.viewportNavigation.onPositionChanged` → `oscRevealRequested`
+  → `Main.revealOsc()` → `PlayerOsc.reveal()`，而旧 `reveal()` 无条件
+  `hideTimer.restart()`。拖动进度条或在其上滚轮都会触发走带 → 重新计票 → 光标还在
+  进度条上就被淡出。沉浸态（Tab/H）另有 `immersiveOscTimer` 独立倒计时，同样不看光标。
+- **修复**：`PlayerOsc.qml`
+  - `pointerInsidePanel = panelHover.hovered || tracks.pointerInside`：光标在面板上或时间轴上即真；
+  - `reveal()` 只在光标**不在**控件上时才 `hideTimer.restart()`，否则 `stop()`；
+  - `hideTimer.onTriggered` 增加 `&& !pointerInsidePanel`，倒计时只能淡出光标已离开的控制条；
+  - `onPointerInsidePanelChanged` 作为唯一复位点，移出光标即重新计票，
+    拖拽释放到面板外也能再次隐藏（不会卡在常亮）。
+  - `TimelineTracks.qml` 新增 `pointerInside = timelineMouse.containsMouse || dragging`：
+    拖拽把光标带出面板时 Qt 会撤销鼠标区 hover，但 grab 仍在。
+  - `Main.qml` 沉浸计时器改为光标在控件上就顺延重检。
+- **测试与变异证据**：`ui.player_osc` 12/12（新增悬停保持、拖拽释放后恢复淡出两条），
+  `ui.timeline_tracks` 5/5（新增 `pointerInside` 拖拽语义）。旧自动隐藏测试反证光标门未被关死。
+  变异 3/3 单点失效：`reveal()` 恒 restart、`pointerInside` 去掉 `dragging`、
+  `onPointerInsidePanelChanged` 去掉 else。
+- **门禁**：`ui.MainQmlContractTests` 48/48（CTest 逐例注册）；dev `format-check` 与 `lint` 通过。
+  注意整二进制一次跑 48 例会出现**与本改动无关的跨用例偶发失败**，按 CTest 注册方式执行。
+- **边界**：未覆盖真实硬件光标行为（合成事件与平台窗口 hover 传递有差异，仓库已有测试注释此点）；
+  未改 `wakeArea`/`immersiveWakeStrip` 的唤醒灵敏度。
 
 ### A-01 状态所有权与增量维护
 

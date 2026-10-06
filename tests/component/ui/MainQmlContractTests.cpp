@@ -14,6 +14,7 @@
 #include "dvs/ui/ReviewPreferencesController.h"
 #include "dvs/ui/ReviewSessionFacade.h"
 #include "dvs/ui/ReviewShellController.h"
+#include "dvs/ui/SourceIdentity.h"
 #include "dvs/ui/SourceListModel.h"
 #include "dvs/ui/VideoFolderModel.h"
 
@@ -51,6 +52,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <gtest/gtest.h>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <utility>
@@ -203,6 +205,42 @@ public:
     }
 
     void cancel(const application::RequestContext&) noexcept override {}
+};
+
+// C1 resume: completes a load carrying one pre-seeded resume entry, so a contract test can start
+// from a document that already says "this file was last watched at frame N" without writing to the
+// user's real settings.
+class SeededResumeSettingsRepository final : public application::ISettingsRepository {
+public:
+    explicit SeededResumeSettingsRepository(std::map<std::string, std::string, std::less<>> values)
+        : values_(std::move(values)) {}
+
+    [[nodiscard]] application::PortSubmitResult
+    submit(const application::SettingsLoadRequest& request,
+           std::shared_ptr<application::IApplicationEventSink> events) override {
+        // The document rides on SettingsLoaded; the terminal only carries the outcome, same as the
+        // real adapter posts it.
+        application::SettingsSnapshot loaded;
+        loaded.values = values_;
+        static_cast<void>(
+            events->postCritical(application::ApplicationEvent{application::SettingsLoaded{
+                .context = request.context, .settings = std::move(loaded)}}));
+        static_cast<void>(events->postCritical(application::ApplicationEvent{
+            application::RequestTerminal{application::RequestSucceeded{
+                .context = application::EventContext{request.context}}}}));
+        return application::PortSubmitResult::Accepted;
+    }
+
+    [[nodiscard]] application::PortSubmitResult
+    submit(const application::SettingsSaveRequest&,
+           std::shared_ptr<application::IApplicationEventSink>) override {
+        return application::PortSubmitResult::Accepted;
+    }
+
+    void cancel(const application::RequestContext&) noexcept override {}
+
+private:
+    std::map<std::string, std::string, std::less<>> values_;
 };
 
 // Records the demux/remux work the GUI asked for and finishes instantly, so a contract test can
@@ -1270,6 +1308,118 @@ TEST(MainQmlContractTests, DockedTransportResolvesContextuallyAndClearsViewport)
         << "hidden auto-hide panel must expose controlsEnabled == false";
 }
 
+// A2/A3. The backlog carried two narrow-window claims that were never reproduced: the floating
+// transport covering the viewport's own fit/reset row below ~1100 px, and the transient notice
+// stack running under the right-hand drawer. Both only occur in the overlay topology, so this
+// uses a single source, and both are asserted at Main.qml's declared 960 px minimum width. If the
+// defect does not reproduce, this test is the evidence that closes it - it must not be deleted
+// after a green run, because a passing geometry assertion is exactly what settles the claim.
+TEST(MainQmlContractTests, NarrowWindowKeepsViewportCornerControlsReachable) {
+    auto snapshot = std::make_shared<application::SessionSnapshot>();
+    snapshot->graphicsReady = true;
+    snapshot->sessionState = domain::SessionState::kReady;
+    snapshot->playbackState = domain::PlaybackState::kPaused;
+    snapshot->displayedFrame = domain::FrameId{0};
+    snapshot->canonicalFrameCount = 10U;
+    snapshot->sources = {
+        application::SessionSourceView{
+            .sourceId = 0U,
+            .role = domain::ComparisonRole::kReference,
+            .displayName = "A",
+        },
+    };
+    snapshot->presentedSources = {
+        application::PresentedSourceState{
+            .sourceId = 0U,
+            .sourceFrameId = domain::FrameId{0},
+            .matchKind = application::FrameMatchKind::ExactIndex,
+        },
+    };
+    std::vector<application::PlaybackCommand> submitted;
+    std::vector<application::CommandTerminal> terminals;
+    ReviewController controller{
+        ReviewController::Dependencies{
+            .submit =
+                [&submitted](application::PlaybackCommand command) {
+                    submitted.push_back(std::move(command));
+                    return application::PortSubmitResult::Accepted;
+                },
+            .snapshot = [snapshot] { return snapshot; },
+            .takeCompletedCommands =
+                [&terminals] {
+                    std::vector<application::CommandTerminal> result = std::move(terminals);
+                    terminals.clear();
+                    return result;
+                },
+        },
+    };
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    ReviewShellController shell{controller, preferences};
+    ReviewSessionFacade facade{controller, preferences, shell};
+
+    QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
+    QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
+    ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
+
+    std::unique_ptr<QObject> root{component.create()};
+    ASSERT_NE(root, nullptr) << componentErrors(component);
+    auto* const window = qobject_cast<QQuickWindow*>(root.get());
+    ASSERT_NE(window, nullptr);
+
+    window->resize(960, 640);
+    window->show();
+    const auto processLayout = [] {
+        for (int iteration = 0; iteration < 8; ++iteration) {
+            QCoreApplication::processEvents();
+        }
+    };
+    processLayout();
+
+    ASSERT_EQ(controller.sourceCount(), 1);
+    // A single source resolves to the auto-hide overlay transport - the only topology in which the
+    // floating bar can sit on top of the viewport at all.
+    ASSERT_FALSE(root->property("transportDocked").toBool());
+    ASSERT_FALSE(root->property("transportHidden").toBool());
+
+    const auto rectInContent = [window](QQuickItem* item) {
+        const QPointF tl = item->mapToItem(window->contentItem(), QPointF{0.0, 0.0});
+        return QRectF(tl.x(), tl.y(), item->width(), item->height());
+    };
+
+    auto* const transport = root->findChild<QQuickItem*>(QStringLiteral("transport"));
+    auto* const viewCommands = root->findChild<QQuickItem*>(QStringLiteral("viewportViewCommands"));
+    ASSERT_NE(transport, nullptr);
+    ASSERT_NE(viewCommands, nullptr);
+    ASSERT_TRUE(viewCommands->isVisible())
+        << "the fit/reset row is only reachable when the chrome is visible";
+    ASSERT_TRUE(transport->isVisible()) << "the overlay transport must be revealed for this claim";
+
+    const QRectF transportRect = rectInContent(transport);
+    const QRectF viewCommandsRect = rectInContent(viewCommands);
+    EXPECT_GT(viewCommandsRect.width(), 0.0);
+    EXPECT_GT(viewCommandsRect.height(), 0.0);
+
+    EXPECT_FALSE(transportRect.intersects(viewCommandsRect))
+        << "the floating transport must not cover the viewport's fit/reset row at 960 px "
+        << "(transport=" << transportRect.x() << "," << transportRect.y() << " "
+        << transportRect.width() << "x" << transportRect.height()
+        << " viewCommands=" << viewCommandsRect.x() << "," << viewCommandsRect.y() << " "
+        << viewCommandsRect.width() << "x" << viewCommandsRect.height() << ")";
+
+    // Both controls have to stay inside the window as well, or they are unreachable regardless of
+    // whether anything overlaps them.
+    const QRectF contentRect{
+        0.0, 0.0, window->contentItem()->width(), window->contentItem()->height()};
+    EXPECT_TRUE(contentRect.contains(viewCommandsRect))
+        << "the fit/reset row must stay inside the window at the minimum width";
+}
+
 // The transport's range row is the second entry point to the in/out range (the inspector and the
 // I / O / \ shortcuts being the others). These contracts pin the chips to the very same session
 // range state so the row cannot drift into a parallel, decorative copy of it.
@@ -1719,6 +1869,582 @@ TEST(MainQmlContractTests, ShowsIntentMessageOnSynchronousRejection) {
     EXPECT_FALSE(removeResult.toBool());
     EXPECT_FALSE(root->property("intentMessage").toString().isEmpty())
         << "removeSelectedSource rejection should show intent message";
+}
+
+// C1. Resume must restore the recorded position and say so, but only for the exact
+// path|size|mtime identity it was recorded under, and never past the end of a timeline that changed
+// underneath the stored entry. A stale or foreign entry must leave the playhead at frame 0.
+TEST(MainQmlContractTests, ResumeRestoresRecordedPositionAndStaysOffForeignOrStaleEntries) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const std::filesystem::path pathA =
+        std::filesystem::path(tempDir.path().toStdWString()) / "resume_sourceA.mp4";
+    const std::filesystem::path pathB =
+        std::filesystem::path(tempDir.path().toStdWString()) / "resume_sourceB.mp4";
+    for (const std::filesystem::path& path : {pathA, pathB}) {
+        QFile file{QString::fromStdWString(path.wstring())};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("resume-source-bytes", 19);
+    }
+
+    const auto rateResult = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rateResult);
+    const domain::RationalRate rate = rateResult.value();
+    std::vector<domain::ComparisonSource> comparisonSources;
+    const std::array<std::filesystem::path, 2> paths = {pathA, pathB};
+    for (std::size_t index = 0U; index < paths.size(); ++index) {
+        const QFileInfo info{QString::fromStdWString(paths[index].wstring())};
+        comparisonSources.push_back(domain::ComparisonSource{
+            .id = static_cast<domain::SourceId>(index),
+            .role = index == 0U ? domain::ComparisonRole::kReference
+                                : domain::ComparisonRole::kPrediction,
+            .descriptor =
+                domain::MediaDescriptor{
+                    .normalizedPath = paths[index],
+                    .extent = domain::MediaExtent{.width = 1'920U, .height = 1'080U},
+                    .frameRate = rate,
+                    .frameCount =
+                        domain::FrameCountInfo{
+                            .value = 12,
+                            .origin = domain::FrameCountOrigin::kReported,
+                        },
+                    .duration = domain::MediaTime{400'000},
+                    .codecId = "h264",
+                    .pixelFormatId = "nv12",
+                    .bitDepth = 8U,
+                    .decodeCapabilities =
+                        domain::DecodeCapabilities{
+                            .softwareDecode = true,
+                            .d3d11VaDecode = true,
+                        },
+                    .timingConfidence = domain::TimingConfidence::kVerifiedCfr,
+                    .sourceIdentity =
+                        domain::SourceFileIdentity{
+                            .byteSize = static_cast<std::uint64_t>(info.size()),
+                            .modifiedUtcMilliseconds = info.lastModified().toMSecsSinceEpoch(),
+                            .fingerprintSha256 = std::string(64U, '0'),
+                        },
+                },
+            .displayName = std::string{"Source "} + static_cast<char>('A' + index),
+        });
+    }
+    auto validated = domain::ComparisonValidator::validate(std::move(comparisonSources));
+    ASSERT_TRUE(validated);
+
+    auto snapshot = std::make_shared<application::SessionSnapshot>();
+    snapshot->graphicsReady = true;
+    snapshot->sessionState = domain::SessionState::kReady;
+    snapshot->playbackState = domain::PlaybackState::kPaused;
+    snapshot->displayedFrame = domain::FrameId{0};
+    snapshot->validatedComparison =
+        std::make_shared<const domain::ValidatedComparisonSet>(std::move(validated).value().set);
+    snapshot->canonicalFrameCount =
+        static_cast<std::uint64_t>(snapshot->validatedComparison->canonicalFrameCount());
+    snapshot->canonicalTimeline = rate;
+    for (const auto& source : snapshot->validatedComparison->sources()) {
+        snapshot->sources.push_back(application::SessionSourceView{
+            .sourceId = source.id,
+            .role = source.role,
+            .displayName = source.displayName,
+        });
+        snapshot->presentedSources.push_back(application::PresentedSourceState{
+            .sourceId = source.id,
+            .sourceFrameId = domain::FrameId{0},
+            .matchKind = application::FrameMatchKind::ExactIndex,
+        });
+    }
+
+    std::vector<application::PlaybackCommand> submitted;
+    std::vector<application::CommandTerminal> terminals;
+    ReviewController controller{
+        ReviewController::Dependencies{
+            .submit =
+                [&submitted](application::PlaybackCommand command) {
+                    submitted.push_back(std::move(command));
+                    return application::PortSubmitResult::Accepted;
+                },
+            .snapshot = [snapshot] { return snapshot; },
+            .takeCompletedCommands =
+                [&terminals] {
+                    std::vector<application::CommandTerminal> result = std::move(terminals);
+                    terminals.clear();
+                    return result;
+                },
+        },
+    };
+
+    const QString identity = canonicalSourceIdentity(QUrl::fromLocalFile(QString::fromStdWString(
+        snapshot->validatedComparison->sources().front().descriptor.normalizedPath.wstring())));
+    ASSERT_FALSE(identity.isEmpty());
+
+    // Three entries, one per behaviour under test:
+    //   identity  -> a real position inside a 12-frame timeline, must be restored;
+    //   samePathWrongSize -> the same file at a different size/mtime, must be ignored;
+    //   pastTheEnd -> inside this timeline's identity but beyond its last frame, must be ignored.
+    std::map<std::string, std::string, std::less<>> seed{
+        {QStringLiteral("resume.%1").arg(identity).toStdString(), "1700000000000:6"},
+        {QStringLiteral("resume.c:/other/clip.mp4|1|2").toStdString(), "1700000000001:7"},
+        {QStringLiteral("resume.%1").arg(QStringLiteral("%1|999").arg(identity)).toStdString(),
+         "1700000000002:6"},
+    };
+    ReviewPreferencesController preferences{
+        std::make_shared<SeededResumeSettingsRepository>(std::move(seed))};
+    ReviewShellController shell{controller, preferences};
+    ReviewSessionFacade facade{controller, preferences, shell};
+
+    QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
+    QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
+    ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
+
+    std::unique_ptr<QObject> root{component.create()};
+    ASSERT_NE(root, nullptr) << componentErrors(component);
+    auto* const window = qobject_cast<QQuickWindow*>(root.get());
+    ASSERT_NE(window, nullptr);
+    window->resize(1280, 800);
+    window->show();
+    for (int iteration = 0; iteration < 16; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+
+    // The controller is the source of truth for where the playhead actually is.
+    const auto seekTargets = [&submitted] {
+        std::vector<std::int64_t> targets;
+        for (const application::PlaybackCommand& command : submitted) {
+            if (const auto* const seek = std::get_if<application::SeekFrameCommand>(&command);
+                seek != nullptr) {
+                targets.push_back(seek->frameId.value());
+            }
+        }
+        return targets;
+    };
+
+    EXPECT_EQ(controller.currentSourceIdentity(), identity);
+    // The recorded position is requested exactly once, and only for the matching identity.
+    const std::vector<std::int64_t> seeks = seekTargets();
+    EXPECT_EQ(std::count(seeks.begin(), seeks.end(), std::int64_t{6}), 1)
+        << "resume must seek to the recorded frame exactly once";
+    EXPECT_EQ(root->property("resumeAttemptedIdentity").toString(), identity)
+        << "resume must record which identity it already handled";
+    EXPECT_GT(root->property("intentMessage").toString().size(), 0)
+        << "a silent jump is indistinguishable from the app losing the user's place";
+
+    // A stored position past the end must never be applied, even under the right identity.
+    const auto staleSeek = [&controller] { return controller.currentFrame(); };
+    preferences.rememberResumeFrame(QStringLiteral("%1|999").arg(identity), 9'000);
+    controller.refreshProjection();
+    for (int iteration = 0; iteration < 16; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    EXPECT_LE(staleSeek(), 11) << "a resume past the end of the timeline must not be applied";
+    preferences.stop();
+    controller.stop();
+}
+
+// A4. The active-source strip is a plain Row with fixed-width chips, so it can neither wrap nor
+// scroll. At Main.qml's declared 960 px minimum width three tagged chips plus the add button are
+// wider than the panel, which would leave trailing chips off-stage and unreachable. This is
+// measured before any fix: if the assertion passes on the current source, the backlog claim is
+// wrong and the claim should be corrected rather than the code bent to match it.
+TEST(MainQmlContractTests, ActiveSourceStripKeepsEveryChipReachableAtMinimumWidth) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    std::vector<std::filesystem::path> paths;
+    for (int index = 0; index < 3; ++index) {
+        paths.push_back(std::filesystem::path(tempDir.path().toStdWString()) /
+                        QStringLiteral("strip_source_%1.mp4").arg(index).toStdWString());
+        QFile file{QString::fromStdWString(paths.back().wstring())};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("strip-source-bytes", 18);
+    }
+
+    const auto rateResult = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rateResult);
+    const domain::RationalRate rate = rateResult.value();
+    std::vector<domain::ComparisonSource> comparisonSources;
+    for (std::size_t index = 0U; index < paths.size(); ++index) {
+        const QFileInfo info{QString::fromStdWString(paths[index].wstring())};
+        comparisonSources.push_back(domain::ComparisonSource{
+            .id = static_cast<domain::SourceId>(index),
+            .role = index == 0U ? domain::ComparisonRole::kReference
+                                : domain::ComparisonRole::kPrediction,
+            .descriptor =
+                domain::MediaDescriptor{
+                    .normalizedPath = paths[index],
+                    .extent = domain::MediaExtent{.width = 1'920U, .height = 1'080U},
+                    .frameRate = rate,
+                    .frameCount =
+                        domain::FrameCountInfo{
+                            .value = 12,
+                            .origin = domain::FrameCountOrigin::kReported,
+                        },
+                    .duration = domain::MediaTime{400'000},
+                    .codecId = "h264",
+                    .pixelFormatId = "nv12",
+                    .bitDepth = 8U,
+                    .decodeCapabilities =
+                        domain::DecodeCapabilities{
+                            .softwareDecode = true,
+                            .d3d11VaDecode = true,
+                        },
+                    .timingConfidence = domain::TimingConfidence::kVerifiedCfr,
+                    .sourceIdentity =
+                        domain::SourceFileIdentity{
+                            .byteSize = static_cast<std::uint64_t>(info.size()),
+                            .modifiedUtcMilliseconds = info.lastModified().toMSecsSinceEpoch(),
+                            .fingerprintSha256 = std::string(64U, '0'),
+                        },
+                },
+            .displayName = std::string{"Source "} + static_cast<char>('A' + index),
+        });
+    }
+    auto validated = domain::ComparisonValidator::validate(std::move(comparisonSources));
+    ASSERT_TRUE(validated);
+
+    auto snapshot = std::make_shared<application::SessionSnapshot>();
+    snapshot->graphicsReady = true;
+    snapshot->sessionState = domain::SessionState::kReady;
+    snapshot->playbackState = domain::PlaybackState::kPaused;
+    snapshot->displayedFrame = domain::FrameId{0};
+    snapshot->validatedComparison =
+        std::make_shared<const domain::ValidatedComparisonSet>(std::move(validated).value().set);
+    snapshot->canonicalFrameCount =
+        static_cast<std::uint64_t>(snapshot->validatedComparison->canonicalFrameCount());
+    snapshot->canonicalTimeline = rate;
+    for (const auto& source : snapshot->validatedComparison->sources()) {
+        snapshot->sources.push_back(application::SessionSourceView{
+            .sourceId = source.id,
+            .role = source.role,
+            .displayName = source.displayName,
+        });
+        snapshot->presentedSources.push_back(application::PresentedSourceState{
+            .sourceId = source.id,
+            .sourceFrameId = domain::FrameId{0},
+            .matchKind = application::FrameMatchKind::ExactIndex,
+        });
+    }
+
+    std::vector<application::PlaybackCommand> submitted;
+    std::vector<application::CommandTerminal> terminals;
+    ReviewController controller{
+        ReviewController::Dependencies{
+            .submit =
+                [&submitted](application::PlaybackCommand command) {
+                    submitted.push_back(std::move(command));
+                    return application::PortSubmitResult::Accepted;
+                },
+            .snapshot = [snapshot] { return snapshot; },
+            .takeCompletedCommands =
+                [&terminals] {
+                    std::vector<application::CommandTerminal> result = std::move(terminals);
+                    terminals.clear();
+                    return result;
+                },
+        },
+    };
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    ReviewShellController shell{controller, preferences};
+    ReviewSessionFacade facade{controller, preferences, shell};
+
+    QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
+    QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
+    ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
+
+    std::unique_ptr<QObject> root{component.create()};
+    ASSERT_NE(root, nullptr) << componentErrors(component);
+    auto* const window = qobject_cast<QQuickWindow*>(root.get());
+    ASSERT_NE(window, nullptr);
+    window->resize(960, 640);
+    window->show();
+    for (int iteration = 0; iteration < 16; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    ASSERT_EQ(controller.sourceCount(), 3);
+
+    auto* const strip = root->findChild<QQuickItem*>(QStringLiteral("activeSourceStrip"));
+    ASSERT_NE(strip, nullptr);
+    ASSERT_TRUE(strip->isVisible());
+    const QPointF stripTopLeft = strip->mapToItem(window->contentItem(), QPointF{0.0, 0.0});
+    const QRectF stripRect{stripTopLeft.x(), stripTopLeft.y(), strip->width(), strip->height()};
+    const QQuickItem* repeater =
+        root->findChild<QQuickItem*>(QStringLiteral("activeSourceRepeater"));
+    ASSERT_NE(repeater, nullptr);
+    // A Repeater is itself a QQuickItem, but its delegates are parented to the Repeater's parent -
+    // here the chip Row. Reading childItems() off the Repeater yields nothing.
+    const QQuickItem* chipRow = repeater->parentItem();
+    ASSERT_NE(chipRow, nullptr);
+
+    // Every chip, plus the add button, must land inside the strip. This strip is the only place a
+    // source can be removed or re-referenced from, so a chip pushed past the right edge is a source
+    // the user cannot manage at all.
+    const QList<QQuickItem*> chipItems = chipRow->childItems();
+    // childItems() also yields the Repeater itself, a zero-sized bookkeeping item. QRectF::contains
+    // rejects empty rectangles by definition, so an unmoved width-0 item would fail for a reason
+    // that has nothing to do with reachability.
+    std::vector<const QQuickItem*> paintedChips;
+    for (const QQuickItem* item : chipItems) {
+        if (item->width() > 0.0 && item->height() > 0.0) {
+            paintedChips.push_back(item);
+        }
+    }
+    // Three source chips plus the add button.
+    ASSERT_GE(paintedChips.size(), 4);
+    for (const QQuickItem* chip : paintedChips) {
+        const QPointF topLeft = chip->mapToItem(window->contentItem(), QPointF{0.0, 0.0});
+        const QRectF chipRect{topLeft.x(), topLeft.y(), chip->width(), chip->height()};
+        EXPECT_TRUE(stripRect.contains(chipRect))
+            << "chip is outside the strip at the 960 px minimum width (chip=" << chipRect.x() << ","
+            << chipRect.y() << " " << chipRect.width() << "x" << chipRect.height()
+            << " strip width=" << stripRect.width() << ")";
+    }
+    auto* const addButton = root->findChild<QQuickItem*>(QStringLiteral("addSourceChipButton"));
+    ASSERT_NE(addButton, nullptr);
+    const QPointF addTopLeft = addButton->mapToItem(window->contentItem(), QPointF{0.0, 0.0});
+    const QRectF addRect{addTopLeft.x(), addTopLeft.y(), addButton->width(), addButton->height()};
+    EXPECT_TRUE(stripRect.contains(addRect))
+        << "the add-source button is outside the strip at the 960 px minimum width (button="
+        << addRect.x() << "," << addRect.y() << " " << addRect.width() << "x" << addRect.height()
+        << ")";
+    controller.stop();
+}
+
+// C2. Reordering the strip must move the chips and nothing else. The chip carries its sourceId,
+// which is what decides its A/B/C role, its Theme.sourceColor accent and its pairing, so if a
+// reorder were to renumber a delegate the review would silently mean something different from the
+// one the user set up. This watches the chips' geometry follow the shell's display order while
+// every chip keeps the sourceId it was created with.
+TEST(MainQmlContractTests, StripChipsFollowDisplayOrderWithoutChangingTheirSourceId) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    std::vector<std::filesystem::path> paths;
+    for (int index = 0; index < 3; ++index) {
+        paths.push_back(std::filesystem::path(tempDir.path().toStdWString()) /
+                        QStringLiteral("order_source_%1.mp4").arg(index).toStdWString());
+        QFile file{QString::fromStdWString(paths.back().wstring())};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("order-source-bytes", 18);
+    }
+
+    const auto rateResult = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rateResult);
+    const domain::RationalRate rate = rateResult.value();
+    std::vector<domain::ComparisonSource> comparisonSources;
+    for (std::size_t index = 0U; index < paths.size(); ++index) {
+        const QFileInfo info{QString::fromStdWString(paths[index].wstring())};
+        comparisonSources.push_back(domain::ComparisonSource{
+            .id = static_cast<domain::SourceId>(index),
+            .role = index == 0U ? domain::ComparisonRole::kReference
+                                : domain::ComparisonRole::kPrediction,
+            .descriptor =
+                domain::MediaDescriptor{
+                    .normalizedPath = paths[index],
+                    .extent = domain::MediaExtent{.width = 1'920U, .height = 1'080U},
+                    .frameRate = rate,
+                    .frameCount =
+                        domain::FrameCountInfo{.value = 12,
+                                               .origin = domain::FrameCountOrigin::kReported},
+                    .duration = domain::MediaTime{400'000},
+                    .codecId = "h264",
+                    .pixelFormatId = "nv12",
+                    .bitDepth = 8U,
+                    .decodeCapabilities =
+                        domain::DecodeCapabilities{.softwareDecode = true, .d3d11VaDecode = true},
+                    .timingConfidence = domain::TimingConfidence::kVerifiedCfr,
+                    .sourceIdentity =
+                        domain::SourceFileIdentity{
+                            .byteSize = static_cast<std::uint64_t>(info.size()),
+                            .modifiedUtcMilliseconds = info.lastModified().toMSecsSinceEpoch(),
+                            .fingerprintSha256 = std::string(64U, '0'),
+                        },
+                },
+            .displayName = std::string{"Order "} + static_cast<char>('A' + index),
+        });
+    }
+    auto validated = domain::ComparisonValidator::validate(std::move(comparisonSources));
+    ASSERT_TRUE(validated);
+
+    auto snapshot = std::make_shared<application::SessionSnapshot>();
+    snapshot->graphicsReady = true;
+    snapshot->sessionState = domain::SessionState::kReady;
+    snapshot->playbackState = domain::PlaybackState::kPaused;
+    snapshot->displayedFrame = domain::FrameId{0};
+    snapshot->validatedComparison =
+        std::make_shared<const domain::ValidatedComparisonSet>(std::move(validated).value().set);
+    snapshot->canonicalFrameCount =
+        static_cast<std::uint64_t>(snapshot->validatedComparison->canonicalFrameCount());
+    snapshot->canonicalTimeline = rate;
+    for (const auto& source : snapshot->validatedComparison->sources()) {
+        snapshot->sources.push_back(application::SessionSourceView{
+            .sourceId = source.id,
+            .role = source.role,
+            .displayName = source.displayName,
+        });
+        snapshot->presentedSources.push_back(application::PresentedSourceState{
+            .sourceId = source.id,
+            .sourceFrameId = domain::FrameId{0},
+            .matchKind = application::FrameMatchKind::ExactIndex,
+        });
+    }
+
+    std::vector<application::PlaybackCommand> submitted;
+    std::vector<application::CommandTerminal> terminals;
+    ReviewController controller{
+        ReviewController::Dependencies{
+            .submit =
+                [&submitted](application::PlaybackCommand command) {
+                    submitted.push_back(std::move(command));
+                    return application::PortSubmitResult::Accepted;
+                },
+            .snapshot = [snapshot] { return snapshot; },
+            .takeCompletedCommands =
+                [&terminals] {
+                    std::vector<application::CommandTerminal> result = std::move(terminals);
+                    terminals.clear();
+                    return result;
+                },
+        },
+    };
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    ReviewShellController shell{controller, preferences};
+    ReviewSessionFacade facade{controller, preferences, shell};
+
+    QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
+    QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
+    ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
+
+    std::unique_ptr<QObject> root{component.create()};
+    ASSERT_NE(root, nullptr) << componentErrors(component);
+    auto* const window = qobject_cast<QQuickWindow*>(root.get());
+    ASSERT_NE(window, nullptr);
+    window->resize(960, 640);
+    window->show();
+    for (int iteration = 0; iteration < 16; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    ASSERT_EQ(controller.sourceCount(), 3);
+
+    const QStringList openedIdentities = shell.activeSourceIdentities();
+    ASSERT_EQ(openedIdentities.size(), 3);
+
+    const auto collectChips = [&root] {
+        QHash<QString, const QQuickItem*> byIdentity;
+        QHash<QString, int> sourceIdsByIdentity;
+        const QQuickItem* repeater =
+            root->findChild<QQuickItem*>(QStringLiteral("activeSourceRepeater"));
+        if (repeater == nullptr || repeater->parentItem() == nullptr) {
+            return qMakePair(byIdentity, sourceIdsByIdentity);
+        }
+        for (const QQuickItem* item : repeater->parentItem()->childItems()) {
+            if (item->width() <= 0.0 || item->height() <= 0.0) {
+                continue;
+            }
+            const QVariant identity = item->property("resolvedSourceIdentity");
+            if (!identity.isValid() || identity.toString().isEmpty()) {
+                continue;
+            }
+            byIdentity.insert(identity.toString(), item);
+            sourceIdsByIdentity.insert(identity.toString(), item->property("sourceId").toInt());
+        }
+        return qMakePair(byIdentity, sourceIdsByIdentity);
+    };
+
+    auto [chipsBefore, sourceIdsBefore] = collectChips();
+    ASSERT_EQ(chipsBefore.size(), 3);
+    for (const QString& identity : openedIdentities) {
+        EXPECT_TRUE(chipsBefore.contains(identity))
+            << "no chip for identity " << identity.toStdString();
+    }
+
+    // Move the last source to the head of the strip.
+    ASSERT_TRUE(shell.moveSourceInDisplayOrder(2, 0));
+    for (int iteration = 0; iteration < 8; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+
+    const QStringList displayIdentities = shell.displaySourceIdentities();
+    ASSERT_EQ(displayIdentities.size(), 3);
+    EXPECT_EQ(displayIdentities.at(0), openedIdentities.at(2));
+    EXPECT_EQ(displayIdentities.at(1), openedIdentities.at(0));
+    EXPECT_EQ(displayIdentities.at(2), openedIdentities.at(1));
+
+    auto [chipsAfter, sourceIdsAfter] = collectChips();
+    ASSERT_EQ(chipsAfter.size(), 3);
+    // Compare positions pairwise along the display order rather than looking for a single minimum.
+    // If the strip never positioned its chips they would all sit at x = 0, and "the smallest x"
+    // would then be the first entry of the order this loop walks - a strip that ignored the order
+    // entirely would pass. The first mutation of this test relied on exactly that hole.
+    std::vector<double> positionsAlongOrder;
+    std::vector<int> reportedDisplayIndexes;
+    positionsAlongOrder.reserve(displayIdentities.size());
+    reportedDisplayIndexes.reserve(displayIdentities.size());
+    for (const QString& identity : displayIdentities) {
+        const QQuickItem* chip = chipsAfter.value(identity, nullptr);
+        ASSERT_NE(chip, nullptr) << "no chip for identity " << identity.toStdString();
+        positionsAlongOrder.push_back(chip->x());
+        // -1 here means the strip's displayOrder never reached this chip, which is a different
+        // failure from "the order arrived but the chips were not moved".
+        reportedDisplayIndexes.push_back(chip->property("displayIndex").toInt());
+    }
+    EXPECT_GT(positionsAlongOrder.front(), 0.0) << "the strip never positioned its chips";
+    for (std::size_t index = 1U; index < positionsAlongOrder.size(); ++index) {
+        EXPECT_GT(positionsAlongOrder[index], positionsAlongOrder[index - 1U])
+            << "chip " << index
+            << " does not sit right of its predecessor; the strip did not follow "
+               "the display order (x =";
+        for (const double position : positionsAlongOrder) {
+            std::cerr << ' ' << position;
+        }
+        std::cerr << " ; displayIndex =";
+        for (const int reported : reportedDisplayIndexes) {
+            std::cerr << ' ' << reported;
+        }
+        std::cerr << ')';
+    }
+    for (const QString& identity : openedIdentities) {
+        EXPECT_EQ(chipsAfter.value(identity, nullptr), chipsBefore.value(identity, nullptr))
+            << "a reorder replaced the chip instance for " << identity.toStdString();
+        EXPECT_EQ(sourceIdsAfter.value(identity), sourceIdsBefore.value(identity))
+            << "a reorder renumbered a chip's sourceId, which would change its role and accent "
+               "colour";
+    }
+
+    // Multi-select: the batch action only appears once something is selected, and the shell still
+    // refuses to act on media truth when the selection changes.
+    auto* const removeSelectedButton =
+        root->findChild<QQuickItem*>(QStringLiteral("removeSelectedChipButton"));
+    ASSERT_NE(removeSelectedButton, nullptr);
+    EXPECT_FALSE(removeSelectedButton->isVisible())
+        << "a batch action is offered with no selection";
+    // The review publishes its own commands while it settles, so compare against the count
+    // taken here rather than against zero.
+    const std::size_t submittedBeforeSelection = submitted.size();
+    shell.toggleSourceSelection(openedIdentities.at(1));
+    for (int iteration = 0; iteration < 4; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    EXPECT_TRUE(removeSelectedButton->isVisible());
+    EXPECT_EQ(shell.selectedSourceIdentities(), QStringList{openedIdentities.at(1)});
+    // Selection is a view concern: it must not have reached media truth.
+    EXPECT_EQ(submitted.size(), submittedBeforeSelection)
+        << "selecting a chip submitted a media command";
+    controller.stop();
 }
 
 TEST(MainQmlContractTests, DrawerScrimTransportShrinkAndEscClose) {

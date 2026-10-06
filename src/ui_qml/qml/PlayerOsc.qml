@@ -21,6 +21,8 @@ Item {
     property real playbackTargetRate: 1
     property real playbackPresentationRate: 0
     property int playbackRunSkippedFrameSets: 0
+    // Frames this run finished presenting. 0 = no sample yet, so the skip count is unmeasured.
+    property int playbackRunPresentedFrames: 0
     property int playbackLagMilliseconds: 0
     property bool playbackCatchingUp: false
     property int displayGapCount: 0
@@ -58,6 +60,11 @@ Item {
     property int previewSampleFrame: -1
     property int playbackContinuityPolicy: 1
     property bool revealActive: controllerState === 0
+    // The cursor is somewhere on the controls. This is the single gate the auto-hide countdown
+    // consults, so a bar under the cursor never fades out — no matter which child owns the hover
+    // (the timeline thumb strip, a transport chip, the metric lane) and no matter how the reveal
+    // was triggered.
+    readonly property bool pointerInsidePanel: panelHover.hovered || tracks.pointerInside
     readonly property bool controlsEnabled: control.docked || control.controllerState === 0 || control.revealActive
 
     signal previewRequested(int frame)
@@ -76,6 +83,18 @@ Item {
     height: Math.max(0, tracks.y) + tracks.height + 13 + transport.implicitHeight + 5
     visible: controllerState !== 2
 
+    onPointerInsidePanelChanged: {
+        // One authority for the countdown, so every way the cursor can leave the controls starts
+        // it exactly once — moving off the panel, dropping the timeline's grab, or releasing a
+        // scrub past the edge. A handler that only watched one of those sources left the bar stuck
+        // visible after a scrub released outside the panel.
+        if (control.pointerInsidePanel) {
+            hideTimer.stop();
+        } else if (control.controllerState === 1 && !control.docked && control.revealActive) {
+            hideTimer.restart();
+        }
+    }
+
     onControllerStateChanged: {
         hideTimer.stop();
         revealActive = controllerState === 0;
@@ -90,7 +109,13 @@ Item {
         if (controllerState !== 1)
             return;
         revealActive = true;
-        hideTimer.restart();
+        // Re-arms the countdown only when the cursor is NOT already on the controls. The host
+        // calls this for every transport seek (scrubbing the bar, the wheel on the bar); re-arming
+        // the countdown in that case used to fade the bar out from under the cursor 1.2 s later.
+        if (control.pointerInsidePanel)
+            hideTimer.stop();
+        else
+            hideTimer.restart();
     }
 
     function markerLabelForFrame(frame) {
@@ -148,13 +173,16 @@ Item {
         }
 
         HoverHandler {
+            id: panelHover
+
             onHoveredChanged: {
                 if (hovered) {
                     control.revealActive = true;
                     hideTimer.stop();
-                } else if (control.controllerState === 1) {
-                    hideTimer.restart();
                 }
+                // Leaving is handled by onPointerInsidePanelChanged below: the cursor may still be
+                // on the controls even while this handler lost the hover (the timeline, a chip, a
+                // live scrub), and only the aggregate answer can tell.
             }
         }
 
@@ -261,6 +289,11 @@ Item {
                     parts.push(qsTr("重复标记 %1").arg(control.sourceDuplicateCount));
                 if (control.displayGapCount > 0)
                     parts.push(qsTr("呈现间隙 %1").arg(control.displayGapCount));
+                // A run that has not finished presenting a single FrameSet has no sample behind any
+                // of those counters. Omitting them reads as "nothing went wrong"; saying so is the
+                // difference between an unmeasured run and a clean one (product section 2).
+                if (control.playbackRunPresentedFrames === 0)
+                    parts.push(qsTr("本次播放尚未测量"));
                 return parts.join(" · ");
             }
             color: {
@@ -452,6 +485,8 @@ Item {
         interval: 1200
         repeat: false
         onTriggered: {
+            // The countdown may only fire once the cursor is off the controls. A countdown that
+            // ignores the cursor hides the bar while the user is looking straight at it.
             if (control.controllerState === 1 && !control.docked)
                 control.revealActive = false;
         }

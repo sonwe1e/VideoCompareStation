@@ -13,6 +13,11 @@ Item {
     property int outFrame: -1
     property int hoverFrame: -1
     property bool dragging: false
+    // The pointer is on the timeline, or is dragging its playhead. The OSC's auto-hide countdown
+    // asks for this so a bar under the cursor never fades out; the plain-property bridge exists
+    // because the timeline's mouse area fills the whole box (so the rail and the empty space above
+    // it are the same answer) and because a drag keeps the grab even when the cursor leaves.
+    readonly property bool pointerInside: timelineMouse.containsMouse || control.dragging
     property real zoomFactor: 1.0
     property real windowStartFrame: 0
     readonly property int visibleFrameCount: Math.max(2, Math.min(totalFrames, Math.ceil(totalFrames / zoomFactor)))

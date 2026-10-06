@@ -1,7 +1,9 @@
 #include "StartupRequestBroker.h"
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QEventLoop>
+#include <QLocalSocket>
 #include <QThread>
 #include <QUuid>
 
@@ -149,6 +151,61 @@ TEST(StartupRequestBrokerTests, StartsAgainAfterThePreviousPrimaryIsGone) {
     // error.
     StartupRequestBroker second{endpoint};
     EXPECT_EQ(second.startOrForward(request), StartupRequestBroker::StartResult::Primary);
+}
+
+// Windows only lets the foreground process hand the foreground right to another process, and the
+// forwarder is the one that holds it during a double-click from Explorer. So the primary has to
+// announce its process id before the forwarder sends anything, and the forwarder has to read that
+// line off the socket. This asserts the announce-then-read handshake on its own: without the
+// greeting the forwarder would send the request having granted nobody, which is exactly the state
+// that leaves the running window behind the windows the user was already looking at.
+TEST(StartupRequestBrokerTests, PrimaryAnnouncesItsProcessIdBeforeTheForwarderSends) {
+    ensureCoreApplication();
+    const QString endpoint = QStringLiteral("CompareStation.StartupRequest.Test.%1")
+                                 .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    StartupRequestBroker primary{endpoint};
+    std::optional<StartupRequest> received;
+    primary.setRequestHandler([&received](StartupRequest request) {
+        received = std::move(request);
+        return true;
+    });
+    ASSERT_EQ(primary.startOrForward(StartupRequest{}), StartupRequestBroker::StartResult::Primary);
+
+    // Speak to the endpoint from another thread, the way the real forwarder does. Driving the
+    // socket
+    // from the thread that also pumps the server's event loop re-enters the broker mid-read and
+    // faults.
+    std::promise<QByteArray> greetingPromise;
+    std::future<QByteArray> greetingFuture = greetingPromise.get_future();
+    std::jthread client{[endpoint, promise = std::move(greetingPromise)]() mutable {
+        QLocalSocket socket;
+        socket.connectToServer(endpoint, QIODevice::ReadWrite);
+        // connectToServer returns void; waitForConnected is the only thing that can fail here.
+        if (!socket.waitForConnected(1000)) {
+            promise.set_value(QByteArray{});
+            return;
+        }
+        QByteArray greeting;
+        QElapsedTimer greetingWindow;
+        greetingWindow.start();
+        while (!greeting.contains('\n') && greetingWindow.elapsed() < 1000) {
+            if (socket.bytesAvailable() == 0) {
+                static_cast<void>(socket.waitForReadyRead(50));
+            }
+            greeting.append(socket.readAll());
+        }
+        socket.disconnectFromServer();
+        promise.set_value(greeting);
+    }};
+    ASSERT_TRUE(waitUntil(
+        [&greetingFuture] { return greetingFuture.wait_for(0ms) == std::future_status::ready; }));
+    const QByteArray greeting = greetingFuture.get();
+    const qsizetype terminator = greeting.indexOf('\n');
+    ASSERT_GE(terminator, 0) << "the primary never announced its process id";
+    const QString line = QString::fromLatin1(greeting.left(terminator));
+    ASSERT_TRUE(line.startsWith(QStringLiteral("PID ")))
+        << "unexpected greeting: " << line.toStdString();
+    EXPECT_EQ(line.mid(4).trimmed().toLongLong(), QCoreApplication::applicationPid());
 }
 
 } // namespace

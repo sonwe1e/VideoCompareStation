@@ -535,6 +535,12 @@ void ReviewShellController::synchronizeActiveSources(const bool advanceGeneratio
         nextIdentities.push_back(review_.frozenSourceIdentity(source.toUrl()));
     }
     frozenActiveIdentities_ = std::move(nextIdentities);
+    // Display order and selection describe a particular set of sources. Once that set changes they
+    // have no meaning, and carrying them over would make the view show an identity that is no
+    // longer open or stay selected through a change the user never made. Reset to "as opened"
+    // order.
+    displaySourceIdentities_ = frozenActiveIdentities_;
+    selectedSourceIdentities_.clear();
     if (!review_.busy()) {
         stagedSources_ = activeSources_;
         // Prefer the comparison reference as the next open's reference; fall back to timeline
@@ -910,6 +916,90 @@ ReviewShellController::effectiveComparisonState() const noexcept {
         .viewMode = static_cast<int>(effectiveMode),
         .differenceEdge = sourceCount == 2 ? kEdge0And1 : (validEdge ? committedEdge : kEdge0And1),
     };
+}
+
+// The display order is the active order until the user reorders it. Falling back on every read
+// keeps the property correct even for the window between an active set change and its stateChanged.
+QStringList ReviewShellController::displaySourceIdentities() const {
+    const QStringList activeIdentities = activeSourceIdentities();
+    if (displaySourceIdentities_.size() != activeIdentities.size()) {
+        return activeIdentities;
+    }
+    for (const QString& identity : displaySourceIdentities_) {
+        if (!activeIdentities.contains(identity)) {
+            return activeIdentities;
+        }
+    }
+    return displaySourceIdentities_;
+}
+
+QStringList ReviewShellController::selectedSourceIdentities() const {
+    const QStringList activeIdentities = activeSourceIdentities();
+    QStringList live;
+    live.reserve(selectedSourceIdentities_.size());
+    for (const QString& identity : selectedSourceIdentities_) {
+        if (activeIdentities.contains(identity)) {
+            live.push_back(identity);
+        }
+    }
+    return live;
+}
+
+bool ReviewShellController::moveSourceInDisplayOrder(const int fromIndex, const int toIndex) {
+    const QStringList order = displaySourceIdentities();
+    if (fromIndex < 0 || fromIndex >= order.size() || toIndex < 0 || toIndex >= order.size() ||
+        fromIndex == toIndex) {
+        return false;
+    }
+    displaySourceIdentities_ = order;
+    displaySourceIdentities_.move(fromIndex, toIndex);
+    Q_EMIT stateChanged();
+    return true;
+}
+
+void ReviewShellController::setSourceSelected(const QString& sourceIdentity, const bool selected) {
+    if (!activeSourceIdentities().contains(sourceIdentity)) {
+        return;
+    }
+    const bool alreadySelected = selectedSourceIdentities_.contains(sourceIdentity);
+    if (alreadySelected == selected) {
+        return;
+    }
+    if (selected) {
+        selectedSourceIdentities_.push_back(sourceIdentity);
+    } else {
+        selectedSourceIdentities_.removeAll(sourceIdentity);
+    }
+    Q_EMIT stateChanged();
+}
+
+void ReviewShellController::toggleSourceSelection(const QString& sourceIdentity) {
+    setSourceSelected(sourceIdentity, !selectedSourceIdentities_.contains(sourceIdentity));
+}
+
+void ReviewShellController::clearSourceSelection() {
+    if (selectedSourceIdentities_.isEmpty()) {
+        return;
+    }
+    selectedSourceIdentities_.clear();
+    Q_EMIT stateChanged();
+}
+
+int ReviewShellController::removeSelectedSources() {
+    // Snapshot first: each removal runs a command that publishes a new active set, and removing
+    // from the live list while iterating it would skip entries.
+    const QStringList targets = selectedSourceIdentities();
+    selectedSourceIdentities_.clear();
+    int removed = 0;
+    for (const QString& identity : targets) {
+        if (removeActiveSourceByIdentity(identity)) {
+            ++removed;
+        }
+    }
+    if (removed > 0) {
+        Q_EMIT stateChanged();
+    }
+    return removed;
 }
 
 } // namespace dvs::ui

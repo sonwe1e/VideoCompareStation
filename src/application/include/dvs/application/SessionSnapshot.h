@@ -82,6 +82,12 @@ struct SessionSnapshot final {
     std::uint64_t playbackSkippedFrameSets = 0U;
     // Same counter scoped to the current Play interval (reset when a PlaybackRun starts).
     std::uint64_t playbackRunSkippedFrameSets = 0U;
+    // Measurement coverage for the same interval: how many FrameSets this run actually finished
+    // presenting. Zero means "nothing has been observed yet", NOT "nothing went wrong" - a skip
+    // count of 0 is only evidence once at least one FrameSet has completed presentation. The UI
+    // needs this to avoid reading an unmeasured run as a clean one
+    // (docs/product/visual-review.md section 2: 无检测结果应显示未知，不应当作零缺陷).
+    std::uint64_t playbackRunPresentedFrames = 0U;
     // Target visual rate (1.0 = real time). Mirror of playbackSpeed for status-rail symmetry
     // with playbackPresentationRate.
     double playbackTargetRate = 1.0;

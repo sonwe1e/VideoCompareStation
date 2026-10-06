@@ -47,6 +47,11 @@ class ReviewController final : public QObject {
         qulonglong playbackSkippedFrameSets READ playbackSkippedFrameSets NOTIFY stateChanged)
     Q_PROPERTY(
         qulonglong playbackRunSkippedFrameSets READ playbackRunSkippedFrameSets NOTIFY stateChanged)
+    // 0 means the current run has not finished presenting any FrameSet yet, so the per-run skip
+    // count is unmeasured rather than clean. The status rail must say so instead of silently
+    // omitting the counter (docs/product/visual-review.md section 2).
+    Q_PROPERTY(
+        qulonglong playbackRunPresentedFrames READ playbackRunPresentedFrames NOTIFY stateChanged)
     Q_PROPERTY(qreal playbackTargetRate READ playbackTargetRate NOTIFY stateChanged)
     Q_PROPERTY(qreal playbackPresentationRate READ playbackPresentationRate NOTIFY stateChanged)
     Q_PROPERTY(qint64 playbackLagMicroseconds READ playbackLagMicroseconds NOTIFY stateChanged)
@@ -170,6 +175,7 @@ public:
     [[nodiscard]] int playbackContinuityPolicy() const noexcept;
     [[nodiscard]] qulonglong playbackSkippedFrameSets() const noexcept;
     [[nodiscard]] qulonglong playbackRunSkippedFrameSets() const noexcept;
+    [[nodiscard]] qulonglong playbackRunPresentedFrames() const noexcept;
     [[nodiscard]] qreal playbackTargetRate() const noexcept;
     [[nodiscard]] qreal playbackPresentationRate() const noexcept;
     [[nodiscard]] qint64 playbackLagMicroseconds() const noexcept;
@@ -305,6 +311,14 @@ public:
     // validated comparison pointer changes, so callers see a stable string between commits.
     // Falls back to the live filesystem identity when no cached entry exists.
     Q_INVOKABLE QString frozenSourceIdentity(const QUrl& source) const;
+    [[nodiscard]] QString currentSourceIdentity() const;
+
+    // Resume support (C1): the path|size|mtime identity of the source the canonical timeline is
+    // built from, or an empty string when nothing is open. Frozen identity is preferred so a file
+    // that changed underneath an open session still matches the entry it was opened under. Declared
+    // as a property, not just an invokable, because Main.qml binds it and must re-evaluate on
+    // change.
+    Q_PROPERTY(QString currentSourceIdentity READ currentSourceIdentity NOTIFY stateChanged)
 
     // Stops timer/backend access and makes every command fail closed. Calls from another thread
     // are queued to the controller's GUI thread; the runtime calls this before closing ingress.
