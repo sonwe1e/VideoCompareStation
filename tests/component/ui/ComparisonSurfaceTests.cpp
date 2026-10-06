@@ -1945,6 +1945,74 @@ TEST(ComparisonSurfaceWarpTests, ThresholdMaskBlacksDifferencesBelowTheSelectedP
     EXPECT_TRUE(actor.shutdown(2s));
 }
 
+TEST(ComparisonSurfaceWarpTests, HighlightThresholdPreservesFirstSourceAndOpacity) {
+    SurfaceWarpHarness harness;
+    harness.surface.setViewMode(ComparisonSurface::Difference);
+    harness.surface.setDifferenceMetric(ComparisonSurface::Highlight);
+    harness.surface.setDifferenceGain(ComparisonSurface::Gain4x);
+    harness.surface.setThresholdEnabled(true);
+    harness.surface.setThreshold(1.0);
+    ASSERT_TRUE(harness.start());
+
+    const domain::ColorMetadata metadata{
+        .matrix = domain::ColorMatrix::kBt709,
+        .range = domain::ColorRange::kFull,
+        .matrixInferred = false,
+    };
+    auto budget = std::make_shared<platform::FrameBudget>(16U * 1024U * 1024U);
+    platform::GpuTransferActor actor{budget, harness.broker, harness.mailbox, harness.activitySink};
+    std::optional<application::FrameSet> pair = makeSolidSetWithMetadata(
+        *budget, domain::FrameId{46}, 96U, 91U, 173U, metadata, 112U, 91U, 173U, metadata);
+    ASSERT_TRUE(pair.has_value());
+    ASSERT_EQ(actor.submit(makeContext(46U), std::move(*pair)),
+              platform::GpuTransferSubmitResult::Accepted);
+    ASSERT_TRUE(actor.waitUntilIdle(5s));
+
+    const QColor sourceA = expectedNv12Color(metadata, 96U, 91U, 173U);
+    // Only Y changes by 16 full-range code values. Gain 4 gives tint strength 64/255.
+    const float strength = 64.0F / 255.0F;
+    const auto tintedChannel = [strength](const int original, const float tint) {
+        return static_cast<int>(
+            std::lround(static_cast<float>(original) * (1.0F - strength) + tint * strength));
+    };
+    const QColor highlighted{tintedChannel(sourceA.red(), 255.0F),
+                              tintedChannel(sourceA.green(), 0.15F * 255.0F),
+                              tintedChannel(sourceA.blue(), 0.35F * 255.0F)};
+    const auto expectCenter = [&harness](const QColor& expected) {
+        const QImage image = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+        ASSERT_FALSE(image.isNull());
+        expectColorNear(image.pixelColor(image.width() / 2, image.height() / 2), expected, 3);
+    };
+    constexpr std::array policies{ComparisonSurface::ThresholdLumaOnly,
+                                  ComparisonSurface::ThresholdAnyChannel,
+                                  ComparisonSurface::ThresholdAllChannels};
+    for (const ComparisonSurface::ThresholdPolicy policy : policies) {
+        harness.surface.setThresholdPolicy(policy);
+        for (const qreal opacity : {1.0, 0.5}) {
+            harness.surface.setOpacity(opacity);
+            const auto overWindow = [opacity](const QColor& foreground) {
+                return QColor{static_cast<int>(std::lround(foreground.red() * opacity +
+                                                           255.0 * (1.0 - opacity))),
+                              static_cast<int>(std::lround(foreground.green() * opacity)),
+                              static_cast<int>(std::lround(foreground.blue() * opacity +
+                                                           255.0 * (1.0 - opacity)))};
+            };
+            harness.surface.setThreshold(1.0);
+            expectCenter(overWindow(sourceA));
+            harness.surface.setThreshold(0.0);
+            expectCenter(overWindow(highlighted));
+            harness.surface.setThreshold(1.0);
+            harness.surface.setThresholdEnabled(false);
+            expectCenter(overWindow(highlighted));
+            harness.surface.setThresholdEnabled(true);
+            expectCenter(overWindow(sourceA));
+        }
+    }
+
+    harness.releaseRenderer();
+    EXPECT_TRUE(actor.shutdown(2s));
+}
+
 TEST(ComparisonSurfaceWarpTests, ExactPlaneDiffFailsClosedAndComparesRawNv12Codes) {
     SurfaceWarpHarness harness;
     harness.surface.setViewMode(ComparisonSurface::Difference);

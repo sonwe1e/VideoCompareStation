@@ -1,7 +1,27 @@
 # 视觉审查问题台账
 
-更新：2026-10-02。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-10-06。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+
+## 2026-10-06 高亮模式的阈值背景（修复草稿，原生渲染验收待完成）
+
+- **复现**：`Nv12ToRgb.hlsl` 的共享阈值分支在进入 Highlight 前返回黑色。
+  因而启用正阈值后，未达到阈值的区域丢失 A 路背景，而不是只隐藏红色 tint；
+  原来的绝对差异黑底测试未覆盖「原图叠加高亮」。
+- **修复范围**：只在 Highlight 的阈值拒绝分支返回经 clamp 和 opacity 预乘的 A 路。
+  三种阈值策略、原始差值准入、等于阈值时通过、增益与 tint 保持原样；
+  其余差异模式仍返回黑色。不改素材、CPU 评分、解码、接线、布局或片段导出。
+- **云端验证**：用 C++ 向量替身编译执行提取的生产 shader 算术主体，
+  172,800 组通过，其中 151,200 组验证其余七种模式与旧版相同；
+  旧版有 3,720 组 Highlight 期望失败。11 项编译后的运行时变异均被检出。
+  此证据不运行 HLSL 编译器、纹理采样、Qt、D3D11 或真实 GPU。
+- **原生回归已添加但未运行**：`ComparisonSurfaceWarpTests.HighlightThresholdPreservesFirstSourceAndOpacity`
+  覆盖有颜色的 A 背景、三种策略、1.0／0.5 opacity、阈值拒绝／通过／关闭及重复切换；
+  共 24 次状态下的像素期望。原生断言的变异验证仍待运行，不能用 CPU 替身冒充。
+  Windows 上定向执行：
+  `pwsh tools/build/build.ps1 -Preset dev -Test -TestRegex 'platform.ComparisonSurfaceWarpTests.(HighlightThreshold|ThresholdMask)'`。
+- **未验收**：Windows/MSVC、项目固定依赖、原生 HLSL/WARP 编译与像素回读、
+  format-check／lint／完整 CTest、真实 GPU 性能、实窗截图及发布门禁。
 
 ## 2026-10-02 日常视频文件夹浏览（V-08，工作区已实现，未发布）
 
@@ -688,8 +708,9 @@
 ## 2026-09-25 差异按钮三选项与按住看原图（P1 · 实施第二步「做好比较」余项一，基线 `05b2686` + 本轮工作区）
 
 对应 2026-09-25 审查 §五「差异高亮应该帮助找问题」：让「差异」按钮直接提供审查点名的
-观察口径，并提供不进菜单的临时隐藏。上轮已核实着色器（`Nv12ToRgb.hlsl`）中 Highlight
-指标本就是「保留 A 路原图＋按增益对超阈值区域红色 tint」，与审查描述一致，本轮只做接线。
+观察口径，并提供不进菜单的临时隐藏。Highlight 的目标是「保留 A 路原图＋按增益对
+超阈值区域红色 tint」；当时只做接线，正阈值下背景被提前清黑的问题由上方
+2026-10-06 阈值背景补丁修正，原生渲染验收仍待完成。
 
 - **「差异」按钮改为下拉**（复用图片工作区 C-02 的既有模式）：`CompareModeBar` 的
   `diffModeButton` 从单一模式按钮改为下拉，提供「纯差异图」（Difference + RgbAbsolute）

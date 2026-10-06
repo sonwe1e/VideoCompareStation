@@ -194,7 +194,9 @@ float4 DifferencePixelShader(
         }
         if (thresholdSample < differenceThreshold) {
             const float alpha = saturate(opacity);
-            return float4(0.0f, 0.0f, 0.0f, alpha);
+            // Highlight suppresses the tint, not the underlying first source.
+            const float3 background = differenceMetric == 6U ? saturate(rgbA) : 0.0f.xxx;
+            return float4(background * alpha, alpha);
         }
     }
     float3 result;
@@ -216,7 +218,7 @@ float4 DifferencePixelShader(
         const float3 signedDifference = differenceGain * (rgbA - rgbB);
         result = saturate(0.5f.xxx + signedDifference);
     } else if (differenceMetric == 6U) {
-        // Highlight: keep A and tint regions whose max-channel delta exceeds the threshold.
+        // Highlight: keep A and tint regions admitted by the selected threshold policy.
         const float peak = differenceGain * max(channelDifference.r,
                                                  max(channelDifference.g, channelDifference.b));
         const float strength = saturate(peak);
