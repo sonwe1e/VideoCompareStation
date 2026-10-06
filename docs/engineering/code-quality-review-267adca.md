@@ -8,6 +8,13 @@
 
 核验结论：**原报告的优先级排序和「保留现有技术栈 + 单一协调循环」的方向判断成立，可照此执行**；但其中两项的证据等级需要修正（一项上调、一项补充关键机制），两项措辞需要收紧。修正见 §3。
 
+> **状态更新（2026-10-05，P1-A 已修复并验证）**
+> P1-A「导出时间基准」已在 `6923131` 之上实现修复：`ClipExportWriter::keyframeTimes()` 改为返回
+> **归零到 frame 0** 的关键帧表，`perform()` 的 seek、end bound、进度与 `firstPresentationMicroseconds`
+> 各自加回容器原点。P1-B / P1-C / P1-D / P2-A ~ P2-D **仍未修复**。
+> 修复证据见 §9：三个新测试（含一个新建的多 GOP 非零起始 fixture）、4/4 变异检出、
+> 以及「改前失败、改后通过」的反向控制。
+
 ---
 
 ## 0. 本次核验的验证边界（先说清做不到什么）
@@ -37,9 +44,9 @@
 
 ## 2. 逐项证据核验结果
 
-### P1-A 导出时间基准：**已本地复现**（证据等级上调：源码推断 → 本地复现器）
+### P1-A 导出时间基准：**已本地复现，并已修复**
 
-这是本次核验中唯一由「读码推断」升级为「跑出来」的问题。
+这是本次核验中唯一由「读码推断」升级为「跑出来」，再进一步落到产品代码的问题。
 
 **机制**：区间规划得到的时间以 canonical frame 0 为原点；`keyframeTimes()` 返回的是容器原始 packet PTS。两者直接进入 `alignClipExportStart()`。
 
@@ -316,7 +323,84 @@ Direct3D 绘图命令进入**设备内部命令缓冲**（[ID3D11DeviceContext::
 |---|---|
 | `out/verification/clock-base-probe/` | `probe.cpp` + `Run-Probe.ps1` + `run.log` + `fixture-facts.txt`：用仓库自身源码复现 P1-A |
 | `out/verification/pixel-contract-probe/` | `Run-PixelProbe.ps1` + `run.log`：实测 P1-B 两条路径不等价 |
+| `out/verification/p1a-fix-verification/` | `probe.cpp` + `Run-Probe.ps1`：修复后规划层的对齐验证 |
+| `out/verification/p1a-mutation/` | `mutate.ps1` + `run.log`：4 个变异全部检出的证据 |
 
 两者都是一次性探针，不是第二套测试套件；若要长期保留，应按 `tests/component/media/ClipExportWriterTests.cpp` 的既有形态转成回归用例，并配变异证据。
+
+---
+
+## 9. P1-A 修复记录
+
+### 改法
+
+容器原点知识只留在适配器里，application/domain 继续只在「归零到 frame 0」的时钟上工作：
+
+- `src/media_ffmpeg/src/ClipExportWriter.cpp` 新增 `streamOriginMicroseconds()` / `videoStreamStartTime()`：从
+  `stream->start_time` 取容器原点（微秒与流时基两种形式），`AV_NOPTS_VALUE` 或非正值时按 0 归一。
+- `keyframeTimes()` 的三处 `push_back`（索引路径的 PTS、索引路径的 fallback、无索引路径）都减去该原点，
+  于是返回表的时钟与规划器一致。
+- `perform()` 把规划器的 `startMicroseconds` / `endMicroseconds` 加回原点后再交给 FFmpeg：seek 目标、
+  `endPts`、进度计算的被减数，以及 `firstPresentationMicroseconds`（原契约要求「source media time」，
+  非零起始源若回原始 PTS 就不再是 source media time）。
+
+### 新增测试
+
+| 测试 | 作用 |
+|---|---|
+| `NormalizesKeyframeTimesOfANonZeroStartStream` | 断言关键帧表归零成 `{0}`，并覆盖首/中/尾三类区间 |
+| `ExportsTheRequestedRangeOfANonZeroStartStream` | 端到端导出 12 帧、成片从 0 开始、无残留 partial |
+| `SeeksANonZeroStartMultiGopSourceOnTheRequestedKeyframe` | 多 GOP 源证明 seek 落在 frame 3 而非 frame 0 |
+
+第三个测试需要一个仓库里没有的素材，因此新建了
+`tests/fixtures/media/h264_nonzero_start_multigop_64x48_30fps_12.mp4`（12 帧 30fps、起点 1.000000s、
+关键帧位于 frame 0/3/6/9）。**关键帧刻意选在整除微秒边界上**：第一版用 frame 0/4/8 时，keyframe 归一化
+时间 133333µs（133333.33 四舍五入）被 `frameAtOrBefore` 向下取整成 frame 3，`firstExportedFrame` 报错一帧——
+那是取整伪影，不是缺陷，换成精确边界即可暴露真实语义。
+
+### 变异证据（4/4 检出）
+
+`out/verification/p1a-mutation/run.log`，控制组与还原控制组均绿：
+
+| 变异 | 被哪个断言抓住 |
+|---|---|
+| `origin-never-subtracted`（原点不归一） | 关键帧表断言（改前为 `{1000000}`） |
+| `seek-forgets-origin`（seek 忘记加回原点） | 多 GOP 测试的包数与帧数 |
+| `endbound-forgets-origin`（end bound 忘记加回） | 端到端成片帧数 |
+| `firstpresentation-unnormalized`（报告回原始 PTS） | `firstPresentationMicroseconds` 断言 |
+
+**过程中修掉的两个取证脚本缺陷**（都记下来，避免下次重犯）：
+1. `Write-Output` 的诊断信息被 `$results +=` 一起收进结果数组，导致计数虚高、且诊断一行都不显示；
+   改用 `Write-Host`。这是本仓库 C2 工作踩过的同一类坑的翻版。
+2. 还原源文件后**没有重新构建**就直接跑还原控制组，读到的是上一个变异编出来的二进制，于是误报
+   「还原后测试失败」。Ninja 按 mtime restat，`Move-Item` 还原的文件可能比已构建目标更旧，构建会被静默跳过。
+   修复：还原后强制刷新 mtime 再构建。
+3. 第一版变异 `seek-forgets-origin` **存活**：单关键帧 fixture 上，seek 到 0 会被 FFmpeg 钳到首个关键帧，
+   与 seek 到正确原点结果相同。这不是脚本问题，是真实的覆盖盲区——补多 GOP fixture 后才可观测。
+
+### 反向控制（改前失败 / 改后通过）
+
+`git stash` 掉 writer 修复、保留新测试与 fixture 后，三个新测试全部失败，且失败信息正是缺陷本身：
+
+```
+NormalizesKeyframeTimesOfANonZeroStartStream      Which is: { 1000000 }  期望 { 0 }
+ExportsTheRequestedRangeOfANonZeroStartStream     Which is: { 1000000 }
+SeeksANonZeroStartMultiGopSourceOnTheRequested... Which is: { 1000000, 1100000, 1200000, 1300000 }
+                                                    期望 { 0, 100000, 200000, 300000 }
+```
+
+修复后 9 个 `ClipExportWriterTests` 全绿。
+
+### 门禁
+
+- `media` 组件 **135 通过 / 1 跳过**（GameDVR 真实录屏用例，未设 `DVS_TEST_GAMEDVR_CAPTURE`，既有状态）
+- `application` 单元 **155 通过**
+- `ui.MainQmlContractTests` **48 通过 / 4 禁用**（4 项禁用为既有状态）
+- dev `format-check`、`lint`（`--max-warnings 0`）通过
+
+### 仍未验收
+
+Windows GUI 完整导出流程、真实录屏素材、GPU/D3D11VA、以及 P1-B / P1-C / P1-D / P2-A ~ P2-D，**均未处理**。
+本次只证明时间基准这一条接线在自动化层面已闭合。
 
 **最终建议**：下一轮实施任务只领取「可信观察与导出闭环」这一批，有明确样例与退出条件；不以新增功能数、代码量或测试总数评价完成。

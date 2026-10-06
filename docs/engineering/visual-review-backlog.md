@@ -1,7 +1,47 @@
 # 视觉审查问题台账
 
-更新：2026-10-04。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-10-05。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+
+## 2026-10-05 区间导出：非零起始源把归一零时间与容器时间混用（P1-A，已修复并验证）
+
+对 `267adca` 的逐条证据核验见 [code-quality-review-267adca.md](code-quality-review-267adca.md)。
+本轮修掉其中 P1-A；**P1-B 像素口径、P1-C 阈值高亮、P1-D 导出事务、P2-A VFR 入口、P2-B 坏点占比
+均未处理**。
+
+- **缺陷**：区间规划在「归零到 frame 0」的时钟上工作（`RationalRate`/`FrameTimeline` 两条时间线都
+  以 frame 0 为 0），而 `ClipExportWriter::keyframeTimes()` 返回**容器原始 PTS**。两者直接进
+  `alignClipExportStart()`，于是首 PTS 为 1s 的素材被按「在 0–0.4s 找关键帧」处理，返回
+  "The requested range holds no keyframe, so the stream copy would be empty."。播放支持非零起始 PTS
+  不代表导出也处理好了它。
+- **复现**：仓库自带 `h264_nonzero_start_64x48_30fps_12.mp4`（ffprobe 实测 `start_pts=15360`、
+  `time_base=1/15360`、12 帧、仅 1 个 I 帧在 1.000000s）。用仓库自身未修改的 planner 源码编译探针，
+  选全部 12 帧得到 `The requested range holds no keyframe`；把关键帧表换成归零后的 `{0}` 立刻对齐成功
+  （`shift=-100000`），与零起始 fixture 逐位一致——因果钉死为时间原点，不是规划算法。
+- **修法**：容器原点知识只留在适配器。新增 `streamOriginMicroseconds()`/`videoStreamStartTime()`
+  从 `stream->start_time` 取原点；`keyframeTimes()` 三处 push 都减去它，使返回表与规划器同一时钟；
+  `perform()` 的 seek 目标、`endPts`、进度被减数与 `firstPresentationMicroseconds` 各自加回原点。
+  `firstPresentationMicroseconds` 的契约写的是 "source media time"，非零起始源回原始 PTS 就不再是
+  source media time，因此一并归一。
+- **测试（3 项新增）**：`NormalizesKeyframeTimesOfANonZeroStartStream`（关键帧表归零为 `{0}`，
+  覆盖首/中/尾区间）、`ExportsTheRequestedRangeOfANonZeroStartStream`（端到端 12 帧、成片从 0 开始、
+  无 partial 残留）、`SeeksANonZeroStartMultiGopSourceOnTheRequestedKeyframe`（多 GOP 证明 seek 落
+  frame 3 而非 frame 0）。
+- **新 fixture**：`h264_nonzero_start_multigop_64x48_30fps_12.mp4`。关键帧刻意放在 frame 0/3/6/9 ——
+  第一版用 0/4/8，归一化时间 133333µs（133333.33 四舍五入）被 `frameAtOrBefore` 向下取整成 frame 3，
+  `firstExportedFrame` 差一帧。那是取整伪影不是缺陷，但会掩盖真实语义，故改用整除微秒边界。
+- **反向控制**：`git stash` 掉 writer 修复后三个新测试全部失败，失败值正是缺陷本身
+  （`{ 1000000 }` vs `{ 0 }`；`{ 1000000, 1100000, 1200000, 1300000 }` vs `{ 0, 100000, 200000, 300000 }`）。
+- **变异证据**：`out/verification/p1a-mutation/`，4/4 检出（原点不归一 / seek 忘记原点 /
+  end bound 忘记原点 / 报告回原始 PTS），控制组与还原控制组均绿。
+- **取证脚本自身的三个坑（已修，留记录）**：① `Write-Output` 诊断被 `$results +=` 收进结果数组，
+  计数虚高且诊断不显示，改用 `Write-Host`；② 还原源文件后未重新构建就读还原控制组，读到的是上一个
+  变异编出的二进制，误报「还原后失败」——Ninja 按 mtime restat，`Move-Item` 还原的文件可能比目标更旧，
+  构建被静默跳过，须强制刷新 mtime；③ `seek-forgets-origin` 一度**存活**：单关键帧 fixture 上 seek 到 0
+  会被 FFmpeg 钳到首个关键帧，与 seek 到正确原点等价，这是真实覆盖盲区，补多 GOP fixture 后才可观测。
+- **门禁**：media 组件 135 通过 / 1 跳过（GameDVR 用例未设 `DVS_TEST_GAMEDVR_CAPTURE`，既有状态）、
+  application 155 通过、`ui.MainQmlContractTests` 48 通过 / 4 禁用（既有）；dev format-check 与 lint 通过。
+- **未验收**：Windows GUI 完整导出流程、真实录屏、GPU/D3D11VA 未运行。本轮只闭合时间基准这一条接线。
 
 ## 2026-10-05 播放控制条：鼠标在进度条上时控制条淡出（U-03，工作区已修复，未提交）
 

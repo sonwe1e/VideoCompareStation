@@ -170,6 +170,33 @@ struct OpenedInput final {
 
 constexpr AVRational kMicrosecondsBase{1, AV_TIME_BASE};
 
+// The container's presentation-time origin, in microseconds. Both canonical timelines — the
+// rational rate and the variable-rate frame list — are normalized to frame zero, so a plan's
+// start and end instants live on that clock while the container speaks in its own origin. Every
+// container timestamp the export touches has to be shifted by this much to become comparable with
+// a plan, and it is exactly what makes a stream that starts at one second plan and copy on the
+// same clock instead of looking for keyframes a second too early.
+//
+// A stream with no recorded start time, or one whose start time falls at or before the container
+// origin, normalizes by zero, which is the historical behaviour for those files.
+[[nodiscard]] std::int64_t streamOriginMicroseconds(const AVStream& stream) noexcept {
+    if (stream.start_time == AV_NOPTS_VALUE) {
+        return 0;
+    }
+    const std::int64_t origin =
+        av_rescale_q(stream.start_time, stream.time_base, kMicrosecondsBase);
+    return origin > 0 ? origin : 0;
+}
+
+// The same origin in the stream's own time-base ticks, which is the form packet timestamps are in.
+// Rescaling microseconds back into ticks avoids a second, differently-rounded subtraction.
+[[nodiscard]] std::int64_t videoStreamStartTime(const AVStream& stream) noexcept {
+    if (stream.start_time == AV_NOPTS_VALUE || stream.start_time <= 0) {
+        return 0;
+    }
+    return stream.start_time;
+}
+
 // Everything a stream copy accumulates while it walks the source: the output, which can only be
 // created once a keyframe has been accepted, and the numbers the report is built from.
 struct ClipCopyState final {
@@ -250,8 +277,12 @@ struct ClipCopyState final {
         state.headerWritten = true;
         state.timestampBase = packet->dts != AV_NOPTS_VALUE ? packet->dts : packet->pts;
         if (packet->pts != AV_NOPTS_VALUE) {
+            // Reported on the same normalized clock as the plan: the packet's container time minus
+            // the source's presentation-time origin. A zero-start source normalizes by zero.
             state.firstPresentationMicroseconds =
-                av_rescale_q(packet->pts, state.sourceStream->time_base, kMicrosecondsBase);
+                av_rescale_q(packet->pts - videoStreamStartTime(*state.sourceStream),
+                             state.sourceStream->time_base,
+                             kMicrosecondsBase);
         }
     }
 
@@ -285,6 +316,10 @@ std::vector<std::int64_t> ClipExportWriter::keyframeTimes(const std::filesystem:
         return {};
     }
     AVStream& stream = *opened.videoStream;
+    // The planner aligns the in point against the canonical timeline, which is normalized to frame
+    // zero, so the reported keyframe times have to be on that same clock. Reporting the raw
+    // container origin instead made a one-second-start stream look for its keyframes in 0-0.4s.
+    const std::int64_t originMicroseconds = streamOriginMicroseconds(stream);
     std::vector<std::int64_t> times;
 
     internal::AvPacketPtr packet{av_packet_alloc()};
@@ -313,7 +348,9 @@ std::vector<std::int64_t> ClipExportWriter::keyframeTimes(const std::filesystem:
             }
 
             const std::int64_t fallbackTime = std::max<std::int64_t>(
-                av_rescale_q(entry->timestamp, stream.time_base, kMicrosecondsBase), 0);
+                av_rescale_q(entry->timestamp, stream.time_base, kMicrosecondsBase) -
+                    originMicroseconds,
+                0);
             // A leading sync sample can carry a negative seek timestamp: it stands for the decode
             // timestamp of the first frame, one reorder delay before the presentation origin. The
             // clamp keeps such an entry on the first frame instead of seeking before the stream.
@@ -333,7 +370,8 @@ std::vector<std::int64_t> ClipExportWriter::keyframeTimes(const std::filesystem:
                 times.push_back(fallbackTime);
                 continue;
             }
-            times.push_back(av_rescale_q(pts, stream.time_base, kMicrosecondsBase));
+            times.push_back(av_rescale_q(pts, stream.time_base, kMicrosecondsBase) -
+                            originMicroseconds);
             av_packet_unref(packet.get());
         }
     } else {
@@ -346,7 +384,8 @@ std::vector<std::int64_t> ClipExportWriter::keyframeTimes(const std::filesystem:
             const std::int64_t pts = packet->pts != AV_NOPTS_VALUE ? packet->pts : packet->dts;
             if (packet->stream_index == opened.videoStreamIndex && pts != AV_NOPTS_VALUE &&
                 (packet->flags & AV_PKT_FLAG_KEY) != 0) {
-                times.push_back(av_rescale_q(pts, stream.time_base, kMicrosecondsBase));
+                times.push_back(av_rescale_q(pts, stream.time_base, kMicrosecondsBase) -
+                                originMicroseconds);
             }
             av_packet_unref(packet.get());
         }
@@ -385,9 +424,13 @@ application::ClipExportReport ClipExportWriter::perform(const application::ClipE
     }
     AVStream* const videoStream = opened.videoStream;
 
+    // keyframeTimes() reports frame-zero-normalized times, and the plan it produced is built on the
+    // same clock. FFmpeg, by contrast, seeks and compares in container time, so the plan's instants
+    // are shifted onto the container clock here and nowhere else.
+    const std::int64_t originMicroseconds = streamOriginMicroseconds(*videoStream);
     const std::int64_t startMicroseconds = job.plan.startMicroseconds;
-    const int seekResult =
-        av_seek_frame(opened.context.get(), -1, startMicroseconds, AVSEEK_FLAG_BACKWARD);
+    const int seekResult = av_seek_frame(
+        opened.context.get(), -1, startMicroseconds + originMicroseconds, AVSEEK_FLAG_BACKWARD);
     if (seekResult < 0) {
         // A cancellation that lands during the seek interrupts it; that is not a broken source.
         if (isCanceled(cancelRequested)) {
@@ -403,10 +446,11 @@ application::ClipExportReport ClipExportWriter::perform(const application::ClipE
     // first packet written is the next keyframe in the stream. Nothing is compared against the
     // start time afterwards: the plan already chose a keyframe instant, and re-deriving it through
     // a timebase rescale would only add a rounding opportunity to skip that very keyframe.
-    const std::int64_t endPts =
-        job.plan.endMicroseconds.has_value()
-            ? av_rescale_q(*job.plan.endMicroseconds, kMicrosecondsBase, videoStream->time_base)
-            : 0;
+    const std::int64_t endPts = job.plan.endMicroseconds.has_value()
+                                    ? av_rescale_q(*job.plan.endMicroseconds + originMicroseconds,
+                                                   kMicrosecondsBase,
+                                                   videoStream->time_base)
+                                    : 0;
     const std::int64_t spanMicroseconds =
         job.plan.endMicroseconds.has_value()
             ? *job.plan.endMicroseconds - startMicroseconds
@@ -508,10 +552,12 @@ application::ClipExportReport ClipExportWriter::perform(const application::ClipE
         }
 
         if (job.progress && spanMicroseconds > 0) {
+            // presentationCursor is container time, so it is brought onto the plan's clock before
+            // the span is divided out of it.
             const double fraction = std::clamp(
                 static_cast<double>(
                     av_rescale_q(presentationCursor, videoStream->time_base, kMicrosecondsBase) -
-                    startMicroseconds) /
+                    originMicroseconds - startMicroseconds) /
                     static_cast<double>(spanMicroseconds),
                 0.0,
                 1.0);

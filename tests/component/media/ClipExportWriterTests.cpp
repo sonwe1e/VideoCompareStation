@@ -174,6 +174,134 @@ TEST(ClipExportWriterTests, CopiesTheRequestedRangeIntoAStandaloneClip) {
                 2'000.0);
 }
 
+// The fixture the failure report used: a playable screen recording whose stream starts at one
+// second instead of zero. Playback handles the non-zero PTS fine; the exporter's keyframe table
+// used to report the raw container origin, so the planner looked for its keyframes at 0-0.4s and
+// every range came back "the requested range holds no keyframe".
+TEST(ClipExportWriterTests, NormalizesKeyframeTimesOfANonZeroStartStream) {
+    const std::filesystem::path source = fixture("h264_nonzero_start_64x48_30fps_12.mp4");
+    const std::atomic_bool cancel{false};
+    ClipExportWriter writer;
+
+    const std::vector<std::int64_t> keyframes = writer.keyframeTimes(source, cancel);
+    // Fixture fact: exactly one sync sample, at a container PTS of 1.000000s. The canonical
+    // timeline is normalized to frame zero, so the only keyframe must be reported as 0, not
+    // 1'000'000: reporting the container origin is what made every range fail to align.
+    ASSERT_EQ(keyframes, std::vector<std::int64_t>({0}));
+
+    // Every range of the file must now align, and each must pre-roll onto that single keyframe.
+    // The planner names frame instants as the ceiling of the exact rational boundary, so the shift
+    // is stated exactly: frame 3 at 100 ms, frame 6 at 200 ms.
+    const struct {
+        std::int64_t inFrame;
+        std::int64_t shift;
+    } cases[] = {{0, 0}, {3, -100'000}, {6, -200'000}};
+    for (const auto& [inFrame, expectedShift] : cases) {
+        const auto plan = alignedPlanFor(source, rangeOf(inFrame, inFrame + 5), keyframes);
+        ASSERT_TRUE(plan.has_value()) << "in frame " << inFrame;
+        ASSERT_TRUE(plan->endMicroseconds.has_value());
+        EXPECT_EQ(plan->startMicroseconds, 0);
+        EXPECT_EQ(plan->startShiftMicroseconds, expectedShift);
+        ASSERT_TRUE(plan->firstExportedFrame.has_value());
+        EXPECT_EQ(plan->firstExportedFrame->value(), 0);
+        EXPECT_EQ(plan->requestedFrameCount, 6);
+    }
+}
+
+// The exported clip of a one-second-start source must still hold every requested frame: the writer
+// shifts the plan onto the container clock for the seek and the end bound, so the non-zero origin
+// cannot make the copy start past the end or stop before the last frame.
+TEST(ClipExportWriterTests, ExportsTheRequestedRangeOfANonZeroStartStream) {
+    const std::filesystem::path source = fixture("h264_nonzero_start_64x48_30fps_12.mp4");
+    const ScopedTempDirectory workspace{"nonzero"};
+    const std::filesystem::path target = workspace.path() / "clip.mp4";
+
+    const std::atomic_bool cancel{false};
+    ClipExportWriter writer;
+    const std::vector<std::int64_t> keyframes = writer.keyframeTimes(source, cancel);
+    ASSERT_EQ(keyframes, std::vector<std::int64_t>({0}));
+
+    const auto plan = alignedPlanFor(source, rangeOf(0, 11), keyframes);
+    ASSERT_TRUE(plan.has_value());
+    ASSERT_TRUE(plan->endMicroseconds.has_value());
+    EXPECT_EQ(plan->startMicroseconds, 0);
+    // Twelve frames: the out point is the last frame, so the end is the end of the stream.
+    EXPECT_EQ(*plan->endMicroseconds, 400'000);
+
+    std::vector<double> progress;
+    application::ClipExportJob job = makeJob(source, target, *plan);
+    job.progress = [&progress](const double value) { progress.push_back(value); };
+
+    const application::ClipExportReport report = writer.perform(job, cancel);
+
+    EXPECT_EQ(report.outcome, application::ClipExportOutcome::kCompleted);
+    EXPECT_EQ(report.technicalDetail, std::string{});
+    EXPECT_TRUE(report.packetsWritten > 0);
+    // The clip starts at zero: the writer rebases the first accepted packet, so a one-second
+    // origin must not be echoed back as the clip's start time.
+    EXPECT_EQ(report.firstPresentationMicroseconds, 0);
+    ASSERT_TRUE(std::filesystem::exists(target));
+    EXPECT_EQ(partialFileCount(workspace.path()), 0U);
+    ASSERT_FALSE(progress.empty());
+    EXPECT_DOUBLE_EQ(progress.back(), 1.0);
+
+    const auto descriptor = MediaProbe::inspect(target, 0U);
+    ASSERT_TRUE(descriptor.hasValue()) << descriptor.error().technicalDetail;
+    EXPECT_EQ(descriptor.value().frameCount.value, 12);
+    EXPECT_EQ(descriptor.value().extent.width, 64U);
+    EXPECT_EQ(descriptor.value().extent.height, 48U);
+}
+
+// A multi-GOP stream with the same non-zero start, so the seek target is actually observable: the
+// single-keyframe fixtures above can never tell a correct seek from one that lands on frame 0,
+// because FFmpeg clamps a target before the stream onto its first keyframe either way.
+TEST(ClipExportWriterTests, SeeksANonZeroStartMultiGopSourceOntoTheRequestedKeyframe) {
+    const std::filesystem::path source = fixture("h264_nonzero_start_multigop_64x48_30fps_12.mp4");
+    const ScopedTempDirectory workspace{"multigop"};
+    const std::filesystem::path target = workspace.path() / "clip.mp4";
+
+    const std::atomic_bool cancel{false};
+    ClipExportWriter writer;
+
+    // Fixture fact: sync samples at container PTS 1.000000s, 1.100000s, 1.200000s and 1.300000s —
+    // frames 0, 3, 6 and 9 of a 30 fps stream, chosen so every keyframe lands on a whole
+    // microsecond and the reported frame identity is exact rather than one microsecond short.
+    const std::vector<std::int64_t> keyframes = writer.keyframeTimes(source, cancel);
+    ASSERT_EQ(keyframes, std::vector<std::int64_t>({0, 100'000, 200'000, 300'000}));
+
+    // Frames 4-7 were asked for; the latest keyframe at or before the in point is frame 3, so the
+    // copy pre-rolls onto it instead of falling all the way back to the stream's first frame.
+    const auto plan = alignedPlanFor(source, rangeOf(4, 7), keyframes);
+    ASSERT_TRUE(plan.has_value());
+    ASSERT_TRUE(plan->endMicroseconds.has_value());
+    EXPECT_EQ(plan->startMicroseconds, 100'000);
+    EXPECT_EQ(plan->startShiftMicroseconds, -33'334);
+    ASSERT_TRUE(plan->firstExportedFrame.has_value());
+    EXPECT_EQ(plan->firstExportedFrame->value(), 3);
+    EXPECT_EQ(plan->requestedFrameCount, 4);
+
+    const application::ClipExportReport report =
+        writer.perform(makeJob(source, target, *plan), cancel);
+
+    EXPECT_EQ(report.outcome, application::ClipExportOutcome::kCompleted);
+    EXPECT_TRUE(report.technicalDetail.empty());
+    // The copied packet count is what proves the seek landed on frame 3: a seek that stayed on the
+    // plan's clock would have been clamped onto frame 0 and copied eight packets instead of five.
+    EXPECT_EQ(report.packetsWritten, 5);
+    // Frame 3's own container time, normalized: not the raw 1.100000s the container reports.
+    EXPECT_EQ(report.firstPresentationMicroseconds, 100'000);
+    ASSERT_TRUE(std::filesystem::exists(target));
+    EXPECT_EQ(partialFileCount(workspace.path()), 0U);
+
+    // Re-decoding the clip confirms the exported identity: frames 3-7 of the source, and crucially
+    // not frame 0, which a wrong seek target would have produced.
+    const auto descriptor = MediaProbe::inspect(target, 0U);
+    ASSERT_TRUE(descriptor.hasValue()) << descriptor.error().technicalDetail;
+    EXPECT_EQ(descriptor.value().frameCount.value, 5);
+    EXPECT_EQ(descriptor.value().extent.width, 64U);
+    EXPECT_EQ(descriptor.value().extent.height, 48U);
+}
+
 TEST(ClipExportWriterTests, PreRollsAMidClipStartOntoTheEarlierKeyframe) {
     const std::filesystem::path source = fixture("h264_a_320x180_30fps_12.mp4");
     const ScopedTempDirectory workspace{"preroll"};
