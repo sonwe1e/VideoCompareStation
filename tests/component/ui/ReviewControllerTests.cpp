@@ -2232,8 +2232,8 @@ TEST_F(ReviewControllerTests, SidebarAppendRejectsChangedReferenceOrSourceSetBef
         h.controller->refreshProjection();
         ASSERT_TRUE(h.shell->stageSidebarAppend(h.urls[2]));
         h.backend->currentSnapshot = changeReference
-            ? readySnapshotWithSources({h.pathAt(0), h.pathAt(1)}, 0U)
-            : readySnapshotWithSources({h.pathAt(2)}, 0U);
+                                         ? readySnapshotWithSources({h.pathAt(0), h.pathAt(1)}, 0U)
+                                         : readySnapshotWithSources({h.pathAt(2)}, 0U);
         h.controller->refreshProjection();
         EXPECT_FALSE(h.shell->openSidebarAppend(0));
         EXPECT_TRUE(h.backend->submitted.empty());
@@ -2295,7 +2295,6 @@ TEST_F(ReviewControllerTests, SidebarAppendNeverAllowsReplacementAndRejectsDirty
     EXPECT_FALSE(h.shell->stageSidebarAppend(h.urls[1]));
     EXPECT_TRUE(h.backend->submitted.empty());
 }
-
 
 TEST_F(ReviewControllerTests, SidebarAppendQueuedChangedExistingFileDoesNotReopen) {
     FolderTransportHarness h;

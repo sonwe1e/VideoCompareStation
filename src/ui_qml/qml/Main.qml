@@ -385,7 +385,7 @@ ApplicationWindow {
     readonly property real frameProgress: currentFrame >= 0 && totalFrames > 1 ? Math.max(0, Math.min(1, Number(currentFrame) / (Number(totalFrames) - 1))) : 0
     readonly property real timelineProgress: timelineDragging && timelinePreviewFrame >= 0 && totalFrames > 1 ? Number(timelinePreviewFrame) / (Number(totalFrames) - 1) : frameProgress
     readonly property bool timelineEnabled: graphicsReady && !busy && Boolean(controller && controller.canFirst) && totalFrames > 0
-    readonly property bool anyMenuOpen: Boolean(applicationMenuBar && applicationMenuBar.anyMenuOpen) || Boolean(sourceBar && sourceBar.anyMenuOpen) || Boolean(viewerContextMenu && viewerContextMenu.anyMenuOpen)
+    readonly property bool anyMenuOpen: Boolean(applicationMenuBar && applicationMenuBar.anyMenuOpen) || Boolean(sourceBar && sourceBar.anyMenuOpen) || Boolean(viewerContextMenu && viewerContextMenu.anyMenuOpen) || Boolean(videoFolderSidebar && videoFolderSidebar.anyMenuOpen)
 
     // Modal/input routing is intentionally computed in one place. Native image dialogs are
 
@@ -2888,6 +2888,10 @@ ApplicationWindow {
     // pass exactly as before. Typed view like reviewInputDialogs above.
     // qmllint disable incompatible-type
     readonly property ImageWorkspace imageWorkspace: imageWorkspaceLoader.item
+    // qmllint enable incompatible-type
+
+    // qmllint disable incompatible-type
+    readonly property VideoFolderSidebar videoFolderSidebar: videoFolderSidebarLoader.item
     // qmllint enable incompatible-type
 
     Loader {

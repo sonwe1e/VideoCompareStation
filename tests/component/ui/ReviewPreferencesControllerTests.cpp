@@ -276,8 +276,8 @@ TEST_F(ReviewPreferencesControllerTests,
     application::SettingsSnapshot settings;
     settings.values.emplace("review.view-mode", "difference");
     settings.values.emplace("extension.unknown-key", "preserve-me");
-    const auto stored = QJsonDocument{QJsonArray{previous.toString(), first.toString(),
-                                               "https://example.invalid/remote.mp4", 1}};
+    const auto stored = QJsonDocument{
+        QJsonArray{previous.toString(), first.toString(), "https://example.invalid/remote.mp4", 1}};
     settings.values.emplace("review.recent-video-files", stored.toJson().toStdString());
     repository->completeLoad(std::move(settings));
     ASSERT_TRUE(waitForPreferences([&] { return !repository->saveRequests.empty(); }));
@@ -288,8 +288,9 @@ TEST_F(ReviewPreferencesControllerTests,
     const auto& saved = repository->saveRequests.back().settings.values;
     EXPECT_EQ(saved.at("extension.unknown-key"), "preserve-me");
     EXPECT_EQ(saved.at("review.view-mode"), "difference");
-    const auto recent = QJsonDocument::fromJson(
-        QByteArray::fromStdString(saved.at("review.recent-video-files"))).array();
+    const auto recent =
+        QJsonDocument::fromJson(QByteArray::fromStdString(saved.at("review.recent-video-files")))
+            .array();
     ASSERT_EQ(recent.size(), 2);
     EXPECT_EQ(QUrl{recent.first().toString()}, first);
     EXPECT_EQ(QUrl{recent.last().toString()}, previous);
@@ -305,7 +306,8 @@ TEST_F(ReviewPreferencesControllerTests,
     ReviewPreferencesController controller{repository};
     controller.setOscMode(1);
     application::SettingsSnapshot settings;
-    settings.values.emplace("review.recent-video-files",
+    settings.values.emplace(
+        "review.recent-video-files",
         QJsonDocument{QJsonArray{recent.toString(), old.toString()}}.toJson().toStdString());
     repository->completeLoad(std::move(settings));
     ASSERT_TRUE(waitForPreferences([&] { return !repository->saveRequests.empty(); }));
@@ -331,7 +333,9 @@ TEST_F(ReviewPreferencesControllerTests,
     ASSERT_TRUE(directory.isValid());
     auto repository = std::make_shared<FakeSettingsRepository>();
     ReviewPreferencesController controller{repository};
-    for (const auto& invalid : {QUrl{}, QUrl{"file:relative.mp4"}, QUrl{"file://server/a.mp4"},
+    for (const auto& invalid : {QUrl{},
+                                QUrl{"file:relative.mp4"},
+                                QUrl{"file://server/a.mp4"},
                                 QUrl{"https://example.invalid/a.mp4"},
                                 QUrl::fromLocalFile(directory.filePath("image.png"))}) {
         controller.rememberVideoFile(invalid);

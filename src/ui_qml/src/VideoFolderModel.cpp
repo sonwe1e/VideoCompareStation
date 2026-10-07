@@ -1,11 +1,11 @@
 #include "dvs/ui/VideoFolderModel.h"
 
-#include "RecentVideoFiles.h"
-
 #include "dvs/application/MediaPaths.h"
 #include "dvs/ui/ReviewController.h"
 #include "dvs/ui/ReviewPreferencesController.h"
 #include "dvs/ui/ReviewShellController.h"
+
+#include "RecentVideoFiles.h"
 
 #include <QDir>
 #include <QDirIterator>
@@ -155,12 +155,11 @@ void VideoFolderModel::attachPreferences(ReviewPreferencesController& preference
             guarded->rememberVideoFile(url);
         }
     };
-    QObject::connect(&preferences,
-                     &ReviewPreferencesController::recentVideoFilesChanged,
-                     this,
-                     [this, &preferences] {
-                         synchronizeRecentFiles(preferences.recentVideoFiles());
-                     });
+    QObject::connect(
+        &preferences,
+        &ReviewPreferencesController::recentVideoFilesChanged,
+        this,
+        [this, &preferences] { synchronizeRecentFiles(preferences.recentVideoFiles()); });
     synchronizeRecentFiles(preferences.recentVideoFiles());
 }
 
@@ -187,9 +186,8 @@ void VideoFolderModel::attachPlayback(ReviewController& controller, ReviewShellC
         this,
         [this](const qulonglong id, const int status, const int, const int, const int) {
             // A newer File-menu/Explorer/source intent also supersedes browser autoplay.
-            if (id != pendingIntentId_ &&
-                (status == ReviewShellController::RunningStatus ||
-                 status == ReviewShellController::QueuedStatus)) {
+            if (id != pendingIntentId_ && (status == ReviewShellController::RunningStatus ||
+                                           status == ReviewShellController::QueuedStatus)) {
                 cancelPendingOpen();
                 // A new accepted ordinary open supersedes the previous browser error too.
                 // Do this on acceptance, not an older intent's eventual success terminal.
@@ -423,10 +421,9 @@ int VideoFolderModel::rowForUrl(const QUrl& url) const {
     if (url.isEmpty()) {
         return -1;
     }
-    const auto found = std::find_if(
-        files_.begin(), files_.end(), [&](const auto& file) {
-            return detail::sameVideoUrl(file.url, url);
-        });
+    const auto found = std::find_if(files_.begin(), files_.end(), [&](const auto& file) {
+        return detail::sameVideoUrl(file.url, url);
+    });
     return found == files_.end() ? -1 : static_cast<int>(found - files_.begin());
 }
 void VideoFolderModel::synchronizeSources(const QVariantList& sources) {
@@ -497,8 +494,8 @@ void VideoFolderModel::recordCommittedVideo() {
         return;
     }
     followCurrentFolder();
-    synchronizeRecentFiles(detail::mergeRecentVideoFiles(
-        {currentUrl_.toString(QUrl::FullyEncoded)}, recentUrls_));
+    synchronizeRecentFiles(
+        detail::mergeRecentVideoFiles({currentUrl_.toString(QUrl::FullyEncoded)}, recentUrls_));
     if (rememberVideo_) {
         rememberVideo_(currentUrl_);
     }

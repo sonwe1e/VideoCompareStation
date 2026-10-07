@@ -5632,7 +5632,9 @@ TEST(MainQmlContractTests, OrdinarySingleVideoOpenShowsItsFolderAndRecordsOnlySu
     ASSERT_TRUE(rate.hasValue());
     ASSERT_TRUE(installValidatedVideoSet(harness.snapshot,
                                          {std::filesystem::path{path.toStdWString()}},
-                                         rate.value(), 100, 3'333'333));
+                                         rate.value(),
+                                         100,
+                                         3'333'333));
     harness.snapshot->sessionId = context.sessionId;
     harness.snapshot->sessionEpoch = context.sessionEpoch;
     harness.terminals.push_back(
@@ -5646,7 +5648,21 @@ TEST(MainQmlContractTests, OrdinarySingleVideoOpenShowsItsFolderAndRecordsOnlySu
     EXPECT_EQ(harness.videoFolder.currentRow(), 0);
     ASSERT_EQ(harness.videoFolder.recentFiles().size(), 1);
     EXPECT_EQ(QUrl{harness.preferences.recentVideoFiles().front()}, url);
-    EXPECT_EQ(harness.submitted.size(), 1U); // Ordinary opens do not gain implicit autoplay.
+    // Successful opens reapply pair, continuity and range preferences. None may start playback
+    // or submit a second open.
+    EXPECT_EQ(std::count_if(harness.submitted.begin(),
+                            harness.submitted.end(),
+                            [](const auto& command) {
+                                return std::holds_alternative<application::OpenComparisonCommand>(
+                                    command);
+                            }),
+              1);
+    EXPECT_EQ(std::count_if(harness.submitted.begin(),
+                            harness.submitted.end(),
+                            [](const auto& command) {
+                                return std::holds_alternative<application::PlayCommand>(command);
+                            }),
+              0);
 
     auto* const tab = harness.root->findChild<QObject*>(QStringLiteral("videoRecentTab"));
     ASSERT_NE(tab, nullptr);
@@ -5655,6 +5671,7 @@ TEST(MainQmlContractTests, OrdinarySingleVideoOpenShowsItsFolderAndRecordsOnlySu
     auto* const list = harness.root->findChild<QObject*>(QStringLiteral("videoRecentFileList"));
     ASSERT_NE(list, nullptr);
     QQuickItem* row = nullptr;
+    ASSERT_TRUE(QMetaObject::invokeMethod(list, "forceLayout"));
     ASSERT_TRUE(harness.waitUntil([&] {
         QMetaObject::invokeMethod(
             list, "itemAtIndex", Q_RETURN_ARG(QQuickItem*, row), Q_ARG(int, 0));
@@ -5675,15 +5692,56 @@ TEST(MainQmlContractTests, OrdinarySingleVideoOpenShowsItsFolderAndRecordsOnlySu
         {.context = failedContext,
          .outcome = application::CommandOutcome::Failed,
          .error = domain::makeMediaError(domain::MediaErrorCode::kMediaOpenFailed,
-                                          domain::MediaOperation::kMediaProbe,
-                                          std::nullopt,
-                                          true)});
+                                         domain::MediaOperation::kMediaProbe,
+                                         std::nullopt,
+                                         true)});
     harness.controller->refreshProjection();
     harness.settle();
     EXPECT_EQ(harness.videoFolder.recentFiles(), history);
     EXPECT_EQ(harness.videoFolder.currentUrl(), url);
     EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 0);
     EXPECT_EQ(harness.submitted.size(), 1U);
+}
+
+TEST(MainQmlContractTests, SidebarMenuBlocksShortcutsBeforeAnyRowHasFocus) {
+    WorkspaceHarness harness;
+    harness.withVideoFolder = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.root->setProperty("videoFolderSidebarVisible", true);
+    harness.window->show();
+    harness.window->requestActivate();
+    harness.settleAnimations();
+    auto* const menu = harness.root->findChild<QObject*>(QStringLiteral("videoFileContextMenu"));
+    ASSERT_NE(menu, nullptr);
+    harness.submitted.clear();
+    ASSERT_TRUE(QMetaObject::invokeMethod(menu, "open"));
+    ASSERT_TRUE(harness.waitUntil([&] { return menu->property("opened").toBool(); }));
+    ASSERT_EQ(menu->property("currentIndex").toInt(), -1);
+    EXPECT_EQ(harness.root->property("inputContext").toInt(), 2);
+    EXPECT_FALSE(harness.root->property("globalMediaShortcutsEnabled").toBool());
+    EXPECT_FALSE(harness.root->property("presentationShortcutsEnabled").toBool());
+    sendKey(*harness.window, Qt::Key_Space);
+    sendKey(*harness.window, Qt::Key_Left);
+    sendKey(*harness.window, Qt::Key_O, Qt::ControlModifier);
+    harness.settle();
+    EXPECT_TRUE(harness.submitted.empty());
+    EXPECT_EQ(harness.root->property("inputContext").toInt(), 2);
+    ASSERT_TRUE(QMetaObject::invokeMethod(menu, "close"));
+    ASSERT_TRUE(harness.waitUntil([&] { return !menu->property("visible").toBool(); }));
+    auto* const viewport =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("mediaViewportFocusTarget"));
+    ASSERT_NE(viewport, nullptr);
+    viewport->forceActiveFocus();
+    harness.settle();
+    ASSERT_EQ(harness.root->property("inputContext").toInt(), 0);
+    ASSERT_TRUE(harness.root->property("globalMediaShortcutsEnabled").toBool());
+    sendKey(*harness.window, Qt::Key_Space);
+    EXPECT_EQ(std::count_if(harness.submitted.begin(),
+                            harness.submitted.end(),
+                            [](const auto& command) {
+                                return std::holds_alternative<application::PlayCommand>(command);
+                            }),
+              1);
 }
 
 TEST(MainQmlContractTests, SidebarComparisonEscapeAndAcceptPreserveCurrentReference) {
@@ -5700,8 +5758,8 @@ TEST(MainQmlContractTests, SidebarComparisonEscapeAndAcceptPreserveCurrentRefere
     harness.withVideoFolder = true;
     const auto rate = domain::RationalRate::create(30, 1);
     ASSERT_TRUE(rate.hasValue());
-    ASSERT_TRUE(installValidatedVideoSet(harness.snapshot, {paths[0], paths[1]},
-                                         rate.value(), 100, 3'333'333));
+    ASSERT_TRUE(installValidatedVideoSet(
+        harness.snapshot, {paths[0], paths[1]}, rate.value(), 100, 3'333'333));
     const auto views = harness.snapshot->validatedComparison->sources();
     std::vector<domain::ComparisonSource> sources{views.begin(), views.end()};
     sources[0].role = domain::ComparisonRole::kPrediction;
@@ -5716,7 +5774,9 @@ TEST(MainQmlContractTests, SidebarComparisonEscapeAndAcceptPreserveCurrentRefere
     ASSERT_TRUE(harness.create()) << harness.error;
     harness.root->setProperty("videoFolderSidebarVisible", true);
     harness.window->show();
-    harness.settle();
+    harness.window->requestActivate();
+    harness.settleAnimations();
+    harness.submitted.clear();
     auto* sidebar = harness.root->findChild<QObject*>(QStringLiteral("videoFolderSidebar"));
     ASSERT_NE(sidebar, nullptr);
     const auto original = harness.shell->activeSources();
@@ -5769,7 +5829,8 @@ TEST(MainQmlContractTests, OpeningComparisonDoesNotAutoBrowseOrRecordASingleVide
     }
     ASSERT_TRUE(harness.shell->stageSources(
         {QUrl::fromLocalFile(QString::fromStdWString(paths[0].wstring())),
-         QUrl::fromLocalFile(QString::fromStdWString(paths[1].wstring()))}, 1));
+         QUrl::fromLocalFile(QString::fromStdWString(paths[1].wstring()))},
+        1));
     harness.submitted.clear();
     ASSERT_TRUE(harness.shell->openStagedSources(false));
     ASSERT_EQ(harness.submitted.size(), 1U);
@@ -5799,7 +5860,19 @@ TEST(MainQmlContractTests, OpeningComparisonDoesNotAutoBrowseOrRecordASingleVide
     EXPECT_TRUE(harness.videoFolder.folderUrl().isEmpty());
     EXPECT_FALSE(harness.videoFolder.scanning());
     EXPECT_FALSE(harness.root->property("videoFolderSidebarVisible").toBool());
-    EXPECT_EQ(harness.submitted.size(), 1U);
+    EXPECT_EQ(std::count_if(harness.submitted.begin(),
+                            harness.submitted.end(),
+                            [](const auto& command) {
+                                return std::holds_alternative<application::OpenComparisonCommand>(
+                                    command);
+                            }),
+              1);
+    EXPECT_EQ(std::count_if(harness.submitted.begin(),
+                            harness.submitted.end(),
+                            [](const auto& command) {
+                                return std::holds_alternative<application::PlayCommand>(command);
+                            }),
+              0);
 }
 
 } // namespace

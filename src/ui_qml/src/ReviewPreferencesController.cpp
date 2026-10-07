@@ -364,8 +364,8 @@ public:
     }
 
     void rememberVideoFile(const QUrl& url) {
-        const QStringList next = detail::mergeRecentVideoFiles(
-            {url.toString(QUrl::FullyEncoded)}, recentVideoFiles_);
+        const QStringList next =
+            detail::mergeRecentVideoFiles({url.toString(QUrl::FullyEncoded)}, recentVideoFiles_);
         if (next == recentVideoFiles_) {
             return;
         }
@@ -511,8 +511,9 @@ private:
                         QStringList storedRecent;
                         if (const auto entry = settings_.values.find(kRecentVideoFilesKey);
                             entry != settings_.values.end()) {
-                            const QJsonArray array = QJsonDocument::fromJson(
-                                QByteArray::fromStdString(entry->second)).array();
+                            const QJsonArray array =
+                                QJsonDocument::fromJson(QByteArray::fromStdString(entry->second))
+                                    .array();
                             for (const QJsonValue& value : array) {
                                 if (value.isString()) {
                                     storedRecent.push_back(value.toString());

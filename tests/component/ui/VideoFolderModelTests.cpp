@@ -118,7 +118,8 @@ TEST_F(VideoFolderModelTests, ContextOpenUsesCapturedFileRatherThanAReorderedRow
 TEST_F(VideoFolderModelTests, ContextOpenRejectsInvalidUrlsAndKeepsCommittedSelection) {
     threeFiles();
     model->synchronizeSources({at(1)});
-    for (const QUrl& url : {QUrl{}, QUrl{QStringLiteral("https://example.com/a.mp4")},
+    for (const QUrl& url : {QUrl{},
+                            QUrl{QStringLiteral("https://example.com/a.mp4")},
                             QUrl::fromLocalFile(directory.filePath("a.png"))}) {
         EXPECT_FALSE(model->openFile(url));
     }
@@ -452,9 +453,9 @@ TEST_F(VideoFolderModelTests, ComparisonAndNonLocalSourcesDoNotCreateSingleVideo
     const auto first = write(QStringLiteral("clip1.mp4"));
     const auto second = write(QStringLiteral("clip2.mp4"));
     for (const QVariantList& sources : {QVariantList{first, second},
-                                      QVariantList{QUrl{"https://example.invalid/a.mp4"}},
-                                      QVariantList{QUrl{"file://server/share/a.mp4"}},
-                                      QVariantList{write(QStringLiteral("image.png"))}}) {
+                                        QVariantList{QUrl{"https://example.invalid/a.mp4"}},
+                                        QVariantList{QUrl{"file://server/share/a.mp4"}},
+                                        QVariantList{write(QStringLiteral("image.png"))}}) {
         model->synchronizeSources(sources);
         model->recordCommittedVideo();
         EXPECT_TRUE(model->currentUrl().isEmpty());

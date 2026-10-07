@@ -12,6 +12,7 @@ Rectangle {
     property bool showRecent: false
     property var fileActionState: null
     property string actionRevision: ""
+    readonly property bool anyMenuOpen: fileMenu.visible
     signal contextOpenRequested(url fileUrl)
     signal compareRequested(url fileUrl)
 
@@ -22,7 +23,7 @@ Rectangle {
         fileMenu.targetUrl = url;
         fileMenu.openReason = state.openReason;
         fileMenu.compareReason = state.compareReason;
-        fileMenu.popup(item, point);
+        fileMenu.popup(control, item.mapToItem(control, point.x, point.y));
         return true;
     }
 
