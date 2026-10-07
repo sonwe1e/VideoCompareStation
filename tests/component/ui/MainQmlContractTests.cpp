@@ -5686,6 +5686,74 @@ TEST(MainQmlContractTests, OrdinarySingleVideoOpenShowsItsFolderAndRecordsOnlySu
     EXPECT_EQ(harness.submitted.size(), 1U);
 }
 
+TEST(MainQmlContractTests, SidebarComparisonEscapeAndAcceptPreserveCurrentReference) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    std::vector<std::filesystem::path> paths;
+    for (const auto* name : {"prediction.mp4", "gt.mp4", "candidate.mp4"}) {
+        QFile file{directory.filePath(QString::fromLatin1(name))};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_EQ(file.write("fake"), 4);
+        paths.emplace_back(file.fileName().toStdWString());
+    }
+    WorkspaceHarness harness;
+    harness.withVideoFolder = true;
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate.hasValue());
+    ASSERT_TRUE(installValidatedVideoSet(harness.snapshot, {paths[0], paths[1]},
+                                         rate.value(), 100, 3'333'333));
+    const auto views = harness.snapshot->validatedComparison->sources();
+    std::vector<domain::ComparisonSource> sources{views.begin(), views.end()};
+    sources[0].role = domain::ComparisonRole::kPrediction;
+    sources[1].role = domain::ComparisonRole::kReference;
+    auto validated = domain::ComparisonValidator::validate(std::move(sources));
+    ASSERT_TRUE(validated.hasValue());
+    harness.snapshot->validatedComparison =
+        std::make_shared<const domain::ValidatedComparisonSet>(std::move(validated).value().set);
+    harness.snapshot->sources[0].role = domain::ComparisonRole::kPrediction;
+    harness.snapshot->sources[1].role = domain::ComparisonRole::kReference;
+    harness.controller->refreshProjection();
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.root->setProperty("videoFolderSidebarVisible", true);
+    harness.window->show();
+    harness.settle();
+    auto* sidebar = harness.root->findChild<QObject*>(QStringLiteral("videoFolderSidebar"));
+    ASSERT_NE(sidebar, nullptr);
+    const auto original = harness.shell->activeSources();
+    const QUrl candidate = QUrl::fromLocalFile(QString::fromStdWString(paths[2].wstring()));
+    ASSERT_TRUE(QMetaObject::invokeMethod(sidebar, "compareRequested", Q_ARG(QUrl, candidate)));
+    harness.settleAnimations();
+    auto* dialog = harness.root->findChild<QObject*>(QStringLiteral("dropReviewDialog"));
+    ASSERT_NE(dialog, nullptr);
+    ASSERT_TRUE(dialog->property("visible").toBool());
+    EXPECT_TRUE(harness.shell->sidebarAppendStaged());
+    EXPECT_EQ(dialog->property("referenceIndex").toInt(), 1);
+    EXPECT_TRUE(harness.submitted.empty());
+    sendKey(*harness.window, Qt::Key_Escape);
+    ASSERT_TRUE(harness.waitUntil([&] { return !dialog->property("visible").toBool(); }));
+    EXPECT_FALSE(harness.root->property("pendingSidebarComparison").toBool());
+    EXPECT_FALSE(harness.shell->sidebarAppendStaged());
+    EXPECT_TRUE(harness.submitted.empty());
+    EXPECT_EQ(harness.shell->activeSources(), original);
+    EXPECT_EQ(harness.shell->referenceSourceIndex(), 1);
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(sidebar, "compareRequested", Q_ARG(QUrl, candidate)));
+    harness.settleAnimations();
+    ASSERT_TRUE(dialog->property("visible").toBool());
+    ASSERT_TRUE(QMetaObject::invokeMethod(dialog, "accept"));
+    harness.settle();
+    EXPECT_FALSE(harness.root->property("pendingSidebarComparison").toBool());
+    ASSERT_EQ(harness.submitted.size(), 1U);
+    const auto* open = std::get_if<application::OpenComparisonCommand>(&harness.submitted[0]);
+    ASSERT_NE(open, nullptr);
+    ASSERT_EQ(open->sources.size(), 3U);
+    EXPECT_EQ(open->sources[1].path, paths[1]);
+    EXPECT_EQ(open->sources[1].role, domain::ComparisonRole::kReference);
+    EXPECT_EQ(open->sources[2].path, paths[2]);
+    EXPECT_TRUE(open->preserveDisplayedTime);
+    EXPECT_EQ(open->intent, application::OpenReviewIntent::ReplaceSources);
+}
+
 TEST(MainQmlContractTests, OpeningComparisonDoesNotAutoBrowseOrRecordASingleVideo) {
     WorkspaceHarness harness;
     harness.withVideoFolder = true;

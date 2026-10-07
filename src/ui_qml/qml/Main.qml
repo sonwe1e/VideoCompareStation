@@ -133,6 +133,7 @@ ApplicationWindow {
     // is replaced by the raw first source of the active pair. Transient; not persisted.
     property bool differencePeekActive: false
     property bool pendingComparisonPreservesPosition: false
+    property bool pendingSidebarComparison: false
     property bool pendingNewReviewWantsThreeUp: false
     property string dropError: ""
     property string intentMessage: ""
@@ -1091,6 +1092,69 @@ ApplicationWindow {
         return true;
     }
 
+    function sidebarVideoActionState(url) {
+        let openReason = "";
+        if (!shell || !controller || !videoFolderModel || !graphicsReady)
+            openReason = qsTr("视频打开服务暂不可用");
+        else if (busy || videoFolderModel.openPending || shell.queuedIntentCount > 0 || Object.keys(shell.activeIntent).length > 0 || (reviewInputDialogs && reviewInputDialogs.modalVisible))
+            openReason = qsTr("请等待当前打开操作完成");
+        else {
+            const checked = controller.handleDroppedUrls([url]);
+            if (!checked.accepted || checked.kind !== "videos")
+                openReason = qsTr("视频已移动、删除或不可读取");
+        }
+        let compareReason = openReason;
+        if (compareReason.length === 0) {
+            const existing = activeSourceUrls();
+            if (imageWorkspaceActive)
+                compareReason = qsTr("请先切回视频工作区");
+            else if (existing.length !== sourceCount)
+                compareReason = qsTr("当前视频会话尚未就绪");
+            else
+                compareReason = shell.sidebarAppendError(url);
+        }
+        return {
+            openReason: openReason,
+            compareReason: compareReason
+        };
+    }
+
+    function openSidebarVideo(url) {
+        const reason = sidebarVideoActionState(url).openReason;
+        if (reason.length > 0) {
+            showIntentMessage(reason);
+            return false;
+        }
+        cancelWorkspaceOpen();
+        workspaceSession.beginOpen(workspaceSession.videoMedia);
+        if (!videoFolderModel.openFile(url)) {
+            workspaceSession.cancelOpen();
+            return false;
+        }
+        pendingNewReviewWantsThreeUp = false;
+        return true;
+    }
+
+    function cancelSidebarComparison() {
+        if (!pendingSidebarComparison)
+            return;
+        pendingSidebarComparison = false;
+        if (shell && shell.sidebarAppendStaged)
+            shell.clearStagedSources();
+        pendingComparisonPreservesPosition = false;
+        pendingNewReviewWantsThreeUp = false;
+        cancelWorkspaceOpen();
+    }
+
+    function compareSidebarVideo(url) {
+        const reason = sidebarVideoActionState(url).compareReason;
+        if (reason.length > 0) {
+            showIntentMessage(reason);
+            return false;
+        }
+        return reviewUrls([url], true, true);
+    }
+
     function stepFolderVideo(delta) {
         if (!videoFolderModel || delta === 0)
             return false;
@@ -1517,7 +1581,7 @@ ApplicationWindow {
 
         return performImageReview(selected);
     }
-    function reviewUrls(urls, allowSingleSourceAppend) {
+    function reviewUrls(urls, allowSingleSourceAppend, sidebarAppend = false) {
         const reviewed = controller.handleDroppedUrls(urls);
 
         if (!reviewed.accepted) {
@@ -1600,9 +1664,14 @@ ApplicationWindow {
 
                 // visible until the user accepts. Cancelling must preserve it untouched.
 
-                if (!setDroppedVideoOrder(existing))
+                const staged = sidebarAppend ? shell.stageSidebarAppend(normalizedUrls[0]) : setDroppedVideoOrder(existing);
+                if (!staged) {
+                    if (sidebarAppend)
+                        showIntentMessage(qsTr("当前视频对比已改变，请重新选择要加入的视频。"));
                     return false;
+                }
 
+                pendingSidebarComparison = sidebarAppend;
                 pendingComparisonPreservesPosition = true;
 
                 workspaceSession.beginOpen(workspaceSession.videoMedia);
@@ -1611,6 +1680,9 @@ ApplicationWindow {
 
                 return true;
             }
+
+            if (sidebarAppend)
+                return false;
 
             requestDestructiveAction({
                 "kind": "openVideos",
@@ -1701,7 +1773,7 @@ ApplicationWindow {
 
         const preservePosition = pendingComparisonPreservesPosition && sourceCount > 0;
 
-        const opened = Boolean(shell && shell.openStagedSources(preservePosition));
+        const opened = Boolean(shell && (pendingSidebarComparison ? shell.openSidebarAppend(referenceIndex) : shell.openStagedSources(preservePosition)));
 
         if (!opened) {
             pendingNewReviewWantsThreeUp = false;
@@ -1714,6 +1786,8 @@ ApplicationWindow {
 
             return false;
         }
+
+        pendingSidebarComparison = false;
 
         pendingComparisonPreservesPosition = false;
 
@@ -2358,7 +2432,7 @@ ApplicationWindow {
             stagedVideos: root.shell ? root.shell.stagedSources : []
             fileNameFunction: root.fileName
             pathNameFunction: root.sourcePathLabel
-            initialReferenceIndex: root.pendingComparisonPreservesPosition ? root.canonicalSourceIndex : 0
+            initialReferenceIndex: root.pendingSidebarComparison && root.shell ? root.shell.stagedReferenceIndex : (root.pendingComparisonPreservesPosition ? root.canonicalSourceIndex : 0)
             onVideoFolderAccepted: folder => root.loadVideoFolder(folder)
             onVideoFolderRejected: root.focusActiveWorkspace()
             onOpenVideosAccepted: urls => root.openNewReviewUrls(urls)
@@ -2369,6 +2443,7 @@ ApplicationWindow {
             onComparisonAccepted: referenceIndex => {
                 root.openDroppedComparison(referenceIndex);
             }
+            onComparisonClosed: root.cancelSidebarComparison()
             onComparisonRejected: {
                 if (root.shell)
                     root.shell.clearStagedSources();
@@ -2829,6 +2904,10 @@ ApplicationWindow {
         anchors.bottomMargin: root.imageWorkspaceActive ? 0 : (root.transportDocked ? root.transportDockHeight : 0)
         sourceComponent: VideoFolderSidebar {
             folderModel: root.videoFolderModel
+            fileActionState: url => root.sidebarVideoActionState(url)
+            actionRevision: JSON.stringify([root.shell ? root.shell.activeSources : [], root.referenceSourceIndex, root.busy, root.graphicsReady, root.imageWorkspaceActive, root.videoFolderModel ? root.videoFolderModel.scanning : false, root.shell ? root.shell.activeIntent : {}, root.shell ? root.shell.queuedIntentCount : 0])
+            onContextOpenRequested: url => root.openSidebarVideo(url)
+            onCompareRequested: url => root.compareSidebarVideo(url)
             errorText: {
                 const text = root.videoFolderModel ? root.videoFolderModel.errorText : "";
                 return /^[a-z][a-z0-9-]+$/.test(text) ? root.messageCatalog.errorMessage(text) : text;

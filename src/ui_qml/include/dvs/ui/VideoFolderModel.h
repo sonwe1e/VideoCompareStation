@@ -79,6 +79,8 @@ public:
     Q_INVOKABLE void clear();
     Q_INVOKABLE bool openAt(int row);
     Q_INVOKABLE bool openRecent(int row);
+    // Context menus retain the file identity, never a row that may have been reordered.
+    Q_INVOKABLE bool openFile(const QUrl& url);
     Q_INVOKABLE bool step(int delta);
     Q_INVOKABLE void cancelPendingOpen();
     void synchronizeSources(const QVariantList& sources);

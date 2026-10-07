@@ -10,6 +10,75 @@ Rectangle {
     required property var folderModel
     property string errorText: ""
     property bool showRecent: false
+    property var fileActionState: null
+    property string actionRevision: ""
+    signal contextOpenRequested(url fileUrl)
+    signal compareRequested(url fileUrl)
+
+    function openContextMenu(item, url, point) {
+        if (!item || !item.enabled || !fileActionState)
+            return false;
+        const state = fileActionState(url);
+        fileMenu.targetUrl = url;
+        fileMenu.openReason = state.openReason;
+        fileMenu.compareReason = state.compareReason;
+        fileMenu.popup(item, point);
+        return true;
+    }
+
+    function openKeyboardMenu(list) {
+        const item = list.itemAtIndex(list.currentIndex);
+        return item ? openContextMenu(item, item.contextUrl, Qt.point(0, item.height)) : false;
+    }
+
+    onAnchorRowChanged: {
+        files.currentIndex = control.anchorRow;
+        if (control.anchorRow >= 0)
+            files.positionViewAtIndex(control.anchorRow, ListView.Contain);
+    }
+    onActionRevisionChanged: fileMenu.close()
+    onShowRecentChanged: fileMenu.close()
+    onVisibleChanged: if (!visible)
+        fileMenu.close()
+
+    VcsMenu {
+        id: fileMenu
+        objectName: "videoFileContextMenu"
+        property url targetUrl
+        property string openReason: ""
+        property string compareReason: ""
+        menuWidth: 300
+        popupType: Popup.Item
+        modal: true
+
+        VcsMenuItem {
+            objectName: "videoFileContextOpen"
+            text: qsTr("打开为新单视频任务")
+            enabled: fileMenu.openReason.length === 0
+            onTriggered: control.contextOpenRequested(fileMenu.targetUrl)
+        }
+        VcsMenuItem {
+            objectName: "videoFileContextCompare"
+            text: qsTr("加入当前视频对比…")
+            enabled: fileMenu.compareReason.length === 0
+            onTriggered: control.compareRequested(fileMenu.targetUrl)
+        }
+        VcsMenuItem {
+            id: reasonItem
+            objectName: "videoFileContextReason"
+            visible: fileMenu.compareReason.length > 0 || fileMenu.openReason.length > 0
+            implicitHeight: visible ? Math.max(35, contentItem.implicitHeight + 16) : 0
+            enabled: false
+            text: fileMenu.openReason.length > 0 ? fileMenu.openReason : fileMenu.compareReason
+            contentItem: Text {
+                text: reasonItem.text
+                wrapMode: Text.Wrap
+                color: Theme.mutedText
+                font.pixelSize: 12
+                verticalAlignment: Text.AlignVCenter
+            }
+        }
+    }
     readonly property bool compact: height < 460
     readonly property int anchorRow: folderModel ? (folderModel.openPending ? folderModel.pendingRow : folderModel.currentRow) : -1
     signal chooseFolderRequested
@@ -120,7 +189,7 @@ Rectangle {
         clip: true
         model: control.folderModel
         currentIndex: control.anchorRow
-        onHeightChanged: Qt.callLater(function() {
+        onHeightChanged: Qt.callLater(function () {
             if (files.currentIndex >= 0)
                 files.positionViewAtIndex(files.currentIndex, ListView.Contain);
         })
@@ -130,7 +199,16 @@ Rectangle {
             required property int index
             required property string fileName
             required property url fileUrl
+            readonly property url contextUrl: fileUrl
             objectName: "videoFolderRow-" + index
+            TapHandler {
+                acceptedButtons: Qt.RightButton
+                onTapped: eventPoint => {
+                    files.currentIndex = row.index;
+                    files.forceActiveFocus();
+                    control.openContextMenu(row, row.contextUrl, eventPoint.position);
+                }
+            }
             width: files.width
             height: 42
             text: fileName
@@ -149,6 +227,13 @@ Rectangle {
                 verticalAlignment: Text.AlignVCenter
                 color: row.highlighted ? Theme.accentText : Theme.primaryText
                 font.pixelSize: 13
+            }
+        }
+        Keys.onPressed: event => {
+            if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier))) {
+                event.accepted = control.openKeyboardMenu(files);
+            } else {
+                event.accepted = false;
             }
         }
         Keys.onReturnPressed: {
@@ -181,7 +266,16 @@ Rectangle {
             id: recentRow
             required property int index
             required property var modelData
+            readonly property url contextUrl: modelData.fileUrl
             objectName: "videoRecentRow-" + index
+            TapHandler {
+                acceptedButtons: Qt.RightButton
+                onTapped: eventPoint => {
+                    recentFiles.currentIndex = recentRow.index;
+                    recentFiles.forceActiveFocus();
+                    control.openContextMenu(recentRow, recentRow.contextUrl, eventPoint.position);
+                }
+            }
             width: recentFiles.width
             height: 42
             text: modelData.fileName
@@ -199,6 +293,13 @@ Rectangle {
                 verticalAlignment: Text.AlignVCenter
                 color: recentRow.highlighted ? Theme.accentText : Theme.primaryText
                 font.pixelSize: 13
+            }
+        }
+        Keys.onPressed: event => {
+            if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier))) {
+                event.accepted = control.openKeyboardMenu(recentFiles);
+            } else {
+                event.accepted = false;
             }
         }
         Keys.onReturnPressed: {
@@ -243,7 +344,7 @@ Rectangle {
         }
         Text {
             width: parent.width
-            text: qsTr("点击文件会打开新的单视频任务")
+            text: qsTr("点击打开单视频；右键可加入当前对比")
             wrapMode: Text.Wrap
             color: Theme.mutedText
             font.pixelSize: 12

@@ -2138,6 +2138,227 @@ public:
     VideoFolderModel folder;
 };
 
+TEST_F(ReviewControllerTests, SidebarAppendPreservesReferenceAndPositionWithoutAutoplay) {
+    FolderTransportHarness h;
+    ASSERT_TRUE(h.initialize());
+    h.backend->currentSnapshot = readySnapshotWithSources({h.pathAt(0), h.pathAt(1)}, 1U);
+    h.controller->refreshProjection();
+    const auto original = h.shell->activeSources();
+    ASSERT_TRUE(h.shell->stageSidebarAppend(h.urls[2]));
+    EXPECT_TRUE(h.shell->sidebarAppendStaged());
+    EXPECT_EQ(h.shell->activeSources(), original);
+    EXPECT_EQ(h.shell->stagedReferenceIndex(), 1);
+    EXPECT_TRUE(h.backend->submitted.empty());
+    ASSERT_TRUE(h.shell->moveStagedSource(2, 0));
+    EXPECT_EQ(h.shell->stagedReferenceIndex(), 2);
+    ASSERT_TRUE(h.shell->openSidebarAppend(h.shell->stagedReferenceIndex()));
+    EXPECT_FALSE(h.shell->sidebarAppendStaged());
+    EXPECT_FALSE(h.shell->openSidebarAppend(2)); // Repeat activation cannot submit twice.
+    ASSERT_EQ(h.backend->submitted.size(), 1U);
+    const auto* open = std::get_if<application::OpenComparisonCommand>(&h.backend->submitted[0]);
+    ASSERT_NE(open, nullptr);
+    ASSERT_EQ(open->sources.size(), 3U);
+    EXPECT_EQ(open->sources[0].path, h.pathAt(2));
+    EXPECT_EQ(open->sources[1].path, h.pathAt(0));
+    EXPECT_EQ(open->sources[2].path, h.pathAt(1));
+    EXPECT_EQ(open->sources[2].role, domain::ComparisonRole::kReference);
+    EXPECT_EQ(open->sources[0].role, domain::ComparisonRole::kPrediction);
+    EXPECT_EQ(open->intent, application::OpenReviewIntent::ReplaceSources);
+    EXPECT_TRUE(open->preserveDisplayedTime);
+    h.completeLast(application::CommandOutcome::Failed);
+    EXPECT_EQ(h.shell->activeSources(), original);
+    EXPECT_EQ(h.shell->referenceSourceIndex(), 1);
+    EXPECT_EQ(h.backend->submitted.size(), 1U); // Failure never starts playback.
+}
+
+TEST_F(ReviewControllerTests, SidebarAppendRejectsNoSessionFullDuplicateAndMissingTargets) {
+    FolderTransportHarness h;
+    ASSERT_TRUE(h.initialize());
+    EXPECT_FALSE(h.shell->stageSidebarAppend(h.urls[0]));
+    EXPECT_FALSE(
+        h.shell->stageSidebarAppend(QUrl::fromLocalFile(h.directory.filePath("gone.mp4"))));
+    h.backend->currentSnapshot = readySnapshotWithSources({h.pathAt(0), h.pathAt(1), h.pathAt(2)});
+    h.controller->refreshProjection();
+    EXPECT_FALSE(h.shell->stageSidebarAppend(h.urls[1]));
+    h.backend->currentSnapshot = emptySnapshot();
+    h.controller->refreshProjection();
+    EXPECT_FALSE(h.shell->stageSidebarAppend(h.urls[1]));
+    EXPECT_TRUE(h.backend->submitted.empty());
+}
+
+TEST_F(ReviewControllerTests, SidebarAppendCancelCannotAffectLaterOrdinaryStaging) {
+    FolderTransportHarness h;
+    ASSERT_TRUE(h.initialize());
+    const auto original = h.shell->activeSources();
+    ASSERT_TRUE(h.shell->stageSidebarAppend(h.urls[1]));
+    h.shell->clearStagedSources();
+    EXPECT_FALSE(h.shell->sidebarAppendStaged());
+    EXPECT_EQ(h.shell->activeSources(), original);
+    EXPECT_FALSE(h.shell->openSidebarAppend(0));
+    ASSERT_TRUE(h.shell->stageSidebarAppend(h.urls[1]));
+    ASSERT_TRUE(h.shell->stageSources({h.urls[2]}, 0));
+    EXPECT_FALSE(h.shell->openSidebarAppend(0)); // An old popup cannot accept a newer staging.
+    EXPECT_TRUE(h.backend->submitted.empty());
+    ASSERT_TRUE(h.shell->openStagedSources(false));
+    ASSERT_EQ(h.backend->submitted.size(), 1U);
+    const auto* open = std::get_if<application::OpenComparisonCommand>(&h.backend->submitted[0]);
+    ASSERT_NE(open, nullptr);
+    ASSERT_EQ(open->sources.size(), 1U);
+    EXPECT_EQ(open->sources[0].path, h.pathAt(2));
+    EXPECT_EQ(open->intent, application::OpenReviewIntent::NewReview);
+}
+
+TEST_F(ReviewControllerTests, SidebarAppendRejectsChangedCandidateOrCommittedFileBeforeAccept) {
+    for (const int changed : {0, 1}) {
+        FolderTransportHarness h;
+        ASSERT_TRUE(h.initialize());
+        const auto original = h.shell->activeSources();
+        ASSERT_TRUE(h.shell->stageSidebarAppend(h.urls[1]));
+        QFile file{h.urls[changed].toLocalFile()};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Append));
+        ASSERT_EQ(file.write("changed"), 7);
+        file.close();
+        EXPECT_FALSE(h.shell->openSidebarAppend(0)) << changed;
+        EXPECT_EQ(h.shell->activeSources(), original);
+        EXPECT_TRUE(h.backend->submitted.empty());
+    }
+}
+
+TEST_F(ReviewControllerTests, SidebarAppendRejectsChangedReferenceOrSourceSetBeforeAccept) {
+    for (const bool changeReference : {true, false}) {
+        FolderTransportHarness h;
+        ASSERT_TRUE(h.initialize());
+        h.backend->currentSnapshot = readySnapshotWithSources({h.pathAt(0), h.pathAt(1)}, 1U);
+        h.controller->refreshProjection();
+        ASSERT_TRUE(h.shell->stageSidebarAppend(h.urls[2]));
+        h.backend->currentSnapshot = changeReference
+            ? readySnapshotWithSources({h.pathAt(0), h.pathAt(1)}, 0U)
+            : readySnapshotWithSources({h.pathAt(2)}, 0U);
+        h.controller->refreshProjection();
+        EXPECT_FALSE(h.shell->openSidebarAppend(0));
+        EXPECT_TRUE(h.backend->submitted.empty());
+        EXPECT_EQ(h.shell->referenceSourceIndex(), 0);
+    }
+}
+
+TEST_F(ReviewControllerTests, SidebarAppendRejectsSameUrlNewReviewBeforeAccept) {
+    FolderTransportHarness h;
+    ASSERT_TRUE(h.initialize());
+    ASSERT_TRUE(h.shell->stageSidebarAppend(h.urls[1]));
+    ASSERT_NE(h.shell->openVideo(h.urls[0]), 0U);
+    ASSERT_EQ(h.backend->submitted.size(), 1U);
+    h.openSucceeded(0); // Same paths/reference, but this is a different accepted review.
+    EXPECT_FALSE(h.shell->openSidebarAppend(0));
+    EXPECT_EQ(h.backend->submitted.size(), 1U);
+}
+
+TEST_F(ReviewControllerTests, SidebarAppendQueuedWhilePlayingRechecksFileBeforeSubmission) {
+    for (const bool changeFile : {false, true}) {
+        FolderTransportHarness h;
+        ASSERT_TRUE(h.initialize());
+        h.playing();
+        h.controller->refreshProjection();
+        ASSERT_TRUE(h.shell->stageSidebarAppend(h.urls[1]));
+        ASSERT_TRUE(h.shell->openSidebarAppend(0));
+        ASSERT_EQ(h.shell->queuedIntentCount(), 1);
+        ASSERT_TRUE(waitUntil([&] { return !h.backend->submitted.empty(); }));
+        ASSERT_TRUE(std::holds_alternative<application::PauseCommand>(h.backend->submitted.back()));
+        if (changeFile) {
+            QFile file{h.urls[1].toLocalFile()};
+            ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Append));
+            ASSERT_EQ(file.write("changed"), 7);
+        }
+        h.paused();
+        h.completeLast();
+        ASSERT_TRUE(waitUntil([&] { return h.shell->queuedIntentCount() == 0; }));
+        EXPECT_EQ(h.backend->submitted.size(), changeFile ? 1U : 2U);
+        if (!changeFile) {
+            const auto* open =
+                std::get_if<application::OpenComparisonCommand>(&h.backend->submitted.back());
+            ASSERT_NE(open, nullptr);
+            EXPECT_TRUE(open->preserveDisplayedTime);
+            EXPECT_EQ(open->sources.size(), 2U);
+        }
+    }
+}
+
+TEST_F(ReviewControllerTests, SidebarAppendNeverAllowsReplacementAndRejectsDirtyCurrentFile) {
+    FolderTransportHarness h;
+    ASSERT_TRUE(h.initialize());
+    ASSERT_TRUE(h.shell->stageSidebarAppend(h.urls[1]));
+    EXPECT_FALSE(h.shell->openStagedSources(false));
+    EXPECT_TRUE(h.backend->submitted.empty());
+    QFile file{h.urls[0].toLocalFile()};
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Append));
+    ASSERT_EQ(file.write("changed"), 7);
+    file.close();
+    EXPECT_FALSE(h.shell->stageSidebarAppend(h.urls[1]));
+    EXPECT_TRUE(h.backend->submitted.empty());
+}
+
+
+TEST_F(ReviewControllerTests, SidebarAppendQueuedChangedExistingFileDoesNotReopen) {
+    FolderTransportHarness h;
+    ASSERT_TRUE(h.initialize());
+    const auto active = h.shell->activeSources();
+    h.playing();
+    h.controller->refreshProjection();
+    ASSERT_TRUE(h.shell->stageSidebarAppend(h.urls[1]));
+    ASSERT_TRUE(h.shell->openSidebarAppend(0));
+    ASSERT_TRUE(waitUntil([&] { return !h.backend->submitted.empty(); }));
+    ASSERT_TRUE(std::holds_alternative<application::PauseCommand>(h.backend->submitted.back()));
+    QFile changed{h.urls[0].toLocalFile()};
+    ASSERT_TRUE(changed.open(QIODevice::Append));
+    ASSERT_EQ(changed.write("changed"), 7);
+    changed.close();
+    h.paused();
+    h.completeLast();
+    ASSERT_TRUE(waitUntil([&] { return h.shell->queuedIntentCount() == 0; }));
+    EXPECT_EQ(h.backend->submitted.size(), 1U);
+    EXPECT_EQ(h.shell->activeSources(), active);
+}
+
+TEST_F(ReviewControllerTests, SidebarAppendQueuedReferenceChangeDoesNotRebase) {
+    FolderTransportHarness h;
+    ASSERT_TRUE(h.initialize());
+    h.backend->currentSnapshot = readySnapshotWithSources({h.pathAt(0), h.pathAt(1)}, 1U);
+    h.playing();
+    h.controller->refreshProjection();
+    ASSERT_TRUE(h.shell->stageSidebarAppend(h.urls[2]));
+    ASSERT_TRUE(h.shell->openSidebarAppend(1));
+    ASSERT_TRUE(waitUntil([&] { return !h.backend->submitted.empty(); }));
+    ASSERT_TRUE(std::holds_alternative<application::PauseCommand>(h.backend->submitted.back()));
+    h.backend->currentSnapshot = readySnapshotWithSources({h.pathAt(0), h.pathAt(1)}, 0U);
+    h.completeLast();
+    ASSERT_TRUE(waitUntil([&] { return h.shell->queuedIntentCount() == 0; }));
+    EXPECT_EQ(h.backend->submitted.size(), 1U);
+    EXPECT_EQ(h.shell->referenceSourceIndex(), 0);
+    EXPECT_EQ(h.shell->activeSources().size(), 2);
+}
+
+TEST_F(ReviewControllerTests, SidebarAppendAliasCannotDuplicateLoadedFile) {
+    FolderTransportHarness h;
+    ASSERT_TRUE(h.initialize());
+    const QString alias = h.directory.filePath("./clip1.mp4");
+    EXPECT_FALSE(h.shell->stageSidebarAppend(QUrl::fromLocalFile(alias)));
+    EXPECT_TRUE(h.backend->submitted.empty());
+}
+
+TEST_F(ReviewControllerTests, SidebarAppendCandidateMayBecomeExplicitReference) {
+    FolderTransportHarness h;
+    ASSERT_TRUE(h.initialize());
+    ASSERT_TRUE(h.shell->stageSidebarAppend(h.urls[1]));
+    ASSERT_TRUE(h.shell->openSidebarAppend(1));
+    ASSERT_EQ(h.backend->submitted.size(), 1U);
+    const auto* open =
+        std::get_if<application::OpenComparisonCommand>(&h.backend->submitted.front());
+    ASSERT_NE(open, nullptr);
+    ASSERT_EQ(open->sources.size(), 2U);
+    EXPECT_EQ(open->sources[1].role, domain::ComparisonRole::kReference);
+    EXPECT_EQ(open->sources[0].role, domain::ComparisonRole::kPrediction);
+    EXPECT_EQ(h.shell->referenceSourceIndex(), 0);
+}
+
 TEST_F(ReviewControllerTests, FolderOpenPausesPlayingVideoAndWaitsForTransportAndDrain) {
     FolderTransportHarness h;
     ASSERT_TRUE(h.initialize());

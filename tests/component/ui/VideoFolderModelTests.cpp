@@ -97,6 +97,36 @@ protected:
     bool allowPlay = true;
 };
 
+TEST_F(VideoFolderModelTests, ContextOpenUsesCapturedFileRatherThanAReorderedRow) {
+    threeFiles();
+    const QUrl selected = at(1);
+    write(QStringLiteral("clip0.mp4"));
+    load();
+    ASSERT_NE(at(1), selected);
+    ASSERT_TRUE(model->openFile(selected));
+    ASSERT_EQ(opened.size(), 1U);
+    EXPECT_EQ(opened.front(), selected);
+    EXPECT_EQ(model->pendingRow(), 2);
+    EXPECT_EQ(plays, 0);
+    EXPECT_EQ(model->currentRow(), -1);
+    model->completeOpen(nextIntent, false, QStringLiteral("media-open-failed"));
+    EXPECT_EQ(model->errorText(), QStringLiteral("media-open-failed"));
+    EXPECT_FALSE(model->openPending());
+    EXPECT_EQ(plays, 0);
+}
+
+TEST_F(VideoFolderModelTests, ContextOpenRejectsInvalidUrlsAndKeepsCommittedSelection) {
+    threeFiles();
+    model->synchronizeSources({at(1)});
+    for (const QUrl& url : {QUrl{}, QUrl{QStringLiteral("https://example.com/a.mp4")},
+                            QUrl::fromLocalFile(directory.filePath("a.png"))}) {
+        EXPECT_FALSE(model->openFile(url));
+    }
+    EXPECT_TRUE(opened.empty());
+    EXPECT_EQ(model->currentRow(), 1);
+    EXPECT_EQ(plays, 0);
+}
+
 TEST_F(VideoFolderModelTests, ScansAsynchronouslyFiltersAndNaturallySortsWithoutDecoding) {
     const auto unicode = write(QString::fromUtf8("片段.MP4"));
     write(QString::fromUtf8("忽略.文本"));

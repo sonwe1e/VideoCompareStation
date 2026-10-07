@@ -513,6 +513,10 @@ bool VideoFolderModel::openRecent(const int row) {
     return openUrl(url, rowForUrl(url));
 }
 
+bool VideoFolderModel::openFile(const QUrl& url) {
+    return openUrl(url, rowForUrl(url));
+}
+
 bool VideoFolderModel::openAt(const int row) {
     if (scanning_ || row < 0 || row >= fileCount() || !dependencies_.openVideo) {
         return false;

@@ -23,6 +23,7 @@ class ReviewShellController final : public QObject {
 
     Q_PROPERTY(QVariantList activeSources READ activeSources NOTIFY stateChanged)
     Q_PROPERTY(QVariantList stagedSources READ stagedSources NOTIFY stateChanged)
+    Q_PROPERTY(bool sidebarAppendStaged READ sidebarAppendStaged NOTIFY stateChanged)
     Q_PROPERTY(int canonicalSourceIndex READ canonicalSourceIndex NOTIFY stateChanged)
     Q_PROPERTY(qulonglong activeGeneration READ activeGeneration NOTIFY stateChanged)
     Q_PROPERTY(int effectiveViewMode READ effectiveViewMode NOTIFY stateChanged)
@@ -102,6 +103,7 @@ public:
 
     [[nodiscard]] QVariantList activeSources() const;
     [[nodiscard]] QVariantList stagedSources() const;
+    [[nodiscard]] bool sidebarAppendStaged() const noexcept;
     [[nodiscard]] int canonicalSourceIndex() const noexcept;
     [[nodiscard]] qulonglong activeGeneration() const noexcept;
     [[nodiscard]] int effectiveViewMode() const noexcept;
@@ -133,6 +135,10 @@ public:
 
     Q_INVOKABLE bool stageSources(const QVariantList& sources, int referenceIndex);
     Q_INVOKABLE void clearStagedSources();
+    // A sidebar append may never become a replacement or rebase onto a different review.
+    Q_INVOKABLE QString sidebarAppendError(const QUrl& source) const;
+    Q_INVOKABLE bool stageSidebarAppend(const QUrl& source);
+    Q_INVOKABLE bool openSidebarAppend(int referenceIndex);
     Q_INVOKABLE bool moveStagedSource(int fromIndex, int toIndex);
     Q_INVOKABLE bool openStagedSources(bool preserveDisplayedTime);
     // One browser activation, serialized with all other source intents. The returned identity
@@ -166,6 +172,15 @@ private:
         int differenceEdge = 0;
     };
 
+    struct SidebarAppendSnapshot final {
+        qulonglong generation = 0U;
+        qulonglong completedIntentRevision = 0U;
+        QStringList activeIdentities;
+        QString referenceIdentity;
+        QUrl candidate;
+        QString candidateIdentity;
+    };
+
     struct ReviewIntent final {
         std::uint64_t id = 0U;
         ReviewIntentKind kind = OpenSourcesIntent;
@@ -177,8 +192,10 @@ private:
         qulonglong expectedGeneration = 0U;
         QStringList expectedSources;
         std::uint64_t commandId = 0U;
+        std::optional<SidebarAppendSnapshot> sidebarAppend;
     };
 
+    [[nodiscard]] bool sidebarAppendCurrent(const SidebarAppendSnapshot& snapshot) const;
     void synchronizeActiveSources(bool advanceGeneration = false);
     [[nodiscard]] bool submitOrQueue(ReviewIntent intent, qulonglong* acceptedId = nullptr);
     [[nodiscard]] bool submitIntent(ReviewIntent& intent);
@@ -200,9 +217,11 @@ private:
     QVariantList activeSources_;
     QStringList frozenActiveIdentities_;
     QVariantList stagedSources_;
+    std::optional<SidebarAppendSnapshot> stagedSidebarAppend_;
     int canonicalSourceIndex_ = -1;
     int referenceSourceIndex_ = -1;
     qulonglong activeGeneration_ = 0U;
+    qulonglong completedIntentRevision_ = 0U;
     int stagedReferenceIndex_ = 0;
     std::deque<ReviewIntent> reviewIntents_;
     std::optional<ReviewIntent> activeIntent_;

@@ -21,6 +21,7 @@ Item {
     signal addVideoRejected
     signal moveRequested(int fromIndex, int toIndex)
     signal comparisonAccepted(int referenceIndex)
+    signal comparisonClosed
     signal comparisonRejected
 
     function openVideos() {
@@ -79,5 +80,6 @@ Item {
         onMoveRequested: (fromIndex, toIndex) => control.moveRequested(fromIndex, toIndex)
         onAccepted: control.comparisonAccepted(referenceIndex)
         onRejected: control.comparisonRejected()
+        onClosed: control.comparisonClosed()
     }
 }

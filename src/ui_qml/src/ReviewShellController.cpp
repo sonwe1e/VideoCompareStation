@@ -3,6 +3,7 @@
 #include "dvs/presentation/ComparisonContract.h"
 #include "dvs/ui/ReviewController.h"
 #include "dvs/ui/ReviewPreferencesController.h"
+#include "dvs/ui/SourceIdentity.h"
 
 #include <QUrl>
 
@@ -62,6 +63,10 @@ QVariantList ReviewShellController::activeSources() const {
 
 QVariantList ReviewShellController::stagedSources() const {
     return stagedSources_;
+}
+
+bool ReviewShellController::sidebarAppendStaged() const noexcept {
+    return stagedSidebarAppend_.has_value();
 }
 
 int ReviewShellController::canonicalSourceIndex() const noexcept {
@@ -229,6 +234,7 @@ bool ReviewShellController::stageSources(const QVariantList& sources, const int 
         referenceIndex >= sources.size()) {
         return false;
     }
+    stagedSidebarAppend_.reset();
     stagedSources_ = sources;
     stagedReferenceIndex_ = referenceIndex;
     Q_EMIT stateChanged();
@@ -236,12 +242,89 @@ bool ReviewShellController::stageSources(const QVariantList& sources, const int 
 }
 
 void ReviewShellController::clearStagedSources() {
-    if (stagedSources_.isEmpty() && stagedReferenceIndex_ == 0) {
+    if (stagedSources_.isEmpty() && stagedReferenceIndex_ == 0 && !stagedSidebarAppend_) {
         return;
     }
+    stagedSidebarAppend_.reset();
     stagedSources_.clear();
     stagedReferenceIndex_ = 0;
     Q_EMIT stateChanged();
+}
+
+QString ReviewShellController::sidebarAppendError(const QUrl& source) const {
+    if (review_.busy() || activeIntent_ || !reviewIntents_.empty()) {
+        return tr("请等待当前打开操作完成");
+    }
+    if (activeSources_.isEmpty()) {
+        return tr("请先打开一个视频");
+    }
+    if (activeSources_.size() >= 3) {
+        return tr("当前已有 3 个视频，请先移除一个");
+    }
+    const auto identities = activeSourceIdentities();
+    for (qsizetype index = 0; index < activeSources_.size(); ++index) {
+        if (dvs::ui::canonicalSourceIdentity(activeSources_[index].toUrl()) != identities[index]) {
+            return tr("当前视频文件已改变，请重新打开后再对比");
+        }
+    }
+    QVariantList sources = activeSources_;
+    sources.push_back(source);
+    const QVariantMap checked = review_.handleDroppedUrls(sources);
+    if (!checked.value(QStringLiteral("accepted")).toBool() ||
+        checked.value(QStringLiteral("kind")).toString() != QStringLiteral("videos")) {
+        return tr("视频已在当前对比中，或源文件不可读取");
+    }
+    return {};
+}
+
+bool ReviewShellController::stageSidebarAppend(const QUrl& source) {
+    if (!sidebarAppendError(source).isEmpty()) {
+        return false;
+    }
+    QVariantList sources = activeSources_;
+    sources.push_back(source);
+    const auto reference = referenceSourceIndex_ >= 0 ? referenceSourceIndex_ : 0;
+    stagedSources_ = sources;
+    stagedReferenceIndex_ = reference;
+    stagedSidebarAppend_ = SidebarAppendSnapshot{
+        .generation = activeGeneration_,
+        .completedIntentRevision = completedIntentRevision_,
+        .activeIdentities = activeSourceIdentities(),
+        .referenceIdentity = referenceSourceIdentity(),
+        .candidate = source,
+        .candidateIdentity = dvs::ui::canonicalSourceIdentity(source),
+    };
+    if (!sidebarAppendCurrent(*stagedSidebarAppend_)) {
+        clearStagedSources();
+        return false;
+    }
+    Q_EMIT stateChanged();
+    return true;
+}
+
+bool ReviewShellController::openSidebarAppend(const int referenceIndex) {
+    if (!stagedSidebarAppend_ || referenceIndex < 0 || referenceIndex >= stagedSources_.size()) {
+        return false;
+    }
+    setStagedReferenceIndex(referenceIndex);
+    return openStagedSources(true);
+}
+
+bool ReviewShellController::sidebarAppendCurrent(const SidebarAppendSnapshot& snapshot) const {
+    if (snapshot.activeIdentities.size() != activeSources_.size()) {
+        return false;
+    }
+    for (qsizetype index = 0; index < activeSources_.size(); ++index) {
+        if (dvs::ui::canonicalSourceIdentity(activeSources_[index].toUrl()) !=
+            snapshot.activeIdentities[index]) {
+            return false;
+        }
+    }
+    return snapshot.completedIntentRevision == completedIntentRevision_ &&
+           snapshot.generation == activeGeneration_ &&
+           snapshot.activeIdentities == activeSourceIdentities() &&
+           snapshot.referenceIdentity == referenceSourceIdentity() &&
+           snapshot.candidateIdentity == dvs::ui::canonicalSourceIdentity(snapshot.candidate);
 }
 
 bool ReviewShellController::moveStagedSource(const int fromIndex, const int toIndex) {
@@ -265,6 +348,11 @@ bool ReviewShellController::openStagedSources(const bool preserveDisplayedTime) 
     if (stagedSources_.isEmpty()) {
         return false;
     }
+    const auto sidebarAppend = std::exchange(stagedSidebarAppend_, std::nullopt);
+    if (sidebarAppend && (!preserveDisplayedTime || !sidebarAppendCurrent(*sidebarAppend))) {
+        Q_EMIT stateChanged();
+        return false;
+    }
     openIntent_ = preserveDisplayedTime ? ReplaceSources : NewReview;
     Q_EMIT stateChanged();
     ReviewIntentKind kind = preserveDisplayedTime ? ReplaceSourcesIntent : OpenSourcesIntent;
@@ -277,6 +365,7 @@ bool ReviewShellController::openStagedSources(const bool preserveDisplayedTime) 
         .referenceIndex = stagedReferenceIndex_,
         .referenceIdentity =
             review_.frozenSourceIdentity(stagedSources_[stagedReferenceIndex_].toUrl()),
+        .sidebarAppend = sidebarAppend,
     });
 }
 
@@ -607,7 +696,8 @@ bool ReviewShellController::submitOrQueue(ReviewIntent intent, qulonglong* const
 }
 
 bool ReviewShellController::submitIntent(ReviewIntent& intent) {
-    if (!rebaseIntent(intent)) {
+    if ((intent.sidebarAppend && !sidebarAppendCurrent(*intent.sidebarAppend)) ||
+        !rebaseIntent(intent)) {
         Q_EMIT intentEvent(
             intent.id, RejectedStatus, intent.kind, StaleTopologyError, intent.sources.size());
         return false;
@@ -737,6 +827,7 @@ void ReviewShellController::finishIntent(const int outcome, const QString& error
     activeIntent_.reset();
     const bool succeeded = outcome == static_cast<int>(application::CommandOutcome::Succeeded);
     if (succeeded) {
+        ++completedIntentRevision_;
         synchronizeActiveSources(true);
     } else {
         synchronizeActiveSources();
