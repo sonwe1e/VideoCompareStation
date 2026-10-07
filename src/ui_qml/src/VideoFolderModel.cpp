@@ -1,13 +1,18 @@
 #include "dvs/ui/VideoFolderModel.h"
 
+#include "RecentVideoFiles.h"
+
 #include "dvs/application/MediaPaths.h"
 #include "dvs/ui/ReviewController.h"
+#include "dvs/ui/ReviewPreferencesController.h"
 #include "dvs/ui/ReviewShellController.h"
 
 #include <QDir>
 #include <QDirIterator>
 #include <QFileInfo>
+#include <QPointer>
 #include <QTimer>
+#include <QVariantMap>
 
 #include <algorithm>
 #include <exception>
@@ -143,6 +148,22 @@ VideoFolderModel::VideoFolderModel(Dependencies dependencies, QObject* const par
     QObject::connect(scanTimer_, &QTimer::timeout, this, [this] { drainScan(); });
 }
 
+void VideoFolderModel::attachPreferences(ReviewPreferencesController& preferences) {
+    const QPointer<ReviewPreferencesController> guarded{&preferences};
+    rememberVideo_ = [guarded](const QUrl& url) {
+        if (guarded) {
+            guarded->rememberVideoFile(url);
+        }
+    };
+    QObject::connect(&preferences,
+                     &ReviewPreferencesController::recentVideoFilesChanged,
+                     this,
+                     [this, &preferences] {
+                         synchronizeRecentFiles(preferences.recentVideoFiles());
+                     });
+    synchronizeRecentFiles(preferences.recentVideoFiles());
+}
+
 void VideoFolderModel::attachPlayback(ReviewController& controller, ReviewShellController& shell) {
     dependencies_.openVideo = [&shell](const QUrl& url) { return shell.openVideo(url); };
     dependencies_.cancelOpen = [&shell](const qulonglong id) { shell.cancelQueuedIntent(id); };
@@ -154,8 +175,11 @@ void VideoFolderModel::attachPlayback(ReviewController& controller, ReviewShellC
         &shell,
         &ReviewShellController::intentFinished,
         this,
-        [this](const qulonglong id, const int, const int outcome, const QString& error) {
+        [this](const qulonglong id, const int kind, const int outcome, const QString& error) {
             completeOpen(id, outcome == 0, error);
+            if (outcome == 0 && kind == ReviewShellController::OpenSourcesIntent) {
+                recordCommittedVideo();
+            }
         });
     QObject::connect(
         &shell,
@@ -163,10 +187,16 @@ void VideoFolderModel::attachPlayback(ReviewController& controller, ReviewShellC
         this,
         [this](const qulonglong id, const int status, const int, const int, const int) {
             // A newer File-menu/Explorer/source intent also supersedes browser autoplay.
-            if (openPending() && id != pendingIntentId_ &&
+            if (id != pendingIntentId_ &&
                 (status == ReviewShellController::RunningStatus ||
                  status == ReviewShellController::QueuedStatus)) {
                 cancelPendingOpen();
+                // A new accepted ordinary open supersedes the previous browser error too.
+                // Do this on acceptance, not an older intent's eventual success terminal.
+                if (!errorText_.isEmpty()) {
+                    errorText_.clear();
+                    Q_EMIT stateChanged();
+                }
             }
             if (status == ReviewShellController::CanceledStatus ||
                 status == ReviewShellController::ReplacedStatus ||
@@ -203,7 +233,7 @@ bool VideoFolderModel::scanning() const noexcept {
     return scanning_;
 }
 QString VideoFolderModel::errorText() const {
-    return errorText_;
+    return errorText_.isEmpty() ? folderErrorText_ : errorText_;
 }
 int VideoFolderModel::currentRow() const noexcept {
     return currentRow_;
@@ -279,17 +309,23 @@ VideoFolderModel::scan(const QUrl& folder,
 }
 
 bool VideoFolderModel::loadFolder(const QUrl& folder) {
-    cancelScan();
     cancelPendingOpen();
+    errorText_.clear();
+    return startScan(folder);
+}
+
+bool VideoFolderModel::startScan(const QUrl& folder) {
+    cancelScan();
     const QString path = folder.toLocalFile();
     if (!folder.isLocalFile() || !folder.host().isEmpty() || !QDir::isAbsolutePath(path) ||
         path.startsWith(QStringLiteral("//")) || path.startsWith(QStringLiteral("\\\\"))) {
-        errorText_ = tr("请选择本地文件夹。");
+        folderErrorText_ = tr("请选择本地文件夹。");
         Q_EMIT stateChanged();
         return false;
     }
-    errorText_.clear();
+    folderErrorText_.clear();
     scanning_ = true;
+    scanningFolderUrl_ = folder;
     const auto canceled = std::make_shared<std::atomic_bool>(false);
     scanCanceled_ = canceled;
     const auto inbox = inbox_;
@@ -312,7 +348,8 @@ bool VideoFolderModel::loadFolder(const QUrl& folder) {
     } catch (const std::exception&) {
         canceled->store(true);
         scanning_ = false;
-        errorText_ = tr("无法启动文件夹读取。");
+        scanningFolderUrl_.clear();
+        folderErrorText_ = tr("无法启动文件夹读取。");
         Q_EMIT stateChanged();
         return false;
     }
@@ -331,14 +368,16 @@ void VideoFolderModel::drainScan() {
         return;
     }
     scanning_ = false;
+    scanningFolderUrl_.clear();
     scanTimer_->stop();
-    errorText_ = result->error;
+    folderErrorText_ = result->error;
     if (result->error.isEmpty()) {
         beginResetModel();
         files_ = std::move(result->files);
         folderUrl_ = result->folder;
         folderName_ = result->name;
         currentRow_ = rowForUrl(currentUrl_);
+        pendingRow_ = rowForUrl(pendingUrl_);
         endResetModel();
     }
     Q_EMIT stateChanged();
@@ -349,6 +388,7 @@ bool VideoFolderModel::refreshFolder() {
 }
 void VideoFolderModel::cancelScan() {
     const bool wasScanning = scanning_;
+    scanningFolderUrl_.clear();
     ++scanGeneration_;
     if (scanCanceled_) {
         scanCanceled_->store(true);
@@ -373,6 +413,7 @@ void VideoFolderModel::clear() {
     folderUrl_.clear();
     folderName_.clear();
     errorText_.clear();
+    folderErrorText_.clear();
     currentRow_ = -1;
     endResetModel();
     Q_EMIT stateChanged();
@@ -383,25 +424,107 @@ int VideoFolderModel::rowForUrl(const QUrl& url) const {
         return -1;
     }
     const auto found = std::find_if(
-        files_.begin(), files_.end(), [&](const auto& file) { return file.url == url; });
+        files_.begin(), files_.end(), [&](const auto& file) {
+            return detail::sameVideoUrl(file.url, url);
+        });
     return found == files_.end() ? -1 : static_cast<int>(found - files_.begin());
 }
 void VideoFolderModel::synchronizeSources(const QVariantList& sources) {
-    const QUrl current = sources.size() == 1 ? sources.front().toUrl() : QUrl{};
+    const QUrl current =
+        sources.size() == 1 ? detail::localVideoUrl(sources.front().toUrl()) : QUrl{};
     if (current == currentUrl_) {
         return;
     }
     currentUrl_ = current;
     currentRow_ = rowForUrl(currentUrl_);
+    followCurrentFolder();
     Q_EMIT stateChanged();
+}
+
+void VideoFolderModel::followCurrentFolder() {
+    if (!currentUrl_.isEmpty()) {
+        const auto folder =
+            QUrl::fromLocalFile(QFileInfo{currentUrl_.toLocalFile()}.absolutePath());
+        if (folder != scanningFolderUrl_ &&
+            (scanning_ || folder != folderUrl_ || currentRow_ < 0)) {
+            // A committed A may arrive while newer B is queued. Following A is enumeration
+            // only: never cancel B's intent or suppress a matching browser autoplay terminal.
+            startScan(folder);
+        }
+    }
+}
+
+QUrl VideoFolderModel::currentUrl() const {
+    return currentUrl_;
+}
+
+int VideoFolderModel::recentCurrentRow() const {
+    if (currentUrl_.isEmpty()) {
+        return -1;
+    }
+    for (qsizetype index = 0; index < recentUrls_.size(); ++index) {
+        if (detail::sameVideoUrl(QUrl{recentUrls_[index]}, currentUrl_)) {
+            return static_cast<int>(index);
+        }
+    }
+    return -1;
+}
+
+QVariantList VideoFolderModel::recentFiles() const {
+    QVariantList result;
+    result.reserve(recentUrls_.size());
+    for (const QString& value : recentUrls_) {
+        const QUrl url{value};
+        result.push_back(
+            QVariantMap{{QStringLiteral("fileName"), QFileInfo{url.toLocalFile()}.fileName()},
+                        {QStringLiteral("fileUrl"), url}});
+    }
+    return result;
+}
+
+void VideoFolderModel::synchronizeRecentFiles(const QStringList& files) {
+    const auto recent = detail::mergeRecentVideoFiles(files, {});
+    if (recent == recentUrls_) {
+        return;
+    }
+    recentUrls_ = recent;
+    Q_EMIT recentFilesChanged();
+    Q_EMIT stateChanged();
+}
+
+void VideoFolderModel::recordCommittedVideo() {
+    if (currentUrl_.isEmpty()) {
+        return;
+    }
+    followCurrentFolder();
+    synchronizeRecentFiles(detail::mergeRecentVideoFiles(
+        {currentUrl_.toString(QUrl::FullyEncoded)}, recentUrls_));
+    if (rememberVideo_) {
+        rememberVideo_(currentUrl_);
+    }
+    Q_EMIT currentFileOpened();
+}
+
+bool VideoFolderModel::openRecent(const int row) {
+    if (row < 0 || row >= recentUrls_.size()) {
+        return false;
+    }
+    const QUrl url{recentUrls_[row]};
+    return openUrl(url, rowForUrl(url));
 }
 
 bool VideoFolderModel::openAt(const int row) {
     if (scanning_ || row < 0 || row >= fileCount() || !dependencies_.openVideo) {
         return false;
     }
+    return openUrl(files_[static_cast<std::size_t>(row)].url, row);
+}
+
+bool VideoFolderModel::openUrl(const QUrl& url, const int row) {
+    if (!dependencies_.openVideo || detail::localVideoUrl(url).isEmpty()) {
+        return false;
+    }
     cancelPendingOpen();
-    const QUrl url = files_[static_cast<std::size_t>(row)].url;
     const auto intent = dependencies_.openVideo(url);
     if (intent == 0) {
         errorText_ = tr("无法提交视频打开请求。");
@@ -446,7 +569,8 @@ void VideoFolderModel::completeOpen(const qulonglong intentId,
     pendingIntentId_ = 0;
     pendingRow_ = -1;
     pendingUrl_.clear();
-    if (!success || currentUrl_ != requested) {
+    if (!success || currentUrl_.isEmpty() ||
+        !detail::sameVideoUrl(currentUrl_, detail::localVideoUrl(requested))) {
         errorText_ = error.isEmpty() ? tr("无法打开该视频，原视频保持不变。") : error;
     } else if (!dependencies_.play || !dependencies_.play()) {
         errorText_ = tr("视频已打开，但未能开始播放。");

@@ -1078,6 +1078,19 @@ ApplicationWindow {
         return true;
     }
 
+    function openRecentVideo(row) {
+        if (!videoFolderModel || row < 0 || row >= videoFolderModel.recentFiles.length)
+            return false;
+        cancelWorkspaceOpen();
+        workspaceSession.beginOpen(workspaceSession.videoMedia);
+        if (!videoFolderModel.openRecent(Number(row))) {
+            workspaceSession.cancelOpen();
+            return false;
+        }
+        pendingNewReviewWantsThreeUp = false;
+        return true;
+    }
+
     function stepFolderVideo(delta) {
         if (!videoFolderModel || delta === 0)
             return false;
@@ -2265,6 +2278,14 @@ ApplicationWindow {
     }
 
     Connections {
+        target: root.videoFolderModel
+
+        function onCurrentFileOpened() {
+            root.videoFolderSidebarVisible = true;
+        }
+    }
+
+    Connections {
         target: root.stillImageController
 
         function onOpenFinished(requestId, pairId, success, error) {
@@ -2814,6 +2835,7 @@ ApplicationWindow {
             }
             onChooseFolderRequested: root.requestOpenVideoFolder()
             onFileRequested: row => root.openFolderVideo(row)
+            onRecentFileRequested: row => root.openRecentVideo(row)
             onStepRequested: delta => root.stepFolderVideo(delta)
             onCloseRequested: root.videoFolderSidebarVisible = false
         }

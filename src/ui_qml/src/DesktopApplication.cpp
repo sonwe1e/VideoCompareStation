@@ -189,6 +189,7 @@ public:
         engine->rootContext()->setContextProperty(QStringLiteral("reviewSession"),
                                                   shellController_.get());
         videoFolder_ = std::make_unique<VideoFolderModel>();
+        videoFolder_->attachPreferences(preferences);
         videoFolder_->attachPlayback(controller, *shellController_);
         engine->rootContext()->setContextProperty(QStringLiteral("videoFolder"),
                                                   videoFolder_.get());

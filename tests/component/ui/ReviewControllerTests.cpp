@@ -2284,5 +2284,73 @@ TEST_F(ReviewControllerTests, FolderOpenWithoutGraphicsFailsRatherThanWaitingFor
     EXPECT_EQ(h.folder.currentRow(), 0);
 }
 
+TEST_F(ReviewControllerTests, SuccessfulSingleOpenRecordsHistoryButFailedAndComparisonOpensDoNot) {
+    FolderTransportHarness h;
+    ASSERT_TRUE(h.initialize());
+    EXPECT_TRUE(h.folder.recentFiles().isEmpty());
+    ASSERT_NE(h.shell->openVideo(h.urls[1]), 0U);
+    EXPECT_TRUE(h.folder.recentFiles().isEmpty());
+    h.openSucceeded(1);
+    ASSERT_EQ(h.folder.recentFiles().size(), 1);
+    EXPECT_EQ(h.folder.recentFiles().front().toMap().value("fileUrl").toUrl(), h.urls[1]);
+    EXPECT_EQ(h.backend->submitted.size(), 1U); // Plain opens keep the existing paused semantics.
+    ASSERT_NE(h.shell->openVideo(h.urls[2]), 0U);
+    h.completeLast(application::CommandOutcome::Failed);
+    ASSERT_EQ(h.folder.recentFiles().size(), 1);
+    EXPECT_EQ(h.folder.currentUrl(), h.urls[1]);
+    ASSERT_TRUE(h.shell->stageSources({h.urls[0], h.urls[2]}, 0));
+    ASSERT_TRUE(h.shell->openStagedSources(false));
+    h.backend->currentSnapshot = readySnapshotWithSources({h.pathAt(0), h.pathAt(2)});
+    h.completeLast();
+    EXPECT_EQ(h.shell->activeSources().size(), 2);
+    EXPECT_EQ(h.folder.currentRow(), -1);
+    EXPECT_TRUE(h.folder.currentUrl().isEmpty());
+    EXPECT_EQ(h.folder.recentFiles().size(), 1);
+}
+
+TEST_F(ReviewControllerTests, RecentActivationUsesProductionIntentAndPlaysOnlyAfterCommit) {
+    FolderTransportHarness h;
+    ASSERT_TRUE(h.initialize());
+    ASSERT_NE(h.shell->openVideo(h.urls[1]), 0U);
+    h.openSucceeded(1);
+    ASSERT_EQ(h.folder.recentFiles().size(), 1);
+    ASSERT_NE(h.shell->openVideo(h.urls[2]), 0U);
+    h.openSucceeded(2);
+    ASSERT_EQ(h.folder.recentFiles().size(), 2);
+    h.backend->submitted.clear();
+    ASSERT_TRUE(h.folder.openRecent(1));
+    ASSERT_EQ(h.backend->submitted.size(), 1U);
+    const auto* const open =
+        std::get_if<application::OpenComparisonCommand>(&h.backend->submitted.back());
+    ASSERT_NE(open, nullptr);
+    ASSERT_EQ(open->sources.size(), 1U);
+    EXPECT_EQ(open->sources.front().path, h.pathAt(1));
+    EXPECT_EQ(h.folder.currentUrl(), h.urls[2]);
+    EXPECT_EQ(h.folder.recentCurrentRow(), 0);
+    h.openSucceeded(1);
+    ASSERT_EQ(h.backend->submitted.size(), 2U);
+    EXPECT_TRUE(std::holds_alternative<application::PlayCommand>(h.backend->submitted.back()));
+    EXPECT_EQ(h.folder.currentUrl(), h.urls[1]);
+    EXPECT_EQ(h.folder.recentCurrentRow(), 0);
+    EXPECT_EQ(h.folder.recentFiles().front().toMap().value("fileUrl").toUrl(), h.urls[1]);
+    EXPECT_FALSE(h.folder.openPending());
+}
+
+TEST_F(ReviewControllerTests, OrdinaryAcceptedOpenClearsAnEarlierRecentFailure) {
+    FolderTransportHarness h;
+    ASSERT_TRUE(h.initialize());
+    ASSERT_NE(h.shell->openVideo(h.urls[1]), 0U);
+    h.openSucceeded(1);
+    ASSERT_TRUE(h.folder.openRecent(0));
+    h.completeLast(application::CommandOutcome::Failed);
+    EXPECT_FALSE(h.folder.errorText().isEmpty());
+    ASSERT_NE(h.shell->openVideo(h.urls[2]), 0U);
+    EXPECT_TRUE(h.folder.errorText().isEmpty());
+    h.openSucceeded(2);
+    EXPECT_TRUE(h.folder.errorText().isEmpty());
+    EXPECT_EQ(h.folder.currentUrl(), h.urls[2]);
+    EXPECT_EQ(h.folder.recentFiles().front().toMap().value("fileUrl").toUrl(), h.urls[2]);
+}
+
 } // namespace
 } // namespace dvs::ui

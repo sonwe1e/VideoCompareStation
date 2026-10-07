@@ -303,3 +303,19 @@ foreach(dvs_qml_style IN ITEMS Basic Windows)
     endforeach()
 endforeach()
 endif()
+
+foreach(dvs_sidebar_style IN ITEMS Basic Windows)
+    add_test(
+        NAME "ui.video_file_sidebar.${dvs_sidebar_style}"
+        COMMAND
+            "$<TARGET_FILE:Qt6::qmltestrunner>"
+            -input "${CMAKE_CURRENT_SOURCE_DIR}/qml/tst_video_file_sidebar.qml"
+    )
+    set_tests_properties(
+        "ui.video_file_sidebar.${dvs_sidebar_style}"
+        PROPERTIES
+            LABELS "component;ui_qml"
+            TIMEOUT 60
+            ENVIRONMENT "QT_QUICK_CONTROLS_STYLE=${dvs_sidebar_style}"
+    )
+endforeach()

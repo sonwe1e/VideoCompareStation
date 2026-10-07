@@ -3,6 +3,56 @@
 2026-10-02，基线 `4a67d1b` + 未提交工作区。此页记录日常播放入口，不是媒体库、批量评测
 或发布验收；此前指标与打包工作区均保留。
 
+## 2026-10-07 文件与历史侧栏增补（待 Windows 原生验收）
+
+基线 main `39be3a62760415b5eae751c1e4266eed8e91e713`，包含用户合入的坏点占比行修复。
+直接复用既有 `VideoFolderModel`／`VideoFolderSidebar`，没有另建播放器或目录扫描链路。
+
+- 普通文件菜单／Explorer 成功打开单视频后自动显示侧栏；「当前文件夹」跟随已提交视频的
+  父目录，只枚举顶层五种既有视频扩展，保留自然排序与当前文件高亮。手动浏览另一目录后，
+  重复状态投影不会抢走选择；成功重新打开文件才回到它的父目录。
+- 「最近打开」最多保存 50 个成功单视频打开的 URL，新到旧排序、去重并保留完整路径提示。
+  复用 `ReviewPreferencesController` 的异步设置仓库、去抖保存与事务写盘；快速打开先于
+  设置加载时合并旧历史，不触发全局 `localChanges_`，避免覆盖原来的视图／快捷键偏好。
+  在途旧保存完成也不会丢掉更新的历史。历史不保存帧位置或比较会话。
+- 历史项也经过原 `ReviewShellController::openVideo`，匹配成功终态及当前 URL 后才自动播放。
+  删除／移动后的旧路径仍保留，失败时沿用原画面与历史，不自动清理或改指向其他文件。
+  非本地路径、图片、失败尝试和多源比较不会写入历史；浏览／扫描不改变 GT 或候选。
+- 列表上明确写着「点击文件会打开新的单视频任务」。收起和纯净模式沿用既有空间归还规则；
+  窄高区域采用紧凑布局，文件名省略但完整路径可悬停查看。
+- 自动跟随只调扫描，不取消较新的排队 intent。A→B→A 快速切换会抑制 B 的旧目录回复；
+  扫描完成也不能抹去最近打开失败的错误。新接受的普通打开清除旧浏览错误，但不抹去
+  匹配浏览器打开后真正的播放拒绝信息。
+- 范围仍为本地视频：不新增图片历史、递归扫描、目录监视、自动连播、清空历史或会话恢复。
+  旧问题记录的直接 controller 恢复路径没有迁移；它的源投影可跟随目录，但不会新增历史。
+
+验证与限制（不能转述为完整 Windows 验收）：
+
+- Linux/GCC14 + Qt6.8.2 Core 真实编译执行 `VideoFolderModelTests` 22 项、
+  `ReviewPreferencesControllerTests` 8 项；新增 10 项覆盖自动跟随、陈旧扫描、历史去重／
+  容量／失败、重新打开、本地范围以及异步设置加载／保存重叠。
+- 生产 `ReviewController`／shell 接线在 Linux 验证副本上执行；副本仅给既有三处
+  Windows/Linux `long`→`QVariant` 差异显式加 `qlonglong` 转型，不修改仓库生产代码。
+  共 57 项通过，含新增的成功历史／失败和比较排除／历史提交后播放／旧错误清理回归。
+- 实际 QtQuick Basic/offscreen 侧栏组件测试 4 项行为场景（另有 init/cleanup），覆盖两页
+  点击、重复切页、当前高亮、键盘、扫描期间历史操作以及 320px 高度含错误的可点击列表。
+  独立截图是隔离组件与合成列表，**不是 Windows 完整播放器或真实解码画面**。
+- 新增 2 项 `MainQmlContractTests` 保留完整主窗入口／工作区／普通打开与非默认 GT 比较
+  接线验证，但本环境未执行。Windows/MSVC、固定 Qt6.11.1、完整 build/CTest、仓库的
+  format-check/lint、真实素材／D3D11 性能与 ZIP 打包门禁均未运行。
+- 行为变异在 `out/verification/file-sidebar/` 保留编译、运行和计数；14 项模型／偏好变异及
+  7 项 QtQuick 变异由运行时断言检出；独立真实 shell 接线另有 2 项编译成功后的
+  运行时变异检出（丢失成功历史接线、旧错误残留）。编译失败不计作检出，生产源不修改。
+  独立接线／截图证据位于 `out/verification/sidebar-independent/`。
+
+Windows 定向复核入口：
+
+```powershell
+pwsh tools/build/build.ps1 -Preset dev -Test -TestRegex 'ui\.(VideoFolderModelTests|ReviewPreferencesControllerTests|ReviewControllerTests|MainQmlContractTests|video_file_sidebar)'
+pwsh tools/build/build.ps1 -Preset dev -Target format-check
+pwsh tools/build/build.ps1 -Preset dev -Target lint
+```
+
 ## 用户可见行为
 
 - 首屏「从文件夹选视频…」、文件菜单同名入口、`Ctrl+Alt+O` 打开文件夹选择器。

@@ -424,6 +424,7 @@ public:
         engine.rootContext()->setContextProperty(QStringLiteral("imageReview"), &imageReview);
         engine.rootContext()->setContextProperty(QStringLiteral("imageFolderPairs"), &folderPairs);
         if (withVideoFolder) {
+            videoFolder.attachPreferences(preferences);
             videoFolder.attachPlayback(*controller, *shell);
             engine.rootContext()->setContextProperty(QStringLiteral("videoFolder"), &videoFolder);
         }
@@ -5605,6 +5606,132 @@ TEST(MainQmlContractTests, NewerNonBrowserIntentSuppressesOldFolderAutoplay) {
                                 return std::holds_alternative<application::PlayCommand>(command);
                             }),
               0);
+}
+
+TEST(MainQmlContractTests, OrdinarySingleVideoOpenShowsItsFolderAndRecordsOnlySuccessfulHistory) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto path = directory.filePath(QString::fromUtf8("片段2.mp4"));
+    for (const auto& name : {path, directory.filePath(QString::fromUtf8("片段10.mp4"))}) {
+        QFile file{name};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_EQ(file.write("fake"), 4);
+    }
+    WorkspaceHarness harness;
+    harness.withVideoFolder = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.submitted.clear();
+    const QUrl url = QUrl::fromLocalFile(path);
+    ASSERT_NE(harness.shell->openVideo(url), 0U);
+    ASSERT_EQ(harness.submitted.size(), 1U);
+    const auto context = application::commandContext(harness.submitted.front());
+    EXPECT_FALSE(harness.root->property("videoFolderSidebarVisible").toBool());
+    EXPECT_TRUE(harness.videoFolder.recentFiles().isEmpty());
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate.hasValue());
+    ASSERT_TRUE(installValidatedVideoSet(harness.snapshot,
+                                         {std::filesystem::path{path.toStdWString()}},
+                                         rate.value(), 100, 3'333'333));
+    harness.snapshot->sessionId = context.sessionId;
+    harness.snapshot->sessionEpoch = context.sessionEpoch;
+    harness.terminals.push_back(
+        {.context = context, .outcome = application::CommandOutcome::Succeeded});
+    harness.controller->refreshProjection();
+    ASSERT_TRUE(harness.waitUntil([&] { return !harness.videoFolder.scanning(); }));
+    harness.settle();
+    EXPECT_TRUE(harness.root->property("videoFolderSidebarVisible").toBool());
+    EXPECT_EQ(harness.videoFolder.folderUrl(), QUrl::fromLocalFile(directory.path()));
+    EXPECT_EQ(harness.videoFolder.fileCount(), 2);
+    EXPECT_EQ(harness.videoFolder.currentRow(), 0);
+    ASSERT_EQ(harness.videoFolder.recentFiles().size(), 1);
+    EXPECT_EQ(QUrl{harness.preferences.recentVideoFiles().front()}, url);
+    EXPECT_EQ(harness.submitted.size(), 1U); // Ordinary opens do not gain implicit autoplay.
+
+    auto* const tab = harness.root->findChild<QObject*>(QStringLiteral("videoRecentTab"));
+    ASSERT_NE(tab, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(tab, "clicked"));
+    harness.settle();
+    auto* const list = harness.root->findChild<QObject*>(QStringLiteral("videoRecentFileList"));
+    ASSERT_NE(list, nullptr);
+    QQuickItem* row = nullptr;
+    ASSERT_TRUE(harness.waitUntil([&] {
+        QMetaObject::invokeMethod(
+            list, "itemAtIndex", Q_RETURN_ARG(QQuickItem*, row), Q_ARG(int, 0));
+        return row != nullptr;
+    }));
+    EXPECT_TRUE(row->property("highlighted").toBool());
+    const auto history = harness.videoFolder.recentFiles();
+    harness.submitted.clear();
+    ASSERT_TRUE(QMetaObject::invokeMethod(row, "clicked"));
+    ASSERT_EQ(harness.submitted.size(), 1U);
+    const auto* const reopened =
+        std::get_if<application::OpenComparisonCommand>(&harness.submitted.front());
+    ASSERT_NE(reopened, nullptr);
+    EXPECT_EQ(reopened->sources.size(), 1U);
+    EXPECT_EQ(reopened->intent, application::OpenReviewIntent::NewReview);
+    const auto failedContext = reopened->context;
+    harness.terminals.push_back(
+        {.context = failedContext,
+         .outcome = application::CommandOutcome::Failed,
+         .error = domain::makeMediaError(domain::MediaErrorCode::kMediaOpenFailed,
+                                          domain::MediaOperation::kMediaProbe,
+                                          std::nullopt,
+                                          true)});
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_EQ(harness.videoFolder.recentFiles(), history);
+    EXPECT_EQ(harness.videoFolder.currentUrl(), url);
+    EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 0);
+    EXPECT_EQ(harness.submitted.size(), 1U);
+}
+
+TEST(MainQmlContractTests, OpeningComparisonDoesNotAutoBrowseOrRecordASingleVideo) {
+    WorkspaceHarness harness;
+    harness.withVideoFolder = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    std::vector<std::filesystem::path> paths;
+    for (const auto* name : {"gt.mp4", "pred.mp4"}) {
+        QFile file{directory.filePath(QString::fromLatin1(name))};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_EQ(file.write("fake"), 4);
+        paths.emplace_back(file.fileName().toStdWString());
+    }
+    ASSERT_TRUE(harness.shell->stageSources(
+        {QUrl::fromLocalFile(QString::fromStdWString(paths[0].wstring())),
+         QUrl::fromLocalFile(QString::fromStdWString(paths[1].wstring()))}, 1));
+    harness.submitted.clear();
+    ASSERT_TRUE(harness.shell->openStagedSources(false));
+    ASSERT_EQ(harness.submitted.size(), 1U);
+    const auto context = application::commandContext(harness.submitted.front());
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate.hasValue());
+    ASSERT_TRUE(installValidatedVideoSet(harness.snapshot, paths, rate.value(), 100, 3'333'333));
+    const auto views = harness.snapshot->validatedComparison->sources();
+    std::vector<domain::ComparisonSource> sources{views.begin(), views.end()};
+    sources[0].role = domain::ComparisonRole::kPrediction;
+    sources[1].role = domain::ComparisonRole::kReference;
+    auto validated = domain::ComparisonValidator::validate(std::move(sources));
+    ASSERT_TRUE(validated.hasValue());
+    harness.snapshot->validatedComparison =
+        std::make_shared<const domain::ValidatedComparisonSet>(std::move(validated).value().set);
+    harness.snapshot->sources[0].role = domain::ComparisonRole::kPrediction;
+    harness.snapshot->sources[1].role = domain::ComparisonRole::kReference;
+    harness.snapshot->sessionId = context.sessionId;
+    harness.snapshot->sessionEpoch = context.sessionEpoch;
+    harness.terminals.push_back(
+        {.context = context, .outcome = application::CommandOutcome::Succeeded});
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_EQ(harness.shell->activeSources().size(), 2);
+    EXPECT_EQ(harness.shell->referenceSourceIndex(), 1);
+    EXPECT_TRUE(harness.videoFolder.recentFiles().isEmpty());
+    EXPECT_TRUE(harness.videoFolder.folderUrl().isEmpty());
+    EXPECT_FALSE(harness.videoFolder.scanning());
+    EXPECT_FALSE(harness.root->property("videoFolderSidebarVisible").toBool());
+    EXPECT_EQ(harness.submitted.size(), 1U);
 }
 
 } // namespace

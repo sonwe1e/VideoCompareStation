@@ -4,6 +4,8 @@
 #include "dvs/presentation/ComparisonContract.h"
 
 #include <QObject>
+#include <QStringList>
+#include <QUrl>
 
 #include <memory>
 
@@ -81,11 +83,15 @@ public:
     void setPlaybackContinuityPolicy(int value);
     void setDefaultPairPolicy(int value);
 
+    [[nodiscard]] QStringList recentVideoFiles() const;
+    void rememberVideoFile(const QUrl& url);
+
     Q_INVOKABLE void stop() noexcept;
     void processRepositoryEvents() noexcept;
 
 Q_SIGNALS:
     void preferencesChanged();
+    void recentVideoFilesChanged();
 
 private:
     class Impl;

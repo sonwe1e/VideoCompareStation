@@ -337,5 +337,162 @@ TEST_F(VideoFolderModelTests, EmptyFolderCompletesAndRealBackgroundWorkerIsUsabl
     tasks.back()(); // The queued closure survives its owner without touching any QObject.
 }
 
+TEST_F(VideoFolderModelTests, CommittedSingleVideoAutomaticallyFollowsParentWithoutOpeningIt) {
+    const auto video = write(QString::fromUtf8("片段2.MP4"));
+    write(QString::fromUtf8("片段10.mp4"));
+    write(QStringLiteral("ignored.png"));
+    model->synchronizeSources({video});
+    EXPECT_TRUE(model->scanning());
+    ASSERT_EQ(tasks.size(), 1U);
+    EXPECT_TRUE(opened.empty());
+    tasks.back()();
+    waitForScan(*model);
+    EXPECT_EQ(model->folderUrl(), QUrl::fromLocalFile(directory.path()));
+    ASSERT_EQ(model->fileCount(), 2);
+    EXPECT_EQ(model->currentRow(), 0);
+    EXPECT_EQ(model->currentUrl(), video);
+    model->synchronizeSources({video});
+    EXPECT_EQ(tasks.size(), 1U);
+    EXPECT_TRUE(model->recentFiles().isEmpty()); // Projections are not successful open terminals.
+    model->recordCommittedVideo();
+    ASSERT_EQ(model->recentFiles().size(), 1);
+    EXPECT_EQ(model->recentFiles().front().toMap().value("fileUrl").toUrl(), video);
+    EXPECT_EQ(plays, 0);
+}
+
+TEST_F(VideoFolderModelTests, AutoFollowCannotCancelNewerPendingRecentOpen) {
+    threeFiles();
+    const auto first = at(0);
+    const auto second = at(1);
+    model->synchronizeSources({first});
+    model->recordCommittedVideo();
+    model->synchronizeSources({second});
+    model->recordCommittedVideo();
+    ASSERT_TRUE(model->openRecent(1));
+    EXPECT_EQ(opened.back(), first);
+    const auto firstIntent = nextIntent;
+    ASSERT_TRUE(model->openRecent(0));
+    const auto secondIntent = nextIntent;
+    const auto canceledBefore = canceled.size();
+    QTemporaryDir other;
+    ASSERT_TRUE(other.isValid());
+    // An older active open may commit while the latest request remains queued.
+    model->synchronizeSources({QUrl::fromLocalFile(other.filePath("old.mp4"))});
+    ASSERT_TRUE(model->scanning());
+    EXPECT_TRUE(model->openPending());
+    EXPECT_EQ(canceled.size(), canceledBefore);
+    model->completeOpen(firstIntent, true, {});
+    EXPECT_EQ(plays, 0);
+    model->synchronizeSources({second});
+    model->completeOpen(secondIntent, true, {});
+    EXPECT_EQ(plays, 1);
+    EXPECT_FALSE(model->openPending());
+    tasks.back()();
+    waitForScan(*model);
+    EXPECT_EQ(at(model->currentRow()), second);
+}
+
+TEST_F(VideoFolderModelTests, RecentHistoryDeduplicatesCapsAndRetainsMissingFiles) {
+    for (int index = 0; index < 55; ++index) {
+        const auto url = QUrl::fromLocalFile(directory.filePath(QString("clip%1.mp4").arg(index)));
+        model->synchronizeSources({url});
+        model->recordCommittedVideo();
+    }
+    ASSERT_EQ(model->recentFiles().size(), 50);
+    const auto oldest = model->recentFiles().back().toMap().value("fileUrl").toUrl();
+    EXPECT_TRUE(oldest.toLocalFile().endsWith("clip5.mp4"));
+    model->synchronizeSources({oldest});
+    model->recordCommittedVideo();
+    ASSERT_EQ(model->recentFiles().size(), 50);
+    EXPECT_EQ(model->recentFiles().front().toMap().value("fileUrl").toUrl(), oldest);
+    const auto history = model->recentFiles();
+    ASSERT_TRUE(model->openRecent(1)); // No GUI-thread file I/O; normal open reports missing files.
+    model->completeOpen(nextIntent, false, QStringLiteral("media-open-failed"));
+    EXPECT_EQ(model->recentFiles(), history);
+    EXPECT_EQ(model->currentUrl(), oldest);
+    EXPECT_EQ(plays, 0);
+    EXPECT_EQ(model->errorText(), "media-open-failed");
+    EXPECT_FALSE(model->openRecent(-1));
+    EXPECT_FALSE(model->openRecent(50));
+    model->clear();
+    EXPECT_EQ(model->recentFiles(), history);
+}
+
+TEST_F(VideoFolderModelTests, ComparisonAndNonLocalSourcesDoNotCreateSingleVideoHistory) {
+    const auto first = write(QStringLiteral("clip1.mp4"));
+    const auto second = write(QStringLiteral("clip2.mp4"));
+    for (const QVariantList& sources : {QVariantList{first, second},
+                                      QVariantList{QUrl{"https://example.invalid/a.mp4"}},
+                                      QVariantList{QUrl{"file://server/share/a.mp4"}},
+                                      QVariantList{write(QStringLiteral("image.png"))}}) {
+        model->synchronizeSources(sources);
+        model->recordCommittedVideo();
+        EXPECT_TRUE(model->currentUrl().isEmpty());
+        EXPECT_TRUE(model->recentFiles().isEmpty());
+        EXPECT_TRUE(tasks.empty());
+    }
+    EXPECT_TRUE(opened.empty());
+}
+
+TEST_F(VideoFolderModelTests, SameFolderMissingRowIsRefreshedButManualBrowsingIsNotOverridden) {
+    threeFiles();
+    const auto original = at(0);
+    model->synchronizeSources({original});
+    const auto added = write(QStringLiteral("clip3.mp4"));
+    model->synchronizeSources({added});
+    EXPECT_TRUE(model->scanning());
+    tasks.back()();
+    waitForScan(*model);
+    EXPECT_EQ(at(model->currentRow()), added);
+    QTemporaryDir chosen;
+    ASSERT_TRUE(chosen.isValid());
+    ASSERT_TRUE(model->loadFolder(QUrl::fromLocalFile(chosen.path())));
+    tasks.back()();
+    waitForScan(*model);
+    const auto scans = tasks.size();
+    model->synchronizeSources({added});
+    EXPECT_EQ(tasks.size(), scans);
+    EXPECT_EQ(model->folderUrl(), QUrl::fromLocalFile(chosen.path()));
+    EXPECT_EQ(model->currentRow(), -1);
+}
+
+TEST_F(VideoFolderModelTests, SuccessfulRecentReopenReturnsFromManuallyBrowsedFolder) {
+    threeFiles();
+    const auto video = at(1);
+    model->synchronizeSources({video});
+    model->recordCommittedVideo();
+    QTemporaryDir chosen;
+    ASSERT_TRUE(chosen.isValid());
+    ASSERT_TRUE(model->loadFolder(QUrl::fromLocalFile(chosen.path())));
+    tasks.back()();
+    waitForScan(*model);
+    ASSERT_TRUE(model->openRecent(0));
+    model->synchronizeSources({video}); // Same source URL, still a new successful open intent.
+    model->completeOpen(nextIntent, true, {});
+    model->recordCommittedVideo();
+    EXPECT_TRUE(model->scanning());
+    tasks.back()();
+    waitForScan(*model);
+    EXPECT_EQ(model->folderUrl(), QUrl::fromLocalFile(directory.path()));
+    EXPECT_EQ(model->currentRow(), 1);
+    EXPECT_EQ(model->recentCurrentRow(), 0);
+    EXPECT_EQ(plays, 1);
+}
+
+TEST_F(VideoFolderModelTests, FolderScanCompletionDoesNotEraseRecentOpenFailure) {
+    threeFiles();
+    const auto video = at(1);
+    model->synchronizeSources({video});
+    model->recordCommittedVideo();
+    ASSERT_TRUE(model->refreshFolder());
+    ASSERT_TRUE(model->openRecent(0));
+    model->completeOpen(nextIntent, false, QStringLiteral("missing video"));
+    tasks.back()();
+    waitForScan(*model);
+    EXPECT_EQ(model->errorText(), "missing video");
+    EXPECT_EQ(model->currentUrl(), video);
+    EXPECT_EQ(plays, 0);
+}
+
 } // namespace
 } // namespace dvs::ui

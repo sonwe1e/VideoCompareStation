@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QAbstractListModel>
+#include <QStringList>
 #include <QUrl>
 #include <QVariantList>
 
@@ -17,6 +18,7 @@ namespace dvs::ui {
 
 class ReviewController;
 class ReviewShellController;
+class ReviewPreferencesController;
 
 // A lightweight, top-level folder browser. Enumeration never probes/decodes video and never
 // touches the GUI thread. The shell owns media commands; only its matching successful terminal
@@ -32,6 +34,9 @@ class VideoFolderModel final : public QAbstractListModel {
     Q_PROPERTY(int currentRow READ currentRow NOTIFY stateChanged)
     Q_PROPERTY(int pendingRow READ pendingRow NOTIFY stateChanged)
     Q_PROPERTY(bool openPending READ openPending NOTIFY stateChanged)
+    Q_PROPERTY(QVariantList recentFiles READ recentFiles NOTIFY recentFilesChanged)
+    Q_PROPERTY(QUrl currentUrl READ currentUrl NOTIFY stateChanged)
+    Q_PROPERTY(int recentCurrentRow READ recentCurrentRow NOTIFY stateChanged)
 
 public:
     struct Dependencies final {
@@ -63,19 +68,27 @@ public:
     [[nodiscard]] QVariant data(const QModelIndex& index, int role) const override;
     [[nodiscard]] QHash<int, QByteArray> roleNames() const override;
 
+    [[nodiscard]] QVariantList recentFiles() const;
+    [[nodiscard]] QUrl currentUrl() const;
+    [[nodiscard]] int recentCurrentRow() const;
+    void attachPreferences(ReviewPreferencesController& preferences);
     void attachPlayback(ReviewController& controller, ReviewShellController& shell);
     Q_INVOKABLE bool loadFolder(const QUrl& folder);
     Q_INVOKABLE bool refreshFolder();
     Q_INVOKABLE void cancelScan();
     Q_INVOKABLE void clear();
     Q_INVOKABLE bool openAt(int row);
+    Q_INVOKABLE bool openRecent(int row);
     Q_INVOKABLE bool step(int delta);
     Q_INVOKABLE void cancelPendingOpen();
     void synchronizeSources(const QVariantList& sources);
     void completeOpen(qulonglong intentId, bool success, const QString& error);
+    void recordCommittedVideo();
 
 signals:
     void stateChanged();
+    void recentFilesChanged();
+    void currentFileOpened();
 
 private:
     struct FileEntry final {
@@ -89,6 +102,10 @@ private:
                            const std::shared_ptr<std::atomic_bool>& canceled,
                            std::size_t maximumFiles);
     void drainScan();
+    bool startScan(const QUrl& folder);
+    void followCurrentFolder();
+    bool openUrl(const QUrl& url, int row);
+    void synchronizeRecentFiles(const QStringList& files);
     [[nodiscard]] int rowForUrl(const QUrl& url) const;
 
     Dependencies dependencies_;
@@ -98,8 +115,12 @@ private:
     std::uint64_t scanGeneration_ = 0;
     std::vector<FileEntry> files_;
     QUrl folderUrl_;
+    QUrl scanningFolderUrl_;
+    QStringList recentUrls_;
+    std::function<void(const QUrl&)> rememberVideo_;
     QString folderName_;
     QString errorText_;
+    QString folderErrorText_;
     bool scanning_ = false;
     QUrl currentUrl_;
     int currentRow_ = -1;
