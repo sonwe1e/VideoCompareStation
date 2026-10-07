@@ -533,7 +533,7 @@ VcsMenuBar {
         }
         VcsMenuItem {
             objectName: "toggleVideoFolderMenuItem"
-            text: control.videoFolderVisible ? qsTr("隐藏视频文件夹列表") : qsTr("显示视频文件夹列表")
+            text: control.videoFolderVisible ? qsTr("隐藏文件与历史侧栏") : qsTr("显示文件与历史侧栏")
             enabled: control.videoFolderAvailable
             onTriggered: control.videoFolderToggleRequested()
         }

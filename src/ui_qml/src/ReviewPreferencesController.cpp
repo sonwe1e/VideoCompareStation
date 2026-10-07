@@ -1,5 +1,9 @@
 #include "dvs/ui/ReviewPreferencesController.h"
 
+#include "RecentVideoFiles.h"
+
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QMetaObject>
 #include <QPointer>
 #include <QThread>
@@ -29,6 +33,7 @@ namespace {
 constexpr int kSaveDebounceMilliseconds = 150;
 constexpr auto kShutdownSaveFlushTimeout = std::chrono::milliseconds{500};
 
+constexpr std::string_view kRecentVideoFilesKey = "review.recent-video-files";
 constexpr std::string_view kLegacyLargeStepKey = "review.large-step-frames";
 constexpr std::string_view kShortcutPresetKey = "review.shortcut-preset";
 constexpr std::string_view kDropFrameTimecodeKey = "review.drop-frame-timecode";
@@ -370,6 +375,24 @@ public:
         changed();
     }
 
+    [[nodiscard]] QStringList recentVideoFiles() const {
+        return recentVideoFiles_;
+    }
+
+    void rememberVideoFile(const QUrl& url) {
+        const QStringList next =
+            detail::mergeRecentVideoFiles({url.toString(QUrl::FullyEncoded)}, recentVideoFiles_);
+        if (next == recentVideoFiles_) {
+            return;
+        }
+        recentVideoFiles_ = next;
+        // History must not set localChanges_: a successful early open must not suppress the
+        // asynchronous load of the user's unrelated playback and comparison preferences.
+        dirty_ = true;
+        Q_EMIT owner_.recentVideoFilesChanged();
+        scheduleSave();
+    }
+
     void stop() noexcept {
         if (stopped_ || stopping_) {
             return;
@@ -500,6 +523,24 @@ private:
                         settings_ = std::move(loaded->settings);
                         if (settings_.values.erase(std::string{kLegacyLargeStepKey}) > 0U) {
                             dirty_ = true;
+                        }
+                        QStringList storedRecent;
+                        if (const auto entry = settings_.values.find(kRecentVideoFilesKey);
+                            entry != settings_.values.end()) {
+                            const QJsonArray array =
+                                QJsonDocument::fromJson(QByteArray::fromStdString(entry->second))
+                                    .array();
+                            for (const QJsonValue& value : array) {
+                                if (value.isString()) {
+                                    storedRecent.push_back(value.toString());
+                                }
+                            }
+                        }
+                        const auto recent =
+                            detail::mergeRecentVideoFiles(recentVideoFiles_, storedRecent);
+                        if (recent != recentVideoFiles_) {
+                            recentVideoFiles_ = recent;
+                            Q_EMIT owner_.recentVideoFilesChanged();
                         }
                         if (!localChanges_) {
                             applyKnownValues(settings_.values);
@@ -675,6 +716,9 @@ private:
     }
 
     void writeKnownValues(std::map<std::string, std::string, std::less<>>& values) const {
+        const auto recent = QJsonDocument{QJsonArray::fromStringList(recentVideoFiles_)};
+        values.insert_or_assign(std::string{kRecentVideoFilesKey},
+                                recent.toJson(QJsonDocument::Compact).toStdString());
         values.erase(std::string{kLegacyLargeStepKey});
         values.insert_or_assign(std::string{kShortcutPresetKey},
                                 shortcutPreset_ == 1 ? "player" : "review");
@@ -724,6 +768,7 @@ private:
     int oscMode_ = -1;
     int playbackContinuityPolicy_ = 2;
     int defaultPairPolicy_ = 2;
+    QStringList recentVideoFiles_;
     bool loadFinished_ = false;
     bool localChanges_ = false;
     bool dirty_ = false;
@@ -739,6 +784,14 @@ ReviewPreferencesController::ReviewPreferencesController(
     : QObject(parent), impl_(std::make_unique<Impl>(*this, std::move(repository))) {}
 
 ReviewPreferencesController::~ReviewPreferencesController() = default;
+
+QStringList ReviewPreferencesController::recentVideoFiles() const {
+    return impl_->recentVideoFiles();
+}
+
+void ReviewPreferencesController::rememberVideoFile(const QUrl& url) {
+    impl_->rememberVideoFile(url);
+}
 
 int ReviewPreferencesController::shortcutPreset() const noexcept {
     return impl_->shortcutPreset();

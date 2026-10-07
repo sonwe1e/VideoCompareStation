@@ -2,6 +2,9 @@
 
 #include <QCoreApplication>
 #include <QEventLoop>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QTemporaryDir>
 #include <QThread>
 
 #include <chrono>
@@ -340,6 +343,97 @@ TEST_F(ReviewPreferencesControllerTests, ResumeEntriesAreCappedByDroppingTheOlde
     // clip15 is the least recently touched survivor group and is the first to go.
     EXPECT_EQ(controller.resumeFrameFor(QStringLiteral("c:/clips/clip15.mp4|1|1")), -1);
     controller.stop();
+}
+
+TEST_F(ReviewPreferencesControllerTests,
+       RecentOpenBeforeSettingsLoadMergesWithoutLosingPreferences) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto first = QUrl::fromLocalFile(directory.filePath(QString::fromUtf8("新的片段.mp4")));
+    const auto previous = QUrl::fromLocalFile(directory.filePath("previous.mkv"));
+    auto repository = std::make_shared<FakeSettingsRepository>();
+    repository->autoCompleteSaves = true;
+    ReviewPreferencesController controller{repository};
+    controller.rememberVideoFile(first);
+    application::SettingsSnapshot settings;
+    settings.values.emplace("review.view-mode", "difference");
+    settings.values.emplace("extension.unknown-key", "preserve-me");
+    const auto stored = QJsonDocument{
+        QJsonArray{previous.toString(), first.toString(), "https://example.invalid/remote.mp4", 1}};
+    settings.values.emplace("review.recent-video-files", stored.toJson().toStdString());
+    repository->completeLoad(std::move(settings));
+    ASSERT_TRUE(waitForPreferences([&] { return !repository->saveRequests.empty(); }));
+    EXPECT_EQ(controller.viewMode(), ReviewPreferencesController::ViewMode::Difference);
+    ASSERT_EQ(controller.recentVideoFiles().size(), 2);
+    EXPECT_EQ(QUrl{controller.recentVideoFiles().front()}, first);
+    EXPECT_EQ(QUrl{controller.recentVideoFiles().back()}, previous);
+    const auto& saved = repository->saveRequests.back().settings.values;
+    EXPECT_EQ(saved.at("extension.unknown-key"), "preserve-me");
+    EXPECT_EQ(saved.at("review.view-mode"), "difference");
+    const auto recent =
+        QJsonDocument::fromJson(QByteArray::fromStdString(saved.at("review.recent-video-files")))
+            .array();
+    ASSERT_EQ(recent.size(), 2);
+    EXPECT_EQ(QUrl{recent.first().toString()}, first);
+    EXPECT_EQ(QUrl{recent.last().toString()}, previous);
+}
+
+TEST_F(ReviewPreferencesControllerTests,
+       RecentHistoryLoadsAfterOtherPreferenceEditsAndPersistsReopen) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto old = QUrl::fromLocalFile(directory.filePath("old.mp4"));
+    const auto recent = QUrl::fromLocalFile(directory.filePath("recent.mp4"));
+    auto repository = std::make_shared<FakeSettingsRepository>();
+    ReviewPreferencesController controller{repository};
+    controller.setOscMode(1);
+    application::SettingsSnapshot settings;
+    settings.values.emplace(
+        "review.recent-video-files",
+        QJsonDocument{QJsonArray{recent.toString(), old.toString()}}.toJson().toStdString());
+    repository->completeLoad(std::move(settings));
+    ASSERT_TRUE(waitForPreferences([&] { return !repository->saveRequests.empty(); }));
+    EXPECT_EQ(controller.oscMode(), 1);
+    ASSERT_EQ(controller.recentVideoFiles().size(), 2);
+    // A new open while the previous save is in flight must survive that older completion.
+    controller.rememberVideoFile(old);
+    repository->completeSave();
+    ASSERT_TRUE(waitForPreferences([&] { return repository->saveRequests.size() == 2U; }));
+    repository->completeSave();
+    controller.processRepositoryEvents();
+    auto reopenedRepository = std::make_shared<FakeSettingsRepository>();
+    ReviewPreferencesController reopened{reopenedRepository};
+    reopenedRepository->completeLoad(repository->saveRequests.back().settings);
+    ASSERT_TRUE(waitForPreferences([&] { return reopened.recentVideoFiles().size() == 2; }));
+    EXPECT_EQ(QUrl{reopened.recentVideoFiles().front()}, old);
+    EXPECT_EQ(QUrl{reopened.recentVideoFiles().back()}, recent);
+}
+
+TEST_F(ReviewPreferencesControllerTests,
+       RecentHistoryRejectsInvalidPathsAndBoundsPersistedEntries) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    auto repository = std::make_shared<FakeSettingsRepository>();
+    ReviewPreferencesController controller{repository};
+    for (const auto& invalid : {QUrl{},
+                                QUrl{"file:relative.mp4"},
+                                QUrl{"file://server/a.mp4"},
+                                QUrl{"https://example.invalid/a.mp4"},
+                                QUrl::fromLocalFile(directory.filePath("image.png"))}) {
+        controller.rememberVideoFile(invalid);
+    }
+    EXPECT_TRUE(controller.recentVideoFiles().isEmpty());
+    QJsonArray stored;
+    for (int index = 0; index < 60; ++index) {
+        stored.append(
+            QUrl::fromLocalFile(directory.filePath(QString("clip%1.mp4").arg(index))).toString());
+    }
+    application::SettingsSnapshot settings;
+    settings.values.emplace("review.recent-video-files",
+                            QJsonDocument{stored}.toJson().toStdString());
+    repository->completeLoad(std::move(settings));
+    ASSERT_TRUE(waitForPreferences([&] { return controller.recentVideoFiles().size() == 50; }));
+    EXPECT_TRUE(QUrl{controller.recentVideoFiles().back()}.toLocalFile().endsWith("clip49.mp4"));
 }
 
 } // namespace

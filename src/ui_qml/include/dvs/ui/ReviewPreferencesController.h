@@ -4,6 +4,8 @@
 #include "dvs/presentation/ComparisonContract.h"
 
 #include <QObject>
+#include <QStringList>
+#include <QUrl>
 
 #include <memory>
 
@@ -81,6 +83,9 @@ public:
     void setPlaybackContinuityPolicy(int value);
     void setDefaultPairPolicy(int value);
 
+    [[nodiscard]] QStringList recentVideoFiles() const;
+    void rememberVideoFile(const QUrl& url);
+
     Q_INVOKABLE void stop() noexcept;
 
     // Resume (C1): per-source last watched frame, keyed by the path|size|mtime identity so an
@@ -95,6 +100,7 @@ public:
 
 Q_SIGNALS:
     void preferencesChanged();
+    void recentVideoFilesChanged();
 
 private:
     class Impl;
