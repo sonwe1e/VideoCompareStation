@@ -30,7 +30,9 @@
 #include <QGuiApplication>
 #include <QHoverEvent>
 #include <QImage>
+#include <QJSValue>
 #include <QKeyEvent>
+#include <QList>
 #include <QMouseEvent>
 #include <QObject>
 #include <QQmlComponent>
@@ -46,6 +48,7 @@
 #include <QThread>
 #include <QUrl>
 #include <QVariant>
+#include <QVariantMap>
 #include <QtQml/qqml.h>
 
 #include <array>
@@ -586,6 +589,96 @@ public:
     QQuickWindow* window = nullptr;
     std::string error;
 };
+
+// The real inspector's Repeater consumes [label, value] pairs. A bare label string
+// is indexable too, but silently renders its first two characters instead of the ratio.
+TEST(MainQmlContractTests, PairMetricsMismatchRowPreservesPolicyAndPercentage) {
+    WorkspaceHarness harness;
+    harness.shell->setInspectorVisible(true);
+    harness.preferences.setViewMode(ReviewPreferencesController::ViewMode::Difference);
+    ASSERT_TRUE(harness.create()) << harness.error;
+    auto* const inspector = harness.root->findChild<QQuickItem*>(QStringLiteral("tabbedInspector"));
+    ASSERT_NE(inspector, nullptr);
+    auto* const readout = inspector->findChild<QQuickItem*>(QStringLiteral("metricsReadoutBlock"));
+    ASSERT_NE(readout, nullptr);
+    QJSValue inspectorObject = harness.engine.newQObject(inspector);
+    QJSValue rowsFunction = inspectorObject.property(QStringLiteral("metricsRows"));
+    ASSERT_TRUE(rowsFunction.isCallable());
+
+    struct RatioCase {
+        double ratio;
+        const char* text;
+    };
+    // Zero keeps the existing small-percentage convention; this fix only restores the
+    // missing pair. The repeated 25% case also rejects a stale value after changing samples.
+    const std::array<RatioCase, 6U> cases{{
+        {0.25, "25.00%"},
+        {0.0, "< 0.01%"},
+        {0.00005, "< 0.01%"},
+        {0.0001, "0.01%"},
+        {1.0, "100.00%"},
+        {0.25, "25.00%"},
+    }};
+    const QStringList policies{
+        QStringLiteral("亮度"), QStringLiteral("任一通道"), QStringLiteral("全部通道")};
+    const std::array<int, 3U> thresholds{0, 16, 255};
+    for (int policy = 0; policy < 3; ++policy) {
+        for (const RatioCase& sample : cases) {
+            const int threshold = thresholds[static_cast<std::size_t>(policy)];
+            const QVariantMap metrics{
+                {QStringLiteral("available"), true},
+                {QStringLiteral("errorKey"), QString{}},
+                {QStringLiteral("hasCurrentSample"), true},
+                {QStringLiteral("currentComparable"), true},
+                {QStringLiteral("metricId"), QStringLiteral("cpu-rgb-absolute-v1")},
+                {QStringLiteral("thresholdPolicy"), policy},
+                {QStringLiteral("threshold"), threshold},
+                {QStringLiteral("currentMae"), 2.0},
+                {QStringLiteral("currentMse"), 4.0},
+                {QStringLiteral("currentPsnrDb"), 42.11},
+                {QStringLiteral("currentMaxAbsError"), 8.0},
+                {QStringLiteral("currentMismatchRatio"), sample.ratio},
+                {QStringLiteral("currentMismatchPixels"), sample.ratio * 1'000'000.0},
+                {QStringLiteral("currentPixelCount"), 1'000'000},
+            };
+            ASSERT_TRUE(inspector->setProperty("metrics", metrics));
+            harness.settle();
+            const QJSValue rows = rowsFunction.callWithInstance(inspectorObject);
+            ASSERT_TRUE(rows.isArray());
+            ASSERT_EQ(rows.property(QStringLiteral("length")).toInt(), 7);
+            const QJSValue row = rows.property(4U);
+            ASSERT_TRUE(row.isArray());
+            ASSERT_EQ(row.property(QStringLiteral("length")).toInt(), 2);
+            const QString expectedLabel =
+                QStringLiteral("坏点占比（%1 ≥ 阈值 %2）").arg(policies[policy]).arg(threshold);
+            EXPECT_EQ(row.property(0U).toString(), expectedLabel);
+            EXPECT_EQ(row.property(1U).toString(), QString::fromLatin1(sample.text));
+
+            // Inspect the actual delegate's two labels too, so a correct helper result
+            // cannot hide a broken model-to-text connection.
+            int matchedRows = 0;
+            QList<QQuickItem*> pending{readout};
+            while (!pending.isEmpty()) {
+                QQuickItem* const object = pending.takeLast();
+                pending.append(object->childItems());
+                if (object->property("text").toString() != expectedLabel) {
+                    continue;
+                }
+                ASSERT_NE(object->parentItem(), nullptr);
+                QStringList siblingTexts;
+                for (QQuickItem* sibling : object->parentItem()->childItems()) {
+                    if (sibling->property("text").isValid()) {
+                        siblingTexts.push_back(sibling->property("text").toString());
+                    }
+                }
+                EXPECT_EQ(siblingTexts,
+                          (QStringList{expectedLabel, QString::fromLatin1(sample.text)}));
+                ++matchedRows;
+            }
+            EXPECT_EQ(matchedRows, 1);
+        }
+    }
+}
 
 TEST(MainQmlContractTests, MapsEveryCurrentMediaErrorAndExcludesDeletedUiDomains) {
     QFile messageCatalog{QStringLiteral(":/qml/ReviewMessageCatalog.qml")};
