@@ -199,6 +199,11 @@ public:
         engine->rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
         engine->rootContext()->setContextProperty(QStringLiteral("reviewPreferences"),
                                                   &preferences);
+        // Automation determinism: QML reads this to keep user-session conveniences that move the
+        // playhead (resume restore) out of the performance gates' frame-zero baseline. Absent in
+        // every other embedding, so QML must guard the read.
+        engine->rootContext()->setContextProperty(QStringLiteral("dvsPerformanceAutomation"),
+                                                  QVariant{options_.performanceAutomation});
         // Pair metrics stay optional so isolated harnesses can load the shell without a
         // metrics service; the QML guards every read on the context property being set.
         if (pairMetrics != nullptr) {

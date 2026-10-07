@@ -1056,6 +1056,7 @@ runDesktop(int& argc,
             .smokeMode = false,
             .preferSoftwareDevice = false,
             .preferHighRefreshScreen = true,
+            .performanceAutomation = true,
         },
     };
     std::unique_ptr<dvs::app::ReviewRuntime> runtime = dvs::app::ReviewRuntime::create();

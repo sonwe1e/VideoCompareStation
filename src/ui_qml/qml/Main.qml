@@ -83,6 +83,9 @@ ApplicationWindow {
     // whether a lossless exporter exists, so its presence alone decides whether the transport
     // shows an export chip; the typeof guard keeps lightweight QML-only harnesses valid.
     readonly property var clipExportService: typeof clipExport !== "undefined" ? clipExport : null
+    // Performance automation keeps the playhead deterministic: a resume restore here would move
+    // the gate's frame-zero baseline seconds after the open and fail the run.
+    readonly property bool performanceAutomation: typeof dvsPerformanceAutomation !== "undefined" && dvsPerformanceAutomation
     // qmllint enable unqualified
     readonly property bool imageWorkspaceActive: workspaceSession.imageActive
 
@@ -840,6 +843,8 @@ ApplicationWindow {
 
     function attemptResume() {
         if (!controller || !preferences)
+            return;
+        if (performanceAutomation)
             return;
         const identity = resumeSourceIdentity;
         if (identity.length === 0)

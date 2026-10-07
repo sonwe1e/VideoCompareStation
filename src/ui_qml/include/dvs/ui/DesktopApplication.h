@@ -27,6 +27,12 @@ struct DesktopApplicationOptions final {
     bool smokeMode = false;
     bool preferSoftwareDevice = false;
     bool preferHighRefreshScreen = false;
+    // Performance gates open fixed fixtures and require a deterministic frame-zero baseline, so
+    // the automation surface must not fight them: user-session conveniences that move the
+    // playhead after an open (resume restore) stay off. Smoke mode already implies determinism
+    // because it never advances past the first frame; performance mode plays for minutes and
+    // would otherwise both read and leave behind resume entries for the gate fixtures.
+    bool performanceAutomation = false;
 };
 
 // Owns QGuiApplication, the QML engine, and the top-level window. The composition root is created
