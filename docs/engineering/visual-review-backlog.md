@@ -3,6 +3,19 @@
 更新：2026-10-07。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
 
+
+## 2026-10-07 连续倒退的 pending 请求互相取消（修复草稿，Windows 待验）
+
+- **实锤**：第 7 帧尚未完成解码时，后继 -1 提前提交第 6 帧；provider 的 Reverse 与
+  Exact 共用 latest-wins 槽，排队 / active 两条取消分支都能撤销协调器仍需要的当前帧。
+  两个输入各一次 Canceled，显示停在 8；同 generation 的旧 Fake 测试未覆盖取消策略。
+- **修复**：仅协调器 Reverse 后继等待当前 `providerSucceeded`，Success 后立即预备，
+  保留 ACK 前解码重叠；正向、Exact / seek、真实 provider / decoder 与身份校验不改。
+- **证据**：正式纯应用 / 预取 92/92，20 轮 1,840/1,840；独立逐字策略重放的两个红例
+  转绿，连同 ACK 前对照 4/4、100 轮 400/400。不是运行真实 provider 或视频解码。
+- **边界**：Windows / Main / shell / 实播 / GPU / 全构建 / 格式 lint 与性能门禁未验。
+  不宣称 FPS 或延迟提升；详见 [倒退请求放行与验证](reverse-step-admission.md)。
+
 ## 2026-10-07 文件侧栏右键操作（V-08 增补，待 Windows 验收）
 
 - **入口**：当前文件夹／最近打开两页统一右键，明确区分「打开为新单视频任务」与
