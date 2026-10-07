@@ -464,15 +464,14 @@ Rectangle {
         }
     }
 
-    // Effective pixel-scale badge (parity with the image workspace's percent readout). The
-    // surface zoom is relative to the fitted layout, so 1:1 needs the panel rect, the source's
-    // pixel extent, and the window DPR. "100% 真实尺寸" marks exact physical 1:1; clicking
-    // either jumps to 1:1 (zoom in) or back to the fitted viewport.
+    // Pixel scale follows the first displayed source and its fitted content, excluding
+    // letterboxing and wipe masks. Cropping/rotation change the source extent, while DPR
+    // converts logical units to physical pixels. Non-square pixels report both axes.
     Rectangle {
         id: pixelScaleBadge
 
         objectName: "viewportPixelScaleBadge"
-        visible: control.chromeVisible && pixelScaleBadge.sourceExtent > 0 && pixelScaleBadge.panelWidth > 0
+        visible: control.chromeVisible && pixelScaleBadge.effectivePercent > 0
         z: 30
         radius: 5
         // Same glass as the other stage plates; exact 1:1 is told by the green edge and label.
@@ -488,24 +487,32 @@ Rectangle {
         }
 
         readonly property var firstPanel: dualVideoSurface.sourcePanelRects.length > 0 ? dualVideoSurface.sourcePanelRects[0] : null
-        readonly property real panelWidth: firstPanel ? Number(firstPanel.width) : 0
-        // Rotation swaps the effective extent along the panel width; sample aspect ratio is
-        // not compensated (rare, and the badge is an orientation hint, not a measurement).
-        readonly property real sourceExtent: {
-            if (control.sourceMediaInfo.length === 0)
-                return 0;
-            const info = control.sourceMediaInfo[0];
+        readonly property int sourceSlot: firstPanel ? Number(firstPanel.slot) : -1
+        readonly property var sourceExtent: {
+            if (sourceSlot < 0 || sourceSlot >= control.sourceMediaInfo.length)
+                return Qt.size(0, 0);
+            const info = control.sourceMediaInfo[sourceSlot];
+            const roiWidth = dualVideoSurface.roiEnabled ? dualVideoSurface.roiRight - dualVideoSurface.roiLeft : 1;
+            const roiHeight = dualVideoSurface.roiEnabled ? dualVideoSurface.roiBottom - dualVideoSurface.roiTop : 1;
+            const width = Number(info.width) * roiWidth;
+            const height = Number(info.height) * roiHeight;
+            if (!isFinite(width) || !isFinite(height) || width <= 0 || height <= 0)
+                return Qt.size(0, 0);
             const rotation = Number(info.rotationDegrees);
-            return (rotation === 90 || rotation === 270) ? Number(info.height) : Number(info.width);
+            return (rotation === 90 || rotation === 270) ? Qt.size(height, width) : Qt.size(width, height);
         }
         readonly property real devicePixelRatio: Window.window ? Window.window.devicePixelRatio : 1
-        readonly property real effectivePercent: sourceExtent > 0 && panelWidth > 0 ? (panelWidth / sourceExtent) * dualVideoSurface.viewScale * devicePixelRatio * 100 : 0
-        readonly property bool pixelExact: Math.abs(effectivePercent - 100) < 2.5
+        readonly property real horizontalPercent: firstPanel && sourceExtent.width > 0 ? Number(firstPanel.contentWidth) / sourceExtent.width * dualVideoSurface.viewScale * devicePixelRatio * 100 : 0
+        readonly property real verticalPercent: firstPanel && sourceExtent.height > 0 ? Number(firstPanel.contentHeight) / sourceExtent.height * dualVideoSurface.viewScale * devicePixelRatio * 100 : 0
+        readonly property real effectivePercent: isFinite(horizontalPercent) && isFinite(verticalPercent) ? Math.min(horizontalPercent, verticalPercent) : 0
+        readonly property bool uniformScale: Math.abs(horizontalPercent - verticalPercent) < 0.001
+        readonly property bool pixelExact: Math.abs(horizontalPercent - 100) < 0.001 && Math.abs(verticalPercent - 100) < 0.001
 
         Label {
             id: pixelScaleLabel
 
-            text: pixelScaleBadge.pixelExact ? qsTr("100% 真实尺寸") : qsTr("画面 %1%").arg(Math.round(pixelScaleBadge.effectivePercent))
+            objectName: "viewportPixelScaleLabel"
+            text: pixelScaleBadge.pixelExact ? qsTr("100% 真实尺寸") : (pixelScaleBadge.uniformScale ? qsTr("画面 %1%").arg(Math.round(pixelScaleBadge.effectivePercent)) : qsTr("横 %1% · 纵 %2%").arg(Math.round(pixelScaleBadge.horizontalPercent)).arg(Math.round(pixelScaleBadge.verticalPercent)))
             color: pixelScaleBadge.pixelExact ? Theme.success : control.mutedTextColor
             font.pixelSize: 11
             anchors.centerIn: parent
@@ -514,16 +521,20 @@ Rectangle {
         MouseArea {
             id: pixelScaleMouse
 
+            objectName: "viewportPixelScaleMouse"
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             onClicked: {
-                if (pixelScaleBadge.pixelExact || pixelScaleBadge.effectivePercent > 100) {
+                if (pixelScaleBadge.effectivePercent >= 99.999) {
                     dualVideoSurface.resetViewport();
                     return;
                 }
-                // Zoom toward 1:1 physical pixels; zoomAt clamps to the surface scale range.
-                const factor = 100 / Math.max(1, pixelScaleBadge.effectivePercent);
+                if (pixelScaleBadge.effectivePercent <= 0)
+                    return;
+                // Zoom toward physical 1:1; non-square pixels keep their display aspect.
+                // The surface owns the scale limit, so an unreachable target stays labelled.
+                const factor = 100 / pixelScaleBadge.effectivePercent;
                 dualVideoSurface.zoomAt(0.5, 0.5, factor);
             }
         }
