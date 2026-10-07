@@ -109,6 +109,18 @@ public:
             &server_, &QLocalServer::newConnection, &owner_, [this] { acceptConnections(); });
     }
 
+    ~Impl() {
+        // The broker QObject outlives this Impl. QLocalSocket destruction can emit disconnected
+        // while server_ tears down its children, after buffers_ has already been destroyed.
+        // Detach the callbacks and close sockets while every captured member is still alive.
+        QObject::disconnect(&server_, nullptr, &owner_, nullptr);
+        for (QLocalSocket* socket : server_.findChildren<QLocalSocket*>()) {
+            QObject::disconnect(socket, nullptr, &owner_, nullptr);
+            socket->abort();
+        }
+        server_.close();
+    }
+
     [[nodiscard]] StartResult startOrForward(const StartupRequest& request) {
         if (server_.isListening()) {
             return StartResult::Primary;
