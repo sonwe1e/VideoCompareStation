@@ -24,6 +24,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
         with:
+          lfs: true
           persist-credentials: false
 
       - name: Check contributor guide
@@ -63,6 +64,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
         with:
+          lfs: true
           persist-credentials: false
 
       - name: Enter MSVC x64 environment

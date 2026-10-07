@@ -35,6 +35,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
         with:
+          lfs: true
           persist-credentials: false
           ref: ${{ env.DVS_EXPECTED_SHA }}
 
