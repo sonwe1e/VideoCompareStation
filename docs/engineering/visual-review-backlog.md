@@ -1,7 +1,40 @@
 # 视觉审查问题台账
 
-更新：2026-10-06。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-10-07。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+
+## 2026-10-07 当前帧坏点占比行（V-07，已修复并通过 Windows 原生验证）
+
+- **基线与复现**：main `267adca6114c912796465944a51468598b8f0762`。
+  `TabbedInspector.qml::metricsRows()` 将坏点占比的完整标签作为字符串混入二元数组列表，
+  实际 Repeater 的 `[0]` / `[1]` 因而得到「坏」/「点」，已经计算的百分比未显示。
+- **修复**：仅将该行恢复成 `[完整策略／阈值标签, ratioText]`。不改评分、阈值、策略或
+  百分比计算；保持原来零值和小于 0.01% 均显示 `< 0.01%` 的约定，不额外改显示口径。
+- **原云端验证（PR 原有记录）**：Node.js 24.19.0 提取并执行生产的两个 JavaScript 函数及两个 delegate 表达式，
+  **108 组组合／3,361 项检查**通过；原版在同一探针有 **438 项断言失败**。
+  覆盖三种策略、0/16/255 阈值、25%／零／微小值／0.01% 边界／100%／重复切换、
+  对齐说明、不可用／采样／不可比及恢复。**15/15** 运行时语义变异检出；语法失败不计检出。
+- **Windows 原生回归**：在 MSVC 19.44、固定 Qt 6.11.1 上构建 Debug 和 Release；
+  `ui.MainQmlContractTests.PairMetricsMismatchRowPreservesPolicyAndPercentage` 在真实
+  Main/Inspector 中验证 18 次投影的行结构、完整标签／百分比及实际 delegate 文本，两种构建均通过。
+  定向命令：`pwsh tools/build/build.ps1 -Preset dev -Test -TestRegex '^ui[.]MainQmlContractTests[.]PairMetricsMismatchRowPreservesPolicyAndPercentage$'`。
+- **原生变异证据**：15/15 项运行时变异检出，原字符串回退在 `row.isArray()` 断言失败；
+  缺值／缺行／重复行、策略／阈值、比例单位／边界／零值／陈旧值、delegate 索引等错误均由
+  原生断言拒绝。前后控制组 2/2 通过；故意减少至 14 项时固定数量 guard 在改源前拒绝执行。
+  QML 字节恢复并重建后复验通过，构建／语法失败不计检出。
+- **门禁**：默认 dev CTest 选中 860 项：853 通过、3 既有 skipped、4 既有 disabled、0 failed
+  （233.26s）；Release 的主界面／指标控制器／像素规则相关套件选中 82 项：78 通过、
+  4 既有 disabled、0 failed（46.64s）。完整 format-check 和 lint 通过；新增测试三处换行
+  按 clang-format 19.1.5 作最小修正，未改变断言。
+- **实窗证据**：真实 Qt Main/Inspector 在 1280／960 逻辑宽度、当前显示器 175% 缩放下，
+  完整策略／阈值标签与 `25.00%` 均可见。指标是原生测试注入值，截图证明显示／布局，
+  不冒充真实视频评分或 GPU 播放证据。见 [原生指标行截图](assets/pr36-inspector-mismatch-percentage.png)。
+  临时捕获代码已按字节恢复并重建；详细日志与变异结果保存在
+  `out/verification/pr36-20261007/`。
+- **构建路径限制**：深隔离目录使格式检查命令达到 39,669 字符，超过 Windows 32,767
+  字符上限；改用 `out/p36` 并 `-Fresh` 重建后通过，不改检查范围或放宽门禁。
+- **边界**：本轮验收并合并仅覆盖 PR #36 的指标行显示问题；硬件性能与打包发布未运行。
+  原云端 `qsTr` / `String.arg` 替身结果与上述 Windows 原生证据分开记录；没有改 workflow。
 
 ## 2026-10-06 导出起始帧元数据舍入（修复草稿，Windows 验收待完成）
 
