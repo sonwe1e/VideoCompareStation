@@ -124,7 +124,11 @@ dvs_add_gtest(
     TIMEOUT 10
 )
 
-add_executable(dvs_main_qml_contract_tests MainQmlContractTests.cpp)
+add_executable(
+    dvs_main_qml_contract_tests
+    MainQmlContractTests.cpp
+    ViewportPixelScaleTests.cpp
+)
 target_link_libraries(
     dvs_main_qml_contract_tests
     PRIVATE
