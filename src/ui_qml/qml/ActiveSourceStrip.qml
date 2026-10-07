@@ -43,14 +43,13 @@ Rectangle {
     signal removeSelectedRequested
     readonly property real chipSpacing: 7
     // A press has to travel this far before it counts as a drag, so an ordinary click on a chip
-    // (which opens its menu) is never mistaken for the start of a reorder.
+    // (which selects it) is never mistaken for the start of a reorder.
     readonly property real dragThreshold: 12
 
-    // Resolves a released drag to a target index in the display order and asks for the move. The
-    // controller rejects an index it does not have, so a drop past either end is simply not a move
-    // rather than a move to a clamped position the user did not choose.
+    // Resolve the drop against chip centres. The insertion position is measured before removing
+    // the dragged chip, so moving to the right must account for that removal.
     function commitDrag(fromIndex, dropCentreX) {
-        if (fromIndex < 0 || control.displayOrder.length === 0)
+        if (fromIndex < 0 || fromIndex >= control.displayOrder.length || !isFinite(dropCentreX))
             return;
         let cursor = 12;
         let target = 0;
@@ -67,8 +66,8 @@ Rectangle {
             }
             cursor += width + control.chipSpacing;
         }
-        if (target > control.displayOrder.length - 1)
-            target = control.displayOrder.length - 1;
+        if (target > fromIndex)
+            target -= 1;
         if (target !== fromIndex)
             control.moveRequested(fromIndex, target);
     }
@@ -191,13 +190,14 @@ Rectangle {
                 // so ctrl-clicking to select never also starts a reorder.
                 property bool dragArmed: false
                 property int dragFromIndex: -1
-                property real dragOffset: 0
+                readonly property real dragOffset: chipDrag.active ? chipDrag.activeTranslation.x : 0
                 readonly property int displayIndex: control.displayOrder.indexOf(chip.resolvedSourceIdentity)
                 // The chip's place in the display order, computed as a binding so it follows the
                 // order and the widths ahead of it. A chip the display order does not mention yet
                 // falls to the end rather than sitting on top of another chip.
                 readonly property real layoutX: chip.displayIndex >= 0 ? control.chipStartX(chip.displayIndex) : control.chipStartX(control.sourceCount)
-                x: chip.layoutX
+                x: chip.layoutX + chip.dragOffset
+                z: chipDrag.active ? 1 : 0
 
                 readonly property color sourceAccent: Theme.sourceColor(chip.sourceId)
                 readonly property color sourceBg: Theme.sourceBackground(chip.sourceId)
@@ -215,19 +215,30 @@ Rectangle {
                     id: chipDrag
 
                     target: null
+                    acceptedButtons: Qt.LeftButton
+                    acceptedModifiers: Qt.NoModifier
                     property real pressX: 0
-                    readonly property real travelled: chip.x - chipDrag.pressX
+                    property var sourceOrderAtStart: []
+                    readonly property real travelled: activeTranslation.x
 
                     onActiveChanged: {
                         if (active) {
                             chip.dragArmed = true;
                             chip.dragFromIndex = chip.displayIndex;
-                            chipDrag.pressX = chip.x;
-                        } else if (chip.dragArmed) {
-                            chip.dragArmed = false;
-                            if (Math.abs(chipDrag.travelled) >= control.dragThreshold)
-                                control.commitDrag(chip.dragFromIndex, chipDrag.pressX + chipDrag.travelled + chip.width / 2);
+                            chipDrag.pressX = chip.layoutX;
+                            chipDrag.sourceOrderAtStart = control.displayOrder.slice();
                         }
+                    }
+                    onGrabChanged: (transition, point) => {
+                        if (transition !== PointerDevice.UngrabExclusive && transition !== PointerDevice.CancelGrabExclusive)
+                            return;
+                        const armed = chip.dragArmed;
+                        chip.dragArmed = false;
+                        if (!armed || transition !== PointerDevice.UngrabExclusive || !control.enabled || !control.visible)
+                            return;
+                        const orderUnchanged = chipDrag.sourceOrderAtStart.length === control.displayOrder.length && chipDrag.sourceOrderAtStart.every((identity, index) => identity === control.displayOrder[index]);
+                        if (orderUnchanged && Math.abs(chipDrag.travelled) >= control.dragThreshold)
+                            control.commitDrag(chip.dragFromIndex, chipDrag.pressX + chipDrag.travelled + chip.width / 2);
                     }
                 }
 

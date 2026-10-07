@@ -3,7 +3,6 @@
 更新：2026-10-07。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
 
-
 ## 2026-10-07 连续倒退的 pending 请求互相取消（修复草稿，Windows 待验）
 
 - **实锤**：第 7 帧尚未完成解码时，后继 -1 提前提交第 6 帧；provider 的 Reverse 与
@@ -16,7 +15,25 @@
 - **边界**：Windows / Main / shell / 实播 / GPU / 全构建 / 格式 lint 与性能门禁未验。
   不宣称 FPS 或延迟提升；详见 [倒退请求放行与验证](reverse-step-admission.md)。
 
+## 2026-10-07 竖屏视频倍率与一键真实尺寸（观看体验，待 Windows 验收）
+
+- **复现**：旧徽标把面板留白／分割遮罩计入视频宽度，并固定读取槽位 0。800 × 600
+  视口显示 1080 × 1920 竖屏时，约 31.15% 被报成 73.89%；点击后仍不是物理 1:1。
+- **修复**：复用真实内容几何，按当前首显示源、ROI、旋转及 DPR 计算；移动分割线不
+  改变倍率。非方形像素显示横/纵读数，64× 上限与原缩放/平移交互保持。
+- **证据**：真实无窗口 Qt 6.8.2 组件新测试 5/5，原 main 5/5 失败；既有几何/属性
+  定向 17/17，总计 22/22。23/23 实现变异、7/7 观测 guard、DPR 15 组/45 检查及
+  2/2 DPR 变异通过。无设备服务；未验 Windows/MSVC、固定 Qt、实窗/DPI、全套门禁。
+- **详细范围与原生复核**：[视频视口倍率](viewport-pixel-scale.md)。不修改 workflow，
+  不手动触发或重跑 CI；本地候选待独立审查与 Draft 发布，不能把零 CI 当通过。
+
 ## 2026-10-07 文件侧栏右键操作（V-08 增补，待 Windows 验收）
+
+- **同日键盘体验增补**：两页把键盘目标细边框与当前播放项填色分开；委托焦点同步列表
+  索引，Enter 与键盘菜单作用到可见目标，失焦保留索引且不打开文件。原 main 新 6 场景
+  全失败，最终 Qt 6.8.2 / Basic / offscreen / software 正式套件 19/19（17 行为 +
+  init/cleanup）；21/21 实现变异、5/5 观测 guard 检出。Windows 主窗/控件风格、
+  完整门禁与真实文件打开未验。见[键盘范围与离屏截图](video-folder-browser.md#2026-10-07-键盘目标与播放项分开显示待-windows-原生验收)。
 
 - **入口**：当前文件夹／最近打开两页统一右键，明确区分「打开为新单视频任务」与
   「加入当前视频对比…」；后者在无视频、满三源、重复／不可读文件及忙状态禁用并说明原因。
@@ -308,6 +325,12 @@
     适配器里引入按文件身份失效的缓存语义。见启动文档 Step 10。
   - **C2 列表增强**——**控制器层与 QML 接线都已实现**。不再等拍板，按建议的安全范围落地：
     重排**只改显示顺序**，多选走**既有操作**。
+    - **2026-10-07 真实鼠标补证与修复**：在当前 main `a0a0440` 复现 handler 已 active、
+      指针移动约601px，但来源牌位移0、排序信号0；旧属性测试没有覆盖这条真实手势。
+      接通 translation，并修正右移索引、取消与拖中身份变化边界。正式 Qt6.8.2 / Basic /
+      offscreen / software 在四档缩放各26/26（24行为 + init/cleanup），38/38实现变异、
+      3/3观测guard覆盖42个新断言位点。真实组件截图已检查；Windows主窗/输入设备、
+      完整Main/shell与播放门禁未验。见[来源条拖拽范围与证据](source-strip-drag.md)。
     - 新增（`ReviewShellController`）：`displaySourceIdentities` / `selectedSourceIdentities`、
       `moveSourceInDisplayOrder(from,to)`、`setSourceSelected` / `toggleSourceSelection` /
       `clearSourceSelection`、`removeSelectedSources()`。全部以**冻结 source identity** 为键，

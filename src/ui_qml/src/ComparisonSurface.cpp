@@ -428,21 +428,8 @@ qreal ComparisonSurface::wipeSplitLogicalX() const {
 }
 
 QVariantList ComparisonSurface::sourcePanelRects() const {
-    const qreal devicePixelRatio =
-        window() != nullptr ? window()->effectiveDevicePixelRatio() : 1.0;
-    const auto pixelWidth =
-        static_cast<std::uint32_t>(std::max<qreal>(1.0, std::round(width() * devicePixelRatio)));
-    const auto pixelHeight =
-        static_cast<std::uint32_t>(std::max<qreal>(1.0, std::round(height() * devicePixelRatio)));
-    const platform::SurfacePanelLayout layout =
-        platform::computeSurfacePanelLayout(nativeViewMode(viewMode_),
-                                            static_cast<float>(width()),
-                                            static_cast<float>(height()),
-                                            pixelWidth,
-                                            pixelHeight,
-                                            static_cast<std::uint8_t>(referenceSlot_),
-                                            nativeDifferenceEdge(differenceEdge_),
-                                            static_cast<float>(wipePosition_));
+    const platform::SurfacePresentationGeometry geometry = surfacePresentationGeometry(*this);
+    const platform::SurfacePanelLayout& layout = geometry.panels;
     QVariantList result;
     result.reserve(static_cast<qsizetype>(layout.sourceCount));
     for (std::size_t index = 0U; index < layout.sourceCount; ++index) {
@@ -453,6 +440,10 @@ QVariantList ComparisonSurface::sourcePanelRects() const {
         item.insert(QStringLiteral("y"), rect.y);
         item.insert(QStringLiteral("width"), rect.width);
         item.insert(QStringLiteral("height"), rect.height);
+        // Keep panel bounds for labels/dividers, but expose the fitted video extent for
+        // pixel-scale readouts. In wipe mode this is the full composite, not the split mask.
+        item.insert(QStringLiteral("contentWidth"), geometry.sourceContentRects[index].width);
+        item.insert(QStringLiteral("contentHeight"), geometry.sourceContentRects[index].height);
         result.push_back(std::move(item));
     }
     return result;
@@ -779,6 +770,7 @@ void ComparisonSurface::setRoiNormalized(const qreal left,
     viewCenterY_ = 0.5;
     viewScale_ = 1.0;
     emit viewportChanged();
+    emit presentationGeometryChanged();
     update();
 }
 
@@ -795,6 +787,7 @@ void ComparisonSurface::clearRoi() {
     viewCenterY_ = 0.5;
     viewScale_ = 1.0;
     emit viewportChanged();
+    emit presentationGeometryChanged();
     update();
 }
 
@@ -830,6 +823,7 @@ void ComparisonSurface::restoreViewport(const qreal centerX,
     roiRight_ = roiEnabled ? roiRight : 1.0;
     roiBottom_ = roiEnabled ? roiBottom : 1.0;
     emit viewportChanged();
+    emit presentationGeometryChanged();
     update();
 }
 

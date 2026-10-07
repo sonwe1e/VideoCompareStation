@@ -197,6 +197,10 @@ Rectangle {
         ScrollBar.vertical: ScrollBar {}
         delegate: ItemDelegate {
             id: row
+            readonly property bool navigationTarget: files.activeFocus && ListView.isCurrentItem
+            // Tab can focus a delegate directly; keep Enter and the keyboard menu on that file.
+            onActiveFocusChanged: if (activeFocus)
+                files.currentIndex = row.index
             required property int index
             required property string fileName
             required property url fileUrl
@@ -218,6 +222,9 @@ Rectangle {
             background: Rectangle {
                 radius: Theme.radiusSmall
                 color: row.highlighted ? Theme.controlChecked : (row.hovered ? Theme.controlHover : "transparent")
+                // The playing row keeps its fill; the keyboard target gets a separate outline.
+                border.width: row.navigationTarget ? 1 : 0
+                border.color: Theme.focus
             }
             ToolTip.visible: hovered
             ToolTip.text: fileUrl.toString()
@@ -265,6 +272,10 @@ Rectangle {
         ScrollBar.vertical: ScrollBar {}
         delegate: ItemDelegate {
             id: recentRow
+            readonly property bool navigationTarget: recentFiles.activeFocus && ListView.isCurrentItem
+            // Tab can focus a delegate directly; keep Enter and the keyboard menu on that file.
+            onActiveFocusChanged: if (activeFocus)
+                recentFiles.currentIndex = recentRow.index
             required property int index
             required property var modelData
             readonly property url contextUrl: modelData.fileUrl
@@ -284,6 +295,9 @@ Rectangle {
             background: Rectangle {
                 radius: Theme.radiusSmall
                 color: recentRow.highlighted ? Theme.controlChecked : (recentRow.hovered ? Theme.controlHover : "transparent")
+                // The playing row keeps its fill; the keyboard target gets a separate outline.
+                border.width: recentRow.navigationTarget ? 1 : 0
+                border.color: Theme.focus
             }
             ToolTip.visible: hovered
             ToolTip.text: modelData.fileUrl.toString()
