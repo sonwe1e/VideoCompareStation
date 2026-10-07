@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <gtest/gtest.h>
+#include <limits>
 #include <memory>
 #include <span>
 #include <vector>
@@ -153,6 +154,123 @@ TEST(ClipExportPlannerTests, MovesForwardToTheFirstKeyframeWhenTheRequestPrecede
     EXPECT_EQ(aligned.value().startShiftMicroseconds, 33'333);
     ASSERT_TRUE(aligned.value().firstExportedFrame.has_value());
     EXPECT_EQ(aligned.value().firstExportedFrame->value(), 1);
+}
+
+TEST(ClipExportPlannerTests, NamesNearestMicrosecondRoundedKeyframeBoundaries) {
+    struct Example final {
+        std::int64_t numerator;
+        std::int64_t denominator;
+        std::int64_t frame;
+        std::int64_t time;
+    };
+    const std::array examples{
+        Example{24000, 1001, 16, 667333},
+        Example{24000, 1001, 32, 1334667},
+        Example{30000, 1001, 2, 66733},
+        Example{60000, 1001, 1, 16683},
+        Example{60000, 2002, 2, 66733},
+        Example{25, 1, 1, 40000},
+        Example{30, 1, 1, 33333},
+        Example{60, 1, 2, 33333},
+        Example{128, 1, 1, 7813},
+        Example{30000, 1001, 0, 0},
+        Example{30000, 1001, 2'000'000'000, 66'733'333'333'333},
+    };
+    for (const auto& example : examples) {
+        SCOPED_TRACE(testing::Message() << example.numerator << '/' << example.denominator
+                                       << " frame=" << example.frame);
+        const domain::CanonicalTimeline timeline{
+            domain::RationalRate::create(example.numerator, example.denominator).value()};
+        const auto planned = planClipExport(
+            timeline,
+            example.frame + 5,
+            {domain::FrameId{example.frame + 1}, domain::FrameId{example.frame + 3}});
+        ASSERT_TRUE(planned.hasValue());
+        const std::array keys{example.time};
+        const auto aligned = alignClipExportStart(timeline, planned.value(), keys);
+        ASSERT_TRUE(aligned.hasValue());
+        EXPECT_EQ(aligned.value().firstExportedFrame, domain::FrameId{example.frame});
+        EXPECT_EQ(aligned.value().startMicroseconds, example.time);
+        EXPECT_EQ(aligned.value().startShiftMicroseconds,
+                  example.time - planned.value().startMicroseconds);
+        EXPECT_EQ(aligned.value().endMicroseconds, planned.value().endMicroseconds);
+        EXPECT_EQ(aligned.value().requestedRange, planned.value().requestedRange);
+        EXPECT_EQ(aligned.value().requestedFrameCount, planned.value().requestedFrameCount);
+    }
+}
+
+TEST(ClipExportPlannerTests, KeepsTimesOutsideRoundedBoundariesOnThePrecedingFrame) {
+    struct Example final {
+        std::int64_t numerator;
+        std::int64_t denominator;
+        std::int64_t time;
+        std::int64_t frame;
+    };
+    const std::array examples{
+        Example{25, 1, 39999, 0},
+        Example{30000, 1001, 66732, 1},
+        Example{30000, 1001, 33366, 0},
+        Example{128, 1, 7812, 0},
+        Example{30000, 1001, 50000, 1},
+        Example{30000, 1001, 66734, 2},
+    };
+    for (const auto& example : examples) {
+        SCOPED_TRACE(testing::Message() << example.numerator << '/' << example.denominator
+                                       << " time=" << example.time);
+        const domain::CanonicalTimeline timeline{
+            domain::RationalRate::create(example.numerator, example.denominator).value()};
+        const auto planned =
+            planClipExport(timeline, 100, {domain::FrameId{50}, domain::FrameId{99}});
+        ASSERT_TRUE(planned.hasValue());
+        const std::array keys{example.time};
+        const auto aligned = alignClipExportStart(timeline, planned.value(), keys);
+        ASSERT_TRUE(aligned.hasValue());
+        EXPECT_EQ(aligned.value().firstExportedFrame, domain::FrameId{example.frame});
+        EXPECT_EQ(aligned.value().startMicroseconds, example.time);
+    }
+}
+
+TEST(ClipExportPlannerTests, LeavesVariableFrameTimingAndUnavailableFrameMetadataUnchanged) {
+    const auto variable = vfr(12);
+    const auto planned = planClipExport(variable, 12, {domain::FrameId{5}, domain::FrameId{11}});
+    ASSERT_TRUE(planned.hasValue());
+    for (const auto key : {33332, 33333}) {
+        const std::array keys{std::int64_t{key}};
+        const auto aligned = alignClipExportStart(variable, planned.value(), keys);
+        ASSERT_TRUE(aligned.hasValue());
+        EXPECT_EQ(aligned.value().firstExportedFrame, domain::FrameId{key == 33332 ? 0 : 1});
+        EXPECT_FALSE(aligned.value().endMicroseconds.has_value());
+    }
+    const std::array negative{std::int64_t{-1}};
+    const auto aligned = alignClipExportStart(cfrThirty(), planned.value(), negative);
+    ASSERT_TRUE(aligned.hasValue());
+    EXPECT_FALSE(aligned.value().firstExportedFrame.has_value());
+
+    const std::array zero{std::int64_t{0}};
+    const auto unavailable = alignClipExportStart(unavailableVfr(), planned.value(), zero);
+    ASSERT_TRUE(unavailable.hasValue());
+    EXPECT_FALSE(unavailable.value().firstExportedFrame.has_value());
+
+    auto unbounded = planned.value();
+    unbounded.startMicroseconds = std::numeric_limits<std::int64_t>::max();
+    const std::array huge{unbounded.startMicroseconds};
+    const auto overflow = alignClipExportStart(cfrThirty(), unbounded, huge);
+    ASSERT_TRUE(overflow.hasValue());
+    EXPECT_FALSE(overflow.value().firstExportedFrame.has_value());
+    EXPECT_EQ(overflow.value().startMicroseconds, huge.front());
+}
+
+TEST(ClipExportPlannerTests, DoesNotGuessBetweenFramesSharingOneRoundedMicrosecond) {
+    const domain::CanonicalTimeline timeline{domain::RationalRate::create(3'000'000, 1).value()};
+    const auto planned = planClipExport(timeline, 12, {domain::FrameId{6}, domain::FrameId{11}});
+    ASSERT_TRUE(planned.hasValue());
+    for (const std::int64_t key : {0, 1}) {
+        const std::array keys{key};
+        const auto aligned = alignClipExportStart(timeline, planned.value(), keys);
+        ASSERT_TRUE(aligned.hasValue());
+        EXPECT_EQ(aligned.value().firstExportedFrame, domain::FrameId{key * 3});
+        EXPECT_EQ(aligned.value().startMicroseconds, key);
+    }
 }
 
 TEST(ClipExportPlannerTests, RejectsRangesWithoutAUsableKeyframe) {

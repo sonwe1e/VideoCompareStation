@@ -31,9 +31,10 @@ public:
     ClipExportWriter(ClipExportWriter&&) = delete;
     ClipExportWriter& operator=(ClipExportWriter&&) = delete;
 
-    // Presentation times of the sync samples, in source microseconds, ascending. A container index
-    // only stores seek timestamps—decode-order values for a reordered stream—so each sync entry is
-    // resolved to the presentation time of the packet a backward seek to it lands on; a container
+    // Presentation times of the sync samples, in frame-zero-normalized microseconds, ascending.
+    // A container index only stores seek timestamps (decode-order values for a reordered stream),
+    // so each sync entry is resolved to the presentation time of the packet a backward seek to it
+    // lands on; a container
     // without an index is walked packet by packet instead. Both paths only demux and never decode,
     // and the times are the ones the planner aligns the in point against.
     [[nodiscard]] std::vector<std::int64_t>

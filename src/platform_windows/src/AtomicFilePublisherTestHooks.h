@@ -21,11 +21,15 @@ namespace dvs::platform::testing {
 // part of the platform adapter's public interface.
 using ReplaceFileCallback = BOOL(WINAPI*)(LPCWSTR, LPCWSTR, LPCWSTR, DWORD, LPVOID, LPVOID);
 using MoveFileExCallback = BOOL(WINAPI*)(LPCWSTR, LPCWSTR, DWORD);
+using FlushFileBuffersCallback = BOOL(WINAPI*)(HANDLE);
+using CloseHandleCallback = BOOL(WINAPI*)(HANDLE);
 
 class ScopedAtomicFilePublisherApiOverride final {
 public:
     ScopedAtomicFilePublisherApiOverride(ReplaceFileCallback replaceFile,
-                                         MoveFileExCallback moveFileEx) noexcept;
+                                         MoveFileExCallback moveFileEx,
+                                         FlushFileBuffersCallback flushFileBuffers = nullptr,
+                                         CloseHandleCallback closeHandle = nullptr) noexcept;
     ~ScopedAtomicFilePublisherApiOverride();
 
     ScopedAtomicFilePublisherApiOverride(const ScopedAtomicFilePublisherApiOverride&) = delete;
@@ -35,6 +39,8 @@ public:
 private:
     ReplaceFileCallback previousReplaceFile_ = nullptr;
     MoveFileExCallback previousMoveFileEx_ = nullptr;
+    FlushFileBuffersCallback previousFlushFileBuffers_ = nullptr;
+    CloseHandleCallback previousCloseHandle_ = nullptr;
 };
 
 } // namespace dvs::platform::testing

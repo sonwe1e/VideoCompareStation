@@ -106,6 +106,19 @@ alignClipExportStart(const domain::CanonicalTimeline& timeline,
     const auto frame = domain::canonicalFrameAtOrBefore(timeline, domain::MediaTime{aligned});
     if (frame) {
         plan.firstExportedFrame = frame.value();
+        if (const auto* const rate = std::get_if<domain::RationalRate>(&timeline);
+            rate != nullptr) {
+            // Packet times are rounded to the nearest microsecond, but canonical starts round
+            // up. Promote only an exact rounded-boundary match, never an arbitrary time just
+            // before a frame. Keep sub-microsecond (ambiguous) and variable-rate timelines alone.
+            const auto interval = rate->frameIntervalCeiling();
+            const domain::FrameId next{frame.value().value() + 1};
+            const auto roundedStart = rate->frameStartTimeRounded(next);
+            if (interval && interval.value().microseconds() > 1 && roundedStart &&
+                roundedStart.value().microseconds() == aligned) {
+                plan.firstExportedFrame = next;
+            }
+        }
     } else {
         plan.firstExportedFrame.reset();
     }

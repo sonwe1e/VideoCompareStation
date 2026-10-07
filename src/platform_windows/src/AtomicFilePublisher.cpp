@@ -32,6 +32,8 @@ constexpr std::uint32_t kTemporaryNameAttempts = 128;
 std::atomic<std::uint64_t> temporarySequence{0};
 std::atomic<testing::ReplaceFileCallback> replaceFileCallback{&ReplaceFileW};
 std::atomic<testing::MoveFileExCallback> moveFileExCallback{&MoveFileExW};
+std::atomic<testing::FlushFileBuffersCallback> flushFileBuffersCallback{&FlushFileBuffers};
+std::atomic<testing::CloseHandleCallback> closeHandleCallback{&CloseHandle};
 
 [[nodiscard]] bool isSafeIdentityToken(const std::string_view token) noexcept {
     if (token.empty() || token.size() > kMaximumIdentityTokenLength) {
@@ -87,8 +89,13 @@ invokeMoveFileEx(const LPCWSTR source, const LPCWSTR destination, const DWORD fl
     return moveFileExCallback.load(std::memory_order_acquire)(source, destination, flags);
 }
 
+[[nodiscard]] BOOL invokeCloseHandle(const HANDLE handle) noexcept {
+    return closeHandleCallback.load(std::memory_order_acquire)(handle);
+}
+
 [[nodiscard]] std::string describePath(const std::filesystem::path& path) {
-    return "'" + path.string() + "'";
+    const std::u8string utf8 = path.u8string();
+    return "'" + std::string{reinterpret_cast<const char*>(utf8.data()), utf8.size()} + "'";
 }
 
 } // namespace
@@ -97,6 +104,7 @@ class AtomicFilePublisher::Impl final {
 public:
     enum class State {
         kOpen,
+        kExternalWrite,
         kFlushed,
         kPublished,
         kAbandoned,
@@ -112,7 +120,7 @@ public:
 
     ~Impl() {
         if (handle != INVALID_HANDLE_VALUE) {
-            CloseHandle(handle);
+            static_cast<void>(invokeCloseHandle(handle));
         }
 
         if (state == State::kRecoveryRequired) {
@@ -299,19 +307,48 @@ PlatformStatus AtomicFilePublisher::write(const std::span<const std::byte> bytes
     return PlatformStatus::success();
 }
 
-PlatformStatus AtomicFilePublisher::flush() {
+PlatformStatus AtomicFilePublisher::prepareForExternalWrite() {
     if (impl_->state != Impl::State::kOpen) {
         return invalidState(impl_->temporary);
     }
+    if (!invokeCloseHandle(impl_->handle)) {
+        return PlatformStatus::failure(makeError(PlatformErrorCode::kCloseFailed,
+                                                 impl_->temporary,
+                                                 systemFailure("CloseHandle", GetLastError())));
+    }
+    impl_->handle = INVALID_HANDLE_VALUE;
+    impl_->state = Impl::State::kExternalWrite;
+    return PlatformStatus::success();
+}
 
-    if (!FlushFileBuffers(impl_->handle)) {
+PlatformStatus AtomicFilePublisher::flush() {
+    if (impl_->state != Impl::State::kOpen && impl_->state != Impl::State::kExternalWrite) {
+        return invalidState(impl_->temporary);
+    }
+    if (impl_->handle == INVALID_HANDLE_VALUE) {
+        // Do not recreate a missing external output as an empty successful file.
+        impl_->handle = CreateFileW(impl_->temporary.c_str(),
+                                    GENERIC_WRITE,
+                                    0,
+                                    nullptr,
+                                    OPEN_EXISTING,
+                                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH,
+                                    nullptr);
+        if (impl_->handle == INVALID_HANDLE_VALUE) {
+            return PlatformStatus::failure(makeError(PlatformErrorCode::kFlushFailed,
+                                                     impl_->temporary,
+                                                     systemFailure("CreateFileW", GetLastError())));
+        }
+    }
+
+    if (!flushFileBuffersCallback.load(std::memory_order_acquire)(impl_->handle)) {
         const DWORD errorCode = GetLastError();
         return PlatformStatus::failure(makeError(PlatformErrorCode::kFlushFailed,
                                                  impl_->temporary,
                                                  systemFailure("FlushFileBuffers", errorCode)));
     }
 
-    if (!CloseHandle(impl_->handle)) {
+    if (!invokeCloseHandle(impl_->handle)) {
         const DWORD errorCode = GetLastError();
         return PlatformStatus::failure(makeError(PlatformErrorCode::kCloseFailed,
                                                  impl_->temporary,
@@ -375,7 +412,7 @@ PlatformStatus AtomicFilePublisher::publishNew() {
         return invalidState(impl_->temporary);
     }
 
-    if (!MoveFileExW(
+    if (!invokeMoveFileEx(
             impl_->temporary.c_str(), impl_->destination.c_str(), MOVEFILE_WRITE_THROUGH)) {
         const DWORD errorCode = GetLastError();
         const PlatformErrorCode code = isCollisionError(errorCode)
@@ -403,7 +440,7 @@ PlatformStatus AtomicFilePublisher::abandon() {
     }
 
     if (impl_->handle != INVALID_HANDLE_VALUE) {
-        if (!CloseHandle(impl_->handle)) {
+        if (!invokeCloseHandle(impl_->handle)) {
             const DWORD errorCode = GetLastError();
             return PlatformStatus::failure(makeError(PlatformErrorCode::kCleanupFailed,
                                                      impl_->temporary,
@@ -449,13 +486,23 @@ const std::filesystem::path& AtomicFilePublisher::recoveryBackupPath() const noe
 namespace testing {
 
 ScopedAtomicFilePublisherApiOverride::ScopedAtomicFilePublisherApiOverride(
-    const ReplaceFileCallback replaceFile, const MoveFileExCallback moveFileEx) noexcept
+    const ReplaceFileCallback replaceFile,
+    const MoveFileExCallback moveFileEx,
+    const FlushFileBuffersCallback flushFileBuffers,
+    const CloseHandleCallback closeHandle) noexcept
     : previousReplaceFile_(replaceFileCallback.exchange(
           replaceFile == nullptr ? &ReplaceFileW : replaceFile, std::memory_order_acq_rel)),
       previousMoveFileEx_(moveFileExCallback.exchange(
-          moveFileEx == nullptr ? &MoveFileExW : moveFileEx, std::memory_order_acq_rel)) {}
+          moveFileEx == nullptr ? &MoveFileExW : moveFileEx, std::memory_order_acq_rel)),
+      previousFlushFileBuffers_(flushFileBuffersCallback.exchange(
+          flushFileBuffers == nullptr ? &FlushFileBuffers : flushFileBuffers,
+          std::memory_order_acq_rel)),
+      previousCloseHandle_(closeHandleCallback.exchange(
+          closeHandle == nullptr ? &CloseHandle : closeHandle, std::memory_order_acq_rel)) {}
 
 ScopedAtomicFilePublisherApiOverride::~ScopedAtomicFilePublisherApiOverride() {
+    closeHandleCallback.store(previousCloseHandle_, std::memory_order_release);
+    flushFileBuffersCallback.store(previousFlushFileBuffers_, std::memory_order_release);
     moveFileExCallback.store(previousMoveFileEx_, std::memory_order_release);
     replaceFileCallback.store(previousReplaceFile_, std::memory_order_release);
 }

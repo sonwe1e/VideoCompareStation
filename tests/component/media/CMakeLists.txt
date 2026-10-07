@@ -2,6 +2,8 @@ include(GoogleTest)
 
 add_executable(
     dvs_media_component_tests
+    ClipExportOriginTests.cpp
+    ClipExportPublicationTests.cpp
     ClipExportWriterTests.cpp
     MultiSourceFrameProviderTests.cpp
     FrameSetAssemblerTests.cpp
@@ -20,7 +22,9 @@ target_link_libraries(
     dvs_media_component_tests
     PRIVATE
         dvs_media_ffmpeg
+        dvs::ffmpeg_dependencies
         dvs::test_dependencies
+        dvs::test_support
 )
 target_compile_definitions(
     dvs_media_component_tests
@@ -31,6 +35,7 @@ target_include_directories(
     PRIVATE
         "${PROJECT_SOURCE_DIR}/src/media_ffmpeg/src"
         "${PROJECT_SOURCE_DIR}/src/platform_windows/include"
+        "${PROJECT_SOURCE_DIR}/src/platform_windows/src"
 )
 
 dvs_apply_project_warnings(dvs_media_component_tests)

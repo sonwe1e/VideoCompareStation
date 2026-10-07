@@ -34,6 +34,11 @@ public:
     AtomicFilePublisher& operator=(AtomicFilePublisher&&) = delete;
 
     [[nodiscard]] PlatformStatus write(std::span<const std::byte> bytes);
+
+    // Releases the owned temporary's handle for a seekable external writer. The caller must
+    // exclusively own this transaction and close that writer before flush() reopens the file.
+    // No publish is allowed until flush succeeds; abandonment still removes only owned artifacts.
+    [[nodiscard]] PlatformStatus prepareForExternalWrite();
     [[nodiscard]] PlatformStatus flush();
 
     // Uses ReplaceFileW and therefore fails if destination does not exist at publish time. A
