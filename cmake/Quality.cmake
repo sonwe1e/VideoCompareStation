@@ -110,16 +110,32 @@ function(dvs_add_quality_targets)
     _dvs_require_llvm_tool_version("${CLANG_FORMAT_EXECUTABLE}" "clang-format")
     _dvs_require_llvm_tool_version("${CLANG_TIDY_EXECUTABLE}" "clang-tidy")
 
+    # The file list goes through a generated file instead of the command line: one argument per
+    # source pushes a single CreateProcess call past the Windows 32,767-character limit on any
+    # deep checkout (see the PR #36 build-path record), which failed format-check with "The
+    # system cannot execute the specified program". The script loops per file, so the command
+    # line stays constant no matter where the repository lives.
+    set(cppFormatFileList "${CMAKE_BINARY_DIR}/dvs-cpp-format-files.txt")
+    string(REPLACE ";" "\n" cppFormatFileListContents "${cppFormatFiles}")
+    file(GENERATE OUTPUT "${cppFormatFileList}" CONTENT "${cppFormatFileListContents}\n")
+
     add_custom_target(
         dvs_format_cpp
-        COMMAND "${CLANG_FORMAT_EXECUTABLE}" -i ${cppFormatFiles}
-        COMMAND_EXPAND_LISTS
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DCLANG_FORMAT_EXECUTABLE=${CLANG_FORMAT_EXECUTABLE}"
+            "-DFILE_LIST=${cppFormatFileList}"
+            -DDVS_FORMAT_APPLY=ON
+            -P "${PROJECT_SOURCE_DIR}/cmake/CheckCppFormat.cmake"
         VERBATIM
     )
     add_custom_target(
         dvs_format_check_cpp
-        COMMAND "${CLANG_FORMAT_EXECUTABLE}" --dry-run --Werror ${cppFormatFiles}
-        COMMAND_EXPAND_LISTS
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DCLANG_FORMAT_EXECUTABLE=${CLANG_FORMAT_EXECUTABLE}"
+            "-DFILE_LIST=${cppFormatFileList}"
+            -P "${PROJECT_SOURCE_DIR}/cmake/CheckCppFormat.cmake"
         VERBATIM
     )
     # clang-tidy is designed to analyze one translation unit per process. Passing the complete
