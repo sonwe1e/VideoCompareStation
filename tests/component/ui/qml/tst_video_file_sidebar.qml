@@ -2,6 +2,7 @@ import QtQuick
 import QtTest
 import QtQuick.Controls
 import "../../../../src/ui_qml/qml" as Dvs
+import "../../../../src/ui_qml/qml/VcsTheme.js" as Theme
 
 Item {
     width: 280
@@ -180,6 +181,76 @@ Item {
             compare(recentSpy.count, 0);
             compare(contextOpenSpy.count, data.downs === 1 ? 1 : 0);
             compare(compareSpy.count, data.downs === 2 ? 1 : 0);
+        }
+
+        function test_keyboardSelectionShowsTargetWithoutChangingPlayingRow_data() {
+            return [{tag: "folder", recent: false}, {tag: "recent", recent: true}];
+        }
+
+        function test_keyboardSelectionShowsTargetWithoutChangingPlayingRow(data) {
+            sidebar.showRecent = data.recent;
+            const list = findChild(sidebar, data.recent ? "videoRecentFileList" : "videoFolderFileList");
+            list.currentIndex = 1;
+            list.forceActiveFocus();
+            keyClick(Qt.Key_Up);
+            compare(list.currentIndex, 0);
+            const target = list.itemAtIndex(0);
+            const playing = list.itemAtIndex(1);
+            verify(target !== null && playing !== null);
+            verify(!target.highlighted && playing.highlighted);
+            compare(target.background.border.width, 1);
+            compare(String(target.background.border.color), Theme.focus);
+            compare(playing.background.border.width, 0);
+            keyClick(Qt.Key_Return);
+            const requested = data.recent ? recentSpy : folderSpy;
+            compare(requested.count, 1);
+            compare(requested.signalArguments[0][0], 0);
+            keyClick(Qt.Key_Down);
+            compare(list.currentIndex, 1);
+            compare(target.background.border.width, 0);
+            compare(playing.background.border.width, 1);
+        }
+
+        function test_focusedDelegateAndKeyboardMenuShareOneTarget_data() {
+            return [{tag: "folder", recent: false}, {tag: "recent", recent: true}];
+        }
+
+        function test_focusedDelegateAndKeyboardMenuShareOneTarget(data) {
+            sidebar.showRecent = data.recent;
+            const list = findChild(sidebar, data.recent ? "videoRecentFileList" : "videoFolderFileList");
+            list.currentIndex = 1;
+            const row = list.itemAtIndex(0);
+            verify(row !== null);
+            row.forceActiveFocus(Qt.TabFocusReason);
+            tryCompare(row, "activeFocus", true);
+            compare(list.currentIndex, 0);
+            compare(row.background.border.width, 1);
+            keyClick(Qt.Key_Menu);
+            const menu = findChild(sidebar, "videoFileContextMenu");
+            tryCompare(menu, "opened", true);
+            compare(menu.targetUrl.toString(), row.contextUrl.toString());
+            keyClick(Qt.Key_Escape);
+            tryCompare(menu, "visible", false);
+            compare(folderSpy.count + recentSpy.count + contextOpenSpy.count + compareSpy.count, 0);
+        }
+
+        function test_leavingListRemovesFocusRingWithoutOpening_data() {
+            return [{tag: "folder", recent: false}, {tag: "recent", recent: true}];
+        }
+
+        function test_leavingListRemovesFocusRingWithoutOpening(data) {
+            sidebar.showRecent = data.recent;
+            const list = findChild(sidebar, data.recent ? "videoRecentFileList" : "videoFolderFileList");
+            list.currentIndex = 0;
+            list.forceActiveFocus();
+            const row = list.itemAtIndex(0);
+            verify(row !== null);
+            compare(row.background.border.width, 1);
+            sidebar.forceActiveFocus();
+            tryCompare(list, "activeFocus", false);
+            compare(row.background.border.width, 0);
+            compare(list.currentIndex, 0);
+            compare(folderSpy.count + recentSpy.count, 0);
         }
 
         function test_tabsRowsAndCurrentHighlight() {
