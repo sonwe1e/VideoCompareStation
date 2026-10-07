@@ -15,6 +15,7 @@ extern "C" {
 #include <filesystem>
 #include <gtest/gtest.h>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -86,7 +87,8 @@ struct PresentedPacket final {
                                      const int gopCount,
                                      const std::int64_t originTicks,
                                      const AVRational rate = AVRational{30000, 1001},
-                                     const bool keyframesOnly = false) {
+                                     const bool keyframesOnly = false,
+                                     const char* const format = "mp4") {
     const auto sourceUtf8 = source.u8string();
     const std::string sourceUrl{reinterpret_cast<const char*>(sourceUtf8.data()),
                                 sourceUtf8.size()};
@@ -129,7 +131,7 @@ struct PresentedPacket final {
     const std::string targetUrl{reinterpret_cast<const char*>(targetUtf8.data()),
                                 targetUtf8.size()};
     AVFormatContext* rawOutput = nullptr;
-    if (avformat_alloc_output_context2(&rawOutput, nullptr, "mp4", targetUrl.c_str()) < 0 ||
+    if (avformat_alloc_output_context2(&rawOutput, nullptr, format, targetUrl.c_str()) < 0 ||
         rawOutput == nullptr) {
         return false;
     }
@@ -146,8 +148,10 @@ struct PresentedPacket final {
         return false;
     }
     AVDictionary* options = nullptr;
-    av_dict_set_int(&options, "movie_timescale", rate.num, 0);
-    av_dict_set_int(&options, "video_track_timescale", rate.num, 0);
+    if (std::string_view{format} == "mp4") {
+        av_dict_set_int(&options, "movie_timescale", rate.num, 0);
+        av_dict_set_int(&options, "video_track_timescale", rate.num, 0);
+    }
     const int headerResult = avformat_write_header(output.get(), &options);
     av_dict_free(&options);
     if (headerResult < 0) {
@@ -288,6 +292,62 @@ TEST_P(ClipExportOriginTests, FindsEveryIndexedKeyframeIncludingTheFinalGop) {
             ASSERT_EQ(expected.size(), static_cast<std::size_t>(gopCount * 12));
             expected.erase(expected.begin(), expected.begin() + firstFrame);
             // Frame 7 still requires frame 8, even when cutting inside the final GOP.
+            const std::size_t count = outFrame == 4 ? 5U : (outFrame == 7 ? 9U : 12U);
+            expected.resize(count);
+            const auto firstTime = expected.front().microseconds;
+            for (auto& value : expected) {
+                value.microseconds -= firstTime;
+            }
+            EXPECT_EQ(presentedPackets(target), expected);
+            EXPECT_EQ(report.packetsWritten, static_cast<std::int64_t>(count));
+        }
+    }
+}
+
+TEST_P(ClipExportOriginTests, FindsKeyframesLoadedByTheFirstMatroskaSeek) {
+    const auto fixture = std::filesystem::path{DVS_MEDIA_FIXTURE_DIR} /
+                         "h264_a_320x180_30fps_12.mp4";
+    const auto [inFrame, outFrame] = GetParam();
+    const domain::CanonicalTimeline timeline{domain::RationalRate::create(30, 1).value()};
+    const std::atomic_bool cancel{false};
+    ClipExportWriter writer;
+    for (const int gopCount : {1, 3, 6}) {
+        for (const std::int64_t origin : {0, 150, 154}) {
+            SCOPED_TRACE(testing::Message() << "GOPs=" << gopCount << " origin=" << origin);
+            const auto source = workspace_ / "lazy-cues.mkv";
+            const auto target = workspace_ / "lazy-cues-clip.mkv";
+            ASSERT_TRUE(writeRepeatedGops(
+                fixture, source, gopCount, origin, AVRational{30, 1}, false, "matroska"));
+            std::vector<std::int64_t> expectedKeys;
+            for (int gop = 0; gop < gopCount; ++gop) {
+                expectedKeys.push_back(static_cast<std::int64_t>(gop) * 400000);
+            }
+            const auto keys = writer.keyframeTimes(source, cancel);
+            EXPECT_EQ(keys, expectedKeys);
+            const int firstFrame = (gopCount - 1) * 12;
+            const auto planned = application::planClipExport(
+                timeline,
+                gopCount * 12,
+                {domain::FrameId{firstFrame + inFrame}, domain::FrameId{firstFrame + outFrame}});
+            ASSERT_TRUE(planned.hasValue());
+            const auto aligned = application::alignClipExportStart(timeline, planned.value(), keys);
+            ASSERT_TRUE(aligned.hasValue());
+            EXPECT_EQ(aligned.value().startMicroseconds, expectedKeys.back());
+
+            application::ClipExportJob job;
+            job.requestId = 94U;
+            job.sourcePath = source;
+            job.outputPath = target;
+            job.plan = aligned.value();
+            const auto report = writer.perform(job, cancel);
+            ASSERT_EQ(report.outcome, application::ClipExportOutcome::kCompleted)
+                << report.technicalDetail;
+            EXPECT_EQ(report.firstPresentationMicroseconds, expectedKeys.back());
+
+            auto expected = presentedPackets(source);
+            ASSERT_EQ(expected.size(), static_cast<std::size_t>(gopCount * 12));
+            expected.erase(expected.begin(), expected.begin() + firstFrame);
+            // Keep the B-frame's forward reference when the out point requires it.
             const std::size_t count = outFrame == 4 ? 5U : (outFrame == 7 ? 9U : 12U);
             expected.resize(count);
             const auto firstTime = expected.front().microseconds;

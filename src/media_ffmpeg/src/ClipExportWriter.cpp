@@ -324,7 +324,10 @@ std::vector<std::int64_t> ClipExportWriter::keyframeTimes(const std::filesystem:
         // Cluster-based indexes can point before the packet, so accept positions at or after it.
         std::int64_t previousPosition = -1;
         bool scanToEnd = false;
-        for (int index = 0; index < indexEntryCount && !scanToEnd; ++index) {
+        // Some demuxers (for example Matroska) load the remaining cue entries on the first
+        // seek. Re-read the count so the initial partial index cannot hide later keyframes.
+        for (int index = 0; index < avformat_index_get_entries_count(&stream) && !scanToEnd;
+             ++index) {
             if (isCanceled(cancelRequested)) {
                 return {};
             }
