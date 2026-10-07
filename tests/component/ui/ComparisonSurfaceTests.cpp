@@ -1976,8 +1976,8 @@ TEST(ComparisonSurfaceWarpTests, HighlightThresholdPreservesFirstSourceAndOpacit
             std::lround(static_cast<float>(original) * (1.0F - strength) + tint * strength));
     };
     const QColor highlighted{tintedChannel(sourceA.red(), 255.0F),
-                              tintedChannel(sourceA.green(), 0.15F * 255.0F),
-                              tintedChannel(sourceA.blue(), 0.35F * 255.0F)};
+                             tintedChannel(sourceA.green(), 0.15F * 255.0F),
+                             tintedChannel(sourceA.blue(), 0.35F * 255.0F)};
     const auto expectCenter = [&harness](const QColor& expected) {
         const QImage image = harness.grab().convertToFormat(QImage::Format_RGBA8888);
         ASSERT_FALSE(image.isNull());

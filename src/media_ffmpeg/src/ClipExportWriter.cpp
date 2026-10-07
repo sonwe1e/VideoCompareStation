@@ -1,8 +1,9 @@
 #include "dvs/media/ClipExportWriter.h"
 
+#include "dvs/platform/AtomicFilePublisher.h"
+
 #include "AvRaii.h"
 #include "ClipExportWriterTestHooks.h"
-#include "dvs/platform/AtomicFilePublisher.h"
 
 extern "C" {
 #include <libavutil/dict.h>
@@ -88,10 +89,8 @@ struct OpenedInput final {
 // AVStream::start_time is the first presentation timestamp, not the first decode timestamp.
 // Some demuxers cannot provide it. Match playback's display-order origin in that case by taking
 // the minimum video PTS, then rewind. This remains a demux-only operation on the export worker.
-[[nodiscard]] std::optional<std::int64_t>
-presentationOrigin(AVFormatContext* const input,
-                   const int streamIndex,
-                   const std::atomic_bool& cancelRequested) {
+[[nodiscard]] std::optional<std::int64_t> presentationOrigin(
+    AVFormatContext* const input, const int streamIndex, const std::atomic_bool& cancelRequested) {
     const AVStream& stream = *input->streams[streamIndex];
     if (stream.start_time != AV_NOPTS_VALUE) {
         return stream.start_time;
@@ -448,11 +447,10 @@ application::ClipExportReport ClipExportWriter::perform(const application::ClipE
                               opened.context->iformat->name != nullptr &&
                               std::string_view{opened.context->iformat->name} == "mpegts";
     const int seekResult =
-        scanForStart ? 0
-                     : av_seek_frame(opened.context.get(),
-                                     opened.videoStreamIndex,
-                                     startPts,
-                                     AVSEEK_FLAG_BACKWARD);
+        scanForStart
+            ? 0
+            : av_seek_frame(
+                  opened.context.get(), opened.videoStreamIndex, startPts, AVSEEK_FLAG_BACKWARD);
     if (seekResult < 0) {
         // A cancellation that lands during the seek interrupts it; that is not a broken source.
         if (isCanceled(cancelRequested)) {
@@ -476,11 +474,11 @@ application::ClipExportReport ClipExportWriter::perform(const application::ClipE
     const std::int64_t spanMicroseconds =
         job.plan.endMicroseconds.has_value()
             ? *job.plan.endMicroseconds - startMicroseconds
-            : (videoStream->duration > 0
-                   ? av_rescale_q(
-                         videoStream->duration, videoStream->time_base, kMicrosecondsBase) -
-                         startMicroseconds
-                   : 0);
+            : (videoStream->duration > 0 ? av_rescale_q(videoStream->duration,
+                                                        videoStream->time_base,
+                                                        kMicrosecondsBase) -
+                                               startMicroseconds
+                                         : 0);
 
     std::error_code pathError;
     if (!job.outputPath.parent_path().empty()) {
@@ -502,17 +500,13 @@ application::ClipExportReport ClipExportWriter::perform(const application::ClipE
     auto transaction = platform::AtomicFilePublisher::begin(
         job.outputPath, {.operation = "clip", .ownerId = "export", .revision = job.requestId});
     if (!transaction) {
-        return makeReport(job,
-                          application::ClipExportOutcome::kFailed,
-                          0,
-                          transaction.error().technicalDetail);
+        return makeReport(
+            job, application::ClipExportOutcome::kFailed, 0, transaction.error().technicalDetail);
     }
     const auto prepare = transaction.value()->prepareForExternalWrite();
     if (!prepare) {
-        return makeReport(job,
-                          application::ClipExportOutcome::kFailed,
-                          0,
-                          prepare.error().technicalDetail);
+        return makeReport(
+            job, application::ClipExportOutcome::kFailed, 0, prepare.error().technicalDetail);
     }
     const std::filesystem::path& workPath = transaction.value()->temporaryPath();
 
@@ -624,11 +618,10 @@ application::ClipExportReport ClipExportWriter::perform(const application::ClipE
 
         if (job.progress && spanMicroseconds > 0) {
             const double fraction = std::clamp(
-                static_cast<double>(
-                    av_rescale_q(presentationCursor - opened.presentationOrigin,
-                                 videoStream->time_base,
-                                 kMicrosecondsBase) -
-                    startMicroseconds) /
+                static_cast<double>(av_rescale_q(presentationCursor - opened.presentationOrigin,
+                                                 videoStream->time_base,
+                                                 kMicrosecondsBase) -
+                                    startMicroseconds) /
                     static_cast<double>(spanMicroseconds),
                 0.0,
                 1.0);

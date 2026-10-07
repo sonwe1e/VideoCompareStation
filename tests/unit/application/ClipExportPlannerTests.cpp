@@ -178,7 +178,7 @@ TEST(ClipExportPlannerTests, NamesNearestMicrosecondRoundedKeyframeBoundaries) {
     };
     for (const auto& example : examples) {
         SCOPED_TRACE(testing::Message() << example.numerator << '/' << example.denominator
-                                       << " frame=" << example.frame);
+                                        << " frame=" << example.frame);
         const domain::CanonicalTimeline timeline{
             domain::RationalRate::create(example.numerator, example.denominator).value()};
         const auto planned = planClipExport(
@@ -216,7 +216,7 @@ TEST(ClipExportPlannerTests, KeepsTimesOutsideRoundedBoundariesOnThePrecedingFra
     };
     for (const auto& example : examples) {
         SCOPED_TRACE(testing::Message() << example.numerator << '/' << example.denominator
-                                       << " time=" << example.time);
+                                        << " time=" << example.time);
         const domain::CanonicalTimeline timeline{
             domain::RationalRate::create(example.numerator, example.denominator).value()};
         const auto planned =

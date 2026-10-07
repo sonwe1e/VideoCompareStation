@@ -41,8 +41,7 @@ void writeText(const std::filesystem::path& path, const std::string& text) {
 [[nodiscard]] application::ClipExportJob jobFor(const std::filesystem::path& target) {
     application::ClipExportJob job;
     job.requestId = 41U;
-    job.sourcePath = std::filesystem::path{DVS_MEDIA_FIXTURE_DIR} /
-                     "h264_a_320x180_30fps_12.mp4";
+    job.sourcePath = std::filesystem::path{DVS_MEDIA_FIXTURE_DIR} / "h264_a_320x180_30fps_12.mp4";
     job.outputPath = target;
     job.plan.startMicroseconds = 0;
     job.plan.endMicroseconds = 166'667;
@@ -98,12 +97,8 @@ BOOL WINAPI recordFlush(const HANDLE handle) {
 }
 
 std::filesystem::path recoveryBackup;
-BOOL WINAPI moveOldThenFail(const LPCWSTR target,
-                           LPCWSTR,
-                           const LPCWSTR backup,
-                           DWORD,
-                           LPVOID,
-                           LPVOID) {
+BOOL WINAPI
+moveOldThenFail(const LPCWSTR target, LPCWSTR, const LPCWSTR backup, DWORD, LPVOID, LPVOID) {
     recoveryBackup = backup;
     if (!MoveFileExW(target, backup, MOVEFILE_WRITE_THROUGH)) {
         return FALSE;
@@ -125,8 +120,7 @@ TEST_P(ClipExportPublicationTests, PublishesACompleteClipWithoutArtifacts) {
     job.progress = [&progress](const double value) { progress.push_back(value); };
     const std::atomic_bool cancel{false};
     const auto report = ClipExportWriter{}.perform(job, cancel);
-    EXPECT_EQ(report.outcome, application::ClipExportOutcome::kCompleted)
-        << report.technicalDetail;
+    EXPECT_EQ(report.outcome, application::ClipExportOutcome::kCompleted) << report.technicalDetail;
     EXPECT_EQ(report.packetsWritten, 5);
     EXPECT_NE(readText(target), "old");
     EXPECT_GT(std::filesystem::file_size(target), 0U);
@@ -161,9 +155,11 @@ TEST_P(ClipExportPublicationTests, FailuresPreserveDestinationAndCleanOwnedFiles
         const std::atomic_bool cancel{false};
         const auto report = ClipExportWriter{}.perform(job, cancel);
         EXPECT_EQ(report.outcome, application::ClipExportOutcome::kFailed);
-        const char* const expectedDetail =
-            fault == 1 ? "FFmpeg could not close" : fault == 2 ? "FlushFileBuffers" :
-            fault == 4 ? (GetParam() ? "ReplaceFileW" : "MoveFileExW") : "CloseHandle";
+        const char* const expectedDetail = fault == 1   ? "FFmpeg could not close"
+                                           : fault == 2 ? "FlushFileBuffers"
+                                           : fault == 4
+                                               ? (GetParam() ? "ReplaceFileW" : "MoveFileExW")
+                                               : "CloseHandle";
         EXPECT_NE(report.technicalDetail.find(expectedDetail), std::string::npos);
         EXPECT_FALSE(completedProgress);
         EXPECT_EQ(std::filesystem::exists(target), GetParam());
@@ -187,7 +183,7 @@ TEST_P(ClipExportPublicationTests, CancellationBeforeCommitPreservesDestination)
         flushCount = 0;
         cancelOnFlush = stage == 3;
         testing::ScopedClipExportCloseOverride closeHook{stage == 2 ? &cancelAfterAvioClose
-                                                                  : nullptr};
+                                                                    : nullptr};
         platform::testing::ScopedAtomicFilePublisherApiOverride flushHook{
             nullptr, nullptr, &recordFlush};
         auto job = jobFor(target);
@@ -217,8 +213,8 @@ TEST(ClipExportPublicationTests, LockedWindowsTargetKeepsItsOriginalBytes) {
     const dvs::test::ScopedTemporaryDirectory directory{"dvs-clip-publish"};
     const auto target = directory.path() / "clip.mp4";
     writeText(target, "old");
-    const HANDLE lock = CreateFileW(target.c_str(), GENERIC_WRITE, 0, nullptr,
-                                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    const HANDLE lock = CreateFileW(
+        target.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     ASSERT_NE(lock, INVALID_HANDLE_VALUE);
     const std::atomic_bool cancel{false};
     const auto report = ClipExportWriter{}.perform(jobFor(target), cancel);
@@ -261,9 +257,8 @@ class ClipExportPathTests : public ::testing::TestWithParam<bool> {};
 
 TEST_P(ClipExportPathTests, RetainsRecoveryCopiesAndReportsUtf8Paths) {
     const dvs::test::ScopedTemporaryDirectory directory{"dvs-clip-publish"};
-    const auto target = directory.path() /
-                        (GetParam() ? std::filesystem::path{u8"片段-恢复.mp4"}
-                                    : std::filesystem::path{"recovery.mp4"});
+    const auto target = directory.path() / (GetParam() ? std::filesystem::path{u8"片段-恢复.mp4"}
+                                                       : std::filesystem::path{"recovery.mp4"});
     writeText(target, "old");
     platform::testing::ScopedAtomicFilePublisherApiOverride fault{&moveOldThenFail, &failMove};
     const std::atomic_bool cancel{false};
@@ -281,8 +276,8 @@ TEST_P(ClipExportPathTests, RetainsRecoveryCopiesAndReportsUtf8Paths) {
 
 TEST_P(ClipExportPathTests, RepeatedRequestIdsAndUnicodeNamesRemainIndependent) {
     const dvs::test::ScopedTemporaryDirectory directory{"dvs-clip-publish"};
-    const auto stem = GetParam() ? std::filesystem::path{u8"片段-新"}
-                                : std::filesystem::path{"clip"};
+    const auto stem =
+        GetParam() ? std::filesystem::path{u8"片段-新"} : std::filesystem::path{"clip"};
     auto target = directory.path() / stem;
     target += ".mp4";
     auto job = jobFor(target);

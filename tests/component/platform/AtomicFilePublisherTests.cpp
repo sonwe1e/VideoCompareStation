@@ -285,8 +285,13 @@ TEST(AtomicFilePublisherTests, ExternalWriterHoldingTheFilePreventsFlush) {
     ASSERT_TRUE(transaction);
     ASSERT_TRUE(transaction.value()->prepareForExternalWrite());
     const auto temporary = transaction.value()->temporaryPath();
-    const HANDLE writer = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr,
-                                      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    const HANDLE writer = CreateFileW(temporary.c_str(),
+                                      GENERIC_WRITE,
+                                      0,
+                                      nullptr,
+                                      OPEN_EXISTING,
+                                      FILE_ATTRIBUTE_NORMAL,
+                                      nullptr);
     ASSERT_NE(writer, INVALID_HANDLE_VALUE);
     const auto flushed = transaction.value()->flush();
     EXPECT_TRUE(CloseHandle(writer));

@@ -34,8 +34,8 @@ struct PresentedPacket final {
 
 // Compare the actual compressed frame identities and their spacing, independently of the
 // writer's packet counter. Each file's first presentation timestamp is its local origin.
-[[nodiscard]] std::vector<PresentedPacket> presentedPackets(
-    const std::filesystem::path& path, std::int64_t* const rawOrigin = nullptr) {
+[[nodiscard]] std::vector<PresentedPacket>
+presentedPackets(const std::filesystem::path& path, std::int64_t* const rawOrigin = nullptr) {
     const std::u8string utf8 = path.u8string();
     const std::string url{reinterpret_cast<const char*>(utf8.data()), utf8.size()};
     AVFormatContext* raw = nullptr;
@@ -164,9 +164,9 @@ struct PresentedPacket final {
         return false;
     }
     for (int gop = 0; gop < gopCount; ++gop) {
-        const std::int64_t offset =
-            originTicks + static_cast<std::int64_t>(gop) *
-                              static_cast<std::int64_t>(packets.size()) * rate.den;
+        const std::int64_t offset = originTicks + static_cast<std::int64_t>(gop) *
+                                                      static_cast<std::int64_t>(packets.size()) *
+                                                      rate.den;
         for (const auto& original : packets) {
             if (av_packet_ref(packet.get(), original.get()) < 0) {
                 return false;
@@ -193,9 +193,9 @@ protected:
     void SetUp() override {
         static std::atomic<int> sequence{0};
         const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-        workspace_ = std::filesystem::temp_directory_path() /
-                     ("dvs_clip_origin_" + std::to_string(stamp) + "_" +
-                      std::to_string(sequence.fetch_add(1)));
+        workspace_ =
+            std::filesystem::temp_directory_path() / ("dvs_clip_origin_" + std::to_string(stamp) +
+                                                      "_" + std::to_string(sequence.fetch_add(1)));
         std::filesystem::create_directories(workspace_);
     }
 
@@ -208,8 +208,8 @@ protected:
 };
 
 TEST_P(ClipExportOriginTests, ExportsTheSelectedFramesFromANonzeroPresentationOrigin) {
-    const auto source = std::filesystem::path{DVS_MEDIA_FIXTURE_DIR} /
-                        "h264_nonzero_start_64x48_30fps_12.mp4";
+    const auto source =
+        std::filesystem::path{DVS_MEDIA_FIXTURE_DIR} / "h264_nonzero_start_64x48_30fps_12.mp4";
     const auto target = workspace_ / "clip.mp4";
     const std::atomic_bool cancel{false};
     ClipExportWriter writer;
@@ -232,8 +232,7 @@ TEST_P(ClipExportOriginTests, ExportsTheSelectedFramesFromANonzeroPresentationOr
     job.plan = aligned.value();
     job.progress = [&progress](const double value) { progress.push_back(value); };
     const auto report = writer.perform(job, cancel);
-    ASSERT_EQ(report.outcome, application::ClipExportOutcome::kCompleted)
-        << report.technicalDetail;
+    ASSERT_EQ(report.outcome, application::ClipExportOutcome::kCompleted) << report.technicalDetail;
     EXPECT_EQ(report.firstPresentationMicroseconds, 0);
 
     auto expected = presentedPackets(source);
@@ -252,8 +251,8 @@ TEST_P(ClipExportOriginTests, ExportsTheSelectedFramesFromANonzeroPresentationOr
 }
 
 TEST_P(ClipExportOriginTests, FindsEveryIndexedKeyframeIncludingTheFinalGop) {
-    const auto fixture = std::filesystem::path{DVS_MEDIA_FIXTURE_DIR} /
-                         "h264_a_320x180_30fps_12.mp4";
+    const auto fixture =
+        std::filesystem::path{DVS_MEDIA_FIXTURE_DIR} / "h264_a_320x180_30fps_12.mp4";
     const domain::CanonicalTimeline timeline{domain::RationalRate::create(30000, 1001).value()};
     const auto [inFrame, outFrame] = GetParam();
     const std::atomic_bool cancel{false};
@@ -311,8 +310,8 @@ TEST_P(ClipExportOriginTests, FindsEveryIndexedKeyframeIncludingTheFinalGop) {
 }
 
 TEST_P(ClipExportOriginTests, FindsKeyframesLoadedByTheFirstMatroskaSeek) {
-    const auto fixture = std::filesystem::path{DVS_MEDIA_FIXTURE_DIR} /
-                         "h264_a_320x180_30fps_12.mp4";
+    const auto fixture =
+        std::filesystem::path{DVS_MEDIA_FIXTURE_DIR} / "h264_a_320x180_30fps_12.mp4";
     const auto [inFrame, outFrame] = GetParam();
     const domain::CanonicalTimeline timeline{domain::RationalRate::create(30, 1).value()};
     const std::atomic_bool cancel{false};
@@ -367,8 +366,8 @@ TEST_P(ClipExportOriginTests, FindsKeyframesLoadedByTheFirstMatroskaSeek) {
 }
 
 TEST_P(ClipExportOriginTests, KeepsTheSelectedTransportStreamKeyframeWithReorderedVideo) {
-    const auto fixture = std::filesystem::path{DVS_MEDIA_FIXTURE_DIR} /
-                         "h264_a_320x180_30fps_12.mp4";
+    const auto fixture =
+        std::filesystem::path{DVS_MEDIA_FIXTURE_DIR} / "h264_a_320x180_30fps_12.mp4";
     const auto [inFrame, outFrame] = GetParam();
     const std::atomic_bool cancel{false};
     ClipExportWriter writer;
@@ -388,12 +387,12 @@ TEST_P(ClipExportOriginTests, KeepsTheSelectedTransportStreamKeyframeWithReorder
             ASSERT_EQ(keys, expectedKeys);
             for (const int firstFrame : {0, 12, 24}) {
                 SCOPED_TRACE(testing::Message() << rate.num << '/' << rate.den
-                             << " origin=" << origin << " first=" << firstFrame);
-                const auto planned = application::planClipExport(
-                    timeline,
-                    36,
-                    {domain::FrameId{firstFrame + inFrame},
-                     domain::FrameId{firstFrame + outFrame}});
+                                                << " origin=" << origin << " first=" << firstFrame);
+                const auto planned =
+                    application::planClipExport(timeline,
+                                                36,
+                                                {domain::FrameId{firstFrame + inFrame},
+                                                 domain::FrameId{firstFrame + outFrame}});
                 ASSERT_TRUE(planned.hasValue());
                 const auto aligned =
                     application::alignClipExportStart(timeline, planned.value(), keys);
@@ -427,8 +426,8 @@ TEST_P(ClipExportOriginTests, KeepsTheSelectedTransportStreamKeyframeWithReorder
 }
 
 TEST_P(ClipExportOriginTests, MissingTransportStreamKeyframePreservesTheDestination) {
-    const auto fixture = std::filesystem::path{DVS_MEDIA_FIXTURE_DIR} /
-                         "h264_a_320x180_30fps_12.mp4";
+    const auto fixture =
+        std::filesystem::path{DVS_MEDIA_FIXTURE_DIR} / "h264_a_320x180_30fps_12.mp4";
     const auto source = workspace_ / "missing-key.ts";
     const auto target = workspace_ / "existing.ts";
     ASSERT_TRUE(writeRepeatedGops(fixture, source, 3, 150, AVRational{30, 1}, false, "mpegts"));
@@ -462,14 +461,16 @@ TEST_P(ClipExportOriginTests, MissingTransportStreamKeyframePreservesTheDestinat
 }
 
 TEST_P(ClipExportOriginTests, ReportsTheActualFrameAtRoundedPacketTimes) {
-    const auto fixture = std::filesystem::path{DVS_MEDIA_FIXTURE_DIR} /
-                         "h264_a_320x180_30fps_12.mp4";
+    const auto fixture =
+        std::filesystem::path{DVS_MEDIA_FIXTURE_DIR} / "h264_a_320x180_30fps_12.mp4";
     const auto [inFrame, outFrame] = GetParam();
     const int firstFrame = inFrame + 1;
     const std::atomic_bool cancel{false};
     ClipExportWriter writer;
-    for (const auto rate : {AVRational{24000, 1001}, AVRational{30000, 1001},
-                           AVRational{60000, 1001}, AVRational{25, 1}}) {
+    for (const auto rate : {AVRational{24000, 1001},
+                            AVRational{30000, 1001},
+                            AVRational{60000, 1001},
+                            AVRational{25, 1}}) {
         const domain::CanonicalTimeline timeline{
             domain::RationalRate::create(rate.num, rate.den).value()};
         for (const std::int64_t origin : {0, rate.num * 5, rate.num * 5 + 4}) {
