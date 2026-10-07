@@ -559,11 +559,9 @@ TEST(MainQmlContractTests, PairMetricsMismatchRowPreservesPolicyAndPercentage) {
     harness.shell->setInspectorVisible(true);
     harness.preferences.setViewMode(ReviewPreferencesController::ViewMode::Difference);
     ASSERT_TRUE(harness.create()) << harness.error;
-    auto* const inspector =
-        harness.root->findChild<QQuickItem*>(QStringLiteral("tabbedInspector"));
+    auto* const inspector = harness.root->findChild<QQuickItem*>(QStringLiteral("tabbedInspector"));
     ASSERT_NE(inspector, nullptr);
-    auto* const readout =
-        inspector->findChild<QQuickItem*>(QStringLiteral("metricsReadoutBlock"));
+    auto* const readout = inspector->findChild<QQuickItem*>(QStringLiteral("metricsReadoutBlock"));
     ASSERT_NE(readout, nullptr);
     QJSValue inspectorObject = harness.engine.newQObject(inspector);
     QJSValue rowsFunction = inspectorObject.property(QStringLiteral("metricsRows"));
@@ -613,9 +611,8 @@ TEST(MainQmlContractTests, PairMetricsMismatchRowPreservesPolicyAndPercentage) {
             const QJSValue row = rows.property(4U);
             ASSERT_TRUE(row.isArray());
             ASSERT_EQ(row.property(QStringLiteral("length")).toInt(), 2);
-            const QString expectedLabel = QStringLiteral("坏点占比（%1 ≥ 阈值 %2）")
-                                              .arg(policies[policy])
-                                              .arg(threshold);
+            const QString expectedLabel =
+                QStringLiteral("坏点占比（%1 ≥ 阈值 %2）").arg(policies[policy]).arg(threshold);
             EXPECT_EQ(row.property(0U).toString(), expectedLabel);
             EXPECT_EQ(row.property(1U).toString(), QString::fromLatin1(sample.text));
 
