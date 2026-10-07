@@ -13,7 +13,9 @@ extern "C" {
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -151,6 +153,10 @@ struct PresentedPacket final {
     if (std::string_view{format} == "mp4") {
         av_dict_set_int(&options, "movie_timescale", rate.num, 0);
         av_dict_set_int(&options, "video_track_timescale", rate.num, 0);
+    }
+    if (std::string_view{format} == "mpegts") {
+        output->avoid_negative_ts = AVFMT_AVOID_NEG_TS_DISABLED;
+        av_dict_set(&options, "mpegts_copyts", "1", 0);
     }
     const int headerResult = avformat_write_header(output.get(), &options);
     av_dict_free(&options);
@@ -358,6 +364,101 @@ TEST_P(ClipExportOriginTests, FindsKeyframesLoadedByTheFirstMatroskaSeek) {
             EXPECT_EQ(report.packetsWritten, static_cast<std::int64_t>(count));
         }
     }
+}
+
+TEST_P(ClipExportOriginTests, KeepsTheSelectedTransportStreamKeyframeWithReorderedVideo) {
+    const auto fixture = std::filesystem::path{DVS_MEDIA_FIXTURE_DIR} /
+                         "h264_a_320x180_30fps_12.mp4";
+    const auto [inFrame, outFrame] = GetParam();
+    const std::atomic_bool cancel{false};
+    ClipExportWriter writer;
+    for (const auto rate : {AVRational{30, 1}, AVRational{30000, 1001}}) {
+        const domain::CanonicalTimeline timeline{
+            domain::RationalRate::create(rate.num, rate.den).value()};
+        for (const std::int64_t origin : {0, rate.num * 5, rate.num * 5 + 4}) {
+            const auto source = workspace_ / "reordered.ts";
+            const auto target = workspace_ / "reordered-clip.ts";
+            ASSERT_TRUE(writeRepeatedGops(fixture, source, 3, origin, rate, false, "mpegts"));
+            const auto keys = writer.keyframeTimes(source, cancel);
+            std::vector<std::int64_t> expectedKeys;
+            for (int gop = 0; gop < 3; ++gop) {
+                expectedKeys.push_back(av_rescale_q(
+                    gop * 12, AVRational{rate.den, rate.num}, AVRational{1, AV_TIME_BASE}));
+            }
+            ASSERT_EQ(keys, expectedKeys);
+            for (const int firstFrame : {0, 12, 24}) {
+                SCOPED_TRACE(testing::Message() << rate.num << '/' << rate.den
+                             << " origin=" << origin << " first=" << firstFrame);
+                const auto planned = application::planClipExport(
+                    timeline,
+                    36,
+                    {domain::FrameId{firstFrame + inFrame},
+                     domain::FrameId{firstFrame + outFrame}});
+                ASSERT_TRUE(planned.hasValue());
+                const auto aligned =
+                    application::alignClipExportStart(timeline, planned.value(), keys);
+                ASSERT_TRUE(aligned.hasValue());
+                const auto expectedStart = expectedKeys[static_cast<std::size_t>(firstFrame / 12)];
+                EXPECT_EQ(aligned.value().startMicroseconds, expectedStart);
+
+                application::ClipExportJob job;
+                job.requestId = 95U;
+                job.sourcePath = source;
+                job.outputPath = target;
+                job.plan = aligned.value();
+                const auto report = writer.perform(job, cancel);
+                ASSERT_EQ(report.outcome, application::ClipExportOutcome::kCompleted)
+                    << report.technicalDetail;
+                EXPECT_EQ(report.firstPresentationMicroseconds, expectedStart);
+                auto expected = presentedPackets(source);
+                ASSERT_EQ(expected.size(), 36U);
+                expected.erase(expected.begin(), expected.begin() + firstFrame);
+                const std::size_t count = outFrame == 4 ? 5U : (outFrame == 7 ? 9U : 12U);
+                expected.resize(count);
+                const auto firstTime = expected.front().microseconds;
+                for (auto& value : expected) {
+                    value.microseconds -= firstTime;
+                }
+                EXPECT_EQ(presentedPackets(target), expected);
+                EXPECT_EQ(report.packetsWritten, static_cast<std::int64_t>(count));
+            }
+        }
+    }
+}
+
+TEST_P(ClipExportOriginTests, MissingTransportStreamKeyframePreservesTheDestination) {
+    const auto fixture = std::filesystem::path{DVS_MEDIA_FIXTURE_DIR} /
+                         "h264_a_320x180_30fps_12.mp4";
+    const auto source = workspace_ / "missing-key.ts";
+    const auto target = workspace_ / "existing.ts";
+    ASSERT_TRUE(writeRepeatedGops(fixture, source, 3, 150, AVRational{30, 1}, false, "mpegts"));
+    {
+        std::ofstream existing{target, std::ios::binary};
+        existing << "keep the previous export";
+    }
+    const int inFrame = GetParam().first;
+    application::ClipExportJob job;
+    job.requestId = 96U;
+    job.sourcePath = source;
+    job.outputPath = target;
+    // An unavailable aligned timestamp must fail closed rather than select the next GOP.
+    job.plan.startMicroseconds = 400000 + inFrame + 1;
+    job.plan.endMicroseconds = 1200000;
+    const std::atomic_bool cancel{false};
+    ClipExportWriter writer;
+    const auto report = writer.perform(job, cancel);
+    EXPECT_EQ(report.outcome, application::ClipExportOutcome::kFailed);
+    EXPECT_EQ(report.packetsWritten, 0);
+    std::ifstream existing{target, std::ios::binary};
+    const std::string contents{std::istreambuf_iterator<char>{existing},
+                               std::istreambuf_iterator<char>{}};
+    EXPECT_EQ(contents, "keep the previous export");
+    std::size_t files = 0;
+    for (const auto& entry : std::filesystem::directory_iterator{workspace_}) {
+        (void)entry;
+        ++files;
+    }
+    EXPECT_EQ(files, 2U);
 }
 
 TEST_P(ClipExportOriginTests, ReportsTheActualFrameAtRoundedPacketTimes) {

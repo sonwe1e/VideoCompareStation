@@ -441,8 +441,18 @@ application::ClipExportReport ClipExportWriter::perform(const application::ClipE
     const std::int64_t startPts =
         opened.presentationOrigin +
         av_rescale_q(startMicroseconds, kMicrosecondsBase, videoStream->time_base);
-    const int seekResult = av_seek_frame(
-        opened.context.get(), opened.videoStreamIndex, startPts, AVSEEK_FLAG_BACKWARD);
+    // MPEG-TS seeks by DTS, so seeking to a keyframe's PTS can land after that keyframe
+    // when video is reordered. Walk its buffered input instead and admit only the planned
+    // keyframe below. Like the no-index keyframe query, this is cancellable demux-only work.
+    const bool scanForStart = opened.context->iformat != nullptr &&
+                              opened.context->iformat->name != nullptr &&
+                              std::string_view{opened.context->iformat->name} == "mpegts";
+    const int seekResult =
+        scanForStart ? 0
+                     : av_seek_frame(opened.context.get(),
+                                     opened.videoStreamIndex,
+                                     startPts,
+                                     AVSEEK_FLAG_BACKWARD);
     if (seekResult < 0) {
         // A cancellation that lands during the seek interrupts it; that is not a broken source.
         if (isCanceled(cancelRequested)) {
@@ -454,7 +464,7 @@ application::ClipExportReport ClipExportWriter::perform(const application::ClipE
                           "FFmpeg could not seek to the clip start: " + ffmpegError(seekResult));
     }
 
-    // The backward seek lands on the latest keyframe at or before the requested start, and the
+    // For other demuxers, the backward seek lands on the latest keyframe before the start, and the
     // first packet written is the next keyframe in the stream. Nothing is compared against the
     // start time afterwards: the plan already chose a keyframe instant, and re-deriving it through
     // a timebase rescale would only add a rounding opportunity to skip that very keyframe.
@@ -546,6 +556,20 @@ application::ClipExportReport ClipExportWriter::perform(const application::ClipE
         if (packet->stream_index != opened.videoStreamIndex) {
             av_packet_unref(packet.get());
             continue;
+        }
+
+        if (scanForStart && !copyState.headerWritten) {
+            const std::int64_t pts = packet->pts != AV_NOPTS_VALUE ? packet->pts : packet->dts;
+            // Use the same normalized rounding as keyframeTimes(), rather than round-tripping
+            // the plan into stream ticks. Never silently replace a missing keyframe with a later
+            // GOP: a failed match must leave the destination untouched.
+            if ((packet->flags & AV_PKT_FLAG_KEY) == 0 || pts == AV_NOPTS_VALUE ||
+                av_rescale_q(pts - opened.presentationOrigin,
+                             videoStream->time_base,
+                             kMicrosecondsBase) != startMicroseconds) {
+                av_packet_unref(packet.get());
+                continue;
+            }
         }
 
         // Decode order is monotonic in dts and a packet never presents before its own decode
