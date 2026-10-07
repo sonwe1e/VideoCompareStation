@@ -1229,6 +1229,11 @@ private:
             return;
         }
         const bool reverse = interactiveStepRun_->direction == InteractiveStepDirection::Reverse;
+        // Reverse shares the provider's latest-wins Exact slot. Wait until the current request
+        // has succeeded so preparing its predecessor cannot cancel a frame we still need.
+        if (reverse && !interactiveStepRun_->frame->frame.providerSucceeded) {
+            return;
+        }
         const std::int64_t current = interactiveStepRun_->frame->frame.expectedFrame.value();
         const std::int64_t nextValue = reverse ? current - 1 : current + 1;
         if (nextValue < 0 || static_cast<std::uint64_t>(nextValue) >= state_.canonicalFrameCount) {
@@ -1628,6 +1633,10 @@ private:
         if (matchesInteractiveStepFrame(terminalContext)) {
             if (std::holds_alternative<RequestSucceeded>(terminal)) {
                 interactiveStepRun_->frame->frame.providerSucceeded = true;
+                if (interactiveStepRun_->direction == InteractiveStepDirection::Reverse) {
+                    // Keep decode-ahead during presentation; do not wait for the render ACK.
+                    submitInteractiveStepSuccessor();
+                }
             } else if (const auto* const failed = std::get_if<RequestFailed>(&terminal)) {
                 // A provider RequestFailed is a hard decode failure — surface it via lastError.
                 failInteractiveStepRun(failed->error);

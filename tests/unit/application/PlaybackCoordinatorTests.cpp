@@ -5540,7 +5540,31 @@ TEST(PlaybackCoordinatorTests, ReverseStepUsesOneGenerationAcrossAdjacentCommand
               }),
               PortSubmitResult::Accepted);
 
+    // The provider's Reverse slot is latest-wins: the pending frame 7 must not be
+    // superseded by frame 6 before the provider has claimed success.
+    ASSERT_TRUE(waitUntil([&coordinator] {
+        return coordinator->snapshot()->requestedFrame == domain::FrameId{6};
+    }));
+    EXPECT_EQ(provider->frameRequestCount(), 3U);
+    const auto current = provider->frameRequest(2U);
+    ASSERT_TRUE(current.has_value());
+    ASSERT_TRUE(provider->postFrameReady(*current, makeFrameSet(current->frameId)));
+    ASSERT_TRUE(render->waitForPublishedCount(3U));
+
+    // Ready alone has not set providerSucceeded. A further key repeat still stays queued.
+    ASSERT_EQ(coordinator->submit(StepFramesCommand{
+                  .context = commandContext(coordinator, domain::CommandId{5}),
+                  .delta = -1,
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_TRUE(waitUntil([&coordinator] {
+        return coordinator->snapshot()->requestedFrame == domain::FrameId{5};
+    }));
+    EXPECT_EQ(provider->frameRequestCount(), 3U);
+    ASSERT_TRUE(provider->postFrameSucceeded(*current));
     ASSERT_TRUE(provider->waitForFrameRequestCount(4U));
+    // Decode-ahead resumes before ACK, preserving the existing presentation overlap.
+    EXPECT_EQ(coordinator->snapshot()->displayedFrame, domain::FrameId{8});
     for (std::size_t index = 2U; index < 4U; ++index) {
         const std::optional<FrameRequest> request = provider->frameRequest(index);
         ASSERT_TRUE(request.has_value());
@@ -5548,12 +5572,152 @@ TEST(PlaybackCoordinatorTests, ReverseStepUsesOneGenerationAcrossAdjacentCommand
         EXPECT_EQ(request->context.playback.playbackGeneration,
                   domain::PlaybackGeneration{generationAtStart.value() + 1U});
     }
-    const auto current = provider->frameRequest(2U);
     const auto prepared = provider->frameRequest(3U);
-    ASSERT_TRUE(current.has_value());
     ASSERT_TRUE(prepared.has_value());
     EXPECT_EQ(current->frameId, domain::FrameId{7});
     EXPECT_EQ(prepared->frameId, domain::FrameId{6});
+
+    presentPublished(coordinator, render, 2U);
+    ASSERT_TRUE(waitUntil([&coordinator] {
+        return coordinator->snapshot()->displayedFrame == domain::FrameId{7};
+    }));
+    // A processed repeat is a fence after promotion, not a sleep-based absence check.
+    ASSERT_EQ(coordinator->submit(StepFramesCommand{
+                  .context = commandContext(coordinator, domain::CommandId{6}),
+                  .delta = -1,
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_TRUE(waitUntil([&coordinator] {
+        return coordinator->snapshot()->requestedFrame == domain::FrameId{4};
+    }));
+    // Frame 6 is now current but still decoding; promotion must not admit frame 5 yet.
+    EXPECT_EQ(provider->frameRequestCount(), 4U);
+    presentInteractiveStep(coordinator, provider, render, prepared, 3U);
+    for (std::size_t index = 4U; index <= 5U; ++index) {
+        ASSERT_TRUE(provider->waitForFrameRequestCount(index + 1U));
+        const auto next = provider->frameRequest(index);
+        ASSERT_TRUE(next.has_value());
+        EXPECT_EQ(next->frameId, domain::FrameId{9 - static_cast<std::int64_t>(index)});
+        EXPECT_EQ(next->priority, FrameRequestPriority::Reverse);
+        EXPECT_EQ(next->context.playback.playbackGeneration,
+                  current->context.playback.playbackGeneration);
+        presentInteractiveStep(coordinator, provider, render, next, index);
+    }
+    ASSERT_TRUE(waitUntil([&coordinator] {
+        return coordinator->snapshot()->displayedFrame == domain::FrameId{4};
+    }));
+    coordinator->shutdown();
+    const auto terminals = coordinator->takeCompletedCommands();
+    ASSERT_EQ(terminals.size(), 5U); // Seek plus four steps, each completed once.
+    for (std::size_t index = 0U; index < terminals.size(); ++index) {
+        EXPECT_EQ(terminals[index].context.commandId, domain::CommandId{index + 2U});
+        EXPECT_EQ(terminals[index].outcome, CommandOutcome::Succeeded);
+    }
+}
+
+TEST(PlaybackCoordinatorTests, ReverseStepPendingQueueStopsAtBoundaryAndShutdown) {
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator = makeCoordinator(provider, render);
+    ASSERT_NE(coordinator, nullptr);
+    openReady(coordinator, provider, render);
+    ASSERT_EQ(coordinator->submit(SeekFrameCommand{
+                  .context = commandContext(coordinator, domain::CommandId{2}),
+                  .frameId = domain::FrameId{2},
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_TRUE(provider->waitForFrameRequestCount(2U));
+    presentInteractiveStep(coordinator, provider, render, provider->frameRequest(1U), 1U);
+    ASSERT_EQ(waitForTerminals(coordinator, 1U).size(), 1U);
+    for (std::uint64_t id = 3U; id <= 5U; ++id) {
+        ASSERT_EQ(coordinator->submit(StepFramesCommand{
+                      .context = commandContext(coordinator, domain::CommandId{id}),
+                      .delta = -1,
+                  }),
+                  PortSubmitResult::Accepted);
+    }
+    const auto boundary = waitForTerminals(coordinator, 1U);
+    ASSERT_EQ(boundary.size(), 1U);
+    EXPECT_EQ(boundary.front().context.commandId, domain::CommandId{5});
+    EXPECT_EQ(boundary.front().outcome, CommandOutcome::Busy);
+    EXPECT_EQ(provider->frameRequestCount(), 3U);
+    EXPECT_EQ(coordinator->snapshot()->requestedFrame, domain::FrameId{0});
+    coordinator->shutdown();
+    auto stopped = coordinator->takeCompletedCommands();
+    std::sort(stopped.begin(), stopped.end(), [](const auto& left, const auto& right) {
+        return left.context.commandId < right.context.commandId;
+    });
+    ASSERT_EQ(stopped.size(), 2U);
+    for (std::size_t index = 0U; index < stopped.size(); ++index) {
+        EXPECT_EQ(stopped[index].context.commandId, domain::CommandId{index + 3U});
+        EXPECT_EQ(stopped[index].outcome, CommandOutcome::Closed);
+    }
+    EXPECT_EQ(provider->frameRequestCount(), 3U);
+    EXPECT_EQ(render->publishedCount(), 2U);
+}
+
+TEST(PlaybackCoordinatorTests, ReverseStepLateTerminalsCannotRestartQueueAfterSeek) {
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator = makeCoordinator(provider, render);
+    ASSERT_NE(coordinator, nullptr);
+    openReady(coordinator, provider, render);
+    ASSERT_EQ(coordinator->submit(SeekFrameCommand{
+                  .context = commandContext(coordinator, domain::CommandId{2}),
+                  .frameId = domain::FrameId{8},
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_TRUE(provider->waitForFrameRequestCount(2U));
+    presentInteractiveStep(coordinator, provider, render, provider->frameRequest(1U), 1U);
+    ASSERT_EQ(waitForTerminals(coordinator, 1U).size(), 1U);
+    for (std::uint64_t id = 3U; id <= 4U; ++id) {
+        ASSERT_EQ(coordinator->submit(StepFramesCommand{
+                      .context = commandContext(coordinator, domain::CommandId{id}),
+                      .delta = -1,
+                  }),
+                  PortSubmitResult::Accepted);
+    }
+    ASSERT_TRUE(waitUntil([&coordinator] {
+        return coordinator->snapshot()->requestedFrame == domain::FrameId{6};
+    }));
+    ASSERT_EQ(provider->frameRequestCount(), 3U);
+    const auto obsolete = provider->frameRequest(2U);
+    ASSERT_TRUE(obsolete.has_value());
+    ASSERT_EQ(coordinator->submit(SeekFrameCommand{
+                  .context = commandContext(coordinator, domain::CommandId{5}),
+                  .frameId = domain::FrameId{9},
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_TRUE(provider->waitForFrameRequestCount(4U));
+    const auto seek = provider->frameRequest(3U);
+    ASSERT_TRUE(seek.has_value());
+    EXPECT_EQ(seek->priority, FrameRequestPriority::Exact);
+    EXPECT_GT(seek->context.playback.playbackGeneration.value(),
+              obsolete->context.playback.playbackGeneration.value());
+    ASSERT_TRUE(provider->postFrameSucceeded(*obsolete));
+    ASSERT_EQ(coordinator->postCritical(ApplicationEvent{RequestTerminal{RequestCanceled{
+                  .context = obsolete->context,
+                  .reason = CancellationReason::Superseded,
+              }}}),
+              EventPostResult::Accepted);
+    presentInteractiveStep(coordinator, provider, render, seek, 2U);
+    ASSERT_TRUE(waitUntil([&coordinator] {
+        return coordinator->snapshot()->displayedFrame == domain::FrameId{9};
+    }));
+    coordinator->shutdown();
+    auto terminals = coordinator->takeCompletedCommands();
+    std::sort(terminals.begin(), terminals.end(), [](const auto& left, const auto& right) {
+        return left.context.commandId < right.context.commandId;
+    });
+    ASSERT_EQ(terminals.size(), 3U);
+    for (std::size_t index = 0U; index < terminals.size(); ++index) {
+        EXPECT_EQ(terminals[index].context.commandId, domain::CommandId{index + 3U});
+        EXPECT_EQ(terminals[index].outcome,
+                  index < 2U ? CommandOutcome::Canceled : CommandOutcome::Succeeded);
+    }
+    EXPECT_EQ(provider->frameRequestCount(), 4U);
+    EXPECT_EQ(render->publishedCount(), 3U);
+    EXPECT_FALSE(coordinator->snapshot()->lastError.has_value());
 }
 
 // Phase 0 baseline: a session's active Pair must not leak across topology changes. Today the Pair
