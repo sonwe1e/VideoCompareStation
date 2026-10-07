@@ -63,6 +63,31 @@
 - **边界**：本轮验收并合并仅覆盖 PR #36 的指标行显示问题；硬件性能与打包发布未运行。
   原云端 `qsTr` / `String.arg` 替身结果与上述 Windows 原生证据分开记录；没有改 workflow。
 
+## 2026-10-07 硬件门禁双源失速：会话恢复移动基线帧（已修复并验证）
+
+- **复现**：`v2.2.0` 标签两次触发发布，Quality 与 Hardware 均红。`hardware.wipe-2source`／
+  `diff-2source`／`mode-switch-retained-frame` 在 2-3 秒内以 `comparison-mode-lost-frame`
+  失败，`decoder_calls=0`、`presented_frames=0`；单源 `rotated-padded-wipe` 正常通过。
+- **根因**：`Main.qml` 的 C1 会话恢复 `attemptResume()` 在打开后把播放头 seek 到设置文档里
+  保存的位置。门禁夹具路径固定，此前 300 秒跑批留下非零恢复位置（本机与 runner 均有），
+  切换比较模式后 `currentFrame` 从基线 0 跳到 7831。全新机器无存储位置，不会复现——这是
+  951 项本地测试全绿仍翻车的原因。诊断插曲：以 `39be3a6` 作二分中点不可靠，该提交在
+  GitHub PR36 线上、不含本地功能线的恢复功能；最终以 `3f88d8e`（PR #37 合并）定位。
+- **修复**：`DesktopApplicationOptions.performanceAutomation` 由 `runPerformance` 打开并
+  发布为 QML 上下文属性 `dvsPerformanceAutomation`；`attemptResume()` 在自动化下直接返回。
+  恢复仍是用户会话行为，门禁恢复确定性帧零基线。
+- **变异证据**：守卫即差异本体——无守卫的 main 三项双源门禁全红（runner 两次、本地一次，
+  症状逐位一致），加守卫后同机同夹具重跑。
+- **连带修复**：① 工作流 8 处 checkout 补 `lfs: true`，构建型作业后置 `git lfs checkout`
+  防 LFS 指针被当图标编译（`RC2175: comparestation.ico is not in 3.00 format`）及旧工作区
+  smudge 竞态；② `dvs_format_check_cpp` 改走生成文件列表 + `cmake/CheckCppFormat.cmake`
+  逐文件执行，消除深路径下超 Windows 32,767 字符上限的 "cannot execute" 失败，与 QML 侧
+  既有模式对齐；空列表直接失败，缺锚不会静默通过；顺带以 format 目标修正合并带入的
+  5 个文件格式违规。
+- **门禁**：本机 release 构建通过；`ui.MainQmlContractTests` 53/53（4 disabled 既有）；
+  format-check 345 文件通过；硬件门禁加守卫后 **6/6 通过**（wipe 317.9s／diff 318.4s／
+  mode-switch 317.8s／rotated 317.6s，300 秒全速播放）；lint 未本地运行，由 CI 执行。
+
 ## 2026-10-07 MPEG-TS 定位越过已选关键帧（修复草稿，Windows 验收待完成）
 
 - **复现**：Draft #34 `cfd3c5c` 的 90 帧／GOP30／B 帧 TS，完整 0–89 请求却成功
