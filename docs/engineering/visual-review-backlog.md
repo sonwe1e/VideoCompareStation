@@ -295,6 +295,12 @@
     适配器里引入按文件身份失效的缓存语义。见启动文档 Step 10。
   - **C2 列表增强**——**控制器层与 QML 接线都已实现**。不再等拍板，按建议的安全范围落地：
     重排**只改显示顺序**，多选走**既有操作**。
+    - **2026-10-07 真实鼠标补证与修复**：在当前 main `a0a0440` 复现 handler 已 active、
+      指针移动约601px，但来源牌位移0、排序信号0；旧属性测试没有覆盖这条真实手势。
+      接通 translation，并修正右移索引、取消与拖中身份变化边界。正式 Qt6.8.2 / Basic /
+      offscreen / software 在四档缩放各26/26（24行为 + init/cleanup），38/38实现变异、
+      3/3观测guard覆盖42个新断言位点。真实组件截图已检查；Windows主窗/输入设备、
+      完整Main/shell与播放门禁未验。见[来源条拖拽范围与证据](source-strip-drag.md)。
     - 新增（`ReviewShellController`）：`displaySourceIdentities` / `selectedSourceIdentities`、
       `moveSourceInDisplayOrder(from,to)`、`setSourceSelected` / `toggleSourceSelection` /
       `clearSourceSelection`、`removeSelectedSources()`。全部以**冻结 source identity** 为键，
