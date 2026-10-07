@@ -146,7 +146,7 @@ jobs:
           # configured for this runner, and the release metadata has to keep "signed" false.
           # The guard names the one tag it is allowed to publish so that a tag cannot silently
           # turn into a release nobody verified. Widen it deliberately, one version at a time.
-          $allowed = @('v2.0.3', 'v2.1.0')
+          $allowed = @('v2.0.3', 'v2.1.0', 'v2.2.0')
           if ($env:GITHUB_REF_NAME -cnotin $allowed) {
             throw (
               "This workflow publishes only the explicitly unsigned build(s): " +

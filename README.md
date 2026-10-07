@@ -111,12 +111,12 @@ ctest --preset performance-d3d11 --output-on-failure
 ```
 
 Release workflow 生成明确标注为未签名的 ZIP，包内包含 EXE、CLI 与
-`CompareStationShell-2.1.dll`。历史版本链更新到 `1.2.0→2.1.0`；本次新增本地视频文件夹入口，
-并优化指标窗口解码与阈值／通道口径复用。首次启动新版时接管当前用户的右键菜单。
+`CompareStationShell-2.2.dll`。历史版本链更新到 `1.2.0→2.2.0`；本次新增最近打开视频历史，
+侧栏右键可打开单视频或加入当前对比，并保留当前参考源供确认。包含已有的播放位置恢复、
+源顺序调整、启动提示与片段导出修复。首次启动新版时接管当前用户的右键菜单。
 标准发布流程执行 Release 测试、硬件与性能门禁、DPI 像素验证和 shutdown soak。
-**2.1.0 的维护者授权例外**：不执行本地硬件长测；GitHub Windows 自托管 runner 离线时
-直接发布本地 Release ZIP。具体已执行与未执行项见 [发布说明](docs/releases/v2.1.0.md)，
-不把 CI 排队或旧版本证据写成通过。SHA-256 只用于校验完整性，不代表发布者身份。
+具体功能、验证结果与边界见 [发布说明](docs/releases/v2.2.0.md)。
+SHA-256 只用于校验完整性，不代表发布者身份。
 runner 标签、素材清单与发布合同详见
 [docs/self-hosted-runner.md](docs/self-hosted-runner.md)。
 
