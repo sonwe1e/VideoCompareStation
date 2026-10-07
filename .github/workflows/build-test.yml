@@ -42,6 +42,10 @@ jobs:
           lfs: true
           persist-credentials: false
 
+      - name: Materialize LFS files
+        shell: pwsh
+        run: git lfs checkout
+
       - name: Enter MSVC x64 environment
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         with:
@@ -137,6 +141,10 @@ jobs:
         with:
           lfs: true
           persist-credentials: false
+
+      - name: Materialize LFS files
+        shell: pwsh
+        run: git lfs checkout
 
       - name: Provision pinned CMake and vcpkg
         shell: bash

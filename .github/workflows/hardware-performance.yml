@@ -39,6 +39,10 @@ jobs:
           persist-credentials: false
           ref: ${{ env.DVS_EXPECTED_SHA }}
 
+      - name: Materialize LFS files
+        shell: pwsh
+        run: git lfs checkout
+
       - name: Verify tested commit
         shell: pwsh
         run: |
