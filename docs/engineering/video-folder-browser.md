@@ -210,3 +210,68 @@ pwsh tools/build/build.ps1 -Preset dev -Target lint
 
 未提交、未发布。真实用户目录／素材、五分钟 D3D11VA／UI 响应／解码缓存、覆盖率和 ZIP
 发布门禁仍须绑定后续候选验证，开发回归不替代这些门禁。
+
+
+## 2026-10-07 键盘目标与播放项分开显示（待 Windows 原生验收）
+
+基线为 `main a0a044066345ed0110f87caab56afb5147f615d5`，独立于视频倍率修复。
+
+### 复现与交互
+
+「当前文件夹 / 最近打开」原来只给当前播放项填色。上下键改变 `ListView.currentIndex`
+后，Enter 会打开新目标，但目标没有对应的可见标识；当 Tab 焦点直接落在某个委托行时，
+键盘菜单还可能继续使用列表里旧的 currentIndex，作用到另一文件。
+
+本次只在 `VideoFolderSidebar.qml` 为两页加上同样的小修：
+
+- 当前播放项继续使用原来的填色；列表有键盘焦点时，当前键盘目标另外显示细边框。
+- 委托行取得焦点时同步当前索引，确保该行与 Enter、Menu / Shift+F10 指向同一文件。
+- 上下键选中本身不打开文件；焦点离开列表后边框消失，选中索引保留。
+- 原单击播放、右键确认、当前项填色、历史保存、扫描与失败处理保持；不改 shell、模型、
+  文件 IO、播放内核或快捷键分配。
+
+### 真实离屏截图
+
+以下来自实际 Qt 6.8.2 / Basic / software 的隔离组件，使用合成文件列表。
+边框是键盘目标（第一个文件），填色是当前播放项（第二个文件）。图顶的 Linux/synthetic
+标签和底部图例只存在于截图探针，未加入生产界面；图片已检查且最终源码复拍字节一致。
+这不是 Windows 主窗或真实视频播放验收。
+
+![当前文件夹：键盘目标与播放项](assets/sidebar-keyboard-folder.jpg)
+
+![最近打开：键盘目标与播放项](assets/sidebar-keyboard-recent.jpg)
+
+JPEG 合计约 39 KB，遵循现有二进制属性；没有改写 PNG/ICO/ZIP 的 LFS 规则。
+
+### 本轮验证
+
+- 正式 `tst_video_file_sidebar.qml` 新增三种场景、两页各跑一次：上下键目标/Enter、
+  委托焦点/键盘菜单/Escape、失焦保留选择。真实离屏窗口接收键盘事件。
+- 原正式套件 11 个行为场景 + 新 6 个场景均通过；加 init/cleanup，QtTest 报告
+  **19 passed、0 failed**。原 main 保留原 11 个行为场景通过，但新 **6/6 失败**。
+- **21/21** 成功加载后的实现变异被新场景运行时断言检出；**20/20 行为断言位置**
+  均有失败证据。另 **5/5 观测故障**验证委托查找/焦点检查，独立计数，不算实现变异。
+  固定变异数量 guard 拒绝故意遗漏一项（27 而非 28 个含正/负控制的变体）。
+- 实际截图的两个场景通过，含 init/cleanup 报告 4/4；最终源码复拍逐字节一致。
+- 直接 Qt 6.8.2 `qmlformat` 检查生产文件无差异，直接 `qmllint` 零警告。
+- 所有运行使用已有云端依赖、offscreen/software 与合成模型；没有连接用户屏幕，
+  没有 D3D、解码、播放器、浏览器、socket 或设备服务，也没有安装新依赖。
+
+正式用例仍只在原仓库测试文件维护；变异副本、截图探针、日志和映射位于本轮
+`out/verification/keyboard/`。它们不替代 Windows CTest。
+
+### 尚未验证
+
+Windows/MSVC、固定 Qt 6.11.1、Windows 控件风格、原生键盘焦点及真实主窗、真实文件打开、
+完整 build/CTest、仓库 format-check/lint、播放/GPU 性能与 ZIP 未执行。
+
+```powershell
+pwsh tools/build/build.ps1 -Preset dev -Test -TestRegex '^ui[.]video_file_sidebar[.]'
+pwsh tools/build/build.ps1 -Preset dev -Target format-check
+pwsh tools/build/build.ps1 -Preset dev -Target lint
+```
+
+人工复核：打开目录并播放第二项，按上下键把目标移到第一项，检查边框/播放填色；
+Enter 应打开边框对应文件。切到最近打开重复，再用 Tab / Shift+Tab 进入列表行，
+用 Menu / Shift+F10 打开菜单及 Escape 取消，确认目标一致且取消不打开文件。
+本项保持 Draft；不把组件通过宣称为 Windows 实际体验或播放流畅度验收。
