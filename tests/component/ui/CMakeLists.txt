@@ -3,7 +3,6 @@ include(GoogleTest)
 add_executable(
     dvs_ui_component_tests
     DiagnosticsProbeTests.cpp
-    IssueLogControllerTests.cpp
     PairMetricsControllerTests.cpp
     PreviewThumbnailControllerTests.cpp
     ReviewControllerTests.cpp
@@ -38,7 +37,13 @@ dvs_add_gtest(
 )
 
 if(DVS_BUILD_ADAPTERS)
-target_sources(dvs_ui_component_tests PRIVATE PairMetricsThresholdReuseTests.cpp)
+# IssueLogControllerTests includes dvs/persistence/IssueRecordRepository.h from the
+# persistence adapter, so it can only compile when the adapters (and their include
+# paths) exist; the ui-dev model-only preset builds without them.
+target_sources(dvs_ui_component_tests PRIVATE
+    IssueLogControllerTests.cpp
+    PairMetricsThresholdReuseTests.cpp
+)
 target_include_directories(
     dvs_ui_component_tests PRIVATE "${PROJECT_SOURCE_DIR}/src/media_ffmpeg/src"
 )
