@@ -2013,6 +2013,61 @@ TEST(ComparisonSurfaceWarpTests, HighlightThresholdPreservesFirstSourceAndOpacit
     EXPECT_TRUE(actor.shutdown(2s));
 }
 
+TEST(ComparisonSurfaceWarpTests, SignedSubtractThresholdPreservesNeutralGrayAndOpacity) {
+    SurfaceWarpHarness harness;
+    harness.surface.setViewMode(ComparisonSurface::Difference);
+    harness.surface.setDifferenceMetric(ComparisonSurface::SignedSubtract);
+    harness.surface.setDifferenceGain(ComparisonSurface::Gain4x);
+    harness.surface.setThresholdEnabled(true);
+    ASSERT_TRUE(harness.start());
+
+    auto budget = std::make_shared<platform::FrameBudget>(16U * 1024U * 1024U);
+    platform::GpuTransferActor actor{budget, harness.broker, harness.mailbox, harness.activitySink};
+    std::optional<application::FrameSet> set =
+        makeThreeSolidSet(*budget, domain::FrameId{47}, {96U, 112U, 80U});
+    ASSERT_TRUE(set.has_value());
+    ASSERT_EQ(actor.submit(makeContext(47U), std::move(*set)),
+              platform::GpuTransferSubmitResult::Accepted);
+    ASSERT_TRUE(actor.waitUntilIdle(5s));
+
+    constexpr std::array edges{ComparisonSurface::Edge0And1, ComparisonSurface::Edge0And2};
+    constexpr std::array policies{ComparisonSurface::ThresholdLumaOnly,
+                                  ComparisonSurface::ThresholdAnyChannel,
+                                  ComparisonSurface::ThresholdAllChannels};
+    for (const ComparisonSurface::DifferenceEdge edge : edges) {
+        harness.surface.setDifferenceEdge(edge);
+        // Full-range Y differs by -/+16; signed subtract at gain 4 is 127.5 -/+64.
+        const int signedGray = edge == ComparisonSurface::Edge0And1 ? 64 : 192;
+        for (const ComparisonSurface::ThresholdPolicy policy : policies) {
+            harness.surface.setThresholdPolicy(policy);
+            for (const qreal opacity : {1.0, 0.5}) {
+                harness.surface.setOpacity(opacity);
+                const auto expectGray = [&harness, opacity](const int gray) {
+                    const QImage image = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+                    ASSERT_FALSE(image.isNull());
+                    const int redBlue = static_cast<int>(
+                        std::lround(gray * opacity + 255.0 * (1.0 - opacity)));
+                    const int green = static_cast<int>(std::lround(gray * opacity));
+                    expectColorNear(image.pixelColor(image.width() / 2, image.height() / 2),
+                                    QColor{redBlue, green, redBlue},
+                                    3);
+                };
+                harness.surface.setThreshold(1.0);
+                expectGray(128);
+                harness.surface.setThreshold(0.0);
+                expectGray(signedGray);
+                harness.surface.setThreshold(1.0);
+                harness.surface.setThresholdEnabled(false);
+                expectGray(signedGray);
+                harness.surface.setThresholdEnabled(true);
+            }
+        }
+    }
+
+    harness.releaseRenderer();
+    EXPECT_TRUE(actor.shutdown(2s));
+}
+
 TEST(ComparisonSurfaceWarpTests, ExactPlaneDiffFailsClosedAndComparesRawNv12Codes) {
     SurfaceWarpHarness harness;
     harness.surface.setViewMode(ComparisonSurface::Difference);

@@ -194,8 +194,9 @@ float4 DifferencePixelShader(
         }
         if (thresholdSample < differenceThreshold) {
             const float alpha = saturate(opacity);
-            // Highlight suppresses the tint, not the underlying first source.
-            const float3 background = differenceMetric == 6U ? saturate(rgbA) : 0.0f.xxx;
+            // Filtering removes the difference, preserving each mode's zero-difference value.
+            const float3 background = differenceMetric == 6U ? saturate(rgbA)
+                                      : differenceMetric == 5U ? 0.5f.xxx : 0.0f.xxx;
             return float4(background * alpha, alpha);
         }
     }
