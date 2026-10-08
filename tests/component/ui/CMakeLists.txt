@@ -148,7 +148,10 @@ dvs_add_gtest(
     TEST_PREFIX "ui."
     LAYER component
     MODULE ui_qml
-    TIMEOUT 20
+    # Real-window popup and mouse cases take 2-15 s locally but 21-27 s on the shared
+    # self-hosted runner (see run 37713616081); 20 s cut them off there while every run
+    # stayed green locally. 120 s keeps a >4x margin without masking a real hang.
+    TIMEOUT 120
     RUN_SERIAL
     ENVIRONMENT QSG_RENDER_LOOP=basic QT_QUICK_CONTROLS_STYLE=Basic
 )
@@ -274,14 +277,19 @@ foreach(dvs_menu_qml_test IN ITEMS vcs_menu application_menu_bar active_source_s
                     "$<TARGET_FILE:Qt6::qmltestrunner>"
                     -input "${CMAKE_CURRENT_SOURCE_DIR}/qml/tst_${dvs_menu_qml_test}.qml"
             )
+            # The expanded source-strip drag suite needs ~21 s locally but measured 77.8 s
+            # on the shared self-hosted runner (run 37713625606's main-push sibling), so it
+            # gets a wider bound than the two small menu suites. 60 s stays enough for those.
+            if(dvs_menu_qml_test STREQUAL "active_source_strip")
+                set(dvs_menu_qml_timeout 180)
+            else()
+                set(dvs_menu_qml_timeout 60)
+            endif()
             set_tests_properties(
                 "ui.${dvs_menu_qml_test}.${dvs_qml_style}.scale-${dvs_scale_name}"
                 PROPERTIES
                     LABELS "component;ui_qml"
-                    # The expanded source-strip drag suite needs ~21 s on Windows with real
-                    # native windows (26 cases across drags and grab handoffs); 20 s cut it
-                    # off mid-run there while Linux offscreen stayed inside the old bound.
-                    TIMEOUT 60
+                    TIMEOUT ${dvs_menu_qml_timeout}
                     RUN_SERIAL TRUE
                     ENVIRONMENT
                         "QT_QUICK_CONTROLS_STYLE=${dvs_qml_style};QSG_RENDER_LOOP=basic;QT_SCALE_FACTOR=${dvs_scale_factor}"
