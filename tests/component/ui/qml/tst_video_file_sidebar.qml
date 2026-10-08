@@ -32,9 +32,21 @@ Item {
         width: 260
         height: parent.height
         folderModel: folder
+        property bool testFocusAfterDispatch: false
+        onCompareRequested: if (testFocusAfterDispatch)
+            nextDialog.open()
         property string testOpenReason: ""
         property string testCompareReason: ""
         fileActionState: url => ({openReason: testOpenReason, compareReason: testCompareReason})
+    }
+
+    Item { id: otherFocus }
+    Popup {
+        id: nextDialog
+        width: 180
+        height: 100
+        focus: true
+        modal: true
     }
 
     SignalSpy { id: recentSpy; target: sidebar; signalName: "recentFileRequested" }
@@ -50,6 +62,9 @@ Item {
 
         function init() {
             findChild(sidebar, "videoFileContextMenu").close();
+            nextDialog.close();
+            sidebar.testFocusAfterDispatch = false;
+            sidebar.visible = true;
             sidebar.testOpenReason = "";
             sidebar.testCompareReason = "";
             sidebar.actionRevision = "";
@@ -78,6 +93,150 @@ Item {
             // 50 ms). Wait for the real layout before any menu-item mouse click.
             const menu = findChild(sidebar, "videoFileContextMenu");
             tryVerify(function() { return menu.contentItem.height > 8; });
+        }
+
+        function rowActionData() {
+            return [{tag: "folder", recent: false}, {tag: "recent", recent: true}];
+        }
+
+        function actionRow(recent, index) {
+            sidebar.showRecent = recent;
+            const list = findChild(sidebar, recent ? "videoRecentFileList" : "videoFolderFileList");
+            let row = null;
+            tryVerify(function() { row = list.itemAtIndex(index); return row !== null; });
+            return row;
+        }
+
+        function actionButton(recent, index) {
+            return findChild(sidebar, (recent ? "videoRecentRowMenu-" : "videoFolderRowMenu-") + index);
+        }
+
+        function test_rowActionVisibleOnHoverAndKeyboardTarget_data() { return rowActionData(); }
+        function test_rowActionVisibleOnHoverAndKeyboardTarget(data) {
+            const row = actionRow(data.recent, 0);
+            const button = actionButton(data.recent, 0);
+            sidebar.forceActiveFocus();
+            mouseMove(sidebar, sidebar.width - 2, sidebar.height - 2, 50);
+            const idleVisible = button.visible;
+            mouseMove(row, 20, 20, 50);
+            const hoverVisible = button.visible;
+            mouseMove(sidebar, sidebar.width - 2, sidebar.height - 2, 50);
+            row.forceActiveFocus(Qt.TabFocusReason);
+            compare([idleVisible, hoverVisible, button.visible], [false, true, true]);
+        }
+
+        function test_rowActionCapturesUrlWithoutOpeningRow_data() { return rowActionData(); }
+        function test_rowActionCapturesUrlWithoutOpeningRow(data) {
+            const row = actionRow(data.recent, 0);
+            const button = actionButton(data.recent, 0);
+            const expected = row.contextUrl.toString();
+            mouseMove(row, 20, 20, 50);
+            mouseClick(button);
+            const menu = findChild(sidebar, "videoFileContextMenu");
+            tryCompare(menu, "opened", true, 1000);
+            settleContextMenu();
+            compare(folderSpy.count + recentSpy.count + contextOpenSpy.count + compareSpy.count, 0);
+            const list = findChild(sidebar, data.recent ? "videoRecentFileList" : "videoFolderFileList");
+            list.currentIndex = 1;
+            mouseClick(findChild(sidebar, "videoFileContextCompare"));
+            compare(compareSpy.signalArguments[0][0].toString(), expected);
+        }
+
+        function test_rowActionEscapeRestoresNavigation_data() { return rowActionData(); }
+        function test_rowActionEscapeRestoresNavigation(data) {
+            const row = actionRow(data.recent, 0);
+            const button = actionButton(data.recent, 0);
+            const list = findChild(sidebar, data.recent ? "videoRecentFileList" : "videoFolderFileList");
+            sidebar.forceActiveFocus();
+            mouseMove(row, 20, 20, 50);
+            mouseClick(button);
+            const menu = findChild(sidebar, "videoFileContextMenu");
+            tryCompare(menu, "opened", true, 1000);
+            keyClick(Qt.Key_Escape);
+            tryCompare(list, "activeFocus", true, 1000);
+            keyClick(Qt.Key_Return);
+            const spy = data.recent ? recentSpy : folderSpy;
+            compare(spy.signalArguments[0][0], 0);
+            keyClick(Qt.Key_Menu);
+            tryVerify(function() { return menu.opened && menu.targetUrl.toString() === row.contextUrl.toString(); }, 1000);
+            keyClick(Qt.Key_Escape);
+        }
+
+        function test_rowActionPreservesDisabledAndRevisionGuards_data() { return rowActionData(); }
+        function test_rowActionPreservesDisabledAndRevisionGuards(data) {
+            const row = actionRow(data.recent, 0);
+            sidebar.testCompareReason = "当前已有 3 个视频，请先移除一个";
+            mouseMove(row, 20, 20, 50);
+            mouseClick(actionButton(data.recent, 0));
+            const menu = findChild(sidebar, "videoFileContextMenu");
+            tryCompare(menu, "opened", true, 1000);
+            settleContextMenu();
+            verify(!findChild(sidebar, "videoFileContextCompare").enabled);
+            sidebar.actionRevision = "new-session";
+            tryCompare(menu, "visible", false, 1000);
+        }
+
+        function test_hiddenRowActionHasNoTabOrAccessibleEntry_data() { return rowActionData(); }
+        function test_hiddenRowActionHasNoTabOrAccessibleEntry(data) {
+            actionRow(data.recent, 0);
+            const button = actionButton(data.recent, 0);
+            sidebar.forceActiveFocus();
+            mouseMove(sidebar, sidebar.width - 2, sidebar.height - 2);
+            tryCompare(button, "visible", false, 1000);
+            verify(!button.activeFocusOnTab);
+            verify(button.Accessible.ignored);
+        }
+
+        function test_compactRowActionReservesFilenameSpace_data() { return rowActionData(); }
+        function test_compactRowActionReservesFilenameSpace(data) {
+            sidebar.height = 320;
+            const row = actionRow(data.recent, 1);
+            const button = actionButton(data.recent, 1);
+            row.forceActiveFocus(Qt.TabFocusReason);
+            tryCompare(button, "visible", true, 1000);
+            const labelRight = row.contentItem.mapToItem(row, row.contentItem.width, 0).x;
+            verify(labelRight <= button.x - 4);
+        }
+
+        function test_rowActionDoesNotRestoreStaleFocus_data() {
+            const cases = [];
+            for (const recent of [false, true]) {
+                for (const reason of ["dispatch", "revision", "hide", "tab"])
+                    cases.push({tag: (recent ? "recent-" : "folder-") + reason, recent: recent, reason: reason});
+            }
+            return cases;
+        }
+        function test_rowActionDoesNotRestoreStaleFocus(data) {
+            const row = actionRow(data.recent, 0);
+            mouseMove(row, 20, 20, 50);
+            mouseClick(actionButton(data.recent, 0));
+            const menu = findChild(sidebar, "videoFileContextMenu");
+            tryCompare(menu, "opened", true, 1000);
+            settleContextMenu();
+            if (data.reason === "dispatch") {
+                sidebar.testFocusAfterDispatch = true;
+                mouseClick(findChild(sidebar, "videoFileContextCompare"));
+                tryVerify(function() { return nextDialog.opened && !menu.visible; }, 1000);
+                verify(nextDialog.activeFocus);
+            } else {
+                otherFocus.forceActiveFocus();
+                if (data.reason === "revision")
+                    sidebar.actionRevision = "new-session";
+                else if (data.reason === "hide")
+                    sidebar.visible = false;
+                else
+                    sidebar.showRecent = !data.recent;
+                tryCompare(menu, "visible", false, 1000);
+                verify(otherFocus.activeFocus);
+            }
+        }
+
+        function test_rowActionRecentRemainsUsableWhileFolderScans() {
+            test_historyRemainsUsableDuringFolderScanAndError();
+            const row = actionRow(true, 0);
+            mouseMove(row, 20, 20, 50);
+            mouseClick(actionButton(true, 0));
+            tryCompare(findChild(sidebar, "videoFileContextMenu"), "opened", true, 1000);
         }
 
         function test_rightClickDoesNotOpenAndUsesCapturedUrl_data() {
