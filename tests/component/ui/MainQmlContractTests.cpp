@@ -684,6 +684,8 @@ TEST(MainQmlContractTests, PairMetricsMismatchRowPreservesPolicyAndPercentage) {
 // Instantiate only the real inspector item: no Main window, media service or rendered pixels.
 TEST(MainQmlContractTests, PairMetricsScopeNoteExplainsSampleSpaceAndWraps) {
     QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
     QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/TabbedInspector.qml")}};
     const QVariantMap properties{
         {QStringLiteral("controller"),
