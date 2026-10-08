@@ -99,9 +99,10 @@ public:
         ++performCalls;
         captured = job;
         captured->progress = {};
-        return {.requestId = job.requestId, .outcome = application::ClipExportOutcome::kCompleted};
+        return {.requestId = job.requestId, .outcome = outcome};
     }
 
+    application::ClipExportOutcome outcome = application::ClipExportOutcome::kCompleted;
     std::atomic_int keyframeCalls{0};
     std::atomic_int performCalls{0};
     std::filesystem::path keyframeSource;
@@ -198,6 +199,52 @@ INSTANTIATE_TEST_SUITE_P(
                     ExportExample{"CfrTail", false, "canonical.mp4", 3, 3, 160'000, -80'000},
                     ExportExample{"NoExtension", true, "canonical", 1, 2, 130'000, 0}),
     [](const testing::TestParamInfo<ExportExample>& info) { return info.param.name; });
+
+TEST_F(ClipExportControllerTests, SourcePathNamesCanonicalVideoRatherThanReference) {
+    ClipExportController controller{dependencies()};
+    EXPECT_EQ(controller.sourcePath(),
+              QDir::toNativeSeparators(QDir::temp().filePath(QStringLiteral("canonical.mp4"))));
+}
+
+class ClipExportReadoutTests : public ClipExportControllerTests,
+                               public testing::WithParamInterface<application::ClipExportOutcome> {
+};
+
+TEST_P(ClipExportReadoutTests, CapturesOneJobAndReturnsToCurrentProposal) {
+    exporter->outcome = GetParam();
+    ClipExportController controller{dependencies()};
+    ASSERT_TRUE(controller.exportRange(target));
+    snapshot = videoSnapshot(true, "next-folder/next-session.mp4");
+    snapshot->playbackRangeIn = domain::FrameId{3};
+    snapshot->playbackRangeOut = domain::FrameId{3};
+    EXPECT_EQ(controller.sourcePath(),
+              QDir::toNativeSeparators(QDir::temp().filePath(QStringLiteral("canonical.mp4"))));
+    EXPECT_EQ(controller.rangeSummary(), QStringLiteral("入 2 · 出 3 · 2 帧"));
+    EXPECT_EQ(controller.suggestedFileName(), QStringLiteral("canonical_clip_2-3.mp4"));
+    EXPECT_EQ(controller.suggestedTarget(),
+              QUrl::fromLocalFile(QDir::temp().filePath(QStringLiteral("canonical_clip_2-3.mp4"))));
+    ASSERT_TRUE(waitForExport(controller));
+    EXPECT_EQ(controller.sourcePath(),
+              QDir::toNativeSeparators(
+                  QDir::temp().filePath(QStringLiteral("next-folder/next-session.mp4"))));
+    EXPECT_EQ(controller.rangeSummary(), QStringLiteral("入 4 · 出 4 · 1 帧"));
+    EXPECT_EQ(controller.suggestedFileName(), QStringLiteral("next-session_clip_4-4.mp4"));
+    EXPECT_EQ(controller.suggestedTarget(),
+              QUrl::fromLocalFile(
+                  QDir::temp().filePath(QStringLiteral("next-folder/next-session_clip_4-4.mp4"))));
+}
+
+INSTANTIATE_TEST_SUITE_P(Outcomes,
+                         ClipExportReadoutTests,
+                         testing::Values(application::ClipExportOutcome::kCompleted,
+                                         application::ClipExportOutcome::kCanceled,
+                                         application::ClipExportOutcome::kFailed));
+
+TEST_F(ClipExportControllerTests, SourcePathIsEmptyWithoutAnExportableRange) {
+    ClipExportController controller{dependencies()};
+    snapshot->playbackRangeOut = domain::FrameId{-1};
+    EXPECT_TRUE(controller.sourcePath().isEmpty());
+}
 
 TEST_F(ClipExportControllerTests, ImageOnlyWorkspaceWithoutAVideoSnapshotIsRejected) {
     // Images are held by ImageReviewController, not the playback session's validated comparison.

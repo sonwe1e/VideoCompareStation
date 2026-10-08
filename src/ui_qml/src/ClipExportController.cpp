@@ -54,7 +54,7 @@ bool ClipExportController::canExport() const {
 }
 
 QString ClipExportController::suggestedFileName() const {
-    const auto request = makeRequest({});
+    const auto request = displayRequest();
     if (!request.has_value()) {
         return {};
     }
@@ -72,7 +72,7 @@ QString ClipExportController::suggestedFileName() const {
 }
 
 QString ClipExportController::rangeSummary() const {
-    const auto request = makeRequest({});
+    const auto request = displayRequest();
     if (!request.has_value()) {
         return {};
     }
@@ -82,6 +82,11 @@ QString ClipExportController::rangeSummary() const {
         .arg(request->range.inInclusive.value() + 1)
         .arg(request->range.outInclusive.value() + 1)
         .arg(frameCount);
+}
+
+QString ClipExportController::sourcePath() const {
+    const auto request = displayRequest();
+    return request.has_value() ? nativePath(request->sourcePath) : QString{};
 }
 
 QString ClipExportController::lastStatus() const {
@@ -97,7 +102,7 @@ QString ClipExportController::lastOutputPath() const {
 }
 
 QUrl ClipExportController::suggestedTarget() const {
-    const auto request = makeRequest({});
+    const auto request = displayRequest();
     if (!request.has_value()) {
         return {};
     }
@@ -122,6 +127,7 @@ bool ClipExportController::exportRange(const QUrl& target) {
 
     request->id = ++nextRequestId_;
     pendingOutputPath_ = nativePath(request->targetPath);
+    activeRequest_ = request;
     activeRequestId_ = request->id;
     cancel_.store(false);
     lastFailureDetail_.clear();
@@ -224,6 +230,7 @@ void ClipExportController::applyFinished(const application::ClipExportReport& re
         return; // Stale completion of a superseded request.
     }
     activeRequestId_ = application::kInvalidClipExportRequestId;
+    activeRequest_.reset();
     setBusy(false);
     if (worker_.joinable()) {
         worker_.join(); // The worker posted this completion as its last action, so this returns.
@@ -252,6 +259,10 @@ void ClipExportController::applyFinished(const application::ClipExportReport& re
         emit exportFinished(false, lastStatus_);
         break;
     }
+}
+
+std::optional<ClipExportController::Request> ClipExportController::displayRequest() const {
+    return busy_ ? activeRequest_ : makeRequest({});
 }
 
 std::optional<ClipExportController::Request>

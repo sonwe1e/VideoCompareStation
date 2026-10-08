@@ -255,7 +255,7 @@ set_tests_properties(
         RUN_SERIAL TRUE
 )
 
-foreach(dvs_review_shell_test IN ITEMS empty_review_view player_osc timeline_tracks timeline_thumbnail_cache review_action_button vcs_theme)
+foreach(dvs_review_shell_test IN ITEMS empty_review_view player_osc timeline_tracks timeline_thumbnail_cache review_action_button vcs_theme clip_export_dialog)
     add_test(
         NAME "ui.${dvs_review_shell_test}"
         COMMAND

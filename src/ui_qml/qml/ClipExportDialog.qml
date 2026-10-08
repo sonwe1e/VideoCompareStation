@@ -22,8 +22,8 @@ Item {
     // where the dialog simply never opens.
     required property var service
 
-    // canExport/rangeSummary/suggestedFileName re-read the session snapshot live, but they only
-    // NOTIFY on stateChanged — and the range itself lives on the shell, so marking an in point
+    // Idle source/range/name readouts re-read the session snapshot; running readouts share the
+    // captured job. They only NOTIFY on stateChanged, while the range lives on the shell, so an in point
     // never notifies this dialog. Bumping rangeRevision on every open forces the bindings below
     // to re-read the current range; without that the dialog would repeat the last export's range.
     property int rangeRevision: 0
@@ -40,6 +40,11 @@ Item {
         control.rangeRevision;
         return control.service ? String(control.service.suggestedFileName) : "";
     }
+    readonly property string sourcePath: {
+        control.rangeRevision;
+        return control.service ? String(control.service.sourcePath) : "";
+    }
+    readonly property string sourceFileName: control.sourcePath.split(/[\\/]/).pop()
     readonly property string statusText: control.service ? String(control.service.lastStatus) : ""
     readonly property string failureDetail: control.service ? String(control.service.lastFailureDetail) : ""
     readonly property string outputPath: control.service ? String(control.service.lastOutputPath) : ""
@@ -206,6 +211,36 @@ Item {
                                 anchors.centerIn: parent
                                 spacing: 8
 
+                                Column {
+                                    width: parent.width
+                                    spacing: 4
+
+                                    Text {
+                                        objectName: "clipExportSourceRole"
+                                        text: control.busy ? qsTr("正在导出（时间线主源）") : qsTr("待导出源（时间线主源）")
+                                        color: Theme.mutedText
+                                        font.pixelSize: 12
+                                    }
+
+                                    Text {
+                                        objectName: "clipExportSourceName"
+                                        width: parent.width
+                                        text: control.sourceFileName.length > 0 ? control.sourceFileName : qsTr("（不可导出）")
+                                        textFormat: Text.PlainText
+                                        color: Theme.primaryText
+                                        font.pixelSize: 13
+                                        font.weight: Font.DemiBold
+                                        elide: Text.ElideMiddle
+                                        Accessible.name: qsTr("导出源（时间线主源）：%1").arg(control.sourcePath)
+                                        ToolTip.visible: sourceHover.hovered && control.sourcePath.length > 0
+                                        ToolTip.text: control.sourcePath
+
+                                        HoverHandler {
+                                            id: sourceHover
+                                        }
+                                    }
+                                }
+
                                 Row {
                                     spacing: 8
                                     width: parent.width
@@ -233,7 +268,7 @@ Item {
                                     spacing: 8
 
                                     Text {
-                                        text: qsTr("目标文件：")
+                                        text: qsTr("建议文件：")
                                         color: Theme.mutedText
                                         font.pixelSize: 12
                                         anchors.verticalCenter: parent.verticalCenter
@@ -289,6 +324,15 @@ Item {
                         }
 
                         Text {
+                            objectName: "clipExportResultHeading"
+                            width: parent.width
+                            visible: control.statusText.length > 0 || control.outputPath.length > 0
+                            text: control.busy ? qsTr("当前导出状态") : qsTr("上次导出结果")
+                            color: Theme.mutedText
+                            font.pixelSize: 12
+                        }
+
+                        Text {
                             width: parent.width
                             visible: control.statusText.length > 0
                             text: control.statusText
@@ -298,6 +342,7 @@ Item {
                         }
 
                         Text {
+                            objectName: "clipExportOutputPath"
                             width: parent.width
                             visible: control.outputPath.length > 0
                             text: control.outputPath
