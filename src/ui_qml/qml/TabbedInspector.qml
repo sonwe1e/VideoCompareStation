@@ -763,10 +763,64 @@ Rectangle {
                             color: control.primaryTextColor
                             font.weight: Font.DemiBold
                         }
+                        Flow {
+                            objectName: "timelineMarkerLegend"
+                            width: parent.width
+                            spacing: 12
+
+                            Repeater {
+                                objectName: "timelineMarkerLegendEntries"
+                                model: [
+                                    {
+                                        kind: "missing",
+                                        label: qsTr("缺失")
+                                    },
+                                    {
+                                        kind: "duplicate",
+                                        label: qsTr("重复")
+                                    },
+                                    {
+                                        kind: "extra",
+                                        label: qsTr("多余")
+                                    },
+                                    {
+                                        kind: "anchor",
+                                        label: qsTr("锚点")
+                                    },
+                                    {
+                                        kind: "low-confidence",
+                                        label: qsTr("低置信度")
+                                    }
+                                ]
+
+                                delegate: Row {
+                                    id: legendEntry
+                                    required property var modelData
+                                    objectName: "timelineMarkerLegendEntry-" + modelData.kind
+                                    spacing: 6
+
+                                    Rectangle {
+                                        objectName: "timelineMarkerLegendSwatch-" + legendEntry.modelData.kind
+                                        width: 10
+                                        height: 10
+                                        radius: 2
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        // Share the timeline renderer's mapping, including its neutral fallback.
+                                        color: Theme.timelineMarkerColor(legendEntry.modelData.kind)
+                                    }
+                                    Label {
+                                        objectName: "timelineMarkerLegendLabel-" + legendEntry.modelData.kind
+                                        text: legendEntry.modelData.label
+                                        color: control.mutedTextColor
+                                    }
+                                }
+                            }
+                        }
                         Label {
+                            objectName: "timelineMarkerLegendNote"
                             width: parent.width
                             wrapMode: Text.WordWrap
-                            text: qsTr("红 · 缺失    橙 · 重复    紫 · 多余\n青 · 锚点    黄 · 低置信度")
+                            text: qsTr("低置信度、待复核和已拒绝区间共用中性色；悬停时间轴标记可查看类型与置信度。")
                             color: control.mutedTextColor
                         }
                         Label {

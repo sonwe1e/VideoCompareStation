@@ -761,6 +761,158 @@ TEST(MainQmlContractTests, PairMetricsScopeNoteExplainsSampleSpaceAndWraps) {
     }
 }
 
+// Legend swatches must follow the same semantic mapping as the timeline, never color-name prose.
+TEST(MainQmlContractTests, TimelineMarkerLegendUsesThemeColorsAndWraps) {
+    QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
+    QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/TabbedInspector.qml")}};
+    const QVariantMap properties{
+        {QStringLiteral("controller"),
+         QVariantMap{{QStringLiteral("alignmentMode"), 0},
+                     {QStringLiteral("activePairTimeInfo"), QVariantMap{}},
+                     {QStringLiteral("currentInexactReason"), QString{}},
+                     {QStringLiteral("sources"), QVariantList{}},
+                     {QStringLiteral("dropFrameTimecodeAvailable"), false},
+                     {QStringLiteral("alignmentTimelineMarkerOverflowCount"), 2},
+                     {QStringLiteral("sourceMediaInfo"), QVariantList{}}}},
+        {QStringLiteral("preferences"),
+         QVariantMap{{QStringLiteral("differenceMetric"), 0},
+                     {QStringLiteral("differenceGain"), 0},
+                     {QStringLiteral("differenceFilter"), 0},
+                     {QStringLiteral("oscMode"), 0}}},
+        {QStringLiteral("session"), QVariantMap{}},
+        {QStringLiteral("metrics"),
+         QVariantMap{{QStringLiteral("available"), true},
+                     {QStringLiteral("errorKey"), QString{}},
+                     {QStringLiteral("hasCurrentSample"), false},
+                     {QStringLiteral("sampling"), false},
+                     {QStringLiteral("metricId"), QStringLiteral("cpu-rgb-absolute-v1")}}},
+        {QStringLiteral("borderColor"), QColor{Qt::gray}},
+        {QStringLiteral("primaryTextColor"), QColor{Qt::white}},
+        {QStringLiteral("mutedTextColor"), QColor{Qt::gray}},
+        {QStringLiteral("singleMode"), false},
+        {QStringLiteral("sourceCount"), 2},
+        {QStringLiteral("wipeMode"), false},
+        {QStringLiteral("differenceMode"), true},
+        {QStringLiteral("analysisGridMode"), false},
+        {QStringLiteral("differenceEdges"), QVariantList{}},
+        {QStringLiteral("sourceIdentities"), QVariantList{}},
+        {QStringLiteral("differenceEdge"), 0},
+        {QStringLiteral("referenceSourceIndex"), 0},
+        {QStringLiteral("differenceThresholdEnabled"), false},
+        {QStringLiteral("differenceThresholdCode"), 0},
+        {QStringLiteral("differenceThresholdPolicy"), 1},
+        {QStringLiteral("wipePosition"), 0.5},
+        {QStringLiteral("roiEnabled"), false},
+        {QStringLiteral("graphicsReady"), false},
+        {QStringLiteral("dropFrameTimecode"), false},
+        {QStringLiteral("currentFrame"), 0},
+        {QStringLiteral("inFrame"), -1},
+        {QStringLiteral("outFrame"), -1},
+        {QStringLiteral("rangePlaybackActive"), false},
+        {QStringLiteral("width"), 300},
+        {QStringLiteral("height"), 760},
+    };
+    const std::unique_ptr<QObject> root{component.createWithInitialProperties(properties)};
+    ASSERT_NE(root, nullptr) << componentErrors(component);
+    auto* const tabs = root->findChild<QQuickItem*>(QStringLiteral("inspectorTabBar"));
+    ASSERT_NE(tabs, nullptr);
+    tabs->setProperty("currentIndex", 1);
+    auto* const legend = root->findChild<QQuickItem*>(QStringLiteral("timelineMarkerLegend"));
+    auto* const note = root->findChild<QQuickItem*>(QStringLiteral("timelineMarkerLegendNote"));
+    auto* const overflow = root->findChild<QQuickItem*>(QStringLiteral("markerOverflowNotice"));
+    ASSERT_NE(legend, nullptr);
+    ASSERT_NE(note, nullptr);
+    ASSERT_NE(overflow, nullptr);
+    EXPECT_TRUE(legend->isVisible());
+    EXPECT_EQ(note->property("text").toString(),
+              QStringLiteral("低置信度、待复核和已拒绝区间共用中性色；"
+                             "悬停时间轴标记可查看类型与置信度。"));
+
+    QQmlComponent themeProbe{&engine};
+    themeProbe.setData(R"qml(
+        import QtQuick
+        import "qrc:/qml/VcsTheme.js" as Theme
+        QtObject {
+            property color neutral: Theme.markerOther
+            function markerColor(kind) { return Theme.timelineMarkerColor(kind); }
+        }
+    )qml",
+                       QUrl{});
+    const std::unique_ptr<QObject> theme{themeProbe.create()};
+    ASSERT_NE(theme, nullptr) << componentErrors(themeProbe);
+    for (const QString& kind : {QStringLiteral("low-confidence"),
+                                QStringLiteral("review-segment"),
+                                QStringLiteral("rejected-segment")}) {
+        QVariant actualColor;
+        ASSERT_TRUE(QMetaObject::invokeMethod(theme.get(),
+                                              "markerColor",
+                                              Q_RETURN_ARG(QVariant, actualColor),
+                                              Q_ARG(QVariant, kind)));
+        EXPECT_EQ(QColor{actualColor.toString()}, theme->property("neutral").value<QColor>());
+    }
+    const std::array<std::pair<QString, QString>, 5> entries{{
+        {QStringLiteral("missing"), QStringLiteral("缺失")},
+        {QStringLiteral("duplicate"), QStringLiteral("重复")},
+        {QStringLiteral("extra"), QStringLiteral("多余")},
+        {QStringLiteral("anchor"), QStringLiteral("锚点")},
+        {QStringLiteral("low-confidence"), QStringLiteral("低置信度")},
+    }};
+    auto* const repeater =
+        legend->findChild<QObject*>(QStringLiteral("timelineMarkerLegendEntries"));
+    ASSERT_NE(repeater, nullptr);
+    EXPECT_EQ(repeater->property("count").toInt(), static_cast<int>(entries.size()));
+    QQuickItem* const column = legend->parentItem();
+    ASSERT_NE(column, nullptr);
+    // Resize the real panel, including a return to the minimum size. No Main or renderer is used.
+    for (const qreal width : {300.0, 380.0, 300.0}) {
+        root->setProperty("width", width);
+        QCoreApplication::processEvents();
+        ASSERT_TRUE(QMetaObject::invokeMethod(legend, "forceLayout"));
+        ASSERT_TRUE(QMetaObject::invokeMethod(note, "forceLayout"));
+        ASSERT_TRUE(QMetaObject::invokeMethod(column, "forceLayout"));
+        EXPECT_DOUBLE_EQ(legend->width(), width - 28.0);
+        int entryIndex = 0;
+        for (const auto& [kind, labelText] : entries) {
+            SCOPED_TRACE(kind.toStdString());
+            QQuickItem* entry = nullptr;
+            ASSERT_TRUE(QMetaObject::invokeMethod(
+                repeater, "itemAt", Q_RETURN_ARG(QQuickItem*, entry), Q_ARG(int, entryIndex)));
+            ++entryIndex;
+            ASSERT_NE(entry, nullptr);
+            auto* const swatch =
+                entry->findChild<QQuickItem*>(QStringLiteral("timelineMarkerLegendSwatch-") + kind);
+            auto* const label =
+                entry->findChild<QQuickItem*>(QStringLiteral("timelineMarkerLegendLabel-") + kind);
+            ASSERT_NE(swatch, nullptr);
+            ASSERT_NE(label, nullptr);
+            QVariant expectedColor;
+            ASSERT_TRUE(QMetaObject::invokeMethod(theme.get(),
+                                                  "markerColor",
+                                                  Q_RETURN_ARG(QVariant, expectedColor),
+                                                  Q_ARG(QVariant, kind)));
+            EXPECT_EQ(swatch->property("color").value<QColor>(), QColor{expectedColor.toString()});
+            EXPECT_EQ(label->property("text").toString(), labelText);
+            EXPECT_TRUE(swatch->isVisible());
+            EXPECT_TRUE(label->isVisible());
+            EXPECT_GT(label->width(), 0.0);
+            EXPECT_GT(label->height(), 0.0);
+            EXPECT_GE(swatch->width(), 8.0);
+            EXPECT_GE(swatch->height(), 8.0);
+            EXPECT_GE(entry->x(), 0.0);
+            EXPECT_LE(entry->x() + entry->width(), legend->width());
+            EXPECT_LE(label->x() + label->width(), entry->width());
+            EXPECT_GE(legend->height(), entry->y() + entry->height());
+        }
+        EXPECT_GE(note->y(), legend->y() + legend->height());
+        EXPECT_LE(note->property("contentWidth").toReal(), note->width() + 1.0);
+        EXPECT_GE(note->height(), note->property("contentHeight").toReal());
+        EXPECT_TRUE(overflow->isVisible());
+        EXPECT_GE(overflow->y(), note->y() + note->height());
+    }
+}
+
 TEST(MainQmlContractTests, MapsEveryCurrentMediaErrorAndExcludesDeletedUiDomains) {
     QFile messageCatalog{QStringLiteral(":/qml/ReviewMessageCatalog.qml")};
     ASSERT_TRUE(messageCatalog.open(QIODevice::ReadOnly));
