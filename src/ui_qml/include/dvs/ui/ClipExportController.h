@@ -36,6 +36,7 @@ class ClipExportController final : public QObject {
     Q_PROPERTY(bool canExport READ canExport NOTIFY stateChanged)
     Q_PROPERTY(QString suggestedFileName READ suggestedFileName NOTIFY stateChanged)
     Q_PROPERTY(QString rangeSummary READ rangeSummary NOTIFY stateChanged)
+    Q_PROPERTY(QString sourcePath READ sourcePath NOTIFY stateChanged)
     Q_PROPERTY(QString lastStatus READ lastStatus NOTIFY stateChanged)
     Q_PROPERTY(QString lastFailureDetail READ lastFailureDetail NOTIFY stateChanged)
     Q_PROPERTY(QString lastOutputPath READ lastOutputPath NOTIFY stateChanged)
@@ -58,10 +59,13 @@ public:
     [[nodiscard]] qreal progress() const noexcept;
     // True when the current snapshot has a complete marked range on a canonical video source.
     [[nodiscard]] bool canExport() const;
+    // Readouts share the captured request while busy, otherwise they describe the current session.
     // "<stem>_clip_<in>-<out><source extension>" over the canonical source file, or empty.
     [[nodiscard]] QString suggestedFileName() const;
     // One-line, 1-based frame label matching the transport range label, or empty.
     [[nodiscard]] QString rangeSummary() const;
+    // Native path of the canonical export source; pinned to the captured job while busy.
+    [[nodiscard]] QString sourcePath() const;
     [[nodiscard]] QString lastStatus() const;
     [[nodiscard]] QString lastFailureDetail() const;
     [[nodiscard]] QString lastOutputPath() const;
@@ -96,6 +100,7 @@ private:
     };
 
     [[nodiscard]] std::optional<Request> makeRequest(std::filesystem::path targetPath) const;
+    [[nodiscard]] std::optional<Request> displayRequest() const;
     void runExport(const Request& request) noexcept;
     void postProgress(application::ClipExportRequestId requestId, qreal value);
     void postFinished(application::ClipExportReport report);
@@ -117,6 +122,8 @@ private:
     QString lastOutputPath_;
     // Native-separator target path captured at launch; shown as lastOutputPath after success.
     QString pendingOutputPath_;
+    // One captured request owns all running-job readouts; idle readouts use the current session.
+    std::optional<Request> activeRequest_;
 };
 
 } // namespace dvs::ui
