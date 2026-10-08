@@ -267,8 +267,8 @@ int PairMetricsController::thresholdPolicy() const noexcept {
 }
 
 void PairMetricsController::setThresholdPolicy(const int value) {
-    // Mirrors presentation::ThresholdPolicy values; unsupported values are ignored instead of
-    // being clamped so the statistics never apply a rule the highlight does not show.
+    // Shares presentation::ThresholdPolicy enum values; ignore unsupported values rather than
+    // clamp to a different policy. Shared policy selection does not imply identical CPU/GPU pixels.
     const auto policy = static_cast<domain::MismatchPolicy>(value);
     if (value < static_cast<int>(domain::MismatchPolicy::LumaOnly) ||
         value > static_cast<int>(domain::MismatchPolicy::AllChannels) ||

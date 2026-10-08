@@ -81,9 +81,10 @@ struct TimelineIndexCancellationState final {
     return metadata.matrix == domain::ColorMatrix::kBt709 ? SWS_CS_ITU709 : SWS_CS_ITU601;
 }
 
-// Converts one decoded frame to tightly packed RGBA8. The conversion mirrors the display
-// normalization contract (matrix/range-correct swscale) so measured differences describe the
-// pixels the renderer shows; both sources of a pair always use the same conversion.
+// Converts each source's decoded frame directly to tightly packed, full-range RGBA8 at decoded
+// dimensions. Metrics use these converted RGB values (including 10-bit inputs reduced to 8-bit),
+// not original code values or renderer readback. Playback separately normalizes to NV12/P010;
+// its display rotation, scaling and sampling do not enter this full-frame metrics conversion.
 [[nodiscard]] std::optional<PairMetricsDecodeSession::RgbaFrame>
 rgbaFromFrame(const AVFrame& frame,
               SwsContextPtr& scaleContext,
@@ -122,8 +123,8 @@ rgbaFromFrame(const AVFrame& frame,
                            (sourcePixelDescriptor->flags & AV_PIX_FMT_FLAG_RGB) != 0;
     const int* const coefficients = sws_getCoefficients(swsColorSpace(colorMetadata));
     const int sourceFullRange = sourceRgb || frame.color_range == AVCOL_RANGE_JPEG ? 1 : 0;
-    // RGBA output is always full range; the pair-metrics contract measures display-converted
-    // values, so the destination range is intentionally independent of the source declaration.
+    // Metrics RGBA8 output is always full range, independently of the source range declaration.
+    // Matrix/range conversion here does not unify transfer functions or color primaries.
     if (coefficients == nullptr || sws_setColorspaceDetails(scaleContext.get(),
                                                             coefficients,
                                                             sourceFullRange,

@@ -1687,6 +1687,17 @@
 
 - **基础定义**：`computeRgbAbsoluteMetrics`、`scoreActivePairRgbAbsolute` 提供 MAE/MSE/PSNR
   标量参考，见 [ADR 0005](../adr/0005-pixel-difference-metrics.md)；端到端集成与后续优化见下文。
+- **2026-10-08 口径说明候选（基线 `880d02a`，Windows 完整流程待验）**：
+  检查器指标标题下新增随列宽换行的说明：统计对象是解码转换后的全帧 RGBA8 RGB 值，
+  忽略 Alpha、非原始文件码值；10-bit 输入也先降到 8-bit。ROI、视图缩放／平移、显示旋转
+  与显示空间重采样、显示增益不改变统计，CPU 坏点数不保证等于屏幕高亮像素数；
+  阈值／通道策略仅查询坏点分布，不改 MAE/MSE/PSNR/最大差。
+  源码依据：`PairMetricsDecodeSession::rgbaFromFrame` 由源格式直接转同尺寸 full-range RGBA8，
+  播放 `SoftwareDecoder` 则另走 NV12/P010；`PairMetricsService::scoreFrame` 比较等尺寸的
+  未旋转整帧缓冲，不使用显示旋转或 SAR 做数值对齐，不把尺寸不匹配的缓冲重采样为可比。
+  `PairMetricsRequest` 没有 ROI／视口 scale 输入；现有矩阵／范围处理不承诺 transfer／primaries
+  统一或完整色彩管理。本轮仅修说明与相邻失实注释，不改公式、像素管线、缓存、请求或
+  `metricsRows`／坏点占比约定；不新增 ROI、原生 RGB 或高位深指标功能。
 - **2026-09-22 已提交实现**：
   1. 新增 `application::IPairMetricsService` 端口（`PairMetrics.h`）：请求携带 `PlaybackRequestContext`
      身份、双源、对齐偏移、帧区间与坏点阈值；结果以带身份的批次异步发布。

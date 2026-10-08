@@ -26,6 +26,32 @@ pixel difference on the session's active `ComparisonPair`.
   render frames or put FFmpeg/graphics types into the core.
 - Coverage fixture lists every new domain/application translation unit.
 
+## Current video sample space
+
+The video metric `cpu-rgb-absolute-v1` describes **decoded-converted full-frame RGBA8 RGB
+values**, not original file code values or the current screen difference. Alpha is ignored;
+10-bit inputs are also reduced to 8-bit RGBA before scoring (PSNR MAX remains 255).
+
+- `PairMetricsDecodeSession::rgbaFromFrame` converts each decoded source format directly to
+  full-range RGBA8 with swscale at the decoded width/height. It uses the current matrix/range
+  handling, not a common transfer-function/primaries transform or complete color management.
+- `SoftwareDecoder` independently normalizes playback to NV12/P010. Renderer sampling and
+  this direct RGBA8 conversion need not yield identical RGB values. Sharing threshold/channel
+  policy definitions does not guarantee that CPU bad-pixel counts equal highlighted screen pixels.
+- `PairMetricsService::scoreFrame` compares the two whole decoded buffers at matching `(x,y)`
+  coordinates and requires equal decoded width/height. It neither applies display rotation nor
+  corrects sample aspect ratio (SAR), and does not spatially resample one source to align it with
+  the other. Equal decoded dimensions alone do not guarantee corresponding displayed geometry.
+  Dimension mismatch remains unavailable, even if the display can scale the sources to fit.
+- `PairMetricsRequest` has no ROI, viewport scale or display-resampling input. Selecting an ROI,
+  zooming/panning, display rotation, display spatial resampling and display gain do not change
+  this full-frame statistic. Frame/time mapping still selects which decoded frames are compared.
+  Threshold/channel policy changes query the bad-pixel distribution, not MAE/MSE/PSNR/max error.
+
+The inspector states this scope below the current-frame metrics title. This clarification does
+not add ROI metrics, original-RGB/native-depth analysis, geometry alignment or a new cache key;
+those would need a separate contract and verification before changing the fixed analysis input.
+
 ## Reusable threshold-independent analysis
 
 `computeRgbAbsoluteAnalysis` adds an adapter-neutral `RgbAbsoluteAnalysis`: the unchanged RGB
