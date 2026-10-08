@@ -151,9 +151,9 @@ ApplicationWindow {
     readonly property real inMediaTime: shell ? Number(shell.inMediaTime) : -1
     readonly property real outMediaTime: shell ? Number(shell.outMediaTime) : -1
     readonly property bool rangePlaybackActive: Boolean(controller && controller.playbackRangeLoopActive) || Boolean(shell && shell.rangePlaybackActive && controller && controller.playbackRangeLoop)
-    // Lossless range-clip export gates. The QML range state participates because the controller
-    // only notifies on its own busy/status changes: a range marked after load would otherwise
-    // leave a stale binding behind.
+    // The shell endpoints update immediately; canExport follows the authoritative snapshot via
+    // availabilityChanged. Both are required so an asynchronous range command cannot leave the
+    // export chip disabled after the coordinator accepts it.
     readonly property bool rangeExportVisible: root.clipExportService !== null
     readonly property bool rangeExportEnabled: {
         // `canExport` carries the parts only the session knows (a video session, a canonical source

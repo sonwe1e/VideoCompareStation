@@ -1761,6 +1761,128 @@ TEST(MainQmlContractTests, TransportRangeRowPlaysAndLoopsTheMarkedRange) {
     EXPECT_TRUE(playRange->property("chipEnabled").toBool());
 }
 
+// Range commands reach the authoritative snapshot after the shell has already notified QML.
+// Keep that ordering: pre-seeding the snapshot before marking endpoints masks a disabled chip.
+TEST(MainQmlContractTests, ExportRangeEnablesAfterAuthoritativeSnapshotArrives) {
+    QTemporaryDir temporaryDirectory;
+    ASSERT_TRUE(temporaryDirectory.isValid());
+    const QString sourcePath = temporaryDirectory.filePath(QStringLiteral("export-gate.mp4"));
+    QFile source{sourcePath};
+    ASSERT_TRUE(source.open(QIODevice::WriteOnly));
+    ASSERT_EQ(source.write("clip-source", 11), 11);
+    source.close();
+
+    auto snapshot = std::make_shared<application::SessionSnapshot>();
+    snapshot->graphicsReady = true;
+    snapshot->sessionState = domain::SessionState::kReady;
+    snapshot->playbackState = domain::PlaybackState::kPaused;
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate);
+    ASSERT_TRUE(installValidatedVideoSet(
+        snapshot, {std::filesystem::path{sourcePath.toStdWString()}}, rate.value(), 12, 400'000));
+    snapshot->displayedFrame = domain::FrameId{3};
+    std::vector<application::PlaybackCommand> submitted;
+    ReviewController controller{ReviewController::Dependencies{
+        .submit =
+            [&submitted](application::PlaybackCommand command) {
+                submitted.push_back(std::move(command));
+                return application::PortSubmitResult::Accepted;
+            },
+        .snapshot = [&snapshot] { return snapshot; },
+        .takeCompletedCommands = [] { return std::vector<application::CommandTerminal>{}; },
+    }};
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    ReviewShellController shell{controller, preferences};
+    ReviewSessionFacade facade{controller, preferences, shell};
+    auto exporter = std::make_shared<RecordingClipExporter>();
+    ClipExportController clipExport{ClipExportController::Dependencies{
+        .snapshot = [&controller] { return controller.currentSnapshot(); },
+        .exporter = exporter,
+    }};
+    QObject::connect(&controller,
+                     &ReviewController::snapshotRefreshed,
+                     &clipExport,
+                     &ClipExportController::refreshAvailability);
+    int availabilityNotifications = 0;
+    QObject::connect(&clipExport,
+                     &ClipExportController::availabilityChanged,
+                     &clipExport,
+                     [&availabilityNotifications] { ++availabilityNotifications; });
+
+    QQmlEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
+    engine.rootContext()->setContextProperty(QStringLiteral("clipExport"), &clipExport);
+    QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
+    ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
+    std::unique_ptr<QObject> root{component.create()};
+    ASSERT_NE(root, nullptr) << componentErrors(component);
+    auto* const window = qobject_cast<QQuickWindow*>(root.get());
+    ASSERT_NE(window, nullptr);
+    window->resize(1280, 800);
+    window->show();
+    QCoreApplication::processEvents();
+    auto* const chip = root->findChild<QQuickItem*>(QStringLiteral("transportExportRangeButton"));
+    ASSERT_NE(chip, nullptr);
+    ASSERT_FALSE(chip->property("chipEnabled").toBool());
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(root.get(), "setInPoint"));
+    EXPECT_EQ(shell.inFrame(), 3);
+    snapshot = std::make_shared<application::SessionSnapshot>(*snapshot);
+    snapshot->displayedFrame = domain::FrameId{7};
+    controller.refreshProjection();
+    ASSERT_TRUE(QMetaObject::invokeMethod(root.get(), "setOutPoint"));
+    EXPECT_EQ(shell.outFrame(), 7);
+    EXPECT_EQ(controller.playbackRangeIn(), 3);
+    EXPECT_EQ(controller.playbackRangeOut(), 7);
+    EXPECT_FALSE(controller.currentSnapshot()->playbackRangeOut.has_value());
+    EXPECT_FALSE(clipExport.canExport());
+    EXPECT_FALSE(chip->property("chipEnabled").toBool());
+    EXPECT_EQ(availabilityNotifications, 0);
+
+    // The coordinator now acknowledges the range. Its values match the optimistic view, so a
+    // stateChanged-only subscription cannot observe this transition to an exportable snapshot.
+    int viewNotifications = 0;
+    QObject::connect(&controller,
+                     &ReviewController::stateChanged,
+                     &controller,
+                     [&viewNotifications] { ++viewNotifications; });
+    snapshot = std::make_shared<application::SessionSnapshot>(*snapshot);
+    snapshot->playbackRangeIn = domain::FrameId{3};
+    snapshot->playbackRangeOut = domain::FrameId{7};
+    controller.refreshProjection();
+    EXPECT_EQ(viewNotifications, 0);
+    EXPECT_TRUE(clipExport.canExport());
+    EXPECT_TRUE(root->property("rangeExportEnabled").toBool());
+    ASSERT_TRUE(chip->property("chipEnabled").toBool());
+    EXPECT_EQ(availabilityNotifications, 1);
+    controller.refreshProjection();
+    EXPECT_EQ(availabilityNotifications, 1);
+
+    // Exercise real mouse delivery rather than invoking the clicked signal on a disabled item.
+    const QPointF chipCenter = chip->mapToScene(QPointF{chip->width() / 2, chip->height() / 2});
+    sendMousePress(*window, chipCenter);
+    sendMouseRelease(*window, chipCenter);
+    auto* const popup = root->findChild<QObject*>(QStringLiteral("clipExportPopup"));
+    ASSERT_NE(popup, nullptr);
+    EXPECT_TRUE(popup->property("visible").toBool());
+    EXPECT_TRUE(exporter->performedJobs().empty());
+
+    // An authoritative invalidation must disable export without needing another shell edit.
+    snapshot = std::make_shared<application::SessionSnapshot>(*snapshot);
+    snapshot->playbackRangeIn.reset();
+    snapshot->playbackRangeOut.reset();
+    controller.refreshProjection();
+    EXPECT_EQ(shell.inFrame(), 3);
+    EXPECT_EQ(shell.outFrame(), 7);
+    EXPECT_FALSE(clipExport.canExport());
+    EXPECT_FALSE(chip->property("chipEnabled").toBool());
+    EXPECT_EQ(availabilityNotifications, 2);
+    window->close();
+}
+
 // The export chip is the only way into a clip export, and it must hand the controller the range the
 // user marked - the same inclusive endpoints the transport shows, never a re-derived pair. The fake
 // exporter completes instantly, so the whole QML -> controller -> adapter path runs in-process.

@@ -330,6 +330,9 @@ public:
     [[nodiscard]] bool waitForSourceDiskStatusIdle(std::chrono::milliseconds timeout) noexcept;
 
 Q_SIGNALS:
+    // Emitted after the authoritative snapshot is read, even when its values already match an
+    // optimistic UI projection. Consumers of currentSnapshot() must not rely on stateChanged().
+    void snapshotRefreshed();
     void stateChanged();
     void frameStateChanged();
     void foregroundCommandFinished(qulonglong commandId, int outcome, const QString& errorKey);

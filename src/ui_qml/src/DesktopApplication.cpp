@@ -304,6 +304,10 @@ public:
                 .snapshot = [&controller] { return controller.currentSnapshot(); },
                 .exporter = clipExporter_,
             });
+            QObject::connect(&controller,
+                             &ReviewController::snapshotRefreshed,
+                             clipExport_.get(),
+                             &ClipExportController::refreshAvailability);
             engine->rootContext()->setContextProperty(QStringLiteral("clipExport"),
                                                       clipExport_.get());
         }

@@ -33,7 +33,7 @@ class ClipExportController final : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool busy READ busy NOTIFY stateChanged)
     Q_PROPERTY(qreal progress READ progress NOTIFY progressChanged)
-    Q_PROPERTY(bool canExport READ canExport NOTIFY stateChanged)
+    Q_PROPERTY(bool canExport READ canExport NOTIFY availabilityChanged)
     Q_PROPERTY(QString suggestedFileName READ suggestedFileName NOTIFY stateChanged)
     Q_PROPERTY(QString rangeSummary READ rangeSummary NOTIFY stateChanged)
     Q_PROPERTY(QString sourcePath READ sourcePath NOTIFY stateChanged)
@@ -59,6 +59,9 @@ public:
     [[nodiscard]] qreal progress() const noexcept;
     // True when the current snapshot has a complete marked range on a canonical video source.
     [[nodiscard]] bool canExport() const;
+    // Called only after the authoritative session snapshot is refreshed. Does not change the
+    // captured running request; repeated snapshots notify QML only when admission changes.
+    void refreshAvailability();
     // Readouts share the captured request while busy, otherwise they describe the current session.
     // "<stem>_clip_<in>-<out><source extension>" over the canonical source file, or empty.
     [[nodiscard]] QString suggestedFileName() const;
@@ -80,6 +83,7 @@ public:
     Q_INVOKABLE void cancelExport();
 
 signals:
+    void availabilityChanged();
     void stateChanged();
     void progressChanged();
     void exportFinished(bool succeeded, const QString& message);
@@ -111,6 +115,7 @@ private:
     void setStatus(QString text);
 
     Dependencies dependencies_;
+    bool lastAvailability_ = false;
     std::atomic_bool cancel_{false};
     application::ClipExportRequestId nextRequestId_ = application::kInvalidClipExportRequestId;
     application::ClipExportRequestId activeRequestId_ = application::kInvalidClipExportRequestId;

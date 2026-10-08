@@ -30,7 +30,9 @@ makeReport(const application::ClipExportRequestId requestId,
 } // namespace
 
 ClipExportController::ClipExportController(Dependencies dependencies, QObject* parent)
-    : QObject(parent), dependencies_(std::move(dependencies)) {}
+    : QObject(parent), dependencies_(std::move(dependencies)) {
+    lastAvailability_ = canExport();
+}
 
 ClipExportController::~ClipExportController() {
     // Join the worker before any member dies: runExport() touches cancel_ and posts lambdas that
@@ -51,6 +53,14 @@ qreal ClipExportController::progress() const noexcept {
 
 bool ClipExportController::canExport() const {
     return makeRequest({}).has_value();
+}
+
+void ClipExportController::refreshAvailability() {
+    const bool available = canExport();
+    if (available != lastAvailability_) {
+        lastAvailability_ = available;
+        emit availabilityChanged();
+    }
 }
 
 QString ClipExportController::suggestedFileName() const {

@@ -1385,6 +1385,7 @@ private:
                 candidateSourceCErrorKey_.clear();
             }
             publishProjection();
+            Q_EMIT owner_.snapshotRefreshed();
             if (completedForeground.has_value()) {
                 const QString errorKey =
                     completedForeground->error.has_value()
