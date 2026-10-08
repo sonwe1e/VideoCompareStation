@@ -41,10 +41,16 @@
   全断言照常执行。
 - **同日再续：ui-dev 模型-only 配置自 #37 起一直红**。侧栏 QML 测试注册块落在
   `if(DVS_BUILD_ADAPTERS)` 守卫之外，ui-dev（无适配器、无 qmltestrunner）全新配置在
-  `add_test` 处失败，六个测试 NOT_BUILT——a0a0440 起每次 main 推送的 Debug 作业都有
+  `add_test` 失败，六个测试 NOT_BUILT——a0a0440 起每次 main 推送的 Debug 作业都有
   这一条，因开发机只跑全量 dev 预设而未暴露。已把侧栏块挪入守卫（与 vcs_tool_tip 等
   同语义：无适配器不注册）；dev 预设 962 项注册不变。该步骤不在发布流水线内，不影响
-  标签门禁。
+  标签门禁。守卫修复让配置越过后又暴露第二层：`IssueLogControllerTests.cpp` 包含
+  适配器头 `dvs/persistence/IssueRecordRepository.h`，已挪入同守卫的 target_sources
+  （1abdf43），适配器开启时 5 项测试照常注册且通过。
+- **本轮低效点与改进方案已归档**：skip-CI 合入的连锁暴露、三轮标签重打、单 runner
+  串行、监控盲区等成本核算与 P1–P3 改进项见
+  [CI 与发布流水线效率改进](ci-release-efficiency.md)；P0（纯文档推送跳过构建矩阵）
+  已随文档落地。
 
 ## 2026-10-07 连续倒退的 pending 请求互相取消（修复草稿，Windows 待验）
 

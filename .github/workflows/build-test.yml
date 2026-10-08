@@ -6,6 +6,13 @@ on:
     branches:
       - main
       - dev
+    paths-ignore:
+      # Documentation-only pushes do not touch code, scripts, or workflow definitions;
+      # running the full build+test matrix for them on the single self-hosted runner
+      # only delays every queued run (2026-10-08: a docs-only push cost ~1 h there).
+      - 'docs/**'
+      - '**.md'
+      - '**.txt'
 
 permissions:
   contents: read
