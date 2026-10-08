@@ -464,21 +464,25 @@ Rectangle {
         }
     }
 
-    // Pixel scale follows the first displayed source and its fitted content, excluding
-    // letterboxing and wipe masks. Cropping/rotation change the source extent, while DPR
-    // converts logical units to physical pixels. Non-square pixels report both axes.
-    Rectangle {
+    // Reuse the pixel-scale badge as a fixed 100% action. The adjacent readout keeps
+    // the actual scale visible when aspect ratio or the surface limits prevent 1:1.
+    ReviewActionButton {
         id: pixelScaleBadge
 
         objectName: "viewportPixelScaleBadge"
+        enabled: visible && control.sourceCount > 0 && !control.overlayVisible
+        text: qsTr("设为 100%")
+        helpText: qsTr("按首个显示源围绕观察中心缩放到 100%，保留 ROI。\n靠近边缘时，观察中心受视口范围约束。\n非方形像素保留显示比例。\n受适应窗口下限与适应窗口倍率的 64 倍上限约束。\n以旁边的实际倍率为准；适应窗口请用上方按钮。")
+        Accessible.name: text
+        Accessible.description: pixelScaleLabel.text + "\n" + helpText
         visible: control.chromeVisible && pixelScaleBadge.effectivePercent > 0
         z: 30
-        radius: 5
-        // Same glass as the other stage plates; exact 1:1 is told by the green edge and label.
-        color: pixelScaleMouse.containsMouse ? Theme.oscGlassHover : Theme.oscGlass
-        border.color: pixelScaleBadge.pixelExact ? Theme.success : Theme.oscBorder
         height: 28
-        width: pixelScaleLabel.implicitWidth + 18
+        width: pixelScaleContents.implicitWidth + 18
+        leftPadding: 9
+        rightPadding: 9
+        topPadding: 0
+        bottomPadding: 0
         anchors {
             left: parent.left
             leftMargin: 12
@@ -508,35 +512,40 @@ Rectangle {
         readonly property bool uniformScale: Math.abs(horizontalPercent - verticalPercent) < 0.001
         readonly property bool pixelExact: Math.abs(horizontalPercent - 100) < 0.001 && Math.abs(verticalPercent - 100) < 0.001
 
-        Label {
-            id: pixelScaleLabel
+        contentItem: Row {
+            id: pixelScaleContents
 
-            objectName: "viewportPixelScaleLabel"
-            text: pixelScaleBadge.pixelExact ? qsTr("100% 真实尺寸") : (pixelScaleBadge.uniformScale ? qsTr("画面 %1%").arg(Math.round(pixelScaleBadge.effectivePercent)) : qsTr("横 %1% · 纵 %2%").arg(Math.round(pixelScaleBadge.horizontalPercent)).arg(Math.round(pixelScaleBadge.verticalPercent)))
-            color: pixelScaleBadge.pixelExact ? Theme.success : control.mutedTextColor
-            font.pixelSize: 11
-            anchors.centerIn: parent
-        }
-
-        MouseArea {
-            id: pixelScaleMouse
-
-            objectName: "viewportPixelScaleMouse"
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: {
-                if (pixelScaleBadge.effectivePercent >= 99.999) {
-                    dualVideoSurface.resetViewport();
-                    return;
-                }
-                if (pixelScaleBadge.effectivePercent <= 0)
-                    return;
-                // Zoom toward physical 1:1; non-square pixels keep their display aspect.
-                // The surface owns the scale limit, so an unreachable target stays labelled.
-                const factor = 100 / pixelScaleBadge.effectivePercent;
-                dualVideoSurface.zoomAt(0.5, 0.5, factor);
+            spacing: 10
+            Label {
+                text: pixelScaleBadge.text
+                color: control.primaryTextColor
+                font.pixelSize: 11
+                font.weight: Font.DemiBold
+                anchors.verticalCenter: parent.verticalCenter
             }
+            Label {
+                id: pixelScaleLabel
+
+                objectName: "viewportPixelScaleLabel"
+                text: pixelScaleBadge.pixelExact ? qsTr("100% 真实尺寸") : (pixelScaleBadge.uniformScale ? qsTr("画面 %1%").arg(Math.round(pixelScaleBadge.effectivePercent)) : qsTr("横 %1% · 纵 %2%").arg(Math.round(pixelScaleBadge.horizontalPercent)).arg(Math.round(pixelScaleBadge.verticalPercent)))
+                color: pixelScaleBadge.pixelExact ? Theme.success : control.mutedTextColor
+                font.pixelSize: 11
+                anchors.verticalCenter: parent.verticalCenter
+            }
+        }
+        background: Rectangle {
+            radius: 5
+            color: pixelScaleBadge.hovered ? Theme.oscGlassHover : Theme.oscGlass
+            border.width: pixelScaleBadge.activeFocus ? 2 : 1
+            border.color: pixelScaleBadge.activeFocus ? Theme.focus : (pixelScaleBadge.pixelExact ? Theme.success : Theme.oscBorder)
+        }
+        onClicked: {
+            if (pixelScaleBadge.effectivePercent <= 0)
+                return;
+            // The existing content/DPR/ROI/SAR-aware readout owns the target. zoomAt
+            // follows its focal point and clamps both scale and center to the viewport bounds.
+            const factor = 100 / pixelScaleBadge.effectivePercent;
+            dualVideoSurface.zoomAt(0.5, 0.5, factor);
         }
     }
 
@@ -545,6 +554,7 @@ Rectangle {
         id: viewCommandRow
 
         objectName: "viewportViewCommands"
+        enabled: visible && control.sourceCount > 0 && !control.overlayVisible
         visible: control.chromeVisible
         z: 30
         spacing: 6
@@ -555,63 +565,48 @@ Rectangle {
             bottomMargin: 8
         }
 
-        Rectangle {
+        ViewCommandButton {
             objectName: "viewportFitButton"
-            width: fitLabel.implicitWidth + 16
-            height: 24
-            radius: 4
-            color: fitMouse.containsMouse ? Theme.oscGlassHover : Theme.oscGlass
-            border.color: fitMouse.containsMouse ? Theme.borderHover : Theme.oscBorder
-
-            Label {
-                id: fitLabel
-
-                text: qsTr("适应窗口")
-                color: fitMouse.containsMouse ? control.primaryTextColor : control.mutedTextColor
-                font.pixelSize: 11
-                anchors.centerIn: parent
-            }
-
-            MouseArea {
-                id: fitMouse
-
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: dualVideoSurface.resetViewport()
+            text: qsTr("适应窗口")
+            helpText: qsTr("适应窗口并居中，保留 ROI；不改变当前帧或比较对象。")
+            onClicked: dualVideoSurface.resetViewport()
+        }
+        ViewCommandButton {
+            objectName: "viewportResetButton"
+            text: qsTr("重置视图")
+            helpText: qsTr("清除 ROI，并适应窗口、居中；不改变当前帧或比较对象。")
+            onClicked: {
+                dualVideoSurface.clearRoi();
+                dualVideoSurface.resetViewport();
             }
         }
+    }
 
-        Rectangle {
-            objectName: "viewportResetButton"
-            width: resetLabel.implicitWidth + 16
-            height: 24
+    component ViewCommandButton: ReviewActionButton {
+        id: commandButton
+
+        Accessible.name: text
+        Accessible.description: helpText
+        width: commandLabel.implicitWidth + 16
+        height: 24
+        leftPadding: 8
+        rightPadding: 8
+        topPadding: 0
+        bottomPadding: 0
+        contentItem: Label {
+            id: commandLabel
+
+            text: commandButton.text
+            color: commandButton.hovered ? control.primaryTextColor : control.mutedTextColor
+            font.pixelSize: 11
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+        }
+        background: Rectangle {
             radius: 4
-            color: resetMouse.containsMouse ? Theme.oscGlassHover : Theme.oscGlass
-            border.color: resetMouse.containsMouse ? Theme.borderHover : Theme.oscBorder
-
-            Label {
-                id: resetLabel
-
-                text: qsTr("重置视图")
-                color: resetMouse.containsMouse ? control.primaryTextColor : control.mutedTextColor
-                font.pixelSize: 11
-                anchors.centerIn: parent
-            }
-
-            MouseArea {
-                id: resetMouse
-
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                // Full observation reset: fit the view AND drop the ROI, so 差异/指标 return
-                // to the whole-frame baseline (适应窗口 keeps the ROI).
-                onClicked: {
-                    dualVideoSurface.clearRoi();
-                    dualVideoSurface.resetViewport();
-                }
-            }
+            color: commandButton.hovered ? Theme.oscGlassHover : Theme.oscGlass
+            border.width: commandButton.activeFocus ? 2 : 1
+            border.color: commandButton.activeFocus ? Theme.focus : (commandButton.hovered ? Theme.borderHover : Theme.oscBorder)
         }
     }
 
