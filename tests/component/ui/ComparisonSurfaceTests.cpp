@@ -30,6 +30,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <gtest/gtest.h>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -269,7 +270,7 @@ TEST(ComparisonSurfaceGeometryTests, RejectsUnknownPresentationOptions) {
     state.threshold = 1.1F;
     EXPECT_FALSE(state.isValid());
     state.threshold = 0.0F;
-    state.viewTransform.scale = 0.5F;
+    state.viewTransform.scale = 0.0F;
     EXPECT_FALSE(state.isValid());
     state.viewTransform.scale = 1.0F;
     state.roiEnabled = true;
@@ -300,6 +301,381 @@ TEST(ComparisonSurfaceGeometryTests, ComposesOneSynchronizedViewportInsideTheRoi
     EXPECT_FLOAT_EQ(sample.right, 0.65F);
     EXPECT_FLOAT_EQ(sample.top, 0.1F);
     EXPECT_FLOAT_EQ(sample.bottom, 0.5F);
+}
+
+TEST(ComparisonSurfaceGeometryTests, BelowFitShrinksTheDestinationAndRetainsTheWholeRoi) {
+    const platform::SurfaceRect bounds{0.0F, 0.0F, 800.0F, 600.0F};
+    const platform::SurfaceRect fitted{0.0F, 75.0F, 800.0F, 450.0F};
+    const platform::SurfaceNormalizedRect roi{0.25F, 0.125F, 0.75F, 0.875F};
+    const platform::SurfaceViewTransform belowFit{0.5F, 0.5F, 0.25F};
+    const platform::SurfaceNormalizedRect sample =
+        platform::effectiveSurfaceSampleRect(belowFit, true, roi);
+    EXPECT_FLOAT_EQ(sample.left, roi.left);
+    EXPECT_FLOAT_EQ(sample.top, roi.top);
+    EXPECT_FLOAT_EQ(sample.right, roi.right);
+    EXPECT_FLOAT_EQ(sample.bottom, roi.bottom);
+    EXPECT_EQ(platform::transformedSurfaceContentRect(
+                  bounds, fitted, belowFit, {1.0F, 1.0F, 0.0F, 0.0F}, {}),
+              (platform::SurfaceRect{300.0F, 243.75F, 200.0F, 112.5F}));
+
+    // Fit and magnification keep the established destination, even if it is off-grid.
+    const platform::SurfacePixelGrid grid{1.25F, 1.25F, 0.375F, 0.625F};
+    for (const float scale : {1.0F, 2.0F, 64.0F}) {
+        SCOPED_TRACE(scale);
+        EXPECT_EQ(platform::transformedSurfaceContentRect(
+                      bounds, fitted, {0.5F, 0.5F, scale}, grid, {0.0F, 0.0F, 200.0F, 112.5F}),
+                  fitted);
+    }
+    const platform::SurfaceNormalizedRect zoomed =
+        platform::effectiveSurfaceSampleRect({0.5F, 0.5F, 2.0F}, true, roi);
+    EXPECT_FLOAT_EQ(zoomed.left, 0.375F);
+    EXPECT_FLOAT_EQ(zoomed.top, 0.3125F);
+    EXPECT_FLOAT_EQ(zoomed.right, 0.625F);
+    EXPECT_FLOAT_EQ(zoomed.bottom, 0.6875F);
+}
+
+TEST(ComparisonSurfaceGeometryTests, DerivesPhysicalPixelGridFromClipAndOffsetViewport) {
+    const platform::SurfaceViewport viewport{17.0F, 29.0F, 1024.0F, 512.0F};
+    const std::array<float, 16U> clip{
+        2.5F / 1024.0F,
+        0.0F,
+        0.0F,
+        -1.0F + 3.75F / 1024.0F,
+        0.0F,
+        -3.0F / 512.0F,
+        0.0F,
+        1.0F - 4.5F / 512.0F,
+        0.0F,
+        0.0F,
+        1.0F,
+        0.0F,
+        0.0F,
+        0.0F,
+        0.0F,
+        1.0F,
+    };
+    const platform::SurfacePixelGrid grid = platform::surfacePixelGridFromClip(clip, viewport);
+    ASSERT_TRUE(grid.isValid());
+    EXPECT_FLOAT_EQ(grid.scaleX, 1.25F);
+    EXPECT_FLOAT_EQ(grid.scaleY, 1.5F);
+    EXPECT_FLOAT_EQ(grid.originX, 18.875F);
+    EXPECT_FLOAT_EQ(grid.originY, 31.25F);
+
+    // Axis-aligned homogeneous scaling is equivalent; shear/perspective is unsupported.
+    std::array<float, 16U> homogeneous = clip;
+    for (float& value : homogeneous) {
+        value *= 2.0F;
+    }
+    const platform::SurfacePixelGrid equivalent =
+        platform::surfacePixelGridFromClip(homogeneous, viewport);
+    EXPECT_FLOAT_EQ(equivalent.scaleX, grid.scaleX);
+    EXPECT_FLOAT_EQ(equivalent.scaleY, grid.scaleY);
+    EXPECT_FLOAT_EQ(equivalent.originX, grid.originX);
+    EXPECT_FLOAT_EQ(equivalent.originY, grid.originY);
+    std::array<float, 16U> unsupported = clip;
+    unsupported[1U] = 0.0000001F;
+    EXPECT_FALSE(platform::surfacePixelGridFromClip(unsupported, viewport).isValid());
+    unsupported = clip;
+    unsupported[12U] = 0.0000001F;
+    EXPECT_FALSE(platform::surfacePixelGridFromClip(unsupported, viewport).isValid());
+}
+
+TEST(ComparisonSurfaceGeometryTests, DistinguishesNominalNativeIntentFromRoundedWindowProjection) {
+    const auto grid = platform::surfacePixelGridForWindow(801.0F, 601.0F, 1.5F);
+    EXPECT_FLOAT_EQ(grid.scaleX, 1202.0F / 801.0F);
+    EXPECT_FLOAT_EQ(grid.scaleY, 902.0F / 601.0F);
+    // Keep qreal/double precision until Qt's integer rounding, including custom DPR.
+    // Narrowing 1.3 to float first rounds 805*DPR down by one entire target pixel.
+    const auto customGrid = platform::surfacePixelGridForWindow(805.0, 605.0, 1.3);
+    EXPECT_FLOAT_EQ(customGrid.scaleX, 1047.0F / 805.0F);
+    EXPECT_FLOAT_EQ(customGrid.scaleY, 787.0F / 605.0F);
+    const platform::SurfaceRect bounds{0.0F, 0.0F, 801.0F, 601.0F};
+    const auto fitted = platform::aspectFitRect(bounds, 160U, 90U);
+    const platform::SurfaceRect pixels{0.0F, 0.0F, 160.0F, 90.0F};
+    const float nativeScale = 160.0F / (801.0F * 1.5F);
+    const auto native = platform::transformedSurfaceContentRect(
+        bounds, fitted, {0.5F, 0.5F, nativeScale}, grid, pixels, 1.5F);
+    ASSERT_TRUE(native.isValid());
+    EXPECT_NEAR(native.width * grid.scaleX, 160.0F, 0.0001F);
+    EXPECT_NEAR(native.height * grid.scaleY, 90.0F, 0.0001F);
+    EXPECT_NEAR(native.x * grid.scaleX, std::round(native.x * grid.scaleX), 0.0001F);
+    EXPECT_NEAR(native.y * grid.scaleY, std::round(native.y * grid.scaleY), 0.0001F);
+    const auto fractional = platform::transformedSurfaceContentRect(
+        bounds, fitted, {0.5F, 0.5F, nativeScale * 0.998F}, grid, pixels, 1.5F);
+    EXPECT_FLOAT_EQ(fractional.width, fitted.width * nativeScale * 0.998F);
+    EXPECT_LT(fractional.width * grid.scaleX, 160.0F);
+    const platform::SurfaceRect tightBounds{0.0F, 0.0F, 160.02F, 90.02F};
+    const auto tightFit = platform::aspectFitRect(tightBounds, 160U, 90U);
+    EXPECT_FALSE(platform::transformedSurfaceContentRect(tightBounds,
+                                                         tightFit,
+                                                         {0.5F, 0.5F, 160.0F / tightFit.width},
+                                                         {0.9998F, 1.0F, 0.0F, 0.0F},
+                                                         pixels,
+                                                         1.0F)
+                     .isValid());
+
+    QQuickWindow window;
+    window.resize(801, 601);
+    ComparisonSurface surface{window.contentItem()};
+    surface.setSize(QSizeF{801.0, 601.0});
+    surface.setSourceDisplayInfo(
+        {QVariantMap{{QStringLiteral("width"), 160}, {QStringLiteral("height"), 90}}});
+    surface.setViewMode(ComparisonSurface::Single);
+    const qreal dpr = window.effectiveDevicePixelRatio();
+    surface.zoomAt(0.5, 0.5, 160.0 / (801.0 * dpr));
+    const auto actualGrid =
+        platform::surfacePixelGridForWindow(801.0F, 601.0F, static_cast<float>(dpr));
+    const auto content = platform::transformedSurfaceContentRect(
+        bounds,
+        fitted,
+        {0.5F, 0.5F, static_cast<float>(surface.viewScale())},
+        actualGrid,
+        pixels,
+        static_cast<float>(dpr));
+    ASSERT_TRUE(content.isValid());
+    const auto center =
+        surface.mapSurfacePoint(content.x + content.width * 0.5, content.y + content.height * 0.5);
+    EXPECT_TRUE(center.value(QStringLiteral("insideContent")).toBool());
+    EXPECT_NEAR(center.value(QStringLiteral("sourceX")).toDouble(), 0.5, 0.000001);
+    EXPECT_NEAR(center.value(QStringLiteral("sourceY")).toDouble(), 0.5, 0.000001);
+    EXPECT_FALSE(surface.mapSurfacePoint(content.x - 0.01, content.y + content.height * 0.5)
+                     .value(QStringLiteral("insideContent"))
+                     .toBool());
+
+    // Exactly one source pixel remains reachable even when Qt rounds the physical grid
+    // below the nominal DPR. Validate the corrected result before applying a generic floor.
+    surface.restoreViewport(0.5, 0.5, 1.0, true, 0.0, 0.0, 1.0 / 160.0, 1.0 / 90.0);
+    const qreal onePixelScale = 1.0 / (601.0 * dpr);
+    EXPECT_TRUE(surface.canDisplayViewScale(onePixelScale));
+    surface.zoomAt(0.5, 0.5, onePixelScale);
+    EXPECT_NEAR(surface.viewScale(), onePixelScale, 0.000000001);
+    EXPECT_TRUE(surface.roiEnabled());
+    surface.setSize(QSizeF{802.0, 601.0});
+    EXPECT_NEAR(surface.viewScale(), onePixelScale, 0.000000001);
+    const auto onePixel = platform::transformedSurfaceContentRect(
+        {0.0F, 0.0F, 801.0F, 601.0F},
+        {100.0F, 0.0F, 601.0F, 601.0F},
+        {0.5F, 0.5F, 1.0F / (601.0F * 1.25F)},
+        platform::surfacePixelGridForWindow(801.0F, 601.0F, 1.25F),
+        {0.0F, 0.0F, 1.0F, 1.0F},
+        1.25F);
+    EXPECT_TRUE(onePixel.isValid());
+}
+
+TEST(ComparisonSurfaceGeometryTests, NativeTexelCentersAlignInAnOddInsetViewportAtEveryDpr) {
+    const platform::SurfaceRect bounds{0.0F, 0.0F, 801.0F, 601.0F};
+    const platform::SurfaceRect fitted = platform::aspectFitRect(bounds, 160U, 90U);
+    const platform::SurfaceRect source{0.0F, 0.0F, 160.0F, 90.0F};
+    constexpr std::array<std::array<float, 2U>, 5U> kTexels{
+        {{0.0F, 0.0F}, {159.0F, 0.0F}, {0.0F, 89.0F}, {159.0F, 89.0F}, {79.0F, 44.0F}}};
+    for (const float dpr : {1.0F, 1.25F, 1.5F, 2.0F}) {
+        SCOPED_TRACE(dpr);
+        // The comparison item starts one DIP inside its containing window.
+        const platform::SurfacePixelGrid grid{dpr, dpr, dpr, dpr};
+        const platform::SurfaceRect content = platform::transformedSurfaceContentRect(
+            bounds, fitted, {0.5F, 0.5F, 160.0F / (801.0F * dpr)}, grid, source);
+        ASSERT_TRUE(content.isValid());
+        EXPECT_NEAR(content.width * dpr, 160.0F, 0.0001F);
+        EXPECT_NEAR(content.height * dpr, 90.0F, 0.0001F);
+        const float physicalLeft = content.x * dpr + grid.originX;
+        const float physicalTop = content.y * dpr + grid.originY;
+        EXPECT_NEAR(physicalLeft, std::round(physicalLeft), 0.0001F);
+        EXPECT_NEAR(physicalTop, std::round(physicalTop), 0.0001F);
+        EXPECT_GE(content.x, bounds.x);
+        EXPECT_GE(content.y, bounds.y);
+        EXPECT_LE(content.x + content.width, bounds.width);
+        EXPECT_LE(content.y + content.height, bounds.height);
+        EXPECT_LE(std::abs(content.x + content.width * 0.5F - bounds.width * 0.5F) * dpr, 0.5001F);
+        EXPECT_LE(std::abs(content.y + content.height * 0.5F - bounds.height * 0.5F) * dpr,
+                  0.5001F);
+        // A one-pixel checkerboard sampled at these device centers must land at texel
+        // centers, not between alternating black/white texels under bilinear filtering.
+        for (const auto& texel : kTexels) {
+            const float physicalX = std::round(physicalLeft) + texel[0U] + 0.5F;
+            const float physicalY = std::round(physicalTop) + texel[1U] + 0.5F;
+            const float sourceX = (physicalX - physicalLeft) / (content.width * dpr) * 160.0F;
+            const float sourceY = (physicalY - physicalTop) / (content.height * dpr) * 90.0F;
+            EXPECT_NEAR(sourceX, texel[0U] + 0.5F, 0.0001F);
+            EXPECT_NEAR(sourceY, texel[1U] + 0.5F, 0.0001F);
+        }
+    }
+}
+
+TEST(ComparisonSurfaceGeometryTests, NativeRotatedRoiKeepsFractionalSourcePixelPhase) {
+    const platform::SurfaceNormalizedRect roi{
+        8.25F / 64.0F, 4.5F / 32.0F, 55.5F / 64.0F, 27.75F / 32.0F};
+    const std::array<platform::SurfaceRect, 4U> expected{
+        platform::SurfaceRect{8.25F, 4.5F, 47.25F, 23.25F},
+        platform::SurfaceRect{4.5F, 8.5F, 23.25F, 47.25F},
+        platform::SurfaceRect{8.5F, 4.25F, 47.25F, 23.25F},
+        platform::SurfaceRect{4.25F, 8.25F, 23.25F, 47.25F},
+    };
+    const platform::SurfaceRect bounds{0.0F, 0.0F, 801.0F, 601.0F};
+    // Include a fractional scene translation as well as the one-DIP inset.
+    const platform::SurfacePixelGrid grid{1.25F, 1.25F, 1.875F, 2.1875F};
+    for (std::size_t index = 0U; index < expected.size(); ++index) {
+        SCOPED_TRACE(index * 90U);
+        const platform::SurfaceRect source = platform::orientedSurfaceSamplePixels(
+            64.0F, 32.0F, static_cast<std::uint16_t>(index * 90U), roi);
+        ASSERT_EQ(source, expected[index]);
+        const float fitScale = std::min(bounds.width / source.width, bounds.height / source.height);
+        const platform::SurfaceRect fitted{
+            (bounds.width - source.width * fitScale) * 0.5F,
+            (bounds.height - source.height * fitScale) * 0.5F,
+            source.width * fitScale,
+            source.height * fitScale,
+        };
+        const platform::SurfaceRect content = platform::transformedSurfaceContentRect(
+            bounds, fitted, {0.5F, 0.5F, 1.0F / (fitScale * grid.scaleX)}, grid, source);
+        ASSERT_TRUE(content.isValid());
+        EXPECT_NEAR(content.width * grid.scaleX, source.width, 0.0001F);
+        EXPECT_NEAR(content.height * grid.scaleY, source.height, 0.0001F);
+        const float phaseX = content.x * grid.scaleX + grid.originX - source.x;
+        const float phaseY = content.y * grid.scaleY + grid.originY - source.y;
+        EXPECT_NEAR(phaseX, std::round(phaseX), 0.0001F);
+        EXPECT_NEAR(phaseY, std::round(phaseY), 0.0001F);
+        EXPECT_GE(content.x, bounds.x);
+        EXPECT_GE(content.y, bounds.y);
+        EXPECT_LE(content.x + content.width, bounds.width);
+        EXPECT_LE(content.y + content.height, bounds.height);
+    }
+
+    // When no phase-aligned placement fits, retain the full ROI rather than crossing
+    // into the adjacent panel or changing its sample. The unavoidable phase stays visible.
+    const platform::SurfaceRect tightBounds{0.0F, 0.0F, 32.5F, 32.5F};
+    const platform::SurfaceRect tight =
+        platform::transformedSurfaceContentRect(tightBounds,
+                                                tightBounds,
+                                                {0.5F, 0.5F, 32.0F / 32.5F},
+                                                {1.0F, 1.0F, 0.0F, 0.0F},
+                                                {0.75F, 0.75F, 32.0F, 32.0F});
+    EXPECT_FLOAT_EQ(tight.width, 32.0F);
+    EXPECT_FLOAT_EQ(tight.height, 32.0F);
+    EXPECT_FLOAT_EQ(tight.x, 0.25F);
+    EXPECT_FLOAT_EQ(tight.y, 0.25F);
+}
+
+TEST(ComparisonSurfaceGeometryTests, RejectsInvalidScalesAndSubpixelDestinationExtents) {
+    platform::SurfaceViewTransform transform{0.5F, 0.5F, presentation::kMinimumViewportScale};
+    EXPECT_TRUE(transform.isValid());
+    transform.scale = 0.25F;
+    EXPECT_TRUE(transform.isValid());
+    transform.centerX = 0.25F;
+    EXPECT_FALSE(transform.isValid());
+    transform.centerX = 0.5F;
+    for (const float scale : {0.0F,
+                              -1.0F,
+                              std::numeric_limits<float>::denorm_min(),
+                              std::numeric_limits<float>::infinity(),
+                              std::numeric_limits<float>::quiet_NaN(),
+                              65.0F}) {
+        SCOPED_TRACE(scale);
+        transform.scale = scale;
+        EXPECT_FALSE(transform.isValid());
+    }
+    const platform::SurfaceRect bounds{0.0F, 0.0F, 100.0F, 100.0F};
+    const platform::SurfacePixelGrid grid{2.0F, 1.0F, 0.25F, 0.75F};
+    EXPECT_TRUE(platform::transformedSurfaceContentRect(
+                    bounds, {0.0F, 0.0F, 32.0F, 64.0F}, {0.5F, 0.5F, 0.015625F}, grid, {})
+                    .isValid());
+    EXPECT_FALSE(platform::transformedSurfaceContentRect(
+                     bounds, {0.0F, 0.0F, 31.0F, 64.0F}, {0.5F, 0.5F, 0.015625F}, grid, {})
+                     .isValid());
+    EXPECT_FALSE(platform::transformedSurfaceContentRect(
+                     bounds, {0.0F, 0.0F, 32.0F, 63.0F}, {0.5F, 0.5F, 0.015625F}, grid, {})
+                     .isValid());
+    EXPECT_FALSE(platform::transformedSurfaceContentRect(
+                     bounds, bounds, {0.5F, 0.5F, presentation::kMinimumViewportScale}, grid, {})
+                     .isValid());
+    EXPECT_FALSE(platform::transformedSurfaceContentRect(bounds, bounds, {0.5F, 0.5F, 0.5F}, {}, {})
+                     .isValid());
+    transform = {0.5F, 0.5F, 0.5F};
+    EXPECT_FALSE(platform::transformedSurfaceContentRect(
+                     bounds,
+                     {0.0F, 0.0F, std::numeric_limits<float>::infinity(), 100.0F},
+                     transform,
+                     grid,
+                     {})
+                     .isValid());
+}
+
+TEST(ComparisonSurfaceGeometryTests, MapsShrunkenContentCornersAndRejectsItsNewBackground) {
+    ComparisonSurface surface;
+    surface.setSize(QSizeF{800.0, 600.0});
+    surface.setPosition(QPointF{1.0, 1.0});
+    surface.setSourceDisplayInfo(
+        {QVariantMap{{QStringLiteral("width"), 160}, {QStringLiteral("height"), 90}}});
+    surface.setViewMode(ComparisonSurface::Single);
+    surface.zoomAt(0.25, 0.75, 0.2);
+    ASSERT_DOUBLE_EQ(surface.viewScale(), 0.2);
+    surface.panBy(0.2, -0.2);
+    EXPECT_DOUBLE_EQ(surface.viewCenterX(), 0.5);
+    EXPECT_DOUBLE_EQ(surface.viewCenterY(), 0.5);
+
+    const auto expectContent = [&](const qreal left,
+                                   const qreal top,
+                                   const qreal width,
+                                   const qreal height,
+                                   const qreal roiLeft,
+                                   const qreal roiTop,
+                                   const qreal roiExtent) {
+        constexpr std::array<std::array<qreal, 2U>, 5U> kPoints{
+            {{0.0, 0.0}, {1.0, 0.0}, {0.0, 1.0}, {1.0, 1.0}, {0.5, 0.5}}};
+        for (const auto& point : kPoints) {
+            const QVariantMap hit =
+                surface.mapSurfacePoint(left + point[0U] * width, top + point[1U] * height);
+            EXPECT_TRUE(hit.value(QStringLiteral("insideContent")).toBool());
+            EXPECT_NEAR(hit.value(QStringLiteral("displayX")).toDouble(), point[0U], 0.0001);
+            EXPECT_NEAR(hit.value(QStringLiteral("displayY")).toDouble(), point[1U], 0.0001);
+            EXPECT_NEAR(hit.value(QStringLiteral("sourceX")).toDouble(),
+                        roiLeft + point[0U] * roiExtent,
+                        0.0001);
+            EXPECT_NEAR(hit.value(QStringLiteral("sourceY")).toDouble(),
+                        roiTop + point[1U] * roiExtent,
+                        0.0001);
+        }
+        const std::array<QPointF, 4U> background{
+            QPointF{left - 0.5, top + height * 0.5},
+            QPointF{left + width + 0.5, top + height * 0.5},
+            QPointF{left + width * 0.5, top - 0.5},
+            QPointF{left + width * 0.5, top + height + 0.5},
+        };
+        for (const QPointF& point : background) {
+            const QVariantMap hit = surface.mapSurfacePoint(point.x(), point.y());
+            EXPECT_TRUE(hit.value(QStringLiteral("insidePanel")).toBool());
+            EXPECT_FALSE(hit.value(QStringLiteral("insideContent")).toBool());
+            EXPECT_FALSE(hit.contains(QStringLiteral("sourceX")));
+            EXPECT_FALSE(hit.contains(QStringLiteral("sourceY")));
+        }
+    };
+    expectContent(320.0, 255.0, 160.0, 90.0, 0.0, 0.0, 1.0);
+
+    // Restoring a smaller ROI must keep the ROI's fractional pixel phase. The top
+    // source edge is 22.5 pixels, so the 45-pixel destination starts at y=277.5.
+    surface.restoreViewport(0.5, 0.5, 0.1, true, 0.25, 0.25, 0.75, 0.75);
+    ASSERT_DOUBLE_EQ(surface.viewScale(), 0.1);
+    expectContent(360.0, 277.5, 80.0, 45.0, 0.25, 0.25, 0.5);
+}
+
+TEST(ComparisonSurfaceGeometryTests, KeepsBelowFitInsideThePhysicalFootprintAfterResize) {
+    ComparisonSurface surface;
+    surface.setSize(QSizeF{800.0, 600.0});
+    surface.setSourceDisplayInfo(
+        {QVariantMap{{QStringLiteral("width"), 160}, {QStringLiteral("height"), 90}}});
+    surface.setViewMode(ComparisonSurface::Single);
+    surface.zoomAt(0.5, 0.5, 0.01);
+    ASSERT_DOUBLE_EQ(surface.viewScale(), 0.01);
+    surface.setSize(QSizeF{32.0, 32.0});
+    EXPECT_NEAR(surface.minimumViewScale(), 1.0 / 18.0, 0.000001);
+    EXPECT_DOUBLE_EQ(surface.viewScale(), surface.minimumViewScale());
+    const qreal before = surface.viewScale();
+    surface.restoreViewport(0.5, 0.5, 0.001, true, 0.25, 0.25, 0.75, 0.75);
+    EXPECT_DOUBLE_EQ(surface.viewScale(), before);
+    EXPECT_FALSE(surface.roiEnabled());
+    surface.zoomAt(0.5, 0.5, 0.001);
+    EXPECT_DOUBLE_EQ(surface.viewScale(), surface.minimumViewScale());
+    surface.setSize(QSizeF{800.0, 600.0});
+    EXPECT_DOUBLE_EQ(surface.viewScale(), before);
 }
 
 TEST(ComparisonSurfaceGeometryTests, SharesThreeSourcePanelGeometryWithLabels) {
@@ -2391,6 +2767,63 @@ TEST(ComparisonSurfaceWarpTests, DifferencePeekReplacesThePassWithTheRawFirstSou
         restored.pixelColor(restored.width() / 2, restored.height() / 2), differenceCenter, 2);
     EXPECT_TRUE(harness.acknowledgementMailbox->tryPop().has_value());
 
+    harness.releaseRenderer();
+    EXPECT_TRUE(actor.shutdown(2s));
+}
+
+TEST(ComparisonSurfaceWarpTests, NativeBelowFitRetainsHighContrastTexelsAndBlackBackground) {
+    SurfaceWarpHarness harness;
+    // Odd bounds and a fractional inset require phase alignment even at 100% DPI.
+    // Avoid an exact half-pixel tie, whose equal placements can differ by float roundoff.
+    harness.window.resize(101, 65);
+    harness.surface.setPosition(QPointF{1.125, 1.125});
+    harness.surface.setSize(QSizeF{99.0, 63.0});
+    harness.surface.setViewMode(ComparisonSurface::Single);
+    harness.surface.setDifferenceFilter(ComparisonSurface::Bilinear);
+    harness.surface.setSourceDisplayInfo(
+        {QVariantMap{{QStringLiteral("width"), 8}, {QStringLiteral("height"), 8}}});
+    ASSERT_TRUE(harness.start());
+    const qreal dpr = harness.window.effectiveDevicePixelRatio();
+    harness.surface.zoomAt(0.5, 0.5, 8.0 / (63.0 * dpr));
+    ASSERT_LT(harness.surface.viewScale(), 1.0);
+
+    constexpr std::array<std::uint8_t, 8U> kPattern{16U, 235U, 16U, 235U, 16U, 235U, 16U, 235U};
+    auto budget = std::make_shared<platform::FrameBudget>(16U * 1024U * 1024U);
+    platform::GpuTransferActor actor{budget, harness.broker, harness.mailbox, harness.activitySink};
+    std::optional<application::FrameSet> pair =
+        makeHorizontalLumaSet(*budget, domain::FrameId{57}, kPattern, kPattern);
+    ASSERT_TRUE(pair.has_value());
+    ASSERT_EQ(actor.submit(makeContext(57U), std::move(*pair)),
+              platform::GpuTransferSubmitResult::Accepted);
+    ASSERT_TRUE(actor.waitUntilIdle(5s));
+    const QImage image = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+    ASSERT_FALSE(image.isNull());
+    const qreal rasterScaleX = image.width() / static_cast<qreal>(qRound(image.width() / dpr));
+    const qreal rasterScaleY = image.height() / static_cast<qreal>(qRound(image.height() / dpr));
+    const int left = static_cast<int>(
+        std::lround((harness.surface.x() + harness.surface.width() * 0.5) * rasterScaleX - 4.0));
+    const int top = static_cast<int>(
+        std::lround((harness.surface.y() + harness.surface.height() * 0.5) * rasterScaleY - 4.0));
+    ASSERT_GT(left, 0);
+    ASSERT_GT(top, 0);
+    ASSERT_LT(left + 8, image.width());
+    ASSERT_LT(top + 8, image.height());
+    // Full-range neutral NV12 has the same RGB code. Any half-texel phase error
+    // blends these alternating columns and fails even if Nearest would appear sharp.
+    for (int row = 0; row < 8; ++row) {
+        for (std::size_t column = 0U; column < kPattern.size(); ++column) {
+            const int luma = kPattern[column];
+            expectColorNear(image.pixelColor(left + static_cast<int>(column), top + row),
+                            QColor{luma, luma, luma},
+                            3);
+        }
+    }
+    for (int offset = 0; offset < 8; ++offset) {
+        expectColorNear(image.pixelColor(left - 1, top + offset), QColor{0, 0, 0}, 1);
+        expectColorNear(image.pixelColor(left + 8, top + offset), QColor{0, 0, 0}, 1);
+        expectColorNear(image.pixelColor(left + offset, top - 1), QColor{0, 0, 0}, 1);
+        expectColorNear(image.pixelColor(left + offset, top + 8), QColor{0, 0, 0}, 1);
+    }
     harness.releaseRenderer();
     EXPECT_TRUE(actor.shutdown(2s));
 }

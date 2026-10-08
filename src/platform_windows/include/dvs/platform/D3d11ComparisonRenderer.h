@@ -48,6 +48,26 @@ struct SurfaceViewport final {
     float height = 0.0F;
 };
 
+// Axis-aligned item-local logical coordinates to physical render-target pixels.
+// A zero/default grid cannot safely support sub-Fit geometry (e.g. perspective ancestors).
+struct SurfacePixelGrid final {
+    float scaleX = 0.0F;
+    float scaleY = 0.0F;
+    float originX = 0.0F;
+    float originY = 0.0F;
+
+    [[nodiscard]] bool isValid() const noexcept;
+};
+
+[[nodiscard]] SurfacePixelGrid surfacePixelGridFromClip(const std::array<float, 16U>& clipFromItem,
+                                                        const SurfaceViewport& viewport) noexcept;
+
+// Ordinary Qt windows round the swapchain size, then round its DPR-divided projection
+// extent again. Predict that raster scale for GUI hit mapping; redirected targets are excluded.
+[[nodiscard]] SurfacePixelGrid surfacePixelGridForWindow(double logicalWidth,
+                                                         double logicalHeight,
+                                                         double nominalDevicePixelRatio) noexcept;
+
 struct D3dScissorRect final {
     std::int32_t left = 0;
     std::int32_t top = 0;
@@ -90,6 +110,22 @@ effectiveSurfaceSampleRect(const SurfaceViewTransform& transform,
                            bool roiEnabled,
                            const SurfaceNormalizedRect& roi) noexcept;
 
+// Pixel-coordinate bounds of the sampled source after rotation, before SAR. The
+// origin carries fractional ROI phase, so 1:1 alignment does not silently move the ROI.
+[[nodiscard]] SurfaceRect orientedSurfaceSamplePixels(float sourceWidth,
+                                                      float sourceHeight,
+                                                      std::uint16_t rotationDegrees,
+                                                      const SurfaceNormalizedRect& sample) noexcept;
+
+// Below Fit, shrink the destination and retain the whole sampled ROI. At/above Fit,
+// return fittedContent unchanged: magnification stays in the established UV crop path.
+[[nodiscard]] SurfaceRect transformedSurfaceContentRect(const SurfaceRect& bounds,
+                                                        const SurfaceRect& fittedContent,
+                                                        const SurfaceViewTransform& transform,
+                                                        const SurfacePixelGrid& pixelGrid,
+                                                        const SurfaceRect& sourcePixels,
+                                                        float nominalPixelsPerUnit = 0.0F) noexcept;
+
 // Qt-facing code snapshots its public scene-graph state into this native-type-free value. The
 // matrix is row-major and maps item-local logical coordinates directly to clip space.
 struct SurfaceRenderState final {
@@ -98,6 +134,8 @@ struct SurfaceRenderState final {
     float logicalHeight = 0.0F;
     std::uint32_t pixelWidth = 0U;
     std::uint32_t pixelHeight = 0U;
+    // Nominal zoom intent is distinct from the rounded projection's actual raster grid.
+    float nominalDevicePixelRatio = 1.0F;
     float opacity = 1.0F;
     bool scissorEnabled = false;
     SurfaceScissorRect scissor;

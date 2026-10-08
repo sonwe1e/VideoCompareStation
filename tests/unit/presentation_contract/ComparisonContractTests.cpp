@@ -53,6 +53,24 @@ TEST(ComparisonContractTests, FallsBackToSingleOrSideBySideForUnavailableModes) 
     EXPECT_EQ(effectiveViewMode(ViewMode::Wipe, 2U), ViewMode::Wipe);
 }
 
+TEST(ComparisonContractTests, SharesCenteredBelowFitScaleBounds) {
+    ViewportState viewport;
+    for (const float scale : {kMinimumViewportScale, 0.25F, 1.0F, kMaximumViewportScale}) {
+        SCOPED_TRACE(scale);
+        viewport.scale = scale;
+        EXPECT_TRUE(viewport.isValid());
+    }
+    viewport.scale = 0.25F;
+    viewport.centerX = 0.4F;
+    EXPECT_FALSE(viewport.isValid());
+    viewport.centerX = 0.5F;
+    viewport.centerY = 0.6F;
+    EXPECT_FALSE(viewport.isValid());
+    viewport.centerY = 0.5F;
+    viewport.scale = std::numeric_limits<float>::denorm_min();
+    EXPECT_FALSE(viewport.isValid());
+}
+
 TEST(ComparisonContractTests, ValidatesCompleteComparisonAndViewportState) {
     ComparisonViewConfig config;
     EXPECT_TRUE(config.isValid());

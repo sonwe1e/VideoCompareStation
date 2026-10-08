@@ -123,12 +123,12 @@ nativeDifferenceFilter(const ComparisonSurface::DifferenceFilter value) noexcept
     };
 }
 
-[[nodiscard]] std::array<platform::SurfaceDisplayExtent, 3U>
-sourceDisplayExtents(const ComparisonSurface& surface) {
+[[nodiscard]] std::array<platform::SurfaceDisplayExtent, 3U> sourceDisplayExtents(
+    const ComparisonSurface& surface, const bool roiEnabled, const QSizeF& roiExtent) {
     std::array<platform::SurfaceDisplayExtent, 3U> result{};
     const QVariantList info = surface.sourceDisplayInfo();
-    const qreal roiWidth = surface.roiEnabled() ? surface.roiRight() - surface.roiLeft() : 1.0;
-    const qreal roiHeight = surface.roiEnabled() ? surface.roiBottom() - surface.roiTop() : 1.0;
+    const qreal roiWidth = roiEnabled ? roiExtent.width() : 1.0;
+    const qreal roiHeight = roiEnabled ? roiExtent.height() : 1.0;
     for (qsizetype index = 0; index < info.size() && index < 3; ++index) {
         const QVariantMap source = info[index].toMap();
         const double width = source.value(QStringLiteral("width")).toDouble();
@@ -157,8 +157,8 @@ sourceDisplayExtents(const ComparisonSurface& surface) {
     return result;
 }
 
-[[nodiscard]] platform::SurfacePresentationGeometry
-surfacePresentationGeometry(const ComparisonSurface& surface) {
+[[nodiscard]] platform::SurfacePresentationGeometry surfacePresentationGeometry(
+    const ComparisonSurface& surface, const bool roiEnabled, const QSizeF& roiExtent) {
     const qreal devicePixelRatio =
         surface.window() != nullptr ? surface.window()->effectiveDevicePixelRatio() : 1.0;
     const auto pixelWidth = static_cast<std::uint32_t>(
@@ -174,7 +174,15 @@ surfacePresentationGeometry(const ComparisonSurface& surface) {
         static_cast<std::uint8_t>(surface.referenceSlot()),
         nativeDifferenceEdge(surface.differenceEdge()),
         static_cast<float>(surface.wipePosition()),
-        sourceDisplayExtents(surface));
+        sourceDisplayExtents(surface, roiEnabled, roiExtent));
+}
+
+[[nodiscard]] platform::SurfacePresentationGeometry
+surfacePresentationGeometry(const ComparisonSurface& surface) {
+    return surfacePresentationGeometry(
+        surface,
+        surface.roiEnabled(),
+        QSizeF{surface.roiRight() - surface.roiLeft(), surface.roiBottom() - surface.roiTop()});
 }
 
 [[nodiscard]] int sourceRotationDegrees(const ComparisonSurface& surface, const int sourceSlot) {
@@ -201,6 +209,144 @@ sourceOrientedPoint(const qreal displayX, const qreal displayY, const int rotati
     default:
         return {displayX, displayY};
     }
+}
+
+[[nodiscard]] platform::SurfacePixelGrid surfacePixelGrid(const ComparisonSurface& surface) {
+    const qreal dpr = surface.window() ? surface.window()->effectiveDevicePixelRatio() : 1.0;
+    const QPointF origin = surface.mapToScene(QPointF{0.0, 0.0});
+    const QPointF xUnit = surface.mapToScene(QPointF{1.0, 0.0}) - origin;
+    const QPointF yUnit = surface.mapToScene(QPointF{0.0, 1.0}) - origin;
+    const QPointF far = surface.mapToScene(QPointF{surface.width(), surface.height()});
+    const QPointF affineFar = origin + xUnit * surface.width() + yUnit * surface.height();
+    if (xUnit.y() != 0.0 || yUnit.x() != 0.0 || std::abs(far.x() - affineFar.x()) > 0.0001 ||
+        std::abs(far.y() - affineFar.y()) > 0.0001) {
+        return {};
+    }
+    const auto windowGrid = surface.window()
+                                ? platform::surfacePixelGridForWindow(
+                                      surface.window()->width(), surface.window()->height(), dpr)
+                                : platform::SurfacePixelGrid{1.0F, 1.0F, 0.0F, 0.0F};
+    return platform::SurfacePixelGrid{static_cast<float>(xUnit.x() * windowGrid.scaleX),
+                                      static_cast<float>(yUnit.y() * windowGrid.scaleY),
+                                      static_cast<float>(origin.x() * windowGrid.scaleX),
+                                      static_cast<float>(origin.y() * windowGrid.scaleY)};
+}
+
+[[nodiscard]] qreal minimumScaleForGeometry(const platform::SurfacePresentationGeometry& geometry,
+                                            const platform::SurfacePixelGrid& grid) {
+    if (!grid.isValid()) {
+        return 1.0;
+    }
+    bool foundContent = false;
+    qreal minimum = presentation::kMinimumViewportScale;
+    const auto consider = [&](const platform::SurfaceRect& rect) {
+        if (!rect.isValid()) {
+            return;
+        }
+        const qreal physicalWidth = static_cast<qreal>(rect.width) * grid.scaleX;
+        const qreal physicalHeight = static_cast<qreal>(rect.height) * grid.scaleY;
+        if (!std::isfinite(physicalWidth) || !std::isfinite(physicalHeight) ||
+            physicalWidth <= 0.0 || physicalHeight <= 0.0) {
+            minimum = 1.0;
+            return;
+        }
+        foundContent = true;
+        minimum = (std::max)(minimum, 1.0 / (std::min)(physicalWidth, physicalHeight));
+    };
+    for (std::size_t index = 0U; index < geometry.panels.sourceCount; ++index) {
+        consider(geometry.sourceContentRects[index]);
+    }
+    if (geometry.differenceContentRect.has_value()) {
+        consider(*geometry.differenceContentRect);
+    }
+    return foundContent ? (std::min)(minimum, 1.0) : 1.0;
+}
+
+[[nodiscard]] platform::SurfaceRect actualContentRect(const ComparisonSurface& surface,
+                                                      const platform::SurfaceRect& bounds,
+                                                      const platform::SurfaceRect& fitted,
+                                                      const int sourceSlot,
+                                                      const platform::SurfaceNormalizedRect& sample,
+                                                      const qreal requestedScale = -1.0) {
+    const qreal scale = requestedScale > 0.0 ? requestedScale : surface.viewScale();
+    if (scale >= 1.0) {
+        return fitted;
+    }
+    platform::SurfaceRect pixels;
+    if (sourceSlot >= 0 && sourceSlot < surface.sourceDisplayInfo().size()) {
+        const QVariantMap info = surface.sourceDisplayInfo()[sourceSlot].toMap();
+        pixels = platform::orientedSurfaceSamplePixels(
+            info.value(QStringLiteral("width")).toFloat(),
+            info.value(QStringLiteral("height")).toFloat(),
+            static_cast<std::uint16_t>(sourceRotationDegrees(surface, sourceSlot)),
+            sample);
+    }
+    return platform::transformedSurfaceContentRect(
+        bounds,
+        fitted,
+        platform::SurfaceViewTransform{
+            scale < 1.0 ? 0.5F : static_cast<float>(surface.viewCenterX()),
+            scale < 1.0 ? 0.5F : static_cast<float>(surface.viewCenterY()),
+            static_cast<float>(scale)},
+        surfacePixelGrid(surface),
+        pixels,
+        static_cast<float>(surface.window() ? surface.window()->effectiveDevicePixelRatio() : 1.0));
+}
+
+[[nodiscard]] bool scaleDisplayable(const ComparisonSurface& surface,
+                                    const platform::SurfacePresentationGeometry& geometry,
+                                    const qreal scale,
+                                    const bool roiEnabled,
+                                    const platform::SurfaceNormalizedRect& roi) {
+    if (!std::isfinite(scale) || scale < presentation::kMinimumViewportScale ||
+        scale > presentation::kMaximumViewportScale) {
+        return false;
+    }
+    if (scale >= 1.0) {
+        return true;
+    }
+    const auto sample = platform::effectiveSurfaceSampleRect(
+        {0.5F, 0.5F, static_cast<float>(scale)}, roiEnabled, roi);
+    const platform::SurfaceRect full{
+        0.0F, 0.0F, static_cast<float>(surface.width()), static_cast<float>(surface.height())};
+    if (geometry.wipeContentRect.has_value()) {
+        return actualContentRect(surface,
+                                 full,
+                                 *geometry.wipeContentRect,
+                                 geometry.panels.sourceSlots[0U],
+                                 sample,
+                                 scale)
+            .isValid();
+    }
+    bool found = false;
+    for (std::size_t index = 0U; index < geometry.panels.sourceCount; ++index) {
+        if (geometry.sourceContentRects[index].isValid()) {
+            found = true;
+            if (!actualContentRect(surface,
+                                   geometry.panels.sourceRects[index],
+                                   geometry.sourceContentRects[index],
+                                   geometry.panels.sourceSlots[index],
+                                   sample,
+                                   scale)
+                     .isValid()) {
+                return false;
+            }
+        }
+    }
+    if (geometry.differenceContentRect.has_value()) {
+        found = true;
+        const int slot = surface.differenceEdge() == ComparisonSurface::Edge1And2 ? 1 : 0;
+        if (!actualContentRect(surface,
+                               *geometry.panels.differenceRect,
+                               *geometry.differenceContentRect,
+                               slot,
+                               sample,
+                               scale)
+                 .isValid()) {
+            return false;
+        }
+    }
+    return found;
 }
 
 [[nodiscard]] std::uint32_t pixelExtent(const qreal logicalExtent, const qreal dpr) noexcept {
@@ -267,6 +413,7 @@ public:
             .logicalHeight = static_cast<float>(bounds_.height()),
             .pixelWidth = pixelExtent(bounds_.width(), devicePixelRatio_),
             .pixelHeight = pixelExtent(bounds_.height(), devicePixelRatio_),
+            .nominalDevicePixelRatio = static_cast<float>(devicePixelRatio_),
             .opacity = static_cast<float>(std::clamp(inheritedOpacity(), 0.0, 1.0)),
             .scissorEnabled = renderState->scissorEnabled(),
             .scissor =
@@ -341,6 +488,7 @@ void ComparisonSurface::setViewMode(const ViewMode value) {
         return;
     }
     viewMode_ = value;
+    clampSmallViewportToGeometry();
     emit viewModeChanged();
     emit presentationGeometryChanged();
     update();
@@ -387,6 +535,7 @@ void ComparisonSurface::setDifferenceEdge(const DifferenceEdge value) {
         return;
     }
     differenceEdge_ = value;
+    clampSmallViewportToGeometry();
     emit differenceEdgeChanged();
     emit presentationGeometryChanged();
     update();
@@ -441,7 +590,9 @@ QVariantList ComparisonSurface::sourcePanelRects() const {
         item.insert(QStringLiteral("width"), rect.width);
         item.insert(QStringLiteral("height"), rect.height);
         // Keep panel bounds for labels/dividers, but expose the fitted video extent for
-        // pixel-scale readouts. In wipe mode this is the full composite, not the split mask.
+        // pixel-scale readouts. These remain the unscaled Fit basis; viewScale is applied
+        // exactly once by the readout. Hit mapping uses actualContentRect below Fit.
+        // In wipe mode this is the full composite, not the split mask.
         item.insert(QStringLiteral("contentWidth"), geometry.sourceContentRects[index].width);
         item.insert(QStringLiteral("contentHeight"), geometry.sourceContentRects[index].height);
         result.push_back(std::move(item));
@@ -458,6 +609,7 @@ void ComparisonSurface::setSourceDisplayInfo(const QVariantList& value) {
         return;
     }
     sourceDisplayInfo_ = value;
+    clampSmallViewportToGeometry();
     emit presentationGeometryChanged();
 }
 
@@ -538,7 +690,13 @@ QVariantMap ComparisonSurface::mapSurfacePoint(const qreal x, const qreal y) con
                    sourceSlot,
                    sourceSlot,
                    insidePanel,
-                   *geometry.wipeContentRect);
+                   actualContentRect(
+                       *this,
+                       platform::SurfaceRect{
+                           0.0F, 0.0F, static_cast<float>(width()), static_cast<float>(height())},
+                       *geometry.wipeContentRect,
+                       static_cast<int>(geometry.panels.sourceSlots[0U]),
+                       sample));
     }
     for (std::size_t index = 0U; index < geometry.panels.sourceCount; ++index) {
         if (contains(geometry.panels.sourceRects[index])) {
@@ -547,17 +705,26 @@ QVariantMap ComparisonSurface::mapSurfacePoint(const qreal x, const qreal y) con
                        static_cast<int>(geometry.panels.sourceSlots[index]),
                        static_cast<int>(geometry.panels.sourceSlots[index]),
                        true,
-                       geometry.sourceContentRects[index]);
+                       actualContentRect(*this,
+                                         geometry.panels.sourceRects[index],
+                                         geometry.sourceContentRects[index],
+                                         static_cast<int>(geometry.panels.sourceSlots[index]),
+                                         sample));
         }
     }
     if (geometry.panels.differenceRect.has_value() && contains(*geometry.panels.differenceRect)) {
         const int firstDifferenceSlot = differenceEdge_ == Edge1And2 ? 1 : 0;
-        return hit(DifferenceRegion,
-                   static_cast<int>(geometry.panels.sourceCount),
-                   -1,
-                   firstDifferenceSlot,
-                   true,
-                   geometry.differenceContentRect.value_or(platform::SurfaceRect{}));
+        return hit(
+            DifferenceRegion,
+            static_cast<int>(geometry.panels.sourceCount),
+            -1,
+            firstDifferenceSlot,
+            true,
+            actualContentRect(*this,
+                              *geometry.panels.differenceRect,
+                              geometry.differenceContentRect.value_or(platform::SurfaceRect{}),
+                              firstDifferenceSlot,
+                              sample));
     }
     return QVariantMap{
         {QStringLiteral("region"), EmptyRegion},
@@ -644,6 +811,26 @@ bool ComparisonSurface::roiEnabled() const noexcept {
     return roiEnabled_;
 }
 
+void ComparisonSurface::clampSmallViewportToGeometry() {
+    if (viewScale_ >= 1.0 || canDisplayViewScale(viewScale_)) {
+        return;
+    }
+    const qreal minimum = minimumViewScale();
+    const qreal candidate = (std::max)(viewScale_, minimum);
+    const qreal next = canDisplayViewScale(candidate) ? candidate : 1.0;
+    if (viewScale_ != next) {
+        viewScale_ = next;
+        viewCenterX_ = 0.5;
+        viewCenterY_ = 0.5;
+        emit viewportChanged();
+        update();
+    }
+}
+
+qreal ComparisonSurface::minimumViewScale() const {
+    return minimumScaleForGeometry(surfacePresentationGeometry(*this), surfacePixelGrid(*this));
+}
+
 qreal ComparisonSurface::roiLeft() const noexcept {
     return roiLeft_;
 }
@@ -660,6 +847,17 @@ qreal ComparisonSurface::roiBottom() const noexcept {
     return roiBottom_;
 }
 
+bool ComparisonSurface::canDisplayViewScale(const qreal scale) const {
+    return scaleDisplayable(*this,
+                            surfacePresentationGeometry(*this),
+                            scale,
+                            roiEnabled_,
+                            {static_cast<float>(roiLeft_),
+                             static_cast<float>(roiTop_),
+                             static_cast<float>(roiRight_),
+                             static_cast<float>(roiBottom_)});
+}
+
 void ComparisonSurface::zoomAt(const qreal normalizedX,
                                const qreal normalizedY,
                                const qreal factor) {
@@ -669,13 +867,23 @@ void ComparisonSurface::zoomAt(const qreal normalizedX,
     }
     const qreal focalX = std::clamp(normalizedX, 0.0, 1.0);
     const qreal focalY = std::clamp(normalizedY, 0.0, 1.0);
-    const qreal oldVisible = 1.0 / viewScale_;
+    const qreal oldVisible = 1.0 / (std::max)(viewScale_, 1.0);
     const qreal oldLeft = std::clamp(viewCenterX_ - (oldVisible * 0.5), 0.0, 1.0 - oldVisible);
     const qreal oldTop = std::clamp(viewCenterY_ - (oldVisible * 0.5), 0.0, 1.0 - oldVisible);
     const qreal sourceX = oldLeft + (focalX * oldVisible);
     const qreal sourceY = oldTop + (focalY * oldVisible);
-    const qreal nextScale = std::clamp(viewScale_ * factor, 1.0, 64.0);
-    const qreal nextVisible = 1.0 / nextScale;
+    const qreal requestedScale =
+        (std::min)(viewScale_ * factor, static_cast<qreal>(presentation::kMaximumViewportScale));
+    const qreal nextScale =
+        canDisplayViewScale(requestedScale)
+            ? requestedScale
+            : std::clamp(requestedScale,
+                         minimumViewScale(),
+                         static_cast<qreal>(presentation::kMaximumViewportScale));
+    if (!canDisplayViewScale(nextScale)) {
+        return;
+    }
+    const qreal nextVisible = 1.0 / (std::max)(nextScale, 1.0);
     const qreal nextLeft = std::clamp(sourceX - (focalX * nextVisible), 0.0, 1.0 - nextVisible);
     const qreal nextTop = std::clamp(sourceY - (focalY * nextVisible), 0.0, 1.0 - nextVisible);
     viewScale_ = nextScale;
@@ -801,16 +1009,29 @@ void ComparisonSurface::restoreViewport(const qreal centerX,
                                         const qreal roiBottom) {
     if (!std::isfinite(centerX) || !std::isfinite(centerY) || !std::isfinite(scale) ||
         !std::isfinite(roiLeft) || !std::isfinite(roiTop) || !std::isfinite(roiRight) ||
-        !std::isfinite(roiBottom) || scale < 1.0 || scale > 64.0) {
+        !std::isfinite(roiBottom) || scale < presentation::kMinimumViewportScale ||
+        scale > presentation::kMaximumViewportScale) {
         return;
     }
-    const qreal visible = 1.0 / scale;
+    const qreal visible = 1.0 / (std::max)(scale, 1.0);
     const qreal minimumCenter = visible * 0.5;
     const qreal maximumCenter = 1.0 - minimumCenter;
     if (centerX < minimumCenter || centerX > maximumCenter || centerY < minimumCenter ||
         centerY > maximumCenter ||
         (roiEnabled && (roiLeft < 0.0 || roiTop < 0.0 || roiRight > 1.0 || roiBottom > 1.0 ||
                         roiLeft >= roiRight || roiTop >= roiBottom))) {
+        return;
+    }
+
+    if (!scaleDisplayable(*this,
+                          surfacePresentationGeometry(
+                              *this, roiEnabled, QSizeF{roiRight - roiLeft, roiBottom - roiTop}),
+                          scale,
+                          roiEnabled,
+                          {static_cast<float>(roiLeft),
+                           static_cast<float>(roiTop),
+                           static_cast<float>(roiRight),
+                           static_cast<float>(roiBottom)})) {
         return;
     }
 
@@ -836,6 +1057,7 @@ void ComparisonSurface::setReferenceSlot(const int value) {
         return;
     }
     referenceSlot_ = value;
+    clampSmallViewportToGeometry();
     emit referenceSlotChanged();
     emit presentationGeometryChanged();
     update();
@@ -917,9 +1139,19 @@ QSGNode* ComparisonSurface::updatePaintNode(QSGNode* const oldNode, UpdatePaintN
     return node;
 }
 
+void ComparisonSurface::itemChange(const ItemChange change, const ItemChangeData& value) {
+    QQuickItem::itemChange(change, value);
+    if (change == ItemSceneChange || change == ItemDevicePixelRatioHasChanged) {
+        clampSmallViewportToGeometry();
+        emit presentationGeometryChanged();
+        update();
+    }
+}
+
 void ComparisonSurface::geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) {
     QQuickItem::geometryChange(newGeometry, oldGeometry);
     if (newGeometry.size() != oldGeometry.size()) {
+        clampSmallViewportToGeometry();
         emit presentationGeometryChanged();
         update();
     }

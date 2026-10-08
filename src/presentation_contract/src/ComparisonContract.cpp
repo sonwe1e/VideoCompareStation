@@ -35,8 +35,9 @@ template <typename Enum>
 bool ViewportState::isValid() const noexcept {
     const bool transformValid = std::isfinite(centerX) && std::isfinite(centerY) &&
                                 std::isfinite(scale) && centerX >= 0.0F && centerX <= 1.0F &&
-                                centerY >= 0.0F && centerY <= 1.0F && scale >= 1.0F &&
-                                scale <= 64.0F;
+                                centerY >= 0.0F && centerY <= 1.0F &&
+                                scale >= kMinimumViewportScale && scale <= kMaximumViewportScale &&
+                                (scale >= 1.0F || (centerX == 0.5F && centerY == 0.5F));
     const bool roiValid = std::isfinite(roiLeft) && std::isfinite(roiTop) &&
                           std::isfinite(roiRight) && std::isfinite(roiBottom) && roiLeft >= 0.0F &&
                           roiTop >= 0.0F && roiRight <= 1.0F && roiBottom <= 1.0F &&
