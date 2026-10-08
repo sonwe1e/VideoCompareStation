@@ -278,7 +278,10 @@ foreach(dvs_menu_qml_test IN ITEMS vcs_menu application_menu_bar active_source_s
                 "ui.${dvs_menu_qml_test}.${dvs_qml_style}.scale-${dvs_scale_name}"
                 PROPERTIES
                     LABELS "component;ui_qml"
-                    TIMEOUT 20
+                    # The expanded source-strip drag suite needs ~21 s on Windows with real
+                    # native windows (26 cases across drags and grab handoffs); 20 s cut it
+                    # off mid-run there while Linux offscreen stayed inside the old bound.
+                    TIMEOUT 60
                     RUN_SERIAL TRUE
                     ENVIRONMENT
                         "QT_QUICK_CONTROLS_STYLE=${dvs_qml_style};QSG_RENDER_LOOP=basic;QT_SCALE_FACTOR=${dvs_scale_factor}"

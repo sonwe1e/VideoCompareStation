@@ -1,6 +1,7 @@
 #include "dvs/ui/ComparisonSurface.h"
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QMetaObject>
 #include <QObject>
 #include <QQmlComponent>
@@ -20,6 +21,11 @@ namespace {
 class ViewportPixelScaleTests : public ::testing::Test {
 protected:
     void SetUp() override {
+        // Same import-path contract as MainQmlContractTests: the engine's default import
+        // paths do not include the qml/ tree deployed next to the test binary, so without
+        // this the QtQuick.Controls import fails with "module is not installed".
+        engine_.addImportPath(
+            QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
         // No window, renderer services, media, filesystem worker or playback coordinator is
         // needed: exercise the real viewport bindings and surface geometry in isolation.
         QQmlComponent component{&engine_, QUrl{QStringLiteral("qrc:/qml/ComparisonViewport.qml")}};

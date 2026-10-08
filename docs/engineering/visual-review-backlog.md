@@ -1,7 +1,35 @@
 # 视觉审查问题台账
 
-更新：2026-10-07。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-10-08。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+
+## 2026-10-08 PR #38–#41 Windows 原生验证轮（四项合并 + 三处测试基建修复）
+
+- **合并**：#38 视口倍率、#39 侧栏键盘目标、#40 来源条拖拽排序、#41 倒退请求放行按
+  `chore(merge)` 依次合入 main；#41 与 #38 的同日台账条目在本页顶部冲突，两条都保留解决。
+  四个 PR 均带 CI skip 标记，Windows 侧验证由本轮补齐。
+- **Windows 全量门禁**：MSVC 19.44 / Qt 6.11.1 / D3D11。dev 预设全量 ctest 962 项注册、
+  0 失败（7 skipped/disabled 为既有状态）；四个 PR 的定向集合 107/107（协调器/预取 92、
+  视口倍率 5、侧栏 2×19、来源条 8×26）；format-check 346 文件、lint 通过。
+- **测试基建修复 ×3**（均先红后绿）：
+  1. 来源条套件在 Windows 真实窗口下单轮约 21 s，超出沿用的 20 s 超时，8/8 判 Timeout；
+     TIMEOUT 放宽到 60 s（与侧栏套件一致）后 8/8 通过（21–23 s）。
+  2. 侧栏上下文菜单 `opened=true` 时内容列首帧布局未完成（探针逐帧采样：contentHeight
+     0→70 需约 50 ms，两种控件风格同样发生），菜单项鼠标点击落空——原套件在本机 10/15
+     轮固定 4 例红（compare 计数 0 vs 1）。测试内在菜单项点击前等待内容列布局
+     （settleContextMenu）后 24/24（12 轮 × Basic/Windows）。探针与红例证据在
+     out/verification/sidebar-probe/（一次性，不入套件）。
+  3. ViewportPixelScaleTests 缺少 MainQmlContractTests 同款的 `addImportPath(bin/qml)`，
+     引擎默认导入路径找不到 QtQuick.Controls（module is not installed，5/5 秒败）；
+     补齐后 5/5。
+  另：PlaybackCoordinatorTests.cpp 在 #41 的提交里未过 clang-format 19.1.5（当时 CI 被
+  skip 未拦下），用仓库 format 目标重排 35 行纯格式后 92/92 复验通过。
+- **全 App 交互层限制**：本轮会话为无头桌面——窗口截图全黑、SendInput/PostMessage 与
+  UIA Invoke 均无法驱动播放导航（transport 全禁用），而同一打开链路在 `--ui-smoke` 与
+  popup-pixels 门禁里全绿，故判定为会话环境限制而非产品回归。真实键鼠的全 App 逐帧
+  交互验收留待有显示会话时执行；探针脚本与记录在 out/verification/ui-probe/。
+- **结论**：#38/#39/#40/#41 的行为改动在 Windows 上经真实窗口组件与真实协调器测试全部
+  验证通过；本轮不宣称交互式全 App 操作与性能门禁（后者由标签触发的 CI 执行）。
 
 ## 2026-10-07 连续倒退的 pending 请求互相取消（修复草稿，Windows 待验）
 
@@ -14,6 +42,9 @@
   转绿，连同 ACK 前对照 4/4、100 轮 400/400。不是运行真实 provider 或视频解码。
 - **边界**：Windows / Main / shell / 实播 / GPU / 全构建 / 格式 lint 与性能门禁未验。
   不宣称 FPS 或延迟提升；详见 [倒退请求放行与验证](reverse-step-admission.md)。
+- **2026-10-08 Windows 原生验证**：合并后 MSVC/Qt 6.11.1 全量 962 项 0 失败，协调器/
+  预取定向 92/92（含本条目的连续 7→6→5→4 与取消终态用例）；全 App 交互步进受无头
+  会话限制未执行，见同日验证轮条目。
 
 ## 2026-10-07 竖屏视频倍率与一键真实尺寸（观看体验，待 Windows 验收）
 
@@ -26,6 +57,8 @@
   2/2 DPR 变异通过。无设备服务；未验 Windows/MSVC、固定 Qt、实窗/DPI、全套门禁。
 - **详细范围与原生复核**：[视频视口倍率](viewport-pixel-scale.md)。不修改 workflow，
   不手动触发或重跑 CI；本地候选待独立审查与 Draft 发布，不能把零 CI 当通过。
+- **2026-10-08 Windows 原生验证**：真实视口组件 5/5（含补齐 bin/qml 导入路径后），
+  随全量 962 项 0 失败；真实实窗/DPI 切换仍留待交互会话。
 
 ## 2026-10-07 文件侧栏右键操作（V-08 增补，待 Windows 验收）
 
@@ -34,6 +67,9 @@
   全失败，最终 Qt 6.8.2 / Basic / offscreen / software 正式套件 19/19（17 行为 +
   init/cleanup）；21/21 实现变异、5/5 观测 guard 检出。Windows 主窗/控件风格、
   完整门禁与真实文件打开未验。见[键盘范围与离屏截图](video-folder-browser.md#2026-10-07-键盘目标与播放项分开显示待-windows-原生验收)。
+- **2026-10-08 Windows 原生验证**：Basic/Windows 两种风格真实窗口套件 19/19×2（菜单
+  内容列布局竞速已由 settleContextMenu 修复，红例 10/15 → 绿 24/24）；随全量 962 项
+  0 失败。真实文件打开的全 App 侧栏流程留待交互会话。
 
 - **入口**：当前文件夹／最近打开两页统一右键，明确区分「打开为新单视频任务」与
   「加入当前视频对比…」；后者在无视频、满三源、重复／不可读文件及忙状态禁用并说明原因。
@@ -331,6 +367,8 @@
       offscreen / software 在四档缩放各26/26（24行为 + init/cleanup），38/38实现变异、
       3/3观测guard覆盖42个新断言位点。真实组件截图已检查；Windows主窗/输入设备、
       完整Main/shell与播放门禁未验。见[来源条拖拽范围与证据](source-strip-drag.md)。
+    - **2026-10-08 Windows 原生验证**：Basic/Windows × 四档缩放 8/8（每轮 21–23 s，
+      超时已放宽至 60 s）；随全量 962 项 0 失败。真实鼠标的全 App 拖拽留待交互会话。
     - 新增（`ReviewShellController`）：`displaySourceIdentities` / `selectedSourceIdentities`、
       `moveSourceInDisplayOrder(from,to)`、`setSourceSelected` / `toggleSourceSelection` /
       `clearSourceSelection`、`removeSelectedSources()`。全部以**冻结 source identity** 为键，

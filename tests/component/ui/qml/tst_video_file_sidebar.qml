@@ -70,6 +70,16 @@ Item {
             wait(30);
         }
 
+        function settleContextMenu() {
+            // opened=true fires before the menu's content column completes its first
+            // layout pass: on Windows/Qt 6.11.1 the content height stays 0 for another
+            // frame or two, and mouseClick on an item mapped through the un-laid-out
+            // column misses the popup (probe evidence: content height 0 -> 70 within
+            // 50 ms). Wait for the real layout before any menu-item mouse click.
+            const menu = findChild(sidebar, "videoFileContextMenu");
+            tryVerify(function() { return menu.contentItem.height > 8; });
+        }
+
         function test_rightClickDoesNotOpenAndUsesCapturedUrl_data() {
             return [{tag: "folder", recent: false}, {tag: "recent", recent: true}];
         }
@@ -94,6 +104,7 @@ Item {
             const originalRecent = folder.recentFiles;
             if (data.recent)
                 folder.recentFiles = originalRecent.slice().reverse();
+            settleContextMenu();
             mouseClick(findChild(sidebar, "videoFileContextCompare"));
             if (data.recent)
                 folder.recentFiles = originalRecent;
@@ -126,6 +137,7 @@ Item {
             list.forceActiveFocus();
             keyClick(data.key, data.modifiers);
             tryCompare(menu, "opened", true);
+            settleContextMenu();
             mouseClick(findChild(sidebar, "videoFileContextOpen"));
             compare(contextOpenSpy.count, 1);
             compare(contextOpenSpy.signalArguments[0][0].toString(), list.itemAtIndex(1).contextUrl.toString());

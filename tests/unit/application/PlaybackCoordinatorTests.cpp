@@ -5542,9 +5542,8 @@ TEST(PlaybackCoordinatorTests, ReverseStepUsesOneGenerationAcrossAdjacentCommand
 
     // The provider's Reverse slot is latest-wins: the pending frame 7 must not be
     // superseded by frame 6 before the provider has claimed success.
-    ASSERT_TRUE(waitUntil([&coordinator] {
-        return coordinator->snapshot()->requestedFrame == domain::FrameId{6};
-    }));
+    ASSERT_TRUE(waitUntil(
+        [&coordinator] { return coordinator->snapshot()->requestedFrame == domain::FrameId{6}; }));
     EXPECT_EQ(provider->frameRequestCount(), 3U);
     const auto current = provider->frameRequest(2U);
     ASSERT_TRUE(current.has_value());
@@ -5557,9 +5556,8 @@ TEST(PlaybackCoordinatorTests, ReverseStepUsesOneGenerationAcrossAdjacentCommand
                   .delta = -1,
               }),
               PortSubmitResult::Accepted);
-    ASSERT_TRUE(waitUntil([&coordinator] {
-        return coordinator->snapshot()->requestedFrame == domain::FrameId{5};
-    }));
+    ASSERT_TRUE(waitUntil(
+        [&coordinator] { return coordinator->snapshot()->requestedFrame == domain::FrameId{5}; }));
     EXPECT_EQ(provider->frameRequestCount(), 3U);
     ASSERT_TRUE(provider->postFrameSucceeded(*current));
     ASSERT_TRUE(provider->waitForFrameRequestCount(4U));
@@ -5578,18 +5576,16 @@ TEST(PlaybackCoordinatorTests, ReverseStepUsesOneGenerationAcrossAdjacentCommand
     EXPECT_EQ(prepared->frameId, domain::FrameId{6});
 
     presentPublished(coordinator, render, 2U);
-    ASSERT_TRUE(waitUntil([&coordinator] {
-        return coordinator->snapshot()->displayedFrame == domain::FrameId{7};
-    }));
+    ASSERT_TRUE(waitUntil(
+        [&coordinator] { return coordinator->snapshot()->displayedFrame == domain::FrameId{7}; }));
     // A processed repeat is a fence after promotion, not a sleep-based absence check.
     ASSERT_EQ(coordinator->submit(StepFramesCommand{
                   .context = commandContext(coordinator, domain::CommandId{6}),
                   .delta = -1,
               }),
               PortSubmitResult::Accepted);
-    ASSERT_TRUE(waitUntil([&coordinator] {
-        return coordinator->snapshot()->requestedFrame == domain::FrameId{4};
-    }));
+    ASSERT_TRUE(waitUntil(
+        [&coordinator] { return coordinator->snapshot()->requestedFrame == domain::FrameId{4}; }));
     // Frame 6 is now current but still decoding; promotion must not admit frame 5 yet.
     EXPECT_EQ(provider->frameRequestCount(), 4U);
     presentInteractiveStep(coordinator, provider, render, prepared, 3U);
@@ -5603,9 +5599,8 @@ TEST(PlaybackCoordinatorTests, ReverseStepUsesOneGenerationAcrossAdjacentCommand
                   current->context.playback.playbackGeneration);
         presentInteractiveStep(coordinator, provider, render, next, index);
     }
-    ASSERT_TRUE(waitUntil([&coordinator] {
-        return coordinator->snapshot()->displayedFrame == domain::FrameId{4};
-    }));
+    ASSERT_TRUE(waitUntil(
+        [&coordinator] { return coordinator->snapshot()->displayedFrame == domain::FrameId{4}; }));
     coordinator->shutdown();
     const auto terminals = coordinator->takeCompletedCommands();
     ASSERT_EQ(terminals.size(), 5U); // Seek plus four steps, each completed once.
@@ -5677,9 +5672,8 @@ TEST(PlaybackCoordinatorTests, ReverseStepLateTerminalsCannotRestartQueueAfterSe
                   }),
                   PortSubmitResult::Accepted);
     }
-    ASSERT_TRUE(waitUntil([&coordinator] {
-        return coordinator->snapshot()->requestedFrame == domain::FrameId{6};
-    }));
+    ASSERT_TRUE(waitUntil(
+        [&coordinator] { return coordinator->snapshot()->requestedFrame == domain::FrameId{6}; }));
     ASSERT_EQ(provider->frameRequestCount(), 3U);
     const auto obsolete = provider->frameRequest(2U);
     ASSERT_TRUE(obsolete.has_value());
@@ -5701,9 +5695,8 @@ TEST(PlaybackCoordinatorTests, ReverseStepLateTerminalsCannotRestartQueueAfterSe
               }}}),
               EventPostResult::Accepted);
     presentInteractiveStep(coordinator, provider, render, seek, 2U);
-    ASSERT_TRUE(waitUntil([&coordinator] {
-        return coordinator->snapshot()->displayedFrame == domain::FrameId{9};
-    }));
+    ASSERT_TRUE(waitUntil(
+        [&coordinator] { return coordinator->snapshot()->displayedFrame == domain::FrameId{9}; }));
     coordinator->shutdown();
     auto terminals = coordinator->takeCompletedCommands();
     std::sort(terminals.begin(), terminals.end(), [](const auto& left, const auto& right) {
