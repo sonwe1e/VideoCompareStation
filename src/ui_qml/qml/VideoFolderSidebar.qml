@@ -19,6 +19,7 @@ Rectangle {
     function openContextMenu(item, url, point) {
         if (!item || !item.enabled || !fileActionState)
             return false;
+        fileMenu.returnFocusItem = null;
         const state = fileActionState(url);
         fileMenu.targetUrl = url;
         fileMenu.openReason = state.openReason;
@@ -48,6 +49,15 @@ Rectangle {
         property url targetUrl
         property string openReason: ""
         property string compareReason: ""
+        property Item returnFocusItem: null
+        property string returnFocusRevision: ""
+        property bool returnFocusRecent: false
+        onClosed: {
+            const target = returnFocusItem;
+            returnFocusItem = null;
+            if (target && target.visible && control.visible && returnFocusRecent === control.showRecent && returnFocusRevision === control.actionRevision)
+                target.forceActiveFocus();
+        }
         menuWidth: 300
         popupType: Popup.Item
         modal: true
@@ -56,13 +66,19 @@ Rectangle {
             objectName: "videoFileContextOpen"
             text: qsTr("打开为新单视频任务")
             enabled: fileMenu.openReason.length === 0
-            onTriggered: control.contextOpenRequested(fileMenu.targetUrl)
+            onTriggered: {
+                fileMenu.returnFocusItem = null;
+                control.contextOpenRequested(fileMenu.targetUrl);
+            }
         }
         VcsMenuItem {
             objectName: "videoFileContextCompare"
             text: qsTr("加入当前视频对比…")
             enabled: fileMenu.compareReason.length === 0
-            onTriggered: control.compareRequested(fileMenu.targetUrl)
+            onTriggered: {
+                fileMenu.returnFocusItem = null;
+                control.compareRequested(fileMenu.targetUrl);
+            }
         }
         VcsMenuItem {
             id: reasonItem
@@ -226,7 +242,37 @@ Rectangle {
                 border.width: row.navigationTarget ? 1 : 0
                 border.color: Theme.focus
             }
-            ToolTip.visible: hovered
+            // Reserve the action slot so hovering does not move or re-elide the filename.
+            rightPadding: rowMenuButton.width + 12
+            HoverHandler {
+                id: rowActionHover
+            }
+            VcsToolButton {
+                id: rowMenuButton
+                objectName: "videoFolderRowMenu-" + row.index
+                anchors.right: parent.right
+                anchors.rightMargin: 6
+                anchors.verticalCenter: parent.verticalCenter
+                width: 28
+                height: 28
+                text: "…"
+                helpText: qsTr("视频操作：打开或加入当前对比")
+                visible: rowActionHover.hovered || row.navigationTarget
+                // Menu / Shift+F10 remain the row's keyboard entry points.
+                focusPolicy: Qt.NoFocus
+                activeFocusOnTab: false
+                Accessible.ignored: !visible
+                onClicked: {
+                    files.currentIndex = row.index;
+                    files.forceActiveFocus();
+                    if (control.openContextMenu(row, row.contextUrl, Qt.point(0, row.height))) {
+                        fileMenu.returnFocusItem = files;
+                        fileMenu.returnFocusRevision = control.actionRevision;
+                        fileMenu.returnFocusRecent = control.showRecent;
+                    }
+                }
+            }
+            ToolTip.visible: hovered && !rowMenuButton.hovered
             ToolTip.text: fileUrl.toString()
             onClicked: control.fileRequested(index)
             contentItem: Text {
@@ -299,7 +345,37 @@ Rectangle {
                 border.width: recentRow.navigationTarget ? 1 : 0
                 border.color: Theme.focus
             }
-            ToolTip.visible: hovered
+            // Reserve the action slot so hovering does not move or re-elide the filename.
+            rightPadding: recentRowMenuButton.width + 12
+            HoverHandler {
+                id: recentRowActionHover
+            }
+            VcsToolButton {
+                id: recentRowMenuButton
+                objectName: "videoRecentRowMenu-" + recentRow.index
+                anchors.right: parent.right
+                anchors.rightMargin: 6
+                anchors.verticalCenter: parent.verticalCenter
+                width: 28
+                height: 28
+                text: "…"
+                helpText: qsTr("视频操作：打开或加入当前对比")
+                visible: recentRowActionHover.hovered || recentRow.navigationTarget
+                // Menu / Shift+F10 remain the row's keyboard entry points.
+                focusPolicy: Qt.NoFocus
+                activeFocusOnTab: false
+                Accessible.ignored: !visible
+                onClicked: {
+                    recentFiles.currentIndex = recentRow.index;
+                    recentFiles.forceActiveFocus();
+                    if (control.openContextMenu(recentRow, recentRow.contextUrl, Qt.point(0, recentRow.height))) {
+                        fileMenu.returnFocusItem = recentFiles;
+                        fileMenu.returnFocusRevision = control.actionRevision;
+                        fileMenu.returnFocusRecent = control.showRecent;
+                    }
+                }
+            }
+            ToolTip.visible: hovered && !recentRowMenuButton.hovered
             ToolTip.text: modelData.fileUrl.toString()
             onClicked: control.recentFileRequested(index)
             contentItem: Text {
@@ -359,7 +435,7 @@ Rectangle {
         }
         Text {
             width: parent.width
-            text: qsTr("点击打开单视频；右键可加入当前对比")
+            text: qsTr("点击打开单视频；… 或右键可加入对比")
             wrapMode: Text.Wrap
             color: Theme.mutedText
             font.pixelSize: 12
