@@ -1112,6 +1112,29 @@
 - **旧账**：「启动时提示『磁盘上的视频文件已变化』」的 tooltip、对比模式芯片行在 960px
   溢出，均为既有现象，本轮未引入亦未处理。
 
+### 2026-10-08 VFR 区间导出入口（P2-A 修复草稿，Windows 流程待验收）
+
+- **基线与问题**：`880d02ad` 的 `ClipExportController::makeRequest` 用
+  `canonicalRate()` 是否存在判断视频；合法 VFR 描述符恰好没有 nominal rate，因此已标记
+  的 VFR 区间被入口拒绝，尽管现有 planner 能处理索引时间线和末帧的无上界导出。
+- **最小修复**：入口改为使用视频会话的 validated comparison 与 canonical timeline；
+  保留源路径、完整入出点，检查可表示帧数、非空且帧数一致的 VFR 索引，并复用 planner
+  拒绝负数、倒置、越界区间。图片仍使用独立 `ImageReviewController`，图片-only 的空视频
+  快照保持拒绝；不用扩展名判定视频能力，合法无扩展名输入仍能进入。
+- **定向证据**：新增 `ClipExportControllerTests.cpp` 并注册现有 UI component target。
+  云端 GCC 14.2 / QtCore 6.8.2 / GoogleTest 1.17 下直接编译生产 controller、planner 和
+  domain 依赖，20 项 controller + 11 项已有 planner 测试通过；controller 覆盖 VFR/CFR
+  中段与末帧、无后缀源、规范源与 reference 分离、快照切换后的请求捕获，以及 15 项拒绝态。
+  原基线恰在 3 项 VFR 正例失败；18 个编译后运行时变异均被检出，22 个新增断言点各有
+  失败证据。`RecordingExporter` 只记录调用，不读写媒体；这不是 FFmpeg 导出／重新打开验证。
+- **提示文案**：功能验证后仅将 Main.qml 和 controller 的两条泛用提示改为检查视频会话与
+  区间有效性，不再一律要求先设置入出点。静态反向替换证明只有两条字符串改变；
+  既有 MainQmlContractTests 的精确提示预期同步一条字符串，断言和调用不变；
+  31 项测试证据针对此前功能代码，该 GUI 合同与最终文案未执行。
+- **范围与未验收**：不改 QML 行为、planner、writer、像素管线或播放逻辑；关键帧
+  前滚及 B 帧结尾限制不变。未运行 Windows/MSVC、锁定 Qt、完整构建／CTest、format/lint、
+  真实素材端到端导出、GUI／D3D11VA、性能与打包门禁；完整工作流按用户要求延后。
+
 ## 2026-09-26 视频第五增补：区间标记与循环（P1 · 实施第三步，基线 `02cf55e` + 本轮工作区）
 
 对应产品目标 §3 新增的「区间标记与循环」。用户把视频编辑收窄为「选定起点/终点裁剪 +

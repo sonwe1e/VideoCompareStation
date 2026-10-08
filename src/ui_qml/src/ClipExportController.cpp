@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <utility>
 
 namespace dvs::ui {
@@ -115,7 +116,7 @@ bool ClipExportController::exportRange(const QUrl& target) {
     }
     auto request = makeRequest(target.toLocalFile().toStdWString());
     if (!request.has_value()) {
-        setStatus(tr("当前没有可导出的区间：请先在视频会话中设置入点与出点。"));
+        setStatus(tr("当前没有可导出的区间：请确认视频会话与入点、出点有效。"));
         return false;
     }
 
@@ -259,15 +260,16 @@ ClipExportController::makeRequest(std::filesystem::path targetPath) const {
     if (!snapshot || !dependencies_.exporter) {
         return std::nullopt;
     }
-    if (!snapshot->canonicalTimeline.has_value() || snapshot->canonicalFrameCount == 0U) {
+    if (!snapshot->canonicalTimeline.has_value() || snapshot->canonicalFrameCount == 0U ||
+        snapshot->canonicalFrameCount >
+            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
         return std::nullopt;
     }
     if (!snapshot->playbackRangeIn.has_value() || !snapshot->playbackRangeOut.has_value()) {
         return std::nullopt;
     }
     const auto& validated = snapshot->validatedComparison;
-    if (!validated || !validated->canonicalRate().has_value()) {
-        // A still-image session has no canonical rate; clip export is video-only.
+    if (!validated) {
         return std::nullopt;
     }
     const domain::ComparisonSource* const source = validated->find(validated->canonicalSourceId());
@@ -284,7 +286,17 @@ ClipExportController::makeRequest(std::filesystem::path targetPath) const {
     request.canonicalFrameCount = static_cast<std::int64_t>(snapshot->canonicalFrameCount);
     request.range.inInclusive = *snapshot->playbackRangeIn;
     request.range.outInclusive = *snapshot->playbackRangeOut;
-    if (!request.range.isValid() || request.sourcePath.empty()) {
+    // This is the video session snapshot; still images use ImageReviewController separately.
+    // A valid VFR source has no nominal rate, so admission follows its indexed timeline instead.
+    if (const auto* const variable =
+            std::get_if<std::shared_ptr<const domain::FrameTimeline>>(&*request.timeline);
+        variable != nullptr &&
+        (!*variable || (*variable)->frameCount() != request.canonicalFrameCount)) {
+        return std::nullopt;
+    }
+    if (request.sourcePath.empty() ||
+        !application::planClipExport(*request.timeline, request.canonicalFrameCount, request.range)
+             .hasValue()) {
         return std::nullopt;
     }
     return request;
