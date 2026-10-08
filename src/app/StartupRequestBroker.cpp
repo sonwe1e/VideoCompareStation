@@ -26,7 +26,7 @@
 namespace dvs::app {
 namespace {
 
-constexpr qsizetype kMaximumFrameBytes = 64 * 1024;
+constexpr qsizetype kMaximumFrameBytes = qsizetype{64} * 1024;
 constexpr int kConnectAttemptMilliseconds = 50;
 constexpr int kConnectWindowMilliseconds = 1000;
 constexpr int kAcknowledgementTimeoutMilliseconds = 1000;
@@ -261,9 +261,9 @@ private:
         if (decoded && (handler_ || pendingRequests_.size() < kMaximumPendingRequests)) {
             bool accepted = true;
             if (handler_) {
-                accepted = handler_(std::move(*decoded.request));
+                accepted = handler_(*decoded.request);
             } else {
-                pendingRequests_.push_back(std::move(*decoded.request));
+                pendingRequests_.push_back(*decoded.request);
             }
             if (accepted) {
                 static_cast<void>(socket.write(QByteArrayLiteral("OK\n")));

@@ -333,7 +333,7 @@ valueEquals(const HKEY key, const wchar_t* const name, const std::wstring_view e
     }
     std::wstring executable =
         count > 0 ? std::filesystem::path{arguments[0]}.filename().wstring() : L"";
-    LocalFree(arguments);
+    LocalFree(static_cast<void*>(arguments));
     // Older plain-command registrations included a trailing space inside the executable quotes.
     // Win32 normalizes trailing spaces/dots on ordinary file names; recognize that legacy shape.
     while (!executable.empty() && (executable.back() == L' ' || executable.back() == L'.')) {
@@ -380,11 +380,16 @@ ExplorerRegistrationResult sweepDuplicateVerbs(const ExplorerRegistrationRoots& 
     for (const std::wstring& parent :
          {roots.classes, roots.classes + L"\\SystemFileAssociations"}) {
         for (const std::wstring& association : subkeyNamesUnder(parent)) {
-            const std::wstring associationPath = parent + L"\\" + association;
-            const std::wstring shellPath = associationPath + L"\\shell";
+            std::wstring associationPath = parent;
+            associationPath += L"\\";
+            associationPath += association;
+            std::wstring shellPath = associationPath;
+            shellPath += L"\\shell";
             bool removedAny = false;
             for (const std::wstring& name : subkeyNamesUnder(shellPath)) {
-                const std::wstring verbPath = shellPath + L"\\" + name;
+                std::wstring verbPath = shellPath;
+                verbPath += L"\\";
+                verbPath += name;
                 bool isRetained = false;
                 for (const std::wstring& current : retained) {
                     isRetained = isRetained || _wcsicmp(verbPath.c_str(), current.c_str()) == 0;
@@ -669,7 +674,7 @@ removeExplorerCommandRegistration(const ExplorerRegistrationRoots& roots) {
     }
     // A leftover copy of the command is still this command, so a documented removal that left one
     // behind would only hide the entry again the next time somebody registered it.
-    const ExplorerRegistrationResult sweep = sweepDuplicateVerbs(roots, false);
+    ExplorerRegistrationResult sweep = sweepDuplicateVerbs(roots, false);
     if (sweep.state == ExplorerRegistrationState::Failed) {
         return sweep;
     }
@@ -710,7 +715,7 @@ ensureExplorerCommandRegistered(const ExplorerRegistrationTargets& targets,
     // The sweep runs on every launch, not only when something had to be written: a second copy of
     // the command can appear at any time - a key an earlier layout wrote, or one copied by hand -
     // and the promise this registration makes is that the entry it owns is the entry the user sees.
-    const ExplorerRegistrationResult registration =
+    ExplorerRegistrationResult registration =
         registrationMatches(targets, roots)
             ? ExplorerRegistrationResult{ExplorerRegistrationState::AlreadyCurrent, {}}
             : writeRegistration(targets, roots);

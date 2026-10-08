@@ -111,8 +111,14 @@ ComparisonExactnessDimensions comparisonExactnessDimensions(const SessionSnapsho
 ComparisonExactness comparisonExactness(const SessionSnapshot& snapshot,
                                         const domain::SourceId first,
                                         const domain::SourceId second) noexcept {
-    const ComparisonExactnessDimensions dimensions =
-        comparisonExactnessDimensions(snapshot, first, second);
+    ComparisonExactnessDimensions dimensions;
+    try {
+        dimensions = comparisonExactnessDimensions(snapshot, first, second);
+    } catch (...) {
+        // Dimension assembly allocates reason strings; an escape cannot leave this noexcept
+        // classifier, so degrade to Unavailable instead.
+        return ComparisonExactness::Unavailable;
+    }
     if (!dimensions.available) {
         return ComparisonExactness::Unavailable;
     }

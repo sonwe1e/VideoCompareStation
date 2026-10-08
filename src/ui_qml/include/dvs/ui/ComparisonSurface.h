@@ -36,6 +36,11 @@ class ComparisonSurface : public QQuickItem {
                    differenceEdgeChanged)
     Q_PROPERTY(DifferenceFilter differenceFilter READ differenceFilter WRITE setDifferenceFilter
                    NOTIFY differenceFilterChanged)
+    // Sampling for the regular video slots. Auto follows the zoom: bilinear at or below 200%,
+    // nearest above it, where bilinear would average away block artifacts and interpolation
+    // distortion. The explicit modes override the automatic switch for user preference.
+    Q_PROPERTY(VideoFilterMode videoFilterMode READ videoFilterMode WRITE setVideoFilterMode NOTIFY
+                   videoFilterModeChanged)
     Q_PROPERTY(
         qreal wipePosition READ wipePosition WRITE setWipePosition NOTIFY wipePositionChanged)
     Q_PROPERTY(qreal wipeSplitLogicalX READ wipeSplitLogicalX NOTIFY presentationGeometryChanged)
@@ -119,6 +124,14 @@ public:
     };
     Q_ENUM(DifferenceFilter)
 
+    enum VideoFilterMode {
+        // Bilinear at or below the nearest-neighbour threshold, Nearest above it.
+        VideoFilterAuto = 0,
+        VideoFilterSmooth = 1,
+        VideoFilterPixel = 2,
+    };
+    Q_ENUM(VideoFilterMode)
+
     enum ThresholdPolicy {
         ThresholdLumaOnly = static_cast<int>(presentation::ThresholdPolicy::LumaOnly),
         ThresholdAnyChannel = static_cast<int>(presentation::ThresholdPolicy::AnyChannel),
@@ -150,6 +163,10 @@ public:
     void setDifferenceEdge(DifferenceEdge value);
     [[nodiscard]] DifferenceFilter differenceFilter() const noexcept;
     void setDifferenceFilter(DifferenceFilter value);
+    [[nodiscard]] VideoFilterMode videoFilterMode() const noexcept;
+    void setVideoFilterMode(VideoFilterMode value);
+    // Effective slot filter for the current zoom: what the renderer actually samples with.
+    [[nodiscard]] DifferenceFilter effectiveVideoFilter() const noexcept;
     [[nodiscard]] qreal wipePosition() const noexcept;
     void setWipePosition(qreal value);
     [[nodiscard]] qreal wipeSplitLogicalX() const;
@@ -215,6 +232,7 @@ signals:
     void differenceGainChanged();
     void differenceEdgeChanged();
     void differenceFilterChanged();
+    void videoFilterModeChanged();
     void wipePositionChanged();
     void presentationGeometryChanged();
     void exactPlaneAvailableChanged();
@@ -243,6 +261,7 @@ private:
     DifferenceGain differenceGain_ = Gain1x;
     DifferenceEdge differenceEdge_ = Edge0And1;
     DifferenceFilter differenceFilter_ = Bilinear;
+    VideoFilterMode videoFilterMode_ = VideoFilterAuto;
     qreal wipePosition_ = 0.5;
     QVariantList sourceDisplayInfo_;
     bool exactPlaneAvailable_ = false;

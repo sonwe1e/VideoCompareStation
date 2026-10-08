@@ -15,7 +15,7 @@ public:
     [[nodiscard]] static std::optional<PresentationTimestampIndex>
     load(const TimestampIndexRequest& request) noexcept;
     static void store(const TimestampIndexRequest& request,
-                      PresentationTimestampIndex index) noexcept;
+                      const PresentationTimestampIndex& index) noexcept;
 };
 
 } // namespace dvs::media::internal

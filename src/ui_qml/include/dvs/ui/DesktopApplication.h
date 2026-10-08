@@ -53,7 +53,7 @@ public:
 
     [[nodiscard]] bool load(ReviewController& controller,
                             ReviewPreferencesController& preferences,
-                            SurfaceBinder bindSurface,
+                            const SurfaceBinder& bindSurface,
                             PairMetricsController* pairMetrics = nullptr,
                             PreviewThumbnailController* previewThumbnails = nullptr);
     // Optional T7 injection. Must be set before load(); the composition root owns the concrete

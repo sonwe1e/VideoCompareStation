@@ -356,10 +356,10 @@ struct DifferenceComputation final {
         .arg(primary.height());
 }
 
-[[nodiscard]] DifferenceAnalysis analyzeDifference(QImage primary,
-                                                   QImage secondary,
-                                                   QImage primaryNative,
-                                                   QImage secondaryNative,
+[[nodiscard]] DifferenceAnalysis analyzeDifference(const QImage& primary,
+                                                   const QImage& secondary,
+                                                   const QImage& primaryNative,
+                                                   const QImage& secondaryNative,
                                                    const QString& key,
                                                    const bool resampleAllowed,
                                                    const std::atomic_bool& cancelled,
@@ -537,16 +537,18 @@ struct DifferenceComputation final {
     analysis.base = left;
     analysis.maxAbsDifference = peak;
     analysis.meanAbsDifference =
-        pixelCount > 0 ? static_cast<double>(rgbAbsSum) / (pixelCount * 3) : 0.0;
+        pixelCount > 0 ? static_cast<double>(rgbAbsSum) / static_cast<double>(pixelCount * 3) : 0.0;
     analysis.peakAlphaDifference = peakAlpha;
     analysis.meanAlphaDifference =
-        pixelCount > 0 ? static_cast<double>(alphaSum) / pixelCount : 0.0;
+        pixelCount > 0 ? static_cast<double>(alphaSum) / static_cast<double>(pixelCount) : 0.0;
     analysis.alphaChangedPixels = alphaChanged;
     analysis.hasAlpha = hasAlpha;
     analysis.nativeAvailable = native;
     analysis.nativeMaxAbsDifference = nativePeak;
     analysis.nativeMeanAbsDifference =
-        native && pixelCount > 0 ? static_cast<double>(nativeRgbSum) / (pixelCount * 3) : 0.0;
+        native && pixelCount > 0
+            ? static_cast<double>(nativeRgbSum) / static_cast<double>(pixelCount * 3)
+            : 0.0;
     analysis.nativePeakAlphaDifference = nativePeakAlpha;
     analysis.nativeChangedPixels = nativeChanged;
     analysis.nativeBeyondDisplayPixels = nativeBeyondDisplay;
@@ -642,7 +644,7 @@ struct DecodedCacheEntry final {
     StillImageSourceInfo info;
 };
 struct LoadJob final {
-    enum class Kind {
+    enum class Kind : std::uint8_t {
         Primary,
         Secondary,
         Pair,
@@ -1067,7 +1069,7 @@ private:
         QMetaObject::invokeMethod(
             owner_,
             [this, result = std::move(result), state = std::move(state)]() mutable {
-                finishLoad(std::move(result), std::move(state));
+                finishLoad(std::move(result), state);
             },
             Qt::QueuedConnection);
     }
@@ -1099,7 +1101,7 @@ private:
         QMetaObject::invokeMethod(
             owner_,
             [this, computation = std::move(computation), state = std::move(state)]() mutable {
-                finishDifference(std::move(computation), std::move(state));
+                finishDifference(std::move(computation), state);
             },
             Qt::QueuedConnection);
     }

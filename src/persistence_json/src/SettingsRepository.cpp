@@ -24,7 +24,7 @@ namespace {
 using Json = nlohmann::json;
 
 constexpr std::int64_t kSettingsSchemaVersion = 1;
-constexpr std::uintmax_t kMaximumSettingsBytes = 1024U * 1024U;
+constexpr std::uintmax_t kMaximumSettingsBytes = std::uintmax_t{1024U} * 1024U;
 
 [[nodiscard]] bool isSettingsSchemaVersion(const Json& value) {
     return (value.is_number_integer() && value.get<std::int64_t>() == kSettingsSchemaVersion) ||
@@ -235,7 +235,7 @@ public:
 
     [[nodiscard]] application::PortSubmitResult
     submit(const application::SettingsLoadRequest& request,
-           std::shared_ptr<application::IApplicationEventSink> events) {
+           const std::shared_ptr<application::IApplicationEventSink>& events) {
         if (!events) {
             return application::PortSubmitResult::Closed;
         }
@@ -247,14 +247,15 @@ public:
 
     [[nodiscard]] application::PortSubmitResult
     submit(const application::SettingsSaveRequest& request,
-           std::shared_ptr<application::IApplicationEventSink> events) {
+           const std::shared_ptr<application::IApplicationEventSink>& events) {
         if (!events) {
             return application::PortSubmitResult::Closed;
         }
         const std::weak_ptr<application::IApplicationEventSink> weakEvents{events};
-        return submitTask(request.context, [this, request, weakEvents](const auto& operation) {
-            executeSave(request, weakEvents, operation);
-        });
+        return submitTask(
+            request.context,
+            [this, request, weakEvents]( // NOLINT(bugprone-exception-escape): actor wraps task()
+                const auto& operation) { executeSave(request, weakEvents, operation); });
     }
 
     void cancel(const application::RequestContext& context) noexcept {
@@ -269,7 +270,10 @@ private:
         try {
             operation = operations.add(context);
             const auto submitted = actor.submit(
+                // NOLINTBEGIN(bugprone-exception-escape)
+                // The IO actor's run loop wraps task() in try/catch; captures cannot escape.
                 [operation, task = std::forward<TTask>(task)]() mutable { task(operation); });
+            // NOLINTEND(bugprone-exception-escape)
             if (submitted != internal::IoSubmitResult::kAccepted) {
                 operations.remove(operation);
             }
@@ -362,16 +366,18 @@ SettingsRepository::SettingsRepository(std::filesystem::path settingsFile,
 
 SettingsRepository::~SettingsRepository() = default;
 
-application::PortSubmitResult
-SettingsRepository::submit(const application::SettingsLoadRequest& request,
-                           std::shared_ptr<application::IApplicationEventSink> events) {
-    return impl_->submit(request, std::move(events));
+application::PortSubmitResult SettingsRepository::submit(
+    const application::SettingsLoadRequest& request,
+    std::shared_ptr<application::IApplicationEventSink>
+        events) { // NOLINT(performance-unnecessary-value-param): port signature
+    return impl_->submit(request, events);
 }
 
-application::PortSubmitResult
-SettingsRepository::submit(const application::SettingsSaveRequest& request,
-                           std::shared_ptr<application::IApplicationEventSink> events) {
-    return impl_->submit(request, std::move(events));
+application::PortSubmitResult SettingsRepository::submit(
+    const application::SettingsSaveRequest& request,
+    std::shared_ptr<application::IApplicationEventSink>
+        events) { // NOLINT(performance-unnecessary-value-param): port signature
+    return impl_->submit(request, events);
 }
 
 void SettingsRepository::cancel(const application::RequestContext& context) noexcept {

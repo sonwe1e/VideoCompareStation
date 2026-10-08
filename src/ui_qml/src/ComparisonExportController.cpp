@@ -83,10 +83,10 @@ QImage ComparisonExportController::composeLabeledCapture(const QImage& windowCap
     if (bounded.isEmpty()) {
         return {};
     }
-    const QImage viewportCapture = windowCapture.copy(bounded);
+    QImage viewportCapture = windowCapture.copy(bounded);
     const QStringList caption = normalizedCaption(captionLines);
     if (caption.isEmpty()) {
-        return viewportCapture;
+        return std::move(viewportCapture);
     }
     const qreal scale = std::max(1.0, devicePixelRatio);
     const int barHeight = captionBarHeight(static_cast<int>(caption.size()), scale);

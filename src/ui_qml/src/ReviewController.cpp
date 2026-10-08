@@ -74,7 +74,7 @@ public:
             }
             highestPublishedGeneration_ = generation;
             completion_ = std::move(completion);
-        } catch (...) {
+        } catch (...) { // NOLINT(bugprone-empty-catch): noexcept counter guard
         }
     }
 
@@ -94,7 +94,7 @@ public:
         try {
             std::lock_guard lock(mutex_);
             ++activeTasks_;
-        } catch (...) {
+        } catch (...) { // NOLINT(bugprone-empty-catch): noexcept counter guard
         }
     }
 
@@ -107,7 +107,7 @@ public:
                 }
             }
             idleCondition_.notify_all();
-        } catch (...) {
+        } catch (...) { // NOLINT(bugprone-empty-catch): noexcept counter guard
         }
     }
 
@@ -232,8 +232,9 @@ private:
     std::int64_t timecodeFrame = frame;
     if (dropFrame) {
         const std::int64_t droppedPerMinute = nominalFps == 60 ? 4 : 2;
-        const std::int64_t framesPerTenMinutes = nominalFps * 600 - droppedPerMinute * 9;
-        const std::int64_t framesPerMinute = nominalFps * 60 - droppedPerMinute;
+        const std::int64_t framesPerTenMinutes =
+            std::int64_t{nominalFps} * 600 - droppedPerMinute * 9;
+        const std::int64_t framesPerMinute = std::int64_t{nominalFps} * 60 - droppedPerMinute;
         const std::int64_t tenMinuteBlocks = frame / framesPerTenMinutes;
         const std::int64_t remaining = frame % framesPerTenMinutes;
         timecodeFrame += droppedPerMinute * 9 * tenMinuteBlocks;
@@ -1414,7 +1415,8 @@ private:
         publishProjection();
     }
 
-    void publishProjection() noexcept {
+    // View assembly allocates Qt strings; callers are noexcept and Qt terminates on OOM.
+    void publishProjection() noexcept { // NOLINT(bugprone-exception-escape)
         ReviewView next;
         next.sourceAErrorKey = candidateSourceAErrorKey_;
         next.sourceBErrorKey = candidateSourceBErrorKey_;
@@ -1967,18 +1969,23 @@ private:
                      sourceRows[second].currentSourceFrame.value_or(-1)},
                     {QStringLiteral("primaryPtsMs"),
                      firstPresented && firstPresented->sourceFrameId.has_value()
-                         ? firstPresented->presentationTime.microseconds() / 1000.0
+                         ? static_cast<double>(firstPresented->presentationTime.microseconds()) /
+                               1000.0
                          : 0.0},
                     {QStringLiteral("secondaryPtsMs"),
                      secondPresented && secondPresented->sourceFrameId.has_value()
-                         ? secondPresented->presentationTime.microseconds() / 1000.0
+                         ? static_cast<double>(secondPresented->presentationTime.microseconds()) /
+                               1000.0
                          : 0.0},
                     {QStringLiteral("deltaMs"),
                      (secondPresented && secondPresented->sourceFrameId.has_value()
-                          ? secondPresented->presentationTime.microseconds() / 1000.0
+                          ? static_cast<double>(secondPresented->presentationTime.microseconds()) /
+                                1000.0
                           : 0.0) -
                          (firstPresented && firstPresented->sourceFrameId.has_value()
-                              ? firstPresented->presentationTime.microseconds() / 1000.0
+                              ? static_cast<double>(
+                                    firstPresented->presentationTime.microseconds()) /
+                                    1000.0
                               : 0.0)},
                 });
             }

@@ -9,6 +9,7 @@
 #include "dvs/ui/ImageEditController.h"
 #include "dvs/ui/ImageFolderPairModel.h"
 #include "dvs/ui/ImageReviewController.h"
+#include "dvs/ui/IssueLogController.h"
 #include "dvs/ui/ReviewController.h"
 #include "dvs/ui/ReviewImageProvider.h"
 #include "dvs/ui/ReviewPreferencesController.h"
@@ -114,6 +115,18 @@ void sendMouseMove(QWindow& window, const QPointF& localPos) {
     QMouseEvent move{
         QEvent::MouseMove, localPos, globalPos, Qt::NoButton, Qt::NoButton, Qt::NoModifier};
     QCoreApplication::sendEvent(&window, &move);
+}
+
+// Key events go to the focused item, mirroring how Qt delivers real key presses. Falls
+// back to the given item when nothing has focus (the offscreen/basic render loop does not
+// always move focus the way a desktop session does).
+void sendKeyToFocus(QObject* fallback, QEvent::Type type, int key) {
+    QObject* receiver = QGuiApplication::focusObject();
+    if (receiver == nullptr) {
+        receiver = fallback;
+    }
+    QKeyEvent event{type, key, Qt::NoModifier};
+    QCoreApplication::sendEvent(receiver, &event);
 }
 
 QQuickWindow* findPopupWindow(const QString& objectName) {
@@ -483,6 +496,13 @@ public:
             engine.rootContext()->setContextProperty(QStringLiteral("clipExport"),
                                                      clipExport.get());
         }
+        if (withIssueLog) {
+            issueLog.setReviewController(controller.get());
+            issueLog.setPreferences(&preferences);
+            issueLog.setFolderModel(&folderPairs);
+            issueLog.setImageController(&imageReview);
+            engine.rootContext()->setContextProperty(QStringLiteral("issueLog"), &issueLog);
+        }
         QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
         if (component.status() != QQmlComponent::Ready) {
             error = componentErrors(component);
@@ -586,6 +606,11 @@ public:
     std::shared_ptr<RecordingClipExporter> clipExporter = std::make_shared<RecordingClipExporter>();
     std::unique_ptr<ClipExportController> clipExport;
     bool withClipExport = false;
+    // The issue log is also opt-in: only the composition root publishes one, and its absence
+    // is a state M-key and the panel must survive without errors. Capture works without a
+    // repository; only save/load would need dvs_persistence_json.
+    IssueLogController issueLog{static_cast<application::IIssueRecordRepository*>(nullptr)};
+    bool withIssueLog = false;
     QQmlEngine engine;
     std::unique_ptr<QObject> root;
     QQuickWindow* window = nullptr;
@@ -2036,6 +2061,61 @@ TEST(MainQmlContractTests, ExportRangeEnablesAfterAuthoritativeSnapshotArrives) 
     EXPECT_FALSE(chip->property("chipEnabled").toBool());
     EXPECT_EQ(availabilityNotifications, 2);
     window->close();
+}
+
+// Issue records capture ROI, centre and scale, and the product promise is that restoring an
+// issue returns to that same viewport. Main.applyIssueRestore must therefore feed the saved
+// view fields into ComparisonSurface.restoreViewport - not just mode, pair and frame.
+TEST(MainQmlContractTests, IssueRestoreReplaysSavedViewportOntoSurface) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    auto* const surface = harness.root->findChild<QQuickItem*>(QStringLiteral("dualVideoSurface"));
+    ASSERT_NE(surface, nullptr);
+    // Restore validates the requested scale against live presentation geometry; give the
+    // surface the extent the recorded session would have presented.
+    ASSERT_TRUE(surface->setProperty("sourceDisplayInfo",
+                                     QVariantList{QVariantMap{
+                                         {QStringLiteral("width"), 1920},
+                                         {QStringLiteral("height"), 1080},
+                                     }}));
+    harness.settle();
+    EXPECT_FALSE(surface->property("roiEnabled").toBool());
+    EXPECT_NEAR(surface->property("viewScale").toDouble(), 1.0, 0.000001);
+
+    // The payload shape IssueLogController::restoreIssue emits for a Ready video decision.
+    const QVariantMap payload{
+        {QStringLiteral("decision"), QStringLiteral("ready")},
+        {QStringLiteral("kind"), QStringLiteral("video")},
+        {QStringLiteral("viewMode"), 0},
+        {QStringLiteral("roiEnabled"), true},
+        {QStringLiteral("roiLeft"), 0.25},
+        {QStringLiteral("roiTop"), 0.25},
+        {QStringLiteral("roiRight"), 0.75},
+        {QStringLiteral("roiBottom"), 0.75},
+        {QStringLiteral("zoom"), 2.0},
+        {QStringLiteral("centerX"), 0.5},
+        {QStringLiteral("centerY"), 0.5},
+    };
+    QVariant restoreResult;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "applyIssueRestore",
+                                          Q_RETURN_ARG(QVariant, restoreResult),
+                                          Q_ARG(QVariant, QVariant::fromValue(payload))));
+    EXPECT_TRUE(restoreResult.toBool());
+    harness.settle();
+
+    EXPECT_TRUE(surface->property("roiEnabled").toBool());
+    EXPECT_NEAR(surface->property("viewScale").toDouble(), 2.0, 0.000001);
+    EXPECT_NEAR(surface->property("roiLeft").toDouble(), 0.25, 0.000001);
+    EXPECT_NEAR(surface->property("roiTop").toDouble(), 0.25, 0.000001);
+    EXPECT_NEAR(surface->property("roiRight").toDouble(), 0.75, 0.000001);
+    EXPECT_NEAR(surface->property("roiBottom").toDouble(), 0.75, 0.000001);
+    EXPECT_NEAR(surface->property("viewCenterX").toDouble(), 0.5, 0.000001);
+    EXPECT_NEAR(surface->property("viewCenterY").toDouble(), 0.5, 0.000001);
+    harness.window->close();
 }
 
 // The export chip is the only way into a clip export, and it must hand the controller the range the
@@ -6591,6 +6671,127 @@ TEST(MainQmlContractTests, ImageWorkspaceAlphaAndBackgroundSelectionContract) {
         harness.root->findChild<QObject*>(QStringLiteral("shortcutHelpOverlay"));
     ASSERT_NE(shortcutHelp, nullptr);
     EXPECT_TRUE(shortcutHelp->property("imagePreset").toBool());
+}
+
+// The help table must describe what ReviewShortcuts actually binds. Left/Right step one frame in
+// every preset (the player preset once claimed 5-second skips), Shift+arrows and Down/Up step five
+// frames, and Home/End / Alt+arrows are listed instead of silently missing.
+TEST(MainQmlContractTests, ShortcutHelpMatchesBoundShortcuts) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+
+    auto* const shortcutHelp =
+        harness.root->findChild<QObject*>(QStringLiteral("shortcutHelpOverlay"));
+    ASSERT_NE(shortcutHelp, nullptr);
+
+    const auto helpPairs = [&shortcutHelp](const bool playerPreset) {
+        shortcutHelp->setProperty("playerPreset", playerPreset);
+        shortcutHelp->setProperty("imagePreset", false);
+        return shortcutHelp->property("shortcutModel").toList();
+    };
+    const auto descriptionFor = [](const QVariantList& model, const QString& keys) {
+        for (const QVariant& entry : model) {
+            const QVariantList pair = entry.toList();
+            if (pair.size() == 2 && pair.front().toString() == keys) {
+                return pair.back().toString();
+            }
+        }
+        return QString{};
+    };
+
+    for (const bool playerPreset : {false, true}) {
+        const QVariantList model = helpPairs(playerPreset);
+        ASSERT_GE(model.size(), 10);
+        EXPECT_EQ(descriptionFor(model, QStringLiteral("← / →")),
+                  QStringLiteral("上一帧 / 下一帧"));
+        EXPECT_EQ(descriptionFor(model, QStringLiteral("↓ / ↑")),
+                  QStringLiteral("后退 / 前进 5 帧"));
+        EXPECT_EQ(descriptionFor(model, QStringLiteral("Shift+← / →")),
+                  QStringLiteral("后退 / 前进 5 帧"));
+        EXPECT_EQ(descriptionFor(model, QStringLiteral("Home / End")),
+                  QStringLiteral("第一帧 / 最后一帧"));
+        EXPECT_EQ(descriptionFor(model, QStringLiteral("Alt+← / →")),
+                  QStringLiteral("Wipe 分屏线左移 / 右移"));
+        EXPECT_FALSE(descriptionFor(model, QStringLiteral("A / D")).isEmpty());
+    }
+
+    // The player preset alone documents the 30-second jumps and its comma/period stepping.
+    const QVariantList playerModel = helpPairs(true);
+    EXPECT_EQ(descriptionFor(playerModel, QStringLiteral("Ctrl+← / →")),
+              QStringLiteral("快退 / 快进 30 秒"));
+    EXPECT_FALSE(descriptionFor(playerModel, QStringLiteral(", / .")).isEmpty());
+    const QVariantList frameModel = helpPairs(false);
+    EXPECT_EQ(descriptionFor(frameModel, QStringLiteral("Ctrl+← / →")),
+              QStringLiteral("后退 / 前进 1 秒"));
+    EXPECT_TRUE(descriptionFor(frameModel, QStringLiteral(", / .")).isEmpty());
+}
+
+// M captures an issue through the note dialog: the dialog opens first, Enter records the typed
+// note, and Escape still records - just without a note. The capture itself must carry the note
+// text into the stored record instead of the empty string the panel button used to pass.
+TEST(MainQmlContractTests, MarkKeyCapturesIssueThroughNoteDialog) {
+    QTemporaryDir temporaryDirectory;
+    ASSERT_TRUE(temporaryDirectory.isValid());
+    const QString sourcePath = temporaryDirectory.filePath(QStringLiteral("issue-mark.mp4"));
+    QFile source{sourcePath};
+    ASSERT_TRUE(source.open(QIODevice::WriteOnly));
+    ASSERT_EQ(source.write("mark-source", 11), 11);
+    source.close();
+
+    WorkspaceHarness harness;
+    harness.withIssueLog = true;
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate);
+    ASSERT_TRUE(installValidatedVideoSet(harness.snapshot,
+                                         {std::filesystem::path{sourcePath.toStdWString()}},
+                                         rate.value(),
+                                         12,
+                                         400'000));
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+    // The projection refresh pulls sourceUrls out of the validated comparison.
+    harness.controller->refreshProjection();
+    harness.settle();
+
+    auto* const noteDialog = harness.root->findChild<QObject*>(QStringLiteral("issueNoteDialog"));
+    ASSERT_NE(noteDialog, nullptr);
+    EXPECT_FALSE(noteDialog->property("visible").toBool());
+    EXPECT_EQ(harness.issueLog.count(), 0);
+
+    // The panel/menu entry point now opens the same dialog instead of capturing immediately.
+    QVariant opened;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        harness.root.get(), "captureIssueLog", Q_RETURN_ARG(QVariant, opened)));
+    EXPECT_TRUE(opened.toBool());
+    harness.settle();
+    EXPECT_TRUE(noteDialog->property("visible").toBool());
+    EXPECT_EQ(harness.issueLog.count(), 0);
+
+    auto* const noteField = noteDialog->findChild<QObject*>(QStringLiteral("issueNoteField"));
+    ASSERT_NE(noteField, nullptr);
+    noteField->setProperty("text", QStringLiteral("块状伪影"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(noteDialog, "save"));
+    harness.settle();
+    EXPECT_FALSE(noteDialog->property("visible").toBool());
+    ASSERT_EQ(harness.issueLog.count(), 1);
+    const QVariantMap recorded = harness.issueLog.issueAt(0);
+    EXPECT_EQ(recorded.value(QStringLiteral("note")).toString(), QStringLiteral("块状伪影"));
+    EXPECT_TRUE(harness.root->property("issueLogPanelVisible").toBool());
+
+    // Escape records without a note rather than cancelling the capture. Send a real key
+    // event so the field's Keys.onEscapePressed handler is the code under test.
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(), "captureIssueLog"));
+    harness.settle();
+    EXPECT_TRUE(noteDialog->property("visible").toBool());
+    sendKeyToFocus(noteField, QEvent::KeyPress, Qt::Key_Escape);
+    sendKeyToFocus(noteField, QEvent::KeyRelease, Qt::Key_Escape);
+    harness.settle();
+    EXPECT_FALSE(noteDialog->property("visible").toBool());
+    ASSERT_EQ(harness.issueLog.count(), 2);
+    const QVariantMap emptyNote = harness.issueLog.issueAt(1);
+    EXPECT_TRUE(emptyNote.value(QStringLiteral("note")).toString().isEmpty());
+    harness.window->close();
 }
 TEST(MainQmlContractTests, VideoFolderEntryOpensModalPickerWithoutChangingWorkspace) {
     WorkspaceHarness harness;

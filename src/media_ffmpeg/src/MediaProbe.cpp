@@ -39,7 +39,7 @@ namespace {
 
 constexpr std::size_t kMediaProbeWorkerCount = 2U;
 
-enum class ProbeLifecycle {
+enum class ProbeLifecycle : std::uint8_t {
     kPending,
     kCanceled,
     kTerminalClaimed,
@@ -695,7 +695,7 @@ void postCanceled(const std::shared_ptr<ProbeOperation>& operation) noexcept {
     application::EventContext context{operation->request.context};
     postCritical(operation->events,
                  application::ApplicationEvent{application::RequestCanceled{
-                     .context = std::move(context),
+                     .context = context,
                      .reason = application::CancellationReason::UserRequested,
                  }});
 }
@@ -710,7 +710,7 @@ void postFailed(const std::shared_ptr<ProbeOperation>& operation,
     application::EventContext context{operation->request.context};
     postCritical(operation->events,
                  application::ApplicationEvent{application::RequestFailed{
-                     .context = std::move(context),
+                     .context = context,
                      .error = std::move(error),
                  }});
 }
@@ -732,7 +732,7 @@ void postSucceeded(const std::shared_ptr<ProbeOperation>& operation,
     application::EventContext context{operation->request.context};
     postCritical(operation->events,
                  application::ApplicationEvent{application::RequestSucceeded{
-                     .context = std::move(context),
+                     .context = context,
                  }});
 }
 

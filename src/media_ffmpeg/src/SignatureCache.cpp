@@ -86,26 +86,26 @@ void SignatureCache::store(const domain::MediaDescriptor& descriptor,
         return;
     }
     std::scoped_lock lock(mutex_);
-    storeLocked(*key, std::move(signature));
+    storeLocked(*key, signature);
 }
 
 void SignatureCache::storeRange(const domain::MediaDescriptor& descriptor,
-                                std::vector<application::FrameLumaSignature> signatures) {
+                                const std::vector<application::FrameLumaSignature>& signatures) {
     const std::optional<std::string> key = makeKey(descriptor);
     if (!key.has_value()) {
         return;
     }
     std::vector<application::FrameLumaSignature> validated;
     validated.reserve(signatures.size());
-    for (application::FrameLumaSignature& signature : signatures) {
+    for (const application::FrameLumaSignature& signature : signatures) {
         if (!signature.isValid()) {
             return;
         }
-        validated.push_back(std::move(signature));
+        validated.push_back(signature);
     }
     std::scoped_lock lock(mutex_);
     for (application::FrameLumaSignature& signature : validated) {
-        storeLocked(*key, std::move(signature));
+        storeLocked(*key, signature);
     }
 }
 
@@ -122,7 +122,7 @@ void SignatureCache::storeLocked(const std::string& key,
     auto& source = entries_[key];
     const std::int64_t frame = signature.frameId.value();
     const bool inserted = source.find(frame) == source.end();
-    source.insert_or_assign(frame, std::move(signature));
+    source.insert_or_assign(frame, signature);
     if (inserted) {
         insertionOrder_.emplace_back(key, frame);
         ++entryCount_;

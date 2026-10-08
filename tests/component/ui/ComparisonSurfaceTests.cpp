@@ -946,6 +946,51 @@ TEST(ComparisonSurfacePropertyTests, ExposesTypedDifferenceDefaultsAndNotifiesOn
     EXPECT_EQ(referenceSlotChanges, 1);
 }
 
+// The video-slot filter is what makes high magnification trustworthy: bilinear above 200%
+// averages neighbouring texels and hides block artifacts, so Auto flips to nearest there.
+// The explicit Smooth/Pixel modes override the automatic switch, and every change notifies.
+TEST(ComparisonSurfacePropertyTests, VideoFilterModeDefaultsToAutoAndSwitchesAtTwiceZoom) {
+    ComparisonSurface surface;
+
+    EXPECT_EQ(surface.videoFilterMode(), ComparisonSurface::VideoFilterAuto);
+    // Fit zoom (1.0) samples smoothly; the zoomed-in case must not.
+    EXPECT_EQ(surface.effectiveVideoFilter(), ComparisonSurface::Bilinear);
+    surface.zoomAt(0.5, 0.5, 2.5);
+    EXPECT_NEAR(surface.viewScale(), 2.5, 0.000001);
+    EXPECT_EQ(surface.effectiveVideoFilter(), ComparisonSurface::Nearest);
+    // The threshold itself: exactly 200% already shows individual texels.
+    surface.zoomAt(0.5, 0.5, 2.0 / 2.5);
+    EXPECT_NEAR(surface.viewScale(), 2.0, 0.000001);
+    EXPECT_EQ(surface.effectiveVideoFilter(), ComparisonSurface::Nearest);
+    surface.zoomAt(0.5, 0.5, 0.5);
+    EXPECT_NEAR(surface.viewScale(), 1.0, 0.000001);
+    EXPECT_EQ(surface.effectiveVideoFilter(), ComparisonSurface::Bilinear);
+
+    int modeChanges = 0;
+    QObject::connect(&surface, &ComparisonSurface::videoFilterModeChanged, [&] { ++modeChanges; });
+
+    surface.setVideoFilterMode(ComparisonSurface::VideoFilterPixel);
+    EXPECT_EQ(surface.videoFilterMode(), ComparisonSurface::VideoFilterPixel);
+    EXPECT_EQ(surface.effectiveVideoFilter(), ComparisonSurface::Nearest);
+    // Pinned smooth keeps bilinear even at high zoom.
+    surface.setVideoFilterMode(ComparisonSurface::VideoFilterSmooth);
+    EXPECT_EQ(surface.effectiveVideoFilter(), ComparisonSurface::Bilinear);
+    surface.zoomAt(0.5, 0.5, 4.0);
+    EXPECT_NEAR(surface.viewScale(), 4.0, 0.000001);
+    EXPECT_EQ(surface.effectiveVideoFilter(), ComparisonSurface::Bilinear);
+    EXPECT_EQ(modeChanges, 2);
+
+    // Same-value writes do not notify, and unknown values are rejected.
+    surface.setVideoFilterMode(ComparisonSurface::VideoFilterSmooth);
+    surface.setVideoFilterMode(static_cast<ComparisonSurface::VideoFilterMode>(99));
+    EXPECT_EQ(modeChanges, 2);
+
+    // Back to Auto: the zoom decides again.
+    surface.setVideoFilterMode(ComparisonSurface::VideoFilterAuto);
+    EXPECT_EQ(modeChanges, 3);
+    EXPECT_EQ(surface.effectiveVideoFilter(), ComparisonSurface::Nearest);
+}
+
 TEST(ComparisonSurfacePropertyTests, DifferenceSuppressedDefaultsFalseAndNotifiesOnlyOnChange) {
     ComparisonSurface surface;
 

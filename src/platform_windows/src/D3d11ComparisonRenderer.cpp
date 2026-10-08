@@ -92,6 +92,9 @@ struct DifferenceDraw final {
 struct PreparedSetDraw final {
     FrameMailboxPublication publication;
     bool hasDifference = false;
+    // Filter for the regular video-slot pass; mirrored from SurfaceRenderState::videoFilter
+    // so drawVideoSlots can pick its sampler without threading the whole state through.
+    SurfaceDifferenceFilter videoFilter = SurfaceDifferenceFilter::Bilinear;
     // Up to three slot draws (two-up, three-up, reference-focus layouts). Each draw carries its
     // own constants and owns one constant-buffer set until the immediate-context draw is issued.
     std::array<VideoDraw, 3U> videoDraws{};
@@ -620,10 +623,11 @@ bool SurfaceRenderState::isValid() const noexcept {
     return (!scissorEnabled || scissor.isValid()) && dvs::platform::isValid(viewMode) &&
            dvs::platform::isValid(differenceMetric) && dvs::platform::isValid(differenceGain) &&
            dvs::platform::isValid(differenceEdge) && dvs::platform::isValid(differenceFilter) &&
-           dvs::platform::isValid(thresholdPolicy) && std::isfinite(threshold) &&
-           threshold >= 0.0F && threshold <= 1.0F && viewTransform.isValid() &&
-           (!roiEnabled || roi.isValid()) && std::isfinite(wipePosition) && wipePosition >= 0.0F &&
-           wipePosition <= 1.0F && referenceSlot < 3U;
+           dvs::platform::isValid(videoFilter) && dvs::platform::isValid(thresholdPolicy) &&
+           std::isfinite(threshold) && threshold >= 0.0F && threshold <= 1.0F &&
+           viewTransform.isValid() && (!roiEnabled || roi.isValid()) &&
+           std::isfinite(wipePosition) && wipePosition >= 0.0F && wipePosition <= 1.0F &&
+           referenceSlot < 3U;
 }
 
 SurfaceSplitLayout computeSurfaceSplit(const float logicalWidth,
@@ -1393,6 +1397,7 @@ private:
             return false;
         }
         const GpuFrameSet& set = *publication.set;
+        prepared.videoFilter = state.videoFilter;
 
         // Extract up to three slots; slots without a frame stay black (the render target is
         // cleared to black before the set is drawn).
@@ -1705,7 +1710,11 @@ private:
                                       const PreparedSetDraw& prepared,
                                       const GraphicsDeviceLease& lease) noexcept {
         context.PSSetShader(nv12PixelShader_.Get(), nullptr, 0U);
-        ID3D11SamplerState* const sampler = linearSampler_.Get();
+        // Point sampling above 200% zoom is what keeps pixels legible as pixels; bilinear
+        // would average neighbouring texels and hide exactly the defects under review.
+        ID3D11SamplerState* const sampler =
+            prepared.videoFilter == SurfaceDifferenceFilter::Bilinear ? linearSampler_.Get()
+                                                                      : nearestSampler_.Get();
         context.PSSetSamplers(0U, 1U, &sampler);
 
         for (std::size_t index = 0U; index < prepared.videoDrawCount; ++index) {

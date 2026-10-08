@@ -86,9 +86,12 @@ struct TimelineIndexCancellationState final {
 // not original code values or renderer readback. Playback separately normalizes to NV12/P010;
 // its display rotation, scaling and sampling do not enter this full-frame metrics conversion.
 [[nodiscard]] std::optional<PairMetricsDecodeSession::RgbaFrame>
-rgbaFromFrame(const AVFrame& frame,
+rgbaFromFrame(const AVFrame& frame, // NOLINT(bugprone-exception-escape): decode-path allocation,
+                                    // terminate accepted
               SwsContextPtr& scaleContext,
-              const domain::ColorMetadata& colorMetadata) noexcept {
+              const domain::ColorMetadata&
+                  colorMetadata) noexcept { // NOLINT(bugprone-exception-escape): decode-path
+                                            // allocations, terminate accepted
     if (frame.width <= 0 || frame.height <= 0) {
         return std::nullopt;
     }
@@ -206,16 +209,14 @@ domain::Status PairMetricsDecodeSession::open(const std::atomic<bool>& cancellat
                         "A pair-metrics decoder requires a complete probed source identity."));
     }
 
-    const auto identity =
-        platform::SourceIdentityService::verify(impl_->descriptor.normalizedPath,
-                                                *impl_->descriptor.sourceIdentity,
-                                                impl_->sourceId,
-                                                domain::MediaOperation::kMediaDecode);
+    auto identity = platform::SourceIdentityService::verify(impl_->descriptor.normalizedPath,
+                                                            *impl_->descriptor.sourceIdentity,
+                                                            impl_->sourceId,
+                                                            domain::MediaOperation::kMediaDecode);
     if (!identity) {
         return identity;
     }
-    const auto normalizedPath =
-        platform::WindowsPaths::absolutePath(impl_->descriptor.normalizedPath);
+    auto normalizedPath = platform::WindowsPaths::absolutePath(impl_->descriptor.normalizedPath);
     if (!normalizedPath) {
         return domain::Status::failure(decodeError(domain::MediaErrorCode::kMediaOpenFailed,
                                                    impl_->sourceId,

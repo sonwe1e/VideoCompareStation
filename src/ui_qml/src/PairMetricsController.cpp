@@ -186,7 +186,8 @@ const PairMetricsController::Sample* PairMetricsController::currentSample() cons
     if (!snapshot || !snapshot->displayedFrame.has_value()) {
         return nullptr;
     }
-    const auto found = samples_.find(snapshot->displayedFrame->value());
+    const domain::FrameId displayed = *snapshot->displayedFrame;
+    const auto found = samples_.find(displayed.value());
     return found == samples_.end() ? nullptr : &found->second;
 }
 
@@ -538,7 +539,8 @@ void PairMetricsController::submitRequest() {
         emit stateChanged();
         return;
     }
-    const std::int64_t center = snapshot->displayedFrame->value();
+    const domain::FrameId displayedFrame = *snapshot->displayedFrame;
+    const std::int64_t center = displayedFrame.value();
     const std::int64_t count = static_cast<std::int64_t>(snapshot->canonicalFrameCount);
     const std::int64_t radius = laneEnabled_ ? kLaneRadiusFrames : 0;
     const std::int64_t windowFirst = std::max<std::int64_t>(0, center - radius);
@@ -628,9 +630,11 @@ void PairMetricsController::trimCache() {
     std::int64_t center = samples_.empty() ? 0 : samples_.begin()->first;
     if (dependencies_.snapshot) {
         const auto snapshot = dependencies_.snapshot();
-        if (snapshot && snapshot->displayedFrame.has_value() &&
-            snapshot->displayedFrame->isValid()) {
-            center = snapshot->displayedFrame->value();
+        if (snapshot && snapshot->displayedFrame.has_value()) {
+            const domain::FrameId displayed = *snapshot->displayedFrame;
+            if (displayed.isValid()) {
+                center = displayed.value();
+            }
         }
     }
     while (samples_.size() > dependencies_.maximumCachedSamples) {

@@ -559,6 +559,41 @@ Rectangle {
         }
     }
 
+    // Sampling mode for the video slots: Auto follows the zoom (bilinear <= 200%, nearest
+    // above), the explicit modes pin one behaviour. One button cycles the three modes so the
+    // chrome stays compact; the label states the active mode.
+    ReviewActionButton {
+        id: videoFilterBadge
+
+        objectName: "viewportVideoFilterBadge"
+        enabled: visible && control.sourceCount > 0 && !control.overlayVisible
+        visible: control.chromeVisible
+        z: 30
+        height: 28
+        leftPadding: 9
+        rightPadding: 9
+        topPadding: 0
+        bottomPadding: 0
+        anchors {
+            left: pixelScaleBadge.right
+            leftMargin: 8
+            bottom: parent.bottom
+            bottomMargin: 12 + control.bottomOverlayInset
+        }
+
+        readonly property int mode: dualVideoSurface.videoFilterMode
+        readonly property string modeText: mode === dualVideoSurface.VideoFilterPixel ? qsTr("像素") : (mode === dualVideoSurface.VideoFilterSmooth ? qsTr("平滑") : qsTr("自动"))
+        text: qsTr("采样 %1").arg(modeText)
+        helpText: qsTr("视频画面采样方式。\n自动：200% 以上用最近邻，保证高倍放大时像素边界可见；其余用双线性。\n平滑：始终双线性。\n像素：始终最近邻。")
+        Accessible.name: text
+        Accessible.description: helpText
+
+        onClicked: {
+            // Auto -> Smooth -> Pixel -> Auto.
+            dualVideoSurface.videoFilterMode = (mode + 1) % 3;
+        }
+    }
+
     // Fit / reset commands, same product verbs as the image workspace toolbar.
     Row {
         id: viewCommandRow

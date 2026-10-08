@@ -168,8 +168,8 @@ failureForTerminal(const std::optional<application::CommandTerminal>& terminal,
 domain::Result<DirectComparisonResult>
 compareDirectSources(std::shared_ptr<application::IFrameProvider> provider,
                      platform::FrameBudget& frameBudget,
-                     domain::MediaDescriptor sourceA,
-                     domain::MediaDescriptor sourceB,
+                     const domain::MediaDescriptor& sourceA,
+                     const domain::MediaDescriptor& sourceB,
                      const domain::FrameId frameId) {
     if (!provider) {
         return domain::Result<DirectComparisonResult>::failure(
@@ -267,19 +267,22 @@ compareDirectSources(std::shared_ptr<application::IFrameProvider> provider,
         return domain::Result<DirectComparisonResult>::failure(comparisonError(
             "The coordinator completed without a complete frame for both sources."));
     }
+    // Both frames are engaged: the guard above returned on !hasFrame().
+    const application::FrameHandle& frameA = *entryA->frame;
+    const application::FrameHandle& frameB = *entryB->frame;
     const DirectComparisonResult result{
         .frameId = set->canonicalFrameId(),
         .sourceA =
             DirectComparisonFrame{
-                .width = entryA->frame->geometry().width,
-                .height = entryA->frame->geometry().height,
-                .accountedBytes = entryA->frame->accountedBytes(),
+                .width = frameA.geometry().width,
+                .height = frameA.geometry().height,
+                .accountedBytes = frameA.accountedBytes(),
             },
         .sourceB =
             DirectComparisonFrame{
-                .width = entryB->frame->geometry().width,
-                .height = entryB->frame->geometry().height,
-                .accountedBytes = entryB->frame->accountedBytes(),
+                .width = frameB.geometry().width,
+                .height = frameB.geometry().height,
+                .accountedBytes = frameB.accountedBytes(),
             },
         .reservedBytes = frameBudget.reservedBytes(),
     };

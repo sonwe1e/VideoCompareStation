@@ -80,7 +80,7 @@ public:
         }
         try {
             wakeup_();
-        } catch (...) {
+        } catch (...) { // NOLINT(bugprone-empty-catch): wake-up loss is recovered by drain
             // The event is already accepted. A missed wake-up is recovered by shutdown draining.
         }
         return application::EventPostResult::Accepted;
@@ -120,8 +120,11 @@ private:
     bool closed_ = false;
 };
 
+// std::visit over a fully valueless-safe variant cannot throw.
+// NOLINTBEGIN(bugprone-exception-escape)
 [[nodiscard]] const application::RequestContext*
 terminalContext(const application::RequestTerminal& terminal) noexcept {
+    // NOLINTEND(bugprone-exception-escape)
     return std::visit(
         [](const auto& outcome) -> const application::RequestContext* {
             return std::get_if<application::RequestContext>(&outcome.context);
@@ -401,7 +404,7 @@ public:
         saveTimer_.stop();
         try {
             flushPendingChangesBeforeStop();
-        } catch (...) {
+        } catch (...) { // NOLINT(bugprone-empty-catch): bounded shutdown is the contract
             // Shutdown remains bounded even if snapshot construction or an adapter submission
             // unexpectedly throws. Outstanding requests are canceled below.
         }
@@ -530,7 +533,7 @@ private:
                             const QJsonArray array =
                                 QJsonDocument::fromJson(QByteArray::fromStdString(entry->second))
                                     .array();
-                            for (const QJsonValue& value : array) {
+                            for (const auto& value : array) {
                                 if (value.isString()) {
                                     storedRecent.push_back(value.toString());
                                 }

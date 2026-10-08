@@ -146,6 +146,10 @@ struct SurfaceRenderState final {
     SurfaceDifferenceGain differenceGain = SurfaceDifferenceGain::Gain1x;
     SurfaceDifferenceEdge differenceEdge = SurfaceDifferenceEdge::Between0And1;
     SurfaceDifferenceFilter differenceFilter = SurfaceDifferenceFilter::Bilinear;
+    // Regular video slots sample through this filter. The surface flips it to Nearest at high
+    // magnification so block artifacts and interpolation distortion stay inspectable instead
+    // of being smoothed away by bilinear taps. Default keeps legacy bilinear behaviour.
+    SurfaceDifferenceFilter videoFilter = SurfaceDifferenceFilter::Bilinear;
     float wipePosition = 0.5F;
     bool exactPlaneAvailable = false;
     bool thresholdEnabled = false;

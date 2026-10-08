@@ -62,7 +62,9 @@ void destroySplashState(SplashState* const state) {
 }
 
 SplashState* stateOf(const HWND window) {
-    return reinterpret_cast<SplashState*>(::GetWindowLongPtrW(window, GWLP_USERDATA));
+    // GWLP_USERDATA is the documented Win32 pattern for per-window state.
+    return reinterpret_cast<SplashState*>( // NOLINT(performance-no-int-to-ptr)
+        ::GetWindowLongPtrW(window, GWLP_USERDATA));
 }
 
 std::wstring toWide(const std::string& text) {
@@ -98,9 +100,13 @@ LRESULT CALLBACK splashWndProc(HWND window,
     case WM_NCCREATE: {
         // The create parameters arrive here, not in WM_PAINT. Stash the state on
         // the window so later paint and destroy messages can reach it.
-        const auto* const create = reinterpret_cast<const CREATESTRUCTW*>(lparam);
-        ::SetWindowLongPtrW(
-            window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+        // LPARAM-to-struct is the documented Win32 message pattern.
+        const auto* const create =
+            reinterpret_cast<const CREATESTRUCTW*>(lparam); // NOLINT(performance-no-int-to-ptr)
+        ::SetWindowLongPtrW(window,
+                            GWLP_USERDATA,
+                            reinterpret_cast<LONG_PTR>( // NOLINT(performance-no-int-to-ptr)
+                                create->lpCreateParams));
         break;
     }
     case WM_PAINT: {
@@ -313,7 +319,11 @@ void StartupSplash::show(const std::string& title, const std::string& subtitle) 
         return;
     }
     dismissRequested_.store(false, std::memory_order_release);
+    // Thread entry copies Qt strings; a splash failure is non-fatal by design and Qt
+    // terminates on OOM.
+    // NOLINTBEGIN(bugprone-exception-escape)
     worker_ = std::thread{[this, title, subtitle] { runWorker(title, subtitle); }};
+    // NOLINTEND(bugprone-exception-escape)
 }
 
 void StartupSplash::requestDismiss() {

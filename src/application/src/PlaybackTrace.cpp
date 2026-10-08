@@ -111,7 +111,9 @@ PlaybackTrace& PlaybackTrace::instance() noexcept {
     // teardown cannot race destruction of its mutex/atomics.
     // This intentional process-lifetime allocation is not registered for static destruction.
     // NOLINTNEXTLINE(cppcoreguidelines-owning-memory)
-    static PlaybackTrace* const trace = new PlaybackTrace;
+    static PlaybackTrace* const trace =
+        new PlaybackTrace; // NOLINT(bugprone-unhandled-exception-at-new):
+                           // process-lifetime by design
     return *trace;
 }
 

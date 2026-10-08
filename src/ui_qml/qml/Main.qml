@@ -417,7 +417,7 @@ ApplicationWindow {
 
     // can never let media shortcuts reach the hidden video session.
 
-    readonly property int inputContext: Boolean(reviewInputDialogs && reviewInputDialogs.modalVisible) || anchorDialog.visible || shortcutHelp.visible || imageSingleDialog.visible || imageAddDialog.visible || imagePairDialog.visible || imageReplacePrimaryDialog.visible || imageReplaceSecondaryDialog.visible || imageFolderLeftDialog.visible || imageFolderRightDialog.visible ? 3 : (anyMenuOpen || focusIsPopup(root.activeFocusItem) ? 2 : (focusIsTextEditing(root.activeFocusItem) ? 1 : 0))
+    readonly property int inputContext: Boolean(reviewInputDialogs && reviewInputDialogs.modalVisible) || anchorDialog.visible || shortcutHelp.visible || issueNoteDialog.visible || imageSingleDialog.visible || imageAddDialog.visible || imagePairDialog.visible || imageReplacePrimaryDialog.visible || imageReplaceSecondaryDialog.visible || imageFolderLeftDialog.visible || imageFolderRightDialog.visible ? 3 : (anyMenuOpen || focusIsPopup(root.activeFocusItem) ? 2 : (focusIsTextEditing(root.activeFocusItem) ? 1 : 0))
     readonly property bool globalMediaShortcutsEnabled: workspaceSession.videoActive && inputContext === 0 && (!chromeVisible || !focusBlocksGlobalMediaShortcuts(root.activeFocusItem))
     readonly property bool presentationShortcutsEnabled: inputContext === 0
     readonly property bool frameErrorBannerVisible: hasErrors && currentFrame >= 0 && !busy && graphicsReady && Boolean(controller && controller.canFirst)
@@ -1401,6 +1401,13 @@ ApplicationWindow {
     // folder choice still switches to the image workspace when no complete pair exists.
 
     function captureIssueLog() {
+        // M opens the note dialog first; the actual capture runs when it closes, so the
+        // recorded viewport is the one the user returns to, not one shifted by dialog focus.
+        issueNoteDialog.open();
+        return true;
+    }
+
+    function captureIssueLogWithNote(note) {
         if (!root.issueLogModel)
             return false;
 
@@ -1408,7 +1415,7 @@ ApplicationWindow {
             root.issueLogModel.setWorkspaceMode(root.imageWorkspaceActive ? "image" : "video");
         }
 
-        const ok = root.issueLogModel.captureCurrentIssue("");
+        const ok = root.issueLogModel.captureCurrentIssue(String(note));
 
         if (ok)
             root.issueLogPanelVisible = true;
@@ -1508,6 +1515,12 @@ ApplicationWindow {
 
             if (payload.frame !== undefined && root.controller)
                 root.controller.seekFrame(Number(payload.frame));
+
+            // Restore the saved viewport only after the open has been committed; the surface
+            // validates the scale against live presentation geometry and silently ignores a
+            // restore attempted before the first frame is presented.
+            if (payload.roiEnabled !== undefined && viewportFrame.surface)
+                viewportFrame.surface.restoreViewport(Number(payload.centerX), Number(payload.centerY), Number(payload.zoom), Boolean(payload.roiEnabled), Number(payload.roiLeft), Number(payload.roiTop), Number(payload.roiRight), Number(payload.roiBottom));
 
             return true;
         }
@@ -2364,6 +2377,15 @@ ApplicationWindow {
         context: Qt.ApplicationShortcut
         enabled: root.inputContext === 0
         onActivated: root.requestCompareFolders()
+    }
+
+    // M for "mark": opens the note dialog; Enter records with the note, Escape records
+    // without one. Active in both workspaces whenever there is something to capture.
+    Shortcut {
+        sequence: "M"
+        context: Qt.ApplicationShortcut
+        enabled: root.inputContext === 0 && (root.videoHasSession || root.imageHasContent)
+        onActivated: root.captureIssueLog()
     }
 
     Timer {
@@ -3505,6 +3527,12 @@ ApplicationWindow {
 
         playerPreset: root.shortcutPreset === 1
         imagePreset: root.imageWorkspaceActive
+    }
+
+    IssueNoteDialog {
+        id: issueNoteDialog
+
+        onAccepted: note => root.captureIssueLogWithNote(note)
     }
 
     ReviewContextMenu {

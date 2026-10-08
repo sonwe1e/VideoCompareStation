@@ -29,7 +29,7 @@ public:
     void store(const domain::MediaDescriptor& descriptor,
                application::FrameLumaSignature signature);
     void storeRange(const domain::MediaDescriptor& descriptor,
-                    std::vector<application::FrameLumaSignature> signatures);
+                    const std::vector<application::FrameLumaSignature>& signatures);
     [[nodiscard]] std::size_t entryCountForTesting() const noexcept;
 
 private:

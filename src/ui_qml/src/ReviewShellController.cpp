@@ -380,7 +380,7 @@ bool ReviewShellController::removeActiveSource(const int sourceIndex) {
 
 bool ReviewShellController::removeActiveSourceByIdentity(const QString& sourceIdentity) {
     const QStringList identities = activeSourceIdentities();
-    const int sourceIndex = identities.indexOf(sourceIdentity);
+    const int sourceIndex = static_cast<int>(identities.indexOf(sourceIdentity));
     if (sourceIdentity.isEmpty() || sourceIndex < 0 || activeSources_.size() <= 1) {
         return false;
     }
@@ -419,7 +419,7 @@ bool ReviewShellController::queueRemoveActiveSource(const QString& sourceIdentit
 
 bool ReviewShellController::changeReferenceByIdentity(const QString& sourceIdentity) {
     const QStringList identities = activeSourceIdentities();
-    const int sourceIndex = identities.indexOf(sourceIdentity);
+    const int sourceIndex = static_cast<int>(identities.indexOf(sourceIdentity));
     if (sourceIdentity.isEmpty() || sourceIndex < 0) {
         return false;
     }
@@ -452,11 +452,18 @@ bool ReviewShellController::cancelQueuedIntent(const qulonglong intentId) {
     if (found == reviewIntents_.end()) {
         return false;
     }
+    // Copied before erase; a reference would dangle once the element is removed.
+    // Copied before erase; a reference would dangle once the element is removed.
+    // NOLINTBEGIN(performance-unnecessary-copy-initialization)
     const ReviewIntent canceled = *found;
+    // NOLINTEND(performance-unnecessary-copy-initialization)
     reviewIntents_.erase(found);
     Q_EMIT stateChanged();
-    Q_EMIT intentEvent(
-        canceled.id, CanceledStatus, canceled.kind, NoIntentError, canceled.sources.size());
+    Q_EMIT intentEvent(canceled.id,
+                       CanceledStatus,
+                       canceled.kind,
+                       NoIntentError,
+                       static_cast<int>(canceled.sources.size()));
     return true;
 }
 
@@ -467,8 +474,11 @@ void ReviewShellController::cancelAllQueuedIntents() {
         Q_EMIT stateChanged();
     }
     for (const ReviewIntent& intent : canceled) {
-        Q_EMIT intentEvent(
-            intent.id, CanceledStatus, intent.kind, NoIntentError, intent.sources.size());
+        Q_EMIT intentEvent(intent.id,
+                           CanceledStatus,
+                           intent.kind,
+                           NoIntentError,
+                           static_cast<int>(intent.sources.size()));
     }
 }
 
@@ -656,8 +666,11 @@ qulonglong ReviewShellController::openVideo(const QUrl& source) {
 bool ReviewShellController::submitOrQueue(ReviewIntent intent, qulonglong* const acceptedId) {
     intent.id = allocateIntentId();
     if (intent.id == 0U) {
-        Q_EMIT intentEvent(
-            0U, RejectedStatus, intent.kind, InvalidIntentError, intent.sources.size());
+        Q_EMIT intentEvent(0U,
+                           RejectedStatus,
+                           intent.kind,
+                           InvalidIntentError,
+                           static_cast<int>(intent.sources.size()));
         return false;
     }
     if (acceptedId != nullptr) {
@@ -670,8 +683,11 @@ bool ReviewShellController::submitOrQueue(ReviewIntent intent, qulonglong* const
         cancelAllQueuedIntents();
         if (activeSources_.isEmpty() && !review_.busy() && !activeIntent_.has_value()) {
             review_.clearCandidateSourceErrors();
-            Q_EMIT intentEvent(
-                intent.id, SucceededStatus, intent.kind, NoIntentError, intent.sources.size());
+            Q_EMIT intentEvent(intent.id,
+                               SucceededStatus,
+                               intent.kind,
+                               NoIntentError,
+                               static_cast<int>(intent.sources.size()));
             Q_EMIT intentFinished(intent.id,
                                   intent.kind,
                                   static_cast<int>(application::CommandOutcome::Succeeded),
@@ -694,8 +710,11 @@ bool ReviewShellController::submitOrQueue(ReviewIntent intent, qulonglong* const
         return queued;
     }
     if (!submitIntent(intent)) {
-        Q_EMIT intentEvent(
-            intent.id, RejectedStatus, intent.kind, SubmissionRejectedError, intent.sources.size());
+        Q_EMIT intentEvent(intent.id,
+                           RejectedStatus,
+                           intent.kind,
+                           SubmissionRejectedError,
+                           static_cast<int>(intent.sources.size()));
         return false;
     }
     return true;
@@ -704,8 +723,11 @@ bool ReviewShellController::submitOrQueue(ReviewIntent intent, qulonglong* const
 bool ReviewShellController::submitIntent(ReviewIntent& intent) {
     if ((intent.sidebarAppend && !sidebarAppendCurrent(*intent.sidebarAppend)) ||
         !rebaseIntent(intent)) {
-        Q_EMIT intentEvent(
-            intent.id, RejectedStatus, intent.kind, StaleTopologyError, intent.sources.size());
+        Q_EMIT intentEvent(intent.id,
+                           RejectedStatus,
+                           intent.kind,
+                           StaleTopologyError,
+                           static_cast<int>(intent.sources.size()));
         return false;
     }
 
@@ -735,7 +757,11 @@ bool ReviewShellController::submitIntent(ReviewIntent& intent) {
     }
     activeIntent_ = intent;
     Q_EMIT stateChanged();
-    Q_EMIT intentEvent(intent.id, RunningStatus, intent.kind, NoIntentError, intent.sources.size());
+    Q_EMIT intentEvent(intent.id,
+                       RunningStatus,
+                       intent.kind,
+                       NoIntentError,
+                       static_cast<int>(intent.sources.size()));
     return true;
 }
 
@@ -748,8 +774,11 @@ bool ReviewShellController::enqueueIntent(ReviewIntent intent) {
             }
             const ReviewIntent replaced = *existing;
             existing = reviewIntents_.erase(existing);
-            Q_EMIT intentEvent(
-                replaced.id, ReplacedStatus, replaced.kind, NoIntentError, replaced.sources.size());
+            Q_EMIT intentEvent(replaced.id,
+                               ReplacedStatus,
+                               replaced.kind,
+                               NoIntentError,
+                               static_cast<int>(replaced.sources.size()));
         }
     } else if (intent.kind == ChangeReferenceIntent) {
         const auto existing = std::find_if(
@@ -757,30 +786,43 @@ bool ReviewShellController::enqueueIntent(ReviewIntent intent) {
                 return queued.kind == ChangeReferenceIntent;
             });
         if (existing != reviewIntents_.rend()) {
+            // Copied before the slot is overwritten by the incoming intent.
+            // NOLINTBEGIN(performance-unnecessary-copy-initialization)
             const ReviewIntent replaced = *existing;
+            // NOLINTEND(performance-unnecessary-copy-initialization)
             *existing = std::move(intent);
             Q_EMIT stateChanged();
-            Q_EMIT intentEvent(
-                replaced.id, ReplacedStatus, replaced.kind, NoIntentError, replaced.sources.size());
+            Q_EMIT intentEvent(replaced.id,
+                               ReplacedStatus,
+                               replaced.kind,
+                               NoIntentError,
+                               static_cast<int>(replaced.sources.size()));
             Q_EMIT intentEvent(existing->id,
                                QueuedStatus,
                                existing->kind,
                                NoIntentError,
-                               existing->sources.size());
+                               static_cast<int>(existing->sources.size()));
             return true;
         }
     }
 
     if (reviewIntents_.size() >= kMaximumQueuedIntents) {
-        Q_EMIT intentEvent(
-            intent.id, RejectedStatus, intent.kind, QueueFullError, intent.sources.size());
+        Q_EMIT intentEvent(intent.id,
+                           RejectedStatus,
+                           intent.kind,
+                           QueueFullError,
+                           static_cast<int>(intent.sources.size()));
         return false;
     }
 
     reviewIntents_.push_back(std::move(intent));
     Q_EMIT stateChanged();
     const ReviewIntent& queued = reviewIntents_.back();
-    Q_EMIT intentEvent(queued.id, QueuedStatus, queued.kind, NoIntentError, queued.sources.size());
+    Q_EMIT intentEvent(queued.id,
+                       QueuedStatus,
+                       queued.kind,
+                       NoIntentError,
+                       static_cast<int>(queued.sources.size()));
     return true;
 }
 
@@ -803,7 +845,7 @@ void ReviewShellController::drainIntentQueue() {
                                RejectedStatus,
                                rejected.kind,
                                SubmissionRejectedError,
-                               rejected.sources.size());
+                               static_cast<int>(rejected.sources.size()));
             Q_EMIT intentFinished(rejected.id,
                                   rejected.kind,
                                   static_cast<int>(application::CommandOutcome::Failed),
@@ -853,7 +895,7 @@ void ReviewShellController::finishIntent(const int outcome, const QString& error
                        succeeded ? SucceededStatus : FailedStatus,
                        completed.kind,
                        succeeded ? NoIntentError : CommandFailedError,
-                       completed.sources.size());
+                       static_cast<int>(completed.sources.size()));
     Q_EMIT intentFinished(completed.id, completed.kind, outcome, errorKey);
     if (!reviewIntents_.empty()) {
         QMetaObject::invokeMethod(this, [this] { drainIntentQueue(); }, Qt::QueuedConnection);
@@ -865,7 +907,7 @@ bool ReviewShellController::rebaseIntent(ReviewIntent& intent) const {
         return true;
     }
 
-    const QStringList activeIdentities = activeSourceIdentities();
+    QStringList activeIdentities = activeSourceIdentities();
     switch (intent.kind) {
     case OpenSourcesIntent:
     case CloseSourcesIntent:
@@ -890,17 +932,20 @@ bool ReviewShellController::rebaseIntent(ReviewIntent& intent) const {
             return false;
         }
         intent.sources = std::move(rebased);
-        intent.referenceIndex = rebasedIdentities.indexOf(intent.referenceIdentity);
+        intent.referenceIndex =
+            static_cast<int>(rebasedIdentities.indexOf(intent.referenceIdentity));
         if (intent.referenceIndex < 0) {
             const int fallbackReference =
                 referenceSourceIndex_ >= 0 ? referenceSourceIndex_ : canonicalSourceIndex_;
             intent.referenceIndex =
-                std::clamp(fallbackReference, 0, static_cast<int>(intent.sources.size()) - 1);
+                std::clamp(fallbackReference,
+                           0,
+                           static_cast<int>(static_cast<int>(intent.sources.size())) - 1);
         }
         return true;
     }
     case RemoveSourceIntent: {
-        const int targetIndex = activeIdentities.indexOf(intent.targetIdentity);
+        const int targetIndex = static_cast<int>(activeIdentities.indexOf(intent.targetIdentity));
         if (targetIndex < 0 || activeSources_.size() <= 1) {
             return false;
         }
@@ -908,14 +953,15 @@ bool ReviewShellController::rebaseIntent(ReviewIntent& intent) const {
         intent.sources.removeAt(targetIndex);
         QStringList remaining = activeIdentities;
         remaining.removeAt(targetIndex);
-        intent.referenceIndex = remaining.indexOf(intent.referenceIdentity);
+        intent.referenceIndex = static_cast<int>(remaining.indexOf(intent.referenceIdentity));
         if (intent.referenceIndex < 0) {
             intent.referenceIndex = 0;
         }
         return true;
     }
     case ChangeReferenceIntent:
-        intent.referenceIndex = activeIdentities.indexOf(intent.referenceIdentity);
+        intent.referenceIndex =
+            static_cast<int>(activeIdentities.indexOf(intent.referenceIdentity));
         return intent.referenceIndex >= 0;
     }
     return false;
@@ -928,7 +974,7 @@ QVariantMap ReviewShellController::intentMap(const ReviewIntent& intent,
         {QStringLiteral("status"), status},
         {QStringLiteral("kind"), intent.kind},
         {QStringLiteral("origin"), intent.origin},
-        {QStringLiteral("sourceCount"), intent.sources.size()},
+        {QStringLiteral("sourceCount"), static_cast<int>(intent.sources.size())},
         {QStringLiteral("referenceIndex"), intent.referenceIndex},
         {QStringLiteral("generation"), QVariant::fromValue<qulonglong>(intent.expectedGeneration)},
     };
@@ -1012,7 +1058,7 @@ ReviewShellController::effectiveComparisonState() const noexcept {
 // The display order is the active order until the user reorders it. Falling back on every read
 // keeps the property correct even for the window between an active set change and its stateChanged.
 QStringList ReviewShellController::displaySourceIdentities() const {
-    const QStringList activeIdentities = activeSourceIdentities();
+    QStringList activeIdentities = activeSourceIdentities();
     if (displaySourceIdentities_.size() != activeIdentities.size()) {
         return activeIdentities;
     }
@@ -1025,7 +1071,7 @@ QStringList ReviewShellController::displaySourceIdentities() const {
 }
 
 QStringList ReviewShellController::selectedSourceIdentities() const {
-    const QStringList activeIdentities = activeSourceIdentities();
+    QStringList activeIdentities = activeSourceIdentities();
     QStringList live;
     live.reserve(selectedSourceIdentities_.size());
     for (const QString& identity : selectedSourceIdentities_) {

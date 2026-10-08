@@ -40,16 +40,16 @@ inline constexpr std::size_t kExactRequestSlots = 1U;
 inline constexpr std::size_t kSequentialRequestSlots = 2U;
 inline constexpr std::size_t kPrefetchRequestSlots = 8U;
 inline constexpr std::size_t kSetTableCapacity = 4U;
-inline constexpr std::size_t kMaximumSourceCacheBytes = 12U * 1024U * 1024U;
-inline constexpr std::size_t kMaximumFrameSetCacheBytes = 96U * 1024U * 1024U;
+inline constexpr std::size_t kMaximumSourceCacheBytes = std::size_t{12U} * 1024U * 1024U;
+inline constexpr std::size_t kMaximumFrameSetCacheBytes = std::size_t{96U} * 1024U * 1024U;
 
-enum class ProviderOperationKind {
+enum class ProviderOperationKind : std::uint8_t {
     kOpen,
     kFrame,
     kClose,
 };
 
-enum class ProviderOperationLifecycle {
+enum class ProviderOperationLifecycle : std::uint8_t {
     kPending,
     kCanceled,
     kTerminalClaimed,
@@ -585,10 +585,14 @@ private:
         std::terminate();
     }
 
-    void
-    cancelQueueLocked(std::deque<std::shared_ptr<ProviderOperation>>& queue,
-                      const application::CancellationReason reason,
-                      std::vector<std::shared_ptr<ProviderOperation>>* const displaced) noexcept {
+    // NOLINTBEGIN(bugprone-exception-escape)
+    // Provider thread contract: cancel paths post events through allocating sinks.
+    void cancelQueueLocked(
+        std::deque<std::shared_ptr<ProviderOperation>>& queue,
+        const application::CancellationReason reason,
+        std::vector<std::shared_ptr<ProviderOperation>>* const
+            displaced) noexcept { // NOLINT(bugprone-exception-escape): provider thread contract
+                                  // NOLINTEND(bugprone-exception-escape)
         while (!queue.empty()) {
             std::shared_ptr<ProviderOperation> operation = std::move(queue.front());
             queue.pop_front();
@@ -607,10 +611,14 @@ private:
         cancelQueueLocked(prefetchQueue_, reason, displaced);
     }
 
-    void
-    cancelFrontLocked(std::deque<std::shared_ptr<ProviderOperation>>& queue,
-                      const application::CancellationReason reason,
-                      std::vector<std::shared_ptr<ProviderOperation>>* const displaced) noexcept {
+    // NOLINTBEGIN(bugprone-exception-escape)
+    // Provider thread contract: cancel paths post events through allocating sinks.
+    void cancelFrontLocked(
+        std::deque<std::shared_ptr<ProviderOperation>>& queue,
+        const application::CancellationReason reason,
+        std::vector<std::shared_ptr<ProviderOperation>>* const
+            displaced) noexcept { // NOLINT(bugprone-exception-escape): provider thread contract
+                                  // NOLINTEND(bugprone-exception-escape)
         if (queue.empty()) {
             return;
         }
@@ -621,9 +629,10 @@ private:
         }
     }
 
-    void cancelFarthestPrefetchLocked(
+    void cancelFarthestPrefetchLocked( // NOLINT(bugprone-exception-escape): provider thread
         const domain::FrameId incomingFrame,
-        std::vector<std::shared_ptr<ProviderOperation>>* const displaced) noexcept {
+        std::vector<std::shared_ptr<ProviderOperation>>* const
+            displaced) noexcept { // NOLINT(bugprone-exception-escape): provider thread contract
         if (prefetchQueue_.empty()) {
             return;
         }
@@ -649,7 +658,8 @@ private:
         return activeOperation_ != nullptr && activeOperation_->requestCancellation(reason);
     }
 
-    [[nodiscard]] bool cancelActiveExactLocked() noexcept {
+    [[nodiscard]] bool cancelActiveExactLocked() noexcept { // NOLINT(bugprone-exception-escape):
+                                                            // provider thread contract
         if (activeOperation_ == nullptr ||
             activeOperation_->kind != ProviderOperationKind::kFrame) {
             return false;
@@ -662,13 +672,14 @@ private:
 
     void cancelOutdatedFrameQueuesLocked(
         const application::PlaybackRequestContext& newestContext,
-        std::vector<std::shared_ptr<ProviderOperation>>* const displaced) noexcept {
+        std::vector<std::shared_ptr<ProviderOperation>>* const
+            displaced) noexcept { // NOLINT(bugprone-exception-escape): provider thread contract
         cancelOutdatedFramesLocked(exactQueue_, newestContext, displaced);
         cancelOutdatedFramesLocked(sequentialQueue_, newestContext, displaced);
         cancelOutdatedFramesLocked(prefetchQueue_, newestContext, displaced);
     }
 
-    void cancelOutdatedFramesLocked(
+    void cancelOutdatedFramesLocked( // NOLINT(bugprone-exception-escape): provider thread
         std::deque<std::shared_ptr<ProviderOperation>>& queue,
         const application::PlaybackRequestContext& newestContext,
         std::vector<std::shared_ptr<ProviderOperation>>* const displaced) noexcept {
@@ -688,7 +699,7 @@ private:
         }
     }
 
-    [[nodiscard]] bool cancelActiveOutdatedFrameLocked(
+    [[nodiscard]] bool cancelActiveOutdatedFrameLocked( // NOLINT(bugprone-exception-escape)
         const application::PlaybackRequestContext& newestContext) noexcept {
         if (activeOperation_ == nullptr ||
             activeOperation_->kind != ProviderOperationKind::kFrame) {
@@ -700,7 +711,7 @@ private:
                activeOperation_->requestCancellation(application::CancellationReason::Superseded);
     }
 
-    void cancelMatchingQueueLocked(
+    void cancelMatchingQueueLocked( // NOLINT(bugprone-exception-escape): provider thread contract
         std::deque<std::shared_ptr<ProviderOperation>>& queue,
         const application::PlaybackRequestContext& context,
         const application::CancellationReason reason,
@@ -767,7 +778,10 @@ private:
         sequentialSetReady_ = false;
     }
 
+    // NOLINTBEGIN(bugprone-exception-escape)
+    // Provider thread entry: the actor run loop owns the terminate contract.
     void executeOpen(const std::shared_ptr<ProviderOperation>& operation) noexcept {
+        // NOLINTEND(bugprone-exception-escape)
         if (operation->isCanceled()) {
             postCanceled(operation);
             return;
@@ -996,7 +1010,10 @@ private:
         return cached->set;
     }
 
+    // NOLINTBEGIN(bugprone-exception-escape)
+    // Provider thread entry: the actor run loop owns the terminate contract.
     void executeFrame(const std::shared_ptr<ProviderOperation>& operation) noexcept {
+        // NOLINTEND(bugprone-exception-escape)
         if (operation->isCanceled()) {
             postCanceled(operation);
             return;
@@ -1258,7 +1275,7 @@ private:
         condition_.notify_one();
     }
 
-    void finishFrameAssembly() noexcept {
+    void finishFrameAssembly() noexcept { // NOLINT(bugprone-exception-escape): provider thread path
         if (!pendingFrameAssembly_.has_value()) {
             return;
         }

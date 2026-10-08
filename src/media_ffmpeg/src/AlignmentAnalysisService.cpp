@@ -33,7 +33,8 @@ using AnalysisRequest =
     std::variant<application::AlignmentEstimateRequest, application::SequenceAlignmentRequest>;
 
 [[nodiscard]] const application::PlaybackRequestContext&
-context(const AnalysisRequest& request) noexcept {
+context(const AnalysisRequest& request) noexcept { // NOLINT(bugprone-exception-escape): std::visit
+                                                   // over a valueless-safe variant
     return std::visit(
         [](const auto& value) -> const application::PlaybackRequestContext& {
             return value.context;
@@ -41,7 +42,8 @@ context(const AnalysisRequest& request) noexcept {
         request);
 }
 
-[[nodiscard]] application::AlignmentAnalysisJobId jobId(const AnalysisRequest& request) noexcept {
+[[nodiscard]] application::AlignmentAnalysisJobId jobId( // NOLINT(bugprone-exception-escape)
+    const AnalysisRequest& request) noexcept {
     return std::visit([](const auto& value) { return value.jobId; }, request);
 }
 

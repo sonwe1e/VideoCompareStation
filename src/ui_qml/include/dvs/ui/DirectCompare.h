@@ -35,8 +35,8 @@ struct DirectComparisonResult final {
 [[nodiscard]] domain::Result<DirectComparisonResult>
 compareDirectSources(std::shared_ptr<application::IFrameProvider> provider,
                      platform::FrameBudget& frameBudget,
-                     domain::MediaDescriptor sourceA,
-                     domain::MediaDescriptor sourceB,
+                     const domain::MediaDescriptor& sourceA,
+                     const domain::MediaDescriptor& sourceB,
                      domain::FrameId frameId);
 
 } // namespace dvs::ui

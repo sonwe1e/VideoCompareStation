@@ -33,7 +33,7 @@ public:
     decodeRange(domain::FrameId firstFrame,
                 std::int64_t frameCount,
                 const std::atomic<bool>& cancellationRequested,
-                Progress progress = {});
+                const Progress& progress = {});
 
     void requestInterrupt() noexcept;
     void close() noexcept;

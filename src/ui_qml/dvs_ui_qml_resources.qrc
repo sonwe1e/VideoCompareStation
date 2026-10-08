@@ -35,6 +35,7 @@
         <file alias="ClipExportDialog.qml">qml/ClipExportDialog.qml</file>
         <!-- Viewer-native commands and timeline chrome. -->
         <file alias="ReviewContextMenu.qml">qml/ReviewContextMenu.qml</file>
+        <file alias="IssueNoteDialog.qml">qml/IssueNoteDialog.qml</file>
         <file alias="ShortcutHelpOverlay.qml">qml/ShortcutHelpOverlay.qml</file>
         <file alias="TabbedInspector.qml">qml/TabbedInspector.qml</file>
         <file alias="TimelineTracks.qml">qml/TimelineTracks.qml</file>

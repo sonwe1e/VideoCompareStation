@@ -10,7 +10,7 @@
 namespace dvs::app {
 namespace {
 
-constexpr qsizetype kMaximumRequestBytes = 64 * 1024;
+constexpr qsizetype kMaximumRequestBytes = qsizetype{64} * 1024;
 
 [[nodiscard]] std::filesystem::path pathFromQString(const QString& value) {
     return std::filesystem::path{value.toStdWString()};
@@ -144,7 +144,7 @@ StartupRequestParseResult decodeStartupRequest(const QByteArray& payload) {
     std::vector<std::filesystem::path> sources;
     const QJsonArray encodedSources = object.value(QStringLiteral("sources")).toArray();
     sources.reserve(static_cast<std::size_t>(encodedSources.size()));
-    for (const QJsonValue& source : encodedSources) {
+    for (const auto& source : encodedSources) {
         if (!source.isString()) {
             return {.error = QStringLiteral("Startup source paths must be strings.")};
         }

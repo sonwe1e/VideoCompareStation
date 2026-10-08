@@ -25,7 +25,8 @@ std::size_t SourceFrameCacheKeyHash::operator()(const SourceFrameCacheKey& key) 
     return result;
 }
 
-SourceFrameCache::SourceFrameCache(const std::size_t capacityBytes) noexcept
+SourceFrameCache::SourceFrameCache( // NOLINT(bugprone-exception-escape)
+    const std::size_t capacityBytes) noexcept
     : capacityBytes_(capacityBytes) {}
 
 std::optional<CachedSourceFrame> SourceFrameCache::find(const SourceFrameCacheKey& key) {

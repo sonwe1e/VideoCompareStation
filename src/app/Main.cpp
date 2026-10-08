@@ -59,7 +59,7 @@
 
 namespace {
 
-enum class SmokeStage {
+enum class SmokeStage : std::uint8_t {
     WaitingForGraphics,
     WaitingForFirstFrame,
     WaitingForNextFrame,
@@ -87,7 +87,7 @@ struct SmokeSources final {
     std::optional<std::filesystem::path> third;
 };
 
-enum class PerformanceComparisonMode {
+enum class PerformanceComparisonMode : std::uint8_t {
     Side,
     Wipe,
     Difference,
@@ -506,7 +506,7 @@ runDesktop(int& argc,
     std::unique_ptr<dvs::app::StartupRequestDispatcher> startupDispatcher;
     if (!smokeMode && !stillImage.has_value()) {
         startupDispatcher = std::make_unique<dvs::app::StartupRequestDispatcher>(
-            [&desktop](dvs::app::StartupRequest request) {
+            [&desktop](const dvs::app::StartupRequest& request) {
                 return applyStartupRequest(request, desktop);
             },
             [controller = runtime->controller()] { return controller->canOpen(); },
@@ -542,11 +542,11 @@ runDesktop(int& argc,
             // failure when this instance is briefly busy: it is accepted, and applied when the
             // session can take it.
             startupBroker->setRequestHandler(
-                [dispatcher = startupDispatcher.get()](dvs::app::StartupRequest request) {
-                    return dispatcher->submit(std::move(request));
+                [dispatcher = startupDispatcher.get()](const dvs::app::StartupRequest& request) {
+                    return dispatcher->submit(request);
                 });
         } else {
-            startupBroker->setRequestHandler([&desktop](dvs::app::StartupRequest request) {
+            startupBroker->setRequestHandler([&desktop](const dvs::app::StartupRequest& request) {
                 return applyStartupRequest(request, desktop);
             });
         }
@@ -935,7 +935,7 @@ runDesktop(int& argc,
         return EXIT_FAILURE;
     }
 
-    enum class Stage {
+    enum class Stage : std::uint8_t {
         WaitingForPreferences,
         WaitingForGraphics,
         WaitingForFirstFrame,
@@ -1047,7 +1047,7 @@ runDesktop(int& argc,
                                  const PerformanceComparisonMode comparisonMode,
                                  const bool reviewLoad) {
     constexpr auto kWarmup = std::chrono::seconds{2};
-    constexpr std::size_t kMaximumFrameBytes = 256U * 1024U * 1024U;
+    constexpr std::size_t kMaximumFrameBytes = std::size_t{256U} * 1024U * 1024U;
     dvs::ui::configureGraphicsBackend();
     dvs::ui::DesktopApplication desktop{
         argc,
@@ -1081,7 +1081,7 @@ runDesktop(int& argc,
         return EXIT_FAILURE;
     }
     installPlaybackTrace(*runtime);
-    enum class Stage {
+    enum class Stage : std::uint8_t {
         WaitingForGraphics,
         WaitingForFirstFrame,
         WaitingForComparisonMode,
@@ -1310,9 +1310,7 @@ runDesktop(int& argc,
         const std::uint64_t endDecodes = accumulateDecodes(heldStepDecoderEnd);
         const std::uint64_t windowDecodes = endDecodes - baseDecodes;
         const std::uint64_t windowExactSeeks = endExactSeeks - baseExactSeeks;
-        if (windowDecodes == 0U) {
-            metrics.heldStepSequentialRatio = 0.0;
-        } else if (windowExactSeeks >= windowDecodes) {
+        if (windowDecodes == 0U || windowExactSeeks >= windowDecodes) {
             metrics.heldStepSequentialRatio = 0.0;
         } else {
             metrics.heldStepSequentialRatio =
@@ -1616,8 +1614,10 @@ runDesktop(int& argc,
                 // short fixtures). totalFrames() is authoritative only after the seek commits.
                 heldStepSamples =
                     std::min(kHeldStepSamplesMax,
-                             static_cast<std::size_t>(std::max<qint64>(
-                                 0, controller.totalFrames() - heldStepSeekTarget - 1)));
+                             static_cast<std::size_t>(std::max<qulonglong>(
+                                 0ULL,
+                                 controller.totalFrames() -
+                                     static_cast<qulonglong>(heldStepSeekTarget) - 1ULL)));
                 heldStepTimer.start();
                 heldStepCadenceMs();
                 heldStepProviderBaseline = runtime->frameProviderStatistics();
@@ -2105,7 +2105,7 @@ runImageFolderEvidence(int& argc, char** argv, const ImageFolderInvocation& invo
     }
     installPlaybackTrace(*runtime);
 
-    enum class ImageStage {
+    enum class ImageStage : std::uint8_t {
         WaitingForGraphics,
         WaitingForFolderFirstPair,
         IteratingRows,
@@ -2169,6 +2169,10 @@ runImageFolderEvidence(int& argc, char** argv, const ImageFolderInvocation& invo
     auto* const model =
         qobject_cast<dvs::ui::ImageFolderPairModel*>(desktop.folderPairModelForAutomation());
 
+    // Row index and open time are the evidence record's own fields; the assignments below
+    // pin the order, and the int/qint64 pair is inherent to the row/evidence shape.
+    // Row index and open time are the evidence record's own fields; the assignments below
+    // pin the order, and the int/qint64 pair is inherent to the row/evidence shape.
     const auto captureRow = [&](const int row, const qint64 openMilliseconds, const bool opened) {
         ImageRowEvidence evidence;
         evidence.row = row;
@@ -2701,7 +2705,7 @@ struct PopupProbeResult final {
         return EXIT_FAILURE;
     }
 
-    enum class Stage {
+    enum class Stage : std::uint8_t {
         WaitingForGraphics,
         WaitingForFirstFrame,
         ProbingMenus,
@@ -2932,6 +2936,10 @@ int main(int argc, char* argv[]) {
     // Qt imageformat plugins may omit PNG/JPEG on this deploy; route still-image open
     // through FFmpeg so File → Open image… works for common formats.
     dvs::ui::ImageReviewController::setProcessStillImageLoader(
+        // Matches the fixed StillImageLoader signature; the adjacent QImage pointers are
+        // the interface itself, not a caller-side mistake.
+        // Matches the fixed StillImageLoader signature; the adjacent QImage pointers are
+        // the interface itself, not a caller-side mistake.
         [](const QByteArray& bytes,
            QImage* image,
            QImage* nativeImage,
@@ -2962,7 +2970,7 @@ int main(int argc, char* argv[]) {
             const QImage decoded(still.rgba.data(),
                                  still.width,
                                  still.height,
-                                 still.width * 4,
+                                 static_cast<qsizetype>(still.width) * 4,
                                  QImage::Format_RGBA8888);
             *image = decoded.copy();
             // Original-depth sidecar for sources beyond 8 bits: RGBA64LE is byte-identical to

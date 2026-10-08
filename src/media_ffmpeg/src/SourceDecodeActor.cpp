@@ -32,7 +32,7 @@ constexpr std::uint64_t kReverseWindowBuildBudgetMicroseconds = 80'000U;
 // D04: the budget covers the complete fill including the mandatory seed decodeExact. A seed
 // that already exceeded it skips the sequential walk so the wait is never "seed + full budget".
 constexpr std::uint32_t kExactSoftwareThreadCount = 4U;
-constexpr std::uint64_t kMaximumSoftwareExactFrameBytes = 8U * 1024U * 1024U;
+constexpr std::uint64_t kMaximumSoftwareExactFrameBytes = std::uint64_t{8U} * 1024U * 1024U;
 
 [[nodiscard]] bool
 supportsDedicatedExactDecode(const domain::MediaDescriptor& descriptor) noexcept {
@@ -250,7 +250,8 @@ application::PortSubmitResult SourceDecodeActor::submit(SourceDecodeRequest requ
     return application::PortSubmitResult::Accepted;
 }
 
-void SourceDecodeActor::close() noexcept {
+void SourceDecodeActor::close() noexcept { // NOLINT(bugprone-exception-escape): control-path
+                                           // allocation
     ControlJob job{.kind = ControlKind::Close};
     std::future<domain::Status> completion = job.completion.get_future();
     {
@@ -346,7 +347,7 @@ std::optional<SourceDecodeActor::DecodeJob> SourceDecodeActor::takeNextDecodeLoc
     return take(prefetchQueue_);
 }
 
-void SourceDecodeActor::run() noexcept {
+void SourceDecodeActor::run() noexcept { // NOLINT(bugprone-exception-escape): actor thread entry
     {
         std::scoped_lock lock{mutex_};
         workerThreadId_ = std::this_thread::get_id();
@@ -679,10 +680,12 @@ void SourceDecodeActor::completeCanceled(DecodeJob job) noexcept {
                  actorError(sourceId_, "The queued source decode request was superseded.")));
 }
 
-void SourceDecodeActor::complete(DecodeJob job, domain::Result<DecodedFrame> result) noexcept {
+void SourceDecodeActor::complete(
+    DecodeJob job, // NOLINT(performance-unnecessary-value-param): moved into the sink
+    domain::Result<DecodedFrame> result) noexcept {
     try {
         job.completion(std::move(result));
-    } catch (...) {
+    } catch (...) { // NOLINT(bugprone-empty-catch): sink failures must not take the actor down
     }
 }
 

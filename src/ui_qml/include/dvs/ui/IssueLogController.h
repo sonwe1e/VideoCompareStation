@@ -33,7 +33,9 @@ public:
     // ImageReviewController / ComparisonSurface live in the graphics adapter.
     void setImageController(QObject* imageController) noexcept;
     void setVideoSurface(QObject* videoSurface) noexcept;
-    void setWorkspaceMode(const QString& mode) noexcept;
+    // Invokable because Main.qml switches the mode on every workspace change and before
+    // every capture; a plain member was unreachable from QML and silently kept the old mode.
+    Q_INVOKABLE void setWorkspaceMode(const QString& mode) noexcept;
     void setDefaultDocumentPath(const QUrl& path) noexcept;
 
     [[nodiscard]] int count() const noexcept;

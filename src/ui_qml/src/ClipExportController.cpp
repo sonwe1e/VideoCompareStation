@@ -164,6 +164,17 @@ void ClipExportController::cancelExport() {
 }
 
 void ClipExportController::runExport(const Request& request) noexcept {
+    try {
+        runExportBody(request);
+    } catch (...) {
+        // The worker is noexcept; an escaped exception would terminate the process. Turn any
+        // unexpected failure into a failed report instead.
+        postFinished(
+            makeReport(request.id, application::ClipExportOutcome::kFailed, std::string{}));
+    }
+}
+
+void ClipExportController::runExportBody(const Request& request) {
     application::IClipExporter& exporter = *dependencies_.exporter;
 
     // An empty keyframe table means both "canceled" and "no keyframe information"; the flag

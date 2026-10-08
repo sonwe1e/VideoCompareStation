@@ -81,7 +81,8 @@ void applyWindowsNativeChrome(QQuickWindow* const window) noexcept {
     if (window == nullptr) {
         return;
     }
-    const auto hwnd = reinterpret_cast<HWND>(window->winId());
+    // WId-to-HWND reinterpret is the documented Qt/Win32 interop idiom.
+    const auto hwnd = reinterpret_cast<HWND>(window->winId()); // NOLINT(performance-no-int-to-ptr)
     if (hwnd == nullptr) {
         return;
     }
@@ -164,7 +165,7 @@ public:
 
     [[nodiscard]] bool load(ReviewController& controller,
                             ReviewPreferencesController& preferences,
-                            SurfaceBinder bindSurface,
+                            const SurfaceBinder& bindSurface,
                             PairMetricsController* pairMetrics,
                             PreviewThumbnailController* previewThumbnails) {
         if (engine_ || !bindSurface) {
@@ -426,7 +427,9 @@ public:
 #if defined(_WIN32)
         if (!options_.smokeMode) {
             // Also ask the shell directly so a launch from Explorer lands in front.
-            if (const auto hwnd = reinterpret_cast<HWND>(window_->winId()); hwnd != nullptr) {
+            if (const auto hwnd =
+                    reinterpret_cast<HWND>(window_->winId()); // NOLINT(performance-no-int-to-ptr)
+                hwnd != nullptr) {
                 ::SetForegroundWindow(hwnd);
             }
         }
@@ -530,7 +533,9 @@ public:
         window_->raise();
         window_->requestActivate();
 #if defined(_WIN32)
-        if (const auto hwnd = reinterpret_cast<HWND>(window_->winId()); hwnd != nullptr) {
+        if (const auto hwnd =
+                reinterpret_cast<HWND>(window_->winId()); // NOLINT(performance-no-int-to-ptr)
+            hwnd != nullptr) {
             ::SetForegroundWindow(hwnd);
         }
 #endif
@@ -804,7 +809,7 @@ public:
                     QQuickWindow* const popupWindow = contentItem->window();
                     if (popupWindow != nullptr && popupWindow != window_ &&
                         popupWindow->width() > 0 && popupWindow->height() > 0) {
-                        const QImage grabbed = popupWindow->grabWindow();
+                        QImage grabbed = popupWindow->grabWindow();
                         if (!grabbed.isNull()) {
                             return grabbed;
                         }
@@ -833,7 +838,7 @@ public:
             if (quickWindow->width() <= 0 || quickWindow->height() <= 0) {
                 return std::nullopt;
             }
-            const QImage grabbed = quickWindow->grabWindow();
+            QImage grabbed = quickWindow->grabWindow();
             if (grabbed.isNull()) {
                 return std::nullopt;
             }
@@ -865,7 +870,11 @@ public:
     }
 
 private:
+    // Tree walk allocates Qt containers; callers are noexcept smoke-harness paths, and Qt
+    // terminates on OOM by design.
+    // NOLINTBEGIN(bugprone-exception-escape)
     [[nodiscard]] QQuickItem* visualItemForAutomation(const QString& target) const noexcept {
+        // NOLINTEND(bugprone-exception-escape)
         if (window_ == nullptr || window_->contentItem() == nullptr || target.isEmpty()) {
             return nullptr;
         }
@@ -947,11 +956,10 @@ DesktopApplication::~DesktopApplication() = default;
 
 bool DesktopApplication::load(ReviewController& controller,
                               ReviewPreferencesController& preferences,
-                              SurfaceBinder bindSurface,
+                              const SurfaceBinder& bindSurface,
                               PairMetricsController* pairMetrics,
                               PreviewThumbnailController* previewThumbnails) {
-    return impl_->load(
-        controller, preferences, std::move(bindSurface), pairMetrics, previewThumbnails);
+    return impl_->load(controller, preferences, bindSurface, pairMetrics, previewThumbnails);
 }
 
 void DesktopApplication::setIssueRecordRepository(

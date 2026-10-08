@@ -116,7 +116,7 @@ struct DifferenceEntry final {
 struct ImageReviewController::AsyncState final {
     explicit AsyncState(ImageReviewController* owner) : loader(owner) {}
 
-    enum class PendingKind {
+    enum class PendingKind : std::uint8_t {
         None,
         Primary,
         Secondary,
@@ -1289,9 +1289,10 @@ void ImageReviewController::handleLoadFinished(ImagePairLoader::Result result) {
     emit openFinished(requestId, pairId, true, QString{});
 }
 
-void ImageReviewController::handleDifferenceFinished(ImagePairLoader::DifferenceResult result,
-                                                     const quint64 sourceGeneration,
-                                                     const QString& cacheKey) {
+void ImageReviewController::handleDifferenceFinished(
+    const ImagePairLoader::DifferenceResult& result,
+    const quint64 sourceGeneration,
+    const QString& cacheKey) {
     if (async_ == nullptr || result.requestId != async_->activeDifferenceRequestId ||
         sourceGeneration != async_->sourceGeneration || cacheKey != differenceCacheKey()) {
         return;
@@ -1608,8 +1609,8 @@ void ImageReviewController::requestDifferenceForCurrentMode() {
         primaryNative_,
         secondaryNative_,
         options,
-        [this, sourceGeneration, cacheKey](ImagePairLoader::DifferenceResult result) {
-            handleDifferenceFinished(std::move(result), sourceGeneration, cacheKey);
+        [this, sourceGeneration, cacheKey](const ImagePairLoader::DifferenceResult& result) {
+            handleDifferenceFinished(result, sourceGeneration, cacheKey);
         });
     emit stateChanged();
 }

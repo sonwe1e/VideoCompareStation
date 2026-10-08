@@ -160,9 +160,12 @@ public:
           bufferPool(3U), softwareThreadCount(softwareThreadCountValue),
           maximumSequentialStride(maximumSequentialStrideValue) {}
 
+    // NOLINTBEGIN(bugprone-exception-escape)
+    // FFmpeg get_format callback: cannot throw across the C boundary by contract.
     [[nodiscard]] static AVPixelFormat
     selectHardwareFormat(AVCodecContext* const context,
                          const AVPixelFormat* const formats) noexcept {
+        // NOLINTEND(bugprone-exception-escape)
         auto* const self = static_cast<Impl*>(context->opaque);
         if (self != nullptr && self->hardwareRequested) {
             for (const AVPixelFormat* format = formats; *format != AV_PIX_FMT_NONE; ++format) {
@@ -268,11 +271,10 @@ domain::Status SoftwareDecoder::open(const std::atomic<bool>& cancellationReques
     }
 
     const domain::SourceId sourceId = impl_->sourceId;
-    const auto identity =
-        platform::SourceIdentityService::verify(impl_->descriptor.normalizedPath,
-                                                *impl_->descriptor.sourceIdentity,
-                                                sourceId,
-                                                domain::MediaOperation::kMediaDecode);
+    auto identity = platform::SourceIdentityService::verify(impl_->descriptor.normalizedPath,
+                                                            *impl_->descriptor.sourceIdentity,
+                                                            sourceId,
+                                                            domain::MediaOperation::kMediaDecode);
     if (!identity) {
         return identity;
     }

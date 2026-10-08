@@ -114,7 +114,7 @@ void logStartupProblem(const std::string_view technicalDetail) noexcept {
                      technicalDetail.data());
         std::fflush(stderr);
         static_cast<void>(appendStartupLog(startupLogPath(), "problem", technicalDetail));
-    } catch (...) {
+    } catch (...) { // NOLINT(bugprone-empty-catch): deliberate swallow, see below
         // Recording the problem must never become a second one.
     }
 }

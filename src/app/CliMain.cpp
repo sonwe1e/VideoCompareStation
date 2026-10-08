@@ -63,7 +63,7 @@ void printError(const dvs::domain::MediaError& error) {
         return EXIT_FAILURE;
     }
 
-    constexpr std::size_t kFrameBudgetBytes = 256U * 1024U * 1024U;
+    constexpr std::size_t kFrameBudgetBytes = std::size_t{256U} * 1024U * 1024U;
     dvs::platform::FrameBudget frameBudget{kFrameBudgetBytes};
     const auto provider = std::make_shared<dvs::media::MultiSourceFrameProvider>(frameBudget);
     const auto comparison = dvs::ui::compareDirectSources(
@@ -127,26 +127,39 @@ void printUsage() {
 
 } // namespace
 
-int main(int argc, char* argv[]) {
-    if (argc == 2 && std::string_view{argv[1]} == "--startup-check") {
-        return runStartupCheck();
-    }
-    if (argc == 3 && std::string_view{argv[1]} == "--probe") {
-        return runProbe(std::filesystem::path{argv[2]});
-    }
-    if (argc == 4 && std::string_view{argv[1]} == "--compare") {
-        return runCompare(std::filesystem::path{argv[2]},
-                          std::filesystem::path{argv[3]},
-                          dvs::domain::FrameId{0});
-    }
-    if (argc == 6 && std::string_view{argv[1]} == "--compare" &&
-        std::string_view{argv[4]} == "--frame") {
-        const auto frameId = parseFrameId(argv[5]);
-        if (!frameId.has_value()) {
-            std::cerr << "error=invalid-frame-id\n";
-            return EXIT_FAILURE;
+// Everything reachable in the body is wrapped in try/catch(...); the remaining escape surface
+// is static initialization/termination, which cannot be caught from main itself.
+int main(int argc, char* argv[]) { // NOLINT(bugprone-exception-escape)
+    // The CLI must terminate with an exit code, never an unhandled exception: filesystem path
+    // construction from argv can throw for undecodable arguments.
+    try {
+        if (argc == 2 && std::string_view{argv[1]} == "--startup-check") {
+            return runStartupCheck();
         }
-        return runCompare(std::filesystem::path{argv[2]}, std::filesystem::path{argv[3]}, *frameId);
+        if (argc == 3 && std::string_view{argv[1]} == "--probe") {
+            return runProbe(std::filesystem::path{argv[2]});
+        }
+        if (argc == 4 && std::string_view{argv[1]} == "--compare") {
+            return runCompare(std::filesystem::path{argv[2]},
+                              std::filesystem::path{argv[3]},
+                              dvs::domain::FrameId{0});
+        }
+        if (argc == 6 && std::string_view{argv[1]} == "--compare" &&
+            std::string_view{argv[4]} == "--frame") {
+            const auto frameId = parseFrameId(argv[5]);
+            if (!frameId.has_value()) {
+                std::cerr << "error=invalid-frame-id\n";
+                return EXIT_FAILURE;
+            }
+            return runCompare(
+                std::filesystem::path{argv[2]}, std::filesystem::path{argv[3]}, *frameId);
+        }
+    } catch (const std::exception& error) {
+        std::cerr << "error=unhandled-exception: " << error.what() << '\n';
+        return EXIT_FAILURE;
+    } catch (...) {
+        std::cerr << "error=unhandled-exception\n";
+        return EXIT_FAILURE;
     }
 
     printUsage();

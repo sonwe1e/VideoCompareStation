@@ -273,7 +273,7 @@ PresentationIndexCache::load(const TimestampIndexRequest& request) noexcept {
 }
 
 void PresentationIndexCache::store(const TimestampIndexRequest& request,
-                                   PresentationTimestampIndex index) noexcept {
+                                   const PresentationTimestampIndex& index) noexcept {
     if (!cacheable(request) || !index || index->empty()) {
         return;
     }
@@ -306,7 +306,7 @@ void PresentationIndexCache::store(const TimestampIndexRequest& request,
         } else {
             static_cast<void>(publisher.value()->publishNew());
         }
-    } catch (...) {
+    } catch (...) { // NOLINT(bugprone-empty-catch): cache write failures are non-fatal
     }
 }
 

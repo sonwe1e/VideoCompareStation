@@ -106,6 +106,8 @@ private:
     [[nodiscard]] std::optional<Request> makeRequest(std::filesystem::path targetPath) const;
     [[nodiscard]] std::optional<Request> displayRequest() const;
     void runExport(const Request& request) noexcept;
+    // Throwing body isolated so the noexcept worker can convert escapes into failed reports.
+    void runExportBody(const Request& request);
     void postProgress(application::ClipExportRequestId requestId, qreal value);
     void postFinished(application::ClipExportReport report);
     void applyProgress(application::ClipExportRequestId requestId, qreal value);

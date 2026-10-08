@@ -51,7 +51,7 @@ public:
 
     [[nodiscard]] application::PortSubmitResult
     submit(const application::PairMetricsRequest& request,
-           std::shared_ptr<application::IPairMetricsSink> sink) {
+           const std::shared_ptr<application::IPairMetricsSink>& sink) {
         if (!sink || !request.isValid()) {
             return application::PortSubmitResult::Closed;
         }
@@ -400,8 +400,10 @@ PairMetricsService::~PairMetricsService() = default;
 
 application::PortSubmitResult
 PairMetricsService::submit(const application::PairMetricsRequest& request,
-                           std::shared_ptr<application::IPairMetricsSink> sink) {
-    return impl_->submit(request, std::move(sink));
+                           std::shared_ptr<application::IPairMetricsSink>
+                               sink) { // NOLINT(performance-unnecessary-value-param):
+                                       // port signature
+    return impl_->submit(request, sink);
 }
 
 void PairMetricsService::cancel(const application::PlaybackRequestContext& context) noexcept {

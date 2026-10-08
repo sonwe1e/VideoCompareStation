@@ -48,7 +48,7 @@ namespace {
 
 using namespace std::chrono_literals;
 
-constexpr std::size_t kPlaybackFrameBudgetBytes = 224U * 1024U * 1024U;
+constexpr std::size_t kPlaybackFrameBudgetBytes = std::size_t{224U} * 1024U * 1024U;
 constexpr auto kAdapterShutdownTimeout = 2s;
 constexpr auto kTotalShutdownTimeout = 7s;
 constexpr auto kShutdownReturnMargin = 50ms;
@@ -62,12 +62,19 @@ public:
     GraphicsNotificationPump(std::shared_ptr<platform::GraphicsDeviceBroker> deviceBroker,
                              std::shared_ptr<platform::FrameMailbox> frameMailbox,
                              std::weak_ptr<application::IApplicationEventSink> events)
-        : deviceBroker_(std::move(deviceBroker)), frameMailbox_(std::move(frameMailbox)),
-          events_(std::move(events)) {
+        : state_(std::make_shared<WorkerState>()), deviceBroker_(std::move(deviceBroker)),
+          frameMailbox_(std::move(frameMailbox)), events_(std::move(events)) {
         if (!deviceBroker_ || !frameMailbox_) {
             throw std::invalid_argument{"Graphics notification pump dependencies are required."};
         }
-        worker_ = std::jthread{[this](const std::stop_token stopToken) { run(stopToken); }};
+        // The thread captures only the shared state and the shared dependencies, never `this`:
+        // any future call to stop()/destructor from inside the worker itself can no longer turn
+        // into a detached thread reading destroyed members (UAF).
+        state_->deviceBroker = deviceBroker_;
+        state_->frameMailbox = frameMailbox_;
+        state_->events = events_;
+        worker_ = std::jthread{
+            [state = state_](const std::stop_token& stopToken) { runWorker(state, stopToken); }};
     }
 
     ~GraphicsNotificationPump() {
@@ -83,25 +90,34 @@ public:
 
     void stop() noexcept {
         requestStop();
-        if (!worker_.joinable()) {
-            return;
-        }
+        // A worker-thread caller only requests the stop; joining itself is impossible and
+        // detaching would let it outlive this object's members. The owner's destructor (on
+        // another thread) performs the join, and the worker's captured state keeps its own
+        // dependencies alive until then, so a self-call cannot produce a use-after-free.
         if (worker_.get_id() == std::this_thread::get_id()) {
-            worker_.detach();
             return;
         }
-        worker_.join();
+        if (worker_.joinable()) {
+            worker_.join();
+        }
     }
 
 private:
-    [[nodiscard]] bool dispatch(platform::GraphicsDeviceNotification notification) noexcept {
+    struct WorkerState final {
+        std::shared_ptr<platform::GraphicsDeviceBroker> deviceBroker;
+        std::shared_ptr<platform::FrameMailbox> frameMailbox;
+        std::weak_ptr<application::IApplicationEventSink> events;
+    };
+
+    [[nodiscard]] static bool dispatch(WorkerState& state,
+                                       platform::GraphicsDeviceNotification notification) noexcept {
         try {
             std::visit(
-                [this](auto&& event) {
-                    static_cast<void>(
-                        frameMailbox_->advanceDeviceGeneration(event.context.deviceGeneration));
+                [&state](auto&& event) {
+                    static_cast<void>(state.frameMailbox->advanceDeviceGeneration(
+                        event.context.deviceGeneration));
                     if (const std::shared_ptr<application::IApplicationEventSink> events =
-                            events_.lock()) {
+                            state.events.lock()) {
                         static_cast<void>(events->postCritical(application::ApplicationEvent{
                             std::forward<decltype(event)>(event),
                         }));
@@ -114,16 +130,18 @@ private:
         return true;
     }
 
-    void run(const std::stop_token stopToken) noexcept {
+    static void runWorker(const std::shared_ptr<WorkerState>& state,
+                          const std::stop_token& stopToken) noexcept {
         while (!stopToken.stop_requested()) {
             std::optional<platform::GraphicsDeviceNotification> notification =
-                deviceBroker_->waitForNotification(stopToken);
-            if (!notification.has_value() || !dispatch(std::move(*notification))) {
+                state->deviceBroker->waitForNotification(stopToken);
+            if (!notification.has_value() || !dispatch(*state, std::move(*notification))) {
                 return;
             }
         }
     }
 
+    std::shared_ptr<WorkerState> state_;
     std::shared_ptr<platform::GraphicsDeviceBroker> deviceBroker_;
     std::shared_ptr<platform::FrameMailbox> frameMailbox_;
     std::weak_ptr<application::IApplicationEventSink> events_;
@@ -558,7 +576,7 @@ public:
             controlThread = std::thread{[work]() noexcept { work->run(); }};
         } catch (...) {
             *abandonedWork = std::move(work);
-            static_cast<void>(abandonedWork.release());
+            abandonedWork.release(); // NOLINT(bugprone-unused-return-value): intentional leak
             shutdownResult_ = false;
             shutdownCompleted_ = true;
             return false;

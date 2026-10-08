@@ -179,16 +179,14 @@ domain::Status SignatureDecodeSession::open(const std::atomic<bool>& cancellatio
                         "A signature decoder requires a complete probed source identity."));
     }
 
-    const auto identity =
-        platform::SourceIdentityService::verify(impl_->descriptor.normalizedPath,
-                                                *impl_->descriptor.sourceIdentity,
-                                                impl_->sourceId,
-                                                domain::MediaOperation::kMediaDecode);
+    auto identity = platform::SourceIdentityService::verify(impl_->descriptor.normalizedPath,
+                                                            *impl_->descriptor.sourceIdentity,
+                                                            impl_->sourceId,
+                                                            domain::MediaOperation::kMediaDecode);
     if (!identity) {
         return identity;
     }
-    const auto normalizedPath =
-        platform::WindowsPaths::absolutePath(impl_->descriptor.normalizedPath);
+    auto normalizedPath = platform::WindowsPaths::absolutePath(impl_->descriptor.normalizedPath);
     if (!normalizedPath) {
         return domain::Status::failure(decodeError(domain::MediaErrorCode::kMediaOpenFailed,
                                                    impl_->sourceId,
@@ -341,7 +339,7 @@ domain::Result<std::vector<application::FrameLumaSignature>>
 SignatureDecodeSession::decodeRange(const domain::FrameId firstFrame,
                                     const std::int64_t frameCount,
                                     const std::atomic<bool>& cancellationRequested,
-                                    Progress progress) {
+                                    const Progress& progress) {
     if (!firstFrame.isValid() || frameCount <= 0 ||
         firstFrame.value() > impl_->descriptor.frameCount.value - frameCount) {
         return domain::Result<std::vector<application::FrameLumaSignature>>::failure(

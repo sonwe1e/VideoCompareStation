@@ -18,7 +18,7 @@ using application::IssueRecord;
 using application::IssueRecordKind;
 using application::kIssueRecordSchemaVersion;
 
-constexpr std::uintmax_t kMaximumIssueDocumentBytes = 2U * 1024U * 1024U;
+constexpr std::uintmax_t kMaximumIssueDocumentBytes = std::uintmax_t{2U} * 1024U * 1024U;
 
 [[nodiscard]] bool isSupportedSchemaVersion(const Json& value) {
     if (!value.is_number_integer() && !value.is_number_unsigned()) {

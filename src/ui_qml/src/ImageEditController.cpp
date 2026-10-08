@@ -71,7 +71,7 @@ public:
     // undo/redo labels all at once, so one place has to notify all of them.
     ImageEditController& controller;
 
-    enum class AnnotationKind {
+    enum class AnnotationKind : std::uint8_t {
         Arrow,
         Rectangle,
         Text,
@@ -453,9 +453,10 @@ public:
     // dirty rect is retained, so a stroke costs its own footprint instead of a full image.
     class PatchCommand final : public QUndoCommand {
     public:
-        PatchCommand(Impl* owner, const QRect rect, QImage before, QImage after, QString label)
+        PatchCommand(
+            Impl* owner, const QRect rect, QImage before, QImage after, const QString& label)
             : owner_(owner), rect_(rect), before_(std::move(before)), after_(std::move(after)) {
-            setText(std::move(label));
+            setText(label);
         }
 
         void undo() override {

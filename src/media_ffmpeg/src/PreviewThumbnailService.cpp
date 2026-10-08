@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
@@ -41,10 +42,8 @@ downscaleToRequest(const application::PreviewThumbnailRequest& request,
     if (sourceWidth > request.maxWidth || sourceHeight > request.maxHeight) {
         const double scale = (std::min)(static_cast<double>(request.maxWidth) / sourceWidth,
                                         static_cast<double>(request.maxHeight) / sourceHeight);
-        targetWidth = std::max(
-            1U, static_cast<std::uint32_t>(static_cast<double>(sourceWidth) * scale + 0.5));
-        targetHeight = std::max(
-            1U, static_cast<std::uint32_t>(static_cast<double>(sourceHeight) * scale + 0.5));
+        targetWidth = std::max(1U, static_cast<std::uint32_t>(std::lround(sourceWidth * scale)));
+        targetHeight = std::max(1U, static_cast<std::uint32_t>(std::lround(sourceHeight * scale)));
     }
     if (targetWidth == 0U || targetHeight == 0U) {
         return result;

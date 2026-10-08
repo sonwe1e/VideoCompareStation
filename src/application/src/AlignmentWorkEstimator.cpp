@@ -78,7 +78,8 @@ globalAnchors(const AlignmentEstimateRequest& request,
 
 } // namespace
 
-AlignmentWorkEstimate estimateAlignmentWork(const AlignmentEstimateRequest& request) noexcept {
+AlignmentWorkEstimate estimateAlignmentWork( // NOLINT(bugprone-exception-escape)
+    const AlignmentEstimateRequest& request) noexcept {
     try {
         const domain::ComparisonSource* const canonical =
             findCanonical(request.sources, request.canonicalSourceId);
@@ -119,7 +120,8 @@ AlignmentWorkEstimate estimateAlignmentWork(const AlignmentEstimateRequest& requ
     }
 }
 
-AlignmentWorkEstimate estimateAlignmentWork(const SequenceAlignmentRequest& request) noexcept {
+AlignmentWorkEstimate estimateAlignmentWork( // NOLINT(bugprone-exception-escape)
+    const SequenceAlignmentRequest& request) noexcept {
     try {
         const domain::ComparisonSource* const canonical =
             findCanonical(request.sources, request.canonicalSourceId);

@@ -310,7 +310,7 @@ private:
 
     [[nodiscard]] ImagePairLoader::DecodePolicy currentDecodePolicy() const;
     void handleLoadFinished(ImagePairLoader::Result result);
-    void handleDifferenceFinished(ImagePairLoader::DifferenceResult result,
+    void handleDifferenceFinished(const ImagePairLoader::DifferenceResult& result,
                                   quint64 sourceGeneration,
                                   const QString& cacheKey);
     void

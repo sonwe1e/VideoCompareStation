@@ -50,6 +50,7 @@ struct PresentationOptions final {
     platform::SurfaceDifferenceEdge differenceEdge = platform::SurfaceDifferenceEdge::Between0And1;
     platform::SurfaceDifferenceFilter differenceFilter =
         platform::SurfaceDifferenceFilter::Bilinear;
+    platform::SurfaceDifferenceFilter videoFilter = platform::SurfaceDifferenceFilter::Bilinear;
     float wipePosition = 0.5F;
     bool exactPlaneAvailable = false;
     bool thresholdEnabled = false;
@@ -99,6 +100,7 @@ nativeDifferenceFilter(const ComparisonSurface::DifferenceFilter value) noexcept
         .differenceGain = nativeDifferenceGain(surface.differenceGain()),
         .differenceEdge = nativeDifferenceEdge(surface.differenceEdge()),
         .differenceFilter = nativeDifferenceFilter(surface.differenceFilter()),
+        .videoFilter = nativeDifferenceFilter(surface.effectiveVideoFilter()),
         .wipePosition = static_cast<float>(surface.wipePosition()),
         .exactPlaneAvailable = surface.exactPlaneAvailable(),
         .thresholdEnabled = surface.thresholdEnabled(),
@@ -430,6 +432,7 @@ public:
             .differenceGain = presentationOptions_.differenceGain,
             .differenceEdge = presentationOptions_.differenceEdge,
             .differenceFilter = presentationOptions_.differenceFilter,
+            .videoFilter = presentationOptions_.videoFilter,
             .wipePosition = presentationOptions_.wipePosition,
             .exactPlaneAvailable = presentationOptions_.exactPlaneAvailable,
             .thresholdEnabled = presentationOptions_.thresholdEnabled,
@@ -554,6 +557,33 @@ void ComparisonSurface::setDifferenceFilter(const DifferenceFilter value) {
     update();
 }
 
+ComparisonSurface::VideoFilterMode ComparisonSurface::videoFilterMode() const noexcept {
+    return videoFilterMode_;
+}
+
+void ComparisonSurface::setVideoFilterMode(const VideoFilterMode value) {
+    if ((value != VideoFilterAuto && value != VideoFilterSmooth && value != VideoFilterPixel) ||
+        videoFilterMode_ == value) {
+        return;
+    }
+    videoFilterMode_ = value;
+    emit videoFilterModeChanged();
+    update();
+}
+
+ComparisonSurface::DifferenceFilter ComparisonSurface::effectiveVideoFilter() const noexcept {
+    if (videoFilterMode_ == VideoFilterSmooth) {
+        return Bilinear;
+    }
+    if (videoFilterMode_ == VideoFilterPixel) {
+        return Nearest;
+    }
+    // Auto: switch to nearest once the user can see individual pixels (>= 200% zoom).
+    // Below that threshold nearest only aliases; above it bilinear hides what is being
+    // reviewed. The threshold matches the guidance in docs/plans/1009_full_plan.md (P0-1).
+    return viewScale_ >= 2.0 ? Nearest : Bilinear;
+}
+
 qreal ComparisonSurface::wipePosition() const noexcept {
     return wipePosition_;
 }
@@ -595,7 +625,7 @@ QVariantList ComparisonSurface::sourcePanelRects() const {
         // In wipe mode this is the full composite, not the split mask.
         item.insert(QStringLiteral("contentWidth"), geometry.sourceContentRects[index].width);
         item.insert(QStringLiteral("contentHeight"), geometry.sourceContentRects[index].height);
-        result.push_back(std::move(item));
+        result.push_back(item);
     }
     return result;
 }

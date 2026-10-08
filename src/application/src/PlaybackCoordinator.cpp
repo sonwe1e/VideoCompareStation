@@ -69,14 +69,14 @@ constexpr auto kInteractiveStepInputLookahead = 3U;
 // FrameSet, unrecoverable graphics failure) sets lastError and fails pending commands. The two
 // paths share teardown (cancel timers/provider, clear render, advance generation) but differ on
 // lastError and command outcome, which is why stopInteractiveStepRun(error) was split.
-enum class InteractiveStepStopReason {
+enum class InteractiveStepStopReason : std::uint8_t {
     NavigationSuperseded,
     PlaybackStarted,
     SessionChanged,
     DeviceChanged,
     Shutdown,
 };
-enum class PendingPhase {
+enum class PendingPhase : std::uint8_t {
     kOpeningProvider,
     kOpeningFirstFrame,
     kSeekingFrame,
@@ -191,7 +191,9 @@ class CoordinatorEventSinkGate final : public IApplicationEventSink {
 public:
     explicit CoordinatorEventSinkGate(CoordinatorEventTarget& target) noexcept : target_(&target) {}
 
-    [[nodiscard]] EventPostResult postCritical(ApplicationEvent event) noexcept override {
+    [[nodiscard]] EventPostResult postCritical(
+        ApplicationEvent event) noexcept override { // NOLINT(bugprone-exception-escape): CV wait
+                                                    // may throw system_error; terminate is accepted
         CoordinatorEventTarget* const target = enter();
         if (target == nullptr) {
             return EventPostResult::Closed;
@@ -201,7 +203,9 @@ public:
         return result;
     }
 
-    [[nodiscard]] EventPostResult postRealtime(ApplicationEvent event) noexcept override {
+    [[nodiscard]] EventPostResult
+    postRealtime(ApplicationEvent event) noexcept override { // NOLINT(bugprone-exception-escape)
+
         CoordinatorEventTarget* const target = enter();
         if (target == nullptr) {
             return EventPostResult::Closed;
@@ -311,7 +315,10 @@ public:
         return publication_.acceptedSequenceAlignments();
     }
 
-    [[nodiscard]] EventPostResult postCritical(ApplicationEvent event) noexcept override {
+    // CV wait may throw system_error; terminate is the accepted outcome.
+    [[nodiscard]] EventPostResult
+    postCritical(ApplicationEvent event) noexcept override { // NOLINT(bugprone-exception-escape)
+
         {
             std::unique_lock lock(ingressMutex_);
             // A critical event is a terminal or a complete exact frame set. It may wait for bounded
@@ -330,7 +337,8 @@ public:
         return EventPostResult::Accepted;
     }
 
-    [[nodiscard]] EventPostResult postRealtime(ApplicationEvent event) noexcept override {
+    [[nodiscard]] EventPostResult
+    postRealtime(ApplicationEvent event) noexcept override { // NOLINT(bugprone-exception-escape)
         {
             std::scoped_lock lock(ingressMutex_);
             if (shuttingDown_ || realtimeIngressClosed_) {
@@ -480,7 +488,7 @@ private:
     // Direction of an interactive ±1 step stream. Forward uses Sequential decode; Reverse uses
     // FrameRequestPriority::Reverse (exact/random-access at the provider) but still keeps one
     // generation and a current+prepared pipeline so held-backward does not cancel per press.
-    enum class InteractiveStepDirection {
+    enum class InteractiveStepDirection : std::uint8_t {
         Forward,
         Reverse,
     };
@@ -827,7 +835,7 @@ private:
         }
         try {
             dependencies_.statePublished();
-        } catch (...) {
+        } catch (...) { // NOLINT(bugprone-empty-catch): publishing must not fail coordinator work
             // Publishing state cannot be allowed to fail coordinator work.
         }
     }
@@ -1163,6 +1171,18 @@ private:
     matchesInteractiveStepPreparedFrame(const EventContext& context) const noexcept {
         return interactiveStepRun_.has_value() && interactiveStepRun_->preparedFrame.has_value() &&
                matchesContext(context, interactiveStepRun_->preparedFrame->frame.context);
+    }
+
+    // Pointer variants let callers bind the engaged optionals once, so the engaged-ness the
+    // guard proves stays visible to the compiler and static analysis alike.
+    [[nodiscard]] PendingInteractiveStep*
+    matchedInteractiveStepFrame(const EventContext& context) noexcept {
+        return matchesInteractiveStepFrame(context) ? &*interactiveStepRun_->frame : nullptr;
+    }
+    [[nodiscard]] PendingInteractiveStep*
+    matchedInteractiveStepPreparedFrame(const EventContext& context) noexcept {
+        return matchesInteractiveStepPreparedFrame(context) ? &*interactiveStepRun_->preparedFrame
+                                                            : nullptr;
     }
 
     [[nodiscard]] PendingPlaybackFrame makeInteractiveStepFrame(const domain::FrameId target) {
@@ -1630,9 +1650,10 @@ private:
                   makeTraceIdentity(),
                   static_cast<std::uint64_t>(terminal.index()),
                   makeIncomingIdentity(terminalContext));
-        if (matchesInteractiveStepFrame(terminalContext)) {
+        if (PendingInteractiveStep* const stepFrame =
+                matchedInteractiveStepFrame(terminalContext)) {
             if (std::holds_alternative<RequestSucceeded>(terminal)) {
-                interactiveStepRun_->frame->frame.providerSucceeded = true;
+                stepFrame->frame.providerSucceeded = true;
                 if (interactiveStepRun_->direction == InteractiveStepDirection::Reverse) {
                     // Keep decode-ahead during presentation; do not wait for the render ACK.
                     submitInteractiveStepSuccessor();
@@ -1648,15 +1669,16 @@ private:
             commitInteractiveStepFrameIfComplete();
             return true;
         }
-        if (matchesInteractiveStepPreparedFrame(terminalContext)) {
+        if (PendingInteractiveStep* const stepPrepared =
+                matchedInteractiveStepPreparedFrame(terminalContext)) {
             if (std::holds_alternative<RequestSucceeded>(terminal)) {
-                interactiveStepRun_->preparedFrame->frame.providerSucceeded = true;
+                stepPrepared->frame.providerSucceeded = true;
             } else {
                 // Drop a failed/canceled prepared frame and re-queue its command so it is
                 // re-submitted when the pipeline advances, rather than lost.
-                CommandContext dropped = interactiveStepRun_->preparedFrame->command;
+                CommandContext dropped = stepPrepared->command;
                 interactiveStepRun_->preparedFrame.reset();
-                interactiveStepRun_->queuedCommands.push_front(std::move(dropped));
+                interactiveStepRun_->queuedCommands.push_front(dropped);
             }
             return true;
         }
@@ -2254,7 +2276,7 @@ private:
         const std::optional<domain::MediaTime> resumeTime = std::nullopt,
         const bool rollbackAttempt = false,
         const std::optional<CommandOutcome> terminalOutcomeOverride = std::nullopt,
-        const std::optional<domain::MediaError> terminalErrorOverride = std::nullopt) {
+        const std::optional<domain::MediaError>& terminalErrorOverride = std::nullopt) {
         domain::FrameId initialFrame{0};
         if (resumeTime.has_value()) {
             auto mapped = domain::canonicalFrameAtOrBefore(timeline, *resumeTime);
@@ -3381,11 +3403,22 @@ private:
                     }
                 } else if constexpr (std::is_same_v<Value, PlayCommand>) {
                     beginPlay(value);
-                } else if constexpr (std::is_same_v<Value, PauseCommand>) {
+                } else if constexpr (std::is_same_v<
+                                         Value,
+                                         PauseCommand>) { // NOLINT(bugprone-branch-clone):
+                                                          // documented no-op arm
                     // Pause is handled before the general active-operation admission gate.
-                } else if constexpr (std::is_same_v<Value, SetPlaybackRangeCommand>) {
+                } else if constexpr (
+                    std::is_same_v<Value,
+                                   SetPlaybackRangeCommand>) { // NOLINT(bugprone-branch-clone):
+                                                               // documented
+                                                               // no-op arm
                     // Handled before the general active-operation admission gate.
-                } else if constexpr (std::is_same_v<Value, StartRangePlaybackCommand>) {
+                } else if constexpr (
+                    std::is_same_v<Value,
+                                   StartRangePlaybackCommand>) { // NOLINT(bugprone-branch-clone):
+                                                                 // documented
+                                                                 // no-op arms
                     // Handled before the general active-operation admission gate.
                 } else if constexpr (std::is_same_v<Value, SetPlaybackContinuityPolicyCommand>) {
                     // Handled before the general active-operation admission gate.
@@ -3504,7 +3537,7 @@ private:
             sequenceAlignmentMaps_ = std::move(openRollback_->sequenceAlignmentMaps);
             automaticAlignmentProposal_ = std::move(openRollback_->automaticAlignmentProposal);
             automaticAlignmentUndo_ = std::move(openRollback_->automaticAlignmentUndo);
-            prefetchScheduler_ = std::move(openRollback_->prefetchScheduler);
+            prefetchScheduler_ = openRollback_->prefetchScheduler;
             openRollback_.reset();
             state_.lastError = terminalErrorOverride;
             publishSnapshot();
@@ -3838,8 +3871,9 @@ private:
                   makeTraceIdentity(),
                   static_cast<std::uint64_t>(ready.set.canonicalFrameId().value()),
                   makeIncomingIdentity(ready.context));
-        if (matchesInteractiveStepFrame(ready.context)) {
-            PendingPlaybackFrame& frame = interactiveStepRun_->frame->frame;
+        if (PendingInteractiveStep* const stepCurrent =
+                matchedInteractiveStepFrame(ready.context)) {
+            PendingPlaybackFrame& frame = stepCurrent->frame;
             if (ready.set.canonicalFrameId() != frame.expectedFrame) {
                 // The provider published a frame set for the wrong canonical frame: a malformed /
                 // mismatched FrameSet is a hard failure — surface it via lastError.
@@ -3855,14 +3889,15 @@ private:
             publishInteractiveStepFrameIfReady();
             return;
         }
-        if (matchesInteractiveStepPreparedFrame(ready.context)) {
-            PendingPlaybackFrame& frame = interactiveStepRun_->preparedFrame->frame;
+        if (PendingInteractiveStep* const stepReady =
+                matchedInteractiveStepPreparedFrame(ready.context)) {
+            PendingPlaybackFrame& frame = stepReady->frame;
             if (ready.set.canonicalFrameId() != frame.expectedFrame) {
                 // A mismatched prepared frame cannot become the current frame; drop it and re-queue
                 // its command so it is re-submitted once the pipeline advances.
-                CommandContext dropped = interactiveStepRun_->preparedFrame->command;
+                CommandContext dropped = stepReady->command;
                 interactiveStepRun_->preparedFrame.reset();
-                interactiveStepRun_->queuedCommands.push_front(std::move(dropped));
+                interactiveStepRun_->queuedCommands.push_front(dropped);
                 return;
             }
             if (!frame.set.has_value()) {
@@ -4361,12 +4396,14 @@ private:
                   makeTraceIdentity(),
                   static_cast<std::uint64_t>(presented.frameId.value()),
                   makeIncomingIdentity(presented.context));
-        if (matchesInteractiveStepFrame(presented.context) &&
-            interactiveStepRun_->frame->frame.framePublished &&
-            presented.frameId == interactiveStepRun_->frame->frame.expectedFrame) {
-            interactiveStepRun_->frame->frame.framePresented = true;
-            commitInteractiveStepFrameIfComplete();
-            return;
+        if (PendingInteractiveStep* const stepPresented =
+                matchedInteractiveStepFrame(presented.context)) {
+            if (stepPresented->frame.framePublished &&
+                presented.frameId == stepPresented->frame.expectedFrame) {
+                stepPresented->frame.framePresented = true;
+                commitInteractiveStepFrameIfComplete();
+                return;
+            }
         }
         if (playbackRun_.has_value() && playbackRun_->frame.has_value() &&
             playbackRun_->frame->framePublished &&
@@ -4532,7 +4569,7 @@ private:
         return WorkItem{std::in_place_index<1>, std::move(event)};
     }
 
-    void run() noexcept {
+    void run() noexcept { // NOLINT(bugprone-exception-escape): coordinator thread entry
         for (;;) {
             std::optional<WorkItem> work;
             {
@@ -4556,7 +4593,7 @@ private:
         }
     }
 
-    void shutdownImpl() noexcept {
+    void shutdownImpl() noexcept { // NOLINT(bugprone-exception-escape): teardown thread entry
         {
             std::scoped_lock lock(ingressMutex_);
             if (shuttingDown_) {
