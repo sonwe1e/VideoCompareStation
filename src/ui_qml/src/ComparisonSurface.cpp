@@ -216,10 +216,10 @@ sourceOrientedPoint(const qreal displayX, const qreal displayY, const int rotati
     const QPointF origin = surface.mapToScene(QPointF{0.0, 0.0});
     const QPointF xUnit = surface.mapToScene(QPointF{1.0, 0.0}) - origin;
     const QPointF yUnit = surface.mapToScene(QPointF{0.0, 1.0}) - origin;
-    const QPointF far = surface.mapToScene(QPointF{surface.width(), surface.height()});
+    const QPointF farPoint = surface.mapToScene(QPointF{surface.width(), surface.height()});
     const QPointF affineFar = origin + xUnit * surface.width() + yUnit * surface.height();
-    if (xUnit.y() != 0.0 || yUnit.x() != 0.0 || std::abs(far.x() - affineFar.x()) > 0.0001 ||
-        std::abs(far.y() - affineFar.y()) > 0.0001) {
+    if (xUnit.y() != 0.0 || yUnit.x() != 0.0 || std::abs(farPoint.x() - affineFar.x()) > 0.0001 ||
+        std::abs(farPoint.y() - affineFar.y()) > 0.0001) {
         return {};
     }
     const auto windowGrid = surface.window()

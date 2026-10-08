@@ -76,7 +76,9 @@ struct ComparisonModeDescriptor final {
 // Smallest positive normal float: all accepted scales survive the GUI double-to-float
 // boundary, including tiny native-size ROIs. Fit is 1; this is a numeric safety floor,
 // not an arbitrary user-visible zoom percentage.
-inline constexpr float kMinimumViewportScale = std::numeric_limits<float>::min();
+// Parenthesized so the call survives TUs where a transitively included Windows
+// header still defines the min macro.
+inline constexpr float kMinimumViewportScale = (std::numeric_limits<float>::min)();
 inline constexpr float kMaximumViewportScale = 64.0F;
 
 struct ViewportState final {

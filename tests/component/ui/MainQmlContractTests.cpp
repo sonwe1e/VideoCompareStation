@@ -1963,6 +1963,8 @@ TEST(MainQmlContractTests, ExportRangeEnablesAfterAuthoritativeSnapshotArrives) 
                      [&availabilityNotifications] { ++availabilityNotifications; });
 
     QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
     engine.rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
     engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
     engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
