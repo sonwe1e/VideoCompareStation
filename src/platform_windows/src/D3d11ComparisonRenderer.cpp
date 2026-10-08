@@ -1254,9 +1254,12 @@ private:
         }
 
         D3D11_DEPTH_STENCIL_DESC depthDescription{};
-        depthDescription.DepthEnable = FALSE;
+        // Qt draws opaque UI before the alpha pass containing our DepthAwareRendering node.
+        // Respect that depth buffer or the video overwrites opaque chrome above it. Keep writes
+        // disabled: the scene graph owns stacking, and this node must not occlude later draws.
+        depthDescription.DepthEnable = TRUE;
         depthDescription.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
-        depthDescription.DepthFunc = D3D11_COMPARISON_ALWAYS;
+        depthDescription.DepthFunc = D3D11_COMPARISON_LESS;
         result = device_->CreateDepthStencilState(&depthDescription, depthState_.GetAddressOf());
         if (FAILED(result)) {
             return failDevice(result, lease);

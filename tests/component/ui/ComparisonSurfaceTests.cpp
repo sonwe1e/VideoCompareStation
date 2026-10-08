@@ -13,10 +13,14 @@
 
 #include <QColor>
 #include <QCoreApplication>
+#include <QDebug>
+#include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QGuiApplication>
 #include <QImage>
+#include <QQmlComponent>
+#include <QQmlEngine>
 #include <QQuickGraphicsConfiguration>
 #include <QQuickWindow>
 #include <QScreen>
@@ -29,6 +33,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <d3d11.h>
 #include <gtest/gtest.h>
 #include <limits>
 #include <memory>
@@ -36,6 +41,7 @@
 #include <span>
 #include <utility>
 #include <vector>
+#include <wrl/client.h>
 
 namespace dvs::ui {
 namespace {
@@ -1620,6 +1626,170 @@ TEST(ComparisonSurfaceWarpTests, RendersUnequalAspectNv12AcrossAnOddSplitWithout
                     2);
     expectColorNear(translucent.pixelColor(translucent.width() / 4, 1), QColor{128, 0, 128}, 2);
 
+    harness.releaseRenderer();
+    EXPECT_TRUE(actor.shutdown(2s));
+}
+
+// The pure-QML popup suite cannot catch a native video draw overwriting opaque QML batches.
+// Keep the production dialog above a real ComparisonSurface and sample RGB, not window alpha:
+// both the white video and the popup have alpha 255 even when the chrome is missing.
+TEST(ComparisonSurfaceWarpTests, DropConfirmationChromeStaysOpaqueOverVideo) {
+    ASSERT_TRUE(qgetenv("QSG_NO_DEPTH_BUFFER").isEmpty())
+        << "This regression requires Qt's depth-buffer batching; unset QSG_NO_DEPTH_BUFFER.";
+    SurfaceWarpHarness harness;
+    harness.window.resize(720, 520);
+    harness.surface.setSize(QSizeF{720.0, 520.0});
+    harness.surface.setViewMode(ComparisonSurface::Single);
+    struct DepthAttachmentProbe final {
+        std::atomic<int> bound{0};
+        std::atomic<int> missing{0};
+        std::atomic<int> noLease{0};
+    };
+    const auto depthProbe = std::make_shared<DepthAttachmentProbe>();
+    QObject probeContext;
+    // In this one-pass fixture the raw ComparisonRenderNode has flushed beginExternal before
+    // this signal. Read its bound DSV before endPass; do not assert from the render thread.
+    // The context disconnects on every exit, while shared captures outlive any in-flight call.
+    QObject::connect(
+        &harness.window,
+        &QQuickWindow::afterRenderPassRecording,
+        &probeContext,
+        [broker = harness.broker, depthProbe] {
+            const platform::GraphicsDeviceLeaseResult result = broker->tryLease();
+            if (!result.lease.has_value()) {
+                depthProbe->noLease.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+            Microsoft::WRL::ComPtr<ID3D11DepthStencilView> depthView;
+            result.lease->immediateContext->OMGetRenderTargets(
+                0U, nullptr, depthView.GetAddressOf());
+            if (depthView) {
+                depthProbe->bound.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                depthProbe->missing.fetch_add(1, std::memory_order_relaxed);
+            }
+        },
+        Qt::DirectConnection);
+    ASSERT_TRUE(harness.start());
+
+    auto budget = std::make_shared<platform::FrameBudget>(16U * 1024U * 1024U);
+    platform::GpuTransferActor actor{budget, harness.broker, harness.mailbox, harness.activitySink};
+    std::optional<application::FrameSet> pair =
+        makeSolidSet(*budget, domain::FrameId{37}, 235U, 235U);
+    ASSERT_TRUE(pair.has_value());
+    ASSERT_EQ(actor.submit(makeContext(37U), std::move(*pair)),
+              platform::GpuTransferSubmitResult::Accepted);
+    ASSERT_TRUE(actor.waitUntilIdle(5s));
+    const QImage video = harness.grab();
+    ASSERT_FALSE(video.isNull());
+    ASSERT_GT(depthProbe->bound.load(), 0) << "No observed native depth attachment; unavailable "
+                                              "leases: "
+                                           << depthProbe->noLease.load();
+    ASSERT_EQ(depthProbe->missing.load(), 0);
+    RecordProperty("device_pixel_ratio",
+                   QString::number(harness.window.devicePixelRatio()).toStdString());
+    RecordProperty("qt_scale_factor", qgetenv("QT_SCALE_FACTOR").toStdString());
+    RecordProperty("grab_width", video.width());
+    RecordProperty("grab_height", video.height());
+    qInfo().nospace() << "DropConfirmation native capture: effectiveDpr="
+                      << harness.window.devicePixelRatio()
+                      << " qtScaleFactor=" << qgetenv("QT_SCALE_FACTOR")
+                      << " logical=" << harness.window.size() << " pixels=" << video.size();
+    expectColorNear(video.pixelColor(video.width() / 4, video.height() / 2), Qt::white, 3);
+
+    QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
+    QQmlComponent component{&engine};
+    component.setData(R"QML(
+import QtQuick
+import "."
+Item {
+    DropConfirmationDialog {
+        objectName: "nativeDropDialog"
+        pendingVideos: ["file:///C:/one.mp4", "file:///C:/two.mp4"]
+        fileNameFunction: function(url) { return url.toString().split("/").pop(); }
+        pathNameFunction: function(url) { return "Videos"; }
+    }
+}
+)QML",
+                      QUrl::fromLocalFile(QDir{QStringLiteral(DVS_QML_SOURCE_DIR)}.filePath(
+                          QStringLiteral("NativeDropDialogProbe.qml"))));
+    ASSERT_EQ(component.status(), QQmlComponent::Ready) << component.errorString().toStdString();
+    std::unique_ptr<QObject> holder{component.beginCreate(engine.rootContext())};
+    auto* const host = qobject_cast<QQuickItem*>(holder.get());
+    ASSERT_NE(host, nullptr);
+    host->setParentItem(harness.window.contentItem());
+    host->setSize(QSizeF{720.0, 520.0});
+    component.completeCreate();
+    ASSERT_FALSE(component.isError()) << component.errorString().toStdString();
+    QObject* const dialog = host->findChild<QObject*>(QStringLiteral("nativeDropDialog"));
+    ASSERT_NE(dialog, nullptr);
+
+    // Exercise both source counts and repeated close/reopen with an already presented video.
+    std::size_t checkedSamples = 0U;
+    for (int sourceCount : {2, 3, 2}) {
+        QVariantList sources{QStringLiteral("file:///C:/one.mp4"),
+                             QStringLiteral("file:///C:/two.mp4")};
+        if (sourceCount == 3) {
+            sources.push_back(QStringLiteral("file:///C:/three.mp4"));
+        }
+        ASSERT_TRUE(dialog->setProperty("pendingVideos", sources));
+        ASSERT_TRUE(QMetaObject::invokeMethod(dialog, "open"));
+        ASSERT_TRUE(waitUntil([&] { return dialog->property("opened").toBool(); }, 2s));
+        const int previousDepthProbes = depthProbe->bound.load();
+        const QImage opened = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+        ASSERT_FALSE(opened.isNull());
+        ASSERT_GT(depthProbe->bound.load(), previousDepthProbes)
+            << "The popup capture did not observe a bound native depth attachment.";
+        ASSERT_EQ(depthProbe->missing.load(), 0);
+        ASSERT_EQ(opened.size(), video.size());
+        auto* const background =
+            dialog->findChild<QQuickItem*>(QStringLiteral("dropDialogBackground"));
+        auto* const header = dialog->findChild<QQuickItem*>(QStringLiteral("dropDialogHeader"));
+        auto* const footer = dialog->findChild<QQuickItem*>(QStringLiteral("dropDialogFooter"));
+        ASSERT_NE(background, nullptr);
+        ASSERT_NE(header, nullptr);
+        ASSERT_NE(footer, nullptr);
+        ASSERT_GT(background->height(), 200.0);
+        const QColor bodyColor = background->property("color").value<QColor>();
+        const QColor headerColor = header->property("color").value<QColor>();
+        const QColor footerColor = footer->property("color").value<QColor>();
+        ASSERT_EQ(bodyColor.alpha(), 255);
+        ASSERT_EQ(headerColor.alpha(), 255);
+        ASSERT_EQ(footerColor.alpha(), 255);
+        const qreal scaleX = static_cast<qreal>(opened.width()) / harness.window.width();
+        const qreal scaleY = static_cast<qreal>(opened.height()) / harness.window.height();
+        ASSERT_NEAR(scaleX, harness.window.devicePixelRatio(), 1.0 / harness.window.width());
+        ASSERT_NEAR(scaleY, harness.window.devicePixelRatio(), 1.0 / harness.window.height());
+        const auto sampleChrome =
+            [&](QQuickItem* item, const qreal x, const qreal y, const QColor& expected) {
+                const QPointF point = item->mapToScene(QPointF{x, y});
+                const QPoint pixel{static_cast<int>(std::floor(point.x() * scaleX)),
+                                   static_cast<int>(std::floor(point.y() * scaleY))};
+                ASSERT_TRUE(opened.rect().contains(pixel));
+                // Prove each sampled location had a decoded frame, not a black letterbox.
+                expectColorNear(video.pixelColor(pixel), Qt::white, 3);
+                expectColorNear(opened.pixelColor(pixel), expected, 3);
+                ++checkedSamples;
+            };
+        for (const qreal x : {24.0, header->width() / 2.0, header->width() - 24.0}) {
+            for (const int delta : {-6, -2, 2, 6}) {
+                SCOPED_TRACE(testing::Message()
+                             << "sources=" << sourceCount << " x=" << x << " delta=" << delta);
+                sampleChrome(
+                    header, x, header->height() + delta, delta < 0 ? headerColor : bodyColor);
+                sampleChrome(footer, x, delta, delta < 0 ? bodyColor : footerColor);
+            }
+        }
+        ASSERT_TRUE(QMetaObject::invokeMethod(dialog, "close"));
+        ASSERT_TRUE(waitUntil([&] { return !dialog->property("visible").toBool(); }, 2s));
+        const QImage dismissed = harness.grab();
+        ASSERT_FALSE(dismissed.isNull());
+        expectColorNear(
+            dismissed.pixelColor(dismissed.width() / 4, dismissed.height() / 2), Qt::white, 3);
+    }
+    EXPECT_EQ(checkedSamples, 72U);
     harness.releaseRenderer();
     EXPECT_TRUE(actor.shutdown(2s));
 }
