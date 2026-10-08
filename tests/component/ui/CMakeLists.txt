@@ -318,7 +318,6 @@ foreach(dvs_qml_style IN ITEMS Basic Windows)
         )
     endforeach()
 endforeach()
-endif()
 
 foreach(dvs_sidebar_style IN ITEMS Basic Windows)
     add_test(
@@ -335,3 +334,4 @@ foreach(dvs_sidebar_style IN ITEMS Basic Windows)
             ENVIRONMENT "QT_QUICK_CONTROLS_STYLE=${dvs_sidebar_style}"
     )
 endforeach()
+endif()
