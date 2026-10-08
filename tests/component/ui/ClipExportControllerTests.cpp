@@ -1,6 +1,5 @@
-#include "dvs/ui/ClipExportController.h"
-
 #include "dvs/domain/ComparisonValidator.h"
+#include "dvs/ui/ClipExportController.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -41,9 +40,10 @@ void ensureExportApplication() {
 }
 
 [[nodiscard]] domain::CanonicalTimeline variableTimeline() {
-    auto timeline = domain::FrameTimeline::create(
-        {domain::MediaTime{0}, domain::MediaTime{40'000}, domain::MediaTime{100'000},
-         domain::MediaTime{130'000}});
+    auto timeline = domain::FrameTimeline::create({domain::MediaTime{0},
+                                                   domain::MediaTime{40'000},
+                                                   domain::MediaTime{100'000},
+                                                   domain::MediaTime{130'000}});
     if (!timeline) {
         throw std::runtime_error("Invalid export test timeline.");
     }
@@ -63,7 +63,7 @@ videoSnapshot(const bool variable = true, const char* const fileName = "canonica
     descriptor.pixelFormatId = "yuv420p";
     descriptor.bitDepth = 8;
     descriptor.timingConfidence = variable ? domain::TimingConfidence::kVariableFrameRate
-                                         : domain::TimingConfidence::kVerifiedCfr;
+                                           : domain::TimingConfidence::kVerifiedCfr;
     auto reference = descriptor;
     reference.normalizedPath =
         QDir::temp().filePath(QStringLiteral("reference.mp4")).toStdWString();
@@ -88,14 +88,14 @@ videoSnapshot(const bool variable = true, const char* const fileName = "canonica
 class RecordingExporter final : public application::IClipExporter {
 public:
     std::vector<std::int64_t> keyframeTimes(const std::filesystem::path& path,
-                                           const std::atomic_bool&) override {
+                                            const std::atomic_bool&) override {
         ++keyframeCalls;
         keyframeSource = path;
         return {0, 40'000};
     }
 
     application::ClipExportReport perform(const application::ClipExportJob& job,
-                                           const std::atomic_bool&) override {
+                                          const std::atomic_bool&) override {
         ++performCalls;
         captured = job;
         captured->progress = {};
@@ -156,7 +156,9 @@ TEST_P(ClipExportTimelineTests, CapturesAndExportsTheCanonicalTimeline) {
     const auto original = snapshot;
     ClipExportController controller{dependencies()};
     int completions = 0;
-    QObject::connect(&controller, &ClipExportController::exportFinished, &controller,
+    QObject::connect(&controller,
+                     &ClipExportController::exportFinished,
+                     &controller,
                      [&completions](const bool succeeded, const QString&) {
                          completions += succeeded ? 1 : -1;
                      });
@@ -237,21 +239,20 @@ INSTANTIATE_TEST_SUITE_P(
         InvalidExample{"MissingComparison", [](auto& value) { value.validatedComparison.reset(); }},
         InvalidExample{"MissingTimeline", [](auto& value) { value.canonicalTimeline.reset(); }},
         InvalidExample{"ZeroFrames", [](auto& value) { value.canonicalFrameCount = 0U; }},
-        InvalidExample{"UnrepresentableCount", [](auto& value) {
+        InvalidExample{"UnrepresentableCount",
+                       [](auto& value) {
                            value.canonicalFrameCount = std::numeric_limits<std::uint64_t>::max();
                        }},
         InvalidExample{"MissingIn", [](auto& value) { value.playbackRangeIn.reset(); }},
         InvalidExample{"MissingOut", [](auto& value) { value.playbackRangeOut.reset(); }},
-        InvalidExample{"NegativeIn", [](auto& value) {
-                           value.playbackRangeIn = domain::FrameId{-1};
-                       }},
-        InvalidExample{"ReversedRange", [](auto& value) {
-                           value.playbackRangeIn = domain::FrameId{3};
-                       }},
-        InvalidExample{"OutOfRange", [](auto& value) {
-                           value.playbackRangeOut = domain::FrameId{4};
-                       }},
-        InvalidExample{"NullVfr", [](auto& value) {
+        InvalidExample{"NegativeIn",
+                       [](auto& value) { value.playbackRangeIn = domain::FrameId{-1}; }},
+        InvalidExample{"ReversedRange",
+                       [](auto& value) { value.playbackRangeIn = domain::FrameId{3}; }},
+        InvalidExample{"OutOfRange",
+                       [](auto& value) { value.playbackRangeOut = domain::FrameId{4}; }},
+        InvalidExample{"NullVfr",
+                       [](auto& value) {
                            value.canonicalTimeline = std::shared_ptr<const domain::FrameTimeline>{};
                        }},
         InvalidExample{"TruncatedVfrCount", [](auto& value) { value.canonicalFrameCount = 3U; }},

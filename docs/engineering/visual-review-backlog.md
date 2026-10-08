@@ -280,6 +280,31 @@
   format-check/lint、完整 CTest、真实 GPU 性能、实窗截图及完整手机录屏工作流。
   本轮不改工作流、不触发或重跑 CI，不扩大差异模式或指标管线。
 
+## 2026-10-08 阈值过滤的模式覆盖与 Fade 守卫（Windows 原生已运行，真机验收未做）
+
+- **背景**：PR 42/43/44 已合并到本地集成分支并快进至本地 main（未推送 origin main）；
+  PR 44 的 scope-note 测试缺 `addImportPath(bin/qml)` 在 Windows 失败，修复已作为
+  `f616da6` 推到上游 `docs/video-metrics-sample-scope` 分支。本轮补齐阈值过滤残余：
+  黑中性模式（0–4）没有逐模式像素断言；且 `D3d11ComparisonRenderer` 把
+  `viewMode == Fade` 映射为 Crossfade（7）度量、以 wipePosition 为混合量，差异模式
+  遗留的 thresholdEnabled 会让 Fade 视图被阈值过滤成黑——该路径用户可达。
+- **改动**：`Nv12ToRgb.hlsl` 阈值分支增加 `differenceMetric != 7U` 守卫
+  （Crossfade 读混合而非差异，无差异可滤）。新增
+  `ComparisonSurfaceWarpTests.ThresholdFilterKeepsBlackNeutralDifferenceMetricsBlack`
+  （模式 0–4 × 三种策略，阈值 1.0 拒绝 → 黑；彩色源对模式 0–3 在阈值 0 下非黑，
+  防全黑回归；模式 4 非黑由既有 ExactPlaneDiff 测试覆盖）与
+  `ComparisonSurfaceWarpTests.FadeViewIsNotFilteredByTheDifferenceThreshold`
+  （阈值 1.0 启用时 Fade 混合仍为 (104,104,104)，与关闭阈值时一致）。
+  另用仓库 `format` 目标修复 PR 43 新文件 `ClipExportControllerTests.cpp` 的
+  clang-format 违规（该 PR CI 被 skip，本机 format-check 首次发现）。
+- **Windows 原生验证（本机 MSVC + WARP）**：`ComparisonSurface` 相关套件 49 通过、
+  1 条件跳过（当前屏幕缩放产生不了奇数物理窗口宽度，与改动无关）；
+  ClipExportControllerTests 3/3 通过；仓库 format-check 与 lint 通过。
+- **变异证据（原生 WARP，恢复后全绿）**：阈值背景 0.0→0.25 由表测试检出；
+  移除 mode 7 守卫由 Fade 测试检出；阈值分支整体禁用（恒 false）由表测试检出。
+- **未验收**：完整 CTest、真实 GPU 性能、实窗截图、发布门禁与真机素材走查；
+  PR 43 的格式修复仅在本地分支，尚未推上游 `fix/indexed-vfr-export-entry`。
+
 ## 2026-10-05 区间导出：非零起始源把归一零时间与容器时间混用（P1-A，已修复并验证）
 
 对 `267adca` 的逐条证据核验见 [code-quality-review-267adca.md](code-quality-review-267adca.md)。

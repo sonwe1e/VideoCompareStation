@@ -2045,8 +2045,8 @@ TEST(ComparisonSurfaceWarpTests, SignedSubtractThresholdPreservesNeutralGrayAndO
                 const auto expectGray = [&harness, opacity](const int gray) {
                     const QImage image = harness.grab().convertToFormat(QImage::Format_RGBA8888);
                     ASSERT_FALSE(image.isNull());
-                    const int redBlue = static_cast<int>(
-                        std::lround(gray * opacity + 255.0 * (1.0 - opacity)));
+                    const int redBlue =
+                        static_cast<int>(std::lround(gray * opacity + 255.0 * (1.0 - opacity)));
                     const int green = static_cast<int>(std::lround(gray * opacity));
                     expectColorNear(image.pixelColor(image.width() / 2, image.height() / 2),
                                     QColor{redBlue, green, redBlue},
@@ -2063,6 +2063,128 @@ TEST(ComparisonSurfaceWarpTests, SignedSubtractThresholdPreservesNeutralGrayAndO
             }
         }
     }
+
+    harness.releaseRenderer();
+    EXPECT_TRUE(actor.shutdown(2s));
+}
+
+// Threshold filtering paints each mode's zero-difference value. Highlight (the first source)
+// and SignedSubtract (mid-gray) have dedicated tests above; this table locks the remaining
+// metrics, whose zero difference reads black, so a shader edit cannot re-tint filtered
+// regions for any policy. Exact planes stay available throughout so its black comes from the
+// filter, never from the fail-closed path.
+TEST(ComparisonSurfaceWarpTests, ThresholdFilterKeepsBlackNeutralDifferenceMetricsBlack) {
+    SurfaceWarpHarness harness;
+    harness.surface.setViewMode(ComparisonSurface::Difference);
+    harness.surface.setDifferenceMetric(ComparisonSurface::RgbAbsolute);
+    harness.surface.setExactPlaneAvailable(true);
+    harness.surface.setThresholdEnabled(true);
+    ASSERT_TRUE(harness.start());
+
+    auto budget = std::make_shared<platform::FrameBudget>(16U * 1024U * 1024U);
+    platform::GpuTransferActor actor{budget, harness.broker, harness.mailbox, harness.activitySink};
+    std::optional<application::FrameSet> grays =
+        makeThreeSolidSet(*budget, domain::FrameId{48}, {80U, 140U, 224U});
+    ASSERT_TRUE(grays.has_value());
+    ASSERT_EQ(actor.submit(makeContext(48U), std::move(*grays)),
+              platform::GpuTransferSubmitResult::Accepted);
+    ASSERT_TRUE(actor.waitUntilIdle(5s));
+
+    constexpr std::array metrics{ComparisonSurface::RgbAbsolute,
+                                 ComparisonSurface::Luma,
+                                 ComparisonSurface::Chroma,
+                                 ComparisonSurface::Heatmap,
+                                 ComparisonSurface::ExactPlanes};
+    constexpr std::array policies{ComparisonSurface::ThresholdLumaOnly,
+                                  ComparisonSurface::ThresholdAnyChannel,
+                                  ComparisonSurface::ThresholdAllChannels};
+    harness.surface.setThreshold(1.0);
+    for (const ComparisonSurface::DifferenceMetric metric : metrics) {
+        harness.surface.setDifferenceMetric(metric);
+        for (const ComparisonSurface::ThresholdPolicy policy : policies) {
+            harness.surface.setThresholdPolicy(policy);
+            const QImage filtered = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+            ASSERT_FALSE(filtered.isNull());
+            expectColorNear(filtered.pixelColor(filtered.width() / 2, filtered.height() / 2),
+                            QColor{0, 0, 0},
+                            2);
+        }
+    }
+
+    // The same shader must still paint a reading once the threshold stops rejecting it, so the
+    // black above is the filter's neutral and not a pass-wide blackout. Chroma needs colored
+    // sources; exact planes keep their own non-black coverage in the ExactPlaneDiff tests.
+    const domain::ColorMetadata metadata{
+        .matrix = domain::ColorMatrix::kBt709,
+        .range = domain::ColorRange::kFull,
+        .matrixInferred = false,
+    };
+    std::optional<application::FrameSet> colored = makeSolidSetWithMetadata(*budget,
+                                                                            domain::FrameId{49},
+                                                                            80U,
+                                                                            100U,
+                                                                            180U,
+                                                                            metadata, //
+                                                                            140U,
+                                                                            180U,
+                                                                            100U,
+                                                                            metadata);
+    ASSERT_TRUE(colored.has_value());
+    ASSERT_EQ(actor.submit(makeContext(49U), std::move(*colored)),
+              platform::GpuTransferSubmitResult::Accepted);
+    ASSERT_TRUE(actor.waitUntilIdle(5s));
+    harness.surface.setThreshold(0.0);
+    for (const ComparisonSurface::DifferenceMetric metric : {ComparisonSurface::RgbAbsolute,
+                                                             ComparisonSurface::Luma,
+                                                             ComparisonSurface::Chroma,
+                                                             ComparisonSurface::Heatmap}) {
+        harness.surface.setDifferenceMetric(metric);
+        const QImage visible = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+        ASSERT_FALSE(visible.isNull());
+        const QColor reading = visible.pixelColor(visible.width() / 2, visible.height() / 2);
+        EXPECT_GT(reading.red() + reading.green() + reading.blue(), 20);
+    }
+
+    EXPECT_TRUE(harness.acknowledgementMailbox->tryPop().has_value());
+    EXPECT_TRUE(harness.acknowledgementMailbox->tryPop().has_value());
+    EXPECT_FALSE(harness.acknowledgementMailbox->tryPop().has_value());
+
+    harness.releaseRenderer();
+    EXPECT_TRUE(actor.shutdown(2s));
+}
+
+// The Fade view reuses the difference pass with the Crossfade metric and the wipe position as
+// the blend amount. A threshold left enabled from a difference mode must not black out the
+// blend: crossfade reads no difference, so there is nothing for the filter to reject.
+TEST(ComparisonSurfaceWarpTests, FadeViewIsNotFilteredByTheDifferenceThreshold) {
+    SurfaceWarpHarness harness;
+    harness.surface.setViewMode(ComparisonSurface::Fade);
+    harness.surface.setWipePosition(0.5);
+    harness.surface.setThresholdEnabled(true);
+    harness.surface.setThreshold(1.0);
+    ASSERT_TRUE(harness.start());
+
+    auto budget = std::make_shared<platform::FrameBudget>(16U * 1024U * 1024U);
+    platform::GpuTransferActor actor{budget, harness.broker, harness.mailbox, harness.activitySink};
+    std::optional<application::FrameSet> set =
+        makeThreeSolidSet(*budget, domain::FrameId{50}, {96U, 112U, 224U});
+    ASSERT_TRUE(set.has_value());
+    ASSERT_EQ(actor.submit(makeContext(50U), std::move(*set)),
+              platform::GpuTransferSubmitResult::Accepted);
+    ASSERT_TRUE(actor.waitUntilIdle(5s));
+
+    const auto expectBlend = [&harness]() {
+        const QImage image = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+        ASSERT_FALSE(image.isNull());
+        expectColorNear(
+            image.pixelColor(image.width() / 2, image.height() / 2), QColor{104, 104, 104}, 3);
+    };
+    expectBlend();
+    harness.surface.setThresholdEnabled(false);
+    expectBlend();
+
+    ASSERT_TRUE(harness.acknowledgementMailbox->tryPop().has_value());
+    EXPECT_FALSE(harness.acknowledgementMailbox->tryPop().has_value());
 
     harness.releaseRenderer();
     EXPECT_TRUE(actor.shutdown(2s));

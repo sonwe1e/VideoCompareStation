@@ -177,7 +177,11 @@ float4 DifferencePixelShader(
     const float3 rgbA = sampleRgbA(yuvA);
     const float3 rgbB = sampleRgbB(yuvB);
     const float3 channelDifference = abs(rgbA - rgbB);
-    if (thresholdEnabled != 0U) {
+    // Crossfade blends the two sources (the Fade view reuses it with the wipe position as the
+    // blend amount); it reads no difference, so threshold filtering has nothing to reject.
+    // Crossfade blends the two sources (the Fade view reuses it with the wipe position as the
+    // blend amount); it reads no difference, so threshold filtering has nothing to reject.
+    if (thresholdEnabled != 0U && differenceMetric != 7U) {
         const float3 thresholdDifference =
             differenceMetric == 4U ? abs(yuvA - yuvB) : channelDifference;
         float thresholdSample;
