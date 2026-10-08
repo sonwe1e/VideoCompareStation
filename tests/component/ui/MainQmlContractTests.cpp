@@ -39,6 +39,7 @@
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQmlError>
+#include <QQmlProperty>
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QRectF>
@@ -3206,6 +3207,85 @@ TEST(MainQmlContractTests, DrawerScrimTransportShrinkAndEscClose) {
             EXPECT_EQ(inspectorAreaPx.alpha(), 255) << "inspector panel area should be opaque";
         }
     }
+
+    // The panel owns a visible close action even when the outer comparison toolbar is absent.
+    auto* const closeButton = root->findChild<QQuickItem*>(QStringLiteral("inspectorCloseButton"));
+    auto* const tabBar = root->findChild<QObject*>(QStringLiteral("inspectorTabBar"));
+    ASSERT_NE(closeButton, nullptr);
+    ASSERT_NE(tabBar, nullptr);
+    EXPECT_EQ(closeButton->size(), QSizeF(34.0, 34.0));
+    EXPECT_DOUBLE_EQ(inspectorItem->width(), 300.0);
+    EXPECT_EQ(QQmlProperty(closeButton, QStringLiteral("Accessible.name"), qmlContext(closeButton))
+                  .read()
+                  .toString(),
+              QStringLiteral("关闭检查器"));
+    ASSERT_TRUE(tabBar->setProperty("currentIndex", 2));
+    processLayout();
+    const auto captureCloseControl = [&](const QString& name) {
+        const QString directory = qEnvironmentVariable("VCS_INSPECTOR_CLOSE_EVIDENCE_DIR");
+        if (!directory.isEmpty()) {
+            window->requestUpdate();
+            processLayout();
+            EXPECT_TRUE(window->grabWindow().save(QDir{directory}.filePath(name)));
+        }
+    };
+    const auto expectClosedWithViewerFocus = [&] {
+        processLayout();
+        EXPECT_FALSE(shell.inspectorVisible());
+        EXPECT_TRUE(viewportItem->hasActiveFocus());
+        EXPECT_EQ(tabBar->property("currentIndex").toInt(), 2);
+        EXPECT_EQ(tabBar->property("count").toInt(), 3);
+    };
+
+    // Multi-source drawer: click the actual panel button, then preserve the selected Info tab.
+    ASSERT_TRUE(root->property("drawerMode").toBool());
+    captureCloseControl(QStringLiteral("multi-drawer-close-button.png"));
+    const QPointF closePoint = closeButton->mapToItem(
+        window->contentItem(), QPointF{closeButton->width() / 2.0, closeButton->height() / 2.0});
+    sendMousePress(*window, closePoint);
+    sendMouseRelease(*window, closePoint);
+    expectClosedWithViewerFocus();
+
+    // Reuse the real controller with a validated single-source snapshot. No media is opened.
+    auto single = domain::ComparisonValidator::validate(
+        std::vector<domain::ComparisonSource>{snapshot->validatedComparison->sources().front()});
+    ASSERT_TRUE(single);
+    snapshot->validatedComparison =
+        std::make_shared<const domain::ValidatedComparisonSet>(std::move(single).value().set);
+    snapshot->sources.resize(1);
+    snapshot->presentedSources.resize(1);
+    controller.refreshProjection();
+    window->hide();
+    processLayout();
+    // Make the docked precondition explicit for this fixture, even on a small desktop.
+    // This changes only the test window, not Main.qml's production minimum width.
+    window->setMinimumWidth(1120);
+    window->resize(1120, 640);
+    processLayout();
+    layoutRoot->setSize(QSizeF{1120.0, 640.0});
+    window->show();
+    window->requestActivate();
+    shell.setInspectorVisible(true);
+    processLayout();
+    ASSERT_EQ(root->property("sourceCount").toInt(), 1);
+    ASSERT_FALSE(root->property("drawerMode").toBool());
+    EXPECT_TRUE(closeButton->isVisible());
+    EXPECT_EQ(tabBar->property("currentIndex").toInt(), 2);
+    captureCloseControl(QStringLiteral("single-docked-close-button.png"));
+    const QPointF singleClosePoint = closeButton->mapToItem(
+        window->contentItem(), QPointF{closeButton->width() / 2.0, closeButton->height() / 2.0});
+    sendMousePress(*window, singleClosePoint);
+    sendMouseRelease(*window, singleClosePoint);
+    expectClosedWithViewerFocus();
+    shell.setInspectorVisible(true);
+    processLayout();
+    closeButton->forceActiveFocus(Qt::TabFocusReason);
+    processLayout();
+    EXPECT_FALSE(root->property("globalMediaShortcutsEnabled").toBool());
+    const auto commandsBeforeClose = submitted.size();
+    sendKey(*window, Qt::Key_Space);
+    expectClosedWithViewerFocus();
+    EXPECT_EQ(submitted.size(), commandsBeforeClose);
 }
 
 TEST(MainQmlContractTests, NestedPopupMouseTraversal) {
