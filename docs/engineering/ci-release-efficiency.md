@@ -45,6 +45,11 @@
 3. **草稿验收脚本化**：把人工执行的 下载 → SHA256 → verify-release-package →
    包内启动自检 → 对上一版 ZIP 文件清单对比 串成
    `tools/release/accept-draft.ps1`，发布轮零遗漏、可复核。
+4. **发布步骤与构建解耦并加重试**：v2.3.0 的标签流水线在全部构建与四道门禁绿了之后，
+   唯一的「创建草稿」API 调用被一次 TLS 瞬断打断，而 GitHub 不支持从失败步骤续跑，
+   只能整作业重来（约 45 分钟构建白白重做）。把「Publish GitHub release」拆成独立
+   job（依赖构建 job 的 artifact），并给该步加 `retry`（如 nick-fields/retry 或
+   包一层重试循环）——以后网络抖动只重试一次 API 调用，不再重做整条构建。
 
 ### P2 需要资源或讨论，发布轮外推进
 
