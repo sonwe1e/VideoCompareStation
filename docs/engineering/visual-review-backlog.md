@@ -263,6 +263,23 @@
   `pwsh tools/build/build.ps1 -Preset dev -Test -TestRegex 'platform.ComparisonSurfaceWarpTests.(HighlightThreshold|ThresholdMask)'`。
 - **未验收**：Windows/MSVC、项目固定依赖、原生 HLSL/WARP 编译与像素回读、
   format-check／lint／完整 CTest、真实 GPU 性能、实窗截图及发布门禁。
+## 2026-10-08 带符号差异的阈值中性值（修复草稿，原生渲染未验收）
+
+- **基线与改动**：`880d02ad` 已保留 Highlight 的 A 路背景，但 SignedSubtract 的阈值
+  拒绝分支仍为黑色，与该模式「中灰表示零差异」冲突。仅让 mode 5 在此分支返回
+  0.5 中灰，并保留 opacity 的 clamp、预乘和 alpha；其他模式、准入谓词与增益不变。
+- **云端有限验证**：GCC 14.2 编译执行提取的生产 shader 算术主体，172,800 个算术组合
+  通过（21,600 个 SignedSubtract 组合；其余 151,200 个与基线一致）。相同输入下基线
+  有 3,720 个 SignedSubtract 期望失败；9/9 编译后运行时变异被检出。计数有显式守卫。
+  采样由向量替身提供，只有 scalar `.xxx` 改为构造器；不验证 HLSL、纹理或 GPU。
+- **原生回归已添加但未运行**：
+  `ComparisonSurfaceWarpTests.SignedSubtractThresholdPreservesNeutralGrayAndOpacity`
+  覆盖正负两种差值、三种策略、1.0/0.5 opacity、阈值拒绝/通过/关闭，共 36 次回读期望。
+  新原生断言的反向控制与变异验证仍待 Windows 执行，不能用上述 CPU 算术结果替代。
+- **未验收**：Windows/MSVC、固定依赖、原生 HLSL/WARP 编译与像素回读、仓库
+  format-check/lint、完整 CTest、真实 GPU 性能、实窗截图及完整手机录屏工作流。
+  本轮不改工作流、不触发或重跑 CI，不扩大差异模式或指标管线。
+
 ## 2026-10-05 区间导出：非零起始源把归一零时间与容器时间混用（P1-A，已修复并验证）
 
 对 `267adca` 的逐条证据核验见 [code-quality-review-267adca.md](code-quality-review-267adca.md)。
