@@ -147,8 +147,11 @@ The following work remains open or requires the intended Windows/D3D11VA runner:
   current shutdown-drained diagnostic was not designed to provide either property.
 - Measure tracing enabled versus disabled under contention. Loss is observable through overflow
   markers, but the tests do not establish an acceptable hardware-run loss rate or tracing cost.
-- Schema-v1 playback-trace kinds are `0`–`22`; `Test-PlaybackTraceFile` and the C++/PowerShell
-  round-trip tests keep that range aligned. Timing summaries separate prepare
+- Schema-v1 playback-trace kinds are `0`–`24`; `SourceDecodeStarted` (`23`) and
+  `SourceDecodeCompleted` (`24`) record the source-decode stage. The maximum is defined by
+  `kSchemaV1MaxTraceEventKind` in [PlaybackTrace.h](../../src/application/include/dvs/application/PlaybackTrace.h);
+  `Test-PlaybackTraceFile` and the C++/PowerShell round-trip tests keep that range aligned.
+  Timing summaries separate prepare
   (`FrameSetReady`→`RenderDrawStarted`), draw submit (`RenderDrawStarted`→`RenderAckPublished`),
   and final present (`RenderAckPublished`→`PresentationAcknowledged`→`SnapshotCommitted`).
   `RenderAckPublished` is CPU-side ack admission, not GPU completion or screen present. Software

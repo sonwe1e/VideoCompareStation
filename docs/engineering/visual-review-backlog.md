@@ -3,6 +3,15 @@
 更新：2026-10-08。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
 
+## 2026-10-08 PR #42–#44 合入状态（完整 Windows 工作流仍延后）
+
+- 已核对 `main @ ba594923aac26891bb998e785cf515d02ca2e57b`：
+  [#42](https://github.com/sonwe1e/VideoCompareStation/pull/42) 的 SignedSubtract 阈值中灰、
+  [#43](https://github.com/sonwe1e/VideoCompareStation/pull/43) 的 VFR 区间导出入口、
+  [#44](https://github.com/sonwe1e/VideoCompareStation/pull/44) 的 RGBA8 指标口径说明均已合入。
+- 下方各条保留原基线与有限验证证据；合入不代表原生渲染、真实素材、完整 Windows
+  工作流或发布验收通过，未执行项和延后边界不变。
+
 ## 2026-10-08 PR #38–#41 Windows 原生验证轮（四项合并 + 三处测试基建修复）
 
 - **合并**：#38 视口倍率、#39 侧栏键盘目标、#40 来源条拖拽排序、#41 倒退请求放行按
@@ -263,7 +272,7 @@
   `pwsh tools/build/build.ps1 -Preset dev -Test -TestRegex 'platform.ComparisonSurfaceWarpTests.(HighlightThreshold|ThresholdMask)'`。
 - **未验收**：Windows/MSVC、项目固定依赖、原生 HLSL/WARP 编译与像素回读、
   format-check／lint／完整 CTest、真实 GPU 性能、实窗截图及发布门禁。
-## 2026-10-08 带符号差异的阈值中性值（修复草稿，原生渲染未验收）
+## 2026-10-08 带符号差异的阈值中性值（#42 已合入，原生渲染未验收）
 
 - **基线与改动**：`880d02ad` 已保留 Highlight 的 A 路背景，但 SignedSubtract 的阈值
   拒绝分支仍为黑色，与该模式「中灰表示零差异」冲突。仅让 mode 5 在此分支返回
@@ -1138,7 +1147,7 @@
 - **旧账**：「启动时提示『磁盘上的视频文件已变化』」的 tooltip、对比模式芯片行在 960px
   溢出，均为既有现象，本轮未引入亦未处理。
 
-### 2026-10-08 VFR 区间导出入口（P2-A 修复草稿，Windows 流程待验收）
+### 2026-10-08 VFR 区间导出入口（P2-A，#43 已合入，Windows 流程待验收）
 
 - **基线与问题**：`880d02ad` 的 `ClipExportController::makeRequest` 用
   `canonicalRate()` 是否存在判断视频；合法 VFR 描述符恰好没有 nominal rate，因此已标记
@@ -1713,7 +1722,7 @@
 
 - **基础定义**：`computeRgbAbsoluteMetrics`、`scoreActivePairRgbAbsolute` 提供 MAE/MSE/PSNR
   标量参考，见 [ADR 0005](../adr/0005-pixel-difference-metrics.md)；端到端集成与后续优化见下文。
-- **2026-10-08 口径说明候选（基线 `880d02a`，Windows 完整流程待验）**：
+- **2026-10-08 口径说明（#44 已合入；原基线 `880d02a`，Windows 完整流程待验）**：
   检查器指标标题下新增随列宽换行的说明：统计对象是解码转换后的全帧 RGBA8 RGB 值，
   忽略 Alpha、非原始文件码值；10-bit 输入也先降到 8-bit。ROI、视图缩放／平移、显示旋转
   与显示空间重采样、显示增益不改变统计，CPU 坏点数不保证等于屏幕高亮像素数；
