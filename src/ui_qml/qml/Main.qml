@@ -2920,6 +2920,11 @@ ApplicationWindow {
         }
         onDifferenceEdgeRequested: edge => root.applyDifferenceEdge(edge)
         onReferenceRequested: sourceIdentity => root.changeReference(sourceIdentity)
+        onCloseRequested: {
+            if (root.shell)
+                root.shell.inspectorVisible = false;
+            root.returnFocusToViewer();
+        }
         onDifferenceThresholdEnabledRequested: enabled => root.differenceThresholdEnabled = enabled
         onDifferenceThresholdCodeRequested: code => root.differenceThresholdCode = code
         onDifferenceThresholdPolicyRequested: policy => root.differenceThresholdPolicy = policy

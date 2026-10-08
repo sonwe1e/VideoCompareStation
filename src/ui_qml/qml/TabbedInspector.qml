@@ -55,6 +55,7 @@ Rectangle {
     signal outPointRequested
     signal clearRangeRequested
     signal rangeLoopToggleRequested
+    signal closeRequested
 
     objectName: "tabbedInspector"
     width: Math.max(300, Math.min(380, parent ? parent.width * 0.3 : 360))
@@ -225,7 +226,9 @@ Rectangle {
                 id: tabs
 
                 objectName: "inspectorTabBar"
-                width: parent.width
+                anchors.left: parent.left
+                anchors.right: inspectorCloseButton.left
+                anchors.rightMargin: 4
                 implicitHeight: 38
                 padding: 4
                 background: Rectangle {
@@ -254,6 +257,19 @@ Rectangle {
                     objectName: "infoTabButton"
                     text: qsTr("信息")
                 }
+            }
+
+            VcsToolButton {
+                id: inspectorCloseButton
+
+                objectName: "inspectorCloseButton"
+                property bool blocksGlobalMediaShortcuts: true
+                text: "×"
+                helpText: qsTr("关闭检查器")
+                anchors.right: parent.right
+                anchors.rightMargin: 4
+                anchors.verticalCenter: tabs.verticalCenter
+                onClicked: control.closeRequested()
             }
 
             StackLayout {
