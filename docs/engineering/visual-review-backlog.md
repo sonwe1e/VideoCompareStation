@@ -302,8 +302,9 @@
   ClipExportControllerTests 3/3 通过；仓库 format-check 与 lint 通过。
 - **变异证据（原生 WARP，恢复后全绿）**：阈值背景 0.0→0.25 由表测试检出；
   移除 mode 7 守卫由 Fade 测试检出；阈值分支整体禁用（恒 false）由表测试检出。
-- **未验收**：完整 CTest、真实 GPU 性能、实窗截图、发布门禁与真机素材走查；
-  PR 43 的格式修复仅在本地分支，尚未推上游 `fix/indexed-vfr-export-entry`。
+- **未验收**：完整 CTest、真实 GPU 性能、实窗截图、发布门禁与真机素材走查。
+  追记：PR 43 的格式修复已作为 `1818325` 推到上游 `fix/indexed-vfr-export-entry`；
+  阈值守卫与表驱动断言已合入本地 main（`44de12f`，未推送 origin main）。
 
 ## 2026-10-05 区间导出：非零起始源把归一零时间与容器时间混用（P1-A，已修复并验证）
 
