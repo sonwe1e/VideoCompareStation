@@ -470,6 +470,7 @@ Rectangle {
         id: pixelScaleBadge
 
         objectName: "viewportPixelScaleBadge"
+        enabled: visible && control.sourceCount > 0 && !control.overlayVisible
         text: qsTr("设为 100%")
         helpText: qsTr("按首个显示源围绕观察中心缩放到 100%，保留 ROI。\n靠近边缘时，观察中心受视口范围约束。\n非方形像素保留显示比例。\n受适应窗口下限与适应窗口倍率的 64 倍上限约束。\n以旁边的实际倍率为准；适应窗口请用上方按钮。")
         Accessible.name: text
@@ -553,6 +554,7 @@ Rectangle {
         id: viewCommandRow
 
         objectName: "viewportViewCommands"
+        enabled: visible && control.sourceCount > 0 && !control.overlayVisible
         visible: control.chromeVisible
         z: 30
         spacing: 6

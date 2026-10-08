@@ -360,5 +360,100 @@ TEST_F(ViewportPixelScaleTests, KeyboardActionUsesWindowDprAndLeavesTextInputAlo
     EXPECT_DOUBLE_EQ(surface_->viewScale(), previousScale);
 }
 
+TEST_F(ViewportPixelScaleTests, UnavailableControlsLeaveFocusAndTabChainUntilRecovery) {
+    window_ = std::make_unique<QQuickWindow>();
+    window_->resize(800, 600);
+    auto* const viewport = qobject_cast<QQuickItem*>(root_.get());
+    ASSERT_NE(viewport, nullptr);
+    viewport->setParentItem(window_->contentItem());
+    QQmlComponent emptyComponent{&engine_, QUrl{QStringLiteral("qrc:/qml/EmptyReviewView.qml")}};
+    std::unique_ptr<QObject> empty{emptyComponent.create()};
+    auto* const cover = qobject_cast<QQuickItem*>(empty.get());
+    ASSERT_NE(cover, nullptr) << emptyComponent.errorString().toStdString();
+    cover->setParentItem(window_->contentItem());
+    cover->setSize(QSizeF{800, 600});
+    cover->setZ(35);
+    QQuickItem* const buttons[]{
+        badge_,
+        root_->findChild<QQuickItem*>(QStringLiteral("viewportFitButton")),
+        root_->findChild<QQuickItem*>(QStringLiteral("viewportResetButton"))};
+    for (auto* button : buttons) {
+        ASSERT_NE(button, nullptr);
+    }
+    window_->show();
+    window_->requestActivate();
+    QCoreApplication::processEvents();
+    const auto key = [&](int value) {
+        const QString text = value == Qt::Key_Space ? QStringLiteral(" ") : QString{};
+        QKeyEvent press{QEvent::KeyPress, value, Qt::NoModifier, text};
+        QCoreApplication::sendEvent(window_.get(), &press);
+        QKeyEvent release{QEvent::KeyRelease, value, Qt::NoModifier, text};
+        QCoreApplication::sendEvent(window_.get(), &release);
+        QCoreApplication::processEvents();
+    };
+    struct State {
+        const char* name;
+        int sourceKind; // 0: none; 1: valid metadata; 2: invalid metadata.
+        int frame;
+        bool overlay;
+        bool busy;
+        bool chrome;
+        bool badgeEnabled;
+        bool commandsEnabled;
+    };
+    const State states[]{
+        {"empty cover", 0, -1, false, false, true, false, false},
+        {"initial loading", 1, -1, true, true, true, false, false},
+        {"retained error overlay", 1, 7, true, false, true, false, false},
+        {"hidden chrome", 1, 7, false, false, false, false, false},
+        {"invalid metadata", 2, 7, false, false, true, false, true},
+        {"busy retained frame", 1, 7, false, true, true, true, true},
+        {"loaded recovery", 1, 7, false, false, true, true, true},
+    };
+    const auto apply = [&](const State& state) {
+        setSources(state.sourceKind == 0
+                       ? QVariantList{}
+                       : QVariantList{source(state.sourceKind == 2 ? 0 : 1920, 1080)});
+        root_->setProperty("currentFrame", state.frame);
+        root_->setProperty("overlayVisible", state.overlay);
+        root_->setProperty("busy", state.busy);
+        root_->setProperty("chromeVisible", state.chrome);
+        cover->setVisible(state.sourceKind == 0);
+        QCoreApplication::processEvents();
+    };
+    for (const auto& state : states) {
+        SCOPED_TRACE(state.name);
+        for (int index = 0; index < 3; ++index) {
+            auto* const button = buttons[index];
+            SCOPED_TRACE(button->objectName().toStdString());
+            apply(states[6]);
+            surface_->restoreViewport(0.4, 0.6, 2.0, true, 0.1, 0.2, 0.9, 0.8);
+            button->forceActiveFocus();
+            apply(state);
+            const bool available = index == 0 ? state.badgeEnabled : state.commandsEnabled;
+            EXPECT_EQ(button->isEnabled(), available);
+            if (!available) {
+                EXPECT_FALSE(button->hasActiveFocus());
+                key(Qt::Key_Space);
+                EXPECT_DOUBLE_EQ(surface_->viewScale(), 2.0);
+                EXPECT_TRUE(surface_->roiEnabled());
+            }
+        }
+        viewport->forceActiveFocus();
+        bool visited[3]{false, false, false};
+        // Nine steps cover all five real empty-screen actions and the three view controls.
+        for (int step = 0; step < 9; ++step) {
+            key(Qt::Key_Tab);
+            for (int index = 0; index < 3; ++index) {
+                visited[index] = visited[index] || window_->activeFocusItem() == buttons[index];
+            }
+        }
+        for (int index = 0; index < 3; ++index) {
+            SCOPED_TRACE(buttons[index]->objectName().toStdString());
+            EXPECT_EQ(visited[index], index == 0 ? state.badgeEnabled : state.commandsEnabled);
+        }
+    }
+}
+
 } // namespace
 } // namespace dvs::ui
