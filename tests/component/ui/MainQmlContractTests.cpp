@@ -681,6 +681,84 @@ TEST(MainQmlContractTests, PairMetricsMismatchRowPreservesPolicyAndPercentage) {
     }
 }
 
+// Instantiate only the real inspector item: no Main window, media service or rendered pixels.
+TEST(MainQmlContractTests, PairMetricsScopeNoteExplainsSampleSpaceAndWraps) {
+    QQmlEngine engine;
+    QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/TabbedInspector.qml")}};
+    const QVariantMap properties{
+        {QStringLiteral("controller"),
+         QVariantMap{{QStringLiteral("alignmentMode"), 0},
+                     {QStringLiteral("activePairTimeInfo"), QVariantMap{}},
+                     {QStringLiteral("currentInexactReason"), QString{}},
+                     {QStringLiteral("sources"), QVariantList{}},
+                     {QStringLiteral("dropFrameTimecodeAvailable"), false},
+                     {QStringLiteral("alignmentTimelineMarkerOverflowCount"), 0},
+                     {QStringLiteral("sourceMediaInfo"), QVariantList{}}}},
+        {QStringLiteral("preferences"),
+         QVariantMap{{QStringLiteral("differenceMetric"), 0},
+                     {QStringLiteral("differenceGain"), 0},
+                     {QStringLiteral("differenceFilter"), 0},
+                     {QStringLiteral("oscMode"), 0}}},
+        {QStringLiteral("session"), QVariantMap{}},
+        {QStringLiteral("metrics"),
+         QVariantMap{{QStringLiteral("available"), true},
+                     {QStringLiteral("errorKey"), QString{}},
+                     {QStringLiteral("hasCurrentSample"), false},
+                     {QStringLiteral("sampling"), false},
+                     {QStringLiteral("metricId"), QStringLiteral("cpu-rgb-absolute-v1")}}},
+        {QStringLiteral("borderColor"), QColor{Qt::gray}},
+        {QStringLiteral("primaryTextColor"), QColor{Qt::white}},
+        {QStringLiteral("mutedTextColor"), QColor{Qt::gray}},
+        {QStringLiteral("singleMode"), false},
+        {QStringLiteral("sourceCount"), 2},
+        {QStringLiteral("wipeMode"), false},
+        {QStringLiteral("differenceMode"), true},
+        {QStringLiteral("analysisGridMode"), false},
+        {QStringLiteral("differenceEdges"), QVariantList{}},
+        {QStringLiteral("sourceIdentities"), QVariantList{}},
+        {QStringLiteral("differenceEdge"), 0},
+        {QStringLiteral("referenceSourceIndex"), 0},
+        {QStringLiteral("differenceThresholdEnabled"), false},
+        {QStringLiteral("differenceThresholdCode"), 0},
+        {QStringLiteral("differenceThresholdPolicy"), 1},
+        {QStringLiteral("wipePosition"), 0.5},
+        {QStringLiteral("roiEnabled"), false},
+        {QStringLiteral("graphicsReady"), false},
+        {QStringLiteral("dropFrameTimecode"), false},
+        {QStringLiteral("currentFrame"), 0},
+        {QStringLiteral("inFrame"), -1},
+        {QStringLiteral("outFrame"), -1},
+        {QStringLiteral("rangePlaybackActive"), false},
+        {QStringLiteral("width"), 300},
+        {QStringLiteral("height"), 1200},
+    };
+    const std::unique_ptr<QObject> root{component.createWithInitialProperties(properties)};
+    ASSERT_NE(root, nullptr) << componentErrors(component);
+    auto* const note = root->findChild<QQuickItem*>(QStringLiteral("metricsScopeNote"));
+    ASSERT_NE(note, nullptr);
+    EXPECT_EQ(note->window(), nullptr);
+    EXPECT_TRUE(note->isVisible());
+    EXPECT_EQ(note->property("text").toString(),
+              QStringLiteral("解码转换后的全帧 RGBA8 RGB 值（忽略 Alpha），非原始码值；"
+                             "10 位输入也按 8 位统计。ROI、视图缩放、显示旋转／重采样及"
+                             "显示增益不改变统计，不等同当前屏幕差异。"));
+    QQuickItem* const column = note->parentItem();
+    ASSERT_NE(column, nullptr);
+    // Probe the metrics column directly so this remains windowless. These are component
+    // geometry checks, not a native inspector screenshot or a full-window resize acceptance.
+    for (const qreal width : {252.0, 332.0, 252.0}) {
+        column->setWidth(width);
+        ASSERT_TRUE(QMetaObject::invokeMethod(note, "forceLayout"));
+        ASSERT_TRUE(QMetaObject::invokeMethod(column, "forceLayout"));
+        QCoreApplication::processEvents();
+        EXPECT_DOUBLE_EQ(note->width(), width);
+        EXPECT_GT(note->height(), 22.0);
+        EXPECT_LE(note->property("contentWidth").toReal(), width + 1.0);
+        EXPECT_GE(note->height(), note->property("contentHeight").toReal());
+        EXPECT_GE(column->implicitHeight(), note->y() + note->height());
+    }
+}
+
 TEST(MainQmlContractTests, MapsEveryCurrentMediaErrorAndExcludesDeletedUiDomains) {
     QFile messageCatalog{QStringLiteral(":/qml/ReviewMessageCatalog.qml")};
     ASSERT_TRUE(messageCatalog.open(QIODevice::ReadOnly));

@@ -7,13 +7,14 @@
 namespace dvs::domain {
 namespace {
 
-// BT.709 luma weights, matching the GPU difference shader's commonBt709Luma so the LumaOnly
-// policy counts exactly the pixels the threshold filter keeps on screen.
+// BT.709 luma weights share the GPU difference shader's commonBt709Luma definition. The CPU
+// predicate acts on its supplied RGBA8 buffers; different conversion/sampling paths mean its
+// counted pixels need not match the on-screen threshold highlight.
 constexpr double kLumaWeightR = 0.2126;
 constexpr double kLumaWeightG = 0.7152;
 constexpr double kLumaWeightB = 0.0722;
 
-// Mismatch predicate in 8-bit code values, mirroring the GPU filter's `sample >= threshold`
+// Mismatch predicate in supplied 8-bit RGB values, sharing the GPU filter's `sample >= threshold`
 // comparison. The `sample > 0` guard keeps threshold 0 from counting identical pixels; under
 // AllChannels the pixel must differ in every channel, under LumaOnly only the weighted luma
 // delta of the signed channel differences decides.

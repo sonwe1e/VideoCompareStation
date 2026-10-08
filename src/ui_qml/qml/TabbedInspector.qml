@@ -79,8 +79,8 @@ Rectangle {
 
     // Read-only rows for the current frame's pair metrics. The metric identity comes from the
     // service (cpu-rgb-absolute-v1); the UI never invents its own formula name or numbers.
-    // The bad-pixel row names the channel policy so the count never reads as a different rule
-    // than the threshold highlight right next to it.
+    // The bad-pixel row names the shared channel policy; the scope note distinguishes the
+    // independent converted buffers from the pixels sampled by the on-screen highlight.
     function metricsThresholdPolicyName() {
         if (control.metrics === null)
             return "";
@@ -531,8 +531,8 @@ Rectangle {
                             currentIndex: control.differenceThresholdPolicy
                             onActivated: index => {
                                 control.differenceThresholdPolicyRequested(index);
-                                // The policy drives the GPU highlight filter and the CPU bad-pixel
-                                // predicate with one rule, mirroring the shared threshold above.
+                                // Share the policy selection with CPU statistics, just like the
+                                // threshold above; the two paths can sample different RGB values.
                                 if (control.metrics !== null)
                                     control.metrics.thresholdPolicy = index;
                             }
@@ -565,6 +565,15 @@ Rectangle {
                                     color: Theme.accent
                                     font.pixelSize: 11
                                     font.weight: Font.DemiBold
+                                }
+
+                                Label {
+                                    objectName: "metricsScopeNote"
+                                    width: metricsColumn.width
+                                    text: qsTr("解码转换后的全帧 RGBA8 RGB 值（忽略 Alpha），非原始码值；10 位输入也按 8 位统计。ROI、视图缩放、显示旋转／重采样及显示增益不改变统计，不等同当前屏幕差异。")
+                                    color: control.mutedTextColor
+                                    font.pixelSize: 11
+                                    wrapMode: Text.Wrap
                                 }
 
                                 Repeater {
