@@ -105,16 +105,26 @@ Item {
             fuzzyCompare(opened.green(headerX, headerY), 28, 3);
             fuzzyCompare(opened.blue(headerX, headerY), 40, 3);
 
-            // Sample just below the header and just above the footer: both must stay opaque.
-            const midHeaderPoint = header.mapToItem(windowContent, header.width / 2, header.height + 6);
-            const midHeaderX = Math.round(midHeaderPoint.x * scaleX);
-            const midHeaderY = Math.round(midHeaderPoint.y * scaleY);
-            compare(opened.alpha(midHeaderX, midHeaderY), 255);
-
-            const footerTopPoint = footer.mapToItem(windowContent, footer.width / 2, 4);
-            const footerTopX = Math.round(footerTopPoint.x * scaleX);
-            const footerTopY = Math.round(footerTopPoint.y * scaleY);
-            compare(opened.alpha(footerTopX, footerTopY), 255);
+            // An opaque backdrop has alpha 255 even through a hole. Check the actual chrome
+            // colors on both sides of each seam, including the 10px square corner-fill strips.
+            let seamSamples = 0;
+            function compareChrome(item, x, y, expected) {
+                const point = item.mapToItem(windowContent, x, y);
+                const px = Math.round(point.x * scaleX);
+                const py = Math.round(point.y * scaleY);
+                verify(px >= 0 && px < opened.width && py >= 0 && py < opened.height);
+                fuzzyCompare(opened.red(px, py), Math.round(expected.r * 255), 3);
+                fuzzyCompare(opened.green(px, py), Math.round(expected.g * 255), 3);
+                fuzzyCompare(opened.blue(px, py), Math.round(expected.b * 255), 3);
+                seamSamples += 1;
+            }
+            for (const x of [24, header.width / 2, header.width - 24]) {
+                for (const delta of [-6, -2, 2, 6]) {
+                    compareChrome(header, x, header.height + delta, delta < 0 ? header.color : background.color);
+                    compareChrome(footer, x, delta, delta < 0 ? background.color : footer.color);
+                }
+            }
+            compare(seamSamples, 24);
 
             const outsideX = Math.round(12 * scaleX);
             const outsideY = Math.round(12 * scaleY);

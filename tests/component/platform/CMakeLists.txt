@@ -58,6 +58,10 @@ target_include_directories(
         "${PROJECT_SOURCE_DIR}/src/ui_qml/src"
         "${PROJECT_SOURCE_DIR}/tests/component/ui"
 )
+target_compile_definitions(
+    dvs_graphics_device_broker_component_tests
+    PRIVATE DVS_QML_SOURCE_DIR="${PROJECT_SOURCE_DIR}/src/ui_qml/qml"
+)
 
 dvs_apply_project_warnings(dvs_graphics_device_broker_component_tests)
 set_target_properties(
@@ -75,3 +79,22 @@ dvs_add_gtest(
     RUN_SERIAL
     ENVIRONMENT QSG_RENDER_LOOP=threaded
 )
+
+# Exercise the native video node below the production popup, not only a QML color backdrop.
+# QT_SCALE_FACTOR multiplies the system DPR; the test records the effective DPR and grab size.
+foreach(dvs_drop_scale IN ITEMS 1 1.25 1.5 2)
+    string(REPLACE "." "_" dvs_drop_scale_name "${dvs_drop_scale}")
+    add_test(
+        NAME "platform.DropConfirmationVideoOcclusion.scale-${dvs_drop_scale_name}"
+        COMMAND "$<TARGET_FILE:dvs_graphics_device_broker_component_tests>"
+            --gtest_filter=ComparisonSurfaceWarpTests.DropConfirmationChromeStaysOpaqueOverVideo
+    )
+    set_tests_properties(
+        "platform.DropConfirmationVideoOcclusion.scale-${dvs_drop_scale_name}"
+        PROPERTIES
+            LABELS "component;platform_windows;ui_qml;graphics;warp"
+            TIMEOUT 60
+            RUN_SERIAL TRUE
+            ENVIRONMENT "QSG_RENDER_LOOP=threaded;QT_SCALE_FACTOR=${dvs_drop_scale}"
+    )
+endforeach()
