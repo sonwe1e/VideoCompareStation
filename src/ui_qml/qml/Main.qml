@@ -606,7 +606,7 @@ ApplicationWindow {
             return false;
 
         if (!rangeExportEnabled) {
-            showImmersiveHud(qsTr("没有可导出的区间：请先设置入点与出点。"));
+            showImmersiveHud(qsTr("当前视频或所选区间暂不可导出，请检查素材和入点、出点。"));
 
             return false;
         }

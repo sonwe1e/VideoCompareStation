@@ -1715,7 +1715,7 @@ TEST(MainQmlContractTests, ExportRangeButtonStartsAClipExport) {
     ASSERT_TRUE(QMetaObject::invokeMethod(exportChip, "clicked"));
     harness.settle();
     EXPECT_EQ(harness.root->property("immersiveHudText").toString(),
-              QStringLiteral("没有可导出的区间：请先设置入点与出点。"));
+              QStringLiteral("当前视频或所选区间暂不可导出，请检查素材和入点、出点。"));
     EXPECT_TRUE(harness.clipExporter->performedJobs().empty());
 
     // A validated canonical source plus a marked range is what makes a session exportable.

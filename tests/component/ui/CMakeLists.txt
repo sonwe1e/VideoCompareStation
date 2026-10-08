@@ -2,6 +2,7 @@ include(GoogleTest)
 
 add_executable(
     dvs_ui_component_tests
+    ClipExportControllerTests.cpp
     DiagnosticsProbeTests.cpp
     PairMetricsControllerTests.cpp
     PreviewThumbnailControllerTests.cpp
