@@ -3630,6 +3630,15 @@ TEST(MainQmlContractTests, CopyComparisonButtonPutsLabeledViewportOnClipboard) {
         pasted = QGuiApplication::clipboard()->image();
     }
     ASSERT_FALSE(pasted.isNull());
+    // grabWindow() yields nothing on a desktop that cannot render, and the production
+    // path reports exactly that instead of copying: the self-hosted runner hit this
+    // between attached sessions (run 37719185877) while the same test passed whenever
+    // a session was attached. Skip only on that reported capture failure; a reported
+    // success with the sentinel still on the clipboard stays a hard failure.
+    if (exportController.lastStatus().contains(QStringLiteral("无法抓取当前画面"))) {
+        GTEST_SKIP() << "window capture unavailable on this desktop: "
+                     << exportController.lastStatus().toStdString();
+    }
     EXPECT_NE(pasted.size(), QSize(3, 3));
     // The capture is the viewport's device-pixel rect plus the caption bar.
     const qreal devicePixelRatio = window->devicePixelRatio();

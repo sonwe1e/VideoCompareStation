@@ -30,6 +30,15 @@
   交互验收留待有显示会话时执行；探针脚本与记录在 out/verification/ui-probe/。
 - **结论**：#38/#39/#40/#41 的行为改动在 Windows 上经真实窗口组件与真实协调器测试全部
   验证通过；本轮不宣称交互式全 App 操作与性能门禁（后者由标签触发的 CI 执行）。
+- **同日晚间续：自托管 runner 的 CI 余量修复**。四个 PR 带 skip 标记合入，main 推送
+  首次在自托管 runner 上跑它们的套件：真实窗口 QML 比开发机慢 3–4 倍，来源条一项实测
+  77.8 s、四个 MainQmlContract 弹窗/鼠标用例实测 21.7–27.0 s，先后越过 60 s/20 s 边界
+  （本地同套件 962 项 0 失败）。按 runner 实测放宽：MainQmlContract 20→120 s、来源条
+  60→180 s（d137aa1）。放宽后 runner 上仅剩 `CopyComparisonButtonPutsLabeledViewportOn
+  Clipboard` 一次真失败：断开的桌面会话里 `grabWindow()` 返回空，生产路径自报
+  「无法抓取当前画面」而剪贴板保持哨兵图；测试改为仅在该自报捕获失败时 GTEST_SKIP
+  （记录状态），自报「已复制」而剪贴板不对仍为硬断言。开发机与附着会话的 runner 上
+  全断言照常执行。
 
 ## 2026-10-07 连续倒退的 pending 请求互相取消（修复草稿，Windows 待验）
 
