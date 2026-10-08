@@ -404,7 +404,9 @@ void appendLetterboxBars(const SurfaceRenderState& state,
 bool SurfaceViewTransform::isValid() const noexcept {
     return std::isfinite(centerX) && std::isfinite(centerY) && std::isfinite(scale) &&
            centerX >= 0.0F && centerX <= 1.0F && centerY >= 0.0F && centerY <= 1.0F &&
-           scale >= 1.0F && scale <= 64.0F;
+           scale >= presentation::kMinimumViewportScale &&
+           scale <= presentation::kMaximumViewportScale &&
+           (scale >= 1.0F || (centerX == 0.5F && centerY == 0.5F));
 }
 
 bool SurfaceNormalizedRect::isValid() const noexcept {
@@ -423,7 +425,7 @@ SurfaceNormalizedRect effectiveSurfaceSampleRect(const SurfaceViewTransform& tra
     const float roiTop = roiEnabled ? roi.top : 0.0F;
     const float roiWidth = roiEnabled ? roi.right - roi.left : 1.0F;
     const float roiHeight = roiEnabled ? roi.bottom - roi.top : 1.0F;
-    const float visible = 1.0F / transform.scale;
+    const float visible = 1.0F / (std::max)(transform.scale, 1.0F);
     const float viewportLeft =
         std::clamp(transform.centerX - (visible * 0.5F), 0.0F, 1.0F - visible);
     const float viewportTop =
@@ -436,9 +438,182 @@ SurfaceNormalizedRect effectiveSurfaceSampleRect(const SurfaceViewTransform& tra
     };
 }
 
+bool SurfacePixelGrid::isValid() const noexcept {
+    return std::isfinite(scaleX) && std::isfinite(scaleY) && std::isfinite(originX) &&
+           std::isfinite(originY) && scaleX > 0.0F && scaleY > 0.0F;
+}
+
+SurfacePixelGrid surfacePixelGridFromClip(const std::array<float, 16U>& matrix,
+                                          const SurfaceViewport& viewport) noexcept {
+    if (!allFinite(matrix) || !std::isfinite(viewport.topLeftX) ||
+        !std::isfinite(viewport.topLeftY) || !std::isfinite(viewport.width) ||
+        !std::isfinite(viewport.height) || viewport.width <= 0.0F || viewport.height <= 0.0F ||
+        matrix[15U] <= 0.0F || matrix[1U] != 0.0F || matrix[4U] != 0.0F || matrix[12U] != 0.0F ||
+        matrix[13U] != 0.0F) {
+        return {};
+    }
+    const float inverseW = 1.0F / matrix[15U];
+    const SurfacePixelGrid result{
+        .scaleX = matrix[0U] * inverseW * viewport.width * 0.5F,
+        .scaleY = -matrix[5U] * inverseW * viewport.height * 0.5F,
+        .originX = viewport.topLeftX + (matrix[3U] * inverseW + 1.0F) * viewport.width * 0.5F,
+        .originY = viewport.topLeftY + (1.0F - matrix[7U] * inverseW) * viewport.height * 0.5F,
+    };
+    return result.isValid() ? result : SurfacePixelGrid{};
+}
+
+SurfacePixelGrid surfacePixelGridForWindow(const double logicalWidth,
+                                           const double logicalHeight,
+                                           const double nominalDevicePixelRatio) noexcept {
+    if (!std::isfinite(logicalWidth) || !std::isfinite(logicalHeight) ||
+        !std::isfinite(nominalDevicePixelRatio) || logicalWidth <= 0.0F || logicalHeight <= 0.0F ||
+        nominalDevicePixelRatio <= 0.0F) {
+        return {};
+    }
+    const auto axisScale = [nominalDevicePixelRatio](const double logical) {
+        const double pixels = std::round(logical * nominalDevicePixelRatio);
+        const double projection = std::round(pixels / nominalDevicePixelRatio);
+        return pixels >= 1.0 && projection >= 1.0 ? static_cast<float>(pixels / projection) : 0.0F;
+    };
+    const SurfacePixelGrid result{axisScale(logicalWidth), axisScale(logicalHeight), 0.0F, 0.0F};
+    return result.isValid() ? result : SurfacePixelGrid{};
+}
+
+SurfaceRect orientedSurfaceSamplePixels(const float sourceWidth,
+                                        const float sourceHeight,
+                                        const std::uint16_t rotationDegrees,
+                                        const SurfaceNormalizedRect& sample) noexcept {
+    if (!std::isfinite(sourceWidth) || !std::isfinite(sourceHeight) || sourceWidth <= 0.0F ||
+        sourceHeight <= 0.0F || !sample.isValid()) {
+        return {};
+    }
+    const float left = sample.left * sourceWidth;
+    const float top = sample.top * sourceHeight;
+    const float right = sample.right * sourceWidth;
+    const float bottom = sample.bottom * sourceHeight;
+    switch (rotationDegrees) {
+    case 0U:
+        return {left, top, right - left, bottom - top};
+    case 90U:
+        return {top, sourceWidth - right, bottom - top, right - left};
+    case 180U:
+        return {sourceWidth - right, sourceHeight - bottom, right - left, bottom - top};
+    case 270U:
+        return {sourceHeight - bottom, left, bottom - top, right - left};
+    default:
+        return {};
+    }
+}
+
+SurfaceRect transformedSurfaceContentRect(const SurfaceRect& bounds,
+                                          const SurfaceRect& fittedContent,
+                                          const SurfaceViewTransform& transform,
+                                          const SurfacePixelGrid& pixelGrid,
+                                          const SurfaceRect& sourcePixels,
+                                          const float nominalPixelsPerUnit) noexcept {
+    const auto finiteRect = [](const SurfaceRect& rect) {
+        return rect.isValid() && std::isfinite(rect.x) && std::isfinite(rect.y) &&
+               std::isfinite(rect.width) && std::isfinite(rect.height);
+    };
+    if (!transform.isValid() || !finiteRect(bounds) || !finiteRect(fittedContent)) {
+        return {};
+    }
+    if (transform.scale >= 1.0F) {
+        return fittedContent;
+    }
+    // A numeric-positive scale can still produce no meaningful raster footprint.
+    // Fail closed before float conversion, division or phase rounding; the GUI uses
+    // the matching physical-pixel floor and therefore cannot request this state.
+    if (!pixelGrid.isValid() || !std::isfinite(nominalPixelsPerUnit) ||
+        nominalPixelsPerUnit < 0.0F) {
+        return {};
+    }
+    double width = static_cast<double>(fittedContent.width) * transform.scale;
+    double height = static_cast<double>(fittedContent.height) * transform.scale;
+    constexpr double pixelTolerance = 0.00001;
+    if (!std::isfinite(width) || !std::isfinite(height) || width <= 0.0 || height <= 0.0) {
+        return {};
+    }
+    double x = fittedContent.x + (static_cast<double>(fittedContent.width) - width) * 0.5;
+    double y = fittedContent.y + (static_cast<double>(fittedContent.height) - height) * 0.5;
+    if (pixelGrid.isValid() && finiteRect(sourcePixels)) {
+        // At native scale, preserve the source sample's fractional phase on the physical
+        // pixel grid. Never enlarge/crop into an adjacent panel to obtain alignment.
+        const auto alignAxis = [](double& position,
+                                  double& extent,
+                                  const double boundStart,
+                                  const double boundExtent,
+                                  const double pixelsPerUnit,
+                                  const double nominalPixelsPerUnit,
+                                  const double physicalOrigin,
+                                  const double sampleOrigin,
+                                  const double sampleExtent) {
+            constexpr double nativeTolerance = 0.00001;
+            if (std::abs(extent * nominalPixelsPerUnit / sampleExtent - 1.0) > nativeTolerance) {
+                return true;
+            }
+            const double nativeExtent = sampleExtent / pixelsPerUnit;
+            if (!std::isfinite(nativeExtent) || nativeExtent <= 0.0 || nativeExtent > boundExtent) {
+                return false;
+            }
+            position += (extent - nativeExtent) * 0.5;
+            extent = nativeExtent;
+            const double minimumPhase =
+                std::ceil(boundStart * pixelsPerUnit + physicalOrigin - sampleOrigin);
+            const double maximumPhase =
+                std::floor((boundStart + boundExtent - extent) * pixelsPerUnit + physicalOrigin -
+                           sampleOrigin);
+            if (minimumPhase > maximumPhase) {
+                // A tightly fitting fractional ROI may have no phase-aligned placement
+                // inside this panel. Keep full content and correct size instead of cropping.
+                return true;
+            }
+            const double nearestPhase =
+                std::round(position * pixelsPerUnit + physicalOrigin - sampleOrigin);
+            position = (std::clamp(nearestPhase, minimumPhase, maximumPhase) + sampleOrigin -
+                        physicalOrigin) /
+                       pixelsPerUnit;
+            return true;
+        };
+        const bool xValid =
+            alignAxis(x,
+                      width,
+                      bounds.x,
+                      bounds.width,
+                      pixelGrid.scaleX,
+                      nominalPixelsPerUnit > 0.0F ? nominalPixelsPerUnit : pixelGrid.scaleX,
+                      pixelGrid.originX,
+                      sourcePixels.x,
+                      sourcePixels.width);
+        const bool yValid =
+            alignAxis(y,
+                      height,
+                      bounds.y,
+                      bounds.height,
+                      pixelGrid.scaleY,
+                      nominalPixelsPerUnit > 0.0F ? nominalPixelsPerUnit : pixelGrid.scaleY,
+                      pixelGrid.originY,
+                      sourcePixels.y,
+                      sourcePixels.height);
+        if (!xValid || !yValid) {
+            return {};
+        }
+    }
+    if (width * pixelGrid.scaleX < 1.0 - pixelTolerance ||
+        height * pixelGrid.scaleY < 1.0 - pixelTolerance) {
+        return {};
+    }
+    const SurfaceRect result{static_cast<float>(x),
+                             static_cast<float>(y),
+                             static_cast<float>(width),
+                             static_cast<float>(height)};
+    return finiteRect(result) ? result : SurfaceRect{};
+}
+
 bool SurfaceRenderState::isValid() const noexcept {
     if (!allFinite(clipFromItem) || !std::isfinite(logicalWidth) || !std::isfinite(logicalHeight) ||
-        !std::isfinite(opacity) || logicalWidth <= 0.0F || logicalHeight <= 0.0F ||
+        !std::isfinite(opacity) || !std::isfinite(nominalDevicePixelRatio) ||
+        nominalDevicePixelRatio <= 0.0F || logicalWidth <= 0.0F || logicalHeight <= 0.0F ||
         pixelWidth == 0U || pixelHeight == 0U) {
         return false;
     }
@@ -1241,13 +1416,41 @@ private:
             return frame != nullptr && backing != nullptr && backing->yView() != nullptr &&
                    backing->uvView() != nullptr;
         };
+        SurfacePixelGrid pixelGrid;
+        if (state.viewTransform.scale < 1.0F) {
+            UINT viewportCount = 1U;
+            D3D11_VIEWPORT viewport{};
+            lease.immediateContext->RSGetViewports(&viewportCount, &viewport);
+            if (viewportCount == 1U) {
+                pixelGrid = surfacePixelGridFromClip(
+                    state.clipFromItem,
+                    SurfaceViewport{
+                        viewport.TopLeftX, viewport.TopLeftY, viewport.Width, viewport.Height});
+            }
+        }
+        const auto contentDestination = [&](const SurfaceRect& bounds,
+                                            const GpuFrameResource& frame) {
+            const auto [contentWidth, contentHeight] =
+                transformedExtent(frame.geometry(), state.roiEnabled, state.roi);
+            const SurfaceRect fitted = aspectFitRectFloat(bounds, contentWidth, contentHeight);
+            const SurfaceNormalizedRect sample =
+                effectiveSurfaceSampleRect(state.viewTransform, state.roiEnabled, state.roi);
+            return transformedSurfaceContentRect(
+                bounds,
+                fitted,
+                state.viewTransform,
+                pixelGrid,
+                orientedSurfaceSamplePixels(static_cast<float>(frame.geometry().width),
+                                            static_cast<float>(frame.geometry().height),
+                                            frame.geometry().presentation.rotationDegrees,
+                                            sample),
+                state.nominalDevicePixelRatio);
+        };
         // Appends one aspect-fit draw into the given bounds; returns false on a degenerate fit.
         const auto appendRegionDraw = [&](const SurfaceRect& bounds,
                                           const GpuFrameResource& frame,
                                           const D3d11GpuFrameBacking& backing) {
-            const auto [contentWidth, contentHeight] =
-                transformedExtent(frame.geometry(), state.roiEnabled, state.roi);
-            const SurfaceRect destination = aspectFitRectFloat(bounds, contentWidth, contentHeight);
+            const SurfaceRect destination = contentDestination(bounds, frame);
             if (!destination.isValid() || prepared.videoDrawCount >= prepared.videoDraws.size()) {
                 return false;
             }
@@ -1299,9 +1502,7 @@ private:
             if (state.differenceSuppressed) {
                 return appendRegionDraw(bounds, *edgeFirst, *edgeFirstBacking);
             }
-            const auto [contentWidth, contentHeight] =
-                transformedExtent(edgeFirst->geometry(), state.roiEnabled, state.roi);
-            const SurfaceRect destination = aspectFitRectFloat(bounds, contentWidth, contentHeight);
+            const SurfaceRect destination = contentDestination(bounds, *edgeFirst);
             if (!destination.isValid()) {
                 return false;
             }
@@ -1346,9 +1547,8 @@ private:
                 return true;
             }
 
-            const auto [contentWidth, contentHeight] = transformedExtent(
-                (leftUsable ? leftFrame : rightFrame)->geometry(), state.roiEnabled, state.roi);
-            const SurfaceRect destination = aspectFitRectFloat(bounds, contentWidth, contentHeight);
+            const SurfaceRect destination =
+                contentDestination(bounds, *(leftUsable ? leftFrame : rightFrame));
             if (!destination.isValid()) {
                 return false;
             }

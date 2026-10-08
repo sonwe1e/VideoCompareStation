@@ -57,6 +57,7 @@ class ComparisonSurface : public QQuickItem {
     Q_PROPERTY(qreal viewCenterX READ viewCenterX NOTIFY viewportChanged)
     Q_PROPERTY(qreal viewCenterY READ viewCenterY NOTIFY viewportChanged)
     Q_PROPERTY(qreal viewScale READ viewScale NOTIFY viewportChanged)
+    Q_PROPERTY(qreal minimumViewScale READ minimumViewScale NOTIFY presentationGeometryChanged)
     Q_PROPERTY(bool roiEnabled READ roiEnabled NOTIFY viewportChanged)
     Q_PROPERTY(qreal roiLeft READ roiLeft NOTIFY viewportChanged)
     Q_PROPERTY(qreal roiTop READ roiTop NOTIFY viewportChanged)
@@ -166,6 +167,8 @@ public:
     [[nodiscard]] qreal viewCenterX() const noexcept;
     [[nodiscard]] qreal viewCenterY() const noexcept;
     [[nodiscard]] qreal viewScale() const noexcept;
+    // A visible source/ROI must retain at least one physical pixel on each axis.
+    [[nodiscard]] qreal minimumViewScale() const;
     [[nodiscard]] bool roiEnabled() const noexcept;
     [[nodiscard]] qreal roiLeft() const noexcept;
     [[nodiscard]] qreal roiTop() const noexcept;
@@ -177,6 +180,7 @@ public:
     void setDifferenceSuppressed(bool value);
     [[nodiscard]] qulonglong droppedFrames() const noexcept;
 
+    Q_INVOKABLE bool canDisplayViewScale(qreal scale) const;
     Q_INVOKABLE void zoomAt(qreal normalizedX, qreal normalizedY, qreal factor);
     Q_INVOKABLE void panBy(qreal normalizedDeltaX, qreal normalizedDeltaY);
     Q_INVOKABLE void resetViewport();
@@ -223,12 +227,15 @@ signals:
 protected:
     [[nodiscard]] QSGNode* updatePaintNode(QSGNode* oldNode,
                                            UpdatePaintNodeData* updateData) override;
+    void itemChange(ItemChange change, const ItemChangeData& value) override;
     void geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) override;
 
 private:
     friend class ComparisonRenderNode;
 
     class Services;
+
+    void clampSmallViewportToGeometry();
 
     std::shared_ptr<const Services> services_;
     ViewMode viewMode_ = SideBySide;

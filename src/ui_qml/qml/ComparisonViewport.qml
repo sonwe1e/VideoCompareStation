@@ -470,9 +470,9 @@ Rectangle {
         id: pixelScaleBadge
 
         objectName: "viewportPixelScaleBadge"
-        enabled: visible && control.sourceCount > 0 && !control.overlayVisible
-        text: qsTr("设为 100%")
-        helpText: qsTr("按首个显示源围绕观察中心缩放到 100%，保留 ROI。\n靠近边缘时，观察中心受视口范围约束。\n非方形像素保留显示比例。\n受适应窗口下限与适应窗口倍率的 64 倍上限约束。\n以旁边的实际倍率为准；适应窗口请用上方按钮。")
+        enabled: visible && control.sourceCount > 0 && !control.overlayVisible && targetReachable
+        text: targetReachable ? qsTr("设为 100%") : qsTr("100% 不可达")
+        helpText: qsTr("按首个显示源围绕观察中心缩放到 100%，保留 ROI。\n小于适应窗口时显示完整 ROI 并居中；放大时中心受视口范围约束。\n非方形像素保留显示比例。\n放大上限仍为适应窗口倍率的 64 倍；缩小时每个显示轴至少占一个物理像素。\n以旁边的实际倍率为准；适应窗口请用上方按钮。")
         Accessible.name: text
         Accessible.description: pixelScaleLabel.text + "\n" + helpText
         visible: control.chromeVisible && pixelScaleBadge.effectivePercent > 0
@@ -509,8 +509,15 @@ Rectangle {
         readonly property real horizontalPercent: firstPanel && sourceExtent.width > 0 ? Number(firstPanel.contentWidth) / sourceExtent.width * dualVideoSurface.viewScale * devicePixelRatio * 100 : 0
         readonly property real verticalPercent: firstPanel && sourceExtent.height > 0 ? Number(firstPanel.contentHeight) / sourceExtent.height * dualVideoSurface.viewScale * devicePixelRatio * 100 : 0
         readonly property real effectivePercent: isFinite(horizontalPercent) && isFinite(verticalPercent) ? Math.min(horizontalPercent, verticalPercent) : 0
+        readonly property real targetScale: effectivePercent > 0 ? dualVideoSurface.viewScale * 100 / effectivePercent : 0
+        readonly property bool targetReachable: isFinite(targetScale) && targetScale > 0 && dualVideoSurface.minimumViewScale > 0 && targetScale <= 64 && dualVideoSurface.canDisplayViewScale(targetScale)
+        readonly property string targetLimitText: targetScale > 64 ? qsTr("超过 64 倍上限") : qsTr("显示范围不足")
         readonly property bool uniformScale: Math.abs(horizontalPercent - verticalPercent) < 0.001
         readonly property bool pixelExact: Math.abs(horizontalPercent - 100) < 0.001 && Math.abs(verticalPercent - 100) < 0.001
+
+        function percentText(value) {
+            return value > 0 && value < 1 ? "<1" : String(Math.round(value));
+        }
 
         contentItem: Row {
             id: pixelScaleContents
@@ -527,7 +534,10 @@ Rectangle {
                 id: pixelScaleLabel
 
                 objectName: "viewportPixelScaleLabel"
-                text: pixelScaleBadge.pixelExact ? qsTr("100% 真实尺寸") : (pixelScaleBadge.uniformScale ? qsTr("画面 %1%").arg(Math.round(pixelScaleBadge.effectivePercent)) : qsTr("横 %1% · 纵 %2%").arg(Math.round(pixelScaleBadge.horizontalPercent)).arg(Math.round(pixelScaleBadge.verticalPercent)))
+                text: {
+                    const actual = pixelScaleBadge.pixelExact ? qsTr("100% 真实尺寸") : (pixelScaleBadge.uniformScale ? qsTr("画面 %1%").arg(pixelScaleBadge.percentText(pixelScaleBadge.effectivePercent)) : qsTr("横 %1% · 纵 %2%").arg(pixelScaleBadge.percentText(pixelScaleBadge.horizontalPercent)).arg(pixelScaleBadge.percentText(pixelScaleBadge.verticalPercent)));
+                    return pixelScaleBadge.targetReachable ? actual : actual + " · " + pixelScaleBadge.targetLimitText;
+                }
                 color: pixelScaleBadge.pixelExact ? Theme.success : control.mutedTextColor
                 font.pixelSize: 11
                 anchors.verticalCenter: parent.verticalCenter
@@ -540,7 +550,7 @@ Rectangle {
             border.color: pixelScaleBadge.activeFocus ? Theme.focus : (pixelScaleBadge.pixelExact ? Theme.success : Theme.oscBorder)
         }
         onClicked: {
-            if (pixelScaleBadge.effectivePercent <= 0)
+            if (!pixelScaleBadge.targetReachable)
                 return;
             // The existing content/DPR/ROI/SAR-aware readout owns the target. zoomAt
             // follows its focal point and clamps both scale and center to the viewport bounds.

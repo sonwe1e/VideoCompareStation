@@ -4,6 +4,7 @@
 #include <QDir>
 #include <QKeyEvent>
 #include <QMetaObject>
+#include <QMouseEvent>
 #include <QObject>
 #include <QQmlComponent>
 #include <QQmlEngine>
@@ -30,7 +31,7 @@ protected:
         engine_.addImportPath(
             QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
         // Exercise real viewport bindings and surface geometry without renderer services,
-        // media, workers or playback. Only the keyboard case adds an isolated Qt window.
+        // media, workers or playback. Pointer and keyboard cases add isolated Qt windows.
         QQmlComponent component{&engine_, QUrl{QStringLiteral("qrc:/qml/ComparisonViewport.qml")}};
         ASSERT_EQ(component.status(), QQmlComponent::Ready)
             << component.errorString().toStdString();
@@ -114,6 +115,34 @@ protected:
         QCoreApplication::processEvents();
     }
 
+    void clickBadgeThroughWindow() {
+        ASSERT_NE(window_, nullptr);
+        ASSERT_TRUE(badge_->isVisible());
+        ASSERT_TRUE(badge_->isEnabled());
+        ASSERT_GT(badge_->width(), 0.0);
+        ASSERT_GT(badge_->height(), 0.0);
+        const QPointF position =
+            badge_->mapToScene(QPointF{badge_->width() * 0.5, badge_->height() * 0.5});
+        const QPointF globalPosition = window_->mapToGlobal(position);
+        QMouseEvent press{QEvent::MouseButtonPress,
+                          position,
+                          position,
+                          globalPosition,
+                          Qt::LeftButton,
+                          Qt::LeftButton,
+                          Qt::NoModifier};
+        QCoreApplication::sendEvent(window_.get(), &press);
+        QMouseEvent release{QEvent::MouseButtonRelease,
+                            position,
+                            position,
+                            globalPosition,
+                            Qt::LeftButton,
+                            Qt::NoButton,
+                            Qt::NoModifier};
+        QCoreApplication::sendEvent(window_.get(), &release);
+        QCoreApplication::processEvents();
+    }
+
     QQmlEngine engine_;
     std::unique_ptr<QQuickWindow> window_;
     std::unique_ptr<QObject> root_;
@@ -193,6 +222,21 @@ TEST_F(ViewportPixelScaleTests, NonSquarePixelsReportBothAxesWithoutClaimingTrue
     clickBadge();
     EXPECT_NEAR(percent(), 100.0, 0.001);
     EXPECT_FALSE(badge_->property("pixelExact").toBool());
+
+    setSources({source(160, 90, 0, 4, 3)});
+    surface_->resetViewport();
+    ASSERT_GT(percent(), 100.0);
+    clickBadge();
+    EXPECT_LT(surface_->viewScale(), 1.0);
+    EXPECT_NEAR(badge_->property("horizontalPercent").toDouble(), 400.0 / 3.0, 0.001);
+    EXPECT_NEAR(badge_->property("verticalPercent").toDouble(), 100.0, 0.001);
+    EXPECT_FALSE(badge_->property("pixelExact").toBool());
+    EXPECT_EQ(label_->property("text").toString(), QStringLiteral("横 133% · 纵 100%"));
+    const double belowFitScale = surface_->viewScale();
+    clickBadge();
+    EXPECT_NEAR(surface_->viewScale(), belowFitScale, 0.000001);
+    EXPECT_NEAR(percent(), 100.0, 0.001);
+    EXPECT_FALSE(badge_->property("pixelExact").toBool());
 }
 
 TEST_F(ViewportPixelScaleTests, InvalidNearOneToOneAndClampedScalesStayHonest) {
@@ -206,10 +250,47 @@ TEST_F(ViewportPixelScaleTests, InvalidNearOneToOneAndClampedScalesStayHonest) {
     EXPECT_TRUE(badge_->property("pixelExact").toBool());
     setSources({source(100000, 100000)});
     surface_->resetViewport();
+    EXPECT_FALSE(badge_->property("targetReachable").toBool());
+    EXPECT_FALSE(badge_->isEnabled());
+    EXPECT_EQ(badge_->property("text").toString(), QStringLiteral("100% 不可达"));
+    EXPECT_TRUE(
+        badge_->property("targetLimitText").toString().contains(QStringLiteral("超过 64 倍上限")));
+    EXPECT_TRUE(label_->property("text").toString().contains(QStringLiteral("超过 64 倍上限")));
+    EXPECT_TRUE(label_->property("text").toString().startsWith(QStringLiteral("画面 <1%")));
+    // Even a programmatic signal cannot perform an unreachable 100% action.
     clickBadge();
+    EXPECT_DOUBLE_EQ(surface_->viewScale(), 1.0);
+    surface_->zoomAt(0.5, 0.5, 1000.0);
     EXPECT_DOUBLE_EQ(surface_->viewScale(), 64.0);
     EXPECT_NEAR(percent(), surface_->height() / 100000.0 * 6400.0, 0.001);
     EXPECT_FALSE(badge_->property("pixelExact").toBool());
+
+    // A fractional ROI may be smaller than one source pixel. Retain it, but do not
+    // offer a native target whose displayed footprint has less than one pixel per axis.
+    root_->setProperty("width", 400);
+    setSources({source(160, 90)});
+    surface_->restoreViewport(0.5, 0.5, 1.0, true, 0.0, 0.0, 0.001, 0.001);
+    ASSERT_TRUE(surface_->roiEnabled());
+    EXPECT_FALSE(badge_->isEnabled());
+    EXPECT_TRUE(label_->property("text").toString().contains(QStringLiteral("显示范围不足")));
+    EXPECT_TRUE(
+        QQmlProperty::read(badge_, QStringLiteral("Accessible.description"), qmlContext(badge_))
+            .toString()
+            .contains(QStringLiteral("显示范围不足")));
+    EXPECT_LE(badge_->x() + badge_->width(), 400.0);
+    clickBadge();
+    EXPECT_DOUBLE_EQ(surface_->viewScale(), 1.0);
+    EXPECT_DOUBLE_EQ(surface_->roiRight(), 0.001);
+    auto* const fit = root_->findChild<QQuickItem*>(QStringLiteral("viewportFitButton"));
+    auto* const reset = root_->findChild<QQuickItem*>(QStringLiteral("viewportResetButton"));
+    ASSERT_NE(fit, nullptr);
+    ASSERT_NE(reset, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(fit, "clicked"));
+    EXPECT_TRUE(surface_->roiEnabled());
+    EXPECT_FALSE(badge_->isEnabled());
+    ASSERT_TRUE(QMetaObject::invokeMethod(reset, "clicked"));
+    EXPECT_FALSE(surface_->roiEnabled());
+    EXPECT_TRUE(badge_->isEnabled());
 }
 
 TEST_F(ViewportPixelScaleTests, FixedActionFromAboveOneToOnePreservesObservation) {
@@ -275,19 +356,59 @@ TEST_F(ViewportPixelScaleTests, FitRetainsRoiAndResetClearsIt) {
     EXPECT_DOUBLE_EQ(surface_->viewCenterY(), 0.5);
 }
 
-TEST_F(ViewportPixelScaleTests, FixedActionExplainsLimitsAndNeverMislabelsSmallSources) {
+TEST_F(ViewportPixelScaleTests, PointerActionReachesNativeSizeBelowFitAndPreservesRoi) {
     setSources({source(160, 90)});
-    surface_->zoomAt(0.5, 0.5, 2.0);
-    clickBadge();
-    EXPECT_DOUBLE_EQ(surface_->viewScale(), 1.0);
-    EXPECT_GT(percent(), 100.0);
-    EXPECT_FALSE(badge_->property("pixelExact").toBool());
-    EXPECT_NE(label_->property("text").toString(), QStringLiteral("100% 真实尺寸"));
+    root_->setProperty("currentFrame", 42);
+    window_ = std::make_unique<QQuickWindow>();
+    window_->resize(801, 601);
+    auto* const viewport = qobject_cast<QQuickItem*>(root_.get());
+    ASSERT_NE(viewport, nullptr);
+    viewport->setSize(QSizeF{801.0, 601.0});
+    viewport->setParentItem(window_->contentItem());
+    window_->show();
+    QCoreApplication::processEvents();
+    ASSERT_EQ(window_->width(), 801);
+    ASSERT_EQ(window_->height(), 601);
+    ASSERT_DOUBLE_EQ(surface_->mapToScene(QPointF{}).x(), 1.0);
+    ASSERT_DOUBLE_EQ(surface_->mapToScene(QPointF{}).y(), 1.0);
+    const double dpr = window_->effectiveDevicePixelRatio();
+    surface_->restoreViewport(0.4, 0.6, 2.0, false, 0.0, 0.0, 1.0, 1.0);
+    ASSERT_GT(percent(), 100.0);
+    for (int repeat = 0; repeat < 2; ++repeat) {
+        clickBadgeThroughWindow();
+        EXPECT_NEAR(surface_->viewScale(), 160.0 / (surface_->width() * dpr), 0.000001);
+        EXPECT_LT(surface_->viewScale(), 1.0);
+        EXPECT_DOUBLE_EQ(surface_->viewCenterX(), 0.5);
+        EXPECT_DOUBLE_EQ(surface_->viewCenterY(), 0.5);
+        EXPECT_NEAR(percent(), 100.0, 0.001);
+        EXPECT_TRUE(badge_->property("pixelExact").toBool());
+        EXPECT_EQ(label_->property("text").toString(), QStringLiteral("100% 真实尺寸"));
+        EXPECT_FALSE(surface_->roiEnabled());
+        EXPECT_EQ(root_->property("currentFrame").toInt(), 42);
+    }
+    surface_->restoreViewport(0.4, 0.6, 2.0, true, 0.125, 0.25, 0.875, 0.75);
+    for (int repeat = 0; repeat < 2; ++repeat) {
+        clickBadgeThroughWindow();
+        EXPECT_NEAR(surface_->viewScale(), 120.0 / (surface_->width() * dpr), 0.000001);
+        EXPECT_LT(surface_->viewScale(), 1.0);
+        EXPECT_DOUBLE_EQ(surface_->viewCenterX(), 0.5);
+        EXPECT_DOUBLE_EQ(surface_->viewCenterY(), 0.5);
+        EXPECT_NEAR(percent(), 100.0, 0.001);
+        EXPECT_TRUE(badge_->property("pixelExact").toBool());
+        EXPECT_TRUE(surface_->roiEnabled());
+        EXPECT_DOUBLE_EQ(surface_->roiLeft(), 0.125);
+        EXPECT_DOUBLE_EQ(surface_->roiTop(), 0.25);
+        EXPECT_DOUBLE_EQ(surface_->roiRight(), 0.875);
+        EXPECT_DOUBLE_EQ(surface_->roiBottom(), 0.75);
+        EXPECT_EQ(root_->property("currentFrame").toInt(), 42);
+    }
     EXPECT_EQ(badge_->property("text").toString(), QStringLiteral("设为 100%"));
     const auto help = badge_->property("helpText").toString();
     EXPECT_TRUE(help.contains(QStringLiteral("非方形像素")));
-    EXPECT_TRUE(help.contains(QStringLiteral("适应窗口下限")));
-    EXPECT_TRUE(help.contains(QStringLiteral("64 倍上限")));
+    EXPECT_TRUE(help.contains(QStringLiteral("小于适应窗口")));
+    EXPECT_TRUE(help.contains(QStringLiteral("完整 ROI 并居中")));
+    EXPECT_TRUE(help.contains(QStringLiteral("放大上限")));
+    EXPECT_TRUE(help.contains(QStringLiteral("64 倍")));
     EXPECT_TRUE(help.contains(QStringLiteral("实际倍率")));
     EXPECT_EQ(QQmlProperty::read(badge_, QStringLiteral("Accessible.name"), qmlContext(badge_))
                   .toString(),
