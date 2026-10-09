@@ -3157,6 +3157,7 @@ ApplicationWindow {
         overlayTitle: root.overlayTitle
         overlayDetail: root.overlayDetail
         playbackActive: root.controller ? root.controller.playing : false
+        playbackHudRevealed: transport.revealActive
         anchors {
             top: parent.top
             topMargin: root.chromeVisible && !root.singleMode ? sourceBar.height + comparisonBar.height + 6 : 0

@@ -56,6 +56,14 @@ Rectangle {
     // True while the transport plays; the pixel readout re-samples on paused frame steps but
     // never per playback frame, so it cannot add readback work to the render loop.
     required property bool playbackActive
+    // Mirrors the transport's reveal state while playing: the floating OSC's countdown hides it
+    // after pointer idle, any pointer activity or the wake strip reveals it again, and the
+    // docked transport and every paused session stay revealed. The bottom-corner HUD follows it,
+    // so a playing view keeps the picture clear without losing the controls on demand.
+    required property bool playbackHudRevealed
+    // Paused sessions show the HUD unconditionally; the transport contract keeps revealActive
+    // true while paused, and this guard keeps the viewport honest even if that ever drifts.
+    readonly property bool hudRevealed: !control.playbackActive || control.playbackHudRevealed
 
     property string alignmentModeName: ""
     property string inexactReason: ""
@@ -575,8 +583,15 @@ Rectangle {
         id: analysisChrome
 
         objectName: "analysisControlsChrome"
-        visible: control.chromeVisible && (control.differenceMode || dualVideoSurface.roiEnabled || control.alignmentModeName.length > 0 || control.differenceThresholdEnabled)
+        visible: control.chromeVisible && control.hudRevealed && (control.differenceMode || dualVideoSurface.roiEnabled || control.alignmentModeName.length > 0 || control.differenceThresholdEnabled)
+        opacity: control.hudRevealed ? 1 : 0
         z: 30
+
+        Behavior on opacity {
+            NumberAnimation {
+                duration: 150
+            }
+        }
         width: Math.min(Math.max(0, parent.width - 24), analysisStatus.implicitWidth + 18)
         height: 28
         radius: 5
@@ -631,8 +646,15 @@ Rectangle {
         helpText: qsTr("按首个显示源围绕观察中心缩放到 100%，保留 ROI。\n小于适应窗口时显示完整 ROI 并居中；放大时中心受视口范围约束。\n非方形像素保留显示比例。\n放大上限仍为适应窗口倍率的 64 倍；缩小时每个显示轴至少占一个物理像素。\n以旁边的实际倍率为准；适应窗口请用上方按钮。")
         Accessible.name: text
         Accessible.description: pixelScaleLabel.text + "\n" + helpText
-        visible: control.chromeVisible && pixelScaleBadge.effectivePercent > 0
+        visible: control.chromeVisible && control.hudRevealed && pixelScaleBadge.effectivePercent > 0
+        opacity: control.hudRevealed ? 1 : 0
         z: 30
+
+        Behavior on opacity {
+            NumberAnimation {
+                duration: 150
+            }
+        }
         height: 28
         width: pixelScaleContents.implicitWidth + 18
         leftPadding: 9
@@ -723,8 +745,15 @@ Rectangle {
 
         objectName: "viewportVideoFilterBadge"
         enabled: visible && control.sourceCount > 0 && !control.overlayVisible
-        visible: control.chromeVisible
+        visible: control.chromeVisible && control.hudRevealed
+        opacity: control.hudRevealed ? 1 : 0
         z: 30
+
+        Behavior on opacity {
+            NumberAnimation {
+                duration: 150
+            }
+        }
         height: 28
         leftPadding: 9
         rightPadding: 9
@@ -758,9 +787,16 @@ Rectangle {
         id: pixelReadoutPlate
 
         objectName: "viewportPixelReadoutPlate"
-        visible: control.chromeVisible && control.pixelReadoutPositionValid && control.sourceCount > 0
+        visible: control.chromeVisible && control.hudRevealed && control.pixelReadoutPositionValid && control.sourceCount > 0
+        opacity: control.hudRevealed ? 1 : 0
         clip: true
         z: 30
+
+        Behavior on opacity {
+            NumberAnimation {
+                duration: 150
+            }
+        }
         radius: 5
         color: Theme.oscGlass
         border.width: 1
@@ -851,8 +887,15 @@ Rectangle {
 
         objectName: "viewportViewCommands"
         enabled: visible && control.sourceCount > 0 && !control.overlayVisible
-        visible: control.chromeVisible
+        visible: control.chromeVisible && control.hudRevealed
+        opacity: control.hudRevealed ? 1 : 0
         z: 30
+
+        Behavior on opacity {
+            NumberAnimation {
+                duration: 150
+            }
+        }
         spacing: 6
         anchors {
             left: parent.left

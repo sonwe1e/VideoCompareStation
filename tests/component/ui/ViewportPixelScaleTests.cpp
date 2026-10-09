@@ -78,6 +78,7 @@ protected:
             {QStringLiteral("overlayTitle"), QString{}},
             {QStringLiteral("overlayDetail"), QString{}},
             {QStringLiteral("playbackActive"), false},
+            {QStringLiteral("playbackHudRevealed"), true},
         };
         root_.reset(component.createWithInitialProperties(properties));
         ASSERT_NE(root_, nullptr) << component.errorString().toStdString();
@@ -753,6 +754,65 @@ TEST_F(ViewportPixelScaleTests, PixelReadoutShowsPerSourceRowsAndDropsStaleDeliv
     root_->setProperty("currentFrame", 43);
     QCoreApplication::processEvents();
     EXPECT_EQ(batches(), parked + 1);
+}
+
+// The bottom-corner HUD follows the transport's reveal state: an idle playing view keeps the
+// picture clear, the reveal brings the controls back (and re-enables them, releasing focus the
+// same way the empty-screen states do), and a paused session keeps them unconditionally.
+TEST_F(ViewportPixelScaleTests, PlaybackHudFollowsTransportReveal) {
+    setSources({source(1920, 1080)});
+    window_ = std::make_unique<QQuickWindow>();
+    window_->resize(800, 600);
+    auto* const viewport = qobject_cast<QQuickItem*>(root_.get());
+    ASSERT_NE(viewport, nullptr);
+    viewport->setParentItem(window_->contentItem());
+    window_->show();
+    QCoreApplication::processEvents();
+    // Arm the conditional plates the same way the product does: a threshold session shows the
+    // analysis chrome, a hover inside the content shows the pixel readout.
+    root_->setProperty("differenceThresholdEnabled", true);
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        root_.get(), "handleNavigationMove", Q_ARG(QVariant, 399), Q_ARG(QVariant, 299)));
+    QCoreApplication::processEvents();
+    QQuickItem* const controls[]{
+        badge_,
+        root_->findChild<QQuickItem*>(QStringLiteral("viewportVideoFilterBadge")),
+        root_->findChild<QQuickItem*>(QStringLiteral("viewportViewCommands")),
+        root_->findChild<QQuickItem*>(QStringLiteral("viewportFitButton")),
+        root_->findChild<QQuickItem*>(QStringLiteral("viewportPixelReadoutPlate")),
+        root_->findChild<QQuickItem*>(QStringLiteral("analysisControlsChrome"))};
+    for (auto* control : controls) {
+        ASSERT_NE(control, nullptr) << "missing HUD control";
+    }
+    const auto expectVisible = [&](const bool visible) {
+        for (auto* control : controls) {
+            SCOPED_TRACE(control->objectName().toStdString());
+            EXPECT_EQ(control->property("visible").toBool(), visible);
+            if (QStringLiteral("viewportPixelReadoutPlate") != control->objectName() &&
+                QStringLiteral("analysisControlsChrome") != control->objectName()) {
+                EXPECT_EQ(control->property("enabled").toBool(), visible);
+            }
+        }
+    };
+    // Paused sessions keep the HUD even when the reveal input is stale: the transport keeps
+    // revealActive true while paused, and the viewport does not depend on that promise alone.
+    root_->setProperty("playbackActive", false);
+    root_->setProperty("playbackHudRevealed", false);
+    QCoreApplication::processEvents();
+    expectVisible(true);
+    // Playing with the OSC revealed (pointer activity, or the docked transport): HUD visible.
+    root_->setProperty("playbackActive", true);
+    root_->setProperty("playbackHudRevealed", true);
+    QCoreApplication::processEvents();
+    expectVisible(true);
+    // Playing with the transport hidden by its countdown: the picture stays clear and the
+    // controls are neither visible, enabled nor focus targets.
+    badge_->forceActiveFocus();
+    ASSERT_TRUE(badge_->hasActiveFocus());
+    root_->setProperty("playbackHudRevealed", false);
+    QCoreApplication::processEvents();
+    expectVisible(false);
+    EXPECT_FALSE(badge_->hasActiveFocus());
 }
 
 } // namespace
