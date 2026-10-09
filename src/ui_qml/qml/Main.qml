@@ -6,6 +6,7 @@ import QtQuick.Dialogs as NativeDialogs
 import QtQuick.Window
 import "VcsTheme.js" as Theme
 import "MediaLabels.js" as MediaLabels
+import "ShortcutCatalog.js" as ShortcutCatalog
 
 // Dvs.Ui is registered by the C++ host before this document is loaded.
 
@@ -139,6 +140,10 @@ ApplicationWindow {
     property bool differencePeekLocked: false
     // The record frozen by the most recent M press, waiting for its note.
     property int pendingIssueNoteIndex: -1
+    // Workspace-level help rows. The sequences come from ShortcutCatalog.js - the same
+    // constants the bindings and the menu labels use - and the contract test cross-checks
+    // rows, labels and bindings against each other.
+    readonly property var workspaceHelpEntries: [[ShortcutCatalog.openVideos, qsTr("打开视频")], [ShortcutCatalog.openVideoFolder, qsTr("从文件夹选视频")], [ShortcutCatalog.addVideo, qsTr("向当前对比添加视频")], [ShortcutCatalog.openImage, qsTr("打开图片")], [ShortcutCatalog.openImagePair, qsTr("打开图片对")], [ShortcutCatalog.addImage, qsTr("向当前图片对添加图片")], [ShortcutCatalog.compareImageFolders, qsTr("对比图片文件夹")], [ShortcutCatalog.closeCurrentTask, qsTr("关闭当前任务")], [ShortcutCatalog.captureIssue, qsTr("记录当前问题，可填备注")]]
     property bool pendingComparisonPreservesPosition: false
     property bool pendingSidebarComparison: false
     property bool pendingNewReviewWantsThreeUp: false
@@ -2455,69 +2460,69 @@ ApplicationWindow {
     }
 
     // Workspace-level shortcuts stay active across both workspaces; media transport shortcuts
-
-    // remain owned by ReviewShortcuts and are gated by globalMediaShortcutsEnabled.
-
+    // remain owned by ReviewShortcuts and are gated by globalMediaShortcutsEnabled. Sequences
+    // come from ShortcutCatalog.js - the same constants the menu labels and the help rows use.
     Shortcut {
-        sequence: "Ctrl+Alt+O"
+        sequence: ShortcutCatalog.openVideoFolder
         context: Qt.ApplicationShortcut
         enabled: root.inputContext === 0 && root.videoFolderModel !== null
         onActivated: root.requestOpenVideoFolder()
     }
 
     Shortcut {
-        sequence: "Ctrl+O"
+        sequence: ShortcutCatalog.openVideos
         context: Qt.ApplicationShortcut
         enabled: root.inputContext === 0
         onActivated: root.requestOpenVideos()
     }
 
     Shortcut {
-        sequence: "Ctrl+Shift+O"
+        sequence: ShortcutCatalog.addVideo
         context: Qt.ApplicationShortcut
         enabled: root.inputContext === 0 && root.videoHasSession && root.sourceCount < 3
         onActivated: root.requestAddVideo()
     }
 
     Shortcut {
-        sequence: "Ctrl+I"
+        sequence: ShortcutCatalog.openImage
         context: Qt.ApplicationShortcut
         enabled: root.inputContext === 0
         onActivated: root.requestImageOpen()
     }
 
     Shortcut {
-        sequence: "Ctrl+Shift+I"
+        sequence: ShortcutCatalog.openImagePair
         context: Qt.ApplicationShortcut
         enabled: root.inputContext === 0
         onActivated: root.requestImagePairOpen()
     }
 
     Shortcut {
-        sequence: "Ctrl+Alt+I"
+        sequence: ShortcutCatalog.addImage
         context: Qt.ApplicationShortcut
         enabled: root.inputContext === 0 && root.imageHasContent && !Boolean(root.stillImageController && root.stillImageController.hasSecondary)
         onActivated: root.requestImageAdd()
     }
 
     Shortcut {
-        sequence: "Ctrl+W"
+        sequence: ShortcutCatalog.closeCurrentTask
         context: Qt.ApplicationShortcut
         enabled: root.inputContext === 0 && root.activeTaskHasMedia
         onActivated: root.closeCurrentTask()
     }
 
     Shortcut {
-        sequence: "Ctrl+Shift+F"
+        sequence: ShortcutCatalog.compareImageFolders
         context: Qt.ApplicationShortcut
         enabled: root.inputContext === 0
         onActivated: root.requestCompareFolders()
     }
 
-    // M for "mark": opens the note dialog; Enter records with the note, Escape records
-    // without one. Active in both workspaces whenever there is something to capture.
+    // M for "mark": freezes the observation and opens the note dialog; Enter attaches the
+    // typed note, Escape attaches an empty one. Active in both workspaces whenever there is
+    // something to capture.
     Shortcut {
-        sequence: "M"
+        sequence: ShortcutCatalog.captureIssue
         context: Qt.ApplicationShortcut
         enabled: root.inputContext === 0 && (root.videoHasSession || root.imageHasContent)
         onActivated: root.captureIssueLog()
@@ -3668,6 +3673,7 @@ ApplicationWindow {
         playerPreset: root.shortcutPreset === 1
         imagePreset: root.imageWorkspaceActive
         mediaEntries: root.imageWorkspaceActive ? [] : reviewShortcuts.helpEntries
+        workspaceEntries: root.workspaceHelpEntries
     }
 
     IssueNoteDialog {

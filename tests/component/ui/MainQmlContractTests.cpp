@@ -6850,7 +6850,10 @@ TEST(MainQmlContractTests, ViewShortcutsSwitchModesZoomAndGenerateHelp) {
         }
         expectedEntries.push_back(row);
     }
-    ASSERT_EQ(model.size(), expectedEntries.size() + 6);
+    // Video preset model = filtered media rows + workspace rows + the five static mouse tails.
+    const QVariantList workspaceEntries = harness.root->property("workspaceHelpEntries").toList();
+    ASSERT_GE(workspaceEntries.size(), 9);
+    ASSERT_EQ(model.size(), expectedEntries.size() + workspaceEntries.size() + 5);
     for (int i = 0; i < expectedEntries.size(); ++i) {
         EXPECT_EQ(model.at(static_cast<qsizetype>(i)).toList().front().toString(),
                   expectedEntries.at(static_cast<qsizetype>(i)).toList().front().toString())
@@ -6872,6 +6875,94 @@ TEST(MainQmlContractTests, ViewShortcutsSwitchModesZoomAndGenerateHelp) {
     EXPECT_EQ(descriptionFor(QStringLiteral("双击")),
               QStringLiteral("切换 100% 真实尺寸 / 适应窗口"));
     EXPECT_TRUE(descriptionFor(QStringLiteral("F11 或双击")).isEmpty());
+}
+
+// Bindings, menu labels and the help table must tell the same story, and no key may be bound
+// twice inside one activation context. The menu bar reads its sequences from ShortcutCatalog
+// (the same constants Main.qml binds); this test is the tripwire that catches a fresh literal,
+// a renamed key, or a second owner of an existing key.
+TEST(MainQmlContractTests, ShortcutBindingsMenuAndHelpStayInSync) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    // Every live Shortcut in the window, flattened to its sequence strings.
+    const QList<QObject*> allObjects = harness.root->findChildren<QObject*>();
+    QStringList sequences;
+    for (QObject* const object : allObjects) {
+        if (!object->property("sequence").isValid() && !object->property("sequences").isValid()) {
+            continue;
+        }
+        const QString sequence = object->property("sequence").toString();
+        if (!sequence.isEmpty()) {
+            sequences.push_back(sequence);
+            continue;
+        }
+        const QVariantList multi = object->property("sequences").toList();
+        for (const QVariant& entry : multi) {
+            if (!entry.toString().isEmpty()) {
+                sequences.push_back(entry.toString());
+            }
+        }
+    }
+    ASSERT_GE(sequences.size(), 40);
+
+    // Duplicate keys inside one activation context shadow each other. Esc is the one
+    // documented overlap: the presentation Esc (full screen / hidden chrome) and the
+    // narrow-window drawer Esc are never enabled for the same state.
+    QStringList sorted = sequences;
+    sorted.sort();
+    for (qsizetype index = 1; index < sorted.size(); ++index) {
+        if (sorted.at(index) == sorted.at(index - 1) && sorted.at(index) != QStringLiteral("Esc")) {
+            ADD_FAILURE() << "sequence " << sorted.at(index).toStdString()
+                          << " is bound more than once";
+        }
+    }
+
+    // Menu labels must reference a real binding; Alt+F4 is menu-only because the window
+    // manager owns its delivery.
+    int labelledMenuItems = 0;
+    for (QObject* const item : allObjects) {
+        const QVariant label = item->property("shortcutText");
+        if (!label.isValid() || label.toString().isEmpty()) {
+            continue;
+        }
+        ++labelledMenuItems;
+        if (label.toString() == QStringLiteral("Alt+F4")) {
+            continue;
+        }
+        EXPECT_TRUE(sequences.contains(label.toString()))
+            << "menu label " << label.toString().toStdString() << " has no live binding";
+    }
+    ASSERT_GE(labelledMenuItems, 10);
+
+    // The workspace help rows share the same source: every row must be a live binding and
+    // must appear in the help model for both workspaces.
+    QObject* const shortcutHelp =
+        harness.root->findChild<QObject*>(QStringLiteral("shortcutHelpOverlay"));
+    ASSERT_NE(shortcutHelp, nullptr);
+    const QVariantList workspaceEntries = harness.root->property("workspaceHelpEntries").toList();
+    ASSERT_GE(workspaceEntries.size(), 9);
+    const auto modelHasKey = [&shortcutHelp](const bool imagePreset, const QString& keys) {
+        shortcutHelp->setProperty("imagePreset", imagePreset);
+        shortcutHelp->setProperty("playerPreset", false);
+        const QVariantList model = shortcutHelp->property("shortcutModel").toList();
+        for (const QVariant& entry : model) {
+            const QVariantList pair = entry.toList();
+            if (pair.size() == 2 && pair.front().toString() == keys) {
+                return true;
+            }
+        }
+        return false;
+    };
+    for (const QVariant& entry : workspaceEntries) {
+        const QString keys = entry.toList().front().toString();
+        SCOPED_TRACE(keys.toStdString());
+        EXPECT_TRUE(sequences.contains(keys)) << "workspace help row without a binding";
+        EXPECT_TRUE(modelHasKey(false, keys)) << "workspace help row missing from video help";
+        EXPECT_TRUE(modelHasKey(true, keys)) << "workspace help row missing from image help";
+    }
 }
 
 // M freezes the observation at the keypress: the record exists before the dialog is touched,

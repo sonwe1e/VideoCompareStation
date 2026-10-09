@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import "ShortcutCatalog.js" as ShortcutCatalog
 
 VcsMenuBar {
     id: control
@@ -85,19 +86,19 @@ VcsMenuBar {
 
         VcsMenuItem {
             text: qsTr("打开视频…")
-            shortcutText: "Ctrl+O"
+            shortcutText: ShortcutCatalog.openVideos
             onTriggered: control.openVideosRequested()
         }
         VcsMenuItem {
             objectName: "openVideoFolderMenuItem"
             text: qsTr("从文件夹选视频…")
-            shortcutText: "Ctrl+Alt+O"
+            shortcutText: ShortcutCatalog.openVideoFolder
             enabled: control.videoFolderAvailable
             onTriggered: control.openVideoFolderRequested()
         }
         VcsMenuItem {
             text: qsTr("添加视频…")
-            shortcutText: "Ctrl+Shift+O"
+            shortcutText: ShortcutCatalog.addVideo
             enabled: control.sourceCount > 0 && control.sourceCount < 3
             onTriggered: control.addVideoRequested()
         }
@@ -107,26 +108,26 @@ VcsMenuBar {
         VcsMenuItem {
             objectName: "openImageMenuItem"
             text: qsTr("打开图片…")
-            shortcutText: "Ctrl+I"
+            shortcutText: ShortcutCatalog.openImage
             onTriggered: control.openImageRequested()
         }
         VcsMenuItem {
             objectName: "openImagePairMenuItem"
             text: qsTr("打开图片对…")
-            shortcutText: "Ctrl+Shift+I"
+            shortcutText: ShortcutCatalog.openImagePair
             onTriggered: control.openImagePairRequested()
         }
         VcsMenuItem {
             objectName: "addImageMenuItem"
             text: qsTr("添加图片…")
-            shortcutText: "Ctrl+Alt+I"
+            shortcutText: ShortcutCatalog.addImage
             enabled: control.workspaceMode === 1 && control.imageHasPrimary && !control.imageHasSecondary
             onTriggered: control.addImageRequested()
         }
         VcsMenuItem {
             objectName: "compareImageFoldersMenuItem"
             text: qsTr("对比文件夹…")
-            shortcutText: "Ctrl+Shift+F"
+            shortcutText: ShortcutCatalog.compareImageFolders
             onTriggered: control.compareImageFoldersRequested()
         }
         VcsMenuSeparator {
@@ -135,6 +136,7 @@ VcsMenuBar {
         VcsMenuItem {
             objectName: "captureIssueMenuItem"
             text: qsTr("记录当前问题")
+            shortcutText: ShortcutCatalog.captureIssue
             onTriggered: control.issueLogCaptureRequested()
         }
         VcsMenuItem {
@@ -155,7 +157,7 @@ VcsMenuBar {
         VcsMenuItem {
             objectName: "closeCurrentMenuItem"
             text: control.workspaceMode === 1 ? qsTr("关闭图片工具") : qsTr("关闭视频")
-            shortcutText: "Ctrl+W"
+            shortcutText: ShortcutCatalog.closeCurrentTask
             enabled: control.workspaceMode === 1 ? control.imageHasSession : control.videoHasSession
             onTriggered: {
                 control.closeCurrentRequested();
@@ -165,7 +167,7 @@ VcsMenuBar {
         VcsMenuSeparator {}
         VcsMenuItem {
             text: qsTr("退出")
-            shortcutText: "Alt+F4"
+            shortcutText: ShortcutCatalog.quit
             onTriggered: {
                 control.destructiveActionRequested("exit");
                 control.returnViewerFocusAfterClose = true;

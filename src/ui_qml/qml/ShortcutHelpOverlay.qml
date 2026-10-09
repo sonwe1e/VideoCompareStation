@@ -13,19 +13,21 @@ Popup {
 
     // Keyboard rows for the video presets are generated from ReviewShortcuts' own binding
     // table (helpKeys/helpLabel declared next to each Shortcut), so the help cannot drift
-    // from the bindings. Mouse verbs and the Main-owned M capture stay static tails.
+    // from the bindings. workspaceEntries carries the Main-owned global actions the same
+    // way; only the mouse verbs stay static tails.
     property var mediaEntries: []
+    property var workspaceEntries: []
 
     // The shortcut table is built on first open rather than at startup: modal help is opened
     // rarely, and its label tree is part of the instantiation bill otherwise. contentReady
     // keeps the table resident afterwards so repeated opens are immediate.
     property bool contentReady: false
 
-    readonly property var staticVideoTails: [[qsTr("M"), qsTr("记录当前问题，可填备注")], [qsTr("Shift+拖动"), qsTr("框选局部并放大")], [qsTr("Alt+拖动"), qsTr("框选 ROI 区域对比")], [qsTr("双击"), qsTr("切换 100% 真实尺寸 / 适应窗口")], [qsTr("滚轮"), qsTr("以光标位置为中心缩放")], [qsTr("右键"), qsTr("查看器命令")]]
+    readonly property var staticVideoTails: [[qsTr("Shift+拖动"), qsTr("框选局部并放大")], [qsTr("Alt+拖动"), qsTr("框选 ROI 区域对比")], [qsTr("双击"), qsTr("切换 100% 真实尺寸 / 适应窗口")], [qsTr("滚轮"), qsTr("以光标位置为中心缩放")], [qsTr("右键"), qsTr("查看器命令")]]
 
     readonly property var shortcutModel: {
         if (control.imagePreset) {
-            return [[qsTr("A"), qsTr("切换 Alpha 灰度通道独立显示")], [qsTr("O"), qsTr("切换 RGB 忽略透明度模式")], [qsTr("空格 / T"), qsTr("手动闪烁模式切换 A / B")], [qsTr("点击画面"), qsTr("手动闪烁模式切换 A / B")], [qsTr("← / →"), qsTr("上一对 / 下一对图片")], [qsTr("Home / End"), qsTr("第一对 / 最后一对图片")], [qsTr("对调 A/B"), qsTr("交换两侧槽位方向（不改变配对身份）")], [qsTr("换图…"), qsTr("只替换 A 或只替换 B，另一侧保持不变")], [qsTr("Shift+拖动"), qsTr("框选局部并同步放大 A/B")], [qsTr("双击"), qsTr("切换 100% 真实尺寸 / 适应窗口")], [qsTr("滚轮"), qsTr("以光标位置为中心缩放")], [qsTr("拖动 / 中键"), qsTr("平移视口画布")], [qsTr("M"), qsTr("记录当前问题，可填备注")], [qsTr("Tab"), qsTr("隐藏界面")], [qsTr("?"), qsTr("本帮助")]];
+            return [[qsTr("A"), qsTr("切换 Alpha 灰度通道独立显示")], [qsTr("O"), qsTr("切换 RGB 忽略透明度模式")], [qsTr("空格 / T"), qsTr("手动闪烁模式切换 A / B")], [qsTr("点击画面"), qsTr("手动闪烁模式切换 A / B")], [qsTr("← / →"), qsTr("上一对 / 下一对图片")], [qsTr("Home / End"), qsTr("第一对 / 最后一对图片")], [qsTr("对调 A/B"), qsTr("交换两侧槽位方向（不改变配对身份）")], [qsTr("换图…"), qsTr("只替换 A 或只替换 B，另一侧保持不变")], [qsTr("Shift+拖动"), qsTr("框选局部并同步放大 A/B")], [qsTr("双击"), qsTr("切换 100% 真实尺寸 / 适应窗口")], [qsTr("滚轮"), qsTr("以光标位置为中心缩放")], [qsTr("拖动 / 中键"), qsTr("平移视口画布")], [qsTr("Tab"), qsTr("隐藏界面")], [qsTr("?"), qsTr("本帮助")]].concat(control.workspaceEntries);
         }
         // mediaEntries rows are [keycaps, label, playerLabel, presetMask]: -1 shows in both
         // video presets, 1 in the player preset only; playerLabel retells rows whose meaning
@@ -37,7 +39,7 @@ Popup {
                 continue;
             rows.push([entry[0], control.playerPreset ? entry[2] : entry[1]]);
         }
-        return rows.concat(control.staticVideoTails);
+        return rows.concat(control.workspaceEntries).concat(control.staticVideoTails);
     }
 
     objectName: "shortcutHelpOverlay"
