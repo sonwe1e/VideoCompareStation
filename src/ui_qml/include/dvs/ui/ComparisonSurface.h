@@ -41,6 +41,12 @@ class ComparisonSurface : public QQuickItem {
     // distortion. The explicit modes override the automatic switch for user preference.
     Q_PROPERTY(VideoFilterMode videoFilterMode READ videoFilterMode WRITE setVideoFilterMode NOTIFY
                    videoFilterModeChanged)
+    // Physical pixels per source pixel of the first displayed panel, in percent - the same
+    // number the viewport badge shows (content, DPR and ROI aware). Auto keys off this, not
+    // the fit-relative viewScale, so a small clip fit to the window (physically magnified)
+    // samples nearest while a large clip zoomed to physical 1:1 stays smooth.
+    Q_PROPERTY(qreal physicalScalePercent READ physicalScalePercent WRITE setPhysicalScalePercent
+                   NOTIFY physicalScalePercentChanged)
     Q_PROPERTY(
         qreal wipePosition READ wipePosition WRITE setWipePosition NOTIFY wipePositionChanged)
     Q_PROPERTY(qreal wipeSplitLogicalX READ wipeSplitLogicalX NOTIFY presentationGeometryChanged)
@@ -165,6 +171,8 @@ public:
     void setDifferenceFilter(DifferenceFilter value);
     [[nodiscard]] VideoFilterMode videoFilterMode() const noexcept;
     void setVideoFilterMode(VideoFilterMode value);
+    [[nodiscard]] qreal physicalScalePercent() const noexcept;
+    void setPhysicalScalePercent(qreal value);
     // Effective slot filter for the current zoom: what the renderer actually samples with.
     [[nodiscard]] DifferenceFilter effectiveVideoFilter() const noexcept;
     [[nodiscard]] qreal wipePosition() const noexcept;
@@ -233,6 +241,7 @@ signals:
     void differenceEdgeChanged();
     void differenceFilterChanged();
     void videoFilterModeChanged();
+    void physicalScalePercentChanged();
     void wipePositionChanged();
     void presentationGeometryChanged();
     void exactPlaneAvailableChanged();
@@ -262,6 +271,8 @@ private:
     DifferenceEdge differenceEdge_ = Edge0And1;
     DifferenceFilter differenceFilter_ = Bilinear;
     VideoFilterMode videoFilterMode_ = VideoFilterAuto;
+    // Fed from the viewport badge's effectivePercent; 0 means "not measurable yet".
+    qreal physicalScalePercent_ = 0.0;
     qreal wipePosition_ = 0.5;
     QVariantList sourceDisplayInfo_;
     bool exactPlaneAvailable_ = false;

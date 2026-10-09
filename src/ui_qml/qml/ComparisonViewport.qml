@@ -205,6 +205,9 @@ Rectangle {
         ComparisonSurface {
             id: dualVideoSurface
 
+            // Auto sampling keys off the badge's physical percent so the readout, the 100% action
+            // and the sampler can never disagree.
+            physicalScalePercent: pixelScaleBadge.effectivePercent
             objectName: "dualVideoSurface"
             Accessible.name: qsTr("CompareStation 同步对比画面")
             viewMode: control.effectiveViewMode

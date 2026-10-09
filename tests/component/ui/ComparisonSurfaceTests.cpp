@@ -947,24 +947,51 @@ TEST(ComparisonSurfacePropertyTests, ExposesTypedDifferenceDefaultsAndNotifiesOn
 }
 
 // The video-slot filter is what makes high magnification trustworthy: bilinear above 200%
-// averages neighbouring texels and hides block artifacts, so Auto flips to nearest there.
-// The explicit Smooth/Pixel modes override the automatic switch, and every change notifies.
-TEST(ComparisonSurfacePropertyTests, VideoFilterModeDefaultsToAutoAndSwitchesAtTwiceZoom) {
+// physical magnification averages neighbouring texels and hides block artifacts, so Auto flips
+// to nearest there. Auto keys off the physical percent (the badge's own measure), never the
+// fit-relative viewScale. The explicit Smooth/Pixel modes override, and changes notify.
+TEST(ComparisonSurfacePropertyTests, VideoFilterAutoSwitchesAtTwicePhysicalPixels) {
     ComparisonSurface surface;
 
     EXPECT_EQ(surface.videoFilterMode(), ComparisonSurface::VideoFilterAuto);
-    // Fit zoom (1.0) samples smoothly; the zoomed-in case must not.
+    EXPECT_DOUBLE_EQ(surface.physicalScalePercent(), 0.0);
+    // No measurable geometry yet: nothing is magnified, keep smoothing.
     EXPECT_EQ(surface.effectiveVideoFilter(), ComparisonSurface::Bilinear);
-    surface.zoomAt(0.5, 0.5, 2.5);
-    EXPECT_NEAR(surface.viewScale(), 2.5, 0.000001);
+
+    // A small clip the window itself magnifies sits at fit zoom (viewScale 1.0) but is
+    // physically magnified well past 200% - Auto must sample nearest.
+    surface.setPhysicalScalePercent(300.0);
     EXPECT_EQ(surface.effectiveVideoFilter(), ComparisonSurface::Nearest);
+    // A large clip zoomed to physical 1:1 stays smooth even though the fit-relative zoom is
+    // far above 2x.
+    surface.setPhysicalScalePercent(100.0);
+    EXPECT_EQ(surface.effectiveVideoFilter(), ComparisonSurface::Bilinear);
     // The threshold itself: exactly 200% already shows individual texels.
-    surface.zoomAt(0.5, 0.5, 2.0 / 2.5);
-    EXPECT_NEAR(surface.viewScale(), 2.0, 0.000001);
+    surface.setPhysicalScalePercent(200.0);
     EXPECT_EQ(surface.effectiveVideoFilter(), ComparisonSurface::Nearest);
-    surface.zoomAt(0.5, 0.5, 0.5);
-    EXPECT_NEAR(surface.viewScale(), 1.0, 0.000001);
+    surface.setPhysicalScalePercent(199.9);
     EXPECT_EQ(surface.effectiveVideoFilter(), ComparisonSurface::Bilinear);
+    // viewScale alone no longer drives the decision.
+    surface.zoomAt(0.5, 0.5, 4.0);
+    EXPECT_NEAR(surface.viewScale(), 4.0, 0.000001);
+    EXPECT_EQ(surface.effectiveVideoFilter(), ComparisonSurface::Bilinear);
+
+    int percentChanges = 0;
+    QObject::connect(
+        &surface, &ComparisonSurface::physicalScalePercentChanged, [&] { ++percentChanges; });
+    surface.setPhysicalScalePercent(250.0);
+    EXPECT_EQ(percentChanges, 1);
+    EXPECT_EQ(surface.effectiveVideoFilter(), ComparisonSurface::Nearest);
+    // Same-value writes do not notify.
+    surface.setPhysicalScalePercent(250.0);
+    EXPECT_EQ(percentChanges, 1);
+    // Non-finite or negative input reads back as 0 (not measurable), never garbage. The
+    // NaN write changes 250 -> 0; the negative write is a 0 -> 0 no-op.
+    surface.setPhysicalScalePercent(std::numeric_limits<qreal>::quiet_NaN());
+    EXPECT_DOUBLE_EQ(surface.physicalScalePercent(), 0.0);
+    surface.setPhysicalScalePercent(-5.0);
+    EXPECT_DOUBLE_EQ(surface.physicalScalePercent(), 0.0);
+    EXPECT_EQ(percentChanges, 2);
 
     int modeChanges = 0;
     QObject::connect(&surface, &ComparisonSurface::videoFilterModeChanged, [&] { ++modeChanges; });
@@ -972,11 +999,10 @@ TEST(ComparisonSurfacePropertyTests, VideoFilterModeDefaultsToAutoAndSwitchesAtT
     surface.setVideoFilterMode(ComparisonSurface::VideoFilterPixel);
     EXPECT_EQ(surface.videoFilterMode(), ComparisonSurface::VideoFilterPixel);
     EXPECT_EQ(surface.effectiveVideoFilter(), ComparisonSurface::Nearest);
-    // Pinned smooth keeps bilinear even at high zoom.
+    // Pinned smooth keeps bilinear even at high physical magnification.
     surface.setVideoFilterMode(ComparisonSurface::VideoFilterSmooth);
     EXPECT_EQ(surface.effectiveVideoFilter(), ComparisonSurface::Bilinear);
-    surface.zoomAt(0.5, 0.5, 4.0);
-    EXPECT_NEAR(surface.viewScale(), 4.0, 0.000001);
+    surface.setPhysicalScalePercent(400.0);
     EXPECT_EQ(surface.effectiveVideoFilter(), ComparisonSurface::Bilinear);
     EXPECT_EQ(modeChanges, 2);
 
@@ -985,7 +1011,7 @@ TEST(ComparisonSurfacePropertyTests, VideoFilterModeDefaultsToAutoAndSwitchesAtT
     surface.setVideoFilterMode(static_cast<ComparisonSurface::VideoFilterMode>(99));
     EXPECT_EQ(modeChanges, 2);
 
-    // Back to Auto: the zoom decides again.
+    // Back to Auto: the physical percent decides again.
     surface.setVideoFilterMode(ComparisonSurface::VideoFilterAuto);
     EXPECT_EQ(modeChanges, 3);
     EXPECT_EQ(surface.effectiveVideoFilter(), ComparisonSurface::Nearest);

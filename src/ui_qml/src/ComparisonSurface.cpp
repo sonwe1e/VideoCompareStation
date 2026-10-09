@@ -42,6 +42,10 @@ public:
 
 namespace {
 
+// Auto sampling switches to nearest at 200% physical magnification (1009 plan P0-1): below it
+// nearest only aliases, above it bilinear averages away what is being reviewed.
+constexpr qreal kAutoNearestThresholdPercent = 200.0;
+
 struct PresentationOptions final {
     platform::SurfaceViewMode viewMode = platform::SurfaceViewMode::SideBySide;
     platform::SurfaceDifferenceMetric differenceMetric =
@@ -571,6 +575,21 @@ void ComparisonSurface::setVideoFilterMode(const VideoFilterMode value) {
     update();
 }
 
+qreal ComparisonSurface::physicalScalePercent() const noexcept {
+    return physicalScalePercent_;
+}
+
+void ComparisonSurface::setPhysicalScalePercent(const qreal value) {
+    const qreal clamped = std::isfinite(value) && value > 0.0 ? value : 0.0;
+    if (qFuzzyCompare(clamped, physicalScalePercent_) ||
+        (clamped == 0.0 && physicalScalePercent_ == 0.0)) {
+        return;
+    }
+    physicalScalePercent_ = clamped;
+    emit physicalScalePercentChanged();
+    update();
+}
+
 ComparisonSurface::DifferenceFilter ComparisonSurface::effectiveVideoFilter() const noexcept {
     if (videoFilterMode_ == VideoFilterSmooth) {
         return Bilinear;
@@ -578,10 +597,13 @@ ComparisonSurface::DifferenceFilter ComparisonSurface::effectiveVideoFilter() co
     if (videoFilterMode_ == VideoFilterPixel) {
         return Nearest;
     }
-    // Auto: switch to nearest once the user can see individual pixels (>= 200% zoom).
-    // Below that threshold nearest only aliases; above it bilinear hides what is being
-    // reviewed. The threshold matches the guidance in docs/plans/1009_full_plan.md (P0-1).
-    return viewScale_ >= 2.0 ? Nearest : Bilinear;
+    // Auto: nearest once the displayed image is physically magnified to >= 200% - the same
+    // effectivePercent the viewport badge reports (content, DPR and ROI aware). The earlier
+    // viewScale_ >= 2.0 check measured zoom relative to fit, so a small clip scaled up by the
+    // window stayed bilinear while a 1080p clip zoomed to physical 1:1 flipped to nearest.
+    // Below the threshold nearest only aliases; above it bilinear hides what is being
+    // reviewed (1009 plan P0-1).
+    return physicalScalePercent_ >= kAutoNearestThresholdPercent ? Nearest : Bilinear;
 }
 
 qreal ComparisonSurface::wipePosition() const noexcept {

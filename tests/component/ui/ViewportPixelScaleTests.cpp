@@ -618,5 +618,28 @@ TEST_F(ViewportPixelScaleTests, ViewCommandFunctionsToggleNativeFitAndReset) {
     EXPECT_NEAR(percent(), fitPercent, 0.001);
 }
 
+// Auto sampling follows the badge's physical percent through the live binding: a clip the
+// window itself magnifies at fit zoom samples nearest, and a clip the window downscales
+// samples smoothly regardless of the fit-relative zoom (the 1009 P0-1 review counterexample).
+TEST_F(ViewportPixelScaleTests, AutoSamplingFollowsTheBadgesPhysicalPercent) {
+    setSources({source(320, 180)});
+    EXPECT_DOUBLE_EQ(surface_->viewScale(), 1.0);
+    EXPECT_GE(percent(), 200.0);
+    EXPECT_DOUBLE_EQ(surface_->physicalScalePercent(), percent());
+    EXPECT_EQ(surface_->effectiveVideoFilter(), ComparisonSurface::Nearest);
+
+    setSources({source(3840, 2160)});
+    EXPECT_LT(percent(), 200.0);
+    EXPECT_DOUBLE_EQ(surface_->physicalScalePercent(), percent());
+    EXPECT_EQ(surface_->effectiveVideoFilter(), ComparisonSurface::Bilinear);
+
+    // Zooming the large clip to physical >= 200% flips Auto to nearest without any mode
+    // change - the same number the badge shows decides the sampler.
+    surface_->zoomAt(0.5, 0.5, 10.0);
+    EXPECT_GE(percent(), 200.0);
+    EXPECT_DOUBLE_EQ(surface_->physicalScalePercent(), percent());
+    EXPECT_EQ(surface_->effectiveVideoFilter(), ComparisonSurface::Nearest);
+}
+
 } // namespace
 } // namespace dvs::ui
