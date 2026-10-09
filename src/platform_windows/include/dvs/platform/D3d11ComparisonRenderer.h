@@ -254,6 +254,34 @@ enum class ComparisonRenderResult {
     Closed,
 };
 
+// One fulfilled source-pixel probe: raw plane code values for the pixel whose top-left corner
+// contains the requested normalized source coordinate, resolved against the frame set the
+// renderer is holding (mailbox front, else the retained front pair). `available` is false with
+// a reason when nothing honest can be reported; the frame identity lets callers discard
+// results that outlived a seek or a source switch.
+struct SourcePixelProbe final {
+    enum class Reason {
+        None,
+        NoFrame,
+        MissingSlot,
+        OutOfRange,
+        DeviceBusy,
+    };
+
+    bool available = false;
+    std::uint8_t slot = 0U;
+    std::uint32_t x = 0U;
+    std::uint32_t y = 0U;
+    std::uint32_t luma = 0U;
+    std::uint32_t cb = 0U;
+    std::uint32_t cr = 0U;
+    std::uint32_t bitDepth = 0U;
+    std::uint64_t frameId = 0U;
+    std::uint64_t sessionEpoch = 0U;
+    std::uint64_t playbackGeneration = 0U;
+    Reason reason = Reason::None;
+};
+
 // Render-thread-only D3D11 compositor. It borrows the current Qt render pass: render() never
 // changes render targets or viewports and never begins an external-command section. The renderer
 // receives a GpuFrameSet; side-by-side view draws the first two slots' textures left/right, and
@@ -272,6 +300,11 @@ public:
     D3d11ComparisonRenderer& operator=(D3d11ComparisonRenderer&&) = delete;
 
     [[nodiscard]] ComparisonRenderResult render(const SurfaceRenderState& state) noexcept;
+    // Render-thread only, like render(): resolves the slot against the set the renderer is
+    // holding and reads one texel per plane through the 1x1 staging probe. A bounded sync of a
+    // one-texel copy; DeviceBusy means the caller should retry on a later frame.
+    [[nodiscard]] SourcePixelProbe
+    probeSourcePixel(std::uint8_t slot, double normalizedX, double normalizedY) noexcept;
     void releaseResources() noexcept;
 
 private:

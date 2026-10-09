@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <utility>
 
 namespace dvs::ui {
@@ -45,6 +46,41 @@ namespace {
 // Auto sampling switches to nearest at 200% physical magnification (1009 plan P0-1): below it
 // nearest only aliases, above it bilinear averages away what is being reviewed.
 constexpr qreal kAutoNearestThresholdPercent = 200.0;
+
+[[nodiscard]] QVariantMap probeResultToMap(const platform::SourcePixelProbe& probe) {
+    using Reason = platform::SourcePixelProbe::Reason;
+    const char* reason = "none";
+    switch (probe.reason) {
+    case Reason::None:
+        break;
+    case Reason::NoFrame:
+        reason = "no-frame";
+        break;
+    case Reason::MissingSlot:
+        reason = "missing-slot";
+        break;
+    case Reason::OutOfRange:
+        reason = "out-of-range";
+        break;
+    case Reason::DeviceBusy:
+        reason = "device-busy";
+        break;
+    }
+    return QVariantMap{
+        {QStringLiteral("valid"), probe.available},
+        {QStringLiteral("slot"), probe.slot},
+        {QStringLiteral("x"), probe.x},
+        {QStringLiteral("y"), probe.y},
+        {QStringLiteral("luma"), probe.luma},
+        {QStringLiteral("cb"), probe.cb},
+        {QStringLiteral("cr"), probe.cr},
+        {QStringLiteral("bitDepth"), probe.bitDepth},
+        {QStringLiteral("frameId"), static_cast<qulonglong>(probe.frameId)},
+        {QStringLiteral("sessionEpoch"), static_cast<qulonglong>(probe.sessionEpoch)},
+        {QStringLiteral("playbackGeneration"), static_cast<qulonglong>(probe.playbackGeneration)},
+        {QStringLiteral("reason"), QString::fromLatin1(reason)},
+    };
+}
 
 struct PresentationOptions final {
     platform::SurfaceViewMode viewMode = platform::SurfaceViewMode::SideBySide;
@@ -378,11 +414,13 @@ sourceOrientedPoint(const qreal displayX, const qreal displayY, const int rotati
 class ComparisonRenderNode final : public QSGRenderNode {
 public:
     ComparisonRenderNode(QQuickWindow& window,
+                         ComparisonSurface& surface,
                          const std::shared_ptr<const ComparisonSurface::Services>& services)
-        : window_(window), services_(services), renderer_(services_->deviceBroker,
-                                                          services_->frameMailbox,
-                                                          services_->acknowledgementMailbox,
-                                                          services_->activitySink) {}
+        : window_(window), surface_(surface), services_(services),
+          renderer_(services_->deviceBroker,
+                    services_->frameMailbox,
+                    services_->acknowledgementMailbox,
+                    services_->activitySink) {}
 
     void synchronize(const QRectF& bounds,
                      const qreal devicePixelRatio,
@@ -390,6 +428,14 @@ public:
         bounds_ = bounds;
         devicePixelRatio_ = devicePixelRatio;
         presentationOptions_ = options;
+    }
+
+    // Scene-graph sync phase (GUI thread): stage one probe request; a newer request replaces
+    // an unfulfilled older one.
+    void stagePixelProbe(const int slot, const qreal normalizedX, const qreal normalizedY) {
+        probeSlot_ = static_cast<std::uint8_t>(slot);
+        probeX_ = normalizedX;
+        probeY_ = normalizedY;
     }
 
     [[nodiscard]] bool usesServices(
@@ -449,6 +495,30 @@ public:
             .referenceSlot = presentationOptions_.referenceSlot,
         };
         retry_.retryContendedRender(window_, renderer_.render(state));
+        fulfillPendingPixelProbe();
+    }
+
+    // Render thread. DeviceBusy keeps the request staged for the next frame; every other
+    // outcome is final and is delivered through a queued invocation on the surface. The
+    // scene-graph sync barrier guarantees the surface outlives render(), and a queued event
+    // posted to an object destroyed before delivery is discarded by Qt, so no Qt state is
+    // touched on the render thread.
+    void fulfillPendingPixelProbe() {
+        if (!probeSlot_.has_value()) {
+            return;
+        }
+        const platform::SourcePixelProbe probed =
+            renderer_.probeSourcePixel(*probeSlot_, probeX_, probeY_);
+        if (probed.reason == platform::SourcePixelProbe::Reason::DeviceBusy) {
+            return;
+        }
+        probeSlot_.reset();
+        const QVariantMap payload = probeResultToMap(probed);
+        ComparisonSurface* const surface = &surface_;
+        QMetaObject::invokeMethod(
+            surface,
+            [surface, payload]() { emit surface->sourcePixelProbed(payload); },
+            Qt::QueuedConnection);
     }
 
     void releaseResources() override {
@@ -469,12 +539,16 @@ public:
 
 private:
     QQuickWindow& window_;
+    ComparisonSurface& surface_;
     std::shared_ptr<const ComparisonSurface::Services> services_;
     platform::D3d11ComparisonRenderer renderer_;
     detail::RenderRetry retry_;
     QRectF bounds_;
     qreal devicePixelRatio_ = 1.0;
     PresentationOptions presentationOptions_;
+    std::optional<std::uint8_t> probeSlot_;
+    qreal probeX_ = 0.0;
+    qreal probeY_ = 0.0;
 };
 
 ComparisonSurface::ComparisonSurface(QQuickItem* const parent) : QQuickItem(parent) {
@@ -670,6 +744,29 @@ qreal ComparisonSurface::wipePositionForLogicalX(const qreal x) const {
         return 0.5;
     }
     return std::clamp(x / width(), 0.0, 1.0);
+}
+
+void ComparisonSurface::requestSourcePixelProbe(const int slot,
+                                                const qreal normalizedX,
+                                                const qreal normalizedY) {
+    if (slot < 0 || slot > 2 || !std::isfinite(normalizedX) || !std::isfinite(normalizedY)) {
+        return;
+    }
+    // Keep the request strictly inside [0,1) so the renderer's edge guard maps it to the last
+    // pixel instead of rejecting a cursor sitting on the right/bottom border.
+    const qreal upperLimit = 1.0 - std::numeric_limits<qreal>::epsilon();
+    pendingPixelProbe_ = PendingPixelProbe{
+        .active = true,
+        .slot = slot,
+        .normalizedX = std::clamp(normalizedX, 0.0, upperLimit),
+        .normalizedY = std::clamp(normalizedY, 0.0, upperLimit),
+    };
+    update();
+    // An idle window parks its render loop; the explicit request guarantees a scene-graph
+    // frame runs the staged probe instead of waiting for some other dirty item.
+    if (QQuickWindow* const itemWindow = window()) {
+        itemWindow->requestUpdate();
+    }
 }
 
 QVariantMap ComparisonSurface::mapSurfacePoint(const qreal x, const qreal y) const {
@@ -1183,11 +1280,17 @@ QSGNode* ComparisonSurface::updatePaintNode(QSGNode* const oldNode, UpdatePaintN
         node = nullptr;
     }
     if (node == nullptr) {
-        node = new ComparisonRenderNode{*itemWindow, services_};
+        node = new ComparisonRenderNode{*itemWindow, *this, services_};
     }
 
     node->synchronize(
         boundingRect(), itemWindow->effectiveDevicePixelRatio(), presentationOptions(*this));
+    if (pendingPixelProbe_.active) {
+        pendingPixelProbe_.active = false;
+        node->stagePixelProbe(pendingPixelProbe_.slot,
+                              pendingPixelProbe_.normalizedX,
+                              pendingPixelProbe_.normalizedY);
+    }
     return node;
 }
 

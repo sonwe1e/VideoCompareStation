@@ -1121,6 +1121,83 @@ public:
         return acknowledge(publication, *publication.set);
     }
 
+    [[nodiscard]] SourcePixelProbe probeSourcePixel(const std::uint8_t slot,
+                                                    const double normalizedX,
+                                                    const double normalizedY) noexcept {
+        SourcePixelProbe result;
+        result.slot = slot;
+        if (!std::isfinite(normalizedX) || !std::isfinite(normalizedY) || normalizedX < 0.0 ||
+            normalizedX >= 1.0 || normalizedY < 0.0 || normalizedY >= 1.0) {
+            result.reason = SourcePixelProbe::Reason::OutOfRange;
+            return result;
+        }
+        const GraphicsDeviceLeaseResult leaseResult = deviceBroker_->tryLease();
+        if (leaseResult.status != GraphicsDeviceLeaseStatus::Available ||
+            !leaseResult.lease.has_value()) {
+            result.reason = SourcePixelProbe::Reason::DeviceBusy;
+            return result;
+        }
+        const GraphicsDeviceLease& lease = *leaseResult.lease;
+
+        // Resolve the set exactly as render() prioritizes it: the mailbox front publication,
+        // else the retained front pair (still what is on screen after a mailbox clear).
+        std::shared_ptr<const GpuFrameSet> set;
+        const FrameMailboxReadResult read = frameMailbox_->tryLatest(lease.deviceGeneration);
+        if (read.status == FrameMailboxReadStatus::Available && read.publication.has_value() &&
+            read.publication->set != nullptr) {
+            set = read.publication->set;
+        }
+        if (set == nullptr && frontPublication_.has_value()) {
+            set = frontPublication_->set;
+        }
+        if (set == nullptr) {
+            result.reason = SourcePixelProbe::Reason::NoFrame;
+            return result;
+        }
+        const GpuFrameSlot* const slotEntry = set->find(domain::SourceId{slot});
+        if (slotEntry == nullptr || slotEntry->frame == nullptr) {
+            result.reason = SourcePixelProbe::Reason::MissingSlot;
+            return result;
+        }
+        const auto* const backing =
+            dynamic_cast<const D3d11GpuFrameBacking*>(&slotEntry->frame->backing());
+        if (backing == nullptr || backing->yTexture() == nullptr ||
+            backing->uvTexture() == nullptr) {
+            result.reason = SourcePixelProbe::Reason::OutOfRange;
+            return result;
+        }
+        const D3d11PlaneDimensions& dimensions = backing->yDimensions();
+        if (dimensions.width == 0U || dimensions.height == 0U) {
+            result.reason = SourcePixelProbe::Reason::OutOfRange;
+            return result;
+        }
+        const auto pixelX = static_cast<std::uint32_t>(
+            std::clamp(std::floor(normalizedX * static_cast<double>(dimensions.width)),
+                       0.0,
+                       static_cast<double>(dimensions.width - 1U)));
+        const auto pixelY = static_cast<std::uint32_t>(
+            std::clamp(std::floor(normalizedY * static_cast<double>(dimensions.height)),
+                       0.0,
+                       static_cast<double>(dimensions.height - 1U)));
+        const std::optional<D3d11SourcePixel> probed =
+            backing->probePixel(lease.device.Get(), lease.immediateContext.Get(), pixelX, pixelY);
+        if (!probed.has_value()) {
+            result.reason = SourcePixelProbe::Reason::OutOfRange;
+            return result;
+        }
+        result.x = pixelX;
+        result.y = pixelY;
+        result.luma = probed->y;
+        result.cb = probed->cb;
+        result.cr = probed->cr;
+        result.bitDepth = probed->bitDepth;
+        result.frameId = set->frameId().value();
+        result.sessionEpoch = set->context().playback.request.sessionEpoch.value();
+        result.playbackGeneration = set->context().playback.playbackGeneration.value();
+        result.available = true;
+        return result;
+    }
+
     void releaseResources() noexcept {
         // Drop the front publication before the device objects so its deferred-retirement
         // deleters can observe a still-valid broker/device generation during teardown.
@@ -1929,6 +2006,12 @@ D3d11ComparisonRenderer::~D3d11ComparisonRenderer() = default;
 
 ComparisonRenderResult D3d11ComparisonRenderer::render(const SurfaceRenderState& state) noexcept {
     return impl_->render(state);
+}
+
+SourcePixelProbe D3d11ComparisonRenderer::probeSourcePixel(const std::uint8_t slot,
+                                                           const double normalizedX,
+                                                           const double normalizedY) noexcept {
+    return impl_->probeSourcePixel(slot, normalizedX, normalizedY);
 }
 
 void D3d11ComparisonRenderer::releaseResources() noexcept {

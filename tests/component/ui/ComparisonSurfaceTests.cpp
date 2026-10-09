@@ -3231,5 +3231,88 @@ TEST(ComparisonSurfaceWarpTests, AcknowledgesOnlyTheLatestReplacementAndRetriesA
     EXPECT_TRUE(actor.shutdown(2s));
 }
 
+// The surface probe pipeline end to end: a request staged on the GUI thread runs against the
+// presented frame set on the render thread and the result returns on the next sync with the
+// exact uploaded code values plus the frame identity. Failures are honest (no-frame before
+// anything is presented, missing-slot for a source that has no frame) instead of invented.
+TEST(ComparisonSurfaceWarpTests, SourcePixelProbeRoundTripsExactCodeValues) {
+    SurfaceWarpHarness harness;
+    ASSERT_TRUE(harness.start());
+
+    std::vector<QVariantMap> probed;
+    QObject::connect(&harness.surface,
+                     &ComparisonSurface::sourcePixelProbed,
+                     [&probed](const QVariantMap& result) { probed.push_back(result); });
+
+    // Before any publication the probe reports no-frame.
+    harness.surface.requestSourcePixelProbe(0, 0.5, 0.5);
+    ASSERT_TRUE(waitUntil([&probed] { return !probed.empty(); }, 5s));
+    QVariantMap noFrame = probed.front();
+    probed.clear();
+    EXPECT_FALSE(noFrame.value(QStringLiteral("valid")).toBool());
+    EXPECT_EQ(noFrame.value(QStringLiteral("reason")).toString(), QStringLiteral("no-frame"));
+
+    auto budget = std::make_shared<platform::FrameBudget>(16U * 1024U * 1024U);
+    platform::GpuTransferActor actor{budget, harness.broker, harness.mailbox, harness.activitySink};
+    const application::FrameRequestContext context = makeContext();
+    const domain::ColorMetadata color{
+        .matrix = domain::ColorMatrix::kBt709,
+        .range = domain::ColorRange::kLimited,
+        .matrixInferred = false,
+    };
+    std::optional<application::FrameSet> pair = makeSolidSetWithMetadata(
+        *budget, domain::FrameId{7}, 200U, 90U, 180U, color, 100U, 30U, 220U, color);
+    ASSERT_TRUE(pair.has_value());
+    ASSERT_EQ(actor.submit(context, std::move(*pair)), platform::GpuTransferSubmitResult::Accepted);
+    ASSERT_TRUE(actor.waitUntilIdle(5s));
+    static_cast<void>(harness.grab());
+
+    // Slot 0 is the 16x9 left source; (0.55, 0.45) maps to pixel (8, 4).
+    harness.surface.requestSourcePixelProbe(0, 0.55, 0.45);
+    ASSERT_TRUE(waitUntil([&probed] { return !probed.empty(); }, 5s));
+    QVariantMap slotZero = probed.front();
+    probed.clear();
+    EXPECT_TRUE(slotZero.value(QStringLiteral("valid")).toBool());
+    EXPECT_EQ(slotZero.value(QStringLiteral("slot")).toInt(), 0);
+    EXPECT_EQ(slotZero.value(QStringLiteral("x")).toInt(), 8);
+    EXPECT_EQ(slotZero.value(QStringLiteral("y")).toInt(), 4);
+    EXPECT_EQ(slotZero.value(QStringLiteral("luma")).toUInt(), 200U);
+    EXPECT_EQ(slotZero.value(QStringLiteral("cb")).toUInt(), 90U);
+    EXPECT_EQ(slotZero.value(QStringLiteral("cr")).toUInt(), 180U);
+    EXPECT_EQ(slotZero.value(QStringLiteral("bitDepth")).toUInt(), 8U);
+    EXPECT_EQ(slotZero.value(QStringLiteral("frameId")).toULongLong(), 7U);
+    EXPECT_EQ(slotZero.value(QStringLiteral("sessionEpoch")).toULongLong(), 3U);
+    EXPECT_EQ(slotZero.value(QStringLiteral("playbackGeneration")).toULongLong(), 1U);
+
+    // Slot 1 is the 12x9 right source with its own values.
+    harness.surface.requestSourcePixelProbe(1, 0.3, 0.6);
+    ASSERT_TRUE(waitUntil([&probed] { return !probed.empty(); }, 5s));
+    const QVariantMap slotOne = probed.front();
+    probed.clear();
+    EXPECT_TRUE(slotOne.value(QStringLiteral("valid")).toBool());
+    EXPECT_EQ(slotOne.value(QStringLiteral("slot")).toInt(), 1);
+    EXPECT_EQ(slotOne.value(QStringLiteral("x")).toInt(), 3);
+    EXPECT_EQ(slotOne.value(QStringLiteral("y")).toInt(), 5);
+    EXPECT_EQ(slotOne.value(QStringLiteral("luma")).toUInt(), 100U);
+    EXPECT_EQ(slotOne.value(QStringLiteral("cb")).toUInt(), 30U);
+    EXPECT_EQ(slotOne.value(QStringLiteral("cr")).toUInt(), 220U);
+
+    // A source with no frame in the set is reported, not guessed.
+    harness.surface.requestSourcePixelProbe(2, 0.5, 0.5);
+    ASSERT_TRUE(waitUntil([&probed] { return !probed.empty(); }, 5s));
+    const QVariantMap missing = probed.front();
+    probed.clear();
+    EXPECT_FALSE(missing.value(QStringLiteral("valid")).toBool());
+    EXPECT_EQ(missing.value(QStringLiteral("reason")).toString(), QStringLiteral("missing-slot"));
+
+    // Invalid slots never schedule anything.
+    harness.surface.requestSourcePixelProbe(3, 0.5, 0.5);
+    EXPECT_FALSE(waitUntil([&probed] { return !probed.empty(); }, std::chrono::milliseconds{200}));
+
+    EXPECT_TRUE(harness.mailbox->clear(context.playback));
+    harness.releaseRenderer();
+    EXPECT_TRUE(actor.shutdown(2s));
+}
+
 } // namespace
 } // namespace dvs::ui

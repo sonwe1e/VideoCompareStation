@@ -224,6 +224,11 @@ public:
                                      qreal roiBottom);
     Q_INVOKABLE qreal wipePositionForLogicalX(qreal x) const;
     Q_INVOKABLE QVariantMap mapSurfacePoint(qreal x, qreal y) const;
+    // Asks for one raw source-pixel read of the given slot at normalized source coordinates.
+    // The probe runs on the render thread against the currently presented frame set and the
+    // result arrives asynchronously on sourcePixelProbed; requests are one-shot and a new
+    // request replaces a pending one. Coordinates are clamped into [0,1).
+    Q_INVOKABLE void requestSourcePixelProbe(int slot, qreal normalizedX, qreal normalizedY);
 
     [[nodiscard]] bool
     attachRendererServices(std::shared_ptr<platform::GraphicsDeviceBroker> deviceBroker,
@@ -235,6 +240,11 @@ public:
     [[nodiscard]] bool hasRendererServices() const noexcept;
 
 signals:
+    // Delivered on the GUI thread. The map mirrors the image side's cursorPixel style:
+    // valid, slot, x, y, luma, cb, cr, bitDepth, frameId, sessionEpoch, playbackGeneration,
+    // and for failures a reason string ("no-frame", "missing-slot", "out-of-range",
+    // "device-busy") with valid=false.
+    void sourcePixelProbed(const QVariantMap& result);
     void viewModeChanged();
     void differenceMetricChanged();
     void differenceGainChanged();
@@ -291,6 +301,14 @@ private:
     int referenceSlot_ = 0;
     std::function<std::uint64_t()> droppedFrameProbe_;
     qulonglong droppedFrames_ = 0U;
+    // One-shot probe request staged for the next scene-graph sync; GUI-thread only.
+    struct PendingPixelProbe final {
+        bool active = false;
+        int slot = 0;
+        qreal normalizedX = 0.0;
+        qreal normalizedY = 0.0;
+    };
+    PendingPixelProbe pendingPixelProbe_;
 };
 
 } // namespace dvs::ui
