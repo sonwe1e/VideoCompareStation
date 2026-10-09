@@ -218,6 +218,8 @@ P1：测试与流程
 
 ### C. 视频像素读数（B 之外独立，放大镜的前置件）
 
+**状态：分片进行中。** 计划原文假设"复用 Present 后的 staging 回读"不成立——产品层此前没有任何 GPU→CPU 回读（仅测试助手有）。片 1（`79110ec`）：`D3d11GpuFrameBacking::probePixel` 1×1 staging 探针（NV12 8-bit / P010 10-bit 左对齐移位，色度取 `x>>1,y>>1` 同位样本，越界与未知格式返回 nullopt），WARP 逐通道断言 + 双变异证据。后续片：渲染器槽位解析（带会话/代际身份）→ ComparisonSurface 异步探针 API → ComparisonViewport 读数 UI（口径对齐图片侧 cursorPixel）。
+
 - 光标锚点：`ComparisonViewport.qml:372` 的 `onPositionChanged` 与 `panelPoint()` 已完成部件坐标 → 源坐标换算，缺的是把源坐标送进回读通道。
 - 回读通道已存在：D3d11GpuFrameBacking / GpuTransferActor 已有 staging / CopySubresourceRegion 路径；新增"只读 1×1"最小查询接口，禁止整帧回读进热路径。
 - 显示口径：A/B/C 同坐标的 Y'CbCr 原始码值 + 转换后 RGB，标注 8/10-bit 与 limited/full；与图片侧 `cursorPixel` 口径一致。
