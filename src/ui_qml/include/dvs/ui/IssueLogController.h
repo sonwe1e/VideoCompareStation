@@ -44,6 +44,9 @@ public:
     [[nodiscard]] QString documentPath() const noexcept;
 
     Q_INVOKABLE bool captureCurrentIssue(const QString& note);
+    // Attaches (or replaces) the note of an already-captured record: the observation is
+    // frozen at capture time and typing a note afterwards must not shift it.
+    Q_INVOKABLE bool attachNote(int index, const QString& note);
     Q_INVOKABLE bool saveDefault();
     Q_INVOKABLE bool saveIssues(const QUrl& fileUrl);
     Q_INVOKABLE bool loadDefault();

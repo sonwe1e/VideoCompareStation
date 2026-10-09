@@ -310,6 +310,22 @@ bool IssueLogController::captureCurrentIssue(const QString& note) {
     return true;
 }
 
+bool IssueLogController::attachNote(const int index, const QString& note) {
+    if (index < 0 || index >= static_cast<int>(issues_.size())) {
+        setStatus(QStringLiteral("无法附加备注"), QStringLiteral("index out of range"));
+        return false;
+    }
+    StoredIssue& issue = issues_[static_cast<std::size_t>(index)];
+    if (issue.record.note == fromQString(note)) {
+        return true;
+    }
+    issue.record.note = fromQString(note);
+    issue.summary = summarize(issue.record);
+    setStatus(QStringLiteral("已记录问题 #%1").arg(index + 1));
+    Q_EMIT issuesChanged();
+    return true;
+}
+
 bool IssueLogController::saveDefault() {
     return saveIssues(QUrl{});
 }

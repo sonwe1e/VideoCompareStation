@@ -137,6 +137,8 @@ ApplicationWindow {
     property bool differencePeekActive: false
     // Keyboard peek (backtick) can lock the raw-reference view; unlocking clears both.
     property bool differencePeekLocked: false
+    // The record frozen by the most recent M press, waiting for its note.
+    property int pendingIssueNoteIndex: -1
     property bool pendingComparisonPreservesPosition: false
     property bool pendingSidebarComparison: false
     property bool pendingNewReviewWantsThreeUp: false
@@ -1431,24 +1433,33 @@ ApplicationWindow {
     // folder choice still switches to the image workspace when no complete pair exists.
 
     function captureIssueLog() {
-        // M opens the note dialog first; the actual capture runs when it closes, so the
-        // recorded viewport is the one the user returns to, not one shifted by dialog focus.
+        // M freezes the observation the moment it is pressed: the record (frame, sources,
+        // ROI, zoom, pair) is captured now, so playback advancing while the note is typed can
+        // no longer shift what was recorded. The dialog only attaches text to that record.
+        if (!root.issueLogModel)
+            return false;
+
+        root.issueLogModel.setWorkspaceMode(root.imageWorkspaceActive ? "image" : "video");
+
+        const ok = root.issueLogModel.captureCurrentIssue("");
+
+        if (!ok)
+            return false;
+
+        root.pendingIssueNoteIndex = root.issueLogModel.count - 1;
+        root.issueLogPanelVisible = true;
         issueNoteDialog.open();
         return true;
     }
 
     function captureIssueLogWithNote(note) {
-        if (!root.issueLogModel)
+        if (!root.issueLogModel || root.pendingIssueNoteIndex < 0)
             return false;
 
-        if (root.issueLogModel) {
-            root.issueLogModel.setWorkspaceMode(root.imageWorkspaceActive ? "image" : "video");
-        }
-
-        const ok = root.issueLogModel.captureCurrentIssue(String(note));
+        const ok = root.issueLogModel.attachNote(root.pendingIssueNoteIndex, String(note));
 
         if (ok)
-            root.issueLogPanelVisible = true;
+            root.pendingIssueNoteIndex = -1;
 
         return ok;
     }

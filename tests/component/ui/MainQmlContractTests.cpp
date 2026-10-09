@@ -6874,9 +6874,10 @@ TEST(MainQmlContractTests, ViewShortcutsSwitchModesZoomAndGenerateHelp) {
     EXPECT_TRUE(descriptionFor(QStringLiteral("F11 或双击")).isEmpty());
 }
 
-// M captures an issue through the note dialog: the dialog opens first, Enter records the typed
-// note, and Escape still records - just without a note. The capture itself must carry the note
-// text into the stored record instead of the empty string the panel button used to pass.
+// M freezes the observation at the keypress: the record exists before the dialog is touched,
+// so playback advancing while the note is typed cannot shift what was recorded. Enter attaches
+// the typed note to that frozen record; Escape attaches an empty one - the note is optional,
+// never a gate.
 TEST(MainQmlContractTests, MarkKeyCapturesIssueThroughNoteDialog) {
     QTemporaryDir temporaryDirectory;
     ASSERT_TRUE(temporaryDirectory.isValid());
@@ -6907,14 +6908,16 @@ TEST(MainQmlContractTests, MarkKeyCapturesIssueThroughNoteDialog) {
     EXPECT_FALSE(noteDialog->property("visible").toBool());
     EXPECT_EQ(harness.issueLog.count(), 0);
 
-    // The panel/menu entry point now opens the same dialog instead of capturing immediately.
+    // The panel/menu entry point captures immediately and opens the dialog for the note: the
+    // record already exists (frozen) while the dialog is up.
     QVariant opened;
     ASSERT_TRUE(QMetaObject::invokeMethod(
         harness.root.get(), "captureIssueLog", Q_RETURN_ARG(QVariant, opened)));
     EXPECT_TRUE(opened.toBool());
     harness.settle();
     EXPECT_TRUE(noteDialog->property("visible").toBool());
-    EXPECT_EQ(harness.issueLog.count(), 0);
+    ASSERT_EQ(harness.issueLog.count(), 1);
+    EXPECT_TRUE(harness.issueLog.issueAt(0).value(QStringLiteral("note")).toString().isEmpty());
 
     auto* const noteField = noteDialog->findChild<QObject*>(QStringLiteral("issueNoteField"));
     ASSERT_NE(noteField, nullptr);
@@ -6927,11 +6930,13 @@ TEST(MainQmlContractTests, MarkKeyCapturesIssueThroughNoteDialog) {
     EXPECT_EQ(recorded.value(QStringLiteral("note")).toString(), QStringLiteral("块状伪影"));
     EXPECT_TRUE(harness.root->property("issueLogPanelVisible").toBool());
 
-    // Escape records without a note rather than cancelling the capture. Send a real key
-    // event so the field's Keys.onEscapePressed handler is the code under test.
+    // Escape attaches an empty note rather than cancelling the frozen capture. Send a real
+    // key event so the field's Keys.onEscapePressed handler is the code under test.
     ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(), "captureIssueLog"));
     harness.settle();
     EXPECT_TRUE(noteDialog->property("visible").toBool());
+    // The second record is frozen the moment M runs again, before Escape is even sent.
+    ASSERT_EQ(harness.issueLog.count(), 2);
     sendKeyToFocus(noteField, QEvent::KeyPress, Qt::Key_Escape);
     sendKeyToFocus(noteField, QEvent::KeyRelease, Qt::Key_Escape);
     harness.settle();

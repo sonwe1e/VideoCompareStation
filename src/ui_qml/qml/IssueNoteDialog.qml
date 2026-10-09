@@ -4,9 +4,10 @@ import QtQuick
 import QtQuick.Controls
 import "VcsTheme.js" as Theme
 
-// Popup shell for the M-key issue capture: Enter saves with the typed note, Escape saves with
-// an empty note (the note is optional, never a gate), and the capture happens on close either
-// way. Focus lands in the field so the user can type immediately.
+// Popup shell for the M-key issue capture: the observation is already frozen when this opens
+// (the record was captured at the keypress), so typing takes as long as it takes. Enter
+// attaches the typed note to that record, Escape attaches an empty one (the note is optional,
+// never a gate). Focus lands in the field so the user can type immediately.
 Popup {
     id: control
 

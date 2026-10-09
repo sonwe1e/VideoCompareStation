@@ -278,6 +278,56 @@ TEST_F(IssueLogControllerTests, CapturesVideoZoomAndReferenceIdentity) {
     EXPECT_EQ(reloaded.value(QStringLiteral("referenceSourceIndex")).toInt(), 1);
 }
 
+// The observation freezes at capture time: a note attached later must not re-read the live
+// snapshot. Playback advancing between the capture and the note (the reviewer typing while
+// the video runs) must not shift the recorded frame.
+TEST_F(IssueLogControllerTests, AttachNoteDoesNotShiftTheFrozenObservation) {
+    ensureCoreApplication();
+    const QString pathA = tempDir_.path() + QStringLiteral("/a.mp4");
+    const QString pathB = tempDir_.path() + QStringLiteral("/b.mp4");
+    ASSERT_TRUE(writeFile(pathA));
+    ASSERT_TRUE(writeFile(pathB));
+
+    auto backend = std::make_shared<FakeBackend>();
+    backend->currentSnapshot = makeReadySnapshot({pathA, pathB}, 0U);
+    const auto presentFrame = [&backend](const int frame) {
+        backend->currentSnapshot.displayedFrame = domain::FrameId{frame};
+        backend->currentSnapshot.presentedSources = {
+            application::PresentedSourceState{
+                .sourceId = 0U,
+                .sourceFrameId = domain::FrameId{frame},
+                .matchKind = application::FrameMatchKind::ExactIndex,
+            },
+            application::PresentedSourceState{
+                .sourceId = 1U,
+                .sourceFrameId = domain::FrameId{frame},
+                .matchKind = application::FrameMatchKind::ExactIndex,
+            },
+        };
+    };
+    presentFrame(7);
+    ReviewController review{dependenciesFor(backend)};
+    controller_->setReviewController(&review);
+    controller_->setWorkspaceMode(QStringLiteral("video"));
+    ASSERT_TRUE(controller_->captureCurrentIssue(QStringLiteral("")));
+
+    // Playback moves on while the user types the note.
+    presentFrame(19);
+    ASSERT_TRUE(controller_->attachNote(0, QStringLiteral("typed-later")));
+
+    const QVariantMap issue = controller_->issueAt(0);
+    EXPECT_EQ(issue.value(QStringLiteral("note")).toString(), QStringLiteral("typed-later"));
+    const QString file = tempDir_.path() + QStringLiteral("/frozen-issues.json");
+    ASSERT_TRUE(controller_->saveIssues(QUrl::fromLocalFile(file)));
+    const application::IssueRecordIoResult loaded = repository_->load(file.toStdString());
+    ASSERT_TRUE(loaded.ok) << loaded.error;
+    ASSERT_EQ(loaded.records.size(), 1U);
+    ASSERT_EQ(loaded.records.front().sources.size(), 2U);
+    EXPECT_EQ(loaded.records.front().sources[0].displayIndex, 7);
+    EXPECT_EQ(loaded.records.front().sources[1].displayIndex, 7);
+    EXPECT_EQ(loaded.records.front().note, "typed-later");
+}
+
 TEST_F(IssueLogControllerTests, CapturesMissingSideWithoutClaimingAFrame) {
     ensureCoreApplication();
     const QString pathA = tempDir_.path() + QStringLiteral("/a.mp4");
