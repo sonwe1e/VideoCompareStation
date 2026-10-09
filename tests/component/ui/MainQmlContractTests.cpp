@@ -6941,6 +6941,101 @@ TEST(MainQmlContractTests, MarkKeyCapturesIssueThroughNoteDialog) {
     EXPECT_TRUE(emptyNote.value(QStringLiteral("note")).toString().isEmpty());
     harness.window->close();
 }
+
+// The video issue restore is staged and identity-correct: openSources() receives the recorded
+// reference (GT) slot - not the timeline's canonical source - and a same-session restore
+// replays mode and viewport only through the staged machine, with a session whose sources no
+// longer match cancelling instead of touching the viewport.
+TEST(MainQmlContractTests, IssueRestoreUsesReferenceIdentityAndStagesViewport) {
+    QTemporaryDir temporaryDirectory;
+    ASSERT_TRUE(temporaryDirectory.isValid());
+    const QString pathA = temporaryDirectory.filePath(QStringLiteral("restore-a.mp4"));
+    const QString pathB = temporaryDirectory.filePath(QStringLiteral("restore-b.mp4"));
+    for (const QString& path : {pathA, pathB}) {
+        QFile file{path};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_GT(file.write("restore-source", 15), 0);
+    }
+
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+    auto* const surface = harness.root->findChild<QQuickItem*>(QStringLiteral("dualVideoSurface"));
+    ASSERT_NE(surface, nullptr);
+    const int initialMode = harness.preferences.viewModeCode();
+    ASSERT_NE(initialMode, ComparisonSurface::Difference);
+
+    QVariantMap payload{
+        {QStringLiteral("decision"), QStringLiteral("ready")},
+        {QStringLiteral("kind"), QStringLiteral("video")},
+        {QStringLiteral("urls"),
+         QVariantList{QUrl::fromLocalFile(pathA), QUrl::fromLocalFile(pathB)}},
+        {QStringLiteral("referenceSourceIndex"), 1},
+        {QStringLiteral("canonicalSourceIndex"), 0},
+        {QStringLiteral("viewMode"), ComparisonSurface::Difference},
+        {QStringLiteral("differenceEdge"), 0},
+        {QStringLiteral("frame"), QVariant::fromValue<qint64>(41)},
+        {QStringLiteral("roiEnabled"), false},
+        {QStringLiteral("roiLeft"), 0.0},
+        {QStringLiteral("roiTop"), 0.0},
+        {QStringLiteral("roiRight"), 1.0},
+        {QStringLiteral("roiBottom"), 1.0},
+        {QStringLiteral("centerX"), 0.35},
+        {QStringLiteral("centerY"), 0.62},
+        {QStringLiteral("zoom"), 2.5},
+    };
+
+    QVariant returned;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "applyIssueRestore",
+                                          Q_RETURN_ARG(QVariant, returned),
+                                          Q_ARG(QVariant, QVariant::fromValue(payload))));
+    EXPECT_TRUE(returned.toBool());
+    harness.settle();
+
+    // The open command must carry the recorded reference identity on slot 1, not the
+    // canonical index.
+    ASSERT_FALSE(harness.submitted.empty());
+    const auto* const open =
+        std::get_if<application::OpenComparisonCommand>(&harness.submitted.back());
+    ASSERT_NE(open, nullptr);
+    ASSERT_EQ(open->sources.size(), 2U);
+    EXPECT_EQ(open->sources[0].role, domain::ComparisonRole::kPrediction);
+    EXPECT_EQ(open->sources[1].role, domain::ComparisonRole::kReference);
+
+    // The staged open never completes against a session whose sources are not the recorded
+    // ones: after the open command settles, the machine cancels without touching the viewport.
+    harness.terminals.push_back(application::CommandTerminal{
+        .context = application::commandContext(harness.submitted.back()),
+        .outcome = application::CommandOutcome::Succeeded,
+    });
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_FALSE(harness.root->property("busy").toBool());
+    EXPECT_FALSE(harness.root->property("imageWorkspaceActive").toBool());
+    EXPECT_GT(harness.root->property("sourceCount").toInt(), 0);
+    EXPECT_EQ(harness.root->property("pendingIssueRestoreStage").toInt(), 0);
+    EXPECT_DOUBLE_EQ(surface->property("viewScale").toDouble(), 1.0);
+
+    // Same-session restore (no urls to reopen): the staged machine applies the mode and the
+    // saved zoom/pan without a seek when the recorded frame is already presented.
+    QVariantMap sameSession = payload;
+    sameSession.remove(QStringLiteral("urls"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "applyIssueRestore",
+                                          Q_RETURN_ARG(QVariant, returned),
+                                          Q_ARG(QVariant, QVariant::fromValue(sameSession))));
+    EXPECT_TRUE(returned.toBool());
+    harness.settle();
+    EXPECT_EQ(harness.root->property("pendingIssueRestoreStage").toInt(), 0);
+    EXPECT_EQ(harness.preferences.viewModeCode(), ComparisonSurface::Difference);
+    EXPECT_DOUBLE_EQ(surface->property("viewScale").toDouble(), 2.5);
+    EXPECT_DOUBLE_EQ(surface->property("viewCenterX").toDouble(), 0.35);
+    EXPECT_DOUBLE_EQ(surface->property("viewCenterY").toDouble(), 0.62);
+    harness.window->close();
+}
+
 TEST(MainQmlContractTests, VideoFolderEntryOpensModalPickerWithoutChangingWorkspace) {
     WorkspaceHarness harness;
     harness.withVideoFolder = true;

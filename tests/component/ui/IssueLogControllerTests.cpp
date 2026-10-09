@@ -224,6 +224,60 @@ TEST_F(IssueLogControllerTests, CapturesPerSideFramePtsAndMappingFromCommittedSn
     EXPECT_EQ(restore.value(QStringLiteral("frame")).toLongLong(), 7);
 }
 
+// A video capture must persist the surface's real zoom and the reference (GT) identity. The
+// zoom default of 1.0 used to collapse restoreViewport's valid centre range to exactly 0.5,
+// silently rejecting the whole viewport restore for any panned state, and the reference slot
+// was never recorded at all even though openSources() needs it to rebuild the comparison.
+TEST_F(IssueLogControllerTests, CapturesVideoZoomAndReferenceIdentity) {
+    ensureCoreApplication();
+    const QString pathA = tempDir_.path() + QStringLiteral("/a.mp4");
+    const QString pathB = tempDir_.path() + QStringLiteral("/b.mp4");
+    ASSERT_TRUE(writeFile(pathA));
+    ASSERT_TRUE(writeFile(pathB));
+
+    auto backend = std::make_shared<FakeBackend>();
+    backend->currentSnapshot = makeReadySnapshot({pathA, pathB}, 1U);
+    backend->currentSnapshot.displayedFrame = domain::FrameId{7};
+    backend->currentSnapshot.presentedSources = {
+        application::PresentedSourceState{
+            .sourceId = 0U,
+            .sourceFrameId = domain::FrameId{7},
+            .matchKind = application::FrameMatchKind::ExactIndex,
+        },
+        application::PresentedSourceState{
+            .sourceId = 1U,
+            .sourceFrameId = domain::FrameId{7},
+            .matchKind = application::FrameMatchKind::ExactIndex,
+        },
+    };
+    ReviewController review{dependenciesFor(backend)};
+    controller_->setReviewController(&review);
+    controller_->setWorkspaceMode(QStringLiteral("video"));
+
+    QObject surface;
+    surface.setProperty("viewScale", 2.5);
+    surface.setProperty("viewCenterX", 0.35);
+    surface.setProperty("viewCenterY", 0.62);
+    surface.setProperty("roiEnabled", false);
+    controller_->setVideoSurface(&surface);
+    ASSERT_TRUE(controller_->captureCurrentIssue(QStringLiteral("panned")));
+
+    const QVariantMap restore = controller_->restoreIssue(0);
+    EXPECT_EQ(restore.value(QStringLiteral("decision")).toString(), QStringLiteral("ready"));
+    EXPECT_DOUBLE_EQ(restore.value(QStringLiteral("zoom")).toDouble(), 2.5);
+    EXPECT_DOUBLE_EQ(restore.value(QStringLiteral("centerX")).toDouble(), 0.35);
+    // Reference and canonical are distinct identities; the payload must carry both.
+    EXPECT_EQ(restore.value(QStringLiteral("referenceSourceIndex")).toInt(), 1);
+
+    const QString file = tempDir_.path() + QStringLiteral("/zoom-issues.json");
+    ASSERT_TRUE(controller_->saveIssues(QUrl::fromLocalFile(file)));
+    controller_->clearIssues();
+    ASSERT_TRUE(controller_->loadIssues(QUrl::fromLocalFile(file)));
+    const QVariantMap reloaded = controller_->restoreIssue(0);
+    EXPECT_DOUBLE_EQ(reloaded.value(QStringLiteral("zoom")).toDouble(), 2.5);
+    EXPECT_EQ(reloaded.value(QStringLiteral("referenceSourceIndex")).toInt(), 1);
+}
+
 TEST_F(IssueLogControllerTests, CapturesMissingSideWithoutClaimingAFrame) {
     ensureCoreApplication();
     const QString pathA = tempDir_.path() + QStringLiteral("/a.mp4");

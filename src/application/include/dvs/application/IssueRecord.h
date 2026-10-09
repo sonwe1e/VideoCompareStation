@@ -95,6 +95,9 @@ struct IssueRecord final {
     bool hasValidPresentation = false;
     std::vector<IssueSourceRef> sources;
     std::int32_t canonicalSourceIndex = 0;
+    // Reference (GT) slot at capture time. Distinct from the canonical source, which only
+    // anchors the timeline. -1 for records written before this field existed.
+    std::int32_t referenceSourceIndex = -1;
     std::uint64_t alignmentRevision = 0U;
     IssueViewContext view;
     // Image-folder payload (kind == ImagePair).

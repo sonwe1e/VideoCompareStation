@@ -211,6 +211,9 @@ bool IssueLogController::captureVideoIssue(StoredIssue& issue, const QString& no
         }
     }
     record.canonicalSourceIndex = review_->canonicalSourceIndex();
+    // The reference (GT) slot is a separate identity from the timeline's canonical source;
+    // restore needs both to rebuild the same comparison.
+    record.referenceSourceIndex = review_->referenceSourceIndex();
     if (preferences_ != nullptr) {
         record.view.viewMode = preferences_->viewModeCode();
         // D07: record the committed effective pair edge, not the legacy preference slot.
@@ -224,6 +227,10 @@ bool IssueLogController::captureVideoIssue(StoredIssue& issue, const QString& no
         record.view.roiBottom = videoSurface_->property("roiBottom").toDouble();
         record.view.centerX = videoSurface_->property("viewCenterX").toDouble();
         record.view.centerY = videoSurface_->property("viewCenterY").toDouble();
+        // The surface's viewScale is fit-relative; restoreViewport expects the same measure,
+        // and a missing zoom used to collapse the valid centre range to exactly 0.5, silently
+        // rejecting the whole viewport restore for any panned state.
+        record.view.zoom = videoSurface_->property("viewScale").toDouble();
     }
     issue.record = std::move(record);
     issue.summary = summarize(issue.record);
@@ -450,6 +457,7 @@ QVariantMap IssueLogController::performRestore(const StoredIssue& issue) {
         }
         result.insert(QStringLiteral("urls"), urls);
         result.insert(QStringLiteral("canonicalSourceIndex"), issue.record.canonicalSourceIndex);
+        result.insert(QStringLiteral("referenceSourceIndex"), issue.record.referenceSourceIndex);
         result.insert(QStringLiteral("viewMode"), issue.record.view.viewMode);
         result.insert(QStringLiteral("differenceEdge"), issue.record.view.differenceEdge);
         result.insert(QStringLiteral("roiEnabled"), issue.record.view.roiEnabled);

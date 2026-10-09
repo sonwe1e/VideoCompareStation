@@ -140,6 +140,13 @@ ApplicationWindow {
     property bool pendingComparisonPreservesPosition: false
     property bool pendingSidebarComparison: false
     property bool pendingNewReviewWantsThreeUp: false
+    // Issue-restore state machine. An openSources() acceptance is only a request; busy stays
+    // set until the session's first frame is presented, and a viewport restore attempted
+    // before that is silently dropped by the surface. Stage 1 waits out the open, stage 2
+    // waits for the recorded frame to be presented, then replays the viewport.
+    property var pendingIssueRestore: null
+    property int pendingIssueRestoreStage: 0
+    property bool pendingIssueRestoreContextApplied: false
     property string dropError: ""
     property string intentMessage: ""
     // C1 resume: the identity currently open, and the one identity a restore has already been
@@ -1513,7 +1520,12 @@ ApplicationWindow {
             const urls = payload.urls || [];
 
             if (urls.length > 0 && root.controller) {
-                const opened = root.controller.openSources(urls, Number(payload.canonicalSourceIndex) || 0);
+                // The open command takes the reference (GT) slot, which is not the timeline's
+                // canonical source. Records written before the distinction was captured carry
+                // only the canonical index; fall back to it for them.
+                const recorded = Number(payload.referenceSourceIndex);
+                const referenceIndex = Number.isFinite(recorded) && recorded >= 0 ? recorded : (Number(payload.canonicalSourceIndex) || 0);
+                const opened = root.controller.openSources(urls, referenceIndex);
 
                 if (!opened) {
                     root.showIntentMessage(qsTr("无法按问题记录打开视频来源。"));
@@ -1526,24 +1538,13 @@ ApplicationWindow {
                 root.commitWorkspace(workspaceSession.videoMedia, urls[0].toString());
             }
 
-            if (root.preferences) {
-                if (payload.viewMode !== undefined)
-                    root.preferences.viewModeCode = Number(payload.viewMode);
-            }
-
-            // D07: restore the issue's pair as an explicit command after open, not as a
-            // preference replay on every subsequent session.
-            if (payload.differenceEdge !== undefined)
-                root.applyDifferenceEdge(Number(payload.differenceEdge));
-
-            if (payload.frame !== undefined && root.controller)
-                root.controller.seekFrame(Number(payload.frame));
-
-            // Restore the saved viewport only after the open has been committed; the surface
-            // validates the scale against live presentation geometry and silently ignores a
-            // restore attempted before the first frame is presented.
-            if (payload.roiEnabled !== undefined && viewportFrame.surface)
-                viewportFrame.surface.restoreViewport(Number(payload.centerX), Number(payload.centerY), Number(payload.zoom), Boolean(payload.roiEnabled), Number(payload.roiLeft), Number(payload.roiTop), Number(payload.roiRight), Number(payload.roiBottom));
+            // Everything else is staged: view context once the session settles, the frame
+            // once it is presented, and the viewport only then. Re-entering from
+            // controller state changes drives the machine.
+            root.pendingIssueRestore = payload;
+            root.pendingIssueRestoreStage = urls.length > 0 ? 1 : 2;
+            root.pendingIssueRestoreContextApplied = false;
+            root.continueIssueRestore();
 
             return true;
         }
@@ -1564,6 +1565,86 @@ ApplicationWindow {
             root.performImageReview([leftUrl, rightUrl]);
         }
 
+        return true;
+    }
+
+    // Staged continuation of an issue restore. Re-enters from controller state/frame changes;
+    // returns without doing anything while the wait conditions still hold, so a still-opening
+    // session simply picks the restore up on the next state change.
+    function continueIssueRestore() {
+        const payload = root.pendingIssueRestore;
+
+        if (!payload)
+            return;
+
+        if (!root.controller || root.imageWorkspaceActive) {
+            root.cancelPendingIssueRestore();
+            return;
+        }
+
+        // Stage 1: the open is still in flight while busy or before any source is visible.
+        if (root.pendingIssueRestoreStage === 1) {
+            if (root.busy || root.sourceCount === 0)
+                return;
+            const urls = payload.urls || [];
+            if (!root.matchesOpenUrls(urls)) {
+                root.cancelPendingIssueRestore();
+                return;
+            }
+            root.pendingIssueRestoreStage = 2;
+        }
+
+        // View context exactly once - this machine re-enters on every state change while the
+        // frame wait below holds, and applyDifferenceEdge is a command, not an idempotent
+        // assignment. The recorded pair goes first because applying it can carry the mode
+        // along; the recorded mode lands last so it is the one that survives (D07: an
+        // explicit command after open, not a preference replay on every later session).
+        if (!root.pendingIssueRestoreContextApplied) {
+            root.pendingIssueRestoreContextApplied = true;
+            if (payload.differenceEdge !== undefined)
+                root.applyDifferenceEdge(Number(payload.differenceEdge));
+            // The QML property is `viewMode`; assigning `viewModeCode` (the C++ accessor)
+            // silently does nothing and drops the recorded mode.
+            if (payload.viewMode !== undefined && root.preferences)
+                root.preferences.viewMode = Number(payload.viewMode);
+        }
+
+        // Stage 2: seek unless the recorded frame is already the presented one, then wait for
+        // that frame before touching the viewport.
+        const target = payload.frame !== undefined ? Number(payload.frame) : -1;
+        if (target >= 0 && root.currentFrame !== target) {
+            if (!root.controller.seekFrame(target)) {
+                // The seek was refused (for example a still-pending command): retry on the
+                // next state change instead of dropping the restore.
+                return;
+            }
+            if (root.currentFrame !== target)
+                return;
+        }
+
+        if (payload.roiEnabled !== undefined && viewportFrame.surface)
+            viewportFrame.surface.restoreViewport(Number(payload.centerX), Number(payload.centerY), Number(payload.zoom), Boolean(payload.roiEnabled), Number(payload.roiLeft), Number(payload.roiTop), Number(payload.roiRight), Number(payload.roiBottom));
+
+        root.cancelPendingIssueRestore();
+    }
+
+    function cancelPendingIssueRestore() {
+        root.pendingIssueRestore = null;
+        root.pendingIssueRestoreStage = 0;
+        root.pendingIssueRestoreContextApplied = false;
+    }
+
+    // A restore only proceeds while the session still shows the recorded sources.
+    function matchesOpenUrls(urls) {
+        if (!root.controller || urls.length === 0)
+            return false;
+        const current = root.controller.sourceUrls || [];
+        if (current.length !== urls.length)
+            return false;
+        for (let index = 0; index < urls.length; ++index) {
+            if (String(current[index]) !== String(urls[index]))
+                return false;
+        }
         return true;
     }
 
@@ -2094,11 +2175,16 @@ ApplicationWindow {
         target: root.controller
 
         function onStateChanged() {
+            root.continueIssueRestore();
             const key = root.playbackPrefsSessionKey();
             if (key.length === 0 || key === root.playbackPrefsAppliedKey)
                 return;
             root.playbackPrefsAppliedKey = key;
             root.applyPlaybackPreferencesFromSettings();
+        }
+
+        function onFrameStateChanged() {
+            root.continueIssueRestore();
         }
     }
 
@@ -2316,6 +2402,9 @@ ApplicationWindow {
                 root.showImmersiveHud(qsTr("分割线位置 %1%").arg(Math.round(position * 100)));
         }
         onManualNavigationRequested: {
+            // The user took the wheel: a restore still waiting for its frame stops here
+            // instead of fighting the navigation.
+            root.cancelPendingIssueRestore();
             root.revealOsc();
 
             if (!root.chromeVisible)

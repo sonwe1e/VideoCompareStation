@@ -112,6 +112,7 @@ bool readBoolean(const Json& value, const char* const key, bool* out) {
     };
     value["hasValidPresentation"] = record.hasValidPresentation;
     value["canonicalSourceIndex"] = record.canonicalSourceIndex;
+    value["referenceSourceIndex"] = record.referenceSourceIndex;
     value["alignmentRevision"] = record.alignmentRevision;
     value["view"] = Json{
         {"viewMode", record.view.viewMode},
@@ -167,6 +168,9 @@ bool readBoolean(const Json& value, const char* const key, bool* out) {
     }
     readBoolean(value, "hasValidPresentation", &record.hasValidPresentation);
     readInteger(value, "canonicalSourceIndex", &record.canonicalSourceIndex);
+    // Absent in records written before the field existed; the -1 default then makes restore
+    // fall back to the canonical index instead of inventing a reference slot.
+    readInteger(value, "referenceSourceIndex", &record.referenceSourceIndex);
     if (value.contains("alignmentRevision") && value["alignmentRevision"].is_number_unsigned()) {
         record.alignmentRevision = value["alignmentRevision"].get<std::uint64_t>();
     } else if (value.contains("alignmentRevision") &&
