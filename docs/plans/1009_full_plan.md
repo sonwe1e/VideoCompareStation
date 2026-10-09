@@ -17,6 +17,7 @@
 - Windows 验收清账：**已通过**（2026-10-09 用户真机走查 `main@6058d19` dev 构建，无回归；交互类悬置项已核销，多容器导出矩阵与 WARP 像素回读仍按各条目原边界，见台账当日条目）。
 - 工单 B 模式与视图快捷键：**已落地**（2026-10-09，同日提交）：数字键 1–6、F/Ctrl+0/+−/R、`` ` ``/Shift+`` ` `` 参考原图直看与锁定、双击统一 100%↔适应（全屏只留 F11）、帮助浮层从绑定表生成。偏差三条：Z 留给放大镜（计划 P1-5），避免二次改键；`` ` `` 为点按切换而非按住（Qt ApplicationShortcut 无释放事件，且 RV/Nuke 的单键翻转同为点按）；模式共 6 个故键位 1–6。
 - 评审优先级第 4 项（动作与帮助同源）：**已落地**（`10e72a7`）：ShortcutCatalog.js 单源常量供 Main 绑定、菜单文案与帮助表三方引用；M 键补上菜单文案；工作区动作进入两个 preset 的帮助表；契约测试三向交叉 + 重复绑定审计（Esc 为唯一登记过的重叠）。Ctrl+Shift+F 已被图片文件夹比较占用（评审提醒属实），后续帧时序浮层需另选键。
+- 工单 C 视频像素读数：**已落地**（2026-10-09，三片 `79110ec`/`a680623`/`7b5043b`+`2756bb3`）：GPU 1×1 探针 → 渲染器逐槽解析 → 批量异步投递 → ComparisonViewport 逐源读数面板（原码值 + 8/10-bit + Limited/Full，暂停逐帧刷新、播放中不刷新、陈旧结果按坐标丢弃）。D（放大镜）由此解锁，Z 键已在 B 中预留。
 - 行号漂移提示：week-1 改动后 Main.qml 3871→3904、PlaybackCoordinator.cpp 4735→4772、Main.cpp 3124→3132，下文旧行号需按此折算；标注"锚点已核实"的小节除外。
 
 ---
@@ -218,7 +219,12 @@ P1：测试与流程
 
 ### C. 视频像素读数（B 之外独立，放大镜的前置件）
 
-**状态：分片进行中。** 计划原文假设"复用 Present 后的 staging 回读"不成立——产品层此前没有任何 GPU→CPU 回读（仅测试助手有）。片 1（`79110ec`）：`D3d11GpuFrameBacking::probePixel` 1×1 staging 探针（NV12 8-bit / P010 10-bit 左对齐移位，色度取 `x>>1,y>>1` 同位样本，越界与未知格式返回 nullopt），WARP 逐通道断言 + 双变异证据。片 2（`a680623`）：渲染器 `probeSourcePixel`（邮箱 front/保留 front 集槽位解析 + 诚实失败原因 + frameId/会话/代际身份）→ ComparisonSurface `requestSourcePixelProbe` Q_INVOKABLE + SG 同步期暂存 + 渲染线程队列投递 `sourcePixelProbed`（发现：渲染线程的窗口更新唤不起停驻的渲染循环，投递不得依赖后续帧）。片 3（待做）：ComparisonViewport 读数 UI（光标跟踪、逐源行、8/10-bit 与 limited/full 标注），口径对齐图片侧 cursorPixel。
+**状态：已落地（2026-10-09）。** 计划原文假设"复用 Present 后的 staging 回读"不成立——产品层此前没有任何 GPU→CPU 回读（仅测试助手有）。片 1（`79110ec`）：`D3d11GpuFrameBacking::probePixel` 1×1 staging 探针（NV12 8-bit / P010 10-bit 左对齐移位，色度取 `x>>1,y>>1` 同位样本，越界与未知格式返回 nullopt），WARP 逐通道断言 + 双变异证据。片 2（`a680623`）：渲染器 `probeSourcePixel`（邮箱 front/保留 front 集槽位解析 + 诚实失败原因 + frameId/会话/代际身份）→ ComparisonSurface `requestSourcePixelProbe` Q_INVOKABLE + SG 同步期暂存 + 渲染线程队列投递 `sourcePixelProbed`（发现：渲染线程的窗口更新唤不起停驻的渲染循环，投递不得依赖后续帧）。片 3（`7b5043b`+`2756bb3`）：读数 UI。落地要点与计划的偏差：
+
+- **批量而非逐个**：片 2 的单请求暂存会让 2–3 源相互饿死，`7b5043b` 把请求改为逐槽独立暂存（同槽新请求替换旧请求），渲染节点一帧内完成整个批次、单次队列调用投递全部结果；批量与替换语义各有变异证据。
+- **读数 UI**（`2756bb3`）：ComparisonViewport 左下新增"源码值 YCbCr"面板，逐源一行（A/B/C 色标字母 + 该源自身像素坐标 + Y/Cb/Cr 码值 + 帧位深 8/10-bit + 源元数据 Limited/Full），悬停/平移/滚轮缩放后重映射再发探针；导航移动处理提取为 `handleNavigationMove` 供契约测试驱动。
+- **时鲜口径**：投递按"当前悬停位置在该槽映射出的像素坐标"过滤，光标已移走的旧结果丢弃；失败结果（无帧/无该源槽位/设备忙）如实具名。暂停后的逐帧步进会重取停驻光标的值；播放中不自动刷新（不为渲染循环加回读，且帮助浮层明示"播放中读数不自动刷新"）。
+- 未做（有意）：转换后 RGB 并列显示——视频侧观看路径本就是显示转换后的画面，与图片侧 cursorPixel 的"显示 RGBA8 + 原生码值"双口径相比，视频侧只承诺原码值（数值审查路径），帮助浮层注明两条路径不承诺一致。若评审确需 RGB 并列，后续在 C 基础上加一行换算即可。
 
 - 光标锚点：`ComparisonViewport.qml:372` 的 `onPositionChanged` 与 `panelPoint()` 已完成部件坐标 → 源坐标换算，缺的是把源坐标送进回读通道。
 - 回读通道已存在：D3d11GpuFrameBacking / GpuTransferActor 已有 staging / CopySubresourceRegion 路径；新增"只读 1×1"最小查询接口，禁止整帧回读进热路径。
