@@ -14,7 +14,8 @@
 
 - 第 1 周四组条目已全部完成（`7260471`）并随 `89c819d` 推送 origin/main：交互 P0 的 1–3、高倍率最近邻、ReviewRuntime 自 detach、clang-tidy 扩规则。下文对应条目已打【已落地】标记，正文保留审计时的发现快照。
 - 当日核实未动工：视频像素读数（`cursorPixel` 仍只在 ImageReviewController）、放大镜（全仓库无 loupe/magnifier 实现）、模式/视图快捷键（ReviewShortcuts.qml 无数字键与 F/Ctrl+0 绑定）。
-- Windows 验收清账未执行：本机 dev 构建 + 启动自检通过，体验清单已于 2026-10-09 发出待反馈；台账 `docs/engineering/visual-review-backlog.md` 里 10-06/10-07 的"修复草稿"条目仍待真机核销。
+- Windows 验收清账：**已通过**（2026-10-09 用户真机走查 `main@6058d19` dev 构建，无回归；交互类悬置项已核销，多容器导出矩阵与 WARP 像素回读仍按各条目原边界，见台账当日条目）。
+- 工单 B 模式与视图快捷键：**已落地**（2026-10-09，同日提交）：数字键 1–6、F/Ctrl+0/+−/R、`` ` ``/Shift+`` ` `` 参考原图直看与锁定、双击统一 100%↔适应（全屏只留 F11）、帮助浮层从绑定表生成。偏差三条：Z 留给放大镜（计划 P1-5），避免二次改键；`` ` `` 为点按切换而非按住（Qt ApplicationShortcut 无释放事件，且 RV/Nuke 的单键翻转同为点按）；模式共 6 个故键位 1–6。
 - 行号漂移提示：week-1 改动后 Main.qml 3871→3904、PlaybackCoordinator.cpp 4735→4772、Main.cpp 3124→3132，下文旧行号需按此折算；标注"锚点已核实"的小节除外。
 
 ---
@@ -72,13 +73,13 @@ P0：修复已确认的缺陷
 
 P1：键盘优先的比较操作
 
-4. 对比模式和视图快捷键。现在模式只能用鼠标点。
+4. 【已落地 2026-10-09：数字键 1–6（模式共 6 个）、F 适应、Ctrl+0 100%、+/− 缩放、R 重置、` 点按看参考原图 + Shift+` 锁定；Z 留给放大镜】对比模式和视图快捷键。现在模式只能用鼠标点。
    - 数字键 1–8 切换视图。
    - F 适应窗口，Ctrl+0 或 Z 切 100%，+/- 缩放，R 重置。
    - "按住看原图"加一个键盘版：按住 ` 看参考源，`Shift+``` 锁定切换。参考 RV 和 Nuke 的单键 A/B 翻转。
 5. 放大镜。Z 键按住时，在光标处显示一个 4–8× 的放大圆窗，A/B/C 同步，叠加像素读数。参考 video-compare 的 Z/C 放大镜和 Photoshop 的导航器。
 6. 命令面板。Ctrl+Shift+P 按名称模糊搜索所有命令，并显示对应快捷键。功能已经很多了（视图、指标、对齐、导出、编辑），菜单藏得深，命令面板能一次性解决可发现性问题（U-01）。参考 VS Code 和 Figma。
-7. 快捷键冲突与重绑。
+7. 【部分落地 2026-10-09：双击已统一为 100%↔适应（ROI 框选激活时仍为清除 ROI），全屏只留 F11；Ctrl+A/D 冲突与 JSON 键位表导入导出仍待做】快捷键冲突与重绑。
    - Ctrl+A/D 用来跳 1 秒，和"全选"的肌肉记忆冲突。
    - A/O 在视频和图片里的含义完全不同。
    - 双击在视频里是全屏，在图片里是 100%/适应。
@@ -194,6 +195,8 @@ P1：测试与流程
 
 ### A. Windows 验收清账（先做，不改代码）
 
+**状态：已通过（2026-10-09 用户真机走查，详见台账当日条目与上方进度区）。**
+
 真机走查并逐条核销 `docs/engineering/visual-review-backlog.md` 的待验收条目。dev 构建 + 启动自检已通过，体验清单 2026-10-09 已发出。范围按台账分四组：
 
 - 渲染类（直接影响比对结论）：Highlight 阈值背景透 A 路、SignedSubtract 阈值拒绝区中灰、差异阈值不吞 Fade 混合。
@@ -204,6 +207,8 @@ P1：测试与流程
 验收通过的条目在台账推进状态；发现回归记新条目，不带病开新功能。
 
 ### B. 模式与视图快捷键（改动面最小，可与 A 并行）
+
+**状态：已落地（2026-10-09）。** 实现按下述方案，偏差与补充：Z 未占用（留给 D 的放大镜按住键）；`` ` `` 实现为点按切换 + Shift+`` ` `` 锁定；帮助浮层由 ReviewShortcuts 的 helpKeys/helpLabel/helpPlayerLabel/helpPresets 生成，Ctrl+方向键的按 preset 文案也在绑定表内；契约测试经 Shortcut 的 activated 信号驱动（ctest 进程拿不到窗口前台，Qt 的 ApplicationShortcut 只在活动窗口匹配，真键事件会把契约耦合到 runner 的前台权限）。
 
 - 绑定点：`src/ui_qml/qml/ReviewShortcuts.qml`（221 行）是唯一绑定表，统一 `Shortcut{enabled,onActivated}` 结构；动作经 `ReviewActions.qml` 门面转发 controller，新增快捷键不直接摸 controller。
 - 内容：数字键 1–8 切 CompareModeBar 模式；F 适应窗口；Ctrl+0 / Z 100%；+/- 走 `ComparisonViewport.qml:558` 的居中 `zoomAt` 路径；R 重置；`` ` `` 按住看参考源，`Shift+`` ` 锁定切换。
