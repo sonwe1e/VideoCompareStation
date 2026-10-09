@@ -6726,6 +6726,154 @@ TEST(MainQmlContractTests, ShortcutHelpMatchesBoundShortcuts) {
     EXPECT_TRUE(descriptionFor(frameModel, QStringLiteral(", / .")).isEmpty());
 }
 
+// Digit keys switch comparison modes with the mode bar's own availability (pair modes need
+// two sources, three-source modes stay disabled here), F/+/- drive the viewport zoom path, and
+// the backtick pair toggles/locks the raw-reference peek. The help table must be the entries
+// ReviewShortcuts itself declares plus the static mouse tails - not a hand-maintained copy.
+TEST(MainQmlContractTests, ViewShortcutsSwitchModesZoomAndGenerateHelp) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    auto* const reviewShortcuts =
+        harness.root->findChild<QObject*>(QStringLiteral("reviewShortcuts"));
+    ASSERT_NE(reviewShortcuts, nullptr);
+    auto* const shortcutHelp =
+        harness.root->findChild<QObject*>(QStringLiteral("shortcutHelpOverlay"));
+    ASSERT_NE(shortcutHelp, nullptr);
+
+    // Shortcut objects carry their declared sequence either as `sequence` or as the first
+    // entry of `sequences`; the property itself is the reliable marker among the binding
+    // table's direct children.
+    const auto shortcutBySequence = [&reviewShortcuts](const QString& wanted) {
+        const QList<QObject*> declared =
+            reviewShortcuts->findChildren<QObject*>(Qt::FindDirectChildrenOnly);
+        for (QObject* const object : declared) {
+            if (!object->property("sequence").isValid() &&
+                !object->property("sequences").isValid()) {
+                continue;
+            }
+            QString sequence = object->property("sequence").toString();
+            if (sequence.isEmpty()) {
+                const QVariantList multi = object->property("sequences").toList();
+                if (!multi.isEmpty()) {
+                    sequence = multi.front().toString();
+                }
+            }
+            if (sequence == wanted) {
+                return object;
+            }
+        }
+        return static_cast<QObject*>(nullptr);
+    };
+
+    // Two sources: pair-mode keys available, three-source modes follow the mode bar and stay
+    // disabled until a third source exists. Keys are driven by emitting each Shortcut's own
+    // `activated` signal: the ctest process cannot take window foreground, and Qt matches
+    // ApplicationShortcuts only in the active window, so real key events would couple this
+    // contract to the runner's foreground rights instead of the bindings under test.
+    QObject* const sideKey = shortcutBySequence(QStringLiteral("1"));
+    ASSERT_NE(sideKey, nullptr);
+    QObject* const wipeKey = shortcutBySequence(QStringLiteral("2"));
+    ASSERT_NE(wipeKey, nullptr);
+    QObject* const differenceKey = shortcutBySequence(QStringLiteral("3"));
+    ASSERT_NE(differenceKey, nullptr);
+    QObject* const threeUpKey = shortcutBySequence(QStringLiteral("4"));
+    ASSERT_NE(threeUpKey, nullptr);
+    EXPECT_TRUE(sideKey->property("enabled").toBool());
+    EXPECT_FALSE(threeUpKey->property("enabled").toBool());
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(sideKey, "activated"));
+    EXPECT_EQ(harness.preferences.viewModeCode(), ComparisonSurface::SideBySide);
+    ASSERT_TRUE(QMetaObject::invokeMethod(wipeKey, "activated"));
+    EXPECT_EQ(harness.preferences.viewModeCode(), ComparisonSurface::Wipe);
+    ASSERT_TRUE(QMetaObject::invokeMethod(differenceKey, "activated"));
+    EXPECT_EQ(harness.preferences.viewModeCode(), ComparisonSurface::Difference);
+    harness.settle();
+
+    // Zoom and view-command shortcuts exist and stay enabled with a drawable stage; the
+    // viewport-side semantics (fit/native toggle, centred zoom step) are pinned by
+    // ViewportPixelScaleTests against real mocked geometry. Pressing them must leave the
+    // comparison mode untouched.
+    QObject* const fitKey = shortcutBySequence(QStringLiteral("F"));
+    ASSERT_NE(fitKey, nullptr);
+    QObject* const nativeKey = shortcutBySequence(QStringLiteral("Ctrl+0"));
+    ASSERT_NE(nativeKey, nullptr);
+    QObject* const zoomInKey = shortcutBySequence(QStringLiteral("Plus"));
+    ASSERT_NE(zoomInKey, nullptr);
+    QObject* const resetKey = shortcutBySequence(QStringLiteral("R"));
+    ASSERT_NE(resetKey, nullptr);
+    QObject* const peekKey = shortcutBySequence(QStringLiteral("`"));
+    ASSERT_NE(peekKey, nullptr);
+    QObject* const peekLockKey = shortcutBySequence(QStringLiteral("Shift+`"));
+    ASSERT_NE(peekLockKey, nullptr);
+    EXPECT_TRUE(fitKey->property("enabled").toBool());
+    EXPECT_TRUE(nativeKey->property("enabled").toBool());
+    EXPECT_TRUE(zoomInKey->property("enabled").toBool());
+    EXPECT_TRUE(resetKey->property("enabled").toBool());
+    ASSERT_TRUE(QMetaObject::invokeMethod(fitKey, "activated"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(zoomInKey, "activated"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(resetKey, "activated"));
+    EXPECT_EQ(harness.preferences.viewModeCode(), ComparisonSurface::Difference);
+
+    // Backtick toggles the raw-reference peek; Shift+backtick locks it, and a plain tap on a
+    // locked peek unlocks instead of flipping the raw view back on.
+    EXPECT_TRUE(harness.root->property("differenceMode").toBool());
+    EXPECT_TRUE(peekKey->property("enabled").toBool());
+    ASSERT_TRUE(QMetaObject::invokeMethod(peekKey, "activated"));
+    EXPECT_TRUE(harness.root->property("differencePeekActive").toBool());
+    ASSERT_TRUE(QMetaObject::invokeMethod(peekKey, "activated"));
+    EXPECT_FALSE(harness.root->property("differencePeekActive").toBool());
+    ASSERT_TRUE(QMetaObject::invokeMethod(peekLockKey, "activated"));
+    EXPECT_TRUE(harness.root->property("differencePeekActive").toBool());
+    EXPECT_TRUE(harness.root->property("differencePeekLocked").toBool());
+    ASSERT_TRUE(QMetaObject::invokeMethod(peekKey, "activated"));
+    EXPECT_FALSE(harness.root->property("differencePeekActive").toBool());
+    EXPECT_FALSE(harness.root->property("differencePeekLocked").toBool());
+
+    // The help model is generated: the binding-table entries (filtered to the active preset)
+    // first, then the static mouse tails. The merged "F11 或双击" row is gone; double-click
+    // now documents the unified native/fit toggle and full screen stays F11-only.
+    const QVariantList helpEntries = reviewShortcuts->property("helpEntries").toList();
+    EXPECT_GE(helpEntries.size(), 10);
+    shortcutHelp->setProperty("imagePreset", false);
+    shortcutHelp->setProperty("playerPreset", false);
+    const QVariantList model = shortcutHelp->property("shortcutModel").toList();
+    // Entry rows are [keycaps, label, playerLabel, presetMask]; the review preset keeps
+    // every row except the player-only ones.
+    QVariantList expectedEntries;
+    for (const QVariant& entry : helpEntries) {
+        const QVariantList row = entry.toList();
+        if (row.size() >= 4 && row.at(3).toInt() == 1) {
+            continue;
+        }
+        expectedEntries.push_back(row);
+    }
+    ASSERT_EQ(model.size(), expectedEntries.size() + 6);
+    for (int i = 0; i < expectedEntries.size(); ++i) {
+        EXPECT_EQ(model.at(static_cast<qsizetype>(i)).toList().front().toString(),
+                  expectedEntries.at(static_cast<qsizetype>(i)).toList().front().toString())
+            << "help row " << i << " must come from the binding table";
+    }
+    const auto descriptionFor = [&model](const QString& keys) {
+        for (const QVariant& entry : model) {
+            const QVariantList pair = entry.toList();
+            if (pair.size() == 2 && pair.front().toString() == keys) {
+                return pair.back().toString();
+            }
+        }
+        return QString{};
+    };
+    EXPECT_EQ(descriptionFor(QStringLiteral("1")), QStringLiteral("切换视图：并排"));
+    EXPECT_EQ(descriptionFor(QStringLiteral("F")), QStringLiteral("适应窗口"));
+    EXPECT_EQ(descriptionFor(QStringLiteral("Ctrl+0")), QStringLiteral("100% 真实尺寸"));
+    EXPECT_EQ(descriptionFor(QStringLiteral("F11")), QStringLiteral("全屏"));
+    EXPECT_EQ(descriptionFor(QStringLiteral("双击")),
+              QStringLiteral("切换 100% 真实尺寸 / 适应窗口"));
+    EXPECT_TRUE(descriptionFor(QStringLiteral("F11 或双击")).isEmpty());
+}
+
 // M captures an issue through the note dialog: the dialog opens first, Enter records the typed
 // note, and Escape still records - just without a note. The capture itself must carry the note
 // text into the stored record instead of the empty string the panel button used to pass.

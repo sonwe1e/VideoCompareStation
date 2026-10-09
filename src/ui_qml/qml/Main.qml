@@ -135,6 +135,8 @@ ApplicationWindow {
     // Hold-to-peek ("按住看原图"): while the toolbar button is held, the difference pass
     // is replaced by the raw first source of the active pair. Transient; not persisted.
     property bool differencePeekActive: false
+    // Keyboard peek (backtick) can lock the raw-reference view; unlocking clears both.
+    property bool differencePeekLocked: false
     property bool pendingComparisonPreservesPosition: false
     property bool pendingSidebarComparison: false
     property bool pendingNewReviewWantsThreeUp: false
@@ -419,6 +421,9 @@ ApplicationWindow {
 
     readonly property int inputContext: Boolean(reviewInputDialogs && reviewInputDialogs.modalVisible) || anchorDialog.visible || shortcutHelp.visible || issueNoteDialog.visible || imageSingleDialog.visible || imageAddDialog.visible || imagePairDialog.visible || imageReplacePrimaryDialog.visible || imageReplaceSecondaryDialog.visible || imageFolderLeftDialog.visible || imageFolderRightDialog.visible ? 3 : (anyMenuOpen || focusIsPopup(root.activeFocusItem) ? 2 : (focusIsTextEditing(root.activeFocusItem) ? 1 : 0))
     readonly property bool globalMediaShortcutsEnabled: workspaceSession.videoActive && inputContext === 0 && (!chromeVisible || !focusBlocksGlobalMediaShortcuts(root.activeFocusItem))
+    // View shortcuts (digit modes, fit/native/zoom, peek) need a drawable video stage and no
+    // modal on top; they stay available while the OSC is hidden, like the transport keys.
+    readonly property bool videoViewShortcutsEnabled: workspaceSession.videoActive && inputContext === 0 && sourceCount > 0 && !overlayVisible
     readonly property bool presentationShortcutsEnabled: inputContext === 0
     readonly property bool frameErrorBannerVisible: hasErrors && currentFrame >= 0 && !busy && graphicsReady && Boolean(controller && controller.canFirst)
     readonly property string overlayTitle: busy ? qsTr("正在加载…") : (!graphicsReady ? qsTr("图形设备不可用") : (hasErrors ? qsTr("无法打开文件") : qsTr("把视频或图片拖到这里")))
@@ -820,6 +825,24 @@ ApplicationWindow {
 
     function returnFocusToViewer() {
         focusActiveWorkspace();
+    }
+
+    // Keyboard flavour of hold-to-peek: tap toggles the raw reference view, Shift+backtick
+    // locks it. The mouse button keeps its transient press/release semantics; its release
+    // never defeats an active lock (see onDifferencePeekChanged).
+    function toggleDifferencePeek(lock) {
+        if (lock) {
+            differencePeekLocked = !differencePeekLocked;
+            differencePeekActive = differencePeekLocked;
+            showImmersiveHud(differencePeekLocked ? qsTr("已锁定参考原图") : qsTr("已解锁参考原图"));
+        } else if (differencePeekLocked) {
+            differencePeekLocked = false;
+            differencePeekActive = false;
+            showImmersiveHud(qsTr("已解锁，恢复差异视图"));
+        } else {
+            differencePeekActive = !differencePeekActive;
+            showImmersiveHud(differencePeekActive ? qsTr("查看参考原图") : qsTr("恢复差异视图"));
+        }
     }
 
     function showIntentMessage(message) {
@@ -2282,6 +2305,10 @@ ApplicationWindow {
         inFrame: root.inFrame
         outFrame: root.outFrame
         candidateSwitchEnabled: root.candidateSwitchAvailable
+        viewShortcutsEnabled: root.videoViewShortcutsEnabled
+        sourceCount: root.sourceCount
+        busy: root.busy
+        differencePeekAvailable: root.differenceMode
         onWipePositionRequested: position => {
             root.wipePosition = position;
 
@@ -2302,6 +2329,14 @@ ApplicationWindow {
         onOutPointRequested: root.setOutPoint()
         onSelectedRangePlaybackRequested: root.playSelectedRange()
         onCandidateSwitchRequested: root.switchCandidateEdge()
+        onModeRequested: mode => root.preferences.viewMode = mode
+        onFitRequested: viewportFrame.fitToWindow()
+        onNativeSizeRequested: viewportFrame.zoomToNativeSize()
+        onZoomInRequested: viewportFrame.zoomViewStep(1.25)
+        onZoomOutRequested: viewportFrame.zoomViewStep(0.8)
+        onResetViewRequested: viewportFrame.resetView()
+        onReferencePeekToggleRequested: root.toggleDifferencePeek(false)
+        onReferencePeekLockToggleRequested: root.toggleDifferencePeek(true)
     }
 
     Shortcut {
@@ -2872,7 +2907,11 @@ ApplicationWindow {
             root.preferences.differenceMetric = metric;
         }
         // qmllint enable unqualified
-        onDifferencePeekChanged: held => root.differencePeekActive = held
+        onDifferencePeekChanged: held => {
+            // A keyboard lock must survive a stray press/release of the mouse button.
+            if (held || !root.differencePeekLocked)
+                root.differencePeekActive = held;
+        }
         onSwitchCandidateRequested: root.switchCandidateEdge()
         onCopyComparisonRequested: root.copyComparisonImage()
         onInspectorRequested: root.shell.inspectorVisible = !root.inspectorOpen
@@ -2984,7 +3023,9 @@ ApplicationWindow {
         differenceThresholdEnabled: root.differenceThresholdEnabled
         differenceThresholdCode: root.differenceThresholdCode
         differenceThresholdPolicy: root.differenceThresholdPolicy
-        differenceSuppressed: root.differencePeekActive
+        // Keyboard peek can outlive a difference view switch (locked); it only ever
+        // suppresses the difference pass itself.
+        differenceSuppressed: root.differencePeekActive && root.differenceMode
         referenceSourceIndex: root.referenceSourceIndex
         sourceCount: root.sourceCount
         wipeMode: root.wipeMode
@@ -3023,7 +3064,6 @@ ApplicationWindow {
         onWipePositionRequested: position => root.wipePosition = position
         onOscRevealRequested: root.revealOsc()
         onContextMenuRequested: root.openViewerContextMenu()
-        onFullScreenToggleRequested: root.toggleFullScreen()
     }
     // The still-image workspace is built on first activation and stays resident: video review
     // sessions never pay for it, and an image launch activates it during the initial binding
@@ -3527,6 +3567,7 @@ ApplicationWindow {
 
         playerPreset: root.shortcutPreset === 1
         imagePreset: root.imageWorkspaceActive
+        mediaEntries: root.imageWorkspaceActive ? [] : reviewShortcuts.helpEntries
     }
 
     IssueNoteDialog {

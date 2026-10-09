@@ -71,7 +71,6 @@ Rectangle {
     signal wipePositionRequested(real position)
     signal oscRevealRequested
     signal contextMenuRequested
-    signal fullScreenToggleRequested
     property alias surface: dualVideoSurface
     property alias videoOutput: surfaceLayer
     readonly property bool roiEnabled: dualVideoSurface.roiEnabled
@@ -91,6 +90,35 @@ Rectangle {
 
     function clearRoi() {
         dualVideoSurface.clearRoi();
+    }
+
+    // View commands shared by the chrome buttons and the keyboard shortcuts. The badge's
+    // content/DPR/ROI/SAR-aware readout owns the native-size target; zoomAt follows its focal
+    // point and clamps scale and center to the viewport bounds.
+    function fitToWindow() {
+        dualVideoSurface.resetViewport();
+    }
+
+    function resetView() {
+        dualVideoSurface.clearRoi();
+        dualVideoSurface.resetViewport();
+    }
+
+    function zoomViewStep(factor) {
+        dualVideoSurface.zoomAt(0.5, 0.5, factor);
+    }
+
+    function zoomToNativeSize() {
+        if (!pixelScaleBadge.targetReachable || pixelScaleBadge.pixelExact)
+            return;
+        dualVideoSurface.zoomAt(0.5, 0.5, 100 / pixelScaleBadge.effectivePercent);
+    }
+
+    function toggleNativeFit() {
+        if (pixelScaleBadge.pixelExact)
+            dualVideoSurface.resetViewport();
+        else
+            zoomToNativeSize();
     }
 
     function panelPoint(x, y) {
@@ -396,11 +424,13 @@ Rectangle {
             control.roiModeIsZoom = true;
             control.roiPanel = -1;
         }
+        // Double-click unifies with the image workspace: toggle native size <-> fit. Full
+        // screen stays on F11 only. An active ROI marquee keeps its own double-click verb.
         onDoubleClicked: {
             if (control.roiEnabled)
                 control.clearRoi();
             else
-                control.fullScreenToggleRequested();
+                control.toggleNativeFit();
         }
     }
 
@@ -614,16 +644,13 @@ Rectangle {
             objectName: "viewportFitButton"
             text: qsTr("适应窗口")
             helpText: qsTr("适应窗口并居中，保留 ROI；不改变当前帧或比较对象。")
-            onClicked: dualVideoSurface.resetViewport()
+            onClicked: control.fitToWindow()
         }
         ViewCommandButton {
             objectName: "viewportResetButton"
             text: qsTr("重置视图")
             helpText: qsTr("清除 ROI，并适应窗口、居中；不改变当前帧或比较对象。")
-            onClicked: {
-                dualVideoSurface.clearRoi();
-                dualVideoSurface.resetViewport();
-            }
+            onClicked: control.resetView()
         }
     }
 

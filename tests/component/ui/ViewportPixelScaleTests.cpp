@@ -576,5 +576,47 @@ TEST_F(ViewportPixelScaleTests, UnavailableControlsLeaveFocusAndTabChainUntilRec
     }
 }
 
+// The unified double-click verb and the keyboard view commands share one set of viewport
+// functions: toggleNativeFit flips between 100% and fit, zoomViewStep scales around the
+// centre, and resetView clears the ROI on its way back to fit.
+TEST_F(ViewportPixelScaleTests, ViewCommandFunctionsToggleNativeFitAndReset) {
+    setSources({source(1920, 1080)});
+    ASSERT_TRUE(QMetaObject::invokeMethod(root_.get(), "fitToWindow"));
+    QCoreApplication::processEvents();
+    const double fitPercent = percent();
+    EXPECT_NE(fitPercent, 100.0);
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(root_.get(), "toggleNativeFit"));
+    QCoreApplication::processEvents();
+    EXPECT_NEAR(percent(), 100.0, 0.001);
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(root_.get(), "toggleNativeFit"));
+    QCoreApplication::processEvents();
+    EXPECT_NEAR(percent(), fitPercent, 0.001);
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(root_.get(), "zoomViewStep", Q_ARG(QVariant, 1.25)));
+    QCoreApplication::processEvents();
+    EXPECT_GT(percent(), fitPercent);
+    EXPECT_LT(percent(), 100.0);
+
+    // zoomToNativeSize is the Ctrl+0 path: it lands on 100% and stays there when already
+    // native, instead of toggling back to fit.
+    ASSERT_TRUE(QMetaObject::invokeMethod(root_.get(), "zoomToNativeSize"));
+    QCoreApplication::processEvents();
+    EXPECT_NEAR(percent(), 100.0, 0.001);
+    ASSERT_TRUE(QMetaObject::invokeMethod(root_.get(), "zoomToNativeSize"));
+    QCoreApplication::processEvents();
+    EXPECT_NEAR(percent(), 100.0, 0.001);
+
+    // resetView is more than fitToWindow: it drops a comparison ROI as well.
+    surface_->setRoiNormalized(0.25, 0.25, 0.75, 0.75);
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(surface_->roiEnabled());
+    ASSERT_TRUE(QMetaObject::invokeMethod(root_.get(), "resetView"));
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(surface_->roiEnabled());
+    EXPECT_NEAR(percent(), fitPercent, 0.001);
+}
+
 } // namespace
 } // namespace dvs::ui
