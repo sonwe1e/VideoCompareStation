@@ -3,6 +3,14 @@
 更新：2026-10-08。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
 
+## 2026-10-09 外部评审三问题修复（记录-恢复闭环、采样口径、M 冻结）
+
+- **评审来源**：对 `main@89c819d` 的代码级复审提出三个"立即重开"问题，逐条对照当前代码核实后全部属实，另发现一个评审未覆盖的潜伏缺陷。
+- **修复 1（`12d2774`）**：视频问题记录补存 `viewScale` 与 `referenceSourceIndex`（旧记录 zoom 默认 1.0 会让 `restoreViewport` 把中心合法区塌缩为 0.5、整条拒绝；`openSources` 第二参实为参考槽却收到时间线主源）；恢复改为分阶段状态机——等打开呈现→应用比较对/模式→跳帧并等待呈现→再恢复视口，手动导航或源不匹配即取消。顺带修复：模式重放写的是 C++ 访问器名 `viewModeCode` 而非 QML 属性 `viewMode`，静默失败。
+- **修复 2（`919d528`）**：Auto 采样阈值从 fit 相对 `viewScale>=2.0` 改为物理倍率（新增 `physicalScalePercent`，由视口徽章 `effectivePercent` 馈给，含 DPR/ROI/内容），小素材被窗口放大 300% 现在正确切最近邻，大素材缩放到物理 1:1 不再误切。
+- **修复 3（`8ab6af8`）**：M 键按下即捕获记录（帧/源/ROI/缩放/比较对全部冻结），备注弹窗只通过新增 `attachNote` 补文字；输入期间播放推进不再改变记录内容。
+- **验证**：三修复各带契约/属性测试与变异证据（身份错换、缩放丢失、判定回退、延迟捕获均被断言检出）；MainQmlContract/IssueLog/ViewportPixelScale/ComparisonSurface 相关 80+ 项 0 失败；lint、format-check 绿。既有偶发：`ImageEditModeCropsAWorkingCopyAndKeepsTheOriginal` 在套件顺序下偶发图片 provider 竞速，单测与复跑均绿，与本轮改动路径无关，待单独跟踪。
+
 ## 2026-10-09 真机交互验收轮（第 2–3 周启动，用户走查通过）
 
 - **范围**：`main @ 6058d19`（dev 构建，`--startup-check` exit 0）上按当日体验清单全量走查：

@@ -24,7 +24,7 @@
 
 P0：像素检查保真
 
-1. 【已落地 7260471：Auto 模式 >200% 自动切换，视口 Smooth/Pixel 徽章可手动锁定】高倍率改用最近邻采样。现在 drawVideoSlots 固定绑定 linearSampler_（D3d11ComparisonRenderer.cpp:1505），放大后像素会被抹平，看不清块效应和插帧形变。最近邻采样器已经存在（:1055），只有差异视图在用。
+1. 【已落地 7260471：>200% Auto 切最近邻 + Smooth/Pixel 徽章；2026-10-09 复审发现口径错误并经 `919d528` 修正——判定从 fit 相对 viewScale 改为徽章同源的物理倍率（含 DPR/ROI），小素材被窗口放大的场景现在正确切最近邻】高倍率改用最近邻采样。现在 drawVideoSlots 固定绑定 linearSampler_（D3d11ComparisonRenderer.cpp:1505），放大后像素会被抹平，看不清块效应和插帧形变。最近邻采样器已经存在（:1055），只有差异视图在用。
    - 方案：缩放超过 200%（可配置）自动切到最近邻，400% 以上叠加像素网格。也提供一个"平滑 / 像素"手动开关，沿用现有的重采样徽章。
    - 参考：OpenRV、DJV、tev 都在高倍率下默认最近邻并显示网格。
 2. 视频像素读数。目前 cursorPixel 只存在于 ImageReviewController。
@@ -65,10 +65,10 @@ P2：格式与色彩
 
 P0：修复已确认的缺陷
 
-1. 【已落地 7260471：restoreViewport 已接线并带契约测试】问题记录恢复不了视口。IssueLogController.cpp:220-265 保存了 ROI、中心点和缩放，但 applyIssueRestore（Main.qml:1500-1510）只恢复了模式、源对和帧号。ComparisonSurface::restoreViewport（ComparisonSurface.cpp:794）全仓库没有调用方。这违背了产品文档里"回到同一状态复核"的目标。改动只需一行调用，再补一个契约测试。
+1. 【已落地 7260471：restoreViewport 已接线并带契约测试；2026-10-09 外部复审发现保存端缺 viewScale/参考身份且恢复与打开竞速，经 `12d2774` 补齐：记录保存 viewScale + referenceSourceIndex，恢复改分阶段状态机（等打开→比较对/模式→目标帧呈现→视口），另修复模式重放误写 viewModeCode 的静默失败】问题记录恢复不了视口。IssueLogController.cpp:220-265 保存了 ROI、中心点和缩放，但 applyIssueRestore（Main.qml:1500-1510）只恢复了模式、源对和帧号。ComparisonSurface::restoreViewport（ComparisonSurface.cpp:794）全仓库没有调用方。这违背了产品文档里"回到同一状态复核"的目标。改动只需一行调用，再补一个契约测试。
 2. 【已落地 7260471：帮助内容已改为与实际绑定一致；"从绑定表生成"的根治方案仍开放，见第 2–3 周细化 B】快捷键帮助写错了。播放器方案里写"← / → 快退 / 快进 5 秒"、"Ctrl+← / → 30 秒"（ShortcutHelpOverlay.qml:24），但代码在所有方案下都是逐帧（ReviewShortcuts.qml:82 的注释也这么写）。另外，帮助里漏了 Up/Down、Alt+←/→（Wipe）和 Home/End。
    - 建议：帮助内容直接从 ReviewShortcuts 的绑定表生成，不再手写第二份。
-3. 【已落地 7260471：M 键 + IssueNoteDialog，回车带备注、Esc 留空】记录问题时可以写备注。现在 captureCurrentIssue("") 永远传空备注，也没有快捷键。
+3. 【已落地 7260471：M 键 + IssueNoteDialog，回车带备注、Esc 留空；2026-10-09 复审指出备注期间播放推进会漂移记录，经 `8ab6af8` 改为按下即冻结观察，备注经 attachNote 事后补文字】记录问题时可以写备注。现在 captureCurrentIssue("") 永远传空备注，也没有快捷键。
    - 建议：M 键直接记录，并弹出一个可以忽略的备注输入框；回车保存，Esc 留空保存。参考 Frame.io 的"按键留言，自动带时间码"。
 
 P1：键盘优先的比较操作
