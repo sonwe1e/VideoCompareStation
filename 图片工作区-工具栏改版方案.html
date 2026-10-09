@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>图片工作区 · 工具栏与交互改版方案（示意）</title>
+<style>
+  :root{--bg:#0f1115;--panel:#171a21;--panel2:#1d212b;--line:#2a2f3a;--text:#e6e9ef;--muted:#9aa3b2;--accent:#4da3ff;--bad:#f05a5a;--good:#3ecf8e;--warn:#f5b64c;}
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--bg);color:var(--text);font:14px/1.6 "Segoe UI","Microsoft YaHei",sans-serif;padding:28px 18px 60px;}
+  .wrap{max-width:1040px;margin:0 auto;}
+  h1{font-size:24px;margin-bottom:4px;}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:20px;}
+  h2{font-size:18px;margin:34px 0 12px;padding-bottom:7px;border-bottom:1px solid var(--line);}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin-bottom:14px;}
+  .chip{display:inline-flex;align-items:center;padding:3px 9px;margin:2px;border-radius:6px;font-size:11px;white-space:nowrap;border:1px solid var(--line);background:#10141b;color:#cdd3de;}
+  .chip.hi{background:rgba(77,163,255,.14);border-color:#3a6ea5;color:#cfe3ff;}
+  .chip.dim{opacity:.5;}
+  .chip.grp{background:rgba(62,207,142,.10);border-color:#2e7d57;color:#bff0d6;}
+  .chip.warn{background:rgba(240,90,90,.10);border-color:#8a3a3a;color:#ffc9c9;}
+  .bar{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:6px 0;}
+  .bar .row{display:flex;flex-wrap:wrap;align-items:center;}
+  .gname{font-size:11px;color:var(--muted);margin:0 6px 0 2px;}
+  .sep{width:1px;height:22px;background:var(--line);margin:0 8px;display:inline-block;}
+  .annot{font-size:11px;color:var(--bad);margin-left:8px;}
+  .annot.ok{color:var(--good);}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:8px;}
+  th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top;}
+  th{background:var(--panel2);white-space:nowrap;}
+  ul,ol{margin:6px 0 6px 20px;} li{margin:4px 0;}
+  .stage{position:relative;background:#0b0e13;border:1px solid var(--line);border-radius:8px;height:130px;margin-top:10px;overflow:hidden;}
+  .float{position:absolute;right:12px;bottom:12px;background:rgba(20,25,34,.92);border:1px solid #3a6ea5;border-radius:8px;padding:8px 12px;font-size:12px;color:#cfe3ff;box-shadow:0 4px 14px rgba(0,0,0,.5);}
+  .status{background:#0c0f14;border-top:1px solid var(--line);padding:5px 12px;font-size:11.5px;color:var(--muted);}
+  .tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:11px;font-weight:600;}
+  .t-ok{background:rgba(62,207,142,.15);color:var(--good);}
+  .t-acc{background:rgba(77,163,255,.15);color:var(--accent);}
+  .t-warn{background:rgba(245,182,76,.15);color:var(--warn);}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>图片工作区 · 工具栏与交互改版方案</h1>
+<div class="sub">问题：双图模式下三行 30+ 控件平铺，无分组、无层级，与视频侧 CompareModeBar 的"主模式 + 更多弹出 + 检查器"两级设计不一致 · 本页为界面示意图（示意），非最终像素稿</div>
+
+<h2>1. 问题诊断（现状）</h2>
+<div class="card">
+<div class="bar">
+  <div class="row">
+    <span class="gname">文件行</span>
+    <span class="chip">打开图片…</span><span class="chip dim">添加图片…</span><span class="chip">打开图片对…</span><span class="chip">对比文件夹…</span><span class="chip">隐藏列表</span><span class="chip">关闭图片</span><span class="chip">重置视图</span><span class="chip hi">适应窗口</span><span class="chip">100% 真实尺寸</span><span class="chip dim">重采样对齐差异</span>
+    <span class="annot">① 文件/视图/模式混在一行</span>
+  </div>
+</div>
+<div class="bar">
+  <div class="row">
+    <span class="gname">模式行</span>
+    <span class="chip hi">单图/切换</span><span class="chip">并排</span><span class="chip">切至 B</span><span class="chip">闪烁</span><span class="chip">分割线</span><span class="chip">淡化</span><span class="chip">绝对差异</span><span class="chip">带符号差异</span><span class="chip">高亮</span><span class="chip warn">Alpha 差异</span>
+    <span class="annot">② 8 个互斥模式 + 2 个操作全平铺，无层级</span>
+  </div>
+</div>
+<div class="bar">
+  <div class="row">
+    <span class="gname">观察行</span>
+    <span class="chip hi">RGBA</span><span class="chip">Alpha 灰度 (A)</span><span class="chip">RGB 忽略 (O)</span><span class="sep"></span><span class="chip hi">深色</span><span class="chip">棋盘格</span><span class="chip">黑底</span><span class="chip">白底</span><span class="chip">循环背景 (B)</span><span class="chip warn">淡化滑块 170px</span><span class="chip warn">α 直通徽标</span>
+    <span class="annot">③ 滑块/徽标挤在按钮行，行宽随模式跳动</span>
+  </div>
+</div>
+<p style="margin-top:10px;font-size:12.5px;color:var(--muted);">合计 <b style="color:var(--text)">30+ 个控件</b>，两图模式下几乎全部可见；而视频侧 <span class="code" style="font-family:Consolas;font-size:12px;">CompareModeBar</span> 只用 3 个主按钮 + "更多模式…"弹出就承载了 8 种视图。图片侧落后于自己定下的 UX 方向。</p>
+</div>
+
+<h2>2. 改版方案（目标）</h2>
+<div class="card">
+<p style="font-size:13px;margin-bottom:10px;">原则：<b>按任务分组 · 渐进披露 · 模式与参数分层 · 高频可见、低频收起 · 与视频侧一致</b></p>
+
+<div class="bar">
+  <div class="row">
+    <span class="gname">行 A · 文件与视图</span>
+    <span class="chip hi">打开图片…</span><span class="chip">打开图片对… ▾</span><span class="chip">关闭图片</span>
+    <span class="sep"></span>
+    <span class="chip hi">适应窗口</span><span class="chip">100%</span><span class="chip">重置</span><span class="chip dim">重采样·</span>
+    <span class="annot ok">打开对/对比文件夹/添加 收进 ▾ 菜单</span>
+  </div>
+</div>
+<div class="bar">
+  <div class="row">
+    <span class="gname">行 B · 模式与观察</span>
+    <span class="gname" style="color:#7fd6b0">布局</span>
+    <span class="chip grp">单图/切换</span><span class="chip grp">并排</span><span class="chip grp">分割线</span><span class="chip grp">淡化</span>
+    <span class="sep"></span>
+    <span class="gname" style="color:#f5b64c">差异</span>
+    <span class="chip hi">绝对</span><span class="chip">更多 ▾</span>
+    <span class="sep"></span>
+    <span class="gname" style="color:#4da3ff">观察</span>
+    <span class="chip hi">RGBA ▾</span><span class="chip">背景·棋盘格 ▾</span><span class="chip">闪烁</span>
+    <span class="annot ok">带符号/高亮/Alpha差异 收进"更多"；通道与背景各一个下拉，B/A/O 快捷键不变</span>
+  </div>
+</div>
+
+<div class="stage">
+  <span style="position:absolute;left:12px;top:10px;font-size:11px;color:var(--muted);">视口（淡化模式下，滑块浮层就地出现，不占工具栏）</span>
+  <div class="float">淡化 · A 35% / B 65% <span style="display:inline-block;width:110px;height:5px;border-radius:3px;background:#2a2f3a;vertical-align:middle;margin-left:8px;position:relative;"><span style="position:absolute;left:35%;top:-4px;width:13px;height:13px;border-radius:7px;background:#4da3ff;display:block;"></span></span></div>
+</div>
+<div class="status">单图/切换 · 峰值 12 · 均值 0.8 · 统计 全图 · α 直通（未预乘）　<span style="color:#4da3ff">← 模式/统计/α 徽标移到状态栏</span></div>
+
+<p style="margin-top:10px;font-size:12.5px;color:var(--muted);">两图模式共 <b style="color:var(--text)">14 个可见控件</b>（4 布局 + 2 差异 + 3 观察 + 4 文件视图 + 1 更多），单图模式自动缩到 8 个（差异组整体隐藏）。分组用分隔线，组间留白，不再是一条长龙。</p>
+</div>
+
+<h2>3. 控件去向</h2>
+<table>
+<tr><th>现控件</th><th>新位置</th><th>理由</th></tr>
+<tr><td>打开图片…</td><td>行 A 主按钮</td><td>高频，保持可见</td></tr>
+<tr><td>打开图片对… / 对比文件夹… / 添加图片…</td><td>行 A「打开图片对… ▾」菜单</td><td>低频/条件可见，收进菜单</td></tr>
+<tr><td>隐藏/显示列表</td><td>侧边栏自身收起按钮</td><td>列表状态应由侧边栏表达</td></tr>
+<tr><td>适应窗口 / 100% / 重置 / 重采样</td><td>行 A 视图组</td><td>统一成"视图"概念</td></tr>
+<tr><td>单图/切换 · 并排 · 分割线 · 淡化</td><td>行 B「布局」组</td><td>互斥布局，同组便于理解</td></tr>
+<tr><td>绝对 · 带符号 · 高亮 · Alpha差异</td><td>「绝对」+「更多 ▾」</td><td>默认差异=绝对（最常用），其余收进弹出</td></tr>
+<tr><td>切至 A/B（单图模式）</td><td>行 B 单图组内（条件显示）</td><td>只有单图/切换模式才需要</td></tr>
+<tr><td>闪烁 (Flicker)</td><td>行 B 观察组</td><td>两图操作，与观察同区</td></tr>
+<tr><td>RGBA / Alpha灰度 / RGB忽略</td><td>「RGBA ▾」下拉</td><td>三选一，下拉省 ~200px，A/O 快捷键保留</td></tr>
+<tr><td>深色/棋盘/黑/白 + 循环背景</td><td>「背景·当前值 ▾」下拉</td><td>四选一，B 键循环保留，显示当前值</td></tr>
+<tr><td>淡化滑块（170px）</td><td>视口底部浮层</td><td>跟随模式出现，不占工具栏宽度</td></tr>
+<tr><td>α 直通徽标</td><td>状态栏右侧</td><td>状态信息归状态栏</td></tr>
+<tr><td>模式名/差异统计</td><td>状态栏（已有）</td><td>保留并增强</td></tr>
+</table>
+
+<h2>4. 实施与风险</h2>
+<div class="card">
+<ul>
+<li><b>objectName 全部保留</b>（<span style="font-family:Consolas;font-size:12px;">imageModePrimary / imageBgChecker / imageFadeSlider</span> 等），QML/UI 测试的定位方式不受影响——只动容器与显隐，不改标识。</li>
+<li>交互行为零改动：快捷键（A/B/O/Space/T/Tab/`）、Fade 数值语义、Flicker 逻辑、WipeHandle 均保持。</li>
+<li>改完跑 <span style="font-family:Consolas;font-size:12px;">build.ps1 -Preset dev -Test -TestRegex 'ui.ImageReview'</span> + 启动截图肉眼复核。</li>
+<li>可选项：同一方案可再应用于"文件夹对比列表"的打开/切换流程（第二步，不在本次范围）。</li>
+</ul>
+</div>
+
+<h2>5. 需要您确认</h2>
+<div class="card">
+<ol>
+<li><b>观察/背景是否接受"下拉按钮"</b>：推荐收进下拉（工具栏更干净）；若您更看重"一眼看到所有通道选项"，可改为保留 3+4 个小 chip 但仅重组分组。</li>
+<li><b>是否现在实施</b>：确认方案后我直接改 <span style="font-family:Consolas;font-size:12px;">ImageWorkspace.qml</span> 并构建验证；也可以只先定稿方案、后续再改。</li>
+</ol>
+</div>
+
+</div>
+</body>
+</html>

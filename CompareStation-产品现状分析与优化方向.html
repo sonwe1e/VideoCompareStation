@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CompareStation 产品现状分析与优化方向（2026-09）</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1d212b; --line:#2a2f3a;
+    --text:#e6e9ef; --muted:#9aa3b2; --accent:#4da3ff; --accent2:#7a5cff;
+    --good:#3ecf8e; --warn:#f5b64c; --bad:#f05a5a; --p0:#f05a5a; --p1:#f5b64c; --p2:#4da3ff;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{background:var(--bg); color:var(--text); font:14px/1.65 "Segoe UI","Microsoft YaHei",sans-serif; padding:32px 20px 80px;}
+  .wrap{max-width:1080px; margin:0 auto;}
+  h1{font-size:26px; margin-bottom:6px;}
+  .sub{color:var(--muted); font-size:13px; margin-bottom:22px;}
+  h2{font-size:19px; margin:40px 0 14px; padding-bottom:8px; border-bottom:1px solid var(--line);}
+  h3{font-size:15px; margin:20px 0 8px; color:var(--accent);}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:18px 20px; margin-bottom:16px;}
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:16px;}
+  @media(max-width:860px){.grid2{grid-template-columns:1fr;}}
+  table{width:100%; border-collapse:collapse; font-size:13px; margin-top:8px;}
+  th,td{border:1px solid var(--line); padding:7px 10px; text-align:left; vertical-align:top;}
+  th{background:var(--panel2); color:var(--text); white-space:nowrap;}
+  td{color:#cdd3de;}
+  .tag{display:inline-block; padding:1px 8px; border-radius:20px; font-size:12px; font-weight:600; white-space:nowrap;}
+  .t-p0{background:rgba(240,90,90,.15); color:var(--p0);}
+  .t-p1{background:rgba(245,182,76,.15); color:var(--p1);}
+  .t-p2{background:rgba(77,163,255,.15); color:var(--p2);}
+  .t-eng{background:rgba(122,92,255,.15); color:var(--accent2);}
+  .t-ok{background:rgba(62,207,142,.15); color:var(--good);}
+  ul,ol{margin:6px 0 6px 22px;}
+  li{margin:4px 0;}
+  .code{font-family:Consolas,monospace; font-size:12px; color:#9fc6ff; background:#0c0f14; padding:1px 6px; border-radius:4px;}
+  .warn{color:var(--warn);} .bad{color:var(--bad);} .good{color:var(--good);}
+  .legend{font-size:12px; color:var(--muted);}
+  .kv{display:flex; gap:8px; flex-wrap:wrap; font-size:13px;}
+  .kv b{color:var(--accent);}
+  .score-dot{display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px; vertical-align:middle;}
+  .note{font-size:12px; color:var(--muted);}
+  .tl{list-style:none; margin:10px 0 0;}
+  .tl li{position:relative; padding:0 0 18px 26px; border-left:2px solid var(--line); margin-left:8px;}
+  .tl li::before{content:""; position:absolute; left:-7px; top:4px; width:12px; height:12px; border-radius:50%; background:var(--accent);}
+  .tl .b1::before{background:var(--bad);} .tl .b2::before{background:var(--warn);}
+  .tl .b3::before{background:var(--good);} .tl .b4::before{background:var(--accent2);}
+  .tl b{display:block;}
+  .layout{background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:12px; margin:10px 0;}
+  .layout .row{display:flex; gap:8px; align-items:stretch; min-height:120px;}
+  .layout .cell{flex:1; border:1px solid #3a4150; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:12px; color:var(--muted); background:#10141b; min-width:0; position:relative;}
+  .layout .cell b{font-size:13px; color:var(--text);}
+  .layout .gt{background:rgba(77,163,255,.10);}
+  .layout .p1{background:rgba(62,207,142,.08);}
+  .layout .p2{background:rgba(245,182,76,.08);}
+  .layout .err{background:rgba(240,90,90,.10);}
+  .layout .cap{text-align:center; font-size:12px; color:var(--muted); margin-top:8px;}
+  .layout .tag-row{display:flex; justify-content:center; gap:6px; margin-top:6px; flex-wrap:wrap;}
+  .heat svg{width:100%; height:auto; display:block;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>CompareStation 产品现状分析与优化方向</h1>
+<div class="sub">分析基线：main @ <span class="code">09393686</span> + 2026-09-22 未提交工作区（PairMetrics、图片高位深 sidecar、Alpha 互斥、图片 Fade 等）· 分析方式：全链路代码阅读 + 同类开源软件调研 · 本页所有打分均为代码阅读估计，非实测数据</div>
+
+<h2>0. 一句话结论</h2>
+<div class="card">
+<p>这个项目的<b>工程底子比绝大多数个人开源项目都要好</b>——分层清晰、防御性强、测试与门禁完整、文档同步维护。真正的短板不在"能不能用"，而在四点：</p>
+<ul>
+<li><b>兼容面窄</b>：视频只认 H.264/HEVC/MPEG-4 Part 2，与"兼容大多数压缩格式"的目标有距离（AV1/VP9 是第一步）。</li>
+<li><b>对比感知还不够强</b>：放大镜（loupe）、双误差图、候选快速切换、"哪个候选更接近 GT"这类"看出差异"的手段还缺。</li>
+<li><b>三图工作流是下一步主战场</b>：视频侧已有三源模型，图片侧此前拍板"不做 3 图"，本次需求重新开启，需要一次设计定稿。</li>
+<li><b>上手体验靠"入口"而非"引导"</b>：首屏入口已补上，但模式很多（视频 8 种视图 × 7 种指标 + 图片 7 种对比模式），还差一层"按任务组织"的引导。</li>
+</ul>
+<p class="legend">另有 5 个 P0 级别的"统计/对齐语义"风险点（不是崩溃，而是<b>可能误导比较结论</b>），详见第 2 节。</p>
+</div>
+
+<h2>1. 四工作流能力现状</h2>
+<div class="card heat">
+<svg viewBox="0 0 920 300" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#f05a5a"/><stop offset=".5" stop-color="#f5b64c"/><stop offset="1" stop-color="#3ecf8e"/>
+    </linearGradient>
+  </defs>
+  <text x="460" y="24" text-anchor="middle" fill="#e6e9ef" font-size="15" font-weight="700">四工作流 × 六维度能力现状（0-5，代码阅读估计）</text>
+  <g font-size="12" fill="#9aa3b2">
+    <text x="100" y="66">格式兼容</text><text x="240" y="66">性能流畅</text><text x="380" y="66">功能完整</text><text x="520" y="66">像素保真</text><text x="660" y="66">交互体验</text><text x="800" y="66">测试覆盖</text>
+    <text x="18" y="135">视频播放</text><text x="18" y="195">视频对比</text><text x="18" y="255">图片查看</text><text x="18" y="315">图片对比</text>
+  </g>
+  <g font-size="14" text-anchor="middle" font-weight="700">
+    <!-- row 视频播放 -->
+    <rect x="70" y="78" width="120" height="46" rx="6" fill="rgba(245,182,76,.55)"/><text x="130" y="106" fill="#1a1d24">3</text>
+    <rect x="210" y="78" width="120" height="46" rx="6" fill="rgba(62,207,142,.55)"/><text x="270" y="106" fill="#1a1d24">4</text>
+    <rect x="350" y="78" width="120" height="46" rx="6" fill="rgba(62,207,142,.75)"/><text x="410" y="106" fill="#0d1210">5</text>
+    <rect x="490" y="78" width="120" height="46" rx="6" fill="rgba(62,207,142,.55)"/><text x="550" y="106" fill="#1a1d24">4</text>
+    <rect x="630" y="78" width="120" height="46" rx="6" fill="rgba(62,207,142,.55)"/><text x="690" y="106" fill="#1a1d24">4</text>
+    <rect x="770" y="78" width="120" height="46" rx="6" fill="rgba(62,207,142,.75)"/><text x="830" y="106" fill="#0d1210">5</text>
+    <!-- row 视频对比 -->
+    <rect x="70" y="138" width="120" height="46" rx="6" fill="rgba(245,182,76,.55)"/><text x="130" y="166" fill="#1a1d24">3</text>
+    <rect x="210" y="138" width="120" height="46" rx="6" fill="rgba(62,207,142,.55)"/><text x="270" y="166" fill="#1a1d24">4</text>
+    <rect x="350" y="138" width="120" height="46" rx="6" fill="rgba(62,207,142,.75)"/><text x="410" y="166" fill="#0d1210">5</text>
+    <rect x="490" y="138" width="120" height="46" rx="6" fill="rgba(62,207,142,.55)"/><text x="550" y="166" fill="#1a1d24">4</text>
+    <rect x="630" y="138" width="120" height="46" rx="6" fill="rgba(62,207,142,.55)"/><text x="690" y="166" fill="#1a1d24">4</text>
+    <rect x="770" y="138" width="120" height="46" rx="6" fill="rgba(62,207,142,.75)"/><text x="830" y="166" fill="#0d1210">5</text>
+    <!-- row 图片查看 -->
+    <rect x="70" y="198" width="120" height="46" rx="6" fill="rgba(62,207,142,.55)"/><text x="130" y="226" fill="#1a1d24">4</text>
+    <rect x="210" y="198" width="120" height="46" rx="6" fill="rgba(245,182,76,.55)"/><text x="270" y="226" fill="#1a1d24">3</text>
+    <rect x="350" y="198" width="120" height="46" rx="6" fill="rgba(62,207,142,.55)"/><text x="410" y="226" fill="#1a1d24">4</text>
+    <rect x="490" y="198" width="120" height="46" rx="6" fill="rgba(62,207,142,.55)"/><text x="550" y="226" fill="#1a1d24">4</text>
+    <rect x="630" y="198" width="120" height="46" rx="6" fill="rgba(62,207,142,.55)"/><text x="690" y="226" fill="#1a1d24">4</text>
+    <rect x="770" y="198" width="120" height="46" rx="6" fill="rgba(62,207,142,.55)"/><text x="830" y="226" fill="#1a1d24">4</text>
+    <!-- row 图片对比 -->
+    <rect x="70" y="258" width="120" height="46" rx="6" fill="rgba(62,207,142,.55)"/><text x="130" y="286" fill="#1a1d24">4</text>
+    <rect x="210" y="258" width="120" height="46" rx="6" fill="rgba(245,182,76,.55)"/><text x="270" y="286" fill="#1a1d24">3</text>
+    <rect x="350" y="258" width="120" height="46" rx="6" fill="rgba(62,207,142,.55)"/><text x="410" y="286" fill="#1a1d24">4</text>
+    <rect x="490" y="258" width="120" height="46" rx="6" fill="rgba(62,207,142,.55)"/><text x="550" y="286" fill="#1a1d24">4</text>
+    <rect x="630" y="258" width="120" height="46" rx="6" fill="rgba(62,207,142,.55)"/><text x="690" y="286" fill="#1a1d24">4</text>
+    <rect x="770" y="258" width="120" height="46" rx="6" fill="rgba(62,207,142,.55)"/><text x="830" y="286" fill="#1a1d24">4</text>
+  </g>
+  <g font-size="11" fill="#9aa3b2">
+    <rect x="70" y="320" width="14" height="10" rx="2" fill="#f05a5a"/><text x="90" y="329">弱</text>
+    <rect x="140" y="320" width="14" height="10" rx="2" fill="#f5b64c"/><text x="160" y="329">中</text>
+    <rect x="210" y="320" width="14" height="10" rx="2" fill="#3ecf8e"/><text x="230" y="329">强</text>
+  </g>
+</svg>
+<p class="note">评分依据：格式兼容（编解码/格式矩阵）、性能流畅（解码与渲染管线/大图延迟，含待验证项）、功能完整（定位/逐帧/对比模式/Alpha 等能力覆盖）、像素保真（原始码值 vs 显示转换的诚实度、ICC）、交互体验（OSC/时间轴/快捷键/引导）、测试覆盖（分层测试与门禁）。</p>
+</div>
+
+<div class="grid2">
+<div class="card">
+<h3>视频播放</h3>
+<ul>
+<li>解码：FFmpeg + D3D11VA（单共享设备），软解回退带原因可查；NV12/P010 直通渲染。</li>
+<li>定位：精确 seek（含 Open-GOP 回退）、反向 GOP 窗口、逐帧/5帧/1秒、区间循环、倍速阶梯。</li>
+<li>状态：OSC 状态轨区分"源重复帧 / 播放器跳帧 / 呈现间隙"三类现象。</li>
+<li class="warn">短板：编解码只有 3 种；4K 不在性能门禁内；V-01/V-02 统计语义待硬件验证。</li>
+</ul>
+</div>
+<div class="card">
+<h3>视频对比</h3>
+<ul>
+<li>视图：SideBySide / ThreeUp / ReferenceFocus / Difference / AnalysisGrid / Wipe / Fade / Single。</li>
+<li>指标：RGB/Luma/Chroma/Heatmap/SignedSubtract/Highlight 等 + 增益 1–16× + 阈值 + ROI。</li>
+<li>三源：A/B/C 槽位、参考聚焦、对齐偏移（全局/自动/手动锚点）、缺帧/重复帧诊断。</li>
+<li class="warn">短板：无放大镜 loupe；无"双误差图并列"；V-03 帧序号 vs 时间对应语义待完善。</li>
+</ul>
+</div>
+<div class="card">
+<h3>图片查看</h3>
+<ul>
+<li>格式：PNG/JPEG/BMP/GIF/WebP/TIFF/PNM(P1–P7) 经 FFmpeg 解码 + 头探测 + 文件夹配对。</li>
+<li>Alpha：A/O/B 快捷键、棋盘格/黑白底、Alpha 灰度、忽略透明度 RGB、观察状态徽标。</li>
+<li>高位深：&gt;8bit 源同步生成 RGBA64 sidecar，取样区分"原始码值"与"显示值"。</li>
+<li class="warn">短板：无 ICC 色彩管理；大图通道首帧延迟未实测（I-06）；动画 GIF/WebP/TIFF 多页不支持。</li>
+</ul>
+</div>
+<div class="card">
+<h3>图片对比</h3>
+<ul>
+<li>模式：SideBySide / AbsDifference / SignedDifference / Highlight / Wipe / AlphaDifference / Fade。</li>
+<li>交互：原地 A/B（Space 按住）、自动 Flicker 闪烁、并排同步十字准星、Fade 滑杆。</li>
+<li>统计：MAE/峰值差/Alpha 统计 + "放大×4 统计为原始值"口径标注。</li>
+<li class="warn">短板：三图对比此前关闭、本次重启待设计；"平均差异"与视频 MAE 定义分叉（I-05）；无对比结果导出。</li>
+</ul>
+</div>
+</div>
+
+<h2>2. 缺陷清单（按优先级）</h2>
+
+<h3>P0 — 可能误导比较结论（正确性/语义）</h3>
+<table>
+<tr><th>ID</th><th>问题</th><th>现状与代码入口</th><th>建议</th></tr>
+<tr><td><span class="tag t-p0">V-01</span></td><td>播放状态统计含义未在真实硬件验证</td><td>三个计数器（源重复帧/播放器跳帧/呈现间隙）来源不同，不能直接相加；<span class="code">ComparisonSurface.droppedFrames → RenderAckRelay::canonicalFrameGaps</span></td><td>按台账退出条件在 D3D11VA runner 上实测；UI 解释严格对应数据来源，未知显示"未知"</td></tr>
+<tr><td><span class="tag t-p0">V-02</span></td><td>2 秒追赶阈值是策略不是实测结论</td><td><span class="code">kPlaybackCatchUpTolerance=2000ms</span>，RealTime 超过即跳；4×/多路/高分辨率下体验未验证</td><td>确定性时钟下覆盖阈值前后、0.25/1/4×、循环边界，确认"变慢/突然跳"体验</td></tr>
+<tr><td><span class="tag t-p0">V-03</span></td><td>帧序号 ≠ 时间：30fps 输入 vs 60fps Prediction/GT 会比较错对象</td><td><span class="code">MultiSourceFrameProvider</span> 默认 <span class="code">mappedFrame=canonicalFrame+offset</span>（按序号）；VFR/偏移/锚点已有但语义待完善</td><td>明确"按序号/按时间/人工映射"三选一的规则并在 UI 显式声明；不自动补帧掩盖模型缺陷</td></tr>
+<tr><td><span class="tag t-p0">V-05 / I-02</span></td><td>显示转换与原始码值要持续保持诚实</td><td>工作区已加 RGBA64 sidecar 与转换标签；RGB/422/444 均走 NV12/P010 显示路径，数值非原码值</td><td>按台账验收 8/10 位、full/limited、RGB 细线样例；标签与结果必须一致</td></tr>
+<tr><td><span class="tag t-p0">I-05</span></td><td>图片"平均差异"与视频 MAE 定义不同</td><td>图片为每像素 max(|ΔR|,|ΔG|,|ΔB|) 再平均；视频为三通道全体平均（<span class="code">PixelDifference.cpp</span>）</td><td>标签注明定义 ID；两套定义统一列入迁移项；Alpha 不混入 RGB MAE</td></tr>
+</table>
+
+<h3>P1 — 核心工作流补齐</h3>
+<table>
+<tr><th>ID</th><th>问题</th><th>建议</th></tr>
+<tr><td><span class="tag t-p1">V-04</span></td><td>编解码矩阵过窄（仅 H.264/HEVC/MPEG-4 Part2），AV1/VP9 是"大多数格式"的第一步</td><td>优先 AV1/VP9（<span class="code">MediaProbe.cpp</span> 放行 + 解码器可用性 + 单/双/三路、倍速、软解回退逐项验收）；<b>已按用户确认：范围按互联网/测试视频 1080p 内，HDR/4K/ProRes 暂不做</b></td></tr>
+<tr><td><span class="tag t-p1">新</span></td><td>视频对比缺"放大镜 loupe"：想在不大动主视图的情况下放大观察局部</td><td>参考 video-compare 的 Z/C 放大镜（光标周围小窗放大），与现有缩放/ROI 并存；同步放大"GT+候选"</td></tr>
+<tr><td><span class="tag t-p1">C-01</span></td><td>三图对比（GT/P1/P2）设计定稿</td><td><b>已确认重启</b>；默认方案 B（三联+双误差图），方案 A 作精看模式；视频复用三源模型，图片按新方向实施（见第 4 节）</td></tr>
+<tr><td><span class="tag t-p1">新</span></td><td>插帧审查：无法"只看生成帧"或"前后帧条带"</td><td>生成帧身份来自用户规则/元数据（不能默认奇数帧=生成帧）；提供单帧前后 3 帧条带对比</td></tr>
+<tr><td><span class="tag t-p1">I-06</span></td><td>大图通道切换首帧延迟未实测（已有缓存+互斥）</td><td>在允许尺寸/内存范围的大图上测首次切换/连续切换/悬停取样，满足 100ms 门禁</td></tr>
+<tr><td><span class="tag t-p1">新</span></td><td>4K 不在活动性能矩阵</td><td>若 4K 素材会出现：纳入 1080p60 之外的验证（P010/10bit 正确性已有，性能未验）</td></tr>
+</table>
+
+<h3>P2 — 专业增强（参考同类软件）</h3>
+<table>
+<tr><th>方向</th><th>参考来源</th><th>说明</th></tr>
+<tr><td>直方图 / 波形 / 矢量示波器</td><td>video-compare（F1–F3）、tev</td><td>检查色偏、裁切、灰度分布，插帧伪影常伴随亮度/色度突变</td></tr>
+<tr><td>对比结果导出（PNG/GIF）</td><td>MegSpot、video-compare（F 存帧）</td><td>把"这一帧这里的差异"保存下来，配合问题记录更完整</td></tr>
+<tr><td>ICC 色彩管理</td><td>tev / OpenRV（OCIO）</td><td>"贴到别的图/视频上颜色对不对"需要色彩空间契约；先做标签后做转换</td></tr>
+<tr><td>批注/涂鸦</td><td>OpenRV</td><td>在问题帧上画圈/箭头，和问题记录 JSON 一起保存</td></tr>
+<tr><td>指标曲线外部导入</td><td>vivictpp（vmaf json 自动加载）</td><td>可选：支持导入 VMAF/SSIM 曲线到时间轴泳道</td></tr>
+<tr><td>动画 GIF / WebP / TIFF 多页</td><td>—</td><td>当前按单图处理；若贴图场景需要，再做"帧序列查看"</td></tr>
+</table>
+
+<h3>工程健康（随批次推进）</h3>
+<table>
+<tr><th>问题</th><th>建议</th></tr>
+<tr><td>工作区大量未提交改动（PairMetrics 全链路、I-02/I-06、图片 Fade 等）</td><td>尽早拆分提交（含测试），跑硬件验收后再宣称"已合入"；台账已记录，别被覆盖</td></tr>
+<tr><td>超大文件：<span class="code">PlaybackCoordinator.cpp</span> 4418 行、<span class="code">Main.qml</span> 约 2800 行、<span class="code">ReviewController.cpp</span> 2460 行</td><td>维持"capability 拆分"方向（台账 A-01），按功能域拆控制器，不必一次重构完</td></tr>
+<tr><td>仓库根目录残留调试文件（<span class="code">build_*.log</span>、<span class="code">fmt.txt</span>、<span class="code">src.txt</span>、<span class="code">generated-*.png</span>、<span class="code">VideoCompareStation_agent_tasks_*.md</span> 等）</td><td>清理并加入 .gitignore；这些是工作区噪音，不是交付物</td></tr>
+<tr><td>文档基线落后：agent-guide 基线写 0a74c46，实际 HEAD 已到 0939368</td><td>刷新文档基线 SHA 与 diff 检查命令</td></tr>
+</table>
+
+<h2>3. 可借鉴的同类软件</h2>
+<table>
+<tr><th>软件</th><th>定位</th><th>值得借鉴的点</th><th>本项目对应现状</th></tr>
+<tr><td><b>video-compare</b>（pixop，开源）</td><td>双视频逐帧对比</td><td>放大镜（Z/C）；时间偏移；多候选切换（Tab）；直方图/示波器/波形（F1–F3）；打印像素值（P）；存帧 PNG；Explorer Send To 集成</td><td>已有 Wipe/Sub、Explorer 右键集成；缺放大镜、scope、多候选一键切换、存帧</td></tr>
+<tr><td><b>vivictpp</b>（开源）</td><td>视频质量主观对比</td><td>每 GOP 码率/帧大小曲线；VMAF/PSNR/SSIM 曲线（vmaf json 自动加载）；plot 缩放平移+点击跳转；左右偏移调节；硬解设置</td><td>V-07 自带指标泳道更先进；可借鉴"曲线内缩放平移/点击跳转"交互</td></tr>
+<tr><td><b>tev</b>（Tom94，开源）</td><td>HDR 图像检查</td><td>像素检查器（精确值+复制）；伪彩色对比；直方图；ICC/OCIO；图片序列快速浏览</td><td>像素取样已有；缺直方图、复制取值、ICC</td></tr>
+<tr><td><b>OpenRV</b>（ASWF，开源）</td><td>专业审片</td><td>Session 素材组织；Sequence/Stack/Layout/Switch 视图；Wipe/Tile；批注工具；OTIO；远程协同</td><td>概念上"源列表+参考+候选"已对齐；批注/多布局是下一步</td></tr>
+<tr><td><b>MegSpot</b>（旷视，开源）</td><td>图片/视频对比</td><td>叠加/拖拽对比；同步缩放平移；直方图；RGB 取色；对比结果导出 GIF</td><td>叠加/Fade 已有；导出 GIF 可借鉴</td></tr>
+<tr><td><b>PicView / Oculante / PixSpy</b>（开源）</td><td>图片查看</td><td>棋盘格背景切换（T/B）；RGBA 通道隔离；忽略 Alpha（A）；JPEG 模式查压缩伪影（J）</td><td>棋盘格/通道/忽略 Alpha 已实现；"JPEG 伪影模式"是新点子</td></tr>
+<tr><td><b>PotPlayer</b>（用户提到的 "Polly Player"）</td><td>通用播放器</td><td>逐帧 D/F、倍速 C/X/Z、Tab 信息面板、AB 循环 —— <b>界面反面教材</b>：设置墙深不可测</td><td>逐帧/倍速/区间循环已具备；界面应保持"按任务组织"，不要学它的设置迷宫</td></tr>
+</table>
+<p class="note">注：您消息里的 "Polly Player" 我理解为 <b>PotPlayer</b>。它的问题正是"功能全但不知道从哪里调"，CompareStation 应该反过来：把 90% 的场景做成开箱即用，剩下 10% 的高级项收进检查器。</p>
+
+<h2>4. 三图对比（GT / Prediction 1 / Prediction 2）设计建议</h2>
+
+<div class="layout">
+  <div class="row">
+    <div class="cell gt"><b>GT</b><br><span style="font-size:11px">固定参考</span></div>
+    <div class="cell p1"><b>候选 1</b><br><span style="font-size:11px">或候选 2（一键切换）</span></div>
+  </div>
+  <div class="cap"><b>方案 A（精看备选）</b>：固定 GT 参照 + 单侧切换候选。画幅最大，精看同一局部；Wipe/高亮/误差图都作用于"GT↔当前候选"。</div>
+  <div class="tag-row"><span class="tag t-p1">精看模式</span><span class="tag t-p1">实现成本低</span><span class="tag t-p1">复用现有双图管线</span></div>
+</div>
+
+<div class="layout">
+  <div class="row">
+    <div class="cell gt"><b>GT</b></div>
+    <div class="cell p1"><b>P1</b></div>
+    <div class="cell p2"><b>P2</b></div>
+  </div>
+  <div class="row" style="min-height:80px; margin-top:8px;">
+    <div class="cell err"><b>误差图 GT–P1</b></div>
+    <div class="cell err"><b>误差图 GT–P2</b></div>
+  </div>
+  <div class="cap"><b>方案 B（整体扫视）</b>：三联同步 + 下方两张误差图共用同一色阶/阈值/增益，上下滚动即可对照两个候选的错误位置与幅度。<b>用户已拍板：默认布局采用此方案。</b></div>
+  <div class="tag-row"><span class="tag t-ok">默认（用户确认）</span><span class="tag t-p2">信息密度高</span></div>
+</div>
+
+<div class="layout">
+  <div class="row">
+    <div class="cell gt"><b>GT</b></div>
+    <div class="cell p1"><b>P1</b></div>
+    <div class="cell p2"><b>P2</b></div>
+  </div>
+  <div class="cap"><b>方案 C（"哪个更接近 GT"区域图，进阶）</b>：逐像素比较 |GT–P1| 与 |GT–P2|，P1 更近着色一色、P2 更近另一色、相等为中性灰；必须保留中性区与误差定义说明，只呈现"哪里不同"，不当自动主观裁判。</div>
+  <div class="tag-row"><span class="tag t-p2">进阶</span><span class="tag t-p2">需要新的 diff 语义</span></div>
+</div>
+
+<div class="layout">
+  <div class="row">
+    <div class="cell gt"><b>GT</b></div>
+    <div class="cell p1"><b>P1</b></div>
+    <div class="cell p2"><b>P2</b></div>
+  </div>
+  <div class="cap"><b>方案 D（快速轮播）</b>：Space 按住 GT→P1→P2 快速切换（或可调频率 Flicker），利用视觉暂留放大运动差异——和图片侧已实现的 Flicker 一致，适合视频逐帧扫。</div>
+  <div class="tag-row"><span class="tag t-p2">锦上添花</span><span class="tag t-ok">与现有 Flicker 复用</span></div>
+</div>
+
+<div class="card">
+<h3>推荐结论（已按用户拍板更新）</h3>
+<ul>
+<li>默认 <b>B（三联 GT | P1 | P2 + 双误差图）</b>，用于整体差异扫视——这是本次确认的默认布局。</li>
+<li>把 <b>A（固定 GT + 切换候选）</b> 保留为"精看模式"：放大、Wipe、高亮时切到它，画幅最大且复用现有双图管线。</li>
+<li><b>C</b> 放在"指标/进阶"页，且必须标注口径、保留中性区，不替代人眼判断。</li>
+<li><b>D</b> 作为候选间快速闪切，与图片 Flicker 体验统一。</li>
+<li>视频侧直接复用已有三源模型（ThreeUp / ReferenceFocus / DifferenceEdge 已存在），本次主要是把"三联 + 双误差图并列 + 精看切换"补上。</li>
+</ul>
+</div>
+
+<h2>5. 建议路线图</h2>
+<ul class="tl">
+  <li class="b1"><b>批次 1 · 可信观察（P0 正确性，约 1–2 周）</b>
+    V-01 状态语义硬件验收 · V-02 追赶体验验证 · V-03 帧序号/时间规则定稿 · V-05/I-02 显示保真验收 · I-05 统计口径标注。结束后"看到的数字不会误导结论"。</li>
+  <li class="b2"><b>批次 2 · 核心工作流（P1，约 2–4 周）</b>
+    AV1/VP9 支持（1080p 内验收）· 视频放大镜 loupe · 三图对比落地（方案 B 默认 + A 精看）· I-06 大图性能。结束后四条工作流在真实素材上可完整走通。</li>
+  <li class="b3"><b>批次 3 · 插帧审查与导出（约 1–2 周）</b>
+    生成帧条带（需先定生成帧规则）· 对比结果导出 PNG/GIF · 快捷键/引导完善（按任务组织模式）。</li>
+  <li class="b4"><b>批次 4 · 专业增强（P2，持续）</b>
+    ICC 色彩管理 · 直方图/波形 · 批注涂鸦 · 指标外部导入 · 双误差图进阶（方案 C）。</li>
+</ul>
+<p class="note">映射关系：批次 1 ≈ 台账"批次 1"；批次 2 ≈ 台账"批次 2+3"；批次 3/4 ≈ 台账"批次 4"及新增项。工程健康项（提交、拆文件、清理）随批次推进，不单独占批次。</p>
+
+<h2>6. 需要您拍板的问题</h2>
+<div class="card">
+<ol>
+<li><span class="tag t-ok">已拍板</span><b>三图对比确认重启</b>：默认方案 B（三联 + 双误差图），方案 A（固定 GT + 切换候选）保留为精看模式。实施时按此定稿。</li>
+<li><span class="tag t-ok">已拍板</span><b>格式矩阵范围</b>：按互联网/测试视频、1080p 内验收；先做 AV1/VP9，HDR/4K/ProRes/DNxHR 暂不做。</li>
+<li><b>"跳帧"语义</b>：播放时希望"保真不漏帧（负载高会变慢）"还是"实时优先（可以跳帧追赶）"？当前默认是实时优先（RealTime）；逐帧审查模式才不漏帧。是否需要把默认改成不漏帧？</li>
+<li><b>生成帧规则</b>：插帧审查要"只看生成帧"，生成帧如何识别？文件命名/元数据/用户指定，三选一或组合？没有规则就无法自动标记。</li>
+<li><b>GT 与 Prediction 是否同帧率、同尺寸</b>：决定 V-03 对齐语义与比较可用性；请确认最常见的工作素材形态。</li>
+<li><b>"PPNM"格式样例</b>：目前按 PNM 家族（PBM/PGM/PPM/PAM，P1–P7）处理，覆盖 8/16 位和 RGBA（PAM）。如有真实样例请提供 1–2 个，确认没有特殊变体。</li>
+</ol>
+</div>
+
+<h2>7. 结束语</h2>
+<div class="card">
+<p>结论：<b>架构与工程质量是资产，不是负债</b>。当前阶段最值得投入的顺序是：<b>① 把 P0 语义验证做完（让结论可信）→ ② 扩兼容（AV1/VP9）→ ③ 三图工作流与放大对比（让结论看得清）→ ④ 上手引导与导出（让结论带得走）</b>。</p>
+<p>不建议做的事：不扩展音频/字幕、不引入项目文件格式、不做自动主观质量裁判、不为单一功能重写播放内核。以上都超出当前产品目标且收益低。</p>
+</div>
+
+</div>
+</body>
+</html>
