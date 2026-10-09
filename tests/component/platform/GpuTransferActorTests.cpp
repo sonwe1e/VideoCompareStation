@@ -863,5 +863,151 @@ TEST(GpuTransferActorTests, HardwareOnlySetPublishesWithoutAnImmediateContextFlu
     EXPECT_TRUE(actor.shutdown(2s));
 }
 
+// The pixel probe is the video readout's numeric foundation: it must return the exact plane
+// code values that were uploaded, not shader-interpolated presentation colours. The chroma
+// sample is the one co-sited with the luma pixel's 2x2 block corner, and out-of-range probes
+// report nothing instead of invented values.
+TEST(GpuTransferActorTests, ProbePixelReadsExactNv12CodeValues) {
+    WarpRuntime runtime;
+    ASSERT_TRUE(runtime.start());
+    auto budget = std::make_shared<FrameBudget>(1U << 20U);
+    auto mailbox = std::make_shared<FrameMailbox>(domain::DeviceGeneration{1U});
+    GpuTransferActor actor{budget, runtime.broker, mailbox};
+
+    const Nv12FrameLayout layout{
+        .width = 5U,
+        .height = 3U,
+        .yStride = 8U,
+        .uvStride = 8U,
+    };
+    const SourceBytes sourceA = makeSourceBytes(layout, 10U);
+    std::optional<application::FrameSet> pair = makeCpuSet(*budget, layout, sourceA, sourceA);
+    ASSERT_TRUE(pair.has_value());
+    const application::FrameRequestContext context = makeContext();
+    ASSERT_EQ(actor.submit(context, std::move(*pair)), GpuTransferSubmitResult::Accepted);
+    std::optional<FrameMailboxPublication> publication =
+        waitForPublication(*mailbox, context.deviceGeneration);
+    ASSERT_TRUE(publication.has_value());
+    const GpuFrameSlot* const slotA = publication->set->find(0U);
+    ASSERT_NE(slotA, nullptr);
+    const auto* const backing = dynamic_cast<const D3d11GpuFrameBacking*>(&slotA->frame->backing());
+    ASSERT_NE(backing, nullptr);
+
+    const GraphicsDeviceLeaseResult lease = runtime.broker->tryLease();
+    ASSERT_EQ(lease.status, GraphicsDeviceLeaseStatus::Available);
+    ASSERT_TRUE(lease.lease.has_value());
+    ID3D11Device* const device = lease.lease->device.Get();
+    ID3D11DeviceContext* const immediateContext = lease.lease->immediateContext.Get();
+
+    // makeSourceBytes: y[row][col] = seed + row*11 + col;
+    // uv[row][byte] = seed + 80 + row*7 + byte with Cb/Cr interleaved.
+    const std::optional<D3d11SourcePixel> origin =
+        backing->probePixel(device, immediateContext, 0U, 0U);
+    ASSERT_TRUE(origin.has_value());
+    EXPECT_EQ(origin->y, 10U);
+    EXPECT_EQ(origin->cb, 90U);
+    EXPECT_EQ(origin->cr, 91U);
+    EXPECT_EQ(origin->bitDepth, 8U);
+
+    const std::optional<D3d11SourcePixel> middle =
+        backing->probePixel(device, immediateContext, 2U, 1U);
+    ASSERT_TRUE(middle.has_value());
+    EXPECT_EQ(middle->y, 10U + 11U + 2U);
+    EXPECT_EQ(middle->cb, 10U + 80U + 2U);
+    EXPECT_EQ(middle->cr, 10U + 80U + 3U);
+    EXPECT_EQ(middle->bitDepth, 8U);
+
+    // The far corner pairs with the last chroma sample (x>>1, y>>1).
+    const std::optional<D3d11SourcePixel> corner =
+        backing->probePixel(device, immediateContext, 4U, 2U);
+    ASSERT_TRUE(corner.has_value());
+    EXPECT_EQ(corner->y, 10U + 22U + 4U);
+    EXPECT_EQ(corner->cb, 10U + 80U + 7U + 4U);
+    EXPECT_EQ(corner->cr, 10U + 80U + 7U + 5U);
+
+    // Out-of-range coordinates never invent values.
+    EXPECT_FALSE(backing->probePixel(device, immediateContext, 5U, 0U).has_value());
+    EXPECT_FALSE(backing->probePixel(device, immediateContext, 0U, 3U).has_value());
+    EXPECT_FALSE(backing->probePixel(nullptr, immediateContext, 0U, 0U).has_value());
+    EXPECT_FALSE(backing->probePixel(device, nullptr, 0U, 0U).has_value());
+
+    EXPECT_TRUE(mailbox->clear(context.playback));
+    publication.reset();
+    EXPECT_TRUE(actor.shutdown(2s));
+}
+
+// P010 keeps each 10-bit sample in the most significant bits of a 16-bit word; the probe must
+// right-shift them out instead of reporting the raw container. Built directly on the device so
+// the fixture controls the exact 16-bit words.
+TEST(GpuTransferActorTests, ProbePixelReadsTenBitP010CodeValues) {
+    WarpRuntime runtime;
+    ASSERT_TRUE(runtime.start());
+    const GraphicsDeviceLeaseResult lease = runtime.broker->tryLease();
+    ASSERT_EQ(lease.status, GraphicsDeviceLeaseStatus::Available);
+    ASSERT_TRUE(lease.lease.has_value());
+    ID3D11Device* const device = lease.lease->device.Get();
+    ID3D11DeviceContext* const immediateContext = lease.lease->immediateContext.Get();
+
+    D3D11_TEXTURE2D_DESC lumaDescription{};
+    lumaDescription.Width = 2U;
+    lumaDescription.Height = 2U;
+    lumaDescription.MipLevels = 1U;
+    lumaDescription.ArraySize = 1U;
+    lumaDescription.Format = DXGI_FORMAT_R16_UNORM;
+    lumaDescription.SampleDesc.Count = 1U;
+    lumaDescription.Usage = D3D11_USAGE_DEFAULT;
+    lumaDescription.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    // 10-bit code values, left-justified by 6.
+    const std::uint16_t lumaWords[4] = {64U << 6U, 512U << 6U, 1000U << 6U, 1023U << 6U};
+    const D3D11_SUBRESOURCE_DATA lumaData{
+        .pSysMem = lumaWords,
+        .SysMemPitch = 2U * sizeof(std::uint16_t),
+    };
+    ComPtr<ID3D11Texture2D> yTexture;
+    ASSERT_TRUE(
+        SUCCEEDED(device->CreateTexture2D(&lumaDescription, &lumaData, yTexture.GetAddressOf())));
+    ComPtr<ID3D11ShaderResourceView> yView;
+    ASSERT_TRUE(
+        SUCCEEDED(device->CreateShaderResourceView(yTexture.Get(), nullptr, yView.GetAddressOf())));
+
+    D3D11_TEXTURE2D_DESC chromaDescription = lumaDescription;
+    chromaDescription.Width = 1U;
+    chromaDescription.Height = 1U;
+    chromaDescription.Format = DXGI_FORMAT_R16G16_UNORM;
+    const std::uint16_t chromaWords[2] = {940U << 6U, 64U << 6U};
+    const D3D11_SUBRESOURCE_DATA chromaData{
+        .pSysMem = chromaWords,
+        .SysMemPitch = 2U * sizeof(std::uint16_t),
+    };
+    ComPtr<ID3D11Texture2D> uvTexture;
+    ASSERT_TRUE(SUCCEEDED(
+        device->CreateTexture2D(&chromaDescription, &chromaData, uvTexture.GetAddressOf())));
+    ComPtr<ID3D11ShaderResourceView> uvView;
+    ASSERT_TRUE(SUCCEEDED(
+        device->CreateShaderResourceView(uvTexture.Get(), nullptr, uvView.GetAddressOf())));
+
+    const D3d11GpuFrameBacking backing{yTexture,
+                                       yView,
+                                       D3d11PlaneDimensions{.width = 2U, .height = 2U},
+                                       uvTexture,
+                                       uvView,
+                                       D3d11PlaneDimensions{.width = 1U, .height = 1U}};
+
+    const std::optional<D3d11SourcePixel> probed =
+        backing.probePixel(device, immediateContext, 1U, 1U);
+    ASSERT_TRUE(probed.has_value());
+    EXPECT_EQ(probed->y, 1023U);
+    EXPECT_EQ(probed->cb, 940U);
+    EXPECT_EQ(probed->cr, 64U);
+    EXPECT_EQ(probed->bitDepth, 10U);
+
+    const std::optional<D3d11SourcePixel> firstPixel =
+        backing.probePixel(device, immediateContext, 0U, 0U);
+    ASSERT_TRUE(firstPixel.has_value());
+    EXPECT_EQ(firstPixel->y, 64U);
+    EXPECT_EQ(firstPixel->cb, 940U);
+    EXPECT_EQ(firstPixel->cr, 64U);
+}
+
 } // namespace
 } // namespace dvs::platform
