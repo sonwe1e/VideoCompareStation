@@ -77,6 +77,7 @@ protected:
             {QStringLiteral("busy"), false},
             {QStringLiteral("overlayTitle"), QString{}},
             {QStringLiteral("overlayDetail"), QString{}},
+            {QStringLiteral("playbackActive"), false},
         };
         root_.reset(component.createWithInitialProperties(properties));
         ASSERT_NE(root_, nullptr) << component.errorString().toStdString();
@@ -639,6 +640,119 @@ TEST_F(ViewportPixelScaleTests, AutoSamplingFollowsTheBadgesPhysicalPercent) {
     EXPECT_GE(percent(), 200.0);
     EXPECT_DOUBLE_EQ(surface_->physicalScalePercent(), percent());
     EXPECT_EQ(surface_->effectiveVideoFilter(), ComparisonSurface::Nearest);
+}
+
+// The per-source pixel readout (1009 plan C slice 3): hovering content issues one probe batch
+// per source set, deliveries are gated on the still-current pixel coordinate for their slot,
+// and rows format the raw YCbCr codes with the frame's bit depth and the source's metadata
+// range - the numeric review path, presentation aligned with the image cursorPixel readout.
+TEST_F(ViewportPixelScaleTests, PixelReadoutShowsPerSourceRowsAndDropsStaleDeliveries) {
+    QVariantList sources;
+    for (int slot = 0; slot < 2; ++slot) {
+        QVariantMap info = source(slot == 0 ? 16 : 12, 9);
+        info.insert(QStringLiteral("colorRange"),
+                    slot == 0 ? QStringLiteral("Limited") : QStringLiteral("Full"));
+        sources.push_back(info);
+    }
+    setSources(sources);
+    auto* const plate = root_->findChild<QQuickItem*>(QStringLiteral("viewportPixelReadoutPlate"));
+    auto* const rows = root_->findChild<QObject*>(QStringLiteral("pixelReadoutRows"));
+    ASSERT_NE(plate, nullptr);
+    ASSERT_NE(rows, nullptr);
+    EXPECT_EQ(rows->property("count").toInt(), 2);
+    EXPECT_FALSE(plate->property("visible").toBool());
+
+    const auto move = [this](const qreal x, const qreal y) {
+        ASSERT_TRUE(QMetaObject::invokeMethod(
+            root_.get(), "handleNavigationMove", Q_ARG(QVariant, x), Q_ARG(QVariant, y)));
+        QCoreApplication::processEvents();
+    };
+    const auto deliver = [this](const QVariantMap& result) {
+        ASSERT_TRUE(QMetaObject::invokeMethod(
+            root_.get(), "acceptPixelProbeResult", Q_ARG(QVariant, result)));
+        QCoreApplication::processEvents();
+    };
+    const auto rowText = [this](const int slot) {
+        QVariant text;
+        if (!QMetaObject::invokeMethod(root_.get(),
+                                       "pixelReadoutRowText",
+                                       Q_RETURN_ARG(QVariant, text),
+                                       Q_ARG(QVariant, slot))) {
+            ADD_FAILURE() << "pixelReadoutRowText not invokable";
+            return QString{};
+        }
+        return text.toString();
+    };
+    const auto batches = [this] { return root_->property("pixelReadoutBatchesIssued").toInt(); };
+
+    // Single mode fits source 0 (16x9) by width; the viewport centre maps to normalized
+    // (0.5, 0.5): pixel (8, 4) for the 16x9 slot and (6, 4) for the 12x9 slot.
+    move(399, 299);
+    EXPECT_TRUE(root_->property("pixelReadoutPositionValid").toBool());
+    EXPECT_TRUE(plate->property("visible").toBool());
+    EXPECT_EQ(batches(), 1);
+    EXPECT_EQ(rowText(0), QStringLiteral("读取中…"));
+
+    deliver({{QStringLiteral("valid"), true},
+             {QStringLiteral("slot"), 0},
+             {QStringLiteral("x"), 8},
+             {QStringLiteral("y"), 4},
+             {QStringLiteral("luma"), 200},
+             {QStringLiteral("cb"), 90},
+             {QStringLiteral("cr"), 180},
+             {QStringLiteral("bitDepth"), 8}});
+    EXPECT_EQ(rowText(0), QStringLiteral("像素 (8, 4)  Y 200  Cb 90  Cr 180  8-bit Limited"));
+
+    deliver({{QStringLiteral("valid"), true},
+             {QStringLiteral("slot"), 1},
+             {QStringLiteral("x"), 6},
+             {QStringLiteral("y"), 4},
+             {QStringLiteral("luma"), 100},
+             {QStringLiteral("cb"), 30},
+             {QStringLiteral("cr"), 220},
+             {QStringLiteral("bitDepth"), 10}});
+    EXPECT_EQ(rowText(1), QStringLiteral("像素 (6, 4)  Y 100  Cb 30  Cr 220  10-bit Full"));
+
+    // A delivery from the position before the cursor moved on is dropped, not shown: the
+    // row keeps the accepted sample and never mixes coordinates with foreign values.
+    move(199, 149);
+    EXPECT_EQ(batches(), 2);
+    deliver({{QStringLiteral("valid"), true},
+             {QStringLiteral("slot"), 0},
+             {QStringLiteral("x"), 8},
+             {QStringLiteral("y"), 4},
+             {QStringLiteral("luma"), 111},
+             {QStringLiteral("cb"), 11},
+             {QStringLiteral("cr"), 11},
+             {QStringLiteral("bitDepth"), 8}});
+    EXPECT_EQ(rowText(0), QStringLiteral("像素 (8, 4)  Y 200  Cb 90  Cr 180  8-bit Limited"));
+
+    // Failures carry no values, so they land without a position gate and name their reason.
+    deliver({{QStringLiteral("valid"), false},
+             {QStringLiteral("slot"), 1},
+             {QStringLiteral("reason"), QStringLiteral("no-frame")}});
+    EXPECT_EQ(rowText(1), QStringLiteral("帧未就绪"));
+
+    // Leaving the content (or the error overlay arriving) retires the readout.
+    move(399, 10);
+    EXPECT_FALSE(root_->property("pixelReadoutPositionValid").toBool());
+    EXPECT_FALSE(plate->property("visible").toBool());
+    root_->setProperty("overlayVisible", true);
+    move(399, 299);
+    EXPECT_FALSE(root_->property("pixelReadoutPositionValid").toBool());
+    root_->setProperty("overlayVisible", false);
+
+    // A paused frame step re-samples the parked cursor; playback never does, so the render
+    // loop gains no readback work while frames stream.
+    move(399, 299);
+    const int parked = batches();
+    root_->setProperty("currentFrame", 42);
+    QCoreApplication::processEvents();
+    EXPECT_EQ(batches(), parked + 1);
+    root_->setProperty("playbackActive", true);
+    root_->setProperty("currentFrame", 43);
+    QCoreApplication::processEvents();
+    EXPECT_EQ(batches(), parked + 1);
 }
 
 } // namespace

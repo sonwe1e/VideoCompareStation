@@ -53,6 +53,9 @@ Rectangle {
     required property bool busy
     required property string overlayTitle
     required property string overlayDetail
+    // True while the transport plays; the pixel readout re-samples on paused frame steps but
+    // never per playback frame, so it cannot add readback work to the render loop.
+    required property bool playbackActive
 
     property string alignmentModeName: ""
     property string inexactReason: ""
@@ -67,6 +70,19 @@ Rectangle {
     property real roiCurrentY: 0
     property real panLastX: 0
     property real panLastY: 0
+
+    // Pixel readout (1009 plan C slice 3). The surface's render-thread probes answer
+    // asynchronously; a delivery is accepted only while its pixel coordinate still matches
+    // what the current hover position maps to for that slot, so results from a cursor that
+    // moved on are dropped instead of shown next to the wrong position.
+    property bool pixelReadoutPositionValid: false
+    property real pixelReadoutSourceX: 0
+    property real pixelReadoutSourceY: 0
+    property var pixelReadoutExpected: ({})
+    property var pixelReadoutResults: ({})
+    // Diagnostics counter (like the surface's droppedFrames): how many probe batches left
+    // this viewport, from hover moves and paused frame steps alike.
+    property int pixelReadoutBatchesIssued: 0
 
     signal wipePositionRequested(real position)
     signal oscRevealRequested
@@ -123,6 +139,119 @@ Rectangle {
 
     function panelPoint(x, y) {
         return dualVideoSurface.mapSurfacePoint(x, y);
+    }
+
+    // Hover/drag moves extracted from the navigation MouseArea so contract tests can drive
+    // the exact path (pan, marquee tracking, pixel readout) with synthetic positions.
+    function handleNavigationMove(x, y) {
+        control.oscRevealRequested();
+        const point = control.panelPoint(x, y);
+        if (control.roiSelecting) {
+            control.roiCurrentX = x;
+            control.roiCurrentY = y;
+            return;
+        }
+        if (viewportNavigation.pressed && point.insideContent && point.panel === control.roiPanel) {
+            dualVideoSurface.panBy(point.x - control.panLastX, point.y - control.panLastY);
+            control.panLastX = point.x;
+            control.panLastY = point.y;
+            // The pan moved the content under the cursor; re-map before re-issuing.
+            control.issuePixelReadout(control.panelPoint(x, y));
+            return;
+        }
+        control.issuePixelReadout(point);
+    }
+
+    // Issues one probe per session source at the hovered content position. The surface stages
+    // each slot independently, so every readout row samples the same content point.
+    function issuePixelReadout(point) {
+        const usable = Boolean(point) && Boolean(point.insideContent) && point.sourceX !== undefined && point.sourceY !== undefined && control.sourceCount > 0 && !control.overlayVisible;
+        control.pixelReadoutPositionValid = usable;
+        if (!usable)
+            return;
+        control.pixelReadoutSourceX = Number(point.sourceX);
+        control.pixelReadoutSourceY = Number(point.sourceY);
+        control.pixelReadoutExpected = expectedPixelsForPosition(control.pixelReadoutSourceX, control.pixelReadoutSourceY);
+        issueProbesForAllSlots();
+    }
+
+    function issueProbesForAllSlots() {
+        control.pixelReadoutBatchesIssued += 1;
+        for (let slot = 0; slot < control.sourceCount; ++slot)
+            dualVideoSurface.requestSourcePixelProbe(slot, control.pixelReadoutSourceX, control.pixelReadoutSourceY);
+    }
+
+    // The renderer resolves each slot's pixel from the same clamped normalized position and
+    // that slot's own frame dimensions; recomputing it here yields the exact coordinate a
+    // fresh delivery must carry to count as current.
+    function expectedPixelsForPosition(nx, ny) {
+        const upperLimit = 1.0 - Number.EPSILON;
+        const cx = Math.min(Math.max(Number(nx), 0.0), upperLimit);
+        const cy = Math.min(Math.max(Number(ny), 0.0), upperLimit);
+        const expected = {};
+        for (let slot = 0; slot < control.sourceCount; ++slot) {
+            const info = slot < control.sourceMediaInfo.length ? control.sourceMediaInfo[slot] : null;
+            if (!info)
+                continue;
+            expected[slot] = {
+                "x": Math.floor(cx * Number(info.width)),
+                "y": Math.floor(cy * Number(info.height))
+            };
+        }
+        return expected;
+    }
+
+    // Slot-filtered sink for sourcePixelProbed: failures are accepted as-is (they carry no
+    // values), while a valid delivery must still match the current position for its slot.
+    function acceptPixelProbeResult(result) {
+        if (!result || !control.pixelReadoutPositionValid)
+            return;
+        const slot = Number(result.slot);
+        const expected = control.pixelReadoutExpected[slot];
+        if (!expected)
+            return;
+        if (Boolean(result.valid) && (Number(result.x) !== expected.x || Number(result.y) !== expected.y))
+            return;
+        const updated = Object.assign({}, control.pixelReadoutResults);
+        updated[slot] = result;
+        control.pixelReadoutResults = updated;
+    }
+
+    function pixelReadoutRowText(slot) {
+        const result = control.pixelReadoutResults[slot];
+        const info = slot < control.sourceMediaInfo.length ? control.sourceMediaInfo[slot] : null;
+        if (!info)
+            return qsTr("无元数据");
+        if (!result)
+            return qsTr("读取中…");
+        if (!Boolean(result.valid)) {
+            const reason = String(result.reason);
+            if (reason === "no-frame")
+                return qsTr("帧未就绪");
+            if (reason === "missing-slot")
+                return qsTr("该源无帧");
+            if (reason === "device-busy")
+                return qsTr("设备忙");
+            return qsTr("超出画面");
+        }
+        const depth = Number(result.bitDepth) > 0 ? qsTr("%1-bit").arg(Number(result.bitDepth)) : "";
+        const range = info.colorRange !== undefined ? String(info.colorRange) : "";
+        const meta = [depth, range].filter(part => part.length > 0).join(" ");
+        return qsTr("像素 (%1, %2)  Y %3  Cb %4  Cr %5%6").arg(Number(result.x)).arg(Number(result.y)).arg(Number(result.luma)).arg(Number(result.cb)).arg(Number(result.cr)).arg(meta.length > 0 ? "  " + meta : "");
+    }
+
+    // A paused frame step keeps the parked cursor's values current; during playback the
+    // readout stays at its last sample instead of adding readbacks to every presented frame.
+    function refreshPixelReadoutAfterFrameChange() {
+        if (control.playbackActive || !control.pixelReadoutPositionValid)
+            return;
+        issueProbesForAllSlots();
+    }
+
+    onCurrentFrameChanged: refreshPixelReadoutAfterFrameChange()
+    onOverlayVisibleChanged: {
+        if (overlayVisible)
+            pixelReadoutPositionValid = false;
     }
 
     function sourceFilename(slot) {
@@ -224,6 +353,7 @@ Rectangle {
             referenceSlot: control.referenceSourceIndex >= 0 ? control.referenceSourceIndex : 0
             sourceDisplayInfo: control.sourceMediaInfo
             anchors.fill: parent
+            onSourcePixelProbed: result => control.acceptPixelProbeResult(result)
         }
         // qmllint enable import unqualified unresolved-type
     }
@@ -361,10 +491,13 @@ Rectangle {
             control.oscRevealRequested();
             const point = control.panelPoint(wheel.x, wheel.y);
             if (!point.insideContent) {
+                control.issuePixelReadout(point);
                 wheel.accepted = false;
                 return;
             }
             dualVideoSurface.zoomAt(point.x, point.y, wheel.angleDelta.y > 0 ? 1.25 : 0.8);
+            // The zoom moved the content under the cursor; re-map before re-issuing.
+            control.issuePixelReadout(control.panelPoint(wheel.x, wheel.y));
             wheel.accepted = true;
         }
         onPressed: mouse => {
@@ -400,18 +533,8 @@ Rectangle {
             }
             control.forceActiveFocus();
         }
-        onPositionChanged: mouse => {
-            control.oscRevealRequested();
-            const point = control.panelPoint(mouse.x, mouse.y);
-            if (control.roiSelecting) {
-                control.roiCurrentX = mouse.x;
-                control.roiCurrentY = mouse.y;
-            } else if (pressed && point.insideContent && point.panel === control.roiPanel) {
-                dualVideoSurface.panBy(point.x - control.panLastX, point.y - control.panLastY);
-                control.panLastX = point.x;
-                control.panLastY = point.y;
-            }
-        }
+        onPositionChanged: mouse => control.handleNavigationMove(mouse.x, mouse.y)
+        onExited: control.pixelReadoutPositionValid = false
         onReleased: mouse => {
             if (control.roiSelecting) {
                 const start = control.panelPoint(control.roiStartX, control.roiStartY);
@@ -624,6 +747,101 @@ Rectangle {
         onClicked: {
             // Auto -> Smooth -> Pixel -> Auto.
             dualVideoSurface.videoFilterMode = (mode + 1) % 3;
+        }
+    }
+
+    // Per-source raw code-value readout (1009 plan C slice 3): one row per session source,
+    // sampled at the hovered content position. The values are the frame planes' own YCbCr
+    // codes - the numeric review path; the picture itself stays the display-converted
+    // viewing path. Presentation follows the image workspace's cursorPixel readout.
+    Rectangle {
+        id: pixelReadoutPlate
+
+        objectName: "viewportPixelReadoutPlate"
+        visible: control.chromeVisible && control.pixelReadoutPositionValid && control.sourceCount > 0
+        clip: true
+        z: 30
+        radius: 5
+        color: Theme.oscGlass
+        border.width: 1
+        border.color: Theme.oscBorder
+        width: Math.min(parent.width - 24, pixelReadoutColumn.implicitWidth + 16)
+        height: pixelReadoutColumn.implicitHeight + 12
+        anchors {
+            left: parent.left
+            leftMargin: 12
+            bottom: viewCommandRow.top
+            bottomMargin: 8
+        }
+        Accessible.name: qsTr("像素源码值读数")
+        Accessible.description: qsTr("光标位置的帧平面原始 YCbCr 码值，逐源显示。")
+
+        Column {
+            id: pixelReadoutColumn
+
+            spacing: 3
+            anchors.centerIn: parent
+
+            Row {
+                spacing: 6
+
+                Text {
+                    text: qsTr("源码值 YCbCr")
+                    color: control.mutedTextColor
+                    font.pixelSize: 10
+                    font.weight: Font.DemiBold
+                }
+
+                HoverHandler {
+                    id: pixelReadoutHeaderHover
+                }
+
+                VcsToolTip {
+                    visible: pixelReadoutHeaderHover.hovered
+                    text: qsTr("光标位置的帧平面原始 YCbCr 码值（数值审查路径）。\n画面本身经过显示转换（观看路径），两者不承诺一致。\n位深来自帧格式，Limited/Full 来自源元数据。\n播放中读数不自动刷新；移动光标或暂停后逐帧重新取样。")
+                }
+            }
+
+            Repeater {
+                id: pixelReadoutRows
+
+                objectName: "pixelReadoutRows"
+                model: control.sourceCount
+
+                delegate: Row {
+                    id: pixelReadoutRow
+
+                    required property int index
+
+                    spacing: 6
+
+                    Rectangle {
+                        width: 18
+                        height: 15
+                        radius: 3
+                        color: Theme.sourceColor(pixelReadoutRow.index)
+                        border.width: 1
+                        border.color: Theme.sourceBorder(pixelReadoutRow.index)
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: String.fromCharCode(65 + pixelReadoutRow.index)
+                            color: Theme.sourceInk
+                            font.bold: true
+                            font.pixelSize: 10
+                        }
+                    }
+                    Text {
+                        objectName: "pixelReadoutRowText"
+                        width: Math.min(implicitWidth, pixelReadoutPlate.width - 46)
+                        elide: Text.ElideRight
+                        text: control.pixelReadoutRowText(pixelReadoutRow.index)
+                        color: control.primaryTextColor
+                        font.pixelSize: 11
+                        font.family: "Consolas"
+                    }
+                }
+            }
         }
     }
 
