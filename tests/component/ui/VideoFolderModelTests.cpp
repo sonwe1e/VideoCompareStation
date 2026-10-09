@@ -1,3 +1,4 @@
+#include "dvs/ui/ReviewPreferencesController.h"
 #include "dvs/ui/VideoFolderModel.h"
 
 #include <QCoreApplication>
@@ -120,7 +121,7 @@ TEST_F(VideoFolderModelTests, ContextOpenRejectsInvalidUrlsAndKeepsCommittedSele
     model->synchronizeSources({at(1)});
     for (const QUrl& url : {QUrl{},
                             QUrl{QStringLiteral("https://example.com/a.mp4")},
-                            QUrl::fromLocalFile(directory.filePath("a.png"))}) {
+                            QUrl::fromLocalFile(directory.filePath("a.xyz"))}) {
         EXPECT_FALSE(model->openFile(url));
     }
     EXPECT_TRUE(opened.empty());
@@ -130,13 +131,13 @@ TEST_F(VideoFolderModelTests, ContextOpenRejectsInvalidUrlsAndKeepsCommittedSele
 
 TEST_F(VideoFolderModelTests, ScansAsynchronouslyFiltersAndNaturallySortsWithoutDecoding) {
     const auto unicode = write(QString::fromUtf8("片段.MP4"));
+    const auto image = write(QString::fromUtf8("ignore.png"));
     write(QString::fromUtf8("忽略.文本"));
     for (const auto& name : {"clip10.MKV",
                              "clip2.mov",
                              "Clip1.avi",
                              "clip99999999999999999999999.m4v",
                              "clip100000000000000000000000.mp4",
-                             "ignore.png",
                              "ignore.txt"}) {
         write(QString::fromLatin1(name));
     }
@@ -149,17 +150,91 @@ TEST_F(VideoFolderModelTests, ScansAsynchronouslyFiltersAndNaturallySortsWithout
     ASSERT_EQ(tasks.size(), 1U);
     tasks.front()();
     waitForScan(*model);
-    ASSERT_EQ(model->fileCount(), 6);
+    ASSERT_EQ(model->fileCount(), 7);
     EXPECT_EQ(model->data(model->index(0), VideoFolderModel::FileNameRole).toString(), "Clip1.avi");
     EXPECT_EQ(model->data(model->index(1), VideoFolderModel::FileNameRole).toString(), "clip2.mov");
     EXPECT_EQ(model->data(model->index(2), VideoFolderModel::FileNameRole).toString(),
               "clip10.MKV");
-    EXPECT_EQ(at(5), unicode);
+    // Still images join the listing, marked by kind for the sidebar's image dispatch.
+    EXPECT_EQ(at(5), image);
+    EXPECT_TRUE(model->data(model->index(5), VideoFolderModel::FileIsImageRole).toBool());
+    EXPECT_FALSE(model->data(model->index(0), VideoFolderModel::FileIsImageRole).toBool());
+    EXPECT_EQ(at(6), unicode);
     EXPECT_TRUE(model->errorText().isEmpty());
     EXPECT_TRUE(opened.empty());
     EXPECT_EQ(model->rowCount(model->index(0)), 0);
     EXPECT_FALSE(model->data(QModelIndex{}, VideoFolderModel::FileUrlRole).isValid());
     EXPECT_EQ(model->roleNames().value(VideoFolderModel::FileNameRole), "fileName");
+}
+
+// Mixed-media folders open images without a video intent: the model stages the pending row,
+// the host drives the decode through the image workspace, and only a matching URL finishes.
+TEST_F(VideoFolderModelTests, ImageRowsStageWithoutVideoIntentAndFinishByUrl) {
+    write(QStringLiteral("clip1.mp4"));
+    const QUrl image = write(QStringLiteral("shot.png"));
+    load();
+    ASSERT_EQ(model->fileCount(), 2);
+    EXPECT_TRUE(model->isImageUrl(image));
+    EXPECT_EQ(model->urlForRow(1), image);
+
+    ASSERT_TRUE(model->openAt(1));
+    EXPECT_TRUE(model->openPending());
+    EXPECT_EQ(model->pendingRow(), 1);
+    EXPECT_TRUE(opened.empty());
+    EXPECT_EQ(plays, 0);
+
+    // A terminal for a foreign file must not retire the staged image.
+    EXPECT_FALSE(model->finishPendingImageOpen(true, {}, at(0).toLocalFile()));
+    EXPECT_TRUE(model->openPending());
+    ASSERT_TRUE(
+        model->finishPendingImageOpen(false, QStringLiteral("decode-failed"), image.toLocalFile()));
+    EXPECT_FALSE(model->openPending());
+    EXPECT_EQ(model->errorText(), QStringLiteral("decode-failed"));
+
+    ASSERT_TRUE(model->openAt(1));
+    ASSERT_TRUE(model->finishPendingImageOpen(true, {}, image.toLocalFile()));
+    EXPECT_FALSE(model->openPending());
+    EXPECT_TRUE(model->errorText().isEmpty());
+    EXPECT_TRUE(opened.empty());
+    EXPECT_EQ(plays, 0);
+
+    ASSERT_TRUE(model->openAt(1));
+    model->cancelPendingImageOpen();
+    EXPECT_FALSE(model->openPending());
+    EXPECT_TRUE(opened.empty());
+}
+
+// Recent entries classify by kind so the sidebar can route images to the image workspace.
+// The list arrives through the preferences controller exactly as in the composed app.
+TEST_F(VideoFolderModelTests, RecentEntriesCarryImageKind) {
+    class ClosedSettingsRepository final : public application::ISettingsRepository {
+    public:
+        [[nodiscard]] application::PortSubmitResult
+        submit(const application::SettingsLoadRequest&,
+               std::shared_ptr<application::IApplicationEventSink>) override {
+            return application::PortSubmitResult::Closed;
+        }
+        [[nodiscard]] application::PortSubmitResult
+        submit(const application::SettingsSaveRequest&,
+               std::shared_ptr<application::IApplicationEventSink>) override {
+            return application::PortSubmitResult::Closed;
+        }
+        void cancel(const application::RequestContext&) noexcept override {}
+    };
+    const QUrl video = write(QStringLiteral("clip.mp4"));
+    const QUrl image = write(QStringLiteral("shot.png"));
+    load();
+    ASSERT_EQ(model->fileCount(), 2);
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    model->attachPreferences(preferences);
+    preferences.rememberMediaFile(image);
+    preferences.rememberMediaFile(video);
+    ASSERT_EQ(model->recentFiles().size(), 2);
+    EXPECT_FALSE(model->recentFiles().front().toMap().value(QStringLiteral("isImage")).toBool());
+    EXPECT_TRUE(model->recentFiles().back().toMap().value(QStringLiteral("isImage")).toBool());
+    EXPECT_FALSE(model->isRecentImage(0));
+    EXPECT_TRUE(model->isRecentImage(1));
+    preferences.stop();
 }
 
 TEST_F(VideoFolderModelTests, OlderScanCannotOverwriteNewFolder) {
@@ -371,7 +446,7 @@ TEST_F(VideoFolderModelTests, EmptyFolderCompletesAndRealBackgroundWorkerIsUsabl
 TEST_F(VideoFolderModelTests, CommittedSingleVideoAutomaticallyFollowsParentWithoutOpeningIt) {
     const auto video = write(QString::fromUtf8("片段2.MP4"));
     write(QString::fromUtf8("片段10.mp4"));
-    write(QStringLiteral("ignored.png"));
+    write(QStringLiteral("ignored.txt"));
     model->synchronizeSources({video});
     EXPECT_TRUE(model->scanning());
     ASSERT_EQ(tasks.size(), 1U);
@@ -449,13 +524,15 @@ TEST_F(VideoFolderModelTests, RecentHistoryDeduplicatesCapsAndRetainsMissingFile
     EXPECT_EQ(model->recentFiles(), history);
 }
 
+// Comparison sessions and non-local sources never create single-video history. A still
+// image no longer appears here: images are first-class media and reach the recent list only
+// through their own commit terminal, never through the video shell's source projection.
 TEST_F(VideoFolderModelTests, ComparisonAndNonLocalSourcesDoNotCreateSingleVideoHistory) {
     const auto first = write(QStringLiteral("clip1.mp4"));
     const auto second = write(QStringLiteral("clip2.mp4"));
     for (const QVariantList& sources : {QVariantList{first, second},
                                         QVariantList{QUrl{"https://example.invalid/a.mp4"}},
-                                        QVariantList{QUrl{"file://server/share/a.mp4"}},
-                                        QVariantList{write(QStringLiteral("image.png"))}}) {
+                                        QVariantList{QUrl{"file://server/share/a.mp4"}}}) {
         model->synchronizeSources(sources);
         model->recordCommittedVideo();
         EXPECT_TRUE(model->currentUrl().isEmpty());

@@ -48,7 +48,7 @@ public:
         std::size_t maximumFiles = 100'000U;
     };
 
-    enum Role { FileNameRole = Qt::UserRole + 1, FileUrlRole };
+    enum Role { FileNameRole = Qt::UserRole + 1, FileUrlRole, FileIsImageRole };
     Q_ENUM(Role)
 
     explicit VideoFolderModel(QObject* parent = nullptr);
@@ -83,6 +83,15 @@ public:
     Q_INVOKABLE bool openFile(const QUrl& url);
     Q_INVOKABLE bool step(int delta);
     Q_INVOKABLE void cancelPendingOpen();
+    // An image open is staged like a video one, but the decode is driven by the host through the
+    // image workspace; finishPendingImageOpen is its terminal (path form: QML has no QUrl
+    // constructor) and only a matching file finishes.
+    Q_INVOKABLE bool
+    finishPendingImageOpen(bool success, const QString& error, const QString& localPath);
+    Q_INVOKABLE void cancelPendingImageOpen();
+    [[nodiscard]] Q_INVOKABLE bool isImageUrl(const QUrl& url) const;
+    [[nodiscard]] Q_INVOKABLE bool isRecentImage(int row) const;
+    [[nodiscard]] Q_INVOKABLE QUrl urlForRow(int row) const;
     void synchronizeSources(const QVariantList& sources);
     void completeOpen(qulonglong intentId, bool success, const QString& error);
     void recordCommittedVideo();
@@ -96,6 +105,7 @@ private:
     struct FileEntry final {
         QString name;
         QUrl url;
+        bool isImage = false;
     };
     struct ScanResult;
     struct Inbox;
@@ -107,6 +117,8 @@ private:
     bool startScan(const QUrl& folder);
     void followCurrentFolder();
     bool openUrl(const QUrl& url, int row);
+    // Stages a still-image open (no shell intent); the host drives the decode.
+    bool stageImageOpen(const QUrl& url, int row);
     void synchronizeRecentFiles(const QStringList& files);
     [[nodiscard]] int rowForUrl(const QUrl& url) const;
 
@@ -119,7 +131,7 @@ private:
     QUrl folderUrl_;
     QUrl scanningFolderUrl_;
     QStringList recentUrls_;
-    std::function<void(const QUrl&)> rememberVideo_;
+    std::function<void(const QUrl&)> rememberMedia_;
     QString folderName_;
     QString errorText_;
     QString folderErrorText_;
@@ -129,6 +141,8 @@ private:
     QUrl pendingUrl_;
     int pendingRow_ = -1;
     qulonglong pendingIntentId_ = 0;
+    // A staged still-image open has no shell intent; the host's image pipeline owns it.
+    bool pendingImage_ = false;
 };
 
 } // namespace dvs::ui

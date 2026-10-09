@@ -941,6 +941,9 @@ ApplicationWindow {
             root.pendingFolderPairRow = -1;
         }
 
+        if (root.videoFolderModel)
+            root.videoFolderModel.cancelPendingImageOpen();
+
         workspaceSession.cancelOpen();
 
         focusActiveWorkspace();
@@ -984,6 +987,9 @@ ApplicationWindow {
 
             root.showIntentMessage(detail);
 
+            if (root.videoFolderModel)
+                root.videoFolderModel.cancelPendingImageOpen();
+
             workspaceSession.cancelOpen();
 
             return;
@@ -999,6 +1005,16 @@ ApplicationWindow {
         root.commitWorkspace(workspaceSession.imageMedia, identity);
 
         root.dropError = "";
+
+        // A committed image task joins the shared recent-media list; a sidebar-staged open
+        // finishes its pending row here (its file must match, so dialog opens stay no-ops).
+        if (root.preferences) {
+            root.preferences.rememberMediaPath(target.primaryPath);
+            if (kind !== "single" && target.secondaryPath && target.secondaryPath.length > 0)
+                root.preferences.rememberMediaPath(target.secondaryPath);
+        }
+        if (root.videoFolderModel)
+            root.videoFolderModel.finishPendingImageOpen(true, "", target.primaryPath);
     }
 
     // Folder rows finish through ImageFolderPairModel. Commit the folder workspace only
@@ -1189,8 +1205,12 @@ ApplicationWindow {
     function openFolderVideo(row) {
         if (!videoFolderModel || videoFolderModel.scanning || row < 0 || row >= videoFolderModel.fileCount)
             return false;
+        const url = videoFolderModel.urlForRow(Number(row));
+        const isImage = videoFolderModel.isImageUrl(url);
         cancelWorkspaceOpen();
-        workspaceSession.beginOpen(workspaceSession.videoMedia);
+        workspaceSession.beginOpen(isImage ? workspaceSession.imageMedia : workspaceSession.videoMedia);
+        if (isImage)
+            return openSidebarImage(url);
         if (!videoFolderModel.openAt(Number(row))) {
             workspaceSession.cancelOpen();
             return false;
@@ -1199,9 +1219,31 @@ ApplicationWindow {
         return true;
     }
 
+    // Shared sidebar/recent image path: the model stages the pending row (no shell intent),
+    // the image workspace drives the decode, and completeImageOpen is the terminal that
+    // records the recent entry and finishes the model's pending state.
+    function openSidebarImage(url) {
+        if (!videoFolderModel.openFile(url)) {
+            workspaceSession.cancelOpen();
+            return false;
+        }
+        if (!performImageReview([url])) {
+            videoFolderModel.cancelPendingImageOpen();
+            workspaceSession.cancelOpen();
+            return false;
+        }
+        return true;
+    }
+
     function openRecentVideo(row) {
         if (!videoFolderModel || row < 0 || row >= videoFolderModel.recentFiles.length)
             return false;
+        if (videoFolderModel.isRecentImage(Number(row))) {
+            const entry = videoFolderModel.recentFiles[row];
+            cancelWorkspaceOpen();
+            workspaceSession.beginOpen(workspaceSession.imageMedia);
+            return openSidebarImage(entry.fileUrl);
+        }
         cancelWorkspaceOpen();
         workspaceSession.beginOpen(workspaceSession.videoMedia);
         if (!videoFolderModel.openRecent(Number(row))) {
@@ -1214,6 +1256,17 @@ ApplicationWindow {
 
     function sidebarVideoActionState(url) {
         let openReason = "";
+        // Still images open in the image workspace; they never join a video comparison.
+        if (videoFolderModel && videoFolderModel.isImageUrl(url)) {
+            if (!stillImageController)
+                openReason = qsTr("图片打开服务暂不可用");
+            else if (busy || videoFolderModel.openPending || (reviewInputDialogs && reviewInputDialogs.modalVisible))
+                openReason = qsTr("请等待当前打开操作完成");
+            return {
+                openReason: openReason,
+                compareReason: openReason.length > 0 ? openReason : qsTr("图片请在图片工作区对比")
+            };
+        }
         if (!shell || !controller || !videoFolderModel || !graphicsReady)
             openReason = qsTr("视频打开服务暂不可用");
         else if (busy || videoFolderModel.openPending || shell.queuedIntentCount > 0 || Object.keys(shell.activeIntent).length > 0 || (reviewInputDialogs && reviewInputDialogs.modalVisible))
@@ -1244,6 +1297,11 @@ ApplicationWindow {
         if (reason.length > 0) {
             showIntentMessage(reason);
             return false;
+        }
+        if (videoFolderModel && videoFolderModel.isImageUrl(url)) {
+            cancelWorkspaceOpen();
+            workspaceSession.beginOpen(workspaceSession.imageMedia);
+            return openSidebarImage(url);
         }
         cancelWorkspaceOpen();
         workspaceSession.beginOpen(workspaceSession.videoMedia);

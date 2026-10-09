@@ -23,8 +23,8 @@ Item {
             {fileName: "same-name.mp4", fileUrl: "file:///older/same-name.mp4"},
             {fileName: "very-long-current-video-name-to-ellide.mp4", fileUrl: "file:///videos/current.mp4"}
         ]
-        ListElement { fileName: "clip1.mp4"; fileUrl: "file:///videos/clip1.mp4" }
-        ListElement { fileName: "clip2.mp4"; fileUrl: "file:///videos/clip2.mp4" }
+        ListElement { fileName: "clip1.mp4"; fileUrl: "file:///videos/clip1.mp4"; fileIsImage: false }
+        ListElement { fileName: "clip2.mp4"; fileUrl: "file:///videos/clip2.mp4"; fileIsImage: false }
     }
 
     Dvs.VideoFolderSidebar {

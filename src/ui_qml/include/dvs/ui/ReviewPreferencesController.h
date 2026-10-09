@@ -83,8 +83,13 @@ public:
     void setPlaybackContinuityPolicy(int value);
     void setDefaultPairPolicy(int value);
 
-    [[nodiscard]] QStringList recentVideoFiles() const;
-    void rememberVideoFile(const QUrl& url);
+    // Recently opened local media, videos and still images alike, newest first (max 50). The
+    // persisted key predates image support and keeps its legacy name so existing history
+    // survives the widening.
+    [[nodiscard]] QStringList recentMediaFiles() const;
+    Q_INVOKABLE void rememberMediaFile(const QUrl& url);
+    // QML entry: builds the local-file URL on the C++ side (QML has no QUrl constructor).
+    Q_INVOKABLE void rememberMediaPath(const QString& localPath);
 
     Q_INVOKABLE void stop() noexcept;
 
@@ -100,7 +105,7 @@ public:
 
 Q_SIGNALS:
     void preferencesChanged();
-    void recentVideoFilesChanged();
+    void recentMediaFilesChanged();
 
 private:
     class Impl;

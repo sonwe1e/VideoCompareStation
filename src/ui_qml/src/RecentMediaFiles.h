@@ -9,11 +9,11 @@
 
 namespace dvs::ui::detail {
 
-constexpr qsizetype kMaximumRecentVideoFiles = 50;
+constexpr qsizetype kMaximumRecentMediaFiles = 50;
 
 // Pure path validation only. Existence/probing stays off the GUI thread; stale history is
 // allowed, and an attempted open reports the normal transactional media error.
-inline QUrl localVideoUrl(const QUrl& url) {
+inline QUrl localMediaUrl(const QUrl& url) {
     const QString path = url.toLocalFile();
     if (!url.isLocalFile() || !url.host().isEmpty() || url.hasQuery() || url.hasFragment() ||
         !QDir::isAbsolutePath(path) || path.startsWith(QStringLiteral("//")) ||
@@ -22,17 +22,28 @@ inline QUrl localVideoUrl(const QUrl& url) {
     }
     const QString suffix = QFileInfo{path}.suffix().toLower();
     // Feed only an ASCII extension to the shared classifier. Unknown Unicode suffixes cannot
-    // name any of the supported video types, and must not require filesystem transcoding.
+    // name any of the supported media types, and must not require filesystem transcoding.
     for (const QChar character : suffix) {
         if (character.unicode() > 127U) {
             return {};
         }
     }
-    const auto file = std::filesystem::path{("video." + suffix).toStdString()};
-    return application::isVideoPath(file) ? QUrl::fromLocalFile(QDir::cleanPath(path)) : QUrl{};
+    const auto file = std::filesystem::path{("media." + suffix).toStdString()};
+    const bool openable = application::isVideoPath(file) || application::isStillImagePath(file);
+    return openable ? QUrl::fromLocalFile(QDir::cleanPath(path)) : QUrl{};
 }
 
-inline bool sameVideoUrl(const QUrl& first, const QUrl& second) {
+// A still image routes to the image workspace, not the video session runner.
+inline bool isStillMediaUrl(const QUrl& url) {
+    const QString path = url.toLocalFile();
+    if (path.isEmpty()) {
+        return false;
+    }
+    const auto file = std::filesystem::path{("media." + QFileInfo{path}.suffix()).toStdWString()};
+    return application::isStillImagePath(file);
+}
+
+inline bool sameMediaUrl(const QUrl& first, const QUrl& second) {
 #ifdef Q_OS_WIN
     return first.toLocalFile().compare(second.toLocalFile(), Qt::CaseInsensitive) == 0;
 #else
@@ -41,17 +52,17 @@ inline bool sameVideoUrl(const QUrl& first, const QUrl& second) {
 }
 
 // Both inputs are newest first. Newly opened files take precedence over a late settings load.
-inline QStringList mergeRecentVideoFiles(const QStringList& newer, const QStringList& older) {
+inline QStringList mergeRecentMediaFiles(const QStringList& newer, const QStringList& older) {
     QStringList result;
     const auto append = [&result](const QStringList& files) {
         for (const QString& value : files) {
-            const QUrl url = localVideoUrl(QUrl{value});
+            const QUrl url = localMediaUrl(QUrl{value});
             if (url.isEmpty()) {
                 continue;
             }
             bool duplicate = false;
             for (const QString& existing : result) {
-                if (sameVideoUrl(QUrl{existing}, url)) {
+                if (sameMediaUrl(QUrl{existing}, url)) {
                     duplicate = true;
                     break;
                 }
@@ -59,13 +70,13 @@ inline QStringList mergeRecentVideoFiles(const QStringList& newer, const QString
             if (!duplicate) {
                 result.push_back(url.toString(QUrl::FullyEncoded));
             }
-            if (result.size() == kMaximumRecentVideoFiles) {
+            if (result.size() == kMaximumRecentMediaFiles) {
                 break;
             }
         }
     };
     append(newer);
-    if (result.size() < kMaximumRecentVideoFiles) {
+    if (result.size() < kMaximumRecentMediaFiles) {
         append(older);
     }
     return result;

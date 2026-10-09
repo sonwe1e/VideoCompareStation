@@ -19,7 +19,7 @@ add_library(
         src/PairMetricsController.cpp
         src/PreviewThumbnailController.cpp
         src/ReviewController.cpp
-        src/RecentVideoFiles.h
+        src/RecentMediaFiles.h
         src/ReviewPreferencesController.cpp
         src/ReviewSessionFacade.cpp
         src/ReviewShellController.cpp

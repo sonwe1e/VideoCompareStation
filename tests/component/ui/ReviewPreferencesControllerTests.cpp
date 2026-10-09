@@ -354,7 +354,7 @@ TEST_F(ReviewPreferencesControllerTests,
     auto repository = std::make_shared<FakeSettingsRepository>();
     repository->autoCompleteSaves = true;
     ReviewPreferencesController controller{repository};
-    controller.rememberVideoFile(first);
+    controller.rememberMediaFile(first);
     application::SettingsSnapshot settings;
     settings.values.emplace("review.view-mode", "difference");
     settings.values.emplace("extension.unknown-key", "preserve-me");
@@ -364,9 +364,9 @@ TEST_F(ReviewPreferencesControllerTests,
     repository->completeLoad(std::move(settings));
     ASSERT_TRUE(waitForPreferences([&] { return !repository->saveRequests.empty(); }));
     EXPECT_EQ(controller.viewMode(), ReviewPreferencesController::ViewMode::Difference);
-    ASSERT_EQ(controller.recentVideoFiles().size(), 2);
-    EXPECT_EQ(QUrl{controller.recentVideoFiles().front()}, first);
-    EXPECT_EQ(QUrl{controller.recentVideoFiles().back()}, previous);
+    ASSERT_EQ(controller.recentMediaFiles().size(), 2);
+    EXPECT_EQ(QUrl{controller.recentMediaFiles().front()}, first);
+    EXPECT_EQ(QUrl{controller.recentMediaFiles().back()}, previous);
     const auto& saved = repository->saveRequests.back().settings.values;
     EXPECT_EQ(saved.at("extension.unknown-key"), "preserve-me");
     EXPECT_EQ(saved.at("review.view-mode"), "difference");
@@ -376,6 +376,25 @@ TEST_F(ReviewPreferencesControllerTests,
     ASSERT_EQ(recent.size(), 2);
     EXPECT_EQ(QUrl{recent.first().toString()}, first);
     EXPECT_EQ(QUrl{recent.last().toString()}, previous);
+}
+
+// The recent list is the workspace's shared history: still images join videos (newest first,
+// deduplicated across kinds) while unknown suffixes never enter it.
+TEST_F(ReviewPreferencesControllerTests, RecentMediaListAcceptsImagesAndMergesAcrossKinds) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto video = QUrl::fromLocalFile(directory.filePath("clip.mp4"));
+    const auto image = QUrl::fromLocalFile(directory.filePath("shot.png"));
+    const auto unknown = QUrl::fromLocalFile(directory.filePath("data.xyz"));
+    ReviewPreferencesController controller{std::make_shared<FakeSettingsRepository>()};
+    controller.rememberMediaFile(video);
+    controller.rememberMediaFile(image);
+    controller.rememberMediaFile(unknown);
+    controller.rememberMediaFile(image);
+    ASSERT_EQ(controller.recentMediaFiles().size(), 2);
+    EXPECT_EQ(QUrl{controller.recentMediaFiles().front()}, image);
+    EXPECT_EQ(QUrl{controller.recentMediaFiles().back()}, video);
+    controller.stop();
 }
 
 TEST_F(ReviewPreferencesControllerTests,
@@ -394,9 +413,9 @@ TEST_F(ReviewPreferencesControllerTests,
     repository->completeLoad(std::move(settings));
     ASSERT_TRUE(waitForPreferences([&] { return !repository->saveRequests.empty(); }));
     EXPECT_EQ(controller.oscMode(), 1);
-    ASSERT_EQ(controller.recentVideoFiles().size(), 2);
+    ASSERT_EQ(controller.recentMediaFiles().size(), 2);
     // A new open while the previous save is in flight must survive that older completion.
-    controller.rememberVideoFile(old);
+    controller.rememberMediaFile(old);
     repository->completeSave();
     ASSERT_TRUE(waitForPreferences([&] { return repository->saveRequests.size() == 2U; }));
     repository->completeSave();
@@ -404,9 +423,9 @@ TEST_F(ReviewPreferencesControllerTests,
     auto reopenedRepository = std::make_shared<FakeSettingsRepository>();
     ReviewPreferencesController reopened{reopenedRepository};
     reopenedRepository->completeLoad(repository->saveRequests.back().settings);
-    ASSERT_TRUE(waitForPreferences([&] { return reopened.recentVideoFiles().size() == 2; }));
-    EXPECT_EQ(QUrl{reopened.recentVideoFiles().front()}, old);
-    EXPECT_EQ(QUrl{reopened.recentVideoFiles().back()}, recent);
+    ASSERT_TRUE(waitForPreferences([&] { return reopened.recentMediaFiles().size() == 2; }));
+    EXPECT_EQ(QUrl{reopened.recentMediaFiles().front()}, old);
+    EXPECT_EQ(QUrl{reopened.recentMediaFiles().back()}, recent);
 }
 
 TEST_F(ReviewPreferencesControllerTests,
@@ -419,10 +438,10 @@ TEST_F(ReviewPreferencesControllerTests,
                                 QUrl{"file:relative.mp4"},
                                 QUrl{"file://server/a.mp4"},
                                 QUrl{"https://example.invalid/a.mp4"},
-                                QUrl::fromLocalFile(directory.filePath("image.png"))}) {
-        controller.rememberVideoFile(invalid);
+                                QUrl::fromLocalFile(directory.filePath("render.xyz"))}) {
+        controller.rememberMediaFile(invalid);
     }
-    EXPECT_TRUE(controller.recentVideoFiles().isEmpty());
+    EXPECT_TRUE(controller.recentMediaFiles().isEmpty());
     QJsonArray stored;
     for (int index = 0; index < 60; ++index) {
         stored.append(
@@ -432,8 +451,8 @@ TEST_F(ReviewPreferencesControllerTests,
     settings.values.emplace("review.recent-video-files",
                             QJsonDocument{stored}.toJson().toStdString());
     repository->completeLoad(std::move(settings));
-    ASSERT_TRUE(waitForPreferences([&] { return controller.recentVideoFiles().size() == 50; }));
-    EXPECT_TRUE(QUrl{controller.recentVideoFiles().back()}.toLocalFile().endsWith("clip49.mp4"));
+    ASSERT_TRUE(waitForPreferences([&] { return controller.recentMediaFiles().size() == 50; }));
+    EXPECT_TRUE(QUrl{controller.recentMediaFiles().back()}.toLocalFile().endsWith("clip49.mp4"));
 }
 
 } // namespace

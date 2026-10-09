@@ -5,7 +5,7 @@
 #include "dvs/ui/ReviewPreferencesController.h"
 #include "dvs/ui/ReviewShellController.h"
 
-#include "RecentVideoFiles.h"
+#include "RecentMediaFiles.h"
 
 #include <QDir>
 #include <QDirIterator>
@@ -150,17 +150,17 @@ VideoFolderModel::VideoFolderModel(Dependencies dependencies, QObject* const par
 
 void VideoFolderModel::attachPreferences(ReviewPreferencesController& preferences) {
     const QPointer<ReviewPreferencesController> guarded{&preferences};
-    rememberVideo_ = [guarded](const QUrl& url) {
+    rememberMedia_ = [guarded](const QUrl& url) {
         if (guarded) {
-            guarded->rememberVideoFile(url);
+            guarded->rememberMediaFile(url);
         }
     };
     QObject::connect(
         &preferences,
-        &ReviewPreferencesController::recentVideoFilesChanged,
+        &ReviewPreferencesController::recentMediaFilesChanged,
         this,
-        [this, &preferences] { synchronizeRecentFiles(preferences.recentVideoFiles()); });
-    synchronizeRecentFiles(preferences.recentVideoFiles());
+        [this, &preferences] { synchronizeRecentFiles(preferences.recentMediaFiles()); });
+    synchronizeRecentFiles(preferences.recentMediaFiles());
 }
 
 void VideoFolderModel::attachPlayback(ReviewController& controller, ReviewShellController& shell) {
@@ -240,7 +240,7 @@ int VideoFolderModel::pendingRow() const noexcept {
     return pendingRow_;
 }
 bool VideoFolderModel::openPending() const noexcept {
-    return pendingIntentId_ != 0;
+    return pendingIntentId_ != 0 || pendingImage_;
 }
 int VideoFolderModel::rowCount(const QModelIndex& parent) const {
     return parent.isValid() ? 0 : fileCount();
@@ -255,12 +255,14 @@ QVariant VideoFolderModel::data(const QModelIndex& index, const int role) const 
         return file.name;
     case FileUrlRole:
         return file.url;
+    case FileIsImageRole:
+        return file.isImage;
     default:
         return {};
     }
 }
 QHash<int, QByteArray> VideoFolderModel::roleNames() const {
-    return {{FileNameRole, "fileName"}, {FileUrlRole, "fileUrl"}};
+    return {{FileNameRole, "fileName"}, {FileUrlRole, "fileUrl"}, {FileIsImageRole, "fileIsImage"}};
 }
 
 VideoFolderModel::ScanResult
@@ -287,16 +289,18 @@ VideoFolderModel::scan(const QUrl& folder,
         // Only the suffix enters the extension classifier; Unicode paths stay in QUrl. Use
         // native Windows wide characters even for unsupported Unicode extensions.
         const auto suffix = std::filesystem::path{
-            (QStringLiteral("video.") + QFileInfo{name}.suffix()).toStdWString()};
-        if (!application::isVideoPath(suffix)) {
+            (QStringLiteral("media.") + QFileInfo{name}.suffix()).toStdWString()};
+        const bool isVideo = application::isVideoPath(suffix);
+        const bool isImage = !isVideo && application::isStillImagePath(suffix);
+        if (!isVideo && !isImage) {
             continue;
         }
         if (result.files.size() >= maximumFiles) {
             result.files.clear();
-            result.error = tr("视频文件过多，请选择较小的文件夹。");
+            result.error = tr("媒体文件过多，请选择较小的文件夹。");
             return result;
         }
-        result.files.push_back({name, QUrl::fromLocalFile(iterator.filePath())});
+        result.files.push_back({name, QUrl::fromLocalFile(iterator.filePath()), isImage});
     }
     if (!canceled->load()) {
         std::sort(result.files.begin(), result.files.end(), [](const auto& a, const auto& b) {
@@ -422,13 +426,13 @@ int VideoFolderModel::rowForUrl(const QUrl& url) const {
         return -1;
     }
     const auto found = std::find_if(files_.begin(), files_.end(), [&](const auto& file) {
-        return detail::sameVideoUrl(file.url, url);
+        return detail::sameMediaUrl(file.url, url);
     });
     return found == files_.end() ? -1 : static_cast<int>(found - files_.begin());
 }
 void VideoFolderModel::synchronizeSources(const QVariantList& sources) {
     const QUrl current =
-        sources.size() == 1 ? detail::localVideoUrl(sources.front().toUrl()) : QUrl{};
+        sources.size() == 1 ? detail::localMediaUrl(sources.front().toUrl()) : QUrl{};
     if (current == currentUrl_) {
         return;
     }
@@ -460,7 +464,7 @@ int VideoFolderModel::recentCurrentRow() const {
         return -1;
     }
     for (qsizetype index = 0; index < recentUrls_.size(); ++index) {
-        if (detail::sameVideoUrl(QUrl{recentUrls_[index]}, currentUrl_)) {
+        if (detail::sameMediaUrl(QUrl{recentUrls_[index]}, currentUrl_)) {
             return static_cast<int>(index);
         }
     }
@@ -472,15 +476,17 @@ QVariantList VideoFolderModel::recentFiles() const {
     result.reserve(recentUrls_.size());
     for (const QString& value : recentUrls_) {
         const QUrl url{value};
-        result.push_back(
-            QVariantMap{{QStringLiteral("fileName"), QFileInfo{url.toLocalFile()}.fileName()},
-                        {QStringLiteral("fileUrl"), url}});
+        result.push_back(QVariantMap{
+            {QStringLiteral("fileName"), QFileInfo{url.toLocalFile()}.fileName()},
+            {QStringLiteral("fileUrl"), url},
+            {QStringLiteral("isImage"), detail::isStillMediaUrl(url)},
+        });
     }
     return result;
 }
 
 void VideoFolderModel::synchronizeRecentFiles(const QStringList& files) {
-    const auto recent = detail::mergeRecentVideoFiles(files, {});
+    const auto recent = detail::mergeRecentMediaFiles(files, {});
     if (recent == recentUrls_) {
         return;
     }
@@ -495,9 +501,9 @@ void VideoFolderModel::recordCommittedVideo() {
     }
     followCurrentFolder();
     synchronizeRecentFiles(
-        detail::mergeRecentVideoFiles({currentUrl_.toString(QUrl::FullyEncoded)}, recentUrls_));
-    if (rememberVideo_) {
-        rememberVideo_(currentUrl_);
+        detail::mergeRecentMediaFiles({currentUrl_.toString(QUrl::FullyEncoded)}, recentUrls_));
+    if (rememberMedia_) {
+        rememberMedia_(currentUrl_);
     }
     Q_EMIT currentFileOpened();
 }
@@ -522,7 +528,13 @@ bool VideoFolderModel::openAt(const int row) {
 }
 
 bool VideoFolderModel::openUrl(const QUrl& url, const int row) {
-    if (!dependencies_.openVideo || detail::localVideoUrl(url).isEmpty()) {
+    if (detail::localMediaUrl(url).isEmpty()) {
+        return false;
+    }
+    if (detail::isStillMediaUrl(url)) {
+        return stageImageOpen(url, row);
+    }
+    if (!dependencies_.openVideo) {
         return false;
     }
     cancelPendingOpen();
@@ -540,6 +552,57 @@ bool VideoFolderModel::openUrl(const QUrl& url, const int row) {
     return true;
 }
 
+bool VideoFolderModel::stageImageOpen(const QUrl& url, const int row) {
+    cancelPendingOpen();
+    pendingUrl_ = url;
+    pendingRow_ = row;
+    pendingImage_ = true;
+    errorText_.clear();
+    Q_EMIT stateChanged();
+    return true;
+}
+
+bool VideoFolderModel::finishPendingImageOpen(const bool success,
+                                              const QString& error,
+                                              const QString& localPath) {
+    const QUrl url = QUrl::fromLocalFile(localPath);
+    if (!pendingImage_ || pendingIntentId_ != 0 ||
+        !detail::sameMediaUrl(pendingUrl_, detail::localMediaUrl(url))) {
+        return false;
+    }
+    pendingImage_ = false;
+    pendingRow_ = -1;
+    pendingUrl_.clear();
+    // The video projection (currentUrl_/folder follow) stays owned by the video session; the
+    // host records the image in the shared recent list through the preferences controller.
+    errorText_ = success ? QString{} : (error.isEmpty() ? tr("无法打开该图片。") : error);
+    Q_EMIT stateChanged();
+    return true;
+}
+
+bool VideoFolderModel::isImageUrl(const QUrl& url) const {
+    return detail::isStillMediaUrl(url);
+}
+
+void VideoFolderModel::cancelPendingImageOpen() {
+    if (std::exchange(pendingImage_, false)) {
+        pendingRow_ = -1;
+        pendingUrl_.clear();
+        Q_EMIT stateChanged();
+    }
+}
+
+QUrl VideoFolderModel::urlForRow(const int row) const {
+    if (row < 0 || row >= fileCount()) {
+        return {};
+    }
+    return files_[static_cast<std::size_t>(row)].url;
+}
+
+bool VideoFolderModel::isRecentImage(const int row) const {
+    return row >= 0 && row < recentUrls_.size() && detail::isStillMediaUrl(QUrl{recentUrls_[row]});
+}
+
 bool VideoFolderModel::step(const int delta) {
     if (delta == 0 || files_.empty()) {
         return false;
@@ -551,12 +614,13 @@ bool VideoFolderModel::step(const int delta) {
 }
 void VideoFolderModel::cancelPendingOpen() {
     const auto intent = std::exchange(pendingIntentId_, 0);
+    const bool image = std::exchange(pendingImage_, false);
     pendingRow_ = -1;
     pendingUrl_.clear();
     if (intent != 0 && dependencies_.cancelOpen) {
         dependencies_.cancelOpen(intent);
     }
-    if (intent != 0) {
+    if (intent != 0 || image) {
         Q_EMIT stateChanged();
     }
 }
@@ -571,7 +635,7 @@ void VideoFolderModel::completeOpen(const qulonglong intentId,
     pendingRow_ = -1;
     pendingUrl_.clear();
     if (!success || currentUrl_.isEmpty() ||
-        !detail::sameVideoUrl(currentUrl_, detail::localVideoUrl(requested))) {
+        !detail::sameMediaUrl(currentUrl_, detail::localMediaUrl(requested))) {
         errorText_ = error.isEmpty() ? tr("无法打开该视频，原视频保持不变。") : error;
     } else if (!dependencies_.play || !dependencies_.play()) {
         errorText_ = tr("视频已打开，但未能开始播放。");

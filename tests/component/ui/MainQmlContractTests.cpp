@@ -7358,7 +7358,7 @@ TEST(MainQmlContractTests, OrdinarySingleVideoOpenShowsItsFolderAndRecordsOnlySu
     EXPECT_EQ(harness.videoFolder.fileCount(), 2);
     EXPECT_EQ(harness.videoFolder.currentRow(), 0);
     ASSERT_EQ(harness.videoFolder.recentFiles().size(), 1);
-    EXPECT_EQ(QUrl{harness.preferences.recentVideoFiles().front()}, url);
+    EXPECT_EQ(QUrl{harness.preferences.recentMediaFiles().front()}, url);
     // Successful opens reapply pair, continuity and range preferences. None may start playback
     // or submit a second open.
     EXPECT_EQ(std::count_if(harness.submitted.begin(),
@@ -7412,6 +7412,49 @@ TEST(MainQmlContractTests, OrdinarySingleVideoOpenShowsItsFolderAndRecordsOnlySu
     EXPECT_EQ(harness.videoFolder.currentUrl(), url);
     EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 0);
     EXPECT_EQ(harness.submitted.size(), 1U);
+}
+
+// The recent list is shared across workspaces: a still image opened through the sidebar path
+// records into the same history the video browser shows (marked by kind), the model's staged
+// pending row finishes on the image commit terminal, and the image workspace becomes the
+// active task - no video intent is ever submitted.
+TEST(MainQmlContractTests, ImageSidebarOpenRecordsSharedRecentHistoryWithoutVideoIntents) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    QImage primary(64, 48, QImage::Format_ARGB32);
+    primary.fill(QColor(120, 140, 160));
+    const QString path = directory.filePath(QStringLiteral("shot.png"));
+    ASSERT_TRUE(primary.save(path, "PNG"));
+    WorkspaceHarness harness;
+    harness.withVideoFolder = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+    harness.submitted.clear();
+    const QUrl url = QUrl::fromLocalFile(path);
+
+    QVariant accepted;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "openSidebarImage",
+                                          Q_RETURN_ARG(QVariant, accepted),
+                                          Q_ARG(QVariant, url)));
+    ASSERT_TRUE(accepted.toBool());
+    EXPECT_TRUE(harness.videoFolder.openPending());
+    ASSERT_TRUE(harness.waitUntil([&] { return harness.imageReview.hasPrimary(); }));
+    harness.settle();
+
+    ASSERT_EQ(harness.preferences.recentMediaFiles().size(), 1);
+    EXPECT_EQ(QUrl{harness.preferences.recentMediaFiles().front()}, url);
+    ASSERT_EQ(harness.videoFolder.recentFiles().size(), 1);
+    EXPECT_TRUE(harness.videoFolder.recentFiles()
+                    .front()
+                    .toMap()
+                    .value(QStringLiteral("isImage"))
+                    .toBool());
+    EXPECT_FALSE(harness.videoFolder.openPending());
+    EXPECT_TRUE(harness.videoFolder.errorText().isEmpty());
+    EXPECT_TRUE(harness.root->property("imageWorkspaceActive").toBool());
+    EXPECT_TRUE(harness.submitted.empty());
 }
 
 TEST(MainQmlContractTests, SidebarMenuBlocksShortcutsBeforeAnyRowHasFocus) {

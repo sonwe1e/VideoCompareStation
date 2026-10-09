@@ -16,12 +16,13 @@ Rectangle {
     signal contextOpenRequested(url fileUrl)
     signal compareRequested(url fileUrl)
 
-    function openContextMenu(item, url, point) {
+    function openContextMenu(item, url, point, isImage) {
         if (!item || !item.enabled || !fileActionState)
             return false;
         fileMenu.returnFocusItem = null;
         const state = fileActionState(url);
         fileMenu.targetUrl = url;
+        fileMenu.targetIsImage = Boolean(isImage);
         fileMenu.openReason = state.openReason;
         fileMenu.compareReason = state.compareReason;
         fileMenu.popup(control, item.mapToItem(control, point.x, point.y));
@@ -30,7 +31,7 @@ Rectangle {
 
     function openKeyboardMenu(list) {
         const item = list.itemAtIndex(list.currentIndex);
-        return item ? openContextMenu(item, item.contextUrl, Qt.point(0, item.height)) : false;
+        return item ? openContextMenu(item, item.contextUrl, Qt.point(0, item.height), item.contextIsImage) : false;
     }
 
     onAnchorRowChanged: {
@@ -47,6 +48,7 @@ Rectangle {
         id: fileMenu
         objectName: "videoFileContextMenu"
         property url targetUrl
+        property bool targetIsImage: false
         property string openReason: ""
         property string compareReason: ""
         property Item returnFocusItem: null
@@ -64,7 +66,7 @@ Rectangle {
 
         VcsMenuItem {
             objectName: "videoFileContextOpen"
-            text: qsTr("打开为新单视频任务")
+            text: fileMenu.targetIsImage ? qsTr("在图片工作区打开") : qsTr("打开为新单视频任务")
             enabled: fileMenu.openReason.length === 0
             onTriggered: {
                 fileMenu.returnFocusItem = null;
@@ -185,7 +187,7 @@ Rectangle {
         Text {
             width: parent.width
             visible: !control.compact
-            text: control.showRecent ? qsTr("%1 个视频 · 最近 50 项").arg(control.folderModel ? control.folderModel.recentFiles.length : 0) : (control.folderModel && control.folderModel.scanning ? qsTr("正在读取文件列表…") : qsTr("%1 个视频 · 点击即播放").arg(control.folderModel ? control.folderModel.fileCount : 0))
+            text: control.showRecent ? qsTr("%1 项 · 上限 50").arg(control.folderModel ? control.folderModel.recentFiles.length : 0) : (control.folderModel && control.folderModel.scanning ? qsTr("正在读取文件列表…") : qsTr("%1 个媒体文件 · 点击即打开").arg(control.folderModel ? control.folderModel.fileCount : 0))
             color: Theme.mutedText
             font.pixelSize: 12
         }
@@ -220,21 +222,45 @@ Rectangle {
             required property int index
             required property string fileName
             required property url fileUrl
+            required property bool fileIsImage
             readonly property url contextUrl: fileUrl
+            readonly property bool contextIsImage: fileIsImage
             objectName: "videoFolderRow-" + index
             TapHandler {
                 acceptedButtons: Qt.RightButton
                 onTapped: eventPoint => {
                     files.currentIndex = row.index;
                     files.forceActiveFocus();
-                    control.openContextMenu(row, row.contextUrl, eventPoint.position);
+                    control.openContextMenu(row, row.contextUrl, eventPoint.position, row.contextIsImage);
                 }
             }
             width: files.width
             height: 42
             text: fileName
+            // The still-image chip marks the rows that open in the image workspace; video rows
+            // (the common case) stay visually unchanged.
+            leftPadding: fileIsImage ? 38 : 0
             highlighted: Boolean(control.folderModel && index === control.folderModel.currentRow)
             enabled: Boolean(control.folderModel && !control.folderModel.scanning)
+            Rectangle {
+                visible: row.fileIsImage
+                width: 24
+                height: 16
+                radius: 3
+                anchors.left: parent.left
+                anchors.leftMargin: 9
+                anchors.verticalCenter: parent.verticalCenter
+                color: "transparent"
+                border.width: 1
+                border.color: Theme.border
+
+                Text {
+                    anchors.centerIn: parent
+                    text: qsTr("图")
+                    color: Theme.mutedText
+                    font.pixelSize: 10
+                }
+            }
             background: Rectangle {
                 radius: Theme.radiusSmall
                 color: row.highlighted ? Theme.controlChecked : (row.hovered ? Theme.controlHover : "transparent")
@@ -256,7 +282,7 @@ Rectangle {
                 width: 28
                 height: 28
                 text: "…"
-                helpText: qsTr("视频操作：打开或加入当前对比")
+                helpText: qsTr("打开文件；视频可加入当前对比")
                 visible: rowActionHover.hovered || row.navigationTarget
                 // Menu / Shift+F10 remain the row's keyboard entry points.
                 focusPolicy: Qt.NoFocus
@@ -301,7 +327,7 @@ Rectangle {
         Text {
             visible: Boolean(control.folderModel && !control.folderModel.scanning && control.folderModel.fileCount === 0)
             anchors.centerIn: parent
-            text: qsTr("没有可浏览的视频")
+            text: qsTr("没有可浏览的媒体文件")
             color: Theme.mutedText
             font.pixelSize: 12
         }
@@ -325,19 +351,40 @@ Rectangle {
             required property int index
             required property var modelData
             readonly property url contextUrl: modelData.fileUrl
+            readonly property bool contextIsImage: Boolean(modelData.isImage)
             objectName: "videoRecentRow-" + index
             TapHandler {
                 acceptedButtons: Qt.RightButton
                 onTapped: eventPoint => {
                     recentFiles.currentIndex = recentRow.index;
                     recentFiles.forceActiveFocus();
-                    control.openContextMenu(recentRow, recentRow.contextUrl, eventPoint.position);
+                    control.openContextMenu(recentRow, recentRow.contextUrl, eventPoint.position, recentRow.contextIsImage);
                 }
             }
             width: recentFiles.width
             height: 42
             text: modelData.fileName
+            leftPadding: contextIsImage ? 38 : 0
             highlighted: Boolean(control.folderModel && index === control.folderModel.recentCurrentRow)
+            Rectangle {
+                visible: recentRow.contextIsImage
+                width: 24
+                height: 16
+                radius: 3
+                anchors.left: parent.left
+                anchors.leftMargin: 9
+                anchors.verticalCenter: parent.verticalCenter
+                color: "transparent"
+                border.width: 1
+                border.color: Theme.border
+
+                Text {
+                    anchors.centerIn: parent
+                    text: qsTr("图")
+                    color: Theme.mutedText
+                    font.pixelSize: 10
+                }
+            }
             background: Rectangle {
                 radius: Theme.radiusSmall
                 color: recentRow.highlighted ? Theme.controlChecked : (recentRow.hovered ? Theme.controlHover : "transparent")
@@ -359,7 +406,7 @@ Rectangle {
                 width: 28
                 height: 28
                 text: "…"
-                helpText: qsTr("视频操作：打开或加入当前对比")
+                helpText: qsTr("打开文件；视频可加入当前对比")
                 visible: recentRowActionHover.hovered || recentRow.navigationTarget
                 // Menu / Shift+F10 remain the row's keyboard entry points.
                 focusPolicy: Qt.NoFocus
@@ -404,7 +451,7 @@ Rectangle {
         Text {
             visible: recentFiles.count === 0
             anchors.centerIn: parent
-            text: qsTr("成功打开的视频会显示在这里")
+            text: qsTr("成功打开的视频与图片会显示在这里")
             color: Theme.mutedText
             font.pixelSize: 12
         }
@@ -429,13 +476,13 @@ Rectangle {
         }
         Text {
             visible: Boolean(control.folderModel && control.folderModel.openPending)
-            text: qsTr("正在打开所选视频…")
+            text: qsTr("正在打开所选文件…")
             color: Theme.mutedText
             font.pixelSize: 12
         }
         Text {
             width: parent.width
-            text: qsTr("点击打开单视频；… 或右键可加入对比")
+            text: qsTr("点击打开；图片进入图片工作区；… 或右键查看操作")
             wrapMode: Text.Wrap
             color: Theme.mutedText
             font.pixelSize: 12
