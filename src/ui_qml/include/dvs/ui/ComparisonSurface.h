@@ -8,6 +8,7 @@
 
 #include <functional>
 #include <memory>
+#include <vector>
 
 namespace dvs::platform {
 class FrameMailbox;
@@ -226,8 +227,10 @@ public:
     Q_INVOKABLE QVariantMap mapSurfacePoint(qreal x, qreal y) const;
     // Asks for one raw source-pixel read of the given slot at normalized source coordinates.
     // The probe runs on the render thread against the currently presented frame set and the
-    // result arrives asynchronously on sourcePixelProbed; requests are one-shot and a new
-    // request replaces a pending one. Coordinates are clamped into [0,1).
+    // result arrives asynchronously on sourcePixelProbed. Requests are one-shot; a new
+    // request for a slot replaces that slot's pending one, while different slots stay
+    // independent so one cursor position can probe every source between two frames.
+    // Coordinates are clamped into [0,1).
     Q_INVOKABLE void requestSourcePixelProbe(int slot, qreal normalizedX, qreal normalizedY);
 
     [[nodiscard]] bool
@@ -273,6 +276,9 @@ private:
     class Services;
 
     void clampSmallViewportToGeometry();
+    // Marks the item dirty and explicitly requests a window update so a parked render loop
+    // still runs the sync that fulfills staged pixel probes.
+    void scheduleProbeSync();
 
     std::shared_ptr<const Services> services_;
     ViewMode viewMode_ = SideBySide;
@@ -301,14 +307,14 @@ private:
     int referenceSlot_ = 0;
     std::function<std::uint64_t()> droppedFrameProbe_;
     qulonglong droppedFrames_ = 0U;
-    // One-shot probe request staged for the next scene-graph sync; GUI-thread only.
+    // One-shot probe requests staged for the next scene-graph sync, at most one per slot;
+    // GUI-thread only.
     struct PendingPixelProbe final {
-        bool active = false;
         int slot = 0;
         qreal normalizedX = 0.0;
         qreal normalizedY = 0.0;
     };
-    PendingPixelProbe pendingPixelProbe_;
+    std::vector<PendingPixelProbe> pendingPixelProbes_;
 };
 
 } // namespace dvs::ui

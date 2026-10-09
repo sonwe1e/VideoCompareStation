@@ -430,12 +430,19 @@ public:
         presentationOptions_ = options;
     }
 
-    // Scene-graph sync phase (GUI thread): stage one probe request; a newer request replaces
-    // an unfulfilled older one.
-    void stagePixelProbe(const int slot, const qreal normalizedX, const qreal normalizedY) {
-        probeSlot_ = static_cast<std::uint8_t>(slot);
-        probeX_ = normalizedX;
-        probeY_ = normalizedY;
+    // Scene-graph sync phase (GUI thread): replace the staged batch. Slots are independent, so
+    // one cursor position probes every source in a single frame; a newer request for a slot
+    // replaces that slot's entry.
+    void stagePixelProbes(const std::vector<ComparisonSurface::PendingPixelProbe>& requests) {
+        stagedProbes_.clear();
+        stagedProbes_.reserve(requests.size());
+        for (const ComparisonSurface::PendingPixelProbe& request : requests) {
+            stagedProbes_.push_back(StagedProbe{
+                .slot = static_cast<std::uint8_t>(request.slot),
+                .x = request.normalizedX,
+                .y = request.normalizedY,
+            });
+        }
     }
 
     [[nodiscard]] bool usesServices(
@@ -495,29 +502,42 @@ public:
             .referenceSlot = presentationOptions_.referenceSlot,
         };
         retry_.retryContendedRender(window_, renderer_.render(state));
-        fulfillPendingPixelProbe();
+        fulfillPendingPixelProbes();
     }
 
-    // Render thread. DeviceBusy keeps the request staged for the next frame; every other
-    // outcome is final and is delivered through a queued invocation on the surface. The
+    // Render thread. DeviceBusy keeps its request staged for the next frame; every other
+    // outcome is final and is delivered through one queued invocation on the surface. The
     // scene-graph sync barrier guarantees the surface outlives render(), and a queued event
     // posted to an object destroyed before delivery is discarded by Qt, so no Qt state is
     // touched on the render thread.
-    void fulfillPendingPixelProbe() {
-        if (!probeSlot_.has_value()) {
+    void fulfillPendingPixelProbes() {
+        if (stagedProbes_.empty()) {
             return;
         }
-        const platform::SourcePixelProbe probed =
-            renderer_.probeSourcePixel(*probeSlot_, probeX_, probeY_);
-        if (probed.reason == platform::SourcePixelProbe::Reason::DeviceBusy) {
+        std::vector<platform::SourcePixelProbe> completed;
+        completed.reserve(stagedProbes_.size());
+        std::vector<StagedProbe> retry;
+        for (const StagedProbe& staged : stagedProbes_) {
+            const platform::SourcePixelProbe probed =
+                renderer_.probeSourcePixel(staged.slot, staged.x, staged.y);
+            if (probed.reason == platform::SourcePixelProbe::Reason::DeviceBusy) {
+                retry.push_back(staged);
+            } else {
+                completed.push_back(probed);
+            }
+        }
+        stagedProbes_ = std::move(retry);
+        if (completed.empty()) {
             return;
         }
-        probeSlot_.reset();
-        const QVariantMap payload = probeResultToMap(probed);
         ComparisonSurface* const surface = &surface_;
         QMetaObject::invokeMethod(
             surface,
-            [surface, payload]() { emit surface->sourcePixelProbed(payload); },
+            [surface, payloads = std::move(completed)]() {
+                for (const platform::SourcePixelProbe& probe : payloads) {
+                    emit surface->sourcePixelProbed(probeResultToMap(probe));
+                }
+            },
             Qt::QueuedConnection);
     }
 
@@ -546,9 +566,12 @@ private:
     QRectF bounds_;
     qreal devicePixelRatio_ = 1.0;
     PresentationOptions presentationOptions_;
-    std::optional<std::uint8_t> probeSlot_;
-    qreal probeX_ = 0.0;
-    qreal probeY_ = 0.0;
+    struct StagedProbe final {
+        std::uint8_t slot = 0;
+        double x = 0.0;
+        double y = 0.0;
+    };
+    std::vector<StagedProbe> stagedProbes_;
 };
 
 ComparisonSurface::ComparisonSurface(QQuickItem* const parent) : QQuickItem(parent) {
@@ -755,12 +778,23 @@ void ComparisonSurface::requestSourcePixelProbe(const int slot,
     // Keep the request strictly inside [0,1) so the renderer's edge guard maps it to the last
     // pixel instead of rejecting a cursor sitting on the right/bottom border.
     const qreal upperLimit = 1.0 - std::numeric_limits<qreal>::epsilon();
-    pendingPixelProbe_ = PendingPixelProbe{
-        .active = true,
+    const PendingPixelProbe request{
         .slot = slot,
         .normalizedX = std::clamp(normalizedX, 0.0, upperLimit),
         .normalizedY = std::clamp(normalizedY, 0.0, upperLimit),
     };
+    for (PendingPixelProbe& pending : pendingPixelProbes_) {
+        if (pending.slot == slot) {
+            pending = request;
+            scheduleProbeSync();
+            return;
+        }
+    }
+    pendingPixelProbes_.push_back(request);
+    scheduleProbeSync();
+}
+
+void ComparisonSurface::scheduleProbeSync() {
     update();
     // An idle window parks its render loop; the explicit request guarantees a scene-graph
     // frame runs the staged probe instead of waiting for some other dirty item.
@@ -1285,11 +1319,9 @@ QSGNode* ComparisonSurface::updatePaintNode(QSGNode* const oldNode, UpdatePaintN
 
     node->synchronize(
         boundingRect(), itemWindow->effectiveDevicePixelRatio(), presentationOptions(*this));
-    if (pendingPixelProbe_.active) {
-        pendingPixelProbe_.active = false;
-        node->stagePixelProbe(pendingPixelProbe_.slot,
-                              pendingPixelProbe_.normalizedX,
-                              pendingPixelProbe_.normalizedY);
+    if (!pendingPixelProbes_.empty()) {
+        node->stagePixelProbes(pendingPixelProbes_);
+        pendingPixelProbes_.clear();
     }
     return node;
 }

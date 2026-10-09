@@ -3314,5 +3314,78 @@ TEST(ComparisonSurfaceWarpTests, SourcePixelProbeRoundTripsExactCodeValues) {
     EXPECT_TRUE(actor.shutdown(2s));
 }
 
+// One cursor position probes every source at once: requests for independent slots all survive
+// until the next sync and each delivery carries its own slot's pixel and code values, so the
+// per-source readout rows can never starve behind one another. Re-issuing a slot replaces
+// only that slot's pending request.
+TEST(ComparisonSurfaceWarpTests, SourcePixelProbeBatchDeliversEveryRequestedSlot) {
+    SurfaceWarpHarness harness;
+    ASSERT_TRUE(harness.start());
+
+    std::vector<QVariantMap> probed;
+    QObject::connect(&harness.surface,
+                     &ComparisonSurface::sourcePixelProbed,
+                     [&probed](const QVariantMap& result) { probed.push_back(result); });
+
+    auto budget = std::make_shared<platform::FrameBudget>(16U * 1024U * 1024U);
+    platform::GpuTransferActor actor{budget, harness.broker, harness.mailbox, harness.activitySink};
+    const application::FrameRequestContext context = makeContext();
+    const domain::ColorMetadata color{
+        .matrix = domain::ColorMatrix::kBt709,
+        .range = domain::ColorRange::kLimited,
+        .matrixInferred = false,
+    };
+    std::optional<application::FrameSet> pair = makeSolidSetWithMetadata(
+        *budget, domain::FrameId{7}, 200U, 90U, 180U, color, 100U, 30U, 220U, color);
+    ASSERT_TRUE(pair.has_value());
+    ASSERT_EQ(actor.submit(context, std::move(*pair)), platform::GpuTransferSubmitResult::Accepted);
+    ASSERT_TRUE(actor.waitUntilIdle(5s));
+    static_cast<void>(harness.grab());
+
+    const auto deliveredSlot = [&probed](const int slot) {
+        for (const QVariantMap& result : probed) {
+            if (result.value(QStringLiteral("slot")).toInt() == slot) {
+                return result;
+            }
+        }
+        return QVariantMap{};
+    };
+
+    // Both slots requested before any sync: both deliver in one round, each with its own
+    // pixel and code values (slot 0 is 16x9, slot 1 is 12x9).
+    harness.surface.requestSourcePixelProbe(0, 0.55, 0.45);
+    harness.surface.requestSourcePixelProbe(1, 0.3, 0.6);
+    ASSERT_TRUE(waitUntil([&probed] { return probed.size() >= 2U; }, 5s));
+    const QVariantMap batchZero = deliveredSlot(0);
+    const QVariantMap batchOne = deliveredSlot(1);
+    ASSERT_TRUE(batchZero.value(QStringLiteral("valid")).toBool());
+    ASSERT_TRUE(batchOne.value(QStringLiteral("valid")).toBool());
+    EXPECT_EQ(batchZero.value(QStringLiteral("x")).toInt(), 8);
+    EXPECT_EQ(batchZero.value(QStringLiteral("y")).toInt(), 4);
+    EXPECT_EQ(batchZero.value(QStringLiteral("luma")).toUInt(), 200U);
+    EXPECT_EQ(batchOne.value(QStringLiteral("x")).toInt(), 3);
+    EXPECT_EQ(batchOne.value(QStringLiteral("y")).toInt(), 5);
+    EXPECT_EQ(batchOne.value(QStringLiteral("luma")).toUInt(), 100U);
+
+    // A newer position for slot 0 replaces only slot 0: it answers with the new pixel and no
+    // stale (8, 4) delivery for slot 0 ever arrives.
+    probed.clear();
+    harness.surface.requestSourcePixelProbe(0, 0.55, 0.45);
+    harness.surface.requestSourcePixelProbe(0, 0.25, 0.25);
+    ASSERT_TRUE(waitUntil([&probed] { return !probed.empty(); }, 5s));
+    static_cast<void>(harness.grab());
+    // Pump briefly: a wrongly retained first request would deliver a second result here.
+    EXPECT_FALSE(
+        waitUntil([&probed] { return probed.size() > 1U; }, std::chrono::milliseconds{150}));
+    ASSERT_EQ(probed.size(), 1U);
+    EXPECT_EQ(probed.front().value(QStringLiteral("slot")).toInt(), 0);
+    EXPECT_EQ(probed.front().value(QStringLiteral("x")).toInt(), 4);
+    EXPECT_EQ(probed.front().value(QStringLiteral("y")).toInt(), 2);
+
+    EXPECT_TRUE(harness.mailbox->clear(context.playback));
+    harness.releaseRenderer();
+    EXPECT_TRUE(actor.shutdown(2s));
+}
+
 } // namespace
 } // namespace dvs::ui
