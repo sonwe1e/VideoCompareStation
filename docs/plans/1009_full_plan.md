@@ -10,11 +10,20 @@
 
 ---
 
+## 落地进度（2026-10-09 更新）
+
+- 第 1 周四组条目已全部完成（`7260471`）并随 `89c819d` 推送 origin/main：交互 P0 的 1–3、高倍率最近邻、ReviewRuntime 自 detach、clang-tidy 扩规则。下文对应条目已打【已落地】标记，正文保留审计时的发现快照。
+- 当日核实未动工：视频像素读数（`cursorPixel` 仍只在 ImageReviewController）、放大镜（全仓库无 loupe/magnifier 实现）、模式/视图快捷键（ReviewShortcuts.qml 无数字键与 F/Ctrl+0 绑定）。
+- Windows 验收清账未执行：本机 dev 构建 + 启动自检通过，体验清单已于 2026-10-09 发出待反馈；台账 `docs/engineering/visual-review-backlog.md` 里 10-06/10-07 的"修复草稿"条目仍待真机核销。
+- 行号漂移提示：week-1 改动后 Main.qml 3871→3904、PlaybackCoordinator.cpp 4735→4772、Main.cpp 3124→3132，下文旧行号需按此折算；标注"锚点已核实"的小节除外。
+
+---
+
 一、播放体验（优先级最高，直接影响审查结论）
 
 P0：像素检查保真
 
-1. 高倍率改用最近邻采样。现在 drawVideoSlots 固定绑定 linearSampler_（D3d11ComparisonRenderer.cpp:1505），放大后像素会被抹平，看不清块效应和插帧形变。最近邻采样器已经存在（:1055），只有差异视图在用。
+1. 【已落地 7260471：Auto 模式 >200% 自动切换，视口 Smooth/Pixel 徽章可手动锁定】高倍率改用最近邻采样。现在 drawVideoSlots 固定绑定 linearSampler_（D3d11ComparisonRenderer.cpp:1505），放大后像素会被抹平，看不清块效应和插帧形变。最近邻采样器已经存在（:1055），只有差异视图在用。
    - 方案：缩放超过 200%（可配置）自动切到最近邻，400% 以上叠加像素网格。也提供一个"平滑 / 像素"手动开关，沿用现有的重采样徽章。
    - 参考：OpenRV、DJV、tev 都在高倍率下默认最近邻并显示网格。
 2. 视频像素读数。目前 cursorPixel 只存在于 ImageReviewController。
@@ -55,10 +64,10 @@ P2：格式与色彩
 
 P0：修复已确认的缺陷
 
-1. 问题记录恢复不了视口。IssueLogController.cpp:220-265 保存了 ROI、中心点和缩放，但 applyIssueRestore（Main.qml:1500-1510）只恢复了模式、源对和帧号。ComparisonSurface::restoreViewport（ComparisonSurface.cpp:794）全仓库没有调用方。这违背了产品文档里"回到同一状态复核"的目标。改动只需一行调用，再补一个契约测试。
-2. 快捷键帮助写错了。播放器方案里写"← / → 快退 / 快进 5 秒"、"Ctrl+← / → 30 秒"（ShortcutHelpOverlay.qml:24），但代码在所有方案下都是逐帧（ReviewShortcuts.qml:82 的注释也这么写）。另外，帮助里漏了 Up/Down、Alt+←/→（Wipe）和 Home/End。
+1. 【已落地 7260471：restoreViewport 已接线并带契约测试】问题记录恢复不了视口。IssueLogController.cpp:220-265 保存了 ROI、中心点和缩放，但 applyIssueRestore（Main.qml:1500-1510）只恢复了模式、源对和帧号。ComparisonSurface::restoreViewport（ComparisonSurface.cpp:794）全仓库没有调用方。这违背了产品文档里"回到同一状态复核"的目标。改动只需一行调用，再补一个契约测试。
+2. 【已落地 7260471：帮助内容已改为与实际绑定一致；"从绑定表生成"的根治方案仍开放，见第 2–3 周细化 B】快捷键帮助写错了。播放器方案里写"← / → 快退 / 快进 5 秒"、"Ctrl+← / → 30 秒"（ShortcutHelpOverlay.qml:24），但代码在所有方案下都是逐帧（ReviewShortcuts.qml:82 的注释也这么写）。另外，帮助里漏了 Up/Down、Alt+←/→（Wipe）和 Home/End。
    - 建议：帮助内容直接从 ReviewShortcuts 的绑定表生成，不再手写第二份。
-3. 记录问题时可以写备注。现在 captureCurrentIssue("") 永远传空备注，也没有快捷键。
+3. 【已落地 7260471：M 键 + IssueNoteDialog，回车带备注、Esc 留空】记录问题时可以写备注。现在 captureCurrentIssue("") 永远传空备注，也没有快捷键。
    - 建议：M 键直接记录，并弹出一个可以忽略的备注输入框；回车保存，Esc 留空保存。参考 Frame.io 的"按键留言，自动带时间码"。
 
 P1：键盘优先的比较操作
@@ -135,9 +144,9 @@ P2：无障碍与高 DPI
 
 P0：安全与正确性
 
-1. 线程自 detach。ReviewRuntime.cpp:89-91 在 worker 线程里调用 stop() 时会 detach()，线程会比持有者活得更久，可能出现释放后使用（UAF）。
+1. 【已落地 7260471：GraphicsNotificationPump 不再自 detach，线程状态由 shared_ptr 持有】线程自 detach。ReviewRuntime.cpp:89-91 在 worker 线程里调用 stop() 时会 detach()，线程会比持有者活得更久，可能出现释放后使用（UAF）。
    - 建议：worker 线程自己调用 stop 时只发停止请求，由持有者在析构时 join。或者在投递关闭消息时禁止自调用。补一个 ASan 场景测试。
-2. lint 覆盖面。
+2. 【部分落地 7260471：bugprone/concurrency/performance/member-init 已加入并清完 ~160 处，HeaderFilterRegex 已去掉 jobs_ffmpeg；platform_windows 仍被 Quality.cmake:86 整体排除，单独 lint 配置待做】lint 覆盖面。
    - .clang-tidy 只开了 clang-analyzer-*，而这个代码库有约 30 处线程和约 31 个使用互斥锁的文件。建议加上 bugprone-*、concurrency-*、performance-* 和 cppcoreguidelines-pro-type-member-init。
    - HeaderFilterRegex 里还写着已经删除的 jobs_ffmpeg。
    - Quality.cmake:86 把整个 platform_windows 排除在 lint 外，D3D 渲染器和 GPU actor 都没有静态分析。建议用一个精简的 include 配置单独为它跑 lint。
@@ -159,7 +168,7 @@ P1：测试与流程
 8. 积压的待验收项。台账里有 8 条以上"修复草稿，Windows 验收待完成"（10-06 到 10-07），都已合入但没有验收。建议先开一轮专门的 Windows 验收清账，再开新功能，否则台账状态会越来越失真。
 9. CI 只有一个机器池。除一个 windows-2022 job 外全部跑在自托管 runner 上。建议至少让 format、lint 和单元测试在 GitHub 托管的 runner 上也跑一份，自托管机器宕机时主线仍有保护。
 10. 测试缺口。tests/hardware 目前只有一个 CMakeLists；persistence_json 只有 8 个测试。
-11. 仓库根目录整理。根目录有一堆未跟踪的 HTML、PNG、update.finished，还有 symbolize.obj、vc140.pdb。建议加进 .gitignore，或者把需要保留的报告移到 docs/。
+11. 【部分处理 2026-10-09：根目录文档类（分析/方案/工单/编译笔记）已按功能分 4 个提交入库；`generated-*.png` 仍留在工作区未跟踪，`.gitignore` 收尾待做】仓库根目录整理。根目录有一堆未跟踪的 HTML、PNG、update.finished，还有 symbolize.obj、vc140.pdb。建议加进 .gitignore，或者把需要保留的报告移到 docs/。
 
 ---
 
@@ -176,3 +185,40 @@ P1：测试与流程
 ├───────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────┤
 │ 之后      │ vsync 对齐、实时拖动、LRU 缓存条、J/K/L、反向播放；Coordinator 和 Controller 拆分；VP9/AV1、4:4:4 路径 │ 投入较大，按用户反馈排序               │
 └───────────┴────────────────────────────────────────────────────────────────────────────────────────────────────────┴────────────────────────────────────────┘
+
+状态（2026-10-09）：第 1 周已完成；当前进入第 2–3 周，执行顺序 A →（B ∥ C）→ D，见下节细化。
+
+---
+
+## 第 2–3 周工单细化（2026-10-09，锚点已对当前 HEAD 核实）
+
+### A. Windows 验收清账（先做，不改代码）
+
+真机走查并逐条核销 `docs/engineering/visual-review-backlog.md` 的待验收条目。dev 构建 + 启动自检已通过，体验清单 2026-10-09 已发出。范围按台账分四组：
+
+- 渲染类（直接影响比对结论）：Highlight 阈值背景透 A 路、SignedSubtract 阈值拒绝区中灰、差异阈值不吞 Fade 混合。
+- 侧栏与历史（V-08）：当前文件夹／最近打开两页、右键"打开为新任务／加入对比"及满三源／重复／不可读时的禁用说明、键盘焦点与 Enter 行为。
+- 倍率类：竖屏视频倍率读数与一键真实尺寸（含 PR 49 的 fit 以下原生缩放）、拖动不跳变。
+- 导出类（需多容器素材）：MP4 末 GOP 关键帧、MKV 惰性索引、TS 起始关键帧、起始帧号舍入、非零起始 PTS。
+
+验收通过的条目在台账推进状态；发现回归记新条目，不带病开新功能。
+
+### B. 模式与视图快捷键（改动面最小，可与 A 并行）
+
+- 绑定点：`src/ui_qml/qml/ReviewShortcuts.qml`（221 行）是唯一绑定表，统一 `Shortcut{enabled,onActivated}` 结构；动作经 `ReviewActions.qml` 门面转发 controller，新增快捷键不直接摸 controller。
+- 内容：数字键 1–8 切 CompareModeBar 模式；F 适应窗口；Ctrl+0 / Z 100%；+/- 走 `ComparisonViewport.qml:558` 的居中 `zoomAt` 路径；R 重置；`` ` `` 按住看参考源，`Shift+`` ` 锁定切换。
+- 根治帮助浮层：从 ReviewShortcuts 绑定表生成帮助内容，替代手写第二份（P0-2 只修了内容，单一事实源未建）。
+- 顺带统一双击语义为"100% ↔ 适应"，全屏只留 F11；新绑定每条补 MainQmlContractTests 契约断言。
+
+### C. 视频像素读数（B 之外独立，放大镜的前置件）
+
+- 光标锚点：`ComparisonViewport.qml:372` 的 `onPositionChanged` 与 `panelPoint()` 已完成部件坐标 → 源坐标换算，缺的是把源坐标送进回读通道。
+- 回读通道已存在：D3d11GpuFrameBacking / GpuTransferActor 已有 staging / CopySubresourceRegion 路径；新增"只读 1×1"最小查询接口，禁止整帧回读进热路径。
+- 显示口径：A/B/C 同坐标的 Y'CbCr 原始码值 + 转换后 RGB，标注 8/10-bit 与 limited/full；与图片侧 `cursorPixel` 口径一致。
+- 验收：对已知测试图（纯色 + 梯度）逐通道比对回读值；异步查询携带会话／代际身份，不阻塞 GUI／渲染线程。
+
+### D. 放大镜 loupe（依赖 C）
+
+- Z 按住显示 4–8× 放大圆窗（倍率／尺寸可配置），A/B/C 严格同坐标，叠加 C 的像素读数，松开即隐。
+- 实现：QML 覆盖层 + 既有放大采样路径，读数复用 C 的查询接口；放大镜内默认最近邻，与 200% 采样策略协同。
+- 验收：三源内容同坐标偏差为 0；圆窗内像素读数与 C 的定点读数一致。
