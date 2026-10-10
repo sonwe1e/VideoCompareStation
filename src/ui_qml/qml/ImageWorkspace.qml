@@ -46,7 +46,8 @@ Rectangle {
     readonly property bool hasPrimary: Boolean(controller && controller.hasPrimary)
     readonly property bool hasSecondary: Boolean(imageReview && imageReview.hasSecondary)
     readonly property bool hasPair: Boolean(imageReview && imageReview.hasPair)
-    readonly property int compareMode: imageReview ? Number(imageReview.compareMode) : 0
+    readonly property bool canSwitchSingleSource: hasPair && !editModeActive
+    readonly property int compareMode: editModeActive ? 0 : (imageReview ? Number(imageReview.compareMode) : 0)
     readonly property real wipePosition: imageReview ? Number(imageReview.wipePosition) : 0.5
     readonly property real zoom: imageReview ? Number(imageReview.zoom) : 1
     readonly property var cursorPixel: imageReview ? imageReview.cursorPixel : ({})
@@ -54,7 +55,7 @@ Rectangle {
     readonly property bool hasFolders: Boolean(pairModel && pairModel.pairCount > 0)
     readonly property bool sizesDiffer: Boolean(imageReview && imageReview.hasPair && imageReview.primaryWidth > 0 && imageReview.primaryWidth !== imageReview.secondaryWidth || imageReview && imageReview.hasPair && imageReview.primaryHeight > 0 && imageReview.primaryHeight !== imageReview.secondaryHeight)
     // Alpha difference (6) is a per-pixel diff over the straight-alpha channel.
-    readonly property bool diffModeActive: Boolean(imageReview && imageReview.hasPair && imageReview.compareMode >= 2 && (imageReview.compareMode <= 4 || imageReview.compareMode === 6))
+    readonly property bool diffModeActive: Boolean(imageReview && imageReview.hasPair && compareMode >= 2 && (compareMode <= 4 || compareMode === 6))
     readonly property int viewMode: imageReview ? Number(imageReview.viewMode) : 0
     // Background under transparent regions: 0 = dark, 1 = checkerboard, 2 = black, 3 = white.
     // The neutral checkerboard is the default so the content area never tints color judgment
@@ -92,6 +93,10 @@ Rectangle {
     onCompareModeChanged: {
         if (compareMode !== 0)
             singleViewShowSecondary = false;
+        clearImageHover();
+    }
+    onEditModeActiveChanged: {
+        clearImageHover();
     }
 
     // A lazily instantiated workspace (video-first sessions build this tree only when the
@@ -109,7 +114,7 @@ Rectangle {
     }
 
     function toggleSinglePairSource() {
-        if (!hasPair)
+        if (!canSwitchSingleSource)
             return;
         if (compareMode !== 0) {
             modeButton(0);
@@ -265,33 +270,38 @@ Rectangle {
         };
     }
 
+    function clearImageHover() {
+        if (imageReview)
+            imageReview.clearCursorPixel();
+        control.hoverPoint = null;
+    }
+
     function applyHover(view, mouseX, mouseY, slot) {
         if (!imageReview)
             return;
-        if (slot < 0) {
-            imageReview.clearCursorPixel();
-            control.hoverPoint = null;
+        const img = view.image;
+        if (slot < 0 || !img || img.status !== Image.Ready) {
+            clearImageHover();
             return;
         }
         const mapped = mapToImage(view, mouseX, mouseY);
-        if (!mapped) {
-            imageReview.clearCursorPixel();
-            control.hoverPoint = null;
+        if (!mapped || mapped.x < 0 || mapped.y < 0 || mapped.x >= img.sourceSize.width || mapped.y >= img.sourceSize.height) {
+            clearImageHover();
             return;
         }
-        imageReview.updateCursorPixel(slot, mapped.x, mapped.y);
-        const img = view.image;
-        if (img && img.sourceSize.width > 0 && img.sourceSize.height > 0) {
-            control.hoverPoint = {
-                "sourceSlot": slot,
-                "normX": Math.max(0, Math.min(1, mapped.x / img.sourceSize.width)),
-                "normY": Math.max(0, Math.min(1, mapped.y / img.sourceSize.height)),
-                "imgX": Math.round(mapped.x),
-                "imgY": Math.round(mapped.y)
-            };
-        } else {
-            control.hoverPoint = null;
-        }
+        // Editing changes the image's origin and pixels. Never label a sample from the
+        // immutable review original as a value from the displayed working copy.
+        if (control.editModeActive)
+            imageReview.clearCursorPixel();
+        else
+            imageReview.updateCursorPixel(slot, mapped.x, mapped.y);
+        control.hoverPoint = {
+            "sourceSlot": slot,
+            "normX": mapped.x / img.sourceSize.width,
+            "normY": mapped.y / img.sourceSize.height,
+            "imgX": Math.floor(mapped.x),
+            "imgY": Math.floor(mapped.y)
+        };
     }
 
     // ---- Step-3 image editing -------------------------------------------------------
@@ -347,6 +357,24 @@ Rectangle {
         if (!imageEdit)
             return false;
         const applied = Boolean(imageEdit.padToCanvas(width, height, fillColor));
+        if (applied && imageReview)
+            imageReview.resetView();
+        return applied;
+    }
+
+    function applyImageMirror(vertical) {
+        if (!imageEdit)
+            return false;
+        const applied = Boolean(imageEdit.mirrorImage(vertical));
+        if (applied && imageReview)
+            imageReview.resetView();
+        return applied;
+    }
+
+    function applyImageRotation(turns) {
+        if (!imageEdit)
+            return false;
+        const applied = Boolean(imageEdit.rotateImage(turns));
         if (applied && imageReview)
             imageReview.resetView();
         return applied;
@@ -485,10 +513,24 @@ Rectangle {
     function updateCropSelection(view) {
         if (!imageEdit || !imageEdit.active)
             return;
-        const m0 = mapToImage(view, view.cropStart.x, view.cropStart.y);
-        const m1 = mapToImage(view, view.cropCurrent.x, view.cropCurrent.y);
+        let m0 = mapToImage(view, view.cropStart.x, view.cropStart.y);
+        let m1 = mapToImage(view, view.cropCurrent.x, view.cropCurrent.y);
         if (!m0 || !m1)
             return;
+        if (control.editTool !== "arrow") {
+            // Clip both endpoints before computing the extent. Clipping only x/y counts
+            // letterbox pixels in the width/height, especially after a first crop.
+            const width = imageEdit.imageWidth;
+            const height = imageEdit.imageHeight;
+            m0 = {
+                "x": Math.max(0, Math.min(width, m0.x)),
+                "y": Math.max(0, Math.min(height, m0.y))
+            };
+            m1 = {
+                "x": Math.max(0, Math.min(width, m1.x)),
+                "y": Math.max(0, Math.min(height, m1.y))
+            };
+        }
         const deltaX = m1.x - m0.x;
         const deltaY = m1.y - m0.y;
         const isArrow = control.editTool === "arrow";
@@ -675,6 +717,97 @@ Rectangle {
         }
     }
 
+    component CropHandle: Item {
+        id: handleArea
+
+        required property string handleMode
+        required property Item targetViewport
+        required property var overlayParent
+
+        width: 22
+        height: 22
+        z: 32
+
+        // Corner L-bracket decoration
+        Item {
+            anchors.fill: parent
+            visible: handleArea.handleMode === "tl" || handleArea.handleMode === "tr" || handleArea.handleMode === "bl" || handleArea.handleMode === "br"
+
+            Rectangle {
+                width: 14
+                height: 3
+                color: "#ffffff"
+                x: handleArea.handleMode.indexOf("l") !== -1 ? 10 : (parent.width - 10 - width)
+                y: handleArea.handleMode.indexOf("t") !== -1 ? 10 : (parent.height - 10 - height)
+
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.margins: -1
+                    z: -1
+                    color: "transparent"
+                    border.color: "#80000000"
+                    border.width: 1
+                }
+            }
+            Rectangle {
+                width: 3
+                height: 14
+                color: "#ffffff"
+                x: handleArea.handleMode.indexOf("l") !== -1 ? 10 : (parent.width - 10 - width)
+                y: handleArea.handleMode.indexOf("t") !== -1 ? 10 : (parent.height - 10 - height)
+
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.margins: -1
+                    z: -1
+                    color: "transparent"
+                    border.color: "#80000000"
+                    border.width: 1
+                }
+            }
+        }
+
+        // Edge horizontal pill (t, b)
+        Rectangle {
+            visible: handleArea.handleMode === "t" || handleArea.handleMode === "b"
+            anchors.centerIn: parent
+            width: 18
+            height: 4
+            radius: 2
+            color: "#ffffff"
+
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: -1
+                radius: 2
+                z: -1
+                color: "transparent"
+                border.color: "#80000000"
+                border.width: 1
+            }
+        }
+
+        // Edge vertical pill (l, r)
+        Rectangle {
+            visible: handleArea.handleMode === "l" || handleArea.handleMode === "r"
+            anchors.centerIn: parent
+            width: 4
+            height: 18
+            radius: 2
+            color: "#ffffff"
+
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: -1
+                radius: 2
+                z: -1
+                color: "transparent"
+                border.color: "#80000000"
+                border.width: 1
+            }
+        }
+    }
+
     component ImageViewport: Item {
         id: viewport
 
@@ -694,6 +827,7 @@ Rectangle {
         property bool cropActive: false
         property point cropStart: Qt.point(0, 0)
         property point cropCurrent: Qt.point(0, 0)
+        readonly property bool isCropTarget: control.editModeActive && (viewport.slot === (control.editSourceSlot >= 0 ? control.editSourceSlot : control.editDisplayedSlot())) && (control.editTool === "crop" || control.editTool === "mosaic")
         // Annotation drag gesture (select tool) and the text-click guard.
         property bool annotationDragActive: false
 
@@ -701,6 +835,14 @@ Rectangle {
         // Fit scale of the displayed image (fit-window base), forwarded so the workspace
         // status bar can report the physical display percentage.
         readonly property real fitScale: previewImage ? previewImage.fitScale : 1
+
+        function refreshHover() {
+            if (viewport.visible && viewportMouseArea.containsMouse)
+                control.applyHover(viewport, viewportMouseArea.mouseX, viewportMouseArea.mouseY, viewport.slot);
+        }
+
+        onVisibleChanged: Qt.callLater(viewport.refreshHover)
+        onSlotChanged: Qt.callLater(viewport.refreshHover)
 
         clip: true
 
@@ -749,6 +891,19 @@ Rectangle {
             asynchronous: false
             cache: false
             smooth: control.zoom <= 2
+            // Coalesce geometry updates so a stationary pointer still describes the pixel
+            // currently underneath it after zoom, pan, crop, rotate or undo.
+            onXChanged: Qt.callLater(viewport.refreshHover)
+            onYChanged: Qt.callLater(viewport.refreshHover)
+            onWidthChanged: Qt.callLater(viewport.refreshHover)
+            onHeightChanged: Qt.callLater(viewport.refreshHover)
+            onSourceSizeChanged: Qt.callLater(viewport.refreshHover)
+            onStatusChanged: Qt.callLater(viewport.refreshHover)
+            onSourceChanged: {
+                if (control.hoverPoint && control.hoverPoint.sourceSlot === viewport.slot)
+                    control.clearImageHover();
+                Qt.callLater(viewport.refreshHover);
+            }
         }
 
         // The title and the size/format readout sit on the image itself, so they get a
@@ -809,29 +964,51 @@ Rectangle {
             id: syncedCrosshair
             objectName: "syncedCrosshair-" + viewport.slot
             anchors.fill: parent
-            visible: Boolean(control.hoverPoint && control.hasPair && control.compareMode === 1 && previewImage.status === Image.Ready)
+            visible: Boolean(control.hoverPoint && previewImage.status === Image.Ready && ((control.compareMode === 1 && control.hasPair) || (control.compareMode === 0 && isHoveredSource)))
             z: 15
 
             readonly property real targetX: control.hoverPoint ? previewImage.x + control.hoverPoint.normX * previewImage.width : 0
             readonly property real targetY: control.hoverPoint ? previewImage.y + control.hoverPoint.normY * previewImage.height : 0
             readonly property bool isHoveredSource: Boolean(control.hoverPoint && control.hoverPoint.sourceSlot === viewport.slot)
+            readonly property real imageLeft: Math.max(0, previewImage.x)
+            readonly property real imageTop: Math.max(0, previewImage.y)
+            readonly property real imageRight: Math.min(viewport.width, previewImage.x + previewImage.width)
+            readonly property real imageBottom: Math.min(viewport.height, previewImage.y + previewImage.height)
 
             // Vertical hairline
             Rectangle {
+                objectName: "imageCrosshairVertical-" + viewport.slot
                 x: Math.round(syncedCrosshair.targetX)
-                y: Math.max(0, previewImage.y)
+                y: syncedCrosshair.imageTop
                 width: 1
-                height: Math.min(viewport.height, previewImage.height)
+                height: Math.max(0, syncedCrosshair.imageBottom - syncedCrosshair.imageTop)
                 color: syncedCrosshair.isHoveredSource ? Theme.probeLineMuted : Theme.probeLine
+
+                Rectangle {
+                    x: -1
+                    width: parent.width + 2
+                    height: parent.height
+                    z: -1
+                    color: "#99000000"
+                }
             }
 
             // Horizontal hairline
             Rectangle {
-                x: Math.max(0, previewImage.x)
+                objectName: "imageCrosshairHorizontal-" + viewport.slot
+                x: syncedCrosshair.imageLeft
                 y: Math.round(syncedCrosshair.targetY)
-                width: Math.min(viewport.width, previewImage.width)
+                width: Math.max(0, syncedCrosshair.imageRight - syncedCrosshair.imageLeft)
                 height: 1
                 color: syncedCrosshair.isHoveredSource ? Theme.probeLineMuted : Theme.probeLine
+
+                Rectangle {
+                    y: -1
+                    width: parent.width
+                    height: parent.height + 2
+                    z: -1
+                    color: "#99000000"
+                }
             }
 
             // Synced target reticle (shown on the mirror/other viewport)
@@ -857,9 +1034,10 @@ Rectangle {
                 color: Theme.probe
             }
 
-            // Coordinate tag on the synced viewport
+            // The active single-image pane also names the pixel before starting a crop.
             Rectangle {
-                visible: !syncedCrosshair.isHoveredSource && control.hoverPoint !== null
+                objectName: "imageCrosshairCoordinates-" + viewport.slot
+                visible: control.hoverPoint !== null && (!syncedCrosshair.isHoveredSource || control.compareMode === 0)
                 x: Math.min(viewport.width - width - 8, Math.max(8, Math.round(syncedCrosshair.targetX + 12)))
                 y: Math.min(viewport.height - height - 8, Math.max(8, Math.round(syncedCrosshair.targetY + 12)))
                 width: coordText.implicitWidth + 8
@@ -871,8 +1049,9 @@ Rectangle {
 
                 Text {
                     id: coordText
+                    objectName: "imageCrosshairCoordinateText-" + viewport.slot
                     anchors.centerIn: parent
-                    text: control.hoverPoint ? "%1, %2".arg(control.hoverPoint.imgX).arg(control.hoverPoint.imgY) : ""
+                    text: control.hoverPoint ? "%1, %2".arg(Math.floor(control.hoverPoint.normX * previewImage.sourceSize.width)).arg(Math.floor(control.hoverPoint.normY * previewImage.sourceSize.height)) : ""
                     color: Theme.probe
                     font.pixelSize: 10
                     font.family: "Consolas"
@@ -898,12 +1077,11 @@ Rectangle {
             current: viewport.marqueeCurrent
         }
 
-        // Crop selection while dragging in edit mode; the applied selection is kept as a
-        // workspace-level image-pixel rect so it survives further zooming.
+        // Generic rect drag for one-shot tools (fill, clear, rect, arrow)
         Rectangle {
-            id: cropRect
-            objectName: "imageCropRect-" + viewport.slot
-            visible: viewport.cropActive
+            id: genericRectDrag
+            objectName: "imageGenericRect-" + viewport.slot
+            visible: viewport.cropActive && !viewport.isCropTarget
             z: 26
             x: Math.min(viewport.cropStart.x, viewport.cropCurrent.x)
             y: Math.min(viewport.cropStart.y, viewport.cropCurrent.y)
@@ -914,12 +1092,620 @@ Rectangle {
             border.width: 1
         }
 
+        // Comprehensive crop overlay with dark scrim, 8 drag handles, move pan, and mini action bar
+        Item {
+            id: cropOverlay
+            objectName: "imageCropOverlay-" + viewport.slot
+            anchors.fill: parent
+            z: 28
+            visible: viewport.isCropTarget && (viewport.cropActive || control.cropSelection !== null)
+
+            property string activeDragMode: ""
+            property point dragStartViewPoint: Qt.point(0, 0)
+            property var initialCropSelection: null
+
+            readonly property bool hasSelection: control.cropSelection !== null
+            readonly property bool isDraggingNew: viewport.cropActive
+            readonly property real imgScale: (previewImage && previewImage.sourceSize.width > 0) ? (previewImage.width / previewImage.sourceSize.width) : 1
+            readonly property real imgLeft: previewImage ? previewImage.x : 0
+            readonly property real imgTop: previewImage ? previewImage.y : 0
+            readonly property real imgRight: previewImage ? (previewImage.x + previewImage.width) : 0
+            readonly property real imgBottom: previewImage ? (previewImage.y + previewImage.height) : 0
+
+            readonly property real boxLeft: isDraggingNew ? Math.min(viewport.cropStart.x, viewport.cropCurrent.x) : (hasSelection ? (previewImage.x + control.cropSelection.x * imgScale) : 0)
+            readonly property real boxTop: isDraggingNew ? Math.min(viewport.cropStart.y, viewport.cropCurrent.y) : (hasSelection ? (previewImage.y + control.cropSelection.y * imgScale) : 0)
+            readonly property real boxWidth: isDraggingNew ? Math.abs(viewport.cropCurrent.x - viewport.cropStart.x) : (hasSelection ? (control.cropSelection.width * imgScale) : 0)
+            readonly property real boxHeight: isDraggingNew ? Math.abs(viewport.cropCurrent.y - viewport.cropStart.y) : (hasSelection ? (control.cropSelection.height * imgScale) : 0)
+
+            function beginCropDrag(mode, mouseViewX, mouseViewY) {
+                if (!control.cropSelection || !previewImage)
+                    return;
+                activeDragMode = mode;
+                dragStartViewPoint = Qt.point(mouseViewX, mouseViewY);
+                initialCropSelection = {
+                    "x": Number(control.cropSelection.x),
+                    "y": Number(control.cropSelection.y),
+                    "width": Number(control.cropSelection.width),
+                    "height": Number(control.cropSelection.height)
+                };
+            }
+
+            function applyCropDrag(mode, mouseViewX, mouseViewY) {
+                if (!initialCropSelection || !previewImage || !control.imageEdit)
+                    return;
+                const mapped = control.mapToImage(viewport, mouseViewX, mouseViewY);
+                const startMapped = control.mapToImage(viewport, dragStartViewPoint.x, dragStartViewPoint.y);
+                if (!mapped || !startMapped)
+                    return;
+                const imgW = Number(control.imageEdit.imageWidth);
+                const imgH = Number(control.imageEdit.imageHeight);
+                const deltaX = Math.round(mapped.x - startMapped.x);
+                const deltaY = Math.round(mapped.y - startMapped.y);
+
+                if (mode === "move") {
+                    const newX = Math.max(0, Math.min(imgW - initialCropSelection.width, initialCropSelection.x + deltaX));
+                    const newY = Math.max(0, Math.min(imgH - initialCropSelection.height, initialCropSelection.y + deltaY));
+                    control.cropSelection = {
+                        "x": newX,
+                        "y": newY,
+                        "width": initialCropSelection.width,
+                        "height": initialCropSelection.height,
+                        "fromX": newX,
+                        "fromY": newY,
+                        "toX": newX + initialCropSelection.width,
+                        "toY": newY + initialCropSelection.height
+                    };
+                    return;
+                }
+
+                let x0 = initialCropSelection.x;
+                let y0 = initialCropSelection.y;
+                let x1 = initialCropSelection.x + initialCropSelection.width;
+                let y1 = initialCropSelection.y + initialCropSelection.height;
+
+                if (mode.indexOf("l") !== -1)
+                    x0 = Math.max(0, Math.min(initialCropSelection.x + initialCropSelection.width - 2, initialCropSelection.x + deltaX));
+                if (mode.indexOf("r") !== -1)
+                    x1 = Math.min(imgW, Math.max(initialCropSelection.x + 2, initialCropSelection.x + initialCropSelection.width + deltaX));
+                if (mode.indexOf("t") !== -1)
+                    y0 = Math.max(0, Math.min(initialCropSelection.y + initialCropSelection.height - 2, initialCropSelection.y + deltaY));
+                if (mode.indexOf("b") !== -1)
+                    y1 = Math.min(imgH, Math.max(initialCropSelection.y + 2, initialCropSelection.y + initialCropSelection.height + deltaY));
+
+                const newW = Math.max(2, x1 - x0);
+                const newH = Math.max(2, y1 - y0);
+
+                control.cropSelection = {
+                    "x": x0,
+                    "y": y0,
+                    "width": newW,
+                    "height": newH,
+                    "fromX": x0,
+                    "fromY": y0,
+                    "toX": x1,
+                    "toY": y1
+                };
+            }
+
+            function endCropDrag() {
+                activeDragMode = "";
+                initialCropSelection = null;
+            }
+
+            // Top Scrim: strictly bounded within the image above the crop box
+            Rectangle {
+                objectName: "imageCropScrimTop-" + viewport.slot
+                visible: cropOverlay.boxWidth > 2 && cropOverlay.boxHeight > 2
+                x: cropOverlay.imgLeft
+                y: cropOverlay.imgTop
+                width: Math.max(0, cropOverlay.imgRight - cropOverlay.imgLeft)
+                height: Math.max(0, cropOverlay.boxTop - cropOverlay.imgTop)
+                color: "#73000000"
+            }
+            // Bottom Scrim: strictly bounded within the image below the crop box
+            Rectangle {
+                objectName: "imageCropScrimBottom-" + viewport.slot
+                visible: cropOverlay.boxWidth > 2 && cropOverlay.boxHeight > 2
+                x: cropOverlay.imgLeft
+                y: cropOverlay.boxTop + cropOverlay.boxHeight
+                width: Math.max(0, cropOverlay.imgRight - cropOverlay.imgLeft)
+                height: Math.max(0, cropOverlay.imgBottom - (cropOverlay.boxTop + cropOverlay.boxHeight))
+                color: "#73000000"
+            }
+            // Left Scrim: strictly bounded within the image on the left side of the crop box
+            Rectangle {
+                objectName: "imageCropScrimLeft-" + viewport.slot
+                visible: cropOverlay.boxWidth > 2 && cropOverlay.boxHeight > 2
+                x: cropOverlay.imgLeft
+                y: cropOverlay.boxTop
+                width: Math.max(0, cropOverlay.boxLeft - cropOverlay.imgLeft)
+                height: Math.max(0, cropOverlay.boxHeight)
+                color: "#73000000"
+            }
+            // Right Scrim: strictly bounded within the image on the right side of the crop box
+            Rectangle {
+                objectName: "imageCropScrimRight-" + viewport.slot
+                visible: cropOverlay.boxWidth > 2 && cropOverlay.boxHeight > 2
+                x: cropOverlay.boxLeft + cropOverlay.boxWidth
+                y: cropOverlay.boxTop
+                width: Math.max(0, cropOverlay.imgRight - (cropOverlay.boxLeft + cropOverlay.boxWidth))
+                height: Math.max(0, cropOverlay.boxHeight)
+                color: "#73000000"
+            }
+
+            // The Crop Bounding Box Item
+            Item {
+                id: cropBoxItem
+                x: Math.round(cropOverlay.boxLeft)
+                y: Math.round(cropOverlay.boxTop)
+                width: Math.round(cropOverlay.boxWidth)
+                height: Math.round(cropOverlay.boxHeight)
+                visible: cropOverlay.boxWidth > 2 && cropOverlay.boxHeight > 2
+
+                // Preserved objectName for backwards compatibility
+                Rectangle {
+                    id: cropRect
+                    objectName: "imageCropRect-" + viewport.slot
+                    anchors.fill: parent
+                    color: cropOverlay.isDraggingNew ? Theme.cropFill : "transparent"
+                    border.color: "#ffffff"
+                    border.width: 1.5
+
+                    // Outer dark border to ensure contrast on white pictures
+                    Rectangle {
+                        anchors.fill: parent
+                        anchors.margins: -1
+                        z: -1
+                        color: "transparent"
+                        border.color: "#66000000"
+                        border.width: 1
+                    }
+                }
+
+                // Rule-of-Thirds Grid
+                Item {
+                    id: ruleOfThirdsGrid
+                    anchors.fill: parent
+                    visible: parent.width > 36 && parent.height > 36
+
+                    Rectangle {
+                        x: 0
+                        y: Math.round(parent.height / 3)
+                        width: parent.width
+                        height: 1
+                        color: "#40ffffff"
+                    }
+                    Rectangle {
+                        x: 0
+                        y: Math.round(parent.height * 2 / 3)
+                        width: parent.width
+                        height: 1
+                        color: "#40ffffff"
+                    }
+                    Rectangle {
+                        x: Math.round(parent.width / 3)
+                        y: 0
+                        width: 1
+                        height: parent.height
+                        color: "#40ffffff"
+                    }
+                    Rectangle {
+                        x: Math.round(parent.width * 2 / 3)
+                        y: 0
+                        width: 1
+                        height: parent.height
+                        color: "#40ffffff"
+                    }
+                }
+
+                // Center Move Area (visual anchor & contract compatibility)
+                Item {
+                    id: cropMoveArea
+                    objectName: "imageCropMoveArea-" + viewport.slot
+                    anchors.fill: parent
+                    anchors.margins: 10
+                }
+
+                // 8 Drag Handles (only in established selection mode)
+                CropHandle {
+                    objectName: "imageCropHandle-tl-" + viewport.slot
+                    handleMode: "tl"
+                    targetViewport: viewport
+                    overlayParent: cropOverlay
+                    x: -width / 2
+                    y: -height / 2
+                    visible: cropOverlay.hasSelection && !cropOverlay.isDraggingNew
+                }
+                CropHandle {
+                    objectName: "imageCropHandle-tr-" + viewport.slot
+                    handleMode: "tr"
+                    targetViewport: viewport
+                    overlayParent: cropOverlay
+                    x: parent.width - width / 2
+                    y: -height / 2
+                    visible: cropOverlay.hasSelection && !cropOverlay.isDraggingNew
+                }
+                CropHandle {
+                    objectName: "imageCropHandle-bl-" + viewport.slot
+                    handleMode: "bl"
+                    targetViewport: viewport
+                    overlayParent: cropOverlay
+                    x: -width / 2
+                    y: parent.height - height / 2
+                    visible: cropOverlay.hasSelection && !cropOverlay.isDraggingNew
+                }
+                CropHandle {
+                    objectName: "imageCropHandle-br-" + viewport.slot
+                    handleMode: "br"
+                    targetViewport: viewport
+                    overlayParent: cropOverlay
+                    x: parent.width - width / 2
+                    y: parent.height - height / 2
+                    visible: cropOverlay.hasSelection && !cropOverlay.isDraggingNew
+                }
+                CropHandle {
+                    objectName: "imageCropHandle-t-" + viewport.slot
+                    handleMode: "t"
+                    targetViewport: viewport
+                    overlayParent: cropOverlay
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    y: -height / 2
+                    visible: cropOverlay.hasSelection && !cropOverlay.isDraggingNew && parent.width > 44
+                }
+                CropHandle {
+                    objectName: "imageCropHandle-b-" + viewport.slot
+                    handleMode: "b"
+                    targetViewport: viewport
+                    overlayParent: cropOverlay
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    y: parent.height - height / 2
+                    visible: cropOverlay.hasSelection && !cropOverlay.isDraggingNew && parent.width > 44
+                }
+                CropHandle {
+                    objectName: "imageCropHandle-l-" + viewport.slot
+                    handleMode: "l"
+                    targetViewport: viewport
+                    overlayParent: cropOverlay
+                    x: -width / 2
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: cropOverlay.hasSelection && !cropOverlay.isDraggingNew && parent.height > 44
+                }
+                CropHandle {
+                    objectName: "imageCropHandle-r-" + viewport.slot
+                    handleMode: "r"
+                    targetViewport: viewport
+                    overlayParent: cropOverlay
+                    x: parent.width - width / 2
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: cropOverlay.hasSelection && !cropOverlay.isDraggingNew && parent.height > 44
+                }
+            }
+
+            // Master Crop Interaction Area: non-moving viewport-level pointer capture
+            // completely eliminates recursive feedback and jitter.
+            MouseArea {
+                id: cropInteractionArea
+                objectName: "cropInteractionArea-" + viewport.slot
+                anchors.fill: parent
+                z: 35
+                enabled: cropOverlay.visible && (cropOverlay.hasSelection || viewport.cropActive)
+                hoverEnabled: true
+                acceptedButtons: Qt.LeftButton | Qt.RightButton
+
+                property string currentMode: ""
+                property point dragStartPoint: Qt.point(0, 0)
+                property var initialBox: null
+
+                function hitTest(mx, my) {
+                    if (!cropOverlay.hasSelection)
+                        return "new";
+                    const bx = cropOverlay.boxLeft;
+                    const by = cropOverlay.boxTop;
+                    const bw = cropOverlay.boxWidth;
+                    const bh = cropOverlay.boxHeight;
+                    const brx = bx + bw;
+                    const bby = by + bh;
+                    const tol = 16;
+
+                    // 4 corners
+                    if (Math.hypot(mx - bx, my - by) <= tol)
+                        return "tl";
+                    if (Math.hypot(mx - brx, my - by) <= tol)
+                        return "tr";
+                    if (Math.hypot(mx - bx, my - bby) <= tol)
+                        return "bl";
+                    if (Math.hypot(mx - brx, my - bby) <= tol)
+                        return "br";
+
+                    // 4 edges
+                    if (Math.abs(my - by) <= 8 && mx >= bx - 4 && mx <= brx + 4)
+                        return "t";
+                    if (Math.abs(my - bby) <= 8 && mx >= bx - 4 && mx <= brx + 4)
+                        return "b";
+                    if (Math.abs(mx - bx) <= 8 && my >= by - 4 && my <= bby + 4)
+                        return "l";
+                    if (Math.abs(mx - brx) <= 8 && my >= by - 4 && my <= bby + 4)
+                        return "r";
+
+                    // Inside box
+                    if (mx >= bx && mx <= brx && my >= by && my <= bby)
+                        return "move";
+
+                    return "new";
+                }
+
+                cursorShape: {
+                    if (pressed) {
+                        if (currentMode === "move")
+                            return Qt.ClosedHandCursor;
+                        if (currentMode === "pan")
+                            return Qt.ClosedHandCursor;
+                    }
+                    const mode = pressed ? currentMode : hitTest(mouseX, mouseY);
+                    switch (mode) {
+                    case "tl":
+                    case "br":
+                        return Qt.SizeFDiagCursor;
+                    case "tr":
+                    case "bl":
+                        return Qt.SizeBDiagCursor;
+                    case "t":
+                    case "b":
+                        return Qt.SizeVerCursor;
+                    case "l":
+                    case "r":
+                        return Qt.SizeHorCursor;
+                    case "move":
+                        return Qt.SizeAllCursor;
+                    default:
+                        return Qt.CrossCursor;
+                    }
+                }
+
+                onPressed: mouse => {
+                    if (mouse.button === Qt.RightButton) {
+                        currentMode = "pan";
+                        viewport.dragStart = Qt.point(mouse.x, mouse.y);
+                        viewport.pressStart = Qt.point(mouse.x, mouse.y);
+                        viewport.dragActive = false;
+                        return;
+                    }
+                    const mode = hitTest(mouse.x, mouse.y);
+                    currentMode = mode;
+                    dragStartPoint = Qt.point(mouse.x, mouse.y);
+                    if (mode !== "new" && cropOverlay.hasSelection) {
+                        initialBox = {
+                            "x": Number(control.cropSelection.x),
+                            "y": Number(control.cropSelection.y),
+                            "width": Number(control.cropSelection.width),
+                            "height": Number(control.cropSelection.height)
+                        };
+                    } else {
+                        initialBox = null;
+                        viewport.pressStart = Qt.point(mouse.x, mouse.y);
+                    }
+                }
+
+                onPositionChanged: mouse => {
+                    if (pressed) {
+                        if (currentMode === "pan") {
+                            const baseW = Math.max(1, previewImage.drawWidth / Math.max(0.001, control.zoom));
+                            const baseH = Math.max(1, previewImage.drawHeight / Math.max(0.001, control.zoom));
+                            const dx = (mouse.x - viewport.dragStart.x) / baseW;
+                            const dy = (mouse.y - viewport.dragStart.y) / baseH;
+                            control.imageReview.panBy(dx, dy);
+                            viewport.dragStart = Qt.point(mouse.x, mouse.y);
+                            return;
+                        }
+
+                        if (currentMode === "new") {
+                            if (!viewport.cropActive && Math.hypot(mouse.x - dragStartPoint.x, mouse.y - dragStartPoint.y) >= 6) {
+                                viewport.cropActive = true;
+                                viewport.cropStart = dragStartPoint;
+                            }
+                            if (viewport.cropActive) {
+                                viewport.cropCurrent = Qt.point(mouse.x, mouse.y);
+                                control.updateCropSelection(viewport);
+                            }
+                            return;
+                        }
+
+                        if (!initialBox || !control.imageEdit)
+                            return;
+
+                        const scale = cropOverlay.imgScale;
+                        if (!(scale > 0))
+                            return;
+
+                        const deltaX = Math.round((mouse.x - dragStartPoint.x) / scale);
+                        const deltaY = Math.round((mouse.y - dragStartPoint.y) / scale);
+                        const imgW = Number(control.imageEdit.imageWidth);
+                        const imgH = Number(control.imageEdit.imageHeight);
+
+                        if (currentMode === "move") {
+                            const newX = Math.max(0, Math.min(imgW - initialBox.width, initialBox.x + deltaX));
+                            const newY = Math.max(0, Math.min(imgH - initialBox.height, initialBox.y + deltaY));
+                            control.cropSelection = {
+                                "x": newX,
+                                "y": newY,
+                                "width": initialBox.width,
+                                "height": initialBox.height,
+                                "fromX": newX,
+                                "fromY": newY,
+                                "toX": newX + initialBox.width,
+                                "toY": newY + initialBox.height
+                            };
+                            return;
+                        }
+
+                        let x0 = initialBox.x;
+                        let y0 = initialBox.y;
+                        let x1 = initialBox.x + initialBox.width;
+                        let y1 = initialBox.y + initialBox.height;
+
+                        if (currentMode.indexOf("l") !== -1)
+                            x0 = Math.max(0, Math.min(initialBox.x + initialBox.width - 2, initialBox.x + deltaX));
+                        if (currentMode.indexOf("r") !== -1)
+                            x1 = Math.min(imgW, Math.max(initialBox.x + 2, initialBox.x + initialBox.width + deltaX));
+                        if (currentMode.indexOf("t") !== -1)
+                            y0 = Math.max(0, Math.min(initialBox.y + initialBox.height - 2, initialBox.y + deltaY));
+                        if (currentMode.indexOf("b") !== -1)
+                            y1 = Math.min(imgH, Math.max(initialBox.y + 2, initialBox.y + initialBox.height + deltaY));
+
+                        control.cropSelection = {
+                            "x": x0,
+                            "y": y0,
+                            "width": Math.max(2, x1 - x0),
+                            "height": Math.max(2, y1 - y0),
+                            "fromX": x0,
+                            "fromY": y0,
+                            "toX": x1,
+                            "toY": y1
+                        };
+                    }
+                }
+
+                onReleased: {
+                    currentMode = "";
+                    initialBox = null;
+                    viewport.cropActive = false;
+                }
+
+                onCanceled: {
+                    currentMode = "";
+                    initialBox = null;
+                    viewport.cropActive = false;
+                }
+
+                onDoubleClicked: mouse => {
+                    if (hitTest(mouse.x, mouse.y) === "move") {
+                        control.applyCropSelection();
+                    }
+                }
+            }
+
+            // Floating Mini Action Bar
+            Rectangle {
+                id: cropActionBar
+                objectName: "imageCropActionBar-" + viewport.slot
+                visible: cropOverlay.hasSelection && !cropOverlay.isDraggingNew && cropBoxItem.visible
+                z: 40
+                implicitHeight: 32
+                implicitWidth: cropActionRow.implicitWidth + 16
+                radius: Theme.radiusMedium
+                color: Theme.raisedPanel
+                border.width: 1
+                border.color: Theme.controlBorder
+
+                x: Math.max(8, Math.min(viewport.width - width - 8, cropBoxItem.x + cropBoxItem.width - width))
+                y: (cropBoxItem.y + cropBoxItem.height + 8 + height <= viewport.height - 8) ? (cropBoxItem.y + cropBoxItem.height + 8) : Math.max(8, cropBoxItem.y + cropBoxItem.height - height - 8)
+
+                Row {
+                    id: cropActionRow
+                    anchors.centerIn: parent
+                    spacing: 8
+
+                    Text {
+                        id: cropSizeLabel
+                        objectName: "imageCropDimensionText-" + viewport.slot
+                        text: control.cropSelection ? qsTr("%1 × %2 px").arg(control.cropSelection.width).arg(control.cropSelection.height) : ""
+                        color: Theme.secondaryText
+                        font.pixelSize: 11
+                        font.family: "Consolas"
+                        font.weight: Font.DemiBold
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Rectangle {
+                        width: 1
+                        height: 14
+                        color: Theme.border
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Rectangle {
+                        id: cancelBtn
+                        objectName: "imageCropCancelButton-" + viewport.slot
+                        signal clicked
+                        onClicked: {
+                            control.cropSelection = null;
+                            control.forceActiveFocus();
+                        }
+                        implicitWidth: cancelText.implicitWidth + 16
+                        implicitHeight: 24
+                        radius: Theme.radiusSmall
+                        color: cancelMouse.pressed ? Theme.fluentPressed : (cancelMouse.containsMouse ? Theme.fluentHover : "transparent")
+                        border.color: cancelMouse.containsMouse ? Theme.borderHover : Theme.border
+                        border.width: 1
+                        anchors.verticalCenter: parent.verticalCenter
+
+                        Text {
+                            id: cancelText
+                            anchors.centerIn: parent
+                            text: qsTr("取消")
+                            color: cancelMouse.containsMouse ? Theme.primaryText : Theme.secondaryText
+                            font.pixelSize: 11
+                        }
+                        MouseArea {
+                            id: cancelMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: cancelBtn.clicked()
+                        }
+                    }
+
+                    Rectangle {
+                        id: applyBtn
+                        objectName: "imageCropApplyButton-" + viewport.slot
+                        signal clicked
+                        onClicked: {
+                            control.applyCropSelection();
+                            control.forceActiveFocus();
+                        }
+                        implicitWidth: applyText.implicitWidth + 18
+                        implicitHeight: 24
+                        radius: Theme.radiusSmall
+                        color: applyMouse.pressed ? Theme.accentPressed : (applyMouse.containsMouse ? Theme.accentHover : Theme.accentFill)
+                        border.color: Theme.accent
+                        border.width: 1
+                        anchors.verticalCenter: parent.verticalCenter
+
+                        Text {
+                            id: applyText
+                            anchors.centerIn: parent
+                            text: control.editTool === "mosaic" ? qsTr("应用马赛克") : qsTr("应用裁剪")
+                            color: Theme.inverseText
+                            font.pixelSize: 11
+                            font.weight: Font.DemiBold
+                        }
+                        MouseArea {
+                            id: applyMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: applyBtn.clicked()
+                        }
+                    }
+                }
+            }
+        }
+
         MouseArea {
             id: viewportMouseArea
             objectName: "imageCanvasMouseArea-" + viewport.slot
             anchors.fill: parent
             hoverEnabled: true
-            acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+            acceptedButtons: Qt.LeftButton | Qt.MiddleButton | Qt.RightButton
+            cursorShape: {
+                if (viewport.dragActive)
+                    return Qt.ClosedHandCursor;
+                if (control.editModeActive) {
+                    if (control.editTool === "brush" || control.editTool === "crop")
+                        return Qt.CrossCursor;
+                }
+                return Qt.ArrowCursor;
+            }
             onClicked: mouse => {
                 if (viewport.suppressClickAfterMarquee) {
                     viewport.suppressClickAfterMarquee = false;
@@ -939,27 +1725,50 @@ Rectangle {
                 } else if (viewport.marqueeActive) {
                     viewport.marqueeCurrent = Qt.point(mouse.x, mouse.y);
                 } else if (pressed && control.imageReview) {
-                    if (!viewport.dragActive && Math.hypot(mouse.x - viewport.pressStart.x, mouse.y - viewport.pressStart.y) >= 5)
-                        viewport.dragActive = true;
-                    if (viewport.dragActive) {
-                        const dx = (mouse.x - viewport.dragStart.x) / Math.max(1, width);
-                        const dy = (mouse.y - viewport.dragStart.y) / Math.max(1, height);
-                        control.imageReview.panBy(dx, dy);
-                        viewport.dragStart = Qt.point(mouse.x, mouse.y);
+                    const isPanButton = (mouse.buttons & Qt.RightButton) || (mouse.buttons & Qt.MiddleButton) || (!control.editModeActive && (mouse.buttons & Qt.LeftButton));
+                    if (isPanButton) {
+                        if (!viewport.dragActive && Math.hypot(mouse.x - viewport.pressStart.x, mouse.y - viewport.pressStart.y) >= 3)
+                            viewport.dragActive = true;
+                        if (viewport.dragActive) {
+                            // 1:1 exact pixel pan tracking: mouse delta maps directly to image screen delta
+                            const baseW = Math.max(1, previewImage.drawWidth / Math.max(0.001, control.zoom));
+                            const baseH = Math.max(1, previewImage.drawHeight / Math.max(0.001, control.zoom));
+                            const dx = (mouse.x - viewport.dragStart.x) / baseW;
+                            const dy = (mouse.y - viewport.dragStart.y) / baseH;
+                            control.imageReview.panBy(dx, dy);
+                            viewport.dragStart = Qt.point(mouse.x, mouse.y);
+                        }
+                    } else if (control.editModeActive && (mouse.buttons & Qt.LeftButton) && !(mouse.modifiers & Qt.ShiftModifier) && !viewport.cropActive && (control.editTool === "crop" || control.editTool === "mosaic")) {
+                        // Start a new crop rectangle only after dragging past 6 pixels, avoiding accidental destruction of an existing selection
+                        if (Math.hypot(mouse.x - viewport.pressStart.x, mouse.y - viewport.pressStart.y) >= 6) {
+                            viewport.cropActive = true;
+                            viewport.cropStart = viewport.pressStart;
+                            viewport.cropCurrent = Qt.point(mouse.x, mouse.y);
+                            control.updateCropSelection(viewport);
+                        }
                     }
                 }
                 control.applyHover(viewport, mouse.x, mouse.y, viewport.slot);
             }
             onExited: {
-                if (control.imageReview)
-                    control.imageReview.clearCursorPixel();
-                control.hoverPoint = null;
+                control.clearImageHover();
             }
             onPressed: mouse => {
+                control.applyHover(viewport, mouse.x, mouse.y, viewport.slot);
+                // RightButton or MiddleButton always pans the canvas, both in review and edit mode
+                if (mouse.button === Qt.RightButton || mouse.button === Qt.MiddleButton) {
+                    viewport.cropActive = false;
+                    viewport.marqueeActive = false;
+                    viewport.annotationDragActive = false;
+                    viewport.dragStart = Qt.point(mouse.x, mouse.y);
+                    viewport.pressStart = Qt.point(mouse.x, mouse.y);
+                    viewport.dragActive = false;
+                    control.forceActiveFocus();
+                    return;
+                }
+
                 // Edit mode: the left button runs the active tool (brush paints, select
-                // drags an annotation, text places on click, everything else selects a
-                // rect), while the middle button keeps panning below. View mode keeps the
-                // old gestures untouched.
+                // drags an annotation, text places on click, crop/rect selects a rect).
                 if (control.editModeActive && mouse.button === Qt.LeftButton && !(mouse.modifiers & Qt.ShiftModifier)) {
                     viewport.marqueeActive = false;
                     viewport.dragActive = false;
@@ -973,9 +1782,14 @@ Rectangle {
                     } else if (control.editTool === "text") {
                         // Placed on release, so a press that turns into a drag is ignored.
                     } else {
-                        viewport.cropActive = true;
-                        viewport.cropStart = Qt.point(mouse.x, mouse.y);
-                        viewport.cropCurrent = Qt.point(mouse.x, mouse.y);
+                        // If no crop selection exists yet, start dragging immediately.
+                        // If a crop selection already exists, wait for drag threshold in onPositionChanged
+                        // so an accidental click doesn't instantly wipe the established crop selection!
+                        if (!control.cropSelection) {
+                            viewport.cropActive = true;
+                            viewport.cropStart = Qt.point(mouse.x, mouse.y);
+                            viewport.cropCurrent = Qt.point(mouse.x, mouse.y);
+                        }
                     }
                 } else if (mouse.button === Qt.LeftButton && (mouse.modifiers & Qt.ShiftModifier)) {
                     viewport.cropActive = false;
@@ -994,6 +1808,10 @@ Rectangle {
                 control.forceActiveFocus();
             }
             onReleased: mouse => {
+                if (mouse.button === Qt.RightButton || mouse.button === Qt.MiddleButton) {
+                    viewport.dragActive = false;
+                    return;
+                }
                 control.endBrushStroke();
                 if (viewport.annotationDragActive) {
                     viewport.annotationDragActive = false;
@@ -1055,7 +1873,9 @@ Rectangle {
                 const mapped = control.mapToImage(viewport, wheel.x, wheel.y);
                 const ax = mapped ? Math.max(0, Math.min(1, mapped.x / Math.max(1, previewImage.sourceSize.width))) : 0.5;
                 const ay = mapped ? Math.max(0, Math.min(1, mapped.y / Math.max(1, previewImage.sourceSize.height))) : 0.5;
-                control.imageReview.zoomBy(wheel.angleDelta.y > 0 ? 1.25 : 0.8, ax, ay);
+                const steps = wheel.angleDelta.y / 120.0;
+                const factor = Math.pow(1.15, steps);
+                control.imageReview.zoomBy(factor, ax, ay);
                 wheel.accepted = true;
             }
         }
@@ -1253,7 +2073,8 @@ Rectangle {
                 }
                 ReviewActionButton {
                     objectName: "imageToggleSourceButton"
-                    visible: control.hasPair && control.compareMode === 0
+                    visible: control.canSwitchSingleSource && control.compareMode === 0
+                    enabled: control.canSwitchSingleSource
                     implicitHeight: 30
                     leftPadding: 8
                     rightPadding: 8
@@ -1567,38 +2388,7 @@ Rectangle {
                             onClicked: control.editTool = "select"
                         }
 
-                        RowSeparator {
-                            visible: control.editModeActive
-                            hairlineHeight: 20
-                        }
-
-                        // Whole-image geometry, not a brush: these change the working copy's size rather
-                        // than the pixels under the cursor, so they sit next to the tool menu instead of
-                        // inside it.
-                        EditButton {
-                            objectName: "imageEditScaleButton"
-                            visible: control.editModeActive
-                            text: qsTr("缩放…")
-                            helpText: qsTr("把画面重采样到指定的像素尺寸；锁定比例时改一边会自动推算另一边。")
-                            onClicked: imageEditDialogs.openScale()
-                        }
-                        EditButton {
-                            objectName: "imageEditFillButton"
-                            visible: control.editModeActive
-                            text: qsTr("填充画布…")
-                            helpText: qsTr("把原图居中放到更大的画布上，四周用指定颜色补齐。")
-                            onClicked: imageEditDialogs.openFill()
-                        }
-
-                        RowSeparator {
-                            visible: control.editModeActive
-                            hairlineHeight: 20
-                        }
-
-                        // The remaining tools share one dropdown. Two-thirds of the row used to be tool
-                        // buttons, which made the row the widest thing in the header and pushed 撤销/重做
-                        // past the window edge at 900 px. The button carries the active tool's name so a
-                        // hidden-but-selected tool is never invisible.
+                        // Drawing and annotation tools dropdown
                         EditButton {
                             objectName: "imageEditMoreToolsButton"
                             visible: control.editModeActive
@@ -1670,6 +2460,70 @@ Rectangle {
                                         if (control.imageEdit)
                                             control.imageEdit.clearAnnotations();
                                     }
+                                }
+                            }
+                        }
+
+                        RowSeparator {
+                            visible: control.editModeActive
+                            hairlineHeight: 20
+                        }
+
+                        // Whole-image geometry, not a brush: these change the working copy's size rather
+                        // than the pixels under the cursor, so they sit together in their own group.
+                        EditButton {
+                            objectName: "imageEditScaleButton"
+                            visible: control.editModeActive
+                            text: qsTr("缩放…")
+                            helpText: qsTr("把画面重采样到指定的像素尺寸；锁定比例时改一边会自动推算另一边。")
+                            onClicked: imageEditDialogs.openScale()
+                        }
+                        EditButton {
+                            objectName: "imageEditFillButton"
+                            visible: control.editModeActive
+                            text: qsTr("填充画布…")
+                            helpText: qsTr("把原图居中放到更大的画布上，四周用指定颜色补齐。")
+                            onClicked: imageEditDialogs.openFill()
+                        }
+
+                        EditButton {
+                            objectName: "imageEditTransformButton"
+                            visible: control.editModeActive
+                            text: qsTr("旋转 / 翻转 ▾")
+                            enabled: control.imageEdit && !control.imageEdit.strokeActive
+                            helpText: qsTr("水平镜像、垂直翻转、90° 或 180° 旋转；每次操作都可撤销。")
+                            onClicked: transformMenu.open()
+
+                            VcsMenu {
+                                id: transformMenu
+                                objectName: "imageEditTransformMenu"
+                                menuWidth: 240
+
+                                VcsMenuItem {
+                                    objectName: "imageEditMirrorHorizontalItem"
+                                    text: qsTr("水平镜像（左右）")
+                                    onTriggered: control.applyImageMirror(false)
+                                }
+                                VcsMenuItem {
+                                    objectName: "imageEditFlipVerticalItem"
+                                    text: qsTr("垂直翻转（上下）")
+                                    onTriggered: control.applyImageMirror(true)
+                                }
+                                VcsMenuSeparator {}
+                                VcsMenuItem {
+                                    objectName: "imageEditRotateClockwiseItem"
+                                    text: qsTr("顺时针旋转 90°")
+                                    onTriggered: control.applyImageRotation(1)
+                                }
+                                VcsMenuItem {
+                                    objectName: "imageEditRotateCounterclockwiseItem"
+                                    text: qsTr("逆时针旋转 90°")
+                                    onTriggered: control.applyImageRotation(-1)
+                                }
+                                VcsMenuItem {
+                                    objectName: "imageEditRotateHalfTurnItem"
+                                    text: qsTr("旋转 180°")
+                                    onTriggered: control.applyImageRotation(2)
                                 }
                             }
                         }
@@ -1918,6 +2772,27 @@ Rectangle {
                                 value: control.annotationTextSize
                                 onMoved: control.annotationTextSize = Math.round(value)
                             }
+                            Text {
+                                objectName: "imageEditCropHelpText"
+                                visible: control.editTool === "crop" && control.cropSelection === null
+                                height: 30
+                                verticalAlignment: Text.AlignVCenter
+                                text: qsTr("在画面上拖拽框选裁剪区域；支持 8 锚点调整与移动；Enter 确认，Esc 取消")
+                                color: Theme.mutedText
+                                font.pixelSize: 11
+                            }
+                            ReviewActionButton {
+                                objectName: "imageEditCancelCropButton"
+                                visible: control.editTool === "crop" && control.cropSelection !== null
+                                text: qsTr("取消选区")
+                                implicitHeight: 30
+                                leftPadding: 10
+                                rightPadding: 10
+                                onClicked: {
+                                    control.cropSelection = null;
+                                    control.forceActiveFocus();
+                                }
+                            }
                             ReviewActionButton {
                                 objectName: "imageEditApplyCropButton"
                                 visible: control.editTool === "crop" || control.editTool === "mosaic"
@@ -2046,6 +2921,12 @@ Rectangle {
         } else if ((event.key === Qt.Key_Delete || event.key === Qt.Key_Backspace) && control.editModeActive && control.imageEdit && control.imageEdit.selectedAnnotation >= 0) {
             control.imageEdit.deleteSelectedAnnotation();
             event.accepted = true;
+        } else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && control.editModeActive && control.cropSelection !== null && (control.editTool === "crop" || control.editTool === "mosaic")) {
+            control.applyCropSelection();
+            event.accepted = true;
+        } else if (event.key === Qt.Key_Escape && control.editModeActive && control.cropSelection !== null) {
+            control.cropSelection = null;
+            event.accepted = true;
         }
     }
 
@@ -2123,7 +3004,7 @@ Rectangle {
                 Rectangle {
                     id: imageInPlaceBadge
                     objectName: "imageInPlaceBadge"
-                    visible: control.hasPair && control.compareMode === 0
+                    visible: control.canSwitchSingleSource && control.compareMode === 0
                     z: 30
                     width: Math.min(stageContent.width - 28, inPlaceBadgeContent.implicitWidth + 20)
                     height: 28
@@ -2266,13 +3147,15 @@ Rectangle {
                         id: primaryViewport
 
                         objectName: "primaryViewport"
-                        slot: (control.compareMode === 0 && control.hasPair && control.singleViewShowSecondary) ? 3 : 2
+                        slot: control.editModeActive ? control.editSourceSlot : ((control.compareMode === 0 && control.hasPair && control.singleViewShowSecondary) ? 3 : 2)
                         width: control.compareMode === 1 && control.hasPair ? parent.width / 2 - 6 : parent.width
                         height: parent.height
                         // While editing, the pane shows the working copy; the compared
                         // originals (and every difference statistic) stay untouched.
                         imageUrl: control.editModeActive && control.editSourceSlot === slot && control.imageEdit ? control.imageEdit.editedImageUrl : (control.imageReview && control.imageReview.contentGeneration >= 0 ? control.imageReview.imageUrl(slot) : "")
                         label: {
+                            if (control.editModeActive && control.editSourceSlot === slot)
+                                return qsTr("%1 · 编辑副本 · %2×%3").arg(slot === 3 ? "B" : "A").arg(control.imageEdit.imageWidth).arg(control.imageEdit.imageHeight);
                             if (slot === 3)
                                 return control.hasSecondary ? qsTr("B · %1×%2 · %3").arg(control.imageReview.secondaryWidth).arg(control.imageReview.secondaryHeight).arg(control.sourceSummary(control.imageReview.secondaryBitDepth, control.imageReview.secondarySourceFormat, control.imageReview.secondaryHasAlpha, control.imageReview.secondaryDisplayConverted)) : "";
                             return control.hasPrimary ? qsTr("A · %1×%2 · %3").arg(control.imageReview.primaryWidth).arg(control.imageReview.primaryHeight).arg(control.sourceSummary(control.imageReview.primaryBitDepth, control.imageReview.primarySourceFormat, control.imageReview.primaryHasAlpha, control.imageReview.primaryDisplayConverted)) : "";
@@ -2537,8 +3420,10 @@ Rectangle {
                             if (wipeOverlay.marqueeActive) {
                                 wipeOverlay.marqueeCurrent = Qt.point(mouse.x, mouse.y);
                             } else if (pressed && control.imageReview) {
-                                const dx = (mouse.x - dragStart.x) / Math.max(1, width);
-                                const dy = (mouse.y - dragStart.y) / Math.max(1, height);
+                                const baseW = Math.max(1, wipeOverlay.drawWidth / Math.max(0.001, control.zoom));
+                                const baseH = Math.max(1, wipeOverlay.drawHeight / Math.max(0.001, control.zoom));
+                                const dx = (mouse.x - dragStart.x) / baseW;
+                                const dy = (mouse.y - dragStart.y) / baseH;
                                 control.imageReview.panBy(dx, dy);
                                 dragStart = Qt.point(mouse.x, mouse.y);
                             }
@@ -2609,7 +3494,9 @@ Rectangle {
                             }, wheel.x, wheel.y);
                             const ax = mapped ? Math.max(0, Math.min(1, mapped.x / Math.max(1, img.sourceSize.width))) : 0.5;
                             const ay = mapped ? Math.max(0, Math.min(1, mapped.y / Math.max(1, img.sourceSize.height))) : 0.5;
-                            control.imageReview.zoomBy(wheel.angleDelta.y > 0 ? 1.25 : 0.8, ax, ay);
+                            const steps = wheel.angleDelta.y / 120.0;
+                            const factor = Math.pow(1.15, steps);
+                            control.imageReview.zoomBy(factor, ax, ay);
                             wheel.accepted = true;
                         }
                     }
@@ -2742,8 +3629,10 @@ Rectangle {
                             if (fadeOverlay.marqueeActive) {
                                 fadeOverlay.marqueeCurrent = Qt.point(mouse.x, mouse.y);
                             } else if (pressed && control.imageReview) {
-                                const dx = (mouse.x - dragStart.x) / Math.max(1, width);
-                                const dy = (mouse.y - dragStart.y) / Math.max(1, height);
+                                const baseW = Math.max(1, fadeOverlay.drawWidth / Math.max(0.001, control.zoom));
+                                const baseH = Math.max(1, fadeOverlay.drawHeight / Math.max(0.001, control.zoom));
+                                const dx = (mouse.x - dragStart.x) / baseW;
+                                const dy = (mouse.y - dragStart.y) / baseH;
                                 control.imageReview.panBy(dx, dy);
                                 dragStart = Qt.point(mouse.x, mouse.y);
                             }
@@ -2814,7 +3703,9 @@ Rectangle {
                             }, wheel.x, wheel.y);
                             const ax = mapped ? Math.max(0, Math.min(1, mapped.x / Math.max(1, fadePrimaryImage.sourceSize.width))) : 0.5;
                             const ay = mapped ? Math.max(0, Math.min(1, mapped.y / Math.max(1, fadePrimaryImage.sourceSize.height))) : 0.5;
-                            control.imageReview.zoomBy(wheel.angleDelta.y > 0 ? 1.25 : 0.8, ax, ay);
+                            const steps = wheel.angleDelta.y / 120.0;
+                            const factor = Math.pow(1.15, steps);
+                            control.imageReview.zoomBy(factor, ax, ay);
                             wheel.accepted = true;
                         }
                     }
@@ -2962,8 +3853,10 @@ Rectangle {
             Text {
                 id: pixelReadout
                 objectName: "imagePixelReadout"
-                visible: Boolean(control.cursorPixel && control.cursorPixel.valid)
+                visible: Boolean((control.editModeActive && control.hoverPoint) || (control.cursorPixel && control.cursorPixel.valid))
                 text: {
+                    if (control.editModeActive)
+                        return control.hoverPoint ? qsTr("编辑副本 · 像素 (%1, %2)").arg(control.hoverPoint.imgX).arg(control.hoverPoint.imgY) : "";
                     if (!control.cursorPixel || !control.cursorPixel.valid)
                         return "";
                     let t = "";
@@ -3070,6 +3963,15 @@ Rectangle {
                 color: Theme.mutedText
                 font.pixelSize: 11
             }
+        }
+    }
+
+    Connections {
+        target: control.imageEdit
+
+        function onHistoryChanged() {
+            // Committed edits and undo/redo retire rectangles from the previous image state.
+            control.cropSelection = null;
         }
     }
 

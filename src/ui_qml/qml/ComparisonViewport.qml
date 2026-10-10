@@ -25,9 +25,15 @@ Rectangle {
     required property bool differenceThresholdEnabled
     required property int differenceThresholdCode
     required property int differenceThresholdPolicy
-    // Hold-to-peek: while true the difference pass is replaced by the raw first source
-    // of the active pair (transient button-hold state, never persisted).
+    // Hold-to-peek: while true the difference pass shows the session's reference (GT) source.
     required property bool differenceSuppressed
+    // While true the difference canvas shows the reference (GT) source instead of the difference
+    // pass. The indicator plate names what is on screen for as long as the state holds, so a
+    // locked peek cannot be mistaken for the difference view after the HUD line has faded.
+    // Plain properties (not required) so the viewport can be instantiated without a session.
+    property bool differencePeekActive: false
+    property bool differencePeekLocked: false
+    property string differencePeekTargetLabel: ""
     required property int referenceSourceIndex
     required property int sourceCount
     required property bool wipeMode
@@ -80,17 +86,25 @@ Rectangle {
     property real panLastY: 0
 
     // Pixel readout (1009 plan C slice 3). The surface's render-thread probes answer
-    // asynchronously; a delivery is accepted only while its pixel coordinate still matches
-    // what the current hover position maps to for that slot, so results from a cursor that
-    // moved on are dropped instead of shown next to the wrong position.
+    // asynchronously against the frame set the renderer is presenting. A delivery is accepted
+    // only while it still describes that frame - its own frame/session/generation identity must
+    // equal the identity the surface presents right now - and only while its pixel coordinate
+    // still matches what the current hover position maps to for that slot. Results from a
+    // cursor that moved on, or from a frame that was seeked away, are dropped instead of shown
+    // next to the wrong position; a value that survives while the frame moved on is labelled
+    // frozen instead of being passed off as current.
     property bool pixelReadoutPositionValid: false
     property real pixelReadoutSourceX: 0
     property real pixelReadoutSourceY: 0
     property var pixelReadoutExpected: ({})
     property var pixelReadoutResults: ({})
+    // Last position+frame this viewport actually spent a readback on, so mouse jitter over one
+    // parked pixel cannot turn into a probe batch per event.
+    property var pixelReadoutIssuedKey: null
     // Diagnostics counter (like the surface's droppedFrames): how many probe batches left
     // this viewport, from hover moves and paused frame steps alike.
     property int pixelReadoutBatchesIssued: 0
+    property int pixelReadoutRequestId: 0
 
     signal wipePositionRequested(real position)
     signal oscRevealRequested
@@ -171,22 +185,39 @@ Rectangle {
     }
 
     // Issues one probe per session source at the hovered content position. The surface stages
-    // each slot independently, so every readout row samples the same content point.
+    // each slot independently and resolves the whole batch against one presented frame set, so
+    // every readout row samples the same content point of the same frame. Playback never issues:
+    // the readout is on-demand numeric review, and a moving cursor must not add readbacks to the
+    // render loop while frames stream.
     function issuePixelReadout(point) {
         const usable = Boolean(point) && Boolean(point.insideContent) && point.sourceX !== undefined && point.sourceY !== undefined && control.sourceCount > 0 && !control.overlayVisible;
+        const wasUsable = control.pixelReadoutPositionValid;
         control.pixelReadoutPositionValid = usable;
-        if (!usable)
+        if (!usable) {
+            control.pixelReadoutIssuedKey = null;
+            // Retiring the readout also drops its in-flight readback instead of letting it run.
+            if (wasUsable)
+                dualVideoSurface.cancelSourcePixelProbes();
             return;
+        }
         control.pixelReadoutSourceX = Number(point.sourceX);
         control.pixelReadoutSourceY = Number(point.sourceY);
         control.pixelReadoutExpected = expectedPixelsForPosition(control.pixelReadoutSourceX, control.pixelReadoutSourceY);
+        if (control.playbackActive) {
+            return;
+        }
         issueProbesForAllSlots();
     }
 
     function issueProbesForAllSlots() {
+        if (!control.pixelReadoutPositionValid || control.playbackActive)
+            return;
+        if (!pixelReadoutWantsFreshSample())
+            return;
         control.pixelReadoutBatchesIssued += 1;
+        control.pixelReadoutRequestId += 1;
         for (let slot = 0; slot < control.sourceCount; ++slot)
-            dualVideoSurface.requestSourcePixelProbe(slot, control.pixelReadoutSourceX, control.pixelReadoutSourceY);
+            dualVideoSurface.requestSourcePixelProbe(slot, control.pixelReadoutSourceX, control.pixelReadoutSourceY, control.pixelReadoutRequestId);
     }
 
     // The renderer resolves each slot's pixel from the same clamped normalized position and
@@ -209,20 +240,74 @@ Rectangle {
         return expected;
     }
 
-    // Slot-filtered sink for sourcePixelProbed: failures are accepted as-is (they carry no
-    // values), while a valid delivery must still match the current position for its slot.
+    // Same cursor pixel, same frame, same presented frame set: the rows already answer it. A new
+    // key means the content under the cursor or the frame on screen moved, so a fresh batch is
+    // worth its readback.
+    function pixelReadoutWantsFreshSample() {
+        const key = [JSON.stringify(control.pixelReadoutExpected), presentedIdentityKey()].join(":");
+        if (control.pixelReadoutIssuedKey === key)
+            return false;
+        control.pixelReadoutIssuedKey = key;
+        return true;
+    }
+
+    // Identity of the frame set the surface is presenting right now, or "none" while nothing has
+    // been drawn. This is the frame the readout is allowed to speak for.
+    function presentedIdentityKey() {
+        if (!dualVideoSurface.presentedFrameValid)
+            return "none";
+        return dualVideoSurface.presentedFrameId + ":" + dualVideoSurface.presentedSessionEpoch + ":" + dualVideoSurface.presentedPlaybackGeneration;
+    }
+
+    // The renderer resolves a probe against the set it is presenting, so a fulfilled delivery
+    // carries that set's identity, including failures. An explicitly invalid identity denotes
+    // no presented frame; untagged results are rejected by the sink.
+    function probeResultIdentityKey(result) {
+        if (!Boolean(result.identityValid))
+            return "none";
+        return result.frameId + ":" + result.sessionEpoch + ":" + result.playbackGeneration;
+    }
+
+    // Slot-filtered sink for sourcePixelProbed. A fulfilled read must still describe the frame on
+    // screen; a failure carries no values of its own, so it is accepted only while the screen still
+    // shows the frame set the request was made against. Either way the row never mixes coordinates
+    // with foreign values.
     function acceptPixelProbeResult(result) {
-        if (!result || !control.pixelReadoutPositionValid)
+        if (!result || !control.pixelReadoutPositionValid || control.playbackActive)
+            return;
+        if (result.requestId === undefined || Number(result.requestId) !== control.pixelReadoutRequestId || result.identityValid === undefined)
+            return;
+        if (probeResultIdentityKey(result) !== presentedIdentityKey())
             return;
         const slot = Number(result.slot);
         const expected = control.pixelReadoutExpected[slot];
         if (!expected)
             return;
-        if (Boolean(result.valid) && (Number(result.x) !== expected.x || Number(result.y) !== expected.y))
-            return;
+        if (Boolean(result.valid)) {
+            if (Number(result.x) !== expected.x || Number(result.y) !== expected.y)
+                return;
+        }
         const updated = Object.assign({}, control.pixelReadoutResults);
         updated[slot] = result;
         control.pixelReadoutResults = updated;
+    }
+
+    // True while the accepted sample still describes the presented frame. A value that outlived a
+    // seek or a frame step is kept for reference but labelled, never presented as current.
+    function probeResultIsCurrent(result) {
+        const identity = probeResultIdentityKey(result);
+        const expected = control.pixelReadoutExpected[Number(result.slot)];
+        return !control.playbackActive && identity === presentedIdentityKey() && Boolean(expected) && Number(result.x) === expected.x && Number(result.y) === expected.y;
+    }
+
+    // The frame planes a probe reads are the normalized NV12/P010 buffers the display path uses,
+    // so a source that is not already 4:2:0 was resampled on the way in. Naming that per source
+    // is the difference between "the file's own code values" and "what this frame holds".
+    function pixelReadoutConverted(info) {
+        const format = info && info.pixelFormat !== undefined ? String(info.pixelFormat) : "";
+        if (format.length === 0)
+            return false;
+        return !["nv12", "p010le", "yuv420p", "yuv420p10le"].includes(format);
     }
 
     function pixelReadoutRowText(slot) {
@@ -231,7 +316,7 @@ Rectangle {
         if (!info)
             return qsTr("无元数据");
         if (!result)
-            return qsTr("读取中…");
+            return control.playbackActive ? qsTr("播放中 · 暂停后读取") : qsTr("读取中…");
         if (!Boolean(result.valid)) {
             const reason = String(result.reason);
             if (reason === "no-frame")
@@ -240,26 +325,44 @@ Rectangle {
                 return qsTr("该源无帧");
             if (reason === "device-busy")
                 return qsTr("设备忙");
+            if (reason === "readback-failed")
+                return qsTr("读取失败");
             return qsTr("超出画面");
         }
         const depth = Number(result.bitDepth) > 0 ? qsTr("%1-bit").arg(Number(result.bitDepth)) : "";
-        const range = info.colorRange !== undefined ? String(info.colorRange) : "";
-        const meta = [depth, range].filter(part => part.length > 0).join(" ");
-        return qsTr("像素 (%1, %2)  Y %3  Cb %4  Cr %5%6").arg(Number(result.x)).arg(Number(result.y)).arg(Number(result.luma)).arg(Number(result.cb)).arg(Number(result.cr)).arg(meta.length > 0 ? "  " + meta : "");
+        const range = info.colorRange ? String(info.colorRange) : qsTr("范围未知");
+        const converted = control.pixelReadoutConverted(info) ? qsTr("已转换") : "";
+        const normalizedFormat = Number(result.bitDepth) === 10 ? "P010" : "NV12";
+        const sourceFormat = info.pixelFormat ? qsTr("来源 %1").arg(String(info.pixelFormat)) : qsTr("来源格式未知");
+        const meta = [normalizedFormat, depth, range, sourceFormat, converted].filter(part => part.length > 0).join(" ");
+        const values = qsTr("像素 (%1, %2)  Y %3  Cb %4  Cr %5%6").arg(Number(result.x)).arg(Number(result.y)).arg(Number(result.luma)).arg(Number(result.cb)).arg(Number(result.cr)).arg(meta.length > 0 ? "  " + meta : "");
+        if (control.probeResultIsCurrent(result))
+            return values;
+        return qsTr("冻结于第 %1 帧 · %2").arg(Number(result.frameId) + 1).arg(values);
     }
 
     // A paused frame step keeps the parked cursor's values current; during playback the
-    // readout stays at its last sample instead of adding readbacks to every presented frame.
+    // readout freezes instead of adding readbacks to every presented frame.
     function refreshPixelReadoutAfterFrameChange() {
         if (control.playbackActive || !control.pixelReadoutPositionValid)
             return;
         issueProbesForAllSlots();
     }
 
-    onCurrentFrameChanged: refreshPixelReadoutAfterFrameChange()
+    onPlaybackActiveChanged: {
+        if (control.playbackActive) {
+            dualVideoSurface.cancelSourcePixelProbes();
+            control.pixelReadoutIssuedKey = null;
+        } else {
+            refreshPixelReadoutAfterFrameChange();
+        }
+    }
     onOverlayVisibleChanged: {
-        if (overlayVisible)
+        if (overlayVisible) {
             pixelReadoutPositionValid = false;
+            pixelReadoutIssuedKey = null;
+            dualVideoSurface.cancelSourcePixelProbes();
+        }
     }
 
     function sourceFilename(slot) {
@@ -362,6 +465,14 @@ Rectangle {
             sourceDisplayInfo: control.sourceMediaInfo
             anchors.fill: parent
             onSourcePixelProbed: result => control.acceptPixelProbeResult(result)
+            onPresentedFrameIdentityChanged: control.refreshPixelReadoutAfterFrameChange()
+            onDifferenceSuppressedChanged: {
+                // The GT can have another aspect ratio or rotation. The parked hover belonged
+                // to the previous canvas geometry; retire it until the next pointer mapping.
+                control.pixelReadoutPositionValid = false;
+                control.pixelReadoutIssuedKey = null;
+                dualVideoSurface.cancelSourcePixelProbes();
+            }
         }
         // qmllint enable import unqualified unresolved-type
     }
@@ -779,10 +890,12 @@ Rectangle {
         }
     }
 
-    // Per-source raw code-value readout (1009 plan C slice 3): one row per session source,
-    // sampled at the hovered content position. The values are the frame planes' own YCbCr
-    // codes - the numeric review path; the picture itself stays the display-converted
-    // viewing path. Presentation follows the image workspace's cursorPixel readout.
+    // Per-source frame-plane readout (1009 plan C slice 3): one row per session source, sampled
+    // at the hovered content position. The values are the YCbCr codes held in the frame planes
+    // the display path uses - the numeric review path; the picture itself is the display-converted
+    // viewing path. Those planes are the normalized NV12/P010 buffers, so a source that was not
+    // already 4:2:0 arrives resampled and its row says so. Presentation follows the image
+    // workspace's cursorPixel readout.
     Rectangle {
         id: pixelReadoutPlate
 
@@ -809,8 +922,8 @@ Rectangle {
             bottom: viewCommandRow.top
             bottomMargin: 8
         }
-        Accessible.name: qsTr("像素源码值读数")
-        Accessible.description: qsTr("光标位置的帧平面原始 YCbCr 码值，逐源显示。")
+        Accessible.name: qsTr("像素规范化帧值读数")
+        Accessible.description: qsTr("光标位置的帧平面 YCbCr 码值，逐源显示。")
 
         Column {
             id: pixelReadoutColumn
@@ -822,7 +935,7 @@ Rectangle {
                 spacing: 6
 
                 Text {
-                    text: qsTr("源码值 YCbCr")
+                    text: qsTr("规范化帧值 YCbCr")
                     color: control.mutedTextColor
                     font.pixelSize: 10
                     font.weight: Font.DemiBold
@@ -834,7 +947,7 @@ Rectangle {
 
                 VcsToolTip {
                     visible: pixelReadoutHeaderHover.hovered
-                    text: qsTr("光标位置的帧平面原始 YCbCr 码值（数值审查路径）。\n画面本身经过显示转换（观看路径），两者不承诺一致。\n位深来自帧格式，Limited/Full 来自源元数据。\n播放中读数不自动刷新；移动光标或暂停后逐帧重新取样。")
+                    text: qsTr("光标位置的帧平面 YCbCr 码值（数值审查路径）。\n读数是 NV12/P010 帧平面中的样本；来源的色度或位深可能在解码时已转换，逐行标出来源格式和「已转换」。\n画面本身经过显示转换（观看路径），两者不承诺一致。\n位深来自帧格式，Limited/Full 来自源元数据。\n播放中冻结读数并标出帧号；暂停后按呈现帧和光标位置重新取样。")
                 }
             }
 
@@ -878,6 +991,47 @@ Rectangle {
                     }
                 }
             }
+        }
+    }
+
+    // Hold-to-peek indicator: names the source the difference canvas is showing while the peek
+    // holds, including when it is locked. It outlives the transient HUD line, so "I am looking
+    // at the GT" stays visible for as long as it is true.
+    Rectangle {
+        id: differencePeekIndicator
+
+        objectName: "differencePeekIndicator"
+        visible: control.differencePeekActive && control.differenceMode
+        opacity: visible ? 1 : 0
+        radius: 5
+        color: Theme.oscGlass
+        border.width: 1
+        border.color: Theme.oscBorder
+        width: Math.min(Math.max(0, parent.width - 24), peekLabel.implicitWidth + 20)
+        height: 26
+        z: 32
+        anchors {
+            left: parent.left
+            leftMargin: 12
+            bottom: pixelReadoutPlate.visible ? pixelReadoutPlate.top : viewCommandRow.top
+            bottomMargin: 8
+        }
+
+        Behavior on opacity {
+            NumberAnimation {
+                duration: 150
+            }
+        }
+
+        Text {
+            id: peekLabel
+
+            anchors.centerIn: parent
+            width: parent.width - 20
+            elide: Text.ElideRight
+            text: control.differencePeekLocked ? qsTr("已锁定直看 GT：%1").arg(control.differencePeekTargetLabel) : qsTr("直看 GT：%1").arg(control.differencePeekTargetLabel)
+            color: control.primaryTextColor
+            font.pixelSize: 11
         }
     }
 

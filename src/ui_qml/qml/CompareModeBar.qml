@@ -17,6 +17,11 @@ Rectangle {
     required property int currentEdgeIndex
     required property bool inspectorOpen
     required property bool busy
+    // The keyboard lock outlives the button press, so the button has to say so.
+    required property bool peekLocked
+    // Set while the session has no identifiable reference (GT) source; the peek is offered by
+    // the keyboard only when this is false, and the button explains itself instead of lying.
+    required property bool peekTargetValid
     property color panelColor: Theme.menu
     property color borderColor: Theme.border
     property color accentColor: Theme.accent
@@ -27,8 +32,9 @@ Rectangle {
     // Step-2 difference entry: one control offers the two flavors the review named —
     // overlay-highlight to locate defects on the original, pure diff for distribution.
     signal differenceViewRequested(int metric)
-    // Hold-to-peek: while the button is held the surface replaces the difference pass
-    // with the raw first source of the active pair; releasing restores the difference.
+    // Hold-to-peek: while held the surface replaces the difference pass with the reference (GT)
+    // source of the session; releasing restores the difference. Same target the keyboard peek
+    // and the viewport indicator name.
     signal differencePeekChanged(bool held)
     // Step-2 "固定 GT 切候选": one action flips the candidate side against the fixed
     // reference; Main keeps the frame, zoom/pan and wipe split untouched.
@@ -88,19 +94,21 @@ Rectangle {
             objectName: "diffModeButton"
             text: control.differenceFlavorLabel.length > 0 ? qsTr("差异·%1 ▾").arg(control.differenceFlavorLabel) : qsTr("差异 ▾")
         }
-        // Hold-to-peek: while held the surface shows the raw first source of the active
-        // pair instead of the difference pass; releasing restores the difference view.
+        // Hold-to-peek: while held the surface shows the reference (GT) source instead of the
+        // difference pass; releasing restores the difference view. The label names that target
+        // and stays visible while the keyboard lock holds it.
         VcsToolButton {
             id: differencePeekButton
 
             objectName: "differencePeekButton"
-            text: qsTr("按住看原图")
+            text: control.peekLocked ? qsTr("GT 原图·已锁定") : qsTr("按住看 GT 原图")
             visible: control.currentMode === ComparisonSurface.Difference
-            enabled: !control.busy
-            prominent: pressed
-            implicitWidth: 104
+            enabled: !control.busy && control.peekTargetValid
+            prominent: pressed || control.peekLocked
+            implicitWidth: 132
             implicitHeight: 30
             labelPixelSize: 12
+            Accessible.description: control.peekTargetValid ? qsTr("按住显示会话的参考（GT）源，即使 GT 不在当前比较对中；松开恢复差异视图。键盘 ` 切换，Shift+` 锁定。") : qsTr("当前会话没有可直看的参考（GT）源。")
             onPressed: control.differencePeekChanged(true)
             onReleased: control.differencePeekChanged(false)
             onCanceled: control.differencePeekChanged(false)

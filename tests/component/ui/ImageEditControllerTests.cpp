@@ -126,6 +126,152 @@ TEST(ImageEditControllerTests, CropClampsToImageBoundsAndRejectsDegenerateRects)
     EXPECT_FALSE(controller.canUndo());
 }
 
+TEST(ImageEditControllerTests, TransformsPermutePixelsAndComposeWithCropUndoAndSave) {
+    using Transform = ImageEditController::ImageTransform;
+    for (const Transform transform : {Transform::MirrorHorizontal,
+                                      Transform::FlipVertical,
+                                      Transform::RotateClockwise,
+                                      Transform::RotateCounterclockwise,
+                                      Transform::RotateHalfTurn}) {
+        SCOPED_TRACE(static_cast<int>(transform));
+        ImageEditController controller;
+        QImage original = cornerImage(12, 10);
+        original.setPixelColor(3, 2, QColor(7, 31, 99, 123));
+        setSource(controller, original);
+        QTemporaryDir directory;
+        ASSERT_TRUE(directory.isValid());
+        const QString originalPath = directory.filePath(QStringLiteral("original.png"));
+        ASSERT_TRUE(original.save(originalPath));
+        ASSERT_TRUE(controller.beginSession(
+            2, QStringLiteral("original.png"), QUrl::fromLocalFile(originalPath)));
+        ASSERT_TRUE(controller.cropToImageRect(2, 1, 8, 6));
+        const QImage cropped = original.copy(2, 1, 8, 6);
+        const bool quarterTurn = transform == Transform::RotateClockwise ||
+                                 transform == Transform::RotateCounterclockwise;
+        QImage expected(quarterTurn ? QSize(6, 8) : cropped.size(), cropped.format());
+        for (int y = 0; y < cropped.height(); ++y) {
+            for (int x = 0; x < cropped.width(); ++x) {
+                QPoint target;
+                switch (transform) {
+                case Transform::MirrorHorizontal:
+                    target = QPoint(7 - x, y);
+                    break;
+                case Transform::FlipVertical:
+                    target = QPoint(x, 5 - y);
+                    break;
+                case Transform::RotateClockwise:
+                    target = QPoint(5 - y, x);
+                    break;
+                case Transform::RotateCounterclockwise:
+                    target = QPoint(y, 7 - x);
+                    break;
+                case Transform::RotateHalfTurn:
+                    target = QPoint(7 - x, 5 - y);
+                    break;
+                }
+                expected.setPixelColor(target, cropped.pixelColor(x, y));
+            }
+        }
+        ASSERT_TRUE(controller.transformImage(transform));
+        EXPECT_EQ(controller.editedImage(), expected);
+        ASSERT_TRUE(controller.undo());
+        EXPECT_EQ(controller.editedImage(), cropped);
+        ASSERT_TRUE(controller.undo());
+        EXPECT_EQ(controller.editedImage(), original);
+        ASSERT_TRUE(controller.redo());
+        ASSERT_TRUE(controller.redo());
+        const QString copyPath = directory.filePath(QStringLiteral("copy.png"));
+        ASSERT_TRUE(controller.saveCopy(QUrl::fromLocalFile(copyPath), false, Qt::white));
+        EXPECT_EQ(QImage(copyPath), expected);
+        EXPECT_EQ(QImage(originalPath), original);
+        EXPECT_EQ(controller.sourceImage(), original);
+    }
+}
+
+TEST(ImageEditControllerTests, TransformsPreserve16BitSamplesAndRespectTheHistoryBudget) {
+    ImageEditController controller;
+    QImage original(6, 4, QImage::Format_RGBA64);
+    for (int y = 0; y < original.height(); ++y) {
+        for (int x = 0; x < original.width(); ++x) {
+            original.setPixelColor(x,
+                                   y,
+                                   QColor::fromRgba64(static_cast<quint16>(x * 901 + 123),
+                                                      static_cast<quint16>(y * 811 + 321),
+                                                      12345,
+                                                      34567));
+        }
+    }
+    setSource(controller, original);
+    ASSERT_TRUE(controller.beginSession(2, QStringLiteral("16-bit.png"), QUrl()));
+    controller.setHistoryByteBudget(original.sizeInBytes() * 2);
+    ASSERT_TRUE(controller.mirrorImage());
+    const QImage mirrored = controller.editedImage();
+    EXPECT_EQ(mirrored.format(), QImage::Format_RGBA64);
+    EXPECT_EQ(mirrored.pixelColor(0, 0).rgba64(), original.pixelColor(5, 0).rgba64());
+    ASSERT_TRUE(controller.rotateImage(-1));
+    EXPECT_EQ(controller.editedImage().format(), QImage::Format_RGBA64);
+    EXPECT_EQ(controller.editedImage().size(), QSize(4, 6));
+    EXPECT_EQ(controller.editedImage().pixelColor(0, 0).rgba64(),
+              original.pixelColor(0, 0).rgba64());
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.editedImage(), mirrored);
+    EXPECT_FALSE(controller.canUndo());
+}
+
+TEST(ImageEditControllerTests, TransformRejectsUnfinishedGesturesAndNoOpRotation) {
+    ImageEditController controller;
+    EXPECT_FALSE(controller.mirrorImage());
+    const QImage original = cornerImage(80, 60);
+    setSource(controller, original);
+    ASSERT_TRUE(controller.beginSession(2, QStringLiteral("a.png"), QUrl()));
+    EXPECT_FALSE(controller.rotateImage(4));
+    EXPECT_FALSE(controller.transformImage(static_cast<ImageEditController::ImageTransform>(99)));
+    EXPECT_FALSE(controller.canUndo());
+    ASSERT_TRUE(controller.beginStroke(Qt::red, 4, 1.0));
+    ASSERT_TRUE(controller.strokeTo(15, 15));
+    const QImage preview = controller.editedImage();
+    EXPECT_FALSE(controller.rotateImage());
+    EXPECT_EQ(controller.editedImage(), preview);
+    ASSERT_TRUE(controller.endStroke());
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.editedImage(), original);
+    ASSERT_TRUE(controller.addRectangle(10, 10, 30, 30, Qt::red, 2));
+    ASSERT_TRUE(controller.beginAnnotationDrag(15, 15));
+    EXPECT_FALSE(controller.mirrorImage(true));
+    ASSERT_TRUE(controller.dragAnnotationTo(18, 18));
+    ASSERT_TRUE(controller.endAnnotationDrag());
+    ASSERT_TRUE(controller.mirrorImage(true));
+}
+
+TEST(ImageEditControllerTests, TransformedTextAndShapesRemainSelectableAndUndoable) {
+    ImageEditController controller;
+    QImage original(120, 100, QImage::Format_ARGB32);
+    original.fill(Qt::black);
+    setSource(controller, original);
+    ASSERT_TRUE(controller.beginSession(2, QStringLiteral("annotations.png"), QUrl()));
+    ASSERT_TRUE(controller.addText(20, 40, QStringLiteral("AB"), Qt::red, 16));
+    ASSERT_TRUE(controller.addArrow(10, 70, 40, 70, Qt::green, 2));
+    const QImage before = controller.editedImage();
+    ASSERT_TRUE(controller.rotateImage());
+    const QImage rotated = controller.editedImage();
+    // Text that was wide becomes tall, and its hit box follows that orientation.
+    EXPECT_GT(rotated.pixelColor(65, 25).red(), 0);
+    ASSERT_TRUE(controller.selectAnnotationAt(65, 25));
+    EXPECT_EQ(controller.selectedAnnotation(), 0);
+    ASSERT_TRUE(controller.deleteSelectedAnnotation());
+    EXPECT_EQ(controller.editedImage().pixelColor(65, 25), QColor(Qt::black));
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.editedImage(), rotated);
+    ASSERT_TRUE(controller.selectAnnotationAt(30, 25));
+    EXPECT_EQ(controller.selectedAnnotation(), 1);
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.editedImage(), before);
+    ASSERT_TRUE(controller.mirrorImage());
+    EXPECT_GT(controller.editedImage().pixelColor(95, 35).red(), 0);
+    ASSERT_TRUE(controller.selectAnnotationAt(95, 35));
+    EXPECT_EQ(controller.selectedAnnotation(), 0);
+}
+
 TEST(ImageEditControllerTests, UndoRedoWalkTheCropHistoryWithLabels) {
     ImageEditController controller;
     setSource(controller, cornerImage(40, 40));

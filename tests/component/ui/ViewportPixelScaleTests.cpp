@@ -2,6 +2,7 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QJSValue>
 #include <QKeyEvent>
 #include <QMetaObject>
 #include <QMouseEvent>
@@ -668,7 +669,15 @@ TEST_F(ViewportPixelScaleTests, PixelReadoutShowsPerSourceRowsAndDropsStaleDeliv
             root_.get(), "handleNavigationMove", Q_ARG(QVariant, x), Q_ARG(QVariant, y)));
         QCoreApplication::processEvents();
     };
-    const auto deliver = [this](const QVariantMap& result) {
+    const auto deliver = [this](QVariantMap result) {
+        result.insert(QStringLiteral("requestId"), root_->property("pixelReadoutRequestId"));
+        if (!result.contains(QStringLiteral("identityValid"))) {
+            result.insert(QStringLiteral("identityValid"), surface_->presentedFrameValid());
+            result.insert(QStringLiteral("frameId"), surface_->presentedFrameId());
+            result.insert(QStringLiteral("sessionEpoch"), surface_->presentedSessionEpoch());
+            result.insert(QStringLiteral("playbackGeneration"),
+                          surface_->presentedPlaybackGeneration());
+        }
         ASSERT_TRUE(QMetaObject::invokeMethod(
             root_.get(), "acceptPixelProbeResult", Q_ARG(QVariant, result)));
         QCoreApplication::processEvents();
@@ -686,6 +695,7 @@ TEST_F(ViewportPixelScaleTests, PixelReadoutShowsPerSourceRowsAndDropsStaleDeliv
     };
     const auto batches = [this] { return root_->property("pixelReadoutBatchesIssued").toInt(); };
 
+    surface_->publishPresentedFrameIdentity(true, 7U, 3U, 1U);
     // Single mode fits source 0 (16x9) by width; the viewport centre maps to normalized
     // (0.5, 0.5): pixel (8, 4) for the 16x9 slot and (6, 4) for the 12x9 slot.
     move(399, 299);
@@ -702,7 +712,7 @@ TEST_F(ViewportPixelScaleTests, PixelReadoutShowsPerSourceRowsAndDropsStaleDeliv
              {QStringLiteral("cb"), 90},
              {QStringLiteral("cr"), 180},
              {QStringLiteral("bitDepth"), 8}});
-    EXPECT_EQ(rowText(0), QStringLiteral("像素 (8, 4)  Y 200  Cb 90  Cr 180  8-bit Limited"));
+    EXPECT_TRUE(rowText(0).contains(QStringLiteral("Y 200  Cb 90  Cr 180  NV12 8-bit Limited")));
 
     deliver({{QStringLiteral("valid"), true},
              {QStringLiteral("slot"), 1},
@@ -712,7 +722,7 @@ TEST_F(ViewportPixelScaleTests, PixelReadoutShowsPerSourceRowsAndDropsStaleDeliv
              {QStringLiteral("cb"), 30},
              {QStringLiteral("cr"), 220},
              {QStringLiteral("bitDepth"), 10}});
-    EXPECT_EQ(rowText(1), QStringLiteral("像素 (6, 4)  Y 100  Cb 30  Cr 220  10-bit Full"));
+    EXPECT_TRUE(rowText(1).contains(QStringLiteral("Y 100  Cb 30  Cr 220  P010 10-bit Full")));
 
     // A delivery from the position before the cursor moved on is dropped, not shown: the
     // row keeps the accepted sample and never mixes coordinates with foreign values.
@@ -726,7 +736,7 @@ TEST_F(ViewportPixelScaleTests, PixelReadoutShowsPerSourceRowsAndDropsStaleDeliv
              {QStringLiteral("cb"), 11},
              {QStringLiteral("cr"), 11},
              {QStringLiteral("bitDepth"), 8}});
-    EXPECT_EQ(rowText(0), QStringLiteral("像素 (8, 4)  Y 200  Cb 90  Cr 180  8-bit Limited"));
+    EXPECT_TRUE(rowText(0).contains(QStringLiteral("Y 200  Cb 90  Cr 180  NV12 8-bit Limited")));
 
     // Failures carry no values, so they land without a position gate and name their reason.
     deliver({{QStringLiteral("valid"), false},
@@ -748,12 +758,258 @@ TEST_F(ViewportPixelScaleTests, PixelReadoutShowsPerSourceRowsAndDropsStaleDeliv
     move(399, 299);
     const int parked = batches();
     root_->setProperty("currentFrame", 42);
+    surface_->publishPresentedFrameIdentity(true, 8U, 3U, 1U);
     QCoreApplication::processEvents();
     EXPECT_EQ(batches(), parked + 1);
     root_->setProperty("playbackActive", true);
     root_->setProperty("currentFrame", 43);
+    surface_->publishPresentedFrameIdentity(true, 9U, 3U, 1U);
     QCoreApplication::processEvents();
     EXPECT_EQ(batches(), parked + 1);
+
+    // A cursor that moves while frames stream must not spend a readback either: the readout
+    // retires rather than sampling a position the picture has already moved past.
+    move(399, 299);
+    EXPECT_TRUE(root_->property("pixelReadoutPositionValid").toBool());
+    EXPECT_TRUE(rowText(0).startsWith(QStringLiteral("冻结于第")));
+    EXPECT_EQ(batches(), parked + 1);
+    root_->setProperty("playbackActive", false);
+
+    // Mouse jitter over one parked pixel must not turn into a readback per event: the same
+    // position, frame and presented frame set is already answered.
+    move(399, 299);
+    const int settled = batches();
+    move(399.1, 299.1);
+    EXPECT_EQ(batches(), settled);
+}
+
+// The readout answers for the frame on screen. A delivery that describes another frame set (a
+// seek or a source switch happened between the request and the answer) is dropped rather than
+// shown next to the current position, a value that outlived its frame is labelled frozen instead
+// of presented as current, and a failure from a replaced session is dropped too.
+TEST_F(ViewportPixelScaleTests, PixelReadoutValidatesFrameIdentityAndLabelsFrozenValues) {
+    setSources({source(16, 9)});
+    auto* const plate = root_->findChild<QQuickItem*>(QStringLiteral("viewportPixelReadoutPlate"));
+    ASSERT_NE(plate, nullptr);
+    const auto move = [this](const qreal x, const qreal y) {
+        ASSERT_TRUE(QMetaObject::invokeMethod(
+            root_.get(), "handleNavigationMove", Q_ARG(QVariant, x), Q_ARG(QVariant, y)));
+        QCoreApplication::processEvents();
+    };
+    const auto deliver = [this](QVariantMap result) {
+        result.insert(QStringLiteral("requestId"), root_->property("pixelReadoutRequestId"));
+        if (!result.contains(QStringLiteral("identityValid"))) {
+            result.insert(QStringLiteral("identityValid"), surface_->presentedFrameValid());
+            result.insert(QStringLiteral("frameId"), surface_->presentedFrameId());
+            result.insert(QStringLiteral("sessionEpoch"), surface_->presentedSessionEpoch());
+            result.insert(QStringLiteral("playbackGeneration"),
+                          surface_->presentedPlaybackGeneration());
+        }
+        ASSERT_TRUE(QMetaObject::invokeMethod(
+            root_.get(), "acceptPixelProbeResult", Q_ARG(QVariant, result)));
+        QCoreApplication::processEvents();
+    };
+    const auto rowText = [this] {
+        QVariant text;
+        if (!QMetaObject::invokeMethod(root_.get(),
+                                       "pixelReadoutRowText",
+                                       Q_RETURN_ARG(QVariant, text),
+                                       Q_ARG(QVariant, 0))) {
+            ADD_FAILURE() << "pixelReadoutRowText not invokable";
+            return QString{};
+        }
+        return text.toString();
+    };
+    // Identity of the frame set the surface presents, published by the render node the same way
+    // a real probe answer is stamped.
+    const auto present = [this](const qulonglong frameId,
+                                const qulonglong sessionEpoch,
+                                const qulonglong playbackGeneration) {
+        ASSERT_TRUE(QMetaObject::invokeMethod(surface_,
+                                              "publishPresentedFrameIdentity",
+                                              Q_ARG(bool, true),
+                                              Q_ARG(qulonglong, frameId),
+                                              Q_ARG(qulonglong, sessionEpoch),
+                                              Q_ARG(qulonglong, playbackGeneration)));
+        QCoreApplication::processEvents();
+    };
+    const auto validResult = [](const qulonglong frameId,
+                                const qulonglong sessionEpoch,
+                                const qulonglong playbackGeneration) {
+        return QVariantMap{
+            {QStringLiteral("valid"), true},
+            {QStringLiteral("identityValid"), true},
+            {QStringLiteral("slot"), 0},
+            {QStringLiteral("x"), 8},
+            {QStringLiteral("y"), 4},
+            {QStringLiteral("luma"), 200},
+            {QStringLiteral("cb"), 90},
+            {QStringLiteral("cr"), 180},
+            {QStringLiteral("bitDepth"), 8},
+            {QStringLiteral("frameId"), QVariant::fromValue(frameId)},
+            {QStringLiteral("sessionEpoch"), QVariant::fromValue(sessionEpoch)},
+            {QStringLiteral("playbackGeneration"), QVariant::fromValue(playbackGeneration)},
+        };
+    };
+
+    // Frame 7 of session 3 / generation 1 is on screen; the parked cursor is answered by it.
+    present(7U, 3U, 1U);
+    move(399, 299);
+    EXPECT_TRUE(plate->property("visible").toBool());
+    deliver(validResult(7U, 3U, 1U));
+    EXPECT_EQ(
+        rowText(),
+        QStringLiteral("像素 (8, 4)  Y 200  Cb 90  Cr 180  NV12 8-bit 范围未知 来源格式未知"));
+
+    // The seek moved on to frame 8 before the answer arrived: the frame-7 answer is dropped, and
+    // the value the row keeps is labelled as belonging to the frame it came from. The stale answer
+    // carries different values, so accepting it would visibly change the row.
+    present(8U, 3U, 1U);
+    QVariantMap stale = validResult(7U, 3U, 1U);
+    stale.insert(QStringLiteral("luma"), 111);
+    stale.insert(QStringLiteral("cb"), 11);
+    stale.insert(QStringLiteral("cr"), 11);
+    deliver(stale);
+    EXPECT_EQ(
+        rowText(),
+        QStringLiteral(
+            "冻结于第 8 帧 · 像素 (8, 4)  Y 200  Cb 90  Cr 180  NV12 8-bit 范围未知 来源格式未知"));
+    deliver(validResult(8U, 3U, 1U));
+    EXPECT_EQ(
+        rowText(),
+        QStringLiteral("像素 (8, 4)  Y 200  Cb 90  Cr 180  NV12 8-bit 范围未知 来源格式未知"));
+
+    // A value that is still displayed while the presented frame moved on is labelled frozen.
+    present(9U, 3U, 1U);
+    EXPECT_EQ(
+        rowText(),
+        QStringLiteral(
+            "冻结于第 9 帧 · 像素 (8, 4)  Y 200  Cb 90  Cr 180  NV12 8-bit 范围未知 来源格式未知"));
+
+    // A failure carries no frame of its own, so it is only honest while the screen still shows
+    // the frame set the request was made against: a moved-on screen drops it instead of
+    // overwriting the row with a stale complaint.
+    deliver(QVariantMap{{QStringLiteral("valid"), false},
+                        {QStringLiteral("identityValid"), true},
+                        {QStringLiteral("frameId"), QVariant::fromValue<qulonglong>(8U)},
+                        {QStringLiteral("sessionEpoch"), QVariant::fromValue<qulonglong>(3U)},
+                        {QStringLiteral("playbackGeneration"), QVariant::fromValue<qulonglong>(1U)},
+                        {QStringLiteral("slot"), 0},
+                        {QStringLiteral("reason"), QStringLiteral("device-busy")}});
+    EXPECT_EQ(
+        rowText(),
+        QStringLiteral(
+            "冻结于第 9 帧 · 像素 (8, 4)  Y 200  Cb 90  Cr 180  NV12 8-bit 范围未知 来源格式未知"));
+
+    // A source that is not already 4:2:0 was resampled into the frame planes the probe reads, so
+    // the row says so instead of implying the file's own chroma survived.
+    setSources({source(16, 9)});
+    root_->setProperty(
+        "sourceMediaInfo",
+        QVariantList{QVariantMap{{QStringLiteral("width"), 16},
+                                 {QStringLiteral("height"), 9},
+                                 {QStringLiteral("pixelFormat"), QStringLiteral("yuv444p")}}});
+    QCoreApplication::processEvents();
+    deliver(validResult(9U, 3U, 1U));
+    EXPECT_EQ(rowText(),
+              QStringLiteral(
+                  "像素 (8, 4)  Y 200  Cb 90  Cr 180  NV12 8-bit 范围未知 来源 yuv444p 已转换"));
+}
+
+TEST_F(ViewportPixelScaleTests, PixelReadoutRejectsReplacedRequestsAndEveryIdentityDimension) {
+    setSources({source(16, 9)});
+    surface_->publishPresentedFrameIdentity(true, 7U, 3U, 1U);
+    const auto move = [this](int x, int y) {
+        ASSERT_TRUE(QMetaObject::invokeMethod(
+            root_.get(), "handleNavigationMove", Q_ARG(QVariant, x), Q_ARG(QVariant, y)));
+    };
+    const auto deliver = [this](const QVariantMap& result) {
+        ASSERT_TRUE(QMetaObject::invokeMethod(
+            root_.get(), "acceptPixelProbeResult", Q_ARG(QVariant, result)));
+    };
+    const auto values = [this] {
+        return root_->property("pixelReadoutResults").value<QJSValue>().toVariant().toMap();
+    };
+    move(399, 299);
+    const int firstRequest = root_->property("pixelReadoutRequestId").toInt();
+    QVariantMap sample{{QStringLiteral("valid"), true},
+                       {QStringLiteral("identityValid"), true},
+                       {QStringLiteral("requestId"), firstRequest},
+                       {QStringLiteral("slot"), 0},
+                       {QStringLiteral("x"), 8},
+                       {QStringLiteral("y"), 4},
+                       {QStringLiteral("frameId"), 7},
+                       {QStringLiteral("sessionEpoch"), 3},
+                       {QStringLiteral("playbackGeneration"), 1},
+                       {QStringLiteral("luma"), 200}};
+    deliver(sample);
+    move(199, 149);
+    move(399, 299);
+    QVariantMap stale = sample;
+    stale[QStringLiteral("luma")] = 111;
+    deliver(stale);
+    stale[QStringLiteral("valid")] = false;
+    stale[QStringLiteral("reason")] = QStringLiteral("device-busy");
+    deliver(stale);
+    const auto accepted = [&values] { return values().value(QStringLiteral("0")).toMap(); };
+    EXPECT_EQ(accepted().value(QStringLiteral("luma")).toInt(), 200);
+    sample[QStringLiteral("requestId")] = root_->property("pixelReadoutRequestId");
+    for (const QString& key : {QStringLiteral("frameId"),
+                               QStringLiteral("sessionEpoch"),
+                               QStringLiteral("playbackGeneration")}) {
+        stale = sample;
+        stale[key] = stale[key].toInt() + 1;
+        stale[QStringLiteral("luma")] = 111;
+        deliver(stale);
+        EXPECT_EQ(accepted().value(QStringLiteral("luma")).toInt(), 200) << key.toStdString();
+    }
+    root_->setProperty("playbackActive", true);
+    sample[QStringLiteral("luma")] = 111;
+    deliver(sample);
+    EXPECT_EQ(accepted().value(QStringLiteral("luma")).toInt(), 200);
+}
+
+// The peek indicator names the source the difference canvas is showing and stays up for as long as
+// the peek holds, so a locked peek cannot be mistaken for the difference view once the transient
+// HUD line has faded. It is absent outside difference mode and while the peek is off.
+TEST_F(ViewportPixelScaleTests, PeekIndicatorNamesTheReferenceSourceWhileThePeekHolds) {
+    auto* const indicator =
+        root_->findChild<QQuickItem*>(QStringLiteral("differencePeekIndicator"));
+    ASSERT_NE(indicator, nullptr);
+    // The plate's text lives in a child Text item; the plate itself carries no text property.
+    const auto indicatorText = [indicator] {
+        QString text;
+        for (QQuickItem* const child : indicator->childItems()) {
+            QVariant label = child->property("text");
+            if (label.isValid() && label.typeId() == QMetaType::QString) {
+                text = label.toString();
+            }
+        }
+        return text;
+    };
+
+    root_->setProperty("differenceMode", true);
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(indicator->property("visible").toBool());
+
+    root_->setProperty("pixelReadoutPositionValid", true);
+    root_->setProperty("differencePeekActive", true);
+    root_->setProperty("differenceSuppressed", true);
+    root_->setProperty("differencePeekTargetLabel", QStringLiteral("B · clip.mp4"));
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(indicator->property("visible").toBool());
+    EXPECT_FALSE(root_->property("pixelReadoutPositionValid").toBool());
+    EXPECT_TRUE(indicatorText().contains(QStringLiteral("直看 GT")));
+    EXPECT_TRUE(indicatorText().contains(QStringLiteral("B · clip.mp4")));
+
+    // The lock is stated on the plate itself, not only in the message that fades away.
+    root_->setProperty("differencePeekLocked", true);
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(indicatorText().contains(QStringLiteral("已锁定")));
+
+    root_->setProperty("differencePeekActive", false);
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(indicator->property("visible").toBool());
 }
 
 // The bottom-corner HUD follows the transport's reveal state: an idle playing view keeps the

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace dvs::platform {
 
@@ -155,9 +156,8 @@ struct SurfaceRenderState final {
     bool thresholdEnabled = false;
     float threshold = 0.0F;
     SurfaceThresholdPolicy thresholdPolicy = SurfaceThresholdPolicy::AnyChannel;
-    // Hold-to-peek ("按住看原图"): while true the difference pass is replaced by the raw
-    // first source of the active pair, aspect-fit into the same rect. Transient UI state;
-    // never persisted.
+    // GT peek: while true the difference pass displays referenceSlot through the regular
+    // source display path, aspect-fit into the same rect. Transient UI state; never persisted.
     bool differenceSuppressed = false;
     SurfaceViewTransform viewTransform;
     bool roiEnabled = false;
@@ -222,16 +222,17 @@ struct Nv12ColorTransform final {
                                         std::uint32_t sourceWidth,
                                         std::uint32_t sourceHeight) noexcept;
 
-[[nodiscard]] SurfacePresentationGeometry computeSurfacePresentationGeometry(
-    SurfaceViewMode viewMode,
-    float logicalWidth,
-    float logicalHeight,
-    std::uint32_t pixelWidth,
-    std::uint32_t pixelHeight,
-    std::uint8_t referenceSlot,
-    SurfaceDifferenceEdge differenceEdge,
-    float wipePosition,
-    const std::array<SurfaceDisplayExtent, 3U>& sourceDisplayExtents) noexcept;
+[[nodiscard]] SurfacePresentationGeometry
+computeSurfacePresentationGeometry(SurfaceViewMode viewMode,
+                                   float logicalWidth,
+                                   float logicalHeight,
+                                   std::uint32_t pixelWidth,
+                                   std::uint32_t pixelHeight,
+                                   std::uint8_t referenceSlot,
+                                   SurfaceDifferenceEdge differenceEdge,
+                                   float wipePosition,
+                                   const std::array<SurfaceDisplayExtent, 3U>& sourceDisplayExtents,
+                                   bool differenceSuppressed = false) noexcept;
 
 // Qt scene-graph scissor coordinates use the render target's bottom-left origin. D3D11 RECT uses
 // its top-left origin; conversion flips by target height, then intersects the active viewport.
@@ -256,9 +257,9 @@ enum class ComparisonRenderResult {
 
 // One fulfilled source-pixel probe: raw plane code values for the pixel whose top-left corner
 // contains the requested normalized source coordinate, resolved against the frame set the
-// renderer is holding (mailbox front, else the retained front pair). `available` is false with
-// a reason when nothing honest can be reported; the frame identity lets callers discard
-// results that outlived a seek or a source switch.
+// renderer is presenting. `available` is false with a reason when nothing honest can be
+// reported; the frame identity lets callers discard results that outlived a seek or a source
+// switch.
 struct SourcePixelProbe final {
     enum class Reason {
         None,
@@ -266,6 +267,7 @@ struct SourcePixelProbe final {
         MissingSlot,
         OutOfRange,
         DeviceBusy,
+        ReadbackFailed,
     };
 
     bool available = false;
@@ -280,6 +282,29 @@ struct SourcePixelProbe final {
     std::uint64_t sessionEpoch = 0U;
     std::uint64_t playbackGeneration = 0U;
     Reason reason = Reason::None;
+    std::uint64_t requestId = 0U;
+    bool identityValid = false;
+};
+
+// One requested slot inside a probe batch. A batch is resolved against a single frame set, so
+// every slot of one cursor position is guaranteed to describe the same presented frame.
+struct SourcePixelProbeRequest final {
+    std::uint8_t slot = 0U;
+    double normalizedX = 0.0;
+    double normalizedY = 0.0;
+    std::uint64_t requestId = 0U;
+};
+
+// Identity of the frame set the renderer is presenting. `valid` is false while nothing has been
+// drawn (or the retained set was dropped by a device/session change), which is the state the
+// readout must report as "no frame yet" instead of quoting an older sample.
+struct PresentedFrameIdentity final {
+    bool valid = false;
+    std::uint64_t frameId = 0U;
+    std::uint64_t sessionEpoch = 0U;
+    std::uint64_t playbackGeneration = 0U;
+
+    [[nodiscard]] constexpr bool operator==(const PresentedFrameIdentity&) const noexcept = default;
 };
 
 // Render-thread-only D3D11 compositor. It borrows the current Qt render pass: render() never
@@ -300,11 +325,19 @@ public:
     D3d11ComparisonRenderer& operator=(D3d11ComparisonRenderer&&) = delete;
 
     [[nodiscard]] ComparisonRenderResult render(const SurfaceRenderState& state) noexcept;
-    // Render-thread only, like render(): resolves the slot against the set the renderer is
-    // holding and reads one texel per plane through the 1x1 staging probe. A bounded sync of a
-    // one-texel copy; DeviceBusy means the caller should retry on a later frame.
+    // Render-thread only, like render(): resolves every request against the one frame set the
+    // renderer is presenting. Copies use six reusable 1x1 staging textures at most; maps use
+    // DO_NOT_WAIT. DeviceBusy asks the caller to poll the same request on a later render pass.
+    // The batch retains its first presented set across retries (including a subset of slots).
+    // Cancel after completion to release that set; changed requests start a fresh batch.
+    [[nodiscard]] std::vector<SourcePixelProbe>
+    probeSourcePixels(const std::vector<SourcePixelProbeRequest>& requests) noexcept;
     [[nodiscard]] SourcePixelProbe
     probeSourcePixel(std::uint8_t slot, double normalizedX, double normalizedY) noexcept;
+    // Identity of the presented set - the same resolution the probes use - so a caller can tell
+    // whether a delivered value still describes the frame on screen.
+    [[nodiscard]] PresentedFrameIdentity presentedFrameIdentity() const noexcept;
+    void cancelSourcePixelProbes() noexcept;
     void releaseResources() noexcept;
 
 private:
