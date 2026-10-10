@@ -2646,6 +2646,161 @@ TEST(MainQmlContractTests, ResumeRestoresRecordedPositionAndStaysOffForeignOrSta
     controller.stop();
 }
 
+// C1b. The resume restore is a user-session convenience; automation determinism (performance
+// gates and --ui-smoke) must not replay it. Found in the wild on 2026-10-10: a developer
+// profile held "resume.<fixture-identity> = 11", and every app.ui-*-smoke run opened the
+// fixture, had the playhead dragged to the stored last frame, and timed out waiting for the
+// frame the stage machine expects after one step. The user path (flag absent) is covered by
+// ResumeRestoresRecordedPositionAndStaysOffForeignOrStaleEntries above.
+TEST(MainQmlContractTests, AutomationDeterminismKeepsStoredResumePositionsOffThePlayhead) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const std::filesystem::path pathA =
+        std::filesystem::path(tempDir.path().toStdWString()) / "resume_sourceA.mp4";
+    const std::filesystem::path pathB =
+        std::filesystem::path(tempDir.path().toStdWString()) / "resume_sourceB.mp4";
+    for (const std::filesystem::path& path : {pathA, pathB}) {
+        QFile file{QString::fromStdWString(path.wstring())};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("resume-source-bytes", 19);
+    }
+
+    const auto rateResult = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rateResult);
+    const domain::RationalRate rate = rateResult.value();
+    std::vector<domain::ComparisonSource> comparisonSources;
+    const std::array<std::filesystem::path, 2> paths = {pathA, pathB};
+    for (std::size_t index = 0U; index < paths.size(); ++index) {
+        const QFileInfo info{QString::fromStdWString(paths[index].wstring())};
+        comparisonSources.push_back(domain::ComparisonSource{
+            .id = static_cast<domain::SourceId>(index),
+            .role = index == 0U ? domain::ComparisonRole::kReference
+                                : domain::ComparisonRole::kPrediction,
+            .descriptor =
+                domain::MediaDescriptor{
+                    .normalizedPath = paths[index],
+                    .extent = domain::MediaExtent{.width = 1'920U, .height = 1'080U},
+                    .frameRate = rate,
+                    .frameCount =
+                        domain::FrameCountInfo{
+                            .value = 12,
+                            .origin = domain::FrameCountOrigin::kReported,
+                        },
+                    .duration = domain::MediaTime{400'000},
+                    .codecId = "h264",
+                    .pixelFormatId = "nv12",
+                    .bitDepth = 8U,
+                    .decodeCapabilities =
+                        domain::DecodeCapabilities{
+                            .softwareDecode = true,
+                            .d3d11VaDecode = true,
+                        },
+                    .timingConfidence = domain::TimingConfidence::kVerifiedCfr,
+                    .sourceIdentity =
+                        domain::SourceFileIdentity{
+                            .byteSize = static_cast<std::uint64_t>(info.size()),
+                            .modifiedUtcMilliseconds = info.lastModified().toMSecsSinceEpoch(),
+                            .fingerprintSha256 = std::string(64U, '0'),
+                        },
+                },
+            .displayName = std::string{"Source "} + static_cast<char>('A' + index),
+        });
+    }
+    auto validated = domain::ComparisonValidator::validate(std::move(comparisonSources));
+    ASSERT_TRUE(validated);
+
+    auto snapshot = std::make_shared<application::SessionSnapshot>();
+    snapshot->graphicsReady = true;
+    snapshot->sessionState = domain::SessionState::kReady;
+    snapshot->playbackState = domain::PlaybackState::kPaused;
+    snapshot->displayedFrame = domain::FrameId{0};
+    snapshot->validatedComparison =
+        std::make_shared<const domain::ValidatedComparisonSet>(std::move(validated).value().set);
+    snapshot->canonicalFrameCount =
+        static_cast<std::uint64_t>(snapshot->validatedComparison->canonicalFrameCount());
+    snapshot->canonicalTimeline = rate;
+    for (const auto& source : snapshot->validatedComparison->sources()) {
+        snapshot->sources.push_back(application::SessionSourceView{
+            .sourceId = source.id,
+            .role = source.role,
+            .displayName = source.displayName,
+        });
+        snapshot->presentedSources.push_back(application::PresentedSourceState{
+            .sourceId = source.id,
+            .sourceFrameId = domain::FrameId{0},
+            .matchKind = application::FrameMatchKind::ExactIndex,
+        });
+    }
+
+    std::vector<application::PlaybackCommand> submitted;
+    std::vector<application::CommandTerminal> terminals;
+    ReviewController controller{
+        ReviewController::Dependencies{
+            .submit =
+                [&submitted](application::PlaybackCommand command) {
+                    submitted.push_back(std::move(command));
+                    return application::PortSubmitResult::Accepted;
+                },
+            .snapshot = [snapshot] { return snapshot; },
+            .takeCompletedCommands =
+                [&terminals] {
+                    std::vector<application::CommandTerminal> result = std::move(terminals);
+                    terminals.clear();
+                    return result;
+                },
+        },
+    };
+
+    const QString identity = canonicalSourceIdentity(QUrl::fromLocalFile(QString::fromStdWString(
+        snapshot->validatedComparison->sources().front().descriptor.normalizedPath.wstring())));
+    ASSERT_FALSE(identity.isEmpty());
+
+    // The exact entry the user path restores (frame 6 of 12); under automation determinism
+    // the playhead must stay at frame 0 instead.
+    std::map<std::string, std::string, std::less<>> seed{
+        {QStringLiteral("resume.%1").arg(identity).toStdString(), "1700000000000:6"},
+    };
+    ReviewPreferencesController preferences{
+        std::make_shared<SeededResumeSettingsRepository>(std::move(seed))};
+    ReviewShellController shell{controller, preferences};
+    ReviewSessionFacade facade{controller, preferences, shell};
+
+    QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
+    engine.rootContext()->setContextProperty(QStringLiteral("dvsPerformanceAutomation"),
+                                             QVariant{true});
+    QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
+    ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
+
+    std::unique_ptr<QObject> root{component.create()};
+    ASSERT_NE(root, nullptr) << componentErrors(component);
+    auto* const window = qobject_cast<QQuickWindow*>(root.get());
+    ASSERT_NE(window, nullptr);
+    window->resize(1280, 800);
+    window->show();
+    for (int iteration = 0; iteration < 16; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+
+    const auto seekCount = [&submitted] {
+        return std::count_if(submitted.begin(), submitted.end(), [](const auto& command) {
+            return std::holds_alternative<application::SeekFrameCommand>(command);
+        });
+    };
+    EXPECT_EQ(seekCount(), 0) << "automation determinism must not replay a stored resume position";
+    EXPECT_TRUE(root->property("resumeAttemptedIdentity").toString().isEmpty())
+        << "suppressed resume must not mark an identity as handled";
+    EXPECT_EQ(controller.currentFrame(), 0)
+        << "the frame-zero baseline is what automation stages and gates wait on";
+    preferences.stop();
+    controller.stop();
+}
+
 // A4. The active-source strip is a plain Row with fixed-width chips, so it can neither wrap nor
 // scroll. At Main.qml's declared 960 px minimum width three tagged chips plus the add button are
 // wider than the panel, which would leave trailing chips off-stage and unreachable. This is
