@@ -4,6 +4,7 @@
 
 #include "dvs/application/PlaybackTrace.h"
 #include "dvs/media/StillImageDecoder.h"
+#include "dvs/persistence/InterpolationProtocolRepository.h"
 #include "dvs/platform/ProcessTelemetry.h"
 #include "dvs/platform/TraceSink.h"
 #include "dvs/shell/ExplorerCommandRegistration.h"
@@ -453,6 +454,10 @@ runDesktop(int& argc,
     }
     desktop.setIssueRecordRepository(runtime->issueRecordRepository());
     desktop.setClipExporter(runtime->clipExporter());
+    // P03 protocol import: the stateless repository is constructed here because only the
+    // composition root may build persistence adapters, and lives for the whole run.
+    dvs::persistence::InterpolationProtocolRepository interpolationProtocolRepository;
+    desktop.setInterpolationProtocolRepository(&interpolationProtocolRepository);
     if (!desktop.load(
             *runtime->controller(),
             *runtime->preferences(),

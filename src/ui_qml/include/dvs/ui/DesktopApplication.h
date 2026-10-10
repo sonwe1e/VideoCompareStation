@@ -13,11 +13,13 @@
 namespace dvs {
 namespace application {
 class IClipExporter;
+class IInterpolationProtocolRepository;
 class IIssueRecordRepository;
 } // namespace application
 namespace ui {
 
 class ComparisonSurface;
+class InterpolationProtocolController;
 class PairMetricsController;
 class PreviewThumbnailController;
 class ReviewController;
@@ -62,6 +64,12 @@ public:
     // Optional clip-export injection. Must be set before load(); when absent the range export
     // controls stay hidden and the `clipExport` context property is never published.
     void setClipExporter(std::shared_ptr<application::IClipExporter> exporter) noexcept;
+    // Optional P03 protocol-import injection. Must be set before load(); the composition root
+    // owns the concrete persistence adapter so ui_qml never links persistence_json directly.
+    // When absent the protocol navigation row stays hidden and the `interpolationProtocol`
+    // context property is never published.
+    void setInterpolationProtocolRepository(
+        application::IInterpolationProtocolRepository* repository) noexcept;
     [[nodiscard]] int exec();
     void exit(int exitCode) noexcept;
     [[nodiscard]] double activeScreenRefreshRate() const noexcept;

@@ -13,6 +13,10 @@ Item {
     property string sourceLabel
     // PairMetricsController context object; optional so standalone QML tests keep working.
     property var metrics: null
+    // InterpolationProtocolController context object (P03); optional for the same reason. The
+    // host owns the controller, the OSC only relays state and intents like it does for range
+    // export.
+    property var protocol: null
     required property bool playing
     property real playbackRate: 1
     // C-07 playback status rail. Bound by Main.qml; defaults keep standalone QML tests working.
@@ -78,6 +82,11 @@ Item {
     signal rangeLoopRequested
     signal clearRangeRequested
     signal exportRangeRequested
+    // P03 protocol navigation intents, forwarded verbatim from the transport's protocol row.
+    signal protocolLoadRequested
+    signal protocolClearRequested
+    signal previousGeneratedFrameRequested
+    signal nextGeneratedFrameRequested
 
     objectName: "transport"
     height: Math.max(0, tracks.y) + tracks.height + 13 + transport.implicitHeight + 5
@@ -427,12 +436,17 @@ Item {
             rangeExportEnabled: control.rangeExportEnabled
             rangeExportBusy: control.rangeExportBusy
             rangeExportProgress: control.rangeExportProgress
+            protocol: control.protocol
             onExportRangeRequested: control.exportRangeRequested()
             onMarkInRequested: control.markInRequested()
             onMarkOutRequested: control.markOutRequested()
             onPlayRangeRequested: control.playRangeRequested()
             onRangeLoopRequested: control.rangeLoopRequested()
             onClearRangeRequested: control.clearRangeRequested()
+            onProtocolLoadRequested: control.protocolLoadRequested()
+            onProtocolClearRequested: control.protocolClearRequested()
+            onPreviousGeneratedFrameRequested: control.previousGeneratedFrameRequested()
+            onNextGeneratedFrameRequested: control.nextGeneratedFrameRequested()
             onFirstRequested: control.actions.firstFrame()
             onPreviousSecondRequested: control.actions.stepBackwardSecond()
             onPreviousFiveRequested: control.actions.stepBackwardFive()

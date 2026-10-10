@@ -9,6 +9,7 @@
 #include "dvs/ui/ImageEditController.h"
 #include "dvs/ui/ImageFolderPairModel.h"
 #include "dvs/ui/ImageReviewController.h"
+#include "dvs/ui/InterpolationProtocolController.h"
 #include "dvs/ui/IssueLogController.h"
 #include "dvs/ui/PairMetricsController.h"
 #include "dvs/ui/ReviewController.h"
@@ -159,6 +160,11 @@ public:
         issueRecordRepository_ = repository;
     }
 
+    void setInterpolationProtocolRepository(
+        application::IInterpolationProtocolRepository* repository) noexcept {
+        interpolationProtocolRepository_ = repository;
+    }
+
     void setClipExporter(std::shared_ptr<application::IClipExporter> exporter) noexcept {
         clipExporter_ = std::move(exporter);
     }
@@ -294,6 +300,16 @@ public:
         issueLog_->setFolderModel(folderPairs_.get());
         issueLog_->setImageController(imageReview_.get());
         engine->rootContext()->setContextProperty(QStringLiteral("issueLog"), issueLog_.get());
+        // P03 protocol import and generated-frame navigation. Optional like the issue log: the
+        // composition root owns the persistence adapter, and when it is absent the protocol row
+        // stays hidden because Main.qml guards every read on the context property.
+        if (interpolationProtocolRepository_ != nullptr) {
+            interpolationProtocol_ =
+                std::make_unique<InterpolationProtocolController>(interpolationProtocolRepository_);
+            interpolationProtocol_->setReviewController(&controller);
+            engine->rootContext()->setContextProperty(QStringLiteral("interpolationProtocol"),
+                                                      interpolationProtocol_.get());
+        }
         // Step-2 comparison export: clipboard/save capture of the comparison viewport
         // with an annotation bar. Optional so isolated harnesses can omit it; Main.qml
         // guards every read on the context property being set.
@@ -939,6 +955,8 @@ private:
     std::unique_ptr<ImageFolderPairModel> folderPairs_;
     application::IIssueRecordRepository* issueRecordRepository_ = nullptr;
     std::unique_ptr<IssueLogController> issueLog_;
+    application::IInterpolationProtocolRepository* interpolationProtocolRepository_ = nullptr;
+    std::unique_ptr<InterpolationProtocolController> interpolationProtocol_;
     std::unique_ptr<ComparisonExportController> comparisonExport_;
     std::shared_ptr<application::IClipExporter> clipExporter_;
     std::unique_ptr<ClipExportController> clipExport_;
@@ -968,6 +986,11 @@ bool DesktopApplication::load(ReviewController& controller,
 void DesktopApplication::setIssueRecordRepository(
     application::IIssueRecordRepository* repository) noexcept {
     impl_->setIssueRecordRepository(repository);
+}
+
+void DesktopApplication::setInterpolationProtocolRepository(
+    application::IInterpolationProtocolRepository* repository) noexcept {
+    impl_->setInterpolationProtocolRepository(repository);
 }
 
 void DesktopApplication::setClipExporter(

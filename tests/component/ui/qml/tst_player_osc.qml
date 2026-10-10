@@ -94,6 +94,73 @@ Item {
         signalName: "previewRequested"
     }
 
+    // P03 protocol-controller stand-in: a plain QtObject carrying the properties the transport
+    // row reads, so visibility/enabled/badge behaviour is testable without a C++ repository.
+    QtObject {
+        id: protocolFake
+
+        property bool protocolLoaded: false
+        property bool canGoNextGenerated: false
+        property bool canGoPreviousGenerated: false
+        property string currentOriginBadge: ""
+        property string statusText: "无协议（协议导航关闭）"
+        property string lastError: ""
+    }
+
+    // Standalone instance wired to the fake controller. The main `osc` above stays protocol-free
+    // and covers the no-controller layout. Hidden outside the protocol tests: this instance is
+    // full-width and would otherwise compete with the hover-sensitive `osc` for synthetic
+    // cursor events (the scrub/auto-hide tests read the cursor state of `osc`).
+    Dvs.PlayerOsc {
+        id: protocolOsc
+
+        visible: false
+        width: root.width
+        controllerState: 0
+        docked: true
+        playing: false
+        timelineEnabled: true
+        currentFrame: 4
+        totalFrames: 10
+        progress: 0.4
+        timecodeText: "00:00:00:04"
+        markers: []
+        actions: actions
+        focusTarget: focusTarget
+        canFirst: true
+        canPrevious: true
+        canPlay: true
+        canPause: false
+        canNext: true
+        canLast: true
+        protocol: protocolFake
+        anchors.verticalCenter: root.verticalCenter
+    }
+
+    SignalSpy {
+        id: protocolLoadSpy
+        target: protocolOsc
+        signalName: "protocolLoadRequested"
+    }
+
+    SignalSpy {
+        id: protocolClearSpy
+        target: protocolOsc
+        signalName: "protocolClearRequested"
+    }
+
+    SignalSpy {
+        id: protocolNextSpy
+        target: protocolOsc
+        signalName: "nextGeneratedFrameRequested"
+    }
+
+    SignalSpy {
+        id: protocolPreviousSpy
+        target: protocolOsc
+        signalName: "previousGeneratedFrameRequested"
+    }
+
     TestCase {
         id: testCase
 
@@ -331,6 +398,131 @@ Item {
             verify(label !== null);
             verify(label.visible);
             compare(label.text, "gameplay_capture.mp4");
+        }
+
+        // P03: without a protocol controller the whole protocol row stays out of the layout, so
+        // the transport renders exactly as before the feature existed.
+        function test_protocol_row_hidden_without_controller() {
+            const row = findChild(osc, "transportProtocolRow");
+            verify(row !== null);
+            verify(!row.visible);
+            const badge = findChild(osc, "transportProtocolBadge");
+            verify(badge !== null);
+            verify(!badge.visible);
+        }
+
+        function test_protocol_row_follows_controller_state() {
+            // Show the protocol instance only while this test drives it; `finally` restores the
+            // shared fake and the visibility so a failure cannot poison the later tests.
+            protocolOsc.visible = true;
+            try {
+                const row = findChild(protocolOsc, "transportProtocolRow");
+                const loadButton = findChild(protocolOsc, "transportLoadProtocolButton");
+                const previousButton = findChild(protocolOsc, "transportPreviousGeneratedButton");
+                const nextButton = findChild(protocolOsc, "transportNextGeneratedButton");
+                const clearButton = findChild(protocolOsc, "transportClearProtocolButton");
+                const badge = findChild(protocolOsc, "transportProtocolBadge");
+                verify(row !== null);
+                verify(loadButton !== null);
+                verify(previousButton !== null);
+                verify(nextButton !== null);
+                verify(clearButton !== null);
+                verify(badge !== null);
+
+                // Controller wired but no protocol loaded: only the import entry and the status
+                // hint exist; nothing here can seek yet. The chips gate on `chipEnabled` — the
+                // chip's own Item.enabled is not wired to it (only the inner MouseArea is).
+                verify(row.visible);
+                verify(loadButton.visible && loadButton.chipEnabled);
+                verify(!previousButton.visible);
+                verify(!nextButton.visible);
+                verify(!clearButton.visible);
+                verify(badge.visible);
+                verify(badge.text.indexOf("无协议") >= 0);
+
+                // Protocol loaded, both directions available.
+                protocolFake.protocolLoaded = true;
+                protocolFake.canGoNextGenerated = true;
+                protocolFake.canGoPreviousGenerated = true;
+                protocolFake.statusText = "协议已载入 · 10 个输出位 · GT 10 帧";
+                protocolFake.currentOriginBadge = "生成帧 · 输入 GT 1/3 · 比例 1/3";
+                tryCompare(previousButton, "visible", true);
+                verify(nextButton.visible && nextButton.chipEnabled);
+                verify(previousButton.chipEnabled);
+                verify(clearButton.visible && clearButton.chipEnabled);
+                // The badge is text-first: provenance must read as words, never colour alone.
+                verify(badge.text.indexOf("生成帧") >= 0);
+                verify(badge.text.indexOf("输入 GT 1/3") >= 0);
+                verify(badge.text.indexOf("比例 1/3") >= 0);
+
+                // A direction with no target disables its chip instead of hiding the pair.
+                protocolFake.canGoNextGenerated = false;
+                tryCompare(nextButton, "chipEnabled", false);
+                verify(nextButton.visible);
+                verify(previousButton.chipEnabled);
+
+                // Import failures surface in the badge text.
+                protocolFake.lastError = "interpolation-protocol document is not valid UTF-8 JSON.";
+                tryCompare(badge, "text", "协议错误：interpolation-protocol document is not valid UTF-8 JSON.");
+                protocolFake.lastError = "";
+
+                // Clearing hides the navigation chips again.
+                protocolFake.protocolLoaded = false;
+                tryCompare(previousButton, "visible", false);
+                verify(!nextButton.visible);
+                verify(!clearButton.visible);
+            } finally {
+                protocolFake.protocolLoaded = false;
+                protocolFake.canGoNextGenerated = false;
+                protocolFake.canGoPreviousGenerated = false;
+                protocolFake.currentOriginBadge = "";
+                protocolFake.statusText = "无协议（协议导航关闭）";
+                protocolFake.lastError = "";
+                protocolOsc.visible = false;
+            }
+        }
+
+        function test_protocol_chips_forward_intents_as_signals() {
+            protocolLoadSpy.clear();
+            protocolClearSpy.clear();
+            protocolNextSpy.clear();
+            protocolPreviousSpy.clear();
+            protocolOsc.visible = true;
+            try {
+                const loadButton = findChild(protocolOsc, "transportLoadProtocolButton");
+                const nextButton = findChild(protocolOsc, "transportNextGeneratedButton");
+                const previousButton = findChild(protocolOsc, "transportPreviousGeneratedButton");
+                const clearButton = findChild(protocolOsc, "transportClearProtocolButton");
+                verify(loadButton !== null);
+                verify(nextButton !== null);
+                verify(previousButton !== null);
+                verify(clearButton !== null);
+
+                mouseClick(loadButton);
+                compare(protocolLoadSpy.count, 1);
+
+                protocolFake.protocolLoaded = true;
+                protocolFake.canGoNextGenerated = true;
+                protocolFake.canGoPreviousGenerated = true;
+                // Wait for the layout polish after the chips appear: a click mapped from the
+                // pre-reflow chip position lands where the chip no longer is (the row re-centres
+                // when the navigation chips join it).
+                tryCompare(nextButton, "visible", true);
+                waitForRendering(nextButton);
+                mouseClick(nextButton);
+                compare(protocolNextSpy.count, 1);
+                mouseClick(previousButton);
+                compare(protocolPreviousSpy.count, 1);
+                mouseClick(clearButton);
+                compare(protocolClearSpy.count, 1);
+            } finally {
+                // Restore the shared fake and hide the instance again so later cursor-state
+                // tests (the scrub release) see the pre-feature layout.
+                protocolFake.protocolLoaded = false;
+                protocolFake.canGoNextGenerated = false;
+                protocolFake.canGoPreviousGenerated = false;
+                protocolOsc.visible = false;
+            }
         }
     }
 }

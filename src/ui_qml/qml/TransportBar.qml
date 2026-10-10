@@ -38,6 +38,11 @@ Item {
     property bool rangeExportEnabled: false
     property bool rangeExportBusy: false
     property real rangeExportProgress: 0
+    // P03 interpolation-protocol navigation. The InterpolationProtocolController context
+    // object, injected by the host (optional like the OSC's `metrics`): null keeps the whole
+    // protocol row out of the layout, so hosts without the controller render the bar unchanged.
+    // Navigation stays an explicit user action — plain playback never consults the protocol.
+    property var protocol: null
 
     signal firstRequested
     signal previousSecondRequested
@@ -57,6 +62,10 @@ Item {
     signal rangeLoopRequested
     signal clearRangeRequested
     signal exportRangeRequested
+    signal protocolLoadRequested
+    signal protocolClearRequested
+    signal previousGeneratedFrameRequested
+    signal nextGeneratedFrameRequested
 
     implicitWidth: transportColumn.implicitWidth
     implicitHeight: transportColumn.implicitHeight
@@ -476,6 +485,78 @@ Item {
                 // still fits, so elision only ever triggers on an unexpectedly narrow window.
                 width: Math.min(implicitWidth, control.compact ? 168 : 210)
                 elide: Text.ElideRight
+                anchors.verticalCenter: parent.verticalCenter
+            }
+        }
+
+        // P03 protocol navigation row: jump to the next/previous generated output position and
+        // read the current frame's provenance. The row exists only when a protocol controller is
+        // wired; the navigation chips additionally require a loaded protocol, so with no protocol
+        // imported nothing here can seek. The badge is text-first so provenance never relies on
+        // colour alone.
+        Row {
+            id: protocolRow
+
+            objectName: "transportProtocolRow"
+            visible: control.protocol !== null
+            spacing: control.compact ? 4 : 6
+            anchors.horizontalCenter: parent.horizontalCenter
+
+            RangeChip {
+                objectName: "transportLoadProtocolButton"
+                chipText: qsTr("导入协议")
+                chipHelp: qsTr("从 JSON 清单导入插帧协议（decimation 或 explicit）")
+                onClicked: control.protocolLoadRequested()
+            }
+
+            RangeChip {
+                objectName: "transportPreviousGeneratedButton"
+                visible: Boolean(control.protocol) && Boolean(control.protocol.protocolLoaded)
+                chipText: qsTr("上一生成帧")
+                chipHelp: qsTr("跳到上一个由模型生成的帧（跳过保留帧、缺帧与未知来源）")
+                chipEnabled: Boolean(control.protocol) && Boolean(control.protocol.canGoPreviousGenerated)
+                onClicked: control.previousGeneratedFrameRequested()
+            }
+
+            RangeChip {
+                objectName: "transportNextGeneratedButton"
+                visible: Boolean(control.protocol) && Boolean(control.protocol.protocolLoaded)
+                chipText: qsTr("下一生成帧")
+                chipHelp: qsTr("跳到下一个由模型生成的帧（跳过保留帧、缺帧与未知来源）")
+                chipEnabled: Boolean(control.protocol) && Boolean(control.protocol.canGoNextGenerated)
+                onClicked: control.nextGeneratedFrameRequested()
+            }
+
+            RangeChip {
+                objectName: "transportClearProtocolButton"
+                visible: Boolean(control.protocol) && Boolean(control.protocol.protocolLoaded)
+                chipText: qsTr("关闭协议")
+                chipHelp: qsTr("关闭协议导航，回到普通审查")
+                chipEnabled: true
+                onClicked: control.protocolClearRequested()
+            }
+
+            Text {
+                id: protocolBadge
+
+                objectName: "transportProtocolBadge"
+                visible: Boolean(control.protocol) && text.length > 0
+                text: {
+                    if (!control.protocol)
+                        return "";
+                    if (control.protocol.lastError.length > 0)
+                        return qsTr("协议错误：%1").arg(control.protocol.lastError);
+                    if (!control.protocol.protocolLoaded)
+                        return control.protocol.statusText;
+                    return control.protocol.currentOriginBadge.length > 0 ? control.protocol.currentOriginBadge + " · " + control.protocol.statusText : control.protocol.statusText;
+                }
+                color: control.protocol && control.protocol.lastError.length > 0 ? Theme.warning : Theme.mutedText
+                font.pixelSize: control.compact ? 10 : 11
+                maximumLineCount: 1
+                elide: Text.ElideRight
+                // Cap instead of overflowing: a generated-frame badge carries two GT indices and
+                // a ratio, which must elide rather than push the chips off the panel.
+                width: Math.min(implicitWidth, control.compact ? 260 : 320)
                 anchors.verticalCenter: parent.verticalCenter
             }
         }

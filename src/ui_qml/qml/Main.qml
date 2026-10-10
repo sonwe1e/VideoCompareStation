@@ -80,6 +80,10 @@ ApplicationWindow {
     // qmllint disable unqualified
     readonly property var issueLogModel: typeof issueLog !== "undefined" ? issueLog : null
     readonly property var comparisonExportService: typeof comparisonExport !== "undefined" ? comparisonExport : null
+    // P03 interpolation-protocol controller from the composition root. The typeof guard keeps
+    // lightweight QML-only harnesses valid: without the controller the transport renders no
+    // protocol row and every protocol action below is skipped.
+    readonly property var protocolModel: typeof interpolationProtocol !== "undefined" ? interpolationProtocol : null
     // Range clip-export controller from the composition root. Only the composition root knows
     // whether a lossless exporter exists, so its presence alone decides whether the transport
     // shows an export chip; the typeof guard keeps lightweight QML-only harnesses valid.
@@ -678,6 +682,17 @@ ApplicationWindow {
             return false;
 
         clipExportDialog.open();
+
+        return true;
+    }
+
+    // P03: opens the protocol-manifest picker. The controller owns validation; a bad manifest is
+    // reported through the transport's protocol badge, not a dead-end dialog here.
+    function openProtocolLoadDialog() {
+        if (!protocolModel)
+            return false;
+
+        protocolLoadDialog.open();
 
         return true;
     }
@@ -3612,6 +3627,22 @@ ApplicationWindow {
             }
         }
     }
+    // P03 interpolation-protocol manifest import. Loading is asynchronous; outcome and errors
+    // surface in the transport's protocol badge.
+    NativeDialogs.FileDialog {
+        id: protocolLoadDialog
+
+        objectName: "protocolLoadDialog"
+        title: qsTr("导入插帧协议")
+        fileMode: NativeDialogs.FileDialog.OpenFile
+        nameFilters: [qsTr("插帧协议 (*.json)"), qsTr("所有文件 (*)")]
+        onAccepted: {
+            const picked = selectedFile && selectedFile.toString().length > 0 ? selectedFile : currentFile;
+
+            if (root.protocolModel && picked && picked.toString().length > 0)
+                root.protocolModel.loadProtocol(picked);
+        }
+    }
     // Lossless range-clip export. The dialog owns the destination picker and the progress readout;
     // the host owns the two things that must happen outside it: an outcome line in the status HUD,
     // and surfacing the adapter's own message when an export fails while the dialog is closed.
@@ -3817,6 +3848,7 @@ ApplicationWindow {
         docked: root.transportDocked
         sourceLabel: root.sourceAName
         metrics: root.pairMetricsModel
+        protocol: root.protocolModel
         playing: root.playing
         playbackRate: root.controller ? Number(root.controller.playbackRate) : 1
         playbackModeLabel: root.playbackModeLabel
@@ -3887,6 +3919,25 @@ ApplicationWindow {
         onRangeLoopRequested: root.toggleRangeLoop()
         onClearRangeRequested: root.clearSelectedRange()
         onExportRangeRequested: root.openClipExportDialog()
+        // P03 protocol navigation intents. Loading goes through the file dialog so the import is
+        // an explicit user action; jumps ride the controller's seekFrame() (the existing
+        // precise-frame command chain), never a direct playback mutation.
+        onProtocolLoadRequested: {
+            if (root.protocolModel)
+                root.openProtocolLoadDialog();
+        }
+        onProtocolClearRequested: {
+            if (root.protocolModel)
+                root.protocolModel.clearProtocol();
+        }
+        onPreviousGeneratedFrameRequested: {
+            if (root.protocolModel)
+                root.protocolModel.previousGeneratedFrame();
+        }
+        onNextGeneratedFrameRequested: {
+            if (root.protocolModel)
+                root.protocolModel.nextGeneratedFrame();
+        }
         onSeekRequested: frame => {
             root.revealOsc();
 

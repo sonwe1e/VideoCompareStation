@@ -132,6 +132,7 @@ dvs_add_gtest(
 
 add_executable(
     dvs_main_qml_contract_tests
+    InterpolationProtocolControllerTests.cpp
     MainQmlContractTests.cpp
     ViewportPixelScaleTests.cpp
 )

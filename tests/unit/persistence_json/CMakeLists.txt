@@ -3,6 +3,7 @@ include(GoogleTest)
 add_executable(
     dvs_persistence_json_unit_tests
     CommitSemanticsTests.cpp
+    InterpolationProtocolRepositoryTests.cpp
     IssueRecordRepositoryTests.cpp
     SettingsRepositoryTests.cpp
 )
