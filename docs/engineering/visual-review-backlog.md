@@ -1,7 +1,133 @@
 # 视觉审查问题台账
 
-更新：2026-10-10（单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-10-11（协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+
+## 2026-10-11 协议导航 P03、三局部预设 P04 与呈现探测 P10（未提交）
+
+- **范围**：路线附录 B 工单 P03/P04/P10，三代理并行 + 续作收尾（首轮三代理全部中途死亡：
+  P03/P04 被取消但留下大部分成果，P10 模型请求失败零痕迹后重派成功）。基线：SAM2 并行
+  会话工作完成（未提交），全树构建与全量测试通过后才开工。
+- **P03 交付**：`InterpolationProtocolRepository`（persistence_json，schema_version=1，
+  decimation/explicit 双形式，JSON 0 起计；未知版本/kind/坏 JSON/域校验失败各自明确拒绝，
+  suggestion 来源拒绝导入）+ `InterpolationProtocolController`（加载失败保持既有协议、
+  清空即回退）+ 走带条"下一/上一生成帧"与来源徽标（文字："保留帧/生成帧·输入 GT x/y·比例
+  n/d/未知/缺帧"，1 起计显示与内部 0 起计分离）+ Main.qml/DesktopApplication/Main.cpp 接线。
+  跳帧经现有 coordinator 命令链；无协议时入口不可用；原速播放路径零变化。
+- **P04 交付**：`RoiTriplet` 视图模式（ViewMode=8，surface 走 ThreeUp 三列全景保三源全呈现）
+  + `RoiTripletStrip` 三个同 ROI 局部窗（同一已呈现 FrameSet 的 QML 复采样，**无新增解码
+  路数**；烘焙 .qsb 着色器含 d3d11/HLSL50 变体）。续作修出两个前任真实缺陷：①映射到
+  SideBySide 时三源场景 C 源根本不被呈现（固定两列布局）；②Qt 6 RHI 的 ShaderEffect 不接受
+  内联 GLSL（解析成 qrc 相对 URL），三个局部窗此前渲染为空——改为 Vulkan 风格源 + qsb 工具
+  烘焙签入。模式往返/缩放/平移 ROI 保持，半开边界钳制，无三源入口禁用，进出预设不 seek。
+- **P10 交付**：`PresentationStatisticsProbe`（platform_windows，pimpl 无 D3D 类型泄漏）：
+  自有离屏 flip 交换链 + 硬件优先/WARP 回退设备，七态分级能力 + Media 统计四态细分；
+  "必须亲见 PresentCount 递增才报可用"；快照只读（PresentCount/SyncRefresh/QPC）；
+  `evidenceScope` 声明与 Qt 场景仅**区间级关联**。本机实测：硬件路径可用、Media 统计
+  kMediaAvailable。未接线（回退语义天然满足）。
+- **验证**：最终全量 **1155/1155 通过**。分项：P03 39/39（controller 8、导入 17、domain 11、
+  player_osc、契约）变异 6/6；P04 MainQmlContractTests 80/80、RoiTripletStrip 14/14，变异
+  6/6（自断言脚本 8 项中 7 过——"viewport restore"一项因基线清理+事后 qmllint 修复不可比，
+  已在 mutation-summary.md 补记功能证明：六变异检出器全绿）；P10 10/10×3 连跑，变异 5/5。
+  证据：out/verification/{protocol-navigation,roi-triplet-preset,presentation-probe}/。
+- **主会话修复**：P10 一个环境敏感测试（`CapabilityReportsExplicitGradedStatusAndEvidenceScope`
+  断言真实机器上 Media 统计应不可用）——远控虚拟屏下传统计数器滞后于探针验证窗口、Media
+  路径却可用，探针诚实报 kUnknown 而测试写死了机器答案；改为结构性断言（media 对内一致、
+  事后采样必须带显式分级），三连跑稳定。教训：对真实硬件能力只能断言分级纪律，不能断言
+  具体答案。
+- **未验证/未接**：P03 真机走带条走查与截图；P04 真机视觉/多 DPI/非 d3d11 RHI 后端、
+  跟随轨迹放大镜（后续 V01 增强）；P10 全屏/MPO/HW Flip Queue（DwmFlush 依赖仅文档依据）、
+  真无头会话、PresentMon/ETW；P09 收集器与 P10 探针到运行时/UI 的接线属后续 D01 完整工单。
+- **状态**：P03/P04 已实现并接线主界面（走查未做）；P10 PoC 已实现未接线。能力对照见
+  [能力台账](capability-ledger.md)。
+
+## 2026-10-10 精确样本导出 P08 与播放时序证据 P09（未提交）
+
+- **范围**：路线附录 B 工单 P08（E01 执行层）与 P09（D01 应用层摘要）。实现由并行子代理完成
+  （首轮代理在验证前被取消，二轮验收代理接手），主会话完成源码完整性抽查与文档。
+- **P08 交付**：`src/application` 新增 `SampleExportWriter.h` 端口（`ISampleExporter` 阻塞式
+  perform + 协作取消，仿 `IClipExporter`）；`src/media_ffmpeg` 新增 `SampleExportWriter`
+  （display-order 帧序号精确抽帧，复用 `SoftwareDecoder`；YUV→RGB24 如实记录"解码转换值"；
+  固定裁剪整组一致；staging→写 4 PNG + manifest→**读回校验**→rename 原子发布，取消/失败/
+  校验失败只清理本次 staging；manifest 按 A4 子集，0 起计索引 + index_base，不伪造指纹字段）。
+  **PNG 编码实走 Windows WIC**：仓库锁定 FFmpeg 8.1.2 构建不含 png 编码器（vcpkg 构建日志
+  证实），avcodec 路径保留为运行时探测回退、在本树未验证。组件测试覆盖 VFR、multigop、
+  非零起点、损坏文件、取消、裁剪、manifest 回读、重复请求清理。
+- **P09 交付**：`src/application` 新增 `PlaybackEvidence.h/.cpp`——`PlaybackEvidenceCollector`
+  增量消费 `TraceEvent`，按 PlaybackRunStarted/Stopped 开合 run，分段延迟（提交→解码完成、
+  →帧组就绪、渲染调度、绘制→ACK、发布→呈现确认，count/max/最近秩 P95），完整帧组跳帧
+  **按帧号缺口**统计；源 PTS 级输出不可用、系统呈现级输出未知，不伪造零；session/epoch/run
+  身份过滤旧事件，run=0 计入非播放窗口；有界内存（约 200 KiB 上界）。被动消费者，
+  不 ingest 即关闭采样。
+- **验收对照**：P08 验收项 B 帧/VFR/取消中——VFR、multigop、取消已测；**B 帧路径未验证**
+  （fixtures 无 B 帧素材，测试内已声明 coverage note）。P09 验收"注入延迟定位正确"——
+  各段注入延迟分别归因到正确阶段，旧 epoch/run 排除，单边事件不产生伪延迟。
+- **验证**：`media.SampleExportWriterTests` 11/11、`media.(ClipExport|SampleExport)` 回归
+  23/23；`application.PlaybackEvidenceTests` 13/13、全 application 189/189 零失败。
+  变异证据 P08 6/6、P09 6/6（协议完整，逐字节还原，主会话对还原结果做了 cmp 抽查）。
+  证据：`out/verification/sample-export-writer/`、`out/verification/playback-evidence/`。
+  代理修复：P08 测试的 COM 公寓生命周期崩溃（`CoUninitialize` 后释放 WIC ComPtr）、两处
+  tidy；P09 两处 tidy。格式化后源码与变异基线的差异经主会话逐行核对仅为格式化与声明过的
+  tidy 修复。
+- **未验证/未接**：P08——B 帧、10-bit 转换分支、avcodec PNG 路径、staged manifest 读回
+  破坏分支（记入 mutation-summary 覆盖缺口）、UI 入口；P09——运行时 trace 流接线与
+  D01 面板 UI、系统呈现采集（P10）。
+- **状态**：P08 执行层已实现（入口未接）；P09 收集器已实现（未接线）。能力对照见
+  [能力台账](capability-ledger.md)。
+
+## 2026-10-10 三元组导出规划 P07 与标签几何变换 P12（未提交）
+
+- **范围**：路线附录 B 工单 P07（E01 纯规划层）与 P12（S02 纯几何模块），由两个并行子代理实现、
+  主会话验收收尾。P04（同 ROI 三局部预设）因需改 ui_qml（该层被并行 SAM2 会话占用且编译失败）顺延。
+- **P07 交付**：`src/application` 新增 `SampleExport.h`／`SampleExportPlanner.cpp`：
+  `planSampleTriplet` 把一个插帧生成帧变成可验证的训练三元组计划（input0／GT 目标／input1 的
+  GT 索引、最简时间比例、候选帧自身位置、映射来源、可选固定裁剪 ROI 整组一致）。
+  拒绝矩阵：非 Generated 来源（保留／未知／缺失各自明确报错）、隐含 GT 位置非整帧（VFR/59.94
+  场景拒绝而非取整）、防御性区间断言、ROI 负值／非正宽高／溢出／越界。纯数据计划，不写文件，
+  不做 JSON 序列化（P08/E01 范围）。
+- **P12 交付**：`src/domain` 新增 `LabelGeometry.h`／`.cpp`：光流端点通式
+  `f'(T0(x)) = T1(x+f(x)) - T0(x)` 与公共仿射捷径（向量乘线性部分，测试断言两者一致）；
+  按网格位裁剪＋终点出界（半开边界）置无效；水平翻转镜像＋dx 取反（等距论证：不重查终点）；
+  pad 新区域零向量＋无效（不制造真值，有效性永不升级）；mask 精确索引重排（类别与连续同规则）；
+  落在像素中心之外／出界的样本丢弃而非重采样；塌缩变换明确拒绝。时间反转与 mask 仿射按路线
+  红线**不提供**（逐像素取负是错误反向流；mask 重采样是独立决策），注释中写明原因。
+- **验收对照**：P07——60→30→60 相位 0 与 60→20→60 的 1/3、2/3 时刻按已知清单逐字段核对，
+  起点/终点/映射验证齐备。P12——解析平移/旋转/缩放、非对称裁剪、出界、反向流方向保留、
+  单像素目标、平移逆＋双翻转往返全部覆盖。
+- **验证**：`application.SampleExportPlannerTests` 7/7、`domain.LabelGeometryTests` 15/15；
+  全量 domain 86/86、application 168/168 零回归。变异证据：P07 6/6、P12 6/6（P12 脚本自带
+  检查数断言并通过），分别见 `out/verification/sample-export-planner/` 与
+  `out/verification/label-geometry/`。六个新文件 clang-format 干净；两个实现文件 clang-tidy
+  以 lint 目标同参数零告警。
+- **过程记录**：两个子代理在 10 分钟无活动后被终止——P07 源码停留在 m6 变异未还原状态
+  （已从 `.orig` 逐字节还原并补跑 m6，DETECTED）；P12 变异脚本已备好但从未运行（含一次
+  /WX 下不可能编译的无效变异 m4，替换为"端点忘记流向量"后整脚本重跑通过，历史保留在
+  `run-mutations-first-attempt.log`）。并行会话长时间持有构建互斥锁，本轮所有构建经
+  wrapper 锁重试完成。
+- **状态**：P07 规划层已实现（UI 入口与写入器未接，属 P08/E01）；P12 纯模块已实现
+  （配方执行器接线属 S01）。能力对照见 [能力台账](capability-ledger.md)。
+
+## 2026-10-10 插帧协议纯数据结构 P02（未提交）
+
+- **范围**：[长期产品与技术路线](../CompareStation_长期产品与技术路线_2026-10-10.md) 工单 P02／F01 核心。
+  新增 `src/domain` 的 `InterpolationProtocol`：GT 与输出索引强类型分离（`GtFrameIndex` 与 `FrameId`
+  不可混用）、输出帧来源四态（Retained／Generated／Unknown／Missing）、映射来源标记
+  （ImportedManifest／Manual／Suggestion，建议不作为已确认映射）、创建期整表校验（严格递增的 GT
+  隐含位置、目标时间比例严格位于两输入之间且约化为最简分数、计数与索引界限）、生成帧导航查询
+  （跳过 Missing／Unknown）与声明式降帧构造器（相位／步长／首尾策略：裁剪或标记缺帧）。
+  配套错误码 `kInterpolationProtocolInvalid` 与操作 `kInterpolationProtocol`。
+- **验收对照**：两种保留相位（60→30→60 相位 0／1）、多生成时刻（60→20→60 的 1/3、2/3）、缺帧
+  （尾段 Missing 与中段缺一帧）全部按已知清单逐项核对；59.94／VFR／起点偏移样例属 P03 导入范围。
+- **验证**：`domain.InterpolationProtocolTests` 11/11 通过；8 个受控变异全部被检出后源码逐字节恢复
+  （`out/verification/interpolation-protocol/`）。`format-check` 对本轮文件干净；clang-tidy 以 lint
+  目标同参数对 `InterpolationProtocol.cpp`／`MediaError.cpp` 通过且零告警。全量构建／全量 lint 因
+  工作区另一会话的 SAM2 接入（`Sam2Segmenter.cpp` 编译失败、`onnxruntime/` 第三方头未过格式检查）
+  当前无法通过，与本轮改动无关，提交前需与该会话协调。
+- **构建环境事故**：一次未走 wrapper 的裸 `cmake --build` 在 Git Bash 环境下触发重生成并损坏
+  `out/build/dev` 缓存（`CMAKE_AR` 变成 `/bin/Host/lib.exe`），已按诊断提示 `-Fresh` 重建恢复。
+  与 AGENTS.md 的要求一致：构建必须经 `tools/build/build.ps1`。
+- **状态**：domain 层已实现；协议导入、UI 生成帧导航未接线（P03）。能力对照快照见
+  [能力台账](capability-ledger.md)。
 
 ## 2026-10-10 单图／裁剪十字线（未提交）
 
