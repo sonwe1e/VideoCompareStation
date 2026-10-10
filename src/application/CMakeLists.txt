@@ -14,6 +14,7 @@ add_library(
         src/MediaPaths.cpp
         src/Module.cpp
         src/PlaybackCoordinator.cpp
+        src/PlaybackEvidence.cpp
         src/PlaybackTiming.cpp
         src/PlaybackTrace.cpp
         src/PrefetchScheduler.cpp

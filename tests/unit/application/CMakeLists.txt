@@ -11,6 +11,7 @@ add_executable(
     IssueRecordTests.cpp
     MediaPathsTests.cpp
     PlaybackCoordinatorTests.cpp
+    PlaybackEvidenceTests.cpp
     PlaybackTraceTests.cpp
     PrefetchSchedulerTests.cpp
     SampleExportPlannerTests.cpp
