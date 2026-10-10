@@ -1056,12 +1056,17 @@ public:
             return false;
         }
         try {
-            return dependencies_.submit(
-                       application::PlaybackCommand{application::SetActiveComparisonPairCommand{
-                           .context = *context,
-                           .pair = pair,
-                           .policy = static_cast<domain::DefaultPairPolicy>(pairPolicyCode),
-                       }}) == application::PortSubmitResult::Accepted;
+            const bool accepted =
+                dependencies_.submit(
+                    application::PlaybackCommand{application::SetActiveComparisonPairCommand{
+                        .context = *context,
+                        .pair = pair,
+                        .policy = static_cast<domain::DefaultPairPolicy>(pairPolicyCode),
+                    }}) == application::PortSubmitResult::Accepted;
+            if (accepted) {
+                lastSubmittedCommandId_ = context->commandId.value();
+            }
+            return accepted;
         } catch (...) {
             return false;
         }
@@ -1328,8 +1333,8 @@ private:
         try {
             std::optional<application::CommandTerminal> completedForeground;
             bool clearCandidateErrors = false;
-            for (const application::CommandTerminal& terminal :
-                 dependencies_.takeCompletedCommands()) {
+            const auto completedCommands = dependencies_.takeCompletedCommands();
+            for (const application::CommandTerminal& terminal : completedCommands) {
                 if (pendingCommand_.has_value() && terminal.context == *pendingCommand_) {
                     completedForeground = terminal;
                     clearCandidateErrors = pendingCommandClearsCandidateErrors_;
@@ -1387,6 +1392,14 @@ private:
             }
             publishProjection();
             Q_EMIT owner_.snapshotRefreshed();
+            for (const application::CommandTerminal& terminal : completedCommands) {
+                Q_EMIT owner_.commandFinished(
+                    terminal.context.commandId.value(),
+                    terminal.context.sessionEpoch.value(),
+                    static_cast<int>(terminal.outcome),
+                    terminal.error ? QString::fromStdString(terminal.error->userMessageKey)
+                                   : QString{});
+            }
             if (completedForeground.has_value()) {
                 const QString errorKey =
                     completedForeground->error.has_value()
@@ -2065,9 +2078,12 @@ private:
         // frame, so a burst of +1 presses that has been queued but not yet presented does not
         // repeatedly submit boundary commands once the displayed frame nears the end
         // (USERPLAN 3.1).
+        // failClosed() reaches this projection with no snapshot ever assigned, so the target
+        // lookup has to survive a null snapshot instead of dereferencing one.
         const std::optional<domain::FrameId> navigationTarget =
-            snapshot_->requestedFrame.has_value() ? snapshot_->requestedFrame
-                                                  : snapshot_->displayedFrame;
+            snapshot_ ? (snapshot_->requestedFrame.has_value() ? snapshot_->requestedFrame
+                                                               : snapshot_->displayedFrame)
+                      : std::nullopt;
         const qint64 navigationBase = navigationTarget.has_value() ? navigationTarget->value() : -1;
         next.canNext = canNavigate && navigationBase >= 0 &&
                        static_cast<qulonglong>(navigationBase) + 1U < next.totalFrames;
@@ -2178,6 +2194,7 @@ private:
             return false;
         }
         pendingNavigationCommand_ = *context;
+        lastSubmittedCommandId_ = context->commandId.value();
         publishProjection();
         return true;
     }
@@ -2716,6 +2733,11 @@ bool ReviewController::last() {
 
 bool ReviewController::stepFrames(const qint64 delta) {
     return impl_->stepFrames(delta);
+}
+
+qulonglong ReviewController::sessionEpoch() const noexcept {
+    const auto snapshot = currentSnapshot();
+    return snapshot ? snapshot->sessionEpoch.value() : 0U;
 }
 
 bool ReviewController::seekFrame(const qint64 frame) {

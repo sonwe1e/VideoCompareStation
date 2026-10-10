@@ -2700,5 +2700,33 @@ TEST_F(ReviewControllerTests, OrdinaryAcceptedOpenClearsAnEarlierRecentFailure) 
     EXPECT_EQ(h.folder.recentFiles().front().toMap().value("fileUrl").toUrl(), h.urls[2]);
 }
 
+// A source swap can publish a validated comparison whose frame count the projection has not caught
+// up with. isConsistent() rejects that snapshot, and the fail-closed path publishes a view with no
+// snapshot ever assigned - which used to be dereferenced by the navigation-availability lookup,
+// crashing inside the controller's very first refresh. The controller must fail closed instead and
+// still recover from a later consistent snapshot.
+TEST_F(ReviewControllerTests, InconsistentFirstSnapshotFailsClosedWithoutDereferencingIt) {
+    auto backend = std::make_shared<FakeBackend>();
+    application::SessionSnapshot snapshot =
+        readySnapshotWithSources({"C:/media/reference.mp4", "C:/media/prediction.mp4"});
+    snapshot.canonicalFrameCount += 1U;
+    backend->currentSnapshot = snapshot;
+
+    ReviewController controller{dependenciesFor(backend)};
+
+    EXPECT_EQ(controller.sourceCount(), 0);
+    EXPECT_EQ(controller.currentFrame(), -1);
+    EXPECT_FALSE(controller.canOpen());
+    EXPECT_FALSE(controller.canNext());
+    EXPECT_FALSE(controller.canPrevious());
+    EXPECT_FALSE(controller.canPlay());
+
+    backend->currentSnapshot = emptySnapshot();
+    controller.refreshProjection();
+    EXPECT_EQ(controller.sourceCount(), 0);
+    EXPECT_FALSE(controller.canOpen());
+    controller.stop();
+}
+
 } // namespace
 } // namespace dvs::ui

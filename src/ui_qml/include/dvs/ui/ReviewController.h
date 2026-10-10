@@ -114,6 +114,8 @@ class ReviewController final : public QObject {
     Q_PROPERTY(bool canLast READ canLast NOTIFY stateChanged)
     Q_PROPERTY(bool canPlay READ canPlay NOTIFY stateChanged)
     Q_PROPERTY(bool canPause READ canPause NOTIFY stateChanged)
+    Q_PROPERTY(qulonglong sessionEpoch READ sessionEpoch NOTIFY snapshotRefreshed)
+    Q_PROPERTY(qulonglong lastSubmittedCommandId READ lastSubmittedCommandId NOTIFY stateChanged)
 
 public:
     enum class ReviewDisplayState {
@@ -246,6 +248,7 @@ public:
     // The most recently accepted foreground session command. Shell orchestration uses this
     // identity to associate the coordinator's exact terminal with one ReviewIntent.
     [[nodiscard]] qulonglong lastSubmittedCommandId() const noexcept;
+    [[nodiscard]] qulonglong sessionEpoch() const noexcept;
 
     Q_INVOKABLE bool openComparison(const QUrl& first, const QUrl& second);
     Q_INVOKABLE bool openSources(const QVariantList& urls, int referenceSourceIndex);
@@ -336,6 +339,10 @@ Q_SIGNALS:
     void stateChanged();
     void frameStateChanged();
     void foregroundCommandFinished(qulonglong commandId, int outcome, const QString& errorKey);
+    void commandFinished(qulonglong commandId,
+                         qulonglong sessionEpoch,
+                         int outcome,
+                         const QString& errorKey);
 
 private:
     class Impl;
