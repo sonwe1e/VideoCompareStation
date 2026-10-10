@@ -48,6 +48,7 @@
 #include <QStringList>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QTransform>
 #include <QUrl>
 #include <QVariant>
 #include <QVariantMap>
@@ -4361,6 +4362,351 @@ TEST(MainQmlContractTests, ImageEditModeCropsAWorkingCopyAndKeepsTheOriginal) {
         << preview->property("source").toString().toStdString();
 }
 
+TEST(MainQmlContractTests, ImageCropOverlayHandlesAndActionButtons) {
+    WorkspaceHarness harness;
+    harness.withImageEdit = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    QImage original(64, 48, QImage::Format_ARGB32);
+    original.fill(QColor(100, 120, 140, 255));
+    ASSERT_TRUE(harness.imageReview.openPrimaryImage(original, QStringLiteral("crop_overlay.png")));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+
+    auto* const workspace =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
+    auto* const startButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditStartButton"));
+    auto* const viewport = harness.root->findChild<QQuickItem*>(QStringLiteral("primaryViewport"));
+    auto* const preview = harness.root->findChild<QQuickItem*>(QStringLiteral("imageViewport-2"));
+    ASSERT_NE(workspace, nullptr);
+    ASSERT_NE(startButton, nullptr);
+    ASSERT_NE(viewport, nullptr);
+    ASSERT_NE(preview, nullptr);
+
+    // Enter edit mode
+    ASSERT_TRUE(QMetaObject::invokeMethod(startButton, "clicked"));
+    harness.settle();
+    EXPECT_TRUE(harness.imageEdit.active());
+
+    // Before any drag, cropOverlay is hidden
+    auto* const cropOverlay =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageCropOverlay-2"));
+    ASSERT_NE(cropOverlay, nullptr);
+    EXPECT_FALSE(cropOverlay->isVisible());
+
+    // Drag crop rectangle
+    const qreal scale =
+        preview->width() / static_cast<qreal>(preview->property("sourceSize").toSize().width());
+    ASSERT_GT(scale, 0.0);
+    viewport->setProperty("cropStart",
+                          QPointF{preview->x() + 10 * scale, preview->y() + 8 * scale});
+    viewport->setProperty("cropCurrent",
+                          QPointF{preview->x() + 42 * scale, preview->y() + 32 * scale});
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        workspace,
+        "updateCropSelection",
+        Q_ARG(QVariant, QVariant::fromValue(static_cast<QObject*>(viewport)))));
+
+    // Overlay, action bar, handles and scrims are now visible
+    EXPECT_TRUE(cropOverlay->isVisible());
+    auto* const cropActionBar =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageCropActionBar-2"));
+    auto* const floatingCancel =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageCropCancelButton-2"));
+    auto* const floatingApply =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageCropApplyButton-2"));
+    auto* const handleBr =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageCropHandle-br-2"));
+    auto* const scrimTop =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageCropScrimTop-2"));
+    auto* const scrimBottom =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageCropScrimBottom-2"));
+    auto* const scrimLeft =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageCropScrimLeft-2"));
+    auto* const scrimRight =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageCropScrimRight-2"));
+    auto* const canvasMouseArea =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageCanvasMouseArea-2"));
+    ASSERT_NE(cropActionBar, nullptr);
+    ASSERT_NE(floatingCancel, nullptr);
+    ASSERT_NE(floatingApply, nullptr);
+    ASSERT_NE(handleBr, nullptr);
+    ASSERT_NE(scrimTop, nullptr);
+    ASSERT_NE(scrimBottom, nullptr);
+    ASSERT_NE(scrimLeft, nullptr);
+    ASSERT_NE(scrimRight, nullptr);
+    ASSERT_NE(canvasMouseArea, nullptr);
+    EXPECT_TRUE(cropActionBar->isVisible());
+    EXPECT_TRUE(handleBr->isVisible());
+    EXPECT_TRUE(scrimTop->isVisible());
+    EXPECT_TRUE(scrimBottom->isVisible());
+    EXPECT_TRUE(scrimLeft->isVisible());
+    EXPECT_TRUE(scrimRight->isVisible());
+
+    // Scrims strictly abut the crop bounding box without overlapping it
+    const auto boxLeft = cropOverlay->property("boxLeft").toReal();
+    const auto boxTop = cropOverlay->property("boxTop").toReal();
+    const auto boxWidth = cropOverlay->property("boxWidth").toReal();
+    const auto boxHeight = cropOverlay->property("boxHeight").toReal();
+    EXPECT_NEAR(scrimTop->y() + scrimTop->height(), boxTop, 0.5);
+    EXPECT_NEAR(scrimBottom->y(), boxTop + boxHeight, 0.5);
+    EXPECT_NEAR(scrimLeft->x() + scrimLeft->width(), boxLeft, 0.5);
+    EXPECT_NEAR(scrimRight->x(), boxLeft + boxWidth, 0.5);
+
+    // Canvas mouse area accepts RightButton for smooth panning
+    const int acceptedButtons = canvasMouseArea->property("acceptedButtons").toInt();
+    EXPECT_TRUE((acceptedButtons & static_cast<int>(Qt::RightButton)) != 0);
+
+    // Canceling through floatingCancel clears cropSelection and hides overlay
+    ASSERT_TRUE(QMetaObject::invokeMethod(floatingCancel, "clicked"));
+    harness.settle();
+    EXPECT_TRUE(workspace->property("cropSelection").toMap().isEmpty());
+    EXPECT_FALSE(cropOverlay->isVisible());
+
+    // Re-create crop selection
+    viewport->setProperty("cropStart", QPointF{preview->x() + 4 * scale, preview->y() + 4 * scale});
+    viewport->setProperty("cropCurrent",
+                          QPointF{preview->x() + 36 * scale, preview->y() + 28 * scale});
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        workspace,
+        "updateCropSelection",
+        Q_ARG(QVariant, QVariant::fromValue(static_cast<QObject*>(viewport)))));
+    EXPECT_TRUE(cropOverlay->isVisible());
+
+    // Applying through floatingApply commits the crop
+    ASSERT_TRUE(QMetaObject::invokeMethod(floatingApply, "clicked"));
+    harness.settle();
+    EXPECT_EQ(harness.imageEdit.imageWidth(), 32);
+    EXPECT_EQ(harness.imageEdit.imageHeight(), 24);
+    EXPECT_TRUE(workspace->property("cropSelection").toMap().isEmpty());
+    EXPECT_FALSE(cropOverlay->isVisible());
+}
+
+TEST(MainQmlContractTests, ImageEditRepeatedCropUsesUpdatedPreviewCoordinates) {
+    WorkspaceHarness harness;
+    harness.withImageEdit = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    QImage original(80, 60, QImage::Format_ARGB32);
+    for (int y = 0; y < original.height(); ++y) {
+        for (int x = 0; x < original.width(); ++x) {
+            original.setPixelColor(x, y, QColor(x * 3, y * 4, 80, 200));
+        }
+    }
+    ASSERT_TRUE(harness.imageReview.openPrimaryImage(original, QStringLiteral("crop.png")));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    auto* const workspace =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
+    auto* const viewport = harness.root->findChild<QQuickItem*>(QStringLiteral("primaryViewport"));
+    auto* const preview = harness.root->findChild<QQuickItem*>(QStringLiteral("imageViewport-2"));
+    auto* const start =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditStartButton"));
+    auto* const apply =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditApplyCropButton"));
+    ASSERT_NE(workspace, nullptr);
+    ASSERT_NE(viewport, nullptr);
+    ASSERT_NE(preview, nullptr);
+    ASSERT_NE(start, nullptr);
+    ASSERT_NE(apply, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(start, "clicked"));
+    const auto crop = [&](const QRect& rectangle, const QSize currentSize) {
+        if (!harness.waitUntil([&]() {
+                return preview->property("sourceSize").toSize() == currentSize &&
+                       preview->width() > 0;
+            })) {
+            return false;
+        }
+        const qreal scale = preview->width() / currentSize.width();
+        viewport->setProperty(
+            "cropStart",
+            QPointF{preview->x() + rectangle.x() * scale, preview->y() + rectangle.y() * scale});
+        viewport->setProperty("cropCurrent",
+                              QPointF{preview->x() + (rectangle.x() + rectangle.width()) * scale,
+                                      preview->y() + (rectangle.y() + rectangle.height()) * scale});
+        return QMetaObject::invokeMethod(
+                   workspace,
+                   "updateCropSelection",
+                   Q_ARG(QVariant, QVariant::fromValue(static_cast<QObject*>(viewport)))) &&
+               QMetaObject::invokeMethod(apply, "clicked");
+    };
+    ASSERT_TRUE(crop(QRect(10, 8, 50, 36), QSize(80, 60)));
+    const QImage first = original.copy(10, 8, 50, 36);
+    EXPECT_EQ(harness.imageEdit.editedImage(), first);
+    harness.imageReview.setZoom(2.0);
+    harness.imageReview.panBy(0.07, -0.04);
+    harness.settle();
+    ASSERT_TRUE(crop(QRect(7, 5, 25, 18), first.size()));
+    const QImage second = original.copy(17, 13, 25, 18);
+    EXPECT_EQ(harness.imageEdit.editedImage(), second);
+    ASSERT_TRUE(harness.imageEdit.undo());
+    EXPECT_EQ(harness.imageEdit.editedImage(), first);
+    ASSERT_TRUE(harness.imageEdit.undo());
+    EXPECT_EQ(harness.imageEdit.editedImage(), original);
+    ASSERT_TRUE(harness.imageEdit.redo());
+    ASSERT_TRUE(harness.imageEdit.redo());
+    EXPECT_EQ(harness.imageEdit.editedImage(), second);
+    EXPECT_EQ(harness.imageReview.rawImageForSlot(ImageReviewController::PrimarySlot), original);
+    // A second crop dragged from the letterbox must retain only the portion inside the image.
+    ASSERT_TRUE(harness.imageEdit.undo());
+    ASSERT_TRUE(crop(QRect(-5, -4, 30, 22), first.size()));
+    EXPECT_EQ(harness.imageEdit.editedImage(), first.copy(0, 0, 25, 18));
+}
+
+TEST(MainQmlContractTests, ImageEditTransformMenuChangesTheWorkingPixelsAndRetiresSelections) {
+    WorkspaceHarness harness;
+    harness.withImageEdit = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.window->resize(960, 640);
+    QImage original(80, 60, QImage::Format_ARGB32);
+    for (int y = 0; y < original.height(); ++y) {
+        for (int x = 0; x < original.width(); ++x) {
+            original.setPixelColor(x, y, QColor(x * 3, y * 4, x + y, 255));
+        }
+    }
+    const QImage secondary = original.flipped(Qt::Horizontal);
+    ASSERT_TRUE(harness.imageReview.openPairImages(
+        original, QStringLiteral("transform.png"), secondary, QStringLiteral("secondary.png")));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    auto* const workspace =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
+    auto* const start =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditStartButton"));
+    auto* const button =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditTransformButton"));
+    auto* const viewport = harness.root->findChild<QQuickItem*>(QStringLiteral("primaryViewport"));
+    auto* const preview = harness.root->findChild<QQuickItem*>(QStringLiteral("imageViewport-2"));
+    auto* const undo = harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditUndoButton"));
+    ASSERT_NE(workspace, nullptr);
+    ASSERT_NE(start, nullptr);
+    ASSERT_NE(button, nullptr);
+    ASSERT_NE(viewport, nullptr);
+    ASSERT_NE(preview, nullptr);
+    ASSERT_NE(undo, nullptr);
+    const std::array<QString, 5> items{QStringLiteral("imageEditMirrorHorizontalItem"),
+                                       QStringLiteral("imageEditFlipVerticalItem"),
+                                       QStringLiteral("imageEditRotateClockwiseItem"),
+                                       QStringLiteral("imageEditRotateCounterclockwiseItem"),
+                                       QStringLiteral("imageEditRotateHalfTurnItem")};
+    const std::array<QImage, 5> expected{original.flipped(Qt::Horizontal),
+                                         original.flipped(Qt::Vertical),
+                                         original.transformed(QTransform{}.rotate(90)),
+                                         original.transformed(QTransform{}.rotate(-90)),
+                                         secondary.flipped(Qt::Horizontal | Qt::Vertical)};
+    for (std::size_t index = 0; index < items.size(); ++index) {
+        SCOPED_TRACE(items[index].toStdString());
+        const bool editingSecondary = index == 4;
+        harness.imageReview.setCompareMode(editingSecondary ? 0 : 2);
+        workspace->setProperty("singleViewShowSecondary", editingSecondary);
+        ASSERT_TRUE(QMetaObject::invokeMethod(start, "clicked"));
+        harness.settle();
+        EXPECT_EQ(harness.imageReview.compareMode(), editingSecondary ? 0 : 2);
+        EXPECT_EQ(workspace->property("compareMode").toInt(), 0);
+        EXPECT_TRUE(viewport->isVisible());
+        EXPECT_EQ(harness.imageEdit.sourceSlot(), editingSecondary ? 3 : 2);
+        // Changing the review-side switch cannot redirect an already active edit session.
+        workspace->setProperty("singleViewShowSecondary", !editingSecondary);
+        EXPECT_EQ(viewport->property("slot").toInt(), editingSecondary ? 3 : 2);
+        auto* const sourceButton =
+            harness.root->findChild<QQuickItem*>(QStringLiteral("imageToggleSourceButton"));
+        auto* const sourceBadge =
+            harness.root->findChild<QQuickItem*>(QStringLiteral("imageInPlaceBadge"));
+        ASSERT_NE(sourceButton, nullptr);
+        ASSERT_NE(sourceBadge, nullptr);
+        EXPECT_FALSE(sourceButton->isVisible());
+        EXPECT_FALSE(sourceButton->isEnabled());
+        EXPECT_FALSE(sourceBadge->isVisible());
+        ASSERT_TRUE(QMetaObject::invokeMethod(workspace, "toggleSinglePairSource"));
+        EXPECT_EQ(workspace->property("singleViewShowSecondary").toBool(), !editingSecondary);
+        EXPECT_TRUE(button->isVisible());
+        EXPECT_TRUE(button->property("enabled").toBool());
+        workspace->setProperty("cropSelection",
+                               QVariantMap{{QStringLiteral("x"), 4},
+                                           {QStringLiteral("y"), 3},
+                                           {QStringLiteral("width"), 10},
+                                           {QStringLiteral("height"), 8}});
+        ASSERT_TRUE(QMetaObject::invokeMethod(button, "clicked"));
+        harness.settle();
+        auto* const item = harness.root->findChild<QQuickItem*>(items[index]);
+        ASSERT_NE(item, nullptr);
+        const auto evidenceDirectory = qEnvironmentVariable("DVS_REVIEW_EVIDENCE_DIR");
+        if (index == 0 && !evidenceDirectory.isEmpty()) {
+            ASSERT_TRUE(QDir().mkpath(evidenceDirectory));
+            harness.settleAnimations();
+            ASSERT_TRUE(harness.window->grabWindow().save(
+                QDir(evidenceDirectory)
+                    .filePath(QStringLiteral("image-transform-toolbar-960.png"))));
+            auto* const popup =
+                harness.root->findChild<QObject*>(QStringLiteral("imageEditTransformMenu"));
+            ASSERT_NE(popup, nullptr);
+            auto* const popupSurface = menuPopupWindow(popup);
+            ASSERT_NE(popupSurface, nullptr);
+            ASSERT_TRUE(popupSurface->grabWindow().save(
+                QDir(evidenceDirectory).filePath(QStringLiteral("image-transform-menu.png"))));
+        }
+        harness.imageReview.setZoom(2.0);
+        harness.imageReview.panBy(0.08, -0.05);
+        ASSERT_TRUE(QMetaObject::invokeMethod(item, "triggered"));
+        auto* const menu =
+            harness.root->findChild<QObject*>(QStringLiteral("imageEditTransformMenu"));
+        ASSERT_NE(menu, nullptr);
+        ASSERT_TRUE(QMetaObject::invokeMethod(menu, "close"));
+        ASSERT_TRUE(harness.waitUntil([&]() { return !menu->property("visible").toBool(); }));
+        harness.settle();
+        ASSERT_TRUE(harness.waitUntil(
+            [&]() { return preview->property("sourceSize").toSize() == expected[index].size(); }));
+        EXPECT_EQ(harness.imageEdit.editedImage(), expected[index]);
+        EXPECT_DOUBLE_EQ(harness.imageReview.zoom(), 1.0);
+        EXPECT_DOUBLE_EQ(harness.imageReview.panX(), 0.5);
+        EXPECT_DOUBLE_EQ(harness.imageReview.panY(), 0.5);
+        EXPECT_TRUE(workspace->property("cropSelection").isNull());
+        EXPECT_TRUE(viewport->property("label").toString().contains(QStringLiteral("编辑副本")));
+        EXPECT_TRUE(viewport->property("label").toString().contains(
+            QStringLiteral("%1×%2").arg(expected[index].width()).arg(expected[index].height())));
+        // Let Qt Quick polish the changed layout before sending window-level pointer input.
+        harness.settleAnimations(50);
+        static_cast<void>(harness.window->grabWindow());
+        // A fresh drag after the transform uses the new axes and the new canvas dimensions.
+        const qreal scale = preview->width() / expected[index].width();
+        const QPointF first =
+            viewport->mapToScene(QPointF(preview->x() + 20 * scale, preview->y() + 20 * scale));
+        const QPointF last =
+            viewport->mapToScene(QPointF(preview->x() + 40 * scale, preview->y() + 35 * scale));
+        sendMousePress(*harness.window, first);
+        const QPointF globalPos = harness.window->mapToGlobal(last.toPoint());
+        QMouseEvent move{
+            QEvent::MouseMove, last, globalPos, Qt::NoButton, Qt::LeftButton, Qt::NoModifier};
+        QCoreApplication::sendEvent(harness.window, &move);
+        sendMouseRelease(*harness.window, last);
+        EXPECT_EQ(
+            workspace->property("cropSelection").toMap().value(QStringLiteral("width")).toInt(),
+            20);
+        EXPECT_EQ(
+            workspace->property("cropSelection").toMap().value(QStringLiteral("height")).toInt(),
+            15);
+        auto* const apply =
+            harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditApplyCropButton"));
+        ASSERT_NE(apply, nullptr);
+        ASSERT_TRUE(QMetaObject::invokeMethod(apply, "clicked"));
+        EXPECT_EQ(harness.imageEdit.editedImage(), expected[index].copy(20, 20, 20, 15));
+        ASSERT_TRUE(QMetaObject::invokeMethod(undo, "clicked"));
+        EXPECT_EQ(harness.imageEdit.editedImage(), expected[index]);
+        workspace->setProperty("cropSelection",
+                               QVariantMap{{QStringLiteral("x"), 1},
+                                           {QStringLiteral("y"), 1},
+                                           {QStringLiteral("width"), 5},
+                                           {QStringLiteral("height"), 5}});
+        ASSERT_TRUE(QMetaObject::invokeMethod(undo, "clicked"));
+        EXPECT_EQ(harness.imageEdit.editedImage(), editingSecondary ? secondary : original);
+        EXPECT_TRUE(workspace->property("cropSelection").isNull());
+        ASSERT_TRUE(QMetaObject::invokeMethod(start, "clicked"));
+        EXPECT_EQ(workspace->property("compareMode").toInt(), editingSecondary ? 0 : 2);
+    }
+    EXPECT_EQ(harness.imageReview.rawImageForSlot(ImageReviewController::PrimarySlot), original);
+}
+
+// Step-3 second increment: the brush paints through the workspace in image coordinates and
+// the mosaic obscures a selected region; both share the same bounded undo history as crop.
 TEST(MainQmlContractTests, ImageEditBrushAndMosaicToolsEditTheWorkingCopy) {
     WorkspaceHarness harness;
     harness.withImageEdit = true;
@@ -6446,6 +6792,252 @@ TEST(MainQmlContractTests, ImageWorkspaceManualFlickerContract) {
     ASSERT_TRUE(QMetaObject::invokeMethod(manualMode, "clicked"));
     harness.settle();
     EXPECT_EQ(primaryViewport->property("slot").toInt(), 2);
+}
+
+TEST(MainQmlContractTests, ImageSingleCrosshairFollowsPixelsAndHidesOutside) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->resize(960, 640);
+    harness.window->show();
+    QImage image(80, 60, QImage::Format_ARGB32);
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            image.setPixelColor(x, y, QColor(x, y, 180));
+        }
+    }
+    ASSERT_TRUE(harness.imageReview.openPrimaryImage(image, QStringLiteral("single.png")));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    harness.settleAnimations();
+    auto* const workspace =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
+    auto* const viewport = harness.root->findChild<QQuickItem*>(QStringLiteral("primaryViewport"));
+    auto* const preview = harness.root->findChild<QQuickItem*>(QStringLiteral("imageViewport-2"));
+    auto* const crosshair =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("syncedCrosshair-2"));
+    auto* const coordinates =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageCrosshairCoordinateText-2"));
+    auto* const vertical =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageCrosshairVertical-2"));
+    auto* const horizontal =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageCrosshairHorizontal-2"));
+    ASSERT_NE(workspace, nullptr);
+    ASSERT_NE(viewport, nullptr);
+    ASSERT_NE(preview, nullptr);
+    ASSERT_NE(crosshair, nullptr);
+    ASSERT_NE(coordinates, nullptr);
+    ASSERT_NE(vertical, nullptr);
+    ASSERT_NE(horizontal, nullptr);
+    ASSERT_TRUE(harness.waitUntil(
+        [&] { return preview->property("sourceSize").toSize() == QSize(80, 60); }));
+    static_cast<void>(harness.window->grabWindow());
+    const qreal scale = preview->width() / 80.0;
+    const QPointF position{preview->x() + 35.75 * scale, preview->y() + 30.75 * scale};
+    sendMouseMove(*harness.window, viewport->mapToScene(position));
+    ASSERT_TRUE(harness.waitUntil([&] { return crosshair->isVisible(); }));
+    EXPECT_TRUE(coordinates->isVisible());
+    const QVariantMap hover = workspace->property("hoverPoint").toMap();
+    EXPECT_EQ(hover.value(QStringLiteral("imgX")).toInt(), 35);
+    EXPECT_EQ(hover.value(QStringLiteral("imgY")).toInt(), 30);
+    EXPECT_EQ(coordinates->property("text").toString(), QStringLiteral("35, 30"));
+    EXPECT_EQ(harness.imageReview.cursorPixel().value(QStringLiteral("r")).toInt(), 35);
+    EXPECT_EQ(harness.imageReview.cursorPixel().value(QStringLiteral("g")).toInt(), 30);
+    EXPECT_NEAR(crosshair->property("targetX").toReal(), position.x(), 0.01);
+    EXPECT_NEAR(crosshair->property("targetY").toReal(), position.y(), 0.01);
+    EXPECT_NEAR(vertical->y(), preview->y(), 0.01);
+    EXPECT_NEAR(vertical->height(), preview->height(), 0.01);
+    EXPECT_NEAR(horizontal->x(), preview->x(), 0.01);
+    EXPECT_NEAR(horizontal->width(), preview->width(), 0.01);
+
+    // No new pointer event: a zoom/pan moves different pixels underneath the same cursor.
+    harness.imageReview.setZoom(2);
+    harness.imageReview.panBy(0.04, -0.03);
+    harness.settleAnimations();
+    const qreal zoomedScale = preview->width() / 80.0;
+    const int zoomedX = qFloor((position.x() - preview->x()) / zoomedScale);
+    const int zoomedY = qFloor((position.y() - preview->y()) / zoomedScale);
+    EXPECT_EQ(workspace->property("hoverPoint").toMap().value(QStringLiteral("imgX")).toInt(),
+              zoomedX);
+    EXPECT_EQ(workspace->property("hoverPoint").toMap().value(QStringLiteral("imgY")).toInt(),
+              zoomedY);
+    EXPECT_NEAR(crosshair->property("targetX").toReal(), position.x(), 0.01);
+    EXPECT_NEAR(crosshair->property("targetY").toReal(), position.y(), 0.01);
+    EXPECT_EQ(coordinates->property("text").toString(),
+              QStringLiteral("%1, %2").arg(zoomedX).arg(zoomedY));
+    EXPECT_NEAR(vertical->y(), qMax(0.0, preview->y()), 0.01);
+    EXPECT_NEAR(vertical->height(),
+                qMin(viewport->height(), preview->y() + preview->height()) - vertical->y(),
+                0.01);
+    EXPECT_NEAR(horizontal->width(),
+                qMin(viewport->width(), preview->x() + preview->width()) - horizontal->x(),
+                0.01);
+
+    // A smaller image panned partly off-screen must stop both hairlines at its visible edge.
+    harness.imageReview.resetView();
+    harness.imageReview.setZoom(0.8);
+    harness.imageReview.panBy(-0.4, -0.4);
+    harness.settleAnimations();
+    static_cast<void>(harness.window->grabWindow());
+    sendMouseMove(*harness.window,
+                  viewport->mapToScene(QPointF{(preview->x() + preview->width()) / 2,
+                                               (preview->y() + preview->height()) / 2}));
+    harness.settle();
+    EXPECT_TRUE(crosshair->isVisible());
+    EXPECT_NEAR(vertical->height(), preview->y() + preview->height(), 0.01);
+    EXPECT_NEAR(horizontal->width(), preview->x() + preview->width(), 0.01);
+
+    harness.imageReview.resetView();
+    harness.settleAnimations();
+    sendMouseMove(*harness.window, viewport->mapToScene(position));
+    harness.settle();
+    const QString evidenceDirectory = qEnvironmentVariable("DVS_REVIEW_EVIDENCE_DIR");
+    if (!evidenceDirectory.isEmpty()) {
+        ASSERT_TRUE(QDir().mkpath(evidenceDirectory));
+        harness.root->setProperty("intentMessage", QString{});
+        ASSERT_TRUE(harness.window->grabWindow().save(
+            QDir(evidenceDirectory).filePath(QStringLiteral("single-image-crosshair.png"))));
+    }
+    ASSERT_GT(preview->x(), 2.0);
+    sendMouseMove(*harness.window, viewport->mapToScene(QPointF{preview->x() / 2, position.y()}));
+    harness.settle();
+    EXPECT_FALSE(crosshair->isVisible());
+    EXPECT_TRUE(workspace->property("hoverPoint").isNull());
+    EXPECT_TRUE(harness.imageReview.cursorPixel().isEmpty());
+
+    sendMouseMove(*harness.window,
+                  viewport->mapToScene(QPointF{preview->x() + 79.75 * scale, position.y()}));
+    harness.settle();
+    EXPECT_TRUE(crosshair->isVisible());
+    EXPECT_EQ(workspace->property("hoverPoint").toMap().value(QStringLiteral("imgX")).toInt(), 79);
+    sendMouseMove(*harness.window,
+                  viewport->mapToScene(QPointF{preview->x() + 80.25 * scale, position.y()}));
+    harness.settle();
+    EXPECT_FALSE(crosshair->isVisible());
+    EXPECT_TRUE(harness.imageReview.cursorPixel().isEmpty());
+
+    // Manual A/B uses the side actually displayed; side-by-side keeps normalized linkage,
+    // with the coordinate tag expressed in each image's own pixel dimensions.
+    QImage secondary(40, 30, QImage::Format_ARGB32);
+    secondary.fill(QColor(111, 112, 113));
+    ASSERT_TRUE(harness.imageReview.openPairImages(
+        image, QStringLiteral("a.png"), secondary, QStringLiteral("b.png")));
+    workspace->setProperty("singleViewShowSecondary", true);
+    harness.settleAnimations();
+    static_cast<void>(harness.window->grabWindow());
+    const qreal secondaryScale = preview->width() / 40.0;
+    sendMouseMove(*harness.window,
+                  viewport->mapToScene(QPointF{preview->x() + 20.75 * secondaryScale,
+                                               preview->y() + 15.75 * secondaryScale}));
+    harness.settle();
+    EXPECT_TRUE(crosshair->isVisible());
+    EXPECT_EQ(coordinates->property("text").toString(), QStringLiteral("20, 15"));
+    EXPECT_EQ(harness.imageReview.cursorPixel().value(QStringLiteral("r")).toInt(), 111);
+    harness.imageReview.setCompareMode(1);
+    harness.settleAnimations();
+    static_cast<void>(harness.window->grabWindow());
+    const qreal pairedScale = preview->width() / 80.0;
+    sendMouseMove(*harness.window,
+                  viewport->mapToScene(QPointF{preview->x() + 35.75 * pairedScale,
+                                               preview->y() + 30.75 * pairedScale}));
+    harness.settle();
+    auto* const syncedCoordinates =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageCrosshairCoordinateText-3"));
+    ASSERT_NE(syncedCoordinates, nullptr);
+    EXPECT_TRUE(crosshair->isVisible());
+    EXPECT_TRUE(syncedCoordinates->isVisible());
+    EXPECT_EQ(syncedCoordinates->property("text").toString(), QStringLiteral("17, 15"));
+}
+
+TEST(MainQmlContractTests, ImageSingleCrosshairTracksTheCroppedWorkingCopy) {
+    WorkspaceHarness harness;
+    harness.withImageEdit = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->resize(960, 640);
+    harness.window->show();
+    QImage image(80, 60, QImage::Format_ARGB32);
+    image.fill(QColor(180, 40, 60));
+    ASSERT_TRUE(harness.imageReview.openPrimaryImage(image, QStringLiteral("crop.png")));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    harness.settleAnimations();
+    auto* const workspace =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
+    auto* const viewport = harness.root->findChild<QQuickItem*>(QStringLiteral("primaryViewport"));
+    auto* const preview = harness.root->findChild<QQuickItem*>(QStringLiteral("imageViewport-2"));
+    auto* const crosshair =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("syncedCrosshair-2"));
+    auto* const coordinates =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageCrosshairCoordinateText-2"));
+    auto* const readout = harness.root->findChild<QQuickItem*>(QStringLiteral("imagePixelReadout"));
+    ASSERT_NE(workspace, nullptr);
+    ASSERT_NE(viewport, nullptr);
+    ASSERT_NE(preview, nullptr);
+    ASSERT_NE(crosshair, nullptr);
+    ASSERT_NE(coordinates, nullptr);
+    ASSERT_NE(readout, nullptr);
+    ASSERT_TRUE(harness.imageEdit.beginSession(2, QStringLiteral("crop.png"), QUrl{}));
+    ASSERT_TRUE(harness.imageEdit.cropToImageRect(10, 8, 60, 40));
+    harness.settleAnimations();
+    ASSERT_TRUE(harness.waitUntil(
+        [&] { return preview->property("sourceSize").toSize() == QSize(60, 40); }));
+    static_cast<void>(harness.window->grabWindow());
+    const qreal scale = preview->width() / 60.0;
+    const QPointF start{preview->x() + 7.25 * scale, preview->y() + 6.25 * scale};
+    const QPointF end{preview->x() + 40.25 * scale, preview->y() + 30.25 * scale};
+    // A press also locates the crosshair, even before a move event is delivered.
+    sendMousePress(*harness.window, viewport->mapToScene(start));
+    harness.settle();
+    EXPECT_TRUE(crosshair->isVisible());
+    EXPECT_EQ(coordinates->property("text").toString(), QStringLiteral("7, 6"));
+    const QPointF dragPosition = viewport->mapToScene(end);
+    QMouseEvent drag{QEvent::MouseMove,
+                     dragPosition,
+                     harness.window->mapToGlobal(dragPosition.toPoint()),
+                     Qt::NoButton,
+                     Qt::LeftButton,
+                     Qt::NoModifier};
+    QCoreApplication::sendEvent(harness.window, &drag);
+    harness.settle();
+    EXPECT_TRUE(crosshair->isVisible());
+    EXPECT_EQ(coordinates->property("text").toString(), QStringLiteral("40, 30"));
+    const QVariantMap selection = workspace->property("cropSelection").toMap();
+    EXPECT_EQ(selection.value(QStringLiteral("x")).toInt(), 7);
+    EXPECT_EQ(selection.value(QStringLiteral("y")).toInt(), 6);
+    EXPECT_EQ(selection.value(QStringLiteral("width")).toInt(), 33);
+    EXPECT_EQ(selection.value(QStringLiteral("height")).toInt(), 24);
+    EXPECT_TRUE(harness.imageReview.cursorPixel().isEmpty());
+    EXPECT_EQ(readout->property("text").toString(), QStringLiteral("编辑副本 · 像素 (40, 30)"));
+    sendMouseRelease(*harness.window, viewport->mapToScene(end));
+    ASSERT_TRUE(QMetaObject::invokeMethod(workspace, "applyCropSelection"));
+    harness.settleAnimations();
+    EXPECT_EQ(harness.imageEdit.editedImage().size(), QSize(33, 24));
+    static_cast<void>(harness.window->grabWindow());
+    const qreal nextScale = preview->width() / 33.0;
+    const QPointF position{preview->x() + 13.25 * nextScale, preview->y() + 10.25 * nextScale};
+    sendMouseMove(*harness.window, viewport->mapToScene(position));
+    harness.settle();
+    EXPECT_TRUE(crosshair->isVisible());
+    EXPECT_EQ(coordinates->property("text").toString(), QStringLiteral("13, 10"));
+    EXPECT_EQ(readout->property("text").toString(), QStringLiteral("编辑副本 · 像素 (13, 10)"));
+    const QString evidenceDirectory = qEnvironmentVariable("DVS_REVIEW_EVIDENCE_DIR");
+    if (!evidenceDirectory.isEmpty()) {
+        ASSERT_TRUE(QDir().mkpath(evidenceDirectory));
+        harness.root->setProperty("intentMessage", QString{});
+        ASSERT_TRUE(harness.window->grabWindow().save(
+            QDir(evidenceDirectory).filePath(QStringLiteral("crop-crosshair.png"))));
+    }
+    ASSERT_TRUE(harness.imageEdit.rotateImage(1));
+    harness.settleAnimations();
+    ASSERT_EQ(preview->property("sourceSize").toSize(), QSize(24, 33));
+    const qreal rotatedScale = preview->width() / 24.0;
+    const int rotatedX = qFloor((position.x() - preview->x()) / rotatedScale);
+    const int rotatedY = qFloor((position.y() - preview->y()) / rotatedScale);
+    EXPECT_EQ(coordinates->property("text").toString(),
+              QStringLiteral("%1, %2").arg(rotatedX).arg(rotatedY));
+    EXPECT_NEAR(crosshair->property("targetX").toReal(), position.x(), 0.01);
+    EXPECT_NEAR(crosshair->property("targetY").toReal(), position.y(), 0.01);
+    EXPECT_TRUE(harness.imageReview.cursorPixel().isEmpty());
+    ASSERT_TRUE(harness.imageEdit.undo());
+    harness.settleAnimations();
+    EXPECT_EQ(coordinates->property("text").toString(), QStringLiteral("13, 10"));
 }
 
 TEST(MainQmlContractTests, ImageWorkspaceSyncedCrosshairExistsInSideBySide) {
