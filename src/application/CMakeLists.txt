@@ -17,6 +17,7 @@ add_library(
         src/PlaybackTiming.cpp
         src/PlaybackTrace.cpp
         src/PrefetchScheduler.cpp
+        src/SampleExportPlanner.cpp
         src/SessionSnapshot.cpp
 )
 add_library(dvs::application ALIAS dvs_application)

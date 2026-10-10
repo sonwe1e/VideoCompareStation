@@ -13,6 +13,7 @@ add_executable(
     PlaybackCoordinatorTests.cpp
     PlaybackTraceTests.cpp
     PrefetchSchedulerTests.cpp
+    SampleExportPlannerTests.cpp
 )
 target_link_libraries(
     dvs_application_unit_tests

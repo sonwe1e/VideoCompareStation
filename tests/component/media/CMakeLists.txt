@@ -13,6 +13,7 @@ add_executable(
     PreviewThumbnailServiceTests.cpp
     ProbeTimelineContractTests.cpp
     SignatureCacheTests.cpp
+    SampleExportWriterTests.cpp
     SourceDecodeActorTests.cpp
     SourceFrameCacheTests.cpp
     SoftwareDecoderTests.cpp
@@ -23,6 +24,7 @@ target_link_libraries(
     PRIVATE
         dvs_media_ffmpeg
         dvs::ffmpeg_dependencies
+        dvs::json_dependencies
         dvs::test_dependencies
         dvs::test_support
 )

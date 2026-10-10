@@ -17,6 +17,7 @@ add_library(
         src/SoftwareDecoder.cpp
         src/SignatureCache.cpp
         src/SignatureDecodeSession.cpp
+        src/SampleExportWriter.cpp
         src/StillImageDecoder.cpp
 )
 add_library(dvs::media_ffmpeg ALIAS dvs_media_ffmpeg)
@@ -34,6 +35,9 @@ target_link_libraries(
         dvs_windows_support
         dvs_graphics_d3d11
         dvs::ffmpeg_dependencies
+        dvs::json_dependencies
+        ole32
+        windowscodecs
 )
 
 dvs_apply_project_warnings(dvs_media_ffmpeg)
