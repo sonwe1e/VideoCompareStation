@@ -15,8 +15,7 @@ namespace dvs::ui {
 // immutable; every tool edits a working copy, every operation is undoable through a
 // bounded history, and saving always writes a new file. Crop, resample, canvas and
 // annotation geometry is expressed in image pixels, so a zoomed or panned viewport cannot
-// drift a selection. The three geometry steps the review actually asked for are crop,
-// resize (change the pixel dimensions) and pad (centre the image on a new canvas).
+// drift a selection. Geometry tools also mirror, flip and rotate the actual working pixels.
 //
 // Editing is deliberately separate from comparison: the workspace may show the edited
 // copy, but the difference pipeline and metrics keep using the committed originals.
@@ -54,6 +53,15 @@ class ImageEditController final : public QObject {
     Q_PROPERTY(int selectedAnnotation READ selectedAnnotation NOTIFY annotationsChanged)
     Q_PROPERTY(QString lastStatus READ lastStatus NOTIFY statusChanged)
 public:
+    enum class ImageTransform {
+        MirrorHorizontal,
+        FlipVertical,
+        RotateClockwise,
+        RotateCounterclockwise,
+        RotateHalfTurn,
+    };
+    Q_ENUM(ImageTransform)
+
     // Decoded original for one display slot, injected by the composition root so the
     // controller never reaches into the review workspace directly.
     using SourceImageProvider = std::function<QImage(int slot)>;
@@ -90,6 +98,11 @@ public:
     // Crops the working copy to an image-pixel rect, clamped to the current image. The
     // rect is in image coordinates, never viewport coordinates.
     Q_INVOKABLE bool cropToImageRect(int x, int y, int width, int height);
+    // Exact axis flips / quarter turns, with alpha and format preserved. Annotations follow
+    // the pixels and remain editable; the entire operation is one bounded history step.
+    Q_INVOKABLE bool transformImage(ImageTransform transform);
+    Q_INVOKABLE bool mirrorImage(bool vertical = false);
+    Q_INVOKABLE bool rotateImage(int quarterTurnsClockwise = 1);
     // Resize: changes the pixel dimensions of the working copy (this is the review's
     // "缩放", not a viewport zoom) and resamples the pixels. Aspect ratio is the caller's
     // business; this only clamps both edges to the supported range and refuses a no-op.

@@ -12,6 +12,7 @@
 #include <QPoint>
 #include <QRect>
 #include <QSaveFile>
+#include <QTransform>
 #include <QUndoCommand>
 
 #include <algorithm>
@@ -86,6 +87,8 @@ public:
         int width = 2;
         int size = 24;
         QString text;
+        // Text follows mirror/rotation without flattening the editable annotation list.
+        QTransform textOrientation;
     };
 
     // A history step that keeps whole image buffers alive. The byte budget needs to know how
@@ -310,6 +313,48 @@ public:
         Impl* owner_;
         QRect rect_;
         QImage previousImage_;
+        std::vector<Annotation> previous_;
+        std::vector<Annotation> next_;
+    };
+
+    class TransformCommand final : public BufferRetainingCommand {
+    public:
+        TransformCommand(Impl* owner,
+                         QImage image,
+                         const QTransform& geometry,
+                         const QString& label)
+            : owner_(owner), previousImage_(owner->working), nextImage_(std::move(image)),
+              previous_(owner->annotations), next_(previous_) {
+            setText(label);
+            const QTransform orientation{
+                geometry.m11(), geometry.m12(), geometry.m21(), geometry.m22(), 0, 0};
+            for (Annotation& annotation : next_) {
+                annotation.from = geometry.map(annotation.from);
+                annotation.to = geometry.map(annotation.to);
+                annotation.textOrientation = annotation.textOrientation * orientation;
+            }
+        }
+
+        void undo() override {
+            owner_->working = previousImage_;
+            owner_->annotations = previous_;
+            owner_->selectedAnnotation = -1;
+        }
+
+        void redo() override {
+            owner_->working = nextImage_;
+            owner_->annotations = next_;
+            owner_->selectedAnnotation = -1;
+        }
+
+        [[nodiscard]] qint64 retainedBytes() const noexcept override {
+            return imageBytes(previousImage_) + imageBytes(nextImage_);
+        }
+
+    private:
+        Impl* owner_;
+        QImage previousImage_;
+        QImage nextImage_;
         std::vector<Annotation> previous_;
         std::vector<Annotation> next_;
     };
@@ -684,7 +729,8 @@ public:
         }
         case AnnotationKind::Text: {
             const QFontMetrics metrics{annotationFont(annotation.size)};
-            return metrics.boundingRect(annotation.text).translated(annotation.from);
+            return annotation.textOrientation.mapRect(metrics.boundingRect(annotation.text))
+                .translated(annotation.from);
         }
         }
         return {};
@@ -738,8 +784,12 @@ public:
                 painter.drawRect(QRect{annotation.from, annotation.to}.normalized());
                 break;
             case AnnotationKind::Text:
+                painter.save();
+                painter.translate(annotation.from);
+                painter.setTransform(annotation.textOrientation, true);
                 painter.setFont(annotationFont(annotation.size));
-                painter.drawText(annotation.from, annotation.text);
+                painter.drawText(QPoint{0, 0}, annotation.text);
+                painter.restore();
                 break;
             }
         }
@@ -1031,6 +1081,80 @@ bool ImageEditController::cropToImageRect(const int x,
     impl_->pushStep(std::make_unique<Impl::CropCommand>(impl_.get(), bounded));
     setStatus(tr("已裁剪为 %1×%2").arg(bounded.width()).arg(bounded.height()));
     return true;
+}
+
+bool ImageEditController::transformImage(const ImageTransform transform) {
+    if (!active()) {
+        setStatus(tr("没有正在编辑的图片。"));
+        return false;
+    }
+    if (impl_->strokeOpen || impl_->draggingAnnotation >= 0) {
+        setStatus(tr("请先结束当前笔画或标注拖动。"));
+        return false;
+    }
+    const qreal width = impl_->working.width();
+    const qreal height = impl_->working.height();
+    QTransform geometry;
+    QImage next;
+    QString label;
+    switch (transform) {
+    case ImageTransform::MirrorHorizontal:
+        next = impl_->working.flipped(Qt::Horizontal);
+        geometry = QTransform{-1, 0, 0, 1, width, 0};
+        label = tr("水平镜像");
+        break;
+    case ImageTransform::FlipVertical:
+        next = impl_->working.flipped(Qt::Vertical);
+        geometry = QTransform{1, 0, 0, -1, 0, height};
+        label = tr("垂直翻转");
+        break;
+    case ImageTransform::RotateClockwise:
+        next = impl_->working.transformed(QTransform{}.rotate(90), Qt::FastTransformation);
+        geometry = QTransform{0, 1, -1, 0, height, 0};
+        label = tr("顺时针旋转 90°");
+        break;
+    case ImageTransform::RotateCounterclockwise:
+        next = impl_->working.transformed(QTransform{}.rotate(-90), Qt::FastTransformation);
+        geometry = QTransform{0, -1, 1, 0, 0, width};
+        label = tr("逆时针旋转 90°");
+        break;
+    case ImageTransform::RotateHalfTurn:
+        next = impl_->working.flipped(Qt::Horizontal | Qt::Vertical);
+        geometry = QTransform{-1, 0, 0, -1, width, height};
+        label = tr("旋转 180°");
+        break;
+    default:
+        setStatus(tr("不支持的图片变换。"));
+        return false;
+    }
+    if (next.isNull()) {
+        setStatus(tr("图片变换失败：无法创建工作副本。"));
+        return false;
+    }
+    impl_->pushStep(
+        std::make_unique<Impl::TransformCommand>(impl_.get(), std::move(next), geometry, label));
+    setStatus(tr("已%1 · %2×%3").arg(label).arg(imageWidth()).arg(imageHeight()));
+    return true;
+}
+
+bool ImageEditController::mirrorImage(const bool vertical) {
+    return transformImage(vertical ? ImageTransform::FlipVertical
+                                   : ImageTransform::MirrorHorizontal);
+}
+
+bool ImageEditController::rotateImage(const int quarterTurnsClockwise) {
+    const int turns = ((quarterTurnsClockwise % 4) + 4) % 4;
+    switch (turns) {
+    case 1:
+        return transformImage(ImageTransform::RotateClockwise);
+    case 2:
+        return transformImage(ImageTransform::RotateHalfTurn);
+    case 3:
+        return transformImage(ImageTransform::RotateCounterclockwise);
+    default:
+        setStatus(tr("旋转角度与当前图片相同。"));
+        return false;
+    }
 }
 
 bool ImageEditController::resizeImage(const int width, const int height, const bool smooth) {
