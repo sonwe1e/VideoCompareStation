@@ -31,6 +31,11 @@
         <file alias="VideoFolderSidebar.qml">qml/VideoFolderSidebar.qml</file>
         <file alias="ActiveSourceStrip.qml">qml/ActiveSourceStrip.qml</file>
         <file alias="CompareModeBar.qml">qml/CompareModeBar.qml</file>
+        <file alias="RoiTripletStrip.qml">qml/RoiTripletStrip.qml</file>
+        <!-- V01 local-window re-sample shaders: the qrc copy serves app/harness QML, the
+             source-tree copy serves filesystem-loaded QML tests (relative .qsb URLs). -->
+        <file alias="shaders/roitripletwindow.vert.qsb">qml/shaders/roitripletwindow.vert.qsb</file>
+        <file alias="shaders/roitripletwindow.frag.qsb">qml/shaders/roitripletwindow.frag.qsb</file>
         <file alias="MetricTimelineLane.qml">qml/MetricTimelineLane.qml</file>
         <file alias="PlayerOsc.qml">qml/PlayerOsc.qml</file>
         <file alias="ClipExportDialog.qml">qml/ClipExportDialog.qml</file>

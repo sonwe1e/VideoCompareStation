@@ -1,6 +1,8 @@
 #include "dvs/application/Alignment.h"
+#include "dvs/application/InterpolationProtocolImport.h"
 #include "dvs/application/SessionSnapshot.h"
 #include "dvs/domain/ComparisonValidator.h"
+#include "dvs/domain/InterpolationProtocol.h"
 #include "dvs/ui/ClipExportController.h"
 #include "dvs/ui/ComparisonExportController.h"
 #include "dvs/ui/ComparisonSurface.h"
@@ -9,6 +11,7 @@
 #include "dvs/ui/ImageEditController.h"
 #include "dvs/ui/ImageFolderPairModel.h"
 #include "dvs/ui/ImageReviewController.h"
+#include "dvs/ui/InterpolationProtocolController.h"
 #include "dvs/ui/IssueLogController.h"
 #include "dvs/ui/ReviewController.h"
 #include "dvs/ui/ReviewImageProvider.h"
@@ -439,6 +442,17 @@ void identifyReferenceSlot(const std::shared_ptr<application::SessionSnapshot>& 
         static_cast<std::uint64_t>(snapshot->validatedComparison->canonicalFrameCount());
 }
 
+// Repository double for P03 protocol contracts: hands back a fixed result per call.
+class ContractProtocolRepository final : public application::IInterpolationProtocolRepository {
+public:
+    std::function<application::InterpolationProtocolIoResult()> behavior;
+
+    [[nodiscard]] application::InterpolationProtocolIoResult
+    load(const std::filesystem::path&) const override {
+        return behavior ? behavior() : application::InterpolationProtocolIoResult{};
+    }
+};
+
 // Shared QML/controller harness for the workspace-routing contracts. It keeps the two-source
 // video session, the still-image controller and the folder model alive for the whole test.
 class WorkspaceHarness final {
@@ -559,6 +573,11 @@ public:
             issueLog.setImageController(&imageReview);
             engine.rootContext()->setContextProperty(QStringLiteral("issueLog"), &issueLog);
         }
+        if (withInterpolationProtocol) {
+            interpolationProtocol.setReviewController(controller.get());
+            engine.rootContext()->setContextProperty(QStringLiteral("interpolationProtocol"),
+                                                     &interpolationProtocol);
+        }
         QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
         if (component.status() != QQmlComponent::Ready) {
             error = componentErrors(component);
@@ -667,6 +686,12 @@ public:
     // repository; only save/load would need dvs_persistence_json.
     IssueLogController issueLog{static_cast<application::IIssueRecordRepository*>(nullptr)};
     bool withIssueLog = false;
+    // P03 protocol navigation is opt-in for the same reason: only the composition root publishes
+    // the controller, and its absence is a state the transport must survive with the protocol
+    // row hidden.
+    ContractProtocolRepository protocolRepository;
+    InterpolationProtocolController interpolationProtocol{&protocolRepository};
+    bool withInterpolationProtocol = false;
     QQmlEngine engine;
     std::unique_ptr<QObject> root;
     QQuickWindow* window = nullptr;
@@ -2006,6 +2031,122 @@ TEST(MainQmlContractTests, TransportRangeRowPlaysAndLoopsTheMarkedRange) {
     EXPECT_EQ(harness.shell->inFrame(), 41);
     EXPECT_EQ(harness.shell->outFrame(), 47);
     EXPECT_TRUE(playRange->property("chipEnabled").toBool());
+}
+
+// P03: without a protocol controller (the state of every harness that predates the feature) the
+// protocol row must stay out of the layout — plain review renders exactly as before.
+TEST(MainQmlContractTests, TransportKeepsProtocolRowHiddenWithoutController) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+
+    auto* const row = harness.root->findChild<QQuickItem*>(QStringLiteral("transportProtocolRow"));
+    ASSERT_NE(row, nullptr);
+    EXPECT_FALSE(row->isVisible());
+    auto* const badge =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("transportProtocolBadge"));
+    ASSERT_NE(badge, nullptr);
+    EXPECT_FALSE(badge->isVisible());
+    // The OSC must expose a null protocol so every downstream binding stays inert.
+    auto* const transport = harness.root->findChild<QQuickItem*>(QStringLiteral("transport"));
+    ASSERT_NE(transport, nullptr);
+    EXPECT_TRUE(transport->property("protocol").isNull());
+    // The harness itself restores playback preferences once the session is ready (continuity
+    // policy plus the stored range remap), so a bare create is not command-silent. What must
+    // never happen without a protocol controller is protocol work: no seek of any kind.
+    for (const auto& command : harness.submitted) {
+        EXPECT_EQ(std::get_if<application::SeekFrameCommand>(&command), nullptr);
+    }
+}
+
+// P03: with a protocol loaded, the transport's chip routes through TransportBar -> PlayerOsc ->
+// Main.qml -> InterpolationProtocolController -> ReviewController, and lands as the same
+// SeekFrameCommand every other precise navigation uses.
+TEST(MainQmlContractTests, ProtocolRowNavigatesGeneratedFramesThroughTheCommandChain) {
+    WorkspaceHarness harness;
+    harness.withInterpolationProtocol = true;
+    // 60->20->60 decimation, GT 10 stride 3: R0 G1 G2 R3 G4 G5 R6 G7 G8 R9. The shared harness
+    // session displays frame 41 of 100; move to frame 2 (a generated position with ratio 2/3).
+    harness.snapshot->displayedFrame = domain::FrameId{2};
+    const auto built =
+        domain::buildDecimatedProtocol(domain::DecimationPlan{.gtFrameCount = 10, .stride = 3},
+                                       domain::MappingOrigin::kImportedManifest,
+                                       domain::TailPolicy::kTrimPartialInterval);
+    ASSERT_TRUE(built);
+    harness.protocolRepository.behavior = [protocol = built.value()] {
+        application::InterpolationProtocolIoResult result;
+        result.ok = true;
+        result.protocol = protocol;
+        return result;
+    };
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+    ASSERT_EQ(harness.controller->currentFrame(), 2);
+
+    ASSERT_TRUE(harness.interpolationProtocol.loadProtocol(
+        QUrl::fromLocalFile(QDir::temp().filePath(QStringLiteral("protocol-manifest.json")))));
+    ASSERT_TRUE(
+        harness.waitUntil([&harness] { return harness.interpolationProtocol.protocolLoaded(); }));
+
+    auto* const nextChip =
+        harness.root->findChild<QObject*>(QStringLiteral("transportNextGeneratedButton"));
+    auto* const previousChip =
+        harness.root->findChild<QObject*>(QStringLiteral("transportPreviousGeneratedButton"));
+    auto* const clearChip =
+        harness.root->findChild<QObject*>(QStringLiteral("transportClearProtocolButton"));
+    auto* const loadChip =
+        harness.root->findChild<QObject*>(QStringLiteral("transportLoadProtocolButton"));
+    auto* const badge = harness.root->findChild<QObject*>(QStringLiteral("transportProtocolBadge"));
+    ASSERT_NE(nextChip, nullptr);
+    ASSERT_NE(previousChip, nullptr);
+    ASSERT_NE(clearChip, nullptr);
+    ASSERT_NE(loadChip, nullptr);
+    ASSERT_NE(badge, nullptr);
+    EXPECT_TRUE(loadChip->property("visible").toBool());
+    EXPECT_TRUE(nextChip->property("visible").toBool());
+    EXPECT_TRUE(nextChip->property("chipEnabled").toBool());
+    EXPECT_TRUE(previousChip->property("chipEnabled").toBool());
+    EXPECT_TRUE(clearChip->property("visible").toBool());
+    // Text-first badge: provenance reads as words, GT indices display 1-based (inputs 0 and 3).
+    EXPECT_TRUE(badge->property("text").toString().contains(QStringLiteral("生成帧")));
+    EXPECT_TRUE(badge->property("text").toString().contains(QStringLiteral("输入 GT 1/4")));
+    EXPECT_TRUE(badge->property("text").toString().contains(QStringLiteral("比例 2/3")));
+
+    // Next generated position from frame 2 is 4; the jump is a coordinator seek command.
+    ASSERT_TRUE(QMetaObject::invokeMethod(nextChip, "clicked"));
+    harness.settle();
+    ASSERT_FALSE(harness.submitted.empty());
+    const auto* const seek = std::get_if<application::SeekFrameCommand>(&harness.submitted.back());
+    ASSERT_NE(seek, nullptr);
+    EXPECT_EQ(seek->frameId, domain::FrameId{4});
+    EXPECT_EQ(seek->context.sessionId, harness.snapshot->sessionId);
+
+    // Mirror the coordinator's terminal and the newly displayed frame, then jump back: the
+    // previous generated position from frame 4 is 2.
+    harness.terminals.push_back(application::CommandTerminal{
+        .context = application::commandContext(harness.submitted.back()),
+        .outcome = application::CommandOutcome::Succeeded,
+    });
+    harness.snapshot->displayedFrame = domain::FrameId{4};
+    harness.controller->refreshProjection();
+    harness.settle();
+    ASSERT_TRUE(harness.waitUntil([&harness] { return harness.controller->currentFrame() == 4; }));
+    ASSERT_TRUE(QMetaObject::invokeMethod(previousChip, "clicked"));
+    harness.settle();
+    ASSERT_GE(harness.submitted.size(), 2U);
+    const auto* const seekBack =
+        std::get_if<application::SeekFrameCommand>(&harness.submitted.back());
+    ASSERT_NE(seekBack, nullptr);
+    EXPECT_EQ(seekBack->frameId, domain::FrameId{2});
+
+    // Rollback: clearing the protocol hides the navigation chips and keeps the session untouched.
+    ASSERT_TRUE(QMetaObject::invokeMethod(clearChip, "clicked"));
+    harness.settle();
+    EXPECT_FALSE(harness.interpolationProtocol.protocolLoaded());
+    EXPECT_FALSE(nextChip->property("visible").toBool());
+    EXPECT_FALSE(previousChip->property("visible").toBool());
+    EXPECT_FALSE(clearChip->property("visible").toBool());
+    EXPECT_TRUE(loadChip->property("visible").toBool());
 }
 
 // Range commands reach the authoritative snapshot after the shell has already notified QML.
@@ -8786,6 +8927,277 @@ TEST(MainQmlContractTests, OpeningComparisonDoesNotAutoBrowseOrRecordASingleVide
                                 return std::holds_alternative<application::PlayCommand>(command);
                             }),
               0);
+}
+
+// V01 "panorama + three same-ROI locals" preset: entering the mode keeps the panorama on the
+// ThreeUp renderer path (the surface itself never renders RoiTriplet; three columns keep all
+// three sources presented so every local window can sample), the three local windows exist,
+// and the whole round trip submits no playback command - the preset must not seek, pause or
+// change the review target.
+namespace {
+
+[[nodiscard]] std::unique_ptr<QObject>
+createThreeSourceRoiTripletRoot(QQmlEngine& engine,
+                                ReviewController& controller,
+                                ReviewPreferencesController& preferences,
+                                ReviewShellController& shell,
+                                ReviewSessionFacade& facade,
+                                const std::shared_ptr<application::SessionSnapshot>& snapshot,
+                                std::string* error) {
+    QTemporaryDir temporaryDirectory;
+    if (!temporaryDirectory.isValid()) {
+        *error = "temp dir";
+        return nullptr;
+    }
+    std::vector<std::filesystem::path> paths;
+    for (const char name : {'a', 'b', 'c'}) {
+        paths.push_back(std::filesystem::path{
+            (temporaryDirectory.filePath(QString{"roi-%1.mp4"}.arg(QLatin1Char{name})))
+                .toStdWString()});
+        QFile file{QString::fromStdWString(paths.back().wstring())};
+        if (!file.open(QIODevice::WriteOnly)) {
+            *error = "write source";
+            return nullptr;
+        }
+        file.write("roi-triplet-bytes");
+    }
+    const auto rate = domain::RationalRate::create(30, 1);
+    if (!rate) {
+        *error = "rate";
+        return nullptr;
+    }
+    snapshot->graphicsReady = true;
+    snapshot->sessionState = domain::SessionState::kReady;
+    snapshot->playbackState = domain::PlaybackState::kPaused;
+    snapshot->displayedFrame = domain::FrameId{0};
+    if (!installValidatedVideoSet(snapshot, paths, rate.value(), 12, 400'000)) {
+        *error = "validated set";
+        return nullptr;
+    }
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
+    QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
+    if (component.status() != QQmlComponent::Ready) {
+        *error = componentErrors(component);
+        return nullptr;
+    }
+    std::unique_ptr<QObject> root{component.create()};
+    if (!root) {
+        *error = componentErrors(component);
+        return nullptr;
+    }
+    return root;
+}
+
+} // namespace
+
+TEST(MainQmlContractTests, RoiTripletPresetEntersFromPreferencesWithoutPlaybackCommands) {
+    auto snapshot = std::make_shared<application::SessionSnapshot>();
+    std::vector<application::PlaybackCommand> submitted;
+    ReviewController controller{
+        ReviewController::Dependencies{
+            .submit =
+                [&submitted](application::PlaybackCommand command) {
+                    submitted.push_back(std::move(command));
+                    return application::PortSubmitResult::Accepted;
+                },
+            .snapshot = [snapshot] { return snapshot; },
+            .takeCompletedCommands = [] { return std::vector<application::CommandTerminal>{}; },
+        },
+    };
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    ReviewShellController shell{controller, preferences};
+    ReviewSessionFacade facade{controller, preferences, shell};
+
+    QQmlEngine engine;
+    std::string error;
+    std::unique_ptr<QObject> root = createThreeSourceRoiTripletRoot(
+        engine, controller, preferences, shell, facade, snapshot, &error);
+    ASSERT_NE(root, nullptr) << error;
+    auto* const window = qobject_cast<QQuickWindow*>(root.get());
+    ASSERT_NE(window, nullptr);
+    window->resize(1440, 900);
+    window->show();
+    for (int iteration = 0; iteration < 16; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    ASSERT_EQ(controller.sourceCount(), 3);
+
+    // The entry exists and is enabled with three sources.
+    auto* const menuItem = root->findChild<QObject*>(QStringLiteral("roiTripletMenuItem"));
+    ASSERT_NE(menuItem, nullptr);
+    EXPECT_TRUE(menuItem->property("enabled").toBool());
+    EXPECT_FALSE(menuItem->property("checked").toBool());
+
+    auto* const surface = root->findChild<QQuickItem*>(QStringLiteral("dualVideoSurface"));
+    ASSERT_NE(surface, nullptr);
+    EXPECT_EQ(surface->property("viewMode").toInt(),
+              static_cast<int>(dvs::ui::ComparisonSurface::SideBySide));
+
+    const int submittedBefore = static_cast<int>(submitted.size());
+    preferences.setViewMode(static_cast<ReviewPreferencesController::ViewMode>(8));
+    for (int iteration = 0; iteration < 8; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+
+    // The mode reached the window and the strip, while the surface moved to the three-column
+    // panorama - the renderer has no panel layout for RoiTriplet and must never see it, and
+    // ThreeUp keeps all three sources presented for the local windows to re-sample.
+    EXPECT_EQ(root->property("effectiveViewMode").toInt(), 8);
+    EXPECT_EQ(surface->property("viewMode").toInt(),
+              static_cast<int>(dvs::ui::ComparisonSurface::ThreeUp));
+    auto* const strip = root->findChild<QQuickItem*>(QStringLiteral("roiTripletStrip"));
+    ASSERT_NE(strip, nullptr);
+    EXPECT_TRUE(strip->property("visible").toBool());
+    EXPECT_GT(strip->height(), 0.0);
+    auto* const windowRepeater =
+        root->findChild<QObject*>(QStringLiteral("roiTripletWindowRepeater"));
+    ASSERT_NE(windowRepeater, nullptr);
+    EXPECT_EQ(windowRepeater->property("count").toInt(), 3);
+    EXPECT_TRUE(menuItem->property("checked").toBool());
+
+    // Entering the preset is a pure view change: no seek, no step, no play/pause.
+    EXPECT_EQ(submitted.size(), static_cast<std::size_t>(submittedBefore));
+
+    // Leaving it again restores the plain panorama with the strip hidden.
+    preferences.setViewMode(ReviewPreferencesController::ViewMode::SideBySide);
+    for (int iteration = 0; iteration < 8; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    EXPECT_FALSE(strip->property("visible").toBool());
+    EXPECT_EQ(surface->property("viewMode").toInt(),
+              static_cast<int>(dvs::ui::ComparisonSurface::SideBySide));
+    EXPECT_EQ(submitted.size(), static_cast<std::size_t>(submittedBefore));
+}
+
+TEST(MainQmlContractTests, RoiTripletPresetKeepsSharedRoiAcrossModeRoundTrip) {
+    auto snapshot = std::make_shared<application::SessionSnapshot>();
+    std::vector<application::PlaybackCommand> submitted;
+    ReviewController controller{
+        ReviewController::Dependencies{
+            .submit =
+                [&submitted](application::PlaybackCommand command) {
+                    submitted.push_back(std::move(command));
+                    return application::PortSubmitResult::Accepted;
+                },
+            .snapshot = [snapshot] { return snapshot; },
+            .takeCompletedCommands = [] { return std::vector<application::CommandTerminal>{}; },
+        },
+    };
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    ReviewShellController shell{controller, preferences};
+    ReviewSessionFacade facade{controller, preferences, shell};
+
+    QQmlEngine engine;
+    std::string error;
+    std::unique_ptr<QObject> root = createThreeSourceRoiTripletRoot(
+        engine, controller, preferences, shell, facade, snapshot, &error);
+    ASSERT_NE(root, nullptr) << error;
+    auto* const window = qobject_cast<QQuickWindow*>(root.get());
+    ASSERT_NE(window, nullptr);
+    window->resize(1440, 900);
+    window->show();
+    for (int iteration = 0; iteration < 16; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+
+    auto* const surface = root->findChild<QQuickItem*>(QStringLiteral("dualVideoSurface"));
+    ASSERT_NE(surface, nullptr);
+    auto* const strip = root->findChild<QQuickItem*>(QStringLiteral("roiTripletStrip"));
+    ASSERT_NE(strip, nullptr);
+
+    preferences.setViewMode(static_cast<ReviewPreferencesController::ViewMode>(8));
+    for (int iteration = 0; iteration < 8; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    ASSERT_TRUE(strip->property("visible").toBool());
+    // Session bootstrap (continuity policy + default pair policy from
+    // applyPlaybackPreferencesFromSettings) legitimately submits commands once the
+    // harness session reports ready; the round trip below must not add to that.
+    const std::size_t submittedBeforeRoundTrip = submitted.size();
+
+    // One manual ROI marquee, applied to the shared surface state.
+    ASSERT_TRUE(QMetaObject::invokeMethod(surface,
+                                          "setRoiNormalized",
+                                          Q_ARG(qreal, 0.2),
+                                          Q_ARG(qreal, 0.2),
+                                          Q_ARG(qreal, 0.8),
+                                          Q_ARG(qreal, 0.7)));
+    for (int iteration = 0; iteration < 8; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    EXPECT_TRUE(surface->property("roiEnabled").toBool());
+    EXPECT_NEAR(surface->property("roiLeft").toDouble(), 0.2, 0.000001);
+    EXPECT_NEAR(surface->property("roiBottom").toDouble(), 0.7, 0.000001);
+
+    // The three windows all resolve their sample rect from that one ROI: the whole
+    // geometry chain (panels, media info, transform) has to be live in the harness.
+    // QML functions take their full parameter list from the meta-object (no method
+    // clones for JS defaults), so the optional zoom override is passed explicitly;
+    // the invalid QVariant arrives as undefined in QML and means "use zoomPercent".
+    const auto sampleForSlot = [&strip](const int slot) {
+        QVariant returned;
+        const bool invoked = QMetaObject::invokeMethod(strip,
+                                                       "windowTextureRect",
+                                                       Q_RETURN_ARG(QVariant, returned),
+                                                       Q_ARG(QVariant, QVariant{slot}),
+                                                       Q_ARG(QVariant, QVariant{}));
+        return invoked ? returned.toMap() : QVariantMap{};
+    };
+    for (int slot = 0; slot < 3; ++slot) {
+        const QVariantMap rect = sampleForSlot(slot);
+        EXPECT_GT(rect.value(QStringLiteral("width")).toDouble(), 0.0) << slot;
+        EXPECT_GT(rect.value(QStringLiteral("height")).toDouble(), 0.0) << slot;
+    }
+
+    // Switch away: the strip hides, the panorama follows the new mode, and the ROI stays.
+    preferences.setViewMode(ReviewPreferencesController::ViewMode::Wipe);
+    for (int iteration = 0; iteration < 8; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    EXPECT_FALSE(strip->property("visible").toBool());
+    EXPECT_EQ(surface->property("viewMode").toInt(),
+              static_cast<int>(dvs::ui::ComparisonSurface::Wipe));
+    EXPECT_TRUE(surface->property("roiEnabled").toBool());
+    EXPECT_NEAR(surface->property("roiLeft").toDouble(), 0.2, 0.000001);
+
+    // Back into the preset: the ROI survived and the windows re-resolve the same rect.
+    preferences.setViewMode(static_cast<ReviewPreferencesController::ViewMode>(8));
+    for (int iteration = 0; iteration < 8; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    ASSERT_TRUE(strip->property("visible").toBool());
+    EXPECT_TRUE(surface->property("roiEnabled").toBool());
+    EXPECT_NEAR(surface->property("roiLeft").toDouble(), 0.2, 0.000001);
+    const QVariantMap after = sampleForSlot(0);
+    EXPECT_GT(after.value(QStringLiteral("width")).toDouble(), 0.0);
+    // The panorama marks the ROI while the preset is active.
+    auto* const outlineRepeater =
+        root->findChild<QObject*>(QStringLiteral("roiTripletOutlineRepeater"));
+    ASSERT_NE(outlineRepeater, nullptr);
+    EXPECT_EQ(outlineRepeater->property("count").toInt(), 3);
+
+    // The whole round trip - including the ROI change - submitted no playback command
+    // beyond the session bootstrap captured before it.
+    EXPECT_EQ(submitted.size(), submittedBeforeRoundTrip);
+}
+
+// Without a third source the preset entry explains itself as unavailable, and the
+// effective-mode fallback keeps the session on the plain panorama.
+TEST(MainQmlContractTests, RoiTripletPresetEntryDisabledWithoutThreeSources) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    EXPECT_EQ(harness.controller->sourceCount(), 2);
+    auto* const menuItem = harness.root->findChild<QObject*>(QStringLiteral("roiTripletMenuItem"));
+    ASSERT_NE(menuItem, nullptr);
+    EXPECT_FALSE(menuItem->property("enabled").toBool());
+    auto* const strip = harness.root->findChild<QQuickItem*>(QStringLiteral("roiTripletStrip"));
+    ASSERT_NE(strip, nullptr);
+    EXPECT_FALSE(strip->property("visible").toBool());
 }
 
 } // namespace

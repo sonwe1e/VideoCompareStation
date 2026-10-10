@@ -6,7 +6,7 @@
 namespace dvs::presentation {
 namespace {
 
-constexpr std::array<ComparisonModeDescriptor, 8U> kModeDescriptors{{
+constexpr std::array<ComparisonModeDescriptor, 9U> kModeDescriptors{{
     {.mode = ViewMode::SideBySide, .minimumSourceCount = 2U, .maximumSourceCount = 3U},
     {.mode = ViewMode::ThreeUp, .minimumSourceCount = 3U, .maximumSourceCount = 3U},
     {.mode = ViewMode::ReferenceFocus, .minimumSourceCount = 3U, .maximumSourceCount = 3U},
@@ -23,6 +23,7 @@ constexpr std::array<ComparisonModeDescriptor, 8U> kModeDescriptors{{
     {.mode = ViewMode::Wipe, .minimumSourceCount = 2U, .maximumSourceCount = 3U, .usesPair = true},
     {.mode = ViewMode::Single, .minimumSourceCount = 1U, .maximumSourceCount = 1U},
     {.mode = ViewMode::Fade, .minimumSourceCount = 2U, .maximumSourceCount = 3U, .usesPair = true},
+    {.mode = ViewMode::RoiTriplet, .minimumSourceCount = 3U, .maximumSourceCount = 3U},
 }};
 
 template <typename Enum>

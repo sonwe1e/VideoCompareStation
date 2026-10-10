@@ -42,6 +42,7 @@ if(DVS_BUILD_ADAPTERS)
 # persistence adapter, so it can only compile when the adapters (and their include
 # paths) exist; the ui-dev model-only preset builds without them.
 target_sources(dvs_ui_component_tests PRIVATE
+    InterpolationProtocolControllerTests.cpp
     IssueLogControllerTests.cpp
     PairMetricsThresholdReuseTests.cpp
 )
@@ -132,7 +133,6 @@ dvs_add_gtest(
 
 add_executable(
     dvs_main_qml_contract_tests
-    InterpolationProtocolControllerTests.cpp
     MainQmlContractTests.cpp
     ViewportPixelScaleTests.cpp
 )
@@ -254,6 +254,23 @@ set_tests_properties(
         LABELS "component;ui_qml"
         TIMEOUT 15
         RUN_SERIAL TRUE
+)
+
+# V01 "panorama + three same-ROI locals": the strip is plain QtQuick (no runtime-registered
+# types), so qmltestrunner can instantiate it directly with a stand-in surface item.
+add_test(
+    NAME ui.RoiTripletStrip
+    COMMAND
+        "$<TARGET_FILE:Qt6::qmltestrunner>"
+        -input "${CMAKE_CURRENT_SOURCE_DIR}/qml/tst_roi_triplet_strip.qml"
+)
+set_tests_properties(
+    ui.RoiTripletStrip
+    PROPERTIES
+        LABELS "component;ui_qml"
+        TIMEOUT 20
+        RUN_SERIAL TRUE
+        ENVIRONMENT "QT_QUICK_CONTROLS_STYLE=Basic;QSG_RENDER_LOOP=basic"
 )
 
 foreach(dvs_review_shell_test IN ITEMS empty_review_view player_osc timeline_tracks timeline_thumbnail_cache review_action_button vcs_theme clip_export_dialog)

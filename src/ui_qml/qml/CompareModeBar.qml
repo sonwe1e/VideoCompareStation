@@ -45,8 +45,18 @@ Rectangle {
 
     // qmllint disable import unqualified unresolved-type
     readonly property bool pairRelevant: currentMode === ComparisonSurface.Wipe || currentMode === ComparisonSurface.Difference || currentMode === ComparisonSurface.AnalysisGrid
-    readonly property bool advancedMode: currentMode === ComparisonSurface.ThreeUp || currentMode === ComparisonSurface.ReferenceFocus || currentMode === ComparisonSurface.AnalysisGrid
-    readonly property string advancedModeLabel: currentMode === ComparisonSurface.ThreeUp ? qsTr("三联") : (currentMode === ComparisonSurface.ReferenceFocus ? qsTr("参考聚焦") : (currentMode === ComparisonSurface.AnalysisGrid ? qsTr("分析网格") : ""))
+    readonly property bool advancedMode: currentMode === ComparisonSurface.ThreeUp || currentMode === ComparisonSurface.ReferenceFocus || currentMode === ComparisonSurface.AnalysisGrid || currentMode === ComparisonSurface.RoiTriplet
+    readonly property string advancedModeLabel: {
+        if (currentMode === ComparisonSurface.ThreeUp)
+            return qsTr("三联");
+        if (currentMode === ComparisonSurface.ReferenceFocus)
+            return qsTr("参考聚焦");
+        if (currentMode === ComparisonSurface.AnalysisGrid)
+            return qsTr("分析网格");
+        if (currentMode === ComparisonSurface.RoiTriplet)
+            return qsTr("全景+三局部");
+        return "";
+    }
     // The button names the active quick flavor; other metrics (signed/heatmap/...) keep
     // the plain "差异" label and stay selectable from the inspector.
     readonly property string differenceFlavorLabel: currentMode === ComparisonSurface.Difference ? (differenceMetric === ComparisonSurface.Highlight ? qsTr("叠加高亮") : (differenceMetric === ComparisonSurface.RgbAbsolute ? qsTr("纯差异图") : "")) : ""
@@ -199,6 +209,18 @@ Rectangle {
                     enabled: control.sourceCount === 3
                     checked: control.currentMode === ComparisonSurface.AnalysisGrid
                     onTriggered: control.modeRequested(ComparisonSurface.AnalysisGrid)
+                }
+                // V01 task preset: the panorama stays SideBySide and three local windows
+                // re-sample the same presented frames under one shared ROI. Three sources
+                // are required, so the item explains itself as unavailable below that.
+                VcsRadioMenuItem {
+                    id: roiTripletMenuItem
+
+                    objectName: "roiTripletMenuItem"
+                    text: qsTr("全景+三局部")
+                    enabled: control.sourceCount === 3
+                    checked: control.currentMode === ComparisonSurface.RoiTriplet
+                    onTriggered: control.modeRequested(ComparisonSurface.RoiTriplet)
                 }
                 // qmllint enable import unqualified unresolved-type
             }

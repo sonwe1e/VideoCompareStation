@@ -16,6 +16,13 @@ enum class ViewMode : std::uint8_t {
     Wipe = 5,
     Single = 6,
     Fade = 7,
+    // V01 "panorama + three same-ROI locals" task preset. The platform renderer keeps the
+    // panorama (ThreeUp three-column layout so every source stays presented); the three
+    // local windows are additional draws of the same presented frame set layered by the QML
+    // viewport, so no extra decode path exists. The surface itself must not enter this mode
+    // - ComparisonViewport maps it to ThreeUp and composes the local strip, because
+    // D3d11ComparisonRenderer has no panel layout for it.
+    RoiTriplet = 8,
 };
 
 enum class DifferenceMetric : std::uint8_t {

@@ -103,6 +103,12 @@ public:
         Wipe = static_cast<int>(presentation::ViewMode::Wipe),
         Single = static_cast<int>(presentation::ViewMode::Single),
         Fade = static_cast<int>(presentation::ViewMode::Fade),
+        // Identity only: the "panorama + three same-ROI locals" preset value that flows through
+        // preferences -> shell -> viewport. The surface itself never renders this mode because
+        // D3d11ComparisonRenderer has no panel layout for it - ComparisonViewport maps it to
+        // ThreeUp and composes the local windows as extra draws of the same frame set.
+        // setViewMode therefore keeps rejecting it.
+        RoiTriplet = static_cast<int>(presentation::ViewMode::RoiTriplet),
     };
     Q_ENUM(ViewMode)
 
