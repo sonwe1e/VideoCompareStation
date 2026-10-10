@@ -41,6 +41,7 @@ add_library(
         src/GpuFrameResource.cpp
         src/GpuTransferActor.cpp
         src/PresentationAckMailbox.cpp
+        src/PresentationStatisticsProbe.cpp
 )
 add_library(dvs::graphics_d3d11 ALIAS dvs_graphics_d3d11)
 
@@ -66,6 +67,7 @@ target_link_libraries(
     PRIVATE
         d3d11
         dxgi
+        dwmapi
 )
 
 dvs_apply_project_warnings(dvs_graphics_d3d11)
