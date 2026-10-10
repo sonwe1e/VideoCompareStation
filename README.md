@@ -111,11 +111,11 @@ ctest --preset performance-d3d11 --output-on-failure
 ```
 
 Release workflow 生成明确标注为未签名的 ZIP，包内包含 EXE、CLI 与
-`CompareStationShell-2.3.dll`。历史版本链更新到 `1.2.0→2.3.0`；本次修复竖屏视频倍率
-与一键真实尺寸、来源条拖拽显示排序、侧栏键盘目标可见性，以及连续倒退逐帧互相取消
-四处体验缺陷。首次启动新版时接管当前用户的右键菜单。
+`CompareStationShell-2.4.dll`。历史版本链更新到 `1.2.0→2.4.0`；本次新增图片镜像／翻转／
+旋转整图变换、单图与裁剪十字线像素读数、画布光标锁定平移与平滑缩放，并统一视频像素
+读数口径、GT 直看语义与问题记录恢复的事务化。首次启动新版时接管当前用户的右键菜单。
 标准发布流程执行 Release 测试、硬件与性能门禁、DPI 像素验证和 shutdown soak。
-具体功能、验证结果与边界见 [发布说明](docs/releases/v2.3.0.md)。
+具体功能、验证结果与边界见 [发布说明](docs/releases/v2.4.0.md)。
 SHA-256 只用于校验完整性，不代表发布者身份。
 runner 标签、素材清单与发布合同详见
 [docs/self-hosted-runner.md](docs/self-hosted-runner.md)。
