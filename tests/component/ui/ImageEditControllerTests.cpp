@@ -1,4 +1,5 @@
 #include "dvs/ui/ImageEditController.h"
+#include "dvs/ui/Sam2Segmenter.h"
 
 #include <QColor>
 #include <QDir>
@@ -15,6 +16,7 @@
 namespace {
 
 using dvs::ui::ImageEditController;
+using dvs::ui::Sam2Segmenter;
 
 // Annotation rendering uses QFont/QFontMetrics, which need a QGuiApplication rather than a
 // bare QCoreApplication.
@@ -1156,4 +1158,113 @@ TEST(ImageEditControllerTests, HistoryByteBudgetChargesOnlyBufferRetainingSteps)
     EXPECT_EQ(controller.annotationCount(), 1);
     ASSERT_TRUE(controller.undo());
     EXPECT_EQ(controller.annotationCount(), 0);
+}
+
+TEST(ImageEditControllerTests, SmartSegmentGracefullyDegradesWhenModelAbsent) {
+    ImageEditController controller;
+    setSource(controller, cornerImage(40, 40));
+    ASSERT_TRUE(controller.beginSession(
+        2, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    EXPECT_FALSE(controller.probeSmartSegment(tempDir.path()));
+    EXPECT_FALSE(controller.smartSegmentAvailable());
+    EXPECT_FALSE(controller.smartSegmentStatus().isEmpty());
+
+    // When model is absent, calling smartSegmentRect fails gracefully without crashing
+    EXPECT_FALSE(controller.smartSegmentRect(0, 0, 20, 20));
+    EXPECT_FALSE(controller.lastStatus().isEmpty());
+}
+
+TEST(ImageEditControllerTests, Sam2SegmenterDirectCutoutAlphaChannel) {
+    // 10x10 test image with semi-transparent pixels (Alpha = 120) and opaque pixels (Alpha = 255)
+    QImage original(10, 10, QImage::Format_ARGB32);
+    original.fill(qRgba(0, 0, 0, 0));
+    // Set a semi-transparent pixel at (3, 3)
+    const QRgb semiTransparent = qRgba(100, 150, 200, 120);
+    original.setPixel(3, 3, semiTransparent);
+    // Set an opaque pixel at (4, 4)
+    const QRgb opaque = qRgba(255, 0, 0, 255);
+    original.setPixel(4, 4, opaque);
+
+    // Create mask where (3, 3) and (4, 4) are foreground (255) and rest are background (0)
+    QImage mask(10, 10, QImage::Format_Grayscale8);
+    mask.fill(0);
+    mask.scanLine(3)[3] = 255;
+    mask.scanLine(4)[4] = 255;
+
+    QRect bbox;
+    const QImage cutout = Sam2Segmenter::applyCutout(original, mask, true, &bbox);
+    EXPECT_FALSE(cutout.isNull());
+    EXPECT_EQ(bbox, QRect(QPoint(3, 3), QPoint(4, 4)));
+    EXPECT_EQ(cutout.width(), 2);
+    EXPECT_EQ(cutout.height(), 2);
+
+    // Pixel at (3, 3) mapped to cutout (0, 0) must preserve original alpha channel (120)
+    EXPECT_EQ(qAlpha(cutout.pixel(0, 0)), 120);
+    // Pixel at (4, 4) mapped to cutout (1, 1) must preserve opaque alpha (255)
+    EXPECT_EQ(qAlpha(cutout.pixel(1, 1)), 255);
+    // Non-foreground pixel in cutout (0, 1) or (1, 0) must be fully transparent
+    EXPECT_EQ(qAlpha(cutout.pixel(0, 1)), 0);
+    EXPECT_EQ(qAlpha(cutout.pixel(1, 0)), 0);
+}
+
+TEST(ImageEditControllerTests, SmartSegmentWithStagedModelExecutesAndCanUndo) {
+    QString modelsDir;
+    for (const QString& candidate : {
+             QStringLiteral("out/models"),
+             QStringLiteral("../../../models"),
+             QDir(QCoreApplication::applicationDirPath())
+                 .filePath(QStringLiteral("../../../models")),
+             QDir(QCoreApplication::applicationDirPath())
+                 .filePath(QStringLiteral("../../../../out/models")),
+         }) {
+        if (QDir(candidate).exists(QStringLiteral("onnxruntime.dll"))) {
+            modelsDir = candidate;
+            break;
+        }
+    }
+    if (modelsDir.isEmpty()) {
+        GTEST_SKIP() << "out/models/onnxruntime.dll not present, skipping live model test.";
+    }
+
+    ImageEditController controller;
+    ASSERT_TRUE(controller.probeSmartSegment(modelsDir));
+    EXPECT_TRUE(controller.smartSegmentAvailable());
+
+    // Create a 200x200 canvas with a 60x60 solid red box in the center
+    QImage canvas(200, 200, QImage::Format_RGB32);
+    canvas.fill(Qt::white);
+    for (int y = 70; y < 130; ++y) {
+        for (int x = 70; x < 130; ++x) {
+            canvas.setPixel(x, y, qRgb(255, 0, 0));
+        }
+    }
+
+    setSource(controller, canvas);
+    ASSERT_TRUE(controller.beginSession(
+        1, QStringLiteral("box.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/box.png"))));
+
+    // Select the red box with a bounding box prompt
+    ASSERT_TRUE(controller.smartSegmentRect(65, 65, 70, 70, true));
+    EXPECT_TRUE(controller.canUndo());
+    EXPECT_EQ(controller.undoLabel(), QStringLiteral("智能抠图"));
+
+    const QImage cutout = controller.editedImage();
+    EXPECT_FALSE(cutout.isNull());
+    // Tight crop should result in roughly 60x60 dimensions (not 200x200)
+    EXPECT_LT(cutout.width(), 100);
+    EXPECT_LT(cutout.height(), 100);
+    EXPECT_TRUE(controller.imageHasAlpha());
+
+    // Undo restores original 200x200 image
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.imageWidth(), 200);
+    EXPECT_EQ(controller.imageHeight(), 200);
+
+    // Redo restores the cutout
+    ASSERT_TRUE(controller.redo());
+    EXPECT_LT(controller.imageWidth(), 100);
+    EXPECT_LT(controller.imageHeight(), 100);
 }

@@ -83,6 +83,7 @@ Rectangle {
     // Text annotations: typed content and pixel size (the width slider doubles as 字号).
     property string annotationText: ""
     property int annotationTextSize: 28
+    property bool smartSegmentTightCrop: true
 
     onHasPairChanged: {
         if (!hasPair) {
@@ -320,6 +321,8 @@ Rectangle {
         switch (String(tool || "")) {
         case "crop":
             return qsTr("裁剪");
+        case "smart_select":
+            return qsTr("智能抠图");
         case "brush":
             return qsTr("画笔");
         case "select":
@@ -402,6 +405,8 @@ Rectangle {
         let applied = false;
         if (control.editTool === "mosaic") {
             applied = Boolean(imageEdit.mosaicImageRect(selection.x, selection.y, selection.width, selection.height, control.mosaicBlock));
+        } else if (control.editTool === "smart_select") {
+            applied = Boolean(imageEdit.smartSegmentRect(selection.x, selection.y, selection.width, selection.height, control.smartSegmentTightCrop));
         } else {
             applied = Boolean(imageEdit.cropToImageRect(selection.x, selection.y, selection.width, selection.height));
         }
@@ -827,7 +832,7 @@ Rectangle {
         property bool cropActive: false
         property point cropStart: Qt.point(0, 0)
         property point cropCurrent: Qt.point(0, 0)
-        readonly property bool isCropTarget: control.editModeActive && (viewport.slot === (control.editSourceSlot >= 0 ? control.editSourceSlot : control.editDisplayedSlot())) && (control.editTool === "crop" || control.editTool === "mosaic")
+        readonly property bool isCropTarget: control.editModeActive && (viewport.slot === (control.editSourceSlot >= 0 ? control.editSourceSlot : control.editDisplayedSlot())) && (control.editTool === "crop" || control.editTool === "mosaic" || control.editTool === "smart_select")
         // Annotation drag gesture (select tool) and the text-click guard.
         property bool annotationDragActive: false
 
@@ -1674,7 +1679,7 @@ Rectangle {
                         Text {
                             id: applyText
                             anchors.centerIn: parent
-                            text: control.editTool === "mosaic" ? qsTr("应用马赛克") : qsTr("应用裁剪")
+                            text: control.editTool === "mosaic" ? qsTr("应用马赛克") : (control.editTool === "smart_select" ? qsTr("智能抠出目标") : qsTr("应用裁剪"))
                             color: Theme.inverseText
                             font.pixelSize: 11
                             font.weight: Font.DemiBold
@@ -1701,7 +1706,7 @@ Rectangle {
                 if (viewport.dragActive)
                     return Qt.ClosedHandCursor;
                 if (control.editModeActive) {
-                    if (control.editTool === "brush" || control.editTool === "crop")
+                    if (control.editTool === "brush" || control.editTool === "crop" || control.editTool === "smart_select")
                         return Qt.CrossCursor;
                 }
                 return Qt.ArrowCursor;
@@ -1738,7 +1743,7 @@ Rectangle {
                             control.imageReview.panBy(dx, dy);
                             viewport.dragStart = Qt.point(mouse.x, mouse.y);
                         }
-                    } else if (control.editModeActive && (mouse.buttons & Qt.LeftButton) && !(mouse.modifiers & Qt.ShiftModifier) && !viewport.cropActive && (control.editTool === "crop" || control.editTool === "mosaic")) {
+                    } else if (control.editModeActive && (mouse.buttons & Qt.LeftButton) && !(mouse.modifiers & Qt.ShiftModifier) && !viewport.cropActive && (control.editTool === "crop" || control.editTool === "mosaic" || control.editTool === "smart_select")) {
                         // Start a new crop rectangle only after dragging past 6 pixels, avoiding accidental destruction of an existing selection
                         if (Math.hypot(mouse.x - viewport.pressStart.x, mouse.y - viewport.pressStart.y) >= 6) {
                             viewport.cropActive = true;
@@ -2369,6 +2374,16 @@ Rectangle {
                             onClicked: control.editTool = "crop"
                         }
                         EditButton {
+                            objectName: "imageEditToolSmartSelectButton"
+                            visible: control.editModeActive
+                            checkable: true
+                            checked: control.editTool === "smart_select"
+                            mirrorsState: true
+                            text: qsTr("智能抠图")
+                            helpText: qsTr("框选目标物体，AI 自动分割轮廓并抠出透明背景。")
+                            onClicked: control.editTool = "smart_select"
+                        }
+                        EditButton {
                             objectName: "imageEditToolBrushButton"
                             visible: control.editModeActive
                             checkable: true
@@ -2805,6 +2820,67 @@ Rectangle {
                                 helpText: qsTr("编辑模式下左键框选区域，中键仍可平移；画笔工具下左键直接涂画。")
                                 onClicked: control.applyCropSelection()
                             }
+                            Text {
+                                objectName: "imageEditSmartSelectHelpText"
+                                visible: control.editTool === "smart_select" && control.cropSelection === null
+                                height: 30
+                                verticalAlignment: Text.AlignVCenter
+                                text: {
+                                    if (!control.imageEdit)
+                                        return "";
+                                    if (!control.imageEdit.smartSegmentAvailable)
+                                        return qsTr("AI 模型未就绪 (将 onnxruntime.dll 与 sam2 模型放入 models 目录后自动使能)");
+                                    return qsTr("在画面上拖拽框选要抠出的目标物体 (支持调整选区与锚点)");
+                                }
+                                color: (control.imageEdit && control.imageEdit.smartSegmentAvailable) ? Theme.mutedText : Theme.warning
+                                font.pixelSize: 11
+                            }
+                            CheckBox {
+                                objectName: "imageEditSmartSelectTightCropCheck"
+                                visible: control.editTool === "smart_select" && control.imageEdit && control.imageEdit.smartSegmentAvailable
+                                text: qsTr("紧凑裁剪")
+                                checked: control.smartSegmentTightCrop
+                                onToggled: control.smartSegmentTightCrop = checked
+                            }
+                            ReviewActionButton {
+                                objectName: "imageEditProbeSmartSelectButton"
+                                visible: control.editTool === "smart_select" && control.imageEdit && !control.imageEdit.smartSegmentAvailable
+                                text: qsTr("检测模型")
+                                implicitHeight: 30
+                                leftPadding: 10
+                                rightPadding: 10
+                                onClicked: {
+                                    if (control.imageEdit)
+                                        control.imageEdit.probeSmartSegment();
+                                }
+                            }
+                            ReviewActionButton {
+                                objectName: "imageEditCancelSmartSelectButton"
+                                visible: control.editTool === "smart_select" && control.cropSelection !== null
+                                text: qsTr("取消选区")
+                                implicitHeight: 30
+                                leftPadding: 10
+                                rightPadding: 10
+                                onClicked: {
+                                    control.cropSelection = null;
+                                    control.forceActiveFocus();
+                                }
+                            }
+                            ReviewActionButton {
+                                objectName: "imageEditApplySmartSelectButton"
+                                visible: control.editTool === "smart_select"
+                                prominent: true
+                                text: control.cropSelection ? qsTr("识别并抠出目标 (%1×%2)").arg(control.cropSelection.width).arg(control.cropSelection.height) : qsTr("识别并抠出目标")
+                                enabled: control.cropSelection !== null && control.imageEdit && control.imageEdit.active && control.imageEdit.smartSegmentAvailable
+                                implicitHeight: 30
+                                leftPadding: 12
+                                rightPadding: 12
+                                helpText: qsTr("使用 SAM 2.1 智能识别选区内的主体轮廓，背景自动转为透明。")
+                                onClicked: {
+                                    control.applyCropSelection();
+                                    control.forceActiveFocus();
+                                }
+                            }
                             ReviewActionButton {
                                 objectName: "imageEditDeleteAnnotationButton"
                                 visible: control.editTool === "select"
@@ -2921,7 +2997,7 @@ Rectangle {
         } else if ((event.key === Qt.Key_Delete || event.key === Qt.Key_Backspace) && control.editModeActive && control.imageEdit && control.imageEdit.selectedAnnotation >= 0) {
             control.imageEdit.deleteSelectedAnnotation();
             event.accepted = true;
-        } else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && control.editModeActive && control.cropSelection !== null && (control.editTool === "crop" || control.editTool === "mosaic")) {
+        } else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && control.editModeActive && control.cropSelection !== null && (control.editTool === "crop" || control.editTool === "mosaic" || control.editTool === "smart_select")) {
             control.applyCropSelection();
             event.accepted = true;
         } else if (event.key === Qt.Key_Escape && control.editModeActive && control.cropSelection !== null) {

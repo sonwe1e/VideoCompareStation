@@ -52,6 +52,9 @@ class ImageEditController final : public QObject {
     Q_PROPERTY(int annotationCount READ annotationCount NOTIFY annotationsChanged)
     Q_PROPERTY(int selectedAnnotation READ selectedAnnotation NOTIFY annotationsChanged)
     Q_PROPERTY(QString lastStatus READ lastStatus NOTIFY statusChanged)
+    Q_PROPERTY(
+        bool smartSegmentAvailable READ smartSegmentAvailable NOTIFY smartSegmentStateChanged)
+    Q_PROPERTY(QString smartSegmentStatus READ smartSegmentStatus NOTIFY smartSegmentStateChanged)
 public:
     enum class ImageTransform {
         MirrorHorizontal,
@@ -177,12 +180,19 @@ public:
     [[nodiscard]] QImage editedImage() const;
     [[nodiscard]] QImage sourceImage() const;
 
+    // Optional SAM 2.1 AI smart segmentation
+    [[nodiscard]] bool smartSegmentAvailable() const noexcept;
+    [[nodiscard]] QString smartSegmentStatus() const;
+    Q_INVOKABLE bool probeSmartSegment(const QString& explicitDir = QString());
+    Q_INVOKABLE bool smartSegmentRect(int x, int y, int width, int height, bool tightCrop = true);
+
 signals:
     void stateChanged();
     void imageChanged();
     void historyChanged();
     void annotationsChanged();
     void statusChanged();
+    void smartSegmentStateChanged();
 
 private:
     class Impl;

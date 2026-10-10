@@ -74,7 +74,7 @@ function(dvs_add_quality_targets)
     )
     # Vendored third-party sources keep their upstream layout; they are excluded from the
     # formatting gate just like they are from clang-tidy's header filter.
-    list(FILTER cppFormatFiles EXCLUDE REGEX "[/\\\\]third_party[/\\\\]")
+    list(FILTER cppFormatFiles EXCLUDE REGEX "[/\\\\](third_party|onnxruntime)[/\\\\]")
     file(
         GLOB_RECURSE cppLintFiles
         CONFIGURE_DEPENDS

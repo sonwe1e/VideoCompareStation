@@ -64,6 +64,7 @@ if(DVS_BUILD_ADAPTERS)
             include/dvs/ui/Module.h
             include/dvs/ui/RenderAckRelay.h
             include/dvs/ui/ReviewImageProvider.h
+            include/dvs/ui/Sam2Segmenter.h
             include/dvs/ui/StartupMilestone.h
             include/dvs/ui/StartupSplash.h
             src/ComparisonExportController.cpp
@@ -79,6 +80,7 @@ if(DVS_BUILD_ADAPTERS)
             src/Module.cpp
             src/RenderAckRelay.cpp
             src/ReviewImageProvider.cpp
+            src/Sam2Segmenter.cpp
             src/StartupMilestone.cpp
             src/StartupSplash.cpp
     )

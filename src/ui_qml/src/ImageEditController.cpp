@@ -1,5 +1,7 @@
 #include "dvs/ui/ImageEditController.h"
 
+#include "dvs/ui/Sam2Segmenter.h"
+
 #include <QBuffer>
 #include <QColor>
 #include <QDir>
@@ -291,7 +293,6 @@ public:
             return imageBytes(previousImage_);
         }
 
-    private:
         // Translates annotations into the cropped coordinate system and drops the ones left
         // entirely outside; survivors keep their relative position on the kept pixels.
         [[nodiscard]] static std::vector<Annotation> cropped(const std::vector<Annotation>& source,
@@ -310,9 +311,50 @@ public:
             return result;
         }
 
+    private:
         Impl* owner_;
         QRect rect_;
         QImage previousImage_;
+        std::vector<Annotation> previous_;
+        std::vector<Annotation> next_;
+    };
+
+    class SmartCutoutCommand final : public BufferRetainingCommand {
+    public:
+        SmartCutoutCommand(Impl* owner,
+                           QImage nextImage,
+                           const QRect cropRect,
+                           const bool tightCrop)
+            : owner_(owner), previousImage_(owner->working), nextImage_(std::move(nextImage)),
+              previous_(owner->annotations) {
+            setText(ImageEditController::tr("智能抠图"));
+            if (tightCrop && cropRect.isValid()) {
+                next_ = CropCommand::cropped(previous_, cropRect);
+            } else {
+                next_ = previous_;
+            }
+        }
+
+        void undo() override {
+            owner_->working = previousImage_;
+            owner_->annotations = previous_;
+            owner_->selectedAnnotation = -1;
+        }
+
+        void redo() override {
+            owner_->working = nextImage_;
+            owner_->annotations = next_;
+            owner_->selectedAnnotation = -1;
+        }
+
+        [[nodiscard]] qint64 retainedBytes() const noexcept override {
+            return imageBytes(previousImage_) + imageBytes(nextImage_);
+        }
+
+    private:
+        Impl* owner_;
+        QImage previousImage_;
+        QImage nextImage_;
         std::vector<Annotation> previous_;
         std::vector<Annotation> next_;
     };
@@ -680,6 +722,8 @@ public:
     QPoint dragOriginalTo;
     QPoint dragAppliedDelta;
     QElapsedTimer annotationPreviewClock;
+    Sam2Segmenter segmenter;
+    qint64 segmenterEncodedCacheKey = 0;
 
     [[nodiscard]] bool canAddAnnotation() const {
         return annotations.size() < static_cast<std::size_t>(kMaximumAnnotations);
@@ -1019,6 +1063,11 @@ bool ImageEditController::beginSession(const int slot,
     impl_->history.setClean();
     impl_->rebuildComposite();
     ++impl_->revision;
+    impl_->segmenterEncodedCacheKey = 0;
+    if (!impl_->segmenter.isAvailable()) {
+        static_cast<void>(impl_->segmenter.probe());
+    }
+    emit smartSegmentStateChanged();
     emit stateChanged();
     emit imageChanged();
     emit annotationsChanged();
@@ -1031,6 +1080,8 @@ void ImageEditController::endSession() {
     if (impl_->slot < 0 && impl_->working.isNull()) {
         return;
     }
+    impl_->segmenter.clearCache();
+    impl_->segmenterEncodedCacheKey = 0;
     impl_->history.clear();
     impl_->history.setDepthLimit(impl_->sessionHistoryLimit);
     impl_->original = QImage();
@@ -1774,6 +1825,78 @@ void ImageEditController::setStatus(QString text) {
     }
     impl_->status = std::move(text);
     emit statusChanged();
+}
+
+bool ImageEditController::smartSegmentAvailable() const noexcept {
+    return impl_->segmenter.isAvailable();
+}
+
+QString ImageEditController::smartSegmentStatus() const {
+    return impl_->segmenter.statusMessage();
+}
+
+bool ImageEditController::probeSmartSegment(const QString& explicitDir) {
+    const bool available = impl_->segmenter.probe(explicitDir);
+    emit smartSegmentStateChanged();
+    return available;
+}
+
+bool ImageEditController::smartSegmentRect(
+    const int x, const int y, const int width, const int height, const bool tightCrop) {
+    if (!active()) {
+        setStatus(tr("没有正在编辑的图片。"));
+        return false;
+    }
+    if (!impl_->segmenter.isAvailable()) {
+        const bool probed = impl_->segmenter.probe();
+        emit smartSegmentStateChanged();
+        if (!probed) {
+            setStatus(tr("AI 抠图模型未就绪，请将 onnxruntime.dll 及 sam2 模型放入 models 目录。"));
+            return false;
+        }
+    }
+    if (width <= 0 || height <= 0) {
+        setStatus(tr("选区无效。"));
+        return false;
+    }
+    const QRect wanted{x, y, width, height};
+    const QRect bounded =
+        wanted.intersected(QRect{0, 0, impl_->working.width(), impl_->working.height()});
+    if (bounded.isEmpty()) {
+        setStatus(tr("选区超出图片范围。"));
+        return false;
+    }
+
+    if (impl_->working.cacheKey() != impl_->segmenterEncodedCacheKey) {
+        setStatus(tr("正在进行特征编码..."));
+        if (!impl_->segmenter.encodeImage(impl_->working)) {
+            setStatus(impl_->segmenter.statusMessage());
+            return false;
+        }
+        impl_->segmenterEncodedCacheKey = impl_->working.cacheKey();
+    }
+
+    setStatus(tr("正在分割目标..."));
+    const QImage mask = impl_->segmenter.segmentBox(bounded);
+    if (mask.isNull()) {
+        setStatus(tr("智能抠图失败: 未能生成有效分割。"));
+        return false;
+    }
+
+    QRect cutoutBbox;
+    QImage cutout = Sam2Segmenter::applyCutout(impl_->working, mask, tightCrop, &cutoutBbox);
+    if (cutout.isNull()) {
+        setStatus(tr("智能抠图失败: 目标为空。"));
+        return false;
+    }
+
+    impl_->pushStep(std::make_unique<Impl::SmartCutoutCommand>(
+        impl_.get(), std::move(cutout), cutoutBbox, tightCrop));
+    setStatus(tr("已完成智能抠图%1")
+                  .arg(tightCrop && cutoutBbox.isValid()
+                           ? tr("，尺寸为 %1×%2").arg(cutoutBbox.width()).arg(cutoutBbox.height())
+                           : QString()));
+    return true;
 }
 
 } // namespace dvs::ui
