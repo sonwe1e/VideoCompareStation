@@ -865,16 +865,17 @@ SurfaceRect aspectFitRect(const SurfaceRect& bounds,
         bounds, static_cast<float>(sourceWidth), static_cast<float>(sourceHeight));
 }
 
-SurfacePresentationGeometry computeSurfacePresentationGeometry(
-    const SurfaceViewMode viewMode,
-    const float logicalWidth,
-    const float logicalHeight,
-    const std::uint32_t pixelWidth,
-    const std::uint32_t pixelHeight,
-    const std::uint8_t referenceSlot,
-    const SurfaceDifferenceEdge differenceEdge,
-    const float wipePosition,
-    const std::array<SurfaceDisplayExtent, 3U>& sourceDisplayExtents) noexcept {
+SurfacePresentationGeometry
+computeSurfacePresentationGeometry(const SurfaceViewMode viewMode,
+                                   const float logicalWidth,
+                                   const float logicalHeight,
+                                   const std::uint32_t pixelWidth,
+                                   const std::uint32_t pixelHeight,
+                                   const std::uint8_t referenceSlot,
+                                   const SurfaceDifferenceEdge differenceEdge,
+                                   const float wipePosition,
+                                   const std::array<SurfaceDisplayExtent, 3U>& sourceDisplayExtents,
+                                   const bool differenceSuppressed) noexcept {
     SurfacePresentationGeometry result;
     result.panels = computeSurfacePanelLayout(viewMode,
                                               logicalWidth,
@@ -910,7 +911,9 @@ SurfacePresentationGeometry computeSurfacePresentationGeometry(
             result.sourceContentRects[1U] = *result.wipeContentRect;
         }
     } else if (result.panels.differenceRect.has_value()) {
-        result.differenceContentRect = fitted(*result.panels.differenceRect, firstDifferenceSlot);
+        const std::uint8_t displayedSlot =
+            differenceSuppressed ? referenceSlot : firstDifferenceSlot;
+        result.differenceContentRect = fitted(*result.panels.differenceRect, displayedSlot);
     }
     return result;
 }
@@ -1121,87 +1124,124 @@ public:
         return acknowledge(publication, *publication.set);
     }
 
-    [[nodiscard]] SourcePixelProbe probeSourcePixel(const std::uint8_t slot,
-                                                    const double normalizedX,
-                                                    const double normalizedY) noexcept {
-        SourcePixelProbe result;
-        result.slot = slot;
-        if (!std::isfinite(normalizedX) || !std::isfinite(normalizedY) || normalizedX < 0.0 ||
-            normalizedX >= 1.0 || normalizedY < 0.0 || normalizedY >= 1.0) {
-            result.reason = SourcePixelProbe::Reason::OutOfRange;
-            return result;
+    // The frame set that is actually on screen: the retained front publication, which render()
+    // keeps repainting while a mailbox clear or presentation-acknowledgement backpressure holds a
+    // newer publication back. Nothing else qualifies - a publication the display path has not
+    // admitted is not what the user is looking at, and resolving through the mailbox would also
+    // cost a device lease on every frame of an empty session.
+    [[nodiscard]] std::shared_ptr<const GpuFrameSet> presentedSet() const {
+        if (frontPublication_.has_value() && frontPublication_->set != nullptr) {
+            return frontPublication_->set;
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] PresentedFrameIdentity presentedFrameIdentity() const noexcept {
+        PresentedFrameIdentity identity;
+        const std::shared_ptr<const GpuFrameSet> set = presentedSet();
+        if (set == nullptr) {
+            return identity;
+        }
+        identity.valid = true;
+        identity.frameId = set->frameId().value();
+        identity.sessionEpoch = set->context().playback.request.sessionEpoch.value();
+        identity.playbackGeneration = set->context().playback.playbackGeneration.value();
+        return identity;
+    }
+
+    [[nodiscard]] std::vector<SourcePixelProbe>
+    probeSourcePixels(const std::vector<SourcePixelProbeRequest>& requests) noexcept {
+        std::vector<SourcePixelProbe> results;
+        results.reserve(requests.size());
+        if (requests.empty()) {
+            return results;
+        }
+        // Resolve the set once per batch so A/B/C of one cursor position can never describe two
+        // different frames, then lease once for the whole batch.
+        // A retry may contain only the busy slots. Keep the original set until the caller
+        // completes/cancels the batch; drawing a newer set must not change its answers.
+        const bool continuesBatch =
+            pixelProbeBatchSet_ &&
+            std::all_of(requests.begin(), requests.end(), [this](const auto& request) {
+                return std::any_of(pixelProbeBatchRequests_.begin(),
+                                   pixelProbeBatchRequests_.end(),
+                                   [&request](const auto& original) {
+                                       return request.slot == original.slot &&
+                                              request.requestId == original.requestId &&
+                                              request.normalizedX == original.normalizedX &&
+                                              request.normalizedY == original.normalizedY;
+                                   });
+            });
+        if (!continuesBatch) {
+            cancelSourcePixelProbes();
+            pixelProbeBatchSet_ = presentedSet();
+            pixelProbeBatchRequests_ = requests;
+        }
+        const std::shared_ptr<const GpuFrameSet> set = pixelProbeBatchSet_;
+        if (set == nullptr) {
+            for (const SourcePixelProbeRequest& request : requests) {
+                SourcePixelProbe result;
+                result.slot = request.slot;
+                result.requestId = request.requestId;
+                result.reason = SourcePixelProbe::Reason::NoFrame;
+                results.push_back(result);
+            }
+            return results;
         }
         const GraphicsDeviceLeaseResult leaseResult = deviceBroker_->tryLease();
         if (leaseResult.status != GraphicsDeviceLeaseStatus::Available ||
             !leaseResult.lease.has_value()) {
-            result.reason = SourcePixelProbe::Reason::DeviceBusy;
-            return result;
+            for (const SourcePixelProbeRequest& request : requests) {
+                SourcePixelProbe result;
+                result.slot = request.slot;
+                result.requestId = request.requestId;
+                result.identityValid = true;
+                result.frameId = set->frameId().value();
+                result.sessionEpoch = set->context().playback.request.sessionEpoch.value();
+                result.playbackGeneration = set->context().playback.playbackGeneration.value();
+                result.reason = SourcePixelProbe::Reason::DeviceBusy;
+                results.push_back(result);
+            }
+            return results;
         }
         const GraphicsDeviceLease& lease = *leaseResult.lease;
+        probeCopiesIssued_ = false;
+        for (const SourcePixelProbeRequest& request : requests) {
+            results.push_back(
+                probeSlot(set, request, lease.device.Get(), lease.immediateContext.Get()));
+        }
+        if (probeCopiesIssued_) {
+            // Submit the tiny copy batch even when Qt parks a paused window. Flush submits GPU
+            // work asynchronously; completion is checked on a later pass with DO_NOT_WAIT.
+            lease.immediateContext->Flush();
+        }
+        return results;
+    }
 
-        // Resolve the set exactly as render() prioritizes it: the mailbox front publication,
-        // else the retained front pair (still what is on screen after a mailbox clear).
-        std::shared_ptr<const GpuFrameSet> set;
-        const FrameMailboxReadResult read = frameMailbox_->tryLatest(lease.deviceGeneration);
-        if (read.status == FrameMailboxReadStatus::Available && read.publication.has_value() &&
-            read.publication->set != nullptr) {
-            set = read.publication->set;
+    [[nodiscard]] SourcePixelProbe probeSourcePixel(const std::uint8_t slot,
+                                                    const double normalizedX,
+                                                    const double normalizedY) noexcept {
+        const std::vector<SourcePixelProbe> probed = probeSourcePixels({SourcePixelProbeRequest{
+            .slot = slot, .normalizedX = normalizedX, .normalizedY = normalizedY}});
+        return probed.empty() ? SourcePixelProbe{} : probed.front();
+    }
+
+    void cancelSourcePixelProbes() noexcept {
+        pixelProbeBatchSet_.reset();
+        pixelProbeBatchRequests_.clear();
+        for (auto& readback : pixelReadbacks_) {
+            readback.set.reset();
+            readback.luma.values.reset();
+            readback.chroma.values.reset();
         }
-        if (set == nullptr && frontPublication_.has_value()) {
-            set = frontPublication_->set;
-        }
-        if (set == nullptr) {
-            result.reason = SourcePixelProbe::Reason::NoFrame;
-            return result;
-        }
-        const GpuFrameSlot* const slotEntry = set->find(domain::SourceId{slot});
-        if (slotEntry == nullptr || slotEntry->frame == nullptr) {
-            result.reason = SourcePixelProbe::Reason::MissingSlot;
-            return result;
-        }
-        const auto* const backing =
-            dynamic_cast<const D3d11GpuFrameBacking*>(&slotEntry->frame->backing());
-        if (backing == nullptr || backing->yTexture() == nullptr ||
-            backing->uvTexture() == nullptr) {
-            result.reason = SourcePixelProbe::Reason::OutOfRange;
-            return result;
-        }
-        const D3d11PlaneDimensions& dimensions = backing->yDimensions();
-        if (dimensions.width == 0U || dimensions.height == 0U) {
-            result.reason = SourcePixelProbe::Reason::OutOfRange;
-            return result;
-        }
-        const auto pixelX = static_cast<std::uint32_t>(
-            std::clamp(std::floor(normalizedX * static_cast<double>(dimensions.width)),
-                       0.0,
-                       static_cast<double>(dimensions.width - 1U)));
-        const auto pixelY = static_cast<std::uint32_t>(
-            std::clamp(std::floor(normalizedY * static_cast<double>(dimensions.height)),
-                       0.0,
-                       static_cast<double>(dimensions.height - 1U)));
-        const std::optional<D3d11SourcePixel> probed =
-            backing->probePixel(lease.device.Get(), lease.immediateContext.Get(), pixelX, pixelY);
-        if (!probed.has_value()) {
-            result.reason = SourcePixelProbe::Reason::OutOfRange;
-            return result;
-        }
-        result.x = pixelX;
-        result.y = pixelY;
-        result.luma = probed->y;
-        result.cb = probed->cb;
-        result.cr = probed->cr;
-        result.bitDepth = probed->bitDepth;
-        result.frameId = set->frameId().value();
-        result.sessionEpoch = set->context().playback.request.sessionEpoch.value();
-        result.playbackGeneration = set->context().playback.playbackGeneration.value();
-        result.available = true;
-        return result;
     }
 
     void releaseResources() noexcept {
         // Drop the front publication before the device objects so its deferred-retirement
         // deleters can observe a still-valid broker/device generation during teardown.
         frontPublication_.reset();
+        cancelSourcePixelProbes();
+        pixelReadbacks_ = {};
         differenceColorBufferB_.Reset();
         differenceColorBufferA_.Reset();
         colorBufferC_.Reset();
@@ -1231,6 +1271,179 @@ public:
     }
 
 private:
+    // One slot of an already resolved batch: reads the texel and stamps the identity of the set
+    // the whole batch was resolved against.
+    [[nodiscard]] SourcePixelProbe probeSlot(const std::shared_ptr<const GpuFrameSet>& set,
+                                             const SourcePixelProbeRequest& request,
+                                             ID3D11Device* const device,
+                                             ID3D11DeviceContext* const context) noexcept {
+        SourcePixelProbe result;
+        result.slot = request.slot;
+        result.requestId = request.requestId;
+        result.identityValid = true;
+        result.frameId = set->frameId().value();
+        result.sessionEpoch = set->context().playback.request.sessionEpoch.value();
+        result.playbackGeneration = set->context().playback.playbackGeneration.value();
+        if (request.slot >= pixelReadbacks_.size()) {
+            result.reason = SourcePixelProbe::Reason::MissingSlot;
+            return result;
+        }
+        if (!std::isfinite(request.normalizedX) || !std::isfinite(request.normalizedY) ||
+            request.normalizedX < 0.0 || request.normalizedX >= 1.0 || request.normalizedY < 0.0 ||
+            request.normalizedY >= 1.0) {
+            result.reason = SourcePixelProbe::Reason::OutOfRange;
+            return result;
+        }
+        const GpuFrameSlot* const slotEntry = set->find(domain::SourceId{request.slot});
+        if (slotEntry == nullptr || slotEntry->frame == nullptr) {
+            result.reason = SourcePixelProbe::Reason::MissingSlot;
+            return result;
+        }
+        const auto* const backing =
+            dynamic_cast<const D3d11GpuFrameBacking*>(&slotEntry->frame->backing());
+        if (backing == nullptr || backing->yTexture() == nullptr ||
+            backing->uvTexture() == nullptr) {
+            result.reason = SourcePixelProbe::Reason::OutOfRange;
+            return result;
+        }
+        const D3d11PlaneDimensions& dimensions = backing->yDimensions();
+        if (dimensions.width == 0U || dimensions.height == 0U) {
+            result.reason = SourcePixelProbe::Reason::OutOfRange;
+            return result;
+        }
+        const auto pixelX = static_cast<std::uint32_t>(
+            std::clamp(std::floor(request.normalizedX * static_cast<double>(dimensions.width)),
+                       0.0,
+                       static_cast<double>(dimensions.width - 1U)));
+        const auto pixelY = static_cast<std::uint32_t>(
+            std::clamp(std::floor(request.normalizedY * static_cast<double>(dimensions.height)),
+                       0.0,
+                       static_cast<double>(dimensions.height - 1U)));
+        result.x = pixelX;
+        result.y = pixelY;
+        PixelReadback& readback = pixelReadbacks_[request.slot];
+        if (!readback.set || readback.set != set || readback.result.requestId != result.requestId ||
+            readback.result.x != pixelX || readback.result.y != pixelY) {
+            readback.set = set;
+            readback.result = result;
+            readback.luma.values.reset();
+            readback.chroma.values.reset();
+            if (!copyProbePlane(
+                    device, context, backing->yTexture(), pixelX, pixelY, readback.luma) ||
+                !copyProbePlane(device,
+                                context,
+                                backing->uvTexture(),
+                                pixelX >> 1U,
+                                pixelY >> 1U,
+                                readback.chroma)) {
+                readback.set.reset();
+                result.reason = SourcePixelProbe::Reason::ReadbackFailed;
+                return result;
+            }
+            probeCopiesIssued_ = true;
+        }
+        const HRESULT lumaStatus = pollProbePlane(context, readback.luma);
+        const HRESULT chromaStatus = pollProbePlane(context, readback.chroma);
+        if (lumaStatus == DXGI_ERROR_WAS_STILL_DRAWING ||
+            chromaStatus == DXGI_ERROR_WAS_STILL_DRAWING) {
+            result.reason = SourcePixelProbe::Reason::DeviceBusy;
+            return result;
+        }
+        if (FAILED(lumaStatus) || FAILED(chromaStatus)) {
+            readback.set.reset();
+            result.reason = SourcePixelProbe::Reason::ReadbackFailed;
+            return result;
+        }
+        result.luma = (*readback.luma.values)[0];
+        result.cb = (*readback.chroma.values)[0];
+        result.cr = (*readback.chroma.values)[1];
+        result.bitDepth = readback.luma.format == DXGI_FORMAT_R8_UNORM ? 8U : 10U;
+        result.available = true;
+        readback.set.reset();
+        return result;
+    }
+
+    struct ProbePlane final {
+        ComPtr<ID3D11Texture2D> staging;
+        DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+        std::optional<std::array<std::uint32_t, 2U>> values;
+    };
+
+    struct PixelReadback final {
+        ProbePlane luma;
+        ProbePlane chroma;
+        std::shared_ptr<const GpuFrameSet> set;
+        SourcePixelProbe result;
+    };
+
+    // Six 1x1 staging resources at most, reused across cursor positions. Copies are issued once
+    // per request; subsequent render passes only poll with DO_NOT_WAIT and never stall the GPU.
+    [[nodiscard]] static bool copyProbePlane(ID3D11Device* device,
+                                             ID3D11DeviceContext* context,
+                                             ID3D11Texture2D* source,
+                                             std::uint32_t x,
+                                             std::uint32_t y,
+                                             ProbePlane& plane) {
+        D3D11_TEXTURE2D_DESC sourceDescription{};
+        source->GetDesc(&sourceDescription);
+        const auto format = sourceDescription.Format;
+        if (x >= sourceDescription.Width || y >= sourceDescription.Height ||
+            (format != DXGI_FORMAT_R8_UNORM && format != DXGI_FORMAT_R8G8_UNORM &&
+             format != DXGI_FORMAT_R16_UNORM && format != DXGI_FORMAT_R16G16_UNORM)) {
+            return false;
+        }
+        if (!plane.staging || plane.format != format) {
+            plane.staging.Reset();
+            D3D11_TEXTURE2D_DESC description{};
+            description.Width = 1U;
+            description.Height = 1U;
+            description.MipLevels = 1U;
+            description.ArraySize = 1U;
+            description.Format = format;
+            description.SampleDesc.Count = 1U;
+            description.Usage = D3D11_USAGE_STAGING;
+            description.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            if (FAILED(
+                    device->CreateTexture2D(&description, nullptr, plane.staging.GetAddressOf()))) {
+                return false;
+            }
+            plane.format = format;
+        }
+        const D3D11_BOX region{x, y, 0U, x + 1U, y + 1U, 1U};
+        context->CopySubresourceRegion(plane.staging.Get(), 0U, 0U, 0U, 0U, source, 0U, &region);
+        return true;
+    }
+
+    [[nodiscard]] static HRESULT pollProbePlane(ID3D11DeviceContext* context, ProbePlane& plane) {
+        if (plane.values.has_value()) {
+            return S_OK;
+        }
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        const HRESULT status = context->Map(
+            plane.staging.Get(), 0U, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped);
+        if (FAILED(status)) {
+            return status;
+        }
+        std::array<std::uint32_t, 2U> values{};
+        if (plane.format == DXGI_FORMAT_R8_UNORM || plane.format == DXGI_FORMAT_R8G8_UNORM) {
+            const auto* const bytes = static_cast<const std::uint8_t*>(mapped.pData);
+            values = {bytes[0], plane.format == DXGI_FORMAT_R8G8_UNORM ? bytes[1] : bytes[0]};
+        } else {
+            const auto* const words = static_cast<const std::uint16_t*>(mapped.pData);
+            values = {static_cast<std::uint32_t>(words[0] >> 6),
+                      static_cast<std::uint32_t>(
+                          (plane.format == DXGI_FORMAT_R16G16_UNORM ? words[1] : words[0]) >> 6)};
+        }
+        context->Unmap(plane.staging.Get(), 0U);
+        plane.values = values;
+        return S_OK;
+    }
+
+    std::array<PixelReadback, 3U> pixelReadbacks_;
+    std::shared_ptr<const GpuFrameSet> pixelProbeBatchSet_;
+    std::vector<SourcePixelProbeRequest> pixelProbeBatchRequests_;
+    bool probeCopiesIssued_ = false;
+
     [[nodiscard]] bool ensureDeviceResources(const GraphicsDeviceLease& lease) noexcept {
         if (device_ && device_.Get() == lease.device.Get() &&
             deviceGeneration_ == lease.deviceGeneration) {
@@ -1580,12 +1793,41 @@ private:
                 }
                 return true;
             }
-            // Hold-to-peek: while suppressed the difference pass is replaced by the raw
-            // first source of the pair — same aspect fit and letterboxing the difference
-            // canvas uses — so the user can check the unmodified pixels under the overlay
-            // without leaving the mode or losing the viewport.
+            // Hold-to-peek ("查看参考原图"): the difference pass is replaced by the reference
+            // (GT) source of the session - the same slot the ReferenceFocus layout puts in the
+            // main panel - drawn into the difference canvas with its own aspect fit and
+            // letterboxing. Falling back to the pair's first source would show the candidate
+            // under a label that promises the reference, so an unavailable reference slot draws
+            // nothing instead of the wrong frame.
             if (state.differenceSuppressed) {
-                return appendRegionDraw(bounds, *edgeFirst, *edgeFirstBacking);
+                const GpuFrameResource* peekFrame = nullptr;
+                const D3d11GpuFrameBacking* peekBacking = nullptr;
+                switch (state.referenceSlot) {
+                case 0U:
+                    peekFrame = frameA.get();
+                    peekBacking = backingA;
+                    break;
+                case 1U:
+                    peekFrame = frameB.get();
+                    peekBacking = backingB;
+                    break;
+                case 2U:
+                    peekFrame = frameC.get();
+                    peekBacking = backingC;
+                    break;
+                default:
+                    break;
+                }
+                if (peekFrame != nullptr && peekBacking != nullptr &&
+                    backingUsable(peekFrame, peekBacking)) {
+                    return appendRegionDraw(bounds, *peekFrame, *peekBacking);
+                }
+                if (prepared.letterboxBarCount < prepared.letterboxBars.size()) {
+                    prepared.letterboxBars[prepared.letterboxBarCount] =
+                        makeComposeConstants(state, bounds, application::TextureRegion{});
+                    ++prepared.letterboxBarCount;
+                }
+                return true;
             }
             const SurfaceRect destination = contentDestination(bounds, *edgeFirst);
             if (!destination.isValid()) {
@@ -2008,10 +2250,23 @@ ComparisonRenderResult D3d11ComparisonRenderer::render(const SurfaceRenderState&
     return impl_->render(state);
 }
 
+std::vector<SourcePixelProbe> D3d11ComparisonRenderer::probeSourcePixels(
+    const std::vector<SourcePixelProbeRequest>& requests) noexcept {
+    return impl_->probeSourcePixels(requests);
+}
+
 SourcePixelProbe D3d11ComparisonRenderer::probeSourcePixel(const std::uint8_t slot,
                                                            const double normalizedX,
                                                            const double normalizedY) noexcept {
     return impl_->probeSourcePixel(slot, normalizedX, normalizedY);
+}
+
+PresentedFrameIdentity D3d11ComparisonRenderer::presentedFrameIdentity() const noexcept {
+    return impl_->presentedFrameIdentity();
+}
+
+void D3d11ComparisonRenderer::cancelSourcePixelProbes() noexcept {
+    impl_->cancelSourcePixelProbes();
 }
 
 void D3d11ComparisonRenderer::releaseResources() noexcept {

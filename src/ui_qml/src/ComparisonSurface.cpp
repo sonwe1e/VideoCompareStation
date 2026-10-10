@@ -12,6 +12,7 @@
 #include <QMatrix4x4>
 #include <QQuickWindow>
 #include <QSGRenderNode>
+#include <QTimer>
 #include <QVariantMap>
 
 #include <algorithm>
@@ -47,6 +48,11 @@ namespace {
 // nearest only aliases, above it bilinear averages away what is being reviewed.
 constexpr qreal kAutoNearestThresholdPercent = 200.0;
 
+// How many rendered frames a source-pixel probe may wait for a contended device before it is
+// reported as busy instead of staying staged. A readback is on-demand work for one cursor
+// position, not something that may park indefinitely inside the render loop.
+constexpr int kProbeAttemptLimit = 3;
+
 [[nodiscard]] QVariantMap probeResultToMap(const platform::SourcePixelProbe& probe) {
     using Reason = platform::SourcePixelProbe::Reason;
     const char* reason = "none";
@@ -65,9 +71,14 @@ constexpr qreal kAutoNearestThresholdPercent = 200.0;
     case Reason::DeviceBusy:
         reason = "device-busy";
         break;
+    case Reason::ReadbackFailed:
+        reason = "readback-failed";
+        break;
     }
     return QVariantMap{
         {QStringLiteral("valid"), probe.available},
+        {QStringLiteral("requestId"), static_cast<qulonglong>(probe.requestId)},
+        {QStringLiteral("identityValid"), probe.identityValid},
         {QStringLiteral("slot"), probe.slot},
         {QStringLiteral("x"), probe.x},
         {QStringLiteral("y"), probe.y},
@@ -216,7 +227,8 @@ nativeDifferenceFilter(const ComparisonSurface::DifferenceFilter value) noexcept
         static_cast<std::uint8_t>(surface.referenceSlot()),
         nativeDifferenceEdge(surface.differenceEdge()),
         static_cast<float>(surface.wipePosition()),
-        sourceDisplayExtents(surface, roiEnabled, roiExtent));
+        sourceDisplayExtents(surface, roiEnabled, roiExtent),
+        surface.differenceSuppressed());
 }
 
 [[nodiscard]] platform::SurfacePresentationGeometry
@@ -435,14 +447,23 @@ public:
     // replaces that slot's entry.
     void stagePixelProbes(const std::vector<ComparisonSurface::PendingPixelProbe>& requests) {
         stagedProbes_.clear();
+        stagedProbeGeneration_ = surface_.pixelProbeGeneration_;
         stagedProbes_.reserve(requests.size());
         for (const ComparisonSurface::PendingPixelProbe& request : requests) {
             stagedProbes_.push_back(StagedProbe{
                 .slot = static_cast<std::uint8_t>(request.slot),
                 .x = request.normalizedX,
                 .y = request.normalizedY,
+                .requestId = request.requestId,
             });
         }
+    }
+
+    // Scene-graph sync phase (GUI thread): drop the staged batch, e.g. because the readout was
+    // retired and its in-flight readback must not run.
+    void dropStagedProbes() {
+        stagedProbes_.clear();
+        renderer_.cancelSourcePixelProbes();
     }
 
     [[nodiscard]] bool usesServices(
@@ -502,11 +523,32 @@ public:
             .referenceSlot = presentationOptions_.referenceSlot,
         };
         retry_.retryContendedRender(window_, renderer_.render(state));
+        publishPresentedFrameIdentity();
         fulfillPendingPixelProbes();
     }
 
-    // Render thread. DeviceBusy keeps its request staged for the next frame; every other
-    // outcome is final and is delivered through one queued invocation on the surface. The
+    // Render thread. Publishes the identity of the frame set the renderer is presenting so the
+    // readout can tell whether a delivered value still describes the frame on screen. Only a
+    // changed identity costs a queued call, so a parked viewport publishes once and stops.
+    void publishPresentedFrameIdentity() {
+        const platform::PresentedFrameIdentity identity = renderer_.presentedFrameIdentity();
+        if (identity == publishedIdentity_) {
+            return;
+        }
+        publishedIdentity_ = identity;
+        ComparisonSurface* const surface = &surface_;
+        QMetaObject::invokeMethod(
+            surface,
+            [surface, services = services_, identity]() {
+                if (surface->services_ == services) {
+                    surface->setPresentedFrameIdentity(identity);
+                }
+            },
+            Qt::QueuedConnection);
+    }
+
+    // Render thread. DeviceBusy keeps its request staged for a bounded number of frames; every
+    // other outcome is final and is delivered through one queued invocation on the surface. The
     // scene-graph sync barrier guarantees the surface outlives render(), and a queued event
     // posted to an object destroyed before delivery is discarded by Qt, so no Qt state is
     // touched on the render thread.
@@ -514,26 +556,56 @@ public:
         if (stagedProbes_.empty()) {
             return;
         }
-        std::vector<platform::SourcePixelProbe> completed;
-        completed.reserve(stagedProbes_.size());
-        std::vector<StagedProbe> retry;
+        std::vector<platform::SourcePixelProbeRequest> requests;
+        requests.reserve(stagedProbes_.size());
         for (const StagedProbe& staged : stagedProbes_) {
-            const platform::SourcePixelProbe probed =
-                renderer_.probeSourcePixel(staged.slot, staged.x, staged.y);
-            if (probed.reason == platform::SourcePixelProbe::Reason::DeviceBusy) {
+            requests.push_back(platform::SourcePixelProbeRequest{
+                .slot = staged.slot,
+                .normalizedX = staged.x,
+                .normalizedY = staged.y,
+                .requestId = staged.requestId,
+            });
+        }
+        // One batch resolves one frame set, so every slot of a cursor position describes the
+        // same presented frame even if the mailbox advances mid-batch.
+        const std::vector<platform::SourcePixelProbe> probed =
+            renderer_.probeSourcePixels(requests);
+        std::vector<platform::SourcePixelProbe> completed;
+        completed.reserve(probed.size());
+        std::vector<StagedProbe> retry;
+        for (std::size_t index = 0U; index < probed.size() && index < stagedProbes_.size();
+             ++index) {
+            StagedProbe& staged = stagedProbes_[index];
+            if (probed[index].reason == platform::SourcePixelProbe::Reason::DeviceBusy &&
+                staged.attempts < kProbeAttemptLimit) {
+                ++staged.attempts;
                 retry.push_back(staged);
             } else {
-                completed.push_back(probed);
+                completed.push_back(probed[index]);
             }
         }
         stagedProbes_ = std::move(retry);
+        if (!stagedProbes_.empty()) {
+            // Give the submitted copy a completion opportunity without blocking the render
+            // thread or burning all bounded attempts in an immediate update loop.
+            QTimer::singleShot(4, &window_, [target = &window_] { target->update(); });
+        } else {
+            renderer_.cancelSourcePixelProbes();
+        }
         if (completed.empty()) {
             return;
         }
         ComparisonSurface* const surface = &surface_;
         QMetaObject::invokeMethod(
             surface,
-            [surface, payloads = std::move(completed)]() {
+            [surface,
+             services = services_,
+             generation = stagedProbeGeneration_,
+             payloads = std::move(completed)]() {
+                if (surface->services_ != services ||
+                    surface->pixelProbeGeneration_ != generation) {
+                    return;
+                }
                 for (const platform::SourcePixelProbe& probe : payloads) {
                     emit surface->sourcePixelProbed(probeResultToMap(probe));
                 }
@@ -570,8 +642,13 @@ private:
         std::uint8_t slot = 0;
         double x = 0.0;
         double y = 0.0;
+        // DeviceBusy retries, bounded so a contended device cannot park a probe forever.
+        int attempts = 0;
+        std::uint64_t requestId = 0U;
     };
     std::vector<StagedProbe> stagedProbes_;
+    platform::PresentedFrameIdentity publishedIdentity_;
+    qulonglong stagedProbeGeneration_ = 0U;
 };
 
 ComparisonSurface::ComparisonSurface(QQuickItem* const parent) : QQuickItem(parent) {
@@ -771,7 +848,8 @@ qreal ComparisonSurface::wipePositionForLogicalX(const qreal x) const {
 
 void ComparisonSurface::requestSourcePixelProbe(const int slot,
                                                 const qreal normalizedX,
-                                                const qreal normalizedY) {
+                                                const qreal normalizedY,
+                                                const qulonglong requestId) {
     if (slot < 0 || slot > 2 || !std::isfinite(normalizedX) || !std::isfinite(normalizedY)) {
         return;
     }
@@ -782,6 +860,7 @@ void ComparisonSurface::requestSourcePixelProbe(const int slot,
         .slot = slot,
         .normalizedX = std::clamp(normalizedX, 0.0, upperLimit),
         .normalizedY = std::clamp(normalizedY, 0.0, upperLimit),
+        .requestId = requestId,
     };
     for (PendingPixelProbe& pending : pendingPixelProbes_) {
         if (pending.slot == slot) {
@@ -791,6 +870,15 @@ void ComparisonSurface::requestSourcePixelProbe(const int slot,
         }
     }
     pendingPixelProbes_.push_back(request);
+    scheduleProbeSync();
+}
+
+void ComparisonSurface::cancelSourcePixelProbes() {
+    ++pixelProbeGeneration_;
+    pendingPixelProbes_.clear();
+    // The node's staged batch lives on the render thread; the flag is consumed by the next sync,
+    // which is guaranteed to run before the next render() because the request forced an update.
+    pixelProbesCancelled_ = true;
     scheduleProbeSync();
 }
 
@@ -896,7 +984,8 @@ QVariantMap ComparisonSurface::mapSurfacePoint(const qreal x, const qreal y) con
         }
     }
     if (geometry.panels.differenceRect.has_value() && contains(*geometry.panels.differenceRect)) {
-        const int firstDifferenceSlot = differenceEdge_ == Edge1And2 ? 1 : 0;
+        const int firstDifferenceSlot =
+            differenceSuppressed_ ? referenceSlot_ : (differenceEdge_ == Edge1And2 ? 1 : 0);
         return hit(
             DifferenceRegion,
             static_cast<int>(geometry.panels.sourceCount),
@@ -1274,6 +1363,8 @@ bool ComparisonSurface::attachRendererServices(
                                            std::move(activitySink));
     droppedFrameProbe_ = std::move(droppedFrameProbe);
     droppedFrames_ = 0U;
+    presentedFrameIdentity_ = {};
+    emit presentedFrameIdentityChanged();
     update();
     return true;
 }
@@ -1281,6 +1372,9 @@ bool ComparisonSurface::attachRendererServices(
 void ComparisonSurface::detachRendererServices() noexcept {
     services_.reset();
     droppedFrameProbe_ = {};
+    droppedFrames_ = 0U;
+    presentedFrameIdentity_ = {};
+    emit presentedFrameIdentityChanged();
     update();
 }
 
@@ -1290,6 +1384,42 @@ bool ComparisonSurface::hasRendererServices() const noexcept {
 
 qulonglong ComparisonSurface::droppedFrames() const noexcept {
     return droppedFrames_;
+}
+
+bool ComparisonSurface::presentedFrameValid() const noexcept {
+    return presentedFrameIdentity_.valid;
+}
+
+qulonglong ComparisonSurface::presentedFrameId() const noexcept {
+    return static_cast<qulonglong>(presentedFrameIdentity_.frameId);
+}
+
+qulonglong ComparisonSurface::presentedSessionEpoch() const noexcept {
+    return static_cast<qulonglong>(presentedFrameIdentity_.sessionEpoch);
+}
+
+qulonglong ComparisonSurface::presentedPlaybackGeneration() const noexcept {
+    return static_cast<qulonglong>(presentedFrameIdentity_.playbackGeneration);
+}
+
+void ComparisonSurface::setPresentedFrameIdentity(const platform::PresentedFrameIdentity identity) {
+    if (presentedFrameIdentity_ == identity) {
+        return;
+    }
+    presentedFrameIdentity_ = identity;
+    emit presentedFrameIdentityChanged();
+}
+
+void ComparisonSurface::publishPresentedFrameIdentity(const bool valid,
+                                                      const qulonglong frameId,
+                                                      const qulonglong sessionEpoch,
+                                                      const qulonglong playbackGeneration) {
+    setPresentedFrameIdentity(platform::PresentedFrameIdentity{
+        .valid = valid,
+        .frameId = static_cast<std::uint64_t>(frameId),
+        .sessionEpoch = static_cast<std::uint64_t>(sessionEpoch),
+        .playbackGeneration = static_cast<std::uint64_t>(playbackGeneration),
+    });
 }
 
 QSGNode* ComparisonSurface::updatePaintNode(QSGNode* const oldNode, UpdatePaintNodeData*) {
@@ -1319,6 +1449,10 @@ QSGNode* ComparisonSurface::updatePaintNode(QSGNode* const oldNode, UpdatePaintN
 
     node->synchronize(
         boundingRect(), itemWindow->effectiveDevicePixelRatio(), presentationOptions(*this));
+    if (pixelProbesCancelled_) {
+        node->dropStagedProbes();
+        pixelProbesCancelled_ = false;
+    }
     if (!pendingPixelProbes_.empty()) {
         node->stagePixelProbes(pendingPixelProbes_);
         pendingPixelProbes_.clear();

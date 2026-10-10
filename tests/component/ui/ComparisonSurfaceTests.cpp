@@ -798,6 +798,29 @@ TEST(ComparisonSurfaceGeometryTests, RejectsLetterboxAndMapsAnalysisDifferenceCo
     EXPECT_DOUBLE_EQ(difference.value(QStringLiteral("normalizedY")).toDouble(), 0.5);
 }
 
+TEST(ComparisonSurfaceGeometryTests, MapsReferencePeekUsingTheReferenceAspectAndRotation) {
+    ComparisonSurface surface;
+    surface.setWidth(800.0);
+    surface.setHeight(600.0);
+    surface.setSourceDisplayInfo(
+        {QVariantMap{{QStringLiteral("width"), 1600}, {QStringLiteral("height"), 900}},
+         QVariantMap{{QStringLiteral("width"), 1600}, {QStringLiteral("height"), 900}},
+         QVariantMap{{QStringLiteral("width"), 600},
+                     {QStringLiteral("height"), 1200},
+                     {QStringLiteral("rotationDegrees"), 90}}});
+    surface.setViewMode(ComparisonSurface::Difference);
+    surface.setDifferenceEdge(ComparisonSurface::Edge0And1);
+    surface.setReferenceSlot(2);
+    surface.setDifferenceSuppressed(true);
+
+    // The rotated GT fits to 800x400 at y=100; the candidate would fit to 800x450 at y=75.
+    EXPECT_FALSE(
+        surface.mapSurfacePoint(200.0, 90.0).value(QStringLiteral("insideContent")).toBool());
+    const QVariantMap point = surface.mapSurfacePoint(200.0, 200.0);
+    EXPECT_NEAR(point.value(QStringLiteral("sourceX")).toDouble(), 0.75, 0.0001);
+    EXPECT_NEAR(point.value(QStringLiteral("sourceY")).toDouble(), 0.25, 0.0001);
+}
+
 TEST(ComparisonSurfaceGeometryTests, MapsRotatedRoiAndZoomPointsBackToSourceCoordinates) {
     ComparisonSurface surface;
     surface.setWidth(800.0);
@@ -2505,6 +2528,64 @@ TEST(ComparisonSurfaceWarpTests, RendersThreeSourcesAndSelectedDiffInOneAnalysis
     EXPECT_TRUE(actor.shutdown(2s));
 }
 
+// Hold-to-peek ("查看参考原图") replaces the difference pass with the reference (GT) source of the
+// session - the same slot ReferenceFocus puts in the main panel. The three solid sources have
+// distinct luma, so the peek must brighten as the reference slot moves 0 -> 1 -> 2. Showing the
+// pair's first source instead (the earlier behaviour) would render the same pixels for all three.
+TEST(ComparisonSurfaceWarpTests, SuppressedDifferenceShowsTheReferenceSlotNotThePairsFirstSource) {
+    SurfaceWarpHarness harness;
+    harness.surface.setViewMode(ComparisonSurface::Difference);
+    harness.surface.setDifferenceEdge(ComparisonSurface::Edge0And1);
+    ASSERT_TRUE(harness.start());
+
+    auto budget = std::make_shared<platform::FrameBudget>(16U * 1024U * 1024U);
+    platform::GpuTransferActor actor{budget, harness.broker, harness.mailbox, harness.activitySink};
+    std::optional<application::FrameSet> set =
+        makeThreeSolidSet(*budget, domain::FrameId{43}, {32U, 96U, 224U});
+    ASSERT_TRUE(set.has_value());
+    ASSERT_EQ(actor.submit(makeContext(43U), std::move(*set)),
+              platform::GpuTransferSubmitResult::Accepted);
+    ASSERT_TRUE(actor.waitUntilIdle(5s));
+
+    const auto peekLuma = [&harness](const int referenceSlot) {
+        harness.surface.setReferenceSlot(referenceSlot);
+        harness.surface.setDifferenceSuppressed(true);
+        const QImage image = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+        EXPECT_FALSE(image.isNull());
+        if (image.isNull()) {
+            return 0;
+        }
+        const QColor center = image.pixelColor(image.width() / 2, image.height() / 2);
+        return center.red() + center.green() + center.blue();
+    };
+
+    // The unsuppressed difference pass, captured before any peek, so the release can be checked
+    // against it rather than against an assumed brightness.
+    harness.surface.setDifferenceSuppressed(false);
+    const QImage differenceBefore = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+    ASSERT_FALSE(differenceBefore.isNull());
+
+    const int firstSlot = peekLuma(0);
+    const int referenceSlot = peekLuma(1);
+    const int thirdSlot = peekLuma(2);
+    EXPECT_LT(firstSlot, referenceSlot);
+    EXPECT_LT(referenceSlot, thirdSlot);
+
+    // Releasing the peek restores the difference pass instead of staying on the raw source.
+    harness.surface.setDifferenceSuppressed(false);
+    const QImage differenceAfter = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+    ASSERT_FALSE(differenceAfter.isNull());
+    const QColor center =
+        differenceAfter.pixelColor(differenceAfter.width() / 2, differenceAfter.height() / 2);
+    expectColorNear(
+        center,
+        differenceBefore.pixelColor(differenceBefore.width() / 2, differenceBefore.height() / 2),
+        2);
+
+    harness.releaseRenderer();
+    EXPECT_TRUE(actor.shutdown(2s));
+}
+
 TEST(ComparisonSurfaceWarpTests, SingleViewUsesTheWholeSurfaceForItsOnlySource) {
     SurfaceWarpHarness harness;
     harness.surface.setViewMode(ComparisonSurface::Single);
@@ -3191,6 +3272,14 @@ TEST(ComparisonSurfaceWarpTests, AcknowledgesOnlyTheLatestReplacementAndRetriesA
               90);
     EXPECT_EQ(harness.activitySink->acknowledgementNotifications.load(std::memory_order_relaxed),
               0U);
+    std::vector<QVariantMap> probes;
+    QObject::connect(&harness.surface,
+                     &ComparisonSurface::sourcePixelProbed,
+                     [&probes](const QVariantMap& result) { probes.push_back(result); });
+    harness.surface.requestSourcePixelProbe(0, 0.5, 0.5, 100U);
+    ASSERT_TRUE(waitUntil([&probes] { return !probes.empty(); }, 5s));
+    EXPECT_EQ(probes.front().value(QStringLiteral("frameId")).toULongLong(), 10U);
+    EXPECT_EQ(probes.front().value(QStringLiteral("luma")).toUInt(), 64U);
     const std::optional<application::FrameSetPresented> dummyA =
         harness.acknowledgementMailbox->tryPop();
     ASSERT_TRUE(dummyA.has_value());
@@ -3309,8 +3398,121 @@ TEST(ComparisonSurfaceWarpTests, SourcePixelProbeRoundTripsExactCodeValues) {
     harness.surface.requestSourcePixelProbe(3, 0.5, 0.5);
     EXPECT_FALSE(waitUntil([&probed] { return !probed.empty(); }, std::chrono::milliseconds{200}));
 
+    auto highDepth = makeSolidP010Set(*budget, domain::FrameId{8}, 257U, 769U, color);
+    ASSERT_TRUE(highDepth.has_value());
+    ASSERT_EQ(actor.submit(context, std::move(*highDepth)),
+              platform::GpuTransferSubmitResult::Accepted);
+    ASSERT_TRUE(actor.waitUntilIdle(5s));
+    static_cast<void>(harness.grab());
+    harness.surface.requestSourcePixelProbe(0, 0.5, 0.5, 201U);
+    ASSERT_TRUE(waitUntil([&probed] { return !probed.empty(); }, 5s));
+    const QVariantMap tenBit = probed.front();
+    const std::array<qulonglong, 7U> actual{tenBit.value(QStringLiteral("valid")).toULongLong(),
+                                            tenBit.value(QStringLiteral("frameId")).toULongLong(),
+                                            tenBit.value(QStringLiteral("requestId")).toULongLong(),
+                                            tenBit.value(QStringLiteral("bitDepth")).toULongLong(),
+                                            tenBit.value(QStringLiteral("luma")).toULongLong(),
+                                            tenBit.value(QStringLiteral("cb")).toULongLong(),
+                                            tenBit.value(QStringLiteral("cr")).toULongLong()};
+    const std::array<qulonglong, 7U> expected{1U, 8U, 201U, 10U, 257U, 512U, 512U};
+    EXPECT_EQ(actual, expected);
+
     EXPECT_TRUE(harness.mailbox->clear(context.playback));
     harness.releaseRenderer();
+    EXPECT_TRUE(actor.shutdown(2s));
+}
+
+TEST(ComparisonSurfaceWarpTests, SourcePixelProbeBatchKeepsItsIdentityAcrossPresentedFrames) {
+    Microsoft::WRL::ComPtr<ID3D11Device> device;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+    ASSERT_TRUE(SUCCEEDED(D3D11CreateDevice(nullptr,
+                                            D3D_DRIVER_TYPE_WARP,
+                                            nullptr,
+                                            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                                            nullptr,
+                                            0U,
+                                            D3D11_SDK_VERSION,
+                                            device.GetAddressOf(),
+                                            nullptr,
+                                            context.GetAddressOf())));
+    auto broker = std::make_shared<platform::GraphicsDeviceBroker>();
+    ASSERT_EQ(broker->adoptQtDevice(device.Get(), context.Get()),
+              platform::GraphicsDeviceBrokerResult::Ready);
+    auto mailbox = std::make_shared<platform::FrameMailbox>(domain::DeviceGeneration{1U});
+    auto acknowledgements = std::make_shared<platform::PresentationAckMailbox>();
+    auto budget = std::make_shared<platform::FrameBudget>(16U * 1024U * 1024U);
+    platform::GpuTransferActor actor{budget, broker, mailbox};
+    platform::D3d11ComparisonRenderer renderer{broker, mailbox, acknowledgements, {}};
+
+    D3D11_TEXTURE2D_DESC description{};
+    description.Width = 128U;
+    description.Height = 64U;
+    description.MipLevels = 1U;
+    description.ArraySize = 1U;
+    description.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    description.SampleDesc.Count = 1U;
+    description.BindFlags = D3D11_BIND_RENDER_TARGET;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> target;
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> targetView;
+    ASSERT_TRUE(SUCCEEDED(device->CreateTexture2D(&description, nullptr, target.GetAddressOf())));
+    ASSERT_TRUE(SUCCEEDED(
+        device->CreateRenderTargetView(target.Get(), nullptr, targetView.GetAddressOf())));
+    ID3D11RenderTargetView* const boundTarget = targetView.Get();
+    context->OMSetRenderTargets(1U, &boundTarget, nullptr);
+    const D3D11_VIEWPORT viewport{0.0F, 0.0F, 128.0F, 64.0F, 0.0F, 1.0F};
+    context->RSSetViewports(1U, &viewport);
+    platform::SurfaceRenderState state;
+    state.logicalWidth = 128.0F;
+    state.logicalHeight = 64.0F;
+    state.pixelWidth = 128U;
+    state.pixelHeight = 64U;
+    state.clipFromItem = {2.0F / 128.0F,
+                          0.0F,
+                          0.0F,
+                          -1.0F,
+                          0.0F,
+                          -2.0F / 64.0F,
+                          0.0F,
+                          1.0F,
+                          0.0F,
+                          0.0F,
+                          1.0F,
+                          0.0F,
+                          0.0F,
+                          0.0F,
+                          0.0F,
+                          1.0F};
+    const auto present = [&](const std::int64_t frameId) {
+        auto set = makeSolidSet(*budget, domain::FrameId{frameId}, 64U, 128U);
+        if (!set ||
+            actor.submit(makeContext(), std::move(*set)) !=
+                platform::GpuTransferSubmitResult::Accepted ||
+            !actor.waitUntilIdle(5s)) {
+            return false;
+        }
+        return renderer.render(state) == platform::ComparisonRenderResult::Presented;
+    };
+    ASSERT_TRUE(present(7));
+    const std::vector<platform::SourcePixelProbeRequest> requests{
+        {.slot = 0U, .normalizedX = 0.5, .normalizedY = 0.5, .requestId = 311U},
+        {.slot = 2U, .normalizedX = 0.5, .normalizedY = 0.5, .requestId = 311U}};
+    static_cast<void>(renderer.probeSourcePixels(requests));
+    ASSERT_TRUE(present(8));
+
+    // A subset retry keeps the first batch's identity even for failures. It must not inherit
+    // the now visible frame; the GUI can therefore discard the entire old request honestly.
+    const auto repeated = renderer.probeSourcePixels({requests[1U]});
+    auto nextRequest = requests[1U];
+    nextRequest.requestId = 312U;
+    const auto next = renderer.probeSourcePixels({nextRequest});
+    ASSERT_EQ(repeated.size(), 1U);
+    ASSERT_EQ(next.size(), 1U);
+    const std::array<std::uint64_t, 4U> actual{
+        repeated[0U].frameId, repeated[0U].requestId, next[0U].frameId, next[0U].requestId};
+    const std::array<std::uint64_t, 4U> expected{7U, 311U, 8U, 312U};
+    EXPECT_EQ(actual, expected);
+    renderer.cancelSourcePixelProbes();
+    renderer.releaseResources();
     EXPECT_TRUE(actor.shutdown(2s));
 }
 

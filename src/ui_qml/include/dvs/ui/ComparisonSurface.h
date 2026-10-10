@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dvs/platform/D3d11ComparisonRenderer.h"
 #include "dvs/presentation/ComparisonContract.h"
 
 #include <QQuickItem>
@@ -80,6 +81,17 @@ class ComparisonSurface : public QQuickItem {
     // Canonical frame gaps observed by the render-acknowledgement relay since surface attach.
     // Refreshed on every scene-graph sync; an empty provider leaves the counter at zero.
     Q_PROPERTY(qulonglong droppedFrames READ droppedFrames NOTIFY droppedFramesChanged)
+    // Identity of the frame set the renderer is presenting - the exact set a probe reads. The
+    // readout uses it to tell whether a delivered value still describes the frame on screen;
+    // valid is false while nothing has been drawn yet.
+    Q_PROPERTY(
+        bool presentedFrameValid READ presentedFrameValid NOTIFY presentedFrameIdentityChanged)
+    Q_PROPERTY(
+        qulonglong presentedFrameId READ presentedFrameId NOTIFY presentedFrameIdentityChanged)
+    Q_PROPERTY(qulonglong presentedSessionEpoch READ presentedSessionEpoch NOTIFY
+                   presentedFrameIdentityChanged)
+    Q_PROPERTY(qulonglong presentedPlaybackGeneration READ presentedPlaybackGeneration NOTIFY
+                   presentedFrameIdentityChanged)
 
 public:
     enum ViewMode {
@@ -205,6 +217,17 @@ public:
     [[nodiscard]] bool differenceSuppressed() const noexcept;
     void setDifferenceSuppressed(bool value);
     [[nodiscard]] qulonglong droppedFrames() const noexcept;
+    [[nodiscard]] bool presentedFrameValid() const noexcept;
+    [[nodiscard]] qulonglong presentedFrameId() const noexcept;
+    [[nodiscard]] qulonglong presentedSessionEpoch() const noexcept;
+    [[nodiscard]] qulonglong presentedPlaybackGeneration() const noexcept;
+    // Publication point for the presented-frame identity. The render node is the only production
+    // caller (it posts this from the render thread whenever the presented set changes); exposing it
+    // lets the readout be exercised without a live D3D device.
+    Q_INVOKABLE void publishPresentedFrameIdentity(bool valid,
+                                                   qulonglong frameId,
+                                                   qulonglong sessionEpoch,
+                                                   qulonglong playbackGeneration);
 
     Q_INVOKABLE bool canDisplayViewScale(qreal scale) const;
     Q_INVOKABLE void zoomAt(qreal normalizedX, qreal normalizedY, qreal factor);
@@ -226,12 +249,18 @@ public:
     Q_INVOKABLE qreal wipePositionForLogicalX(qreal x) const;
     Q_INVOKABLE QVariantMap mapSurfacePoint(qreal x, qreal y) const;
     // Asks for one raw source-pixel read of the given slot at normalized source coordinates.
-    // The probe runs on the render thread against the currently presented frame set and the
-    // result arrives asynchronously on sourcePixelProbed. Requests are one-shot; a new
+    // The probe runs on the render thread against the frame set the renderer is presenting and
+    // the result arrives asynchronously on sourcePixelProbed. Requests are one-shot; a new
     // request for a slot replaces that slot's pending one, while different slots stay
     // independent so one cursor position can probe every source between two frames.
     // Coordinates are clamped into [0,1).
-    Q_INVOKABLE void requestSourcePixelProbe(int slot, qreal normalizedX, qreal normalizedY);
+    Q_INVOKABLE void requestSourcePixelProbe(int slot,
+                                             qreal normalizedX,
+                                             qreal normalizedY,
+                                             qulonglong requestId = 0U);
+    // Drops every staged and pending probe. Retiring the readout (cursor left the content,
+    // playback started, an overlay took over) must not leave an in-flight readback behind.
+    Q_INVOKABLE void cancelSourcePixelProbes();
 
     [[nodiscard]] bool
     attachRendererServices(std::shared_ptr<platform::GraphicsDeviceBroker> deviceBroker,
@@ -263,6 +292,7 @@ signals:
     void referenceSlotChanged();
     void differenceSuppressedChanged();
     void droppedFramesChanged();
+    void presentedFrameIdentityChanged();
 
 protected:
     [[nodiscard]] QSGNode* updatePaintNode(QSGNode* oldNode,
@@ -279,7 +309,9 @@ private:
     // Marks the item dirty and explicitly requests a window update so a parked render loop
     // still runs the sync that fulfills staged pixel probes.
     void scheduleProbeSync();
-
+    // Render thread -> GUI thread publication of the presented frame identity. Only emits when
+    // the identity actually changed, so a parked viewport costs nothing.
+    void setPresentedFrameIdentity(platform::PresentedFrameIdentity identity);
     std::shared_ptr<const Services> services_;
     ViewMode viewMode_ = SideBySide;
     DifferenceMetric differenceMetric_ = RgbAbsolute;
@@ -307,14 +339,20 @@ private:
     int referenceSlot_ = 0;
     std::function<std::uint64_t()> droppedFrameProbe_;
     qulonglong droppedFrames_ = 0U;
+    // Identity of the frame set the renderer last reported as presented; GUI-thread only.
+    platform::PresentedFrameIdentity presentedFrameIdentity_;
     // One-shot probe requests staged for the next scene-graph sync, at most one per slot;
     // GUI-thread only.
     struct PendingPixelProbe final {
         int slot = 0;
         qreal normalizedX = 0.0;
         qreal normalizedY = 0.0;
+        qulonglong requestId = 0U;
     };
     std::vector<PendingPixelProbe> pendingPixelProbes_;
+    // Set by cancelSourcePixelProbes(); the next sync clears the node's staged batch with it.
+    bool pixelProbesCancelled_ = false;
+    qulonglong pixelProbeGeneration_ = 0U;
 };
 
 } // namespace dvs::ui
