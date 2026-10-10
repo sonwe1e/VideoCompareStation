@@ -134,12 +134,38 @@ ApplicationWindow {
     property bool showFramePending: false
     property real wipePosition: 0.5
     // Hold-to-peek ("按住看原图"): while the toolbar button is held, the difference pass
-    // is replaced by the raw first source of the active pair. Transient; not persisted.
+    // is replaced by the reference (GT) source of the session - the same slot ReferenceFocus
+    // puts in the main panel - so the shortcut, the button and the hint all name one target.
+    // Transient; not persisted.
     property bool differencePeekActive: false
     // Keyboard peek (backtick) can lock the raw-reference view; unlocking clears both.
     property bool differencePeekLocked: false
+    // The peek is only offered while the session actually identifies a GT slot. Showing a
+    // candidate under a "reference original" label would be worse than offering nothing.
+    readonly property bool differencePeekTargetValid: {
+        const index = root.referenceSourceIndex;
+        return index >= 0 && index < root.sourceCount;
+    }
+    // What the peek is looking at, named for the indicator plate: "B · clip.mp4".
+    readonly property string differencePeekTargetLabel: {
+        const index = root.referenceSourceIndex;
+        if (index < 0 || index >= root.sourceCount)
+            return "";
+        const names = [root.sourceAName, root.sourceBName, root.sourceCName];
+        const name = index < names.length ? String(names[index] || "") : "";
+        return name.length > 0 ? name : qsTr("源 %1").arg(String.fromCharCode(65 + index));
+    }
     // The record frozen by the most recent M press, waiting for its note.
     property int pendingIssueNoteIndex: -1
+    // A peek that names a reference source cannot outlive the session that provided it: a new
+    // open (or a session that lost its GT slot) releases the peek instead of showing a candidate
+    // under the "reference original" label.
+    onDifferencePeekTargetValidChanged: {
+        if (!root.differencePeekTargetValid) {
+            root.differencePeekActive = false;
+            root.differencePeekLocked = false;
+        }
+    }
     // Workspace-level help rows. The sequences come from ShortcutCatalog.js - the same
     // constants the bindings and the menu labels use - and the contract test cross-checks
     // rows, labels and bindings against each other.
@@ -154,6 +180,16 @@ ApplicationWindow {
     property var pendingIssueRestore: null
     property int pendingIssueRestoreStage: 0
     property bool pendingIssueRestoreContextApplied: false
+    // Whether the recorded comparison pair was accepted by the controller. False with a recorded
+    // edge means the restore is partial; the message at the end of the machine says so.
+    property bool pendingIssueRestorePairApplied: true
+    property var pendingIssueRestoreOpenCommandId: 0
+    property var pendingIssueRestoreOpenSessionEpoch: 0
+    property int pendingIssueRestoreOpenOutcome: -1
+    property var pendingIssueRestoreSessionEpoch: 0
+    property var pendingIssueRestorePairCommandId: 0
+    property var pendingIssueRestoreSeekCommandId: 0
+    property bool issueRestoreContinuing: false
     property string dropError: ""
     property string intentMessage: ""
     // C1 resume: the identity currently open, and the one identity a restore has already been
@@ -251,6 +287,12 @@ ApplicationWindow {
     readonly property bool sourceBMissing: Boolean(!controller || controller.sourceBMissing)
     readonly property bool sourceCMissing: Boolean(!controller || controller.sourceCMissing)
     readonly property int sourceCount: controller ? Number(controller.sourceCount) : 0
+    readonly property var sourceMediaInfo: controller ? controller.sourceMediaInfo : []
+    readonly property var videoSessionEpoch: controller ? controller.sessionEpoch : 0
+    onVideoSessionEpochChanged: {
+        root.differencePeekActive = false;
+        root.differencePeekLocked = false;
+    }
     readonly property bool singleMode: sourceCount === 1
     readonly property bool imageHasContent: Boolean(stillImageController && (stillImageController.hasPrimary || stillImageController.hasSecondary))
     readonly property bool videoHasSession: sourceCount > 0
@@ -843,12 +885,17 @@ ApplicationWindow {
 
     // Keyboard flavour of hold-to-peek: tap toggles the raw reference view, Shift+backtick
     // locks it. The mouse button keeps its transient press/release semantics; its release
-    // never defeats an active lock (see onDifferencePeekChanged).
+    // never defeats an active lock (see onDifferencePeekChanged). The locked state also stays
+    // on screen through the viewport's peek indicator, not only as a transient HUD line.
     function toggleDifferencePeek(lock) {
+        if (!root.differencePeekTargetValid) {
+            root.showImmersiveHud(qsTr("当前会话没有可直看的参考（GT）源"));
+            return;
+        }
         if (lock) {
             differencePeekLocked = !differencePeekLocked;
             differencePeekActive = differencePeekLocked;
-            showImmersiveHud(differencePeekLocked ? qsTr("已锁定参考原图") : qsTr("已解锁参考原图"));
+            showImmersiveHud(differencePeekLocked ? qsTr("已锁定参考原图直看") : qsTr("已解锁参考原图"));
         } else if (differencePeekLocked) {
             differencePeekLocked = false;
             differencePeekActive = false;
@@ -1590,8 +1637,10 @@ ApplicationWindow {
         if (String(payload.decision) !== "ready")
             return false;
 
+        root.cancelPendingIssueRestore();
         if (String(payload.kind) === "video") {
             const urls = payload.urls || [];
+            let openCommandId = 0;
 
             if (urls.length > 0 && root.controller) {
                 // The open command takes the reference (GT) slot, which is not the timeline's
@@ -1607,6 +1656,7 @@ ApplicationWindow {
                     return false;
                 }
 
+                openCommandId = root.controller.lastSubmittedCommandId;
                 workspaceSession.beginOpen(workspaceSession.videoMedia);
 
                 root.commitWorkspace(workspaceSession.videoMedia, urls[0].toString());
@@ -1618,12 +1668,20 @@ ApplicationWindow {
             root.pendingIssueRestore = payload;
             root.pendingIssueRestoreStage = urls.length > 0 ? 1 : 2;
             root.pendingIssueRestoreContextApplied = false;
+            root.pendingIssueRestorePairApplied = true;
+            root.pendingIssueRestoreOpenCommandId = openCommandId;
+            root.pendingIssueRestoreOpenSessionEpoch = root.controller ? root.controller.sessionEpoch : 0;
+            root.pendingIssueRestoreSessionEpoch = urls.length === 0 && root.controller ? root.controller.sessionEpoch : 0;
+            issueRestoreDeadline.restart();
             root.continueIssueRestore();
 
             return true;
         }
 
-        // Image-pair restore: folders + row identity only after evaluation said Ready.
+        // Image-pair restore: folders + row identity only after evaluation said Ready. The
+        // recorded image view state (compare mode, zoom, pan, row) is not replayed yet, so the
+        // message says what was actually restored instead of implying the same observation.
+        const imageViewRecorded = payload.zoom !== undefined || payload.panX !== undefined || payload.compareMode !== undefined;
 
         if (payload.leftFolder && payload.rightFolder) {
             root.imageFolderLeftUrl = "file:///" + String(payload.leftFolder).replace(/\\/g, "/");
@@ -1639,33 +1697,59 @@ ApplicationWindow {
             root.performImageReview([leftUrl, rightUrl]);
         }
 
+        if (imageViewRecorded)
+            root.showIntentMessage(qsTr("部分恢复：正在打开记录中的图片，观察模式、缩放和平移未恢复"));
+
         return true;
     }
 
     // Staged continuation of an issue restore. Re-enters from controller state/frame changes;
     // returns without doing anything while the wait conditions still hold, so a still-opening
-    // session simply picks the restore up on the next state change.
+    // session simply picks the restore up on the next state change. Every stage is bound to the
+    // recorded sources: a session that is no longer the recorded one cancels the restore instead
+    // of replaying the recorded view onto whatever is open now.
     function continueIssueRestore() {
+        if (root.issueRestoreContinuing)
+            return;
+        root.issueRestoreContinuing = true;
+        try {
+            root.advanceIssueRestore();
+        } finally {
+            root.issueRestoreContinuing = false;
+        }
+    }
+
+    function advanceIssueRestore() {
         const payload = root.pendingIssueRestore;
 
         if (!payload)
             return;
 
         if (!root.controller || root.imageWorkspaceActive) {
-            root.cancelPendingIssueRestore();
+            root.abandonPendingIssueRestore(qsTr("恢复已取消：工作区已切换"));
             return;
         }
 
-        // Stage 1: the open is still in flight while busy or before any source is visible.
+        const urls = payload.urls || [];
+
         if (root.pendingIssueRestoreStage === 1) {
-            if (root.busy || root.sourceCount === 0)
+            if (root.pendingIssueRestoreOpenOutcome < 0)
                 return;
-            const urls = payload.urls || [];
-            if (!root.matchesOpenUrls(urls)) {
-                root.cancelPendingIssueRestore();
+            if (root.pendingIssueRestoreOpenOutcome !== 0 || root.sourceCount === 0) {
+                root.abandonPendingIssueRestore(qsTr("恢复失败：无法打开记录中的视频来源"));
                 return;
             }
+            if (!root.matchesOpenUrls(urls)) {
+                root.abandonPendingIssueRestore(qsTr("恢复已取消：打开的素材与记录不一致"));
+                return;
+            }
+            root.pendingIssueRestoreSessionEpoch = root.controller.sessionEpoch;
             root.pendingIssueRestoreStage = 2;
+        } else if (root.controller.sessionEpoch !== root.pendingIssueRestoreSessionEpoch || (urls.length > 0 && !root.matchesOpenUrls(urls))) {
+            // Stage 2 onwards: the recorded session was replaced while the restore waited for
+            // its frame, so the recorded view must not be replayed onto the new one.
+            root.abandonPendingIssueRestore(qsTr("恢复已取消：打开的素材与记录不一致"));
+            return;
         }
 
         // View context exactly once - this machine re-enters on every state change while the
@@ -1673,39 +1757,111 @@ ApplicationWindow {
         // assignment. The recorded pair goes first because applying it can carry the mode
         // along; the recorded mode lands last so it is the one that survives (D07: an
         // explicit command after open, not a preference replay on every later session).
+        // A refused pair command no longer counts as applied: it is reported at the end as a
+        // partial restore instead of being silently swallowed, and it never blocks the mode,
+        // frame and viewport replay, which are independent of it.
         if (!root.pendingIssueRestoreContextApplied) {
             root.pendingIssueRestoreContextApplied = true;
-            if (payload.differenceEdge !== undefined)
-                root.applyDifferenceEdge(Number(payload.differenceEdge));
+            if (payload.differenceEdge !== undefined) {
+                root.pendingIssueRestorePairApplied = false;
+                if (root.applyDifferenceEdge(Number(payload.differenceEdge)))
+                    root.pendingIssueRestorePairCommandId = root.controller.lastSubmittedCommandId;
+            }
             // The QML property is `viewMode`; assigning `viewModeCode` (the C++ accessor)
             // silently does nothing and drops the recorded mode.
             if (payload.viewMode !== undefined && root.preferences)
                 root.preferences.viewMode = Number(payload.viewMode);
         }
 
+        if (root.pendingIssueRestorePairCommandId !== 0)
+            return;
+
         // Stage 2: seek unless the recorded frame is already the presented one, then wait for
         // that frame before touching the viewport.
         const target = payload.frame !== undefined ? Number(payload.frame) : -1;
+        if (target >= 0 && (!Number.isInteger(target) || target >= root.totalFrames)) {
+            root.abandonPendingIssueRestore(qsTr("恢复失败：记录中的帧超出素材范围"));
+            return;
+        }
+        if (root.pendingIssueRestoreSeekCommandId !== 0)
+            return;
         if (target >= 0 && root.currentFrame !== target) {
+            if (root.busy || root.framePending)
+                return;
             if (!root.controller.seekFrame(target)) {
-                // The seek was refused (for example a still-pending command): retry on the
-                // next state change instead of dropping the restore.
+                root.abandonPendingIssueRestore(qsTr("恢复失败：无法提交帧定位"));
                 return;
             }
-            if (root.currentFrame !== target)
-                return;
+            root.pendingIssueRestoreSeekCommandId = root.controller.lastSubmittedCommandId;
+            return;
         }
+        if (root.framePending)
+            return;
 
         if (payload.roiEnabled !== undefined && viewportFrame.surface)
             viewportFrame.surface.restoreViewport(Number(payload.centerX), Number(payload.centerY), Number(payload.zoom), Boolean(payload.roiEnabled), Number(payload.roiLeft), Number(payload.roiTop), Number(payload.roiRight), Number(payload.roiBottom));
 
+        // A recorded pair the session would not take is a partial restore: the files, mode, frame
+        // and viewport are back, but the comparison pair is not. Saying so is the difference
+        // between "restored" and "looks restored".
+        if (payload.differenceEdge !== undefined && !root.pendingIssueRestorePairApplied)
+            root.showIntentMessage(qsTr("部分恢复：记录中的比较对未能应用"));
+
         root.cancelPendingIssueRestore();
+    }
+
+    function acceptIssueRestoreCommand(commandId, sessionEpoch, outcome) {
+        if (!root.pendingIssueRestore)
+            return;
+        if (commandId === root.pendingIssueRestoreOpenCommandId) {
+            if (sessionEpoch !== root.pendingIssueRestoreOpenSessionEpoch)
+                return;
+            root.pendingIssueRestoreOpenCommandId = 0;
+            root.pendingIssueRestoreOpenOutcome = outcome;
+        } else if (sessionEpoch !== root.pendingIssueRestoreSessionEpoch) {
+            return;
+        } else if (commandId === root.pendingIssueRestorePairCommandId) {
+            root.pendingIssueRestorePairCommandId = 0;
+            root.pendingIssueRestorePairApplied = outcome === 0 && root.differenceEdge === Number(root.pendingIssueRestore.differenceEdge);
+        } else if (commandId === root.pendingIssueRestoreSeekCommandId) {
+            root.pendingIssueRestoreSeekCommandId = 0;
+            if (outcome !== 0 || root.currentFrame !== Number(root.pendingIssueRestore.frame)) {
+                root.abandonPendingIssueRestore(qsTr("恢复失败：无法定位到记录中的帧"));
+                return;
+            }
+        } else {
+            return;
+        }
+        root.continueIssueRestore();
+    }
+
+    Timer {
+        id: issueRestoreDeadline
+
+        objectName: "issueRestoreDeadline"
+        interval: 15000
+        onTriggered: root.abandonPendingIssueRestore(qsTr("恢复超时：未能确认记录中的观察位置"))
+    }
+
+    // Ends a pending restore that cannot complete, and says so. A silent drop would leave the
+    // user believing the recorded observation was restored.
+    function abandonPendingIssueRestore(message) {
+        root.cancelPendingIssueRestore();
+        root.showIntentMessage(message);
     }
 
     function cancelPendingIssueRestore() {
         root.pendingIssueRestore = null;
         root.pendingIssueRestoreStage = 0;
         root.pendingIssueRestoreContextApplied = false;
+        root.pendingIssueRestorePairApplied = true;
+        root.pendingIssueRestoreOpenCommandId = 0;
+        root.pendingIssueRestoreOpenSessionEpoch = 0;
+        root.pendingIssueRestoreOpenOutcome = -1;
+        root.pendingIssueRestoreSessionEpoch = 0;
+        root.pendingIssueRestorePairCommandId = 0;
+        root.pendingIssueRestoreSeekCommandId = 0;
+        issueRestoreDeadline.stop();
     }
 
     // A restore only proceeds while the session still shows the recorded sources.
@@ -2260,6 +2416,14 @@ ApplicationWindow {
         function onFrameStateChanged() {
             root.continueIssueRestore();
         }
+
+        function onCommandFinished(commandId, sessionEpoch, outcome, errorKey) {
+            root.acceptIssueRestoreCommand(commandId, sessionEpoch, outcome);
+        }
+
+        function onSnapshotRefreshed() {
+            root.continueIssueRestore();
+        }
     }
 
     function sourceOffsets() {
@@ -2468,7 +2632,7 @@ ApplicationWindow {
         viewShortcutsEnabled: root.videoViewShortcutsEnabled
         sourceCount: root.sourceCount
         busy: root.busy
-        differencePeekAvailable: root.differenceMode
+        differencePeekAvailable: root.differenceMode && root.differencePeekTargetValid
         onWipePositionRequested: position => {
             root.wipePosition = position;
 
@@ -3054,6 +3218,8 @@ ApplicationWindow {
         currentEdgeIndex: root.differenceEdgeIndex(root.differenceEdge)
         inspectorOpen: root.inspectorOpen
         busy: root.busy
+        peekLocked: root.differencePeekLocked
+        peekTargetValid: root.differencePeekTargetValid
         borderColor: root.borderColor
         accentColor: root.accentColor
         textColor: root.primaryTextColor
@@ -3073,7 +3239,7 @@ ApplicationWindow {
         onDifferencePeekChanged: held => {
             // A keyboard lock must survive a stray press/release of the mouse button.
             if (held || !root.differencePeekLocked)
-                root.differencePeekActive = held;
+                root.differencePeekActive = held && root.differencePeekTargetValid;
         }
         onSwitchCandidateRequested: root.switchCandidateEdge()
         onCopyComparisonRequested: root.copyComparisonImage()
@@ -3206,7 +3372,10 @@ ApplicationWindow {
         sourceNames: [root.sourceAName, root.sourceBName, root.sourceCName]
         sourceParentLabels: root.controller ? root.controller.sourceParentLabels : []
         sourceFullPaths: root.controller ? root.controller.sourceFullPaths : []
-        sourceMediaInfo: root.controller ? root.controller.sourceMediaInfo : []
+        sourceMediaInfo: root.sourceMediaInfo
+        differencePeekActive: root.differencePeekActive
+        differencePeekLocked: root.differencePeekLocked
+        differencePeekTargetLabel: root.differencePeekTargetLabel
         frameErrorBannerVisible: root.frameErrorBannerVisible
         errorDetail: root.errorDetails()
         overlayVisible: root.overlayVisible
@@ -3585,10 +3754,11 @@ ApplicationWindow {
                             if (!root.issueLogModel)
                                 return;
 
-                            const result = root.issueLogModel.restoreIssue(issueLogRow.index);
-
-                            if (result && result.ok)
-                                root.applyIssueRestore(result);
+                            // IssueLogController::restoreIssue already emits restoreRequested,
+                            // and the Connections block below is the single entry that runs the
+                            // restore. Applying the returned payload here as well would open
+                            // the recorded sources twice from one click.
+                            root.issueLogModel.restoreIssue(issueLogRow.index);
                         }
                     }
                 }

@@ -383,6 +383,61 @@ installValidatedVideoSet(const std::shared_ptr<application::SessionSnapshot>& sn
     return true;
 }
 
+// Marks a snapshot's session as identifying one GT (reference) slot. `referenceSourceIndex` is
+// projected from the validated comparison, so a snapshot whose sources are bare
+// SessionSourceView entries leaves the session without a GT identity - which is exactly the state
+// where the reference peek must not be offered. Callers that exercise the peek need this.
+void identifyReferenceSlot(const std::shared_ptr<application::SessionSnapshot>& snapshot,
+                           const int referenceSlot) {
+    const auto rate = domain::RationalRate::create(30, 1);
+    if (!rate) {
+        return;
+    }
+    std::vector<domain::ComparisonSource> sources;
+    for (const auto& view : snapshot->sources) {
+        const std::filesystem::path sourcePath = std::filesystem::path{
+            L"probe-source-" + std::to_wstring(static_cast<unsigned>(view.sourceId)) + L".mp4"};
+        sources.push_back(domain::ComparisonSource{
+            .id = static_cast<domain::SourceId>(view.sourceId),
+            .role = static_cast<domain::SourceId>(view.sourceId) ==
+                            static_cast<domain::SourceId>(referenceSlot)
+                        ? domain::ComparisonRole::kReference
+                        : domain::ComparisonRole::kPrediction,
+            .descriptor =
+                domain::MediaDescriptor{
+                    .normalizedPath = sourcePath,
+                    .extent = domain::MediaExtent{.width = 1'920U, .height = 1'080U},
+                    .frameRate = rate.value(),
+                    .frameCount =
+                        domain::FrameCountInfo{
+                            .value = 100,
+                            .origin = domain::FrameCountOrigin::kReported,
+                        },
+                    .duration = domain::MediaTime{3000000},
+                    .codecId = "h264",
+                    .pixelFormatId = "nv12",
+                    .bitDepth = 8U,
+                    .decodeCapabilities =
+                        domain::DecodeCapabilities{
+                            .softwareDecode = true,
+                            .d3d11VaDecode = true,
+                        },
+                    .timingConfidence = domain::TimingConfidence::kVerifiedCfr,
+                },
+            .displayName = view.displayName,
+        });
+    }
+    auto validated = domain::ComparisonValidator::validate(std::move(sources));
+    if (!validated) {
+        return;
+    }
+    snapshot->validatedComparison =
+        std::make_shared<const domain::ValidatedComparisonSet>(std::move(validated).value().set);
+    snapshot->canonicalTimeline = rate.value();
+    snapshot->canonicalFrameCount =
+        static_cast<std::uint64_t>(snapshot->validatedComparison->canonicalFrameCount());
+}
+
 // Shared QML/controller harness for the workspace-routing contracts. It keeps the two-source
 // video session, the still-image controller and the folder model alive for the whole test.
 class WorkspaceHarness final {
@@ -1179,6 +1234,19 @@ TEST(MainQmlContractTests, InstantiatesRootAndSeparatesManualAlignmentStates) {
     EXPECT_GT(transport->width(), 0.0);
     EXPECT_GT(firstButton->width(), 0.0);
     EXPECT_GT(lastButton->width(), 0.0);
+    auto* const nextButton = root->findChild<QQuickItem*>(QStringLiteral("nextButton"));
+    auto* const nextFiveButton = root->findChild<QQuickItem*>(QStringLiteral("nextFiveButton"));
+    auto* const nextSecondButton = root->findChild<QQuickItem*>(QStringLiteral("nextSecondButton"));
+    auto* const playbackRateCombo =
+        root->findChild<QQuickItem*>(QStringLiteral("playbackRateCombo"));
+    ASSERT_NE(nextButton, nullptr);
+    ASSERT_NE(nextFiveButton, nullptr);
+    ASSERT_NE(nextSecondButton, nullptr);
+    ASSERT_NE(playbackRateCombo, nullptr);
+    EXPECT_LT(nextButton->x(), nextFiveButton->x());
+    EXPECT_LT(nextFiveButton->x(), nextSecondButton->x());
+    EXPECT_LT(nextSecondButton->x(), lastButton->x());
+    EXPECT_LT(lastButton->x(), playbackRateCombo->x());
     // The alignment chip (对齐：…) is always present in a video session, so the analysis
     // chrome stays visible even without difference/ROI/threshold conditions.
     EXPECT_TRUE(analysisChrome->property("visible").toBool());
@@ -3914,6 +3982,8 @@ TEST(MainQmlContractTests, DifferenceButtonOffersFlavorsAndPeekTogglesSuppressio
         },
     };
     std::vector<application::PlaybackCommand> submitted;
+    // The peek names the reference (GT) source, so the session has to identify one.
+    identifyReferenceSlot(snapshot, 0);
     ReviewController controller{
         ReviewController::Dependencies{
             .submit =
@@ -4291,8 +4361,6 @@ TEST(MainQmlContractTests, ImageEditModeCropsAWorkingCopyAndKeepsTheOriginal) {
         << preview->property("source").toString().toStdString();
 }
 
-// Step-3 second increment: the brush paints through the workspace in image coordinates and
-// the mosaic obscures a selected region; both share the same bounded undo history as crop.
 TEST(MainQmlContractTests, ImageEditBrushAndMosaicToolsEditTheWorkingCopy) {
     WorkspaceHarness harness;
     harness.withImageEdit = true;
@@ -6820,6 +6888,10 @@ TEST(MainQmlContractTests, ViewShortcutsSwitchModesZoomAndGenerateHelp) {
     // Backtick toggles the raw-reference peek; Shift+backtick locks it, and a plain tap on a
     // locked peek unlocks instead of flipping the raw view back on.
     EXPECT_TRUE(harness.root->property("differenceMode").toBool());
+    // The peek names the reference (GT) source, so the session must identify one.
+    identifyReferenceSlot(harness.snapshot, 0);
+    harness.controller->refreshProjection();
+    harness.settle();
     EXPECT_TRUE(peekKey->property("enabled").toBool());
     ASSERT_TRUE(QMetaObject::invokeMethod(peekKey, "activated"));
     EXPECT_TRUE(harness.root->property("differencePeekActive").toBool());
@@ -6828,6 +6900,21 @@ TEST(MainQmlContractTests, ViewShortcutsSwitchModesZoomAndGenerateHelp) {
     ASSERT_TRUE(QMetaObject::invokeMethod(peekLockKey, "activated"));
     EXPECT_TRUE(harness.root->property("differencePeekActive").toBool());
     EXPECT_TRUE(harness.root->property("differencePeekLocked").toBool());
+    const QString peekEvidence = qEnvironmentVariable("DVS_REVIEW_EVIDENCE_DIR");
+    if (!peekEvidence.isEmpty()) {
+        QDir().mkpath(peekEvidence);
+        harness.window->resize(960, 640);
+        harness.settle();
+        auto* const indicator =
+            harness.root->findChild<QQuickItem*>(QStringLiteral("differencePeekIndicator"));
+        if (indicator != nullptr) {
+            static_cast<void>(
+                harness.waitUntil([indicator] { return indicator->opacity() > 0.99; }));
+        }
+        harness.root->setProperty("intentMessage", QString{});
+        harness.window->grabWindow().save(
+            QDir{peekEvidence}.filePath(QStringLiteral("gt-peek-locked-960.png")));
+    }
     ASSERT_TRUE(QMetaObject::invokeMethod(peekKey, "activated"));
     EXPECT_FALSE(harness.root->property("differencePeekActive").toBool());
     EXPECT_FALSE(harness.root->property("differencePeekLocked").toBool());
@@ -7130,6 +7217,331 @@ TEST(MainQmlContractTests, IssueRestoreUsesReferenceIdentityAndStagesViewport) {
     EXPECT_DOUBLE_EQ(surface->property("viewCenterX").toDouble(), 0.35);
     EXPECT_DOUBLE_EQ(surface->property("viewCenterY").toDouble(), 0.62);
     harness.window->close();
+}
+
+// One click on an issue row must run the restore exactly once. The row's click handler calls
+// IssueLogController::restoreIssue(), which emits restoreRequested, and the Connections block is
+// the single entry that applies it; the handler applying the returned payload as well opened the
+// recorded sources twice from one click. Driven through the same call the handler makes.
+TEST(MainQmlContractTests, IssueRowClickRestoresOnceThroughTheSignalEntry) {
+    QTemporaryDir temporaryDirectory;
+    ASSERT_TRUE(temporaryDirectory.isValid());
+    QString pathA = temporaryDirectory.filePath(QStringLiteral("restore-once-a.mp4"));
+    QString pathB = temporaryDirectory.filePath(QStringLiteral("restore-once-b.mp4"));
+    for (const QString& path : {pathA, pathB}) {
+        QFile file{path};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_GT(file.write("restore-source", 15), 0);
+    }
+
+    WorkspaceHarness harness;
+    harness.withIssueLog = true;
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate);
+    ASSERT_TRUE(installValidatedVideoSet(
+        harness.snapshot,
+        {std::filesystem::path{pathA.toStdWString()}, std::filesystem::path{pathB.toStdWString()}},
+        rate.value(),
+        12,
+        400'000));
+    // The harness's default displayed frame is beyond this 12-frame set, which would make the
+    // snapshot inconsistent and close the projection.
+    harness.snapshot->displayedFrame = domain::FrameId{0};
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+    // The projection refresh pulls sourceUrls out of the validated comparison.
+    harness.controller->refreshProjection();
+    harness.settle();
+    harness.issueLog.setWorkspaceMode(QStringLiteral("video"));
+    ASSERT_TRUE(harness.issueLog.captureCurrentIssue(QString{}));
+    ASSERT_EQ(harness.issueLog.count(), 1);
+    // The row exists in the panel the click opens, so the click path is reachable and its handler
+    // has a live delegate to act on.
+    harness.root->setProperty("issueLogPanelVisible", true);
+    harness.settle();
+    auto* const list = harness.root->findChild<QQuickItem*>(QStringLiteral("issueLogList"));
+    ASSERT_NE(list, nullptr);
+    QQuickItem* row = nullptr;
+    ASSERT_TRUE(harness.waitUntil([&] {
+        QMetaObject::invokeMethod(
+            list, "itemAtIndex", Q_RETURN_ARG(QQuickItem*, row), Q_ARG(int, 0));
+        return row != nullptr;
+    }));
+    bool rowClickable = false;
+    for (QObject* const child : row->findChildren<QObject*>()) {
+        if (child->inherits("QQuickMouseArea")) {
+            rowClickable = qobject_cast<QQuickItem*>(child)->isEnabled();
+        }
+    }
+    EXPECT_TRUE(rowClickable) << "issue row has no enabled click target";
+
+    // The row's handler calls restoreIssue(), which emits restoreRequested; the Connections block
+    // is the single entry that applies it. Applying the returned payload as well - which the
+    // handler used to do - ran the whole restore twice from one click, so one restore must produce
+    // exactly one open of the recorded sources.
+    const QPointF rowCenter = row->mapToScene(QPointF{row->width() / 2, row->height() / 2});
+    sendMousePress(*harness.window, rowCenter);
+    sendMouseRelease(*harness.window, rowCenter);
+    harness.settle();
+
+    int opens = 0;
+    for (const application::PlaybackCommand& command : harness.submitted) {
+        if (std::holds_alternative<application::OpenComparisonCommand>(command)) {
+            ++opens;
+        }
+    }
+    EXPECT_EQ(opens, 1) << "one restore must open the recorded sources exactly once";
+    EXPECT_EQ(harness.root->property("pendingIssueRestoreStage").toInt(), 1);
+
+    // The staged machine waits for that open to complete; once it does, the restore finishes
+    // instead of hanging pending.
+    harness.terminals.push_back(application::CommandTerminal{
+        .context = application::commandContext(harness.submitted.back()),
+        .outcome = application::CommandOutcome::Succeeded,
+    });
+    harness.controller->refreshProjection();
+    harness.settle();
+    if (std::holds_alternative<application::SetActiveComparisonPairCommand>(
+            harness.submitted.back())) {
+        harness.terminals.push_back(application::CommandTerminal{
+            .context = application::commandContext(harness.submitted.back()),
+            .outcome = application::CommandOutcome::Succeeded,
+        });
+        harness.controller->refreshProjection();
+        harness.settle();
+    }
+    EXPECT_EQ(harness.root->property("pendingIssueRestoreStage").toInt(), 0);
+    harness.window->close();
+}
+
+// A staged restore that is waiting for its recorded frame must not replay that view onto a
+// different session: opening something else cancels the restore and says so, instead of seeking
+// and re-zooming whatever is open now.
+TEST(MainQmlContractTests, IssueRestoreCancelsWhenTheSessionChangesWhileWaiting) {
+    QTemporaryDir temporaryDirectory;
+    ASSERT_TRUE(temporaryDirectory.isValid());
+    QString pathA = temporaryDirectory.filePath(QStringLiteral("restore-swap-a.mp4"));
+    QString pathB = temporaryDirectory.filePath(QStringLiteral("restore-swap-b.mp4"));
+    QString pathC = temporaryDirectory.filePath(QStringLiteral("restore-swap-c.mp4"));
+    for (const QString& path : {pathA, pathB, pathC}) {
+        QFile file{path};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_GT(file.write("restore-source", 15), 0);
+    }
+
+    WorkspaceHarness harness;
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate);
+    // A/B is the open session, and the restore is for those same sources targeting a frame the
+    // fake transport never presents - so the machine parks in stage 2 waiting for that frame.
+    ASSERT_TRUE(installValidatedVideoSet(
+        harness.snapshot,
+        {std::filesystem::path{pathA.toStdWString()}, std::filesystem::path{pathB.toStdWString()}},
+        rate.value(),
+        12,
+        400'000));
+    harness.snapshot->displayedFrame = domain::FrameId{0};
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+    harness.controller->refreshProjection();
+    harness.settle();
+    auto* const surface = harness.root->findChild<QQuickItem*>(QStringLiteral("dualVideoSurface"));
+    ASSERT_NE(surface, nullptr);
+    ASSERT_TRUE(surface->setProperty("sourceDisplayInfo",
+                                     QVariantList{QVariantMap{
+                                         {QStringLiteral("width"), 1920},
+                                         {QStringLiteral("height"), 1080},
+                                     }}));
+    harness.settle();
+
+    const QVariantMap payload{
+        {QStringLiteral("decision"), QStringLiteral("ready")},
+        {QStringLiteral("kind"), QStringLiteral("video")},
+        {QStringLiteral("urls"),
+         QVariantList{QUrl::fromLocalFile(pathA), QUrl::fromLocalFile(pathB)}},
+        {QStringLiteral("referenceSourceIndex"), 0},
+        {QStringLiteral("canonicalSourceIndex"), 0},
+        {QStringLiteral("viewMode"), ComparisonSurface::Difference},
+        {QStringLiteral("frame"), QVariant::fromValue<qint64>(5)},
+        {QStringLiteral("roiEnabled"), true},
+        {QStringLiteral("roiLeft"), 0.25},
+        {QStringLiteral("roiTop"), 0.25},
+        {QStringLiteral("roiRight"), 0.75},
+        {QStringLiteral("roiBottom"), 0.75},
+        {QStringLiteral("centerX"), 0.35},
+        {QStringLiteral("centerY"), 0.62},
+        {QStringLiteral("zoom"), 2.5},
+    };
+    QVariant returned;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "applyIssueRestore",
+                                          Q_RETURN_ARG(QVariant, returned),
+                                          Q_ARG(QVariant, QVariant::fromValue(payload))));
+    EXPECT_TRUE(returned.toBool());
+    harness.settle();
+    // Complete the restore's own open so the machine advances to the frame wait.
+    ASSERT_FALSE(harness.submitted.empty());
+    harness.terminals.push_back(application::CommandTerminal{
+        .context = application::commandContext(harness.submitted.back()),
+        .outcome = application::CommandOutcome::Succeeded,
+    });
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_EQ(harness.root->property("pendingIssueRestoreStage").toInt(), 2);
+    EXPECT_FALSE(surface->property("roiEnabled").toBool());
+
+    // The user opens something else while the restore waits for its frame: the recorded view must
+    // not land on the new session, and the machine must not stay pending forever.
+    harness.submitted.clear();
+    harness.terminals.clear();
+    ASSERT_TRUE(installValidatedVideoSet(harness.snapshot,
+                                         {std::filesystem::path{pathC.toStdWString()}},
+                                         rate.value(),
+                                         12,
+                                         400'000));
+    harness.controller->refreshProjection();
+    harness.settle();
+
+    EXPECT_EQ(harness.root->property("pendingIssueRestoreStage").toInt(), 0);
+    EXPECT_FALSE(surface->property("roiEnabled").toBool());
+    EXPECT_NEAR(surface->property("viewScale").toDouble(), 1.0, 0.000001);
+    EXPECT_FALSE(harness.root->property("intentMessage").toString().isEmpty());
+    harness.window->close();
+}
+
+class IssueRestoreScenario final {
+public:
+    bool start() {
+        for (const QString& name : {QStringLiteral("a.mp4"), QStringLiteral("b.mp4")}) {
+            QFile file{temporary.filePath(name)};
+            if (!file.open(QIODevice::WriteOnly) || file.write("source", 6) != 6) {
+                return false;
+            }
+            urls.push_back(QUrl::fromLocalFile(file.fileName()));
+        }
+        const auto rate = domain::RationalRate::create(30, 1);
+        if (!rate || !installValidatedVideoSet(
+                         harness.snapshot,
+                         {std::filesystem::path{temporary.filePath("a.mp4").toStdWString()},
+                          std::filesystem::path{temporary.filePath("b.mp4").toStdWString()}},
+                         rate.value(),
+                         100,
+                         3'333'333)) {
+            return false;
+        }
+        if (!harness.create()) {
+            return false;
+        }
+        harness.settle();
+        return true;
+    }
+
+    bool restore(QVariantMap additions = {}) {
+        QVariantMap payload{{QStringLiteral("decision"), QStringLiteral("ready")},
+                            {QStringLiteral("kind"), QStringLiteral("video")},
+                            {QStringLiteral("frame"), 41}};
+        for (auto it = additions.cbegin(); it != additions.cend(); ++it) {
+            payload.insert(it.key(), it.value());
+        }
+        QVariant result;
+        return QMetaObject::invokeMethod(harness.root.get(),
+                                         "applyIssueRestore",
+                                         Q_RETURN_ARG(QVariant, result),
+                                         Q_ARG(QVariant, payload)) &&
+               result.toBool();
+    }
+
+    void finish(const application::PlaybackCommand& command, application::CommandOutcome outcome) {
+        harness.terminals.push_back(application::CommandTerminal{
+            .context = application::commandContext(command), .outcome = outcome});
+        harness.controller->refreshProjection();
+        harness.settle();
+    }
+
+    int stage() const {
+        return harness.root->property("pendingIssueRestoreStage").toInt();
+    }
+    QTemporaryDir temporary;
+    WorkspaceHarness harness;
+    QVariantList urls;
+};
+
+TEST(MainQmlContractTests, IssueRestoreOpenFailureCannotRestoreThePreviousSameUrls) {
+    IssueRestoreScenario scenario;
+    ASSERT_TRUE(scenario.start());
+    ASSERT_TRUE(scenario.restore({{QStringLiteral("urls"), scenario.urls}}));
+    const auto open = scenario.harness.submitted.back();
+    scenario.finish(open, application::CommandOutcome::Failed);
+    EXPECT_EQ(scenario.stage(), 0);
+    EXPECT_TRUE(scenario.harness.root->property("intentMessage")
+                    .toString()
+                    .contains(QStringLiteral("恢复失败")));
+}
+
+TEST(MainQmlContractTests, IssueRestorePairWaitsForOneMatchingTerminalAndReportsPartialFailure) {
+    IssueRestoreScenario scenario;
+    ASSERT_TRUE(scenario.start());
+    ASSERT_TRUE(scenario.restore({{QStringLiteral("differenceEdge"), 0}}));
+    ASSERT_FALSE(scenario.harness.submitted.empty());
+    const auto pair = scenario.harness.submitted.back();
+    ASSERT_TRUE(std::holds_alternative<application::SetActiveComparisonPairCommand>(pair));
+    const auto count = scenario.harness.submitted.size();
+    for (int index = 0; index < 3; ++index) {
+        ASSERT_TRUE(QMetaObject::invokeMethod(scenario.harness.root.get(), "continueIssueRestore"));
+    }
+    EXPECT_EQ(scenario.harness.submitted.size(), count);
+    EXPECT_EQ(scenario.stage(), 2);
+    auto unrelated = application::commandContext(pair);
+    unrelated.commandId = domain::CommandId{unrelated.commandId.value() + 100U};
+    scenario.harness.terminals.push_back(application::CommandTerminal{
+        .context = unrelated, .outcome = application::CommandOutcome::Succeeded});
+    scenario.harness.controller->refreshProjection();
+    EXPECT_EQ(scenario.stage(), 2);
+    scenario.finish(pair, application::CommandOutcome::Failed);
+    EXPECT_EQ(scenario.stage(), 0);
+    EXPECT_TRUE(scenario.harness.root->property("intentMessage")
+                    .toString()
+                    .contains(QStringLiteral("部分恢复")));
+}
+
+TEST(MainQmlContractTests, IssueRestoreSeekFailureEndsPendingWithoutAnotherStateChange) {
+    IssueRestoreScenario scenario;
+    ASSERT_TRUE(scenario.start());
+    ASSERT_TRUE(scenario.restore({{QStringLiteral("frame"), 42}}));
+    const auto seek = scenario.harness.submitted.back();
+    ASSERT_TRUE(std::holds_alternative<application::SeekFrameCommand>(seek));
+    ASSERT_TRUE(QMetaObject::invokeMethod(scenario.harness.root.get(), "continueIssueRestore"));
+    EXPECT_EQ(std::count_if(scenario.harness.submitted.begin(),
+                            scenario.harness.submitted.end(),
+                            [](const auto& command) {
+                                return std::holds_alternative<application::SeekFrameCommand>(
+                                    command);
+                            }),
+              1);
+    scenario.finish(seek, application::CommandOutcome::Failed);
+    EXPECT_EQ(scenario.stage(), 0);
+}
+
+TEST(MainQmlContractTests, IssueRestoreRejectsSameUrlsInANewerSessionAndTimesOutMissingTerminals) {
+    IssueRestoreScenario scenario;
+    ASSERT_TRUE(scenario.start());
+    ASSERT_TRUE(scenario.restore({{QStringLiteral("frame"), 42}}));
+    scenario.harness.snapshot->sessionEpoch =
+        domain::SessionEpoch{scenario.harness.snapshot->sessionEpoch.value() + 1U};
+    scenario.harness.controller->refreshProjection();
+    scenario.harness.settle();
+    EXPECT_EQ(scenario.stage(), 0);
+    ASSERT_TRUE(scenario.restore({{QStringLiteral("frame"), 42}}));
+    auto* timer =
+        scenario.harness.root->findChild<QObject*>(QStringLiteral("issueRestoreDeadline"));
+    ASSERT_NE(timer, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(timer, "triggered"));
+    EXPECT_EQ(scenario.stage(), 0);
+    EXPECT_TRUE(scenario.harness.root->property("intentMessage")
+                    .toString()
+                    .contains(QStringLiteral("超时")));
 }
 
 TEST(MainQmlContractTests, VideoFolderEntryOpensModalPickerWithoutChangingWorkspace) {

@@ -282,6 +282,38 @@ Item {
                     control.restoreFocus();
                 }
             }
+            TransportButton {
+                objectName: "nextFiveButton"
+                iconSource: "qrc:/icons/next-five.svg"
+                helpText: qsTr("前进 5 帧\n快捷键：Shift+→ / Shift+D")
+                enabled: control.canNext
+                onClicked: {
+                    control.nextFiveRequested();
+                    control.restoreFocus();
+                }
+            }
+            TransportButton {
+                objectName: "nextSecondButton"
+                iconSource: "qrc:/icons/next-second.svg"
+                helpText: qsTr("前进 1 秒\n快捷键：Ctrl+→ / Ctrl+D")
+                enabled: control.canNext
+                onClicked: {
+                    control.nextSecondRequested();
+                    control.restoreFocus();
+                }
+            }
+            TransportButton {
+                id: lastButton
+
+                objectName: "lastButton"
+                iconSource: "qrc:/icons/last.svg"
+                helpText: qsTr("最后一帧\n快捷键：End")
+                enabled: control.canLast
+                onClicked: {
+                    control.lastRequested();
+                    control.restoreFocus();
+                }
+            }
             ToolbarCombo {
                 id: playbackRateCombo
 
@@ -318,38 +350,6 @@ Item {
 
                     font: playbackRateCombo.font
                     text: qsTr("0.25×")
-                }
-            }
-            TransportButton {
-                objectName: "nextFiveButton"
-                iconSource: "qrc:/icons/next-five.svg"
-                helpText: qsTr("前进 5 帧\n快捷键：Shift+→ / Shift+D")
-                enabled: control.canNext
-                onClicked: {
-                    control.nextFiveRequested();
-                    control.restoreFocus();
-                }
-            }
-            TransportButton {
-                objectName: "nextSecondButton"
-                iconSource: "qrc:/icons/next-second.svg"
-                helpText: qsTr("前进 1 秒\n快捷键：Ctrl+→ / Ctrl+D")
-                enabled: control.canNext
-                onClicked: {
-                    control.nextSecondRequested();
-                    control.restoreFocus();
-                }
-            }
-            TransportButton {
-                id: lastButton
-
-                objectName: "lastButton"
-                iconSource: "qrc:/icons/last.svg"
-                helpText: qsTr("最后一帧\n快捷键：End")
-                enabled: control.canLast
-                onClicked: {
-                    control.lastRequested();
-                    control.restoreFocus();
                 }
             }
 
