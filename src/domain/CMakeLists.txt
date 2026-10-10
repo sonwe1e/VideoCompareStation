@@ -5,6 +5,8 @@ add_library(
         src/ComparisonValidator.cpp
         src/PixelDifference.cpp
         src/FrameTimeline.cpp
+        src/InterpolationProtocol.cpp
+        src/LabelGeometry.cpp
         src/MediaDescriptor.cpp
         src/MediaError.cpp
         src/Module.cpp

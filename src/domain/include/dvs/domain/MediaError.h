@@ -52,6 +52,7 @@ enum class MediaErrorCode {
     kGraphicsUnavailable,
     kGraphicsDeviceLost,
     kFramePresentationTimedOut,
+    kInterpolationProtocolInvalid,
 };
 
 enum class MediaOperation {
@@ -63,6 +64,7 @@ enum class MediaOperation {
     kMediaDecode,
     kGraphicsInitialization,
     kFramePresentation,
+    kInterpolationProtocol,
 };
 
 [[nodiscard]] std::string_view stableId(SessionState state) noexcept;

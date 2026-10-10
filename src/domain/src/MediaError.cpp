@@ -92,6 +92,8 @@ std::string_view stableId(const MediaErrorCode code) noexcept {
         return "graphics-device-lost";
     case MediaErrorCode::kFramePresentationTimedOut:
         return "frame-presentation-timed-out";
+    case MediaErrorCode::kInterpolationProtocolInvalid:
+        return "interpolation-protocol-invalid";
     }
     return "unknown-error";
 }
@@ -114,6 +116,8 @@ std::string_view stableId(const MediaOperation operation) noexcept {
         return "graphics-initialization";
     case MediaOperation::kFramePresentation:
         return "frame-presentation";
+    case MediaOperation::kInterpolationProtocol:
+        return "interpolation-protocol";
     }
     return "unknown-operation";
 }

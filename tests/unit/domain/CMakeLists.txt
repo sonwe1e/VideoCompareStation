@@ -7,6 +7,8 @@ add_executable(
     PixelDifferenceTests.cpp
     FrameTimelineTests.cpp
     FrameTimelineCanonicalContractTests.cpp
+    InterpolationProtocolTests.cpp
+    LabelGeometryTests.cpp
     VfrMediaDescriptorConsistencyTests.cpp
     MediaDescriptorAndErrorTests.cpp
     ModuleNameTests.cpp
