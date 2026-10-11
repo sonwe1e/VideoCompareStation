@@ -387,6 +387,10 @@ public:
         diagnosticsProbe_ = std::make_unique<DiagnosticsProbe>();
         engine->rootContext()->setContextProperty(QStringLiteral("dvsDiagnostics"),
                                                   diagnosticsProbe_.get());
+        // E01: construction only builds lightweight state now. The presentation capability probe
+        // (hidden window, D3D11 device, swap chain) is requested by TabbedInspector when the
+        // diagnostics surface opens and runs on the controller's worker thread, so nothing here
+        // blocks engine->load() below.
         timingDiagnostics_ = std::make_unique<TimingDiagnosticsController>();
         engine->rootContext()->setContextProperty(QStringLiteral("timingDiagnostics"),
                                                   timingDiagnostics_.get());
@@ -437,6 +441,34 @@ public:
                 }
             },
             Qt::DirectConnection);
+
+        // E01 startup milestones: the first presented main-window frame is the honest
+        // "interactive" mark (sg-initialized only proves the scene graph exists), and the first
+        // presented material frame separates window readiness from content readiness. Both are
+        // one-shot marks printed under DVS_STARTUP_TIMING alongside the existing milestones.
+        auto windowFirstFrameMarked = std::make_shared<bool>(false);
+        QObject::connect(
+            window,
+            &QQuickWindow::frameSwapped,
+            window,
+            [windowFirstFrameMarked] {
+                if (!*windowFirstFrameMarked) {
+                    *windowFirstFrameMarked = true;
+                    markStartupMilestone("window-first-frame");
+                }
+            },
+            Qt::DirectConnection);
+
+        auto sourceFirstFrameMarked = std::make_shared<bool>(false);
+        QObject::connect(&controller,
+                         &ReviewController::frameStateChanged,
+                         &controller,
+                         [controller = &controller, sourceFirstFrameMarked] {
+                             if (!*sourceFirstFrameMarked && controller->currentFrame() >= 0) {
+                                 *sourceFirstFrameMarked = true;
+                                 markStartupMilestone("source-first-frame");
+                             }
+                         });
 
         QQuickGraphicsConfiguration configuration;
         configuration.setPreferSoftwareDevice(options_.preferSoftwareDevice);

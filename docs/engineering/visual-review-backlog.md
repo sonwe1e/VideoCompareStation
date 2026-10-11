@@ -1,7 +1,45 @@
 # 视觉审查问题台账
 
-更新：2026-10-11（全画布候选直看 P05／图片编辑纯操作 P11／协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-10-11（启动减负 E01／全画布候选直看 P05／图片编辑纯操作 P11／协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+
+## 2026-10-11 启动关键路径减负 E01
+
+- **范围**：《CompareStation 下一步体验与性能计划 2026-10-11》§4 E01（P0）：呈现能力探测移出
+  启动关键路径；StartupMilestone 补齐"主窗可交互"与"素材首帧"。
+- **代码证据（基线 a3a06ee）**：`TimingDiagnosticsController` 构造即同步调用
+  `evaluateProbeCapability()`（`PresentationStatisticsProbe` 自建隐藏窗口 + D3D11 设备 + 交换链
+  并 Present 验证），发生在 `engine->load(Main.qml)` 之前；里程碑已有进程进入/窗口序列，
+  缺首帧两个节点。
+- **交付**：
+  - 控制器构造只建轻量状态：呈现状态初始为"未确认 (未探测)"，不再构造期探测。探针的创建、
+    采样与销毁全部移入控制器私有的单工作线程（命令合并 + 单槽结果信箱）；隐藏窗口 HWND、
+    D3D11 设备与交换链同线程创建、使用、销毁，不跨线程使用。
+  - `Q_INVOKABLE requestPresentationProbe()`：TabbedInspector 在面板可见时请求（守卫式属性
+    访问，兼容契约测试 mock）；单飞 + 代次标识，重复请求复用缓存答案；超时（4 s）显示
+    "未确认 (探测超时)"，均不阻塞播放；`notePresentationTargetReplaced()` 为窗口/会话交接
+    提供失效钩子，过期代次结果丢弃、不改写新状态。
+  - 探测完成后的 presentCount/presentRefreshCount 采样同样走工作线程（refresh 2 Hz 拉取）。
+  - StartupMilestone 新增 `window-first-frame`（QQuickWindow::frameSwapped 首帧，可交互）与
+    `source-first-frame`（ReviewController::frameStateChanged 且 currentFrame ≥ 0）；进程进入
+    沿用 Main.cpp 既有打点；后台 shell 注册（jthread）未动。
+  - Loader 延迟未新增：startup-performance-v2.md 有实测证据的重组件（ClipExportDialog、
+    ReviewInputDialogs+DropConfirmationDialog、ShortcutHelpOverlay、SampleExportDialog）已在
+    早前 Step 3/4 Loader 化；其余组件无实测耗时证据，按工单要求跳过。
+  - 不改 PlaybackCoordinator 状态所有权与 GPU 渲染后端。
+- **验收对照**：无诊断场景启动路径零探测工作（构造测试钉死）；失败/超时显示未确认；过期
+  结果不覆盖新状态（变异 B）。真机场景（空启动/单/三文件、物理屏/远控、启动中关闭程序）
+  未执行，见"未验证"。
+- **验证**（隔离 worktree @ a3a06ee + 本工单文件，避开同工作区并行会话的未提交改动）：
+  `ui.TimingDiagnosticsControllerTests` 10/10（新增 3）；`ui.MainQmlContractTests` +
+  `ui.DiagnosticsProbeTests` 组合 92/92（4 项既有 Disabled）。变异 3/3：A 构造恢复同步探测 →
+  轻量测试红（实测机器返回"可用 (Flip Model)"≠期望"未确认 (未探测)"）；B 去掉代次检查 →
+  过期测试红（appliedProbeGeneration 1≠0，过期"窗口不可用"被应用）；C worker 结果不送达 →
+  异步应用测试红（5 s 截止、generation 0）。
+- **未验证**：真机冷/热启动的 DVS_STARTUP_TIMING 里程碑数值对比、启动完成前关闭程序、远控
+  虚拟屏下的探测表现；探测超时分支无自动化断言（无事件循环的测试环境不触发 QTimer）。
+- **回退**：还原 TimingDiagnosticsController.h/.cpp、DesktopApplication.cpp 与 TabbedInspector
+  一处即可回到构造期同步探测；无其他调用方。
 
 ## 2026-10-11 图片编辑纯操作提取 P11
 

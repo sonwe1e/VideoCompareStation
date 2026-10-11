@@ -12,6 +12,12 @@
 
 namespace dvs::ui {
 
+// Owns the presentation statistics probe on exactly one worker thread (E01). Forward declared so
+// the probe's thread and lifetime never leak into controller users; defined in the .cpp together
+// with the thread body that creates, uses and destroys the probe's hidden window, D3D11 device
+// and swap chain.
+class PresentationProbeWorker;
+
 class TimingDiagnosticsController final : public QObject, public application::ITraceObserver {
     Q_OBJECT
 
@@ -48,6 +54,19 @@ public:
     [[nodiscard]] bool isMonitoring() const noexcept;
     void setMonitoring(bool monitoring);
 
+    // E01: the capability probe builds its own hidden window, D3D11 device and swap chain.
+    // Construction no longer runs it: the diagnostics surface requests it when it opens, and the
+    // probe runs as a single-flight task on the worker thread. Failure and timeout surface as
+    // explicit "未确认" states; playback is never blocked. Repeated requests reuse the cached
+    // answer, and a completed probe is never re-run.
+    Q_INVOKABLE void requestPresentationProbe();
+
+    // Invalidation hook for window/session handover: bumps the probe generation so any in-flight
+    // capability answer carries a stale identity and is dropped instead of overwriting the state
+    // the new target starts from (E01). The panel returns to "未确认 (未探测)" until a fresh
+    // request completes.
+    void notePresentationTargetReplaced();
+
     [[nodiscard]] bool hasActivePlayback() const noexcept;
     [[nodiscard]] quint64 runId() const noexcept;
     [[nodiscard]] quint64 skippedFrameSetCount() const noexcept;
@@ -65,6 +84,9 @@ public:
     [[nodiscard]] QString presentationDetail() const;
     [[nodiscard]] quint32 presentCount() const noexcept;
     [[nodiscard]] quint32 presentRefreshCount() const noexcept;
+    // Generation of the capability answer currently displayed, or 0 while unprobed. Lets gates
+    // and tests observe which request an answer belongs to without trusting status text.
+    [[nodiscard]] quint64 appliedProbeGeneration() const noexcept;
 
     // Test helper to feed events directly without requiring a live PlaybackTrace singleton
     void ingestTraceEvent(const application::TraceEvent& event);
@@ -80,12 +102,19 @@ Q_SIGNALS:
 private:
     Q_DISABLE_COPY_MOVE(TimingDiagnosticsController)
 
+    // Drains the worker's finished capability/sample answers, applies the ones whose generation
+    // is still current, and schedules the next present-count sample while diagnostics run.
+    void pollPresentationProbe();
+    void applyProbeCapability(const platform::PresentationStatisticsCapability& capability);
     void updateFromSummary(const application::PlaybackEvidenceSummary& summary);
-    void evaluateProbeCapability();
 
     application::PlaybackEvidenceCollector collector_;
-    std::unique_ptr<platform::PresentationStatisticsProbe> probe_;
+    // Probe seed adopted by the worker on first use; never used on the adopting thread after the
+    // worker exists, so every probe resource stays on the worker thread.
+    std::unique_ptr<platform::PresentationStatisticsProbe> probeSeed_;
+    std::unique_ptr<PresentationProbeWorker> probeWorker_;
     QTimer* refreshTimer_ = nullptr;
+    QTimer* probeTimeoutTimer_ = nullptr;
 
     bool monitoring_ = true;
     bool hasActivePlayback_ = false;
@@ -105,6 +134,11 @@ private:
     QString presentationDetail_;
     quint32 presentCount_ = 0U;
     quint32 presentRefreshCount_ = 0U;
+    quint64 probeGeneration_ = 0U;
+    quint64 appliedProbeGeneration_ = 0U;
+    bool probeInFlight_ = false;
+    bool probeApplied_ = false;
+    bool sampleInFlight_ = false;
 };
 
 } // namespace dvs::ui

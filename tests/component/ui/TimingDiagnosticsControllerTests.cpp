@@ -1,9 +1,19 @@
 #include "dvs/ui/TimingDiagnosticsController.h"
 
+#include "PresentationStatisticsProbeTestHooks.h"
+
+#include <chrono>
 #include <gtest/gtest.h>
+#include <thread>
 
 namespace dvs::ui {
 namespace {
+
+[[nodiscard]] platform::testing::PresentationStatisticsProbeOverrides failingWindowOverrides() {
+    platform::testing::PresentationStatisticsProbeOverrides overrides;
+    overrides.failWindowCreation = true;
+    return overrides;
+}
 
 application::TraceIdentity makeIdentity(const std::uint64_t runId = 1U,
                                         const std::uint64_t reqId = 1U) {
@@ -103,6 +113,7 @@ TEST(TimingDiagnosticsControllerTests, PassiveObserverReceivesEventsFromPlayback
     TimingDiagnosticsController controller;
     controller.setMonitoring(false);
 
+
     // Emitting through global PlaybackTrace should reach controller via observer
     const auto id = makeIdentity(1U, 1U);
     trace.record(application::TraceEventKind::PlaybackRunStarted, id, 1U);
@@ -114,7 +125,82 @@ TEST(TimingDiagnosticsControllerTests, PassiveObserverReceivesEventsFromPlayback
     EXPECT_FALSE(controller.hasActivePlayback());
     EXPECT_EQ(controller.runId(), 1U);
 
+    controller.setMonitoring(false);
     trace.reset();
+}
+
+// E01: construction sits on the startup critical path and must not run the presentation
+// capability probe. The panel starts from the explicit unprobed state.
+TEST(TimingDiagnosticsControllerTests, ConstructionStaysLightAndDefersCapabilityProbe) {
+    TimingDiagnosticsController controller;
+    controller.setMonitoring(false);
+
+    EXPECT_EQ(controller.systemPresentationStatus(), QStringLiteral("未确认 (未探测)"));
+    EXPECT_EQ(controller.driverKind(), QStringLiteral("未知"));
+    EXPECT_FALSE(controller.isIndirectDisplayWarning());
+    EXPECT_TRUE(controller.presentationDetail().isEmpty());
+    EXPECT_EQ(controller.appliedProbeGeneration(), 0U);
+    EXPECT_EQ(controller.presentCount(), 0U);
+    EXPECT_EQ(controller.presentRefreshCount(), 0U);
+}
+
+// E01: the requested probe runs on the controller's worker thread and its graded answer is
+// applied asynchronously. The injected window failure keeps the platform answer deterministic.
+TEST(TimingDiagnosticsControllerTests, RequestedProbeAppliesItsGenerationResultAsynchronously) {
+    TimingDiagnosticsController controller;
+    controller.setMonitoring(false);
+
+    {
+        const platform::testing::ScopedPresentationStatisticsProbeOverride overrides{
+            failingWindowOverrides()};
+        controller.requestPresentationProbe();
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while (std::chrono::steady_clock::now() < deadline &&
+               controller.appliedProbeGeneration() == 0U) {
+            controller.refresh();
+            std::this_thread::sleep_for(std::chrono::milliseconds{5});
+        }
+    }
+    EXPECT_EQ(controller.appliedProbeGeneration(), 1U);
+    EXPECT_EQ(controller.systemPresentationStatus(), QStringLiteral("窗口不可用"));
+    EXPECT_TRUE(controller.presentationDetail().contains(QStringLiteral("CreateWindowExW")));
+
+    // A completed capability stays the cached answer; repeated requests are free.
+    controller.requestPresentationProbe();
+    EXPECT_EQ(controller.appliedProbeGeneration(), 1U);
+}
+
+// E01: a capability answer whose generation was superseded by a presentation-target handover is
+// dropped, never applied to the new target; the panel stays unprobed until a fresh request lands.
+TEST(TimingDiagnosticsControllerTests, SupersededProbeResultNeverOverwritesNewTarget) {
+    TimingDiagnosticsController controller;
+    controller.setMonitoring(false);
+
+    {
+        const platform::testing::ScopedPresentationStatisticsProbeOverride overrides{
+            failingWindowOverrides()};
+        controller.requestPresentationProbe();
+        // Handover before the first answer arrives: the in-flight result becomes stale.
+        controller.notePresentationTargetReplaced();
+        // The failing probe answers within milliseconds; this wait only samples the state after
+        // the stale answer has had every chance to arrive. Even a late arrival is dropped below.
+        std::this_thread::sleep_for(std::chrono::milliseconds{250});
+        controller.refresh();
+        EXPECT_EQ(controller.appliedProbeGeneration(), 0U);
+        EXPECT_EQ(controller.systemPresentationStatus(), QStringLiteral("未确认 (未探测)"));
+
+        // A fresh request for the new target completes and applies under its own generation.
+        // Generations: first request = 1, handover bump = 2, second request = 3.
+        controller.requestPresentationProbe();
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while (std::chrono::steady_clock::now() < deadline &&
+               controller.appliedProbeGeneration() == 0U) {
+            controller.refresh();
+            std::this_thread::sleep_for(std::chrono::milliseconds{5});
+        }
+    }
+    EXPECT_EQ(controller.appliedProbeGeneration(), 3U);
+    EXPECT_EQ(controller.systemPresentationStatus(), QStringLiteral("窗口不可用"));
 }
 
 } // namespace dvs::ui

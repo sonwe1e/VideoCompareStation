@@ -60,6 +60,20 @@ Rectangle {
     signal rangeLoopToggleRequested
     signal closeRequested
 
+    // E01: the presentation capability probe builds its own hidden window, D3D11 device and swap
+    // chain on the controller's worker thread, so it is requested here — when the diagnostics
+    // surface is actually opened — instead of on the startup critical path. The controller keeps
+    // the cached answer and ignores superseded requests, so repeated opens are free. Guarded
+    // property access keeps plain-object stand-ins (contract-test mocks) warning-free.
+    onVisibleChanged: {
+        if (!visible || !control.timingDiagnostics) {
+            return;
+        }
+        if (control.timingDiagnostics.requestPresentationProbe !== undefined) {
+            control.timingDiagnostics.requestPresentationProbe();
+        }
+    }
+
     objectName: "tabbedInspector"
     width: Math.max(300, Math.min(380, parent ? parent.width * 0.3 : 360))
     color: Theme.panel
