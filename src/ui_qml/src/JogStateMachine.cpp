@@ -94,8 +94,8 @@ void JogStateMachine::poll(const SteadyClockTime now) {
     }
     // External navigation can move the presented frame past what this jog tracked; resync so
     // the lead bound measures against reality, not a stale target.
-    const std::int64_t presentedPastTarget = direction_ > 0 ? displayed - lastRequestedFrame_
-                                                            : lastRequestedFrame_ - displayed;
+    const std::int64_t presentedPastTarget =
+        direction_ > 0 ? displayed - lastRequestedFrame_ : lastRequestedFrame_ - displayed;
     if (presentedPastTarget > 0) {
         lastRequestedFrame_ = displayed;
     }
