@@ -5072,6 +5072,188 @@ TEST(MainQmlContractTests, PairComboNamesTheTwoRealSourceFiles) {
               QStringLiteral("A ↔ B"));
 }
 
+// V03: the mode bar is organized by task. The four daily tasks - 并排 / 划线 / 局部联动 /
+// 差异定位 - are one-click top-level entries; the three secondary layouts (三联 / 参考聚焦 /
+// 分析网格) live one level down in the labelled 布局 menu and keep driving the same ViewMode
+// enum. The 局部联动 task reaches the existing RoiTriplet preset end-to-end: the surface
+// maps it to the three-column panorama, the strip stages one window per source, and entering
+// it is a pure view change (no playback command crosses the boundary).
+TEST(MainQmlContractTests, ModeBarOrganizesTasksWithLayoutSubmenu) {
+    ThreeSourceFocusHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+
+    auto* const sideButton = harness.root->findChild<QQuickItem*>(QStringLiteral("sideModeButton"));
+    ASSERT_NE(sideButton, nullptr);
+    auto* const wipeButton = harness.root->findChild<QQuickItem*>(QStringLiteral("wipeModeButton"));
+    ASSERT_NE(wipeButton, nullptr);
+    auto* const roiTripletButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("roiTripletTaskButton"));
+    ASSERT_NE(roiTripletButton, nullptr);
+    auto* const diffButton = harness.root->findChild<QQuickItem*>(QStringLiteral("diffModeButton"));
+    ASSERT_NE(diffButton, nullptr);
+    auto* const surface = harness.root->findChild<QQuickItem*>(QStringLiteral("dualVideoSurface"));
+    ASSERT_NE(surface, nullptr);
+
+    // Four one-click tasks at the top level; the anonymous "…" overflow is gone.
+    EXPECT_TRUE(sideButton->isVisible());
+    EXPECT_TRUE(wipeButton->isVisible());
+    EXPECT_TRUE(wipeButton->property("text").toString().contains(QStringLiteral("划线")));
+    EXPECT_TRUE(roiTripletButton->isVisible());
+    EXPECT_TRUE(roiTripletButton->property("enabled").toBool());
+    EXPECT_TRUE(diffButton->isVisible());
+    EXPECT_TRUE(diffButton->property("text").toString().contains(QStringLiteral("差异定位")));
+    EXPECT_EQ(harness.root->findChild<QObject*>(QStringLiteral("moreCompareModesButton")), nullptr);
+
+    // The layout submenu carries the three secondary layouts and nothing else from the old
+    // overflow: the RoiTriplet entry moved up, the dual-difference entry moved into the
+    // difference menu.
+    auto* const layoutButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("layoutModesButton"));
+    ASSERT_NE(layoutButton, nullptr);
+    EXPECT_TRUE(layoutButton->property("text").toString().contains(QStringLiteral("布局")));
+    auto* const threeUpItem =
+        harness.root->findChild<QObject*>(QStringLiteral("modeBarThreeUpItem"));
+    ASSERT_NE(threeUpItem, nullptr);
+    EXPECT_TRUE(threeUpItem->property("enabled").toBool());
+    EXPECT_NE(harness.root->findChild<QObject*>(QStringLiteral("modeBarReferenceFocusItem")),
+              nullptr);
+    EXPECT_NE(harness.root->findChild<QObject*>(QStringLiteral("modeBarAnalysisGridItem")),
+              nullptr);
+    EXPECT_EQ(harness.root->findChild<QObject*>(QStringLiteral("roiTripletMenuItem")), nullptr);
+
+    // A layout entry still drives the same enum, and the button names the active layout.
+    ASSERT_TRUE(QMetaObject::invokeMethod(threeUpItem, "triggered"));
+    for (int iteration = 0; iteration < 8; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    EXPECT_EQ(harness.root->property("effectiveViewMode").toInt(),
+              static_cast<int>(dvs::ui::ComparisonSurface::ThreeUp));
+    EXPECT_TRUE(layoutButton->property("text").toString().contains(QStringLiteral("三联")));
+
+    // The 局部联动 task reaches the real preset: mode, panorama mapping, strip and window
+    // count, without submitting anything.
+    const std::size_t submittedBefore = harness.submitted.size();
+    ASSERT_TRUE(QMetaObject::invokeMethod(roiTripletButton, "clicked"));
+    for (int iteration = 0; iteration < 8; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    EXPECT_EQ(harness.root->property("effectiveViewMode").toInt(), 8);
+    EXPECT_EQ(surface->property("viewMode").toInt(),
+              static_cast<int>(dvs::ui::ComparisonSurface::ThreeUp));
+    EXPECT_TRUE(roiTripletButton->property("checked").toBool());
+    auto* const roiStrip = harness.root->findChild<QQuickItem*>(QStringLiteral("roiTripletStrip"));
+    ASSERT_NE(roiStrip, nullptr);
+    EXPECT_TRUE(roiStrip->property("visible").toBool());
+    auto* const windowRepeater =
+        harness.root->findChild<QObject*>(QStringLiteral("roiTripletWindowRepeater"));
+    ASSERT_NE(windowRepeater, nullptr);
+    EXPECT_EQ(windowRepeater->property("count").toInt(), 3);
+    EXPECT_EQ(harness.submitted.size(), submittedBefore);
+
+    // Back to a plain task the same way.
+    ASSERT_TRUE(QMetaObject::invokeMethod(sideButton, "clicked"));
+    for (int iteration = 0; iteration < 8; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    EXPECT_EQ(harness.root->property("effectiveViewMode").toInt(),
+              static_cast<int>(dvs::ui::ComparisonSurface::SideBySide));
+    EXPECT_FALSE(roiStrip->property("visible").toBool());
+    EXPECT_EQ(harness.submitted.size(), submittedBefore);
+}
+
+// V03: with three sources and an identified GT, the difference-locating task recommends the
+// GT-anchored dual difference by name, and entering it keeps the task button in charge (the
+// button stays checked and names the 双参考 flavor). The hold-to-peek GT entry stays bound to
+// the pair-difference mode only.
+TEST(MainQmlContractTests, DualDifferenceGuidanceNamesTheBaseline) {
+    ThreeSourceFocusHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+
+    auto* const diffButton = harness.root->findChild<QQuickItem*>(QStringLiteral("diffModeButton"));
+    ASSERT_NE(diffButton, nullptr);
+    auto* const dualItem =
+        harness.root->findChild<QObject*>(QStringLiteral("dualDifferenceMenuItem"));
+    ASSERT_NE(dualItem, nullptr);
+    // Menu rows only carry their visibility once the popup materializes them.
+    auto* const diffMenu = harness.root->findChild<QObject*>(QStringLiteral("diffFlavorMenu"));
+    ASSERT_NE(diffMenu, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(diffMenu, "open"));
+    for (int iteration = 0; iteration < 5; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    EXPECT_TRUE(dualItem->property("visible").toBool());
+    EXPECT_TRUE(dualItem->property("enabled").toBool());
+    EXPECT_TRUE(dualItem->property("text").toString().contains(QStringLiteral("GT 基准")));
+    auto* const peekButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("differencePeekButton"));
+    ASSERT_NE(peekButton, nullptr);
+
+    const std::size_t submittedBefore = harness.submitted.size();
+    ASSERT_TRUE(QMetaObject::invokeMethod(dualItem, "triggered"));
+    for (int iteration = 0; iteration < 8; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    EXPECT_EQ(harness.root->property("effectiveViewMode").toInt(), 9);
+    EXPECT_TRUE(diffButton->property("checked").toBool());
+    EXPECT_TRUE(diffButton->property("text").toString().contains(QStringLiteral("双参考")));
+    // The peek is a pair-difference companion; it does not follow into the dual layout.
+    EXPECT_FALSE(peekButton->isVisible());
+    // Entering a layout is still a pure view change.
+    EXPECT_EQ(harness.submitted.size(), submittedBefore);
+}
+
+// V03: a three-source session without an identified GT must not be pushed into a dual
+// difference against a silently chosen pseudo-baseline. The entry explains what is missing
+// and stays disabled until a reference is set; the two pair-difference flavors remain the
+// offered way to describe source-vs-source differences.
+TEST(MainQmlContractTests, DualDifferenceWithoutReferenceStaysExplainedAndDisabled) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    // Grow the two-source session to three, without any identified reference.
+    harness.snapshot->sources.push_back(application::SessionSourceView{
+        .sourceId = 2U,
+        .role = domain::ComparisonRole::kPrediction,
+        .displayName = "C",
+    });
+    harness.snapshot->presentedSources.push_back(application::PresentedSourceState{
+        .sourceId = 2U,
+        .sourceFrameId = domain::FrameId{41},
+        .matchKind = application::FrameMatchKind::ExactIndex,
+    });
+    harness.controller->refreshProjection();
+    for (int iteration = 0; iteration < 5; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    ASSERT_EQ(harness.controller->sourceCount(), 3);
+    EXPECT_LT(harness.controller->referenceSourceIndex(), 0);
+
+    auto* const dualItem =
+        harness.root->findChild<QObject*>(QStringLiteral("dualDifferenceMenuItem"));
+    ASSERT_NE(dualItem, nullptr);
+    auto* const diffMenu = harness.root->findChild<QObject*>(QStringLiteral("diffFlavorMenu"));
+    ASSERT_NE(diffMenu, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(diffMenu, "open"));
+    for (int iteration = 0; iteration < 5; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    EXPECT_TRUE(dualItem->property("visible").toBool());
+    EXPECT_FALSE(dualItem->property("enabled").toBool());
+    EXPECT_TRUE(dualItem->property("text").toString().contains(QStringLiteral("需先设置参考源")));
+    auto* const pureItem = harness.root->findChild<QObject*>(QStringLiteral("diffPureMenuItem"));
+    ASSERT_NE(pureItem, nullptr);
+    EXPECT_TRUE(pureItem->property("enabled").toBool());
+
+    // Identifying the reference turns the guidance on - same entry, now resolvable.
+    identifyReferenceSlot(harness.snapshot, 1);
+    harness.controller->refreshProjection();
+    for (int iteration = 0; iteration < 5; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    ASSERT_EQ(harness.controller->referenceSourceIndex(), 1);
+    EXPECT_TRUE(dualItem->property("enabled").toBool());
+    EXPECT_TRUE(dualItem->property("text").toString().contains(QStringLiteral("GT 基准")));
+}
+
 // Step-2 comparison export: the composed capture is the exact viewport crop plus a
 // neutral-gray caption bar (true grays — an exported image must not tint color judgment).
 TEST(MainQmlContractTests, ComparisonExportComposesCaptionBarInNeutralGray) {
@@ -9837,8 +10019,9 @@ TEST(MainQmlContractTests, RoiTripletPresetEntersFromPreferencesWithoutPlaybackC
     }
     ASSERT_EQ(controller.sourceCount(), 3);
 
-    // The entry exists and is enabled with three sources.
-    auto* const menuItem = root->findChild<QObject*>(QStringLiteral("roiTripletMenuItem"));
+    // The entry exists and is enabled with three sources. V03: 局部联动 is a top-level task
+    // button now (the old "全景+局部" overflow item moved up, same mode enum and path).
+    auto* const menuItem = root->findChild<QObject*>(QStringLiteral("roiTripletTaskButton"));
     ASSERT_NE(menuItem, nullptr);
     EXPECT_TRUE(menuItem->property("enabled").toBool());
     EXPECT_FALSE(menuItem->property("checked").toBool());
@@ -10009,9 +10192,23 @@ TEST(MainQmlContractTests, RoiTripletPresetSupportsTwoSources) {
     EXPECT_EQ(harness.controller->sourceCount(), 2);
     auto* const surface = harness.root->findChild<QQuickItem*>(QStringLiteral("dualVideoSurface"));
     ASSERT_NE(surface, nullptr);
-    auto* const menuItem = harness.root->findChild<QObject*>(QStringLiteral("roiTripletMenuItem"));
+    auto* const menuItem =
+        harness.root->findChild<QObject*>(QStringLiteral("roiTripletTaskButton"));
     ASSERT_NE(menuItem, nullptr);
     EXPECT_TRUE(menuItem->property("enabled").toBool());
+    // V03: the dual difference needs three sources; the two-source difference task only
+    // offers the pair flavors (row visibility is readable once the popup materializes).
+    auto* const diffMenu = harness.root->findChild<QObject*>(QStringLiteral("diffFlavorMenu"));
+    ASSERT_NE(diffMenu, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(diffMenu, "open"));
+    for (int iteration = 0; iteration < 5; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    auto* const dualItem =
+        harness.root->findChild<QObject*>(QStringLiteral("dualDifferenceMenuItem"));
+    ASSERT_NE(dualItem, nullptr);
+    EXPECT_FALSE(dualItem->property("visible").toBool());
+    ASSERT_TRUE(QMetaObject::invokeMethod(diffMenu, "close"));
     auto* const strip = harness.root->findChild<QQuickItem*>(QStringLiteral("roiTripletStrip"));
     ASSERT_NE(strip, nullptr);
     EXPECT_FALSE(strip->property("visible").toBool());

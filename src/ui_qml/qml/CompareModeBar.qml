@@ -57,23 +57,22 @@ Rectangle {
 
     // qmllint disable import unqualified unresolved-type
     readonly property bool pairRelevant: currentMode === ComparisonSurface.Wipe || currentMode === ComparisonSurface.Difference || currentMode === ComparisonSurface.AnalysisGrid
-    readonly property bool advancedMode: currentMode === ComparisonSurface.ThreeUp || currentMode === ComparisonSurface.ReferenceFocus || currentMode === ComparisonSurface.AnalysisGrid || currentMode === ComparisonSurface.RoiTriplet || currentMode === ComparisonSurface.DualDifference
-    readonly property string advancedModeLabel: {
+    // V03: the three secondary layouts keep living one level down, under the 布局 menu - they
+    // refine how the sources are arranged, they are not daily tasks of their own.
+    readonly property bool layoutModeActive: currentMode === ComparisonSurface.ThreeUp || currentMode === ComparisonSurface.ReferenceFocus || currentMode === ComparisonSurface.AnalysisGrid
+    readonly property string layoutModeLabel: {
         if (currentMode === ComparisonSurface.ThreeUp)
             return qsTr("三联");
         if (currentMode === ComparisonSurface.ReferenceFocus)
             return qsTr("参考聚焦");
         if (currentMode === ComparisonSurface.AnalysisGrid)
             return qsTr("分析网格");
-        if (currentMode === ComparisonSurface.RoiTriplet)
-            return qsTr("全景+局部");
-        if (currentMode === ComparisonSurface.DualDifference)
-            return qsTr("双参考差异");
         return "";
     }
     // The button names the active quick flavor; other metrics (signed/heatmap/...) keep
-    // the plain "差异" label and stay selectable from the inspector.
-    readonly property string differenceFlavorLabel: currentMode === ComparisonSurface.Difference ? (differenceMetric === ComparisonSurface.Highlight ? qsTr("叠加高亮") : (differenceMetric === ComparisonSurface.RgbAbsolute ? qsTr("纯差异图") : "")) : ""
+    // the plain "差异" label and stay selectable from the inspector. V03: the dual-reference
+    // difference counts as a difference-locating flavor, so the task button names it too.
+    readonly property string differenceFlavorLabel: currentMode === ComparisonSurface.Difference ? (differenceMetric === ComparisonSurface.Highlight ? qsTr("叠加高亮") : (differenceMetric === ComparisonSurface.RgbAbsolute ? qsTr("纯差异图") : "")) : (currentMode === ComparisonSurface.DualDifference ? qsTr("双参考") : "")
     // qmllint enable import unqualified unresolved-type
 
     // V02 (P05): request codes mirroring ReviewShellController::CanvasFocusRequest. Exposed as
@@ -117,14 +116,24 @@ Rectangle {
         }
         ModeButton {
             objectName: "wipeModeButton"
-            text: qsTr("分割线")
+            text: qsTr("划线")
             modeValue: ComparisonSurface.Wipe
+        }
+        // V03: local comparison is a top-level task, not an overflow entry. V01 already
+        // samples the decoded source textures for 2-3 same-ROI windows under one shared ROI,
+        // so the entry only has to reach the existing RoiTriplet preset - same mode enum,
+        // same renderer path, nothing new to invent. Two sources give two windows, three
+        // give three.
+        ModeButton {
+            objectName: "roiTripletTaskButton"
+            text: qsTr("局部联动")
+            modeValue: ComparisonSurface.RoiTriplet
         }
         // Step-2 difference entry: the button itself offers the flavors the review named
         // (overlay highlight / pure diff), mirroring the image workspace's diff dropdown.
         DiffModeButton {
             objectName: "diffModeButton"
-            text: control.differenceFlavorLabel.length > 0 ? qsTr("差异·%1 ▾").arg(control.differenceFlavorLabel) : qsTr("差异 ▾")
+            text: control.differenceFlavorLabel.length > 0 ? qsTr("差异·%1 ▾").arg(control.differenceFlavorLabel) : qsTr("差异定位 ▾")
         }
         // Hold-to-peek: while held the surface shows the reference (GT) source instead of the
         // difference pass; releasing restores the difference view. The label names that target
@@ -223,69 +232,50 @@ Rectangle {
             }
         }
 
+        // V03: the three secondary layouts move one level down into a labelled 布局 menu
+        // instead of sharing a flat "…" overflow with the daily tasks. The button names the
+        // active layout so the current arrangement stays readable from the top level.
         VcsToolButton {
-            id: moreCompareModesButton
+            id: layoutModesButton
 
-            objectName: "moreCompareModesButton"
-            text: control.advancedMode ? qsTr("… · %1").arg(control.advancedModeLabel) : "…"
-            implicitWidth: control.advancedMode ? 128 : 36
+            objectName: "layoutModesButton"
+            text: control.layoutModeActive ? qsTr("布局·%1 ▾").arg(control.layoutModeLabel) : qsTr("布局 ▾")
+            implicitWidth: control.layoutModeActive ? 128 : 76
             implicitHeight: 30
-            onClicked: moreMenu.open()
+            onClicked: layoutMenu.open()
             labelPixelSize: 12
 
             VcsMenu {
-                id: moreMenu
+                id: layoutMenu
                 menuWidth: 220
 
                 // qmllint disable import unqualified unresolved-type
                 VcsRadioMenuItem {
-                    id: threeUpMenuItem
+                    id: modeBarThreeUpItem
 
-                    objectName: "threeUpMenuItem"
+                    objectName: "modeBarThreeUpItem"
                     text: qsTr("三联")
                     enabled: control.sourceCount === 3
                     checked: control.currentMode === ComparisonSurface.ThreeUp
                     onTriggered: control.modeRequested(ComparisonSurface.ThreeUp)
                 }
                 VcsRadioMenuItem {
-                    id: referenceFocusMenuItem
+                    id: modeBarReferenceFocusItem
 
-                    objectName: "referenceFocusMenuItem"
+                    objectName: "modeBarReferenceFocusItem"
                     text: qsTr("参考聚焦")
                     enabled: control.sourceCount === 3
                     checked: control.currentMode === ComparisonSurface.ReferenceFocus
                     onTriggered: control.modeRequested(ComparisonSurface.ReferenceFocus)
                 }
                 VcsRadioMenuItem {
-                    id: analysisGridMenuItem
+                    id: modeBarAnalysisGridItem
 
-                    objectName: "analysisGridMenuItem"
+                    objectName: "modeBarAnalysisGridItem"
                     text: qsTr("分析网格")
                     enabled: control.sourceCount === 3
                     checked: control.currentMode === ComparisonSurface.AnalysisGrid
                     onTriggered: control.modeRequested(ComparisonSurface.AnalysisGrid)
-                }
-                // V01 task preset: the panorama stays one column per source and the renderer
-                // draws the local windows as extra draws of the same presented frame set under
-                // one shared ROI. Two sources are the minimum, so the item explains itself as
-                // unavailable below that.
-                VcsRadioMenuItem {
-                    id: roiTripletMenuItem
-
-                    objectName: "roiTripletMenuItem"
-                    text: qsTr("全景+局部")
-                    enabled: control.sourceCount >= 2
-                    checked: control.currentMode === ComparisonSurface.RoiTriplet
-                    onTriggered: control.modeRequested(ComparisonSurface.RoiTriplet)
-                }
-                VcsRadioMenuItem {
-                    id: dualDifferenceMenuItem
-
-                    objectName: "dualDifferenceMenuItem"
-                    text: qsTr("双参考差异")
-                    enabled: control.sourceCount === 3
-                    checked: control.currentMode === ComparisonSurface.DualDifference
-                    onTriggered: control.modeRequested(ComparisonSurface.DualDifference)
                 }
                 // qmllint enable import unqualified unresolved-type
             }
@@ -458,11 +448,13 @@ Rectangle {
         id: diffModeButton
 
         checkable: true
-        checked: control.currentMode === ComparisonSurface.Difference
+        // V03: "差异定位" covers both pair differences and the GT-anchored dual difference -
+        // one task, two scopes.
+        checked: control.currentMode === ComparisonSurface.Difference || control.currentMode === ComparisonSurface.DualDifference
         // Opening the flavour menu must not light the button up before a flavour is chosen.
         mirrorsState: true
         implicitHeight: 30
-        implicitWidth: control.differenceFlavorLabel.length > 0 ? 132 : 84
+        implicitWidth: control.differenceFlavorLabel.length > 0 ? 132 : 92
         enabled: !control.busy
         leftPadding: 10
         rightPadding: 10
@@ -518,8 +510,24 @@ Rectangle {
 
         VcsMenu {
             id: diffFlavorMenu
+            objectName: "diffFlavorMenu"
             menuWidth: 220
 
+            // V03: with three sources and an identified GT, the GT-anchored dual difference is
+            // the recommended way to locate defects (both candidates against the same
+            // baseline), so it leads the menu and says so. Without a GT the item explains
+            // itself instead of silently picking a pseudo-baseline, and the pair-difference
+            // flavors below describe plain source-vs-source differences.
+            VcsRadioMenuItem {
+                id: dualDifferenceMenuItem
+
+                objectName: "dualDifferenceMenuItem"
+                visible: control.sourceCount === 3
+                enabled: !control.busy && control.peekTargetValid
+                text: control.peekTargetValid ? qsTr("双参考差异（GT 基准）") : qsTr("双参考差异（需先设置参考源）")
+                checked: control.currentMode === ComparisonSurface.DualDifference
+                onTriggered: control.modeRequested(ComparisonSurface.DualDifference)
+            }
             VcsRadioMenuItem {
                 objectName: "diffPureMenuItem"
 

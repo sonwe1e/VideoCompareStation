@@ -1,7 +1,43 @@
 # 视觉审查问题台账
 
-更新：2026-10-11（统一源入口与比较选择 V02／长按正反向走带 E04／缓存小步改进 E05／启动减负 E01／诊断可关闭 E02／全画布候选直看 P05／图片编辑纯操作 P11／协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-10-11（任务化模式入口 V03／统一源入口与比较选择 V02／长按正反向走带 E04／缓存小步改进 E05／启动减负 E01／诊断可关闭 E02／全画布候选直看 P05／图片编辑纯操作 P11／协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+
+## 2026-10-11 任务化模式入口 V03
+
+- **范围**：《CompareStation 下一步体验与性能计划 2026-10-11》§5 V03（P1），R3 阶段工单。
+  顶层按任务组织对比入口；内部复用现有 ViewMode 枚举，不改播放器域模型、渲染后端与 E04 走带。
+- **问题（基线 147dd54）**：8 种模式平铺，三联/参考聚焦/分析网格与日常任务混排在"…"溢出菜单；
+  V01 交付的局部联动（源纹理直采样）藏在"…"里发现性差；三源差异无 GT 基准引导。
+- **交付**（`CompareModeBar.qml` 单文件为主）：
+  - 顶层四个一键任务：并排、划线（原"分割线"）、局部联动（新顶层按钮 `roiTripletTaskButton`，
+    直达既有 RoiTriplet 预设；2 源两格/3 源三格由 V01 既有路径承担）、差异定位（`diffModeButton`，
+    plain 标签从"差异 ▾"改"差异定位 ▾"）。
+  - 差异菜单：三源且已识别 GT 时，"双参考差异（GT 基准）"列为首项（默认引导）；无 GT 时该项保持
+    可见但禁用并说明"需先设置参考源"（不悄悄选伪基准），两格差异风味继续描述源间差异；
+    双源会话不显示该项。差异定位按钮 checked 覆盖 Difference+DualDifference 两族，激活时按钮
+    名称带"双参考"风味。
+  - 布局子菜单：原"…"溢出改为"布局 ▾"（`layoutModesButton`），内含三联/参考聚焦/分析网格
+    （objectName `modeBarThreeUpItem`/`modeBarReferenceFocusItem`/`modeBarAnalysisGridItem`，
+    与 ApplicationMenuBar 同名项解耦）；激活布局时按钮显示"布局·三联"等。诊断卡仍按需展开，未动。
+- **不变量**：所有入口仅发既有 modeRequested 枚举值；进入任何任务/布局均为纯视图切换
+  （不提交播放命令，测试钉死）；ApplicationMenuBar 与 TabbedInspector 未改。
+- **验证（本地 dev preset，2026-10-11）**：
+  - 新增 `MainQmlContractTests.ModeBarOrganizesTasksWithLayoutSubmenu`（四任务一键可达、
+    溢出按钮消失、布局子菜单驱动同一枚举且按钮命名激活布局、局部联动直达预设：surface 映射
+    ThreeUp、strip 可见、3 窗、零播放命令）、`DualDifferenceGuidanceNamesTheBaseline`（GT 基准
+    命名、进入即纯视图切换、任务按钮覆盖双差异族、peek 不跟随）、
+    `DualDifferenceWithoutReferenceStaysExplainedAndDisabled`（无 GT 三源：禁用+说明文字、
+    识别参考后转为可用）；既有 RoiTriplet 两测更新为顶层按钮引用，2 源测试加双差异不可见断言。
+  - 回归：MainQmlContractTests 92/92、ReviewControllerTests+domain ComparisonSelection/Validator+
+    RoiTripletStrip+active_source_strip 共 243/243；format-check、lint 通过。
+  - 变异证据：`out/verification/v03-task-entry-mutation/`（VM1–VM5：任务按钮错靶/无 GT 放开/
+    布局项错枚举/差异按钮丢双差异族/三源门丢失，全部改坏→失败→还原；VM1 附实例 onClicked
+    与内联组件 handler 叠加不覆盖的记录）。
+- **UNVERIFIED（真机项，不宣称）**：四任务在 960×640 最小宽度下的实际排版余量（U01 另行
+  处理响应式）；差异菜单引导措辞的用户理解度；真机 GT+双输出的双差异观感。
+- **回退**：CompareModeBar.qml 还原为"…"溢出+三按钮平铺即回旧入口；测试引用同步还原。
+  无 C++ 行为改动，回退无连锁。
 
 ## 2026-10-11 统一源入口与比较选择 V02
 
