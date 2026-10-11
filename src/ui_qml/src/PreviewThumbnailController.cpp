@@ -84,6 +84,39 @@ void PreviewThumbnailController::request(const qint64 frame) {
     }
 }
 
+void PreviewThumbnailController::requestBatch(const QVariantList& frames) {
+    if (stopped_) {
+        return;
+    }
+    // The batch always replaces its predecessor: a re-targeted strip must not keep decoding
+    // frames from the previous window. The card re-sends the whole visible window, so the
+    // queue stays bounded by the strip's cell count (5-9 frames) by construction.
+    batchQueue_.clear();
+    for (const QVariant& frame : frames) {
+        bool converted = false;
+        const qint64 value = frame.toLongLong(&converted);
+        if (converted && value >= 0 && !hasThumbnail(value)) {
+            batchQueue_.push_back(value);
+        }
+    }
+    if (!batchQueue_.empty() && debounce_ != nullptr) {
+        debounce_->start();
+    }
+}
+
+void PreviewThumbnailController::cancelBatch() {
+    batchQueue_.clear();
+    if (inflightIsBatch_) {
+        if (dependencies_.service != nullptr && inflightContext_.has_value()) {
+            dependencies_.service->cancel(*inflightContext_);
+        }
+        inflightContext_.reset();
+        inflightFrame_ = -1;
+        inflightIsBatch_ = false;
+        Q_EMIT stateChanged();
+    }
+}
+
 QUrl PreviewThumbnailController::urlForFrame(const qint64 frame) {
     if (!hasThumbnail(frame)) {
         return {};
@@ -97,6 +130,16 @@ bool PreviewThumbnailController::hasThumbnail(const qint64 frame) {
     return cache_.find(frame) != cache_.end();
 }
 
+QSize PreviewThumbnailController::thumbnailSourceSize(const qint64 frame) {
+    syncSessionIdentity();
+    std::scoped_lock lock(cacheMutex_);
+    const auto found = cache_.find(frame);
+    if (found == cache_.end()) {
+        return {};
+    }
+    return QSize{found->second.width, found->second.height};
+}
+
 PreviewThumbnailController::RawThumbnail
 PreviewThumbnailController::rawForFrame(const qint64 frame) const {
     std::scoped_lock lock(cacheMutex_);
@@ -106,6 +149,8 @@ PreviewThumbnailController::rawForFrame(const qint64 frame) const {
 
 void PreviewThumbnailController::stop() noexcept {
     stopped_ = true;
+    batchQueue_.clear();
+    inflightIsBatch_ = false;
     if (sink_ != nullptr) {
         sink_->close();
     }
@@ -138,6 +183,8 @@ void PreviewThumbnailController::syncSessionIdentity() {
     // old session and must never surface for the new one.
     cachedSessionId_ = snapshot->sessionId;
     cachedSessionEpoch_ = snapshot->sessionEpoch;
+    batchQueue_.clear();
+    inflightIsBatch_ = false;
     if (dependencies_.service != nullptr && inflightContext_.has_value()) {
         dependencies_.service->cancel(*inflightContext_);
     }
@@ -157,6 +204,11 @@ void PreviewThumbnailController::drainSink() {
     }
     for (application::PreviewThumbnailResult& result : sink_->takeResults()) {
         onResult(std::move(result));
+    }
+    // A finished job (either kind) can leave queued batch frames behind; arm the drain so the
+    // low-priority strip continues without another user action.
+    if (!stopped_ && pendingFrame_ < 0 && !batchQueue_.empty() && debounce_ != nullptr) {
+        debounce_->start();
     }
 }
 
@@ -178,6 +230,7 @@ void PreviewThumbnailController::onResult(application::PreviewThumbnailResult re
     if (inflightContext_.has_value() && *inflightContext_ == result.context) {
         inflightFrame_ = -1;
         inflightContext_.reset();
+        inflightIsBatch_ = false;
     }
     if (!result.available || result.rgba.empty() || result.width == 0U || result.height == 0U) {
         return;
@@ -200,13 +253,14 @@ void PreviewThumbnailController::onResult(application::PreviewThumbnailResult re
     if (!inflightContext_.has_value() || inflightContext_->requestId == result.context.requestId) {
         inflightFrame_ = -1;
         inflightContext_.reset();
+        inflightIsBatch_ = false;
     }
     Q_EMIT thumbnailReady(result.frameId.value());
     Q_EMIT stateChanged();
 }
 
 void PreviewThumbnailController::scheduleRequest() {
-    if (stopped_ || dependencies_.service == nullptr || pendingFrame_ < 0) {
+    if (stopped_ || dependencies_.service == nullptr) {
         return;
     }
     const std::shared_ptr<const application::SessionSnapshot> snapshot =
@@ -215,40 +269,95 @@ void PreviewThumbnailController::scheduleRequest() {
         snapshot->sessionState != domain::SessionState::kReady) {
         return;
     }
-    if (pendingFrame_ == inflightFrame_) {
-        return;
-    }
-    if (hasThumbnail(pendingFrame_)) {
-        pendingFrame_ = -1;
-        return;
-    }
+    // Interactive (hover) work always goes first. An interactive target preempts an
+    // in-flight batch decode through the same cancel path that supersedes older hovers.
+    if (pendingFrame_ >= 0) {
+        if (pendingFrame_ == inflightFrame_) {
+            return;
+        }
+        if (hasThumbnail(pendingFrame_)) {
+            pendingFrame_ = -1;
+            return;
+        }
 
-    // Hover preview describes the timeline master (canonical) source of the active set.
-    const domain::SourceId canonicalId = snapshot->validatedComparison->canonicalSourceId();
-    const domain::ComparisonSource* source = snapshot->validatedComparison->find(canonicalId);
-    if (source == nullptr) {
-        return;
-    }
+        // Hover preview describes the timeline master (canonical) source of the active set.
+        const domain::SourceId canonicalId = snapshot->validatedComparison->canonicalSourceId();
+        const domain::ComparisonSource* source = snapshot->validatedComparison->find(canonicalId);
+        if (source == nullptr) {
+            return;
+        }
 
-    application::PreviewThumbnailRequest request{
-        .context = application::RequestContext{snapshot->sessionId,
-                                               snapshot->sessionEpoch,
-                                               domain::RequestId{nextRequestId_++}},
-        .source = *source,
-        .frameId = domain::FrameId{pendingFrame_},
-    };
-    if (!request.isValid()) {
-        pendingFrame_ = -1;
+        application::PreviewThumbnailRequest request{
+            .context = application::RequestContext{snapshot->sessionId,
+                                                   snapshot->sessionEpoch,
+                                                   domain::RequestId{nextRequestId_++}},
+            .source = *source,
+            .frameId = domain::FrameId{pendingFrame_},
+        };
+        if (!request.isValid()) {
+            pendingFrame_ = -1;
+            return;
+        }
+        if (inflightContext_.has_value()) {
+            dependencies_.service->cancel(*inflightContext_);
+        }
+        if (dependencies_.service->submit(request, sink_) ==
+            application::PortSubmitResult::Accepted) {
+            inflightFrame_ = pendingFrame_;
+            inflightContext_ = request.context;
+            inflightIsBatch_ = false;
+            pendingFrame_ = -1;
+            Q_EMIT stateChanged();
+        }
         return;
     }
-    if (inflightContext_.has_value()) {
-        dependencies_.service->cancel(*inflightContext_);
-    }
-    if (dependencies_.service->submit(request, sink_) == application::PortSubmitResult::Accepted) {
-        inflightFrame_ = pendingFrame_;
-        inflightContext_ = request.context;
-        pendingFrame_ = -1;
-        Q_EMIT stateChanged();
+    // Low-priority batch drain (V04 nearby-frames strip): one decode at a time, only while
+    // no interactive request is pending. There is never more than one strip decode in flight,
+    // so the prefetch path cannot add resident decode pressure beyond a single hover-sized job.
+    while (!batchQueue_.empty()) {
+        const qint64 frame = batchQueue_.front();
+        if (frame < 0 || hasThumbnail(frame)) {
+            batchQueue_.erase(batchQueue_.begin());
+            continue;
+        }
+        if (frame == inflightFrame_) {
+            return;
+        }
+
+        const domain::SourceId canonicalId = snapshot->validatedComparison->canonicalSourceId();
+        const domain::ComparisonSource* source = snapshot->validatedComparison->find(canonicalId);
+        if (source == nullptr) {
+            // Cannot address the canonical source right now: drop the batch instead of
+            // keeping stale frames queued (the card re-requests on its next change).
+            batchQueue_.clear();
+            return;
+        }
+
+        application::PreviewThumbnailRequest request{
+            .context = application::RequestContext{snapshot->sessionId,
+                                                   snapshot->sessionEpoch,
+                                                   domain::RequestId{nextRequestId_++}},
+            .source = *source,
+            .frameId = domain::FrameId{frame},
+        };
+        if (!request.isValid()) {
+            batchQueue_.clear();
+            return;
+        }
+        if (inflightContext_.has_value()) {
+            dependencies_.service->cancel(*inflightContext_);
+        }
+        if (dependencies_.service->submit(request, sink_) ==
+            application::PortSubmitResult::Accepted) {
+            inflightFrame_ = frame;
+            inflightContext_ = request.context;
+            inflightIsBatch_ = true;
+            batchQueue_.erase(batchQueue_.begin());
+            Q_EMIT stateChanged();
+            return;
+        }
+        batchQueue_.clear();
+        return;
     }
 }
 

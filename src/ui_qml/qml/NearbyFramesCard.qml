@@ -6,6 +6,9 @@ import "VcsTheme.js" as Theme
 // P06 (D02) nearby-frames diagnostic card: filmstrip showing 5-9 frames around a marked issue,
 // real timeline thumbnails, provenance badges (retained/generated/missing/unknown), anchor highlight,
 // loop seam indicator, interval playback controls, and training sample triplet export.
+// V04: the window stays 5-9 cells centered on the anchor, one low-priority thumbnail batch
+// replaces per-cell requests, thumbnails name their source, and the strip can switch to a
+// same-ROI consecutive view for locating a defect before close inspection on the main canvas.
 Rectangle {
     id: control
 
@@ -17,6 +20,14 @@ Rectangle {
     property var previewThumbnails: null
     property var sampleExportController: null
     property int currentFrame: -1
+    property int totalFrames: 0
+    // Shared-ROI state from the main canvas (normalized source rect). The consecutive strip
+    // crops each thumbnail to this rect so every cell shows the same region across frames.
+    property bool roiEnabled: false
+    property real roiLeft: 0
+    property real roiTop: 0
+    property real roiRight: 1
+    property real roiBottom: 1
 
     signal closeRequested
     signal seekRequested(int frame)
@@ -41,6 +52,11 @@ Rectangle {
     readonly property var sessionEpoch: intervalData && intervalData.sessionEpoch !== undefined ? intervalData.sessionEpoch : 0
     readonly property bool epochMatches: !reviewController || sessionEpoch === 0 || Number(reviewController.sessionEpoch) === Number(sessionEpoch)
 
+    // V04 same-ROI consecutive strip: false shows the issue interval with provenance badges,
+    // true shows a contiguous ±4 window around the anchor cropped to the shared ROI.
+    property bool consecutiveStripMode: false
+    readonly property int stripCenterFrame: anchorFrame >= 0 ? anchorFrame : currentFrame
+
     readonly property int selectedExportFrame: anchorFrame >= 0 ? anchorFrame : currentFrame
     readonly property bool canExportSample: sampleExportController && selectedExportFrame >= 0 ? sampleExportController.canExportAtFrame(selectedExportFrame) : false
     readonly property bool sampleExportBusy: sampleExportController ? Boolean(sampleExportController.busy) : false
@@ -52,29 +68,116 @@ Rectangle {
         if (protocolController && Boolean(protocolController.protocolLoaded)) {
             const summaries = protocolController.originSummariesInRange(inFrame, outFrame);
             if (summaries && summaries.length > 0)
-                return summaries;
+                return clampToLocatingWindow(summaries);
         }
 
+        // No loaded protocol: the strip has no provenance evidence for any frame, so every
+        // cell reports "unknown" - claiming a definite "outside the interval" would invent
+        // knowledge nobody has (V04: unknown protocol is not "out of interval").
         const fallback = [];
-        for (let f = inFrame; f <= outFrame; ++f) {
+        for (let f = windowInFrame; f <= windowOutFrame; ++f) {
             fallback.push({
                 "frame": f,
                 "displayFrame": f + 1,
-                "kind": "outside",
+                "kind": "unknown",
                 "badgeMarker": ""
             });
         }
         return fallback;
     }
 
-    onSummariesListChanged: {
-        if (control.previewThumbnails) {
-            for (let i = 0; i < summariesList.length; ++i) {
-                const f = summariesList[i].frame;
-                if (f !== undefined && f >= 0)
-                    control.previewThumbnails.request(f);
-            }
+    // V04 locating window: at most 9 cells (5-9 frames stay usable for locating), centered on
+    // the anchor when the recorded interval is wider. The protocol summary is trimmed to the
+    // same window so badges describe exactly the frames shown.
+    readonly property int windowInFrame: {
+        if (inFrame < 0 || outFrame < inFrame)
+            return -1;
+        if (outFrame - inFrame + 1 <= 9)
+            return inFrame;
+        const center = anchorFrame >= 0 ? Math.min(Math.max(anchorFrame, inFrame), outFrame) : currentFrame;
+        return Math.max(inFrame, Math.min(center - 4, outFrame - 8));
+    }
+    readonly property int windowOutFrame: {
+        if (inFrame < 0 || outFrame < inFrame || windowInFrame < 0)
+            return -1;
+        if (outFrame - inFrame + 1 <= 9)
+            return outFrame;
+        return Math.min(outFrame, windowInFrame + 8);
+    }
+
+    function clampToLocatingWindow(summaries) {
+        if (windowInFrame < 0 || windowOutFrame < windowInFrame)
+            return [];
+        return summaries.filter(entry => {
+            const f = Number(entry && entry.frame !== undefined ? entry.frame : -1);
+            return f >= windowInFrame && f <= windowOutFrame;
+        });
+    }
+
+    // V04 consecutive strip: contiguous frames around the anchor (current frame without one),
+    // clamped to the timeline. No provenance claim is made for these cells - the point is
+    // comparing the same region across neighbouring frames, and the interval view keeps the
+    // provenance badges.
+    readonly property var consecutiveList: {
+        const total = Number(control.totalFrames);
+        if (stripCenterFrame < 0 || total <= 0)
+            return [];
+        const first = Math.max(0, stripCenterFrame - 4);
+        const last = Math.min(total - 1, stripCenterFrame + 4);
+        const cells = [];
+        for (let f = first; f <= last; ++f) {
+            cells.push({
+                "frame": f,
+                "displayFrame": f + 1,
+                "kind": ""
+            });
         }
+        return cells;
+    }
+
+    readonly property var displayList: consecutiveStripMode ? consecutiveList : summariesList
+
+    // All thumbnail decodes for the card go through one low-priority batch (V04): a single
+    // replaceable queue in the preview controller, never per-cell latest-wins requests that
+    // would fight the timeline hover preview and drop all but the last frame.
+    readonly property var thumbnailFrames: {
+        const frames = [];
+        for (let i = 0; i < displayList.length; ++i) {
+            const f = displayList[i] && displayList[i].frame !== undefined ? Number(displayList[i].frame) : -1;
+            if (f >= 0)
+                frames.push(f);
+        }
+        return frames;
+    }
+
+    function requestVisibleThumbnails() {
+        if (control.previewThumbnails && control.previewThumbnails.requestBatch)
+            control.previewThumbnails.requestBatch(control.thumbnailFrames);
+    }
+
+    // Thumbnails always come from the canonical (timeline master) source; the card says so
+    // instead of letting a frame read like "the" frame of every source.
+    readonly property string thumbnailSourceName: {
+        if (!reviewController)
+            return "";
+        const names = [reviewController.sourceAFilename, reviewController.sourceBFilename, reviewController.sourceCFilename];
+        const index = Number(reviewController.canonicalSourceIndex);
+        return index >= 0 && index < names.length ? String(names[index]) : "";
+    }
+
+    onThumbnailFramesChanged: requestVisibleThumbnails()
+    onVisibleChanged: {
+        // A closed or hidden card cancels its outstanding batch so stale frame decodes stop;
+        // becoming visible again re-requests exactly the shown window.
+        if (control.visible) {
+            requestVisibleThumbnails();
+        } else if (control.previewThumbnails && control.previewThumbnails.cancelBatch) {
+            control.previewThumbnails.cancelBatch();
+        }
+    }
+    onPreviewThumbnailsChanged: {
+        if (control.visible)
+            requestVisibleThumbnails();
     }
 
     Column {
@@ -98,6 +201,19 @@ Rectangle {
                 text: control.anchorFrame >= 0 ? qsTr("锚点：第 %1 帧（区间 %2..%3）").arg(control.anchorFrame + 1).arg(control.inFrame + 1).arg(control.outFrame + 1) : ""
                 color: Theme.mutedText
                 font.pixelSize: 11
+                anchors.verticalCenter: parent.verticalCenter
+            }
+
+            // V04: thumbnails decode the canonical (timeline master) source through the
+            // independent preview path; say which file that is instead of an anonymous frame.
+            Text {
+                objectName: "nearbyFramesThumbnailSourceLabel"
+                visible: control.previewThumbnails !== null
+                text: control.thumbnailSourceName.length > 0 ? qsTr("缩略图源：%1").arg(control.thumbnailSourceName) : qsTr("缩略图源：未知")
+                color: control.thumbnailSourceName.length > 0 ? Theme.secondaryText : Theme.warningText
+                font.pixelSize: 10
+                elide: Text.ElideMiddle
+                width: 150
                 anchors.verticalCenter: parent.verticalCenter
             }
 
@@ -127,6 +243,19 @@ Rectangle {
             }
 
             ReviewActionButton {
+                objectName: "nearbyFramesStripToggle"
+                // Interval view keeps the provenance badges; the consecutive view crops every
+                // cell to the same ROI so the eye compares one region across neighbouring
+                // frames. Without a ROI the strip still shows whole frames, and says so.
+                text: control.consecutiveStripMode ? (control.roiEnabled ? qsTr("同 ROI 连续帧") : qsTr("连续帧（未启用 ROI）")) : qsTr("区间帧")
+                checked: control.consecutiveStripMode
+                implicitHeight: 26
+                implicitWidth: control.consecutiveStripMode ? 120 : 76
+                anchors.verticalCenter: parent.verticalCenter
+                onClicked: control.consecutiveStripMode = !control.consecutiveStripMode
+            }
+
+            ReviewActionButton {
                 objectName: "nearbyFramesCloseButton"
                 text: qsTr("收起")
                 implicitHeight: 26
@@ -146,7 +275,7 @@ Rectangle {
             spacing: 6
             clip: true
             cacheBuffer: 300
-            model: control.summariesList
+            model: control.displayList
 
             delegate: Rectangle {
                 id: cellRect
@@ -167,6 +296,21 @@ Rectangle {
                             return u;
                     }
                     return "";
+                }
+
+                // The same-ROI strip crops in the thumbnail's own pixels. The size comes from
+                // the controller's decoded cache (reading the QML Image's implicit size would
+                // loop: the implicit size itself follows sourceClipRect). An empty rect keeps
+                // the whole image - also the fallback while the frame is not decoded yet.
+                readonly property size thumbnailSourceSize: {
+                    if (!control.previewThumbnails || !control.previewThumbnails.thumbnailSourceSize || cellFrame < 0)
+                        return Qt.size(0, 0);
+                    return control.previewThumbnails.thumbnailSourceSize(cellFrame);
+                }
+                readonly property rect roiCropRect: {
+                    if (!control.consecutiveStripMode || !control.roiEnabled || cellRect.thumbnailUrl.toString().length === 0 || cellRect.thumbnailSourceSize.width <= 0 || cellRect.thumbnailSourceSize.height <= 0)
+                        return Qt.rect(0, 0, 0, 0);
+                    return Qt.rect(control.roiLeft * cellRect.thumbnailSourceSize.width, control.roiTop * cellRect.thumbnailSourceSize.height, (control.roiRight - control.roiLeft) * cellRect.thumbnailSourceSize.width, (control.roiBottom - control.roiTop) * cellRect.thumbnailSourceSize.height);
                 }
 
                 objectName: cellFrame >= 0 ? ("nearbyFrameCell_" + cellFrame) : ""
@@ -205,11 +349,21 @@ Rectangle {
                         clip: true
 
                         Image {
+                            id: cellThumbnail
+
+                            objectName: "nearbyFrameThumbnailImage"
                             anchors.fill: parent
-                            fillMode: Image.PreserveAspectFit
+                            // Cropped cells stretch the ROI region into the well (locating
+                            // view); whole-frame cells keep their aspect like before.
+                            fillMode: cellRect.roiCropRect.width > 0 && cellRect.roiCropRect.height > 0 ? Image.Stretch : Image.PreserveAspectFit
                             source: cellRect.thumbnailUrl
                             cache: false
                             visible: cellRect.thumbnailUrl.toString().length > 0
+                            // V04 same-ROI strip: crop the decoded full frame to the shared
+                            // ROI (normalized source rect maps 1:1 onto the whole-frame
+                            // thumbnail). An empty rect keeps the whole image, which is also
+                            // the fallback while the image dimensions are not loaded yet.
+                            sourceClipRect: cellRect.roiCropRect
                         }
 
                         Text {
@@ -240,6 +394,9 @@ Rectangle {
                         border.color: cellRect.cellKind === "missing" ? Theme.errorBorder : "transparent"
 
                         Text {
+                            id: kindBadgeText
+
+                            objectName: "nearbyFrameKindBadge"
                             anchors.centerIn: parent
                             font.pixelSize: 9
                             text: {
@@ -314,6 +471,7 @@ Rectangle {
                 }
 
                 MouseArea {
+                    objectName: "nearbyFrameCellClick"
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor

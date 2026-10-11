@@ -3123,6 +3123,137 @@ TEST(ComparisonSurfaceWarpTests, RendersThreeSourcesAndSelectedPairwiseDifferenc
     EXPECT_TRUE(actor.shutdown(2s));
 }
 
+// V04 dual-difference display caliber: the two panes render under one shared reference,
+// threshold, gain and colour scale. A fixed luma error must paint the same colour in both
+// panes and across different frames (the scale never re-normalizes per pane or per frame),
+// a threshold change masks both panes together, the display gain scales both panes without
+// being reset by a frame change, and moving the reference to another slot re-keys the pane
+// colours to the pairs the layout actually draws instead of scrambling the scale.
+TEST(ComparisonSurfaceWarpTests, DualDifferencePaintsBothPanesWithOneSharedCaliber) {
+    SurfaceWarpHarness harness;
+    harness.surface.setViewMode(ComparisonSurface::DualDifference);
+    harness.surface.setReferenceSlot(2);
+    ASSERT_TRUE(harness.start());
+
+    auto budget = std::make_shared<platform::FrameBudget>(16U * 1024U * 1024U);
+    platform::GpuTransferActor actor{budget, harness.broker, harness.mailbox, harness.activitySink};
+    const auto publishSolidSet = [&actor, &budget](const std::uint64_t requestId,
+                                                   const domain::FrameId frameId,
+                                                   const std::array<std::uint8_t, 3U> lumaValues) {
+        std::optional<application::FrameSet> set = makeThreeSolidSet(*budget, frameId, lumaValues);
+        EXPECT_TRUE(set.has_value());
+        if (!set.has_value()) {
+            return false;
+        }
+        return actor.submit(makeContext(requestId), std::move(*set)) ==
+                   platform::GpuTransferSubmitResult::Accepted &&
+               actor.waitUntilIdle(5s);
+    };
+    const auto paneColors = [&harness]() {
+        struct Panes {
+            QColor first;
+            QColor second;
+            bool valid;
+        };
+        const QImage image = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+        if (image.isNull()) {
+            return Panes{QColor{}, QColor{}, false};
+        }
+        return Panes{image.pixelColor(image.width() / 4, image.height() / 2),
+                     image.pixelColor(image.width() * 3 / 4, image.height() / 2),
+                     true};
+    };
+
+    // Frame 40: A and B both differ from GT by the same fixed error (32 luma) at the same
+    // absolute levels, so both panes must paint the same colour for the same quantity.
+    ASSERT_TRUE(publishSolidSet(40U, domain::FrameId{40}, {32U, 32U, 64U}));
+    const auto panesFrame40 = paneColors();
+    ASSERT_TRUE(panesFrame40.valid);
+    expectColorNear(panesFrame40.first, panesFrame40.second, 1);
+    EXPECT_GT(panesFrame40.first.red(), 8);
+
+    // Frame 50: the same fixed error at different absolute levels (96 vs 128). The colour
+    // scale is fixed across frames: the same error paints the same colour again.
+    ASSERT_TRUE(publishSolidSet(50U, domain::FrameId{50}, {96U, 96U, 128U}));
+    const auto panesFrame50 = paneColors();
+    ASSERT_TRUE(panesFrame50.valid);
+    expectColorNear(panesFrame50.first, panesFrame40.first, 2);
+    expectColorNear(panesFrame50.second, panesFrame40.second, 2);
+    EXPECT_TRUE(harness.acknowledgementMailbox->tryPop().has_value());
+
+    // One threshold change masks both panes together; releasing it restores both together.
+    harness.surface.setThresholdEnabled(true);
+    harness.surface.setThresholdPolicy(ComparisonSurface::ThresholdAnyChannel);
+    harness.surface.setThreshold(100.0 / 255.0);
+    const auto masked = paneColors();
+    ASSERT_TRUE(masked.valid);
+    expectColorNear(masked.first, QColor{0, 0, 0}, 2);
+    expectColorNear(masked.second, QColor{0, 0, 0}, 2);
+    harness.surface.setThresholdEnabled(false);
+
+    // The display gain scales both panes by the same factor (16x saturates the fixed error)
+    // and is not reset by presenting another frame with the same error.
+    harness.surface.setDifferenceGain(ComparisonSurface::Gain16x);
+    ASSERT_TRUE(publishSolidSet(51U, domain::FrameId{51}, {32U, 32U, 64U}));
+    const auto gained = paneColors();
+    ASSERT_TRUE(gained.valid);
+    expectColorNear(gained.first, gained.second, 1);
+    EXPECT_NEAR(gained.first.red(), std::min(255, panesFrame40.first.red() * 16), 4);
+
+    // Moving the reference to slot 1 re-keys both panes to the pairs the layout draws:
+    // A vs B (error 64) and C vs B (error 64) - both panes equal, brighter than the 32-error
+    // colour, and the pane identity follows the slots, not a stale pairing.
+    harness.surface.setDifferenceGain(ComparisonSurface::Gain1x);
+    ASSERT_TRUE(publishSolidSet(60U, domain::FrameId{60}, {32U, 96U, 160U}));
+    harness.surface.setReferenceSlot(1);
+    const auto swapped = paneColors();
+    ASSERT_TRUE(swapped.valid);
+    expectColorNear(swapped.first, swapped.second, 1);
+    EXPECT_GT(swapped.first.red(), panesFrame40.first.red() + 8);
+    // The same set with the original reference shows 128-error and 64-error panes: distinct
+    // pane colours under the same scale prove the swap re-keyed the pairs correctly.
+    harness.surface.setReferenceSlot(2);
+    const auto restored = paneColors();
+    ASSERT_TRUE(restored.valid);
+    expectColorNear(restored.second, swapped.first, 2);
+    EXPECT_GT(restored.first.red(), restored.second.red() + 8);
+
+    harness.releaseRenderer();
+    EXPECT_TRUE(actor.shutdown(2s));
+}
+
+// V04: in dual difference a pane whose candidate slot has no frame stays black (the missing
+// source is named by the QML overlay), while the other pane keeps rendering its difference -
+// a missing frame never degrades into a wrong pairing or a blank canvas.
+TEST(ComparisonSurfaceWarpTests, DualDifferenceMissingPaneStaysBlackWhileTheOtherPaneRenders) {
+    SurfaceWarpHarness harness;
+    harness.surface.setViewMode(ComparisonSurface::DualDifference);
+    harness.surface.setReferenceSlot(2);
+    ASSERT_TRUE(harness.start());
+
+    auto budget = std::make_shared<platform::FrameBudget>(16U * 1024U * 1024U);
+    platform::GpuTransferActor actor{budget, harness.broker, harness.mailbox, harness.activitySink};
+    std::optional<application::FrameSet> set =
+        makeThreeSolidSetWithMissingMiddle(*budget, domain::FrameId{70});
+    ASSERT_TRUE(set.has_value());
+    ASSERT_EQ(actor.submit(makeContext(70U), std::move(*set)),
+              platform::GpuTransferSubmitResult::Accepted);
+    ASSERT_TRUE(actor.waitUntilIdle(5s));
+
+    const QImage image = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+    ASSERT_FALSE(image.isNull());
+    // Left pane (slot 0 vs reference slot 2) renders its difference; right pane (slot 1,
+    // missing, vs reference) stays black instead of falling back to another source.
+    const QColor firstPane = image.pixelColor(image.width() / 4, image.height() / 2);
+    const QColor secondPane = image.pixelColor(image.width() * 3 / 4, image.height() / 2);
+    EXPECT_GT(firstPane.red() + firstPane.green() + firstPane.blue(), 20);
+    expectColorNear(secondPane, QColor{0, 0, 0}, 2);
+    ASSERT_TRUE(harness.acknowledgementMailbox->tryPop().has_value());
+
+    harness.releaseRenderer();
+    EXPECT_TRUE(actor.shutdown(2s));
+}
+
 TEST(ComparisonSurfaceWarpTests, WipeUsesTheSelectedPairAndDraggableSplitPosition) {
     SurfaceWarpHarness harness;
     harness.surface.setViewMode(ComparisonSurface::Wipe);

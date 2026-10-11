@@ -40,6 +40,12 @@ Rectangle {
     // panel geometry, so overlays and hit mapping follow the same single panel.
     property int canvasFocusSlot: -1
     property bool dualDifferenceMode: false
+    // V04 dual-difference caliber: Main computes one legend/converted-note pair for the two
+    // rendered panes (both candidate slots against the reference under one shared
+    // threshold/gain/metric/colour scale). Empty text falls back to the single-pair wording.
+    property string dualDifferenceLegendText: ""
+    property bool dualDifferenceLegendExact: false
+    property string dualDifferenceInexactDetail: ""
     required property int referenceSourceIndex
     required property int sourceCount
     required property bool wipeMode
@@ -138,6 +144,12 @@ Rectangle {
     property alias surface: dualVideoSurface
     property alias videoOutput: surfaceLayer
     readonly property bool roiEnabled: dualVideoSurface.roiEnabled
+    // Normalized shared-ROI rect (V04 nearby-frames strip). Re-exported from the typed
+    // surface so other files never touch the var-typed surface alias.
+    readonly property real surfaceRoiLeft: dualVideoSurface.roiLeft
+    readonly property real surfaceRoiTop: dualVideoSurface.roiTop
+    readonly property real surfaceRoiRight: dualVideoSurface.roiRight
+    readonly property real surfaceRoiBottom: dualVideoSurface.roiBottom
     // The var-typed `surface` alias defeats qmllint's type resolution from other files, so the
     // drop counter is re-exposed as a plain int computed here where ComparisonSurface resolves.
     readonly property real droppedFrames: dualVideoSurface.droppedFrames
@@ -810,12 +822,19 @@ Rectangle {
         Label {
             id: analysisStatus
 
+            objectName: "analysisStatusText"
             text: {
                 const parts = [];
                 if (control.alignmentModeName.length > 0)
                     parts.push(qsTr("对齐：%1").arg(control.alignmentModeName));
-                if (control.differenceMode)
-                    parts.push(control.comparisonDimensionsLabel(control.selectedDifferenceEdge));
+                if (control.differenceMode) {
+                    // Dual difference reads one combined legend for both panes; the single-pair
+                    // dimension wording stays for plain difference/grid modes.
+                    if (control.dualDifferenceMode && control.dualDifferenceLegendText.length > 0)
+                        parts.push(control.dualDifferenceLegendText);
+                    else
+                        parts.push(control.comparisonDimensionsLabel(control.selectedDifferenceEdge));
+                }
                 if (control.differenceThresholdEnabled)
                     parts.push(qsTr("阈值已启用 (%1)").arg(control.differenceThresholdCode));
                 if (dualVideoSurface.roiEnabled)
@@ -823,8 +842,9 @@ Rectangle {
                 return parts.join(" · ");
             }
             // Exactness describes the pixel comparison (format, colour space, geometry), so only
-            // difference mode is tinted; plain side-by-side viewing stays neutral.
-            color: !control.differenceMode ? Theme.secondaryText : (control.inexactReason.length === 0 && control.selectedDifferenceExactness === 0 ? Theme.success : Theme.warning)
+            // difference mode is tinted; plain side-by-side viewing stays neutral. In dual mode
+            // the tint covers both rendered panes under their one shared caliber.
+            color: !control.differenceMode ? Theme.secondaryText : (control.dualDifferenceMode && control.dualDifferenceLegendText.length > 0 ? (control.dualDifferenceLegendExact ? Theme.success : Theme.warning) : (control.inexactReason.length === 0 && control.selectedDifferenceExactness === 0 ? Theme.success : Theme.warning))
             font.pixelSize: 11
             width: Math.max(0, parent.width - 18)
             elide: Text.ElideRight
@@ -1263,7 +1283,11 @@ Rectangle {
         id: inexactDifferenceBanner
 
         objectName: "inexactDifferenceBanner"
-        visible: control.chromeVisible && control.differenceMode && control.inexactReason.length > 0
+        // Dual difference aggregates the two rendered panes' reasons into one note (the active
+        // pair selector may describe a pair the canvas is not showing).
+        readonly property string effectiveInexactReason: control.dualDifferenceMode && control.dualDifferenceInexactDetail.length > 0 ? control.dualDifferenceInexactDetail : control.inexactReason
+
+        visible: control.chromeVisible && control.differenceMode && effectiveInexactReason.length > 0
         radius: 5
         color: Theme.warningPanel
         border.color: Theme.warningBorder
@@ -1280,7 +1304,7 @@ Rectangle {
         Text {
             id: inexactBannerText
 
-            text: qsTr("⚠️ 对比非精确对应：%1").arg(control.inexactReason)
+            text: qsTr("⚠️ 对比非精确对应：%1").arg(inexactDifferenceBanner.effectiveInexactReason)
             color: Theme.warningText
             font.pixelSize: 11
             font.weight: Font.DemiBold

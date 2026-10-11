@@ -1,7 +1,65 @@
 # 视觉审查问题台账
 
-更新：2026-10-11（原速播放指标与调度守恒 E03／任务化模式入口 V03／统一源入口与比较选择 V02／长按正反向走带 E04／缓存小步改进 E05／启动减负 E01／诊断可关闭 E02／全画布候选直看 P05／图片编辑纯操作 P11／协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-10-11（双差异显示口径与附近帧可读性 V04／原速播放指标与调度守恒 E03／任务化模式入口 V03／统一源入口与比较选择 V02／长按正反向走带 E04／缓存小步改进 E05／启动减负 E01／诊断可关闭 E02／全画布候选直看 P05／图片编辑纯操作 P11／协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+
+## 2026-10-11 双差异显示口径与附近帧可读性 V04
+
+- **范围**：《CompareStation 下一步体验与性能计划 2026-10-11》§5 V04（P1），R3 阶段工单。
+  双差异两窗共同口径的确认与 WARP 像素级钉死、附近帧诊断卡的定位用途与同 ROI 连续帧条。
+  不改 V03 差异定位入口语义、E04 走带、GPU 渲染后端结构（渲染器零改动：两窗本就共用同一
+  `SurfaceRenderState`，口径由共享状态保证，本单补的是 QML 投影与缩略图管线）。
+- **问题（基线 9f631b9）**：DualDifference 渲染层已同 GT、同阈值/增益/度量/滤镜/ROI/视口，但 QML
+  投影仍按"当前比较对"描述——HUD 图例/已转换横幅/缺帧提示可能命名画布上并不显示的一对
+  （参考源缺失时单差异口径甚至不提示，双差异两窗全黑却无解释）；NearbyFramesCard 未加载协议时把
+  全部帧标成确定的"超界"；缩略图逐帧 `request()` 走"最新者胜"单槽路径，一列 9 帧只有最后一帧
+  被解码、且与时间线悬停互相取消；区间可随持久化记录无限宽；缩略图不声明其来源。
+- **交付**：
+  - `Main.qml` + `ComparisonViewport.qml`：新增 `dualDifferencePaneSlots/PaneEdges`（与渲染器
+    `computeSurfacePanelLayout` 同规则：非参考槽升序，各自对参考槽）。双差异模式下
+    `differenceUnavailableDetail` 按真实显示的两窗+参考槽报告缺帧（参考缺失也点名"参考（源 C）"）；
+    HUD 图例（`analysisStatusText`）一行合并两窗口径：`双差异 A↔GT · B↔GT` + 时间/空间/像素三维
+    精确性按两窗取与 + `两窗共用阈值/增益/色阶`；精确性聚合任一窗无证据即"不可用/未知"，不宣称
+    精确或零；非精确横幅聚合两窗原因（去重）。
+  - `NearbyFramesCard.qml`：定位窗口钉为 ≤9 格、锚点居中（宽区间收缩，协议摘要同窗裁剪）；未加载
+    协议回退 `kind:"unknown"`（未知），不再伪称"超界"（协议已加载时超界仍由协议证据支持）；全部
+    缩略图走一次可替换的低优先级批量请求，关闭/重开即取消/重发；新增"区间帧 ↔ 同 ROI 连续帧"
+    切换（连续帧条把缩略图按主画布共享 ROI 裁剪显示，裁剪尺寸取自控制器缓存
+    `thumbnailSourceSize`，读 QML Image 隐式尺寸会与 sourceClipRect 成环）；表头标注缩略图源
+    （主时间线源文件名，不可用时如实标注）；点格仍走 `controller.seekFrame` 精确跳转链。
+  - `PreviewThumbnailController.h/.cpp`：新增 `requestBatch(QVariantList)/cancelBatch()/
+    thumbnailSourceSize(frame)`。批量 FIFO 一次最多一帧在途，仅在无交互请求待发/在途时排水；
+    交互 `request()` 经既有 `cancel(context)` 抢占在途批量任务；结果到达后自动续排剩余帧；
+    会话切换/停止清空批量并取消在途（复用既有取消与 generation 机制，不新增解码路径）。
+- **不变量**：双差异渲染口径（同 GT、阈值/增益/色阶/有效区域/分析域）由单一 `SurfaceRenderState`
+  共享，本单零渲染器改动、以 WARP 像素回读钉死"同固定误差两窗同色同量、跨帧同色"；显示增益不进
+  任何统计（ADR-0005 未动，`PairMetricsRequest` 仍无显示参数，阈值复用协议未动）；缩略图批量在
+  独立预览解码服务内排队，不进播放管线、不新增常驻解码。
+- **验证（本地 dev preset，2026-10-11）**：
+  - 新增测试：`PreviewThumbnailControllerTests` +3（批量让位于悬停且被其抢占／取消清队且交互仍可用／
+    会话切换丢批量）、`ComparisonSurfaceWarpTests` +2（`DualDifferencePaintsBothPanesWithOneSharedCaliber`
+    固定误差两窗同色→跨帧同色→阈值同步两窗→增益 16×同缩放且换帧不重置→换参考槽重定键；
+    `DualDifferenceMissingPaneStaysBlackWhileTheOtherPaneRenders` 缺帧窗黑、另一窗照常）、
+    `MainQmlContractTests` +5（未加载协议=未知+≤9 锚点居中定位窗／点格=SeekFrameCommand 精确跳转／
+    同 ROI 连续帧裁剪+批量请求+关闭取消+缩略图源命名／双差异图例按真实两窗+缺 B 命名／缺参考
+    命名"参考（源 C）"）。
+  - 回归（全绿）：`ui.MainQmlContractTests` 97/97（4 项原有 Disabled 未计）、
+    `platform.ComparisonSurface*` 83/83、`ui.PreviewThumbnailControllerTests` 8/8、
+    `ui.ReviewControllerTests` 79/79、`ui.PairMetricsControllerTests`+
+    `ui.PairMetricsThresholdReuseTests`+`domain.PixelDifferenceTests`+
+    `presentation.ComparisonContractTests` 39/39；`format-check`（qmlformat+clang-format 393 文件）、
+    `lint`（qmllint --max-warnings 0 + clang-tidy）通过。
+  - 变异证据：`out/verification/v04-dual-diff-nearby-frames/`（M1–M13：缺参考不点名／图例丢双窗头／
+    精确性只聚合单窗／未知退回超界／窗口钳制丢失退左对齐／批量退逐帧最新者胜／ROI 裁剪禁用／
+    精确跳转退相对步进／批量不让位悬停／取消不清在途／会话切换留队／增益映射改 1×／阈值常关，
+    13/13 改坏→红→还原；mutate.ps1 自校验行数与字节还原，附逐项日志与 mutation-results.json）。
+- **UNVERIFIED（真机项，不宣称）**：真实 GT+双输出素材下两窗同色同量的观感验证；连续帧条在真实
+  解码延迟下的逐步填充体验与 ROI 裁剪清晰度；2/3 源真机走查（组件测试覆盖 2 源会话与 3 源会话
+  的图例/缺帧/ROI 路径，非真机 D3D11VA 回放）；缩略图批量在长 GOP 素材上的实际排队时延。
+- **回退**：还原 `Main.qml` 双差异分支与 ROI 转发、`ComparisonViewport.qml` 图例/横幅聚合与四个新
+  属性、`NearbyFramesCard.qml`（恢复 `kind:"outside"` 回退、逐帧 request、无窗口钳制、无切换）、
+  `PreviewThumbnailController` 批量 API 即回旧行为；新增测试同步还原。渲染器与统计路径零改动，
+  回退无连锁。
 
 ## 2026-10-11 任务化模式入口 V03
 

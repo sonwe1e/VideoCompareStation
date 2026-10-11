@@ -401,17 +401,119 @@ ApplicationWindow {
     readonly property int differenceSecondSlot: selectedDifferenceEdge ? Number(selectedDifferenceEdge.secondSourceId) : 1
     readonly property int selectedDifferenceExactness: selectedDifferenceEdge ? Number(selectedDifferenceEdge.exactness) : 4
     readonly property bool exactPlaneMode: preferences ? Number(preferences.differenceMetric) === 4 : false
+
+    // V04 dual-difference caliber: the two rendered panes are the non-reference slots (in
+    // ascending order, exactly like computeSurfacePanelLayout) each against the reference
+    // slot. The QML projection describes these panes - not the active pair selector - so the
+    // legend, the missing-frame overlay and the "converted" note all speak about the two
+    // windows the user actually sees, under their one shared threshold/gain/metric/colour scale.
+    readonly property int dualDifferenceReferenceSlot: referenceSourceIndex >= 0 ? referenceSourceIndex : 0
+    readonly property var dualDifferencePaneSlots: {
+        const slots = [];
+        if (sourceCount === 3) {
+            for (let slot = 0; slot < 3; ++slot) {
+                if (slot !== dualDifferenceReferenceSlot)
+                    slots.push(slot);
+            }
+        }
+        return slots;
+    }
+
+    function dualPaneEdge(firstSlot, secondSlot) {
+        for (const edge of differenceEdges) {
+            const primary = Number(edge.primarySlot);
+            const secondary = Number(edge.secondarySlot);
+            if ((primary === firstSlot && secondary === secondSlot) || (primary === secondSlot && secondary === firstSlot))
+                return edge;
+        }
+        return null;
+    }
+
+    readonly property var dualDifferencePaneEdges: {
+        const edges = [];
+        for (const slot of dualDifferencePaneSlots)
+            edges.push(dualPaneEdge(slot, dualDifferenceReferenceSlot));
+        return edges;
+    }
+
+    // One legend line for both panes: pane identity plus the per-dimension exactness combined
+    // across the two pairs (a dimension is only "exact" when both panes are), then the shared
+    // caliber note. Missing evidence stays "不可用/未知"; nothing is reported as exact or zero
+    // without it.
+    readonly property string dualDifferenceLegendText: {
+        if (!dualDifferenceMode)
+            return "";
+        if (dualDifferencePaneSlots.length !== 2)
+            return qsTr("双差异（无参考）");
+        const paneLetter = slot => String.fromCharCode(65 + slot);
+        const head = qsTr("双差异 %1↔GT · %2↔GT").arg(paneLetter(dualDifferencePaneSlots[0])).arg(paneLetter(dualDifferencePaneSlots[1]));
+        const first = dualDifferencePaneEdges[0];
+        const second = dualDifferencePaneEdges[1];
+        if (!first || !second || Number(first.dimensionsAvailable) !== 1 || Number(second.dimensionsAvailable) !== 1)
+            return head + qsTr(" · 比较语义不可用");
+        const bothExact = field => Number(first[field]) === 1 && Number(second[field]) === 1;
+        const parts = [head];
+        parts.push(bothExact("temporalExact") ? qsTr("时间 索引及时间戳一致") : qsTr("时间 映射或时间戳不同"));
+        parts.push(bothExact("spatialExact") ? qsTr("空间 原尺寸") : qsTr("空间 尺寸或几何不同"));
+        parts.push(bothExact("pixelExact") ? qsTr("像素 数值审查路径（原码值）") : qsTr("像素 观看路径（已做显示转换，非原码值）"));
+        parts.push(qsTr("两窗共用阈值/增益/色阶"));
+        return parts.join(" · ");
+    }
+
+    readonly property bool dualDifferenceLegendExact: {
+        if (!dualDifferenceMode || dualDifferencePaneEdges.length !== 2)
+            return false;
+        const first = dualDifferencePaneEdges[0];
+        const second = dualDifferencePaneEdges[1];
+        return Boolean(first) && Boolean(second) && Number(first.dimensionsAvailable) === 1 && Number(second.dimensionsAvailable) === 1 && Number(first.exactness) === 0 && Number(second.exactness) === 0;
+    }
+
+    // Combined "cannot correspond exactly" note across the two panes; empty when both pane
+    // pairs correspond exactly. Duplicated reasons are named once.
+    readonly property string dualDifferenceInexactDetail: {
+        if (!dualDifferenceMode || dualDifferencePaneEdges.length !== 2)
+            return "";
+        const notes = [];
+        for (const edge of dualDifferencePaneEdges) {
+            const reason = edge ? String(edge.inexactReason) : "";
+            if (reason.length > 0 && notes.indexOf(reason) < 0)
+                notes.push(reason);
+        }
+        return notes.join(qsTr("；"));
+    }
+
     readonly property string differenceUnavailableDetail: {
         if ((!differenceMode && !wipeMode) || currentFrame < 0)
             return "";
 
         const missing = [];
+        const missingLabel = slot => sourceLabel(slot);
+
+        if (dualDifferenceMode) {
+            // The overlay names the panes the dual layout actually draws: each non-reference
+            // slot against the reference. Reporting the active pair selector here could name a
+            // pair the canvas is not showing (or hide a pane that is black).
+            if (dualDifferencePaneSlots.length === 2) {
+                for (const slot of dualDifferencePaneSlots) {
+                    if (sourceMissing(slot))
+                        missing.push(missingLabel(slot));
+                }
+                if (sourceMissing(dualDifferenceReferenceSlot))
+                    missing.push(qsTr("参考（%1）").arg(sourceLabel(dualDifferenceReferenceSlot)));
+                if (missing.length > 0)
+                    return qsTr("无法对比第 %1 帧，因为 %2 缺失。").arg(Number(currentFrame) + 1).arg(missing.join(qsTr(" 和 ")));
+                if (exactPlaneMode && (Number(dualDifferencePaneEdges[0] ? dualDifferencePaneEdges[0].exactness : 4) !== 0 || Number(dualDifferencePaneEdges[1] ? dualDifferencePaneEdges[1].exactness : 4) !== 0))
+                    return qsTr("逐像素精确差异要求分辨率、像素格式、位深、色彩元数据一致，且两侧使用 ExactIndex 映射并具有相同时间戳。");
+                return "";
+            }
+            return "";
+        }
 
         if (sourceMissing(differenceFirstSlot))
-            missing.push(sourceLabel(differenceFirstSlot));
+            missing.push(missingLabel(differenceFirstSlot));
 
         if (sourceMissing(differenceSecondSlot))
-            missing.push(sourceLabel(differenceSecondSlot));
+            missing.push(missingLabel(differenceSecondSlot));
 
         if (missing.length > 0)
             return qsTr("无法对比第 %1 帧，因为 %2 缺失。").arg(Number(currentFrame) + 1).arg(missing.join(qsTr(" 和 ")));
@@ -514,6 +616,12 @@ ApplicationWindow {
     readonly property int timelinePreviewSampleFrame: timelinePreviewFrame >= 0 && totalFrames > 0 ? thumbnailCache.nearestSample(timelinePreviewFrame) : -1
     readonly property string previewTimecode: controller && effectivePreviewFrame >= 0 ? controller.timecodeForFrame(effectivePreviewFrame, dropFrameTimecode) : "00:00:00:00"
     readonly property bool roiEnabled: Boolean(viewportFrame && viewportFrame.roiEnabled)
+    // Normalized shared-ROI rect (V04 nearby-frames strip). The surface owns the values; the
+    // card only consumes them, so the strip and the canvas can never disagree about the region.
+    readonly property real surfaceRoiLeft: viewportFrame ? viewportFrame.surfaceRoiLeft : 0
+    readonly property real surfaceRoiTop: viewportFrame ? viewportFrame.surfaceRoiTop : 0
+    readonly property real surfaceRoiRight: viewportFrame ? viewportFrame.surfaceRoiRight : 1
+    readonly property real surfaceRoiBottom: viewportFrame ? viewportFrame.surfaceRoiBottom : 1
 
     onFramePendingChanged: {
         if (framePending)
@@ -3511,6 +3619,9 @@ ApplicationWindow {
         wipeMode: root.wipeMode
         differenceMode: root.differenceMode
         dualDifferenceMode: root.dualDifferenceMode
+        dualDifferenceLegendText: root.dualDifferenceLegendText
+        dualDifferenceLegendExact: root.dualDifferenceLegendExact
+        dualDifferenceInexactDetail: root.dualDifferenceInexactDetail
         analysisGridMode: root.analysisGridMode
         immersiveHudVisible: root.immersiveHudVisible
         immersiveHudText: root.immersiveHudText
@@ -4182,6 +4293,14 @@ ApplicationWindow {
         previewThumbnails: root.previewThumbnailsModel
         sampleExportController: root.sampleExportModel
         currentFrame: Number(root.currentFrame)
+        totalFrames: Number(root.totalFrames)
+        // Same-ROI consecutive strip (V04): the shared ROI of the main canvas, in normalized
+        // source coordinates straight off the comparison surface.
+        roiEnabled: root.roiEnabled
+        roiLeft: root.surfaceRoiLeft
+        roiTop: root.surfaceRoiTop
+        roiRight: root.surfaceRoiRight
+        roiBottom: root.surfaceRoiBottom
 
         onCloseRequested: root.nearbyFramesCardVisible = false
         onSeekRequested: frame => {

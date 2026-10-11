@@ -45,6 +45,7 @@
 #include <QQmlEngine>
 #include <QQmlError>
 #include <QQmlProperty>
+#include <QQuickImageProvider>
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QRectF>
@@ -473,6 +474,22 @@ public:
     }
 };
 
+// V04 nearby-frames strip: serves a fixed-size image for the stub's decoded frames so the
+// card's same-ROI crop has real image dimensions to work with.
+class SolidThumbnailProvider final : public QQuickImageProvider {
+public:
+    SolidThumbnailProvider() : QQuickImageProvider(QQuickImageProvider::Image) {}
+
+    QImage requestImage(const QString&, QSize* size, const QSize&) override {
+        QImage image{100, 50, QImage::Format_RGB32};
+        image.fill(QColor{64, 96, 128});
+        if (size != nullptr) {
+            *size = image.size();
+        }
+        return image;
+    }
+};
+
 // Shared QML/controller harness for the workspace-routing contracts. It keeps the two-source
 // video session, the still-image controller and the folder model alive for the whole test.
 class WorkspaceHarness final {
@@ -598,6 +615,53 @@ public:
             engine.rootContext()->setContextProperty(QStringLiteral("interpolationProtocol"),
                                                      &interpolationProtocol);
         }
+        if (withPreviewThumbnails) {
+            // V04 nearby-frames batch contract: a QML stub stands in for the composition
+            // root's PreviewThumbnailController. It records requestBatch/cancelBatch calls
+            // where the C++ side can read them and serves decodable image URLs through a
+            // registered provider, so the card's crop and batch wiring run for real.
+            QQmlComponent stubComponent{&engine};
+            stubComponent.setData(QStringLiteral(R"qml(
+import QtQuick
+QtObject {
+    property int generation: 3
+    property var batchCalls: []
+    property int cancelCount: 0
+    property var framesReady: []
+    function requestBatch(frames) {
+        const copy = [];
+        for (let i = 0; i < frames.length; ++i)
+            copy.push(frames[i]);
+        batchCalls = batchCalls.concat([copy]);
+    }
+    function cancelBatch() {
+        cancelCount = cancelCount + 1;
+    }
+    function request(frame) {
+    }
+    function urlForFrame(frame) {
+        return framesReady.indexOf(frame) >= 0 ? "image://nearby-strip-test/" + frame : "";
+    }
+    function hasThumbnail(frame) {
+        return framesReady.indexOf(frame) >= 0;
+    }
+    function thumbnailSourceSize(frame) {
+        return framesReady.indexOf(frame) >= 0 ? Qt.size(100, 50) : Qt.size(0, 0);
+    }
+}
+)qml")
+                                      .toUtf8(),
+                                  QUrl{});
+            previewThumbnailsStub.reset(stubComponent.create());
+            if (previewThumbnailsStub == nullptr) {
+                error = componentErrors(stubComponent);
+                return false;
+            }
+            engine.addImageProvider(QStringLiteral("nearby-strip-test"),
+                                    new SolidThumbnailProvider);
+            engine.rootContext()->setContextProperty(QStringLiteral("previewThumbnails"),
+                                                     previewThumbnailsStub.get());
+        }
         QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
         if (component.status() != QQmlComponent::Ready) {
             error = componentErrors(component);
@@ -712,6 +776,10 @@ public:
     ContractProtocolRepository protocolRepository;
     InterpolationProtocolController interpolationProtocol{&protocolRepository};
     bool withInterpolationProtocol = false;
+    // V04 nearby-frames strip contract: opt-in stub for the composition root's
+    // "previewThumbnails" context object (see create()).
+    std::unique_ptr<QObject> previewThumbnailsStub;
+    bool withPreviewThumbnails = false;
     QQmlEngine engine;
     std::unique_ptr<QObject> root;
     QQuickWindow* window = nullptr;
@@ -9191,6 +9259,455 @@ TEST(MainQmlContractTests, NearbyFramesCardOpensFromIssueLogAndExposesDiagnostic
     QMetaObject::invokeMethod(closeBtn, "clicked");
     harness.settle();
     EXPECT_FALSE(card->property("visible").toBool());
+
+    harness.window->close();
+}
+
+// V04: without a loaded interpolation protocol the card has no provenance evidence for any
+// frame, so every cell reports the honest "未知" - a definite "超界" (outside the interval)
+// claim would invent knowledge. A wide recorded interval also keeps a 9-cell locating window
+// centred on the anchor instead of flooding the strip.
+TEST(MainQmlContractTests, NearbyFramesWithoutProtocolShowUnknownNotOutsideAndKeepALocatingWindow) {
+    QTemporaryDir temporaryDirectory;
+    ASSERT_TRUE(temporaryDirectory.isValid());
+    const QString pathA = temporaryDirectory.filePath(QStringLiteral("card-unknown-a.mp4"));
+    const QString pathB = temporaryDirectory.filePath(QStringLiteral("card-unknown-b.mp4"));
+    for (const QString& path : {pathA, pathB}) {
+        QFile file{path};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_GT(file.write("card-unknown", 12), 0);
+    }
+
+    WorkspaceHarness harness;
+    harness.withIssueLog = true;
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate);
+    ASSERT_TRUE(installValidatedVideoSet(
+        harness.snapshot,
+        {std::filesystem::path{pathA.toStdWString()}, std::filesystem::path{pathB.toStdWString()}},
+        rate.value(),
+        60,
+        2'000'000));
+    harness.snapshot->displayedFrame = domain::FrameId{20};
+    harness.snapshot->sessionEpoch = domain::SessionEpoch{2U};
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+    harness.controller->refreshProjection();
+    harness.settle();
+
+    harness.issueLog.setWorkspaceMode(QStringLiteral("video"));
+    ASSERT_TRUE(harness.issueLog.captureCurrentIssue(QStringLiteral("card-unknown-note")));
+
+    harness.root->setProperty("issueLogPanelVisible", true);
+    harness.settle();
+    auto* const list = harness.root->findChild<QQuickItem*>(QStringLiteral("issueLogList"));
+    ASSERT_NE(list, nullptr);
+    QQuickItem* row = nullptr;
+    ASSERT_TRUE(harness.waitUntil([&] {
+        QMetaObject::invokeMethod(
+            list, "itemAtIndex", Q_RETURN_ARG(QQuickItem*, row), Q_ARG(int, 0));
+        return row != nullptr;
+    }));
+    auto* const diagButton =
+        row->findChild<QQuickItem*>(QStringLiteral("issueLogDiagnosticButton"));
+    ASSERT_NE(diagButton, nullptr);
+    QMetaObject::invokeMethod(diagButton, "clicked");
+    harness.settle();
+
+    auto* const card = harness.root->findChild<QQuickItem*>(QStringLiteral("nearbyFramesCard"));
+    ASSERT_NE(card, nullptr);
+    EXPECT_TRUE(card->property("visible").toBool());
+
+    // The captured interval 16..24 with no protocol: every badge says 未知, none says 超界.
+    // ListView delegates are reached through itemAtIndex (they are not QObject-children of
+    // the window, so findChild-by-name cannot see them).
+    auto* const filmstrip = card->findChild<QQuickItem*>(QStringLiteral("nearbyFramesFilmstrip"));
+    ASSERT_NE(filmstrip, nullptr);
+    const auto cellAt = [&harness, &filmstrip](const int index) {
+        QQuickItem* cell = nullptr;
+        QMetaObject::invokeMethod(
+            filmstrip, "itemAtIndex", Q_RETURN_ARG(QQuickItem*, cell), Q_ARG(int, index));
+        harness.settle(1);
+        return cell;
+    };
+    ASSERT_TRUE(harness.waitUntil([&cellAt] { return cellAt(0) != nullptr; }));
+    ASSERT_EQ(filmstrip->property("count").toInt(), 9);
+    for (int index = 0; index < 9; ++index) {
+        auto* const cell = cellAt(index);
+        ASSERT_NE(cell, nullptr) << index;
+        EXPECT_EQ(cell->objectName(), QStringLiteral("nearbyFrameCell_%1").arg(16 + index))
+            << index;
+        auto* const badge = cell->findChild<QObject*>(QStringLiteral("nearbyFrameKindBadge"));
+        ASSERT_NE(badge, nullptr) << index;
+        EXPECT_EQ(badge->property("text").toString(), QStringLiteral("未知")) << index;
+    }
+
+    // A wide persisted interval keeps a 9-cell window centred on the anchor: with the anchor
+    // at 20 inside [2, 45] the strip shows 16..24 (a left-aligned window would show 2..10) -
+    // the interval itself never floods the card.
+    QVariantMap wideInterval;
+    wideInterval.insert(QStringLiteral("anchorFrame"), QVariant{qlonglong{20}});
+    wideInterval.insert(QStringLiteral("inFrame"), QVariant{qlonglong{2}});
+    wideInterval.insert(QStringLiteral("outFrame"), QVariant{qlonglong{45}});
+    wideInterval.insert(QStringLiteral("loopSeamAtOut"), false);
+    wideInterval.insert(QStringLiteral("sessionEpoch"),
+                        QVariant::fromValue(harness.snapshot->sessionEpoch.value()));
+    ASSERT_TRUE(card->setProperty("intervalData", wideInterval));
+    ASSERT_TRUE(harness.waitUntil([&cellAt] {
+        return cellAt(0) != nullptr &&
+               cellAt(0)->objectName() == QStringLiteral("nearbyFrameCell_16");
+    }));
+    ASSERT_EQ(filmstrip->property("count").toInt(), 9);
+    for (int index = 0; index < 9; ++index) {
+        auto* const cell = cellAt(index);
+        ASSERT_NE(cell, nullptr) << index;
+        EXPECT_EQ(cell->objectName(), QStringLiteral("nearbyFrameCell_%1").arg(16 + index))
+            << index;
+    }
+
+    harness.window->close();
+}
+
+// V04: selecting a cell sends the real frame to the main canvas through the existing precise
+// jump chain (a coordinator SeekFrameCommand), not a re-decode or an approximate step.
+TEST(MainQmlContractTests, NearbyFramesCellClickSeeksTheExactFrameThroughTheCoordinator) {
+    QTemporaryDir temporaryDirectory;
+    ASSERT_TRUE(temporaryDirectory.isValid());
+    const QString pathA = temporaryDirectory.filePath(QStringLiteral("card-seek-a.mp4"));
+    const QString pathB = temporaryDirectory.filePath(QStringLiteral("card-seek-b.mp4"));
+    for (const QString& path : {pathA, pathB}) {
+        QFile file{path};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_GT(file.write("card-seek", 9), 0);
+    }
+
+    WorkspaceHarness harness;
+    harness.withIssueLog = true;
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate);
+    ASSERT_TRUE(installValidatedVideoSet(
+        harness.snapshot,
+        {std::filesystem::path{pathA.toStdWString()}, std::filesystem::path{pathB.toStdWString()}},
+        rate.value(),
+        60,
+        2'000'000));
+    harness.snapshot->displayedFrame = domain::FrameId{20};
+    harness.snapshot->sessionEpoch = domain::SessionEpoch{2U};
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+    harness.controller->refreshProjection();
+    harness.settle();
+
+    harness.issueLog.setWorkspaceMode(QStringLiteral("video"));
+    ASSERT_TRUE(harness.issueLog.captureCurrentIssue(QStringLiteral("card-seek-note")));
+
+    QVariant openedResult;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "openNearbyFramesCard",
+                                          Q_RETURN_ARG(QVariant, openedResult),
+                                          Q_ARG(QVariant, QVariant{0})));
+    ASSERT_TRUE(openedResult.toBool());
+    harness.settle();
+
+    auto* const seekCard = harness.root->findChild<QQuickItem*>(QStringLiteral("nearbyFramesCard"));
+    ASSERT_NE(seekCard, nullptr);
+    auto* const seekFilmstrip =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("nearbyFramesFilmstrip"));
+    ASSERT_NE(seekFilmstrip, nullptr);
+    const auto seekCellAt = [&harness, &seekFilmstrip](const int index) {
+        QQuickItem* cell = nullptr;
+        QMetaObject::invokeMethod(
+            seekFilmstrip, "itemAtIndex", Q_RETURN_ARG(QQuickItem*, cell), Q_ARG(int, index));
+        harness.settle(1);
+        return cell;
+    };
+    // Frame 18 is index 2 of the captured window 16..24; delegates are reached through
+    // itemAtIndex (ListView delegates are not QObject-children of the window).
+    QQuickItem* seekCell = nullptr;
+    ASSERT_TRUE(harness.waitUntil([&] {
+        seekCell = seekCellAt(2);
+        return seekCell != nullptr &&
+               seekCell->objectName() == QStringLiteral("nearbyFrameCell_18");
+    }));
+
+    // Clear whatever the staged restore left pending (this harness never delivers coordinator
+    // terminals by itself), so the precise-jump chain is not busy-gated.
+    for (const application::PlaybackCommand& command : harness.submitted) {
+        harness.terminals.push_back(application::CommandTerminal{
+            .context = application::commandContext(command),
+            .outcome = application::CommandOutcome::Succeeded,
+        });
+    }
+    harness.controller->refreshProjection();
+    harness.settle();
+
+    const std::size_t submittedBefore = harness.submitted.size();
+    // Drive the card's seekRequested handler exactly as the cell's MouseArea does; Main.qml
+    // forwards it to the coordinator's precise jump chain.
+    ASSERT_TRUE(QMetaObject::invokeMethod(seekCard, "seekRequested", Q_ARG(int, 18)));
+    harness.settle();
+    ASSERT_GT(harness.submitted.size(), submittedBefore);
+    const auto* const seek = std::get_if<application::SeekFrameCommand>(&harness.submitted.back());
+    ASSERT_NE(seek, nullptr);
+    EXPECT_EQ(seek->frameId, domain::FrameId{18});
+    EXPECT_EQ(seek->context.sessionId, harness.snapshot->sessionId);
+
+    harness.window->close();
+}
+
+// V04: the strip can switch to a same-ROI consecutive view - cells are the anchor-centred
+// consecutive frames, each thumbnail cropped to the shared ROI, the whole window is fetched
+// through one replaceable low-priority batch, and closing the card cancels that batch.
+TEST(MainQmlContractTests, NearbyFramesConsecutiveStripCropsToTheSharedRoiAndCancelsItsBatch) {
+    QTemporaryDir temporaryDirectory;
+    ASSERT_TRUE(temporaryDirectory.isValid());
+    const QString pathA = temporaryDirectory.filePath(QStringLiteral("card-roi-a.mp4"));
+    const QString pathB = temporaryDirectory.filePath(QStringLiteral("card-roi-b.mp4"));
+    for (const QString& path : {pathA, pathB}) {
+        QFile file{path};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_GT(file.write("card-roi", 7), 0);
+    }
+
+    WorkspaceHarness harness;
+    harness.withIssueLog = true;
+    harness.withPreviewThumbnails = true;
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate);
+    ASSERT_TRUE(installValidatedVideoSet(
+        harness.snapshot,
+        {std::filesystem::path{pathA.toStdWString()}, std::filesystem::path{pathB.toStdWString()}},
+        rate.value(),
+        60,
+        2'000'000));
+    harness.snapshot->displayedFrame = domain::FrameId{20};
+    harness.snapshot->sessionEpoch = domain::SessionEpoch{2U};
+    ASSERT_TRUE(harness.create()) << harness.error;
+    ASSERT_NE(harness.previewThumbnailsStub, nullptr);
+    harness.window->show();
+    harness.settle();
+    harness.controller->refreshProjection();
+    harness.settle();
+
+    harness.issueLog.setWorkspaceMode(QStringLiteral("video"));
+    ASSERT_TRUE(harness.issueLog.captureCurrentIssue(QStringLiteral("card-roi-note")));
+
+    QVariant openedResult;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "openNearbyFramesCard",
+                                          Q_RETURN_ARG(QVariant, openedResult),
+                                          Q_ARG(QVariant, QVariant{0})));
+    ASSERT_TRUE(openedResult.toBool());
+    harness.settle();
+
+    auto* const card = harness.root->findChild<QQuickItem*>(QStringLiteral("nearbyFramesCard"));
+    ASSERT_NE(card, nullptr);
+    // The thumbnail source is named: the strip decodes the canonical (timeline master) file,
+    // never an anonymous frame.
+    auto* const sourceLabel =
+        card->findChild<QObject*>(QStringLiteral("nearbyFramesThumbnailSourceLabel"));
+    ASSERT_NE(sourceLabel, nullptr);
+    EXPECT_TRUE(sourceLabel->property("visible").toBool());
+    EXPECT_TRUE(sourceLabel->property("text").toString().contains(QStringLiteral("card-roi-a.mp4")))
+        << sourceLabel->property("text").toString().toStdString();
+
+    // Opening the card fetched exactly its 9-cell window through one batch call.
+    ASSERT_TRUE(harness.waitUntil([&harness] {
+        return !harness.previewThumbnailsStub->property("batchCalls").toList().isEmpty();
+    }));
+    const QVariantList batchCalls = harness.previewThumbnailsStub->property("batchCalls").toList();
+    QVariantList lastCall = batchCalls.back().toList();
+    ASSERT_EQ(lastCall.size(), 9);
+    EXPECT_EQ(lastCall.front().toLongLong(), qlonglong{16});
+    EXPECT_EQ(lastCall.back().toLongLong(), qlonglong{24});
+
+    // Switch to the consecutive strip: the same anchor-centred frames, no provenance claim
+    // (the interval view keeps those badges), and the batch is re-issued for the new window.
+    const int batchCallsBefore = batchCalls.size();
+    auto* const stripToggle =
+        card->findChild<QQuickItem*>(QStringLiteral("nearbyFramesStripToggle"));
+    ASSERT_NE(stripToggle, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(stripToggle, "clicked"));
+    harness.settle();
+    EXPECT_TRUE(card->property("consecutiveStripMode").toBool());
+    const QVariantList batchCallsAfter =
+        harness.previewThumbnailsStub->property("batchCalls").toList();
+    ASSERT_GT(batchCallsAfter.size(), qsizetype{batchCallsBefore});
+    lastCall = batchCallsAfter.back().toList();
+    ASSERT_EQ(lastCall.size(), 9);
+    EXPECT_EQ(lastCall.front().toLongLong(), qlonglong{16});
+    EXPECT_EQ(lastCall.back().toLongLong(), qlonglong{24});
+    auto* const stripFilmstrip =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("nearbyFramesFilmstrip"));
+    ASSERT_NE(stripFilmstrip, nullptr);
+    const auto stripCellAt = [&harness, &stripFilmstrip](const int index) {
+        QQuickItem* cell = nullptr;
+        QMetaObject::invokeMethod(
+            stripFilmstrip, "itemAtIndex", Q_RETURN_ARG(QQuickItem*, cell), Q_ARG(int, index));
+        harness.settle(1);
+        return cell;
+    };
+    QQuickItem* consecutiveCell = nullptr;
+    ASSERT_TRUE(harness.waitUntil([&] {
+        consecutiveCell = stripCellAt(2);
+        return consecutiveCell != nullptr &&
+               consecutiveCell->objectName() == QStringLiteral("nearbyFrameCell_18");
+    }));
+    auto* const cell18Badge =
+        consecutiveCell->findChild<QObject*>(QStringLiteral("nearbyFrameKindBadge"));
+    ASSERT_NE(cell18Badge, nullptr);
+    EXPECT_EQ(cell18Badge->property("text").toString(), QStringLiteral("—"));
+    // Without a ROI the toggle says so; whole frames are shown, no crop.
+    EXPECT_TRUE(stripToggle->property("text").toString().contains(QStringLiteral("未启用 ROI")));
+
+    // Enable the shared ROI on the main canvas surface and mark the frames decoded: every
+    // strip cell crops its thumbnail to the same normalized rect (100x50 provider image ->
+    // crop 20,5 60x40) and stretches that region into the cell.
+    auto* const surface = harness.root->findChild<QQuickItem*>(QStringLiteral("dualVideoSurface"));
+    ASSERT_NE(surface, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(surface,
+                                          "setRoiNormalized",
+                                          Q_ARG(qreal, 0.2),
+                                          Q_ARG(qreal, 0.1),
+                                          Q_ARG(qreal, 0.8),
+                                          Q_ARG(qreal, 0.9)));
+    QVariantList ready;
+    for (int frame = 16; frame <= 24; ++frame) {
+        ready.append(QVariant{qlonglong{frame}});
+    }
+    ASSERT_TRUE(harness.previewThumbnailsStub->setProperty("framesReady", ready));
+    harness.settle(12);
+    EXPECT_TRUE(stripToggle->property("text").toString().contains(QStringLiteral("同 ROI 连续帧")));
+    QQuickItem* cropCell = nullptr;
+    ASSERT_TRUE(harness.waitUntil([&] {
+        cropCell = stripCellAt(2);
+        return cropCell != nullptr &&
+               cropCell->objectName() == QStringLiteral("nearbyFrameCell_18");
+    }));
+    auto* const thumbnail =
+        cropCell->findChild<QQuickItem*>(QStringLiteral("nearbyFrameThumbnailImage"));
+    ASSERT_NE(thumbnail, nullptr);
+    // Image.Ready == 1: the provider image is loaded before reading the crop rect.
+    ASSERT_TRUE(
+        harness.waitUntil([&thumbnail] { return thumbnail->property("status").toInt() == 1; }));
+    const QRectF crop = thumbnail->property("sourceClipRect").toRectF();
+    EXPECT_NEAR(crop.x(), 20.0, 0.5);
+    EXPECT_NEAR(crop.y(), 5.0, 0.5);
+    EXPECT_NEAR(crop.width(), 60.0, 0.5);
+    EXPECT_NEAR(crop.height(), 40.0, 0.5);
+
+    // Closing the card cancels its outstanding batch - stale frame decodes stop.
+    const int cancelsBefore = harness.previewThumbnailsStub->property("cancelCount").toInt();
+    auto* const closeBtn = card->findChild<QQuickItem*>(QStringLiteral("nearbyFramesCloseButton"));
+    ASSERT_NE(closeBtn, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(closeBtn, "clicked"));
+    harness.settle();
+    EXPECT_FALSE(card->property("visible").toBool());
+    EXPECT_GT(harness.previewThumbnailsStub->property("cancelCount").toInt(), cancelsBefore);
+
+    harness.window->close();
+}
+
+// V04: the dual-difference HUD legend describes the two panes the layout renders (both
+// candidates against the reference under one shared threshold/gain/colour scale), and the
+// missing-frame overlay names the panes' slots - including the reference, which the active
+// pair selector never mentions. A pane going missing also flips the combined exactness.
+TEST(MainQmlContractTests, DualDifferenceLegendAndMissingOverlayDescribeTheRenderedPanes) {
+    ThreeSourceFocusHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+
+    auto* const dualItem =
+        harness.root->findChild<QObject*>(QStringLiteral("dualDifferenceMenuItem"));
+    ASSERT_NE(dualItem, nullptr);
+    auto* const diffMenu = harness.root->findChild<QObject*>(QStringLiteral("diffFlavorMenu"));
+    ASSERT_NE(diffMenu, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(diffMenu, "open"));
+    for (int iteration = 0; iteration < 5; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    ASSERT_TRUE(QMetaObject::invokeMethod(dualItem, "triggered"));
+    for (int iteration = 0; iteration < 8; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    ASSERT_EQ(harness.root->property("effectiveViewMode").toInt(), 9);
+
+    auto* const statusText =
+        harness.root->findChild<QObject*>(QStringLiteral("analysisStatusText"));
+    ASSERT_NE(statusText, nullptr);
+    const QString legend = statusText->property("text").toString();
+    EXPECT_TRUE(legend.contains(QStringLiteral("双差异"))) << legend.toStdString();
+    EXPECT_TRUE(legend.contains(QStringLiteral("A↔GT · B↔GT"))) << legend.toStdString();
+    EXPECT_TRUE(legend.contains(QStringLiteral("两窗共用阈值/增益/色阶"))) << legend.toStdString();
+    // The legend may honestly report unavailable semantics, but it never claims exact
+    // correspondence it cannot see (no "原码值" wording unless both panes are pixel-exact).
+    if (!harness.root->property("dualDifferenceLegendExact").toBool()) {
+        EXPECT_TRUE(legend.contains(QStringLiteral("不可用")) ||
+                    legend.contains(QStringLiteral("不同")))
+            << legend.toStdString();
+    }
+
+    // One pane pair loses its frame: the combined legend must drop out of the exact state
+    // (aggregating only one pane would keep claiming exactness) and the missing candidate is
+    // named by the unavailable overlay.
+    harness.snapshot->presentedSources[1].matchKind = application::FrameMatchKind::Missing;
+    harness.snapshot->presentedSources[1].sourceFrameId = std::nullopt;
+    harness.controller->refreshProjection();
+    for (int iteration = 0; iteration < 8; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    EXPECT_FALSE(harness.root->property("dualDifferenceLegendExact").toBool());
+    const QString legendAfterMissingPane =
+        harness.root->property("dualDifferenceLegendText").toString();
+    EXPECT_TRUE(legendAfterMissingPane.contains(QStringLiteral("不可用")) ||
+                legendAfterMissingPane.contains(QStringLiteral("不同")))
+        << legendAfterMissingPane.toStdString();
+    const QString detail = harness.root->property("differenceUnavailableDetail").toString();
+    EXPECT_TRUE(detail.contains(QStringLiteral("源 B"))) << detail.toStdString();
+    // The legend still names both panes; the pane loss is a missing-frame problem, not a
+    // caliber change.
+    EXPECT_TRUE(harness.root->property("dualDifferenceLegendText")
+                    .toString()
+                    .contains(QStringLiteral("B↔GT")));
+
+    harness.window->close();
+}
+
+// V04 (companion): with the reference source missing, both dual-difference panes are black
+// and the overlay names the reference - the active pair selector (both candidates present)
+// would stay silent about exactly the source the layout needs.
+TEST(MainQmlContractTests, DualDifferenceMissingReferenceIsNamedByTheUnavailableOverlay) {
+    ThreeSourceFocusHarness harness;
+    harness.snapshot->presentedSources[2].matchKind = application::FrameMatchKind::Missing;
+    harness.snapshot->presentedSources[2].sourceFrameId = std::nullopt;
+    ASSERT_TRUE(harness.create()) << harness.error;
+
+    auto* const dualItem =
+        harness.root->findChild<QObject*>(QStringLiteral("dualDifferenceMenuItem"));
+    ASSERT_NE(dualItem, nullptr);
+    auto* const diffMenu = harness.root->findChild<QObject*>(QStringLiteral("diffFlavorMenu"));
+    ASSERT_NE(diffMenu, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(diffMenu, "open"));
+    for (int iteration = 0; iteration < 5; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    ASSERT_TRUE(QMetaObject::invokeMethod(dualItem, "triggered"));
+    for (int iteration = 0; iteration < 8; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    ASSERT_EQ(harness.root->property("effectiveViewMode").toInt(), 9);
+
+    EXPECT_TRUE(harness.controller->sourceCMissing());
+    const QString detail = harness.root->property("differenceUnavailableDetail").toString();
+    EXPECT_TRUE(detail.contains(QStringLiteral("参考"))) << detail.toStdString();
+    EXPECT_TRUE(detail.contains(QStringLiteral("源 C"))) << detail.toStdString();
+    EXPECT_FALSE(detail.contains(QStringLiteral("源 A"))) << detail.toStdString();
+    // The panes are still described: the reference loss is a missing-frame problem, not a
+    // caliber change.
+    EXPECT_TRUE(harness.root->property("dualDifferenceLegendText")
+                    .toString()
+                    .contains(QStringLiteral("A↔GT · B↔GT")));
 
     harness.window->close();
 }

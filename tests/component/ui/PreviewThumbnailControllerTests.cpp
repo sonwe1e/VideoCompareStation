@@ -273,5 +273,108 @@ TEST(PreviewThumbnailControllerTests, LateFailurePreservesNewerInflightRequest) 
     ASSERT_TRUE(waitUntil([&] { return controller.hasThumbnail(7); }));
 }
 
+// V04 nearby-frames batch: the strip prefetches through one low-priority queue. It must wait
+// behind interactive hover work, drain one frame at a time afterwards, and an interactive
+// request preempts an in-flight batch decode through the existing cancel(context) path.
+TEST(PreviewThumbnailControllerTests, BatchPrefetchWaitsForHoverAndIsPreemptedByIt) {
+    ensureCoreApplication();
+    const auto session = readySnapshot(101U);
+    FakePreviewThumbnailService service;
+    PreviewThumbnailController controller{PreviewThumbnailController::Dependencies{
+        .snapshot = [&session] { return session; }, .service = &service}};
+
+    controller.request(9);
+    controller.requestBatch(QVariantList{QVariant{qlonglong{5}}, QVariant{qlonglong{6}}});
+    ASSERT_TRUE(waitUntil([&] { return service.submitted.size() == 1U; }));
+    // The interactive hover is decoded first; the batch waits behind it without cancelling.
+    ASSERT_EQ(service.submitted.front().frameId.value(), 9);
+    ASSERT_TRUE(service.cancelledContexts.empty());
+
+    // Hover finished: the batch starts draining, one frame at a time.
+    service.deliver(thumbnailResult(service.submitted.front()));
+    ASSERT_TRUE(waitUntil([&] { return service.submitted.size() == 2U; }));
+    EXPECT_EQ(service.submitted.at(1U).frameId.value(), 5);
+
+    // Interactive hover preempts the in-flight batch decode: the batch context is cancelled
+    // and the hover frame is decoded first.
+    controller.request(7);
+    ASSERT_TRUE(waitUntil([&] { return service.submitted.size() == 3U; }));
+    EXPECT_EQ(service.submitted.at(2U).frameId.value(), 7);
+    ASSERT_FALSE(service.cancelledContexts.empty());
+    EXPECT_EQ(service.cancelledContexts.back(), service.submitted.at(1U).context);
+
+    // Once the hover result lands, the batch resumes with the remaining queued frame.
+    service.deliver(thumbnailResult(service.submitted.back()));
+    ASSERT_TRUE(waitUntil([&] { return service.submitted.size() == 4U; }));
+    EXPECT_EQ(service.submitted.at(3U).frameId.value(), 6);
+    service.deliver(thumbnailResult(service.submitted.back()));
+    ASSERT_TRUE(waitUntil([&] { return controller.hasThumbnail(6); }));
+}
+
+// V04: a closed or re-targeted card cancels its batch - the in-flight decode through the
+// service's cancel(context), the queued frames by dropping the queue - and the controller
+// stays usable for interactive requests afterwards.
+TEST(PreviewThumbnailControllerTests, CancelBatchCancelsInflightBatchAndClearsQueue) {
+    ensureCoreApplication();
+    const auto session = readySnapshot(101U);
+    FakePreviewThumbnailService service;
+    PreviewThumbnailController controller{PreviewThumbnailController::Dependencies{
+        .snapshot = [&session] { return session; }, .service = &service}};
+
+    controller.requestBatch(QVariantList{QVariant{qlonglong{5}}, QVariant{qlonglong{6}}});
+    ASSERT_TRUE(waitUntil([&] { return service.submitted.size() == 1U; }));
+    EXPECT_EQ(service.submitted.front().frameId.value(), 5);
+    const std::size_t cancelledBefore = service.cancelledContexts.size();
+    controller.cancelBatch();
+    ASSERT_EQ(service.cancelledContexts.size(), cancelledBefore + 1U);
+    EXPECT_EQ(service.cancelledContexts.back(), service.submitted.front().context);
+
+    // The queued frame 6 is never submitted for the cancelled batch, even after the
+    // cancelled job's late result arrives (the decode itself stays a valid cache entry).
+    service.deliver(thumbnailResult(service.submitted.front()));
+    for (int spin = 0; spin < 120; ++spin) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 2);
+        QThread::msleep(1U);
+    }
+    EXPECT_EQ(service.submitted.size(), 1U);
+    EXPECT_TRUE(controller.hasThumbnail(5));
+
+    // Interactive requests still work after a batch cancel.
+    controller.request(6);
+    ASSERT_TRUE(waitUntil([&] { return service.submitted.size() == 2U; }));
+    EXPECT_EQ(service.submitted.back().frameId.value(), 6);
+    service.deliver(thumbnailResult(service.submitted.back()));
+    ASSERT_TRUE(waitUntil([&] { return controller.hasThumbnail(6); }));
+}
+
+// V04: a session switch invalidates the batch with the rest of the cache identity - queued
+// frames are dropped and the stale session's late results do not resubmit them.
+TEST(PreviewThumbnailControllerTests, SessionChangeDropsQueuedBatchFrames) {
+    ensureCoreApplication();
+    const auto sessionA = readySnapshot(101U);
+    const auto sessionB = readySnapshot(202U);
+    std::shared_ptr<const application::SessionSnapshot> current = sessionA;
+    FakePreviewThumbnailService service;
+    PreviewThumbnailController controller{PreviewThumbnailController::Dependencies{
+        .snapshot = [&current] { return current; }, .service = &service}};
+
+    controller.requestBatch(QVariantList{QVariant{qlonglong{5}}, QVariant{qlonglong{6}}});
+    ASSERT_TRUE(waitUntil([&] { return service.submitted.size() == 1U; }));
+    EXPECT_EQ(service.submitted.front().context.sessionId, domain::SessionId{101U});
+
+    current = sessionB;
+    controller.hasThumbnail(6);
+    // The stale in-flight decode is cancelled and frame 6 is not decoded for either session:
+    // the batch belonged to the previous session.
+    service.deliver(thumbnailResult(service.submitted.front()));
+    for (int spin = 0; spin < 120; ++spin) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 2);
+        QThread::msleep(1U);
+    }
+    EXPECT_EQ(service.submitted.size(), 1U);
+    EXPECT_FALSE(controller.hasThumbnail(5));
+    EXPECT_FALSE(controller.hasThumbnail(6));
+}
+
 } // namespace
 } // namespace dvs::ui
