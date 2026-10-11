@@ -46,12 +46,19 @@ Item {
         pendingSourceIdentities: []
         sourceIdentities: ["source-a", "source-b"]
         displayOrder: ["source-a", "source-b"]
-        onMoveRequested: (from, to) => {
-            const order = displayOrder.slice();
-            const moved = order.splice(from, 1)[0];
-            order.splice(to, 0, moved);
-            displayOrder = order;
+        canvasFocusIdentity: ""
+        // Stand-in for the shell wiring Main.qml owns: the strip only emits, the owner keeps
+        // the identity-keyed selection state.
+        onSelectionToggled: identity => {
+            const updated = selectedIdentities.slice();
+            const index = updated.indexOf(identity);
+            if (index >= 0)
+                updated.splice(index, 1);
+            else
+                updated.push(identity);
+            selectedIdentities = updated;
         }
+        onSelectionCleared: selectedIdentities = []
     }
 
     SignalSpy {
@@ -69,29 +76,45 @@ Item {
     }
 
     SignalSpy {
+        id: replaceSpy
+
+        target: strip
+        signalName: "replaceRequested"
+    }
+
+    SignalSpy {
+        id: directLookSpy
+
+        target: strip
+        signalName: "directLookRequested"
+    }
+
+    SignalSpy {
         id: viewerFocusSpy
 
         target: strip
         signalName: "viewerFocusRequested"
     }
 
-    DragHandler {
-        id: stealingDrag
-        target: null
-        dragThreshold: 30000
-        grabPermissions: PointerHandler.CanTakeOverFromAnything | PointerHandler.ApprovesTakeOverByAnything
-    }
-
-    SignalSpy {
-        id: moveSpy
-        target: strip
-        signalName: "moveRequested"
-    }
-
     SignalSpy {
         id: selectionSpy
+
         target: strip
         signalName: "selectionToggled"
+    }
+
+    SignalSpy {
+        id: selectionClearedSpy
+
+        target: strip
+        signalName: "selectionCleared"
+    }
+
+    SignalSpy {
+        id: removeSelectedSpy
+
+        target: strip
+        signalName: "removeSelectedRequested"
     }
 
     TestCase {
@@ -100,7 +123,7 @@ Item {
 
         function cleanup() {
             root.visible = true;
-            // Restore two-source model in case a test mutated it (e.g. Test B).
+            // Restore two-source model in case a test mutated it.
             sources.clear();
             sources.append({sourceId: 0, sourceIdentity: "source-a", filename: "reference.mp4", parentLabel: "", fullPath: "", changedOnDisk: false});
             sources.append({sourceId: 1, sourceIdentity: "source-b", filename: "prediction.mp4", parentLabel: "", fullPath: "", changedOnDisk: false});
@@ -111,11 +134,13 @@ Item {
             strip.canonicalSourceIdentity = "source-a";
             strip.referenceSourceIndex = 0;
             strip.referenceSourceIdentity = "source-a";
+            strip.canvasFocusIdentity = "";
+            strip.manageSelection = false;
+            strip.selectedIdentities = [];
             strip.enabled = true;
-            stealingDrag.dragThreshold = 30000;
             root.width = 720;
-            moveSpy.clear();
-            selectionSpy.clear();
+            strip.pendingSourceIdentities = [];
+            strip.returnViewerFocusAfterClose = false;
             wait(0);
 
             const firstMenu = findChild(strip, "sourceOverflowButton-0").sourceMenuControl;
@@ -124,13 +149,16 @@ Item {
             secondMenu.close();
             referenceSpy.clear();
             removalSpy.clear();
+            replaceSpy.clear();
+            directLookSpy.clear();
             viewerFocusSpy.clear();
-            strip.pendingSourceIdentities = [];
-            strip.returnViewerFocusAfterClose = false;
+            selectionSpy.clear();
+            selectionClearedSpy.clear();
+            removeSelectedSpy.clear();
             wait(0);
         }
 
-        function prepareDragSources() {
+        function prepareThreeSources() {
             root.width = 1100;
             sources.clear();
             sources.append({sourceId: 0, sourceIdentity: "source-a", filename: "prediction-a.mp4", parentLabel: "", fullPath: "", changedOnDisk: false});
@@ -141,184 +169,145 @@ Item {
             strip.displayOrder = ["source-a", "source-b", "source-c"];
             strip.referenceSourceIndex = 1;
             strip.referenceSourceIdentity = "source-b";
-            moveSpy.clear();
-            selectionSpy.clear();
             wait(30);
         }
 
-        function dragChip(identity, deltaX, duringDrag, button = Qt.LeftButton, modifiers = Qt.NoModifier) {
+        function dragChip(identity, deltaX) {
             const chip = strip.chipAt(identity);
             verify(chip !== null);
-            compare(chip.resolvedSourceIdentity, identity);
+            verify(chip.resolvedSourceIdentity === identity);
             const start = chip.mapToItem(root, chip.width / 2, chip.height / 2);
             const end = Qt.point(start.x + deltaX, start.y);
-            mousePress(root, start.x, start.y, button, modifiers);
+            mousePress(root, start.x, start.y, Qt.LeftButton, Qt.NoModifier);
             try {
                 const firstDelta = Math.sign(deltaX) * Math.min(30, Math.abs(deltaX) / 2);
                 mouseMove(root, start.x + firstDelta, start.y, 30);
                 mouseMove(root, end.x, end.y, 30);
-                if (duringDrag)
-                    duringDrag(chip, start, end);
             } finally {
-                mouseRelease(root, end.x, end.y, button, modifiers);
+                mouseRelease(root, end.x, end.y, Qt.LeftButton, Qt.NoModifier);
             }
             wait(0);
         }
 
-        function test_realDragMovesLeftAndRight_data() {
-            return [{tag: "right", identity: "source-a", delta: 620, from: 0, to: 2, order: "source-b,source-c,source-a"},
-                    {tag: "left", identity: "source-c", delta: -620, from: 2, to: 0, order: "source-c,source-a,source-b"}];
-        }
-
-        function test_realDragMovesLeftAndRight(data) {
-            prepareDragSources();
-            const sourceIds = [strip.chipAt("source-a").sourceId, strip.chipAt("source-b").sourceId, strip.chipAt("source-c").sourceId];
-            dragChip(data.identity, data.delta, function(chip) {
-                verify(chip.dragArmed);
-                verify(Math.abs(chip.x - chip.layoutX) > 500);
-                verify(chip.z > strip.chipAt("source-b").z);
-            });
-            compare(moveSpy.count, 1);
-            compare(moveSpy.signalArguments[0][0], data.from);
-            compare(moveSpy.signalArguments[0][1], data.to);
-            compare(strip.displayOrder.join(","), data.order);
+        // V02: a plain chip-body click is the direct look of that source, addressed by session
+        // slot. It never toggles the management selection - selection lives behind the explicit
+        // manage mode.
+        function test_plainChipClickRequestsDirectLook() {
+            const firstChip = strip.chipAt("source-a");
+            mouseClick(firstChip, firstChip.width / 2, firstChip.height / 2);
+            compare(directLookSpy.count, 1);
+            compare(directLookSpy.signalArguments[0][0], 0);
             compare(selectionSpy.count, 0);
-            compare(strip.referenceSourceIdentity, "source-b");
-            compare(strip.canonicalSourceIdentity, "source-a");
-            compare([strip.chipAt("source-a").sourceId, strip.chipAt("source-b").sourceId, strip.chipAt("source-c").sourceId].join(","), sourceIds.join(","));
-            const moved = strip.chipAt(data.identity);
-            compare(moved.x, moved.layoutX);
-        }
 
-        function test_repeatedDragStartsFromTheNewLayout() {
-            prepareDragSources();
-            dragChip("source-a", 620);
-            dragChip("source-a", -620);
-            compare(moveSpy.count, 2);
-            compare(moveSpy.signalArguments[1][0], 2);
-            compare(moveSpy.signalArguments[1][1], 0);
-            compare(strip.displayOrder.join(","), "source-a,source-b,source-c");
-        }
-
-        function test_dragWithinOwnPositionDoesNotReorder_data() {
-            return [{tag: "right-small", delta: 40}, {tag: "left-small", delta: -40}];
-        }
-
-        function test_dragWithinOwnPositionDoesNotReorder(data) {
-            prepareDragSources();
-            dragChip("source-b", data.delta);
-            compare(moveSpy.count, 0);
-            compare(strip.displayOrder.join(","), "source-a,source-b,source-c");
+            const secondChip = strip.chipAt("source-b");
+            mouseClick(secondChip, secondChip.width / 2, secondChip.height / 2);
+            compare(directLookSpy.count, 2);
+            compare(directLookSpy.signalArguments[1][0], 1);
             compare(selectionSpy.count, 0);
         }
 
-        function test_smallPointerJitterRemainsAnOrdinaryClick() {
-            prepareDragSources();
-            dragChip("source-a", 2);
-            compare(moveSpy.count, 0);
+        // V02: the third source gets the same entry as the first two - the click carries slot
+        // 2, no matter which source carries the reference role.
+        function test_thirdSourceChipHasEqualDirectLookEntry() {
+            prepareThreeSources();
+            const thirdChip = strip.chipAt("source-c");
+            mouseClick(thirdChip, thirdChip.width / 2, thirdChip.height / 2);
+            compare(directLookSpy.count, 1);
+            compare(directLookSpy.signalArguments[0][0], 2);
+            compare(selectionSpy.count, 0);
+        }
+
+        // V02: batch management is an explicit mode. The chip click only selects once the
+        // manage toggle is on, and the remove button only exists there.
+        function test_manageModeTurnsChipClicksIntoSelection() {
+            const manageButton = findChild(strip, "manageSourcesButton");
+            verify(manageButton !== null);
+            compare(strip.manageSelection, false);
+            compare(findChild(strip, "removeSelectedChipButton").visible, false);
+
+            mouseClick(manageButton, manageButton.width / 2, manageButton.height / 2);
+            verify(strip.manageSelection);
+
+            const firstChip = strip.chipAt("source-a");
+            mouseClick(firstChip, firstChip.width / 2, firstChip.height / 2);
             compare(selectionSpy.count, 1);
             compare(selectionSpy.signalArguments[0][0], "source-a");
+            compare(directLookSpy.count, 0);
+            compare(strip.selectedIdentities, ["source-a"]);
+            verify(findChild(strip, "removeSelectedChipButton").visible);
+
+            const secondChip = strip.chipAt("source-b");
+            mouseClick(secondChip, secondChip.width / 2, secondChip.height / 2);
+            compare(selectionSpy.count, 2);
+            compare(strip.selectedIdentities, ["source-a", "source-b"]);
         }
 
-        function test_disabledDragCancelsWithoutCommitting_data() {
-            return [{tag: "disabled", hide: false}, {tag: "hidden", hide: true}];
+        // Leaving the manage mode drops the selection, so a hidden batch state can never
+        // linger under a click that now means direct look.
+        function test_leavingManageModeClearsSelection() {
+            const manageButton = findChild(strip, "manageSourcesButton");
+            mouseClick(manageButton, manageButton.width / 2, manageButton.height / 2);
+            const firstChip = strip.chipAt("source-a");
+            mouseClick(firstChip, firstChip.width / 2, firstChip.height / 2);
+            compare(selectionSpy.count, 1);
+
+            mouseClick(manageButton, manageButton.width / 2, manageButton.height / 2);
+            verify(!strip.manageSelection);
+            compare(selectionClearedSpy.count, 1);
+            compare(strip.selectedIdentities, []);
+            compare(findChild(strip, "removeSelectedChipButton").visible, false);
         }
 
-        function test_disabledDragCancelsWithoutCommitting(data) {
-            prepareDragSources();
-            dragChip("source-a", 620, function(chip) {
-                verify(chip.dragArmed);
-                if (data.hide)
-                    root.visible = false;
-                else
-                    strip.enabled = false;
-            });
-            compare(moveSpy.count, 0);
+        // The remove button stays a management-mode action and still fires its signal.
+        function test_removeSelectedOnlyFiresInManageMode() {
+            const manageButton = findChild(strip, "manageSourcesButton");
+            mouseClick(manageButton, manageButton.width / 2, manageButton.height / 2);
+            const firstChip = strip.chipAt("source-a");
+            mouseClick(firstChip, firstChip.width / 2, firstChip.height / 2);
+            const removeButton = findChild(strip, "removeSelectedChipButton");
+            verify(removeButton.visible);
+            mouseClick(removeButton, removeButton.width / 2, removeButton.height / 2);
+            compare(removeSelectedSpy.count, 1);
+        }
+
+        // V02: dragging a chip must never reorder anything. The picture panels follow the
+        // session slot order, so a chip-only reorder would be a label change pretending to be
+        // a layout change; the drag is disabled and the strip stays where the shell put it.
+        function test_dragDoesNotReorder_data() {
+            return [{tag: "right", identity: "source-a", delta: 620},
+                    {tag: "left", identity: "source-c", delta: -620}];
+        }
+
+        function test_dragDoesNotReorder(data) {
+            prepareThreeSources();
+            dragChip(data.identity, data.delta);
             compare(strip.displayOrder.join(","), "source-a,source-b,source-c");
-            const chip = strip.chipAt("source-a");
+            const chip = strip.chipAt(data.identity);
             compare(chip.x, chip.layoutX);
+            compare(selectionSpy.count, 0);
+            compare(directLookSpy.count, 0);
         }
 
-        function test_stolenGrabCancelsWithoutCommitting() {
-            prepareDragSources();
-            dragChip("source-a", 620, function(chip, start, end) {
-                verify(chip.dragArmed);
-                stealingDrag.dragThreshold = 0;
-                mouseMove(root, end.x + 20, end.y, 30);
-                verify(stealingDrag.active);
-            });
-            compare(moveSpy.count, 0);
-            compare(strip.displayOrder.join(","), "source-a,source-b,source-c");
-            const chip = strip.chipAt("source-a");
-            compare(chip.x, chip.layoutX);
-        }
-
-        function test_sourceChangesInvalidateAnInFlightDrag_data() {
-            return [{tag: "replacement", mode: "replace"}, {tag: "removal", mode: "remove"},
-                    {tag: "addition", mode: "add"}, {tag: "reorder", mode: "reorder"},
-                    {tag: "dragged-replacement", mode: "replace-dragged"},
-                    {tag: "dragged-removal", mode: "remove-dragged"}];
-        }
-
-        function test_sourceChangesInvalidateAnInFlightDrag(data) {
-            prepareDragSources();
-            if (data.mode === "add") {
-                sources.remove(2);
-                strip.sourceCount = 2;
-                strip.sourceIdentities = ["source-a", "source-b"];
-                strip.displayOrder = strip.sourceIdentities.slice();
-            }
-            let expectedOrder = "";
-            dragChip("source-a", 620, function() {
-                if (data.mode === "replace-dragged") {
-                    sources.setProperty(0, "sourceIdentity", "replacement-a");
-                    strip.sourceIdentities = ["replacement-a", "source-b", "source-c"];
-                } else if (data.mode === "remove-dragged") {
-                    sources.remove(0);
-                    strip.sourceCount = 2;
-                    strip.sourceIdentities = ["source-b", "source-c"];
-                } else if (data.mode === "replace") {
-                    sources.setProperty(2, "sourceIdentity", "replacement-c");
-                    strip.sourceIdentities = ["source-a", "source-b", "replacement-c"];
-                } else if (data.mode === "remove") {
-                    sources.remove(2);
-                    strip.sourceCount = 2;
-                    strip.sourceIdentities = ["source-a", "source-b"];
-                } else if (data.mode === "add") {
-                    sources.append({sourceId: 2, sourceIdentity: "source-c", filename: "prediction-c.mp4", parentLabel: "", fullPath: "", changedOnDisk: false});
-                    strip.sourceCount = 3;
-                    strip.sourceIdentities = ["source-a", "source-b", "source-c"];
-                }
-                strip.displayOrder = data.mode === "reorder" ? ["source-c", "source-b", "source-a"] : strip.sourceIdentities.slice();
-                expectedOrder = strip.displayOrder.join(",");
-            });
-            compare(moveSpy.count, 0);
-            compare(strip.displayOrder.join(","), expectedOrder);
+        // Small pointer jitter stays an ordinary click - and in the default mode that click
+        // is the direct look, not a selection.
+        function test_smallPointerJitterRemainsAnOrdinaryClick() {
+            prepareThreeSources();
+            dragChip("source-a", 2);
+            compare(directLookSpy.count, 1);
+            compare(directLookSpy.signalArguments[0][0], 0);
             compare(selectionSpy.count, 0);
         }
 
-        function test_menuClickDoesNotDragOrSelectTheChip() {
-            prepareDragSources();
+        function test_menuClickDoesNotDirectLookOrSelectTheChip() {
+            prepareThreeSources();
             const overflow = findChild(strip, "sourceOverflowButton-1");
             mouseClick(overflow, overflow.width / 2, overflow.height / 2);
             const menu = overflow.sourceMenuControl;
             tryCompare(menu, "opened", true);
             keyClick(Qt.Key_Escape);
             tryCompare(menu, "visible", false);
-            compare(moveSpy.count, 0);
+            compare(directLookSpy.count, 0);
             compare(selectionSpy.count, 0);
-        }
-
-        function test_modifiedOrRightButtonDragDoesNotReorder_data() {
-            return [{tag: "control-drag", button: Qt.LeftButton, modifiers: Qt.ControlModifier},
-                    {tag: "right-button", button: Qt.RightButton, modifiers: Qt.NoModifier}];
-        }
-
-        function test_modifiedOrRightButtonDragDoesNotReorder(data) {
-            prepareDragSources();
-            dragChip("source-a", 620, null, data.button, data.modifiers);
-            compare(moveSpy.count, 0);
-            compare(strip.displayOrder.join(","), "source-a,source-b,source-c");
         }
 
         function test_reference_is_a_badge_and_all_sources_have_action_menus() {
@@ -362,12 +351,41 @@ Item {
             compare(removalSpy.signalArguments[0][0], "source-a");
         }
 
+        // V02 "替换文件": the menu carries the third per-source action, and it emits the
+        // frozen identity after the menu closes, exactly like reference and removal.
+        function test_replace_action_emits_identity_after_the_menu_closes() {
+            const secondOverflow = findChild(strip, "sourceOverflowButton-1");
+            const menu = secondOverflow.sourceMenuControl;
+            const replace = secondOverflow.replaceSourceAction;
+            verify(replace !== null);
+            menu.popup(root, 300, 24);
+            tryCompare(menu, "opened", true);
+            // A third row means the list needs another frame to materialize the delegate.
+            tryCompare(replace, "visible", true);
+            replace.triggered();
+            tryCompare(replaceSpy, "count", 1);
+            compare(replaceSpy.signalArguments[0][0], "source-b");
+            tryCompare(menu, "opened", false);
+        }
+
         function test_pending_identity_disables_only_the_affected_source() {
             const firstOverflow = findChild(strip, "sourceOverflowButton-0");
             const secondOverflow = findChild(strip, "sourceOverflowButton-1");
             strip.pendingSourceIdentities = ["source-b"];
             tryCompare(firstOverflow, "enabled", true);
             tryCompare(secondOverflow, "enabled", false);
+        }
+
+        // V02: the focused source shows the 直看 tag so the four per-source states (direct
+        // look, reference role, timeline master, plain) stay visually distinct.
+        function test_direct_look_tag_marks_the_focused_chip() {
+            prepareThreeSources();
+            compare(findChild(strip, "sourceDirectLookTag-1").visible, false);
+            strip.canvasFocusIdentity = "source-b";
+            wait(0);
+            verify(findChild(strip, "sourceDirectLookTag-1").visible);
+            compare(findChild(strip, "sourceDirectLookTag-0").visible, false);
+            compare(findChild(strip, "sourceDirectLookTag-2").visible, false);
         }
 
         // Test B: model reset while menu is open must not leak openMenuCount.

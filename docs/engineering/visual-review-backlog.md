@@ -1,7 +1,52 @@
 # 视觉审查问题台账
 
-更新：2026-10-11（长按正反向走带 E04／缓存小步改进 E05／启动减负 E01／诊断可关闭 E02／全画布候选直看 P05／图片编辑纯操作 P11／协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-10-11（统一源入口与比较选择 V02／长按正反向走带 E04／缓存小步改进 E05／启动减负 E01／诊断可关闭 E02／全画布候选直看 P05／图片编辑纯操作 P11／协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+
+## 2026-10-11 统一源入口与比较选择 V02
+
+- **范围**：《CompareStation 下一步体验与性能计划 2026-10-11》§5 V02（P0），R3 阶段工单。
+  每路源对等的直看入口、显式管理选择、比较对真实源名、替换文件入口；复用 P05 canvasFocus
+  链路，不新增渲染/播放状态；不改 E04 走带、GPU 后端与播放器域模型。
+- **问题（基线 104d474）**：直看按钮为 A/B/GT，GT=A 时 A 与 GT 重复、C 无对等入口；
+  ActiveSourceStrip 普通点击被管理选择劫持；拖动只改标签条顺序、画面顺序不跟随（误导）；
+  比较对下拉显示 A/B/C 槽位字母而非真实文件名。
+- **交付**：
+  - `CompareModeBar.qml`：直看组改为按会话生成 A/B/C 同等按钮（Repeater，objectName
+    `canvasFocus{A,B,C}Button`）；承担参考角色的源在自己的按钮上挂 GT 徽标（`referenceBadge`），
+    删除独立"看 GT"按钮——GT 是角色不是第四个源，GT=A 时不再重复、C 有对等入口。
+    点击发 `fullCanvasFocusRequested(SourceSlot, slot)`，选中项再点发 Off 返回比较视图（P05 语义不变）。
+  - `ActiveSourceStrip.qml`：卡片主体单击=进入/退出该源全画布直看（`directLookRequested(slot)`，
+    Main.qml `toggleDirectLook` 转 `shell.requestCanvasFocus`，同帧同 ROI/缩放，不 seek/不重开）；
+    新增"☰"管理开关进入显式管理模式，普通点击才变多选，离开模式清空选择；拖动重排整体移除
+    （画面顺序跟随会话槽位，标签条单独重排属误导交互；shell `moveSourceInDisplayOrder` API 保留
+    供程序化重排，其不变量测试仍在）；源菜单新增"替换文件…"（`replaceRequested(identity)`）。
+    直看中的卡片显示"直看"标签并与参考/主时间线/普通态可区分。
+  - `Main.qml` + `ReviewInputDialogs.qml`：替换文件走新 `replaceSourceFileDialog`；
+    `performSourceReplacement` 以冻结身份定位槽位、拒绝重复文件、`stageSources+openStagedSources(true)`
+    走 ReplaceSourcesIntent（保显示位置、保参考角色、失败不拆当前会话）。
+  - `ReviewController.cpp`：每条 differenceEdge 新增 `pairLabel`/`firstSourceName`/`secondSourceName`
+    （真实文件名，同名附父目录）；比较对下拉改用 `pairLabel`，`label`（槽位字母）保留给既有调用方。
+- **不变量（§2.1）**：切换直看/比较对不 seek、不改 GT、不改时间轴/播放位置、不重置 ROI/缩放、
+  不重开视频；A/B/C 槽位仍不充当文件身份（直看状态按冻结身份清除，P05 语义）。
+- **验证（本地 dev preset，2026-10-11）**：
+  - 新增/改写：`MainQmlContractTests.SourceChipDirectLookSwitchesWithoutTouchingMediaTruthOrObservation`
+    （卡片单击进入/退出/直切 + 命令数/参考/边缘/帧/epoch/视图模式/显示顺序/ROI/缩放全保持）、
+    `PairComboNamesTheTwoRealSourceFiles`（下拉与全部三条边显示真实文件名）、
+    `ReviewControllerTests.DifferenceEdgesNameRealSourceFilesForThePairSelector`；
+    P05 焦点组测试改为断言 A/B/C 对等 + GT 徽标（原"看 GT"按钮断言随之移除：徽标方案取代独立按钮，
+    Reference 请求码仍由 shell/domain 测试覆盖）。`tst_active_source_strip.qml` 重写拖动为
+    "拖动不再重排"断言、新增直看点击/管理模式/退出清空/替换菜单/直看标签 8 个用例。
+  - 回归：MainQmlContractTests 89/89、ReviewControllerTests+domain ComparisonSelection/Validator+
+    RoiTripletStrip 150/150、active_source_strip 8 变体全绿；format-check、lint 通过。
+  - 变异证据：`out/verification/v02-source-entry-mutation/`（M1–M9：直看进不去/重置视口/GT 顶替/
+    偷步进/偷换比较对/点击退回选择/拖动重排回归/真实名退回字母/Off 失效，全部改坏→失败→还原）。
+- **UNVERIFIED（真机项，不宣称）**：三源真实素材下按钮排布与长文件名截断的观感（仅跑了
+  960px 最小宽度的既有布局断言）；替换文件对大文件的失败回退体验（意图失败路径与移除一致，
+  未做真机坏文件验收）；管理模式触屏可用性。
+- **回退**：还原 CompareModeBar 焦点组为静态 A/B/GT 三按钮、ActiveSourceStrip 恢复点击=选择与
+  DragHandler、Main.qml 移除 toggleDirectLook/替换接线即回到旧行为；`pairLabel` 字段多余数据
+  无行为影响，可独立保留。
 
 ## 2026-10-11 长按正反向走带 E04 与缓存小步改进 E05
 

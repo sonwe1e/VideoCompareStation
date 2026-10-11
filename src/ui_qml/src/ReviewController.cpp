@@ -1998,6 +1998,17 @@ private:
                 const QString baseLabel =
                     QStringLiteral("%1 ↔ %2").arg(sourceName(sourceRows[first].sourceId),
                                                   sourceName(sourceRows[second].sourceId));
+                // V02: the pair selector must name the two real files, not the A/B/C session
+                // letters - the letters are slot labels, not file identity. Same-name sources
+                // keep the parent-folder disambiguation the source chips already use.
+                const auto rowDisplayName = [](const SourceListRow& row) {
+                    return row.parentLabel.isEmpty()
+                               ? row.filename
+                               : QStringLiteral("%1 (%2)").arg(row.filename, row.parentLabel);
+                };
+                const QString firstName = rowDisplayName(sourceRows[first]);
+                const QString secondName = rowDisplayName(sourceRows[second]);
+                const QString pairLabel = QStringLiteral("%1 ↔ %2").arg(firstName, secondName);
                 const QString displayLabel =
                     isCandidateOnly ? QStringLiteral("%1 (候选差异)").arg(baseLabel) : baseLabel;
                 const QString roleDescription =
@@ -2005,6 +2016,9 @@ private:
                                     : (isReferenceDiff ? QStringLiteral("参考对比") : QString());
                 next.differenceEdges.push_back(QVariantMap{
                     {QStringLiteral("label"), baseLabel},
+                    {QStringLiteral("pairLabel"), pairLabel},
+                    {QStringLiteral("firstSourceName"), firstName},
+                    {QStringLiteral("secondSourceName"), secondName},
                     {QStringLiteral("displayLabel"), displayLabel},
                     {QStringLiteral("isCandidateOnlyDifference"), isCandidateOnly},
                     {QStringLiteral("isReferenceDifference"), isReferenceDiff},

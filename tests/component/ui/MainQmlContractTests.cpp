@@ -393,6 +393,24 @@ installValidatedVideoSet(const std::shared_ptr<application::SessionSnapshot>& sn
 // projected from the validated comparison, so a snapshot whose sources are bare
 // SessionSourceView entries leaves the session without a GT identity - which is exactly the state
 // where the reference peek must not be offered. Callers that exercise the peek need this.
+// V02: Repeater delegates (the per-source focus buttons, the source chips) live in the item
+// tree but not in the QObject children tree - the same reason collectChips() walks
+// childItems() off the chip Row. Look them up by objectName through the scene graph.
+[[nodiscard]] QQuickItem* findItemByName(QQuickItem* root, const QString& name) {
+    if (root == nullptr) {
+        return nullptr;
+    }
+    if (root->objectName() == name) {
+        return root;
+    }
+    for (QQuickItem* child : root->childItems()) {
+        if (QQuickItem* const found = findItemByName(child, name)) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
 void identifyReferenceSlot(const std::shared_ptr<application::SessionSnapshot>& snapshot,
                            const int referenceSlot) {
     const auto rate = domain::RationalRate::create(30, 1);
@@ -4609,8 +4627,9 @@ TEST(MainQmlContractTests, FullCanvasFocusRequestCodesMatchTheShellEnum) {
               static_cast<int>(ReviewShellController::CanvasFocusSourceSlot));
 }
 
-// P05: three-source session with an identified GT exposes the full-canvas direct-look group
-// (A/B/GT). Switching changes only the shell's canvas focus: no playback command crosses the
+// P05/V02: three-source session with an identified GT (slot 2) exposes one equal direct-look
+// entry per source - A/B/C - and the GT role is a badge on C's own button, never a fourth
+// button. Switching changes only the shell's canvas focus: no playback command crosses the
 // boundary (no seek, no re-pairing), and the GT role, the committed pair, the presented frame
 // and the viewport's ROI/zoom/pan observation state all survive every switch.
 TEST(MainQmlContractTests, FullCanvasFocusSwitchesSourceWithoutSeekOrPairOrRoleChanges) {
@@ -4619,13 +4638,16 @@ TEST(MainQmlContractTests, FullCanvasFocusSwitchesSourceWithoutSeekOrPairOrRoleC
 
     auto* const bar = harness.root->findChild<QQuickItem*>(QStringLiteral("compareModeBar"));
     ASSERT_NE(bar, nullptr);
-    auto* const focusA = harness.root->findChild<QQuickItem*>(QStringLiteral("canvasFocusAButton"));
+    // The per-source focus buttons are Repeater delegates: item tree, not the QObject tree.
+    auto* const focusA = findItemByName(bar, QStringLiteral("canvasFocusAButton"));
     ASSERT_NE(focusA, nullptr);
-    auto* const focusB = harness.root->findChild<QQuickItem*>(QStringLiteral("canvasFocusBButton"));
+    auto* const focusB = findItemByName(bar, QStringLiteral("canvasFocusBButton"));
     ASSERT_NE(focusB, nullptr);
-    auto* const focusGt =
-        harness.root->findChild<QQuickItem*>(QStringLiteral("canvasFocusGtButton"));
-    ASSERT_NE(focusGt, nullptr);
+    auto* const focusC = findItemByName(bar, QStringLiteral("canvasFocusCButton"));
+    ASSERT_NE(focusC, nullptr);
+    // V02: the separate "看 GT" button is gone; per-source entries are equal and the reference
+    // role shows as a badge on the source that carries it.
+    EXPECT_EQ(findItemByName(bar, QStringLiteral("canvasFocusGtButton")), nullptr);
     auto* const surface = harness.root->findChild<QQuickItem*>(QStringLiteral("dualVideoSurface"));
     ASSERT_NE(surface, nullptr);
 
@@ -4637,10 +4659,14 @@ TEST(MainQmlContractTests, FullCanvasFocusSwitchesSourceWithoutSeekOrPairOrRoleC
     EXPECT_EQ(bar->property("canvasFocusRequestSourceSlot").toInt(),
               static_cast<int>(ReviewShellController::CanvasFocusSourceSlot));
 
-    // Three sources with a GT on slot 2: A/B/GT entries all present.
+    // Three sources with a GT on slot 2: every source has an entry, exactly one carries the
+    // GT badge, and no duplicate GT entry exists.
     EXPECT_TRUE(focusA->isVisible());
     EXPECT_TRUE(focusB->isVisible());
-    EXPECT_TRUE(focusGt->isVisible());
+    EXPECT_TRUE(focusC->isVisible());
+    EXPECT_FALSE(focusA->property("referenceBadge").toBool());
+    EXPECT_FALSE(focusB->property("referenceBadge").toBool());
+    EXPECT_TRUE(focusC->property("referenceBadge").toBool());
     EXPECT_EQ(harness.controller->referenceSourceIndex(), 2);
     EXPECT_TRUE(harness.shell->canvasFocusIdentity().isEmpty());
     EXPECT_EQ(harness.shell->canvasFocusSlot(), -1);
@@ -4731,21 +4757,27 @@ TEST(MainQmlContractTests, FullCanvasFocusSwitchesSourceWithoutSeekOrPairOrRoleC
     EXPECT_EQ(harness.controller->effectiveDifferenceEdge(), edgeBefore);
     EXPECT_DOUBLE_EQ(surface->property("viewScale").toDouble(), scale);
 
-    // Click "看 GT": the role-based request lands on the reference (slot 2 here).
-    ASSERT_TRUE(QMetaObject::invokeMethod(focusGt, "clicked"));
+    // Click "看 C" - the GT source, addressed by its own slot like every other source: the
+    // request lands on slot 2 and the identity is the reference's frozen identity.
+    ASSERT_TRUE(QMetaObject::invokeMethod(focusC, "clicked"));
     QCoreApplication::processEvents();
     EXPECT_EQ(relay->property("calls").toInt(), 3);
-    EXPECT_EQ(relay->property("lastRequest").toInt(), gtRequest);
+    EXPECT_EQ(relay->property("lastRequest").toInt(), slotRequest);
+    EXPECT_EQ(relay->property("lastSlot").toInt(), 2);
     EXPECT_EQ(harness.shell->canvasFocusSlot(), 2);
     EXPECT_EQ(harness.shell->canvasFocusIdentity(), identities.at(2));
     EXPECT_EQ(harness.submitted.size(), submittedBefore);
 
-    // Once the focus slot and the reference slot are bound (the future Main.qml wiring), the
-    // GT entry reads as focused and re-clicking it requests Off, returning to the comparison
-    // view.
+    // The role-based request stays resolvable at the shell level (the keyboard peek family
+    // addresses the reference wherever it sits); with GT on slot 2 it names the same source.
+    EXPECT_TRUE(harness.shell->requestCanvasFocus(gtRequest, 0));
+    EXPECT_EQ(harness.shell->canvasFocusSlot(), 2);
+
+    // Once the focus slot and the reference slot are bound (the production Main.qml wiring),
+    // the C entry reads as focused and re-clicking it requests Off, returning to the
+    // comparison view.
     ASSERT_TRUE(bar->setProperty("canvasFocusSlot", 2));
-    ASSERT_TRUE(bar->setProperty("referenceSourceSlot", 2));
-    ASSERT_TRUE(QMetaObject::invokeMethod(focusGt, "clicked"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(focusC, "clicked"));
     QCoreApplication::processEvents();
     EXPECT_EQ(relay->property("calls").toInt(), 4);
     EXPECT_EQ(relay->property("lastRequest").toInt(), offRequest);
@@ -4786,42 +4818,43 @@ TEST(MainQmlContractTests, FullCanvasFocusSwitchesSourceWithoutSeekOrPairOrRoleC
     EXPECT_TRUE(harness.shell->canvasFocusIdentity().isEmpty());
 }
 
-// P05: two-source sessions only offer the entries the session can name. Without an identified
-// GT the "看 GT" entry stays hidden and a reference request refuses; identifying the reference
-// brings the entry back. A single-source session hides the whole bar, focus group included.
+// P05/V02: two-source sessions offer one entry per source; the GT badge follows the slot the
+// session identifies as reference, and appears only once that reference is identified. A
+// single-source session hides the whole bar, focus group included.
 TEST(MainQmlContractTests, FullCanvasFocusGroupShowsOnlyApplicableEntriesPerSession) {
     WorkspaceHarness harness;
     ASSERT_TRUE(harness.create()) << harness.error;
 
-    auto* const focusA = harness.root->findChild<QQuickItem*>(QStringLiteral("canvasFocusAButton"));
-    ASSERT_NE(focusA, nullptr);
-    auto* const focusB = harness.root->findChild<QQuickItem*>(QStringLiteral("canvasFocusBButton"));
-    ASSERT_NE(focusB, nullptr);
-    auto* const focusGt =
-        harness.root->findChild<QQuickItem*>(QStringLiteral("canvasFocusGtButton"));
-    ASSERT_NE(focusGt, nullptr);
     auto* const bar = harness.root->findChild<QQuickItem*>(QStringLiteral("compareModeBar"));
     ASSERT_NE(bar, nullptr);
+    auto* const focusA = findItemByName(bar, QStringLiteral("canvasFocusAButton"));
+    ASSERT_NE(focusA, nullptr);
+    auto* const focusB = findItemByName(bar, QStringLiteral("canvasFocusBButton"));
+    ASSERT_NE(focusB, nullptr);
+    // Two sources means two entries; there is no C entry to find (item tree included).
+    EXPECT_EQ(findItemByName(bar, QStringLiteral("canvasFocusCButton")), nullptr);
     const int gtRequest = static_cast<int>(ReviewShellController::CanvasFocusReference);
     const int slotRequest = static_cast<int>(ReviewShellController::CanvasFocusSourceSlot);
 
-    // Two sources, no identified GT yet: A/B only.
+    // Two sources, no identified GT yet: A/B entries without any badge.
     EXPECT_EQ(harness.controller->sourceCount(), 2);
     EXPECT_TRUE(focusA->isVisible());
     EXPECT_TRUE(focusB->isVisible());
-    EXPECT_FALSE(focusGt->isVisible());
+    EXPECT_FALSE(focusA->property("referenceBadge").toBool());
+    EXPECT_FALSE(focusB->property("referenceBadge").toBool());
     // The shell refuses a reference request while no GT is identifiable.
     EXPECT_FALSE(harness.shell->requestCanvasFocus(gtRequest, 0));
     EXPECT_TRUE(harness.shell->canvasFocusIdentity().isEmpty());
 
-    // Identifying the GT on slot 0 exposes the entry and makes the request resolvable.
+    // Identifying the GT on slot 0 badges A's own entry and makes the request resolvable.
     identifyReferenceSlot(harness.snapshot, 0);
     harness.controller->refreshProjection();
     QCoreApplication::processEvents();
     ASSERT_EQ(harness.controller->referenceSourceIndex(), 0);
     EXPECT_TRUE(focusA->isVisible());
     EXPECT_TRUE(focusB->isVisible());
-    EXPECT_TRUE(focusGt->isVisible());
+    EXPECT_TRUE(focusA->property("referenceBadge").toBool());
+    EXPECT_FALSE(focusB->property("referenceBadge").toBool());
     const QStringList identities = harness.shell->activeSourceIdentities();
     ASSERT_EQ(identities.size(), 2);
     ASSERT_TRUE(harness.shell->requestCanvasFocus(gtRequest, 0));
@@ -4885,7 +4918,7 @@ TEST(MainQmlContractTests, FullCanvasFocusFlowsThroughTheRealMainQmlWiring) {
 
     auto* const bar = harness.root->findChild<QQuickItem*>(QStringLiteral("compareModeBar"));
     ASSERT_NE(bar, nullptr);
-    auto* const focusA = harness.root->findChild<QQuickItem*>(QStringLiteral("canvasFocusAButton"));
+    auto* const focusA = findItemByName(bar, QStringLiteral("canvasFocusAButton"));
     ASSERT_NE(focusA, nullptr);
     auto* const surface = harness.root->findChild<QQuickItem*>(QStringLiteral("dualVideoSurface"));
     ASSERT_NE(surface, nullptr);
@@ -4909,6 +4942,134 @@ TEST(MainQmlContractTests, FullCanvasFocusFlowsThroughTheRealMainQmlWiring) {
     EXPECT_EQ(bar->property("canvasFocusSlot").toInt(), -1);
     EXPECT_EQ(surface->property("canvasFocusSlot").toInt(), -1);
     EXPECT_FALSE(focusA->property("checked").toBool());
+}
+
+// V02: the source chip body is the per-source direct-look entry. One plain click on a chip
+// enters that source's full-canvas view through the production Main.qml wiring, a second
+// click on the same chip exits, and a click on another chip switches directly. Every switch
+// is presentation state only: no playback command crosses the boundary (no seek, no
+// re-pairing, no reopen), and the GT role, the committed pair, the presented frame, the view
+// mode, the display order and the viewport's ROI/zoom/pan observation state all survive.
+TEST(MainQmlContractTests, SourceChipDirectLookSwitchesWithoutTouchingMediaTruthOrObservation) {
+    ThreeSourceFocusHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+
+    auto* const surface = harness.root->findChild<QQuickItem*>(QStringLiteral("dualVideoSurface"));
+    ASSERT_NE(surface, nullptr);
+    auto* const strip = harness.root->findChild<QQuickItem*>(QStringLiteral("activeSourceStrip"));
+    ASSERT_NE(strip, nullptr);
+    // Chips are Repeater delegates: look them up through the item tree.
+    auto* const chipA = findItemByName(strip, QStringLiteral("sourceChip-0"));
+    ASSERT_NE(chipA, nullptr);
+    auto* const chipB = findItemByName(strip, QStringLiteral("sourceChip-1"));
+    ASSERT_NE(chipB, nullptr);
+
+    // Stage a non-trivial observation context; every switch below must keep it.
+    ASSERT_TRUE(QMetaObject::invokeMethod(surface,
+                                          "restoreViewport",
+                                          Q_ARG(qreal, 0.35),
+                                          Q_ARG(qreal, 0.65),
+                                          Q_ARG(qreal, 3.0),
+                                          Q_ARG(bool, true),
+                                          Q_ARG(qreal, 0.2),
+                                          Q_ARG(qreal, 0.1),
+                                          Q_ARG(qreal, 0.6),
+                                          Q_ARG(qreal, 0.8)));
+    EXPECT_DOUBLE_EQ(surface->property("viewScale").toDouble(), 3.0);
+
+    harness.preferences.setViewMode(ReviewPreferencesController::ViewMode::Difference);
+    QCoreApplication::processEvents();
+
+    const QStringList identities = harness.shell->activeSourceIdentities();
+    ASSERT_EQ(identities.size(), 3);
+    const QStringList displayOrderBefore = harness.shell->displaySourceIdentities();
+    const std::size_t submittedBefore = harness.submitted.size();
+    const int referenceBefore = harness.controller->referenceSourceIndex();
+    const int edgeBefore = harness.controller->effectiveDifferenceEdge();
+    const qint64 frameBefore = harness.controller->currentFrame();
+    const qulonglong epochBefore = harness.controller->sessionEpoch();
+    const int viewModeBefore = harness.root->property("effectiveViewMode").toInt();
+
+    // Enter B's direct look through the chip body (the exact path TapHandler takes).
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        strip, "chipClicked", Q_ARG(QVariant, QVariant::fromValue(chipB))));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(harness.shell->canvasFocusSlot(), 1);
+    EXPECT_EQ(harness.shell->canvasFocusIdentity(), identities.at(1));
+    EXPECT_TRUE(chipB->property("isCanvasFocus").toBool());
+    EXPECT_FALSE(chipA->property("isCanvasFocus").toBool());
+
+    // Same chip again: exit back to the comparison view.
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        strip, "chipClicked", Q_ARG(QVariant, QVariant::fromValue(chipB))));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(harness.shell->canvasFocusSlot(), -1);
+    EXPECT_TRUE(harness.shell->canvasFocusIdentity().isEmpty());
+    EXPECT_FALSE(chipB->property("isCanvasFocus").toBool());
+
+    // A different chip switches directly, without an Off step in between.
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        strip, "chipClicked", Q_ARG(QVariant, QVariant::fromValue(chipA))));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(harness.shell->canvasFocusSlot(), 0);
+    EXPECT_EQ(harness.shell->canvasFocusIdentity(), identities.at(0));
+
+    // The invariant block: nothing but the presentation focus moved.
+    EXPECT_EQ(harness.submitted.size(), submittedBefore);
+    for (const auto& command : harness.submitted) {
+        EXPECT_EQ(std::get_if<application::SeekFrameCommand>(&command), nullptr);
+    }
+    EXPECT_EQ(harness.controller->referenceSourceIndex(), referenceBefore);
+    EXPECT_EQ(harness.controller->effectiveDifferenceEdge(), edgeBefore);
+    EXPECT_EQ(harness.controller->currentFrame(), frameBefore);
+    EXPECT_EQ(harness.controller->sessionEpoch(), epochBefore);
+    EXPECT_EQ(harness.root->property("effectiveViewMode").toInt(), viewModeBefore);
+    EXPECT_EQ(harness.shell->displaySourceIdentities(), displayOrderBefore);
+    EXPECT_DOUBLE_EQ(surface->property("viewCenterX").toDouble(), 0.35);
+    EXPECT_DOUBLE_EQ(surface->property("viewCenterY").toDouble(), 0.65);
+    EXPECT_DOUBLE_EQ(surface->property("viewScale").toDouble(), 3.0);
+    EXPECT_TRUE(surface->property("roiEnabled").toBool());
+    EXPECT_DOUBLE_EQ(surface->property("roiLeft").toDouble(), 0.2);
+    EXPECT_DOUBLE_EQ(surface->property("roiTop").toDouble(), 0.1);
+    EXPECT_DOUBLE_EQ(surface->property("roiRight").toDouble(), 0.6);
+    EXPECT_DOUBLE_EQ(surface->property("roiBottom").toDouble(), 0.8);
+}
+
+// V02: the three-source pair selector names the two real files of each edge, so "which clip
+// am I comparing" never hides behind the A/B/C slot letters. The letters stay available on
+// the "label" role for the inspector rows.
+TEST(MainQmlContractTests, PairComboNamesTheTwoRealSourceFiles) {
+    ThreeSourceFocusHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+
+    // Name the sources like a real GT+two-outputs session; the projection's row filename is
+    // the snapshot view's displayName.
+    ASSERT_EQ(harness.snapshot->sources.size(), 3U);
+    harness.snapshot->sources[0].displayName = "gt.mp4";
+    harness.snapshot->sources[1].displayName = "model-1.mp4";
+    harness.snapshot->sources[2].displayName = "model-2.mp4";
+    harness.controller->refreshProjection();
+    harness.preferences.setViewMode(ReviewPreferencesController::ViewMode::Difference);
+    QCoreApplication::processEvents();
+
+    auto* const pairCombo = harness.root->findChild<QQuickItem*>(QStringLiteral("pairCombo"));
+    ASSERT_NE(pairCombo, nullptr);
+    EXPECT_TRUE(pairCombo->isVisible());
+    // The default edge is A↔B; the selector names both files, not "A ↔ B".
+    EXPECT_EQ(pairCombo->property("currentText").toString(),
+              QStringLiteral("gt.mp4 ↔ model-1.mp4"));
+    // Every offered edge names its two real files.
+    const QVariantList edges = harness.controller->differenceEdges();
+    ASSERT_EQ(edges.size(), 3);
+    EXPECT_EQ(edges.at(0).toMap().value(QStringLiteral("pairLabel")).toString(),
+              QStringLiteral("gt.mp4 ↔ model-1.mp4"));
+    EXPECT_EQ(edges.at(1).toMap().value(QStringLiteral("pairLabel")).toString(),
+              QStringLiteral("gt.mp4 ↔ model-2.mp4"));
+    EXPECT_EQ(edges.at(2).toMap().value(QStringLiteral("pairLabel")).toString(),
+              QStringLiteral("model-1.mp4 ↔ model-2.mp4"));
+    // The slot-letter role stays for callers that address slots.
+    EXPECT_EQ(edges.at(0).toMap().value(QStringLiteral("label")).toString(),
+              QStringLiteral("A ↔ B"));
 }
 
 // Step-2 comparison export: the composed capture is the exact viewport crop plus a

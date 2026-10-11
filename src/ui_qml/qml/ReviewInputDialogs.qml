@@ -11,7 +11,7 @@ Item {
     property var pathNameFunction: null
     required property int initialReferenceIndex
     readonly property bool comparisonVisible: comparisonDialog.visible
-    readonly property bool modalVisible: comparisonDialog.visible || videoFilesDialog.visible || addVideoDialog.visible || videoFolderDialog.visible
+    readonly property bool modalVisible: comparisonDialog.visible || videoFilesDialog.visible || addVideoDialog.visible || replaceVideoDialog.visible || videoFolderDialog.visible
 
     signal videoFolderAccepted(url folder)
     signal videoFolderRejected
@@ -19,6 +19,10 @@ Item {
     signal openVideosRejected
     signal addVideoAccepted(url url)
     signal addVideoRejected
+    // V02 "替换文件": one file replaces the source whose menu asked for it; Main owns which
+    // identity is being replaced and stages the swap.
+    signal replaceVideoAccepted(url url)
+    signal replaceVideoRejected
     signal moveRequested(int fromIndex, int toIndex)
     signal comparisonAccepted(int referenceIndex)
     signal comparisonClosed
@@ -34,6 +38,10 @@ Item {
 
     function openAddVideo() {
         addVideoDialog.open();
+    }
+
+    function openReplaceVideo() {
+        replaceVideoDialog.open();
     }
 
     function openComparison() {
@@ -68,6 +76,17 @@ Item {
         nameFilters: [qsTr("视频文件 (*.mp4 *.mkv *.mov *.avi *.m4v)"), qsTr("所有文件 (*)")]
         onAccepted: control.addVideoAccepted(selectedFile)
         onRejected: control.addVideoRejected()
+    }
+
+    NativeDialogs.FileDialog {
+        id: replaceVideoDialog
+
+        objectName: "replaceSourceFileDialog"
+        title: qsTr("替换视频文件")
+        fileMode: NativeDialogs.FileDialog.OpenFile
+        nameFilters: [qsTr("视频文件 (*.mp4 *.mkv *.mov *.avi *.m4v)"), qsTr("所有文件 (*)")]
+        onAccepted: control.replaceVideoAccepted(selectedFile)
+        onRejected: control.replaceVideoRejected()
     }
 
     DropConfirmationDialog {

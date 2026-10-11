@@ -1060,6 +1060,45 @@ TEST_F(ReviewControllerTests, DisplayOrderReorderingNeverTouchesRoleReferenceOrT
     controller.stop();
 }
 
+// V02: every difference edge carries the two real file names (plus the per-side names) so the
+// pair selector can name what is being compared instead of the A/B/C slot letters. Slot
+// letters stay on the "label" role for slot-addressing callers.
+TEST_F(ReviewControllerTests, DifferenceEdgesNameRealSourceFilesForThePairSelector) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString sourceGt = createFile(directory, QStringLiteral("gt.mp4"));
+    const QString sourceModelA = createFile(directory, QStringLiteral("model-1.mp4"));
+    const QString sourceModelB = createFile(directory, QStringLiteral("model-2.mp4"));
+
+    auto backend = std::make_shared<FakeBackend>();
+    auto snapshot = readySnapshotWithSources({std::filesystem::path{sourceGt.toStdWString()},
+                                              std::filesystem::path{sourceModelA.toStdWString()},
+                                              std::filesystem::path{sourceModelB.toStdWString()}});
+    ASSERT_EQ(snapshot.sources.size(), 3U);
+    snapshot.sources[0].displayName = "gt.mp4";
+    snapshot.sources[1].displayName = "model-1.mp4";
+    snapshot.sources[2].displayName = "model-2.mp4";
+    backend->currentSnapshot = std::move(snapshot);
+    ReviewController controller{dependenciesFor(backend)};
+
+    const QVariantList edges = controller.differenceEdges();
+    ASSERT_EQ(edges.size(), 3);
+    const QVariantMap firstEdge = edges[0].toMap();
+    EXPECT_EQ(firstEdge.value(QStringLiteral("pairLabel")).toString(),
+              QStringLiteral("gt.mp4 ↔ model-1.mp4"));
+    EXPECT_EQ(firstEdge.value(QStringLiteral("firstSourceName")).toString(),
+              QStringLiteral("gt.mp4"));
+    EXPECT_EQ(firstEdge.value(QStringLiteral("secondSourceName")).toString(),
+              QStringLiteral("model-1.mp4"));
+    EXPECT_EQ(edges[1].toMap().value(QStringLiteral("pairLabel")).toString(),
+              QStringLiteral("gt.mp4 ↔ model-2.mp4"));
+    EXPECT_EQ(edges[2].toMap().value(QStringLiteral("pairLabel")).toString(),
+              QStringLiteral("model-1.mp4 ↔ model-2.mp4"));
+    // The slot-letter role is unchanged for existing callers.
+    EXPECT_EQ(firstEdge.value(QStringLiteral("label")).toString(), QStringLiteral("A ↔ B"));
+    controller.stop();
+}
+
 // Selection is identity-keyed, survives a display move, and never silently carries across a change
 // to the active set - the user did not select the sources a new open brought in.
 TEST_F(ReviewControllerTests, SelectionSurvivesReorderAndIsDroppedWhenTheActiveSetChanges) {

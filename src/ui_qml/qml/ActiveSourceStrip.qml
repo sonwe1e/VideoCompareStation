@@ -26,51 +26,41 @@ Rectangle {
     signal addRequested
     signal removeRequested(string sourceIdentity)
     signal referenceRequested(string sourceIdentity)
+    // V02 "替换文件": the chip's overflow menu asks for a file replacement of one source;
+    // Main owns the dialog and the staged re-open with the displayed position preserved.
+    signal replaceRequested(string sourceIdentity)
     signal viewerFocusRequested
+    // V02 direct look: a plain click on the chip body enters (or exits) the full-canvas
+    // direct look of that source through the P05 canvasFocus chain. The signal carries the
+    // session slot; Main maps it onto the shell request, toggling Off for the focused slot.
+    signal directLookRequested(int sourceSlot)
 
     property int openMenuCount: 0
     property bool returnViewerFocusAfterClose: false
     readonly property bool anyMenuOpen: openMenuCount > 0
     // C2. The order the user sees, and the sources they have selected. Both are keyed by frozen
     // source identity so that arranging the list cannot reach media truth - the chip keeps its
-    // sourceId, and with it its A/B/C role, its accent colour and its pairing.
+    // sourceId, and with it its A/B/C role, its accent colour and its pairing. V02: the strip
+    // no longer offers a drag reorder - the picture panels follow the session slot order and a
+    // chip-only reorder would be a label change masquerading as a layout change - so the
+    // display order stays whatever the shell says and this layout only renders it.
     property var displayOrder: []
     property var selectedIdentities: []
     readonly property bool anySelected: control.selectedIdentities.length > 0
-    signal moveRequested(int fromIndex, int toIndex)
+    // V02: frozen identity of the source the whole canvas is focused on ("" = comparison
+    // view). Pure mirror of the shell's canvasFocusIdentity; the chip only highlights itself.
+    property string canvasFocusIdentity: ""
+    // V02: batch management (multi-select remove) is an explicit mode, entered through the
+    // 管理 toggle. Outside the mode a plain chip click is a direct look; inside it the click
+    // toggles the management selection, so selection can never hijack the ordinary click.
+    property bool manageSelection: false
     signal selectionToggled(string sourceIdentity)
     signal selectionCleared
     signal removeSelectedRequested
     readonly property real chipSpacing: 7
-    // A press has to travel this far before it counts as a drag, so an ordinary click on a chip
-    // (which selects it) is never mistaken for the start of a reorder.
-    readonly property real dragThreshold: 12
 
-    // Resolve the drop against chip centres. The insertion position is measured before removing
-    // the dragged chip, so moving to the right must account for that removal.
-    function commitDrag(fromIndex, dropCentreX) {
-        if (fromIndex < 0 || fromIndex >= control.displayOrder.length || !isFinite(dropCentreX))
-            return;
-        let cursor = 12;
-        let target = 0;
-        for (let position = 0; position < control.displayOrder.length; ++position) {
-            const identity = String(control.displayOrder[position]);
-            const existing = chips.children.find(child => child.resolvedSourceIdentity === identity);
-            const width = existing ? existing.width : 128;
-            const centre = cursor + width / 2;
-            if (dropCentreX > centre) {
-                target = position + 1;
-            } else {
-                target = position;
-                break;
-            }
-            cursor += width + control.chipSpacing;
-        }
-        if (target > fromIndex)
-            target -= 1;
-        if (target !== fromIndex)
-            control.moveRequested(fromIndex, target);
-    }
+    // V02: the drag reorder is gone (see the displayOrder note above). Positions stay
+    // bindings over the display order the shell publishes, so nothing needs scheduling.
 
     // Positions are bindings, not an imperative pass. A Row would place its children in model order,
     // and the display order is exactly what may differ from it, so each chip computes its own x from
@@ -96,7 +86,7 @@ Rectangle {
         let fallback = null;
         for (let index = 0; index < chips.children.length; ++index) {
             const child = chips.children[index];
-            if (child.objectName === "addSourceChipButton" || child.objectName === "removeSelectedChipButton")
+            if (child.objectName === "addSourceChipButton" || child.objectName === "removeSelectedChipButton" || child.objectName === "manageSourcesButton")
                 continue;
             if (child.resolvedSourceIdentity === wanted)
                 return child;
@@ -106,12 +96,12 @@ Rectangle {
         return fallback;
     }
 
-    // The trailing buttons follow the chips; the second one starts where the first ends.
+    // The trailing buttons follow the chips; each one starts where the previous ended.
     readonly property real trailingButtonX: {
         let cursor = 12;
         for (let index = 0; index < chips.children.length; ++index) {
             const child = chips.children[index];
-            if (child.objectName === "addSourceChipButton" || child.objectName === "removeSelectedChipButton")
+            if (child.objectName === "addSourceChipButton" || child.objectName === "removeSelectedChipButton" || child.objectName === "manageSourcesButton")
                 continue;
             if (child.width > 0.0)
                 cursor += child.width + control.chipSpacing;
@@ -119,15 +109,19 @@ Rectangle {
         return cursor;
     }
 
-    // No repositioning hooks: every position is a binding, so there is nothing to schedule.
-
-    // Clicking the chip body toggles its selection. The chip body had no click target before this, so
-    // nothing that used to work moves; the chip menu stays on the overflow button, and a plain
-    // selection needs no modifier key, which also keeps it reachable from a keyboard.
+    // V02 click semantics. Outside the management mode a plain click on the chip body is the
+    // direct look of that source (enter or exit); only inside the explicit 管理 mode does the
+    // same click toggle the management selection. The chip's overflow button and the add and
+    // manage buttons are children and consume their own clicks first, so this handler sees
+    // presses on the chip body alone.
     function chipClicked(chip) {
         if (chip.resolvedSourceIdentity.length === 0)
             return;
-        control.selectionToggled(chip.resolvedSourceIdentity);
+        if (control.manageSelection) {
+            control.selectionToggled(chip.resolvedSourceIdentity);
+            return;
+        }
+        control.directLookRequested(chip.sourceId);
     }
 
     objectName: "activeSourceStrip"
@@ -165,6 +159,7 @@ Rectangle {
             delegate: Rectangle {
                 id: chip
 
+                objectName: "sourceChip-" + sourceId
                 required property int sourceId
                 required property string sourceIdentity
                 required property string filename
@@ -176,8 +171,8 @@ Rectangle {
                 // Explicit label width: RowLayout.fillWidth children do not feed back into an
                 // implicit width, so sum the pieces here to size the chip from the real text.
                 readonly property real chipLabelPlainWidth: letterBadge.width + separatorOne.implicitWidth + filenameLabel.implicitWidth + 10
-                readonly property real chipLabelTaggedWidth: chipLabelPlainWidth + (chip.isReference ? referenceTag.implicitWidth + separatorTwo.implicitWidth + 10 : 0) + (chip.isTimelineMaster ? masterTag.implicitWidth + separatorThree.implicitWidth + 10 : 0)
-                width: Math.min(280, Math.max(128, ((chip.isReference || chip.isTimelineMaster) ? chipLabelTaggedWidth : chipLabelPlainWidth) + (control.singleMode ? 24 : 84)))
+                readonly property real chipLabelTaggedWidth: chipLabelPlainWidth + (chip.isCanvasFocus ? directLookTag.implicitWidth + 10 : 0) + (chip.isReference ? referenceTag.implicitWidth + separatorTwo.implicitWidth + 10 : 0) + (chip.isTimelineMaster ? masterTag.implicitWidth + separatorThree.implicitWidth + 10 : 0)
+                width: Math.min(280, Math.max(128, ((chip.isReference || chip.isTimelineMaster || chip.isCanvasFocus) ? chipLabelTaggedWidth : chipLabelPlainWidth) + (control.singleMode ? 24 : 84)))
                 radius: 8
                 readonly property string resolvedSourceIdentity: chip.sourceIdentity.length > 0 ? chip.sourceIdentity : (chip.sourceId >= 0 && chip.sourceId < control.sourceIdentities.length ? String(control.sourceIdentities[chip.sourceId]) : "")
                 // D08: timeline master and comparison reference are independent projections.
@@ -185,62 +180,26 @@ Rectangle {
                 readonly property bool isReference: chip.resolvedSourceIdentity.length > 0 ? (control.referenceSourceIdentity.length > 0 ? chip.resolvedSourceIdentity === control.referenceSourceIdentity : chip.sourceId === control.referenceSourceIndex) : chip.sourceId === control.referenceSourceIndex
                 readonly property bool pending: control.pendingSourceIdentities.indexOf(chip.resolvedSourceIdentity) >= 0 || requestQueued
                 property bool requestQueued: false
-                readonly property bool selected: control.selectedIdentities.indexOf(chip.resolvedSourceIdentity) >= 0
-                // Drag state. A drag starts only from a plain press that is not a modifier-click,
-                // so ctrl-clicking to select never also starts a reorder.
-                property bool dragArmed: false
-                property int dragFromIndex: -1
-                readonly property real dragOffset: chipDrag.active ? chipDrag.activeTranslation.x : 0
+                readonly property bool selected: control.manageSelection && control.selectedIdentities.indexOf(chip.resolvedSourceIdentity) >= 0
+                // V02: this chip's source is the one the whole canvas is focused on. Highlight
+                // only mirrors the shell state - the chip never owns focus.
+                readonly property bool isCanvasFocus: chip.resolvedSourceIdentity.length > 0 && chip.resolvedSourceIdentity === control.canvasFocusIdentity
                 readonly property int displayIndex: control.displayOrder.indexOf(chip.resolvedSourceIdentity)
                 // The chip's place in the display order, computed as a binding so it follows the
                 // order and the widths ahead of it. A chip the display order does not mention yet
                 // falls to the end rather than sitting on top of another chip.
                 readonly property real layoutX: chip.displayIndex >= 0 ? control.chipStartX(chip.displayIndex) : control.chipStartX(control.sourceCount)
-                x: chip.layoutX + chip.dragOffset
-                z: chipDrag.active ? 1 : 0
+                x: chip.layoutX
 
                 readonly property color sourceAccent: Theme.sourceColor(chip.sourceId)
                 readonly property color sourceBg: Theme.sourceBackground(chip.sourceId)
                 readonly property color sourceBorder: Theme.sourceBorder(chip.sourceId)
 
-                color: chip.selected ? chip.sourceBg : (chip.isReference ? chip.sourceBg : Theme.raisedPanel)
-                border.color: chip.selected ? chip.sourceAccent : (chip.isReference ? chip.sourceAccent : (chipHover.hovered ? chip.sourceBorder : Theme.border))
-                border.width: (chip.selected || chip.isReference) ? 1.5 : 1
-
-                // The drag is resolved on release rather than continuously: the chip follows the
-                // pointer as a single offset, and only a release past the threshold commits a move.
-                // Living reordering during the drag would need the strip to animate around a moving
-                // pointer, and this build has no way to confirm that looks right.
-                DragHandler {
-                    id: chipDrag
-
-                    target: null
-                    acceptedButtons: Qt.LeftButton
-                    acceptedModifiers: Qt.NoModifier
-                    property real pressX: 0
-                    property var sourceOrderAtStart: []
-                    readonly property real travelled: activeTranslation.x
-
-                    onActiveChanged: {
-                        if (active) {
-                            chip.dragArmed = true;
-                            chip.dragFromIndex = chip.displayIndex;
-                            chipDrag.pressX = chip.layoutX;
-                            chipDrag.sourceOrderAtStart = control.displayOrder.slice();
-                        }
-                    }
-                    onGrabChanged: (transition, point) => {
-                        if (transition !== PointerDevice.UngrabExclusive && transition !== PointerDevice.CancelGrabExclusive)
-                            return;
-                        const armed = chip.dragArmed;
-                        chip.dragArmed = false;
-                        if (!armed || transition !== PointerDevice.UngrabExclusive || !control.enabled || !control.visible)
-                            return;
-                        const orderUnchanged = chipDrag.sourceOrderAtStart.length === control.displayOrder.length && chipDrag.sourceOrderAtStart.every((identity, index) => identity === control.displayOrder[index]);
-                        if (orderUnchanged && Math.abs(chipDrag.travelled) >= control.dragThreshold)
-                            control.commitDrag(chip.dragFromIndex, chipDrag.pressX + chipDrag.travelled + chip.width / 2);
-                    }
-                }
+                // Direct look wins the highlight: it names what the whole canvas is showing
+                // right now, while selection is only a management-mode batch state.
+                color: chip.isCanvasFocus ? chip.sourceBg : (chip.selected ? chip.sourceBg : (chip.isReference ? chip.sourceBg : Theme.raisedPanel))
+                border.color: chip.isCanvasFocus ? chip.sourceAccent : (chip.selected ? chip.sourceAccent : (chip.isReference ? chip.sourceAccent : (chipHover.hovered ? chip.sourceBorder : Theme.border)))
+                border.width: (chip.isCanvasFocus || chip.selected || chip.isReference) ? 1.5 : 1
 
                 HoverHandler {
                     id: chipHover
@@ -266,6 +225,20 @@ Rectangle {
                     sourceMenu.close();
                     Qt.callLater(() => {
                         control.referenceRequested(chip.resolvedSourceIdentity);
+                        chip.requestQueued = false;
+                    });
+                }
+
+                // V02: replace the file behind this slot. The identity disambiguates same-named
+                // sources; Main stages the swap and re-opens with the displayed position kept.
+                function requestReplacement() {
+                    if (chip.pending || chip.resolvedSourceIdentity.length === 0)
+                        return;
+                    chip.requestQueued = true;
+                    control.returnViewerFocusAfterClose = true;
+                    sourceMenu.close();
+                    Qt.callLater(() => {
+                        control.replaceRequested(chip.resolvedSourceIdentity);
                         chip.requestQueued = false;
                     });
                 }
@@ -315,6 +288,38 @@ Rectangle {
                     Text {
                         id: separatorOne
 
+                        text: "·"
+                        color: control.mutedTextColor
+                        font.pixelSize: 12
+                    }
+                    // V02: the fourth per-source state, next to the timeline-master and
+                    // reference-role tags - this chip's source is what the whole canvas is
+                    // showing right now. Pure mirror of the shell's canvas focus.
+                    Text {
+                        id: directLookTag
+
+                        objectName: "sourceDirectLookTag-" + chip.sourceId
+                        visible: chip.isCanvasFocus
+                        text: qsTr("直看")
+                        color: chip.sourceAccent
+                        font.pixelSize: 11
+                        font.weight: Font.DemiBold
+                        Accessible.name: qsTr("全画布直看")
+                        Accessible.description: qsTr("整个画布正单独显示该源；单击卡片主体返回比较视图")
+
+                        HoverHandler {
+                            id: directLookTagHover
+                        }
+
+                        VcsToolTip {
+                            visible: directLookTagHover.hovered
+                            text: qsTr("全画布直看")
+                        }
+                    }
+                    Text {
+                        id: directLookSeparator
+
+                        visible: chip.isCanvasFocus && (chip.isTimelineMaster || chip.isReference)
                         text: "·"
                         color: control.mutedTextColor
                         font.pixelSize: 12
@@ -453,6 +458,7 @@ Rectangle {
                         objectName: "sourceOverflowButton-" + chip.sourceId
                         readonly property var sourceMenuControl: sourceMenu
                         readonly property var makeReferenceAction: useAsReferenceItem
+                        readonly property var replaceSourceAction: replaceSourceItem
                         readonly property var removeSourceAction: removeSourceItem
                         width: 30
                         height: 30
@@ -505,6 +511,15 @@ Rectangle {
                         }
 
                         VcsMenuItem {
+                            id: replaceSourceItem
+
+                            objectName: "replaceSourceAction-" + chip.sourceId
+                            text: qsTr("替换文件…")
+                            enabled: !chip.pending && chip.resolvedSourceIdentity.length > 0
+                            onTriggered: chip.requestReplacement()
+                        }
+
+                        VcsMenuItem {
                             id: removeSourceItem
 
                             objectName: "removeSourceAction-" + chip.sourceId
@@ -517,12 +532,38 @@ Rectangle {
             }
         }
 
+        // V02: batch management is explicit. The toggle enters the selection mode (chip clicks
+        // select, the remove button appears); leaving it drops the selection so a hidden
+        // batch state can never linger under a click that now means direct look.
+        VcsToolButton {
+            id: manageSourcesButton
+
+            objectName: "manageSourcesButton"
+            // Not checkable on purpose: `checked` is a live mirror of manageSelection and a
+            // checkable button would break that binding on the first click. The prominent fill
+            // carries the active state instead.
+            prominent: control.manageSelection
+            x: control.trailingButtonX
+            width: 34
+            height: chips.height
+            text: "☰"
+            enabled: true
+            helpText: control.manageSelection ? qsTr("退出管理（放弃所选 %1）").arg(control.selectedIdentities.length) : qsTr("管理源（多选移除）")
+            Accessible.name: control.manageSelection ? qsTr("退出源管理") : qsTr("管理源")
+            onClicked: {
+                control.manageSelection = !control.manageSelection;
+                if (!control.manageSelection && control.anySelected)
+                    control.selectionCleared();
+            }
+            controlRadius: 8
+        }
+
         VcsToolButton {
             id: addSourceChipButton
 
             objectName: "addSourceChipButton"
             visible: control.sourceCount < 3
-            x: control.trailingButtonX
+            x: control.trailingButtonX + manageSourcesButton.width + control.chipSpacing
             width: 34
             height: chips.height
             text: "+"
@@ -536,8 +577,11 @@ Rectangle {
             id: removeSelectedChipButton
 
             objectName: "removeSelectedChipButton"
+            // Selection only ever appears through the manage mode (or an owner-side programmatic
+            // select), so "something is selected" is itself the visibility condition - the batch
+            // action must stay reachable for whatever put the selection there.
             visible: control.anySelected
-            x: control.trailingButtonX + (addSourceChipButton.visible ? addSourceChipButton.width + control.chipSpacing : 0)
+            x: control.trailingButtonX + manageSourcesButton.width + control.chipSpacing + (addSourceChipButton.visible ? addSourceChipButton.width + control.chipSpacing : 0)
             width: 34
             height: chips.height
             text: "−"

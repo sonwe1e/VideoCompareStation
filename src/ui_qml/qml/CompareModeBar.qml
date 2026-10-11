@@ -162,8 +162,11 @@ Rectangle {
             visible: control.sourceCount === 3 && control.pairRelevant
             implicitWidth: 92
             implicitHeight: 30
+            // V02: the selector names the two real files ("gt.mp4 ↔ model.mp4") instead of the
+            // A/B/C slot letters, so a same-letter relabel can never masquerade as a pair
+            // switch. The role keeping the letters ("label") stays for the inspector rows.
             model: control.differenceEdges
-            textRole: "label"
+            textRole: "pairLabel"
             currentIndex: control.currentEdgeIndex
             Accessible.name: qsTr("对比对")
             hoverEnabled: true
@@ -190,11 +193,13 @@ Rectangle {
             onClicked: control.switchCandidateRequested()
         }
 
-        // V02 (P05) full-canvas direct look: A/B address session slots, GT addresses the
-        // reference role wherever it sits. Entries appear only where the session can name the
-        // target (GT needs an identifiable reference); a two-source session without GT shows
-        // A/B only. Re-clicking the active entry returns to the comparison view. The switch
-        // keeps the frame, ROI/zoom/pan and every other entry on this bar untouched.
+        // V02: one direct-look entry per participating source, generated from the session
+        // (A/B/C). The source that currently carries the reference (GT) role shows a GT badge
+        // on its own button - GT is a role, never a fourth source - so "GT = A" never
+        // duplicates the A entry and C gets the same entry A and B have. A click addresses
+        // the session slot; re-clicking the checked entry requests Off and returns to the
+        // comparison view. The switch keeps the frame, ROI/zoom/pan, the GT role and every
+        // other entry on this bar untouched (P05 canvasFocus chain, no new state).
         Rectangle {
             visible: control.sourceCount > 1
             width: 1
@@ -203,31 +208,19 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
         }
 
-        FocusButton {
-            id: canvasFocusAButton
+        Repeater {
+            objectName: "canvasFocusButtonRepeater"
+            model: Math.max(0, control.sourceCount)
 
-            objectName: "canvasFocusAButton"
-            text: qsTr("看 A")
-            focusSlot: 0
-        }
-        FocusButton {
-            id: canvasFocusBButton
+            FocusButton {
+                id: canvasFocusButton
 
-            objectName: "canvasFocusBButton"
-            text: qsTr("看 B")
-            focusSlot: 1
-        }
-        // "看 GT" names the session's reference source the same way the difference peek and
-        // the viewport indicator do; it stays hidden while no GT can be identified.
-        FocusButton {
-            id: canvasFocusGtButton
-
-            objectName: "canvasFocusGtButton"
-            text: qsTr("看 GT")
-            focusSlot: control.referenceSourceSlot
-            requestReference: true
-            implicitWidth: 72
-            visible: control.peekTargetValid
+                required property int index
+                objectName: "canvasFocus" + String.fromCharCode(65 + index) + "Button"
+                text: qsTr("看 %1").arg(String.fromCharCode(65 + index))
+                focusSlot: index
+                referenceBadge: index === control.referenceSourceSlot
+            }
         }
 
         VcsToolButton {
@@ -362,39 +355,63 @@ Rectangle {
         }
     }
 
-    // V02 (P05): one full-canvas direct-look entry. Checked mirrors the shell's focus slot;
-    // clicking the checked entry requests Off so the group always has a way back to the
-    // regular comparison view.
+    // V02: one full-canvas direct-look entry per source slot. Checked mirrors the shell's
+    // focus slot; clicking the checked entry requests Off so the group always has a way back
+    // to the regular comparison view. referenceBadge marks the slot that carries the session's
+    // GT role - a badge on the source's own button, never a duplicated GT button.
     component FocusButton: ReviewActionButton {
         id: focusButton
 
         required property int focusSlot
-        property bool requestReference: false
+        property bool referenceBadge: false
         checkable: true
         checked: control.canvasFocusSlot >= 0 && control.canvasFocusSlot === focusSlot
         mirrorsState: true
         implicitHeight: 30
-        implicitWidth: 64
+        implicitWidth: focusButton.referenceBadge ? 96 : 64
         enabled: !control.busy
         leftPadding: 10
         rightPadding: 10
         onClicked: {
             if (focusButton.checked)
                 control.fullCanvasFocusRequested(control.canvasFocusRequestOff, 0);
-            else if (focusButton.requestReference)
-                control.fullCanvasFocusRequested(control.canvasFocusRequestReference, 0);
             else
                 control.fullCanvasFocusRequested(control.canvasFocusRequestSourceSlot, focusSlot);
         }
 
-        contentItem: Text {
-            text: focusButton.text
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-            color: !focusButton.enabled ? Theme.disabledText : (focusButton.checked || focusButton.hovered ? Theme.primaryText : Theme.mutedText)
-            font.pixelSize: 12
-            font.weight: focusButton.checked ? Font.DemiBold : Font.Normal
-            elide: Text.ElideRight
+        contentItem: Row {
+            spacing: 4
+
+            Text {
+                text: focusButton.text
+                color: !focusButton.enabled ? Theme.disabledText : (focusButton.checked || focusButton.hovered ? Theme.primaryText : Theme.mutedText)
+                font.pixelSize: 12
+                font.weight: focusButton.checked ? Font.DemiBold : Font.Normal
+                anchors.verticalCenter: parent.verticalCenter
+            }
+
+            Rectangle {
+                visible: focusButton.referenceBadge
+                width: gtBadgeLabel.implicitWidth + 8
+                height: 16
+                radius: 3
+                color: Theme.controlChecked
+                border.width: 1
+                border.color: Theme.accent
+                anchors.verticalCenter: parent.verticalCenter
+                Accessible.name: qsTr("参考源（GT）")
+                Accessible.description: qsTr("该源当前承担会话的对比基准角色")
+
+                Text {
+                    id: gtBadgeLabel
+
+                    anchors.centerIn: parent
+                    text: qsTr("GT")
+                    color: Theme.primaryText
+                    font.pixelSize: 10
+                    font.weight: Font.DemiBold
+                }
+            }
         }
 
         background: Rectangle {

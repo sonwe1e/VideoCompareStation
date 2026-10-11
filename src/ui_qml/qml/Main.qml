@@ -2319,6 +2319,60 @@ ApplicationWindow {
         return ok;
     }
 
+    // V02 direct look from a source chip: toggle the shell's canvas focus for that session
+    // slot through the P05 request chain. Presentation state only - the same frame, ROI,
+    // zoom/pan, GT role and comparison pair come back when the focus returns Off - so this
+    // function must do nothing else. The request codes come from the mode bar's enum mirrors
+    // (themselves cross-checked against the shell enum by contract tests).
+    function toggleDirectLook(sourceSlot) {
+        if (!shell || !comparisonBar)
+            return false;
+        const focused = Number(shell.canvasFocusSlot);
+        const request = focused === sourceSlot ? comparisonBar.canvasFocusRequestOff : comparisonBar.canvasFocusRequestSourceSlot;
+        const ok = Boolean(shell.requestCanvasFocus(request, sourceSlot));
+        return ok;
+    }
+
+    // V02 "替换文件": the chip menu records which frozen identity is being replaced, then a
+    // single-file dialog picks the successor. The swap keeps the slot count, the reference
+    // role and the displayed position (openStagedSources(true) -> ReplaceSourcesIntent);
+    // a bad file fails the intent without tearing down the current session.
+    property string pendingReplaceSourceIdentity: ""
+
+    function requestReplaceSource(identity) {
+        if (!shell || String(identity || "").length === 0)
+            return false;
+        pendingReplaceSourceIdentity = String(identity);
+        ensureReviewInputDialogs().openReplaceVideo();
+        return true;
+    }
+
+    function performSourceReplacement(url) {
+        const identity = pendingReplaceSourceIdentity;
+        pendingReplaceSourceIdentity = "";
+        if (!shell || identity.length === 0 || !url || url.toString().length === 0)
+            return false;
+        const identities = shell.activeSourceIdentities;
+        const slot = identities ? identities.indexOf(identity) : -1;
+        if (slot < 0) {
+            showIntentMessage(qsTr("所选视频已不可用。"));
+            return false;
+        }
+        const urls = activeSourceUrls();
+        const candidate = url.toString();
+        for (let index = 0; index < urls.length; ++index) {
+            if (index !== slot && urls[index].toString() === candidate) {
+                showIntentMessage(qsTr("该视频已在当前对比中。"));
+                return false;
+            }
+        }
+        urls[slot] = url;
+        const reference = shell.referenceSourceIndex >= 0 ? shell.referenceSourceIndex : 0;
+        if (!shell.stageSources(urls, reference))
+            return false;
+        return Boolean(shell.openStagedSources(true));
+    }
+
     function showImmersiveHud(message) {
         immersiveHudText = message;
 
@@ -2993,6 +3047,10 @@ ApplicationWindow {
             onOpenVideosRejected: root.cancelWorkspaceOpen()
             onAddVideoAccepted: url => root.reviewDroppedUrls([url])
             onAddVideoRejected: root.cancelWorkspaceOpen()
+            // V02 "替换文件": the identity captured by the chip menu picks the slot; a
+            // rejection just returns focus - nothing about the session changed yet.
+            onReplaceVideoAccepted: url => root.performSourceReplacement(url)
+            onReplaceVideoRejected: root.returnFocusToViewer()
             onMoveRequested: (fromIndex, toIndex) => root.swapDroppedVideos(fromIndex, toIndex)
             onComparisonAccepted: referenceIndex => {
                 root.openDroppedComparison(referenceIndex);
@@ -3249,6 +3307,8 @@ ApplicationWindow {
         sourceIdentities: root.shell ? root.shell.activeSourceIdentities : []
         displayOrder: root.shell ? root.shell.displaySourceIdentities : []
         selectedIdentities: root.shell ? root.shell.selectedSourceIdentities : []
+        // V02: the chip highlights the source the whole canvas is focused on; pure mirror.
+        canvasFocusIdentity: root.shell ? root.shell.canvasFocusIdentity : ""
         z: 30
         borderColor: root.borderColor
         accentColor: root.accentColor
@@ -3263,10 +3323,10 @@ ApplicationWindow {
         onAddRequested: root.requestAddVideo()
         onRemoveRequested: sourceIdentity => root.removeSelectedSource(sourceIdentity)
         onReferenceRequested: sourceIdentity => root.changeReference(sourceIdentity)
-        onMoveRequested: (fromIndex, toIndex) => {
-            if (root.shell)
-                root.shell.moveSourceInDisplayOrder(fromIndex, toIndex);
-        }
+        onReplaceRequested: sourceIdentity => root.requestReplaceSource(sourceIdentity)
+        // V02 direct look: one plain chip click enters/exits that source's full-canvas view.
+        // The shell owns the focus; this handler only forwards the toggle request.
+        onDirectLookRequested: sourceSlot => root.toggleDirectLook(sourceSlot)
         onSelectionToggled: sourceIdentity => {
             if (root.shell)
                 root.shell.toggleSourceSelection(sourceIdentity);
