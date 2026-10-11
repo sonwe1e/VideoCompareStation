@@ -11,6 +11,7 @@ add_library(
         include/dvs/ui/ReviewPreferencesController.h
         include/dvs/ui/ReviewSessionFacade.h
         include/dvs/ui/ReviewShellController.h
+        include/dvs/ui/SampleExportController.h
         include/dvs/ui/SourceIdentity.h
         include/dvs/ui/SourceListModel.h
         include/dvs/ui/VideoFolderModel.h
@@ -25,6 +26,7 @@ add_library(
         src/ReviewPreferencesController.cpp
         src/ReviewSessionFacade.cpp
         src/ReviewShellController.cpp
+        src/SampleExportController.cpp
         src/SourceIdentity.cpp
         src/SourceListModel.cpp
         src/VideoFolderModel.cpp

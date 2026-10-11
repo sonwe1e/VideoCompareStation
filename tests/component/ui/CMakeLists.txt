@@ -9,6 +9,7 @@ add_executable(
     ReviewControllerTests.cpp
     "${PROJECT_SOURCE_DIR}/src/app/RuntimeBridges.cpp"
     ReviewPreferencesControllerTests.cpp
+    SampleExportControllerTests.cpp
     SourceIdentityTests.cpp
     StartupSplashTests.cpp
     VideoFolderModelTests.cpp

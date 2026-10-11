@@ -15,6 +15,7 @@ namespace application {
 class IClipExporter;
 class IInterpolationProtocolRepository;
 class IIssueRecordRepository;
+class ISampleExporter;
 } // namespace application
 namespace ui {
 
@@ -64,6 +65,10 @@ public:
     // Optional clip-export injection. Must be set before load(); when absent the range export
     // controls stay hidden and the `clipExport` context property is never published.
     void setClipExporter(std::shared_ptr<application::IClipExporter> exporter) noexcept;
+    // Optional E01 training-sample export injection. Must be set before load(); when absent
+    // sample export controls stay hidden and the `sampleExport` context property is never
+    // published.
+    void setSampleExporter(std::shared_ptr<application::ISampleExporter> exporter) noexcept;
     // Optional P03 protocol-import injection. Must be set before load(); the composition root
     // owns the concrete persistence adapter so ui_qml never links persistence_json directly.
     // When absent the protocol navigation row stays hidden and the `interpolationProtocol`

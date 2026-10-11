@@ -90,6 +90,8 @@ ApplicationWindow {
     // whether a lossless exporter exists, so its presence alone decides whether the transport
     // shows an export chip; the typeof guard keeps lightweight QML-only harnesses valid.
     readonly property var clipExportService: typeof clipExport !== "undefined" ? clipExport : null
+    // E01 training-sample triplet export controller from the composition root.
+    readonly property var sampleExportModel: typeof sampleExport !== "undefined" ? sampleExport : null
     // Performance automation and smoke runs keep the playhead deterministic: a resume restore
     // here would move the frame-zero baseline seconds after the open and fail the run.
     readonly property bool performanceAutomation: typeof dvsPerformanceAutomation !== "undefined" && dvsPerformanceAutomation
@@ -685,6 +687,27 @@ ApplicationWindow {
 
         clipExportDialog.open();
 
+        return true;
+    }
+
+    // E01: opens the training-sample triplet export dialog for the given frame (or the current
+    // playhead). Validates that the frame is an exportable prediction with its inputs resolvable.
+    function openSampleExportDialog(frame) {
+        if (!sampleExportModel)
+            return false;
+
+        const target = frame !== undefined && frame >= 0 ? frame : Number(root.currentFrame);
+        if (!sampleExportModel.canExportAtFrame(target)) {
+            showImmersiveHud(qsTr("当前帧不是插帧协议中的生成帧，或未载入插帧协议。"));
+            return false;
+        }
+
+        sampleExportDialogLoader.active = true;
+
+        if (!sampleExportDialog)
+            return false;
+
+        sampleExportDialog.openWithFrame(target);
         return true;
     }
 
@@ -3723,6 +3746,35 @@ ApplicationWindow {
                 root.clipExportDialog.open();
         }
     }
+    // qmllint disable incompatible-type
+    readonly property SampleExportDialog sampleExportDialog: sampleExportDialogLoader.item
+    // qmllint enable incompatible-type
+
+    Loader {
+        id: sampleExportDialogLoader
+
+        active: false
+
+        sourceComponent: sampleExportDialogComponent
+    }
+
+    Component {
+        id: sampleExportDialogComponent
+
+        SampleExportDialog {
+            service: root.sampleExportModel
+        }
+    }
+    Connections {
+        target: root.sampleExportModel
+        enabled: root.sampleExportModel !== null
+        function onExportFinished(succeeded, message) {
+            root.showImmersiveHud(message);
+
+            if (!succeeded && root.sampleExportDialog && root.sampleExportDialog.lastFailureDetail.length > 0)
+                root.sampleExportDialog.open();
+        }
+    }
     Rectangle {
         id: issueLogPanel
 
@@ -3961,6 +4013,8 @@ ApplicationWindow {
         rangeExportEnabled: root.rangeExportEnabled
         rangeExportBusy: root.clipExportService !== null && Boolean(root.clipExportService.busy)
         rangeExportProgress: root.clipExportService !== null ? Number(root.clipExportService.progress) : 0
+        sampleExport: root.sampleExportModel
+        sampleExportBusy: root.sampleExportModel !== null && Boolean(root.sampleExportModel.busy)
         previewFrame: root.effectivePreviewFrame
         previewTimecode: root.previewTimecode
         previewThumbnailSource: {
@@ -3997,6 +4051,7 @@ ApplicationWindow {
         onRangeLoopRequested: root.toggleRangeLoop()
         onClearRangeRequested: root.clearSelectedRange()
         onExportRangeRequested: root.openClipExportDialog()
+        onExportSampleRequested: root.openSampleExportDialog(root.currentFrame)
         // P03 protocol navigation intents. Loading goes through the file dialog so the import is
         // an explicit user action; jumps ride the controller's seekFrame() (the existing
         // precise-frame command chain), never a direct playback mutation.
@@ -4053,6 +4108,8 @@ ApplicationWindow {
         intervalData: root.issueLogModel && root.activeDiagnosticIssueIndex >= 0 ? root.issueLogModel.intervalAt(root.activeDiagnosticIssueIndex) : null
         protocolController: root.protocolModel
         reviewController: root.controller
+        previewThumbnails: root.previewThumbnailsModel
+        sampleExportController: root.sampleExportModel
         currentFrame: Number(root.currentFrame)
 
         onCloseRequested: root.nearbyFramesCardVisible = false
@@ -4067,6 +4124,7 @@ ApplicationWindow {
             if (root.controller)
                 root.controller.stepFrames(delta);
         }
+        onExportSampleRequested: frame => root.openSampleExportDialog(frame)
     }
 
     IssueNoteDialog {

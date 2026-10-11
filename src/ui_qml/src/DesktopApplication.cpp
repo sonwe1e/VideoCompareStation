@@ -17,6 +17,7 @@
 #include "dvs/ui/ReviewPreferencesController.h"
 #include "dvs/ui/ReviewSessionFacade.h"
 #include "dvs/ui/ReviewShellController.h"
+#include "dvs/ui/SampleExportController.h"
 #include "dvs/ui/StartupMilestone.h"
 #include "dvs/ui/StartupSplash.h"
 #include "dvs/ui/VideoFolderModel.h"
@@ -167,6 +168,10 @@ public:
 
     void setClipExporter(std::shared_ptr<application::IClipExporter> exporter) noexcept {
         clipExporter_ = std::move(exporter);
+    }
+
+    void setSampleExporter(std::shared_ptr<application::ISampleExporter> exporter) noexcept {
+        sampleExporter_ = std::move(exporter);
     }
 
     [[nodiscard]] bool load(ReviewController& controller,
@@ -330,6 +335,50 @@ public:
                              &ClipExportController::refreshAvailability);
             engine->rootContext()->setContextProperty(QStringLiteral("clipExport"),
                                                       clipExport_.get());
+        }
+        // E01 training-sample export: only offered when the composition root injected a sample
+        // exporter adapter (ui_qml never links media_ffmpeg).
+        if (sampleExporter_) {
+            sampleExport_ =
+                std::make_unique<SampleExportController>(SampleExportController::Dependencies{
+                    .snapshot = [&controller] { return controller.currentSnapshot(); },
+                    .exporter = sampleExporter_,
+                    .protocol = [proto = interpolationProtocol_.get()]()
+                        -> const std::optional<domain::InterpolationProtocol>& {
+                        static const std::optional<domain::InterpolationProtocol> kEmpty;
+                        return proto != nullptr ? proto->protocol() : kEmpty;
+                    },
+                    .activeCropRect =
+                        [this, &controller]() -> std::optional<application::SampleCropRect> {
+                        if (surface_ != nullptr && surface_->roiEnabled()) {
+                            const auto snapshot = controller.currentSnapshot();
+                            if (snapshot && snapshot->validatedComparison) {
+                                const auto& extent =
+                                    snapshot->validatedComparison->canonicalDescriptor().extent;
+                                if (extent.isValid()) {
+                                    const auto w = static_cast<double>(extent.width);
+                                    const auto h = static_cast<double>(extent.height);
+                                    const auto cx = static_cast<std::int64_t>(
+                                        std::clamp(surface_->roiLeft() * w, 0.0, w - 1.0));
+                                    const auto cy = static_cast<std::int64_t>(
+                                        std::clamp(surface_->roiTop() * h, 0.0, h - 1.0));
+                                    const auto cw = static_cast<std::int64_t>(
+                                        std::clamp((surface_->roiRight() - surface_->roiLeft()) * w,
+                                                   1.0,
+                                                   w - static_cast<double>(cx)));
+                                    const auto ch = static_cast<std::int64_t>(
+                                        std::clamp((surface_->roiBottom() - surface_->roiTop()) * h,
+                                                   1.0,
+                                                   h - static_cast<double>(cy)));
+                                    return application::SampleCropRect{cx, cy, cw, ch};
+                                }
+                            }
+                        }
+                        return std::nullopt;
+                    },
+                });
+            engine->rootContext()->setContextProperty(QStringLiteral("sampleExport"),
+                                                      sampleExport_.get());
         }
         // UI observation bridge: forwards QML scene-graph operations (timeline thumbnail grabs)
         // into the bounded trace buffer so playback evidence can correlate them with pipeline
@@ -960,6 +1009,8 @@ private:
     std::unique_ptr<ComparisonExportController> comparisonExport_;
     std::shared_ptr<application::IClipExporter> clipExporter_;
     std::unique_ptr<ClipExportController> clipExport_;
+    std::shared_ptr<application::ISampleExporter> sampleExporter_;
+    std::unique_ptr<SampleExportController> sampleExport_;
     std::unique_ptr<ImageEditController> imageEdit_;
     std::unique_ptr<DiagnosticsProbe> diagnosticsProbe_;
     QQuickWindow* window_ = nullptr;
@@ -996,6 +1047,11 @@ void DesktopApplication::setInterpolationProtocolRepository(
 void DesktopApplication::setClipExporter(
     std::shared_ptr<application::IClipExporter> exporter) noexcept {
     impl_->setClipExporter(std::move(exporter));
+}
+
+void DesktopApplication::setSampleExporter(
+    std::shared_ptr<application::ISampleExporter> exporter) noexcept {
+    impl_->setSampleExporter(std::move(exporter));
 }
 
 int DesktopApplication::exec() {

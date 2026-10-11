@@ -54,6 +54,9 @@ public:
     void setReviewController(ReviewController* controller) noexcept;
 
     [[nodiscard]] bool protocolLoaded() const noexcept;
+    [[nodiscard]] const std::optional<domain::InterpolationProtocol>& protocol() const noexcept {
+        return protocol_;
+    }
     [[nodiscard]] QString statusText() const;
     [[nodiscard]] QString lastError() const;
     // "retained" | "generated" | "unknown" | "missing", or "" when no protocol is loaded or no

@@ -17,6 +17,9 @@ Item {
     // host owns the controller, the OSC only relays state and intents like it does for range
     // export.
     property var protocol: null
+    // E01 training-sample triplet export context and status.
+    property var sampleExport: null
+    property bool sampleExportBusy: false
     required property bool playing
     property real playbackRate: 1
     // C-07 playback status rail. Bound by Main.qml; defaults keep standalone QML tests working.
@@ -82,6 +85,7 @@ Item {
     signal rangeLoopRequested
     signal clearRangeRequested
     signal exportRangeRequested
+    signal exportSampleRequested
     // P03 protocol navigation intents, forwarded verbatim from the transport's protocol row.
     signal protocolLoadRequested
     signal protocolClearRequested
@@ -437,7 +441,10 @@ Item {
             rangeExportBusy: control.rangeExportBusy
             rangeExportProgress: control.rangeExportProgress
             protocol: control.protocol
+            sampleExport: control.sampleExport
+            sampleExportBusy: control.sampleExportBusy
             onExportRangeRequested: control.exportRangeRequested()
+            onExportSampleRequested: control.exportSampleRequested()
             onMarkInRequested: control.markInRequested()
             onMarkOutRequested: control.markOutRequested()
             onPlayRangeRequested: control.playRangeRequested()

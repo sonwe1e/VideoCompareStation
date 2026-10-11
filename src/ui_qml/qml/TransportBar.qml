@@ -43,6 +43,9 @@ Item {
     // protocol row out of the layout, so hosts without the controller render the bar unchanged.
     // Navigation stays an explicit user action — plain playback never consults the protocol.
     property var protocol: null
+    // E01 training-sample triplet export context and status.
+    property var sampleExport: null
+    property bool sampleExportBusy: false
 
     signal firstRequested
     signal previousSecondRequested
@@ -62,6 +65,7 @@ Item {
     signal rangeLoopRequested
     signal clearRangeRequested
     signal exportRangeRequested
+    signal exportSampleRequested
     signal protocolLoadRequested
     signal protocolClearRequested
     signal previousGeneratedFrameRequested
@@ -525,6 +529,15 @@ Item {
                 chipHelp: qsTr("跳到下一个由模型生成的帧（跳过保留帧、缺帧与未知来源）")
                 chipEnabled: Boolean(control.protocol) && Boolean(control.protocol.canGoNextGenerated)
                 onClicked: control.nextGeneratedFrameRequested()
+            }
+
+            RangeChip {
+                objectName: "transportExportSampleButton"
+                visible: Boolean(control.sampleExport) && Boolean(control.protocol) && Boolean(control.protocol.protocolLoaded)
+                chipText: qsTr("导出样本…")
+                chipHelp: qsTr("导出当前帧对应的训练三元组（input0、GT、input1）与推理帧")
+                chipEnabled: Boolean(control.sampleExport) && control.currentFrame >= 0 && Boolean(control.sampleExport.canExportAtFrame(control.currentFrame)) && !control.sampleExportBusy
+                onClicked: control.exportSampleRequested()
             }
 
             RangeChip {

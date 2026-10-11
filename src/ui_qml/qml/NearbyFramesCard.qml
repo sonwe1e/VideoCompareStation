@@ -4,8 +4,8 @@ import QtQuick
 import "VcsTheme.js" as Theme
 
 // P06 (D02) nearby-frames diagnostic card: filmstrip showing 5-9 frames around a marked issue,
-// provenance badges (retained/generated/missing/unknown), anchor highlight, loop seam indicator,
-// and interval playback controls.
+// real timeline thumbnails, provenance badges (retained/generated/missing/unknown), anchor highlight,
+// loop seam indicator, interval playback controls, and training sample triplet export.
 Rectangle {
     id: control
 
@@ -14,20 +14,23 @@ Rectangle {
     property var intervalData: null
     property var protocolController: null
     property var reviewController: null
+    property var previewThumbnails: null
+    property var sampleExportController: null
     property int currentFrame: -1
 
     signal closeRequested
     signal seekRequested(int frame)
     signal loopIntervalRequested(int inFrame, int outFrame)
     signal stepFrameRequested(int delta)
+    signal exportSampleRequested(int frame)
 
     objectName: "nearbyFramesCard"
     color: Theme.panelElevated
     border.color: Theme.menuBorder
     border.width: 1
     radius: Theme.radiusCard
-    implicitWidth: 680
-    implicitHeight: 180
+    implicitWidth: 720
+    implicitHeight: 220
     width: implicitWidth
     height: implicitHeight
 
@@ -37,6 +40,10 @@ Rectangle {
     readonly property bool loopSeamAtOut: intervalData && intervalData.loopSeamAtOut !== undefined ? Boolean(intervalData.loopSeamAtOut) : false
     readonly property var sessionEpoch: intervalData && intervalData.sessionEpoch !== undefined ? intervalData.sessionEpoch : 0
     readonly property bool epochMatches: !reviewController || sessionEpoch === 0 || Number(reviewController.sessionEpoch) === Number(sessionEpoch)
+
+    readonly property int selectedExportFrame: anchorFrame >= 0 ? anchorFrame : currentFrame
+    readonly property bool canExportSample: sampleExportController && selectedExportFrame >= 0 ? sampleExportController.canExportAtFrame(selectedExportFrame) : false
+    readonly property bool sampleExportBusy: sampleExportController ? Boolean(sampleExportController.busy) : false
 
     readonly property var summariesList: {
         if (inFrame < 0 || outFrame < inFrame)
@@ -58,6 +65,16 @@ Rectangle {
             });
         }
         return fallback;
+    }
+
+    onSummariesListChanged: {
+        if (control.previewThumbnails) {
+            for (let i = 0; i < summariesList.length; ++i) {
+                const f = summariesList[i].frame;
+                if (f !== undefined && f >= 0)
+                    control.previewThumbnails.request(f);
+            }
+        }
     }
 
     Column {
@@ -124,7 +141,7 @@ Rectangle {
 
             objectName: "nearbyFramesFilmstrip"
             width: parent.width
-            height: 80
+            height: 116
             orientation: ListView.Horizontal
             spacing: 6
             clip: true
@@ -143,9 +160,18 @@ Rectangle {
                 readonly property bool isCurrent: cellFrame === control.currentFrame
                 readonly property bool isSeam: cellFrame === control.outFrame && control.loopSeamAtOut
 
+                readonly property url thumbnailUrl: {
+                    if (control.previewThumbnails && control.previewThumbnails.generation > 0 && cellFrame >= 0) {
+                        const u = control.previewThumbnails.urlForFrame(cellFrame);
+                        if (u && u.toString().length > 0)
+                            return u;
+                    }
+                    return "";
+                }
+
                 objectName: cellFrame >= 0 ? ("nearbyFrameCell_" + cellFrame) : ""
-                width: 64
-                height: 78
+                width: 76
+                height: 112
                 radius: Theme.radiusSmall
                 color: isCurrent ? Theme.raisedPanel : Theme.panel
                 border.width: isCurrent || isAnchor ? 2 : 1
@@ -156,22 +182,50 @@ Rectangle {
                     anchors.margins: 4
                     spacing: 2
 
+                    // Frame number header
                     Row {
                         anchors.horizontalCenter: parent.horizontalCenter
                         spacing: 2
 
                         Text {
                             text: "#" + cellRect.cellDisplayFrame
-                            font.pixelSize: 11
+                            font.pixelSize: 10
                             font.weight: cellRect.isAnchor ? Font.Bold : Font.Normal
                             color: cellRect.isAnchor ? Theme.accentText : Theme.primaryText
                         }
                     }
 
+                    // Thumbnail viewport
                     Rectangle {
                         anchors.horizontalCenter: parent.horizontalCenter
                         width: parent.width - 4
-                        height: 20
+                        height: 42
+                        radius: 3
+                        color: Theme.thumbnailWell
+                        clip: true
+
+                        Image {
+                            anchors.fill: parent
+                            fillMode: Image.PreserveAspectFit
+                            source: cellRect.thumbnailUrl
+                            cache: false
+                            visible: cellRect.thumbnailUrl.toString().length > 0
+                        }
+
+                        Text {
+                            anchors.centerIn: parent
+                            visible: cellRect.thumbnailUrl.toString().length === 0
+                            text: "#" + cellRect.cellDisplayFrame
+                            color: Theme.mutedText
+                            font.pixelSize: 10
+                        }
+                    }
+
+                    // Provenance badge
+                    Rectangle {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: parent.width - 4
+                        height: 18
                         radius: 3
                         color: {
                             if (cellRect.cellKind === "generated")
@@ -187,7 +241,7 @@ Rectangle {
 
                         Text {
                             anchors.centerIn: parent
-                            font.pixelSize: 10
+                            font.pixelSize: 9
                             text: {
                                 if (cellRect.cellKind === "generated")
                                     return qsTr("生成");
@@ -213,6 +267,7 @@ Rectangle {
                         }
                     }
 
+                    // Anchor & Seam tags
                     Row {
                         anchors.horizontalCenter: parent.horizontalCenter
                         spacing: 2
@@ -303,6 +358,18 @@ Rectangle {
                 implicitWidth: 84
                 enabled: control.anchorFrame >= 0
                 onClicked: control.seekRequested(control.anchorFrame)
+            }
+
+            ReviewActionButton {
+                id: nearbyFramesExportButton
+
+                objectName: "nearbyFramesExportButton"
+                text: qsTr("导出训练样本…")
+                implicitHeight: 28
+                implicitWidth: 104
+                visible: control.sampleExportController !== null
+                enabled: control.canExportSample && !control.sampleExportBusy
+                onClicked: control.exportSampleRequested(control.selectedExportFrame)
             }
         }
     }

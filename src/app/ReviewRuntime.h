@@ -16,6 +16,7 @@ namespace dvs {
 namespace application {
 class IClipExporter;
 class IIssueRecordRepository;
+class ISampleExporter;
 } // namespace application
 namespace ui {
 class ComparisonSurface;
@@ -51,6 +52,8 @@ public:
     // Lossless range clip-export port owned by the composition root (architecture: ui_qml must not
     // link media_ffmpeg). Shared so a running export survives the teardown hand-off.
     [[nodiscard]] std::shared_ptr<application::IClipExporter> clipExporter() const noexcept;
+    // E01 training sample triplet export port owned by the composition root.
+    [[nodiscard]] std::shared_ptr<application::ISampleExporter> sampleExporter() const noexcept;
     [[nodiscard]] bool attachSurface(ui::ComparisonSurface& surface) noexcept;
     [[nodiscard]] std::vector<media::DecoderBackendStatus> decoderBackendStatuses() const;
     [[nodiscard]] media::MediaProbeStatistics mediaProbeStatistics() const noexcept;

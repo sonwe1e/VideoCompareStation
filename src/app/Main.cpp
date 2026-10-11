@@ -454,6 +454,7 @@ runDesktop(int& argc,
     }
     desktop.setIssueRecordRepository(runtime->issueRecordRepository());
     desktop.setClipExporter(runtime->clipExporter());
+    desktop.setSampleExporter(runtime->sampleExporter());
     // P03 protocol import: the stateless repository is constructed here because only the
     // composition root may build persistence adapters, and lives for the whole run.
     dvs::persistence::InterpolationProtocolRepository interpolationProtocolRepository;
