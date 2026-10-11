@@ -60,17 +60,25 @@ Rectangle {
     signal rangeLoopToggleRequested
     signal closeRequested
 
-    // E01: the presentation capability probe builds its own hidden window, D3D11 device and swap
-    // chain on the controller's worker thread, so it is requested here — when the diagnostics
-    // surface is actually opened — instead of on the startup critical path. The controller keeps
-    // the cached answer and ignores superseded requests, so repeated opens are free. Guarded
-    // property access keeps plain-object stand-ins (contract-test mocks) warning-free.
-    onVisibleChanged: {
-        if (!visible || !control.timingDiagnostics) {
+    // E01/E02: the presentation capability probe builds its own hidden window, D3D11 device and
+    // swap chain on the controller's worker thread, so it is requested here — when the
+    // diagnostics surface is actually opened — instead of on the startup critical path. Detailed
+    // diagnostics sampling likewise runs only while this surface is open: closing stops the
+    // observer ingest and the refresh timer inside the controller, leaving trace sinks alone.
+    // Guarded property access keeps plain-object stand-ins (contract-test mocks) warning-free.
+    onVisibleChanged: control.syncTimingDiagnostics()
+    Component.onCompleted: control.syncTimingDiagnostics()
+
+    function syncTimingDiagnostics() {
+        const diag = control.timingDiagnostics;
+        if (!diag) {
             return;
         }
-        if (control.timingDiagnostics.requestPresentationProbe !== undefined) {
-            control.timingDiagnostics.requestPresentationProbe();
+        if (diag.monitoring !== undefined) {
+            diag.monitoring = control.visible;
+        }
+        if (control.visible && diag.requestPresentationProbe !== undefined) {
+            diag.requestPresentationProbe();
         }
     }
 

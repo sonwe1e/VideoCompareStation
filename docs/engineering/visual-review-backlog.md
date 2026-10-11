@@ -1,6 +1,6 @@
 # 视觉审查问题台账
 
-更新：2026-10-11（启动减负 E01／全画布候选直看 P05／图片编辑纯操作 P11／协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-10-11（启动减负 E01／诊断可关闭 E02／全画布候选直看 P05／图片编辑纯操作 P11／协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
 
 ## 2026-10-11 启动关键路径减负 E01
@@ -40,6 +40,42 @@
   虚拟屏下的探测表现；探测超时分支无自动化断言（无事件循环的测试环境不触发 QTimer）。
 - **回退**：还原 TimingDiagnosticsController.h/.cpp、DesktopApplication.cpp 与 TabbedInspector
   一处即可回到构造期同步探测；无其他调用方。
+
+## 2026-10-11 诊断真正可关闭 E02
+
+- **范围**：同计划 §4 E02（P0）：拆清采集／汇总／UI 刷新／能力探测四个状态；停止监测真的
+  停止新增诊断 ingest；不误伤其他 trace sink；默认不常驻详细采样。
+- **代码证据（基线 a3a06ee）**：`setMonitoring(false)` 只停 QTimer；observer 仍挂接且
+  `onTraceEvent` 无过滤；`PlaybackTrace::record` 持 observer shared lock 回调，collector 的
+  ingest mutex 进入解码/调度事件生产路径；控制器构造经 `installObserver` 自动 enable 全局
+  trace 时钟（默认常驻采样）。
+- **交付**：
+  - `PlaybackTrace::setObserverEnabled(bool)`：原子门，`record()` 在取 observer 锁**之前**
+    acquire 检查（release/acquire 配对保证可见性）；只作用于 observer 分发，ring buffer 与
+    已装 sink 不受影响；`reset()` 恢复默认开。
+  - 控制器四状态拆分：采集（共享门 + `monitoring_` 原子双保险，`onTraceEvent` 入口 acquire
+    再查）；汇总（collector 仅监测开启时收到事件）；UI 刷新（500 ms QTimer = 2 Hz 聚合快照，
+    仅监测开启时运行，无每帧 QVariantMap 分配）；能力探测（E01 worker，独立于监测开关）。
+  - `monitoring_` 默认 false：构造不再 installObserver/enable——普通运行零每事件诊断工作
+    （时钟禁用时 record 仅剩一次原子读 + 分支）；首次 `setMonitoring(true)` 才安装 observer
+    （沿用其 enable 契约）；关闭时先关门再翻标志，时钟与 sink 不动；析构关门 → 卸载
+    （unique_lock 等待在途回调）→ 恢复门默认。
+  - 未引入事件交接队列：本轮无实测证据表明同步处理占事件生产预算（未跑真机预算测量），按
+    工单"否则保持简单"执行；QML 快照维持 2 Hz。
+- **验收对照**：monitoring=false 后诊断事件数不增长（测试 + 变异 D）；sink 并存不受影响
+  （测试）；连续开关 100 次、在途事件、monitoring 开启时销毁（并发 stress 测试）。
+- **验证**（同一 worktree）：`ui.TimingDiagnosticsControllerTests` 10/10（新增 4）；`application.
+  PlaybackTraceTests` 8/8（新增 3）；焦点组合 `ui.TimingDiagnosticsControllerTests |
+  application.PlaybackTraceTests | application.PlaybackEvidenceTests` 28/28；format-check
+  （386 文件）与 lint 通过。变异：D 移除 record 门 → 单元测试红（分发未停）；E 移除控制器
+  回调检查 → "门重开仍拒绝"红；G 卸载不加锁 → "卸载等待在途回调"红（50 ms 超时断言立即
+  返回）。**变异 F（控制器析构围栏整体移除）未检出**：非 ASAN debug 构建下销毁后分发落入
+  未复用栈内存、虚表与原子字节未被破坏，UB 恰好无害执行；该保证由 `installObserver` 的
+  unique_lock 纪律提供（变异 G 的确定性测试覆盖），后续可用 ASAN 变体验证。
+- **未验证**：真机关闭诊断前后的帧时/跳帧差异（E02 验收的"采样开/关帧时和跳帧差异"）；
+  队列丢失计数（未实现队列，无此指标）。
+- **回退**：还原 PlaybackTrace.h/.cpp 与控制器开关语义即可；门默认开，既有 sink 与 CI 门禁
+  行为不变。
 
 ## 2026-10-11 图片编辑纯操作提取 P11
 

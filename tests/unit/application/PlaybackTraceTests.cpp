@@ -314,4 +314,111 @@ TEST_F(PlaybackTraceSingletonTests, PassiveObserverReceivesEventsWithoutDraining
     EXPECT_EQ(trace.drainToSink(), 1U);
 }
 
+// E02: closing the observer gate stops every new dispatch while leaving the ring buffer and any
+// installed sink fully operational; reopening resumes dispatch. acquire/release pairing makes
+// the stop visible to producers without further synchronization.
+TEST_F(PlaybackTraceSingletonTests, ObserverGateStopsDispatchWithoutTouchingBufferOrSink) {
+    PlaybackTrace& trace = PlaybackTrace::instance();
+    trace.installSink(&sink);
+    trace.enable(fixedTraceTime);
+
+    RecordingTraceObserver observer;
+    trace.installObserver(&observer);
+
+    trace.record(TraceEventKind::CacheHit, TraceIdentity{}, 10U);
+    ASSERT_EQ(observer.events.size(), 1U);
+
+    trace.setObserverEnabled(false);
+    trace.record(TraceEventKind::CacheHit, TraceIdentity{}, 20U);
+    trace.record(TraceEventKind::FrameSetReady, TraceIdentity{}, 21U);
+    EXPECT_EQ(observer.events.size(), 1U);
+    // The gated events stayed in the ring and the sink still received them.
+    EXPECT_EQ(trace.drainToSink(), 2U);
+    EXPECT_EQ(sink.events.size(), 2U);
+
+    trace.setObserverEnabled(true);
+    trace.record(TraceEventKind::CacheHit, TraceIdentity{}, 30U);
+    EXPECT_EQ(observer.events.size(), 2U);
+    EXPECT_EQ(observer.events.back().payload, 30U);
+    EXPECT_EQ(trace.drainToSink(), 1U);
+    EXPECT_EQ(sink.events.size(), 3U);
+}
+
+// E02: reset() restores the gate default so a paused consumer cannot leak its state into the
+// next observer installed on this process-global trace.
+TEST_F(PlaybackTraceSingletonTests, ResetRestoresTheObserverGateDefault) {
+    PlaybackTrace& trace = PlaybackTrace::instance();
+    trace.enable(fixedTraceTime);
+    trace.setObserverEnabled(false);
+
+    RecordingTraceObserver observer;
+    trace.installObserver(&observer);
+    trace.record(TraceEventKind::CacheHit, TraceIdentity{}, 10U);
+    EXPECT_EQ(observer.events.size(), 0U);
+
+    trace.reset();
+    RecordingTraceObserver freshObserver;
+    trace.installObserver(&freshObserver);
+    trace.record(TraceEventKind::CacheHit, TraceIdentity{}, 20U);
+    EXPECT_EQ(freshObserver.events.size(), 1U);
+    EXPECT_EQ(freshObserver.events.front().payload, 20U);
+}
+
+// E02: uninstalling the observer is a lifecycle operation — installObserver(nullptr) takes the
+// unique lock, so it returns only after a callback that is already inside has finished. A
+// controller destructor relies on exactly this guarantee to never leave a dispatch running
+// against a destructed observer.
+class BlockingTraceObserver final : public ITraceObserver {
+public:
+    void onTraceEvent(const TraceEvent&) noexcept override {
+        std::unique_lock lock(mutex_);
+        entered_ = true;
+        condition_.notify_all();
+        condition_.wait(lock, [this] { return released_; });
+    }
+
+    [[nodiscard]] bool waitUntilEntered(const std::chrono::milliseconds timeout) {
+        std::unique_lock lock(mutex_);
+        return condition_.wait_for(lock, timeout, [this] { return entered_; });
+    }
+
+    void release() {
+        {
+            std::scoped_lock lock(mutex_);
+            released_ = true;
+        }
+        condition_.notify_all();
+    }
+
+private:
+    std::mutex mutex_;
+    std::condition_variable condition_;
+    bool entered_ = false;
+    bool released_ = false;
+};
+
+TEST_F(PlaybackTraceSingletonTests, UninstallingObserverWaitsForAnInProgressCallback) {
+    PlaybackTrace& trace = PlaybackTrace::instance();
+    trace.enable(fixedTraceTime);
+
+    BlockingTraceObserver observer;
+    trace.installObserver(&observer);
+
+    std::thread producer{[&trace] { trace.record(TraceEventKind::CacheHit, TraceIdentity{}, 1U); }};
+    if (!observer.waitUntilEntered(1s)) {
+        observer.release();
+        producer.join();
+        FAIL() << "The observer callback was not entered before the test deadline.";
+    }
+
+    std::future<void> uninstall =
+        std::async(std::launch::async, [&trace] { trace.installObserver(nullptr); });
+    EXPECT_EQ(uninstall.wait_for(50ms), std::future_status::timeout);
+
+    observer.release();
+    producer.join();
+    EXPECT_EQ(uninstall.wait_for(1s), std::future_status::ready);
+    uninstall.get();
+}
+
 } // namespace dvs::application

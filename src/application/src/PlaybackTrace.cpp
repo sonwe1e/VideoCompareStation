@@ -130,6 +130,10 @@ void PlaybackTrace::installObserver(ITraceObserver* const observer) noexcept {
     }
 }
 
+void PlaybackTrace::setObserverEnabled(const bool enabled) noexcept {
+    observerEnabled_.store(enabled, std::memory_order_release);
+}
+
 bool PlaybackTrace::enabled() const noexcept {
     return now_.load(std::memory_order_acquire) != nullptr;
 }
@@ -159,6 +163,13 @@ void PlaybackTrace::record(const TraceEventKind kind,
     };
     static_cast<void>(buffer_.record(event));
 
+    // Observer gate (E02): checked before taking the observer lock so a paused diagnostics
+    // consumer removes every dispatch cost from the producer threads. The acquire load pairs
+    // with the release store in setObserverEnabled; events already past this check when the
+    // gate closes are re-checked by the observer itself before ingesting.
+    if (!observerEnabled_.load(std::memory_order_acquire)) {
+        return;
+    }
     std::shared_lock lock(observerMutex_);
     if (observer_ != nullptr) {
         observer_->onTraceEvent(event);
@@ -183,6 +194,9 @@ void PlaybackTrace::reset() noexcept {
         std::unique_lock lock(observerMutex_);
         observer_ = nullptr;
     }
+    // Restore the gate default so a controller's paused state cannot leak into the next observer
+    // a test or component installs on this process-global trace.
+    observerEnabled_.store(true, std::memory_order_release);
     buffer_.reset();
 }
 

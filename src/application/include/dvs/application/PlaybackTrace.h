@@ -201,6 +201,12 @@ public:
 
     void installSink(ITraceSink* sink) noexcept;
     void installObserver(ITraceObserver* observer) noexcept;
+    // Gates only the passive-observer dispatch (E02). The ring buffer and any installed sink are
+    // unaffected, so pausing the diagnostics observer can never silence a file capture or a CI
+    // gate. The flag is checked before the observer lock in record(); the release store here
+    // pairs with the acquire load there, so an update is visible to every producer thread
+    // without further synchronization.
+    void setObserverEnabled(bool enabled) noexcept;
     [[nodiscard]] bool enabled() const noexcept;
 
     // Enables recording with the given monotonic time source (microseconds since an arbitrary
@@ -223,6 +229,7 @@ private:
     PlaybackTrace() = default;
 
     std::atomic<Clock> now_{nullptr};
+    std::atomic<bool> observerEnabled_{true};
     mutable std::shared_mutex observerMutex_;
     ITraceObserver* observer_ = nullptr;
     PlaybackTraceBuffer buffer_;

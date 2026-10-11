@@ -8,6 +8,7 @@
 #include <QString>
 #include <QTimer>
 
+#include <atomic>
 #include <memory>
 
 namespace dvs::ui {
@@ -48,9 +49,16 @@ public:
                                 QObject* parent = nullptr);
     ~TimingDiagnosticsController() override;
 
-    // application::ITraceObserver interface
+    // application::ITraceObserver interface. Defence in depth behind the PlaybackTrace observer
+    // gate (E02): an event that passed the gate while monitoring was switching off still must
+    // not ingest.
     void onTraceEvent(const application::TraceEvent& event) noexcept override;
 
+    // E02: monitoring splits four states. Off (the default) stops the observer ingest at the
+    // PlaybackTrace gate, stops the refresh timer, and leaves the trace clock and sinks alone;
+    // on installs this controller as the trace observer the first time (which enables the trace
+    // clock through that existing contract), opens the gate, and runs the refresh timer. The
+    // capability probe is independent of this switch and requested on demand (E01).
     [[nodiscard]] bool isMonitoring() const noexcept;
     void setMonitoring(bool monitoring);
 
@@ -116,7 +124,9 @@ private:
     QTimer* refreshTimer_ = nullptr;
     QTimer* probeTimeoutTimer_ = nullptr;
 
-    bool monitoring_ = true;
+    // Master diagnostics switch, written by the GUI thread and read by every trace-producer
+    // thread inside onTraceEvent; acquire/release pairing makes the stop visible without locks.
+    std::atomic<bool> monitoring_{false};
     bool hasActivePlayback_ = false;
     quint64 runId_ = 0U;
     quint64 skippedFrameSetCount_ = 0U;

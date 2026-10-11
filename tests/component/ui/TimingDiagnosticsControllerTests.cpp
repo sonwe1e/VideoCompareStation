@@ -2,12 +2,38 @@
 
 #include "PresentationStatisticsProbeTestHooks.h"
 
+#include <atomic>
 #include <chrono>
 #include <gtest/gtest.h>
 #include <thread>
+#include <vector>
 
 namespace dvs::ui {
 namespace {
+
+// Minimal recording sink for the E02 coexistence test: the monitoring gate must pause only the
+// diagnostics observer, never a sink installed on the same global trace.
+class RecordingTraceSink final : public application::ITraceSink {
+public:
+    [[nodiscard]] bool append(const application::TraceEvent& event) noexcept override {
+        try {
+            events.push_back(event);
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+
+    [[nodiscard]] bool recordOverflow(const std::uint64_t) noexcept override {
+        return true;
+    }
+
+    [[nodiscard]] bool finalize() noexcept override {
+        return true;
+    }
+
+    std::vector<application::TraceEvent> events;
+};
 
 [[nodiscard]] platform::testing::PresentationStatisticsProbeOverrides failingWindowOverrides() {
     platform::testing::PresentationStatisticsProbeOverrides overrides;
@@ -111,8 +137,9 @@ TEST(TimingDiagnosticsControllerTests, PassiveObserverReceivesEventsFromPlayback
     trace.reset();
 
     TimingDiagnosticsController controller;
-    controller.setMonitoring(false);
-
+    // E02: monitoring defaults off, so the singleton path only reaches the collector after the
+    // diagnostics surface turned it on — exactly the production wiring this test mirrors.
+    controller.setMonitoring(true);
 
     // Emitting through global PlaybackTrace should reach controller via observer
     const auto id = makeIdentity(1U, 1U);
@@ -126,6 +153,147 @@ TEST(TimingDiagnosticsControllerTests, PassiveObserverReceivesEventsFromPlayback
     EXPECT_EQ(controller.runId(), 1U);
 
     controller.setMonitoring(false);
+    trace.reset();
+}
+
+// E02: after setMonitoring(false), events recorded through the global trace stop reaching the
+// collector; turning monitoring back on resumes ingest.
+TEST(TimingDiagnosticsControllerTests, MonitoringOffStopsNewDiagnosticIngest) {
+    application::PlaybackTrace& trace = application::PlaybackTrace::instance();
+    trace.reset();
+
+    TimingDiagnosticsController controller;
+    EXPECT_FALSE(controller.isMonitoring());
+    controller.setMonitoring(true);
+    EXPECT_TRUE(trace.enabled());
+
+    const auto id = makeIdentity(1U, 1U);
+    trace.record(application::TraceEventKind::PlaybackRunStarted, id, 10U);
+    controller.refresh();
+    EXPECT_EQ(controller.runId(), 1U);
+
+    controller.setMonitoring(false);
+    trace.record(application::TraceEventKind::PlaybackRunStarted, id, 20U);
+    trace.record(application::TraceEventKind::ProviderSubmitted, id, 21U);
+    controller.refresh();
+    // The second run boundary never ingested: the open run is still run 1.
+    EXPECT_EQ(controller.runId(), 1U);
+    EXPECT_TRUE(controller.hasActivePlayback());
+
+    // Re-enabling resumes ingest; the stopped boundary closes run 1 without opening run 2.
+    controller.setMonitoring(true);
+    trace.record(application::TraceEventKind::PlaybackRunStopped, id, 30U);
+    controller.refresh();
+    EXPECT_EQ(controller.runId(), 1U);
+    EXPECT_FALSE(controller.hasActivePlayback());
+
+    controller.setMonitoring(false);
+    trace.reset();
+}
+
+// E02: the in-callback monitoring check is independent of the shared PlaybackTrace gate. Even
+// when the process-global gate is opened again by someone else while this controller's
+// monitoring stays off, no event may reach the collector.
+TEST(TimingDiagnosticsControllerTests, MonitoringOffStillRejectsEventsWhenGateReopens) {
+    application::PlaybackTrace& trace = application::PlaybackTrace::instance();
+    trace.reset();
+
+    TimingDiagnosticsController controller;
+    controller.setMonitoring(true);
+    const auto id = makeIdentity(1U, 1U);
+    trace.record(application::TraceEventKind::PlaybackRunStarted, id, 10U);
+    controller.refresh();
+    EXPECT_EQ(controller.runId(), 1U);
+
+    controller.setMonitoring(false);
+    // Another trace user reopens the shared gate; this controller's monitoring stays off.
+    trace.setObserverEnabled(true);
+    trace.record(application::TraceEventKind::PlaybackRunStarted, id, 20U);
+    trace.record(application::TraceEventKind::PlaybackRunStopped, id, 21U);
+    controller.refresh();
+    EXPECT_EQ(controller.runId(), 1U);
+    EXPECT_TRUE(controller.hasActivePlayback());
+
+    trace.setObserverEnabled(false);
+    trace.reset();
+}
+
+// E02: the monitoring gate filters only the diagnostics observer. A concurrently installed
+// file sink keeps receiving every event, and the ring buffer keeps them drainable.
+TEST(TimingDiagnosticsControllerTests, ObserverGateDoesNotTouchSinks) {
+    application::PlaybackTrace& trace = application::PlaybackTrace::instance();
+    trace.reset();
+
+    RecordingTraceSink sink;
+    trace.installSink(&sink);
+    trace.enable(application::traceNowMicroseconds);
+
+    TimingDiagnosticsController controller;
+    controller.setMonitoring(true);
+    const auto id = makeIdentity(1U, 1U);
+    trace.record(application::TraceEventKind::PlaybackRunStarted, id, 10U);
+    EXPECT_EQ(trace.drainToSink(), 1U);
+    ASSERT_EQ(sink.events.size(), 1U);
+
+    controller.setMonitoring(false);
+    trace.record(application::TraceEventKind::ProviderSubmitted, id, 20U);
+    EXPECT_EQ(trace.drainToSink(), 1U);
+    EXPECT_EQ(sink.events.size(), 2U);
+    EXPECT_EQ(sink.events.back().kind, application::TraceEventKind::ProviderSubmitted);
+    controller.refresh();
+    EXPECT_EQ(controller.runId(), 1U);
+
+    controller.setMonitoring(false);
+    trace.reset();
+}
+
+// E02: toggling monitoring while a producer thread keeps emitting, and destroying the controller
+// mid-stream, must neither crash nor leak ingest past the final stop. Exercises the observer
+// gate, the in-callback monitoring check, and the destructor's lifecycle fence together.
+TEST(TimingDiagnosticsControllerTests, ConcurrentMonitoringTogglingAndDestructionStaySafe) {
+    application::PlaybackTrace& trace = application::PlaybackTrace::instance();
+    trace.reset();
+
+    std::atomic<bool> producerRunning{true};
+    std::thread producer([&trace, &producerRunning] {
+        const auto id = makeIdentity(1U, 1U);
+        while (producerRunning.load(std::memory_order_relaxed)) {
+            trace.record(application::TraceEventKind::ProviderSubmitted, id, 0U);
+            std::this_thread::yield();
+        }
+    });
+
+    {
+        TimingDiagnosticsController controller;
+        controller.setMonitoring(true);
+        for (int cycle = 0; cycle < 100; ++cycle) {
+            controller.setMonitoring(cycle % 2 == 0);
+            std::this_thread::yield();
+        }
+        controller.setMonitoring(false);
+        // Let every dispatch that passed the gate before the close land and drain it.
+        std::this_thread::sleep_for(std::chrono::milliseconds{50});
+        controller.refresh();
+        const double latencyBefore = controller.decodeLatencyP95Ms();
+        const quint64 runIdBefore = controller.runId();
+        // A boundary recorded after the final stop must not change any aggregated state.
+        trace.record(application::TraceEventKind::PlaybackRunStarted, makeIdentity(7U, 1U), 0U);
+        controller.refresh();
+        EXPECT_EQ(controller.runId(), runIdBefore);
+        EXPECT_DOUBLE_EQ(controller.decodeLatencyP95Ms(), latencyBefore);
+    }
+    // Destroyed with monitoring still ON while the producer keeps emitting: the destructor's
+    // lifecycle fence is the only thing standing between in-flight/continued dispatches and a
+    // destructed observer. The gate closes first, the uninstall waits out any callback already
+    // inside, and after it returns the freed object is unreachable from the trace.
+    {
+        TimingDiagnosticsController controller;
+        controller.setMonitoring(true);
+        std::this_thread::sleep_for(std::chrono::milliseconds{30});
+    }
+
+    producerRunning.store(false, std::memory_order_relaxed);
+    producer.join();
     trace.reset();
 }
 

@@ -186,16 +186,16 @@ TimingDiagnosticsController::TimingDiagnosticsController(
     // E01: construction sits on the startup critical path, so it only builds lightweight state.
     // The capability probe (hidden window + D3D11 device + swap chain) is no longer run here;
     // the diagnostics surface requests it on demand and the worker thread executes it.
+    // E02: monitoring defaults off, so nothing is installed on the trace and the trace clock
+    // stays wherever its owner left it — an ordinary run records nothing on behalf of this
+    // panel. setMonitoring(true) installs the observer (which enables the clock through its
+    // existing contract), opens the observer gate and starts the refresh timer.
     systemPresentationStatus_ = unprobedStatusText();
     driverKind_ = QStringLiteral("未知");
-    application::PlaybackTrace::instance().installObserver(this);
 
     refreshTimer_ = new QTimer(this);
     refreshTimer_->setInterval(500);
     connect(refreshTimer_, &QTimer::timeout, this, &TimingDiagnosticsController::refresh);
-    if (monitoring_) {
-        refreshTimer_->start();
-    }
 
     probeTimeoutTimer_ = new QTimer(this);
     probeTimeoutTimer_->setSingleShot(true);
@@ -213,10 +213,22 @@ TimingDiagnosticsController::TimingDiagnosticsController(
 TimingDiagnosticsController::~TimingDiagnosticsController() {
     // Shuts the worker down and joins it; the probe resources are released on the worker thread.
     probeWorker_.reset();
-    application::PlaybackTrace::instance().installObserver(nullptr);
+    application::PlaybackTrace& trace = application::PlaybackTrace::instance();
+    // Lifecycle fence (E02): the gate stops new dispatches without waiting; the observer
+    // uninstall takes the unique lock, so it returns only after a callback already inside has
+    // finished — no dispatch can touch a destructing controller. Restoring the default-open gate
+    // leaves observers installed later by anyone else unaffected.
+    trace.setObserverEnabled(false);
+    trace.installObserver(nullptr);
+    trace.setObserverEnabled(true);
 }
 
 void TimingDiagnosticsController::onTraceEvent(const application::TraceEvent& event) noexcept {
+    // Second line of defence behind the PlaybackTrace gate (E02): an event that passed the gate
+    // check while monitoring was being switched off must not ingest either.
+    if (!monitoring_.load(std::memory_order_acquire)) {
+        return;
+    }
     try {
         collector_.ingest(event);
     } catch (...) { // NOLINT(bugprone-empty-catch): observer must never fail playback workers
@@ -224,18 +236,31 @@ void TimingDiagnosticsController::onTraceEvent(const application::TraceEvent& ev
 }
 
 bool TimingDiagnosticsController::isMonitoring() const noexcept {
-    return monitoring_;
+    return monitoring_.load(std::memory_order_acquire);
 }
 
 void TimingDiagnosticsController::setMonitoring(const bool monitoring) {
-    if (monitoring_ == monitoring) {
+    if (isMonitoring() == monitoring) {
         return;
     }
-    monitoring_ = monitoring;
-    if (refreshTimer_ != nullptr) {
-        if (monitoring) {
+    application::PlaybackTrace& trace = application::PlaybackTrace::instance();
+    if (monitoring) {
+        // First activation installs the observer; installObserver enables the trace clock when
+        // nobody else did. Later toggles only flip the gate, so repeated on/off cycles never
+        // re-run the installation.
+        trace.installObserver(this);
+        trace.setObserverEnabled(true);
+        monitoring_.store(true, std::memory_order_release);
+        if (refreshTimer_ != nullptr) {
             refreshTimer_->start();
-        } else {
+        }
+    } else {
+        // Close the gate BEFORE the local flag: producers stop dispatching at the gate check,
+        // and any dispatch already past the gate re-checks this flag before ingesting. The
+        // trace clock and any sink are left alone so file captures keep running (E02).
+        trace.setObserverEnabled(false);
+        monitoring_.store(false, std::memory_order_release);
+        if (refreshTimer_ != nullptr) {
             refreshTimer_->stop();
         }
     }
