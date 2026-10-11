@@ -327,6 +327,9 @@ TEST_F(PlaybackTraceSingletonTests, ObserverGateStopsDispatchWithoutTouchingBuff
 
     trace.record(TraceEventKind::CacheHit, TraceIdentity{}, 10U);
     ASSERT_EQ(observer.events.size(), 1U);
+    // Drain the gate-open baseline event so the counts below track only the gated records.
+    EXPECT_EQ(trace.drainToSink(), 1U);
+    EXPECT_EQ(sink.events.size(), 1U);
 
     trace.setObserverEnabled(false);
     trace.record(TraceEventKind::CacheHit, TraceIdentity{}, 20U);
