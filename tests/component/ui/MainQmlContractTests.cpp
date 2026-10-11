@@ -1021,6 +1021,93 @@ TEST(MainQmlContractTests, TimelineMarkerLegendUsesThemeColorsAndWraps) {
     }
 }
 
+TEST(MainQmlContractTests, TimingDiagnosticsCardRendersInReviewTabWhenProvided) {
+    QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
+    QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/TabbedInspector.qml")}};
+
+    QQmlComponent mockProbe{&engine};
+    mockProbe.setData(R"qml(
+        import QtQuick
+        QtObject {
+            property bool hasActivePlayback: true
+            property int skippedFrameSetCount: 0
+            property double decodeLatencyP95Ms: 12.5
+            property double decodeLatencyMaxMs: 25.0
+            property double renderScheduleP95Ms: 1.2
+            property double renderScheduleMaxMs: 3.4
+            property double drawToAckP95Ms: 2.1
+            property double drawToAckMaxMs: 4.5
+            property string systemPresentationStatus: "可用 (Flip Model)"
+            property string driverKind: "Hardware"
+            property bool isIndirectDisplayWarning: false
+        }
+    )qml",
+                      QUrl{});
+    const std::unique_ptr<QObject> mockDiag{mockProbe.create()};
+    ASSERT_NE(mockDiag, nullptr) << componentErrors(mockProbe);
+
+    const QVariantMap properties{
+        {QStringLiteral("controller"),
+         QVariantMap{{QStringLiteral("alignmentMode"), 0},
+                     {QStringLiteral("activePairTimeInfo"), QVariantMap{}},
+                     {QStringLiteral("currentInexactReason"), QString{}},
+                     {QStringLiteral("sources"), QVariantList{}},
+                     {QStringLiteral("dropFrameTimecodeAvailable"), false},
+                     {QStringLiteral("alignmentTimelineMarkerOverflowCount"), 0},
+                     {QStringLiteral("sourceMediaInfo"), QVariantList{}}}},
+        {QStringLiteral("preferences"),
+         QVariantMap{{QStringLiteral("differenceMetric"), 0},
+                     {QStringLiteral("differenceGain"), 0},
+                     {QStringLiteral("differenceFilter"), 0},
+                     {QStringLiteral("oscMode"), 0}}},
+        {QStringLiteral("session"), QVariantMap{}},
+        {QStringLiteral("metrics"), QVariantMap{}},
+        {QStringLiteral("timingDiagnostics"), QVariant::fromValue(mockDiag.get())},
+        {QStringLiteral("borderColor"), QColor{Qt::gray}},
+        {QStringLiteral("primaryTextColor"), QColor{Qt::white}},
+        {QStringLiteral("mutedTextColor"), QColor{Qt::gray}},
+        {QStringLiteral("singleMode"), false},
+        {QStringLiteral("sourceCount"), 2},
+        {QStringLiteral("wipeMode"), false},
+        {QStringLiteral("differenceMode"), true},
+        {QStringLiteral("analysisGridMode"), false},
+        {QStringLiteral("differenceEdges"), QVariantList{}},
+        {QStringLiteral("sourceIdentities"), QVariantList{}},
+        {QStringLiteral("differenceEdge"), 0},
+        {QStringLiteral("referenceSourceIndex"), 0},
+        {QStringLiteral("differenceThresholdEnabled"), false},
+        {QStringLiteral("differenceThresholdCode"), 0},
+        {QStringLiteral("differenceThresholdPolicy"), 1},
+        {QStringLiteral("wipePosition"), 0.5},
+        {QStringLiteral("roiEnabled"), false},
+        {QStringLiteral("graphicsReady"), false},
+        {QStringLiteral("dropFrameTimecode"), false},
+        {QStringLiteral("currentFrame"), 0},
+        {QStringLiteral("inFrame"), -1},
+        {QStringLiteral("outFrame"), -1},
+        {QStringLiteral("rangePlaybackActive"), false},
+        {QStringLiteral("width"), 320},
+        {QStringLiteral("height"), 800},
+    };
+    const std::unique_ptr<QObject> root{component.createWithInitialProperties(properties)};
+    ASSERT_NE(root, nullptr) << componentErrors(component);
+    auto* const tabs = root->findChild<QQuickItem*>(QStringLiteral("inspectorTabBar"));
+    ASSERT_NE(tabs, nullptr);
+    tabs->setProperty("currentIndex", 1);
+
+    auto* const card = root->findChild<QQuickItem*>(QStringLiteral("timingDiagnosticsCard"));
+    ASSERT_NE(card, nullptr);
+    EXPECT_TRUE(card->isVisible());
+    auto* const badge = root->findChild<QQuickItem*>(QStringLiteral("timingDroppedFramesBadge"));
+    ASSERT_NE(badge, nullptr);
+    EXPECT_TRUE(badge->isVisible());
+    auto* const liveBadge = root->findChild<QQuickItem*>(QStringLiteral("timingLiveBadge"));
+    ASSERT_NE(liveBadge, nullptr);
+    EXPECT_TRUE(liveBadge->isVisible());
+}
+
 TEST(MainQmlContractTests, MapsEveryCurrentMediaErrorAndExcludesDeletedUiDomains) {
     QFile messageCatalog{QStringLiteral(":/qml/ReviewMessageCatalog.qml")};
     ASSERT_TRUE(messageCatalog.open(QIODevice::ReadOnly));

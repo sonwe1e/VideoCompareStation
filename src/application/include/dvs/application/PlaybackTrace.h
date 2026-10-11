@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <string>
 
 namespace dvs::application {
@@ -131,6 +132,15 @@ public:
     [[nodiscard]] virtual bool finalize() noexcept = 0;
 };
 
+// A passive observer receives copies of recorded trace events as they happen without
+// draining the buffer. Used for live diagnostics panels (roadmap D01) where events
+// must not be removed from the ring buffer so file sinks and CI gates stay complete.
+class ITraceObserver {
+public:
+    virtual ~ITraceObserver() = default;
+    virtual void onTraceEvent(const TraceEvent& event) noexcept = 0;
+};
+
 // Bounded multi-producer/single-consumer ring buffer. Events are produced by several threads
 // (the coordinator worker and, for media-layer events, each per-source decode worker) and
 // consumed later by a single export thread. Producers serialize briefly on the queue lock for a
@@ -190,6 +200,7 @@ public:
     static PlaybackTrace& instance() noexcept;
 
     void installSink(ITraceSink* sink) noexcept;
+    void installObserver(ITraceObserver* observer) noexcept;
     [[nodiscard]] bool enabled() const noexcept;
 
     // Enables recording with the given monotonic time source (microseconds since an arbitrary
@@ -212,6 +223,8 @@ private:
     PlaybackTrace() = default;
 
     std::atomic<Clock> now_{nullptr};
+    mutable std::shared_mutex observerMutex_;
+    ITraceObserver* observer_ = nullptr;
     PlaybackTraceBuffer buffer_;
 };
 

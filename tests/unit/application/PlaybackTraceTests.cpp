@@ -277,4 +277,41 @@ TEST_F(PlaybackTraceSingletonTests,
     EXPECT_EQ(sink.events.front().payload, 2U);
 }
 
+class RecordingTraceObserver final : public ITraceObserver {
+public:
+    void onTraceEvent(const TraceEvent& event) noexcept override {
+        events.push_back(event);
+    }
+
+    std::vector<TraceEvent> events;
+};
+
+TEST_F(PlaybackTraceSingletonTests, PassiveObserverReceivesEventsWithoutDrainingTheBuffer) {
+    PlaybackTrace& trace = PlaybackTrace::instance();
+    trace.installSink(&sink);
+    trace.enable(fixedTraceTime);
+
+    RecordingTraceObserver observer;
+    trace.installObserver(&observer);
+
+    trace.record(TraceEventKind::CacheHit, TraceIdentity{}, 10U);
+    trace.record(TraceEventKind::FrameSetReady, TraceIdentity{}, 20U);
+
+    ASSERT_EQ(observer.events.size(), 2U);
+    EXPECT_EQ(observer.events[0].kind, TraceEventKind::CacheHit);
+    EXPECT_EQ(observer.events[0].payload, 10U);
+    EXPECT_EQ(observer.events[1].kind, TraceEventKind::FrameSetReady);
+    EXPECT_EQ(observer.events[1].payload, 20U);
+
+    // Buffer and sink remain unaffected (not drained by observer)
+    EXPECT_EQ(trace.drainToSink(), 2U);
+    EXPECT_EQ(sink.events.size(), 2U);
+
+    // After unregistering observer, subsequent events are no longer delivered to it
+    trace.installObserver(nullptr);
+    trace.record(TraceEventKind::CacheHit, TraceIdentity{}, 30U);
+    EXPECT_EQ(observer.events.size(), 2U);
+    EXPECT_EQ(trace.drainToSink(), 1U);
+}
+
 } // namespace dvs::application

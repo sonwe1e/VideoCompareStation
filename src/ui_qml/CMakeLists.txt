@@ -72,6 +72,7 @@ if(DVS_BUILD_ADAPTERS)
             include/dvs/ui/Sam2Segmenter.h
             include/dvs/ui/StartupMilestone.h
             include/dvs/ui/StartupSplash.h
+            include/dvs/ui/TimingDiagnosticsController.h
             src/ComparisonExportController.cpp
             src/DesktopApplication.cpp
             src/DiagnosticsProbe.cpp
@@ -89,6 +90,7 @@ if(DVS_BUILD_ADAPTERS)
             src/Sam2Segmenter.cpp
             src/StartupMilestone.cpp
             src/StartupSplash.cpp
+            src/TimingDiagnosticsController.cpp
     )
     add_library(dvs::ui_d3d11_bridge ALIAS dvs_ui_d3d11_bridge)
 

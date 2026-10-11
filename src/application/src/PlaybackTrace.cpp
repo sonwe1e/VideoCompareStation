@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <shared_mutex>
 
 namespace dvs::application {
 
@@ -121,6 +122,14 @@ void PlaybackTrace::installSink(ITraceSink* sink) noexcept {
     buffer_.setSink(sink);
 }
 
+void PlaybackTrace::installObserver(ITraceObserver* const observer) noexcept {
+    std::unique_lock lock(observerMutex_);
+    observer_ = observer;
+    if (observer_ != nullptr && now_.load(std::memory_order_acquire) == nullptr) {
+        enable(traceNowMicroseconds);
+    }
+}
+
 bool PlaybackTrace::enabled() const noexcept {
     return now_.load(std::memory_order_acquire) != nullptr;
 }
@@ -149,6 +158,11 @@ void PlaybackTrace::record(const TraceEventKind kind,
         .incoming = incoming,
     };
     static_cast<void>(buffer_.record(event));
+
+    std::shared_lock lock(observerMutex_);
+    if (observer_ != nullptr) {
+        observer_->onTraceEvent(event);
+    }
 }
 
 std::size_t PlaybackTrace::drain(TraceEvent* out, const std::size_t max) noexcept {
@@ -165,6 +179,10 @@ std::uint64_t PlaybackTrace::overflowCount() const noexcept {
 
 void PlaybackTrace::reset() noexcept {
     disable();
+    {
+        std::unique_lock lock(observerMutex_);
+        observer_ = nullptr;
+    }
     buffer_.reset();
 }
 

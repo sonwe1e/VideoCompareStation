@@ -20,6 +20,7 @@
 #include "dvs/ui/SampleExportController.h"
 #include "dvs/ui/StartupMilestone.h"
 #include "dvs/ui/StartupSplash.h"
+#include "dvs/ui/TimingDiagnosticsController.h"
 #include "dvs/ui/VideoFolderModel.h"
 
 #include <QCoreApplication>
@@ -386,6 +387,9 @@ public:
         diagnosticsProbe_ = std::make_unique<DiagnosticsProbe>();
         engine->rootContext()->setContextProperty(QStringLiteral("dvsDiagnostics"),
                                                   diagnosticsProbe_.get());
+        timingDiagnostics_ = std::make_unique<TimingDiagnosticsController>();
+        engine->rootContext()->setContextProperty(QStringLiteral("timingDiagnostics"),
+                                                  timingDiagnostics_.get());
         const QMetaObject::Connection warningConnection = QObject::connect(
             engine.get(),
             &QQmlEngine::warnings,
@@ -1013,6 +1017,7 @@ private:
     std::unique_ptr<SampleExportController> sampleExport_;
     std::unique_ptr<ImageEditController> imageEdit_;
     std::unique_ptr<DiagnosticsProbe> diagnosticsProbe_;
+    std::unique_ptr<TimingDiagnosticsController> timingDiagnostics_;
     QQuickWindow* window_ = nullptr;
     ComparisonSurface* surface_ = nullptr;
     double activeScreenRefreshRate_ = 0.0;

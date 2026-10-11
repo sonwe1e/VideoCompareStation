@@ -46,6 +46,7 @@ target_sources(dvs_ui_component_tests PRIVATE
     InterpolationProtocolControllerTests.cpp
     IssueLogControllerTests.cpp
     PairMetricsThresholdReuseTests.cpp
+    TimingDiagnosticsControllerTests.cpp
 )
 target_include_directories(
     dvs_ui_component_tests PRIVATE "${PROJECT_SOURCE_DIR}/src/media_ffmpeg/src"

@@ -65,6 +65,7 @@ struct PresentationStatisticsCapability final {
         PresentationStatisticsMediaStatus::kMediaUnknown;
     bool frameStatisticsUsable = false;
     bool mediaStatisticsUsable = false;
+    bool isIndirectDisplayPath = false;
     std::optional<PresentationStatisticsDriverKind> driverKind;
     std::string technicalDetail;
     std::string evidenceScope{std::string_view{kProbeEvidenceScope}};

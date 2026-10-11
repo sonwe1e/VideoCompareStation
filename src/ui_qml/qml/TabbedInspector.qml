@@ -17,6 +17,9 @@ Rectangle {
     // V-07 pair-metrics projection from the composition root; optional so standalone QML
     // tests (no metrics service) keep instantiating the inspector without warnings.
     property var metrics: null
+    // D01 timing diagnostics projection from the composition root; optional so standalone QML
+    // tests keep instantiating the inspector without warnings.
+    property var timingDiagnostics: null
     required property var session
     required property color borderColor
     required property color primaryTextColor
@@ -854,6 +857,190 @@ Rectangle {
                             wrapMode: Text.WordWrap
                             text: qsTr("时间轴上未显示其余 %1 个对齐标记。").arg(Number(control.controller.alignmentTimelineMarkerOverflowCount))
                             color: Theme.warning
+                        }
+
+                        // 呈现时序与卡顿诊断 (D01 / M2)
+                        Rectangle {
+                            id: timingCard
+                            objectName: "timingDiagnosticsCard"
+                            visible: Boolean(control.timingDiagnostics)
+                            width: parent.width
+                            height: timingCol.implicitHeight + 20
+                            radius: 8
+                            color: Theme.panelElevated
+                            border.color: Theme.border
+                            border.width: 1
+
+                            Column {
+                                id: timingCol
+                                width: parent.width - 20
+                                x: 10
+                                y: 10
+                                spacing: 8
+
+                                RowLayout {
+                                    width: parent.width
+                                    spacing: 6
+
+                                    Label {
+                                        text: qsTr("呈现时序与卡顿诊断")
+                                        color: control.primaryTextColor
+                                        font.pixelSize: 13
+                                        font.weight: Font.DemiBold
+                                        Layout.fillWidth: true
+                                    }
+
+                                    Rectangle {
+                                        id: liveBadge
+                                        objectName: "timingLiveBadge"
+                                        implicitWidth: liveText.implicitWidth + 10
+                                        implicitHeight: 18
+                                        radius: 4
+                                        color: control.timingDiagnostics && control.timingDiagnostics.hasActivePlayback ? Theme.successPanel : Theme.control
+                                        border.width: 1
+                                        border.color: control.timingDiagnostics && control.timingDiagnostics.hasActivePlayback ? Theme.successBorder : Theme.controlBorder
+
+                                        Text {
+                                            id: liveText
+                                            anchors.centerIn: parent
+                                            text: control.timingDiagnostics && control.timingDiagnostics.hasActivePlayback ? qsTr("实时采样") : qsTr("就绪")
+                                            color: control.timingDiagnostics && control.timingDiagnostics.hasActivePlayback ? Theme.success : control.mutedTextColor
+                                            font.pixelSize: 10
+                                            font.bold: true
+                                        }
+                                    }
+                                }
+
+                                // 间接显示驱动警示横幅
+                                Rectangle {
+                                    id: indirectWarningBanner
+                                    objectName: "timingIndirectWarningBanner"
+                                    visible: Boolean(control.timingDiagnostics && control.timingDiagnostics.isIndirectDisplayWarning)
+                                    width: parent.width
+                                    height: indirectWarningCol.implicitHeight + 12
+                                    radius: 4
+                                    color: Theme.warningPanel
+                                    border.width: 1
+                                    border.color: Theme.warningBorder
+
+                                    Column {
+                                        id: indirectWarningCol
+                                        width: parent.width - 12
+                                        x: 6
+                                        y: 6
+                                        spacing: 2
+
+                                        Text {
+                                            text: qsTr("⚠️ 间接显示驱动环境")
+                                            color: Theme.warningText
+                                            font.pixelSize: 11
+                                            font.bold: true
+                                        }
+
+                                        Text {
+                                            width: parent.width
+                                            wrapMode: Text.WordWrap
+                                            text: qsTr("检测到虚拟屏/远控环境，系统呈现垂直同步未确认。耗时反映应用调度与提交。")
+                                            color: Theme.warningText
+                                            font.pixelSize: 10
+                                        }
+                                    }
+                                }
+
+                                // 丢帧统计行
+                                RowLayout {
+                                    width: parent.width
+
+                                    Text {
+                                        text: qsTr("丢帧统计 (跳帧集)")
+                                        color: control.mutedTextColor
+                                        font.pixelSize: 11
+                                        Layout.fillWidth: true
+                                    }
+
+                                    Rectangle {
+                                        objectName: "timingDroppedFramesBadge"
+                                        implicitWidth: dropCountText.implicitWidth + 12
+                                        implicitHeight: 18
+                                        radius: 4
+                                        color: (control.timingDiagnostics && control.timingDiagnostics.skippedFrameSetCount > 0) ? Theme.warningPanel : Theme.successPanel
+                                        border.width: 1
+                                        border.color: (control.timingDiagnostics && control.timingDiagnostics.skippedFrameSetCount > 0) ? Theme.warningBorder : Theme.successBorder
+
+                                        Text {
+                                            id: dropCountText
+                                            anchors.centerIn: parent
+                                            text: (control.timingDiagnostics && control.timingDiagnostics.skippedFrameSetCount > 0) ? qsTr("%1 帧集跳帧").arg(Number(control.timingDiagnostics.skippedFrameSetCount)) : qsTr("0 跳帧 (平稳)")
+                                            color: (control.timingDiagnostics && control.timingDiagnostics.skippedFrameSetCount > 0) ? Theme.warningText : Theme.success
+                                            font.pixelSize: 10
+                                            font.bold: true
+                                        }
+                                    }
+                                }
+
+                                // 耗时指标网格 (解码、调度、绘制至 ACK)
+                                GridLayout {
+                                    width: parent.width
+                                    columns: 2
+                                    columnSpacing: 10
+                                    rowSpacing: 4
+
+                                    Text {
+                                        text: qsTr("解码耗时 P95 / Max:")
+                                        color: control.mutedTextColor
+                                        font.pixelSize: 11
+                                    }
+                                    Text {
+                                        Layout.alignment: Qt.AlignRight
+                                        text: control.timingDiagnostics ? qsTr("%1 / %2 ms").arg(control.timingDiagnostics.decodeLatencyP95Ms.toFixed(1)).arg(control.timingDiagnostics.decodeLatencyMaxMs.toFixed(1)) : "—"
+                                        color: control.primaryTextColor
+                                        font.pixelSize: 11
+                                    }
+
+                                    Text {
+                                        text: qsTr("渲染调度 P95 / Max:")
+                                        color: control.mutedTextColor
+                                        font.pixelSize: 11
+                                    }
+                                    Text {
+                                        Layout.alignment: Qt.AlignRight
+                                        text: control.timingDiagnostics ? qsTr("%1 / %2 ms").arg(control.timingDiagnostics.renderScheduleP95Ms.toFixed(1)).arg(control.timingDiagnostics.renderScheduleMaxMs.toFixed(1)) : "—"
+                                        color: control.primaryTextColor
+                                        font.pixelSize: 11
+                                    }
+
+                                    Text {
+                                        text: qsTr("绘制提交至确认:")
+                                        color: control.mutedTextColor
+                                        font.pixelSize: 11
+                                    }
+                                    Text {
+                                        Layout.alignment: Qt.AlignRight
+                                        text: control.timingDiagnostics ? qsTr("%1 / %2 ms").arg(control.timingDiagnostics.drawToAckP95Ms.toFixed(1)).arg(control.timingDiagnostics.drawToAckMaxMs.toFixed(1)) : "—"
+                                        color: control.primaryTextColor
+                                        font.pixelSize: 11
+                                    }
+                                }
+
+                                // 驱动与呈现状态
+                                RowLayout {
+                                    width: parent.width
+
+                                    Text {
+                                        text: qsTr("呈现状态 / 驱动:")
+                                        color: control.mutedTextColor
+                                        font.pixelSize: 11
+                                        Layout.fillWidth: true
+                                    }
+
+                                    Text {
+                                        text: control.timingDiagnostics ? qsTr("%1 (%2)").arg(control.timingDiagnostics.systemPresentationStatus).arg(control.timingDiagnostics.driverKind) : "—"
+                                        color: control.mutedTextColor
+                                        font.pixelSize: 11
+                                        elide: Text.ElideRight
+                                    }
+                                }
+                            }
                         }
                     }
                 }

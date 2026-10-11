@@ -3354,6 +3354,7 @@ ApplicationWindow {
         controller: root.controller
         preferences: root.preferences
         metrics: root.pairMetricsModel
+        timingDiagnostics: typeof timingDiagnostics !== "undefined" ? timingDiagnostics : null
         session: root.shell
         borderColor: root.borderColor
         primaryTextColor: root.primaryTextColor

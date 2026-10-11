@@ -358,9 +358,11 @@ private:
 
         if (highestPresentCount == 0U) {
             capability.status = PresentationStatisticsStatus::kUnknown;
+            capability.isIndirectDisplayPath = true;
             capability.technicalDetail =
                 "GetFrameStatistics succeeded but PresentCount never advanced after the probe's "
-                "own presents; the counters are not usable evidence.";
+                "own presents; the counters are not usable evidence (indirect display or virtual "
+                "screen).";
         } else {
             capability.status = PresentationStatisticsStatus::kStatisticsDisjoint;
             capability.technicalDetail =
@@ -378,6 +380,15 @@ private:
         DXGI_FRAME_STATISTICS_MEDIA statistics{};
         const HRESULT result = mediaChain_->GetFrameStatisticsMedia(&statistics);
         if (SUCCEEDED(result)) {
+            if (statistics.PresentCount == 0U) {
+                capability.mediaStatus = PresentationStatisticsMediaStatus::kMediaUnsupported;
+                capability.mediaStatisticsUsable = false;
+                capability.isIndirectDisplayPath = true;
+                capability.technicalDetail += " GetFrameStatisticsMedia succeeded but PresentCount "
+                                              "remained 0 (indirect display "
+                                              "or unconfirmed presentation path).";
+                return;
+            }
             capability.mediaStatus = PresentationStatisticsMediaStatus::kMediaAvailable;
             capability.mediaStatisticsUsable = true;
             capability.technicalDetail += " GetFrameStatisticsMedia composition mode " +
