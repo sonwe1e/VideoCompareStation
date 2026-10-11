@@ -335,16 +335,20 @@ TEST_F(PlaybackTraceSingletonTests, ObserverGateStopsDispatchWithoutTouchingBuff
     trace.record(TraceEventKind::CacheHit, TraceIdentity{}, 20U);
     trace.record(TraceEventKind::FrameSetReady, TraceIdentity{}, 21U);
     EXPECT_EQ(observer.events.size(), 1U);
-    // The gated events stayed in the ring and the sink still received them.
+    // The gated events stayed in the ring and the sink still received them. The sink count is
+    // cumulative: the baseline drain above already delivered one event, so two more deliveries
+    // make three and the final record makes four (39989de fixed the drain counts but left the
+    // sink counts as if the baseline had never been delivered; the suite was red on a clean
+    // 104d474 checkout because of exactly this off-by-one).
     EXPECT_EQ(trace.drainToSink(), 2U);
-    EXPECT_EQ(sink.events.size(), 2U);
+    EXPECT_EQ(sink.events.size(), 3U);
 
     trace.setObserverEnabled(true);
     trace.record(TraceEventKind::CacheHit, TraceIdentity{}, 30U);
     EXPECT_EQ(observer.events.size(), 2U);
     EXPECT_EQ(observer.events.back().payload, 30U);
     EXPECT_EQ(trace.drainToSink(), 1U);
-    EXPECT_EQ(sink.events.size(), 3U);
+    EXPECT_EQ(sink.events.size(), 4U);
 }
 
 // E02: reset() restores the gate default so a paused consumer cannot leak its state into the
