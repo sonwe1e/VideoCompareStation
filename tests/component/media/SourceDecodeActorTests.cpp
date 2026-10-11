@@ -765,5 +765,53 @@ TEST(SourceDecodeActorTests, BackendStatusReportsSourceCacheOccupancyAndEviction
     EXPECT_EQ(smallCacheActor.backendStatus().cacheHitCount, 1U);
 }
 
+// E03 源解码 P50/P95/P99: the backend status must expose nearest-rank decode-duration
+// percentiles over the actor's bounded sample reservoir, ordered p50 <= p95 <= p99 <= max and
+// consistent with the completed decode count. A freshly opened actor that has decoded nothing
+// reports zeros for all of them: unmeasured, never a fabricated zero-latency reading.
+TEST(SourceDecodeActorTests, BackendStatusReportsDecodeLatencyPercentiles) {
+    platform::FrameBudget budget{16U * 1024U * 1024U};
+    std::atomic<bool> interrupted = false;
+    std::atomic<bool> canceled = false;
+    SourceDecodeActor actor{0U, descriptor("h264_a_320x180_30fps_12.mp4"), budget, &interrupted};
+    ASSERT_TRUE(actor.open(canceled));
+
+    const media::DecoderBackendStatus beforeAnyDecode = actor.backendStatus();
+    EXPECT_EQ(beforeAnyDecode.completedDecodeCount, 0U);
+    EXPECT_EQ(beforeAnyDecode.decodeP50Microseconds, 0U);
+    EXPECT_EQ(beforeAnyDecode.decodeP95Microseconds, 0U);
+    EXPECT_EQ(beforeAnyDecode.decodeP99Microseconds, 0U);
+    EXPECT_EQ(beforeAnyDecode.decodeLatencyTruncatedSamples, 0U);
+
+    const auto decodeExact = [&](const std::int64_t frame) {
+        SourceDecodeSubmission submitted = actor.submit(SourceDecodeRequest{
+            .frameId = domain::FrameId{frame},
+            .priority = SourceDecodePriority::Exact,
+            .cancellationRequested = std::shared_ptr<const std::atomic<bool>>(
+                &canceled, [](const std::atomic<bool>*) noexcept {}),
+        });
+        ASSERT_EQ(submitted.status, application::PortSubmitResult::Accepted);
+        const domain::Result<DecodedFrame> decoded = submitted.completion.get();
+        ASSERT_TRUE(decoded) << decoded.error().technicalDetail;
+    };
+    for (const std::int64_t frame : {11, 10, 9, 8, 7, 6, 5}) {
+        decodeExact(frame);
+    }
+
+    const media::DecoderBackendStatus after = actor.backendStatus();
+    ASSERT_EQ(after.completedDecodeCount, 7U);
+    // Nearest-rank percentiles of the measured decode durations are monotone with the exact
+    // maximum. With 7 samples the 95th and 99th nearest ranks are both the 7th smallest sample,
+    // i.e. exactly the maximum - a deterministic identity that fails if the reservoir is not fed
+    // or the ranks drift. p50 must also be a real measured sample, never zero.
+    EXPECT_LE(after.decodeP50Microseconds, after.decodeP95Microseconds);
+    EXPECT_LE(after.decodeP95Microseconds, after.decodeP99Microseconds);
+    EXPECT_GT(after.decodeP50Microseconds, 0U);
+    EXPECT_GT(after.maximumDecodeMicroseconds, 0U);
+    EXPECT_EQ(after.decodeP95Microseconds, after.maximumDecodeMicroseconds);
+    EXPECT_EQ(after.decodeP99Microseconds, after.maximumDecodeMicroseconds);
+    EXPECT_EQ(after.decodeLatencyTruncatedSamples, 0U);
+}
+
 } // namespace
 } // namespace dvs::media::internal

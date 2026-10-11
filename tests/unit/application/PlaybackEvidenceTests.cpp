@@ -541,5 +541,104 @@ TEST(PlaybackEvidenceTests, ConcurrentIngestPairsEverySampleUnderTheMutex) {
     EXPECT_EQ(run.staleEventCount, 0U);
 }
 
+// E03: the latency aggregate must expose nearest-rank P50/P95/P99 so one slow hop cannot hide
+// behind an average or a single percentile. 11 samples of 100..1100 us pin all three ranks.
+TEST(PlaybackEvidenceTests, StagePercentilesAreNearestRankP50P95P99) {
+    PlaybackEvidenceCollector collector;
+    collector.ingest(
+        traceEvent(TraceEventKind::PlaybackRunStarted, 0U, 0U, coordinatorScope(1, 1, 1)));
+    for (std::uint64_t sample = 0U; sample < 11U; ++sample) {
+        // Submit-to-decode sample value: 100 * (sample + 1) microseconds.
+        const std::uint64_t submittedAt = 10'000U + sample * 10U;
+        const std::uint64_t sampleMicroseconds = 100U * (sample + 1U);
+        collector.ingest(
+            traceEvent(TraceEventKind::ProviderSubmitted, submittedAt, 0U, providerScope(1, 1)));
+        collector.ingest(traceEvent(TraceEventKind::SourceDecodeCompleted,
+                                    submittedAt + sampleMicroseconds,
+                                    500U + sample,
+                                    decodeScope(1, 1, 7U)));
+    }
+    // The open run's live snapshot must already carry the percentiles (a UI polls summary()
+    // mid-run); a value only appearing after the stop would hide in-flight degradation.
+    {
+        const PlaybackEvidenceSummary open = collector.summary();
+        ASSERT_EQ(open.runs.size(), 1U);
+        ASSERT_TRUE(open.runs.front().open);
+        const PlaybackLatencyStats& live =
+            stageStats(open.runs.front(), PlaybackEvidenceStage::kSubmitToDecodeCompleted);
+        ASSERT_EQ(live.count, 11U);
+        EXPECT_EQ(live.p50Microseconds, 600U);
+        EXPECT_EQ(live.p95Microseconds, 1'100U);
+        EXPECT_EQ(live.p99Microseconds, 1'100U);
+    }
+    collector.ingest(
+        traceEvent(TraceEventKind::PlaybackRunStopped, 100'000U, 0U, coordinatorScope(1, 1, 1)));
+
+    const PlaybackEvidenceSummary summary = collector.summary();
+    ASSERT_EQ(summary.runs.size(), 1U);
+    const PlaybackRunEvidence& run = summary.runs.front();
+    const PlaybackLatencyStats& decode =
+        stageStats(run, PlaybackEvidenceStage::kSubmitToDecodeCompleted);
+    ASSERT_EQ(decode.count, 11U);
+    EXPECT_EQ(decode.maxMicroseconds, 1'100U);
+    // Nearest rank on 11 sorted samples {100..1100}: ceil(0.50*11)=6th -> 600;
+    // ceil(0.95*11)=11th -> 1100; ceil(0.99*11)=11th -> 1100.
+    EXPECT_EQ(decode.p50Microseconds, 600U);
+    EXPECT_EQ(decode.p95Microseconds, 1'100U);
+    EXPECT_EQ(decode.p99Microseconds, 1'100U);
+    EXPECT_EQ(decode.truncatedSampleCount, 0U);
+}
+
+// E03 分层呈现: a publication with no presentation acknowledgement has no confirmed-presentation
+// evidence. The render-to-ack stage must stay unmeasured (count 0), the unfinished publication
+// must surface through the pending counter, and the summary must keep reporting the system
+// presentation layer as unknown - never a fabricated zero-latency or zero-drop reading.
+TEST(PlaybackEvidenceTests, PublishedFramesWithoutAcknowledgementKeepPresentationUnmeasured) {
+    PlaybackEvidenceCollector collector;
+    collector.ingest(
+        traceEvent(TraceEventKind::PlaybackRunStarted, 0U, 0U, coordinatorScope(1, 1, 1)));
+    for (std::uint64_t frame = 0U; frame < 3U; ++frame) {
+        const std::uint64_t base = 1'000U + frame * 100U;
+        collector.ingest(
+            traceEvent(TraceEventKind::ProviderSubmitted, base, 0U, providerScope(1, 1)));
+        collector.ingest(traceEvent(TraceEventKind::SourceDecodeCompleted,
+                                    base + 10U,
+                                    500U + frame,
+                                    decodeScope(1, 1, 7U)));
+        collector.ingest(traceEvent(
+            TraceEventKind::FrameSetReady, base + 11U, 100U + frame, coordinatorScope(1, 1, 1)));
+        collector.ingest(traceEvent(
+            TraceEventKind::RenderPublished, base + 12U, 100U + frame, coordinatorScope(1, 1, 1)));
+        // Draw and renderer-side ack exist, but the coordinator never received the presentation
+        // acknowledgement for these frames.
+        collector.ingest(traceEvent(
+            TraceEventKind::RenderDrawStarted, base + 20U, 100U + frame, TraceIdentity{}));
+        collector.ingest(traceEvent(
+            TraceEventKind::RenderAckPublished, base + 25U, 100U + frame, TraceIdentity{}));
+    }
+    collector.ingest(
+        traceEvent(TraceEventKind::PlaybackRunStopped, 2'000U, 0U, coordinatorScope(1, 1, 1)));
+
+    const PlaybackEvidenceSummary summary = collector.summary();
+    ASSERT_EQ(summary.runs.size(), 1U);
+    const PlaybackRunEvidence& run = summary.runs.front();
+    ASSERT_FALSE(run.open);
+    // Publish happened (frame ids advanced), so the pipeline demonstrably ran...
+    const PlaybackLatencyStats& schedule = stageStats(run, PlaybackEvidenceStage::kRenderSchedule);
+    EXPECT_EQ(schedule.count, 3U);
+    // ...but the confirmed-presentation hop never closed: zero completed pairs, all percentiles
+    // at zero because nothing was measured, and the publications still pending.
+    const PlaybackLatencyStats& presentation =
+        stageStats(run, PlaybackEvidenceStage::kRenderToPresentationAck);
+    EXPECT_EQ(presentation.count, 0U);
+    EXPECT_EQ(presentation.p50Microseconds, 0U);
+    EXPECT_EQ(presentation.p95Microseconds, 0U);
+    EXPECT_EQ(presentation.p99Microseconds, 0U);
+    EXPECT_EQ(presentation.maxMicroseconds, 0U);
+    EXPECT_EQ(run.pendingPublicationCount, 3U);
+    // The swap-chain / physical present layer stays unknown, not zero.
+    EXPECT_EQ(summary.systemPresentationStatus, PlaybackEvidenceFieldStatus::kUnknown);
+}
+
 } // namespace
 } // namespace dvs::application

@@ -1,6 +1,6 @@
 # 视觉审查问题台账
 
-更新：2026-10-11（任务化模式入口 V03／统一源入口与比较选择 V02／长按正反向走带 E04／缓存小步改进 E05／启动减负 E01／诊断可关闭 E02／全画布候选直看 P05／图片编辑纯操作 P11／协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-10-11（原速播放指标与调度守恒 E03／任务化模式入口 V03／统一源入口与比较选择 V02／长按正反向走带 E04／缓存小步改进 E05／启动减负 E01／诊断可关闭 E02／全画布候选直看 P05／图片编辑纯操作 P11／协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
 
 ## 2026-10-11 任务化模式入口 V03
@@ -83,6 +83,60 @@
 - **回退**：还原 CompareModeBar 焦点组为静态 A/B/GT 三按钮、ActiveSourceStrip 恢复点击=选择与
   DragHandler、Main.qml 移除 toggleDirectLook/替换接线即回到旧行为；`pairLabel` 字段多余数据
   无行为影响，可独立保留。
+
+## 2026-10-11 原速播放指标与调度守恒 E03
+
+- **范围**：《CompareStation 下一步体验与性能计划 2026-10-11》§4 E03（P0），§2.2/§2.3/§8。
+  目标是回答"原速吗、哪一层慢、是否损失了完整帧组"，不是给一个平均 FPS。
+- **现状核对（不改写已满足的行为）**：唯一 canonical 媒体时钟已存在——`playbackDue`/
+  `playbackTargetAt` 从 canonical 时间轴（RationalRate 或 FrameTimeline，即 PTS/时间基的运行时
+  形态）推导计划位置，无"每路 sleep 16ms"式协调；"原速观看 vs 完整帧审查"两口径已存在为
+  `PlaybackContinuityPolicy::RealTime`（允许整组追赶、如实计 skip）与 `ReviewEveryFrame`（不跳组、
+  时基滑移）。本单只补测量与命名落地，未改调度语义。
+- **交付**：
+  - 稳态实际速率：运行内"稳态段"累积 Σ媒体时间/Σ墙钟。段从（锚帧，墙锚）起算、终于该段最后一次
+    commit 的（帧，墙时刻），循环接缝、restart-from-end、倍速重锚前先封段；暂停后到最后 commit 的
+    停留墙钟不进分母；<200ms 的碎片整段丢弃（`playbackRunSteadySegmentCount` 为样本数，0=未测量
+    而非速率 0）。倍速变化重置累积（跨请求速率的比值无单一解释）。
+  - 迟到帧组：发布时刻晚于计划呈现时刻（playbackDue）的完整帧组计数（run 级 + 会话级），与
+    skip（从未发布的整组）分开归因；计划→发布时延 P50/P95/P99/最大值按最近秩百分位采样
+    （提前发布计 0 延迟=准备余量，非负时延）。
+  - 单一 reservoir 实现（`PlaybackLatencyReservoir`，application 公共头）：PlaybackEvidence 各跳、
+    协调器计划→发布、SourceDecodeActor 解码耗时（`DecoderBackendStatus` 新增 decode_p50/p95/p99/
+    truncated）共用同一最近秩定义与"截断保大"截断口径；`PlaybackLatencyStats` 增 P50/P99。
+  - 分层呈现口径：计划时间（canonical 边界）、已发布时间（RenderPublished）、可确认层=应用呈现
+    ACK（PresentationAcknowledged）；交换链/系统呈现无每帧证据→报告 `timing_scope=application_ack`、
+    `system_presentation=unknown`，不写零丢帧（PlaybackEvidence 的 kUnknown 语义原样保留）。
+  - `Main.cpp` 性能报告新增 `play` 对象（§8.4 示意的落点）：mode（continuity 策略名）、speed_ratio
+    （未测量时字符串 "unknown"）、steady_media_us/steady_wall_us/steady_segments、frame_sets_skipped
+    （run+lifetime）、late_frame_sets（run+lifetime）、presented_frames、plan_to_publish_*、
+    input_response_ms（复用 play→playing 既有 UI 响应测量点，无则 unknown）、gpu_memory_bytes=
+    unknown（无真实采样来源，不编造）。缓存摘要复用 E05 frameset_cache_*/cache_*/reverse_window_*
+    键，per_source_decode 增 decode_p50/p95/p99/truncated。
+  - 60/59.94/VFR：速率计算全部经 RationalRate（60000/1001 非整数微秒帧距）或 FrameTimeline（逐帧
+    非均匀间隔）推导，测试分别覆盖；显示器重复刷新不参与任何"源内容重复"判断（无此概念路径）。
+- **测试（application 单元 + media 组件，注入时钟/假解码）**：`PlaybackCoordinatorTests` +6：
+  CFR60 精确比值 1.0（媒体=墙钟=100000µs 整）、59.94 非整数时间基、16 点不规则 VFR、循环接缝+
+  暂停停留排除（2 段精确折叠、+5s 停留不进分母）、迟到组归因（40ms 持有→late=1/skip=0/
+  p50=p95=p99=max=40000）、追赶下 late 与 skip 并存（skip=10 且 late=1）。`PlaybackEvidenceTests`
+  +2：最近秩 P50/P95/P99（开段与闭段两路径）、无 ACK 证据时呈现层保持未测量（count=0 +
+  pending=3 + systemPresentation=kUnknown，不显示 0）。`MultiSourceFrameProviderTests` +1：连续两次
+  带偏移请求的发布帧组中每个源都恰在其映射帧（1 路新鲜+2 路旧帧不可能以成功发布）。
+  `SourceDecodeActorTests` +1：解码 P50/P95/P99 最近秩（7 样本 p95=p99=max 恒等式、未解码全零）。
+- **变异证据**：9 组改坏→红→还原，日志 `out/verification/e03-mutations/`（百分位秩取整改 floor、
+  稳态段终点改 now()（5s 停留泄漏）、接缝不封段、准时发布计迟到、计划→发布不采样、快照不复制
+  新字段、映射偏移 +1、解码不采样、开段百分位不终化）。
+- **既有套件**：全量 475/475（application/media/domain/presentation，隔离 worktree dev preset）。
+  另发现基线 104d474 上 `PlaybackTraceSingletonTests.ObserverGateStopsDispatch...` 因 39989de 的
+  sink 计数算术自身矛盾而必红（干净基线复现），以独立小提交把两处 sink 期望修正为累加口径
+  （1+2=3、3+1=4）；红→绿输出在 e03-mutations/ 目录。
+- **UNVERIFIED（真机项，不宣称）**：真实 5 分钟三源 1080p60 稳态（speed_ratio 1.00±1%、零额外整组
+  跳过、D3D11VA、物理屏）未跑；59.94/长 GOP/10bit 扩展素材未跑；`play` 对象的真实 GUI 运行输出
+  （性能 harness 需要真机窗口）未验证——报告键是接线完成但运行时读数 UNVERIFIED；GUI 输入→
+  画面变化的光子级时延无测量点，按口径写 unknown。
+- **回退**：删除 `PlaybackLatencyReservoir.h`、还原 PlaybackEvidence/SessionSnapshot/
+  PlaybackCoordinator/SourceDecodeActor/DecoderBackend/Main.cpp/ReviewRuntime 即可；无调度语义、
+  trace schema、GPU 后端、QML 改动。`PlaybackLatencyStats` 新增字段为尾部追加，序列化兼容。
 
 ## 2026-10-11 长按正反向走带 E04 与缓存小步改进 E05
 

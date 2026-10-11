@@ -386,6 +386,8 @@ void SourceDecodeActor::run() noexcept { // NOLINT(bugprone-exception-escape): a
                     cacheHitCount_ = 0U;
                     totalDecodeMicroseconds_ = 0U;
                     maximumDecodeMicroseconds_ = 0U;
+                    decodeLatencyReservoir_.reset();
+                    decodeLatencyStats_ = application::PlaybackLatencyStats{};
                     reverseWindowHitCount_ = 0U;
                     reverseWindowBuildCount_ = 0U;
                     reverseWindowBuiltFrameCount_ = 0U;
@@ -430,6 +432,10 @@ void SourceDecodeActor::run() noexcept { // NOLINT(bugprone-exception-escape): a
             ++completedDecodeCount_;
             totalDecodeMicroseconds_ += decodeMicroseconds;
             maximumDecodeMicroseconds_ = std::max(maximumDecodeMicroseconds_, decodeMicroseconds);
+            // E03: decode-duration sample for the per-source percentile fields. Sorted insert
+            // into a bounded reservoir stays nanosecond-scale next to the decode it measures.
+            decodeLatencyReservoir_.add(decodeMicroseconds, decodeLatencyStats_);
+            decodeLatencyReservoir_.finalizeStats(decodeLatencyStats_);
             backendStatus_ = media::DecoderBackendStatus{
                 .sourceId = sourceId_,
                 .backend = decoder_->backend(),
@@ -450,6 +456,10 @@ void SourceDecodeActor::run() noexcept { // NOLINT(bugprone-exception-escape): a
                 .cacheEvictCount = cache_.evictionCount(),
                 .cacheEntryCount = cache_.entryCount(),
                 .cacheRetainedBytes = cache_.retainedBytes(),
+                .decodeP50Microseconds = decodeLatencyStats_.p50Microseconds,
+                .decodeP95Microseconds = decodeLatencyStats_.p95Microseconds,
+                .decodeP99Microseconds = decodeLatencyStats_.p99Microseconds,
+                .decodeLatencyTruncatedSamples = decodeLatencyStats_.truncatedSampleCount,
             };
         };
         const auto refreshReverseMetrics = [this] {

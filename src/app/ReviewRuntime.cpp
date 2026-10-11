@@ -426,6 +426,11 @@ public:
                               : std::vector<media::DecoderBackendStatus>{};
     }
 
+    [[nodiscard]] std::shared_ptr<const application::SessionSnapshot> sessionSnapshot() const {
+        return coordinator_ ? coordinator_->snapshot()
+                            : std::shared_ptr<const application::SessionSnapshot>{};
+    }
+
     [[nodiscard]] media::MediaProbeStatistics mediaProbeStatistics() const noexcept {
         return mediaProbe_ ? mediaProbe_->statistics() : media::MediaProbeStatistics{};
     }
@@ -695,6 +700,10 @@ bool ReviewRuntime::attachSurface(ui::ComparisonSurface& surface) noexcept {
 
 std::vector<media::DecoderBackendStatus> ReviewRuntime::decoderBackendStatuses() const {
     return impl_ ? impl_->decoderBackendStatuses() : std::vector<media::DecoderBackendStatus>{};
+}
+
+std::shared_ptr<const application::SessionSnapshot> ReviewRuntime::sessionSnapshot() const {
+    return impl_ ? impl_->sessionSnapshot() : std::shared_ptr<const application::SessionSnapshot>{};
 }
 
 media::MediaProbeStatistics ReviewRuntime::mediaProbeStatistics() const noexcept {

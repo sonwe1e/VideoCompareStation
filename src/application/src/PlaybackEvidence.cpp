@@ -1,51 +1,13 @@
 #include "dvs/application/PlaybackEvidence.h"
 
+#include "dvs/application/PlaybackLatencyReservoir.h"
+
 #include <algorithm>
 #include <deque>
 #include <optional>
 
 namespace dvs::application {
 namespace {
-
-// Sorted-ascending percentile reservoir for one stage. Keeps the kMaxStageSamplesPerRun
-// largest samples once full: count and max stay exact for every sample, while the percentile
-// is exact below the cap and biased upward beyond it (the conservative direction for stall
-// diagnosis, documented on PlaybackLatencyStats).
-class StageReservoir final {
-public:
-    explicit StageReservoir(const std::size_t capacity) : capacity_(capacity) {}
-
-    void add(const std::uint64_t sample, PlaybackLatencyStats& stats) {
-        stats.count += 1U;
-        stats.maxMicroseconds = std::max(stats.maxMicroseconds, sample);
-        if (samples_.size() < capacity_) {
-            samples_.insert(std::lower_bound(samples_.begin(), samples_.end(), sample), sample);
-            return;
-        }
-        // The reservoir is full: exactly one sample stays outside it. Evicting the smallest
-        // keeps the percentile biased upward rather than downward under truncation.
-        stats.truncatedSampleCount += 1U;
-        if (sample <= samples_.front()) {
-            return;
-        }
-        samples_.erase(samples_.begin());
-        samples_.insert(std::lower_bound(samples_.begin(), samples_.end(), sample), sample);
-    }
-
-    // Nearest-rank 95th percentile: the ceil(0.95 * n)-th smallest sample.
-    [[nodiscard]] std::uint64_t p95() const {
-        if (samples_.empty()) {
-            return 0U;
-        }
-        const std::size_t rank = static_cast<std::size_t>((95U * samples_.size() + 99U) / 100U);
-        const std::size_t index = std::min(rank, samples_.size()) - 1U;
-        return samples_[index];
-    }
-
-private:
-    std::size_t capacity_;
-    std::vector<std::uint64_t> samples_;
-};
 
 [[nodiscard]] bool sameScope(const TraceIdentity& identity,
                              const domain::SessionId session,
@@ -127,12 +89,12 @@ struct PlaybackEvidenceCollector::RunState final {
     std::optional<std::uint64_t> latestDecodeCompletion;
     std::optional<std::uint64_t> lastPublishedFrame;
 
-    std::array<StageReservoir, kPlaybackEvidenceStageCount> reservoirs{
-        StageReservoir{kMaxStageSamplesPerRun},
-        StageReservoir{kMaxStageSamplesPerRun},
-        StageReservoir{kMaxStageSamplesPerRun},
-        StageReservoir{kMaxStageSamplesPerRun},
-        StageReservoir{kMaxStageSamplesPerRun},
+    std::array<PlaybackLatencyReservoir, kPlaybackEvidenceStageCount> reservoirs{
+        PlaybackLatencyReservoir{kMaxStageSamplesPerRun},
+        PlaybackLatencyReservoir{kMaxStageSamplesPerRun},
+        PlaybackLatencyReservoir{kMaxStageSamplesPerRun},
+        PlaybackLatencyReservoir{kMaxStageSamplesPerRun},
+        PlaybackLatencyReservoir{kMaxStageSamplesPerRun},
     };
 
     explicit RunState(const TraceEvent& start) {
@@ -387,7 +349,7 @@ PlaybackEvidenceSummary PlaybackEvidenceCollector::summary() const {
 
     PlaybackRunEvidence live = activeRun_->evidence;
     for (std::size_t stage = 0U; stage < kPlaybackEvidenceStageCount; ++stage) {
-        live.stages[stage].p95Microseconds = activeRun_->reservoirs[stage].p95();
+        activeRun_->reservoirs[stage].finalizeStats(live.stages[stage]);
     }
     live.pendingProviderSubmitCount = activeRun_->providerSubmits.size();
     live.pendingSourceDecodeCount = activeRun_->decodeStarts.size();
@@ -414,7 +376,7 @@ void PlaybackEvidenceCollector::closeActiveRun(const std::uint64_t stoppedAtMicr
     run.evidence.open = false;
     run.evidence.stoppedAtMicroseconds = stoppedAtMicroseconds;
     for (std::size_t stage = 0U; stage < kPlaybackEvidenceStageCount; ++stage) {
-        run.evidence.stages[stage].p95Microseconds = run.reservoirs[stage].p95();
+        run.reservoirs[stage].finalizeStats(run.evidence.stages[stage]);
     }
     run.evidence.pendingProviderSubmitCount = run.providerSubmits.size();
     run.evidence.pendingSourceDecodeCount = run.decodeStarts.size();

@@ -2,6 +2,7 @@
 
 #include "dvs/application/AlignmentCacheIdentity.h"
 #include "dvs/application/FrameMapping.h"
+#include "dvs/application/PlaybackLatencyReservoir.h"
 #include "dvs/application/PlaybackTrace.h"
 #include "dvs/application/PrefetchScheduler.h"
 #include "dvs/domain/ComparisonSelection.h"
@@ -56,6 +57,15 @@ constexpr auto kPlaybackProjectionInterval = 33ms;
 // a review tool exists to inspect. Only a stall beyond this tolerance skips complete FrameSets to
 // recover the wall-clock anchor; a sustained shortfall still accumulates past it and is caught.
 constexpr auto kPlaybackCatchUpTolerance = 2000ms;
+// E03 steady-state rate window: a steady segment shorter than this is dropped from the
+// media/wall accumulation entirely. Loop seams and catch-up restarts re-anchor the run, and a
+// fragment of one or two frames carries more seam overhead than cadence information. The §8
+// acceptance window is 60 s; dropping sub-second fragments does not touch it.
+constexpr auto kPlaybackSteadySegmentMinimumWall = 200ms;
+// E03 planned-to-published lateness samples per Play interval. Same order as the evidence
+// collector's stage reservoirs; beyond the cap only the largest samples are kept (percentiles
+// bias upward, never downward).
+constexpr std::size_t kPlaybackPlanToPublishSamplesPerRun = 4096U;
 // A held forward step presents every intermediate frame, so the user input target may lead the
 // displayed frame by this many frames before the stream reports Busy. This is an input lookahead
 // bound, not a decoder cache size: the provider still keeps 1 current + 1 prepared in flight and
@@ -465,6 +475,12 @@ private:
         std::optional<domain::FrameId> cadenceTarget;
         std::optional<PendingPlaybackFrame> frame;
         std::optional<PendingPlaybackFrame> preparedFrame;
+        // E03 steady-segment tail: the most recent frame this run committed (published +
+        // presented + timer cancelled) and the wall instant of that commit. A steady segment is
+        // measured from the run anchor pair to this pair, so dwell time after the last commit
+        // (pause pressed seconds later, loop seam handling) never enters the wall total.
+        std::optional<domain::FrameId> lastCommittedFrame;
+        std::optional<std::chrono::steady_clock::time_point> lastCommitWall;
         bool restartFromEnd = false;
         bool pauseRequested = false;
         // Snapshot of session playback-range authority at run start (updated live by
@@ -778,6 +794,20 @@ private:
         state_.playbackSkippedFrameSets = playbackSkippedFrameSets_;
         state_.playbackRunSkippedFrameSets = playbackRunSkippedFrameSets_;
         state_.playbackRunPresentedFrames = playbackRunPresentedFrames_;
+        // E03 run accounting. Copied from the surviving members so a snapshot taken after the
+        // run ended still reports the finished interval; zero segment count means unmeasured.
+        state_.playbackLateFrameSets = playbackLateFrameSets_;
+        state_.playbackRunLateFrameSets = playbackRunLateFrameSets_;
+        state_.playbackRunSteadyMediaMicroseconds = playbackRunSteadyMediaMicroseconds_;
+        state_.playbackRunSteadyWallMicroseconds = playbackRunSteadyWallMicroseconds_;
+        state_.playbackRunSteadySegmentCount = playbackRunSteadySegmentCount_;
+        state_.playbackRunSteadySpeedRatio =
+            playbackRunSteadyWallMicroseconds_ == 0U
+                ? 0.0
+                : static_cast<double>(playbackRunSteadyMediaMicroseconds_) /
+                      static_cast<double>(playbackRunSteadyWallMicroseconds_);
+        playbackRunPlanToPublishReservoir_.finalizeStats(playbackRunPlanToPublish_);
+        state_.playbackRunPlanToPublishLatency = playbackRunPlanToPublish_;
         updatePlaybackPresentationMetrics();
         state_.activeComparisonPair = activeComparisonPair_;
         state_.playbackRangeIn =
@@ -1131,6 +1161,9 @@ private:
         if (!playbackRun_.has_value()) {
             return;
         }
+        // E03: the run is ending (pause, seek, session change, failure); fold the final steady
+        // segment in before the run state moves. Run-scoped accounting members survive below.
+        closeSteadyPlaybackSegment();
         PlaybackRun stopped = std::move(*playbackRun_);
         playbackRun_.reset();
         lastPlaybackProjectionAt_.reset();
@@ -1794,6 +1827,76 @@ private:
         }
     }
 
+    // E03: closes the current steady segment (run anchor pair -> last committed pair) and folds
+    // it into the run's steady media/wall totals. Called before every anchor re-assignment (loop
+    // seam, restart-from-end, rate change) and at every run teardown point. Because the segment
+    // ends at the last commit, dwell time between that commit and the seam/stop never enters the
+    // wall total; fragments below kPlaybackSteadySegmentMinimumWall are dropped whole.
+    void closeSteadyPlaybackSegment() {
+        if (!playbackRun_.has_value()) {
+            return;
+        }
+        const PlaybackRun& run = *playbackRun_;
+        if (!run.lastCommitWall.has_value() || !run.lastCommittedFrame.has_value() ||
+            !canonicalTimeline_.has_value()) {
+            return;
+        }
+        const auto mediaStart =
+            domain::canonicalFrameStartTime(*canonicalTimeline_, run.anchorFrame);
+        const auto mediaEnd =
+            domain::canonicalFrameStartTime(*canonicalTimeline_, *run.lastCommittedFrame);
+        if (!mediaStart || !mediaEnd) {
+            return;
+        }
+        const auto mediaDelta = detail::checkedSubtract(mediaEnd.value().microseconds(),
+                                                        mediaStart.value().microseconds());
+        if (!mediaDelta.has_value()) {
+            return;
+        }
+        const auto wallDelta = std::chrono::duration_cast<std::chrono::microseconds>(
+            *run.lastCommitWall - run.wallAnchor);
+        if (*mediaDelta < 0 || wallDelta < kPlaybackSteadySegmentMinimumWall) {
+            return;
+        }
+        playbackRunSteadyMediaMicroseconds_ += static_cast<std::uint64_t>(*mediaDelta);
+        playbackRunSteadyWallMicroseconds_ += static_cast<std::uint64_t>(wallDelta.count());
+        playbackRunSteadySegmentCount_ += 1U;
+    }
+
+    // E03: samples the planned-to-published lateness of one frame set at its publication instant.
+    // The planned instant is the canonical boundary from playbackDue (the only schedule
+    // authority). Publication inside the preparation lead clamps to zero - lead margin, not
+    // negative latency. A set published past its plan is additionally counted in the late
+    // counters. An unrepresentable due records no sample: unknown, never a fabricated zero.
+    void notePlaybackPlanToPublishLatency(const domain::FrameId frame) {
+        if (!playbackRun_.has_value()) {
+            return;
+        }
+        const auto due = playbackDue(frame);
+        if (!due.has_value()) {
+            return;
+        }
+        const auto lateness = std::chrono::duration_cast<std::chrono::microseconds>(
+            dependencies_.clock->now() - *due);
+        const std::int64_t latenessMicroseconds = std::max<std::int64_t>(0, lateness.count());
+        if (latenessMicroseconds > 0) {
+            playbackLateFrameSets_ += 1U;
+            playbackRunLateFrameSets_ += 1U;
+        }
+        playbackRunPlanToPublishReservoir_.add(static_cast<std::uint64_t>(latenessMicroseconds),
+                                               playbackRunPlanToPublish_);
+    }
+
+    // E03: resets the run-scoped accounting at PlaybackRun start (mirrors the skip counters).
+    void resetPlaybackRunAccounting() noexcept {
+        playbackRunLateFrameSets_ = 0U;
+        playbackRunSteadyMediaMicroseconds_ = 0U;
+        playbackRunSteadyWallMicroseconds_ = 0U;
+        playbackRunSteadySegmentCount_ = 0U;
+        playbackRunPlanToPublishReservoir_.reset();
+        playbackRunPlanToPublish_ = PlaybackLatencyStats{};
+    }
+
     [[nodiscard]] bool activatePlaybackTarget(const domain::FrameId target) {
         if (!playbackRun_.has_value() || playbackRun_->frame.has_value()) {
             return false;
@@ -1995,6 +2098,7 @@ private:
         };
         playbackRunSkippedFrameSets_ = 0U;
         playbackRunPresentedFrames_ = 0U;
+        resetPlaybackRunAccounting();
         lastPlaybackProjectionAt_ = playbackRun_->wallAnchor;
         state_.lastError.reset();
         emitTrace(TraceEventKind::PlaybackRunStarted,
@@ -2035,6 +2139,13 @@ private:
             completeCommand(command.context, CommandOutcome::Succeeded);
             return;
         }
+        // E03: the re-anchor opens a new steady segment, and media/wall totals across two
+        // requested speeds have no single interpretation, so the accumulation restarts whole.
+        // Close against the OLD anchor before it is rewritten below.
+        closeSteadyPlaybackSegment();
+        playbackRunSteadyMediaMicroseconds_ = 0U;
+        playbackRunSteadyWallMicroseconds_ = 0U;
+        playbackRunSteadySegmentCount_ = 0U;
         playbackRun_->speed = command.speed;
         playbackRun_->anchorFrame = *state_.displayedFrame;
         playbackRun_->wallAnchor = dependencies_.clock->now();
@@ -3599,6 +3710,9 @@ private:
         emitTrace(TraceEventKind::RenderPublished,
                   makeTraceIdentity(),
                   static_cast<std::uint64_t>(frame.set->canonicalFrameId().value()));
+        // E03: publication is the moment the complete FrameSet left the coordinator; sample its
+        // lateness against the planned boundary before the commit path continues.
+        notePlaybackPlanToPublishLatency(frame.expectedFrame);
         commitPlaybackFrameIfComplete();
     }
 
@@ -3633,6 +3747,10 @@ private:
         // Coverage for this run: this frame completed publish + present + timer, so every per-run
         // counter now has at least one real sample behind it.
         ++playbackRunPresentedFrames_;
+        // E03 steady-segment tail: recorded before any seam handling below so a seam close reads
+        // the finished segment's last committed pair.
+        playbackRun_->lastCommittedFrame = displayedFrame;
+        playbackRun_->lastCommitWall = dependencies_.clock->now();
         state_.displayedFrame = displayedFrame;
         state_.requestedFrame.reset();
         state_.lastError.reset();
@@ -3651,6 +3769,9 @@ private:
                     playbackRun_->completedLoops += 1U;
                     playbackRangeCompletedLoops_ = playbackRun_->completedLoops;
                     playbackRun_->restartFromEnd = false;
+                    // E03: the loop seam closes the finished steady segment before re-anchoring
+                    // so the seam instant belongs to neither segment's wall total.
+                    closeSteadyPlaybackSegment();
                     playbackRun_->anchorFrame = range.inInclusive;
                     playbackRun_->firstTarget = range.inInclusive;
                     playbackRun_->nextMinimum = range.inInclusive;
@@ -3662,6 +3783,7 @@ private:
                 if (playbackRun_->preparedFrame.has_value()) {
                     dependencies_.directFrameProvider->cancel(playbackRun_->providerContext);
                 }
+                closeSteadyPlaybackSegment();
                 emitTrace(TraceEventKind::PlaybackRunStopped,
                           makeTraceIdentity(),
                           static_cast<std::uint64_t>(displayedFrame.value()));
@@ -3677,6 +3799,7 @@ private:
             if (playbackRun_->preparedFrame.has_value()) {
                 dependencies_.directFrameProvider->cancel(playbackRun_->providerContext);
             }
+            closeSteadyPlaybackSegment();
             emitTrace(TraceEventKind::PlaybackRunStopped,
                       makeTraceIdentity(),
                       static_cast<std::uint64_t>(displayedFrame.value()));
@@ -3693,6 +3816,8 @@ private:
             // frame 0 of a restart-from-end just committed: re-anchor on the absolute canonical
             // timeline at frame 0 and continue from frame 1.
             playbackRun_->restartFromEnd = false;
+            // E03: the wrap to frame 0 is a seam; close the finished segment first.
+            closeSteadyPlaybackSegment();
             playbackRun_->anchorFrame = domain::FrameId{0};
             playbackRun_->firstTarget = domain::FrameId{1};
             playbackRun_->nextMinimum = domain::FrameId{1};
@@ -4675,6 +4800,17 @@ private:
     std::uint64_t playbackRunSkippedFrameSets_ = 0U;
     // Frames this run finished presenting; the coverage signal behind "未测量 vs 零缺陷".
     std::uint64_t playbackRunPresentedFrames_ = 0U;
+    // E03 run accounting: published-later-than-planned sets and the steady media/wall totals.
+    // Run-scoped values survive run teardown (like the skip counters) so a snapshot taken after
+    // pause still reports the finished interval; they reset when the next PlaybackRun starts.
+    std::uint64_t playbackLateFrameSets_ = 0U;
+    std::uint64_t playbackRunLateFrameSets_ = 0U;
+    std::uint64_t playbackRunSteadyMediaMicroseconds_ = 0U;
+    std::uint64_t playbackRunSteadyWallMicroseconds_ = 0U;
+    std::uint64_t playbackRunSteadySegmentCount_ = 0U;
+    PlaybackLatencyReservoir playbackRunPlanToPublishReservoir_{
+        kPlaybackPlanToPublishSamplesPerRun};
+    PlaybackLatencyStats playbackRunPlanToPublish_;
     // C-02: session pair + preference policy used to re-resolve after topology changes.
     domain::DefaultPairPolicy activePairPolicy_ = domain::DefaultPairPolicy::PreserveIfAvailable;
     // D06: monotonic playback-run id stamped on TraceIdentity.run for the whole PlaybackRun.

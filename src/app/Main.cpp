@@ -3,6 +3,7 @@
 #endif
 
 #include "dvs/application/PlaybackTrace.h"
+#include "dvs/application/SessionSnapshot.h"
 #include "dvs/media/StillImageDecoder.h"
 #include "dvs/persistence/InterpolationProtocolRepository.h"
 #include "dvs/platform/ProcessTelemetry.h"
@@ -1144,6 +1145,9 @@ runDesktop(int& argc,
     std::vector<qint64> warmStepMilliseconds;
     std::vector<dvs::media::DecoderBackendStatus> playbackBackends;
     dvs::platform::GpuTransferStatistics playbackTransfer;
+    // E03: the coordinator snapshot taken once the playback interval has paused, so the report
+    // can state the finished run's speed-ratio/skip/late accounting rather than only live rates.
+    std::shared_ptr<const dvs::application::SessionSnapshot> playbackAccounting;
     std::optional<dvs::ui::RenderAckRelayStatistics> playbackRelayBaseline;
     std::optional<dvs::ui::RenderAckRelayStatistics> playbackRelayEnd;
     std::size_t seekIndex = 0U;
@@ -1531,6 +1535,7 @@ runDesktop(int& argc,
             }
             playbackBackends = runtime->decoderBackendStatuses();
             playbackTransfer = runtime->transferStatistics();
+            playbackAccounting = runtime->sessionSnapshot();
             if (controller.totalFrames() < 100U) {
                 fail("insufficient-frames-for-seek-sampling");
                 return;
@@ -1993,6 +1998,61 @@ runDesktop(int& argc,
     addNumber(QStringLiteral("frameset_cache_entries"), provider.frameSetCacheEntries);
     addNumber(QStringLiteral("frameset_cache_bytes"), provider.frameSetCacheRetainedBytes);
 
+    // E03 playback accounting summary (plan §8.4 PLAY line): one object that answers "was it
+    // real speed, which layer slipped, were complete frame sets lost" instead of a bare FPS
+    // number. All values come from the coordinator snapshot taken after the interval paused;
+    // timing_scope names the strongest presentation evidence this process can prove (the
+    // application acknowledgement). The swap-chain / physical present layers have no wired
+    // per-frame evidence, so they stay "unknown" rather than being reported as zero drops.
+    {
+        QJsonObject play;
+        const auto addPlayNumber = [&play](const QString& key, const auto value) {
+            play.insert(key, static_cast<qint64>(value));
+        };
+        const dvs::application::SessionSnapshot emptyAccounting;
+        const dvs::application::SessionSnapshot& accounting =
+            playbackAccounting != nullptr ? *playbackAccounting : emptyAccounting;
+        const std::string_view modeName =
+            dvs::domain::playbackContinuityPolicyName(accounting.playbackContinuityPolicyEffective);
+        play.insert(QStringLiteral("mode"),
+                    QString::fromUtf8(modeName.data(), static_cast<qsizetype>(modeName.size())));
+        play.insert(QStringLiteral("speed_ratio"),
+                    accounting.playbackRunSteadySegmentCount == 0U
+                        ? QStringLiteral("unknown")
+                        : QString::number(accounting.playbackRunSteadySpeedRatio, 'f', 4));
+        addPlayNumber(QStringLiteral("steady_media_us"),
+                      accounting.playbackRunSteadyMediaMicroseconds);
+        addPlayNumber(QStringLiteral("steady_wall_us"),
+                      accounting.playbackRunSteadyWallMicroseconds);
+        addPlayNumber(QStringLiteral("steady_segments"), accounting.playbackRunSteadySegmentCount);
+        addPlayNumber(QStringLiteral("frame_sets_skipped"), accounting.playbackRunSkippedFrameSets);
+        addPlayNumber(QStringLiteral("frame_sets_skipped_lifetime"),
+                      accounting.playbackSkippedFrameSets);
+        addPlayNumber(QStringLiteral("late_frame_sets"), accounting.playbackRunLateFrameSets);
+        addPlayNumber(QStringLiteral("late_frame_sets_lifetime"), accounting.playbackLateFrameSets);
+        addPlayNumber(QStringLiteral("presented_frames"), accounting.playbackRunPresentedFrames);
+        addPlayNumber(QStringLiteral("plan_to_publish_p50_us"),
+                      accounting.playbackRunPlanToPublishLatency.p50Microseconds);
+        addPlayNumber(QStringLiteral("plan_to_publish_p95_us"),
+                      accounting.playbackRunPlanToPublishLatency.p95Microseconds);
+        addPlayNumber(QStringLiteral("plan_to_publish_p99_us"),
+                      accounting.playbackRunPlanToPublishLatency.p99Microseconds);
+        addPlayNumber(QStringLiteral("plan_to_publish_maximum_us"),
+                      accounting.playbackRunPlanToPublishLatency.maxMicroseconds);
+        addPlayNumber(QStringLiteral("plan_to_publish_samples"),
+                      accounting.playbackRunPlanToPublishLatency.count);
+        addPlayNumber(QStringLiteral("plan_to_publish_truncated_samples"),
+                      accounting.playbackRunPlanToPublishLatency.truncatedSampleCount);
+        play.insert(QStringLiteral("timing_scope"), QStringLiteral("application_ack"));
+        play.insert(QStringLiteral("system_presentation"), QStringLiteral("unknown"));
+        play.insert(QStringLiteral("gpu_memory_bytes"), QStringLiteral("unknown"));
+        play.insert(QStringLiteral("input_response_ms"),
+                    metrics.playbackResponseMilliseconds >= 0
+                        ? QString::number(metrics.playbackResponseMilliseconds)
+                        : QStringLiteral("unknown"));
+        report.insert(QStringLiteral("play"), play);
+    }
+
     QJsonArray sourceDecode;
     for (std::size_t index = 0U; index < playbackBackends.size(); ++index) {
         const auto& backend = playbackBackends[index];
@@ -2026,6 +2086,13 @@ runDesktop(int& argc,
                                      : backend.totalDecodeMicroseconds /
                                            backend.completedDecodeCount)},
             {QStringLiteral("maximum_us"), static_cast<double>(backend.maximumDecodeMicroseconds)},
+            // E03 source-decode P50/P95/P99 (nearest-rank, µs) over the actor's bounded sample
+            // reservoir; truncated counts samples beyond the reservoir, not dropped silently.
+            {QStringLiteral("decode_p50_us"), static_cast<double>(backend.decodeP50Microseconds)},
+            {QStringLiteral("decode_p95_us"), static_cast<double>(backend.decodeP95Microseconds)},
+            {QStringLiteral("decode_p99_us"), static_cast<double>(backend.decodeP99Microseconds)},
+            {QStringLiteral("decode_truncated_samples"),
+             static_cast<double>(backend.decodeLatencyTruncatedSamples)},
         });
     }
     report.insert(QStringLiteral("per_source_decode"), sourceDecode);

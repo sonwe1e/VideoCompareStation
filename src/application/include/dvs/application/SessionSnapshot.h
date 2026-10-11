@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dvs/application/FrameSet.h"
+#include "dvs/application/PlaybackEvidence.h"
 #include "dvs/application/RequestContext.h"
 #include "dvs/domain/ComparisonSelection.h"
 #include "dvs/domain/CompatibilityReport.h"
@@ -100,6 +101,34 @@ struct SessionSnapshot final {
     // True while the real-time policy is actively skipping whole FrameSets to recover the
     // wall-clock anchor. Always false under ReviewEveryFrame.
     bool playbackCatchingUp = false;
+    // E03 (原速播放指标): complete FrameSets published to the renderer later than their planned
+    // presentation time (playbackDue). Distinct from skips: a late set was still published whole;
+    // a skipped set never existed. Late counts exist even under ReviewEveryFrame, where the
+    // cadence deliberately slips instead of skipping.
+    std::uint64_t playbackLateFrameSets = 0U;
+    // Same counter scoped to the current Play interval (reset when a PlaybackRun starts).
+    std::uint64_t playbackRunLateFrameSets = 0U;
+    // E03 steady-state rate accounting. The canonical media clock is the only schedule authority;
+    // the ratio below compares media progress against wall progress over the run's steady
+    // segments. A segment opens at the run anchor (or a loop/restart re-anchor) and closes at the
+    // last committed frame of that segment, so explicit pause dwell after the last frame, scrub
+    // (run boundary) and loop seams never inflate the wall total. Segments shorter than the
+    // coordinator's minimum are dropped entirely; playbackRunSteadySegmentCount is the sample
+    // count, so 0 means "not measured", never "ratio is exactly zero".
+    std::uint64_t playbackRunSteadyMediaMicroseconds = 0U;
+    std::uint64_t playbackRunSteadyWallMicroseconds = 0U;
+    std::uint64_t playbackRunSteadySegmentCount = 0U;
+    // media-µs per wall-µs over the steady segments (1.0 = exactly the requested cadence at 1x).
+    // 0.0 while unmeasured. A speed change resets the accumulation because summing across two
+    // requested speeds has no single interpretation.
+    double playbackRunSteadySpeedRatio = 0.0;
+    // E03 planned-to-published frame-set lateness: per published set, how far the application's
+    // publish instant (RenderPublished) sat past the planned presentation instant derived from
+    // the source PTS/time base. Samples are clamped at zero (publishing inside the preparation
+    // lead is lead margin, not negative latency). This is the application layer only: the
+    // confirmed presentation layer is the presentation acknowledgement, and the swap-chain /
+    // physical present layers stay unknown in this contract (PlaybackEvidence statuses).
+    PlaybackLatencyStats playbackRunPlanToPublishLatency;
     // C-02: session comparison pair as stable source identities; projected to DifferenceEdge
     // only at the renderer boundary.
     std::optional<domain::ComparisonPair> activeComparisonPair;

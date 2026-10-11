@@ -4491,6 +4491,618 @@ TEST(PlaybackCoordinatorTests, ReviewEveryFrameNeverSkipsUnderLoadAndReportsGrow
 }
 
 // ---------------------------------------------------------------------------
+// E03 原速播放指标: steady speed ratio over 60/59.94/VFR time bases, loop-seam and
+// pause-dwell exclusion, and late/skip attribution.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Opens a two-source CFR session whose canonical timeline uses an exact rational rate (60000/1001
+// for 59.94) and drives it to Ready with frame 0 presented. openReady() only builds integer-fps
+// descriptors; the E03 rate tests need the non-integer time base.
+void openReadyWithRate(const std::shared_ptr<PlaybackCoordinator>& coordinator,
+                       const std::shared_ptr<FakeFrameProvider>& provider,
+                       const std::shared_ptr<FakeRenderChannel>& render,
+                       const domain::RationalRate& rate,
+                       const std::int64_t frameCount = 12) {
+    domain::MediaDescriptor descriptorA =
+        makeDescriptor("a.mp4", domain::MediaExtent{.width = 320, .height = 180}, frameCount);
+    domain::MediaDescriptor descriptorB =
+        makeDescriptor("b.mp4", domain::MediaExtent{.width = 160, .height = 90}, frameCount);
+    descriptorA.frameRate = rate;
+    descriptorB.frameRate = rate;
+    const std::shared_ptr<const SessionSnapshot> initial = coordinator->snapshot();
+    ASSERT_NE(initial, nullptr);
+    ASSERT_EQ(coordinator->submit(OpenDirectComparisonCommand{
+                  .context =
+                      CommandContext{
+                          .sessionId = initial->sessionId,
+                          .sessionEpoch = initial->sessionEpoch,
+                          .commandId = domain::CommandId{1},
+                      },
+                  .sources =
+                      {
+                          domain::ComparisonSource{
+                              .id = 0,
+                              .role = domain::ComparisonRole::kPrediction,
+                              .descriptor = descriptorA,
+                              .displayName = "a",
+                          },
+                          domain::ComparisonSource{
+                              .id = 1,
+                              .role = domain::ComparisonRole::kPrediction,
+                              .descriptor = descriptorB,
+                              .displayName = "b",
+                          },
+                      },
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_TRUE(provider->waitForOpenRequestCount(1U));
+    const std::optional<FrameProviderOpenRequest> open = provider->openRequest();
+    ASSERT_TRUE(open.has_value());
+    ASSERT_TRUE(provider->postOpenSucceeded(*open));
+
+    ASSERT_TRUE(provider->waitForFrameRequestCount(1U));
+    const std::optional<FrameRequest> frame = provider->frameRequest(0U);
+    ASSERT_TRUE(frame.has_value());
+    ASSERT_EQ(frame->frameId, domain::FrameId{0});
+    ASSERT_TRUE(provider->postFrameReady(*frame, makeFrameSet(frame->frameId)));
+    ASSERT_TRUE(render->waitForPublishedCount(1U));
+    ASSERT_TRUE(provider->postFrameSucceeded(*frame));
+    presentPublished(coordinator, render, 0U);
+    const std::vector<CommandTerminal> terminals = waitForTerminals(coordinator, 1U);
+    ASSERT_EQ(terminals.size(), 1U);
+    EXPECT_EQ(terminals.front().outcome, CommandOutcome::Succeeded);
+}
+
+[[nodiscard]] std::optional<FrameRequest>
+findFrameRequestFor(const std::shared_ptr<FakeFrameProvider>& provider,
+                    const domain::FrameId frameId) {
+    // Latest match: a loop pass re-requests the same frame id under a fresh context; the newest
+    // request is the one whose FrameSetReady will be accepted by the live run.
+    for (std::size_t index = provider->frameRequestCount(); index > 0U; --index) {
+        const std::optional<FrameRequest> request = provider->frameRequest(index - 1U);
+        if (request.has_value() && request->frameId == frameId) {
+            return request;
+        }
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::size_t countFrameRequestsFor(const std::shared_ptr<FakeFrameProvider>& provider,
+                                                const domain::FrameId frameId) {
+    std::size_t count = 0U;
+    for (std::size_t index = 0U; index < provider->frameRequestCount(); ++index) {
+        const std::optional<FrameRequest> request = provider->frameRequest(index);
+        if (request.has_value() && request->frameId == frameId) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+// One step of deterministic steady playback: fire the cadence for `frame`, then deliver and
+// present the set exactly at its planned canonical boundary so media and wall advance by the
+// same interval. `cadenceIndex` is the schedule-table index of this frame's cadence timer
+// (schedule 2i-1 for the i-th played frame; schedule 0 is the presentation deadline).
+void deliverSteadyFrameAtBoundary(const std::shared_ptr<PlaybackCoordinator>& coordinator,
+                                  const std::shared_ptr<FakeFrameProvider>& provider,
+                                  const std::shared_ptr<FakeRenderChannel>& render,
+                                  const std::shared_ptr<FakeSteadyClock>& clock,
+                                  const std::shared_ptr<FakeDeadlineScheduler>& scheduler,
+                                  const std::chrono::steady_clock::time_point& wallAnchor,
+                                  const std::int64_t plannedMicroseconds,
+                                  const std::int64_t frame,
+                                  const std::size_t cadenceIndex) {
+    ASSERT_TRUE(scheduler->waitForScheduleCount(cadenceIndex + 1U));
+    const std::optional<DeadlineRequest> cadence = scheduler->request(cadenceIndex);
+    ASSERT_TRUE(cadence.has_value());
+    clock->set(cadence->due);
+    ASSERT_TRUE(scheduler->fire(cadenceIndex));
+    ASSERT_TRUE(waitUntil([&provider, frame] {
+        return findFrameRequestFor(provider, domain::FrameId{frame}).has_value();
+    }));
+    const std::optional<FrameRequest> request =
+        findFrameRequestFor(provider, domain::FrameId{frame});
+    ASSERT_TRUE(request.has_value());
+    clock->set(wallAnchor + std::chrono::microseconds{plannedMicroseconds});
+    ASSERT_TRUE(provider->postFrameReady(*request, makeFrameSet(request->frameId)));
+    ASSERT_TRUE(render->waitForPublishedCount(static_cast<std::size_t>(frame) + 1U));
+    presentPublished(coordinator, render, static_cast<std::size_t>(frame));
+    ASSERT_TRUE(provider->postFrameSucceeded(*request));
+    ASSERT_TRUE(waitUntil([&coordinator, frame] {
+        return coordinator->snapshot()->displayedFrame == domain::FrameId{frame};
+    }));
+}
+
+[[nodiscard]] std::int64_t rateStartTimeMicroseconds(const domain::RationalRate& rate,
+                                                     const std::int64_t frame) {
+    const auto start = rate.frameStartTime(domain::FrameId{frame});
+    EXPECT_TRUE(start.hasValue());
+    return start.value().microseconds();
+}
+
+} // namespace
+
+TEST(PlaybackCoordinatorTests, SteadySpeedRatioTracksCfr60PlaybackExactly) {
+    const auto scheduler = std::make_shared<FakeDeadlineScheduler>();
+    const auto clock = std::make_shared<FakeSteadyClock>();
+    const auto probe = std::make_shared<FakeMediaProbe>();
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator = makeCoordinator(provider, render, probe, scheduler, clock);
+    markGraphicsReady(coordinator, domain::DeviceGeneration{1});
+    const auto rate = domain::RationalRate::create(60, 1);
+    ASSERT_TRUE(rate.hasValue());
+    openReadyWithRate(coordinator, provider, render, rate.value(), 24);
+
+    // wallAnchor is the clock reading at Play processing; the clock is not advanced between this
+    // read and the terminal, so the anchor is exactly this instant.
+    const std::chrono::steady_clock::time_point wallAnchor = clock->now();
+    const std::shared_ptr<const SessionSnapshot> ready = coordinator->snapshot();
+    ASSERT_EQ(coordinator->submit(PlayCommand{
+                  .context =
+                      CommandContext{
+                          .sessionId = ready->sessionId,
+                          .sessionEpoch = ready->sessionEpoch,
+                          .commandId = domain::CommandId{2},
+                      },
+              }),
+              PortSubmitResult::Accepted);
+    EXPECT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+
+    // 13 frames at 60 fps = 216.7 ms of media, past the 200 ms steady-segment minimum.
+    constexpr std::int64_t kLastFrame = 13;
+    for (std::int64_t frame = 1; frame <= kLastFrame; ++frame) {
+        deliverSteadyFrameAtBoundary(coordinator,
+                                     provider,
+                                     render,
+                                     clock,
+                                     scheduler,
+                                     wallAnchor,
+                                     rateStartTimeMicroseconds(rate.value(), frame),
+                                     frame,
+                                     static_cast<std::size_t>(2 * frame - 1));
+    }
+
+    // Pause while the successor request is in flight (not yet published): the run stops without
+    // another commit, so the final steady segment is [play anchor, frame 6 commit].
+    ASSERT_EQ(coordinator->submit(PauseCommand{
+                  .context = commandContext(coordinator, domain::CommandId{3}),
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_TRUE(waitUntil([&coordinator] {
+        return coordinator->snapshot()->playbackState == domain::PlaybackState::kPaused;
+    }));
+
+    const std::shared_ptr<const SessionSnapshot> after = coordinator->snapshot();
+    ASSERT_EQ(after->displayedFrame, domain::FrameId{kLastFrame});
+    // Commits happened exactly at the planned boundaries, so media and wall advanced by the same
+    // 100000 us and the ratio is exactly 1.0 - the E03 answer to "原速吗" for a 60 fps source.
+    const std::int64_t expectedMicroseconds = rateStartTimeMicroseconds(rate.value(), kLastFrame);
+    EXPECT_EQ(after->playbackRunSteadySegmentCount, 1U);
+    EXPECT_EQ(after->playbackRunSteadyMediaMicroseconds,
+              static_cast<std::uint64_t>(expectedMicroseconds));
+    EXPECT_EQ(after->playbackRunSteadyWallMicroseconds,
+              static_cast<std::uint64_t>(expectedMicroseconds));
+    EXPECT_DOUBLE_EQ(after->playbackRunSteadySpeedRatio, 1.0);
+    EXPECT_EQ(after->playbackRunPresentedFrames, static_cast<std::uint64_t>(kLastFrame));
+    // Publication inside the preparation lead or exactly at the boundary is lead margin, never a
+    // late set; the planned-to-publish samples exist (coverage) and are all zero lateness.
+    EXPECT_EQ(after->playbackRunLateFrameSets, 0U);
+    EXPECT_EQ(after->playbackLateFrameSets, 0U);
+    EXPECT_EQ(after->playbackRunPlanToPublishLatency.count, static_cast<std::uint64_t>(kLastFrame));
+    EXPECT_EQ(after->playbackRunPlanToPublishLatency.p50Microseconds, 0U);
+    EXPECT_EQ(after->playbackRunPlanToPublishLatency.p95Microseconds, 0U);
+    EXPECT_EQ(after->playbackRunPlanToPublishLatency.p99Microseconds, 0U);
+    EXPECT_EQ(after->playbackRunPlanToPublishLatency.maxMicroseconds, 0U);
+    EXPECT_EQ(after->playbackRunSkippedFrameSets, 0U);
+}
+
+TEST(PlaybackCoordinatorTests, SteadySpeedRatioHandlesNonIntegerTimebase5994) {
+    const auto scheduler = std::make_shared<FakeDeadlineScheduler>();
+    const auto clock = std::make_shared<FakeSteadyClock>();
+    const auto probe = std::make_shared<FakeMediaProbe>();
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator = makeCoordinator(provider, render, probe, scheduler, clock);
+    markGraphicsReady(coordinator, domain::DeviceGeneration{1});
+    // 59.94 = 60000/1001: frame boundaries are 16683.33... us, never an integer number of
+    // microseconds per frame. The rate must come from the rational time base, not from integer
+    // frame counting.
+    const auto rate = domain::RationalRate::create(60000, 1001);
+    ASSERT_TRUE(rate.hasValue());
+    openReadyWithRate(coordinator, provider, render, rate.value(), 24);
+
+    const std::chrono::steady_clock::time_point wallAnchor = clock->now();
+    const std::shared_ptr<const SessionSnapshot> ready = coordinator->snapshot();
+    ASSERT_EQ(coordinator->submit(PlayCommand{
+                  .context =
+                      CommandContext{
+                          .sessionId = ready->sessionId,
+                          .sessionEpoch = ready->sessionEpoch,
+                          .commandId = domain::CommandId{2},
+                      },
+              }),
+              PortSubmitResult::Accepted);
+    EXPECT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+
+    // 13 frames at 59.94 = 216.9 ms of media, past the 200 ms steady-segment minimum.
+    constexpr std::int64_t kLastFrame = 13;
+    for (std::int64_t frame = 1; frame <= kLastFrame; ++frame) {
+        deliverSteadyFrameAtBoundary(coordinator,
+                                     provider,
+                                     render,
+                                     clock,
+                                     scheduler,
+                                     wallAnchor,
+                                     rateStartTimeMicroseconds(rate.value(), frame),
+                                     frame,
+                                     static_cast<std::size_t>(2 * frame - 1));
+    }
+    ASSERT_EQ(coordinator->submit(PauseCommand{
+                  .context = commandContext(coordinator, domain::CommandId{3}),
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_TRUE(waitUntil([&coordinator] {
+        return coordinator->snapshot()->playbackState == domain::PlaybackState::kPaused;
+    }));
+
+    const std::shared_ptr<const SessionSnapshot> after = coordinator->snapshot();
+    ASSERT_EQ(after->displayedFrame, domain::FrameId{kLastFrame});
+    const std::int64_t expectedMicroseconds = rateStartTimeMicroseconds(rate.value(), kLastFrame);
+    EXPECT_EQ(after->playbackRunSteadySegmentCount, 1U);
+    EXPECT_EQ(after->playbackRunSteadyMediaMicroseconds,
+              static_cast<std::uint64_t>(expectedMicroseconds));
+    EXPECT_EQ(after->playbackRunSteadyWallMicroseconds,
+              static_cast<std::uint64_t>(expectedMicroseconds));
+    EXPECT_DOUBLE_EQ(after->playbackRunSteadySpeedRatio, 1.0);
+}
+
+TEST(PlaybackCoordinatorTests, SteadySpeedRatioFollowsNonuniformVfrTimeline) {
+    const auto scheduler = std::make_shared<FakeDeadlineScheduler>();
+    const auto clock = std::make_shared<FakeSteadyClock>();
+    const auto probe = std::make_shared<FakeMediaProbe>();
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator = makeCoordinator(provider, render, probe, scheduler, clock);
+
+    // A longer VFR timeline: irregular intervals (10/40/19.8/30/20/50/... ms) totalling 459.8 ms
+    // so the played span passes the 200 ms steady-segment minimum while every single interval
+    // stays non-uniform. The rate must come from the timeline per frame, not from an average.
+    const std::array<domain::MediaTime, 16> kVfrPoints{
+        domain::MediaTime{0},
+        domain::MediaTime{10'000},
+        domain::MediaTime{50'000},
+        domain::MediaTime{69'800},
+        domain::MediaTime{99'800},
+        domain::MediaTime{119'800},
+        domain::MediaTime{169'800},
+        domain::MediaTime{199'800},
+        domain::MediaTime{229'800},
+        domain::MediaTime{239'800},
+        domain::MediaTime{289'800},
+        domain::MediaTime{339'800},
+        domain::MediaTime{349'800},
+        domain::MediaTime{399'800},
+        domain::MediaTime{449'800},
+        domain::MediaTime{459'800},
+    };
+    std::vector<domain::MediaTime> displayTimes(kVfrPoints.begin(), kVfrPoints.end());
+    const auto built = domain::FrameTimeline::create(std::move(displayTimes));
+    ASSERT_TRUE(built.hasValue());
+    const std::shared_ptr<const domain::FrameTimeline> timeline =
+        std::make_shared<const domain::FrameTimeline>(std::move(built).value());
+    const domain::MediaDescriptor descriptorA =
+        makeVfrDescriptor("C:/media/a.mp4",
+                          domain::MediaExtent{.width = 320, .height = 180},
+                          16,
+                          domain::MediaTime{459'800});
+    const domain::MediaDescriptor descriptorB =
+        makeDescriptor("C:/media/b.mp4", domain::MediaExtent{.width = 160, .height = 90}, 16);
+    openVfrReady(coordinator, probe, provider, render, timeline, descriptorA, descriptorB);
+    markGraphicsReady(coordinator);
+
+    const auto timelineStart = [&](const std::int64_t frame) {
+        const auto start = timeline->frameStartTime(domain::FrameId{frame});
+        EXPECT_TRUE(start.hasValue());
+        return start.value().microseconds();
+    };
+    const std::chrono::steady_clock::time_point wallAnchor = clock->now();
+    const std::shared_ptr<const SessionSnapshot> ready = coordinator->snapshot();
+    ASSERT_EQ(coordinator->submit(PlayCommand{
+                  .context =
+                      CommandContext{
+                          .sessionId = ready->sessionId,
+                          .sessionEpoch = ready->sessionEpoch,
+                          .commandId = domain::CommandId{2},
+                      },
+              }),
+              PortSubmitResult::Accepted);
+    EXPECT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+
+    for (std::int64_t frame = 1; frame <= 15; ++frame) {
+        deliverSteadyFrameAtBoundary(coordinator,
+                                     provider,
+                                     render,
+                                     clock,
+                                     scheduler,
+                                     wallAnchor,
+                                     timelineStart(frame),
+                                     frame,
+                                     static_cast<std::size_t>(2 * frame - 1));
+    }
+
+    // Frame 15 is the final canonical frame: the run auto-stops at its commit, exercising the
+    // end-of-stream teardown path of the steady accounting.
+    ASSERT_TRUE(waitUntil([&coordinator] {
+        return coordinator->snapshot()->playbackState == domain::PlaybackState::kPaused;
+    }));
+    const std::shared_ptr<const SessionSnapshot> stopped = coordinator->snapshot();
+    ASSERT_EQ(stopped->displayedFrame, domain::FrameId{15});
+    EXPECT_EQ(stopped->playbackRunSteadySegmentCount, 1U);
+    EXPECT_EQ(stopped->playbackRunSteadyMediaMicroseconds, 459'800U);
+    EXPECT_EQ(stopped->playbackRunSteadyWallMicroseconds, 459'800U);
+    EXPECT_DOUBLE_EQ(stopped->playbackRunSteadySpeedRatio, 1.0);
+    EXPECT_EQ(stopped->playbackRunPresentedFrames, 15U);
+    EXPECT_EQ(stopped->playbackRunLateFrameSets, 0U);
+}
+
+TEST(PlaybackCoordinatorTests, LoopSeamAndPauseDwellAreExcludedFromSteadySpeedRatio) {
+    const auto scheduler = std::make_shared<FakeDeadlineScheduler>();
+    const auto clock = std::make_shared<FakeSteadyClock>();
+    const auto probe = std::make_shared<FakeMediaProbe>();
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator = makeCoordinator(provider, render, probe, scheduler, clock);
+    markGraphicsReady(coordinator, domain::DeviceGeneration{1});
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate.hasValue());
+    openReadyWithRate(coordinator, provider, render, rate.value());
+    const auto timelineStart = [&rate](const std::int64_t frame) {
+        return rateStartTimeMicroseconds(rate.value(), frame);
+    };
+
+    // Loop range [1, 9]: each pass is 9 frames = 300 ms of media, above the 200 ms steady
+    // minimum, so two passes must yield exactly two steady segments.
+    const std::shared_ptr<const SessionSnapshot> ready = coordinator->snapshot();
+    ASSERT_EQ(coordinator->submit(StartRangePlaybackCommand{
+                  .context =
+                      CommandContext{
+                          .sessionId = ready->sessionId,
+                          .sessionEpoch = ready->sessionEpoch,
+                          .commandId = domain::CommandId{2},
+                      },
+                  .range =
+                      PlaybackRange{
+                          .inInclusive = domain::FrameId{1},
+                          .outInclusive = domain::FrameId{9},
+                      },
+                  .loop = true,
+              }),
+              PortSubmitResult::Accepted);
+    EXPECT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+
+    // StartRangePlayback from displayed frame 0 anchors the run at frame 0 (media origin).
+    const std::chrono::steady_clock::time_point wallAnchor = clock->now();
+    constexpr std::int64_t kRangeIn = 1;
+    constexpr std::int64_t kRangeOut = 9;
+    constexpr std::size_t kFramesPerPass = static_cast<std::size_t>(kRangeOut - kRangeIn + 1);
+
+    // Schedule-table indices (see the VFR cadence tests for the same counting): activation of a
+    // frame appends its 5 s presentation deadline, and each commit appends the next frame's
+    // cadence timer. Range play anchors at In (both the run start and every loop seam), so
+    // frame In of EVERY pass is activated immediately with no cadence timer; frames 2..9 fire
+    // cadences at indices 2,4,..,16 (pass 1) and 19,21,..,33 (pass 2).
+    std::optional<std::chrono::steady_clock::time_point> seamWall;
+    for (int pass = 0; pass < 2; ++pass) {
+        for (std::int64_t frame = kRangeIn; frame <= kRangeOut; ++frame) {
+            const bool anchorActivated = frame == kRangeIn;
+            if (!anchorActivated) {
+                const std::size_t cadenceIndex = pass == 0
+                                                     ? static_cast<std::size_t>(2 * frame - 2)
+                                                     : static_cast<std::size_t>(2 * frame + 15);
+                ASSERT_TRUE(scheduler->waitForScheduleCount(cadenceIndex + 1U));
+                const std::optional<DeadlineRequest> cadence = scheduler->request(cadenceIndex);
+                ASSERT_TRUE(cadence.has_value());
+                clock->set(cadence->due);
+                ASSERT_TRUE(scheduler->fire(cadenceIndex));
+            }
+            // Wait for THIS pass's request: frame ids repeat across passes, so count them.
+            const std::size_t expectedRequests = static_cast<std::size_t>(pass) + 1U;
+            ASSERT_TRUE(waitUntil([&provider, frame, expectedRequests] {
+                return countFrameRequestsFor(provider, domain::FrameId{frame}) >= expectedRequests;
+            }));
+            const std::optional<FrameRequest> request =
+                findFrameRequestFor(provider, domain::FrameId{frame});
+            ASSERT_TRUE(request.has_value());
+            // Both passes anchor at In: frame k's boundary is anchor + t(k) - t(In), with the
+            // pass-2 anchor being the loop seam.
+            const std::int64_t mediaOffset = timelineStart(frame) - timelineStart(kRangeIn);
+            const std::chrono::steady_clock::time_point base = pass == 0 ? wallAnchor : *seamWall;
+            const std::chrono::steady_clock::time_point boundary =
+                base + std::chrono::microseconds{mediaOffset};
+            clock->set(boundary);
+            ASSERT_TRUE(provider->postFrameReady(*request, makeFrameSet(request->frameId)));
+            const std::size_t publishedIndex =
+                static_cast<std::size_t>(pass) * kFramesPerPass + static_cast<std::size_t>(frame);
+            ASSERT_TRUE(render->waitForPublishedCount(publishedIndex + 1U));
+            presentPublished(coordinator, render, publishedIndex);
+            ASSERT_TRUE(provider->postFrameSucceeded(*request));
+            ASSERT_TRUE(waitUntil([&coordinator, frame] {
+                return coordinator->snapshot()->displayedFrame == domain::FrameId{frame};
+            }));
+            if (frame == kRangeOut) {
+                seamWall = boundary;
+            }
+        }
+    }
+
+    // Pass 3 has begun (frame In request in flight, unpublished). Pause 5 s after the last
+    // commit: the dwell must stay out of the steady wall total.
+    clock->set(*seamWall + 5s);
+    ASSERT_EQ(coordinator->submit(PauseCommand{
+                  .context = commandContext(coordinator, domain::CommandId{3}),
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_TRUE(waitUntil([&coordinator] {
+        return coordinator->snapshot()->playbackState == domain::PlaybackState::kPaused;
+    }));
+
+    const std::shared_ptr<const SessionSnapshot> after = coordinator->snapshot();
+    ASSERT_EQ(after->playbackRangeCompletedLoops, 2U);
+    const std::int64_t expectedPerPass = timelineStart(kRangeOut) - timelineStart(kRangeIn);
+    const std::int64_t expectedTotal = 2 * expectedPerPass;
+    EXPECT_EQ(after->playbackRunSteadySegmentCount, 2U);
+    EXPECT_EQ(after->playbackRunSteadyMediaMicroseconds, static_cast<std::uint64_t>(expectedTotal));
+    EXPECT_EQ(after->playbackRunSteadyWallMicroseconds, static_cast<std::uint64_t>(expectedTotal));
+    EXPECT_DOUBLE_EQ(after->playbackRunSteadySpeedRatio, 1.0);
+    EXPECT_EQ(after->playbackRunPresentedFrames, 2U * kFramesPerPass);
+}
+
+TEST(PlaybackCoordinatorTests, LateFrameSetAttributedWhenPublishedPastPlanWithoutSkip) {
+    const auto scheduler = std::make_shared<FakeDeadlineScheduler>();
+    const auto clock = std::make_shared<FakeSteadyClock>();
+    const auto probe = std::make_shared<FakeMediaProbe>();
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator = makeCoordinator(provider, render, probe, scheduler, clock);
+    markGraphicsReady(coordinator, domain::DeviceGeneration{1});
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate.hasValue());
+    openReadyWithRate(coordinator, provider, render, rate.value());
+
+    const std::chrono::steady_clock::time_point wallAnchor = clock->now();
+    const std::shared_ptr<const SessionSnapshot> ready = coordinator->snapshot();
+    ASSERT_EQ(coordinator->submit(PlayCommand{
+                  .context =
+                      CommandContext{
+                          .sessionId = ready->sessionId,
+                          .sessionEpoch = ready->sessionEpoch,
+                          .commandId = domain::CommandId{2},
+                      },
+              }),
+              PortSubmitResult::Accepted);
+    EXPECT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+
+    ASSERT_TRUE(scheduler->waitForScheduleCount(2U));
+    const std::optional<DeadlineRequest> firstCadence = scheduler->request(1U);
+    ASSERT_TRUE(firstCadence.has_value());
+    clock->set(firstCadence->due);
+    ASSERT_TRUE(scheduler->fire(1U));
+    ASSERT_TRUE(waitUntil(
+        [&provider] { return findFrameRequestFor(provider, domain::FrameId{1}).has_value(); }));
+    const std::optional<FrameRequest> request = findFrameRequestFor(provider, domain::FrameId{1});
+    ASSERT_TRUE(request.has_value());
+    // Hold the set 40 ms past its planned boundary: published late (a whole, correct set), but
+    // far inside the 2 s catch-up tolerance, so nothing was skipped.
+    constexpr std::chrono::milliseconds kHeldLate{40};
+    const auto lateWall = wallAnchor +
+                          std::chrono::microseconds{rateStartTimeMicroseconds(rate.value(), 1)} +
+                          kHeldLate;
+    clock->set(lateWall);
+    ASSERT_TRUE(provider->postFrameReady(*request, makeFrameSet(request->frameId)));
+    ASSERT_TRUE(render->waitForPublishedCount(2U));
+    // The late group is still the requested complete set - late attribution never re-labels a
+    // partial or stale composition as success.
+    const std::optional<FrameSetPresented> published = render->presentation(1U);
+    ASSERT_TRUE(published.has_value());
+    EXPECT_EQ(published->frameId, domain::FrameId{1});
+    presentPublished(coordinator, render, 1U);
+    ASSERT_TRUE(provider->postFrameSucceeded(*request));
+    ASSERT_TRUE(waitUntil(
+        [&coordinator] { return coordinator->snapshot()->displayedFrame == domain::FrameId{1}; }));
+
+    // Frame 2 is now in flight (activated at commit because its due already passed). Pause
+    // before it publishes so the run closes with exactly one published set.
+    ASSERT_EQ(coordinator->submit(PauseCommand{
+                  .context = commandContext(coordinator, domain::CommandId{3}),
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_TRUE(waitUntil([&coordinator] {
+        return coordinator->snapshot()->playbackState == domain::PlaybackState::kPaused;
+    }));
+
+    const std::shared_ptr<const SessionSnapshot> after = coordinator->snapshot();
+    EXPECT_EQ(after->playbackRunLateFrameSets, 1U);
+    EXPECT_EQ(after->playbackLateFrameSets, 1U);
+    EXPECT_EQ(after->playbackRunSkippedFrameSets, 0U);
+    EXPECT_EQ(after->playbackRunPresentedFrames, 1U);
+    EXPECT_EQ(after->playbackRunPlanToPublishLatency.count, 1U);
+    EXPECT_EQ(after->playbackRunPlanToPublishLatency.p50Microseconds,
+              static_cast<std::uint64_t>(kHeldLate.count()) * 1000U);
+    EXPECT_EQ(after->playbackRunPlanToPublishLatency.p95Microseconds,
+              static_cast<std::uint64_t>(kHeldLate.count()) * 1000U);
+    EXPECT_EQ(after->playbackRunPlanToPublishLatency.p99Microseconds,
+              static_cast<std::uint64_t>(kHeldLate.count()) * 1000U);
+    EXPECT_EQ(after->playbackRunPlanToPublishLatency.maxMicroseconds,
+              static_cast<std::uint64_t>(kHeldLate.count()) * 1000U);
+}
+
+TEST(PlaybackCoordinatorTests, CatchUpSkipAndLateAttributionCoexist) {
+    const auto scheduler = std::make_shared<FakeDeadlineScheduler>();
+    const auto clock = std::make_shared<FakeSteadyClock>();
+    const auto probe = std::make_shared<FakeMediaProbe>();
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator = makeCoordinator(provider, render, probe, scheduler, clock);
+    markGraphicsReady(coordinator, domain::DeviceGeneration{1});
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate.hasValue());
+    openReadyWithRate(coordinator, provider, render, rate.value());
+    requireRealTimeContinuity(coordinator, domain::CommandId{901});
+
+    const std::chrono::steady_clock::time_point wallAnchor = clock->now();
+    const std::shared_ptr<const SessionSnapshot> ready = coordinator->snapshot();
+    ASSERT_EQ(coordinator->submit(PlayCommand{
+                  .context =
+                      CommandContext{
+                          .sessionId = ready->sessionId,
+                          .sessionEpoch = ready->sessionEpoch,
+                          .commandId = domain::CommandId{2},
+                      },
+              }),
+              PortSubmitResult::Accepted);
+    EXPECT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+
+    ASSERT_TRUE(scheduler->waitForScheduleCount(2U));
+    const std::optional<DeadlineRequest> firstCadence = scheduler->request(1U);
+    ASSERT_TRUE(firstCadence.has_value());
+    // Fire the first cadence 2.5 s late: RealTime catch-up jumps straight to the clamped final
+    // frame (11), skipping 10 whole sets, and the one published set is also late by the full
+    // held interval past its own plan. Both facts must be visible independently.
+    const auto fireWall = firstCadence->due + 2500ms;
+    clock->set(fireWall);
+    ASSERT_TRUE(scheduler->fire(1U));
+    ASSERT_TRUE(waitUntil(
+        [&provider] { return findFrameRequestFor(provider, domain::FrameId{11}).has_value(); }));
+    const std::optional<FrameRequest> request = findFrameRequestFor(provider, domain::FrameId{11});
+    ASSERT_TRUE(request.has_value());
+    const std::int64_t expectedLatenessMicroseconds =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            fireWall -
+            (wallAnchor + std::chrono::microseconds{rateStartTimeMicroseconds(rate.value(), 11)}))
+            .count();
+    ASSERT_TRUE(provider->postFrameReady(*request, makeFrameSet(request->frameId)));
+    ASSERT_TRUE(render->waitForPublishedCount(2U));
+    presentPublished(coordinator, render, 1U);
+    ASSERT_TRUE(provider->postFrameSucceeded(*request));
+    ASSERT_TRUE(waitUntil(
+        [&coordinator] { return coordinator->snapshot()->displayedFrame == domain::FrameId{11}; }));
+    // Frame 11 is the last canonical frame: the run auto-stops at the commit.
+
+    const std::shared_ptr<const SessionSnapshot> after = coordinator->snapshot();
+    EXPECT_EQ(after->playbackRunSkippedFrameSets, 10U);
+    EXPECT_EQ(after->playbackRunLateFrameSets, 1U);
+    EXPECT_EQ(after->playbackRunPresentedFrames, 1U);
+    EXPECT_EQ(after->playbackRunPlanToPublishLatency.count, 1U);
+    EXPECT_EQ(after->playbackRunPlanToPublishLatency.p50Microseconds,
+              static_cast<std::uint64_t>(expectedLatenessMicroseconds));
+    EXPECT_EQ(after->playbackRunPlanToPublishLatency.maxMicroseconds,
+              static_cast<std::uint64_t>(expectedLatenessMicroseconds));
+}
+
+// ---------------------------------------------------------------------------
 // v1.5 interactive forward-step stream tests (plan section 16, application unit)
 // ---------------------------------------------------------------------------
 

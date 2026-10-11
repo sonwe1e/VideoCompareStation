@@ -17,6 +17,7 @@ namespace application {
 class IClipExporter;
 class IIssueRecordRepository;
 class ISampleExporter;
+struct SessionSnapshot;
 } // namespace application
 namespace ui {
 class ComparisonSurface;
@@ -56,6 +57,9 @@ public:
     [[nodiscard]] std::shared_ptr<application::ISampleExporter> sampleExporter() const noexcept;
     [[nodiscard]] bool attachSurface(ui::ComparisonSurface& surface) noexcept;
     [[nodiscard]] std::vector<media::DecoderBackendStatus> decoderBackendStatuses() const;
+    // E03: the coordinator's published session snapshot (playback accounting fields included) for
+    // the performance report path. Same thread-safe pull the UI controllers use.
+    [[nodiscard]] std::shared_ptr<const application::SessionSnapshot> sessionSnapshot() const;
     [[nodiscard]] media::MediaProbeStatistics mediaProbeStatistics() const noexcept;
     [[nodiscard]] media::FrameProviderStatistics frameProviderStatistics() const noexcept;
     [[nodiscard]] std::uint64_t decodedSignatureCount() const noexcept;

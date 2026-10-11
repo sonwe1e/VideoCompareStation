@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dvs/application/PlaybackLatencyReservoir.h"
 #include "dvs/application/Ports.h"
 #include "dvs/domain/Result.h"
 
@@ -147,6 +148,12 @@ private:
     std::uint64_t cacheHitCount_ = 0U;
     std::uint64_t totalDecodeMicroseconds_ = 0U;
     std::uint64_t maximumDecodeMicroseconds_ = 0U;
+    // E03: bounded decode-duration samples behind the backend status percentiles. Same reservoir
+    // implementation as the application-layer latency stats so every percentile in the product
+    // uses one nearest-rank definition.
+    static constexpr std::size_t kDecodeLatencySampleCapacity = 1024U;
+    application::PlaybackLatencyReservoir decodeLatencyReservoir_{kDecodeLatencySampleCapacity};
+    application::PlaybackLatencyStats decodeLatencyStats_;
     std::uint64_t reverseWindowHitCount_ = 0U;
     std::uint64_t reverseWindowBuildCount_ = 0U;
     std::uint64_t reverseWindowBuiltFrameCount_ = 0U;

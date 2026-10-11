@@ -65,14 +65,17 @@ inline constexpr std::size_t kPlaybackEvidenceStageCount = 5U;
 
 // Per-stage latency aggregate. `count` is completed pairs, not emitted events: one-sided
 // events leave count at 0 and surface through the pending counters instead. `max` is exact.
-// `p95Microseconds` is the nearest-rank 95th percentile (ceil(0.95 * n)-th smallest sample).
-// Samples beyond kMaxStageSamplesPerRun per stage are counted in `truncatedSampleCount` and
-// excluded from the percentile reservoir, which then keeps the largest samples and can only
-// overestimate p95 - the conservative direction for stall diagnosis.
+// `p50Microseconds`/`p95Microseconds`/`p99Microseconds` are nearest-rank percentiles
+// (ceil(p * n)-th smallest sample). Samples beyond the reservoir capacity per stage are counted
+// in `truncatedSampleCount` and excluded from the percentile reservoir, which then keeps the
+// largest samples and can only overestimate the percentiles - the conservative direction for
+// stall diagnosis (E03 needs P50/P95/P99 so one slow hop cannot hide behind an average).
 struct PlaybackLatencyStats final {
     std::uint64_t count = 0U;
     std::uint64_t maxMicroseconds = 0U;
+    std::uint64_t p50Microseconds = 0U;
     std::uint64_t p95Microseconds = 0U;
+    std::uint64_t p99Microseconds = 0U;
     std::uint64_t truncatedSampleCount = 0U;
 
     [[nodiscard]] bool operator==(const PlaybackLatencyStats&) const noexcept = default;

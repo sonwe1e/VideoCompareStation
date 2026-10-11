@@ -36,6 +36,15 @@ struct DecoderBackendStatus final {
     std::uint64_t cacheEvictCount = 0U;
     std::size_t cacheEntryCount = 0U;
     std::size_t cacheRetainedBytes = 0U;
+    // E03 decode-latency percentiles (nearest-rank, microseconds) over the actor's bounded
+    // per-source sample reservoir. Beyond the reservoir capacity only the largest samples are
+    // kept, so the percentiles can only overestimate; truncated samples are counted instead of
+    // being silently dropped. Zero completed decodes leaves all of these at zero (unmeasured,
+    // not "zero latency").
+    std::uint64_t decodeP50Microseconds = 0U;
+    std::uint64_t decodeP95Microseconds = 0U;
+    std::uint64_t decodeP99Microseconds = 0U;
+    std::uint64_t decodeLatencyTruncatedSamples = 0U;
 
     [[nodiscard]] bool operator==(const DecoderBackendStatus&) const = default;
 };

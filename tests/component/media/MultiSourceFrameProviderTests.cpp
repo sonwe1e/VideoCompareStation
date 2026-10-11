@@ -1505,5 +1505,50 @@ TEST(AlignmentAnalysisServiceTests, NormalizesTenBitFramesForGlobalAnalysis) {
     EXPECT_GT(service.decodedSignatureCountForTesting(), 0U);
 }
 
+// E03 整组归因: every published FrameSet must carry each source at ITS mapped frame for the
+// requested canonical id. With per-source offsets applied, consecutive requests must advance
+// every slot together - a composition of one fresh source plus stale frames from an earlier
+// request can never be published as a successful set. This is the media-layer half of the
+// "慢源注入不得把 1 路正常 2 路旧帧记为成功" contract (the coordinator-side late/skip
+// attribution lives in PlaybackCoordinatorTests).
+TEST(MultiSourceFrameProviderTests, PublishedFrameSetsCarryEverySourceAtItsMappedFrame) {
+    platform::FrameBudget budget{4U * 1024U * 1024U};
+    MultiSourceFrameProvider provider{budget};
+    const auto events = std::make_shared<RecordingEventSink>();
+    const application::FrameProviderOpenRequest open = makeOpenRequest(724U);
+    ASSERT_EQ(provider.submit(open, events), application::PortSubmitResult::Accepted);
+    ASSERT_TRUE(events->waitForEventCount(1U));
+
+    for (const std::int64_t canonical : {5, 6}) {
+        events->clear();
+        const application::FrameRequest request{
+            .context = makeFrameContext(725U + static_cast<std::uint64_t>(canonical)),
+            .frameId = domain::FrameId{canonical},
+            .priority = application::FrameRequestPriority::Exact,
+            .sourceOffsets =
+                {
+                    application::SourceFrameOffset{.sourceId = 0U, .frames = 0},
+                    application::SourceFrameOffset{.sourceId = 1U, .frames = 2},
+                },
+        };
+        ASSERT_EQ(provider.submit(request, events), application::PortSubmitResult::Accepted);
+        ASSERT_TRUE(events->waitForEventCount(2U));
+        const auto ready = findFrameSetReady(events, request.context);
+        ASSERT_TRUE(ready.has_value());
+        ASSERT_EQ(ready->set.canonicalFrameId(), request.frameId);
+        // Both slots at their mapped frames for THIS canonical id; source 1's slot must never
+        // be the previous request's frame.
+        const application::MappedSourceFrame* slot0 = ready->set.find(0U);
+        const application::MappedSourceFrame* slot1 = ready->set.find(1U);
+        ASSERT_NE(slot0, nullptr);
+        ASSERT_NE(slot1, nullptr);
+        ASSERT_TRUE(slot0->sourceFrameId.has_value());
+        ASSERT_TRUE(slot1->sourceFrameId.has_value());
+        EXPECT_EQ(*slot0->sourceFrameId, domain::FrameId{canonical});
+        EXPECT_EQ(*slot1->sourceFrameId, domain::FrameId{canonical + 2});
+        EXPECT_EQ(slot0->matchKind, application::FrameMatchKind::ExactIndex);
+    }
+}
+
 } // namespace
 } // namespace dvs::media
