@@ -1,6 +1,5 @@
-#include "dvs/persistence/InterpolationProtocolRepository.h"
-
 #include "dvs/domain/InterpolationProtocol.h"
+#include "dvs/persistence/InterpolationProtocolRepository.h"
 
 #include <filesystem>
 #include <fstream>
@@ -64,10 +63,10 @@ TEST_F(InterpolationProtocolRepositoryTests, ImportsDecimationPhaseOneManualOrig
         R"("tail_policy":"trim","mapping_origin":"manual"})");
     ASSERT_TRUE(result.ok) << result.error;
 
-    const auto expected = domain::buildDecimatedProtocol(
-        DecimationPlan{.gtFrameCount = 8, .stride = 2, .phase = 1},
-        MappingOrigin::kManual,
-        TailPolicy::kTrimPartialInterval);
+    const auto expected =
+        domain::buildDecimatedProtocol(DecimationPlan{.gtFrameCount = 8, .stride = 2, .phase = 1},
+                                       MappingOrigin::kManual,
+                                       TailPolicy::kTrimPartialInterval);
     ASSERT_TRUE(expected);
     EXPECT_EQ(result.protocol.value(), expected.value());
     EXPECT_EQ(result.protocol.value().mappingOrigin(), MappingOrigin::kManual);
@@ -81,10 +80,10 @@ TEST_F(InterpolationProtocolRepositoryTests, ImportsStrideThreeWithMultipleGener
     // mapping_origin absent defaults to imported_manifest rather than guessing a manual entry.
     EXPECT_EQ(result.protocol.value().mappingOrigin(), MappingOrigin::kImportedManifest);
 
-    const auto expected = domain::buildDecimatedProtocol(DecimationPlan{.gtFrameCount = 10,
-                                                                       .stride = 3},
-                                                         MappingOrigin::kImportedManifest,
-                                                         TailPolicy::kTrimPartialInterval);
+    const auto expected =
+        domain::buildDecimatedProtocol(DecimationPlan{.gtFrameCount = 10, .stride = 3},
+                                       MappingOrigin::kImportedManifest,
+                                       TailPolicy::kTrimPartialInterval);
     ASSERT_TRUE(expected);
     EXPECT_EQ(result.protocol.value(), expected.value());
     EXPECT_EQ(result.protocol.value().frameCount(), 10);
@@ -184,10 +183,10 @@ TEST_F(InterpolationProtocolRepositoryTests, ExplicitDocumentRoundTripsThroughEn
 
 TEST_F(InterpolationProtocolRepositoryTests, EncodedDecimationProtocolReimportsIdentically) {
     // The explicit encoding is lossless for a protocol built from a decimation plan.
-    const auto built = domain::buildDecimatedProtocol(DecimationPlan{.gtFrameCount = 10,
-                                                                     .stride = 3},
-                                                      MappingOrigin::kImportedManifest,
-                                                      TailPolicy::kTrimPartialInterval);
+    const auto built =
+        domain::buildDecimatedProtocol(DecimationPlan{.gtFrameCount = 10, .stride = 3},
+                                       MappingOrigin::kImportedManifest,
+                                       TailPolicy::kTrimPartialInterval);
     ASSERT_TRUE(built);
     const auto reparsed = InterpolationProtocolRepository::decodeDocument(
         InterpolationProtocolRepository::encodeDocument(built.value()));
@@ -287,8 +286,7 @@ TEST_F(InterpolationProtocolRepositoryTests, RejectsExplicitOriginsWithBadRatios
         "origins": [{"type": "generated", "input0": 0, "input1": 2}]
     })");
     ASSERT_FALSE(missingRatio.ok);
-    EXPECT_NE(missingRatio.error.find("requires a \"ratio\" pair of integers"),
-              std::string::npos)
+    EXPECT_NE(missingRatio.error.find("requires a \"ratio\" pair of integers"), std::string::npos)
         << missingRatio.error;
 }
 
@@ -344,8 +342,7 @@ TEST_F(InterpolationProtocolRepositoryTests, LoadsDecimationDocumentFromFile) {
     ASSERT_TRUE(result.ok) << result.error;
     ASSERT_TRUE(result.protocol.has_value());
     EXPECT_EQ(result.protocol.value().frameCount(), 10);
-    EXPECT_EQ(result.protocol.value().nextGeneratedFrame(domain::FrameId{0}),
-              domain::FrameId{1});
+    EXPECT_EQ(result.protocol.value().nextGeneratedFrame(domain::FrameId{0}), domain::FrameId{1});
 }
 
 TEST_F(InterpolationProtocolRepositoryTests, ReportsFileLevelErrors) {

@@ -44,8 +44,8 @@ constexpr std::uintmax_t kMaximumProtocolDocumentBytes = std::uintmax_t{16U} * 1
                                        std::string* error) {
     const auto field = value.find(key);
     if (field == value.end() || !field->is_number_integer()) {
-        *error = std::string{"interpolation-protocol document requires an integer \""} + key +
-                 "\".";
+        *error =
+            std::string{"interpolation-protocol document requires an integer \""} + key + "\".";
         return false;
     }
     *out = field->get<std::int64_t>();
@@ -79,8 +79,7 @@ constexpr std::uintmax_t kMaximumProtocolDocumentBytes = std::uintmax_t{16U} * 1
     return false;
 }
 
-[[nodiscard]] InterpolationProtocolIoResult
-domainFailure(const domain::MediaError& error) {
+[[nodiscard]] InterpolationProtocolIoResult domainFailure(const domain::MediaError& error) {
     return failure("interpolation-protocol rejected by domain validation: " +
                    error.technicalDetail);
 }
@@ -107,8 +106,8 @@ domainFailure(const domain::MediaError& error) {
                        "\"mark_missing\".");
     }
     const domain::TailPolicy tailPolicy = tailPolicyText == "trim"
-                                               ? domain::TailPolicy::kTrimPartialInterval
-                                               : domain::TailPolicy::kMarkPartialIntervalMissing;
+                                              ? domain::TailPolicy::kTrimPartialInterval
+                                              : domain::TailPolicy::kMarkPartialIntervalMissing;
     MappingOrigin mappingOrigin = MappingOrigin::kImportedManifest;
     if (!readMappingOrigin(root, &mappingOrigin, &error)) {
         return failure(std::move(error));
@@ -135,8 +134,8 @@ domainFailure(const domain::MediaError& error) {
                                OutputFrameOrigin* out,
                                std::string* error) {
     if (!value.is_object()) {
-        *error = "interpolation-protocol origins[" + std::to_string(index) +
-                 "] must be a JSON object.";
+        *error =
+            "interpolation-protocol origins[" + std::to_string(index) + "] must be a JSON object.";
         return false;
     }
     const auto typeField = value.find("type");
@@ -169,9 +168,8 @@ domainFailure(const domain::MediaError& error) {
             return false;
         }
         const auto ratioField = value.find("ratio");
-        if (ratioField == value.end() || !ratioField->is_array() ||
-            ratioField->size() != 2U || !(*ratioField)[0].is_number_integer() ||
-            !(*ratioField)[1].is_number_integer()) {
+        if (ratioField == value.end() || !ratioField->is_array() || ratioField->size() != 2U ||
+            !(*ratioField)[0].is_number_integer() || !(*ratioField)[1].is_number_integer()) {
             *error = "interpolation-protocol origins[" + std::to_string(index) +
                      "] requires a \"ratio\" pair of integers [numerator, denominator].";
             return false;
@@ -262,8 +260,8 @@ domainFailure(const domain::MediaError& error) {
         value["type"] = "generated";
         value["input0"] = generated->input0GtFrame.value();
         value["input1"] = generated->input1GtFrame.value();
-        value["ratio"] = Json::array(
-            {generated->targetRatioNumerator, generated->targetRatioDenominator});
+        value["ratio"] =
+            Json::array({generated->targetRatioNumerator, generated->targetRatioDenominator});
         return value;
     }
     if (const auto* missing = std::get_if<MissingFrame>(&origin)) {
