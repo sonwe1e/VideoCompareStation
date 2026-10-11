@@ -82,6 +82,7 @@ dvs_add_gtest(
 add_executable(
     dvs_image_edit_controller_tests
     ImageEditControllerTests.cpp
+    ImageEditOperationsTests.cpp
 )
 target_link_libraries(
     dvs_image_edit_controller_tests

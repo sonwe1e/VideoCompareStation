@@ -17,6 +17,8 @@
 ## 环境基线（2026-10-10 记录）
 
 - HEAD：`fc630c0`（`fix(ui): keep smoke runs off stored resume positions`），版本 2.4.0。
+- 2026-10-11 更新：路线工单 P02—P12 代码与 SAM2 分割已陆续入库（`7604740`…`9b6f500`）；工具链、
+  锁定依赖与本机硬件未变，未执行项结论不变。
 - 工具链：MSVC 14.44（VS 2022 BuildTools）、CMake presets、Ninja、clang-format 19.1.5；pwsh 7 wrapper。
 - 锁定依赖：FFmpeg ≥ 8.1.2（avcodec/avformat/swscale，动态库）、Qt base ≥ 6.11.1、nlohmann-json、GoogleTest。
 - 本机：i7-13700KF；NVIDIA GeForce RTX 4090（驱动 32.0.16.1074），4K@143。
@@ -46,9 +48,9 @@
 | D06 自动异常导航 | 未开始 | — |
 | Q01 有口径结果卡 | 部分 | MAE/PSNR、阈值复用、异步采样已有（`ComparisonMetrics`、`PairMetricsService`）；通常表现/变差比例/严重问题三段式结果卡未做 |
 | Q02 时间指标 | 未开始 | — |
-| S01 SampleGroup/配方 | 部分已实现 | P11 已提取 `ImageEditOperations` 纯函数模块（裁剪、水平镜像/垂直翻转/90°/180° 旋转、矩形填充/清除、马赛克 + `EditRecipe` 有序折叠执行器雏形）；控制器全部委托纯函数，撤销/历史/副本身份不动；控制器路径与纯函数路径输出**逐字节一致**有测试证明。画笔/标注/智能抠图刻意不提取（交互态/模型环境）；`EditRecipe` 序列化与批量导出执行器未做 |
+| S01 SampleGroup/配方 | 部分已实现 | P11 已提取 `ImageEditOperations` 纯函数模块（裁剪、水平镜像/垂直翻转/90°/180° 旋转、矩形填充/清除、马赛克 + `effectiveMosaicBlockSize` + `EditRecipe` 五操作有序折叠执行器雏形）；控制器五入口（裁剪/变换/马赛克/填充/清除）全部委托纯函数，撤销/历史/副本身份不动；控制器路径与纯函数路径输出**逐字节一致**有测试证明（8 项组件测试，含 5 步控制器序列经配方重放一致），6/6 变异检出且既有控制器测试随纯模块变异同步变红（证明无内联残留），证据 `out/verification/edit-recipe-ops/`。画笔/标注/智能抠图刻意不提取（交互态/模型环境）；缩放（Resample）与填充画布（Canvas）仍内联、未入 `EditOperation`（配方执行器落地前需补）；`EditRecipe` 序列化与批量导出执行器未做 |
 | S02 标签几何变换 | 部分已实现 | P12 本次新增 `src/domain` 的 `LabelGeometry`（光流端点通式 `f'(T0(x)) = T1(x+f(x)) - T0(x)`、公共仿射捷径、按网格位裁剪＋终点出界置无效、水平翻转 dx 取反、pad 不制造真值、mask 精确重排；无时间反转、无 mask 重采样）+ 15 项单测与 6/6 变异证据。接入配方执行器（S01）未开始 |
-| S03 选区/抠图/AI 分割 | 未开始 | 工作区另有并行未提交的 SAM2 接入尝试（`src/ui_qml/src/Sam2Segmenter.cpp`，当前编译失败），状态以该工作完成时为准 |
+| S03 选区/抠图/AI 分割 | 部分已实现 | `1e3e04b` 已提交可选 SAM 2.1 矩形框选抠图：`Sam2Segmenter` 进程内 ONNX Runtime 纯 CPU 推理，运行时 LoadLibrary 解析 `onnxruntime.dll`（零编译/链接依赖，vendored 头入格式门禁豁免）；权重由用户手工放入 models 目录、不入库不发包；缺权重/加载失败降级为状态提示与禁用入口，基本编辑不受影响；2 项常跑测试（优雅降级、applyCutout alpha/包围盒）+1 项本机有权重即跑的 live 测试（无权重 GTEST_SKIP）。未达路线要求/未做：独立可选进程、权重下载与版本哈希锁定、多边形/笔刷选区、mask 导入、加减选区、羽化、去边、matting；点提示 `segmentPoints` 已暴露未接；**编码/解码当前在 GUI 线程同步执行（大图可冻结 UI 数秒，待改异步）**，解码异常后缓存 moved-from 投毒问题待修 |
 | S04 可控合成数据 | 未开始 | — |
 | E01 精确样本导出 | 部分已实现 | P07 纯规划层 `planSampleTriplet`（生成帧→三元组计划，整除性/映射验证，固定裁剪）；P08 新增 `SampleExportWriter`（display-order 帧序号精确抽帧、staging→读回校验→rename 原子发布、协作取消、manifest A4 子集 0 起计索引）+ 11 组件测试与 6/6 变异。PNG 实走 Windows WIC（仓库锁定 FFmpeg 构建无 png 编码器，avcodec 路径为未验证回退）；B 帧、10-bit、UI 入口未验证/未接。流拷贝片段导出仍保留（`ClipExportPlanner`/`ClipExportWriter`） |
 | E02 批处理 | 仅接口 | `CompareStationCli --startup-check` 存在；配方批处理、断点恢复未做 |

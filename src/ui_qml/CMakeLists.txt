@@ -61,6 +61,7 @@ if(DVS_BUILD_ADAPTERS)
             include/dvs/ui/EditImageProvider.h
             include/dvs/ui/GraphicsBackend.h
             include/dvs/ui/ImageEditController.h
+            include/dvs/ui/ImageEditOperations.h
             include/dvs/ui/ImagePairLoader.h
             include/dvs/ui/ImageReviewController.h
             include/dvs/ui/Module.h
@@ -77,6 +78,7 @@ if(DVS_BUILD_ADAPTERS)
             src/EditImageProvider.cpp
             src/GraphicsBackend.cpp
             src/ImageEditController.cpp
+            src/ImageEditOperations.cpp
             src/ImagePairLoader.cpp
             src/ImageReviewController.cpp
             src/Module.cpp

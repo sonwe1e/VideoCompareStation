@@ -1,5 +1,6 @@
 #include "dvs/ui/ImageEditController.h"
 
+#include "dvs/ui/ImageEditOperations.h"
 #include "dvs/ui/Sam2Segmenter.h"
 
 #include <QBuffer>
@@ -283,7 +284,9 @@ public:
         }
 
         void redo() override {
-            owner_->working = owner_->working.copy(rect_);
+            // Pixel work delegated to the pure operation module; the command keeps owning
+            // history state (previous buffer, translated annotations).
+            owner_->working = dvs::ui::cropImageRect(owner_->working, rect_);
             owner_->annotations = next_;
             owner_->selectedAnnotation = -1;
         }
@@ -1146,31 +1149,33 @@ bool ImageEditController::transformImage(const ImageTransform transform) {
     const qreal width = impl_->working.width();
     const qreal height = impl_->working.height();
     QTransform geometry;
-    QImage next;
     QString label;
+    // The pixel permutation itself comes from the pure operation module; only the
+    // annotation geometry and the history step stay controller-owned.
+    QImage next;
     switch (transform) {
     case ImageTransform::MirrorHorizontal:
-        next = impl_->working.flipped(Qt::Horizontal);
+        next = applyGeometryTransform(impl_->working, GeometryTransform::MirrorHorizontal);
         geometry = QTransform{-1, 0, 0, 1, width, 0};
         label = tr("水平镜像");
         break;
     case ImageTransform::FlipVertical:
-        next = impl_->working.flipped(Qt::Vertical);
+        next = applyGeometryTransform(impl_->working, GeometryTransform::FlipVertical);
         geometry = QTransform{1, 0, 0, -1, 0, height};
         label = tr("垂直翻转");
         break;
     case ImageTransform::RotateClockwise:
-        next = impl_->working.transformed(QTransform{}.rotate(90), Qt::FastTransformation);
+        next = applyGeometryTransform(impl_->working, GeometryTransform::RotateClockwise);
         geometry = QTransform{0, 1, -1, 0, height, 0};
         label = tr("顺时针旋转 90°");
         break;
     case ImageTransform::RotateCounterclockwise:
-        next = impl_->working.transformed(QTransform{}.rotate(-90), Qt::FastTransformation);
+        next = applyGeometryTransform(impl_->working, GeometryTransform::RotateCounterclockwise);
         geometry = QTransform{0, -1, 1, 0, 0, width};
         label = tr("逆时针旋转 90°");
         break;
     case ImageTransform::RotateHalfTurn:
-        next = impl_->working.flipped(Qt::Horizontal | Qt::Vertical);
+        next = applyGeometryTransform(impl_->working, GeometryTransform::RotateHalfTurn);
         geometry = QTransform{-1, 0, 0, -1, width, height};
         label = tr("旋转 180°");
         break;
@@ -1363,25 +1368,12 @@ bool ImageEditController::mosaicImageRect(
         setStatus(tr("马赛克区域超出图片范围。"));
         return false;
     }
-    const int block =
-        std::clamp(blockSize, 2, std::max(2, std::min(bounded.width(), bounded.height())));
-    // Nearest-neighbour down/up scaling is the deterministic pixelate: each block keeps one
-    // sampled colour, and the blocks stay opaque so the region really is obscured.
-    const QImage pixelated =
-        impl_->working.copy(bounded)
-            .scaled(std::max(1, bounded.width() / block),
-                    std::max(1, bounded.height() / block),
-                    Qt::IgnoreAspectRatio,
-                    Qt::FastTransformation)
-            .scaled(bounded.size(), Qt::IgnoreAspectRatio, Qt::FastTransformation);
-    QImage after = impl_->working.copy(bounded);
-    {
-        QPainter painter(&after);
-        painter.setCompositionMode(QPainter::CompositionMode_Source);
-        painter.drawImage(0, 0, pixelated);
-    }
+    // The pixelation is delegated to the pure operation module; the effective block size
+    // stays in the status message so the user sees the same clamp the pixels used.
+    const int block = effectiveMosaicBlockSize(bounded, blockSize);
+    const QImage next = dvs::ui::mosaicImageRect(impl_->working, bounded, block);
     impl_->pushStep(std::make_unique<Impl::PatchCommand>(
-        impl_.get(), bounded, impl_->working.copy(bounded), std::move(after), tr("马赛克")));
+        impl_.get(), bounded, impl_->working.copy(bounded), next.copy(bounded), tr("马赛克")));
     setStatus(tr("已对 %1×%2 区域应用马赛克（块 %3 像素）")
                   .arg(bounded.width())
                   .arg(bounded.height())
@@ -1406,10 +1398,9 @@ bool ImageEditController::fillImageRect(
         return false;
     }
     // An opaque colour block is the review's preferred way to mask sensitive content.
-    QImage after = impl_->working.copy(bounded);
-    after.fill(color);
+    const QImage next = dvs::ui::fillImageRect(impl_->working, bounded, color);
     impl_->pushStep(std::make_unique<Impl::PatchCommand>(
-        impl_.get(), bounded, impl_->working.copy(bounded), std::move(after), tr("填充")));
+        impl_.get(), bounded, impl_->working.copy(bounded), next.copy(bounded), tr("填充")));
     setStatus(tr("已填充 %1×%2 区域").arg(bounded.width()).arg(bounded.height()));
     return true;
 }
@@ -1428,10 +1419,9 @@ bool ImageEditController::clearImageRect(const int x,
         setStatus(tr("清除区域为空或超出图片范围。"));
         return false;
     }
-    QImage after = impl_->working.copy(bounded);
-    after.fill(Qt::transparent);
+    const QImage next = dvs::ui::clearImageRect(impl_->working, bounded);
     impl_->pushStep(std::make_unique<Impl::PatchCommand>(
-        impl_.get(), bounded, impl_->working.copy(bounded), std::move(after), tr("清除")));
+        impl_.get(), bounded, impl_->working.copy(bounded), next.copy(bounded), tr("清除")));
     setStatus(tr("已把 %1×%2 区域清除为透明").arg(bounded.width()).arg(bounded.height()));
     return true;
 }
