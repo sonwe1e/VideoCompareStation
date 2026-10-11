@@ -30,6 +30,12 @@ struct DecoderBackendStatus final {
     std::uint64_t reverseWindowBuildMicroseconds = 0U;
     std::uint64_t reverseWindowBuildMaximumMicroseconds = 0U;
     std::uint64_t reverseExactFallbackCount = 0U;
+    // E05 source-cache evidence. Occupancy is the actor's real retained entry/byte count (never
+    // a request-side "up to N frames" claim); evictions pair with cacheHitCount to show whether
+    // the cache is warm or thrashing.
+    std::uint64_t cacheEvictCount = 0U;
+    std::size_t cacheEntryCount = 0U;
+    std::size_t cacheRetainedBytes = 0U;
 
     [[nodiscard]] bool operator==(const DecoderBackendStatus&) const = default;
 };

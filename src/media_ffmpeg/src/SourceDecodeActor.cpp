@@ -392,6 +392,7 @@ void SourceDecodeActor::run() noexcept { // NOLINT(bugprone-exception-escape): a
                     reverseWindowBuildMicroseconds_ = 0U;
                     reverseWindowBuildMaximumMicroseconds_ = 0U;
                     reverseExactFallbackCount_ = 0U;
+                    cache_.clear();
                     backendStatus_ = media::DecoderBackendStatus{
                         .sourceId = sourceId_,
                         .backend = decoder_->backend(),
@@ -446,6 +447,9 @@ void SourceDecodeActor::run() noexcept { // NOLINT(bugprone-exception-escape): a
                 .reverseWindowBuildMicroseconds = reverseWindowBuildMicroseconds_,
                 .reverseWindowBuildMaximumMicroseconds = reverseWindowBuildMaximumMicroseconds_,
                 .reverseExactFallbackCount = reverseExactFallbackCount_,
+                .cacheEvictCount = cache_.evictionCount(),
+                .cacheEntryCount = cache_.entryCount(),
+                .cacheRetainedBytes = cache_.retainedBytes(),
             };
         };
         const auto refreshReverseMetrics = [this] {
@@ -460,6 +464,9 @@ void SourceDecodeActor::run() noexcept { // NOLINT(bugprone-exception-escape): a
             backendStatus_.exactSeekCount =
                 decoder_->exactSeekCount() +
                 (exactDecoder_ != nullptr ? exactDecoder_->exactSeekCount() : 0U);
+            backendStatus_.cacheEvictCount = cache_.evictionCount();
+            backendStatus_.cacheEntryCount = cache_.entryCount();
+            backendStatus_.cacheRetainedBytes = cache_.retainedBytes();
         };
         const auto reverseWorkInterrupted = [this](const SourceDecodeRequest& request) {
             if (request.cancellationRequested != nullptr &&

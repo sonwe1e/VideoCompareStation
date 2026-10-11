@@ -1,7 +1,72 @@
 # 视觉审查问题台账
 
-更新：2026-10-11（启动减负 E01／诊断可关闭 E02／全画布候选直看 P05／图片编辑纯操作 P11／协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-10-11（长按正反向走带 E04／缓存小步改进 E05／启动减负 E01／诊断可关闭 E02／全画布候选直看 P05／图片编辑纯操作 P11／协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+
+## 2026-10-11 长按正反向走带 E04 与缓存小步改进 E05
+
+- **范围**：《CompareStation 下一步体验与性能计划 2026-10-11》§4 E04（P0）+ E05（P1，服务 E04），
+  R2 阶段两个工单。遵守 §9 警告：本提交不改 Input 生命周期所有权、PlaybackCoordinator 状态所有权
+  和 GPU 后端三者中的多项重写——协调器本体仅加一处预取守卫，GPU 后端零改动。
+- **E04 交付**：
+  - 纯输入层 Jog 状态机 `JogStateMachine`（`src/ui_qml`，无 Qt 依赖、注入时钟）：单击立即 ±1 帧并
+    保持暂停；按住 ≥250ms 进入连续走带；松手/取消停止 feeding。走带步进由媒体时钟推进（起始帧 +
+    elapsed × 速率 × 帧率），并以呈现帧 +2 的 lead 上界做背压限界——下一帧由呈现决定，不由按键数
+    决定；同方向重复按键视为 auto-repeat 忽略，反方向先结束旧方向（协调器侧取消旧流并升代）。
+  - `JogKeyHandler`（窗口事件过滤器，`Dvs.Ui/JogKeyHandler` 注册）：裸 A/D、←/→（播放预设加 ,/.）
+    压下→jogPress、抬起→jogRelease；auto-repeat 按键被消费且不触发；窗口失活（Alt+Tab）释放全部
+    按键；未启用时全部放行（对话框/文本框/图片工作区快捷键不受影响）。ReviewShortcuts 中对应
+    per-repeat Shortcut 移除（无法感知 key release 是旧实现依赖 OS 重复时钟的根因），帮助行保留
+    并注明"长按连续走带"。
+  - `ReviewController` 新增 jogPress/jogRelease/jogCancel/jogRate 与 jogging/jogActive/jogDirection
+    投影；步进经同一 PlaybackCoordinator 的 StepFramesCommand ±1 链（单 generation、current+prepared
+    流水线、输入 lookahead 上界 3、warm cursor 复用、换向取消旧代），协调器语义零改动。
+  - TransportBar 上一帧/下一帧按钮改为 pressed/released/canceled 驱动 jog（与键盘一致，幂等守卫），
+    键盘激活（Space/Enter）仍走 clicked 单步回退；Esc（非全屏/有 chrome 时专用 Shortcut）、对话框
+    （shortcutsEnabled 翻转 → handler 释放）、会话不可步进（refresh 内 poll 自取消）、窗口关闭
+    （Main.qml onClosing）均结束走带。
+  - 反向走带复用既有 ADR-003 反向 GOP 窗口（关键帧顺解+缓存+反序呈现），请求窗长 24、上限 48，
+    未改 SourceDecodeActor 行为。
+- **E05 交付**：
+  - 完整帧组缓存（provider setTable_）：命中/未命中/淘汰计数 + 真实条目/字节占用进
+    `FrameProviderStatistics`；FIFO 改为访问序 LRU（命中刷新 recency，不只插入时）。
+  - 单源缓存（SourceFrameCache）：新增淘汰计数；actor `DecoderBackendStatus` 暴露
+    cacheEvictCount/cacheEntryCount/cacheRetainedBytes（实际占用，非"最多 N 帧"口径）。
+  - 预取守卫：队列空闲优先级由结构性位置承担——provider 取件序为 control→exact→sequential→
+    prefetch（预取只在前列为空时解码）、每次新请求取消旧代预取（cancelOutdatedFrameQueuesLocked）、
+    actor read-ahead 遇 urgent work 让位；协调器精确导航完成处的 submitPrefetch 注释钉死该契约
+    （该点不可能有播放运行或交互步流活跃）。集缓存对预取保持 source-cache-only（不保留完整帧组）。
+  - `Main.cpp` 性能报告补 frameset_cache_misses/evictions/entries/bytes 与 per_source_decode 的
+    cache_evictions/cache_entries/cache_bytes/reverse_window_* 键。
+- **验收对照（§4 E04/E05、§2.2）**：三类请求分别调度未破坏（原速播放/拖动/精确逐帧路径未动）；
+  轻点精确、长按连续、松手即停、鼠标按钮与键盘一致；generation 过期不更新画面由协调器既有
+  cancelInteractiveStepRun 升代 + 反向终结测试覆盖。
+- **验证（本地 dev preset，2026-10-11）**：
+  - 新增 GoogleTest：`JogStateMachineTests` 11 项（轻点单步、跨 250ms 阈值、媒体时钟节奏与
+    轮询频率无关、背压 lead 上界、松手停止、边界自取消、auto-repeat 忽略、换向重起、速率钳制
+    0.5/2.0、无效方向拒绝、提交被拒不取消）；`JogKeyHandlerTests` 9 项（键位映射、auto-repeat 抑制
+    与合成 release 不终止、禁用放行、方向门、修饰键放行、播放预设 ,/. 门、失活释放、禁用释放、
+    非监视对象过滤）；`ReviewControllerTests` +5 项（tap 单步且重复按忽略、按住按媒体时钟+lead
+    节奏、会话失去步进能力自取消、边界/gate 无副作用、速率投影）；`MultiSourceFrameProviderTests`
+    +3 项（访问序 LRU 判别：重访 0 后插入 4 淘汰 1、frame 0 仍命中=第二次命中——FIFO 变异下
+    hits 停在 1/misses 增至 6；4 帧往返零重解码零淘汰；9 帧往返淘汰有界且尾部 3 帧命中）；
+    `SourceDecodeActorTests` +1 项（三帧缓存五次精确解码 → 占用=3 帧、淘汰=2、最近帧命中、
+    最旧帧重解码后再淘汰）。
+  - QML：`ui.ReviewActions` +4 项（jog 转发与 manualNavigation、边界门无副作用、release/cancel
+    转发、投影读取）；`ui.player_osc` +3 项（按住上一帧按钮 jogPress(-1)+单次 jogRelease、下一帧
+    同 + 键盘 clicked 恰好单步、事件序恰为 press→release）。
+  - 既有套件回归：ui.ReviewControllerTests 98/98、application.PlaybackCoordinatorTests 90/90、
+    media.MultiSourceFrameProviderTests + SourceDecodeActorTests 40/40、ui.MainQmlContractTests 87/87、
+    ui.player_osc + ui.ReviewActions 全绿。
+  - 变异证据：见 `out/verification/e04-jog-mutation/` 与 `out/verification/e05-cache-mutation/`
+    （改坏→失败→还原记录）。
+- **UNVERIFIED（真机项，不宣称）**：长按 10 秒真实手感与停止延迟 P95≤100ms（需 D3D11VA 真机）；
+  反向冷 GOP 实际准备/走带速度（48 帧是请求上限不是缓存实测，实测经新增 reverse_window_* 与
+  cache_* 指标读出）；缓存命中率提升幅度（往返 24 帧与 8/10bit、1/2/3 源矩阵未跑真机）；0.5×/2×
+  速率的 UI 选择器未做（能力已暴露为 jogRate 属性，默认 1×）。
+- **回退**：恢复 ReviewShortcuts 旧 per-repeat Shortcut、移除 JogKeyHandler 实例与 TransportBar
+  pressed/released 接线即回到 OS auto-repeat 行为；LRU 还原为 insertionOrder 比较即回 FIFO；
+  预取守卫删除不影响其余路径。协调器除 submitPrefetch 守卫外零改动。
 
 ## 2026-10-11 启动关键路径减负 E01
 

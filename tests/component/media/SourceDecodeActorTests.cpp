@@ -703,5 +703,67 @@ TEST(SourceDecodeActorTests, ReverseGopWindowRebuildsAfterLeftEdgeExhaustion) {
     EXPECT_LE(afterSecond.exactSeekCount, seeksAfterFirstWindow + 3U);
 }
 
+// E05: the actor reports what its source cache actually holds — real entry/byte occupancy and
+// eviction pressure next to the hit count — so "48-frame window" style capacity claims stay
+// separable from measured behavior.
+TEST(SourceDecodeActorTests, BackendStatusReportsSourceCacheOccupancyAndEvictions) {
+    platform::FrameBudget budget{16U * 1024U * 1024U};
+    std::atomic<bool> interrupted = false;
+    std::atomic<bool> canceled = false;
+    SourceDecodeActor actor{0U, descriptor("h264_a_320x180_30fps_12.mp4"), budget, &interrupted};
+    ASSERT_TRUE(actor.open(canceled));
+
+    // Probe the real frame size first, then size the cache to three frames.
+    SourceDecodeSubmission probe = actor.submit(SourceDecodeRequest{
+        .frameId = domain::FrameId{0},
+        .priority = SourceDecodePriority::Exact,
+        .cancellationRequested = std::shared_ptr<const std::atomic<bool>>(
+            &canceled, [](const std::atomic<bool>*) noexcept {}),
+    });
+    ASSERT_EQ(probe.status, application::PortSubmitResult::Accepted);
+    const domain::Result<DecodedFrame> probed = probe.completion.get();
+    ASSERT_TRUE(probed) << probed.error().technicalDetail;
+    const std::size_t frameBytes = probed.value().handle.accountedBytes();
+    ASSERT_GT(frameBytes, 0U);
+
+    SourceDecodeActor smallCacheActor{
+        0U,
+        descriptor("h264_a_320x180_30fps_12.mp4"),
+        budget,
+        &interrupted,
+        false,
+        frameBytes * 3U,
+    };
+    ASSERT_TRUE(smallCacheActor.open(canceled));
+    const auto decodeExact = [&](const std::int64_t frame) {
+        SourceDecodeSubmission submitted = smallCacheActor.submit(SourceDecodeRequest{
+            .frameId = domain::FrameId{frame},
+            .priority = SourceDecodePriority::Exact,
+            .cancellationRequested = std::shared_ptr<const std::atomic<bool>>(
+                &canceled, [](const std::atomic<bool>*) noexcept {}),
+        });
+        ASSERT_EQ(submitted.status, application::PortSubmitResult::Accepted);
+        const domain::Result<DecodedFrame> decoded = submitted.completion.get();
+        ASSERT_TRUE(decoded) << decoded.error().technicalDetail;
+    };
+
+    // Five exact decodes through a three-frame cache: two entries must be evicted.
+    for (const std::int64_t frame : {0, 1, 2, 3, 4}) {
+        decodeExact(frame);
+    }
+    const media::DecoderBackendStatus afterFill = smallCacheActor.backendStatus();
+    EXPECT_EQ(afterFill.cacheEntryCount, 3U);
+    EXPECT_EQ(afterFill.cacheRetainedBytes, frameBytes * 3U);
+    EXPECT_EQ(afterFill.cacheEvictCount, 2U);
+
+    // The most recent frame still hits; the evicted oldest one re-decodes.
+    decodeExact(4);
+    EXPECT_EQ(smallCacheActor.backendStatus().cacheHitCount, 1U);
+    EXPECT_EQ(smallCacheActor.backendStatus().cacheEvictCount, 2U);
+    decodeExact(0);
+    EXPECT_EQ(smallCacheActor.backendStatus().cacheEvictCount, 3U);
+    EXPECT_EQ(smallCacheActor.backendStatus().cacheHitCount, 1U);
+}
+
 } // namespace
 } // namespace dvs::media::internal

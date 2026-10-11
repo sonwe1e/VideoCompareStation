@@ -662,6 +662,11 @@ private:
         if (!sources_.has_value()) {
             return;
         }
+        // Prefetch priority is enforced downstream, not here: the provider drains control/exact/
+        // sequential before touching the prefetch queue and discards outdated-generation prefetch
+        // on every newer request, and the decode actor defers its read-ahead to urgent work. This
+        // call site is the exact-seek completion, where no playback run or interactive step stream
+        // can be active — they are torn down before the seek begins.
         for (const domain::FrameId target : targets) {
             const FrameRequest request{
                 .context =

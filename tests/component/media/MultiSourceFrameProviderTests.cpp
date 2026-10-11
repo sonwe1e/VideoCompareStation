@@ -599,6 +599,152 @@ TEST(MultiSourceFrameProviderTests, FrameSetCacheLeavesRenderHeadroomUnderShared
     EXPECT_EQ(provider.frameSetCacheHitCountForTesting(), 0U);
 }
 
+// E05 access-order LRU: revisiting a cached frame refreshes its recency, so the eviction picks
+// the frame the review left alone longest — not the oldest insertion. With a four-entry table
+// holding 0..3, a revisit of 0 followed by inserting 4 must evict 1; frame 0 then still hits.
+// The FIFO predecessor evicted 0 here, which is exactly the round-trip regression this changes.
+TEST(MultiSourceFrameProviderTests, FrameSetCacheKeepsRevisitedFramesByAccessOrder) {
+    platform::FrameBudget budget{8U * 1024U * 1024U};
+    MultiSourceFrameProvider provider{budget};
+    const auto events = std::make_shared<RecordingEventSink>();
+    const application::FrameProviderOpenRequest open = makeOpenRequest(744U);
+    ASSERT_EQ(provider.submit(open, events), application::PortSubmitResult::Accepted);
+    ASSERT_TRUE(events->waitForEventCount(1U));
+
+    const auto decodeExact = [&](const std::uint64_t requestId, const std::int64_t frame) {
+        events->clear();
+        const application::FrameRequest request{
+            .context = makeFrameContext(requestId, requestId),
+            .frameId = domain::FrameId{frame},
+            .priority = application::FrameRequestPriority::Exact,
+        };
+        EXPECT_EQ(provider.submit(request, events), application::PortSubmitResult::Accepted);
+        EXPECT_TRUE(events->waitForEventCount(2U));
+        EXPECT_TRUE(findFrameSetReady(events, request.context).has_value());
+    };
+
+    decodeExact(745U, 0);
+    decodeExact(746U, 1);
+    decodeExact(747U, 2);
+    decodeExact(748U, 3);
+    const std::vector<std::uint64_t> fullTableDecodes = provider.decodeCountsForTesting();
+
+    // Revisit frame 0: a cache hit that must also refresh its LRU recency.
+    decodeExact(749U, 0);
+    EXPECT_EQ(provider.decodeCountsForTesting(), fullTableDecodes);
+    EXPECT_EQ(provider.statistics().frameSetCacheHits, 1U);
+
+    // A fifth entry forces one eviction (and decodes the new frame once); the access-order
+    // victim is frame 1, not frame 0.
+    decodeExact(750U, 4);
+    const FrameProviderStatistics afterInsert = provider.statistics();
+    EXPECT_EQ(afterInsert.frameSetCacheEvictions, 1U);
+    EXPECT_EQ(afterInsert.frameSetCacheEntries, 4U);
+    EXPECT_EQ(afterInsert.frameSetCacheMisses, 5U);
+    std::vector<std::uint64_t> expectedDecodes = fullTableDecodes;
+    for (std::uint64_t& count : expectedDecodes) {
+        count += 1U;
+    }
+    EXPECT_EQ(provider.decodeCountsForTesting(), expectedDecodes);
+
+    // The discriminator: frame 0 survived the insertion, so revisiting it is the second
+    // set-level hit. The FIFO predecessor evicted frame 0 here: the revisit becomes a miss
+    // (hits stays 1, misses grows to 6) — exactly the round-trip regression this change removes.
+    decodeExact(751U, 0);
+    EXPECT_EQ(provider.statistics().frameSetCacheHits, 2U);
+    EXPECT_EQ(provider.statistics().frameSetCacheMisses, 5U);
+}
+
+// E05 round-trip scenario, 4-frame span: a full back-and-forth inside the table capacity never
+// re-decodes — every reverse target hits the retained sets. Occupancy stays bounded at 4 entries.
+TEST(MultiSourceFrameProviderTests, RoundTripWithinCapacityHitsEveryRevisit) {
+    platform::FrameBudget budget{8U * 1024U * 1024U};
+    MultiSourceFrameProvider provider{budget};
+    const auto events = std::make_shared<RecordingEventSink>();
+    const application::FrameProviderOpenRequest open = makeOpenRequest(752U);
+    ASSERT_EQ(provider.submit(open, events), application::PortSubmitResult::Accepted);
+    ASSERT_TRUE(events->waitForEventCount(1U));
+
+    const auto decodeExact = [&](const std::uint64_t requestId, const std::int64_t frame) {
+        events->clear();
+        const application::FrameRequest request{
+            .context = makeFrameContext(requestId, requestId),
+            .frameId = domain::FrameId{frame},
+            .priority = application::FrameRequestPriority::Exact,
+        };
+        EXPECT_EQ(provider.submit(request, events), application::PortSubmitResult::Accepted);
+        EXPECT_TRUE(events->waitForEventCount(2U));
+        EXPECT_TRUE(findFrameSetReady(events, request.context).has_value());
+    };
+
+    for (std::int64_t frame = 0; frame <= 3; ++frame) {
+        decodeExact(static_cast<std::uint64_t>(753U + frame), frame);
+    }
+    const std::vector<std::uint64_t> forwardDecodes = provider.decodeCountsForTesting();
+
+    // Generations must advance even while the walk goes backward: a lower generation is a
+    // stale request the provider cancels on sight, not a reverse step.
+    std::uint64_t walkRequestId = 760U;
+    for (std::int64_t frame = 2; frame >= 0; --frame) {
+        decodeExact(walkRequestId++, frame);
+    }
+    EXPECT_EQ(provider.decodeCountsForTesting(), forwardDecodes);
+    const FrameProviderStatistics statistics = provider.statistics();
+    EXPECT_EQ(statistics.frameSetCacheHits, 3U);
+    EXPECT_EQ(statistics.frameSetCacheMisses, 4U);
+    EXPECT_EQ(statistics.frameSetCacheEntries, 4U);
+    EXPECT_EQ(statistics.frameSetCacheEvictions, 0U);
+    EXPECT_GT(statistics.frameSetCacheRetainedBytes, 0U);
+}
+
+// E05 round-trip scenario, 9-frame span: beyond capacity the walk re-decodes, but the last four
+// sets stay cached so the immediately-following backward steps hit, and occupancy stays bounded.
+TEST(MultiSourceFrameProviderTests, RoundTripBeyondCapacityReDecodesButKeepsTheTail) {
+    platform::FrameBudget budget{8U * 1024U * 1024U};
+    MultiSourceFrameProvider provider{budget};
+    const auto events = std::make_shared<RecordingEventSink>();
+    const application::FrameProviderOpenRequest open = makeOpenRequest(764U);
+    ASSERT_EQ(provider.submit(open, events), application::PortSubmitResult::Accepted);
+    ASSERT_TRUE(events->waitForEventCount(1U));
+
+    const auto decodeExact = [&](const std::uint64_t requestId, const std::int64_t frame) {
+        events->clear();
+        const application::FrameRequest request{
+            .context = makeFrameContext(requestId, requestId),
+            .frameId = domain::FrameId{frame},
+            .priority = application::FrameRequestPriority::Exact,
+        };
+        EXPECT_EQ(provider.submit(request, events), application::PortSubmitResult::Accepted);
+        EXPECT_TRUE(events->waitForEventCount(2U));
+        EXPECT_TRUE(findFrameSetReady(events, request.context).has_value());
+    };
+
+    for (std::int64_t frame = 0; frame <= 8; ++frame) {
+        decodeExact(static_cast<std::uint64_t>(765U + frame), frame);
+    }
+    const FrameProviderStatistics afterForward = provider.statistics();
+    EXPECT_EQ(afterForward.frameSetCacheMisses, 9U);
+    EXPECT_EQ(afterForward.frameSetCacheEntries, 4U);
+    EXPECT_EQ(afterForward.frameSetCacheEvictions, 5U);
+    const std::vector<std::uint64_t> forwardDecodes = provider.decodeCountsForTesting();
+
+    // Backward from 7 to 4: the most recent entries 7/6/5 hit; 4 was already evicted by the
+    // forward walk's fifth insert, so its revisit is the sixth miss and its insert evicts the
+    // now-oldest entry 8. Generations keep advancing as the walk goes backward.
+    std::uint64_t walkRequestId = 780U;
+    for (std::int64_t frame = 7; frame >= 4; --frame) {
+        decodeExact(walkRequestId++, frame);
+    }
+    const FrameProviderStatistics afterBackward = provider.statistics();
+    // The per-source decode counts do not move on the re-assembly: the actors' own source
+    // caches still hold the walked frames, which is exactly why a set-level miss stays cheap.
+    EXPECT_EQ(provider.decodeCountsForTesting(), forwardDecodes);
+    EXPECT_EQ(afterBackward.frameSetCacheHits, 3U);
+    EXPECT_EQ(afterBackward.frameSetCacheMisses, 10U);
+    EXPECT_EQ(afterBackward.frameSetCacheEvictions, 6U);
+    EXPECT_EQ(afterBackward.frameSetCacheEntries, 4U);
+}
+
 TEST(MultiSourceFrameProviderTests, PrefetchPopulatesSourceCachesWithoutPublishingAFrameSet) {
     platform::FrameBudget budget{8U * 1024U * 1024U};
     MultiSourceFrameProvider provider{budget};

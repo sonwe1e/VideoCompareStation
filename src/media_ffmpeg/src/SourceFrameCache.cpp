@@ -74,6 +74,7 @@ void SourceFrameCache::clear() noexcept {
     index_.clear();
     entries_.clear();
     retainedBytes_ = 0U;
+    evictionCount_ = 0U;
 }
 
 std::size_t SourceFrameCache::capacityBytes() const noexcept {
@@ -88,11 +89,16 @@ std::size_t SourceFrameCache::entryCount() const noexcept {
     return entries_.size();
 }
 
+std::uint64_t SourceFrameCache::evictionCount() const noexcept {
+    return evictionCount_;
+}
+
 void SourceFrameCache::evictToFit(const std::size_t incomingBytes) noexcept {
     while (!entries_.empty() && retainedBytes_ > capacityBytes_ - incomingBytes) {
         retainedBytes_ -= entries_.back().bytes;
         index_.erase(entries_.back().key);
         entries_.pop_back();
+        ++evictionCount_;
     }
 }
 

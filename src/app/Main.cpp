@@ -1986,6 +1986,12 @@ runDesktop(int& argc,
                   : provider.totalAssemblyMicroseconds / provider.assembledFrameSets);
     addNumber(QStringLiteral("frameset_assembly_maximum_us"), provider.maximumAssemblyMicroseconds);
     addNumber(QStringLiteral("frameset_cache_hits"), provider.frameSetCacheHits);
+    // E05 cache evidence: misses/evictions/occupancy turn the cache from a capacity claim into
+    // measured behavior (per-source occupancy and the reverse window live in per_source_decode).
+    addNumber(QStringLiteral("frameset_cache_misses"), provider.frameSetCacheMisses);
+    addNumber(QStringLiteral("frameset_cache_evictions"), provider.frameSetCacheEvictions);
+    addNumber(QStringLiteral("frameset_cache_entries"), provider.frameSetCacheEntries);
+    addNumber(QStringLiteral("frameset_cache_bytes"), provider.frameSetCacheRetainedBytes);
 
     QJsonArray sourceDecode;
     for (std::size_t index = 0U; index < playbackBackends.size(); ++index) {
@@ -1999,7 +2005,20 @@ runDesktop(int& argc,
             {QStringLiteral("device_generation"),
              static_cast<double>(backend.deviceGeneration.value())},
             {QStringLiteral("cache_hits"), static_cast<double>(backend.cacheHitCount)},
+            {QStringLiteral("cache_evictions"), static_cast<double>(backend.cacheEvictCount)},
+            {QStringLiteral("cache_entries"), static_cast<double>(backend.cacheEntryCount)},
+            {QStringLiteral("cache_bytes"), static_cast<double>(backend.cacheRetainedBytes)},
             {QStringLiteral("exact_seeks"), static_cast<double>(backend.exactSeekCount)},
+            {QStringLiteral("reverse_window_hits"),
+             static_cast<double>(backend.reverseWindowHitCount)},
+            {QStringLiteral("reverse_window_builds"),
+             static_cast<double>(backend.reverseWindowBuildCount)},
+            {QStringLiteral("reverse_window_built_frames"),
+             static_cast<double>(backend.reverseWindowBuiltFrameCount)},
+            {QStringLiteral("reverse_window_build_maximum_us"),
+             static_cast<double>(backend.reverseWindowBuildMaximumMicroseconds)},
+            {QStringLiteral("reverse_window_fallbacks"),
+             static_cast<double>(backend.reverseExactFallbackCount)},
             {QStringLiteral("calls"), static_cast<double>(backend.completedDecodeCount)},
             {QStringLiteral("average_us"),
              static_cast<double>(backend.completedDecodeCount == 0U

@@ -21,6 +21,12 @@ struct FrameProviderStatistics final {
     std::uint64_t totalAssemblyMicroseconds = 0U;
     std::uint64_t maximumAssemblyMicroseconds = 0U;
     std::uint64_t frameSetCacheHits = 0U;
+    // E05 complete-FrameSet cache evidence: misses pair with hits, evictions with occupancy.
+    // Entry/byte occupancy is the real retained amount, not a capacity claim.
+    std::uint64_t frameSetCacheMisses = 0U;
+    std::uint64_t frameSetCacheEvictions = 0U;
+    std::size_t frameSetCacheEntries = 0U;
+    std::size_t frameSetCacheRetainedBytes = 0U;
     // Held-forward step gate (plan 1.6 M1.1): counts captured across the
     // HeldStepping window and reported as deltas.
     std::uint64_t sequentialRequestCount = 0U;

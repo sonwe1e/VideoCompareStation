@@ -522,17 +522,27 @@ public:
     }
 
     [[nodiscard]] FrameProviderStatistics statistics() const noexcept {
-        return FrameProviderStatistics{
+        FrameProviderStatistics statistics{
             .assembledFrameSets = assembledFrameSets_.load(std::memory_order_acquire),
             .totalAssemblyMicroseconds = totalAssemblyMicroseconds_.load(std::memory_order_acquire),
             .maximumAssemblyMicroseconds =
                 maximumAssemblyMicroseconds_.load(std::memory_order_acquire),
             .frameSetCacheHits = frameSetCacheHitCount_.load(std::memory_order_acquire),
+            .frameSetCacheMisses = frameSetCacheMissCount_.load(std::memory_order_acquire),
+            .frameSetCacheEvictions = frameSetCacheEvictCount_.load(std::memory_order_acquire),
             .sequentialRequestCount = sequentialRequestCount_.load(std::memory_order_acquire),
             .cancelCount = cancelCount_.load(std::memory_order_acquire),
             .decoderReopenCount = decoderReopenCount_.load(std::memory_order_acquire),
             .generationDeltaCount = generationDeltaCount_.load(std::memory_order_acquire),
         };
+        // Occupancy is read under the control mutex so a concurrent cacheSet eviction cannot
+        // produce entry/byte pairs from different generations of the table.
+        {
+            std::scoped_lock lock(mutex_);
+            statistics.frameSetCacheEntries = setTable_.size();
+            statistics.frameSetCacheRetainedBytes = setTableRetainedBytes_;
+        }
+        return statistics;
     }
 
     [[nodiscard]] std::vector<DecoderBackendStatus> decoderBackendStatuses() const {
@@ -556,7 +566,9 @@ private:
         internal::FrameSetCacheKey key;
         application::FrameSet set;
         std::size_t accountedBytes = 0U;
-        std::uint64_t insertionOrder;
+        // E05 access-order LRU: bumped on every cache hit, not only on insertion, so a
+        // round-trip review keeps the frame it just revisited instead of the newest arrival.
+        std::uint64_t lastAccessOrder;
     };
 
     struct PendingFrameAssembly final {
@@ -975,23 +987,24 @@ private:
                 std::min_element(setTable_.begin(),
                                  setTable_.end(),
                                  [](const SetTableEntry& left, const SetTableEntry& right) {
-                                     return left.insertionOrder < right.insertionOrder;
+                                     return left.lastAccessOrder < right.lastAccessOrder;
                                  });
             setTableRetainedBytes_ -= evictable->accountedBytes;
             setTable_.erase(evictable);
+            frameSetCacheEvictCount_.fetch_add(1U, std::memory_order_release);
         }
 
         setTable_.push_back(SetTableEntry{
             .key = key,
             .set = set,
             .accountedBytes = setBytes,
-            .insertionOrder = nextSetInsertionOrder_++,
+            .lastAccessOrder = nextSetAccessOrder_++,
         });
         setTableRetainedBytes_ += setBytes;
     }
 
     [[nodiscard]] std::optional<application::FrameSet>
-    cachedSet(const application::FrameRequest& request) const {
+    cachedSet(const application::FrameRequest& request) {
         if (request.priority != application::FrameRequestPriority::Exact &&
             request.priority != application::FrameRequestPriority::Reverse) {
             return std::nullopt;
@@ -1007,6 +1020,8 @@ private:
         if (cached == setTable_.end()) {
             return std::nullopt;
         }
+        // Access-order LRU (E05): a hit refreshes recency so revisited frames survive eviction.
+        cached->lastAccessOrder = nextSetAccessOrder_++;
         return cached->set;
     }
 
@@ -1048,6 +1063,10 @@ private:
             sequentialSetReady_ = false;
             postFrameSetSucceeded(operation, *cached);
             return;
+        }
+        if (request.priority == application::FrameRequestPriority::Exact ||
+            request.priority == application::FrameRequestPriority::Reverse) {
+            frameSetCacheMissCount_.fetch_add(1U, std::memory_order_release);
         }
         const auto assemblyStarted = std::chrono::steady_clock::now();
 
@@ -1501,7 +1520,8 @@ private:
     std::shared_ptr<platform::GraphicsDeviceBroker> deviceBroker_;
     std::size_t queueCapacity_;
     bool lowPriority_;
-    std::mutex mutex_;
+    // Mutable so const evidence accessors (statistics()) can read table occupancy under lock.
+    mutable std::mutex mutex_;
     std::condition_variable condition_;
     std::deque<std::shared_ptr<ProviderOperation>> controlQueue_;
     std::deque<std::shared_ptr<ProviderOperation>> exactQueue_;
@@ -1523,8 +1543,10 @@ private:
     std::optional<ActiveSession> activeSession_;
     std::deque<SetTableEntry> setTable_;
     std::size_t setTableRetainedBytes_ = 0U;
-    std::uint64_t nextSetInsertionOrder_ = 0;
+    std::uint64_t nextSetAccessOrder_ = 0;
     std::atomic<std::uint64_t> frameSetCacheHitCount_ = 0U;
+    std::atomic<std::uint64_t> frameSetCacheMissCount_ = 0U;
+    std::atomic<std::uint64_t> frameSetCacheEvictCount_ = 0U;
     std::atomic<std::uint64_t> assembledFrameSets_ = 0U;
     std::atomic<std::uint64_t> totalAssemblyMicroseconds_ = 0U;
     std::atomic<std::uint64_t> maximumAssemblyMicroseconds_ = 0U;

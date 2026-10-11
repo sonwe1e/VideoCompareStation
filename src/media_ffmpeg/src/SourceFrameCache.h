@@ -51,6 +51,9 @@ public:
     [[nodiscard]] std::size_t capacityBytes() const noexcept;
     [[nodiscard]] std::size_t retainedBytes() const noexcept;
     [[nodiscard]] std::size_t entryCount() const noexcept;
+    // Entries dropped by evictToFit since construction. E05 cache evidence: eviction pressure,
+    // read next to hits, tells a warm cache from one that keeps discarding what reviews revisit.
+    [[nodiscard]] std::uint64_t evictionCount() const noexcept;
 
 private:
     struct Entry final {
@@ -67,6 +70,7 @@ private:
 
     std::size_t capacityBytes_ = 0U;
     std::size_t retainedBytes_ = 0U;
+    std::uint64_t evictionCount_ = 0U;
     EntryList entries_;
     EntryIndex index_;
 };
