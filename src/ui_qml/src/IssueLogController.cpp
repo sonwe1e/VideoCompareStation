@@ -14,11 +14,13 @@
 namespace dvs::ui {
 namespace {
 
+using application::clampIssueInterval;
 using application::FrameMatchKind;
 using application::IssueRecord;
 using application::IssueRecordKind;
 using application::IssueRestoreDecision;
 using application::IssueSourceRef;
+using application::kDefaultDiagnosticIntervalRadius;
 using application::kIssueRecordSchemaVersion;
 using application::ObservedSourceIdentity;
 using application::PresentedSourceState;
@@ -208,6 +210,23 @@ bool IssueLogController::captureVideoIssue(StoredIssue& issue, const QString& no
             source.timeBaseNumerator = 1;
             source.timeBaseDenominator = 1'000'000;
             source.presentationMatchKind = static_cast<std::int32_t>(presented->matchKind);
+        }
+        if (hasFrame) {
+            const std::int64_t anchor =
+                static_cast<std::int64_t>(snapshot->displayedFrame->value());
+            const std::int64_t frameCount =
+                static_cast<std::int64_t>(snapshot->canonicalFrameCount);
+            record.interval =
+                clampIssueInterval(anchor, kDefaultDiagnosticIntervalRadius, frameCount);
+            record.interval.sessionEpoch = snapshot->sessionEpoch.value();
+            record.interval.playbackGeneration = snapshot->playbackGeneration.value();
+            const bool loopActive =
+                snapshot->playbackRangeLoopActive || snapshot->playbackRangeLoop;
+            if (loopActive && snapshot->playbackRangeOut.has_value()) {
+                const std::int64_t loopOut =
+                    static_cast<std::int64_t>(snapshot->playbackRangeOut->value());
+                record.interval.loopSeamAtOut = (record.interval.outFrame == loopOut);
+            }
         }
     }
     record.canonicalSourceIndex = review_->canonicalSourceIndex();
@@ -403,6 +422,57 @@ QVariantMap IssueLogController::issueAt(const int index) const {
     map.insert(QStringLiteral("hasValidPresentation"), issue.record.hasValidPresentation);
     map.insert(QStringLiteral("schemaVersion"), static_cast<qint64>(issue.record.schemaVersion));
     map.insert(QStringLiteral("screenshotIsDisplayResult"), issue.record.screenshotIsDisplayResult);
+    const bool hasInterval =
+        (issue.record.kind == IssueRecordKind::Video && issue.record.interval.anchorFrame >= 0);
+    map.insert(QStringLiteral("hasInterval"), hasInterval);
+    map.insert(QStringLiteral("intervalAnchorFrame"),
+               static_cast<qint64>(issue.record.interval.anchorFrame));
+    map.insert(QStringLiteral("intervalInFrame"),
+               static_cast<qint64>(issue.record.interval.inFrame));
+    map.insert(QStringLiteral("intervalOutFrame"),
+               static_cast<qint64>(issue.record.interval.outFrame));
+    map.insert(QStringLiteral("intervalSessionEpoch"),
+               static_cast<qulonglong>(issue.record.interval.sessionEpoch));
+    map.insert(QStringLiteral("intervalPlaybackGeneration"),
+               static_cast<qulonglong>(issue.record.interval.playbackGeneration));
+    map.insert(QStringLiteral("intervalLoopSeamAtOut"), issue.record.interval.loopSeamAtOut);
+
+    QVariantMap intervalMap;
+    intervalMap.insert(QStringLiteral("hasInterval"), hasInterval);
+    intervalMap.insert(QStringLiteral("anchorFrame"),
+                       static_cast<qint64>(issue.record.interval.anchorFrame));
+    intervalMap.insert(QStringLiteral("inFrame"),
+                       static_cast<qint64>(issue.record.interval.inFrame));
+    intervalMap.insert(QStringLiteral("outFrame"),
+                       static_cast<qint64>(issue.record.interval.outFrame));
+    intervalMap.insert(QStringLiteral("sessionEpoch"),
+                       static_cast<qulonglong>(issue.record.interval.sessionEpoch));
+    intervalMap.insert(QStringLiteral("playbackGeneration"),
+                       static_cast<qulonglong>(issue.record.interval.playbackGeneration));
+    intervalMap.insert(QStringLiteral("loopSeamAtOut"), issue.record.interval.loopSeamAtOut);
+    map.insert(QStringLiteral("interval"), intervalMap);
+    return map;
+}
+
+QVariantMap IssueLogController::intervalAt(const int index) const {
+    if (index < 0 || index >= static_cast<int>(issues_.size())) {
+        return {};
+    }
+    const StoredIssue& issue = issues_[static_cast<std::size_t>(index)];
+    if (issue.record.kind != IssueRecordKind::Video || issue.record.interval.anchorFrame < 0) {
+        return {};
+    }
+    QVariantMap map;
+    map.insert(QStringLiteral("hasInterval"), true);
+    map.insert(QStringLiteral("anchorFrame"),
+               static_cast<qint64>(issue.record.interval.anchorFrame));
+    map.insert(QStringLiteral("inFrame"), static_cast<qint64>(issue.record.interval.inFrame));
+    map.insert(QStringLiteral("outFrame"), static_cast<qint64>(issue.record.interval.outFrame));
+    map.insert(QStringLiteral("sessionEpoch"),
+               static_cast<qulonglong>(issue.record.interval.sessionEpoch));
+    map.insert(QStringLiteral("playbackGeneration"),
+               static_cast<qulonglong>(issue.record.interval.playbackGeneration));
+    map.insert(QStringLiteral("loopSeamAtOut"), issue.record.interval.loopSeamAtOut);
     return map;
 }
 
@@ -499,6 +569,20 @@ QVariantMap IssueLogController::performRestore(const StoredIssue& issue) {
             const IssueSourceRef& canonical =
                 issue.record.sources[canonicalSourcePosition(issue.record)];
             result.insert(QStringLiteral("frame"), static_cast<qint64>(canonical.displayIndex));
+            if (issue.record.interval.anchorFrame >= 0) {
+                result.insert(QStringLiteral("intervalAnchorFrame"),
+                              static_cast<qint64>(issue.record.interval.anchorFrame));
+                result.insert(QStringLiteral("intervalInFrame"),
+                              static_cast<qint64>(issue.record.interval.inFrame));
+                result.insert(QStringLiteral("intervalOutFrame"),
+                              static_cast<qint64>(issue.record.interval.outFrame));
+                result.insert(QStringLiteral("intervalSessionEpoch"),
+                              static_cast<qulonglong>(issue.record.interval.sessionEpoch));
+                result.insert(QStringLiteral("intervalPlaybackGeneration"),
+                              static_cast<qulonglong>(issue.record.interval.playbackGeneration));
+                result.insert(QStringLiteral("intervalLoopSeamAtOut"),
+                              issue.record.interval.loopSeamAtOut);
+            }
         }
         Q_EMIT restoreRequested(result);
         setStatus(QStringLiteral("问题记录可恢复"));

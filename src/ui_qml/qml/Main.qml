@@ -77,6 +77,8 @@ ApplicationWindow {
 
     property int workspaceMode: 0
     property bool issueLogPanelVisible: false
+    property bool nearbyFramesCardVisible: false
+    property int activeDiagnosticIssueIndex: -1
     // qmllint disable unqualified
     readonly property var issueLogModel: typeof issueLog !== "undefined" ? issueLog : null
     readonly property var comparisonExportService: typeof comparisonExport !== "undefined" ? comparisonExport : null
@@ -1587,6 +1589,33 @@ ApplicationWindow {
             root.pendingIssueNoteIndex = -1;
 
         return ok;
+    }
+
+    function openNearbyFramesCard(index) {
+        if (!root.issueLogModel || index < 0 || index >= root.issueLogModel.count)
+            return false;
+
+        const issue = root.issueLogModel.issueAt(index);
+        if (!issue || !issue.hasInterval)
+            return false;
+
+        root.activeDiagnosticIssueIndex = index;
+        root.nearbyFramesCardVisible = true;
+        root.issueLogModel.restoreIssue(index);
+        return true;
+    }
+
+    function playIntervalRange(inF, outF) {
+        if (!root.controller || inF < 0 || outF < inF)
+            return false;
+
+        if (root.shell) {
+            root.shell.setRangeIn(inF, Number(root.controller.mediaTimeForFrame(inF)));
+            root.shell.setRangeOut(outF, Number(root.controller.mediaTimeForFrame(outF)));
+            root.shell.setRangePlaybackState(true, Number(root.currentFrame) !== inF);
+            root.shell.setRangeStartPending(false);
+        }
+        return root.controller.playRange(inF, outF);
     }
 
     // Step-2 comparison export: the caption names the compared sources (GT and
@@ -3772,29 +3801,64 @@ ApplicationWindow {
 
                     required property int index
 
+                    readonly property var issueInfo: root.issueLogModel ? root.issueLogModel.issueAt(issueLogRow.index) : null
+                    readonly property bool rowHasInterval: Boolean(issueInfo && issueInfo.hasInterval)
+
                     width: issueLogList.width
-                    height: 44
+                    height: 48
                     color: Theme.raisedPanel
                     border.color: Theme.border
                     radius: 4
+
                     Column {
-                        anchors.fill: parent
-                        anchors.margins: 6
+                        anchors {
+                            left: parent.left
+                            leftMargin: 6
+                            right: diagButton.visible ? diagButton.left : parent.right
+                            rightMargin: 6
+                            verticalCenter: parent.verticalCenter
+                        }
+
                         Text {
-                            text: root.issueLogModel ? String(root.issueLogModel.issueAt(issueLogRow.index).summary || "") : ""
+                            text: issueLogRow.issueInfo ? String(issueLogRow.issueInfo.summary || "") : ""
                             color: root.primaryTextColor
                             font.pixelSize: 12
+                            elide: Text.ElideRight
+                            width: parent.width
                         }
+
                         Text {
-                            text: root.issueLogModel ? String(root.issueLogModel.issueAt(issueLogRow.index).note || "") : ""
+                            text: issueLogRow.issueInfo ? String(issueLogRow.issueInfo.note || "") : ""
                             color: root.mutedTextColor
                             font.pixelSize: 10
                             elide: Text.ElideRight
                             width: parent.width
                         }
                     }
+
+                    ReviewActionButton {
+                        id: diagButton
+
+                        objectName: "issueLogDiagnosticButton"
+                        visible: issueLogRow.rowHasInterval
+                        text: qsTr("诊断卡")
+                        implicitHeight: 24
+                        implicitWidth: 54
+                        anchors {
+                            right: parent.right
+                            rightMargin: 6
+                            verticalCenter: parent.verticalCenter
+                        }
+                        onClicked: root.openNearbyFramesCard(issueLogRow.index)
+                    }
+
                     MouseArea {
-                        anchors.fill: parent
+                        anchors {
+                            left: parent.left
+                            top: parent.top
+                            bottom: parent.bottom
+                            right: diagButton.visible ? diagButton.left : parent.right
+                        }
                         onClicked: {
                             if (!root.issueLogModel)
                                 return;
@@ -3969,6 +4033,40 @@ ApplicationWindow {
         imagePreset: root.imageWorkspaceActive
         mediaEntries: root.imageWorkspaceActive ? [] : reviewShortcuts.helpEntries
         workspaceEntries: root.workspaceHelpEntries
+    }
+
+    NearbyFramesCard {
+        id: nearbyFramesCard
+
+        objectName: "nearbyFramesCard"
+        visible: root.nearbyFramesCardVisible && !root.imageWorkspaceActive && root.activeDiagnosticIssueIndex >= 0
+        z: 55
+        width: Math.min(root.width - 32, implicitWidth)
+        height: implicitHeight
+        anchors {
+            horizontalCenter: parent.horizontalCenter
+            bottom: transport.top
+            bottomMargin: 16
+        }
+        issueIndex: root.activeDiagnosticIssueIndex
+        issueData: root.issueLogModel && root.activeDiagnosticIssueIndex >= 0 ? root.issueLogModel.issueAt(root.activeDiagnosticIssueIndex) : null
+        intervalData: root.issueLogModel && root.activeDiagnosticIssueIndex >= 0 ? root.issueLogModel.intervalAt(root.activeDiagnosticIssueIndex) : null
+        protocolController: root.protocolModel
+        reviewController: root.controller
+        currentFrame: Number(root.currentFrame)
+
+        onCloseRequested: root.nearbyFramesCardVisible = false
+        onSeekRequested: frame => {
+            root.revealOsc();
+            if (root.controller)
+                root.controller.seekFrame(frame);
+        }
+        onLoopIntervalRequested: (inF, outF) => root.playIntervalRange(inF, outF)
+        onStepFrameRequested: delta => {
+            root.revealOsc();
+            if (root.controller)
+                root.controller.stepFrames(delta);
+        }
     }
 
     IssueNoteDialog {

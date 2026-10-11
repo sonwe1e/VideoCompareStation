@@ -53,6 +53,7 @@ public:
     Q_INVOKABLE bool loadIssues(const QUrl& fileUrl);
     Q_INVOKABLE QVariantMap restoreIssue(int index);
     Q_INVOKABLE QVariantMap issueAt(int index) const;
+    Q_INVOKABLE QVariantMap intervalAt(int index) const;
     Q_INVOKABLE void clearIssues();
 
 Q_SIGNALS:

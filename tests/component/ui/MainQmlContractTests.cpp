@@ -8657,6 +8657,113 @@ TEST(MainQmlContractTests, IssueRowClickRestoresOnceThroughTheSignalEntry) {
     harness.window->close();
 }
 
+TEST(MainQmlContractTests, NearbyFramesCardOpensFromIssueLogAndExposesDiagnosticFilmstrip) {
+    QTemporaryDir temporaryDirectory;
+    ASSERT_TRUE(temporaryDirectory.isValid());
+    const QString pathA = temporaryDirectory.filePath(QStringLiteral("card-test-a.mp4"));
+    const QString pathB = temporaryDirectory.filePath(QStringLiteral("card-test-b.mp4"));
+    for (const QString& path : {pathA, pathB}) {
+        QFile file{path};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_GT(file.write("card-source", 11), 0);
+    }
+
+    WorkspaceHarness harness;
+    harness.withIssueLog = true;
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate);
+    ASSERT_TRUE(installValidatedVideoSet(
+        harness.snapshot,
+        {std::filesystem::path{pathA.toStdWString()}, std::filesystem::path{pathB.toStdWString()}},
+        rate.value(),
+        60,
+        2'000'000));
+    harness.snapshot->displayedFrame = domain::FrameId{20};
+    harness.snapshot->playbackRangeIn = domain::FrameId{10};
+    harness.snapshot->playbackRangeOut = domain::FrameId{24}; // 20 + 4 == 24 -> loopSeamAtOut
+    harness.snapshot->playbackRangeLoopActive = true;
+    harness.snapshot->sessionEpoch = domain::SessionEpoch{2U};
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+    harness.controller->refreshProjection();
+    harness.settle();
+
+    harness.issueLog.setWorkspaceMode(QStringLiteral("video"));
+    ASSERT_TRUE(harness.issueLog.captureCurrentIssue(QStringLiteral("card-artifact-note")));
+    ASSERT_EQ(harness.issueLog.count(), 1);
+
+    const QVariantMap issue = harness.issueLog.issueAt(0);
+    EXPECT_TRUE(issue.value(QStringLiteral("hasInterval")).toBool());
+    EXPECT_EQ(issue.value(QStringLiteral("intervalAnchorFrame")).toLongLong(), 20);
+    EXPECT_EQ(issue.value(QStringLiteral("intervalInFrame")).toLongLong(), 16);
+    EXPECT_EQ(issue.value(QStringLiteral("intervalOutFrame")).toLongLong(), 24);
+    EXPECT_TRUE(issue.value(QStringLiteral("intervalLoopSeamAtOut")).toBool());
+
+    harness.root->setProperty("issueLogPanelVisible", true);
+    harness.settle();
+
+    auto* const list = harness.root->findChild<QQuickItem*>(QStringLiteral("issueLogList"));
+    ASSERT_NE(list, nullptr);
+    QQuickItem* row = nullptr;
+    ASSERT_TRUE(harness.waitUntil([&] {
+        QMetaObject::invokeMethod(
+            list, "itemAtIndex", Q_RETURN_ARG(QQuickItem*, row), Q_ARG(int, 0));
+        return row != nullptr;
+    }));
+
+    auto* const diagButton =
+        row->findChild<QQuickItem*>(QStringLiteral("issueLogDiagnosticButton"));
+    ASSERT_NE(diagButton, nullptr);
+    EXPECT_TRUE(diagButton->property("visible").toBool());
+
+    auto* const card = harness.root->findChild<QQuickItem*>(QStringLiteral("nearbyFramesCard"));
+    ASSERT_NE(card, nullptr);
+    EXPECT_FALSE(card->property("visible").toBool());
+
+    // Click diagnostic button to open card
+    QMetaObject::invokeMethod(diagButton, "clicked");
+    harness.settle();
+
+    EXPECT_TRUE(card->property("visible").toBool());
+    EXPECT_EQ(card->property("anchorFrame").toLongLong(), 20);
+    EXPECT_EQ(card->property("inFrame").toLongLong(), 16);
+    EXPECT_EQ(card->property("outFrame").toLongLong(), 24);
+    EXPECT_TRUE(card->property("loopSeamAtOut").toBool());
+
+    auto* const filmstrip = card->findChild<QQuickItem*>(QStringLiteral("nearbyFramesFilmstrip"));
+    ASSERT_NE(filmstrip, nullptr);
+
+    // Verify cell items inside filmstrip (index 4 is frame 20 anchor, index 8 is frame 24 seam)
+    QQuickItem* anchorCell = nullptr;
+    ASSERT_TRUE(harness.waitUntil([&] {
+        QMetaObject::invokeMethod(
+            filmstrip, "itemAtIndex", Q_RETURN_ARG(QQuickItem*, anchorCell), Q_ARG(int, 4));
+        return anchorCell != nullptr;
+    }));
+    EXPECT_EQ(anchorCell->objectName(), QStringLiteral("nearbyFrameCell_20"));
+
+    QQuickItem* seamCell = nullptr;
+    ASSERT_TRUE(harness.waitUntil([&] {
+        QMetaObject::invokeMethod(
+            filmstrip, "itemAtIndex", Q_RETURN_ARG(QQuickItem*, seamCell), Q_ARG(int, 8));
+        return seamCell != nullptr;
+    }));
+    EXPECT_EQ(seamCell->objectName(), QStringLiteral("nearbyFrameCell_24"));
+    auto* const seamTag = seamCell->findChild<QQuickItem*>(QStringLiteral("loopSeamTag"));
+    ASSERT_NE(seamTag, nullptr);
+    EXPECT_TRUE(seamTag->property("visible").toBool());
+
+    // Clicking "收起" hides the card
+    auto* const closeBtn = card->findChild<QQuickItem*>(QStringLiteral("nearbyFramesCloseButton"));
+    ASSERT_NE(closeBtn, nullptr);
+    QMetaObject::invokeMethod(closeBtn, "clicked");
+    harness.settle();
+    EXPECT_FALSE(card->property("visible").toBool());
+
+    harness.window->close();
+}
+
 // A staged restore that is waiting for its recorded frame must not replay that view onto a
 // different session: opening something else cancels the restore and says so, instead of seeking
 // and re-zooming whatever is open now.

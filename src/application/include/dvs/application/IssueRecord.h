@@ -156,6 +156,10 @@ matchIssueSourceIdentity(const IssueSourceRef& recorded,
 evaluateIssueRestore(const IssueRecord& record,
                      const std::vector<ObservedSourceIdentity>& observedIdentities);
 
+// Default radius for nearby-frames diagnostic interval (4 frames before, 4 frames after =
+// 9 frames span).
+inline constexpr std::int64_t kDefaultDiagnosticIntervalRadius = 4;
+
 // Clamps the diagnostic neighborhood [anchorFrame - radius, anchorFrame + radius] onto the
 // canonical timeline [0, frameCount - 1]. The anchor stays the center; the window truncates at
 // timeline edges instead of shifting, so the recorded interval only ever names positions that

@@ -452,5 +452,72 @@ TEST_F(IssueLogControllerTests, OldSchemaLoadFailsWithExplanation) {
         -1);
 }
 
+TEST_F(IssueLogControllerTests, CapturesDiagnosticIntervalAndLoopSeamFromCommittedSnapshot) {
+    ensureCoreApplication();
+    const QString pathA = tempDir_.path() + QStringLiteral("/a.mp4");
+    const QString pathB = tempDir_.path() + QStringLiteral("/b.mp4");
+    ASSERT_TRUE(writeFile(pathA));
+    ASSERT_TRUE(writeFile(pathB));
+
+    auto backend = std::make_shared<FakeBackend>();
+    backend->currentSnapshot = makeReadySnapshot({pathA, pathB}, 0U);
+    backend->currentSnapshot.displayedFrame = domain::FrameId{7};
+    backend->currentSnapshot.sessionEpoch = domain::SessionEpoch{3U};
+    backend->currentSnapshot.playbackGeneration = domain::PlaybackGeneration{8U};
+    backend->currentSnapshot.playbackRangeIn = domain::FrameId{0};
+    backend->currentSnapshot.playbackRangeOut = domain::FrameId{11}; // 7 + 4 == 11 -> loopSeamAtOut
+    backend->currentSnapshot.playbackRangeLoopActive = true;
+    backend->currentSnapshot.presentedSources = {
+        application::PresentedSourceState{
+            .sourceId = 0U,
+            .sourceFrameId = domain::FrameId{7},
+            .matchKind = application::FrameMatchKind::ExactIndex,
+            .alignmentConfidence = 1.0F,
+            .presentationTime = domain::MediaTime{233'000},
+        },
+        application::PresentedSourceState{
+            .sourceId = 1U,
+            .sourceFrameId = domain::FrameId{7},
+            .matchKind = application::FrameMatchKind::ExactIndex,
+            .alignmentConfidence = 1.0F,
+            .presentationTime = domain::MediaTime{233'000},
+        },
+    };
+    ReviewController review{dependenciesFor(backend)};
+    controller_->setReviewController(&review);
+    controller_->setWorkspaceMode(QStringLiteral("video"));
+    ASSERT_TRUE(controller_->captureCurrentIssue(QStringLiteral("interval-test")));
+    ASSERT_EQ(controller_->count(), 1);
+
+    const QVariantMap issue = controller_->issueAt(0);
+    EXPECT_TRUE(issue.value(QStringLiteral("hasInterval")).toBool());
+    EXPECT_EQ(issue.value(QStringLiteral("intervalAnchorFrame")).toLongLong(), 7);
+    EXPECT_EQ(issue.value(QStringLiteral("intervalInFrame")).toLongLong(), 3);
+    EXPECT_EQ(issue.value(QStringLiteral("intervalOutFrame")).toLongLong(), 11);
+    EXPECT_EQ(issue.value(QStringLiteral("intervalSessionEpoch")).toULongLong(), 3ULL);
+    EXPECT_EQ(issue.value(QStringLiteral("intervalPlaybackGeneration")).toULongLong(), 8ULL);
+    EXPECT_TRUE(issue.value(QStringLiteral("intervalLoopSeamAtOut")).toBool());
+
+    const QVariantMap interval = controller_->intervalAt(0);
+    EXPECT_TRUE(interval.value(QStringLiteral("hasInterval")).toBool());
+    EXPECT_EQ(interval.value(QStringLiteral("anchorFrame")).toLongLong(), 7);
+    EXPECT_EQ(interval.value(QStringLiteral("inFrame")).toLongLong(), 3);
+    EXPECT_EQ(interval.value(QStringLiteral("outFrame")).toLongLong(), 11);
+    EXPECT_EQ(interval.value(QStringLiteral("sessionEpoch")).toULongLong(), 3ULL);
+    EXPECT_EQ(interval.value(QStringLiteral("playbackGeneration")).toULongLong(), 8ULL);
+    EXPECT_TRUE(interval.value(QStringLiteral("loopSeamAtOut")).toBool());
+
+    const QVariantMap restored = controller_->restoreIssue(0);
+    EXPECT_EQ(restored.value(QStringLiteral("decision")).toString(), QStringLiteral("ready"));
+    EXPECT_EQ(restored.value(QStringLiteral("intervalAnchorFrame")).toLongLong(), 7);
+    EXPECT_EQ(restored.value(QStringLiteral("intervalInFrame")).toLongLong(), 3);
+    EXPECT_EQ(restored.value(QStringLiteral("intervalOutFrame")).toLongLong(), 11);
+    EXPECT_TRUE(restored.value(QStringLiteral("intervalLoopSeamAtOut")).toBool());
+
+    // Out of range index returns empty map.
+    EXPECT_TRUE(controller_->intervalAt(-1).isEmpty());
+    EXPECT_TRUE(controller_->intervalAt(5).isEmpty());
+}
+
 } // namespace
 } // namespace dvs::ui
