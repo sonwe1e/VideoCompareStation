@@ -66,7 +66,7 @@ Rectangle {
         if (currentMode === ComparisonSurface.AnalysisGrid)
             return qsTr("分析网格");
         if (currentMode === ComparisonSurface.RoiTriplet)
-            return qsTr("全景+三局部");
+            return qsTr("全景+局部");
         if (currentMode === ComparisonSurface.DualDifference)
             return qsTr("双参考差异");
         return "";
@@ -272,15 +272,16 @@ Rectangle {
                     checked: control.currentMode === ComparisonSurface.AnalysisGrid
                     onTriggered: control.modeRequested(ComparisonSurface.AnalysisGrid)
                 }
-                // V01 task preset: the panorama stays SideBySide and three local windows
-                // re-sample the same presented frames under one shared ROI. Three sources
-                // are required, so the item explains itself as unavailable below that.
+                // V01 task preset: the panorama stays one column per source and the renderer
+                // draws the local windows as extra draws of the same presented frame set under
+                // one shared ROI. Two sources are the minimum, so the item explains itself as
+                // unavailable below that.
                 VcsRadioMenuItem {
                     id: roiTripletMenuItem
 
                     objectName: "roiTripletMenuItem"
-                    text: qsTr("全景+三局部")
-                    enabled: control.sourceCount === 3
+                    text: qsTr("全景+局部")
+                    enabled: control.sourceCount >= 2
                     checked: control.currentMode === ComparisonSurface.RoiTriplet
                     onTriggered: control.modeRequested(ComparisonSurface.RoiTriplet)
                 }

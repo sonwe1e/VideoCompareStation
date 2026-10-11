@@ -23,7 +23,7 @@ constexpr std::array<ComparisonModeDescriptor, 10U> kModeDescriptors{{
     {.mode = ViewMode::Wipe, .minimumSourceCount = 2U, .maximumSourceCount = 3U, .usesPair = true},
     {.mode = ViewMode::Single, .minimumSourceCount = 1U, .maximumSourceCount = 1U},
     {.mode = ViewMode::Fade, .minimumSourceCount = 2U, .maximumSourceCount = 3U, .usesPair = true},
-    {.mode = ViewMode::RoiTriplet, .minimumSourceCount = 3U, .maximumSourceCount = 3U},
+    {.mode = ViewMode::RoiTriplet, .minimumSourceCount = 2U, .maximumSourceCount = 3U},
     {.mode = ViewMode::DualDifference,
      .minimumSourceCount = 3U,
      .maximumSourceCount = 3U,

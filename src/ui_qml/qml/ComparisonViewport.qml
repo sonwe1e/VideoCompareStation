@@ -80,23 +80,23 @@ Rectangle {
     property string alignmentModeName: ""
     property string inexactReason: ""
 
-    // V01 "全景 + 三局部" task preset. The shell already gates the mode by source count; the
+    // V01 "全景 + 局部" task preset. The shell already gates the mode by source count; the
     // local guard keeps the strip off if that ever drifts. The surface itself never renders
-    // this mode - it keeps a ThreeUp panorama (three columns, one per source, because the
-    // two-column SideBySide layout would leave the third source unpresented and its local
-    // window permanently empty) and the RoiTripletStrip re-samples the same presented frame
-    // set, so no extra decode path exists.
+    // this mode - the panorama keeps one column per source (ThreeUp with three sources so the
+    // third stays presented; SideBySide with two) and the renderer draws the local windows as
+    // additional draws of the same presented frame set, so no extra decode path exists.
     // qmllint disable unqualified
-    readonly property bool roiTripletMode: control.effectiveViewMode === ComparisonSurface.RoiTriplet && control.sourceCount >= 3
+    readonly property bool roiTripletMode: control.effectiveViewMode === ComparisonSurface.RoiTriplet && control.sourceCount >= 2
     // qmllint enable unqualified
     // V02 (P05): full-canvas focus suspends the preset - the panorama collapses to the focused
-    // source, so there are no three panels for the local windows to re-sample. The strip and
+    // source, so there are no panels for the local windows to sample. The strip and
     // its outline hide, and the stage reclaims their space; the ROI itself stays on the
     // surface and survives leaving the focus.
     readonly property bool roiTripletStageActive: control.roiTripletMode && control.canvasFocusSlot < 0
     // Window zoom owned here so it survives leaving and re-entering the preset; the ROI
-    // itself lives on the surface and therefore survives every mode switch.
-    property int roiTripletZoomPercent: 100
+    // itself lives on the surface and therefore survives every mode switch. 0 = 适配ROI,
+    // otherwise physical source-pixel percent.
+    property int roiTripletZoomPercent: 0
     // How far the preset strip lifts the bottom chrome row so badges never cover the cells.
     readonly property real roiTripletStageInset: control.roiTripletStageActive ? roiTripletStrip.height + 8 : 0
 
@@ -482,10 +482,11 @@ Rectangle {
             physicalScalePercent: pixelScaleBadge.effectivePercent
             objectName: "dualVideoSurface"
             Accessible.name: qsTr("CompareStation 同步对比画面")
-            // The preset keeps the panorama on the ThreeUp layout; the renderer has no
-            // panel layout for RoiTriplet and the local windows are QML-side re-samples.
-            // ThreeUp (not SideBySide) because the preset needs all three sources presented.
-            viewMode: control.roiTripletMode ? ComparisonSurface.ThreeUp : control.effectiveViewMode
+            // The preset keeps the panorama on one column per source; the renderer has no panel
+            // layout for RoiTriplet and the local windows are renderer-side extra draws. ThreeUp
+            // (not SideBySide) with three sources because the third column must stay presented;
+            // with two sources SideBySide presents both.
+            viewMode: control.roiTripletMode ? (control.sourceCount >= 3 ? ComparisonSurface.ThreeUp : ComparisonSurface.SideBySide) : control.effectiveViewMode
             differenceMetric: control.preferences ? control.preferences.differenceMetric : ComparisonSurface.RgbAbsolute
             differenceGain: control.preferences ? control.preferences.differenceGain : ComparisonSurface.Gain1x
             differenceEdge: control.effectiveDifferenceEdge
@@ -522,13 +523,13 @@ Rectangle {
         // qmllint enable import unqualified unresolved-type
 
         // The panorama marks the shared ROI while the preset is active ("全景标出区域").
-        // Positions come from the same mapping the local windows sample, so the outline and
-        // the triplet can never disagree about where the ROI is. Hidden while the canvas is
+        // Rects come from the surface, resolved with the same pure geometry the render path
+        // draws, so the outline can never drift from the picture. Hidden while the canvas is
         // focused on one source - the strip is hidden then, and there is no panorama to mark.
         Repeater {
             objectName: "roiTripletOutlineRepeater"
 
-            model: control.roiTripletMode && control.canvasFocusSlot < 0 && dualVideoSurface.roiEnabled ? dualVideoSurface.sourcePanelRects : []
+            model: control.roiTripletMode && control.canvasFocusSlot < 0 && dualVideoSurface.roiEnabled ? dualVideoSurface.roiTripletOutlineRects : []
 
             delegate: Rectangle {
                 id: roiOutline
@@ -536,13 +537,13 @@ Rectangle {
                 required property var modelData
 
                 objectName: "roiTripletOutline"
-                readonly property var textureRect: roiTripletStrip.windowTextureRect(Number(roiOutline.modelData.slot), 1)
+                readonly property bool resolved: Boolean(roiOutline.modelData) && Number(roiOutline.modelData.width) > 1 && Number(roiOutline.modelData.height) > 1
 
-                visible: Boolean(textureRect) && width > 1 && height > 1
-                x: textureRect ? textureRect.x * dualVideoSurface.width : 0
-                y: textureRect ? textureRect.y * dualVideoSurface.height : 0
-                width: textureRect ? textureRect.width * dualVideoSurface.width : 0
-                height: textureRect ? textureRect.height * dualVideoSurface.height : 0
+                visible: roiOutline.resolved
+                x: roiOutline.resolved ? Number(roiOutline.modelData.x) : 0
+                y: roiOutline.resolved ? Number(roiOutline.modelData.y) : 0
+                width: roiOutline.resolved ? Number(roiOutline.modelData.width) : 0
+                height: roiOutline.resolved ? Number(roiOutline.modelData.height) : 0
                 color: "transparent"
                 border.color: control.accentColor
                 border.width: 2
@@ -1510,11 +1511,12 @@ Rectangle {
         }
     }
 
-    // V01 "全景 + 三局部": three local windows re-sampling the live panorama. Every ROI and
-    // transform input is the surface's own state, so the windows share one ROI and follow
-    // zoom/pan/source switches by construction. Declared last so its controls sit above the
-    // navigation MouseArea. Entering or leaving the preset never seeks, changes GT or
-    // playback: the only state it owns is the window zoom percent.
+    // V01 "全景 + 局部": the local windows are renderer-side extra draws of the same presented
+    // frame set. Every ROI and transform input is the surface's own state, so the windows share
+    // one ROI and follow zoom/pan/source switches by construction; only the window zoom and the
+    // staged content rects live here. Declared last so its controls sit above the navigation
+    // MouseArea. Entering or leaving the preset never seeks, changes GT or playback: the only
+    // state it owns is the window zoom percent.
     RoiTripletStrip {
         id: roiTripletStrip
 
@@ -1532,23 +1534,29 @@ Rectangle {
         // ComparisonSurface is runtime-registered, so qmllint cannot see it derives Item.
         sourceItem: dualVideoSurface
         // qmllint enable incompatible-type
-        panels: dualVideoSurface.sourcePanelRects
-        sourceInfos: control.sourceMediaInfo
         sourceCount: control.sourceCount
         sourceLabels: control.sourceNames
         roiEnabled: dualVideoSurface.roiEnabled
-        roiLeft: dualVideoSurface.roiLeft
-        roiTop: dualVideoSurface.roiTop
-        roiRight: dualVideoSurface.roiRight
-        roiBottom: dualVideoSurface.roiBottom
-        viewScale: dualVideoSurface.viewScale
-        viewCenterX: dualVideoSurface.viewCenterX
-        viewCenterY: dualVideoSurface.viewCenterY
         zoomPercent: control.roiTripletZoomPercent
         // Shared sampling preference, not a second knob: the pixel mode pins nearest, auto
         // mirrors the surface's own >=200% nearest rule against the window zoom, smooth
-        // stays bilinear.
+        // stays bilinear. 适配ROI (0) keeps the smooth default.
         smoothSampling: dualVideoSurface.videoFilterMode !== dualVideoSurface.VideoFilterPixel && !(dualVideoSurface.videoFilterMode === dualVideoSurface.VideoFilterAuto && control.roiTripletZoomPercent >= 200)
+        // Published footage extents chrome; resolved by the same pure geometry the renderer
+        // draws with.
+        windowRects: dualVideoSurface.roiTripletWindowRects
         onZoomStepRequested: percent => control.roiTripletZoomPercent = percent
     }
+
+    // qmllint disable incompatible-type
+    // ComparisonSurface is runtime-registered, so qmllint cannot see the target derives Item.
+    Binding {
+        // The strip stages each window cell's content rect (surface item coordinates) and the
+        // renderer turns it into an additional draw of the presented frame set. A hidden strip
+        // stages an empty list, so no stale local draw can outlive the preset.
+        target: dualVideoSurface
+        property: "roiTripletWindows"
+        value: roiTripletStrip.stagedWindows
+    }
+    // qmllint enable incompatible-type
 }

@@ -139,6 +139,16 @@
   SideBySide 时三源场景 C 源根本不被呈现（固定两列布局）；②Qt 6 RHI 的 ShaderEffect 不接受
   内联 GLSL（解析成 qrc 相对 URL），三个局部窗此前渲染为空——改为 Vulkan 风格源 + qsb 工具
   烘焙签入。模式往返/缩放/平移 ROI 保持，半开边界钳制，无三源入口禁用，进出预设不 seek。
+- **V01 交付（局部窗直采样改造）**：删除 P04 的 flattened snapshot 复采样路径（.qsb 快照
+  shader 已删），局部窗改为 `D3d11ComparisonRenderer` 对同一已呈现 FrameSet 的附加绘制：
+  strip 暂存窗口 contentRect → `SurfaceRenderState.localWindows` → 共用纯函数
+  `surfaceLocalWindowGeometry`（半开钳制定向 ROI、整数裁剪、SAR 横向、100/200/400% 物理
+  档位）→ 同一 render() 同一组 SRV 的 NV12 附加绘制（同一 ACK；视频常量缓冲 3→6 组、逐绘制
+  采样器；`alignLocalWindowFootage` 整物理像素对齐保 1px 棋盘 texel 精确）。缩放命名改为
+  适配ROI/源像素100%/200%/400%，100%=纵向源像素 1:1（横向按 SAR）；QML 不再持有采样公式；
+  全景 ROI 轮廓改由 surface 经 `surfacePanelRoiRect` 发布；2 源（SideBySide 全景）与 3 源
+  （ThreeUp 全景）均可用。WARP 回读覆盖棋盘 texel 精确、全景缩放不变性、90° 旋转、SAR、
+  奇数宽末列；变异验证见提交说明。真机 D3D11VA 与高 DPI 走查保持未验证。
 - **P10 交付**：`PresentationStatisticsProbe`（platform_windows，pimpl 无 D3D 类型泄漏）：
   自有离屏 flip 交换链 + 硬件优先/WARP 回退设备，七态分级能力 + Media 统计四态细分；
   "必须亲见 PresentCount 递增才报可用"；快照只读（PresentCount/SyncRefresh/QPC）；

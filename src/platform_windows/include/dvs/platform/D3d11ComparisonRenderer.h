@@ -127,6 +127,69 @@ effectiveSurfaceSampleRect(const SurfaceViewTransform& transform,
                                                         const SurfaceRect& sourcePixels,
                                                         float nominalPixelsPerUnit = 0.0F) noexcept;
 
+// One staged local window of the V01 RoiTriplet preset. The strip maps each window cell's
+// content rect into the surface's item space and stages it here; the renderer turns it into an
+// additional draw of the already-presented frame set (same SRVs, same render pass, no extra
+// decode path and no extra presentation acknowledgement).
+struct SurfaceLocalWindow final {
+    std::uint8_t slot = 0U;
+    // Window content bounds in surface item-local logical coordinates.
+    SurfaceRect contentRect;
+    // 0 = fit the whole ROI; otherwise physical device pixels per source pixel on the vertical
+    // axis (100/200/400). The horizontal axis follows the sample aspect ratio, like every
+    // other presentation geometry in the renderer.
+    int zoomPercent = 0;
+    bool smoothSampling = true;
+
+    [[nodiscard]] bool isValid() const noexcept;
+};
+
+// Geometry of one local window, resolved by the same pure function for the renderer draw and
+// the QML letterbox chrome. `footageRect` lives in the coordinate space of the content bounds
+// that were passed in (nominal-DPR logical units) and is always centred inside them; `crop` is
+// the visible region in unrotated normalized source coordinates, so the draw keeps the frame's
+// own rotation path. `nativePhysicalWidth/Height` are the exact physical extents a physical
+// zoom promises (oriented crop times magnification, SAR on the horizontal axis); zero at fit,
+// where no per-pixel size claim exists. The renderer re-expresses them on the render target's
+// actual pixel grid, whose scale Qt rounds independently per axis.
+struct SurfaceLocalWindowGeometry final {
+    bool valid = false;
+    SurfaceRect footageRect;
+    SurfaceNormalizedRect crop;
+    float nativePhysicalWidth = 0.0F;
+    float nativePhysicalHeight = 0.0F;
+};
+
+// Resolves one local window observation transform. The result depends only on the ROI, the
+// zoom and the frame's own geometry - never on the panorama view transform, so changing the
+// panorama zoom can never change what a fixed-magnification window samples.
+//
+// Fit shows the whole half-open-clamped ROI, letterboxed by its display aspect (SAR applied
+// to width). A physical zoom shows an integer-sized crop centred on the ROI centre (the frame
+// centre while the ROI is off), sized so the footage spans at most the content rect's physical
+// extent: exactly one source pixel per zoom/100 physical pixels on the vertical axis, SAR
+// scaled on the horizontal axis, clamped half-open to the frame.
+[[nodiscard]] SurfaceLocalWindowGeometry
+surfaceLocalWindowGeometry(const SurfaceRect& contentRect,
+                           float pixelsPerLogicalUnit,
+                           float sourceWidth,
+                           float sourceHeight,
+                           std::uint16_t rotationDegrees,
+                           std::uint32_t sarNumerator,
+                           std::uint32_t sarDenominator,
+                           bool roiEnabled,
+                           const SurfaceNormalizedRect& roi,
+                           int zoomPercent) noexcept;
+
+// Rect of the half-open-clamped oriented ROI as displayed inside one panel's drawn content, in
+// the coordinate space of the given rects. The panorama's positioning transform enters only
+// through the content/source pair the caller already resolved, so the outline the QML overlay
+// draws cannot drift from what the renderer paints. Returns an empty rect when there is no
+// visible intersection.
+[[nodiscard]] SurfaceRect surfacePanelRoiRect(const SurfaceRect& contentRect,
+                                              const SurfaceRect& sourcePixels,
+                                              const SurfaceRect& roiPixels) noexcept;
+
 // Qt-facing code snapshots its public scene-graph state into this native-type-free value. The
 // matrix is row-major and maps item-local logical coordinates directly to clip space.
 struct SurfaceRenderState final {
@@ -166,6 +229,10 @@ struct SurfaceRenderState final {
     bool roiEnabled = false;
     SurfaceNormalizedRect roi;
     std::uint8_t referenceSlot = 0U;
+    // V01 RoiTriplet staged local windows. Extra draws of the same presented frame set; they
+    // never change the publication, the acknowledgement or the decode path.
+    std::array<SurfaceLocalWindow, 3U> localWindows{};
+    std::uint32_t localWindowCount = 0U;
 
     [[nodiscard]] bool isValid() const noexcept;
 };
@@ -226,6 +293,20 @@ struct Nv12ColorTransform final {
 [[nodiscard]] SurfaceRect aspectFitRect(const SurfaceRect& bounds,
                                         std::uint32_t sourceWidth,
                                         std::uint32_t sourceHeight) noexcept;
+
+// Floating-point aspect fit for already-scaled display extents (SAR/ROI applied).
+[[nodiscard]] SurfaceRect
+aspectFitRectFloat(const SurfaceRect& bounds, float displayWidth, float displayHeight) noexcept;
+
+// The shared ROI rotated into the oriented (display) frame and clamped half-open to it, in
+// oriented pixels: the right/bottom edges may not pass the last valid pixel centre, so no
+// sampling path can average in the texel at the frame edge. Used by the local-window geometry
+// and the panorama ROI outline alike.
+[[nodiscard]] SurfaceRect orientedClampedRoiPixels(float sourceWidth,
+                                                   float sourceHeight,
+                                                   std::uint16_t rotationDegrees,
+                                                   bool roiEnabled,
+                                                   const SurfaceNormalizedRect& roi) noexcept;
 
 [[nodiscard]] SurfacePresentationGeometry
 computeSurfacePresentationGeometry(SurfaceViewMode viewMode,

@@ -31,7 +31,12 @@ TEST(ComparisonContractTests, DescribesExactlyTheCurrentOneTwoAndThreeSourceMode
     EXPECT_FALSE(isViewModeAvailable(ViewMode::SideBySide, 1U));
 
     for (const ViewMode mode :
-         std::array{ViewMode::SideBySide, ViewMode::Difference, ViewMode::Wipe, ViewMode::Fade}) {
+         std::array{ViewMode::SideBySide,
+                    ViewMode::Difference,
+                    ViewMode::Wipe,
+                    ViewMode::Fade,
+                    // V01: the RoiTriplet preset also serves two sources (SideBySide panorama).
+                    ViewMode::RoiTriplet}) {
         EXPECT_TRUE(isViewModeAvailable(mode, 2U));
     }
     EXPECT_FALSE(isViewModeAvailable(ViewMode::ThreeUp, 2U));
@@ -48,7 +53,6 @@ TEST(ComparisonContractTests, DescribesExactlyTheCurrentOneTwoAndThreeSourceMode
         EXPECT_TRUE(isViewModeAvailable(mode, 3U));
     }
     EXPECT_FALSE(isViewModeAvailable(ViewMode::Single, 3U));
-    EXPECT_FALSE(isViewModeAvailable(ViewMode::RoiTriplet, 2U));
     EXPECT_FALSE(isViewModeAvailable(ViewMode::DualDifference, 2U));
 }
 

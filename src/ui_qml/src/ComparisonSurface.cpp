@@ -114,6 +114,10 @@ struct PresentationOptions final {
     bool roiEnabled = false;
     platform::SurfaceNormalizedRect roi;
     std::uint8_t referenceSlot = 0U;
+    // V01 RoiTriplet staged local windows. Extra draws of the presented frame set; suspended
+    // entirely while a full-canvas focus replaces the panorama.
+    std::array<platform::SurfaceLocalWindow, 3U> localWindows{};
+    std::uint32_t localWindowCount = 0U;
 };
 
 [[nodiscard]] platform::SurfaceViewMode
@@ -146,7 +150,47 @@ nativeDifferenceFilter(const ComparisonSurface::DifferenceFilter value) noexcept
     return static_cast<platform::SurfaceDifferenceFilter>(value);
 }
 
+// V01 RoiTriplet staged windows, validated into the render-state form. A full-canvas focus
+// suspends the preset (the strip hides and restages empty), so the focus path never sees
+// stale window draws.
+[[nodiscard]] std::pair<std::array<platform::SurfaceLocalWindow, 3U>, std::uint32_t>
+stagedLocalWindows(const ComparisonSurface& surface) {
+    std::pair<std::array<platform::SurfaceLocalWindow, 3U>, std::uint32_t> result{};
+    if (surface.canvasFocusSlot() >= 0) {
+        return result;
+    }
+    const QVariantList staged = surface.roiTripletWindows();
+    for (const QVariant& entry : staged) {
+        if (result.second >= result.first.size()) {
+            break;
+        }
+        const QVariantMap map = entry.toMap();
+        const int slot = map.value(QStringLiteral("slot")).toInt();
+        const double x = map.value(QStringLiteral("x")).toDouble();
+        const double y = map.value(QStringLiteral("y")).toDouble();
+        const double width = map.value(QStringLiteral("width")).toDouble();
+        const double height = map.value(QStringLiteral("height")).toDouble();
+        if (slot < 0 || slot > 2 || !std::isfinite(x) || !std::isfinite(y) ||
+            !std::isfinite(width) || !std::isfinite(height) || width <= 0.0 || height <= 0.0) {
+            continue;
+        }
+        const int zoomPercent = map.value(QStringLiteral("zoomPercent"), 0).toInt();
+        result.first[result.second] = platform::SurfaceLocalWindow{
+            .slot = static_cast<std::uint8_t>(slot),
+            .contentRect = platform::SurfaceRect{static_cast<float>(x),
+                                                 static_cast<float>(y),
+                                                 static_cast<float>(width),
+                                                 static_cast<float>(height)},
+            .zoomPercent = std::clamp(zoomPercent, 0, 400),
+            .smoothSampling = map.value(QStringLiteral("smoothSampling"), true).toBool(),
+        };
+        ++result.second;
+    }
+    return result;
+}
+
 [[nodiscard]] PresentationOptions presentationOptions(const ComparisonSurface& surface) noexcept {
+    const auto [localWindows, localWindowCount] = stagedLocalWindows(surface);
     return PresentationOptions{
         .viewMode = nativeViewMode(surface.viewMode()),
         .differenceMetric = nativeDifferenceMetric(surface.differenceMetric()),
@@ -176,6 +220,8 @@ nativeDifferenceFilter(const ComparisonSurface::DifferenceFilter value) noexcept
                 .bottom = static_cast<float>(surface.roiBottom()),
             },
         .referenceSlot = static_cast<std::uint8_t>(surface.referenceSlot()),
+        .localWindows = localWindows,
+        .localWindowCount = localWindowCount,
     };
 }
 
@@ -529,6 +575,8 @@ public:
             .roiEnabled = presentationOptions_.roiEnabled,
             .roi = presentationOptions_.roi,
             .referenceSlot = presentationOptions_.referenceSlot,
+            .localWindows = presentationOptions_.localWindows,
+            .localWindowCount = presentationOptions_.localWindowCount,
         };
         retry_.retryContendedRender(window_, renderer_.render(state));
         publishPresentedFrameIdentity();
@@ -634,7 +682,20 @@ public:
     }
 
     [[nodiscard]] QRectF rect() const override {
-        return bounds_;
+        // BoundedRectRendering promises the node draws only inside rect(). The staged local
+        // windows draw into the strip's cells below the surface item, so the reported rect
+        // must cover them too.
+        QRectF united = bounds_;
+        for (std::uint32_t index = 0U; index < presentationOptions_.localWindowCount &&
+                                       index < presentationOptions_.localWindows.size();
+             ++index) {
+            const platform::SurfaceLocalWindow& window = presentationOptions_.localWindows[index];
+            united = united.united(QRectF{window.contentRect.x,
+                                          window.contentRect.y,
+                                          window.contentRect.width,
+                                          window.contentRect.height});
+        }
+        return united;
     }
 
 private:
@@ -680,6 +741,8 @@ void ComparisonSurface::setViewMode(const ViewMode value) {
     clampSmallViewportToGeometry();
     emit viewModeChanged();
     emit presentationGeometryChanged();
+    // The published panorama ROI outline follows the panel layout.
+    emitRoiTripletGeometryChanged();
     update();
 }
 
@@ -845,6 +908,7 @@ void ComparisonSurface::setSourceDisplayInfo(const QVariantList& value) {
     sourceDisplayInfo_ = value;
     clampSmallViewportToGeometry();
     emit presentationGeometryChanged();
+    emitRoiTripletGeometryChanged();
 }
 
 qreal ComparisonSurface::wipePositionForLogicalX(const qreal x) const {
@@ -1170,6 +1234,8 @@ void ComparisonSurface::zoomAt(const qreal normalizedX,
     viewCenterX_ = nextLeft + (nextVisible * 0.5);
     viewCenterY_ = nextTop + (nextVisible * 0.5);
     emit viewportChanged();
+    // The panorama ROI outline follows the view transform; the local windows do not.
+    emitRoiTripletGeometryChanged();
     update();
 }
 
@@ -1190,6 +1256,7 @@ void ComparisonSurface::panBy(const qreal normalizedDeltaX, const qreal normaliz
     viewCenterX_ = nextX;
     viewCenterY_ = nextY;
     emit viewportChanged();
+    emitRoiTripletGeometryChanged();
     update();
 }
 
@@ -1202,6 +1269,7 @@ void ComparisonSurface::resetViewport() {
     viewCenterY_ = 0.5;
     viewScale_ = 1.0;
     emit viewportChanged();
+    emitRoiTripletGeometryChanged();
     update();
 }
 
@@ -1231,6 +1299,7 @@ void ComparisonSurface::zoomToNormalizedRect(const qreal left,
     viewCenterX_ = std::clamp(centerX, visible * 0.5, 1.0 - visible * 0.5);
     viewCenterY_ = std::clamp(centerY, visible * 0.5, 1.0 - visible * 0.5);
     emit viewportChanged();
+    emitRoiTripletGeometryChanged();
     update();
 }
 
@@ -1259,6 +1328,7 @@ void ComparisonSurface::setRoiNormalized(const qreal left,
     viewScale_ = 1.0;
     emit viewportChanged();
     emit presentationGeometryChanged();
+    emitRoiTripletGeometryChanged();
     update();
 }
 
@@ -1276,6 +1346,7 @@ void ComparisonSurface::clearRoi() {
     viewScale_ = 1.0;
     emit viewportChanged();
     emit presentationGeometryChanged();
+    emitRoiTripletGeometryChanged();
     update();
 }
 
@@ -1325,6 +1396,7 @@ void ComparisonSurface::restoreViewport(const qreal centerX,
     roiBottom_ = roiEnabled ? roiBottom : 1.0;
     emit viewportChanged();
     emit presentationGeometryChanged();
+    emitRoiTripletGeometryChanged();
     update();
 }
 
@@ -1340,6 +1412,7 @@ void ComparisonSurface::setReferenceSlot(const int value) {
     clampSmallViewportToGeometry();
     emit referenceSlotChanged();
     emit presentationGeometryChanged();
+    emitRoiTripletGeometryChanged();
     update();
 }
 
@@ -1357,6 +1430,7 @@ void ComparisonSurface::setCanvasFocusSlot(const int value) {
     clampSmallViewportToGeometry();
     emit canvasFocusSlotChanged();
     emit presentationGeometryChanged();
+    emitRoiTripletGeometryChanged();
     update();
 }
 
@@ -1447,6 +1521,154 @@ void ComparisonSurface::publishPresentedFrameIdentity(const bool valid,
     });
 }
 
+QVariantList ComparisonSurface::roiTripletWindows() const {
+    return roiTripletWindows_;
+}
+
+void ComparisonSurface::setRoiTripletWindows(const QVariantList& windows) {
+    QVariantList sanitized;
+    sanitized.reserve(windows.size());
+    for (const QVariant& entry : windows) {
+        if (sanitized.size() >= 3) {
+            break;
+        }
+        const QVariantMap map = entry.toMap();
+        const int slot = map.value(QStringLiteral("slot")).toInt();
+        const double x = map.value(QStringLiteral("x")).toDouble();
+        const double y = map.value(QStringLiteral("y")).toDouble();
+        const double width = map.value(QStringLiteral("width")).toDouble();
+        const double height = map.value(QStringLiteral("height")).toDouble();
+        if (slot < 0 || slot > 2 || !std::isfinite(x) || !std::isfinite(y) ||
+            !std::isfinite(width) || !std::isfinite(height) || width <= 0.0 || height <= 0.0) {
+            continue;
+        }
+        sanitized.append(map);
+    }
+    if (sanitized == roiTripletWindows_) {
+        return;
+    }
+    roiTripletWindows_ = sanitized;
+    emitRoiTripletGeometryChanged();
+    update();
+}
+
+QVariantList ComparisonSurface::roiTripletWindowRects() const {
+    QVariantList result;
+    const auto [windows, windowCount] = stagedLocalWindows(*this);
+    const qreal devicePixelRatio =
+        window() != nullptr ? window()->effectiveDevicePixelRatio() : 1.0;
+    for (std::uint32_t index = 0U; index < windowCount && index < windows.size(); ++index) {
+        const platform::SurfaceLocalWindow& staged = windows[index];
+        const QVariantMap info =
+            staged.slot < sourceDisplayInfo_.size()
+                ? sourceDisplayInfo_.at(static_cast<qsizetype>(staged.slot)).toMap()
+                : QVariantMap{};
+        const double sourceWidth = info.value(QStringLiteral("width")).toDouble();
+        const double sourceHeight = info.value(QStringLiteral("height")).toDouble();
+        const platform::SurfaceLocalWindowGeometry geometry = platform::surfaceLocalWindowGeometry(
+            staged.contentRect,
+            static_cast<float>(devicePixelRatio),
+            static_cast<float>(sourceWidth),
+            static_cast<float>(sourceHeight),
+            static_cast<std::uint16_t>(sourceRotationDegrees(*this, static_cast<int>(staged.slot))),
+            static_cast<std::uint32_t>(
+                info.value(QStringLiteral("sampleAspectNumerator"), 1U).toUInt()),
+            static_cast<std::uint32_t>(
+                info.value(QStringLiteral("sampleAspectDenominator"), 1U).toUInt()),
+            roiEnabled_,
+            platform::SurfaceNormalizedRect{static_cast<float>(roiLeft_),
+                                            static_cast<float>(roiTop_),
+                                            static_cast<float>(roiRight_),
+                                            static_cast<float>(roiBottom_)},
+            staged.zoomPercent);
+        QVariantMap item;
+        item.insert(QStringLiteral("slot"), static_cast<int>(staged.slot));
+        item.insert(QStringLiteral("valid"), geometry.valid);
+        // Extents only: the footage is always centred inside the staged content rect, and the
+        // strip draws its letterbox chrome in its own cell coordinates.
+        item.insert(QStringLiteral("width"), geometry.footageRect.width);
+        item.insert(QStringLiteral("height"), geometry.footageRect.height);
+        result.append(item);
+    }
+    return result;
+}
+
+QVariantList ComparisonSurface::roiTripletOutlineRects() const {
+    QVariantList result;
+    if (!roiEnabled_) {
+        return result;
+    }
+    const platform::SurfacePresentationGeometry geometry = surfacePresentationGeometry(*this);
+    const platform::SurfacePixelGrid grid = surfacePixelGrid(*this);
+    const qreal devicePixelRatio =
+        window() != nullptr ? window()->effectiveDevicePixelRatio() : 1.0;
+    const platform::SurfaceViewTransform transform{
+        static_cast<float>(viewCenterX_),
+        static_cast<float>(viewCenterY_),
+        static_cast<float>(viewScale_),
+    };
+    const platform::SurfaceNormalizedRect roi{static_cast<float>(roiLeft_),
+                                              static_cast<float>(roiTop_),
+                                              static_cast<float>(roiRight_),
+                                              static_cast<float>(roiBottom_)};
+    const std::array<platform::SurfaceDisplayExtent, 3U> extents =
+        sourceDisplayExtents(*this, true, QSizeF{roiRight_ - roiLeft_, roiBottom_ - roiTop_});
+    for (std::size_t index = 0U; index < geometry.panels.sourceCount; ++index) {
+        const std::uint8_t slot = geometry.panels.sourceSlots[index];
+        if (slot >= extents.size() || !extents[slot].isValid()) {
+            continue;
+        }
+        const QVariantMap info = slot < sourceDisplayInfo_.size()
+                                     ? sourceDisplayInfo_.at(static_cast<qsizetype>(slot)).toMap()
+                                     : QVariantMap{};
+        const float sourceWidth =
+            static_cast<float>(info.value(QStringLiteral("width")).toDouble());
+        const float sourceHeight =
+            static_cast<float>(info.value(QStringLiteral("height")).toDouble());
+        if (sourceWidth <= 0.0F || sourceHeight <= 0.0F) {
+            continue;
+        }
+        const std::uint16_t rotation =
+            static_cast<std::uint16_t>(sourceRotationDegrees(*this, static_cast<int>(slot)));
+        // The panorama's positioning transform enters only through the content/source pair -
+        // exactly the geometry the render path draws for this panel.
+        const platform::SurfaceRect fitted = aspectFitRectFloat(
+            geometry.panels.sourceRects[index], extents[slot].width, extents[slot].height);
+        const platform::SurfaceNormalizedRect sample =
+            effectiveSurfaceSampleRect(transform, true, roi);
+        const platform::SurfaceRect sourcePixels =
+            orientedSurfaceSamplePixels(sourceWidth, sourceHeight, rotation, sample);
+        const platform::SurfaceRect content =
+            transformedSurfaceContentRect(geometry.panels.sourceRects[index],
+                                          fitted,
+                                          transform,
+                                          grid,
+                                          sourcePixels,
+                                          static_cast<float>(devicePixelRatio));
+        if (!content.isValid()) {
+            continue;
+        }
+        const platform::SurfaceRect roiPixels =
+            orientedClampedRoiPixels(sourceWidth, sourceHeight, rotation, true, roi);
+        const platform::SurfaceRect outline = surfacePanelRoiRect(content, sourcePixels, roiPixels);
+        if (!outline.isValid()) {
+            continue;
+        }
+        QVariantMap item;
+        item.insert(QStringLiteral("slot"), static_cast<int>(slot));
+        item.insert(QStringLiteral("x"), outline.x);
+        item.insert(QStringLiteral("y"), outline.y);
+        item.insert(QStringLiteral("width"), outline.width);
+        item.insert(QStringLiteral("height"), outline.height);
+        result.append(item);
+    }
+    return result;
+}
+
+void ComparisonSurface::emitRoiTripletGeometryChanged() {
+    emit roiTripletGeometryChanged();
+}
+
 QSGNode* ComparisonSurface::updatePaintNode(QSGNode* const oldNode, UpdatePaintNodeData*) {
     QQuickWindow* const itemWindow = window();
     // Sync-time probe of the relay's gap counter. The probe itself is a lock-free atomic read
@@ -1490,6 +1712,7 @@ void ComparisonSurface::itemChange(const ItemChange change, const ItemChangeData
     if (change == ItemSceneChange || change == ItemDevicePixelRatioHasChanged) {
         clampSmallViewportToGeometry();
         emit presentationGeometryChanged();
+        emitRoiTripletGeometryChanged();
         update();
     }
 }
@@ -1499,6 +1722,7 @@ void ComparisonSurface::geometryChange(const QRectF& newGeometry, const QRectF& 
     if (newGeometry.size() != oldGeometry.size()) {
         clampSmallViewportToGeometry();
         emit presentationGeometryChanged();
+        emitRoiTripletGeometryChanged();
         update();
     }
 }

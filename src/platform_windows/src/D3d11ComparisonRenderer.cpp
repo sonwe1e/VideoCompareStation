@@ -75,6 +75,9 @@ struct VideoDraw final {
     ColorConstants color;
     ID3D11ShaderResourceView* yView = nullptr;
     ID3D11ShaderResourceView* uvView = nullptr;
+    // Per-draw sampler selection: regular slots share the state-level filter, while each local
+    // window carries its own smooth/pixel preference.
+    SurfaceDifferenceFilter filter = SurfaceDifferenceFilter::Bilinear;
 };
 
 struct DifferenceDraw final {
@@ -92,12 +95,10 @@ struct DifferenceDraw final {
 struct PreparedSetDraw final {
     FrameMailboxPublication publication;
     bool hasDifference = false;
-    // Filter for the regular video-slot pass; mirrored from SurfaceRenderState::videoFilter
-    // so drawVideoSlots can pick its sampler without threading the whole state through.
-    SurfaceDifferenceFilter videoFilter = SurfaceDifferenceFilter::Bilinear;
-    // Up to three slot draws (two-up, three-up, reference-focus layouts). Each draw carries its
-    // own constants and owns one constant-buffer set until the immediate-context draw is issued.
-    std::array<VideoDraw, 3U> videoDraws{};
+    // Up to three slot draws (two-up, three-up, reference-focus layouts) plus up to three
+    // V01 local-window draws of the same presented set. Each draw carries its own constants
+    // and owns one constant-buffer set until the immediate-context draw is issued.
+    std::array<VideoDraw, 6U> videoDraws{};
     std::size_t videoDrawCount = 0U;
     std::array<DifferenceDraw, 2U> differenceDraws{};
     std::size_t differenceDrawCount = 0U;
@@ -314,7 +315,97 @@ d3dBacking(const std::shared_ptr<const GpuFrameResource>& frame) noexcept {
             },
         .yView = backing.yView(),
         .uvView = backing.uvView(),
+        .filter = state.videoFilter,
     };
+}
+
+// Sub-region of a frame's texture region in normalized source coordinates - the local-window
+// path resolves its crop through the same mapping the panorama draws use.
+[[nodiscard]] application::TextureRegion scaledTextureRegion(const application::TextureRegion& full,
+                                                             const SurfaceNormalizedRect& crop) {
+    return application::TextureRegion{
+        .left = full.left + (crop.left * (full.right - full.left)),
+        .top = full.top + (crop.top * (full.bottom - full.top)),
+        .right = full.left + (crop.right * (full.right - full.left)),
+        .bottom = full.top + (crop.bottom * (full.bottom - full.top)),
+    };
+}
+
+[[nodiscard]] VideoDraw makeLocalWindowDraw(const SurfaceRenderState& state,
+                                            const SurfaceRect& destination,
+                                            const GpuFrameResource& frame,
+                                            const D3d11GpuFrameBacking& backing,
+                                            const SurfaceNormalizedRect& crop,
+                                            const bool smoothSampling) {
+    return VideoDraw{
+        .compose = makeComposeConstants(state,
+                                        destination,
+                                        scaledTextureRegion(frame.geometry().textureRegion, crop),
+                                        frame.geometry().presentation.rotationDegrees),
+        .color =
+            ColorConstants{
+                .yuvToRgb =
+                    nv12ColorTransform(frame.colorMetadata(), frameBitDepth(frame)).yuvToRgb,
+            },
+        .yView = backing.yView(),
+        .uvView = backing.uvView(),
+        .filter =
+            smoothSampling ? SurfaceDifferenceFilter::Bilinear : SurfaceDifferenceFilter::Nearest,
+    };
+}
+
+// Re-express a physical-zoom local-window footage rect on the render target's actual pixel
+// grid and snap it onto whole physical pixels. Qt rounds the swapchain scale independently per
+// axis, so the nominal DPR is only an intent: the drawn quad must size and position through
+// the same grid the panorama's phase alignment reads, or a window whose physical origin lands
+// between pixels would interpolate every texel under bilinear sampling - exactly the averaging
+// the direct source draw exists to avoid. Fit footage (native extents of zero) passes through.
+[[nodiscard]] SurfaceRect alignLocalWindowFootage(const SurfaceRect& footage,
+                                                  const SurfaceRect& contentRect,
+                                                  const SurfacePixelGrid& pixelGrid,
+                                                  const float nativePhysicalWidth,
+                                                  const float nativePhysicalHeight) noexcept {
+    if (nativePhysicalWidth <= 0.0F || nativePhysicalHeight <= 0.0F || !footage.isValid() ||
+        !contentRect.isValid() || !pixelGrid.isValid()) {
+        return footage;
+    }
+    const double drawnWidth = nativePhysicalWidth / pixelGrid.scaleX;
+    const double drawnHeight = nativePhysicalHeight / pixelGrid.scaleY;
+    if (!std::isfinite(drawnWidth) || !std::isfinite(drawnHeight) || drawnWidth <= 0.0 ||
+        drawnHeight <= 0.0) {
+        return footage;
+    }
+    const double physicalWidth = nativePhysicalWidth;
+    const double physicalHeight = nativePhysicalHeight;
+    // A non-integral physical extent (SAR on the horizontal axis) keeps the centred placement;
+    // no per-pixel claim holds on that axis then.
+    const double snappedExtentWidth = std::round(physicalWidth);
+    const double snappedExtentHeight = std::round(physicalHeight);
+    constexpr double integralTolerance = 0.01;
+    const double left = pixelGrid.originX + contentRect.x * pixelGrid.scaleX;
+    const double top = pixelGrid.originY + contentRect.y * pixelGrid.scaleY;
+    const double physicalContentWidth = contentRect.width * pixelGrid.scaleX;
+    const double physicalContentHeight = contentRect.height * pixelGrid.scaleY;
+    double snappedLeft = left;
+    double snappedTop = top;
+    if (std::abs(physicalWidth - snappedExtentWidth) < integralTolerance &&
+        physicalWidth <= physicalContentWidth) {
+        snappedLeft =
+            std::clamp(std::round(left + (physicalContentWidth - snappedExtentWidth) * 0.5),
+                       left,
+                       left + physicalContentWidth - snappedExtentWidth);
+    }
+    if (std::abs(physicalHeight - snappedExtentHeight) < integralTolerance &&
+        physicalHeight <= physicalContentHeight) {
+        snappedTop =
+            std::clamp(std::round(top + (physicalContentHeight - snappedExtentHeight) * 0.5),
+                       top,
+                       top + physicalContentHeight - snappedExtentHeight);
+    }
+    return SurfaceRect{static_cast<float>((snappedLeft - pixelGrid.originX) / pixelGrid.scaleX),
+                       static_cast<float>((snappedTop - pixelGrid.originY) / pixelGrid.scaleY),
+                       static_cast<float>(drawnWidth),
+                       static_cast<float>(drawnHeight)};
 }
 
 [[nodiscard]] DifferenceDraw makeDifferenceDraw(const SurfaceRenderState& state,
@@ -615,6 +706,271 @@ SurfaceRect transformedSurfaceContentRect(const SurfaceRect& bounds,
     return finiteRect(result) ? result : SurfaceRect{};
 }
 
+bool SurfaceLocalWindow::isValid() const noexcept {
+    return slot < 3U && contentRect.isValid() && std::isfinite(contentRect.x) &&
+           std::isfinite(contentRect.y) && zoomPercent >= 0 && zoomPercent <= 400;
+}
+
+namespace {
+
+// Forward map of a normalized source rect into the oriented (display) frame, the fractional
+// counterpart of orientedSurfaceSamplePixels. Rotation 90 turns (l, t, r, b) into
+// (t, 1 - r) as the oriented top-left corner and swaps the extents; 180/270 follow.
+[[nodiscard]] SurfaceNormalizedRect orientedNormalizedRect(const std::uint16_t rotationDegrees,
+                                                           const float left,
+                                                           const float top,
+                                                           const float right,
+                                                           const float bottom) noexcept {
+    switch (rotationDegrees) {
+    case 90U:
+        return {top, 1.0F - right, bottom, 1.0F - left};
+    case 180U:
+        return {1.0F - right, 1.0F - bottom, left, top};
+    case 270U:
+        return {1.0F - bottom, left, 1.0F - top, right};
+    default:
+        return {left, top, right, bottom};
+    }
+}
+
+// Inverse of orientedNormalizedRect: an oriented (display) rect back into unrotated normalized
+// source coordinates, so the renderer can hand the crop to the established texture-region path.
+[[nodiscard]] SurfaceNormalizedRect unorientedNormalizedRect(const std::uint16_t rotationDegrees,
+                                                             const float left,
+                                                             const float top,
+                                                             const float right,
+                                                             const float bottom) noexcept {
+    switch (rotationDegrees) {
+    case 90U:
+        return {1.0F - top - (bottom - top), left, 1.0F - top, left + (right - left)};
+    case 180U:
+        return {1.0F - right, 1.0F - bottom, 1.0F - left, 1.0F - top};
+    case 270U:
+        return {top, 1.0F - right, top + (right - left), 1.0F - left};
+    default:
+        return {left, top, right, bottom};
+    }
+}
+
+} // namespace
+
+SurfaceRect orientedClampedRoiPixels(const float sourceWidth,
+                                     const float sourceHeight,
+                                     const std::uint16_t rotationDegrees,
+                                     const bool roiEnabled,
+                                     const SurfaceNormalizedRect& roi) noexcept {
+    if (!std::isfinite(sourceWidth) || !std::isfinite(sourceHeight) || sourceWidth <= 0.0F ||
+        sourceHeight <= 0.0F ||
+        (rotationDegrees != 0U && rotationDegrees != 90U && rotationDegrees != 180U &&
+         rotationDegrees != 270U) ||
+        (roiEnabled && !roi.isValid())) {
+        return {};
+    }
+    const bool rotated = rotationDegrees == 90U || rotationDegrees == 270U;
+    const float orientedWidth = rotated ? sourceHeight : sourceWidth;
+    const float orientedHeight = rotated ? sourceWidth : sourceHeight;
+    const SurfaceNormalizedRect orientedRoi =
+        roiEnabled
+            ? orientedNormalizedRect(rotationDegrees, roi.left, roi.top, roi.right, roi.bottom)
+            : SurfaceNormalizedRect{};
+    const float maxRight = orientedWidth - 0.5F;
+    const float maxBottom = orientedHeight - 0.5F;
+    const float left = (std::max)(orientedRoi.left * orientedWidth, 0.0F);
+    const float top = (std::max)(orientedRoi.top * orientedHeight, 0.0F);
+    const float right =
+        (std::max)((std::min)(orientedRoi.right * orientedWidth, maxRight), left + 0.5F);
+    const float bottom =
+        (std::max)((std::min)(orientedRoi.bottom * orientedHeight, maxBottom), top + 0.5F);
+    return SurfaceRect{left, top, right - left, bottom - top};
+}
+
+SurfaceLocalWindowGeometry surfaceLocalWindowGeometry(const SurfaceRect& contentRect,
+                                                      const float pixelsPerLogicalUnit,
+                                                      const float sourceWidth,
+                                                      const float sourceHeight,
+                                                      const std::uint16_t rotationDegrees,
+                                                      const std::uint32_t sarNumerator,
+                                                      const std::uint32_t sarDenominator,
+                                                      const bool roiEnabled,
+                                                      const SurfaceNormalizedRect& roi,
+                                                      const int zoomPercent) noexcept {
+    if (!contentRect.isValid() || !std::isfinite(contentRect.x) || !std::isfinite(contentRect.y) ||
+        !std::isfinite(pixelsPerLogicalUnit) || pixelsPerLogicalUnit <= 0.0F ||
+        !std::isfinite(sourceWidth) || !std::isfinite(sourceHeight) || sourceWidth <= 0.0F ||
+        sourceHeight <= 0.0F ||
+        (rotationDegrees != 0U && rotationDegrees != 90U && rotationDegrees != 180U &&
+         rotationDegrees != 270U) ||
+        sarNumerator == 0U || sarDenominator == 0U || zoomPercent < 0 || zoomPercent > 400 ||
+        (roiEnabled && !roi.isValid())) {
+        return {};
+    }
+    const float sar = static_cast<float>(sarNumerator) / static_cast<float>(sarDenominator);
+    if (!std::isfinite(sar) || sar <= 0.0F) {
+        return {};
+    }
+
+    // The oriented frame the window displays, in pixels, and the shared ROI clamped half-open
+    // into it: the right/bottom edges may not pass the last valid pixel centre, so sampling can
+    // never average in the texel at the frame edge.
+    const bool rotated = rotationDegrees == 90U || rotationDegrees == 270U;
+    const float orientedWidth = rotated ? sourceHeight : sourceWidth;
+    const float orientedHeight = rotated ? sourceWidth : sourceHeight;
+    const SurfaceRect clampedRoi =
+        orientedClampedRoiPixels(sourceWidth, sourceHeight, rotationDegrees, roiEnabled, roi);
+    if (!clampedRoi.isValid()) {
+        return {};
+    }
+    const float clampedLeft = clampedRoi.x;
+    const float clampedTop = clampedRoi.y;
+    const float clampedRight = clampedRoi.x + clampedRoi.width;
+    const float clampedBottom = clampedRoi.y + clampedRoi.height;
+    const float centreX = (clampedLeft + clampedRight) * 0.5F;
+    const float centreY = (clampedTop + clampedBottom) * 0.5F;
+
+    float cropLeft = 0.0F;
+    float cropTop = 0.0F;
+    float cropRight = 0.0F;
+    float cropBottom = 0.0F;
+    double footageWidth = 0.0;
+    double footageHeight = 0.0;
+    if (zoomPercent == 0) {
+        // Fit: the whole clamped ROI, letterboxed into the content rect by its display aspect.
+        cropLeft = clampedLeft;
+        cropTop = clampedTop;
+        cropRight = clampedRight;
+        cropBottom = clampedBottom;
+        const double displayWidth = static_cast<double>(cropRight - cropLeft) * sar;
+        const double displayHeight = static_cast<double>(cropBottom - cropTop);
+        if (!(displayWidth > 0.0) || !(displayHeight > 0.0)) {
+            return {};
+        }
+        const double fitScale = (std::min)(static_cast<double>(contentRect.width) / displayWidth,
+                                           static_cast<double>(contentRect.height) / displayHeight);
+        footageWidth = displayWidth * fitScale;
+        footageHeight = displayHeight * fitScale;
+    } else {
+        // Physical zoom: the footage spans zoom/100 physical pixels per source pixel on the
+        // vertical axis (SAR scaled horizontally), so the visible crop is the content rect's
+        // physical extent divided by the magnification. The crop is integer-sized and centred
+        // on the ROI centre, clamped into the frame, so fixed magnification keeps texel-exact
+        // sampling regardless of the window's sub-pixel placement.
+        const double zoom = zoomPercent / 100.0;
+        const double physicalWidth = static_cast<double>(contentRect.width) * pixelsPerLogicalUnit;
+        const double physicalHeight =
+            static_cast<double>(contentRect.height) * pixelsPerLogicalUnit;
+        const double requestedWidth = physicalWidth / (zoom * sar);
+        const double requestedHeight = physicalHeight / zoom;
+        if (!std::isfinite(requestedWidth) || !std::isfinite(requestedHeight) ||
+            requestedWidth < 1.0 || requestedHeight < 1.0) {
+            return {};
+        }
+        float cropWidth = static_cast<float>(
+            (std::min)(std::floor(requestedWidth), static_cast<double>(orientedWidth)));
+        float cropHeight = static_cast<float>(
+            (std::min)(std::floor(requestedHeight), static_cast<double>(orientedHeight)));
+        // Keep the crop half-open inside the frame and its extent integral: an integer crop
+        // with an integer origin lets the renderer snap the footage onto whole physical
+        // pixels, so every footage pixel centre lands on a texel centre at native zoom. The
+        // right/bottom edge therefore stops before the boundary texel entirely.
+        if (orientedWidth < 2.0F || orientedHeight < 2.0F) {
+            return {};
+        }
+        cropWidth = (std::min)(cropWidth, orientedWidth - 1.0F);
+        cropHeight = (std::min)(cropHeight, orientedHeight - 1.0F);
+        if (cropWidth < 1.0F || cropHeight < 1.0F) {
+            return {};
+        }
+        cropLeft = std::clamp(static_cast<float>(std::round(centreX - cropWidth * 0.5F)),
+                              0.0F,
+                              orientedWidth - 1.0F - cropWidth);
+        cropTop = std::clamp(static_cast<float>(std::round(centreY - cropHeight * 0.5F)),
+                             0.0F,
+                             orientedHeight - 1.0F - cropHeight);
+        cropRight = cropLeft + cropWidth;
+        cropBottom = cropTop + cropHeight;
+        // The half-open clamp may shrink the crop below the requested extent; the footage then
+        // covers crop times magnification and letterboxes instead of stretching. The extent is
+        // physical, so it converts back to the content rect's logical units here.
+        footageWidth =
+            static_cast<double>(cropRight - cropLeft) * sar * zoom / pixelsPerLogicalUnit;
+        footageHeight = static_cast<double>(cropBottom - cropTop) * zoom / pixelsPerLogicalUnit;
+    }
+    if (!std::isfinite(footageWidth) || !std::isfinite(footageHeight) || footageWidth <= 0.0 ||
+        footageHeight <= 0.0) {
+        return {};
+    }
+    const SurfaceRect footage{
+        static_cast<float>(contentRect.x + (contentRect.width - footageWidth) * 0.5),
+        static_cast<float>(contentRect.y + (contentRect.height - footageHeight) * 0.5),
+        static_cast<float>(footageWidth),
+        static_cast<float>(footageHeight),
+    };
+    if (!footage.isValid() || !std::isfinite(footage.x) || !std::isfinite(footage.y)) {
+        return {};
+    }
+    const SurfaceNormalizedRect orientedCrop{cropLeft / orientedWidth,
+                                             cropTop / orientedHeight,
+                                             cropRight / orientedWidth,
+                                             cropBottom / orientedHeight};
+    // The physical extent a physical zoom promises: the oriented crop times the magnification,
+    // SAR applied horizontally. The renderer re-expresses this on the render target's real
+    // pixel grid; the fit path claims no per-pixel size and reports zero.
+    const float nativePhysicalWidth =
+        zoomPercent == 0 ? 0.0F
+                         : static_cast<float>(cropRight - cropLeft) * sar * (zoomPercent / 100.0F);
+    const float nativePhysicalHeight =
+        zoomPercent == 0 ? 0.0F : static_cast<float>(cropBottom - cropTop) * (zoomPercent / 100.0F);
+    return SurfaceLocalWindowGeometry{
+        .valid = true,
+        .footageRect = footage,
+        .crop = unorientedNormalizedRect(rotationDegrees,
+                                         orientedCrop.left,
+                                         orientedCrop.top,
+                                         orientedCrop.right,
+                                         orientedCrop.bottom),
+        .nativePhysicalWidth = nativePhysicalWidth,
+        .nativePhysicalHeight = nativePhysicalHeight,
+    };
+}
+
+SurfaceRect surfacePanelRoiRect(const SurfaceRect& contentRect,
+                                const SurfaceRect& sourcePixels,
+                                const SurfaceRect& roiPixels) noexcept {
+    const auto finiteRect = [](const SurfaceRect& rect) {
+        return rect.isValid() && std::isfinite(rect.x) && std::isfinite(rect.y) &&
+               std::isfinite(rect.width) && std::isfinite(rect.height);
+    };
+    if (!finiteRect(contentRect) || !finiteRect(sourcePixels) || !finiteRect(roiPixels) ||
+        sourcePixels.width <= 0.0F || sourcePixels.height <= 0.0F) {
+        return {};
+    }
+    // Linear map from oriented source pixels onto the drawn content, then intersect with the
+    // content rect: an ROI the panorama has panned away loses its off-screen part exactly where
+    // the drawn picture ends.
+    const double scaleX = static_cast<double>(contentRect.width) / sourcePixels.width;
+    const double scaleY = static_cast<double>(contentRect.height) / sourcePixels.height;
+    const double left =
+        contentRect.x + (static_cast<double>(roiPixels.x) - sourcePixels.x) * scaleX;
+    const double top = contentRect.y + (static_cast<double>(roiPixels.y) - sourcePixels.y) * scaleY;
+    const double right =
+        contentRect.x +
+        (static_cast<double>(roiPixels.x + roiPixels.width) - sourcePixels.x) * scaleX;
+    const double bottom =
+        contentRect.y +
+        (static_cast<double>(roiPixels.y + roiPixels.height) - sourcePixels.y) * scaleY;
+    const double clampedLeft = (std::max)(left, static_cast<double>(contentRect.x));
+    const double clampedTop = (std::max)(top, static_cast<double>(contentRect.y));
+    const double clampedRight =
+        (std::min)(right, static_cast<double>(contentRect.x + contentRect.width));
+    const double clampedBottom =
+        (std::min)(bottom, static_cast<double>(contentRect.y + contentRect.height));
+    const SurfaceRect result{static_cast<float>(clampedLeft),
+                             static_cast<float>(clampedTop),
+                             static_cast<float>(clampedRight - clampedLeft),
+                             static_cast<float>(clampedBottom - clampedTop)};
+    return result.isValid() ? result : SurfaceRect{};
+}
+
 bool SurfaceRenderState::isValid() const noexcept {
     if (!allFinite(clipFromItem) || !std::isfinite(logicalWidth) || !std::isfinite(logicalHeight) ||
         !std::isfinite(opacity) || !std::isfinite(nominalDevicePixelRatio) ||
@@ -629,7 +985,12 @@ bool SurfaceRenderState::isValid() const noexcept {
            std::isfinite(threshold) && threshold >= 0.0F && threshold <= 1.0F &&
            viewTransform.isValid() && (!roiEnabled || roi.isValid()) &&
            std::isfinite(wipePosition) && wipePosition >= 0.0F && wipePosition <= 1.0F &&
-           canvasFocusSlot >= -1 && canvasFocusSlot <= 2 && referenceSlot < 3U;
+           canvasFocusSlot >= -1 && canvasFocusSlot <= 2 && referenceSlot < 3U &&
+           localWindowCount <= localWindows.size() &&
+           std::all_of(
+               localWindows.begin(),
+               localWindows.begin() + static_cast<std::ptrdiff_t>(localWindowCount),
+               [](const SurfaceLocalWindow& window) { return window.isValid(); });
 }
 
 SurfaceSplitLayout computeSurfaceSplit(const float logicalWidth,
@@ -846,11 +1207,9 @@ SurfacePanelLayout computeSurfacePanelLayout(const SurfaceViewMode viewMode,
     return result;
 }
 
-namespace {
-
-[[nodiscard]] SurfaceRect aspectFitRectFloat(const SurfaceRect& bounds,
-                                             const float sourceWidth,
-                                             const float sourceHeight) noexcept {
+SurfaceRect aspectFitRectFloat(const SurfaceRect& bounds,
+                               const float sourceWidth,
+                               const float sourceHeight) noexcept {
     if (!bounds.isValid() || !std::isfinite(bounds.x) || !std::isfinite(bounds.y) ||
         !std::isfinite(bounds.width) || !std::isfinite(bounds.height) || sourceWidth == 0U ||
         sourceHeight == 0U) {
@@ -874,8 +1233,6 @@ namespace {
         .height = fittedHeight,
     };
 }
-
-} // namespace
 
 SurfaceRect aspectFitRect(const SurfaceRect& bounds,
                           const std::uint32_t sourceWidth,
@@ -1288,18 +1645,18 @@ public:
         frontPublication_.reset();
         cancelSourcePixelProbes();
         pixelReadbacks_ = {};
-        colorBufferC_.Reset();
-        colorBufferB_.Reset();
-        colorBufferA_.Reset();
+        for (ComPtr<ID3D11Buffer>& buffer : videoColorBuffers_) {
+            buffer.Reset();
+        }
         for (std::size_t i = 0U; i < 2U; ++i) {
             differenceBuffers_[i].Reset();
             differenceColorBuffersB_[i].Reset();
             differenceColorBuffersA_[i].Reset();
             differenceComposeBuffers_[i].Reset();
         }
-        composeBufferC_.Reset();
-        composeBufferB_.Reset();
-        composeBufferA_.Reset();
+        for (ComPtr<ID3D11Buffer>& buffer : videoComposeBuffers_) {
+            buffer.Reset();
+        }
         for (ComPtr<ID3D11Buffer>& buffer : blackComposeBuffers_) {
             buffer.Reset();
         }
@@ -1540,17 +1897,29 @@ private:
             }
         }
         if (FAILED(result = createDynamicConstantBuffer(
-                       *device_.Get(), sizeof(ComposeConstants), composeBufferA_)) ||
+                       *device_.Get(), sizeof(ComposeConstants), videoComposeBuffers_[0U])) ||
             FAILED(result = createDynamicConstantBuffer(
-                       *device_.Get(), sizeof(ComposeConstants), composeBufferB_)) ||
+                       *device_.Get(), sizeof(ComposeConstants), videoComposeBuffers_[1U])) ||
             FAILED(result = createDynamicConstantBuffer(
-                       *device_.Get(), sizeof(ComposeConstants), composeBufferC_)) ||
+                       *device_.Get(), sizeof(ComposeConstants), videoComposeBuffers_[2U])) ||
             FAILED(result = createDynamicConstantBuffer(
-                       *device_.Get(), sizeof(ColorConstants), colorBufferA_)) ||
+                       *device_.Get(), sizeof(ComposeConstants), videoComposeBuffers_[3U])) ||
             FAILED(result = createDynamicConstantBuffer(
-                       *device_.Get(), sizeof(ColorConstants), colorBufferB_)) ||
+                       *device_.Get(), sizeof(ComposeConstants), videoComposeBuffers_[4U])) ||
             FAILED(result = createDynamicConstantBuffer(
-                       *device_.Get(), sizeof(ColorConstants), colorBufferC_))) {
+                       *device_.Get(), sizeof(ComposeConstants), videoComposeBuffers_[5U])) ||
+            FAILED(result = createDynamicConstantBuffer(
+                       *device_.Get(), sizeof(ColorConstants), videoColorBuffers_[0U])) ||
+            FAILED(result = createDynamicConstantBuffer(
+                       *device_.Get(), sizeof(ColorConstants), videoColorBuffers_[1U])) ||
+            FAILED(result = createDynamicConstantBuffer(
+                       *device_.Get(), sizeof(ColorConstants), videoColorBuffers_[2U])) ||
+            FAILED(result = createDynamicConstantBuffer(
+                       *device_.Get(), sizeof(ColorConstants), videoColorBuffers_[3U])) ||
+            FAILED(result = createDynamicConstantBuffer(
+                       *device_.Get(), sizeof(ColorConstants), videoColorBuffers_[4U])) ||
+            FAILED(result = createDynamicConstantBuffer(
+                       *device_.Get(), sizeof(ColorConstants), videoColorBuffers_[5U]))) {
             return failDevice(result, lease);
         }
         for (std::size_t i = 0U; i < 2U; ++i) {
@@ -1740,7 +2109,6 @@ private:
             return false;
         }
         const GpuFrameSet& set = *publication.set;
-        prepared.videoFilter = state.videoFilter;
 
         // Extract up to three slots; slots without a frame stay black (the render target is
         // cleared to black before the set is drawn).
@@ -2095,6 +2463,66 @@ private:
                 return false;
             }
         }
+
+        // V01 RoiTriplet local windows: additional draws of the same presented frame set into
+        // the strip's window cells, resolved by the shared pure geometry. A window whose slot
+        // has no frame, or whose content rect cannot resolve a crop, draws nothing - the strip
+        // chrome reports the unresolvable window instead of a stale or wrong picture.
+        if (state.localWindowCount > 0U) {
+            SurfacePixelGrid localGrid;
+            UINT viewportCount = 1U;
+            D3D11_VIEWPORT viewport{};
+            lease.immediateContext->RSGetViewports(&viewportCount, &viewport);
+            if (viewportCount == 1U) {
+                localGrid = surfacePixelGridFromClip(
+                    state.clipFromItem,
+                    SurfaceViewport{
+                        viewport.TopLeftX, viewport.TopLeftY, viewport.Width, viewport.Height});
+            }
+            const std::array<const GpuFrameResource*, 3U> windowSlotFrames{
+                frameA.get(), frameB.get(), frameC.get()};
+            const std::array<const D3d11GpuFrameBacking*, 3U> windowSlotBackings{
+                backingA, backingB, backingC};
+            for (std::size_t index = 0U;
+                 index < state.localWindowCount && index < state.localWindows.size() &&
+                 prepared.videoDrawCount < prepared.videoDraws.size();
+                 ++index) {
+                const SurfaceLocalWindow& window = state.localWindows[index];
+                if (window.slot >= windowSlotFrames.size()) {
+                    continue;
+                }
+                const GpuFrameResource* const frame = windowSlotFrames[window.slot];
+                const D3d11GpuFrameBacking* const backing = windowSlotBackings[window.slot];
+                if (!backingUsable(frame, backing)) {
+                    continue;
+                }
+                const SurfaceLocalWindowGeometry geometry = surfaceLocalWindowGeometry(
+                    window.contentRect,
+                    state.nominalDevicePixelRatio,
+                    static_cast<float>(frame->geometry().width),
+                    static_cast<float>(frame->geometry().height),
+                    frame->geometry().presentation.rotationDegrees,
+                    frame->geometry().presentation.sampleAspectNumerator,
+                    frame->geometry().presentation.sampleAspectDenominator,
+                    state.roiEnabled,
+                    state.roi,
+                    window.zoomPercent);
+                if (!geometry.valid) {
+                    continue;
+                }
+                const SurfaceRect footage = alignLocalWindowFootage(geometry.footageRect,
+                                                                    window.contentRect,
+                                                                    localGrid,
+                                                                    geometry.nativePhysicalWidth,
+                                                                    geometry.nativePhysicalHeight);
+                if (!footage.isValid()) {
+                    continue;
+                }
+                prepared.videoDraws[prepared.videoDrawCount] = makeLocalWindowDraw(
+                    state, footage, *frame, *backing, geometry.crop, window.smoothSampling);
+                ++prepared.videoDrawCount;
+            }
+        }
         for (std::size_t index = 0U; SUCCEEDED(result) && index < prepared.letterboxBarCount;
              ++index) {
             result = writeConstantBuffer(
@@ -2141,26 +2569,23 @@ private:
                                       const GraphicsDeviceLease& lease) noexcept {
         context.PSSetShader(nv12PixelShader_.Get(), nullptr, 0U);
         // Point sampling above 200% zoom is what keeps pixels legible as pixels; bilinear
-        // would average neighbouring texels and hide exactly the defects under review.
-        ID3D11SamplerState* const sampler =
-            prepared.videoFilter == SurfaceDifferenceFilter::Bilinear ? linearSampler_.Get()
-                                                                      : nearestSampler_.Get();
-        context.PSSetSamplers(0U, 1U, &sampler);
+        // would average neighbouring texels and hide exactly the defects under review. The
+        // sampler is per draw: regular slots share the state-level filter, each local window
+        // carries its own smooth/pixel preference.
 
         for (std::size_t index = 0U; index < prepared.videoDrawCount; ++index) {
             const VideoDraw& draw = prepared.videoDraws[index];
             if (draw.yView == nullptr || draw.uvView == nullptr) {
                 continue;
             }
-            // Each queued draw owns a distinct constant buffer. Reusing A for the third draw
-            // would overwrite draw zero before the GPU consumed it on deferred WARP/hardware
+            // Each queued draw owns a distinct constant buffer. Reusing one for a later draw
+            // would overwrite it before the GPU consumed it on deferred WARP/hardware
             // execution, making two panels show the same source.
-            const std::array<ID3D11Buffer*, 3U> composeBuffers{
-                composeBufferA_.Get(), composeBufferB_.Get(), composeBufferC_.Get()};
-            const std::array<ID3D11Buffer*, 3U> colorBuffers{
-                colorBufferA_.Get(), colorBufferB_.Get(), colorBufferC_.Get()};
-            ID3D11Buffer* const composeBuffer = composeBuffers[index];
-            ID3D11Buffer* const colorBuffer = colorBuffers[index];
+            if (index >= videoComposeBuffers_.size() || index >= videoColorBuffers_.size()) {
+                break;
+            }
+            ID3D11Buffer* const composeBuffer = videoComposeBuffers_[index].Get();
+            ID3D11Buffer* const colorBuffer = videoColorBuffers_[index].Get();
             HRESULT result = writeConstantBuffer(context, *composeBuffer, draw.compose);
             if (FAILED(result)) {
                 return failDevice(result, lease);
@@ -2170,8 +2595,12 @@ private:
                 return failDevice(result, lease);
             }
             const std::array<ID3D11ShaderResourceView*, 2U> views{draw.yView, draw.uvView};
+            ID3D11SamplerState* const sampler = draw.filter == SurfaceDifferenceFilter::Bilinear
+                                                    ? linearSampler_.Get()
+                                                    : nearestSampler_.Get();
             context.VSSetConstantBuffers(0U, 1U, &composeBuffer);
             context.PSSetConstantBuffers(1U, 1U, &colorBuffer);
+            context.PSSetSamplers(0U, 1U, &sampler);
             context.PSSetShaderResources(0U, static_cast<UINT>(views.size()), views.data());
             context.Draw(4U, 0U);
         }
@@ -2335,13 +2764,12 @@ private:
     ComPtr<ID3D11SamplerState> nearestSampler_;
     ComPtr<ID3D11SamplerState> linearSampler_;
     std::array<ComPtr<ID3D11Buffer>, 16U> blackComposeBuffers_;
-    ComPtr<ID3D11Buffer> composeBufferA_;
-    ComPtr<ID3D11Buffer> composeBufferB_;
-    ComPtr<ID3D11Buffer> composeBufferC_;
+    // One compose/color pair per video draw: up to three panorama slots plus up to three
+    // local windows. Reusing a pair for a later draw would overwrite it before the GPU
+    // consumed it on deferred WARP/hardware execution.
+    std::array<ComPtr<ID3D11Buffer>, 6U> videoComposeBuffers_;
     std::array<ComPtr<ID3D11Buffer>, 2U> differenceComposeBuffers_;
-    ComPtr<ID3D11Buffer> colorBufferA_;
-    ComPtr<ID3D11Buffer> colorBufferB_;
-    ComPtr<ID3D11Buffer> colorBufferC_;
+    std::array<ComPtr<ID3D11Buffer>, 6U> videoColorBuffers_;
     std::array<ComPtr<ID3D11Buffer>, 2U> differenceColorBuffersA_;
     std::array<ComPtr<ID3D11Buffer>, 2U> differenceColorBuffersB_;
     std::array<ComPtr<ID3D11Buffer>, 2U> differenceBuffers_;

@@ -9782,24 +9782,26 @@ TEST(MainQmlContractTests, RoiTripletPresetKeepsSharedRoiAcrossModeRoundTrip) {
     EXPECT_NEAR(surface->property("roiLeft").toDouble(), 0.2, 0.000001);
     EXPECT_NEAR(surface->property("roiBottom").toDouble(), 0.7, 0.000001);
 
-    // The three windows all resolve their sample rect from that one ROI: the whole
-    // geometry chain (panels, media info, transform) has to be live in the harness.
-    // QML functions take their full parameter list from the meta-object (no method
-    // clones for JS defaults), so the optional zoom override is passed explicitly;
-    // the invalid QVariant arrives as undefined in QML and means "use zoomPercent".
-    const auto sampleForSlot = [&strip](const int slot) {
-        QVariant returned;
-        const bool invoked = QMetaObject::invokeMethod(strip,
-                                                       "windowTextureRect",
-                                                       Q_RETURN_ARG(QVariant, returned),
-                                                       Q_ARG(QVariant, QVariant{slot}),
-                                                       Q_ARG(QVariant, QVariant{}));
-        return invoked ? returned.toMap() : QVariantMap{};
+    // The three windows all stage a content rect for the renderer's extra draws, and the
+    // surface publishes a resolvable footage extent for each of them out of that one ROI.
+    const auto stagedList = [&surface]() {
+        return surface->property("roiTripletWindows").toList();
     };
+    const auto footageList = [&surface]() {
+        return surface->property("roiTripletWindowRects").toList();
+    };
+    EXPECT_EQ(stagedList().size(), 3);
+    EXPECT_EQ(footageList().size(), 3);
     for (int slot = 0; slot < 3; ++slot) {
-        const QVariantMap rect = sampleForSlot(slot);
-        EXPECT_GT(rect.value(QStringLiteral("width")).toDouble(), 0.0) << slot;
-        EXPECT_GT(rect.value(QStringLiteral("height")).toDouble(), 0.0) << slot;
+        const QVariantMap staged = stagedList()[static_cast<qsizetype>(slot)].toMap();
+        EXPECT_EQ(staged.value(QStringLiteral("slot")).toInt(), slot) << slot;
+        EXPECT_GT(staged.value(QStringLiteral("width")).toDouble(), 0.0) << slot;
+        EXPECT_GT(staged.value(QStringLiteral("height")).toDouble(), 0.0) << slot;
+        const QVariantMap footage = footageList()[static_cast<qsizetype>(slot)].toMap();
+        EXPECT_EQ(footage.value(QStringLiteral("slot")).toInt(), slot) << slot;
+        EXPECT_TRUE(footage.value(QStringLiteral("valid")).toBool()) << slot;
+        EXPECT_GT(footage.value(QStringLiteral("width")).toDouble(), 0.0) << slot;
+        EXPECT_GT(footage.value(QStringLiteral("height")).toDouble(), 0.0) << slot;
     }
 
     // Switch away: the strip hides, the panorama follows the new mode, and the ROI stays.
@@ -9813,7 +9815,7 @@ TEST(MainQmlContractTests, RoiTripletPresetKeepsSharedRoiAcrossModeRoundTrip) {
     EXPECT_TRUE(surface->property("roiEnabled").toBool());
     EXPECT_NEAR(surface->property("roiLeft").toDouble(), 0.2, 0.000001);
 
-    // Back into the preset: the ROI survived and the windows re-resolve the same rect.
+    // Back into the preset: the ROI survived and the windows re-stage for the renderer.
     preferences.setViewMode(static_cast<ReviewPreferencesController::ViewMode>(8));
     for (int iteration = 0; iteration < 8; ++iteration) {
         QCoreApplication::processEvents();
@@ -9821,7 +9823,9 @@ TEST(MainQmlContractTests, RoiTripletPresetKeepsSharedRoiAcrossModeRoundTrip) {
     ASSERT_TRUE(strip->property("visible").toBool());
     EXPECT_TRUE(surface->property("roiEnabled").toBool());
     EXPECT_NEAR(surface->property("roiLeft").toDouble(), 0.2, 0.000001);
-    const QVariantMap after = sampleForSlot(0);
+    const QVariantList restaged = stagedList();
+    EXPECT_EQ(restaged.size(), 3);
+    const QVariantMap after = restaged.isEmpty() ? QVariantMap{} : restaged.front().toMap();
     EXPECT_GT(after.value(QStringLiteral("width")).toDouble(), 0.0);
     // The panorama marks the ROI while the preset is active.
     auto* const outlineRepeater =
@@ -9834,18 +9838,46 @@ TEST(MainQmlContractTests, RoiTripletPresetKeepsSharedRoiAcrossModeRoundTrip) {
     EXPECT_EQ(submitted.size(), submittedBeforeRoundTrip);
 }
 
-// Without a third source the preset entry explains itself as unavailable, and the
-// effective-mode fallback keeps the session on the plain panorama.
-TEST(MainQmlContractTests, RoiTripletPresetEntryDisabledWithoutThreeSources) {
+// Two sources are the preset minimum: the entry is enabled, the panorama falls back to the
+// two-column SideBySide layout (both sources stay presented), and the strip stages two local
+// windows for the renderer's extra draws.
+TEST(MainQmlContractTests, RoiTripletPresetSupportsTwoSources) {
     WorkspaceHarness harness;
     ASSERT_TRUE(harness.create()) << harness.error;
     EXPECT_EQ(harness.controller->sourceCount(), 2);
+    auto* const surface = harness.root->findChild<QQuickItem*>(QStringLiteral("dualVideoSurface"));
+    ASSERT_NE(surface, nullptr);
     auto* const menuItem = harness.root->findChild<QObject*>(QStringLiteral("roiTripletMenuItem"));
     ASSERT_NE(menuItem, nullptr);
-    EXPECT_FALSE(menuItem->property("enabled").toBool());
+    EXPECT_TRUE(menuItem->property("enabled").toBool());
     auto* const strip = harness.root->findChild<QQuickItem*>(QStringLiteral("roiTripletStrip"));
     ASSERT_NE(strip, nullptr);
     EXPECT_FALSE(strip->property("visible").toBool());
+
+    harness.preferences.setViewMode(static_cast<ReviewPreferencesController::ViewMode>(8));
+    for (int iteration = 0; iteration < 8; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    EXPECT_TRUE(menuItem->property("checked").toBool());
+    EXPECT_TRUE(strip->property("visible").toBool());
+    // Two columns: every source stays presented and its local window can sample the frame set.
+    EXPECT_EQ(surface->property("viewMode").toInt(),
+              static_cast<int>(dvs::ui::ComparisonSurface::SideBySide));
+    auto* const windowRepeater =
+        harness.root->findChild<QObject*>(QStringLiteral("roiTripletWindowRepeater"));
+    ASSERT_NE(windowRepeater, nullptr);
+    EXPECT_EQ(windowRepeater->property("count").toInt(), 2);
+    const QVariantList staged = surface->property("roiTripletWindows").toList();
+    ASSERT_EQ(staged.size(), 2);
+    EXPECT_EQ(staged.front().toMap().value(QStringLiteral("slot")).toInt(), 0);
+    EXPECT_EQ(staged.at(1).toMap().value(QStringLiteral("slot")).toInt(), 1);
+
+    harness.preferences.setViewMode(ReviewPreferencesController::ViewMode::SideBySide);
+    for (int iteration = 0; iteration < 8; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    EXPECT_FALSE(strip->property("visible").toBool());
+    EXPECT_TRUE(surface->property("roiTripletWindows").toList().empty());
 }
 
 } // namespace

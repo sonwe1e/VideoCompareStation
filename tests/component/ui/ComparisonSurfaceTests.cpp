@@ -572,6 +572,154 @@ TEST(ComparisonSurfaceGeometryTests, NativeRotatedRoiKeepsFractionalSourcePixelP
     EXPECT_FLOAT_EQ(tight.y, 0.25F);
 }
 
+TEST(ComparisonSurfaceGeometryTests, LocalWindowFitShowsTheWholeClampedRoiCentredInBounds) {
+    const platform::SurfaceRect content{10.0F, 20.0F, 90.0F, 50.0F};
+    const platform::SurfaceNormalizedRect roi{0.25F, 0.5F, 0.75F, 1.0F};
+    const platform::SurfaceLocalWindowGeometry geometry =
+        platform::surfaceLocalWindowGeometry(content, 2.0F, 64.0F, 32.0F, 0U, 1U, 1U, true, roi, 0);
+    ASSERT_TRUE(geometry.valid);
+    // The crop is the ROI clamped half-open: 16..48 x 16..31.5 source pixels - the bottom
+    // edge stops at the last valid pixel centre of the 32-px frame.
+    EXPECT_NEAR(geometry.crop.left, 16.0F / 64.0F, 0.00001F);
+    EXPECT_NEAR(geometry.crop.top, 16.0F / 32.0F, 0.00001F);
+    EXPECT_NEAR(geometry.crop.right, 48.0F / 64.0F, 0.00001F);
+    EXPECT_NEAR(geometry.crop.bottom, 31.5F / 32.0F, 0.00001F);
+    // The footage fits the ROI display aspect (32 x 15.5) and is centred in the bounds.
+    EXPECT_FLOAT_EQ(geometry.footageRect.width, 90.0F);
+    EXPECT_FLOAT_EQ(geometry.footageRect.height, 43.59375F);
+    EXPECT_FLOAT_EQ(geometry.footageRect.x, 10.0F);
+    EXPECT_FLOAT_EQ(geometry.footageRect.y, 20.0F + (50.0F - 43.59375F) * 0.5F);
+}
+
+TEST(ComparisonSurfaceGeometryTests, LocalWindowPhysicalZoomKeepsAnIntegerTexelAlignedCrop) {
+    // 40x20 logical content at DPR 2 = 80x40 physical; at 100% the crop is 80x40 source
+    // pixels of the 96x64 frame, centred on the ROI centre and spanning at most the content
+    // rect. The centre is chosen so the crop fits without hitting the frame edge.
+    const platform::SurfaceRect content{0.0F, 0.0F, 40.0F, 20.0F};
+    const platform::SurfaceNormalizedRect roi{0.25F, 0.25F, 0.75F, 0.75F};
+    const platform::SurfaceLocalWindowGeometry geometry = platform::surfaceLocalWindowGeometry(
+        content, 2.0F, 96.0F, 64.0F, 0U, 1U, 1U, true, roi, 100);
+    ASSERT_TRUE(geometry.valid);
+    EXPECT_FLOAT_EQ(geometry.footageRect.width, 40.0F);
+    EXPECT_FLOAT_EQ(geometry.footageRect.height, 20.0F);
+    // ROI centre (48, 32): crop 8..88 x 12..52, integral on every edge.
+    EXPECT_NEAR(geometry.crop.left * 96.0F, 8.0F, 0.00001F);
+    EXPECT_NEAR(geometry.crop.right * 96.0F, 88.0F, 0.00001F);
+    EXPECT_NEAR(geometry.crop.top * 64.0F, 12.0F, 0.00001F);
+    EXPECT_NEAR(geometry.crop.bottom * 64.0F, 52.0F, 0.00001F);
+    EXPECT_FLOAT_EQ(geometry.footageRect.x, 0.0F);
+    EXPECT_FLOAT_EQ(geometry.footageRect.y, 0.0F);
+
+    // 200% halves the visible extent about the same centre; the crop stays integral and
+    // the footage doubles it back onto the same physical extent.
+    const platform::SurfaceLocalWindowGeometry zoomed = platform::surfaceLocalWindowGeometry(
+        content, 2.0F, 96.0F, 64.0F, 0U, 1U, 1U, true, roi, 200);
+    ASSERT_TRUE(zoomed.valid);
+    EXPECT_FLOAT_EQ(zoomed.footageRect.width, 40.0F);
+    EXPECT_FLOAT_EQ(zoomed.footageRect.height, 20.0F);
+    EXPECT_NEAR(zoomed.crop.left * 96.0F, 28.0F, 0.00001F);
+    EXPECT_NEAR(zoomed.crop.right * 96.0F, 68.0F, 0.00001F);
+    EXPECT_NEAR(zoomed.crop.top * 64.0F, 22.0F, 0.00001F);
+    EXPECT_NEAR(zoomed.crop.bottom * 64.0F, 42.0F, 0.00001F);
+
+    // A crop that cannot centre on the ROI (centre too close to the frame edge with the full
+    // frame wider than the crop) clamps into the frame instead of sampling past it.
+    const platform::SurfaceNormalizedRect edgeRoi{0.5F, 0.5F, 1.0F, 1.0F};
+    const platform::SurfaceLocalWindowGeometry edge = platform::surfaceLocalWindowGeometry(
+        content, 2.0F, 96.0F, 64.0F, 0U, 1U, 1U, true, edgeRoi, 100);
+    ASSERT_TRUE(edge.valid);
+    EXPECT_NEAR(edge.crop.left * 96.0F, 15.0F, 0.00001F);
+    EXPECT_NEAR(edge.crop.right * 96.0F, 95.0F, 0.00001F);
+    EXPECT_NEAR(edge.crop.top * 64.0F, 23.0F, 0.00001F);
+    EXPECT_NEAR(edge.crop.bottom * 64.0F, 63.0F, 0.00001F);
+}
+
+TEST(ComparisonSurfaceGeometryTests, LocalWindowGeometryMapsRotationAndSarDisplayAspect) {
+    // Rotation 90 of a 32x16 frame displays as 16x32; the ROI maps through the oriented frame
+    // and comes back as the unrotated normalized rect the texture path consumes.
+    const platform::SurfaceNormalizedRect roi{0.5F, 0.25F, 1.0F, 0.75F};
+    const platform::SurfaceLocalWindowGeometry rotated = platform::surfaceLocalWindowGeometry(
+        {0.0F, 0.0F, 32.0F, 64.0F}, 1.0F, 32.0F, 16.0F, 90U, 1U, 1U, true, roi, 0);
+    ASSERT_TRUE(rotated.valid);
+    // Oriented ROI pixels: left 4, top 0, right 12, bottom 16 on the 16x32 oriented frame;
+    // the returned crop is the same rect mapped back into unrotated normalized coordinates.
+    EXPECT_NEAR(rotated.crop.left, 0.5F, 0.00001F);
+    EXPECT_NEAR(rotated.crop.top, 0.25F, 0.00001F);
+    EXPECT_NEAR(rotated.crop.right, 1.0F, 0.00001F);
+    EXPECT_NEAR(rotated.crop.bottom, 0.75F, 0.00001F);
+    // The footage fits the oriented display aspect 8x16 inside 32x64.
+    EXPECT_NEAR(rotated.footageRect.width, 32.0F, 0.00001F);
+    EXPECT_NEAR(rotated.footageRect.height, 64.0F, 0.00001F);
+
+    // SAR 2:1 doubles the horizontal display extent at fit.
+    const platform::SurfaceLocalWindowGeometry wide = platform::surfaceLocalWindowGeometry(
+        {0.0F, 0.0F, 64.0F, 16.0F}, 1.0F, 8.0F, 8.0F, 0U, 2U, 1U, true, roi, 0);
+    ASSERT_TRUE(wide.valid);
+    // ROI pixels 4..7.5 x 2..6 (right edge clamped half-open): display extent 7x4 fits
+    // 64x16 with scale 4.
+    EXPECT_NEAR(wide.footageRect.width, 28.0F, 0.00001F);
+    EXPECT_NEAR(wide.footageRect.height, 16.0F, 0.00001F);
+    // At physical zoom the horizontal scale is SAR-scaled: the 7x7 frame-bounded crop spans
+    // 14 physical px horizontally and 7 vertically at 100%.
+    const platform::SurfaceLocalWindowGeometry wideNative = platform::surfaceLocalWindowGeometry(
+        {0.0F, 0.0F, 64.0F, 16.0F}, 1.0F, 8.0F, 8.0F, 0U, 2U, 1U, true, roi, 100);
+    ASSERT_TRUE(wideNative.valid);
+    EXPECT_NEAR(wideNative.footageRect.width, 14.0F, 0.00001F);
+    EXPECT_NEAR(wideNative.footageRect.height, 7.0F, 0.00001F);
+}
+
+TEST(ComparisonSurfaceGeometryTests, LocalWindowGeometryRejectsUnresolvableInputs) {
+    const platform::SurfaceRect content{0.0F, 0.0F, 40.0F, 40.0F};
+    const platform::SurfaceNormalizedRect roi{0.25F, 0.25F, 0.75F, 0.75F};
+    EXPECT_FALSE(
+        platform::surfaceLocalWindowGeometry(content, 1.0F, 0.0F, 8.0F, 0U, 1U, 1U, true, roi, 0)
+            .valid);
+    EXPECT_FALSE(platform::surfaceLocalWindowGeometry(
+                     {0.0F, 0.0F, 0.0F, 0.0F}, 1.0F, 8.0F, 8.0F, 0U, 1U, 1U, true, roi, 0)
+                     .valid);
+    EXPECT_FALSE(
+        platform::surfaceLocalWindowGeometry(content, 0.0F, 8.0F, 8.0F, 0U, 1U, 1U, true, roi, 0)
+            .valid);
+    EXPECT_FALSE(
+        platform::surfaceLocalWindowGeometry(content, 1.0F, 8.0F, 8.0F, 45U, 1U, 1U, true, roi, 0)
+            .valid);
+    EXPECT_FALSE(
+        platform::surfaceLocalWindowGeometry(content, 1.0F, 8.0F, 8.0F, 0U, 0U, 1U, true, roi, 0)
+            .valid);
+    EXPECT_FALSE(
+        platform::surfaceLocalWindowGeometry(content, 1.0F, 8.0F, 8.0F, 0U, 1U, 1U, true, roi, 500)
+            .valid);
+    // A zoom too small to resolve one source pixel cannot produce honest footage.
+    EXPECT_FALSE(platform::surfaceLocalWindowGeometry(
+                     {0.0F, 0.0F, 0.6F, 0.6F}, 1.0F, 64.0F, 64.0F, 0U, 1U, 1U, true, roi, 100)
+                     .valid);
+    // A degenerate ROI is rejected instead of silently sampling the full frame.
+    EXPECT_FALSE(platform::surfaceLocalWindowGeometry(
+                     content, 1.0F, 8.0F, 8.0F, 0U, 1U, 1U, true, {0.5F, 0.5F, 0.5F, 0.75F}, 0)
+                     .valid);
+}
+
+TEST(ComparisonSurfaceGeometryTests, PanelRoiRectMapsAndClampsOntoTheDrawnContent) {
+    const platform::SurfaceRect content{10.0F, 10.0F, 50.0F, 40.0F};
+    // The content shows oriented source pixels 0..100 x 0..50; the ROI covers 50..100 x 0..25.
+    const platform::SurfaceRect source{0.0F, 0.0F, 100.0F, 50.0F};
+    const platform::SurfaceRect roi{50.0F, 0.0F, 50.0F, 25.0F};
+    const platform::SurfaceRect mapped = platform::surfacePanelRoiRect(content, source, roi);
+    ASSERT_TRUE(mapped.isValid());
+    EXPECT_FLOAT_EQ(mapped.x, 35.0F);
+    EXPECT_FLOAT_EQ(mapped.y, 10.0F);
+    EXPECT_FLOAT_EQ(mapped.width, 25.0F);
+    EXPECT_FLOAT_EQ(mapped.height, 20.0F);
+    // An ROI the panorama has panned away clamps to the content edge instead of drawing
+    // outside the picture.
+    const platform::SurfaceRect offscreen{150.0F, 0.0F, 50.0F, 25.0F};
+    EXPECT_FALSE(platform::surfacePanelRoiRect(content, source, offscreen).isValid());
+    const platform::SurfaceRect crossing{90.0F, 0.0F, 50.0F, 25.0F};
+    const platform::SurfaceRect clipped = platform::surfacePanelRoiRect(content, source, crossing);
+    ASSERT_TRUE(clipped.isValid());
+    EXPECT_FLOAT_EQ(clipped.x + clipped.width, content.x + content.width);
+}
+
 TEST(ComparisonSurfaceGeometryTests, RejectsInvalidScalesAndSubpixelDestinationExtents) {
     platform::SurfaceViewTransform transform{0.5F, 0.5F, presentation::kMinimumViewportScale};
     EXPECT_TRUE(transform.isValid());
@@ -1650,6 +1798,72 @@ makeSolidSetWithMetadata(platform::FrameBudget& budget,
                                          }});
 }
 
+// One-pixel checkerboard: luma alternates per (x+y) parity, chroma stays neutral, so every
+// averaged tap shows up as an intermediate grey the direct-sampling assertions can reject.
+[[nodiscard]] std::optional<application::FrameHandle>
+makeCheckerLumaFrame(platform::FrameResourceFactory& factory,
+                     const std::uint32_t width,
+                     const std::uint32_t height,
+                     const domain::ColorMetadata color) {
+    const std::uint32_t uvRowBytes = ((width + 1U) / 2U) * 2U;
+    const platform::Nv12FrameLayout layout{
+        .width = width,
+        .height = height,
+        .yStride = width,
+        .uvStride = uvRowBytes,
+    };
+    std::vector<std::uint8_t> yPlane(static_cast<std::size_t>(width) * height);
+    for (std::uint32_t row = 0U; row < height; ++row) {
+        for (std::uint32_t column = 0U; column < width; ++column) {
+            yPlane[static_cast<std::size_t>(row) * width + column] =
+                ((column + row) % 2U) == 0U ? 16U : 235U;
+        }
+    }
+    std::vector<std::uint8_t> uvPlane(static_cast<std::size_t>(uvRowBytes) * ((height + 1U) / 2U),
+                                      128U);
+    return factory.createCpuNv12(layout, color, std::span{yPlane}, std::span{uvPlane});
+}
+
+[[nodiscard]] std::optional<application::FrameSet>
+makeCheckerLumaSet(platform::FrameBudget& budget,
+                   const domain::FrameId frameId,
+                   const std::uint32_t width,
+                   const std::uint32_t height,
+                   const application::FramePresentation presentation = {}) {
+    const domain::ColorMetadata metadata{
+        .matrix = domain::ColorMatrix::kBt709,
+        .range = domain::ColorRange::kFull,
+        .matrixInferred = false,
+    };
+    platform::FrameResourceFactory factory{budget, presentation};
+    const std::optional<application::FrameHandle> frameA =
+        makeCheckerLumaFrame(factory, width, height, metadata);
+    const std::optional<application::FrameHandle> frameB =
+        makeCheckerLumaFrame(factory, width, height, metadata);
+    if (!frameA.has_value() || !frameB.has_value()) {
+        return std::nullopt;
+    }
+    return application::FrameSet::create(
+        frameId,
+        domain::MediaTime{0},
+        {
+            application::MappedSourceFrame{
+                .sourceId = 0U,
+                .sourceFrameId = domain::FrameId{frameId.value()},
+                .frame = *frameA,
+                .presentationTime = domain::MediaTime{0},
+                .matchKind = application::FrameMatchKind::ExactIndex,
+            },
+            application::MappedSourceFrame{
+                .sourceId = 1U,
+                .sourceFrameId = domain::FrameId{frameId.value()},
+                .frame = *frameB,
+                .presentationTime = domain::MediaTime{0},
+                .matchKind = application::FrameMatchKind::ExactIndex,
+            },
+        });
+}
+
 [[nodiscard]] std::optional<application::FrameSet>
 makeThreeSolidSet(platform::FrameBudget& budget,
                   const domain::FrameId frameId,
@@ -2232,6 +2446,427 @@ TEST(ComparisonSurfaceWarpTests, UsesSampleAspectRatioForDisplayGeometry) {
     const int centerY = image.height() / 2;
     EXPECT_GT(image.pixelColor(centerX, centerY).red(), 225);
     expectColorNear(image.pixelColor(centerX, centerY - (image.height() / 4)), QColor{0, 0, 0}, 2);
+
+    harness.releaseRenderer();
+    EXPECT_TRUE(actor.shutdown(2s));
+}
+
+namespace {
+
+// Stages one local window below the surface item (the harness window is tall enough) and
+// resolves the expected on-screen footage box the same way the renderer must: shared pure
+// geometry, then whole-physical-pixel snapping inside the content rect.
+struct ExpectedLocalFootage final {
+    bool valid = false;
+    int physicalLeft = 0;
+    int physicalTop = 0;
+    int physicalRight = 0;
+    int physicalBottom = 0;
+};
+
+[[nodiscard]] ExpectedLocalFootage
+expectedLocalFootage(const ComparisonSurface& surface,
+                     const platform::SurfaceRect& content,
+                     const int zoomPercent,
+                     const float sourceWidth,
+                     const float sourceHeight,
+                     const std::uint16_t rotationDegrees,
+                     const std::uint32_t sarNumerator,
+                     const std::uint32_t sarDenominator,
+                     const bool roiEnabled,
+                     const platform::SurfaceNormalizedRect& roi) {
+    const qreal dpr = surface.window()->effectiveDevicePixelRatio();
+    const platform::SurfaceLocalWindowGeometry geometry =
+        platform::surfaceLocalWindowGeometry(content,
+                                             static_cast<float>(dpr),
+                                             sourceWidth,
+                                             sourceHeight,
+                                             rotationDegrees,
+                                             sarNumerator,
+                                             sarDenominator,
+                                             roiEnabled,
+                                             roi,
+                                             zoomPercent);
+    ExpectedLocalFootage expected;
+    if (!geometry.valid) {
+        return expected;
+    }
+    if (geometry.nativePhysicalWidth <= 0.0F) {
+        // Fit footage makes no per-pixel claim; report the nominal-DPR box as a sanity bound.
+        expected.valid = true;
+        expected.physicalLeft = static_cast<int>(std::floor(geometry.footageRect.x * dpr));
+        expected.physicalTop = static_cast<int>(std::floor(geometry.footageRect.y * dpr));
+        expected.physicalRight = static_cast<int>(
+            std::ceil((geometry.footageRect.x + geometry.footageRect.width) * dpr));
+        expected.physicalBottom = static_cast<int>(
+            std::ceil((geometry.footageRect.y + geometry.footageRect.height) * dpr));
+        return expected;
+    }
+    // The renderer re-expresses the native extent on the render target's real pixel grid (Qt
+    // rounds the swapchain scale independently per axis) and snaps the centred placement onto
+    // whole physical pixels. Predict the same grid here.
+    const platform::SurfacePixelGrid grid =
+        platform::surfacePixelGridForWindow(static_cast<float>(surface.window()->width()),
+                                            static_cast<float>(surface.window()->height()),
+                                            static_cast<float>(dpr));
+    EXPECT_TRUE(grid.isValid());
+    const double contentLeft = grid.originX + content.x * grid.scaleX;
+    const double contentTop = grid.originY + content.y * grid.scaleY;
+    const double contentWidth = content.width * grid.scaleX;
+    const double contentHeight = content.height * grid.scaleY;
+    const double extentWidth = geometry.nativePhysicalWidth;
+    const double extentHeight = geometry.nativePhysicalHeight;
+    EXPECT_NEAR(extentWidth, std::round(extentWidth), 0.01);
+    EXPECT_NEAR(extentHeight, std::round(extentHeight), 0.01);
+    const double snappedLeft =
+        std::clamp(std::round(contentLeft + (contentWidth - extentWidth) * 0.5),
+                   contentLeft,
+                   contentLeft + contentWidth - extentWidth);
+    const double snappedTop =
+        std::clamp(std::round(contentTop + (contentHeight - extentHeight) * 0.5),
+                   contentTop,
+                   contentTop + contentHeight - extentHeight);
+    expected.valid = true;
+    expected.physicalLeft = static_cast<int>(snappedLeft);
+    expected.physicalTop = static_cast<int>(snappedTop);
+    expected.physicalRight = static_cast<int>(snappedLeft + extentWidth);
+    expected.physicalBottom = static_cast<int>(snappedTop + extentHeight);
+    return expected;
+}
+
+[[nodiscard]] QVariantMap stagedWindowEntry(const int slot,
+                                            const qreal x,
+                                            const qreal y,
+                                            const qreal width,
+                                            const qreal height,
+                                            const int zoomPercent) {
+    QVariantMap entry;
+    entry.insert(QStringLiteral("slot"), slot);
+    entry.insert(QStringLiteral("x"), x);
+    entry.insert(QStringLiteral("y"), y);
+    entry.insert(QStringLiteral("width"), width);
+    entry.insert(QStringLiteral("height"), height);
+    entry.insert(QStringLiteral("zoomPercent"), zoomPercent);
+    entry.insert(QStringLiteral("smoothSampling"), true);
+    return entry;
+}
+
+} // namespace
+
+// V01: the local windows are additional draws of the presented frame set on the source SRVs.
+// The window content rect sits below the surface item inside the same window, exactly like
+// the strip's cells do, and the footage must land texel-exact on the physical pixel grid.
+TEST(ComparisonSurfaceWarpTests, LocalWindowDrawsCheckerSourcePixelsTexelExactAtNativeZoom) {
+    SurfaceWarpHarness harness;
+    harness.window.resize(101, 160);
+    ASSERT_TRUE(harness.start());
+    constexpr std::uint32_t kFrameExtent = 16U;
+    auto budget = std::make_shared<platform::FrameBudget>(16U * 1024U * 1024U);
+    platform::GpuTransferActor actor{budget, harness.broker, harness.mailbox, harness.activitySink};
+    std::optional<application::FrameSet> pair =
+        makeCheckerLumaSet(*budget, domain::FrameId{61}, kFrameExtent, kFrameExtent);
+    ASSERT_TRUE(pair.has_value());
+    ASSERT_EQ(actor.submit(makeContext(61U), std::move(*pair)),
+              platform::GpuTransferSubmitResult::Accepted);
+    ASSERT_TRUE(actor.waitUntilIdle(5s));
+
+    const platform::SurfaceRect content{10.0F, 72.0F, 40.0F, 40.0F};
+    harness.surface.setRoiTripletWindows(
+        {stagedWindowEntry(0, content.x, content.y, content.width, content.height, 100)});
+    const ExpectedLocalFootage expected = expectedLocalFootage(harness.surface,
+                                                               content,
+                                                               100,
+                                                               static_cast<float>(kFrameExtent),
+                                                               static_cast<float>(kFrameExtent),
+                                                               0U,
+                                                               1U,
+                                                               1U,
+                                                               false,
+                                                               platform::SurfaceNormalizedRect{});
+    ASSERT_TRUE(expected.valid);
+    const QImage image = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+    ASSERT_FALSE(image.isNull());
+    ASSERT_LT(expected.physicalLeft + 2, expected.physicalRight);
+    ASSERT_LT(expected.physicalTop + 2, expected.physicalBottom);
+
+    const platform::SurfaceLocalWindowGeometry geometry = platform::surfaceLocalWindowGeometry(
+        content,
+        static_cast<float>(harness.window.effectiveDevicePixelRatio()),
+        static_cast<float>(kFrameExtent),
+        static_cast<float>(kFrameExtent),
+        0U,
+        1U,
+        1U,
+        false,
+        platform::SurfaceNormalizedRect{},
+        100);
+    ASSERT_TRUE(geometry.valid);
+    // Every footage pixel is a pure checker texel - one averaged tap would land between the
+    // 16 and 235 levels. The parity follows the crop origin resolved by the shared geometry.
+    const int cropLeftTexel = static_cast<int>(geometry.crop.left * kFrameExtent + 0.5F);
+    const int cropTopTexel = static_cast<int>(geometry.crop.top * kFrameExtent + 0.5F);
+    for (int y = expected.physicalTop + 1; y < expected.physicalBottom - 1; ++y) {
+        for (int x = expected.physicalLeft + 1; x < expected.physicalRight - 1; ++x) {
+            const QColor pixel = image.pixelColor(x, y);
+            const int texelX = cropLeftTexel + (x - expected.physicalLeft);
+            const int texelY = cropTopTexel + (y - expected.physicalTop);
+            const bool bright = ((texelX + texelY) % 2) == 1;
+            if (bright) {
+                EXPECT_GT(pixel.red(), 210) << x << "," << y;
+                EXPECT_GT(pixel.green(), 210) << x << "," << y;
+                EXPECT_GT(pixel.blue(), 210) << x << "," << y;
+            } else {
+                EXPECT_LT(pixel.red(), 60) << x << "," << y;
+                EXPECT_LT(pixel.green(), 60) << x << "," << y;
+                EXPECT_LT(pixel.blue(), 60) << x << "," << y;
+            }
+        }
+    }
+    // The letterbox around the footage stays the window background - no footage bleed.
+    const QColor outside = image.pixelColor(expected.physicalLeft - 2, expected.physicalTop + 2);
+    EXPECT_GT(outside.red(), 240);
+    EXPECT_LT(outside.green(), 60);
+
+    harness.releaseRenderer();
+    EXPECT_TRUE(actor.shutdown(2s));
+}
+
+// Fixed source-pixel magnification: the panorama's zoom state must not move a single sampled
+// texel of the local window.
+TEST(ComparisonSurfaceWarpTests, LocalWindowSamplingIsIndependentOfThePanoramaTransform) {
+    SurfaceWarpHarness harness;
+    harness.window.resize(101, 160);
+    ASSERT_TRUE(harness.start());
+    constexpr std::uint32_t kFrameExtent = 16U;
+    auto budget = std::make_shared<platform::FrameBudget>(16U * 1024U * 1024U);
+    platform::GpuTransferActor actor{budget, harness.broker, harness.mailbox, harness.activitySink};
+    std::optional<application::FrameSet> pair =
+        makeCheckerLumaSet(*budget, domain::FrameId{62}, kFrameExtent, kFrameExtent);
+    ASSERT_TRUE(pair.has_value());
+    ASSERT_EQ(actor.submit(makeContext(62U), std::move(*pair)),
+              platform::GpuTransferSubmitResult::Accepted);
+    ASSERT_TRUE(actor.waitUntilIdle(5s));
+
+    const platform::SurfaceRect content{10.0F, 72.0F, 40.0F, 40.0F};
+    harness.surface.setRoiTripletWindows(
+        {stagedWindowEntry(0, content.x, content.y, content.width, content.height, 100)});
+    const ExpectedLocalFootage expected = expectedLocalFootage(harness.surface,
+                                                               content,
+                                                               100,
+                                                               static_cast<float>(kFrameExtent),
+                                                               static_cast<float>(kFrameExtent),
+                                                               0U,
+                                                               1U,
+                                                               1U,
+                                                               false,
+                                                               platform::SurfaceNormalizedRect{});
+    ASSERT_TRUE(expected.valid);
+    const QRect footageBox{QPoint{expected.physicalLeft, expected.physicalTop},
+                           QPoint{expected.physicalRight - 1, expected.physicalBottom - 1}};
+    const QImage before = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+    ASSERT_FALSE(before.isNull());
+
+    harness.surface.restoreViewport(0.3, 0.4, 3.0, false, 0.0, 0.0, 1.0, 1.0);
+    EXPECT_NEAR(harness.surface.viewScale(), 3.0, 0.000001);
+    const QImage after = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+    ASSERT_FALSE(after.isNull());
+    ASSERT_EQ(before.size(), after.size());
+    // Liveness check retained in final version.
+    EXPECT_GT(maximumRgbDifference(before.copy(QRect{0, 0, before.width(), 60}),
+                                   after.copy(QRect{0, 0, after.width(), 60})),
+              0);
+    EXPECT_EQ(maximumRgbDifference(before.copy(footageBox), after.copy(footageBox)), 0);
+
+    harness.releaseRenderer();
+    EXPECT_TRUE(actor.shutdown(2s));
+}
+
+TEST(ComparisonSurfaceWarpTests, LocalWindowDrawsRotatedSourceInDisplayOrientation) {
+    SurfaceWarpHarness harness;
+    harness.window.resize(101, 160);
+    ASSERT_TRUE(harness.start());
+    constexpr std::array<std::uint8_t, 16U> kColumns{
+        16U,
+        16U,
+        16U,
+        16U,
+        16U,
+        16U,
+        16U,
+        16U,
+        235U,
+        235U,
+        235U,
+        235U,
+        235U,
+        235U,
+        235U,
+        235U,
+    };
+    auto budget = std::make_shared<platform::FrameBudget>(16U * 1024U * 1024U);
+    platform::GpuTransferActor actor{budget, harness.broker, harness.mailbox, harness.activitySink};
+    std::optional<application::FrameSet> pair =
+        makeHorizontalLumaSet(*budget,
+                              domain::FrameId{63},
+                              kColumns,
+                              kColumns,
+                              application::FramePresentation{.rotationDegrees = 90U});
+    ASSERT_TRUE(pair.has_value());
+    ASSERT_EQ(actor.submit(makeContext(63U), std::move(*pair)),
+              platform::GpuTransferSubmitResult::Accepted);
+    ASSERT_TRUE(actor.waitUntilIdle(5s));
+
+    const platform::SurfaceRect content{10.0F, 72.0F, 40.0F, 40.0F};
+    harness.surface.setRoiTripletWindows(
+        {stagedWindowEntry(0, content.x, content.y, content.width, content.height, 0)});
+    const ExpectedLocalFootage expected = expectedLocalFootage(harness.surface,
+                                                               content,
+                                                               0,
+                                                               16.0F,
+                                                               8.0F,
+                                                               90U,
+                                                               1U,
+                                                               1U,
+                                                               false,
+                                                               platform::SurfaceNormalizedRect{});
+    ASSERT_TRUE(expected.valid);
+    const QImage image = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+    ASSERT_FALSE(image.isNull());
+    // The 16x8 luma gradient rotated 90 degrees shows bright above dark, like the panorama's
+    // own rotation test - the local draw keeps the frame's display orientation.
+    const int centreX = (expected.physicalLeft + expected.physicalRight) / 2;
+    const int centreY = (expected.physicalTop + expected.physicalBottom) / 2;
+    const int upperY = expected.physicalTop + (expected.physicalBottom - expected.physicalTop) / 4;
+    const int lowerY =
+        expected.physicalTop + (expected.physicalBottom - expected.physicalTop) * 3 / 4;
+    const QColor upper = image.pixelColor(centreX, upperY);
+    const QColor lower = image.pixelColor(centreX, lowerY);
+    EXPECT_GT(upper.red(), 210);
+    EXPECT_LT(lower.red(), 40);
+    // Letterbox sides stay background: the portrait footage is narrower than the square cell.
+    const QColor side = image.pixelColor(expected.physicalLeft - 2, centreY);
+    EXPECT_GT(side.red(), 240);
+
+    harness.releaseRenderer();
+    EXPECT_TRUE(actor.shutdown(2s));
+}
+
+TEST(ComparisonSurfaceWarpTests, LocalWindowFootageFollowsSampleAspectRatioAtFit) {
+    SurfaceWarpHarness harness;
+    harness.window.resize(101, 160);
+    ASSERT_TRUE(harness.start());
+    const domain::ColorMetadata metadata{
+        .matrix = domain::ColorMatrix::kBt709,
+        .range = domain::ColorRange::kFull,
+        .matrixInferred = false,
+    };
+    auto budget = std::make_shared<platform::FrameBudget>(16U * 1024U * 1024U);
+    platform::GpuTransferActor actor{budget, harness.broker, harness.mailbox, harness.activitySink};
+    std::optional<application::FrameSet> pair =
+        makeSolidSetWithMetadata(*budget,
+                                 domain::FrameId{64},
+                                 235U,
+                                 128U,
+                                 128U,
+                                 metadata,
+                                 235U,
+                                 128U,
+                                 128U,
+                                 metadata,
+                                 application::FramePresentation{
+                                     .sampleAspectNumerator = 2U,
+                                     .sampleAspectDenominator = 1U,
+                                 });
+    ASSERT_TRUE(pair.has_value());
+    ASSERT_EQ(actor.submit(makeContext(64U), std::move(*pair)),
+              platform::GpuTransferSubmitResult::Accepted);
+    ASSERT_TRUE(actor.waitUntilIdle(5s));
+
+    const platform::SurfaceRect content{10.0F, 72.0F, 60.0F, 40.0F};
+    harness.surface.setRoiTripletWindows(
+        {stagedWindowEntry(0, content.x, content.y, content.width, content.height, 0)});
+    const ExpectedLocalFootage expected = expectedLocalFootage(harness.surface,
+                                                               content,
+                                                               0,
+                                                               16.0F,
+                                                               9.0F,
+                                                               0U,
+                                                               2U,
+                                                               1U,
+                                                               false,
+                                                               platform::SurfaceNormalizedRect{});
+    ASSERT_TRUE(expected.valid);
+    const QImage image = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+    ASSERT_FALSE(image.isNull());
+    // White footage, and the top letterbox band proves the SAR-widened aspect (ignoring SAR
+    // would fit the 16x9 source height-first and leave no band at this cell shape).
+    const QColor inside = image.pixelColor((expected.physicalLeft + expected.physicalRight) / 2,
+                                           (expected.physicalTop + expected.physicalBottom) / 2);
+    EXPECT_GT(inside.red(), 225);
+    EXPECT_GT(inside.green(), 225);
+    EXPECT_GT(inside.blue(), 225);
+    const QColor band = image.pixelColor((expected.physicalLeft + expected.physicalRight) / 2,
+                                         expected.physicalTop - 2);
+    EXPECT_GT(band.red(), 240);
+    EXPECT_LT(band.green(), 60);
+
+    harness.releaseRenderer();
+    EXPECT_TRUE(actor.shutdown(2s));
+}
+
+TEST(ComparisonSurfaceWarpTests, LocalWindowOddWidthKeepsTheLastSourceColumn) {
+    SurfaceWarpHarness harness;
+    harness.window.resize(101, 160);
+    ASSERT_TRUE(harness.start());
+    constexpr std::array<std::uint8_t, 15U> kColumns{
+        16U,
+        16U,
+        16U,
+        16U,
+        16U,
+        16U,
+        16U,
+        235U,
+        235U,
+        235U,
+        235U,
+        235U,
+        235U,
+        235U,
+        235U,
+    };
+    auto budget = std::make_shared<platform::FrameBudget>(16U * 1024U * 1024U);
+    platform::GpuTransferActor actor{budget, harness.broker, harness.mailbox, harness.activitySink};
+    std::optional<application::FrameSet> pair =
+        makeHorizontalLumaSet(*budget, domain::FrameId{65}, kColumns, kColumns);
+    ASSERT_TRUE(pair.has_value());
+    ASSERT_EQ(actor.submit(makeContext(65U), std::move(*pair)),
+              platform::GpuTransferSubmitResult::Accepted);
+    ASSERT_TRUE(actor.waitUntilIdle(5s));
+
+    const platform::SurfaceRect content{10.0F, 72.0F, 40.0F, 40.0F};
+    harness.surface.setRoiTripletWindows(
+        {stagedWindowEntry(0, content.x, content.y, content.width, content.height, 0)});
+    const ExpectedLocalFootage expected = expectedLocalFootage(harness.surface,
+                                                               content,
+                                                               0,
+                                                               15.0F,
+                                                               8.0F,
+                                                               0U,
+                                                               1U,
+                                                               1U,
+                                                               false,
+                                                               platform::SurfaceNormalizedRect{});
+    ASSERT_TRUE(expected.valid);
+    const QImage image = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+    ASSERT_FALSE(image.isNull());
+    const int centreY = (expected.physicalTop + expected.physicalBottom) / 2;
+    const int darkX = expected.physicalLeft + (expected.physicalRight - expected.physicalLeft) / 4;
+    const int brightX = expected.physicalRight - 2;
+    EXPECT_LT(image.pixelColor(darkX, centreY).red(), 40);
+    // The odd-width frame's last valid column survives the half-open clamp; sampling past it
+    // would show a black or averaged column instead of the bright texel.
+    EXPECT_GT(image.pixelColor(brightX, centreY).red(), 210);
 
     harness.releaseRenderer();
     EXPECT_TRUE(actor.shutdown(2s));

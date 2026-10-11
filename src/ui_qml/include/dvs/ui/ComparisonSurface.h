@@ -97,6 +97,23 @@ class ComparisonSurface : public QQuickItem {
                    presentedFrameIdentityChanged)
     Q_PROPERTY(qulonglong presentedPlaybackGeneration READ presentedPlaybackGeneration NOTIFY
                    presentedFrameIdentityChanged)
+    // V01 RoiTriplet staged local windows: [{slot, x, y, width, height, zoomPercent,
+    // smoothSampling}, ...] with the window content rects in surface item coordinates. The
+    // strip owns the layout; the surface only carries it into the render state. Extra draws
+    // of the presented frame set - never a second presentation acknowledgement.
+    Q_PROPERTY(QVariantList roiTripletWindows READ roiTripletWindows WRITE setRoiTripletWindows
+                   NOTIFY roiTripletGeometryChanged)
+    // Published footage extents for the staged windows: [{slot, valid, width, height}, ...].
+    // Resolved by the same pure geometry the renderer draws with, so the strip's letterbox
+    // chrome cannot drift from the picture. Extents only - the footage is always centred in
+    // the staged content rect.
+    Q_PROPERTY(QVariantList roiTripletWindowRects READ roiTripletWindowRects NOTIFY
+                   roiTripletGeometryChanged)
+    // Published panorama ROI outline rects in surface coordinates:
+    // [{slot, x, y, width, height}, ...], one entry per panel where the clamped oriented ROI
+    // intersects what the panorama currently shows.
+    Q_PROPERTY(QVariantList roiTripletOutlineRects READ roiTripletOutlineRects NOTIFY
+                   roiTripletGeometryChanged)
 
 public:
     enum ViewMode {
@@ -235,6 +252,10 @@ public:
     [[nodiscard]] qulonglong presentedFrameId() const noexcept;
     [[nodiscard]] qulonglong presentedSessionEpoch() const noexcept;
     [[nodiscard]] qulonglong presentedPlaybackGeneration() const noexcept;
+    [[nodiscard]] QVariantList roiTripletWindows() const;
+    void setRoiTripletWindows(const QVariantList& windows);
+    [[nodiscard]] QVariantList roiTripletWindowRects() const;
+    [[nodiscard]] QVariantList roiTripletOutlineRects() const;
     // Publication point for the presented-frame identity. The render node is the only production
     // caller (it posts this from the render thread whenever the presented set changes); exposing it
     // lets the readout be exercised without a live D3D device.
@@ -308,6 +329,9 @@ signals:
     void differenceSuppressedChanged();
     void droppedFramesChanged();
     void presentedFrameIdentityChanged();
+    // V01 RoiTriplet: staged windows, published footage extents and panorama outline rects
+    // all re-resolve together; every input change emits this once.
+    void roiTripletGeometryChanged();
 
 protected:
     [[nodiscard]] QSGNode* updatePaintNode(QSGNode* oldNode,
@@ -324,6 +348,9 @@ private:
     // Marks the item dirty and explicitly requests a window update so a parked render loop
     // still runs the sync that fulfills staged pixel probes.
     void scheduleProbeSync();
+    // Emits roiTripletGeometryChanged after any input of the published local-window/outline
+    // geometry changed (staged list, ROI, source info, DPR).
+    void emitRoiTripletGeometryChanged();
     // Render thread -> GUI thread publication of the presented frame identity. Only emits when
     // the identity actually changed, so a parked viewport costs nothing.
     void setPresentedFrameIdentity(platform::PresentedFrameIdentity identity);
@@ -370,6 +397,10 @@ private:
     // Set by cancelSourcePixelProbes(); the next sync clears the node's staged batch with it.
     bool pixelProbesCancelled_ = false;
     qulonglong pixelProbeGeneration_ = 0U;
+    // V01 RoiTriplet staged windows: the strip's window content rects in surface item
+    // coordinates, validated and clamped to three entries. GUI-thread only; copied into the
+    // render state at every scene-graph sync.
+    QVariantList roiTripletWindows_;
 };
 
 } // namespace dvs::ui
