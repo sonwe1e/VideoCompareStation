@@ -11,6 +11,11 @@ Item {
     QtObject {
         id: actions
 
+        property var jogPressCalls: []
+        property int jogReleaseCalls: 0
+        property int previousFrameCalls: 0
+        property int nextFrameCalls: 0
+
         function firstFrame() {
         }
         function stepBackwardSecond() {
@@ -18,10 +23,12 @@ Item {
         function stepBackwardFive() {
         }
         function previousFrame() {
+            previousFrameCalls += 1;
         }
         function togglePlayback() {
         }
         function nextFrame() {
+            nextFrameCalls += 1;
         }
         function stepForwardFive() {
         }
@@ -29,6 +36,81 @@ Item {
         }
         function lastFrame() {
         }
+        function jogPress(direction) {
+            const nextPresses = jogPressCalls.slice(0);
+            nextPresses.push(direction);
+            jogPressCalls = nextPresses;
+            return true;
+        }
+        function jogRelease() {
+            jogReleaseCalls += 1;
+        }
+    }
+
+    // Order-sensitive stand-in used by the hold-to-jog test: records the exact event sequence
+    // so a double release or a stray keyboard-fallback step is attributable.
+    QtObject {
+        id: orderedActions
+
+        property var events: []
+
+        function record(name) {
+            const next = events.slice(0);
+            next.push(name);
+            events = next;
+        }
+        function previousFrame() {
+            record("previousFrame");
+        }
+        function nextFrame() {
+            record("nextFrame");
+        }
+        function jogPress(direction) {
+            record("jogPress:" + direction);
+            return true;
+        }
+        function jogRelease() {
+            record("jogRelease");
+        }
+        function firstFrame() {
+        }
+        function stepBackwardSecond() {
+        }
+        function stepBackwardFive() {
+        }
+        function togglePlayback() {
+        }
+        function stepForwardFive() {
+        }
+        function stepForwardSecond() {
+        }
+        function lastFrame() {
+        }
+    }
+
+    Dvs.PlayerOsc {
+        id: orderedOsc
+
+        visible: false
+        width: root.width
+        controllerState: 0
+        docked: true
+        playing: false
+        timelineEnabled: true
+        currentFrame: 10
+        totalFrames: 100
+        progress: 0.1
+        timecodeText: "00:00:00:10"
+        markers: []
+        actions: orderedActions
+        focusTarget: focusTarget
+        canFirst: true
+        canPrevious: true
+        canPlay: true
+        canPause: false
+        canNext: true
+        canLast: true
+        anchors.top: root.top
     }
 
     Item {
@@ -287,6 +369,59 @@ Item {
             timeline.previewRequested(42);
             compare(previewSpy.count, 1);
             compare(previewSpy.signalArguments[0][0], 42);
+        }
+
+        // E04: holding the single-frame buttons drives the jog state machine exactly like the
+        // keyboard — pressed feeds jogPress, release stops it — while a plain click still steps
+        // exactly one frame through the keyboard-style clicked fallback.
+        function test_hold_previous_button_jogs_and_release_stops() {
+            osc.revealActive = true;
+            const previousButton = findChild(osc, "previousButton");
+            verify(previousButton !== null);
+            actions.jogPressCalls = [];
+            actions.jogReleaseCalls = 0;
+            actions.previousFrameCalls = 0;
+
+            mousePress(previousButton);
+            compare(actions.jogPressCalls, [-1]);
+            compare(actions.previousFrameCalls, 0);
+
+            mouseRelease(previousButton);
+            compare(actions.jogReleaseCalls, 1);
+            compare(actions.previousFrameCalls, 0);
+        }
+
+        function test_hold_next_button_jogs_and_keyboard_click_steps_once() {
+            osc.revealActive = true;
+            const nextButton = findChild(osc, "nextButton");
+            verify(nextButton !== null);
+            actions.jogPressCalls = [];
+            actions.jogReleaseCalls = 0;
+            actions.nextFrameCalls = 0;
+
+            mousePress(nextButton);
+            compare(actions.jogPressCalls, [1]);
+            mouseRelease(nextButton);
+            compare(actions.jogReleaseCalls, 1);
+            compare(actions.nextFrameCalls, 0);
+
+            // Keyboard activation (Space/Enter on a focused button) emits clicked without a
+            // press/release pair; the fallback must step exactly once, not double with a jog.
+            nextButton.clicked();
+            compare(actions.nextFrameCalls, 1);
+            compare(actions.jogPressCalls.length, 1);
+        }
+
+        function test_button_hold_event_order_has_one_press_and_one_release() {
+            orderedOsc.visible = true;
+            const previousButton = findChild(orderedOsc, "previousButton");
+            verify(previousButton !== null);
+            orderedActions.events = [];
+
+            mousePress(previousButton);
+            mouseRelease(previousButton);
+            compare(orderedActions.events, ["jogPress:-1", "jogRelease"]);
+            orderedOsc.visible = false;
         }
 
         function test_playback_status_separates_three_phenomena() {

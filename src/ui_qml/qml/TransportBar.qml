@@ -51,6 +51,12 @@ Item {
     signal previousSecondRequested
     signal previousFiveRequested
     signal previousRequested
+    // E04 hold-to-jog: pressed while the pointer (or keyboard activation) goes down on the
+    // single-frame buttons, released when it comes up. The host maps these to the jog state
+    // machine, so holding a button walks exactly like holding its shortcut key.
+    signal previousPressed
+    signal nextPressed
+    signal navigationReleased
     signal playbackRequested
     signal nextRequested
     signal nextFiveRequested
@@ -257,12 +263,40 @@ Item {
             TransportButton {
                 id: previousButton
 
+                // Guards the click/press split: mouse presses step via onPressed, keyboard
+                // activation (Space/Enter) has no press phase and steps via onClicked.
+                property bool jogArmed: false
+
                 objectName: "previousButton"
                 iconSource: "qrc:/icons/previous.svg"
-                helpText: qsTr("上一帧\n快捷键：← / A")
+                helpText: qsTr("上一帧（长按连续走带）\n快捷键：← / A")
                 enabled: control.canPrevious
+                onPressed: {
+                    previousButton.jogArmed = true;
+                    control.previousPressed();
+                    control.restoreFocus();
+                }
+                onReleased: {
+                    // Idempotent: some synthesized releases deliver both released and canceled,
+                    // and either path alone must end the hold exactly once.
+                    if (previousButton.jogArmed) {
+                        previousButton.jogArmed = false;
+                        control.navigationReleased();
+                    }
+                }
+                onCanceled: {
+                    // Released off-button or stolen by a grab: still end the hold.
+                    if (previousButton.jogArmed) {
+                        previousButton.jogArmed = false;
+                        control.navigationReleased();
+                    }
+                }
                 onClicked: {
-                    control.previousRequested();
+                    // Keyboard activation (Space/Enter) fires clicked without press/release;
+                    // mouse clicks already stepped via onPressed, so only the keyboard path
+                    // steps here.
+                    if (!previousButton.jogArmed)
+                        control.previousRequested();
                     control.restoreFocus();
                 }
             }
@@ -286,12 +320,32 @@ Item {
             TransportButton {
                 id: nextButton
 
+                property bool jogArmed: false
+
                 objectName: "nextButton"
                 iconSource: "qrc:/icons/next.svg"
-                helpText: qsTr("下一帧\n快捷键：→ / D")
+                helpText: qsTr("下一帧（长按连续走带）\n快捷键：→ / D")
                 enabled: control.canNext
+                onPressed: {
+                    nextButton.jogArmed = true;
+                    control.nextPressed();
+                    control.restoreFocus();
+                }
+                onReleased: {
+                    if (nextButton.jogArmed) {
+                        nextButton.jogArmed = false;
+                        control.navigationReleased();
+                    }
+                }
+                onCanceled: {
+                    if (nextButton.jogArmed) {
+                        nextButton.jogArmed = false;
+                        control.navigationReleased();
+                    }
+                }
                 onClicked: {
-                    control.nextRequested();
+                    if (!nextButton.jogArmed)
+                        control.nextRequested();
                     control.restoreFocus();
                 }
             }

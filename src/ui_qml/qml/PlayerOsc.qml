@@ -457,6 +457,21 @@ Item {
             onFirstRequested: control.actions.firstFrame()
             onPreviousSecondRequested: control.actions.stepBackwardSecond()
             onPreviousFiveRequested: control.actions.stepBackwardFive()
+            // E04: hold-to-jog on the single-frame buttons — pressed starts the walk (tap step
+            // plus hold window), release stops feeding. Clicks still step exactly one frame.
+            // typeof guards keep standalone harnesses with minimal action mocks working.
+            onPreviousPressed: {
+                if (control.actions && typeof control.actions.jogPress === "function")
+                    control.actions.jogPress(-1);
+            }
+            onNextPressed: {
+                if (control.actions && typeof control.actions.jogPress === "function")
+                    control.actions.jogPress(1);
+            }
+            onNavigationReleased: {
+                if (control.actions && typeof control.actions.jogRelease === "function")
+                    control.actions.jogRelease();
+            }
             onPreviousRequested: control.actions.previousFrame()
             onPlaybackRequested: control.actions.togglePlayback()
             onPlaybackRateRequested: rate => {

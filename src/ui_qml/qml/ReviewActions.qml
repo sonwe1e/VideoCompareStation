@@ -16,6 +16,12 @@ QtObject {
     readonly property bool canNext: Boolean(controller && controller.canNext)
     readonly property bool canLast: Boolean(controller && controller.canLast)
     readonly property bool canTogglePlayback: Boolean(controller && (controller.playing ? controller.canPause : controller.canPlay))
+    // E04 jog projection. `jogActive` covers the 250 ms press window too, so an Esc pressed
+    // between the tap and the hold threshold still ends the interaction.
+    readonly property bool jogging: Boolean(controller && controller.jogging)
+    readonly property bool jogActive: Boolean(controller && controller.jogActive)
+    readonly property int jogDirection: controller && controller.jogDirection !== undefined ? Number(controller.jogDirection) : 0
+    readonly property real jogRate: controller && controller.jogRate !== undefined ? Number(controller.jogRate) : 1
 
     signal wipePositionRequested(real position)
     signal manualNavigationRequested
@@ -113,5 +119,31 @@ QtObject {
             manualNavigationRequested();
             controller.stepFrames(delta);
         }
+    }
+
+    // E04 long-press jog. The controller owns the state machine: press steps once immediately
+    // and arms the 250 ms hold window; release stops feeding. A same-direction press while
+    // already held (OS auto-repeat) is ignored by the controller; the opposite direction ends
+    // the current jog first. Boundaries are gated here as well so a press at frame 0/last
+    // neither steps nor triggers the manual-navigation side effects.
+    function jogPress(direction) {
+        if (!controller || typeof controller.jogPress !== "function")
+            return false;
+        const allowed = direction < 0 ? canPrevious : canNext;
+        if (!allowed)
+            return false;
+        manualNavigationRequested();
+        return controller.jogPress(direction);
+    }
+
+    function jogRelease() {
+        if (controller && typeof controller.jogRelease === "function")
+            controller.jogRelease();
+    }
+
+    // Non-release end: Esc, focus loss, dialog open, window close.
+    function jogCancel() {
+        if (controller && typeof controller.jogCancel === "function")
+            controller.jogCancel();
     }
 }

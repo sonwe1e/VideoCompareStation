@@ -62,6 +62,11 @@ class ReviewController final : public QObject {
     Q_PROPERTY(bool framePending READ framePending NOTIFY stateChanged)
     Q_PROPERTY(bool playing READ playing NOTIFY stateChanged)
     Q_PROPERTY(qreal playbackRate READ playbackRate NOTIFY stateChanged)
+    // E04 jog projection: a held frame-step key/button walking continuously.
+    Q_PROPERTY(bool jogging READ jogging NOTIFY jogStateChanged)
+    Q_PROPERTY(bool jogActive READ jogActive NOTIFY jogStateChanged)
+    Q_PROPERTY(int jogDirection READ jogDirection NOTIFY jogStateChanged)
+    Q_PROPERTY(qreal jogRate READ jogRate WRITE setJogRate NOTIFY jogStateChanged)
     Q_PROPERTY(qint64 playbackRangeIn READ playbackRangeIn NOTIFY stateChanged)
     Q_PROPERTY(qint64 playbackRangeOut READ playbackRangeOut NOTIFY stateChanged)
     Q_PROPERTY(bool playbackRangeLoop READ playbackRangeLoop NOTIFY stateChanged)
@@ -152,6 +157,8 @@ public:
         // Optional test/adapter seam. The default probe uses QFileInfo on a background worker.
         std::function<SourceFileMetadata(const QString&)> sourceFileMetadataProbe;
         std::function<void(BackgroundTask)> scheduleBackgroundTask;
+        // Optional test seam for jog hold/pacing timing; defaults to the steady system clock.
+        std::function<std::chrono::steady_clock::time_point()> steadyClock;
     };
 
     explicit ReviewController(Dependencies dependencies, QObject* parent = nullptr);
@@ -188,6 +195,10 @@ public:
     [[nodiscard]] bool framePending() const noexcept;
     [[nodiscard]] bool playing() const noexcept;
     [[nodiscard]] qreal playbackRate() const noexcept;
+    [[nodiscard]] bool jogging() const noexcept;
+    [[nodiscard]] bool jogActive() const noexcept;
+    [[nodiscard]] int jogDirection() const noexcept;
+    [[nodiscard]] qreal jogRate() const noexcept;
     [[nodiscard]] qint64 playbackRangeIn() const noexcept;
     [[nodiscard]] qint64 playbackRangeOut() const noexcept;
     [[nodiscard]] bool playbackRangeLoop() const noexcept;
@@ -297,6 +308,17 @@ public:
     // while paused (applied by the next play()).
     Q_INVOKABLE bool setPlaybackRate(qreal rate);
     Q_INVOKABLE bool togglePlayback();
+    // E04 long-press jog. press starts a tap (immediate ±1 step) and arms the 250 ms hold
+    // window; holding enters continuous walking paced by the media clock and bounded by the
+    // presentation lead. A same-direction press while already held is an OS auto-repeat and is
+    // ignored; the opposite direction ends the current jog first (the coordinator cancels that
+    // stream and starts a fresh generation). release/cancel stop feeding; already-requested
+    // frames keep their bounded drain. Returns false when the press was ignored.
+    Q_INVOKABLE bool jogPress(qint64 direction);
+    Q_INVOKABLE void jogRelease();
+    Q_INVOKABLE void jogCancel();
+    // Continuous walking rate in real-time multiples; clamped to [0.5, 2.0].
+    Q_INVOKABLE void setJogRate(qreal rate);
     // Kernel playback-range authority. in/out < 0 clears the range. loop only applies with a
     // valid closed interval.
     Q_INVOKABLE bool setPlaybackRange(qint64 inFrame, qint64 outFrame, bool loop);
@@ -338,6 +360,7 @@ Q_SIGNALS:
     void snapshotRefreshed();
     void stateChanged();
     void frameStateChanged();
+    void jogStateChanged();
     void foregroundCommandFinished(qulonglong commandId, int outcome, const QString& errorKey);
     void commandFinished(qulonglong commandId,
                          qulonglong sessionEpoch,

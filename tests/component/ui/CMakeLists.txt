@@ -4,6 +4,8 @@ add_executable(
     dvs_ui_component_tests
     ClipExportControllerTests.cpp
     DiagnosticsProbeTests.cpp
+    JogKeyHandlerTests.cpp
+    JogStateMachineTests.cpp
     PairMetricsControllerTests.cpp
     PreviewThumbnailControllerTests.cpp
     ReviewControllerTests.cpp

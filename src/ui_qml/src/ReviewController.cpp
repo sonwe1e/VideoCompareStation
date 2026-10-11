@@ -4,6 +4,7 @@
 #include "dvs/application/MediaPaths.h"
 #include "dvs/domain/ComparisonSelection.h"
 #include "dvs/domain/PlaybackContinuityPolicy.h"
+#include "dvs/ui/JogStateMachine.h"
 #include "dvs/ui/SourceIdentity.h"
 #include "dvs/ui/SourceListModel.h"
 
@@ -461,10 +462,10 @@ void appendTimelineMarker(QVariantList& markers,
 
 } // namespace
 
-class ReviewController::Impl final {
+class ReviewController::Impl final : private JogStateMachine::Host {
 public:
     Impl(ReviewController& owner, Dependencies dependencies)
-        : owner_(owner), dependencies_(std::move(dependencies)), sourceModel_(&owner) {
+        : owner_(owner), dependencies_(std::move(dependencies)), sourceModel_(&owner), jog_(*this) {
         if (!dependencies_.submit || !dependencies_.snapshot ||
             !dependencies_.takeCompletedCommands) {
             throw std::invalid_argument{"Review controller dependencies must not be empty."};
@@ -472,6 +473,16 @@ public:
 
         QObject::connect(&projectionTimer_, &QTimer::timeout, &owner_, [this] { refresh(); });
         projectionTimer_.setInterval(kFallbackProjectionIntervalMilliseconds);
+        QObject::connect(&jogPacingTimer_, &QTimer::timeout, &owner_, [this] {
+            jog_.poll(jogClockNow());
+            if (jog_.phase() == JogStateMachine::Phase::Idle) {
+                jogPacingTimer_.stop();
+            }
+            syncJogProjection();
+        });
+        jogPacingTimer_.setInterval(static_cast<int>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(JogStateMachine::kPacingTick)
+                .count()));
         QObject::connect(&sourceDiskStatusPollTimer_, &QTimer::timeout, &owner_, [this] {
             consumeSourceDiskStatusCompletion();
         });
@@ -494,6 +505,28 @@ public:
 
     [[nodiscard]] const ReviewView& view() const noexcept {
         return view_;
+    }
+
+    // E04 jog projection reads; the projected copies update exactly when jogStateChanged fires.
+    [[nodiscard]] bool joggingProjected() const noexcept {
+        return joggingProjected_;
+    }
+
+    [[nodiscard]] bool jogActiveProjected() const noexcept {
+        return jogActiveProjected_;
+    }
+
+    [[nodiscard]] int jogDirectionProjected() const noexcept {
+        return jogDirectionProjected_;
+    }
+
+    [[nodiscard]] double jogRate() const noexcept {
+        return jog_.rate();
+    }
+
+    void setJogRate(const double rate) {
+        jog_.setRate(rate);
+        syncJogProjection();
     }
 
     [[nodiscard]] QAbstractItemModel* sources() noexcept {
@@ -1208,6 +1241,8 @@ public:
         }
         stopped_ = true;
         projectionTimer_.stop();
+        jog_.cancel();
+        jogPacingTimer_.stop();
         sourceDiskStatusPollTimer_.stop();
         sourceDiskStatusRefreshTimer_.stop();
         ++sourceDiskStatusGeneration_;
@@ -1391,6 +1426,16 @@ private:
                 candidateSourceCErrorKey_.clear();
             }
             publishProjection();
+            // A session change, boundary or lost readiness must end an active jog even when no
+            // pacing tick fires: the machine cancels itself when the direction can no longer
+            // step (poll is a no-op while Idle).
+            if (jog_.phase() != JogStateMachine::Phase::Idle) {
+                jog_.poll(jogClockNow());
+                if (jog_.phase() == JogStateMachine::Phase::Idle) {
+                    jogPacingTimer_.stop();
+                }
+                syncJogProjection();
+            }
             Q_EMIT owner_.snapshotRefreshed();
             for (const application::CommandTerminal& terminal : completedCommands) {
                 Q_EMIT owner_.commandFinished(
@@ -1418,6 +1463,8 @@ private:
     void failClosed() noexcept {
         stopped_ = true;
         projectionTimer_.stop();
+        jog_.cancel();
+        jogPacingTimer_.stop();
         sourceDiskStatusPollTimer_.stop();
         sourceDiskStatusRefreshTimer_.stop();
         ++sourceDiskStatusGeneration_;
@@ -2290,12 +2337,118 @@ private:
         return true;
     }
 
+public:
+    [[nodiscard]] std::chrono::steady_clock::time_point jogClockNow() const noexcept {
+        if (dependencies_.steadyClock) {
+            return dependencies_.steadyClock();
+        }
+        return std::chrono::steady_clock::now();
+    }
+
+    void syncJogProjection() {
+        const bool jogging = jog_.phase() == JogStateMachine::Phase::Jogging;
+        const bool active = jog_.phase() != JogStateMachine::Phase::Idle;
+        const int direction = static_cast<int>(jog_.direction());
+        if (jogging == joggingProjected_ && active == jogActiveProjected_ &&
+            direction == jogDirectionProjected_) {
+            return;
+        }
+        joggingProjected_ = jogging;
+        jogActiveProjected_ = active;
+        jogDirectionProjected_ = direction;
+        Q_EMIT owner_.jogStateChanged();
+    }
+
+    // E04: stops feeding the jog without touching in-flight coordinator work. The interactive
+    // step stream drains its bounded current+prepared tail and ends paused on its own.
+    void jogEnd() {
+        if (jog_.phase() == JogStateMachine::Phase::Idle) {
+            return;
+        }
+        jog_.release();
+        jogPacingTimer_.stop();
+        syncJogProjection();
+    }
+
+    [[nodiscard]] bool jogPress(const std::int64_t direction) {
+        if (!onOwnerThread() || stopped_) {
+            return false;
+        }
+        refresh();
+        if (stopped_) {
+            return false;
+        }
+        const bool accepted = jog_.press(direction, jogClockNow());
+        if (accepted && !jogPacingTimer_.isActive()) {
+            jogPacingTimer_.start();
+        }
+        syncJogProjection();
+        return accepted;
+    }
+
+    // ---- JogStateMachine::Host ---------------------------------------------------------------
+
+    [[nodiscard]] bool submitJogStep(const std::int64_t delta) override {
+        // Same path as a manual step tap, minus the refresh: the pacing loop refreshes once per
+        // poll, so each accepted step here stays a cheap dispatch against a fresh view.
+        if (!onOwnerThread() || stopped_ || delta == 0) {
+            return false;
+        }
+        if (!(delta < 0 ? view_.canPrevious : view_.canNext)) {
+            return false;
+        }
+        const std::optional<application::CommandContext> context = allocateCommandContext();
+        if (!context.has_value()) {
+            failClosed();
+            return false;
+        }
+        application::PlaybackCommand command{application::StepFramesCommand{
+            .context = *context,
+            .delta = delta,
+        }};
+        application::PortSubmitResult result = application::PortSubmitResult::Closed;
+        try {
+            result = dependencies_.submit(std::move(command));
+        } catch (...) {
+            failClosed();
+            return false;
+        }
+        if (result != application::PortSubmitResult::Accepted) {
+            return false;
+        }
+        pendingNavigationCommand_ = *context;
+        lastSubmittedCommandId_ = context->commandId.value();
+        publishProjection();
+        return true;
+    }
+
+    [[nodiscard]] std::int64_t jogDisplayedFrame() const override {
+        return view_.currentFrame;
+    }
+
+    [[nodiscard]] std::int64_t jogFrameCount() const override {
+        return static_cast<std::int64_t>(view_.totalFrames);
+    }
+
+    [[nodiscard]] int jogFramesPerSecond() const override {
+        return std::max(1, view_.oneSecondStepFrames);
+    }
+
+    [[nodiscard]] bool canJogToward(const std::int64_t delta) const override {
+        return delta < 0 ? view_.canPrevious : view_.canNext;
+    }
+
     ReviewController& owner_;
     Dependencies dependencies_;
     SourceListModel sourceModel_;
+    JogStateMachine jog_;
     QTimer projectionTimer_;
+    QTimer jogPacingTimer_;
     QTimer sourceDiskStatusPollTimer_;
     QTimer sourceDiskStatusRefreshTimer_;
+    bool joggingProjected_ = false;
+    bool jogActiveProjected_ = false;
+    int jogDirectionProjected_ = 0;
     std::shared_ptr<const application::SessionSnapshot> snapshot_;
     QString candidateSourceAErrorKey_;
     QString candidateSourceBErrorKey_;
@@ -2861,6 +3014,38 @@ bool ReviewController::applyDefaultPairPolicy(const int policyCode) {
 
 bool ReviewController::togglePlayback() {
     return impl_->togglePlayback();
+}
+
+bool ReviewController::jogging() const noexcept {
+    return impl_->joggingProjected();
+}
+
+bool ReviewController::jogActive() const noexcept {
+    return impl_->jogActiveProjected();
+}
+
+int ReviewController::jogDirection() const noexcept {
+    return impl_->jogDirectionProjected();
+}
+
+qreal ReviewController::jogRate() const noexcept {
+    return impl_->jogRate();
+}
+
+bool ReviewController::jogPress(const qint64 direction) {
+    return impl_->jogPress(direction);
+}
+
+void ReviewController::jogRelease() {
+    impl_->jogEnd();
+}
+
+void ReviewController::jogCancel() {
+    impl_->jogEnd();
+}
+
+void ReviewController::setJogRate(const qreal rate) {
+    impl_->setJogRate(rate);
 }
 
 void ReviewController::refreshProjection() noexcept {

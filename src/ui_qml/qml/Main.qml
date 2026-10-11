@@ -573,6 +573,9 @@ ApplicationWindow {
         // user did was move the playhead. Record synchronously so the position survives the close.
         resumeRecordTimer.stop();
         root.recordResumePosition();
+        // E04: a held frame-step key dies with the window; end the walk so the coordinator's
+        // bounded drain cannot outlive the interaction.
+        reviewShortcuts.cancelJog();
     }
 
     // Fade was removed from the video compare modes; fall back to Wipe for persisted preferences
@@ -2718,7 +2721,12 @@ ApplicationWindow {
         }
         onChromeToggleRequested: root.toggleChrome()
         onFullScreenToggleRequested: root.toggleFullScreen()
-        onPresentationEscapeRequested: root.escapePresentationMode()
+        onPresentationEscapeRequested: {
+            // Esc during a held jog ends the walk in every presentation state; the chrome/full
+            // screen exit keeps its existing behavior.
+            reviewShortcuts.cancelJog();
+            root.escapePresentationMode();
+        }
         onShortcutHelpRequested: shortcutHelp.open()
         onInPointRequested: root.setInPoint()
         onOutPointRequested: root.setOutPoint()

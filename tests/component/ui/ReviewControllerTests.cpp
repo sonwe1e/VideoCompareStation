@@ -2737,5 +2737,162 @@ TEST_F(ReviewControllerTests, InconsistentFirstSnapshotFailsClosedWithoutDerefer
     controller.stop();
 }
 
+// ---- E04 long-press jog integration ---------------------------------------------------------
+
+namespace {
+
+// Shared mutable fake steady clock for jog hold/pacing timing.
+class FakeJogClock {
+public:
+    [[nodiscard]] std::chrono::steady_clock::time_point now() const {
+        return std::chrono::steady_clock::time_point{} + std::chrono::milliseconds{milliseconds};
+    }
+
+    void advance(const std::chrono::milliseconds delta) {
+        milliseconds += delta.count();
+    }
+
+private:
+    std::int64_t milliseconds = 0;
+};
+
+[[nodiscard]] qint64 countStepCommands(const FakeBackend& backend, const std::int64_t delta) {
+    qint64 count = 0;
+    for (const application::PlaybackCommand& command : backend.submitted) {
+        const auto* const step = std::get_if<application::StepFramesCommand>(&command);
+        if (step != nullptr && step->delta == delta) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+} // namespace
+
+TEST_F(ReviewControllerTests, JogTapStepsOnceAndRepeatPressesAreIgnored) {
+    auto backend = std::make_shared<FakeBackend>();
+    backend->currentSnapshot = readySnapshot(5, 100U);
+    FakeJogClock clock;
+    ReviewController::Dependencies dependencies = dependenciesFor(backend);
+    dependencies.steadyClock = [&clock] { return clock.now(); };
+    ReviewController controller{std::move(dependencies)};
+
+    ASSERT_TRUE(controller.jogPress(1));
+    // Tap: exactly one immediate +1, and the controller reports an active press.
+    ASSERT_EQ(countStepCommands(*backend, 1), 1);
+    EXPECT_TRUE(controller.jogActive());
+    EXPECT_FALSE(controller.jogging());
+    EXPECT_EQ(controller.jogDirection(), 1);
+
+    // Same-direction press inside the hold window: OS auto-repeat, ignored.
+    clock.advance(std::chrono::milliseconds{50});
+    EXPECT_FALSE(controller.jogPress(1));
+    EXPECT_EQ(countStepCommands(*backend, 1), 1);
+
+    // Release before the threshold: the tap already stepped, nothing more follows.
+    controller.jogRelease();
+    EXPECT_FALSE(controller.jogActive());
+    clock.advance(std::chrono::milliseconds{400});
+    controller.refreshProjection();
+    EXPECT_EQ(countStepCommands(*backend, 1), 1);
+    controller.stop();
+}
+
+TEST_F(ReviewControllerTests, JogHoldPacesByMediaClockWithPresentationLeadBound) {
+    auto backend = std::make_shared<FakeBackend>();
+    backend->currentSnapshot = readySnapshot(10, 100U);
+    FakeJogClock clock;
+    ReviewController::Dependencies dependencies = dependenciesFor(backend);
+    dependencies.steadyClock = [&clock] { return clock.now(); };
+    ReviewController controller{std::move(dependencies)};
+
+    ASSERT_TRUE(controller.jogPress(1));
+    backend->currentSnapshot.displayedFrame = domain::FrameId{11};
+    ASSERT_TRUE(waitUntil([&controller] { return controller.currentFrame() == 11; }));
+
+    // Crossing the hold threshold enters the walk; elapsed 0 adds no step yet.
+    clock.advance(std::chrono::milliseconds{250});
+    controller.refreshProjection();
+    EXPECT_TRUE(controller.jogging());
+    EXPECT_EQ(countStepCommands(*backend, 1), 1);
+
+    // 100 ms at 30 fps 1x = 3 frames of media time after the walk start; the presented frame
+    // is still at 11, so the lead bound feeds two and holds the rest until presentation.
+    clock.advance(std::chrono::milliseconds{100});
+    controller.refreshProjection();
+    EXPECT_EQ(countStepCommands(*backend, 1), 3);
+    backend->currentSnapshot.displayedFrame = domain::FrameId{13};
+    ASSERT_TRUE(waitUntil([&controller] { return controller.currentFrame() == 13; }));
+
+    // The remaining media-clock debt is repaid on the next poll.
+    clock.advance(std::chrono::milliseconds{16});
+    controller.refreshProjection();
+    EXPECT_EQ(countStepCommands(*backend, 1), 4);
+
+    // Release stops feeding: later polls submit nothing even as media time passes.
+    controller.jogRelease();
+    EXPECT_FALSE(controller.jogActive());
+    clock.advance(std::chrono::milliseconds{1000});
+    controller.refreshProjection();
+    EXPECT_EQ(countStepCommands(*backend, 1), 4);
+    controller.stop();
+}
+
+TEST_F(ReviewControllerTests, JogCancelsWhenSessionCanNoLongerStep) {
+    auto backend = std::make_shared<FakeBackend>();
+    backend->currentSnapshot = readySnapshot(10, 100U);
+    FakeJogClock clock;
+    ReviewController::Dependencies dependencies = dependenciesFor(backend);
+    dependencies.steadyClock = [&clock] { return clock.now(); };
+    ReviewController controller{std::move(dependencies)};
+
+    ASSERT_TRUE(controller.jogPress(1));
+    clock.advance(std::chrono::milliseconds{300});
+    controller.refreshProjection();
+    ASSERT_TRUE(controller.jogging());
+
+    // Session goes away: the walk must end itself instead of feeding steps into a closed port.
+    backend->currentSnapshot = emptySnapshot();
+    controller.refreshProjection();
+    EXPECT_FALSE(controller.jogActive());
+    const qint64 stepsBefore = countStepCommands(*backend, 1);
+    clock.advance(std::chrono::milliseconds{100});
+    controller.refreshProjection();
+    EXPECT_EQ(countStepCommands(*backend, 1), stepsBefore);
+    controller.stop();
+}
+
+TEST_F(ReviewControllerTests, JogBoundaryAndGateRejectPressWithoutSideEffects) {
+    auto backend = std::make_shared<FakeBackend>();
+    backend->currentSnapshot = readySnapshot(99, 100U);
+    FakeJogClock clock;
+    ReviewController::Dependencies dependencies = dependenciesFor(backend);
+    dependencies.steadyClock = [&clock] { return clock.now(); };
+    ReviewController controller{std::move(dependencies)};
+
+    ASSERT_FALSE(controller.canNext());
+    const std::size_t submittedBefore = backend->submitted.size();
+    EXPECT_FALSE(controller.jogPress(1));
+    EXPECT_FALSE(controller.jogActive());
+    EXPECT_EQ(backend->submitted.size(), submittedBefore);
+    EXPECT_TRUE(controller.jogPress(-1));
+    EXPECT_EQ(countStepCommands(*backend, -1), 1);
+    controller.stop();
+}
+
+TEST_F(ReviewControllerTests, JogRateIsClampedAndProjected) {
+    auto backend = std::make_shared<FakeBackend>();
+    backend->currentSnapshot = readySnapshot(5, 100U);
+    ReviewController controller{dependenciesFor(backend)};
+
+    controller.setJogRate(4.0);
+    EXPECT_DOUBLE_EQ(controller.jogRate(), 2.0);
+    controller.setJogRate(0.1);
+    EXPECT_DOUBLE_EQ(controller.jogRate(), 0.5);
+    controller.setJogRate(1.0);
+    EXPECT_DOUBLE_EQ(controller.jogRate(), 1.0);
+    controller.stop();
+}
+
 } // namespace
 } // namespace dvs::ui

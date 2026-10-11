@@ -5,6 +5,7 @@ add_library(
         include/dvs/ui/ImageFolderPairModel.h
         include/dvs/ui/InterpolationProtocolController.h
         include/dvs/ui/IssueLogController.h
+        include/dvs/ui/JogStateMachine.h
         include/dvs/ui/PairMetricsController.h
         include/dvs/ui/PreviewThumbnailController.h
         include/dvs/ui/ReviewController.h
@@ -19,6 +20,7 @@ add_library(
         src/ImageFolderPairModel.cpp
         src/InterpolationProtocolController.cpp
         src/IssueLogController.cpp
+        src/JogStateMachine.cpp
         src/PairMetricsController.cpp
         src/PreviewThumbnailController.cpp
         src/ReviewController.cpp
@@ -66,6 +68,7 @@ if(DVS_BUILD_ADAPTERS)
             include/dvs/ui/ImageEditOperations.h
             include/dvs/ui/ImagePairLoader.h
             include/dvs/ui/ImageReviewController.h
+            include/dvs/ui/JogKeyHandler.h
             include/dvs/ui/Module.h
             include/dvs/ui/RenderAckRelay.h
             include/dvs/ui/ReviewImageProvider.h
@@ -84,6 +87,7 @@ if(DVS_BUILD_ADAPTERS)
             src/ImageEditOperations.cpp
             src/ImagePairLoader.cpp
             src/ImageReviewController.cpp
+            src/JogKeyHandler.cpp
             src/Module.cpp
             src/RenderAckRelay.cpp
             src/ReviewImageProvider.cpp

@@ -54,6 +54,39 @@ Item {
     objectName: "reviewShortcuts"
     visible: false
 
+    // E04 held-key jog. The handler owns the bare frame-step sequences while enabled: a press
+    // becomes one immediate step plus a 250 ms hold window, OS auto-repeat is consumed so it
+    // can never re-trigger a jog, and the release (or window deactivation) stops the walk. The
+    // per-repeat Shortcuts this replaces could not see key releases, which is why the walk was
+    // previously keyed to the OS repeat clock instead of the media clock.
+    // qmllint disable import unqualified unresolved-type
+    JogKeyHandler {
+        id: jogKeys
+
+        window: control.Window.window
+        enabled: reviewActions.shortcutsEnabled
+        backwardEnabled: reviewActions.canPrevious
+        forwardEnabled: reviewActions.canNext
+        playerPresetKeys: control.shortcutPreset === 1
+        onJogPressed: direction => reviewActions.jogPress(direction)
+        onJogReleased: () => reviewActions.jogRelease()
+    }
+    // qmllint enable import unqualified unresolved-type
+
+    // Non-release ends: Esc, focus loss (window deactivation is handled by the key handler),
+    // dialog open (shortcutsEnabled drops and the handler releases), and window close via the
+    // host's cancelJog() call.
+    function cancelJog() {
+        reviewActions.jogCancel();
+    }
+
+    onShortcutsEnabledChanged: {
+        // A dialog or menu opened mid-hold disables the key handler, which releases the held
+        // keys; jogCancel() here is the safety net for the press window between enable flips.
+        if (!shortcutsEnabled)
+            reviewActions.jogCancel();
+    }
+
     // Single source of truth for the shortcut help: every Shortcut below declares its own
     // helpKeys/helpLabel next to its sequence, and the overlay renders this table instead of a
     // hand-maintained copy. Entries are [keycaps, label, playerLabel, presetMask]: playerLabel
@@ -112,38 +145,31 @@ Item {
         enabled: reviewActions.shortcutsEnabled && reviewActions.canLast
         onActivated: reviewActions.lastFrame()
     }
-    Shortcut {
-        sequence: "A"
-        context: Qt.ApplicationShortcut
-        enabled: reviewActions.shortcutsEnabled && reviewActions.canPrevious
-        onActivated: reviewActions.previousFrame()
-        property string helpKeys: qsTr("A / D")
-        property string helpLabel: qsTr("上一帧 / 下一帧")
+    // Bare A/D and Left/Right are owned by JogKeyHandler above (press = tap step, hold = walk,
+    // release = stop), so they appear here only as help-table rows. The overlay collects these
+    // entries exactly like Shortcut help rows; their per-repeat Shortcut predecessors could not
+    // observe key releases. Multi-frame jumps stay on Shift/Ctrl variants and the ±5/±1s buttons.
+    component JogKeyHelpRow: QtObject {
+        id: jogKeyHelpRow
+
+        required property string helpKeys
+        required property string helpLabel
+        required property int helpPresets
     }
-    Shortcut {
-        sequence: "D"
-        context: Qt.ApplicationShortcut
-        enabled: reviewActions.shortcutsEnabled && reviewActions.canNext
-        onActivated: reviewActions.nextFrame()
+    JogKeyHelpRow {
+        helpKeys: qsTr("A / D")
+        helpLabel: qsTr("上一帧 / 下一帧（长按连续走带）")
+        helpPresets: -1
     }
-    // Left/Right always step a single frame, in every shortcut preset. The OS auto-repeat drives
-    // rapid stepping (plan 1.5.md §11.1: "continue letting nextFrame() be driven by OS auto-repeat").
-    // Preset 1 (Player) previously mapped these to stepSeconds(5) = 150 frames at 30 fps — a jump that
-    // violated the "±1 frame" expectation. Multi-frame jumps in preset 1 are still available via
-    // Ctrl+Left/Ctrl+Right (stepSeconds(30)) and the dedicated five-frame/second buttons.
-    Shortcut {
-        sequence: "Left"
-        context: Qt.ApplicationShortcut
-        enabled: reviewActions.shortcutsEnabled && reviewActions.canPrevious
-        onActivated: reviewActions.previousFrame()
-        property string helpKeys: qsTr("← / →")
-        property string helpLabel: qsTr("上一帧 / 下一帧")
+    JogKeyHelpRow {
+        helpKeys: qsTr("← / →")
+        helpLabel: qsTr("上一帧 / 下一帧（长按连续走带）")
+        helpPresets: -1
     }
-    Shortcut {
-        sequence: "Right"
-        context: Qt.ApplicationShortcut
-        enabled: reviewActions.shortcutsEnabled && reviewActions.canNext
-        onActivated: reviewActions.nextFrame()
+    JogKeyHelpRow {
+        helpKeys: qsTr(", / .")
+        helpLabel: qsTr("上一帧 / 下一帧（长按连续走带）")
+        helpPresets: 1
     }
     Shortcut {
         sequences: ["Down", "Shift+Left", "Shift+A"]
@@ -190,21 +216,8 @@ Item {
         enabled: reviewActions.shortcutsEnabled && reviewActions.canNext
         onActivated: control.shortcutPreset === 1 ? reviewActions.stepSeconds(30) : reviewActions.stepForwardSecond()
     }
-    Shortcut {
-        sequence: ","
-        context: Qt.ApplicationShortcut
-        enabled: control.shortcutPreset === 1 && reviewActions.shortcutsEnabled && reviewActions.canPrevious
-        onActivated: reviewActions.previousFrame()
-        property string helpKeys: qsTr(", / .")
-        property string helpLabel: qsTr("上一帧 / 下一帧")
-        property int helpPresets: 1
-    }
-    Shortcut {
-        sequence: "."
-        context: Qt.ApplicationShortcut
-        enabled: control.shortcutPreset === 1 && reviewActions.shortcutsEnabled && reviewActions.canNext
-        onActivated: reviewActions.nextFrame()
-    }
+    // ,/. are player-preset aliases of the bare frame-step keys; JogKeyHandler owns them while
+    // the player preset is active (playerPresetKeys) and they are documented in the help rows.
     Shortcut {
         sequence: "Alt+Left"
         context: Qt.ApplicationShortcut
@@ -254,6 +267,14 @@ Item {
         context: Qt.ApplicationShortcut
         enabled: control.fullScreen || !control.chromeVisible
         onActivated: control.presentationEscapeRequested()
+    }
+    // Esc ends an active jog (E04 end list). The presentation Esc above owns the key whenever it
+    // is enabled, and Main.qml cancels the jog on that path too, so the two never compete.
+    Shortcut {
+        sequence: "Esc"
+        context: Qt.ApplicationShortcut
+        enabled: reviewActions.jogActive && !control.fullScreen && control.chromeVisible
+        onActivated: reviewActions.jogCancel()
     }
     Shortcut {
         sequence: "?"

@@ -13,6 +13,7 @@
 #include "dvs/ui/ImageReviewController.h"
 #include "dvs/ui/InterpolationProtocolController.h"
 #include "dvs/ui/IssueLogController.h"
+#include "dvs/ui/JogKeyHandler.h"
 #include "dvs/ui/ReviewController.h"
 #include "dvs/ui/ReviewImageProvider.h"
 #include "dvs/ui/ReviewPreferencesController.h"
@@ -8200,7 +8201,7 @@ TEST(MainQmlContractTests, ShortcutHelpMatchesBoundShortcuts) {
         const QVariantList model = helpPairs(playerPreset);
         ASSERT_GE(model.size(), 10);
         EXPECT_EQ(descriptionFor(model, QStringLiteral("← / →")),
-                  QStringLiteral("上一帧 / 下一帧"));
+                  QStringLiteral("上一帧 / 下一帧（长按连续走带）"));
         EXPECT_EQ(descriptionFor(model, QStringLiteral("↓ / ↑")),
                   QStringLiteral("后退 / 前进 5 帧"));
         EXPECT_EQ(descriptionFor(model, QStringLiteral("Shift+← / →")),
@@ -9889,6 +9890,7 @@ int main(int argumentCount, char* arguments[]) {
     initializeMainQmlContractResources();
     static_cast<void>(
         qmlRegisterType<dvs::ui::ComparisonSurface>("Dvs.Ui", 1, 0, "ComparisonSurface"));
+    static_cast<void>(qmlRegisterType<dvs::ui::JogKeyHandler>("Dvs.Ui", 1, 0, "JogKeyHandler"));
     testing::InitGoogleTest(&argumentCount, arguments);
     return RUN_ALL_TESTS();
 }

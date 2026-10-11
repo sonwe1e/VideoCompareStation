@@ -11,6 +11,7 @@
 #include "dvs/ui/ImageReviewController.h"
 #include "dvs/ui/InterpolationProtocolController.h"
 #include "dvs/ui/IssueLogController.h"
+#include "dvs/ui/JogKeyHandler.h"
 #include "dvs/ui/PairMetricsController.h"
 #include "dvs/ui/ReviewController.h"
 #include "dvs/ui/ReviewImageProvider.h"
@@ -130,6 +131,7 @@ void registerQmlTypes() {
     static std::once_flag registered;
     std::call_once(registered, [] {
         static_cast<void>(qmlRegisterType<ComparisonSurface>("Dvs.Ui", 1, 0, "ComparisonSurface"));
+        static_cast<void>(qmlRegisterType<JogKeyHandler>("Dvs.Ui", 1, 0, "JogKeyHandler"));
     });
 }
 
