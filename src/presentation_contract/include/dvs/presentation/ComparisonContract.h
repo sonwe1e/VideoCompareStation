@@ -23,6 +23,9 @@ enum class ViewMode : std::uint8_t {
     // - ComparisonViewport maps it to ThreeUp and composes the local strip, because
     // D3d11ComparisonRenderer has no panel layout for it.
     RoiTriplet = 8,
+    // V03 dual-reference difference layout: pairs GT−CandidateA on the left and GT−CandidateB
+    // on the right in two columns, locking gain, threshold, color scale and ROI.
+    DualDifference = 9,
 };
 
 enum class DifferenceMetric : std::uint8_t {

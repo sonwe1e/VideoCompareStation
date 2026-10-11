@@ -454,12 +454,20 @@ Rectangle {
                             visible: control.sourceCount === 3 && (control.wipeMode || control.differenceMode || control.analysisGridMode)
                             width: parent.width
                             model: control.differenceEdges
-                            textRole: "label"
+                            textRole: "displayLabel"
                             currentIndex: control.differenceEdgeIndex(control.differenceEdge)
                             onActivated: index => {
                                 if (index >= 0 && index < control.differenceEdges.length)
                                     control.differenceEdgeRequested(Number(control.differenceEdges[index].preferenceValue));
                             }
+                        }
+                        Label {
+                            visible: pairCombo.visible && control.differenceEdges.length > 0 && Boolean(control.differenceEdges[pairCombo.currentIndex] && control.differenceEdges[pairCombo.currentIndex].isCandidateOnlyDifference)
+                            text: qsTr("ℹ️ 候选差异，不代表对参考的质量优劣")
+                            color: Theme.accentText
+                            font.pixelSize: 11
+                            wrapMode: Text.WordWrap
+                            width: parent.width
                         }
 
                         Label {

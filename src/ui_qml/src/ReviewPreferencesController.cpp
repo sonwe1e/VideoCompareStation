@@ -151,6 +151,7 @@ constexpr NamedEnumOption<ReviewPreferencesController::ViewMode> kViewModeOption
     {"wipe", ReviewPreferencesController::ViewMode::Wipe},
     {"fade", ReviewPreferencesController::ViewMode::Fade},
     {"roi-triplet", ReviewPreferencesController::ViewMode::RoiTriplet},
+    {"dual-difference", ReviewPreferencesController::ViewMode::DualDifference},
 };
 constexpr NamedEnumOption<ReviewPreferencesController::DifferenceMetric>
     kDifferenceMetricOptions[] = {
@@ -323,7 +324,7 @@ public:
     void setViewMode(const ViewMode value) {
         // RoiTriplet is the V01 "panorama + three same-ROI locals" task preset; it is a request
         // value like every other mode and reaches the viewport through the effective-mode path.
-        setEnum(viewMode_, value, ViewMode::SideBySide, ViewMode::RoiTriplet);
+        setEnum(viewMode_, value, ViewMode::SideBySide, ViewMode::DualDifference);
     }
 
     void setDifferenceMetric(const DifferenceMetric value) {

@@ -374,8 +374,9 @@ ApplicationWindow {
     // qmllint disable unqualified
 
     readonly property int effectiveViewMode: shell ? Number(shell.effectiveViewMode) : (singleMode ? ComparisonSurface.Single : ComparisonSurface.SideBySide)
+    readonly property bool dualDifferenceMode: effectiveViewMode === ComparisonSurface.DualDifference
     readonly property bool analysisGridMode: effectiveViewMode === ComparisonSurface.AnalysisGrid
-    readonly property bool differenceMode: effectiveViewMode === ComparisonSurface.Difference || analysisGridMode
+    readonly property bool differenceMode: effectiveViewMode === ComparisonSurface.Difference || analysisGridMode || dualDifferenceMode
     readonly property bool wipeMode: effectiveViewMode === ComparisonSurface.Wipe
     readonly property int threeUpViewMode: ComparisonSurface.ThreeUp
 
@@ -3440,6 +3441,7 @@ ApplicationWindow {
         sourceCount: root.sourceCount
         wipeMode: root.wipeMode
         differenceMode: root.differenceMode
+        dualDifferenceMode: root.dualDifferenceMode
         analysisGridMode: root.analysisGridMode
         immersiveHudVisible: root.immersiveHudVisible
         immersiveHudText: root.immersiveHudText

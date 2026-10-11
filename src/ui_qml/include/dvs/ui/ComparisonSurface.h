@@ -114,6 +114,7 @@ public:
         // ThreeUp and composes the local windows as extra draws of the same frame set.
         // setViewMode therefore keeps rejecting it.
         RoiTriplet = static_cast<int>(presentation::ViewMode::RoiTriplet),
+        DualDifference = static_cast<int>(presentation::ViewMode::DualDifference),
     };
     Q_ENUM(ViewMode)
 

@@ -103,7 +103,7 @@ VcsMenu {
             delegate: VcsRadioMenuItem {
                 required property int index
                 required property var modelData
-                text: String(modelData.label)
+                text: modelData.displayLabel ? String(modelData.displayLabel) : String(modelData.label)
                 checked: index === control.currentEdgeIndex
                 onTriggered: {
                     control.edgeRequested(Number(modelData.preferenceValue));

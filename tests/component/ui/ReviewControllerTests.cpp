@@ -1723,7 +1723,16 @@ TEST_F(ReviewControllerTests, ProjectsDisplayFramesGraphicsAndRoleSpecificErrorK
     EXPECT_EQ(firstEdge.value(QStringLiteral("firstSourceFrame")).toLongLong(), 2);
     EXPECT_EQ(firstEdge.value(QStringLiteral("secondSourceFrame")).toLongLong(), 3);
     EXPECT_EQ(firstEdge.value(QStringLiteral("firstPresentationTimeUs")).toLongLong(), 33'333);
-    EXPECT_EQ(firstEdge.value(QStringLiteral("secondPresentationTimeUs")).toLongLong(), 16'667);
+    EXPECT_FALSE(firstEdge.value(QStringLiteral("isCandidateOnlyDifference")).toBool());
+    EXPECT_TRUE(firstEdge.value(QStringLiteral("isReferenceDifference")).toBool());
+    const QVariantMap candidateEdge = differenceEdges[2].toMap();
+    EXPECT_EQ(candidateEdge.value(QStringLiteral("label")).toString(), QStringLiteral("B ↔ C"));
+    EXPECT_EQ(candidateEdge.value(QStringLiteral("displayLabel")).toString(),
+              QStringLiteral("B ↔ C (候选差异)"));
+    EXPECT_TRUE(candidateEdge.value(QStringLiteral("isCandidateOnlyDifference")).toBool());
+    EXPECT_FALSE(candidateEdge.value(QStringLiteral("isReferenceDifference")).toBool());
+    EXPECT_EQ(candidateEdge.value(QStringLiteral("roleDescription")).toString(),
+              QStringLiteral("候选差异，不代表质量优劣"));
     EXPECT_EQ(controller.sourceAErrorKey(), QStringLiteral("media-probe-failed"));
     EXPECT_TRUE(controller.sourceBErrorKey().isEmpty());
     EXPECT_TRUE(controller.pairErrorKey().isEmpty());

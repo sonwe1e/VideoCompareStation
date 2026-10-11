@@ -317,6 +317,9 @@ sourceOrientedPoint(const qreal displayX, const qreal displayY, const int rotati
     if (geometry.differenceContentRect.has_value()) {
         consider(*geometry.differenceContentRect);
     }
+    if (geometry.secondaryDifferenceContentRect.has_value()) {
+        consider(*geometry.secondaryDifferenceContentRect);
+    }
     return foundContent ? (std::min)(minimum, 1.0) : 1.0;
 }
 
@@ -669,7 +672,7 @@ ComparisonSurface::ViewMode ComparisonSurface::viewMode() const noexcept {
 void ComparisonSurface::setViewMode(const ViewMode value) {
     if ((value != SideBySide && value != ThreeUp && value != ReferenceFocus &&
          value != Difference && value != AnalysisGrid && value != Wipe && value != Single &&
-         value != Fade) ||
+         value != Fade && value != DualDifference) ||
         viewMode_ == value) {
         return;
     }

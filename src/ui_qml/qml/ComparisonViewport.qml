@@ -39,6 +39,7 @@ Rectangle {
     // shell; forwarded to the surface, which mirrors it into the renderer snapshot and the
     // panel geometry, so overlays and hit mapping follow the same single panel.
     property int canvasFocusSlot: -1
+    property bool dualDifferenceMode: false
     required property int referenceSourceIndex
     required property int sourceCount
     required property bool wipeMode
@@ -554,7 +555,7 @@ Rectangle {
     Repeater {
         objectName: "panelDividerRepeater"
         // Full-canvas focus collapses the layout to one panel, so there is no split to draw.
-        model: control.sourceCount > 1 && control.canvasFocusSlot < 0 && !control.wipeMode && (!control.differenceMode || control.analysisGridMode) ? dualVideoSurface.sourcePanelRects : []
+        model: control.sourceCount > 1 && control.canvasFocusSlot < 0 && !control.wipeMode && (!control.differenceMode || control.analysisGridMode || control.dualDifferenceMode) ? dualVideoSurface.sourcePanelRects : []
 
         Rectangle {
             required property var modelData
@@ -1286,6 +1287,35 @@ Rectangle {
         }
     }
 
+    Rectangle {
+        id: candidateDifferenceBanner
+
+        objectName: "candidateDifferenceBanner"
+        visible: control.chromeVisible && control.differenceMode && !control.dualDifferenceMode && control.selectedDifferenceEdge && Boolean(control.selectedDifferenceEdge.isCandidateOnlyDifference)
+        radius: 5
+        color: Theme.panel
+        border.color: Theme.borderHover
+        border.width: 1
+        height: candidateBannerText.implicitHeight + 10
+        width: Math.min(parent.width - 24, candidateBannerText.implicitWidth + 20)
+        z: 20
+        anchors {
+            top: inexactDifferenceBanner.visible ? inexactDifferenceBanner.bottom : (alignmentStatus.visible ? alignmentStatus.bottom : parent.top)
+            topMargin: inexactDifferenceBanner.visible || alignmentStatus.visible ? 8 : control.stageBannerTop
+            horizontalCenter: parent.horizontalCenter
+        }
+
+        Text {
+            id: candidateBannerText
+
+            text: qsTr("ℹ️ 候选差异，不代表质量优劣")
+            color: Theme.accentText
+            font.pixelSize: 11
+            font.weight: Font.DemiBold
+            anchors.centerIn: parent
+        }
+    }
+
     Item {
         id: surfaceLabels
 
@@ -1352,6 +1382,11 @@ Rectangle {
 
                     visible: surfaceLabel.showFilename
                     text: {
+                        if (control.dualDifferenceMode) {
+                            const refLetter = String.fromCharCode(65 + control.referenceSourceIndex);
+                            const candLetter = String.fromCharCode(65 + surfaceLabel.sourceSlot);
+                            return qsTr("差异：%1 ↔ %2 (参考)").arg(candLetter).arg(refLetter);
+                        }
                         const parent = control.sourceParentLabel(surfaceLabel.sourceSlot);
                         const name = control.sourceFilename(surfaceLabel.sourceSlot);
                         return parent.length > 0 ? "%1 (%2)".arg(name).arg(parent) : name;

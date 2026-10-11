@@ -99,7 +99,8 @@ struct PreparedSetDraw final {
     // own constants and owns one constant-buffer set until the immediate-context draw is issued.
     std::array<VideoDraw, 3U> videoDraws{};
     std::size_t videoDrawCount = 0U;
-    DifferenceDraw differenceDraw;
+    std::array<DifferenceDraw, 2U> differenceDraws{};
+    std::size_t differenceDrawCount = 0U;
     std::array<ComposeConstants, 16U> letterboxBars{};
     std::size_t letterboxBarCount = 0U;
 };
@@ -113,7 +114,8 @@ struct PreparedSetDraw final {
     return value == SurfaceViewMode::SideBySide || value == SurfaceViewMode::ThreeUp ||
            value == SurfaceViewMode::ReferenceFocus || value == SurfaceViewMode::Difference ||
            value == SurfaceViewMode::AnalysisGrid || value == SurfaceViewMode::Wipe ||
-           value == SurfaceViewMode::Single || value == SurfaceViewMode::Fade;
+           value == SurfaceViewMode::Single || value == SurfaceViewMode::Fade ||
+           value == SurfaceViewMode::DualDifference;
 }
 
 [[nodiscard]] bool isValid(const SurfaceDifferenceMetric value) noexcept {
@@ -773,6 +775,23 @@ SurfacePanelLayout computeSurfacePanelLayout(const SurfaceViewMode viewMode,
         result.sourceCount = 2U;
         return result;
     }
+    if (viewMode == SurfaceViewMode::DualDifference) {
+        const SurfaceColumnLayout columns =
+            computeSurfaceColumns(logicalWidth, logicalHeight, pixelWidth, pixelHeight, 2U);
+        result.differenceRect = columns.columns[0U];
+        result.secondaryDifferenceRect = columns.columns[1U];
+        result.sourceRects[0U] = columns.columns[0U];
+        result.sourceRects[1U] = columns.columns[1U];
+        std::size_t destination = 0U;
+        for (std::uint8_t slot = 0U; slot < 3U; ++slot) {
+            if (slot != referenceSlot) {
+                result.sourceSlots[destination++] = slot;
+            }
+        }
+        result.sourceSlots[2U] = referenceSlot;
+        result.sourceCount = 2U;
+        return result;
+    }
     if (viewMode == SurfaceViewMode::AnalysisGrid) {
         const std::uint32_t leftPixels = pixelWidth / 2U;
         const std::uint32_t topPixels = pixelHeight / 2U;
@@ -927,6 +946,15 @@ computeSurfacePresentationGeometry(const SurfaceViewMode viewMode,
         if (result.wipeContentRect->isValid()) {
             result.sourceContentRects[0U] = *result.wipeContentRect;
             result.sourceContentRects[1U] = *result.wipeContentRect;
+        }
+    } else if (viewMode == SurfaceViewMode::DualDifference) {
+        const std::uint8_t displayedSlot = referenceSlot;
+        if (result.panels.differenceRect.has_value()) {
+            result.differenceContentRect = fitted(*result.panels.differenceRect, displayedSlot);
+        }
+        if (result.panels.secondaryDifferenceRect.has_value()) {
+            result.secondaryDifferenceContentRect =
+                fitted(*result.panels.secondaryDifferenceRect, displayedSlot);
         }
     } else if (result.panels.differenceRect.has_value()) {
         const std::uint8_t displayedSlot =
@@ -1260,13 +1288,15 @@ public:
         frontPublication_.reset();
         cancelSourcePixelProbes();
         pixelReadbacks_ = {};
-        differenceColorBufferB_.Reset();
-        differenceColorBufferA_.Reset();
         colorBufferC_.Reset();
         colorBufferB_.Reset();
         colorBufferA_.Reset();
-        differenceBuffer_.Reset();
-        differenceComposeBuffer_.Reset();
+        for (std::size_t i = 0U; i < 2U; ++i) {
+            differenceBuffers_[i].Reset();
+            differenceColorBuffersB_[i].Reset();
+            differenceColorBuffersA_[i].Reset();
+            differenceComposeBuffers_[i].Reset();
+        }
         composeBufferC_.Reset();
         composeBufferB_.Reset();
         composeBufferA_.Reset();
@@ -1516,20 +1546,25 @@ private:
             FAILED(result = createDynamicConstantBuffer(
                        *device_.Get(), sizeof(ComposeConstants), composeBufferC_)) ||
             FAILED(result = createDynamicConstantBuffer(
-                       *device_.Get(), sizeof(ComposeConstants), differenceComposeBuffer_)) ||
-            FAILED(result = createDynamicConstantBuffer(
                        *device_.Get(), sizeof(ColorConstants), colorBufferA_)) ||
             FAILED(result = createDynamicConstantBuffer(
                        *device_.Get(), sizeof(ColorConstants), colorBufferB_)) ||
             FAILED(result = createDynamicConstantBuffer(
-                       *device_.Get(), sizeof(ColorConstants), colorBufferC_)) ||
-            FAILED(result = createDynamicConstantBuffer(
-                       *device_.Get(), sizeof(ColorConstants), differenceColorBufferA_)) ||
-            FAILED(result = createDynamicConstantBuffer(
-                       *device_.Get(), sizeof(ColorConstants), differenceColorBufferB_)) ||
-            FAILED(result = createDynamicConstantBuffer(
-                       *device_.Get(), sizeof(DifferenceConstants), differenceBuffer_))) {
+                       *device_.Get(), sizeof(ColorConstants), colorBufferC_))) {
             return failDevice(result, lease);
+        }
+        for (std::size_t i = 0U; i < 2U; ++i) {
+            if (FAILED(result = createDynamicConstantBuffer(*device_.Get(),
+                                                            sizeof(ComposeConstants),
+                                                            differenceComposeBuffers_[i])) ||
+                FAILED(result = createDynamicConstantBuffer(
+                           *device_.Get(), sizeof(ColorConstants), differenceColorBuffersA_[i])) ||
+                FAILED(result = createDynamicConstantBuffer(
+                           *device_.Get(), sizeof(ColorConstants), differenceColorBuffersB_[i])) ||
+                FAILED(result = createDynamicConstantBuffer(
+                           *device_.Get(), sizeof(DifferenceConstants), differenceBuffers_[i]))) {
+                return failDevice(result, lease);
+            }
         }
 
         D3D11_SAMPLER_DESC samplerDescription{};
@@ -1778,7 +1813,9 @@ private:
         };
         ID3D11DeviceContext& context = *lease.immediateContext.Get();
         HRESULT result = S_OK;
-        const auto appendDifference = [&](const SurfaceRect& bounds) {
+        const auto appendPairDifference = [&](const SurfaceRect& bounds,
+                                              const std::uint8_t slotFirst,
+                                              const std::uint8_t slotSecond) {
             if (state.differenceMetric == SurfaceDifferenceMetric::ExactPlanes &&
                 !state.exactPlaneAvailable) {
                 if (prepared.letterboxBarCount < prepared.letterboxBars.size()) {
@@ -1788,19 +1825,18 @@ private:
                 }
                 return true;
             }
-            const GpuFrameResource* edgeFirst = frameA.get();
-            const D3d11GpuFrameBacking* edgeFirstBacking = backingA;
-            const GpuFrameResource* edgeSecond = frameB.get();
-            const D3d11GpuFrameBacking* edgeSecondBacking = backingB;
-            if (state.differenceEdge == SurfaceDifferenceEdge::Between0And2) {
-                edgeSecond = frameC.get();
-                edgeSecondBacking = backingC;
-            } else if (state.differenceEdge == SurfaceDifferenceEdge::Between1And2) {
-                edgeFirst = frameB.get();
-                edgeFirstBacking = backingB;
-                edgeSecond = frameC.get();
-                edgeSecondBacking = backingC;
-            }
+            const std::array<const GpuFrameResource*, 3U> slotFrames{
+                frameA.get(), frameB.get(), frameC.get()};
+            const std::array<const D3d11GpuFrameBacking*, 3U> slotBackings{
+                backingA, backingB, backingC};
+            const GpuFrameResource* edgeFirst =
+                slotFirst < slotFrames.size() ? slotFrames[slotFirst] : nullptr;
+            const D3d11GpuFrameBacking* edgeFirstBacking =
+                slotFirst < slotBackings.size() ? slotBackings[slotFirst] : nullptr;
+            const GpuFrameResource* edgeSecond =
+                slotSecond < slotFrames.size() ? slotFrames[slotSecond] : nullptr;
+            const D3d11GpuFrameBacking* edgeSecondBacking =
+                slotSecond < slotBackings.size() ? slotBackings[slotSecond] : nullptr;
             const bool edgeFirstUsable = backingUsable(edgeFirst, edgeFirstBacking);
             const bool edgeSecondUsable = backingUsable(edgeSecond, edgeSecondBacking);
             if (!edgeFirstUsable || !edgeSecondUsable) {
@@ -1811,30 +1847,12 @@ private:
                 }
                 return true;
             }
-            // Hold-to-peek ("查看参考原图"): the difference pass is replaced by the reference
-            // (GT) source of the session - the same slot the ReferenceFocus layout puts in the
-            // main panel - drawn into the difference canvas with its own aspect fit and
-            // letterboxing. Falling back to the pair's first source would show the candidate
-            // under a label that promises the reference, so an unavailable reference slot draws
-            // nothing instead of the wrong frame.
             if (state.differenceSuppressed) {
                 const GpuFrameResource* peekFrame = nullptr;
                 const D3d11GpuFrameBacking* peekBacking = nullptr;
-                switch (state.referenceSlot) {
-                case 0U:
-                    peekFrame = frameA.get();
-                    peekBacking = backingA;
-                    break;
-                case 1U:
-                    peekFrame = frameB.get();
-                    peekBacking = backingB;
-                    break;
-                case 2U:
-                    peekFrame = frameC.get();
-                    peekBacking = backingC;
-                    break;
-                default:
-                    break;
+                if (state.referenceSlot < slotFrames.size()) {
+                    peekFrame = slotFrames[state.referenceSlot];
+                    peekBacking = slotBackings[state.referenceSlot];
                 }
                 if (peekFrame != nullptr && peekBacking != nullptr &&
                     backingUsable(peekFrame, peekBacking)) {
@@ -1852,10 +1870,29 @@ private:
                 return false;
             }
             prepared.hasDifference = true;
-            prepared.differenceDraw = makeDifferenceDraw(
-                state, destination, *edgeFirst, *edgeFirstBacking, *edgeSecond, *edgeSecondBacking);
+            if (prepared.differenceDrawCount < prepared.differenceDraws.size()) {
+                prepared.differenceDraws[prepared.differenceDrawCount] =
+                    makeDifferenceDraw(state,
+                                       destination,
+                                       *edgeFirst,
+                                       *edgeFirstBacking,
+                                       *edgeSecond,
+                                       *edgeSecondBacking);
+                ++prepared.differenceDrawCount;
+            }
             appendLetterboxBars(state, bounds, destination, prepared);
             return true;
+        };
+        const auto appendDifference = [&](const SurfaceRect& bounds) {
+            std::uint8_t slotFirst = 0U;
+            std::uint8_t slotSecond = 1U;
+            if (state.differenceEdge == SurfaceDifferenceEdge::Between0And2) {
+                slotSecond = 2U;
+            } else if (state.differenceEdge == SurfaceDifferenceEdge::Between1And2) {
+                slotFirst = 1U;
+                slotSecond = 2U;
+            }
+            return appendPairDifference(bounds, slotFirst, slotSecond);
         };
         const auto appendWipe = [&](const SurfaceRect& bounds) {
             const auto appendUnavailableBlack = [&](const SurfaceRect& rectangle) {
@@ -1983,6 +2020,26 @@ private:
                     makeComposeConstants(state, fullBounds, application::TextureRegion{});
                 ++prepared.letterboxBarCount;
             }
+        } else if (state.viewMode == SurfaceViewMode::DualDifference) {
+            const SurfacePanelLayout layout = computeSurfacePanelLayout(state.viewMode,
+                                                                        state.logicalWidth,
+                                                                        state.logicalHeight,
+                                                                        state.pixelWidth,
+                                                                        state.pixelHeight,
+                                                                        state.referenceSlot,
+                                                                        state.differenceEdge,
+                                                                        state.wipePosition);
+            if (layout.differenceRect.has_value() &&
+                !appendPairDifference(
+                    *layout.differenceRect, layout.sourceSlots[0U], layout.sourceSlots[2U])) {
+                return false;
+            }
+            if (layout.secondaryDifferenceRect.has_value() &&
+                !appendPairDifference(*layout.secondaryDifferenceRect,
+                                      layout.sourceSlots[1U],
+                                      layout.sourceSlots[2U])) {
+                return false;
+            }
         } else if (state.viewMode == SurfaceViewMode::Difference ||
                    state.viewMode == SurfaceViewMode::Fade) {
             // Difference and Fade never degrades to a single-source image. If either selected
@@ -2065,11 +2122,13 @@ private:
             }
         }
         if (prepared.hasDifference) {
-            if (!drawDifference(context, prepared.differenceDraw, lease)) {
-                const std::array<ID3D11ShaderResourceView*, 4U> nullViews{};
-                context.PSSetShaderResources(
-                    0U, static_cast<UINT>(nullViews.size()), nullViews.data());
-                return false;
+            for (std::size_t index = 0U; index < prepared.differenceDrawCount; ++index) {
+                if (!drawDifference(context, prepared.differenceDraws[index], index, lease)) {
+                    const std::array<ID3D11ShaderResourceView*, 4U> nullViews{};
+                    context.PSSetShaderResources(
+                        0U, static_cast<UINT>(nullViews.size()), nullViews.data());
+                    return false;
+                }
             }
         }
         const std::array<ID3D11ShaderResourceView*, 4U> nullViews{};
@@ -2121,21 +2180,22 @@ private:
 
     [[nodiscard]] bool drawDifference(ID3D11DeviceContext& context,
                                       const DifferenceDraw& draw,
+                                      const std::size_t index,
                                       const GraphicsDeviceLease& lease) noexcept {
         HRESULT result =
-            writeConstantBuffer(context, *differenceComposeBuffer_.Get(), draw.compose);
+            writeConstantBuffer(context, *differenceComposeBuffers_[index].Get(), draw.compose);
         if (FAILED(result)) {
             return failDevice(result, lease);
         }
-        result = writeConstantBuffer(context, *differenceColorBufferA_.Get(), draw.colorA);
+        result = writeConstantBuffer(context, *differenceColorBuffersA_[index].Get(), draw.colorA);
         if (FAILED(result)) {
             return failDevice(result, lease);
         }
-        result = writeConstantBuffer(context, *differenceColorBufferB_.Get(), draw.colorB);
+        result = writeConstantBuffer(context, *differenceColorBuffersB_[index].Get(), draw.colorB);
         if (FAILED(result)) {
             return failDevice(result, lease);
         }
-        result = writeConstantBuffer(context, *differenceBuffer_.Get(), draw.options);
+        result = writeConstantBuffer(context, *differenceBuffers_[index].Get(), draw.options);
         if (FAILED(result)) {
             return failDevice(result, lease);
         }
@@ -2145,9 +2205,10 @@ private:
                                                 : nearestSampler_.Get();
         context.PSSetSamplers(0U, 1U, &sampler);
 
-        ID3D11Buffer* const composeBuffer = differenceComposeBuffer_.Get();
-        const std::array<ID3D11Buffer*, 3U> pixelBuffers{
-            differenceColorBufferA_.Get(), differenceColorBufferB_.Get(), differenceBuffer_.Get()};
+        ID3D11Buffer* const composeBuffer = differenceComposeBuffers_[index].Get();
+        const std::array<ID3D11Buffer*, 3U> pixelBuffers{differenceColorBuffersA_[index].Get(),
+                                                         differenceColorBuffersB_[index].Get(),
+                                                         differenceBuffers_[index].Get()};
         const std::array<ID3D11ShaderResourceView*, 4U> views{
             draw.yViewA, draw.uvViewA, draw.yViewB, draw.uvViewB};
         context.VSSetConstantBuffers(0U, 1U, &composeBuffer);
@@ -2277,13 +2338,13 @@ private:
     ComPtr<ID3D11Buffer> composeBufferA_;
     ComPtr<ID3D11Buffer> composeBufferB_;
     ComPtr<ID3D11Buffer> composeBufferC_;
-    ComPtr<ID3D11Buffer> differenceComposeBuffer_;
+    std::array<ComPtr<ID3D11Buffer>, 2U> differenceComposeBuffers_;
     ComPtr<ID3D11Buffer> colorBufferA_;
     ComPtr<ID3D11Buffer> colorBufferB_;
     ComPtr<ID3D11Buffer> colorBufferC_;
-    ComPtr<ID3D11Buffer> differenceColorBufferA_;
-    ComPtr<ID3D11Buffer> differenceColorBufferB_;
-    ComPtr<ID3D11Buffer> differenceBuffer_;
+    std::array<ComPtr<ID3D11Buffer>, 2U> differenceColorBuffersA_;
+    std::array<ComPtr<ID3D11Buffer>, 2U> differenceColorBuffersB_;
+    std::array<ComPtr<ID3D11Buffer>, 2U> differenceBuffers_;
 };
 
 D3d11ComparisonRenderer::D3d11ComparisonRenderer(

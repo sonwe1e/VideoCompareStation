@@ -182,6 +182,7 @@ struct SurfacePanelLayout final {
     std::array<std::uint8_t, 3U> sourceSlots{0U, 1U, 2U};
     std::size_t sourceCount = 0U;
     std::optional<SurfaceRect> differenceRect;
+    std::optional<SurfaceRect> secondaryDifferenceRect;
 };
 
 struct SurfaceDisplayExtent final {
@@ -197,6 +198,7 @@ struct SurfacePresentationGeometry final {
     SurfacePanelLayout panels;
     std::array<SurfaceRect, 3U> sourceContentRects{};
     std::optional<SurfaceRect> differenceContentRect;
+    std::optional<SurfaceRect> secondaryDifferenceContentRect;
     std::optional<SurfaceRect> wipeContentRect;
 };
 

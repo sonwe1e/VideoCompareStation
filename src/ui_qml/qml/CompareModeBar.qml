@@ -57,7 +57,7 @@ Rectangle {
 
     // qmllint disable import unqualified unresolved-type
     readonly property bool pairRelevant: currentMode === ComparisonSurface.Wipe || currentMode === ComparisonSurface.Difference || currentMode === ComparisonSurface.AnalysisGrid
-    readonly property bool advancedMode: currentMode === ComparisonSurface.ThreeUp || currentMode === ComparisonSurface.ReferenceFocus || currentMode === ComparisonSurface.AnalysisGrid || currentMode === ComparisonSurface.RoiTriplet
+    readonly property bool advancedMode: currentMode === ComparisonSurface.ThreeUp || currentMode === ComparisonSurface.ReferenceFocus || currentMode === ComparisonSurface.AnalysisGrid || currentMode === ComparisonSurface.RoiTriplet || currentMode === ComparisonSurface.DualDifference
     readonly property string advancedModeLabel: {
         if (currentMode === ComparisonSurface.ThreeUp)
             return qsTr("三联");
@@ -67,6 +67,8 @@ Rectangle {
             return qsTr("分析网格");
         if (currentMode === ComparisonSurface.RoiTriplet)
             return qsTr("全景+三局部");
+        if (currentMode === ComparisonSurface.DualDifference)
+            return qsTr("双参考差异");
         return "";
     }
     // The button names the active quick flavor; other metrics (signed/heatmap/...) keep
@@ -281,6 +283,15 @@ Rectangle {
                     enabled: control.sourceCount === 3
                     checked: control.currentMode === ComparisonSurface.RoiTriplet
                     onTriggered: control.modeRequested(ComparisonSurface.RoiTriplet)
+                }
+                VcsRadioMenuItem {
+                    id: dualDifferenceMenuItem
+
+                    objectName: "dualDifferenceMenuItem"
+                    text: qsTr("双参考差异")
+                    enabled: control.sourceCount === 3
+                    checked: control.currentMode === ComparisonSurface.DualDifference
+                    onTriggered: control.modeRequested(ComparisonSurface.DualDifference)
                 }
                 // qmllint enable import unqualified unresolved-type
             }

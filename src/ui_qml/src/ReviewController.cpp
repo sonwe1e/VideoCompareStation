@@ -1938,10 +1938,30 @@ private:
                         ? application::comparisonExactnessDimensions(
                               *snapshot_, sourceRows[first].sourceId, sourceRows[second].sourceId)
                         : application::ComparisonExactnessDimensions{};
+                const bool hasReference =
+                    std::any_of(sourceRows.begin(), sourceRows.end(), [](const SourceListRow& r) {
+                        return r.role == static_cast<int>(domain::ComparisonRole::kReference);
+                    });
+                const bool firstIsRef =
+                    sourceRows[first].role == static_cast<int>(domain::ComparisonRole::kReference);
+                const bool secondIsRef =
+                    sourceRows[second].role == static_cast<int>(domain::ComparisonRole::kReference);
+                const bool isCandidateOnly = hasReference && !firstIsRef && !secondIsRef;
+                const bool isReferenceDiff = firstIsRef || secondIsRef;
+                const QString baseLabel =
+                    QStringLiteral("%1 ↔ %2").arg(sourceName(sourceRows[first].sourceId),
+                                                  sourceName(sourceRows[second].sourceId));
+                const QString displayLabel =
+                    isCandidateOnly ? QStringLiteral("%1 (候选差异)").arg(baseLabel) : baseLabel;
+                const QString roleDescription =
+                    isCandidateOnly ? QStringLiteral("候选差异，不代表质量优劣")
+                                    : (isReferenceDiff ? QStringLiteral("参考对比") : QString());
                 next.differenceEdges.push_back(QVariantMap{
-                    {QStringLiteral("label"),
-                     QStringLiteral("%1 ↔ %2").arg(sourceName(sourceRows[first].sourceId),
-                                                   sourceName(sourceRows[second].sourceId))},
+                    {QStringLiteral("label"), baseLabel},
+                    {QStringLiteral("displayLabel"), displayLabel},
+                    {QStringLiteral("isCandidateOnlyDifference"), isCandidateOnly},
+                    {QStringLiteral("isReferenceDifference"), isReferenceDiff},
+                    {QStringLiteral("roleDescription"), roleDescription},
                     {QStringLiteral("preferenceValue"), preferenceValue},
                     {QStringLiteral("firstSourceId"),
                      QVariant::fromValue<qulonglong>(sourceRows[first].sourceId)},

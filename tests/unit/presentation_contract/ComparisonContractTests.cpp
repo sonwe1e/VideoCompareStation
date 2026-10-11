@@ -13,6 +13,7 @@ TEST(ComparisonContractTests, PreservesPublishedPresentationEnumValues) {
     EXPECT_EQ(static_cast<std::uint8_t>(ViewMode::Single), 6U);
     EXPECT_EQ(static_cast<std::uint8_t>(ViewMode::Fade), 7U);
     EXPECT_EQ(static_cast<std::uint8_t>(ViewMode::RoiTriplet), 8U);
+    EXPECT_EQ(static_cast<std::uint8_t>(ViewMode::DualDifference), 9U);
     EXPECT_EQ(static_cast<std::uint8_t>(DifferenceMetric::ExactPlanes), 4U);
     EXPECT_EQ(static_cast<std::uint8_t>(DifferenceMetric::SignedSubtract), 5U);
     EXPECT_EQ(static_cast<std::uint8_t>(DifferenceMetric::Highlight), 6U);
@@ -24,7 +25,7 @@ TEST(ComparisonContractTests, PreservesPublishedPresentationEnumValues) {
 }
 
 TEST(ComparisonContractTests, DescribesExactlyTheCurrentOneTwoAndThreeSourceModes) {
-    EXPECT_EQ(comparisonModeDescriptors().size(), 9U);
+    EXPECT_EQ(comparisonModeDescriptors().size(), 10U);
 
     EXPECT_TRUE(isViewModeAvailable(ViewMode::Single, 1U));
     EXPECT_FALSE(isViewModeAvailable(ViewMode::SideBySide, 1U));
@@ -42,11 +43,13 @@ TEST(ComparisonContractTests, DescribesExactlyTheCurrentOneTwoAndThreeSourceMode
                                           ViewMode::AnalysisGrid,
                                           ViewMode::Wipe,
                                           ViewMode::Fade,
-                                          ViewMode::RoiTriplet}) {
+                                          ViewMode::RoiTriplet,
+                                          ViewMode::DualDifference}) {
         EXPECT_TRUE(isViewModeAvailable(mode, 3U));
     }
     EXPECT_FALSE(isViewModeAvailable(ViewMode::Single, 3U));
     EXPECT_FALSE(isViewModeAvailable(ViewMode::RoiTriplet, 2U));
+    EXPECT_FALSE(isViewModeAvailable(ViewMode::DualDifference, 2U));
 }
 
 TEST(ComparisonContractTests, FallsBackToSingleOrSideBySideForUnavailableModes) {

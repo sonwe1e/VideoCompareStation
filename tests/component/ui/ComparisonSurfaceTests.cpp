@@ -757,6 +757,52 @@ TEST(ComparisonSurfaceGeometryTests, MapsWipeLabelsToSelectedPairAndSplit) {
     EXPECT_FLOAT_EQ(wipe.sourceRects[1U].x, 200.0F);
 }
 
+TEST(ComparisonSurfaceGeometryTests, DualDifferenceLayoutPlacesTwoDifferencePanelsAndReference) {
+    const platform::SurfacePanelLayout dualDiff =
+        platform::computeSurfacePanelLayout(platform::SurfaceViewMode::DualDifference,
+                                            1000.0F,
+                                            600.0F,
+                                            1000U,
+                                            600U,
+                                            2U,
+                                            platform::SurfaceDifferenceEdge::Between0And1,
+                                            0.5F);
+    ASSERT_EQ(dualDiff.sourceCount, 2U);
+    ASSERT_TRUE(dualDiff.differenceRect.has_value());
+    ASSERT_TRUE(dualDiff.secondaryDifferenceRect.has_value());
+    EXPECT_FLOAT_EQ(dualDiff.differenceRect->width, 500.0F);
+    EXPECT_FLOAT_EQ(dualDiff.secondaryDifferenceRect->x, 500.0F);
+    EXPECT_FLOAT_EQ(dualDiff.secondaryDifferenceRect->width, 500.0F);
+    EXPECT_EQ(dualDiff.sourceSlots[0U], 0U);
+    EXPECT_EQ(dualDiff.sourceSlots[1U], 1U);
+    EXPECT_EQ(dualDiff.sourceSlots[2U], 2U);
+}
+
+TEST(ComparisonSurfaceGeometryTests, DualDifferencePresentationGeometryFitsBothDifferences) {
+    const std::array<platform::SurfaceDisplayExtent, 3U> extents{
+        platform::SurfaceDisplayExtent{.width = 1600.0F, .height = 900.0F},
+        platform::SurfaceDisplayExtent{.width = 1600.0F, .height = 900.0F},
+        platform::SurfaceDisplayExtent{.width = 1600.0F, .height = 900.0F}};
+    const platform::SurfacePresentationGeometry geometry =
+        platform::computeSurfacePresentationGeometry(platform::SurfaceViewMode::DualDifference,
+                                                     1000.0F,
+                                                     600.0F,
+                                                     1000U,
+                                                     600U,
+                                                     2U,
+                                                     platform::SurfaceDifferenceEdge::Between0And1,
+                                                     0.5F,
+                                                     extents,
+                                                     false,
+                                                     -1);
+    ASSERT_TRUE(geometry.differenceContentRect.has_value());
+    ASSERT_TRUE(geometry.secondaryDifferenceContentRect.has_value());
+    EXPECT_GT(geometry.differenceContentRect->width, 0.0F);
+    EXPECT_GT(geometry.secondaryDifferenceContentRect->width, 0.0F);
+    EXPECT_FLOAT_EQ(geometry.differenceContentRect->width,
+                    geometry.secondaryDifferenceContentRect->width);
+}
+
 // V02 (P05): full-canvas focus replaces any view-mode layout with one full-canvas panel of
 // the focused slot - no difference rect, no wipe composite, content rect aspect-fit to that
 // slot's display extent. Off (-1) keeps the regular layout.
