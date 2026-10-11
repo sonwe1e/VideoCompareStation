@@ -185,6 +185,60 @@ QString InterpolationProtocolController::originKindAtCurrentFrame() const {
     return currentOriginKind();
 }
 
+QVariantList InterpolationProtocolController::originSummariesInRange(const qint64 fromFrame,
+                                                                     const qint64 toFrame) const {
+    QVariantList summaries;
+    if (!protocol_) {
+        return summaries;
+    }
+    const qint64 first = fromFrame > 0 ? fromFrame : 0;
+    for (qint64 frame = first; frame <= toFrame; ++frame) {
+        QVariantMap summary;
+        summary.insert(QStringLiteral("frame"), frame);
+        summary.insert(QStringLiteral("displayFrame"), static_cast<qint64>(displayedIndex(frame)));
+        bool described = false;
+        if (frame < protocol_->frameCount()) {
+            const auto origin = protocol_->originAt(FrameId{frame});
+            if (origin) {
+                described = true;
+                if (const auto* retained = std::get_if<RetainedFrame>(&origin.value())) {
+                    summary.insert(QStringLiteral("kind"), QStringLiteral("retained"));
+                    summary.insert(QStringLiteral("displayGtFrame"),
+                                   static_cast<qint64>(displayedIndex(retained->gtFrame.value())));
+                } else if (const auto* generated = std::get_if<GeneratedFrame>(&origin.value())) {
+                    summary.insert(QStringLiteral("kind"), QStringLiteral("generated"));
+                    summary.insert(
+                        QStringLiteral("displayInput0Frame"),
+                        static_cast<qint64>(displayedIndex(generated->input0GtFrame.value())));
+                    summary.insert(
+                        QStringLiteral("displayInput1Frame"),
+                        static_cast<qint64>(displayedIndex(generated->input1GtFrame.value())));
+                    summary.insert(QStringLiteral("ratioNumerator"),
+                                   static_cast<qint64>(generated->targetRatioNumerator));
+                    summary.insert(QStringLiteral("ratioDenominator"),
+                                   static_cast<qint64>(generated->targetRatioDenominator));
+                } else if (std::holds_alternative<UnknownFrame>(origin.value())) {
+                    summary.insert(QStringLiteral("kind"), QStringLiteral("unknown"));
+                } else if (const auto* missing = std::get_if<MissingFrame>(&origin.value())) {
+                    summary.insert(QStringLiteral("kind"), QStringLiteral("missing"));
+                    summary.insert(
+                        QStringLiteral("displayExpectedGtFrame"),
+                        missing->expectedGtFrame.has_value()
+                            ? static_cast<qint64>(displayedIndex(missing->expectedGtFrame->value()))
+                            : qint64{-1});
+                }
+            }
+        }
+        if (!described) {
+            // Beyond the protocol's output positions: the cell still exists on the timeline,
+            // it just carries no provenance claim.
+            summary.insert(QStringLiteral("kind"), QStringLiteral("outside"));
+        }
+        summaries.append(summary);
+    }
+    return summaries;
+}
+
 void InterpolationProtocolController::refreshOriginProjection() {
     QString kind;
     QString badge;
@@ -193,8 +247,8 @@ void InterpolationProtocolController::refreshOriginProjection() {
         if (origin) {
             if (const auto* retained = std::get_if<RetainedFrame>(&origin.value())) {
                 kind = QStringLiteral("retained");
-                badge = QStringLiteral("保留帧 · GT %1").arg(
-                    displayedIndex(retained->gtFrame.value()));
+                badge =
+                    QStringLiteral("保留帧 · GT %1").arg(displayedIndex(retained->gtFrame.value()));
             } else if (const auto* generated = std::get_if<GeneratedFrame>(&origin.value())) {
                 kind = QStringLiteral("generated");
                 badge = QStringLiteral("生成帧 · 输入 GT %1/%2 · 比例 %3/%4")
@@ -208,8 +262,8 @@ void InterpolationProtocolController::refreshOriginProjection() {
             } else if (const auto* missing = std::get_if<MissingFrame>(&origin.value())) {
                 kind = QStringLiteral("missing");
                 badge = missing->expectedGtFrame.has_value()
-                            ? QStringLiteral("缺失帧 · 预期 GT %1").arg(
-                                  displayedIndex(missing->expectedGtFrame->value()))
+                            ? QStringLiteral("缺失帧 · 预期 GT %1")
+                                  .arg(displayedIndex(missing->expectedGtFrame->value()))
                             : QStringLiteral("缺失帧");
             }
         } else if (review_->currentFrame() >= 0) {

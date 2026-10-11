@@ -41,7 +41,7 @@
 | V03 双参考差异 | 部分 | A−B 差异/热力图/阈值已有（`TabbedInspector`、`PairMetricsService`）；GT−A/GT−B 成对布局、跨帧锁定标尺未做 |
 | V04 编辑副本比较 | 部分 | 编辑副本、撤销、另存副本已有（台账 2026-10-10 图片连续裁剪与整图变换）；"副本作为候选进入比较管线"未接 |
 | D01 播放时序证据 | 部分已实现 | 应用层 trace（kind 2/23/24，`PlaybackTrace.h`）与呈现 ACK 已有；P09 `PlaybackEvidenceCollector`（分段延迟/帧号缺口跳帧/身份过滤/分级摘要，13 单测+6 变异）已实现未接线。P10 平台探针 PoC `PresentationStatisticsProbe`（自有离屏 flip 交换链、七态分级能力、QPC/PresentCount 快照、区间级关联声明、10 测试+5 变异）已实现未接线；本机硬件路径 kMediaAvailable。远控虚拟屏会话下传统计数器可能滞后于验证窗口→诚实报 kUnknown（测试按结构性断言，不对机器答案下断言）。PresentMon/ETW 采集未开始 |
-| D02 异常标记诊断卡 | 部分 | `IssueLogController` 问题标记、In/Out 区间、缓存已有；5—9 帧胶片条诊断卡未做 |
+| D02 异常标记诊断卡 | 部分已实现 | `IssueLogController` 问题标记、In/Out 区间、缓存已有。P06 步骤 1—3 已落地：`IssueIntervalContext`（锚定已呈现帧、绑定 sessionEpoch/playbackGeneration）+ `clampIssueInterval` 纯函数（时间线边缘截断、不移锚、无效锚保持未捕获）+ `IssueRecordRepository` 往返（旧记录无 interval 键时保持默认，不 bump schema）+ 协议控制器 `originSummariesInRange`（retained/generated/unknown/missing/outside 五类投影、1 起计显示字段、负起点钳制）；6 新测试 + 8/8 变异证据（`out/verification/p06-diagnostic-interval/`）。未做：捕获接线（`captureVideoIssue` 填充区间）、胶片条 QML 卡、Main 入口与循环接缝标记 |
 | D03 运动进度偏差 | 未开始 | OpenCV 依赖未引入 |
 | D04 纹理残留/重影 | 未开始 | 时间切片、模型中间结果接入未做 |
 | D05 线条抖动 | 未开始 | — |

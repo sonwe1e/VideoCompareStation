@@ -114,14 +114,12 @@ public:
     }
 };
 
-[[nodiscard]] application::InterpolationProtocolIoResult
-protocolResult(const std::string& json) {
+[[nodiscard]] application::InterpolationProtocolIoResult protocolResult(const std::string& json) {
     return persistence::InterpolationProtocolRepository::decodeDocument(json);
 }
 
-[[nodiscard]] QString writeManifest(const QTemporaryDir& dir,
-                                   const QString& name,
-                                   const char* const json) {
+[[nodiscard]] QString
+writeManifest(const QTemporaryDir& dir, const QString& name, const char* const json) {
     QString path = dir.path() + QStringLiteral("/") + name;
     QFile file{path};
     if (!file.open(QIODevice::WriteOnly)) {
@@ -196,9 +194,8 @@ TEST_F(InterpolationProtocolControllerTests, NavigationRunsBothDirectionsAndStop
     };
     InterpolationProtocolController controller{&repository};
     controller.setReviewController(&review);
-    ASSERT_TRUE(
-        controller.loadProtocol(QUrl::fromLocalFile(writeManifest(tempDir_, "p.json",
-                                                                  kStrideThreeManifest))));
+    ASSERT_TRUE(controller.loadProtocol(
+        QUrl::fromLocalFile(writeManifest(tempDir_, "p.json", kStrideThreeManifest))));
     ASSERT_TRUE(waitUntil([&controller] { return controller.protocolLoaded(); }));
 
     // R9: retained, no generated frame after it, one before it.
@@ -252,9 +249,8 @@ TEST_F(InterpolationProtocolControllerTests, ClearProtocolRollsBackToPlainReview
     };
     InterpolationProtocolController controller{&repository};
     controller.setReviewController(&review);
-    ASSERT_TRUE(
-        controller.loadProtocol(QUrl::fromLocalFile(writeManifest(tempDir_, "p.json",
-                                                                  kStrideThreeManifest))));
+    ASSERT_TRUE(controller.loadProtocol(
+        QUrl::fromLocalFile(writeManifest(tempDir_, "p.json", kStrideThreeManifest))));
     ASSERT_TRUE(waitUntil([&controller] { return controller.protocolLoaded(); }));
 
     controller.clearProtocol();
@@ -282,9 +278,8 @@ TEST_F(InterpolationProtocolControllerTests, FailedLoadKeepsTheProtocolAlreadyIn
     };
     InterpolationProtocolController controller{&repository};
     controller.setReviewController(&review);
-    ASSERT_TRUE(
-        controller.loadProtocol(QUrl::fromLocalFile(writeManifest(tempDir_, "p.json",
-                                                                  kStrideThreeManifest))));
+    ASSERT_TRUE(controller.loadProtocol(
+        QUrl::fromLocalFile(writeManifest(tempDir_, "p.json", kStrideThreeManifest))));
     ASSERT_TRUE(waitUntil([&controller] { return controller.protocolLoaded(); }));
 
     failNext = true;
@@ -372,11 +367,78 @@ TEST_F(InterpolationProtocolControllerTests, ReportsOriginKindsForExplicitManife
         backend.currentSnapshot = readySnapshot(entry.frame, 10U);
         ASSERT_TRUE(waitUntil([&review, &entry] { return review.currentFrame() == entry.frame; }));
         EXPECT_EQ(controller.currentOriginKind(), entry.kind)
-            << "frame " << entry.frame << " badge " << controller.currentOriginBadge().toStdString();
+            << "frame " << entry.frame << " badge "
+            << controller.currentOriginBadge().toStdString();
         EXPECT_TRUE(controller.currentOriginBadge().contains(entry.badgeMarker))
-            << "frame " << entry.frame << " badge " << controller.currentOriginBadge().toStdString();
+            << "frame " << entry.frame << " badge "
+            << controller.currentOriginBadge().toStdString();
     }
     EXPECT_EQ(controller.originKindAtCurrentFrame(), controller.currentOriginKind());
+}
+
+TEST_F(InterpolationProtocolControllerTests, OriginSummariesInRangeProjectEveryProvenanceKind) {
+    FakeBackend backend;
+    ReviewController review{dependenciesFor(backend)};
+    FakeProtocolRepository repository;
+    repository.behavior = [](const std::filesystem::path&) {
+        return protocolResult(R"({
+            "schema_version": 1,
+            "kind": "explicit",
+            "gt_frame_count": 5,
+            "origins": [
+                {"type": "retained", "gt": 0},
+                {"type": "unknown"},
+                {"type": "missing", "expected": null},
+                {"type": "missing", "expected": 2},
+                {"type": "generated", "input0": 2, "input1": 4, "ratio": [1, 2]}
+            ]
+        })");
+    };
+    InterpolationProtocolController controller{&repository};
+    controller.setReviewController(&review);
+    ASSERT_TRUE(controller.loadProtocol(QUrl::fromLocalFile(
+        writeManifest(tempDir_, "explicit.json", R"({"schema_version":1,"kind":"explicit"})"))));
+    ASSERT_TRUE(waitUntil([&controller] { return controller.protocolLoaded(); }));
+
+    // Frames 0..4 carry the five origins; 5..7 sit past the protocol's positions and must stay
+    // "outside" so the strip can still align its cells with per-side presentation facts.
+    const QVariantList summaries = controller.originSummariesInRange(0, 7);
+    ASSERT_EQ(summaries.size(), 8);
+    const QVariantMap retained = summaries.at(0).toMap();
+    EXPECT_EQ(retained.value(QStringLiteral("kind")).toString(), QStringLiteral("retained"));
+    EXPECT_EQ(retained.value(QStringLiteral("frame")).toLongLong(), 0);
+    EXPECT_EQ(retained.value(QStringLiteral("displayFrame")).toLongLong(), 1);
+    EXPECT_EQ(retained.value(QStringLiteral("displayGtFrame")).toLongLong(), 1);
+    const QVariantMap unknown = summaries.at(1).toMap();
+    EXPECT_EQ(unknown.value(QStringLiteral("kind")).toString(), QStringLiteral("unknown"));
+    EXPECT_FALSE(unknown.contains(QStringLiteral("displayGtFrame")));
+    const QVariantMap missingWithoutExpected = summaries.at(2).toMap();
+    EXPECT_EQ(missingWithoutExpected.value(QStringLiteral("kind")).toString(),
+              QStringLiteral("missing"));
+    EXPECT_EQ(missingWithoutExpected.value(QStringLiteral("displayExpectedGtFrame")).toLongLong(),
+              -1);
+    const QVariantMap missingWithExpected = summaries.at(3).toMap();
+    EXPECT_EQ(missingWithExpected.value(QStringLiteral("displayExpectedGtFrame")).toLongLong(), 3);
+    const QVariantMap generated = summaries.at(4).toMap();
+    EXPECT_EQ(generated.value(QStringLiteral("kind")).toString(), QStringLiteral("generated"));
+    EXPECT_EQ(generated.value(QStringLiteral("displayInput0Frame")).toLongLong(), 3);
+    EXPECT_EQ(generated.value(QStringLiteral("displayInput1Frame")).toLongLong(), 5);
+    EXPECT_EQ(generated.value(QStringLiteral("ratioNumerator")).toLongLong(), 1);
+    EXPECT_EQ(generated.value(QStringLiteral("ratioDenominator")).toLongLong(), 2);
+    for (qsizetype index = 5; index < summaries.size(); ++index) {
+        EXPECT_EQ(summaries.at(index).toMap().value(QStringLiteral("kind")).toString(),
+                  QStringLiteral("outside"))
+            << "frame index " << index;
+    }
+
+    // A negative start clamps to the first output position instead of widening the range.
+    const QVariantList clamped = controller.originSummariesInRange(-3, 1);
+    ASSERT_EQ(clamped.size(), 2);
+    EXPECT_EQ(clamped.front().toMap().value(QStringLiteral("frame")).toLongLong(), 0);
+
+    // Without a protocol the strip is not blocked: no badges, empty list.
+    controller.clearProtocol();
+    EXPECT_TRUE(controller.originSummariesInRange(0, 4).isEmpty());
 }
 
 TEST_F(InterpolationProtocolControllerTests, RejectsUnusableLoadRequests) {
@@ -392,8 +454,8 @@ TEST_F(InterpolationProtocolControllerTests, RejectsUnusableLoadRequests) {
     EXPECT_TRUE(backend.submitted.empty());
 
     InterpolationProtocolController repositoryless{nullptr};
-    EXPECT_FALSE(repositoryless.loadProtocol(QUrl::fromLocalFile(
-        writeManifest(tempDir_, "p.json", kStrideThreeManifest))));
+    EXPECT_FALSE(repositoryless.loadProtocol(
+        QUrl::fromLocalFile(writeManifest(tempDir_, "p.json", kStrideThreeManifest))));
     EXPECT_TRUE(repositoryless.lastError().contains(QStringLiteral("adapter missing")));
 }
 

@@ -72,5 +72,50 @@ TEST(IssueRecordTests, RejectsUnsupportedSchemaAndEmptyRecords) {
     EXPECT_EQ(evaluateIssueRestore(empty, {}).decision, IssueRestoreDecision::Blocked);
 }
 
+TEST(IssueRecordTests, ClampsIntervalAroundAnInteriorAnchor) {
+    const IssueIntervalContext interval = clampIssueInterval(10, 4, 30);
+    EXPECT_EQ(interval.anchorFrame, 10);
+    EXPECT_EQ(interval.inFrame, 6);
+    EXPECT_EQ(interval.outFrame, 14);
+}
+
+TEST(IssueRecordTests, TruncatesIntervalAtTimelineEdgesWithoutShiftingTheAnchor) {
+    const IssueIntervalContext head = clampIssueInterval(1, 4, 30);
+    EXPECT_EQ(head.anchorFrame, 1);
+    EXPECT_EQ(head.inFrame, 0);
+    EXPECT_EQ(head.outFrame, 5);
+
+    const IssueIntervalContext tail = clampIssueInterval(28, 4, 30);
+    EXPECT_EQ(tail.anchorFrame, 28);
+    EXPECT_EQ(tail.inFrame, 24);
+    EXPECT_EQ(tail.outFrame, 29);
+
+    // A radius larger than the timeline covers it whole; the anchor stays presented-centered.
+    const IssueIntervalContext whole = clampIssueInterval(2, 50, 5);
+    EXPECT_EQ(whole.anchorFrame, 2);
+    EXPECT_EQ(whole.inFrame, 0);
+    EXPECT_EQ(whole.outFrame, 4);
+}
+
+TEST(IssueRecordTests, IntervalWithoutAPresentedAnchorStaysUncaptured) {
+    const IssueIntervalContext noAnchor = clampIssueInterval(-1, 4, 30);
+    EXPECT_EQ(noAnchor.anchorFrame, -1);
+    EXPECT_EQ(noAnchor.inFrame, -1);
+    EXPECT_EQ(noAnchor.outFrame, -1);
+    const IssueIntervalContext pastEnd = clampIssueInterval(30, 4, 30);
+    EXPECT_EQ(pastEnd.anchorFrame, -1);
+    EXPECT_EQ(pastEnd.inFrame, -1);
+    EXPECT_EQ(pastEnd.outFrame, -1);
+    const IssueIntervalContext noTimeline = clampIssueInterval(5, 4, 0);
+    EXPECT_EQ(noTimeline.anchorFrame, -1);
+    EXPECT_EQ(noTimeline.inFrame, -1);
+    EXPECT_EQ(noTimeline.outFrame, -1);
+    // A negative radius degenerates to the anchor-only interval rather than widening it.
+    const IssueIntervalContext degenerate = clampIssueInterval(5, -3, 30);
+    EXPECT_EQ(degenerate.anchorFrame, 5);
+    EXPECT_EQ(degenerate.inFrame, 5);
+    EXPECT_EQ(degenerate.outFrame, 5);
+}
+
 } // namespace
 } // namespace dvs::application

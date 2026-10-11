@@ -83,6 +83,24 @@ struct IssueViewContext final {
     bool resampleAllowed = false;
 };
 
+// P06 (D02) nearby-frames diagnostic interval. The anchor is the frame the session actually
+// presented when the issue was marked (never a pending seek target); inFrame/outFrame bound the
+// recorded neighborhood on the canonical timeline; sessionEpoch and playbackGeneration bind the
+// capture to the session identity that presented the anchor, so a card opened against a
+// different session cannot claim the same epoch. A negative anchorFrame means the record
+// carries no interval (all records written before this field existed).
+struct IssueIntervalContext final {
+    std::int64_t anchorFrame = -1;
+    std::int64_t inFrame = -1;
+    std::int64_t outFrame = -1;
+    std::uint64_t sessionEpoch = 0U;
+    std::uint64_t playbackGeneration = 0U;
+    // True when the interval's out frame coincides with an active loop range's out point, so
+    // the film strip must mark the loop seam instead of letting automatic analysis run across
+    // the wrap.
+    bool loopSeamAtOut = false;
+};
+
 struct IssueRecord final {
     std::int64_t schemaVersion = kIssueRecordSchemaVersion;
     IssueRecordKind kind = IssueRecordKind::Video;
@@ -100,6 +118,7 @@ struct IssueRecord final {
     std::int32_t referenceSourceIndex = -1;
     std::uint64_t alignmentRevision = 0U;
     IssueViewContext view;
+    IssueIntervalContext interval;
     // Image-folder payload (kind == ImagePair).
     std::string leftFolder;
     std::string rightFolder;
@@ -136,6 +155,15 @@ matchIssueSourceIdentity(const IssueSourceRef& recorded,
 [[nodiscard]] IssueRestoreEvaluation
 evaluateIssueRestore(const IssueRecord& record,
                      const std::vector<ObservedSourceIdentity>& observedIdentities);
+
+// Clamps the diagnostic neighborhood [anchorFrame - radius, anchorFrame + radius] onto the
+// canonical timeline [0, frameCount - 1]. The anchor stays the center; the window truncates at
+// timeline edges instead of shifting, so the recorded interval only ever names positions that
+// exist around the presented frame. A radius below zero is treated as zero. Inputs that are not
+// a presented position on a non-empty timeline return the "not captured" context (negative
+// anchor). Session identity fields are left for the caller to fill from the snapshot.
+[[nodiscard]] IssueIntervalContext
+clampIssueInterval(std::int64_t anchorFrame, std::int64_t radius, std::int64_t frameCount) noexcept;
 
 struct IssueRecordIoResult final {
     bool ok = false;

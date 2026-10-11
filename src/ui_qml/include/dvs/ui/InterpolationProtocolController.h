@@ -6,6 +6,7 @@
 #include <QObject>
 #include <QString>
 #include <QUrl>
+#include <QVariantList>
 
 #include <atomic>
 #include <memory>
@@ -36,8 +37,7 @@ class InterpolationProtocolController final : public QObject {
     Q_PROPERTY(QString currentOriginKind READ currentOriginKind NOTIFY currentOriginChanged)
     Q_PROPERTY(QString currentOriginBadge READ currentOriginBadge NOTIFY currentOriginChanged)
     Q_PROPERTY(bool canGoNextGenerated READ canGoNextGenerated NOTIFY currentOriginChanged)
-    Q_PROPERTY(
-        bool canGoPreviousGenerated READ canGoPreviousGenerated NOTIFY currentOriginChanged)
+    Q_PROPERTY(bool canGoPreviousGenerated READ canGoPreviousGenerated NOTIFY currentOriginChanged)
 
 public:
     explicit InterpolationProtocolController(
@@ -75,6 +75,15 @@ public:
     Q_INVOKABLE bool nextGeneratedFrame();
     Q_INVOKABLE bool previousGeneratedFrame();
     Q_INVOKABLE QString originKindAtCurrentFrame() const;
+    // P06 (D02): per-frame provenance for the diagnostic card's film strip across
+    // [fromFrame, toFrame] on the canonical timeline, in order. Frames beyond the loaded
+    // protocol report kind "outside" so the strip can still align its cells with per-side
+    // presentation facts. The "frame" field is the zero-based internal id (the value
+    // seekFrame accepts); every display*-prefixed field follows the one-based UI text
+    // convention, and n/a numerics are -1 so QML never branches on key presence. Returns an
+    // empty list when no protocol is loaded - a missing protocol only drops the badges, it
+    // never blocks the card.
+    Q_INVOKABLE QVariantList originSummariesInRange(qint64 fromFrame, qint64 toFrame) const;
 
 Q_SIGNALS:
     void protocolChanged();
@@ -86,8 +95,7 @@ private:
         std::atomic<bool> cancelled{false};
     };
 
-    void deliverLoadResult(quint64 requestId,
-                           application::InterpolationProtocolIoResult result);
+    void deliverLoadResult(quint64 requestId, application::InterpolationProtocolIoResult result);
     void refreshOriginProjection();
     [[nodiscard]] QString buildStatusText() const;
 

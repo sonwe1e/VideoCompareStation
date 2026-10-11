@@ -113,6 +113,42 @@ TEST_F(IssueRecordRepositoryTests, RejectsCorruptJsonWithExplanation) {
     EXPECT_NE(loaded.error.find("not valid UTF-8 JSON"), std::string::npos);
 }
 
+TEST_F(IssueRecordRepositoryTests, RoundTripsIntervalContext) {
+    IssueRecordRepository repository{documentPath()};
+    application::IssueRecord record = sampleRecord();
+    record.interval.anchorFrame = 41;
+    record.interval.inFrame = 37;
+    record.interval.outFrame = 45;
+    record.interval.sessionEpoch = 7U;
+    record.interval.playbackGeneration = 12U;
+    record.interval.loopSeamAtOut = true;
+    std::string error;
+    ASSERT_TRUE(repository.save(documentPath(), {record}, &error)) << error;
+    const application::IssueRecordIoResult loaded = repository.load(documentPath());
+    ASSERT_TRUE(loaded.ok) << loaded.error;
+    ASSERT_EQ(loaded.records.size(), 1U);
+    const application::IssueIntervalContext& interval = loaded.records.front().interval;
+    EXPECT_EQ(interval.anchorFrame, 41);
+    EXPECT_EQ(interval.inFrame, 37);
+    EXPECT_EQ(interval.outFrame, 45);
+    EXPECT_EQ(interval.sessionEpoch, 7U);
+    EXPECT_EQ(interval.playbackGeneration, 12U);
+    EXPECT_TRUE(interval.loopSeamAtOut);
+}
+
+TEST_F(IssueRecordRepositoryTests, RecordsWithoutAnIntervalStayLegacyShaped) {
+    IssueRecordRepository repository{documentPath()};
+    // No interval set: the anchor default is "not captured".
+    const application::IssueRecord record = sampleRecord();
+    const std::string text = repository.encodeDocument({record});
+    EXPECT_EQ(text.find("\"interval\""), std::string::npos);
+    const IssueRecordDocument document = repository.decodeDocument(text);
+    ASSERT_TRUE(document.ok) << document.error;
+    ASSERT_EQ(document.records.size(), 1U);
+    EXPECT_EQ(document.records.front().interval.anchorFrame, -1);
+    EXPECT_FALSE(document.records.front().interval.loopSeamAtOut);
+}
+
 TEST_F(IssueRecordRepositoryTests, EncodeDecodeHelpersRejectOldEntrySchema) {
     const std::string text =
         R"({"schemaVersion":1,"kind":"comparestation-issue-log","records":[{"schemaVersion":0,"kind":"video"}]})";

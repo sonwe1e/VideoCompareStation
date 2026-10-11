@@ -71,4 +71,18 @@ evaluateIssueRestore(const IssueRecord& record,
     return evaluation;
 }
 
+IssueIntervalContext clampIssueInterval(const std::int64_t anchorFrame,
+                                        const std::int64_t radius,
+                                        const std::int64_t frameCount) noexcept {
+    IssueIntervalContext interval;
+    if (anchorFrame < 0 || frameCount <= 0 || anchorFrame >= frameCount) {
+        return interval;
+    }
+    const std::int64_t span = radius > 0 ? radius : 0;
+    interval.anchorFrame = anchorFrame;
+    interval.inFrame = anchorFrame - span < 0 ? 0 : anchorFrame - span;
+    interval.outFrame = anchorFrame + span > frameCount - 1 ? frameCount - 1 : anchorFrame + span;
+    return interval;
+}
+
 } // namespace dvs::application

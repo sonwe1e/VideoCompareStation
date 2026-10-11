@@ -66,6 +66,21 @@ bool readBoolean(const Json& value, const char* const key, bool* out) {
     return true;
 }
 
+// Session identity fields are unsigned; accept either JSON number flavor but never a negative,
+// mirroring the alignmentRevision tolerance for hand-edited documents.
+void readUnsigned64(const Json& value, const char* const key, std::uint64_t* out) {
+    const auto field = value.find(key);
+    if (field == value.end()) {
+        return;
+    }
+    if (field->is_number_unsigned()) {
+        *out = field->get<std::uint64_t>();
+    } else if (field->is_number_integer()) {
+        const auto signedValue = field->get<std::int64_t>();
+        *out = signedValue > 0 ? static_cast<std::uint64_t>(signedValue) : 0U;
+    }
+}
+
 [[nodiscard]] Json sourceToJson(const application::IssueSourceRef& source) {
     Json value = Json::object();
     value["path"] = source.path;
@@ -130,6 +145,18 @@ bool readBoolean(const Json& value, const char* const key, bool* out) {
         {"panY", record.view.panY},
         {"resampleAllowed", record.view.resampleAllowed},
     };
+    // Written only when the record carries a diagnostic interval, so legacy files stay
+    // byte-identical to what older writers produced.
+    if (record.interval.anchorFrame >= 0) {
+        value["interval"] = Json{
+            {"anchorFrame", record.interval.anchorFrame},
+            {"inFrame", record.interval.inFrame},
+            {"outFrame", record.interval.outFrame},
+            {"sessionEpoch", record.interval.sessionEpoch},
+            {"playbackGeneration", record.interval.playbackGeneration},
+            {"loopSeamAtOut", record.interval.loopSeamAtOut},
+        };
+    }
     Json sources = Json::array();
     for (const application::IssueSourceRef& source : record.sources) {
         sources.push_back(sourceToJson(source));
@@ -207,6 +234,17 @@ bool readBoolean(const Json& value, const char* const key, bool* out) {
         record.view.panX = readNumber("panX", 0.5);
         record.view.panY = readNumber("panY", 0.5);
         readBoolean(view, "resampleAllowed", &record.view.resampleAllowed);
+    }
+    // Absent in records written before the interval existed; the defaults then keep the record
+    // at "no diagnostic interval" instead of inventing a neighborhood.
+    if (value.contains("interval") && value["interval"].is_object()) {
+        const Json& interval = value["interval"];
+        readInteger(interval, "anchorFrame", &record.interval.anchorFrame);
+        readInteger(interval, "inFrame", &record.interval.inFrame);
+        readInteger(interval, "outFrame", &record.interval.outFrame);
+        readUnsigned64(interval, "sessionEpoch", &record.interval.sessionEpoch);
+        readUnsigned64(interval, "playbackGeneration", &record.interval.playbackGeneration);
+        readBoolean(interval, "loopSeamAtOut", &record.interval.loopSeamAtOut);
     }
     if (value.contains("sources") && value["sources"].is_array()) {
         for (const Json& sourceValue : value["sources"]) {
