@@ -91,6 +91,10 @@ Item {
     Dvs.PlayerOsc {
         id: orderedOsc
 
+        // Raised above dockedOsc (same top anchor, declared later): without this the
+        // docked instance's identical transport layout occludes this one and synthetic
+        // presses land on the wrong buttons.
+        z: 5
         visible: false
         width: root.width
         controllerState: 0
