@@ -34,6 +34,11 @@ Rectangle {
     property bool differencePeekActive: false
     property bool differencePeekLocked: false
     property string differencePeekTargetLabel: ""
+    // V02 (P05) full-canvas direct look: -1 = regular comparison view, otherwise the whole
+    // canvas shows only that source slot (session slot order). Presentation state owned by the
+    // shell; forwarded to the surface, which mirrors it into the renderer snapshot and the
+    // panel geometry, so overlays and hit mapping follow the same single panel.
+    property int canvasFocusSlot: -1
     required property int referenceSourceIndex
     required property int sourceCount
     required property bool wipeMode
@@ -83,11 +88,16 @@ Rectangle {
     // qmllint disable unqualified
     readonly property bool roiTripletMode: control.effectiveViewMode === ComparisonSurface.RoiTriplet && control.sourceCount >= 3
     // qmllint enable unqualified
+    // V02 (P05): full-canvas focus suspends the preset - the panorama collapses to the focused
+    // source, so there are no three panels for the local windows to re-sample. The strip and
+    // its outline hide, and the stage reclaims their space; the ROI itself stays on the
+    // surface and survives leaving the focus.
+    readonly property bool roiTripletStageActive: control.roiTripletMode && control.canvasFocusSlot < 0
     // Window zoom owned here so it survives leaving and re-entering the preset; the ROI
     // itself lives on the surface and therefore survives every mode switch.
     property int roiTripletZoomPercent: 100
     // How far the preset strip lifts the bottom chrome row so badges never cover the cells.
-    readonly property real roiTripletStageInset: control.roiTripletMode ? roiTripletStrip.height + 8 : 0
+    readonly property real roiTripletStageInset: control.roiTripletStageActive ? roiTripletStrip.height + 8 : 0
 
     property bool roiSelecting: false
     // Shift marquee zooms to the selection (product "放大"); Alt marquee sets comparison ROI.
@@ -459,7 +469,7 @@ Rectangle {
             right: parent.right
             margins: control.chromeVisible ? 1 : 0
         }
-        height: parent.height - 2 * (control.chromeVisible ? 1 : 0) - (control.roiTripletMode ? roiTripletStrip.height + 8 : 0)
+        height: parent.height - 2 * (control.chromeVisible ? 1 : 0) - (control.roiTripletStageActive ? roiTripletStrip.height + 8 : 0)
 
         // The type is runtime-registered; startup smoke coverage verifies the registration.
         // qmllint disable import unqualified unresolved-type
@@ -486,6 +496,7 @@ Rectangle {
             thresholdPolicy: control.differenceThresholdPolicy
             differenceSuppressed: control.differenceSuppressed
             referenceSlot: control.referenceSourceIndex >= 0 ? control.referenceSourceIndex : 0
+            canvasFocusSlot: control.canvasFocusSlot
             sourceDisplayInfo: control.sourceMediaInfo
             anchors.fill: parent
             onSourcePixelProbed: result => control.acceptPixelProbeResult(result)
@@ -497,16 +508,26 @@ Rectangle {
                 control.pixelReadoutIssuedKey = null;
                 dualVideoSurface.cancelSourcePixelProbes();
             }
+            onCanvasFocusSlotChanged: {
+                // Same rule as the GT peek: the focused source can have another aspect ratio
+                // or rotation, so the parked hover described the previous canvas geometry.
+                // Retire it until the next pointer mapping; the readout then re-maps through
+                // the single focus panel and cannot quote the wrong slot.
+                control.pixelReadoutPositionValid = false;
+                control.pixelReadoutIssuedKey = null;
+                dualVideoSurface.cancelSourcePixelProbes();
+            }
         }
         // qmllint enable import unqualified unresolved-type
 
         // The panorama marks the shared ROI while the preset is active ("全景标出区域").
         // Positions come from the same mapping the local windows sample, so the outline and
-        // the triplet can never disagree about where the ROI is.
+        // the triplet can never disagree about where the ROI is. Hidden while the canvas is
+        // focused on one source - the strip is hidden then, and there is no panorama to mark.
         Repeater {
             objectName: "roiTripletOutlineRepeater"
 
-            model: control.roiTripletMode && dualVideoSurface.roiEnabled ? dualVideoSurface.sourcePanelRects : []
+            model: control.roiTripletMode && control.canvasFocusSlot < 0 && dualVideoSurface.roiEnabled ? dualVideoSurface.sourcePanelRects : []
 
             delegate: Rectangle {
                 id: roiOutline
@@ -532,7 +553,8 @@ Rectangle {
 
     Repeater {
         objectName: "panelDividerRepeater"
-        model: control.sourceCount > 1 && !control.wipeMode && (!control.differenceMode || control.analysisGridMode) ? dualVideoSurface.sourcePanelRects : []
+        // Full-canvas focus collapses the layout to one panel, so there is no split to draw.
+        model: control.sourceCount > 1 && control.canvasFocusSlot < 0 && !control.wipeMode && (!control.differenceMode || control.analysisGridMode) ? dualVideoSurface.sourcePanelRects : []
 
         Rectangle {
             required property var modelData
@@ -549,7 +571,9 @@ Rectangle {
     }
 
     WipeHandle {
-        visible: control.wipeMode
+        // Hidden while the canvas is focused: no wipe composite is rendered then, so a
+        // draggable split would promise interaction the picture does not have.
+        visible: control.wipeMode && control.canvasFocusSlot < 0
         z: 50
         surfaceItem: dualVideoSurface
         position: control.wipePosition
@@ -660,7 +684,7 @@ Rectangle {
             top: parent.top
             left: parent.left
             right: parent.right
-            bottom: control.roiTripletMode ? roiTripletStrip.top : parent.bottom
+            bottom: control.roiTripletStageActive ? roiTripletStrip.top : parent.bottom
             margins: 1
         }
         acceptedButtons: Qt.LeftButton | Qt.RightButton
@@ -1460,7 +1484,7 @@ Rectangle {
         id: roiTripletStrip
 
         objectName: "roiTripletStrip"
-        visible: control.roiTripletMode
+        visible: control.roiTripletStageActive
         enabled: visible
         anchors {
             left: parent.left

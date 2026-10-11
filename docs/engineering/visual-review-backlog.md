@@ -1,7 +1,30 @@
 # 视觉审查问题台账
 
-更新：2026-10-11（协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-10-11（全画布候选直看 P05／图片编辑纯操作 P11／协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+
+## 2026-10-11 全画布候选直看 P05
+
+- **范围**：路线附录 B 工单 P05（V02 同帧候选切换）：全画布 A/B/GT 直看，同帧、同 ROI、零回放命令。
+- **交付**：domain `CanvasFocusRequest`/`resolveCanvasFocusTarget`（无参考 GT 请求与越界槽位**拒绝而不替代**）；
+  shell `canvasFocusIdentity`/`canvasFocusSlot`/`requestCanvasFocus`（纯呈现态，零回放命令提交，焦点按冻结
+  源身份保存，源离开活动集清除而非改指向接槽者）；模式条 看A/看B/看GT（无 GT 隐藏、重按取消、checked
+  镜像 shell 槽位）；Main.qml 正式接线（绑定 + 信号转发，契约测试自带 relay 仍独立有效）；画布渲染：
+  `ComparisonSurface.canvasFocusSlot`（-1=off，越界拒绝）进入 `PresentationOptions`/`SurfaceRenderState`，
+  平台几何（`computeSurfacePresentationGeometry` 聚焦态单面板全画布、清空差异/Wipe 矩形，QML 覆盖层经
+  `sourcePanelRects` 自然一致）与渲染路径（render() 最高优先分支，与 GT peek 同构的 aspect fit+letterbox，
+  聚焦槽缺帧画显式黑不回退其它源）。聚焦期隐藏分屏线/Wipe 手柄/ROI 三联条（ROI 本体保留）；沉浸字母与
+  源标签随单面板自然聚焦；像素读数映射聚焦源并在切换瞬间挂起重取（宽高比/旋转可不同）。
+- **验收对照**：附录 B"不 seek、不改 GT"——契约测试钉死切换前后命令数零增量、无 SeekFrame、参考角色/
+  比较对/epoch/帧号/视图模式/ROI/缩放/平移全部保持；协调器级零命令位稳定测试（对照注入 seek 立即扰动
+  同一身份，证明断言非空转）；两源无 GT 会话仅显 A/B、参考请求拒绝；单源隐藏整条模式栏。
+- **验证**：组合电池 273/273（ComparisonSelection 11、PlaybackCoordinator 100、ComparisonSurface 69、
+  MainQmlContractTests 85/85+4 既有 Disabled、ImageEdit 系列含 ImageEditOperations 8）；qmllint 通过。
+  变异 8/8（`out/verification/p05-mutation/`：setter 守卫、几何 focus 分支、isValid 范围、render 分派、
+  Main 三处接线、几何传参；红/绿 16 相全录、恢复后字节一致）。真机 D3D11VA 手感与性能未跑（WARP 已覆盖
+  渲染正确性：Wipe 模式聚焦逐槽亮度单调、退出恢复合成、ACK 单发）。
+- **未接/未做**：盲比随机种子与同区间顺序播放比较（V02 其余部分）；真机走查与截图。
+
 
 ## 2026-10-11 协议导航 P03、三局部预设 P04 与呈现探测 P10（未提交）
 

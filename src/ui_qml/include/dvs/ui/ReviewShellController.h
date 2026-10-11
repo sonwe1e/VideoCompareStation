@@ -52,10 +52,18 @@ class ReviewShellController final : public QObject {
     Q_PROPERTY(bool rangeStartPending READ rangeStartPending NOTIFY stateChanged)
     // C2. Display order and selection are a view concern kept here, in the shell, precisely so that
     // they cannot reach media truth. Both are keyed by frozen source identity, never by index, so
-    // rearranging the list can never change a source's role, the pairing, or the reference.
+    // that rearranging the list can never change a source's role, the pairing, or the reference.
     Q_PROPERTY(QStringList displaySourceIdentities READ displaySourceIdentities NOTIFY stateChanged)
     Q_PROPERTY(
         QStringList selectedSourceIdentities READ selectedSourceIdentities NOTIFY stateChanged)
+    // V02 (P05): full-canvas direct-look focus - which participating source the whole canvas
+    // shows. Same C2 rule as display order: presentation state keyed by frozen source identity,
+    // kept in the shell so switching it cannot reach media truth. Switching submits no playback
+    // command (no seek, no re-pairing), never touches the reference role or the comparison pair,
+    // and clears when the focused source leaves the active set. The slot projection addresses
+    // the session order (A/B/C), matching the mode bar's vocabulary.
+    Q_PROPERTY(QString canvasFocusIdentity READ canvasFocusIdentity NOTIFY canvasFocusChanged)
+    Q_PROPERTY(int canvasFocusSlot READ canvasFocusSlot NOTIFY canvasFocusChanged)
 
 public:
     enum OpenIntent {
@@ -80,6 +88,16 @@ public:
         StartupOrigin = 1,
     };
     Q_ENUM(ReviewIntentOrigin)
+
+    // V02 (P05): request codes for the full-canvas direct-look switch. Values mirror
+    // domain::CanvasFocusRequest exactly; the contract tests cross-check the two so a drift on
+    // either side fails a build instead of silently re-targeting the canvas.
+    enum CanvasFocusRequest {
+        CanvasFocusOff = 0,
+        CanvasFocusReference = 1,
+        CanvasFocusSourceSlot = 2,
+    };
+    Q_ENUM(CanvasFocusRequest)
 
     enum ReviewIntentStatus {
         QueuedStatus = 0,
@@ -136,6 +154,12 @@ public:
     [[nodiscard]] bool rangeStartPending() const noexcept;
     [[nodiscard]] QStringList displaySourceIdentities() const;
     [[nodiscard]] QStringList selectedSourceIdentities() const;
+    // V02 (P05): the frozen identity of the source the full canvas is focused on, or an empty
+    // string when the canvas shows the regular comparison view.
+    [[nodiscard]] QString canvasFocusIdentity() const;
+    // Session-order slot (A/B/C) of the focused source, or -1 when off. Display convenience for
+    // the mode bar's checked states; the identity above is the durable state.
+    [[nodiscard]] int canvasFocusSlot() const;
 
     void setStagedReferenceIndex(int sourceIndex);
     void setChromeVisible(bool visible);
@@ -181,9 +205,18 @@ public:
     // actually removed. Identities that left the active set in the meantime are skipped rather than
     // failing the whole batch.
     Q_INVOKABLE int removeSelectedSources();
+    // V02 (P05): switches which participating source the full canvas shows, at the frame the
+    // session is already presenting. requestCode is a CanvasFocusRequest value; sourceSlot is
+    // the session slot for CanvasFocusSourceSlot. The switch is presentation state only: it
+    // submits no playback command (no seek, no locate, no re-pairing), leaves the reference
+    // role and the active comparison pair untouched, and every participating source keeps
+    // being maintained by the same frame set. Returns false and changes nothing when the
+    // request cannot be resolved (for example "GT" in a session without a reference).
+    Q_INVOKABLE bool requestCanvasFocus(int requestCode, int sourceSlot = 0);
 
 Q_SIGNALS:
     void stateChanged();
+    void canvasFocusChanged();
     void intentEvent(qulonglong intentId, int status, int kind, int error, int sourceCount);
     void intentFinished(qulonglong intentId, int kind, int outcome, const QString& errorKey);
 
@@ -260,6 +293,10 @@ private:
     bool rangeStartPending_ = false;
     QStringList displaySourceIdentities_;
     QStringList selectedSourceIdentities_;
+    // V02 (P05): frozen identity of the full-canvas focus target; empty when off. Cleared by
+    // synchronizeActiveSources() once the focused source leaves the active set - never remapped
+    // onto whatever source took its slot.
+    QString canvasFocusIdentity_;
 };
 
 } // namespace dvs::ui

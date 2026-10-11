@@ -286,6 +286,17 @@ TEST(ComparisonSurfaceGeometryTests, RejectsUnknownPresentationOptions) {
     state.roiEnabled = false;
     state.referenceSlot = 3U;
     EXPECT_FALSE(state.isValid());
+    state.referenceSlot = 0U;
+    // V02 (P05): the full-canvas focus slot must stay within -1..2; anything else is not a
+    // slot the renderer could draw.
+    state.canvasFocusSlot = -2;
+    EXPECT_FALSE(state.isValid());
+    state.canvasFocusSlot = 3;
+    EXPECT_FALSE(state.isValid());
+    state.canvasFocusSlot = -1;
+    EXPECT_TRUE(state.isValid());
+    state.canvasFocusSlot = 2;
+    EXPECT_TRUE(state.isValid());
 }
 
 TEST(ComparisonSurfaceGeometryTests, ComposesOneSynchronizedViewportInsideTheRoi) {
@@ -746,6 +757,117 @@ TEST(ComparisonSurfaceGeometryTests, MapsWipeLabelsToSelectedPairAndSplit) {
     EXPECT_FLOAT_EQ(wipe.sourceRects[1U].x, 200.0F);
 }
 
+// V02 (P05): full-canvas focus replaces any view-mode layout with one full-canvas panel of
+// the focused slot - no difference rect, no wipe composite, content rect aspect-fit to that
+// slot's display extent. Off (-1) keeps the regular layout.
+TEST(ComparisonSurfaceGeometryTests, CanvasFocusCollapsesTheLayoutToOneFullCanvasPanel) {
+    const std::array<platform::SurfaceDisplayExtent, 3U> extents{
+        platform::SurfaceDisplayExtent{.width = 1600.0F, .height = 900.0F},
+        platform::SurfaceDisplayExtent{.width = 800.0F, .height = 800.0F},
+        platform::SurfaceDisplayExtent{.width = 600.0F, .height = 1200.0F}};
+
+    const platform::SurfacePresentationGeometry focused =
+        platform::computeSurfacePresentationGeometry(platform::SurfaceViewMode::AnalysisGrid,
+                                                     900.0F,
+                                                     600.0F,
+                                                     900U,
+                                                     600U,
+                                                     2U,
+                                                     platform::SurfaceDifferenceEdge::Between0And1,
+                                                     0.5F,
+                                                     extents,
+                                                     false,
+                                                     2);
+    ASSERT_EQ(focused.panels.sourceCount, 1U);
+    EXPECT_EQ(focused.panels.sourceSlots[0U], 2U);
+    EXPECT_FLOAT_EQ(focused.panels.sourceRects[0U].width, 900.0F);
+    EXPECT_FLOAT_EQ(focused.panels.sourceRects[0U].height, 600.0F);
+    EXPECT_FALSE(focused.panels.differenceRect.has_value());
+    EXPECT_FALSE(focused.differenceContentRect.has_value());
+    EXPECT_FALSE(focused.wipeContentRect.has_value());
+    // Portrait 600x1200 fits into 900x600 as 300x600, centered horizontally.
+    EXPECT_FLOAT_EQ(focused.sourceContentRects[0U].x, 300.0F);
+    EXPECT_FLOAT_EQ(focused.sourceContentRects[0U].y, 0.0F);
+    EXPECT_FLOAT_EQ(focused.sourceContentRects[0U].width, 300.0F);
+    EXPECT_FLOAT_EQ(focused.sourceContentRects[0U].height, 600.0F);
+
+    // The same focus collapses the wipe layout, ignoring the split position entirely.
+    const platform::SurfacePresentationGeometry focusedWipe =
+        platform::computeSurfacePresentationGeometry(platform::SurfaceViewMode::Wipe,
+                                                     900.0F,
+                                                     600.0F,
+                                                     900U,
+                                                     600U,
+                                                     0U,
+                                                     platform::SurfaceDifferenceEdge::Between1And2,
+                                                     0.25F,
+                                                     extents,
+                                                     false,
+                                                     0);
+    ASSERT_EQ(focusedWipe.panels.sourceCount, 1U);
+    EXPECT_EQ(focusedWipe.panels.sourceSlots[0U], 0U);
+    EXPECT_FALSE(focusedWipe.wipeContentRect.has_value());
+    // Slot 0 is 16:9, fit into 900x600 as 900x506.25.
+    EXPECT_FLOAT_EQ(focusedWipe.sourceContentRects[0U].width, 900.0F);
+    EXPECT_NEAR(focusedWipe.sourceContentRects[0U].height, 506.25F, 0.001F);
+
+    // Off (-1) keeps the regular multi-panel layout with its difference rect.
+    const platform::SurfacePresentationGeometry regular =
+        platform::computeSurfacePresentationGeometry(platform::SurfaceViewMode::AnalysisGrid,
+                                                     900.0F,
+                                                     600.0F,
+                                                     900U,
+                                                     600U,
+                                                     2U,
+                                                     platform::SurfaceDifferenceEdge::Between0And1,
+                                                     0.5F,
+                                                     extents,
+                                                     false,
+                                                     -1);
+    ASSERT_EQ(regular.panels.sourceCount, 3U);
+    ASSERT_TRUE(regular.panels.differenceRect.has_value());
+}
+
+// V02 (P05): the surface property drives the same collapse the renderer draws - panel rects
+// expose one full-canvas panel of the focused slot, and pointer mapping resolves through that
+// panel's content rect, so the pixel readout cannot quote another slot while focused.
+TEST(ComparisonSurfaceGeometryTests, CanvasFocusSlotDrivesPanelRectsAndPointerMapping) {
+    ComparisonSurface surface;
+    surface.setWidth(900.0);
+    surface.setHeight(600.0);
+    surface.setSourceDisplayInfo(
+        {QVariantMap{{QStringLiteral("width"), 1600}, {QStringLiteral("height"), 900}},
+         QVariantMap{{QStringLiteral("width"), 800}, {QStringLiteral("height"), 800}},
+         QVariantMap{{QStringLiteral("width"), 600}, {QStringLiteral("height"), 1200}}});
+    surface.setViewMode(ComparisonSurface::AnalysisGrid);
+
+    ASSERT_EQ(surface.sourcePanelRects().size(), 3);
+
+    surface.setCanvasFocusSlot(2);
+    const QVariantList focusedPanels = surface.sourcePanelRects();
+    ASSERT_EQ(focusedPanels.size(), 1);
+    const QVariantMap panel = focusedPanels.first().toMap();
+    EXPECT_EQ(panel.value(QStringLiteral("slot")).toInt(), 2);
+    EXPECT_DOUBLE_EQ(panel.value(QStringLiteral("width")).toDouble(), 900.0);
+
+    // Inside the focused portrait content (300 wide at x=300): maps to slot 2 with that
+    // source's own normalized coordinates.
+    const QVariantMap inside = surface.mapSurfacePoint(450.0, 300.0);
+    EXPECT_EQ(inside.value(QStringLiteral("sourceSlot")).toInt(), 2);
+    EXPECT_EQ(inside.value(QStringLiteral("panelIndex")).toInt(), 0);
+    EXPECT_TRUE(inside.value(QStringLiteral("insideContent")).toBool());
+    EXPECT_NEAR(inside.value(QStringLiteral("normalizedX")).toDouble(), 0.5, 0.0001);
+    EXPECT_NEAR(inside.value(QStringLiteral("normalizedY")).toDouble(), 0.5, 0.0001);
+
+    // The letterbox bar left of the content stays outside the video content.
+    const QVariantMap letterbox = surface.mapSurfacePoint(100.0, 300.0);
+    EXPECT_TRUE(letterbox.value(QStringLiteral("insidePanel")).toBool());
+    EXPECT_FALSE(letterbox.value(QStringLiteral("insideContent")).toBool());
+
+    surface.setCanvasFocusSlot(-1);
+    EXPECT_EQ(surface.sourcePanelRects().size(), 3);
+}
+
 TEST(ComparisonSurfaceGeometryTests, MapsPointerInputThroughTheRendererPanelLayout) {
     ComparisonSurface surface;
     surface.setWidth(800.0);
@@ -1065,6 +1187,48 @@ TEST(ComparisonSurfacePropertyTests, DifferenceSuppressedDefaultsFalseAndNotifie
     EXPECT_FALSE(surface.differenceSuppressed());
     EXPECT_EQ(suppressedChanges, 2);
     EXPECT_EQ(geometryChanges, 0);
+}
+
+// V02 (P05): the full-canvas focus slot defaults to off, accepts exactly -1..2 and refuses
+// everything else. Unlike the transient GT peek it replaces the panel layout, so every
+// accepted change also invalidates the presentation geometry.
+TEST(ComparisonSurfacePropertyTests, CanvasFocusSlotDefaultsOffAndRejectsOutOfRangeSlots) {
+    ComparisonSurface surface;
+
+    EXPECT_EQ(surface.canvasFocusSlot(), -1);
+    int focusChanges = 0;
+    int geometryChanges = 0;
+    QObject::connect(&surface, &ComparisonSurface::canvasFocusSlotChanged, [&] { ++focusChanges; });
+    QObject::connect(
+        &surface, &ComparisonSurface::presentationGeometryChanged, [&] { ++geometryChanges; });
+
+    surface.setCanvasFocusSlot(-1);
+    EXPECT_EQ(focusChanges, 0);
+    EXPECT_EQ(geometryChanges, 0);
+
+    surface.setCanvasFocusSlot(1);
+    EXPECT_EQ(surface.canvasFocusSlot(), 1);
+    EXPECT_EQ(focusChanges, 1);
+    EXPECT_EQ(geometryChanges, 1);
+
+    surface.setCanvasFocusSlot(1);
+    EXPECT_EQ(focusChanges, 1);
+
+    // Out-of-range slots refuse instead of clamping: 3 and -2 are not slots the renderer
+    // could draw, and a silent clamp could focus the wrong source.
+    surface.setCanvasFocusSlot(3);
+    EXPECT_EQ(surface.canvasFocusSlot(), 1);
+    EXPECT_EQ(focusChanges, 1);
+    surface.setCanvasFocusSlot(-2);
+    EXPECT_EQ(surface.canvasFocusSlot(), 1);
+    EXPECT_EQ(focusChanges, 1);
+
+    surface.setCanvasFocusSlot(0);
+    EXPECT_EQ(surface.canvasFocusSlot(), 0);
+    EXPECT_EQ(focusChanges, 2);
+    surface.setCanvasFocusSlot(-1);
+    EXPECT_EQ(surface.canvasFocusSlot(), -1);
+    EXPECT_EQ(focusChanges, 3);
 }
 
 TEST(ComparisonSurfacePropertyTests, ClampsWipePositionAndNotifiesOnlyOnChange) {
@@ -2636,6 +2800,61 @@ TEST(ComparisonSurfaceWarpTests, ThresholdMaskBlacksDifferencesBelowTheSelectedP
     ASSERT_FALSE(visible.isNull());
     const QColor visibleDifference = visible.pixelColor(visible.width() / 2, visible.height() / 2);
     EXPECT_GT(visibleDifference.red() + visibleDifference.green() + visibleDifference.blue(), 20);
+    ASSERT_TRUE(harness.acknowledgementMailbox->tryPop().has_value());
+    EXPECT_FALSE(harness.acknowledgementMailbox->tryPop().has_value());
+
+    harness.releaseRenderer();
+    EXPECT_TRUE(actor.shutdown(2s));
+}
+
+// V02 (P05): full-canvas focus renders only the focused slot across the whole canvas, with
+// its own aspect fit and letterbox, regardless of the active view mode - the Wipe mode here
+// proves the wipe branch really is suspended while the focus holds. The three solid sources
+// have distinct luma, so the focused slot is identifiable by brightness; leaving the focus
+// restores the wipe composite.
+TEST(ComparisonSurfaceWarpTests, CanvasFocusRendersOnlyTheFocusedSlotAcrossTheWholeCanvas) {
+    SurfaceWarpHarness harness;
+    harness.surface.setViewMode(ComparisonSurface::Wipe);
+    harness.surface.setDifferenceEdge(ComparisonSurface::Edge0And1);
+    harness.surface.setWipePosition(0.25);
+    ASSERT_TRUE(harness.start());
+
+    auto budget = std::make_shared<platform::FrameBudget>(16U * 1024U * 1024U);
+    platform::GpuTransferActor actor{budget, harness.broker, harness.mailbox, harness.activitySink};
+    std::optional<application::FrameSet> set =
+        makeThreeSolidSet(*budget, domain::FrameId{47}, {32U, 96U, 224U});
+    ASSERT_TRUE(set.has_value());
+    ASSERT_EQ(actor.submit(makeContext(47U), std::move(*set)),
+              platform::GpuTransferSubmitResult::Accepted);
+    ASSERT_TRUE(actor.waitUntilIdle(5s));
+
+    const auto centerLuma = [&harness](const int focusSlot) {
+        harness.surface.setCanvasFocusSlot(focusSlot);
+        const QImage image = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+        EXPECT_FALSE(image.isNull());
+        if (image.isNull()) {
+            return 0;
+        }
+        const QColor center = image.pixelColor(image.width() / 2, image.height() / 2);
+        return center.red() + center.green() + center.blue();
+    };
+
+    // Each focused slot paints the whole canvas with that slot's brightness; a wipe composite
+    // (or a fallback to another slot) could not produce this monotone sequence.
+    const int first = centerLuma(0);
+    const int second = centerLuma(1);
+    const int third = centerLuma(2);
+    EXPECT_LT(first, second);
+    EXPECT_LT(second, third);
+
+    // Leaving the focus restores the wipe composite: the quarter split shows slot 0 left of
+    // the split and slot 1 right of it, unlike any single-source full-canvas view.
+    harness.surface.setCanvasFocusSlot(-1);
+    const QImage wipe = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+    ASSERT_FALSE(wipe.isNull());
+    EXPECT_NE(wipe.pixelColor(wipe.width() * 3 / 16, wipe.height() / 2).red(),
+              wipe.pixelColor(wipe.width() / 2, wipe.height() / 2).red());
+
     ASSERT_TRUE(harness.acknowledgementMailbox->tryPop().has_value());
     EXPECT_FALSE(harness.acknowledgementMailbox->tryPop().has_value());
 

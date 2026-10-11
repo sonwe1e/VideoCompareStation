@@ -78,6 +78,11 @@ class ComparisonSurface : public QQuickItem {
     Q_PROPERTY(qreal roiBottom READ roiBottom NOTIFY viewportChanged)
     Q_PROPERTY(
         int referenceSlot READ referenceSlot WRITE setReferenceSlot NOTIFY referenceSlotChanged)
+    // V02 (P05) full-canvas direct look: -1 = regular comparison view, otherwise the whole
+    // canvas shows only this source slot's frame. Presentation-only state, like the GT peek;
+    // it never seeks, re-pairs or touches the reference role.
+    Q_PROPERTY(int canvasFocusSlot READ canvasFocusSlot WRITE setCanvasFocusSlot NOTIFY
+                   canvasFocusSlotChanged)
     // Canonical frame gaps observed by the render-acknowledgement relay since surface attach.
     // Refreshed on every scene-graph sync; an empty provider leaves the counter at zero.
     Q_PROPERTY(qulonglong droppedFrames READ droppedFrames NOTIFY droppedFramesChanged)
@@ -220,6 +225,8 @@ public:
     [[nodiscard]] qreal roiBottom() const noexcept;
     [[nodiscard]] int referenceSlot() const noexcept;
     void setReferenceSlot(int value);
+    [[nodiscard]] int canvasFocusSlot() const noexcept;
+    void setCanvasFocusSlot(int value);
     [[nodiscard]] bool differenceSuppressed() const noexcept;
     void setDifferenceSuppressed(bool value);
     [[nodiscard]] qulonglong droppedFrames() const noexcept;
@@ -296,6 +303,7 @@ signals:
     void thresholdChanged();
     void viewportChanged();
     void referenceSlotChanged();
+    void canvasFocusSlotChanged();
     void differenceSuppressedChanged();
     void droppedFramesChanged();
     void presentedFrameIdentityChanged();
@@ -343,6 +351,8 @@ private:
     qreal roiRight_ = 1.0;
     qreal roiBottom_ = 1.0;
     int referenceSlot_ = 0;
+    // V02 (P05): -1 = off; legal focus slots are 0..2 (out-of-range writes are rejected).
+    int canvasFocusSlot_ = -1;
     std::function<std::uint64_t()> droppedFrameProbe_;
     qulonglong droppedFrames_ = 0U;
     // Identity of the frame set the renderer last reported as presented; GUI-thread only.

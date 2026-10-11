@@ -22,6 +22,12 @@ Rectangle {
     // Set while the session has no identifiable reference (GT) source; the peek is offered by
     // the keyboard only when this is false, and the button explains itself instead of lying.
     required property bool peekTargetValid
+    // V02 (P05): session slot the full canvas is focused on (-1 = regular comparison view),
+    // and the slot carrying the reference role. Both default to "unknown" so an unwired bar
+    // stays inert instead of checking an entry at random; the contract tests cross-check the
+    // bindings once Main.qml wires them.
+    property int canvasFocusSlot: -1
+    property int referenceSourceSlot: -1
     property color panelColor: Theme.menu
     property color borderColor: Theme.border
     property color accentColor: Theme.accent
@@ -39,6 +45,12 @@ Rectangle {
     // Step-2 "固定 GT 切候选": one action flips the candidate side against the fixed
     // reference; Main keeps the frame, zoom/pan and wipe split untouched.
     signal switchCandidateRequested
+    // V02 (P05) full-canvas direct look: one request switches which participating source the
+    // whole canvas shows. Same frame, same ROI/zoom/pan, no seek, no GT role change, no
+    // re-pairing - presentation state only. requestCode follows ReviewShellController's
+    // CanvasFocusRequest (0 off, 1 reference, 2 session slot); sourceSlot addresses the
+    // session order (A=0, B=1). Re-clicking the active entry requests Off.
+    signal fullCanvasFocusRequested(int requestCode, int sourceSlot)
     // Step-2 comparison export: one action copies the labeled comparison capture.
     signal copyComparisonRequested
     signal inspectorRequested
@@ -61,6 +73,14 @@ Rectangle {
     // the plain "差异" label and stay selectable from the inspector.
     readonly property string differenceFlavorLabel: currentMode === ComparisonSurface.Difference ? (differenceMetric === ComparisonSurface.Highlight ? qsTr("叠加高亮") : (differenceMetric === ComparisonSurface.RgbAbsolute ? qsTr("纯差异图") : "")) : ""
     // qmllint enable import unqualified unresolved-type
+
+    // V02 (P05): request codes mirroring ReviewShellController::CanvasFocusRequest. Exposed as
+    // properties so the emitted values are readable in one place; the shell contract tests
+    // cross-check these against the C++ enum so a drift fails a test instead of silently
+    // re-targeting the canvas.
+    readonly property int canvasFocusRequestOff: 0
+    readonly property int canvasFocusRequestReference: 1
+    readonly property int canvasFocusRequestSourceSlot: 2
 
     objectName: "compareModeBar"
     height: sourceCount > 1 ? 40 : 0
@@ -168,6 +188,46 @@ Rectangle {
             onClicked: control.switchCandidateRequested()
         }
 
+        // V02 (P05) full-canvas direct look: A/B address session slots, GT addresses the
+        // reference role wherever it sits. Entries appear only where the session can name the
+        // target (GT needs an identifiable reference); a two-source session without GT shows
+        // A/B only. Re-clicking the active entry returns to the comparison view. The switch
+        // keeps the frame, ROI/zoom/pan and every other entry on this bar untouched.
+        Rectangle {
+            visible: control.sourceCount > 1
+            width: 1
+            height: 20
+            color: Theme.border
+            anchors.verticalCenter: parent.verticalCenter
+        }
+
+        FocusButton {
+            id: canvasFocusAButton
+
+            objectName: "canvasFocusAButton"
+            text: qsTr("看 A")
+            focusSlot: 0
+        }
+        FocusButton {
+            id: canvasFocusBButton
+
+            objectName: "canvasFocusBButton"
+            text: qsTr("看 B")
+            focusSlot: 1
+        }
+        // "看 GT" names the session's reference source the same way the difference peek and
+        // the viewport indicator do; it stays hidden while no GT can be identified.
+        FocusButton {
+            id: canvasFocusGtButton
+
+            objectName: "canvasFocusGtButton"
+            text: qsTr("看 GT")
+            focusSlot: control.referenceSourceSlot
+            requestReference: true
+            implicitWidth: 72
+            visible: control.peekTargetValid
+        }
+
         VcsToolButton {
             id: moreCompareModesButton
 
@@ -273,6 +333,80 @@ Rectangle {
                 if (modeButton.checked)
                     return Theme.accent;
                 if (modeButton.hovered)
+                    return Theme.subtleBorder;
+                return "transparent";
+            }
+
+            Behavior on color {
+                ColorAnimation {
+                    duration: 120
+                }
+            }
+            Behavior on border.color {
+                ColorAnimation {
+                    duration: 120
+                }
+            }
+        }
+    }
+
+    // V02 (P05): one full-canvas direct-look entry. Checked mirrors the shell's focus slot;
+    // clicking the checked entry requests Off so the group always has a way back to the
+    // regular comparison view.
+    component FocusButton: ReviewActionButton {
+        id: focusButton
+
+        required property int focusSlot
+        property bool requestReference: false
+        checkable: true
+        checked: control.canvasFocusSlot >= 0 && control.canvasFocusSlot === focusSlot
+        mirrorsState: true
+        implicitHeight: 30
+        implicitWidth: 64
+        enabled: !control.busy
+        leftPadding: 10
+        rightPadding: 10
+        onClicked: {
+            if (focusButton.checked)
+                control.fullCanvasFocusRequested(control.canvasFocusRequestOff, 0);
+            else if (focusButton.requestReference)
+                control.fullCanvasFocusRequested(control.canvasFocusRequestReference, 0);
+            else
+                control.fullCanvasFocusRequested(control.canvasFocusRequestSourceSlot, focusSlot);
+        }
+
+        contentItem: Text {
+            text: focusButton.text
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            color: !focusButton.enabled ? Theme.disabledText : (focusButton.checked || focusButton.hovered ? Theme.primaryText : Theme.mutedText)
+            font.pixelSize: 12
+            font.weight: focusButton.checked ? Font.DemiBold : Font.Normal
+            elide: Text.ElideRight
+        }
+
+        background: Rectangle {
+            radius: Theme.radiusMedium
+            color: {
+                if (!focusButton.enabled)
+                    return "transparent";
+                if (focusButton.checked)
+                    return Theme.controlChecked;
+                if (focusButton.down)
+                    return Theme.fluentPressed;
+                if (focusButton.hovered)
+                    return Theme.fluentHover;
+                return "transparent";
+            }
+            border.width: focusButton.activeFocus ? 2 : 1
+            border.color: {
+                if (focusButton.activeFocus)
+                    return Theme.focus;
+                if (!focusButton.enabled)
+                    return "transparent";
+                if (focusButton.checked)
+                    return Theme.accent;
+                if (focusButton.hovered)
                     return Theme.subtleBorder;
                 return "transparent";
             }

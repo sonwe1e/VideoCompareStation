@@ -159,6 +159,9 @@ struct SurfaceRenderState final {
     // GT peek: while true the difference pass displays referenceSlot through the regular
     // source display path, aspect-fit into the same rect. Transient UI state; never persisted.
     bool differenceSuppressed = false;
+    // V02 (P05) full-canvas direct look: -1 = off (regular comparison view), otherwise the
+    // whole canvas shows only this source slot's frame. Transient UI state; never persisted.
+    std::int8_t canvasFocusSlot = -1;
     SurfaceViewTransform viewTransform;
     bool roiEnabled = false;
     SurfaceNormalizedRect roi;
@@ -232,7 +235,11 @@ computeSurfacePresentationGeometry(SurfaceViewMode viewMode,
                                    SurfaceDifferenceEdge differenceEdge,
                                    float wipePosition,
                                    const std::array<SurfaceDisplayExtent, 3U>& sourceDisplayExtents,
-                                   bool differenceSuppressed = false) noexcept;
+                                   bool differenceSuppressed = false,
+                                   // V02 (P05): >= 0 replaces the layout with one full-canvas
+                                   // panel showing that source slot (out-of-range keeps the
+                                   // regular view-mode layout).
+                                   std::int8_t canvasFocusSlot = -1) noexcept;
 
 // Qt scene-graph scissor coordinates use the render target's bottom-left origin. D3D11 RECT uses
 // its top-left origin; conversion flips by target height, then intersects the active viewport.

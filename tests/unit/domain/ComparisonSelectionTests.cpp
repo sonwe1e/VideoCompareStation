@@ -192,4 +192,85 @@ TEST(ComparisonSelectionTests, ContinuityPolicyResolvesContextualToSmoothnessFir
               PlaybackContinuityPolicy::ReviewEveryFrame);
 }
 
+// P05: the full-canvas direct-look resolution is keyed by role for GT and by session slot for
+// A/B, and refuses rather than substituting when the named target is not loaded.
+TEST(ComparisonSelectionTests, CanvasFocusReferenceResolvesOnlyALoadedReference) {
+    const std::vector<ComparisonSource> sources{
+        makeSource(0, ComparisonRole::kReference),
+        makeSource(1),
+        makeSource(2),
+    };
+    const auto loaded =
+        resolveCanvasFocusTarget(sources, SourceId{0}, CanvasFocusRequest::Reference);
+    ASSERT_TRUE(loaded.has_value());
+    EXPECT_EQ(*loaded, 0U);
+    // No reference in the session: refuse instead of falling back to a candidate that would be
+    // shown under a "GT direct look" promise.
+    EXPECT_FALSE(
+        resolveCanvasFocusTarget(sources, std::nullopt, CanvasFocusRequest::Reference).has_value());
+    // A reference id that is not among the loaded sources (stale slot) must also refuse.
+    EXPECT_FALSE(
+        resolveCanvasFocusTarget(sources, SourceId{7}, CanvasFocusRequest::Reference).has_value());
+}
+
+TEST(ComparisonSelectionTests, CanvasFocusSourceSlotRefusesOutOfRangeSlots) {
+    const std::vector<ComparisonSource> sources{
+        makeSource(0, ComparisonRole::kReference),
+        makeSource(1),
+        makeSource(2),
+    };
+    const auto first =
+        resolveCanvasFocusTarget(sources, SourceId{0}, CanvasFocusRequest::SourceSlot, 0U);
+    ASSERT_TRUE(first.has_value());
+    EXPECT_EQ(*first, 0U);
+    const auto second =
+        resolveCanvasFocusTarget(sources, SourceId{0}, CanvasFocusRequest::SourceSlot, 1U);
+    ASSERT_TRUE(second.has_value());
+    EXPECT_EQ(*second, 1U);
+    // Slot addressing follows the loaded list; a slot past its end refuses rather than
+    // wrapping onto another source.
+    EXPECT_FALSE(resolveCanvasFocusTarget(sources, SourceId{0}, CanvasFocusRequest::SourceSlot, 3U)
+                     .has_value());
+    EXPECT_FALSE(
+        resolveCanvasFocusTarget(
+            std::vector<ComparisonSource>{}, SourceId{0}, CanvasFocusRequest::SourceSlot, 0U)
+            .has_value());
+    EXPECT_FALSE(
+        resolveCanvasFocusTarget(sources, SourceId{0}, CanvasFocusRequest::Off).has_value());
+}
+
+// P05 red line: switching the full-canvas focus must not change the comparison pair. Pair
+// resolution never consumes the focus request; this pins that invariant so a future change
+// that wires focus into pair resolution fails here instead of silently re-pairing sessions.
+TEST(ComparisonSelectionTests, CanvasFocusSwitchingLeavesPairResolutionUntouched) {
+    const std::vector<ComparisonSource> sources{
+        makeSource(0, ComparisonRole::kReference),
+        makeSource(1),
+        makeSource(2),
+    };
+    const std::optional<SourceId> reference = SourceId{0};
+    const std::optional<ComparisonPair> preferred = ComparisonPair{0, 2};
+    const DefaultPairPolicy policies[] = {
+        DefaultPairPolicy::ReferenceAndFirstCandidate,
+        DefaultPairPolicy::LastTwoActiveSources,
+        DefaultPairPolicy::PreserveIfAvailable,
+    };
+    for (const DefaultPairPolicy policy : policies) {
+        const ComparisonPair baseline =
+            resolveComparisonPair(sources, reference, preferred, policy);
+        const CanvasFocusRequest switches[] = {
+            CanvasFocusRequest::Off,
+            CanvasFocusRequest::Reference,
+            CanvasFocusRequest::SourceSlot,
+        };
+        for (const CanvasFocusRequest request : switches) {
+            ASSERT_TRUE(resolveCanvasFocusTarget(sources, reference, request, 1U).has_value() ||
+                        request == CanvasFocusRequest::Off)
+                << "switch under test must resolve";
+            EXPECT_EQ(resolveComparisonPair(sources, reference, preferred, policy), baseline)
+                << "pair must survive focus switch";
+        }
+    }
+}
+
 } // namespace dvs::domain

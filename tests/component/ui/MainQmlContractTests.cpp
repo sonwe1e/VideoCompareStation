@@ -57,6 +57,7 @@
 #include <QVariantMap>
 #include <QtQml/qqml.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <filesystem>
@@ -4367,6 +4368,459 @@ TEST(MainQmlContractTests, DifferenceButtonOffersFlavorsAndPeekTogglesSuppressio
     preferences.setViewMode(ReviewPreferencesController::ViewMode::SideBySide);
     QCoreApplication::processEvents();
     EXPECT_FALSE(peekButton->isVisible());
+}
+
+// P05 shared shape: a three-source session (A/B candidates, GT identified on slot 2) with the
+// full controller/preferences/shell/facade stack the mode bar and the canvas-focus switch live
+// in. identifyReferenceSlot() builds the validated comparison, which is what gives the shell
+// frozen source identities to focus on.
+class ThreeSourceFocusHarness final {
+public:
+    ThreeSourceFocusHarness() {
+        snapshot->graphicsReady = true;
+        snapshot->sessionState = domain::SessionState::kReady;
+        snapshot->playbackState = domain::PlaybackState::kPaused;
+        snapshot->displayedFrame = domain::FrameId{41};
+        snapshot->canonicalFrameCount = 100U;
+        snapshot->sources = {
+            application::SessionSourceView{
+                .sourceId = 0U,
+                .role = domain::ComparisonRole::kPrediction,
+                .displayName = "A",
+            },
+            application::SessionSourceView{
+                .sourceId = 1U,
+                .role = domain::ComparisonRole::kPrediction,
+                .displayName = "B",
+            },
+            application::SessionSourceView{
+                .sourceId = 2U,
+                .role = domain::ComparisonRole::kReference,
+                .displayName = "C",
+            },
+        };
+        for (const auto& view : snapshot->sources) {
+            snapshot->presentedSources.push_back(application::PresentedSourceState{
+                .sourceId = view.sourceId,
+                .sourceFrameId = domain::FrameId{41},
+                .matchKind = application::FrameMatchKind::ExactIndex,
+            });
+        }
+        identifyReferenceSlot(snapshot, 2);
+        controller = std::make_unique<ReviewController>(ReviewController::Dependencies{
+            .submit =
+                [this](application::PlaybackCommand command) {
+                    submitted.push_back(std::move(command));
+                    return application::PortSubmitResult::Accepted;
+                },
+            .snapshot = [this] { return snapshot; },
+            .takeCompletedCommands = [] { return std::vector<application::CommandTerminal>{}; },
+        });
+        shell = std::make_unique<ReviewShellController>(*controller, preferences);
+        facade = std::make_unique<ReviewSessionFacade>(*controller, preferences, *shell);
+    }
+
+    [[nodiscard]] bool create() {
+        const QString importPath =
+            QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml"));
+        engine.addImportPath(importPath);
+        engine.rootContext()->setContextProperty(QStringLiteral("reviewController"),
+                                                 controller.get());
+        engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
+        engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), shell.get());
+        engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), facade.get());
+        QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
+        if (component.status() != QQmlComponent::Ready) {
+            error = componentErrors(component);
+            return false;
+        }
+        root.reset(component.create());
+        if (!root) {
+            error = componentErrors(component);
+            return false;
+        }
+        window = qobject_cast<QQuickWindow*>(root.get());
+        if (window == nullptr) {
+            error = "Main.qml root is not a QQuickWindow";
+            return false;
+        }
+        window->resize(1440, 900);
+        window->show();
+        for (int iteration = 0; iteration < 5; ++iteration) {
+            QCoreApplication::processEvents();
+        }
+        return true;
+    }
+
+    std::shared_ptr<application::SessionSnapshot> snapshot =
+        std::make_shared<application::SessionSnapshot>();
+    std::vector<application::PlaybackCommand> submitted;
+    std::unique_ptr<ReviewController> controller;
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    std::unique_ptr<ReviewShellController> shell;
+    std::unique_ptr<ReviewSessionFacade> facade;
+    QQmlEngine engine;
+    std::unique_ptr<QObject> root;
+    QQuickWindow* window = nullptr;
+    std::string error;
+};
+
+// P05: installs the wiring a future Main.qml handler will own - the mode bar's
+// fullCanvasFocusRequested signal forwarded into the shell action, with every crossing request
+// recorded on the relay (calls / lastRequest / lastSlot) so tests can assert exactly what left
+// the QML component.
+[[nodiscard]] std::unique_ptr<QObject>
+installFocusWiring(QQmlEngine& engine, QQuickItem* bar, ReviewShellController& shell) {
+    QQmlComponent component{&engine};
+    component.setData(QByteArrayLiteral("import QtQml\n"
+                                        "QtObject {\n"
+                                        "    property var source: null\n"
+                                        "    property var session: null\n"
+                                        "    property int calls: 0\n"
+                                        "    property int lastRequest: -99\n"
+                                        "    property int lastSlot: -99\n"
+                                        "    function connectNow() {\n"
+                                        "        source.fullCanvasFocusRequested.connect("
+                                        "function(requestCode, sourceSlot) {\n"
+                                        "            calls += 1;\n"
+                                        "            lastRequest = requestCode;\n"
+                                        "            lastSlot = sourceSlot;\n"
+                                        "            session.requestCanvasFocus(requestCode, "
+                                        "sourceSlot);\n"
+                                        "        });\n"
+                                        "    }\n"
+                                        "}\n"),
+                      QUrl{});
+    if (component.status() != QQmlComponent::Ready) {
+        return nullptr;
+    }
+    std::unique_ptr<QObject> relay{component.create()};
+    if (relay == nullptr) {
+        return nullptr;
+    }
+    relay->setProperty("source", QVariant::fromValue(bar));
+    relay->setProperty("session", QVariant::fromValue(&shell));
+    if (!QMetaObject::invokeMethod(relay.get(), "connectNow")) {
+        return nullptr;
+    }
+    return relay;
+}
+
+// P05: the canvas-focus request codes the QML bar emits must mirror the shell's (and thereby
+// the domain's) CanvasFocusRequest values. A drift on either side would silently re-target the
+// canvas, so the cross-check is a first-class assertion.
+TEST(MainQmlContractTests, FullCanvasFocusRequestCodesMatchTheShellEnum) {
+    EXPECT_EQ(static_cast<int>(ReviewShellController::CanvasFocusOff), 0);
+    EXPECT_EQ(static_cast<int>(ReviewShellController::CanvasFocusReference), 1);
+    EXPECT_EQ(static_cast<int>(ReviewShellController::CanvasFocusSourceSlot), 2);
+    EXPECT_EQ(static_cast<int>(domain::CanvasFocusRequest::Off),
+              static_cast<int>(ReviewShellController::CanvasFocusOff));
+    EXPECT_EQ(static_cast<int>(domain::CanvasFocusRequest::Reference),
+              static_cast<int>(ReviewShellController::CanvasFocusReference));
+    EXPECT_EQ(static_cast<int>(domain::CanvasFocusRequest::SourceSlot),
+              static_cast<int>(ReviewShellController::CanvasFocusSourceSlot));
+}
+
+// P05: three-source session with an identified GT exposes the full-canvas direct-look group
+// (A/B/GT). Switching changes only the shell's canvas focus: no playback command crosses the
+// boundary (no seek, no re-pairing), and the GT role, the committed pair, the presented frame
+// and the viewport's ROI/zoom/pan observation state all survive every switch.
+TEST(MainQmlContractTests, FullCanvasFocusSwitchesSourceWithoutSeekOrPairOrRoleChanges) {
+    ThreeSourceFocusHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+
+    auto* const bar = harness.root->findChild<QQuickItem*>(QStringLiteral("compareModeBar"));
+    ASSERT_NE(bar, nullptr);
+    auto* const focusA = harness.root->findChild<QQuickItem*>(QStringLiteral("canvasFocusAButton"));
+    ASSERT_NE(focusA, nullptr);
+    auto* const focusB = harness.root->findChild<QQuickItem*>(QStringLiteral("canvasFocusBButton"));
+    ASSERT_NE(focusB, nullptr);
+    auto* const focusGt =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("canvasFocusGtButton"));
+    ASSERT_NE(focusGt, nullptr);
+    auto* const surface = harness.root->findChild<QQuickItem*>(QStringLiteral("dualVideoSurface"));
+    ASSERT_NE(surface, nullptr);
+
+    // The bar's request-code properties mirror the shell enum (guarded separately above).
+    EXPECT_EQ(bar->property("canvasFocusRequestOff").toInt(),
+              static_cast<int>(ReviewShellController::CanvasFocusOff));
+    EXPECT_EQ(bar->property("canvasFocusRequestReference").toInt(),
+              static_cast<int>(ReviewShellController::CanvasFocusReference));
+    EXPECT_EQ(bar->property("canvasFocusRequestSourceSlot").toInt(),
+              static_cast<int>(ReviewShellController::CanvasFocusSourceSlot));
+
+    // Three sources with a GT on slot 2: A/B/GT entries all present.
+    EXPECT_TRUE(focusA->isVisible());
+    EXPECT_TRUE(focusB->isVisible());
+    EXPECT_TRUE(focusGt->isVisible());
+    EXPECT_EQ(harness.controller->referenceSourceIndex(), 2);
+    EXPECT_TRUE(harness.shell->canvasFocusIdentity().isEmpty());
+    EXPECT_EQ(harness.shell->canvasFocusSlot(), -1);
+
+    // Stage a non-trivial observation context on the surface; the switches below must keep it.
+    ASSERT_TRUE(QMetaObject::invokeMethod(surface,
+                                          "restoreViewport",
+                                          Q_ARG(qreal, 0.4),
+                                          Q_ARG(qreal, 0.6),
+                                          Q_ARG(qreal, 2.5),
+                                          Q_ARG(bool, true),
+                                          Q_ARG(qreal, 0.1),
+                                          Q_ARG(qreal, 0.2),
+                                          Q_ARG(qreal, 0.5),
+                                          Q_ARG(qreal, 0.7)));
+    const double centerX = surface->property("viewCenterX").toDouble();
+    const double centerY = surface->property("viewCenterY").toDouble();
+    const double scale = surface->property("viewScale").toDouble();
+    const bool roiEnabled = surface->property("roiEnabled").toBool();
+    const double roiLeft = surface->property("roiLeft").toDouble();
+    const double roiTop = surface->property("roiTop").toDouble();
+    const double roiRight = surface->property("roiRight").toDouble();
+    const double roiBottom = surface->property("roiBottom").toDouble();
+    EXPECT_TRUE(roiEnabled);
+    EXPECT_DOUBLE_EQ(scale, 2.5);
+
+    // Enter a pair-relevant mode first: the switches must survive inside it, and the fallback
+    // entries below are visible exactly in this state.
+    harness.preferences.setViewMode(ReviewPreferencesController::ViewMode::Difference);
+    QCoreApplication::processEvents();
+    EXPECT_EQ(harness.root->property("effectiveViewMode").toInt(), ComparisonSurface::Difference);
+
+    // The baseline every switch below must hold against.
+    const QStringList identities = harness.shell->activeSourceIdentities();
+    ASSERT_EQ(identities.size(), 3);
+    const std::size_t submittedBefore = harness.submitted.size();
+    const int edgeBefore = harness.controller->effectiveDifferenceEdge();
+    const qint64 frameBefore = harness.controller->currentFrame();
+    const qulonglong epochBefore = harness.controller->sessionEpoch();
+    const int viewModeBefore = harness.root->property("effectiveViewMode").toInt();
+
+    auto relay = installFocusWiring(harness.engine, bar, *harness.shell);
+    ASSERT_NE(relay, nullptr);
+    const int offRequest = static_cast<int>(ReviewShellController::CanvasFocusOff);
+    const int gtRequest = static_cast<int>(ReviewShellController::CanvasFocusReference);
+    const int slotRequest = static_cast<int>(ReviewShellController::CanvasFocusSourceSlot);
+
+    // Click "看 A": the request crosses the QML boundary and lands in the shell as the slot-0
+    // focus, with nothing else moving.
+    ASSERT_TRUE(QMetaObject::invokeMethod(focusA, "clicked"));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(relay->property("calls").toInt(), 1);
+    EXPECT_EQ(relay->property("lastRequest").toInt(), slotRequest);
+    EXPECT_EQ(relay->property("lastSlot").toInt(), 0);
+    EXPECT_EQ(harness.shell->canvasFocusSlot(), 0);
+    EXPECT_EQ(harness.shell->canvasFocusIdentity(), identities.at(0));
+    // The switch itself must submit nothing: the command count does not move. (The startup
+    // sequence before the baseline may legitimately carry a pair-policy command; only the
+    // delta across the switch is the switch's own traffic.)
+    EXPECT_EQ(harness.submitted.size(), submittedBefore);
+    for (const auto& command : harness.submitted) {
+        EXPECT_EQ(std::get_if<application::SeekFrameCommand>(&command), nullptr);
+    }
+    EXPECT_EQ(harness.controller->referenceSourceIndex(), 2);
+    EXPECT_EQ(harness.controller->effectiveDifferenceEdge(), edgeBefore);
+    EXPECT_EQ(harness.controller->currentFrame(), frameBefore);
+    EXPECT_EQ(harness.controller->sessionEpoch(), epochBefore);
+    EXPECT_EQ(harness.root->property("effectiveViewMode").toInt(), viewModeBefore);
+    EXPECT_FALSE(surface->property("differenceSuppressed").toBool());
+    EXPECT_DOUBLE_EQ(surface->property("viewCenterX").toDouble(), centerX);
+    EXPECT_DOUBLE_EQ(surface->property("viewCenterY").toDouble(), centerY);
+    EXPECT_DOUBLE_EQ(surface->property("viewScale").toDouble(), scale);
+    EXPECT_EQ(surface->property("roiEnabled").toBool(), roiEnabled);
+    EXPECT_DOUBLE_EQ(surface->property("roiLeft").toDouble(), roiLeft);
+    EXPECT_DOUBLE_EQ(surface->property("roiTop").toDouble(), roiTop);
+    EXPECT_DOUBLE_EQ(surface->property("roiRight").toDouble(), roiRight);
+    EXPECT_DOUBLE_EQ(surface->property("roiBottom").toDouble(), roiBottom);
+
+    // Click "看 B": same-frame switch to the second source, same observation context.
+    ASSERT_TRUE(QMetaObject::invokeMethod(focusB, "clicked"));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(relay->property("calls").toInt(), 2);
+    EXPECT_EQ(relay->property("lastSlot").toInt(), 1);
+    EXPECT_EQ(harness.shell->canvasFocusSlot(), 1);
+    EXPECT_EQ(harness.shell->canvasFocusIdentity(), identities.at(1));
+    EXPECT_EQ(harness.submitted.size(), submittedBefore);
+    EXPECT_EQ(harness.controller->referenceSourceIndex(), 2);
+    EXPECT_EQ(harness.controller->effectiveDifferenceEdge(), edgeBefore);
+    EXPECT_DOUBLE_EQ(surface->property("viewScale").toDouble(), scale);
+
+    // Click "看 GT": the role-based request lands on the reference (slot 2 here).
+    ASSERT_TRUE(QMetaObject::invokeMethod(focusGt, "clicked"));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(relay->property("calls").toInt(), 3);
+    EXPECT_EQ(relay->property("lastRequest").toInt(), gtRequest);
+    EXPECT_EQ(harness.shell->canvasFocusSlot(), 2);
+    EXPECT_EQ(harness.shell->canvasFocusIdentity(), identities.at(2));
+    EXPECT_EQ(harness.submitted.size(), submittedBefore);
+
+    // Once the focus slot and the reference slot are bound (the future Main.qml wiring), the
+    // GT entry reads as focused and re-clicking it requests Off, returning to the comparison
+    // view.
+    ASSERT_TRUE(bar->setProperty("canvasFocusSlot", 2));
+    ASSERT_TRUE(bar->setProperty("referenceSourceSlot", 2));
+    ASSERT_TRUE(QMetaObject::invokeMethod(focusGt, "clicked"));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(relay->property("calls").toInt(), 4);
+    EXPECT_EQ(relay->property("lastRequest").toInt(), offRequest);
+    EXPECT_TRUE(harness.shell->canvasFocusIdentity().isEmpty());
+    EXPECT_EQ(harness.shell->canvasFocusSlot(), -1);
+    EXPECT_EQ(harness.submitted.size(), submittedBefore);
+
+    // Refusals change nothing: an out-of-range slot and an unknown request code.
+    EXPECT_FALSE(harness.shell->requestCanvasFocus(slotRequest, 7));
+    EXPECT_FALSE(harness.shell->requestCanvasFocus(9, 0));
+    EXPECT_TRUE(harness.shell->canvasFocusIdentity().isEmpty());
+    EXPECT_EQ(harness.submitted.size(), submittedBefore);
+
+    // The original switching entries survive the new group and stay functional: mode buttons,
+    // the pair combo and the fixed-GT candidate switch are visible in this 3-source
+    // pair-relevant mode, and the difference peek is offered next to the new direct-look
+    // entries.
+    auto* const sideModeButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("sideModeButton"));
+    ASSERT_NE(sideModeButton, nullptr);
+    EXPECT_TRUE(sideModeButton->isVisible());
+    auto* const pairCombo = harness.root->findChild<QQuickItem*>(QStringLiteral("pairCombo"));
+    ASSERT_NE(pairCombo, nullptr);
+    EXPECT_TRUE(pairCombo->isVisible());
+    auto* const switchCandidate =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("switchCandidateButton"));
+    ASSERT_NE(switchCandidate, nullptr);
+    EXPECT_TRUE(switchCandidate->isVisible());
+    auto* const peekButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("differencePeekButton"));
+    ASSERT_NE(peekButton, nullptr);
+    EXPECT_TRUE(peekButton->isVisible());
+    // And a mode entry still works: leaving Difference for side-by-side keeps the focus state
+    // alone - view modes and the canvas focus are independent state.
+    ASSERT_TRUE(QMetaObject::invokeMethod(sideModeButton, "clicked"));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(harness.root->property("effectiveViewMode").toInt(), ComparisonSurface::SideBySide);
+    EXPECT_TRUE(harness.shell->canvasFocusIdentity().isEmpty());
+}
+
+// P05: two-source sessions only offer the entries the session can name. Without an identified
+// GT the "看 GT" entry stays hidden and a reference request refuses; identifying the reference
+// brings the entry back. A single-source session hides the whole bar, focus group included.
+TEST(MainQmlContractTests, FullCanvasFocusGroupShowsOnlyApplicableEntriesPerSession) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+
+    auto* const focusA = harness.root->findChild<QQuickItem*>(QStringLiteral("canvasFocusAButton"));
+    ASSERT_NE(focusA, nullptr);
+    auto* const focusB = harness.root->findChild<QQuickItem*>(QStringLiteral("canvasFocusBButton"));
+    ASSERT_NE(focusB, nullptr);
+    auto* const focusGt =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("canvasFocusGtButton"));
+    ASSERT_NE(focusGt, nullptr);
+    auto* const bar = harness.root->findChild<QQuickItem*>(QStringLiteral("compareModeBar"));
+    ASSERT_NE(bar, nullptr);
+    const int gtRequest = static_cast<int>(ReviewShellController::CanvasFocusReference);
+    const int slotRequest = static_cast<int>(ReviewShellController::CanvasFocusSourceSlot);
+
+    // Two sources, no identified GT yet: A/B only.
+    EXPECT_EQ(harness.controller->sourceCount(), 2);
+    EXPECT_TRUE(focusA->isVisible());
+    EXPECT_TRUE(focusB->isVisible());
+    EXPECT_FALSE(focusGt->isVisible());
+    // The shell refuses a reference request while no GT is identifiable.
+    EXPECT_FALSE(harness.shell->requestCanvasFocus(gtRequest, 0));
+    EXPECT_TRUE(harness.shell->canvasFocusIdentity().isEmpty());
+
+    // Identifying the GT on slot 0 exposes the entry and makes the request resolvable.
+    identifyReferenceSlot(harness.snapshot, 0);
+    harness.controller->refreshProjection();
+    QCoreApplication::processEvents();
+    ASSERT_EQ(harness.controller->referenceSourceIndex(), 0);
+    EXPECT_TRUE(focusA->isVisible());
+    EXPECT_TRUE(focusB->isVisible());
+    EXPECT_TRUE(focusGt->isVisible());
+    const QStringList identities = harness.shell->activeSourceIdentities();
+    ASSERT_EQ(identities.size(), 2);
+    ASSERT_TRUE(harness.shell->requestCanvasFocus(gtRequest, 0));
+    EXPECT_EQ(harness.shell->canvasFocusSlot(), 0);
+    EXPECT_EQ(harness.shell->canvasFocusIdentity(), identities.at(0));
+
+    // Shrinking to a single source hides the whole bar - no canvas switching to offer. The
+    // focused source is the one that survives, so the focus stays meaningful, but a request
+    // for the removed slot refuses.
+    harness.snapshot->sources.erase(harness.snapshot->sources.begin() + 1);
+    harness.snapshot->presentedSources.erase(harness.snapshot->presentedSources.begin() + 1);
+    identifyReferenceSlot(harness.snapshot, 0);
+    harness.controller->refreshProjection();
+    QCoreApplication::processEvents();
+    EXPECT_EQ(harness.controller->sourceCount(), 1);
+    EXPECT_FALSE(bar->isVisible());
+    EXPECT_FALSE(focusA->isVisible());
+    const QStringList remaining = harness.shell->activeSourceIdentities();
+    ASSERT_EQ(remaining.size(), 1);
+    EXPECT_EQ(harness.shell->canvasFocusIdentity(), remaining.at(0));
+    EXPECT_FALSE(harness.shell->requestCanvasFocus(slotRequest, 1));
+}
+
+// P05: the focus names a source by frozen identity, so a source-set change that removes the
+// focused source clears the focus instead of silently re-targeting whatever took its slot.
+TEST(MainQmlContractTests, CanvasFocusClearsWhenFocusedSourceLeavesActiveSet) {
+    ThreeSourceFocusHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+
+    const QStringList identities = harness.shell->activeSourceIdentities();
+    ASSERT_EQ(identities.size(), 3);
+    const int slotRequest = static_cast<int>(ReviewShellController::CanvasFocusSourceSlot);
+    ASSERT_TRUE(harness.shell->requestCanvasFocus(slotRequest, 1));
+    EXPECT_EQ(harness.shell->canvasFocusSlot(), 1);
+    EXPECT_EQ(harness.shell->canvasFocusIdentity(), identities.at(1));
+
+    // Remove source B (slot 1) from the session.
+    harness.snapshot->sources.erase(harness.snapshot->sources.begin() + 1);
+    harness.snapshot->presentedSources.erase(
+        std::remove_if(harness.snapshot->presentedSources.begin(),
+                       harness.snapshot->presentedSources.end(),
+                       [](const application::PresentedSourceState& presented) {
+                           return presented.sourceId == 1U;
+                       }),
+        harness.snapshot->presentedSources.end());
+    identifyReferenceSlot(harness.snapshot, 2);
+    harness.controller->refreshProjection();
+    QCoreApplication::processEvents();
+
+    EXPECT_TRUE(harness.shell->canvasFocusIdentity().isEmpty());
+    EXPECT_EQ(harness.shell->canvasFocusSlot(), -1);
+}
+
+// P05: the production Main.qml wiring, exercised as shipped - no relay, no manual
+// setProperty. Clicking 看A crosses the bar's signal into the shell action, and the shell's
+// slot flows back through the bar and viewport bindings to the surface. Re-clicking the now
+// checked entry requests Off and the bindings carry -1 all the way back.
+TEST(MainQmlContractTests, FullCanvasFocusFlowsThroughTheRealMainQmlWiring) {
+    ThreeSourceFocusHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+
+    auto* const bar = harness.root->findChild<QQuickItem*>(QStringLiteral("compareModeBar"));
+    ASSERT_NE(bar, nullptr);
+    auto* const focusA = harness.root->findChild<QQuickItem*>(QStringLiteral("canvasFocusAButton"));
+    ASSERT_NE(focusA, nullptr);
+    auto* const surface = harness.root->findChild<QQuickItem*>(QStringLiteral("dualVideoSurface"));
+    ASSERT_NE(surface, nullptr);
+
+    EXPECT_EQ(harness.shell->canvasFocusSlot(), -1);
+    EXPECT_EQ(bar->property("canvasFocusSlot").toInt(), -1);
+    EXPECT_EQ(surface->property("canvasFocusSlot").toInt(), -1);
+    EXPECT_FALSE(focusA->property("checked").toBool());
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(focusA, "clicked"));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(harness.shell->canvasFocusSlot(), 0);
+    EXPECT_EQ(bar->property("canvasFocusSlot").toInt(), 0);
+    EXPECT_EQ(surface->property("canvasFocusSlot").toInt(), 0);
+    EXPECT_TRUE(focusA->property("checked").toBool());
+
+    // The checked state mirrors the shell through the binding; re-clicking it requests Off.
+    ASSERT_TRUE(QMetaObject::invokeMethod(focusA, "clicked"));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(harness.shell->canvasFocusSlot(), -1);
+    EXPECT_EQ(bar->property("canvasFocusSlot").toInt(), -1);
+    EXPECT_EQ(surface->property("canvasFocusSlot").toInt(), -1);
+    EXPECT_FALSE(focusA->property("checked").toBool());
 }
 
 // Step-2 comparison export: the composed capture is the exact viewport crop plus a

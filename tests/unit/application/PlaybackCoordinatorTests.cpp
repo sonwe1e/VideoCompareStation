@@ -6539,5 +6539,86 @@ TEST(PlaybackCoordinatorTests, TimestampModeMarksSecondaryMissingBeyondVfrTimeli
     }
 }
 
+// P05: a full-canvas direct-look switch is presentation state the coordinator never hears
+// about. Zero submitted commands must mean a bit-stable session identity: the same snapshot
+// object, the same session epoch, playback generation, committed pair, validated topology and
+// displayed frame - i.e. no seek, no re-pairing and no frame-set rebuild behind the view
+// layer's back. The closing seek proves the equality assertions are not vacuous: a command
+// that a wrong switch implementation would emit changes the identity immediately.
+TEST(PlaybackCoordinatorTests, PresentationSourceSwitchBoundaryKeepsSessionIdentityStable) {
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator = makeCoordinator(provider, render);
+    ASSERT_NE(coordinator, nullptr);
+    markGraphicsReady(coordinator);
+
+    const auto source =
+        [](const domain::SourceId id, const char* name, const domain::ComparisonRole role) {
+            return domain::ComparisonSource{
+                .id = id,
+                .role = role,
+                .descriptor =
+                    makeDescriptor(name, domain::MediaExtent{.width = 320, .height = 180}, 30, 30),
+                .displayName = name,
+            };
+        };
+
+    // Three sources with the reference on slot 2 - the A/B/GT direct-look shape.
+    const std::shared_ptr<const SessionSnapshot> initial = coordinator->snapshot();
+    ASSERT_EQ(coordinator->submit(OpenDirectComparisonCommand{
+                  .context =
+                      CommandContext{
+                          .sessionId = initial->sessionId,
+                          .sessionEpoch = initial->sessionEpoch,
+                          .commandId = domain::CommandId{1},
+                      },
+                  .sources = {source(0U, "a.mp4", domain::ComparisonRole::kPrediction),
+                              source(1U, "b.mp4", domain::ComparisonRole::kPrediction),
+                              source(2U, "gt.mp4", domain::ComparisonRole::kReference)},
+              }),
+              PortSubmitResult::Accepted);
+    completeDirectOpen(coordinator, provider, render, 0U, 0U, 0U);
+
+    const std::shared_ptr<const SessionSnapshot> settled = coordinator->snapshot();
+    ASSERT_NE(settled, nullptr);
+    ASSERT_NE(settled->validatedComparison, nullptr);
+    ASSERT_TRUE(settled->activeComparisonPair.has_value());
+    ASSERT_TRUE(settled->displayedFrame.has_value());
+
+    // The display-side switch boundary: the shell/QML layer flips its canvas focus and, by
+    // construction of the feature, submits nothing. With no command in flight the
+    // coordinator's committed identity cannot move - require it to be bit-stable.
+    const std::shared_ptr<const SessionSnapshot> afterSwitch = coordinator->snapshot();
+    EXPECT_EQ(afterSwitch.get(), settled.get());
+    EXPECT_EQ(afterSwitch->sessionId, settled->sessionId);
+    EXPECT_EQ(afterSwitch->sessionEpoch, settled->sessionEpoch);
+    EXPECT_EQ(afterSwitch->playbackGeneration, settled->playbackGeneration);
+    EXPECT_EQ(afterSwitch->activeComparisonPair, settled->activeComparisonPair);
+    EXPECT_EQ(afterSwitch->validatedComparison.get(), settled->validatedComparison.get());
+    EXPECT_EQ(afterSwitch->displayedFrame, settled->displayedFrame);
+
+    // Non-vacuous control: the command family a broken switch would submit (a locate)
+    // immediately disturbs the identity the switch must preserve - new snapshot object, new
+    // playback generation, new displayed frame.
+    ASSERT_EQ(coordinator->submit(SeekFrameCommand{
+                  .context = commandContext(coordinator, domain::CommandId{2}),
+                  .frameId = domain::FrameId{5},
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_TRUE(provider->waitForFrameRequestCount(2U));
+    const auto seek = provider->frameRequest(1U);
+    ASSERT_TRUE(seek.has_value());
+    ASSERT_TRUE(provider->postFrameReady(*seek, makeFrameSet(seek->frameId)));
+    ASSERT_TRUE(render->waitForPublishedCount(2U));
+    ASSERT_TRUE(provider->postFrameSucceeded(*seek));
+    presentPublished(coordinator, render, 1U);
+    ASSERT_EQ(waitForTerminals(coordinator, 1U).size(), 1U);
+    const std::shared_ptr<const SessionSnapshot> afterSeek = coordinator->snapshot();
+    EXPECT_NE(afterSeek.get(), settled.get());
+    EXPECT_NE(afterSeek->playbackGeneration, settled->playbackGeneration);
+    ASSERT_TRUE(afterSeek->displayedFrame.has_value());
+    EXPECT_EQ(*afterSeek->displayedFrame, domain::FrameId{5});
+}
+
 } // namespace
 } // namespace dvs::application

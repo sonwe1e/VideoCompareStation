@@ -34,6 +34,16 @@ enum class DefaultPairPolicy : std::uint8_t {
     PreserveIfAvailable = 2,
 };
 
+// V02 (P05): full-canvas direct-look request. The canvas focus is pure presentation state:
+// switching it changes which participating source the whole canvas shows, never the timeline
+// position, the reference role or the active comparison pair. A/B address session slots; the
+// reference request addresses the GT role wherever it sits.
+enum class CanvasFocusRequest : std::uint8_t {
+    Off = 0,
+    Reference = 1,
+    SourceSlot = 2,
+};
+
 // Resolves the effective pair for the current source list. Preferred is used when the policy
 // can honor it (PreserveIfAvailable) or when both members are still loaded.
 [[nodiscard]] ComparisonPair resolveComparisonPair(std::span<const ComparisonSource> sources,
@@ -59,5 +69,17 @@ remapComparisonPairByMediaIdentity(std::span<const ComparisonSource> previousSou
 [[nodiscard]] std::optional<std::uint8_t>
 comparisonPairEdgeOrdinal(std::span<const ComparisonSource> sources,
                           const ComparisonPair& pair) noexcept;
+
+// Resolves which loaded source a full-canvas direct look should show, or nullopt when the
+// request must be refused. Refusal, never substitution: a Reference request without a loaded
+// reference resolves to nothing (drawing a candidate under a "GT" promise is the failure mode
+// this exists to prevent), and a slot beyond the loaded sources resolves to nothing instead of
+// wrapping onto another source. Resolution reads only identities and roles - it never consults
+// or mutates the comparison pair, so a focus switch cannot change the pair identity.
+[[nodiscard]] std::optional<SourceId>
+resolveCanvasFocusTarget(const std::span<const ComparisonSource> sources,
+                         const std::optional<SourceId> referenceId,
+                         const CanvasFocusRequest request,
+                         const std::uint8_t sourceSlot = 0U) noexcept;
 
 } // namespace dvs::domain

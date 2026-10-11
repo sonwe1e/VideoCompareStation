@@ -3235,6 +3235,10 @@ ApplicationWindow {
         busy: root.busy
         peekLocked: root.differencePeekLocked
         peekTargetValid: root.differencePeekTargetValid
+        // V02 (P05): the bar mirrors the shell's canvas focus (session slot, -1 = off) and the
+        // reference slot so the 看A/看B/看GT checked states name what the canvas shows.
+        canvasFocusSlot: root.shell ? root.shell.canvasFocusSlot : -1
+        referenceSourceSlot: root.referenceSourceIndex
         borderColor: root.borderColor
         accentColor: root.accentColor
         textColor: root.primaryTextColor
@@ -3257,6 +3261,13 @@ ApplicationWindow {
                 root.differencePeekActive = held && root.differencePeekTargetValid;
         }
         onSwitchCandidateRequested: root.switchCandidateEdge()
+        // V02 (P05) full-canvas direct look: one shell action switches which participating
+        // source the whole canvas shows. Presentation state only - no seek, no re-pairing, no
+        // reference change - so the handler forwards the request and nothing else.
+        onFullCanvasFocusRequested: (requestCode, sourceSlot) => {
+            if (root.shell)
+                root.shell.requestCanvasFocus(requestCode, sourceSlot);
+        }
         onCopyComparisonRequested: root.copyComparisonImage()
         onInspectorRequested: root.shell.inspectorVisible = !root.inspectorOpen
     }
@@ -3370,6 +3381,9 @@ ApplicationWindow {
         // Keyboard peek can outlive a difference view switch (locked); it only ever
         // suppresses the difference pass itself.
         differenceSuppressed: root.differencePeekActive && root.differenceMode
+        // V02 (P05): the whole canvas shows the shell-focused source slot (-1 = off). The
+        // viewport forwards it to the surface; image workspace is not involved.
+        canvasFocusSlot: root.shell ? root.shell.canvasFocusSlot : -1
         referenceSourceIndex: root.referenceSourceIndex
         sourceCount: root.sourceCount
         wipeMode: root.wipeMode

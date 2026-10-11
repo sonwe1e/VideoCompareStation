@@ -627,7 +627,7 @@ bool SurfaceRenderState::isValid() const noexcept {
            std::isfinite(threshold) && threshold >= 0.0F && threshold <= 1.0F &&
            viewTransform.isValid() && (!roiEnabled || roi.isValid()) &&
            std::isfinite(wipePosition) && wipePosition >= 0.0F && wipePosition <= 1.0F &&
-           referenceSlot < 3U;
+           canvasFocusSlot >= -1 && canvasFocusSlot <= 2 && referenceSlot < 3U;
 }
 
 SurfaceSplitLayout computeSurfaceSplit(const float logicalWidth,
@@ -875,16 +875,9 @@ computeSurfacePresentationGeometry(const SurfaceViewMode viewMode,
                                    const SurfaceDifferenceEdge differenceEdge,
                                    const float wipePosition,
                                    const std::array<SurfaceDisplayExtent, 3U>& sourceDisplayExtents,
-                                   const bool differenceSuppressed) noexcept {
+                                   const bool differenceSuppressed,
+                                   const std::int8_t canvasFocusSlot) noexcept {
     SurfacePresentationGeometry result;
-    result.panels = computeSurfacePanelLayout(viewMode,
-                                              logicalWidth,
-                                              logicalHeight,
-                                              pixelWidth,
-                                              pixelHeight,
-                                              referenceSlot,
-                                              differenceEdge,
-                                              wipePosition);
     const auto fitted = [&sourceDisplayExtents](const SurfaceRect& bounds,
                                                 const std::uint8_t slot) {
         if (slot >= sourceDisplayExtents.size() || !sourceDisplayExtents[slot].isValid()) {
@@ -893,6 +886,31 @@ computeSurfacePresentationGeometry(const SurfaceViewMode viewMode,
         return aspectFitRectFloat(
             bounds, sourceDisplayExtents[slot].width, sourceDisplayExtents[slot].height);
     };
+    // V02 (P05) full-canvas direct look: the focused slot replaces the whole layout regardless
+    // of the view mode - one panel covering the canvas, the focus slot as its only source, no
+    // difference/wipe regions. QML overlays, hit mapping and pixel-probe geometry read this same
+    // result, so they cannot disagree with the render path that draws exactly this slot.
+    if (canvasFocusSlot >= 0 && canvasFocusSlot <= 2) {
+        if (!std::isfinite(logicalWidth) || !std::isfinite(logicalHeight) || logicalWidth <= 0.0F ||
+            logicalHeight <= 0.0F) {
+            return result;
+        }
+        const SurfaceRect full{
+            .x = 0.0F, .y = 0.0F, .width = logicalWidth, .height = logicalHeight};
+        result.panels.sourceRects[0U] = full;
+        result.panels.sourceSlots[0U] = static_cast<std::uint8_t>(canvasFocusSlot);
+        result.panels.sourceCount = 1U;
+        result.sourceContentRects[0U] = fitted(full, static_cast<std::uint8_t>(canvasFocusSlot));
+        return result;
+    }
+    result.panels = computeSurfacePanelLayout(viewMode,
+                                              logicalWidth,
+                                              logicalHeight,
+                                              pixelWidth,
+                                              pixelHeight,
+                                              referenceSlot,
+                                              differenceEdge,
+                                              wipePosition);
     for (std::size_t index = 0U; index < result.panels.sourceCount; ++index) {
         result.sourceContentRects[index] =
             fitted(result.panels.sourceRects[index], result.panels.sourceSlots[index]);
@@ -1931,8 +1949,42 @@ private:
         };
 
         prepared.publication = publication;
-        if (state.viewMode == SurfaceViewMode::Difference ||
-            state.viewMode == SurfaceViewMode::Fade) {
+        if (state.canvasFocusSlot >= 0) {
+            // V02 (P05) full-canvas direct look: the whole canvas shows only the focused
+            // slot's frame, aspect-fit with letterbox, regardless of the active view mode.
+            // An unavailable slot draws an explicit black canvas rather than falling back to
+            // another source - a direct look must never show the wrong frame. Wipe,
+            // Difference and the multi-panel branches do not execute while this holds
+            // (same shape as the differenceSuppressed GT peek path).
+            const SurfaceRect fullBounds{
+                .x = 0.0F,
+                .y = 0.0F,
+                .width = state.logicalWidth,
+                .height = state.logicalHeight,
+            };
+            const std::array<const GpuFrameResource*, 3U> slotFrames{
+                frameA.get(), frameB.get(), frameC.get()};
+            const std::array<const D3d11GpuFrameBacking*, 3U> slotBackings{
+                backingA, backingB, backingC};
+            const std::size_t focusSlot = static_cast<std::size_t>(state.canvasFocusSlot);
+            const GpuFrameResource* focusFrame = nullptr;
+            const D3d11GpuFrameBacking* focusBacking = nullptr;
+            if (focusSlot < slotFrames.size()) {
+                focusFrame = slotFrames[focusSlot];
+                focusBacking = slotBackings[focusSlot];
+            }
+            if (focusFrame != nullptr && focusBacking != nullptr &&
+                backingUsable(focusFrame, focusBacking)) {
+                if (!appendRegionDraw(fullBounds, *focusFrame, *focusBacking)) {
+                    return false;
+                }
+            } else if (prepared.letterboxBarCount < prepared.letterboxBars.size()) {
+                prepared.letterboxBars[prepared.letterboxBarCount] =
+                    makeComposeConstants(state, fullBounds, application::TextureRegion{});
+                ++prepared.letterboxBarCount;
+            }
+        } else if (state.viewMode == SurfaceViewMode::Difference ||
+                   state.viewMode == SurfaceViewMode::Fade) {
             // Difference and Fade never degrades to a single-source image. If either selected
             // slot is unavailable, draw an explicit black unavailable canvas; the QML projection
             // names the missing source and canonical frame above it.

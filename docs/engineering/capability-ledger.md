@@ -35,7 +35,7 @@
 | F02 色彩/像素/坐标契约 | 部分 | 已有规范化帧值 YCbCr 读数与"已转换"标记（台账 2026-10-09 一致性轮）、`ComparisonExactness`、8/16-bit 差异统计口径。4:2:2/4:4:4 显式警告、解码源域记录完整化未开始 |
 | F03 播放预算与缓存 | 已实现（既有） | 256 MiB 解码帧缓存上限、完整 FrameSet 原子发布、呈现 ACK 背压均在门禁内；短区间预缓存容量计算与局部缓存未开始 |
 | V01 全景+同 ROI 三局部 | 部分已实现 | P04 已交付 `RoiTriplet` 预设：全景走 ThreeUp（三源全呈现）+ 三个同 ROI 局部窗（QML `RoiTripletStrip` 复采样已呈现 FrameSet，烘焙 .qsb 着色器含 d3d11 变体），无新增解码路数；往返/缩放/平移 ROI 保持、半开边界钳制、入口无三源禁用。真机视觉/DPI/截图未验证；跟随轨迹放大镜未做 |
-| V02 全画布切换与盲比 | 未开始 | 手动 A/B 切换（图片）已有；视频全画布候选切换、顺序播放比较、盲比随机种子未做 |
+| V02 全画布切换与盲比 | 部分已实现 | P05 已交付全画布直看闭环：domain `CanvasFocusRequest`/`resolveCanvasFocusTarget`（角色/槽位解析，拒绝而不替代）、shell `canvasFocus` 显示状态（零回放命令、焦点按冻结身份失效清理）、模式条 看A/看B/看GT 入口、Main.qml 正式接线与画布渲染（`ComparisonSurface.canvasFocusSlot` → `SurfaceRenderState`/平台几何与渲染：聚焦态单面板全画布、aspect fit+letterbox、缺帧画黑不回退；分屏线/Wipe 手柄/ROI 三联条聚焦期隐藏，像素读数映射聚焦源并在切换时挂起重取）。不变量测试钉死不 seek/不改 GT/不改比较对/ROI 缩放平移保持/effectiveViewMode 不变；含真实接线测试与 WARP 渲染测试，变异 8/8（`out/verification/p05-mutation/`）。真机 D3D11VA 手感未验；盲比随机种子、顺序播放比较未做 |
 | V03 双参考差异 | 部分 | A−B 差异/热力图/阈值已有（`TabbedInspector`、`PairMetricsService`）；GT−A/GT−B 成对布局、跨帧锁定标尺未做 |
 | V04 编辑副本比较 | 部分 | 编辑副本、撤销、另存副本已有（台账 2026-10-10 图片连续裁剪与整图变换）；"副本作为候选进入比较管线"未接 |
 | D01 播放时序证据 | 部分已实现 | 应用层 trace（kind 2/23/24，`PlaybackTrace.h`）与呈现 ACK 已有；P09 `PlaybackEvidenceCollector`（分段延迟/帧号缺口跳帧/身份过滤/分级摘要，13 单测+6 变异）已实现未接线。P10 平台探针 PoC `PresentationStatisticsProbe`（自有离屏 flip 交换链、七态分级能力、QPC/PresentCount 快照、区间级关联声明、10 测试+5 变异）已实现未接线；本机硬件路径 kMediaAvailable。远控虚拟屏会话下传统计数器可能滞后于验证窗口→诚实报 kUnknown（测试按结构性断言，不对机器答案下断言）。PresentMon/ETW 采集未开始 |
@@ -46,7 +46,7 @@
 | D06 自动异常导航 | 未开始 | — |
 | Q01 有口径结果卡 | 部分 | MAE/PSNR、阈值复用、异步采样已有（`ComparisonMetrics`、`PairMetricsService`）；通常表现/变差比例/严重问题三段式结果卡未做 |
 | Q02 时间指标 | 未开始 | — |
-| S01 SampleGroup/配方 | 未开始 | 图片编辑操作（裁剪/变换/画笔/填充/马赛克/标注/撤销）已有，可作纯操作提取来源 |
+| S01 SampleGroup/配方 | 部分已实现 | P11 已提取 `ImageEditOperations` 纯函数模块（裁剪、水平镜像/垂直翻转/90°/180° 旋转、矩形填充/清除、马赛克 + `EditRecipe` 有序折叠执行器雏形）；控制器全部委托纯函数，撤销/历史/副本身份不动；控制器路径与纯函数路径输出**逐字节一致**有测试证明。画笔/标注/智能抠图刻意不提取（交互态/模型环境）；`EditRecipe` 序列化与批量导出执行器未做 |
 | S02 标签几何变换 | 部分已实现 | P12 本次新增 `src/domain` 的 `LabelGeometry`（光流端点通式 `f'(T0(x)) = T1(x+f(x)) - T0(x)`、公共仿射捷径、按网格位裁剪＋终点出界置无效、水平翻转 dx 取反、pad 不制造真值、mask 精确重排；无时间反转、无 mask 重采样）+ 15 项单测与 6/6 变异证据。接入配方执行器（S01）未开始 |
 | S03 选区/抠图/AI 分割 | 未开始 | 工作区另有并行未提交的 SAM2 接入尝试（`src/ui_qml/src/Sam2Segmenter.cpp`，当前编译失败），状态以该工作完成时为准 |
 | S04 可控合成数据 | 未开始 | — |

@@ -1,5 +1,6 @@
 #include "dvs/ui/ReviewShellController.h"
 
+#include "dvs/domain/ComparisonSelection.h"
 #include "dvs/presentation/ComparisonContract.h"
 #include "dvs/ui/ReviewController.h"
 #include "dvs/ui/ReviewPreferencesController.h"
@@ -10,7 +11,9 @@
 #include <algorithm>
 #include <iterator>
 #include <limits>
+#include <optional>
 #include <utility>
+#include <vector>
 
 namespace dvs::ui {
 namespace {
@@ -640,6 +643,14 @@ void ReviewShellController::synchronizeActiveSources(const bool advanceGeneratio
     // order.
     displaySourceIdentities_ = frozenActiveIdentities_;
     selectedSourceIdentities_.clear();
+    // P05: the canvas focus goes stale with the same set change. Drop it instead of remapping
+    // onto whatever source now occupies the slot - a direct look that silently targets a
+    // different source is worse than returning to the comparison view.
+    if (!canvasFocusIdentity_.isEmpty() &&
+        !frozenActiveIdentities_.contains(canvasFocusIdentity_)) {
+        canvasFocusIdentity_.clear();
+        Q_EMIT canvasFocusChanged();
+    }
     if (!review_.busy()) {
         stagedSources_ = activeSources_;
         // Prefer the comparison reference as the next open's reference; fall back to timeline
@@ -1080,6 +1091,72 @@ QStringList ReviewShellController::selectedSourceIdentities() const {
         }
     }
     return live;
+}
+
+QString ReviewShellController::canvasFocusIdentity() const {
+    return canvasFocusIdentity_;
+}
+
+int ReviewShellController::canvasFocusSlot() const {
+    if (canvasFocusIdentity_.isEmpty()) {
+        return -1;
+    }
+    return static_cast<int>(activeSourceIdentities().indexOf(canvasFocusIdentity_));
+}
+
+bool ReviewShellController::requestCanvasFocus(const int requestCode, const int sourceSlot) {
+    // Presentation-only switch. The domain resolver decides which loaded source the request
+    // names, with refusal instead of substitution; everything the coordinator owns (frame
+    // position, playback generation, pair topology, reference role) is deliberately not
+    // touched here, so no playback command is submitted and the frame set is not rebuilt.
+    if (requestCode < static_cast<int>(domain::CanvasFocusRequest::Off) ||
+        requestCode > static_cast<int>(domain::CanvasFocusRequest::SourceSlot)) {
+        return false;
+    }
+    if (requestCode == static_cast<int>(domain::CanvasFocusRequest::Off)) {
+        if (canvasFocusIdentity_.isEmpty()) {
+            return true;
+        }
+        canvasFocusIdentity_.clear();
+        Q_EMIT canvasFocusChanged();
+        return true;
+    }
+    const QStringList identities = activeSourceIdentities();
+    if (sourceSlot < 0 || sourceSlot >= identities.size()) {
+        return false;
+    }
+    // Project the active set onto the domain shape (session slot = SourceId, role from the
+    // tracked reference index) and let the domain rules pick the target. Only identities and
+    // roles matter to focus resolution, so the projected descriptors stay minimal.
+    std::vector<domain::ComparisonSource> projection;
+    projection.reserve(static_cast<std::size_t>(identities.size()));
+    for (int index = 0; index < identities.size(); ++index) {
+        projection.push_back(domain::ComparisonSource{
+            .id = static_cast<domain::SourceId>(index),
+            .role = index == referenceSourceIndex_ ? domain::ComparisonRole::kReference
+                                                   : domain::ComparisonRole::kPrediction,
+            .descriptor = domain::MediaDescriptor{.duration = domain::MediaTime{0}},
+        });
+    }
+    const std::optional<domain::SourceId> referenceId =
+        referenceSourceIndex_ >= 0 && referenceSourceIndex_ < identities.size()
+            ? std::optional<domain::SourceId>{static_cast<domain::SourceId>(referenceSourceIndex_)}
+            : std::nullopt;
+    const auto target =
+        domain::resolveCanvasFocusTarget(projection,
+                                         referenceId,
+                                         static_cast<domain::CanvasFocusRequest>(requestCode),
+                                         static_cast<std::uint8_t>(sourceSlot));
+    if (!target.has_value() || static_cast<int>(*target) >= identities.size()) {
+        return false;
+    }
+    const QString& identity = identities.at(static_cast<int>(*target));
+    if (identity == canvasFocusIdentity_) {
+        return true;
+    }
+    canvasFocusIdentity_ = identity;
+    Q_EMIT canvasFocusChanged();
+    return true;
 }
 
 bool ReviewShellController::moveSourceInDisplayOrder(const int fromIndex, const int toIndex) {

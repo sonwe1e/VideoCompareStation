@@ -108,6 +108,8 @@ struct PresentationOptions final {
     float threshold = 0.0F;
     platform::SurfaceThresholdPolicy thresholdPolicy = platform::SurfaceThresholdPolicy::AnyChannel;
     bool differenceSuppressed = false;
+    // V02 (P05): -1 = regular comparison view; >= 0 focuses the whole canvas on that slot.
+    std::int8_t canvasFocusSlot = -1;
     platform::SurfaceViewTransform viewTransform;
     bool roiEnabled = false;
     platform::SurfaceNormalizedRect roi;
@@ -158,6 +160,7 @@ nativeDifferenceFilter(const ComparisonSurface::DifferenceFilter value) noexcept
         .threshold = static_cast<float>(surface.threshold()),
         .thresholdPolicy = nativeThresholdPolicy(surface.thresholdPolicy()),
         .differenceSuppressed = surface.differenceSuppressed(),
+        .canvasFocusSlot = static_cast<std::int8_t>(surface.canvasFocusSlot()),
         .viewTransform =
             platform::SurfaceViewTransform{
                 .centerX = static_cast<float>(surface.viewCenterX()),
@@ -228,7 +231,8 @@ nativeDifferenceFilter(const ComparisonSurface::DifferenceFilter value) noexcept
         nativeDifferenceEdge(surface.differenceEdge()),
         static_cast<float>(surface.wipePosition()),
         sourceDisplayExtents(surface, roiEnabled, roiExtent),
-        surface.differenceSuppressed());
+        surface.differenceSuppressed(),
+        static_cast<std::int8_t>(surface.canvasFocusSlot()));
 }
 
 [[nodiscard]] platform::SurfacePresentationGeometry
@@ -517,6 +521,7 @@ public:
             .threshold = presentationOptions_.threshold,
             .thresholdPolicy = presentationOptions_.thresholdPolicy,
             .differenceSuppressed = presentationOptions_.differenceSuppressed,
+            .canvasFocusSlot = presentationOptions_.canvasFocusSlot,
             .viewTransform = presentationOptions_.viewTransform,
             .roiEnabled = presentationOptions_.roiEnabled,
             .roi = presentationOptions_.roi,
@@ -1331,6 +1336,23 @@ void ComparisonSurface::setReferenceSlot(const int value) {
     referenceSlot_ = value;
     clampSmallViewportToGeometry();
     emit referenceSlotChanged();
+    emit presentationGeometryChanged();
+    update();
+}
+
+int ComparisonSurface::canvasFocusSlot() const noexcept {
+    return canvasFocusSlot_;
+}
+
+void ComparisonSurface::setCanvasFocusSlot(const int value) {
+    if (value < -1 || value > 2 || canvasFocusSlot_ == value) {
+        return;
+    }
+    canvasFocusSlot_ = value;
+    // Focus replaces the multi-panel layout with one full-canvas panel, so the minimum
+    // displayable scale changes with it exactly like a reference-slot or view-mode change.
+    clampSmallViewportToGeometry();
+    emit canvasFocusSlotChanged();
     emit presentationGeometryChanged();
     update();
 }

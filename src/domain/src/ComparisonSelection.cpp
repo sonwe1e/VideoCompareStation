@@ -157,4 +157,27 @@ comparisonPairEdgeOrdinal(const std::span<const ComparisonSource> sources,
     return std::nullopt;
 }
 
+std::optional<SourceId> resolveCanvasFocusTarget(const std::span<const ComparisonSource> sources,
+                                                 const std::optional<SourceId> referenceId,
+                                                 const CanvasFocusRequest request,
+                                                 const std::uint8_t sourceSlot) noexcept {
+    switch (request) {
+    case CanvasFocusRequest::Off:
+        return std::nullopt;
+    case CanvasFocusRequest::Reference:
+        // A session without a loadable reference has no GT to look at; refusing keeps the
+        // canvas on the comparison view instead of silently showing a candidate.
+        if (!referenceId.has_value() || !containsSource(sources, *referenceId)) {
+            return std::nullopt;
+        }
+        return referenceId;
+    case CanvasFocusRequest::SourceSlot:
+        if (sourceSlot >= sources.size()) {
+            return std::nullopt;
+        }
+        return sources[sourceSlot].id;
+    }
+    return std::nullopt;
+}
+
 } // namespace dvs::domain
