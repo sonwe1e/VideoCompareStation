@@ -200,6 +200,9 @@ Item {
     Dvs.PlayerOsc {
         id: protocolOsc
 
+        // Only this fixture should receive protocol clicks when its centered panel
+        // overlaps the top/bottom transport fixtures after a status-row reflow.
+        z: 6
         visible: false
         width: root.width
         controllerState: 0
@@ -329,7 +332,7 @@ Item {
             // While the drag is live the scrub itself counts as "on the controls"; only the release
             // hands the countdown back.
             verify(osc.pointerInsidePanel, "a live scrub counts as the cursor being on the controls");
-            mouseRelease(timeline, scrubX, scrubY, Qt.LeftButton);
+            mouseRelease(root, mouseXOfPanelOutside(), mouseYAbovePanel(), Qt.LeftButton);
             wait(50);
             verify(!osc.pointerInsidePanel, "released off the controls, the cursor is outside");
             tryCompare(osc, "controlsEnabled", false, 3000);
@@ -637,6 +640,7 @@ Item {
                 verify(previousButton !== null);
                 verify(clearButton !== null);
 
+                waitForRendering(loadButton);
                 mouseClick(loadButton);
                 compare(protocolLoadSpy.count, 1);
 
