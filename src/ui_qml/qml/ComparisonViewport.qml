@@ -4,6 +4,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Window
 import "VcsTheme.js" as Theme
+import "LayoutMetrics.js" as LayoutMetrics
 // qmllint disable import
 import Dvs.Ui 1.0
 
@@ -103,6 +104,9 @@ Rectangle {
     // itself lives on the surface and therefore survives every mode switch. 0 = 适配ROI,
     // otherwise physical source-pixel percent.
     property int roiTripletZoomPercent: 0
+    // U01: the strip's share of the workspace height. Session-scoped view preference driven
+    // by the drag splitter; the clamp keeps it inside the 28-40 % band at all times.
+    property real roiTripletStripShare: 0.34
     // How far the preset strip lifts the bottom chrome row so badges never cover the cells.
     readonly property real roiTripletStageInset: control.roiTripletStageActive ? roiTripletStrip.height + 8 : 0
 
@@ -1598,7 +1602,7 @@ Rectangle {
             bottom: parent.bottom
             margins: control.chromeVisible ? 1 : 0
         }
-        height: visible ? Math.max(132, control.height * 0.34) : 0
+        height: visible ? Math.max(LayoutMetrics.localStripMinimumHeight, control.height * LayoutMetrics.clampLocalStripShare(control.roiTripletStripShare)) : 0
         // qmllint disable incompatible-type
         // ComparisonSurface is runtime-registered, so qmllint cannot see it derives Item.
         sourceItem: dualVideoSurface
@@ -1615,6 +1619,39 @@ Rectangle {
         // draws with.
         windowRects: dualVideoSurface.roiTripletWindowRects
         onZoomStepRequested: percent => control.roiTripletZoomPercent = percent
+    }
+
+    // U01: the local strip's drag splitter, on the strip's top edge. Dragging up enlarges the
+    // strip's share of the workspace; the clamp keeps the share in the 28-40 % band, so the
+    // panorama can neither crush the locals nor swallow the workspace.
+    MouseArea {
+        id: roiTripletStripSplitter
+
+        objectName: "roiTripletStripSplitter"
+        visible: control.roiTripletStageActive
+        enabled: visible
+        z: 60
+        height: 8
+        cursorShape: Qt.SizeVerCursor
+        anchors {
+            left: parent.left
+            right: parent.right
+            bottom: roiTripletStrip.top
+            bottomMargin: -roiTripletStripSplitter.height / 2
+        }
+
+        property real dragStartShare: 0
+
+        onPressed: mouse => {
+            roiTripletStripSplitter.dragStartShare = control.roiTripletStripShare;
+            mouse.accepted = true;
+        }
+        onPositionChanged: mouse => {
+            if (!roiTripletStripSplitter.pressed)
+                return;
+            const workspaceHeight = Math.max(1.0, control.height);
+            control.roiTripletStripShare = LayoutMetrics.clampLocalStripShare(roiTripletStripSplitter.dragStartShare - (mouse.y - roiTripletStripSplitter.height / 2) / workspaceHeight);
+        }
     }
 
     // qmllint disable incompatible-type

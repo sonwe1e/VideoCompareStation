@@ -4,6 +4,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import "VcsTheme.js" as Theme
+import "LayoutMetrics.js" as LayoutMetrics
 // qmllint disable import
 import Dvs.Ui 1.0
 
@@ -83,7 +84,9 @@ Rectangle {
     }
 
     objectName: "tabbedInspector"
-    width: Math.max(300, Math.min(380, parent ? parent.width * 0.3 : 360))
+    // U01: the default clamps to the panel-width token band; Main.qml drives the live,
+    // user-draggable width through the same clamp.
+    width: LayoutMetrics.clampInspectorWidth(Theme.inspectorWidthDefault)
     color: Theme.panel
     border.color: control.borderColor
 

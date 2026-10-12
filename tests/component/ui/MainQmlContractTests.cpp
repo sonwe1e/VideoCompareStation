@@ -2175,6 +2175,142 @@ TEST(MainQmlContractTests, RoleStatesCarryLabelsNotColourAlone) {
         << "the pair selector must name the two compared files as text";
 }
 
+// U01: the docked/drawer reflow reads the canvas width left after the panels that actually
+// consume stage width, not the raw window width. The 600 px guard is the protection line: an
+// inspector that would push the canvas under it goes to the drawer, and a drag of either
+// panel can never leave its token band.
+TEST(MainQmlContractTests, CanvasGuardDrivesInspectorDockingAndPanelClamps) {
+    WorkspaceHarness harness;
+    harness.shell->setInspectorVisible(true);
+    ASSERT_TRUE(harness.create()) << harness.error;
+    // Stay hidden: a shown window clamps to the 960 px minimum width and the sub-960
+    // reflow cases below could never run (the same reason DrawerScrim hides while resizing).
+    harness.settle();
+
+    auto* const inspector = harness.root->findChild<QQuickItem*>(QStringLiteral("tabbedInspector"));
+    auto* const viewport =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("mediaViewportFocusTarget"));
+    ASSERT_NE(inspector, nullptr);
+    ASSERT_NE(viewport, nullptr);
+    QQuickItem* const layoutRoot = inspector->parentItem();
+    ASSERT_NE(layoutRoot, nullptr);
+
+    const auto processLayout = [&harness, layoutRoot] {
+        for (int iteration = 0; iteration < 8; ++iteration) {
+            QCoreApplication::processEvents();
+        }
+        layoutRoot->setSize(QSizeF{static_cast<qreal>(harness.window->width()),
+                                   static_cast<qreal>(harness.window->height())});
+    };
+
+    // 1280 window: 1252 canvas after margins, docking 288 keeps 964 >= 600.
+    EXPECT_TRUE(harness.root->property("inspectorDocked").toBool());
+    EXPECT_FALSE(harness.root->property("drawerMode").toBool());
+    EXPECT_DOUBLE_EQ(inspector->width(), 288.0);
+    EXPECT_GE(viewport->width(), 600.0) << "a docked inspector must leave the canvas its guard";
+
+    // Over/under drags clamp to the panel band edges, and the live width follows.
+    harness.root->setProperty("inspectorPanelWidth", 999.0);
+    processLayout();
+    EXPECT_DOUBLE_EQ(inspector->width(), 320.0);
+    harness.root->setProperty("inspectorPanelWidth", 100.0);
+    processLayout();
+    EXPECT_DOUBLE_EQ(inspector->width(), 260.0);
+    harness.root->setProperty("inspectorPanelWidth", 288.0);
+    processLayout();
+    EXPECT_DOUBLE_EQ(inspector->width(), 288.0);
+
+    // 960 window still docks: 932 - 288 = 644 >= 600. (The retired <1120 window-width rule
+    // would have gone to the drawer here even though the canvas keeps its guard.)
+    harness.window->resize(960, 640);
+    processLayout();
+    EXPECT_TRUE(harness.root->property("inspectorDocked").toBool())
+        << "960 px with no sidebar leaves 644 px of canvas; docking is correct";
+    EXPECT_FALSE(harness.root->property("drawerMode").toBool())
+        << "the drawer decision must read the guard, not the raw window width";
+    EXPECT_GE(viewport->width(), 600.0);
+
+    // 900 window: 872 - 288 = 584 < 600, so the inspector reflows to the drawer and the
+    // canvas spans the full stage width again.
+    harness.window->resize(900, 640);
+    processLayout();
+    EXPECT_FALSE(harness.root->property("inspectorDocked").toBool());
+    EXPECT_TRUE(harness.root->property("drawerMode").toBool());
+    EXPECT_GE(viewport->width(), 600.0) << "the drawer must not squeeze the canvas";
+
+    // Widening restores the docked arrangement without any preference changing hands.
+    harness.window->resize(1280, 800);
+    processLayout();
+    EXPECT_TRUE(harness.root->property("inspectorDocked").toBool());
+    EXPECT_DOUBLE_EQ(inspector->width(), 288.0);
+}
+
+// U01: the file sidebar resizes inside its 200-288 band and yields to the canvas guard by
+// temporary suppression - the user's visible flag survives, so widening the window restores
+// the sidebar without the user re-opening it.
+TEST(MainQmlContractTests, FileSidebarResizesInsideItsBandAndYieldsToTheCanvasGuard) {
+    WorkspaceHarness harness;
+    harness.withVideoFolder = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    // Hidden window: the 620 px suppression case sits below the 960 px minimum width.
+    harness.settle();
+
+    auto* const loader =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("videoFolderSidebarLoader"));
+    ASSERT_NE(loader, nullptr);
+    // QQuickLoader has no public C++ header in this Qt, so the loaded panel is read through
+    // the object property system instead.
+    const auto sidebarWidth = [loader]() -> qreal {
+        const auto* const panel =
+            qobject_cast<const QQuickItem*>(loader->property("item").value<QObject*>());
+        return panel != nullptr ? panel->width() : -1.0;
+    };
+
+    const auto processLayout = [&harness] {
+        for (int iteration = 0; iteration < 8; ++iteration) {
+            QCoreApplication::processEvents();
+        }
+    };
+
+    harness.root->setProperty("videoFolderSidebarVisible", true);
+    processLayout();
+    ASSERT_TRUE(loader->property("active").toBool());
+    ASSERT_NE(loader->property("item").value<QObject*>(), nullptr);
+    EXPECT_DOUBLE_EQ(sidebarWidth(), 232.0) << "default sidebar width is the 232 token";
+
+    // The drag clamp pins over/under drags at the band edges.
+    harness.root->setProperty("videoFolderSidebarWidth", 999.0);
+    processLayout();
+    EXPECT_DOUBLE_EQ(sidebarWidth(), 288.0);
+    harness.root->setProperty("videoFolderSidebarWidth", 1.0);
+    processLayout();
+    EXPECT_DOUBLE_EQ(sidebarWidth(), 200.0);
+    harness.root->setProperty("videoFolderSidebarWidth", 232.0);
+    processLayout();
+    EXPECT_DOUBLE_EQ(sidebarWidth(), 232.0);
+
+    // 620 px window: 592 canvas without any sidebar is under the 600 guard, so the sidebar
+    // is temporarily suppressed while the user's flag stays on.
+    auto* const layoutRoot = qobject_cast<QQuickItem*>(loader->parentItem());
+    ASSERT_NE(layoutRoot, nullptr);
+    harness.window->resize(620, 480);
+    for (int iteration = 0; iteration < 8; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    layoutRoot->setSize(QSizeF{620.0, 480.0});
+    processLayout();
+    EXPECT_FALSE(loader->property("active").toBool())
+        << "the sidebar must yield when it would push the canvas under the guard";
+    EXPECT_TRUE(harness.root->property("videoFolderSidebarVisible").toBool())
+        << "suppression is temporary; the user's visible flag is untouched";
+
+    // Widening past the guard brings the sidebar back by itself.
+    harness.window->resize(960, 640);
+    processLayout();
+    EXPECT_TRUE(loader->property("active").toBool());
+    EXPECT_DOUBLE_EQ(sidebarWidth(), 232.0);
+}
+
 // The transport's range row is the second entry point to the in/out range (the inspector and the
 // I / O / \ shortcuts being the others). These contracts pin the chips to the very same session
 // range state so the row cannot drift into a parallel, decorative copy of it.
@@ -3804,9 +3940,9 @@ TEST(MainQmlContractTests, DrawerScrimTransportShrinkAndEscClose) {
         int height;
     };
     constexpr std::array<GeometryCase, 4> kSizes = {
+        GeometryCase{860, 640},
+        GeometryCase{900, 640},
         GeometryCase{960, 640},
-        GeometryCase{1100, 700},
-        GeometryCase{1120, 700},
         GeometryCase{1440, 900},
     };
 
@@ -3843,7 +3979,10 @@ TEST(MainQmlContractTests, DrawerScrimTransportShrinkAndEscClose) {
         processLayout();
         restoreHiddenContentSize();
 
-        const bool isDrawer = size.width < 1120;
+        // U01: the drawer boundary follows the canvas guard, not the window width. With the
+        // default 288 px inspector and no sidebar the guard fails below 916 px (916 - 28 - 288 =
+        // 600).
+        const bool isDrawer = size.width < 916;
 
         if (isDrawer) {
             EXPECT_TRUE(root->property("drawerMode").toBool())
@@ -3888,9 +4027,15 @@ TEST(MainQmlContractTests, DrawerScrimTransportShrinkAndEscClose) {
     }
 
     // --- Esc closes drawer ---
-    window->resize(960, 640);
+    // 900 px is below Main.qml's 960 px production minimum, so this test window relaxes its
+    // own minimum before showing (production keeps 960). The shortcut needs a visible,
+    // activated window; only the test fixture width changes.
+    window->setMinimumWidth(600);
+    window->resize(900, 640);
     window->show();
     window->requestActivate();
+    processLayout();
+    layoutRoot->setSize(QSizeF{900.0, 640.0});
     shell.setInspectorVisible(true);
     processLayout();
     ASSERT_TRUE(root->property("drawerMode").toBool());
@@ -3909,7 +4054,7 @@ TEST(MainQmlContractTests, DrawerScrimTransportShrinkAndEscClose) {
     }
     EXPECT_FALSE(shell.inspectorVisible()) << "Esc should close the inspector drawer";
 
-    // --- Pixel gate: 960x640 drawer open ---
+    // --- Pixel gate: 900x640 drawer open (below the canvas-guard boundary) ---
     shell.setInspectorVisible(true);
     processLayout();
     // Allow the rendering backend to produce a frame.
@@ -3922,7 +4067,7 @@ TEST(MainQmlContractTests, DrawerScrimTransportShrinkAndEscClose) {
 
     const QImage grab = window->grabWindow();
     const double dpr = window->devicePixelRatio();
-    const int expectedGrabWidth = static_cast<int>(960.0 * dpr);
+    const int expectedGrabWidth = static_cast<int>(900.0 * dpr);
     const int expectedGrabHeight = static_cast<int>(640.0 * dpr);
     EXPECT_EQ(grab.width(), expectedGrabWidth);
     EXPECT_EQ(grab.height(), expectedGrabHeight);
@@ -3931,7 +4076,7 @@ TEST(MainQmlContractTests, DrawerScrimTransportShrinkAndEscClose) {
         grab.height() == expectedGrabHeight) {
         // The inspector occupies the right side. Sample a pixel in the expected
         // inspector region (logical x near right edge, y near vertical center).
-        const int inspectorSampleX = static_cast<int>((960.0 - 30.0) * dpr);
+        const int inspectorSampleX = static_cast<int>((900.0 - 30.0) * dpr);
         const int inspectorSampleY = static_cast<int>(320.0 * dpr);
         const QColor inspectorPixel = grab.pixelColor(inspectorSampleX, inspectorSampleY);
         EXPECT_EQ(inspectorPixel.alpha(), 255)
@@ -3970,7 +4115,8 @@ TEST(MainQmlContractTests, DrawerScrimTransportShrinkAndEscClose) {
     ASSERT_NE(closeButton, nullptr);
     ASSERT_NE(tabBar, nullptr);
     EXPECT_EQ(closeButton->size(), QSizeF(34.0, 34.0));
-    EXPECT_DOUBLE_EQ(inspectorItem->width(), 300.0);
+    EXPECT_DOUBLE_EQ(inspectorItem->width(), 288.0)
+        << "U01: the panel width is the clamped token default";
     EXPECT_EQ(QQmlProperty(closeButton, QStringLiteral("Accessible.name"), qmlContext(closeButton))
                   .read()
                   .toString(),
@@ -10191,6 +10337,75 @@ TEST(MainQmlContractTests, NearbyFramesConsecutiveStripCropsToTheSharedRoiAndCan
     harness.window->close();
 }
 
+// U01: the nearby-frames card folds to its header row and expands into the 144-184 height
+// band. The expanded card sits at the band ceiling with the filmstrip and footer intact, so
+// folding is one click and re-expanding loses nothing.
+TEST(MainQmlContractTests, NearbyFramesCardFoldsIntoItsHeightBand) {
+    QTemporaryDir temporaryDirectory;
+    ASSERT_TRUE(temporaryDirectory.isValid());
+    const QString pathA = temporaryDirectory.filePath(QStringLiteral("card-fold-a.mp4"));
+    const QString pathB = temporaryDirectory.filePath(QStringLiteral("card-fold-b.mp4"));
+    for (const QString& path : {pathA, pathB}) {
+        QFile file{path};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_GT(file.write("card-fold", 9), 0);
+    }
+
+    WorkspaceHarness harness;
+    harness.withIssueLog = true;
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate);
+    ASSERT_TRUE(installValidatedVideoSet(
+        harness.snapshot,
+        {std::filesystem::path{pathA.toStdWString()}, std::filesystem::path{pathB.toStdWString()}},
+        rate.value(),
+        60,
+        2'000'000));
+    harness.snapshot->displayedFrame = domain::FrameId{20};
+    harness.snapshot->playbackRangeIn = domain::FrameId{10};
+    harness.snapshot->playbackRangeOut = domain::FrameId{24};
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+    harness.controller->refreshProjection();
+    harness.settle();
+
+    harness.issueLog.setWorkspaceMode(QStringLiteral("video"));
+    ASSERT_TRUE(harness.issueLog.captureCurrentIssue(QString{}));
+    harness.root->setProperty("nearbyFramesCardVisible", true);
+    harness.root->setProperty("activeDiagnosticIssueIndex", 0);
+    harness.settle();
+
+    auto* const card = harness.root->findChild<QQuickItem*>(QStringLiteral("nearbyFramesCard"));
+    ASSERT_NE(card, nullptr);
+    ASSERT_TRUE(card->property("visible").toBool());
+    EXPECT_FALSE(card->property("collapsed").toBool());
+    EXPECT_DOUBLE_EQ(card->height(), 184.0)
+        << "the expanded card sits at the top of its 144-184 band";
+
+    auto* const filmstrip = card->findChild<QQuickItem*>(QStringLiteral("nearbyFramesFilmstrip"));
+    ASSERT_NE(filmstrip, nullptr);
+    EXPECT_TRUE(filmstrip->property("visible").toBool());
+    EXPECT_GT(filmstrip->height(), 0.0);
+
+    auto* const foldButton = card->findChild<QQuickItem*>(QStringLiteral("nearbyFramesFoldButton"));
+    ASSERT_NE(foldButton, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(foldButton, "clicked"));
+    harness.settle();
+
+    EXPECT_TRUE(card->property("collapsed").toBool());
+    EXPECT_LT(card->height(), 80.0) << "folded, the card keeps only its header row";
+    EXPECT_FALSE(filmstrip->property("visible").toBool());
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(foldButton, "clicked"));
+    harness.settle();
+    EXPECT_FALSE(card->property("collapsed").toBool());
+    EXPECT_DOUBLE_EQ(card->height(), 184.0);
+    EXPECT_TRUE(filmstrip->property("visible").toBool());
+
+    harness.window->close();
+}
+
 // V04: the dual-difference HUD legend describes the two panes the layout renders (both
 // candidates against the reference under one shared threshold/gain/colour scale), and the
 // missing-frame overlay names the panes' slots - including the reference, which the active
@@ -11163,6 +11378,84 @@ TEST(MainQmlContractTests, RoiTripletPresetEntersFromPreferencesWithoutPlaybackC
     EXPECT_EQ(surface->property("viewMode").toInt(),
               static_cast<int>(dvs::ui::ComparisonSurface::SideBySide));
     EXPECT_EQ(submitted.size(), static_cast<std::size_t>(submittedBefore));
+}
+
+// U01: the local strip's drag splitter moves the strip's share of the workspace height, and
+// the clamp keeps the share inside the 28-40 % band no matter where the drag ends. Entering
+// or leaving the preset resets nothing - the share is presentation state only.
+TEST(MainQmlContractTests, LocalStripShareDragKeepsTheBand) {
+    auto snapshot = std::make_shared<application::SessionSnapshot>();
+    std::vector<application::PlaybackCommand> submitted;
+    ReviewController controller{
+        ReviewController::Dependencies{
+            .submit =
+                [&submitted](application::PlaybackCommand command) {
+                    submitted.push_back(std::move(command));
+                    return application::PortSubmitResult::Accepted;
+                },
+            .snapshot = [snapshot] { return snapshot; },
+            .takeCompletedCommands = [] { return std::vector<application::CommandTerminal>{}; },
+        },
+    };
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    ReviewShellController shell{controller, preferences};
+    ReviewSessionFacade facade{controller, preferences, shell};
+
+    QQmlEngine engine;
+    std::string error;
+    std::unique_ptr<QObject> root = createThreeSourceRoiTripletRoot(
+        engine, controller, preferences, shell, facade, snapshot, &error);
+    ASSERT_NE(root, nullptr) << error;
+    auto* const window = qobject_cast<QQuickWindow*>(root.get());
+    ASSERT_NE(window, nullptr);
+    window->resize(1440, 900);
+    window->show();
+    const auto processLayout = [] {
+        for (int iteration = 0; iteration < 12; ++iteration) {
+            QCoreApplication::processEvents();
+        }
+    };
+    processLayout();
+
+    preferences.setViewMode(static_cast<ReviewPreferencesController::ViewMode>(8));
+    processLayout();
+    // The review settles with a few of its own commands; the drag's innocence is measured
+    // against this baseline, as the preset-entry test does.
+    const std::size_t submittedBeforeDrag = submitted.size();
+    auto* const strip = root->findChild<QQuickItem*>(QStringLiteral("roiTripletStrip"));
+    auto* const splitter = root->findChild<QQuickItem*>(QStringLiteral("roiTripletStripSplitter"));
+    auto* const viewport = root->findChild<QQuickItem*>(QStringLiteral("mediaViewportFocusTarget"));
+    ASSERT_NE(strip, nullptr);
+    ASSERT_NE(splitter, nullptr);
+    ASSERT_NE(viewport, nullptr);
+    ASSERT_TRUE(strip->isVisible());
+    EXPECT_NEAR(strip->height() / viewport->height(), 0.34, 0.02)
+        << "the default share is 34 % of the workspace";
+
+    // Drag the splitter far past both band edges; the share must clamp, not escape.
+    const QPointF splitterCenter =
+        splitter->mapToScene(QPointF{splitter->width() / 2, splitter->height() / 2});
+    const auto dragTo = [&](const QPointF& windowPos) {
+        const QPointF globalPos = window->mapToGlobal(windowPos.toPoint());
+        QMouseEvent move{
+            QEvent::MouseMove, windowPos, globalPos, Qt::NoButton, Qt::LeftButton, Qt::NoModifier};
+        QCoreApplication::sendEvent(window, &move);
+    };
+    sendMousePress(*window, splitterCenter);
+    dragTo(splitterCenter + QPointF{0.0, -2000.0});
+    processLayout();
+    EXPECT_NEAR(strip->height() / viewport->height(), 0.40, 0.02)
+        << "an upward over-drag clamps at the 40 % ceiling";
+
+    dragTo(splitterCenter + QPointF{0.0, 2000.0});
+    processLayout();
+    EXPECT_NEAR(strip->height() / viewport->height(), 0.28, 0.02)
+        << "a downward over-drag clamps at the 28 % floor";
+    sendMouseRelease(*window, splitterCenter + QPointF{0.0, 2000.0});
+    processLayout();
+
+    // The share is presentation state: no playback command left the drag.
+    EXPECT_EQ(submitted.size(), submittedBeforeDrag);
 }
 
 TEST(MainQmlContractTests, RoiTripletPresetKeepsSharedRoiAcrossModeRoundTrip) {

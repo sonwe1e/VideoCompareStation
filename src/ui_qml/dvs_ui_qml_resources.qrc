@@ -2,6 +2,7 @@
     <qresource prefix="/qml">
         <file alias="Main.qml">qml/Main.qml</file>
         <file alias="VcsTheme.js">qml/VcsTheme.js</file>
+        <file alias="LayoutMetrics.js">qml/LayoutMetrics.js</file>
         <file alias="MediaLabels.js">qml/MediaLabels.js</file>
         <file alias="ShortcutCatalog.js">qml/ShortcutCatalog.js</file>
         <file alias="VcsToolTip.qml">qml/VcsToolTip.qml</file>

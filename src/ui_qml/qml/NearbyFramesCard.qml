@@ -41,9 +41,13 @@ Rectangle {
     border.width: 1
     radius: Theme.radiusCard
     implicitWidth: 720
-    implicitHeight: 220
+    // U01: expanded, the card sits at the top of its height band (144-184); folded it keeps
+    // only the header row. The filmstrip shrinks its thumbnail wells to fit rather than
+    // dropping the provenance badges V04 pinned.
+    implicitHeight: collapsed ? cardHeaderRow.height + 20 : Theme.nearbyFramesHeightMax
     width: implicitWidth
     height: implicitHeight
+    property bool collapsed: false
 
     readonly property int anchorFrame: intervalData && intervalData.anchorFrame !== undefined ? Number(intervalData.anchorFrame) : -1
     readonly property int inFrame: intervalData && intervalData.inFrame !== undefined ? Number(intervalData.inFrame) : -1
@@ -181,11 +185,15 @@ Rectangle {
     }
 
     Column {
+        id: cardColumn
+
         anchors.fill: parent
         anchors.margins: 10
         spacing: 8
 
         Row {
+            id: cardHeaderRow
+
             width: parent.width
             spacing: 8
 
@@ -255,6 +263,17 @@ Rectangle {
                 onClicked: control.consecutiveStripMode = !control.consecutiveStripMode
             }
 
+            // U01: folding keeps the card on stage as its header alone, so re-expanding the
+            // locating filmstrip costs one click; 收起 still removes the card entirely.
+            ReviewActionButton {
+                objectName: "nearbyFramesFoldButton"
+                text: control.collapsed ? qsTr("展开") : qsTr("折叠")
+                implicitHeight: 26
+                implicitWidth: 60
+                anchors.verticalCenter: parent.verticalCenter
+                onClicked: control.collapsed = !control.collapsed
+            }
+
             ReviewActionButton {
                 objectName: "nearbyFramesCloseButton"
                 text: qsTr("收起")
@@ -270,7 +289,10 @@ Rectangle {
 
             objectName: "nearbyFramesFilmstrip"
             width: parent.width
-            height: 116
+            // U01: the filmstrip fills whatever the expanded height band leaves between the
+            // header and the footer rows; folded, it collapses to zero with the card.
+            height: control.collapsed ? 0 : Math.max(0, control.height - cardHeaderRow.height - cardFooterRow.height - 36)
+            visible: !control.collapsed
             orientation: ListView.Horizontal
             spacing: 6
             clip: true
@@ -315,7 +337,7 @@ Rectangle {
 
                 objectName: cellFrame >= 0 ? ("nearbyFrameCell_" + cellFrame) : ""
                 width: 76
-                height: 112
+                height: filmstripList.height
                 radius: Theme.radiusSmall
                 color: isCurrent ? Theme.raisedPanel : Theme.panel
                 border.width: isCurrent || isAnchor ? 2 : 1
@@ -343,7 +365,7 @@ Rectangle {
                     Rectangle {
                         anchors.horizontalCenter: parent.horizontalCenter
                         width: parent.width - 4
-                        height: 42
+                        height: Math.max(24, cellRect.height - 61)
                         radius: 3
                         color: Theme.thumbnailWell
                         clip: true
@@ -481,8 +503,11 @@ Rectangle {
         }
 
         Row {
+            id: cardFooterRow
+
             width: parent.width
             spacing: 8
+            visible: !control.collapsed
 
             ReviewActionButton {
                 objectName: "nearbyFramesLoopButton"

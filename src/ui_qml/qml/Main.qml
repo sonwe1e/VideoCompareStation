@@ -5,6 +5,7 @@ import QtQuick.Controls
 import QtQuick.Dialogs as NativeDialogs
 import QtQuick.Window
 import "VcsTheme.js" as Theme
+import "LayoutMetrics.js" as LayoutMetrics
 import "MediaLabels.js" as MediaLabels
 import "ShortcutCatalog.js" as ShortcutCatalog
 
@@ -68,7 +69,21 @@ ApplicationWindow {
     readonly property int canonicalSourceIndex: controller ? Number(controller.canonicalSourceIndex) : -1
     readonly property bool inspectorOpen: shell ? Boolean(shell.inspectorVisible) : false
     readonly property bool chromeVisible: shell ? Boolean(shell.chromeVisible) : true
-    readonly property bool drawerMode: alignmentBar.visible && root.width < 1120
+    // U01 responsive structure. Panel sizes are session-scoped view preferences (the user's
+    // drag), not persisted settings; the docked/drawer reflow reads the canvas width left
+    // after the panels that actually consume stage width, never the raw window width. The
+    // file sidebar can be temporarily suppressed by the guard without losing the user's
+    // visible flag, so widening the window restores the exact arrangement.
+    property real videoFolderSidebarWidth: Theme.fileSidebarWidthDefault
+    property real inspectorPanelWidth: Theme.inspectorWidthDefault
+    readonly property real clampedSidebarWidth: LayoutMetrics.clampFileSidebarWidth(videoFolderSidebarWidth)
+    readonly property real clampedInspectorWidth: LayoutMetrics.clampInspectorWidth(inspectorPanelWidth)
+    readonly property bool videoFolderListVisible: videoFolderModel !== null && videoFolderSidebarVisible && chromeVisible && LayoutMetrics.fileSidebarAllowed(LayoutMetrics.availableCanvasWidth(root.width, chromeVisible, false, 0, false, 0), Theme.canvasMinimumWidth)
+    readonly property real videoFolderInset: videoFolderListVisible ? LayoutMetrics.fileSidebarStageWidth(clampedSidebarWidth) : 0
+    // Canvas width before the inspector's own claim; the guard decision below consumes it.
+    readonly property real availableCanvasWithoutInspector: LayoutMetrics.availableCanvasWidth(root.width, chromeVisible, videoFolderListVisible, clampedSidebarWidth, false, 0)
+    readonly property bool inspectorDocked: alignmentBar.visible && LayoutMetrics.inspectorShouldDock(availableCanvasWithoutInspector, clampedInspectorWidth, Theme.canvasMinimumWidth)
+    readonly property bool drawerMode: alignmentBar.visible && !inspectorDocked
     property int visibilityBeforeFullScreen: Window.Windowed
 
     // 0 = video compare workspace, 1 = still-image workspace. Kept writable so existing
@@ -128,8 +143,8 @@ ApplicationWindow {
     readonly property var folderPairModel: typeof imageFolderPairs !== "undefined" ? imageFolderPairs : null
     readonly property var videoFolderModel: typeof videoFolder !== "undefined" ? videoFolder : null
     property bool videoFolderSidebarVisible: false
-    readonly property bool videoFolderListVisible: videoFolderModel !== null && videoFolderSidebarVisible && chromeVisible
-    readonly property real videoFolderInset: videoFolderListVisible ? 268 : 0
+    // videoFolderListVisible / videoFolderInset live with the other U01 layout properties
+    // above: the guard-aware visibility and the token-driven stage width are one decision.
     // V-07 pair-metrics controller from the composition root; the typeof guard keeps
     // lightweight QML-only tests (no metrics service) valid and warning-free.
     readonly property var pairMetricsModel: typeof pairMetrics !== "undefined" ? pairMetrics : null
@@ -3565,6 +3580,9 @@ ApplicationWindow {
         metrics: root.pairMetricsModel
         timingDiagnostics: typeof timingDiagnostics !== "undefined" ? timingDiagnostics : null
         session: root.shell
+        // U01: the clamped, user-draggable panel width. The component's own default clamps
+        // the same tokens, so a standalone instantiation cannot drift out of the band either.
+        width: root.clampedInspectorWidth
         borderColor: root.borderColor
         primaryTextColor: root.primaryTextColor
         mutedTextColor: root.mutedTextColor
@@ -3615,6 +3633,37 @@ ApplicationWindow {
         onOutPointRequested: root.setOutPoint()
         onClearRangeRequested: root.clearSelectedRange()
         onRangeLoopToggleRequested: root.toggleRangeLoop()
+    }
+
+    // U01: the docked inspector's resize splitter. Only shown while the inspector actually
+    // docks - the drawer overlay does not consume canvas width, so there is nothing to resize.
+    MouseArea {
+        id: inspectorSplitter
+
+        objectName: "inspectorSplitter"
+        visible: root.inspectorDocked
+        enabled: visible
+        z: 21
+        width: 8
+        cursorShape: Qt.SizeHorCursor
+        anchors {
+            right: alignmentBar.left
+            rightMargin: -inspectorSplitter.width / 2
+            top: alignmentBar.top
+            bottom: alignmentBar.bottom
+        }
+
+        property real dragStartWidth: 0
+
+        onPressed: mouse => {
+            inspectorSplitter.dragStartWidth = root.inspectorPanelWidth;
+            mouse.accepted = true;
+        }
+        onPositionChanged: mouse => {
+            if (!inspectorSplitter.pressed)
+                return;
+            root.inspectorPanelWidth = LayoutMetrics.clampInspectorWidth(inspectorSplitter.dragStartWidth - mouse.x + inspectorSplitter.width / 2);
+        }
     }
     ComparisonViewport {
         id: viewportFrame
@@ -3687,9 +3736,9 @@ ApplicationWindow {
             bottom: parent.bottom
             bottomMargin: root.transportDocked ? root.transportDockHeight : 0
             left: parent.left
-            leftMargin: (root.chromeVisible ? 14 : 0) + root.videoFolderInset
-            right: alignmentBar.visible && root.width >= 1120 ? alignmentBar.left : parent.right
-            rightMargin: root.chromeVisible ? 14 : 0
+            leftMargin: (root.chromeVisible ? LayoutMetrics.canvasEdgeMargin : 0) + root.videoFolderInset
+            right: alignmentBar.visible && root.inspectorDocked ? alignmentBar.left : parent.right
+            rightMargin: root.chromeVisible ? LayoutMetrics.canvasEdgeMargin : 0
         }
         onWipePositionRequested: position => root.wipePosition = position
         onOscRevealRequested: root.revealOsc()
@@ -3708,12 +3757,13 @@ ApplicationWindow {
 
     Loader {
         id: videoFolderSidebarLoader
+        objectName: "videoFolderSidebarLoader"
         active: root.videoFolderListVisible
         visible: active
-        width: 260
+        width: root.clampedSidebarWidth
         z: 36
         anchors.left: parent.left
-        anchors.leftMargin: 14
+        anchors.leftMargin: LayoutMetrics.fileSidebarLoaderMargin
         anchors.top: parent.top
         anchors.topMargin: root.imageWorkspaceActive ? 10 : (root.chromeVisible && !root.singleMode ? sourceBar.height + comparisonBar.height + 6 : 0)
         anchors.bottom: parent.bottom
@@ -3736,6 +3786,38 @@ ApplicationWindow {
         }
     }
 
+    // U01: the file sidebar's resize splitter. The drag writes the session-scoped width; the
+    // clamp keeps it inside the token band, so the strip can never push the canvas under the
+    // guard no matter where the drag ends.
+    MouseArea {
+        id: videoFolderSidebarSplitter
+
+        objectName: "videoFolderSidebarSplitter"
+        visible: root.videoFolderListVisible
+        enabled: visible
+        z: 37
+        width: 8
+        cursorShape: Qt.SizeHorCursor
+        anchors {
+            left: parent.left
+            leftMargin: LayoutMetrics.fileSidebarLoaderMargin + root.clampedSidebarWidth + LayoutMetrics.fileSidebarGap / 2 - videoFolderSidebarSplitter.width / 2
+            top: videoFolderSidebarLoader.top
+            bottom: videoFolderSidebarLoader.bottom
+        }
+
+        property real dragStartWidth: 0
+
+        onPressed: mouse => {
+            videoFolderSidebarSplitter.dragStartWidth = root.videoFolderSidebarWidth;
+            mouse.accepted = true;
+        }
+        onPositionChanged: mouse => {
+            if (!videoFolderSidebarSplitter.pressed)
+                return;
+            root.videoFolderSidebarWidth = LayoutMetrics.clampFileSidebarWidth(videoFolderSidebarSplitter.dragStartWidth + mouse.x - videoFolderSidebarSplitter.width / 2);
+        }
+    }
+
     Loader {
         id: imageWorkspaceLoader
 
@@ -3750,9 +3832,9 @@ ApplicationWindow {
             topMargin: root.chromeVisible ? 10 : 0
             bottom: parent.bottom
             left: parent.left
-            leftMargin: (root.chromeVisible ? 14 : 0) + root.videoFolderInset
+            leftMargin: (root.chromeVisible ? LayoutMetrics.canvasEdgeMargin : 0) + root.videoFolderInset
             right: parent.right
-            rightMargin: root.chromeVisible ? 14 : 0
+            rightMargin: root.chromeVisible ? LayoutMetrics.canvasEdgeMargin : 0
         }
 
         sourceComponent: imageWorkspaceComponent
