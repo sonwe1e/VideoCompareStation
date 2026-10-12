@@ -31,6 +31,11 @@ enum class SelectionKind {
 [[nodiscard]] std::span<const std::wstring_view> supportedVideoExtensions();
 [[nodiscard]] std::span<const std::wstring_view> supportedImageExtensions();
 
+// One argument as a Windows command line would quote it, including the backslash handling a
+// trailing quote has to survive. Shared by the Explorer verb line and the default-open command
+// value, so both spell a path with a space or a non-ASCII name the same way.
+[[nodiscard]] std::wstring quoteWindowsArgument(std::wstring_view argument);
+
 [[nodiscard]] SelectionKind classifySelection(std::span<const std::filesystem::path> paths);
 
 [[nodiscard]] std::wstring

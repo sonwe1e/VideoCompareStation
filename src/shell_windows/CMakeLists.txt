@@ -9,12 +9,18 @@ configure_file(
 # therefore lives in a static library the application links, and it reads the extension lists from
 # ExplorerCommandSupport instead of keeping a copy, so the entry can never be offered for a file the
 # handler then refuses.
+#
+# FileAssociationRegistration is the separate default-application registration (ProgIDs,
+# Applications, Capabilities, RegisteredApplications): it stays a leaf like the Explorer verb and
+# the composition root adapts it to application::IFileAssociationService, so no shell type
+# reaches the UI layer and no application type reaches this adapter.
 add_library(
     dvs_shell_registration
     STATIC
     ExplorerCommandRegistration.cpp
     ExplorerCommandSupport.cpp
     ExplorerCommandSupport.h
+    FileAssociationRegistration.cpp
 )
 target_include_directories(
     dvs_shell_registration

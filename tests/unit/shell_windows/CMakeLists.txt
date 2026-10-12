@@ -4,8 +4,10 @@ add_executable(
     dvs_shell_support_unit_tests
     ExplorerCommandRegistrationTests.cpp
     ExplorerCommandSupportTests.cpp
+    FileAssociationRegistrationTests.cpp
     "${PROJECT_SOURCE_DIR}/src/shell_windows/ExplorerCommandRegistration.cpp"
     "${PROJECT_SOURCE_DIR}/src/shell_windows/ExplorerCommandSupport.cpp"
+    "${PROJECT_SOURCE_DIR}/src/shell_windows/FileAssociationRegistration.cpp"
 )
 target_include_directories(
     dvs_shell_support_unit_tests

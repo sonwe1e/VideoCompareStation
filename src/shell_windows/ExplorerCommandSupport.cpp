@@ -41,7 +41,9 @@ constexpr std::array<std::wstring_view, 13U> kSupportedImageExtensions{
     return std::ranges::find(extensions, std::wstring_view{extension}) != extensions.end();
 }
 
-[[nodiscard]] std::wstring quoteWindowsArgument(const std::wstring_view argument) {
+} // namespace
+
+std::wstring quoteWindowsArgument(const std::wstring_view argument) {
     std::wstring quoted;
     quoted.push_back(L'"');
     std::size_t slashes = 0U;
@@ -64,8 +66,6 @@ constexpr std::array<std::wstring_view, 13U> kSupportedImageExtensions{
     quoted.push_back(L'"');
     return quoted;
 }
-
-} // namespace
 
 bool hasSupportedVideoExtension(const std::filesystem::path& path) {
     return hasExtension(path, kSupportedVideoExtensions);
