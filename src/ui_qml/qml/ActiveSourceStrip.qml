@@ -129,7 +129,7 @@ Rectangle {
     }
 
     objectName: "activeSourceStrip"
-    height: sourceCount > 1 ? 40 : 0
+    height: sourceCount > 1 ? Theme.barRowHeight : 0
     visible: sourceCount > 1
     color: "transparent"
     border.color: "transparent"
@@ -152,8 +152,8 @@ Rectangle {
             fill: parent
             leftMargin: 12
             rightMargin: 12
-            topMargin: 6
-            bottomMargin: 6
+            topMargin: 4
+            bottomMargin: 4
         }
 
         Repeater {
@@ -240,7 +240,7 @@ Rectangle {
                         anchors.centerIn: parent
                         text: qsTr("松开替换 %1").arg(String.fromCharCode(65 + chip.sourceId))
                         color: control.textColor
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontBody
                         font.weight: Font.DemiBold
                     }
                 }
@@ -324,7 +324,7 @@ Rectangle {
                             anchors.centerIn: parent
                             text: String.fromCharCode(65 + chip.sourceId)
                             color: chip.isReference ? Theme.sourceInk : chip.sourceAccent
-                            font.pixelSize: 11
+                            font.pixelSize: Theme.fontSecondary
                             font.weight: Font.Bold
                         }
                     }
@@ -334,7 +334,7 @@ Rectangle {
 
                         text: "·"
                         color: control.mutedTextColor
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontBody
                     }
                     // V02: the fourth per-source state, next to the timeline-master and
                     // reference-role tags - this chip's source is what the whole canvas is
@@ -346,7 +346,7 @@ Rectangle {
                         visible: chip.isCanvasFocus
                         text: qsTr("直看")
                         color: chip.sourceAccent
-                        font.pixelSize: 11
+                        font.pixelSize: Theme.fontSecondary
                         font.weight: Font.DemiBold
                         Accessible.name: qsTr("全画布直看")
                         Accessible.description: qsTr("整个画布正单独显示该源；单击卡片主体返回比较视图")
@@ -366,7 +366,7 @@ Rectangle {
                         visible: chip.isCanvasFocus && (chip.isTimelineMaster || chip.isReference)
                         text: "·"
                         color: control.mutedTextColor
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontBody
                     }
                     Text {
                         id: masterTag
@@ -375,7 +375,7 @@ Rectangle {
                         visible: chip.isTimelineMaster
                         text: qsTr("主时间线")
                         color: control.mutedTextColor
-                        font.pixelSize: 11
+                        font.pixelSize: Theme.fontSecondary
                         font.weight: Font.DemiBold
                         Accessible.name: qsTr("时间线主源")
                         Accessible.description: qsTr("会话时间轴与帧号由它决定")
@@ -395,7 +395,7 @@ Rectangle {
                         visible: chip.isTimelineMaster && chip.isReference
                         text: "·"
                         color: control.mutedTextColor
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontBody
                     }
                     Text {
                         id: referenceTag
@@ -405,7 +405,7 @@ Rectangle {
                         text: qsTr("参考")
                         // The reference chip is drawn entirely in its source colour.
                         color: chip.sourceAccent
-                        font.pixelSize: 11
+                        font.pixelSize: Theme.fontSecondary
                         font.weight: Font.DemiBold
                         Accessible.name: qsTr("参考源")
                         Accessible.description: qsTr("对比基准参考源")
@@ -425,14 +425,14 @@ Rectangle {
                         visible: chip.isReference
                         text: "·"
                         color: control.mutedTextColor
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontBody
                     }
                     Text {
                         id: filenameLabel
 
                         text: chip.parentLabel.length > 0 ? "%1 (%2)".arg(chip.filename).arg(chip.parentLabel) : chip.filename
                         color: control.textColor
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontBody
                         elide: Text.ElideMiddle
                         Layout.fillWidth: true
 
@@ -491,7 +491,7 @@ Rectangle {
                             anchors.centerIn: parent
                             text: "!"
                             color: Theme.warning
-                            font.pixelSize: 11
+                            font.pixelSize: Theme.fontSecondary
                             font.weight: Font.DemiBold
                         }
                     }
@@ -504,8 +504,8 @@ Rectangle {
                         readonly property var makeReferenceAction: useAsReferenceItem
                         readonly property var replaceSourceAction: replaceSourceItem
                         readonly property var removeSourceAction: removeSourceItem
-                        width: 30
-                        height: 30
+                        width: 32
+                        height: 32
                         text: "⋯"
                         enabled: !chip.pending && chip.resolvedSourceIdentity.length > 0
                         helpText: chip.pending ? qsTr("正在更新视频…") : qsTr("源操作")

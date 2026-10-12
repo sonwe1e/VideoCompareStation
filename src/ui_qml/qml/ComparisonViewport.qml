@@ -636,7 +636,7 @@ Rectangle {
                 text: String.fromCharCode(65 + immersiveLetter.slot)
                 color: Theme.sourceColor(immersiveLetter.slot)
                 font.bold: true
-                font.pixelSize: 12
+                font.pixelSize: Theme.fontSecondary
             }
         }
     }
@@ -668,7 +668,7 @@ Rectangle {
 
             text: control.immersiveHudText
             color: control.primaryTextColor
-            font.pixelSize: 13
+            font.pixelSize: Theme.fontBody
             anchors.centerIn: parent
         }
     }
@@ -702,7 +702,7 @@ Rectangle {
             Text {
                 text: qsTr("正在获取最新帧…")
                 color: control.mutedTextColor
-                font.pixelSize: 11
+                font.pixelSize: Theme.fontSecondary
             }
         }
     }
@@ -1514,7 +1514,7 @@ Rectangle {
                 width: parent.width
                 text: qsTr("帧未变化")
                 color: Theme.errorText
-                font.pixelSize: 13
+                font.pixelSize: Theme.fontBody
                 font.weight: Font.DemiBold
             }
 
@@ -1523,7 +1523,7 @@ Rectangle {
                 width: parent.width
                 text: control.errorDetail
                 color: control.primaryTextColor
-                font.pixelSize: 11
+                font.pixelSize: Theme.fontSecondary
                 wrapMode: Text.Wrap
             }
         }
@@ -1573,8 +1573,8 @@ Rectangle {
                 horizontalAlignment: Text.AlignHCenter
                 text: control.overlayDetail
                 color: control.mutedTextColor
-                font.pixelSize: 12
-                lineHeight: 1.25
+                font.pixelSize: Theme.fontSecondary
+                lineHeight: Theme.lineHeightCompact
                 wrapMode: Text.Wrap
             }
         }

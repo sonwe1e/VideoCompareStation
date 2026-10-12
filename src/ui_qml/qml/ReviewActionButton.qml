@@ -41,7 +41,7 @@ Button {
         verticalAlignment: Text.AlignVCenter
         text: control.text
         color: !control.enabled ? Theme.disabledText : (control.prominent ? Theme.inverseText : control.textColor)
-        font.pixelSize: 13
+        font.pixelSize: Theme.fontBody
         font.weight: Font.DemiBold
         elide: Text.ElideRight
     }

@@ -2041,6 +2041,140 @@ TEST(MainQmlContractTests, NarrowWindowKeepsViewportCornerControlsReachable) {
         << "the fit/reset row must stay inside the window at the minimum width";
 }
 
+// U02 design tokens: the key controls must actually consume the token values pinned by
+// ui.vcs_theme. This is the drift guard in the implementation direction - a control that
+// silently falls back to a literal 12 px label or a 30 px hit area fails here even though the
+// token itself still reads correctly.
+TEST(MainQmlContractTests, DesignTokensGovernKeyControlMetrics) {
+    WorkspaceHarness harness;
+    harness.shell->setInspectorVisible(true);
+    ASSERT_TRUE(harness.create()) << harness.error;
+
+    const auto contentFontPixelSize = [](QQuickItem* item) -> qreal {
+        const QVariant content = item->property("contentItem");
+        const auto* const text = qobject_cast<const QQuickItem*>(content.value<QObject*>());
+        if (text == nullptr) {
+            return -1.0;
+        }
+        return QQmlProperty(const_cast<QQuickItem*>(text), QStringLiteral("font.pixelSize"))
+            .read()
+            .toReal();
+    };
+
+    // Chrome rows share one 40 px band (36-40 token range).
+    auto* const sourceBar =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("activeSourceStrip"));
+    auto* const compareBar = harness.root->findChild<QQuickItem*>(QStringLiteral("compareModeBar"));
+    ASSERT_NE(sourceBar, nullptr);
+    ASSERT_NE(compareBar, nullptr);
+    EXPECT_EQ(sourceBar->height(), 40.0);
+    EXPECT_EQ(compareBar->height(), 40.0);
+
+    // Common controls sit on the 32 px hit-area token with 14 px body labels.
+    auto* const sideModeButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("sideModeButton"));
+    auto* const diffModeButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("diffModeButton"));
+    auto* const focusButton = findItemByName(compareBar, QStringLiteral("canvasFocusAButton"));
+    ASSERT_NE(sideModeButton, nullptr);
+    ASSERT_NE(diffModeButton, nullptr);
+    ASSERT_NE(focusButton, nullptr);
+    EXPECT_EQ(sideModeButton->height(), 32.0);
+    EXPECT_EQ(diffModeButton->height(), 32.0);
+    EXPECT_EQ(focusButton->height(), 32.0);
+    EXPECT_EQ(contentFontPixelSize(sideModeButton), 14.0);
+    EXPECT_EQ(contentFontPixelSize(diffModeButton), 14.0);
+
+    auto* const overflowButton =
+        findItemByName(sourceBar, QStringLiteral("sourceOverflowButton-0"));
+    ASSERT_NE(overflowButton, nullptr);
+    EXPECT_EQ(overflowButton->width(), 32.0);
+    EXPECT_EQ(overflowButton->height(), 32.0);
+
+    // The source chip body is itself the direct-look hit area, so it keeps the full 32 px band.
+    auto* const sourceChip = findItemByName(sourceBar, QStringLiteral("sourceChip-0"));
+    ASSERT_NE(sourceChip, nullptr);
+    EXPECT_EQ(sourceChip->height(), 32.0);
+
+    // The transport: the main play button sits in its own 40-44 band, the range chips on the
+    // common 32 px hit area.
+    auto* const playbackButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("playbackButton"));
+    ASSERT_NE(playbackButton, nullptr);
+    EXPECT_GE(playbackButton->height(), 40.0);
+    EXPECT_LE(playbackButton->height(), 44.0);
+    auto* const markInChip =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("transportMarkInButton"));
+    ASSERT_NE(markInChip, nullptr);
+    EXPECT_EQ(markInChip->height(), 32.0);
+
+    // Status surfaces: the diagnostic rail and the stage overlay carry readable conclusions,
+    // so neither may drop to the decorative 10 px token.
+    auto* const statusText =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("playbackStatusText"));
+    ASSERT_NE(statusText, nullptr);
+    EXPECT_EQ(QQmlProperty(statusText, QStringLiteral("font.pixelSize")).read().toReal(), 12.0);
+    auto* const statusHint =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("playbackStatusHint"));
+    ASSERT_NE(statusHint, nullptr);
+    EXPECT_EQ(QQmlProperty(statusHint, QStringLiteral("font.pixelSize")).read().toReal(), 12.0);
+}
+
+// U02: GT, the current comparison pair and the direct look must never be colour-only. Each
+// role keeps a text label next to its hue: the chip prints 参考 / 直看 tags, the focus button
+// prints 看 X plus a GT badge on the reference slot, and the pair combo names both files.
+// Dropping any label would leave a hue-only state this test rejects.
+TEST(MainQmlContractTests, RoleStatesCarryLabelsNotColourAlone) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    auto* const sourceBar =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("activeSourceStrip"));
+    auto* const compareBar = harness.root->findChild<QQuickItem*>(QStringLiteral("compareModeBar"));
+    ASSERT_NE(sourceBar, nullptr);
+    ASSERT_NE(compareBar, nullptr);
+
+    // No reference identified yet: no 参考 tag, no GT badge.
+    auto* const referenceTag = findItemByName(sourceBar, QStringLiteral("sourceReferenceTag-0"));
+    auto* const focusA = findItemByName(compareBar, QStringLiteral("canvasFocusAButton"));
+    ASSERT_NE(referenceTag, nullptr);
+    ASSERT_NE(focusA, nullptr);
+    EXPECT_FALSE(referenceTag->isVisible());
+    EXPECT_FALSE(focusA->property("referenceBadge").toBool());
+
+    // Identifying the GT on slot 0 raises the text label on the chip and the GT badge on the
+    // focus button - the colour never has to carry the role alone.
+    identifyReferenceSlot(harness.snapshot, 0);
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_TRUE(referenceTag->isVisible())
+        << "the reference chip must carry the 参考 text tag, not just its hue";
+    EXPECT_EQ(referenceTag->property("text").toString(), QStringLiteral("参考"));
+    EXPECT_TRUE(focusA->property("referenceBadge").toBool());
+    EXPECT_GT(focusA->width(),
+              findItemByName(compareBar, QStringLiteral("canvasFocusBButton"))->width())
+        << "the GT badge widens the focus button so the label cannot be clipped away";
+
+    // Direct look raises the 直看 tag on the focused chip, beside its accent colour.
+    const QStringList identities = harness.shell->activeSourceIdentities();
+    ASSERT_EQ(identities.size(), 2);
+    ASSERT_TRUE(harness.shell->requestCanvasFocus(
+        static_cast<int>(ReviewShellController::CanvasFocusSourceSlot), 1));
+    harness.settle();
+    auto* const directLookTag = findItemByName(sourceBar, QStringLiteral("sourceDirectLookTag-1"));
+    ASSERT_NE(directLookTag, nullptr);
+    EXPECT_TRUE(directLookTag->isVisible())
+        << "the focused chip must carry the 直看 text tag, not just its hue";
+    EXPECT_EQ(directLookTag->property("text").toString(), QStringLiteral("直看"));
+
+    // The current comparison pair is named by the two real files in the combo, never by hue.
+    auto* const pairCombo = harness.root->findChild<QQuickItem*>(QStringLiteral("pairCombo"));
+    ASSERT_NE(pairCombo, nullptr);
+    const QVariantList edgeList = harness.root->property("differenceEdges").toList();
+    ASSERT_FALSE(edgeList.isEmpty());
+    EXPECT_FALSE(edgeList.first().toMap().value(QStringLiteral("pairLabel")).toString().isEmpty())
+        << "the pair selector must name the two compared files as text";
+}
+
 // The transport's range row is the second entry point to the in/out range (the inspector and the
 // I / O / \ shortcuts being the others). These contracts pin the chips to the very same session
 // range state so the row cannot drift into a parallel, decorative copy of it.

@@ -89,7 +89,7 @@ Item {
         id: button
 
         implicitWidth: control.compact ? 36 : 44
-        implicitHeight: control.compact ? 32 : 38
+        implicitHeight: control.compact ? Theme.hitAreaMinimum : 38
         iconExtent: control.compact ? 18 : 22
         controlRadius: control.compact ? 6 : 8
         toolTipDelay: 650
@@ -113,7 +113,7 @@ Item {
         signal clicked
 
         implicitWidth: chipLabel.implicitWidth + (control.compact ? 16 : 20)
-        implicitHeight: control.compact ? 24 : 28
+        implicitHeight: control.compact ? Theme.hitAreaMinimum : 36
         radius: Theme.radiusMedium
         // Neutral chips read as ordinary controls; export keeps a green edge because it is the only
         // chip that writes a file.
@@ -140,7 +140,7 @@ Item {
 
             anchors.centerIn: parent
             text: chip.chipText
-            font.pixelSize: control.compact ? 11 : 12
+            font.pixelSize: control.compact ? Theme.fontSecondary : Theme.fontBody
             font.weight: chip.chipActive || chip.prominent ? Font.DemiBold : Font.Normal
             color: !chip.chipEnabled ? Theme.disabledText : (chip.chipActive ? Theme.inverseText : (chip.prominent ? Theme.success : (chipMouse.containsMouse ? Theme.primaryText : Theme.secondaryText)))
         }
@@ -173,8 +173,8 @@ Item {
         property string optionHelp: ""
         readonly property bool isSelected: control.playbackContinuityPolicy === option.policyCode
 
-        implicitWidth: control.compact ? 58 : 66
-        implicitHeight: control.compact ? 22 : 28
+        implicitWidth: control.compact ? 62 : 70
+        implicitHeight: control.compact ? Theme.hitAreaMinimum : 36
         radius: Theme.radiusSmall
         color: option.isSelected ? Theme.controlChecked : (optionMouse.pressed ? Theme.fluentPressed : (optionMouse.containsMouse ? Theme.fluentHover : "transparent"))
         border.width: 1
@@ -195,7 +195,7 @@ Item {
         Text {
             anchors.centerIn: parent
             text: option.optionText
-            font.pixelSize: control.compact ? 11 : 12
+            font.pixelSize: control.compact ? Theme.fontSecondary : Theme.fontBody
             font.weight: option.isSelected ? Font.DemiBold : Font.Normal
             color: option.isSelected ? Theme.primaryText : (optionMouse.containsMouse ? Theme.primaryText : Theme.mutedText)
         }
@@ -305,10 +305,10 @@ Item {
 
                 objectName: "playbackButton"
                 prominent: true
-                implicitWidth: control.compact ? 46 : 56
-                implicitHeight: control.compact ? 36 : 44
+                implicitWidth: control.compact ? 48 : 56
+                implicitHeight: control.compact ? Theme.playButtonHeight : Theme.playButtonHeightLarge
                 iconExtent: control.compact ? 20 : 24
-                controlRadius: control.compact ? 18 : 22
+                controlRadius: control.compact ? 20 : 22
                 iconSource: control.playing ? "qrc:/icons/pause.svg" : "qrc:/icons/play.svg"
                 helpText: control.playing ? qsTr("暂停\n快捷键：空格") : qsTr("播放\n快捷键：空格")
                 enabled: control.playing ? control.canPause : control.canPlay
@@ -388,7 +388,7 @@ Item {
                 // Sized from the widest rate label: a fixed 58/68 px left the current rate elided to "…".
                 implicitWidth: Math.ceil(rateLabelMetrics.advanceWidth) + playbackRateCombo.leftPadding + playbackRateCombo.rightPadding + 4
                 // Same height as the continuity switch beside it, so the row's boxed controls line up.
-                implicitHeight: control.compact ? 28 : 34
+                implicitHeight: control.compact ? Theme.hitAreaMinimum : 36
                 anchors.verticalCenter: parent.verticalCenter
                 model: [qsTr("0.25×"), qsTr("0.5×"), qsTr("1×"), qsTr("1.5×"), qsTr("2×"), qsTr("4×")]
                 currentIndex: {
@@ -538,7 +538,7 @@ Item {
                 }
                 color: control.hasCompleteRange ? Theme.accentText : Theme.mutedText
                 font.family: "Consolas"
-                font.pixelSize: control.compact ? 10 : 11
+                font.pixelSize: Theme.fontSecondary
                 // Cap instead of overflowing: the row has no clip, and a three-digit frame count
                 // still fits, so elision only ever triggers on an unexpectedly narrow window.
                 width: Math.min(implicitWidth, control.compact ? 168 : 210)
@@ -618,7 +618,7 @@ Item {
                     return control.protocol.currentOriginBadge.length > 0 ? control.protocol.currentOriginBadge + " · " + control.protocol.statusText : control.protocol.statusText;
                 }
                 color: control.protocol && control.protocol.lastError.length > 0 ? Theme.warning : Theme.mutedText
-                font.pixelSize: control.compact ? 10 : 11
+                font.pixelSize: Theme.fontSecondary
                 maximumLineCount: 1
                 elide: Text.ElideRight
                 // Cap instead of overflowing: a generated-frame badge carries two GT indices and
@@ -638,7 +638,7 @@ Item {
 
             Text {
                 text: qsTr("相邻帧：")
-                font.pixelSize: 10
+                font.pixelSize: Theme.fontSecondary
                 color: Theme.mutedText
                 anchors.verticalCenter: parent.verticalCenter
             }
@@ -655,7 +655,7 @@ Item {
                     readonly property bool isValid: adjacentItem.targetFrame >= 0 && (control.totalFrames <= 0 || adjacentItem.targetFrame < control.totalFrames)
 
                     implicitWidth: adjacentItem.isCurrent ? 58 : 30
-                    implicitHeight: 20
+                    implicitHeight: 24
                     radius: Theme.radiusSmall
                     color: adjacentItem.isCurrent ? Theme.accentFill : (!adjacentItem.isValid ? Theme.disabledPanel : (adjacentMouse.containsMouse ? Theme.controlHover : Theme.control))
                     border.color: adjacentItem.isCurrent ? Theme.accent : (!adjacentItem.isValid ? Theme.disabledBorder : (adjacentMouse.containsMouse ? Theme.borderHover : Theme.controlBorder))
@@ -664,7 +664,7 @@ Item {
                     Text {
                         anchors.centerIn: parent
                         text: adjacentItem.isCurrent ? qsTr("当前 %1").arg(adjacentItem.targetFrame + 1) : (adjacentItem.delta > 0 ? "+" + adjacentItem.delta : String(adjacentItem.delta))
-                        font.pixelSize: 10
+                        font.pixelSize: Theme.fontSecondary
                         font.weight: adjacentItem.isCurrent ? Font.DemiBold : Font.Normal
                         color: adjacentItem.isCurrent ? Theme.inverseText : (adjacentMouse.containsMouse ? Theme.primaryText : Theme.mutedText)
                     }

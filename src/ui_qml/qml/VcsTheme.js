@@ -124,6 +124,65 @@ var radiusLarge = 8
 var radiusCard = 12
 var radiusPill = 999
 
+// Typography tokens (Qt logical pixels, never source pixels). Body copy is 14; 12 is the
+// secondary size for muted captions, status readouts and diagnostics; 16 leads groups.
+// fontMono sizes the compact monospaced numeric readouts (timecode, frame counters).
+// fontMicro is decorative only - it must never carry a key action or a must-read conclusion;
+// anything that states a result or invites a click uses fontSecondary or larger.
+var fontBody = 14
+var fontSecondary = 12
+var fontGroupTitle = 16
+var fontMicro = 10
+var fontMono = 13
+
+// Line heights for wrapped body and compact readout text.
+var lineHeightBody = 1.35
+var lineHeightCompact = 1.25
+
+// Spacing: 4 is the micro step, 8 the primary grid. Larger paddings stay multiples or
+// deliberate literals inside their components.
+var spaceMicro = 4
+var spaceMain = 8
+
+// Hit areas. Common interactive controls are at least 32x32 logical pixels so a 100% DPI
+// pointer still lands on them; the main play/pause button sits in its own 40-44 band.
+var hitAreaMinimum = 32
+var playButtonHeight = 40
+var playButtonHeightLarge = 44
+
+// Chrome rows above the stage (source strip, compare action bar) share one height band.
+var barRowHeight = 40
+var barRowHeightMin = 36
+var barRowHeightMax = 40
+
+// The docked control strip (one main timeline plus the first-layer transport controls) has
+// its own band; optional diagnostic rows that stack above the timeline are not part of it.
+var controlStripMinHeight = 64
+var controlStripMaxHeight = 80
+
+// Panel widths. The left file sidebar defaults to 232 and resizes inside 200-288; the right
+// inspector defaults to 288 and resizes inside 260-320. Defaults and clamps travel together
+// so a resize can never push a panel over the canvas guard (canvasMinimumWidth below).
+var fileSidebarWidthDefault = 232
+var fileSidebarWidthMin = 200
+var fileSidebarWidthMax = 288
+var inspectorWidthDefault = 288
+var inspectorWidthMin = 260
+var inspectorWidthMax = 320
+
+// The local-comparison strip claims a share of the workspace height inside this band.
+var localStripShareMin = 0.28
+var localStripShareMax = 0.40
+
+// The nearby-frames area's expanded height band (collapsed is header-only).
+var nearbyFramesHeightMin = 144
+var nearbyFramesHeightMax = 184
+
+// The stage keeps at least this many logical pixels of canvas after the actually expanded
+// panels; below it the layout reflows (drawer instead of docked inspector) rather than
+// squeezing text or controls.
+var canvasMinimumWidth = 600
+
 var fluentHover = "#14ffffff"
 var fluentPressed = "#0cffffff"
 var subtleBorder = "#1fffffff"

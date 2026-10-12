@@ -93,8 +93,8 @@ Rectangle {
                 width: parent.width
                 text: qsTr("打开一个视频即可播放，两三个视频可逐帧对比；图片也可以直接拖进来查看。")
                 color: control.mutedTextColor
-                font.pixelSize: 13
-                lineHeight: 1.25
+                font.pixelSize: Theme.fontBody
+                lineHeight: Theme.lineHeightCompact
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
             }
@@ -159,7 +159,7 @@ Rectangle {
                 width: parent.width
                 text: qsTr("仅画面播放 · 不播放声音")
                 color: Theme.disabledText
-                font.pixelSize: 12
+                font.pixelSize: Theme.fontSecondary
                 horizontalAlignment: Text.AlignHCenter
             }
         }

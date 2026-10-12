@@ -84,7 +84,7 @@ Rectangle {
     readonly property int canvasFocusRequestSourceSlot: 2
 
     objectName: "compareModeBar"
-    height: sourceCount > 1 ? 40 : 0
+    height: sourceCount > 1 ? Theme.barRowHeight : 0
     visible: sourceCount > 1
     color: "transparent"
     border.color: "transparent"
@@ -146,9 +146,9 @@ Rectangle {
             visible: control.currentMode === ComparisonSurface.Difference
             enabled: !control.busy && control.peekTargetValid
             prominent: pressed || control.peekLocked
-            implicitWidth: 132
-            implicitHeight: 30
-            labelPixelSize: 12
+            implicitWidth: 136
+            implicitHeight: Theme.hitAreaMinimum
+            labelPixelSize: Theme.fontBody
             Accessible.description: control.peekTargetValid ? qsTr("按住显示会话的参考（GT）源，即使 GT 不在当前比较对中；松开恢复差异视图。键盘 ` 切换，Shift+` 锁定。") : qsTr("当前会话没有可直看的参考（GT）源。")
             onPressed: control.differencePeekChanged(true)
             onReleased: control.differencePeekChanged(false)
@@ -169,8 +169,8 @@ Rectangle {
 
             objectName: "pairCombo"
             visible: control.sourceCount === 3 && control.pairRelevant
-            implicitWidth: 92
-            implicitHeight: 30
+            implicitWidth: 104
+            implicitHeight: Theme.hitAreaMinimum
             // V02: the selector names the two real files ("gt.mp4 ↔ model.mp4") instead of the
             // A/B/C slot letters, so a same-letter relabel can never masquerade as a pair
             // switch. The role keeping the letters ("label") stays for the inspector rows.
@@ -181,7 +181,7 @@ Rectangle {
             hoverEnabled: true
             leftPadding: 10
             rightPadding: 26
-            font.pixelSize: 12
+            font.pixelSize: Theme.fontBody
             onActivated: index => {
                 if (index >= 0 && index < control.differenceEdges.length)
                     control.edgeRequested(Number(control.differenceEdges[index].preferenceValue));
@@ -195,9 +195,9 @@ Rectangle {
             text: qsTr("切候选")
             visible: control.sourceCount === 3 && control.pairRelevant
             enabled: !control.busy
-            implicitWidth: 78
-            implicitHeight: 30
-            labelPixelSize: 12
+            implicitWidth: 86
+            implicitHeight: Theme.hitAreaMinimum
+            labelPixelSize: Theme.fontBody
             Accessible.name: qsTr("固定参考切换候选")
             onClicked: control.switchCandidateRequested()
         }
@@ -240,10 +240,10 @@ Rectangle {
 
             objectName: "layoutModesButton"
             text: control.layoutModeActive ? qsTr("布局·%1 ▾").arg(control.layoutModeLabel) : qsTr("布局 ▾")
-            implicitWidth: control.layoutModeActive ? 128 : 76
-            implicitHeight: 30
+            implicitWidth: control.layoutModeActive ? 136 : 84
+            implicitHeight: Theme.hitAreaMinimum
             onClicked: layoutMenu.open()
-            labelPixelSize: 12
+            labelPixelSize: Theme.fontBody
 
             VcsMenu {
                 id: layoutMenu
@@ -289,8 +289,8 @@ Rectangle {
         checkable: true
         checked: control.currentMode === modeValue
         mirrorsState: true
-        implicitHeight: 30
-        implicitWidth: 64
+        implicitHeight: Theme.hitAreaMinimum
+        implicitWidth: 80
         enabled: !control.busy
         leftPadding: 10
         rightPadding: 10
@@ -301,7 +301,7 @@ Rectangle {
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
             color: !modeButton.enabled ? Theme.disabledText : (modeButton.checked || modeButton.hovered ? Theme.primaryText : Theme.mutedText)
-            font.pixelSize: 12
+            font.pixelSize: Theme.fontBody
             font.weight: modeButton.checked ? Font.DemiBold : Font.Normal
             elide: Text.ElideRight
         }
@@ -357,8 +357,8 @@ Rectangle {
         checkable: true
         checked: control.canvasFocusSlot >= 0 && control.canvasFocusSlot === focusSlot
         mirrorsState: true
-        implicitHeight: 30
-        implicitWidth: focusButton.referenceBadge ? 96 : 64
+        implicitHeight: Theme.hitAreaMinimum
+        implicitWidth: focusButton.referenceBadge ? 104 : 72
         enabled: !control.busy
         leftPadding: 10
         rightPadding: 10
@@ -375,7 +375,7 @@ Rectangle {
             Text {
                 text: focusButton.text
                 color: !focusButton.enabled ? Theme.disabledText : (focusButton.checked || focusButton.hovered ? Theme.primaryText : Theme.mutedText)
-                font.pixelSize: 12
+                font.pixelSize: Theme.fontBody
                 font.weight: focusButton.checked ? Font.DemiBold : Font.Normal
                 anchors.verticalCenter: parent.verticalCenter
             }
@@ -383,7 +383,7 @@ Rectangle {
             Rectangle {
                 visible: focusButton.referenceBadge
                 width: gtBadgeLabel.implicitWidth + 8
-                height: 16
+                height: 18
                 radius: 3
                 color: Theme.controlChecked
                 border.width: 1
@@ -398,7 +398,7 @@ Rectangle {
                     anchors.centerIn: parent
                     text: qsTr("GT")
                     color: Theme.primaryText
-                    font.pixelSize: 10
+                    font.pixelSize: Theme.fontSecondary
                     font.weight: Font.DemiBold
                 }
             }
@@ -453,8 +453,8 @@ Rectangle {
         checked: control.currentMode === ComparisonSurface.Difference || control.currentMode === ComparisonSurface.DualDifference
         // Opening the flavour menu must not light the button up before a flavour is chosen.
         mirrorsState: true
-        implicitHeight: 30
-        implicitWidth: control.differenceFlavorLabel.length > 0 ? 132 : 92
+        implicitHeight: Theme.hitAreaMinimum
+        implicitWidth: control.differenceFlavorLabel.length > 0 ? 136 : 100
         enabled: !control.busy
         leftPadding: 10
         rightPadding: 10
@@ -465,7 +465,7 @@ Rectangle {
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
             color: !diffModeButton.enabled ? Theme.disabledText : (diffModeButton.checked || diffModeButton.hovered ? Theme.primaryText : Theme.mutedText)
-            font.pixelSize: 12
+            font.pixelSize: Theme.fontBody
             font.weight: diffModeButton.checked ? Font.DemiBold : Font.Normal
             elide: Text.ElideRight
         }
@@ -551,7 +551,7 @@ Rectangle {
 
         objectName: "inspectorToggleButton"
         text: control.inspectorOpen ? qsTr("隐藏检查器") : qsTr("检查器")
-        implicitHeight: 30
+        implicitHeight: Theme.hitAreaMinimum
         leftPadding: 12
         rightPadding: 12
         prominent: control.inspectorOpen
@@ -571,9 +571,9 @@ Rectangle {
         objectName: "copyComparisonButton"
         text: qsTr("复制对比图")
         enabled: !control.busy
-        implicitWidth: 104
-        implicitHeight: 30
-        labelPixelSize: 12
+        implicitWidth: 112
+        implicitHeight: Theme.hitAreaMinimum
+        labelPixelSize: Theme.fontBody
         onClicked: control.copyComparisonRequested()
         anchors {
             right: inspectorToggleButton.left

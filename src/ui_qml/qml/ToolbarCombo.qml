@@ -24,7 +24,7 @@ T.ComboBox {
     rightPadding: control.mirrored ? 12 : 32
     activeFocusOnTab: true
     hoverEnabled: true
-    font.pixelSize: 12
+    font.pixelSize: Theme.fontSecondary
     Accessible.role: Accessible.ComboBox
 
     delegate: T.ItemDelegate {
@@ -69,7 +69,7 @@ T.ComboBox {
             anchors.centerIn: parent
             text: "\u25be"
             color: control.enabled ? control.textColor : control.disabledTextColor
-            font.pixelSize: 12
+            font.pixelSize: Theme.fontSecondary
         }
     }
 

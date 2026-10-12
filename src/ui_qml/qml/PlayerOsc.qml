@@ -207,7 +207,7 @@ Item {
             text: control.sourceLabel
             color: Theme.mutedText
             font.family: "Consolas"
-            font.pixelSize: 12
+            font.pixelSize: Theme.fontSecondary
             // Elide long filenames instead of overflowing the panel edge (the panel has no clip).
             elide: Text.ElideRight
             anchors {
@@ -235,13 +235,13 @@ Item {
                 text: control.timecodeText
                 color: Theme.primaryText
                 font.family: "Consolas"
-                font.pixelSize: 13
+                font.pixelSize: Theme.fontMono
                 font.weight: Font.DemiBold
             }
             Text {
                 text: control.currentFrame >= 0 ? qsTr("第 %1 / %2 帧").arg(control.currentFrame + 1).arg(control.totalFrames) : qsTr("无帧")
                 color: Theme.mutedText
-                font.pixelSize: 12
+                font.pixelSize: Theme.fontSecondary
             }
             // The in/out range readout moved into the transport's range row
             // (`transportRangeLabel`): endpoints, their buttons and the frame count now sit in one
@@ -265,7 +265,7 @@ Item {
                     return qsTr("MAE %1 · PSNR %2").arg(control.metrics.currentMae.toFixed(2)).arg(psnr);
                 }
                 color: Theme.warning
-                font.pixelSize: 11
+                font.pixelSize: Theme.fontSecondary
                 font.family: "Consolas"
             }
         }
@@ -314,7 +314,7 @@ Item {
                     return Theme.warning;
                 return Theme.mutedText;
             }
-            font.pixelSize: 11
+            font.pixelSize: Theme.fontSecondary
             Accessible.name: text
             Accessible.description: (control.playbackModeDetail.length > 0 ? control.playbackModeDetail + "。" : "") + control.statusLegend
             anchors {
@@ -335,7 +335,7 @@ Item {
             height: visible ? implicitHeight : 0
             text: control.playbackModeDetail + (control.sourceRateText.length > 0 ? " · " + control.sourceRateText : "")
             color: Theme.disabledText
-            font.pixelSize: 10
+            font.pixelSize: Theme.fontSecondary
             elide: Text.ElideRight
             anchors {
                 left: parent.left

@@ -108,5 +108,78 @@ Item {
         function test_missing_marker_keeps_the_reserved_failure_red() {
             compare(Theme.timelineMarkerColor("missing"), Theme.error);
         }
+
+        // U02 design-system tokens. Each case pins a value the key controls actually consume
+        // (see MainQmlContractTests.DesignTokensGovernKeyControlMetrics); changing a token
+        // without re-checking those controls must fail here first.
+
+        function test_typography_tokens_form_the_planned_ladder() {
+            compare(Theme.fontMicro, 10);
+            compare(Theme.fontSecondary, 12);
+            compare(Theme.fontBody, 14);
+            compare(Theme.fontGroupTitle, 16);
+            compare(Theme.fontMono, 13);
+            verify(Theme.fontMicro < Theme.fontSecondary);
+            verify(Theme.fontSecondary < Theme.fontBody);
+            verify(Theme.fontBody < Theme.fontGroupTitle);
+        }
+
+        function test_line_height_tokens_stay_compact() {
+            compare(Theme.lineHeightCompact, 1.25);
+            compare(Theme.lineHeightBody, 1.35);
+            verify(Theme.lineHeightCompact < Theme.lineHeightBody);
+        }
+
+        function test_spacing_tokens_are_the_micro_step_and_primary_grid() {
+            compare(Theme.spaceMicro, 4);
+            compare(Theme.spaceMain, 8);
+            verify(Theme.spaceMicro < Theme.spaceMain);
+        }
+
+        function test_hit_area_and_play_button_tokens() {
+            compare(Theme.hitAreaMinimum, 32);
+            compare(Theme.playButtonHeight, 40);
+            compare(Theme.playButtonHeightLarge, 44);
+            verify(Theme.hitAreaMinimum >= 32);
+            verify(Theme.playButtonHeight >= 40 && Theme.playButtonHeight <= 44);
+            verify(Theme.playButtonHeightLarge >= 40 && Theme.playButtonHeightLarge <= 44);
+        }
+
+        function test_chrome_row_height_tokens() {
+            compare(Theme.barRowHeight, 40);
+            compare(Theme.barRowHeightMin, 36);
+            compare(Theme.barRowHeightMax, 40);
+            verify(Theme.barRowHeightMin <= Theme.barRowHeight);
+            verify(Theme.barRowHeight <= Theme.barRowHeightMax);
+            compare(Theme.controlStripMinHeight, 64);
+            compare(Theme.controlStripMaxHeight, 80);
+            verify(Theme.controlStripMinHeight < Theme.controlStripMaxHeight);
+        }
+
+        function test_panel_width_tokens_match_the_planned_bands() {
+            compare(Theme.fileSidebarWidthDefault, 232);
+            compare(Theme.fileSidebarWidthMin, 200);
+            compare(Theme.fileSidebarWidthMax, 288);
+            verify(Theme.fileSidebarWidthMin <= Theme.fileSidebarWidthDefault);
+            verify(Theme.fileSidebarWidthDefault <= Theme.fileSidebarWidthMax);
+            compare(Theme.inspectorWidthDefault, 288);
+            compare(Theme.inspectorWidthMin, 260);
+            compare(Theme.inspectorWidthMax, 320);
+            verify(Theme.inspectorWidthMin <= Theme.inspectorWidthDefault);
+            verify(Theme.inspectorWidthDefault <= Theme.inspectorWidthMax);
+        }
+
+        function test_resizable_region_tokens_stay_in_their_bands() {
+            compare(Theme.localStripShareMin, 0.28);
+            compare(Theme.localStripShareMax, 0.40);
+            verify(Theme.localStripShareMin < Theme.localStripShareMax);
+            compare(Theme.nearbyFramesHeightMin, 144);
+            compare(Theme.nearbyFramesHeightMax, 184);
+            verify(Theme.nearbyFramesHeightMin < Theme.nearbyFramesHeightMax);
+        }
+
+        function test_canvas_guard_token() {
+            compare(Theme.canvasMinimumWidth, 600);
+        }
     }
 }

@@ -3367,7 +3367,7 @@ ApplicationWindow {
                 objectName: "manualOffsetStatusLabel"
                 text: root.manualOffsetActive ? qsTr("帧对齐偏移 · 已启用") : qsTr("帧对齐偏移")
                 color: root.manualOffsetActive ? Theme.warning : root.mutedTextColor
-                font.pixelSize: 11
+                font.pixelSize: Theme.fontSecondary
             }
 
             Repeater {
@@ -4022,7 +4022,7 @@ ApplicationWindow {
                 Text {
                     text: qsTr("问题记录")
                     color: root.primaryTextColor
-                    font.pixelSize: 13
+                    font.pixelSize: Theme.fontBody
                     font.weight: Font.DemiBold
                     anchors.verticalCenter: parent.verticalCenter
                 }
@@ -4042,7 +4042,7 @@ ApplicationWindow {
                 wrapMode: Text.Wrap
                 text: root.issueLogModel ? root.issueLogModel.statusText : ""
                 color: root.mutedTextColor
-                font.pixelSize: 11
+                font.pixelSize: Theme.fontSecondary
                 objectName: "issueLogStatusText"
             }
             Text {
@@ -4051,7 +4051,7 @@ ApplicationWindow {
                 visible: root.issueLogModel && root.issueLogModel.lastError.length > 0
                 text: root.issueLogModel ? root.issueLogModel.lastError : ""
                 color: Theme.errorText
-                font.pixelSize: 11
+                font.pixelSize: Theme.fontSecondary
                 objectName: "issueLogErrorText"
             }
 
@@ -4089,7 +4089,7 @@ ApplicationWindow {
                         Text {
                             text: issueLogRow.issueInfo ? String(issueLogRow.issueInfo.summary || "") : ""
                             color: root.primaryTextColor
-                            font.pixelSize: 12
+                            font.pixelSize: Theme.fontBody
                             elide: Text.ElideRight
                             width: parent.width
                         }
@@ -4097,7 +4097,7 @@ ApplicationWindow {
                         Text {
                             text: issueLogRow.issueInfo ? String(issueLogRow.issueInfo.note || "") : ""
                             color: root.mutedTextColor
-                            font.pixelSize: 10
+                            font.pixelSize: Theme.fontSecondary
                             elide: Text.ElideRight
                             width: parent.width
                         }
@@ -4428,7 +4428,7 @@ ApplicationWindow {
                 width: Math.max(0, parent.width - 32)
                 text: root.intentMessage
                 color: root.primaryTextColor
-                font.pixelSize: 13
+                font.pixelSize: Theme.fontBody
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.Wrap
             }
@@ -4462,7 +4462,7 @@ ApplicationWindow {
                     visible: Number(intentQueuePanel.runningIntent.id || 0) > 0
                     text: qsTr("处理中 · %1").arg(root.messageCatalog.intentKindText(intentQueuePanel.runningIntent.kind, intentQueuePanel.runningIntent.sourceCount))
                     color: root.primaryTextColor
-                    font.pixelSize: 12
+                    font.pixelSize: Theme.fontBody
                     elide: Text.ElideRight
                     width: parent.width
                 }
@@ -4474,7 +4474,7 @@ ApplicationWindow {
                     Text {
                         text: qsTr("%1 个请求排队中").arg(intentQueuePanel.queued.length)
                         color: root.mutedTextColor
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         width: parent.width - cancelAllButton.width
                         anchors.verticalCenter: parent.verticalCenter
                     }
@@ -4484,8 +4484,8 @@ ApplicationWindow {
 
                         text: qsTr("全部取消")
                         implicitWidth: 74
-                        implicitHeight: 24
-                        labelPixelSize: 11
+                        implicitHeight: Theme.hitAreaMinimum
+                        labelPixelSize: Theme.fontSecondary
                         onClicked: root.shell.cancelAllQueuedIntents()
                     }
                 }
@@ -4502,7 +4502,7 @@ ApplicationWindow {
                         Text {
                             text: root.messageCatalog.intentKindText(queuedIntentRow.modelData.kind, queuedIntentRow.modelData.sourceCount)
                             color: root.primaryTextColor
-                            font.pixelSize: 11
+                            font.pixelSize: Theme.fontSecondary
                             elide: Text.ElideRight
                             width: parent.width - cancelQueuedButton.width
                             anchors.verticalCenter: parent.verticalCenter
@@ -4513,8 +4513,8 @@ ApplicationWindow {
 
                             text: qsTr("取消")
                             implicitWidth: 58
-                            implicitHeight: 22
-                            labelPixelSize: 11
+                            implicitHeight: Theme.hitAreaMinimum
+                            labelPixelSize: Theme.fontSecondary
                             onClicked: root.shell.cancelQueuedIntent(queuedIntentRow.modelData.id)
                         }
                     }
@@ -4557,13 +4557,13 @@ ApplicationWindow {
                         return qsTr("正在打开图片…");
                     }
                     color: root.primaryTextColor
-                    font.pixelSize: 13
+                    font.pixelSize: Theme.fontBody
                     anchors.verticalCenter: parent.verticalCenter
                 }
                 ReviewActionButton {
                     text: qsTr("取消")
                     implicitWidth: 58
-                    implicitHeight: 28
+                    implicitHeight: Theme.hitAreaMinimum
                     leftPadding: 8
                     rightPadding: 8
                     onClicked: root.cancelWorkspaceOpen()
@@ -4587,7 +4587,7 @@ ApplicationWindow {
                 width: parent.width - 34
                 text: root.dropError
                 color: Theme.errorText
-                font.pixelSize: 13
+                font.pixelSize: Theme.fontBody
                 wrapMode: Text.Wrap
                 anchors.centerIn: parent
             }
@@ -4643,14 +4643,14 @@ ApplicationWindow {
             Text {
                 text: "↑"
                 color: root.primaryTextColor
-                font.pixelSize: 13
+                font.pixelSize: Theme.fontBody
                 font.weight: Font.DemiBold
                 anchors.verticalCenter: parent.verticalCenter
             }
             Text {
                 text: qsTr("界面已隐藏 · 按 Tab 或点击恢复")
                 color: root.primaryTextColor
-                font.pixelSize: 12
+                font.pixelSize: Theme.fontSecondary
                 anchors.verticalCenter: parent.verticalCenter
             }
         }
@@ -4719,7 +4719,7 @@ ApplicationWindow {
                 // canvas opens/appends, a drop on a source chip replaces that source.
                 text: qsTr("1–3 个视频或图片 · 拖到源卡片上替换该源")
                 color: root.mutedTextColor
-                font.pixelSize: 14
+                font.pixelSize: Theme.fontBody
                 anchors.horizontalCenter: parent.horizontalCenter
             }
         }
