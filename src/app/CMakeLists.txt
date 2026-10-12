@@ -4,6 +4,8 @@ add_executable(
     CompareStation
     WIN32
     Main.cpp
+    FileAssociationService.cpp
+    FileAssociationService.h
     PlaybackTraceEnvironment.cpp
     PlaybackTraceEnvironment.h
     ReviewRuntime.cpp

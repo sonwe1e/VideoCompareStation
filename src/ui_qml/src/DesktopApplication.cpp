@@ -6,6 +6,7 @@
 #include "dvs/ui/ComparisonSurface.h"
 #include "dvs/ui/DiagnosticsProbe.h"
 #include "dvs/ui/EditImageProvider.h"
+#include "dvs/ui/FileAssociationController.h"
 #include "dvs/ui/ImageEditController.h"
 #include "dvs/ui/ImageFolderPairModel.h"
 #include "dvs/ui/ImageReviewController.h"
@@ -175,6 +176,11 @@ public:
 
     void setSampleExporter(std::shared_ptr<application::ISampleExporter> exporter) noexcept {
         sampleExporter_ = std::move(exporter);
+    }
+
+    void setFileAssociationService(
+        std::shared_ptr<application::IFileAssociationService> service) noexcept {
+        fileAssociationService_ = std::move(service);
     }
 
     [[nodiscard]] bool load(ReviewController& controller,
@@ -382,6 +388,14 @@ public:
                 });
             engine->rootContext()->setContextProperty(QStringLiteral("sampleExport"),
                                                       sampleExport_.get());
+        }
+        // I03 file-association settings: the Windows default-app registration port, injected by
+        // the composition root. ui_qml never links shell_windows; without the service the
+        // dialog's menu entry stays hidden, so lightweight harnesses stay valid.
+        if (fileAssociationService_) {
+            fileAssociation_ = std::make_unique<FileAssociationController>(fileAssociationService_);
+            engine->rootContext()->setContextProperty(QStringLiteral("fileAssociation"),
+                                                      fileAssociation_.get());
         }
         // UI observation bridge: forwards QML scene-graph operations (timeline thumbnail grabs)
         // into the bounded trace buffer so playback evidence can correlate them with pipeline
@@ -1049,6 +1063,8 @@ private:
     std::unique_ptr<ClipExportController> clipExport_;
     std::shared_ptr<application::ISampleExporter> sampleExporter_;
     std::unique_ptr<SampleExportController> sampleExport_;
+    std::shared_ptr<application::IFileAssociationService> fileAssociationService_;
+    std::unique_ptr<FileAssociationController> fileAssociation_;
     std::unique_ptr<ImageEditController> imageEdit_;
     std::unique_ptr<DiagnosticsProbe> diagnosticsProbe_;
     std::unique_ptr<TimingDiagnosticsController> timingDiagnostics_;
@@ -1091,6 +1107,11 @@ void DesktopApplication::setClipExporter(
 void DesktopApplication::setSampleExporter(
     std::shared_ptr<application::ISampleExporter> exporter) noexcept {
     impl_->setSampleExporter(std::move(exporter));
+}
+
+void DesktopApplication::setFileAssociationService(
+    std::shared_ptr<application::IFileAssociationService> service) noexcept {
+    impl_->setFileAssociationService(std::move(service));
 }
 
 int DesktopApplication::exec() {

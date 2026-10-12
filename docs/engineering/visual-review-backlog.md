@@ -1,6 +1,6 @@
 # 视觉审查问题台账
 
-更新：2026-10-11（统一鼠标与快捷键 I02／打开、添加、替换意图区分 I01）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-10-11（Windows 默认打开完整闭环 I03／统一鼠标与快捷键 I02／打开、添加、替换意图区分 I01／双差异显示口径与附近帧可读性 V04／原速播放指标与调度守恒 E03／任务化模式入口 V03／统一源入口与比较选择 V02／长按正反向走带 E04／缓存小步改进 E05／启动减负 E01／诊断可关闭 E02／全画布候选直看 P05／图片编辑纯操作 P11／协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
 
 ## 2026-10-11 统一鼠标与快捷键 I02
@@ -128,6 +128,67 @@
   `ReviewPreferencesController` 的 autoplayOnOpen、`ActiveSourceStrip` 的卡片 DropArea/提示、
   `Main.qml` 的 dropReplaceSource/浮层文案/菜单绑定即回旧行为（旧行为=双击不自动播放、拖拽
   全走工作区打开/追加）；新增测试同步还原。播放域、broker、GPU 路径零改动，回退无连锁。
+## 2026-10-11 Windows 默认打开完整闭环 I03
+
+- **范围**：《CompareStation 下一步体验与性能计划 2026-10-11》§6 I03（P1，可独立交付），在分支
+  `agent/i03-fileassoc`（基线 b35b808 的独立 worktree）实现，待 cherry-pick 回 main。
+  右键 Compare 动词之外的"系统默认应用注册"四动作闭环：注册为可选应用、前往系统设置、修复当前路径、
+  移除本应用注册。不重做 broker/CLI 打开路径：默认打开命令 `"CompareStation.exe" "%1"` 产出单文件
+  命令行，接既有 StartupRequest 的 PlaySingle 语义。
+- **问题（基线 b35b808）**：`ExplorerCommandRegistration` 只注册 SystemFileAssociations 右键动词，
+  不写 ProgID/Applications/Capabilities/RegisteredApplications，Windows"打开方式/默认应用"列表里
+  选不到本应用；ZIP 移动后这类键若存在也无法修复。
+- **交付**：
+  - `src/application/include/dvs/application/FileAssociation.h`：UI 层只见端口
+    `IFileAssociationService`（注册/跳设置/读回状态/修复/移除 + 三态所有权与健康枚举），
+    无 Win32 类型。
+  - `src/shell_windows/FileAssociationRegistration.cpp/.h`：与 ExplorerCommandRegistration 分工
+    独立的关联适配器（自由函数 + roots 注入，保持 dvs_shell_registration 叶子地位）。按用户写
+    HKCU：两 ProgID（`CompareStation.Video` 5 视频 / `CompareStation.Image` 13 图片，清单读
+    ExplorerCommandSupport，不维护副本）、`Applications\CompareStation.exe`（SupportedTypes+
+    command）、每扩展 `OpenWithProgids` 值、`Capabilities\FileAssociations`、
+    `RegisteredApplications` 指针。打开命令显式引号（复用 quoteWindowsArgument）；事务式
+    写入：先建全部键（含祖先）→逐值写（先存旧值）→读回校验，任一步失败按 undo 逆序恢复旧值并删
+    本次新建键。绝不写 UserChoice（只读三态：本应用/他应用或部分/未设置）、绝不 HKLM、不注册音频。
+    `ms-settings:defaultapps?registeredAppUser=` 按 build≥22000 决定，拒绝时退回总页；
+    `openDefaultAppsSettings` 的启动器与 build 可注入以便测试。`FileAssociationTestHooks.h`
+    提供"第 N 次值写入失败"的确定性测试缝（沿 ClipExportWriterTestHooks 先例）。
+  - `src/app/FileAssociationService.cpp/.h`：组合根把 shell 自由函数适配成端口实现（沿"仅组合根
+    构造具体适配器"规则）。
+  - `src/ui_qml`：`FileAssociationController`（ui_models，QThreadPool 工作线程执行动作+状态读回，
+    队列元调用回 GUI，析构等待在途 worker，busy 互斥）；`FileAssociationDialog.qml`（四动作 +
+    注册健康/视频/图片默认三态 + 错误行；文案明示静音、不注册音频、"设置页已打开≠完成"）。
+  - 共享文件最小接线（cherry-pick 时与 I01/I02 解冲突）：`ApplicationMenuBar.qml`（新增"设置"菜单
+    一项 + 对话框实例 + anyMenuOpen 追加 settingsMenu）、`DesktopApplication.h/.cpp`
+    （setFileAssociationService 注入 + 控制器/上下文属性，约 27 行）、`Main.cpp`（构造注入 5 行）、
+    qrc 一行、三个 CMakeLists 源清单行。Main.qml 零改动。
+- **不变量**：只写 HKCU 用户范围；移除只删本应用键值（RegisteredApplications/OpenWithProgids/
+  扩展键上的他应用数据与 UserChoice 原样保留，空键才删）；注册前置校验可执行文件存在；真实启动的
+  Explorer 右键注册逻辑零改动；GUI 线程不等注册表。
+- **验证（worktree 独立构建目录 out/build/dev，2026-10-11）**：
+  - 新增 `tests/unit/shell_windows/FileAssociationRegistrationTests.cpp` 15 例：形状逐值断言（键/
+    值/路径引号）、5+13 清单与音频排除、中文/空格路径精确命令值、UserChoice 只读、缺可执行文件
+    拒写、修复更新全部含路径键+RegisteredApplications 指针、修复需先注册、中途写失败回滚到旧注册
+    /新注册无残留、移除只删自有键、移除幂等、状态三态+健康三态、深链 build 门槛、URI 转义、
+    深链→总页降级与全失败如实报错。
+  - 回归（全绿）：`shell_windows` 45/45（含既有 30 例）、`app` 37/37、
+    `ui.MainQmlContractTests` 97/97（4 项原有 Disabled）；`format-check`、`lint`
+    （qmllint --max-warnings 0 + clang-tidy）通过。测试隔离沿用 scratch 子树
+    `HKCU\Software\CompareStationTests\<pid>` + TearDown 清理 + 临时目录清理；跑后核对真实
+    `HKCU\Software\Classes\CompareStation.*`、`Applications\CompareStation.exe`、
+    `RegisteredApplications` 无残留。
+  - 变异证据：`out/verification/i03-file-association-mutations/`（M01–M13：引号丢失/视频并入图片
+    ProgID/修复漏路径键/移除吞共享键/写失败不回滚/深链不分 build/UserChoice 缺失当本应用/缺文件
+    仍注册/注册写 UserChoice/注册音频/修复凭空造册/URI 不转义/丢弃总页降级，13 项改坏→红→字节
+    级还原→绿；mutate.ps1 自校验锚点唯一性与 52 项检查计数，附逐项日志与 mutation-results.json）。
+- **UNVERIFIED（真机项，不宣称）**：真实 Explorer 双击默认打开端到端（本机为开发环境，未在真实
+  释放 ZIP 上做"设为默认→双击 mp4→OpenForPlayback 自动播放"）；系统设置页真实跳转与选择后读回；
+  两版本并存；ZIP 移动/升级后真实修复；系统重启后状态；Windows 10 真机总页降级。以上需主会话在
+  真机验收后关闭。
+- **回退**：还原 `FileAssociationRegistration.*`、`FileAssociation.h/.cpp`、
+  `FileAssociationController.*`、`FileAssociationDialog.qml`、`ApplicationMenuBar.qml` 设置段与
+  `DesktopApplication` 注入点即回旧行为；Explorer 右键注册与启动路径零改动，回退无连锁。
+
 
 ## 2026-10-11 双差异显示口径与附近帧可读性 V04
 

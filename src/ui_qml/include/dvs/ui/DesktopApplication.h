@@ -13,6 +13,7 @@
 namespace dvs {
 namespace application {
 class IClipExporter;
+class IFileAssociationService;
 class IInterpolationProtocolRepository;
 class IIssueRecordRepository;
 class ISampleExporter;
@@ -69,6 +70,11 @@ public:
     // sample export controls stay hidden and the `sampleExport` context property is never
     // published.
     void setSampleExporter(std::shared_ptr<application::ISampleExporter> exporter) noexcept;
+    // Optional I03 file-association injection. Must be set before load(); when absent the
+    // settings dialog's menu entry stays hidden and the `fileAssociation` context property is
+    // never published.
+    void setFileAssociationService(
+        std::shared_ptr<application::IFileAssociationService> service) noexcept;
     // Optional P03 protocol-import injection. Must be set before load(); the composition root
     // owns the concrete persistence adapter so ui_qml never links persistence_json directly.
     // When absent the protocol navigation row stays hidden and the `interpolationProtocol`

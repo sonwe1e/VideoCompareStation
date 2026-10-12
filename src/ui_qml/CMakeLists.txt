@@ -2,6 +2,7 @@ add_library(
     dvs_ui_models
     STATIC
         include/dvs/ui/ClipExportController.h
+        include/dvs/ui/FileAssociationController.h
         include/dvs/ui/ImageFolderPairModel.h
         include/dvs/ui/InterpolationProtocolController.h
         include/dvs/ui/IssueLogController.h
@@ -17,6 +18,7 @@ add_library(
         include/dvs/ui/SourceListModel.h
         include/dvs/ui/VideoFolderModel.h
         src/ClipExportController.cpp
+        src/FileAssociationController.cpp
         src/ImageFolderPairModel.cpp
         src/InterpolationProtocolController.cpp
         src/IssueLogController.cpp

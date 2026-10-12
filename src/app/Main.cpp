@@ -21,6 +21,7 @@
 #include "dvs/ui/SourceListModel.h"
 #include "dvs/ui/StartupMilestone.h"
 
+#include "FileAssociationService.h"
 #include "PlaybackTraceEnvironment.h"
 #include "ReviewRuntime.h"
 #include "StartupFailureReporter.h"
@@ -460,6 +461,11 @@ runDesktop(int& argc,
     // composition root may build persistence adapters, and lives for the whole run.
     dvs::persistence::InterpolationProtocolRepository interpolationProtocolRepository;
     desktop.setInterpolationProtocolRepository(&interpolationProtocolRepository);
+    // I03 default-app registration: the shell adapter is constructed here for the same reason -
+    // only the composition root may build concrete adapters - and writes nothing until the user
+    // acts in the settings dialog.
+    desktop.setFileAssociationService(
+        std::make_shared<dvs::app::FileAssociationService>(DVS_PROJECT_VERSION));
     if (!desktop.load(
             *runtime->controller(),
             *runtime->preferences(),

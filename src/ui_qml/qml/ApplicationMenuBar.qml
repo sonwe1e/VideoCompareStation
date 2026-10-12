@@ -67,7 +67,7 @@ VcsMenuBar {
     signal viewerFocusRequested
 
     property bool returnViewerFocusAfterClose: false
-    readonly property bool anyMenuOpen: fileMenu.opened || compareMenu.opened || analyzeMenu.opened || viewMenu.opened
+    readonly property bool anyMenuOpen: fileMenu.opened || compareMenu.opened || analyzeMenu.opened || viewMenu.opened || settingsMenu.opened
 
     function changeReferenceByIndex(sourceIndex) {
         if (!control.session || sourceIndex < 0 || sourceIndex >= control.sourceIdentities.length)
@@ -605,5 +605,33 @@ VcsMenuBar {
                 control.returnViewerFocusAfterClose = true;
             }
         }
+    }
+
+    // I03: the Windows default-open settings dialog lives here so Main.qml keeps its wiring
+    // untouched; the controller context property only exists when the composition root injected
+    // the association service, and without it the entry stays hidden like the other optional
+    // services. Everything else about the dialog is self-contained in FileAssociationDialog.
+    // qmllint disable unqualified
+    readonly property var fileAssociationService: typeof fileAssociation !== "undefined" ? fileAssociation : null
+    // qmllint enable unqualified
+
+    VcsMenu {
+        id: settingsMenu
+
+        objectName: "settingsMenu"
+        title: qsTr("设置")
+        menuItemVisible: control.fileAssociationService !== null
+
+        VcsMenuItem {
+            objectName: "fileAssociationMenuItem"
+            text: qsTr("文件关联…")
+            onTriggered: fileAssociationDialog.open()
+        }
+    }
+
+    FileAssociationDialog {
+        id: fileAssociationDialog
+
+        service: control.fileAssociationService
     }
 }
