@@ -1,7 +1,73 @@
 # 视觉审查问题台账
 
-更新：2026-10-11（设计 token U02／画布响应式重排 U01／信息分层与五态 U03／Windows 默认打开完整闭环 I03／统一鼠标与快捷键 I02／打开、添加、替换意图区分 I01／双差异显示口径与附近帧可读性 V04／原速播放指标与调度守恒 E03／任务化模式入口 V03／统一源入口与比较选择 V02／长按正反向走带 E04／缓存小步改进 E05／启动减负 E01／诊断可关闭 E02／全画布候选直看 P05／图片编辑纯操作 P11／协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-10-13（E04 走带速率选择器与 JOG 基准证据补全／设计 token U02／画布响应式重排 U01／信息分层与五态 U03／Windows 默认打开完整闭环 I03／统一鼠标与快捷键 I02／打开、添加、替换意图区分 I01／双差异显示口径与附近帧可读性 V04／原速播放指标与调度守恒 E03／任务化模式入口 V03／统一源入口与比较选择 V02／长按正反向走带 E04／缓存小步改进 E05／启动减负 E01／诊断可关闭 E02／全画布候选直看 P05／图片编辑纯操作 P11／协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+
+## 2026-10-13 E04 走带速率选择器与 JOG 基准证据（补全）
+
+- **范围**：《CompareStation 下一步体验与性能计划 2026-10-11》§4 E04 的两个未交付点——0.5×/2×
+  走带速率入口、松手停止/过期追跑的真机可测性——与 §8.4／R0"可重复终端摘要"。UI 只加一个速率
+  组合框；播放域调度语义、trace schema 与 GPU 后端零改动。
+- **问题（基线 e14d8ca）**：
+  - E04 台账记录"0.5×/2× 速率的 UI 选择器未做（能力已暴露为 jogRate 属性，默认 1×）"，
+    用户无法选择走带速率；
+  - `ReviewController::syncJogProjection` 只比较 jogging/active/direction：`jogRate` 虽声明
+    NOTIFY jogStateChanged，空闲时 `setJogRate` 却不发通知——QML 镜像（Main.qml 的 jogRate
+    绑定）不更新，选择器无法回显真实速率，这是投影通知缺陷而非外观问题；
+  - 验收条目"松手后 P95≤100ms 停止旧走带、过期任务不继续推动画面"没有可复现测量入口：
+    `--ui-performance` 只有固定节拍 HeldStepping，没有保持/释放/停稳/追跑观察；
+  - §8.4 摘要只有"未来格式示意"，run-performance-gate.ps1 仅输出一条 DVS_GATE_PASSED。
+- **交付**：
+  - 走带速率入口：`TransportBar.qml` 新增 `jogRate`/`jogRateRequested` 与 `jogRateCombo`
+    （标签"走带 0.5×/1×/2×"；单一 `jogRateLadder` 供 nearest-index 投影与发值，索引与速率
+    不可能漂移）；`ReviewActions.setJogRate` 经 typeof 守卫转发；`PlayerOsc` 中继；
+    `Main.qml` 绑定 `controller.jogRate`（与 playbackRate 同模式）。
+    `syncJogProjection` 把 clamp 后的速率纳入投影比较并按需发 `jogStateChanged`
+    （同值重设不重复通知）。
+  - JOG 证据：`Main.cpp` 新增 `JogHolding` 阶段（HeldStepping 之后、analysis 之前，1/2/3 源
+    都跑）：6 腿交替 ±1、每腿 1.0s 保持（走 `controller.jogPress/jogRelease` 真实输入路径），
+    释放后用"150ms 连续静止 + busy 与 framePending 均空闲"判定停稳（导航排空不再被误判为
+    追跑），停稳后再观察 250ms；停稳后任何呈现变化计为 stale 并当场 `fail("jog-stale-update")`
+    ——"过期任务不追跑"从描述变成硬失败。报告新增 `jog_legs`/`nominal_fps`/前后向帧数与
+    实际 fps/`stop_samples`/`stop_p50/p95/max`/`stale_updates`；前反向分开报告实际速度
+    （冷反向 GOP 不冒充 60fps）。挂起保护相应放宽：应用内 duration+150s、gate 外层
+    duration+180s、trace 门 duration+60s（只为容纳新测量窗口，不是性能预算）。
+  - §8.4 摘要：`run-performance-gate.ps1` 新增必须键校验（旧二进制只报一次明确失败）与
+    `DVS_BENCHMARK_SUMMARY` 块（BUILD/DISPLAY/OPEN/PLAY/JOG/CACHE/RESULT）；无证据字段
+    （shell 计时、GPU 显存、物理/远控探测）如实写 unknown；`-DisplayPath`/`-BuildType` 由
+    调用方声明，默认 unknown。JOG 结构硬门＝阶段跑过、每腿都有停稳样本、前向确已推进、
+    stale=0；100ms 停止目标沿 held-step 纪律记为软告警首基线。失败路径也输出摘要
+    （`RESULT FAIL reason=...`）后再抛出。
+- **不变量**：走带速率只影响输入节奏（media-clock × rate 与呈现 lead 上界），不提交任何播放
+  命令、不改 GT/比较对/ROI/时间轴（契约测试钉死 0 命令）；停稳判定依赖导航投影，不取消任何
+  在途有用请求；协调器调度语义零改动。
+- **验证（本地 dev preset，2026-10-13）**：
+  - 单测/契约全绿：`ui.ReviewControllerTests`、`ui.MainQmlContractTests`、`ui.ReviewActions`、
+    `ui.player_osc` 共 194/194（另 4 项既有 Disabled）。新增/改写：
+    `JogRateIsClampedAndProjected`（改值才通知、clamp 同值不通知）、
+    `ReviewActions.test_jog_rate_selection_forwards_to_the_controller`、
+    `player_osc` 的激活选择器用例（真实 popup 键盘路径 → 2× 转发；索引跟随 jogRate 投影）、
+    `JogRateSelectorMirrorsAndReachesTheController`（默认 1×/索引 1；activated 2→controller
+    2.0→镜像回读→combo 索引 2；activated 0→0.5；submitted 恒空）。960×640 运输条不出窗的
+    既有断言随加宽后仍绿。
+  - 真机 smoke（dev build + 12s 1080p60 素材 + 远程虚拟屏，非参考基线）：
+    2 源 run（`out/verification/e04-jog-benchmark/run/`）6/6 腿停稳、stale=0、exit 0，
+    该机数字 stop P50=325ms/P95=782ms、前向 12.5fps/反向 2.9fps（该次播放自身 speed_ratio
+    0.956、late_frame_sets=242，机器负载所致）；1 源 run 前向 60 帧/秒、停稳 6/6、退出码 0，
+    覆盖无 analysis 的完成路径。第一版静稳判定只用 `busy()`，把释放后的导航排空当成追跑
+    （红：`failure=jog-stale-update`、stop_samples=0），改用 `framePending()` 后转绿
+    （stderr.log→stderr2.log，见目录 README）。
+  - 脚本 smoke：`out/verification/e04-jog-benchmark/summary-smoke/`（自断言 17 检查、三条路径：
+    健康→RESULT PASS 与全部摘要行、stale=1→RESULT FAIL、缺 JOG 键→单次 missing keys 失败）。
+  - 变异证据：`out/verification/e04-jog-benchmark/mutations/`（M1 速率退出投影比较→通知语义
+    测试红；M2 移除 ReviewActions 转发→ui.ReviewActions 红；逐字节还原后复绿）。
+  - `format-check` 与 `lint` 通过。
+- **UNVERIFIED（真机项，不宣称）**：物理屏 D3D11VA runner 上的 JOG 数字与 100ms 停止目标
+  基线（本机为 dev/远控负载环境，且未跑 300s 门禁素材）；0.5×/2× 在真实长按手感下的复核；
+  `DVS_BENCHMARK_SUMMARY` 在发布流水线日志中的留存格式（下一次 runner 门禁自然产生）。
+- **回退**：还原四份 QML 的 jogRate 接线与 `syncJogProjection` 速率比较即回旧速率行为；
+  删除 `JogHolding` 阶段与报告键、还原 gate 脚本的摘要/校验与三处超时边界即回旧测量契约；
+  无持久化状态、无协议变更，回退无连锁。
 
 ## 2026-10-11 UI 排版三工单 U01/U02/U03（一次合并小节）
 

@@ -10,6 +10,10 @@ PowerShell automation is grouped by responsibility:
   CRT/`CommandLineToArgvW` command-line quoting implementation used by the playback gates, the
   performance gate, and the popup-pixel smoke script, so quoting fixes land in one place. See
   [`docs/engineering/maintenance-and-performance.md`](../docs/engineering/maintenance-and-performance.md).
+  `run-performance-gate.ps1` ends with a compact `DVS_BENCHMARK_SUMMARY` block
+  (BUILD/DISPLAY/OPEN/PLAY/JOG/CACHE/RESULT) for local runs; run conditions it cannot detect
+  (`-DisplayPath`, `-BuildType`) are caller-stated and unmeasured layers (shell timing, GPU
+  memory) stay `unknown` instead of being synthesized.
   `generate-performance-diff-fixture.ps1` derives the external 1080p60 Diff B fixture from A with
   a deterministic visible patch and writes a same-basename `.contract.json` hash contract. Its
   FFmpeg operations are timeout-bounded, and it publishes the video/contract pair with rollback so
