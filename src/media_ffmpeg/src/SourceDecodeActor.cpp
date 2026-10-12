@@ -395,6 +395,7 @@ void SourceDecodeActor::run() noexcept { // NOLINT(bugprone-exception-escape): a
                     reverseWindowBuildMaximumMicroseconds_ = 0U;
                     reverseExactFallbackCount_ = 0U;
                     cache_.clear();
+                    cache_.resetStatistics();
                     backendStatus_ = media::DecoderBackendStatus{
                         .sourceId = sourceId_,
                         .backend = decoder_->backend(),
@@ -876,8 +877,11 @@ void SourceDecodeActor::fillReverseGopWindow(
                               .handle = decoded.value().handle,
                               .presentationTime = decoded.value().presentationTime,
                           });
+            // Only frames actually retained count as built: the trace payload is documented as
+            // the number of frames in the built window, so a re-decode of an already-cached
+            // frame must not inflate it past the window's real size.
+            ++builtFrames;
         }
-        ++builtFrames;
     }
 
     const auto buildMicroseconds =

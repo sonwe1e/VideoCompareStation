@@ -74,6 +74,9 @@ void SourceFrameCache::clear() noexcept {
     index_.clear();
     entries_.clear();
     retainedBytes_ = 0U;
+}
+
+void SourceFrameCache::resetStatistics() noexcept {
     evictionCount_ = 0U;
 }
 

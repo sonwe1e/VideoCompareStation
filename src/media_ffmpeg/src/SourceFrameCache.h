@@ -46,13 +46,20 @@ public:
 
     [[nodiscard]] std::optional<CachedSourceFrame> find(const SourceFrameCacheKey& key);
     void insert(SourceFrameCacheKey key, CachedSourceFrame frame);
+    // Drops all cached content. Callers use this to invalidate frames (decoder close, read-ahead
+    // with a one-frame cache); the run's eviction evidence survives, because a content
+    // invalidation is not a statistics reset.
     void clear() noexcept;
+    // Explicit per-open statistics reset: zeroes the eviction counter together with the actor's
+    // other per-session counters.
+    void resetStatistics() noexcept;
 
     [[nodiscard]] std::size_t capacityBytes() const noexcept;
     [[nodiscard]] std::size_t retainedBytes() const noexcept;
     [[nodiscard]] std::size_t entryCount() const noexcept;
-    // Entries dropped by evictToFit since construction. E05 cache evidence: eviction pressure,
-    // read next to hits, tells a warm cache from one that keeps discarding what reviews revisit.
+    // Entries dropped by evictToFit since the last explicit statistics reset (open). E05 cache
+    // evidence: eviction pressure, read next to hits, tells a warm cache from one that keeps
+    // discarding what reviews revisit.
     [[nodiscard]] std::uint64_t evictionCount() const noexcept;
 
 private:

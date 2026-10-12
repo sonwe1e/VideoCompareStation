@@ -784,8 +784,13 @@ private:
         }
         decodeActors_.clear();
         activeSession_.reset();
-        setTable_.clear();
-        setTableRetainedBytes_ = 0U;
+        {
+            // The set table is read by statistics() from the GUI thread; every mutation must hold
+            // the same lock or the reported entry/byte pair is a torn read (UB).
+            std::scoped_lock lock(mutex_);
+            setTable_.clear();
+            setTableRetainedBytes_ = 0U;
+        }
         sequentialSetFrame_.reset();
         sequentialSetReady_ = false;
     }
@@ -945,6 +950,9 @@ private:
             request.priority != application::FrameRequestPriority::Reverse) {
             return;
         }
+        // statistics() reads the table from the GUI thread; every mutation here is serialized
+        // against it by the same lock.
+        std::scoped_lock lock(mutex_);
 
         const internal::FrameSetCacheKey key{
             .sessionEpoch = request.context.playback.request.sessionEpoch,
@@ -1009,6 +1017,8 @@ private:
             request.priority != application::FrameRequestPriority::Reverse) {
             return std::nullopt;
         }
+        // Recency refresh and lookup are serialized with statistics()' occupancy read.
+        std::scoped_lock lock(mutex_);
         const internal::FrameSetCacheKey key{
             .sessionEpoch = request.context.playback.request.sessionEpoch,
             .alignmentRevision = request.alignmentRevision,

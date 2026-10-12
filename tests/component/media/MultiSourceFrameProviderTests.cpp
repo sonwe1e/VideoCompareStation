@@ -738,11 +738,22 @@ TEST(MultiSourceFrameProviderTests, RoundTripBeyondCapacityReDecodesButKeepsTheT
     const FrameProviderStatistics afterBackward = provider.statistics();
     // The per-source decode counts do not move on the re-assembly: the actors' own source
     // caches still hold the walked frames, which is exactly why a set-level miss stays cheap.
+    // This assertion therefore documents cost, not set-cache policy; the policy discriminator is
+    // FrameSetCacheKeepsRevisitedFramesByAccessOrder plus the revisit below.
     EXPECT_EQ(provider.decodeCountsForTesting(), forwardDecodes);
     EXPECT_EQ(afterBackward.frameSetCacheHits, 3U);
     EXPECT_EQ(afterBackward.frameSetCacheMisses, 10U);
     EXPECT_EQ(afterBackward.frameSetCacheEvictions, 6U);
     EXPECT_EQ(afterBackward.frameSetCacheEntries, 4U);
+
+    // E05 policy probe beyond capacity: the backward walk refreshed 7/6/5 (LRU), while the FIFO
+    // predecessor would have kept the insertion-oldest 5 and evicted 8 instead. Revisiting 5
+    // therefore separates the policies: LRU hits (hits 4, misses stay 10); FIFO would miss
+    // (hits stay 3, misses 11).
+    decodeExact(790U, 5);
+    const FrameProviderStatistics afterPolicyProbe = provider.statistics();
+    EXPECT_EQ(afterPolicyProbe.frameSetCacheHits, 4U);
+    EXPECT_EQ(afterPolicyProbe.frameSetCacheMisses, 10U);
 }
 
 TEST(MultiSourceFrameProviderTests, PrefetchPopulatesSourceCachesWithoutPublishingAFrameSet) {

@@ -135,6 +135,24 @@ TEST(SourceFrameCacheTests, IgnoresOversizeAndZeroByteFramesAndClearResetsState)
     EXPECT_EQ(cache.entryCount(), 0U);
 }
 
+TEST(SourceFrameCacheTests, ClearKeepsTheEvictionStatisticUntilAnExplicitReset) {
+    SourceFrameCache cache{2U};
+    cache.insert(makeKey("source", 1), makeFrame(2U, 10));
+    cache.insert(makeKey("source", 2), makeFrame(2U, 20));
+    cache.insert(makeKey("source", 3), makeFrame(2U, 30));
+    ASSERT_EQ(cache.evictionCount(), 2U);
+
+    // Content invalidation (decoder close, read-ahead with a one-frame cache) must not restart
+    // the run's eviction evidence...
+    cache.clear();
+    EXPECT_EQ(cache.entryCount(), 0U);
+    EXPECT_EQ(cache.evictionCount(), 2U);
+
+    // ... while the explicit per-open statistics reset does.
+    cache.resetStatistics();
+    EXPECT_EQ(cache.evictionCount(), 0U);
+}
+
 TEST(SourceFrameCacheTests, ZeroCapacityRetainsNoFrames) {
     SourceFrameCache cache{0U};
 
