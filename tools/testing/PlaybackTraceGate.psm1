@@ -583,7 +583,10 @@ function Invoke-PlaybackTraceGate {
             }
         }
 
-        $timeoutMilliseconds = ([int64]$DurationSeconds + 30L) * 1000L
+        # Shutdown grace for a successful run: measured duration plus the seek/warm/held/JOG
+        # measurement windows plus alignment analysis and shutdown. It is a hang guard, not a
+        # performance budget; a healthy run finishes well inside it.
+        $timeoutMilliseconds = ([int64]$DurationSeconds + 60L) * 1000L
         if (-not $process.WaitForExit([int]$timeoutMilliseconds)) {
             throw (
                 "$resultPrefix`_PROCESS_TIMEOUT: exceeded $timeoutMilliseconds ms " +

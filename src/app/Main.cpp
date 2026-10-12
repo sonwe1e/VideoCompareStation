@@ -134,6 +134,24 @@ struct PerformanceMetrics final {
     // seeks). 1.0 means every decode continued from the previous frame; lower means the decoder
     // fell back to exact seeks. Computed in finalizeHeldStep from decoder backend status deltas.
     double heldStepSequentialRatio = 0.0;
+    // JOG evidence (E04 acceptance / plan §8.4 JOG line). Six alternating hold legs at the default
+    // 1x walk rate: the achieved presented frames per second per direction, the release-to-still
+    // stop latency, and any stale motion after the walk had already settled. Forward and reverse
+    // stay separate because reverse cold-GOP preparation reports its actual speed, not a nominal
+    // one; sample counts make "0 samples" distinguishable from "0 ms".
+    std::uint64_t jogLegs = 0U;
+    int jogNominalFps = 0;
+    std::uint64_t jogForwardFrames = 0U;
+    std::uint64_t jogReverseFrames = 0U;
+    qint64 jogForwardHoldMilliseconds = 0;
+    qint64 jogReverseHoldMilliseconds = 0;
+    double jogForwardFps = 0.0;
+    double jogReverseFps = 0.0;
+    std::uint64_t jogStopSamples = 0U;
+    qint64 jogStopP50Milliseconds = -1;
+    qint64 jogStopP95Milliseconds = -1;
+    qint64 jogStopMaximumMilliseconds = -1;
+    std::uint64_t jogStaleUpdates = 0U;
     qint64 analysisMilliseconds = -1;
     std::uint64_t analysisDecodedFrames = 0U;
     qint64 shutdownMilliseconds = -1;
@@ -1105,6 +1123,7 @@ runDesktop(int& argc,
         Seeking,
         WarmStepping,
         HeldStepping,
+        JogHolding,
         Analyzing,
     };
     Stage stage = Stage::WaitingForGraphics;
@@ -1197,6 +1216,39 @@ runDesktop(int& argc,
     std::optional<dvs::media::FrameProviderStatistics> heldStepProviderEnd;
     std::vector<dvs::media::DecoderBackendStatus> heldStepDecoderBaseline;
     std::vector<dvs::media::DecoderBackendStatus> heldStepDecoderEnd;
+    // JOG evidence (E04 acceptance / plan §8.4). Hold the real jog input path for a bounded window
+    // per leg, release, wait for the picture to settle, then watch for stale motion. Directions
+    // alternate so the direction-change cancellation runs too; a leg only flips its planned
+    // direction when a media boundary leaves no room, so both directions always get samples.
+    static constexpr std::size_t kJogLegCount = 6U;
+    static constexpr qint64 kJogHoldMilliseconds = 1000;
+    // Continuous stillness required before the walk counts as stopped. The coordinator's
+    // interactive stream drains its bounded current/prepared/queued tail after release, so the
+    // settle condition also requires the navigation projection to be idle (framePending false).
+    static constexpr qint64 kJogSettleMilliseconds = 150;
+    // After the settle declaration, any further presented change is a stale update: the walk had
+    // visibly stopped and in-flight work was already idle, so nothing legitimate can move it.
+    static constexpr qint64 kJogStaleWatchMilliseconds = 250;
+    enum class JogPhase : std::uint8_t {
+        // Waiting to start the leg: the previous leg must have drained before this press.
+        Press,
+        // Holding the direction; presented changes are counted at their actual pace.
+        Hold,
+        // Released: waiting out the bounded drain until the picture is still and idle.
+        Settle,
+        // Watching a settled picture for stale motion before the next leg starts.
+        Watch,
+    };
+    JogPhase jogPhase = JogPhase::Press;
+    std::size_t jogLegIndex = 0U;
+    int jogDirection = 1;
+    QElapsedTimer jogTimer;
+    // Phase-relative deadline: the hold end while walking, the watch end while watching.
+    qint64 jogDeadlineMilliseconds = 0;
+    qint64 jogReleaseMilliseconds = 0;
+    qint64 jogLastChangeMilliseconds = 0;
+    qint64 jogLastFrame = -1;
+    std::vector<qint64> jogStopSamplesMilliseconds;
     std::uint64_t analysisSignatureBaseline = 0U;
     bool analysisObservedRunning = false;
     bool completed = false;
@@ -1342,6 +1394,26 @@ runDesktop(int& argc,
                 heldStepMilliseconds[static_cast<std::size_t>(samples * 95U / 100U)];
             metrics.heldStepP99Milliseconds =
                 heldStepMilliseconds[static_cast<std::size_t>(samples * 99U / 100U)];
+        }
+    };
+    // JOG evidence summary (nearest-rank percentiles, same convention as the held-step window).
+    const auto finalizeJogStage = [&] {
+        metrics.jogStopSamples = static_cast<std::uint64_t>(jogStopSamplesMilliseconds.size());
+        if (metrics.jogForwardHoldMilliseconds > 0) {
+            metrics.jogForwardFps = static_cast<double>(metrics.jogForwardFrames) * 1000.0 /
+                                    static_cast<double>(metrics.jogForwardHoldMilliseconds);
+        }
+        if (metrics.jogReverseHoldMilliseconds > 0) {
+            metrics.jogReverseFps = static_cast<double>(metrics.jogReverseFrames) * 1000.0 /
+                                    static_cast<double>(metrics.jogReverseHoldMilliseconds);
+        }
+        std::ranges::sort(jogStopSamplesMilliseconds);
+        const std::size_t stopSamples = jogStopSamplesMilliseconds.size();
+        if (stopSamples > 0U) {
+            metrics.jogStopP50Milliseconds = jogStopSamplesMilliseconds[stopSamples / 2U];
+            metrics.jogStopP95Milliseconds =
+                jogStopSamplesMilliseconds[static_cast<std::size_t>(stopSamples * 95U / 100U)];
+            metrics.jogStopMaximumMilliseconds = jogStopSamplesMilliseconds.back();
         }
     };
 
@@ -1679,20 +1751,16 @@ runDesktop(int& argc,
                 heldStepProviderEnd = runtime->frameProviderStatistics();
                 heldStepDecoderEnd = runtime->decoderBackendStatuses();
                 finalizeHeldStep();
-                if (expectedSourceCount == 1U) {
-                    metrics.finalThreads =
-                        dvs::platform::sampleCurrentProcessTelemetry().threadCount;
-                    completed = true;
-                    desktop.exit(EXIT_SUCCESS);
-                    return;
-                }
-                analysisSignatureBaseline = runtime->decodedSignatureCount();
-                analysisTimer.start();
-                if (!controller.estimateAlignment()) {
-                    fail("analysis-rejected");
-                    return;
-                }
-                stage = Stage::Analyzing;
+                // JOG evidence (E04 / plan §8.4): hold the real jog input path before the run
+                // completes. Alternating directions from the held-step end position also exercise
+                // the direction-change cancellation the plan requires.
+                metrics.jogLegs = kJogLegCount;
+                metrics.jogNominalFps = controller.oneSecondStepFrames();
+                jogLegIndex = 0U;
+                jogDirection = 1;
+                jogPhase = JogPhase::Press;
+                jogTimer.start();
+                stage = Stage::JogHolding;
                 return;
             }
             // Paced cadence: never submit while the controller is busy. dispatchNavigation rejects
@@ -1710,6 +1778,120 @@ runDesktop(int& argc,
                 heldStepCadenceMs();
             }
             return;
+        case Stage::JogHolding: {
+            const qint64 now = jogTimer.elapsed();
+            const qint64 presented = controller.currentFrame();
+            switch (jogPhase) {
+            case JogPhase::Press: {
+                // Wait for the previous leg's bounded drain so this press starts a real walk.
+                // The step tail is navigation work: framePending() (the requested-target vs
+                // displayed-frame projection) covers it, while busy() only covers opens and other
+                // general commands.
+                if (controller.busy() || controller.framePending()) {
+                    return;
+                }
+                // Keep the alternating plan, but never press into a media boundary: flip when the
+                // planned direction has no room. Both directions empty would be a single-frame
+                // session, which the earlier ">= 100 frames" seek guard already rejects.
+                if (jogDirection > 0 ? !controller.canNext() : !controller.canPrevious()) {
+                    jogDirection = -jogDirection;
+                }
+                if (jogDirection > 0 ? !controller.canNext() : !controller.canPrevious()) {
+                    fail("jog-stage-no-room");
+                    return;
+                }
+                jogLastFrame = presented;
+                jogLastChangeMilliseconds = now;
+                if (!controller.jogPress(jogDirection)) {
+                    fail("jog-press-rejected");
+                    return;
+                }
+                jogDeadlineMilliseconds = now + kJogHoldMilliseconds;
+                jogPhase = JogPhase::Hold;
+                return;
+            }
+            case JogPhase::Hold: {
+                if (presented != jogLastFrame) {
+                    jogLastFrame = presented;
+                    jogLastChangeMilliseconds = now;
+                    if (jogDirection > 0) {
+                        ++metrics.jogForwardFrames;
+                    } else {
+                        ++metrics.jogReverseFrames;
+                    }
+                }
+                if (now < jogDeadlineMilliseconds) {
+                    return;
+                }
+                controller.jogRelease();
+                jogReleaseMilliseconds = now;
+                const qint64 holdMilliseconds =
+                    now - (jogDeadlineMilliseconds - kJogHoldMilliseconds);
+                if (jogDirection > 0) {
+                    metrics.jogForwardHoldMilliseconds += holdMilliseconds;
+                } else {
+                    metrics.jogReverseHoldMilliseconds += holdMilliseconds;
+                }
+                jogPhase = JogPhase::Settle;
+                return;
+            }
+            case JogPhase::Settle: {
+                if (presented != jogLastFrame) {
+                    jogLastFrame = presented;
+                    jogLastChangeMilliseconds = now;
+                }
+                // Stillness plus an idle pipeline declares the walk stopped. The released jog's
+                // queued step tail keeps framePending() true while it drains, so a slow
+                // presentation cannot be mistaken for stale motion; once both pending flags are
+                // false, only news after the declaration can be attributed as stale below.
+                if (controller.busy() || controller.framePending() ||
+                    now - jogLastChangeMilliseconds < kJogSettleMilliseconds) {
+                    return;
+                }
+                jogStopSamplesMilliseconds.push_back(
+                    std::max<qint64>(0, jogLastChangeMilliseconds - jogReleaseMilliseconds));
+                jogPhase = JogPhase::Watch;
+                jogDeadlineMilliseconds = now + kJogStaleWatchMilliseconds;
+                return;
+            }
+            case JogPhase::Watch: {
+                if (presented != jogLastFrame) {
+                    // The picture had visibly stopped and the pipeline was idle, so a further
+                    // presented change is stale in-flight work still pushing the picture.
+                    jogLastFrame = presented;
+                    ++metrics.jogStaleUpdates;
+                    fail("jog-stale-update");
+                    return;
+                }
+                if (now < jogDeadlineMilliseconds) {
+                    return;
+                }
+                ++jogLegIndex;
+                if (jogLegIndex >= kJogLegCount) {
+                    finalizeJogStage();
+                    if (expectedSourceCount == 1U) {
+                        metrics.finalThreads =
+                            dvs::platform::sampleCurrentProcessTelemetry().threadCount;
+                        completed = true;
+                        desktop.exit(EXIT_SUCCESS);
+                        return;
+                    }
+                    analysisSignatureBaseline = runtime->decodedSignatureCount();
+                    analysisTimer.start();
+                    if (!controller.estimateAlignment()) {
+                        fail("analysis-rejected");
+                        return;
+                    }
+                    stage = Stage::Analyzing;
+                    return;
+                }
+                jogDirection = -jogDirection;
+                jogPhase = JogPhase::Press;
+                return;
+            }
+            }
+            return;
+        }
         case Stage::Analyzing:
             if (controller.alignmentAnalysisRunning()) {
                 analysisObservedRunning = true;
@@ -1734,7 +1916,11 @@ runDesktop(int& argc,
 
     QTimer timeout;
     timeout.setSingleShot(true);
-    timeout.setInterval(static_cast<int>((duration + std::chrono::seconds{90}).count() * 1000));
+    // Hang guard, not a performance budget: the measured duration plus the bounded measurement
+    // stages (20 cold seeks, 20 warm steps, the 300-step held window, the JOG window and the
+    // alignment analysis) plus shutdown. The JOG legs added ~9 s, so the margin covers the whole
+    // tail instead of only playback and shutdown.
+    timeout.setInterval(static_cast<int>((duration + std::chrono::seconds{150}).count() * 1000));
     QObject::connect(
         &timeout, &QTimer::timeout, runtime->controller(), [&] { fail("performance-timeout"); });
     poll.start();
@@ -1831,6 +2017,10 @@ runDesktop(int& argc,
         // otherwise a run that silently absorbs steps would report a healthy pass.
         metrics.heldStepPresentedFrames != heldStepSubmittedFrames ||
         heldStepMilliseconds.size() != heldStepSubmittedFrames ||
+        // Every JOG leg must have produced a stop sample and the forward walk must have advanced;
+        // a missing sample means a leg never settled and a zero forward count means the walk
+        // never moved. Stale post-settle motion already fails the run at detection.
+        metrics.jogStopSamples != metrics.jogLegs || metrics.jogForwardFrames == 0U ||
         (expectedSourceCount > 1U && metrics.analysisDecodedFrames == 0U) ||
         metrics.peakFrameBytes > kMaximumFrameBytes || !allHardware ||
         metrics.finalThreads > metrics.baselineThreads + 2U || !metrics.comparisonModeVerified ||
@@ -1925,6 +2115,23 @@ runDesktop(int& argc,
     addNumber(QStringLiteral("held_step_cancel_count"), metrics.heldStepCancelCount);
     addNumber(QStringLiteral("held_step_decoder_reopen_count"), metrics.heldStepDecoderReopenCount);
     addNumber(QStringLiteral("held_step_sequential_ratio"), metrics.heldStepSequentialRatio);
+    // E04 JOG evidence (plan §8.4 JOG line). The achieved forward rate below the nominal source
+    // fps names decode/presentation backpressure; reverse keeps its own number because a cold
+    // reverse GOP legitimately walks slower. Stop latency is release -> last presented change;
+    // stale updates count motion after the picture had already settled and gone idle.
+    addNumber(QStringLiteral("jog_legs"), metrics.jogLegs);
+    addNumber(QStringLiteral("jog_nominal_fps"), metrics.jogNominalFps);
+    addNumber(QStringLiteral("jog_forward_frames"), metrics.jogForwardFrames);
+    addNumber(QStringLiteral("jog_reverse_frames"), metrics.jogReverseFrames);
+    addNumber(QStringLiteral("jog_forward_hold_ms"), metrics.jogForwardHoldMilliseconds);
+    addNumber(QStringLiteral("jog_reverse_hold_ms"), metrics.jogReverseHoldMilliseconds);
+    addNumber(QStringLiteral("jog_forward_fps"), metrics.jogForwardFps);
+    addNumber(QStringLiteral("jog_reverse_fps"), metrics.jogReverseFps);
+    addNumber(QStringLiteral("jog_stop_samples"), metrics.jogStopSamples);
+    addNumber(QStringLiteral("jog_stop_p50_ms"), metrics.jogStopP50Milliseconds);
+    addNumber(QStringLiteral("jog_stop_p95_ms"), metrics.jogStopP95Milliseconds);
+    addNumber(QStringLiteral("jog_stop_max_ms"), metrics.jogStopMaximumMilliseconds);
+    addNumber(QStringLiteral("jog_stale_updates"), metrics.jogStaleUpdates);
     addNumber(QStringLiteral("analysis_ms"), metrics.analysisMilliseconds);
     addNumber(QStringLiteral("analysis_decoded_frames"), metrics.analysisDecodedFrames);
     addNumber(QStringLiteral("analysis_frames_per_second"), analysisFramesPerSecond);
