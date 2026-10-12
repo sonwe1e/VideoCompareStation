@@ -38,10 +38,35 @@ Rectangle {
     readonly property var zoomSteps: [0, 100, 200, 400]
 
     objectName: "roiTripletStrip"
-    color: Theme.panel
+    // The strip is declared above the live surface in the scene graph, so anything opaque painted
+    // here would cover the renderer's local-window overdraw that lands inside the window cells.
+    // The root therefore stays transparent; only the header band keeps an opaque chrome plate and
+    // the cells paint their own letterbox bars around the footage holes.
+    color: "transparent"
     border.color: Theme.border
     border.width: 1
     radius: Theme.radiusMedium
+
+    // Opaque chrome behind the header band only. The window row below must stay transparent so
+    // the footage overdraw shows through the cells' footage holes. The band height is derived
+    // from the column's own layout values instead of anchoring to `windowRow`: that row is
+    // positioner-managed, and an anchor line into a positioner child does not track its layout.
+    Rectangle {
+        id: headerPlate
+
+        objectName: "roiTripletHeaderPlate"
+        anchors {
+            left: parent.left
+            right: parent.right
+            top: parent.top
+            leftMargin: 1
+            rightMargin: 1
+            topMargin: 1
+        }
+        height: stripColumn.anchors.margins + stripHeader.height + stripColumn.spacing - 1
+        color: Theme.panel
+        radius: Math.max(0, control.radius - 1)
+    }
 
     // Staged window content rects in surface item coordinates, one entry per active source.
     // The viewport binds the surface's roiTripletWindows to this list. Every input the mapping
@@ -109,7 +134,9 @@ Rectangle {
     }
 
     function zoomTitle() {
-        return control.zoomPercent === 0 ? qsTr("局部 适配ROI") : qsTr("局部 %1%").arg(control.zoomPercent);
+        // B09/plan V01 naming: ROI-fit must never read as a source-pixel magnification, so the
+        // fixed steps say 源像素 explicitly (100% = physical-pixel 1:1 against the source).
+        return control.zoomPercent === 0 ? qsTr("局部·适配ROI") : qsTr("局部·源像素 %1%").arg(control.zoomPercent);
     }
 
     function cycleZoom() {

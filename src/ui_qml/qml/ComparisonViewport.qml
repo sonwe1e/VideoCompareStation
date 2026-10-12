@@ -1616,9 +1616,10 @@ Rectangle {
         roiEnabled: dualVideoSurface.roiEnabled
         zoomPercent: control.roiTripletZoomPercent
         // Shared sampling preference, not a second knob: the pixel mode pins nearest, auto
-        // mirrors the surface's own >=200% nearest rule against the window zoom, smooth
-        // stays bilinear. 适配ROI (0) keeps the smooth default.
-        smoothSampling: dualVideoSurface.videoFilterMode !== dualVideoSurface.VideoFilterPixel && !(dualVideoSurface.videoFilterMode === dualVideoSurface.VideoFilterAuto && control.roiTripletZoomPercent >= 200)
+        // mirrors the surface's own nearest rule against the window zoom (the threshold comes
+        // from the surface, so the two cannot drift), smooth stays bilinear. 适配ROI (0) keeps
+        // the smooth default.
+        smoothSampling: dualVideoSurface.videoFilterMode !== dualVideoSurface.VideoFilterPixel && !(dualVideoSurface.videoFilterMode === dualVideoSurface.VideoFilterAuto && control.roiTripletZoomPercent >= dualVideoSurface.autoNearestThresholdPercent)
         // Published footage extents chrome; resolved by the same pure geometry the renderer
         // draws with.
         windowRects: dualVideoSurface.roiTripletWindowRects

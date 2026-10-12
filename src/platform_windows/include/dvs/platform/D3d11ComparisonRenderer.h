@@ -149,9 +149,10 @@ struct SurfaceLocalWindow final {
 // that were passed in (nominal-DPR logical units) and is always centred inside them; `crop` is
 // the visible region in unrotated normalized source coordinates, so the draw keeps the frame's
 // own rotation path. `nativePhysicalWidth/Height` are the exact physical extents a physical
-// zoom promises (oriented crop times magnification, SAR on the horizontal axis); zero at fit,
-// where no per-pixel size claim exists. The renderer re-expresses them on the render target's
-// actual pixel grid, whose scale Qt rounds independently per axis.
+// zoom promises (oriented crop times magnification, with the anamorphic factor on the axis that
+// spans the source width: horizontal when unrotated, vertical after a 90/270 rotation); zero at
+// fit, where no per-pixel size claim exists. The renderer re-expresses them on the render
+// target's actual pixel grid, whose scale Qt rounds independently per axis.
 struct SurfaceLocalWindowGeometry final {
     bool valid = false;
     SurfaceRect footageRect;

@@ -810,6 +810,10 @@ ComparisonSurface::VideoFilterMode ComparisonSurface::videoFilterMode() const no
     return videoFilterMode_;
 }
 
+int ComparisonSurface::autoNearestThresholdPercent() const noexcept {
+    return static_cast<int>(kAutoNearestThresholdPercent);
+}
+
 void ComparisonSurface::setVideoFilterMode(const VideoFilterMode value) {
     if ((value != VideoFilterAuto && value != VideoFilterSmooth && value != VideoFilterPixel) ||
         videoFilterMode_ == value) {

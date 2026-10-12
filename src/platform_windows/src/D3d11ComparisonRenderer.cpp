@@ -377,7 +377,7 @@ d3dBacking(const std::shared_ptr<const GpuFrameResource>& frame) noexcept {
     }
     const double physicalWidth = nativePhysicalWidth;
     const double physicalHeight = nativePhysicalHeight;
-    // A non-integral physical extent (SAR on the horizontal axis) keeps the centred placement;
+    // A non-integral physical extent (the anamorphic axis) keeps the centred placement;
     // no per-pixel claim holds on that axis then.
     const double snappedExtentWidth = std::round(physicalWidth);
     const double snappedExtentHeight = std::round(physicalHeight);
@@ -826,6 +826,13 @@ SurfaceLocalWindowGeometry surfaceLocalWindowGeometry(const SurfaceRect& content
     const float clampedBottom = clampedRoi.y + clampedRoi.height;
     const float centreX = (clampedLeft + clampedRight) * 0.5F;
     const float centreY = (clampedTop + clampedBottom) * 0.5F;
+    // The anamorphic axis in the oriented frame: SAR belongs to the source-width axis, which is
+    // the oriented horizontal axis when unrotated and the oriented vertical axis after a 90/270
+    // rotation - exactly the rule transformedExtent uses for the panorama. Applying SAR to the
+    // oriented width unconditionally stretched rotated anamorphic sources differently from the
+    // panorama and from the pixel-scale badge.
+    const double horizontalSar = rotated ? 1.0 : static_cast<double>(sar);
+    const double verticalSar = rotated ? static_cast<double>(sar) : 1.0;
 
     float cropLeft = 0.0F;
     float cropTop = 0.0F;
@@ -839,8 +846,8 @@ SurfaceLocalWindowGeometry surfaceLocalWindowGeometry(const SurfaceRect& content
         cropTop = clampedTop;
         cropRight = clampedRight;
         cropBottom = clampedBottom;
-        const double displayWidth = static_cast<double>(cropRight - cropLeft) * sar;
-        const double displayHeight = static_cast<double>(cropBottom - cropTop);
+        const double displayWidth = static_cast<double>(cropRight - cropLeft) * horizontalSar;
+        const double displayHeight = static_cast<double>(cropBottom - cropTop) * verticalSar;
         if (!(displayWidth > 0.0) || !(displayHeight > 0.0)) {
             return {};
         }
@@ -850,16 +857,16 @@ SurfaceLocalWindowGeometry surfaceLocalWindowGeometry(const SurfaceRect& content
         footageHeight = displayHeight * fitScale;
     } else {
         // Physical zoom: the footage spans zoom/100 physical pixels per source pixel on the
-        // vertical axis (SAR scaled horizontally), so the visible crop is the content rect's
-        // physical extent divided by the magnification. The crop is integer-sized and centred
-        // on the ROI centre, clamped into the frame, so fixed magnification keeps texel-exact
-        // sampling regardless of the window's sub-pixel placement.
+        // source-height axis (the source-width axis per SAR), so the visible crop is the content
+        // rect's physical extent divided by the magnification. The crop is integer-sized and
+        // centred on the ROI centre, clamped into the frame, so fixed magnification keeps
+        // texel-exact sampling regardless of the window's sub-pixel placement.
         const double zoom = zoomPercent / 100.0;
         const double physicalWidth = static_cast<double>(contentRect.width) * pixelsPerLogicalUnit;
         const double physicalHeight =
             static_cast<double>(contentRect.height) * pixelsPerLogicalUnit;
-        const double requestedWidth = physicalWidth / (zoom * sar);
-        const double requestedHeight = physicalHeight / zoom;
+        const double requestedWidth = physicalWidth / (zoom * horizontalSar);
+        const double requestedHeight = physicalHeight / (zoom * verticalSar);
         if (!std::isfinite(requestedWidth) || !std::isfinite(requestedHeight) ||
             requestedWidth < 1.0 || requestedHeight < 1.0) {
             return {};
@@ -868,32 +875,34 @@ SurfaceLocalWindowGeometry surfaceLocalWindowGeometry(const SurfaceRect& content
             (std::min)(std::floor(requestedWidth), static_cast<double>(orientedWidth)));
         float cropHeight = static_cast<float>(
             (std::min)(std::floor(requestedHeight), static_cast<double>(orientedHeight)));
-        // Keep the crop half-open inside the frame and its extent integral: an integer crop
-        // with an integer origin lets the renderer snap the footage onto whole physical
-        // pixels, so every footage pixel centre lands on a texel centre at native zoom. The
-        // right/bottom edge therefore stops before the boundary texel entirely.
-        if (orientedWidth < 2.0F || orientedHeight < 2.0F) {
+        // Keep the crop inside the frame and its extent integral: an integer crop with an
+        // integer origin maps every destination pixel centre onto a texel centre, so the crop
+        // may cover the whole frame - including the last source row and column - without any
+        // boundary averaging. (The fit path keeps the half-open centre clamp because it
+        // resamples with an arbitrary scale, where averaging in the edge texel is the risk.)
+        if (orientedWidth < 1.0F || orientedHeight < 1.0F) {
             return {};
         }
-        cropWidth = (std::min)(cropWidth, orientedWidth - 1.0F);
-        cropHeight = (std::min)(cropHeight, orientedHeight - 1.0F);
+        cropWidth = (std::min)(cropWidth, orientedWidth);
+        cropHeight = (std::min)(cropHeight, orientedHeight);
         if (cropWidth < 1.0F || cropHeight < 1.0F) {
             return {};
         }
         cropLeft = std::clamp(static_cast<float>(std::round(centreX - cropWidth * 0.5F)),
                               0.0F,
-                              orientedWidth - 1.0F - cropWidth);
+                              orientedWidth - cropWidth);
         cropTop = std::clamp(static_cast<float>(std::round(centreY - cropHeight * 0.5F)),
                              0.0F,
-                             orientedHeight - 1.0F - cropHeight);
+                             orientedHeight - cropHeight);
         cropRight = cropLeft + cropWidth;
         cropBottom = cropTop + cropHeight;
         // The half-open clamp may shrink the crop below the requested extent; the footage then
         // covers crop times magnification and letterboxes instead of stretching. The extent is
         // physical, so it converts back to the content rect's logical units here.
         footageWidth =
-            static_cast<double>(cropRight - cropLeft) * sar * zoom / pixelsPerLogicalUnit;
-        footageHeight = static_cast<double>(cropBottom - cropTop) * zoom / pixelsPerLogicalUnit;
+            static_cast<double>(cropRight - cropLeft) * horizontalSar * zoom / pixelsPerLogicalUnit;
+        footageHeight =
+            static_cast<double>(cropBottom - cropTop) * verticalSar * zoom / pixelsPerLogicalUnit;
     }
     if (!std::isfinite(footageWidth) || !std::isfinite(footageHeight) || footageWidth <= 0.0 ||
         footageHeight <= 0.0) {
@@ -913,13 +922,17 @@ SurfaceLocalWindowGeometry surfaceLocalWindowGeometry(const SurfaceRect& content
                                              cropRight / orientedWidth,
                                              cropBottom / orientedHeight};
     // The physical extent a physical zoom promises: the oriented crop times the magnification,
-    // SAR applied horizontally. The renderer re-expresses this on the render target's real
-    // pixel grid; the fit path claims no per-pixel size and reports zero.
+    // with the anamorphic factor on the axis that spans the source width (horizontal when
+    // unrotated, vertical after a 90/270 rotation). The renderer re-expresses this on the render
+    // target's real pixel grid; the fit path claims no per-pixel size and reports zero.
     const float nativePhysicalWidth =
         zoomPercent == 0 ? 0.0F
-                         : static_cast<float>(cropRight - cropLeft) * sar * (zoomPercent / 100.0F);
+                         : static_cast<float>(static_cast<double>(cropRight - cropLeft) *
+                                              horizontalSar * (zoomPercent / 100.0F));
     const float nativePhysicalHeight =
-        zoomPercent == 0 ? 0.0F : static_cast<float>(cropBottom - cropTop) * (zoomPercent / 100.0F);
+        zoomPercent == 0 ? 0.0F
+                         : static_cast<float>(static_cast<double>(cropBottom - cropTop) *
+                                              verticalSar * (zoomPercent / 100.0F));
     return SurfaceLocalWindowGeometry{
         .valid = true,
         .footageRect = footage,
@@ -2466,8 +2479,10 @@ private:
 
         // V01 RoiTriplet local windows: additional draws of the same presented frame set into
         // the strip's window cells, resolved by the shared pure geometry. A window whose slot
-        // has no frame, or whose content rect cannot resolve a crop, draws nothing - the strip
-        // chrome reports the unresolvable window instead of a stale or wrong picture.
+        // has no frame in the presented set, or whose content rect cannot resolve a crop, draws
+        // nothing - never a stale or wrong picture. The strip chrome cannot yet distinguish this
+        // skip from a resolved window, so such a cell shows its letterbox bars without footage
+        // (tracked in the backlog as the remaining availability-honesty gap).
         if (state.localWindowCount > 0U) {
             SurfacePixelGrid localGrid;
             UINT viewportCount = 1U;

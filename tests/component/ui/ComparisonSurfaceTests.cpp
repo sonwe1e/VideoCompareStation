@@ -622,16 +622,18 @@ TEST(ComparisonSurfaceGeometryTests, LocalWindowPhysicalZoomKeepsAnIntegerTexelA
     EXPECT_NEAR(zoomed.crop.top * 64.0F, 22.0F, 0.00001F);
     EXPECT_NEAR(zoomed.crop.bottom * 64.0F, 42.0F, 0.00001F);
 
-    // A crop that cannot centre on the ROI (centre too close to the frame edge with the full
-    // frame wider than the crop) clamps into the frame instead of sampling past it.
+    // A crop that cannot centre on the ROI (centre too close to the frame edge with the crop
+    // wider than the remaining room) clamps into the frame instead of sampling past it; the
+    // integral crop may touch the frame boundary, so the last source row and column stay
+    // inspectable at fixed magnification.
     const platform::SurfaceNormalizedRect edgeRoi{0.5F, 0.5F, 1.0F, 1.0F};
     const platform::SurfaceLocalWindowGeometry edge = platform::surfaceLocalWindowGeometry(
         content, 2.0F, 96.0F, 64.0F, 0U, 1U, 1U, true, edgeRoi, 100);
     ASSERT_TRUE(edge.valid);
-    EXPECT_NEAR(edge.crop.left * 96.0F, 15.0F, 0.00001F);
-    EXPECT_NEAR(edge.crop.right * 96.0F, 95.0F, 0.00001F);
-    EXPECT_NEAR(edge.crop.top * 64.0F, 23.0F, 0.00001F);
-    EXPECT_NEAR(edge.crop.bottom * 64.0F, 63.0F, 0.00001F);
+    EXPECT_NEAR(edge.crop.left * 96.0F, 16.0F, 0.00001F);
+    EXPECT_NEAR(edge.crop.right * 96.0F, 96.0F, 0.00001F);
+    EXPECT_NEAR(edge.crop.top * 64.0F, 24.0F, 0.00001F);
+    EXPECT_NEAR(edge.crop.bottom * 64.0F, 64.0F, 0.00001F);
 }
 
 TEST(ComparisonSurfaceGeometryTests, LocalWindowGeometryMapsRotationAndSarDisplayAspect) {
@@ -659,13 +661,77 @@ TEST(ComparisonSurfaceGeometryTests, LocalWindowGeometryMapsRotationAndSarDispla
     // 64x16 with scale 4.
     EXPECT_NEAR(wide.footageRect.width, 28.0F, 0.00001F);
     EXPECT_NEAR(wide.footageRect.height, 16.0F, 0.00001F);
-    // At physical zoom the horizontal scale is SAR-scaled: the 7x7 frame-bounded crop spans
-    // 14 physical px horizontally and 7 vertically at 100%.
+    // At physical zoom the horizontal scale is SAR-scaled: at 100% the whole 8x8 frame fits the
+    // window (the crop covers the frame, last row and column included) and spans 16x8 physical
+    // px, so the SAR 2:1 source keeps its true display aspect.
     const platform::SurfaceLocalWindowGeometry wideNative = platform::surfaceLocalWindowGeometry(
         {0.0F, 0.0F, 64.0F, 16.0F}, 1.0F, 8.0F, 8.0F, 0U, 2U, 1U, true, roi, 100);
     ASSERT_TRUE(wideNative.valid);
-    EXPECT_NEAR(wideNative.footageRect.width, 14.0F, 0.00001F);
-    EXPECT_NEAR(wideNative.footageRect.height, 7.0F, 0.00001F);
+    EXPECT_NEAR(wideNative.footageRect.width, 16.0F, 0.00001F);
+    EXPECT_NEAR(wideNative.footageRect.height, 8.0F, 0.00001F);
+
+    // Rotation 90 combined with SAR 2: the anamorphic factor belongs to the oriented *vertical*
+    // axis (the axis that spans the source width after rotation), exactly as transformedExtent
+    // computes it for the panorama. An 8x16 frame displays as 16x32; the ROI's display extent is
+    // (oriented width, oriented height x SAR) = (15.5, 15) after the half-open clamp, so the
+    // square content window is filled horizontally and letterboxed vertically.
+    const platform::SurfaceNormalizedRect fullRoi{0.0F, 0.0F, 1.0F, 1.0F};
+    const platform::SurfaceLocalWindowGeometry rotatedSar = platform::surfaceLocalWindowGeometry(
+        {0.0F, 0.0F, 1000.0F, 1000.0F}, 1.0F, 8.0F, 16.0F, 90U, 2U, 1U, true, fullRoi, 0);
+    ASSERT_TRUE(rotatedSar.valid);
+    EXPECT_NEAR(rotatedSar.footageRect.width, 1000.0F, 0.01F);
+    EXPECT_NEAR(rotatedSar.footageRect.height, 1000.0F * 15.0F / 15.5F, 0.01F);
+    // The unrotated orientation of the same frame keeps the anamorphic factor on the horizontal
+    // axis instead: the same content window is filled vertically this time.
+    const platform::SurfaceLocalWindowGeometry unrotatedSar = platform::surfaceLocalWindowGeometry(
+        {0.0F, 0.0F, 1000.0F, 1000.0F}, 1.0F, 8.0F, 16.0F, 0U, 2U, 1U, true, fullRoi, 0);
+    ASSERT_TRUE(unrotatedSar.valid);
+    EXPECT_NEAR(unrotatedSar.footageRect.width, 1000.0F * 15.0F / 15.5F, 0.01F);
+    EXPECT_NEAR(unrotatedSar.footageRect.height, 1000.0F, 0.01F);
+
+    // At 100% the rotated anamorphic frame fits the window exactly: the crop covers the whole
+    // oriented frame and the physical extent is 16x16 (8 source rows x SAR 2 vertically, 16
+    // source columns horizontally).
+    const platform::SurfaceLocalWindowGeometry rotatedSarNative =
+        platform::surfaceLocalWindowGeometry(
+            {0.0F, 0.0F, 32.0F, 32.0F}, 1.0F, 8.0F, 16.0F, 90U, 2U, 1U, true, fullRoi, 100);
+    ASSERT_TRUE(rotatedSarNative.valid);
+    EXPECT_NEAR(rotatedSarNative.crop.left, 0.0F, 0.00001F);
+    EXPECT_NEAR(rotatedSarNative.crop.top, 0.0F, 0.00001F);
+    EXPECT_NEAR(rotatedSarNative.crop.right, 1.0F, 0.00001F);
+    EXPECT_NEAR(rotatedSarNative.crop.bottom, 1.0F, 0.00001F);
+    EXPECT_NEAR(rotatedSarNative.footageRect.width, 16.0F, 0.00001F);
+    EXPECT_NEAR(rotatedSarNative.footageRect.height, 16.0F, 0.00001F);
+    EXPECT_NEAR(rotatedSarNative.nativePhysicalWidth, 16.0F, 0.00001F);
+    EXPECT_NEAR(rotatedSarNative.nativePhysicalHeight, 16.0F, 0.00001F);
+}
+
+TEST(ComparisonSurfaceGeometryTests, LocalWindowNativeZoomCoversTheLastSourceRowAndColumn) {
+    // A frame smaller than the window at 100% must be inspectable in full: the integral crop may
+    // cover the frame to its boundary, because an integer crop with an integer origin maps every
+    // destination pixel centre onto a texel centre. The old N-1 cap made the last source row and
+    // column unreachable at every fixed magnification while fit could still show them.
+    const platform::SurfaceNormalizedRect fullRoi{0.0F, 0.0F, 1.0F, 1.0F};
+    const platform::SurfaceLocalWindowGeometry geometry = platform::surfaceLocalWindowGeometry(
+        {0.0F, 0.0F, 64.0F, 64.0F}, 1.0F, 15.0F, 8.0F, 0U, 1U, 1U, true, fullRoi, 100);
+    ASSERT_TRUE(geometry.valid);
+    EXPECT_NEAR(geometry.crop.left, 0.0F, 0.00001F);
+    EXPECT_NEAR(geometry.crop.top, 0.0F, 0.00001F);
+    EXPECT_NEAR(geometry.crop.right, 1.0F, 0.00001F);
+    EXPECT_NEAR(geometry.crop.bottom, 1.0F, 0.00001F);
+    EXPECT_NEAR(geometry.footageRect.width, 15.0F, 0.00001F);
+    EXPECT_NEAR(geometry.footageRect.height, 8.0F, 0.00001F);
+    EXPECT_NEAR(geometry.nativePhysicalWidth, 15.0F, 0.00001F);
+    EXPECT_NEAR(geometry.nativePhysicalHeight, 8.0F, 0.00001F);
+
+    // The same promise at 200%: the crop still covers the frame when the window is large enough,
+    // and the physical extent doubles.
+    const platform::SurfaceLocalWindowGeometry zoomed = platform::surfaceLocalWindowGeometry(
+        {0.0F, 0.0F, 64.0F, 64.0F}, 1.0F, 15.0F, 8.0F, 0U, 1U, 1U, true, fullRoi, 200);
+    ASSERT_TRUE(zoomed.valid);
+    EXPECT_NEAR(zoomed.crop.right, 1.0F, 0.00001F);
+    EXPECT_NEAR(zoomed.nativePhysicalWidth, 30.0F, 0.00001F);
+    EXPECT_NEAR(zoomed.nativePhysicalHeight, 16.0F, 0.00001F);
 }
 
 TEST(ComparisonSurfaceGeometryTests, LocalWindowGeometryRejectsUnresolvableInputs) {

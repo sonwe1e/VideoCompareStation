@@ -21,6 +21,21 @@ Item {
         height: 400
     }
 
+    // Bright plate below the strip: in production the live surface node paints the local-window
+    // overdraw underneath the strip, so the footage holes must stay transparent. Declared before
+    // the strip on purpose - the strip must cover this plate everywhere except the holes.
+    Rectangle {
+        id: underPlate
+
+        anchors {
+            left: parent.left
+            right: parent.right
+            bottom: parent.bottom
+        }
+        height: 200
+        color: "#ff0000"
+    }
+
     Dvs.RoiTripletStrip {
         id: strip
 
@@ -130,14 +145,14 @@ Item {
             const button = findChild(strip, "roiTripletZoomButton");
             verify(button !== null);
             compare(strip.zoomPercent, 0);
-            compare(button.text, qsTr("局部 适配ROI"));
+            compare(button.text, qsTr("局部·适配ROI"));
             zoomSpy.clear();
             button.clicked();
             compare(zoomSpy.count, 1);
             compare(zoomSpy.signalArguments[0][0], 100);
             strip.zoomPercent = 100;
             wait(0);
-            compare(button.text, qsTr("局部 100%"));
+            compare(button.text, qsTr("局部·源像素 100%"));
             strip.zoomPercent = 200;
             button.clicked();
             compare(zoomSpy.signalArguments[1][0], 400);
@@ -145,6 +160,35 @@ Item {
             button.clicked();
             // 400% wraps back to 适配ROI.
             compare(zoomSpy.signalArguments[2][0], 0);
+        }
+
+        // The strip is declared above the live surface: the renderer's local-window overdraw
+        // lands under it. If the strip root or a cell painted an opaque background over the
+        // footage hole, the whole V01 feature would be invisible while every property-level test
+        // still passed - the plate below must show through the hole and nowhere else.
+        function test_footage_hole_stays_transparent_over_the_lower_layer() {
+            const target = cell(1);
+            verify(target !== null);
+            strip.windowRects = [
+                { "slot": 0, "valid": false, "width": 0, "height": 0 },
+                { "slot": 1, "valid": true, "width": 120, "height": 80 },
+                { "slot": 2, "valid": false, "width": 0, "height": 0 }
+            ];
+            wait(0);
+            verify(target.footageValid);
+            const image = grabImage(root);
+            // Centre of the footage hole: the plate below (the overdraw stand-in) must be visible.
+            const center = target.mapToItem(root, target.footageX + target.footageWidth / 2, target.footageY + target.footageHeight / 2);
+            const centerColor = image.pixel(center.x, center.y);
+            verify(centerColor.r > 0.9 && centerColor.g < 0.1, "the footage hole shows " + centerColor.toString() + " instead of the layer below");
+            // The letterbox bar above the footage stays canvas-dark: only the hole is transparent.
+            const barPoint = target.mapToItem(root, target.width / 2, Math.max(1, target.footageY - 4));
+            const barColor = image.pixel(barPoint.x, barPoint.y);
+            verify(barColor.r < 0.2 && barColor.g < 0.2 && barColor.b < 0.25, "the letterbox bar shows " + barColor.toString());
+            // The header band keeps its opaque chrome plate: transparency is scoped to the holes.
+            const header = strip.mapToItem(root, strip.width - 10, 12);
+            const headerColor = image.pixel(header.x, header.y);
+            verify(headerColor.r < 0.2 && headerColor.g < 0.25 && headerColor.b < 0.3, "the header plate shows " + headerColor.toString());
         }
 
         function test_published_footage_extents_drive_letterbox_chrome() {

@@ -43,6 +43,10 @@ class ComparisonSurface : public QQuickItem {
     // distortion. The explicit modes override the automatic switch for user preference.
     Q_PROPERTY(VideoFilterMode videoFilterMode READ videoFilterMode WRITE setVideoFilterMode NOTIFY
                    videoFilterModeChanged)
+    // The physical magnification at which Auto sampling switches to nearest. Exposed so the QML
+    // local-window chrome applies the same rule as the surface's own sampler instead of
+    // duplicating the constant (V01).
+    Q_PROPERTY(int autoNearestThresholdPercent READ autoNearestThresholdPercent CONSTANT)
     // Physical pixels per source pixel of the first displayed panel, in percent - the same
     // number the viewport badge shows (content, DPR and ROI aware). Auto keys off this, not
     // the fit-relative viewScale, so a small clip fit to the window (physically magnified)
@@ -212,6 +216,8 @@ public:
     [[nodiscard]] DifferenceFilter differenceFilter() const noexcept;
     void setDifferenceFilter(DifferenceFilter value);
     [[nodiscard]] VideoFilterMode videoFilterMode() const noexcept;
+    // Auto-sampling nearest-neighbour threshold in physical percent (V01 local-window chrome).
+    [[nodiscard]] int autoNearestThresholdPercent() const noexcept;
     void setVideoFilterMode(VideoFilterMode value);
     [[nodiscard]] qreal physicalScalePercent() const noexcept;
     void setPhysicalScalePercent(qreal value);
