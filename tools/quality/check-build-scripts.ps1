@@ -282,6 +282,77 @@ Assert-Contract ($regexIndex -ge 0 -and $testCalls[0].Arguments[$regexIndex + 1]
 Write-Host 'PASS: target array and CTest regex preserve literal arguments'
 $passed++
 
+$groupExamples = @{
+    Core = 'application.PlaybackCoordinatorTests.RejectsStaleFrame'
+    Media = 'media.SoftwareDecoderTests.DecodesFrame'
+    Images = 'ui.MainQmlContractTests.ImageWorkspaceManualFlickerContract'
+    Playback = 'ui.player_osc'
+    Sidebar = 'ui.video_file_sidebar.Basic'
+    Ui = 'ui.MainQmlContractTests.ImageWorkspaceManualFlickerContract'
+    Build = 'quality.build-scripts'
+    Shell = 'shell_windows.ExplorerCommandSmokeTests.InvokesRealComServerWithUnicodeCompareArguments'
+}
+foreach ($group in $groupExamples.Keys) {
+    $result = Invoke-WrapperCase @{ Test = $true; TestGroup = $group; TestJobs = 8 }
+    Assert-Contract ($result.ExitCode -eq 0) "Development group $group failed." $result
+    $testCalls = @($result.Records | Where-Object { $_.Tool -eq 'ctest' })
+    Assert-Contract ($testCalls.Count -eq 1) 'A development group must invoke CTest exactly once.' $result
+    $arguments = $testCalls[0].Arguments
+    $regexIndex = [Array]::IndexOf($arguments, '-R')
+    Assert-Contract ($regexIndex -ge 0 -and
+        $groupExamples[$group] -match $arguments[$regexIndex + 1] -and
+        'unrelated.Test' -notmatch $arguments[$regexIndex + 1]) `
+        "Group $group lost its scope or representative regression." $result
+    $excludeIndex = [Array]::IndexOf($arguments, '-E')
+    Assert-Contract ($excludeIndex -ge 0) 'Development groups must select a representative UI matrix.' $result
+    $exclude = $arguments[$excludeIndex + 1]
+    foreach ($name in @('ui.vcs_menu.Windows.scale-1', 'ui.WipeHandle.scale-1_25',
+            'ui.DropConfirmationDialog.scale-1_5', 'ui.vcs_tool_tip.Basic.scale-2',
+            'ui.video_file_sidebar.Windows', 'ui.ToolbarCombo.Windows')) {
+        Assert-Contract ($name -match $exclude) "Repeated UI variant was not excluded: $name" $result
+    }
+    foreach ($name in @('ui.vcs_menu.Basic.scale-1', 'ui.WipeHandle.scale-1',
+            'ui.video_file_sidebar.Basic', 'ui.MainQmlContractTests.ImageOpen')) {
+        Assert-Contract ($name -notmatch $exclude) "Representative UI coverage was excluded: $name" $result
+    }
+    $jobsIndex = [Array]::IndexOf($arguments, '-j')
+    Assert-Contract ($jobsIndex -ge 0 -and $arguments[$jobsIndex + 1] -eq '8') `
+        'Local test parallelism was not forwarded.' $result
+    Assert-Contract ($arguments -contains '--no-tests=error' -and $arguments -notcontains '-LE') `
+        'Development selection weakened the empty-selection or preset label gates.' $result
+    Write-Host "PASS: $group selects its regressions once, with representative matrix and local jobs"
+    $passed++
+}
+
+$result = Invoke-WrapperCase @{ TestOnly = $true; TestGroup = 'Sidebar'; FullMatrix = $true }
+$testCalls = @($result.Records | Where-Object { $_.Tool -eq 'ctest' })
+Assert-Contract ($result.ExitCode -eq 0 -and $testCalls.Count -eq 1 -and
+    $testCalls[0].Arguments -contains '-R' -and $testCalls[0].Arguments -notcontains '-E' -and
+    @($result.Records | Where-Object { $_.Arguments -contains '--build' }).Count -eq 0) `
+    'FullMatrix must retain the selected group and all variants without an extra build.' $result
+Write-Host 'PASS: full matrix is available within a targeted group'
+$passed++
+
+$result = Invoke-WrapperCase @{ Test = $true }
+$testCalls = @($result.Records | Where-Object { $_.Tool -eq 'ctest' })
+Assert-Contract ($result.ExitCode -eq 0 -and $testCalls.Count -eq 1 -and
+    $testCalls[0].Arguments -notcontains '-R' -and $testCalls[0].Arguments -notcontains '-E' -and
+    $testCalls[0].Arguments -notcontains '-j') `
+    'The default full gate or preset parallelism was narrowed by development routing.' $result
+Write-Host 'PASS: unfiltered test retains the complete preset and its default jobs'
+$passed++
+
+foreach ($invalidSelection in @(
+        @{ Test = $true; TestGroup = 'Sidebar'; TestRegex = 'ui' },
+        @{ TestGroup = 'Sidebar' },
+        @{ Test = $true; FullMatrix = $true })) {
+    $result = Invoke-WrapperCase $invalidSelection
+    Assert-Contract ($result.ExitCode -ne 0 -and $result.Records.Count -eq 0) `
+        'Ambiguous or inactive test options must fail before any build or test tool runs.' $result
+    $passed++
+}
+Write-Host 'PASS: ambiguous and inactive test selections fail before invoking tools'
+
 $result = Invoke-WrapperCase @{ Configure = $true }
 Assert-Contract ($result.ExitCode -eq 0) '-Configure failed with an existing cache.' $result
 Assert-Contract (@($result.Records | Where-Object {
@@ -386,4 +457,5 @@ Assert-Contract (@($result.Records | Where-Object {
 Write-Host 'PASS: Doctor diagnoses without configuring or building'
 $passed++
 
+if ($passed -ne 28) { throw "Expected 28 build-script contract cases; ran $passed." }
 Write-Host "Build-script contracts passed: $passed cases. Fixtures: $fixtureRoot"

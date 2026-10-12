@@ -7,7 +7,9 @@
 
 ```powershell
 pwsh tools/build/build.ps1 -Preset dev -Doctor
-pwsh tools/build/build.ps1 -Preset dev -Test
+pwsh tools/build/build.ps1 -Preset dev -Test -TestGroup Sidebar -TestJobs 8
+pwsh tools/build/build.ps1 -Preset dev -Test -TestRegex '^ui[.]ImageReviewControllerTests[.]'
+pwsh tools/build/build.ps1 -Preset dev -Test -TestJobs 8
 pwsh tools/build/build.ps1 -Preset dev -Target format-check
 pwsh tools/build/build.ps1 -Preset dev -Target lint
 pwsh tools/quality/check-build-scripts.ps1
@@ -22,6 +24,40 @@ pwsh tools/quality/check-hardcoded-paths.ps1
 默认构建所有目标。定向测试用 `-Test -TestRegex 'ui.ImageReviewControllerTests'`，
 零项匹配会失败。`-TestOnly -TestRegex ...` 只用于源码与二进制已一致的情况。
 包装器以仓库为工作目录；从其他目录调用时使用脚本的完整路径。
+
+### 开发循环与完整验收
+
+编辑时先选择受影响的组，或用 `-TestRegex` 精确到套件／用例。组不是自动影响分析：跨层修改
+仍需沿 [Agent 路由表](agent-guide.md) 补跑其他受影响入口；`Ui` 是较宽的 UI 回归，通常不应
+用于单个按钮的每次修改。组与正则不能同时传入，避免误以为两个范围会取交集。
+
+| `-TestGroup` | 覆盖范围 |
+|---|---|
+| `Core` | domain、application、presentation 契约 |
+| `Media` | media 解码／导出组件与 platform 渲染组件，沿用 preset 的硬件／性能排除项 |
+| `Images` | 图片解码、查看／编辑／配对控制器、图片工作区及文件夹侧栏接线 |
+| `Playback` | application、播放解码链、走带／Jog／缩略图控制器与主窗播放入口 |
+| `Sidebar` | 文件夹模型、历史／侧栏控制器、菜单交互与主窗侧栏接线 |
+| `Ui` | 全部 UI 控制器、组件与主窗契约 |
+| `Build` | `quality.*` 构建、脚本和发布契约检查 |
+| `Shell` | Explorer 接口及应用启动／smoke |
+
+命名组默认每套 QML 只跑 Basic／100% 代表配置。修改主题、弹窗、布局或 DPI 时加
+`-FullMatrix`，同一套件的 Windows／125%／150%／200% 组合仍全部保留。显式 `-TestRegex`
+和无过滤器的 `-Test` 保持完整矩阵，不会因为新增开发分组而缩小原有门禁。
+
+```powershell
+pwsh tools/build/build.ps1 -Preset dev -Test -TestGroup Images -TestJobs 8
+pwsh tools/build/build.ps1 -Preset dev -Test -TestGroup Sidebar -FullMatrix -TestJobs 8
+```
+
+`-TestJobs N` 只改变本次 CTest 并行度；默认仍遵循 preset 的单线程设置。真实窗口输入测试
+保持 `RUN_SERIAL`，不会同时争抢焦点。不要自行并发启动同一构建目录的多个 wrapper。
+
+改动稳定后，无过滤器执行一次全套，并执行适用的 format/lint 门禁；失败先定向修复和重测，
+修复稳定后再作最终完整验收。相同输入上的成功结果无需反复重跑。仅文档改动运行适用的
+文档／脚本检查；一次完整 CTest 已包含脚本检查时，不再单独重复运行它们。变异验证按改变的
+关键行为提供反例，相关断言共享证据，不为低风险文案逐断言重建整个项目。
 
 同一 preset 的包装器构建和测试互斥，避免 smoke 正在运行 EXE 时重新链接造成 LNK1168。
 不要同时绕过包装器运行同目录的 Ninja/CTest。日志实时输出；需要保存时重定向到 `out/`。

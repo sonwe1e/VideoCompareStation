@@ -86,6 +86,13 @@ pwsh tools/build/build.ps1 -Preset dev -Target format-check
 pwsh tools/build/build.ps1 -Preset dev -Target lint
 ```
 
+开发时也可用 `-Test -TestGroup Core|Media|Images|Playback|Sidebar|Ui|Build|Shell` 选择命名组，
+搭配 `-TestJobs 8` 并行运行允许并行的用例。命名组默认只跑 UI 代表配置；涉及主题／弹窗／
+布局／DPI 时加 `-FullMatrix`。组是路由起点，不代替上表的跨层影响检查；范围仍太宽时使用
+`-TestRegex`，不能与 `-TestGroup` 同传。详情见 [开发循环与完整验收](building.md#开发循环与完整验收)。
+改动稳定后只作一次最终完整回归；相同输入下已通过的门禁不重复运行。无过滤器的 `-Test`
+始终保留全套与完整 UI 配置矩阵，硬件／性能发布门禁另按原要求执行。
+
 测试过滤器须核对当前 CTest 注册名与实际执行数量；零项匹配不是通过。
 `-TestOnly` 只适合确认二进制与源码一致时使用。wrapper 支持 `-Target`，不支持旧示例中的
 `-FormatCheck -Lint` 参数。

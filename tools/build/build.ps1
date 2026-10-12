@@ -5,6 +5,8 @@
 #   pwsh tools/build/build.ps1 -Preset dev -Target format-check
 #   pwsh tools/build/build.ps1 -Preset dev -Target lint
 #   pwsh tools/build/build.ps1 -Preset dev -Test -TestRegex 'ui.ImageReviewControllerTests'
+#   pwsh tools/build/build.ps1 -Preset dev -Test -TestJobs 8
+#   pwsh tools/build/build.ps1 -Preset dev -Test -TestGroup Sidebar -TestJobs 8
 [CmdletBinding()]
 param(
     [string]$Preset = 'dev',
@@ -15,6 +17,16 @@ param(
     [string[]]$Target = @(),
     [switch]$Test,
     [string]$TestRegex = '',
+    # Named development routes use one representative UI style/DPI by default.
+    # An unfiltered -Test still runs the complete preset, including the UI matrix.
+    [ValidateSet('Core', 'Media', 'Images', 'Playback', 'Sidebar', 'Ui', 'Build', 'Shell')]
+    [string]$TestGroup = '',
+    [switch]$FullMatrix,
+    # 0 keeps the preset's CTEST_PARALLEL_LEVEL (CI stays at 1 for low CPU impact);
+    # CTest still runs real-window RUN_SERIAL suites alone; independent unit and
+    # component tests can overlap under this local override.
+    [ValidateRange(0, 64)]
+    [int]$TestJobs = 0,
     [switch]$TestOnly,
     [string]$VcpkgRoot = '',
     [string]$VcvarsAll = '',
@@ -34,8 +46,28 @@ if (-not $configurePreset -or
     -not ($presets.buildPresets | Where-Object name -CEQ $Preset)) {
     throw "Unknown build preset '$Preset'. Use a non-hidden preset from CMakePresets.json."
 }
+if ($TestGroup -and $TestRegex) {
+    throw 'Use either -TestGroup or -TestRegex, not both.'
+}
+if (($TestGroup -or $FullMatrix -or $TestJobs -gt 0) -and -not ($Test -or $TestOnly)) {
+    throw 'Test selection and parallelism options require -Test or -TestOnly.'
+}
+if ($FullMatrix -and -not $TestGroup) {
+    throw '-FullMatrix is only needed with -TestGroup; other test runs already keep the matrix.'
+}
+$testGroups = @{
+    Core = '^(domain|application|presentation)[.]'
+    Media = '^(media|platform)[.]'
+    Images = '^(media[.]StillImageDecoderTests[.]|ui[.](Image|MainQmlContractTests[.](Image|FolderSidebar)))'
+    Playback = '^(application[.]|media[.](SoftwareDecoderTests|SourceDecodeActorTests|MultiSourceFrameProviderTests)[.]|ui[.](Jog|ReviewControllerTests[.]|PreviewThumbnailControllerTests[.]|player_osc$|timeline_tracks$|timeline_thumbnail_cache$|ReviewActions$|MainQmlContractTests[.](Transport|Startup|.*(Scrub|Jog|Range|Playback))))'
+    Sidebar = '^ui[.](VideoFolderModelTests[.]|video_file_sidebar[.]|ReviewControllerTests[.].*(History|Recent|Folder|Browser)|MainQmlContractTests[.].*(Sidebar|Recent|History|VideoFolder|NonBrowser|AutoBrowse))'
+    Ui = '^ui[.]'
+    Build = '^quality[.]'
+    Shell = '^(shell_windows|app)[.]'
+}
+if ($TestGroup) { $TestRegex = $testGroups[$TestGroup] }
 if ($TestOnly -and (-not $TestRegex -or $Fresh -or $Configure -or $UseInstalledDependencies -or $Target.Count -gt 0)) {
-    throw '-TestOnly requires -TestRegex and cannot combine with configure/build options.'
+    throw '-TestOnly requires -TestRegex or -TestGroup and cannot combine with configure/build options.'
 }
 
 . (Join-Path $PSScriptRoot 'env.ps1') -VcpkgRoot $VcpkgRoot -VcvarsAll $VcvarsAll -CMakeExecutable $CMakeExecutable -NinjaExecutable $NinjaExecutable
@@ -252,6 +284,13 @@ try {
     if ($Test -or $TestOnly) {
         $testArgs = @('--preset', $Preset, '--output-on-failure', '--no-tests=error')
         if ($TestRegex) { $testArgs += @('-R', $TestRegex) }
+        if ($TestGroup -and -not $FullMatrix) {
+            # Keep Basic/100% once per QML suite. Name exclusion composes with the
+            # preset's label exclusions (hardware/performance/packaged/soak).
+            $testArgs += @('-E', '^ui[.].*([.]Windows([.]|$)|[.]scale-(1_25|1_5|2)$)')
+            Write-Host "Development group: $TestGroup; UI matrix: representative (use -FullMatrix for all variants)."
+        }
+        if ($TestJobs -gt 0) { $testArgs += @('-j', $TestJobs) }
         Invoke-BuildTool $env:CTEST_EXECUTABLE $testArgs
     }
     Write-Host "Done: preset=$Preset"
