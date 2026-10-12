@@ -1876,6 +1876,15 @@ private:
         if (!due.has_value()) {
             return;
         }
+        // A plan at or before the run anchor is a re-anchor instant, not a schedule. Play from
+        // the last frame, a range start, a loop seam and a rate change all set the anchor equal
+        // to (or past) the next frame they present, so its "due" is the anchor itself or a media
+        // time before it; sampling those would book the clip length or the seam's own decode time
+        // as lateness on every pass and poison the late counters and the plan-to-publish
+        // maximum/percentiles. Only a plan after the anchor measures scheduling slip.
+        if (*due <= playbackRun_->wallAnchor) {
+            return;
+        }
         const auto lateness = std::chrono::duration_cast<std::chrono::microseconds>(
             dependencies_.clock->now() - *due);
         const std::int64_t latenessMicroseconds = std::max<std::int64_t>(0, lateness.count());
@@ -1909,6 +1918,12 @@ private:
                 clamped = domain::FrameId{ceiling};
             } else if (clamped.value() < floor) {
                 clamped = domain::FrameId{floor};
+            }
+            // A live range change can move the floor past the sequential minimum (the displayed
+            // frame lay outside the new range). That reposition is navigation, not wall-clock
+            // slip: re-baseline the minimum so the gap is not counted as skipped FrameSets.
+            if (playbackRun_->nextMinimum.value() < floor) {
+                playbackRun_->nextMinimum = domain::FrameId{floor};
             }
         }
         notePlaybackSkipIfJumping(clamped);
@@ -2206,6 +2221,10 @@ private:
                 const std::int64_t outValue = playbackRange_->outInclusive.value();
                 if (displayedValue < inValue || displayedValue > outValue) {
                     if (playbackRun_->rangeLoop && inValue < outValue) {
+                        // E03: the reposition is a seam like a loop wrap - close the finished
+                        // steady segment before moving the anchor, so the wall time between the
+                        // last commit and the reposition belongs to neither segment.
+                        closeSteadyPlaybackSegment();
                         playbackRun_->anchorFrame = playbackRange_->inInclusive;
                         playbackRun_->firstTarget = playbackRange_->inInclusive;
                         playbackRun_->nextMinimum = playbackRange_->inInclusive;

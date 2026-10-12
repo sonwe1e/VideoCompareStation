@@ -26,6 +26,13 @@ public:
     void add(const std::uint64_t sample, PlaybackLatencyStats& stats) {
         stats.count += 1U;
         stats.maxMicroseconds = std::max(stats.maxMicroseconds, sample);
+        if (capacity_ == 0U) {
+            // A zero-capacity reservoir keeps the exact count and maximum but retains nothing;
+            // without this branch the full-eviction path below would call front() on an empty
+            // vector (UB) because size() < 0 is never true.
+            stats.truncatedSampleCount += 1U;
+            return;
+        }
         if (samples_.size() < capacity_) {
             samples_.insert(std::lower_bound(samples_.begin(), samples_.end(), sample), sample);
             return;

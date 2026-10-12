@@ -2497,6 +2497,14 @@ TEST(PlaybackCoordinatorTests, FinalFrameAutoPausesAndPlayFromEndRestartsAtZero)
     ASSERT_TRUE(nextFrame.has_value());
     EXPECT_EQ(nextFrame->frameId, domain::FrameId{1});
     EXPECT_EQ(nextFrame->priority, FrameRequestPriority::Sequential);
+
+    // E03: replay-from-end re-anchors the run at frame 0, so frame 0's plan *is* the anchor
+    // instant. Sampling it would book the whole clip length as lateness (the old behaviour);
+    // a re-anchor is a schedule origin, not a missed plan, so no sample and no late set is
+    // recorded for it.
+    const std::shared_ptr<const SessionSnapshot> replay = coordinator->snapshot();
+    EXPECT_EQ(replay->playbackRunLateFrameSets, 0U);
+    EXPECT_EQ(replay->playbackRunPlanToPublishLatency.count, 0U);
 }
 
 TEST(PlaybackCoordinatorTests, PlaybackTimeoutPausesAndRejectsLateProviderResults) {
@@ -4958,6 +4966,230 @@ TEST(PlaybackCoordinatorTests, LoopSeamAndPauseDwellAreExcludedFromSteadySpeedRa
     EXPECT_EQ(after->playbackRunSteadyWallMicroseconds, static_cast<std::uint64_t>(expectedTotal));
     EXPECT_DOUBLE_EQ(after->playbackRunSteadySpeedRatio, 1.0);
     EXPECT_EQ(after->playbackRunPresentedFrames, 2U * kFramesPerPass);
+}
+
+TEST(PlaybackCoordinatorTests, LoopSeamDoesNotBookItsOwnDecodeTimeAsLateness) {
+    const auto scheduler = std::make_shared<FakeDeadlineScheduler>();
+    const auto clock = std::make_shared<FakeSteadyClock>();
+    const auto probe = std::make_shared<FakeMediaProbe>();
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator = makeCoordinator(provider, render, probe, scheduler, clock);
+    markGraphicsReady(coordinator, domain::DeviceGeneration{1});
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate.hasValue());
+    openReadyWithRate(coordinator, provider, render, rate.value());
+    const auto timelineStart = [&rate](const std::int64_t frame) {
+        return rateStartTimeMicroseconds(rate.value(), frame);
+    };
+
+    const std::shared_ptr<const SessionSnapshot> ready = coordinator->snapshot();
+    ASSERT_EQ(coordinator->submit(StartRangePlaybackCommand{
+                  .context =
+                      CommandContext{
+                          .sessionId = ready->sessionId,
+                          .sessionEpoch = ready->sessionEpoch,
+                          .commandId = domain::CommandId{2},
+                      },
+                  .range =
+                      PlaybackRange{
+                          .inInclusive = domain::FrameId{1},
+                          .outInclusive = domain::FrameId{3},
+                      },
+                  .loop = true,
+              }),
+              PortSubmitResult::Accepted);
+    EXPECT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+
+    const std::chrono::steady_clock::time_point wallAnchor = clock->now();
+    constexpr std::int64_t kRangeIn = 1;
+    constexpr std::int64_t kRangeOut = 3;
+
+    // Pass 1: publish every frame exactly at its planned boundary.
+    std::optional<std::chrono::steady_clock::time_point> seamWall;
+    for (std::int64_t frame = kRangeIn; frame <= kRangeOut; ++frame) {
+        if (frame != kRangeIn) {
+            const std::size_t cadenceIndex = static_cast<std::size_t>(2 * frame - 2);
+            ASSERT_TRUE(scheduler->waitForScheduleCount(cadenceIndex + 1U));
+            const std::optional<DeadlineRequest> cadence = scheduler->request(cadenceIndex);
+            ASSERT_TRUE(cadence.has_value());
+            clock->set(cadence->due);
+            ASSERT_TRUE(scheduler->fire(cadenceIndex));
+        }
+        ASSERT_TRUE(waitUntil([&provider, frame] {
+            return findFrameRequestFor(provider, domain::FrameId{frame}).has_value();
+        }));
+        const std::optional<FrameRequest> request =
+            findFrameRequestFor(provider, domain::FrameId{frame});
+        ASSERT_TRUE(request.has_value());
+        const std::chrono::steady_clock::time_point boundary =
+            wallAnchor + std::chrono::microseconds{timelineStart(frame) - timelineStart(kRangeIn)};
+        clock->set(boundary);
+        ASSERT_TRUE(provider->postFrameReady(*request, makeFrameSet(request->frameId)));
+        ASSERT_TRUE(render->waitForPublishedCount(static_cast<std::size_t>(frame) + 1U));
+        presentPublished(coordinator, render, static_cast<std::size_t>(frame));
+        ASSERT_TRUE(provider->postFrameSucceeded(*request));
+        ASSERT_TRUE(waitUntil([&coordinator, frame] {
+            return coordinator->snapshot()->displayedFrame == domain::FrameId{frame};
+        }));
+        if (frame == kRangeOut) {
+            seamWall = boundary;
+        }
+    }
+
+    // The seam re-anchored the run at In and re-requested frame In for pass 2. Publish it 6 ms
+    // after the seam instant to stand in for decode/assembly time: that delay is the new pass
+    // starting, not a slip against a plan.
+    ASSERT_TRUE(waitUntil(
+        [&provider] { return countFrameRequestsFor(provider, domain::FrameId{kRangeIn}) >= 2U; }));
+    const std::optional<FrameRequest> seamRequest =
+        findFrameRequestFor(provider, domain::FrameId{kRangeIn});
+    ASSERT_TRUE(seamRequest.has_value());
+    clock->set(*seamWall + 6ms);
+    ASSERT_TRUE(provider->postFrameReady(*seamRequest, makeFrameSet(seamRequest->frameId)));
+    ASSERT_TRUE(render->waitForPublishedCount(static_cast<std::size_t>(kRangeOut) + 2U));
+    presentPublished(coordinator, render, static_cast<std::size_t>(kRangeOut) + 1U);
+    ASSERT_TRUE(provider->postFrameSucceeded(*seamRequest));
+    ASSERT_TRUE(waitUntil([&coordinator] {
+        return coordinator->snapshot()->playbackRunPresentedFrames ==
+               static_cast<std::uint64_t>(kRangeOut - kRangeIn + 2);
+    }));
+
+    const std::shared_ptr<const SessionSnapshot> after = coordinator->snapshot();
+    EXPECT_EQ(after->playbackRangeCompletedLoops, 1U);
+    EXPECT_EQ(after->playbackRunLateFrameSets, 0U);
+    // The range start (frame In == anchor) and the seam (frame In == new anchor) are schedule
+    // origins, so only frames 2..kRangeOut of pass 1 carry a plan after their anchor.
+    EXPECT_EQ(after->playbackRunPlanToPublishLatency.count,
+              static_cast<std::uint64_t>(kRangeOut - kRangeIn));
+    EXPECT_EQ(after->playbackRunPlanToPublishLatency.maxMicroseconds, 0U);
+}
+
+TEST(PlaybackCoordinatorTests, MidPlayRangeRepositionClosesTheSegmentAndCountsNoSkip) {
+    const auto scheduler = std::make_shared<FakeDeadlineScheduler>();
+    const auto clock = std::make_shared<FakeSteadyClock>();
+    const auto probe = std::make_shared<FakeMediaProbe>();
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator = makeCoordinator(provider, render, probe, scheduler, clock);
+    markGraphicsReady(coordinator, domain::DeviceGeneration{1});
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate.hasValue());
+    // The repositioned range [50, 60] needs a timeline long enough to hold Out on both sources.
+    openReadyWithRate(coordinator, provider, render, rate.value(), 80);
+    requireRealTimeContinuity(coordinator);
+    const auto timelineStart = [&rate](const std::int64_t frame) {
+        return rateStartTimeMicroseconds(rate.value(), frame);
+    };
+
+    const std::chrono::steady_clock::time_point wallAnchor = clock->now();
+    const std::shared_ptr<const SessionSnapshot> ready = coordinator->snapshot();
+    ASSERT_EQ(coordinator->submit(PlayCommand{
+                  .context =
+                      CommandContext{
+                          .sessionId = ready->sessionId,
+                          .sessionEpoch = ready->sessionEpoch,
+                          .commandId = domain::CommandId{2},
+                      },
+              }),
+              PortSubmitResult::Accepted);
+    EXPECT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+
+    // 8 frames at 30 fps = 233 ms of media, past the 200 ms steady-segment minimum, so the
+    // pre-reposition stretch is a measurable segment.
+    constexpr std::int64_t kSteadyLast = 8;
+    for (std::int64_t frame = 1; frame <= kSteadyLast; ++frame) {
+        deliverSteadyFrameAtBoundary(coordinator,
+                                     provider,
+                                     render,
+                                     clock,
+                                     scheduler,
+                                     wallAnchor,
+                                     timelineStart(frame),
+                                     frame,
+                                     static_cast<std::size_t>(2 * frame - 1));
+    }
+
+    // Get frame 9 in flight (requested, not yet published) so the range change has to deal with
+    // an in-flight frame from the old schedule.
+    const std::size_t frameNineCadenceIndex = static_cast<std::size_t>(2 * (kSteadyLast + 1) - 1);
+    ASSERT_TRUE(scheduler->waitForScheduleCount(frameNineCadenceIndex + 1U));
+    const std::optional<DeadlineRequest> frameNineCadence =
+        scheduler->request(frameNineCadenceIndex);
+    ASSERT_TRUE(frameNineCadence.has_value());
+    clock->set(frameNineCadence->due);
+    ASSERT_TRUE(scheduler->fire(frameNineCadenceIndex));
+    ASSERT_TRUE(waitUntil([&provider] {
+        return findFrameRequestFor(provider, domain::FrameId{kSteadyLast + 1}).has_value();
+    }));
+    const std::optional<FrameRequest> frameNine =
+        findFrameRequestFor(provider, domain::FrameId{kSteadyLast + 1});
+    ASSERT_TRUE(frameNine.has_value());
+
+    // Reposition the live run to [50, 60] loop while frame 9 is in flight. This is navigation,
+    // not wall-clock slip: the finished segment must be closed at the seam and the 41-frame gap
+    // must not be booked as skipped FrameSets.
+    const std::shared_ptr<const SessionSnapshot> before = coordinator->snapshot();
+    ASSERT_EQ(coordinator->submit(SetPlaybackRangeCommand{
+                  .context =
+                      CommandContext{
+                          .sessionId = before->sessionId,
+                          .sessionEpoch = before->sessionEpoch,
+                          .commandId = domain::CommandId{3},
+                      },
+                  .range =
+                      PlaybackRange{
+                          .inInclusive = domain::FrameId{50},
+                          .outInclusive = domain::FrameId{60},
+                      },
+                  .loop = true,
+              }),
+              PortSubmitResult::Accepted);
+    EXPECT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+
+    // Frame 9 still commits (the run only cancels the prepared slot). Its publication is a plan
+    // from before the new anchor, so it records no lateness sample; its commit then activates
+    // the repositioned floor.
+    clock->set(clock->now() + 10ms);
+    ASSERT_TRUE(provider->postFrameReady(*frameNine, makeFrameSet(frameNine->frameId)));
+    ASSERT_TRUE(render->waitForPublishedCount(static_cast<std::size_t>(kSteadyLast) + 2U));
+    presentPublished(coordinator, render, static_cast<std::size_t>(kSteadyLast) + 1U);
+    ASSERT_TRUE(provider->postFrameSucceeded(*frameNine));
+    ASSERT_TRUE(waitUntil(
+        [&provider] { return findFrameRequestFor(provider, domain::FrameId{50}).has_value(); }));
+
+    const std::optional<FrameRequest> reposition =
+        findFrameRequestFor(provider, domain::FrameId{50});
+    ASSERT_TRUE(reposition.has_value());
+    clock->set(clock->now() + 5ms);
+    ASSERT_TRUE(provider->postFrameReady(*reposition, makeFrameSet(reposition->frameId)));
+    ASSERT_TRUE(render->waitForPublishedCount(static_cast<std::size_t>(kSteadyLast) + 3U));
+    presentPublished(coordinator, render, static_cast<std::size_t>(kSteadyLast) + 2U);
+    ASSERT_TRUE(provider->postFrameSucceeded(*reposition));
+    ASSERT_TRUE(waitUntil(
+        [&coordinator] { return coordinator->snapshot()->displayedFrame == domain::FrameId{50}; }));
+
+    ASSERT_EQ(coordinator->submit(PauseCommand{
+                  .context = commandContext(coordinator, domain::CommandId{4}),
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_TRUE(waitUntil([&coordinator] {
+        return coordinator->snapshot()->playbackState == domain::PlaybackState::kPaused;
+    }));
+
+    const std::shared_ptr<const SessionSnapshot> after = coordinator->snapshot();
+    // The pre-reposition stretch is the one closed steady segment: it ends at frame 8's commit
+    // exactly at its boundary, so media == wall.
+    EXPECT_EQ(after->playbackRunSteadySegmentCount, 1U);
+    EXPECT_EQ(after->playbackRunSteadyMediaMicroseconds,
+              static_cast<std::uint64_t>(timelineStart(kSteadyLast) - timelineStart(0)));
+    EXPECT_EQ(after->playbackRunSteadyWallMicroseconds, after->playbackRunSteadyMediaMicroseconds);
+    // Navigation is not wall-clock slip, and a plan at the re-anchor instant is not lateness.
+    EXPECT_EQ(after->playbackRunSkippedFrameSets, 0U);
+    EXPECT_EQ(after->playbackRunLateFrameSets, 0U);
+    EXPECT_EQ(after->playbackRunPlanToPublishLatency.count,
+              static_cast<std::uint64_t>(kSteadyLast));
+    EXPECT_EQ(after->playbackRunPlanToPublishLatency.maxMicroseconds, 0U);
 }
 
 TEST(PlaybackCoordinatorTests, LateFrameSetAttributedWhenPublishedPastPlanWithoutSkip) {

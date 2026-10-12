@@ -12,6 +12,7 @@ add_executable(
     MediaPathsTests.cpp
     PlaybackCoordinatorTests.cpp
     PlaybackEvidenceTests.cpp
+    PlaybackLatencyReservoirTests.cpp
     PlaybackTraceTests.cpp
     PrefetchSchedulerTests.cpp
     SampleExportPlannerTests.cpp

@@ -1929,6 +1929,15 @@ runDesktop(int& argc,
     poll.stop();
     timeout.stop();
     uiLoopHeartbeatTimer.stop();
+    // E03: the pause command publishes kPaused before the run's deferred teardown folds the last
+    // steady segment (an in-flight frame still has to commit). Re-read the accounting now that
+    // every benchmark stage has finished, so speed_ratio/steady_* describe the closed run instead
+    // of a pre-teardown snapshot that can report "unknown"/0 segments.
+    if (std::shared_ptr<const dvs::application::SessionSnapshot> latest =
+            runtime->sessionSnapshot();
+        latest != nullptr) {
+        playbackAccounting = std::move(latest);
+    }
     const dvs::platform::ProcessTelemetry telemetryPeaks = telemetrySampler.stopAndTakePeaks();
     metrics.peakWorkingSetBytes =
         std::max(metrics.peakWorkingSetBytes, telemetryPeaks.workingSetBytes);
