@@ -107,6 +107,11 @@ Rectangle {
     readonly property real roiTripletStageInset: control.roiTripletStageActive ? roiTripletStrip.height + 8 : 0
 
     property bool roiSelecting: false
+    // I02: visible affordance for the ROI marquee. Armed by the 框选区域 button (Alt+drag
+    // keeps working without it), the cross cursor plus the checked button name the mode; a
+    // plain drag then draws the comparison ROI instead of panning. Esc, toggling the button
+    // off or resetting the view leaves it; while it is off, the default drag stays pan.
+    property bool roiSelectMode: false
     // Shift marquee zooms to the selection (product "放大"); Alt marquee sets comparison ROI.
     property bool roiModeIsZoom: true
     property int roiPanel: -1
@@ -178,6 +183,9 @@ Rectangle {
     function resetView() {
         dualVideoSurface.clearRoi();
         dualVideoSurface.resetViewport();
+        // I02: 重置视图 is the one-shot "back to normal navigation" verb; leaving the marquee
+        // mode armed with its cross cursor would contradict the reset the user asked for.
+        control.roiSelectMode = false;
     }
 
     function zoomViewStep(factor) {
@@ -461,6 +469,16 @@ Rectangle {
 
     objectName: "mediaViewportFocusTarget"
     focus: true
+    // I02: Esc leaves the marquee mode. The viewport is the stage's focus item, so this is the
+    // receiver for an Esc no other layer owns: the presentation Esc (full screen / hidden
+    // chrome) and the jog-end Esc stay enabled in exactly those states, and Qt's shortcut
+    // layer runs before item key delivery, so this handler only sees the idle-chrome case.
+    Keys.onEscapePressed: event => {
+        if (control.roiSelectMode) {
+            control.roiSelectMode = false;
+            event.accepted = true;
+        }
+    }
     color: Theme.stageWell
     border.color: control.borderColor
     border.width: control.chromeVisible ? 1 : 0
@@ -692,6 +710,7 @@ Rectangle {
     MouseArea {
         id: viewportNavigation
 
+        objectName: "viewportNavigation"
         // Panorama gestures stop at the preset strip; identical to the old fill+margins
         // geometry while the preset is off.
         anchors {
@@ -703,6 +722,9 @@ Rectangle {
         }
         acceptedButtons: Qt.LeftButton | Qt.RightButton
         hoverEnabled: true
+        // I02: the cursor names the interaction before the first press - cross while the
+        // marquee is armed or being drawn, the standard arrow for pan otherwise.
+        cursorShape: control.roiSelectMode || control.roiSelecting ? Qt.CrossCursor : Qt.ArrowCursor
 
         onWheel: wheel => {
             control.oscRevealRequested();
@@ -741,6 +763,15 @@ Rectangle {
                 control.roiCurrentX = mouse.x;
                 control.roiCurrentY = mouse.y;
             } else if ((mouse.modifiers & Qt.AltModifier) !== 0) {
+                control.roiSelecting = true;
+                control.roiModeIsZoom = false;
+                control.roiStartX = mouse.x;
+                control.roiStartY = mouse.y;
+                control.roiCurrentX = mouse.x;
+                control.roiCurrentY = mouse.y;
+            } else if (control.roiSelectMode) {
+                // I02: the visible 框选区域 mode turns the plain drag into the ROI marquee,
+                // so the gesture no longer depends on remembering the Alt chord.
                 control.roiSelecting = true;
                 control.roiModeIsZoom = false;
                 control.roiStartX = mouse.x;
@@ -1175,6 +1206,20 @@ Rectangle {
             text: qsTr("重置视图")
             helpText: qsTr("清除 ROI，并适应窗口、居中；不改变当前帧或比较对象。")
             onClicked: control.resetView()
+        }
+        // I02: the visible ROI entry. Checkable with the mode bar's mirrorsState contract -
+        // the checked fill names the armed state, the cross cursor repeats it on the canvas,
+        // and Alt+drag keeps working without the button.
+        ViewCommandButton {
+            id: roiSelectButton
+
+            objectName: "viewportRoiSelectButton"
+            checkable: true
+            checked: control.roiSelectMode
+            mirrorsState: true
+            text: control.roiSelectMode ? qsTr("框选区域 · 开") : qsTr("框选区域")
+            helpText: qsTr("开启后拖动框选比较 ROI（画布为十字光标）；Esc、重置视图或再次点击退出。\nAlt+拖动仍可直接框选；Shift+拖动放大所选区域；未开启时默认拖动为平移，滚轮以光标为中心缩放。")
+            onClicked: control.roiSelectMode = !control.roiSelectMode
         }
     }
 

@@ -23,7 +23,7 @@ Popup {
     // keeps the table resident afterwards so repeated opens are immediate.
     property bool contentReady: false
 
-    readonly property var staticVideoTails: [[qsTr("Shift+拖动"), qsTr("框选局部并放大")], [qsTr("Alt+拖动"), qsTr("框选 ROI 区域对比")], [qsTr("双击"), qsTr("切换 100% 真实尺寸 / 适应窗口")], [qsTr("滚轮"), qsTr("以光标位置为中心缩放")], [qsTr("右键"), qsTr("查看器命令")]]
+    readonly property var staticVideoTails: [[qsTr("Shift+拖动"), qsTr("框选局部并放大")], [qsTr("框选区域按钮 / Alt+拖动"), qsTr("框选比较 ROI 区域")], [qsTr("双击"), qsTr("切换 100% 真实尺寸 / 适应窗口")], [qsTr("滚轮"), qsTr("以光标位置为中心缩放")], [qsTr("右键"), qsTr("查看器命令")]]
 
     readonly property var shortcutModel: {
         if (control.imagePreset) {

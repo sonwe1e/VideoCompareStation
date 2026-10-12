@@ -126,6 +126,9 @@ Item {
     Shortcut {
         sequence: "Space"
         context: Qt.ApplicationShortcut
+        // I02: toggle-type actions never auto-repeat - a held Space must not flip play/pause
+        // on the OS repeat clock.
+        autoRepeat: false
         enabled: reviewActions.shortcutsEnabled && reviewActions.canTogglePlayback
         onActivated: reviewActions.togglePlayback()
         property string helpKeys: qsTr("空格")
@@ -249,6 +252,7 @@ Item {
     Shortcut {
         sequence: "Tab"
         context: Qt.ApplicationShortcut
+        autoRepeat: false
         enabled: control.presentationShortcutsEnabled
         onActivated: control.chromeToggleRequested()
         property string helpKeys: qsTr("Tab")
@@ -257,6 +261,7 @@ Item {
     Shortcut {
         sequence: "F11"
         context: Qt.ApplicationShortcut
+        autoRepeat: false
         enabled: control.presentationShortcutsEnabled
         onActivated: control.fullScreenToggleRequested()
         property string helpKeys: qsTr("F11")
@@ -265,6 +270,7 @@ Item {
     Shortcut {
         sequence: "Esc"
         context: Qt.ApplicationShortcut
+        autoRepeat: false
         enabled: control.fullScreen || !control.chromeVisible
         onActivated: control.presentationEscapeRequested()
     }
@@ -273,12 +279,14 @@ Item {
     Shortcut {
         sequence: "Esc"
         context: Qt.ApplicationShortcut
+        autoRepeat: false
         enabled: reviewActions.jogActive && !control.fullScreen && control.chromeVisible
         onActivated: reviewActions.jogCancel()
     }
     Shortcut {
         sequence: "?"
         context: Qt.ApplicationShortcut
+        autoRepeat: false
         enabled: control.shortcutsEnabled
         onActivated: control.shortcutHelpRequested()
         property string helpKeys: qsTr("?")
@@ -303,6 +311,7 @@ Item {
     Shortcut {
         sequence: "C"
         context: Qt.ApplicationShortcut
+        autoRepeat: false
         enabled: control.shortcutsEnabled && control.candidateSwitchEnabled
         onActivated: control.candidateSwitchRequested()
         property string helpKeys: qsTr("C")
@@ -311,6 +320,7 @@ Item {
     Shortcut {
         sequence: "\\"
         context: Qt.ApplicationShortcut
+        autoRepeat: false
         enabled: control.shortcutsEnabled && control.inFrame >= 0 && control.outFrame >= control.inFrame
         onActivated: control.selectedRangePlaybackRequested()
         property string helpKeys: qsTr("\\")
@@ -331,6 +341,7 @@ Item {
 
         sequence: keySequence
         context: Qt.ApplicationShortcut
+        autoRepeat: false
         enabled: control.viewShortcutsEnabled && !control.busy && control.sourceCount >= modeShortcut.requiredSourceCount
         onActivated: control.modeRequested(modeValue)
     }
@@ -419,6 +430,7 @@ Item {
     Shortcut {
         sequence: "`"
         context: Qt.ApplicationShortcut
+        autoRepeat: false
         enabled: control.viewShortcutsEnabled && control.differencePeekAvailable && !control.busy
         onActivated: control.referencePeekToggleRequested()
         property string helpKeys: qsTr("`")
@@ -427,6 +439,7 @@ Item {
     Shortcut {
         sequence: "Shift+`"
         context: Qt.ApplicationShortcut
+        autoRepeat: false
         enabled: control.viewShortcutsEnabled && control.differencePeekAvailable && !control.busy
         onActivated: control.referencePeekLockToggleRequested()
         property string helpKeys: qsTr("Shift+`")

@@ -16,6 +16,7 @@
 #include <QUrl>
 #include <QVariantList>
 #include <QVariantMap>
+#include <QWheelEvent>
 
 #include <gtest/gtest.h>
 #include <memory>
@@ -1069,6 +1070,297 @@ TEST_F(ViewportPixelScaleTests, PlaybackHudFollowsTransportReveal) {
     QCoreApplication::processEvents();
     expectVisible(false);
     EXPECT_FALSE(badge_->hasActiveFocus());
+}
+
+// I02: the wheel zoom must stay centred on the pointer, not on the viewport - the focus point
+// decides which content survives the zoom, so a right-bottom pointer has to pull the view
+// centre right and down while the keyboard zoom keeps the centre.
+TEST_F(ViewportPixelScaleTests, WheelZoomCentersOnThePointerNotTheViewportCenter) {
+    setSources({source(1600, 900)});
+    window_ = std::make_unique<QQuickWindow>();
+    window_->resize(801, 601);
+    auto* const viewport = qobject_cast<QQuickItem*>(root_.get());
+    ASSERT_NE(viewport, nullptr);
+    viewport->setSize(QSizeF{801.0, 601.0});
+    viewport->setParentItem(window_->contentItem());
+    window_->show();
+    QCoreApplication::processEvents();
+    surface_->resetViewport();
+    ASSERT_DOUBLE_EQ(surface_->viewScale(), 1.0);
+    ASSERT_DOUBLE_EQ(surface_->viewCenterX(), 0.5);
+
+    const auto sendWheel = [this](const QPointF& localPosition, const int delta) {
+        const QPointF globalPosition = window_->mapToGlobal(localPosition.toPoint());
+        QWheelEvent wheel{localPosition,
+                          globalPosition,
+                          QPoint{},
+                          QPoint{0, delta},
+                          Qt::NoButton,
+                          Qt::NoModifier,
+                          Qt::NoScrollPhase,
+                          false};
+        QCoreApplication::sendEvent(window_.get(), &wheel);
+        QCoreApplication::processEvents();
+    };
+
+    // Pointer in the right-lower quadrant of the content; nothing chrome covers it.
+    const QPointF pointer{600, 450};
+    sendWheel(pointer, 120);
+    EXPECT_GT(surface_->viewScale(), 1.0);
+    EXPECT_GT(surface_->viewCenterX(), 0.52);
+    EXPECT_GT(surface_->viewCenterY(), 0.52);
+    // The keyboard flavour keeps the geometric centre, which is what separates the two paths.
+    surface_->resetViewport();
+    ASSERT_TRUE(QMetaObject::invokeMethod(root_.get(), "zoomViewStep", Q_ARG(QVariant, 1.25)));
+    QCoreApplication::processEvents();
+    EXPECT_GT(surface_->viewScale(), 1.0);
+    EXPECT_NEAR(surface_->viewCenterX(), 0.5, 0.0001);
+    EXPECT_NEAR(surface_->viewCenterY(), 0.5, 0.0001);
+}
+
+// I02: the ROI marquee gets a visible affordance - the 框选区域 button arms it with a cross
+// cursor, a plain drag then draws the comparison ROI, and Esc or the button leaves it. While
+// disarmed the same plain drag stays pan, so the default navigation never changes.
+TEST_F(ViewportPixelScaleTests, RoiSelectButtonArmsMarqueeWhilePlainDragStaysPan) {
+    setSources({source(1600, 900)});
+    window_ = std::make_unique<QQuickWindow>();
+    window_->resize(801, 601);
+    auto* const viewport = qobject_cast<QQuickItem*>(root_.get());
+    ASSERT_NE(viewport, nullptr);
+    viewport->setSize(QSizeF{801.0, 601.0});
+    viewport->setParentItem(window_->contentItem());
+    viewport->forceActiveFocus();
+    window_->show();
+    QCoreApplication::processEvents();
+
+    auto* const navigation = root_->findChild<QQuickItem*>(QStringLiteral("viewportNavigation"));
+    auto* const roiButton =
+        root_->findChild<QQuickItem*>(QStringLiteral("viewportRoiSelectButton"));
+    ASSERT_NE(navigation, nullptr);
+    ASSERT_NE(roiButton, nullptr);
+
+    const auto sendClick = [this](QQuickItem* item) {
+        const QPointF position =
+            item->mapToScene(QPointF{item->width() * 0.5, item->height() * 0.5});
+        const QPointF globalPosition = window_->mapToGlobal(position.toPoint());
+        QMouseEvent press{QEvent::MouseButtonPress,
+                          position,
+                          position,
+                          globalPosition,
+                          Qt::LeftButton,
+                          Qt::LeftButton,
+                          Qt::NoModifier};
+        QCoreApplication::sendEvent(window_.get(), &press);
+        QMouseEvent release{QEvent::MouseButtonRelease,
+                            position,
+                            position,
+                            globalPosition,
+                            Qt::LeftButton,
+                            Qt::NoButton,
+                            Qt::NoModifier};
+        QCoreApplication::sendEvent(window_.get(), &release);
+        QCoreApplication::processEvents();
+    };
+    const auto sendDrag = [this](const QPointF& from, const QPointF& to) {
+        const QPointF globalFrom = window_->mapToGlobal(from.toPoint());
+        QMouseEvent press{QEvent::MouseButtonPress,
+                          from,
+                          from,
+                          globalFrom,
+                          Qt::LeftButton,
+                          Qt::LeftButton,
+                          Qt::NoModifier};
+        QCoreApplication::sendEvent(window_.get(), &press);
+        QMouseEvent move{QEvent::MouseMove,
+                         to,
+                         to,
+                         window_->mapToGlobal(to.toPoint()),
+                         Qt::NoButton,
+                         Qt::LeftButton,
+                         Qt::NoModifier};
+        QCoreApplication::sendEvent(window_.get(), &move);
+        QMouseEvent release{QEvent::MouseButtonRelease,
+                            to,
+                            to,
+                            window_->mapToGlobal(to.toPoint()),
+                            Qt::LeftButton,
+                            Qt::NoButton,
+                            Qt::NoModifier};
+        QCoreApplication::sendEvent(window_.get(), &release);
+        QCoreApplication::processEvents();
+    };
+
+    // Disarmed: the plain drag pans (visible only once zoomed in) and never sets an ROI.
+    ASSERT_TRUE(QMetaObject::invokeMethod(root_.get(), "zoomViewStep", Q_ARG(QVariant, 1.25)));
+    QCoreApplication::processEvents();
+    ASSERT_GT(surface_->viewScale(), 1.0);
+    const double centerXBefore = surface_->viewCenterX();
+    sendDrag(QPointF{400, 300}, QPointF{300, 300});
+    EXPECT_NE(surface_->viewCenterX(), centerXBefore);
+    EXPECT_FALSE(surface_->roiEnabled());
+    surface_->resetViewport();
+
+    // Armed through the visible button: cross cursor, the same plain drag is the marquee.
+    sendClick(roiButton);
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(root_->property("roiSelectMode").toBool());
+    EXPECT_TRUE(roiButton->property("checked").toBool());
+    EXPECT_EQ(navigation->property("cursorShape").toInt(), static_cast<int>(Qt::CrossCursor));
+    sendDrag(QPointF{200, 200}, QPointF{600, 450});
+    EXPECT_TRUE(surface_->roiEnabled());
+    // Source-normalized rect of the dragged box: left/right from the horizontal span, top/
+    // bottom from the vertical span inside the letterboxed content (content 799x450 at
+    // y 76..526 in the 801x601 viewport).
+    EXPECT_NEAR(surface_->roiLeft(), (200.0 - 1.0) / 799.0, 0.02);
+    EXPECT_NEAR(surface_->roiRight(), (600.0 - 1.0) / 799.0, 0.02);
+    EXPECT_NEAR(surface_->roiTop(), (200.0 - 76.0) / 450.0, 0.03);
+    EXPECT_NEAR(surface_->roiBottom(), (450.0 - 76.0) / 450.0, 0.03);
+
+    // Esc leaves the mode; the cursor returns to the pan arrow.
+    QKeyEvent escapePress{QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier};
+    QKeyEvent escapeRelease{QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier};
+    QCoreApplication::sendEvent(window_.get(), &escapePress);
+    QCoreApplication::sendEvent(window_.get(), &escapeRelease);
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(root_->property("roiSelectMode").toBool());
+    EXPECT_EQ(navigation->property("cursorShape").toInt(), static_cast<int>(Qt::ArrowCursor));
+    EXPECT_FALSE(roiButton->property("checked").toBool());
+}
+
+// I02: the transparent HUD plates sit above the canvas but must never consume a pointer
+// gesture meant for the viewport below. Text items accept the left button for rich-text
+// links and controls for their own activation, so "does not block" is behavioural, not
+// structural: with the canvas zoomed in (content covering the whole viewport), a drag that
+// starts on each visible plate must still pan the view.
+TEST_F(ViewportPixelScaleTests, HudPlatesStayTransparentToCanvasInput) {
+    setSources({source(1600, 900)});
+    window_ = std::make_unique<QQuickWindow>();
+    window_->resize(801, 601);
+    auto* const viewport = qobject_cast<QQuickItem*>(root_.get());
+    ASSERT_NE(viewport, nullptr);
+    viewport->setSize(QSizeF{801.0, 601.0});
+    viewport->setParentItem(window_->contentItem());
+    window_->show();
+    QCoreApplication::processEvents();
+
+    const auto sendWheel = [this](const QPointF& localPosition, const int delta) {
+        const QPointF globalPosition = window_->mapToGlobal(localPosition.toPoint());
+        QWheelEvent wheel{localPosition,
+                          globalPosition,
+                          QPoint{},
+                          QPoint{0, delta},
+                          Qt::NoButton,
+                          Qt::NoModifier,
+                          Qt::NoScrollPhase,
+                          false};
+        QCoreApplication::sendEvent(window_.get(), &wheel);
+        QCoreApplication::processEvents();
+    };
+    const auto drag = [this](const QPointF& from, const QPointF& to) {
+        QMouseEvent press{QEvent::MouseButtonPress,
+                          from,
+                          from,
+                          window_->mapToGlobal(from.toPoint()),
+                          Qt::LeftButton,
+                          Qt::LeftButton,
+                          Qt::NoModifier};
+        QCoreApplication::sendEvent(window_.get(), &press);
+        QMouseEvent move{QEvent::MouseMove,
+                         to,
+                         to,
+                         window_->mapToGlobal(to.toPoint()),
+                         Qt::NoButton,
+                         Qt::LeftButton,
+                         Qt::NoModifier};
+        QCoreApplication::sendEvent(window_.get(), &move);
+        QMouseEvent release{QEvent::MouseButtonRelease,
+                            to,
+                            to,
+                            window_->mapToGlobal(to.toPoint()),
+                            Qt::LeftButton,
+                            Qt::NoButton,
+                            Qt::NoModifier};
+        QCoreApplication::sendEvent(window_.get(), &release);
+        QCoreApplication::processEvents();
+    };
+
+    // Zoom in once: the pan-gesture plates sit over the fitted content rect, where a plain
+    // drag pans the canvas.
+    sendWheel(QPointF{400, 300}, 120);
+    ASSERT_GT(surface_->viewScale(), 1.0);
+
+    // Arm each plate's visibility the way the product does.
+    root_->setProperty("pixelReadoutPositionValid", true);
+    root_->setProperty("differenceThresholdEnabled", true);
+    root_->setProperty("differenceMode", true);
+    root_->setProperty("differencePeekActive", true);
+    QCoreApplication::processEvents();
+
+    const auto centerOf = [this](const QString& name) {
+        auto* const plate = root_->findChild<QQuickItem*>(name);
+        EXPECT_NE(plate, nullptr) << name.toStdString();
+        return plate == nullptr
+                   ? QPointF{}
+                   : plate->mapToScene(QPointF{plate->width() * 0.5, plate->height() * 0.5});
+    };
+    // The readout and peek plates sit over the fitted content: a drag starting on them must
+    // pan the canvas right through the plate. Each drag zooms one step deeper first so the
+    // centre has travel room again.
+    for (const QString& name :
+         {QStringLiteral("viewportPixelReadoutPlate"), QStringLiteral("differencePeekIndicator")}) {
+        SCOPED_TRACE(name.toStdString());
+        sendWheel(QPointF{400, 300}, 120);
+        ASSERT_GT(surface_->viewScale(), 1.0);
+        const QPointF center = centerOf(name);
+        ASSERT_FALSE(center.isNull());
+        const double centerXBefore = surface_->viewCenterX();
+        drag(center, center + QPointF{120, 0});
+        EXPECT_NE(surface_->viewCenterX(), centerXBefore);
+        EXPECT_FALSE(surface_->roiEnabled());
+    }
+
+    // The bottom plates sit in the letterbox band where the fitted content does not reach, so
+    // pan is not the observable - the press itself is: a press outside content still focuses
+    // the canvas (viewportNavigation.onPressed -> forceActiveFocus). Hand focus to the plate
+    // first, press on it, and only a press that reached the canvas can give the viewport
+    // active focus back.
+    const auto assertPressFocusesCanvasThrough = [&](const QString& name) {
+        SCOPED_TRACE(name.toStdString());
+        auto* const plate = root_->findChild<QQuickItem*>(name);
+        ASSERT_NE(plate, nullptr);
+        plate->forceActiveFocus();
+        ASSERT_TRUE(plate->hasActiveFocus());
+        ASSERT_FALSE(viewport->hasActiveFocus());
+        const QPointF center = centerOf(name);
+        ASSERT_FALSE(center.isNull());
+        const QPointF global = window_->mapToGlobal(center.toPoint());
+        QMouseEvent press{QEvent::MouseButtonPress,
+                          center,
+                          center,
+                          global,
+                          Qt::LeftButton,
+                          Qt::LeftButton,
+                          Qt::NoModifier};
+        QCoreApplication::sendEvent(window_.get(), &press);
+        QMouseEvent release{QEvent::MouseButtonRelease,
+                            center,
+                            center,
+                            global,
+                            Qt::LeftButton,
+                            Qt::NoButton,
+                            Qt::NoModifier};
+        QCoreApplication::sendEvent(window_.get(), &release);
+        QCoreApplication::processEvents();
+        EXPECT_TRUE(viewport->hasActiveFocus());
+    };
+    assertPressFocusesCanvasThrough(QStringLiteral("analysisControlsChrome"));
+
+    // The immersive HUD lives in the chrome-hidden review; same rule under it.
+    root_->setProperty("chromeVisible", false);
+    root_->setProperty("immersiveHudVisible", true);
+    root_->setProperty("immersiveHudText", QStringLiteral("hud"));
+    QCoreApplication::processEvents();
+    assertPressFocusesCanvasThrough(QStringLiteral("immersiveReviewHud"));
 }
 
 } // namespace

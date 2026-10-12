@@ -7805,6 +7805,238 @@ TEST(MainQmlContractTests, VideoDroppedOnASourceChipReplacesThatSourceInPlace) {
               0);
 }
 
+// I02: toggle-type shortcuts never auto-repeat. A held Space must not flip play/pause on the
+// OS repeat clock, the mode digits must not re-fire, and the two data-affecting workspace
+// actions (issue capture, task close) must stay single-shot. Command-type keys (frame steps,
+// zoom, in/out) are deliberately not listed - repeating them is their intended behaviour.
+TEST(MainQmlContractTests, ToggleShortcutsAndWorkspaceActionsDisableAutoRepeat) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    auto* const reviewShortcuts =
+        harness.root->findChild<QObject*>(QStringLiteral("reviewShortcuts"));
+    ASSERT_NE(reviewShortcuts, nullptr);
+
+    const auto shortcutsBySequence = [&harness](const QString& wanted) {
+        std::vector<QObject*> found;
+        const QList<QObject*> all = harness.root->findChildren<QObject*>();
+        for (QObject* const object : all) {
+            const QString sequence = object->property("sequence").toString();
+            if (sequence == wanted) {
+                found.push_back(object);
+            }
+        }
+        return found;
+    };
+
+    for (const auto* const sequence : {"Space",
+                                       "Tab",
+                                       "F11",
+                                       "Esc",
+                                       "?",
+                                       "C",
+                                       "\\",
+                                       "`",
+                                       "Shift+`",
+                                       "1",
+                                       "2",
+                                       "3",
+                                       "4",
+                                       "5",
+                                       "6",
+                                       "M",
+                                       "Ctrl+W"}) {
+        const std::vector<QObject*> shortcuts = shortcutsBySequence(QString::fromLatin1(sequence));
+        ASSERT_FALSE(shortcuts.empty()) << "no Shortcut binds " << sequence;
+        for (QObject* const shortcut : shortcuts) {
+            SCOPED_TRACE(std::string{sequence} + " " + shortcut->objectName().toStdString());
+            EXPECT_FALSE(shortcut->property("autoRepeat").toBool());
+        }
+    }
+}
+
+// I02: the input context owns the keyboard before the media layer. While the comparison
+// dialog is modal, A/D/C/digits/Space must leave the video session untouched (no jog, no
+// mode switch, no transport command), and leaving the dialog restores the bindings. The
+// image workspace takes the keyboard the same way, and hidden chrome keeps its exits.
+TEST(MainQmlContractTests, DialogsAndWorkspacesOwnTheKeyboardBeforeMediaShortcuts) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    QVariantList urls;
+    for (const auto* const name : {"modal_a.mp4", "modal_b.mp4"}) {
+        const QString path = directory.filePath(QString::fromLatin1(name));
+        ASSERT_TRUE(writeTestPng(path));
+        urls.push_back(QUrl::fromLocalFile(path));
+    }
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.window->requestActivate();
+    harness.settleAnimations();
+    auto* const reviewShortcuts =
+        harness.root->findChild<QObject*>(QStringLiteral("reviewShortcuts"));
+    ASSERT_NE(reviewShortcuts, nullptr);
+
+    // Two staged videos open the A/B/GT order dialog - the modal input context.
+    QVariant staged;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "performVideoReview",
+                                          Q_RETURN_ARG(QVariant, staged),
+                                          Q_ARG(QVariant, QVariant{urls})));
+    EXPECT_TRUE(staged.toBool());
+    auto* const dialog = harness.root->findChild<QObject*>(QStringLiteral("dropReviewDialog"));
+    ASSERT_NE(dialog, nullptr);
+    ASSERT_TRUE(dialog->property("visible").toBool());
+    EXPECT_EQ(harness.root->property("inputContext").toInt(), 3);
+    EXPECT_FALSE(harness.root->property("globalMediaShortcutsEnabled").toBool());
+    EXPECT_FALSE(reviewShortcuts->property("shortcutsEnabled").toBool());
+    EXPECT_FALSE(reviewShortcuts->property("viewShortcutsEnabled").toBool());
+    // Jog (bare A/D), candidate switch, digit modes and Space all stay inert while modal.
+    harness.submitted.clear();
+    sendKey(*harness.window, Qt::Key_A);
+    sendKey(*harness.window, Qt::Key_D);
+    sendKey(*harness.window, Qt::Key_C);
+    sendKey(*harness.window, Qt::Key_1);
+    sendKey(*harness.window, Qt::Key_Space);
+    harness.settle();
+    EXPECT_TRUE(harness.submitted.empty());
+
+    // Esc closes the dialog (the dialog's own key handling); the media layer comes back.
+    sendKey(*harness.window, Qt::Key_Escape);
+    ASSERT_TRUE(harness.waitUntil([&] { return !dialog->property("visible").toBool(); }));
+    EXPECT_EQ(harness.root->property("inputContext").toInt(), 0);
+    EXPECT_TRUE(reviewShortcuts->property("shortcutsEnabled").toBool());
+
+    // The image workspace takes the keyboard away from the video session the same way.
+    QImage retained{16, 16, QImage::Format_ARGB32};
+    retained.fill(QColor(10, 20, 30));
+    ASSERT_TRUE(harness.imageReview.openPrimaryImage(std::move(retained),
+                                                     QStringLiteral("retained-image")));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    harness.settle();
+    EXPECT_FALSE(harness.root->property("globalMediaShortcutsEnabled").toBool());
+    EXPECT_FALSE(reviewShortcuts->property("viewShortcutsEnabled").toBool());
+    harness.submitted.clear();
+    sendKey(*harness.window, Qt::Key_Space);
+    sendKey(*harness.window, Qt::Key_1);
+    harness.settle();
+    EXPECT_TRUE(harness.submitted.empty());
+
+    // Hidden chrome is an immersive review, not a trap: Tab and F11 stay reachable so the
+    // interface and full screen can always come back.
+    ASSERT_TRUE(harness.activateWorkspace(0));
+    harness.settle();
+    harness.shell->setChromeVisible(false);
+    harness.settle();
+    EXPECT_EQ(harness.root->property("inputContext").toInt(), 0);
+    EXPECT_TRUE(harness.root->property("presentationShortcutsEnabled").toBool());
+    QObject* tabShortcut = nullptr;
+    QObject* fullScreenShortcut = nullptr;
+    const QList<QObject*> all = harness.root->findChildren<QObject*>();
+    for (QObject* const object : all) {
+        if (object->property("sequence").toString() == QStringLiteral("Tab")) {
+            tabShortcut = object;
+        }
+        if (object->property("sequence").toString() == QStringLiteral("F11")) {
+            fullScreenShortcut = object;
+        }
+    }
+    ASSERT_NE(tabShortcut, nullptr);
+    ASSERT_NE(fullScreenShortcut, nullptr);
+    EXPECT_TRUE(tabShortcut->property("enabled").toBool());
+    EXPECT_TRUE(fullScreenShortcut->property("enabled").toBool());
+}
+
+// I02: over the wipe handle the split line owns the gesture - even with the ROI marquee armed,
+// a drag on the handle moves the wipe and never commits an ROI. One gesture, one consumer.
+TEST(MainQmlContractTests, WipeHandleDragOwnsTheGestureOverTheRoiMarquee) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    std::vector<QString> localPaths;
+    for (const auto* const name : {"wipe_gt.mp4", "wipe_pred.mp4"}) {
+        const QString path = directory.filePath(QString::fromLatin1(name));
+        ASSERT_TRUE(writeTestPng(path));
+        localPaths.push_back(path);
+    }
+    WorkspaceHarness harness;
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate.hasValue());
+    ASSERT_TRUE(installValidatedVideoSet(harness.snapshot,
+                                         {std::filesystem::path{localPaths[0].toStdWString()},
+                                          std::filesystem::path{localPaths[1].toStdWString()}},
+                                         rate.value(),
+                                         100,
+                                         3'333'334));
+    harness.snapshot->displayedFrame = domain::FrameId{0};
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.submitted.clear();
+    QVariantList urls;
+    for (const auto& path : localPaths) {
+        urls.push_back(QUrl::fromLocalFile(path));
+    }
+    ASSERT_TRUE(harness.shell->enqueueStartupRequest(2, urls));
+    const application::CommandContext context =
+        application::commandContext(harness.submitted.back());
+    harness.terminals.push_back(application::CommandTerminal{
+        .context = context,
+        .outcome = application::CommandOutcome::Succeeded,
+    });
+    harness.controller->refreshProjection();
+    ASSERT_TRUE(harness.waitUntil([&] { return harness.shell->activeSources().size() == 2; }));
+    harness.preferences.setViewModeCode(ComparisonSurface::Wipe);
+    harness.settle();
+
+    auto* const viewport =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("mediaViewportFocusTarget"));
+    auto* const wipeHandle = harness.root->findChild<QQuickItem*>(QStringLiteral("wipeHandle"));
+    ASSERT_NE(viewport, nullptr);
+    ASSERT_NE(wipeHandle, nullptr);
+    ASSERT_TRUE(wipeHandle->isVisible());
+    // Arm the marquee mode so the test proves the handle wins against an armed ROI gesture.
+    viewport->setProperty("roiSelectMode", true);
+    harness.settle();
+
+    const qreal startX =
+        wipeHandle->mapToScene(QPointF{wipeHandle->width() / 2, wipeHandle->height() / 2}).x();
+    const qreal startY = wipeHandle->mapToScene(QPointF{0, wipeHandle->height() / 2}).y();
+    const auto sendDrag = [&harness](const QPointF& from, const QPointF& to) {
+        const QPointF globalFrom = harness.window->mapToGlobal(from.toPoint());
+        QMouseEvent press{QEvent::MouseButtonPress,
+                          from,
+                          from,
+                          globalFrom,
+                          Qt::LeftButton,
+                          Qt::LeftButton,
+                          Qt::AltModifier};
+        QCoreApplication::sendEvent(harness.window, &press);
+        QMouseEvent move{QEvent::MouseMove,
+                         to,
+                         to,
+                         harness.window->mapToGlobal(to.toPoint()),
+                         Qt::NoButton,
+                         Qt::LeftButton,
+                         Qt::AltModifier};
+        QCoreApplication::sendEvent(harness.window, &move);
+        QMouseEvent release{QEvent::MouseButtonRelease,
+                            to,
+                            to,
+                            harness.window->mapToGlobal(to.toPoint()),
+                            Qt::LeftButton,
+                            Qt::NoButton,
+                            Qt::AltModifier};
+        QCoreApplication::sendEvent(harness.window, &release);
+        QCoreApplication::processEvents();
+    };
+    harness.root->setProperty("wipePosition", 0.5);
+    harness.settle();
+    sendDrag(QPointF{startX, startY}, QPointF{startX - 160, startY});
+    EXPECT_NE(harness.root->property("wipePosition").toDouble(), 0.5);
+    auto* const surface = harness.root->findChild<QQuickItem*>(QStringLiteral("dualVideoSurface"));
+    ASSERT_NE(surface, nullptr);
+    EXPECT_FALSE(surface->property("roiEnabled").toBool());
+    EXPECT_TRUE(viewport->property("roiSelectMode").toBool());
+}
+
 TEST(MainQmlContractTests, ClosingRetainedVideoDoesNotReplaceImageWorkspace) {
     WorkspaceHarness harness;
     QTemporaryDir directory;

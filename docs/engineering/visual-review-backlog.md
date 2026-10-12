@@ -1,7 +1,69 @@
 # 视觉审查问题台账
 
-更新：2026-10-11（打开/添加/替换意图区分 I01）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-10-11（统一鼠标与快捷键 I02／打开、添加、替换意图区分 I01）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+
+## 2026-10-11 统一鼠标与快捷键 I02
+
+- **范围**：《CompareStation 下一步体验与性能计划 2026-10-11》§6 I02（P1），R4 阶段工单。
+  ROI 框选的可见入口与光标状态、切换型快捷键关闭 autoRepeat、输入上下文互斥与 HUD
+  事件透明的验证。不改 E04 Jog 语义（JogKeyHandler 仍独占裸 A/D/←→/,/.），不把已用于
+  模式切换的 1–6 再绑定到源选择（未新增任何源选择键），不动渲染后端。
+- **问题（基线 788c557）**：ROI 框选只能靠记住 Alt+拖动；所有切换型 Shortcut 未显式关
+  autoRepeat（Qt QML Shortcut 默认 true，按住空格会按 OS 重复时钟翻转播放/暂停，M 按住会
+  连发问题记录）；"弹窗/图片工作区中媒体键不动视频"“HUD 不拦截画布事件”只有菜单上下文
+  一处被钉死，模态对话框、双工作区与 HUD 事件路径没有回归保护。
+- **交付**：
+  - `ComparisonViewport.qml`：新 `roiSelectMode` 状态与可见入口按钮 `viewportRoiSelectButton`
+    （`viewCommandRow` 内，`checkable`+`mirrorsState` 与模式条同契约；开启时普通拖动=框选
+    ROI，未开启时默认拖动仍是平移）；`viewportNavigation` 鼠标区增加 `cursorShape`
+    （armed/框选中=CrossCursor，否则箭头）并在按下分支按 Shift→Alt→armed 优先进入框选；
+    视口（舞台焦点项）`Keys.onEscapePressed` 退出框选模式，`resetView()`（R/按钮）一并退出。
+    Alt+拖动与 Shift+放大框选原样保留；滚轮本就以光标为中心缩放（`zoomAt(point.x, point.y)`，
+    本次用测试钉死而非改码）。
+  - `ReviewShortcuts.qml`：切换型 Shortcut 显式 `autoRepeat: false`——空格、Tab、F11、
+    两处 Esc、?、C、\\、数字模式键 1–6（ModeKeyShortcut 组件内）、` 与 Shift+`。
+  - `Main.qml`：M（记录问题，每次激活都会创建记录）与 Ctrl+W（关闭任务）同样关闭
+    autoRepeat；抽屉 Esc 同步关闭。图片工作区的 A/O/T/空格本就以 `!event.isAutoRepeat`
+    门控（未改）。
+  - `ShortcutHelpOverlay.qml`：鼠标尾行"Alt+拖动"扩为"框选区域按钮 / Alt+拖动"，与新入口
+    互为说明。
+  - **HUD 事件透明**：调查结论（证据在案）——结构性 `acceptedMouseButtons` 检查是错误口径
+    （QQuickText 为富文本链接声明左键、分析条 Label 是 Control，但两者都忽略并放行无关注
+    销）；行为级验证证明基线 HUD 从未拦截画布手势，曾尝试的 z 重排/Label→Text 改动全部
+    撤销，保留行为测试作为回归闸。Wipe 手柄拖拽优先由 DragHandler 独占抓取保证（z 非关键，
+    证据在 M4 记录），同样以测试钉死。
+- **不变量**：E04 jog 的按下/长按/释放链路零改动；数字键 1–6 仍只切换视图模式；输入上下文
+  互斥仍由 `inputContext` 单点计算（未改逻辑，只加测试）；视频与图片工作区切换后无悬挂
+  快捷键（`globalMediaShortcutsEnabled` 依 `videoActive` 门控，测试钉死）。
+- **验证（本地 dev preset，2026-10-11）**：
+  - 新增 `ViewportPixelScaleTests` +3：`WheelZoomCentersOnThePointerNotTheViewportCenter`
+    （右下光标滚轮→viewCenter 右下移动，键盘缩放仍居中）、`RoiSelectButtonArmsMarquee-
+    WhilePlainDragStaysPan`（未开=平移且无 ROI；按钮开启=十字光标+普通拖动框选出归一化
+    ROI 矩形；Esc 退出恢复箭头）、`HudPlatesStayTransparentToCanvasInput`（放大后从像素
+    读数板/直看指示板中心起拖→画布平移；对齐条与沉浸 HUD 处在信箱带无平移语义，以
+    按压→画布夺回焦点验证穿透）。
+  - 新增 `MainQmlContractTests` +3：`ToggleShortcutsAndWorkspaceActionsDisableAutoRepeat`
+    （17 个切换序列的 autoRepeat 全为 false）、`DialogsAndWorkspacesOwnTheKeyboardBefore-
+    MediaShortcuts`（A/B/GT 对话框模态中 A/D/C/1/空格零命令、Esc 关闭后恢复；图片工作区
+    同样接管键盘；隐藏 chrome 下 Tab/F11 仍可用）、`WipeHandleDragOwnsTheGestureOverThe-
+    RoiMarquee`（armed 状态下 Alt+拖 Wipe 手柄：wipePosition 移动、ROI 未设、模式未退）。
+  - 变异证据：`out/verification/i02-mutation-evidence/`（M1 空格丢 autoRepeat=红；M2 armed
+    分支清空=红；M3 滚轮退回中心缩放=红；M4 手柄 DragHandler 禁用=红——附 z 50→10 候选
+    未变红的记录，说明优先级由独占抓取而非 z 保证；M5 附撤销记录：HUD z 重排候选在基线
+    上即绿，产品零改动；M5R 向 HUD 板加入吞输入的 MouseArea=红；M6 inputContext 丢模态
+    上下文=红）。
+  - 回归（全绿）：`ui.MainQmlContractTests`、`ui.ViewportPixelScaleTests`、
+    `ui.ReviewControllerTests`、`ui.VideoFolderModelTests`、`ui.ImageReviewControllerTests`、
+    `ui.application_menu_bar.*`、`ui.active_source_strip.*`、`ui.wipe_handle.*` 共 292/292
+    （另 4 项原有 Disabled 未计）；`ui.player_osc` 2 例失败为基线干净树同样复现的环境问题
+    （见 I01 节）；`format-check`（qmlformat+clang-format 393 文件）与 `lint`
+    （qmllint --max-warnings 0 + clang-tidy）通过。
+- **UNVERIFIED（真机项，不宣称）**：十字光标与按钮选中态在高 DPI/缩放下的观感；真实滚轮
+  设备的离散档位手感；沉浸 HUD 穿透在真机窗口焦点切换下的行为（组件级合成事件验证）。
+- **回退**：还原 `ComparisonViewport.qml` 的 roiSelectMode/按钮/光标/Esc、`ReviewShortcuts.qml`
+  与 `Main.qml` 的 autoRepeat 行、帮助尾行文案即回旧行为（Alt+拖动仍在）；新增测试同步
+  还原。HUD/Wipe 无产品改动需要回退。
 
 ## 2026-10-11 打开、添加、替换意图区分 I01
 

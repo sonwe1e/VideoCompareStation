@@ -2926,6 +2926,7 @@ ApplicationWindow {
     Shortcut {
         sequence: "Esc"
         context: Qt.ApplicationShortcut
+        autoRepeat: false
 
         // In full screen the presentation Escape (ReviewShortcuts) owns the key and exits
 
@@ -2986,6 +2987,7 @@ ApplicationWindow {
     Shortcut {
         sequence: ShortcutCatalog.closeCurrentTask
         context: Qt.ApplicationShortcut
+        autoRepeat: false
         enabled: root.inputContext === 0 && root.activeTaskHasMedia
         onActivated: root.closeCurrentTask()
     }
@@ -2999,10 +3001,11 @@ ApplicationWindow {
 
     // M for "mark": freezes the observation and opens the note dialog; Enter attaches the
     // typed note, Escape attaches an empty one. Active in both workspaces whenever there is
-    // something to capture.
+    // something to capture. Never auto-repeats: every activation creates an issue record.
     Shortcut {
         sequence: ShortcutCatalog.captureIssue
         context: Qt.ApplicationShortcut
+        autoRepeat: false
         enabled: root.inputContext === 0 && (root.videoHasSession || root.imageHasContent)
         onActivated: root.captureIssueLog()
     }
