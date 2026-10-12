@@ -55,6 +55,10 @@ Rectangle {
     required property bool immersiveHudVisible
     required property string immersiveHudText
     required property bool showFramePending
+    // U03: the waiting pill's wording is owned by the host so it can name the actual work
+    // (an ordinary latest-frame fetch vs. preparing reverse-walk frames) without the
+    // viewport learning about the jog state machine.
+    property string framePendingText: qsTr("正在获取最新帧…")
     required property int currentFrame
     required property string differenceUnavailableDetail
     required property string combinedAlignmentStatus
@@ -704,7 +708,7 @@ Rectangle {
                 running: parent.parent.visible
             }
             Text {
-                text: qsTr("正在获取最新帧…")
+                text: control.framePendingText
                 color: control.mutedTextColor
                 font.pixelSize: Theme.fontSecondary
             }

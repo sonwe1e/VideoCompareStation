@@ -2311,6 +2311,252 @@ TEST(MainQmlContractTests, FileSidebarResizesInsideItsBandAndYieldsToTheCanvasGu
     EXPECT_DOUBLE_EQ(sidebarWidth(), 232.0);
 }
 
+// U03: the five stage states are mutually exclusive and each drives exactly its own surface.
+// The scenarios run through the real controller over a validated comparison (submitting
+// commands, delivering terminals, mutating the snapshot) so the derived stageStateId and the
+// on-screen surfaces are checked against each other, not against a mock of themselves.
+TEST(MainQmlContractTests, StageStatesAreMutuallyExclusiveAndDriveTheRightSurface) {
+    QTemporaryDir temporaryDirectory;
+    ASSERT_TRUE(temporaryDirectory.isValid());
+    const QString pathA = temporaryDirectory.filePath(QStringLiteral("stage-a.mp4"));
+    const QString pathB = temporaryDirectory.filePath(QStringLiteral("stage-b.mp4"));
+    for (const QString& path : {pathA, pathB}) {
+        QFile file{path};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_GT(file.write("stage-source", 12), 0);
+    }
+
+    WorkspaceHarness harness;
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate);
+    ASSERT_TRUE(installValidatedVideoSet(
+        harness.snapshot,
+        {std::filesystem::path{pathA.toStdWString()}, std::filesystem::path{pathB.toStdWString()}},
+        rate.value(),
+        100,
+        400'000));
+    // The helper clears and rebuilds sources/presentedSources with exact matches.
+    harness.snapshot->displayedFrame = domain::FrameId{41};
+    ASSERT_TRUE(harness.create()) << harness.error;
+
+    auto* const overlay = harness.root->findChild<QQuickItem*>(QStringLiteral("statusOverlay"));
+    auto* const banner = harness.root->findChild<QQuickItem*>(QStringLiteral("frameErrorBanner"));
+    ASSERT_NE(overlay, nullptr);
+    ASSERT_NE(banner, nullptr);
+
+    const auto stateIs = [&harness](const char* expected) {
+        return harness.root->property("stageStateId").toString() == QLatin1String(expected);
+    };
+
+    // ready: frame presented, nothing pending, nothing failed.
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_EQ(harness.root->property("stageStateId").toString(), QStringLiteral("ready"));
+
+    // empty: no sources at all - the drop-hint overlay owns the stage. The whole snapshot
+    // moves to a consistent kEmpty (frame count, timeline, frame id all cleared), exactly
+    // how the composition root publishes a closed session - an inconsistent snapshot would
+    // fail the controller closed and read as a graphics failure instead.
+    const std::vector<application::SessionSourceView> savedSources = harness.snapshot->sources;
+    const std::vector<application::PresentedSourceState> savedPresented =
+        harness.snapshot->presentedSources;
+    const auto savedComparison = harness.snapshot->validatedComparison;
+    const auto savedTimeline = harness.snapshot->canonicalTimeline;
+    const auto savedFrameCount = harness.snapshot->canonicalFrameCount;
+    harness.snapshot->sources.clear();
+    harness.snapshot->presentedSources.clear();
+    harness.snapshot->validatedComparison.reset();
+    harness.snapshot->canonicalTimeline.reset();
+    harness.snapshot->canonicalFrameCount = 0U;
+    harness.snapshot->sessionState = domain::SessionState::kEmpty;
+    harness.snapshot->displayedFrame.reset();
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_EQ(harness.root->property("stageStateId").toString(), QStringLiteral("empty"));
+    auto* const emptyView = harness.root->findChild<QQuickItem*>(QStringLiteral("emptyReviewView"));
+    ASSERT_NE(emptyView, nullptr);
+    EXPECT_TRUE(emptyView->isVisible()) << "first blank shows the drop-card entry points";
+    EXPECT_FALSE(overlay->isVisible()) << "nothing has failed and nothing is loading";
+
+    // waitingFrame: the old picture stays while the next frame is on its way. A pending
+    // navigation raises framePending; after the short debounce the waiting state shows
+    // while the old frame remains unmasked.
+    harness.snapshot->displayedFrame = domain::FrameId{41};
+    harness.snapshot->sources = savedSources;
+    harness.snapshot->presentedSources = savedPresented;
+    harness.snapshot->validatedComparison = savedComparison;
+    harness.snapshot->canonicalTimeline = savedTimeline;
+    harness.snapshot->canonicalFrameCount = savedFrameCount;
+    harness.snapshot->sessionState = domain::SessionState::kReady;
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_TRUE(harness.controller->seekFrame(42));
+    ASSERT_TRUE(harness.waitUntil([&harness] {
+        return harness.root->property("stageStateId").toString() == QLatin1String("waitingFrame");
+    })) << "a pending navigation over a kept frame must read as waitingFrame, not be masked";
+    EXPECT_FALSE(overlay->isVisible()) << "a kept picture must not be masked by a full overlay";
+    EXPECT_FALSE(emptyView->isVisible());
+
+    // opening: a new task is opening and there is no old picture - the open command holds
+    // busy while the coordinator publishes a kLoading snapshot (no frame, no presentation).
+    const QUrl openUrlA = QUrl::fromLocalFile(pathA);
+    const QUrl openUrlB = QUrl::fromLocalFile(pathB);
+    EXPECT_TRUE(harness.controller->openSources(
+        {QVariant::fromValue(openUrlA), QVariant::fromValue(openUrlB)}, 0));
+    harness.snapshot->sessionState = domain::SessionState::kLoading;
+    harness.snapshot->displayedFrame.reset();
+    harness.snapshot->presentedSources.clear();
+    harness.snapshot->validatedComparison.reset();
+    harness.snapshot->canonicalTimeline.reset();
+    harness.snapshot->canonicalFrameCount = 0U;
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_TRUE(harness.controller->busy());
+    EXPECT_TRUE(stateIs("opening")) << "busy with no old picture is the opening state";
+    EXPECT_TRUE(overlay->isVisible()) << "opening shows the busy overlay";
+    EXPECT_FALSE(emptyView->isVisible());
+
+    // openFailed: restore the presented session, deliver the terminal (clear busy), then
+    // fail with the old frame kept - the banner explains the failure while the old session
+    // survives behind it.
+    harness.snapshot->sessionState = domain::SessionState::kReady;
+    harness.snapshot->displayedFrame = domain::FrameId{41};
+    harness.snapshot->presentedSources = savedPresented;
+    harness.snapshot->validatedComparison = savedComparison;
+    harness.snapshot->canonicalTimeline = savedTimeline;
+    harness.snapshot->canonicalFrameCount = savedFrameCount;
+    // Retire every outstanding command (the navigation and the open) so the failure state
+    // is not masked by a lingering wait.
+    for (const application::PlaybackCommand& command : harness.submitted) {
+        harness.terminals.push_back(application::CommandTerminal{
+            .context = application::commandContext(command),
+            .outcome = application::CommandOutcome::Succeeded,
+        });
+    }
+    harness.snapshot->lastError = domain::MediaError{
+        .source = domain::SourceId{0U},
+        .userMessageKey = "media-open-failed",
+        .technicalDetail = "u03-stage-test",
+    };
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_TRUE(stateIs("openFailed")) << "an error over a kept frame is still openFailed";
+    EXPECT_TRUE(banner->isVisible()) << "the failure keeps the old session and explains itself";
+    EXPECT_FALSE(overlay->isVisible());
+    EXPECT_FALSE(emptyView->isVisible());
+
+    // missingFrame: error cleared, one source's frame missing for the shown frame.
+    harness.snapshot->lastError.reset();
+    harness.snapshot->presentedSources.front().matchKind = application::FrameMatchKind::Missing;
+    harness.snapshot->presentedSources.front().sourceFrameId.reset();
+    harness.snapshot->presentedSources.front().missingReason =
+        application::MissingReason::AlignmentGap;
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_TRUE(stateIs("missingFrame"));
+    EXPECT_FALSE(banner->isVisible());
+    EXPECT_FALSE(overlay->isVisible())
+        << "missingFrame speaks through the pair-dependent unavailable banner only";
+}
+
+// U03 information layering and user-action terminology: a single ordinary video hides the
+// comparison pair and the GT role entirely; a comparison session shows them. The transport
+// speaks "原速播放", the pending pill distinguishes reverse-walk preparation, and the
+// presentation status is translated with the raw value kept one hover away.
+TEST(MainQmlContractTests, TerminologySpeaksUserActionsAndLayeringFollowsTheTask) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    // Two sources: the compare bar, the pair selector and the strip are part of the task.
+    auto* const compareBar = harness.root->findChild<QQuickItem*>(QStringLiteral("compareModeBar"));
+    auto* const sourceBar =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("activeSourceStrip"));
+    ASSERT_NE(compareBar, nullptr);
+    ASSERT_NE(sourceBar, nullptr);
+    EXPECT_TRUE(compareBar->isVisible());
+    EXPECT_TRUE(sourceBar->isVisible());
+    auto* const pairCombo = harness.root->findChild<QQuickItem*>(QStringLiteral("pairCombo"));
+    ASSERT_NE(pairCombo, nullptr);
+    EXPECT_EQ(QQmlProperty(pairCombo, QStringLiteral("Accessible.name"), qmlContext(pairCombo))
+                  .read()
+                  .toString(),
+              QStringLiteral("比较对象"));
+
+    // A single ordinary video: the comparison pair and the GT role chrome disappear.
+    auto single = domain::ComparisonValidator::validate(std::vector<domain::ComparisonSource>{
+        domain::ComparisonSource{
+            .id = domain::SourceId{0U},
+            .role = domain::ComparisonRole::kReference,
+            .descriptor =
+                domain::MediaDescriptor{
+                    .normalizedPath = std::filesystem::path{L"u03-single.mp4"},
+                    .extent = domain::MediaExtent{.width = 1'920U, .height = 1'080U},
+                    .frameRate = domain::RationalRate::create(30, 1).value(),
+                    .frameCount = domain::FrameCountInfo{.value = 12},
+                    .duration = domain::MediaTime{400'000},
+                    .codecId = "h264",
+                    .pixelFormatId = "nv12",
+                    .bitDepth = 8U,
+                    .timingConfidence = domain::TimingConfidence::kVerifiedCfr,
+                },
+            .displayName = "Single",
+        },
+    });
+    ASSERT_TRUE(single);
+    harness.snapshot->validatedComparison =
+        std::make_shared<const domain::ValidatedComparisonSet>(std::move(single).value().set);
+    harness.snapshot->sources.resize(1);
+    harness.snapshot->presentedSources.resize(1);
+    harness.controller->refreshProjection();
+    harness.settle();
+    ASSERT_EQ(harness.controller->sourceCount(), 1);
+    EXPECT_FALSE(compareBar->isVisible())
+        << "an ordinary single video hides the comparison pair and GT chrome";
+    EXPECT_FALSE(sourceBar->isVisible());
+
+    // The transport names the user action, not the continuity policy enum.
+    EXPECT_EQ(harness.root->property("playbackModeLabel").toString(), QStringLiteral("原速播放"));
+
+    // The presentation-status translation maps every unconfirmed calibre to the same
+    // user-facing sentence while other calibres keep their meaning; the waiting pill names
+    // reverse-walk preparation and defaults to the plain fetch.
+    auto* const catalog = harness.root->findChild<QObject*>(QStringLiteral("reviewMessageCatalog"));
+    ASSERT_NE(catalog, nullptr);
+    const auto presentationText = [&catalog](const QString& raw) {
+        QVariant result;
+        QMetaObject::invokeMethod(catalog,
+                                  "presentationStatusText",
+                                  Q_RETURN_ARG(QVariant, result),
+                                  Q_ARG(QVariant, QVariant{raw}));
+        return result.toString();
+    };
+    EXPECT_EQ(harness.root->property("framePendingLabel").toString(),
+              QStringLiteral("正在获取最新帧…"));
+    const auto framePendingText = [&catalog](const QVariant& active, const QVariant& direction) {
+        QVariant result;
+        QMetaObject::invokeMethod(catalog,
+                                  "framePendingText",
+                                  Q_RETURN_ARG(QVariant, result),
+                                  Q_ARG(QVariant, active),
+                                  Q_ARG(QVariant, direction));
+        return result.toString();
+    };
+    EXPECT_EQ(framePendingText(QVariant{true}, QVariant{-1}), QStringLiteral("正在准备反向帧…"));
+    EXPECT_EQ(framePendingText(QVariant{true}, QVariant{1}), QStringLiteral("正在获取最新帧…"));
+    EXPECT_EQ(framePendingText(QVariant{false}, QVariant{-1}), QStringLiteral("正在获取最新帧…"));
+    EXPECT_EQ(presentationText(QStringLiteral("未确认 (未探测)")),
+              QStringLiteral("尚未确认系统呈现"));
+    EXPECT_EQ(presentationText(QStringLiteral("未知 (未确认)")),
+              QStringLiteral("尚未确认系统呈现"));
+    EXPECT_EQ(presentationText(QStringLiteral("可用 (Flip Model)")),
+              QStringLiteral("已确认系统呈现"));
+    EXPECT_EQ(presentationText(QStringLiteral("不支持 (需 Flip 模型)")),
+              QStringLiteral("系统呈现不可用"));
+    EXPECT_EQ(presentationText(QStringLiteral("")), QStringLiteral("—"));
+}
+
 // The transport's range row is the second entry point to the in/out range (the inspector and the
 // I / O / \ shortcuts being the others). These contracts pin the chips to the very same session
 // range state so the row cannot drift into a parallel, decorative copy of it.

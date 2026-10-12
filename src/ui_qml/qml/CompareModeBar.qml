@@ -177,7 +177,7 @@ Rectangle {
             model: control.differenceEdges
             textRole: "pairLabel"
             currentIndex: control.currentEdgeIndex
-            Accessible.name: qsTr("对比对")
+            Accessible.name: qsTr("比较对象")
             hoverEnabled: true
             leftPadding: 10
             rightPadding: 26

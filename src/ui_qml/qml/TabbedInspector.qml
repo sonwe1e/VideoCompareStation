@@ -18,6 +18,9 @@ Rectangle {
     // V-07 pair-metrics projection from the composition root; optional so standalone QML
     // tests (no metrics service) keep instantiating the inspector without warnings.
     property var metrics: null
+    // U03 terminology projection from the composition root's message catalog; nullable so
+    // standalone harnesses keep working, with the raw technical value as the fallback.
+    property var messageCatalog: null
     // D01 timing diagnostics projection from the composition root; optional so standalone QML
     // tests keep instantiating the inspector without warnings.
     property var timingDiagnostics: null
@@ -965,9 +968,9 @@ Rectangle {
                                         Text {
                                             width: parent.width
                                             wrapMode: Text.WordWrap
-                                            text: qsTr("检测到虚拟屏/远控环境，系统呈现垂直同步未确认。耗时反映应用调度与提交。")
+                                            text: qsTr("检测到虚拟屏/远控环境，尚未确认系统呈现。耗时反映应用调度与提交。")
                                             color: Theme.warningText
-                                            font.pixelSize: 10
+                                            font.pixelSize: Theme.fontSecondary
                                         }
                                     }
                                 }
@@ -1058,11 +1061,26 @@ Rectangle {
                                         Layout.fillWidth: true
                                     }
 
+                                    // U03: the row speaks the user-facing conclusion
+                                    // ("尚未确认系统呈现"), while the tooltip keeps the raw
+                                    // controller value for the technical detail.
                                     Text {
-                                        text: control.timingDiagnostics ? qsTr("%1 (%2)").arg(control.timingDiagnostics.systemPresentationStatus).arg(control.timingDiagnostics.driverKind) : "—"
+                                        id: presentationStatusValue
+
+                                        objectName: "presentationStatusValue"
+                                        text: control.timingDiagnostics ? (control.messageCatalog ? control.messageCatalog.presentationStatusText(control.timingDiagnostics.systemPresentationStatus) : qsTr("%1 (%2)").arg(control.timingDiagnostics.systemPresentationStatus).arg(control.timingDiagnostics.driverKind)) : "—"
                                         color: control.mutedTextColor
                                         font.pixelSize: 11
                                         elide: Text.ElideRight
+
+                                        HoverHandler {
+                                            id: presentationStatusHover
+                                        }
+
+                                        VcsToolTip {
+                                            text: control.timingDiagnostics ? qsTr("%1 (%2)").arg(control.timingDiagnostics.systemPresentationStatus).arg(control.timingDiagnostics.driverKind) : ""
+                                            visible: presentationStatusHover.hovered && text.length > 0
+                                        }
                                     }
                                 }
                             }

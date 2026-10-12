@@ -1,6 +1,36 @@
 import QtQml
 
 QtObject {
+    objectName: "reviewMessageCatalog"
+    // U03 display-layer terminology: source-facing statuses are translated into the user
+    // action they name, without touching the underlying calibre. The raw technical value
+    // stays available to the caller (tooltips / expanded details).
+    function presentationStatusText(status) {
+        const raw = String(status === undefined || status === null ? "" : status);
+        if (raw.indexOf("未确认") >= 0 || raw.indexOf("未知") >= 0)
+            return qsTr("尚未确认系统呈现");
+        if (raw.indexOf("可用 (Flip") >= 0)
+            return qsTr("已确认系统呈现");
+        if (raw.indexOf("基础可用") >= 0)
+            return qsTr("已确认系统呈现（受限）");
+        if (raw.indexOf("不支持") >= 0 || raw.indexOf("不可用") >= 0)
+            return qsTr("系统呈现不可用");
+        if (raw.indexOf("不连贯") >= 0)
+            return qsTr("系统呈现不连贯");
+        if (raw.indexOf("探测") >= 0)
+            return qsTr("正在确认系统呈现");
+        return raw.length > 0 ? raw : qsTr("—");
+    }
+
+    // U03: the waiting pill names the work in progress. A held reverse walk (E04) prepares
+    // earlier frames through the reverse GOP window, which reads differently from an
+    // ordinary latest-frame fetch; the underlying jog fields stay untouched.
+    function framePendingText(jogActive, jogDirection) {
+        if (jogActive === true && Number(jogDirection) < 0)
+            return qsTr("正在准备反向帧…");
+        return qsTr("正在获取最新帧…");
+    }
+
     function droppedUrlError(errorKey, detail) {
         switch (errorKey) {
         case "drop-empty":

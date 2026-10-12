@@ -6,6 +6,7 @@ import QtQuick.Dialogs as NativeDialogs
 import QtQuick.Window
 import "VcsTheme.js" as Theme
 import "LayoutMetrics.js" as LayoutMetrics
+import "StageStates.js" as StageStates
 import "MediaLabels.js" as MediaLabels
 import "ShortcutCatalog.js" as ShortcutCatalog
 
@@ -582,12 +583,24 @@ ApplicationWindow {
     }
     readonly property string playbackModeLabel: {
         const policy = Number(controller ? controller.playbackContinuityPolicy : 2);
-        return policy === 0 ? qsTr("逐帧完整审查") : qsTr("正常速度观看");
+        // U03: the rail speaks the user action ("原速播放"), not the internal continuity
+        // policy name; the policy detail stays one line down.
+        return policy === 0 ? qsTr("逐帧完整审查") : qsTr("原速播放");
     }
     readonly property string playbackModeDetail: {
         const policy = Number(controller ? controller.playbackContinuityPolicy : 2);
         return policy === 0 ? qsTr("不跳过整组；落后时放慢以保留每组画面") : qsTr("落后超过约 2 秒时跳过整组追上时间");
     }
+    // U03: the waiting indicator names the work in progress. A held reverse walk (E04) is
+    // preparing earlier frames through the reverse GOP window, which reads differently from
+    // an ordinary latest-frame fetch; the underlying fields stay untouched.
+    readonly property string framePendingLabel: messageCatalog.framePendingText(controller ? controller.jogActive : false, controller ? controller.jogDirection : 0)
+    // U03: the one mutually exclusive answer to what the video stage is showing. Pure over
+    // the same booleans the overlay surfaces read (see StageStates.js); the five-state
+    // distinction lives here so tests can pin it and the surfaces cannot drift from it.
+    // The per-source missing flags default to true for slots the session does not fill, so
+    // only sources that actually exist may speak.
+    readonly property string stageStateId: StageStates.resolveStageState(videoHasSession, graphicsReady, busy, currentFrame >= 0, hasErrors, showFramePending, (sourceCount > 0 && sourceAMissing) || (sourceCount > 1 && sourceBMissing) || (sourceCount > 2 && sourceCMissing))
     readonly property string sourceRateText: {
         const rate = controller ? String(controller.rationalFrameRate || "") : "";
         return rate.length > 0 ? qsTr("源 %1 · 屏刷新无法逐帧呈现时以逐帧审查核对单帧").arg(rate) : "";
@@ -3578,6 +3591,7 @@ ApplicationWindow {
         controller: root.controller
         preferences: root.preferences
         metrics: root.pairMetricsModel
+        messageCatalog: root.messageCatalog
         timingDiagnostics: typeof timingDiagnostics !== "undefined" ? timingDiagnostics : null
         session: root.shell
         // U01: the clamped, user-draggable panel width. The component's own default clamps
@@ -3708,6 +3722,7 @@ ApplicationWindow {
         immersiveHudVisible: root.immersiveHudVisible
         immersiveHudText: root.immersiveHudText
         showFramePending: root.showFramePending
+        framePendingText: root.framePendingLabel
         currentFrame: root.currentFrame
         differenceUnavailableDetail: root.differenceUnavailableDetail
         combinedAlignmentStatus: root.combinedAlignmentStatus
