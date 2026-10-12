@@ -1,7 +1,69 @@
 # 视觉审查问题台账
 
-更新：2026-10-11（Windows 默认打开完整闭环 I03／统一鼠标与快捷键 I02／打开、添加、替换意图区分 I01／双差异显示口径与附近帧可读性 V04／原速播放指标与调度守恒 E03／任务化模式入口 V03／统一源入口与比较选择 V02／长按正反向走带 E04／缓存小步改进 E05／启动减负 E01／诊断可关闭 E02／全画布候选直看 P05／图片编辑纯操作 P11／协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-10-11（设计 token U02／画布响应式重排 U01／信息分层与五态 U03／Windows 默认打开完整闭环 I03／统一鼠标与快捷键 I02／打开、添加、替换意图区分 I01／双差异显示口径与附近帧可读性 V04／原速播放指标与调度守恒 E03／任务化模式入口 V03／统一源入口与比较选择 V02／长按正反向走带 E04／缓存小步改进 E05／启动减负 E01／诊断可关闭 E02／全画布候选直看 P05／图片编辑纯操作 P11／协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+
+## 2026-10-11 UI 排版三工单 U01/U02/U03（一次合并小节）
+
+- **范围**：《CompareStation 下一步体验与性能计划 2026-10-11》§7 U01（围绕画布的响应式结构）、
+  U02（在现有主题上补设计系统）、U03（信息分层与空/错/忙状态），R4 阶段，三个提交按
+  U02→U01→U03 顺序交付（U02 的 token 是 U01 布局的地基）。
+- **问题（基线 84c33f9）**：主题只有语义色与圆角，尺寸散落——常用按钮 12px/30px 命中区、10px
+  诊断结论、播放钮 36px、区间芯片 24px；抽屉判定读裸窗口宽（`root.width < 1120`），文件侧栏固定
+  260px，检查器按窗口百分比 300–380px 不可调，局部条固定 34%，附近帧卡固定 220px；"画面正在
+  显示什么"只有若干互相独立的可见性绑定可以回答，走带栏写着内部策略名，诊断行印原始口径串。
+- **交付**：
+  - `VcsTheme.js`（U02，8e92518）：字体（正文 14/次要 12/分组 16/等宽数字 13/装饰性 10）、
+    行高、4/8 间距栅格、命中区（常用 ≥32×32、播放钮 40–44）、栏行 36–40、控制条 64–80、
+    面板宽（侧栏 232 默认 200–288、检查器 288 默认 260–320）、局部区 28–40%、附近帧 144–184、
+    画布保护线 600；关键控件实际引用 token（CompareModeBar/ActiveSourceStrip/PlayerOsc/
+    TransportBar/Main 通知区/ComparisonViewport 状态面/EmptyReviewView/共用按钮与下拉）。
+    GT/当前比较/直看为颜色+标签双编码并有契约测试钉住。迁移边界：未动 TabbedInspector 内部
+    （U03 顺手迁移了所改行）与 ImageWorkspace。
+  - `LayoutMetrics.js` + `Main.qml`（U01，aa5cbb3）：纯函数决定重排——可用画布宽（窗口宽减
+    实际展开面板）、检查器仅在停靠后画布仍 ≥600 时停靠（否则走既有抽屉）、侧栏在会破坏保护线
+    时临时抑制（用户开关不丢，放宽窗口自动恢复）；侧栏与检查器获得拖拽分隔条并钳制在 token
+    区间；局部条份额 28–40% 可拖（132px 下限）；附近帧卡可折叠、展开高 184（缩略图井自适应，
+    保留 V04 徽标）；检查器默认 288。临时收起与持久偏好区分（面板宽/份额是会话级视图状态，
+    未写设置）。既有 `DrawerScrimTransportShrinkAndEscClose` 的抽屉边界从 1120 移到 916
+    （默认检查器宽下的保护线位置），尺寸组改为 860/900/960/1440，像素门 900×640——理由：
+    判定输入从窗口宽换成了可用画布宽。
+  - `StageStates.js` + 展示层映射（U03，f122057）：五态互斥投影 `stageStateId`
+    （empty/opening/waitingFrame/openFailed/missingFrame/ready；失败>打开>空白>等待>缺帧，
+    缺帧仅在已显示帧且槽位存在时发声——`sourceCMissing` 等标志对未填充槽默认为 true）；
+    术语映射不改口径：走带栏"原速播放"、比较对象（可达名）、
+    `ReviewMessageCatalog.presentationStatusText`（未确认/未知→"尚未确认系统呈现"，原始值留
+    悬停详情）、`framePendingText`（反向走带→"正在准备反向帧…"）、虚拟屏横幅改口径句；
+    单视频隐藏比较对与 GT 栏（结构性，测试钉住）。
+- **不变量**：布局动、行为不动——进出局部预设/折叠卡片/拖面板/抽屉换挡均零播放命令、零
+  会话状态变更；V02/V03/I01/I02 交互语义零改动；E03/E02 口径零改动（仅展示层翻译）。
+- **验证（本地 dev preset，2026-10-11，证据 `out/verification/u02-design-tokens/`、
+  `u01-responsive-layout/`、`u03-stage-states/`）**：
+  - 新增 `ui.vcs_theme` token 用例 +8；`MainQmlContractTests`
+    `DesignTokensGovernKeyControlMetrics`、`RoleStatesCarryLabelsNotColourAlone`（U02）；
+    `ui.layout_metrics` +6（纯函数：面板各态可用画布宽、600 保护线边界、钳制区间）；
+    `CanvasGuardDrivesInspectorDockingAndPanelClamps`、`FileSidebarResizes…YieldsToTheCanvas-
+    Guard`、`LocalStripShareDragKeepsTheBand`、`NearbyFramesCardFoldsIntoItsHeightBand`（U01）；
+    `ui.stage_states` +6（布尔全组合互斥矩阵）与 `StageStatesAreMutuallyExclusiveAndDriveThe-
+    RightSurface`、`TerminologySpeaksUserActionsAndLayeringFollowsTheTask`（U03）。
+  - 变异证据：U02 10 token 翻转 + 6 控件脱钩 + 3 标签移除；U01 8 纯函数翻转 + 6 接线脱钩
+    （局部条钳制为双路径设计，需双路径同拆才变红）；U03 5 状态机规则翻转 + 4 接线脱钩；全部
+    红→还原→绿。
+  - 回归：`ui.MainQmlContractTests`（117 含新增，另 4 项原有 Disabled）、`ui.active_source_strip.*`
+    （8）、`ui.application_menu_bar.*`（8）、`ui.RoiTripletStrip`、`ui.ToolbarCombo`（2）、
+    `ui.video_file_sidebar`（2，当时全绿）、`ui.player_osc`、`ui.vcs_theme`、`ui.layout_metrics`、
+    `ui.stage_states`、`ui.empty_review_view` 全绿；`format-check` 与 `lint` 通过。
+  - 会话晚段环境回退（与本三提交无关，有对照证据）：`ui.video_file_sidebar`（2 例超时）与
+    `ui.player_osc`（2 例）在 84c33f9 基线源码 + 同一引擎下同样失败（worktree 对照，
+    `out/verification/u0x-final-suites.log`）；当日早段同样源码曾全绿（120/120、117/117）。
+    判定为机器状态回退（字体度量/输入合成变化，同日 out/vcpkg 安装树亦被清空过一次）。
+- **UNVERIFIED（真机项，不宣称）**：960×640/1366×768/1440×900/1920×1080 与 100/125/150/200%
+  DPI 实际截图走查（按钮无遮挡/裁断、命中区手感）；各状态矩阵在真机窗口焦点切换下的观感；
+  hover 防闪烁在真实指针下的复核。控制条 64–80 带仅部分落地：停泊 OSC 的可选诊断行
+  （E03 状态栏）叠放时总高可超 80，强行钳制会隐藏已交付状态，暂按"一条主时间轴+首层控件"
+  口径执行并保留 token。
+- **回退**：按提交逐个 revert 即可（无持久化状态、无接口变更）；U01 需同步还原
+  `DrawerScrimTransportShrinkAndEscClose` 的边界调整。
 
 ## 2026-10-11 统一鼠标与快捷键 I02
 
