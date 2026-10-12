@@ -63,6 +63,12 @@ Rectangle {
     signal removeSelectedRequested
     readonly property real chipSpacing: 7
 
+    // Session change detector: the shell clears its selection list whenever the active source set
+    // changes, but the explicit management mode is strip-local. Without leaving it, an ordinary
+    // chip click after an open/replace/append would keep selecting instead of direct-looking.
+    readonly property string sourceSetSignature: control.displayOrder.join("\u0001") + "|" + control.sourceCount
+    onSourceSetSignatureChanged: control.manageSelection = false
+
     // V02: the drag reorder is gone (see the displayOrder note above). Positions stay
     // bindings over the display order the shell publishes, so nothing needs scheduling.
 
@@ -119,7 +125,10 @@ Rectangle {
     // manage buttons are children and consume their own clicks first, so this handler sees
     // presses on the chip body alone.
     function chipClicked(chip) {
-        if (chip.resolvedSourceIdentity.length === 0)
+        // A chip mid-replacement/reopen has no stable identity to focus yet; every sibling action
+        // already refuses while pending, and a direct look on a torn-down source would either
+        // focus the old identity or be dropped when the new topology lands.
+        if (chip.pending || chip.resolvedSourceIdentity.length === 0)
             return;
         if (control.manageSelection) {
             control.selectionToggled(chip.resolvedSourceIdentity);

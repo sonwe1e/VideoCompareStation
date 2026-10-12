@@ -2501,6 +2501,21 @@ ApplicationWindow {
         return performSourceReplacement(url);
     }
 
+    // V02 acceptance: an already-open file is refused with the canonical local path, not a raw
+    // URL string. handleDroppedUrls is the one validator that canonicalizes a local file; both
+    // the replacement candidate and the already-open sources go through it, so the comparison
+    // holds even when the open set was staged under a different spelling (redundant path
+    // segment, case differences, UNC vs mapped drive). Unresolvable spellings fall back to the
+    // raw form, which can only add refusals, never silently accept a duplicate.
+    function canonicalVideoUrl(url) {
+        if (!controller || !url)
+            return url;
+        const reviewed = controller.handleDroppedUrls([url]);
+        if (reviewed && reviewed.accepted && reviewed.urls && reviewed.urls.length === 1)
+            return reviewed.urls[0];
+        return url;
+    }
+
     function performSourceReplacement(url) {
         const identity = pendingReplaceSourceIdentity;
         pendingReplaceSourceIdentity = "";
@@ -2512,15 +2527,24 @@ ApplicationWindow {
             showIntentMessage(qsTr("所选视频已不可用。"));
             return false;
         }
+        let candidateUrl = url;
+        if (controller) {
+            const reviewed = controller.handleDroppedUrls([url]);
+            if (!reviewed || !reviewed.accepted || reviewed.kind !== "videos" || !reviewed.urls || reviewed.urls.length !== 1) {
+                showIntentMessage(qsTr("请选择单个可用的视频文件替换该源。"));
+                return false;
+            }
+            candidateUrl = canonicalVideoUrl(url);
+        }
         const urls = activeSourceUrls();
-        const candidate = url.toString();
+        const candidate = candidateUrl.toString();
         for (let index = 0; index < urls.length; ++index) {
-            if (index !== slot && urls[index].toString() === candidate) {
+            if (index !== slot && canonicalVideoUrl(urls[index]).toString() === candidate) {
                 showIntentMessage(qsTr("该视频已在当前对比中。"));
                 return false;
             }
         }
-        urls[slot] = url;
+        urls[slot] = candidateUrl;
         const reference = shell.referenceSourceIndex >= 0 ? shell.referenceSourceIndex : 0;
         if (!shell.stageSources(urls, reference))
             return false;

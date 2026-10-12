@@ -242,6 +242,43 @@ Item {
             compare(strip.selectedIdentities, ["source-a", "source-b"]);
         }
 
+        // V02: the management mode must not survive a session change. The shell clears its
+        // selection list when the source set changes; a strip still in manage mode would turn
+        // the next ordinary chip click into a selection instead of the direct look the user
+        // expects.
+        function test_sessionChangeLeavesTheManageMode() {
+            const manageButton = findChild(strip, "manageSourcesButton");
+            mouseClick(manageButton, manageButton.width / 2, manageButton.height / 2);
+            verify(strip.manageSelection);
+
+            strip.displayOrder = ["source-a", "replacement-b"];
+            wait(0);
+            compare(strip.manageSelection, false);
+
+            // And once more through the source count (an append/remove rather than a replace).
+            mouseClick(manageButton, manageButton.width / 2, manageButton.height / 2);
+            verify(strip.manageSelection);
+            strip.sourceCount = 3;
+            wait(0);
+            compare(strip.manageSelection, false);
+        }
+
+        // V02: a chip that is mid-replacement/reopen has no stable identity to focus; the click
+        // is refused like every sibling action, and the ready chips keep working.
+        function test_pendingChipClickDoesNotRequestDirectLook() {
+            strip.pendingSourceIdentities = ["source-b"];
+            wait(0);
+            const pendingChip = strip.chipAt("source-b");
+            mouseClick(pendingChip, pendingChip.width / 2, pendingChip.height / 2);
+            compare(directLookSpy.count, 0);
+            compare(selectionSpy.count, 0);
+
+            const readyChip = strip.chipAt("source-a");
+            mouseClick(readyChip, readyChip.width / 2, readyChip.height / 2);
+            compare(directLookSpy.count, 1);
+            compare(directLookSpy.signalArguments[0][0], 0);
+        }
+
         // Leaving the manage mode drops the selection, so a hidden batch state can never
         // linger under a click that now means direct look.
         function test_leavingManageModeClearsSelection() {

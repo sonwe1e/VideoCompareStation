@@ -8369,6 +8369,65 @@ TEST(MainQmlContractTests, VideoDroppedOnASourceChipReplacesThatSourceInPlace) {
               0);
 }
 
+// V02 acceptance: replacement refuses an already-open file by canonical identity, not by URL
+// spelling. The candidate below names the same file as source A through a redundant path
+// segment; the old raw-string compare accepted it and let the session compare a file with
+// itself.
+TEST(MainQmlContractTests, ReplacingWithAnAlreadyOpenFileUnderAnotherSpellingIsRefused) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    ASSERT_TRUE(QDir{directory.path()}.mkpath(QStringLiteral("sub")));
+    std::vector<QString> localPaths;
+    for (const auto* const name : {"chip_a.mp4", "chip_b.mp4"}) {
+        const QString path = directory.filePath(QString::fromLatin1(name));
+        ASSERT_TRUE(writeTestPng(path));
+        localPaths.push_back(path);
+    }
+    const QString spellingVariant = directory.filePath(QStringLiteral("sub/../chip_a.mp4"));
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.submitted.clear();
+    QVariantList urls;
+    for (const auto& path : localPaths) {
+        urls.push_back(QUrl::fromLocalFile(path));
+    }
+    ASSERT_TRUE(harness.shell->enqueueStartupRequest(2, urls));
+    const application::CommandContext context =
+        application::commandContext(harness.submitted.front());
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate.hasValue());
+    ASSERT_TRUE(installValidatedVideoSet(harness.snapshot,
+                                         {std::filesystem::path{localPaths[0].toStdWString()},
+                                          std::filesystem::path{localPaths[1].toStdWString()}},
+                                         rate.value(),
+                                         100,
+                                         3'333'334));
+    harness.snapshot->displayedFrame = domain::FrameId{0};
+    harness.terminals.push_back(application::CommandTerminal{
+        .context = context,
+        .outcome = application::CommandOutcome::Succeeded,
+    });
+    harness.controller->refreshProjection();
+    ASSERT_TRUE(harness.waitUntil([&] { return harness.shell->activeSources().size() == 2; }));
+    harness.settle();
+
+    auto* const strip = harness.root->findChild<QQuickItem*>(QStringLiteral("activeSourceStrip"));
+    ASSERT_NE(strip, nullptr);
+    const QStringList identities = harness.shell->activeSourceIdentities();
+    ASSERT_EQ(identities.size(), 2);
+    harness.submitted.clear();
+    ASSERT_TRUE(QMetaObject::invokeMethod(strip,
+                                          "replaceDropped",
+                                          Q_ARG(QString, identities[1]),
+                                          Q_ARG(QUrl, QUrl::fromLocalFile(spellingVariant))));
+    harness.settle();
+    // The duplicate was refused before intent staging: no command reached the session and the
+    // compare set stays untouched.
+    EXPECT_TRUE(harness.submitted.empty());
+    EXPECT_NE(harness.shell->openIntent(), ReviewShellController::ReplaceSources);
+}
+
 // I02: toggle-type shortcuts never auto-repeat. A held Space must not flip play/pause on the
 // OS repeat clock, the mode digits must not re-fire, and the two data-affecting workspace
 // actions (issue capture, task close) must stay single-shot. Command-type keys (frame steps,
