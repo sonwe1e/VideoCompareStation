@@ -35,6 +35,13 @@ struct ProbeOutcome final {
     platform::PresentationStatisticsCapability capability{};
 };
 
+// A finished present-count sample plus the request generation it belongs to: a sample requested
+// before a target handover must not repopulate the reset counters (E01).
+struct SampleOutcome final {
+    std::uint64_t generation = 0U;
+    platform::PresentationStatisticsSample sample{};
+};
+
 } // namespace
 
 // Runs every platform probe call on one dedicated thread. The probe lazily creates a hidden
@@ -64,11 +71,12 @@ public:
         condition_.notify_all();
     }
 
-    void requestSample() {
+    void requestSample(const std::uint64_t generation) {
         startIfNeeded();
         {
             std::lock_guard lock(mutex_);
             sampleRequested_ = true;
+            sampleRequestedGeneration_ = generation;
         }
         condition_.notify_all();
     }
@@ -83,7 +91,7 @@ public:
         return true;
     }
 
-    [[nodiscard]] bool tryTakeSample(platform::PresentationStatisticsSample& out) {
+    [[nodiscard]] bool tryTakeSample(SampleOutcome& out) {
         std::lock_guard lock(mutex_);
         if (!sampleAnswer_.has_value()) {
             return false;
@@ -129,8 +137,9 @@ private:
         }
         for (;;) {
             bool probeRequested = false;
-            bool sampleRequested = false;
+            bool requestedSample = false;
             std::uint64_t generation = 0U;
+            std::uint64_t sampleGeneration = 0U;
             {
                 std::unique_lock lock(mutex_);
                 condition_.wait(lock, [this] {
@@ -143,8 +152,9 @@ private:
                 probeRequested = capabilityRequested_;
                 capabilityRequested_ = false;
                 generation = requestedGeneration_;
-                sampleRequested = sampleRequested_;
+                requestedSample = sampleRequested_;
                 sampleRequested_ = false;
+                sampleGeneration = sampleRequestedGeneration_;
             }
             // Expensive platform work runs without holding the mutex so the GUI thread can drain
             // earlier answers and issue coalesced commands meanwhile.
@@ -153,10 +163,10 @@ private:
                 std::lock_guard lock(mutex_);
                 capabilityAnswer_ = ProbeOutcome{generation, std::move(capability)};
             }
-            if (sampleRequested && probe != nullptr) {
+            if (requestedSample && probe != nullptr) {
                 platform::PresentationStatisticsSample sample = probe->sampleFrameStatistics();
                 std::lock_guard lock(mutex_);
-                sampleAnswer_ = std::move(sample);
+                sampleAnswer_ = SampleOutcome{sampleGeneration, std::move(sample)};
             }
         }
     }
@@ -172,8 +182,9 @@ private:
     bool capabilityRequested_ = false;
     std::uint64_t requestedGeneration_ = 0U;
     bool sampleRequested_ = false;
+    std::uint64_t sampleRequestedGeneration_ = 0U;
     std::optional<ProbeOutcome> capabilityAnswer_;
-    std::optional<platform::PresentationStatisticsSample> sampleAnswer_;
+    std::optional<SampleOutcome> sampleAnswer_;
 };
 
 TimingDiagnosticsController::TimingDiagnosticsController(QObject* parent)
@@ -204,7 +215,10 @@ TimingDiagnosticsController::TimingDiagnosticsController(
             return;
         }
         // Honest unconfirmed state; the single flight keeps running and a current-generation
-        // answer still applies whenever it arrives.
+        // answer still applies whenever it arrives. Clearing the in-flight flag is what lets a
+        // later request retry instead of bouncing off a stuck single flight forever.
+        probeInFlight_ = false;
+        probeInFlightGeneration_ = 0U;
         systemPresentationStatus_ = probeTimeoutStatusText();
         Q_EMIT diagnosticsUpdated();
     });
@@ -214,13 +228,31 @@ TimingDiagnosticsController::~TimingDiagnosticsController() {
     // Shuts the worker down and joins it; the probe resources are released on the worker thread.
     probeWorker_.reset();
     application::PlaybackTrace& trace = application::PlaybackTrace::instance();
-    // Lifecycle fence (E02): the gate stops new dispatches without waiting; the observer
-    // uninstall takes the unique lock, so it returns only after a callback already inside has
-    // finished — no dispatch can touch a destructing controller. Restoring the default-open gate
-    // leaves observers installed later by anyone else unaffected.
-    trace.setObserverEnabled(false);
-    trace.installObserver(nullptr);
-    trace.setObserverEnabled(true);
+    if (observerInstalled_) {
+        // Ownership-checked removal takes the observer lock, so on return no callback can be in
+        // flight and a later-installed foreign observer is left installed. The gate and the
+        // clock are only restored when this controller owned them (E02): a controller that never
+        // monitored must not perturb the process-global trace.
+        trace.removeObserver(this);
+        observerInstalled_ = false;
+    }
+    releaseTraceClockIfOwned();
+}
+
+// E02: "off" must mean off. If this controller's observer installation was what enabled the
+// process-global trace clock and no file sink shares it, disable the clock so producers return to
+// the zero-work default; a later activation re-arms it (the ownership flag stays sticky while the
+// observer remains installed, so repeated on/off cycles keep working). A sink
+// (DVS_PLAYBACK_TRACE captures) keeps the clock enabled.
+void TimingDiagnosticsController::releaseTraceClockIfOwned() {
+    if (!traceClockEnabledByThis_) {
+        return;
+    }
+    application::PlaybackTrace& trace = application::PlaybackTrace::instance();
+    if (trace.sinkInstalled()) {
+        return;
+    }
+    trace.disable();
 }
 
 void TimingDiagnosticsController::onTraceEvent(const application::TraceEvent& event) noexcept {
@@ -246,9 +278,19 @@ void TimingDiagnosticsController::setMonitoring(const bool monitoring) {
     application::PlaybackTrace& trace = application::PlaybackTrace::instance();
     if (monitoring) {
         // First activation installs the observer; installObserver enables the trace clock when
-        // nobody else did. Later toggles only flip the gate, so repeated on/off cycles never
-        // re-run the installation.
-        trace.installObserver(this);
+        // nobody else did. Remember whether this controller was the one who enabled it, so a
+        // full stop can restore the default-off clock. Later toggles only flip the gate, so
+        // repeated on/off cycles never re-run the installation.
+        if (!observerInstalled_) {
+            const bool clockWasEnabled = trace.enabled();
+            trace.installObserver(this);
+            observerInstalled_ = true;
+            traceClockEnabledByThis_ = !clockWasEnabled && trace.enabled();
+        } else if (traceClockEnabledByThis_ && !trace.enabled() && !trace.sinkInstalled()) {
+            // An earlier stop disabled the clock this controller owns: re-arm it so resumed
+            // monitoring actually records again.
+            trace.enable(application::traceNowMicroseconds);
+        }
         trace.setObserverEnabled(true);
         monitoring_.store(true, std::memory_order_release);
         if (refreshTimer_ != nullptr) {
@@ -256,19 +298,20 @@ void TimingDiagnosticsController::setMonitoring(const bool monitoring) {
         }
     } else {
         // Close the gate BEFORE the local flag: producers stop dispatching at the gate check,
-        // and any dispatch already past the gate re-checks this flag before ingesting. The
-        // trace clock and any sink are left alone so file captures keep running (E02).
+        // and any dispatch already past the gate re-checks this flag before ingesting. A file
+        // sink is left alone so captures keep running (E02).
         trace.setObserverEnabled(false);
         monitoring_.store(false, std::memory_order_release);
         if (refreshTimer_ != nullptr) {
             refreshTimer_->stop();
         }
+        releaseTraceClockIfOwned();
     }
     Q_EMIT monitoringChanged();
 }
 
 void TimingDiagnosticsController::requestPresentationProbe() {
-    if (probeApplied_ || probeInFlight_) {
+    if (probeApplied() || probeInFlight_) {
         // A completed capability stays the cached answer; a running single flight re-checks its
         // generation on completion, so a second request cannot duplicate the platform work.
         return;
@@ -278,6 +321,7 @@ void TimingDiagnosticsController::requestPresentationProbe() {
     }
     ++probeGeneration_;
     probeInFlight_ = true;
+    probeInFlightGeneration_ = probeGeneration_;
     systemPresentationStatus_ = probingStatusText();
     if (probeTimeoutTimer_ != nullptr) {
         probeTimeoutTimer_->start(kProbeTimeoutMs);
@@ -289,7 +333,12 @@ void TimingDiagnosticsController::requestPresentationProbe() {
 void TimingDiagnosticsController::notePresentationTargetReplaced() {
     ++probeGeneration_;
     probeInFlight_ = false;
-    probeApplied_ = false;
+    probeInFlightGeneration_ = 0U;
+    // In-flight samples carry the old target's generation: drop their in-flight state so they
+    // cannot repopulate the counters this reset just cleared, and let the new target's first
+    // sample start immediately.
+    sampleInFlight_ = false;
+    sampleInFlightGeneration_ = 0U;
     appliedProbeGeneration_ = 0U;
     if (probeTimeoutTimer_ != nullptr) {
         probeTimeoutTimer_->stop();
@@ -399,32 +448,42 @@ void TimingDiagnosticsController::pollPresentationProbe() {
 
     ProbeOutcome outcome;
     if (probeWorker_->tryTakeCapability(outcome)) {
-        probeInFlight_ = false;
-        if (probeTimeoutTimer_ != nullptr) {
-            probeTimeoutTimer_->stop();
+        // Only the newest request's answer may clear the in-flight state: a superseded answer
+        // must not cancel the new request's timeout and leave the panel probing forever (E01).
+        if (probeInFlight_ && outcome.generation == probeInFlightGeneration_) {
+            probeInFlight_ = false;
+            probeInFlightGeneration_ = 0U;
+            if (probeTimeoutTimer_ != nullptr) {
+                probeTimeoutTimer_->stop();
+            }
         }
         // A stale answer (superseded request or replaced presentation target) is dropped, never
         // applied (E01).
-        if (outcome.generation == probeGeneration_ && !probeApplied_) {
-            probeApplied_ = true;
+        if (outcome.generation == probeGeneration_ && !probeApplied()) {
             appliedProbeGeneration_ = outcome.generation;
             applyProbeCapability(outcome.capability);
         }
     }
 
-    platform::PresentationStatisticsSample sample;
-    if (probeWorker_->tryTakeSample(sample)) {
-        sampleInFlight_ = false;
-        if (sample.status == platform::PresentationStatisticsStatus::kAvailable &&
-            sample.snapshot.has_value()) {
-            presentCount_ = sample.snapshot->presentCount;
-            presentRefreshCount_ = sample.snapshot->presentRefreshCount;
+    SampleOutcome sampleOutcome;
+    if (probeWorker_->tryTakeSample(sampleOutcome)) {
+        if (sampleInFlight_ && sampleOutcome.generation == sampleInFlightGeneration_) {
+            sampleInFlight_ = false;
+            sampleInFlightGeneration_ = 0U;
+        }
+        // A sample requested before a target handover must not repopulate the reset counters.
+        if (sampleOutcome.generation == probeGeneration_ &&
+            sampleOutcome.sample.status == platform::PresentationStatisticsStatus::kAvailable &&
+            sampleOutcome.sample.snapshot.has_value()) {
+            presentCount_ = sampleOutcome.sample.snapshot->presentCount;
+            presentRefreshCount_ = sampleOutcome.sample.snapshot->presentRefreshCount;
         }
     }
 
-    if (monitoring_ && probeApplied_ && !sampleInFlight_) {
-        probeWorker_->requestSample();
+    if (monitoring_ && probeApplied() && !sampleInFlight_) {
+        probeWorker_->requestSample(probeGeneration_);
         sampleInFlight_ = true;
+        sampleInFlightGeneration_ = probeGeneration_;
     }
 }
 

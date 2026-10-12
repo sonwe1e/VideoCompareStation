@@ -159,6 +159,9 @@ public:
     // drain, so after setSink(nullptr) returns the caller may safely destroy the previous sink.
     // This lifecycle lock is independent of the producer queue lock.
     void setSink(ITraceSink* sink) noexcept;
+    // Whether a drain sink is installed. A sink shares the process-global clock with observers
+    // and must keep it enabled; an observer's owner uses this before restoring the default.
+    [[nodiscard]] bool sinkInstalled() const noexcept;
 
     // Records an event from any thread. Returns false (and counts it as lost) only when the
     // buffer is full. Serializes with other producers for a single-event copy; never performs I/O.
@@ -201,6 +204,13 @@ public:
 
     void installSink(ITraceSink* sink) noexcept;
     void installObserver(ITraceObserver* observer) noexcept;
+    // Removes `observer` only when it is still the installed one: a controller tearing itself
+    // down must not silently detach an observer that replaced it. Takes the observer lock, so
+    // after it returns no callback for the removed observer can be in flight. Never touches the
+    // clock or the gate, so a controller that never monitored cannot perturb the global trace.
+    void removeObserver(ITraceObserver* observer) noexcept;
+    // Whether a drain sink is installed; the caller must keep the shared clock enabled then.
+    [[nodiscard]] bool sinkInstalled() const noexcept;
     // Gates only the passive-observer dispatch (E02). The ring buffer and any installed sink are
     // unaffected, so pausing the diagnostics observer can never silence a file capture or a CI
     // gate. The flag is checked before the observer lock in record(); the release store here

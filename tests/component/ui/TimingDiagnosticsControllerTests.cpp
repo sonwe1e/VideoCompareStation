@@ -35,6 +35,17 @@ public:
     std::vector<application::TraceEvent> events;
 };
 
+// Counting observer for lifecycle tests: proves whether the trace still dispatches to an
+// observer that a destroyed controller must not have detached.
+class RecordingTraceObserver final : public application::ITraceObserver {
+public:
+    void onTraceEvent(const application::TraceEvent&) noexcept override {
+        count += 1U;
+    }
+
+    std::size_t count = 0U;
+};
+
 [[nodiscard]] platform::testing::PresentationStatisticsProbeOverrides failingWindowOverrides() {
     platform::testing::PresentationStatisticsProbeOverrides overrides;
     overrides.failWindowCreation = true;
@@ -244,6 +255,71 @@ TEST(TimingDiagnosticsControllerTests, ObserverGateDoesNotTouchSinks) {
     EXPECT_EQ(controller.runId(), 1U);
 
     controller.setMonitoring(false);
+    trace.reset();
+}
+
+// E02: a stopped panel must not leave the per-event work it added running for the rest of the
+// process. A controller that enabled the trace clock restores the default-off clock on stop
+// (when no sink shares it) and re-arms it on the next activation; a shared clock is left alone.
+TEST(TimingDiagnosticsControllerTests, MonitoringOffRestoresTheClockItOwnedAndReArmsItOnReturn) {
+    application::PlaybackTrace& trace = application::PlaybackTrace::instance();
+    trace.reset();
+    EXPECT_FALSE(trace.enabled());
+
+    TimingDiagnosticsController controller;
+    controller.setMonitoring(true);
+    EXPECT_TRUE(trace.enabled());
+
+    controller.setMonitoring(false);
+    EXPECT_FALSE(trace.enabled());
+    controller.setMonitoring(true);
+    EXPECT_TRUE(trace.enabled());
+    controller.setMonitoring(false);
+    EXPECT_FALSE(trace.enabled());
+
+    // A sink shares the clock: the observer owner must not disable (or re-enable) it then.
+    RecordingTraceSink sink;
+    trace.installSink(&sink);
+    trace.enable(application::traceNowMicroseconds);
+    controller.setMonitoring(true);
+    controller.setMonitoring(false);
+    EXPECT_TRUE(trace.enabled());
+    controller.setMonitoring(true);
+    controller.setMonitoring(false);
+    EXPECT_TRUE(trace.enabled());
+    trace.installSink(nullptr);
+    trace.reset();
+}
+
+// E02: destroying a controller that never monitored must not detach a foreign observer or touch
+// the process-global clock, and destroying a bystander while another controller monitors must
+// leave that controller's registration intact (ownership-checked removal).
+TEST(TimingDiagnosticsControllerTests, DestructionLeavesForeignRegistrationAndClockAlone) {
+    application::PlaybackTrace& trace = application::PlaybackTrace::instance();
+    trace.reset();
+    EXPECT_FALSE(trace.enabled());
+
+    RecordingTraceObserver foreignObserver;
+    trace.installObserver(&foreignObserver);
+    EXPECT_TRUE(trace.enabled());
+    {
+        TimingDiagnosticsController bystander;
+    }
+    trace.record(application::TraceEventKind::PlaybackRunStarted, makeIdentity(1U, 1U), 0U);
+    EXPECT_EQ(foreignObserver.count, 1U);
+    trace.removeObserver(&foreignObserver);
+    trace.reset();
+
+    // The monitoring controller survives a bystander's destruction: its observer still ingests.
+    TimingDiagnosticsController monitor;
+    monitor.setMonitoring(true);
+    {
+        TimingDiagnosticsController bystander;
+    }
+    trace.record(application::TraceEventKind::PlaybackRunStarted, makeIdentity(1U, 1U), 10U);
+    monitor.refresh();
+    EXPECT_EQ(monitor.runId(), 1U);
+    EXPECT_TRUE(monitor.hasActivePlayback());
     trace.reset();
 }
 

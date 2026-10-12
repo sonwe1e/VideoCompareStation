@@ -55,10 +55,12 @@ public:
     void onTraceEvent(const application::TraceEvent& event) noexcept override;
 
     // E02: monitoring splits four states. Off (the default) stops the observer ingest at the
-    // PlaybackTrace gate, stops the refresh timer, and leaves the trace clock and sinks alone;
-    // on installs this controller as the trace observer the first time (which enables the trace
-    // clock through that existing contract), opens the gate, and runs the refresh timer. The
-    // capability probe is independent of this switch and requested on demand (E01).
+    // PlaybackTrace gate, stops the refresh timer, and — when this controller's installation was
+    // what enabled the process-global trace clock and no file sink shares it — disables that
+    // clock again, so a stopped panel leaves no per-event work behind. On installs this
+    // controller as the trace observer the first time (which enables the trace clock through
+    // that existing contract), opens the gate, and runs the refresh timer. The capability probe
+    // is independent of this switch and requested on demand (E01).
     [[nodiscard]] bool isMonitoring() const noexcept;
     void setMonitoring(bool monitoring);
 
@@ -71,8 +73,12 @@ public:
 
     // Invalidation hook for window/session handover: bumps the probe generation so any in-flight
     // capability answer carries a stale identity and is dropped instead of overwriting the state
-    // the new target starts from (E01). The panel returns to "未确认 (未探测)" until a fresh
-    // request completes.
+    // the new target starts from (E01). Reserved: no production path calls it yet - the probe
+    // owns its own hidden window/device, so a main-window swap does not invalidate its
+    // machine-level answer - and the tests drive it directly. The panel returns to
+    // "未确认 (未探测)" until a fresh request completes; note that the worker's probe caches its
+    // capability, so a re-request after this hook re-applies the cached answer until a real
+    // handover consumer teaches the probe to invalidate (tracked in the backlog).
     void notePresentationTargetReplaced();
 
     [[nodiscard]] bool hasActivePlayback() const noexcept;
@@ -115,6 +121,13 @@ private:
     void pollPresentationProbe();
     void applyProbeCapability(const platform::PresentationStatisticsCapability& capability);
     void updateFromSummary(const application::PlaybackEvidenceSummary& summary);
+    // E02: if this controller's observer installation enabled the process-global trace clock and
+    // no file sink shares it, restores the default-off clock so "monitoring off" really removes
+    // the per-event work this controller added.
+    void releaseTraceClockIfOwned();
+    [[nodiscard]] bool probeApplied() const noexcept {
+        return appliedProbeGeneration_ != 0U;
+    }
 
     application::PlaybackEvidenceCollector collector_;
     // Probe seed adopted by the worker on first use; never used on the adopting thread after the
@@ -127,6 +140,12 @@ private:
     // Master diagnostics switch, written by the GUI thread and read by every trace-producer
     // thread inside onTraceEvent; acquire/release pairing makes the stop visible without locks.
     std::atomic<bool> monitoring_{false};
+    // E02 lifecycle bookkeeping: whether this controller installed the trace observer, and
+    // whether that installation was the one that enabled the process-global trace clock. The
+    // ownership flag is sticky while the observer is installed, so a later activation can re-arm
+    // the clock an earlier stop disabled; only an owned enable is ever restored to the default.
+    bool observerInstalled_ = false;
+    bool traceClockEnabledByThis_ = false;
     bool hasActivePlayback_ = false;
     quint64 runId_ = 0U;
     quint64 skippedFrameSetCount_ = 0U;
@@ -147,8 +166,11 @@ private:
     quint64 probeGeneration_ = 0U;
     quint64 appliedProbeGeneration_ = 0U;
     bool probeInFlight_ = false;
-    bool probeApplied_ = false;
     bool sampleInFlight_ = false;
+    // Generations of the capability/sample requests currently in flight: a superseded answer
+    // must not clear a newer request's in-flight state or stop its timeout (E01).
+    quint64 probeInFlightGeneration_ = 0U;
+    quint64 sampleInFlightGeneration_ = 0U;
 };
 
 } // namespace dvs::ui

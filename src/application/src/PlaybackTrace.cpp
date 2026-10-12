@@ -14,6 +14,11 @@ void PlaybackTraceBuffer::setSink(ITraceSink* sink) noexcept {
     sink_ = sink;
 }
 
+bool PlaybackTraceBuffer::sinkInstalled() const noexcept {
+    std::lock_guard lock(sinkMutex_);
+    return sink_ != nullptr;
+}
+
 bool PlaybackTraceBuffer::record(const TraceEvent event) noexcept {
     // Blocking lock: the critical section is a single-event copy (nanoseconds), and producers
     // never touch the sink or do I/O here, so a brief serialization cannot stall playback.
@@ -122,11 +127,22 @@ void PlaybackTrace::installSink(ITraceSink* sink) noexcept {
     buffer_.setSink(sink);
 }
 
+bool PlaybackTrace::sinkInstalled() const noexcept {
+    return buffer_.sinkInstalled();
+}
+
 void PlaybackTrace::installObserver(ITraceObserver* const observer) noexcept {
     std::unique_lock lock(observerMutex_);
     observer_ = observer;
     if (observer_ != nullptr && now_.load(std::memory_order_acquire) == nullptr) {
         enable(traceNowMicroseconds);
+    }
+}
+
+void PlaybackTrace::removeObserver(ITraceObserver* const observer) noexcept {
+    std::unique_lock lock(observerMutex_);
+    if (observer_ == observer) {
+        observer_ = nullptr;
     }
 }
 
