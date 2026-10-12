@@ -39,6 +39,7 @@ constexpr std::string_view kRecentMediaFilesKey = "review.recent-video-files";
 constexpr std::string_view kLegacyLargeStepKey = "review.large-step-frames";
 constexpr std::string_view kShortcutPresetKey = "review.shortcut-preset";
 constexpr std::string_view kDropFrameTimecodeKey = "review.drop-frame-timecode";
+constexpr std::string_view kAutoplayOnOpenKey = "review.autoplay-on-open";
 constexpr std::string_view kViewModeKey = "review.view-mode";
 constexpr std::string_view kDifferenceMetricKey = "review.difference-metric";
 constexpr std::string_view kDifferenceGainKey = "review.difference-gain";
@@ -273,6 +274,10 @@ public:
         return dropFrameTimecode_;
     }
 
+    [[nodiscard]] bool autoplayOnOpen() const noexcept {
+        return autoplayOnOpen_;
+    }
+
     [[nodiscard]] ViewMode viewMode() const noexcept {
         return viewMode_;
     }
@@ -318,6 +323,14 @@ public:
             return;
         }
         dropFrameTimecode_ = value;
+        changed();
+    }
+
+    void setAutoplayOnOpen(const bool value) {
+        if (value == autoplayOnOpen_) {
+            return;
+        }
+        autoplayOnOpen_ = value;
         changed();
     }
 
@@ -680,6 +693,9 @@ private:
         }
         const bool nextDropFrameTimecode = values.find(kDropFrameTimecodeKey) != values.end() &&
                                            values.find(kDropFrameTimecodeKey)->second == "true";
+        // I01: absent setting keeps the player-like default - a double-clicked video plays.
+        const bool nextAutoplayOnOpen = values.find(kAutoplayOnOpenKey) == values.end() ||
+                                        values.find(kAutoplayOnOpenKey)->second == "true";
         const ViewMode nextViewMode = parseEnum<ViewMode>(values, kViewModeKey, kViewModeOptions)
                                           .value_or(ViewMode::SideBySide);
         const DifferenceMetric nextMetric =
@@ -705,12 +721,14 @@ private:
 
         const bool changed =
             shortcutPreset_ != nextShortcutPreset || dropFrameTimecode_ != nextDropFrameTimecode ||
-            viewMode_ != nextViewMode || differenceMetric_ != nextMetric ||
-            differenceGain_ != nextGain || differenceEdge_ != nextReference ||
-            differenceFilter_ != nextFilter || oscMode_ != nextOscMode ||
-            playbackContinuityPolicy_ != nextContinuity || defaultPairPolicy_ != nextPairPolicy;
+            autoplayOnOpen_ != nextAutoplayOnOpen || viewMode_ != nextViewMode ||
+            differenceMetric_ != nextMetric || differenceGain_ != nextGain ||
+            differenceEdge_ != nextReference || differenceFilter_ != nextFilter ||
+            oscMode_ != nextOscMode || playbackContinuityPolicy_ != nextContinuity ||
+            defaultPairPolicy_ != nextPairPolicy;
         shortcutPreset_ = nextShortcutPreset;
         dropFrameTimecode_ = nextDropFrameTimecode;
+        autoplayOnOpen_ = nextAutoplayOnOpen;
         viewMode_ = nextViewMode;
         differenceMetric_ = nextMetric;
         differenceGain_ = nextGain;
@@ -733,6 +751,8 @@ private:
                                 shortcutPreset_ == 1 ? "player" : "review");
         values.insert_or_assign(std::string{kDropFrameTimecodeKey},
                                 dropFrameTimecode_ ? "true" : "false");
+        values.insert_or_assign(std::string{kAutoplayOnOpenKey},
+                                autoplayOnOpen_ ? "true" : "false");
         writeEnum(values, kViewModeKey, kViewModeOptions, viewMode_, "side-by-side");
         writeEnum(values,
                   kDifferenceMetricKey,
@@ -769,6 +789,7 @@ private:
     qint64 lastResumeStamp_ = std::numeric_limits<qint64>::min();
     int shortcutPreset_ = 0;
     bool dropFrameTimecode_ = false;
+    bool autoplayOnOpen_ = true;
     ViewMode viewMode_ = ViewMode::SideBySide;
     DifferenceMetric differenceMetric_ = DifferenceMetric::RgbAbsolute;
     DifferenceGain differenceGain_ = DifferenceGain::Gain1x;
@@ -812,6 +833,10 @@ int ReviewPreferencesController::shortcutPreset() const noexcept {
 
 bool ReviewPreferencesController::dropFrameTimecode() const noexcept {
     return impl_->dropFrameTimecode();
+}
+
+bool ReviewPreferencesController::autoplayOnOpen() const noexcept {
+    return impl_->autoplayOnOpen();
 }
 
 ReviewPreferencesController::ViewMode ReviewPreferencesController::viewMode() const noexcept {
@@ -868,6 +893,10 @@ void ReviewPreferencesController::setShortcutPreset(const int value) {
 
 void ReviewPreferencesController::setDropFrameTimecode(const bool value) {
     impl_->setDropFrameTimecode(value);
+}
+
+void ReviewPreferencesController::setAutoplayOnOpen(const bool value) {
+    impl_->setAutoplayOnOpen(value);
 }
 
 void ReviewPreferencesController::setViewMode(const ViewMode value) {

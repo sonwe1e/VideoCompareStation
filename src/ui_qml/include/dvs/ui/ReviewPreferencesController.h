@@ -18,6 +18,11 @@ class ReviewPreferencesController final : public QObject {
         int shortcutPreset READ shortcutPreset WRITE setShortcutPreset NOTIFY preferencesChanged)
     Q_PROPERTY(bool dropFrameTimecode READ dropFrameTimecode WRITE setDropFrameTimecode NOTIFY
                    preferencesChanged)
+    // I01: the user's off switch for intent-driven autoplay (system-double-click opens). A
+    // playback-purpose open plays after its first confirmed frame only while this is true;
+    // review, append and replace opens never consult it.
+    Q_PROPERTY(
+        bool autoplayOnOpen READ autoplayOnOpen WRITE setAutoplayOnOpen NOTIFY preferencesChanged)
     Q_PROPERTY(int viewMode READ viewModeCode WRITE setViewModeCode NOTIFY preferencesChanged)
     Q_PROPERTY(int differenceMetric READ differenceMetricCode WRITE setDifferenceMetricCode NOTIFY
                    preferencesChanged)
@@ -51,6 +56,7 @@ public:
 
     [[nodiscard]] int shortcutPreset() const noexcept;
     [[nodiscard]] bool dropFrameTimecode() const noexcept;
+    [[nodiscard]] bool autoplayOnOpen() const noexcept;
     [[nodiscard]] ViewMode viewMode() const noexcept;
     [[nodiscard]] DifferenceMetric differenceMetric() const noexcept;
     [[nodiscard]] DifferenceGain differenceGain() const noexcept;
@@ -69,6 +75,7 @@ public:
 
     void setShortcutPreset(int value);
     void setDropFrameTimecode(bool value);
+    void setAutoplayOnOpen(bool value);
     void setViewMode(ViewMode value);
     void setDifferenceMetric(DifferenceMetric value);
     void setDifferenceGain(DifferenceGain value);

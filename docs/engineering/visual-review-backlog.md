@@ -1,7 +1,71 @@
 # 视觉审查问题台账
 
-更新：2026-10-11（双差异显示口径与附近帧可读性 V04／原速播放指标与调度守恒 E03／任务化模式入口 V03／统一源入口与比较选择 V02／长按正反向走带 E04／缓存小步改进 E05／启动减负 E01／诊断可关闭 E02／全画布候选直看 P05／图片编辑纯操作 P11／协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-10-11（打开/添加/替换意图区分 I01）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+
+## 2026-10-11 打开、添加、替换意图区分 I01
+
+- **范围**：《CompareStation 下一步体验与性能计划 2026-10-11》§6 I01（P1），R4 阶段工单。
+  把"为什么打开"写成每个意图自己的显式参数，并把拖到源卡片做成有清晰落点提示的替换入口。
+  不引入标签页/项目系统，沿用单会话；不动 broker 协议、StartupRequestDispatch 的排队/耐心值
+  与 GPU 渲染后端。
+- **问题（基线 b35b808）**：`enqueueStartupRequest(kind, files)` 收到 PlaySingle/Compare 却把
+  kind 丢弃——系统双击单视频与资源管理器比较动词进入完全相同的 OpenSourcesIntent，双击后
+  永不自动播放（用户预期"像播放器"），且没有任何设置能改变这一点；替换只能经源菜单
+  "替换文件…"的文件选择器，拖拽永远落入工作区级"打开/追加"，拖到哪个卡片都不会替换那一路。
+- **交付**：
+  - `ReviewShellController.h/.cpp`：新增 `OpenPurpose{OpenForReview,OpenForPlayback}`（Q_ENUM，
+    随 intentMap 暴露 `purpose`）。`ReviewIntent` 增加 per-intent `purpose` 字段（默认
+    OpenForReview）；`enqueueStartupRequest` 把 kind 1（PlaySingle）映射为 OpenForPlayback、
+    kind 2（Compare）映射为 OpenForReview——不是全局布尔。`finishIntent` 在打开成功终端
+    （该终端在真实命令链上已含首帧 ACK）后，仅当 `kind==OpenSourcesIntent && purpose==
+    OpenForPlayback && autoplayOnOpen()` 才提交 `review_.play()` 并发新信号
+    `openPlaybackRequested(id, started)`；追加/替换意图按构造永不进该分支。播放启动失败经
+    Main.qml 显示"视频已打开，但未能开始播放。"。
+  - `ReviewPreferencesController.h/.cpp`：新持久化偏好 `autoplayOnOpen`（键
+    `review.autoplay-on-open`，缺省 true=保持播放器默认；`ApplicationMenuBar` 视图菜单新增
+    可勾选"双击打开后自动播放"，经 `Main.qml` 的 `root.autoplayOnOpen` 平面值绑定镜像，
+    与 shortcutPreset 同模式）。
+  - `ActiveSourceStrip.qml`：每张源卡片新增 DropArea（objectName `sourceChipDropArea-N`）与
+    拖拽落点提示 `sourceChipDropHint-N`（"松开替换 B"高亮浮层）；仅接受单个 URL 的拖拽，
+    多文件/非 URL 拖拽在 onEntered 拒绝并继续落给工作区 DropArea（保持打开/追加语义）。
+    新信号 `replaceDropped(identity, url)`。
+  - `Main.qml`：`dropReplaceSource()` 校验拖入物是单个可读视频（`handleDroppedUrls`），随后
+    复用 V02 `performSourceReplacement` 路径（保持槽位数/参考角色/显示位置，失败保留旧会话）；
+    工作区拖放浮层副文案补"拖到源卡片上替换该源"，与卡片提示互为解释。拖拽中途移出即可
+    取消（无任何暂存），队列中的替换意图仍可用既有 queuedIntentRow 取消。
+- **行为契约**：系统双击单视频=OpenForPlayback→首帧确认后自动播放（偏好可关）；应用比较打开/
+  Explorer 比较动词=OpenForReview→暂停在起点；添加源=AddSourcesIntent（既有 V02 语义不动）；
+  拖到明确卡片=ReplaceSource。单文件打开不创建 A/B/GT 顺序确认对话框（Loader 惰性实例化，
+  测试钉死）；历史记录/父目录跟随仅在成功终端后发生（既有 recordCommittedVideo 位置不动，
+  该时机已含首帧 ACK）；打开失败保留原会话（既有 synchronizeActiveSources 契约）；
+  主窗加载期的外部打开请求沿既有 broker/StartupRequestDispatcher 排队，有界（8）且耐心值
+  到期上报，过期结果不反向覆盖（既有测试覆盖，未改动）。
+- **验证（本地 dev preset，2026-10-11）**：
+  - 新增 `MainQmlContractTests` +4：`StartupPlaybackOpenAutoplaysAfterTheFirstConfirmedFrame`
+    （目的参数=OpenForPlayback；终端前 0 个 PlayCommand、成功后恰 1 个；顺序对话框未实例化）、
+    `StartupPlaybackAutoplayRespectsThePreferenceOffSwitch`（偏好关→0 个 PlayCommand；菜单项
+    勾选态镜像且两次触发 off→on→off）、`StartupCompareOpenStaysPausedForReview`（Compare
+    打开成功后仍 0 个 PlayCommand）、`VideoDroppedOnASourceChipReplacesThatSourceInPlace`
+    （卡片拖放→OpenComparisonCommand intent=ReplaceSources、preserveDisplayedTime、槽 1 换文件、
+    参考角色保留、0 个 PlayCommand）。
+  - 变异证据：`out/verification/i01-mutation-evidence/`（M1 丢 purpose 门→review 打开也播放=红；
+    M2 丢 play() 调用=红；M3 丢偏好门=红；M4 kind 映射反转=双测红；M5 拖放丢目标身份=红；
+    M6 菜单触发写常量=红；全部改坏→红→还原后 4/4 绿）。
+  - 回归（全绿）：`ui.MainQmlContractTests`、`ui.ReviewControllerTests`、
+    `ui.ReviewPreferencesControllerTests`、`ui.VideoFolderModelTests`、
+    `ui.ImageReviewControllerTests`、`ui.application_menu_bar.*`、`ui.active_source_strip.*`
+    共 281/281（另 4 项原有 Disabled 未计）；`ui.player_osc` 2 例失败为基线 b35b808 干净树上
+    同样复现的环境问题（protocol_chips / scrub-release），与本单无关；`format-check`
+    （qmlformat+clang-format 393 文件）与 `lint`（qmllint --max-warnings 0 + clang-tidy）通过。
+- **UNVERIFIED（真机项，不宣称）**：真实 Explorer 双击→自动播放的端到端时延与前台激活体验
+  （StartupRequestBroker/AllowSetForegroundWindow 路径未在本单重测）；真实拖拽手势下卡片
+  落点提示的观感（组件测试用信号级驱动，未仿真 OS 拖放事件）；偏好持久化跨进程重启的落盘
+  （ClosedSettingsRepository 测试仓储不做磁盘 IO）。
+- **回退**：还原 `ReviewShellController` 的 purpose 字段/枚举/finishIntent 分支与信号、
+  `ReviewPreferencesController` 的 autoplayOnOpen、`ActiveSourceStrip` 的卡片 DropArea/提示、
+  `Main.qml` 的 dropReplaceSource/浮层文案/菜单绑定即回旧行为（旧行为=双击不自动播放、拖拽
+  全走工作区打开/追加）；新增测试同步还原。播放域、broker、GPU 路径零改动，回退无连锁。
 
 ## 2026-10-11 双差异显示口径与附近帧可读性 V04
 

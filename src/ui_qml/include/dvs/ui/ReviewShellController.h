@@ -89,6 +89,18 @@ public:
     };
     Q_ENUM(ReviewIntentOrigin)
 
+    // I01: why the sources are being opened, carried per intent instead of a global flag so a
+    // startup playback open, a review open, an append and a replace can never overwrite each
+    // other's purpose. Only OpenSourcesIntent consumes it: appends and replaces deliberately
+    // never start playback. OpenForPlayback = "act like a player" (a double-clicked file that
+    // should play once its first frame is confirmed); OpenForReview = the app's compare open,
+    // which stays paused so the start point can be checked.
+    enum OpenPurpose {
+        OpenForReview = 0,
+        OpenForPlayback = 1,
+    };
+    Q_ENUM(OpenPurpose)
+
     // V02 (P05): request codes for the full-canvas direct-look switch. Values mirror
     // domain::CanvasFocusRequest exactly; the contract tests cross-check the two so a drift on
     // either side fails a build instead of silently re-targeting the canvas.
@@ -219,6 +231,10 @@ Q_SIGNALS:
     void canvasFocusChanged();
     void intentEvent(qulonglong intentId, int status, int kind, int error, int sourceCount);
     void intentFinished(qulonglong intentId, int kind, int outcome, const QString& errorKey);
+    // I01: fired after a successful open whose purpose was OpenForPlayback and whose autoplay
+    // was not disabled by preference. `started` is the transport's answer; false means the open
+    // succeeded but playback could not start, which the UI must not swallow silently.
+    void openPlaybackRequested(qulonglong intentId, bool started);
 
 private:
     struct EffectiveComparisonState final {
@@ -239,6 +255,7 @@ private:
         std::uint64_t id = 0U;
         ReviewIntentKind kind = OpenSourcesIntent;
         ReviewIntentOrigin origin = UserInterfaceOrigin;
+        OpenPurpose purpose = OpenForReview;
         QVariantList sources;
         int referenceIndex = 0;
         QString referenceIdentity;

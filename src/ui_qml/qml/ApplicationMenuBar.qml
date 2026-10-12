@@ -22,6 +22,9 @@ VcsMenuBar {
     required property bool chromeVisible
     required property bool fullScreen
     required property int shortcutPreset
+    // I01: mirrors the preference like shortcutPreset does - a plain value binding, so the
+    // check mark tracks preferencesChanged; the trigger writes through control.preferences.
+    required property bool autoplayOnOpen
     required property var sourceIdentities
     // C-07 effective/requested continuity code (0 ReviewEveryFrame, 1 RealTime, 2 Contextual).
     property int playbackContinuityPolicy: 2
@@ -587,6 +590,19 @@ VcsMenuBar {
                     control.preferences.shortcutPreset = 1;
                     control.returnViewerFocusAfterClose = true;
                 }
+            }
+        }
+        // I01: the user's off switch for intent-driven autoplay. A double-clicked video plays
+        // after its first confirmed frame while this stays checked; unchecked, every open
+        // lands paused like a review open.
+        VcsMenuItem {
+            objectName: "autoplayOnOpenMenuItem"
+            checkable: true
+            checked: control.autoplayOnOpen
+            text: qsTr("双击打开后自动播放")
+            onTriggered: {
+                control.preferences.autoplayOnOpen = !control.preferences.autoplayOnOpen;
+                control.returnViewerFocusAfterClose = true;
             }
         }
     }

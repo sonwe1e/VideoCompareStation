@@ -29,6 +29,10 @@ Rectangle {
     // V02 "替换文件": the chip's overflow menu asks for a file replacement of one source;
     // Main owns the dialog and the staged re-open with the displayed position preserved.
     signal replaceRequested(string sourceIdentity)
+    // I01 "拖到明确源卡片": dropping a single video on a chip replaces exactly that source
+    // through the same staged swap the chip menu uses. The drop names its target - the chip
+    // under the cursor - so the replace can never silently retarget another slot.
+    signal replaceDropped(string sourceIdentity, url url)
     signal viewerFocusRequested
     // V02 direct look: a plain click on the chip body enters (or exits) the full-canvas
     // direct look of that source through the P05 canvasFocus chain. The signal carries the
@@ -200,6 +204,46 @@ Rectangle {
                 color: chip.isCanvasFocus ? chip.sourceBg : (chip.selected ? chip.sourceBg : (chip.isReference ? chip.sourceBg : Theme.raisedPanel))
                 border.color: chip.isCanvasFocus ? chip.sourceAccent : (chip.selected ? chip.sourceAccent : (chip.isReference ? chip.sourceAccent : (chipHover.hovered ? chip.sourceBorder : Theme.border)))
                 border.width: (chip.isCanvasFocus || chip.selected || chip.isReference) ? 1.5 : 1
+
+                // I01: one dropped video on this chip replaces this source. The visible
+                // "松开替换" plate is the drop-target contract - the user sees which slot the
+                // file lands in before committing, and dragging away cancels without staging
+                // anything. Multi-file and non-URL drags are rejected here so they keep the
+                // workspace-level drop semantics (open/append) instead.
+                readonly property bool dropReplaceHovered: chipDropArea.containsDrag
+
+                DropArea {
+                    id: chipDropArea
+
+                    objectName: "sourceChipDropArea-" + chip.sourceId
+                    anchors.fill: parent
+                    onEntered: drag => {
+                        if (!drag.hasUrls || drag.urls.length !== 1)
+                            drag.accepted = false;
+                    }
+                    onDropped: drop => {
+                        drop.acceptProposedAction();
+                        control.replaceDropped(chip.resolvedSourceIdentity, drop.urls[0]);
+                    }
+                }
+
+                Rectangle {
+                    objectName: "sourceChipDropHint-" + chip.sourceId
+                    visible: chip.dropReplaceHovered
+                    anchors.fill: parent
+                    radius: 8
+                    color: Theme.dropScrim
+                    border.color: control.accentColor
+                    border.width: 2
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: qsTr("松开替换 %1").arg(String.fromCharCode(65 + chip.sourceId))
+                        color: control.textColor
+                        font.pixelSize: 12
+                        font.weight: Font.DemiBold
+                    }
+                }
 
                 HoverHandler {
                     id: chipHover

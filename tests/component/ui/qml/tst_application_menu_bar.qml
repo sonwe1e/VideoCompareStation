@@ -74,6 +74,7 @@ Item {
         chromeVisible: true
         fullScreen: false
         shortcutPreset: 0
+        autoplayOnOpen: true
         sourceIdentities: ["source-a", "source-b", "source-c"]
     }
 

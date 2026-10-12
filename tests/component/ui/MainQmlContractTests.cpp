@@ -7590,6 +7590,221 @@ TEST(MainQmlContractTests, UnsuccessfulStartupVideoOpenKeepsImageWorkspace) {
     }
 }
 
+// I01: a system double-click (PlaySingle startup request) is a playback open. The intent
+// carries OpenForPlayback as an explicit parameter, and only its successful terminal - which
+// the real open command reaches after the first-frame ACK - may hand control to the transport.
+// The order/reference confirmation dialog belongs to multi-source review opens and must never
+// appear for this single-file playback open.
+TEST(MainQmlContractTests, StartupPlaybackOpenAutoplaysAfterTheFirstConfirmedFrame) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("startup_play.mp4"));
+    ASSERT_TRUE(writeTestPng(path));
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.submitted.clear();
+    ASSERT_TRUE(harness.shell->enqueueStartupRequest(1, {QUrl::fromLocalFile(path)}));
+    EXPECT_EQ(harness.shell->activeIntent().value(QStringLiteral("purpose")).toInt(),
+              ReviewShellController::OpenForPlayback);
+    const application::CommandContext context =
+        application::commandContext(harness.submitted.back());
+    // First-frame gate: before the open's terminal nothing may start playback.
+    EXPECT_EQ(std::count_if(harness.submitted.begin(),
+                            harness.submitted.end(),
+                            [](const auto& command) {
+                                return std::holds_alternative<application::PlayCommand>(command);
+                            }),
+              0);
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate.hasValue());
+    ASSERT_TRUE(installValidatedVideoSet(harness.snapshot,
+                                         {std::filesystem::path{path.toStdWString()}},
+                                         rate.value(),
+                                         100,
+                                         3'333'334));
+    harness.snapshot->displayedFrame = domain::FrameId{0};
+    harness.terminals.push_back(application::CommandTerminal{
+        .context = context,
+        .outcome = application::CommandOutcome::Succeeded,
+    });
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_EQ(std::count_if(harness.submitted.begin(),
+                            harness.submitted.end(),
+                            [](const auto& command) {
+                                return std::holds_alternative<application::PlayCommand>(command);
+                            }),
+              1);
+    // Single file: the A/B/GT order confirmation was never needed.
+    EXPECT_EQ(harness.root->findChild<QObject*>(QStringLiteral("dropReviewDialog")), nullptr);
+}
+
+// I01: the preference is the user's off switch for intent-driven autoplay, and the view menu
+// item is the visible control for it. With autoplay off, the same double-click open lands
+// paused exactly like a review open.
+TEST(MainQmlContractTests, StartupPlaybackAutoplayRespectsThePreferenceOffSwitch) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("startup_paused.mp4"));
+    ASSERT_TRUE(writeTestPng(path));
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    EXPECT_TRUE(harness.preferences.autoplayOnOpen());
+    harness.preferences.setAutoplayOnOpen(false);
+    harness.window->show();
+    harness.submitted.clear();
+    ASSERT_TRUE(harness.shell->enqueueStartupRequest(1, {QUrl::fromLocalFile(path)}));
+    const application::CommandContext context =
+        application::commandContext(harness.submitted.back());
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate.hasValue());
+    ASSERT_TRUE(installValidatedVideoSet(harness.snapshot,
+                                         {std::filesystem::path{path.toStdWString()}},
+                                         rate.value(),
+                                         100,
+                                         3'333'334));
+    harness.snapshot->displayedFrame = domain::FrameId{0};
+    harness.terminals.push_back(application::CommandTerminal{
+        .context = context,
+        .outcome = application::CommandOutcome::Succeeded,
+    });
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_EQ(std::count_if(harness.submitted.begin(),
+                            harness.submitted.end(),
+                            [](const auto& command) {
+                                return std::holds_alternative<application::PlayCommand>(command);
+                            }),
+              0);
+    // The menu item the user sees is wired to the same preference in both directions. The
+    // trigger writes the flipped value, so off -> on -> off across two activations.
+    auto* const menuItem =
+        harness.root->findChild<QObject*>(QStringLiteral("autoplayOnOpenMenuItem"));
+    ASSERT_NE(menuItem, nullptr);
+    EXPECT_FALSE(menuItem->property("checked").toBool());
+    ASSERT_TRUE(QMetaObject::invokeMethod(menuItem, "triggered"));
+    harness.settle();
+    EXPECT_TRUE(harness.preferences.autoplayOnOpen());
+    ASSERT_TRUE(QMetaObject::invokeMethod(menuItem, "triggered"));
+    harness.settle();
+    EXPECT_FALSE(harness.preferences.autoplayOnOpen());
+}
+
+// I01: the Explorer compare verb (Compare startup request) is a review open - paused so the
+// start point can be checked - even after a fully successful open.
+TEST(MainQmlContractTests, StartupCompareOpenStaysPausedForReview) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    std::vector<std::filesystem::path> paths;
+    for (const auto* const name : {"compare_a.mp4", "compare_b.mp4"}) {
+        const QString path = directory.filePath(QString::fromLatin1(name));
+        ASSERT_TRUE(writeTestPng(path));
+        paths.emplace_back(path.toStdWString());
+    }
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.submitted.clear();
+    QVariantList urls;
+    for (const auto& path : paths) {
+        urls.push_back(QUrl::fromLocalFile(QString::fromStdWString(path.wstring())));
+    }
+    ASSERT_TRUE(harness.shell->enqueueStartupRequest(2, urls));
+    EXPECT_EQ(harness.shell->activeIntent().value(QStringLiteral("purpose")).toInt(),
+              ReviewShellController::OpenForReview);
+    const application::CommandContext context =
+        application::commandContext(harness.submitted.back());
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate.hasValue());
+    ASSERT_TRUE(installValidatedVideoSet(harness.snapshot, paths, rate.value(), 100, 3'333'334));
+    harness.snapshot->displayedFrame = domain::FrameId{0};
+    harness.terminals.push_back(application::CommandTerminal{
+        .context = context,
+        .outcome = application::CommandOutcome::Succeeded,
+    });
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_EQ(std::count_if(harness.submitted.begin(),
+                            harness.submitted.end(),
+                            [](const auto& command) {
+                                return std::holds_alternative<application::PlayCommand>(command);
+                            }),
+              0);
+}
+
+// I01: dropping one video on a source chip replaces exactly that source through the V02
+// staged swap - slot count, reference role and displayed position preserved, no playback
+// started, no order dialog involved.
+TEST(MainQmlContractTests, VideoDroppedOnASourceChipReplacesThatSourceInPlace) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    std::vector<QString> localPaths;
+    for (const auto* const name : {"chip_a.mp4", "chip_b.mp4", "chip_replacement.mp4"}) {
+        const QString path = directory.filePath(QString::fromLatin1(name));
+        ASSERT_TRUE(writeTestPng(path));
+        localPaths.push_back(path);
+    }
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.submitted.clear();
+    QVariantList urls;
+    for (const auto& path : localPaths) {
+        urls.push_back(QUrl::fromLocalFile(path));
+    }
+    ASSERT_TRUE(harness.shell->enqueueStartupRequest(2, urls.mid(0, 2)));
+    const application::CommandContext context =
+        application::commandContext(harness.submitted.front());
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate.hasValue());
+    ASSERT_TRUE(installValidatedVideoSet(harness.snapshot,
+                                         {std::filesystem::path{localPaths[0].toStdWString()},
+                                          std::filesystem::path{localPaths[1].toStdWString()}},
+                                         rate.value(),
+                                         100,
+                                         3'333'334));
+    harness.snapshot->displayedFrame = domain::FrameId{0};
+    harness.terminals.push_back(application::CommandTerminal{
+        .context = context,
+        .outcome = application::CommandOutcome::Succeeded,
+    });
+    harness.controller->refreshProjection();
+    ASSERT_TRUE(harness.waitUntil([&] { return harness.shell->activeSources().size() == 2; }));
+    harness.settle();
+
+    auto* const strip = harness.root->findChild<QQuickItem*>(QStringLiteral("activeSourceStrip"));
+    ASSERT_NE(strip, nullptr);
+    ASSERT_TRUE(strip->isVisible());
+    const QStringList identities = harness.shell->activeSourceIdentities();
+    ASSERT_EQ(identities.size(), 2);
+    harness.submitted.clear();
+    // The strip resolves the drop to the frozen identity of the chip under the cursor; the
+    // handler must stage the replacement in that exact slot.
+    ASSERT_TRUE(QMetaObject::invokeMethod(strip,
+                                          "replaceDropped",
+                                          Q_ARG(QString, identities[1]),
+                                          Q_ARG(QUrl, QUrl::fromLocalFile(localPaths[2]))));
+    harness.settle();
+    ASSERT_GE(harness.submitted.size(), 1U);
+    const auto* const command =
+        std::get_if<application::OpenComparisonCommand>(&harness.submitted.back());
+    ASSERT_NE(command, nullptr);
+    ASSERT_EQ(command->sources.size(), 2U);
+    EXPECT_EQ(command->sources[1].path, std::filesystem::path{localPaths[2].toStdWString()});
+    EXPECT_EQ(command->sources[1].role, domain::ComparisonRole::kPrediction);
+    EXPECT_EQ(command->sources[0].role, domain::ComparisonRole::kReference);
+    EXPECT_EQ(command->intent, application::OpenReviewIntent::ReplaceSources);
+    EXPECT_TRUE(command->preserveDisplayedTime);
+    EXPECT_EQ(harness.shell->openIntent(), ReviewShellController::ReplaceSources);
+    EXPECT_EQ(std::count_if(harness.submitted.begin(),
+                            harness.submitted.end(),
+                            [](const auto& command) {
+                                return std::holds_alternative<application::PlayCommand>(command);
+                            }),
+              0);
+}
+
 TEST(MainQmlContractTests, ClosingRetainedVideoDoesNotReplaceImageWorkspace) {
     WorkspaceHarness harness;
     QTemporaryDir directory;

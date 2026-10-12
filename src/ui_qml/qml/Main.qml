@@ -225,6 +225,8 @@ ApplicationWindow {
     }
     readonly property int shortcutPreset: preferences ? Number(preferences.shortcutPreset) : 0
     readonly property bool dropFrameTimecode: Boolean(preferences && preferences.dropFrameTimecode)
+    // I01: playback-purpose opens autoplay only while the user keeps this preference on.
+    readonly property bool autoplayOnOpen: preferences ? Boolean(preferences.autoplayOnOpen) : true
     property int changedOnDiskAnnouncedGeneration: -1
 
     // Single owner of workspace intent vs. committed content. activeMedia is the workspace
@@ -2455,6 +2457,22 @@ ApplicationWindow {
         return true;
     }
 
+    // I01 "拖到明确源卡片": a video dropped on one chip replaces exactly that source through
+    // the same staged swap as the chip menu. Only a single readable video is a replacement;
+    // anything else refuses without touching the compare set, and a failed swap keeps the old
+    // session (the ReplaceSourcesIntent contract).
+    function dropReplaceSource(identity, url) {
+        if (!shell || String(identity || "").length === 0 || !url || url.toString().length === 0)
+            return false;
+        const reviewed = controller ? controller.handleDroppedUrls([url]) : null;
+        if (!reviewed || !reviewed.accepted || reviewed.kind !== "videos") {
+            showIntentMessage(qsTr("请拖入单个视频文件替换该源。"));
+            return false;
+        }
+        pendingReplaceSourceIdentity = String(identity);
+        return performSourceReplacement(url);
+    }
+
     function performSourceReplacement(url) {
         const identity = pendingReplaceSourceIdentity;
         pendingReplaceSourceIdentity = "";
@@ -2798,6 +2816,7 @@ ApplicationWindow {
         chromeVisible: root.chromeVisible
         fullScreen: root.fullScreen
         shortcutPreset: root.shortcutPreset
+        autoplayOnOpen: root.autoplayOnOpen
         sourceIdentities: root.shell ? root.shell.activeSourceIdentities : []
         playbackContinuityPolicy: {
             if (!controller)
@@ -3064,6 +3083,14 @@ ApplicationWindow {
             } else if (Number(kind) === 5) {
                 root.clearReviewUi();
             }
+        }
+
+        // I01: a playback-purpose open (system double-click) asked the transport to start
+        // after the first confirmed frame. The refusal is a fact the user must see, not one
+        // to swallow now that the open itself succeeded.
+        function onOpenPlaybackRequested(intentId, started) {
+            if (!started)
+                root.showIntentMessage(qsTr("视频已打开，但未能开始播放。"));
         }
     }
 
@@ -3432,6 +3459,9 @@ ApplicationWindow {
         onRemoveRequested: sourceIdentity => root.removeSelectedSource(sourceIdentity)
         onReferenceRequested: sourceIdentity => root.changeReference(sourceIdentity)
         onReplaceRequested: sourceIdentity => root.requestReplaceSource(sourceIdentity)
+        // I01: a drop on one chip replaces that chip's source; the strip already resolved
+        // which frozen identity the drop names.
+        onReplaceDropped: (sourceIdentity, url) => root.dropReplaceSource(sourceIdentity, url)
         // V02 direct look: one plain chip click enters/exits that source's full-canvas view.
         // The shell owns the focus; this handler only forwards the toggle request.
         onDirectLookRequested: sourceSlot => root.toggleDirectLook(sourceSlot)
@@ -4682,7 +4712,9 @@ ApplicationWindow {
                 anchors.horizontalCenter: parent.horizontalCenter
             }
             Text {
-                text: qsTr("1–3 个视频或图片")
+                // I01: the overlay must tell the two drop intents apart - a drop on the empty
+                // canvas opens/appends, a drop on a source chip replaces that source.
+                text: qsTr("1–3 个视频或图片 · 拖到源卡片上替换该源")
                 color: root.mutedTextColor
                 font.pixelSize: 14
                 anchors.horizontalCenter: parent.horizontalCenter

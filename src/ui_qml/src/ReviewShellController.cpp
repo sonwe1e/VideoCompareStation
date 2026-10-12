@@ -516,9 +516,14 @@ bool ReviewShellController::enqueueStartupRequest(const int kind, const QVariant
     if (kind <= 0 || files.isEmpty() || files.size() > 3) {
         return false;
     }
+    // I01: the startup request already names its own intent - a double-clicked single video is a
+    // playback open, the Explorer compare verb is a review open - so the purpose is mapped from
+    // that kind instead of a global "play on open" flag that later opens could flip.
+    const OpenPurpose purpose = kind == 1 ? OpenForPlayback : OpenForReview;
     return submitOrQueue(ReviewIntent{
         .kind = OpenSourcesIntent,
         .origin = StartupOrigin,
+        .purpose = purpose,
         .sources = files,
         .referenceIndex = 0,
         .referenceIdentity = review_.frozenSourceIdentity(files.front().toUrl()),
@@ -908,6 +913,15 @@ void ReviewShellController::finishIntent(const int outcome, const QString& error
                        succeeded ? NoIntentError : CommandFailedError,
                        static_cast<int>(completed.sources.size()));
     Q_EMIT intentFinished(completed.id, completed.kind, outcome, errorKey);
+    // I01: autoplay is decided by the completed intent's own purpose, never by a global flag.
+    // A successful open terminal already implies the first-frame ACK, so this is the earliest
+    // honest moment to hand control to the transport. The preference remains the user's off
+    // switch; an append or replace intent never reaches this branch by construction.
+    if (succeeded && completed.kind == OpenSourcesIntent && completed.purpose == OpenForPlayback &&
+        (preferences_ == nullptr || preferences_->autoplayOnOpen())) {
+        const bool started = review_.play();
+        Q_EMIT openPlaybackRequested(completed.id, started);
+    }
     if (!reviewIntents_.empty()) {
         QMetaObject::invokeMethod(this, [this] { drainIntentQueue(); }, Qt::QueuedConnection);
     }
@@ -985,6 +999,7 @@ QVariantMap ReviewShellController::intentMap(const ReviewIntent& intent,
         {QStringLiteral("status"), status},
         {QStringLiteral("kind"), intent.kind},
         {QStringLiteral("origin"), intent.origin},
+        {QStringLiteral("purpose"), intent.purpose},
         {QStringLiteral("sourceCount"), static_cast<int>(intent.sources.size())},
         {QStringLiteral("referenceIndex"), intent.referenceIndex},
         {QStringLiteral("generation"), QVariant::fromValue<qulonglong>(intent.expectedGeneration)},
