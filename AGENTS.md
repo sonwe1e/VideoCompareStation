@@ -30,7 +30,22 @@ pwsh tools/build/build.ps1 -Preset release -Test
 pwsh tools/build/build.ps1 -Preset dev -Target format-check
 pwsh tools/build/build.ps1 -Preset dev -Target lint
 pwsh tools/build/build.ps1 -Preset dev -Test -TestRegex 'ui.ImageReviewControllerTests'
+pwsh tools/build/build.ps1 -Preset dev -Test -TestJobs 8
+pwsh tools/build/build.ps1 -Preset dev -Test -TestGroup Sidebar -TestJobs 8
 ```
+
+The preset keeps `CTEST_PARALLEL_LEVEL=1` for CI's low CPU impact; `-TestJobs N` is the local
+opt-in (`RUN_SERIAL` UI tests still run one at a time). Targeted `-TestRegex` runs remain the
+default dev loop. `-TestGroup Core|Media|Images|Playback|Sidebar|Ui|Build|Shell` provides named
+development routes and runs one representative UI style/DPI per suite; add `-FullMatrix` for
+style, popup, layout or DPI changes. Groups are starting points, not automatic impact analysis:
+use `-TestRegex` for a narrower case or additional affected suites. Do not combine both selectors.
+
+Run focused tests while editing. Once the patch is stable, run the full suite and applicable
+format/lint gates once before handoff (`-Test` without a selector keeps the complete preset).
+After a failure, rerun the failing scope first; repeat the full gate only after the corrective
+changes are settled. Do not repeat a successful gate on identical inputs without a new concern.
+Documentation-only changes need the applicable documentation/script checks, not a media/UI run.
 
 Raw preset commands require a configured MSVC x64 developer environment:
 
@@ -100,8 +115,12 @@ performance evidence for media/render work and screenshots for visible QML chang
 Never block GUI/render threads, publish partial frame sets, or omit session/generation/request
 identity on asynchronous work. Hide FFmpeg/D3D11 types behind adapters. Write files
 transactionally. Preserve approved tests and performance gates. Fix the product behaviour rather
-than the manual workaround. An assertion is coverage only if it fails once the behaviour is broken:
-attach mutation evidence for every new assertion. A script must assert its own check count so that
+than the manual workaround. An assertion is coverage only if it can detect broken behaviour.
+Attach targeted mutation evidence per changed critical behaviour (async identity, complete frame
+sets, timing, cache limits, data integrity), not per assertion. Related assertions may share one
+counterexample. For low-risk presentation changes, focused behaviour tests and applicable visual
+checks suffice; test-routing changes must prove that selection cannot silently omit its gates.
+A script must assert its own check count so that
 a missing anchor cannot turn its checks into silent passes. Read an artifact back before a later
 step publishes or consumes it: a scratch path can already hold an older copy, and a publish command
 will ship that copy without complaining.
