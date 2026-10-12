@@ -28,6 +28,7 @@ Item {
         property var jogPressCalls: []
         property int jogReleaseCalls: 0
         property int jogCancelCalls: 0
+        property var jogRateCalls: []
 
         function first() {
             firstCalls += 1;
@@ -60,6 +61,11 @@ Item {
         }
         function jogCancel() {
             jogCancelCalls += 1;
+        }
+        function setJogRate(rate) {
+            const nextRates = jogRateCalls.slice(0);
+            nextRates.push(rate);
+            jogRateCalls = nextRates;
         }
     }
 
@@ -163,6 +169,13 @@ Item {
             controller.jogActive = false;
             controller.jogDirection = 0;
             controller.jogRate = 1;
+        }
+
+        function test_jog_rate_selection_forwards_to_the_controller() {
+            controller.jogRateCalls = [];
+            actions.setJogRate(2);
+            actions.setJogRate(0.5);
+            compare(controller.jogRateCalls, [2, 0.5]);
         }
     }
 }

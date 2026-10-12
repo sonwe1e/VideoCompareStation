@@ -4293,6 +4293,7 @@ ApplicationWindow {
         protocol: root.protocolModel
         playing: root.playing
         playbackRate: root.controller ? Number(root.controller.playbackRate) : 1
+        jogRate: root.controller ? Number(root.controller.jogRate) : 1
         playbackModeLabel: root.playbackModeLabel
         playbackModeDetail: root.playbackModeDetail
         playbackTargetRate: root.playbackTargetRate

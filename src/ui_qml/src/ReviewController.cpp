@@ -2363,13 +2363,15 @@ public:
         const bool jogging = jog_.phase() == JogStateMachine::Phase::Jogging;
         const bool active = jog_.phase() != JogStateMachine::Phase::Idle;
         const int direction = static_cast<int>(jog_.direction());
+        const double rate = jog_.rate();
         if (jogging == joggingProjected_ && active == jogActiveProjected_ &&
-            direction == jogDirectionProjected_) {
+            direction == jogDirectionProjected_ && rate == jogRateProjected_) {
             return;
         }
         joggingProjected_ = jogging;
         jogActiveProjected_ = active;
         jogDirectionProjected_ = direction;
+        jogRateProjected_ = rate;
         Q_EMIT owner_.jogStateChanged();
     }
 
@@ -2463,6 +2465,10 @@ public:
     bool joggingProjected_ = false;
     bool jogActiveProjected_ = false;
     int jogDirectionProjected_ = 0;
+    // Last notified walk rate. The rate is a clamped projection like the phase flags, so a
+    // rate-only change (idle session, combo selection) must still emit jogStateChanged — and a
+    // re-set of the already-clamped value must not.
+    double jogRateProjected_ = 1.0;
     std::shared_ptr<const application::SessionSnapshot> snapshot_;
     QString candidateSourceAErrorKey_;
     QString candidateSourceBErrorKey_;

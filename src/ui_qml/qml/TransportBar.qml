@@ -15,6 +15,10 @@ Item {
     property bool canLast: false
     property bool playing: false
     property real playbackRate: 1
+    // E04 long-press walk rate. Defaults to real time; the plan's optional 0.5x/2x steps ride on
+    // one ladder so the combo's index->value mapping and the emitted rate cannot drift apart.
+    property real jogRate: 1
+    readonly property var jogRateLadder: [0.5, 1.0, 2.0]
     property Item focusTarget: null
     property bool compact: false
     property int playbackContinuityPolicy: 1
@@ -63,6 +67,7 @@ Item {
     signal nextSecondRequested
     signal lastRequested
     signal playbackRateRequested(real rate)
+    signal jogRateRequested(real rate)
     signal continuityPolicyRequested(int policyCode)
     signal stepFramesRequested(int delta)
     signal markInRequested
@@ -417,6 +422,45 @@ Item {
 
                     font: playbackRateCombo.font
                     text: qsTr("0.25×")
+                }
+            }
+
+            // E04 walk-rate selector for the long-press step walk. The labels carry the 走带 prefix
+            // because a bare "1×" beside the playback-rate combo would be ambiguous.
+            ToolbarCombo {
+                id: jogRateCombo
+
+                objectName: "jogRateCombo"
+                implicitWidth: Math.ceil(jogRateLabelMetrics.advanceWidth) + jogRateCombo.leftPadding + jogRateCombo.rightPadding + 4
+                implicitHeight: control.compact ? Theme.hitAreaMinimum : 36
+                anchors.verticalCenter: parent.verticalCenter
+                model: [qsTr("走带 0.5×"), qsTr("走带 1×"), qsTr("走带 2×")]
+                currentIndex: {
+                    // Nearest ladder value: the controller clamps to the same [0.5, 2.0] range, so
+                    // the projection never has to invent an index outside the three labels.
+                    const ladder = control.jogRateLadder;
+                    let best = 0;
+                    let bestDistance = Math.abs(ladder[0] - control.jogRate);
+                    for (let index = 1; index < ladder.length; ++index) {
+                        const distance = Math.abs(ladder[index] - control.jogRate);
+                        if (distance < bestDistance) {
+                            bestDistance = distance;
+                            best = index;
+                        }
+                    }
+                    return best;
+                }
+                Accessible.name: qsTr("长按连续走带的速率")
+                onActivated: index => {
+                    control.jogRateRequested(control.jogRateLadder[index]);
+                    control.restoreFocus();
+                }
+
+                TextMetrics {
+                    id: jogRateLabelMetrics
+
+                    font: jogRateCombo.font
+                    text: qsTr("走带 0.5×")
                 }
             }
 

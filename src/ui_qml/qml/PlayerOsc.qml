@@ -22,6 +22,8 @@ Item {
     property bool sampleExportBusy: false
     required property bool playing
     property real playbackRate: 1
+    // E04 long-press walk rate, mirrored from the controller by Main.qml like `playbackRate`.
+    property real jogRate: 1
     // C-07 playback status rail. Bound by Main.qml; defaults keep standalone QML tests working.
     property string playbackModeLabel: ""
     property string playbackModeDetail: ""
@@ -427,6 +429,7 @@ Item {
             canLast: control.canLast
             playing: control.playing
             playbackRate: control.playbackRate
+            jogRate: control.jogRate
             playbackContinuityPolicy: control.playbackContinuityPolicy
             currentFrame: control.currentFrame
             totalFrames: control.totalFrames
@@ -477,6 +480,10 @@ Item {
             onPlaybackRateRequested: rate => {
                 if (control.actions && typeof control.actions.setPlaybackRate === "function")
                     control.actions.setPlaybackRate(rate);
+            }
+            onJogRateRequested: rate => {
+                if (control.actions && typeof control.actions.setJogRate === "function")
+                    control.actions.setJogRate(rate);
             }
             onContinuityPolicyRequested: policy => {
                 if (control.actions && typeof control.actions.setPlaybackContinuityPolicy === "function")

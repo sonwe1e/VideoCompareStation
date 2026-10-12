@@ -15,6 +15,7 @@ Item {
         property int jogReleaseCalls: 0
         property int previousFrameCalls: 0
         property int nextFrameCalls: 0
+        property var jogRateCalls: []
 
         function firstFrame() {
         }
@@ -44,6 +45,11 @@ Item {
         }
         function jogRelease() {
             jogReleaseCalls += 1;
+        }
+        function setJogRate(rate) {
+            const nextRates = jogRateCalls.slice(0);
+            nextRates.push(rate);
+            jogRateCalls = nextRates;
         }
     }
 
@@ -429,6 +435,33 @@ Item {
             mouseRelease(previousButton);
             compare(orderedActions.events, ["jogPress:-1", "jogRelease"]);
             orderedOsc.visible = false;
+        }
+
+        // E04 walk-rate completion: the 走带 combo mirrors the controller projection and its
+        // selection reaches the same action seam the jog keys use. Driven by the real activation
+        // path (open, arrow, confirm) so a handler wired to the wrong signal fails here.
+        function test_jog_rate_selector_mirrors_and_forwards_the_walk_rate() {
+            osc.revealActive = true;
+            const transport = findChild(osc, "transportBar");
+            verify(transport !== null);
+            const combo = findChild(transport, "jogRateCombo");
+            verify(combo !== null);
+
+            osc.jogRate = 0.5;
+            compare(combo.currentIndex, 0);
+            osc.jogRate = 1;
+            compare(combo.currentIndex, 1);
+            osc.jogRate = 2;
+            compare(combo.currentIndex, 2);
+
+            osc.jogRate = 1;
+            actions.jogRateCalls = [];
+            combo.forceActiveFocus();
+            mouseClick(combo, combo.width / 2, combo.height / 2);
+            tryVerify(() => combo.popup.visible);
+            keyClick(Qt.Key_Down);
+            keyClick(Qt.Key_Return);
+            compare(actions.jogRateCalls, [2]);
         }
 
         function test_playback_status_separates_three_phenomena() {

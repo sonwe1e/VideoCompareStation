@@ -2120,6 +2120,44 @@ TEST(MainQmlContractTests, DesignTokensGovernKeyControlMetrics) {
     EXPECT_EQ(QQmlProperty(statusHint, QStringLiteral("font.pixelSize")).read().toReal(), 12.0);
 }
 
+// E04 walk-rate completion (plan §4): the long-press step walk defaults to real time with the
+// optional 0.5x/2x steps. The 走带 combo mirrors the controller projection and its selection
+// reaches the same controller the jog keys drive — without submitting a single playback
+// command, because changing the walk pace is input pacing, not a media request.
+TEST(MainQmlContractTests, JogRateSelectorMirrorsAndReachesTheController) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+
+    auto* const transportBar = harness.root->findChild<QQuickItem*>(QStringLiteral("transportBar"));
+    auto* const jogRateCombo = harness.root->findChild<QQuickItem*>(QStringLiteral("jogRateCombo"));
+    ASSERT_NE(transportBar, nullptr);
+    ASSERT_NE(jogRateCombo, nullptr);
+
+    // Default projection: real time, and the combo elects the middle ladder slot.
+    EXPECT_DOUBLE_EQ(harness.controller->jogRate(), 1.0);
+    EXPECT_DOUBLE_EQ(transportBar->property("jogRate").toDouble(), 1.0);
+    EXPECT_EQ(jogRateCombo->property("currentIndex").toInt(), 1);
+    harness.submitted.clear();
+
+    // 2x: activation lands on the controller and comes back as the mirrored projection — the
+    // notify path, not just a local combo index change.
+    ASSERT_TRUE(QMetaObject::invokeMethod(jogRateCombo, "activated", Q_ARG(int, 2)));
+    harness.settle();
+    EXPECT_DOUBLE_EQ(harness.controller->jogRate(), 2.0);
+    EXPECT_DOUBLE_EQ(transportBar->property("jogRate").toDouble(), 2.0);
+    EXPECT_EQ(jogRateCombo->property("currentIndex").toInt(), 2);
+
+    // 0.5x: the low option selects and mirrors through the same path.
+    ASSERT_TRUE(QMetaObject::invokeMethod(jogRateCombo, "activated", Q_ARG(int, 0)));
+    harness.settle();
+    EXPECT_DOUBLE_EQ(harness.controller->jogRate(), 0.5);
+    EXPECT_DOUBLE_EQ(transportBar->property("jogRate").toDouble(), 0.5);
+    EXPECT_EQ(jogRateCombo->property("currentIndex").toInt(), 0);
+
+    // Walk pace is an input-layer dial: no command may be submitted by changing it.
+    EXPECT_TRUE(harness.submitted.empty());
+}
+
 // U02: GT, the current comparison pair and the direct look must never be colour-only. Each
 // role keeps a text label next to its hue: the chip prints 参考 / 直看 tags, the focus button
 // prints 看 X plus a GT badge on the reference slot, and the pair combo names both files.

@@ -2924,12 +2924,27 @@ TEST_F(ReviewControllerTests, JogRateIsClampedAndProjected) {
     backend->currentSnapshot = readySnapshot(5, 100U);
     ReviewController controller{dependenciesFor(backend)};
 
+    // The rate is a projected property: a rate-only change must notify even while idle, and a
+    // re-set of the already-clamped value must not. Without the notification the QML transport
+    // mirror would keep showing the old walk rate.
+    int notifications = 0;
+    QObject::connect(&controller,
+                     &ReviewController::jogStateChanged,
+                     &controller,
+                     [&notifications] { ++notifications; });
+
     controller.setJogRate(4.0);
     EXPECT_DOUBLE_EQ(controller.jogRate(), 2.0);
+    EXPECT_EQ(notifications, 1);
+    controller.setJogRate(3.0);
+    EXPECT_DOUBLE_EQ(controller.jogRate(), 2.0);
+    EXPECT_EQ(notifications, 1);
     controller.setJogRate(0.1);
     EXPECT_DOUBLE_EQ(controller.jogRate(), 0.5);
+    EXPECT_EQ(notifications, 2);
     controller.setJogRate(1.0);
     EXPECT_DOUBLE_EQ(controller.jogRate(), 1.0);
+    EXPECT_EQ(notifications, 3);
     controller.stop();
 }
 

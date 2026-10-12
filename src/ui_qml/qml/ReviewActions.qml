@@ -99,6 +99,14 @@ QtObject {
             controller.setPlaybackRate(rate);
     }
 
+    // E04 long-press walk rate: 0.5x/1x/2x real-time multiples, clamped by the controller's jog
+    // state machine. It paces the same held walk as the step keys and buttons, so it never
+    // touches playback state.
+    function setJogRate(rate) {
+        if (controller && typeof controller.setJogRate === "function")
+            controller.setJogRate(rate);
+    }
+
     function moveWipe(delta) {
         if (!wipeEnabled)
             return;
