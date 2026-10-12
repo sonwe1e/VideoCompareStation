@@ -1,7 +1,82 @@
 # 视觉审查问题台账
 
-更新：2026-10-13（E04 走带速率选择器与 JOG 基准证据补全／设计 token U02／画布响应式重排 U01／信息分层与五态 U03／Windows 默认打开完整闭环 I03／统一鼠标与快捷键 I02／打开、添加、替换意图区分 I01／双差异显示口径与附近帧可读性 V04／原速播放指标与调度守恒 E03／任务化模式入口 V03／统一源入口与比较选择 V02／长按正反向走带 E04／缓存小步改进 E05／启动减负 E01／诊断可关闭 E02／全画布候选直看 P05／图片编辑纯操作 P11／协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-10-13（质量审计与修复轮：V01 可见性与几何、E03 重锚指标、E02 生命周期、缓存统计、V02 交互／E04 走带速率选择器与 JOG 基准证据补全／设计 token U02／画布响应式重排 U01／信息分层与五态 U03／Windows 默认打开完整闭环 I03／统一鼠标与快捷键 I02／打开、添加、替换意图区分 I01／双差异显示口径与附近帧可读性 V04／原速播放指标与调度守恒 E03／任务化模式入口 V03／统一源入口与比较选择 V02／长按正反向走带 E04／缓存小步改进 E05／启动减负 E01／诊断可关闭 E02／全画布候选直看 P05／图片编辑纯操作 P11／协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+
+## 2026-10-13 质量审计与修复轮（E01/E02、V01/V02、E03/E05 复审）
+
+- **范围**：对已交付的计划工作项做独立复审（只读审查代理分头核查 E01/E02 诊断与启动、V01/V02
+  局部窗与源入口、E03/E05 指标与缓存；主会话逐条亲验并修复）。只修确认的真实缺陷与诚实性
+  缺口，不扩功能范围；渲染后端结构、调度语义与 trace schema 不变。
+- **确认并修复的缺陷**：
+  - **V01 局部窗在真实应用不可见（严重）**：`RoiTripletStrip` 根背景不透明
+    （`Theme.panel`），把渲染器画在 surface 节点（strip 之下）的局部窗附加绘制整体盖住；
+    WARP/属性测试都不覆盖"strip 盖在画面上"这一层。用红色底板 + `grabImage` 探针实测确认
+    格子中心是面板色。修复：根透明 + 头部面板独立（高度由 Column 布局值推导——锚到 positioner
+    子项不会跟随布局，实测高度 0）+ 像素回归
+    `test_footage_hole_stays_transparent_over_the_lower_layer`；缩放按钮命名改
+    「局部·适配ROI／局部·源像素 N%」（B09）。
+  - **局部窗旋转 + SAR 轴向错误（中）**：SAR 恒乘 oriented 宽度；90/270° 时与全景
+    `transformedExtent`（先乘未旋转宽度再换轴）不一致，局部窗宽高比错误。修复：
+    `horizontalSar/verticalSar` 随旋转换轴，fit/原生/物理回写三处统一；新增旋转+SAR 组合
+    用例（旧代码下红）。
+  - **固定倍率看不到最后一列/行（中）**：原生 crop 上限 `N-1`，100/200/400% 永远无法检视
+    帧边界像素（fit 反而可以）。修复：整数 crop 允许覆盖至帧边界（整数原点+整数 crop 映射
+    texel 中心，无边界平均）；更新边缘 clamp 期望 + 新增覆盖用例。
+  - **E03 迟到指标在重锚点伪造（高）**：`playbackDue` 在 anchor==firstTarget（播完重播、
+    区间起点、循环接缝）给出过去时刻，`notePlaybackPlanToPublishLatency` 把整段媒体时长/
+    接缝解码时间计入 late 与 plan_to_publish 极大值。修复：拒绝 anchor 及之前的 plan（调度
+    原点不是漏排期）；新增播完重播、循环接缝（接缝后 6ms 发布）回归（late=0、样本只含锚后帧）。
+  - **播放中改区间未封段且导航计成跳帧（高）**：`beginSetPlaybackRange` 重锚前不
+    `closeSteadyPlaybackSegment`，已测段在 stop 时因负 delta 被整体丢弃；floor 前移后下一次
+    激活把 41 帧位移计为 skipped。修复：重锚前封段 + `activatePlaybackTarget` 在 floor 越过
+    顺序最小时重基线；新增回归（segments==1、skip==0、late==0、媒体==墙钟）。
+  - **E02 关闭监测仍永久设置 trace 时钟（中）**：首次安装 observer 会 enable 全局时钟，
+    off 只关门不停钟——面板开过一次后整个会话每事件构造与环形锁持续存在。修复：所有权标记 +
+    `PlaybackTrace::sinkInstalled()`；off 时归还时钟（有 sink 则共享不动），再次 on 重臂；
+    新增归还/重臂与 sink 共享两个用例。
+  - **析构无条件卸载全局 observer 并碰全局门（中）**：会摘掉别人（先安装者）的注册。修复：
+    `PlaybackTrace::removeObserver`（所有权检查、unique lock 保证无在途回调）+ 仅当自己安装
+    过才移除；新增外部 observer 存活与旁路 controller 不干扰用例。
+  - **探针 in-flight/超时状态机代次错误、样本无代次（中低）**：过期 capability 回答会清掉
+    新请求的 in-flight 并停新超时；超时后 in-flight 永真无法重试；样本可跨 target 覆盖计数器。
+    修复：`probeInFlightGeneration_/sampleInFlightGeneration_`、超时清 in-flight、样本 outcome
+    带代次、handover 清样本在途；冗余 `probeApplied_` 删除。
+  - **FrameProvider 缓存占用读取数据竞争（中）**：`statistics()` 持锁读 `setTable_`，而
+    `cacheSet/cachedSet/closeDecodeActors` 无锁写（reallocation/erase 下撕裂/UB）。修复：
+    三处写入持同一把锁。
+  - **SourceFrameCache 统计被内容清理重置（低）**：`clear()` 同时清淘汰计数（decoder close/
+    预读小缓存路径使运行内 `cache_evictions` 非单调）；反向窗 `built_frames` 把已缓存帧的
+    重复解码也计为"入窗"。修复：拆 `clear()/resetStatistics()`（仅 open 统计重置调用后者）、
+    builtFrames 只在真实插入时累加；新增单测。
+  - **替换文件去重按原始 URL 字符串（低）**：同一文件不同拼写（冗余路径段、大小写）可绕过
+    "已在当前对比中"。修复：候选与已开源都经 `handleDroppedUrls` 规范化后比较；新增
+    `sub/../` 拼写变体契约测试。
+  - **直看点击无 pending 守卫、管理模式跨会话残留（低）**：pending 芯片点击会进入直看；
+    替换/打开后普通点击仍被管理模式劫持为选择。修复：`chipClicked` 检查 `pending`；
+    `sourceSetSignature` 变化时退出管理模式；新增 QML 用例。
+  - **Auto 最近邻阈值 QML 复制（低）**：`ComparisonViewport` 硬编码 200 与 surface 常量可
+    漂移。修复：surface 暴露 `autoNearestThresholdPercent`，QML 引用。
+  - **诚实性注释修正**：渲染器不再声称 strip chrome 能报告"不可解析窗口"（实为静默跳过，
+    chrome 仍显示合法窗框——列入下方仍然开放项）。
+- **验证（本地 dev preset，2026-10-13）**：
+  - 受影响套件 368/368（RoiTripletStrip、MainQmlContractTests、TimingDiagnosticsController、
+    player_osc、ReviewActions、PlaybackTrace/PlaybackLatencyReservoir/PlaybackCoordinator、
+    SourceFrameCache/SourceDecodeActor/MultiSourceFrameProvider、ComparisonSurface 几何+WARP）。
+  - 变异证据：`out/verification/quality-audit-2026-10-13/mutations/`（M1 strip 根不透明、
+    M2 重锚 plan 计迟到、M3 区间重定位不封段、M4 关监测不还钟、M5 原生 crop 停在 N-1、
+    M6 旋转 SAR 错轴；6/6 检出、逐字节还原、还原树电池全绿，13 项自断言检查）。
+  - 全量 dev 回归 1317/1321 注册、0 失败（8 项环境跳过、4 项既有 Disabled；新增 9 项注册
+    含本轮的局部窗像素回归、几何/指标/生命周期/缓存用例）。
+  - `format-check`（403 C++ 文件 + QML）与 `lint` 通过。
+- **仍开放（本轮未修，如实记录）**：`notePresentationTargetReplaced` 无生产调用方，且探针
+  capability 缓存导致"重探测"返回旧答案；探针 worker 析构无界 join（平台调用卡死会拖住退出）；
+  探测结果投递依赖 monitoring 的刷新计时器（latent API 不一致）；空槽局部窗 chrome 仍显示为
+  合法（渲染器静默跳过）；预取仍不检查剩余预算（队列优先级已结构保证）；`reverse_window_hits`
+  混含"窗构建后命中"与"任意源缓存命中"；teardown 时在途帧组不计入 skip/late（边界未在报告
+  注明）。
+- **回退**：按提交分组逐个 revert（V01 渲染/几何、E03 调度指标、E02 诊断生命周期、媒体缓存
+  统计、V02 交互、文档），无持久化状态与协议变更，回退无连锁。
 
 ## 2026-10-13 E04 走带速率选择器与 JOG 基准证据（补全）
 
