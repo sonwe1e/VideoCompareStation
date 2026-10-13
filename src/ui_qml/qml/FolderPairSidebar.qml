@@ -206,6 +206,7 @@ Rectangle {
                 objectName: "folderPairScroll"
                 anchors.fill: parent
                 clip: true
+                ScrollBar.vertical: VcsScrollBar {}
 
                 ListView {
                     id: pairList

@@ -3,6 +3,102 @@
 更新：2026-10-13（质量审计与修复轮：V01 可见性与几何、E03 重锚指标、E02 生命周期、缓存统计、V02 交互／E04 走带速率选择器与 JOG 基准证据补全／设计 token U02／画布响应式重排 U01／信息分层与五态 U03／Windows 默认打开完整闭环 I03／统一鼠标与快捷键 I02／打开、添加、替换意图区分 I01／双差异显示口径与附近帧可读性 V04／原速播放指标与调度守恒 E03／任务化模式入口 V03／统一源入口与比较选择 V02／长按正反向走带 E04／缓存小步改进 E05／启动减负 E01／诊断可关闭 E02／全画布候选直看 P05／图片编辑纯操作 P11／协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
 
+## 2026-10-13 极简界面与交互收尾（当前工作区）
+
+- **基线**：`32408b4` 加已有未提交主题工作；保留并完善该批修改。下面这一节记录后续实窗
+  复查及最终实现，颜色和行为以本节与当前源码为准，前一轮主题记录保留作过程证据。
+- **实窗确认并修复**：
+  - 共享按钮／菜单中 `#1affffffff` 的颜色位数不合法，次级按钮在实窗显示为黑块。
+    改用合法的主题 token；主按钮填充／hover／pressed 与白字、次要文字与深色面板均有
+    ≥4.5:1 的数值对比度测试。额外帧标记改粉色，与紫色 C 源保持可区分。
+  - `ReviewActionButton`／`VcsToolButton` 原本把焦点边框固定为透明；现在键盘操作显示
+    清晰焦点环，鼠标操作保持安静。工具按钮的 checked 状态在移开鼠标后仍有选中填充；
+    动效使用有效的 `easing.type`，共享按钮不再各自硬编码状态色。
+  - 工具提示恢复不透明 `Theme.menu` 背景，避免明亮视频透过提示影响可读性；启动图的
+    背景和次要文字同步最终主题，避免启动交接时的色差。
+  - 欢迎页突出「打开视频 / 打开图片」，文件夹浏览与比较留在次级操作区；背景使用中性
+    暗色，空会话隐藏源标签、采样和缩放 HUD，避免「未打开文件」与无效工具污染首页。
+  - 视频比较栏按可用宽度换行，复制与检查器保留独立空间；模式改变后立即重排，避免
+    三路差异模式新增「看 GT」、比较对象、切候选时重叠。宽屏仍保持 40px 单行基准。
+  - 图片命令按文字长度占位，短按钮不再占满 116px；模式选中态与视频统一。编辑期间
+    收起比较模式行，结束编辑自动恢复；已打开图片后「打开」回到次要层级，编辑时突出
+    「另存副本」。不修改原图、编辑历史、异步身份或视频播放语义。
+- **回归覆盖**：新布局用例逐项检查 13 个动作的存在、可见控件边界与两两不重叠，覆盖
+  960/1280/1440/1920px、并排／差异；首页检查五个入口完整显示；按钮测试驱动点击与
+  焦点，模式行验证进入编辑隐藏、退出恢复。既有图片工作流 14 项定向测试全部通过。
+  `RoiTripletStrip` 的原有像素测试补上逻辑坐标→设备像素换算；此前所谓高 DPI 白底
+  回退实际是测试采样了错误位置。保留三处颜色断言，且将真实组件临时改为不透明面板时
+  用例准确失败（10 通过、1 失败，失败值为面板色 `#242426`）；原文件已按字节恢复。
+  反例日志为 `roi-opaque-counterexample.txt`，没有复制另一份测试套件。
+- **截图**：`out/verification/ui-minimal-2026-10-13/` 中的 `welcome-960.png`、
+  `welcome-1440.png`、`compare-toolbar-*.png`、`image-transform-toolbar-960.png` 与图片
+  编辑／淡化截图；来源为真实 QML 窗口。实际开发版另经 computer-use 复查首页，已无
+  旧源标签与黑块按钮。测试截图中的原图变更提示来自测试夹具的占位路径。
+- **DPI 补查**：`verify-dpi.ps1` 驱动仓库原有套件，`QT_SCALE_FACTOR=1/1.25/1.5/2`、
+  Basic/Windows 两种样式共 36/36 次调用通过；脚本逐项核对退出码和测试数量。
+  桌面原生缩放会叠加，极高缩放下超过桌面最大宽度的窗口会被 Windows 钳制，因此
+  四档缩放截图证明文字与控件状态；960–1920px 完整宽度的布局证据取默认缩放运行。
+- **最终门禁**：`format-check`（403 C++ 文件与生产 QML）、`lint`（clang-tidy 与
+  `qmllint --max-warnings 0`）均通过。首轮完整并行回归暴露上述工具提示／DPI 采样问题，
+  修正后原失败范围 10/10 通过；其中一次文件关联注册失败在串行定向复跑通过，未改该模块。
+  最终 `pwsh tools/build/build.ps1 -Preset dev -Test` 选择 1322 项：**1315 通过、3 跳过、
+  4 原有禁用、0 失败**，耗时 552.62 秒；文件关联用例在最终全套中也通过。跳过项为缺少
+  Game DVR 专用素材及两项 Windows 文件系统大小写冲突场景，禁用项保持原样。
+  日志：`out/verification/ui-minimal-full-final.log`、`ui-minimal-format-check.log`、
+  `ui-minimal-lint.log`、`ui-minimal-dpi.log`；无需将前一轮结果当作当前版本的通过证据。
+- **边界**：此轮是界面与交互验收，不代表 ZIP 发布、真实 D3D11VA 五分钟性能门禁或
+  所有显示器／系统字体的人工验收；现有播放与数据完整性要求不变。
+
+## 2026-10-13 UI 视觉与交互统一（Apple 风格深色主题，前一轮工作区记录）
+
+- **范围**：按用户要求把界面从蓝灰“工具风”收敛为 Apple 式深色极简：中性炭灰表面、单一系统蓝强调色、
+  白色半透明发丝分隔线替代成片描边、更大的圆角、悬停/按下用填充而非描边、键盘焦点才显示描边环。
+  只动表现层（`VcsTheme.js`、控件基元与少量组件内状态样式），不改布局尺寸、行为语义与异步/播放路径。
+- **交付**：
+  - `VcsTheme.js`：新调色板（canvas `#0c0c0e` / window `#18181a` / panel `#1f1f21` / menu `#29292c` /
+    raised `#2c2c2e`），系统蓝 accent `#0a84ff`（填充 `#0a6ce0` 保持白字 AA），文字层级
+    `#f5f5f7/#d1d1d6/#98989d`，错误/警告/成功改系统色（`#ff453a/#ffd60a/#30d158`），
+    圆角 6/8/10/14，半透明控件填充与焦点环；新增 `raisedPanelHover`（弹窗列表行用不透明高亮，
+    保持其对比度守卫成立）。
+  - 基元：`VcsToolButton`/`ReviewActionButton`/`ToolbarCombo`/`ReviewOffsetSpinBox` 去掉静息描边、
+    悬停/按下改填充；`VcsMenu`（圆角 10、padding 6）/`VcsMenuItem`（中性行高亮）/
+    `VcsMenuBar`（打开项中性填充）/`VcsToolTip`（圆角 8、padding 10）。
+  - 组件：`CompareModeBar`（模式/直看按钮去静息描边，GT 徽标改胶囊）、`ActiveSourceStrip`
+    （卡片去静息描边、hover 才显出源色边）、`TransportBar`（区间芯片去描边、连续播放段去选中边）、
+    `TabbedInspector`（页签改下划线式选中，去选中填充）、`PlayerOsc`（浮层圆角 token 化）、
+    `FolderPairSidebar`/`VideoFolderSidebar`（新增暗色 `VcsScrollBar` 细滚动条）。
+  - 系统层同步：`DesktopApplication.cpp` 标题栏颜色 `RGB(24,24,26)`、标题文字 `#f5f5f7`；
+    `StartupSplash.cpp` 背景/标题/副标题与 `Theme.window` 对齐。
+- **不变量**：`ui.vcs_theme` 钉住的所有字号/行高/间距/命中区/栏高/面板宽/画布保护线数值、源身份色、
+  时间轴标记互相及与源色的分离约束、缺失标记=错误红、菜单/弹窗/工具提示背景不透明度、
+  `DesignTokensGovernKeyControlMetrics` 与 `RoleStatesCarryLabelsNotColourAlone` 全部保持。
+- **测试更新（1 处）**：`tst_drop_confirmation_dialog.qml` 原先硬编码 `Theme.panel` 旧字面量
+  (`#151c28`) 做像素采样，改为读取 `Theme.panel` token（断言意图不变：表头以不透明面板色覆盖洋红底），
+  其余测试未改。
+- **验证（本地 dev preset，2026-10-13）**：
+  - 全矩阵 UI：`-TestGroup Ui -FullMatrix -TestJobs 8` 共 546 项注册、542 通过；并行负载下
+    `ui.player_osc` 与 `ui.video_file_sidebar.Basic/Windows` 三项失败／超时，单独串行复跑全部通过
+    （5.44s／5.20s／5.18s）；`ui.RoiTripletStrip` 的 `grabImage` 白底失败在未改动的 `32408b44`
+    基线上同样复现（对照运行），属环境回退，非本主题改动引入。
+  - 渲染对话框的 WARP 用例：`platform.DropConfirmationVideoOcclusion.scale-1/1.25/1.5/2` 与
+    `platform.ComparisonSurfaceWarpTests.DropConfirmationChromeStaysOpaqueOverVideo` 5/5 通过
+    （采样颜色从控件属性读取，随主题变化）。
+  - 定向复跑：`ui.vcs_theme`、`ui.ToolbarCombo`×2、`ui.DropConfirmationDialog`×4、
+    `ui.player_osc`、`ui.video_file_sidebar`×2、`ui.WipeHandle`×4、`ui.ReviewActions`、
+    `ui.layout_metrics`、`ui.stage_states`、`ui.clip_export_dialog`、`ui.review_action_button`、
+    `ui.vcs_tool_tip`×8、`ui.empty_review_view`、`ui.timeline_tracks`、`ui.timeline_thumbnail_cache`、
+    `ui.MainQmlContractTests`（129）×全矩阵 全部通过。
+  - `format-check`（403 C++ + QML）与 `lint`（clang-tidy + `qmllint --max-warnings 0`，含新
+    `VcsScrollBar.qml`）通过。
+- **真机目视（2026-10-13，本机 dev 构建，双路 320×180 素材，150% DPI）**：实际启动走查了菜单弹窗
+  （圆角、蓝色勾选/单选、发丝分隔、快捷键列、打开项中性填充）、来源条与模式条（扁平按钮、GT 胶囊
+  徽标、参考卡蓝边、无选中描边）、传输条（系统蓝播放钮、选中芯片蓝底白字、当前帧芯片）与状态行；
+  截图证据见 `out/verification/ui-apple-restyle-2026-10-13/`。
+- **UNVERIFIED（真机项，不宣称）**：100/125/200% DPI 与 960×640–1920×1080 全尺寸截图走查、
+  hover/按下手感与短动效体感；检查器停靠/抽屉及大检查器的观感未截图；对比度按 token 数值自查
+  （正文/次要文本 ≥ 4.5:1，禁用文本除外），未做逐像素取色复核。
+- **回退**：按文件 revert 即可（无持久化状态、无接口/协议变更、无 C++ 行为改动，仅标题栏/启动图颜色常量）。
+
 ## 2026-10-13 质量审计与修复轮（E01/E02、V01/V02、E03/E05 复审）
 
 - **范围**：对已交付的计划工作项做独立复审（只读审查代理分头核查 E01/E02 诊断与启动、V01/V02

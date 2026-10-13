@@ -163,8 +163,8 @@ Rectangle {
         }
 
         background: Rectangle {
-            radius: 6
-            color: darkTabButton.checked ? Theme.controlChecked : (darkTabButton.hovered ? Theme.fluentHover : "transparent")
+            radius: Theme.radiusSmall
+            color: darkTabButton.hovered && !darkTabButton.checked ? Theme.fluentHover : "transparent"
 
             Behavior on color {
                 ColorAnimation {
@@ -172,6 +172,8 @@ Rectangle {
                 }
             }
 
+            // Xcode-style tab: the underline alone marks the active tab; the label weight and
+            // colour carry the rest, so the row stays quiet.
             Rectangle {
                 visible: darkTabButton.checked
                 height: 2

@@ -175,7 +175,7 @@ Item {
             rightMargin: control.docked ? 0 : Math.max(16, (control.width - 920) / 2)
             bottomMargin: control.docked ? 0 : 8
         }
-        radius: control.docked ? 0 : 14
+        radius: control.docked ? 0 : Theme.radiusCard
         opacity: control.controlsEnabled ? 1.0 : 0.0
         enabled: control.controlsEnabled
         color: control.docked ? Theme.panel : Theme.oscGlass

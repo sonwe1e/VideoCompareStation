@@ -1,64 +1,78 @@
 .pragma library
 
-// Static semantic tokens for CompareStation's dark desktop theme. Keep state colours here so
-// controls rendered by different Qt Quick Controls styles cannot silently drift apart.
+// Static semantic tokens for CompareStation's Apple-flavoured dark theme. Keep state colours
+// here so controls rendered by different Qt Quick Controls styles cannot silently drift apart.
+//
+// The palette follows macOS dark-mode conventions: neutral charcoal surfaces (no blue cast),
+// translucent white hairlines instead of solid outlines, one system-blue accent, and text
+// colours taken from the system hierarchy (primary / secondary / tertiary / quaternary).
 
 // Surfaces, darkest to lightest. The review stage sits below the chrome so footage keeps the
 // strongest contrast; every raised layer is one step lighter than the layer it sits on.
-var canvas = "#0b0f17"
-var window = "#111722"
+// Tuned to macOS dark-mode neutrals: pure neutral charcoal, no blue or purple cast.
+var canvas = "#0a0a0b"
+var window = "#1c1c1e"
 // The DWM caption colour in DesktopApplication.cpp mirrors this value; change both together.
-var headerBackground = "#111722"
-var panel = "#151c28"
-var panelElevated = "#19212f"
-var menu = "#1a2231"
-var raisedPanel = "#1e2737"
-var disabledPanel = "#1a2230"
+var headerBackground = "#1c1c1e"
+var panel = "#242426"
+var panelElevated = "#2c2c2e"
+var menu = "#343438"
+var raisedPanel = "#3a3a3c"
+var disabledPanel = "#2a2a2c"
+// Opaque row highlight for popup lists (combo boxes). The translucent control veils are for
+// flat chrome sitting on known surfaces; a list row floats over the popup and must keep one
+// solid fill so its label keeps its measured contrast.
+var raisedPanelHover = "#48484a"
 
-// Neutral control states. Checked controls carry an accent-tinted fill, hover never does.
-var control = "#232e40"
-var controlHover = "#2c394e"
-var controlPressed = "#1f2a3b"
-var controlChecked = "#1d3a66"
+// Neutral control states. Resting fills are translucent white so the same control reads
+// correctly on the window, a panel or a floating surface; hover and press only deepen the
+// veil, and a checked control keeps an accent-tinted fill (never just a border).
+var control = "#1affffff"
+var controlHover = "#29ffffff"
+var controlPressed = "#3dffffff"
+var controlChecked = "#3d0a84ff"
 
-var primaryText = "#f1f5f9"
-var secondaryText = "#cbd5e1"
-var mutedText = "#94a3b8"
-var disabledText = "#64748b"
+var primaryText = "#f5f5f7"
+var secondaryText = "#e5e5ea"
+var mutedText = "#a5a5ab"
+var disabledText = "#6c6c70"
 var inverseText = "#ffffff"
 
 // accent is for borders, indicators and focus; filled buttons use accentFill so white labels
 // keep an AA contrast ratio, and accentText is the readable accent for text on dark panels.
-var accent = "#3b82f6"
-var accentText = "#7cb4ff"
-var accentFill = "#2563eb"
-var accentHover = "#2f6ff0"
-var accentPressed = "#1d4ed8"
-var focus = "#60a5fa"
-var strongFocus = "#bfdbfe"
+// Aligned to macOS systemBlue dark.
+var accent = "#0a84ff"
+var accentText = "#64d2ff"
+var accentFill = "#0964d4"
+var accentHover = "#0b6bdc"
+var accentPressed = "#0054b8"
+var focus = "#64d2ff"
+var strongFocus = "#d1e7ff"
 
-var border = "#263244"
-var borderHover = "#40526d"
-var controlBorder = "#334259"
-var menuBorder = "#34445c"
-var disabledBorder = "#212b3a"
+// Hairline separators and control outlines. Everything is a white veil so the line adapts to
+// the surface underneath; only floating popups carry a slightly stronger edge.
+var border = "#14ffffff"
+var borderHover = "#2effffff"
+var controlBorder = "#1affffff"
+var menuBorder = "#22ffffff"
+var disabledBorder = "#0fffffff"
 
 // Red is reserved for real failures (a decode error, a failed save). Limits and unavailable
 // states such as a missing frame or an inexact pairing use the warning family instead.
-var error = "#f87171"
-var errorPanel = "#2a1216"
-var errorBorder = "#b91c1c"
-var errorText = "#fca5a5"
-var warning = "#fbbf24"
-var warningPanel = "#241b0d"
-var warningBorder = "#7c5a14"
-var warningText = "#fde68a"
-var success = "#34d399"
-var successFill = "#065f46"
-var successFillHover = "#047857"
-var successBorder = "#10b981"
+var error = "#ff453a"
+var errorPanel = "#3b1719"
+var errorBorder = "#ff453a"
+var errorText = "#ff8f87"
+var warning = "#ffd60a"
+var warningPanel = "#332a10"
+var warningBorder = "#b89b0e"
+var warningText = "#ffe066"
+var success = "#30d158"
+var successFill = "#248a3d"
+var successFillHover = "#2ea54b"
+var successBorder = "#30d158"
 // Badge ground for success-coloured text; successFill is too light for it to reach AA.
-var successPanel = "#064e3b"
+var successPanel = "#123f22"
 // Neutral "this is extra information", not a state: the Alpha channel-view dot and the timeline
 // zoom readout. It used to be #38bdf8, byte-identical to sourceA, so an image-workspace badge
 // read as "source A". Green is the one saturated hue band still clear of all three sources.
@@ -68,27 +82,27 @@ var successPanel = "#064e3b"
 var information = "#22c55e"
 
 // These alpha-bearing colours are intentional semantic overlays, not popup backgrounds.
-var modalScrim = "#b3070a10"
-var oscPanel = "#ed151c28"
-var thumbnailPanel = "#f21a2231"
-var thumbnailWell = "#05080d"
+var modalScrim = "#a6000000"
+var oscPanel = "#ed1f1f21"
+var thumbnailPanel = "#f229292c"
+var thumbnailWell = "#0a0a0b"
 
 // Translucent overlays drawn on top of footage: they must stay legible over bright pixels.
-var stageLabel = "#c7090d15"
-var stageLabelBorder = "#2d3b50"
-var oscGlass = "#eb141b27"
-var oscBorder = "#33435b"
-var oscGlassHover = "#f21a2332"
+var stageLabel = "#c71c1c1e"
+var stageLabelBorder = "#2bffffff"
+var oscGlass = "#eb1f1f21"
+var oscBorder = "#2bffffff"
+var oscGlassHover = "#f2262629"
 // Drag-and-drop scrim. Heavier than modalScrim so the drop hint stays legible over bright
 // footage; nothing behind it needs to be read while a file is being dragged.
-var dropScrim = "#df0b1421"
+var dropScrim = "#e00a0a0c"
 
 // The stage itself: the well behind footage and the marks drawn on the picture. Their
 // translucency lives in the colour, never in `opacity`, so child items cannot fade with them.
-var stageWell = "#06080d"
+var stageWell = "#050506"
 var stageDivider = "#bfd8e2f2"
 var lineHalo = "#4d000000"
-var selectionFill = "#223b82f6"
+var selectionFill = "#220a84ff"
 var cropFill = "#2214b8a6"
 var cropBorder = "#5eead4"
 // Pixel probe. Yellow stays clear of the accent-blue selection, the teal crop and every
@@ -98,31 +112,39 @@ var probeLine = "#d9facc15"
 var probeLineMuted = "#55ffffff"
 var probePip = "#ccffffff"
 
-var timelineRail = "#243146"
+var timelineRail = "#2e2e31"
 // In/out band: accentText at 30 % alpha, so the brackets drawn on top of it stay fully opaque.
-var rangeBand = "#4d7cb4ff"
+var rangeBand = "#4d5aabff"
 // Alignment markers. A missing frame is a real gap and uses error; the other kinds only need
 // to be told apart from each other.
 //
-// These four deliberately sit outside the A/B/C source-identity hues (sky #38bdf8 198 deg,
-// orange #fb923c 27 deg, violet #a78bfa 255 deg). The rail is 4-11 px wide, so a marker that
+// These four deliberately sit outside the A/B/C source-identity hues (cyan, orange, purple).
+// The extra-frame marker is pink to keep it clear of source C. The rail is 4-11 px wide, so a marker that
 // merely *resembles* a source chip reads as "this is source B" instead of "this frame repeated":
 // duplicate and information used to be byte-identical to sourceB and sourceA, and extra was
-// ~6 deg from sourceC. Anchor and other are near-neutral, which separates them from every
+// too close to sourceC. Anchor and other are near-neutral, which separates them from every
 // saturated hue by chroma rather than by hue. `ui.vcs_theme` asserts the separation.
 var markerDuplicate = "#a3e635"
-var markerExtra = "#f0abfc"
+var markerExtra = "#f4a4ca"
 var markerAnchor = "#e2e8f0"
 var markerOther = "#a8a29e"
-var keycap = "#111827"
-var keycapBorder = "#2f3d52"
+var keycap = "#2a2a2c"
+var keycapBorder = "#454548"
 
-// Shape and interaction tokens.
-var radiusSmall = 4
-var radiusMedium = 6
-var radiusLarge = 8
-var radiusCard = 12
+// Shape and interaction tokens. Larger, more uniform radii follow Apple's continuous-corner
+// language: small controls round at 8, cards float at 18.
+var radiusSmall = 8
+var radiusMedium = 10
+var radiusLarge = 12
+var radiusCard = 18
 var radiusPill = 999
+
+// Animation tokens. macOS UI moves on ~160-220 ms OutCubic springs, not linear 80 ms fades.
+var animationFast = 120
+var animationBase = 180
+var animationSlow = 260
+var animationEasing = "easeOutCubic"
+var animationEasingSpring = "easeOutBack"
 
 // Typography tokens (Qt logical pixels, never source pixels). Body copy is 14; 12 is the
 // secondary size for muted captions, status readouts and diagnostics; 16 leads groups.
@@ -183,26 +205,30 @@ var nearbyFramesHeightMax = 184
 // squeezing text or controls.
 var canvasMinimumWidth = 600
 
-var fluentHover = "#14ffffff"
-var fluentPressed = "#0cffffff"
-var subtleBorder = "#1fffffff"
+// Flat-control hover/press veils. One step stronger than `controlHover`/`controlPressed`
+// would read as a fill; these stay a whisper so toolbars do not flicker.
+var fluentHover = "#1fffffff"
+var fluentPressed = "#33ffffff"
+var subtleBorder = "#24ffffff"
 
-// Source identity follows the application icon: A is sky, B is orange, C is violet. Use the
-// helpers so chips, badges, labels and cards cannot assign different colours to one slot.
-var sourceA = "#38bdf8"
-var sourceABackground = "#0b2536"
-var sourceABorder = "#0e7fb8"
+// Source identity follows the application icon: A is system blue, B is system orange, C is
+// system purple — macOS dark-mode system colors, desaturated enough to read as identity, not
+// decoration. Use the helpers so chips, badges, labels and cards cannot assign different
+// colours to one slot.
+var sourceA = "#64d2ff"
+var sourceABackground = "#0a2a3a"
+var sourceABorder = "#0a84ff"
 
-var sourceB = "#fb923c"
-var sourceBBackground = "#33190a"
-var sourceBBorder = "#c2560f"
+var sourceB = "#ff9f0a"
+var sourceBBackground = "#3a2208"
+var sourceBBorder = "#ff9f0a"
 
-var sourceC = "#a78bfa"
-var sourceCBackground = "#241640"
-var sourceCBorder = "#7c5ce0"
+var sourceC = "#bf5af2"
+var sourceCBackground = "#2a1540"
+var sourceCBorder = "#bf5af2"
 
 // Dark text for letters drawn on a filled source colour.
-var sourceInk = "#0b0f17"
+var sourceInk = "#0c0c0e"
 
 function sourceColor(slot) {
     return slot === 0 ? sourceA : (slot === 1 ? sourceB : sourceC);

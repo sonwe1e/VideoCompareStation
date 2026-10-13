@@ -24,6 +24,7 @@
         <file alias="ReviewActionButton.qml">qml/ReviewActionButton.qml</file>
         <file alias="ReviewOffsetSpinBox.qml">qml/ReviewOffsetSpinBox.qml</file>
         <file alias="ToolbarCombo.qml">qml/ToolbarCombo.qml</file>
+        <file alias="VcsScrollBar.qml">qml/VcsScrollBar.qml</file>
         <file alias="TransportBar.qml">qml/TransportBar.qml</file>
         <file alias="WipeHandle.qml">qml/WipeHandle.qml</file>
         <file alias="EmptyReviewView.qml">qml/EmptyReviewView.qml</file>

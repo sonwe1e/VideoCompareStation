@@ -2,12 +2,18 @@ import QtQuick
 import QtQuick.Controls
 import QtTest
 import "../../../../src/ui_qml/qml" as Dvs
+import "../../../../src/ui_qml/qml/VcsTheme.js" as Theme
 
 Item {
     id: root
 
     width: 720
     height: 520
+
+    // The header/footer opaque-plate samples must follow the theme token they assert, so a
+    // palette change updates this probe without weakening the contract: the point is that the
+    // header paints its own opaque panel surface over the magenta plate below.
+    readonly property color themePanel: Theme.panel
 
     Rectangle {
         anchors.fill: parent
@@ -100,10 +106,10 @@ Item {
             const headerX = Math.round(headerPoint.x * scaleX);
             const headerY = Math.round(headerPoint.y * scaleY);
             compare(opened.alpha(headerX, headerY), 255);
-            // Theme.panel (#151c28): the header paints its own opaque surface over the magenta.
-            fuzzyCompare(opened.red(headerX, headerY), 21, 3);
-            fuzzyCompare(opened.green(headerX, headerY), 28, 3);
-            fuzzyCompare(opened.blue(headerX, headerY), 40, 3);
+            // Theme.panel: the header paints its own opaque surface over the magenta.
+            fuzzyCompare(opened.red(headerX, headerY), Math.round(root.themePanel.r * 255), 3);
+            fuzzyCompare(opened.green(headerX, headerY), Math.round(root.themePanel.g * 255), 3);
+            fuzzyCompare(opened.blue(headerX, headerY), Math.round(root.themePanel.b * 255), 3);
 
             // An opaque backdrop has alpha 255 even through a hole. Check the actual chrome
             // colors on both sides of each seam, including the 10px square corner-fill strips.

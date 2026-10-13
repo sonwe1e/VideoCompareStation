@@ -3715,7 +3715,7 @@ ApplicationWindow {
         accentColor: root.accentColor
         primaryTextColor: root.primaryTextColor
         mutedTextColor: root.mutedTextColor
-        chromeVisible: root.chromeVisible
+        chromeVisible: root.chromeVisible && root.sourceCount > 0
         // Lift the viewport's own corner controls clear of the floating transport. 0 when the
         // transport is docked or hidden, so the docked layout is byte-for-byte unchanged.
         bottomOverlayInset: root.transportOverlayInset

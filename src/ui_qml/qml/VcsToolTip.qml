@@ -10,7 +10,7 @@ ToolTip {
     objectName: "vcsToolTip"
     delay: 500
     timeout: 6000
-    padding: 8
+    padding: 10
     margins: 8
     popupType: Popup.Item
 
@@ -23,9 +23,8 @@ ToolTip {
 
     background: Rectangle {
         objectName: "vcsToolTipBackground"
-        color: Theme.raisedPanel
-        radius: 5
-        border.width: 1
-        border.color: Theme.menuBorder
+        color: Theme.menu
+        radius: Theme.radiusSmall
+        border.width: 0
     }
 }

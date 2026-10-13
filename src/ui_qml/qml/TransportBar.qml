@@ -123,7 +123,10 @@ Item {
         // Neutral chips read as ordinary controls; export keeps a green edge because it is the only
         // chip that writes a file.
         color: !chip.chipEnabled ? Theme.disabledPanel : (chip.chipActive ? Theme.accentFill : (chipMouse.containsMouse ? Theme.controlHover : Theme.control))
-        border.color: !chip.chipEnabled ? Theme.disabledBorder : (chip.chipActive ? Theme.accent : (chip.prominent ? (chipMouse.containsMouse ? Theme.successBorder : Theme.successFill) : (chipMouse.containsMouse ? Theme.borderHover : Theme.controlBorder)))
+        // Flat by default: the fill and the label carry the state. Only the active range keeps
+        // an accent hairline, because it marks a selected interval rather than a hover.
+        border.color: !chip.chipEnabled ? "transparent" : (chip.chipActive ? Theme.accent : (chip.prominent ? (chipMouse.containsMouse ? Theme.successBorder : Theme.successFill) : "transparent"))
+        border.width: 1
 
         Behavior on color {
             ColorAnimation {
@@ -183,7 +186,7 @@ Item {
         radius: Theme.radiusSmall
         color: option.isSelected ? Theme.controlChecked : (optionMouse.pressed ? Theme.fluentPressed : (optionMouse.containsMouse ? Theme.fluentHover : "transparent"))
         border.width: 1
-        border.color: option.isSelected ? Theme.accent : "transparent"
+        border.color: "transparent"
 
         Behavior on color {
             ColorAnimation {

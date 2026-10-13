@@ -11,7 +11,7 @@ ToolButton {
     property url iconSource: ""
     property int iconExtent: 20
     property int labelPixelSize: 16
-    property real controlRadius: 6
+    property real controlRadius: Theme.radiusMedium
     property bool prominent: false
     property int toolTipDelay: 500
 
@@ -22,6 +22,7 @@ ToolButton {
     // show a surface on hover; the prominent variant is the one filled action in its group.
     flat: true
     activeFocusOnTab: true
+    hoverEnabled: true
     Accessible.name: helpText.length > 0 ? helpText.split("\n")[0] : text
     Accessible.description: helpText
 
@@ -33,18 +34,19 @@ ToolButton {
             sourceSize.width: control.iconExtent
             sourceSize.height: control.iconExtent
             fillMode: Image.PreserveAspectFit
-            opacity: !control.enabled ? 0.35 : (control.prominent || control.hovered ? 1.0 : 0.86)
-            scale: control.down ? 0.92 : 1.0
+            opacity: !control.enabled ? 0.32 : (control.prominent || control.hovered ? 1.0 : 0.82)
+            scale: control.down ? 0.9 : 1.0
 
             Behavior on scale {
                 NumberAnimation {
-                    duration: 80
-                    easing.type: Easing.OutQuad
+                    duration: Theme.animationFast
+                    easing.type: Easing.OutCubic
                 }
             }
             Behavior on opacity {
                 NumberAnimation {
-                    duration: 120
+                    duration: Theme.animationBase
+                    easing.type: Easing.OutCubic
                 }
             }
         }
@@ -68,31 +70,26 @@ ToolButton {
                 return control.flat ? "transparent" : Theme.disabledPanel;
             if (control.prominent)
                 return control.down ? Theme.accentPressed : (control.hovered ? Theme.accentHover : Theme.accentFill);
+            if (control.checked)
+                return Theme.controlChecked;
             if (control.flat)
                 return control.down ? Theme.fluentPressed : (control.hovered ? Theme.fluentHover : "transparent");
             return control.down ? Theme.controlPressed : (control.hovered ? Theme.controlHover : Theme.control);
         }
-        border.width: control.activeFocus ? 2 : 1
-        border.color: {
-            if (control.activeFocus)
-                return control.prominent ? Theme.strongFocus : Theme.focus;
-            if (!control.enabled)
-                return control.flat ? "transparent" : Theme.disabledBorder;
-            if (control.prominent)
-                return control.hovered ? Theme.focus : Theme.accent;
-            if (control.flat)
-                return control.hovered ? Theme.subtleBorder : "transparent";
-            return Theme.controlBorder;
-        }
+        // Apple-style flat controls carry no resting outline: hover and press are a fill, and
+        // the only line the user sees is the keyboard focus ring.
+        border.width: control.visualFocus ? 2 : 0
+        border.color: Theme.focus
 
         Behavior on color {
             ColorAnimation {
-                duration: 120
+                duration: Theme.animationBase
+                easing.type: Easing.OutCubic
             }
         }
         Behavior on border.color {
             ColorAnimation {
-                duration: 120
+                duration: Theme.animationFast
             }
         }
     }

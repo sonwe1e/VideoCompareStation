@@ -186,7 +186,7 @@ Rectangle {
                 readonly property real chipLabelPlainWidth: letterBadge.width + separatorOne.implicitWidth + filenameLabel.implicitWidth + 10
                 readonly property real chipLabelTaggedWidth: chipLabelPlainWidth + (chip.isCanvasFocus ? directLookTag.implicitWidth + 10 : 0) + (chip.isReference ? referenceTag.implicitWidth + separatorTwo.implicitWidth + 10 : 0) + (chip.isTimelineMaster ? masterTag.implicitWidth + separatorThree.implicitWidth + 10 : 0)
                 width: Math.min(280, Math.max(128, ((chip.isReference || chip.isTimelineMaster || chip.isCanvasFocus) ? chipLabelTaggedWidth : chipLabelPlainWidth) + (control.singleMode ? 24 : 84)))
-                radius: 8
+                radius: Theme.radiusLarge
                 readonly property string resolvedSourceIdentity: chip.sourceIdentity.length > 0 ? chip.sourceIdentity : (chip.sourceId >= 0 && chip.sourceId < control.sourceIdentities.length ? String(control.sourceIdentities[chip.sourceId]) : "")
                 // D08: timeline master and comparison reference are independent projections.
                 readonly property bool isTimelineMaster: chip.resolvedSourceIdentity.length > 0 ? chip.resolvedSourceIdentity === control.canonicalSourceIdentity : chip.sourceId === control.canonicalSourceIndex
@@ -211,7 +211,7 @@ Rectangle {
                 // Direct look wins the highlight: it names what the whole canvas is showing
                 // right now, while selection is only a management-mode batch state.
                 color: chip.isCanvasFocus ? chip.sourceBg : (chip.selected ? chip.sourceBg : (chip.isReference ? chip.sourceBg : Theme.raisedPanel))
-                border.color: chip.isCanvasFocus ? chip.sourceAccent : (chip.selected ? chip.sourceAccent : (chip.isReference ? chip.sourceAccent : (chipHover.hovered ? chip.sourceBorder : Theme.border)))
+                border.color: chip.isCanvasFocus ? chip.sourceAccent : (chip.selected ? chip.sourceAccent : (chip.isReference ? chip.sourceAccent : (chipHover.hovered ? chip.sourceBorder : "transparent")))
                 border.width: (chip.isCanvasFocus || chip.selected || chip.isReference) ? 1.5 : 1
 
                 // I01: one dropped video on this chip replaces this source. The visible
@@ -240,7 +240,7 @@ Rectangle {
                     objectName: "sourceChipDropHint-" + chip.sourceId
                     visible: chip.dropReplaceHovered
                     anchors.fill: parent
-                    radius: 8
+                    radius: Theme.radiusLarge
                     color: Theme.dropScrim
                     border.color: control.accentColor
                     border.width: 2

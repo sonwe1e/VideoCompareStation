@@ -17,12 +17,12 @@ Menu {
     property bool menuItemEnabled: true
     property color menuBackgroundColor: Theme.menu
     property color menuBorderColor: Theme.menuBorder
-    property real menuRadius: 8
+    property real menuRadius: Theme.radiusLarge
     property real menuWidth: 280
 
     topMargin: 6
     bottomMargin: 6
-    padding: 4
+    padding: 6
     width: control.menuWidth
     popupType: Popup.Window
     cascade: true

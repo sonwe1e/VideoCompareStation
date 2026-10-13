@@ -2415,6 +2415,10 @@ TEST(MainQmlContractTests, StageStatesAreMutuallyExclusiveAndDriveTheRightSurfac
     ASSERT_NE(emptyView, nullptr);
     EXPECT_TRUE(emptyView->isVisible()) << "first blank shows the drop-card entry points";
     EXPECT_FALSE(overlay->isVisible()) << "nothing has failed and nothing is loading";
+    auto* const viewport =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("mediaViewportFocusTarget"));
+    ASSERT_NE(viewport, nullptr);
+    EXPECT_FALSE(viewport->property("chromeVisible").toBool());
 
     // waitingFrame: the old picture stays while the next frame is on its way. A pending
     // navigation raises framePending; after the short debounce the waiting state shows
@@ -5710,6 +5714,65 @@ TEST(MainQmlContractTests, PairComboNamesTheTwoRealSourceFiles) {
 // enum. The 局部联动 task reaches the existing RoiTriplet preset end-to-end: the surface
 // maps it to the three-column panorama, the strip stages one window per source, and entering
 // it is a pure view change (no playback command crosses the boundary).
+TEST(MainQmlContractTests, ModeBarReflowsWithoutOverlappingActions) {
+    ThreeSourceFocusHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    auto* const bar = harness.root->findChild<QQuickItem*>(QStringLiteral("compareModeBar"));
+    ASSERT_NE(bar, nullptr);
+    const QStringList names{QStringLiteral("sideModeButton"),
+                            QStringLiteral("wipeModeButton"),
+                            QStringLiteral("roiTripletTaskButton"),
+                            QStringLiteral("diffModeButton"),
+                            QStringLiteral("differencePeekButton"),
+                            QStringLiteral("pairCombo"),
+                            QStringLiteral("switchCandidateButton"),
+                            QStringLiteral("canvasFocusAButton"),
+                            QStringLiteral("canvasFocusBButton"),
+                            QStringLiteral("canvasFocusCButton"),
+                            QStringLiteral("layoutModesButton"),
+                            QStringLiteral("copyComparisonButton"),
+                            QStringLiteral("inspectorToggleButton")};
+    harness.window->show();
+    for (const int width : {960, 1280, 1440, 1920}) {
+        harness.window->resize(width, 720);
+        for (const auto mode : {ReviewPreferencesController::ViewMode::SideBySide,
+                                ReviewPreferencesController::ViewMode::Difference}) {
+            harness.preferences.setViewMode(mode);
+            QElapsedTimer layoutWait;
+            layoutWait.start();
+            while (layoutWait.elapsed() < 250) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+                QThread::msleep(5U);
+            }
+            std::vector<QRectF> occupied;
+            for (const auto& name : names) {
+                auto* const button = findItemByName(bar, name);
+                ASSERT_NE(button, nullptr) << name.toStdString();
+                if (!button->isVisible()) {
+                    continue;
+                }
+                const QRectF rect{button->mapToItem(bar, QPointF{}), button->size()};
+                EXPECT_TRUE((QRectF{0, 0, bar->width(), bar->height()}.contains(rect)))
+                    << width << " " << name.toStdString();
+                for (const auto& previous : occupied) {
+                    EXPECT_FALSE(rect.intersects(previous))
+                        << width << " " << name.toStdString() << " overlaps another action";
+                }
+                occupied.push_back(rect);
+            }
+            EXPECT_GE(occupied.size(), 10U);
+            const QString evidence = qEnvironmentVariable("DVS_REVIEW_EVIDENCE_DIR");
+            if (!evidence.isEmpty()) {
+                ASSERT_TRUE(QDir().mkpath(evidence));
+                ASSERT_TRUE(harness.window->grabWindow().save(
+                    QDir{evidence}.filePath(QStringLiteral("compare-toolbar-%1-%2.png")
+                                                .arg(width)
+                                                .arg(static_cast<int>(mode)))));
+            }
+        }
+    }
+}
+
 TEST(MainQmlContractTests, ModeBarOrganizesTasksWithLayoutSubmenu) {
     ThreeSourceFocusHarness harness;
     ASSERT_TRUE(harness.create()) << harness.error;
@@ -6883,11 +6946,16 @@ TEST(MainQmlContractTests, ImageEditScaleDialogResizesTheWorkingCopy) {
     ASSERT_NE(undoButton, nullptr);
     ASSERT_NE(openButton, nullptr);
     ASSERT_NE(saveCopyButton, nullptr);
-    EXPECT_TRUE(openButton->property("prominent").toBool());
+    EXPECT_FALSE(openButton->property("prominent").toBool())
+        << "once an image is open, the opening action steps back";
+    auto* const modeRow = harness.root->findChild<QQuickItem*>(QStringLiteral("imageModeRow"));
+    ASSERT_NE(modeRow, nullptr);
+    EXPECT_TRUE(modeRow->isVisible());
 
     ASSERT_TRUE(QMetaObject::invokeMethod(startButton, "clicked"));
     harness.settle();
     EXPECT_TRUE(scaleButton->isVisible());
+    EXPECT_FALSE(modeRow->isVisible()) << "comparison modes do not compete with editing tools";
     // One filled button per view: while editing, 另存副本… is the primary action and
     // 打开图片… steps back to a neutral button.
     EXPECT_FALSE(openButton->property("prominent").toBool());
@@ -6963,6 +7031,7 @@ TEST(MainQmlContractTests, ImageEditScaleDialogResizesTheWorkingCopy) {
     ASSERT_TRUE(QMetaObject::invokeMethod(startButton, "clicked"));
     harness.settle();
     EXPECT_FALSE(harness.imageEdit.active());
+    EXPECT_TRUE(modeRow->isVisible()) << "leaving edit mode restores comparison controls";
 }
 
 // The canvas-fill dialog's contract: the image keeps its pixels and lands in the middle of the
@@ -8926,6 +8995,16 @@ TEST(MainQmlContractTests, EmptyReviewViewExposesImageAndFolderEntryPoints) {
         harness.root->findChild<QQuickItem*>(QStringLiteral("emptyCompareFoldersButton"));
     ASSERT_NE(compareFoldersBtn, nullptr);
     EXPECT_TRUE(compareFoldersBtn->isVisible());
+    const QString evidence = qEnvironmentVariable("DVS_REVIEW_EVIDENCE_DIR");
+    if (!evidence.isEmpty()) {
+        ASSERT_TRUE(QDir().mkpath(evidence));
+        for (const QSize size : {QSize{960, 640}, QSize{1440, 900}}) {
+            harness.window->resize(size);
+            harness.settleAnimations();
+            ASSERT_TRUE(harness.window->grabWindow().save(
+                QDir{evidence}.filePath(QStringLiteral("welcome-%1.png").arg(size.width()))));
+        }
+    }
 }
 
 TEST(MainQmlContractTests, ImageWorkspaceZoomResetAndTrueSizeContract) {

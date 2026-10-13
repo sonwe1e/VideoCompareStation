@@ -73,6 +73,30 @@ Item {
         name: "VcsTheme"
         when: windowShown
 
+        function test_control_colours_are_valid_and_text_stays_readable() {
+            const colours = [Theme.control, Theme.controlHover, Theme.controlPressed,
+                Theme.controlChecked, Theme.controlBorder, Theme.accentFill,
+                Theme.accentHover, Theme.accentPressed, Theme.mutedText];
+            for (let i = 0; i < colours.length; ++i)
+                verify(/^#([0-9a-f]{6}|[0-9a-f]{8})$/i.test(colours[i]), colours[i]);
+            function luminance(hex) {
+                const channels = [1, 3, 5].map(function(offset) {
+                    const value = parseInt(hex.substring(offset, offset + 2), 16) / 255;
+                    return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+                });
+                return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+            }
+            const pairs = [[Theme.inverseText, Theme.accentFill],
+                [Theme.inverseText, Theme.accentHover], [Theme.inverseText, Theme.accentPressed],
+                [Theme.mutedText, Theme.panel], [Theme.mutedText, Theme.menu],
+                [Theme.mutedText, Theme.raisedPanel]];
+            for (let i = 0; i < pairs.length; ++i) {
+                const a = luminance(pairs[i][0]);
+                const b = luminance(pairs[i][1]);
+                verify((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) >= 4.5, pairs[i].join(" on "));
+            }
+        }
+
         function test_timeline_markers_avoid_every_source_identity_hue() {
             const kinds = ["duplicate", "extra", "anchor", "other"];
             for (let i = 0; i < kinds.length; ++i) {

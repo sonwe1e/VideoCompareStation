@@ -177,17 +177,23 @@ Item {
             wait(0);
             verify(target.footageValid);
             const image = grabImage(root);
+            // grabImage returns device pixels; mapToItem returns logical pixels. On a
+            // scaled desktop the unconverted point samples the white area above the strip.
+            function pixelAt(point) {
+                return image.pixel(Math.round(point.x * image.width / root.width),
+                    Math.round(point.y * image.height / root.height));
+            }
             // Centre of the footage hole: the plate below (the overdraw stand-in) must be visible.
             const center = target.mapToItem(root, target.footageX + target.footageWidth / 2, target.footageY + target.footageHeight / 2);
-            const centerColor = image.pixel(center.x, center.y);
+            const centerColor = pixelAt(center);
             verify(centerColor.r > 0.9 && centerColor.g < 0.1, "the footage hole shows " + centerColor.toString() + " instead of the layer below");
             // The letterbox bar above the footage stays canvas-dark: only the hole is transparent.
             const barPoint = target.mapToItem(root, target.width / 2, Math.max(1, target.footageY - 4));
-            const barColor = image.pixel(barPoint.x, barPoint.y);
+            const barColor = pixelAt(barPoint);
             verify(barColor.r < 0.2 && barColor.g < 0.2 && barColor.b < 0.25, "the letterbox bar shows " + barColor.toString());
             // The header band keeps its opaque chrome plate: transparency is scoped to the holes.
             const header = strip.mapToItem(root, strip.width - 10, 12);
-            const headerColor = image.pixel(header.x, header.y);
+            const headerColor = pixelAt(header);
             verify(headerColor.r < 0.2 && headerColor.g < 0.25 && headerColor.b < 0.3, "the header plate shows " + headerColor.toString());
         }
 

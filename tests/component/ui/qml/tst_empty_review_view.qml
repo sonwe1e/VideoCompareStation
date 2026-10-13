@@ -46,5 +46,29 @@ Item {
             verify(emptyView.visible);
             verify(!hiddenOsc.visible);
         }
+
+        function test_entry_points_remain_inside_card_at_supported_sizes() {
+            const names = ["emptyOpenVideosButton", "emptyOpenImageButton", "emptyOpenVideoFolderButton", "emptyOpenImagePairButton", "emptyCompareFoldersButton"];
+            const sizes = [[960, 640], [1280, 720], [1920, 1080]];
+            const card = findChild(emptyView, "emptyReviewCard");
+            verify(card);
+            for (let s = 0; s < sizes.length; ++s) {
+                root.width = sizes[s][0];
+                root.height = sizes[s][1];
+                wait(30);
+                for (let i = 0; i < names.length; ++i) {
+                    const button = findChild(emptyView, names[i]);
+                    verify(button && button.visible && button.enabled, names[i]);
+                    const point = button.mapToItem(card, 0, 0);
+                    verify(point.x >= 0 && point.y >= 0, names[i]);
+                    verify(point.x + button.width <= card.width, names[i]);
+                    verify(point.y + button.height <= card.height, names[i]);
+                    verify(button.height >= 32, names[i]);
+                    verify(button.contentItem.implicitWidth <= button.availableWidth, names[i] + " label fits");
+                }
+            }
+            root.width = 960;
+            root.height = 640;
+        }
     }
 }

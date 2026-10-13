@@ -84,10 +84,16 @@ Rectangle {
     readonly property int canvasFocusRequestSourceSlot: 2
 
     objectName: "compareModeBar"
-    height: sourceCount > 1 ? Theme.barRowHeight : 0
+    height: sourceCount > 1 ? Math.max(Theme.barRowHeight, modeActions.implicitHeight + 8) : 0
     visible: sourceCount > 1
     color: "transparent"
     border.color: "transparent"
+
+    // Flows created before the window is exposed otherwise keep their width-zero layout
+    // until the first render. Mode changes also reveal conditional actions between frames.
+    Component.onCompleted: modeActions.forceLayout()
+    onCurrentModeChanged: Qt.callLater(modeActions.forceLayout)
+    onSourceCountChanged: Qt.callLater(modeActions.forceLayout)
 
     // The mode bar is the last chrome row above the stage; one hairline separates the two.
     Rectangle {
@@ -100,12 +106,19 @@ Rectangle {
         }
     }
 
-    Row {
+    Flow {
+        id: modeActions
+
+        objectName: "compareModeActions"
         spacing: 6
+        onWidthChanged: forceLayout()
         anchors {
             left: parent.left
             leftMargin: 12
-            verticalCenter: parent.verticalCenter
+            right: copyComparisonButton.left
+            rightMargin: 12
+            top: parent.top
+            topMargin: 4
         }
 
         // qmllint disable import unqualified unresolved-type
@@ -159,9 +172,8 @@ Rectangle {
         Rectangle {
             visible: control.sourceCount === 3 && control.pairRelevant
             width: 1
-            height: 20
+            height: Theme.hitAreaMinimum
             color: Theme.border
-            anchors.verticalCenter: parent.verticalCenter
         }
 
         ToolbarCombo {
@@ -212,9 +224,8 @@ Rectangle {
         Rectangle {
             visible: control.sourceCount > 1
             width: 1
-            height: 20
+            height: Theme.hitAreaMinimum
             color: Theme.border
-            anchors.verticalCenter: parent.verticalCenter
         }
 
         Repeater {
@@ -320,17 +331,7 @@ Rectangle {
                 return "transparent";
             }
             border.width: modeButton.activeFocus ? 2 : 1
-            border.color: {
-                if (modeButton.activeFocus)
-                    return Theme.focus;
-                if (!modeButton.enabled)
-                    return "transparent";
-                if (modeButton.checked)
-                    return Theme.accent;
-                if (modeButton.hovered)
-                    return Theme.subtleBorder;
-                return "transparent";
-            }
+            border.color: modeButton.activeFocus ? Theme.focus : "transparent"
 
             Behavior on color {
                 ColorAnimation {
@@ -384,7 +385,7 @@ Rectangle {
                 visible: focusButton.referenceBadge
                 width: gtBadgeLabel.implicitWidth + 8
                 height: 18
-                radius: 3
+                radius: height / 2
                 color: Theme.controlChecked
                 border.width: 1
                 border.color: Theme.accent
@@ -418,17 +419,7 @@ Rectangle {
                 return "transparent";
             }
             border.width: focusButton.activeFocus ? 2 : 1
-            border.color: {
-                if (focusButton.activeFocus)
-                    return Theme.focus;
-                if (!focusButton.enabled)
-                    return "transparent";
-                if (focusButton.checked)
-                    return Theme.accent;
-                if (focusButton.hovered)
-                    return Theme.subtleBorder;
-                return "transparent";
-            }
+            border.color: focusButton.activeFocus ? Theme.focus : "transparent"
 
             Behavior on color {
                 ColorAnimation {
@@ -484,17 +475,7 @@ Rectangle {
                 return "transparent";
             }
             border.width: diffModeButton.activeFocus ? 2 : 1
-            border.color: {
-                if (diffModeButton.activeFocus)
-                    return Theme.focus;
-                if (!diffModeButton.enabled)
-                    return "transparent";
-                if (diffModeButton.checked)
-                    return Theme.accent;
-                if (diffModeButton.hovered)
-                    return Theme.subtleBorder;
-                return "transparent";
-            }
+            border.color: diffModeButton.activeFocus ? Theme.focus : "transparent"
 
             Behavior on color {
                 ColorAnimation {
@@ -559,7 +540,8 @@ Rectangle {
         anchors {
             right: parent.right
             rightMargin: 12
-            verticalCenter: parent.verticalCenter
+            top: parent.top
+            topMargin: 4
         }
     }
 
@@ -578,7 +560,8 @@ Rectangle {
         anchors {
             right: inspectorToggleButton.left
             rightMargin: 8
-            verticalCenter: parent.verticalCenter
+            top: parent.top
+            topMargin: 4
         }
     }
 }

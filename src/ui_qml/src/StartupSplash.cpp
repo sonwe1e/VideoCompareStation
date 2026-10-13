@@ -17,12 +17,12 @@ namespace dvs::ui {
 namespace {
 
 #if defined(_WIN32)
-// The review shell clears to this colour (see Theme.background in
+// The review shell clears to this colour (see Theme.window in
 // src/ui_qml/qml/VcsTheme.js). Painting the splash the same colour means the
 // handover from splash to main window is not a visible brightness jump.
-constexpr COLORREF kSplashBackground = RGB(0x09, 0x0d, 0x14);
-constexpr COLORREF kSplashTitleColor = RGB(0xe2, 0xe8, 0xf0);
-constexpr COLORREF kSplashSubtitleColor = RGB(0x94, 0xa3, 0xb8);
+constexpr COLORREF kSplashBackground = RGB(0x1c, 0x1c, 0x1e);
+constexpr COLORREF kSplashTitleColor = RGB(0xf5, 0xf5, 0xf7);
+constexpr COLORREF kSplashSubtitleColor = RGB(0xa5, 0xa5, 0xab);
 constexpr wchar_t kSplashClassName[] = L"CompareStationStartupSplash";
 // The splash must be an *owned* window. Process.CloseMainWindow() - and anything else that guesses
 // "the process main window" by walking top-level windows in enumeration order - takes the first

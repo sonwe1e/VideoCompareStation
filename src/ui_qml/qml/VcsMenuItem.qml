@@ -14,7 +14,7 @@ MenuItem {
     property color textColor: Theme.primaryText
     property color disabledTextColor: Theme.disabledText
     property color shortcutColor: Theme.mutedText
-    property color hoverColor: Theme.controlPressed
+    property color hoverColor: Theme.fluentHover
     property color checkColor: Theme.accent
     property color checkBackgroundColor: Theme.disabledPanel
     property color checkBorderColor: Theme.menuBorder

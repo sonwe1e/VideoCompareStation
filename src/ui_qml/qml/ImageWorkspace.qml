@@ -585,7 +585,7 @@ Rectangle {
         required property int modeValue
         // 0 = compare mode, 1 = channel observation, 2 = background under alpha.
         property int selectGroup: 0
-        property int chipWidth: 108
+        property int chipWidth: Math.max(64, contentItem.implicitWidth + 24)
         checkable: true
         checked: selectGroup === 0 ? control.compareMode === modeValue : selectGroup === 1 ? control.viewMode === modeValue : control.backgroundMode === modeValue
         mirrorsState: true
@@ -631,18 +631,8 @@ Rectangle {
                     return Theme.fluentHover;
                 return "transparent";
             }
-            border.width: chip.activeFocus ? 2 : 1
-            border.color: {
-                if (chip.activeFocus)
-                    return Theme.focus;
-                if (!chip.enabled)
-                    return "transparent";
-                if (chip.checked)
-                    return Theme.accent;
-                if (chip.hovered)
-                    return Theme.subtleBorder;
-                return "transparent";
-            }
+            border.width: chip.visualFocus ? 2 : 0
+            border.color: Theme.focus
 
             Behavior on color {
                 ColorAnimation {
@@ -1900,10 +1890,8 @@ Rectangle {
             margins: 12
         }
         height: commandColumn.implicitHeight + 20
-        radius: 10
-        color: Theme.panelElevated
-        border.width: 1
-        border.color: Theme.border
+        radius: Theme.radiusLarge
+        color: Theme.panel
 
         Column {
             id: commandColumn
@@ -1929,17 +1917,17 @@ Rectangle {
                 // See the forceLayout note in Component.onCompleted above.
                 onWidthChanged: forceLayout()
 
-                ReviewActionButton {
+                ImageCommandButton {
                     objectName: "imageOpenButton"
                     text: qsTr("打开图片…")
                     // Edit mode has its own primary action (另存副本…); one filled button per view.
-                    prominent: !control.editModeActive
+                    prominent: !control.hasPrimary && !control.editModeActive
                     implicitHeight: 30
                     leftPadding: 12
                     rightPadding: 12
                     onClicked: control.openImageRequested()
                 }
-                ReviewActionButton {
+                ImageCommandButton {
                     objectName: "imageOpenPairButton"
                     text: qsTr("打开图片对… ▾")
                     implicitHeight: 30
@@ -1970,7 +1958,7 @@ Rectangle {
                         }
                     }
                 }
-                ReviewActionButton {
+                ImageCommandButton {
                     objectName: "imageCloseButton"
                     text: qsTr("关闭图片")
                     implicitHeight: 30
@@ -1979,7 +1967,7 @@ Rectangle {
                     enabled: control.hasPrimary
                     onClicked: control.imageReview.closeAll()
                 }
-                ReviewActionButton {
+                ImageCommandButton {
                     objectName: "imageFitButton"
                     checkable: true
                     checked: !control.trueSize
@@ -1995,7 +1983,7 @@ Rectangle {
                             control.imageReview.resetView();
                     }
                 }
-                ReviewActionButton {
+                ImageCommandButton {
                     objectName: "imageTrueSizeButton"
                     checkable: true
                     checked: control.trueSize
@@ -2011,7 +1999,7 @@ Rectangle {
                             control.imageReview.setZoom(1.0);
                     }
                 }
-                ReviewActionButton {
+                ImageCommandButton {
                     objectName: "imageResetViewButton"
                     text: qsTr("重置视图")
                     implicitHeight: 30
@@ -2029,7 +2017,7 @@ Rectangle {
                     visible: control.hasFolders
                 }
 
-                ReviewActionButton {
+                ImageCommandButton {
                     objectName: "imageToggleSidebarButton"
                     // The label names the action it performs, so the button carries no checked tint.
                     text: control.sidebarVisible ? qsTr("隐藏列表") : qsTr("显示列表")
@@ -2048,6 +2036,7 @@ Rectangle {
                 id: modeRow
 
                 objectName: "imageModeRow"
+                visible: !control.editModeActive
                 width: parent.width
                 spacing: 8
                 // See the forceLayout note in Component.onCompleted above.
@@ -2076,7 +2065,7 @@ Rectangle {
                     modeValue: 7
                     visible: control.hasPair
                 }
-                ReviewActionButton {
+                ImageCommandButton {
                     objectName: "imageToggleSourceButton"
                     visible: control.canSwitchSingleSource && control.compareMode === 0
                     enabled: control.canSwitchSingleSource
@@ -2086,7 +2075,7 @@ Rectangle {
                     text: control.compareMode === 0 && control.singleViewShowSecondary ? qsTr("切至 A") : qsTr("切至 B")
                     onClicked: control.toggleSinglePairSource()
                 }
-                ReviewActionButton {
+                ImageCommandButton {
                     objectName: "imageSwapSidesButton"
                     visible: control.hasPair
                     implicitHeight: 30
@@ -2097,7 +2086,7 @@ Rectangle {
                     onClicked: control.swapSidesRequested()
                 }
 
-                ReviewActionButton {
+                ImageCommandButton {
                     objectName: "imageReplaceSidesButton"
                     text: qsTr("换图… ▾")
                     implicitHeight: 30
@@ -2131,7 +2120,7 @@ Rectangle {
                     visible: control.hasPair
                 }
 
-                ReviewActionButton {
+                ImageCommandButton {
                     objectName: "imageDiffModeButton"
                     text: control.diffModeLabel + " ▾"
                     implicitHeight: 30
@@ -2177,7 +2166,7 @@ Rectangle {
                 // Difference display gain. It amplifies only the rendered image; the peak/MAE
                 // readouts stay raw 8-bit deltas, so two candidates compared at the same gain remain
                 // visually comparable and the numbers never follow the display setting.
-                ReviewActionButton {
+                ImageCommandButton {
                     objectName: "imageDiffGainButton"
                     text: qsTr("差异放大 ×%1 ▾").arg(control.imageReview ? control.imageReview.diffGain : 4)
                     implicitHeight: 30
@@ -2239,7 +2228,7 @@ Rectangle {
                     }
                 }
 
-                ReviewActionButton {
+                ImageCommandButton {
                     objectName: "imageViewModeButton"
                     text: control.viewModeLabel + " ▾"
                     implicitHeight: 30
@@ -2272,7 +2261,7 @@ Rectangle {
                         }
                     }
                 }
-                ReviewActionButton {
+                ImageCommandButton {
                     objectName: "imageBackgroundButton"
                     text: control.backgroundModeLabel + " ▾"
                     implicitHeight: 30
@@ -2346,7 +2335,7 @@ Rectangle {
                         // See the forceLayout note in Component.onCompleted above.
                         onWidthChanged: forceLayout()
 
-                        EditButton {
+                        ImageCommandButton {
                             objectName: "imageEditStartButton"
                             // An action label, not a state: the filled button while editing is 另存副本….
                             text: control.editModeActive ? qsTr("结束编辑") : qsTr("编辑画面")
@@ -2364,7 +2353,7 @@ Rectangle {
                             hairlineHeight: 20
                         }
 
-                        EditButton {
+                        ImageCommandButton {
                             objectName: "imageEditToolCropButton"
                             visible: control.editModeActive
                             checkable: true
@@ -2373,7 +2362,7 @@ Rectangle {
                             text: qsTr("裁剪")
                             onClicked: control.editTool = "crop"
                         }
-                        EditButton {
+                        ImageCommandButton {
                             objectName: "imageEditToolSmartSelectButton"
                             visible: control.editModeActive
                             checkable: true
@@ -2383,7 +2372,7 @@ Rectangle {
                             helpText: qsTr("框选目标物体，AI 自动分割轮廓并抠出透明背景。")
                             onClicked: control.editTool = "smart_select"
                         }
-                        EditButton {
+                        ImageCommandButton {
                             objectName: "imageEditToolBrushButton"
                             visible: control.editModeActive
                             checkable: true
@@ -2392,7 +2381,7 @@ Rectangle {
                             text: qsTr("画笔")
                             onClicked: control.editTool = "brush"
                         }
-                        EditButton {
+                        ImageCommandButton {
                             objectName: "imageEditToolSelectButton"
                             visible: control.editModeActive
                             checkable: true
@@ -2404,7 +2393,7 @@ Rectangle {
                         }
 
                         // Drawing and annotation tools dropdown
-                        EditButton {
+                        ImageCommandButton {
                             objectName: "imageEditMoreToolsButton"
                             visible: control.editModeActive
                             text: control.imageEditToolLabel(control.editTool) + " ▾"
@@ -2486,14 +2475,14 @@ Rectangle {
 
                         // Whole-image geometry, not a brush: these change the working copy's size rather
                         // than the pixels under the cursor, so they sit together in their own group.
-                        EditButton {
+                        ImageCommandButton {
                             objectName: "imageEditScaleButton"
                             visible: control.editModeActive
                             text: qsTr("缩放…")
                             helpText: qsTr("把画面重采样到指定的像素尺寸；锁定比例时改一边会自动推算另一边。")
                             onClicked: imageEditDialogs.openScale()
                         }
-                        EditButton {
+                        ImageCommandButton {
                             objectName: "imageEditFillButton"
                             visible: control.editModeActive
                             text: qsTr("填充画布…")
@@ -2501,7 +2490,7 @@ Rectangle {
                             onClicked: imageEditDialogs.openFill()
                         }
 
-                        EditButton {
+                        ImageCommandButton {
                             objectName: "imageEditTransformButton"
                             visible: control.editModeActive
                             text: qsTr("旋转 / 翻转 ▾")
@@ -2548,7 +2537,7 @@ Rectangle {
                             hairlineHeight: 20
                         }
 
-                        EditButton {
+                        ImageCommandButton {
                             objectName: "imageEditUndoButton"
                             visible: control.editModeActive
                             text: qsTr("撤销")
@@ -2558,7 +2547,7 @@ Rectangle {
                                     control.imageEdit.undo();
                             }
                         }
-                        EditButton {
+                        ImageCommandButton {
                             objectName: "imageEditRedoButton"
                             visible: control.editModeActive
                             text: qsTr("重做")
@@ -2574,7 +2563,7 @@ Rectangle {
                             hairlineHeight: 20
                         }
 
-                        EditButton {
+                        ImageCommandButton {
                             objectName: "imageEditSaveCopyButton"
                             visible: control.editModeActive
                             prominent: true
@@ -2923,10 +2912,9 @@ Rectangle {
         }
     }
 
-    // Header buttons size to their label instead of the shared 112 px floor: the row
-    // is the widest thing in the header and 重做/另存副本 used to clip past the window
-    // edge well above the 960 px minimum width.
-    component EditButton: ReviewActionButton {
+    // File, view and edit actions share label-sized buttons. Short labels such as 100%
+    // must not reserve the same width as an opening action and push useful tools onto a new row.
+    component ImageCommandButton: ReviewActionButton {
         implicitHeight: 30
         leftPadding: 10
         rightPadding: 10

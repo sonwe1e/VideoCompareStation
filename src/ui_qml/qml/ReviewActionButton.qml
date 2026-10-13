@@ -17,13 +17,15 @@ Button {
     // state stays selected; undo that flip and leave the caller's binding in charge.
     property bool mirrorsState: false
 
-    implicitWidth: Math.max(112, contentItem.implicitWidth + 34)
-    implicitHeight: 40
-    leftPadding: 17
-    rightPadding: 17
+    implicitWidth: Math.max(116, contentItem.implicitWidth + 36)
+    implicitHeight: 42
+    leftPadding: 18
+    rightPadding: 18
     activeFocusOnTab: true
+    hoverEnabled: true
+    Accessible.description: helpText
     // A pressed button sinks slightly; hover only changes colour so borders stay pixel-aligned.
-    scale: control.down ? 0.98 : 1.0
+    scale: control.down ? 0.97 : 1.0
     onToggled: {
         if (control.mirrorsState)
             control.toggle();
@@ -31,8 +33,8 @@ Button {
 
     Behavior on scale {
         NumberAnimation {
-            duration: 80
-            easing.type: Easing.OutQuad
+            duration: Theme.animationFast
+            easing.type: Easing.OutCubic
         }
     }
 
@@ -42,7 +44,7 @@ Button {
         text: control.text
         color: !control.enabled ? Theme.disabledText : (control.prominent ? Theme.inverseText : control.textColor)
         font.pixelSize: Theme.fontBody
-        font.weight: Font.DemiBold
+        font.weight: control.prominent || control.checked ? Font.DemiBold : Font.Normal
         elide: Text.ElideRight
     }
 
@@ -57,22 +59,18 @@ Button {
                 return control.down ? Theme.accentPressed : (control.hovered ? Theme.accentHover : Theme.accentFill);
             if (control.checked)
                 return Theme.controlChecked;
+            if (control.flat)
+                return control.down ? Theme.fluentPressed : (control.hovered ? Theme.fluentHover : "transparent");
             return control.down ? Theme.controlPressed : (control.hovered ? Theme.controlHover : Theme.control);
         }
-        border.width: control.activeFocus ? 2 : 1
-        border.color: {
-            if (control.activeFocus)
-                return control.prominent || control.checked ? Theme.strongFocus : control.accentColor;
-            if (!control.enabled)
-                return Theme.disabledBorder;
-            if (control.prominent || control.checked)
-                return control.hovered ? Theme.focus : Theme.accent;
-            return control.hovered ? Theme.borderHover : Theme.controlBorder;
-        }
+        // No resting outline: the fill carries the state, the ring is reserved for keyboard focus.
+        border.width: control.visualFocus ? 2 : 0
+        border.color: Theme.focus
 
         Behavior on color {
             ColorAnimation {
-                duration: 100
+                duration: Theme.animationBase
+                easing.type: Easing.OutCubic
             }
         }
     }

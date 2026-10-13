@@ -212,7 +212,7 @@ Rectangle {
             if (files.currentIndex >= 0)
                 files.positionViewAtIndex(files.currentIndex, ListView.Contain);
         })
-        ScrollBar.vertical: ScrollBar {}
+        ScrollBar.vertical: VcsScrollBar {}
         delegate: ItemDelegate {
             id: row
             readonly property bool navigationTarget: files.activeFocus && ListView.isCurrentItem
@@ -341,7 +341,7 @@ Rectangle {
         anchors.fill: files
         clip: true
         model: control.folderModel ? control.folderModel.recentFiles : []
-        ScrollBar.vertical: ScrollBar {}
+        ScrollBar.vertical: VcsScrollBar {}
         delegate: ItemDelegate {
             id: recentRow
             readonly property bool navigationTarget: recentFiles.activeFocus && ListView.isCurrentItem

@@ -11,7 +11,9 @@ MenuBar {
     property color menuBarBorderColor: "transparent"
     property color textColor: Theme.primaryText
     property color mutedTextColor: Theme.mutedText
-    property color accentColor: Theme.controlPressed
+    // Fill behind the top-level item whose menu is open (or held down). A neutral veil, not a
+    // saturated accent: the open title is a position marker, not a selected action.
+    property color accentColor: "#2bffffff"
 
     delegate: MenuBarItem {
         id: topLevelItem
@@ -19,38 +21,37 @@ MenuBar {
         objectName: menu && menu.objectName.length > 0 ? menu.objectName + "Button" : ""
         enabled: Boolean(menu && menu.enabled)
 
-        leftPadding: 10
-        rightPadding: 10
-        topPadding: 5
-        bottomPadding: 5
+        leftPadding: 12
+        rightPadding: 12
+        topPadding: 6
+        bottomPadding: 6
 
         contentItem: Text {
             text: topLevelItem.text
             color: topLevelItem.enabled ? control.textColor : control.mutedTextColor
-            font.pixelSize: 12
+            font.pixelSize: 13
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
         }
 
         background: Rectangle {
-            radius: Theme.radiusMedium
+            radius: Theme.radiusSmall
             color: {
                 if (!topLevelItem.enabled)
                     return "transparent";
                 if (topLevelItem.highlighted || topLevelItem.down)
                     return control.accentColor;
                 if (topLevelItem.activeFocus)
-                    return Theme.controlHover;
+                    return "#2bffffff";
                 if (topLevelItem.hovered)
-                    return Theme.fluentHover;
+                    return Theme.control;
                 return "transparent";
             }
-            border.width: topLevelItem.activeFocus ? 1 : 0
-            border.color: Theme.focus
 
             Behavior on color {
                 ColorAnimation {
-                    duration: 120
+                    duration: Theme.animationBase
+                    easing.type: Easing.OutCubic
                 }
             }
         }
@@ -58,16 +59,5 @@ MenuBar {
 
     background: Rectangle {
         color: control.menuBarColor
-
-        Rectangle {
-            height: 1
-            visible: control.menuBarBorderColor.a > 0
-            color: control.menuBarBorderColor
-            anchors {
-                bottom: parent.bottom
-                left: parent.left
-                right: parent.right
-            }
-        }
     }
 }

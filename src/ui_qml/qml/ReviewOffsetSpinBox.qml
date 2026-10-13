@@ -34,8 +34,15 @@ SpinBox {
     }
 
     background: Rectangle {
-        radius: 4
-        color: control.panelColor
-        border.color: control.activeFocus ? control.accentColor : control.borderColor
+        radius: Theme.radiusSmall
+        color: control.hovered ? Theme.controlHover : Theme.control
+        border.width: 1
+        border.color: control.activeFocus ? control.accentColor : "transparent"
+
+        Behavior on color {
+            ColorAnimation {
+                duration: 120
+            }
+        }
     }
 }

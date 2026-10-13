@@ -113,16 +113,16 @@ void applyWindowsNativeChrome(QQuickWindow* const window) noexcept {
     constexpr DWORD kDwmwcpRound = 2;
     setAttr(kDwmwaWindowCornerPreference, &kDwmwcpRound);
 
-    // 3. Caption colour matches Theme.headerBackground (#111722) in VcsTheme.js, so the title
+    // 3. Caption colour matches Theme.headerBackground (#1c1c1e) in VcsTheme.js, so the title
     //    bar and the menu bar read as one header. No system backdrop is requested: the window
     //    paints an opaque background, so Mica would never show through.
     constexpr DWORD kDwmwaCaptionColor = 35;
-    constexpr COLORREF kCaptionColor = RGB(17, 23, 34);
+    constexpr COLORREF kCaptionColor = RGB(28, 28, 30);
     setAttr(kDwmwaCaptionColor, &kCaptionColor);
 
-    // 4. Caption text matches Theme.primaryText (#f1f5f9).
+    // 4. Caption text matches Theme.primaryText (#f5f5f7).
     constexpr DWORD kDwmwaTextColor = 36;
-    constexpr COLORREF kTextColor = RGB(241, 245, 249);
+    constexpr COLORREF kTextColor = RGB(245, 245, 247);
     setAttr(kDwmwaTextColor, &kTextColor);
     markStartupMilestone("native-attrs");
 }

@@ -1,6 +1,7 @@
 import QtQuick
 import QtTest
 import "../../../../src/ui_qml/qml" as Dvs
+import "../../../../src/ui_qml/qml/VcsTheme.js" as Theme
 
 // Regression guard for ReviewActionButton.mirrorsState. Qt flips a checkable button's
 // `checked` before onClicked, so a button whose `checked` mirrors caller-owned state used to
@@ -13,7 +14,7 @@ Item {
     property bool menuModeActive: false
     property int menuOpens: 0
 
-    width: 520
+    width: 640
     height: 120
 
     Row {
@@ -54,6 +55,12 @@ Item {
             text: "Lock"
             checkable: true
         }
+        Dvs.VcsToolButton {
+            id: toolToggle
+
+            text: "T"
+            checkable: true
+        }
     }
 
     TestCase {
@@ -69,6 +76,7 @@ Item {
             root.menuModeActive = false;
             root.menuOpens = 0;
             ownedToggle.checked = false;
+            toolToggle.checked = false;
         }
 
         function test_reclick_keeps_selected_option_checked() {
@@ -108,6 +116,33 @@ Item {
             verify(ownedToggle.checked);
             mouseClick(ownedToggle);
             verify(!ownedToggle.checked);
+        }
+
+        function test_keyboard_focus_is_visible_on_both_button_types() {
+            const buttons = [fitButton, toolToggle];
+            for (let i = 0; i < buttons.length; ++i) {
+                const button = buttons[i];
+                button.forceActiveFocus(Qt.TabFocusReason);
+                verify(button.visualFocus);
+                compare(button.background.border.width, 2);
+                verify(Qt.colorEqual(button.background.border.color, Theme.focus));
+                verify(button.background.border.color.a > 0.9);
+                root.forceActiveFocus();
+                mouseClick(button);
+                verify(!button.visualFocus);
+                compare(button.background.border.width, 0);
+            }
+        }
+
+        function test_tool_toggle_keeps_its_selection_visible_after_pointer_leaves() {
+            mouseClick(toolToggle);
+            mouseMove(root, root.width - 1, root.height - 1);
+            verify(toolToggle.checked);
+            tryCompare(toolToggle.background, "color", Theme.controlChecked);
+            mouseClick(toolToggle);
+            mouseMove(root, root.width - 1, root.height - 1);
+            verify(!toolToggle.checked);
+            tryVerify(function() { return Qt.colorEqual(toolToggle.background.color, "transparent"); });
         }
     }
 }

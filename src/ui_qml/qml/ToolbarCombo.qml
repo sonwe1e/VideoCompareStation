@@ -15,7 +15,7 @@ T.ComboBox {
     property color disabledTextColor: Theme.mutedText
     property color borderColor: Theme.border
     property color focusColor: Theme.accent
-    property color highlightColor: Theme.controlPressed
+    property color highlightColor: Theme.raisedPanelHover
     property color highlightedTextColor: Theme.primaryText
 
     implicitWidth: Math.max(implicitBackgroundWidth + leftInset + rightInset, implicitContentWidth + leftPadding + rightPadding)
@@ -54,7 +54,7 @@ T.ComboBox {
 
         background: Rectangle {
             objectName: "toolbarComboDelegateBackground-" + delegateControl.index
-            radius: 5
+            radius: Theme.radiusSmall
             color: delegateControl.highlighted || delegateControl.hovered || control.currentIndex === delegateControl.index ? control.highlightColor : control.panelColor
         }
     }
@@ -86,10 +86,17 @@ T.ComboBox {
         objectName: "toolbarComboBackground"
         implicitWidth: 122
         implicitHeight: 34
-        radius: 6
-        color: control.enabled ? control.panelColor : control.disabledPanelColor
+        radius: Theme.radiusMedium
+        color: {
+            if (!control.enabled)
+                return control.disabledPanelColor;
+            return control.hovered ? Theme.controlHover : Theme.control;
+        }
+        // Flat by default; the keyboard focus ring is the only outline. No colour animation:
+        // a disabled combo must snap to its disabled fill so the state change is observable
+        // in the same frame the caller sets it.
         border.width: control.activeFocus ? 2 : 1
-        border.color: control.activeFocus ? control.focusColor : (control.hovered ? Theme.borderHover : control.borderColor)
+        border.color: control.activeFocus ? control.focusColor : "transparent"
     }
 
     popup: T.Popup {
@@ -120,7 +127,7 @@ T.ComboBox {
 
         background: Rectangle {
             objectName: "toolbarComboPopupBackground"
-            radius: 8
+            radius: Theme.radiusLarge
             color: Theme.menu
             border.width: 1
             border.color: Theme.menuBorder
