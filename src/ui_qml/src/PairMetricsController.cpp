@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <deque>
 #include <iterator>
 #include <limits>
 #include <optional>
@@ -367,33 +368,70 @@ QVariantList PairMetricsController::peakFrames(const int maximumCount,
         double mae = 0.0;
     };
     std::vector<Candidate> candidates;
+    // A frame is a peak only when it strictly dominates every comparable neighbor in the
+    // window; plateaus are deliberately not peaks (ties disqualify both sides) so a flat
+    // region never produces a marker per frame.
+    //
+    // The window maximum travels in a monotonic deque of distinct MAE values, each carrying
+    // the number of in-window samples that reach it, so one ordered pass decides every
+    // frame. Rescanning the neighborhood per sample made this O(samples x window): with a
+    // full 4096-entry cache on a long source the window spans thousands of frames, and the
+    // GUI thread spent tens of milliseconds here. The lane repaints on every batch, so that
+    // cost repeated for the whole fill of the sampling window.
+    struct WindowValue final {
+        double mae = 0.0;
+        std::size_t count = 0;
+    };
+    std::deque<WindowValue> window;
+    // Ordered comparable series. Non-comparable samples and non-positive MAE are absent, so
+    // advancing two cursors over this view visits exactly the samples the neighborhood scan
+    // used to consider.
+    std::vector<std::pair<std::int64_t, double>> series;
+    series.reserve(samples_.size());
     for (const auto& [frame, sample] : samples_) {
-        if (!sample.comparable || sample.analysis.metrics.mae <= 0.0) {
-            continue;
+        if (sample.comparable && sample.analysis.metrics.mae > 0.0) {
+            series.emplace_back(frame, sample.analysis.metrics.mae);
         }
-        // A frame is a peak only when it strictly dominates every comparable neighbor in the
-        // window; plateaus are deliberately not peaks (ties disqualify both sides) so a flat
-        // region never produces a marker per frame.
-        bool isPeak = true;
-        const auto lower = samples_.lower_bound(
-            static_cast<std::int64_t>(static_cast<qreal>(frame) - neighborhoodFrames));
-        for (auto iterator = lower;
-             iterator != samples_.end() &&
-             static_cast<qreal>(iterator->first) <= static_cast<qreal>(frame) + neighborhoodFrames;
-             ++iterator) {
-            if (iterator->first == frame) {
-                continue;
+    }
+    std::size_t firstInWindow = 0;
+    std::size_t firstBeyondWindow = 0;
+    for (std::size_t index = 0; index < series.size(); ++index) {
+        const std::int64_t frame = series[index].first;
+        const double mae = series[index].second;
+        // The lower bound is truncated toward zero, exactly as the previous map lookup did,
+        // so a half-frame window edge keeps the same membership.
+        const std::int64_t lower =
+            static_cast<std::int64_t>(static_cast<double>(frame) - neighborhoodFrames);
+        const double upper = static_cast<double>(frame) + neighborhoodFrames;
+        while (firstBeyondWindow < series.size() &&
+               static_cast<double>(series[firstBeyondWindow].first) <= upper) {
+            const double value = series[firstBeyondWindow].second;
+            std::size_t count = 1;
+            while (!window.empty() && window.back().mae <= value) {
+                if (window.back().mae == value) {
+                    count += window.back().count;
+                }
+                window.pop_back();
             }
-            if (!iterator->second.comparable) {
-                continue;
-            }
-            if (iterator->second.analysis.metrics.mae >= sample.analysis.metrics.mae) {
-                isPeak = false;
-                break;
-            }
+            window.push_back(WindowValue{value, count});
+            ++firstBeyondWindow;
         }
-        if (isPeak) {
-            candidates.push_back(Candidate{frame, sample.analysis.metrics.mae});
+        while (firstInWindow < firstBeyondWindow && series[firstInWindow].first < lower) {
+            if (!window.empty() && window.front().mae == series[firstInWindow].second) {
+                if (window.front().count > 1) {
+                    --window.front().count;
+                } else {
+                    window.pop_front();
+                }
+            }
+            ++firstInWindow;
+        }
+        // Strictly dominates every other comparable sample in the window. A frame that ties
+        // the window maximum is a plateau member, not a peak.
+        const double windowMax = window.empty() ? 0.0 : window.front().mae;
+        const std::size_t windowMaxCount = window.empty() ? 0U : window.front().count;
+        if (mae >= windowMax && !(mae == windowMax && windowMaxCount > 1)) {
+            candidates.push_back(Candidate{frame, mae});
         }
     }
     std::sort(candidates.begin(),

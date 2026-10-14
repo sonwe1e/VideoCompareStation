@@ -6,6 +6,7 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -625,6 +626,113 @@ TEST_F(PairMetricsControllerTests, PeakFramesAndSamplePointsProjectCache) {
         }
     }
     EXPECT_TRUE(strongestProjected);
+}
+
+// Peak semantics pinned independently of the implementation: a frame is a peak only when it
+// strictly dominates every comparable neighbour in the window, so a plateau produces no
+// marker at all. Non-comparable positions and non-positive MAE never act as neighbours.
+TEST_F(PairMetricsControllerTests, PeakFramesHonourTiesPlateausHolesAndFractionalWindows) {
+    installTwoSourceSession(0, 12U);
+    controller_->setLaneEnabled(true);
+    controller_->refresh();
+    processUntil([&] { return !service_.requests.empty(); }, 1000);
+    ASSERT_FALSE(service_.requests.empty());
+
+    // 0:1  1:5  2:5  3:1  4:3  5:9  6:2  7:0  8:4  9:hole  10:4  11:1
+    // Frames 1 and 2 tie, so neither is a peak. Frame 8 and frame 10 tie as well.
+    // Frame 7 carries a zero MAE and frame 9 is not comparable, so both are invisible.
+    const std::vector<double> mae{1.0, 5.0, 5.0, 1.0, 3.0, 9.0, 2.0, 0.0, 4.0, 0.0, 4.0, 1.0};
+    std::vector<application::PairMetricsSample> samples;
+    for (std::int64_t frame = 0; frame < 12; ++frame) {
+        application::PairMetricsSample sample;
+        sample.canonicalFrameId = domain::FrameId{frame};
+        sample.comparable = frame != 9;
+        sample.analysis.metrics.mae = mae[static_cast<std::size_t>(frame)];
+        samples.push_back(sample);
+    }
+    service_.deliver(service_.makeBatch(service_.requests.front(), std::move(samples)));
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    ASSERT_EQ(controller_->sampleCount(), 12);
+
+    const auto peakFramesOf = [this](const qreal neighborhood) {
+        QVariantList peaks = controller_->peakFrames(8, neighborhood);
+        std::vector<qint64> frames;
+        frames.reserve(static_cast<std::size_t>(peaks.size()));
+        for (const QVariant& entry : peaks) {
+            frames.push_back(entry.toMap().value("frame").toLongLong());
+        }
+        std::sort(frames.begin(), frames.end());
+        return frames;
+    };
+
+    // Integer window: only frame 5 strictly dominates {3,4,6}; frame 7's zero MAE and frame
+    // 9's hole keep 8 and 10 from ever seeing each other, but each still sees the other's
+    // equal value through the window, so neither is a peak.
+    EXPECT_EQ(peakFramesOf(2.0), std::vector<qint64>({5}));
+
+    // Fractional window: the lower bound truncates toward zero, so frame 8's window starts
+    // at frame 6 and excludes frame 7's zero and frame 9's hole, while frame 10's window
+    // still contains frame 8. Frame 8 becomes a peak; frame 10 does not.
+    EXPECT_EQ(peakFramesOf(1.5), std::vector<qint64>({5, 8}));
+
+    // A window narrower than one frame isolates every comparable sample. Frames 1 and 2 still
+    // tie and disqualify each other, and frames 6 and 11 are dominated by their stronger
+    // neighbour, so the survivors are the frames that dominate nothing but themselves.
+    EXPECT_EQ(peakFramesOf(0.5), std::vector<qint64>({0, 1, 4, 5, 8, 10}));
+}
+
+// The lane repaints on every batch, so the peak scan runs repeatedly while a sampling window
+// fills. A per-sample neighbourhood rescan made this O(samples x window): with a full cache on
+// a long source the GUI thread stalled for tens of milliseconds per batch. This guard fails if
+// that quadratic scan comes back.
+TEST_F(PairMetricsControllerTests, PeakFramesStayCheapWhenTheWindowSpansTheWholeCache) {
+    // A source long enough that totalFrames / 100 exceeds the whole sample cache.
+    installTwoSourceSession(0, 4096U * 100U);
+    controller_->setLaneEnabled(true);
+    controller_->refresh();
+    processUntil([&] { return !service_.requests.empty(); }, 1000);
+    ASSERT_FALSE(service_.requests.empty());
+
+    // Fill the cache to its hard limit in batches, the way the worker delivers a window.
+    constexpr int kBatchSize = 512;
+    constexpr int kSampleCount = 4096;
+    const application::PairMetricsRequest& request = service_.requests.front();
+    for (int start = 0; start < kSampleCount; start += kBatchSize) {
+        std::vector<application::PairMetricsSample> batch;
+        batch.reserve(static_cast<std::size_t>(kBatchSize));
+        for (int index = 0; index < kBatchSize; ++index) {
+            const int frame = start + index;
+            application::PairMetricsSample sample;
+            sample.canonicalFrameId = domain::FrameId{frame};
+            sample.comparable = true;
+            // A rising series is the worst case for a neighbourhood rescan: every sample has
+            // to walk the whole window before it finds a neighbour that dominates it.
+            sample.analysis.metrics.mae = static_cast<double>(frame) * 0.001;
+            batch.push_back(sample);
+        }
+        service_.deliver(service_.makeBatch(request, std::move(batch)));
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    }
+    ASSERT_EQ(controller_->sampleCount(), kSampleCount);
+
+    // Window at least as wide as the whole cache, which is what a very long source produces.
+    constexpr qreal kWindow = 1.0e9;
+    QElapsedTimer elapsed;
+    elapsed.start();
+    const QVariantList peaks = controller_->peakFrames(4, kWindow);
+    const qint64 elapsedMilliseconds = elapsed.elapsed();
+
+    // Only the last frame dominates the entire series.
+    ASSERT_EQ(peaks.size(), 1);
+    EXPECT_EQ(peaks.first().toMap().value("frame").toLongLong(), kSampleCount - 1);
+
+    // Reference measurements on the development machine: the previous per-sample rescan took
+    // about 34 ms for this exact input, the single-pass scan about 0.05 ms. The bound leaves
+    // two orders of magnitude of headroom for a loaded CI runner while still failing the
+    // quadratic implementation by more than three times.
+    EXPECT_LT(elapsedMilliseconds, 10)
+        << "peakFrames took " << elapsedMilliseconds
+        << " ms for 4096 samples with a whole-cache window; the neighbourhood rescan is back.";
 }
 
 TEST_F(PairMetricsControllerTests, TimestampModePrefersSourceTimelineAndAppliesUserOffset) {
