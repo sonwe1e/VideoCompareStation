@@ -124,6 +124,10 @@ Item {
         property string subtitle: ""
         property string confirmText: qsTr("应用")
         property string confirmObjectName: ""
+        // Keyboard-ownership marker read by Main.qml's focus walk (same contract as VcsMenu):
+        // while this modal popup holds focus, workspace shortcuts stay inert instead of acting
+        // on the session behind the dialog.
+        property bool popupInputContext: true
 
         default property alias shellBody: bodySlot.data
         readonly property alias bodyWidth: bodySlot.width

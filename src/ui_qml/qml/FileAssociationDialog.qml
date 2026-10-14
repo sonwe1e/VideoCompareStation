@@ -23,6 +23,10 @@ Item {
     required property var service
 
     readonly property bool busy: control.service ? Boolean(control.service.busy) : false
+    // The popup's visibility, not this Item's: the item is always "visible" as a layout object,
+    // so Main.qml's modal gate must read the popup state through this property (the same
+    // dialogVisible contract the export dialogs expose).
+    readonly property bool dialogVisible: dialog.visible
     readonly property string lastError: control.service ? String(control.service.lastError) : ""
     readonly property string lastResult: control.service ? String(control.service.lastResult) : ""
     // FileAssociationHealth: 0 not registered, 1 current, 2 registered with another path.
@@ -79,6 +83,10 @@ Item {
         id: dialog
 
         objectName: "fileAssociationPopup"
+        // Keyboard-ownership marker read by Main.qml's focus walk (same contract as VcsMenu):
+        // while this modal popup holds focus, workspace shortcuts stay inert instead of acting
+        // on the session behind the dialog.
+        property bool popupInputContext: true
         parent: Overlay.overlay
         anchors.centerIn: Overlay.overlay
         popupType: Popup.Item

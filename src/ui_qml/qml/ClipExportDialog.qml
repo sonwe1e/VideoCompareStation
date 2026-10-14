@@ -95,6 +95,10 @@ Item {
         id: dialog
 
         objectName: "clipExportPopup"
+        // Keyboard-ownership marker read by Main.qml's focus walk (same contract as VcsMenu):
+        // while this modal popup holds focus, workspace shortcuts stay inert instead of acting
+        // on the session behind the dialog.
+        property bool popupInputContext: true
         parent: Overlay.overlay
         anchors.centerIn: Overlay.overlay
         popupType: Popup.Item
@@ -104,8 +108,9 @@ Item {
         padding: 0
         width: Math.min(460, (parent ? parent.width : 800) - 48)
         // Closing while an export runs is allowed on purpose: the work continues on the worker
-        // thread, the transport chip keeps showing progress, and the outcome still lands in the
-        // status HUD, so nobody has to babysit a dialog.
+        // thread, the transport chip keeps showing progress, and the outcome is reported through
+        // the action-feedback channel (intent toast with the chrome up, HUD when hidden), so
+        // nobody has to babysit a dialog.
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
         Overlay.modal: Rectangle {

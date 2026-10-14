@@ -69,6 +69,10 @@ Rectangle {
     // working copy — comparison and difference statistics keep using the originals.
     property var imageEdit: null
     readonly property bool editModeActive: Boolean(imageEdit && imageEdit.active)
+    // The scale/fill dialogs are modal popups that own the keyboard while open; Main.qml reads
+    // this to keep workspace shortcuts inert behind them (the dialogs themselves carry the
+    // popupInputContext marker for the focus walk).
+    readonly property bool anyEditDialogOpen: imageEditDialogs.anyVisible
     readonly property int editSourceSlot: editModeActive ? Number(imageEdit.sourceSlot) : -1
     // Selection in image pixels (null while nothing is selected); shared by crop and mosaic.
     property var cropSelection: null

@@ -2709,6 +2709,13 @@ TEST(MainQmlContractTests, TransportRangeRowMarksInAndOutFromTheCurrentFrame) {
     EXPECT_EQ(label->property("text").toString(), QStringLiteral("入 42 · 出 —（区间无效）"))
         << "an in point alone is not a range";
 
+    // Marking a point is a chrome-time action, so its confirmation must ride the intent toast:
+    // the immersive HUD does not render while the chrome is visible, and a set point that
+    // reports nothing reads as a dead chip.
+    EXPECT_EQ(harness.root->property("intentMessage").toString(),
+              QStringLiteral("入点 · 第 42 帧"));
+    EXPECT_TRUE(harness.root->property("immersiveHudText").toString().isEmpty());
+
     // Seek to frame 47 and mark the matching out point.
     harness.snapshot->displayedFrame = domain::FrameId{47};
     harness.controller->refreshProjection();
@@ -2730,6 +2737,27 @@ TEST(MainQmlContractTests, TransportRangeRowMarksInAndOutFromTheCurrentFrame) {
     EXPECT_EQ(transportBar->property("rangeInFrame").toInt(), 41);
     EXPECT_EQ(transportBar->property("rangeOutFrame").toInt(), 47);
     EXPECT_FALSE(transportBar->property("rangeLoopActive").toBool());
+
+    // The same marking in immersive mode keeps the HUD channel: hiding the chrome must not lose
+    // the confirmation, and the toast must stay quiet because it is not the visible channel
+    // there. Marked last so the range assertions above keep their in/out frames.
+    harness.shell->setChromeVisible(false);
+    harness.settle();
+    harness.window->requestActivate();
+    harness.root->setProperty("intentMessage", QString{});
+    harness.root->setProperty("immersiveHudText", QString{});
+    harness.snapshot->displayedFrame = domain::FrameId{50};
+    harness.controller->refreshProjection();
+    harness.settle();
+    sendKey(*harness.window, Qt::Key_I);
+    harness.settle();
+    EXPECT_EQ(harness.root->property("immersiveHudText").toString(),
+              QStringLiteral("入点 · 第 51 帧"));
+    EXPECT_TRUE(harness.root->property("intentMessage").toString().isEmpty());
+    harness.shell->setChromeVisible(true);
+    harness.settle();
+}
+
 }
 
 TEST(MainQmlContractTests, TransportRangeRowPlaysAndLoopsTheMarkedRange) {
@@ -3248,9 +3276,12 @@ TEST(MainQmlContractTests, ExportRangeButtonStartsAClipExport) {
     EXPECT_EQ(jobs.front().plan.requestedFrameCount, 5);
     EXPECT_EQ(harness.clipExporter->queriedSourcePaths().size(), 1U);
 
-    // The outcome lands once, in both channels the user can see.
-    EXPECT_EQ(harness.root->property("immersiveHudText").toString(),
+    // The outcome lands once, on the channel the user can actually see: the export finishes
+    // while the chrome is up (the dialog may even be closed), so the intent toast carries it and
+    // the immersive HUD - which only renders with the chrome hidden - stays empty.
+    EXPECT_EQ(harness.root->property("intentMessage").toString(),
               QStringLiteral("已导出所选区间。"));
+    EXPECT_TRUE(harness.root->property("immersiveHudText").toString().isEmpty());
     EXPECT_EQ(harness.clipExport->lastStatus(), QStringLiteral("已导出所选区间。"));
     EXPECT_EQ(harness.clipExport->lastOutputPath(), QDir::toNativeSeparators(targetPath));
     EXPECT_TRUE(harness.clipExport->lastFailureDetail().isEmpty());
@@ -8844,6 +8875,153 @@ TEST(MainQmlContractTests, DialogsAndWorkspacesOwnTheKeyboardBeforeMediaShortcut
     ASSERT_NE(fullScreenShortcut, nullptr);
     EXPECT_TRUE(tabShortcut->property("enabled").toBool());
     EXPECT_TRUE(fullScreenShortcut->property("enabled").toBool());
+}
+
+// The in-window modal popups (clip export, sample export, file association, image edit
+// scale/fill) are QML Popups, not native windows: nothing but the app's own routing keeps
+// workspace shortcuts away from the session behind them. Two layers must hold together - each
+// popup declares the popupInputContext marker for the focus walk, and Main.qml aggregates
+// their visibility into inputContext - so a popup added without either fails here instead of
+// silently stealing keys from the session behind it.
+TEST(MainQmlContractTests, ModalPopupsOwnTheKeyboardBeforeWorkspaceShortcuts) {
+    // Baseline first: with no popup, menu or text field involved, the workspace owns the keys.
+    // Without this the modal assertions below could pass for the wrong reason (a permanently
+    // modal input context) and the contract would silently mean nothing.
+    {
+        WorkspaceHarness harness;
+        ASSERT_TRUE(harness.create()) << harness.error;
+        harness.window->show();
+        harness.settle();
+        EXPECT_EQ(harness.root->property("inputContext").toInt(), 0);
+        EXPECT_TRUE(harness.root->property("globalMediaShortcutsEnabled").toBool());
+        harness.window->close();
+    }
+
+    // Behavioural layer, file association: opened through the settings menu, the popup owns the
+    // keyboard - M must not log an issue, Ctrl+W must not close the task, Tab must not hide the
+    // chrome behind the modal scrim.
+    {
+        WorkspaceHarness harness;
+        harness.withFileAssociation = true;
+        ASSERT_TRUE(harness.create()) << harness.error;
+        harness.window->show();
+        harness.settle();
+        auto* const settingsMenu =
+            harness.root->findChild<QObject*>(QStringLiteral("settingsMenu"));
+        ASSERT_NE(settingsMenu, nullptr);
+        ASSERT_TRUE(QMetaObject::invokeMethod(settingsMenu, "open"));
+        harness.settle();
+        auto* const menuItem =
+            harness.root->findChild<QObject*>(QStringLiteral("fileAssociationMenuItem"));
+        ASSERT_NE(menuItem, nullptr);
+        ASSERT_TRUE(QMetaObject::invokeMethod(menuItem, "triggered"));
+        harness.settle();
+        auto* const popup =
+            harness.root->findChild<QObject*>(QStringLiteral("fileAssociationPopup"));
+        ASSERT_NE(popup, nullptr);
+        ASSERT_TRUE(popup->property("visible").toBool());
+        EXPECT_TRUE(popup->property("popupInputContext").toBool());
+        EXPECT_EQ(harness.root->property("inputContext").toInt(), 3);
+        EXPECT_TRUE(harness.root->property("anyModalPopupOpen").toBool());
+        EXPECT_FALSE(harness.root->property("globalMediaShortcutsEnabled").toBool());
+        EXPECT_FALSE(harness.root->property("presentationShortcutsEnabled").toBool());
+        harness.submitted.clear();
+        sendKey(*harness.window, Qt::Key_M);
+        sendKey(*harness.window, Qt::Key_W, Qt::ControlModifier);
+        sendKey(*harness.window, Qt::Key_Tab);
+        harness.settle();
+        EXPECT_TRUE(harness.submitted.empty());
+        EXPECT_TRUE(harness.root->property("chromeVisible").toBool());
+        harness.window->close();
+    }
+
+    // Behavioural layer, image edit scale dialog: the workspace dialog shell owns the keyboard
+    // exactly like the menu-driven popups.
+    {
+        WorkspaceHarness harness;
+        ASSERT_TRUE(harness.create()) << harness.error;
+        harness.window->show();
+        harness.settle();
+        QImage retained{16, 16, QImage::Format_ARGB32};
+        retained.fill(QColor(10, 20, 30));
+        ASSERT_TRUE(harness.imageReview.openPrimaryImage(std::move(retained),
+                                                         QStringLiteral("retained-image")));
+        ASSERT_TRUE(harness.activateWorkspace(1));
+        harness.settle();
+        auto* const editDialogs =
+            harness.root->findChild<QObject*>(QStringLiteral("imageEditDialogs"));
+        ASSERT_NE(editDialogs, nullptr);
+        ASSERT_TRUE(QMetaObject::invokeMethod(editDialogs, "openScale"));
+        harness.settle();
+        auto* const popup =
+            harness.root->findChild<QObject*>(QStringLiteral("imageEditScaleDialog"));
+        ASSERT_NE(popup, nullptr);
+        EXPECT_TRUE(popup->property("visible").toBool());
+        EXPECT_TRUE(popup->property("popupInputContext").toBool());
+        EXPECT_EQ(harness.root->property("inputContext").toInt(), 3);
+        EXPECT_TRUE(harness.root->property("anyModalPopupOpen").toBool());
+        harness.submitted.clear();
+        sendKey(*harness.window, Qt::Key_M);
+        sendKey(*harness.window, Qt::Key_W, Qt::ControlModifier);
+        harness.settle();
+        EXPECT_TRUE(harness.submitted.empty());
+        harness.window->close();
+    }
+
+    // Behavioural layer, clip export: the export dialog is the dangerous one - Ctrl+W while an
+    // export runs must not close the session the export belongs to.
+    {
+        QTemporaryDir temporaryDirectory;
+        ASSERT_TRUE(temporaryDirectory.isValid());
+        std::vector<std::filesystem::path> sourcePaths;
+        for (const char* name : {"modal_export_a.mp4", "modal_export_b.mp4"}) {
+            const QString path = temporaryDirectory.filePath(QString::fromLatin1(name));
+            QFile file{path};
+            ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+            ASSERT_EQ(file.write("fake-modal-source", 16), 16);
+            file.close();
+            sourcePaths.push_back(std::filesystem::path{path.toStdWString()});
+        }
+        WorkspaceHarness harness;
+        harness.withClipExport = true;
+        const auto rateResult = domain::RationalRate::create(30, 1);
+        ASSERT_TRUE(rateResult);
+        ASSERT_TRUE(installValidatedVideoSet(
+            harness.snapshot, sourcePaths, rateResult.value(), 12, 400'000));
+        harness.snapshot->displayedFrame = domain::FrameId{3};
+        harness.snapshot->playbackRangeIn = domain::FrameId{3};
+        harness.snapshot->playbackRangeOut = domain::FrameId{7};
+        ASSERT_TRUE(harness.create()) << harness.error;
+        harness.window->show();
+        harness.settle();
+        harness.controller->refreshProjection();
+        harness.settle();
+        harness.shell->setRangeIn(3, static_cast<double>(harness.controller->mediaTimeForFrame(3)));
+        harness.shell->setRangeOut(7,
+                                   static_cast<double>(harness.controller->mediaTimeForFrame(7)));
+        harness.settle();
+
+        auto* const exportChip =
+            harness.root->findChild<QObject*>(QStringLiteral("transportExportRangeButton"));
+        ASSERT_NE(exportChip, nullptr);
+        ASSERT_TRUE(exportChip->property("chipEnabled").toBool());
+        ASSERT_TRUE(QMetaObject::invokeMethod(exportChip, "clicked"));
+        harness.settle();
+        auto* const popup = harness.root->findChild<QObject*>(QStringLiteral("clipExportPopup"));
+        ASSERT_NE(popup, nullptr);
+        ASSERT_TRUE(popup->property("visible").toBool());
+        EXPECT_TRUE(popup->property("popupInputContext").toBool());
+        EXPECT_EQ(harness.root->property("inputContext").toInt(), 3);
+        EXPECT_TRUE(harness.root->property("anyModalPopupOpen").toBool());
+        harness.submitted.clear();
+        sendKey(*harness.window, Qt::Key_M);
+        sendKey(*harness.window, Qt::Key_W, Qt::ControlModifier);
+        sendKey(*harness.window, Qt::Key_Tab);
+        harness.settle();
+        EXPECT_TRUE(harness.submitted.empty());
+        EXPECT_TRUE(harness.root->property("chromeVisible").toBool());
+        harness.window->close();
+    }
 }
 
 // I02: over the wipe handle the split line owns the gesture - even with the ROI marquee armed,

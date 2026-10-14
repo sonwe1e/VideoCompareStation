@@ -610,13 +610,19 @@ ApplicationWindow {
     readonly property bool timelineEnabled: graphicsReady && !busy && Boolean(controller && controller.canFirst) && totalFrames > 0
     readonly property bool anyMenuOpen: Boolean(applicationMenuBar && applicationMenuBar.anyMenuOpen) || Boolean(sourceBar && sourceBar.anyMenuOpen) || Boolean(viewerContextMenu && viewerContextMenu.anyMenuOpen) || Boolean(videoFolderSidebar && videoFolderSidebar.anyMenuOpen)
 
+    // QML modal popups own the keyboard while they are open. Each popup also carries the
+    // popupInputContext marker the focus walk below reads, but a visibility-driven gate covers
+    // the frames before focus has landed inside the popup and keeps the ownership honest as new
+    // popups are added. Native dialogs need no entry: the OS takes focus for them.
+    readonly property bool anyModalPopupOpen: Boolean(clipExportDialog && clipExportDialog.dialogVisible) || Boolean(sampleExportDialog && sampleExportDialog.dialogVisible) || fileAssociationDialog.dialogVisible || Boolean(imageWorkspace && imageWorkspace.anyEditDialogOpen)
+
     // Modal/input routing is intentionally computed in one place. Native image dialogs are
 
     // included even though they are not Popups, so a selector opened from the video workspace
 
     // can never let media shortcuts reach the hidden video session.
 
-    readonly property int inputContext: Boolean(reviewInputDialogs && reviewInputDialogs.modalVisible) || anchorDialog.visible || shortcutHelp.visible || issueNoteDialog.visible || imageSingleDialog.visible || imageAddDialog.visible || imagePairDialog.visible || imageReplacePrimaryDialog.visible || imageReplaceSecondaryDialog.visible || imageFolderLeftDialog.visible || imageFolderRightDialog.visible ? 3 : (anyMenuOpen || focusIsPopup(root.activeFocusItem) ? 2 : (focusIsTextEditing(root.activeFocusItem) ? 1 : 0))
+    readonly property int inputContext: Boolean(reviewInputDialogs && reviewInputDialogs.modalVisible) || anchorDialog.visible || shortcutHelp.visible || issueNoteDialog.visible || imageSingleDialog.visible || imageAddDialog.visible || imagePairDialog.visible || imageReplacePrimaryDialog.visible || imageReplaceSecondaryDialog.visible || imageFolderLeftDialog.visible || imageFolderRightDialog.visible || anyModalPopupOpen ? 3 : (anyMenuOpen || focusIsPopup(root.activeFocusItem) ? 2 : (focusIsTextEditing(root.activeFocusItem) ? 1 : 0))
     readonly property bool globalMediaShortcutsEnabled: workspaceSession.videoActive && inputContext === 0 && (!chromeVisible || !focusBlocksGlobalMediaShortcuts(root.activeFocusItem))
     // View shortcuts (digit modes, fit/native/zoom, peek) need a drawable video stage and no
     // modal on top; they stay available while the OSC is hidden, like the transport keys.
@@ -752,7 +758,9 @@ ApplicationWindow {
             if (shell.setRangeIn(frame, mediaTime)) {
                 syncApplicationRange();
 
-                showImmersiveHud(qsTr("入点 · 第 %1 帧").arg(frame + 1));
+                // A chrome-time action: the immersive HUD only renders while the chrome is
+                // hidden, so the confirmation must ride the channel that is actually visible.
+                showActionFeedback(qsTr("入点 · 第 %1 帧").arg(frame + 1));
             }
         }
     }
@@ -768,7 +776,7 @@ ApplicationWindow {
             if (shell.setRangeOut(frame, mediaTime)) {
                 syncApplicationRange();
 
-                showImmersiveHud(qsTr("出点 · 第 %1 帧").arg(frame + 1));
+                showActionFeedback(qsTr("出点 · 第 %1 帧").arg(frame + 1));
             }
         }
     }
@@ -1071,20 +1079,20 @@ ApplicationWindow {
     // on screen through the viewport's peek indicator, not only as a transient HUD line.
     function toggleDifferencePeek(lock) {
         if (!root.differencePeekTargetValid) {
-            root.showImmersiveHud(qsTr("当前会话没有可直看的参考（GT）源"));
+            showActionFeedback(qsTr("当前会话没有可直看的参考（GT）源"));
             return;
         }
         if (lock) {
             differencePeekLocked = !differencePeekLocked;
             differencePeekActive = differencePeekLocked;
-            showImmersiveHud(differencePeekLocked ? qsTr("已锁定参考原图直看") : qsTr("已解锁参考原图"));
+            showActionFeedback(differencePeekLocked ? qsTr("已锁定参考原图直看") : qsTr("已解锁参考原图"));
         } else if (differencePeekLocked) {
             differencePeekLocked = false;
             differencePeekActive = false;
-            showImmersiveHud(qsTr("已解锁，恢复差异视图"));
+            showActionFeedback(qsTr("已解锁，恢复差异视图"));
         } else {
             differencePeekActive = !differencePeekActive;
-            showImmersiveHud(differencePeekActive ? qsTr("查看参考原图") : qsTr("恢复差异视图"));
+            showActionFeedback(differencePeekActive ? qsTr("查看参考原图") : qsTr("恢复差异视图"));
         }
     }
 
@@ -4149,7 +4157,10 @@ ApplicationWindow {
         target: root.clipExportService
         enabled: root.clipExportService !== null
         function onExportFinished(succeeded, message) {
-            root.showImmersiveHud(message);
+            // The dialog may have been closed on purpose while the export ran, so the outcome
+            // must land on a channel that renders with the chrome up - not only the immersive
+            // HUD, which stays hidden whenever the chrome is visible.
+            root.showActionFeedback(message);
 
             // A cancel is deliberate and stays silent; a real failure reopens the dialog so the
             // technical detail is readable instead of disappearing with the popup.
@@ -4180,7 +4191,9 @@ ApplicationWindow {
         target: root.sampleExportModel
         enabled: root.sampleExportModel !== null
         function onExportFinished(succeeded, message) {
-            root.showImmersiveHud(message);
+            // Same channel rule as the clip export above: the dialog may be closed on purpose,
+            // so the outcome rides the feedback channel that renders with the chrome up.
+            root.showActionFeedback(message);
 
             if (!succeeded && root.sampleExportDialog && root.sampleExportDialog.lastFailureDetail.length > 0)
                 root.sampleExportDialog.open();
