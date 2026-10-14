@@ -101,9 +101,27 @@ Item {
             const y = canvas.height / 2;
             mousePress(canvas, x, y, Qt.LeftButton);
             mouseMove(canvas, x + 10, y);
+            // The press/move land on the topmost viewport under the cursor, which is not
+            // always the slot-2 canvas findChild returns; find the viewport whose pan grab
+            // actually armed so the assertions below target the real receiver.
+            let active = null;
+            for (let slot = 2; slot <= 4; ++slot) {
+                const area = findChild(workspace, "imageCanvasMouseArea-" + slot);
+                if (area && area.parent && area.parent.dragActive) {
+                    active = area;
+                    break;
+                }
+            }
+            verify(active !== null);
+            verify(active.parent.dragActive);
+            compare(active.cursorShape, Qt.ClosedHandCursor);
             mouseRelease(canvas, x + 10, y, Qt.LeftButton);
             verify(imageReview.panCalls > 0);
             compare(workspace.singleViewShowSecondary, false);
+            // Releasing the left button must end the grab too, or the closed-hand cursor and
+            // the onClicked drag gate stay stuck for the next click.
+            compare(active.parent.dragActive, false);
+            verify(active.cursorShape !== Qt.ClosedHandCursor);
         }
 
         function test_double_click_zoom_keeps_selected_source() {

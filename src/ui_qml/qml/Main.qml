@@ -3865,6 +3865,10 @@ ApplicationWindow {
         onWipePositionRequested: position => root.wipePosition = position
         onOscRevealRequested: root.revealOsc()
         onContextMenuRequested: root.openViewerContextMenu()
+        // A dropped ROI marquee (released in the letterbox or too small) reaches the user on the
+        // same action-feedback channel as every other chrome action, so it renders with the
+        // chrome up as well as on the immersive HUD.
+        onRoiRejected: reason => root.showActionFeedback(reason)
     }
     // The still-image workspace is built on first activation and stays resident: video review
     // sessions never pay for it, and an image launch activates it during the initial binding

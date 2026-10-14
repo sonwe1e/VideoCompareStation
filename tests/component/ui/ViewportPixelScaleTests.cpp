@@ -1216,6 +1216,20 @@ TEST_F(ViewportPixelScaleTests, RoiSelectButtonArmsMarqueeWhilePlainDragStaysPan
     EXPECT_NEAR(surface_->roiTop(), (200.0 - 76.0) / 450.0, 0.03);
     EXPECT_NEAR(surface_->roiBottom(), (450.0 - 76.0) / 450.0, 0.03);
 
+    // I10: a marquee that starts inside the content but is released in the letterbox is
+    // dropped, never silently - the component records a non-empty reason, the ROI is left
+    // untouched, and roiSelectMode stays armed (only Esc, the toggle button or resetView()
+    // leave it, per the documented contract). QtTest/QSignalSpy is not linked to this suite,
+    // so the reason is observed through lastRoiRejectReason, which the reject path sets right
+    // before emitting roiRejected().
+    surface_->clearRoi();
+    ASSERT_FALSE(surface_->roiEnabled());
+    root_->setProperty("lastRoiRejectReason", QString());
+    sendDrag(QPointF{200, 200}, QPointF{400, 40});
+    EXPECT_FALSE(surface_->roiEnabled());
+    EXPECT_TRUE(root_->property("roiSelectMode").toBool());
+    EXPECT_FALSE(root_->property("lastRoiRejectReason").toString().isEmpty());
+
     // Esc leaves the mode; the cursor returns to the pan arrow.
     QKeyEvent escapePress{QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier};
     QKeyEvent escapeRelease{QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier};

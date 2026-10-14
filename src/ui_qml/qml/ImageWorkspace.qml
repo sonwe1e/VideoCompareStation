@@ -1745,6 +1745,7 @@ Rectangle {
             onExited: {
                 control.clearImageHover();
             }
+            onCanceled: viewport.dragActive = false
             onPressed: mouse => {
                 control.applyHover(viewport, mouse.x, mouse.y, viewport.slot);
                 // RightButton or MiddleButton always pans the canvas, both in review and edit mode
@@ -1800,8 +1801,15 @@ Rectangle {
                 control.forceActiveFocus();
             }
             onReleased: mouse => {
+                // Every release ends the pan grab: a left-drag past the 3px threshold must
+                // clear dragActive too, or the closed-hand cursor and the onClicked drag gate
+                // stay stuck for the next click. That release is still a drag, not a click, so
+                // suppress it from toggling the source - the same suppression the annotation,
+                // crop and marquee gestures already use.
+                if (mouse.button === Qt.LeftButton && viewport.dragActive)
+                    viewport.suppressClickAfterMarquee = true;
+                viewport.dragActive = false;
                 if (mouse.button === Qt.RightButton || mouse.button === Qt.MiddleButton) {
-                    viewport.dragActive = false;
                     return;
                 }
                 control.endBrushStroke();

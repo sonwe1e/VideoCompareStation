@@ -154,6 +154,10 @@ Rectangle {
     signal wipePositionRequested(real position)
     signal oscRevealRequested
     signal contextMenuRequested
+    signal roiRejected(string reason)
+    // Mirrors the last roiRejected() argument so the C++ contract suite (which does not link
+    // QtTest/QSignalSpy) can observe that a dropped marquee carried a non-empty reason.
+    property string lastRoiRejectReason: ""
     property alias surface: dualVideoSurface
     property alias videoOutput: surfaceLayer
     readonly property bool roiEnabled: dualVideoSurface.roiEnabled
@@ -800,6 +804,17 @@ Rectangle {
                         dualVideoSurface.zoomToNormalizedRect(start.sourceX, start.sourceY, end.sourceX, end.sourceY);
                     else
                         dualVideoSurface.setRoiNormalized(start.sourceX, start.sourceY, end.sourceX, end.sourceY);
+                } else if (!start.insideContent || !end.insideContent || start.panel !== end.panel) {
+                    // Released in the letterbox or the other panel: nothing was selected, so the
+                    // marquee is dropped - but never silently. roiSelectMode stays armed per its
+                    // documented contract; only the silence is removed here.
+                    control.lastRoiRejectReason = qsTr("框选未应用：请在画面内按住并拖动");
+                    control.roiRejected(control.lastRoiRejectReason);
+                } else {
+                    // Inside one panel, but a corner did not map to a source pixel (empty or
+                    // sub-pixel drag), so there is no rect to apply.
+                    control.lastRoiRejectReason = qsTr("框选未应用：区域太小");
+                    control.roiRejected(control.lastRoiRejectReason);
                 }
             }
             control.roiSelecting = false;
