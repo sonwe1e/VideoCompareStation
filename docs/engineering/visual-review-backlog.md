@@ -1,9 +1,127 @@
 # 视觉审查问题台账
 
-更新：2026-10-14（并行三维审查与低风险修复轮：走带条鼠标长按修复与 E04 记录口径更正、
-chrome 态不可见 HUD 提示改道、busy 期间模式条选中指示保留、播放中指标采样收窄、
-配对指标解码缓冲复用，及一批焦点/快捷键/对比度小修）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-10-14（计划清单逐条实核轮：先确认缺陷再修，P3/F1/F4 性能与 I5–I11、U4–U12/U17
+交互与可读性落地，token 纪律门禁未做）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+
+## 2026-10-14 计划清单逐条实核与修复（当前工作区）
+
+- **基线**：`5f43289`（干净树）。上一节记的 `8d054ff` 之后又落了 11 个提交，因此计划里
+  引用的行号几乎全部失效；本轮先用四个只读代理逐条对当前源码实核，再动手。**结论：计划
+  中 2 项性能描述有实质错误、1 项部分错误，其余确认。**
+- **P3 泳道峰值表（确认，且比计划更严重）**：`peakFrames` 原实现对每个采样点在
+  `samples_` 上重扫整个邻域，O(采样数 × 窗口)。用等价独立探针（`out/verification/
+  p3-peak-probe/`）实测：60 分钟 60fps 源 + 4096 条满缓存时，GUI 线程单次 **26.3 ms**
+  （`-O2` 探针）；在未优化的 dev 构建里同一输入 **897 ms**。泳道每次 `samplesChanged`
+  都重算，即整个采样窗口填充期间反复停顿。改为单趟单调 deque 携带「窗口最大值 + 达到
+  该值的样本数」，O(N)。等价性用 40 万随机差分用例钉住（含平顶、并列、洞、分数窗口、
+  窗口越界——分数窗口是关键：旧代码 `lower_bound` 前会把下界向零截断）。新增
+  `PeakFramesHonourTiesPlateausHolesAndFractionalWindows`（语义）与
+  `PeakFramesStayCheapWhenTheWindowSpansTheWholeCache`（耗时上限）。变异证据：仅还原
+  算法（`git stash push src/ui_qml/src/PairMetricsController.cpp`）→ 新用例以
+  `897 ms vs 10 ms` 失败，还原后转绿。
+- **F1 配对指标 scratch（确认“无可见性、无上限”，但计划的“287 MiB 超限”不成立）**：
+  `PairMetricsDecodeSession` 每个源常驻一整帧 RGBA 作为转换暂存，且明确不占
+  FrameBudget。这一点是正确的——它是转码暂存，不是解码帧缓存项，本就不该计入 256 MiB
+  解码帧配额；播放预算是 224 MiB，并未超限。真正的缺口是它完全不可见，且对超大源无上限
+  （8K RGBA8 单源即 132.7 MiB）。修复：新增 `retainedScratchBytes()` 上报
+  `--ui-performance` 的 `pair_metrics_scratch_bytes`（独立键，不混入
+  `frameset_cache_bytes`），并设每会话 64 MiB 上限——超限的会话在作业结束后关闭，用
+  “每作业多一次 demuxer 重开”换有界的空闲占用；4K（31.6 MiB/源）仍走复用快路，解码路径
+  与全部发布数值不变。测试 `RetainedScratchIsReportedAndBoundedPerSession` 断言 320×180
+  双源恰为 2 × 单帧字节。
+- **F4 静图打开（计划前半句不成立，后半句已修）**：计划称“整链路同步在 GUI 线程”不成立
+  ——产品路径 `requestOpenPrimary/requestOpenPair` 已经过 `ImagePairLoader` 的
+  QThreadPool worker；同步的 `loadChecked` 只被测试调用。但 `Main.cpp` loader 里
+  `*image = decoded.copy()` 确实多出一整帧 RGBA 的瞬时副本。改用带 cleanup 的 QImage
+  构造器让显示图直接收养解码缓冲，去掉这次拷贝。真机验证：
+  `CompareStation.exe --ui-image-folder`（含 3840×2160 的 `big.png`）退出码 0、
+  `passed:true`、六张图 `opened:true`、逐张 SHA256 与差异指标（MAE 0.425）均正常，
+  证明收养后的像素未被破坏。
+- **I5 时间轴缩放不跟随播放头（确认，未修）**：`TimelineTracks.qml` 的
+  `windowStartFrame` 只由 `setZoom`/`panFrames` 写入，无任何 follow 逻辑；播放头越界后
+  被 `x` 钳制贴在边缘，与“正好在窗口边界”无法区分，唯一的 `Nx` 徽章只说明缩放级别。
+- **I8 走带条 tooltip 快捷键不符（确认，未修）**：`TransportBar.qml:254/397` 是硬编码
+  字面量，而 `ReviewShortcuts.qml` 让 Ctrl+←/→ 在 player 预设下变成 ±30 秒；帮助浮层已
+  按预设分流（`helpPlayerLabel`），只有走带条 tooltip 没跟上。
+- **I9 图片画布左键平移释放后 `dragActive` 不复位（确认，已修）**：只在
+  `onPressed` 各分支清除，`onReleased` 仅对右/中键清除，且无 `onCanceled`。修复时发现
+  只清 `dragActive` 会让同一次释放的 `onClicked` 误判为点击而切换 A/B（已复现），因此
+  同时按 annotation/crop/marquee 的既有机制置 `suppressClickAfterMarquee`。
+  `tst_image_workspace_manual` 已加“按下武装→释放解除”断言。
+- **I10 视频 ROI 框选内容外释放被静默丢弃（确认，已修）**：`ComparisonViewport.qml`
+  的 `onReleased` 对 letterbox/另一面板/不可映射直接落空，无任何提示。新增
+  `signal roiRejected(string)`，按“画面外”与“区域太小”分别给出中文原因，经 `Main.qml`
+  的 `showActionFeedback()` 送到与其它 chrome 操作同一可见通道。`roiSelectMode` 保持已
+  武装状态不变（该行为有契约测试钉住，属既定设计）。
+- **I11 帮助表漏图片 `` ` `` 别名（确认，未修）**：别名在
+  `ImageWorkspace.qml` 的 `Keys.onPressed` 里真实存在，但 `ShortcutHelpOverlay.qml:30`
+  只写“空格 / T”。`I`/`O` 的 `autoRepeat: false` 已存在，只是
+  `MainQmlContractTests` 的序列清单刻意未收录（`:8806` 注释还声称入/出点是命令型按键）。
+- **U4/U6/U7 对比度（确认，已修）**：ClipExportDialog 百分比文字用 `Theme.accent`
+  （在真实背景 `Theme.menu` 上 3.40:1）改为 `Theme.accentText`（7.20:1），与
+  SampleExportDialog 一致；ShortcutHelpOverlay「Esc 关闭」`disabledText`（2.37:1）与三处
+  “空值/占位”（实际 2.96–3.25:1）改 `mutedText`。`tst_vcs_theme.qml` 的对比度数对
+  补 `accentText/menu`、`mutedText/window`。（计划里 3.82–4.25 与 2.67–2.96 的分母取错
+  了面板。）
+- **U5 时间轴标记 tooltip 显示内部枚举（确认，已修）**：`%2` 直接插 `marker.kind`，
+  用户看到 `duplicate`/`missing` 等。原有三份互相独立的中文映射（PlayerOsc、TabbedInspector、
+  以及一处根本没有），收敛为 `VcsTheme.js` 的 `timelineMarkerLabel(kind)`（紧挨既有
+  `timelineMarkerColor`），三处共用。新增 `tst_timeline_tracks` 用例断言 tooltip 含
+  「缺失」且不含 `missing`；反向对照（还原成 `marker.kind`）确实变红。
+- **U8 9px 承载结论文字（确认，已修）**：`TimelineTracks` 的缩放读数（必读状态值）升
+  `Theme.fontSecondary`；VcsMenuItem 勾形与 NearbyFramesCard 的三个状态标签（徽章、锚点、
+  接缝）降到 `Theme.fontMicro`。78 处 11px 按原记录仍属一致性收敛，未动。
+- **U9 `VcsToolButton` 文本不 elide（部分确认，已修）**：机制真实（无 `elide`/`clip`，
+  固定宽度），但失败模式是溢出而非裁切，且审计 19 个调用点无一实际溢出——属潜在缺陷。
+  补 `elide: Text.ElideRight`（CompareModeBar 的 ModeButton 早有同样写法）。
+- **U10 泳道展开/收起与峰值点命中区（确认，已修）**：toggle 原为常量 `Theme.accent`、
+  仅 MouseArea、无键盘焦点；现补 HoverHandler 变色、`activeFocusOnTab`、Return/Enter/Space
+  触发同一切换、以及 2px `Theme.focus` 焦点环（`Text` 不是 AbstractButton，没有
+  `visualFocus`，且 qmllint 不会标记自引用 id 上的不存在属性——用错会静默永远不显示）。
+  峰值点可见圆点仍 6×6，指针目标扩到 `Theme.hitAreaMinimum` 并夹在 curveArea 内；同时补
+  `z: 1`，否则后声明的大面积 curveArea MouseArea 会吞掉圆点点击，放大命中区形同虚设。
+- **U11 NearbyFramesCard 头部 450px 魔法预算（确认，且触发条件比计划更糟）**：溢出量
+  = 固定内容宽 − 450，与卡片宽度无关，因此无跨会话徽章时也溢出约 178px、有徽章约 246px。
+  改为 `fixedContentWidth` 按可见兄弟实测求和，弹性间隔取剩余空间。
+  `MainQmlContractTests` 在徽章隐藏/可见两种状态下都断言每个可见子项不越界，并用可见
+  子项计数防止空转通过。
+- **U12 焦点环三套标准（确认，未修）**：`visualFocus`+`focus`（ReviewActionButton/
+  VcsToolButton/ImageWorkspace）、`activeFocus`+`focus`（TabbedInspector/CompareModeBar/
+  ComparisonViewport/ImageEditDialogs）、`activeFocus`+`accent`（IssueNoteDialog/
+  SampleExportDialog/ReviewOffsetSpinBox/ToolbarCombo）三套并存，另有约 20 个 TransportBar
+  控件与 MetricTimelineLane、NearbyFramesCard 胶片条等完全无环。收敛方案需产品确认
+  （`visualFocus` 让鼠标保持安静，`activeFocus` 不区分来源），本轮只在新加的
+  MetricTimelineLane 环上采用 `Theme.focus`。
+- **U17 disabled 先于 checked（确认，已修）**：`ReviewActionButton`/`VcsToolButton` 的
+  背景与文字色都把 `!enabled` 排在 `checked` 之前，与已修好的 CompareModeBar 相反。两个
+  文件的四个色块都把 `checked` 提到最前并带上 CompareModeBar 的理由注释；
+  `prominent` 分支位置不变（TransportBar 的播放钮是 prominent + 动态 enabled，必须保留
+  禁用外观）。`tst_review_action_button` 补“禁用但选中仍为 controlChecked/正常文字”用例。
+- **D1–D3 产品决策（三项均确认仍开放，未动）**：与 `8d054ff` 基线逐字节一致，台账第
+  51–57 行仍列为待产品确认。补充事实：`H` 与 `Ctrl+H` 在全库均未绑定（D1 可安全改绑）；
+  D2 只钉住了按钮隐藏、按键在双参考模式下仍可用这半没有任何测试；D3 的静默回落完全无
+  测试，且 `referenceSourceIndex >= 0 ? … : 0` 同一写法还有三处（`Main.qml:428/2602/2718`）。
+- **未做（如实记录）**：U3 token 纪律门禁与 U14–U21 的字面量收敛未开始；U12 焦点环统一、
+  I5、I8、I11、D1–D3 待决。已实核的收敛清单（真实计数）：`font.pixelSize` 210 处/12 档，
+  其中 11px 78 处无对应 token 是最大漂移；`radius` 120 处/15 值（6/4/3/2/5 共 80 处无
+  token，另 29 处 8/10/12 已有 token 却写字面量）；`duration` 31 处（120 有
+  `animationFast` 却写 16 次字面量）；`spacing` 132 处（6×23、7×5 脱离 4/8 栅格，
+  47 处已有 token）；24–31px 命中区 66 处（含计划漏掉的 24px×7）；画笔色板 6 项中
+  `#ffd60a`=`Theme.warning`、`#ffffff`=`Theme.inverseText` 两项字节级重复（计划只发现
+  前者）；`Consolas` 16 处、其中 9 处串本身含中文。
+- **验证**：`-TestRegex 'ui.(MainQmlContractTests|ViewportPixelScaleTests|
+  PairMetricsControllerTests|image_workspace_manual|player_osc|timeline_tracks|vcs_theme|
+  review_action_button)|media.(PairMetricsServiceTests|StillImageDecoderTests)|
+  ui.(ImageReviewControllerTests|ImageFolderPairModelTests)' -TestJobs 4` → 252/252 通过
+  （4 项原有 Disabled、2 项环境跳过未计）。`tst_player_osc` 22/22、
+  `tst_review_action_button` 11/11、`tst_timeline_tracks` 9/9、`tst_vcs_theme` 15/15
+  （qmltestrunner 直跑）。`format-check` 通过。真机：
+  `--ui-image-folder` 静图打开全通过（见 F4）。变异证据：P3 还原算法→耗时断言红；
+  U5 还原 `marker.kind`→tooltip 用例红；U9/U10/I9/I10 各还原一处→对应用例红。
+- **边界**：本轮未跑完整 `-Test` 全套与 `-FullMatrix`；UI 改动涉及主题/弹窗/布局/DPI 的
+  部分（U4–U7 对比度、U10/U11 命中区与头部布局）按仓库要求应补 `-FullMatrix` 截图核对，
+  尚未执行。I5/I8/I11/U12/D1–D3 与 token 收敛均未动。
 
 ## 2026-10-14 并行三维审查与低风险修复（当前工作区）
 
