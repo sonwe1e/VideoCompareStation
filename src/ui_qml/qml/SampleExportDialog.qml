@@ -96,7 +96,7 @@ Item {
 
         background: Rectangle {
             color: Theme.menu
-            radius: 10
+            radius: Theme.radiusMedium
             border.width: 1
             border.color: Theme.menuBorder
         }
@@ -115,7 +115,7 @@ Item {
                     width: parent.width
                     height: 48
                     color: Theme.panel
-                    radius: 10
+                    radius: Theme.radiusMedium
 
                     Rectangle {
                         height: 10
@@ -195,7 +195,7 @@ Item {
 
                                 width: parent.width - 24
                                 anchors.centerIn: parent
-                                spacing: 8
+                                spacing: Theme.spaceMain
 
                                 Row {
                                     anchors.horizontalCenter: parent.horizontalCenter
@@ -325,7 +325,7 @@ Item {
                         // Sample ID input
                         Column {
                             width: parent.width
-                            spacing: 4
+                            spacing: Theme.spaceMicro
 
                             Text {
                                 text: qsTr("样本标识 (sampleId)：")
@@ -362,7 +362,7 @@ Item {
                         // Directory Selection
                         Column {
                             width: parent.width
-                            spacing: 4
+                            spacing: Theme.spaceMicro
 
                             Text {
                                 text: qsTr("保存目录：")
@@ -372,7 +372,7 @@ Item {
 
                             Row {
                                 width: parent.width
-                                spacing: 8
+                                spacing: Theme.spaceMain
 
                                 Rectangle {
                                     width: parent.width - 88
@@ -426,7 +426,7 @@ Item {
 
                                 width: parent.width - 16
                                 anchors.centerIn: parent
-                                spacing: 8
+                                spacing: Theme.spaceMain
 
                                 Rectangle {
                                     width: 16
@@ -482,12 +482,12 @@ Item {
                         Column {
                             width: parent.width
                             visible: control.busy || control.lastStatus.length > 0 || control.lastOutputPath.length > 0 || control.lastFailureDetail.length > 0
-                            spacing: 4
+                            spacing: Theme.spaceMicro
 
                             Row {
                                 width: parent.width
                                 visible: control.busy
-                                spacing: 8
+                                spacing: Theme.spaceMain
 
                                 Rectangle {
                                     width: parent.width - 50
@@ -552,7 +552,7 @@ Item {
                     width: parent.width
                     height: footerRow.implicitHeight + 24
                     color: Theme.panel
-                    radius: 10
+                    radius: Theme.radiusMedium
 
                     Rectangle {
                         height: 10
@@ -567,7 +567,7 @@ Item {
                     Row {
                         id: footerRow
 
-                        spacing: 8
+                        spacing: Theme.spaceMain
                         anchors {
                             right: parent.right
                             rightMargin: 12

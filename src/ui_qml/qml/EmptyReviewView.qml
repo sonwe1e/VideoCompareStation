@@ -141,7 +141,7 @@ Rectangle {
 
             Flow {
                 width: parent.width
-                spacing: 4
+                spacing: Theme.spaceMicro
 
                 ReviewActionButton {
                     objectName: "emptyOpenFolderButton"

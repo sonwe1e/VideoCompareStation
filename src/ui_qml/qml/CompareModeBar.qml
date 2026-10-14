@@ -337,12 +337,12 @@ Rectangle {
 
             Behavior on color {
                 ColorAnimation {
-                    duration: 120
+                    duration: Theme.animationFast
                 }
             }
             Behavior on border.color {
                 ColorAnimation {
-                    duration: 120
+                    duration: Theme.animationFast
                 }
             }
         }
@@ -373,7 +373,7 @@ Rectangle {
         }
 
         contentItem: Row {
-            spacing: 4
+            spacing: Theme.spaceMicro
 
             Text {
                 text: focusButton.text
@@ -426,12 +426,12 @@ Rectangle {
 
             Behavior on color {
                 ColorAnimation {
-                    duration: 120
+                    duration: Theme.animationFast
                 }
             }
             Behavior on border.color {
                 ColorAnimation {
-                    duration: 120
+                    duration: Theme.animationFast
                 }
             }
         }
@@ -483,12 +483,12 @@ Rectangle {
 
             Behavior on color {
                 ColorAnimation {
-                    duration: 120
+                    duration: Theme.animationFast
                 }
             }
             Behavior on border.color {
                 ColorAnimation {
-                    duration: 120
+                    duration: Theme.animationFast
                 }
             }
         }

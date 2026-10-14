@@ -3381,7 +3381,7 @@ ApplicationWindow {
         }
 
         background: Rectangle {
-            radius: 8
+            radius: Theme.radiusSmall
             color: root.panelColor
             border.color: root.borderColor
         }
@@ -3519,7 +3519,7 @@ ApplicationWindow {
                     required property int manualOffset
                     property int sourceIdValue: sourceId
                     width: parent.width
-                    spacing: 8
+                    spacing: Theme.spaceMain
 
                     Text {
                         width: parent.width - sourceOffsetInput.width - parent.spacing
@@ -4226,11 +4226,11 @@ ApplicationWindow {
         Column {
             anchors.fill: parent
             anchors.margins: 10
-            spacing: 8
+            spacing: Theme.spaceMain
 
             Row {
                 width: parent.width
-                spacing: 8
+                spacing: Theme.spaceMain
 
                 Text {
                     text: qsTr("问题记录")
@@ -4355,7 +4355,7 @@ ApplicationWindow {
 
             Row {
                 width: parent.width
-                spacing: 8
+                spacing: Theme.spaceMain
 
                 ReviewActionButton {
                     objectName: "issueLogCaptureButton"
@@ -4634,7 +4634,7 @@ ApplicationWindow {
         readonly property real noticeWidth: Math.max(0, Math.min(560, (root.chromeVisible ? notificationStack.stageRight - notificationStack.stageLeft : root.width) - 48))
 
         z: 990
-        spacing: 8
+        spacing: Theme.spaceMain
         x: Math.round((root.chromeVisible ? (notificationStack.stageLeft + notificationStack.stageRight) / 2 : root.width / 2) - notificationStack.width / 2)
         y: Math.round(root.chromeVisible ? notificationStack.stageFloor - 12 - notificationStack.height : chromeRestorePill.y + chromeRestorePill.height + 10)
 
@@ -4850,7 +4850,7 @@ ApplicationWindow {
 
         Behavior on opacity {
             NumberAnimation {
-                duration: 120
+                duration: Theme.animationFast
             }
         }
 

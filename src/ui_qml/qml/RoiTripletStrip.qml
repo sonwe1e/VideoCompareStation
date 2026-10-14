@@ -157,7 +157,7 @@ Rectangle {
         Row {
             id: stripHeader
 
-            spacing: 8
+            spacing: Theme.spaceMain
             width: parent.width
 
             ReviewActionButton {

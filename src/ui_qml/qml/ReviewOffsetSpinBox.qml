@@ -41,7 +41,7 @@ SpinBox {
 
         Behavior on color {
             ColorAnimation {
-                duration: 120
+                duration: Theme.animationFast
             }
         }
     }

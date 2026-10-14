@@ -198,7 +198,7 @@ Rectangle {
         id: darkCheckBox
 
         leftPadding: 0
-        spacing: 8
+        spacing: Theme.spaceMain
 
         contentItem: Text {
             text: darkCheckBox.text
@@ -359,7 +359,7 @@ Rectangle {
                             visible: Boolean(control.controller && control.controller.activePairTimeInfo && control.controller.activePairTimeInfo.aligned)
                             width: parent.width
                             height: visible ? activePairTimeColumn.implicitHeight + 18 : 0
-                            radius: 8
+                            radius: Theme.radiusSmall
                             color: Theme.panelElevated
                             border.color: Theme.border
                             border.width: 1
@@ -452,7 +452,7 @@ Rectangle {
                             visible: Boolean(control.controller && control.controller.currentInexactReason && control.controller.currentInexactReason.length > 0)
                             width: parent.width
                             height: visible ? inexactReasonCol.implicitHeight + 16 : 0
-                            radius: 8
+                            radius: Theme.radiusSmall
                             color: Theme.warningPanel
                             border.color: Theme.warningBorder
                             border.width: 1
@@ -608,7 +608,7 @@ Rectangle {
                             visible: control.differenceMode && control.metrics !== null && control.metrics.available
                             width: parent.width
                             height: visible ? metricsColumn.implicitHeight + 20 : 0
-                            radius: 8
+                            radius: Theme.radiusSmall
                             color: Theme.panelElevated
                             border.color: Theme.border
                             border.width: 1
@@ -616,7 +616,7 @@ Rectangle {
                             Column {
                                 id: metricsColumn
 
-                                spacing: 4
+                                spacing: Theme.spaceMicro
                                 x: 10
                                 y: 10
                                 width: parent.width - 20
@@ -646,7 +646,7 @@ Rectangle {
                                         required property var modelData
 
                                         width: metricsColumn.width
-                                        spacing: 8
+                                        spacing: Theme.spaceMain
 
                                         Label {
                                             Layout.fillWidth: true
@@ -707,7 +707,7 @@ Rectangle {
                                 y: wipeSlider.topPadding + (wipeSlider.horizontal ? (wipeSlider.availableHeight - height) / 2 : wipeSlider.visualPosition * (wipeSlider.availableHeight - height))
                                 implicitWidth: 16
                                 implicitHeight: 16
-                                radius: 8
+                                radius: Theme.radiusSmall
                                 color: Theme.primaryText
                                 border.width: wipeSlider.pressed ? 4 : (wipeSlider.activeFocus ? 3 : 2.5)
                                 border.color: Theme.accent
@@ -903,7 +903,7 @@ Rectangle {
                             visible: Boolean(control.timingDiagnostics)
                             width: parent.width
                             height: timingCol.implicitHeight + 20
-                            radius: 8
+                            radius: Theme.radiusSmall
                             color: Theme.panelElevated
                             border.color: Theme.border
                             border.width: 1
@@ -913,7 +913,7 @@ Rectangle {
                                 width: parent.width - 20
                                 x: 10
                                 y: 10
-                                spacing: 8
+                                spacing: Theme.spaceMain
 
                                 RowLayout {
                                     width: parent.width
@@ -1125,7 +1125,7 @@ Rectangle {
                                 required property var modelData
                                 width: infoColumn.width
                                 height: mediaCardCol.implicitHeight + 20
-                                radius: 8
+                                radius: Theme.radiusSmall
                                 color: Theme.panelElevated
                                 border.color: Theme.border
                                 border.width: 1

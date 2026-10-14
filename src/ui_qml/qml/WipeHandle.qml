@@ -48,7 +48,7 @@ Item {
 
         Behavior on color {
             ColorAnimation {
-                duration: 120
+                duration: Theme.animationFast
             }
         }
     }
@@ -58,7 +58,7 @@ Item {
         objectName: "wipeKnob"
         width: 20
         height: 84
-        radius: 10
+        radius: Theme.radiusMedium
         // No hover scale: a scaled edge and 2 px grip bars land on fractional pixels and blur.
         color: drag.active ? Theme.controlChecked : (hover.hovered ? Theme.controlHover : Theme.raisedPanel)
         border.width: 1.5
@@ -67,18 +67,18 @@ Item {
 
         Behavior on color {
             ColorAnimation {
-                duration: 120
+                duration: Theme.animationFast
             }
         }
         Behavior on border.color {
             ColorAnimation {
-                duration: 120
+                duration: Theme.animationFast
             }
         }
 
         // Grip: two short bars read as "drag me" without the cramped arrow glyphs.
         Row {
-            spacing: 4
+            spacing: Theme.spaceMicro
             anchors.centerIn: parent
 
             Rectangle {

@@ -150,7 +150,7 @@ Item {
 
         background: Rectangle {
             color: Theme.menu
-            radius: 10
+            radius: Theme.radiusMedium
             border.width: 1
             border.color: Theme.menuBorder
         }
@@ -168,7 +168,7 @@ Item {
                     width: parent.width
                     height: 48
                     color: Theme.panel
-                    radius: 10
+                    radius: Theme.radiusMedium
 
                     Rectangle {
                         height: 10
@@ -223,7 +223,7 @@ Item {
                     width: parent.width
                     height: footerRow.implicitHeight + 24
                     color: Theme.panel
-                    radius: 10
+                    radius: Theme.radiusMedium
 
                     Rectangle {
                         height: 10
@@ -238,7 +238,7 @@ Item {
                     Row {
                         id: footerRow
 
-                        spacing: 8
+                        spacing: Theme.spaceMain
                         anchors {
                             right: parent.right
                             rightMargin: 12
@@ -356,7 +356,7 @@ Item {
             }
 
             Row {
-                spacing: 8
+                spacing: Theme.spaceMain
 
                 ReviewActionButton {
                     objectName: "imageEditScaleLockAspect"

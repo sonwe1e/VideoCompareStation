@@ -671,7 +671,7 @@ Rectangle {
 
         Behavior on opacity {
             NumberAnimation {
-                duration: 120
+                duration: Theme.animationFast
             }
         }
 
@@ -689,7 +689,7 @@ Rectangle {
         objectName: "framePendingIndicator"
         visible: control.showFramePending && control.currentFrame >= 0
         z: 40
-        radius: 12
+        radius: Theme.radiusLarge
         color: Theme.oscGlass
         border.color: Theme.oscBorder
         width: pendingRow.implicitWidth + 22
@@ -1281,7 +1281,7 @@ Rectangle {
         visible: control.differenceUnavailableDetail.length > 0
         width: Math.min(parent.width - 48, 460)
         height: unavailableColumn.implicitHeight + 32
-        radius: 8
+        radius: Theme.radiusSmall
         // A missing frame or an inexact pairing is a limit of the material, not a failure.
         color: Theme.warningPanel
         border.color: Theme.warningBorder
@@ -1445,7 +1445,7 @@ Rectangle {
                 // elides once the name outgrows the panel or the 280 px cap.
                 width: compactBadge ? 44 : Math.min(280, Math.max(80, panelWidth - 24), Math.max(80, surfaceLabelName.implicitWidth + 56))
                 height: compactBadge ? 36 : 42
-                radius: 8
+                radius: Theme.radiusSmall
                 color: Theme.oscGlass
                 border.width: 1
                 border.color: Theme.sourceBorder(surfaceLabel.sourceSlot)
@@ -1568,7 +1568,7 @@ Rectangle {
             id: overlayColumn
 
             width: parent.width - 36
-            spacing: 8
+            spacing: Theme.spaceMain
             anchors.centerIn: parent
 
             BusyIndicator {

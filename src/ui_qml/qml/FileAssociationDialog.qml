@@ -103,7 +103,7 @@ Item {
 
         background: Rectangle {
             color: Theme.menu
-            radius: 10
+            radius: Theme.radiusMedium
             border.width: 1
             border.color: Theme.menuBorder
         }
@@ -121,7 +121,7 @@ Item {
                     width: parent.width
                     height: 48
                     color: Theme.panel
-                    radius: 10
+                    radius: Theme.radiusMedium
 
                     Rectangle {
                         height: 10
@@ -256,7 +256,7 @@ Item {
                         Row {
                             objectName: "fileActionButtonRow1"
                             width: parent.width
-                            spacing: 8
+                            spacing: Theme.spaceMain
 
                             ReviewActionButton {
                                 objectName: "fileAssociationRegisterButton"
@@ -278,7 +278,7 @@ Item {
                         Row {
                             objectName: "fileActionButtonRow2"
                             width: parent.width
-                            spacing: 8
+                            spacing: Theme.spaceMain
 
                             ReviewActionButton {
                                 objectName: "fileAssociationRepairButton"
@@ -319,7 +319,7 @@ Item {
                     color: Theme.panel
 
                     Row {
-                        spacing: 8
+                        spacing: Theme.spaceMain
                         anchors {
                             right: parent.right
                             rightMargin: 12

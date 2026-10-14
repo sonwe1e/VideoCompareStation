@@ -93,7 +93,7 @@ Popup {
             Keys.onEscapePressed: control.saveEmpty()
         }
         Row {
-            spacing: 8
+            spacing: Theme.spaceMain
             layoutDirection: Qt.RightToLeft
 
             anchors {

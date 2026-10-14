@@ -905,7 +905,7 @@ Rectangle {
             visible: viewport.label.length > 0 || viewport.title.length > 0
             width: Math.min(viewportLabelColumn.implicitWidth + 18, Math.max(200, viewport.width - 60))
             height: viewportLabelColumn.implicitHeight + 12
-            radius: 8
+            radius: Theme.radiusSmall
             color: Theme.stageLabel
             border.width: 1
             border.color: Theme.stageLabelBorder
@@ -1595,7 +1595,7 @@ Rectangle {
                 Row {
                     id: cropActionRow
                     anchors.centerIn: parent
-                    spacing: 8
+                    spacing: Theme.spaceMain
 
                     Text {
                         id: cropSizeLabel
@@ -1909,7 +1909,7 @@ Rectangle {
                 right: parent.right
                 rightMargin: 10
             }
-            spacing: 8
+            spacing: Theme.spaceMain
 
             // Row A — file and view commands. Opening variants live behind one dropdown so the
             // top edge never grows past a single row; sidebar toggling only appears with folders.
@@ -1918,7 +1918,7 @@ Rectangle {
 
                 objectName: "imageFileRow"
                 width: parent.width
-                spacing: 8
+                spacing: Theme.spaceMain
                 // See the forceLayout note in Component.onCompleted above.
                 onWidthChanged: forceLayout()
 
@@ -2043,7 +2043,7 @@ Rectangle {
                 objectName: "imageModeRow"
                 visible: !control.editModeActive
                 width: parent.width
-                spacing: 8
+                spacing: Theme.spaceMain
                 // See the forceLayout note in Component.onCompleted above.
                 onWidthChanged: forceLayout()
 
@@ -2329,7 +2329,7 @@ Rectangle {
                         top: parent.top
                         margins: control.editModeActive ? 8 : 0
                     }
-                    spacing: 8
+                    spacing: Theme.spaceMain
 
                     Flow {
                         id: editRow
@@ -2603,7 +2603,7 @@ Rectangle {
                         Flow {
                             id: editParamsRow
                             objectName: "imageEditParamsRow"
-                            spacing: 8
+                            spacing: Theme.spaceMain
                             visible: control.hasPrimary && control.editModeActive
                             // See the forceLayout note in Component.onCompleted above.
                             onWidthChanged: forceLayout()
@@ -3432,7 +3432,7 @@ Rectangle {
                         visible: control.hasPair && control.hasSecondary && wipeOverlay.splitX > 44
                         width: wipeIdentityLeft.width + 18
                         height: wipeIdentityLeft.implicitHeight + 12
-                        radius: 8
+                        radius: Theme.radiusSmall
                         color: Theme.stageLabel
                         border.width: 1
                         border.color: Theme.stageLabelBorder
@@ -3461,7 +3461,7 @@ Rectangle {
                         visible: control.hasPair && (wipeOverlay.width - wipeOverlay.splitX) > 44
                         width: wipeIdentityRight.width + 18
                         height: wipeIdentityRight.implicitHeight + 12
-                        radius: 8
+                        radius: Theme.radiusSmall
                         color: Theme.stageLabel
                         border.width: 1
                         border.color: Theme.stageLabelBorder
@@ -3798,7 +3798,7 @@ Rectangle {
         visible: control.hasPair && control.compareMode === 7
         width: fadeRow.implicitWidth + 24
         height: 36
-        radius: 8
+        radius: Theme.radiusSmall
         color: Theme.oscGlass
         border.width: 1
         border.color: Theme.oscBorder

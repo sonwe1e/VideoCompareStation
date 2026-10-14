@@ -119,7 +119,7 @@ Item {
 
         background: Rectangle {
             color: Theme.menu
-            radius: 10
+            radius: Theme.radiusMedium
             border.width: 1
             border.color: Theme.menuBorder
         }
@@ -137,7 +137,7 @@ Item {
                     width: parent.width
                     height: 48
                     color: Theme.panel
-                    radius: 10
+                    radius: Theme.radiusMedium
 
                     Rectangle {
                         height: 10
@@ -214,11 +214,11 @@ Item {
                                 id: infoCol
                                 width: parent.width - 20
                                 anchors.centerIn: parent
-                                spacing: 8
+                                spacing: Theme.spaceMain
 
                                 Column {
                                     width: parent.width
-                                    spacing: 4
+                                    spacing: Theme.spaceMicro
 
                                     Text {
                                         objectName: "clipExportSourceRole"
@@ -247,7 +247,7 @@ Item {
                                 }
 
                                 Row {
-                                    spacing: 8
+                                    spacing: Theme.spaceMain
                                     width: parent.width
 
                                     Text {
@@ -270,7 +270,7 @@ Item {
 
                                 Row {
                                     width: parent.width
-                                    spacing: 8
+                                    spacing: Theme.spaceMain
 
                                     Text {
                                         text: qsTr("建议文件：")
@@ -381,7 +381,7 @@ Item {
                                 id: tipCol
                                 width: parent.width - 20
                                 anchors.centerIn: parent
-                                spacing: 4
+                                spacing: Theme.spaceMicro
 
                                 Text {
                                     text: qsTr("ℹ️ 无损剪辑特性说明：")
@@ -407,7 +407,7 @@ Item {
                     width: parent.width
                     height: footerRow.implicitHeight + 24
                     color: Theme.panel
-                    radius: 10
+                    radius: Theme.radiusMedium
 
                     Rectangle {
                         height: 10
@@ -422,7 +422,7 @@ Item {
                     Row {
                         id: footerRow
 
-                        spacing: 8
+                        spacing: Theme.spaceMain
                         anchors {
                             right: parent.right
                             rightMargin: 12

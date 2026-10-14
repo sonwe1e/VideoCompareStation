@@ -71,13 +71,13 @@ Item {
 
         Behavior on height {
             NumberAnimation {
-                duration: 120
+                duration: Theme.animationFast
                 easing.type: Easing.OutQuad
             }
         }
         Behavior on radius {
             NumberAnimation {
-                duration: 120
+                duration: Theme.animationFast
                 easing.type: Easing.OutQuad
             }
         }

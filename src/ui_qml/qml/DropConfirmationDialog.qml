@@ -86,7 +86,7 @@ Popup {
     background: Rectangle {
         objectName: "dropDialogBackground"
         color: Theme.menu
-        radius: 10
+        radius: Theme.radiusMedium
         border.width: 1
         border.color: Theme.menuBorder
     }
@@ -105,7 +105,7 @@ Popup {
                 width: parent.width
                 height: 52
                 color: Theme.panel
-                radius: 10
+                radius: Theme.radiusMedium
 
                 Rectangle {
                     height: 10
@@ -166,7 +166,7 @@ Popup {
 
                             Row {
                                 width: parent.width
-                                spacing: 8
+                                spacing: Theme.spaceMain
 
                                 Rectangle {
                                     width: 24
@@ -245,7 +245,7 @@ Popup {
                 width: parent.width
                 height: footerRow.implicitHeight + 24
                 color: Theme.panel
-                radius: 10
+                radius: Theme.radiusMedium
 
                 Rectangle {
                     height: 10
@@ -261,7 +261,7 @@ Popup {
                     id: footerRow
 
                     objectName: "dropDialogFooterRow"
-                    spacing: 8
+                    spacing: Theme.spaceMain
                     anchors {
                         right: parent.right
                         rightMargin: 12

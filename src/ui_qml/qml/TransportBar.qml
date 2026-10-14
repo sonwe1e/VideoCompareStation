@@ -130,12 +130,12 @@ Item {
 
         Behavior on color {
             ColorAnimation {
-                duration: 120
+                duration: Theme.animationFast
             }
         }
         Behavior on border.color {
             ColorAnimation {
-                duration: 120
+                duration: Theme.animationFast
             }
         }
 
@@ -228,7 +228,7 @@ Item {
     Column {
         id: transportColumn
 
-        spacing: 4
+        spacing: Theme.spaceMicro
         anchors.horizontalCenter: parent.horizontalCenter
 
         Row {
@@ -704,7 +704,7 @@ Item {
 
             objectName: "adjacentFramesStrip"
             visible: !control.playing && control.currentFrame >= 0
-            spacing: 4
+            spacing: Theme.spaceMicro
             anchors.horizontalCenter: parent.horizontalCenter
 
             Text {

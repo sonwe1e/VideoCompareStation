@@ -189,13 +189,13 @@ Rectangle {
 
         anchors.fill: parent
         anchors.margins: 10
-        spacing: 8
+        spacing: Theme.spaceMain
 
         Row {
             id: cardHeaderRow
 
             width: parent.width
-            spacing: 8
+            spacing: Theme.spaceMain
 
             // U11: the spacer used to eat a flat 450px, which overflowed the card by ~178px
             // (and ~246px with the cross-session badge) because the header's fixed content is
@@ -533,7 +533,7 @@ Rectangle {
             id: cardFooterRow
 
             width: parent.width
-            spacing: 8
+            spacing: Theme.spaceMain
             visible: !control.collapsed
 
             ReviewActionButton {
