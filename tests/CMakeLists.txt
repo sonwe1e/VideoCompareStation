@@ -72,6 +72,20 @@ if(DVS_BUILD_DESKTOP)
             -NoProfile
             -File "${PROJECT_SOURCE_DIR}/tools/quality/check-hardcoded-paths.ps1"
     )
+
+    # Design-token drift ratchet: no QML font size, radius, duration, spacing or sub-32px
+    # interactive target may grow past the recorded baseline without a token behind it.
+    dvs_add_test(
+        NAME quality.qml-token-literals
+        LAYER unit
+        MODULE app
+        TIMEOUT 60
+        COMMAND
+            "${DVS_POWERSHELL_EXECUTABLE}"
+            -NoLogo
+            -NoProfile
+            -File "${PROJECT_SOURCE_DIR}/tools/quality/check-qml-token-literals.ps1"
+    )
 endif()
 
 add_subdirectory(unit)
