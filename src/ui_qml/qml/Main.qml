@@ -582,14 +582,14 @@ ApplicationWindow {
         return n;
     }
     readonly property string playbackModeLabel: {
-        const policy = Number(controller ? controller.playbackContinuityPolicy : 2);
-        // U03: the rail speaks the user action ("原速播放"), not the internal continuity
-        // policy name; the policy detail stays one line down.
-        return policy === 0 ? qsTr("逐帧完整审查") : qsTr("原速播放");
+        // The rail speaks the active behaviour. The Contextual preference resolves per session,
+        // so the effective policy - not the requested one - is what the user is watching.
+        const policy = Number(controller ? controller.playbackContinuityPolicyEffective : 1);
+        return policy === 0 ? qsTr("逐帧完整") : qsTr("流畅优先");
     }
     readonly property string playbackModeDetail: {
-        const policy = Number(controller ? controller.playbackContinuityPolicy : 2);
-        return policy === 0 ? qsTr("不跳过整组；落后时放慢以保留每组画面") : qsTr("落后超过约 2 秒时跳过整组追上时间");
+        const policy = Number(controller ? controller.playbackContinuityPolicyEffective : 1);
+        return policy === 0 ? qsTr("每一帧都显示；负载高时播放会放慢") : qsTr("保持原速；解码跟不上时整组跳帧");
     }
     // U03: the waiting indicator names the work in progress. A held reverse walk (E04) is
     // preparing earlier frames through the reverse GOP window, which reads differently from
@@ -4457,7 +4457,7 @@ ApplicationWindow {
             return root.previewInfo ? !root.previewInfo.isExact : false;
         }
         previewSampleFrame: root.previewInfo ? root.previewInfo.sampleFrame : -1
-        playbackContinuityPolicy: root.controller ? root.controller.playbackContinuityPolicy : 1
+        playbackContinuityPolicy: root.controller ? root.controller.playbackContinuityPolicyEffective : 1
         anchors {
             left: viewportFrame.left
             right: root.drawerMode ? alignmentBar.left : viewportFrame.right

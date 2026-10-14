@@ -2616,7 +2616,7 @@ TEST(MainQmlContractTests, TerminologySpeaksUserActionsAndLayeringFollowsTheTask
     EXPECT_FALSE(sourceBar->isVisible());
 
     // The transport names the user action, not the continuity policy enum.
-    EXPECT_EQ(harness.root->property("playbackModeLabel").toString(), QStringLiteral("原速播放"));
+    EXPECT_EQ(harness.root->property("playbackModeLabel").toString(), QStringLiteral("流畅优先"));
 
     // The presentation-status translation maps every unconfirmed calibre to the same
     // user-facing sentence while other calibres keep their meaning; the waiting pill names
@@ -2758,6 +2758,70 @@ TEST(MainQmlContractTests, TransportRangeRowMarksInAndOutFromTheCurrentFrame) {
     harness.settle();
 }
 
+// The default continuity preference is Contextual, a policy with no segment of its own. The
+// transport switch must show the behaviour the session resolved to (RealTime) instead of
+// looking unset, while the menu keeps editing the three-way preference - one setting, four
+// surfaces, one vocabulary.
+TEST(MainQmlContractTests, ContinuitySwitchShowsTheResolvedPolicyForAContextualPreference) {
+    WorkspaceHarness harness;
+    harness.preferences.setPlaybackContinuityPolicy(2);
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    // The harness restores the stored preference once the session reports ready - the same
+    // one-shot path the settings dialog uses - so no manual apply is needed here.
+    harness.settle();
+
+    // The controller keeps the request and the resolution apart.
+    EXPECT_EQ(harness.controller->playbackContinuityPolicy(), 2);
+    EXPECT_EQ(harness.controller->playbackContinuityPolicyEffective(), 1);
+    // The status rail names the resolved behaviour in the same vocabulary as the switch.
+    EXPECT_EQ(harness.root->property("playbackModeLabel").toString(), QStringLiteral("流畅优先"));
+
+    auto* const realTimeOption =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("realTimeContinuityButton"));
+    auto* const everyFrameOption =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("reviewEveryFrameContinuityButton"));
+    ASSERT_NE(realTimeOption, nullptr);
+    ASSERT_NE(everyFrameOption, nullptr);
+    EXPECT_TRUE(realTimeOption->property("isSelected").toBool())
+        << "a Contextual preference must leave the resolved RealTime segment selected";
+    EXPECT_FALSE(everyFrameOption->property("isSelected").toBool());
+
+    // The menu still offers (and marks) the three-way preference the user actually chose.
+    auto* const contextualItem =
+        harness.root->findChild<QObject*>(QStringLiteral("continuityContextual"));
+    ASSERT_NE(contextualItem, nullptr);
+    EXPECT_TRUE(contextualItem->property("checked").toBool());
+    auto* const realTimeItem =
+        harness.root->findChild<QObject*>(QStringLiteral("continuityRealTime"));
+    ASSERT_NE(realTimeItem, nullptr);
+    EXPECT_FALSE(realTimeItem->property("checked").toBool());
+
+    // Choosing the explicit review mode flips both the resolution and the switch. The option
+    // segments are plain Rectangles driven by a MouseArea, so the request goes through the
+    // transport's own signal - the same path a click takes.
+    auto* const transportBar = harness.root->findChild<QQuickItem*>(QStringLiteral("transportBar"));
+    ASSERT_NE(transportBar, nullptr);
+    ASSERT_TRUE(
+        QMetaObject::invokeMethod(transportBar, "continuityPolicyRequested", Q_ARG(int, 0)));
+    EXPECT_EQ(harness.controller->playbackContinuityPolicy(), 0)
+        << "the transport request must reach the controller";
+    EXPECT_EQ(harness.preferences.playbackContinuityPolicy(), 0)
+        << "the transport request must reach the preferences store";
+
+    // Mirror the accepted command into the harness snapshot the way the coordinator would, so
+    // the authoritative publication agrees with the optimistic projection instead of reverting
+    // it on the next refresh.
+    harness.snapshot->playbackContinuityPolicy = domain::PlaybackContinuityPolicy::ReviewEveryFrame;
+    harness.snapshot->playbackContinuityPolicyEffective =
+        domain::PlaybackContinuityPolicy::ReviewEveryFrame;
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_EQ(harness.controller->playbackContinuityPolicy(), 0);
+    EXPECT_EQ(harness.controller->playbackContinuityPolicyEffective(), 0);
+    EXPECT_TRUE(everyFrameOption->property("isSelected").toBool());
+    EXPECT_FALSE(realTimeOption->property("isSelected").toBool());
+    EXPECT_EQ(harness.root->property("playbackModeLabel").toString(), QStringLiteral("逐帧完整"));
 }
 
 TEST(MainQmlContractTests, TransportRangeRowPlaysAndLoopsTheMarkedRange) {

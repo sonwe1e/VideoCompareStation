@@ -489,8 +489,8 @@ Item {
 
         function test_playback_status_separates_three_phenomena() {
             osc.revealActive = true;
-            osc.playbackModeLabel = "正常速度观看";
-            osc.playbackModeDetail = "落后超过约 2 秒时跳过整组追上时间";
+            osc.playbackModeLabel = "流畅优先";
+            osc.playbackModeDetail = "保持原速；解码跟不上时整组跳帧";
             osc.playbackTargetRate = 1.0;
             osc.playbackPresentationRate = 0.72;
             osc.playbackRunSkippedFrameSets = 3;
@@ -504,7 +504,7 @@ Item {
             verify(status.visible);
             // Mode, target vs actual rate, player-side skips, lag, source duplicates and
             // display gaps must appear as distinct labels so they cannot be conflated.
-            verify(status.text.indexOf("正常速度观看") >= 0);
+            verify(status.text.indexOf("流畅优先") >= 0);
             verify(status.text.indexOf("目标 1.00×") >= 0);
             verify(status.text.indexOf("实际 0.72×") >= 0);
             verify(status.text.indexOf("播放器跳过 3 组") >= 0);
@@ -517,13 +517,13 @@ Item {
             verify(hint !== null);
             verify(hint.visible);
             verify(hint.text.indexOf("不跳过") < 0);
-            verify(hint.text.indexOf("跳过整组") >= 0);
+            verify(hint.text.indexOf("整组跳帧") >= 0);
         }
 
         function test_review_every_frame_status_reports_no_skip() {
             osc.revealActive = true;
-            osc.playbackModeLabel = "逐帧完整审查";
-            osc.playbackModeDetail = "不跳过整组；落后时放慢以保留每组画面";
+            osc.playbackModeLabel = "逐帧完整";
+            osc.playbackModeDetail = "每一帧都显示；负载高时播放会放慢";
             osc.playbackTargetRate = 1.0;
             osc.playbackPresentationRate = 0.4;
             osc.playbackRunSkippedFrameSets = 0;
@@ -534,7 +534,7 @@ Item {
             osc.playing = true;
             const status = findChild(osc, "playbackStatusText");
             verify(status !== null);
-            verify(status.text.indexOf("逐帧完整审查") >= 0);
+            verify(status.text.indexOf("逐帧完整") >= 0);
             verify(status.text.indexOf("播放器跳过") < 0);
             verify(status.text.indexOf("明显落后") >= 0);
         }

@@ -42,7 +42,14 @@ class ReviewController final : public QObject {
     Q_PROPERTY(int referenceSourceIndex READ referenceSourceIndex NOTIFY stateChanged)
     Q_PROPERTY(
         QString playbackContinuityPolicyName READ playbackContinuityPolicyName NOTIFY stateChanged)
+    // The policy the user selected (0 ReviewEveryFrame, 1 RealTime, 2 Contextual). The
+    // Contextual choice has no segment of its own, so surfaces that show what playback is
+    // actually doing must read playbackContinuityPolicyEffective instead.
     Q_PROPERTY(int playbackContinuityPolicy READ playbackContinuityPolicy NOTIFY stateChanged)
+    // Contextual resolved against the live session: always 0 or 1, so a two-segment switch can
+    // always show the active state instead of looking unset on the default preference.
+    Q_PROPERTY(int playbackContinuityPolicyEffective READ playbackContinuityPolicyEffective NOTIFY
+                   stateChanged)
     Q_PROPERTY(
         qulonglong playbackSkippedFrameSets READ playbackSkippedFrameSets NOTIFY stateChanged)
     Q_PROPERTY(
@@ -182,6 +189,7 @@ public:
     [[nodiscard]] int referenceSourceIndex() const noexcept;
     [[nodiscard]] QString playbackContinuityPolicyName() const;
     [[nodiscard]] int playbackContinuityPolicy() const noexcept;
+    [[nodiscard]] int playbackContinuityPolicyEffective() const noexcept;
     [[nodiscard]] qulonglong playbackSkippedFrameSets() const noexcept;
     [[nodiscard]] qulonglong playbackRunSkippedFrameSets() const noexcept;
     [[nodiscard]] qulonglong playbackRunPresentedFrames() const noexcept;

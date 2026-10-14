@@ -401,7 +401,12 @@ struct ReviewView final {
     QVariantList differenceEdges;
     // C-02/C-07 projections from the session snapshot.
     int effectiveDifferenceEdge = 0;
+    // The requested policy (2 = Contextual) and the policy the session actually resolved it to
+    // (0 or 1). Both travel separately: the menu edits the request, the transport switch and
+    // the status rail read the resolution, so the default Contextual preference still shows
+    // which behaviour is active instead of leaving the switch unset.
     int playbackContinuityPolicy = 1;
+    int playbackContinuityPolicyEffective = 1;
     QString playbackContinuityPolicyName;
     qulonglong playbackSkippedFrameSets = 0U;
     qulonglong playbackRunSkippedFrameSets = 0U;
@@ -1023,6 +1028,8 @@ public:
         }
         refresh();
         view_.playbackContinuityPolicy = policyCode;
+        view_.playbackContinuityPolicyEffective = static_cast<int>(domain::resolveContinuityPolicy(
+            static_cast<domain::PlaybackContinuityPolicy>(policyCode), 0U));
         desiredContinuityPolicy_ = policyCode;
         view_.playbackContinuityPolicyName = QString::fromLatin1(
             domain::playbackContinuityPolicyName(
@@ -1031,6 +1038,9 @@ public:
             static_cast<qsizetype>(domain::playbackContinuityPolicyName(
                                        static_cast<domain::PlaybackContinuityPolicy>(policyCode))
                                        .size()));
+        // Optimistic local projection like setPlaybackRange: the switch and the status rail must
+        // move with the click, not wait for the coordinator's next snapshot publication.
+        Q_EMIT owner_.stateChanged();
         return submitPlaybackContinuityPolicy(policyCode);
     }
 
@@ -2115,7 +2125,8 @@ private:
                 next.alignmentModeName = QStringLiteral("人工锚点");
                 break;
             }
-            next.playbackContinuityPolicy =
+            next.playbackContinuityPolicy = static_cast<int>(snapshot_->playbackContinuityPolicy);
+            next.playbackContinuityPolicyEffective =
                 static_cast<int>(snapshot_->playbackContinuityPolicyEffective);
             next.playbackContinuityPolicyName = QString::fromLatin1(
                 domain::playbackContinuityPolicyName(snapshot_->playbackContinuityPolicyEffective)
@@ -2548,6 +2559,10 @@ QString ReviewController::playbackContinuityPolicyName() const {
 
 int ReviewController::playbackContinuityPolicy() const noexcept {
     return impl_->view().playbackContinuityPolicy;
+}
+
+int ReviewController::playbackContinuityPolicyEffective() const noexcept {
+    return impl_->view().playbackContinuityPolicyEffective;
 }
 
 qulonglong ReviewController::playbackSkippedFrameSets() const noexcept {

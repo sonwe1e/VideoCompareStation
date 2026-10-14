@@ -346,7 +346,9 @@ VcsMenuBar {
 
             VcsRadioMenuItem {
                 objectName: "continuityReviewEveryFrame"
-                text: qsTr("逐帧完整审查 · 不跳过")
+                // One name per policy across the switch, this menu, the status rail and the HUD
+                // note; the trade-off rides in the label tail instead of renaming the mode.
+                text: qsTr("逐帧完整 · 每一帧都显示")
                 checked: Number(control.playbackContinuityPolicy) === 0
                 onTriggered: {
                     control.preferences.playbackContinuityPolicy = 0;
@@ -358,7 +360,7 @@ VcsMenuBar {
             }
             VcsRadioMenuItem {
                 objectName: "continuityRealTime"
-                text: qsTr("正常速度观看 · 落后超 2s 可跳过")
+                text: qsTr("流畅优先 · 落后时整组跳帧")
                 checked: Number(control.playbackContinuityPolicy) === 1
                 onTriggered: {
                     control.preferences.playbackContinuityPolicy = 1;
@@ -370,7 +372,7 @@ VcsMenuBar {
             }
             VcsRadioMenuItem {
                 objectName: "continuityContextual"
-                text: qsTr("按会话自适应 · 多源默认跟播")
+                text: qsTr("按会话自适应")
                 checked: Number(control.playbackContinuityPolicy) === 2
                 onTriggered: {
                     control.preferences.playbackContinuityPolicy = 2;
