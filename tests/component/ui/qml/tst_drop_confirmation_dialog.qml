@@ -137,6 +137,11 @@ Item {
             verify(opened.red(outsideX, outsideY) < beforeOpen.red(outsideX, outsideY));
             verify(opened.blue(outsideX, outsideY) < beforeOpen.blue(outsideX, outsideY));
 
+            // The spies are file-scope and other tests may have accepted or rejected before
+            // this one runs (Qt Quick Test executes in declaration order, not file order);
+            // this test owns its click, so it starts its counts from zero.
+            acceptedSpy.clear();
+            rejectedSpy.clear();
             mouseClick(okButton);
             tryCompare(dialog, "visible", false);
             compare(acceptedSpy.count, 1);
@@ -166,6 +171,29 @@ Item {
             tryCompare(dialog, "visible", true);
             compare(dialog.referenceIndex, 0);
             dialog.close();
+        }
+
+        // The confirm button owns the popup's initial focus: Enter confirms without a Tab
+        // walk, while Space stays inert — modal media review keeps Space free of any dialog
+        // activation (keyboard ownership contract in MainQmlContractTests).
+        function test_enter_confirms_and_space_stays_inert() {
+            acceptedSpy.clear();
+            rejectedSpy.clear();
+            dialog.open();
+            tryCompare(dialog, "visible", true);
+            const okButton = findChild(dialog, "dropFooterOkButton");
+            verify(okButton !== null);
+            tryCompare(okButton, "activeFocus", true);
+
+            keyClick(Qt.Key_Space);
+            compare(acceptedSpy.count, 0);
+            compare(rejectedSpy.count, 0);
+            verify(dialog.visible);
+
+            keyClick(Qt.Key_Return);
+            tryCompare(dialog, "visible", false);
+            compare(acceptedSpy.count, 1);
+            compare(rejectedSpy.count, 0);
         }
 
         function test_same_basename_shows_distinct_parent_paths() {

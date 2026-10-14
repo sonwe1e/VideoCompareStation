@@ -336,7 +336,9 @@ Item {
             visible: statusText.visible && control.playbackModeDetail.length > 0
             height: visible ? implicitHeight : 0
             text: control.playbackModeDetail + (control.sourceRateText.length > 0 ? " · " + control.sourceRateText : "")
-            color: Theme.disabledText
+            // Live readouts, not a disabled state: mutedText keeps ~4.5:1 on the panel glass,
+            // while disabledText is reserved for controls that cannot be used.
+            color: Theme.mutedText
             font.pixelSize: Theme.fontSecondary
             elide: Text.ElideRight
             anchors {

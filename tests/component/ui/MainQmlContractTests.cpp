@@ -3309,6 +3309,104 @@ TEST(MainQmlContractTests, MixedMediaSelectionRejectsThroughTheVisibleIntentChan
     harness.window->close();
 }
 
+// Busy disables the mode row, but a disabled checked button must keep its checked fill and
+// label: an open/decode otherwise erases the only indicator of which compare mode is active.
+TEST(MainQmlContractTests, CompareModeBarKeepsTheCheckedFillWhileBusy) {
+    QTemporaryDir temporaryDirectory;
+    ASSERT_TRUE(temporaryDirectory.isValid());
+    std::vector<std::filesystem::path> sourcePaths;
+    for (const char* name : {"mode_source_a.mp4", "mode_source_b.mp4"}) {
+        const QString path = temporaryDirectory.filePath(QString::fromLatin1(name));
+        QFile file{path};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        ASSERT_EQ(file.write("fake-mode-source", 16), 16);
+        file.close();
+        sourcePaths.push_back(std::filesystem::path{path.toStdWString()});
+    }
+
+    WorkspaceHarness harness;
+    // The validated session must exist before create(): the controller's open gate reads the
+    // projection the shell was built from, and the state-machine contract tests install the
+    // set the same way.
+    const auto rateResult = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rateResult);
+    ASSERT_TRUE(
+        installValidatedVideoSet(harness.snapshot, sourcePaths, rateResult.value(), 12, 400'000));
+    harness.snapshot->displayedFrame = domain::FrameId{3};
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+    harness.controller->refreshProjection();
+    harness.settle();
+
+    auto* const sideModeButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("sideModeButton"));
+    auto* const diffModeButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("diffModeButton"));
+    ASSERT_NE(sideModeButton, nullptr);
+    ASSERT_NE(diffModeButton, nullptr);
+    // Ready session: side-by-side is the active mode and its button carries the checked fill.
+    EXPECT_TRUE(sideModeButton->property("enabled").toBool());
+    EXPECT_TRUE(sideModeButton->property("checked").toBool());
+
+    const auto backgroundOf = [](QQuickItem* button) -> QQuickItem* {
+        for (QQuickItem* child : button->childItems()) {
+            if (child->property("color").isValid() && child->property("radius").isValid())
+                return child;
+        }
+        return nullptr;
+    };
+    auto* const sideBackground = backgroundOf(sideModeButton);
+    auto* const diffBackground = backgroundOf(diffModeButton);
+    ASSERT_NE(sideBackground, nullptr);
+    ASSERT_NE(diffBackground, nullptr);
+
+    QQmlEngine* const qmlEngine = QQmlEngine::contextForObject(harness.root.get())->engine();
+    ASSERT_NE(qmlEngine, nullptr);
+    QQmlComponent themeProbe{qmlEngine};
+    themeProbe.setData(R"qml(
+        import QtQuick
+        import "qrc:/qml/VcsTheme.js" as Theme
+        QtObject {
+            property color checkedFill: Theme.controlChecked
+        }
+    )qml",
+                       QUrl{});
+    const std::unique_ptr<QObject> theme{themeProbe.create()};
+    ASSERT_NE(theme, nullptr) << componentErrors(themeProbe);
+    const auto checkedFill = theme->property("checkedFill").value<QColor>();
+
+    EXPECT_EQ(sideBackground->property("color").value<QColor>(), checkedFill);
+    EXPECT_EQ(diffBackground->property("color").value<QColor>(),
+              QColor{QStringLiteral("transparent")});
+
+    // Drive busy exactly like a real open: a pending open command over a loading snapshot.
+    const QUrl reloadA =
+        QUrl::fromLocalFile(temporaryDirectory.filePath(QStringLiteral("mode_source_a.mp4")));
+    const QUrl reloadB =
+        QUrl::fromLocalFile(temporaryDirectory.filePath(QStringLiteral("mode_source_b.mp4")));
+    EXPECT_TRUE(harness.controller->openSources(
+        {QVariant::fromValue(reloadA), QVariant::fromValue(reloadB)}, 0));
+    harness.snapshot->sessionState = domain::SessionState::kLoading;
+    harness.snapshot->displayedFrame.reset();
+    harness.snapshot->presentedSources.clear();
+    harness.snapshot->validatedComparison.reset();
+    harness.snapshot->canonicalTimeline.reset();
+    harness.snapshot->canonicalFrameCount = 0U;
+    harness.controller->refreshProjection();
+    harness.settle();
+
+    ASSERT_TRUE(harness.controller->busy());
+    // The row is disabled now, but the checked mode keeps its fill while the unchecked one
+    // stays flat — the user can still read which mode is active.
+    EXPECT_FALSE(sideModeButton->property("enabled").toBool());
+    EXPECT_TRUE(sideModeButton->property("checked").toBool());
+    EXPECT_EQ(sideBackground->property("color").value<QColor>(), checkedFill);
+    EXPECT_EQ(diffBackground->property("color").value<QColor>(),
+              QColor{QStringLiteral("transparent")});
+    harness.window->close();
+}
+
 TEST(MainQmlContractTests, TransportRangeRowClearsTheRangeAndGatesChipsWithoutMedia) {
     WorkspaceHarness harness;
     ASSERT_TRUE(harness.create()) << harness.error;
@@ -6737,11 +6835,12 @@ TEST(MainQmlContractTests, ImageEditBrushAndMosaicToolsEditTheWorkingCopy) {
     auto* const mosaicTool =
         openEditToolsItem(harness.root.get(), QStringLiteral("imageEditToolMosaicButton"));
     ASSERT_NE(mosaicTool, nullptr);
-    // The dropdown button names the active tool, so the selection is not hidden.
+    // The dropdown keeps its own 「更多工具」 label while a standalone tool (crop is the
+    // edit-mode default) is active; it must not duplicate that tool's own button name.
     auto* const moreToolsButton =
         harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditMoreToolsButton"));
     ASSERT_NE(moreToolsButton, nullptr);
-    EXPECT_TRUE(moreToolsButton->property("text").toString().contains(QStringLiteral("裁剪")));
+    EXPECT_TRUE(moreToolsButton->property("text").toString().contains(QStringLiteral("更多工具")));
 
     // Brush tool: the tool switch changes what the left button does and shows its controls.
     ASSERT_TRUE(QMetaObject::invokeMethod(brushTool, "clicked"));
@@ -6790,6 +6889,9 @@ TEST(MainQmlContractTests, ImageEditBrushAndMosaicToolsEditTheWorkingCopy) {
     ASSERT_TRUE(QMetaObject::invokeMethod(mosaicTool, "clicked"));
     harness.settle();
     EXPECT_EQ(workspace->property("editTool").toString(), QStringLiteral("mosaic"));
+    // A tool hidden inside the dropdown gets named on its button, so the selection stays
+    // readable from the closed row.
+    EXPECT_TRUE(moreToolsButton->property("text").toString().contains(QStringLiteral("马赛克")));
     EXPECT_TRUE(applyButton->isVisible());
     EXPECT_TRUE(applyButton->property("text").toString().contains(QStringLiteral("马赛克")));
     workspace->setProperty("mosaicBlock", 8);

@@ -497,5 +497,35 @@ Item {
             compare(folderSpy.count, 0);
             compare(folder.currentRow, 1);
         }
+
+        // The panel can be narrowed to Theme.fileSidebarWidthMin (200 px). The header rows
+        // must wrap there instead of pushing 「最近打开」/「刷新」past the clipped border, and
+        // file names keep their padding instead of hugging the panel edge.
+        function test_headerButtonsWrapAtMinimumPanelWidth() {
+            const withinPanel = function (item) {
+                const origin = item.mapToItem(sidebar, 0, 0);
+                return origin.x + item.width <= sidebar.width + 0.5;
+            };
+            sidebar.width = 200;
+            wait(30);
+            const folderTab = findChild(sidebar, "videoFolderTab");
+            const recentTab = findChild(sidebar, "videoRecentTab");
+            const refresh = findChild(sidebar, "videoFolderRefreshButton");
+            verify(folderTab.visible && recentTab.visible && refresh.visible);
+            verify(recentTab.y > folderTab.y, "the second tab wraps to a new line");
+            verify(withinPanel(folderTab));
+            verify(withinPanel(recentTab));
+            verify(withinPanel(refresh));
+            const list = findChild(sidebar, "videoFolderFileList");
+            let row = null;
+            tryVerify(function () {
+                row = list.itemAtIndex(0);
+                return row !== null;
+            });
+            verify(row.leftPadding >= 10, "file names keep breathing room from the border");
+            sidebar.width = 260;
+            wait(30);
+            verify(Math.abs(recentTab.y - folderTab.y) < 0.5, "wide panel keeps both tabs on one line");
+        }
     }
 }

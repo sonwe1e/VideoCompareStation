@@ -281,6 +281,15 @@ Popup {
                         prominent: true
                         implicitWidth: 88
                         implicitHeight: 30
+                        // Default action: the popup's focus scope lands here on open, so Enter
+                        // confirms without a Tab walk first (AbstractButton alone only maps
+                        // Space). Space itself stays inert — modal media review keeps Space
+                        // free of any dialog activation (the keyboard ownership contract in
+                        // MainQmlContractTests).
+                        focus: true
+                        Keys.onReturnPressed: control.accept()
+                        Keys.onEnterPressed: control.accept()
+                        Keys.onSpacePressed: event => event.accepted = true
                         onClicked: control.accept()
                     }
                 }

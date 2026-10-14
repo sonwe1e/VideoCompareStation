@@ -311,7 +311,9 @@ Rectangle {
             text: modeButton.text
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
-            color: !modeButton.enabled ? Theme.disabledText : (modeButton.checked || modeButton.hovered ? Theme.primaryText : Theme.mutedText)
+            // Checked wins over disabled: while busy disables the row, the active mode must
+            // stay readable instead of collapsing into the disabled grey.
+            color: modeButton.checked ? Theme.primaryText : (!modeButton.enabled ? Theme.disabledText : (modeButton.hovered ? Theme.primaryText : Theme.mutedText))
             font.pixelSize: Theme.fontBody
             font.weight: modeButton.checked ? Font.DemiBold : Font.Normal
             elide: Text.ElideRight
@@ -320,10 +322,10 @@ Rectangle {
         background: Rectangle {
             radius: Theme.radiusMedium
             color: {
-                if (!modeButton.enabled)
-                    return "transparent";
                 if (modeButton.checked)
                     return Theme.controlChecked;
+                if (!modeButton.enabled)
+                    return "transparent";
                 if (modeButton.down)
                     return Theme.fluentPressed;
                 if (modeButton.hovered)
@@ -375,7 +377,8 @@ Rectangle {
 
             Text {
                 text: focusButton.text
-                color: !focusButton.enabled ? Theme.disabledText : (focusButton.checked || focusButton.hovered ? Theme.primaryText : Theme.mutedText)
+                // Same checked-over-disabled rule as ModeButton.
+                color: focusButton.checked ? Theme.primaryText : (!focusButton.enabled ? Theme.disabledText : (focusButton.hovered ? Theme.primaryText : Theme.mutedText))
                 font.pixelSize: Theme.fontBody
                 font.weight: focusButton.checked ? Font.DemiBold : Font.Normal
                 anchors.verticalCenter: parent.verticalCenter
@@ -408,10 +411,10 @@ Rectangle {
         background: Rectangle {
             radius: Theme.radiusMedium
             color: {
-                if (!focusButton.enabled)
-                    return "transparent";
                 if (focusButton.checked)
                     return Theme.controlChecked;
+                if (!focusButton.enabled)
+                    return "transparent";
                 if (focusButton.down)
                     return Theme.fluentPressed;
                 if (focusButton.hovered)
@@ -455,7 +458,8 @@ Rectangle {
             text: diffModeButton.text
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
-            color: !diffModeButton.enabled ? Theme.disabledText : (diffModeButton.checked || diffModeButton.hovered ? Theme.primaryText : Theme.mutedText)
+            // Same checked-over-disabled rule as ModeButton.
+            color: diffModeButton.checked ? Theme.primaryText : (!diffModeButton.enabled ? Theme.disabledText : (diffModeButton.hovered ? Theme.primaryText : Theme.mutedText))
             font.pixelSize: Theme.fontBody
             font.weight: diffModeButton.checked ? Font.DemiBold : Font.Normal
             elide: Text.ElideRight
@@ -464,10 +468,10 @@ Rectangle {
         background: Rectangle {
             radius: Theme.radiusMedium
             color: {
-                if (!diffModeButton.enabled)
-                    return "transparent";
                 if (diffModeButton.checked)
                     return Theme.controlChecked;
+                if (!diffModeButton.enabled)
+                    return "transparent";
                 if (diffModeButton.down)
                     return Theme.fluentPressed;
                 if (diffModeButton.hovered)

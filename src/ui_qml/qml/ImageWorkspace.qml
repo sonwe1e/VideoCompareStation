@@ -315,18 +315,11 @@ Rectangle {
         return (compareMode === 0 && hasPair && singleViewShowSecondary) ? 3 : 2;
     }
 
-    // Label of the tool that is actually selected, so a tool living inside the 「更多工具」
-    // dropdown is still readable from the closed row.
+    // Label of the 「更多工具」dropdown. It names the active tool only when that tool lives
+    // inside the dropdown — a tool that already has its own button keeps the plain label, so
+    // the row never shows two buttons with the same name.
     function imageEditToolLabel(tool) {
         switch (String(tool || "")) {
-        case "crop":
-            return qsTr("裁剪");
-        case "smart_select":
-            return qsTr("智能抠图");
-        case "brush":
-            return qsTr("画笔");
-        case "select":
-            return qsTr("选择");
         case "mosaic":
             return qsTr("马赛克");
         case "fill":

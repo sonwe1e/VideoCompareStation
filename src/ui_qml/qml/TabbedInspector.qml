@@ -165,6 +165,10 @@ Rectangle {
         background: Rectangle {
             radius: Theme.radiusSmall
             color: darkTabButton.hovered && !darkTabButton.checked ? Theme.fluentHover : "transparent"
+            // Keyboard focus must be visible on the quiet tab chrome, same contract as the
+            // compare mode buttons: a 2 px focus hairline when the tab holds focus.
+            border.width: darkTabButton.activeFocus ? 2 : 0
+            border.color: Theme.focus
 
             Behavior on color {
                 ColorAnimation {

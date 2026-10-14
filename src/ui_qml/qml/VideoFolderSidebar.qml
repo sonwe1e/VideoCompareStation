@@ -120,24 +120,40 @@ Rectangle {
         anchors.topMargin: 10
         spacing: control.compact ? 4 : 8
 
-        Row {
-            spacing: 6
+        // The close button anchors to the right and the title takes what remains, so the row
+        // keeps working at any panel width instead of relying on a hardcoded width budget.
+        Item {
+            width: parent.width
+            height: control.compact ? 30 : 34
+
             Text {
-                width: control.width - 80
-                height: control.compact ? 24 : 30
+                anchors {
+                    left: parent.left
+                    right: sidebarCloseButton.left
+                    rightMargin: 6
+                    verticalCenter: parent.verticalCenter
+                }
                 text: qsTr("文件与历史")
                 color: Theme.primaryText
-                verticalAlignment: Text.AlignVCenter
+                elide: Text.ElideRight
                 font.bold: true
             }
             VcsToolButton {
+                id: sidebarCloseButton
+
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
                 text: "×"
                 helpText: qsTr("收起文件与历史侧栏")
                 onClicked: control.closeRequested()
             }
         }
-        Row {
+        // Flow, not Row: at the panel's minimum width the two tabs cannot share one line, and
+        // the product rule is to wrap controls rather than clip or shrink their labels.
+        Flow {
+            width: parent.width
             spacing: 6
+
             ReviewActionButton {
                 implicitHeight: control.compact ? 30 : 40
                 objectName: "videoFolderTab"
@@ -169,9 +185,11 @@ Rectangle {
                 id: folderHover
             }
         }
-        Row {
+        Flow {
             visible: !control.showRecent
+            width: parent.width
             spacing: 6
+
             ReviewActionButton {
                 implicitHeight: control.compact ? 30 : 40
                 text: qsTr("选择文件夹…")
@@ -179,6 +197,7 @@ Rectangle {
             }
             ReviewActionButton {
                 implicitHeight: control.compact ? 30 : 40
+                objectName: "videoFolderRefreshButton"
                 text: qsTr("刷新")
                 enabled: Boolean(control.folderModel && !control.folderModel.scanning && control.folderModel.folderUrl.toString().length > 0)
                 onClicked: control.folderModel.refreshFolder()
@@ -187,6 +206,7 @@ Rectangle {
         Text {
             width: parent.width
             visible: !control.compact
+            elide: Text.ElideRight
             text: control.showRecent ? qsTr("%1 项 · 上限 50").arg(control.folderModel ? control.folderModel.recentFiles.length : 0) : (control.folderModel && control.folderModel.scanning ? qsTr("正在读取文件列表…") : qsTr("%1 个媒体文件 · 点击即打开").arg(control.folderModel ? control.folderModel.fileCount : 0))
             color: Theme.mutedText
             font.pixelSize: 12
@@ -204,7 +224,9 @@ Rectangle {
         anchors.bottomMargin: 10
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.margins: 6
+        // Match the header's 10 px inset so filenames never hug the panel's rounded border.
+        anchors.leftMargin: 10
+        anchors.rightMargin: 10
         clip: true
         model: control.folderModel
         currentIndex: control.anchorRow
@@ -238,8 +260,9 @@ Rectangle {
             height: 42
             text: fileName
             // The still-image chip marks the rows that open in the image workspace; video rows
-            // (the common case) stay visually unchanged.
-            leftPadding: fileIsImage ? 38 : 0
+            // (the common case) stay visually unchanged. Both get breathing room from the
+            // panel border that the earlier zero-padding video rows lacked.
+            leftPadding: fileIsImage ? 44 : 12
             highlighted: Boolean(control.folderModel && index === control.folderModel.currentRow)
             enabled: Boolean(control.folderModel && !control.folderModel.scanning)
             Rectangle {
@@ -248,7 +271,7 @@ Rectangle {
                 height: 16
                 radius: 3
                 anchors.left: parent.left
-                anchors.leftMargin: 9
+                anchors.leftMargin: 10
                 anchors.verticalCenter: parent.verticalCenter
                 color: "transparent"
                 border.width: 1
@@ -364,7 +387,7 @@ Rectangle {
             width: recentFiles.width
             height: 42
             text: modelData.fileName
-            leftPadding: contextIsImage ? 38 : 0
+            leftPadding: contextIsImage ? 44 : 12
             highlighted: Boolean(control.folderModel && index === control.folderModel.recentCurrentRow)
             Rectangle {
                 visible: recentRow.contextIsImage
@@ -372,7 +395,7 @@ Rectangle {
                 height: 16
                 radius: 3
                 anchors.left: parent.left
-                anchors.leftMargin: 9
+                anchors.leftMargin: 10
                 anchors.verticalCenter: parent.verticalCenter
                 color: "transparent"
                 border.width: 1
@@ -487,9 +510,11 @@ Rectangle {
             color: Theme.mutedText
             font.pixelSize: 12
         }
-        Row {
+        Flow {
             visible: !control.showRecent
+            width: parent.width
             spacing: 6
+
             ReviewActionButton {
                 implicitHeight: control.compact ? 30 : 40
                 objectName: "videoFolderPrevious"

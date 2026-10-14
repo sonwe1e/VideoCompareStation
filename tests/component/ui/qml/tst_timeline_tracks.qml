@@ -49,5 +49,51 @@ Item {
             tracks.dragging = false;
             verify(!tracks.pointerInside, "ending the scrub restores the outside reading");
         }
+
+        function reset_window() {
+            tracks.zoomFactor = 1.0;
+            tracks.windowStartFrame = 0;
+        }
+
+        // A range whose out-point is not marked yet must still show where it begins: the band
+        // runs open to the window's right edge and the in-bracket stands on its own.
+        function test_lone_in_point_keeps_band_and_bracket_visible() {
+            reset_window();
+            tracks.inFrame = 42;
+            tracks.outFrame = -1;
+            const range = findChild(tracks, "rangeHighlight");
+            verify(range.visible, "band stays visible with only the in-point set");
+            fuzzyCompare(range.x + range.width, tracks.width, 1.0);
+            verify(findChild(tracks, "inPointBracket").visible);
+            verify(!findChild(tracks, "outPointBracket").visible);
+            tracks.inFrame = 0;
+            tracks.outFrame = 99;
+        }
+
+        function test_lone_out_point_keeps_band_and_bracket_visible() {
+            reset_window();
+            tracks.inFrame = -1;
+            tracks.outFrame = 48;
+            const range = findChild(tracks, "rangeHighlight");
+            verify(range.visible, "band stays visible with only the out-point set");
+            fuzzyCompare(range.x, 0, 0.5);
+            verify(findChild(tracks, "outPointBracket").visible);
+            verify(!findChild(tracks, "inPointBracket").visible);
+            tracks.inFrame = 0;
+            tracks.outFrame = 99;
+        }
+
+        // The pair being reversed is invalid as a range, but the user still marked two frames:
+        // both brackets stay readable while the band disappears.
+        function test_reversed_pair_hides_band_but_keeps_both_brackets() {
+            reset_window();
+            tracks.inFrame = 80;
+            tracks.outFrame = 20;
+            verify(!findChild(tracks, "rangeHighlight").visible);
+            verify(findChild(tracks, "inPointBracket").visible);
+            verify(findChild(tracks, "outPointBracket").visible);
+            tracks.inFrame = 0;
+            tracks.outFrame = 99;
+        }
     }
 }

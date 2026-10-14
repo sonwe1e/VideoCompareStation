@@ -113,70 +113,82 @@ Item {
         anchors.verticalCenter: mainRail.verticalCenter
     }
 
+    // The range band. An endpoint that is not marked yet leaves the band open to that edge of
+    // the window, so a lone in-point already shows where the reviewed range begins. A reversed
+    // pair (out before in) hides the band; the bracket handles below still mark both endpoints.
     Rectangle {
         objectName: "rangeHighlight"
-        visible: control.inFrame >= 0 && control.outFrame >= control.inFrame && control.totalFrames > 1 && control.outFrame >= control.windowStartFrame && control.inFrame <= control.windowStartFrame + control.visibleFrameCount - 1
-        readonly property real visibleIn: Math.max(control.windowStartFrame, Math.min(control.windowStartFrame + control.visibleFrameCount - 1, control.inFrame))
-        readonly property real visibleOut: Math.max(control.windowStartFrame, Math.min(control.windowStartFrame + control.visibleFrameCount - 1, control.outFrame))
-        x: Math.max(0, control.positionForFrame(visibleIn) * control.width)
-        width: visibleOut < visibleIn ? 0 : Math.max(2, (visibleOut - visibleIn) / Math.max(1, control.visibleFrameCount - 1) * control.width)
+
+        readonly property int windowEndFrame: control.windowStartFrame + control.visibleFrameCount - 1
+        readonly property bool pairReversed: control.inFrame >= 0 && control.outFrame >= 0 && control.outFrame < control.inFrame
+        readonly property real bandIn: control.inFrame >= 0 ? Math.max(control.windowStartFrame, Math.min(windowEndFrame, control.inFrame)) : control.windowStartFrame
+        readonly property real bandOut: control.outFrame >= 0 ? Math.max(control.windowStartFrame, Math.min(windowEndFrame, control.outFrame)) : windowEndFrame
+        visible: control.totalFrames > 1 && (control.inFrame >= 0 || control.outFrame >= 0) && !pairReversed && bandOut >= bandIn && (control.inFrame < 0 || control.inFrame <= windowEndFrame) && (control.outFrame < 0 || control.outFrame >= control.windowStartFrame)
+        x: Math.max(0, control.positionForFrame(bandIn) * control.width)
+        width: bandOut < bandIn ? 0 : Math.max(2, (bandOut - bandIn) / Math.max(1, control.visibleFrameCount - 1) * control.width)
         height: 11
         radius: 2
-        // Translucency lives in the colour, not in `opacity`, so the child brackets stay crisp.
         color: Theme.rangeBand
         y: mainRail.y - 3
+    }
 
-        // Professional In-point bracket handle ([)
-        Item {
-            visible: control.inFrame >= control.windowStartFrame
-            width: 4
+    // Professional In-point bracket handle ([). It renders on its own, not as part of the band,
+    // so the in-point stays visible while the out-point is still unset or the pair is reversed.
+    Item {
+        objectName: "inPointBracket"
+
+        visible: control.inFrame >= 0 && control.totalFrames > 1 && control.inFrame >= control.windowStartFrame && control.inFrame <= control.windowStartFrame + control.visibleFrameCount - 1
+        width: 4
+        height: 11
+        x: Math.min(control.width - width, Math.max(0, control.positionForFrame(control.inFrame) * control.width))
+        y: mainRail.y - 3
+
+        Rectangle {
+            width: 2
             height: parent.height
-            anchors.left: parent.left
-
-            Rectangle {
-                width: 2
-                height: parent.height
-                color: Theme.accentText
-            }
-            Rectangle {
-                width: 4
-                height: 2
-                color: Theme.accentText
-            }
-            Rectangle {
-                width: 4
-                height: 2
-                anchors.bottom: parent.bottom
-                color: Theme.accentText
-            }
+            color: Theme.accentText
         }
-
-        // Professional Out-point bracket handle (])
-        Item {
-            visible: control.outFrame <= control.windowStartFrame + control.visibleFrameCount - 1
+        Rectangle {
             width: 4
+            height: 2
+            color: Theme.accentText
+        }
+        Rectangle {
+            width: 4
+            height: 2
+            anchors.bottom: parent.bottom
+            color: Theme.accentText
+        }
+    }
+
+    // Professional Out-point bracket handle (]). Independent of the band for the same reason.
+    Item {
+        objectName: "outPointBracket"
+
+        visible: control.outFrame >= 0 && control.totalFrames > 1 && control.outFrame >= control.windowStartFrame && control.outFrame <= control.windowStartFrame + control.visibleFrameCount - 1
+        width: 4
+        height: 11
+        x: Math.max(0, Math.min(control.width - width, control.positionForFrame(control.outFrame) * control.width))
+        y: mainRail.y - 3
+
+        Rectangle {
+            width: 2
             height: parent.height
             anchors.right: parent.right
-
-            Rectangle {
-                width: 2
-                height: parent.height
-                anchors.right: parent.right
-                color: Theme.accentText
-            }
-            Rectangle {
-                width: 4
-                height: 2
-                anchors.right: parent.right
-                color: Theme.accentText
-            }
-            Rectangle {
-                width: 4
-                height: 2
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                color: Theme.accentText
-            }
+            color: Theme.accentText
+        }
+        Rectangle {
+            width: 4
+            height: 2
+            anchors.right: parent.right
+            color: Theme.accentText
+        }
+        Rectangle {
+            width: 4
+            height: 2
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            color: Theme.accentText
         }
     }
 

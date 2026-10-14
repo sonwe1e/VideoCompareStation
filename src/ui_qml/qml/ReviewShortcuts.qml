@@ -295,6 +295,9 @@ Item {
     Shortcut {
         sequence: "I"
         context: Qt.ApplicationShortcut
+        // Marking shortcuts follow the I02 toggle rule: one press, one mark — holding the key
+        // must not re-issue the mark (and re-light the HUD) on every auto-repeat.
+        autoRepeat: false
         enabled: control.shortcutsEnabled && control.currentFrame >= 0
         onActivated: control.inPointRequested()
         property string helpKeys: qsTr("I / O")
@@ -303,6 +306,7 @@ Item {
     Shortcut {
         sequence: "O"
         context: Qt.ApplicationShortcut
+        autoRepeat: false
         enabled: control.shortcutsEnabled && control.currentFrame >= 0
         onActivated: control.outPointRequested()
     }
