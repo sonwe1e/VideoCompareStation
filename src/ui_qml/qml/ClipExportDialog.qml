@@ -282,7 +282,7 @@ Item {
                                     Text {
                                         width: parent.width - 70
                                         text: control.fileName.length > 0 ? control.fileName : qsTr("（待选择）")
-                                        color: control.fileName.length > 0 ? Theme.primaryText : Theme.disabledText
+                                        color: control.fileName.length > 0 ? Theme.primaryText : Theme.mutedText
                                         font.family: "Consolas"
                                         font.pixelSize: 12
                                         elide: Text.ElideMiddle
@@ -318,7 +318,7 @@ Item {
 
                             Text {
                                 text: control.progressPercent + "%"
-                                color: Theme.accent
+                                color: Theme.accentText
                                 font.pixelSize: 11
                                 font.weight: Font.DemiBold
                                 anchors {

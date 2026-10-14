@@ -89,7 +89,8 @@ Item {
             const pairs = [[Theme.inverseText, Theme.accentFill],
                 [Theme.inverseText, Theme.accentHover], [Theme.inverseText, Theme.accentPressed],
                 [Theme.mutedText, Theme.panel], [Theme.mutedText, Theme.menu],
-                [Theme.mutedText, Theme.raisedPanel]];
+                [Theme.mutedText, Theme.raisedPanel],
+                [Theme.accentText, Theme.menu], [Theme.mutedText, Theme.window]];
             for (let i = 0; i < pairs.length; ++i) {
                 const a = luminance(pairs[i][0]);
                 const b = luminance(pairs[i][1]);

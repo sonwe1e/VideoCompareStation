@@ -88,7 +88,7 @@ Popup {
                 }
                 Label {
                     text: qsTr("Esc 关闭")
-                    color: Theme.disabledText
+                    color: Theme.mutedText
                     font.pixelSize: 12
                     anchors {
                         right: parent.right

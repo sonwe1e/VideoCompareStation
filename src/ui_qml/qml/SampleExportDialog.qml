@@ -391,7 +391,7 @@ Item {
                                             margins: 8
                                         }
                                         text: control.targetDirectory.length > 0 ? control.targetDirectory : qsTr("未选择目录")
-                                        color: control.targetDirectory.length > 0 ? Theme.primaryText : Theme.disabledText
+                                        color: control.targetDirectory.length > 0 ? Theme.primaryText : Theme.mutedText
                                         font.pixelSize: 11
                                         elide: Text.ElideMiddle
                                     }
@@ -460,7 +460,7 @@ Item {
 
                                     Text {
                                         text: qsTr("裁剪至当前 ROI 区域")
-                                        color: (control.planSummary && Boolean(control.planSummary.hasCrop)) ? Theme.primaryText : Theme.disabledText
+                                        color: (control.planSummary && Boolean(control.planSummary.hasCrop)) ? Theme.primaryText : Theme.mutedText
                                         font.pixelSize: 11
                                         font.weight: Font.DemiBold
                                     }

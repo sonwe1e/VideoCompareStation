@@ -98,7 +98,9 @@ MenuItem {
             visible: !control.radioIndicator
             text: control.checked ? "✓" : ""
             color: Theme.inverseText
-            font.pixelSize: 9
+            // A pure glyph, not a label: the checkmark carries no wording of its own, so it stays
+            // at the decorative fontMicro floor rather than the secondary size.
+            font.pixelSize: Theme.fontMicro
             font.bold: true
         }
     }
