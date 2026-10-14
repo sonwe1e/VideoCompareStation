@@ -57,7 +57,9 @@ Button {
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
         text: control.text
-        color: !control.enabled ? Theme.disabledText : (control.prominent ? Theme.inverseText : control.textColor)
+        // Checked wins over disabled: while busy disables the row, the active mode must
+        // stay readable instead of collapsing into the disabled grey.
+        color: control.checked ? control.textColor : (!control.enabled ? Theme.disabledText : (control.prominent ? Theme.inverseText : control.textColor))
         font.pixelSize: Theme.fontBody
         font.weight: control.prominent || control.checked ? Font.DemiBold : Font.Normal
         elide: Text.ElideRight
@@ -68,12 +70,14 @@ Button {
     background: Rectangle {
         radius: Theme.radiusMedium
         color: {
+            // Checked wins over disabled: while busy disables the row, the active mode must
+            // stay readable instead of collapsing into the disabled grey.
+            if (control.checked)
+                return Theme.controlChecked;
             if (!control.enabled)
                 return Theme.disabledPanel;
             if (control.prominent)
                 return control.down ? Theme.accentPressed : (control.hovered ? Theme.accentHover : Theme.accentFill);
-            if (control.checked)
-                return Theme.controlChecked;
             if (control.flat)
                 return control.down ? Theme.fluentPressed : (control.hovered ? Theme.fluentHover : "transparent");
             return control.down ? Theme.controlPressed : (control.hovered ? Theme.controlHover : Theme.control);

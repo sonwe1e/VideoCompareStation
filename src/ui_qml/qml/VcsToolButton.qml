@@ -57,21 +57,26 @@ ToolButton {
             text: control.text
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
-            color: !control.enabled ? Theme.disabledText : (control.prominent ? Theme.inverseText : Theme.primaryText)
+            // Checked wins over disabled: while busy disables the row, the active mode must
+            // stay readable instead of collapsing into the disabled grey.
+            color: control.checked ? Theme.primaryText : (!control.enabled ? Theme.disabledText : (control.prominent ? Theme.inverseText : Theme.primaryText))
             font.pixelSize: control.labelPixelSize
             font.weight: Font.DemiBold
+            elide: Text.ElideRight
         }
     }
 
     background: Rectangle {
         radius: control.controlRadius
         color: {
+            // Checked wins over disabled: while busy disables the row, the active mode must
+            // stay readable instead of collapsing into the disabled grey.
+            if (control.checked)
+                return Theme.controlChecked;
             if (!control.enabled)
                 return control.flat ? "transparent" : Theme.disabledPanel;
             if (control.prominent)
                 return control.down ? Theme.accentPressed : (control.hovered ? Theme.accentHover : Theme.accentFill);
-            if (control.checked)
-                return Theme.controlChecked;
             if (control.flat)
                 return control.down ? Theme.fluentPressed : (control.hovered ? Theme.fluentHover : "transparent");
             return control.down ? Theme.controlPressed : (control.hovered ? Theme.controlHover : Theme.control);

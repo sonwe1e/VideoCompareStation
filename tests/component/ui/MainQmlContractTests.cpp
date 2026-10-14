@@ -10875,6 +10875,39 @@ TEST(MainQmlContractTests, NearbyFramesCardOpensFromIssueLogAndExposesDiagnostic
     ASSERT_NE(seamTag, nullptr);
     EXPECT_TRUE(seamTag->property("visible").toBool());
 
+    // U11: the header's flexible spacer is derived from its siblings' widths, so no child may
+    // reach past the card's right edge. The recorded interval carries epoch 2 and the
+    // controller still runs on it, so the two agree and the cross-session badge is hidden.
+    auto* const stripToggle =
+        card->findChild<QQuickItem*>(QStringLiteral("nearbyFramesStripToggle"));
+    ASSERT_NE(stripToggle, nullptr);
+    auto* const headerRow = stripToggle->parentItem();
+    ASSERT_NE(headerRow, nullptr);
+    // Returns the visible child count, so a state that silently hides every child (and so
+    // checks nothing) cannot pass as a fit.
+    const auto visibleHeaderChildren = [&]() {
+        int visible = 0;
+        for (QQuickItem* child : headerRow->childItems()) {
+            if (!child->property("visible").toBool())
+                continue; // an invisible child takes no space in a Row
+            ++visible;
+            EXPECT_LE(child->x() + child->width(), card->width())
+                << "a header child overflows the card while the cross-session badge is "
+                << (card->property("epochMatches").toBool() ? "hidden" : "shown");
+        }
+        return visible;
+    };
+    EXPECT_TRUE(card->property("epochMatches").toBool());
+    const int childrenWithBadgeHidden = visibleHeaderChildren();
+    EXPECT_GE(childrenWithBadgeHidden, 6);
+
+    // A controller on a different epoch makes the same header carry the cross-session badge.
+    harness.snapshot->sessionEpoch = domain::SessionEpoch{3U};
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_FALSE(card->property("epochMatches").toBool());
+    EXPECT_EQ(visibleHeaderChildren(), childrenWithBadgeHidden + 1);
+
     // Clicking "收起" hides the card
     auto* const closeBtn = card->findChild<QQuickItem*>(QStringLiteral("nearbyFramesCloseButton"));
     ASSERT_NE(closeBtn, nullptr);

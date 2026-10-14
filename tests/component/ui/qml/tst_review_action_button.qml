@@ -134,6 +134,49 @@ Item {
             }
         }
 
+        function test_checked_wins_over_disabled() {
+            // A busy surface disables the whole row (CompareModeBar's mode chips do this);
+            // the active option must keep its accent fill and readable label instead of
+            // collapsing into the disabled grey. Guards the checked-before-disabled order.
+            fitButton.enabled = false;
+            try {
+                verify(fitButton.checked, "Fit is the active option");
+                // tryCompare's fourth positional argument is the timeout, not a message, so the
+                // colour check is a plain compare plus a retry loop instead.
+                tryVerify(function() {
+                    return Qt.colorEqual(fitButton.background.color, Theme.controlChecked);
+                }, 5000, "a disabled but checked button keeps controlChecked, not disabledPanel");
+                verify(Qt.colorEqual(fitButton.contentItem.color, Theme.primaryText),
+                    "a disabled but checked label keeps normal text, not disabledText");
+                verify(!Qt.colorEqual(fitButton.contentItem.color, Theme.disabledText));
+            } finally {
+                // Restore the shared fixture no matter how the assertions above end, or every
+                // later case in this suite inherits a disabled button.
+                fitButton.enabled = true;
+            }
+        }
+
+        function test_tool_button_label_elides_long_text() {
+            // A fixed-width tool button must clip its label with an ellipsis rather than
+            // letting the text overflow the button and collide with neighbours in a Flow.
+            toolToggle.width = 34;
+            toolToggle.text = "A label far too long for the button";
+            const label = toolButtonLabel(toolToggle);
+            verify(label !== null, "the tool button must expose a text label");
+            compare(label.elide, Text.ElideRight);
+            toolToggle.text = "T";
+        }
+
+        function toolButtonLabel(button) {
+            // Only the label Text carries `elide`; the icon Image does not.
+            const kids = button.contentItem.children;
+            for (let i = 0; i < kids.length; ++i) {
+                if (kids[i].elide !== undefined)
+                    return kids[i];
+            }
+            return null;
+        }
+
         function test_tool_toggle_keeps_its_selection_visible_after_pointer_leaves() {
             mouseClick(toolToggle);
             mouseMove(root, root.width - 1, root.height - 1);

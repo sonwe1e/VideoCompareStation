@@ -51,19 +51,52 @@ Item {
         }
 
         Text {
+            id: laneToggle
+
             objectName: "metricLaneToggle"
             text: lane.metrics && lane.metrics.laneEnabled ? qsTr("收起 ▴") : qsTr("展开 ▾")
-            color: Theme.accent
+            // U10: the toggle is an interactive control, so the pointer has to get the same
+            // answer a hovered button gives - the readable accent for text on dark panels.
+            color: toggleHover.hovered ? Theme.accentText : Theme.accent
             font.pixelSize: 11
             font.weight: Font.DemiBold
+            // U10: collapsed, the lane keeps only this header row, so the toggle has to stay
+            // keyboard reachable and show the same focus ring as ReviewActionButton.
+            activeFocusOnTab: true
 
             MouseArea {
+                id: toggleArea
+
                 anchors.fill: parent
                 cursorShape: Qt.PointingHandCursor
                 onClicked: {
                     if (lane.metrics !== null)
                         lane.metrics.laneEnabled = !lane.metrics.laneEnabled;
                 }
+            }
+
+            HoverHandler {
+                id: toggleHover
+            }
+
+            // A Text has no border of its own, so the ring rides on a transparent child hugging
+            // the label. Text is not an AbstractButton, so visualFocus is unavailable here and
+            // activeFocus is the correct trigger; the ring colour matches ReviewActionButton.
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: -3
+                color: "transparent"
+                radius: 3
+                border.width: laneToggle.activeFocus ? 2 : 0
+                border.color: Theme.focus
+            }
+
+            Keys.onPressed: event => {
+                if (event.key !== Qt.Key_Return && event.key !== Qt.Key_Enter && event.key !== Qt.Key_Space)
+                    return;
+                if (lane.metrics !== null)
+                    lane.metrics.laneEnabled = !lane.metrics.laneEnabled;
+                event.accepted = true;
             }
         }
     }
@@ -174,7 +207,19 @@ Item {
                 }
 
                 MouseArea {
-                    anchors.fill: parent
+                    objectName: "peakMarkerHitArea"
+                    // U10: the dot stays 6x6 - a data marker on a 22px curve - but the pointer
+                    // target grows to the theme's hit-area minimum, centred on the dot and
+                    // clamped inside the curve area so a marker at either end cannot reach past
+                    // it. curveArea clips, so nothing outside it can be clicked through this.
+                    // The raise matters: the curve-area MouseArea is declared after this
+                    // Repeater, so without it the whole-lane handler sits on top and swallows
+                    // every dot click before the enlarged target can ever be used.
+                    z: 1
+                    width: Math.max(parent.width, Theme.hitAreaMinimum)
+                    height: Math.max(parent.height, Theme.hitAreaMinimum)
+                    x: Math.max(0, Math.min(curveArea.width - width, peakMarker.x + peakMarker.width / 2 - width / 2))
+                    y: Math.max(0, peakMarker.y + peakMarker.height / 2 - height / 2)
                     cursorShape: Qt.PointingHandCursor
                     onClicked: lane.seekRequested(Number(peakMarker.modelData.frame))
                 }

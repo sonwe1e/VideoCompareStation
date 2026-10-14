@@ -197,7 +197,21 @@ Rectangle {
             width: parent.width
             spacing: 8
 
+            // U11: the spacer used to eat a flat 450px, which overflowed the card by ~178px
+            // (and ~246px with the cross-session badge) because the header's fixed content is
+            // wider than that guess. Derive the budget from the real siblings instead, so the
+            // flexible middle expands into whatever the fixed content leaves and the action
+            // buttons can never be pushed past the card's right edge. The gap count follows the
+            // visible children: a Row skips an invisible child and its spacing with it.
+            readonly property real fixedContentWidth: {
+                const fixed = headerTitleText.width + anchorReadoutText.width + (thumbnailSourceLabel.visible ? thumbnailSourceLabel.width : 0) + (epochBadge.visible ? epochBadge.width : 0) + stripToggleButton.width + foldButton.width + closeButton.width;
+                const visibleOthers = (thumbnailSourceLabel.visible ? 1 : 0) + (epochBadge.visible ? 1 : 0) + 5;
+                return fixed + spacing * visibleOthers;
+            }
+
             Text {
+                id: headerTitleText
+
                 text: qsTr("附近帧诊断卡")
                 color: Theme.primaryText
                 font.pixelSize: 13
@@ -206,6 +220,8 @@ Rectangle {
             }
 
             Text {
+                id: anchorReadoutText
+
                 text: control.anchorFrame >= 0 ? qsTr("锚点：第 %1 帧（区间 %2..%3）").arg(control.anchorFrame + 1).arg(control.inFrame + 1).arg(control.outFrame + 1) : ""
                 color: Theme.mutedText
                 font.pixelSize: 11
@@ -215,6 +231,8 @@ Rectangle {
             // V04: thumbnails decode the canonical (timeline master) source through the
             // independent preview path; say which file that is instead of an anonymous frame.
             Text {
+                id: thumbnailSourceLabel
+
                 objectName: "nearbyFramesThumbnailSourceLabel"
                 visible: control.previewThumbnails !== null
                 text: control.thumbnailSourceName.length > 0 ? qsTr("缩略图源：%1").arg(control.thumbnailSourceName) : qsTr("缩略图源：未知")
@@ -226,6 +244,8 @@ Rectangle {
             }
 
             Rectangle {
+                id: epochBadge
+
                 visible: !control.epochMatches
                 height: 20
                 width: epochText.implicitWidth + 10
@@ -247,10 +267,12 @@ Rectangle {
 
             Item {
                 height: 1
-                width: Math.max(10, parent.width - 450)
+                width: Math.max(Theme.spaceMain, cardHeaderRow.width - cardHeaderRow.fixedContentWidth)
             }
 
             ReviewActionButton {
+                id: stripToggleButton
+
                 objectName: "nearbyFramesStripToggle"
                 // Interval view keeps the provenance badges; the consecutive view crops every
                 // cell to the same ROI so the eye compares one region across neighbouring
@@ -266,6 +288,8 @@ Rectangle {
             // U01: folding keeps the card on stage as its header alone, so re-expanding the
             // locating filmstrip costs one click; 收起 still removes the card entirely.
             ReviewActionButton {
+                id: foldButton
+
                 objectName: "nearbyFramesFoldButton"
                 text: control.collapsed ? qsTr("展开") : qsTr("折叠")
                 implicitHeight: 26
@@ -275,6 +299,8 @@ Rectangle {
             }
 
             ReviewActionButton {
+                id: closeButton
+
                 objectName: "nearbyFramesCloseButton"
                 text: qsTr("收起")
                 implicitHeight: 26
@@ -420,7 +446,8 @@ Rectangle {
 
                             objectName: "nearbyFrameKindBadge"
                             anchors.centerIn: parent
-                            font.pixelSize: 9
+                            // A status badge, not a conclusion: the decorative fontMicro floor.
+                            font.pixelSize: Theme.fontMicro
                             text: {
                                 if (cellRect.cellKind === "generated")
                                     return qsTr("生成");
@@ -464,7 +491,7 @@ Rectangle {
                                 anchors.centerIn: parent
                                 text: qsTr("锚点")
                                 color: Theme.inverseText
-                                font.pixelSize: 9
+                                font.pixelSize: Theme.fontMicro
                             }
                         }
 
@@ -486,7 +513,7 @@ Rectangle {
                                 anchors.centerIn: parent
                                 text: qsTr("接缝")
                                 color: Theme.warningText
-                                font.pixelSize: 9
+                                font.pixelSize: Theme.fontMicro
                             }
                         }
                     }

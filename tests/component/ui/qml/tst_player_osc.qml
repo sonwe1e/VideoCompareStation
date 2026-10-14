@@ -1,6 +1,7 @@
 import QtQuick
 import QtTest
 import "../../../../src/ui_qml/qml" as Dvs
+import "../../../../src/ui_qml/qml/VcsTheme.js" as Theme
 
 Item {
     id: root
@@ -199,6 +200,33 @@ Item {
         property string lastError: ""
     }
 
+    // V-07 pair-metrics stand-in: the members MetricTimelineLane reads off PairMetricsController,
+    // so the lane's hover, focus and hit-area behaviour is testable without a C++ controller.
+    // `samplesChanged` is the publication signal the lane listens for.
+    QtObject {
+        id: metricsFake
+
+        signal samplesChanged()
+
+        property bool available: true
+        property bool laneEnabled: true
+        property bool sampling: false
+        property bool hasCurrentSample: false
+        property bool currentComparable: false
+        property real currentMae: 0
+        property real currentPsnrDb: 0
+        property int sampleCount: 0
+        property real sampleMaxMae: 1.0
+        property var peaks: []
+
+        function peakFrames(count, neighborhood) {
+            return metricsFake.peaks;
+        }
+        function samplePoints(maximumPoints) {
+            return [];
+        }
+    }
+
     // Standalone instance wired to the fake controller. The main `osc` above stays protocol-free
     // and covers the no-controller layout. Hidden outside the protocol tests: this instance is
     // full-width and would otherwise compete with the hover-sensitive `osc` for synthetic
@@ -266,6 +294,43 @@ Item {
 
     SignalSpy {
         id: holdCancelSpy
+    }
+
+    // V-07 metric-lane instance. The lane only exists when metrics are available, so it gets its
+    // own transport: the shared `osc` keeps the pre-feature layout for the cursor tests, and
+    // dockedOsc (declared after `osc`, same z) covers the top of the panel the lane sits in.
+    // Raised above every other fixture and hidden outside these tests, exactly like the
+    // protocol instance, so synthetic hover and clicks land on this lane.
+    Dvs.PlayerOsc {
+        id: metricOsc
+
+        z: 7
+        visible: false
+        width: root.width
+        controllerState: 1
+        docked: false
+        playing: false
+        timelineEnabled: true
+        currentFrame: 10
+        totalFrames: 100
+        progress: 0.1
+        timecodeText: "00:00:00:10"
+        markers: []
+        actions: actions
+        focusTarget: focusTarget
+        canFirst: true
+        canPrevious: true
+        canPlay: true
+        canPause: false
+        canNext: true
+        canLast: true
+        anchors.top: root.top
+    }
+
+    SignalSpy {
+        id: seekSpy
+        target: metricOsc
+        signalName: "seekRequested"
     }
 
     TestCase {
@@ -743,6 +808,120 @@ Item {
                 protocolFake.canGoPreviousGenerated = false;
                 protocolOsc.visible = false;
             }
+        }
+
+        // V-07 U10: the lane's expand/collapse toggle is a control, not a caption: it answers
+        // the pointer with the readable accent and the keyboard with the same focus ring
+        // ReviewActionButton draws, and Return/Space perform the click's toggle.
+        function test_metric_lane_toggle_answers_hover_and_keyboard_focus() {
+            metricOsc.visible = true;
+            metricOsc.revealActive = true;
+            metricOsc.metrics = metricsFake;
+            try {
+                const lane = findChild(metricOsc, "metricTimelineLane");
+                verify(lane !== null);
+                verify(lane.visible, "available metrics must reveal the lane");
+                const toggle = findChild(lane, "metricLaneToggle");
+                verify(toggle !== null);
+                verify(toggle.visible);
+
+                // Hover answers with the readable accent; leaving returns to the resting one.
+                verify(Qt.colorEqual(toggle.color, Theme.accent));
+                mouseMove(toggle, toggle.width / 2, toggle.height / 2);
+                tryVerify(function() { return Qt.colorEqual(toggle.color, Theme.accentText); });
+                mouseMove(root, 1, 1);
+                tryVerify(function() { return Qt.colorEqual(toggle.color, Theme.accent); });
+
+                // Keyboard reachable, with the repo's canonical ring (2px Theme.focus). A Text
+                // has no visualFocus, so the ring follows activeFocus.
+                verify(toggle.activeFocusOnTab, "the toggle must be reachable with Tab");
+                toggle.forceActiveFocus(Qt.TabFocusReason);
+                verify(toggle.activeFocus);
+                let ring = null;
+                for (const child of toggle.children) {
+                    if (child.border !== undefined)
+                        ring = child;
+                }
+                verify(ring !== null, "a focused toggle must draw a focus ring");
+                compare(ring.border.width, 2);
+                verify(Qt.colorEqual(ring.border.color, Theme.focus));
+                // The ring belongs to focus alone: it disappears again when focus moves on.
+                root.forceActiveFocus();
+                verify(!toggle.activeFocus);
+                compare(ring.border.width, 0);
+                toggle.forceActiveFocus(Qt.TabFocusReason);
+
+                // Return and Space both flip the lane, exactly like the click does.
+                const enabledBefore = metricsFake.laneEnabled;
+                keyClick(Qt.Key_Return);
+                compare(metricsFake.laneEnabled, !enabledBefore);
+                keyClick(Qt.Key_Space);
+                compare(metricsFake.laneEnabled, enabledBefore);
+            } finally {
+                metricOsc.metrics = null;
+                metricOsc.visible = false;
+            }
+        }
+
+        // V-07 U10: the peak marker's visible dot stays 6x6 (a data marker on a 22px curve), but
+        // its pointer target must reach the theme's 32px hit-area minimum, stay centred on the
+        // dot and never reach outside the curve area - including at the lane's left edge.
+        function test_metric_lane_peak_marker_reaches_the_hit_area_minimum() {
+            metricOsc.visible = true;
+            metricOsc.revealActive = true;
+            metricsFake.peaks = [
+                { "frame": 1, "mae": 5.0 },
+                { "frame": 10, "mae": 4.0 },
+                { "frame": 90, "mae": 2.0 }
+            ];
+            metricOsc.metrics = metricsFake;
+            try {
+                const lane = findChild(metricOsc, "metricTimelineLane");
+                verify(lane !== null);
+                const canvas = findChild(lane, "metricLaneCanvas");
+                verify(canvas !== null);
+                const curveArea = canvas.parent;
+                verify(curveArea !== null);
+                // Publishing samples is what builds the peak list.
+                metricsFake.samplesChanged();
+
+                // The markers are Repeater delegates, so their hit areas sit below curveArea.
+                const hitAreas = collectPeakHitAreas(curveArea, []);
+                compare(hitAreas.length, 3, "every reported peak must render a marker");
+                for (const hitArea of hitAreas) {
+                    const dot = hitArea.parent;
+                    verify(dot !== null);
+                    compare(dot.width, 6, "the visible dot must stay 6x6");
+                    compare(dot.height, 6, "the visible dot must stay 6x6");
+                    verify(hitArea.width >= Theme.hitAreaMinimum, "the pointer target must reach the hit-area minimum");
+                    verify(hitArea.height >= Theme.hitAreaMinimum, "the pointer target must reach the hit-area minimum");
+                    verify(hitArea.x >= 0, "the enlarged target must stay inside the curve area");
+                    verify(hitArea.x + hitArea.width <= curveArea.width, "the enlarged target must stay inside the curve area");
+                    // The target covers the dot's centre, centred wherever the edges allow.
+                    const dotCentre = dot.x + dot.width / 2;
+                    verify(hitArea.x <= dotCentre && hitArea.x + hitArea.width >= dotCentre);
+                }
+
+                // The click still seeks to the peak's own frame.
+                seekSpy.clear();
+                const firstDot = hitAreas[0].parent;
+                mouseClick(curveArea, firstDot.x + firstDot.width / 2, firstDot.y + firstDot.height / 2);
+                compare(seekSpy.count, 1);
+                compare(seekSpy.signalArguments[0][0], 1);
+            } finally {
+                metricsFake.peaks = [];
+                metricOsc.metrics = null;
+                metricOsc.visible = false;
+            }
+        }
+
+        function collectPeakHitAreas(item, found) {
+            for (const child of item.children) {
+                if (child.objectName === "peakMarkerHitArea")
+                    found.push(child);
+                collectPeakHitAreas(child, found);
+            }
+            return found;
         }
     }
 }
