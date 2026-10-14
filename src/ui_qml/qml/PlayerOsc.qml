@@ -133,6 +133,9 @@ Item {
             hideTimer.restart();
     }
 
+    // In/out points are the OSC's own vocabulary; a marker's kind comes from the one shared
+    // mapping (`Theme.timelineMarkerLabel`) that the timeline tooltip and the inspector legend
+    // also read, so the same kind never gets two different names.
     function markerLabelForFrame(frame) {
         if (frame < 0)
             return "";
@@ -142,18 +145,8 @@ Item {
             return qsTr("出点标记");
         for (let i = 0; i < control.markers.length; ++i) {
             const m = control.markers[i];
-            if (Math.abs(Number(m.frame) - frame) <= 1) {
-                const kind = String(m.kind);
-                if (kind === "anchor")
-                    return qsTr("人工锚点");
-                if (kind === "duplicate")
-                    return qsTr("源重复帧");
-                if (kind === "missing")
-                    return qsTr("源缺失帧");
-                if (kind === "extra")
-                    return qsTr("冗余帧");
-                return qsTr("分析标记");
-            }
+            if (Math.abs(Number(m.frame) - frame) <= 1)
+                return Theme.timelineMarkerLabel(String(m.kind));
         }
         return "";
     }

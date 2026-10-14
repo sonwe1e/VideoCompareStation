@@ -831,26 +831,29 @@ Rectangle {
 
                             Repeater {
                                 objectName: "timelineMarkerLegendEntries"
+                                // The labels come from the one shared mapping the timeline tooltip
+                                // and the OSC hover readout also use, so a kind cannot be named
+                                // differently in the legend than on the timeline itself.
                                 model: [
                                     {
                                         kind: "missing",
-                                        label: qsTr("缺失")
+                                        label: Theme.timelineMarkerLabel("missing")
                                     },
                                     {
                                         kind: "duplicate",
-                                        label: qsTr("重复")
+                                        label: Theme.timelineMarkerLabel("duplicate")
                                     },
                                     {
                                         kind: "extra",
-                                        label: qsTr("多余")
+                                        label: Theme.timelineMarkerLabel("extra")
                                     },
                                     {
                                         kind: "anchor",
-                                        label: qsTr("锚点")
+                                        label: Theme.timelineMarkerLabel("anchor")
                                     },
                                     {
                                         kind: "low-confidence",
-                                        label: qsTr("低置信度")
+                                        label: Theme.timelineMarkerLabel("low-confidence")
                                     }
                                 ]
 

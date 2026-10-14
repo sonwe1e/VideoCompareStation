@@ -199,6 +199,8 @@ Item {
         delegate: Rectangle {
             id: marker
 
+            objectName: "timelineMarker"
+
             required property var modelData
             readonly property string kind: String(modelData.kind)
             readonly property real trackPosition: control.positionForFrame(Number(modelData.frame))
@@ -216,7 +218,7 @@ Item {
 
             VcsToolTip {
                 visible: markerHover.hovered
-                text: qsTr("源 %1 · %2\n第 %3 帧\n置信度 %4%").arg(String(marker.modelData.source)).arg(marker.kind).arg(Number(marker.modelData.frame) + 1).arg(Number(marker.modelData.confidence))
+                text: qsTr("源 %1 · %2\n第 %3 帧\n置信度 %4%").arg(String(marker.modelData.source)).arg(Theme.timelineMarkerLabel(marker.kind)).arg(Number(marker.modelData.frame) + 1).arg(Number(marker.modelData.confidence))
             }
         }
     }
@@ -302,7 +304,9 @@ Item {
         visible: control.zoomFactor > 1
         text: qsTr("%1×").arg(control.zoomFactor.toFixed(1))
         color: Theme.information
-        font.pixelSize: 9
+        // The zoom factor is a must-read value, so it sits at the secondary size, never the
+        // decorative fontMicro floor.
+        font.pixelSize: Theme.fontSecondary
         anchors {
             right: parent.right
             top: parent.top

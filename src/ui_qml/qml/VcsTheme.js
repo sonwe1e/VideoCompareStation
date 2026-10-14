@@ -252,6 +252,31 @@ function timelineMarkerColor(kind) {
     return kind === "anchor" ? markerAnchor : markerOther;
 }
 
+// The localized name of every alignment-marker kind `ReviewController` can mint, so the timeline
+// tooltip, the OSC hover readout and the inspector legend cannot drift into different words for
+// one kind. Pair it with `timelineMarkerColor` above, which owns the matching colour and the same
+// neutral fallback. Plain literals, like the rest of this file: it is a `.pragma library` script,
+// so `qsTr` is unavailable here and lupdate never sees these strings — the QML call sites keep
+// their own `qsTr` context around them.
+function timelineMarkerLabel(kind) {
+    if (kind === "missing")
+        return "缺失";
+    if (kind === "duplicate")
+        return "重复";
+    if (kind === "extra")
+        return "多余";
+    if (kind === "anchor")
+        return "锚点";
+    if (kind === "low-confidence")
+        return "低置信度";
+    if (kind === "review-segment")
+        return "待复核区间";
+    if (kind === "rejected-segment")
+        return "已拒绝区间";
+    // A kind this file does not know yet is still an analysis marker, never a raw enum.
+    return "分析标记";
+}
+
 // Maps a source label such as "A" or "源 B" to its slot; -1 when no letter is present.
 function slotForLabel(label) {
     const match = /[ABC]/.exec(String(label || ""));

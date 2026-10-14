@@ -95,5 +95,37 @@ Item {
             tracks.inFrame = 0;
             tracks.outFrame = 99;
         }
+
+        // U5: hovering an alignment marker must name its kind in the user's language. The tooltip
+        // used to interpolate `marker.kind` directly, so the raw enum the review controller mints
+        // ("missing") reached the user. One shared mapping (Theme.timelineMarkerLabel) now feeds
+        // this tooltip, the OSC hover readout and the inspector legend.
+        function test_marker_tooltip_names_the_kind_in_chinese() {
+            // The delegate comes from a Repeater, so it is reached through the visual tree.
+            const marker = findChild(tracks, "timelineMarker");
+            verify(marker !== null, "the marker delegate is in the timeline's tree");
+            const tip = findChild(marker, "vcsToolTip");
+            verify(tip !== null, "the marker delegate owns a tooltip");
+            verify(tip.text.indexOf("missing") < 0,
+                "the raw enum must never reach the user: " + tip.text);
+
+            // Rest the cursor on the marker for frame 30, the model's only marker. The rail is
+            // bottom-anchored with a 5 px margin and is 4 px tall, and the 11 px marker straddles
+            // it, so the rail's centre is the marker's centre.
+            mouseMove(tracks, marker.x + marker.width / 2, marker.y + marker.height / 2);
+            wait(50);
+            compare(tracks.hoverFrame, 30, "the cursor rests on the marker's frame");
+
+            verify(tip.text.indexOf(qsTr("缺失")) >= 0,
+                "the kind is named in Chinese: " + tip.text);
+            verify(tip.text.indexOf("missing") < 0,
+                "the raw enum must never reach the user: " + tip.text);
+
+            // Leave no hover behind. A later case reads the same timeline's pointer-inside state,
+            // and a synthetic hover outlives the case that created it.
+            mouseMove(root, 1, 1);
+            wait(50);
+            verify(!tracks.pointerInside, "the cursor is off the timeline again");
+        }
     }
 }
