@@ -62,6 +62,10 @@ private:
     // Returns the jog direction for a key event, or 0 when the key is not a jog key for the
     // current preset. Only unmodified (and numpad) variants map.
     [[nodiscard]] int directionFor(const QKeyEvent& event) const noexcept;
+    // True while at least one key of `direction` is still held. The consumer has a single jog
+    // slot, so a staggered multi-key hold (A and Left both down) must keep walking until the
+    // last key of that direction is up.
+    [[nodiscard]] bool anyKeyHeldFor(int direction) const noexcept;
     // Emits jogReleased for every held key and forgets them. Used on disable, window change,
     // window deactivation and destruction.
     void releaseHeldKeys();

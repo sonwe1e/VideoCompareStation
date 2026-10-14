@@ -12,6 +12,10 @@ Button {
     property bool prominent: false
     property color textColor: Theme.primaryText
     property color accentColor: Theme.accent
+    // Optional item that takes the focus back after a click. A held AbstractButton maps Space
+    // to its own activation, so a surface whose root owns the Space shortcut (the image
+    // workspace's manual A/B flicker) sets this to that root. Null keeps today's behaviour.
+    property var focusTarget: null
     // `checked` mirrors state the caller owns (a mode, a tool). Qt flips `checked` itself
     // before onClicked, so re-clicking the selected option would drop its highlight while the
     // state stays selected; undo that flip and leave the caller's binding in charge.
@@ -29,6 +33,17 @@ Button {
     onToggled: {
         if (control.mirrorsState)
             control.toggle();
+    }
+
+    // Listens to the signal rather than the handler property: usage sites declare their own
+    // onClicked, which would replace a handler declared here, but the signal fires regardless.
+    Connections {
+        target: control
+
+        function onClicked() {
+            if (control.focusTarget)
+                Qt.callLater(() => control.focusTarget.forceActiveFocus());
+        }
     }
 
     Behavior on scale {

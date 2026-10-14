@@ -437,6 +437,27 @@ Item {
             compare(actions.jogPressCalls.length, 1);
         }
 
+        // A press that ends in canceled (released off-button or stolen by a grab) emits no
+        // clicked, so nothing clears the mouse-pressed marker. The next keyboard activation must
+        // still step once instead of silently swallowing the frame.
+        function test_canceled_press_does_not_swallow_the_next_keyboard_step() {
+            osc.revealActive = true;
+            const previousButton = findChild(osc, "previousButton");
+            verify(previousButton !== null);
+            actions.jogPressCalls = [];
+            actions.jogReleaseCalls = 0;
+            actions.previousFrameCalls = 0;
+
+            mousePress(previousButton);
+            compare(actions.jogPressCalls, [-1]);
+            previousButton.canceled();
+            compare(actions.jogReleaseCalls, 1);
+
+            previousButton.clicked();
+            compare(actions.previousFrameCalls, 1, "the keyboard step after a canceled press must land");
+            compare(actions.jogPressCalls.length, 1);
+        }
+
         function test_button_hold_event_order_has_one_press_and_one_release() {
             orderedOsc.visible = true;
             const previousButton = findChild(orderedOsc, "previousButton");

@@ -145,17 +145,40 @@ bool JogKeyHandler::eventFilter(QObject* watched, QEvent* event) {
     if (keyEvent.isAutoRepeat() || !pressedKeys_.remove(keyEvent.key())) {
         return keyEvent.isAutoRepeat();
     }
-    Q_EMIT jogReleased(direction);
+    // A staggered multi-key hold releases one direction at a time: the walk survives until the
+    // last key of that direction is up, because the consumer owns a single jog slot and would
+    // otherwise stop early while another key of the same direction is still held.
+    if (!anyKeyHeldFor(direction)) {
+        Q_EMIT jogReleased(direction);
+    }
     return true;
 }
 
+bool JogKeyHandler::anyKeyHeldFor(const int direction) const noexcept {
+    for (const int key : pressedKeys_) {
+        if (directionFor(QKeyEvent{QEvent::KeyRelease, key, Qt::NoModifier}) == direction) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void JogKeyHandler::releaseHeldKeys() {
-    // QSet iteration order is unspecified, but a simultaneous multi-key hold releases one
-    // direction at a time, so the order is unobservable to the state machine.
+    // One release per direction that still had a key down: a simultaneous multi-key hold must
+    // not look like several separate walks ending.
     const QSet<int> held = pressedKeys_;
     pressedKeys_.clear();
-    for (const int key : held) {
-        Q_EMIT jogReleased(directionFor(QKeyEvent{QEvent::KeyRelease, key, Qt::NoModifier}));
+    for (const int direction : {-1, 1}) {
+        bool anyHeld = false;
+        for (const int key : held) {
+            if (directionFor(QKeyEvent{QEvent::KeyRelease, key, Qt::NoModifier}) == direction) {
+                anyHeld = true;
+                break;
+            }
+        }
+        if (anyHeld) {
+            Q_EMIT jogReleased(direction);
+        }
     }
 }
 

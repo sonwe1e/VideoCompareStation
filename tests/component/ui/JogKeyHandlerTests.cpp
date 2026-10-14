@@ -192,6 +192,50 @@ TEST_F(JogKeyHandlerTests, DisablingReleasesHeldKeys) {
     EXPECT_EQ(recorder.released(), (std::vector<int>{-1}));
 }
 
+// A staggered multi-key hold of one direction must survive until the last key of that direction
+// is up: the consumer owns a single jog slot, so an early release would stop a walk the user is
+// still holding down.
+TEST_F(JogKeyHandlerTests, StaggeredMultiKeyReleaseKeepsTheWalkUntilTheLastKeyOfTheDirection) {
+    QObject target;
+    JogKeyHandler handler;
+    armHandler(handler, target);
+    DirectionRecorder recorder{handler};
+
+    // A and Left both drive the backward walk.
+    EXPECT_TRUE(sendKey(target, QEvent::KeyPress, Qt::Key_A));
+    EXPECT_TRUE(sendKey(target, QEvent::KeyPress, Qt::Key_Left));
+    EXPECT_EQ(recorder.pressed(), (std::vector<int>{-1, -1}));
+
+    // Releasing one of them leaves the other held: no release may be emitted.
+    EXPECT_TRUE(sendKey(target, QEvent::KeyRelease, Qt::Key_A));
+    EXPECT_TRUE(recorder.released().empty());
+
+    // The last key of the direction ends the walk exactly once.
+    EXPECT_TRUE(sendKey(target, QEvent::KeyRelease, Qt::Key_Left));
+    EXPECT_EQ(recorder.released(), (std::vector<int>{-1}));
+}
+
+// The opposite direction is a separate slot: pressing it while another direction is held starts
+// the new walk (the documented behaviour), and the staggered release of the first direction must
+// not end the new one.
+TEST_F(JogKeyHandlerTests, OppositeDirectionPressThenStaggeredReleaseOfTheOldDirection) {
+    QObject target;
+    JogKeyHandler handler;
+    armHandler(handler, target);
+    DirectionRecorder recorder{handler};
+
+    EXPECT_TRUE(sendKey(target, QEvent::KeyPress, Qt::Key_A));
+    EXPECT_TRUE(sendKey(target, QEvent::KeyPress, Qt::Key_Right));
+    EXPECT_EQ(recorder.pressed(), (std::vector<int>{-1, 1}));
+
+    // Releasing the old direction's only key ends that slot, not the new walk.
+    EXPECT_TRUE(sendKey(target, QEvent::KeyRelease, Qt::Key_A));
+    EXPECT_EQ(recorder.released(), (std::vector<int>{-1}));
+
+    EXPECT_TRUE(sendKey(target, QEvent::KeyRelease, Qt::Key_Right));
+    EXPECT_EQ(recorder.released(), (std::vector<int>{-1, 1}));
+}
+
 TEST_F(JogKeyHandlerTests, OnlyTheWatchedWindowIsFiltered) {
     QObject target;
     JogKeyHandler handler;

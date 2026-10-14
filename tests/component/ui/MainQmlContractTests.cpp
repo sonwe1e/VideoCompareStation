@@ -9587,6 +9587,26 @@ TEST(MainQmlContractTests, ImageWorkspaceManualFlickerContract) {
     harness.settle();
     EXPECT_EQ(primaryViewport->property("slot").toInt(), 2);
 
+    // A toolbar button must not keep the keyboard: after clicking one, Space still toggles A/B
+    // instead of re-running the button (a held AbstractButton maps Space to its own activation,
+    // which used to make the help row's "Space / T" promise quietly false after any click).
+    // A real mouse press leaves the focus on the button, so reproduce that first.
+    auto* const trueSizeButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageTrueSizeButton"));
+    ASSERT_NE(trueSizeButton, nullptr);
+    trueSizeButton->forceActiveFocus();
+    ASSERT_TRUE(QMetaObject::invokeMethod(trueSizeButton, "clicked"));
+    harness.settle();
+    ASSERT_TRUE(imageWorkspace->property("trueSize").toBool());
+    ASSERT_TRUE(imageWorkspace->hasActiveFocus())
+        << "a toolbar click must hand the keyboard back to the workspace root";
+    sendKey(*harness.window, Qt::Key_Space);
+    harness.settle();
+    EXPECT_EQ(primaryViewport->property("slot").toInt(), 3)
+        << "Space must toggle A/B even right after a toolbar click";
+    EXPECT_TRUE(imageWorkspace->property("trueSize").toBool())
+        << "Space must not re-run the toolbar button that was clicked";
+
     // The Fade chip is visible again and clicking it must actually engage the mode: the
     // controller used to reject compareMode 7, so the entry was hidden (C-02).
     auto* const fadeBtn = harness.root->findChild<QQuickItem*>(QStringLiteral("imageModeFade"));

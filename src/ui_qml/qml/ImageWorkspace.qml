@@ -2918,6 +2918,11 @@ Rectangle {
         // implicitContentWidth does not notify, so a binding to it keeps the value it had
         // during construction; bind the label's own width instead.
         implicitWidth: Math.max(64, contentItem.implicitWidth + leftPadding + rightPadding + 8)
+        // Hand the focus back to the workspace root after the click: a held AbstractButton maps
+        // Space to its own activation, so leaving focus on the button would make Space re-run
+        // the last command instead of toggling A/B as the shortcut help promises. The transport
+        // bar restores focus the same way after a click.
+        focusTarget: control
     }
 
     // Left/Right/Up/Down walk folder pairs when a comparison list is loaded; Home/End jump

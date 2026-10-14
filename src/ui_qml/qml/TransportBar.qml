@@ -293,18 +293,25 @@ Item {
                 }
                 onReleased: {
                     // Idempotent: some synthesized releases deliver both released and canceled,
-                    // and either path alone must end the hold exactly once.
+                    // and either path alone must end the hold exactly once. jogPressed stays set
+                    // here on purpose: released() arrives before clicked(), and the click path
+                    // below still needs to tell "the mouse already stepped" from a keyboard
+                    // activation.
                     if (previousButton.jogArmed) {
                         previousButton.jogArmed = false;
                         control.navigationReleased();
                     }
                 }
                 onCanceled: {
-                    // Released off-button or stolen by a grab: still end the hold.
+                    // Released off-button or stolen by a grab: still end the hold. No clicked
+                    // follows a canceled press, so this is the only path that can clear the flag -
+                    // leaving it set would make the next keyboard activation believe the mouse
+                    // had already stepped and silently drop one frame.
                     if (previousButton.jogArmed) {
                         previousButton.jogArmed = false;
                         control.navigationReleased();
                     }
+                    previousButton.jogPressed = false;
                 }
                 onClicked: {
                     // Keyboard activation (Space/Enter) fires clicked without a press/release;
@@ -351,16 +358,21 @@ Item {
                     // Same guard as previousButton: no focus change during the hold.
                 }
                 onReleased: {
+                    // jogPressed stays set on purpose: released() arrives before clicked(), and
+                    // the click path below still needs the "mouse already stepped" marker.
                     if (nextButton.jogArmed) {
                         nextButton.jogArmed = false;
                         control.navigationReleased();
                     }
                 }
                 onCanceled: {
+                    // No clicked follows a canceled press, so this is the only path that can
+                    // clear the flag; leaving it set would silently drop the next keyboard step.
                     if (nextButton.jogArmed) {
                         nextButton.jogArmed = false;
                         control.navigationReleased();
                     }
+                    nextButton.jogPressed = false;
                 }
                 onClicked: {
                     if (!nextButton.jogPressed)

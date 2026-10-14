@@ -69,7 +69,13 @@ Item {
         forwardEnabled: reviewActions.canNext
         playerPresetKeys: control.shortcutPreset === 1
         onJogPressed: direction => reviewActions.jogPress(direction)
-        onJogReleased: () => reviewActions.jogRelease()
+        // Only the active direction's release ends the walk: pressing the opposite direction
+        // starts a new jog in the single consumer slot, and the old key's staggered release must
+        // not stop the walk the user is still holding.
+        onJogReleased: direction => {
+            if (reviewActions.jogDirection === 0 || reviewActions.jogDirection === direction)
+                reviewActions.jogRelease();
+        }
     }
     // qmllint enable import unqualified unresolved-type
 
