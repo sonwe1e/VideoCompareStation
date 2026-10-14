@@ -266,7 +266,9 @@ Item {
                     const psnr = control.metrics.currentPsnrDb >= 999.0 ? qsTr("∞") : control.metrics.currentPsnrDb.toFixed(1) + qsTr(" dB");
                     return qsTr("MAE %1 · PSNR %2").arg(control.metrics.currentMae.toFixed(2)).arg(psnr);
                 }
-                color: Theme.warning
+                // A measurement, not a warning: the warning yellow is reserved for playback
+                // alerts, and this panel shows those one row down.
+                color: Theme.secondaryText
                 font.pixelSize: Theme.fontSecondary
                 font.family: "Consolas"
             }

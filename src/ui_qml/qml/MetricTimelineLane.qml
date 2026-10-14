@@ -122,7 +122,9 @@ Item {
                 }
                 if (!started)
                     return;
-                context.strokeStyle = Theme.error;
+                // A data series, not a failure: red is reserved for real errors, so the MAE
+                // curve wears the readable accent the theme designates for dark panels.
+                context.strokeStyle = Theme.accentText;
                 context.lineWidth = 1;
                 context.stroke();
             }
@@ -156,8 +158,10 @@ Item {
                 radius: 3
                 x: Math.max(0, Math.min(curveArea.width - width, markerX))
                 y: 1
-                color: Theme.warning
-                border.color: Theme.warningBorder
+                // Same data colour as the curve so a peak marker reads as "this point of the
+                // series", with the accent edge keeping it visible over the glass.
+                color: Theme.accentText
+                border.color: Theme.accent
                 border.width: 1
 
                 HoverHandler {

@@ -3145,11 +3145,12 @@ Rectangle {
                             width: 7
                             height: 7
                             radius: 3.5
+                            // All three view modes are observations, not alerts: information
+                            // marks the two derived views and accent the plain one, so the
+                            // warning yellow stays reserved for real warnings.
                             color: {
-                                if (control.viewMode === 1)
+                                if (control.viewMode === 1 || control.viewMode === 2)
                                     return Theme.information;
-                                if (control.viewMode === 2)
-                                    return Theme.warning;
                                 return Theme.accent;
                             }
                             anchors.verticalCenter: parent.verticalCenter
@@ -3973,7 +3974,9 @@ Rectangle {
                 objectName: "displayConversionBadge"
                 visible: Boolean(control.imageReview && control.hasPrimary && (control.imageReview.primaryDisplayConverted || control.imageReview.secondaryDisplayConverted))
                 text: qsTr("显示缓冲 RGBA8")
-                dotColor: Theme.warning
+                // Extra information about a conversion that already happened, not a warning:
+                // the theme's information token exists for exactly this "neutral note" case.
+                dotColor: Theme.information
 
                 HoverHandler {
                     id: displayConversionHover
@@ -3990,7 +3993,9 @@ Rectangle {
                 objectName: "imageResampleBadge"
                 visible: Boolean(control.imageReview && control.hasPair && (control.imageReview.diffResampled || (control.sizesDiffer && control.imageReview.resampleAllowed)))
                 text: control.imageReview && control.imageReview.diffResampled ? qsTr("空间已重采样") : qsTr("重采样：开")
-                dotColor: Theme.warning
+                // Same information semantics as the conversion badge: a resample that already
+                // happened is a fact about the comparison, not a warning about it.
+                dotColor: Theme.information
 
                 MouseArea {
                     anchors.fill: parent
