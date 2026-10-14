@@ -3013,7 +3013,9 @@ ApplicationWindow {
 
         // full screen first; the drawer can still be dismissed by clicking the scrim.
 
-        enabled: root.drawerMode && root.inputContext === 0 && !root.fullScreen
+        // A held jog keeps the docked-chrome Esc (ReviewShortcuts) as the sole owner, so the
+        // drawer waits for the next press instead of racing it on the same sequence.
+        enabled: root.drawerMode && root.inputContext === 0 && !root.fullScreen && !reviewShortcuts.actions.jogActive
         onActivated: {
             if (root.shell)
                 root.shell.inspectorVisible = false;

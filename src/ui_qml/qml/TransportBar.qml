@@ -273,16 +273,23 @@ Item {
 
                 // Guards the click/press split: mouse presses step via onPressed, keyboard
                 // activation (Space/Enter) has no press phase and steps via onClicked.
+                // jogArmed spans the hold; jogPressed survives the release handlers because
+                // released() reaches the button before clicked() and the click must still be
+                // able to tell "mouse already stepped" from "keyboard activation".
                 property bool jogArmed: false
+                property bool jogPressed: false
 
                 objectName: "previousButton"
                 iconSource: "qrc:/icons/previous.svg"
-                helpText: qsTr("上一帧（长按连续走带）\n快捷键：← / A")
+                helpText: qsTr("上一帧（长按可连续逐帧）\n快捷键：← / A")
                 enabled: control.canPrevious
                 onPressed: {
                     previousButton.jogArmed = true;
+                    previousButton.jogPressed = true;
                     control.previousPressed();
-                    control.restoreFocus();
+                    // No restoreFocus here: a focus change while the button is held makes
+                    // AbstractButton cancel the press, which ends the hold after one frame.
+                    // The click path below restores focus after the release.
                 }
                 onReleased: {
                     // Idempotent: some synthesized releases deliver both released and canceled,
@@ -300,11 +307,12 @@ Item {
                     }
                 }
                 onClicked: {
-                    // Keyboard activation (Space/Enter) fires clicked without press/release;
+                    // Keyboard activation (Space/Enter) fires clicked without a press/release;
                     // mouse clicks already stepped via onPressed, so only the keyboard path
                     // steps here.
-                    if (!previousButton.jogArmed)
+                    if (!previousButton.jogPressed)
                         control.previousRequested();
+                    previousButton.jogPressed = false;
                     control.restoreFocus();
                 }
             }
@@ -328,16 +336,19 @@ Item {
             TransportButton {
                 id: nextButton
 
+                // Same jog/jogPressed split as previousButton.
                 property bool jogArmed: false
+                property bool jogPressed: false
 
                 objectName: "nextButton"
                 iconSource: "qrc:/icons/next.svg"
-                helpText: qsTr("下一帧（长按连续走带）\n快捷键：→ / D")
+                helpText: qsTr("下一帧（长按可连续逐帧）\n快捷键：→ / D")
                 enabled: control.canNext
                 onPressed: {
                     nextButton.jogArmed = true;
+                    nextButton.jogPressed = true;
                     control.nextPressed();
-                    control.restoreFocus();
+                    // Same guard as previousButton: no focus change during the hold.
                 }
                 onReleased: {
                     if (nextButton.jogArmed) {
@@ -352,8 +363,9 @@ Item {
                     }
                 }
                 onClicked: {
-                    if (!nextButton.jogArmed)
+                    if (!nextButton.jogPressed)
                         control.nextRequested();
+                    nextButton.jogPressed = false;
                     control.restoreFocus();
                 }
             }
@@ -428,7 +440,7 @@ Item {
                 }
             }
 
-            // E04 walk-rate selector for the long-press step walk. The labels carry the 走带 prefix
+            // E04 walk-rate selector for the long-press step walk. The labels carry the 连帧 prefix
             // because a bare "1×" beside the playback-rate combo would be ambiguous.
             ToolbarCombo {
                 id: jogRateCombo
@@ -437,7 +449,7 @@ Item {
                 implicitWidth: Math.ceil(jogRateLabelMetrics.advanceWidth) + jogRateCombo.leftPadding + jogRateCombo.rightPadding + 4
                 implicitHeight: control.compact ? Theme.hitAreaMinimum : 36
                 anchors.verticalCenter: parent.verticalCenter
-                model: [qsTr("走带 0.5×"), qsTr("走带 1×"), qsTr("走带 2×")]
+                model: [qsTr("连帧 0.5×"), qsTr("连帧 1×"), qsTr("连帧 2×")]
                 currentIndex: {
                     // Nearest ladder value: the controller clamps to the same [0.5, 2.0] range, so
                     // the projection never has to invent an index outside the three labels.
@@ -453,7 +465,7 @@ Item {
                     }
                     return best;
                 }
-                Accessible.name: qsTr("长按连续走带的速率")
+                Accessible.name: qsTr("长按连续逐帧的速率")
                 onActivated: index => {
                     control.jogRateRequested(control.jogRateLadder[index]);
                     control.restoreFocus();
@@ -463,7 +475,7 @@ Item {
                     id: jogRateLabelMetrics
 
                     font: jogRateCombo.font
-                    text: qsTr("走带 0.5×")
+                    text: qsTr("连帧 0.5×")
                 }
             }
 

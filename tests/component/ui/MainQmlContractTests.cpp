@@ -2121,7 +2121,7 @@ TEST(MainQmlContractTests, DesignTokensGovernKeyControlMetrics) {
 }
 
 // E04 walk-rate completion (plan §4): the long-press step walk defaults to real time with the
-// optional 0.5x/2x steps. The 走带 combo mirrors the controller projection and its selection
+// optional 0.5x/2x steps. The 连帧 combo mirrors the controller projection and its selection
 // reaches the same controller the jog keys drive — without submitting a single playback
 // command, because changing the walk pace is input pacing, not a media request.
 TEST(MainQmlContractTests, JogRateSelectorMirrorsAndReachesTheController) {
@@ -9763,7 +9763,7 @@ TEST(MainQmlContractTests, ShortcutHelpMatchesBoundShortcuts) {
         const QVariantList model = helpPairs(playerPreset);
         ASSERT_GE(model.size(), 10);
         EXPECT_EQ(descriptionFor(model, QStringLiteral("← / →")),
-                  QStringLiteral("上一帧 / 下一帧（长按连续走带）"));
+                  QStringLiteral("上一帧 / 下一帧（长按可连续逐帧）"));
         EXPECT_EQ(descriptionFor(model, QStringLiteral("↓ / ↑")),
                   QStringLiteral("后退 / 前进 5 帧"));
         EXPECT_EQ(descriptionFor(model, QStringLiteral("Shift+← / →")),

@@ -161,17 +161,17 @@ Item {
     }
     JogKeyHelpRow {
         helpKeys: qsTr("A / D")
-        helpLabel: qsTr("上一帧 / 下一帧（长按连续走带）")
+        helpLabel: qsTr("上一帧 / 下一帧（长按可连续逐帧）")
         helpPresets: -1
     }
     JogKeyHelpRow {
         helpKeys: qsTr("← / →")
-        helpLabel: qsTr("上一帧 / 下一帧（长按连续走带）")
+        helpLabel: qsTr("上一帧 / 下一帧（长按可连续逐帧）")
         helpPresets: -1
     }
     JogKeyHelpRow {
         helpKeys: qsTr(", / .")
-        helpLabel: qsTr("上一帧 / 下一帧（长按连续走带）")
+        helpLabel: qsTr("上一帧 / 下一帧（长按可连续逐帧）")
         helpPresets: 1
     }
     Shortcut {

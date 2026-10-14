@@ -256,6 +256,18 @@ Item {
         signalName: "previousGeneratedFrameRequested"
     }
 
+    // Retargeted onto the transport hold buttons inside the hold test: released and canceled
+    // both feed the same navigationReleased handler, so the ordered event log alone cannot tell
+    // a healthy hold from one that Qt silently canceled (for example by a focus change pressed
+    // into the hold).
+    SignalSpy {
+        id: holdReleaseSpy
+    }
+
+    SignalSpy {
+        id: holdCancelSpy
+    }
+
     TestCase {
         id: testCase
 
@@ -429,15 +441,26 @@ Item {
             orderedOsc.visible = true;
             const previousButton = findChild(orderedOsc, "previousButton");
             verify(previousButton !== null);
+            holdReleaseSpy.target = previousButton;
+            holdReleaseSpy.signalName = "released";
+            holdCancelSpy.target = previousButton;
+            holdCancelSpy.signalName = "canceled";
+            holdReleaseSpy.clear();
+            holdCancelSpy.clear();
             orderedActions.events = [];
 
             mousePress(previousButton);
             mouseRelease(previousButton);
             compare(orderedActions.events, ["jogPress:-1", "jogRelease"]);
+            // A canceled hold produces the same two action events, so the log cannot catch it:
+            // the press must actually survive to released, with canceled never firing. This is
+            // the regression gate for "restoreFocus inside onPressed killed the mouse hold".
+            compare(holdReleaseSpy.count, 1, "the hold must end through released");
+            compare(holdCancelSpy.count, 0, "the hold must not be canceled mid-press");
             orderedOsc.visible = false;
         }
 
-        // E04 walk-rate completion: the 走带 combo mirrors the controller projection and its
+        // E04 walk-rate completion: the 连帧 combo mirrors the controller projection and its
         // selection reaches the same action seam the jog keys use. Driven by the real activation
         // path (open, arrow, confirm) so a handler wired to the wrong signal fails here.
         function test_jog_rate_selector_mirrors_and_forwards_the_walk_rate() {
