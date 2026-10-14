@@ -394,6 +394,10 @@ void PairMetricsDecodeSession::requestInterrupt() noexcept {
     impl_->interrupted.store(true, std::memory_order_release);
 }
 
+std::size_t PairMetricsDecodeSession::retainedScratchBytes() const noexcept {
+    return impl_->scratch.pixels.size();
+}
+
 void PairMetricsDecodeSession::close() noexcept {
     impl_->scaleContext.reset();
     impl_->frame.reset();

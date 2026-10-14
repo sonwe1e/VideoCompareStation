@@ -39,6 +39,11 @@ public:
     // Thread-safe cumulative telemetry. Read after completion for a stable work total.
     [[nodiscard]] WorkStats workStats() const noexcept;
 
+    // Bytes the worker currently pins for RGBA conversion staging across its sessions. This
+    // is reported separately from the decoded-frame budget on purpose: it is transcode
+    // staging, not a decoded-frame cache entry, and it carries its own per-session cap.
+    [[nodiscard]] std::size_t retainedScratchBytes() const noexcept;
+
 private:
     class Impl;
 

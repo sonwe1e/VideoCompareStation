@@ -460,6 +460,34 @@ TEST_F(PairMetricsServiceTests, SessionReuseSkipsReopenBetweenJobs) {
     EXPECT_GT(secondSink->totalSampleCount(), 0U);
 }
 
+TEST_F(PairMetricsServiceTests, RetainedScratchIsReportedAndBoundedPerSession) {
+    // The RGBA conversion staging is invisible to the decoded-frame budget on purpose, so the
+    // performance report needs its own reading. Two sources means two retained full-frame
+    // buffers, one per decode session, and each must stay under the per-session cap that keeps
+    // an idle service from pinning an unbounded buffer for a very large source.
+    const domain::ComparisonSource first =
+        probeSource(fixture("h264_a_320x180_30fps_12.mp4"), domain::SourceId{1});
+    const domain::ComparisonSource second =
+        probeSource(fixture("h265_a_320x180_30fps_12.mp4"), domain::SourceId{2});
+
+    EXPECT_EQ(service.retainedScratchBytes(), 0U);
+
+    const auto sink = std::make_shared<CollectingSink>();
+    ASSERT_EQ(service.submit(makeRequest(first, second, 0, 0, 0, 1U), sink),
+              application::PortSubmitResult::Accepted);
+    ASSERT_TRUE(sink->waitForCompletion(std::chrono::seconds{5}));
+
+    const std::uint32_t width = first.descriptor.extent.width;
+    const std::uint32_t height = first.descriptor.extent.height;
+    const std::size_t pixels = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+    const std::size_t perFrame = pixels * 4U;
+    EXPECT_EQ(service.retainedScratchBytes(), perFrame * 2U);
+    // The cap is 64 MiB per session, so a normal source keeps the reuse fast path and an idle
+    // service still cannot pin more than the capped amount.
+    EXPECT_LT(service.retainedScratchBytes(), std::size_t{64U} * 1024U * 1024U);
+    EXPECT_GT(service.retainedScratchBytes(), 0U);
+}
+
 TEST_F(PairMetricsServiceTests, SwitchingComparisonPairRebindsDecodeSessions) {
     // Regression: a decode slot that served another source used to reopen the descriptor
     // captured at its construction, so after A/B -> A/C the second slot silently decoded B

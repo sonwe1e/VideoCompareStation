@@ -61,6 +61,9 @@ public:
     // the performance report path. Same thread-safe pull the UI controllers use.
     [[nodiscard]] std::shared_ptr<const application::SessionSnapshot> sessionSnapshot() const;
     [[nodiscard]] media::MediaProbeStatistics mediaProbeStatistics() const noexcept;
+    // Bytes the pair-metrics worker pins for RGBA conversion staging. Reported separately from
+    // the decoded-frame budget: it is transcode staging, not a decoded-frame cache entry.
+    [[nodiscard]] std::size_t pairMetricsScratchBytes() const noexcept;
     [[nodiscard]] media::FrameProviderStatistics frameProviderStatistics() const noexcept;
     [[nodiscard]] std::uint64_t decodedSignatureCount() const noexcept;
     [[nodiscard]] platform::GpuTransferStatistics transferStatistics() const noexcept;

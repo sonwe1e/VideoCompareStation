@@ -52,6 +52,10 @@ public:
 
     void requestInterrupt() noexcept;
     void close() noexcept;
+    // Bytes this session currently pins for RGBA conversion staging. The buffer is not a
+    // decoded-frame cache entry and is deliberately outside the playback FrameBudget, so
+    // callers account for it separately; see PairMetricsService's per-session cap.
+    [[nodiscard]] std::size_t retainedScratchBytes() const noexcept;
     // True when the session can serve the descriptor without reopening (same source identity,
     // geometry, and frame count).
     [[nodiscard]] bool matches(const domain::MediaDescriptor& descriptor) const noexcept;

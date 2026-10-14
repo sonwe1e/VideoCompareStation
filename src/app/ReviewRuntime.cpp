@@ -435,6 +435,10 @@ public:
         return mediaProbe_ ? mediaProbe_->statistics() : media::MediaProbeStatistics{};
     }
 
+    [[nodiscard]] std::size_t pairMetricsScratchBytes() const noexcept {
+        return pairMetricsService_ ? pairMetricsService_->retainedScratchBytes() : 0U;
+    }
+
     [[nodiscard]] media::FrameProviderStatistics frameProviderStatistics() const noexcept {
         return frameProvider_ ? frameProvider_->statistics() : media::FrameProviderStatistics{};
     }
@@ -708,6 +712,10 @@ std::shared_ptr<const application::SessionSnapshot> ReviewRuntime::sessionSnapsh
 
 media::MediaProbeStatistics ReviewRuntime::mediaProbeStatistics() const noexcept {
     return impl_ ? impl_->mediaProbeStatistics() : media::MediaProbeStatistics{};
+}
+
+std::size_t ReviewRuntime::pairMetricsScratchBytes() const noexcept {
+    return impl_ ? impl_->pairMetricsScratchBytes() : 0U;
 }
 
 media::FrameProviderStatistics ReviewRuntime::frameProviderStatistics() const noexcept {

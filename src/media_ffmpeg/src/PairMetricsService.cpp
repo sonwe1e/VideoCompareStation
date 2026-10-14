@@ -22,6 +22,15 @@ namespace {
 // Samples are published progressively so a timeline lane fills while decoding.
 constexpr std::size_t kBatchSampleCount = 16U;
 
+// Per-session ceiling on retained RGBA staging. A session keeps one full-frame buffer alive
+// between jobs so paused frame stepping does not reopen demuxers, and that buffer is
+// deliberately outside the playback FrameBudget: it is transcode staging, not a decoded-frame
+// cache entry, so it must not consume the 256 MiB decoded-frame allowance. It still needs its
+// own bound. A 4K RGBA8 frame is ~31.6 MiB, so ordinary and 4K pairs keep the fast path; a
+// source whose frame exceeds the cap gets its session closed once the job finishes, trading
+// one demuxer reopen per job for a bounded idle footprint.
+constexpr std::size_t kSessionScratchCapBytes = std::size_t{64U} * 1024U * 1024U;
+
 [[nodiscard]] std::optional<std::int64_t>
 offsetForSource(const std::vector<application::SourceFrameOffset>& offsets,
                 const domain::SourceId sourceId) noexcept {
@@ -99,6 +108,13 @@ public:
         };
     }
 
+    // Read from the GUI thread after a job settles, like workStats. The session slots belong
+    // to the worker, so the sum is only meaningful between jobs; the atomic keeps the read
+    // itself well defined.
+    [[nodiscard]] std::size_t retainedScratchBytes() const noexcept {
+        return retainedScratchBytes_.load(std::memory_order_acquire);
+    }
+
 private:
     struct Job final {
         application::PairMetricsRequest request;
@@ -151,12 +167,32 @@ private:
                 active_ = job;
             }
             execute(*job);
+            releaseOversizedSessions();
             {
                 std::scoped_lock lock(mutex_);
                 active_.reset();
                 activeSessions_.clear();
             }
         }
+    }
+
+    // Closes any session whose retained staging buffer exceeds the per-session cap, so an
+    // idle service pins at most one capped buffer per source instead of an unbounded one.
+    // The next job reopens the demuxer; the decode path and every published value are
+    // unchanged. Worker thread only.
+    void releaseOversizedSessions() {
+        std::size_t retained = 0U;
+        for (SessionSlot& slot : sessions_) {
+            if (slot.session == nullptr) {
+                continue;
+            }
+            if (slot.session->isOpen() &&
+                slot.session->retainedScratchBytes() > kSessionScratchCapBytes) {
+                slot.session->close();
+            }
+            retained += slot.session->retainedScratchBytes();
+        }
+        retainedScratchBytes_.store(retained, std::memory_order_release);
     }
 
     void execute(Job& job) {
@@ -386,6 +422,7 @@ private:
     std::atomic<std::uint64_t> decodedFrameCount_{0U};
     std::atomic<std::uint64_t> sampledFrameCount_{0U};
     std::atomic<std::uint64_t> publishedBatchCount_{0U};
+    std::atomic<std::size_t> retainedScratchBytes_{0U};
     std::thread worker_;
 };
 
@@ -408,6 +445,10 @@ void PairMetricsService::cancel(const application::PlaybackRequestContext& conte
 
 PairMetricsService::WorkStats PairMetricsService::workStats() const noexcept {
     return impl_->workStats();
+}
+
+std::size_t PairMetricsService::retainedScratchBytes() const noexcept {
+    return impl_->retainedScratchBytes();
 }
 
 } // namespace dvs::media
