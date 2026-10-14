@@ -1,9 +1,80 @@
 # 视觉审查问题台账
 
-更新：2026-10-13（质量审计与修复轮：V01 可见性与几何、E03 重锚指标、E02 生命周期、缓存统计、V02 交互／E04 走带速率选择器与 JOG 基准证据补全／设计 token U02／画布响应式重排 U01／信息分层与五态 U03／Windows 默认打开完整闭环 I03／统一鼠标与快捷键 I02／打开、添加、替换意图区分 I01／双差异显示口径与附近帧可读性 V04／原速播放指标与调度守恒 E03／任务化模式入口 V03／统一源入口与比较选择 V02／长按正反向走带 E04／缓存小步改进 E05／启动减负 E01／诊断可关闭 E02／全画布候选直看 P05／图片编辑纯操作 P11／协议导航 P03／三局部预设 P04／呈现探测 P10／插帧协议 P02／三元组规划 P07／标签几何 P12／样本写入 P08／时序证据 P09／单图／裁剪十字线）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
+更新：2026-10-14（并行三维审查与低风险修复轮：走带条鼠标长按修复与 E04 记录口径更正、
+chrome 态不可见 HUD 提示改道、busy 期间模式条选中指示保留、播放中指标采样收窄、
+配对指标解码缓冲复用，及一批焦点/快捷键/对比度小修）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
 [Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
 
-## 2026-10-13 极简界面与交互收尾（当前工作区）
+## 2026-10-14 并行三维审查与低风险修复（当前工作区）
+
+- **基线**：`8d054ff` + 同日合并打开入口等工作区未提交改动。三个只读审查代理分别从
+  性能、交互、UI 设计三维核对工作区当前版本；总体结论：无性能红线违规（帧缓存上限、
+  异步身份、FrameSet 完整性、图片缓存有界性均核对通过），下列为确认缺陷与本轮修复。
+- **修复（交互）**：
+  - **走带条鼠标长按逐帧从不生效（E04 记录与实现不符，已修）**：`TransportBar` 两个
+    单帧按钮在 `onPressed` 内调用 `restoreFocus()`，Qt 在按住期间重设焦点会取消按压
+    （Qt 6.11 探针实测事件序列为 pressed→canceled，released/clicked 不再发出），按住
+    永远只走 1 帧，与 tooltip「长按可连续逐帧」矛盾；原 QML 测试断言的
+    `["jogPress","jogRelease"]` 恰好同样被 canceled 路径满足，属"假绿"。修复：焦点
+    恢复移到 `onClicked`（释放之后），并以 `jogArmed`/`jogPressed` 双标志区分鼠标与
+    键盘路径——`released` 先于 `clicked` 到达，仅靠 `jogArmed` 会让键盘防重步守卫
+    失效（单击会走两帧）。测试补 SignalSpy 断言 released 恰 1 次、canceled 0 次，
+    可区分两种结束路径。
+  - **chrome 可见时提示发到不可见的沉浸 HUD**：`showImmersiveHud` 仅在 `!chromeVisible`
+    时渲染，而混选打开拒绝、复制对比图成败、导出不可用、样本导出不可用、连帧策略
+    代价说明均发生在常规界面，用户零反馈（混选拒绝是产品文档 §7 的明确承诺）。新增
+    `showActionFeedback()`（chrome 可见走 intent toast，沉浸态走 HUD）并切换六处
+    调用；合同测试断言混选拒绝在两种界面态各落在可见通道。
+  - 抽屉关闭 Esc 与走带取消 Esc 在窄窗口 + 按住走带时可同时启用；抽屉 Esc 现排除
+    `jogActive`。
+  - `I`/`O` 补 `autoRepeat: false`，与 I02 切换型快捷键口径一致。
+  - 拖放顺序确认对话框打开时焦点落「确定」，回车可直接确认。
+- **修复（视觉）**：
+  - CompareModeBar 三个按钮在 busy（会话加载/解码）期间整排变灰且丢失选中指示
+    （disabled 分支先于 checked 返回 transparent/disabledText）；改为 checked 优先，
+    激活模式保留 `controlChecked` 底与 `primaryText`。合同测试以真实 openSources +
+    kLoading 驱动 busy，断言 checked 填充保留、未选中按钮仍为透明。
+  - `TabbedInspector` 页签补 2px `Theme.focus` 键盘焦点环（与模式条按钮同一契约）。
+  - OSC `statusHint`（播放模式/源帧率说明）由 `disabledText` 改 `mutedText`
+    （约 3.2:1 → 约 6.7:1）；禁用灰不再承载实时读数。
+  - EmptyReviewView「对比两张图片…」补 helpText，与同排其余两个入口一致。
+- **修复（性能）**：
+  - **泳道展开 + 播放中的指标采样收窄为播放头单帧**：±150 帧窗口在播放中每个防抖
+    周期随播放头前移、上一任务被 superseded，301 帧×2 源软解全部作废并与播放争解码
+    器（台账 E04 真机记录的 `speed_ratio 0.956` 与此类常驻负载一致）；播放中只保留
+    与收起状态相同的单帧实时读数，暂停后的状态变化自然重排补采窗口。控制器测试
+    覆盖播放收窄与暂停后重开窗口。
+  - `PairMetricsDecodeSession` 新增非持有 `decodeRgbaView`：采样热路径复用会话内
+    scratch 缓冲（原先每帧 `assign` 约 8MB RGBA 向量）；`decodeRgba` 旧契约保留给
+    缩略图冷路径，`PairMetricsService` 切换至视图接口。既有端到端数值断言
+    （MAE/MSE/PSNR/坏点对独立解码参考全等）作为行为等价门禁。
+- **决策项（本轮不改，待产品确认）**：
+  - `Tab` 键被「隐藏界面」占用，常规界面键盘焦点导航不可用（ApplicationShortcut 先于
+    焦点导航消费按键，探针实测；MainQmlContractTests 钉住该行为）。建议改绑
+    `H`/`Ctrl+H` 并同步帮助与快捷键目录。
+  - 双参考差异模式下「按住看 GT 原图」按钮隐藏而键盘 `` ` `` 可用（测试注释称 peek 是
+    pair-difference 伴随项，不跟随进入双参考布局）；两入口可用面不一致，属产品决策。
+  - 无 GT 时 `C` 键静默以源 A 为锚，与差异菜单「无 GT 显式禁用」语义不一致。
+  - 性能优化机会（非缺陷）：`PixelDifference` 标量 double 累加可整数化自动向量化
+    （图片路径已是整数累加）；泳道峰值/桶化点表每批次全量重建可防抖；图片棋盘格
+    `Canvas.Immediate` 可换平铺 Image。
+  - 一致性收尾（无可见缺陷）：11px 字号已成事实第六档（78 处/13 文件）；`Consolas`
+    字面量 16 处缺字体 token；滚动条/菜单栏/ImageWorkspace 画布记号色脱离 token；
+    OSC 指标读数常驻 warning 黄与状态行警示色同屏撞语义。
+- **台账同步**：产品文档 §7 记录的同日合并打开入口/文件关联对话框修复由其自身工作区
+  改动承载，本节不重复记录。
+- **验证**：`pwsh tools/build/build.ps1 -Preset dev -Test -TestRegex
+  'ui.(MainQmlContractTests|player_osc|PairMetricsControllerTests|PairMetricsThresholdReuseTests|review_actions|DropConfirmationDialog|empty_review_view|review_action_button)|media.(PairMetricsServiceTests|PreviewThumbnailServiceTests)'
+  -TestJobs 8`：165 项（另 4 项为原有禁用）全部通过——首轮 2 个新合同测试与
+  DropConfirmationDialog 套件暴露 3 处测试自身缺陷（合同测试缺 withVideoFolder、
+  install 时序，以及 QML 测试按字母序执行导致的共享 SignalSpy 跨测试计数），修正后
+  复跑通过；新增断言可区分 released/canceled 走带路径、chrome/沉浸两种提示通道、
+  busy 期间选中填充、播放中窗口收窄与暂停补采、Enter 确认/Space 惰性。
+  `format-check`（clang-format + qmlformat）与 `lint`（clang-tidy +
+  `qmllint --max-warnings 0`）通过。
+
+## 2026-10-13 极简界面与交互收尾
+
 
 - **基线**：`32408b4` 加已有未提交主题工作；保留并完善该批修改。下面这一节记录后续实窗
   复查及最终实现，颜色和行为以本节与当前源码为准，前一轮主题记录保留作过程证据。
