@@ -2219,6 +2219,11 @@ runDesktop(int& argc,
     addNumber(QStringLiteral("frameset_cache_evictions"), provider.frameSetCacheEvictions);
     addNumber(QStringLiteral("frameset_cache_entries"), provider.frameSetCacheEntries);
     addNumber(QStringLiteral("frameset_cache_bytes"), provider.frameSetCacheRetainedBytes);
+    // Pair-metrics RGBA conversion staging, reported separately from the decoded-frame cache:
+    // it is not a FrameBudget reservation and must not be counted against the 256 MiB decoded
+    // frame allowance, so it gets its own key instead of hiding inside frameset_cache_bytes.
+    addNumber(QStringLiteral("pair_metrics_scratch_bytes"),
+              runtime != nullptr ? static_cast<double>(runtime->pairMetricsScratchBytes()) : 0.0);
 
     // E03 playback accounting summary (plan §8.4 PLAY line): one object that answers "was it
     // real speed, which layer slipped, were complete frame sets lost" instead of a bare FPS
@@ -3246,6 +3251,13 @@ struct PopupProbeResult final {
 
 } // namespace
 
+// Releases the decoder-owned RGBA buffer that a QImage adopted through its cleanup callback.
+// Used by the still-image loader so the display image shares the decoded storage instead of
+// paying a second full-frame copy.
+void releaseAdoptedRgbaBuffer(void* info) {
+    delete static_cast<std::vector<std::uint8_t>*>(info);
+}
+
 int main(int argc, char* argv[]) {
     // Qt imageformat plugins may omit PNG/JPEG on this deploy; route still-image open
     // through FFmpeg so File → Open image… works for common formats.
@@ -3281,12 +3293,20 @@ int main(int argc, char* argv[]) {
                 }
                 return false;
             }
-            const QImage decoded(still.rgba.data(),
+            // The decoder buffer is adopted, not copied: QImage takes ownership of the
+            // vector's storage and releases it through the cleanup callback, so a large
+            // source no longer pays a second full-frame RGBA allocation while the decoded
+            // one is still alive. The previous `decoded.copy()` doubled the transient peak
+            // of every still-image open on the loader worker.
+            auto* const owned = new std::vector<std::uint8_t>(std::move(still.rgba));
+            const QImage decoded(owned->data(),
                                  still.width,
                                  still.height,
                                  static_cast<qsizetype>(still.width) * 4,
-                                 QImage::Format_RGBA8888);
-            *image = decoded.copy();
+                                 QImage::Format_RGBA8888,
+                                 &releaseAdoptedRgbaBuffer,
+                                 owned);
+            *image = decoded;
             // Original-depth sidecar for sources beyond 8 bits: RGBA64LE is byte-identical to
             // QImage::Format_RGBA64 on little-endian, and a constructed QImage never pads rows
             // for 8-byte-per-pixel formats, so a single copy fills it.
