@@ -542,7 +542,13 @@ void PairMetricsController::submitRequest() {
     const domain::FrameId displayedFrame = *snapshot->displayedFrame;
     const std::int64_t center = displayedFrame.value();
     const std::int64_t count = static_cast<std::int64_t>(snapshot->canonicalFrameCount);
-    const std::int64_t radius = laneEnabled_ ? kLaneRadiusFrames : 0;
+    // A lane-expanded window behind a moving playhead never completes: every debounce tick the
+    // window moves on, the service supersedes the previous job after a handful of decoded
+    // frames, and the churn competes with playback for the decoder. While playing, sample only
+    // the playhead frame — the same live readout the collapsed lane keeps. Pause emits the
+    // state change that reschedules the request, so the window refills once playback stops.
+    const bool playing = snapshot->playbackState == domain::PlaybackState::kPlaying;
+    const std::int64_t radius = laneEnabled_ && !playing ? kLaneRadiusFrames : 0;
     const std::int64_t windowFirst = std::max<std::int64_t>(0, center - radius);
     const std::int64_t windowLast = std::min<std::int64_t>(count - 1, center + radius);
 

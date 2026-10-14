@@ -258,13 +258,16 @@ private:
 
     // Scores one canonical frame. Nullopt stops the job silently (superseded) or after a
     // posted failure; non-comparable positions are returned as samples so the UI can show an
-    // explicit "not comparable" state instead of a hole.
+    // explicit "not comparable" state instead of a hole. Decoding goes through the non-owning
+    // views so a whole window reuses one RGBA buffer per source instead of assigning a fresh
+    // full-frame vector per frame; the two views live in two distinct sessions and overlap only
+    // inside this function.
     [[nodiscard]] std::optional<application::PairMetricsSample>
     scoreFrame(Job& job, const domain::FrameId frameId) {
         application::PairMetricsSample sample;
         sample.canonicalFrameId = frameId;
 
-        std::array<internal::PairMetricsDecodeSession::RgbaFrame, 2U> frames{};
+        std::array<domain::Rgba8View, 2U> frames{};
         for (std::size_t index = 0; index < 2U; ++index) {
             const domain::ComparisonSource& source = job.request.sources[index];
             std::int64_t mapped = -1;
@@ -288,7 +291,7 @@ private:
             }
             internal::PairMetricsDecodeSession& session = *sessions_[index].session;
             const auto before = session.workStats();
-            auto decoded = session.decodeRgba(domain::FrameId{mapped}, job.superseded);
+            auto decoded = session.decodeRgbaView(domain::FrameId{mapped}, job.superseded);
             const auto after = session.workStats();
             seekCount_.fetch_add(after.seekCount - before.seekCount, std::memory_order_release);
             decodedFrameCount_.fetch_add(after.decodedFrames - before.decodedFrames,
@@ -301,24 +304,17 @@ private:
                 return std::nullopt;
             }
             sampledFrameCount_.fetch_add(1U, std::memory_order_release);
-            frames[index] = std::move(decoded).value();
+            frames[index] = decoded.value();
         }
-        if (frames[0].isEmpty() || frames[1].isEmpty() || frames[0].width != frames[1].width ||
+        if (!frames[0].isValid() || !frames[1].isValid() || frames[0].width != frames[1].width ||
             frames[0].height != frames[1].height) {
             sample.comparable = false;
             return sample;
         }
 
-        const domain::Rgba8View first{frames[0].pixels.data(),
-                                      frames[0].width,
-                                      frames[0].height,
-                                      static_cast<std::size_t>(frames[0].width) * 4U};
-        const domain::Rgba8View second{frames[1].pixels.data(),
-                                       frames[1].width,
-                                       frames[1].height,
-                                       static_cast<std::size_t>(frames[1].width) * 4U};
         const domain::ComparisonPair pair{job.request.sources[0].id, job.request.sources[1].id};
-        const auto scored = application::analyzeActivePairRgbAbsolute(pair, frameId, first, second);
+        const auto scored =
+            application::analyzeActivePairRgbAbsolute(pair, frameId, frames[0], frames[1]);
         if (!scored.has_value()) {
             sample.comparable = false;
             return sample;

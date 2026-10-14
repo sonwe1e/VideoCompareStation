@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dvs/domain/MediaDescriptor.h"
+#include "dvs/domain/PixelDifference.h"
 #include "dvs/domain/Result.h"
 
 #include <atomic>
@@ -42,6 +43,12 @@ public:
     [[nodiscard]] domain::Status open(const std::atomic<bool>& cancellationRequested);
     [[nodiscard]] domain::Result<RgbaFrame>
     decodeRgba(domain::FrameId frameId, const std::atomic<bool>& cancellationRequested);
+    // Non-owning variant for the sampling hot path: the pixels live in one session-owned buffer
+    // that is refilled on every decode, so a window of frames reuses a single allocation per
+    // source instead of assigning a fresh full-frame vector per frame. The view stays valid
+    // until the next decode (or close) on this session.
+    [[nodiscard]] domain::Result<domain::Rgba8View>
+    decodeRgbaView(domain::FrameId frameId, const std::atomic<bool>& cancellationRequested);
 
     void requestInterrupt() noexcept;
     void close() noexcept;
@@ -54,7 +61,9 @@ public:
     [[nodiscard]] WorkStats workStats() const noexcept;
 
 private:
-    [[nodiscard]] domain::Result<RgbaFrame>
+    [[nodiscard]] domain::Result<domain::Rgba8View>
+    decodeSequentially(domain::FrameId frameId, const std::atomic<bool>& cancellationRequested);
+    [[nodiscard]] domain::Result<domain::Rgba8View>
     decodeInternal(domain::FrameId frameId,
                    const std::atomic<bool>& cancellationRequested,
                    bool continueSequentially,

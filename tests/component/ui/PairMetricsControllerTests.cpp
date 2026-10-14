@@ -193,6 +193,32 @@ TEST_F(PairMetricsControllerTests, LaneEnabledWidensSamplingWindow) {
     EXPECT_EQ(service_.requests.front().priorityFrame, domain::FrameId{3});
 }
 
+TEST_F(PairMetricsControllerTests, PlayingSessionCollapsesTheLaneWindowToThePlayhead) {
+    installTwoSourceSession(3, 12U);
+    snapshot_->playbackState = domain::PlaybackState::kPlaying;
+    controller_->setLaneEnabled(true);
+    controller_->refresh();
+    processUntil([&] { return !service_.requests.empty(); }, 1000);
+    ASSERT_EQ(service_.requests.size(), 1U);
+    // A lane window behind a moving playhead is superseded before it can finish; playback only
+    // keeps the live playhead readout, identical to the collapsed lane.
+    EXPECT_EQ(service_.requests.front().firstFrame, domain::FrameId{3});
+    EXPECT_EQ(service_.requests.front().lastFrame, domain::FrameId{3});
+    service_.deliver(
+        service_.makeBatch(service_.requests.front(),
+                           {application::PairMetricsSample{.canonicalFrameId = domain::FrameId{3},
+                                                           .comparable = true}}));
+
+    // Pause re-opens the window: the next submit drains the nearest missing run around the
+    // playhead again.
+    snapshot_->playbackState = domain::PlaybackState::kPaused;
+    controller_->refresh();
+    processUntil([&] { return service_.requests.size() >= 2U; }, 1000);
+    ASSERT_EQ(service_.requests.size(), 2U);
+    EXPECT_EQ(service_.requests.back().firstFrame, domain::FrameId{0});
+    EXPECT_EQ(service_.requests.back().lastFrame, domain::FrameId{2});
+}
+
 TEST_F(PairMetricsControllerTests, ClippedWindowPrioritizesActualPlayhead) {
     installTwoSourceSession(3, 1000U);
     controller_->setLaneEnabled(true);

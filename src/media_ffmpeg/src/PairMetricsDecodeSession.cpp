@@ -85,22 +85,22 @@ struct TimelineIndexCancellationState final {
 // dimensions. Metrics use these converted RGB values (including 10-bit inputs reduced to 8-bit),
 // not original code values or renderer readback. Playback separately normalizes to NV12/P010;
 // its display rotation, scaling and sampling do not enter this full-frame metrics conversion.
-[[nodiscard]] std::optional<PairMetricsDecodeSession::RgbaFrame>
-rgbaFromFrame(const AVFrame& frame, // NOLINT(bugprone-exception-escape): decode-path allocation,
-                                    // terminate accepted
-              SwsContextPtr& scaleContext,
-              const domain::ColorMetadata&
-                  colorMetadata) noexcept { // NOLINT(bugprone-exception-escape): decode-path
-                                            // allocations, terminate accepted
+// Fills the caller-owned `output` in place: `assign` reuses the buffer's capacity across calls,
+// so a sampling window pays one allocation instead of one per frame.
+[[nodiscard]] bool rgbaFromFrame( // NOLINT(bugprone-exception-escape): decode-path allocation,
+                                  // terminate accepted
+    const AVFrame& frame,
+    SwsContextPtr& scaleContext,
+    const domain::ColorMetadata& colorMetadata,
+    PairMetricsDecodeSession::RgbaFrame& output) noexcept {
     if (frame.width <= 0 || frame.height <= 0) {
-        return std::nullopt;
+        return false;
     }
     const auto sourceFormat = static_cast<AVPixelFormat>(frame.format);
     if (sourceFormat == AV_PIX_FMT_NONE || sws_isSupportedInput(sourceFormat) == 0) {
-        return std::nullopt;
+        return false;
     }
 
-    PairMetricsDecodeSession::RgbaFrame output;
     output.width = static_cast<std::uint32_t>(frame.width);
     output.height = static_cast<std::uint32_t>(frame.height);
     const std::size_t stride = static_cast<std::size_t>(frame.width) * 4U;
@@ -119,7 +119,7 @@ rgbaFromFrame(const AVFrame& frame, // NOLINT(bugprone-exception-escape): decode
                                                     nullptr);
     scaleContext.reset(scaled);
     if (scaleContext == nullptr) {
-        return std::nullopt;
+        return false;
     }
     const AVPixFmtDescriptor* const sourcePixelDescriptor = av_pix_fmt_desc_get(sourceFormat);
     const bool sourceRgb = sourcePixelDescriptor != nullptr &&
@@ -136,7 +136,7 @@ rgbaFromFrame(const AVFrame& frame, // NOLINT(bugprone-exception-escape): decode
                                                             0,
                                                             1 << 16,
                                                             1 << 16) < 0) {
-        return std::nullopt;
+        return false;
     }
 
     std::array<std::uint8_t*, 4U> destinationData{output.pixels.data(), nullptr, nullptr, nullptr};
@@ -148,10 +148,7 @@ rgbaFromFrame(const AVFrame& frame, // NOLINT(bugprone-exception-escape): decode
                                frame.height,
                                destinationData.data(),
                                destinationLines.data());
-    if (rows != frame.height) {
-        return std::nullopt;
-    }
-    return output;
+    return rows == frame.height;
 }
 
 } // namespace
@@ -171,6 +168,9 @@ public:
     AvPacketPtr packet;
     AvFramePtr frame;
     SwsContextPtr scaleContext;
+    // Session-owned RGBA conversion target. Its capacity survives across decodes so a sampling
+    // window refills one buffer per source instead of assigning a fresh full-frame vector.
+    PairMetricsDecodeSession::RgbaFrame scratch;
     int streamIndex = -1;
     AVRational timeBase{};
     std::shared_ptr<const std::vector<std::int64_t>> presentationTimestamps;
@@ -353,9 +353,11 @@ domain::Status PairMetricsDecodeSession::open(const std::atomic<bool>& cancellat
     return domain::Status::success();
 }
 
-domain::Result<PairMetricsDecodeSession::RgbaFrame>
-PairMetricsDecodeSession::decodeRgba(const domain::FrameId frameId,
-                                     const std::atomic<bool>& cancellationRequested) {
+// Shared entry that keeps the sequential-continuation bookkeeping in one place: consecutive
+// frame ids skip the seek pre-roll, and any failure retires the sequential cursor.
+domain::Result<domain::Rgba8View>
+PairMetricsDecodeSession::decodeSequentially(const domain::FrameId frameId,
+                                             const std::atomic<bool>& cancellationRequested) {
     const bool sequential = impl_->sequentialReady && impl_->lastReturnedFrame.has_value() &&
                             frameId.isValid() &&
                             frameId.value() == impl_->lastReturnedFrame->value() + 1;
@@ -364,6 +366,28 @@ PairMetricsDecodeSession::decodeRgba(const domain::FrameId frameId,
         impl_->sequentialReady = false;
     }
     return result;
+}
+
+domain::Result<PairMetricsDecodeSession::RgbaFrame>
+PairMetricsDecodeSession::decodeRgba(const domain::FrameId frameId,
+                                     const std::atomic<bool>& cancellationRequested) {
+    auto view = decodeSequentially(frameId, cancellationRequested);
+    if (!view) {
+        return domain::Result<RgbaFrame>::failure(view.error());
+    }
+    // Owning hand-out for the cold single-frame path: the buffer moves out of the scratch, so
+    // the next decode refills it from a fresh allocation. Hot-path callers use decodeRgbaView.
+    RgbaFrame owned;
+    owned.width = impl_->scratch.width;
+    owned.height = impl_->scratch.height;
+    owned.pixels = std::move(impl_->scratch.pixels);
+    return domain::Result<RgbaFrame>::success(std::move(owned));
+}
+
+domain::Result<domain::Rgba8View>
+PairMetricsDecodeSession::decodeRgbaView(const domain::FrameId frameId,
+                                         const std::atomic<bool>& cancellationRequested) {
+    return decodeSequentially(frameId, cancellationRequested);
 }
 
 void PairMetricsDecodeSession::requestInterrupt() noexcept {
@@ -377,6 +401,9 @@ void PairMetricsDecodeSession::close() noexcept {
     impl_->codec.reset();
     impl_->format.reset();
     impl_->presentationTimestamps.reset();
+    // The scratch capacity belongs to one open session; releasing it here keeps a closed
+    // session from pinning a full RGBA frame behind an idle service.
+    impl_->scratch = PairMetricsDecodeSession::RgbaFrame{};
     impl_->streamIndex = -1;
     impl_->lastReturnedFrame.reset();
     impl_->packetPending = false;
@@ -423,7 +450,7 @@ PairMetricsDecodeSession::WorkStats PairMetricsDecodeSession::workStats() const 
     return impl_->work;
 }
 
-domain::Result<PairMetricsDecodeSession::RgbaFrame>
+domain::Result<domain::Rgba8View>
 PairMetricsDecodeSession::decodeInternal(const domain::FrameId frameId,
                                          const std::atomic<bool>& cancellationRequested,
                                          const bool continueSequentially,
@@ -432,26 +459,26 @@ PairMetricsDecodeSession::decodeInternal(const domain::FrameId frameId,
     impl_->interrupted.store(cancellationRequested.load(std::memory_order_acquire),
                              std::memory_order_release);
     if (cancellationRequested.load(std::memory_order_acquire)) {
-        return domain::Result<RgbaFrame>::failure(
+        return domain::Result<domain::Rgba8View>::failure(
             decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
                         impl_->sourceId,
                         "Pair-metrics decoding was canceled.",
                         true));
     }
     if (!impl_->opened || impl_->format == nullptr || impl_->codec == nullptr) {
-        return domain::Result<RgbaFrame>::failure(
+        return domain::Result<domain::Rgba8View>::failure(
             decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
                         impl_->sourceId,
                         "Pair-metrics decoder is not open."));
     }
     if (!frameId.isValid() || frameId.value() >= impl_->descriptor.frameCount.value) {
-        return domain::Result<RgbaFrame>::failure(
+        return domain::Result<domain::Rgba8View>::failure(
             decodeError(domain::MediaErrorCode::kInvalidFrameId,
                         impl_->sourceId,
                         "Requested pair-metrics frame is outside the source timeline."));
     }
     if (!impl_->presentationTimestamps) {
-        return domain::Result<RgbaFrame>::failure(
+        return domain::Result<domain::Rgba8View>::failure(
             decodeError(domain::MediaErrorCode::kFrameTimelineInvalid,
                         impl_->sourceId,
                         "Pair-metrics decoder has no presentation timestamp index.",
@@ -467,7 +494,7 @@ PairMetricsDecodeSession::decodeInternal(const domain::FrameId frameId,
         const int seekResult = av_seek_frame(
             impl_->format.get(), impl_->streamIndex, seekTimestamp, AVSEEK_FLAG_BACKWARD);
         if (seekResult < 0) {
-            return domain::Result<RgbaFrame>::failure(decodeError(
+            return domain::Result<domain::Rgba8View>::failure(decodeError(
                 domain::MediaErrorCode::kMediaDecodeFailed,
                 impl_->sourceId,
                 "FFmpeg could not seek for pair-metrics extraction: " + ffmpegError(seekResult),
@@ -493,7 +520,7 @@ PairMetricsDecodeSession::decodeInternal(const domain::FrameId frameId,
         impl_->frame.reset(av_frame_alloc());
     }
     if (impl_->packet == nullptr || impl_->frame == nullptr) {
-        return domain::Result<RgbaFrame>::failure(
+        return domain::Result<domain::Rgba8View>::failure(
             decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
                         impl_->sourceId,
                         "FFmpeg could not allocate pair-metrics decode buffers."));
@@ -502,7 +529,7 @@ PairMetricsDecodeSession::decodeInternal(const domain::FrameId frameId,
     for (;;) {
         if (cancellationRequested.load(std::memory_order_acquire) ||
             impl_->interrupted.load(std::memory_order_acquire)) {
-            return domain::Result<RgbaFrame>::failure(
+            return domain::Result<domain::Rgba8View>::failure(
                 decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
                             impl_->sourceId,
                             "Pair-metrics decoding was interrupted.",
@@ -515,7 +542,7 @@ PairMetricsDecodeSession::decodeInternal(const domain::FrameId frameId,
                                                ? impl_->frame->best_effort_timestamp
                                                : impl_->frame->pts;
             if (timestamp == AV_NOPTS_VALUE) {
-                return domain::Result<RgbaFrame>::failure(
+                return domain::Result<domain::Rgba8View>::failure(
                     decodeError(domain::MediaErrorCode::kFrameTimelineInvalid,
                                 impl_->sourceId,
                                 "A pair-metrics frame has no presentation timestamp.",
@@ -537,12 +564,12 @@ PairMetricsDecodeSession::decodeInternal(const domain::FrameId frameId,
                     if (seekOrdinalBackOff == 0U) {
                         const domain::Status reopened = open(cancellationRequested);
                         if (!reopened) {
-                            return domain::Result<RgbaFrame>::failure(reopened.error());
+                            return domain::Result<domain::Rgba8View>::failure(reopened.error());
                         }
                         return decodeInternal(frameId, cancellationRequested, false, false);
                     }
                 }
-                return domain::Result<RgbaFrame>::failure(
+                return domain::Result<domain::Rgba8View>::failure(
                     decodeError(domain::MediaErrorCode::kFrameTimelineInvalid,
                                 impl_->sourceId,
                                 "The indexed timestamp did not identify pair-metrics frame " +
@@ -551,7 +578,7 @@ PairMetricsDecodeSession::decodeInternal(const domain::FrameId frameId,
             }
             const auto pixelFormat = static_cast<AVPixelFormat>(impl_->frame->format);
             if (pixelFormat == AV_PIX_FMT_NONE || sws_isSupportedInput(pixelFormat) == 0) {
-                return domain::Result<RgbaFrame>::failure(
+                return domain::Result<domain::Rgba8View>::failure(
                     decodeError(domain::MediaErrorCode::kUnsupportedPixelFormat,
                                 impl_->sourceId,
                                 "The pair-metrics decoder produced a format that cannot be "
@@ -562,27 +589,35 @@ PairMetricsDecodeSession::decodeInternal(const domain::FrameId frameId,
                 static_cast<std::uint32_t>(impl_->frame->width) != impl_->descriptor.extent.width ||
                 static_cast<std::uint32_t>(impl_->frame->height) !=
                     impl_->descriptor.extent.height) {
-                return domain::Result<RgbaFrame>::failure(
+                return domain::Result<domain::Rgba8View>::failure(
                     decodeError(domain::MediaErrorCode::kSourceFingerprintMismatch,
                                 impl_->sourceId,
                                 "Decoded pair-metrics geometry changed after media probing.",
                                 true));
             }
-            auto rgba =
-                rgbaFromFrame(*impl_->frame, impl_->scaleContext, impl_->descriptor.colorMetadata);
+            const bool converted = rgbaFromFrame(*impl_->frame,
+                                                 impl_->scaleContext,
+                                                 impl_->descriptor.colorMetadata,
+                                                 impl_->scratch);
             av_frame_unref(impl_->frame.get());
-            if (!rgba.has_value()) {
-                return domain::Result<RgbaFrame>::failure(
+            if (!converted) {
+                return domain::Result<domain::Rgba8View>::failure(
                     decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
                                 impl_->sourceId,
                                 "Decoder-owned pixels could not be converted for pair metrics."));
             }
             impl_->lastReturnedFrame = frameId;
             impl_->sequentialReady = true;
-            return domain::Result<RgbaFrame>::success(std::move(*rgba));
+            const std::size_t stride = static_cast<std::size_t>(impl_->scratch.width) * 4U;
+            return domain::Result<domain::Rgba8View>::success(domain::Rgba8View{
+                impl_->scratch.pixels.data(),
+                static_cast<std::size_t>(impl_->scratch.width),
+                static_cast<std::size_t>(impl_->scratch.height),
+                stride,
+            });
         }
         if (receiveResult != AVERROR(EAGAIN) && receiveResult != AVERROR_EOF) {
-            return domain::Result<RgbaFrame>::failure(decodeError(
+            return domain::Result<domain::Rgba8View>::failure(decodeError(
                 domain::MediaErrorCode::kMediaDecodeFailed,
                 impl_->sourceId,
                 "FFmpeg could not receive a pair-metrics frame: " + ffmpegError(receiveResult),
@@ -599,7 +634,7 @@ PairMetricsDecodeSession::decodeInternal(const domain::FrameId frameId,
                     break;
                 }
                 if (readResult < 0) {
-                    return domain::Result<RgbaFrame>::failure(decodeError(
+                    return domain::Result<domain::Rgba8View>::failure(decodeError(
                         domain::MediaErrorCode::kMediaDecodeFailed,
                         impl_->sourceId,
                         "FFmpeg could not read a pair-metrics packet: " + ffmpegError(readResult),
@@ -622,7 +657,7 @@ PairMetricsDecodeSession::decodeInternal(const domain::FrameId frameId,
             if (sendResult == AVERROR(EAGAIN)) {
                 continue;
             }
-            return domain::Result<RgbaFrame>::failure(decodeError(
+            return domain::Result<domain::Rgba8View>::failure(decodeError(
                 domain::MediaErrorCode::kMediaDecodeFailed,
                 impl_->sourceId,
                 "FFmpeg could not submit a pair-metrics packet: " + ffmpegError(sendResult),
@@ -637,21 +672,21 @@ PairMetricsDecodeSession::decodeInternal(const domain::FrameId frameId,
             if (flushResult == AVERROR(EAGAIN)) {
                 continue;
             }
-            return domain::Result<RgbaFrame>::failure(decodeError(
+            return domain::Result<domain::Rgba8View>::failure(decodeError(
                 domain::MediaErrorCode::kMediaDecodeFailed,
                 impl_->sourceId,
                 "FFmpeg could not flush the pair-metrics decoder: " + ffmpegError(flushResult),
                 true));
         }
         if (impl_->inputEnded && impl_->flushSubmitted) {
-            return domain::Result<RgbaFrame>::failure(
+            return domain::Result<domain::Rgba8View>::failure(
                 decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
                             impl_->sourceId,
                             "Pair-metrics decoder requested input after flush.",
                             true));
         }
     }
-    return domain::Result<RgbaFrame>::failure(
+    return domain::Result<domain::Rgba8View>::failure(
         decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
                     impl_->sourceId,
                     "Pair-metrics decoding ended before the requested frame.",
