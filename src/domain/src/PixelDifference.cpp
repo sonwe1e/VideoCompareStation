@@ -62,9 +62,13 @@ computeRgbAbsoluteMetrics(const Rgba8View first,
     metrics.pixelCount = first.width * first.height;
     metrics.channelSamples = metrics.pixelCount * 3U;
 
-    double absSum = 0.0;
-    double squareSum = 0.0;
-    double maxAbs = 0.0;
+    // Integer accumulation: every term is an 8-bit absolute delta, so the sums stay exact well
+    // under 2^53 and the divisors below produce bit-identical results to the previous double
+    // accumulation, while MSVC can vectorize an integer reduction (it cannot vectorize a
+    // floating-point one without /fp:fast, because reassociation is not value-safe there).
+    std::uint64_t absSum = 0U;
+    std::uint64_t squareSum = 0U;
+    int maxAbs = 0;
     std::uint64_t mismatchPixels = 0U;
 
     for (std::size_t y = 0; y < first.height; ++y) {
@@ -77,9 +81,10 @@ computeRgbAbsoluteMetrics(const Rgba8View first,
                 const int delta = static_cast<int>(firstRow[offset + channel]) -
                                   static_cast<int>(secondRow[offset + channel]);
                 channelDeltas[channel] = delta;
-                const double absolute = static_cast<double>(std::abs(delta));
-                absSum += absolute;
-                squareSum += absolute * absolute;
+                const int absolute = std::abs(delta);
+                absSum += static_cast<std::uint64_t>(absolute);
+                // 8-bit deltas square to at most 65025, so the int product cannot overflow.
+                squareSum += static_cast<std::uint64_t>(absolute * absolute);
                 maxAbs = std::max(maxAbs, absolute);
             }
             const bool pixelMismatch = policyMismatch(
@@ -90,11 +95,13 @@ computeRgbAbsoluteMetrics(const Rgba8View first,
         }
     }
 
-    metrics.mae =
-        metrics.channelSamples > 0U ? absSum / static_cast<double>(metrics.channelSamples) : 0.0;
-    metrics.mse =
-        metrics.channelSamples > 0U ? squareSum / static_cast<double>(metrics.channelSamples) : 0.0;
-    metrics.maxAbsError = maxAbs;
+    metrics.mae = metrics.channelSamples > 0U
+                      ? static_cast<double>(absSum) / static_cast<double>(metrics.channelSamples)
+                      : 0.0;
+    metrics.mse = metrics.channelSamples > 0U
+                      ? static_cast<double>(squareSum) / static_cast<double>(metrics.channelSamples)
+                      : 0.0;
+    metrics.maxAbsError = static_cast<double>(maxAbs);
     metrics.mismatchPixels = mismatchPixels;
     metrics.mismatchRatio = metrics.pixelCount > 0U ? static_cast<double>(mismatchPixels) /
                                                           static_cast<double>(metrics.pixelCount)
@@ -133,8 +140,8 @@ std::optional<RgbAbsoluteAnalysis> computeRgbAbsoluteAnalysis(const Rgba8View fi
     RgbAbsoluteAnalysis analysis;
     analysis.metrics.pixelCount = first.width * first.height;
     analysis.metrics.channelSamples = analysis.metrics.pixelCount * 3U;
-    double absSum = 0.0;
-    double squareSum = 0.0;
+    std::uint64_t absSum = 0U;
+    std::uint64_t squareSum = 0U;
     for (std::size_t y = 0; y < first.height; ++y) {
         const auto* firstRow = first.pixels + y * first.strideBytes;
         const auto* secondRow = second.pixels + y * second.strideBytes;
@@ -146,12 +153,12 @@ std::optional<RgbAbsoluteAnalysis> computeRgbAbsoluteAnalysis(const Rgba8View fi
             const int absoluteR = std::abs(deltaR);
             const int absoluteG = std::abs(deltaG);
             const int absoluteB = std::abs(deltaB);
-            absSum += static_cast<double>(absoluteR);
-            absSum += static_cast<double>(absoluteG);
-            absSum += static_cast<double>(absoluteB);
-            squareSum += static_cast<double>(deltaR * deltaR);
-            squareSum += static_cast<double>(deltaG * deltaG);
-            squareSum += static_cast<double>(deltaB * deltaB);
+            absSum += static_cast<std::uint64_t>(absoluteR);
+            absSum += static_cast<std::uint64_t>(absoluteG);
+            absSum += static_cast<std::uint64_t>(absoluteB);
+            squareSum += static_cast<std::uint64_t>(deltaR * deltaR);
+            squareSum += static_cast<std::uint64_t>(deltaG * deltaG);
+            squareSum += static_cast<std::uint64_t>(deltaB * deltaB);
             const int maximum = std::max(absoluteR, std::max(absoluteG, absoluteB));
             const int minimum = std::min(absoluteR, std::min(absoluteG, absoluteB));
             analysis.metrics.maxAbsError =
@@ -178,8 +185,10 @@ std::optional<RgbAbsoluteAnalysis> computeRgbAbsoluteAnalysis(const Rgba8View fi
             counts[threshold - 1U] += counts[threshold];
         }
     }
-    analysis.metrics.mae = absSum / static_cast<double>(analysis.metrics.channelSamples);
-    analysis.metrics.mse = squareSum / static_cast<double>(analysis.metrics.channelSamples);
+    analysis.metrics.mae =
+        static_cast<double>(absSum) / static_cast<double>(analysis.metrics.channelSamples);
+    analysis.metrics.mse =
+        static_cast<double>(squareSum) / static_cast<double>(analysis.metrics.channelSamples);
     analysis.metrics.psnrDb = analysis.metrics.mse <= 0.0
                                   ? kInfinitePsnrDb
                                   : 10.0 * std::log10((255.0 * 255.0) / analysis.metrics.mse);
