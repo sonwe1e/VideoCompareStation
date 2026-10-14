@@ -27,6 +27,11 @@ class FileAssociationController final : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool busy READ busy NOTIFY stateChanged)
     Q_PROPERTY(QString lastError READ lastError NOTIFY stateChanged)
+    // Short per-action success note (Chinese, QML renders it verbatim); empty when the last
+    // action failed - lastError carries that case - and until the first action completes.
+    // Without it a successful register or repair is visually indistinguishable from a click
+    // that did nothing, which reads to the user as a dead button.
+    Q_PROPERTY(QString lastResult READ lastResult NOTIFY stateChanged)
     // FileAssociationHealth: 0 not registered, 1 current, 2 registered but pointing at another
     // path (a moved or upgraded ZIP - repair rewrites it).
     Q_PROPERTY(int registrationHealth READ registrationHealth NOTIFY stateChanged)
@@ -44,6 +49,7 @@ public:
 
     [[nodiscard]] bool busy() const noexcept;
     [[nodiscard]] QString lastError() const noexcept;
+    [[nodiscard]] QString lastResult() const noexcept;
     [[nodiscard]] int registrationHealth() const noexcept;
     [[nodiscard]] int videoDefaultOwnership() const noexcept;
     [[nodiscard]] int imageDefaultOwnership() const noexcept;
@@ -68,12 +74,16 @@ private:
     };
 
     // Runs `action` on the worker pool, then reads the association status on the same worker
-    // and applies both to the properties on the GUI thread.
-    void runAsync(std::function<application::FileAssociationOutcome()> action);
+    // and applies both to the properties on the GUI thread. `successMessage` becomes lastResult
+    // when the action succeeded and names the follow-up the user still owes (e.g. picking the
+    // default in system settings).
+    void runAsync(std::function<application::FileAssociationOutcome()> action,
+                  QString successMessage);
 
     std::shared_ptr<application::IFileAssociationService> service_;
     application::FileAssociationStatus status_;
     QString lastError_;
+    QString lastResult_;
     bool busy_{false};
     Shutdown shutdown_;
 };

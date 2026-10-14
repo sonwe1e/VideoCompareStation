@@ -11,12 +11,16 @@ Item {
     property var pathNameFunction: null
     required property int initialReferenceIndex
     readonly property bool comparisonVisible: comparisonDialog.visible
-    readonly property bool modalVisible: comparisonDialog.visible || videoFilesDialog.visible || addVideoDialog.visible || replaceVideoDialog.visible || videoFolderDialog.visible
+    readonly property bool modalVisible: comparisonDialog.visible || videoFilesDialog.visible || addVideoDialog.visible || replaceVideoDialog.visible || videoFolderDialog.visible || mediaFilesDialog.visible
 
     signal videoFolderAccepted(url folder)
     signal videoFolderRejected
     signal openVideosAccepted(var urls)
     signal openVideosRejected
+    // Merged 打开文件 entry: one multi-select dialog for videos and still images; Main
+    // classifies the accepted selection and routes it to the video or image pipeline.
+    signal mediaFilesAccepted(var urls)
+    signal mediaFilesRejected
     signal addVideoAccepted(url url)
     signal addVideoRejected
     // V02 "替换文件": one file replaces the source whose menu asked for it; Main owns which
@@ -30,6 +34,10 @@ Item {
 
     function openVideos() {
         videoFilesDialog.open();
+    }
+
+    function openMediaFiles() {
+        mediaFilesDialog.open();
     }
 
     function openVideoFolder() {
@@ -65,6 +73,17 @@ Item {
         nameFilters: [qsTr("视频文件 (*.mp4 *.mkv *.mov *.avi *.m4v)"), qsTr("所有文件 (*)")]
         onAccepted: control.openVideosAccepted(selectedFiles)
         onRejected: control.openVideosRejected()
+    }
+
+    NativeDialogs.FileDialog {
+        id: mediaFilesDialog
+
+        objectName: "mediaFilesDialog"
+        title: qsTr("打开文件")
+        fileMode: NativeDialogs.FileDialog.OpenFiles
+        nameFilters: [qsTr("媒体文件 (*.mp4 *.mkv *.mov *.avi *.m4v *.png *.jpg *.jpeg *.bmp *.gif *.webp *.tif *.tiff *.pnm *.ppm *.pgm *.pbm *.pam)"), qsTr("所有文件 (*)")]
+        onAccepted: control.mediaFilesAccepted(selectedFiles)
+        onRejected: control.mediaFilesRejected()
     }
 
     NativeDialogs.FileDialog {

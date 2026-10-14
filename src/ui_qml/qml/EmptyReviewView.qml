@@ -11,8 +11,7 @@ Rectangle {
     property color mutedTextColor: Theme.mutedText
 
     signal openVideoFolderRequested
-    signal openVideosRequested
-    signal openImageRequested
+    signal openFilesRequested
     signal openImagePairRequested
     signal compareFoldersRequested
 
@@ -109,25 +108,18 @@ Rectangle {
                 spacing: 12
                 anchors.horizontalCenter: parent.horizontalCenter
 
+                // One merged entry: the file dialog accepts videos and still images in the
+                // same selection, so "which kind am I opening" is not a question the card
+                // needs to ask up front.
                 ReviewActionButton {
-                    id: openVideosButton
+                    id: openFilesButton
 
-                    objectName: "emptyOpenVideosButton"
-                    text: qsTr("打开视频…")
-                    implicitWidth: (parent.width - 12) / 2
+                    objectName: "emptyOpenFilesButton"
+                    text: qsTr("打开文件…")
+                    implicitWidth: parent.width
                     prominent: true
-                    helpText: qsTr("选择一个视频播放，或选择两三个视频进行对比。")
-                    onClicked: control.openVideosRequested()
-                }
-
-                ReviewActionButton {
-                    id: openImageButton
-
-                    objectName: "emptyOpenImageButton"
-                    text: qsTr("打开图片…")
-                    implicitWidth: (parent.width - 12) / 2
-                    helpText: qsTr("查看图片、透明度和像素值。")
-                    onClicked: control.openImageRequested()
+                    helpText: qsTr("选择视频或图片；多选两三个视频进入对比，两张图片自动配对。")
+                    onClicked: control.openFilesRequested()
                 }
             }
 
@@ -152,14 +144,14 @@ Rectangle {
                 spacing: 4
 
                 ReviewActionButton {
-                    objectName: "emptyOpenVideoFolderButton"
-                    text: qsTr("浏览视频文件夹…")
+                    objectName: "emptyOpenFolderButton"
+                    text: qsTr("打开文件夹…")
                     implicitWidth: (parent.width - 8) / 3
                     implicitHeight: 36
                     leftPadding: 6
                     rightPadding: 6
                     flat: true
-                    helpText: qsTr("从文件夹中选择视频，支持上一项与下一项。")
+                    helpText: qsTr("从文件夹中选择视频或图片，支持上一项与下一项。")
                     onClicked: control.openVideoFolderRequested()
                 }
 
@@ -171,6 +163,7 @@ Rectangle {
                     leftPadding: 6
                     rightPadding: 6
                     flat: true
+                    helpText: qsTr("选择两张图片，并排、分割线或闪烁比较。")
                     onClicked: control.openImagePairRequested()
                 }
 

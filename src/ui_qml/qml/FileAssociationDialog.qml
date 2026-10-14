@@ -24,11 +24,30 @@ Item {
 
     readonly property bool busy: control.service ? Boolean(control.service.busy) : false
     readonly property string lastError: control.service ? String(control.service.lastError) : ""
+    readonly property string lastResult: control.service ? String(control.service.lastResult) : ""
     // FileAssociationHealth: 0 not registered, 1 current, 2 registered with another path.
     readonly property int registrationHealth: control.service ? Number(control.service.registrationHealth) : 0
     // DefaultAppOwnership: 0 not set, 1 this application, 2 another/partial.
     readonly property int videoDefault: control.service ? Number(control.service.videoDefault) : 0
     readonly property int imageDefault: control.service ? Number(control.service.imageDefault) : 0
+
+    // The service reports failures in English (shell-layer strings); the dialog owns the
+    // user-facing wording. Known failure causes map to plain Chinese, anything unexpected is
+    // wrapped but kept intact so support can still read the registry detail.
+    function localizedError() {
+        const raw = control.lastError;
+        if (raw.length === 0)
+            return "";
+        if (raw.indexOf("the registration needs CompareStation.exe") >= 0)
+            return qsTr("注册需要正式安装的 CompareStation.exe，当前进程位置无法注册。");
+        if (raw.indexOf("the executable does not exist") >= 0)
+            return qsTr("注册的程序文件不存在，请重新解压或安装后再试。");
+        if (raw.indexOf("(rolled back)") >= 0)
+            return qsTr("写入系统注册表失败，已回滚到操作前的状态（%1）。").arg(raw);
+        if (raw.indexOf("registry error") >= 0)
+            return qsTr("访问系统注册表失败（%1）。").arg(raw);
+        return raw;
+    }
 
     function open() {
         dialog.open();
@@ -194,11 +213,33 @@ Item {
                             }
                         }
 
+                        // Registration never writes UserChoice, so it can never change the
+                        // default by itself. Saying so up front is the difference between
+                        // "the button did something" and "the button did nothing".
+                        Text {
+                            objectName: "fileAssociationDefaultNote"
+                            width: parent.width
+                            text: qsTr("「注册为可选应用」只把本应用加入系统的「打开方式」列表；要把视频或图片默认打开为本应用，请在系统设置中选择本应用。")
+                            color: Theme.mutedText
+                            font.pixelSize: 12
+                            wrapMode: Text.WordWrap
+                        }
+
+                        Text {
+                            objectName: "fileAssociationResultText"
+                            width: parent.width
+                            visible: !control.busy && control.lastResult.length > 0
+                            text: control.lastResult
+                            color: Theme.success
+                            font.pixelSize: 12
+                            wrapMode: Text.WordWrap
+                        }
+
                         Text {
                             objectName: "fileAssociationErrorText"
                             width: parent.width
                             visible: control.lastError.length > 0
-                            text: control.lastError
+                            text: control.localizedError()
                             color: Theme.error
                             font.pixelSize: 12
                             wrapMode: Text.WordWrap
@@ -213,6 +254,7 @@ Item {
                                 objectName: "fileAssociationRegisterButton"
                                 text: qsTr("注册为可选应用")
                                 prominent: true
+                                helpText: qsTr("加入「打开方式」列表；不会、也无法直接更改默认应用。")
                                 enabled: !control.busy && control.service !== null
                                 onClicked: control.service.registerApplication()
                             }

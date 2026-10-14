@@ -7,6 +7,7 @@
 #include "dvs/ui/ComparisonExportController.h"
 #include "dvs/ui/ComparisonSurface.h"
 #include "dvs/ui/EditImageProvider.h"
+#include "dvs/ui/FileAssociationController.h"
 #include "dvs/ui/GraphicsBackend.h"
 #include "dvs/ui/ImageEditController.h"
 #include "dvs/ui/ImageFolderPairModel.h"
@@ -490,6 +491,51 @@ public:
     }
 };
 
+// In-memory stand-in for the Windows file-association port. The dialog contract only needs the
+// outcome of each action and a read-back status; recording the calls lets tests prove which
+// button ran, and a settable failure exercises the dialog's error wording.
+class ContractFileAssociationService final : public application::IFileAssociationService {
+public:
+    [[nodiscard]] application::FileAssociationOutcome registerAsOptionalApplication() override {
+        ++registerCalls;
+        return nextOutcome();
+    }
+
+    [[nodiscard]] application::FileAssociationOutcome openSystemDefaultAppsSettings() override {
+        ++settingsCalls;
+        return nextOutcome();
+    }
+
+    [[nodiscard]] application::FileAssociationStatus associationStatus() override {
+        return status;
+    }
+
+    [[nodiscard]] application::FileAssociationOutcome repairRegistrationPaths() override {
+        ++repairCalls;
+        return nextOutcome();
+    }
+
+    [[nodiscard]] application::FileAssociationOutcome removeRegistration() override {
+        ++removeCalls;
+        return nextOutcome();
+    }
+
+    [[nodiscard]] application::FileAssociationOutcome nextOutcome() const {
+        if (failNext) {
+            return application::FileAssociationOutcome{false, nextError};
+        }
+        return application::FileAssociationOutcome{true, {}};
+    }
+
+    application::FileAssociationStatus status;
+    bool failNext = false;
+    std::string nextError;
+    int registerCalls = 0;
+    int settingsCalls = 0;
+    int repairCalls = 0;
+    int removeCalls = 0;
+};
+
 // Shared QML/controller harness for the workspace-routing contracts. It keeps the two-source
 // video session, the still-image controller and the folder model alive for the whole test.
 class WorkspaceHarness final {
@@ -614,6 +660,11 @@ public:
             interpolationProtocol.setReviewController(controller.get());
             engine.rootContext()->setContextProperty(QStringLiteral("interpolationProtocol"),
                                                      &interpolationProtocol);
+        }
+        if (withFileAssociation) {
+            fileAssociation = std::make_unique<FileAssociationController>(fileAssociationService);
+            engine.rootContext()->setContextProperty(QStringLiteral("fileAssociation"),
+                                                     fileAssociation.get());
         }
         if (withPreviewThumbnails) {
             // V04 nearby-frames batch contract: a QML stub stands in for the composition
@@ -780,6 +831,12 @@ QtObject {
     // "previewThumbnails" context object (see create()).
     std::unique_ptr<QObject> previewThumbnailsStub;
     bool withPreviewThumbnails = false;
+    // I03 file-association dialog contract: opt-in for the same reason as the other optional
+    // context objects - only the composition root publishes a real controller.
+    std::shared_ptr<ContractFileAssociationService> fileAssociationService =
+        std::make_shared<ContractFileAssociationService>();
+    std::unique_ptr<FileAssociationController> fileAssociation;
+    bool withFileAssociation = false;
     QQmlEngine engine;
     std::unique_ptr<QObject> root;
     QQuickWindow* window = nullptr;
@@ -3203,6 +3260,53 @@ TEST(MainQmlContractTests, ExportRangeButtonStartsAClipExport) {
     EXPECT_EQ(exportChip->property("chipText").toString(), QStringLiteral("导出"));
     EXPECT_FALSE(exportChip->property("chipActive").toBool());
     EXPECT_TRUE(popup->property("visible").toBool());
+}
+
+// The merged open entry lives in the chrome (menu, empty view), so its rejection feedback must
+// surface on a channel that renders while the chrome is visible. The immersive HUD stays hidden
+// whenever the chrome is shown, and the mixed video/image selection is rejected before any open
+// starts, so the toast is the only feedback the user can get.
+TEST(MainQmlContractTests, MixedMediaSelectionRejectsThroughTheVisibleIntentChannel) {
+    WorkspaceHarness harness;
+    harness.withVideoFolder = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    ASSERT_TRUE(harness.root->property("chromeVisible").toBool());
+    harness.root->setProperty("immersiveHudText", QString{});
+    harness.root->setProperty("intentMessage", QString{});
+
+    // Suffixes only: the mixed check runs before any file is touched, so real media is not
+    // needed to reach the rejection branch.
+    const QVariantList mixedSelection{
+        QUrl::fromLocalFile(QStringLiteral("C:/comparestation/a.mp4")),
+        QUrl::fromLocalFile(QStringLiteral("C:/comparestation/b.png"))};
+    QVariant returned;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "openMediaFilesSelection",
+                                          Q_RETURN_ARG(QVariant, returned),
+                                          Q_ARG(QVariant, QVariant::fromValue(mixedSelection))));
+    EXPECT_FALSE(returned.toBool());
+    harness.settle();
+    EXPECT_EQ(harness.root->property("intentMessage").toString(),
+              QStringLiteral("视频与图片不能混合打开，请分两次选择。"));
+    EXPECT_TRUE(harness.root->property("immersiveHudText").toString().isEmpty());
+
+    // Immersive mode keeps the HUD channel: hiding the chrome must not lose the message.
+    harness.root->setProperty("intentMessage", QString{});
+    harness.shell->setChromeVisible(false);
+    harness.settle();
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "openMediaFilesSelection",
+                                          Q_RETURN_ARG(QVariant, returned),
+                                          Q_ARG(QVariant, QVariant::fromValue(mixedSelection))));
+    EXPECT_FALSE(returned.toBool());
+    harness.settle();
+    EXPECT_EQ(harness.root->property("immersiveHudText").toString(),
+              QStringLiteral("视频与图片不能混合打开，请分两次选择。"));
+    EXPECT_TRUE(harness.root->property("intentMessage").toString().isEmpty());
+    harness.window->close();
 }
 
 TEST(MainQmlContractTests, TransportRangeRowClearsTheRangeAndGatesChipsWithoutMedia) {
@@ -8966,7 +9070,7 @@ TEST(MainQmlContractTests, CloseCurrentTaskOnlyClosesActiveWorkspace) {
     EXPECT_TRUE(harness.imageReview.hasPrimary());
 }
 
-TEST(MainQmlContractTests, EmptyReviewViewExposesImageAndFolderEntryPoints) {
+TEST(MainQmlContractTests, EmptyReviewViewExposesFileAndFolderEntryPoints) {
     WorkspaceHarness harness;
     harness.snapshot->sources.clear();
     harness.snapshot->presentedSources.clear();
@@ -8978,15 +9082,15 @@ TEST(MainQmlContractTests, EmptyReviewViewExposesImageAndFolderEntryPoints) {
     harness.window->show();
     harness.settle();
 
-    auto* const openVideosBtn =
-        harness.root->findChild<QQuickItem*>(QStringLiteral("emptyOpenVideosButton"));
-    ASSERT_NE(openVideosBtn, nullptr);
-    EXPECT_TRUE(openVideosBtn->isVisible());
+    auto* const openFilesBtn =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("emptyOpenFilesButton"));
+    ASSERT_NE(openFilesBtn, nullptr);
+    EXPECT_TRUE(openFilesBtn->isVisible());
 
-    auto* const openImageBtn =
-        harness.root->findChild<QQuickItem*>(QStringLiteral("emptyOpenImageButton"));
-    ASSERT_NE(openImageBtn, nullptr);
-    EXPECT_TRUE(openImageBtn->isVisible());
+    auto* const openFolderBtn =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("emptyOpenFolderButton"));
+    ASSERT_NE(openFolderBtn, nullptr);
+    EXPECT_TRUE(openFolderBtn->isVisible());
 
     auto* const openImagePairBtn =
         harness.root->findChild<QQuickItem*>(QStringLiteral("emptyOpenImagePairButton"));
@@ -9931,7 +10035,8 @@ TEST(MainQmlContractTests, ViewShortcutsSwitchModesZoomAndGenerateHelp) {
     }
     // Video preset model = filtered media rows + workspace rows + the five static mouse tails.
     const QVariantList workspaceEntries = harness.root->property("workspaceHelpEntries").toList();
-    ASSERT_GE(workspaceEntries.size(), 9);
+    // 打开视频+打开图片 merged into one 打开文件 entry (2026-10-14): 8 rows.
+    ASSERT_GE(workspaceEntries.size(), 8);
     ASSERT_EQ(model.size(), expectedEntries.size() + workspaceEntries.size() + 5);
     for (int i = 0; i < expectedEntries.size(); ++i) {
         EXPECT_EQ(model.at(static_cast<qsizetype>(i)).toList().front().toString(),
@@ -10014,7 +10119,8 @@ TEST(MainQmlContractTests, ShortcutBindingsMenuAndHelpStayInSync) {
         EXPECT_TRUE(sequences.contains(label.toString()))
             << "menu label " << label.toString().toStdString() << " has no live binding";
     }
-    ASSERT_GE(labelledMenuItems, 10);
+    // The merged 打开文件 entry dropped the separate 打开图片 row (2026-10-14).
+    ASSERT_GE(labelledMenuItems, 9);
 
     // The workspace help rows share the same source: every row must be a live binding and
     // must appear in the help model for both workspaces.
@@ -10022,7 +10128,8 @@ TEST(MainQmlContractTests, ShortcutBindingsMenuAndHelpStayInSync) {
         harness.root->findChild<QObject*>(QStringLiteral("shortcutHelpOverlay"));
     ASSERT_NE(shortcutHelp, nullptr);
     const QVariantList workspaceEntries = harness.root->property("workspaceHelpEntries").toList();
-    ASSERT_GE(workspaceEntries.size(), 9);
+    // 打开视频+打开图片 merged into one 打开文件 entry (2026-10-14): 8 rows.
+    ASSERT_GE(workspaceEntries.size(), 8);
     const auto modelHasKey = [&shortcutHelp](const bool imagePreset, const QString& keys) {
         shortcutHelp->setProperty("imagePreset", imagePreset);
         shortcutHelp->setProperty("playerPreset", false);
@@ -11181,8 +11288,7 @@ TEST(MainQmlContractTests, VideoFolderEntryOpensModalPickerWithoutChangingWorksp
     ASSERT_TRUE(QMetaObject::invokeMethod(picker, "reject"));
     harness.settle();
     EXPECT_EQ(harness.submitted.size(), before);
-    EXPECT_NE(harness.root->findChild<QObject*>(QStringLiteral("emptyOpenVideoFolderButton")),
-              nullptr);
+    EXPECT_NE(harness.root->findChild<QObject*>(QStringLiteral("emptyOpenFolderButton")), nullptr);
 }
 
 TEST(MainQmlContractTests, VideoFolderRowOpensOneSourceThenPlaysOnlyAfterSuccess) {
@@ -12052,6 +12158,69 @@ TEST(MainQmlContractTests, RoiTripletPresetSupportsTwoSources) {
     }
     EXPECT_FALSE(strip->property("visible").toBool());
     EXPECT_TRUE(surface->property("roiTripletWindows").toList().empty());
+}
+
+// I03: the settings menu's 「文件关联…」 entry must open the dialog, and every action in it
+// must leave a visible trace. The dialog used to be declared inside the MenuBar, and a MenuBar
+// never parents non-Menu children into a window, so the popup silently never opened - the
+// "clicked, nothing happened" report this contract pins down. A success that only changes a
+// read-back row would equally read as a dead button, so outcomes must be visible too.
+TEST(MainQmlContractTests, FileAssociationDialogOpensAndReportsActionOutcomes) {
+    WorkspaceHarness harness;
+    harness.withFileAssociation = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    // The user's path: open the Settings menu first, then trigger its item, so the
+    // contract also covers the menu-closing/dialog-opening interplay.
+    auto* const settingsMenu = harness.root->findChild<QObject*>(QStringLiteral("settingsMenu"));
+    ASSERT_NE(settingsMenu, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(settingsMenu, "open"));
+    harness.settle();
+
+    auto* const menuItem =
+        harness.root->findChild<QObject*>(QStringLiteral("fileAssociationMenuItem"));
+    ASSERT_NE(menuItem, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(menuItem, "triggered"));
+    harness.settle();
+
+    // QQuickPopup derives QObject, not QQuickItem, so the lookup must not be QQuickItem-typed.
+    auto* const popup = harness.root->findChild<QObject*>(QStringLiteral("fileAssociationPopup"));
+    ASSERT_NE(popup, nullptr);
+    EXPECT_TRUE(popup->property("visible").toBool());
+
+    auto* const resultText =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("fileAssociationResultText"));
+    ASSERT_NE(resultText, nullptr);
+    auto* const errorText =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("fileAssociationErrorText"));
+    ASSERT_NE(errorText, nullptr);
+
+    // A successful register states what it did and what the user still owes the system. The
+    // dialog's own open() fires an async refresh, so wait for idle before clicking.
+    auto* const registerButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("fileAssociationRegisterButton"));
+    ASSERT_NE(registerButton, nullptr);
+    EXPECT_TRUE(harness.waitUntil([&harness] { return !harness.fileAssociation->busy(); }));
+    ASSERT_TRUE(QMetaObject::invokeMethod(registerButton, "clicked"));
+    EXPECT_TRUE(harness.waitUntil([resultText] {
+        return resultText->isVisible() &&
+               resultText->property("text").toString().contains(QStringLiteral("已注册为可选应用"));
+    }));
+    EXPECT_FALSE(errorText->isVisible());
+    EXPECT_EQ(harness.fileAssociationService->registerCalls, 1);
+
+    // A failed action clears the success note and names the cause in Chinese, not raw English.
+    harness.fileAssociationService->failNext = true;
+    harness.fileAssociationService->nextError = "the registration needs CompareStation.exe";
+    ASSERT_TRUE(QMetaObject::invokeMethod(registerButton, "clicked"));
+    EXPECT_TRUE(harness.waitUntil([errorText] {
+        return errorText->isVisible() &&
+               errorText->property("text").toString().contains(QStringLiteral("无法注册"));
+    }));
+    EXPECT_FALSE(resultText->isVisible());
+    EXPECT_EQ(harness.fileAssociationService->registerCalls, 2);
 }
 
 } // namespace

@@ -8,7 +8,6 @@
 const openVideos = "Ctrl+O";
 const openVideoFolder = "Ctrl+Alt+O";
 const addVideo = "Ctrl+Shift+O";
-const openImage = "Ctrl+I";
 const openImagePair = "Ctrl+Shift+I";
 const addImage = "Ctrl+Alt+I";
 const compareImageFolders = "Ctrl+Shift+F";

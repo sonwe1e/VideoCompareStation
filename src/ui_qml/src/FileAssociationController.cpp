@@ -28,6 +28,10 @@ QString FileAssociationController::lastError() const noexcept {
     return lastError_;
 }
 
+QString FileAssociationController::lastResult() const noexcept {
+    return lastResult_;
+}
+
 int FileAssociationController::registrationHealth() const noexcept {
     return static_cast<int>(status_.health);
 }
@@ -41,29 +45,34 @@ int FileAssociationController::imageDefaultOwnership() const noexcept {
 }
 
 void FileAssociationController::registerApplication() {
-    runAsync([service = service_] { return service->registerAsOptionalApplication(); });
+    runAsync([service = service_] { return service->registerAsOptionalApplication(); },
+             QStringLiteral("已注册为可选应用；默认打开方式仍需在系统设置中选择本应用。"));
 }
 
 void FileAssociationController::openSystemSettings() {
-    runAsync([service = service_] { return service->openSystemDefaultAppsSettings(); });
+    runAsync([service = service_] { return service->openSystemDefaultAppsSettings(); },
+             QStringLiteral("已打开系统默认应用设置；在系统中选择本应用后，回到此处刷新状态。"));
 }
 
 void FileAssociationController::refreshStatus() {
     // A read-back is an action with no write: the same one-worker round trip, an empty action,
     // and a status the dialog can trust because it came from UserChoice, not from hope.
-    runAsync([] { return application::FileAssociationOutcome{true, {}}; });
+    runAsync([] { return application::FileAssociationOutcome{true, {}}; },
+             QStringLiteral("状态已刷新。"));
 }
 
 void FileAssociationController::repairPaths() {
-    runAsync([service = service_] { return service->repairRegistrationPaths(); });
+    runAsync([service = service_] { return service->repairRegistrationPaths(); },
+             QStringLiteral("注册路径已修复为当前程序位置。"));
 }
 
 void FileAssociationController::removeRegistration() {
-    runAsync([service = service_] { return service->removeRegistration(); });
+    runAsync([service = service_] { return service->removeRegistration(); },
+             QStringLiteral("已移除本应用的注册。"));
 }
 
 void FileAssociationController::runAsync(
-    std::function<application::FileAssociationOutcome()> action) {
+    std::function<application::FileAssociationOutcome()> action, QString successMessage) {
     if (busy_ || service_ == nullptr) {
         return;
     }
@@ -78,7 +87,10 @@ void FileAssociationController::runAsync(
         }
         ++shutdown_.inFlight;
     }
-    QThreadPool::globalInstance()->start([this, service = service_, action = std::move(action)] {
+    QThreadPool::globalInstance()->start([this,
+                                          service = service_,
+                                          action = std::move(action),
+                                          successMessage = std::move(successMessage)] {
         const application::FileAssociationOutcome outcome = action();
         // The status read-back rides the same worker round trip, so the properties the dialog
         // shows after an action come from UserChoice and the registry, never from the action's
@@ -87,11 +99,13 @@ void FileAssociationController::runAsync(
         QMetaObject::invokeMethod(
             this,
             // The slot copies two small value types and emits; Qt terminates on OOM by design,
-            // the same reasoning the automation helpers in DesktopApplication use.
+            // the same reasoning the automation helpers in DesktopApplication use. The outer
+            // lambda's captured copy is const, so the inner one copies - QString is shared.
             // NOLINTBEGIN(bugprone-exception-escape)
-            [this, outcome, status] {
+            [this, outcome, status, successMessage] {
                 status_ = status;
                 lastError_ = outcome.ok ? QString{} : QString::fromStdString(outcome.error);
+                lastResult_ = outcome.ok ? successMessage : QString{};
                 busy_ = false;
                 emit stateChanged();
                 // NOLINTEND(bugprone-exception-escape)

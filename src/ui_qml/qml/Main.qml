@@ -193,7 +193,7 @@ ApplicationWindow {
     // Workspace-level help rows. The sequences come from ShortcutCatalog.js - the same
     // constants the bindings and the menu labels use - and the contract test cross-checks
     // rows, labels and bindings against each other.
-    readonly property var workspaceHelpEntries: [[ShortcutCatalog.openVideos, qsTr("打开视频")], [ShortcutCatalog.openVideoFolder, qsTr("从文件夹选视频")], [ShortcutCatalog.addVideo, qsTr("向当前对比添加视频")], [ShortcutCatalog.openImage, qsTr("打开图片")], [ShortcutCatalog.openImagePair, qsTr("打开图片对")], [ShortcutCatalog.addImage, qsTr("向当前图片对添加图片")], [ShortcutCatalog.compareImageFolders, qsTr("对比图片文件夹")], [ShortcutCatalog.closeCurrentTask, qsTr("关闭当前任务")], [ShortcutCatalog.captureIssue, qsTr("记录当前问题，可填备注")]]
+    readonly property var workspaceHelpEntries: [[ShortcutCatalog.openVideos, qsTr("打开文件")], [ShortcutCatalog.openVideoFolder, qsTr("打开文件夹")], [ShortcutCatalog.addVideo, qsTr("向当前对比添加视频")], [ShortcutCatalog.openImagePair, qsTr("打开图片对")], [ShortcutCatalog.addImage, qsTr("向当前图片对添加图片")], [ShortcutCatalog.compareImageFolders, qsTr("对比图片文件夹")], [ShortcutCatalog.closeCurrentTask, qsTr("关闭当前任务")], [ShortcutCatalog.captureIssue, qsTr("记录当前问题，可填备注")]]
     property bool pendingComparisonPreservesPosition: false
     property bool pendingSidebarComparison: false
     property bool pendingNewReviewWantsThreeUp: false
@@ -1578,6 +1578,52 @@ ApplicationWindow {
         return true;
     }
 
+    // The merged 打开文件 entry: one dialog, both media kinds. The pending-workspace state is
+    // only begun once the selection's kind is known, so a cancelled dialog leaves nothing open.
+    function requestOpenMediaFiles() {
+        ensureReviewInputDialogs().openMediaFiles();
+
+        return true;
+    }
+
+    function openMediaFilesSelection(urls) {
+        const files = [];
+
+        for (let i = 0; urls && i < urls.length; ++i) {
+            if (urls[i] && urls[i].toString().length > 0)
+                files.push(urls[i]);
+        }
+
+        if (files.length === 0)
+            return true;
+
+        let images = 0;
+
+        for (let i = 0; i < files.length; ++i) {
+            if (videoFolderModel && videoFolderModel.isImageUrl(files[i]))
+                ++images;
+        }
+
+        if (images > 0 && images < files.length) {
+            showActionFeedback(qsTr("视频与图片不能混合打开，请分两次选择。"));
+
+            return false;
+        }
+
+        if (images === 0) {
+            workspaceSession.beginOpen(workspaceSession.videoMedia);
+
+            return openNewReviewUrls(files);
+        }
+
+        workspaceSession.beginOpen(workspaceSession.imageMedia);
+
+        if (files.length === 1)
+            return performImageReview([files[0]]);
+
+        return performImagePairSelection(files);
+    }
+
     function requestAddVideo() {
         workspaceSession.beginOpen(workspaceSession.videoMedia);
 
@@ -2918,12 +2964,15 @@ ApplicationWindow {
         onIssueLogLoadRequested: issueLoadDialog.open()
         onOpenVideoFolderRequested: root.requestOpenVideoFolder()
         onVideoFolderToggleRequested: root.videoFolderSidebarVisible = !root.videoFolderSidebarVisible
-        onOpenVideosRequested: root.requestOpenVideos()
+        onOpenFilesRequested: root.requestOpenMediaFiles()
         onAddVideoRequested: root.requestAddVideo()
-        onOpenImageRequested: root.requestImageOpen()
         onAddImageRequested: root.requestImageAdd()
         onOpenImagePairRequested: root.requestImagePairOpen()
         onCompareImageFoldersRequested: root.requestCompareFolders()
+        // Open one event-loop turn later, not inline: the menu closes itself while the item's
+        // handler runs, and a popup that entered the overlay while the menu was open gets
+        // popped with it.
+        onFileAssociationDialogRequested: Qt.callLater(fileAssociationDialog.open)
         onWorkspaceRequested: mode => root.activateWorkspace(mode)
         onCloseCurrentRequested: root.closeCurrentTask()
         onDestructiveActionRequested: kind => root.requestDestructiveAction({
@@ -3036,7 +3085,7 @@ ApplicationWindow {
         sequence: ShortcutCatalog.openVideos
         context: Qt.ApplicationShortcut
         enabled: root.inputContext === 0
-        onActivated: root.requestOpenVideos()
+        onActivated: root.requestOpenMediaFiles()
     }
 
     Shortcut {
@@ -3044,13 +3093,6 @@ ApplicationWindow {
         context: Qt.ApplicationShortcut
         enabled: root.inputContext === 0 && root.videoHasSession && root.sourceCount < 3
         onActivated: root.requestAddVideo()
-    }
-
-    Shortcut {
-        sequence: ShortcutCatalog.openImage
-        context: Qt.ApplicationShortcut
-        enabled: root.inputContext === 0
-        onActivated: root.requestImageOpen()
     }
 
     Shortcut {
@@ -3266,6 +3308,8 @@ ApplicationWindow {
             onVideoFolderRejected: root.focusActiveWorkspace()
             onOpenVideosAccepted: urls => root.openNewReviewUrls(urls)
             onOpenVideosRejected: root.cancelWorkspaceOpen()
+            onMediaFilesAccepted: urls => root.openMediaFilesSelection(urls)
+            onMediaFilesRejected: root.focusActiveWorkspace()
             onAddVideoAccepted: url => root.reviewDroppedUrls([url])
             onAddVideoRejected: root.cancelWorkspaceOpen()
             // V02 "替换文件": the identity captured by the chip menu picks the slot; a
@@ -4324,8 +4368,7 @@ ApplicationWindow {
         mutedTextColor: root.mutedTextColor
         anchors.fill: viewportFrame
         onOpenVideoFolderRequested: root.requestOpenVideoFolder()
-        onOpenVideosRequested: root.requestOpenVideos()
-        onOpenImageRequested: root.requestImageOpen()
+        onOpenFilesRequested: root.requestOpenMediaFiles()
         onOpenImagePairRequested: root.requestImagePairOpen()
         onCompareFoldersRequested: root.requestCompareFolders()
     }
@@ -4456,6 +4499,19 @@ ApplicationWindow {
         imagePreset: root.imageWorkspaceActive
         mediaEntries: root.imageWorkspaceActive ? [] : reviewShortcuts.helpEntries
         workspaceEntries: root.workspaceHelpEntries
+    }
+
+    // I03: the file-association dialog must live in the window's item tree. It used to be
+    // declared inside ApplicationMenuBar, but a MenuBar only parents Menu children into the
+    // scene, so the dialog item never reached a window and its popup silently never opened.
+    // qmllint disable unqualified
+    readonly property var fileAssociationService: typeof fileAssociation !== "undefined" ? fileAssociation : null
+    // qmllint enable unqualified
+
+    FileAssociationDialog {
+        id: fileAssociationDialog
+
+        service: root.fileAssociationService
     }
 
     NearbyFramesCard {

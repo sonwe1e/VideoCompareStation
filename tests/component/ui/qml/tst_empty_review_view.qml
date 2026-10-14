@@ -48,7 +48,7 @@ Item {
         }
 
         function test_entry_points_remain_inside_card_at_supported_sizes() {
-            const names = ["emptyOpenVideosButton", "emptyOpenImageButton", "emptyOpenVideoFolderButton", "emptyOpenImagePairButton", "emptyCompareFoldersButton"];
+            const names = ["emptyOpenFilesButton", "emptyOpenFolderButton", "emptyOpenImagePairButton", "emptyCompareFoldersButton"];
             const sizes = [[960, 640], [1280, 720], [1920, 1080]];
             const card = findChild(emptyView, "emptyReviewCard");
             verify(card);

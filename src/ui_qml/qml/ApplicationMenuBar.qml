@@ -49,12 +49,12 @@ VcsMenuBar {
 
     signal openVideoFolderRequested
     signal videoFolderToggleRequested
-    signal openVideosRequested
+    signal openFilesRequested
     signal addVideoRequested
-    signal openImageRequested
     signal addImageRequested
     signal openImagePairRequested
     signal compareImageFoldersRequested
+    signal fileAssociationDialogRequested
     signal issueLogCaptureRequested
     signal issueLogToggleRequested
     signal issueLogSaveRequested
@@ -88,13 +88,14 @@ VcsMenuBar {
         }
 
         VcsMenuItem {
-            text: qsTr("打开视频…")
+            objectName: "openFilesMenuItem"
+            text: qsTr("打开文件…")
             shortcutText: ShortcutCatalog.openVideos
-            onTriggered: control.openVideosRequested()
+            onTriggered: control.openFilesRequested()
         }
         VcsMenuItem {
             objectName: "openVideoFolderMenuItem"
-            text: qsTr("从文件夹选视频…")
+            text: qsTr("打开文件夹…")
             shortcutText: ShortcutCatalog.openVideoFolder
             enabled: control.videoFolderAvailable
             onTriggered: control.openVideoFolderRequested()
@@ -107,12 +108,6 @@ VcsMenuBar {
         }
         VcsMenuSeparator {
             objectName: "fileImageSeparator"
-        }
-        VcsMenuItem {
-            objectName: "openImageMenuItem"
-            text: qsTr("打开图片…")
-            shortcutText: ShortcutCatalog.openImage
-            onTriggered: control.openImageRequested()
         }
         VcsMenuItem {
             objectName: "openImagePairMenuItem"
@@ -607,10 +602,12 @@ VcsMenuBar {
         }
     }
 
-    // I03: the Windows default-open settings dialog lives here so Main.qml keeps its wiring
-    // untouched; the controller context property only exists when the composition root injected
-    // the association service, and without it the entry stays hidden like the other optional
-    // services. Everything else about the dialog is self-contained in FileAssociationDialog.
+    // I03: the Windows default-open entry point. The controller context property only exists
+    // when the composition root injected the association service, and without it the entry
+    // stays hidden like the other optional services. The dialog itself must NOT be declared
+    // here: a MenuBar only parents Menu children into the scene, so a dialog item declared in
+    // it never reaches a window and its popup silently never opens. Main.qml owns the dialog
+    // and opens it on fileAssociationDialogRequested.
     // qmllint disable unqualified
     readonly property var fileAssociationService: typeof fileAssociation !== "undefined" ? fileAssociation : null
     // qmllint enable unqualified
@@ -625,13 +622,7 @@ VcsMenuBar {
         VcsMenuItem {
             objectName: "fileAssociationMenuItem"
             text: qsTr("文件关联…")
-            onTriggered: fileAssociationDialog.open()
+            onTriggered: control.fileAssociationDialogRequested()
         }
-    }
-
-    FileAssociationDialog {
-        id: fileAssociationDialog
-
-        service: control.fileAssociationService
     }
 }
