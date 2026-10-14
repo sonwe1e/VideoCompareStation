@@ -487,14 +487,14 @@ Item {
                     ContinuityOption {
                         objectName: "realTimeContinuityButton"
                         policyCode: 1
-                        optionText: qsTr("流畅观看")
+                        optionText: qsTr("流畅优先")
                         optionHelp: qsTr("保持实时节奏；解码跟不上时整组跳帧")
                     }
 
                     ContinuityOption {
                         objectName: "reviewEveryFrameContinuityButton"
                         policyCode: 0
-                        optionText: qsTr("逐帧检查")
+                        optionText: qsTr("逐帧完整")
                         optionHelp: qsTr("每一帧都显示，不跳帧；负载高时播放会变慢")
                     }
                 }

@@ -817,7 +817,7 @@ ApplicationWindow {
             return false;
 
         if (!rangeExportEnabled) {
-            showImmersiveHud(qsTr("当前视频或所选区间暂不可导出，请检查素材和入点、出点。"));
+            showActionFeedback(qsTr("当前视频或所选区间暂不可导出，请检查素材和入点、出点。"));
 
             return false;
         }
@@ -840,7 +840,7 @@ ApplicationWindow {
 
         const target = frame !== undefined && frame >= 0 ? frame : Number(root.currentFrame);
         if (!sampleExportModel.canExportAtFrame(target)) {
-            showImmersiveHud(qsTr("当前帧不是插帧协议中的生成帧，或未载入插帧协议。"));
+            showActionFeedback(qsTr("当前帧不是插帧协议中的生成帧，或未载入插帧协议。"));
             return false;
         }
 
@@ -1831,11 +1831,11 @@ ApplicationWindow {
 
     function copyComparisonImage() {
         if (!comparisonExportService) {
-            root.showImmersiveHud(qsTr("复制对比图不可用"));
+            showActionFeedback(qsTr("复制对比图不可用"));
             return false;
         }
         const ok = Boolean(comparisonExportService.copyComparison(viewportFrame, comparisonCaptionLines()));
-        root.showImmersiveHud(ok ? qsTr("已复制对比图（含标注）") : qsTr("复制失败：%1").arg(comparisonExportService.lastStatus));
+        showActionFeedback(ok ? qsTr("已复制对比图（含标注）") : qsTr("复制失败：%1").arg(comparisonExportService.lastStatus));
         return ok;
     }
 
@@ -2559,6 +2559,25 @@ ApplicationWindow {
         immersiveHudTimer.restart();
     }
 
+    // Feedback for actions the user starts from the chrome (menu, transport chips, dialogs).
+    // The immersive HUD only renders while the chrome is hidden, so chrome-time messages would
+    // be invisible; the intent toast renders in both presentation states.
+    function showActionFeedback(message) {
+        if (chromeVisible)
+            showIntentMessage(message);
+        else
+            showImmersiveHud(message);
+    }
+
+    // The 流畅优先/逐帧完整 toggle switches policy silently otherwise; the note names the
+    // trade-off the choice just made, which is the part the labels alone cannot carry.
+    function showContinuityPolicyHud(policy) {
+        if (policy === 0)
+            showActionFeedback(qsTr("逐帧完整：每一帧都显示；负载高时播放会放慢"));
+        else if (policy === 1)
+            showActionFeedback(qsTr("流畅优先：保持原速；解码跟不上时整组跳帧"));
+    }
+
     function toggleChrome() {
         if (!shell)
             return;
@@ -2973,6 +2992,16 @@ ApplicationWindow {
         onResetViewRequested: viewportFrame.resetView()
         onReferencePeekToggleRequested: root.toggleDifferencePeek(false)
         onReferencePeekLockToggleRequested: root.toggleDifferencePeek(true)
+    }
+
+    // The transport's 流畅优先/逐帧完整 toggle routes through reviewShortcuts.actions; the
+    // HUD note lives here so the action map stays free of UI plumbing.
+    Connections {
+        target: reviewShortcuts.actions
+
+        function onPlaybackContinuityPolicyChanged(policy) {
+            root.showContinuityPolicyHud(policy);
+        }
     }
 
     Shortcut {

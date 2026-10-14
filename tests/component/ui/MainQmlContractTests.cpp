@@ -3094,7 +3094,9 @@ TEST(MainQmlContractTests, ExportRangeButtonStartsAClipExport) {
     EXPECT_FALSE(exportChip->property("chipEnabled").toBool());
     ASSERT_TRUE(QMetaObject::invokeMethod(exportChip, "clicked"));
     harness.settle();
-    EXPECT_EQ(harness.root->property("immersiveHudText").toString(),
+    // The chip is a chrome-time control, so its feedback must land on the intent toast — the
+    // immersive HUD only renders while the chrome is hidden.
+    EXPECT_EQ(harness.root->property("intentMessage").toString(),
               QStringLiteral("当前视频或所选区间暂不可导出，请检查素材和入点、出点。"));
     EXPECT_TRUE(harness.clipExporter->performedJobs().empty());
 

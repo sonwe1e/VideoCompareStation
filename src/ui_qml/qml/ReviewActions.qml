@@ -115,11 +115,16 @@ QtObject {
 
     property var preferences: null
 
+    // The transport toggle explains its own consequence the moment it is used: the policy names
+    // alone do not say what "smooth" or "complete" costs, so Main.qml turns this into a HUD note.
+    signal playbackContinuityPolicyChanged(int policy)
+
     function setPlaybackContinuityPolicy(policy) {
         if (preferences)
             preferences.playbackContinuityPolicy = policy;
         if (controller && typeof controller.setPlaybackContinuityPolicy === "function")
             controller.setPlaybackContinuityPolicy(policy);
+        playbackContinuityPolicyChanged(policy);
     }
 
     function stepFrames(delta) {
