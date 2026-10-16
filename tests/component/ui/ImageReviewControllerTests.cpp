@@ -84,6 +84,65 @@ TEST(ImageReviewControllerTests, LoadsPrimaryAndSamplesChannels) {
     EXPECT_EQ(pixel.value(QStringLiteral("y")).toInt(), 2);
 }
 
+// The same-coordinate pair readout (A/B and Δ = B−A) is built on samplePixelOriginal: it
+// names each side's committed decode buffer, ignores the active channel observation view,
+// and can never reach the difference image. The observation-aware samplePixel keeps its
+// derived-view semantics, which is exactly the contrast this test pins.
+TEST(ImageReviewControllerTests, SamplePixelOriginalReportsEachSideWithoutChannelView) {
+    ImageReviewController controller;
+    // Asymmetric, non-gray, alpha-bearing pair so every channel matters:
+    // A=(120,130,140,200), B=(122,128,140,255) → Δ(B−A) = +2, −2, 0, +55.
+    ASSERT_TRUE(controller.openPairImages(solidImage(QColor(120, 130, 140, 200)),
+                                          QStringLiteral("a.png"),
+                                          solidImage(QColor(122, 128, 140, 255)),
+                                          QStringLiteral("b.png")));
+    for (const int mode : {0, 1, 2}) {
+        controller.setViewMode(mode);
+        const QVariantMap a =
+            controller.samplePixelOriginal(ImageReviewController::DisplayPrimarySlot, 1, 2);
+        const QVariantMap b =
+            controller.samplePixelOriginal(ImageReviewController::DisplaySecondarySlot, 1, 2);
+        ASSERT_TRUE(a.value(QStringLiteral("valid")).toBool()) << "view mode " << mode;
+        ASSERT_TRUE(b.value(QStringLiteral("valid")).toBool()) << "view mode " << mode;
+        EXPECT_EQ(a.value(QStringLiteral("r")).toInt(), 120) << "view mode " << mode;
+        EXPECT_EQ(a.value(QStringLiteral("g")).toInt(), 130) << "view mode " << mode;
+        EXPECT_EQ(a.value(QStringLiteral("b")).toInt(), 140) << "view mode " << mode;
+        EXPECT_EQ(a.value(QStringLiteral("a")).toInt(), 200) << "view mode " << mode;
+        EXPECT_EQ(b.value(QStringLiteral("r")).toInt(), 122) << "view mode " << mode;
+        EXPECT_EQ(b.value(QStringLiteral("g")).toInt(), 128) << "view mode " << mode;
+        EXPECT_EQ(b.value(QStringLiteral("b")).toInt(), 140) << "view mode " << mode;
+        EXPECT_EQ(b.value(QStringLiteral("a")).toInt(), 255) << "view mode " << mode;
+        EXPECT_EQ(a.value(QStringLiteral("source")).toString(), QStringLiteral("original"))
+            << "view mode " << mode;
+        EXPECT_FALSE(a.contains(QStringLiteral("channelView"))) << "view mode " << mode;
+    }
+    // Δ = B−A at one shared coordinate: the numbers the status bar shows.
+    const QVariantMap a =
+        controller.samplePixelOriginal(ImageReviewController::DisplayPrimarySlot, 1, 2);
+    const QVariantMap b =
+        controller.samplePixelOriginal(ImageReviewController::DisplaySecondarySlot, 1, 2);
+    EXPECT_EQ(b.value(QStringLiteral("r")).toInt() - a.value(QStringLiteral("r")).toInt(), 2);
+    EXPECT_EQ(b.value(QStringLiteral("g")).toInt() - a.value(QStringLiteral("g")).toInt(), -2);
+    EXPECT_EQ(b.value(QStringLiteral("b")).toInt() - a.value(QStringLiteral("b")).toInt(), 0);
+    EXPECT_EQ(b.value(QStringLiteral("a")).toInt() - a.value(QStringLiteral("a")).toInt(), 55);
+    // The difference image stays unreachable: a pair readout can never mix diff pixels in.
+    const QVariantMap diff =
+        controller.samplePixelOriginal(ImageReviewController::DisplayDiffSlot, 1, 2);
+    EXPECT_FALSE(diff.value(QStringLiteral("valid")).toBool());
+    // Out-of-bounds coordinates are invalid, not clamped fabrications.
+    EXPECT_FALSE(controller.samplePixelOriginal(ImageReviewController::DisplayPrimarySlot, 4, 2)
+                     .value(QStringLiteral("valid"))
+                     .toBool());
+    // Contrast: the observation-aware variant DOES follow the channel view.
+    controller.setViewMode(1);
+    const QVariantMap viewed =
+        controller.samplePixel(ImageReviewController::DisplayPrimarySlot, 1, 2);
+    ASSERT_TRUE(viewed.value(QStringLiteral("valid")).toBool());
+    EXPECT_EQ(viewed.value(QStringLiteral("r")).toInt(), 200);
+    EXPECT_EQ(viewed.value(QStringLiteral("channelView")).toString(), QStringLiteral("alphaGray"));
+    controller.setViewMode(0);
+}
+
 TEST(ImageReviewControllerTests, DiffPairComputesPeakAndSignedMidpoint) {
     ImageReviewController controller;
     ASSERT_TRUE(
@@ -1569,6 +1628,485 @@ TEST(ImageReviewControllerTests, DifferenceRefusesPairBeyondWorkingSetBudget) {
     ASSERT_TRUE(result->succeeded());
     EXPECT_EQ(result->maxAbsDifference, 10);
     EXPECT_EQ(result->gain, 4);
+}
+
+// ---- Single-side close --------------------------------------------------------------------
+//
+// Closing one side must keep the other side's file identity, decoded content and source
+// provenance. Neither entry is a disguised closeAll: with a pair committed the surviving
+// side stays, and only when the named side is the last image does the workspace reach the
+// empty state.
+
+TEST(ImageReviewControllerTests, CloseSecondaryKeepsPrimaryAndItsProvenance) {
+    ImageReviewController controller;
+    ASSERT_TRUE(controller.openPairImages(solidImage(Qt::red),
+                                          QStringLiteral("left.png"),
+                                          solidImage(Qt::blue),
+                                          QStringLiteral("right.png"),
+                                          7));
+    controller.setCompareMode(ImageReviewController::Wipe);
+    controller.setZoom(2.5);
+    controller.updateCursorPixel(ImageReviewController::SecondarySlot, 1, 1);
+
+    ASSERT_TRUE(controller.closeSecondary());
+    EXPECT_TRUE(controller.hasPrimary());
+    EXPECT_FALSE(controller.hasSecondary());
+    EXPECT_FALSE(controller.hasPair());
+    EXPECT_EQ(controller.primaryPath(), QStringLiteral("left.png"));
+    EXPECT_TRUE(controller.secondaryPath().isEmpty());
+    // The surviving image is the one that was A: content and provenance travel with it.
+    EXPECT_EQ(controller.imageForSlot(ImageReviewController::PrimarySlot).pixel(0, 0),
+              QColor(Qt::red).rgb());
+    // A single image cannot carry a pair-only mode, so difference/wipe/fade fall back.
+    EXPECT_EQ(controller.compareMode(), ImageReviewController::PrimaryOnly);
+    // The committed row identity is gone with the pair, and the folder list must not keep
+    // a stale selection pointing at a pair that no longer exists.
+    EXPECT_EQ(controller.committedPairId(), -1);
+    // The observation position is deliberately kept: the surviving image is already
+    // decoded and in memory, and a reset would throw away the user's zoom and pan.
+    EXPECT_DOUBLE_EQ(controller.zoom(), 2.5);
+    // Probe and hover state for the closed side must not survive.
+    EXPECT_TRUE(controller.cursorPixel().isEmpty());
+    EXPECT_TRUE(controller.frozenProbeSample().isEmpty());
+    // The content generation moved, so a late asynchronous result for the closed pair
+    // cannot repaint the surviving image.
+    const int generation = controller.contentGeneration();
+    EXPECT_TRUE(controller.closePrimary());
+    EXPECT_NE(controller.contentGeneration(), generation);
+}
+
+TEST(ImageReviewControllerTests, ClosePrimaryPromotesSecondaryWithItsOwnIdentity) {
+    ImageReviewController controller;
+    dvs::ui::StillImageSourceInfo primaryInfo;
+    primaryInfo.sourceFormat = QStringLiteral("png");
+    primaryInfo.bitDepth = 8;
+    primaryInfo.hasAlpha = true;
+    primaryInfo.channels = 4;
+    primaryInfo.displayConverted = false;
+    dvs::ui::StillImageSourceInfo secondaryInfo;
+    secondaryInfo.sourceFormat = QStringLiteral("webp");
+    secondaryInfo.bitDepth = 16;
+    secondaryInfo.hasAlpha = true;
+    secondaryInfo.channels = 4;
+    secondaryInfo.displayConverted = true;
+    ASSERT_TRUE(controller.openPairImages(solidImage(Qt::red),
+                                          QStringLiteral("a.png"),
+                                          solidImage(Qt::blue),
+                                          QStringLiteral("b.webp"),
+                                          11,
+                                          primaryInfo,
+                                          secondaryInfo));
+
+    ASSERT_TRUE(controller.closePrimary());
+    EXPECT_TRUE(controller.hasPrimary());
+    EXPECT_FALSE(controller.hasSecondary());
+    // B is promoted into the internal primary slot, but it keeps its own file identity,
+    // content and source information - it is not relabelled as A.
+    EXPECT_EQ(controller.primaryPath(), QStringLiteral("b.webp"));
+    EXPECT_EQ(controller.primarySourceFormat(), QStringLiteral("webp"));
+    EXPECT_EQ(controller.primaryBitDepth(), 16);
+    EXPECT_TRUE(controller.primaryDisplayConverted());
+    EXPECT_TRUE(controller.primaryHasAlpha());
+    EXPECT_EQ(controller.imageForSlot(ImageReviewController::PrimarySlot).pixel(0, 0),
+              QColor(Qt::blue).rgb());
+    // A single image cannot carry a pair-only mode.
+    EXPECT_EQ(controller.compareMode(), ImageReviewController::PrimaryOnly);
+    EXPECT_EQ(controller.committedPairId(), -1);
+    EXPECT_TRUE(controller.frozenProbeSample().isEmpty());
+    EXPECT_TRUE(controller.cursorPixel().isEmpty());
+}
+
+TEST(ImageReviewControllerTests, ClosePrimaryWithoutSecondaryReachesEmptyState) {
+    ImageReviewController controller;
+    ASSERT_TRUE(controller.openPrimaryImage(solidImage(Qt::red), QStringLiteral("only.png")));
+    ASSERT_TRUE(controller.hasPrimary());
+    EXPECT_FALSE(controller.hasSecondary());
+
+    // The last image is not a single-side close standing in for closeAll: there is no
+    // other side to keep, so the same teardown the session close uses runs.
+    const int generation = controller.contentGeneration();
+    ASSERT_TRUE(controller.closePrimary());
+    EXPECT_FALSE(controller.hasPrimary());
+    EXPECT_FALSE(controller.hasSecondary());
+    EXPECT_TRUE(controller.primaryPath().isEmpty());
+    // A new generation replaces the pixels, so a late result for the closed image cannot
+    // repaint anything.
+    EXPECT_GT(controller.contentGeneration(), generation);
+    // Nothing is left to close, so a second call refuses instead of inventing work.
+    EXPECT_FALSE(controller.closePrimary());
+    EXPECT_FALSE(controller.closeSecondary());
+}
+
+TEST(ImageReviewControllerTests, SingleSideCloseRefusesAndKeepsEverythingWithoutAMatch) {
+    ImageReviewController controller;
+    ASSERT_TRUE(controller.openPairImages(solidImage(Qt::red),
+                                          QStringLiteral("a.png"),
+                                          solidImage(Qt::blue),
+                                          QStringLiteral("b.png")));
+    // Nothing loaded: both entries refuse and the workspace is untouched.
+    ImageReviewController empty;
+    EXPECT_FALSE(empty.closePrimary());
+    EXPECT_FALSE(empty.closeSecondary());
+    EXPECT_FALSE(empty.hasPrimary());
+
+    // A live pair is untouched by a refused close on an empty controller (the guards are
+    // per-controller, and the pair above is still there).
+    EXPECT_TRUE(controller.hasPair());
+    EXPECT_EQ(controller.primaryPath(), QStringLiteral("a.png"));
+    EXPECT_EQ(controller.secondaryPath(), QStringLiteral("b.png"));
+}
+
+// ---- Numeric readout format ----------------------------------------------------------------
+//
+// The switch changes only what is printed and copied. The buffers, the sampling values,
+// the difference field and every statistic stay exactly as they were.
+
+TEST(ImageReviewControllerTests, NumericFormatChangesOnlyThePrintedText) {
+    ImageReviewController controller;
+    ASSERT_TRUE(controller.openPairImages(solidImage(QColor(12, 34, 56)),
+                                          QStringLiteral("a.png"),
+                                          solidImage(QColor(12, 34, 56)),
+                                          QStringLiteral("b.png")));
+    const int generation = controller.contentGeneration();
+    const QImage before = controller.imageForSlot(ImageReviewController::PrimarySlot);
+
+    EXPECT_EQ(controller.numericFormat(), ImageReviewController::IntegerCodeValues);
+    EXPECT_EQ(controller.channelText(12), QStringLiteral("12"));
+    EXPECT_EQ(controller.channelText(255), QStringLiteral("255"));
+    EXPECT_EQ(controller.channelText16(32768), QStringLiteral("32768"));
+    EXPECT_EQ(controller.rgbText(12, 34, 56), QStringLiteral("rgb(12, 34, 56)"));
+    EXPECT_EQ(controller.rgbaText(12, 34, 56, 200), QStringLiteral("rgba(12, 34, 56, 200)"));
+    // Hex is always #RRGGBBAA: the alpha byte is never dropped and the order is never ARGB.
+    EXPECT_EQ(controller.hexText(12, 34, 56, 200), QStringLiteral("#0C2238C8"));
+    EXPECT_EQ(controller.hexText(255, 255, 255, 255), QStringLiteral("#FFFFFFFF"));
+
+    controller.setNumericFormat(ImageReviewController::NormalizedFloat);
+    EXPECT_EQ(controller.numericFormat(), ImageReviewController::NormalizedFloat);
+    // 8-bit display buffer: channel / 255, six decimals, no negative zero.
+    EXPECT_EQ(controller.channelText(12), QStringLiteral("0.047059"));
+    EXPECT_EQ(controller.channelText(255), QStringLiteral("1.000000"));
+    EXPECT_EQ(controller.channelText(0), QStringLiteral("0.000000"));
+    // Converted 16-bit sidecar: channel16 / 65535, never quantized to 8 bits first.
+    EXPECT_EQ(controller.channelText16(32768), QStringLiteral("0.500008"));
+    EXPECT_EQ(controller.rgbText(12, 34, 56), QStringLiteral("rgb(0.047059, 0.133333, 0.219608)"));
+    // RGBA states its alpha range explicitly in the integer form; the normalized form is
+    // self-describing because every component is on the same 0..1 scale.
+    EXPECT_EQ(controller.rgbaText(12, 34, 56, 200),
+              QStringLiteral("rgba(0.047059, 0.133333, 0.219608, 0.784314)"));
+    // Hex stays hexadecimal in both modes: the switch never changes what it means.
+    EXPECT_EQ(controller.hexText(12, 34, 56, 200), QStringLiteral("#0C2238C8"));
+
+    // Signed deltas keep their sign in both modes, and a zero delta never renders as
+    // "-0.000000". The integer form is the raw step count; the float form is the same
+    // difference on the buffer's own full scale.
+    EXPECT_EQ(controller.deltaText(12, 34), QStringLiteral("+0.086275"));
+    EXPECT_EQ(controller.deltaText(34, 12), QStringLiteral("-0.086275"));
+    EXPECT_EQ(controller.deltaText(12, 12), QStringLiteral("0.000000"));
+    EXPECT_EQ(controller.deltaText16(1000, 2000), QStringLiteral("+0.015259"));
+    EXPECT_EQ(controller.deltaText16(2000, 1000), QStringLiteral("-0.015259"));
+    EXPECT_EQ(controller.deltaText16(1000, 1000), QStringLiteral("0.000000"));
+    // Back to the integer form: the same deltas are raw step counts.
+    controller.setNumericFormat(ImageReviewController::IntegerCodeValues);
+    EXPECT_EQ(controller.deltaText(12, 34), QStringLiteral("+22"));
+    EXPECT_EQ(controller.deltaText(34, 12), QStringLiteral("-22"));
+    EXPECT_EQ(controller.deltaText(12, 12), QStringLiteral("+0"));
+    EXPECT_EQ(controller.deltaText16(1000, 2000), QStringLiteral("+1000"));
+    EXPECT_EQ(controller.deltaText16(2000, 1000), QStringLiteral("-1000"));
+
+    // Presentation only: the decoded buffer and the generation are untouched, so nothing
+    // downstream can mistake the switch for a re-decode or a re-analysis.
+    EXPECT_EQ(controller.contentGeneration(), generation);
+    EXPECT_EQ(controller.imageForSlot(ImageReviewController::PrimarySlot), before);
+    // The statistics of a difference are still raw 8-bit deltas, not normalized ones.
+    ASSERT_TRUE(controller.closeSecondary());
+}
+
+TEST(ImageReviewControllerTests, NumericFormatRejectsUnknownValuesAndKeepsTheCurrentOne) {
+    ImageReviewController controller;
+    EXPECT_EQ(controller.numericFormat(), ImageReviewController::IntegerCodeValues);
+    controller.setNumericFormat(ImageReviewController::NormalizedFloat);
+    EXPECT_EQ(controller.numericFormat(), ImageReviewController::NormalizedFloat);
+    controller.setNumericFormat(99);
+    EXPECT_EQ(controller.numericFormat(), ImageReviewController::IntegerCodeValues)
+        << "an unknown format falls back to the integer form, never to a silent no-op";
+}
+
+// ---- Frozen probe sample & colour copy ------------------------------------------------------
+//
+// The pointer leaves the pixel long before the user reaches the button, so the sample that
+// gets copied is the last valid one of the current material generation.
+
+TEST(ImageReviewControllerTests, ProbeSampleSurvivesThePointerLeavingAndNamesTheSide) {
+    ImageReviewController controller;
+    ASSERT_TRUE(controller.openPairImages(solidImage(QColor(12, 34, 56, 200)),
+                                          QStringLiteral("a.png"),
+                                          solidImage(QColor(200, 100, 50, 255)),
+                                          QStringLiteral("b.png")));
+    // Nothing is frozen before the first valid sample.
+    EXPECT_FALSE(controller.frozenProbeSample().value(QStringLiteral("valid")).toBool());
+
+    ASSERT_TRUE(controller.captureProbeSample(ImageReviewController::DisplayPrimarySlot, 1, 1));
+    const QVariantMap frozen = controller.frozenProbeSample();
+    ASSERT_TRUE(frozen.value(QStringLiteral("valid")).toBool());
+    EXPECT_EQ(frozen.value(QStringLiteral("x")).toInt(), 1);
+    EXPECT_EQ(frozen.value(QStringLiteral("y")).toInt(), 1);
+    EXPECT_EQ(frozen.value(QStringLiteral("r")).toInt(), 12);
+    EXPECT_EQ(frozen.value(QStringLiteral("g")).toInt(), 34);
+    EXPECT_EQ(frozen.value(QStringLiteral("b")).toInt(), 56);
+    EXPECT_EQ(frozen.value(QStringLiteral("a")).toInt(), 200);
+    EXPECT_EQ(frozen.value(QStringLiteral("side")).toString(), QStringLiteral("A"));
+
+    // The sample survives the pointer leaving the pixel: it is not re-sampled at click
+    // time and it is not the screen colour under the button.
+    controller.clearCursorPixel();
+    EXPECT_TRUE(controller.frozenProbeSample().value(QStringLiteral("valid")).toBool());
+    EXPECT_EQ(controller.probeColorText(ImageReviewController::ProbeRgb),
+              QStringLiteral("rgb(12, 34, 56)"));
+    EXPECT_EQ(controller.probeColorText(ImageReviewController::ProbeRgba),
+              QStringLiteral("rgba(12, 34, 56, 200)"));
+    EXPECT_EQ(controller.probeColorText(ImageReviewController::ProbeHex),
+              QStringLiteral("#0C2238C8"));
+
+    // B is named explicitly: nothing is guessed from "the main side".
+    ASSERT_TRUE(controller.captureProbeSample(ImageReviewController::DisplaySecondarySlot, 2, 2));
+    const QVariantMap frozenB = controller.frozenProbeSample();
+    EXPECT_EQ(frozenB.value(QStringLiteral("side")).toString(), QStringLiteral("B"));
+    EXPECT_EQ(frozenB.value(QStringLiteral("r")).toInt(), 200);
+    EXPECT_EQ(controller.probeColorText(ImageReviewController::ProbeRgb),
+              QStringLiteral("rgb(200, 100, 50)"));
+    EXPECT_EQ(controller.probeColorText(ImageReviewController::ProbeHex),
+              QStringLiteral("#C86432FF"));
+
+    // A sample outside the image is refused, and the previously frozen one stays because
+    // it still names a real pixel of the current generation.
+    EXPECT_FALSE(
+        controller.captureProbeSample(ImageReviewController::DisplaySecondarySlot, 99, 99));
+    EXPECT_EQ(controller.frozenProbeSample().value(QStringLiteral("x")).toInt(), 2);
+
+    // A new generation replaces the pixels the sample named, so it dies with them.
+    ASSERT_TRUE(controller.closeSecondary());
+    EXPECT_FALSE(controller.frozenProbeSample().value(QStringLiteral("valid")).toBool());
+    EXPECT_TRUE(controller.probeColorText(ImageReviewController::ProbeRgb).isEmpty());
+}
+
+TEST(ImageReviewControllerTests, ProbeSampleCopiesTheOriginalDecodeNotADerivedView) {
+    ImageReviewController controller;
+    // A transparent pixel whose RGB is not black: the straight-alpha buffer keeps the real
+    // value, so the copy must not zero it just because the alpha is small.
+    ASSERT_TRUE(controller.openPrimaryImage(solidImage(QColor(10, 20, 30, 4)),
+                                            QStringLiteral("ghost.png")));
+    // The RGB-ignoring-alpha observation is a derived view; the copy still reads the
+    // original decode buffer, never the view, the composited background or a wipe line.
+    controller.setViewMode(ImageReviewController::RgbOpaqueView);
+    ASSERT_TRUE(controller.captureProbeSample(ImageReviewController::DisplayPrimarySlot, 0, 0));
+    const QVariantMap frozen = controller.frozenProbeSample();
+    EXPECT_EQ(frozen.value(QStringLiteral("r")).toInt(), 10);
+    EXPECT_EQ(frozen.value(QStringLiteral("g")).toInt(), 20);
+    EXPECT_EQ(frozen.value(QStringLiteral("b")).toInt(), 30);
+    EXPECT_EQ(frozen.value(QStringLiteral("a")).toInt(), 4);
+    EXPECT_EQ(controller.probeColorText(ImageReviewController::ProbeRgba),
+              QStringLiteral("rgba(10, 20, 30, 4)"));
+    // A derived view never changes the source label of the frozen sample.
+    EXPECT_EQ(frozen.value(QStringLiteral("source")).toString(), QStringLiteral("original"));
+}
+
+// ---- Alpha threshold observation filter ----------------------------------------------------
+//
+// The filter is an observation over the "RGB ignoring alpha" view. It never reaches the
+// committed buffers, the difference pipeline, the statistics, the edit working copy or a
+// saved copy.
+
+TEST(ImageReviewControllerTests, AlphaFilterUsesStrictGreaterThanOnTheEightBitBuffer) {
+    ImageReviewController controller;
+    ASSERT_TRUE(
+        controller.openPrimaryImage(solidImage(QColor(255, 0, 0, 26)), QStringLiteral("a.png")));
+    EXPECT_FALSE(controller.alphaFilterEnabled());
+    EXPECT_EQ(controller.alphaThreshold(), 0);
+    // Off means everything passes, whatever the threshold happens to be.
+    EXPECT_TRUE(controller.alphaPassesFilter(true, 0, 0));
+    EXPECT_TRUE(controller.alphaPassesFilter(true, 20, 0));
+
+    controller.setAlphaFilterEnabled(true);
+    controller.setAlphaThreshold(25);
+    EXPECT_TRUE(controller.alphaFilterEnabled());
+    EXPECT_EQ(controller.alphaThreshold(), 25);
+    // Strict greater-than: A=20 and A=25 are hidden, A=26 passes.
+    EXPECT_FALSE(controller.alphaPassesFilter(true, 20, 0));
+    EXPECT_FALSE(controller.alphaPassesFilter(true, 25, 0));
+    EXPECT_TRUE(controller.alphaPassesFilter(true, 26, 0));
+
+    // "Off" and "on with T = 0" are different states: T = 0 still hides A = 0.
+    controller.setAlphaThreshold(0);
+    EXPECT_TRUE(controller.alphaFilterEnabled());
+    EXPECT_FALSE(controller.alphaPassesFilter(true, 0, 0));
+    EXPECT_TRUE(controller.alphaPassesFilter(true, 1, 0));
+
+    // T = 255 lets nothing through, which is a valid filter result and not an error.
+    controller.setAlphaThreshold(255);
+    EXPECT_FALSE(controller.alphaPassesFilter(true, 255, 0));
+    EXPECT_FALSE(controller.alphaPassesFilter(true, 254, 0));
+
+    // The threshold is clamped to the 0..255 equivalent scale.
+    controller.setAlphaThreshold(-5);
+    EXPECT_EQ(controller.alphaThreshold(), 0);
+    controller.setAlphaThreshold(900);
+    EXPECT_EQ(controller.alphaThreshold(), 255);
+
+    // The filter is only active in the observation it belongs to.
+    EXPECT_FALSE(controller.alphaFilterActive());
+    controller.setViewMode(ImageReviewController::RgbOpaqueView);
+    EXPECT_TRUE(controller.alphaFilterActive());
+    controller.setViewMode(ImageReviewController::AlphaGrayView);
+    EXPECT_FALSE(controller.alphaFilterActive());
+    controller.setViewMode(ImageReviewController::RgbaView);
+    EXPECT_FALSE(controller.alphaFilterActive());
+}
+
+TEST(ImageReviewControllerTests, AlphaFilterComparesHighDepthAlphaWithoutQuantizing) {
+    // A real sidecar is what the probe and the view consult, so the 8-bit display value
+    // never answers the question. The loader injects both buffers, exactly as the decode
+    // path does for a genuine >8-bit source.
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QUrl url = writeBytes(directory, QStringLiteral("deep.bin"), QByteArrayLiteral("rgba64"));
+    ASSERT_FALSE(url.isEmpty());
+    ScopedStillImageLoader loader{[](const QByteArray& bytes,
+                                     QImage* image,
+                                     QImage* nativeImage,
+                                     dvs::ui::StillImageSourceInfo* info,
+                                     std::string*) {
+        if (!bytes.startsWith("rgba64")) {
+            return false;
+        }
+        // 8-bit display value 99 (the rounded form of 25800/257).
+        *image = solidImage(QColor(255, 0, 0, 99));
+        if (info != nullptr) {
+            info->bitDepth = 16;
+            info->channels = 4;
+            info->hasAlpha = true;
+            info->sourceFormat = QStringLiteral("rgba64le");
+            info->displayConverted = true;
+        }
+        if (nativeImage != nullptr) {
+            QImage native(4, 4, QImage::Format_RGBA64);
+            if (!native.isNull()) {
+                auto* const samples = reinterpret_cast<QRgba64*>(native.bits());
+                std::fill(samples,
+                          samples + native.sizeInBytes() / sizeof(QRgba64),
+                          qRgba64(65535, 0, 0, 25800));
+            }
+            *nativeImage = std::move(native);
+        }
+        return true;
+    }};
+    ImageReviewController loaded;
+    loaded.setAlphaFilterEnabled(true);
+    // T = 99 corresponds to 99/255 in normalized terms, i.e. 99 * 65535 / 255 = 25443
+    // exactly (65535 / 255 = 257). The bound is evaluated in integers, so it is exact and
+    // testable.
+    loaded.setAlphaThreshold(99);
+    ASSERT_GT(loaded.requestOpenPrimary(url), 0);
+    ASSERT_TRUE(waitForControllerIdle(loaded));
+    // The provenance proves the >8-bit sidecar arrived with the image, so the filter has a
+    // real 16-bit alpha to consult rather than the 8-bit display value.
+    ASSERT_EQ(loaded.primaryBitDepth(), 16);
+    ASSERT_TRUE(loaded.primaryHasAlpha());
+    ASSERT_TRUE(loaded.primaryDisplayConverted());
+
+    // T = 99 corresponds to 99/255 in normalized terms, i.e. 99 * 65535 / 255 = 25443
+    // exactly (65535 / 255 = 257). The bound is evaluated in integers, so it is exact and
+    // testable.
+    //
+    // 25800 (= 100/255 * 65535, rounded up) is above the bound, so the pixel passes on its
+    // own depth even though its 8-bit display value 99 is not > 99.
+    EXPECT_TRUE(loaded.alphaPassesFilter(true, 99, 25800));
+    // The exact boundary: 25443 is not > 25443, and one step above it passes.
+    EXPECT_FALSE(loaded.alphaPassesFilter(true, 99, 25443));
+    EXPECT_TRUE(loaded.alphaPassesFilter(true, 99, 25444));
+    // A 16-bit value that maps below the 8-bit rounding of the bound is hidden.
+    EXPECT_FALSE(loaded.alphaPassesFilter(true, 99, 25442));
+
+    // The frozen sample's own-depth alpha passes the bound, so it is not hidden - even
+    // though its 8-bit display value equals the threshold exactly.
+    ASSERT_TRUE(loaded.captureProbeSample(ImageReviewController::DisplayPrimarySlot, 0, 0));
+    const QVariantMap frozen = loaded.frozenProbeSample();
+    EXPECT_EQ(frozen.value(QStringLiteral("a16")).toInt(), 25800);
+    EXPECT_FALSE(frozen.value(QStringLiteral("alphaHidden")).toBool());
+    // The copy still carries the original decoded values, not the mask.
+    EXPECT_EQ(loaded.probeColorText(ImageReviewController::ProbeRgba),
+              QStringLiteral("rgba(255, 0, 0, 99)"));
+
+    // Raising the threshold past the sidecar alpha hides the same pixel, and the hint
+    // follows the live threshold instead of the one set when the sample was captured.
+    // T = 101 maps to 101 * 257 = 25957, which is above the sidecar's 25800.
+    loaded.setAlphaThreshold(101);
+    EXPECT_TRUE(loaded.frozenProbeSample().value(QStringLiteral("alphaHidden")).toBool());
+    loaded.setAlphaThreshold(99);
+    EXPECT_FALSE(loaded.frozenProbeSample().value(QStringLiteral("alphaHidden")).toBool());
+
+    // Without a sidecar the 8-bit buffer is the only truth: 99 is not > 99.
+    ImageReviewController plain;
+    plain.setAlphaFilterEnabled(true);
+    plain.setAlphaThreshold(99);
+    ASSERT_TRUE(
+        plain.openPrimaryImage(solidImage(QColor(255, 0, 0, 99)), QStringLiteral("eight.png")));
+    ASSERT_TRUE(plain.captureProbeSample(ImageReviewController::DisplayPrimarySlot, 0, 0));
+    EXPECT_TRUE(plain.frozenProbeSample().value(QStringLiteral("alphaHidden")).toBool());
+    EXPECT_EQ(plain.frozenProbeSample().value(QStringLiteral("a")).toInt(), 99);
+    // The copy of a hidden pixel is still the original RGBA, never the mask colour.
+    EXPECT_EQ(plain.probeColorText(ImageReviewController::ProbeRgba),
+              QStringLiteral("rgba(255, 0, 0, 99)"));
+}
+
+TEST(ImageReviewControllerTests, AlphaFilterChangesTheViewButNeverTheSamplesOrStatistics) {
+    ImageReviewController controller;
+    ASSERT_TRUE(controller.openPairImages(solidImage(QColor(10, 20, 30, 0)),
+                                          QStringLiteral("a.png"),
+                                          solidImage(QColor(10, 20, 30, 255)),
+                                          QStringLiteral("b.png")));
+    controller.setViewMode(ImageReviewController::RgbOpaqueView);
+    const QImage unfiltered = controller.imageForSlot(ImageReviewController::DisplayPrimarySlot);
+    // The probe reads the original RGBA whatever the filter does.
+    ASSERT_TRUE(controller.captureProbeSample(ImageReviewController::DisplayPrimarySlot, 0, 0));
+    const QVariantMap before = controller.frozenProbeSample();
+    ASSERT_EQ(before.value(QStringLiteral("a")).toInt(), 0);
+
+    controller.setAlphaFilterEnabled(true);
+    controller.setAlphaThreshold(128);
+    const QImage filtered = controller.imageForSlot(ImageReviewController::DisplayPrimarySlot);
+    // The view really changed: the A=0 pixel is now the neutral mask, not black.
+    EXPECT_NE(filtered.pixel(0, 0), unfiltered.pixel(0, 0));
+    EXPECT_NE(filtered.pixel(0, 0), QColor(Qt::black).rgb())
+        << "the mask must never be mistaken for a pixel that was actually black";
+    // The original sample, its values and its label are untouched by the filter. Only the
+    // "hidden by the current threshold" hint moves, and that is deliberate: it is live
+    // view state, so a sample captured before the filter was enabled still names the
+    // state the user is looking at now.
+    const QVariantMap after = controller.frozenProbeSample();
+    for (const QString& key : {QStringLiteral("x"),
+                               QStringLiteral("y"),
+                               QStringLiteral("r"),
+                               QStringLiteral("g"),
+                               QStringLiteral("b"),
+                               QStringLiteral("a"),
+                               QStringLiteral("source"),
+                               QStringLiteral("side"),
+                               QStringLiteral("slot"),
+                               QStringLiteral("generation")}) {
+        EXPECT_EQ(after.value(key), before.value(key)) << key.toStdString();
+    }
+    EXPECT_FALSE(before.value(QStringLiteral("alphaHidden")).toBool())
+        << "the filter was off when the sample was captured";
+    EXPECT_TRUE(after.value(QStringLiteral("alphaHidden")).toBool())
+        << "the hint follows the live threshold";
+    EXPECT_EQ(controller.probeColorText(ImageReviewController::ProbeRgba),
+              QStringLiteral("rgba(10, 20, 30, 0)"));
+    // Turning the filter off restores both the unfiltered view and the hint.
+    controller.setAlphaFilterEnabled(false);
+    EXPECT_EQ(controller.imageForSlot(ImageReviewController::DisplayPrimarySlot), unfiltered);
+    EXPECT_FALSE(controller.frozenProbeSample().value(QStringLiteral("alphaHidden")).toBool());
+    EXPECT_EQ(controller.probeColorText(ImageReviewController::ProbeRgba),
+              QStringLiteral("rgba(10, 20, 30, 0)"));
 }
 
 } // namespace

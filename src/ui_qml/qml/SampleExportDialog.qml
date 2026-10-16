@@ -147,7 +147,7 @@ Item {
                             anchors.verticalCenter: parent.verticalCenter
                             implicitWidth: formatBadgeText.implicitWidth + 12
                             implicitHeight: 20
-                            radius: 4
+                            radius: Theme.radiusMicro
                             color: Theme.successPanel
                             border.width: 1
                             border.color: Theme.successBorder
@@ -186,7 +186,7 @@ Item {
                             width: parent.width
                             implicitHeight: tripletCol.implicitHeight + 16
                             color: Theme.panel
-                            radius: 6
+                            radius: Theme.radiusSubtle
                             border.width: 1
                             border.color: Theme.border
 
@@ -204,7 +204,7 @@ Item {
                                     Rectangle {
                                         width: 80
                                         height: 44
-                                        radius: 4
+                                        radius: Theme.radiusMicro
                                         color: Theme.raisedPanel
                                         border.width: 1
                                         border.color: Theme.border
@@ -240,7 +240,7 @@ Item {
                                     Rectangle {
                                         width: 100
                                         height: 44
-                                        radius: 4
+                                        radius: Theme.radiusMicro
                                         color: Theme.accentPanel
                                         border.width: 1
                                         border.color: Theme.accentBorder
@@ -282,7 +282,7 @@ Item {
                                     Rectangle {
                                         width: 80
                                         height: 44
-                                        radius: 4
+                                        radius: Theme.radiusMicro
                                         color: Theme.raisedPanel
                                         border.width: 1
                                         border.color: Theme.border
@@ -316,7 +316,7 @@ Item {
                                         return gtText;
                                     }
                                     color: Theme.secondaryText
-                                    font.pixelSize: 11
+                                    font.pixelSize: Theme.fontCaption
                                     horizontalAlignment: Text.AlignHCenter
                                 }
                             }
@@ -330,7 +330,7 @@ Item {
                             Text {
                                 text: qsTr("样本标识 (sampleId)：")
                                 color: Theme.mutedText
-                                font.pixelSize: 11
+                                font.pixelSize: Theme.fontCaption
                             }
 
                             TextField {
@@ -367,7 +367,7 @@ Item {
                             Text {
                                 text: qsTr("保存目录：")
                                 color: Theme.mutedText
-                                font.pixelSize: 11
+                                font.pixelSize: Theme.fontCaption
                             }
 
                             Row {
@@ -392,7 +392,7 @@ Item {
                                         }
                                         text: control.targetDirectory.length > 0 ? control.targetDirectory : qsTr("未选择目录")
                                         color: control.targetDirectory.length > 0 ? Theme.primaryText : Theme.mutedText
-                                        font.pixelSize: 11
+                                        font.pixelSize: Theme.fontCaption
                                         elide: Text.ElideMiddle
                                     }
                                 }
@@ -416,7 +416,7 @@ Item {
                         Rectangle {
                             width: parent.width
                             implicitHeight: cropRow.implicitHeight + 12
-                            radius: 4
+                            radius: Theme.radiusMicro
                             color: Theme.panel
                             border.width: 1
                             border.color: Theme.border
@@ -461,7 +461,7 @@ Item {
                                     Text {
                                         text: qsTr("裁剪至当前 ROI 区域")
                                         color: (control.planSummary && Boolean(control.planSummary.hasCrop)) ? Theme.primaryText : Theme.mutedText
-                                        font.pixelSize: 11
+                                        font.pixelSize: Theme.fontCaption
                                         font.weight: Font.DemiBold
                                     }
 
@@ -507,7 +507,7 @@ Item {
                                 Text {
                                     text: control.progressPercent + "%"
                                     color: Theme.accentText
-                                    font.pixelSize: 11
+                                    font.pixelSize: Theme.fontCaption
                                     font.weight: Font.DemiBold
                                     anchors.verticalCenter: parent.verticalCenter
                                 }
@@ -519,7 +519,7 @@ Item {
                                 visible: control.lastStatus.length > 0
                                 text: control.lastStatus
                                 color: control.lastFailureDetail.length > 0 ? Theme.error : (control.lastOutputPath.length > 0 ? Theme.success : Theme.secondaryText)
-                                font.pixelSize: 11
+                                font.pixelSize: Theme.fontCaption
                                 wrapMode: Text.WordWrap
                             }
 
@@ -529,7 +529,7 @@ Item {
                                 visible: control.lastOutputPath.length > 0
                                 text: control.lastOutputPath
                                 color: Theme.mutedText
-                                font.family: "Consolas"
+                                font.family: Theme.fontFamilyMono
                                 font.pixelSize: 10
                                 elide: Text.ElideMiddle
                             }

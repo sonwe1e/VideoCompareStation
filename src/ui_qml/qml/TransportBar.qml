@@ -21,6 +21,11 @@ Item {
     readonly property var jogRateLadder: [0.5, 1.0, 2.0]
     property Item focusTarget: null
     property bool compact: false
+    // I8: the second-step buttons follow the active shortcut preset so their tooltips never
+    // promise a different jump than ReviewShortcuts performs. 0 = frame-review preset
+    // (Ctrl+←/→ steps one second), 1 = player preset (Ctrl+←/→ jumps 30 seconds). The host
+    // routes the button actions off the same value; the bar only reports it.
+    property int shortcutPreset: 0
     property int playbackContinuityPolicy: 1
     property int currentFrame: -1
     property int totalFrames: 0
@@ -33,8 +38,13 @@ Item {
     property int rangeInFrame: -1
     property int rangeOutFrame: -1
     property bool rangeLoopActive: false
+    // E3: back-and-forth range walk toggle; meaningful only while the loop is active.
+    property bool rangePingPongActive: false
     readonly property bool hasRangeEndpoints: control.rangeInFrame >= 0 || control.rangeOutFrame >= 0
     readonly property bool hasCompleteRange: control.rangeInFrame >= 0 && control.rangeOutFrame >= control.rangeInFrame
+    // The quick-stepping strip exists only on an explicit ask AND a paused session with a
+    // current frame; the toggle chip mirrors this to stay honest while playing.
+    readonly property bool adjacentStripVisible: control.adjacentExpanded && !control.playing && control.currentFrame >= 0
     // Range clip export. Opt-in like the range row itself so hosts without an export adapter keep
     // the chip hidden. `rangeExportBusy` deliberately does not disable the chip: a click during a
     // running export reopens the dialog so progress and the cancel action stay reachable.
@@ -50,6 +60,10 @@ Item {
     // E01 training-sample triplet export context and status.
     property var sampleExport: null
     property bool sampleExportBusy: false
+    // Phase-3: the adjacent-frame quick-stepping strip is a secondary paused-review tool, so
+    // it rides behind one chip in the button row instead of costing every paused transport a
+    // permanent line. Collapsed by default; the strip itself re-checks pause/frame validity.
+    property bool adjacentExpanded: false
 
     signal firstRequested
     signal previousSecondRequested
@@ -73,6 +87,8 @@ Item {
     signal markInRequested
     signal markOutRequested
     signal playRangeRequested
+    // E3: flip the back-and-forth intent of the active loop range.
+    signal rangePingPongRequested
     signal rangeLoopRequested
     signal clearRangeRequested
     signal exportRangeRequested
@@ -190,7 +206,7 @@ Item {
 
         Behavior on color {
             ColorAnimation {
-                duration: 100
+                duration: Theme.animationFast
             }
         }
 
@@ -229,10 +245,13 @@ Item {
         id: transportColumn
 
         spacing: Theme.spaceMicro
+        width: control.width
         anchors.horizontalCenter: parent.horizontalCenter
 
         Row {
             id: buttons
+
+            anchors.horizontalCenter: parent.horizontalCenter
 
             spacing: control.compact ? 4 : 6
 
@@ -249,9 +268,15 @@ Item {
                 }
             }
             TransportButton {
+                id: previousSecondButton
+
                 objectName: "previousSecondButton"
                 iconSource: "qrc:/icons/previous-second.svg"
-                helpText: qsTr("后退 1 秒\n快捷键：Ctrl+← / Ctrl+A")
+                // I8: preset-bound wording. The player preset turns this control (and its
+                // Ctrl+← shortcut) into the ±30 s jump; the frame-review preset keeps the
+                // exact second. Ctrl+A always stays the one-second chord, so the player
+                // listing must not present it as a 30-second alias.
+                helpText: control.shortcutPreset === 1 ? qsTr("快退 30 秒\n快捷键：Ctrl+←（Ctrl+A 仍后退 1 秒）") : qsTr("后退 1 秒\n快捷键：Ctrl+← / Ctrl+A")
                 enabled: control.canPrevious
                 onClicked: {
                     control.previousSecondRequested();
@@ -259,9 +284,11 @@ Item {
                 }
             }
             TransportButton {
+                id: previousFiveButton
+
                 objectName: "previousFiveButton"
                 iconSource: "qrc:/icons/previous-five.svg"
-                helpText: qsTr("后退 5 帧\n快捷键：Shift+← / Shift+A")
+                helpText: qsTr("后退 5 帧\n快捷键：↓ / Shift+← / Shift+A")
                 enabled: control.canPrevious
                 onClicked: {
                     control.previousFiveRequested();
@@ -281,7 +308,8 @@ Item {
 
                 objectName: "previousButton"
                 iconSource: "qrc:/icons/previous.svg"
-                helpText: qsTr("上一帧（长按可连续逐帧）\n快捷键：← / A")
+                // The player preset adds the , alias (JogKeyHandler owns it while active).
+                helpText: control.shortcutPreset === 1 ? qsTr("上一帧（长按可连续逐帧）\n快捷键：← / A / ,") : qsTr("上一帧（长按可连续逐帧）\n快捷键：← / A")
                 enabled: control.canPrevious
                 onPressed: {
                     previousButton.jogArmed = true;
@@ -349,7 +377,8 @@ Item {
 
                 objectName: "nextButton"
                 iconSource: "qrc:/icons/next.svg"
-                helpText: qsTr("下一帧（长按可连续逐帧）\n快捷键：→ / D")
+                // The player preset adds the . alias (JogKeyHandler owns it while active).
+                helpText: control.shortcutPreset === 1 ? qsTr("下一帧（长按可连续逐帧）\n快捷键：→ / D / .") : qsTr("下一帧（长按可连续逐帧）\n快捷键：→ / D")
                 enabled: control.canNext
                 onPressed: {
                     nextButton.jogArmed = true;
@@ -382,9 +411,11 @@ Item {
                 }
             }
             TransportButton {
+                id: nextFiveButton
+
                 objectName: "nextFiveButton"
                 iconSource: "qrc:/icons/next-five.svg"
-                helpText: qsTr("前进 5 帧\n快捷键：Shift+→ / Shift+D")
+                helpText: qsTr("前进 5 帧\n快捷键：↑ / Shift+→ / Shift+D")
                 enabled: control.canNext
                 onClicked: {
                     control.nextFiveRequested();
@@ -392,9 +423,13 @@ Item {
                 }
             }
             TransportButton {
+                id: nextSecondButton
+
                 objectName: "nextSecondButton"
                 iconSource: "qrc:/icons/next-second.svg"
-                helpText: qsTr("前进 1 秒\n快捷键：Ctrl+→ / Ctrl+D")
+                // I8: same preset binding as previousSecondButton, mirrored for the forward
+                // jump. Ctrl+D always stays the one-second chord, like Ctrl+A.
+                helpText: control.shortcutPreset === 1 ? qsTr("快进 30 秒\n快捷键：Ctrl+→（Ctrl+D 仍快进 1 秒）") : qsTr("前进 1 秒\n快捷键：Ctrl+→ / Ctrl+D")
                 enabled: control.canNext
                 onClicked: {
                     control.nextSecondRequested();
@@ -491,8 +526,25 @@ Item {
                 }
             }
 
+            // Secondary paused-review tool, collapsed behind this chip (Phase-3): the strip
+            // costs a layout line, so it only exists while the user asked for it.
+            RangeChip {
+                id: adjacentToggle
+
+                objectName: "transportAdjacentToggle"
+                visible: !control.playing && control.currentFrame >= 0
+                width: visible ? implicitWidth : 0
+                chipText: control.adjacentStripVisible ? qsTr("相邻帧 ▴") : qsTr("相邻帧 ▾")
+                chipHelp: qsTr("展开或收起相邻帧快捷条（±3 帧一步直达；仅暂停时可用）")
+                chipEnabled: true
+                chipActive: control.adjacentStripVisible
+                onClicked: control.adjacentExpanded = !control.adjacentExpanded
+            }
+
             // Segmented switch: both options share one well so they read as a single choice.
             Rectangle {
+                id: continuityToggleGroup
+
                 objectName: "continuityPolicyToggleGroup"
                 implicitWidth: continuityGroup.implicitWidth + 6
                 implicitHeight: continuityGroup.implicitHeight + 6
@@ -525,61 +577,143 @@ Item {
             }
         }
 
-        // In/out range controls. Given their own row under the playback buttons: five extra chips
-        // inside the button row would push the cluster past the 960 px minimum window width, and
-        // the endpoints read better grouped with the range label than interleaved with stepping.
+        // A stable second row keeps mark, playback and export controls reachable in
+        // every range state. Its position never changes when an endpoint is added.
         Row {
-            id: rangeRow
+            id: rangeCluster
 
             objectName: "transportRangeRow"
             visible: control.rangeControlsVisible
-            spacing: control.compact ? 4 : 6
+            // Collapse this row for hosts without range controls.
+            height: visible ? implicitHeight : 0
             anchors.horizontalCenter: parent.horizontalCenter
+            spacing: control.compact ? 4 : 6
 
-            RangeChip {
-                objectName: "transportMarkInButton"
-                chipText: qsTr("入点")
-                chipHelp: qsTr("把当前帧设为入点\n快捷键：I")
-                chipEnabled: control.canMarkRange
-                onClicked: control.markInRequested()
+            // Keep both marking actions after either endpoint has been set.
+            Row {
+                id: rangeMarkFace
+
+                visible: true
+                width: visible ? implicitWidth : 0
+                spacing: control.compact ? 4 : 6
+
+                RangeChip {
+                    objectName: "transportMarkInButton"
+                    chipText: qsTr("设入点 I")
+                    chipHelp: qsTr("把当前帧设为入点\n快捷键：I")
+                    chipEnabled: control.canMarkRange
+                    onClicked: control.markInRequested()
+                }
+
+                RangeChip {
+                    objectName: "transportMarkOutButton"
+                    chipText: qsTr("设出点 O")
+                    chipHelp: qsTr("把当前帧设为出点\n快捷键：O")
+                    chipEnabled: control.canMarkRange
+                    onClicked: control.markOutRequested()
+                }
             }
 
-            RangeChip {
-                objectName: "transportMarkOutButton"
-                chipText: qsTr("出点")
-                chipHelp: qsTr("把当前帧设为出点\n快捷键：O")
-                chipEnabled: control.canMarkRange
-                onClicked: control.markOutRequested()
+            // Working face: the range readout as one capsule plus the chips that act on it.
+            Row {
+                id: rangeWorkingFace
+
+                visible: control.hasRangeEndpoints
+                width: visible ? implicitWidth : 0
+                spacing: control.compact ? 4 : 6
+
+                // The single-source range readout, restyled as the capsule that groups the
+                // working chips. The text binding is byte-for-byte the contract-tested one
+                // (MainQmlContractTests reads `transportRangeLabel.text` in every range state,
+                // including the unset state while this capsule is hidden).
+                Rectangle {
+                    id: rangeCapsule
+
+                    objectName: "transportRangeCapsule"
+                    radius: Theme.radiusMedium
+                    implicitHeight: control.compact ? Theme.hitAreaMinimum : 36
+                    implicitWidth: Math.min(rangeLabel.implicitWidth, control.compact ? 168 : 210) + 20
+                    // A complete range is an interval worth acting on; an invalid pair stays a
+                    // quiet panel so it reads as "not a range yet" next to the active chips.
+                    color: control.hasCompleteRange ? Theme.control : Theme.disabledPanel
+                    border.width: 1
+                    border.color: control.hasCompleteRange ? Theme.accent : "transparent"
+                    anchors.verticalCenter: parent.verticalCenter
+
+                    Text {
+                        id: rangeLabel
+
+                        objectName: "transportRangeLabel"
+                        text: {
+                            if (!control.hasRangeEndpoints)
+                                return qsTr("未设区间（I / O 设点）");
+                            const inText = control.rangeInFrame >= 0 ? String(control.rangeInFrame + 1) : "—";
+                            const outText = control.rangeOutFrame >= 0 ? String(control.rangeOutFrame + 1) : "—";
+                            if (!control.hasCompleteRange)
+                                return qsTr("入 %1 · 出 %2（区间无效）").arg(inText).arg(outText);
+                            const frameCount = control.rangeOutFrame - control.rangeInFrame + 1;
+                            return qsTr("入 %1 · 出 %2 · %3 帧%4").arg(inText).arg(outText).arg(frameCount).arg(control.rangeLoopActive ? qsTr(" · 循环") : "");
+                        }
+                        color: control.hasCompleteRange ? Theme.accentText : Theme.mutedText
+                        font.family: Theme.fontFamilyMono
+                        font.pixelSize: Theme.fontSecondary
+                        // Cap instead of overflowing: the cluster has no clip, and a three-digit
+                        // frame count still fits, so elision only ever triggers on an
+                        // unexpectedly narrow window.
+                        width: Math.min(implicitWidth, control.compact ? 168 : 210)
+                        elide: Text.ElideRight
+                        anchors.centerIn: parent
+                    }
+                }
+
+                RangeChip {
+                    objectName: "transportPlayRangeButton"
+                    visible: control.hasCompleteRange
+                    chipText: qsTr("播放区间")
+                    chipHelp: qsTr("播放入点到出点\n快捷键：\\")
+                    chipEnabled: control.hasCompleteRange
+                    onClicked: control.playRangeRequested()
+                }
+
+                RangeChip {
+                    objectName: "transportLoopRangeButton"
+                    chipText: qsTr("循环 \\")
+                    chipHelp: control.rangeLoopActive ? qsTr("停止循环，改为单次播放区间") : qsTr("循环播放入点到出点；\\ 键单次播放区间")
+                    chipEnabled: control.hasCompleteRange
+                    chipActive: control.rangeLoopActive
+                    onClicked: control.rangeLoopRequested()
+                }
+
+                RangeChip {
+                    objectName: "transportPingPongRangeButton"
+                    // E3: the click flips the back-and-forth intent on the SAME interval;
+                    // available whenever a complete range exists (armed even while paused,
+                    // so a loop can be configured before playback starts).
+                    visible: control.hasCompleteRange
+                    chipText: qsTr("往返")
+                    chipHelp: control.rangePingPongActive ? qsTr("往返开启中：到出点后倒放返回入点；点击恢复单向循环") : qsTr("循环到出点后倒放返回入点，端点不重复")
+                    chipEnabled: control.hasCompleteRange
+                    chipActive: control.rangePingPongActive
+                    onClicked: control.rangePingPongRequested()
+                }
+
+                RangeChip {
+                    objectName: "transportClearRangeButton"
+                    chipText: qsTr("清除")
+                    chipHelp: qsTr("清除入点与出点")
+                    chipEnabled: control.hasRangeEndpoints
+                    onClicked: control.clearRangeRequested()
+                }
             }
 
-            RangeChip {
-                objectName: "transportPlayRangeButton"
-                chipText: qsTr("播放区间")
-                chipHelp: qsTr("播放入点到出点\n快捷键：\\")
-                chipEnabled: control.hasCompleteRange
-                onClicked: control.playRangeRequested()
-            }
-
-            RangeChip {
-                objectName: "transportLoopRangeButton"
-                chipText: qsTr("循环")
-                chipHelp: control.rangeLoopActive ? qsTr("停止循环，改为单次播放区间") : qsTr("循环播放入点到出点")
-                chipEnabled: control.hasCompleteRange
-                chipActive: control.rangeLoopActive
-                onClicked: control.rangeLoopRequested()
-            }
-
-            RangeChip {
-                objectName: "transportClearRangeButton"
-                chipText: qsTr("清除")
-                chipHelp: qsTr("清除入点与出点")
-                chipEnabled: control.hasRangeEndpoints
-                onClicked: control.clearRangeRequested()
-            }
-
-            // Export the marked range as a standalone clip. The work is a lossless stream copy, so
-            // the start has to snap back to the preceding keyframe; the tooltip says so rather than
-            // letting the user discover it from a clip that starts a little early.
+            // Export chip, hoisted out of the two faces (the MainQmlContractTests contract):
+            // it stays visible in BOTH faces whenever the host publishes an export service.
+            // With no endpoints it is visible but disabled - a click then answers through the
+            // intent toast, which is why chipEnabled (not visible) carries the gate - and once
+            // a range is marked it enables and opens the clip export dialog. Hoisting also
+            // keeps the chip off the mark/working face flip, so its geometry never rides that
+            // relayout and a real mouse click cannot land on stale coordinates. Trailing
+            // position matches the pre-cluster flat row (…, 清除, 导出).
             RangeChip {
                 objectName: "transportExportRangeButton"
                 visible: control.rangeExportVisible
@@ -589,32 +723,6 @@ Item {
                 chipEnabled: control.rangeExportEnabled || control.rangeExportBusy
                 chipActive: control.rangeExportBusy
                 onClicked: control.exportRangeRequested()
-            }
-
-            // Single source of range truth for the transport cluster: an unset range still gets a
-            // one-line hint, so the chips are never a row of unexplained grey labels.
-            Text {
-                id: rangeLabel
-
-                objectName: "transportRangeLabel"
-                text: {
-                    if (!control.hasRangeEndpoints)
-                        return qsTr("未设区间（I / O 设点）");
-                    const inText = control.rangeInFrame >= 0 ? String(control.rangeInFrame + 1) : "—";
-                    const outText = control.rangeOutFrame >= 0 ? String(control.rangeOutFrame + 1) : "—";
-                    if (!control.hasCompleteRange)
-                        return qsTr("入 %1 · 出 %2（区间无效）").arg(inText).arg(outText);
-                    const frameCount = control.rangeOutFrame - control.rangeInFrame + 1;
-                    return qsTr("入 %1 · 出 %2 · %3 帧%4").arg(inText).arg(outText).arg(frameCount).arg(control.rangeLoopActive ? qsTr(" · 循环") : "");
-                }
-                color: control.hasCompleteRange ? Theme.accentText : Theme.mutedText
-                font.family: "Consolas"
-                font.pixelSize: Theme.fontSecondary
-                // Cap instead of overflowing: the row has no clip, and a three-digit frame count
-                // still fits, so elision only ever triggers on an unexpectedly narrow window.
-                width: Math.min(implicitWidth, control.compact ? 168 : 210)
-                elide: Text.ElideRight
-                anchors.verticalCenter: parent.verticalCenter
             }
         }
 
@@ -628,6 +736,9 @@ Item {
 
             objectName: "transportProtocolRow"
             visible: control.protocol !== null
+            // Column positioners reserve a slot for invisible children; collapse so hosts
+            // without a protocol controller lose the row's height, not just its paint.
+            height: visible ? implicitHeight : 0
             spacing: control.compact ? 4 : 6
             anchors.horizontalCenter: parent.horizontalCenter
 
@@ -703,7 +814,10 @@ Item {
             id: adjacentStrip
 
             objectName: "adjacentFramesStrip"
-            visible: !control.playing && control.currentFrame >= 0
+            visible: control.adjacentStripVisible
+            // Collapses while hidden or while playing: positioners keep layout space for
+            // invisible children otherwise.
+            height: visible ? implicitHeight : 0
             spacing: Theme.spaceMicro
             anchors.horizontalCenter: parent.horizontalCenter
 

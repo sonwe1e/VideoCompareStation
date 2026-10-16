@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <vector>
 
@@ -34,6 +35,12 @@ namespace app {
 class ReviewRuntime final {
 public:
     [[nodiscard]] static std::unique_ptr<ReviewRuntime> create();
+    // Same composition, but the settings repository reads/writes the given file instead of
+    // the user's roaming settings. UI evidence automation uses this so repeated runs never
+    // touch (or resume from) the user's real playback positions. Empty path = production
+    // behaviour, identical to create().
+    [[nodiscard]] static std::unique_ptr<ReviewRuntime>
+    createWithSettingsFile(const std::filesystem::path& settingsFile);
     ~ReviewRuntime();
 
     ReviewRuntime(const ReviewRuntime&) = delete;
@@ -87,6 +94,7 @@ public:
 
 private:
     ReviewRuntime();
+    explicit ReviewRuntime(const std::filesystem::path& settingsFile);
 
     class Impl;
 

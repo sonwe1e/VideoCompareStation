@@ -148,14 +148,17 @@ Rectangle {
                 onClicked: control.closeRequested()
             }
         }
-        // Flow, not Row: at the panel's minimum width the two tabs cannot share one line, and
-        // the product rule is to wrap controls rather than clip or shrink their labels.
-        Flow {
+        Grid {
+            objectName: "videoFolderActions"
             width: parent.width
-            spacing: 6
+            columns: 2
+            spacing: Theme.spaceMicro
 
             ReviewActionButton {
+                width: (parent.width - parent.spacing) / 2
                 implicitHeight: control.compact ? 30 : 40
+                leftPadding: Theme.spaceMicro
+                rightPadding: Theme.spaceMicro
                 objectName: "videoFolderTab"
                 text: qsTr("当前文件夹")
                 checkable: true
@@ -164,7 +167,10 @@ Rectangle {
                 onClicked: control.showRecent = false
             }
             ReviewActionButton {
+                width: (parent.width - parent.spacing) / 2
                 implicitHeight: control.compact ? 30 : 40
+                leftPadding: Theme.spaceMicro
+                rightPadding: Theme.spaceMicro
                 objectName: "videoRecentTab"
                 text: qsTr("最近打开")
                 checkable: true
@@ -172,35 +178,35 @@ Rectangle {
                 mirrorsState: true
                 onClicked: control.showRecent = true
             }
+            ReviewActionButton {
+                width: (parent.width - parent.spacing) / 2
+                implicitHeight: control.compact ? 30 : 40
+                leftPadding: Theme.spaceMicro
+                rightPadding: Theme.spaceMicro
+                objectName: "videoFolderChooseButton"
+                text: qsTr("选择文件夹…")
+                onClicked: control.chooseFolderRequested()
+            }
+            ReviewActionButton {
+                width: (parent.width - parent.spacing) / 2
+                implicitHeight: control.compact ? 30 : 40
+                leftPadding: Theme.spaceMicro
+                rightPadding: Theme.spaceMicro
+                objectName: "videoFolderRefreshButton"
+                text: qsTr("刷新")
+                enabled: Boolean(control.folderModel && !control.folderModel.scanning && control.folderModel.folderUrl.toString().length > 0)
+                onClicked: control.folderModel.refreshFolder()
+            }
         }
         Text {
             width: parent.width
-            visible: !control.showRecent
-            text: control.folderModel && control.folderModel.folderName.length > 0 ? control.folderModel.folderName : qsTr("请选择本地文件夹")
+            text: control.showRecent ? qsTr("最近打开") : (control.folderModel && control.folderModel.folderName.length > 0 ? control.folderModel.folderName : qsTr("请选择本地文件夹"))
             color: Theme.mutedText
             elide: Text.ElideMiddle
             ToolTip.visible: folderHover.hovered
             ToolTip.text: control.folderModel ? control.folderModel.folderPath : ""
             HoverHandler {
                 id: folderHover
-            }
-        }
-        Flow {
-            visible: !control.showRecent
-            width: parent.width
-            spacing: 6
-
-            ReviewActionButton {
-                implicitHeight: control.compact ? 30 : 40
-                text: qsTr("选择文件夹…")
-                onClicked: control.chooseFolderRequested()
-            }
-            ReviewActionButton {
-                implicitHeight: control.compact ? 30 : 40
-                objectName: "videoFolderRefreshButton"
-                text: qsTr("刷新")
-                enabled: Boolean(control.folderModel && !control.folderModel.scanning && control.folderModel.folderUrl.toString().length > 0)
-                onClicked: control.folderModel.refreshFolder()
             }
         }
         Text {
@@ -510,12 +516,15 @@ Rectangle {
             color: Theme.mutedText
             font.pixelSize: 12
         }
-        Flow {
+        Row {
             visible: !control.showRecent
             width: parent.width
             spacing: 6
 
             ReviewActionButton {
+                width: (parent.width - parent.spacing) / 2
+                leftPadding: Theme.spaceMicro
+                rightPadding: Theme.spaceMicro
                 implicitHeight: control.compact ? 30 : 40
                 objectName: "videoFolderPrevious"
                 text: qsTr("上一项")
@@ -523,6 +532,9 @@ Rectangle {
                 onClicked: control.stepRequested(-1)
             }
             ReviewActionButton {
+                width: (parent.width - parent.spacing) / 2
+                leftPadding: Theme.spaceMicro
+                rightPadding: Theme.spaceMicro
                 implicitHeight: control.compact ? 30 : 40
                 objectName: "videoFolderNext"
                 text: qsTr("下一项")

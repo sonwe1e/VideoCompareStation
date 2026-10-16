@@ -34,6 +34,11 @@ Rectangle {
     property var windowRects: []
     // Owned by the viewport so the value survives strip teardown; the strip only asks.
     signal zoomStepRequested(int percent)
+    // Phase-3 direct manipulation: drag deltas from one local window, in that cell's logical
+    // pixels. The shared ROI means every window follows; the viewport forwards the deltas to
+    // the surface, which owns the window->source geometry (rotation included) in one place -
+    // the strip keeps no sampling formula of its own.
+    signal roiPanRequested(int slot, real deltaLogicalX, real deltaLogicalY)
 
     readonly property var zoomSteps: [0, 100, 200, 400]
 
@@ -139,9 +144,14 @@ Rectangle {
         return control.zoomPercent === 0 ? qsTr("局部·适配ROI") : qsTr("局部·源像素 %1%").arg(control.zoomPercent);
     }
 
-    function cycleZoom() {
+    // direction >= 0 walks the ladder toward higher magnification (wheel up / button click),
+    // direction < 0 toward 适配ROI; both wrap. A missing argument keeps the legacy forward
+    // direction so existing callers stay valid.
+    function cycleZoom(direction) {
         const index = control.zoomSteps.indexOf(control.zoomPercent);
-        const next = control.zoomSteps[(index + 1 + control.zoomSteps.length) % control.zoomSteps.length];
+        const count = control.zoomSteps.length;
+        const step = direction === undefined || direction >= 0 ? 1 : -1;
+        const next = control.zoomSteps[(index + step + count) % count];
         control.zoomStepRequested(next);
     }
 
@@ -166,14 +176,14 @@ Rectangle {
                 objectName: "roiTripletZoomButton"
                 enabled: control.visible
                 text: control.zoomTitle()
-                helpText: qsTr("各局部窗直接采样解码后的源纹理，共用一个倍率：适配ROI 撑满窗口；源像素100% 为纵向源像素 1:1（横向按 SAR），200%/400% 再放大。\n采样方式跟随画面下方的「采样」按钮（自动/平滑/像素）。局部显示的是已按契约转换的色彩，不是原始码值。")
+                helpText: qsTr("各局部窗直接采样解码后的源纹理，共用一个倍率：适配ROI 撑满窗口；源像素100% 为纵向源像素 1:1（横向按 SAR），200%/400% 再放大。\n采样方式跟随画面下方的「采样」按钮（自动/平滑/像素）。局部显示的是已按契约转换的色彩，不是原始码值。\n在局部窗内拖动可平移共享 ROI（内容跟随光标），滚轮切换局部倍率。")
                 implicitWidth: 96
                 implicitHeight: 24
                 leftPadding: 8
                 rightPadding: 8
                 topPadding: 0
                 bottomPadding: 0
-                onClicked: control.cycleZoom()
+                onClicked: control.cycleZoom(1)
             }
 
             Text {
@@ -185,7 +195,7 @@ Rectangle {
                 visible: !control.roiEnabled
                 text: qsTr("在上方全景上 Alt+拖动 框选 ROI，局部窗将同框显示该区域的源像素")
                 color: Theme.mutedText
-                font.pixelSize: 11
+                font.pixelSize: Theme.fontCaption
                 anchors.verticalCenter: parent.verticalCenter
             }
         }
@@ -264,7 +274,7 @@ Rectangle {
                     Rectangle {
                         width: 30
                         height: 20
-                        radius: 4
+                        radius: Theme.radiusMicro
                         color: Theme.stageLabel
                         border.width: 1
                         border.color: Theme.sourceBorder(windowCell.slot)
@@ -280,7 +290,7 @@ Rectangle {
                             text: String.fromCharCode(65 + windowCell.slot)
                             color: Theme.sourceColor(windowCell.slot)
                             font.bold: true
-                            font.pixelSize: 11
+                            font.pixelSize: Theme.fontCaption
                         }
                     }
 
@@ -306,8 +316,44 @@ Rectangle {
                         visible: !windowCell.footageValid
                         text: qsTr("暂无可采样画面")
                         color: Theme.warning
-                        font.pixelSize: 11
+                        font.pixelSize: Theme.fontCaption
                         anchors.centerIn: parent
+                    }
+
+                    // Phase-3 direct manipulation: a drag nudges the shared ROI centre (the
+                    // content follows the cursor, like the panorama pan), the wheel cycles the
+                    // window magnification. Both need a resolvable ROI; without one the hint in
+                    // the header still teaches the marquee and the cell stays inert.
+                    MouseArea {
+                        id: windowDrag
+
+                        objectName: "roiTripletWindowDragArea"
+                        anchors.fill: parent
+                        enabled: control.roiEnabled && windowCell.footageValid
+                        hoverEnabled: true
+                        // The cursor names the verb before the first press: size-all on the
+                        // draggable window, closed hand while the grab holds.
+                        cursorShape: windowDrag.pressed ? Qt.ClosedHandCursor : (windowDrag.enabled && windowDrag.containsMouse ? Qt.SizeAllCursor : Qt.ArrowCursor)
+
+                        property real lastLogicalX: 0
+                        property real lastLogicalY: 0
+
+                        onPressed: mouse => {
+                            windowDrag.lastLogicalX = mouse.x;
+                            windowDrag.lastLogicalY = mouse.y;
+                            mouse.accepted = true;
+                        }
+                        onPositionChanged: mouse => {
+                            if (!windowDrag.pressed)
+                                return;
+                            control.roiPanRequested(windowCell.slot, mouse.x - windowDrag.lastLogicalX, mouse.y - windowDrag.lastLogicalY);
+                            windowDrag.lastLogicalX = mouse.x;
+                            windowDrag.lastLogicalY = mouse.y;
+                        }
+                        onWheel: wheel => {
+                            control.cycleZoom(wheel.angleDelta.y > 0 ? 1 : -1);
+                            wheel.accepted = true;
+                        }
                     }
                 }
             }

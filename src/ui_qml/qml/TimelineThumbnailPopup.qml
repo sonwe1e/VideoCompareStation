@@ -27,7 +27,7 @@ Rectangle {
         visible: control.hasThumbnail
         width: parent.width - 12
         height: 68
-        radius: 6
+        radius: Theme.radiusSubtle
         color: Theme.thumbnailWell
         anchors {
             top: parent.top
@@ -78,8 +78,8 @@ Rectangle {
                 objectName: "previewTimecodeText"
                 text: qsTr("%1  ·  第 %2 帧").arg(control.previewTimecode).arg(control.previewFrame + 1)
                 color: Theme.primaryText
-                font.family: "Consolas"
-                font.pixelSize: 11
+                font.family: Theme.fontFamilyMono
+                font.pixelSize: Theme.fontCaption
                 font.weight: Font.DemiBold
             }
         }

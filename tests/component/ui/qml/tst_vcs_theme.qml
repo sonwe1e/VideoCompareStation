@@ -206,5 +206,54 @@ Item {
         function test_canvas_guard_token() {
             compare(Theme.canvasMinimumWidth, 600);
         }
+
+        // Phase-4 tokens. fontCaption collects the 11 px dense-metadata size 78 call sites
+        // already used; radiusMicro/radiusSubtle collect the 4/6 px corners; the two family
+        // tokens are single names because QML's font value type exposes one `family` string
+        // only - see the tradeoff case below.
+        function test_caption_radius_and_family_tokens() {
+            compare(Theme.fontCaption, 11);
+            verify(Theme.fontMicro < Theme.fontCaption);
+            verify(Theme.fontCaption < Theme.fontSecondary);
+            compare(Theme.radiusMicro, 4);
+            compare(Theme.radiusSubtle, 6);
+            verify(Theme.radiusMicro < Theme.radiusSubtle);
+            verify(Theme.radiusSubtle < Theme.radiusSmall);
+            compare(Theme.fontFamilyUi, "Segoe UI Variable Text");
+            compare(Theme.fontFamilyMono, "Cascadia Mono");
+            // E: tabular-numeral feature token for numeric mixed text in the UI font. The
+            // object shape (and only tnum) is the contract - the rendered effect depends on
+            // the font carrying the feature, which this theme never promises.
+            verify(Theme.fontFeaturesNumeric !== undefined);
+            compare(Theme.fontFeaturesNumeric.tnum, 1);
+            const featureProbe = Qt.createQmlObject(
+                "import QtQuick\nText { font.features: { \"tnum\": 1 } }", root,
+                "themeFontFeaturesProbe");
+            verify(featureProbe.font.features !== undefined)
+                << "this Qt build must accept font.features assignments";
+            featureProbe.destroy();
+        }
+
+        // Font-stack tradeoff, recorded as data and comments rather than a version probe:
+        // Qt 6.11's QML `font` value type has `family` (string) and no `families` list (the
+        // shipped plugins.qmltypes list QQuickFontValueType's properties without it, and the
+        // Qt documentation agrees), so a CSS-style fallback stack cannot be expressed in
+        // QML and the tokens above are single family names. Missing glyphs are covered by
+        // Qt's own font-merging fallback (contextFontMerging exists since 6.8); which
+        // substitute font that picks is Qt's decision, not a promise of this theme. The
+        // runtime Qt version is not asserted here - the qmltestrunner log header carries
+        // it. What IS asserted is that each token binds to a real font group assignment.
+        function test_font_family_tokens_bind_to_a_real_font() {
+            const probe = Qt.createQmlObject(
+                "import QtQuick\nText { font.family: \"Cascadia Mono\" }", root,
+                "themeFontFamilyProbe");
+            compare(probe.font.family, Theme.fontFamilyMono);
+            const uiProbe = Qt.createQmlObject(
+                "import QtQuick\nText { font.family: \"Segoe UI Variable Text\" }", root,
+                "themeFontFamilyUiProbe");
+            compare(uiProbe.font.family, Theme.fontFamilyUi);
+            probe.destroy();
+            uiProbe.destroy();
+        }
     }
 }

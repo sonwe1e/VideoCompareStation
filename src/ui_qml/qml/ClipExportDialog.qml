@@ -169,7 +169,7 @@ Item {
                             anchors.verticalCenter: parent.verticalCenter
                             implicitWidth: streamCopyText.implicitWidth + 12
                             implicitHeight: 20
-                            radius: 4
+                            radius: Theme.radiusMicro
                             color: Theme.successPanel
                             border.width: 1
                             border.color: Theme.successBorder
@@ -205,7 +205,7 @@ Item {
                         Rectangle {
                             width: parent.width
                             implicitHeight: infoCol.implicitHeight + 18
-                            radius: 6
+                            radius: Theme.radiusSubtle
                             color: Theme.window
                             border.width: 1
                             border.color: Theme.border
@@ -283,7 +283,7 @@ Item {
                                         width: parent.width - 70
                                         text: control.fileName.length > 0 ? control.fileName : qsTr("（待选择）")
                                         color: control.fileName.length > 0 ? Theme.primaryText : Theme.mutedText
-                                        font.family: "Consolas"
+                                        font.family: Theme.fontFamilyMono
                                         font.pixelSize: 12
                                         elide: Text.ElideMiddle
                                         anchors.verticalCenter: parent.verticalCenter
@@ -304,14 +304,14 @@ Item {
 
                                 width: parent.width - 48
                                 height: 8
-                                radius: 4
+                                radius: Theme.radiusMicro
                                 color: Theme.control
                                 anchors.verticalCenter: parent.verticalCenter
 
                                 Rectangle {
                                     width: Math.round(progressTrack.width * control.progress)
                                     height: parent.height
-                                    radius: 4
+                                    radius: Theme.radiusMicro
                                     color: Theme.accent
                                 }
                             }
@@ -319,7 +319,7 @@ Item {
                             Text {
                                 text: control.progressPercent + "%"
                                 color: Theme.accentText
-                                font.pixelSize: 11
+                                font.pixelSize: Theme.fontCaption
                                 font.weight: Font.DemiBold
                                 anchors {
                                     right: parent.right
@@ -352,8 +352,8 @@ Item {
                             visible: control.outputPath.length > 0
                             text: control.outputPath
                             color: Theme.mutedText
-                            font.family: "Consolas"
-                            font.pixelSize: 11
+                            font.family: Theme.fontFamilyMono
+                            font.pixelSize: Theme.fontCaption
                             elide: Text.ElideMiddle
                         }
 
@@ -364,7 +364,7 @@ Item {
                             visible: control.failureDetail.length > 0
                             text: control.failureDetail
                             color: Theme.warning
-                            font.pixelSize: 11
+                            font.pixelSize: Theme.fontCaption
                             wrapMode: Text.WordWrap
                         }
 
@@ -372,7 +372,7 @@ Item {
                         Rectangle {
                             width: parent.width
                             implicitHeight: tipCol.implicitHeight + 16
-                            radius: 6
+                            radius: Theme.radiusSubtle
                             color: Theme.raisedPanel
                             border.width: 1
                             border.color: Theme.controlBorder
@@ -386,7 +386,7 @@ Item {
                                 Text {
                                     text: qsTr("ℹ️ 无损剪辑特性说明：")
                                     color: Theme.accentText
-                                    font.pixelSize: 11
+                                    font.pixelSize: Theme.fontCaption
                                     font.weight: Font.DemiBold
                                 }
 
@@ -394,7 +394,7 @@ Item {
                                     width: parent.width
                                     text: qsTr("• 无损流拷贝保持原始编码、分辨率与帧率。\n• 起点会对齐到前一个关键帧，片段可能比入点稍早开始；B 帧素材的结尾可能多出几帧参考帧。要精确成帧需要重新编码，尚未提供。")
                                     color: Theme.mutedText
-                                    font.pixelSize: 11
+                                    font.pixelSize: Theme.fontCaption
                                     lineHeight: 1.35
                                     wrapMode: Text.WordWrap
                                 }

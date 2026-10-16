@@ -17,7 +17,7 @@ ToolTip {
     contentItem: Text {
         text: control.text
         color: Theme.primaryText
-        font.pixelSize: 12
+        font.pixelSize: Theme.fontSecondary
         wrapMode: Text.Wrap
     }
 

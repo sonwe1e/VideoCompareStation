@@ -172,7 +172,7 @@ Rectangle {
 
             Behavior on color {
                 ColorAnimation {
-                    duration: 100
+                    duration: Theme.animationFast
                 }
             }
 
@@ -213,14 +213,14 @@ Rectangle {
             y: darkCheckBox.height / 2 - height / 2
             implicitWidth: 16
             implicitHeight: 16
-            radius: 4
+            radius: Theme.radiusMicro
             color: darkCheckBox.checked ? Theme.accent : Theme.raisedPanel
             border.color: darkCheckBox.checked ? Theme.accent : (darkCheckBox.hovered ? Theme.accent : Theme.menuBorder)
             border.width: 1
 
             Behavior on color {
                 ColorAnimation {
-                    duration: 100
+                    duration: Theme.animationFast
                 }
             }
 
@@ -383,7 +383,7 @@ Rectangle {
                                 Label {
                                     text: qsTr("对比对时间与帧号")
                                     color: control.mutedTextColor
-                                    font.pixelSize: 11
+                                    font.pixelSize: Theme.fontCaption
                                     font.weight: Font.DemiBold
                                 }
 
@@ -392,7 +392,7 @@ Rectangle {
                                     Label {
                                         text: qsTr("源 %1（基准）").arg(String.fromCharCode(65 + activePairTimeBlock.pSlot))
                                         color: Theme.sourceColor(activePairTimeBlock.pSlot)
-                                        font.pixelSize: 11
+                                        font.pixelSize: Theme.fontCaption
                                         font.weight: Font.DemiBold
                                     }
                                     Item {
@@ -401,8 +401,8 @@ Rectangle {
                                     Label {
                                         text: qsTr("第 %1 帧 (%2 ms)").arg(activePairTimeBlock.pFrame + 1).arg(activePairTimeBlock.pPts.toFixed(2))
                                         color: control.primaryTextColor
-                                        font.pixelSize: 11
-                                        font.family: "Consolas"
+                                        font.pixelSize: Theme.fontCaption
+                                        font.family: Theme.fontFamilyMono
                                     }
                                 }
 
@@ -411,7 +411,7 @@ Rectangle {
                                     Label {
                                         text: qsTr("源 %1（对比）").arg(String.fromCharCode(65 + activePairTimeBlock.sSlot))
                                         color: Theme.sourceColor(activePairTimeBlock.sSlot)
-                                        font.pixelSize: 11
+                                        font.pixelSize: Theme.fontCaption
                                         font.weight: Font.DemiBold
                                     }
                                     Item {
@@ -420,8 +420,8 @@ Rectangle {
                                     Label {
                                         text: qsTr("第 %1 帧 (%2 ms)").arg(activePairTimeBlock.sFrame + 1).arg(activePairTimeBlock.sPts.toFixed(2))
                                         color: control.primaryTextColor
-                                        font.pixelSize: 11
-                                        font.family: "Consolas"
+                                        font.pixelSize: Theme.fontCaption
+                                        font.family: Theme.fontFamilyMono
                                     }
                                 }
 
@@ -431,7 +431,7 @@ Rectangle {
                                     Label {
                                         text: qsTr("时间偏差 Δ")
                                         color: control.mutedTextColor
-                                        font.pixelSize: 11
+                                        font.pixelSize: Theme.fontCaption
                                     }
                                     Item {
                                         Layout.fillWidth: true
@@ -439,8 +439,8 @@ Rectangle {
                                     Label {
                                         text: qsTr("%1 ms").arg((activePairTimeBlock.delta >= 0 ? "+" : "") + activePairTimeBlock.delta.toFixed(2))
                                         color: Math.abs(activePairTimeBlock.delta) > 1.0 ? Theme.warning : control.mutedTextColor
-                                        font.pixelSize: 11
-                                        font.family: "Consolas"
+                                        font.pixelSize: Theme.fontCaption
+                                        font.family: Theme.fontFamilyMono
                                     }
                                 }
                             }
@@ -467,7 +467,7 @@ Rectangle {
                                 Label {
                                     text: qsTr("⚠️ 无法精确对应原因")
                                     color: Theme.warning
-                                    font.pixelSize: 11
+                                    font.pixelSize: Theme.fontCaption
                                     font.weight: Font.DemiBold
                                 }
 
@@ -475,7 +475,7 @@ Rectangle {
                                     width: parent.width
                                     text: control.controller ? control.controller.currentInexactReason : ""
                                     color: Theme.warningText
-                                    font.pixelSize: 11
+                                    font.pixelSize: Theme.fontCaption
                                     wrapMode: Text.Wrap
                                 }
                             }
@@ -502,7 +502,7 @@ Rectangle {
                             visible: pairCombo.visible && control.differenceEdges.length > 0 && Boolean(control.differenceEdges[pairCombo.currentIndex] && control.differenceEdges[pairCombo.currentIndex].isCandidateOnlyDifference)
                             text: qsTr("ℹ️ 候选差异，不代表对参考的质量优劣")
                             color: Theme.accentText
-                            font.pixelSize: 11
+                            font.pixelSize: Theme.fontCaption
                             wrapMode: Text.WordWrap
                             width: parent.width
                         }
@@ -570,6 +570,7 @@ Rectangle {
                         ReviewOffsetSpinBox {
                             id: thresholdSpinBox
 
+                            objectName: "differenceThresholdSpinBox"
                             visible: control.differenceMode && control.differenceThresholdEnabled
                             width: parent.width
                             from: 0
@@ -624,7 +625,7 @@ Rectangle {
                                 Label {
                                     text: qsTr("当前帧指标 · %1").arg(control.metrics ? control.metrics.metricId : "")
                                     color: Theme.accent
-                                    font.pixelSize: 11
+                                    font.pixelSize: Theme.fontCaption
                                     font.weight: Font.DemiBold
                                 }
 
@@ -633,7 +634,7 @@ Rectangle {
                                     width: metricsColumn.width
                                     text: qsTr("解码转换后的全帧 RGBA8 RGB 值（忽略 Alpha），非原始码值；10 位输入也按 8 位统计。ROI、视图缩放、显示旋转／重采样及显示增益不改变统计，不等同当前屏幕差异。")
                                     color: control.mutedTextColor
-                                    font.pixelSize: 11
+                                    font.pixelSize: Theme.fontCaption
                                     wrapMode: Text.Wrap
                                 }
 
@@ -652,15 +653,15 @@ Rectangle {
                                             Layout.fillWidth: true
                                             text: metricsRow.modelData[0]
                                             color: control.mutedTextColor
-                                            font.pixelSize: 11
+                                            font.pixelSize: Theme.fontCaption
                                             elide: Text.ElideRight
                                         }
 
                                         Label {
                                             text: metricsRow.modelData[1]
                                             color: control.primaryTextColor
-                                            font.pixelSize: 11
-                                            font.family: "Consolas"
+                                            font.pixelSize: Theme.fontCaption
+                                            font.family: Theme.fontFamilyMono
                                         }
                                     }
                                 }
@@ -932,7 +933,7 @@ Rectangle {
                                         objectName: "timingLiveBadge"
                                         implicitWidth: liveText.implicitWidth + 10
                                         implicitHeight: 18
-                                        radius: 4
+                                        radius: Theme.radiusMicro
                                         color: control.timingDiagnostics && control.timingDiagnostics.hasActivePlayback ? Theme.successPanel : Theme.control
                                         border.width: 1
                                         border.color: control.timingDiagnostics && control.timingDiagnostics.hasActivePlayback ? Theme.successBorder : Theme.controlBorder
@@ -955,7 +956,7 @@ Rectangle {
                                     visible: Boolean(control.timingDiagnostics && control.timingDiagnostics.isIndirectDisplayWarning)
                                     width: parent.width
                                     height: indirectWarningCol.implicitHeight + 12
-                                    radius: 4
+                                    radius: Theme.radiusMicro
                                     color: Theme.warningPanel
                                     border.width: 1
                                     border.color: Theme.warningBorder
@@ -970,7 +971,7 @@ Rectangle {
                                         Text {
                                             text: qsTr("⚠️ 间接显示驱动环境")
                                             color: Theme.warningText
-                                            font.pixelSize: 11
+                                            font.pixelSize: Theme.fontCaption
                                             font.bold: true
                                         }
 
@@ -991,7 +992,7 @@ Rectangle {
                                     Text {
                                         text: qsTr("丢帧统计 (跳帧集)")
                                         color: control.mutedTextColor
-                                        font.pixelSize: 11
+                                        font.pixelSize: Theme.fontCaption
                                         Layout.fillWidth: true
                                     }
 
@@ -999,7 +1000,7 @@ Rectangle {
                                         objectName: "timingDroppedFramesBadge"
                                         implicitWidth: dropCountText.implicitWidth + 12
                                         implicitHeight: 18
-                                        radius: 4
+                                        radius: Theme.radiusMicro
                                         color: (control.timingDiagnostics && control.timingDiagnostics.skippedFrameSetCount > 0) ? Theme.warningPanel : Theme.successPanel
                                         border.width: 1
                                         border.color: (control.timingDiagnostics && control.timingDiagnostics.skippedFrameSetCount > 0) ? Theme.warningBorder : Theme.successBorder
@@ -1025,37 +1026,37 @@ Rectangle {
                                     Text {
                                         text: qsTr("解码耗时 P95 / Max:")
                                         color: control.mutedTextColor
-                                        font.pixelSize: 11
+                                        font.pixelSize: Theme.fontCaption
                                     }
                                     Text {
                                         Layout.alignment: Qt.AlignRight
                                         text: control.timingDiagnostics ? qsTr("%1 / %2 ms").arg(control.timingDiagnostics.decodeLatencyP95Ms.toFixed(1)).arg(control.timingDiagnostics.decodeLatencyMaxMs.toFixed(1)) : "—"
                                         color: control.primaryTextColor
-                                        font.pixelSize: 11
+                                        font.pixelSize: Theme.fontCaption
                                     }
 
                                     Text {
                                         text: qsTr("渲染调度 P95 / Max:")
                                         color: control.mutedTextColor
-                                        font.pixelSize: 11
+                                        font.pixelSize: Theme.fontCaption
                                     }
                                     Text {
                                         Layout.alignment: Qt.AlignRight
                                         text: control.timingDiagnostics ? qsTr("%1 / %2 ms").arg(control.timingDiagnostics.renderScheduleP95Ms.toFixed(1)).arg(control.timingDiagnostics.renderScheduleMaxMs.toFixed(1)) : "—"
                                         color: control.primaryTextColor
-                                        font.pixelSize: 11
+                                        font.pixelSize: Theme.fontCaption
                                     }
 
                                     Text {
                                         text: qsTr("绘制提交至确认:")
                                         color: control.mutedTextColor
-                                        font.pixelSize: 11
+                                        font.pixelSize: Theme.fontCaption
                                     }
                                     Text {
                                         Layout.alignment: Qt.AlignRight
                                         text: control.timingDiagnostics ? qsTr("%1 / %2 ms").arg(control.timingDiagnostics.drawToAckP95Ms.toFixed(1)).arg(control.timingDiagnostics.drawToAckMaxMs.toFixed(1)) : "—"
                                         color: control.primaryTextColor
-                                        font.pixelSize: 11
+                                        font.pixelSize: Theme.fontCaption
                                     }
                                 }
 
@@ -1066,7 +1067,7 @@ Rectangle {
                                     Text {
                                         text: qsTr("呈现状态 / 驱动:")
                                         color: control.mutedTextColor
-                                        font.pixelSize: 11
+                                        font.pixelSize: Theme.fontCaption
                                         Layout.fillWidth: true
                                     }
 
@@ -1079,7 +1080,7 @@ Rectangle {
                                         objectName: "presentationStatusValue"
                                         text: control.timingDiagnostics ? (control.messageCatalog ? control.messageCatalog.presentationStatusText(control.timingDiagnostics.systemPresentationStatus) : qsTr("%1 (%2)").arg(control.timingDiagnostics.systemPresentationStatus).arg(control.timingDiagnostics.driverKind)) : "—"
                                         color: control.mutedTextColor
-                                        font.pixelSize: 11
+                                        font.pixelSize: Theme.fontCaption
                                         elide: Text.ElideRight
 
                                         HoverHandler {
@@ -1144,7 +1145,7 @@ Rectangle {
                                         Rectangle {
                                             implicitWidth: 18
                                             implicitHeight: 18
-                                            radius: 4
+                                            radius: Theme.radiusMicro
                                             color: Theme.sourceBackground(Theme.slotForLabel(mediaCard.modelData.label))
                                             border.width: 1
                                             border.color: Theme.sourceBorder(Theme.slotForLabel(mediaCard.modelData.label))
@@ -1152,7 +1153,7 @@ Rectangle {
                                                 anchors.centerIn: parent
                                                 text: String(mediaCard.modelData.label || "")
                                                 color: Theme.sourceColor(Theme.slotForLabel(mediaCard.modelData.label))
-                                                font.pixelSize: 11
+                                                font.pixelSize: Theme.fontCaption
                                                 font.bold: true
                                             }
                                         }
@@ -1174,7 +1175,7 @@ Rectangle {
                                         readonly property string decoderFallbackSuffix: mediaCard.modelData.decodeFallbackReason ? qsTr(" (%1)").arg(String(mediaCard.modelData.decodeFallbackReason)) : ""
                                         text: qsTr("%1 × %2 · %3 · %4 帧\n%5 · %6 · %7 位\n%8 · %9 · %10\n解码：%11%12 · 角色：%13").arg(Number(mediaCard.modelData.width)).arg(Number(mediaCard.modelData.height)).arg(String(mediaCard.modelData.frameRate)).arg(Number(mediaCard.modelData.frameCount)).arg(String(mediaCard.modelData.timingMode)).arg(String(mediaCard.modelData.codec)).arg(Number(mediaCard.modelData.bitDepth)).arg(String(mediaCard.modelData.pixelFormat)).arg(String(mediaCard.modelData.colorMatrix)).arg(String(mediaCard.modelData.colorRange)).arg(String(mediaCard.modelData.decodeBackend)).arg(decoderFallbackSuffix).arg(String(mediaCard.modelData.role))
                                         color: control.mutedTextColor
-                                        font.pixelSize: 11
+                                        font.pixelSize: Theme.fontCaption
                                     }
                                 }
                             }

@@ -40,6 +40,10 @@ class ReviewController final : public QObject {
     Q_PROPERTY(int sourceCount READ sourceCount NOTIFY stateChanged)
     Q_PROPERTY(int canonicalSourceIndex READ canonicalSourceIndex NOTIFY stateChanged)
     Q_PROPERTY(int referenceSourceIndex READ referenceSourceIndex NOTIFY stateChanged)
+    // True only when the validated comparison identifies a reference (GT) source. Without it,
+    // referenceSourceIndex carries the canonical-source fallback, so GT-anchored actions (the
+    // candidate switch, the reference peek) must gate on this flag, not on the index alone.
+    Q_PROPERTY(bool hasExplicitReference READ hasExplicitReference NOTIFY stateChanged)
     Q_PROPERTY(
         QString playbackContinuityPolicyName READ playbackContinuityPolicyName NOTIFY stateChanged)
     // The policy the user selected (0 ReviewEveryFrame, 1 RealTime, 2 Contextual). The
@@ -78,6 +82,8 @@ class ReviewController final : public QObject {
     Q_PROPERTY(qint64 playbackRangeOut READ playbackRangeOut NOTIFY stateChanged)
     Q_PROPERTY(bool playbackRangeLoop READ playbackRangeLoop NOTIFY stateChanged)
     Q_PROPERTY(bool playbackRangeLoopActive READ playbackRangeLoopActive NOTIFY stateChanged)
+    // E3: back-and-forth range walk; meaningful only while playbackRangeLoop holds.
+    Q_PROPERTY(bool playbackRangePingPong READ playbackRangePingPong NOTIFY stateChanged)
     Q_PROPERTY(bool graphicsReady READ graphicsReady NOTIFY stateChanged)
     Q_PROPERTY(qint64 currentFrame READ currentFrame NOTIFY frameStateChanged)
     Q_PROPERTY(qulonglong totalFrames READ totalFrames NOTIFY stateChanged)
@@ -187,6 +193,7 @@ public:
     [[nodiscard]] int sourceCount() const noexcept;
     [[nodiscard]] int canonicalSourceIndex() const noexcept;
     [[nodiscard]] int referenceSourceIndex() const noexcept;
+    [[nodiscard]] bool hasExplicitReference() const noexcept;
     [[nodiscard]] QString playbackContinuityPolicyName() const;
     [[nodiscard]] int playbackContinuityPolicy() const noexcept;
     [[nodiscard]] int playbackContinuityPolicyEffective() const noexcept;
@@ -211,6 +218,7 @@ public:
     [[nodiscard]] qint64 playbackRangeOut() const noexcept;
     [[nodiscard]] bool playbackRangeLoop() const noexcept;
     [[nodiscard]] bool playbackRangeLoopActive() const noexcept;
+    [[nodiscard]] bool playbackRangePingPong() const noexcept;
     [[nodiscard]] bool graphicsReady() const noexcept;
     // Zero-based canonical frame ID. -1 means that no frame has been presented.
     [[nodiscard]] qint64 currentFrame() const noexcept;
@@ -330,6 +338,9 @@ public:
     // Kernel playback-range authority. in/out < 0 clears the range. loop only applies with a
     // valid closed interval.
     Q_INVOKABLE bool setPlaybackRange(qint64 inFrame, qint64 outFrame, bool loop);
+    // E3: toggles the back-and-forth walk on the current loop range. Requires an active
+    // loop range; submits loop=true with the flipped ping-pong intent.
+    Q_INVOKABLE bool togglePlaybackRangePingPong();
     Q_INVOKABLE bool playRange(qint64 inFrame, qint64 outFrame);
     Q_INVOKABLE bool stopRangeLoop();
     // C-07: domain::PlaybackContinuityPolicy code (0 ReviewEveryFrame, 1 RealTime, 2 Contextual).

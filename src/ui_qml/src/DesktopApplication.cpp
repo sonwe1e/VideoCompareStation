@@ -2,11 +2,13 @@
 
 #include "dvs/application/MediaPaths.h"
 #include "dvs/ui/ClipExportController.h"
+#include "dvs/ui/ColorClipboardController.h"
 #include "dvs/ui/ComparisonExportController.h"
 #include "dvs/ui/ComparisonSurface.h"
 #include "dvs/ui/DiagnosticsProbe.h"
 #include "dvs/ui/EditImageProvider.h"
 #include "dvs/ui/FileAssociationController.h"
+#include "dvs/ui/HoldKeyHandler.h"
 #include "dvs/ui/ImageEditController.h"
 #include "dvs/ui/ImageFolderPairModel.h"
 #include "dvs/ui/ImageReviewController.h"
@@ -133,6 +135,7 @@ void registerQmlTypes() {
     std::call_once(registered, [] {
         static_cast<void>(qmlRegisterType<ComparisonSurface>("Dvs.Ui", 1, 0, "ComparisonSurface"));
         static_cast<void>(qmlRegisterType<JogKeyHandler>("Dvs.Ui", 1, 0, "JogKeyHandler"));
+        static_cast<void>(qmlRegisterType<HoldKeyHandler>("Dvs.Ui", 1, 0, "HoldKeyHandler"));
     });
 }
 
@@ -330,6 +333,12 @@ public:
         comparisonExport_ = std::make_unique<ComparisonExportController>();
         engine->rootContext()->setContextProperty(QStringLiteral("comparisonExport"),
                                                   comparisonExport_.get());
+        // Pixel-probe colour copy. Always registered: the workspace degrades to a disabled
+        // button when the property is absent, so isolated harnesses that do not set it keep
+        // working, while the real window gets a verified Qt clipboard write.
+        colorClipboard_ = std::make_unique<ColorClipboardController>();
+        engine->rootContext()->setContextProperty(QStringLiteral("colorClipboard"),
+                                                  colorClipboard_.get());
         // Range clip export: only offered when the composition root injected an exporter
         // adapter (ui_qml never links media_ffmpeg). Main.qml guards every read on the
         // context property being set, so isolated harnesses can omit it.
@@ -739,8 +748,38 @@ public:
                 static_cast<void>(transport->setProperty("revealActive", true));
             }
         }
-        return control != nullptr && control->property("enabled").toBool() &&
-               QMetaObject::invokeMethod(control, "click", Qt::DirectConnection);
+        if (control == nullptr || !control->property("enabled").toBool()) {
+            return false;
+        }
+        if (control->metaObject()->indexOfMethod("click()") >= 0) {
+            return QMetaObject::invokeMethod(control, "click", Qt::DirectConnection);
+        }
+        // Custom QML chips expose pointer handlers rather than AbstractButton::click().
+        // Drive their real hit path, including effective visibility and window bounds.
+        auto* const item = qobject_cast<QQuickItem*>(control);
+        if (item == nullptr || !item->isVisible() || item->width() <= 0 || item->height() <= 0) {
+            return false;
+        }
+        const QPointF local = item->mapToScene({item->width() / 2, item->height() / 2});
+        if (local.x() < 0 || local.y() < 0 || local.x() >= window_->width() ||
+            local.y() >= window_->height()) {
+            return false;
+        }
+        const QPointF global = window_->mapToGlobal(local.toPoint());
+        QMouseEvent press{QEvent::MouseButtonPress,
+                          local,
+                          global,
+                          Qt::LeftButton,
+                          Qt::LeftButton,
+                          Qt::NoModifier};
+        QMouseEvent release{QEvent::MouseButtonRelease,
+                            local,
+                            global,
+                            Qt::LeftButton,
+                            Qt::NoButton,
+                            Qt::NoModifier};
+        const bool pressed = QCoreApplication::sendEvent(window_, &press);
+        return QCoreApplication::sendEvent(window_, &release) && pressed;
     }
 
     [[nodiscard]] bool focusControlForAutomation(const std::string_view objectName) noexcept {
@@ -802,6 +841,77 @@ public:
         return true;
     }
 
+    [[nodiscard]] bool sendMouseMoveForAutomation(const double sceneX,
+                                                  const double sceneY) noexcept {
+        if (window_ == nullptr || !std::isfinite(sceneX) || !std::isfinite(sceneY) ||
+            sceneX < 0.0 || sceneY < 0.0 || sceneX > window_->width() ||
+            sceneY > window_->height()) {
+            return false;
+        }
+        const QPointF localPosition{sceneX, sceneY};
+        const QPointF globalPosition = window_->mapToGlobal(localPosition.toPoint());
+        QMouseEvent move{QEvent::MouseMove,
+                         localPosition,
+                         globalPosition,
+                         Qt::NoButton,
+                         Qt::NoButton,
+                         Qt::NoModifier};
+        return QCoreApplication::sendEvent(window_, &move);
+    }
+
+    [[nodiscard]] std::optional<QPointF>
+    objectScenePointForAutomation(const std::string_view objectName,
+                                  const double fractionalX,
+                                  const double fractionalY) const {
+        if (window_ == nullptr) {
+            return std::nullopt;
+        }
+        auto* const item = window_->findChild<QQuickItem*>(
+            QString::fromUtf8(objectName.data(), static_cast<qsizetype>(objectName.size())));
+        if (item == nullptr || item->width() <= 0.0 || item->height() <= 0.0) {
+            return std::nullopt;
+        }
+        return item->mapToScene(QPointF{item->width() * fractionalX, item->height() * fractionalY});
+    }
+
+    [[nodiscard]] std::optional<std::string>
+    objectStringMethodForAutomation(const std::string_view objectName,
+                                    const std::string_view methodName,
+                                    const int argument) const {
+        if (window_ == nullptr || objectName.empty() || methodName.empty()) {
+            return std::nullopt;
+        }
+        QObject* const object = window_->findChild<QObject*>(
+            QString::fromUtf8(objectName.data(), static_cast<qsizetype>(objectName.size())));
+        if (object == nullptr) {
+            return std::nullopt;
+        }
+        QVariant result;
+        // The const char* invokeMethod overload (the one the contract suite uses for the same
+        // QML function) resolves QML-defined methods; the QString overload does not accept the
+        // return/argument macro combination.
+        const std::string method{methodName};
+        const bool invoked = QMetaObject::invokeMethod(object,
+                                                       method.c_str(),
+                                                       Q_RETURN_ARG(QVariant, result),
+                                                       Q_ARG(QVariant, QVariant{argument}));
+        if (!invoked || !result.isValid()) {
+            return std::nullopt;
+        }
+        return std::optional<std::string>{result.toString().toStdString()};
+    }
+
+    [[nodiscard]] std::optional<QImage> captureWindowForAutomation() const {
+        if (window_ == nullptr || window_->width() <= 0 || window_->height() <= 0) {
+            return std::nullopt;
+        }
+        QImage image = window_->grabWindow();
+        if (image.isNull()) {
+            return std::nullopt;
+        }
+        return image;
+    }
+
     [[nodiscard]] std::optional<std::string>
     objectStringPropertyForAutomation(const std::string_view objectName,
                                       const std::string_view propertyName) const {
@@ -834,6 +944,58 @@ public:
         bool converted = false;
         const int value = object->property(property.c_str()).toInt(&converted);
         return converted ? std::optional<int>{value} : std::nullopt;
+    }
+
+    // Generic property read for structured automation facts (e.g. the viewport's
+    // pixelReadoutResults map). An unreachable object or property yields an invalid QVariant,
+    // which callers must surface as "unknown" rather than a defaulted value.
+    [[nodiscard]] QVariant
+    objectVariantPropertyForAutomation(const std::string_view objectName,
+                                       const std::string_view propertyName) const {
+        if (window_ == nullptr || objectName.empty() || propertyName.empty()) {
+            return {};
+        }
+        const QObject* const object = window_->findChild<QObject*>(
+            QString::fromUtf8(objectName.data(), static_cast<qsizetype>(objectName.size())));
+        if (object == nullptr) {
+            return {};
+        }
+        const std::string property{propertyName};
+        return object->property(property.c_str());
+    }
+
+    // Walks the item's parent chain and records the properties that decide whether the item
+    // can actually appear: per-ancestor visibility, opacity, geometry, z and clip, plus the
+    // mapped scene position. Read-only diagnostics for the forensic entry points.
+    [[nodiscard]] QVariantList
+    itemAncestorReportForAutomation(const std::string_view objectName) const {
+        QVariantList report;
+        if (window_ == nullptr || objectName.empty()) {
+            return report;
+        }
+        auto* const item = window_->findChild<QQuickItem*>(
+            QString::fromUtf8(objectName.data(), static_cast<qsizetype>(objectName.size())));
+        if (item == nullptr) {
+            return report;
+        }
+        for (const QQuickItem* cursor = item; cursor != nullptr; cursor = cursor->parentItem()) {
+            QVariantMap entry;
+            entry.insert(QStringLiteral("objectName"), cursor->objectName());
+            entry.insert(QStringLiteral("className"), cursor->metaObject()->className());
+            entry.insert(QStringLiteral("visible"), cursor->isVisible());
+            entry.insert(QStringLiteral("opacity"), cursor->opacity());
+            entry.insert(QStringLiteral("width"), cursor->width());
+            entry.insert(QStringLiteral("height"), cursor->height());
+            entry.insert(QStringLiteral("x"), cursor->x());
+            entry.insert(QStringLiteral("y"), cursor->y());
+            entry.insert(QStringLiteral("z"), cursor->z());
+            entry.insert(QStringLiteral("clip"), cursor->clip());
+            const QPointF sceneTopLeft = cursor->mapToScene(QPointF{});
+            entry.insert(QStringLiteral("sceneX"), sceneTopLeft.x());
+            entry.insert(QStringLiteral("sceneY"), sceneTopLeft.y());
+            report.append(entry);
+        }
+        return report;
     }
 
     [[nodiscard]] std::optional<QImage>
@@ -875,8 +1037,10 @@ public:
         const QString target =
             QString::fromUtf8(objectName.data(), static_cast<qsizetype>(objectName.size()));
         if (QObject* const anchor = sourceMenuAnchorForAutomation(target); anchor != nullptr) {
-            return anchor->property("enabled").toBool() &&
-                   QMetaObject::invokeMethod(anchor, "click", Qt::DirectConnection);
+            if (!anchor->property("visible").toBool() || anchor->property("pending").toBool() ||
+                anchor->property("resolvedSourceIdentity").toString().isEmpty()) {
+                return false;
+            }
         }
         QObject* const menu = menuForAutomation(target);
         if (menu == nullptr || !menu->property("enabled").toBool()) {
@@ -1017,7 +1181,7 @@ private:
             return nullptr;
         }
         const QString anchorName =
-            QStringLiteral("sourceOverflowButton-") + target.sliced(kSourceMenuPrefix.size());
+            QStringLiteral("sourceChip-") + target.sliced(kSourceMenuPrefix.size());
         if (QObject* const anchor = window_->findChild<QObject*>(anchorName); anchor != nullptr) {
             return anchor;
         }
@@ -1059,6 +1223,7 @@ private:
     application::IInterpolationProtocolRepository* interpolationProtocolRepository_ = nullptr;
     std::unique_ptr<InterpolationProtocolController> interpolationProtocol_;
     std::unique_ptr<ComparisonExportController> comparisonExport_;
+    std::unique_ptr<ColorClipboardController> colorClipboard_;
     std::shared_ptr<application::IClipExporter> clipExporter_;
     std::unique_ptr<ClipExportController> clipExport_;
     std::shared_ptr<application::ISampleExporter> sampleExporter_;
@@ -1171,6 +1336,27 @@ bool DesktopApplication::sendKeyForAutomation(const int key, const int modifiers
     return impl_->sendKeyForAutomation(key, modifiers);
 }
 
+bool DesktopApplication::sendMouseMoveForAutomation(const double sceneX,
+                                                    const double sceneY) noexcept {
+    return impl_->sendMouseMoveForAutomation(sceneX, sceneY);
+}
+
+std::optional<QImage> DesktopApplication::captureWindowForAutomation() const {
+    return impl_->captureWindowForAutomation();
+}
+
+std::optional<QPointF> DesktopApplication::objectScenePointForAutomation(
+    const std::string_view objectName, const double fractionalX, const double fractionalY) const {
+    return impl_->objectScenePointForAutomation(objectName, fractionalX, fractionalY);
+}
+
+std::optional<std::string>
+DesktopApplication::objectStringMethodForAutomation(const std::string_view objectName,
+                                                    const std::string_view methodName,
+                                                    const int argument) const {
+    return impl_->objectStringMethodForAutomation(objectName, methodName, argument);
+}
+
 std::optional<std::string>
 DesktopApplication::objectStringPropertyForAutomation(const std::string_view objectName,
                                                       const std::string_view propertyName) const {
@@ -1181,6 +1367,17 @@ std::optional<int>
 DesktopApplication::objectIntPropertyForAutomation(const std::string_view objectName,
                                                    const std::string_view propertyName) const {
     return impl_->objectIntPropertyForAutomation(objectName, propertyName);
+}
+
+QVariant
+DesktopApplication::objectVariantPropertyForAutomation(const std::string_view objectName,
+                                                       const std::string_view propertyName) const {
+    return impl_->objectVariantPropertyForAutomation(objectName, propertyName);
+}
+
+QVariantList
+DesktopApplication::itemAncestorReportForAutomation(const std::string_view objectName) const {
+    return impl_->itemAncestorReportForAutomation(objectName);
 }
 
 std::optional<QImage>

@@ -46,6 +46,23 @@ var accentText = "#64d2ff"
 var accentFill = "#0964d4"
 var accentHover = "#0b6bdc"
 var accentPressed = "#0054b8"
+// Keyboard focus contract (one rule per kind of item, so rings cannot drift apart again -
+// backlog U12). Control subclasses (buttons, combos, spin boxes) drive the ring from
+// `visualFocus`: the 2 px `focus` ring shows for keyboard navigation only and a mouse click
+// leaves no mark; ReviewActionButton and VcsToolButton pin this in tst_review_action_button.
+// A custom Item that is not a Control has no `visualFocus` at all - binding it is silently
+// never true, and qmllint does not flag the missing property on a self-referencing id (U10).
+// Prefer turning such an item into a suitable Control so the rule above applies. A genuinely
+// custom focus mechanism is not prescribed here: whatever drives it must be proven by real
+// tests (Tab and Shift+Tab arrival from a neighbour, mouse-click entry, focus loss and
+// return), and a bare `activeFocus` ring is not that mechanism - a mouse forceActiveFocus
+// lights it too.
+// Editable Controls with an internal editor (e.g. an editable SpinBox) forward focus to the
+// contentItem; the Control itself then never reports activeFocus/visualFocus while the editor
+// holds it (verified against Qt 6.11 QQuickAbstractSpinBox::handleFocusInEvent - Control is
+// not a FocusScope). Such a ring must derive from `contentItem.activeFocus` plus the Control's
+// `focusReason` naming a keyboard reason; ReviewOffsetSpinBox's keyboardFocusRing is the
+// pattern and tst_review_offset_spin_box pins it.
 var focus = "#64d2ff"
 var strongFocus = "#d1e7ff"
 
@@ -132,7 +149,10 @@ var keycap = "#2a2a2c"
 var keycapBorder = "#454548"
 
 // Shape and interaction tokens. Larger, more uniform radii follow Apple's continuous-corner
-// language: small controls round at 8, cards float at 18.
+// language: small controls round at 8, cards float at 18. The micro and subtle steps collect
+// the 4 and 6 px corners that chips, badges and inline wells already used.
+var radiusMicro = 4
+var radiusSubtle = 6
 var radiusSmall = 8
 var radiusMedium = 10
 var radiusLarge = 12
@@ -151,11 +171,30 @@ var animationEasingSpring = "easeOutBack"
 // fontMono sizes the compact monospaced numeric readouts (timecode, frame counters).
 // fontMicro is decorative only - it must never carry a key action or a must-read conclusion;
 // anything that states a result or invites a click uses fontSecondary or larger.
+// fontCaption (11) collects the dense metadata size that 78 call sites already used - it is
+// the smallest size that may carry a readable, but non-critical, label.
 var fontBody = 14
 var fontSecondary = 12
 var fontGroupTitle = 16
 var fontMicro = 10
 var fontMono = 13
+var fontCaption = 11
+
+// Font families. QML's `font` value type exposes a single `family` string only (Qt 6.11 has
+// no `font.families`; tst_vcs_theme records the probe), so a CSS-style fallback stack cannot
+// be expressed. Characters the named family lacks are covered by Qt's own font-merging
+// fallback (contextFontMerging exists since 6.8); which substitute font Qt picks is not
+// promised here. Binding either token forces the family - text that should keep the platform
+// default simply leaves font.family unset.
+var fontFamilyUi = "Segoe UI Variable Text"
+var fontFamilyMono = "Cascadia Mono"
+
+// Tabular numerals for numeric mixed text that ticks in place (zoom badges, metric readouts)
+// while staying in the UI font with its Chinese fallback. The monospaced readouts keep
+// Cascadia Mono - coordinates and tables need real column alignment, not just even digits.
+// font.features ships since Qt 6.6; the rendered effect depends on the font actually
+// carrying the feature, which is why binding sites must not promise a platform guarantee.
+var fontFeaturesNumeric = { "tnum": 1 }
 
 // Line heights for wrapped body and compact readout text.
 var lineHeightBody = 1.35

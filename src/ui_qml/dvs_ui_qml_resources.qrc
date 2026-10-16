@@ -27,6 +27,7 @@
         <file alias="VcsScrollBar.qml">qml/VcsScrollBar.qml</file>
         <file alias="TransportBar.qml">qml/TransportBar.qml</file>
         <file alias="WipeHandle.qml">qml/WipeHandle.qml</file>
+        <file alias="PixelGrid.qml">qml/PixelGrid.qml</file>
         <file alias="EmptyReviewView.qml">qml/EmptyReviewView.qml</file>
         <file alias="ImageWorkspace.qml">qml/ImageWorkspace.qml</file>
         <file alias="ImageEditDialogs.qml">qml/ImageEditDialogs.qml</file>

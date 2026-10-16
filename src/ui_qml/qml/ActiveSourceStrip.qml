@@ -106,6 +106,20 @@ Rectangle {
         return fallback;
     }
 
+    // Right-click entry point for one chip's source menu. The position is the chip-local
+    // press point, so the menu opens where the user asked for it. A chip that is
+    // mid-replacement/reopen has no stable identity yet, and the overflow button is
+    // disabled in that state for exactly the same reason, so the right click is refused
+    // the same way instead of opening a menu whose actions would all be inert.
+    function openSourceMenu(chip, position) {
+        if (!control.visible || !chip || chip.pending || chip.resolvedSourceIdentity.length === 0)
+            return false;
+        // The menu belongs to the chip that was right-clicked, so the lookup goes through
+        // the chip itself: `sourceMenu` is a per-delegate id and is not in this scope.
+        chip.sourceMenuControl.popup(chips, chip.mapToItem(chips, position.x, position.y));
+        return true;
+    }
+
     // The trailing buttons follow the chips; each one starts where the previous ended.
     readonly property real trailingButtonX: {
         let cursor = 12;
@@ -146,7 +160,7 @@ Rectangle {
 
     Behavior on opacity {
         NumberAnimation {
-            duration: 160
+            duration: Theme.animationBase
         }
     }
 
@@ -198,6 +212,13 @@ Rectangle {
                 // only mirrors the shell state - the chip never owns focus.
                 readonly property bool isCanvasFocus: chip.resolvedSourceIdentity.length > 0 && chip.resolvedSourceIdentity === control.canvasFocusIdentity
                 readonly property int displayIndex: control.displayOrder.indexOf(chip.resolvedSourceIdentity)
+                // The chip's own source menu, exposed so the strip-level right-click entry
+                // can pop the menu of the chip that was actually clicked. `sourceMenu` is a
+                // per-delegate id and is not in scope from the strip's own functions.
+                readonly property var sourceMenuControl: sourceMenu
+                readonly property var makeReferenceAction: useAsReferenceItem
+                readonly property var replaceSourceAction: replaceSourceItem
+                readonly property var removeSourceAction: removeSourceItem
                 // The chip's place in the display order, computed as a binding so it follows the
                 // order and the widths ahead of it. A chip the display order does not mention yet
                 // falls to the end rather than sitting on top of another chip.
@@ -270,6 +291,25 @@ Rectangle {
                     }
                 }
 
+                // Right-click on the filename label opens the same source menu the overflow
+                // button uses. The handler is declared with acceptedButtons: Qt.RightButton,
+                // so a right press is invisible to the left-button handler above - it can
+                // never fire the direct look, the management selection or a drag before the
+                // menu appears. The menu itself is the one per-chip instance, so the two
+                // entries cannot drift apart, and every action it carries is addressed by
+                // the chip's frozen source identity (never by its display index or its
+                // filename).
+                TapHandler {
+                    id: chipContextHandler
+
+                    acceptedButtons: Qt.RightButton
+                    gesturePolicy: TapHandler.DragThreshold
+
+                    onTapped: function (eventPoint, button) {
+                        control.openSourceMenu(chip, eventPoint.position);
+                    }
+                }
+
                 function requestReference() {
                     if (chip.pending || chip.isReference || chip.resolvedSourceIdentity.length === 0)
                         return;
@@ -325,7 +365,7 @@ Rectangle {
                         implicitWidth: 18
                         implicitHeight: 18
                         Layout.alignment: Qt.AlignVCenter
-                        radius: 4
+                        radius: Theme.radiusMicro
                         color: chip.isReference ? chip.sourceAccent : Theme.fluentHover
 
                         Text {
@@ -482,7 +522,7 @@ Rectangle {
                         visible: chip.changedOnDisk
                         width: 24
                         height: 24
-                        radius: 6
+                        radius: Theme.radiusSubtle
                         color: Theme.warningPanel
                         border.width: 1
                         border.color: Theme.warningBorder
@@ -503,23 +543,6 @@ Rectangle {
                             font.pixelSize: Theme.fontSecondary
                             font.weight: Font.DemiBold
                         }
-                    }
-
-                    VcsToolButton {
-                        id: overflowButton
-
-                        objectName: "sourceOverflowButton-" + chip.sourceId
-                        readonly property var sourceMenuControl: sourceMenu
-                        readonly property var makeReferenceAction: useAsReferenceItem
-                        readonly property var replaceSourceAction: replaceSourceItem
-                        readonly property var removeSourceAction: removeSourceItem
-                        width: 32
-                        height: 32
-                        text: "⋯"
-                        enabled: !chip.pending && chip.resolvedSourceIdentity.length > 0
-                        helpText: chip.pending ? qsTr("正在更新视频…") : qsTr("源操作")
-                        Accessible.name: qsTr("%1 的源操作").arg(chip.filename)
-                        onClicked: sourceMenu.popup(overflowButton, Qt.point(0, overflowButton.height))
                     }
 
                     VcsMenu {
@@ -576,7 +599,12 @@ Rectangle {
                             id: removeSourceItem
 
                             objectName: "removeSourceAction-" + chip.sourceId
-                            text: qsTr("移除视频")
+                            text: qsTr("关闭此视频")
+                            // Quantity protection is the removal command's own: the last
+                            // source of a session cannot be removed through it. The strip is
+                            // hidden at sourceCount <= 1, and closing the final video goes
+                            // through the session-close path (Main.closeCurrentTask), so this
+                            // guard is the boundary and is deliberately not bypassed here.
                             enabled: control.sourceCount > 1
                             onTriggered: chip.requestRemoval()
                         }

@@ -250,6 +250,13 @@ bool IssueLogController::captureVideoIssue(StoredIssue& issue, const QString& no
         // and a missing zoom used to collapse the valid centre range to exactly 0.5, silently
         // rejecting the whole viewport restore for any panned state.
         record.view.zoom = videoSurface_->property("viewScale").toDouble();
+        // E1: wipe state only when this capture is actually in wipe mode; the -1 sentinels
+        // elsewhere mean "no wipe state recorded" (restore keeps the current axis).
+        const QVariant wipeOrientation = videoSurface_->property("wipeOrientation");
+        if (record.view.viewMode == 5 && wipeOrientation.isValid()) {
+            record.view.wipeOrientation = wipeOrientation.toInt();
+            record.view.wipePosition = videoSurface_->property("wipePosition").toDouble();
+        }
     }
     issue.record = std::move(record);
     issue.summary = summarize(issue.record);
@@ -292,6 +299,11 @@ bool IssueLogController::captureImageIssue(StoredIssue& issue, const QString& no
         record.view.panX = imageController_->property("panX").toDouble();
         record.view.panY = imageController_->property("panY").toDouble();
         record.view.resampleAllowed = imageController_->property("resampleAllowed").toBool();
+        // E1: same wipe-only capture rule as the video branch.
+        if (record.view.compareMode == 5) {
+            record.view.wipeOrientation = imageController_->property("wipeOrientation").toInt();
+            record.view.wipePosition = imageController_->property("wipePosition").toDouble();
+        }
         // Committed pair identity only — never a pending candidate.
         record.hasValidPresentation =
             imageController_->property("hasPair").toBool() && !record.leftPath.empty();
@@ -546,6 +558,12 @@ QVariantMap IssueLogController::performRestore(const StoredIssue& issue) {
         result.insert(QStringLiteral("referenceSourceIndex"), issue.record.referenceSourceIndex);
         result.insert(QStringLiteral("viewMode"), issue.record.view.viewMode);
         result.insert(QStringLiteral("differenceEdge"), issue.record.view.differenceEdge);
+        // E1: always present so the QML restore can tell the three states apart - a real
+        // replay (0/1 + ratio), a legacy record without wipe state (-1), and a record whose
+        // stored wipe pair was rejected as invalid on load (-2). Collapsing them would turn
+        // rejected data into a quiet "keep the current split".
+        result.insert(QStringLiteral("wipeOrientation"), issue.record.view.wipeOrientation);
+        result.insert(QStringLiteral("wipePosition"), issue.record.view.wipePosition);
         result.insert(QStringLiteral("roiEnabled"), issue.record.view.roiEnabled);
         result.insert(QStringLiteral("roiLeft"), issue.record.view.roiLeft);
         result.insert(QStringLiteral("roiTop"), issue.record.view.roiTop);

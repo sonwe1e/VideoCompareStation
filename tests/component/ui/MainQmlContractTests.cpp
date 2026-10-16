@@ -9,6 +9,7 @@
 #include "dvs/ui/EditImageProvider.h"
 #include "dvs/ui/FileAssociationController.h"
 #include "dvs/ui/GraphicsBackend.h"
+#include "dvs/ui/HoldKeyHandler.h"
 #include "dvs/ui/ImageEditController.h"
 #include "dvs/ui/ImageFolderPairModel.h"
 #include "dvs/ui/ImageReviewController.h"
@@ -29,6 +30,9 @@
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
@@ -39,6 +43,7 @@
 #include <QJSValue>
 #include <QKeyEvent>
 #include <QList>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QObject>
 #include <QQmlComponent>
@@ -51,6 +56,7 @@
 #include <QQuickWindow>
 #include <QRectF>
 #include <QResource>
+#include <QScreen>
 #include <QStringList>
 #include <QTemporaryDir>
 #include <QThread>
@@ -152,6 +158,21 @@ QQuickWindow* findPopupWindow(const QString& objectName) {
         }
     }
     return nullptr;
+}
+
+// Failure diagnostics for isVisible() assertions: names every ancestor between the item and
+// the window, so a failing expectation reports which container hid the subtree instead of a
+// bare "Actual: false". (QML's `visible` reads the effective visibility - ancestors included -
+// so a single per-node effective flag is all there is to report; that shared source is exactly
+// why an ancestor must not gate its own visibility on a descendant's `visible`.)
+[[nodiscard]] std::string visibleChainText(const QQuickItem* item) {
+    std::string chain;
+    for (const QQuickItem* node = item; node != nullptr; node = node->parentItem()) {
+        chain += "\n    ";
+        chain += node->objectName().isEmpty() ? "<anonymous>" : node->objectName().toStdString();
+        chain += node->isVisible() ? ":visible" : ":HIDDEN";
+    }
+    return chain;
 }
 
 QQuickWindow* menuPopupWindow(QObject* menu) {
@@ -334,6 +355,78 @@ installValidatedVideoSet(const std::shared_ptr<application::SessionSnapshot>& sn
             .id = static_cast<domain::SourceId>(index),
             .role = index == 0U ? domain::ComparisonRole::kReference
                                 : domain::ComparisonRole::kPrediction,
+            .descriptor =
+                domain::MediaDescriptor{
+                    .normalizedPath = paths[index],
+                    .extent = domain::MediaExtent{.width = 1'920U, .height = 1'080U},
+                    .frameRate = rate,
+                    .frameCount =
+                        domain::FrameCountInfo{
+                            .value = frameCount,
+                            .origin = domain::FrameCountOrigin::kReported,
+                        },
+                    .duration = domain::MediaTime{durationMicroseconds},
+                    .codecId = "h264",
+                    .pixelFormatId = "nv12",
+                    .bitDepth = 8U,
+                    .decodeCapabilities =
+                        domain::DecodeCapabilities{
+                            .softwareDecode = true,
+                            .d3d11VaDecode = true,
+                        },
+                    .timingConfidence = domain::TimingConfidence::kVerifiedCfr,
+                    .sourceIdentity =
+                        domain::SourceFileIdentity{
+                            .byteSize = static_cast<std::uint64_t>(info.size()),
+                            .modifiedUtcMilliseconds = info.lastModified().toMSecsSinceEpoch(),
+                            .fingerprintSha256 = std::string(64U, '0'),
+                        },
+                },
+            .displayName = std::string{"Source "} + static_cast<char>('A' + index),
+        });
+    }
+
+    auto validated = domain::ComparisonValidator::validate(std::move(sources));
+    if (!validated) {
+        return false;
+    }
+    snapshot->validatedComparison =
+        std::make_shared<const domain::ValidatedComparisonSet>(std::move(validated).value().set);
+    snapshot->canonicalFrameCount =
+        static_cast<std::uint64_t>(snapshot->validatedComparison->canonicalFrameCount());
+    snapshot->canonicalTimeline = rate;
+    snapshot->sources.clear();
+    snapshot->presentedSources.clear();
+    for (const auto& source : snapshot->validatedComparison->sources()) {
+        snapshot->sources.push_back(application::SessionSourceView{
+            .sourceId = source.id,
+            .role = source.role,
+            .displayName = source.displayName,
+        });
+        snapshot->presentedSources.push_back(application::PresentedSourceState{
+            .sourceId = source.id,
+            .sourceFrameId = domain::FrameId{0},
+            .matchKind = application::FrameMatchKind::ExactIndex,
+        });
+    }
+    return true;
+}
+
+// Same validated install as installValidatedVideoSet, but every source keeps the Prediction
+// role: the real "predictions compared without a GT reference" session whose
+// referenceSourceIndex projects to -1.
+[[nodiscard]] bool
+installAllPredictionVideoSet(const std::shared_ptr<application::SessionSnapshot>& snapshot,
+                             const std::vector<std::filesystem::path>& paths,
+                             const domain::RationalRate& rate,
+                             const std::int64_t frameCount,
+                             const std::int64_t durationMicroseconds) {
+    std::vector<domain::ComparisonSource> sources;
+    for (std::size_t index = 0U; index < paths.size(); ++index) {
+        const QFileInfo info{QString::fromStdWString(paths[index].wstring())};
+        sources.push_back(domain::ComparisonSource{
+            .id = static_cast<domain::SourceId>(index),
+            .role = domain::ComparisonRole::kPrediction,
             .descriptor =
                 domain::MediaDescriptor{
                     .normalizedPath = paths[index],
@@ -1601,7 +1694,8 @@ TEST(MainQmlContractTests, InstantiatesRootAndSeparatesManualAlignmentStates) {
     sideModeButton->forceActiveFocus();
     ASSERT_TRUE(sideModeButton->hasActiveFocus());
     EXPECT_FALSE(root->property("globalMediaShortcutsEnabled").toBool());
-    sendKey(*window, Qt::Key_Tab);
+    // D1: pure mode lives on H; Tab keeps its platform meaning (focus navigation).
+    sendKey(*window, Qt::Key_H);
     QCoreApplication::processEvents();
     EXPECT_FALSE(root->property("chromeVisible").toBool());
     EXPECT_TRUE(root->property("globalMediaShortcutsEnabled").toBool());
@@ -1668,7 +1762,7 @@ TEST(MainQmlContractTests, InstantiatesRootAndSeparatesManualAlignmentStates) {
     ASSERT_FALSE(submitted.empty());
     EXPECT_NE(std::get_if<application::PlayCommand>(&submitted.back()), nullptr);
 
-    sendKey(*window, Qt::Key_Tab);
+    sendKey(*window, Qt::Key_H);
     QCoreApplication::processEvents();
     EXPECT_TRUE(root->property("chromeVisible").toBool());
     EXPECT_TRUE(transport->isVisible());
@@ -2144,9 +2238,7 @@ TEST(MainQmlContractTests, DesignTokensGovernKeyControlMetrics) {
 
     auto* const overflowButton =
         findItemByName(sourceBar, QStringLiteral("sourceOverflowButton-0"));
-    ASSERT_NE(overflowButton, nullptr);
-    EXPECT_EQ(overflowButton->width(), 32.0);
-    EXPECT_EQ(overflowButton->height(), 32.0);
+    EXPECT_EQ(overflowButton, nullptr) << "source operations use the filename context menu";
 
     // The source chip body is itself the direct-look hit area, so it keeps the full 32 px band.
     auto* const sourceChip = findItemByName(sourceBar, QStringLiteral("sourceChip-0"));
@@ -2343,7 +2435,7 @@ TEST(MainQmlContractTests, CanvasGuardDrivesInspectorDockingAndPanelClamps) {
 // U01: the file sidebar resizes inside its 200-288 band and yields to the canvas guard by
 // temporary suppression - the user's visible flag survives, so widening the window restores
 // the sidebar without the user re-opening it.
-TEST(MainQmlContractTests, FileSidebarResizesInsideItsBandAndYieldsToTheCanvasGuard) {
+TEST(MainQmlContractTests, FileSidebarKeepsFixedWidthAndYieldsToTheCanvasGuard) {
     WorkspaceHarness harness;
     harness.withVideoFolder = true;
     ASSERT_TRUE(harness.create()) << harness.error;
@@ -2373,16 +2465,27 @@ TEST(MainQmlContractTests, FileSidebarResizesInsideItsBandAndYieldsToTheCanvasGu
     ASSERT_NE(loader->property("item").value<QObject*>(), nullptr);
     EXPECT_DOUBLE_EQ(sidebarWidth(), 232.0) << "default sidebar width is the 232 token";
 
-    // The drag clamp pins over/under drags at the band edges.
-    harness.root->setProperty("videoFolderSidebarWidth", 999.0);
-    processLayout();
-    EXPECT_DOUBLE_EQ(sidebarWidth(), 288.0);
-    harness.root->setProperty("videoFolderSidebarWidth", 1.0);
-    processLayout();
-    EXPECT_DOUBLE_EQ(sidebarWidth(), 200.0);
-    harness.root->setProperty("videoFolderSidebarWidth", 232.0);
+    // Width is fixed, including when a previous client attempts to set the old preference.
+    EXPECT_FALSE(harness.root->setProperty("videoFolderSidebarWidth", 999.0));
     processLayout();
     EXPECT_DOUBLE_EQ(sidebarWidth(), 232.0);
+    EXPECT_EQ(harness.root->findChild<QQuickItem*>(QStringLiteral("videoFolderSidebarSplitter")),
+              nullptr);
+    auto* const folder = harness.root->findChild<QQuickItem*>(QStringLiteral("videoFolderTab"));
+    auto* const recent = harness.root->findChild<QQuickItem*>(QStringLiteral("videoRecentTab"));
+    auto* const choose =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("videoFolderChooseButton"));
+    auto* const refresh =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("videoFolderRefreshButton"));
+    ASSERT_NE(folder, nullptr);
+    ASSERT_NE(recent, nullptr);
+    ASSERT_NE(choose, nullptr);
+    ASSERT_NE(refresh, nullptr);
+    EXPECT_DOUBLE_EQ(folder->width(), recent->width());
+    EXPECT_DOUBLE_EQ(choose->width(), refresh->width());
+    EXPECT_DOUBLE_EQ(folder->y(), recent->y());
+    EXPECT_DOUBLE_EQ(choose->y(), refresh->y());
+    EXPECT_GT(choose->y(), folder->y());
 
     // 620 px window: 592 canvas without any sidebar is under the 600 guard, so the sidebar
     // is temporarily suppressed while the user's flag stays on.
@@ -5384,7 +5487,7 @@ TEST(MainQmlContractTests, DifferenceButtonOffersFlavorsAndPeekTogglesSuppressio
               static_cast<int>(ComparisonSurface::Highlight));
     EXPECT_EQ(root->property("effectiveViewMode").toInt(), ComparisonSurface::Difference);
     EXPECT_TRUE(diffButton->property("text").toString().contains(QStringLiteral("叠加高亮")));
-    EXPECT_TRUE(peekButton->isVisible());
+    EXPECT_TRUE(peekButton->isVisible()) << visibleChainText(peekButton);
 
     // Hold-to-peek: pressed suppresses the difference pass on the surface; released
     // restores it — no mode or metric change in between.
@@ -5736,15 +5839,15 @@ TEST(MainQmlContractTests, FullCanvasFocusSwitchesSourceWithoutSeekOrPairOrRoleC
     EXPECT_TRUE(sideModeButton->isVisible());
     auto* const pairCombo = harness.root->findChild<QQuickItem*>(QStringLiteral("pairCombo"));
     ASSERT_NE(pairCombo, nullptr);
-    EXPECT_TRUE(pairCombo->isVisible());
+    EXPECT_TRUE(pairCombo->isVisible()) << visibleChainText(pairCombo);
     auto* const switchCandidate =
         harness.root->findChild<QQuickItem*>(QStringLiteral("switchCandidateButton"));
     ASSERT_NE(switchCandidate, nullptr);
-    EXPECT_TRUE(switchCandidate->isVisible());
+    EXPECT_TRUE(switchCandidate->isVisible()) << visibleChainText(switchCandidate);
     auto* const peekButton =
         harness.root->findChild<QQuickItem*>(QStringLiteral("differencePeekButton"));
     ASSERT_NE(peekButton, nullptr);
-    EXPECT_TRUE(peekButton->isVisible());
+    EXPECT_TRUE(peekButton->isVisible()) << visibleChainText(peekButton);
     // And a mode entry still works: leaving Difference for side-by-side keeps the focus state
     // alone - view modes and the canvas focus are independent state.
     ASSERT_TRUE(QMetaObject::invokeMethod(sideModeButton, "clicked"));
@@ -5879,6 +5982,38 @@ TEST(MainQmlContractTests, FullCanvasFocusFlowsThroughTheRealMainQmlWiring) {
     EXPECT_FALSE(focusA->property("checked").toBool());
 }
 
+TEST(MainQmlContractTests, ComparisonModeButtonsExitDirectLookEvenForTheCurrentLayout) {
+    ThreeSourceFocusHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    auto* const bar = harness.root->findChild<QQuickItem*>(QStringLiteral("compareModeBar"));
+    auto* const surface = harness.root->findChild<QQuickItem*>(QStringLiteral("dualVideoSurface"));
+    ASSERT_NE(bar, nullptr);
+    ASSERT_NE(surface, nullptr);
+    auto* const focusA = findItemByName(bar, QStringLiteral("canvasFocusAButton"));
+    auto* const focusB = findItemByName(bar, QStringLiteral("canvasFocusBButton"));
+    ASSERT_NE(focusA, nullptr);
+    ASSERT_NE(focusB, nullptr);
+    const auto commandsBefore = harness.submitted.size();
+    for (const auto& [name, mode] :
+         {std::pair{QStringLiteral("sideModeButton"), ComparisonSurface::SideBySide},
+          std::pair{QStringLiteral("wipeModeButton"), ComparisonSurface::Wipe},
+          std::pair{QStringLiteral("roiTripletTaskButton"), ComparisonSurface::RoiTriplet}}) {
+        auto* const button = findItemByName(bar, name);
+        ASSERT_NE(button, nullptr);
+        for (auto* focus : {focusA, focusB}) {
+            ASSERT_TRUE(QMetaObject::invokeMethod(focus, "clicked"));
+            QCoreApplication::processEvents();
+            EXPECT_GE(harness.shell->canvasFocusSlot(), 0);
+            ASSERT_TRUE(QMetaObject::invokeMethod(button, "clicked"));
+            QCoreApplication::processEvents();
+            EXPECT_EQ(harness.shell->canvasFocusSlot(), -1);
+            EXPECT_EQ(surface->property("canvasFocusSlot").toInt(), -1);
+            EXPECT_EQ(bar->property("currentMode").toInt(), static_cast<int>(mode));
+        }
+    }
+    EXPECT_EQ(harness.submitted.size(), commandsBefore) << "layout changes must not seek";
+}
+
 // V02: the source chip body is the per-source direct-look entry. One plain click on a chip
 // enters that source's full-canvas view through the production Main.qml wiring, a second
 // click on the same chip exits, and a click on another chip switches directly. Every switch
@@ -5989,7 +6124,7 @@ TEST(MainQmlContractTests, PairComboNamesTheTwoRealSourceFiles) {
 
     auto* const pairCombo = harness.root->findChild<QQuickItem*>(QStringLiteral("pairCombo"));
     ASSERT_NE(pairCombo, nullptr);
-    EXPECT_TRUE(pairCombo->isVisible());
+    EXPECT_TRUE(pairCombo->isVisible()) << visibleChainText(pairCombo);
     // The default edge is A↔B; the selector names both files, not "A ↔ B".
     EXPECT_EQ(pairCombo->property("currentText").toString(),
               QStringLiteral("gt.mp4 ↔ model-1.mp4"));
@@ -6044,6 +6179,15 @@ TEST(MainQmlContractTests, ModeBarReflowsWithoutOverlappingActions) {
                 QThread::msleep(5U);
             }
             std::vector<QRectF> occupied;
+            std::vector<QString> occupiedNames;
+            const auto rectText = [](const QRectF& rect) {
+                return QStringLiteral("(%1,%2 %3x%4)")
+                    .arg(rect.x())
+                    .arg(rect.y())
+                    .arg(rect.width())
+                    .arg(rect.height())
+                    .toStdString();
+            };
             for (const auto& name : names) {
                 auto* const button = findItemByName(bar, name);
                 ASSERT_NE(button, nullptr) << name.toStdString();
@@ -6052,12 +6196,37 @@ TEST(MainQmlContractTests, ModeBarReflowsWithoutOverlappingActions) {
                 }
                 const QRectF rect{button->mapToItem(bar, QPointF{}), button->size()};
                 EXPECT_TRUE((QRectF{0, 0, bar->width(), bar->height()}.contains(rect)))
-                    << width << " " << name.toStdString();
-                for (const auto& previous : occupied) {
-                    EXPECT_FALSE(rect.intersects(previous))
-                        << width << " " << name.toStdString() << " overlaps another action";
+                    << width << " " << name.toStdString() << " rect=" << rectText(rect);
+                for (std::size_t index = 0; index < occupied.size(); ++index) {
+                    const bool intersects = rect.intersects(occupied[index]);
+                    if (!intersects) {
+                        continue;
+                    }
+                    // Subtree dump when the stacked-capsule signature appears: parent-relative
+                    // x of every modeActions descendant tells whether the inner positioners ran.
+                    if (name == QStringLiteral("switchCandidateButton")) {
+                        std::function<void(QQuickItem*, const QString&)> dump;
+                        dump = [&dump, &rectText](QQuickItem* node, const QString& indent) {
+                            qDebug() << (indent + node->objectName() +
+                                         " x=" + QString::number(node->x()) +
+                                         " y=" + QString::number(node->y()) +
+                                         " w=" + QString::number(node->width()));
+                            for (QQuickItem* child : node->childItems()) {
+                                dump(child, indent + QStringLiteral("  "));
+                            }
+                        };
+                        if (auto* const flow =
+                                findItemByName(bar, QStringLiteral("compareModeActions"))) {
+                            dump(flow, QString{});
+                        }
+                    }
+                    EXPECT_FALSE(intersects)
+                        << width << " " << name.toStdString() << " rect=" << rectText(rect)
+                        << " intersects " << occupiedNames[index].toStdString()
+                        << " rect=" << rectText(occupied[index]);
                 }
                 occupied.push_back(rect);
+                occupiedNames.push_back(name);
             }
             EXPECT_GE(occupied.size(), 10U);
             const QString evidence = qEnvironmentVariable("DVS_REVIEW_EVIDENCE_DIR");
@@ -6157,8 +6326,9 @@ TEST(MainQmlContractTests, ModeBarOrganizesTasksWithLayoutSubmenu) {
 
 // V03: with three sources and an identified GT, the difference-locating task recommends the
 // GT-anchored dual difference by name, and entering it keeps the task button in charge (the
-// button stays checked and names the 双参考 flavor). The hold-to-peek GT entry stays bound to
-// the pair-difference mode only.
+// button stays checked and names the 双参考 flavor). D2: the hold-to-peek GT entry follows
+// the whole 差异定位 task - button and keyboard share one availability, so the dual layout
+// (a GT-anchored difference flavour with the reference on screen) shows it too.
 TEST(MainQmlContractTests, DualDifferenceGuidanceNamesTheBaseline) {
     ThreeSourceFocusHarness harness;
     ASSERT_TRUE(harness.create()) << harness.error;
@@ -6190,8 +6360,10 @@ TEST(MainQmlContractTests, DualDifferenceGuidanceNamesTheBaseline) {
     EXPECT_EQ(harness.root->property("effectiveViewMode").toInt(), 9);
     EXPECT_TRUE(diffButton->property("checked").toBool());
     EXPECT_TRUE(diffButton->property("text").toString().contains(QStringLiteral("双参考")));
-    // The peek is a pair-difference companion; it does not follow into the dual layout.
-    EXPECT_FALSE(peekButton->isVisible());
+    // D2: the peek button and the ` key share one availability condition, and the
+    // GT-anchored dual layout qualifies - no hidden-but-triggerable states either way.
+    EXPECT_TRUE(peekButton->isVisible()) << visibleChainText(peekButton);
+    EXPECT_TRUE(peekButton->property("enabled").toBool());
     // Entering a layout is still a pure view change.
     EXPECT_EQ(harness.submitted.size(), submittedBefore);
 }
@@ -6782,17 +6954,30 @@ TEST(MainQmlContractTests, ImageEditTransformMenuChangesTheWorkingPixelsAndRetir
         // Changing the review-side switch cannot redirect an already active edit session.
         workspace->setProperty("singleViewShowSecondary", !editingSecondary);
         EXPECT_EQ(viewport->property("slot").toInt(), editingSecondary ? 3 : 2);
-        auto* const sourceButton =
-            harness.root->findChild<QQuickItem*>(QStringLiteral("imageToggleSourceButton"));
+        // The surviving direct-selection entries are the A/B file chips (the standalone
+        // "切至 A / 切至 B" toolbar button is gone - it duplicated them, Space/T and the
+        // in-canvas badge). They must stay inert during an edit session so a side switch
+        // can never retarget the working copy, exactly as the removed button did.
+        auto* const sourceChipA =
+            harness.root->findChild<QQuickItem*>(QStringLiteral("imageSourceChipA"));
+        auto* const sourceChipB =
+            harness.root->findChild<QQuickItem*>(QStringLiteral("imageSourceChipB"));
         auto* const sourceBadge =
             harness.root->findChild<QQuickItem*>(QStringLiteral("imageInPlaceBadge"));
-        ASSERT_NE(sourceButton, nullptr);
+        ASSERT_NE(sourceChipA, nullptr);
+        ASSERT_NE(sourceChipB, nullptr);
         ASSERT_NE(sourceBadge, nullptr);
-        EXPECT_FALSE(sourceButton->isVisible());
-        EXPECT_FALSE(sourceButton->isEnabled());
+        EXPECT_FALSE(sourceChipA->isEnabled());
+        EXPECT_FALSE(sourceChipB->isEnabled());
         EXPECT_FALSE(sourceBadge->isVisible());
+        // The deleted duplicate must not come back: no toolbar button may still offer the
+        // A/B switch that the chips, Space/T and the badge already cover.
+        EXPECT_EQ(harness.root->findChild<QQuickItem*>(QStringLiteral("imageToggleSourceButton")),
+                  nullptr);
         ASSERT_TRUE(QMetaObject::invokeMethod(workspace, "toggleSinglePairSource"));
         EXPECT_EQ(workspace->property("singleViewShowSecondary").toBool(), !editingSecondary);
+        EXPECT_EQ(harness.imageEdit.sourceSlot(), editingSecondary ? 3 : 2)
+            << "the review-side switch must not redirect an active edit session";
         EXPECT_TRUE(button->isVisible());
         EXPECT_TRUE(button->property("enabled").toBool());
         workspace->setProperty("cropSelection",
@@ -7741,8 +7926,10 @@ TEST(MainQmlContractTests, ImageWorkspaceReloadsViewportSourceAfterImageOpen) {
 
     // Before any image is loaded the binding holds the generation-0 URL and the Image
     // element received a null pixmap from the provider.
-    EXPECT_EQ(viewport->property("imageUrl").toString(), QStringLiteral("image://vcs-review/2/0"));
-    EXPECT_EQ(imageItem->property("source").toString(), QStringLiteral("image://vcs-review/2/0"));
+    EXPECT_EQ(viewport->property("imageUrl").toString(),
+              QStringLiteral("image://vcs-review/2/0/0/0/0"));
+    EXPECT_EQ(imageItem->property("source").toString(),
+              QStringLiteral("image://vcs-review/2/0/0/0/0"));
 
     QImage image(64, 48, QImage::Format_ARGB32);
     image.fill(QColor(200, 30, 30));
@@ -7753,8 +7940,10 @@ TEST(MainQmlContractTests, ImageWorkspaceReloadsViewportSourceAfterImageOpen) {
 
     // The binding must re-evaluate (generation 0 -> 1) so the Image element reloads the
     // provider and actually paints the decoded pixels instead of staying black.
-    EXPECT_EQ(viewport->property("imageUrl").toString(), QStringLiteral("image://vcs-review/2/1"));
-    EXPECT_EQ(imageItem->property("source").toString(), QStringLiteral("image://vcs-review/2/1"));
+    EXPECT_EQ(viewport->property("imageUrl").toString(),
+              QStringLiteral("image://vcs-review/2/1/0/0/0"));
+    EXPECT_EQ(imageItem->property("source").toString(),
+              QStringLiteral("image://vcs-review/2/1/0/0/0"));
     // 1 == QQuickImage::Ready.
     EXPECT_EQ(imageItem->property("status").toInt(), 1)
         << "Image element must reach Ready after the source URL refreshes.";
@@ -7764,7 +7953,8 @@ TEST(MainQmlContractTests, ImageWorkspaceReloadsViewportSourceAfterImageOpen) {
     imageReview.setViewMode(ImageReviewController::AlphaGrayView);
     QCoreApplication::processEvents();
     EXPECT_EQ(imageItem->property("source").toString(), imageReview.imageUrl(2));
-    EXPECT_NE(imageItem->property("source").toString(), QStringLiteral("image://vcs-review/2/1"));
+    EXPECT_NE(imageItem->property("source").toString(),
+              QStringLiteral("image://vcs-review/2/1/0/0/0"));
     EXPECT_EQ(imageItem->property("status").toInt(), 1);
     const QString alphaUrl = imageItem->property("source").toString();
     imageReview.setViewMode(ImageReviewController::RgbaView);
@@ -7853,13 +8043,16 @@ TEST(MainQmlContractTests, ImageWorkspaceWipeHandleMovesSplitPosition) {
     ASSERT_NE(clip, nullptr);
     EXPECT_TRUE(handle->isVisible()) << "wipe handle must be visible for a pair in wipe mode";
 
-    // updatePosition(sceneX) is the exact path DragHandler.onCentroidChanged drives; it
-    // emits positionRequested, whose handler must move the controller position.
+    // updatePosition(sceneX, sceneY) is the exact path DragHandler.onCentroidChanged drives;
+    // it emits positionRequested, whose handler must move the controller position.
     const QPointF overlayOrigin = overlay->mapToScene(QPointF{0.0, 0.0});
     for (const double requested : {0.25, 0.75}) {
         const qreal sceneX = overlayOrigin.x() + overlay->width() * requested;
-        ASSERT_TRUE(
-            QMetaObject::invokeMethod(handle, "updatePosition", Q_ARG(QVariant, QVariant{sceneX})));
+        const qreal sceneY = overlayOrigin.y() + overlay->height() / 2.0;
+        ASSERT_TRUE(QMetaObject::invokeMethod(handle,
+                                              "updatePosition",
+                                              Q_ARG(QVariant, QVariant{sceneX}),
+                                              Q_ARG(QVariant, QVariant{sceneY})));
         QCoreApplication::processEvents();
         EXPECT_NEAR(imageReview.wipePosition(), requested, 1e-3)
             << "dragging the split handle must update the controller wipe position";
@@ -7871,6 +8064,37 @@ TEST(MainQmlContractTests, ImageWorkspaceWipeHandleMovesSplitPosition) {
     const QPointF handleCenter = handle->mapToScene(QPointF{handle->width() / 2.0, 0.0});
     EXPECT_NEAR(
         handleCenter.x(), overlayOrigin.x() + overlay->width() * imageReview.wipePosition(), 1.5);
+
+    // E1: switching to the horizontal axis must move the clip bound and the handle to the Y
+    // split while keeping the ratio, the pair and the decoded buffers untouched.
+    const qreal ratioBefore = imageReview.wipePosition();
+    const int compareModeBefore = imageReview.compareMode();
+    imageReview.setWipeOrientation(1);
+    QCoreApplication::processEvents();
+    EXPECT_EQ(clip->height(), qRound(overlay->height() * imageReview.wipePosition()))
+        << "the horizontal clip must bound at the Y split";
+    EXPECT_EQ(clip->width(), overlay->width());
+    const QPointF handleCenterH = handle->mapToScene(QPointF{0.0, handle->height() / 2.0});
+    EXPECT_NEAR(
+        handleCenterH.y(), overlayOrigin.y() + overlay->height() * imageReview.wipePosition(), 1.5)
+        << "the horizontal handle must ride the Y split";
+    EXPECT_EQ(imageReview.wipePosition(), ratioBefore) << "axis switch keeps the split ratio";
+    EXPECT_EQ(imageReview.compareMode(), compareModeBefore) << "axis switch keeps the mode";
+    // Hover side selection follows the axis: a point below the Y split maps to the primary.
+    const QPointF belowSplit = overlay->mapToScene(
+        QPointF{overlay->width() / 2.0, overlay->height() * (imageReview.wipePosition() + 0.1)});
+    QMouseEvent hoverMove{QEvent::MouseMove,
+                          overlay->mapFromScene(belowSplit),
+                          belowSplit,
+                          Qt::NoButton,
+                          Qt::NoButton,
+                          Qt::NoModifier};
+    QCoreApplication::sendEvent(overlay, &hoverMove);
+    QCoreApplication::processEvents();
+    // Back to vertical restores the X-bound clip.
+    imageReview.setWipeOrientation(0);
+    QCoreApplication::processEvents();
+    EXPECT_EQ(clip->width(), qRound(overlay->width() * imageReview.wipePosition()));
 }
 
 TEST(MainQmlContractTests, SameNamedVideoSourcesExposeParentLabels) {
@@ -8669,6 +8893,233 @@ TEST(MainQmlContractTests, StartupCompareOpenStaysPausedForReview) {
               0);
 }
 
+// I01/V02 acceptance at the real event layer: the QML suite can only emit the image chip's
+// own signal (Qt 6 refuses external calls to on* handlers), so the DropArea's enter filter
+// and the drop routing need genuine drag events through the window. A valid image URL
+// released over chip A/B must route to exactly that slot's replace signal with that URL,
+// while a drag without URLs or with a non-image URL leaves both signals silent.
+TEST(MainQmlContractTests, ImageChipDropsRouteRealDragEvents) {
+    auto snapshot = std::make_shared<application::SessionSnapshot>();
+    snapshot->graphicsReady = true;
+    snapshot->sessionState = domain::SessionState::kEmpty;
+    std::vector<application::PlaybackCommand> submitted;
+    ReviewController controller{
+        ReviewController::Dependencies{
+            .submit =
+                [&submitted](application::PlaybackCommand command) {
+                    submitted.push_back(std::move(command));
+                    return application::PortSubmitResult::Accepted;
+                },
+            .snapshot = [snapshot] { return snapshot; },
+            .takeCompletedCommands = [] { return std::vector<application::CommandTerminal>{}; },
+        },
+    };
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    ReviewShellController shell{controller, preferences};
+    ReviewSessionFacade facade{controller, preferences, shell};
+    ImageReviewController imageReview;
+
+    QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
+    engine.rootContext()->setContextProperty(QStringLiteral("imageReview"), &imageReview);
+    engine.addImageProvider(QStringLiteral("vcs-review"), new ReviewImageProvider(&imageReview));
+    QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
+    ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
+
+    std::unique_ptr<QObject> root{component.create()};
+    ASSERT_NE(root, nullptr) << componentErrors(component);
+    auto* const window = qobject_cast<QQuickWindow*>(root.get());
+    ASSERT_NE(window, nullptr);
+    window->resize(1280, 800);
+    window->show();
+    QCoreApplication::processEvents();
+
+    QImage left(32, 32, QImage::Format_ARGB32);
+    left.fill(QColor(200, 30, 30));
+    QImage right(32, 32, QImage::Format_ARGB32);
+    right.fill(QColor(30, 30, 200));
+    ASSERT_TRUE(imageReview.openPrimaryImage(std::move(left), QStringLiteral("left.png")));
+    ASSERT_TRUE(imageReview.openSecondaryImage(std::move(right), QStringLiteral("right.png")));
+    QVariant workspaceActivated;
+    ASSERT_TRUE(QMetaObject::invokeMethod(root.get(),
+                                          "activateWorkspace",
+                                          Q_RETURN_ARG(QVariant, workspaceActivated),
+                                          Q_ARG(QVariant, QVariant{1})));
+    ASSERT_TRUE(workspaceActivated.toBool());
+    for (int iteration = 0; iteration < 5; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+
+    QObject* const workspace = root->findChild<QObject*>(QStringLiteral("imageWorkspaceRoot"));
+    ASSERT_NE(workspace, nullptr);
+    auto* const chipA = workspace->findChild<QQuickItem*>(QStringLiteral("imageSourceChipA"));
+    auto* const chipB = workspace->findChild<QQuickItem*>(QStringLiteral("imageSourceChipB"));
+    ASSERT_NE(chipA, nullptr);
+    ASSERT_NE(chipB, nullptr);
+    ASSERT_TRUE(chipA->isVisible());
+    ASSERT_TRUE(chipB->isVisible());
+
+    // Count through a QML relay (the installFocusWiring precedent): the workspace signals
+    // are QML-declared, so a script-side connection reads them without string-based
+    // SLOT plumbing.
+    QQmlComponent counterComponent{&engine};
+    counterComponent.setData(
+        QByteArrayLiteral("import QtQml\n"
+                          "QtObject {\n"
+                          "    property var source: null\n"
+                          "    property var windowSource: null\n"
+                          "    property int primaryCalls: 0\n"
+                          "    property int secondaryCalls: 0\n"
+                          "    property int windowDrops: 0\n"
+                          "    property var lastWindowUrls: []\n"
+                          "    property url lastPrimary\n"
+                          "    property url lastSecondary\n"
+                          "    function connectNow() {\n"
+                          "        source.replacePrimaryDropped.connect"
+                          "(function(url) {\n"
+                          "            primaryCalls += 1;\n"
+                          "            lastPrimary = url;\n"
+                          "        });\n"
+                          "        source.replaceSecondaryDropped.connect"
+                          "(function(url) {\n"
+                          "            secondaryCalls += 1;\n"
+                          "            lastSecondary = url;\n"
+                          "        });\n"
+                          "        windowSource.dropped.connect(function(drop) {\n"
+                          "            windowDrops += 1;\n"
+                          "            lastWindowUrls = drop.urls;\n"
+                          "        });\n"
+                          "    }\n"
+                          "}\n"),
+        QUrl{});
+    ASSERT_EQ(counterComponent.status(), QQmlComponent::Ready) << componentErrors(counterComponent);
+    std::unique_ptr<QObject> counter{counterComponent.create()};
+    ASSERT_NE(counter, nullptr) << componentErrors(counterComponent);
+    QObject* const windowDrop = root->findChild<QObject*>(QStringLiteral("workspaceDropArea"));
+    ASSERT_NE(windowDrop, nullptr);
+    ASSERT_TRUE(counter->setProperty("source", QVariant::fromValue(workspace)));
+    ASSERT_TRUE(counter->setProperty("windowSource", QVariant::fromValue(windowDrop)));
+    ASSERT_TRUE(QMetaObject::invokeMethod(counter.get(), "connectNow"));
+    const auto primaryCalls = [&] { return counter->property("primaryCalls").toInt(); };
+    const auto secondaryCalls = [&] { return counter->property("secondaryCalls").toInt(); };
+    const auto windowDrops = [&] { return counter->property("windowDrops").toInt(); };
+    const auto capturedPrimary = [&] { return counter->property("lastPrimary").toUrl(); };
+    const auto capturedSecondary = [&] { return counter->property("lastSecondary").toUrl(); };
+    // The window-level target must stay a live participant of the default open/append
+    // path while the chips claim their own drags.
+    EXPECT_TRUE(windowDrop->property("enabled").toBool())
+        << "the window-level open/append drop target must stay enabled";
+
+    const auto dragDropAtScene =
+        [&](QQuickWindow* target, const QPointF& scene, const QList<QUrl>& urls) {
+            QMimeData* const mimeData = new QMimeData;
+            mimeData->setUrls(urls);
+            QDragEnterEvent enter{
+                scene.toPoint(), Qt::CopyAction, mimeData, Qt::LeftButton, Qt::NoModifier};
+            static_cast<void>(QCoreApplication::sendEvent(target, &enter));
+            QDragMoveEvent move{
+                scene.toPoint(), Qt::CopyAction, mimeData, Qt::LeftButton, Qt::NoModifier};
+            static_cast<void>(QCoreApplication::sendEvent(target, &move));
+            QDropEvent drop{scene, Qt::CopyAction, mimeData, Qt::LeftButton, Qt::NoModifier};
+            static_cast<void>(QCoreApplication::sendEvent(target, &drop));
+            for (int iteration = 0; iteration < 5; ++iteration) {
+                QCoreApplication::processEvents();
+            }
+            mimeData->deleteLater();
+            for (int iteration = 0; iteration < 3; ++iteration) {
+                QCoreApplication::processEvents();
+            }
+        };
+    const auto dragDropAt = [&](QQuickItem* target, const QList<QUrl>& urls) {
+        const QPointF centre{target->width() / 2, target->height() / 2};
+        const QPointF scene = target->mapToScene(centre);
+        QMimeData* const mimeData = new QMimeData;
+        mimeData->setUrls(urls);
+        QDragEnterEvent enter{
+            scene.toPoint(), Qt::CopyAction, mimeData, Qt::LeftButton, Qt::NoModifier};
+        static_cast<void>(QCoreApplication::sendEvent(window, &enter));
+        QDragMoveEvent move{
+            scene.toPoint(), Qt::CopyAction, mimeData, Qt::LeftButton, Qt::NoModifier};
+        static_cast<void>(QCoreApplication::sendEvent(window, &move));
+        QDropEvent drop{scene, Qt::CopyAction, mimeData, Qt::LeftButton, Qt::NoModifier};
+        static_cast<void>(QCoreApplication::sendEvent(window, &drop));
+        for (int iteration = 0; iteration < 5; ++iteration) {
+            QCoreApplication::processEvents();
+        }
+        mimeData->deleteLater();
+        for (int iteration = 0; iteration < 3; ++iteration) {
+            QCoreApplication::processEvents();
+        }
+    };
+
+    // A valid single image URL routes to the slot under the cursor.
+    const QUrl replacement{QUrl::fromLocalFile(QStringLiteral("C:/fixtures/new-secondary.png"))};
+    auto* const chipDropB =
+        workspace->findChild<QObject*>(QStringLiteral("imageSourceChipDropAreaB"));
+    ASSERT_NE(chipDropB, nullptr);
+    {
+        // The drop target's OWN geometry must be real before any event: a zero-sized or
+        // offset DropArea (anchor chain, content parent, unpolished container) would make
+        // every synthetic event land beside the target - this pins the command panel's
+        // explicit-relayout discipline for no-render hosts.
+        auto* const dropAreaItem = qobject_cast<QQuickItem*>(chipDropB);
+        ASSERT_NE(dropAreaItem, nullptr);
+        EXPECT_GT(dropAreaItem->width(), 0.0) << "chip B's DropArea must have width";
+        EXPECT_GT(dropAreaItem->height(), 0.0) << "chip B's DropArea must have height";
+        EXPECT_TRUE(dropAreaItem->contains(dropAreaItem->mapFromScene(dropAreaItem->mapToScene(
+            QPointF{dropAreaItem->width() / 2, dropAreaItem->height() / 2}))))
+            << "chip B's DropArea must contain its own mapped centre";
+    }
+    dragDropAt(chipB, {replacement});
+    EXPECT_EQ(secondaryCalls(), 1) << "a valid image drop on chip B must reach the B slot";
+    EXPECT_EQ(primaryCalls(), 0) << "chip B's drop must not leak into the A slot";
+    EXPECT_EQ(capturedSecondary(), replacement);
+    EXPECT_EQ(windowDrops(), 0) << "a chip drop must not leak into the open/append path";
+
+    const QUrl otherImage{QUrl::fromLocalFile(QStringLiteral("C:/fixtures/new-primary.png"))};
+    dragDropAt(chipA, {otherImage});
+    EXPECT_EQ(primaryCalls(), 1) << "a valid image drop on chip A must reach the A slot";
+    EXPECT_EQ(secondaryCalls(), 1);
+    EXPECT_EQ(capturedPrimary(), otherImage);
+    EXPECT_EQ(windowDrops(), 0);
+
+    // The default open/append path must stay live: the same single image dropped on the
+    // canvas (away from any chip) reaches the window-level target with the same URL.
+    const QPointF canvasPoint{window->width() / 2.0, window->height() * 0.75};
+    dragDropAtScene(window, canvasPoint, {replacement});
+    EXPECT_EQ(windowDrops(), 1) << "a canvas drop must reach the window-level open target";
+    EXPECT_EQ(primaryCalls(), 1) << "a canvas drop must not replace a chip slot";
+    EXPECT_EQ(secondaryCalls(), 1);
+    const QVariantList droppedUrls = counter->property("lastWindowUrls").toList();
+    ASSERT_EQ(droppedUrls.size(), 1);
+    EXPECT_EQ(droppedUrls.front().toUrl(), replacement);
+
+    // Counterexample: a drag without URLs stays filtered out.
+    const int windowDropsBeforeCounterexamples = windowDrops();
+    dragDropAt(chipA, {});
+    EXPECT_EQ(primaryCalls(), 1);
+    EXPECT_EQ(secondaryCalls(), 1);
+
+    // Counterexample: a non-image URL stays filtered out on both slots. Falling through to
+    // the window-level open/append path is acceptable; a chip replacement is not.
+    dragDropAt(chipB, {QUrl::fromLocalFile(QStringLiteral("C:/fixtures/clip.mp4"))});
+    EXPECT_EQ(primaryCalls(), 1);
+    EXPECT_EQ(secondaryCalls(), 1);
+
+    // Counterexample: two URLs at once is not a single-file replacement.
+    dragDropAt(chipA, {otherImage, replacement});
+    EXPECT_EQ(primaryCalls(), 1);
+    EXPECT_EQ(secondaryCalls(), 1);
+    EXPECT_GE(windowDrops(), windowDropsBeforeCounterexamples)
+        << "fallback drops may reach the open/append target, never a chip slot";
+    window->close();
+}
+
 // I01: dropping one video on a source chip replaces exactly that source through the V02
 // staged swap - slot count, reference role and displayed position preserved, no playback
 // started, no order dialog involved.
@@ -8824,14 +9275,15 @@ TEST(MainQmlContractTests, ToggleShortcutsAndWorkspaceActionsDisableAutoRepeat) 
     };
 
     for (const auto* const sequence : {"Space",
-                                       "Tab",
+                                       "H",
                                        "F11",
                                        "Esc",
                                        "?",
                                        "C",
                                        "\\",
-                                       "`",
                                        "Shift+`",
+                                       "Z",
+                                       "T",
                                        "1",
                                        "2",
                                        "3",
@@ -8847,6 +9299,13 @@ TEST(MainQmlContractTests, ToggleShortcutsAndWorkspaceActionsDisableAutoRepeat) 
             EXPECT_FALSE(shortcut->property("autoRepeat").toBool());
         }
     }
+
+    // D1: Tab is no longer a shortcut at all - it returns to platform focus navigation. D4:
+    // the plain backtick is a window-level hold now, not a per-activation Shortcut.
+    EXPECT_TRUE(shortcutsBySequence(QStringLiteral("Tab")).empty())
+        << "Tab must stay free for focus navigation; pure mode lives on H";
+    EXPECT_TRUE(shortcutsBySequence(QStringLiteral("`")).empty())
+        << "the plain backtick is a hold; only Shift+` stays a Shortcut (the lock)";
 }
 
 // I02: the input context owns the keyboard before the media layer. While the comparison
@@ -8916,28 +9375,29 @@ TEST(MainQmlContractTests, DialogsAndWorkspacesOwnTheKeyboardBeforeMediaShortcut
     harness.settle();
     EXPECT_TRUE(harness.submitted.empty());
 
-    // Hidden chrome is an immersive review, not a trap: Tab and F11 stay reachable so the
-    // interface and full screen can always come back.
+    // Hidden chrome is an immersive review, not a trap: H and F11 stay reachable so the
+    // interface and full screen can always come back. (D1: H carries pure mode; Tab is no
+    // longer a shortcut and keeps its focus-navigation meaning.)
     ASSERT_TRUE(harness.activateWorkspace(0));
     harness.settle();
     harness.shell->setChromeVisible(false);
     harness.settle();
     EXPECT_EQ(harness.root->property("inputContext").toInt(), 0);
     EXPECT_TRUE(harness.root->property("presentationShortcutsEnabled").toBool());
-    QObject* tabShortcut = nullptr;
+    QObject* chromeShortcut = nullptr;
     QObject* fullScreenShortcut = nullptr;
     const QList<QObject*> all = harness.root->findChildren<QObject*>();
     for (QObject* const object : all) {
-        if (object->property("sequence").toString() == QStringLiteral("Tab")) {
-            tabShortcut = object;
+        if (object->property("sequence").toString() == QStringLiteral("H")) {
+            chromeShortcut = object;
         }
         if (object->property("sequence").toString() == QStringLiteral("F11")) {
             fullScreenShortcut = object;
         }
     }
-    ASSERT_NE(tabShortcut, nullptr);
+    ASSERT_NE(chromeShortcut, nullptr);
     ASSERT_NE(fullScreenShortcut, nullptr);
-    EXPECT_TRUE(tabShortcut->property("enabled").toBool());
+    EXPECT_TRUE(chromeShortcut->property("enabled").toBool());
     EXPECT_TRUE(fullScreenShortcut->property("enabled").toBool());
 }
 
@@ -8992,6 +9452,7 @@ TEST(MainQmlContractTests, ModalPopupsOwnTheKeyboardBeforeWorkspaceShortcuts) {
         harness.submitted.clear();
         sendKey(*harness.window, Qt::Key_M);
         sendKey(*harness.window, Qt::Key_W, Qt::ControlModifier);
+        sendKey(*harness.window, Qt::Key_H);
         sendKey(*harness.window, Qt::Key_Tab);
         harness.settle();
         EXPECT_TRUE(harness.submitted.empty());
@@ -9080,6 +9541,7 @@ TEST(MainQmlContractTests, ModalPopupsOwnTheKeyboardBeforeWorkspaceShortcuts) {
         harness.submitted.clear();
         sendKey(*harness.window, Qt::Key_M);
         sendKey(*harness.window, Qt::Key_W, Qt::ControlModifier);
+        sendKey(*harness.window, Qt::Key_H);
         sendKey(*harness.window, Qt::Key_Tab);
         harness.settle();
         EXPECT_TRUE(harness.submitted.empty());
@@ -9556,21 +10018,53 @@ TEST(MainQmlContractTests, ImageWorkspaceManualFlickerContract) {
     ASSERT_NE(primaryViewport, nullptr);
     EXPECT_EQ(primaryViewport->property("slot").toInt(), 2);
 
-    // Toggle button switches to slot 3 (B)
-    auto* const toggleBtn =
-        harness.root->findChild<QQuickItem*>(QStringLiteral("imageToggleSourceButton"));
-    ASSERT_NE(toggleBtn, nullptr);
-    EXPECT_TRUE(toggleBtn->isVisible());
-    ASSERT_TRUE(QMetaObject::invokeMethod(toggleBtn, "clicked"));
+    // The standalone "切至 A / 切至 B" toolbar button is gone: it duplicated the A/B file
+    // chips (a click selects that side), Space/T and the in-canvas badge. The chip is now
+    // the primary entry, so it must really switch the side - and the removed duplicate must
+    // not linger in the tree for an old test to find.
+    auto* const chipA = harness.root->findChild<QQuickItem*>(QStringLiteral("imageSourceChipA"));
+    auto* const chipB = harness.root->findChild<QQuickItem*>(QStringLiteral("imageSourceChipB"));
+    ASSERT_NE(chipA, nullptr);
+    ASSERT_NE(chipB, nullptr);
+    EXPECT_EQ(harness.root->findChild<QQuickItem*>(QStringLiteral("imageToggleSourceButton")),
+              nullptr);
+    // Chip B selects B (slot 3).
+    ASSERT_TRUE(QMetaObject::invokeMethod(chipB, "clicked"));
     harness.settle();
     EXPECT_EQ(primaryViewport->property("slot").toInt(), 3);
     EXPECT_TRUE(imageWorkspace->property("singleViewShowSecondary").toBool());
-
-    // Toggle again returns to slot 2 (A)
-    ASSERT_TRUE(QMetaObject::invokeMethod(toggleBtn, "clicked"));
+    // Chip A selects A again (slot 2).
+    ASSERT_TRUE(QMetaObject::invokeMethod(chipA, "clicked"));
     harness.settle();
     EXPECT_EQ(primaryViewport->property("slot").toInt(), 2);
     EXPECT_FALSE(imageWorkspace->property("singleViewShowSecondary").toBool());
+    // The in-canvas badge is the compact current-source indicator: it names the side on
+    // screen and its two segments are the switch, so it stays readable while blinking.
+    auto* const badgeCurrent =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageInPlaceCurrentSegment"));
+    auto* const badgeSwitch =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageInPlaceSwitchSegment"));
+    auto* const badgeSelectA =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageInPlaceSelectA"));
+    auto* const badgeSelectB =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageInPlaceSelectB"));
+    ASSERT_NE(badgeCurrent, nullptr);
+    ASSERT_NE(badgeSwitch, nullptr);
+    ASSERT_NE(badgeSelectA, nullptr);
+    ASSERT_NE(badgeSelectB, nullptr);
+    // The in-canvas badge is the compact current-source indicator: it names the side on
+    // screen and exposes two segments. Their click targets are plain MouseAreas inside a
+    // glass plate, which the offscreen/basic render loop this C++ harness runs on cannot
+    // route real mouse events into - the same limitation that keeps the A/B chip's drag
+    // drop a recorded coverage gap. The click behaviour is therefore verified with real
+    // mouseClick calls in tst_image_workspace_manual.qml (A/B badge case); here the
+    // structural contract is checked: both segments exist, are visible and sized, and the
+    // plate stays inside its host so it can never overlap the neighbouring badge.
+    EXPECT_TRUE(badgeCurrent->isVisible());
+    EXPECT_TRUE(badgeSwitch->isVisible());
+    EXPECT_GT(badgeSelectA->width(), 0.0);
+    EXPECT_GT(badgeSelectB->width(), 0.0);
+    EXPECT_LE(inPlaceBadge->x() + inPlaceBadge->width(), inPlaceBadge->parentItem()->width());
 
     // The canvas exposes a full-size click target; Space switches A/B without auto playback.
     auto* const canvasArea =
@@ -9578,6 +10072,16 @@ TEST(MainQmlContractTests, ImageWorkspaceManualFlickerContract) {
     ASSERT_NE(canvasArea, nullptr);
     EXPECT_TRUE(canvasArea->isVisible());
     EXPECT_GT(canvasArea->width(), 100);
+
+    // Evidence for the consolidated A/B entries: the shot shows the renamed 单图 A/B chip, the
+    // A/B file chips as the direct-selection entry and the in-canvas current-source badge.
+    const auto badgeEvidence = qEnvironmentVariable("DVS_REVIEW_EVIDENCE_DIR");
+    if (!badgeEvidence.isEmpty()) {
+        ASSERT_TRUE(QDir().mkpath(badgeEvidence));
+        harness.settleAnimations();
+        ASSERT_TRUE(harness.window->grabWindow().save(
+            QDir(badgeEvidence).filePath(QStringLiteral("image-single-ab-entries.png"))));
+    }
 
     imageWorkspace->forceActiveFocus();
     sendKey(*harness.window, Qt::Key_Space);
@@ -9660,6 +10164,387 @@ TEST(MainQmlContractTests, ImageWorkspaceManualFlickerContract) {
     ASSERT_TRUE(QMetaObject::invokeMethod(manualMode, "clicked"));
     harness.settle();
     EXPECT_EQ(primaryViewport->property("slot").toInt(), 2);
+
+    // The hold-to-peek is a separate behaviour from the A/B switch and must survive the
+    // consolidation: in a difference mode the backtick suppresses the difference for as
+    // long as it is held and restores it on release. The A/B badge hides while peeking so
+    // the user is never told "you are on A" while the canvas shows the peeked original.
+    // Press and release are sent separately (sendKey pairs them), so the held state is
+    // actually observed rather than skipped over.
+    auto* const peekBadge = harness.root->findChild<QQuickItem*>(QStringLiteral("imagePeekBadge"));
+    ASSERT_NE(peekBadge, nullptr);
+    EXPECT_FALSE(peekBadge->isVisible()) << "no peek outside a difference/fade mode";
+    // Enter the absolute-difference mode again so the peek has something to suppress.
+    ASSERT_TRUE(QMetaObject::invokeMethod(absDiff, "triggered"));
+    harness.settle();
+    EXPECT_EQ(harness.imageReview.compareMode(), 2);
+    EXPECT_FALSE(inPlaceBadge->isVisible()) << "the A/B badge belongs to the single-image mode";
+    imageWorkspace->forceActiveFocus();
+    QKeyEvent peekPress{QEvent::KeyPress, Qt::Key_QuoteLeft, Qt::NoModifier};
+    QCoreApplication::sendEvent(harness.window, &peekPress);
+    harness.settle();
+    EXPECT_TRUE(imageWorkspace->property("peekActive").toBool());
+    EXPECT_TRUE(peekBadge->isVisible());
+    // Evidence for the hold-to-peek that survives the consolidation: the shot shows the
+    // peeked original with the badge naming which side is on screen.
+    const auto peekEvidence = qEnvironmentVariable("DVS_REVIEW_EVIDENCE_DIR");
+    if (!peekEvidence.isEmpty()) {
+        ASSERT_TRUE(QDir().mkpath(peekEvidence));
+        harness.settleAnimations();
+        ASSERT_TRUE(harness.window->grabWindow().save(
+            QDir(peekEvidence).filePath(QStringLiteral("image-hold-to-peek.png"))));
+    }
+    QKeyEvent peekRelease{QEvent::KeyRelease, Qt::Key_QuoteLeft, Qt::NoModifier};
+    QCoreApplication::sendEvent(harness.window, &peekRelease);
+    harness.settle();
+    EXPECT_FALSE(imageWorkspace->property("peekActive").toBool());
+    EXPECT_FALSE(peekBadge->isVisible());
+    EXPECT_EQ(harness.imageReview.compareMode(), 2) << "release restores the difference mode";
+}
+
+// The probe readout family in a real main window: the copy-colour button and its menu, the
+// numeric-format selector, the Alpha filter switch, and the status-bar readout that must stay
+// fully readable at the 960px floor. Everything is driven through the real UI objects, and the
+// env-gated captures give the visual evidence for the layout claim.
+TEST(MainQmlContractTests, ImageProbeReadoutFamilyIsReachableAndReadableAtNarrowWidth) {
+    WorkspaceHarness harness;
+    QQmlComponent clipboardComponent{&harness.engine};
+    clipboardComponent.setData(QByteArrayLiteral("import QtQml\n"
+                                                 "QtObject {\n"
+                                                 "    property string copiedText: \"\"\n"
+                                                 "    function copyText(value) {\n"
+                                                 "        copiedText = value; return true;\n"
+                                                 "    }\n"
+                                                 "}\n"),
+                               QUrl{});
+    std::unique_ptr<QObject> clipboard{clipboardComponent.create()};
+    ASSERT_NE(clipboard, nullptr);
+    harness.engine.rootContext()->setContextProperty(QStringLiteral("colorClipboard"),
+                                                     clipboard.get());
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->resize(960, 640);
+    harness.window->show();
+    harness.settle();
+
+    QImage primary(64, 64, QImage::Format_ARGB32);
+    primary.fill(QColor(12, 34, 56, 200));
+    QImage secondary(64, 64, QImage::Format_ARGB32);
+    secondary.fill(QColor(200, 100, 50, 255));
+    ASSERT_TRUE(harness.imageReview.openPairImages(std::move(primary),
+                                                   QStringLiteral("a.png"),
+                                                   std::move(secondary),
+                                                   QStringLiteral("b.png")));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    harness.settle();
+    auto* const workspace =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
+    ASSERT_NE(workspace, nullptr);
+    EXPECT_EQ(workspace->property("colorClipboard").value<QObject*>(), clipboard.get());
+    // A real sample, produced exactly the way the workspace's hover handler produces one:
+    // updateCursorPixel then captureProbeSample. The mouse path into the workspace cannot be
+    // driven from this harness (the same offscreen limitation that keeps the A/B chip drag a
+    // recorded gap), so the controller entries the handler calls are addressed directly.
+    harness.imageReview.updateCursorPixel(ImageReviewController::DisplayPrimarySlot, 10, 20);
+    harness.settle();
+    ASSERT_TRUE(harness.imageReview.cursorPixel().value(QStringLiteral("valid")).toBool())
+        << "a real hover must freeze a probe sample";
+    ASSERT_TRUE(
+        harness.imageReview.captureProbeSample(ImageReviewController::DisplayPrimarySlot, 10, 20));
+    ASSERT_TRUE(QMetaObject::invokeMethod(workspace, "clearImageHover"));
+    harness.settle();
+    EXPECT_TRUE(harness.imageReview.cursorPixel().isEmpty());
+
+    // The copy button is enabled by the frozen sample and its menu names the side, the
+    // coordinate and the value, so the user knows what they are about to copy.
+    auto* const copyButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageCopyColorButton"));
+    auto* const copyLabel =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageCopyColorSample"));
+    ASSERT_NE(copyButton, nullptr);
+    ASSERT_NE(copyLabel, nullptr);
+    EXPECT_TRUE(copyButton->property("enabled").toBool());
+    const QString label = copyLabel->property("text").toString();
+    EXPECT_TRUE(label.contains(QStringLiteral("A 原图"))) << label.toStdString();
+    EXPECT_TRUE(label.contains(QStringLiteral("像素 ("))) << label.toStdString();
+    EXPECT_TRUE(label.contains(QStringLiteral("rgb(12, 34, 56)"))) << label.toStdString();
+
+    // The numeric-format selector is the one compact entry for the whole readout family.
+    auto* const formatButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageNumericFormatButton"));
+    ASSERT_NE(formatButton, nullptr);
+    EXPECT_TRUE(formatButton->property("text").toString().contains(QStringLiteral("整数码值")));
+    auto* const floatAction =
+        harness.root->findChild<QObject*>(QStringLiteral("imageNumericFormatFloat"));
+    auto* const integerAction =
+        harness.root->findChild<QObject*>(QStringLiteral("imageNumericFormatInteger"));
+    ASSERT_NE(floatAction, nullptr);
+    ASSERT_NE(integerAction, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(floatAction, "triggered"));
+    harness.settle();
+    EXPECT_TRUE(formatButton->property("text").toString().contains(QStringLiteral("归一化浮点")));
+    EXPECT_EQ(harness.imageReview.channelText(12), QStringLiteral("0.047059"));
+    EXPECT_EQ(harness.imageReview.rgbText(12, 34, 56),
+              QStringLiteral("rgb(0.047059, 0.133333, 0.219608)"));
+    // Hex stays hexadecimal in both forms.
+    EXPECT_EQ(harness.imageReview.hexText(12, 34, 56, 200), QStringLiteral("#0C2238C8"));
+    // The copy payload follows the format.
+    EXPECT_EQ(harness.imageReview.probeColorText(ImageReviewController::ProbeRgb),
+              QStringLiteral("rgb(0.047059, 0.133333, 0.219608)"));
+    EXPECT_EQ(harness.imageReview.probeColorText(ImageReviewController::ProbeHex),
+              QStringLiteral("#0C2238C8"));
+    auto* const redColumn = harness.root->findChild<QQuickItem*>(QStringLiteral("imagePairColAR"));
+    ASSERT_NE(redColumn, nullptr);
+    EXPECT_TRUE(redColumn->isVisible());
+    EXPECT_EQ(redColumn->property("text").toString().trimmed(), QStringLiteral("0.047059"));
+    auto* const deltaColumn =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imagePairColDeltaR"));
+    ASSERT_NE(deltaColumn, nullptr);
+    EXPECT_EQ(deltaColumn->property("text").toString(), QStringLiteral("+0.737255"));
+    EXPECT_TRUE(copyLabel->property("text").toString().contains(
+        QStringLiteral("rgb(0.047059, 0.133333, 0.219608)")));
+    auto* const copyRgb = harness.root->findChild<QObject*>(QStringLiteral("imageCopyRgbAction"));
+    ASSERT_NE(copyRgb, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(copyRgb, "triggered"));
+    EXPECT_EQ(clipboard->property("copiedText").toString(),
+              QStringLiteral("rgb(0.047059, 0.133333, 0.219608)"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(integerAction, "triggered"));
+    harness.settle();
+
+    // The Alpha filter switch sits next to the observation it belongs to and is off by
+    // default; its threshold row only appears once it is on.
+    auto* const alphaToggle =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageAlphaFilterButton"));
+    auto* const alphaRow =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageAlphaFilterRow"));
+    ASSERT_NE(alphaToggle, nullptr);
+    ASSERT_NE(alphaRow, nullptr);
+    EXPECT_FALSE(harness.imageReview.alphaFilterEnabled());
+    EXPECT_FALSE(alphaRow->isVisible());
+    ASSERT_TRUE(QMetaObject::invokeMethod(alphaToggle, "clicked"));
+    EXPECT_TRUE(harness.imageReview.alphaFilterEnabled());
+    EXPECT_EQ(harness.imageReview.viewMode(), ImageReviewController::RgbOpaqueView);
+    auto* const thresholdSpin =
+        harness.root->findChild<QObject*>(QStringLiteral("imageAlphaFilterSpin"));
+    ASSERT_NE(thresholdSpin, nullptr);
+    thresholdSpin->setProperty("value", 128);
+    ASSERT_TRUE(QMetaObject::invokeMethod(thresholdSpin, "valueModified"));
+    ASSERT_TRUE(
+        harness.imageReview.captureProbeSample(ImageReviewController::DisplayPrimarySlot, 10, 20));
+    harness.settle();
+    EXPECT_TRUE(alphaRow->isVisible());
+    EXPECT_TRUE(alphaToggle->property("text").toString().contains(QStringLiteral("A > 128")));
+    auto* const displayedImage =
+        harness.root->findChild<QObject*>(QStringLiteral("imageViewport-2"));
+    auto* const thresholdSlider =
+        harness.root->findChild<QObject*>(QStringLiteral("imageAlphaFilterSlider"));
+    ASSERT_NE(displayedImage, nullptr);
+    ASSERT_NE(thresholdSlider, nullptr);
+    const auto sourceBeforeThreshold = displayedImage->property("source").toUrl();
+    thresholdSlider->setProperty("value", 200);
+    ASSERT_TRUE(QMetaObject::invokeMethod(thresholdSlider, "moved"));
+    ASSERT_TRUE(harness.waitUntil([&] { return harness.imageReview.alphaThreshold() == 200; }));
+    EXPECT_NE(displayedImage->property("source").toUrl(), sourceBeforeThreshold)
+        << "moving the threshold must invalidate Qt's displayed image, not just the readout";
+    EXPECT_EQ(harness.imageReview.imageForSlot(ImageReviewController::DisplayPrimarySlot)
+                  .pixelColor(10, 20),
+              QColor(39, 39, 39));
+
+    // The structured readout: the coordinate and the hex value are separate fields, and the
+    // hex value is not clipped away at this width - its content fits inside its own box
+    // rather than being elided behind a tooltip.
+    auto* const coordinate =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imagePairCoordA"));
+    auto* const hex = harness.root->findChild<QQuickItem*>(QStringLiteral("imagePairHexA"));
+    ASSERT_NE(coordinate, nullptr);
+    ASSERT_NE(hex, nullptr);
+    EXPECT_TRUE(coordinate->isVisible());
+    EXPECT_TRUE(hex->isVisible());
+    EXPECT_TRUE(hex->property("text").toString().startsWith(QStringLiteral("#")));
+    EXPECT_LE(hex->property("contentWidth").toReal(), hex->property("width").toReal() + 0.5)
+        << "the hex value must fit its own field instead of being elided";
+    // The whole readout block stays inside the status bar's detail area.
+    auto* const readoutBlock =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imagePairPixelReadout"));
+    ASSERT_NE(readoutBlock, nullptr);
+    EXPECT_LE(readoutBlock->x() + readoutBlock->width(), readoutBlock->parentItem()->width() + 0.5)
+        << "the readout block must not run past the status bar";
+    auto* const hints = harness.root->findChild<QQuickItem*>(QStringLiteral("imageStatusHints"));
+    auto* const details =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageStatusDetails"));
+    ASSERT_NE(hints, nullptr);
+    ASSERT_NE(details, nullptr);
+    EXPECT_GE(hints->height(), formatButton->height());
+    EXPECT_GE(details->y(), hints->y() + hints->height());
+    const QRectF formatBounds{formatButton->position(), formatButton->size()};
+    const QRectF copyBounds{copyButton->position(), copyButton->size()};
+    EXPECT_FALSE(formatBounds.intersects(copyBounds)) << "the persistent controls must not overlap";
+    EXPECT_GE(formatButton->x(), 0);
+    EXPECT_LE(copyButton->x() + copyButton->width(), hints->width() + 0.5);
+
+    // The probe keeps reading the original RGBA whatever the filter does, and names the fact
+    // that the current threshold hides this pixel. T = 200 is the exact strict-greater
+    // boundary for a 200-alpha sample, so the hint is the observable form of that rule.
+    // The Alpha toggle selects its RGB observation. Capture again after that view change,
+    // then leave the image before changing the threshold and using the copy controls.
+    ASSERT_TRUE(
+        harness.imageReview.captureProbeSample(ImageReviewController::DisplayPrimarySlot, 10, 20));
+    harness.imageReview.setAlphaThreshold(200);
+    harness.settle();
+    EXPECT_TRUE(
+        harness.imageReview.frozenProbeSample().value(QStringLiteral("alphaHidden")).toBool())
+        << "A = 200 with T = 200 is hidden, and the readout says so";
+    EXPECT_EQ(harness.imageReview.frozenProbeSample().value(QStringLiteral("a")).toInt(), 200);
+    // The copy still carries the original sample, never the mask colour.
+    EXPECT_EQ(harness.imageReview.probeColorText(ImageReviewController::ProbeRgba),
+              QStringLiteral("rgba(12, 34, 56, 200)"));
+    // One step down and the same pixel passes again.
+    harness.imageReview.setAlphaThreshold(199);
+    harness.settle();
+    EXPECT_FALSE(
+        harness.imageReview.frozenProbeSample().value(QStringLiteral("alphaHidden")).toBool());
+
+    // Evidence for the whole family at the 960px floor.
+    const auto evidenceDirectory = qEnvironmentVariable("DVS_REVIEW_EVIDENCE_DIR");
+    if (!evidenceDirectory.isEmpty()) {
+        ASSERT_TRUE(QDir().mkpath(evidenceDirectory));
+        harness.settleAnimations();
+        ASSERT_TRUE(harness.window->grabWindow().save(
+            QDir(evidenceDirectory).filePath(QStringLiteral("image-probe-readout-960.png"))));
+        // A wider window keeps the same fields readable, which is the other half of the
+        // layout claim.
+        harness.window->resize(1440, 900);
+        harness.settleAnimations();
+        EXPECT_EQ(coordinate->y(), redColumn->y()) << "use the available width before wrapping";
+        auto* const lastDelta =
+            harness.root->findChild<QQuickItem*>(QStringLiteral("imagePairColDeltaAlpha"));
+        ASSERT_NE(lastDelta, nullptr);
+        EXPECT_EQ(coordinate->y(), lastDelta->y());
+        ASSERT_TRUE(harness.window->grabWindow().save(
+            QDir(evidenceDirectory).filePath(QStringLiteral("image-probe-readout-1440.png"))));
+        ASSERT_TRUE(QMetaObject::invokeMethod(floatAction, "triggered"));
+        harness.settleAnimations();
+        EXPECT_EQ(redColumn->property("text").toString().trimmed(), QStringLiteral("0.047059"));
+        ASSERT_TRUE(harness.window->grabWindow().save(
+            QDir(evidenceDirectory)
+                .filePath(QStringLiteral("image-probe-readout-float-1440.png"))));
+    }
+}
+
+TEST(MainQmlContractTests, VideoPixelGridButtonUsesSurfaceGeometryAndActualSampling) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    auto* const surface =
+        harness.root->findChild<ComparisonSurface*>(QStringLiteral("dualVideoSurface"));
+    auto* const viewport =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("mediaViewportFocusTarget"));
+    auto* const button =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("videoPixelGridButton"));
+    ASSERT_NE(surface, nullptr);
+    ASSERT_NE(viewport, nullptr);
+    ASSERT_NE(button, nullptr);
+    EXPECT_GE(button->height(), 32.0);
+    surface->setSourceDisplayInfo(
+        {QVariantMap{{QStringLiteral("width"), 320}, {QStringLiteral("height"), 180}},
+         QVariantMap{{QStringLiteral("width"), 320}, {QStringLiteral("height"), 180}}});
+    surface->setVideoFilterMode(ComparisonSurface::VideoFilterPixel);
+    surface->zoomAt(0.5, 0.5, 16);
+    harness.settleAnimations();
+    ASSERT_EQ(surface->pixelGridPanels().size(), 2);
+    EXPECT_FALSE(viewport->property("pixelGridEnabled").toBool());
+    ASSERT_TRUE(QMetaObject::invokeMethod(button, "click"));
+    ASSERT_TRUE(harness.waitUntil([&] { return viewport->property("pixelGridEnabled").toBool(); }));
+    ASSERT_TRUE(harness.waitUntil(
+        [&] { return findItemByName(viewport, QStringLiteral("videoPixelGrid")) != nullptr; }));
+    QList<QQuickItem*> grids;
+    for (auto* child : surface->parentItem()->childItems()) {
+        if (child->objectName() == QStringLiteral("videoPixelGrid")) {
+            grids.push_back(child);
+        }
+    }
+    ASSERT_EQ(grids.size(), 2);
+    for (auto* grid : grids) {
+        EXPECT_TRUE(grid->property("active").toBool())
+            << "requested=" << grid->property("requested").toBool()
+            << " nearest=" << grid->property("nearest").toBool()
+            << " step=" << grid->property("stepX").toReal() << ","
+            << grid->property("stepY").toReal() << " size=" << grid->width() << ","
+            << grid->height();
+        EXPECT_LT(grid->property("columns").toInt() + grid->property("rows").toInt(), 1000);
+        EXPECT_EQ(grid->parentItem(), surface->parentItem());
+    }
+    surface->setVideoFilterMode(ComparisonSurface::VideoFilterSmooth);
+    harness.settle();
+    for (auto* grid : grids) {
+        EXPECT_FALSE(grid->property("active").toBool());
+    }
+    surface->setVideoFilterMode(ComparisonSurface::VideoFilterPixel);
+    surface->resetViewport();
+    harness.settle();
+    int resetGrids = 0;
+    for (auto* grid : surface->parentItem()->childItems()) {
+        if (grid->objectName() == QStringLiteral("videoPixelGrid")) {
+            ++resetGrids;
+            EXPECT_FALSE(grid->property("active").toBool());
+        }
+    }
+    EXPECT_EQ(resetGrids, 2);
+}
+
+TEST(MainQmlContractTests, ImagePixelGridButtonTracksPhysicalPixelsWithoutChangingSamples) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->resize(960, 640);
+    harness.window->show();
+    QImage image(96, 64, QImage::Format_ARGB32);
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            image.setPixelColor(x, y, QColor(x * 2, y * 3, 180));
+        }
+    }
+    ASSERT_TRUE(harness.imageReview.openPrimaryImage(image, QStringLiteral("grid.png")));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    auto* const workspace =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
+    auto* const grid = harness.root->findChild<QQuickItem*>(QStringLiteral("imagePixelGrid-2"));
+    auto* const button =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imagePixelGridButton"));
+    auto* const preview = harness.root->findChild<QQuickItem*>(QStringLiteral("imageViewport-2"));
+    ASSERT_NE(workspace, nullptr);
+    ASSERT_NE(grid, nullptr);
+    ASSERT_NE(button, nullptr);
+    ASSERT_NE(preview, nullptr);
+    EXPECT_FALSE(grid->property("requested").toBool());
+    ASSERT_TRUE(workspace->setProperty("trueSize", true));
+    harness.imageReview.setZoom(8);
+    harness.settleAnimations();
+    static_cast<void>(harness.window->grabWindow());
+    const QPointF click = button->mapToScene({button->width() / 2, button->height() / 2});
+    sendMouseMove(*harness.window, click);
+    harness.settle();
+    sendMousePress(*harness.window, click);
+    sendMouseRelease(*harness.window, click);
+    ASSERT_TRUE(harness.waitUntil([&] { return grid->property("active").toBool(); }))
+        << "requested=" << grid->property("requested").toBool()
+        << " nearest=" << grid->property("nearest").toBool()
+        << " step=" << grid->property("stepX").toReal() << "," << grid->property("stepY").toReal()
+        << " size=" << grid->width() << "," << grid->height() << " enabled=" << button->isEnabled()
+        << " visible=" << button->isVisible() << " click=" << click.x() << "," << click.y();
+    EXPECT_NEAR(grid->property("stepX").toReal() * harness.window->devicePixelRatio(), 8, 0.001);
+    EXPECT_NEAR(grid->property("stepY").toReal() * harness.window->devicePixelRatio(), 8, 0.001);
+    EXPECT_NEAR(grid->x() + grid->property("originX").toReal(), preview->x(), 0.001);
+    EXPECT_NEAR(grid->y() + grid->property("originY").toReal(), preview->y(), 0.001);
+    harness.imageReview.updateCursorPixel(2, 35, 30);
+    EXPECT_EQ(harness.imageReview.cursorPixel().value(QStringLiteral("r")).toInt(), 70);
+    EXPECT_EQ(harness.imageReview.cursorPixel().value(QStringLiteral("g")).toInt(), 90);
+    const QString evidenceDirectory = qEnvironmentVariable("DVS_REVIEW_EVIDENCE_DIR");
+    if (!evidenceDirectory.isEmpty()) {
+        ASSERT_TRUE(QDir().mkpath(evidenceDirectory));
+        ASSERT_TRUE(harness.window->grabWindow().save(
+            QDir(evidenceDirectory).filePath(QStringLiteral("image-pixel-grid-800.png"))));
+    }
+    harness.imageReview.setZoom(7.9);
+    ASSERT_TRUE(harness.waitUntil([&] { return !grid->property("active").toBool(); }));
 }
 
 TEST(MainQmlContractTests, ImageSingleCrosshairFollowsPixelsAndHidesOutside) {
@@ -9698,11 +10583,16 @@ TEST(MainQmlContractTests, ImageSingleCrosshairFollowsPixelsAndHidesOutside) {
     ASSERT_TRUE(harness.waitUntil(
         [&] { return preview->property("sourceSize").toSize() == QSize(80, 60); }));
     static_cast<void>(harness.window->grabWindow());
+    auto* const statusBar = harness.root->findChild<QQuickItem*>(QStringLiteral("imageStatusBar"));
+    ASSERT_NE(statusBar, nullptr);
+    const qreal statusHeightBeforeSample = statusBar->height();
     const qreal scale = preview->width() / 80.0;
     const QPointF position{preview->x() + 35.75 * scale, preview->y() + 30.75 * scale};
     sendMouseMove(*harness.window, viewport->mapToScene(position));
     ASSERT_TRUE(harness.waitUntil([&] { return crosshair->isVisible(); }));
     EXPECT_TRUE(coordinates->isVisible());
+    EXPECT_EQ(statusBar->height(), statusHeightBeforeSample)
+        << "hovering must not resize the image underneath the pointer";
     const QVariantMap hover = workspace->property("hoverPoint").toMap();
     EXPECT_EQ(hover.value(QStringLiteral("imgX")).toInt(), 35);
     EXPECT_EQ(hover.value(QStringLiteral("imgY")).toInt(), 30);
@@ -9750,8 +10640,13 @@ TEST(MainQmlContractTests, ImageSingleCrosshairFollowsPixelsAndHidesOutside) {
                                                (preview->y() + preview->height()) / 2}));
     harness.settle();
     EXPECT_TRUE(crosshair->isVisible());
-    EXPECT_NEAR(vertical->height(), preview->y() + preview->height(), 0.01);
-    EXPECT_NEAR(horizontal->width(), preview->x() + preview->width(), 0.01);
+    EXPECT_NEAR(vertical->height(),
+                qMin(viewport->height(), preview->y() + preview->height()) -
+                    qMax(0.0, preview->y()),
+                0.01);
+    EXPECT_NEAR(horizontal->width(),
+                qMin(viewport->width(), preview->x() + preview->width()) - qMax(0.0, preview->x()),
+                0.01);
 
     harness.imageReview.resetView();
     harness.settleAnimations();
@@ -9834,7 +10729,8 @@ TEST(MainQmlContractTests, ImageSingleCrosshairTracksTheCroppedWorkingCopy) {
         harness.root->findChild<QQuickItem*>(QStringLiteral("syncedCrosshair-2"));
     auto* const coordinates =
         harness.root->findChild<QQuickItem*>(QStringLiteral("imageCrosshairCoordinateText-2"));
-    auto* const readout = harness.root->findChild<QQuickItem*>(QStringLiteral("imagePixelReadout"));
+    auto* const readout =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imagePixelReadoutCoordinate"));
     ASSERT_NE(workspace, nullptr);
     ASSERT_NE(viewport, nullptr);
     ASSERT_NE(preview, nullptr);
@@ -10024,7 +10920,10 @@ TEST(MainQmlContractTests, HighBitDepthAlphaIsVisibleInPixelReadout) {
     ASSERT_TRUE(harness.activateWorkspace(1));
     harness.settle();
     auto* workspace = harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
-    auto* readout = harness.root->findChild<QQuickItem*>(QStringLiteral("imagePixelReadout"));
+    // The readout is now a structured block: the coordinate is its own fixed-width field
+    // and the high-depth detail is a separate labelled line, so the test reads the fields
+    // it names instead of one elided sentence.
+    auto* readout = harness.root->findChild<QQuickItem*>(QStringLiteral("imagePixelReadoutNative"));
     ASSERT_NE(workspace, nullptr);
     ASSERT_NE(readout, nullptr);
     struct LoaderReset final {
@@ -10062,11 +10961,21 @@ TEST(MainQmlContractTests, HighBitDepthAlphaIsVisibleInPixelReadout) {
     const auto text = readout->property("text").toString();
     EXPECT_TRUE(text.contains(QStringLiteral("A 32768"))) << text.toStdString();
     EXPECT_TRUE(text.contains(QStringLiteral("50.0008%"))) << text.toStdString();
+    // Evidence for the structured two-line readout at the 960px floor: the shot shows the
+    // coordinate, the hex value, the alpha percentage and the high-depth detail laid out as
+    // their own fields instead of one elided sentence.
     const auto evidenceDirectory = qEnvironmentVariable("DVS_REVIEW_EVIDENCE_DIR");
     if (!evidenceDirectory.isEmpty()) {
         ASSERT_TRUE(QDir().mkpath(evidenceDirectory));
+        harness.settleAnimations();
         ASSERT_TRUE(harness.window->grabWindow().save(
             QDir(evidenceDirectory).filePath(QStringLiteral("high-depth-alpha.png"))));
+        // The same readout in the normalized-float form, so the layout claim covers both.
+        harness.imageReview.setNumericFormat(ImageReviewController::NormalizedFloat);
+        harness.settle();
+        ASSERT_TRUE(harness.window->grabWindow().save(
+            QDir(evidenceDirectory).filePath(QStringLiteral("high-depth-alpha-float.png"))));
+        harness.imageReview.setNumericFormat(ImageReviewController::IntegerCodeValues);
     }
 }
 
@@ -10239,7 +11148,7 @@ TEST(MainQmlContractTests, ShortcutHelpMatchesBoundShortcuts) {
         EXPECT_EQ(descriptionFor(model, QStringLiteral("Home / End")),
                   QStringLiteral("第一帧 / 最后一帧"));
         EXPECT_EQ(descriptionFor(model, QStringLiteral("Alt+← / →")),
-                  QStringLiteral("Wipe 分屏线左移 / 右移"));
+                  QStringLiteral("垂直分屏线左移 / 右移（仅左右切分）"));
         EXPECT_FALSE(descriptionFor(model, QStringLiteral("A / D")).isEmpty());
     }
 
@@ -10254,10 +11163,786 @@ TEST(MainQmlContractTests, ShortcutHelpMatchesBoundShortcuts) {
     EXPECT_TRUE(descriptionFor(frameModel, QStringLiteral(", / .")).isEmpty());
 }
 
+// The image help table must describe the entries that actually exist after the A/B
+// consolidation: the renamed single-image A/B mode, the A/B chips as the direct-selection
+// entry, their right-click close, the hold-to-peek, and the new probe colour copy, numeric
+// format and Alpha filter. No entry may advertise the removed standalone "切至 A / 切至 B"
+// button, which duplicated the chips, the shortcuts and the in-canvas indicator.
+TEST(MainQmlContractTests, ImageShortcutHelpDescribesTheRealEntries) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    auto* const shortcutHelp =
+        harness.root->findChild<QObject*>(QStringLiteral("shortcutHelpOverlay"));
+    ASSERT_NE(shortcutHelp, nullptr);
+    shortcutHelp->setProperty("imagePreset", true);
+    shortcutHelp->setProperty("playerPreset", false);
+    const QVariantList model = shortcutHelp->property("shortcutModel").toList();
+    const auto descriptionFor = [](const QVariantList& rows, const QString& keys) {
+        for (const QVariant& entry : rows) {
+            const QVariantList pair = entry.toList();
+            if (pair.size() == 2 && pair.front().toString() == keys) {
+                return pair.back().toString();
+            }
+        }
+        return QString{};
+    };
+    // The renamed mode, and the shortcut that drives it.
+    EXPECT_EQ(descriptionFor(model, QStringLiteral("空格 / T")),
+              QStringLiteral("单图 A/B 模式切换 A / B"));
+    // The file chips are the primary entry for choosing a side, and their right click closes
+    // exactly that side.
+    EXPECT_EQ(descriptionFor(model, QStringLiteral("点击 A / B 标签")),
+              QStringLiteral("直接选择该侧素材"));
+    EXPECT_EQ(descriptionFor(model, QStringLiteral("右键 A / B 标签")),
+              QStringLiteral("关闭此侧素材"));
+    // Hold-to-peek survives the consolidation.
+    EXPECT_TRUE(descriptionFor(model, QStringLiteral("`（按住）/ Shift+`"))
+                    .contains(QStringLiteral("按住直看")));
+    // The new probe readout entries.
+    EXPECT_EQ(descriptionFor(model, QStringLiteral("复制颜色 ▾")),
+              QStringLiteral("复制探针样本的 RGB / RGBA / Hex"));
+    EXPECT_EQ(descriptionFor(model, QStringLiteral("数值：整数码值 / 归一化浮点")),
+              QStringLiteral("只改显示与复制格式，不改像素与统计"));
+    EXPECT_EQ(descriptionFor(model, QStringLiteral("Alpha 过滤")),
+              QStringLiteral("仅显示 A > T；未通过区域显示中性棋盘格"));
+    // The removed duplicate must not be documented as if it still existed.
+    for (const QVariant& entry : model) {
+        const QVariantList pair = entry.toList();
+        if (pair.size() != 2) {
+            continue;
+        }
+        EXPECT_NE(pair.front().toString(), QStringLiteral("切至 A / 切至 B"))
+            << "the standalone A/B switch button is gone and must not be advertised";
+    }
+}
+
+// D1/D2/D3 keyboard contract: H owns pure mode (Tab is free for focus navigation again), Z
+// flips between fit-window and true 1:1 through the same toggle the canvas double-click
+// uses, and T alternates the whole-canvas direct look between the two slots of the actual
+// current comparison pair - paused only, so it never competes with playback semantics.
+TEST(MainQmlContractTests, HTogglesChromeTabNavigatesAndTAlternatesTheActualPair) {
+    QTemporaryDir temporaryDirectory;
+    ASSERT_TRUE(temporaryDirectory.isValid());
+    const QString pathA = temporaryDirectory.filePath(QStringLiteral("keys-a.mp4"));
+    const QString pathB = temporaryDirectory.filePath(QStringLiteral("keys-b.mp4"));
+    for (const QString& path : {pathA, pathB}) {
+        QFile file{path};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_GT(file.write("key-source", 10), 0);
+    }
+    WorkspaceHarness harness;
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate);
+    ASSERT_TRUE(installValidatedVideoSet(
+        harness.snapshot,
+        {std::filesystem::path{pathA.toStdWString()}, std::filesystem::path{pathB.toStdWString()}},
+        rate.value(),
+        120,
+        400'000));
+    harness.snapshot->displayedFrame = domain::FrameId{41};
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    auto* const reviewShortcuts =
+        harness.root->findChild<QObject*>(QStringLiteral("reviewShortcuts"));
+    ASSERT_NE(reviewShortcuts, nullptr);
+    const auto shortcutBySequence = [&reviewShortcuts](const QString& wanted) {
+        const QList<QObject*> declared =
+            reviewShortcuts->findChildren<QObject*>(Qt::FindDirectChildrenOnly);
+        for (QObject* const object : declared) {
+            if (object->property("sequence").toString() == wanted) {
+                return object;
+            }
+        }
+        return static_cast<QObject*>(nullptr);
+    };
+
+    // Tab no longer toggles the chrome: it hands focus to the next tab-stop while the
+    // interface stays exactly where it was.
+    EXPECT_TRUE(harness.root->property("chromeVisible").toBool());
+    auto* const viewport =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("mediaViewportFocusTarget"));
+    ASSERT_NE(viewport, nullptr);
+    viewport->forceActiveFocus();
+    ASSERT_TRUE(viewport->hasActiveFocus());
+    const QQuickItem* const focusedBeforeTab = harness.window->activeFocusItem();
+    sendKey(*harness.window, Qt::Key_Tab);
+    harness.settle();
+    EXPECT_TRUE(harness.root->property("chromeVisible").toBool())
+        << "Tab must not toggle the chrome";
+    EXPECT_NE(harness.window->activeFocusItem(), focusedBeforeTab)
+        << "Tab must move the keyboard focus, not hide the interface";
+
+    // H is the pure-mode key now, in both directions.
+    sendKey(*harness.window, Qt::Key_H);
+    harness.settle();
+    EXPECT_FALSE(harness.root->property("chromeVisible").toBool());
+    sendKey(*harness.window, Qt::Key_H);
+    harness.settle();
+    EXPECT_TRUE(harness.root->property("chromeVisible").toBool());
+
+    // H must stay inert while a text-editing control owns the keyboard. Real user entry:
+    // open the manual-anchor dialog and focus its editable canonical-frame spin box. Honest
+    // scope note: with the dialog open the input context is BOTH modal and text-editing, so
+    // this proves the user-facing guarantee (H never hides the interface while an editable
+    // spin box holds focus) but not the text guard in isolation from the popup guard; the
+    // context ladder orders modal above text, and the inspector's threshold spin box (a
+    // non-modal editable site) lives inside a loader that this small-window harness never
+    // instantiates, so the isolated non-modal case stays a recorded limitation.
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(), "openManualAnchorsDialog"));
+    harness.settle();
+    // Popup content lives under the window's overlay, not under the root item's scene-graph
+    // subtree - start the objectName walk from the window content item.
+    auto* const spinBox =
+        findItemByName(harness.window->contentItem(), QStringLiteral("canonicalAnchorFrame"));
+    ASSERT_NE(spinBox, nullptr);
+    EXPECT_TRUE(spinBox->isVisible())
+        << "the anchor dialog's editable spin box must be visible once the dialog opens";
+    spinBox->forceActiveFocus();
+    harness.settle();
+    // Editable spin boxes forward focus to their internal editor, so the window's active
+    // focus item is the editor - inside the spin box, whose textEditingInputContext puts the
+    // input context on that chain.
+    QQuickItem* const focusItem = harness.window->activeFocusItem();
+    ASSERT_NE(focusItem, nullptr);
+    ASSERT_NE(focusItem, viewport) << "focus must have moved into the spin box's editor";
+    bool focusInsideSpinBox = false;
+    for (const QQuickItem* cursor = focusItem; cursor != nullptr; cursor = cursor->parentItem()) {
+        if (cursor == spinBox) {
+            focusInsideSpinBox = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(focusInsideSpinBox) << "focus must land inside the editable spin box";
+    sendKey(*harness.window, Qt::Key_H);
+    harness.settle();
+    EXPECT_TRUE(harness.root->property("chromeVisible").toBool())
+        << "H must be inert while an editable spin box holds the focus";
+    // Leave the edit context exactly the way a user would: Esc closes the dialog and the
+    // viewport takes the keyboard back.
+    sendKey(*harness.window, Qt::Key_Escape);
+    harness.settle();
+    viewport->forceActiveFocus();
+    harness.settle();
+
+    // The dialog scenario couples the popup guard with the text guard. This isolates the
+    // text guard alone: a visible, non-modal, test-owned TextInput declares the same
+    // textEditingInputContext contract the editable spin boxes implement. Focus it for real,
+    // press H, and require that the keystroke reached the text (real keyboard routing) while
+    // the chrome stays put; handing focus back must make H toggle again.
+    QQmlComponent textProbeComponent{&harness.engine};
+    textProbeComponent.setData(
+        "import QtQuick\nTextInput { objectName: \"hGuardTextProbe\"; property bool "
+        "textEditingInputContext: true; width: 140; height: 22; x: 8; y: 8; color: \"white\" }",
+        QUrl{QStringLiteral("qrc:/h-guard-text-probe")});
+    ASSERT_EQ(textProbeComponent.status(), QQmlComponent::Ready)
+        << componentErrors(textProbeComponent);
+    QQuickItem* const textProbe = qobject_cast<QQuickItem*>(textProbeComponent.create());
+    ASSERT_NE(textProbe, nullptr);
+    textProbe->setParentItem(harness.window->contentItem());
+    textProbe->forceActiveFocus();
+    harness.settle();
+    ASSERT_EQ(harness.window->activeFocusItem(), textProbe)
+        << "the non-modal text probe must own the keyboard";
+    // postEvent keys carry their text explicitly (the constructor does not synthesize it),
+    // and both guard and positive control use the same primitive: the same H key event
+    // posted to the window must reach the focused target through the normal dispatch, so a
+    // difference between the two scenarios isolates the focus context rather than the
+    // sending mechanism.
+    const auto postHKey = [&window = *harness.window]() {
+        QCoreApplication::postEvent(
+            &window,
+            new QKeyEvent{QEvent::KeyPress, Qt::Key_H, Qt::NoModifier, QStringLiteral("h")});
+        QCoreApplication::postEvent(
+            &window,
+            new QKeyEvent{QEvent::KeyRelease, Qt::Key_H, Qt::NoModifier, QStringLiteral("h")});
+    };
+    postHKey();
+    harness.settle();
+    EXPECT_TRUE(harness.root->property("chromeVisible").toBool())
+        << "H must be inert while a non-modal text input owns the focus";
+    EXPECT_EQ(textProbe->property("text").toString(), QStringLiteral("h"))
+        << "the keystroke must reach the text input, not be swallowed silently";
+    // Positive control with the same event primitive: the identical posted H must toggle
+    // once focus is back on the viewport, proving the guard difference is the focus context.
+    viewport->forceActiveFocus();
+    harness.settle();
+    postHKey();
+    harness.settle();
+    EXPECT_FALSE(harness.root->property("chromeVisible").toBool())
+        << "with focus back on the viewport, H toggles the chrome again";
+    postHKey();
+    harness.settle();
+    EXPECT_TRUE(harness.root->property("chromeVisible").toBool());
+    delete textProbe;
+
+    // Hiding the chrome shows the restore pill, and the pill names H - never the retired
+    // Tab binding the D1 rebind removed.
+    sendKey(*harness.window, Qt::Key_H);
+    harness.settle();
+    EXPECT_FALSE(harness.root->property("chromeVisible").toBool());
+    auto* const restorePill =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("chromeRestorePill"));
+    ASSERT_NE(restorePill, nullptr);
+    EXPECT_TRUE(restorePill->isVisible());
+    QString pillText;
+    const QList<QQuickItem*> pillChildren = restorePill->findChildren<QQuickItem*>();
+    for (const QQuickItem* const child : pillChildren) {
+        const QString candidate = child->property("text").toString();
+        if (!candidate.isEmpty()) {
+            pillText += candidate;
+            pillText += QLatin1Char(' ');
+        }
+    }
+    EXPECT_NE(pillText.indexOf(QString::fromUtf8("按 H")), -1)
+        << "the restore pill must name the H binding";
+    EXPECT_EQ(pillText.indexOf(QStringLiteral("Tab")), -1)
+        << "the restore pill must not advertise the retired Tab binding";
+    sendKey(*harness.window, Qt::Key_H);
+    harness.settle();
+    EXPECT_TRUE(harness.root->property("chromeVisible").toBool());
+
+    // T alternates the direct look over the actual pair. With sources A/B the effective
+    // edge is A<->B, so the canvas focus flips 0 -> 1 -> 0.
+    QObject* const pairLookKey = shortcutBySequence(QStringLiteral("T"));
+    ASSERT_NE(pairLookKey, nullptr);
+    EXPECT_TRUE(pairLookKey->property("enabled").toBool());
+    ASSERT_TRUE(QMetaObject::invokeMethod(pairLookKey, "activated"));
+    harness.settle();
+    EXPECT_EQ(harness.shell->canvasFocusSlot(), 0)
+        << "the first T enters the direct look on the pair's first slot";
+    ASSERT_TRUE(QMetaObject::invokeMethod(pairLookKey, "activated"));
+    harness.settle();
+    EXPECT_EQ(harness.shell->canvasFocusSlot(), 1)
+        << "the second T flips to the pair's second slot";
+    ASSERT_TRUE(QMetaObject::invokeMethod(pairLookKey, "activated"));
+    harness.settle();
+    EXPECT_EQ(harness.shell->canvasFocusSlot(), 0) << "T keeps alternating inside the current pair";
+
+    // While playing, T stays inert: no focus flip, no playback command.
+    harness.snapshot->playbackState = domain::PlaybackState::kPlaying;
+    harness.controller->refreshProjection();
+    harness.settle();
+    ASSERT_TRUE(harness.root->property("playing").toBool());
+    harness.submitted.clear();
+    ASSERT_TRUE(QMetaObject::invokeMethod(pairLookKey, "activated"));
+    harness.settle();
+    EXPECT_EQ(harness.shell->canvasFocusSlot(), 0)
+        << "a playing session keeps T away from the canvas focus";
+    EXPECT_TRUE(harness.submitted.empty()) << "T must not inject playback commands while playing";
+    harness.snapshot->playbackState = domain::PlaybackState::kPaused;
+    harness.controller->refreshProjection();
+    harness.settle();
+
+    // Z shares the double-click toggle: one press leaves the fit state, a second press
+    // returns to it (the exact native target is the pixel badge's own contract).
+    QObject* const nativeFitKey = shortcutBySequence(QStringLiteral("Z"));
+    ASSERT_NE(nativeFitKey, nullptr);
+    EXPECT_TRUE(nativeFitKey->property("enabled").toBool());
+    auto* const surface = viewport->property("surface").value<QObject*>();
+    ASSERT_NE(surface, nullptr);
+    const qreal fitScale = surface->property("viewScale").toReal();
+    ASSERT_TRUE(QMetaObject::invokeMethod(nativeFitKey, "activated"));
+    harness.settle();
+    const qreal nativeScale = surface->property("viewScale").toReal();
+    EXPECT_NE(nativeScale, fitScale) << "Z must leave the fit state";
+    ASSERT_TRUE(QMetaObject::invokeMethod(nativeFitKey, "activated"));
+    harness.settle();
+    EXPECT_NEAR(surface->property("viewScale").toReal(), fitScale, 1e-6)
+        << "the second Z returns to fit";
+}
+
+// D3: three predictions with NO explicit GT reference. The C candidate switch must name the
+// reason through the visible feedback channel and leave the committed pair untouched instead
+// of silently anchoring on source A (the ReviewController canonical-source fallback stays a
+// general read-path fallback, not a switch anchor), and the hold-to-peek GT entry - the
+// mode-bar button and the backtick hold alike - stays unavailable for the same reason.
+// E1: the viewport wipe-orientation button is the discoverable axis entry. Its hit area
+// must meet the 32 px theme minimum even though ViewCommandButton defaults to 24 px; a real
+// click (window mouse events) must flip the axis, keep the ratio and the view transform, and
+// swap the label halves (左右 <-> 上下).
+TEST(MainQmlContractTests, ViewportWipeOrientationButtonMeetsHitMinimumAndTogglesAxis) {
+    QTemporaryDir temporaryDirectory;
+    ASSERT_TRUE(temporaryDirectory.isValid());
+    std::vector<std::filesystem::path> paths;
+    for (const char name : {'a', 'b'}) {
+        paths.push_back(std::filesystem::path{
+            (temporaryDirectory.filePath(QString{"pair-%1.mp4"}.arg(QLatin1Char{name})))
+                .toStdWString()});
+        QFile file{QString::fromStdWString(paths.back().wstring())};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_GT(file.write("pair-source", 11), 0);
+    }
+    WorkspaceHarness harness;
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate);
+    ASSERT_TRUE(installValidatedVideoSet(harness.snapshot, paths, rate.value(), 120, 400'000));
+    harness.snapshot->displayedFrame = domain::FrameId{41};
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+    ASSERT_EQ(harness.controller->sourceCount(), 2);
+
+    // Switch the video session into wipe mode through the real preference.
+    harness.preferences.setViewMode(ReviewPreferencesController::ViewMode::Wipe);
+    harness.window->requestActivate();
+    harness.settleAnimations();
+    static_cast<void>(harness.window->grabWindow());
+
+    auto* const button =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("viewportWipeOrientationButton"));
+    ASSERT_NE(button, nullptr);
+    EXPECT_TRUE(button->isVisible());
+    EXPECT_GE(button->height(), 32.0)
+        << "the new entry must meet the 32 px hit-area minimum on its own instance";
+
+    // The orientation state lives on the dualVideoSurface (the viewport mirrors it). Main
+    // has no such property, and reading a missing QVariant there converts to 0 - which
+    // would make the initial assertion vacuously pass and the post-click one fail. Assert
+    // the QVariant is valid before comparing, and set a non-default view first so the
+    // "keeps the view" checks cannot be satisfied by a reset to defaults.
+    auto* const surface = harness.root->findChild<QQuickItem*>(QStringLiteral("dualVideoSurface"));
+    ASSERT_NE(surface, nullptr);
+    const QVariant orientationBefore = surface->property("wipeOrientation");
+    ASSERT_TRUE(orientationBefore.isValid());
+    EXPECT_EQ(orientationBefore.toInt(), 0) << "a fresh session starts vertical";
+
+    const QString verticalLabel = button->property("text").toString();
+    EXPECT_NE(verticalLabel.indexOf(QString::fromUtf8("左右")), -1)
+        << "vertical label must name 左右 halves";
+
+    // Non-default view through the real interaction API: if the axis toggle reset the view,
+    // these saved values would not survive. zoomAt/panBy are Q_INVOKABLE on the typed
+    // surface; the QQuickItem* handle cannot call them directly.
+    auto* const typedSurface = qobject_cast<ComparisonSurface*>(surface);
+    ASSERT_NE(typedSurface, nullptr);
+    typedSurface->zoomAt(0.5, 0.5, 1.25);
+    typedSurface->panBy(0.05, -0.05);
+    harness.settle();
+    const qreal ratioBefore = surface->property("wipePosition").toReal();
+    const qreal scaleBefore = surface->property("viewScale").toReal();
+    const qreal centerXBefore = surface->property("viewCenterX").toReal();
+    const qreal centerYBefore = surface->property("viewCenterY").toReal();
+
+    // Real click at the button centre through window mouse events.
+    const QPointF buttonCenter =
+        button->mapToScene(QPointF{button->width() / 2, button->height() / 2});
+    sendMouseMove(*harness.window, buttonCenter);
+    harness.settleAnimations();
+    SCOPED_TRACE(::testing::Message()
+                 << "button enabled=" << button->isEnabled() << " opacity=" << button->opacity()
+                 << " mode=" << surface->property("viewMode").toInt()
+                 << " input=" << harness.root->property("inputContext").toInt());
+    sendMousePress(*harness.window, buttonCenter);
+    sendMouseRelease(*harness.window, buttonCenter);
+    harness.settle();
+
+    const QVariant orientationAfter = surface->property("wipeOrientation");
+    ASSERT_TRUE(orientationAfter.isValid());
+    EXPECT_EQ(orientationAfter.toInt(), 1) << "one real click must switch to the horizontal axis";
+    const QString horizontalLabel = button->property("text").toString();
+    EXPECT_NE(horizontalLabel.indexOf(QString::fromUtf8("上下")), -1)
+        << "horizontal label must name 上下 halves";
+    EXPECT_EQ(surface->property("wipePosition").toReal(), ratioBefore)
+        << "axis toggle keeps the split ratio";
+    EXPECT_EQ(surface->property("viewScale").toReal(), scaleBefore) << "axis toggle keeps the zoom";
+    EXPECT_DOUBLE_EQ(surface->property("viewCenterX").toReal(), centerXBefore)
+        << "axis toggle keeps the pan X";
+    EXPECT_DOUBLE_EQ(surface->property("viewCenterY").toReal(), centerYBefore)
+        << "axis toggle keeps the pan Y";
+
+    // Second click returns to vertical.
+    const QPointF buttonCenter2 =
+        button->mapToScene(QPointF{button->width() / 2, button->height() / 2});
+    sendMousePress(*harness.window, buttonCenter2);
+    sendMouseRelease(*harness.window, buttonCenter2);
+    harness.settle();
+    const QVariant orientationBack = surface->property("wipeOrientation");
+    ASSERT_TRUE(orientationBack.isValid());
+    EXPECT_EQ(orientationBack.toInt(), 0);
+}
+
+// E1 keyboard evidence: W toggles the wipe split axis only while a real wipe composite is
+// on screen, and the Alt arrow pairs are gated to their real axes - in vertical, Alt+Left/
+// Right move the split and Alt+Up/Down are inert; in horizontal the roles swap. Real window
+// key events drive everything, and the moves route through the same
+// wipePositionRequested -> root.wipePosition -> surface path the handle drag uses.
+TEST(MainQmlContractTests, WipeAxisKeyboardGatesMatchTheRealAxes) {
+    QTemporaryDir temporaryDirectory;
+    ASSERT_TRUE(temporaryDirectory.isValid());
+    std::vector<std::filesystem::path> paths;
+    for (const char name : {'a', 'b'}) {
+        paths.push_back(std::filesystem::path{
+            (temporaryDirectory.filePath(QString{"pair-%1.mp4"}.arg(QLatin1Char{name})))
+                .toStdWString()});
+        QFile file{QString::fromStdWString(paths.back().wstring())};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_GT(file.write("pair-source", 11), 0);
+    }
+    WorkspaceHarness harness;
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate);
+    ASSERT_TRUE(installValidatedVideoSet(harness.snapshot, paths, rate.value(), 120, 400'000));
+    harness.snapshot->displayedFrame = domain::FrameId{41};
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+    harness.preferences.setViewMode(ReviewPreferencesController::ViewMode::Wipe);
+    harness.window->requestActivate();
+    harness.settleAnimations();
+    auto* const viewport =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("mediaViewportFocusTarget"));
+    ASSERT_NE(viewport, nullptr);
+    viewport->forceActiveFocus();
+    static_cast<void>(harness.window->grabWindow());
+    harness.settle();
+    SCOPED_TRACE(::testing::Message()
+                 << "window active=" << harness.window->isActive()
+                 << " wipe=" << harness.root->property("wipeMode").toBool()
+                 << " global=" << harness.root->property("globalMediaShortcutsEnabled").toBool()
+                 << " input=" << harness.root->property("inputContext").toInt());
+
+    auto* const surface = harness.root->findChild<QQuickItem*>(QStringLiteral("dualVideoSurface"));
+    ASSERT_NE(surface, nullptr);
+    const QVariant orientationBefore = surface->property("wipeOrientation");
+    ASSERT_TRUE(orientationBefore.isValid());
+    EXPECT_EQ(orientationBefore.toInt(), 0) << "vertical starts the session";
+
+    // W toggles vertical -> horizontal while the composite is live.
+    sendKey(*harness.window, Qt::Key_W);
+    harness.settle();
+    EXPECT_EQ(surface->property("wipeOrientation").toInt(), 1)
+        << "W must switch the split axis to horizontal";
+
+    // In horizontal, Alt+Left/Right must be inert: the split no longer moves along X.
+    harness.root->setProperty("wipePosition", QVariant{0.5});
+    harness.settle();
+    sendKey(*harness.window, Qt::Key_Left, Qt::AltModifier);
+    harness.settle();
+    EXPECT_EQ(harness.root->property("wipePosition").toDouble(), 0.5)
+        << "Alt+Left must stay inert in horizontal mode";
+    // Alt+Up moves the split up along Y (ratio 0.5 -> 0.49). The delta is a normalized
+    // split-ratio step applied to the single ratio state, so the step is exact and identical
+    // with normal chrome and in immersive mode (no outer-frame vs surface extent mixing).
+    sendKey(*harness.window, Qt::Key_Up, Qt::AltModifier);
+    harness.settle();
+    EXPECT_NEAR(harness.root->property("wipePosition").toDouble(), 0.49, 1e-6)
+        << "Alt+Up must move the horizontal split";
+
+    // Back to vertical: the roles swap. Alt+Up/Down inert, Alt+Left moves.
+    sendKey(*harness.window, Qt::Key_W);
+    harness.settle();
+    EXPECT_EQ(surface->property("wipeOrientation").toInt(), 0);
+    harness.root->setProperty("wipePosition", QVariant{0.5});
+    harness.settle();
+    sendKey(*harness.window, Qt::Key_Up, Qt::AltModifier);
+    harness.settle();
+    EXPECT_EQ(harness.root->property("wipePosition").toDouble(), 0.5)
+        << "Alt+Up must stay inert in vertical mode";
+    sendKey(*harness.window, Qt::Key_Left, Qt::AltModifier);
+    harness.settle();
+    EXPECT_NEAR(harness.root->property("wipePosition").toDouble(), 0.49, 1e-6)
+        << "Alt+Left must move the vertical split";
+}
+
+// E3: the controller-level ping-pong toggle flips ONLY the walk intent on the current
+// loop interval. Each toggle submits SetPlaybackRangeCommand with the SAME [in, out] and
+// loop=true; without an armed interval it is a refusal, not a new range. The harness
+// snapshot is a manually driven fixture: after every command the fixture is advanced by
+// the production projection protocol (the real coordinator projects range/loop/pingPong
+// into its published snapshot), so settle-time refreshes keep the controller view
+// consistent instead of silently clearing the optimistic projection.
+TEST(MainQmlContractTests, PingPongToggleFlipsIntentWithoutTouchingTheInterval) {
+    QTemporaryDir temporaryDirectory;
+    ASSERT_TRUE(temporaryDirectory.isValid());
+    std::vector<std::filesystem::path> paths;
+    for (const char name : {'a', 'b'}) {
+        paths.push_back(std::filesystem::path{
+            (temporaryDirectory.filePath(QString{"pair-%1.mp4"}.arg(QLatin1Char{name})))
+                .toStdWString()});
+        QFile file{QString::fromStdWString(paths.back().wstring())};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_GT(file.write("pair-source", 11), 0);
+    }
+    WorkspaceHarness harness;
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate);
+    ASSERT_TRUE(installValidatedVideoSet(harness.snapshot, paths, rate.value(), 120, 400'000));
+    harness.snapshot->displayedFrame = domain::FrameId{15};
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    // Without a range: the toggle refuses instead of inventing an interval.
+    EXPECT_FALSE(harness.controller->togglePlaybackRangePingPong());
+
+    // Arm a loop range, then flip the walk intent twice through the real controller entry.
+    // After each command the fixture snapshot is advanced exactly as the real coordinator
+    // would project it (setPlaybackRange -> loop state; toggle -> flipped pingPong).
+    ASSERT_TRUE(harness.controller->setPlaybackRange(10, 20, true));
+    harness.snapshot->playbackRangeIn = domain::FrameId{10};
+    harness.snapshot->playbackRangeOut = domain::FrameId{20};
+    harness.snapshot->playbackRangeLoop = true;
+    harness.snapshot->playbackRangePingPong = false;
+    harness.settle();
+    EXPECT_EQ(harness.controller->playbackRangeIn(), 10)
+        << "the armed range must survive projection before the toggle";
+    EXPECT_EQ(harness.controller->playbackRangeOut(), 20);
+
+    ASSERT_TRUE(harness.controller->togglePlaybackRangePingPong());
+    harness.snapshot->playbackRangePingPong = true;
+    harness.settle();
+    EXPECT_TRUE(harness.controller->playbackRangePingPong());
+
+    ASSERT_TRUE(harness.controller->togglePlaybackRangePingPong());
+    harness.snapshot->playbackRangePingPong = false;
+    harness.settle();
+    EXPECT_FALSE(harness.controller->playbackRangePingPong());
+
+    std::vector<
+        std::pair<std::optional<bool>, std::optional<std::pair<std::int64_t, std::int64_t>>>>
+        rangeCommands;
+    for (const application::PlaybackCommand& command : harness.submitted) {
+        const auto* setRange = std::get_if<application::SetPlaybackRangeCommand>(&command);
+        if (setRange == nullptr) {
+            continue;
+        }
+        std::optional<std::pair<std::int64_t, std::int64_t>> interval;
+        if (setRange->range.has_value()) {
+            interval = {setRange->range->inInclusive.value(),
+                        setRange->range->outInclusive.value()};
+        }
+        rangeCommands.push_back({setRange->pingPong, interval});
+    }
+    // Session setup may legitimately submit its own range command; the LAST THREE are ours:
+    // arm(loop, no ping-pong) -> toggle ON -> toggle OFF, all on the same [10, 20].
+    ASSERT_GE(rangeCommands.size(), 3U);
+    const auto& arm = rangeCommands[rangeCommands.size() - 3U];
+    const auto& on = rangeCommands[rangeCommands.size() - 2U];
+    const auto& off = rangeCommands[rangeCommands.size() - 1U];
+    ASSERT_TRUE(arm.first.has_value() && on.first.has_value() && off.first.has_value());
+    EXPECT_FALSE(*arm.first) << "arming sets loop without the walk";
+    EXPECT_TRUE(*on.first) << "the first toggle must turn the walk ON";
+    EXPECT_FALSE(*off.first) << "the second toggle must turn the walk OFF";
+    for (const auto* entry : {&arm, &on, &off}) {
+        ASSERT_TRUE(entry->second.has_value());
+        EXPECT_EQ(entry->second->first, 10);
+        EXPECT_EQ(entry->second->second, 20);
+    }
+
+    // E3 ENTRY CHAIN (still open): set-range -> toggle ON -> real playRange must submit
+    // StartRangePlaybackCommand with pingPong=true. The product fix is in (playRange
+    // forwards view_.playbackRangePingPong); the harness-level run of this chain needs the
+    // fixture advanced for the playback generation as well and stays on the open list.
+}
+TEST(MainQmlContractTests, CandidateSwitchWithoutReferenceReportsInsteadOfAnchoringOnA) {
+    QTemporaryDir temporaryDirectory;
+    ASSERT_TRUE(temporaryDirectory.isValid());
+    std::vector<std::filesystem::path> paths;
+    for (const char name : {'p', 'q', 'r'}) {
+        paths.push_back(std::filesystem::path{
+            (temporaryDirectory.filePath(QString{"pair-%1.mp4"}.arg(QLatin1Char{name})))
+                .toStdWString()});
+        QFile file{QString::fromStdWString(paths.back().wstring())};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_GT(file.write("pair-source", 11), 0);
+    }
+    WorkspaceHarness harness;
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate);
+    ASSERT_TRUE(installAllPredictionVideoSet(harness.snapshot, paths, rate.value(), 120, 400'000))
+        << "an all-prediction three-source set must validate";
+    harness.snapshot->displayedFrame = domain::FrameId{41};
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+    ASSERT_EQ(harness.controller->sourceCount(), 3);
+    // The real projection keeps the canonical fallback in referenceSourceIndex, so the
+    // explicit-GT flag is the fact the gate must read: canonical >= 0 but no reference role.
+    const int canonicalIndex = harness.controller->canonicalSourceIndex();
+    ASSERT_GE(canonicalIndex, 0) << "the no-reference counterexample needs canonical >= 0";
+    EXPECT_EQ(harness.root->property("referenceSourceIndex").toInt(), canonicalIndex);
+    EXPECT_FALSE(harness.root->property("hasExplicitReference").toBool())
+        << "this test needs the all-prediction session: no explicit GT role";
+
+    const int edgeBefore = harness.root->property("differenceEdge").toInt();
+    const std::size_t commandsBefore = harness.submitted.size();
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(), "switchCandidateEdge"));
+    harness.settle();
+    const QString feedback = harness.root->property("intentMessage").toString();
+    EXPECT_TRUE(feedback.contains(QString::fromUtf8("未设置参考")))
+        << "the refused switch must say why; got: " << feedback.toStdString();
+    EXPECT_EQ(harness.root->property("differenceEdge").toInt(), edgeBefore)
+        << "the committed pair must not change without a GT anchor";
+    EXPECT_EQ(harness.submitted.size(), commandsBefore)
+        << "the refused switch must not submit a pair command";
+
+    // The hold-to-peek GT entry follows the same availability: the mode-bar button is hidden
+    // and a real backtick press/release never shows the raw reference.
+    auto* const peekButton = findItemByName(qobject_cast<QQuickItem*>(harness.root.get()),
+                                            QStringLiteral("differencePeekButton"));
+    if (peekButton != nullptr) {
+        EXPECT_FALSE(peekButton->isVisible())
+            << "the peek button must stay hidden without an identifiable reference";
+    }
+    EXPECT_FALSE(harness.root->property("differencePeekAvailable").toBool());
+    // A manual press (the hold arms through the window-level watcher) proves the hold is
+    // inert WHILE pressed, not merely that it ends.
+    QKeyEvent backtickPress{QEvent::KeyPress, Qt::Key_QuoteLeft, Qt::NoModifier};
+    QCoreApplication::sendEvent(harness.window, &backtickPress);
+    harness.settle();
+    EXPECT_FALSE(harness.root->property("differencePeekActive").toBool())
+        << "the backtick hold must stay inert while pressed without a GT reference";
+    QKeyEvent backtickRelease{QEvent::KeyRelease, Qt::Key_QuoteLeft, Qt::NoModifier};
+    QCoreApplication::sendEvent(harness.window, &backtickRelease);
+    harness.settle();
+    EXPECT_FALSE(harness.root->property("differencePeekActive").toBool());
+}
+
+TEST(MainQmlContractTests, TAlternatesTheActualThreeSourcePairWithRealKeys) {
+    QTemporaryDir temporaryDirectory;
+    ASSERT_TRUE(temporaryDirectory.isValid());
+    std::vector<std::filesystem::path> paths;
+    for (const char name : {'x', 'y', 'z'}) {
+        paths.push_back(std::filesystem::path{
+            (temporaryDirectory.filePath(QString{"pair-%1.mp4"}.arg(QLatin1Char{name})))
+                .toStdWString()});
+        QFile file{QString::fromStdWString(paths.back().wstring())};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_GT(file.write("pair-source", 11), 0);
+    }
+    WorkspaceHarness harness;
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate);
+    ASSERT_TRUE(installValidatedVideoSet(harness.snapshot, paths, rate.value(), 120, 400'000));
+    harness.snapshot->displayedFrame = domain::FrameId{41};
+    // GT on session slot 1 (source B), so the anchor is not the zero slot.
+    identifyReferenceSlot(harness.snapshot, 1);
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+    ASSERT_EQ(harness.controller->sourceCount(), 3);
+    // The explicit-GT projection: a validated reference role shows up as the flag, while the
+    // index keeps pointing at the reference slot for its existing readers.
+    EXPECT_TRUE(harness.root->property("hasExplicitReference").toBool())
+        << "an identified reference role must project the explicit-GT flag";
+    EXPECT_EQ(harness.root->property("referenceSourceIndex").toInt(), 1);
+
+    // Switch the effective comparison pair to B<->C through the real Main edge applier.
+    const QVariantList edges = harness.root->property("differenceEdges").toList();
+    int targetPreference = -1;
+    bool foundEdge = false;
+    for (const QVariant& entry : edges) {
+        const QVariantMap edge = entry.toMap();
+        if (edge.value(QStringLiteral("firstSourceId")).toInt() == 1 &&
+            edge.value(QStringLiteral("secondSourceId")).toInt() == 2) {
+            targetPreference = edge.value(QStringLiteral("preferenceValue")).toInt();
+            foundEdge = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(foundEdge) << "the B<->C edge must exist in a three-source session";
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        harness.root.get(), "applyDifferenceEdge", Q_ARG(QVariant, QVariant{targetPreference})));
+    harness.settle();
+    // The fake session accepts the pair switch exactly like the application layer would (the
+    // precedent is the DualReferenceDifference harness): the submitted pair lands in the
+    // snapshot so the projection reflects the switch, and a succeeded terminal clears the
+    // controller's pending-command state so `busy` does not hold the real-key T path below
+    // disabled for the rest of the test.
+    ASSERT_TRUE(std::holds_alternative<application::SetActiveComparisonPairCommand>(
+        harness.submitted.back()));
+    {
+        const auto& pairCommand =
+            std::get<application::SetActiveComparisonPairCommand>(harness.submitted.back());
+        ASSERT_TRUE(pairCommand.pair.has_value());
+        auto accepted = std::make_shared<application::SessionSnapshot>(*harness.snapshot);
+        accepted->activeComparisonPair = *pairCommand.pair;
+        harness.snapshot = accepted;
+    }
+    harness.terminals.push_back(application::CommandTerminal{
+        .context = application::commandContext(harness.submitted.back()),
+        .outcome = application::CommandOutcome::Succeeded,
+    });
+    // The real-key T shortcut is enabled only while the controller is idle, and the fake
+    // session must complete EVERY accepted command the way the application layer does - the
+    // startup pair-policy handshakes included - or the oldest pending command keeps `busy`
+    // true and a real key press finds the shortcut disabled.
+    for (const application::PlaybackCommand& command : harness.submitted) {
+        harness.terminals.push_back(application::CommandTerminal{
+            .context = application::commandContext(command),
+            .outcome = application::CommandOutcome::Succeeded,
+        });
+    }
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_FALSE(harness.controller->busy()) << "the session must be idle before the real keys";
+    EXPECT_EQ(harness.root->property("differenceFirstSlot").toInt(), 1);
+    EXPECT_EQ(harness.root->property("differenceSecondSlot").toInt(), 2);
+
+    // Real key delivery (window events, not signal synthesis): T enters the direct look on
+    // the pair's first slot (1 = B), the next press flips to slot 2 (C).
+    QObject* const reviewShortcuts =
+        harness.root->findChild<QObject*>(QStringLiteral("reviewShortcuts"));
+    ASSERT_NE(reviewShortcuts, nullptr);
+    QObject* const pairLookKey = [&reviewShortcuts]() {
+        const QList<QObject*> declared =
+            reviewShortcuts->findChildren<QObject*>(Qt::FindDirectChildrenOnly);
+        for (QObject* const object : declared) {
+            if (object->property("sequence").toString() == QStringLiteral("T")) {
+                return object;
+            }
+        }
+        return static_cast<QObject*>(nullptr);
+    }();
+    ASSERT_NE(pairLookKey, nullptr);
+    // A real key press reaches the shortcut only through its enabled gate, so pin the gate
+    // itself: an accidental regression here would otherwise look like "T does nothing".
+    EXPECT_TRUE(pairLookKey->property("enabled").toBool())
+        << "videoViewShortcutsEnabled="
+        << harness.root->property("videoViewShortcutsEnabled").toInt()
+        << " inputContext=" << harness.root->property("inputContext").toInt()
+        << " overlayVisible=" << harness.root->property("overlayVisible").toInt()
+        << " playing=" << harness.root->property("playing").toInt();
+    // QML Shortcuts reach activation through the focus item's ShortcutOverride delivery; a
+    // real session always has a focused stage (HToggles parks focus the same way before its
+    // real keys). Without one the synthesized key press finds no delivery path.
+    auto* const stage =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("mediaViewportFocusTarget"));
+    ASSERT_NE(stage, nullptr);
+    stage->forceActiveFocus();
+    QKeyEvent tPress{QEvent::KeyPress, Qt::Key_T, Qt::NoModifier};
+    QKeyEvent tRelease{QEvent::KeyRelease, Qt::Key_T, Qt::NoModifier};
+    static_cast<void>(QCoreApplication::sendEvent(harness.window, &tPress));
+    static_cast<void>(QCoreApplication::sendEvent(harness.window, &tRelease));
+    harness.settle();
+    EXPECT_EQ(harness.shell->canvasFocusSlot(), 1)
+        << "T must enter on the actual pair's first slot (B), not a hardcoded A";
+    static_cast<void>(QCoreApplication::sendEvent(harness.window, &tPress));
+    static_cast<void>(QCoreApplication::sendEvent(harness.window, &tRelease));
+    harness.settle();
+    EXPECT_EQ(harness.shell->canvasFocusSlot(), 2)
+        << "the second T flips to the actual pair's second slot (C)";
+
+    // Playing sessions keep T inert: no flip, no playback command.
+    harness.snapshot->playbackState = domain::PlaybackState::kPlaying;
+    harness.controller->refreshProjection();
+    harness.settle();
+    ASSERT_TRUE(harness.root->property("playing").toBool());
+    harness.submitted.clear();
+    static_cast<void>(QCoreApplication::sendEvent(harness.window, &tPress));
+    static_cast<void>(QCoreApplication::sendEvent(harness.window, &tRelease));
+    harness.settle();
+    EXPECT_EQ(harness.shell->canvasFocusSlot(), 2);
+    EXPECT_TRUE(harness.submitted.empty());
+}
+
 // Digit keys switch comparison modes with the mode bar's own availability (pair modes need
 // two sources, three-source modes stay disabled here), F/+/- drive the viewport zoom path, and
-// the backtick pair toggles/locks the raw-reference peek. The help table must be the entries
-// ReviewShortcuts itself declares plus the static mouse tails - not a hand-maintained copy.
+// the backtick hold/lock pair drives the raw-reference peek. The help table must be the
+// entries ReviewShortcuts itself declares plus the static mouse tails - not a hand-maintained
+// copy.
 TEST(MainQmlContractTests, ViewShortcutsSwitchModesZoomAndGenerateHelp) {
     WorkspaceHarness harness;
     ASSERT_TRUE(harness.create()) << harness.error;
@@ -10332,8 +12017,12 @@ TEST(MainQmlContractTests, ViewShortcutsSwitchModesZoomAndGenerateHelp) {
     ASSERT_NE(zoomInKey, nullptr);
     QObject* const resetKey = shortcutBySequence(QStringLiteral("R"));
     ASSERT_NE(resetKey, nullptr);
-    QObject* const peekKey = shortcutBySequence(QStringLiteral("`"));
-    ASSERT_NE(peekKey, nullptr);
+    // D4: the backtick is a real hold now (a window-level watcher, not a Shortcut): press
+    // shows the raw reference view, release restores the difference view, auto-repeat pairs
+    // never re-trigger it, and a release carrying a modifier pressed mid-hold still ends it.
+    // Shift+backtick remains the lock, and a plain hold never unlocks a locked peek.
+    QObject* const peekToggleKey = shortcutBySequence(QStringLiteral("`"));
+    EXPECT_EQ(peekToggleKey, nullptr) << "the backtick must not be a toggle Shortcut any more";
     QObject* const peekLockKey = shortcutBySequence(QStringLiteral("Shift+`"));
     ASSERT_NE(peekLockKey, nullptr);
     EXPECT_TRUE(fitKey->property("enabled").toBool());
@@ -10345,21 +12034,48 @@ TEST(MainQmlContractTests, ViewShortcutsSwitchModesZoomAndGenerateHelp) {
     ASSERT_TRUE(QMetaObject::invokeMethod(resetKey, "activated"));
     EXPECT_EQ(harness.preferences.viewModeCode(), ComparisonSurface::Difference);
 
-    // Backtick toggles the raw-reference peek; Shift+backtick locks it, and a plain tap on a
-    // locked peek unlocks instead of flipping the raw view back on.
-    EXPECT_TRUE(harness.root->property("differenceMode").toBool());
     // The peek names the reference (GT) source, so the session must identify one.
+    EXPECT_TRUE(harness.root->property("differenceMode").toBool());
     identifyReferenceSlot(harness.snapshot, 0);
     harness.controller->refreshProjection();
     harness.settle();
-    EXPECT_TRUE(peekKey->property("enabled").toBool());
-    ASSERT_TRUE(QMetaObject::invokeMethod(peekKey, "activated"));
+    const auto sendBacktick = [&harness](const QEvent::Type type,
+                                         const Qt::KeyboardModifiers modifiers = Qt::NoModifier,
+                                         const bool autoRepeat = false) {
+        QKeyEvent event{type, Qt::Key_QuoteLeft, modifiers, QStringLiteral("`"), autoRepeat, 1};
+        static_cast<void>(QCoreApplication::sendEvent(harness.window, &event));
+        QCoreApplication::processEvents();
+    };
+    // Basic hold: press shows, release restores.
+    sendBacktick(QEvent::KeyPress);
     EXPECT_TRUE(harness.root->property("differencePeekActive").toBool());
-    ASSERT_TRUE(QMetaObject::invokeMethod(peekKey, "activated"));
+    sendBacktick(QEvent::KeyRelease);
     EXPECT_FALSE(harness.root->property("differencePeekActive").toBool());
+    // Auto-repeat pairs (press and release alike) never change the hold.
+    sendBacktick(QEvent::KeyPress);
+    sendBacktick(QEvent::KeyPress, Qt::NoModifier, true);
+    sendBacktick(QEvent::KeyRelease, Qt::NoModifier, true);
+    sendBacktick(QEvent::KeyPress, Qt::NoModifier, true);
+    EXPECT_TRUE(harness.root->property("differencePeekActive").toBool())
+        << "auto-repeats must not end the hold";
+    // A release with a modifier pressed mid-hold still ends the armed hold.
+    sendBacktick(QEvent::KeyRelease, Qt::ShiftModifier);
+    EXPECT_FALSE(harness.root->property("differencePeekActive").toBool())
+        << "a modified release of an armed hold must still restore the difference view";
+    // A modified press never starts a hold; its release passes through untouched.
+    sendBacktick(QEvent::KeyPress, Qt::ControlModifier);
+    EXPECT_FALSE(harness.root->property("differencePeekActive").toBool());
+    sendBacktick(QEvent::KeyRelease, Qt::ControlModifier);
+    EXPECT_FALSE(harness.root->property("differencePeekActive").toBool());
+    // The lock is its own action; a hold on a locked peek neither unlocks nor flickers.
     ASSERT_TRUE(QMetaObject::invokeMethod(peekLockKey, "activated"));
     EXPECT_TRUE(harness.root->property("differencePeekActive").toBool());
     EXPECT_TRUE(harness.root->property("differencePeekLocked").toBool());
+    sendBacktick(QEvent::KeyPress);
+    EXPECT_TRUE(harness.root->property("differencePeekActive").toBool());
+    sendBacktick(QEvent::KeyRelease);
+    EXPECT_TRUE(harness.root->property("differencePeekActive").toBool())
+        << "releasing the hold keeps a locked peek on screen";
     const QString peekEvidence = qEnvironmentVariable("DVS_REVIEW_EVIDENCE_DIR");
     if (!peekEvidence.isEmpty()) {
         QDir().mkpath(peekEvidence);
@@ -10375,7 +12091,7 @@ TEST(MainQmlContractTests, ViewShortcutsSwitchModesZoomAndGenerateHelp) {
         harness.window->grabWindow().save(
             QDir{peekEvidence}.filePath(QStringLiteral("gt-peek-locked-960.png")));
     }
-    ASSERT_TRUE(QMetaObject::invokeMethod(peekKey, "activated"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(peekLockKey, "activated"));
     EXPECT_FALSE(harness.root->property("differencePeekActive").toBool());
     EXPECT_FALSE(harness.root->property("differencePeekLocked").toBool());
 
@@ -12620,6 +14336,314 @@ TEST(MainQmlContractTests, FileAssociationDialogOpensAndReportsActionOutcomes) {
     EXPECT_EQ(harness.fileAssociationService->registerCalls, 2);
 }
 
+// Flow176 UI rework evidence harness. Runs the same measurement and screenshot protocol
+// before and after the layout rework (gated by DVS_REVIEW_EVIDENCE_DIR): identical window
+// sizes, identical session states. The chrome-height, canvas-space and OSC-height claims are
+// read from these captures, never from the plan's numbers. All geometry is recorded in
+// logical pixels at the current QT_SCALE_FACTOR; each DPI run uses its own evidence dir.
+TEST(MainQmlContractTests, ChromeGeometryAndScreenshotEvidence) {
+    QTemporaryDir temporaryDirectory;
+    ASSERT_TRUE(temporaryDirectory.isValid());
+    std::vector<std::filesystem::path> videoPaths;
+    for (const char name : {'a', 'b', 'c'}) {
+        videoPaths.push_back(std::filesystem::path{
+            (temporaryDirectory.filePath(QString{"evidence-%1.mp4"}.arg(QLatin1Char{name})))
+                .toStdWString()});
+        QFile file{QString::fromStdWString(videoPaths.back().wstring())};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_GT(file.write("evidence-source-bytes", 10), 0);
+    }
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate);
+
+    WorkspaceHarness harness;
+    // The edit-mode capture needs the step-3 edit controller in the QML context.
+    harness.withImageEdit = true;
+    ASSERT_TRUE(installValidatedVideoSet(harness.snapshot, videoPaths, rate.value(), 120, 400'000));
+    harness.snapshot->sessionState = domain::SessionState::kReady;
+    harness.snapshot->playbackState = domain::PlaybackState::kPaused;
+    harness.snapshot->displayedFrame = domain::FrameId{41};
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    const auto evidenceDirectory = qEnvironmentVariable("DVS_REVIEW_EVIDENCE_DIR");
+    if (!evidenceDirectory.isEmpty()) {
+        ASSERT_TRUE(QDir().mkpath(evidenceDirectory));
+    }
+    QStringList geometryLines;
+    geometryLines << QStringLiteral("# logical pixels; scale=%1")
+                         .arg(QString::number(harness.window->devicePixelRatio(), 'g', 4));
+
+    const auto recordItem = [&geometryLines, &harness](const char* prefix,
+                                                       const QString& name,
+                                                       const bool required = false) {
+        auto* const item = harness.root->findChild<QQuickItem*>(name);
+        if (item == nullptr) {
+            // Required anchors must exist: an evidence capture that silently skips a missing
+            // milestone records a filename the picture behind it may not match.
+            if (required) {
+                ADD_FAILURE() << "evidence anchor missing: " << name.toStdString();
+            }
+            geometryLines << QStringLiteral("%1.%2=missing").arg(QLatin1String{prefix}, name);
+            return static_cast<QQuickItem*>(nullptr);
+        }
+        geometryLines << QStringLiteral("%1.%2.visible=%3")
+                             .arg(QLatin1String{prefix}, name, item->isVisible() ? "1" : "0");
+        geometryLines << QStringLiteral("%1.%2.w=%3")
+                             .arg(QLatin1String{prefix},
+                                  name,
+                                  QString::number(item->width(), 'f', 1));
+        geometryLines << QStringLiteral("%1.%2.h=%3")
+                             .arg(QLatin1String{prefix},
+                                  name,
+                                  QString::number(item->height(), 'f', 1));
+        geometryLines << QStringLiteral("%1.%2.x=%3")
+                             .arg(QLatin1String{prefix}, name, QString::number(item->x(), 'f', 1));
+        geometryLines << QStringLiteral("%1.%2.y=%3")
+                             .arg(QLatin1String{prefix}, name, QString::number(item->y(), 'f', 1));
+        return item;
+    };
+    const auto recordStageArea = [&geometryLines](const char* prefix,
+                                                  const QQuickItem* workspace,
+                                                  const QQuickItem* topChrome,
+                                                  const QQuickItem* statusBar) {
+        if (workspace == nullptr || topChrome == nullptr || statusBar == nullptr) {
+            geometryLines << QStringLiteral("%1.stage=unmeasured").arg(QLatin1String{prefix});
+            return;
+        }
+        // The real stage (canvas) box: ImageWorkspace anchors the stage between the command
+        // panel (+12 top margin) and the status bar (-12 bottom margin), inset 12 left/right.
+        const qreal stageTop = topChrome->y() + topChrome->height() + 12.0;
+        const qreal stageBottom = statusBar->y() - 12.0;
+        const qreal stageHeight = stageBottom - stageTop;
+        const qreal stageWidth = qMax(0.0, workspace->width() - 24.0);
+        geometryLines << QStringLiteral("%1.stage.h=%2")
+                             .arg(QLatin1String{prefix}, QString::number(stageHeight, 'f', 1));
+        geometryLines << QStringLiteral("%1.stage.w=%2")
+                             .arg(QLatin1String{prefix}, QString::number(stageWidth, 'f', 1));
+        geometryLines << QStringLiteral("%1.stage.area=%2")
+                             .arg(QLatin1String{prefix},
+                                  QString::number(stageHeight * stageWidth, 'f', 0));
+    };
+    const auto recordWindow = [&geometryLines, &harness](const QString& prefix) {
+        geometryLines << QStringLiteral("%1.window.w=%2").arg(prefix).arg(harness.window->width());
+        geometryLines << QStringLiteral("%1.window.h=%2").arg(prefix).arg(harness.window->height());
+    };
+    const auto shot = [&harness, &evidenceDirectory](const char* name) {
+        if (evidenceDirectory.isEmpty()) {
+            return;
+        }
+        harness.settleAnimations();
+        ASSERT_TRUE(harness.window->grabWindow().save(
+            QDir(evidenceDirectory).filePath(QString::fromLatin1(name))));
+    };
+
+    // ---- Video workspace, default comparison view at the working size. ----
+    // The 1440x900 evidence window must land on a screen whose available area fits BOTH
+    // dimensions (a largest-area screen can still be too narrow or too short, e.g. a
+    // portrait display); otherwise Windows clamps the window and the capture would
+    // silently show a different geometry than the filename claims. Try each candidate in
+    // turn and record what every screen achieved; the guard below skips the scenario as
+    // NOT evidenced when none fits.
+    {
+        QStringList screensReport;
+        for (QScreen* screen : QGuiApplication::screens()) {
+            const QRect available = screen->availableGeometry();
+            screensReport << QStringLiteral("%1 %2x%3@%4")
+                                 .arg(screen->name())
+                                 .arg(available.width())
+                                 .arg(available.height())
+                                 .arg(QString::number(screen->devicePixelRatio(), 'g', 3));
+        }
+        geometryLines
+            << QStringLiteral("screens: %1").arg(screensReport.join(QStringLiteral("; ")));
+        for (QScreen* screen : QGuiApplication::screens()) {
+            const QRect available = screen->availableGeometry();
+            harness.window->setScreen(screen);
+            harness.window->setGeometry(available.x() + (available.width() - 1440) / 2,
+                                        available.y() + (available.height() - 900) / 2,
+                                        1440,
+                                        900);
+            harness.settle();
+            geometryLines << QStringLiteral("screen %1 candidate: requested 1440x900 "
+                                            "achieved %2x%3")
+                                 .arg(screen->name())
+                                 .arg(harness.window->width())
+                                 .arg(harness.window->height());
+            if (harness.window->width() == 1440 && harness.window->height() == 900) {
+                break;
+            }
+        }
+    }
+    harness.window->resize(1440, 900);
+    harness.settle();
+    harness.settleAnimations();
+    if (harness.window->width() != 1440 || harness.window->height() != 900) {
+        geometryLines << QStringLiteral("video1440.window.clamped=%1x%2 - the 1440x900 "
+                                        "evidence scenario was NOT captured this run")
+                             .arg(harness.window->width())
+                             .arg(harness.window->height());
+        if (!evidenceDirectory.isEmpty()) {
+            QFile clampedReport{
+                QDir(evidenceDirectory).filePath(QStringLiteral("chrome-geometry.txt"))};
+            static_cast<void>(clampedReport.open(QIODevice::WriteOnly | QIODevice::Append));
+            clampedReport.write(geometryLines.join(QLatin1Char{'\n'}).toUtf8());
+        }
+        GTEST_SKIP() << "no screen fits the 1440x900 evidence window at the current scale: "
+                        "achieved "
+                     << harness.window->width() << "x" << harness.window->height() << " at DPR "
+                     << harness.window->devicePixelRatio();
+    }
+    // The evidence comparison needs identical actual sizes: a window clamped by the screen
+    // edge must fail here instead of being compared as if it were 1440x900.
+    EXPECT_EQ(harness.window->width(), 1440);
+    EXPECT_EQ(harness.window->height(), 900);
+    shot("video-default-1440.png");
+    recordWindow(QStringLiteral("video1440"));
+    recordItem("video1440", QStringLiteral("activeSourceStrip"), true);
+    recordItem("video1440", QStringLiteral("compareModeBar"), true);
+    recordItem("video1440", QStringLiteral("transport"), true);
+    recordItem("video1440", QStringLiteral("mediaViewportFocusTarget"), true);
+    recordItem("video1440", QStringLiteral("viewportPixelReadoutPlate"));
+
+    // In/out range state: the transport grows its range cluster.
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(), "setInPoint"));
+    harness.settle();
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(), "setOutPoint"));
+    harness.settle();
+    EXPECT_GE(harness.shell->inFrame(), 0) << "the range capture must show a real range";
+    shot("video-range-1440.png");
+    recordItem("videoRange1440", QStringLiteral("transport"), true);
+
+    // Three-source ROI triplet preset.
+    harness.preferences.setViewMode(ReviewPreferencesController::ViewMode::RoiTriplet);
+    harness.settle();
+    harness.settleAnimations();
+    {
+        auto* const strip = recordItem("videoRoi1440", QStringLiteral("roiTripletStrip"), true);
+        ASSERT_NE(strip, nullptr);
+        EXPECT_TRUE(strip->isVisible()) << "the ROI capture must show the triplet strip";
+    }
+    shot("video-roi-triplet-1440.png");
+    harness.preferences.setViewMode(ReviewPreferencesController::ViewMode::SideBySide);
+    harness.settle();
+
+    // Supported floor size.
+    harness.window->resize(960, 640);
+    harness.settle();
+    harness.settleAnimations();
+    EXPECT_EQ(harness.window->width(), 960);
+    EXPECT_EQ(harness.window->height(), 640);
+    shot("video-min-960.png");
+    recordWindow(QStringLiteral("video960"));
+    recordItem("video960", QStringLiteral("transport"), true);
+
+    // ---- Image workspace: one pair, every comparison mode + edit mode. ----
+    QImage imageA(320, 240, QImage::Format_ARGB32);
+    QImage imageB(320, 240, QImage::Format_ARGB32);
+    for (int y = 0; y < 240; ++y) {
+        for (int x = 0; x < 320; ++x) {
+            imageA.setPixelColor(x, y, QColor(x % 256, (x / 2) % 256, y % 256, 255));
+            imageB.setPixelColor(x, y, QColor((x + 12) % 256, (x / 2) % 256, (y + 5) % 256, 255));
+        }
+    }
+    ASSERT_TRUE(harness.imageReview.openPairImages(
+        imageA, QStringLiteral("evidence-a.png"), imageB, QStringLiteral("evidence-b.png")));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    harness.window->resize(1440, 900);
+    harness.settle();
+    harness.settleAnimations();
+
+    shot("image-default-1440.png");
+    recordWindow(QStringLiteral("image1440"));
+    recordStageArea("image1440",
+                    recordItem("image1440", QStringLiteral("imageWorkspaceRoot"), true),
+                    recordItem("image1440", QStringLiteral("imageCommandPanel"), true),
+                    recordItem("image1440", QStringLiteral("imageStatusBar"), true));
+
+    // Every mode capture asserts the controller state, so a screenshot filename always
+    // describes the mode the picture actually shows.
+    const auto clickItem = [&harness](const QString& name, const char* method) {
+        auto* const item = harness.root->findChild<QQuickItem*>(name);
+        EXPECT_NE(item, nullptr) << name.toStdString();
+        return item != nullptr && QMetaObject::invokeMethod(item, method);
+    };
+    const auto clickMode = [&](const QString& name, const int expectedMode) {
+        EXPECT_TRUE(clickItem(name, "clicked")) << name.toStdString();
+        harness.settle();
+        EXPECT_EQ(harness.imageReview.compareMode(), expectedMode)
+            << "capture state mismatch after " << name.toStdString();
+    };
+
+    clickMode(QStringLiteral("imageModeSide"), 1);
+    {
+        auto* const secondary =
+            harness.root->findChild<QQuickItem*>(QStringLiteral("secondaryViewport"));
+        ASSERT_NE(secondary, nullptr);
+        EXPECT_TRUE(secondary->isVisible());
+    }
+    shot("image-side-by-side-1440.png");
+    clickMode(QStringLiteral("imageModeWipe"), 5);
+    {
+        auto* const wipe = harness.root->findChild<QQuickItem*>(QStringLiteral("wipeOverlay"));
+        ASSERT_NE(wipe, nullptr);
+        EXPECT_TRUE(wipe->isVisible());
+    }
+    shot("image-wipe-1440.png");
+    clickMode(QStringLiteral("imageModeFade"), 7);
+    {
+        auto* const fade = harness.root->findChild<QQuickItem*>(QStringLiteral("fadeOverlay"));
+        ASSERT_NE(fade, nullptr);
+        EXPECT_TRUE(fade->isVisible());
+    }
+    shot("image-fade-1440.png");
+    clickMode(QStringLiteral("imageModePrimary"), 0);
+    EXPECT_TRUE(clickItem(QStringLiteral("imageModeAbsDiff"), "triggered"));
+    EXPECT_TRUE(harness.waitUntil([&harness] { return harness.imageReview.hasDiffResult(); }))
+        << "the diff capture needs a real difference result";
+    harness.settle();
+    EXPECT_EQ(harness.imageReview.compareMode(), 2);
+    {
+        auto* const diff = harness.root->findChild<QQuickItem*>(QStringLiteral("diffViewport"));
+        ASSERT_NE(diff, nullptr);
+        EXPECT_TRUE(diff->isVisible());
+    }
+    shot("image-diff-1440.png");
+
+    clickMode(QStringLiteral("imageModePrimary"), 0);
+    EXPECT_TRUE(clickItem(QStringLiteral("imageEditStartButton"), "clicked"));
+    harness.settle();
+    EXPECT_TRUE(harness.imageEdit.property("active").toBool())
+        << "the edit capture must show an active edit session";
+    shot("image-edit-1440.png");
+    recordStageArea("imageEdit1440",
+                    recordItem("imageEdit1440", QStringLiteral("imageWorkspaceRoot"), true),
+                    recordItem("imageEdit1440", QStringLiteral("imageCommandPanel"), true),
+                    recordItem("imageEdit1440", QStringLiteral("imageStatusBar"), true));
+    EXPECT_TRUE(clickItem(QStringLiteral("imageEditStartButton"), "clicked"));
+    harness.settle();
+    EXPECT_FALSE(harness.imageEdit.property("active").toBool());
+
+    harness.window->resize(960, 640);
+    harness.settle();
+    harness.settleAnimations();
+    EXPECT_EQ(harness.window->width(), 960);
+    EXPECT_EQ(harness.window->height(), 640);
+    shot("image-min-960.png");
+    recordWindow(QStringLiteral("image960"));
+    recordStageArea("image960",
+                    recordItem("image960", QStringLiteral("imageWorkspaceRoot"), true),
+                    recordItem("image960", QStringLiteral("imageCommandPanel"), true),
+                    recordItem("image960", QStringLiteral("imageStatusBar"), true));
+
+    if (!evidenceDirectory.isEmpty()) {
+        QFile geometryFile{QDir(evidenceDirectory).filePath(QStringLiteral("chrome-geometry.txt"))};
+        ASSERT_TRUE(geometryFile.open(QIODevice::WriteOnly | QIODevice::Text));
+        ASSERT_TRUE(geometryFile.write(geometryLines.join('\n').toUtf8() + '\n'));
+    }
+}
+
 } // namespace
 } // namespace dvs::ui
 
@@ -12630,6 +14654,7 @@ int main(int argumentCount, char* arguments[]) {
     static_cast<void>(
         qmlRegisterType<dvs::ui::ComparisonSurface>("Dvs.Ui", 1, 0, "ComparisonSurface"));
     static_cast<void>(qmlRegisterType<dvs::ui::JogKeyHandler>("Dvs.Ui", 1, 0, "JogKeyHandler"));
+    static_cast<void>(qmlRegisterType<dvs::ui::HoldKeyHandler>("Dvs.Ui", 1, 0, "HoldKeyHandler"));
     testing::InitGoogleTest(&argumentCount, arguments);
     return RUN_ALL_TESTS();
 }

@@ -89,6 +89,14 @@ using SurfaceDifferenceEdge = presentation::DifferenceEdge;
 using SurfaceDifferenceFilter = presentation::DifferenceFilter;
 using SurfaceThresholdPolicy = presentation::ThresholdPolicy;
 
+// E1: wipe split axis. Vertical is the historical left/right split along X; Horizontal is the
+// top/bottom split along Y. Every wipe consumer - the renderer's clip/UV math, the panel
+// layout, the QML hit mapping and the handle - must read the same value.
+enum class SurfaceWipeOrientation : std::uint8_t {
+    Vertical = 0,
+    Horizontal = 1,
+};
+
 struct SurfaceViewTransform final {
     float centerX = 0.5F;
     float centerY = 0.5F;
@@ -216,6 +224,7 @@ struct SurfaceRenderState final {
     // of being smoothed away by bilinear taps. Default keeps legacy bilinear behaviour.
     SurfaceDifferenceFilter videoFilter = SurfaceDifferenceFilter::Bilinear;
     float wipePosition = 0.5F;
+    SurfaceWipeOrientation wipeOrientation = SurfaceWipeOrientation::Vertical;
     bool exactPlaneAvailable = false;
     bool thresholdEnabled = false;
     float threshold = 0.0F;
@@ -282,14 +291,16 @@ struct Nv12ColorTransform final {
                                                      std::uint32_t pixelWidth,
                                                      std::uint32_t pixelHeight) noexcept;
 
-[[nodiscard]] SurfacePanelLayout computeSurfacePanelLayout(SurfaceViewMode viewMode,
-                                                           float logicalWidth,
-                                                           float logicalHeight,
-                                                           std::uint32_t pixelWidth,
-                                                           std::uint32_t pixelHeight,
-                                                           std::uint8_t referenceSlot,
-                                                           SurfaceDifferenceEdge differenceEdge,
-                                                           float wipePosition) noexcept;
+[[nodiscard]] SurfacePanelLayout computeSurfacePanelLayout(
+    SurfaceViewMode viewMode,
+    float logicalWidth,
+    float logicalHeight,
+    std::uint32_t pixelWidth,
+    std::uint32_t pixelHeight,
+    std::uint8_t referenceSlot,
+    SurfaceDifferenceEdge differenceEdge,
+    float wipePosition,
+    SurfaceWipeOrientation wipeOrientation = SurfaceWipeOrientation::Vertical) noexcept;
 
 [[nodiscard]] SurfaceRect aspectFitRect(const SurfaceRect& bounds,
                                         std::uint32_t sourceWidth,
@@ -318,6 +329,7 @@ computeSurfacePresentationGeometry(SurfaceViewMode viewMode,
                                    std::uint8_t referenceSlot,
                                    SurfaceDifferenceEdge differenceEdge,
                                    float wipePosition,
+                                   SurfaceWipeOrientation wipeOrientation,
                                    const std::array<SurfaceDisplayExtent, 3U>& sourceDisplayExtents,
                                    bool differenceSuppressed = false,
                                    // V02 (P05): >= 0 replaces the layout with one full-canvas

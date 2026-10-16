@@ -67,15 +67,17 @@ ApplicationWindow {
     // qmllint enable unqualified
 
     readonly property int referenceSourceIndex: controller ? Number(controller.referenceSourceIndex) : -1
+    // The validated comparison actually identifies a GT source. Without it
+    // referenceSourceIndex falls back to the canonical (timeline master) slot, so every
+    // GT-anchored action gates on this flag - a predictions-only set must never read its
+    // master as a reference.
+    readonly property bool hasExplicitReference: controller ? controller.hasExplicitReference === true : false
     readonly property int canonicalSourceIndex: controller ? Number(controller.canonicalSourceIndex) : -1
     readonly property bool inspectorOpen: shell ? Boolean(shell.inspectorVisible) : false
     readonly property bool chromeVisible: shell ? Boolean(shell.chromeVisible) : true
-    // U01 responsive structure. Panel sizes are session-scoped view preferences (the user's
-    // drag), not persisted settings; the docked/drawer reflow reads the canvas width left
-    // after the panels that actually consume stage width, never the raw window width. The
-    // file sidebar can be temporarily suppressed by the guard without losing the user's
-    // visible flag, so widening the window restores the exact arrangement.
-    property real videoFolderSidebarWidth: Theme.fileSidebarWidthDefault
+    // The file sidebar has a fixed width; the inspector retains its session width preference.
+    // The canvas guard can temporarily suppress the sidebar without losing its visible flag.
+    readonly property real videoFolderSidebarWidth: Theme.fileSidebarWidthDefault
     property real inspectorPanelWidth: Theme.inspectorWidthDefault
     readonly property real clampedSidebarWidth: LayoutMetrics.clampFileSidebarWidth(videoFolderSidebarWidth)
     readonly property real clampedInspectorWidth: LayoutMetrics.clampInspectorWidth(inspectorPanelWidth)
@@ -98,6 +100,7 @@ ApplicationWindow {
     // qmllint disable unqualified
     readonly property var issueLogModel: typeof issueLog !== "undefined" ? issueLog : null
     readonly property var comparisonExportService: typeof comparisonExport !== "undefined" ? comparisonExport : null
+    readonly property var colorClipboardService: typeof colorClipboard !== "undefined" ? colorClipboard : null
     // P03 interpolation-protocol controller from the composition root. The typeof guard keeps
     // lightweight QML-only harnesses valid: without the controller the transport renders no
     // protocol row and every protocol action below is skipped.
@@ -166,10 +169,9 @@ ApplicationWindow {
     property bool differencePeekLocked: false
     // The peek is only offered while the session actually identifies a GT slot. Showing a
     // candidate under a "reference original" label would be worse than offering nothing.
-    readonly property bool differencePeekTargetValid: {
-        const index = root.referenceSourceIndex;
-        return index >= 0 && index < root.sourceCount;
-    }
+    // The explicit-reference flag is the real fact: without it referenceSourceIndex is the
+    // canonical fallback, which is a timeline master and not a reference.
+    readonly property bool differencePeekTargetValid: root.hasExplicitReference && root.referenceSourceIndex >= 0 && root.referenceSourceIndex < root.sourceCount
     // What the peek is looking at, named for the indicator plate: "B · clip.mp4".
     readonly property string differencePeekTargetLabel: {
         const index = root.referenceSourceIndex;
@@ -395,6 +397,12 @@ ApplicationWindow {
     readonly property bool dualDifferenceMode: effectiveViewMode === ComparisonSurface.DualDifference
     readonly property bool analysisGridMode: effectiveViewMode === ComparisonSurface.AnalysisGrid
     readonly property bool differenceMode: effectiveViewMode === ComparisonSurface.Difference || analysisGridMode || dualDifferenceMode
+    // D4 peek capability: the 差异定位 task (pure pair difference or GT-anchored dual
+    // difference) is exactly where the "hold to see the GT original" button and the ` key
+    // apply. AnalysisGrid is a layout flavour, not the difference task, so neither entry is
+    // offered there - one shared condition, no hidden-but-triggerable states, no button that
+    // promises a key the keyboard will not honour.
+    readonly property bool peekDifferenceTask: effectiveViewMode === ComparisonSurface.Difference || dualDifferenceMode
     readonly property bool wipeMode: effectiveViewMode === ComparisonSurface.Wipe
     readonly property int threeUpViewMode: ComparisonSurface.ThreeUp
 
@@ -960,6 +968,23 @@ ApplicationWindow {
         return paused;
     }
 
+    // E3: flip the back-and-forth walk intent on the CURRENT loop interval. The interval and
+    // loop stay untouched; only pingPong flips, so the coordinator keeps the same closed range.
+    function toggleRangePingPong() {
+        if (!controller) {
+            showIntentMessage(qsTr("当前无活动会话。"));
+
+            return false;
+        }
+        if (!controller.togglePlaybackRangePingPong()) {
+            showIntentMessage(qsTr("往返需要完整的入出区间（设置后自动开启循环）。"));
+
+            return false;
+        }
+        showIntentMessage(controller.playbackRangePingPong ? qsTr("往返循环：到出点后倒放返回") : qsTr("单向区间循环"));
+        return true;
+    }
+
     function resetViewport() {
         if (viewportFrame && viewportFrame.surface)
             viewportFrame.surface.resetViewport();
@@ -1073,10 +1098,23 @@ ApplicationWindow {
         focusActiveWorkspace();
     }
 
-    // Keyboard flavour of hold-to-peek: tap toggles the raw reference view, Shift+backtick
-    // locks it. The mouse button keeps its transient press/release semantics; its release
-    // never defeats an active lock (see onDifferencePeekChanged). The locked state also stays
-    // on screen through the viewport's peek indicator, not only as a transient HUD line.
+    // Keyboard flavour of hold-to-peek: the backtick is a real hold (D4) - press shows the
+    // raw reference view, release restores the difference view. The hold never touches the
+    // lock; a locked peek simply stays on when the hold ends. Shift+backtick remains the
+    // lock toggle, and the mouse button keeps its transient press/release semantics; a
+    // release never defeats an active lock (see onDifferencePeekChanged). The locked state
+    // also stays on screen through the viewport's peek indicator, not only as a transient
+    // HUD line.
+    function setDifferencePeekHeld(held) {
+        if (held) {
+            if (!root.differencePeekTargetValid)
+                return;
+            differencePeekActive = true;
+        } else {
+            differencePeekActive = differencePeekLocked;
+        }
+    }
+
     function toggleDifferencePeek(lock) {
         if (!root.differencePeekTargetValid) {
             showActionFeedback(qsTr("当前会话没有可直看的参考（GT）源"));
@@ -2064,6 +2102,27 @@ ApplicationWindow {
         if (payload.roiEnabled !== undefined && viewportFrame.surface)
             viewportFrame.surface.restoreViewport(Number(payload.centerX), Number(payload.centerY), Number(payload.zoom), Boolean(payload.roiEnabled), Number(payload.roiLeft), Number(payload.roiTop), Number(payload.roiRight), Number(payload.roiBottom));
 
+        // E1: wipe state replay has three distinguishable states, matching what the
+        // repository round-trips - a valid pair (orientation 0/1, ratio in [0,1]) replays
+        // exactly; the invalid sentinel (-2, the record's stored pair was rejected on load)
+        // reports the rejection instead of quietly looking legacy; the legacy sentinel (-1,
+        // no fields) keeps the current split. The ratio check is also strict here so a
+        // tampered file cannot smuggle an out-of-range value through the restore.
+        const restoreWipeOrientation = payload.wipeOrientation !== undefined ? Number(payload.wipeOrientation) : -1;
+        const restoreWipePosition = payload.wipePosition !== undefined ? Number(payload.wipePosition) : -1;
+        if (payload.viewMode === 5 && restoreWipeOrientation !== -1) {
+            if (restoreWipeOrientation === -2) {
+                root.showIntentMessage(qsTr("部分恢复：记录中的分屏线状态无效，已保持当前切分"));
+            } else if ((restoreWipeOrientation === 0 || restoreWipeOrientation === 1) && Number.isFinite(restoreWipePosition) && restoreWipePosition >= 0 && restoreWipePosition <= 1) {
+                viewportFrame.setWipeOrientation(restoreWipeOrientation);
+                root.wipePosition = restoreWipePosition;
+            } else {
+                root.showIntentMessage(qsTr("部分恢复：记录中的分屏线状态无效，已保持当前切分"));
+            }
+        } else if (payload.viewMode === 5) {
+            root.showIntentMessage(qsTr("部分恢复：记录未含分屏线方向/位置，保持当前切分"));
+        }
+
         // A recorded pair the session would not take is a partial restore: the files, mode, frame
         // and viewport are back, but the comparison pair is not. Saying so is the difference
         // between "restored" and "looks restored".
@@ -2516,6 +2575,17 @@ ApplicationWindow {
     // zoom/pan, GT role and comparison pair come back when the focus returns Off - so this
     // function must do nothing else. The request codes come from the mode bar's enum mirrors
     // (themselves cross-checked against the shell enum by contract tests).
+    // Selecting a comparison layout always leaves a direct look or a locked GT peek,
+    // even when the selected mode is already the stored preference.
+    function selectComparisonMode(mode) {
+        if (!preferences || !shell)
+            return;
+        shell.requestCanvasFocus(comparisonBar.canvasFocusRequestOff, 0);
+        differencePeekLocked = false;
+        differencePeekActive = false;
+        preferences.viewMode = mode;
+    }
+
     function toggleDirectLook(sourceSlot) {
         if (!shell || !comparisonBar)
             return false;
@@ -2523,6 +2593,22 @@ ApplicationWindow {
         const request = focused === sourceSlot ? comparisonBar.canvasFocusRequestOff : comparisonBar.canvasFocusRequestSourceSlot;
         const ok = Boolean(shell.requestCanvasFocus(request, sourceSlot));
         return ok;
+    }
+
+    // D3 pair look (T): alternate the whole-canvas direct look between the two slots of the
+    // actual current comparison pair - the effective edge, so GT/candidate combinations are
+    // included and nothing is hardcoded to A/B. Paused sessions only: while playing the key
+    // must stay inert so it never competes with playback semantics. Presentation-only chain,
+    // identical to the mode bar's 看 A/B/C entries.
+    function togglePairLook() {
+        if (playing || sourceCount < 2 || !shell || !comparisonBar)
+            return false;
+        const first = differenceFirstSlot;
+        const second = differenceSecondSlot;
+        if (first === second || first < 0 || second < 0 || first >= sourceCount || second >= sourceCount)
+            return false;
+        const focused = Number(shell.canvasFocusSlot);
+        return toggleDirectLook(focused === first ? second : first);
     }
 
     // V02 "替换文件": the chip menu records which frozen identity is being replaced, then a
@@ -2715,7 +2801,17 @@ ApplicationWindow {
     function switchCandidateEdge() {
         if (sourceCount !== 3)
             return false;
-        const reference = referenceSourceIndex >= 0 ? referenceSourceIndex : 0;
+        // D3: without an explicitly identified reference there is no GT-anchored pair to
+        // switch to. referenceSourceIndex alone is not the fact - the controller falls back
+        // to the canonical (timeline master) slot when the validated comparison has no
+        // reference - so gate on the explicit role and name the reason through the same
+        // visible feedback channel as the peek. The canonical fallback stays untouched for
+        // its existing readers.
+        if (!hasExplicitReference || referenceSourceIndex < 0 || referenceSourceIndex >= sourceCount) {
+            showActionFeedback(qsTr("未设置参考（GT）源：切候选需要 GT 锚定的比较对，请先在来源菜单设置参考"));
+            return false;
+        }
+        const reference = referenceSourceIndex;
         let current = null;
         for (let index = 0; index < differenceEdges.length; ++index) {
             if (Number(differenceEdges[index].preferenceValue) === differenceEdge)
@@ -3001,6 +3097,12 @@ ApplicationWindow {
         presentationShortcutsEnabled: root.presentationShortcutsEnabled
         oneSecondStepFrames: root.oneSecondStepFrames
         wipeEnabled: root.wipeMode
+        // E1: W/Alt axis keys act only while a real wipe composite is on screen - the shell's
+        // canvas focus (direct look) renders the single-source branch instead, where flipping
+        // the axis would be invisible tampering. root has no canvasFocusSlot of its own; the
+        // shell owns it.
+        wipeSplitActive: root.wipeMode && root.shell !== null && root.shell.canvasFocusSlot < 0
+        wipeHorizontal: viewportFrame.wipeOrientation === 1
         wipePosition: root.wipePosition
         shortcutPreset: root.shortcutPreset
         fullScreen: root.fullScreen
@@ -3012,7 +3114,7 @@ ApplicationWindow {
         viewShortcutsEnabled: root.videoViewShortcutsEnabled
         sourceCount: root.sourceCount
         busy: root.busy
-        differencePeekAvailable: root.differenceMode && root.differencePeekTargetValid
+        differencePeekAvailable: root.peekDifferenceTask && root.differencePeekTargetValid
         onWipePositionRequested: position => {
             root.wipePosition = position;
 
@@ -3041,14 +3143,32 @@ ApplicationWindow {
         onOutPointRequested: root.setOutPoint()
         onSelectedRangePlaybackRequested: root.playSelectedRange()
         onCandidateSwitchRequested: root.switchCandidateEdge()
-        onModeRequested: mode => root.preferences.viewMode = mode
+        onModeRequested: mode => root.selectComparisonMode(mode)
         onFitRequested: viewportFrame.fitToWindow()
         onNativeSizeRequested: viewportFrame.zoomToNativeSize()
+        onNativeFitToggleRequested: viewportFrame.toggleNativeFit()
+        onPairLookToggleRequested: root.togglePairLook()
         onZoomInRequested: viewportFrame.zoomViewStep(1.25)
         onZoomOutRequested: viewportFrame.zoomViewStep(0.8)
         onResetViewRequested: viewportFrame.resetView()
-        onReferencePeekToggleRequested: root.toggleDifferencePeek(false)
+        onReferencePeekHoldChanged: held => root.setDifferencePeekHeld(held)
         onReferencePeekLockToggleRequested: root.toggleDifferencePeek(true)
+        // E1: wipe split axis. The surface is the single state owner; toggling keeps the
+        // split ratio, sources, frame, zoom and pan untouched by construction.
+        onWipeOrientationToggleRequested: {
+            viewportFrame.setWipeOrientation(viewportFrame.wipeOrientation === 1 ? 0 : 1);
+            root.showActionFeedback(viewportFrame.wipeOrientation === 1 ? qsTr("分屏线：水平（上下切分）") : qsTr("分屏线：垂直（左右切分）"));
+        }
+        onWipeMoveYRequested: delta => {
+            // The delta is already a normalized split-ratio step: apply it to the single
+            // ratio state directly. Routing it through the outer viewport height and the
+            // native surface height mixed two different extents (the frame adds chrome
+            // margins the surface does not have), which skewed every step by that ratio.
+            const next = Math.max(0, Math.min(1, root.wipePosition + delta));
+            root.wipePosition = next;
+            if (!root.chromeVisible)
+                root.showImmersiveHud(qsTr("分割线位置 %1%").arg(Math.round(next * 100)));
+        }
     }
 
     // The transport's 流畅优先/逐帧完整 toggle routes through reviewShortcuts.actions; the
@@ -3644,11 +3764,11 @@ ApplicationWindow {
             left: parent.left
             right: parent.right
         }
-        onModeRequested: mode => root.preferences.viewMode = mode
+        onModeRequested: mode => root.selectComparisonMode(mode)
         onEdgeRequested: edge => root.applyDifferenceEdge(edge)
         // qmllint disable unqualified
         onDifferenceViewRequested: metric => {
-            root.preferences.viewMode = ComparisonSurface.Difference;
+            root.selectComparisonMode(ComparisonSurface.Difference);
             root.preferences.differenceMetric = metric;
         }
         // qmllint enable unqualified
@@ -3912,38 +4032,6 @@ ApplicationWindow {
         }
     }
 
-    // U01: the file sidebar's resize splitter. The drag writes the session-scoped width; the
-    // clamp keeps it inside the token band, so the strip can never push the canvas under the
-    // guard no matter where the drag ends.
-    MouseArea {
-        id: videoFolderSidebarSplitter
-
-        objectName: "videoFolderSidebarSplitter"
-        visible: root.videoFolderListVisible
-        enabled: visible
-        z: 37
-        width: 8
-        cursorShape: Qt.SizeHorCursor
-        anchors {
-            left: parent.left
-            leftMargin: LayoutMetrics.fileSidebarLoaderMargin + root.clampedSidebarWidth + LayoutMetrics.fileSidebarGap / 2 - videoFolderSidebarSplitter.width / 2
-            top: videoFolderSidebarLoader.top
-            bottom: videoFolderSidebarLoader.bottom
-        }
-
-        property real dragStartWidth: 0
-
-        onPressed: mouse => {
-            videoFolderSidebarSplitter.dragStartWidth = root.videoFolderSidebarWidth;
-            mouse.accepted = true;
-        }
-        onPositionChanged: mouse => {
-            if (!videoFolderSidebarSplitter.pressed)
-                return;
-            root.videoFolderSidebarWidth = LayoutMetrics.clampFileSidebarWidth(videoFolderSidebarSplitter.dragStartWidth + mouse.x - videoFolderSidebarSplitter.width / 2);
-        }
-    }
-
     Loader {
         id: imageWorkspaceLoader
 
@@ -3952,6 +4040,13 @@ ApplicationWindow {
         active: root.imageWorkspaceActive || keepActive
 
         onLoaded: keepActive = true
+
+        // Drag delivery is topmost-first across the scene: this content must stack
+        // above the window-level workspaceDropArea (z:0) so the A/B source chips'
+        // DropAreas receive a drag entered over them; drags over the canvas or empty
+        // chrome find no accepting item in this subtree and fall through to the
+        // window-level open/append target below.
+        z: 1
 
         anchors {
             top: parent.top
@@ -3985,6 +4080,23 @@ ApplicationWindow {
             onSwapSidesRequested: root.requestImageSwapSides()
             onReplacePrimaryRequested: root.requestImageReplacePrimary()
             onReplaceSecondaryRequested: root.requestImageReplaceSecondary()
+            // A single image dropped on the A/B identity chip replaces exactly that side
+            // through the same in-place swap the replace dialogs use; the other side, the
+            // committed pair and the observation position stay put.
+            onReplacePrimaryDropped: url => root.performImageSideReplace(url, "a")
+            onReplaceSecondaryDropped: url => root.performImageSideReplace(url, "b")
+            // I0x: closing one side leaves the other side's task alive. The workspace keeps
+            // whatever is left, so the host only has to notice when nothing is left at all
+            // and hand the stage back to the video task.
+            onCloseSideRequested: sourceSlot => {
+                if (root.imageHasContent)
+                    return;
+                if (root.videoHasSession)
+                    root.showWorkspace(workspaceSession.videoMedia);
+                else
+                    root.focusActiveWorkspace();
+            }
+            colorClipboard: root.colorClipboardService
         }
     }
     NativeDialogs.FolderDialog {
@@ -4213,7 +4325,7 @@ ApplicationWindow {
         color: Theme.panel
         border.color: Theme.menuBorder
         border.width: 1
-        radius: 6
+        radius: Theme.radiusSubtle
         anchors {
             top: parent.top
             topMargin: 48
@@ -4288,7 +4400,7 @@ ApplicationWindow {
                     height: 48
                     color: Theme.raisedPanel
                     border.color: Theme.border
-                    radius: 4
+                    radius: Theme.radiusMicro
 
                     Column {
                         anchors {
@@ -4409,6 +4521,10 @@ ApplicationWindow {
         playing: root.playing
         playbackRate: root.controller ? Number(root.controller.playbackRate) : 1
         jogRate: root.controller ? Number(root.controller.jogRate) : 1
+        // I8: the transport tooltips tell the truth about the ±1 s buttons - the player
+        // preset makes them ±30 s, and the preset comes from the same preference the
+        // bindings read.
+        shortcutPreset: root.shortcutPreset
         playbackModeLabel: root.playbackModeLabel
         playbackModeDetail: root.playbackModeDetail
         playbackTargetRate: root.playbackTargetRate
@@ -4437,6 +4553,7 @@ ApplicationWindow {
         inFrame: root.inFrame
         outFrame: root.outFrame
         loopRangeActive: root.rangePlaybackActive
+        loopRangePingPongActive: Boolean(root.controller && root.controller.playbackRangePingPong)
         rangeExportVisible: root.rangeExportVisible
         rangeExportEnabled: root.rangeExportEnabled
         rangeExportBusy: root.clipExportService !== null && Boolean(root.clipExportService.busy)
@@ -4477,6 +4594,7 @@ ApplicationWindow {
         onMarkOutRequested: root.setOutPoint()
         onPlayRangeRequested: root.playSelectedRange()
         onRangeLoopRequested: root.toggleRangeLoop()
+        onRangePingPongRequested: root.toggleRangePingPong()
         onClearRangeRequested: root.clearSelectedRange()
         onExportRangeRequested: root.openClipExportDialog()
         onExportSampleRequested: root.openSampleExportDialog(root.currentFrame)
@@ -4596,9 +4714,9 @@ ApplicationWindow {
 
         // qmllint disable unqualified
 
-        onSideRequested: root.preferences.viewMode = ComparisonSurface.SideBySide
-        onWipeRequested: root.preferences.viewMode = ComparisonSurface.Wipe
-        onDiffRequested: root.preferences.viewMode = ComparisonSurface.Difference
+        onSideRequested: root.selectComparisonMode(ComparisonSurface.SideBySide)
+        onWipeRequested: root.selectComparisonMode(ComparisonSurface.Wipe)
+        onDiffRequested: root.selectComparisonMode(ComparisonSurface.Difference)
 
         // qmllint enable unqualified
 
@@ -4828,11 +4946,11 @@ ApplicationWindow {
 
         objectName: "chromeRestorePill"
 
-        // With the chrome hidden (Tab / presentation mode) every menu and bar disappears and the
+        // With the chrome hidden (H / presentation mode) every menu and bar disappears and the
 
         // immersive HUD fades after 800 ms. This persistent pill is the always-visible way back:
 
-        // it names the Tab shortcut and restores the interface on click.
+        // it names the H shortcut and restores the interface on click.
 
         visible: !root.chromeVisible
         z: 980
@@ -4874,7 +4992,7 @@ ApplicationWindow {
                 anchors.verticalCenter: parent.verticalCenter
             }
             Text {
-                text: qsTr("界面已隐藏 · 按 Tab 或点击恢复")
+                text: qsTr("界面已隐藏 · 按 H 或点击恢复")
                 color: root.primaryTextColor
                 font.pixelSize: Theme.fontSecondary
                 anchors.verticalCenter: parent.verticalCenter

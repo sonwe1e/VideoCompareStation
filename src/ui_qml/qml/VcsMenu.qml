@@ -40,6 +40,8 @@ Menu {
         radius: control.menuRadius
         color: control.menuBackgroundColor
         border.width: 1
-        border.color: control.menuBorderColor
+        // Rectangle replaces its fill at the border. Composite the hairline over the menu
+        // first so the outer edge stays opaque over bright video as well as the center.
+        border.color: Qt.tint(control.menuBackgroundColor, control.menuBorderColor)
     }
 }

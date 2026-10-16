@@ -272,7 +272,7 @@ private:
 
 class ReviewRuntime::Impl final {
 public:
-    Impl()
+    explicit Impl(std::filesystem::path settingsFile = {})
         : shutdownWork_(std::make_shared<ShutdownWork>()),
           abandonedWork_(std::make_unique<std::shared_ptr<ShutdownWork>>()) {
         frameBudget_ = std::make_shared<platform::FrameBudget>(kPlaybackFrameBudgetBytes);
@@ -288,7 +288,10 @@ public:
         mediaProbe_ = std::make_shared<media::MediaProbe>();
         clipExporter_ = std::make_shared<media::ClipExportWriter>();
         sampleExporter_ = std::make_shared<media::SampleExportWriter>();
-        settingsRepository_ = std::make_shared<persistence::SettingsRepository>();
+        // Empty path keeps the production Windows roaming location; a non-empty path is the
+        // automation seam so evidence runs never read or write the user's real settings.
+        settingsRepository_ =
+            std::make_shared<persistence::SettingsRepository>(std::move(settingsFile));
         issueRecordRepository_ = std::make_shared<persistence::IssueRecordRepository>();
         frameProvider_ = std::make_shared<media::MultiSourceFrameProvider>(
             *frameBudget_, 16U, false, deviceBroker_);
@@ -666,7 +669,19 @@ std::unique_ptr<ReviewRuntime> ReviewRuntime::create() {
     }
 }
 
+std::unique_ptr<ReviewRuntime>
+ReviewRuntime::createWithSettingsFile(const std::filesystem::path& settingsFile) {
+    try {
+        return std::unique_ptr<ReviewRuntime>{new ReviewRuntime{settingsFile}};
+    } catch (...) {
+        return {};
+    }
+}
+
 ReviewRuntime::ReviewRuntime() : impl_(std::make_unique<Impl>()) {}
+
+ReviewRuntime::ReviewRuntime(const std::filesystem::path& settingsFile)
+    : impl_(std::make_unique<Impl>(settingsFile)) {}
 
 ReviewRuntime::~ReviewRuntime() = default;
 

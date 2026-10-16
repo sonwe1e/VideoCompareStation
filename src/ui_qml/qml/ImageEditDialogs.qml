@@ -507,7 +507,7 @@ Item {
                             objectName: "imageEditFillColor" + swatch.index
                             width: 26
                             height: 26
-                            radius: 4
+                            radius: Theme.radiusMicro
                             color: swatch.modelData.color
                             border.width: control.fillColorIndex === swatch.index ? 2 : 1
                             border.color: control.fillColorIndex === swatch.index ? Theme.focus : Theme.controlBorder
@@ -552,7 +552,7 @@ Item {
                 visible: control.fillColorIndex === control.fillChoices.length - 1
                 text: qsTr("透明填充只在当前图片已有透明通道时可用，否则会提示并保持原图不变。")
                 color: Theme.warning
-                font.pixelSize: 11
+                font.pixelSize: Theme.fontCaption
                 wrapMode: Text.WordWrap
             }
         }

@@ -13,6 +13,36 @@ import Dvs.Ui 1.0
 Rectangle {
     id: control
 
+    property bool pixelGridEnabled: false
+    // Dvs.Ui is registered by C++ at runtime; the lint-only import has no generated
+    // enum metadata. Keep these values bound to the real type rather than copying numbers.
+    // qmllint disable unqualified
+    readonly property int videoFilterAutoValue: ComparisonSurface.VideoFilterAuto
+    readonly property int videoFilterSmoothValue: ComparisonSurface.VideoFilterSmooth
+    readonly property int videoFilterPixelValue: ComparisonSurface.VideoFilterPixel
+    // qmllint enable unqualified
+
+    Repeater {
+        parent: surfaceLayer
+        model: control.pixelGridEnabled ? dualVideoSurface.pixelGridPanels : []
+
+        PixelGrid {
+            required property var modelData
+            objectName: "videoPixelGrid"
+            x: Number(modelData.x)
+            y: Number(modelData.y)
+            width: Number(modelData.width)
+            height: Number(modelData.height)
+            originX: Number(modelData.originX)
+            originY: Number(modelData.originY)
+            stepX: Number(modelData.stepX)
+            stepY: Number(modelData.stepY)
+            requested: control.pixelGridEnabled
+            nearest: dualVideoSurface.videoFilterMode === control.videoFilterPixelValue || (dualVideoSurface.videoFilterMode === control.videoFilterAutoValue && dualVideoSurface.physicalScalePercent >= dualVideoSurface.autoNearestThresholdPercent)
+            z: 2
+        }
+    }
+
     required property var preferences
     required property color borderColor
     required property color accentColor
@@ -399,6 +429,85 @@ Rectangle {
         return qsTr("冻结于第 %1 帧 · %2").arg(Number(result.frameId) + 1).arg(values);
     }
 
+    // Phase-3 table decomposition of the same data. pixelReadoutRowText() stays the legacy
+    // full string (the C++ contract suite invokes it directly and asserts exact substrings);
+    // the helpers below feed the aligned micro-table's columns.
+    function pixelReadoutHasValidSample(slot) {
+        const result = control.pixelReadoutResults[slot];
+        return Boolean(result) && Boolean(result.valid);
+    }
+
+    function pixelReadoutCoordText(slot) {
+        if (!control.pixelReadoutHasValidSample(slot))
+            return "";
+        const result = control.pixelReadoutResults[slot];
+        return "(" + Number(result.x) + ", " + Number(result.y) + ")";
+    }
+
+    function pixelReadoutValuesText(slot) {
+        if (!control.pixelReadoutHasValidSample(slot))
+            return "";
+        const result = control.pixelReadoutResults[slot];
+        const frozenPrefix = control.probeResultIsCurrent(result) ? "" : qsTr("冻结于第 %1 帧 · ").arg(Number(result.frameId) + 1);
+        return frozenPrefix + qsTr("Y %1  Cb %2  Cr %3").arg(Number(result.luma)).arg(Number(result.cb)).arg(Number(result.cr));
+    }
+
+    // Delta column: this source minus the session's reference source. Code values only compare
+    // on one numerical scale: both sides must be current samples (same presented frame set,
+    // same parked coordinate) AND share the frame bit depth and the source colour range. The
+    // renderer's normalized NV12/P010 display planes say nothing about cross-depth value
+    // equality - a 10-bit code next to an 8-bit code, or limited next to full, is not a delta,
+    // it is two scales. Anything less shows the em dash with the reason one hover away.
+    function pixelReadoutDeltaReason(slot) {
+        const reference = control.referenceSourceIndex;
+        if (reference < 0 || reference >= control.sourceCount)
+            return qsTr("会话未识别参考（GT）源");
+        if (!control.pixelReadoutHasValidSample(slot) || !control.pixelReadoutHasValidSample(reference))
+            return qsTr("样本不完整（读取中/失败或不可用）");
+        const mine = control.pixelReadoutResults[slot];
+        const base = control.pixelReadoutResults[reference];
+        if (!control.probeResultIsCurrent(mine) || !control.probeResultIsCurrent(base))
+            return qsTr("样本已过期（跨帧不能相减）");
+        const myDepth = Number(mine.bitDepth);
+        const baseDepth = Number(base.bitDepth);
+        if (!(myDepth > 0) || !(baseDepth > 0) || myDepth !== baseDepth)
+            return qsTr("位深不同（%1 与 %2）").arg(myDepth > 0 ? myDepth : qsTr("未知")).arg(baseDepth > 0 ? baseDepth : qsTr("未知"));
+        const myInfo = slot < control.sourceMediaInfo.length ? control.sourceMediaInfo[slot] : null;
+        const baseInfo = reference < control.sourceMediaInfo.length ? control.sourceMediaInfo[reference] : null;
+        const myRange = myInfo && myInfo.colorRange ? String(myInfo.colorRange) : "";
+        const baseRange = baseInfo && baseInfo.colorRange ? String(baseInfo.colorRange) : "";
+        if (myRange.length === 0 || baseRange.length === 0)
+            return qsTr("色彩范围未知");
+        if (myRange !== baseRange)
+            return qsTr("色彩范围不同（%1 与 %2）").arg(myRange).arg(baseRange);
+        return "";
+    }
+
+    function pixelReadoutDeltaText(slot) {
+        if (control.pixelReadoutDeltaReason(slot).length > 0)
+            return "—";
+        const reference = control.referenceSourceIndex;
+        const mine = control.pixelReadoutResults[slot];
+        const base = control.pixelReadoutResults[reference];
+        const signed = value => (value > 0 ? "+" : "") + Math.round(value);
+        return "Δ " + signed(Number(mine.luma) - Number(base.luma)) + " " + signed(Number(mine.cb) - Number(base.cb)) + " " + signed(Number(mine.cr) - Number(base.cr));
+    }
+
+    function pixelReadoutFormatText(slot) {
+        if (!control.pixelReadoutHasValidSample(slot))
+            return "";
+        const result = control.pixelReadoutResults[slot];
+        const info = slot < control.sourceMediaInfo.length ? control.sourceMediaInfo[slot] : null;
+        if (!info)
+            return "";
+        const depth = Number(result.bitDepth) > 0 ? qsTr("%1-bit").arg(Number(result.bitDepth)) : "";
+        const range = info.colorRange ? String(info.colorRange) : qsTr("范围未知");
+        const converted = control.pixelReadoutConverted(info) ? qsTr("已转换") : "";
+        const normalizedFormat = Number(result.bitDepth) === 10 ? "P010" : "NV12";
+        const sourceFormat = info.pixelFormat ? qsTr("来源 %1").arg(String(info.pixelFormat)) : qsTr("来源格式未知");
+        return [normalizedFormat, depth, range, sourceFormat, converted].filter(part => part.length > 0).join(" ");
+    }
+
     // A paused frame step keeps the parked cursor's values current; during playback the
     // readout freezes instead of adding readbacks to every presented frame.
     function refreshPixelReadoutAfterFrameChange() {
@@ -614,12 +723,28 @@ Rectangle {
         }
     }
 
+    // E1: expose the surface's wipe split axis and position conversions so the host can
+    // route the W toggle and the Alt+Up/Down moves without touching internals.
+    readonly property int wipeOrientation: dualVideoSurface.wipeOrientation
+    function setWipeOrientation(orientation) {
+        dualVideoSurface.wipeOrientation = orientation;
+    }
+    function wipePositionForLogicalY(y) {
+        return dualVideoSurface.wipePositionForLogicalY(y);
+    }
+    function wipeSplitLogicalY() {
+        // wipeSplitLogicalY on the surface is a qreal Q_PROPERTY, not a method: read it as a
+        // property value here so callers of this wrapper never invoke it as a function.
+        return dualVideoSurface.wipeSplitLogicalY;
+    }
+
     WipeHandle {
         // Hidden while the canvas is focused: no wipe composite is rendered then, so a
         // draggable split would promise interaction the picture does not have.
         visible: control.wipeMode && control.canvasFocusSlot < 0
         z: 50
         surfaceItem: dualVideoSurface
+        orientation: dualVideoSurface.wipeOrientation
         position: control.wipePosition
         onPositionRequested: position => control.wipePositionRequested(position)
     }
@@ -660,7 +785,7 @@ Rectangle {
         z: 45
         width: immersiveHudLabel.implicitWidth + 24
         height: 34
-        radius: 6
+        radius: Theme.radiusSubtle
         color: Theme.oscGlass
         border.color: Theme.oscBorder
         anchors {
@@ -852,7 +977,7 @@ Rectangle {
 
         Behavior on opacity {
             NumberAnimation {
-                duration: 150
+                duration: Theme.animationBase
             }
         }
         width: Math.min(Math.max(0, parent.width - 24), analysisStatus.implicitWidth + 18)
@@ -899,7 +1024,7 @@ Rectangle {
             // difference mode is tinted; plain side-by-side viewing stays neutral. In dual mode
             // the tint covers both rendered panes under their one shared caliber.
             color: !control.differenceMode ? Theme.secondaryText : (control.dualDifferenceMode && control.dualDifferenceLegendText.length > 0 ? (control.dualDifferenceLegendExact ? Theme.success : Theme.warning) : (control.inexactReason.length === 0 && control.selectedDifferenceExactness === 0 ? Theme.success : Theme.warning))
-            font.pixelSize: 11
+            font.pixelSize: Theme.fontCaption
             width: Math.max(0, parent.width - 18)
             elide: Text.ElideRight
             anchors.centerIn: parent
@@ -923,7 +1048,7 @@ Rectangle {
 
         Behavior on opacity {
             NumberAnimation {
-                duration: 150
+                duration: Theme.animationBase
             }
         }
         height: 28
@@ -975,7 +1100,7 @@ Rectangle {
             Label {
                 text: pixelScaleBadge.text
                 color: control.primaryTextColor
-                font.pixelSize: 11
+                font.pixelSize: Theme.fontCaption
                 font.weight: Font.DemiBold
                 anchors.verticalCenter: parent.verticalCenter
             }
@@ -988,7 +1113,7 @@ Rectangle {
                     return pixelScaleBadge.targetReachable ? actual : actual + " · " + pixelScaleBadge.targetLimitText;
                 }
                 color: pixelScaleBadge.pixelExact ? Theme.success : control.mutedTextColor
-                font.pixelSize: 11
+                font.pixelSize: Theme.fontCaption
                 anchors.verticalCenter: parent.verticalCenter
             }
         }
@@ -1022,7 +1147,7 @@ Rectangle {
 
         Behavior on opacity {
             NumberAnimation {
-                duration: 150
+                duration: Theme.animationBase
             }
         }
         height: 28
@@ -1038,7 +1163,7 @@ Rectangle {
         }
 
         readonly property int mode: dualVideoSurface.videoFilterMode
-        readonly property string modeText: mode === dualVideoSurface.VideoFilterPixel ? qsTr("像素") : (mode === dualVideoSurface.VideoFilterSmooth ? qsTr("平滑") : qsTr("自动"))
+        readonly property string modeText: mode === control.videoFilterPixelValue ? qsTr("像素") : (mode === control.videoFilterSmoothValue ? qsTr("平滑") : qsTr("自动"))
         text: qsTr("采样 %1").arg(modeText)
         helpText: qsTr("视频画面采样方式。\n自动：200% 以上用最近邻，保证高倍放大时像素边界可见；其余用双线性。\n平滑：始终双线性。\n像素：始终最近邻。")
         Accessible.name: text
@@ -1048,6 +1173,20 @@ Rectangle {
             // Auto -> Smooth -> Pixel -> Auto.
             dualVideoSurface.videoFilterMode = (mode + 1) % 3;
         }
+    }
+
+    ReviewActionButton {
+        objectName: "videoPixelGridButton"
+        visible: videoFilterBadge.visible
+        enabled: control.sourceCount > 0
+        z: 30
+        anchors.left: videoFilterBadge.right
+        anchors.leftMargin: 8
+        anchors.bottom: videoFilterBadge.bottom
+        height: Theme.hitAreaMinimum
+        text: control.pixelGridEnabled ? qsTr("网格 开") : qsTr("网格 关")
+        helpText: qsTr("像素网格：仅在最近邻采样且横纵实际放大均达到 800% 时显示。")
+        onClicked: control.pixelGridEnabled = !control.pixelGridEnabled
     }
 
     // Per-source frame-plane readout (1009 plan C slice 3): one row per session source, sampled
@@ -1067,7 +1206,7 @@ Rectangle {
 
         Behavior on opacity {
             NumberAnimation {
-                duration: 150
+                duration: Theme.animationBase
             }
         }
         radius: 5
@@ -1083,7 +1222,32 @@ Rectangle {
             bottomMargin: 8
         }
         Accessible.name: qsTr("像素规范化帧值读数")
-        Accessible.description: qsTr("光标位置的帧平面 YCbCr 码值，逐源显示。")
+        Accessible.description: qsTr("光标位置的帧平面 YCbCr 码值，逐源显示；Δ 列为该源减去当前参考源的差值。")
+
+        // Fixed column widths measured on the widest value each column can carry, so digits
+        // changing under the cursor never make neighbouring columns jitter. The monospace
+        // family stays until the theme ships a mono font-stack token.
+        TextMetrics {
+            id: readoutCoordMetrics
+
+            font.family: Theme.fontFamilyMono
+            font.pixelSize: Theme.fontCaption
+            text: "(4095, 4095)"
+        }
+        TextMetrics {
+            id: readoutValuesMetrics
+
+            font.family: Theme.fontFamilyMono
+            font.pixelSize: Theme.fontCaption
+            text: qsTr("冻结于第 9999 帧 · Y 1023  Cb 1023  Cr 1023")
+        }
+        TextMetrics {
+            id: readoutDeltaMetrics
+
+            font.family: Theme.fontFamilyMono
+            font.pixelSize: Theme.fontCaption
+            text: "Δ +1023 +1023 +1023"
+        }
 
         Column {
             id: pixelReadoutColumn
@@ -1101,13 +1265,23 @@ Rectangle {
                     font.weight: Font.DemiBold
                 }
 
+                Text {
+                    visible: control.referenceSourceIndex >= 0 && control.referenceSourceIndex < control.sourceCount
+                    // Delta baseline naming: the column reads "this source minus X" only when
+                    // the session actually identifies a reference.
+                    text: qsTr("· Δ 相对 %1").arg(String.fromCharCode(65 + control.referenceSourceIndex))
+                    color: Theme.accentText
+                    font.pixelSize: 10
+                    font.weight: Font.DemiBold
+                }
+
                 HoverHandler {
                     id: pixelReadoutHeaderHover
                 }
 
                 VcsToolTip {
                     visible: pixelReadoutHeaderHover.hovered
-                    text: qsTr("光标位置的帧平面 YCbCr 码值（数值审查路径）。\n读数是 NV12/P010 帧平面中的样本；来源的色度或位深可能在解码时已转换，逐行标出来源格式和「已转换」。\n画面本身经过显示转换（观看路径），两者不承诺一致。\n位深来自帧格式，Limited/Full 来自源元数据。\n播放中冻结读数并标出帧号；暂停后按呈现帧和光标位置重新取样。")
+                    text: qsTr("光标位置的帧平面 YCbCr 码值（数值审查路径）。\n读数是 NV12/P010 帧平面中的样本；来源的色度或位深可能在解码时已转换，逐行标出来源格式和「已转换」。\n画面本身经过显示转换（观看路径），两者不承诺一致。\n位深来自帧格式，Limited/Full 来自源元数据。\nΔ 列 = 该源 − 当前参考源（同一呈现帧、同一坐标下的差值）；无参考源或样本不完整时显示 —。\n播放中冻结读数并标出帧号；暂停后按呈现帧和光标位置重新取样。")
                 }
             }
 
@@ -1117,12 +1291,18 @@ Rectangle {
                 objectName: "pixelReadoutRows"
                 model: control.sourceCount
 
+                // One aligned table row. The row container carries the legacy
+                // `pixelReadoutRowText` objectName (the C++ suite's per-row handle); the
+                // columns decompose the very same data the legacy string renders.
                 delegate: Row {
                     id: pixelReadoutRow
 
                     required property int index
 
-                    spacing: 6
+                    objectName: "pixelReadoutRowText"
+                    readonly property bool hasValidSample: control.pixelReadoutHasValidSample(pixelReadoutRow.index)
+
+                    spacing: 8
 
                     Rectangle {
                         width: 18
@@ -1141,13 +1321,57 @@ Rectangle {
                         }
                     }
                     Text {
-                        objectName: "pixelReadoutRowText"
-                        width: Math.min(implicitWidth, pixelReadoutPlate.width - 46)
+                        // Coordinates: fixed width, left aligned.
+                        width: readoutCoordMetrics.advanceWidth
+                        text: control.pixelReadoutCoordText(pixelReadoutRow.index)
+                        color: control.mutedTextColor
+                        font.pixelSize: Theme.fontCaption
+                        font.family: Theme.fontFamilyMono
+                    }
+                    Text {
+                        // Y / Cb / Cr values (with the frozen marker when the sample outlived
+                        // its frame); unavailable rows keep the legacy wording in this column.
+                        width: pixelReadoutRow.hasValidSample ? readoutValuesMetrics.advanceWidth : Math.min(implicitWidth, readoutValuesMetrics.advanceWidth + readoutDeltaMetrics.advanceWidth)
                         elide: Text.ElideRight
-                        text: control.pixelReadoutRowText(pixelReadoutRow.index)
+                        text: pixelReadoutRow.hasValidSample ? control.pixelReadoutValuesText(pixelReadoutRow.index) : control.pixelReadoutRowText(pixelReadoutRow.index)
                         color: control.primaryTextColor
-                        font.pixelSize: 11
-                        font.family: "Consolas"
+                        font.pixelSize: Theme.fontCaption
+                        font.family: Theme.fontFamilyMono
+                    }
+                    Text {
+                        // Delta vs the reference source; "—" while the pair is not comparable
+                        // (no reference, undelivered side, stale sample, or differing bit
+                        // depth / colour range), with the reason one hover away. Unavailable
+                        // rows let their wording span this column instead.
+                        visible: pixelReadoutRow.hasValidSample
+                        width: visible ? readoutDeltaMetrics.advanceWidth : 0
+                        text: control.pixelReadoutDeltaText(pixelReadoutRow.index)
+                        color: control.primaryTextColor
+                        font.pixelSize: Theme.fontCaption
+                        font.family: Theme.fontFamilyMono
+
+                        HoverHandler {
+                            id: deltaColumnHover
+                        }
+
+                        VcsToolTip {
+                            visible: deltaColumnHover.hovered
+                            text: {
+                                const reason = control.pixelReadoutDeltaReason(pixelReadoutRow.index);
+                                return reason.length > 0 ? qsTr("Δ 不可用：%1").arg(reason) : qsTr("Δ = 本源 − 参考源（同一呈现帧、同一坐标、位深与色彩范围一致）");
+                            }
+                        }
+                    }
+                    Text {
+                        // Format badge: normalized plane format, depth, range, source format
+                        // and the conversion marker, elided at the cap rather than pushing the
+                        // plate wider.
+                        visible: pixelReadoutRow.hasValidSample
+                        width: Math.min(implicitWidth, 150)
+                        elide: Text.ElideRight
+                        text: control.pixelReadoutFormatText(pixelReadoutRow.index)
+                        color: control.mutedTextColor
+                        font.pixelSize: 10
                     }
                 }
             }
@@ -1179,7 +1403,7 @@ Rectangle {
 
         Behavior on opacity {
             NumberAnimation {
-                duration: 150
+                duration: Theme.animationBase
             }
         }
 
@@ -1191,7 +1415,7 @@ Rectangle {
             elide: Text.ElideRight
             text: control.differencePeekLocked ? qsTr("已锁定直看 GT：%1").arg(control.differencePeekTargetLabel) : qsTr("直看 GT：%1").arg(control.differencePeekTargetLabel)
             color: control.primaryTextColor
-            font.pixelSize: 11
+            font.pixelSize: Theme.fontCaption
         }
     }
 
@@ -1207,7 +1431,7 @@ Rectangle {
 
         Behavior on opacity {
             NumberAnimation {
-                duration: 150
+                duration: Theme.animationBase
             }
         }
         spacing: 6
@@ -1223,6 +1447,20 @@ Rectangle {
             text: qsTr("适应窗口")
             helpText: qsTr("适应窗口并居中，保留 ROI；不改变当前帧或比较对象。")
             onClicked: control.fitToWindow()
+        }
+        // E1: wipe split axis toggle - a discoverable entry next to the fit/reset commands,
+        // visible only in wipe mode while the full canvas is not in a direct look. The label
+        // names the halves (左右/上下) instead of the axis jargon. ViewCommandButton is
+        // 24 px tall by default, below the 32 px hit-area minimum, so this new instance
+        // raises only its own height (the legacy buttons keep theirs; no whitelist entry).
+        ViewCommandButton {
+            objectName: "viewportWipeOrientationButton"
+            visible: control.wipeMode && control.canvasFocusSlot < 0
+            enabled: visible && !control.overlayVisible
+            height: Theme.hitAreaMinimum
+            text: control.wipeOrientation === 1 ? qsTr("分屏：上下") : qsTr("分屏：左右")
+            helpText: control.wipeOrientation === 1 ? qsTr("当前上下切分；点击改为左右切分（W 键）。分屏比例保持不变。") : qsTr("当前左右切分；点击改为上下切分（W 键）。分屏比例保持不变。")
+            onClicked: control.setWipeOrientation(control.wipeOrientation === 1 ? 0 : 1)
         }
         ViewCommandButton {
             objectName: "viewportResetButton"
@@ -1262,12 +1500,12 @@ Rectangle {
 
             text: commandButton.text
             color: commandButton.hovered ? control.primaryTextColor : control.mutedTextColor
-            font.pixelSize: 11
+            font.pixelSize: Theme.fontCaption
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
         }
         background: Rectangle {
-            radius: 4
+            radius: Theme.radiusMicro
             color: commandButton.hovered ? Theme.oscGlassHover : Theme.oscGlass
             border.width: commandButton.activeFocus ? 2 : 1
             border.color: commandButton.activeFocus ? Theme.focus : (commandButton.hovered ? Theme.borderHover : Theme.oscBorder)
@@ -1374,7 +1612,7 @@ Rectangle {
 
             text: qsTr("⚠️ 对比非精确对应：%1").arg(inexactDifferenceBanner.effectiveInexactReason)
             color: Theme.warningText
-            font.pixelSize: 11
+            font.pixelSize: Theme.fontCaption
             font.weight: Font.DemiBold
             anchors.centerIn: parent
         }
@@ -1403,7 +1641,7 @@ Rectangle {
 
             text: qsTr("ℹ️ 候选差异，不代表质量优劣")
             color: Theme.accentText
-            font.pixelSize: 11
+            font.pixelSize: Theme.fontCaption
             font.weight: Font.DemiBold
             anchors.centerIn: parent
         }
@@ -1514,7 +1752,7 @@ Rectangle {
         objectName: "frameErrorBanner"
         width: Math.min(parent.width - 48, 720)
         height: frameErrorBannerColumn.implicitHeight + 20
-        radius: 6
+        radius: Theme.radiusSubtle
         visible: control.frameErrorBannerVisible
         color: Theme.errorPanel
         border.color: Theme.errorBorder
@@ -1634,11 +1872,14 @@ Rectangle {
         // mirrors the surface's own nearest rule against the window zoom (the threshold comes
         // from the surface, so the two cannot drift), smooth stays bilinear. 适配ROI (0) keeps
         // the smooth default.
-        smoothSampling: dualVideoSurface.videoFilterMode !== dualVideoSurface.VideoFilterPixel && !(dualVideoSurface.videoFilterMode === dualVideoSurface.VideoFilterAuto && control.roiTripletZoomPercent >= dualVideoSurface.autoNearestThresholdPercent)
+        smoothSampling: dualVideoSurface.videoFilterMode !== control.videoFilterPixelValue && !(dualVideoSurface.videoFilterMode === control.videoFilterAutoValue && control.roiTripletZoomPercent >= dualVideoSurface.autoNearestThresholdPercent)
         // Published footage extents chrome; resolved by the same pure geometry the renderer
         // draws with.
         windowRects: dualVideoSurface.roiTripletWindowRects
         onZoomStepRequested: percent => control.roiTripletZoomPercent = percent
+        // Phase-3 local-window drag: the strip reports logical-pixel deltas, the surface owns
+        // the window->source geometry (rotation and magnification included) in one place.
+        onRoiPanRequested: (slot, deltaLogicalX, deltaLogicalY) => dualVideoSurface.panRoiByLocalWindowPixels(slot, deltaLogicalX, deltaLogicalY)
     }
 
     // U01: the local strip's drag splitter, on the strip's top edge. Dragging up enlarges the

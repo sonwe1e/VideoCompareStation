@@ -14,7 +14,7 @@ T.ComboBox {
     property color textColor: Theme.primaryText
     property color disabledTextColor: Theme.mutedText
     property color borderColor: Theme.border
-    property color focusColor: Theme.accent
+    property color focusColor: Theme.focus
     property color highlightColor: Theme.raisedPanelHover
     property color highlightedTextColor: Theme.primaryText
 
@@ -94,9 +94,10 @@ T.ComboBox {
         }
         // Flat by default; the keyboard focus ring is the only outline. No colour animation:
         // a disabled combo must snap to its disabled fill so the state change is observable
-        // in the same frame the caller sets it.
-        border.width: control.activeFocus ? 2 : 1
-        border.color: control.activeFocus ? control.focusColor : "transparent"
+        // in the same frame the caller sets it. visualFocus (not activeFocus) so a mouse
+        // click leaves no ring behind - the contract in VcsTheme.js.
+        border.width: control.visualFocus ? 2 : 1
+        border.color: control.visualFocus ? control.focusColor : "transparent"
     }
 
     popup: T.Popup {

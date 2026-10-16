@@ -70,7 +70,7 @@ $requiredTokens = @(
     'clang-format reads an unknown extension as C++',
     'check-script-integrity.ps1',
     'check-hardcoded-paths.ps1',
-    'fails once the behaviour is broken',
+    'An assertion is coverage only if it can detect broken behaviour',
     'assert its own check count'
 )
 
@@ -97,6 +97,10 @@ $requiredCommands = @(
     'pwsh tools/release/verify-release-package.ps1',
     'pwsh tools/shell/RegisterExplorerCommand.ps1 -InstallRoot out\build\release\bin'
 )
+
+if ($requiredTokens.Count -ne 44 -or $requiredCommands.Count -ne 15) {
+    throw 'Expected 44 required contract terms and 15 commands.'
+}
 
 foreach ($command in $requiredCommands) {
     $linePattern = '(?m)^[ \t]*' + [regex]::Escape($command) + '[ \t]*\r?$'

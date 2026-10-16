@@ -10,7 +10,7 @@ ToolButton {
     property string helpText: ""
     property url iconSource: ""
     property int iconExtent: 20
-    property int labelPixelSize: 16
+    property int labelPixelSize: Theme.fontGroupTitle
     property real controlRadius: Theme.radiusMedium
     property bool prominent: false
     property int toolTipDelay: 500

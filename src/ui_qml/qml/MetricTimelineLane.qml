@@ -33,7 +33,7 @@ Item {
 
         text: qsTr("差异指标 MAE")
         color: Theme.mutedText
-        font.pixelSize: 11
+        font.pixelSize: Theme.fontCaption
         font.weight: Font.DemiBold
         anchors {
             left: parent.left
@@ -58,7 +58,7 @@ Item {
             // U10: the toggle is an interactive control, so the pointer has to get the same
             // answer a hovered button gives - the readable accent for text on dark panels.
             color: toggleHover.hovered ? Theme.accentText : Theme.accent
-            font.pixelSize: 11
+            font.pixelSize: Theme.fontCaption
             font.weight: Font.DemiBold
             // U10: collapsed, the lane keeps only this header row, so the toggle has to stay
             // keyboard reachable and show the same focus ring as ReviewActionButton.
@@ -116,7 +116,7 @@ Item {
         Rectangle {
             anchors.fill: parent
             color: Theme.canvas
-            radius: 6
+            radius: Theme.radiusSubtle
             border.color: Theme.border
             border.width: 1
         }

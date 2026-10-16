@@ -224,7 +224,7 @@ Rectangle {
 
                 text: control.anchorFrame >= 0 ? qsTr("锚点：第 %1 帧（区间 %2..%3）").arg(control.anchorFrame + 1).arg(control.inFrame + 1).arg(control.outFrame + 1) : ""
                 color: Theme.mutedText
-                font.pixelSize: 11
+                font.pixelSize: Theme.fontCaption
                 anchors.verticalCenter: parent.verticalCenter
             }
 

@@ -143,8 +143,8 @@ Item {
             strip.returnViewerFocusAfterClose = false;
             wait(0);
 
-            const firstMenu = findChild(strip, "sourceOverflowButton-0").sourceMenuControl;
-            const secondMenu = findChild(strip, "sourceOverflowButton-1").sourceMenuControl;
+            const firstMenu = findChild(strip, "sourceChip-0").sourceMenuControl;
+            const secondMenu = findChild(strip, "sourceChip-1").sourceMenuControl;
             firstMenu.close();
             secondMenu.close();
             referenceSpy.clear();
@@ -337,8 +337,8 @@ Item {
 
         function test_menuClickDoesNotDirectLookOrSelectTheChip() {
             prepareThreeSources();
-            const overflow = findChild(strip, "sourceOverflowButton-1");
-            mouseClick(overflow, overflow.width / 2, overflow.height / 2);
+            const overflow = findChild(strip, "sourceChip-1");
+            mouseClick(overflow, overflow.width / 2, overflow.height / 2, Qt.RightButton);
             const menu = overflow.sourceMenuControl;
             tryCompare(menu, "opened", true);
             keyClick(Qt.Key_Escape);
@@ -349,15 +349,15 @@ Item {
 
         function test_reference_is_a_badge_and_all_sources_have_action_menus() {
             const tag = findChild(strip, "sourceReferenceTag-0");
-            const firstOverflow = findChild(strip, "sourceOverflowButton-0");
-            const secondOverflow = findChild(strip, "sourceOverflowButton-1");
+            const firstOverflow = findChild(strip, "sourceChip-0");
+            const secondOverflow = findChild(strip, "sourceChip-1");
             verify(tag !== null);
             verify(firstOverflow !== null);
             verify(secondOverflow !== null);
             verify(tag.visible);
             compare(tag.text, "参考");
 
-            mouseClick(secondOverflow, secondOverflow.width / 2, secondOverflow.height / 2);
+            mouseClick(secondOverflow, secondOverflow.width / 2, secondOverflow.height / 2, Qt.RightButton);
             const menu = secondOverflow.sourceMenuControl;
             tryCompare(menu, "opened", true);
             compare(strip.anyMenuOpen, true);
@@ -368,7 +368,7 @@ Item {
         }
 
         function test_actions_emit_identity_after_the_menu_closes() {
-            const secondOverflow = findChild(strip, "sourceOverflowButton-1");
+            const secondOverflow = findChild(strip, "sourceChip-1");
             const menu = secondOverflow.sourceMenuControl;
             const makeReference = secondOverflow.makeReferenceAction;
             menu.popup(root, 300, 24);
@@ -378,7 +378,7 @@ Item {
             compare(referenceSpy.signalArguments[0][0], "source-b");
             tryCompare(menu, "opened", false);
 
-            const firstOverflow = findChild(strip, "sourceOverflowButton-0");
+            const firstOverflow = findChild(strip, "sourceChip-0");
             const firstMenu = firstOverflow.sourceMenuControl;
             const remove = firstOverflow.removeSourceAction;
             firstMenu.popup(root, 300, 24);
@@ -391,7 +391,7 @@ Item {
         // V02 "替换文件": the menu carries the third per-source action, and it emits the
         // frozen identity after the menu closes, exactly like reference and removal.
         function test_replace_action_emits_identity_after_the_menu_closes() {
-            const secondOverflow = findChild(strip, "sourceOverflowButton-1");
+            const secondOverflow = findChild(strip, "sourceChip-1");
             const menu = secondOverflow.sourceMenuControl;
             const replace = secondOverflow.replaceSourceAction;
             verify(replace !== null);
@@ -406,11 +406,12 @@ Item {
         }
 
         function test_pending_identity_disables_only_the_affected_source() {
-            const firstOverflow = findChild(strip, "sourceOverflowButton-0");
-            const secondOverflow = findChild(strip, "sourceOverflowButton-1");
+            const firstOverflow = findChild(strip, "sourceChip-0");
+            const secondOverflow = findChild(strip, "sourceChip-1");
             strip.pendingSourceIdentities = ["source-b"];
-            tryCompare(firstOverflow, "enabled", true);
-            tryCompare(secondOverflow, "enabled", false);
+            tryCompare(firstOverflow, "pending", false);
+            tryCompare(secondOverflow, "pending", true);
+            verify(!strip.openSourceMenu(secondOverflow, Qt.point(10, 10)));
         }
 
         // V02: the focused source shows the 直看 tag so the four per-source states (direct
@@ -427,8 +428,8 @@ Item {
 
         // Test B: model reset while menu is open must not leak openMenuCount.
         function test_model_reset_clears_open_menu_count() {
-            const secondOverflow = findChild(strip, "sourceOverflowButton-1");
-            mouseClick(secondOverflow, secondOverflow.width / 2, secondOverflow.height / 2);
+            const secondOverflow = findChild(strip, "sourceChip-1");
+            mouseClick(secondOverflow, secondOverflow.width / 2, secondOverflow.height / 2, Qt.RightButton);
             const menu = secondOverflow.sourceMenuControl;
             tryCompare(menu, "opened", true);
             compare(strip.anyMenuOpen, true);
@@ -454,7 +455,7 @@ Item {
         // Triggered path (makeReference) must emit viewerFocusRequested exactly once.
         function test_triggered_action_emits_viewer_focus_requested() {
             viewerFocusSpy.clear();
-            const secondOverflow = findChild(strip, "sourceOverflowButton-1");
+            const secondOverflow = findChild(strip, "sourceChip-1");
             const menu = secondOverflow.sourceMenuControl;
             const makeReference = secondOverflow.makeReferenceAction;
             menu.popup(root, 300, 24);
@@ -467,7 +468,7 @@ Item {
         // Escape-close (no triggered action) must NOT emit viewerFocusRequested.
         function test_escape_close_does_not_emit_viewer_focus_requested() {
             viewerFocusSpy.clear();
-            const secondOverflow = findChild(strip, "sourceOverflowButton-1");
+            const secondOverflow = findChild(strip, "sourceChip-1");
             const menu = secondOverflow.sourceMenuControl;
             menu.popup(root, 300, 24);
             tryCompare(menu, "opened", true);

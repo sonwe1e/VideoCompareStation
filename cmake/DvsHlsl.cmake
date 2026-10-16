@@ -37,6 +37,7 @@ function(dvs_compile_nv12_shaders)
     set(shaderDirectory "${PROJECT_SOURCE_DIR}/src/ui_qml/shaders")
     set(composeShader "${shaderDirectory}/Compose.hlsl")
     set(nv12Shader "${shaderDirectory}/Nv12ToRgb.hlsl")
+    set(probeShader "${shaderDirectory}/SourcePixelProbe.hlsl")
     set(generatedIncludeDirectory "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
     set(generatedHeader
         "${generatedIncludeDirectory}/dvs/platform/shaders/DvsNv12Shaders.generated.h")
@@ -48,11 +49,13 @@ function(dvs_compile_nv12_shaders)
         COMMAND "$<TARGET_FILE:dvs_hlsl_header_compiler>"
                 --compose "${composeShader}"
                 --nv12 "${nv12Shader}"
+                --probe "${probeShader}"
                 --output "${generatedHeader}"
         DEPENDS
             dvs_hlsl_header_compiler
             "${composeShader}"
             "${nv12Shader}"
+            "${probeShader}"
         COMMENT "Compiling deterministic D3D11 NV12 shader bytecode"
         VERBATIM
     )

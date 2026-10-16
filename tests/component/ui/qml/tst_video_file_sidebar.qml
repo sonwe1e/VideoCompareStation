@@ -29,7 +29,7 @@ Item {
 
     Dvs.VideoFolderSidebar {
         id: sidebar
-        width: 260
+        width: Theme.fileSidebarWidthDefault
         height: parent.height
         folderModel: folder
         property bool testFocusAfterDispatch: false
@@ -498,23 +498,28 @@ Item {
             compare(folder.currentRow, 1);
         }
 
-        // The panel can be narrowed to Theme.fileSidebarWidthMin (200 px). The header rows
-        // must wrap there instead of pushing 「最近打开」/「刷新」past the clipped border, and
-        // file names keep their padding instead of hugging the panel edge.
-        function test_headerButtonsWrapAtMinimumPanelWidth() {
+        // The shared sidebar now has a fixed width and keeps four equal buttons in a 2x2
+        // grid, including while switching to history. File names retain their padding.
+        function test_headerButtonsKeepTwoByTwoGridAtFixedWidth() {
             const withinPanel = function (item) {
                 const origin = item.mapToItem(sidebar, 0, 0);
                 return origin.x + item.width <= sidebar.width + 0.5;
             };
-            sidebar.width = 200;
             wait(30);
             const folderTab = findChild(sidebar, "videoFolderTab");
             const recentTab = findChild(sidebar, "videoRecentTab");
+            const choose = findChild(sidebar, "videoFolderChooseButton");
             const refresh = findChild(sidebar, "videoFolderRefreshButton");
-            verify(folderTab.visible && recentTab.visible && refresh.visible);
-            verify(recentTab.y > folderTab.y, "the second tab wraps to a new line");
+            verify(folderTab.visible && recentTab.visible && choose.visible && refresh.visible);
+            compare(folderTab.y, recentTab.y);
+            compare(choose.y, refresh.y);
+            verify(choose.y >= folderTab.y + folderTab.height);
+            compare(folderTab.width, recentTab.width);
+            compare(choose.width, folderTab.width);
+            compare(refresh.width, folderTab.width);
             verify(withinPanel(folderTab));
             verify(withinPanel(recentTab));
+            verify(withinPanel(choose));
             verify(withinPanel(refresh));
             const list = findChild(sidebar, "videoFolderFileList");
             let row = null;
@@ -523,9 +528,12 @@ Item {
                 return row !== null;
             });
             verify(row.leftPadding >= 10, "file names keep breathing room from the border");
-            sidebar.width = 260;
+            sidebar.showRecent = true;
             wait(30);
-            verify(Math.abs(recentTab.y - folderTab.y) < 0.5, "wide panel keeps both tabs on one line");
+            verify(choose.visible && refresh.visible);
+            compare(folderTab.y, recentTab.y);
+            compare(choose.y, refresh.y);
+            compare(sidebar.width, Theme.fileSidebarWidthDefault);
         }
     }
 }

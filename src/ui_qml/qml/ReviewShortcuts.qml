@@ -45,11 +45,20 @@ Item {
     signal modeRequested(int mode)
     signal fitRequested
     signal nativeSizeRequested
+    // D2: one-key toggle between fit-window and true 1:1 (same verb as the canvas
+    // double-click). The host routes it to the viewport's anchor-preserving toggle.
+    signal nativeFitToggleRequested
     signal zoomInRequested
     signal zoomOutRequested
     signal resetViewRequested
-    signal referencePeekToggleRequested
+    // D4 hold peek: press shows the raw reference view, release restores the difference view.
+    // The lock (Shift+`) is a separate action; the hold never changes the lock state.
+    signal referencePeekHoldChanged(bool held)
     signal referencePeekLockToggleRequested
+    // D3 pair look (T): while paused, alternate the whole-canvas direct look between the two
+    // slots of the current comparison pair. The host computes the actual pair (GT/candidate
+    // combinations included) and keeps the key inert while playing.
+    signal pairLookToggleRequested
 
     objectName: "reviewShortcuts"
     visible: false
@@ -227,41 +236,89 @@ Item {
     }
     // ,/. are player-preset aliases of the bare frame-step keys; JogKeyHandler owns them while
     // the player preset is active (playerPresetKeys) and they are documented in the help rows.
+    // E1: W toggles the wipe split axis (vertical left/right <-> horizontal top/bottom).
+    // It must fire only while a real wipe composite is on screen: wipe view mode AND no
+    // full-canvas direct look (canvasFocusSlot >= 0 hides the handle and renders the
+    // single-source branch, so silently flipping the axis then would be invisible tampering).
+    signal wipeOrientationToggleRequested
+    signal wipeMoveYRequested(real delta)
+    required property bool wipeSplitActive
+    // E1: which axis the split is currently on. The Alt+Left/Right and Alt+Up/Down move keys
+    // are gated to their real axes - moving the ratio with the wrong arrow pair would drag
+    // the split along an axis the on-screen handle no longer shows.
+    required property bool wipeHorizontal
+    Shortcut {
+        sequence: "W"
+        context: Qt.ApplicationShortcut
+        autoRepeat: false
+        enabled: reviewActions.shortcutsEnabled && reviewActions.wipeEnabled && control.wipeSplitActive && control.presentationShortcutsEnabled
+        onActivated: control.wipeOrientationToggleRequested()
+        property string helpKeys: qsTr("W")
+        property string helpLabel: qsTr("切换分屏线方向（水平 / 垂直）")
+    }
+    Shortcut {
+        sequence: "Alt+Up"
+        context: Qt.ApplicationShortcut
+        enabled: reviewActions.shortcutsEnabled && reviewActions.wipeEnabled && control.wipeSplitActive && control.wipeHorizontal
+        onActivated: control.wipeMoveYRequested(-0.01)
+        property string helpKeys: qsTr("Alt+↑ / Alt+↓")
+        property string helpLabel: qsTr("水平分屏线上移 / 下移（Shift 大步；仅上下切分）")
+    }
+    Shortcut {
+        sequence: "Alt+Down"
+        context: Qt.ApplicationShortcut
+        enabled: reviewActions.shortcutsEnabled && reviewActions.wipeEnabled && control.wipeSplitActive && control.wipeHorizontal
+        onActivated: control.wipeMoveYRequested(0.01)
+    }
+    Shortcut {
+        sequence: "Shift+Alt+Up"
+        context: Qt.ApplicationShortcut
+        enabled: reviewActions.shortcutsEnabled && reviewActions.wipeEnabled && control.wipeSplitActive && control.wipeHorizontal
+        onActivated: control.wipeMoveYRequested(-0.05)
+    }
+    Shortcut {
+        sequence: "Shift+Alt+Down"
+        context: Qt.ApplicationShortcut
+        enabled: reviewActions.shortcutsEnabled && reviewActions.wipeEnabled && control.wipeSplitActive && control.wipeHorizontal
+        onActivated: control.wipeMoveYRequested(0.05)
+    }
     Shortcut {
         sequence: "Alt+Left"
         context: Qt.ApplicationShortcut
-        enabled: reviewActions.shortcutsEnabled && reviewActions.wipeEnabled
+        enabled: reviewActions.shortcutsEnabled && reviewActions.wipeEnabled && control.wipeSplitActive && !control.wipeHorizontal
         onActivated: reviewActions.moveWipe(-0.01)
         property string helpKeys: qsTr("Alt+← / →")
-        property string helpLabel: qsTr("Wipe 分屏线左移 / 右移")
+        property string helpLabel: qsTr("垂直分屏线左移 / 右移（仅左右切分）")
     }
     Shortcut {
         sequence: "Alt+Right"
         context: Qt.ApplicationShortcut
-        enabled: reviewActions.shortcutsEnabled && reviewActions.wipeEnabled
+        enabled: reviewActions.shortcutsEnabled && reviewActions.wipeEnabled && control.wipeSplitActive && !control.wipeHorizontal
         onActivated: reviewActions.moveWipe(0.01)
     }
     Shortcut {
         sequence: "Shift+Alt+Left"
         context: Qt.ApplicationShortcut
-        enabled: reviewActions.shortcutsEnabled && reviewActions.wipeEnabled
+        enabled: reviewActions.shortcutsEnabled && reviewActions.wipeEnabled && control.wipeSplitActive && !control.wipeHorizontal
         onActivated: reviewActions.moveWipe(-0.05)
         property string helpKeys: qsTr("Shift+Alt+← / →")
-        property string helpLabel: qsTr("Wipe 分屏线大步左移 / 右移")
+        property string helpLabel: qsTr("垂直分屏线大步左移 / 右移（仅左右切分）")
     }
     Shortcut {
         sequence: "Shift+Alt+Right"
         context: Qt.ApplicationShortcut
-        enabled: reviewActions.shortcutsEnabled && reviewActions.wipeEnabled
+        enabled: reviewActions.shortcutsEnabled && reviewActions.wipeEnabled && control.wipeSplitActive && !control.wipeHorizontal
         onActivated: reviewActions.moveWipe(0.05)
     }
+    // D1: pure mode moved from Tab to H. Tab/Shift+Tab return to their platform meaning -
+    // keyboard focus navigation - which an ApplicationShortcut on Tab would swallow.
     Shortcut {
-        sequence: "Tab"
+        sequence: "H"
         context: Qt.ApplicationShortcut
         autoRepeat: false
         enabled: control.presentationShortcutsEnabled
         onActivated: control.chromeToggleRequested()
-        property string helpKeys: qsTr("Tab")
+        property string helpKeys: qsTr("H")
         property string helpLabel: qsTr("隐藏界面")
     }
     Shortcut {
@@ -403,6 +460,29 @@ Item {
         property string helpKeys: qsTr("F")
         property string helpLabel: qsTr("适应窗口")
     }
+    // D2: Z mirrors the canvas double-click - one key flips between fit-window and the
+    // content/DPR-aware 100%, preserving the observation anchor. Never auto-repeats: each
+    // press is one deliberate flip.
+    Shortcut {
+        sequence: "Z"
+        context: Qt.ApplicationShortcut
+        autoRepeat: false
+        enabled: control.viewShortcutsEnabled
+        onActivated: control.nativeFitToggleRequested()
+        property string helpKeys: qsTr("Z")
+        property string helpLabel: qsTr("100% ↔ 适应窗口")
+    }
+    // D3: T is the cross-workspace "alternate in-place look" key. Video side pauses only:
+    // while playing the key stays inert so it never competes with playback semantics.
+    Shortcut {
+        sequence: "T"
+        context: Qt.ApplicationShortcut
+        autoRepeat: false
+        enabled: control.viewShortcutsEnabled && !control.busy
+        onActivated: control.pairLookToggleRequested()
+        property string helpKeys: qsTr("T")
+        property string helpLabel: qsTr("暂停时在当前比较对间交替直看")
+    }
     Shortcut {
         sequence: "Ctrl+0"
         context: Qt.ApplicationShortcut
@@ -433,18 +513,24 @@ Item {
         property string helpKeys: qsTr("R")
         property string helpLabel: qsTr("重置视图（清除 ROI 并适应窗口）")
     }
-    // Keyboard flavour of the mode bar's hold-to-peek button: tap toggles the raw reference
-    // view, Shift+` locks it so it survives view switches. Difference mode only, same
-    // availability as the button. The literal backtick is used (not the QuoteLeft key name)
-    // because QKeySequence parses and matches punctuation characters reliably.
-    Shortcut {
-        sequence: "`"
-        context: Qt.ApplicationShortcut
-        autoRepeat: false
+    // D4: the backtick is a real hold, not a toggle. The window-level watcher pairs with the
+    // mode bar's hold button (same availability); auto-repeats never re-arm it, a modified
+    // release still ends it, and window deactivation releases the hold. Shift+` below stays
+    // the lock - a deliberate separate action. The literal backtick is used (not the
+    // QuoteLeft key name) because QKeySequence matches punctuation characters reliably.
+    // qmllint disable import unqualified unresolved-type
+    HoldKeyHandler {
+        window: control.Window.window
         enabled: control.viewShortcutsEnabled && control.differencePeekAvailable && !control.busy
-        onActivated: control.referencePeekToggleRequested()
-        property string helpKeys: qsTr("`")
-        property string helpLabel: qsTr("切换查看参考原图（差异模式）")
+        holdKey: Qt.Key_QuoteLeft
+        onHoldPressed: control.referencePeekHoldChanged(true)
+        onHoldReleased: control.referencePeekHoldChanged(false)
+    }
+    // qmllint enable import unqualified unresolved-type
+    JogKeyHelpRow {
+        helpKeys: qsTr("`（按住）")
+        helpLabel: qsTr("按住直看参考（GT）原图，松开恢复差异视图")
+        helpPresets: -1
     }
     Shortcut {
         sequence: "Shift+`"

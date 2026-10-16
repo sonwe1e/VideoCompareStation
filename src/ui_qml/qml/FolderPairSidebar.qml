@@ -29,6 +29,14 @@ Rectangle {
         return row >= 0 ? row : -1;
     }
 
+    // Null-safe projections of the model's QString properties: a model that has not
+    // exposed them yet (isolated harness mocks, a model mid-reset) yields undefined,
+    // and reading `.length` on undefined or assigning it into a QString property is a
+    // runtime error, not an empty value. Bindings read these instead of the raw values.
+    readonly property string leftFolderPathText: pairModel && pairModel.leftFolderPath !== undefined ? String(pairModel.leftFolderPath) : ""
+    readonly property string rightFolderPathText: pairModel && pairModel.rightFolderPath !== undefined ? String(pairModel.rightFolderPath) : ""
+    readonly property string modelErrorText: pairModel && pairModel.errorText !== undefined ? String(pairModel.errorText) : ""
+
     function selectRow(row) {
         if (!pairModel || row < 0 || row >= pairModel.pairCount)
             return;
@@ -78,9 +86,9 @@ Rectangle {
         }
     }
 
+    // The bands butt exactly: a Column's default spacing is 0, so no literal is needed.
     Column {
         anchors.fill: parent
-        spacing: 0
 
         // Header: folder names plus a change action.
         Rectangle {
@@ -128,7 +136,7 @@ Rectangle {
                     visible: control.hasFolders
                     text: control.pairModel ? qsTr("同名配对（大小写不敏感）") : ""
                     color: Theme.mutedText
-                    font.pixelSize: 11
+                    font.pixelSize: Theme.fontCaption
                 }
 
                 // T6: pairing outcome counts. "已配对" only means the names match on both
@@ -139,7 +147,7 @@ Rectangle {
                     visible: control.hasFolders
                     text: control.pairModel ? qsTr("完整 %1 · 缺失 %2 · 大小写冲突 %3").arg(control.pairModel.completeCount).arg(control.pairModel.missingCount).arg(control.pairModel.conflictCount) : ""
                     color: Theme.mutedText
-                    font.pixelSize: 11
+                    font.pixelSize: Theme.fontCaption
                     elide: Text.ElideRight
                 }
 
@@ -149,7 +157,7 @@ Rectangle {
                     visible: control.hasFolders
                     text: control.pairModel ? "%1 · %2".arg(qsTr("A")).arg(control.pairModel.leftFolderName) : ""
                     color: Theme.mutedText
-                    font.pixelSize: 11
+                    font.pixelSize: Theme.fontCaption
                     elide: Text.ElideMiddle
 
                     HoverHandler {
@@ -157,8 +165,8 @@ Rectangle {
                     }
 
                     VcsToolTip {
-                        visible: leftFolderHover.hovered && control.pairModel && control.pairModel.leftFolderPath.length > 0
-                        text: control.pairModel ? control.pairModel.leftFolderPath : ""
+                        visible: leftFolderHover.hovered && control.leftFolderPathText.length > 0
+                        text: control.leftFolderPathText
                     }
                 }
 
@@ -168,7 +176,7 @@ Rectangle {
                     visible: control.hasFolders
                     text: control.pairModel ? "%1 · %2".arg(qsTr("B")).arg(control.pairModel.rightFolderName) : ""
                     color: Theme.mutedText
-                    font.pixelSize: 11
+                    font.pixelSize: Theme.fontCaption
                     elide: Text.ElideMiddle
 
                     HoverHandler {
@@ -176,8 +184,8 @@ Rectangle {
                     }
 
                     VcsToolTip {
-                        visible: rightFolderHover.hovered && control.pairModel && control.pairModel.rightFolderPath.length > 0
-                        text: control.pairModel ? control.pairModel.rightFolderPath : ""
+                        visible: rightFolderHover.hovered && control.rightFolderPathText.length > 0
+                        text: control.rightFolderPathText
                     }
                 }
 
@@ -238,13 +246,13 @@ Rectangle {
                         objectName: "folderPairRow-" + index
                         width: pairList.width
                         height: 34
-                        radius: 6
+                        radius: Theme.radiusSubtle
                         color: pairRow.hasBoth ? (pairRow.index === control.currentRow ? Theme.controlChecked : (rowHover.hovered ? Theme.fluentHover : "transparent")) : "transparent"
                         opacity: pairRow.hasBoth ? 1.0 : 0.55
 
                         Behavior on color {
                             ColorAnimation {
-                                duration: 100
+                                duration: Theme.animationFast
                             }
                         }
 
@@ -267,7 +275,7 @@ Rectangle {
                             objectName: "folderPairDot-" + pairRow.index
                             width: 8
                             height: 8
-                            radius: 4
+                            radius: Theme.radiusMicro
                             color: pairRow.hasBoth ? Theme.success : Theme.warning
                             anchors {
                                 left: parent.left
@@ -347,7 +355,7 @@ Rectangle {
                     Text {
                         anchors.centerIn: parent
                         visible: control.pairModel && control.pairModel.pairCount === 0
-                        text: control.pairModel && control.pairModel.errorText.length > 0 ? control.pairModel.errorText : qsTr("没有可对比的图片。")
+                        text: control.modelErrorText.length > 0 ? control.modelErrorText : qsTr("没有可对比的图片。")
                         color: Theme.mutedText
                         font.pixelSize: 12
                     }

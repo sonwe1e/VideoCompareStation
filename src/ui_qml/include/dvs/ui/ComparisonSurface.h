@@ -55,9 +55,16 @@ class ComparisonSurface : public QQuickItem {
                    NOTIFY physicalScalePercentChanged)
     Q_PROPERTY(
         qreal wipePosition READ wipePosition WRITE setWipePosition NOTIFY wipePositionChanged)
+    // E1: wipe split axis. 0 = Vertical (left/right along X, the historical default),
+    // 1 = Horizontal (top/bottom along Y). Renderer clip/UV math, panel layout, hit mapping
+    // and the handle all read this one value.
+    Q_PROPERTY(int wipeOrientation READ wipeOrientation WRITE setWipeOrientation NOTIFY
+                   wipeOrientationChanged)
     Q_PROPERTY(qreal wipeSplitLogicalX READ wipeSplitLogicalX NOTIFY presentationGeometryChanged)
+    Q_PROPERTY(qreal wipeSplitLogicalY READ wipeSplitLogicalY NOTIFY presentationGeometryChanged)
     Q_PROPERTY(
         QVariantList sourcePanelRects READ sourcePanelRects NOTIFY presentationGeometryChanged)
+    Q_PROPERTY(QVariantList pixelGridPanels READ pixelGridPanels NOTIFY pixelGridGeometryChanged)
     Q_PROPERTY(QVariantList sourceDisplayInfo READ sourceDisplayInfo WRITE setSourceDisplayInfo
                    NOTIFY presentationGeometryChanged)
     Q_PROPERTY(bool exactPlaneAvailable READ exactPlaneAvailable WRITE setExactPlaneAvailable NOTIFY
@@ -225,8 +232,12 @@ public:
     [[nodiscard]] DifferenceFilter effectiveVideoFilter() const noexcept;
     [[nodiscard]] qreal wipePosition() const noexcept;
     void setWipePosition(qreal value);
+    [[nodiscard]] int wipeOrientation() const noexcept;
+    void setWipeOrientation(int orientation);
     [[nodiscard]] qreal wipeSplitLogicalX() const;
+    [[nodiscard]] qreal wipeSplitLogicalY() const;
     [[nodiscard]] QVariantList sourcePanelRects() const;
+    [[nodiscard]] QVariantList pixelGridPanels() const;
     [[nodiscard]] QVariantList sourceDisplayInfo() const;
     void setSourceDisplayInfo(const QVariantList& value);
     [[nodiscard]] bool exactPlaneAvailable() const noexcept;
@@ -279,6 +290,14 @@ public:
     Q_INVOKABLE void zoomToNormalizedRect(qreal left, qreal top, qreal right, qreal bottom);
     Q_INVOKABLE void setRoiNormalized(qreal left, qreal top, qreal right, qreal bottom);
     Q_INVOKABLE void clearRoi();
+    // Phase-3 local-window drag: converts one staged local window's logical-pixel drag delta
+    // (display space) into a shared-ROI centre move, using the same pure geometry the renderer
+    // draws with (footage extents plus the unrotated crop), including the display<->source axis
+    // and sign mapping for rotated sources. Grab semantics - the content follows the cursor -
+    // and the rect keeps its size, clamped to the frame. Presentation-layer state only: writes
+    // the ROI fields like setRoiNormalized but never resets the panorama view transform, so a
+    // drag cannot refit a panned/zoomed panorama. No-ops without a staged window or an ROI.
+    Q_INVOKABLE void panRoiByLocalWindowPixels(int slot, qreal dxLogical, qreal dyLogical);
     Q_INVOKABLE void restoreViewport(qreal centerX,
                                      qreal centerY,
                                      qreal scale,
@@ -288,6 +307,7 @@ public:
                                      qreal roiRight,
                                      qreal roiBottom);
     Q_INVOKABLE qreal wipePositionForLogicalX(qreal x) const;
+    Q_INVOKABLE qreal wipePositionForLogicalY(qreal y) const;
     Q_INVOKABLE QVariantMap mapSurfacePoint(qreal x, qreal y) const;
     // Asks for one raw source-pixel read of the given slot at normalized source coordinates.
     // The probe runs on the render thread against the frame set the renderer is presenting and
@@ -313,6 +333,7 @@ public:
     [[nodiscard]] bool hasRendererServices() const noexcept;
 
 signals:
+    void pixelGridGeometryChanged();
     // Delivered on the GUI thread. The map mirrors the image side's cursorPixel style:
     // valid, slot, x, y, luma, cb, cr, bitDepth, frameId, sessionEpoch, playbackGeneration,
     // and for failures a reason string ("no-frame", "missing-slot", "out-of-range",
@@ -326,6 +347,7 @@ signals:
     void videoFilterModeChanged();
     void physicalScalePercentChanged();
     void wipePositionChanged();
+    void wipeOrientationChanged();
     void presentationGeometryChanged();
     void exactPlaneAvailableChanged();
     void thresholdChanged();
@@ -370,6 +392,7 @@ private:
     // Fed from the viewport badge's effectivePercent; 0 means "not measurable yet".
     qreal physicalScalePercent_ = 0.0;
     qreal wipePosition_ = 0.5;
+    int wipeOrientation_ = 0;
     QVariantList sourceDisplayInfo_;
     bool exactPlaneAvailable_ = false;
     bool thresholdEnabled_ = false;

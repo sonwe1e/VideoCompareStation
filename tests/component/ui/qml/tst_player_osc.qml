@@ -17,10 +17,17 @@ Item {
         property int previousFrameCalls: 0
         property int nextFrameCalls: 0
         property var jogRateCalls: []
+        // I8 preset routing: the player preset sends the second-step buttons to stepSeconds
+        // (like ReviewShortcuts' Ctrl+←/→ branch); the frame-review preset keeps the exact
+        // second seam.
+        property var stepSecondsCalls: []
+        property int backwardSecondCalls: 0
+        property int forwardSecondCalls: 0
 
         function firstFrame() {
         }
         function stepBackwardSecond() {
+            backwardSecondCalls += 1;
         }
         function stepBackwardFive() {
         }
@@ -35,6 +42,12 @@ Item {
         function stepForwardFive() {
         }
         function stepForwardSecond() {
+            forwardSecondCalls += 1;
+        }
+        function stepSeconds(seconds) {
+            const nextCalls = stepSecondsCalls.slice(0);
+            nextCalls.push(seconds);
+            stepSecondsCalls = nextCalls;
         }
         function lastFrame() {
         }
@@ -185,6 +198,17 @@ Item {
         id: previewSpy
         target: osc
         signalName: "previewRequested"
+    }
+
+    SignalSpy {
+        id: markInSpy
+        target: osc
+        signalName: "markInRequested"
+    }
+    SignalSpy {
+        id: pingPongSpy
+        target: osc
+        signalName: "rangePingPongRequested"
     }
 
     // P03 protocol-controller stand-in: a plain QtObject carrying the properties the transport
@@ -599,11 +623,18 @@ Item {
             verify(status.text.indexOf("呈现间隙 5") >= 0);
             verify(osc.statusLegend.indexOf("可能与播放器跳过重合") >= 0);
             verify(osc.statusLegend.indexOf("不能相加") >= 0);
+            // The strategy explanation left its own layout line for the tooltip: the wording
+            // stays reachable on the hidden anchor and inside the shared tooltip text.
             const hint = findChild(osc, "playbackStatusHint");
             verify(hint !== null);
-            verify(hint.visible);
-            verify(hint.text.indexOf("不跳过") < 0);
+            verify(!hint.visible, "the detail line no longer spends a row in any state");
             verify(hint.text.indexOf("整组跳帧") >= 0);
+            verify(osc.playbackStatusToolTipText().indexOf("整组跳帧") >= 0);
+            // The alert rail carries the warning colour; the quiet capsule is off-stage.
+            verify(Qt.colorEqual(status.color, Theme.warning));
+            const quiet = findChild(osc, "playbackStatusQuiet");
+            verify(quiet !== null);
+            verify(!quiet.visible, "an alert run must not also show the quiet capsule");
         }
 
         function test_review_every_frame_status_reports_no_skip() {
@@ -913,6 +944,276 @@ Item {
                 metricOsc.metrics = null;
                 metricOsc.visible = false;
             }
+        }
+
+        // I8: the second-step tooltips must promise exactly what ReviewShortcuts performs in
+        // the active preset - ±1 s in the frame-review preset, ±30 s in the player preset.
+        function test_second_step_tooltips_follow_the_shortcut_preset() {
+            osc.revealActive = true;
+            const transport = findChild(osc, "transportBar");
+            verify(transport !== null);
+            const previousSecond = findChild(transport, "previousSecondButton");
+            const nextSecond = findChild(transport, "nextSecondButton");
+            verify(previousSecond !== null);
+            verify(nextSecond !== null);
+
+            osc.shortcutPreset = 0;
+            verify(previousSecond.helpText.indexOf(qsTr("后退 1 秒")) >= 0);
+            verify(nextSecond.helpText.indexOf(qsTr("前进 1 秒")) >= 0);
+            verify(previousSecond.helpText.indexOf("Ctrl+←") >= 0);
+            verify(nextSecond.helpText.indexOf("Ctrl+→") >= 0);
+
+            osc.shortcutPreset = 1;
+            verify(previousSecond.helpText.indexOf(qsTr("快退 30 秒")) >= 0);
+            verify(nextSecond.helpText.indexOf(qsTr("快进 30 秒")) >= 0);
+            // The key chords themselves stay truthful in both presets: the player listing must
+            // say the Ctrl+A/D chords keep their one-second step instead of claiming them as
+            // 30-second aliases (that mismatch was the I8 regression).
+            verify(previousSecond.helpText.indexOf("Ctrl+A") >= 0);
+            verify(previousSecond.helpText.indexOf(qsTr("仍后退 1 秒")) >= 0);
+            verify(nextSecond.helpText.indexOf("Ctrl+D") >= 0);
+            verify(nextSecond.helpText.indexOf(qsTr("仍快进 1 秒")) >= 0);
+            osc.shortcutPreset = 0;
+        }
+
+        // I8 action side: in the player preset the buttons drive the same ±30 s jump the
+        // Ctrl+←/→ shortcuts perform; the frame-review preset keeps the exact-second seam.
+        function test_player_preset_second_buttons_jump_30_seconds() {
+            osc.revealActive = true;
+            const previousSecond = findChild(osc, "previousSecondButton");
+            const nextSecond = findChild(osc, "nextSecondButton");
+            verify(previousSecond !== null);
+            verify(nextSecond !== null);
+
+            osc.shortcutPreset = 1;
+            actions.stepSecondsCalls = [];
+            actions.backwardSecondCalls = 0;
+            actions.forwardSecondCalls = 0;
+            nextSecond.clicked();
+            previousSecond.clicked();
+            compare(actions.stepSecondsCalls, [30, -30]);
+            compare(actions.backwardSecondCalls, 0);
+            compare(actions.forwardSecondCalls, 0);
+
+            osc.shortcutPreset = 0;
+            actions.stepSecondsCalls = [];
+            actions.backwardSecondCalls = 0;
+            actions.forwardSecondCalls = 0;
+            nextSecond.clicked();
+            previousSecond.clicked();
+            compare(actions.stepSecondsCalls, []);
+            compare(actions.forwardSecondCalls, 1);
+            compare(actions.backwardSecondCalls, 1);
+        }
+
+        // E3 ping-pong: the walk chip arms with a complete range, a real click emits the
+        // flip intent, and the active face follows the loopRangePingPongActive projection.
+        function test_ping_pong_chip_flips_walk_intent_on_same_interval() {
+            osc.revealActive = true;
+            osc.inFrame = 41;
+            osc.outFrame = 47;
+            osc.loopRangePingPongActive = false;
+            wait(0);
+            const chip = findChild(osc, "transportPingPongRangeButton");
+            verify(chip !== null);
+            tryCompare(chip, "visible", true);
+            verify(!chip.chipActive);
+
+            pingPongSpy.clear();
+            chip.clicked();
+            compare(pingPongSpy.count, 1);
+
+            osc.loopRangePingPongActive = true;
+            tryCompare(chip, "chipActive", true);
+
+            // Clearing the endpoints retires the chip with the rest of the working face.
+            osc.inFrame = -1;
+            osc.outFrame = -1;
+            tryCompare(chip, "visible", false);
+            osc.loopRangePingPongActive = false;
+        }
+        // Phase-3 inline range cluster: no endpoints means the row is exactly the two compact
+        // mark chips; endpoints expand the working face (capsule + loop/export/clear) while
+        // every contract objectName and the range label wording stay intact.
+        function test_range_controls_remain_reachable_after_marking_endpoints() {
+            osc.revealActive = true;
+            osc.playing = false;
+            osc.inFrame = -1;
+            osc.outFrame = -1;
+            wait(0);
+            const markIn = findChild(osc, "transportMarkInButton");
+            const markOut = findChild(osc, "transportMarkOutButton");
+            const playRange = findChild(osc, "transportPlayRangeButton");
+            const loopRange = findChild(osc, "transportLoopRangeButton");
+            const clearRange = findChild(osc, "transportClearRangeButton");
+            const exportChip = findChild(osc, "transportExportRangeButton");
+            const label = findChild(osc, "transportRangeLabel");
+            verify(markIn !== null);
+            verify(markOut !== null);
+            verify(playRange !== null);
+            verify(loopRange !== null);
+            verify(clearRange !== null);
+            verify(exportChip !== null);
+            verify(label !== null);
+
+            // Unset: the mark chips are the row; the working chips exist but stay hidden.
+            verify(markIn.visible);
+            verify(markOut.visible);
+            verify(!playRange.visible);
+            verify(!loopRange.visible);
+            verify(!clearRange.visible);
+            compare(label.text, qsTr("未设区间（I / O 设点）"));
+
+            // Marking intent still flows from the collapsed chips.
+            markInSpy.clear();
+            markIn.clicked();
+            compare(markInSpy.count, 1);
+
+            // One endpoint expands the working face with the contract wording unchanged.
+            osc.inFrame = 41;
+            tryCompare(label, "text", qsTr("入 42 · 出 —（区间无效）"));
+            tryCompare(loopRange, "visible", true);
+            tryCompare(clearRange, "visible", true);
+            verify(!playRange.visible, "playback needs both endpoints");
+
+            // A complete range names itself with the frame count, exactly as before.
+            osc.outFrame = 47;
+            tryCompare(label, "text", qsTr("入 42 · 出 48 · 7 帧"));
+
+            osc.inFrame = -1;
+            osc.outFrame = -1;
+            tryCompare(markIn, "visible", true);
+
+            const transport = findChild(osc, "transportBar");
+            const cluster = findChild(transport, "transportRangeRow");
+            const buttonRow = findChild(transport, "firstButton").parent;
+            const strip = findChild(transport, "adjacentFramesStrip");
+            transport.adjacentExpanded = true;
+            for (const width of [960, 1280]) {
+                osc.width = width;
+                osc.inFrame = 41;
+                osc.outFrame = 47;
+                waitForRendering(transport);
+                verify(markIn.visible && markOut.visible && playRange.visible);
+                verify(cluster.y >= buttonRow.y + buttonRow.height - 0.5);
+                verify(cluster.width <= transport.width + 0.5);
+                verify(buttonRow.width <= transport.width + 0.5);
+                const centre = transport.width / 2;
+                const clusterRect = cluster.mapToItem(transport, Qt.rect(0, 0, cluster.width, cluster.height));
+                const stripRect = strip.mapToItem(transport, Qt.rect(0, 0, strip.width, strip.height));
+                verify(Math.abs(clusterRect.x + clusterRect.width / 2 - centre) < 1);
+                verify(Math.abs(stripRect.x + stripRect.width / 2 - centre) < 1);
+                verify(stripRect.y >= clusterRect.y + clusterRect.height);
+                verify(clusterRect.y + clusterRect.height <= transport.height);
+            }
+            transport.adjacentExpanded = false;
+            osc.inFrame = -1;
+            osc.outFrame = -1;
+            // Restore the shared fixture width for the alphabetically later cases.
+            osc.width = root.width;
+        }
+
+        // C-07 quiet capsule: a clean run shows the one-line summary inline in the info row
+        // and keeps the warning rail off-stage; any real anomaly expands the full rail again,
+        // and the full text stays one hover away in both states.
+        function test_status_quiet_capsule_when_run_is_clean() {
+            osc.revealActive = true;
+            osc.playbackModeLabel = "流畅优先";
+            osc.playbackModeDetail = "保持原速；解码跟不上时整组跳帧";
+            osc.playbackTargetRate = 1.0;
+            osc.playbackPresentationRate = 1.0;
+            osc.playbackRunSkippedFrameSets = 0;
+            osc.playbackRunPresentedFrames = 120;
+            osc.playbackLagMilliseconds = 0;
+            osc.playbackCatchingUp = false;
+            osc.sourceDuplicateCount = 0;
+            osc.displayGapCount = 0;
+            osc.playing = true;
+            const status = findChild(osc, "playbackStatusText");
+            const quiet = findChild(osc, "playbackStatusQuiet");
+            verify(status !== null);
+            verify(quiet !== null);
+
+            verify(!osc.playbackStatusAlert, "a measured run with no skips and no lag is quiet");
+            verify(quiet.visible);
+            compare(quiet.text, qsTr("流畅优先 · 目标 1.00×"));
+            verify(Qt.colorEqual(quiet.color, Theme.mutedText));
+            verify(!status.visible, "the warning rail stays off-stage while the run is clean");
+            // The quiet capsule hides nothing: the full rail keeps the delivered rate.
+            verify(osc.playbackStatusFullText().indexOf("实际 1.00×") >= 0);
+
+            // Any real anomaly swaps the capsule for the warning rail, same vocabulary as
+            // before.
+            osc.playbackRunSkippedFrameSets = 1;
+            tryVerify(() => osc.playbackStatusAlert);
+            tryVerify(() => status.visible);
+            tryVerify(() => !quiet.visible);
+            verify(status.text.indexOf(qsTr("播放器跳过 1 组")) >= 0);
+            verify(Qt.colorEqual(status.color, Theme.warning));
+        }
+
+        // Phase-3: the metric curve rides behind an explicit readout-row toggle; collapsed
+        // keeps the single-frame summary as the always-on readout. The toggle is a Control, so
+        // its focus ring follows the visualFocus-only contract: a mouse click stays quiet,
+        // keyboard arrival lights the canonical ring.
+        function test_metrics_summary_row_toggle_expands_the_lane() {
+            metricOsc.visible = true;
+            metricOsc.revealActive = true;
+            metricsFake.available = true;
+            metricsFake.laneEnabled = false;
+            metricOsc.metrics = metricsFake;
+            try {
+                const toggle = findChild(metricOsc, "oscMetricsLaneToggle");
+                verify(toggle !== null);
+                verify(toggle.visible);
+                verify(toggle.text.indexOf(qsTr("展开指标曲线")) >= 0);
+
+                waitForRendering(toggle);
+                mouseClick(toggle);
+                verify(metricsFake.laneEnabled);
+                tryCompare(toggle, "text", qsTr("收起指标曲线 ▴"));
+                verify(!toggle.visualFocus, "a mouse click must not light the ring");
+
+                // Keyboard arrival is a focus transition. The click above left the toggle
+                // holding active focus with the mouse reason, and forceActiveFocus on an item
+                // that already has focus does not rewrite that reason - the same no-op a real
+                // user gets, who cannot Tab onto the control they are already on. Drop focus
+                // to the root first (the tst_review_action_button pattern) so the Tab reason
+                // actually registers.
+                root.forceActiveFocus();
+                toggle.forceActiveFocus(Qt.TabFocusReason);
+                verify(toggle.visualFocus, "keyboard arrival must light the ring");
+                root.forceActiveFocus();
+            } finally {
+                metricOsc.metrics = null;
+                metricOsc.visible = false;
+            }
+        }
+
+        // Phase-3: the adjacent-frame strip is on-demand - collapsed by default, one chip in
+        // the button row expands it, and playing closes both the strip and the entry.
+        function test_adjacent_frames_strip_is_on_demand() {
+            osc.revealActive = true;
+            const transport = findChild(osc, "transportBar");
+            osc.playing = false;
+            osc.currentFrame = 10;
+            transport.adjacentExpanded = false;
+            wait(0);
+            const toggle = findChild(osc, "transportAdjacentToggle");
+            const strip = findChild(osc, "adjacentFramesStrip");
+            verify(toggle !== null);
+            verify(strip !== null);
+            verify(toggle.visible);
+            verify(!strip.visible, "collapsed by default - the strip costs a line only on ask");
+            toggle.clicked();
+            tryVerify(() => strip.visible);
+            verify(toggle.chipActive);
+            // Playing retires the strip and the entry until the next pause.
+            osc.playing = true;
+            tryVerify(() => !strip.visible);
+            tryVerify(() => !toggle.visible);
+            osc.playing = false;
+            transport.adjacentExpanded = false;
         }
 
         function collectPeakHitAreas(item, found) {

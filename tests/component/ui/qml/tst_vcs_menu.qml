@@ -82,6 +82,8 @@ Item {
             compare(nestedMenu.popupType, Popup.Window);
             compare(rootMenu.background.color.a, 1.0);
             compare(nestedMenu.background.color.a, 1.0);
+            compare(rootMenu.background.border.color.a, 1.0);
+            compare(nestedMenu.background.border.color.a, 1.0);
             verify(rootMenu.popupInputContext);
             verify(findChild(rootMenu, "rootMenuItem").popupInputContext);
 

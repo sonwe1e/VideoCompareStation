@@ -2,6 +2,7 @@
 
 #include <QImage>
 #include <QList>
+#include <QPointF>
 #include <QUrl>
 
 #include <functional>
@@ -106,12 +107,40 @@ public:
     [[nodiscard]] bool focusControlForAutomation(std::string_view objectName) noexcept;
     [[nodiscard]] bool clickTimelineForAutomation(double normalizedPosition) noexcept;
     [[nodiscard]] bool sendKeyForAutomation(int key, int modifiers = 0) noexcept;
+    // Posts a window-level hover move in logical coordinates. The UI evidence automation uses
+    // it to drive the real hover paths (pixel probe plates, timeline previews) with the same
+    // event delivery a moving mouse produces.
+    [[nodiscard]] bool sendMouseMoveForAutomation(double sceneX, double sceneY) noexcept;
+    // Maps a fractional point (0..1) of the named item into window scene coordinates, so hover
+    // automation reaches the real on-screen position. Item x/y properties alone are
+    // parent-relative and go stale whenever an ancestor layout moves; mapToScene stays exact.
+    [[nodiscard]] std::optional<QPointF> objectScenePointForAutomation(std::string_view objectName,
+                                                                       double fractionalX,
+                                                                       double fractionalY) const;
+    // Invokes a QML function of the named object that takes one numeric argument and returns a
+    // string. The pixel-readout row is such a function: since the row became an aligned table,
+    // its container is no longer a Text whose "text" property could be read directly.
+    [[nodiscard]] std::optional<std::string> objectStringMethodForAutomation(
+        std::string_view objectName, std::string_view methodName, int argument) const;
+    // Captures the whole top-level window, not just one item - the video evidence automation
+    // needs the chrome and the footage in one shot.
+    [[nodiscard]] std::optional<QImage> captureWindowForAutomation() const;
     [[nodiscard]] std::optional<std::string>
     objectStringPropertyForAutomation(std::string_view objectName,
                                       std::string_view propertyName) const;
     [[nodiscard]] std::optional<int>
     objectIntPropertyForAutomation(std::string_view objectName,
                                    std::string_view propertyName) const;
+    // Generic property read for structured automation facts (e.g. the viewport's
+    // pixelReadoutResults map). An invalid QVariant means the object or property was
+    // unreachable - callers surface that as "unknown", never as a defaulted value.
+    [[nodiscard]] QVariant objectVariantPropertyForAutomation(std::string_view objectName,
+                                                              std::string_view propertyName) const;
+    // Walks the named item's parent chain and records, per ancestor: objectName, className,
+    // visible, opacity, width, height, x, y, z, clip and the mapped scene position - the
+    // properties that decide whether the item can actually appear. Read-only diagnostics for
+    // the forensic entry points; an unknown item yields an empty list.
+    [[nodiscard]] QVariantList itemAncestorReportForAutomation(std::string_view objectName) const;
     // Captures the named visible QML item's rendered pixels. Hardware gates use this to prove
     // that a selected comparison mode produced content, not merely that its button accepted a
     // click.

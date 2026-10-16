@@ -39,6 +39,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <thread>
 #include <utility>
 #include <vector>
 #include <wrl/client.h>
@@ -830,6 +831,77 @@ TEST(ComparisonSurfaceGeometryTests, RejectsInvalidScalesAndSubpixelDestinationE
                      .isValid());
 }
 
+TEST(ComparisonSurfaceGeometryTests, PixelGridMatchesRotatedSarRoiSourcePixelBoundaries) {
+    for (const int rotation : {0, 90, 180, 270}) {
+        ComparisonSurface surface;
+        surface.setSize({803, 607});
+        surface.setViewMode(ComparisonSurface::Single);
+        surface.setSourceDisplayInfo({QVariantMap{{QStringLiteral("width"), 160},
+                                                  {QStringLiteral("height"), 90},
+                                                  {QStringLiteral("sampleAspectNumerator"), 2},
+                                                  {QStringLiteral("sampleAspectDenominator"), 1},
+                                                  {QStringLiteral("rotationDegrees"), rotation}}});
+        surface.setRoiNormalized(0.13, 0.17, 0.83, 0.91);
+        surface.zoomAt(0.37, 0.61, 4.0);
+        surface.panBy(0.03, -0.02);
+        const auto panels = surface.pixelGridPanels();
+        ASSERT_EQ(panels.size(), 1);
+        const auto grid = panels.front().toMap();
+        const qreal x = grid.value(QStringLiteral("x")).toDouble();
+        const qreal y = grid.value(QStringLiteral("y")).toDouble();
+        const qreal stepX = grid.value(QStringLiteral("stepX")).toDouble();
+        const qreal stepY = grid.value(QStringLiteral("stepY")).toDouble();
+        const qreal originX = x + grid.value(QStringLiteral("originX")).toDouble();
+        const qreal originY = y + grid.value(QStringLiteral("originY")).toDouble();
+        const qreal lineX = originX + std::ceil((x - originX) / stepX + 1) * stepX;
+        const qreal lineY = originY + std::ceil((y - originY) / stepY + 1) * stepY;
+        const auto mapped = surface.mapSurfacePoint(lineX, lineY);
+        ASSERT_TRUE(mapped.value(QStringLiteral("insideContent")).toBool());
+        const qreal pixelX = mapped.value(QStringLiteral("sourceX")).toDouble() * 160;
+        const qreal pixelY = mapped.value(QStringLiteral("sourceY")).toDouble() * 90;
+        EXPECT_NEAR(pixelX, std::round(pixelX), 0.0002) << rotation;
+        EXPECT_NEAR(pixelY, std::round(pixelY), 0.0002) << rotation;
+        EXPECT_GE(x, 0);
+        EXPECT_GE(y, 0);
+        EXPECT_LE(x + grid.value(QStringLiteral("width")).toDouble(), surface.width());
+        EXPECT_LE(y + grid.value(QStringLiteral("height")).toDouble(), surface.height());
+    }
+}
+
+TEST(ComparisonSurfaceGeometryTests, PixelGridUsesFullWipeContentBeforeClippingBelowFit) {
+    ComparisonSurface surface;
+    surface.setSize({800, 600});
+    surface.setViewMode(ComparisonSurface::Wipe);
+    surface.setSourceDisplayInfo(
+        {QVariantMap{{QStringLiteral("width"), 16}, {QStringLiteral("height"), 9}},
+         QVariantMap{{QStringLiteral("width"), 8}, {QStringLiteral("height"), 9}}});
+    surface.zoomAt(0.5, 0.5, 0.5);
+    ASSERT_DOUBLE_EQ(surface.viewScale(), 0.5);
+    for (const int orientation : {0, 1}) {
+        surface.setWipeOrientation(orientation);
+        const auto grids = surface.pixelGridPanels();
+        ASSERT_EQ(grids.size(), 2);
+        for (const auto& value : grids) {
+            const auto grid = value.toMap();
+            const qreal left = grid.value(QStringLiteral("x")).toReal();
+            const qreal top = grid.value(QStringLiteral("y")).toReal();
+            const qreal stepX = grid.value(QStringLiteral("stepX")).toReal();
+            const qreal stepY = grid.value(QStringLiteral("stepY")).toReal();
+            const qreal originX = left + grid.value(QStringLiteral("originX")).toReal();
+            const qreal originY = top + grid.value(QStringLiteral("originY")).toReal();
+            const qreal x = originX + std::ceil((left - originX) / stepX + 1) * stepX;
+            const qreal y = originY + std::ceil((top - originY) / stepY + 1) * stepY;
+            const auto mapped = surface.mapSurfacePoint(x, y);
+            ASSERT_TRUE(mapped.value(QStringLiteral("insideContent")).toBool()) << orientation;
+            const int width = mapped.value(QStringLiteral("sourceSlot")).toInt() == 0 ? 16 : 8;
+            const qreal sourceX = mapped.value(QStringLiteral("sourceX")).toReal() * width;
+            const qreal sourceY = mapped.value(QStringLiteral("sourceY")).toReal() * 9;
+            EXPECT_NEAR(sourceX, std::round(sourceX), 0.0001);
+            EXPECT_NEAR(sourceY, std::round(sourceY), 0.0001);
+        }
+    }
+}
+
 TEST(ComparisonSurfaceGeometryTests, MapsShrunkenContentCornersAndRejectsItsNewBackground) {
     ComparisonSurface surface;
     surface.setSize(QSizeF{800.0, 600.0});
@@ -1006,6 +1078,7 @@ TEST(ComparisonSurfaceGeometryTests, DualDifferencePresentationGeometryFitsBothD
                                                      2U,
                                                      platform::SurfaceDifferenceEdge::Between0And1,
                                                      0.5F,
+                                                     platform::SurfaceWipeOrientation::Vertical,
                                                      extents,
                                                      false,
                                                      -1);
@@ -1035,6 +1108,7 @@ TEST(ComparisonSurfaceGeometryTests, CanvasFocusCollapsesTheLayoutToOneFullCanva
                                                      2U,
                                                      platform::SurfaceDifferenceEdge::Between0And1,
                                                      0.5F,
+                                                     platform::SurfaceWipeOrientation::Vertical,
                                                      extents,
                                                      false,
                                                      2);
@@ -1061,6 +1135,7 @@ TEST(ComparisonSurfaceGeometryTests, CanvasFocusCollapsesTheLayoutToOneFullCanva
                                                      0U,
                                                      platform::SurfaceDifferenceEdge::Between1And2,
                                                      0.25F,
+                                                     platform::SurfaceWipeOrientation::Vertical,
                                                      extents,
                                                      false,
                                                      0);
@@ -1081,6 +1156,7 @@ TEST(ComparisonSurfaceGeometryTests, CanvasFocusCollapsesTheLayoutToOneFullCanva
                                                      2U,
                                                      platform::SurfaceDifferenceEdge::Between0And1,
                                                      0.5F,
+                                                     platform::SurfaceWipeOrientation::Vertical,
                                                      extents,
                                                      false,
                                                      -1);
@@ -2622,6 +2698,49 @@ expectedLocalFootage(const ComparisonSurface& surface,
 // V01: the local windows are additional draws of the presented frame set on the source SRVs.
 // The window content rect sits below the surface item inside the same window, exactly like
 // the strip's cells do, and the footage must land texel-exact on the physical pixel grid.
+TEST(ComparisonSurfaceWarpTests, LocalRoiLeavesPanoramaAndPointerMappingAtFullExtent) {
+    SurfaceWarpHarness harness;
+    harness.window.resize(101, 160);
+    ASSERT_TRUE(harness.start());
+    constexpr std::array<std::uint8_t, 16U> kColumns{
+        16U, 16U, 16U, 16U, 16U, 16U, 16U, 16U, 235U, 235U, 235U, 235U, 235U, 235U, 235U, 235U};
+    auto budget = std::make_shared<platform::FrameBudget>(16U * 1024U * 1024U);
+    platform::GpuTransferActor actor{budget, harness.broker, harness.mailbox, harness.activitySink};
+    auto pair = makeHorizontalLumaSet(*budget, domain::FrameId{70}, kColumns, kColumns);
+    ASSERT_TRUE(pair.has_value());
+    ASSERT_EQ(actor.submit(makeContext(70U), std::move(*pair)),
+              platform::GpuTransferSubmitResult::Accepted);
+    ASSERT_TRUE(actor.waitUntilIdle(5s));
+    harness.surface.setSourceDisplayInfo(
+        {QVariantMap{{QStringLiteral("width"), 16}, {QStringLiteral("height"), 8}},
+         QVariantMap{{QStringLiteral("width"), 16}, {QStringLiteral("height"), 8}}});
+    harness.surface.setRoiTripletWindows({stagedWindowEntry(0, 10.0, 72.0, 40.0, 40.0, 0)});
+    const QImage before = harness.grab();
+    ASSERT_FALSE(before.isNull());
+    const auto pointBefore = harness.surface.mapSurfacePoint(12.0, 32.0);
+    ASSERT_TRUE(pointBefore.value(QStringLiteral("insideContent")).toBool());
+
+    // Only the dark half is selected: a cropped panorama would lose its bright half.
+    harness.surface.setRoiNormalized(0.0, 0.0, 0.5, 1.0);
+    const QImage after = harness.grab();
+    ASSERT_FALSE(after.isNull());
+    const qreal dpr = harness.window.effectiveDevicePixelRatio();
+    const QRect panorama{0, 0, before.width(), qRound(64 * dpr)};
+    EXPECT_EQ(maximumRgbDifference(before.copy(panorama), after.copy(panorama)), 0);
+    const auto pointAfter = harness.surface.mapSurfacePoint(12.0, 32.0);
+    EXPECT_EQ(pointBefore, pointAfter);
+    const QColor localPixel = after.pixelColor(qRound(30 * dpr), qRound(92 * dpr));
+    EXPECT_LT(localPixel.red(), 60);
+    EXPECT_LT(localPixel.green(), 60);
+    EXPECT_LT(localPixel.blue(), 60);
+    const auto outlines = harness.surface.roiTripletOutlineRects();
+    ASSERT_EQ(outlines.size(), 2);
+    EXPECT_NEAR(outlines[0].toMap().value(QStringLiteral("width")).toDouble(), 25.0, 1.0);
+
+    harness.releaseRenderer();
+    EXPECT_TRUE(actor.shutdown(2s));
+}
+
 TEST(ComparisonSurfaceWarpTests, LocalWindowDrawsCheckerSourcePixelsTexelExactAtNativeZoom) {
     SurfaceWarpHarness harness;
     harness.window.resize(101, 160);
@@ -3360,6 +3479,80 @@ TEST(ComparisonSurfaceWarpTests, WipeUsesTheSelectedPairAndDraggableSplitPositio
         EXPECT_LT(pairLeft.green(), pairRight.green());
         EXPECT_LT(pairLeft.blue(), pairRight.blue());
     }
+
+    harness.releaseRenderer();
+    EXPECT_TRUE(actor.shutdown(2s));
+}
+
+// E1: the horizontal wipe clips top/bottom along Y. Both sources share neutral Cb/Cr and
+// differ only in luma, so the RGB order itself is the axis oracle. Boundary checks target
+// the side whose ownership actually changes: at position 0 the top edge flips to the second
+// source; at position 1 the bottom edge flips to the first.
+TEST(ComparisonSurfaceWarpTests, WipeHorizontalOrientationSplitsTopBottomAlongY) {
+    SurfaceWarpHarness harness;
+    harness.surface.setViewMode(ComparisonSurface::Wipe);
+    harness.surface.setWipePosition(0.5);
+    harness.surface.setWipeOrientation(1);
+    // Non-default zoom/pan through the real interaction API: if the axis toggle reset the
+    // view these values would change.
+    harness.surface.zoomAt(0.5, 0.5, 1.25);
+    harness.surface.panBy(0.1, -0.1);
+    ASSERT_TRUE(harness.start());
+
+    auto budget = std::make_shared<platform::FrameBudget>(16U * 1024U * 1024U);
+    platform::GpuTransferActor actor{budget, harness.broker, harness.mailbox, harness.activitySink};
+    std::optional<application::FrameSet> set =
+        makeSolidSet(*budget, domain::FrameId{41}, 32U, 224U);
+    ASSERT_TRUE(set.has_value());
+    ASSERT_EQ(actor.submit(makeContext(41U), std::move(*set)),
+              platform::GpuTransferSubmitResult::Accepted);
+    ASSERT_TRUE(actor.waitUntilIdle(5s));
+
+    const QImage image = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+    ASSERT_FALSE(image.isNull());
+    const int middleX = image.width() / 2;
+    // Top half = slot 0 (dark), bottom half = slot 1 (bright): the split runs along Y.
+    const QColor top = image.pixelColor(middleX, image.height() / 8);
+    const QColor bottom = image.pixelColor(middleX, image.height() * 7 / 8);
+    EXPECT_LT(top.red(), bottom.red());
+    EXPECT_LT(top.green(), bottom.green());
+    EXPECT_LT(top.blue(), bottom.blue());
+    // Left/right at the same height stay on one source: identical samples inside the top
+    // half prove no vertical-axis clip is active.
+    const QColor topLeft = image.pixelColor(image.width() / 8, image.height() / 8);
+    const QColor topRight = image.pixelColor(image.width() * 3 / 8, image.height() / 8);
+    expectColorNear(topLeft, topRight, 2);
+    ASSERT_TRUE(harness.acknowledgementMailbox->tryPop().has_value());
+
+    // Boundary 0: the split sits at the top edge, so the top sample - which was slot 0 at
+    // 0.5 - now belongs to the second source and flips dark->bright.
+    harness.surface.setWipePosition(0.0);
+    const QImage allSecond = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+    const QColor secondSample = allSecond.pixelColor(middleX, allSecond.height() / 8);
+    EXPECT_GT(secondSample.red(), top.red());
+
+    // Boundary 1: the split sits at the bottom edge, so the bottom sample flips
+    // bright->dark (first source).
+    harness.surface.setWipePosition(1.0);
+    const QImage allFirst = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+    const QColor firstSample = allFirst.pixelColor(middleX, allFirst.height() * 7 / 8);
+    EXPECT_LT(firstSample.red(), bottom.red());
+
+    // Back to vertical with the ratio restored explicitly: the split moves to the X axis.
+    harness.surface.setWipePosition(0.5);
+    harness.surface.setWipeOrientation(0);
+    const QImage vertical = harness.grab().convertToFormat(QImage::Format_RGBA8888);
+    const int middleY = vertical.height() / 2;
+    const QColor verticalLeft = vertical.pixelColor(vertical.width() / 8, middleY);
+    const QColor verticalRight = vertical.pixelColor(vertical.width() * 7 / 8, middleY);
+    EXPECT_LT(verticalLeft.red(), verticalRight.red());
+    EXPECT_LT(verticalLeft.green(), verticalRight.green());
+    EXPECT_LT(verticalLeft.blue(), verticalRight.blue());
+    // The axis toggle preserved the view transform: non-default zoom/pan survive.
+    const qreal scaleAfter = harness.surface.viewScale();
+    EXPECT_GT(scaleAfter, 1.0) << "zoom must survive the axis toggle";
+    EXPECT_NE(harness.surface.viewCenterX(), 0.5) << "pan X must survive";
+    EXPECT_NE(harness.surface.viewCenterY(), 0.5) << "pan Y must survive";
 
     harness.releaseRenderer();
     EXPECT_TRUE(actor.shutdown(2s));
@@ -4613,10 +4806,116 @@ TEST(ComparisonSurfaceWarpTests, SourcePixelProbeBatchKeepsItsIdentityAcrossPres
     EXPECT_TRUE(actor.shutdown(2s));
 }
 
-// One cursor position probes every source at once: requests for independent slots all survive
-// until the next sync and each delivery carries its own slot's pixel and code values, so the
-// per-source readout rows can never starve behind one another. Re-issuing a slot replaces
-// only that slot's pending request.
+// Probe request ids keep the full 64-bit width end to end: an id above UINT32_MAX completes,
+// and a request that shares its low 32 bits but differs in the high half is a different
+// request - it re-issues and completes with its own id instead of inheriting the old answer.
+TEST(ComparisonSurfaceWarpTests, SourcePixelProbeRequestIdsKeepFullWidth) {
+    Microsoft::WRL::ComPtr<ID3D11Device> device;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+    ASSERT_TRUE(SUCCEEDED(D3D11CreateDevice(nullptr,
+                                            D3D_DRIVER_TYPE_WARP,
+                                            nullptr,
+                                            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                                            nullptr,
+                                            0U,
+                                            D3D11_SDK_VERSION,
+                                            device.GetAddressOf(),
+                                            nullptr,
+                                            context.GetAddressOf())));
+    auto broker = std::make_shared<platform::GraphicsDeviceBroker>();
+    ASSERT_EQ(broker->adoptQtDevice(device.Get(), context.Get()),
+              platform::GraphicsDeviceBrokerResult::Ready);
+    auto mailbox = std::make_shared<platform::FrameMailbox>(domain::DeviceGeneration{1U});
+    auto acknowledgements = std::make_shared<platform::PresentationAckMailbox>();
+    auto budget = std::make_shared<platform::FrameBudget>(16U * 1024U * 1024U);
+    platform::GpuTransferActor actor{budget, broker, mailbox};
+    platform::D3d11ComparisonRenderer renderer{broker, mailbox, acknowledgements, {}};
+
+    D3D11_TEXTURE2D_DESC description{};
+    description.Width = 128U;
+    description.Height = 64U;
+    description.MipLevels = 1U;
+    description.ArraySize = 1U;
+    description.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    description.SampleDesc.Count = 1U;
+    description.BindFlags = D3D11_BIND_RENDER_TARGET;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> target;
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> targetView;
+    ASSERT_TRUE(SUCCEEDED(device->CreateTexture2D(&description, nullptr, target.GetAddressOf())));
+    ASSERT_TRUE(SUCCEEDED(
+        device->CreateRenderTargetView(target.Get(), nullptr, targetView.GetAddressOf())));
+    ID3D11RenderTargetView* const boundTarget = targetView.Get();
+    context->OMSetRenderTargets(1U, &boundTarget, nullptr);
+    const D3D11_VIEWPORT viewport{0.0F, 0.0F, 128.0F, 64.0F, 0.0F, 1.0F};
+    context->RSSetViewports(1U, &viewport);
+    platform::SurfaceRenderState state;
+    state.logicalWidth = 128.0F;
+    state.logicalHeight = 64.0F;
+    state.pixelWidth = 128U;
+    state.pixelHeight = 64U;
+    state.clipFromItem = {2.0F / 128.0F,
+                          0.0F,
+                          0.0F,
+                          -1.0F,
+                          0.0F,
+                          -2.0F / 64.0F,
+                          0.0F,
+                          1.0F,
+                          0.0F,
+                          0.0F,
+                          1.0F,
+                          0.0F,
+                          0.0F,
+                          0.0F,
+                          0.0F,
+                          1.0F};
+    ASSERT_TRUE([&] {
+        auto set = makeSolidSet(*budget, domain::FrameId{7}, 64U, 128U);
+        if (!set ||
+            actor.submit(makeContext(), std::move(*set)) !=
+                platform::GpuTransferSubmitResult::Accepted ||
+            !actor.waitUntilIdle(5s)) {
+            return false;
+        }
+        return renderer.render(state) == platform::ComparisonRenderResult::Presented;
+    }());
+
+    constexpr std::uint64_t wideA = 0x1'0000'0001ULL;
+    constexpr std::uint64_t wideB = 0x2'0000'0001ULL;
+    const platform::SourcePixelProbeRequest requestA{
+        .slot = 0U, .normalizedX = 0.5, .normalizedY = 0.5, .requestId = wideA};
+    const platform::SourcePixelProbeRequest requestB{
+        .slot = 0U, .normalizedX = 0.5, .normalizedY = 0.5, .requestId = wideB};
+
+    auto first = renderer.probeSourcePixels({requestA});
+    ASSERT_EQ(first.size(), 1U);
+    for (int attempt = 0; attempt < 128 && !first[0U].available; ++attempt) {
+        // WARP completes the flushed one-texel copy on its software rasterizer thread; give
+        // it scheduling time instead of spin-polling within one scheduler quantum.
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        first = renderer.probeSourcePixels({requestA});
+    }
+    ASSERT_TRUE(first[0U].available)
+        << "probe A never completed; reason=" << static_cast<int>(first[0U].reason);
+    EXPECT_EQ(first[0U].requestId, wideA);
+
+    auto second = renderer.probeSourcePixels({requestB});
+    ASSERT_EQ(second.size(), 1U);
+    for (int attempt = 0; attempt < 128 && !second[0U].available; ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        second = renderer.probeSourcePixels({requestB});
+    }
+    ASSERT_TRUE(second[0U].available)
+        << "probe B never completed; reason=" << static_cast<int>(second[0U].reason);
+    EXPECT_EQ(second[0U].requestId, wideB);
+    EXPECT_EQ(second[0U].luma, first[0U].luma);
+    EXPECT_EQ(second[0U].cb, first[0U].cb);
+    EXPECT_EQ(second[0U].cr, first[0U].cr);
+
+    renderer.cancelSourcePixelProbes();
+    renderer.releaseResources();
+    EXPECT_TRUE(actor.shutdown(2s));
+}
 TEST(ComparisonSurfaceWarpTests, SourcePixelProbeBatchDeliversEveryRequestedSlot) {
     SurfaceWarpHarness harness;
     ASSERT_TRUE(harness.start());

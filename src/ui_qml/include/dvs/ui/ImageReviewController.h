@@ -34,6 +34,10 @@ class ImageReviewController final : public QObject {
     Q_PROPERTY(int compareMode READ compareMode WRITE setCompareMode NOTIFY stateChanged)
     Q_PROPERTY(int viewMode READ viewMode WRITE setViewMode NOTIFY stateChanged)
     Q_PROPERTY(qreal wipePosition READ wipePosition WRITE setWipePosition NOTIFY viewChanged)
+    // E1: wipe split axis for the image workspace. 0 = Vertical (left/right), 1 = Horizontal
+    // (top/bottom). View-only state like wipePosition: never persisted, never touches the
+    // decoded buffers, and the clip paths for both images follow the same axis.
+    Q_PROPERTY(int wipeOrientation READ wipeOrientation WRITE setWipeOrientation NOTIFY viewChanged)
     // Fade blend position for the two-image Fade mode: 0 shows A, 1 shows B. View-only state,
     // never touches the decoded buffers or the difference pipeline.
     Q_PROPERTY(qreal fadePosition READ fadePosition WRITE setFadePosition NOTIFY viewChanged)
@@ -85,6 +89,19 @@ class ImageReviewController final : public QObject {
     Q_PROPERTY(QString secondarySourceFormat READ secondarySourceFormat NOTIFY stateChanged)
     Q_PROPERTY(bool secondaryDisplayConverted READ secondaryDisplayConverted NOTIFY stateChanged)
 
+    // ---- Alpha threshold observation filter --------------------------------------------
+    // A view-only filter over the "RGB ignoring alpha" observation. It never reaches the
+    // committed buffers, the difference pipeline, the statistics, the edit working copy or
+    // a saved copy.
+    Q_PROPERTY(int numericFormat READ numericFormat WRITE setNumericFormat NOTIFY stateChanged)
+    Q_PROPERTY(bool alphaFilterEnabled READ alphaFilterEnabled WRITE setAlphaFilterEnabled NOTIFY
+                   stateChanged)
+    Q_PROPERTY(int alphaThreshold READ alphaThreshold WRITE setAlphaThreshold NOTIFY stateChanged)
+    // True only while the filter can actually change what is on screen (the RGB-ignoring
+    // observation is active). The workspace uses this to say "not applied" instead of
+    // silently filtering, or silently not filtering, in the other modes.
+    Q_PROPERTY(bool alphaFilterActive READ alphaFilterActive NOTIFY stateChanged)
+
 public:
     // Process-wide still-image decoder. Qt's imageformat plugins may omit PNG/JPEG on
     // minimal deploys; the app composition root injects an FFmpeg-backed loader that
@@ -122,6 +139,24 @@ public:
     };
     Q_ENUM(ImageViewMode)
 
+    // Numeric readout format. Display/copy formatting only: it never touches the decoded
+    // buffers, the sampling values, the difference field or any statistic. Hex stays a
+    // hexadecimal expression in both forms.
+    enum NumericFormat : int {
+        IntegerCodeValues = 0,
+        NormalizedFloat = 1,
+    };
+    Q_ENUM(NumericFormat)
+
+    // The exact clipboard payload for one frozen probe sample; an empty text from
+    // probeColorText means "nothing to copy".
+    enum ProbeColorFormat : int {
+        ProbeRgb = 0,
+        ProbeRgba = 1,
+        ProbeHex = 2,
+    };
+    Q_ENUM(ProbeColorFormat)
+
     enum ImageSlot : int {
         PrimarySlot = 0,
         SecondarySlot = 1,
@@ -149,6 +184,8 @@ public:
     void setViewMode(int mode);
     [[nodiscard]] qreal wipePosition() const noexcept;
     void setWipePosition(qreal position);
+    [[nodiscard]] int wipeOrientation() const noexcept;
+    void setWipeOrientation(int orientation);
     [[nodiscard]] qreal fadePosition() const noexcept;
     void setFadePosition(qreal position);
     [[nodiscard]] qreal zoom() const noexcept;
@@ -209,6 +246,60 @@ public:
     [[nodiscard]] QString secondarySourceFormat() const;
     [[nodiscard]] bool secondaryDisplayConverted() const noexcept;
 
+    // ---- Single-side close ---------------------------------------------------------------
+    // Closes exactly one side of the workspace. Neither is a disguised closeAll: with a
+    // pair committed the surviving side is kept (closing A promotes B into the internal
+    // primary slot so the file identity, the decoded content and the source provenance
+    // stay correct), and only when the named side is the last image does the workspace
+    // reach the empty state.
+    Q_INVOKABLE bool closePrimary();
+    Q_INVOKABLE bool closeSecondary();
+
+    // ---- Numeric readout format ----------------------------------------------------------
+    [[nodiscard]] int numericFormat() const noexcept;
+    void setNumericFormat(int format);
+    // Channel text for the readouts and the copied colour. Integer mode keeps the code
+    // value; float mode normalizes it against the buffer it came from (8-bit display
+    // buffer: channel/255; converted 16-bit sidecar: channel16/65535).
+    [[nodiscard]] Q_INVOKABLE QString channelText(int channel8) const;
+    [[nodiscard]] Q_INVOKABLE QString channelText16(int channel16) const;
+    // Signed delta text. The sign is part of the meaning (Δ = B − A), so a negative delta
+    // is never clipped to zero and a zero delta never renders as "-0.000000".
+    [[nodiscard]] Q_INVOKABLE QString deltaText(int low8, int high8) const;
+    [[nodiscard]] Q_INVOKABLE QString deltaText16(int low16, int high16) const;
+    [[nodiscard]] Q_INVOKABLE static QString hexText(int r, int g, int b, int a);
+    [[nodiscard]] Q_INVOKABLE QString rgbText(int r, int g, int b) const;
+    [[nodiscard]] Q_INVOKABLE QString rgbaText(int r, int g, int b, int a) const;
+
+    // ---- Alpha threshold observation filter ----------------------------------------------
+    [[nodiscard]] bool alphaFilterEnabled() const noexcept;
+    void setAlphaFilterEnabled(bool enabled);
+    // 0..255 equivalent scale. The comparison is a strict "A > T".
+    [[nodiscard]] int alphaThreshold() const noexcept;
+    void setAlphaThreshold(int threshold);
+    [[nodiscard]] bool alphaFilterActive() const noexcept;
+    // Whether one pixel's alpha passes the active filter. A high-bit-depth side compares
+    // its un-quantized sidecar alpha (T maps to T/255, so the 16-bit bound is
+    // T * 65535 / 255 evaluated exactly in integers); an 8-bit buffer compares its own
+    // alpha. Never rounds the source down to 8 bits first.
+    [[nodiscard]] bool alphaPassesFilter(bool primarySide, int alpha8, quint16 alpha16) const;
+    // Convenience form for the probe readouts: decides from the pixel's own position, so a
+    // high-depth side is judged by its sidecar alpha rather than by the 8-bit display
+    // value the probe reports.
+    [[nodiscard]] bool alphaHiddenAt(bool primarySide, int x, int y, int alpha8) const;
+
+    // ---- Frozen probe sample --------------------------------------------------------------
+    // The last valid sample of the current material generation. The pointer may leave the
+    // pixel (and the canvas) without losing it, so the copy button never has to guess a
+    // position or read the screen colour under itself.
+    Q_PROPERTY(QVariantMap frozenProbeSample READ frozenProbeSample NOTIFY frozenProbeSampleChanged)
+    [[nodiscard]] QVariantMap frozenProbeSample() const;
+    Q_INVOKABLE bool captureProbeSample(int imageSlot, qreal imageX, qreal imageY);
+    Q_INVOKABLE void clearFrozenProbeSample();
+    // The exact clipboard payload for one frozen sample. Format is one of
+    // ProbeColorFormat (declared above); an empty string means "nothing to copy".
+    [[nodiscard]] Q_INVOKABLE QString probeColorText(int format) const;
+
     Q_INVOKABLE bool openPrimary(const QUrl& url);
     Q_INVOKABLE bool openSecondary(const QUrl& url);
     // Session-local A/B orientation flip. Swaps both sides (buffers, paths, provenance)
@@ -244,6 +335,14 @@ public:
     Q_INVOKABLE void panBy(qreal deltaNormalizedX, qreal deltaNormalizedY);
     Q_INVOKABLE void setZoom(qreal value);
     Q_INVOKABLE QVariantMap samplePixel(int imageSlot, qreal imageX, qreal imageY) const;
+    // Same-coordinate pair readout support: samples the committed decode buffer of one side
+    // WITHOUT the active channel observation view (the derived Alpha-gray/RGB-opaque view is
+    // a presentation artifact and must never read as the side's original RGBA). Accepts the
+    // primary slots (0/2) and secondary slots (1/3) only; the difference image is not
+    // reachable here so a pair readout can never mix difference pixels into A/B originals.
+    // Reports the source label "original" and, when the side carries a high-bit-depth
+    // sidecar, its original-depth code values as well.
+    Q_INVOKABLE QVariantMap samplePixelOriginal(int imageSlot, qreal imageX, qreal imageY) const;
     Q_INVOKABLE void updateCursorPixel(int imageSlot, qreal imageX, qreal imageY);
     Q_INVOKABLE void clearCursorPixel();
     Q_INVOKABLE QString imageUrl(int imageSlot) const;
@@ -290,6 +389,7 @@ signals:
     void stateChanged();
     void viewChanged();
     void cursorPixelChanged();
+    void frozenProbeSampleChanged();
     // T4 completion contract: exactly one terminal per accepted asynchronous request.
     void openFinished(int requestId, int pairId, bool success, QString error);
 
@@ -305,8 +405,12 @@ private:
                                           QString* error);
     [[nodiscard]] QImage displayImage(int slot) const;
     // Derived channel view of a decoded buffer for the active observation mode. Result is
-    // cached across calls and invalidated when the generation or view mode changes.
-    [[nodiscard]] QImage channelView(const QImage& source, int mode, bool primarySide) const;
+    // cached across calls and invalidated when the generation, the view mode or the alpha
+    // filter changes. `native` is the side's original-depth sidecar (null for 8-bit
+    // sources); it is only consulted by the alpha filter, so a filter that is off costs
+    // nothing and a filtered high-depth side never rounds its alpha to 8 bits first.
+    [[nodiscard]] QImage
+    channelView(const QImage& source, const QImage& native, int mode, bool primarySide) const;
 
     [[nodiscard]] ImagePairLoader::DecodePolicy currentDecodePolicy() const;
     void handleLoadFinished(ImagePairLoader::Result result);
@@ -355,6 +459,7 @@ private:
     int compareMode_ = PrimaryOnly;
     int viewMode_ = RgbaView;
     qreal wipePosition_ = 0.5;
+    int wipeOrientation_ = 0;
     qreal fadePosition_ = 0.5;
     int contentGeneration_ = 0;
     int maxAbsDifference_ = 0;
@@ -373,6 +478,10 @@ private:
     mutable QImage secondaryViewCache_;
     mutable int viewCacheGeneration_ = -1;
     mutable int viewCacheMode_ = -1;
+    // The alpha filter is part of the derived-view identity: changing the threshold has to
+    // invalidate the cached views exactly like changing the observation mode does.
+    mutable bool viewCacheFilterEnabled_ = false;
+    mutable int viewCacheThreshold_ = -1;
     // Row identity of the last atomically committed pair; -1 when no pair commit happened
     // (including after closeAll). Updated only by openPairAtomically/openPairImages and
     // closeAll so the canvas identity matches the folder list selection exactly.
@@ -393,6 +502,14 @@ private:
     qreal panX_ = 0.5;
     qreal panY_ = 0.5;
     QVariantMap cursorPixel_;
+    // Numeric presentation and the alpha observation filter. Both are view state: they
+    // change what is shown and what is copied, never a decoded value or a statistic.
+    int numericFormat_ = IntegerCodeValues;
+    bool alphaFilterEnabled_ = false;
+    // kDefaultAlphaThreshold (0) is defined in the .cpp: the filter is off by default and
+    // "off" and "on with T = 0" are different states (T = 0 still hides A = 0).
+    int alphaThreshold_ = 0;
+    QVariantMap frozenProbe_;
     std::unique_ptr<AsyncState> async_;
 };
 

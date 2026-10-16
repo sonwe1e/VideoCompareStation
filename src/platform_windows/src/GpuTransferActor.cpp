@@ -335,16 +335,25 @@ struct UploadSource final {
             direct.resource->texture(), &description, view.ReleaseAndGetAddressOf());
     };
 
+    // Probe dimensions come from the visible frame region: D3D11VA surfaces are allocated with
+    // aligned (padded) texture dimensions, and the readout must address visible samples only.
+    // The shader views keep covering the whole texture; the display path crops by geometry.
+    const std::uint32_t visibleWidth = direct.geometry.width;
+    const std::uint32_t visibleHeight = direct.geometry.height;
+    if (visibleWidth == 0U || visibleHeight == 0U || visibleWidth > textureDescription.Width ||
+        visibleHeight > textureDescription.Height) {
+        return E_INVALIDARG;
+    }
     output.direct = &direct;
     output.y.layout = VisiblePlaneLayout{
-        .width = textureDescription.Width,
-        .height = textureDescription.Height,
+        .width = visibleWidth,
+        .height = visibleHeight,
         .rowBytes = 0U,
         .format = yFormat,
     };
     output.uv.layout = VisiblePlaneLayout{
-        .width = (textureDescription.Width + 1U) / 2U,
-        .height = (textureDescription.Height + 1U) / 2U,
+        .width = (visibleWidth + 1U) / 2U,
+        .height = (visibleHeight + 1U) / 2U,
         .rowBytes = 0U,
         .format = uvFormat,
     };

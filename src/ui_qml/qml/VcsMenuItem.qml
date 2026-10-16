@@ -51,7 +51,7 @@ MenuItem {
             }
             text: control.text
             color: control.enabled ? control.textColor : control.disabledTextColor
-            font.pixelSize: 13
+            font.pixelSize: Theme.fontMono
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight
         }
@@ -66,7 +66,7 @@ MenuItem {
             shortcutEnabled: control.enabled
             text: control.subMenu ? "›" : control.shortcutText
             shortcutColor: control.subMenu ? control.textColor : control.shortcutColor
-            font.pixelSize: control.subMenu ? 14 : 12
+            font.pixelSize: control.subMenu ? Theme.fontBody : Theme.fontSecondary
             font.bold: control.subMenu
         }
     }
@@ -111,7 +111,7 @@ MenuItem {
 
         Behavior on color {
             ColorAnimation {
-                duration: 100
+                duration: Theme.animationFast
             }
         }
     }

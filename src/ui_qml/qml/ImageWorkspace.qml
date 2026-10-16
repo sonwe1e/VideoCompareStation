@@ -15,6 +15,10 @@ Rectangle {
     required property var controller
     required property var pairModel
     required property bool sidebarVisible
+    // Optional Qt clipboard adapter for the probe colour copy (Main.qml sets it from the
+    // composition root). Absent in isolated harnesses, where the copy button explains
+    // itself instead of failing silently.
+    property var colorClipboard: null
 
     signal openImageRequested
     signal addImageRequested
@@ -24,11 +28,20 @@ Rectangle {
     signal swapSidesRequested
     signal replacePrimaryRequested
     signal replaceSecondaryRequested
+    // Drop-to-replace on the A/B source chips carries the dropped URL directly, so Main can
+    // stage the in-place slot replace (requestReplacePrimary/Secondary) without a file
+    // dialog. Mirrors the video strip's replaceDropped(identity, url) contract.
+    signal replacePrimaryDropped(url url)
+    signal replaceSecondaryDropped(url url)
+    // I0x "右键关闭此图片": the chip's right-click menu names the side it belongs to, so
+    // this handler closes exactly that side through the controller's single-side close.
+    signal closeSideRequested(int sourceSlot)
 
     // False = fit-window display; true = true-size display where 1 image pixel maps to
     // 1 physical screen pixel (device-pixel-ratio aware). The two are separate commands
     // (T2); the controller zoom multiplies whichever base is active.
     property bool trueSize: false
+    property bool pixelGridEnabled: false
 
     // Distance from the workspace's bottom edge to the top of the stage's bottom controls;
     // Main floats its notices above this line so they never cover the stage chrome.
@@ -89,34 +102,103 @@ Rectangle {
     property int annotationTextSize: 28
     property bool smartSegmentTightCrop: true
 
+    // ---- Hold-to-peek (look at an original while a difference/fade view is active) ----
+    // Peek is a temporary state: entering it snapshots {compareMode, viewMode, diffGain,
+    // fadePosition, singleViewShowSecondary}, shows the named original as a plain single
+    // view, and every release path (key up, focus loss, window deactivation, image/task
+    // change, edit-mode change) restores that snapshot exactly. A press while a peek is
+    // already active never re-snapshots, so the snapshot always describes the view from
+    // before the peek.
+    property bool peekActive: false
+    property int peekSource: 0
+    property var peekSnapshot: null
+
+    // Floating crosshair coordinate card verbosity (P): false = concise "(x, y)",
+    // true = detailed swatch + coordinates + original-pixel R G B A + α%.
+    property bool crosshairVerbose: false
+
+    // Same-normalized-coordinate A/B sampling of the two originals (refreshPairSample).
+    // Never derived from the difference image: a/b come from samplePixel(2/3), so the
+    // status-bar pair readout always names original pixels even in diff modes.
+    property var pairSample: null
+
+    // Crop aspect lock: 0 = free, otherwise width / height (1, 16/9, 4/3). The crop tool's
+    // drag handles and the direct W/H inputs both honour it inside the image bounds.
+    property real cropRatioLock: 0
+
+    // Lightweight marquee feedback: a Shift+drag released outside the image used to vanish
+    // silently; the status bar now names the reason for a couple of seconds.
+    property string marqueeNoticeText: ""
+
+    readonly property int contentGeneration: imageReview ? Number(imageReview.contentGeneration) : 0
+
+    // Explicit relayout discipline for the whole command-panel chain, mirroring
+    // CompareModeBar: hosts that pump the event loop without a render pass (the drag
+    // harness) never run the positioners' polish, so the rows keep their creation
+    // layout and the Column keeps a zero implicitHeight — the panel collapses to
+    // zero height and Qt's drag traversal prunes the entire chip subtree at it.
+    // Every state flip that adds or removes rows or chips re-runs the chain; the
+    // deferred call settles after the current binding cycle, and Qt.callLater
+    // coalesces repeated requests of the same function into one pass.
+    function relayoutCommandPanel() {
+        fileRow.forceLayout();
+        modeRow.forceLayout();
+        editRow.forceLayout();
+        editParamsRow.forceLayout();
+        // The Column re-sums only on its own layout pass; without it the rows above
+        // settle while commandPanel.height (bound to commandColumn.implicitHeight)
+        // still reads zero.
+        commandColumn.forceLayout();
+    }
+
     onHasPairChanged: {
+        endPeek();
         if (!hasPair) {
             singleViewShowSecondary = false;
             hoverPoint = null;
         }
+        Qt.callLater(relayoutCommandPanel);
     }
     onCompareModeChanged: {
         if (compareMode !== 0)
             singleViewShowSecondary = false;
         clearImageHover();
+        Qt.callLater(relayoutCommandPanel);
     }
     onEditModeActiveChanged: {
+        endPeek();
         clearImageHover();
+        Qt.callLater(relayoutCommandPanel);
     }
+    onHasPrimaryChanged: Qt.callLater(relayoutCommandPanel)
+    onHasSecondaryChanged: Qt.callLater(relayoutCommandPanel)
+    onActiveFocusChanged: {
+        // Losing the keyboard (a TextField grabbed it, another pane took focus) must not
+        // strand the workspace in a peek state the user can no longer release.
+        if (!activeFocus)
+            endPeek();
+    }
+    // A new image generation replaces both buffers under a stationary pointer; the pair
+    // sample must not outlive the pixels it names. compareMode changes clear the hover
+    // wholesale (existing behaviour), and the observation view is irrelevant to the
+    // originals but refresh anyway so a stale sample can never survive a mode flip.
+    onContentGenerationChanged: {
+        endPeek();
+        refreshPairSample();
+    }
+    onViewModeChanged: refreshPairSample()
 
     // A lazily instantiated workspace (video-first sessions build this tree only when the
     // image workspace activates) creates its Flows inside an already-sized parent chain:
     // each Flow lays out once at its width-0 creation state, and the re-layout Qt performs
     // on width changes is frame-driven — it never happens in a window that is not exposed
     // yet. Force the rows to lay out synchronously so the panel never keeps a stale
-    // vertical layout: once here, where the widths settle during creation, and on every
-    // later width change (chrome margins, window resizes) through each row's handler.
-    Component.onCompleted: {
-        fileRow.forceLayout();
-        modeRow.forceLayout();
-        editRow.forceLayout();
-        editParamsRow.forceLayout();
-    }
+    // vertical layout: once here, where the widths settle during creation, on every
+    // later width change (chrome margins, window resizes) through each row's handler,
+    // and on content flips (rows, chips appearing and disappearing) through the
+    // relayout hooks above — the Column itself must re-sum in every one of those
+    // passes, or commandPanel.height stays at its zero creation value.
+    Component.onCompleted: relayoutCommandPanel()
 
     function toggleSinglePairSource() {
         if (!canSwitchSingleSource)
@@ -129,6 +211,51 @@ Rectangle {
         }
     }
 
+    // ---- Single-side close -----------------------------------------------------------------
+    //
+    // The reason a close is currently refused, or "" when it is allowed. An edit session
+    // with unsaved changes is the only refusal: the working copy lives in memory only and
+    // the original file is never written, so dropping it here would lose the work without
+    // saying so. The user is told to save a copy (or end the edit) instead.
+    readonly property string closeSideBlockedReason: {
+        if (!editModeActive)
+            return "";
+        if (!imageEdit || !imageEdit.dirty)
+            return "";
+        return qsTr("编辑副本有未保存修改：请先「另存副本…」或「结束编辑」，再关闭此图片。");
+    }
+
+    // Closes one side of the pair. Closing B keeps A; closing A keeps B (the controller
+    // promotes the surviving side into the primary slot so its file identity, decoded
+    // content and provenance stay correct); closing the last image reaches the empty state.
+    function closeSide(sourceSlot) {
+        if (!imageReview)
+            return false;
+        if (closeSideBlockedReason.length > 0) {
+            showMarqueeNotice(closeSideBlockedReason);
+            return false;
+        }
+        // A clean edit session has nothing to lose, so it is ended before the side goes.
+        if (editModeActive)
+            control.finishImageEdit();
+        const isSecondary = Number(sourceSlot) === 3;
+        const closed = isSecondary ? Boolean(imageReview.closeSecondary()) : Boolean(imageReview.closePrimary());
+        if (!closed)
+            return false;
+        // A single-side close leaves a single image (or nothing). The pair-only modes and
+        // the A/B side switch are already invalid, and the workspace-local side flag is
+        // reset here so a stale "showing B" can never survive into the next pair.
+        if (!hasPair) {
+            singleViewShowSecondary = false;
+            hoverPoint = null;
+            pairSample = null;
+        }
+        endPeek();
+        Qt.callLater(relayoutCommandPanel);
+        control.closeSideRequested(isSecondary ? 3 : 2);
+        return true;
+    }
+
     function toggleAlphaView() {
         if (!imageReview || !hasPrimary)
             return;
@@ -139,6 +266,359 @@ Rectangle {
         if (!imageReview || !hasPrimary)
             return;
         imageReview.viewMode = (imageReview.viewMode === 2 ? 0 : 2);
+    }
+
+    // ---- Hold-to-peek -------------------------------------------------------------
+
+    // Peek is offered exactly where the original plan needs it: the difference modes
+    // (2/3/4/6) and fade (7). Everywhere else the plain in-place toggle (Space/T) already
+    // shows originals.
+    readonly property bool peekModeAvailable: Boolean(imageReview && hasPair && !editModeActive && (diffModeActive || compareMode === 7))
+
+    function beginPeek(showSecondary) {
+        if (peekActive || !peekModeAvailable)
+            return;
+        peekSnapshot = {
+            "compareMode": Number(imageReview.compareMode),
+            "singleViewShowSecondary": singleViewShowSecondary,
+            "viewMode": Number(imageReview.viewMode),
+            "diffGain": Number(imageReview.diffGain),
+            "fadePosition": Number(imageReview.fadePosition)
+        };
+        peekSource = showSecondary ? 1 : 0;
+        peekActive = true;
+        singleViewShowSecondary = showSecondary;
+        // compareMode is restored before singleViewShowSecondary below, and the
+        // onCompareModeChanged handler only clears the flag for non-zero modes.
+        imageReview.compareMode = 0;
+    }
+
+    function endPeek() {
+        if (!peekActive || !peekSnapshot || !imageReview)
+            return;
+        const snapshot = peekSnapshot;
+        peekSnapshot = null;
+        peekActive = false;
+        // A peek that ended because the pair went away cannot restore a pair-only mode;
+        // fall back to the neutral single view for that case.
+        imageReview.compareMode = hasPair ? snapshot.compareMode : 0;
+        singleViewShowSecondary = hasPair ? snapshot.singleViewShowSecondary : false;
+        imageReview.viewMode = snapshot.viewMode;
+        imageReview.diffGain = snapshot.diffGain;
+        imageReview.fadePosition = snapshot.fadePosition;
+    }
+
+    // Z and double-click share one verb: flip between fit-window and true 1:1 pixels.
+    function toggleTrueSize() {
+        if (trueSize) {
+            trueSize = false;
+            if (imageReview)
+                imageReview.resetView();
+        } else {
+            trueSize = true;
+            if (imageReview)
+                imageReview.setZoom(1.0);
+        }
+    }
+
+    // ---- Same-coordinate pair sampling ----------------------------------------------
+
+    // Samples both committed decode buffers at the hovered normalized coordinate through
+    // samplePixelOriginal, so the active channel observation view never repaints the pair
+    // numbers and the difference image can never leak into an A/B readout. "Same
+    // coordinate" is only claimed when both sides share one pixel grid: unequal sizes keep
+    // their own grids, and a resampled difference does not relocate B's pixels, so the
+    // conservative honest readout names the state instead of inventing a correspondence.
+    function refreshPairSample() {
+        if (!imageReview || !hasPair || editModeActive || !hoverPoint) {
+            pairSample = null;
+            return;
+        }
+        const pw = Number(imageReview.primaryWidth);
+        const ph = Number(imageReview.primaryHeight);
+        const sw = Number(imageReview.secondaryWidth);
+        const sh = Number(imageReview.secondaryHeight);
+        if (!(pw > 0) || !(ph > 0) || !(sw > 0) || !(sh > 0)) {
+            pairSample = null;
+            return;
+        }
+        const a = imageReview.samplePixelOriginal(2, hoverPoint.normX * pw, hoverPoint.normY * ph);
+        let b = null;
+        if (!sizesDiffer)
+            b = imageReview.samplePixelOriginal(3, hoverPoint.normX * sw, hoverPoint.normY * sh);
+        else
+            b = {
+                "unaligned": true
+            };
+        pairSample = {
+            "a": a,
+            "b": b
+        };
+    }
+
+    // The sample the floating coordinate card names in verbose mode. Each slot gets its own
+    // side's value from the pair sample, so the two side-by-side cards show two different
+    // (and individually correct) numbers on an asymmetric pair. Without a pair, the hovered
+    // single image's own original readout is the only honest value.
+    function crosshairSampleForSlot(slot) {
+        if (editModeActive)
+            return null;
+        if (pairSample) {
+            if (slot === 3)
+                return (pairSample.b && pairSample.b.valid) ? pairSample.b : null;
+            return (pairSample.a && pairSample.a.valid) ? pairSample.a : null;
+        }
+        if (slot === 4)
+            return null;
+        if (cursorPixel && cursorPixel.valid && cursorPixel.source === "original")
+            return cursorPixel;
+        return null;
+    }
+
+    // Identity label for the detailed floating card. Original samples name their side;
+    // a sample that passed a derived channel view is labelled as an observation and never
+    // presented as original RGBA (the source/channelView semantics from the controller).
+    function crosshairCardLabel(slot, sample) {
+        if (!sample)
+            return "";
+        if (sample.channelView === "alphaGray")
+            return qsTr("观察值 · Alpha 灰度");
+        if (sample.channelView === "rgbOpaque")
+            return qsTr("观察值 · RGB 忽略透明");
+        if (sample.source === "diff")
+            return qsTr("差异像素");
+        return slot === 3 ? qsTr("B 原图") : qsTr("A 原图");
+    }
+
+    // ---- Numeric presentation ------------------------------------------------------------
+    //
+    // One switch, two meanings, zero effect on the pixels. Integer mode prints the code
+    // value the buffer actually holds; normalized float mode prints it against that
+    // buffer's own full scale (channel/255 for the 8-bit display buffer, channel16/65535
+    // for the converted 16-bit sidecar). Neither form is linear light, HDR or colour
+    // managed, and Hex stays hexadecimal in both modes. The controller owns the exact
+    // text so the readout, the tooltip and the clipboard can never disagree.
+    readonly property bool numericFloat: Boolean(imageReview && Number(imageReview.numericFormat) === 1)
+
+    function setNumericFormat(format) {
+        if (imageReview)
+            imageReview.numericFormat = Number(format);
+    }
+
+    function channelText(value) {
+        const fallback = control.numericFloat ? (Number(value) / 255).toFixed(6) : String(value);
+        if (imageReview && typeof imageReview.channelText === "function")
+            return String(imageReview.channelText(Number(value)));
+        return fallback;
+    }
+
+    function deltaText(low, high) {
+        // Invokable method calls do not track the C++ properties read inside them. Read the
+        // format here as well so an unchanged sample updates when its format changes.
+        const difference = Number(high) - Number(low);
+        const text = control.numericFloat ? (difference / 255).toFixed(6) : String(difference);
+        if (imageReview && typeof imageReview.deltaText === "function")
+            return String(imageReview.deltaText(Number(low), Number(high)));
+        return difference > 0 ? "+" + text : text;
+    }
+
+    // Fixed-width monospace channel text: spaces pad to three columns in integer mode and
+    // to eight in float mode (a normalized value is always "0.047059"), so a value 1 -> 255
+    // or a coordinate gaining a digit reshapes nothing - the following columns keep their
+    // start and the row never jitters while the pointer moves.
+    function fmtChannel(value) {
+        const text = channelText(value);
+        const columns = control.numericFloat ? 8 : 3;
+        return text.length >= columns ? text : " ".repeat(columns - text.length) + text;
+    }
+
+    // Signed delta text. The sign is part of the meaning (Δ = B − A), so a negative delta
+    // is never clipped to zero in either mode and a zero delta never reads "-0.000000".
+    function fmtSigned(low, high) {
+        return deltaText(low, high);
+    }
+
+    readonly property int channelColumnWidth: control.numericFloat ? 62 : 30
+    readonly property int deltaColumnWidth: control.numericFloat ? 72 : 38
+    // Give the readout the whole available row; wrap only when the window actually fills.
+
+    // A channel delta is highlighted when it exceeds the display quantization floor
+    // (1 step of the RGBA8 buffer, or 1/65535 when the pair is read through the converted
+    // 16-bit sidecar). The image pipeline has no other threshold: statistics are raw
+    // 8-bit deltas and the gain is display-only, so this constant is the readout's
+    // own documented limit, not a replay of some pipeline setting.
+    readonly property int pairDeltaWarnThreshold: 1
+
+    // The A|B|Δ(B−A) status-bar sentence, plain variant (tests, tooltips).
+    function pairReadoutText() {
+        const sample = readoutPairSample;
+        if (!sample)
+            return "";
+        const aOk = Boolean(sample.a && sample.a.valid);
+        let text = "";
+        if (aOk)
+            text = qsTr("A (%1, %2): R %3 G %4 B %5 A %6").arg(sample.a.x).arg(sample.a.y).arg(fmtChannel(sample.a.r)).arg(fmtChannel(sample.a.g)).arg(fmtChannel(sample.a.b)).arg(fmtChannel(sample.a.a));
+        else
+            text = qsTr("A: 无有效值");
+        if (sample.b && sample.b.unaligned) {
+            text += qsTr("  |  B: 未对齐无有效值（尺寸不同）");
+            return text;
+        }
+        const bOk = Boolean(sample.b && sample.b.valid);
+        if (!bOk) {
+            text += qsTr("  |  B: 无有效值");
+            return text;
+        }
+        text += qsTr("  |  B (%1, %2): R %3 G %4 B %5 A %6").arg(sample.b.x).arg(sample.b.y).arg(fmtChannel(sample.b.r)).arg(fmtChannel(sample.b.g)).arg(fmtChannel(sample.b.b)).arg(fmtChannel(sample.b.a));
+        if (aOk) {
+            // Δ = B − A, computed from the same code values the columns show, so switching
+            // to the normalized format moves the decimal point of both sides and of the
+            // difference without changing what the difference means.
+            text += qsTr("  |  Δ(B−A): R %1 G %2 B %3 A %4").arg(fmtSigned(sample.a.r, sample.b.r)).arg(fmtSigned(sample.a.g, sample.b.g)).arg(fmtSigned(sample.a.b, sample.b.b)).arg(fmtSigned(sample.a.a, sample.b.a));
+        }
+        return text;
+    }
+
+    // ---- Frozen probe sample & colour copy ------------------------------------------------
+    //
+    // The pointer leaves the pixel long before the user reaches the button, so the sample
+    // that gets copied is the last valid one of the current material generation, held by
+    // the controller. It is not re-sampled at click time (the pointer is elsewhere by
+    // then), it is not the screen colour under the button, and it dies with the generation
+    // that produced it - a closed, replaced or re-opened side invalidates it.
+
+    readonly property var probeSample: imageReview ? imageReview.frozenProbeSample : null
+    readonly property bool probeSampleReady: Boolean(probeSample && probeSample.valid === true)
+    readonly property var statusPixel: cursorPixel && cursorPixel.valid ? cursorPixel : (probeSampleReady ? probeSample : ({}))
+    // The crosshair follows the live pointer. The status bar keeps the last valid coordinate
+    // of this material generation so moving to its controls does not remove the numbers.
+    readonly property var readoutPairSample: {
+        if (pairSample)
+            return pairSample;
+        if (!hasPair || editModeActive || !probeSampleReady)
+            return null;
+        const sample = probeSample;
+        return {
+            "a": imageReview.samplePixelOriginal(2, sample.x, sample.y),
+            "b": sizesDiffer ? {
+                "unaligned": true
+            } : imageReview.samplePixelOriginal(3, sample.x, sample.y)
+        };
+    }
+
+    // Names the material, the coordinate and the value the copy will carry, so the user can
+    // see what they are about to copy before they choose a format. A pair always names A or
+    // B; nothing is guessed from "the main side".
+    readonly property string probeSampleLabel: {
+        const sample = control.probeSample;
+        if (!control.probeSampleReady)
+            return qsTr("无有效样本：把指针移到图片像素上");
+        const side = String(sample.side || "A");
+        const text = qsTr("%1 原图 · 像素 (%2, %3) · %4").arg(side).arg(sample.x).arg(sample.y).arg(control.rgbText(sample.r, sample.g, sample.b));
+        return sample.alphaHidden === true ? text + qsTr(" · 已被当前 Alpha 阈值隐藏") : text;
+    }
+
+    function rgbText(r, g, b) {
+        const fallback = "rgb(" + control.channelText(r) + ", " + control.channelText(g) + ", " + control.channelText(b) + ")";
+        if (imageReview && typeof imageReview.rgbText === "function")
+            return String(imageReview.rgbText(r, g, b));
+        return fallback;
+    }
+
+    function captureProbeSample(slot, x, y) {
+        if (imageReview && typeof imageReview.captureProbeSample === "function")
+            imageReview.captureProbeSample(slot, x, y);
+    }
+
+    function copyProbeColor(format) {
+        if (!imageReview || typeof imageReview.probeColorText !== "function") {
+            showMarqueeNotice(qsTr("当前运行环境不能复制颜色。"));
+            return false;
+        }
+        if (!control.probeSampleReady) {
+            showMarqueeNotice(qsTr("没有可复制的颜色样本：请先把指针移到图片像素上。"));
+            return false;
+        }
+        const text = String(imageReview.probeColorText(Number(format)) || "");
+        if (text.length === 0) {
+            showMarqueeNotice(qsTr("没有可复制的颜色样本。"));
+            return false;
+        }
+        const clipboard = control.colorClipboard;
+        if (!clipboard || typeof clipboard.copyText !== "function") {
+            showMarqueeNotice(qsTr("当前运行环境没有剪贴板。"));
+            return false;
+        }
+        // The adapter verifies its own write by reading the value back, so a failure can
+        // never be reported as a success here.
+        const copied = Boolean(clipboard.copyText(text));
+        showMarqueeNotice(copied ? qsTr("已复制 %1").arg(text) : qsTr("复制失败：%1").arg(String(clipboard.statusText || "")));
+        return copied;
+    }
+
+    // ---- Alpha threshold observation filter -----------------------------------------------
+
+    readonly property bool alphaFilterEnabled: Boolean(imageReview && imageReview.alphaFilterEnabled === true)
+    readonly property int alphaThreshold: imageReview ? Number(imageReview.alphaThreshold) : 0
+    // The filter only changes the picture in the "RGB ignoring alpha" observation. Every
+    // other mode (alpha gray, the difference images, the edit working copy) keeps its own
+    // explicit rule, and the status badge says so instead of applying something undefined.
+    readonly property bool alphaFilterApplies: Boolean(control.alphaFilterEnabled && control.viewMode === 2)
+    readonly property string alphaFilterBadgeText: {
+        if (!control.alphaFilterEnabled)
+            return "";
+        if (!control.alphaFilterApplies)
+            return qsTr("Alpha 过滤未应用（当前不是 RGB 忽略透明度）");
+        if (control.alphaThreshold >= 255)
+            return qsTr("Alpha 过滤 A > 255：无像素通过（有效过滤结果）");
+        return qsTr("Alpha 过滤 A > %1").arg(control.alphaThreshold);
+    }
+
+    function setAlphaFilterEnabled(enabled) {
+        if (!imageReview)
+            return;
+        if (enabled) {
+            imageReview.viewMode = 2;
+            if (diffModeActive || compareMode === 7)
+                modeButton(hasPair ? 1 : 0);
+        }
+        imageReview.alphaFilterEnabled = Boolean(enabled);
+    }
+
+    function setAlphaThreshold(threshold) {
+        alphaThresholdCommit.stop();
+        if (imageReview)
+            imageReview.alphaThreshold = Math.round(Number(threshold));
+    }
+
+    function resetAlphaThreshold() {
+        control.setAlphaThreshold(0);
+        control.setAlphaFilterEnabled(false);
+    }
+
+    // ---- Marquee feedback -------------------------------------------------------------
+
+    function showMarqueeNotice(text) {
+        marqueeNoticeText = text;
+        marqueeNoticeTimer.restart();
+    }
+
+    // ---- Drag-in image filter ---------------------------------------------------------
+
+    // One dragged URL counts as a replaceable image only when its extension matches the
+    // open dialogs' still-image filter. Multi-file and non-image drags are rejected by the
+    // chips so the workspace-level drop semantics keep them.
+    readonly property var imageFileExtensions: ["png", "jpg", "jpeg", "bmp", "gif", "webp", "tif", "tiff", "pnm", "ppm", "pgm", "pbm", "pam"]
+
+    function isImageFileUrl(fileUrl) {
+        const path = String(fileUrl);
+        const query = Math.max(path.indexOf("?"), path.indexOf("#"));
+        const stem = query >= 0 ? path.slice(0, query) : path;
+        const dot = stem.lastIndexOf(".");
+        if (dot < 0)
+            return false;
+        const ext = stem.slice(dot + 1).toLowerCase();
+        return imageFileExtensions.indexOf(ext) >= 0;
     }
 
     // Physical-percent of the active display scale: true-size is 1 image px per physical
@@ -279,6 +759,7 @@ Rectangle {
         if (imageReview)
             imageReview.clearCursorPixel();
         control.hoverPoint = null;
+        control.pairSample = null;
     }
 
     function applyHover(view, mouseX, mouseY, slot) {
@@ -296,10 +777,15 @@ Rectangle {
         }
         // Editing changes the image's origin and pixels. Never label a sample from the
         // immutable review original as a value from the displayed working copy.
-        if (control.editModeActive)
+        if (control.editModeActive) {
             imageReview.clearCursorPixel();
-        else
+            imageReview.clearFrozenProbeSample();
+        } else {
             imageReview.updateCursorPixel(slot, mapped.x, mapped.y);
+            // Freeze the same coordinate as the copy source: the controller keeps it after
+            // the pointer leaves, and drops it when the material generation changes.
+            control.captureProbeSample(slot, mapped.x, mapped.y);
+        }
         control.hoverPoint = {
             "sourceSlot": slot,
             "normX": mapped.x / img.sourceSize.width,
@@ -307,6 +793,7 @@ Rectangle {
             "imgX": Math.floor(mapped.x),
             "imgY": Math.floor(mapped.y)
         };
+        control.refreshPairSample();
     }
 
     // ---- Step-3 image editing -------------------------------------------------------
@@ -414,6 +901,101 @@ Rectangle {
                 control.imageReview.resetView();
         }
         return applied;
+    }
+
+    // ---- Crop ratio lock & direct size entry -----------------------------------------
+
+    // Reshape one selection rectangle to the locked aspect ratio inside the image bounds.
+    // leadByWidth names the dimension the drag/input drives; the other follows. The mutual
+    // clamp (a height cap that trims the width that then trims the height again) converges
+    // within a couple of passes; the loop guard keeps a pathological bound from spinning.
+    function cropSelectionWithRatio(x, y, w, h, leadByWidth) {
+        const free = !(cropRatioLock > 0) || editTool !== "crop";
+        const imgW = imageEdit ? Number(imageEdit.imageWidth) : 0;
+        const imgH = imageEdit ? Number(imageEdit.imageHeight) : 0;
+        if (free || !(imgW >= 2) || !(imgH >= 2)) {
+            return {
+                "x": x,
+                "y": y,
+                "width": Math.max(1, w),
+                "height": Math.max(1, h)
+            };
+        }
+        x = Math.max(0, Math.min(Math.round(x), imgW - 2));
+        y = Math.max(0, Math.min(Math.round(y), imgH - 2));
+        let width = Math.max(2, Math.min(Math.round(w), imgW - x));
+        let height = Math.max(2, Math.min(Math.round(h), imgH - y));
+        for (let guard = 0; guard < 4; ++guard) {
+            if (leadByWidth) {
+                const want = Math.max(2, Math.round(width / cropRatioLock));
+                if (want <= imgH - y) {
+                    height = want;
+                    break;
+                }
+                height = Math.max(2, imgH - y);
+                const nextWidth = Math.max(2, Math.min(imgW - x, Math.round(height * cropRatioLock)));
+                if (nextWidth === width)
+                    break;
+                width = nextWidth;
+            } else {
+                const want = Math.max(2, Math.round(height * cropRatioLock));
+                if (want <= imgW - x) {
+                    width = want;
+                    break;
+                }
+                width = Math.max(2, imgW - x);
+                const nextHeight = Math.max(2, Math.min(imgH - y, Math.round(width / cropRatioLock)));
+                if (nextHeight === height)
+                    break;
+                height = nextHeight;
+            }
+        }
+        return {
+            "x": x,
+            "y": y,
+            "width": width,
+            "height": height
+        };
+    }
+
+    // A newly picked ratio reshapes the existing selection in place (width leads, anchored
+    // at the current origin) so the chips are one-click, not "pick then drag again".
+    function applyCropRatioToSelection() {
+        if (!cropSelection || !imageEdit || !(cropRatioLock > 0))
+            return;
+        const shaped = cropSelectionWithRatio(cropSelection.x, cropSelection.y, cropSelection.width, cropSelection.height, true);
+        cropSelection = {
+            "x": shaped.x,
+            "y": shaped.y,
+            "width": shaped.width,
+            "height": shaped.height,
+            "fromX": shaped.x,
+            "fromY": shaped.y,
+            "toX": shaped.x + shaped.width,
+            "toY": shaped.y + shaped.height
+        };
+    }
+
+    // Direct W/H entry: the edited side leads; a locked ratio pushes the other side, and
+    // both clamp inside the image (keeping the selection origin).
+    function applyCropSizeFromField(which, value) {
+        if (!cropSelection || !imageEdit)
+            return;
+        const parsed = Math.round(Number(value));
+        if (!(parsed >= 1))
+            return;
+        const shaped = cropSelectionWithRatio(cropSelection.x, cropSelection.y, which === "width" ? parsed : cropSelection.width, which === "height" ? parsed : cropSelection.height, which === "width");
+        cropSelection = {
+            "x": shaped.x,
+            "y": shaped.y,
+            "width": shaped.width,
+            "height": shaped.height,
+            "fromX": shaped.x,
+            "fromY": shaped.y,
+            "toX": shaped.x + shaped.width,
+            "toY": shaped.y + shaped.height
+        };
+        control.forceActiveFocus();
     }
 
     // Brush: the stroke is painted live into the working copy, but the whole gesture is
@@ -541,15 +1123,23 @@ Rectangle {
             control.cropSelection = null;
             return;
         }
+        let box = {
+            "x": Math.max(0, Math.round(Math.min(m0.x, m1.x))),
+            "y": Math.max(0, Math.round(Math.min(m0.y, m1.y))),
+            "width": Math.max(1, Math.round(Math.abs(deltaX))),
+            "height": Math.max(1, Math.round(Math.abs(deltaY)))
+        };
+        if (control.editTool === "crop" && control.cropRatioLock > 0)
+            box = control.cropSelectionWithRatio(box.x, box.y, box.width, box.height, Math.abs(deltaX) >= Math.abs(deltaY));
         control.cropSelection = {
             "fromX": Math.round(m0.x),
             "fromY": Math.round(m0.y),
             "toX": Math.round(m1.x),
             "toY": Math.round(m1.y),
-            "x": Math.max(0, Math.round(Math.min(m0.x, m1.x))),
-            "y": Math.max(0, Math.round(Math.min(m0.y, m1.y))),
-            "width": Math.max(1, Math.round(Math.abs(deltaX))),
-            "height": Math.max(1, Math.round(Math.abs(deltaY)))
+            "x": box.x,
+            "y": box.y,
+            "width": box.width,
+            "height": box.height
         };
     }
 
@@ -633,7 +1223,7 @@ Rectangle {
 
             Behavior on color {
                 ColorAnimation {
-                    duration: 100
+                    duration: Theme.animationFast
                 }
             }
         }
@@ -656,6 +1246,352 @@ Rectangle {
         }
     }
 
+    // A/B identity chip for the source row. A plain click is the direct look of that side
+    // (single view switched to A or B); one dropped still image replaces exactly this slot
+    // through the URL-carrying signal, mirroring the video strip's drop contract. Built on
+    // ReviewActionButton so the keyboard focus ring follows the visualFocus convention.
+    component ImageSourceChip: ReviewActionButton {
+        id: sourceChip
+
+        required property int sourceSlot
+        property string chipTitle: ""
+        property string chipPath: ""
+        readonly property bool isSecondary: sourceSlot === 3
+        // The chip highlights itself while the stage shows exactly this side.
+        readonly property bool isDisplayed: control.hasPair && control.compareMode === 0 && (isSecondary === control.singleViewShowSecondary)
+        readonly property color sourceAccent: isSecondary ? Theme.sourceB : Theme.sourceA
+        readonly property color sourceBorder: isSecondary ? Theme.sourceBBorder : Theme.sourceABorder
+        readonly property bool dropHovered: chipDropArea.containsDrag
+
+        signal directLookRequested
+        signal replaceDropped(url url)
+        // I0x "右键关闭此图片": the chip's right-click menu asks the workspace to close
+        // exactly this side. The signal carries no index and no filename - the chip is the
+        // side's own component, so the target can never drift to the other slot.
+        signal closeRequested
+
+        implicitHeight: 30
+        implicitWidth: Math.min(220, Math.max(120, sourceChipLabel.implicitWidth + 34))
+        leftPadding: Theme.spaceMain
+        rightPadding: Theme.spaceMain
+        focusTarget: control
+        enabled: !control.editModeActive
+
+        onClicked: directLookRequested()
+
+        // Right-click on the filename label opens this side's close menu. The handler only
+        // accepts the right button, so the left-button activation above (the direct look)
+        // never fires first: no view switch, no A/B flip and no drag can happen before the
+        // menu appears. It is also invisible to the chip's own Button handling, which only
+        // reacts to the left button.
+        TapHandler {
+            id: chipContextHandler
+
+            acceptedButtons: Qt.RightButton
+            gesturePolicy: TapHandler.DragThreshold
+
+            onTapped: function (eventPoint, button) {
+                sourceChip.openCloseMenu(eventPoint.position);
+            }
+        }
+
+        function openCloseMenu(position) {
+            closeMenu.popup(sourceChip, position);
+            return true;
+        }
+
+        contentItem: Row {
+            id: sourceChipLabel
+
+            spacing: Theme.spaceMicro
+            leftPadding: 0
+
+            Rectangle {
+                width: 18
+                height: 18
+                radius: Theme.radiusMicro
+                color: sourceChip.isDisplayed ? sourceChip.sourceAccent : Theme.fluentHover
+                anchors.verticalCenter: parent.verticalCenter
+
+                Text {
+                    anchors.centerIn: parent
+                    text: sourceChip.isSecondary ? "B" : "A"
+                    color: sourceChip.isDisplayed ? Theme.sourceInk : sourceChip.sourceAccent
+                    font.pixelSize: Theme.fontSecondary
+                    font.weight: Font.Bold
+                }
+            }
+
+            Text {
+                text: sourceChip.chipTitle
+                color: sourceChip.enabled ? (sourceChip.isDisplayed ? Theme.primaryText : Theme.secondaryText) : Theme.disabledText
+                font.pixelSize: Theme.fontSecondary
+                elide: Text.ElideMiddle
+                width: Math.min(implicitWidth, 150)
+                anchors.verticalCenter: parent.verticalCenter
+
+                HoverHandler {
+                    id: chipTitleHover
+                }
+
+                VcsToolTip {
+                    visible: chipTitleHover.hovered && sourceChip.chipPath.length > 0
+                    text: sourceChip.chipPath
+                }
+            }
+        }
+
+        background: Rectangle {
+            radius: Theme.radiusLarge
+            color: {
+                if (!sourceChip.enabled)
+                    return "transparent";
+                if (sourceChip.isDisplayed)
+                    return sourceChip.isSecondary ? Theme.sourceBBackground : Theme.sourceABackground;
+                if (sourceChip.down)
+                    return Theme.fluentPressed;
+                if (sourceChip.hovered)
+                    return Theme.fluentHover;
+                return Theme.raisedPanel;
+            }
+            border.width: 1
+            border.color: sourceChip.isDisplayed || sourceChip.hovered ? sourceChip.sourceBorder : Theme.controlBorder
+        }
+
+        // One still image replaces this side. Multi-URL and non-image drags are rejected so
+        // they keep the workspace-level open/append drop semantics.
+        DropArea {
+            id: chipDropArea
+
+            objectName: (sourceChip.isSecondary ? "imageSourceChipDropAreaB" : "imageSourceChipDropAreaA")
+            anchors.fill: parent
+            onEntered: drag => {
+                if (!drag.hasUrls || drag.urls.length !== 1 || !control.isImageFileUrl(drag.urls[0]))
+                    drag.accepted = false;
+            }
+            onDropped: drop => {
+                drop.acceptProposedAction();
+                sourceChip.replaceDropped(drop.urls[0]);
+            }
+        }
+
+        // I0x: this side's close menu. The same VcsMenu component the rest of the shell
+        // uses, so the popup, focus and keyboard behaviour stay one contract. Every row is
+        // addressed through the chip that owns the side, never through a display position.
+        VcsMenu {
+            id: closeMenu
+
+            objectName: (sourceChip.isSecondary ? "imageSourceChipCloseMenuB" : "imageSourceChipCloseMenuA")
+            // Closing is only meaningful while this side actually holds an image.
+            enabled: sourceChip.isSecondary ? control.hasSecondary : control.hasPrimary
+
+            onClosed: {
+                // The menu took the keyboard while it was open; hand it back to the
+                // workspace so Space/T and the other review shortcuts work immediately.
+                Qt.callLater(() => control.forceActiveFocus());
+            }
+
+            VcsMenuItem {
+                objectName: (sourceChip.isSecondary ? "imageCloseSecondaryAction" : "imageClosePrimaryAction")
+                text: sourceChip.isSecondary ? qsTr("关闭此图片（B）") : qsTr("关闭此图片（A）")
+                enabled: closeMenu.enabled
+                onTriggered: {
+                    closeMenu.close();
+                    sourceChip.closeRequested();
+                }
+            }
+            VcsMenuItem {
+                objectName: (sourceChip.isSecondary ? "imageCloseSecondaryReason" : "imageClosePrimaryReason")
+                // Never leave the user without a reason: an edit session with unsaved
+                // changes refuses the close instead of dropping the work silently.
+                visible: control.closeSideBlockedReason.length > 0
+                enabled: false
+                text: control.closeSideBlockedReason
+                contentItem: Text {
+                    text: control.closeSideBlockedReason
+                    wrapMode: Text.Wrap
+                    color: Theme.mutedText
+                    font.pixelSize: Theme.fontSecondary
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+        }
+
+        Rectangle {
+            objectName: (sourceChip.isSecondary ? "imageSourceChipDropHintB" : "imageSourceChipDropHintA")
+            visible: sourceChip.dropHovered
+            anchors.fill: parent
+            radius: Theme.radiusLarge
+            color: Theme.dropScrim
+            border.color: sourceChip.sourceBorder
+            border.width: 2
+
+            Text {
+                anchors.centerIn: parent
+                text: qsTr("松开替换 %1").arg(sourceChip.isSecondary ? "B" : "A")
+                color: Theme.primaryText
+                font.pixelSize: Theme.fontSecondary
+                font.weight: Font.DemiBold
+            }
+        }
+    }
+
+    // Glass chip for the bottom-left view-command HUD: the same material and metrics as the
+    // video viewport's viewCommandRow so both workspaces keep one muscle memory.
+    component HudCommandButton: ReviewActionButton {
+        id: hudButton
+
+        Accessible.name: text
+        Accessible.description: helpText
+        width: hudLabel.implicitWidth + 16
+        // The chip itself is the receiver, so it carries the full hit-area minimum
+        // (HUD view commands and the gain steps are frequent pointer targets).
+        height: Theme.hitAreaMinimum
+        leftPadding: 8
+        rightPadding: 8
+        topPadding: 0
+        bottomPadding: 0
+        focusTarget: control
+
+        contentItem: Text {
+            id: hudLabel
+
+            text: hudButton.text
+            color: !hudButton.enabled ? Theme.disabledText : (hudButton.checked || hudButton.hovered ? Theme.primaryText : Theme.mutedText)
+            font.pixelSize: Theme.fontCaption
+            font.weight: hudButton.checked ? Font.DemiBold : Font.Normal
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+        }
+
+        background: Rectangle {
+            radius: Theme.radiusMicro
+            color: hudButton.checked ? Theme.controlChecked : (hudButton.hovered ? Theme.oscGlassHover : Theme.oscGlass)
+            border.width: hudButton.visualFocus ? 2 : 1
+            border.color: hudButton.visualFocus ? Theme.focus : Theme.oscBorder
+        }
+    }
+
+    // Crosshair layer for the single-surface compare overlays (wipe/fade). The pointer
+    // position is stored as a normalized coordinate over the shared primary-geometry box,
+    // so the crosshair follows the same mapping on both overlays and the diff viewport.
+    component OverlayCrosshair: Item {
+        id: overlayCross
+
+        required property Image imageItem
+        required property string key
+
+        anchors.fill: parent
+        visible: Boolean(control.hoverPoint && imageItem.status === Image.Ready)
+        z: 16
+
+        readonly property real targetX: control.hoverPoint ? imageItem.x + control.hoverPoint.normX * imageItem.width : 0
+        readonly property real targetY: control.hoverPoint ? imageItem.y + control.hoverPoint.normY * imageItem.height : 0
+        readonly property real imageLeft: Math.max(0, imageItem.x)
+        readonly property real imageTop: Math.max(0, imageItem.y)
+        readonly property real imageRight: Math.min(width, imageItem.x + imageItem.width)
+        readonly property real imageBottom: Math.min(height, imageItem.y + imageItem.height)
+        readonly property var cardSample: control.crosshairSampleForSlot(control.hoverPoint ? control.hoverPoint.sourceSlot : 2)
+
+        // Vertical hairline
+        Rectangle {
+            objectName: "imageCrosshairVertical-" + overlayCross.key
+            x: Math.round(overlayCross.targetX)
+            y: overlayCross.imageTop
+            width: 1
+            height: Math.max(0, overlayCross.imageBottom - overlayCross.imageTop)
+            color: Theme.probeLineMuted
+
+            Rectangle {
+                x: -1
+                width: parent.width + 2
+                height: parent.height
+                z: -1
+                color: "#99000000"
+            }
+        }
+
+        // Horizontal hairline
+        Rectangle {
+            objectName: "imageCrosshairHorizontal-" + overlayCross.key
+            x: overlayCross.imageLeft
+            y: Math.round(overlayCross.targetY)
+            width: Math.max(0, overlayCross.imageRight - overlayCross.imageLeft)
+            height: 1
+            color: Theme.probeLineMuted
+
+            Rectangle {
+                y: -1
+                width: parent.width
+                height: parent.height + 2
+                z: -1
+                color: "#99000000"
+            }
+        }
+
+        // Center pip at the probe point
+        Rectangle {
+            x: Math.round(overlayCross.targetX - 2)
+            y: Math.round(overlayCross.targetY - 2)
+            width: 4
+            height: 4
+            radius: 2
+            color: Theme.probePip
+        }
+
+        // Coordinate card: concise "(x, y)", or detailed original-pixel readout (P).
+        Rectangle {
+            objectName: "imageCrosshairCoordinates-" + overlayCross.key
+            x: Math.min(overlayCross.width - width - 8, Math.max(8, Math.round(overlayCross.targetX + 12)))
+            y: Math.min(overlayCross.height - height - 8, Math.max(8, Math.round(overlayCross.targetY + 12)))
+            width: overlayCrossCardRow.implicitWidth + 10
+            height: control.crosshairVerbose ? 24 : 18
+            radius: Theme.radiusMicro
+            color: Theme.oscGlass
+            border.color: Theme.probe
+            border.width: 1
+
+            Row {
+                id: overlayCrossCardRow
+
+                spacing: Theme.spaceMicro
+                anchors.centerIn: parent
+
+                Rectangle {
+                    visible: control.crosshairVerbose && overlayCross.cardSample !== null
+                    width: 14
+                    height: 14
+                    radius: 2
+                    color: overlayCross.cardSample ? Qt.rgba(overlayCross.cardSample.r / 255, overlayCross.cardSample.g / 255, overlayCross.cardSample.b / 255, 1) : "transparent"
+                    border.width: 1
+                    border.color: Theme.probe
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Text {
+                    objectName: "imageCrosshairCoordinateText-" + overlayCross.key
+                    text: {
+                        if (!control.hoverPoint)
+                            return "";
+                        const coords = "(%1, %2)".arg(Math.floor(control.hoverPoint.normX * (control.imageReview ? control.imageReview.primaryWidth : 0))).arg(Math.floor(control.hoverPoint.normY * (control.imageReview ? control.imageReview.primaryHeight : 0)));
+                        if (!control.crosshairVerbose || !overlayCross.cardSample)
+                            return coords;
+                        const s = overlayCross.cardSample;
+                        const hoverSlot = control.hoverPoint.sourceSlot;
+                        // The card follows the same integer/float switch as the status bar, so
+                        // the two can never disagree about what a number means.
+                        return "%1 · %2 · R %3 G %4 B %5 A %6 · α %7%".arg(control.crosshairCardLabel(hoverSlot, s)).arg(coords).arg(control.channelText(s.r)).arg(control.channelText(s.g)).arg(control.channelText(s.b)).arg(control.channelText(s.a)).arg(s.alphaPercent);
+                    }
+                    color: Theme.probe
+                    font.pixelSize: 10
+                    font.family: Theme.fontFamilyMono
+                    font.weight: Font.Bold
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+        }
+    }
+
     // Shared status-bar chip: a dark raised plate with a hairline border, where the semantic
     // colour lives in one 6 px dot (or a single glyph) instead of a whole saturated pill. A row
     // of them then reads as one instrument strip rather than a rainbow of one-off badges.
@@ -668,13 +1604,12 @@ Rectangle {
         property color glyphColor: Theme.mutedText
         property bool dotVisible: true
 
-        height: 22
+        height: Theme.hitAreaMinimum
         implicitWidth: badgeContent.implicitWidth + 20
-        radius: 6
+        radius: Theme.radiusSubtle
         color: Theme.raisedPanel
         border.width: 1
         border.color: Theme.border
-        anchors.verticalCenter: parent.verticalCenter
 
         Row {
             id: badgeContent
@@ -703,7 +1638,7 @@ Rectangle {
             Text {
                 text: badge.text
                 color: Theme.primaryText
-                font.pixelSize: 11
+                font.pixelSize: Theme.fontCaption
                 anchors.verticalCenter: parent.verticalCenter
             }
         }
@@ -800,6 +1735,22 @@ Rectangle {
         }
     }
 
+    component ImagePixelGrid: PixelGrid {
+        required property Image imageItem
+        required property Item viewportItem
+
+        x: Math.max(0, imageItem.x)
+        y: Math.max(0, imageItem.y)
+        width: Math.max(0, Math.min(viewportItem.width, imageItem.x + imageItem.width) - x)
+        height: Math.max(0, Math.min(viewportItem.height, imageItem.y + imageItem.height) - y)
+        originX: imageItem.x - x
+        originY: imageItem.y - y
+        stepX: imageItem.sourceSize.width > 0 ? imageItem.width / imageItem.sourceSize.width : 0
+        stepY: imageItem.sourceSize.height > 0 ? imageItem.height / imageItem.sourceSize.height : 0
+        requested: control.pixelGridEnabled && imageItem.status === Image.Ready
+        nearest: !imageItem.smooth
+    }
+
     component ImageViewport: Item {
         id: viewport
 
@@ -862,7 +1813,7 @@ Rectangle {
             color: "transparent"
             border.color: Theme.border
             border.width: 1
-            radius: 6
+            radius: Theme.radiusSubtle
         }
 
         Image {
@@ -896,6 +1847,12 @@ Rectangle {
                     control.clearImageHover();
                 Qt.callLater(viewport.refreshHover);
             }
+        }
+
+        ImagePixelGrid {
+            objectName: "imagePixelGrid-" + viewport.slot
+            imageItem: previewImage
+            viewportItem: viewport
         }
 
         // The title and the size/format readout sit on the image itself, so they get a
@@ -945,7 +1902,7 @@ Rectangle {
                     visible: viewport.label.length > 0
                     text: viewport.label
                     color: Theme.mutedText
-                    font.pixelSize: 11
+                    font.pixelSize: Theme.fontCaption
                     elide: Text.ElideRight
                     width: Math.min(implicitWidth, Math.max(160, viewport.width - 76))
                 }
@@ -956,7 +1913,10 @@ Rectangle {
             id: syncedCrosshair
             objectName: "syncedCrosshair-" + viewport.slot
             anchors.fill: parent
-            visible: Boolean(control.hoverPoint && previewImage.status === Image.Ready && ((control.compareMode === 1 && control.hasPair) || (control.compareMode === 0 && isHoveredSource)))
+            // Side-by-side keeps the mirrored reticle pair; mode 0 shows the hovered pane's
+            // own crosshair; the difference viewport (slot 4) gets the same crosshair in the
+            // diff modes so the probe coordinate stays visible while reading the difference.
+            visible: Boolean(control.hoverPoint && previewImage.status === Image.Ready && ((control.compareMode === 1 && control.hasPair) || (control.compareMode === 0 && isHoveredSource) || (viewport.slot === 4 && control.diffModeActive && isHoveredSource)))
             z: 15
 
             readonly property real targetX: control.hoverPoint ? previewImage.x + control.hoverPoint.normX * previewImage.width : 0
@@ -966,6 +1926,7 @@ Rectangle {
             readonly property real imageTop: Math.max(0, previewImage.y)
             readonly property real imageRight: Math.min(viewport.width, previewImage.x + previewImage.width)
             readonly property real imageBottom: Math.min(viewport.height, previewImage.y + previewImage.height)
+            readonly property var cardSample: control.crosshairSampleForSlot(viewport.slot)
 
             // Vertical hairline
             Rectangle {
@@ -1026,28 +1987,63 @@ Rectangle {
                 color: Theme.probe
             }
 
-            // The active single-image pane also names the pixel before starting a crop.
+            // The active single-image pane (and the difference viewport) names the pixel
+            // under the probe. Side-by-side shows BOTH panes' cards: each names its own
+            // side's original, so an asymmetric pair reads as two different (individually
+            // correct) numbers instead of one pane staying unlabelled. P flips the card
+            // between "(x, y)" and the detailed original-pixel readout with a swatch.
             Rectangle {
                 objectName: "imageCrosshairCoordinates-" + viewport.slot
-                visible: control.hoverPoint !== null && (!syncedCrosshair.isHoveredSource || control.compareMode === 0)
+                visible: control.hoverPoint !== null && (control.compareMode === 1 || !syncedCrosshair.isHoveredSource || control.compareMode === 0 || viewport.slot === 4)
                 x: Math.min(viewport.width - width - 8, Math.max(8, Math.round(syncedCrosshair.targetX + 12)))
                 y: Math.min(viewport.height - height - 8, Math.max(8, Math.round(syncedCrosshair.targetY + 12)))
-                width: coordText.implicitWidth + 8
-                height: 18
+                width: coordCardRow.implicitWidth + 10
+                height: control.crosshairVerbose ? 24 : 18
                 radius: 3
                 color: Theme.oscGlass
                 border.color: Theme.probe
                 border.width: 1
 
-                Text {
-                    id: coordText
-                    objectName: "imageCrosshairCoordinateText-" + viewport.slot
+                Row {
+                    id: coordCardRow
+
+                    spacing: Theme.spaceMicro
                     anchors.centerIn: parent
-                    text: control.hoverPoint ? "%1, %2".arg(Math.floor(control.hoverPoint.normX * previewImage.sourceSize.width)).arg(Math.floor(control.hoverPoint.normY * previewImage.sourceSize.height)) : ""
-                    color: Theme.probe
-                    font.pixelSize: 10
-                    font.family: "Consolas"
-                    font.weight: Font.Bold
+
+                    Rectangle {
+                        visible: control.crosshairVerbose && syncedCrosshair.cardSample !== null
+                        width: 14
+                        height: 14
+                        radius: 2
+                        color: syncedCrosshair.cardSample ? Qt.rgba(syncedCrosshair.cardSample.r / 255, syncedCrosshair.cardSample.g / 255, syncedCrosshair.cardSample.b / 255, 1) : "transparent"
+                        border.width: 1
+                        border.color: Theme.probe
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Text {
+                        id: coordText
+                        objectName: "imageCrosshairCoordinateText-" + viewport.slot
+                        text: {
+                            if (!control.hoverPoint)
+                                return "";
+                            const coords = "%1, %2".arg(Math.floor(control.hoverPoint.normX * previewImage.sourceSize.width)).arg(Math.floor(control.hoverPoint.normY * previewImage.sourceSize.height));
+                            if (!control.crosshairVerbose || !syncedCrosshair.cardSample)
+                                return coords;
+                            // Detailed values name the sample's identity: the side's own
+                            // original, or an observation value that a channel view converted.
+                            // The numbers follow the status bar's integer/float switch, and a
+                            // pixel the alpha threshold hides says so instead of looking like
+                            // a value the filter changed.
+                            const s = syncedCrosshair.cardSample;
+                            return "%1 · %2 · R %3 G %4 B %5 A %6 · α %7%%8".arg(control.crosshairCardLabel(viewport.slot, s)).arg(coords).arg(control.channelText(s.r)).arg(control.channelText(s.g)).arg(control.channelText(s.b)).arg(control.channelText(s.a)).arg(s.alphaPercent).arg(s.alphaHidden === true ? qsTr(" · 已被当前 Alpha 阈值隐藏") : "");
+                        }
+                        color: Theme.probe
+                        font.pixelSize: 10
+                        font.family: Theme.fontFamilyMono
+                        font.weight: Font.Bold
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
                 }
             }
 
@@ -1164,18 +2160,18 @@ Rectangle {
                 if (mode.indexOf("b") !== -1)
                     y1 = Math.min(imgH, Math.max(initialCropSelection.y + 2, initialCropSelection.y + initialCropSelection.height + deltaY));
 
-                const newW = Math.max(2, x1 - x0);
-                const newH = Math.max(2, y1 - y0);
-
+                // A locked ratio follows the dragged edge pair: left/right drags lead with
+                // the width, top/bottom and corners with the larger intent (width).
+                const ratioShaped = control.cropSelectionWithRatio(x0, y0, Math.max(2, x1 - x0), Math.max(2, y1 - y0), mode.indexOf("l") !== -1 || mode.indexOf("r") !== -1 || Math.abs(x1 - x0) >= Math.abs(y1 - y0));
                 control.cropSelection = {
-                    "x": x0,
-                    "y": y0,
-                    "width": newW,
-                    "height": newH,
-                    "fromX": x0,
-                    "fromY": y0,
-                    "toX": x1,
-                    "toY": y1
+                    "x": ratioShaped.x,
+                    "y": ratioShaped.y,
+                    "width": ratioShaped.width,
+                    "height": ratioShaped.height,
+                    "fromX": ratioShaped.x,
+                    "fromY": ratioShaped.y,
+                    "toX": ratioShaped.x + ratioShaped.width,
+                    "toY": ratioShaped.y + ratioShaped.height
                 };
             }
 
@@ -1544,15 +2540,18 @@ Rectangle {
                         if (currentMode.indexOf("b") !== -1)
                             y1 = Math.min(imgH, Math.max(initialBox.y + 2, initialBox.y + initialBox.height + deltaY));
 
+                        // Ratio-locked handles follow the dragged edge pair (see the shared
+                        // helper); a free ratio keeps the previous clamp-only behaviour.
+                        const ratioShaped = control.cropSelectionWithRatio(x0, y0, Math.max(2, x1 - x0), Math.max(2, y1 - y0), currentMode.indexOf("l") !== -1 || currentMode.indexOf("r") !== -1 || Math.abs(x1 - x0) >= Math.abs(y1 - y0));
                         control.cropSelection = {
-                            "x": x0,
-                            "y": y0,
-                            "width": Math.max(2, x1 - x0),
-                            "height": Math.max(2, y1 - y0),
-                            "fromX": x0,
-                            "fromY": y0,
-                            "toX": x1,
-                            "toY": y1
+                            "x": ratioShaped.x,
+                            "y": ratioShaped.y,
+                            "width": ratioShaped.width,
+                            "height": ratioShaped.height,
+                            "fromX": ratioShaped.x,
+                            "fromY": ratioShaped.y,
+                            "toX": ratioShaped.x + ratioShaped.width,
+                            "toY": ratioShaped.y + ratioShaped.height
                         };
                     }
                 }
@@ -1582,7 +2581,9 @@ Rectangle {
                 objectName: "imageCropActionBar-" + viewport.slot
                 visible: cropOverlay.hasSelection && !cropOverlay.isDraggingNew && cropBoxItem.visible
                 z: 40
-                implicitHeight: 32
+                // The bar's inner controls carry the 32 px hit-area minimum; the plate
+                // keeps a 2 px breathing margin above and below them.
+                implicitHeight: 36
                 implicitWidth: cropActionRow.implicitWidth + 16
                 radius: Theme.radiusMedium
                 color: Theme.raisedPanel
@@ -1590,7 +2591,22 @@ Rectangle {
                 border.color: Theme.controlBorder
 
                 x: Math.max(8, Math.min(viewport.width - width - 8, cropBoxItem.x + cropBoxItem.width - width))
-                y: (cropBoxItem.y + cropBoxItem.height + 8 + height <= viewport.height - 8) ? (cropBoxItem.y + cropBoxItem.height + 8) : Math.max(8, cropBoxItem.y + cropBoxItem.height - height - 8)
+                // Prefer the space below the box, fall back to the box's bottom edge,
+                // then clamp inside the viewport AND above the bottom-left view-command
+                // HUD. The bar and the HUD float on the canvas floor in the same
+                // vertical frame, and an overlap puts the HUD's buttons (a later stage
+                // sibling with higher z) on top of the bar's left chips, where clicks
+                // can never reach them; a zoomed or panned crop can additionally put
+                // the box itself beyond the visible canvas, so an unclamped fallback
+                // would strand the bar outside the clipped viewport entirely.
+                y: {
+                    const belowY = cropBoxItem.y + cropBoxItem.height + 8;
+                    const aboveY = cropBoxItem.y + cropBoxItem.height - height - 8;
+                    const preferredY = (belowY + height <= viewport.height - 8) ? belowY : aboveY;
+                    const floorY = viewport.height - height - 8;
+                    const maxY = imageViewCommandHud.visible ? Math.min(floorY, imageViewCommandHud.y - height - 8) : floorY;
+                    return Math.max(8, Math.min(maxY, preferredY));
+                }
 
                 Row {
                     id: cropActionRow
@@ -1602,10 +2618,150 @@ Rectangle {
                         objectName: "imageCropDimensionText-" + viewport.slot
                         text: control.cropSelection ? qsTr("%1 × %2 px").arg(control.cropSelection.width).arg(control.cropSelection.height) : ""
                         color: Theme.secondaryText
-                        font.pixelSize: 11
-                        font.family: "Consolas"
+                        font.pixelSize: Theme.fontCaption
+                        font.family: Theme.fontFamilyMono
                         font.weight: Font.DemiBold
                         anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Rectangle {
+                        width: 1
+                        height: 14
+                        color: Theme.border
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    // Aspect chips: picking a ratio reshapes the current selection in place
+                    // and constrains handle drags; 自由 releases the lock.
+                    ReviewActionButton {
+                        objectName: "imageCropRatioFree"
+                        visible: control.editTool === "crop"
+                        checkable: true
+                        checked: !(control.cropRatioLock > 0)
+                        mirrorsState: true
+                        implicitHeight: Theme.hitAreaMinimum
+                        leftPadding: 8
+                        rightPadding: 8
+                        text: qsTr("自由")
+                        onClicked: control.cropRatioLock = 0
+                    }
+                    ReviewActionButton {
+                        objectName: "imageCropRatioOneOne"
+                        visible: control.editTool === "crop"
+                        checkable: true
+                        checked: control.cropRatioLock > 0 && Math.abs(control.cropRatioLock - 1) < 0.0001
+                        mirrorsState: true
+                        implicitHeight: Theme.hitAreaMinimum
+                        leftPadding: 8
+                        rightPadding: 8
+                        text: qsTr("1:1")
+                        onClicked: {
+                            control.cropRatioLock = 1;
+                            control.applyCropRatioToSelection();
+                        }
+                    }
+                    ReviewActionButton {
+                        objectName: "imageCropRatioSixteenNine"
+                        visible: control.editTool === "crop"
+                        checkable: true
+                        checked: control.cropRatioLock > 0 && Math.abs(control.cropRatioLock - 16 / 9) < 0.0001
+                        mirrorsState: true
+                        implicitHeight: Theme.hitAreaMinimum
+                        leftPadding: 8
+                        rightPadding: 8
+                        text: qsTr("16:9")
+                        onClicked: {
+                            control.cropRatioLock = 16 / 9;
+                            control.applyCropRatioToSelection();
+                        }
+                    }
+                    ReviewActionButton {
+                        objectName: "imageCropRatioFourThree"
+                        visible: control.editTool === "crop"
+                        checkable: true
+                        checked: control.cropRatioLock > 0 && Math.abs(control.cropRatioLock - 4 / 3) < 0.0001
+                        mirrorsState: true
+                        implicitHeight: Theme.hitAreaMinimum
+                        leftPadding: 8
+                        rightPadding: 8
+                        text: qsTr("4:3")
+                        onClicked: {
+                            control.cropRatioLock = 4 / 3;
+                            control.applyCropRatioToSelection();
+                        }
+                    }
+
+                    // Direct size entry: the edited side leads, the ratio pushes the other
+                    // side, and both clamp inside the image bounds.
+                    Text {
+                        visible: control.editTool === "crop"
+                        text: qsTr("宽")
+                        color: Theme.mutedText
+                        font.pixelSize: Theme.fontCaption
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    TextField {
+                        id: cropWidthField
+
+                        objectName: "imageCropWidthField"
+                        visible: control.editTool === "crop"
+                        width: 54
+                        height: 24
+                        font.pixelSize: Theme.fontCaption
+                        horizontalAlignment: TextInput.AlignHCenter
+                        inputMethodHints: Qt.ImhDigitsOnly
+                        validator: IntValidator {
+                            bottom: 1
+                            top: control.imageEdit ? control.imageEdit.imageWidth : 1
+                        }
+                        text: control.cropSelection ? control.cropSelection.width : ""
+                        onEditingFinished: {
+                            control.applyCropSizeFromField("width", text);
+                            text = Qt.binding(() => control.cropSelection ? control.cropSelection.width : "");
+                        }
+                        anchors.verticalCenter: parent.verticalCenter
+
+                        background: Rectangle {
+                            radius: Theme.radiusMicro
+                            color: Theme.control
+                            border.width: cropWidthField.activeFocus ? 2 : 1
+                            border.color: cropWidthField.activeFocus ? Theme.focus : Theme.controlBorder
+                        }
+                    }
+                    Text {
+                        visible: control.editTool === "crop"
+                        text: "×"
+                        color: Theme.mutedText
+                        font.pixelSize: Theme.fontCaption
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    TextField {
+                        id: cropHeightField
+
+                        objectName: "imageCropHeightField"
+                        visible: control.editTool === "crop"
+                        width: 54
+                        height: 24
+                        font.pixelSize: Theme.fontCaption
+                        horizontalAlignment: TextInput.AlignHCenter
+                        inputMethodHints: Qt.ImhDigitsOnly
+                        validator: IntValidator {
+                            bottom: 1
+                            top: control.imageEdit ? control.imageEdit.imageHeight : 1
+                        }
+                        text: control.cropSelection ? control.cropSelection.height : ""
+                        onEditingFinished: {
+                            control.applyCropSizeFromField("height", text);
+                            text = Qt.binding(() => control.cropSelection ? control.cropSelection.height : "");
+                        }
+                        anchors.verticalCenter: parent.verticalCenter
+
+                        background: Rectangle {
+                            radius: Theme.radiusMicro
+                            color: Theme.control
+                            border.width: cropHeightField.activeFocus ? 2 : 1
+                            border.color: cropHeightField.activeFocus ? Theme.focus : Theme.controlBorder
+                        }
                     }
 
                     Rectangle {
@@ -1624,7 +2780,7 @@ Rectangle {
                             control.forceActiveFocus();
                         }
                         implicitWidth: cancelText.implicitWidth + 16
-                        implicitHeight: 24
+                        implicitHeight: Theme.hitAreaMinimum
                         radius: Theme.radiusSmall
                         color: cancelMouse.pressed ? Theme.fluentPressed : (cancelMouse.containsMouse ? Theme.fluentHover : "transparent")
                         border.color: cancelMouse.containsMouse ? Theme.borderHover : Theme.border
@@ -1636,7 +2792,7 @@ Rectangle {
                             anchors.centerIn: parent
                             text: qsTr("取消")
                             color: cancelMouse.containsMouse ? Theme.primaryText : Theme.secondaryText
-                            font.pixelSize: 11
+                            font.pixelSize: Theme.fontCaption
                         }
                         MouseArea {
                             id: cancelMouse
@@ -1656,7 +2812,7 @@ Rectangle {
                             control.forceActiveFocus();
                         }
                         implicitWidth: applyText.implicitWidth + 18
-                        implicitHeight: 24
+                        implicitHeight: Theme.hitAreaMinimum
                         radius: Theme.radiusSmall
                         color: applyMouse.pressed ? Theme.accentPressed : (applyMouse.containsMouse ? Theme.accentHover : Theme.accentFill)
                         border.color: Theme.accent
@@ -1668,7 +2824,7 @@ Rectangle {
                             anchors.centerIn: parent
                             text: control.editTool === "mosaic" ? qsTr("应用马赛克") : (control.editTool === "smart_select" ? qsTr("智能抠出目标") : qsTr("应用裁剪"))
                             color: Theme.inverseText
-                            font.pixelSize: 11
+                            font.pixelSize: Theme.fontCaption
                             font.weight: Font.DemiBold
                         }
                         MouseArea {
@@ -1839,7 +2995,9 @@ Rectangle {
                     if (Math.abs(right - left) >= 8 && Math.abs(bottom - top) >= 8 && previewImage.sourceSize.width > 0 && previewImage.sourceSize.height > 0) {
                         const m0 = control.mapToImage(viewport, left, top);
                         const m1 = control.mapToImage(viewport, right, bottom);
-                        if (m0 && m1) {
+                        // A release whose rectangle misses the picture entirely used to fall
+                        // through silently; the status bar now says why nothing zoomed.
+                        if (m0 && m1 && !(m0.x >= previewImage.sourceSize.width || m0.y >= previewImage.sourceSize.height || m1.x <= 0 || m1.y <= 0)) {
                             const sw = previewImage.sourceSize.width;
                             const sh = previewImage.sourceSize.height;
                             const normX0 = Math.max(0, Math.min(1, m0.x / sw));
@@ -1848,7 +3006,11 @@ Rectangle {
                             const normY1 = Math.max(0, Math.min(1, m1.y / sh));
                             if (control.imageReview)
                                 control.imageReview.zoomToRect(normX0, normY0, normX1, normY1);
+                        } else {
+                            control.showMarqueeNotice(qsTr("框选超出画面范围，未放大"));
                         }
+                    } else if (Math.abs(right - left) >= 8 || Math.abs(bottom - top) >= 8) {
+                        control.showMarqueeNotice(qsTr("框选区域太小（至少 8×8 像素），未放大"));
                     }
                 }
             }
@@ -1857,15 +3019,7 @@ Rectangle {
                 // source unchanged when the user invokes the zoom gesture.
                 if (mouse.button === Qt.LeftButton && control.compareMode === 0 && control.hasPair)
                     control.toggleSinglePairSource();
-                if (control.trueSize) {
-                    control.trueSize = false;
-                    if (control.imageReview)
-                        control.imageReview.resetView();
-                } else {
-                    control.trueSize = true;
-                    if (control.imageReview)
-                        control.imageReview.setZoom(1.0);
-                }
+                control.toggleTrueSize();
             }
             onWheel: wheel => {
                 if (!control.imageReview)
@@ -1881,9 +3035,10 @@ Rectangle {
         }
     }
 
-    // The command surface is one raised panel rather than rows floating on the canvas: file,
-    // view, comparison and edit commands belong to a single tool area, and the panel edge gives
-    // the wrapping rows a visible boundary at every window width.
+    // The command surface is a flat two-row strip aligned with the video workspace: row 1
+    // names the sources and the session commands, row 2 carries the comparison and
+    // observation modes and is replaced wholesale by the edit ribbon while editing. The
+    // stage keeps its anchor contract: stage.top stays commandPanel.bottom + 12.
     Rectangle {
         id: commandPanel
 
@@ -1892,433 +3047,757 @@ Rectangle {
             top: parent.top
             left: parent.left
             right: parent.right
-            margins: 12
         }
-        height: commandColumn.implicitHeight + 20
-        radius: Theme.radiusLarge
+        height: commandColumn.implicitHeight
         color: Theme.panel
 
         Column {
             id: commandColumn
 
             anchors {
-                top: parent.top
-                topMargin: 10
                 left: parent.left
-                leftMargin: 10
                 right: parent.right
-                rightMargin: 10
+                top: parent.top
             }
-            spacing: Theme.spaceMain
+            // Bands butt exactly: a Column's default spacing is 0, no literal needed.
 
-            // Row A — file and view commands. Opening variants live behind one dropdown so the
-            // top edge never grows past a single row; sidebar toggling only appears with folders.
-            Flow {
-                id: fileRow
+            // Row 1 — sources & session. The A/B chips give the pair a visible identity
+            // (click = direct look, drop = replace that slot); the session commands sit in
+            // the same flow so a narrow window wraps instead of overlapping. Opening
+            // variants live behind one dropdown so the strip never grows past one band.
+            Item {
+                id: sourceRow
 
-                objectName: "imageFileRow"
+                objectName: "imageSourceRow"
                 width: parent.width
-                spacing: Theme.spaceMain
-                // See the forceLayout note in Component.onCompleted above.
-                onWidthChanged: forceLayout()
+                height: Math.max(Theme.barRowHeight, fileRow.implicitHeight + 8)
 
-                ImageCommandButton {
-                    objectName: "imageOpenButton"
-                    text: qsTr("打开图片…")
-                    // Edit mode has its own primary action (另存副本…); one filled button per view.
-                    prominent: !control.hasPrimary && !control.editModeActive
-                    implicitHeight: 30
-                    leftPadding: 12
-                    rightPadding: 12
-                    onClicked: control.openImageRequested()
-                }
-                ImageCommandButton {
-                    objectName: "imageOpenPairButton"
-                    text: qsTr("打开图片对… ▾")
-                    implicitHeight: 30
-                    leftPadding: 12
-                    rightPadding: 12
-                    onClicked: openPairMenu.open()
+                Flow {
+                    id: fileRow
 
-                    VcsMenu {
-                        id: openPairMenu
-                        menuWidth: 220
+                    objectName: "imageFileRow"
+                    spacing: Theme.spaceMain
+                    anchors {
+                        left: parent.left
+                        leftMargin: 12
+                        right: parent.right
+                        rightMargin: 12
+                        verticalCenter: parent.verticalCenter
+                    }
+                    // See the forceLayout note in Component.onCompleted above.
+                    onWidthChanged: {
+                        forceLayout();
+                        Qt.callLater(commandColumn.forceLayout);
+                    }
 
-                        VcsMenuItem {
-                            objectName: "imageOpenPairMenuItem"
-                            text: qsTr("打开图片对…")
-                            onTriggered: control.openPairRequested()
+                    ImageSourceChip {
+                        objectName: "imageSourceChipA"
+                        sourceSlot: 2
+                        visible: control.hasPrimary
+                        chipTitle: control.imageTitle(control.imageReview.primaryPath, control.imageReview.secondaryPath)
+                        chipPath: String((control.imageReview && control.imageReview.primaryPath) || "")
+                        onDirectLookRequested: {
+                            if (!control.canSwitchSingleSource)
+                                return;
+                            if (control.compareMode !== 0)
+                                control.modeButton(0);
+                            control.singleViewShowSecondary = false;
                         }
-                        VcsMenuItem {
-                            objectName: "imageCompareFoldersMenuItem"
-                            text: qsTr("对比文件夹…")
-                            onTriggered: control.compareFoldersRequested()
+                        onCloseRequested: control.closeSide(2)
+                        onReplaceDropped: url => control.replacePrimaryDropped(url)
+                    }
+                    ImageSourceChip {
+                        objectName: "imageSourceChipB"
+                        sourceSlot: 3
+                        visible: control.hasSecondary
+                        chipTitle: control.imageTitle(control.imageReview.secondaryPath, control.imageReview.primaryPath)
+                        chipPath: String((control.imageReview && control.imageReview.secondaryPath) || "")
+                        onDirectLookRequested: {
+                            if (!control.canSwitchSingleSource)
+                                return;
+                            if (control.compareMode !== 0)
+                                control.modeButton(0);
+                            control.singleViewShowSecondary = true;
                         }
-                        VcsMenuSeparator {}
-                        VcsMenuItem {
-                            objectName: "imageAddMenuItem"
-                            text: qsTr("添加图片…")
-                            enabled: control.hasPrimary && !control.hasSecondary
-                            onTriggered: control.addImageRequested()
+                        onCloseRequested: control.closeSide(3)
+                        onReplaceDropped: url => control.replaceSecondaryDropped(url)
+                    }
+
+                    RowSeparator {
+                        visible: control.hasPrimary
+                    }
+
+                    ImageCommandButton {
+                        objectName: "imageOpenButton"
+                        // With nothing open this is the entry point; once an image is open
+                        // the same commands live behind 打开/添加 ▾ below.
+                        visible: !control.hasPrimary
+                        text: qsTr("打开图片…")
+                        // Edit mode has its own primary action (另存副本…); one filled button per view.
+                        prominent: !control.hasPrimary && !control.editModeActive
+                        implicitHeight: 30
+                        leftPadding: 12
+                        rightPadding: 12
+                        onClicked: control.openImageRequested()
+                    }
+                    ImageCommandButton {
+                        objectName: "imageOpenPairButton"
+                        text: qsTr("打开/添加 ▾")
+                        implicitHeight: 30
+                        leftPadding: 8
+                        rightPadding: 8
+                        onClicked: openPairMenu.open()
+
+                        VcsMenu {
+                            id: openPairMenu
+                            menuWidth: 220
+
+                            VcsMenuItem {
+                                objectName: "imageOpenSingleMenuItem"
+                                text: qsTr("打开图片…")
+                                onTriggered: control.openImageRequested()
+                            }
+                            VcsMenuItem {
+                                objectName: "imageOpenPairMenuItem"
+                                text: qsTr("打开图片对…")
+                                onTriggered: control.openPairRequested()
+                            }
+                            VcsMenuItem {
+                                objectName: "imageCompareFoldersMenuItem"
+                                text: qsTr("对比文件夹…")
+                                onTriggered: control.compareFoldersRequested()
+                            }
+                            VcsMenuSeparator {}
+                            VcsMenuItem {
+                                objectName: "imageAddMenuItem"
+                                text: qsTr("添加图片…")
+                                enabled: control.hasPrimary && !control.hasSecondary
+                                onTriggered: control.addImageRequested()
+                            }
                         }
                     }
-                }
-                ImageCommandButton {
-                    objectName: "imageCloseButton"
-                    text: qsTr("关闭图片")
-                    implicitHeight: 30
-                    leftPadding: 12
-                    rightPadding: 12
-                    enabled: control.hasPrimary
-                    onClicked: control.imageReview.closeAll()
-                }
-                ImageCommandButton {
-                    objectName: "imageFitButton"
-                    checkable: true
-                    checked: !control.trueSize
-                    mirrorsState: true
-                    text: qsTr("适应窗口")
-                    implicitHeight: 30
-                    leftPadding: 10
-                    rightPadding: 10
-                    enabled: control.hasPrimary
-                    onClicked: {
-                        control.trueSize = false;
-                        if (control.imageReview)
-                            control.imageReview.resetView();
+                    ImageCommandButton {
+                        objectName: "imageSwapSidesButton"
+                        visible: control.hasPair
+                        implicitHeight: 30
+                        leftPadding: 8
+                        rightPadding: 8
+                        text: qsTr("对调 A/B")
+                        helpText: qsTr("交换 A 与 B 的槽位方向。\n不改变文件夹配对身份；带符号差异、分割线与淡化会跟随新的 A/B 方向。")
+                        onClicked: control.swapSidesRequested()
                     }
-                }
-                ImageCommandButton {
-                    objectName: "imageTrueSizeButton"
-                    checkable: true
-                    checked: control.trueSize
-                    mirrorsState: true
-                    text: qsTr("100%")
-                    implicitHeight: 30
-                    leftPadding: 10
-                    rightPadding: 10
-                    enabled: control.hasPrimary
-                    onClicked: {
-                        control.trueSize = true;
-                        if (control.imageReview)
-                            control.imageReview.setZoom(1.0);
-                    }
-                }
-                ImageCommandButton {
-                    objectName: "imageResetViewButton"
-                    text: qsTr("重置视图")
-                    implicitHeight: 30
-                    leftPadding: 10
-                    rightPadding: 10
-                    enabled: control.hasPrimary
-                    onClicked: {
-                        control.trueSize = false;
-                        if (control.imageReview)
-                            control.imageReview.resetView();
-                    }
-                }
 
-                RowSeparator {
-                    visible: control.hasFolders
-                }
+                    ImageCommandButton {
+                        objectName: "imageReplaceSidesButton"
+                        text: qsTr("换图… ▾")
+                        implicitHeight: 30
+                        leftPadding: 8
+                        rightPadding: 8
+                        visible: control.hasPrimary
+                        enabled: control.hasPrimary
+                        helpText: qsTr("只替换其中一侧，另一侧保持不变。失败时原图保留。")
+                        onClicked: replaceSidesMenu.open()
 
-                ImageCommandButton {
-                    objectName: "imageToggleSidebarButton"
-                    // The label names the action it performs, so the button carries no checked tint.
-                    text: control.sidebarVisible ? qsTr("隐藏列表") : qsTr("显示列表")
-                    implicitHeight: 30
-                    leftPadding: 10
-                    rightPadding: 10
-                    visible: control.hasFolders
-                    onClicked: control.toggleSidebarRequested()
+                        VcsMenu {
+                            id: replaceSidesMenu
+                            menuWidth: 180
+
+                            VcsMenuItem {
+                                objectName: "imageReplacePrimaryButton"
+                                text: qsTr("替换 A…")
+                                enabled: control.hasPrimary
+                                onTriggered: control.replacePrimaryRequested()
+                            }
+                            VcsMenuItem {
+                                objectName: "imageReplaceSecondaryButton"
+                                text: control.hasSecondary ? qsTr("替换 B…") : qsTr("添加 B…")
+                                enabled: control.hasPrimary
+                                onTriggered: control.replaceSecondaryRequested()
+                            }
+                            VcsMenuSeparator {}
+                            VcsMenuItem {
+                                objectName: "imageCloseMenuItem"
+                                text: qsTr("关闭图片")
+                                // Same guard as the chip's right-click menu: an edit session
+                                // with unsaved work refuses and explains, instead of dropping
+                                // the working copy silently.
+                                enabled: control.hasPrimary && control.closeSideBlockedReason.length === 0
+                                onTriggered: {
+                                    if (control.closeSideBlockedReason.length > 0) {
+                                        control.showMarqueeNotice(control.closeSideBlockedReason);
+                                        return;
+                                    }
+                                    // The surviving side is closed last: closing B keeps A,
+                                    // then closing A reaches the empty state through the same
+                                    // single-side path - a closeAll is never used to stand in
+                                    // for a single-side close.
+                                    control.closeSide(3);
+                                    control.closeSide(2);
+                                }
+                            }
+                        }
+                    }
+
+                    ImageCommandButton {
+                        objectName: "imageEditStartButton"
+                        visible: control.hasPrimary && control.imageEdit !== null
+                        // An action label, not a state: the filled button while editing is 另存副本….
+                        text: control.editModeActive ? qsTr("结束编辑") : qsTr("编辑画面")
+                        helpText: qsTr("在原图的副本上编辑；原文件保持不变，编辑结果必须另存为副本。")
+                        onClicked: {
+                            if (control.editModeActive)
+                                control.finishImageEdit();
+                            else
+                                control.beginImageEdit();
+                        }
+                    }
+
+                    // Preserved objectName: the close action moved into the 换图 dropdown
+                    // and the A/B chips' right-click menu; the standalone button stays in the
+                    // tree (hidden) for compatibility and routes through the same guarded
+                    // single-side close.
+                    ImageCommandButton {
+                        objectName: "imageCloseButton"
+                        visible: false
+                        text: qsTr("关闭图片")
+                        enabled: control.hasPrimary
+                        onClicked: {
+                            control.closeSide(3);
+                            control.closeSide(2);
+                        }
+                    }
+
+                    ImageCommandButton {
+                        objectName: "imageToggleSidebarButton"
+                        // The label names the action it performs, so the button carries no checked tint.
+                        text: control.sidebarVisible ? qsTr("隐藏列表") : qsTr("显示列表")
+                        implicitHeight: 30
+                        leftPadding: 10
+                        rightPadding: 10
+                        visible: control.hasFolders
+                        onClicked: control.toggleSidebarRequested()
+                    }
                 }
             }
 
-            // Row B — comparison layout, difference analysis and observation. Mutually exclusive
-            // modes stay grouped; secondary modes collapse into "more" menus like the video bar,
-            // so a pair never shows the full control surface at once.
-            Flow {
-                id: modeRow
+            Rectangle {
+                width: parent.width
+                height: 1
+                color: Theme.border
+            }
 
-                objectName: "imageModeRow"
+            // Row 2 — comparison & observation. Mutually exclusive modes stay grouped; the
+            // difference modes collapse behind one dropdown, the channel/background
+            // observations are one-click chips. While editing, this whole band is replaced
+            // by the edit ribbon below it.
+            Item {
+                id: modeRowHost
+
+                width: parent.width
                 visible: !control.editModeActive
-                width: parent.width
-                spacing: Theme.spaceMain
-                // See the forceLayout note in Component.onCompleted above.
-                onWidthChanged: forceLayout()
+                height: visible ? Math.max(Theme.barRowHeight, modeRow.implicitHeight + 8) : 0
 
-                ModeChip {
-                    objectName: "imageModePrimary"
-                    text: control.hasPair ? qsTr("手动闪烁") : qsTr("查看")
-                    modeValue: 0
-                }
-                ModeChip {
-                    objectName: "imageModeSide"
-                    text: qsTr("并排")
-                    modeValue: 1
-                    visible: control.hasPair
-                }
-                ModeChip {
-                    objectName: "imageModeWipe"
-                    text: qsTr("分割线")
-                    modeValue: 5
-                    visible: control.hasPair
-                }
-                ModeChip {
-                    objectName: "imageModeFade"
-                    text: qsTr("淡化")
-                    modeValue: 7
-                    visible: control.hasPair
-                }
-                ImageCommandButton {
-                    objectName: "imageToggleSourceButton"
-                    visible: control.canSwitchSingleSource && control.compareMode === 0
-                    enabled: control.canSwitchSingleSource
-                    implicitHeight: 30
-                    leftPadding: 8
-                    rightPadding: 8
-                    text: control.compareMode === 0 && control.singleViewShowSecondary ? qsTr("切至 A") : qsTr("切至 B")
-                    onClicked: control.toggleSinglePairSource()
-                }
-                ImageCommandButton {
-                    objectName: "imageSwapSidesButton"
-                    visible: control.hasPair
-                    implicitHeight: 30
-                    leftPadding: 8
-                    rightPadding: 8
-                    text: qsTr("对调 A/B")
-                    helpText: qsTr("交换 A 与 B 的槽位方向。\n不改变文件夹配对身份；带符号差异、分割线与淡化会跟随新的 A/B 方向。")
-                    onClicked: control.swapSidesRequested()
-                }
+                Flow {
+                    id: modeRow
 
-                ImageCommandButton {
-                    objectName: "imageReplaceSidesButton"
-                    text: qsTr("换图… ▾")
-                    implicitHeight: 30
-                    leftPadding: 8
-                    rightPadding: 8
-                    visible: control.hasPrimary
-                    enabled: control.hasPrimary
-                    helpText: qsTr("只替换其中一侧，另一侧保持不变。失败时原图保留。")
-                    onClicked: replaceSidesMenu.open()
+                    objectName: "imageModeRow"
+                    spacing: Theme.spaceMain
+                    anchors {
+                        left: parent.left
+                        leftMargin: 12
+                        right: parent.right
+                        rightMargin: 12
+                        verticalCenter: parent.verticalCenter
+                    }
+                    // See the forceLayout note in Component.onCompleted above.
+                    onWidthChanged: {
+                        forceLayout();
+                        Qt.callLater(commandColumn.forceLayout);
+                    }
 
-                    VcsMenu {
-                        id: replaceSidesMenu
-                        menuWidth: 180
-
-                        VcsMenuItem {
-                            objectName: "imageReplacePrimaryButton"
-                            text: qsTr("替换 A…")
-                            enabled: control.hasPrimary
-                            onTriggered: control.replacePrimaryRequested()
-                        }
-                        VcsMenuItem {
-                            objectName: "imageReplaceSecondaryButton"
-                            text: control.hasSecondary ? qsTr("替换 B…") : qsTr("添加 B…")
-                            enabled: control.hasPrimary
-                            onTriggered: control.replaceSecondaryRequested()
+                    // C-01: the single-image A/B view. The name says what it is - one canvas
+                    // showing A or B - instead of the old "手动闪烁", which described the
+                    // switching gesture and read as a separate feature next to the fade mode.
+                    // Which side is on screen stays visible in the in-canvas badge, and the
+                    // A/B file chips plus Space/T are the entries that change it.
+                    ModeChip {
+                        objectName: "imageModePrimary"
+                        text: control.hasPair ? qsTr("单图 A/B") : qsTr("查看")
+                        modeValue: 0
+                    }
+                    ModeChip {
+                        objectName: "imageModeSide"
+                        text: qsTr("并排")
+                        modeValue: 1
+                        visible: control.hasPair
+                    }
+                    ModeChip {
+                        objectName: "imageModeWipe"
+                        text: qsTr("分割线")
+                        modeValue: 5
+                        visible: control.hasPair
+                    }
+                    // E1: wipe split axis toggle - the discoverable entry for the image
+                    // workspace, shown only while the wipe comparison is active. The label
+                    // names the halves (左右/上下) instead of the axis jargon, and switching
+                    // keeps the ratio, the pair and the decoded buffers untouched.
+                    ImageCommandButton {
+                        objectName: "imageWipeOrientationButton"
+                        visible: control.hasPair && control.compareMode === 5
+                        enabled: visible && control.imageReview !== null
+                        implicitHeight: Theme.hitAreaMinimum
+                        leftPadding: 8
+                        rightPadding: 8
+                        text: control.imageReview && control.imageReview.wipeOrientation === 1 ? qsTr("分屏：上下") : qsTr("分屏：左右")
+                        onClicked: {
+                            if (control.imageReview)
+                                control.imageReview.wipeOrientation = control.imageReview.wipeOrientation === 1 ? 0 : 1;
                         }
                     }
-                }
+                    ModeChip {
+                        objectName: "imageModeFade"
+                        text: qsTr("淡化")
+                        modeValue: 7
+                        visible: control.hasPair
+                    }
+                    // C-01: the standalone "切至 A / 切至 B" toolbar button is gone. It
+                    // duplicated the A/B file chips (a click on the chip selects that side),
+                    // the Space/T shortcut and the in-canvas badge, and a permanent button
+                    // whose label flipped on every press was the least discoverable of the
+                    // three. The remaining entries are kept and tested; the video playback
+                    // shortcuts are untouched.
+                    ImageCommandButton {
+                        objectName: "imageDiffModeButton"
+                        text: control.diffModeLabel + " ▾"
+                        implicitHeight: 30
+                        leftPadding: 8
+                        rightPadding: 8
+                        visible: control.hasPair
+                        onClicked: diffMenu.open()
 
-                RowSeparator {
-                    visible: control.hasPair
-                }
+                        VcsMenu {
+                            id: diffMenu
+                            menuWidth: 220
 
-                ImageCommandButton {
-                    objectName: "imageDiffModeButton"
-                    text: control.diffModeLabel + " ▾"
-                    implicitHeight: 30
-                    leftPadding: 8
-                    rightPadding: 8
-                    visible: control.hasPair
-                    onClicked: diffMenu.open()
-
-                    VcsMenu {
-                        id: diffMenu
-                        menuWidth: 220
-
-                        VcsRadioMenuItem {
-                            objectName: "imageModeAbsDiff"
-                            text: qsTr("绝对差异")
-                            checked: control.compareMode === 2
-                            onTriggered: control.modeButton(2)
-                        }
-                        VcsRadioMenuItem {
-                            objectName: "imageModeSignedDiff"
-                            text: qsTr("带符号差异")
-                            checked: control.compareMode === 3
-                            onTriggered: control.modeButton(3)
-                        }
-                        VcsRadioMenuItem {
-                            objectName: "imageModeHighlight"
-                            text: qsTr("高亮")
-                            checked: control.compareMode === 4
-                            onTriggered: control.modeButton(4)
-                        }
-                        VcsRadioMenuItem {
-                            objectName: "imageModeAlphaDiff"
-                            text: qsTr("Alpha 差异")
-                            enabled: Boolean(control.imageReview && (control.imageReview.primaryHasAlpha || control.imageReview.secondaryHasAlpha))
-                            checked: control.compareMode === 6
-                            onTriggered: control.modeButton(6)
+                            VcsRadioMenuItem {
+                                objectName: "imageModeAbsDiff"
+                                text: qsTr("绝对差异")
+                                checked: control.compareMode === 2
+                                onTriggered: control.modeButton(2)
+                            }
+                            VcsRadioMenuItem {
+                                objectName: "imageModeSignedDiff"
+                                text: qsTr("带符号差异")
+                                checked: control.compareMode === 3
+                                onTriggered: control.modeButton(3)
+                            }
+                            VcsRadioMenuItem {
+                                objectName: "imageModeHighlight"
+                                text: qsTr("高亮")
+                                checked: control.compareMode === 4
+                                onTriggered: control.modeButton(4)
+                            }
+                            VcsRadioMenuItem {
+                                objectName: "imageModeAlphaDiff"
+                                text: qsTr("Alpha 差异")
+                                enabled: Boolean(control.imageReview && (control.imageReview.primaryHasAlpha || control.imageReview.secondaryHasAlpha))
+                                checked: control.compareMode === 6
+                                onTriggered: control.modeButton(6)
+                            }
                         }
                     }
-                }
 
-                RowSeparator {}
+                    // Hold-to-peek the originals while reading a difference or fade view.
+                    // The button mirrors the keyboard: hold = look, release = restore.
+                    // visible/enabled stay on while a peek is active (beginPeek switches the
+                    // mode away from the availability condition; hiding or disabling the
+                    // button mid-hold would cancel the press and end the peek), and the
+                    // press must not move the focus either — a focus change cancels a held
+                    // AbstractButton, so only tab navigation can focus it.
+                    ImageCommandButton {
+                        objectName: "imagePeekButton"
+                        visible: control.peekModeAvailable || control.peekActive
+                        enabled: control.peekModeAvailable || control.peekActive
+                        focusPolicy: Qt.TabFocus
+                        implicitHeight: 30
+                        leftPadding: 8
+                        rightPadding: 8
+                        text: control.peekActive ? qsTr("松开恢复 %1").arg(control.diffModeLabel) : qsTr("按住看 A/B 原图")
+                        helpText: qsTr("按住时临时直看原图：` 看 A，Shift+` 看 B；松开恢复差异/淡化视图。也可按住此按钮。")
+                        onPressed: control.beginPeek(false)
+                        onReleased: control.endPeek()
+                        onCanceled: control.endPeek()
+                    }
 
-                // Difference display gain. It amplifies only the rendered image; the peak/MAE
-                // readouts stay raw 8-bit deltas, so two candidates compared at the same gain remain
-                // visually comparable and the numbers never follow the display setting.
-                ImageCommandButton {
-                    objectName: "imageDiffGainButton"
-                    text: qsTr("差异放大 ×%1 ▾").arg(control.imageReview ? control.imageReview.diffGain : 4)
-                    implicitHeight: 30
-                    leftPadding: 8
-                    rightPadding: 8
-                    visible: control.diffModeActive
-                    helpText: qsTr("只放大显示，方便看清弱差异；峰值/平均差异读数仍是原始差值。")
-                    onClicked: diffGainMenu.open()
+                    // Difference display gain, one click per step. Wide windows show the
+                    // inline steps; narrow ones fall back to the dropdown below. The gain
+                    // amplifies only the rendered image; the peak/MAE readouts stay raw
+                    // 8-bit deltas, so two candidates compared at the same gain remain
+                    // visually comparable and the numbers never follow the display setting.
+                    Row {
+                        id: imageDiffGainChipRow
 
-                    VcsMenu {
-                        id: diffGainMenu
-                        menuWidth: 230
+                        objectName: "imageDiffGainChipRow"
+                        visible: control.diffModeActive && commandPanel.width >= 1180
+                        spacing: 4
+                        height: Theme.hitAreaMinimum
 
-                        VcsRadioMenuItem {
-                            objectName: "imageDiffGain1"
-                            text: qsTr("×1 · 原始差值（不放大）")
+                        Text {
+                            text: qsTr("增益")
+                            color: Theme.mutedText
+                            font.pixelSize: Theme.fontCaption
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        HudCommandButton {
+                            objectName: "imageDiffGainChip1"
+                            checkable: true
                             checked: control.imageReview && control.imageReview.diffGain === 1
-                            onTriggered: {
+                            mirrorsState: true
+                            text: qsTr("×1")
+                            onClicked: {
                                 if (control.imageReview)
                                     control.imageReview.diffGain = 1;
                             }
                         }
-                        VcsRadioMenuItem {
-                            objectName: "imageDiffGain2"
-                            text: qsTr("×2")
+                        HudCommandButton {
+                            objectName: "imageDiffGainChip2"
+                            checkable: true
                             checked: control.imageReview && control.imageReview.diffGain === 2
-                            onTriggered: {
+                            mirrorsState: true
+                            text: qsTr("×2")
+                            onClicked: {
                                 if (control.imageReview)
                                     control.imageReview.diffGain = 2;
                             }
                         }
-                        VcsRadioMenuItem {
-                            objectName: "imageDiffGain4"
-                            text: qsTr("×4（默认）")
+                        HudCommandButton {
+                            objectName: "imageDiffGainChip4"
+                            checkable: true
                             checked: control.imageReview && control.imageReview.diffGain === 4
-                            onTriggered: {
+                            mirrorsState: true
+                            text: qsTr("×4")
+                            onClicked: {
                                 if (control.imageReview)
                                     control.imageReview.diffGain = 4;
                             }
                         }
-                        VcsRadioMenuItem {
-                            objectName: "imageDiffGain8"
-                            text: qsTr("×8")
+                        HudCommandButton {
+                            objectName: "imageDiffGainChip8"
+                            checkable: true
                             checked: control.imageReview && control.imageReview.diffGain === 8
-                            onTriggered: {
+                            mirrorsState: true
+                            text: qsTr("×8")
+                            onClicked: {
                                 if (control.imageReview)
                                     control.imageReview.diffGain = 8;
                             }
                         }
-                        VcsRadioMenuItem {
-                            objectName: "imageDiffGain16"
-                            text: qsTr("×16")
+                        HudCommandButton {
+                            objectName: "imageDiffGainChip16"
+                            checkable: true
                             checked: control.imageReview && control.imageReview.diffGain === 16
-                            onTriggered: {
+                            mirrorsState: true
+                            text: qsTr("×16")
+                            onClicked: {
                                 if (control.imageReview)
                                     control.imageReview.diffGain = 16;
                             }
                         }
                     }
-                }
 
-                ImageCommandButton {
-                    objectName: "imageViewModeButton"
-                    text: control.viewModeLabel + " ▾"
-                    implicitHeight: 30
-                    leftPadding: 8
-                    rightPadding: 8
-                    helpText: qsTr("显示通道：正常 RGBA，或只观察 Alpha 灰度、忽略透明度。快捷键 A / O。")
-                    onClicked: viewMenu.open()
+                    ImageCommandButton {
+                        objectName: "imageDiffGainButton"
+                        text: qsTr("差异放大 ×%1 ▾").arg(control.imageReview ? control.imageReview.diffGain : 4)
+                        implicitHeight: 30
+                        leftPadding: 8
+                        rightPadding: 8
+                        visible: control.diffModeActive && !imageDiffGainChipRow.visible
+                        helpText: qsTr("只放大显示，方便看清弱差异；峰值/平均差异读数仍是原始差值。")
+                        onClicked: diffGainMenu.open()
 
-                    VcsMenu {
-                        id: viewMenu
-                        menuWidth: 230
+                        VcsMenu {
+                            id: diffGainMenu
+                            menuWidth: 230
 
-                        VcsRadioMenuItem {
-                            objectName: "imageViewRgba"
-                            text: qsTr("RGBA")
-                            checked: control.viewMode === 0
-                            onTriggered: control.setViewMode(0)
-                        }
-                        VcsRadioMenuItem {
-                            objectName: "imageViewAlphaGray"
-                            text: qsTr("Alpha 灰度 (A)")
-                            checked: control.viewMode === 1
-                            onTriggered: control.setViewMode(1)
-                        }
-                        VcsRadioMenuItem {
-                            objectName: "imageViewRgbOpaque"
-                            text: qsTr("RGB 忽略透明度 (O)")
-                            checked: control.viewMode === 2
-                            onTriggered: control.setViewMode(2)
+                            VcsRadioMenuItem {
+                                objectName: "imageDiffGain1"
+                                text: qsTr("×1 · 原始差值（不放大）")
+                                checked: control.imageReview && control.imageReview.diffGain === 1
+                                onTriggered: {
+                                    if (control.imageReview)
+                                        control.imageReview.diffGain = 1;
+                                }
+                            }
+                            VcsRadioMenuItem {
+                                objectName: "imageDiffGain2"
+                                text: qsTr("×2")
+                                checked: control.imageReview && control.imageReview.diffGain === 2
+                                onTriggered: {
+                                    if (control.imageReview)
+                                        control.imageReview.diffGain = 2;
+                                }
+                            }
+                            VcsRadioMenuItem {
+                                objectName: "imageDiffGain4"
+                                text: qsTr("×4（默认）")
+                                checked: control.imageReview && control.imageReview.diffGain === 4
+                                onTriggered: {
+                                    if (control.imageReview)
+                                        control.imageReview.diffGain = 4;
+                                }
+                            }
+                            VcsRadioMenuItem {
+                                objectName: "imageDiffGain8"
+                                text: qsTr("×8")
+                                checked: control.imageReview && control.imageReview.diffGain === 8
+                                onTriggered: {
+                                    if (control.imageReview)
+                                        control.imageReview.diffGain = 8;
+                                }
+                            }
+                            VcsRadioMenuItem {
+                                objectName: "imageDiffGain16"
+                                text: qsTr("×16")
+                                checked: control.imageReview && control.imageReview.diffGain === 16
+                                onTriggered: {
+                                    if (control.imageReview)
+                                        control.imageReview.diffGain = 16;
+                                }
+                            }
                         }
                     }
-                }
-                ImageCommandButton {
-                    objectName: "imageBackgroundButton"
-                    text: control.backgroundModeLabel + " ▾"
-                    implicitHeight: 30
-                    leftPadding: 8
-                    rightPadding: 8
-                    helpText: qsTr("图片背后的底色，用来判断透明区域；不影响像素读数。")
-                    onClicked: bgMenu.open()
 
-                    VcsMenu {
-                        id: bgMenu
-                        menuWidth: 200
+                    RowSeparator {}
 
-                        VcsRadioMenuItem {
-                            objectName: "imageBgDark"
-                            text: qsTr("深色")
-                            checked: control.backgroundMode === 0
-                            onTriggered: control.backgroundMode = 0
+                    // Channel observation quick chips (A / O keep their toggle semantics:
+                    // clicking the active chip returns to plain RGBA).
+                    ModeChip {
+                        objectName: "imageViewChipRgba"
+                        text: qsTr("RGBA")
+                        selectGroup: 1
+                        modeValue: 0
+                    }
+                    ModeChip {
+                        objectName: "imageViewChipAlphaGray"
+                        text: qsTr("Alpha (A)")
+                        selectGroup: 1
+                        modeValue: 1
+                    }
+                    ModeChip {
+                        objectName: "imageViewChipRgbOpaque"
+                        text: qsTr("忽略透明 (O)")
+                        selectGroup: 1
+                        modeValue: 2
+                    }
+
+                    // ---- Alpha threshold observation filter -------------------------------------
+                    // Sits next to the "RGB ignoring alpha" entry it belongs to, because that
+                    // is the only observation it applies to. Default off; "off" and "on with
+                    // T = 0" are deliberately different states (T = 0 still hides A = 0).
+                    ImageCommandButton {
+                        objectName: "imageAlphaFilterButton"
+                        visible: control.hasPrimary
+                        implicitHeight: Theme.hitAreaMinimum
+                        leftPadding: 8
+                        rightPadding: 8
+                        text: control.alphaFilterEnabled ? qsTr("Alpha 过滤：A > %1").arg(control.alphaThreshold) : qsTr("Alpha 过滤：关")
+                        helpText: qsTr("仅显示 A > T（严格大于）：A=20/T=25 与 A=25/T=25 隐藏，A=26/T=25 显示。\n未通过区域显示中性棋盘格，不会被误认为原像素是黑色。\n不修改素材、编辑副本、原始读数、差异或统计；探针仍读原始 RGBA。")
+                        onClicked: control.setAlphaFilterEnabled(!control.alphaFilterEnabled)
+                    }
+
+                    // Slider + exact entry + reset. The slider writes through a debounce so a
+                    // drag cannot queue one full view rebuild per pixel of travel; the spin
+                    // box and the reset commit immediately.
+                    Row {
+                        objectName: "imageAlphaFilterRow"
+                        visible: control.alphaFilterEnabled && control.hasPrimary
+                        spacing: Theme.spaceMicro
+                        height: Theme.hitAreaMinimum
+
+                        Text {
+                            text: qsTr("仅显示 A > T")
+                            color: Theme.mutedText
+                            font.pixelSize: Theme.fontCaption
+                            anchors.verticalCenter: parent.verticalCenter
                         }
-                        VcsRadioMenuItem {
-                            objectName: "imageBgChecker"
-                            text: qsTr("棋盘格")
-                            checked: control.backgroundMode === 1
-                            onTriggered: control.backgroundMode = 1
+
+                        Slider {
+                            id: alphaThresholdSlider
+
+                            objectName: "imageAlphaFilterSlider"
+                            from: 0
+                            to: 255
+                            stepSize: 1
+                            implicitWidth: 148
+                            anchors.verticalCenter: parent.verticalCenter
+                            // Dragging writes `value` directly, which would break a plain
+                            // binding on the first drag; restoreMode puts it back so the
+                            // controller stays the single source of truth (the reset button
+                            // and the spin box both write through it).
+                            Binding {
+                                target: alphaThresholdSlider
+                                property: "value"
+                                value: control.alphaThreshold
+                                restoreMode: Binding.RestoreBinding
+                            }
+                            onMoved: {
+                                alphaThresholdCommit.pendingValue = value;
+                                alphaThresholdCommit.restart();
+                            }
+                            onPressedChanged: {
+                                if (!pressed) {
+                                    alphaThresholdCommit.stop();
+                                    control.setAlphaThreshold(value);
+                                }
+                            }
                         }
-                        VcsRadioMenuItem {
-                            objectName: "imageBgBlack"
-                            text: qsTr("黑底")
-                            checked: control.backgroundMode === 2
-                            onTriggered: control.backgroundMode = 2
+
+                        ReviewOffsetSpinBox {
+                            id: alphaThresholdSpin
+
+                            objectName: "imageAlphaFilterSpin"
+                            from: 0
+                            to: 255
+                            implicitWidth: 104
+                            anchors.verticalCenter: parent.verticalCenter
+                            Binding {
+                                target: alphaThresholdSpin
+                                property: "value"
+                                value: control.alphaThreshold
+                                restoreMode: Binding.RestoreBinding
+                            }
+                            onValueModified: control.setAlphaThreshold(value)
                         }
-                        VcsRadioMenuItem {
-                            objectName: "imageBgWhite"
-                            text: qsTr("白底")
-                            checked: control.backgroundMode === 3
-                            onTriggered: control.backgroundMode = 3
+
+                        ImageCommandButton {
+                            objectName: "imageAlphaFilterResetButton"
+                            text: qsTr("重置")
+                            implicitHeight: Theme.hitAreaMinimum
+                            leftPadding: 8
+                            rightPadding: 8
+                            anchors.verticalCenter: parent.verticalCenter
+                            onClicked: control.resetAlphaThreshold()
+                        }
+                    }
+
+                    // Background quick chips under transparent regions.
+                    ModeChip {
+                        objectName: "imageBgChipDark"
+                        text: qsTr("深色")
+                        selectGroup: 2
+                        modeValue: 0
+                    }
+                    ModeChip {
+                        objectName: "imageBgChipChecker"
+                        text: qsTr("棋盘")
+                        selectGroup: 2
+                        modeValue: 1
+                    }
+                    ModeChip {
+                        objectName: "imageBgChipBlack"
+                        text: qsTr("黑底")
+                        selectGroup: 2
+                        modeValue: 2
+                    }
+                    ModeChip {
+                        objectName: "imageBgChipWhite"
+                        text: qsTr("白底")
+                        selectGroup: 2
+                        modeValue: 3
+                    }
+
+                    // Preserved dropdown entries: the quick chips cover the wide layout,
+                    // the menus stay reachable (and their items testable) on every width.
+                    ImageCommandButton {
+                        objectName: "imageViewModeButton"
+                        visible: false
+                        text: control.viewModeLabel + " ▾"
+                        implicitHeight: 30
+                        leftPadding: 8
+                        rightPadding: 8
+                        helpText: qsTr("显示通道：正常 RGBA，或只观察 Alpha 灰度、忽略透明度。快捷键 A / O。")
+                        onClicked: viewMenu.open()
+
+                        VcsMenu {
+                            id: viewMenu
+                            menuWidth: 230
+
+                            VcsRadioMenuItem {
+                                objectName: "imageViewRgba"
+                                text: qsTr("RGBA")
+                                checked: control.viewMode === 0
+                                onTriggered: control.setViewMode(0)
+                            }
+                            VcsRadioMenuItem {
+                                objectName: "imageViewAlphaGray"
+                                text: qsTr("Alpha 灰度 (A)")
+                                checked: control.viewMode === 1
+                                onTriggered: control.setViewMode(1)
+                            }
+                            VcsRadioMenuItem {
+                                objectName: "imageViewRgbOpaque"
+                                text: qsTr("RGB 忽略透明度 (O)")
+                                checked: control.viewMode === 2
+                                onTriggered: control.setViewMode(2)
+                            }
+                        }
+                    }
+                    ImageCommandButton {
+                        objectName: "imageBackgroundButton"
+                        visible: false
+                        text: control.backgroundModeLabel + " ▾"
+                        implicitHeight: 30
+                        leftPadding: 8
+                        rightPadding: 8
+                        helpText: qsTr("图片背后的底色，用来判断透明区域；不影响像素读数。")
+                        onClicked: bgMenu.open()
+
+                        VcsMenu {
+                            id: bgMenu
+                            menuWidth: 200
+
+                            VcsRadioMenuItem {
+                                objectName: "imageBgDark"
+                                text: qsTr("深色")
+                                checked: control.backgroundMode === 0
+                                onTriggered: control.backgroundMode = 0
+                            }
+                            VcsRadioMenuItem {
+                                objectName: "imageBgChecker"
+                                text: qsTr("棋盘格")
+                                checked: control.backgroundMode === 1
+                                onTriggered: control.backgroundMode = 1
+                            }
+                            VcsRadioMenuItem {
+                                objectName: "imageBgBlack"
+                                text: qsTr("黑底")
+                                checked: control.backgroundMode === 2
+                                onTriggered: control.backgroundMode = 2
+                            }
+                            VcsRadioMenuItem {
+                                objectName: "imageBgWhite"
+                                text: qsTr("白底")
+                                checked: control.backgroundMode === 3
+                                onTriggered: control.backgroundMode = 3
+                            }
                         }
                     }
                 }
             }
 
-            // Row C — step-3 image editing suite. The original file is never written to: the session
-            // edits a working copy and saving always produces a new file. Every tool takes its
-            // geometry in image pixels, so zooming or panning cannot drift a selection or a
-            // stroke. The tool only changes what the left button does; middle-drag still pans.
-            Rectangle {
-                id: editSuite
+            // Row 2 (edit) — the comparison band is replaced wholesale by the edit ribbon.
+            // The original file is never written to: the session edits a working copy and
+            // saving always produces a new file. Every tool takes its geometry in image
+            // pixels, so zooming or panning cannot drift a selection, a stroke or an
+            // annotation. The tool only changes what the left button does; middle-drag
+            // still pans. 进入/结束编辑的入口固定在第 1 层（编辑画面/结束编辑）。
+            Item {
+                id: editBarHost
 
-                visible: control.hasPrimary && control.imageEdit !== null
                 width: parent.width
-                height: editRibbon.implicitHeight + (control.editModeActive ? 16 : 0)
-                radius: 6
-                color: control.editModeActive ? Theme.raisedPanel : "transparent"
+                visible: control.editModeActive && control.hasPrimary && control.imageEdit !== null
+                height: visible ? editRibbon.implicitHeight : 0
 
                 Column {
                     id: editRibbon
@@ -2327,7 +3806,7 @@ Rectangle {
                         left: parent.left
                         right: parent.right
                         top: parent.top
-                        margins: control.editModeActive ? 8 : 0
+                        margins: 4
                     }
                     spacing: Theme.spaceMain
 
@@ -2338,23 +3817,23 @@ Rectangle {
                         spacing: 6
                         visible: control.hasPrimary && control.imageEdit !== null
                         // See the forceLayout note in Component.onCompleted above.
-                        onWidthChanged: forceLayout()
+                        onWidthChanged: {
+                            forceLayout();
+                            Qt.callLater(commandColumn.forceLayout);
+                        }
 
-                        ImageCommandButton {
-                            objectName: "imageEditStartButton"
-                            // An action label, not a state: the filled button while editing is 另存副本….
-                            text: control.editModeActive ? qsTr("结束编辑") : qsTr("编辑画面")
-                            helpText: qsTr("在原图的副本上编辑；原文件保持不变，编辑结果必须另存为副本。")
-                            onClicked: {
-                                if (control.editModeActive)
-                                    control.finishImageEdit();
-                                else
-                                    control.beginImageEdit();
-                            }
+                        Text {
+                            objectName: "imageEditingSourceLabel"
+                            height: 30
+                            verticalAlignment: Text.AlignVCenter
+                            text: control.imageEdit ? qsTr("正在编辑：%1 的副本 (%2×%3)").arg(control.editSourceSlot === 3 ? "B" : "A").arg(control.imageEdit.imageWidth).arg(control.imageEdit.imageHeight) : ""
+                            color: Theme.secondaryText
+                            font.pixelSize: Theme.fontCaption
+                            elide: Text.ElideRight
+                            width: Math.min(200, implicitWidth)
                         }
 
                         RowSeparator {
-                            visible: control.editModeActive
                             hairlineHeight: 20
                         }
 
@@ -2582,7 +4061,7 @@ Rectangle {
                             verticalAlignment: Text.AlignVCenter
                             text: control.imageEdit ? String(control.imageEdit.lastStatus || "") : ""
                             color: Theme.mutedText
-                            font.pixelSize: 11
+                            font.pixelSize: Theme.fontCaption
                             elide: Text.ElideRight
                             width: Math.min(240, implicitWidth)
                         }
@@ -2595,7 +4074,7 @@ Rectangle {
                         visible: control.hasPrimary && control.editModeActive
                         width: parent.width
                         height: editParamsRow.implicitHeight + 12
-                        radius: 6
+                        radius: Theme.radiusSubtle
                         color: Theme.canvas
                         border.width: 1
                         border.color: Theme.border
@@ -2606,7 +4085,10 @@ Rectangle {
                             spacing: Theme.spaceMain
                             visible: control.hasPrimary && control.editModeActive
                             // See the forceLayout note in Component.onCompleted above.
-                            onWidthChanged: forceLayout()
+                            onWidthChanged: {
+                                forceLayout();
+                                Qt.callLater(commandColumn.forceLayout);
+                            }
 
                             anchors {
                                 left: parent.left
@@ -2689,7 +4171,7 @@ Rectangle {
                                 verticalAlignment: Text.AlignVCenter
                                 text: control.editTool === "brush" ? qsTr("粗细 %1").arg(control.brushWidth) : qsTr("线宽 %1").arg(control.brushWidth)
                                 color: Theme.mutedText
-                                font.pixelSize: 11
+                                font.pixelSize: Theme.fontCaption
                             }
                             Slider {
                                 objectName: "imageEditBrushWidthSlider"
@@ -2709,7 +4191,7 @@ Rectangle {
                                 verticalAlignment: Text.AlignVCenter
                                 text: qsTr("透明 %1%").arg(Math.round(control.brushOpacity * 100))
                                 color: Theme.mutedText
-                                font.pixelSize: 11
+                                font.pixelSize: Theme.fontCaption
                             }
                             Slider {
                                 objectName: "imageEditBrushOpacitySlider"
@@ -2729,7 +4211,7 @@ Rectangle {
                                 verticalAlignment: Text.AlignVCenter
                                 text: qsTr("块大小 %1").arg(control.mosaicBlock)
                                 color: Theme.mutedText
-                                font.pixelSize: 11
+                                font.pixelSize: Theme.fontCaption
                             }
                             Slider {
                                 objectName: "imageEditMosaicBlockSlider"
@@ -2749,7 +4231,7 @@ Rectangle {
                                 verticalAlignment: Text.AlignVCenter
                                 text: qsTr("文字")
                                 color: Theme.mutedText
-                                font.pixelSize: 11
+                                font.pixelSize: Theme.fontCaption
                             }
                             TextField {
                                 objectName: "imageEditAnnotationTextField"
@@ -2768,7 +4250,7 @@ Rectangle {
                                 verticalAlignment: Text.AlignVCenter
                                 text: qsTr("字号 %1").arg(control.annotationTextSize)
                                 color: Theme.mutedText
-                                font.pixelSize: 11
+                                font.pixelSize: Theme.fontCaption
                             }
                             Slider {
                                 objectName: "imageEditAnnotationTextSizeSlider"
@@ -2788,7 +4270,7 @@ Rectangle {
                                 verticalAlignment: Text.AlignVCenter
                                 text: qsTr("在画面上拖拽框选裁剪区域；支持 8 锚点调整与移动；Enter 确认，Esc 取消")
                                 color: Theme.mutedText
-                                font.pixelSize: 11
+                                font.pixelSize: Theme.fontCaption
                             }
                             ReviewActionButton {
                                 objectName: "imageEditCancelCropButton"
@@ -2827,7 +4309,7 @@ Rectangle {
                                     return qsTr("在画面上拖拽框选要抠出的目标物体 (支持调整选区与锚点)");
                                 }
                                 color: (control.imageEdit && control.imageEdit.smartSegmentAvailable) ? Theme.mutedText : Theme.warning
-                                font.pixelSize: 11
+                                font.pixelSize: Theme.fontCaption
                             }
                             CheckBox {
                                 objectName: "imageEditSmartSelectTightCropCheck"
@@ -2908,7 +4390,7 @@ Rectangle {
                                 verticalAlignment: Text.AlignVCenter
                                 text: control.imageEdit ? qsTr("标注 %1 个").arg(control.imageEdit.annotationCount) : ""
                                 color: Theme.mutedText
-                                font.pixelSize: 11
+                                font.pixelSize: Theme.fontCaption
                             }
                         }
                     }
@@ -2959,10 +4441,19 @@ Rectangle {
             event.accepted = true;
         }
     }
-    // Manual in-place comparison: each press switches the displayed source.
+    // Manual in-place comparison: Space and T switch to (or flip) the single-source view
+    // from every pair mode, not only from the single-image A/B mode.
     Keys.onSpacePressed: event => {
-        if (control.hasPair && control.compareMode === 0 && !event.isAutoRepeat) {
+        if (control.hasPair && !control.editModeActive && !event.isAutoRepeat) {
             control.toggleSinglePairSource();
+            event.accepted = true;
+        }
+    }
+    Keys.onReleased: event => {
+        // Peek ends on the key release (and on every other exit path tracked by endPeek).
+        // autoRepeat releases (if a platform synthesizes them) must not end a still-held key.
+        if (event.key === Qt.Key_QuoteLeft && !event.isAutoRepeat) {
+            control.endPeek();
             event.accepted = true;
         }
     }
@@ -2977,9 +4468,25 @@ Rectangle {
                 folderPairSidebar.stepLast();
                 event.accepted = true;
             }
-        } else if (event.key === Qt.Key_T || event.key === Qt.Key_QuoteLeft) {
+        } else if ((event.modifiers === Qt.NoModifier || event.modifiers === Qt.KeypadModifier) && event.key === Qt.Key_T) {
+            // Plain T only: Ctrl+T / Alt+T keep their platform meanings and must never
+            // flip the pair. T stays the A/B in-place toggle synonym of Space.
             if (control.hasPair && !event.isAutoRepeat) {
                 control.toggleSinglePairSource();
+                event.accepted = true;
+            }
+        } else if (event.key === Qt.Key_QuoteLeft && !event.isAutoRepeat && control.peekModeAvailable && (event.modifiers === Qt.NoModifier || event.modifiers === Qt.KeypadModifier || event.modifiers === Qt.ShiftModifier)) {
+            // Backtick is hold-to-peek, no longer a toggle: plain ` shows A, Shift+`
+            // shows B while a difference or fade view is active; releasing restores the
+            // snapshot. Ctrl/Alt variants keep their platform meanings, and an autoRepeat
+            // press must never re-arm or overwrite the snapshot.
+            control.beginPeek(event.modifiers === Qt.ShiftModifier);
+            event.accepted = true;
+        } else if ((event.modifiers === Qt.NoModifier || event.modifiers === Qt.KeypadModifier) && event.key === Qt.Key_W) {
+            // E1: W toggles the wipe split axis, but only while a real wipe composite is on
+            // screen (compare mode 5) - the same condition the wipe overlay itself uses.
+            if (control.hasPair && control.compareMode === 5 && control.imageReview && !event.isAutoRepeat) {
+                control.imageReview.wipeOrientation = control.imageReview.wipeOrientation === 1 ? 0 : 1;
                 event.accepted = true;
             }
         } else if ((event.modifiers === Qt.NoModifier || event.modifiers === Qt.KeypadModifier) && event.key === Qt.Key_A) {
@@ -2990,6 +4497,17 @@ Rectangle {
         } else if ((event.modifiers === Qt.NoModifier || event.modifiers === Qt.KeypadModifier) && event.key === Qt.Key_O) {
             if (control.hasPrimary) {
                 control.toggleRgbOpaqueView();
+                event.accepted = true;
+            }
+        } else if ((event.modifiers === Qt.NoModifier || event.modifiers === Qt.KeypadModifier) && event.key === Qt.Key_P) {
+            if (control.hasPrimary && !event.isAutoRepeat) {
+                control.crosshairVerbose = !control.crosshairVerbose;
+                event.accepted = true;
+            }
+        } else if ((event.modifiers === Qt.NoModifier || event.modifiers === Qt.KeypadModifier) && event.key === Qt.Key_Z) {
+            // Same verb as a canvas double-click: flip fit-window and true 1:1 pixels.
+            if (control.hasPrimary && !event.isAutoRepeat) {
+                control.toggleTrueSize();
                 event.accepted = true;
             }
         } else if ((event.key === Qt.Key_Delete || event.key === Qt.Key_Backspace) && control.editModeActive && control.imageEdit && control.imageEdit.selectedAnnotation >= 0) {
@@ -3071,18 +4589,19 @@ Rectangle {
                     }
                 }
 
-                // Manual A/B comparison badge stays inside the image stage. A dark translucent
-                // plate plus an identity dot (A = accent blue, B = amber) states the active side
-                // the way the rest of the app does, instead of a saturated green/teal pill that
-                // competed with the imagery it sits on.
+                // Manual A/B comparison badge stays inside the image stage. It is a two-
+                // segment switch: the filled dot and the border name the side currently on
+                // screen (A = accent blue, B = amber), the other segment names where a click
+                // (or Space) would go, so a few blinks can never leave the user unsure of
+                // which side they are looking at.
                 Rectangle {
                     id: imageInPlaceBadge
                     objectName: "imageInPlaceBadge"
-                    visible: control.canSwitchSingleSource && control.compareMode === 0
+                    visible: control.canSwitchSingleSource && control.compareMode === 0 && !control.peekActive
                     z: 30
                     width: Math.min(stageContent.width - 28, inPlaceBadgeContent.implicitWidth + 20)
                     height: 28
-                    radius: 6
+                    radius: Theme.radiusSubtle
                     color: Theme.oscGlass
                     border.width: 1
                     border.color: control.singleViewShowSecondary ? Theme.sourceBBorder : Theme.sourceABorder
@@ -3092,52 +4611,165 @@ Rectangle {
                         margins: 14
                     }
 
+                    function selectSource(showSecondary) {
+                        if (!control.canSwitchSingleSource)
+                            return;
+                        if (showSecondary === control.singleViewShowSecondary)
+                            return;
+                        control.toggleSinglePairSource();
+                    }
+
                     Row {
                         id: inPlaceBadgeContent
+
+                        spacing: 8
+                        anchors.centerIn: parent
+
+                        // Segment A
+                        Item {
+                            objectName: "imageInPlaceCurrentSegment"
+                            // Explicit geometry: an Item's implicitWidth alone does not give
+                            // it a hit area, so the click target would collapse to nothing.
+                            width: inPlaceSegmentA.implicitWidth
+                            height: 18
+                            anchors.verticalCenter: parent.verticalCenter
+
+                            Row {
+                                id: inPlaceSegmentA
+                                spacing: Theme.spaceMicro
+
+                                Rectangle {
+                                    width: 7
+                                    height: 7
+                                    radius: Theme.radiusMicro
+                                    color: Theme.sourceA
+                                    opacity: control.singleViewShowSecondary ? 0.35 : 1
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+
+                                Text {
+                                    text: control.singleViewShowSecondary ? qsTr("A 原图") : qsTr("当前 A (原图)")
+                                    color: control.singleViewShowSecondary ? Theme.mutedText : Theme.primaryText
+                                    font.pixelSize: Theme.fontCaption
+                                    font.weight: control.singleViewShowSecondary ? Font.Normal : Font.DemiBold
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+                            }
+
+                            MouseArea {
+                                objectName: "imageInPlaceSelectA"
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: imageInPlaceBadge.selectSource(false)
+                            }
+                        }
+
+                        Rectangle {
+                            width: 1
+                            height: 14
+                            color: Theme.oscBorder
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        // Segment B
+                        Item {
+                            objectName: "imageInPlaceSwitchSegment"
+                            // Explicit geometry, as for segment A: the click target needs a
+                            // real size, and an implicitWidth alone does not give it one.
+                            width: inPlaceSegmentB.implicitWidth
+                            height: 18
+                            anchors.verticalCenter: parent.verticalCenter
+
+                            Row {
+                                id: inPlaceSegmentB
+                                spacing: Theme.spaceMicro
+
+                                Rectangle {
+                                    width: 7
+                                    height: 7
+                                    radius: Theme.radiusMicro
+                                    color: Theme.sourceB
+                                    opacity: control.singleViewShowSecondary ? 1 : 0.35
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+
+                                Text {
+                                    text: control.singleViewShowSecondary ? qsTr("当前 B (原图)") : qsTr("切至 B · 空格")
+                                    color: control.singleViewShowSecondary ? Theme.primaryText : Theme.mutedText
+                                    font.pixelSize: Theme.fontCaption
+                                    font.weight: control.singleViewShowSecondary ? Font.DemiBold : Font.Normal
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+                            }
+
+                            MouseArea {
+                                objectName: "imageInPlaceSelectB"
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: imageInPlaceBadge.selectSource(true)
+                            }
+                        }
+                    }
+                }
+
+                // Peek badge: while a difference/fade view is suppressed by a held backtick,
+                // this plate names which original is on screen and that releasing restores
+                // the previous view, in the same plate style as the A/B badge.
+                Rectangle {
+                    id: imagePeekBadge
+                    objectName: "imagePeekBadge"
+                    visible: control.peekActive
+                    z: 30
+                    width: Math.min(stageContent.width - 28, peekBadgeContent.implicitWidth + 20)
+                    height: 28
+                    radius: Theme.radiusSubtle
+                    color: Theme.oscGlass
+                    border.width: 1
+                    border.color: control.peekSource === 1 ? Theme.sourceBBorder : Theme.sourceABorder
+                    anchors {
+                        top: parent.top
+                        right: parent.right
+                        margins: 14
+                    }
+
+                    Row {
+                        id: peekBadgeContent
+
                         spacing: 7
                         anchors.centerIn: parent
 
                         Rectangle {
                             width: 7
                             height: 7
-                            radius: 3.5
-                            color: control.singleViewShowSecondary ? Theme.sourceB : Theme.sourceA
+                            radius: Theme.radiusMicro
+                            color: control.peekSource === 1 ? Theme.sourceB : Theme.sourceA
                             anchors.verticalCenter: parent.verticalCenter
                         }
 
                         Text {
-                            text: control.singleViewShowSecondary ? qsTr("当前 B") : qsTr("当前 A")
+                            text: qsTr("peek：%1 原图（松开 ` 恢复）").arg(control.peekSource === 1 ? "B" : "A")
                             color: Theme.primaryText
                             font.pixelSize: 12
                             font.weight: Font.DemiBold
                             anchors.verticalCenter: parent.verticalCenter
                         }
-
-                        Text {
-                            text: qsTr("点击画面或按空格切换")
-                            color: Theme.mutedText
-                            font.pixelSize: 11
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-                    }
-
-                    MouseArea {
-                        anchors.fill: parent
-                        onClicked: control.toggleSinglePairSource()
                     }
                 }
 
                 // Alpha & background observation HUD badge. Same plate as the A/B badge so the
-                // two never look like unrelated widgets; the dot carries the state colour and the
-                // text names the state in words.
+                // two never look like unrelated widgets; the dot carries the state colour and
+                // text names the state in words. The body click only cycles the background
+                // (checker → black → white → dark → checker); channel observations keep their
+                // own toolbar entries, and the separate × button restores the default
+                // observation (RGBA view on the neutral checkerboard) in one step.
                 Rectangle {
                     id: imageAlphaObservationBadge
                     objectName: "imageAlphaObservationBadge"
                     visible: control.hasPrimary && (control.viewMode !== 0 || control.backgroundMode !== 1)
                     z: 30
-                    width: Math.min(stageContent.width - (imageInPlaceBadge.visible ? imageInPlaceBadge.width + 52 : 28), alphaBadgeContent.implicitWidth + 20)
+                    width: Math.min(stageContent.width - (imageInPlaceBadge.visible ? imageInPlaceBadge.width + 52 : 28), alphaBadgeContent.implicitWidth + 44)
                     height: 28
-                    radius: 6
+                    radius: Theme.radiusSubtle
                     color: Theme.oscGlass
                     border.width: 1
                     // The dot carries the state; the plate matches the other stage badges.
@@ -3152,12 +4784,16 @@ Rectangle {
                     Row {
                         id: alphaBadgeContent
                         spacing: 7
-                        anchors.centerIn: parent
+                        anchors {
+                            left: parent.left
+                            leftMargin: 10
+                            verticalCenter: parent.verticalCenter
+                        }
 
                         Rectangle {
                             width: 7
                             height: 7
-                            radius: 3.5
+                            radius: Theme.radiusMicro
                             // All three view modes are observations, not alerts: information
                             // marks the two derived views and accent the plain one, so the
                             // warning yellow stays reserved for real warnings.
@@ -3187,29 +4823,69 @@ Rectangle {
                         }
 
                         Text {
-                            text: {
-                                if (control.viewMode === 1)
-                                    return qsTr("按 A 或点击还原 RGBA");
-                                if (control.viewMode === 2)
-                                    return qsTr("按 O 或点击还原 RGBA");
-                                return qsTr("点击还原棋盘格背景");
-                            }
+                            text: qsTr("点击换底色")
                             color: Theme.mutedText
-                            font.pixelSize: 11
+                            font.pixelSize: Theme.fontCaption
                             anchors.verticalCenter: parent.verticalCenter
                         }
                     }
 
-                    MouseArea {
-                        anchors.fill: parent
-                        onClicked: {
-                            if (control.viewMode !== 0) {
+                    // One-step restore of the default observation state.
+                    Rectangle {
+                        id: alphaObservationResetButton
+                        objectName: "imageAlphaObservationResetButton"
+                        width: 22
+                        height: 22
+                        radius: Theme.radiusMicro
+                        anchors {
+                            right: parent.right
+                            rightMargin: 4
+                            verticalCenter: parent.verticalCenter
+                        }
+                        color: alphaResetMouse.containsMouse ? Theme.fluentHover : "transparent"
+                        border.width: 1
+                        border.color: alphaResetMouse.containsMouse ? Theme.borderHover : Theme.controlBorder
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: "×"
+                            color: alphaResetMouse.containsMouse ? Theme.primaryText : Theme.mutedText
+                            font.pixelSize: 12
+                            font.weight: Font.DemiBold
+                        }
+
+                        MouseArea {
+                            id: alphaResetMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
                                 if (control.imageReview)
                                     control.imageReview.viewMode = 0;
-                            } else {
                                 control.backgroundMode = 1;
                             }
                         }
+
+                        HoverHandler {
+                            id: alphaResetHover
+                        }
+
+                        VcsToolTip {
+                            visible: alphaResetHover.hovered
+                            text: qsTr("还原默认观察（RGBA 视图 + 棋盘格底色）")
+                        }
+                    }
+
+                    MouseArea {
+                        // Body click cycles the background only, never the channel view.
+                        anchors {
+                            left: parent.left
+                            top: parent.top
+                            bottom: parent.bottom
+                            right: alphaObservationResetButton.left
+                        }
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: control.backgroundMode = (control.backgroundMode + 1) % 4
                     }
                 }
 
@@ -3265,7 +4941,10 @@ Rectangle {
                     slot: 4
                     visible: control.hasPair && control.imageReview && control.imageReview.hasDiffResult && (control.compareMode >= 2 && control.compareMode <= 4 || control.compareMode === 6)
                     anchors.fill: parent
-                    imageUrl: control.imageReview && control.imageReview.contentGeneration >= 0 ? control.imageReview.imageUrl(4) : ""
+                    // The diff image only exists while this viewport is visible; requesting
+                    // image://vcs-review/4 otherwise makes the provider fail (slot 4 has no
+                    // source image) and pollutes the hover chain with load errors.
+                    imageUrl: visible && control.imageReview && control.imageReview.contentGeneration >= 0 ? control.imageReview.imageUrl(4) : ""
                     label: {
                         if (!control.imageReview || !control.imageReview.hasDiffResult)
                             return "";
@@ -3374,6 +5053,13 @@ Rectangle {
                     readonly property real drawX: control.imageDrawEdge(width, drawWidth, control.imageReview ? control.imageReview.panX : 0.5)
                     readonly property real drawY: control.imageDrawEdge(height, drawHeight, control.imageReview ? control.imageReview.panY : 0.5)
                     readonly property real splitX: width * control.wipePosition
+                    // E1: wipe split axis. 0 = Vertical (left/right), 1 = Horizontal
+                    // (top/bottom). Owned by ImageReviewController like wipePosition; the
+                    // clip rect, identity plates, hover side selection and the handle all
+                    // read this same value.
+                    readonly property int wipeOrientation: control.imageReview ? control.imageReview.wipeOrientation : 0
+                    readonly property bool wipeHorizontal: wipeOrientation === 1
+                    readonly property real splitY: height * control.wipePosition
                     property bool marqueeActive: false
                     property point marqueeStart: Qt.point(0, 0)
                     property point marqueeCurrent: Qt.point(0, 0)
@@ -3399,12 +5085,18 @@ Rectangle {
                         smooth: control.zoom <= 2
                     }
 
+                    ImagePixelGrid {
+                        objectName: "imagePixelGrid-wipeA"
+                        imageItem: wipePrimaryImage
+                        viewportItem: wipeOverlay
+                    }
+
                     Item {
                         id: wipeClip
 
                         objectName: "wipeClip"
-                        width: Math.round(wipeOverlay.splitX)
-                        height: wipeOverlay.height
+                        width: wipeOverlay.wipeHorizontal ? wipeOverlay.width : Math.round(wipeOverlay.splitX)
+                        height: wipeOverlay.wipeHorizontal ? Math.round(wipeOverlay.splitY) : wipeOverlay.height
                         clip: true
 
                         Image {
@@ -3421,15 +5113,21 @@ Rectangle {
                             cache: false
                             smooth: control.zoom <= 2
                         }
+                        ImagePixelGrid {
+                            objectName: "imagePixelGrid-wipeB"
+                            imageItem: wipeSecondaryImage
+                            viewportItem: wipeClip
+                        }
                     }
 
-                    // T6: persistent A/B identity for the wipe halves. The left of the
-                    // split shows the secondary image and the right shows the primary, so
-                    // the labels name them in that order and can never be misread as
-                    // reversed while the split is dragged. Both ride on translucent plates
-                    // like the viewport labels, so they stay readable over bright imagery.
+                    // T6: persistent A/B identity for the wipe halves. The first side of the
+                    // split shows the secondary image and the other side shows the primary
+                    // (left/right in vertical, top/bottom in horizontal), so the labels name
+                    // them in that order and can never be misread as reversed while the
+                    // split is dragged. Both ride on translucent plates like the viewport
+                    // labels, so they stay readable over bright imagery.
                     Rectangle {
-                        visible: control.hasPair && control.hasSecondary && wipeOverlay.splitX > 44
+                        visible: control.hasPair && control.hasSecondary && (wipeOverlay.wipeHorizontal ? wipeOverlay.splitY > 44 : wipeOverlay.splitX > 44)
                         width: wipeIdentityLeft.width + 18
                         height: wipeIdentityLeft.implicitHeight + 12
                         radius: Theme.radiusSmall
@@ -3452,13 +5150,13 @@ Rectangle {
                             font.pixelSize: 12
                             font.weight: Font.DemiBold
                             elide: Text.ElideRight
-                            width: Math.max(0, wipeOverlay.splitX - 36)
+                            width: Math.max(0, (wipeOverlay.wipeHorizontal ? wipeOverlay.width : wipeOverlay.splitX) - 36)
                             anchors.centerIn: parent
                         }
                     }
 
                     Rectangle {
-                        visible: control.hasPair && (wipeOverlay.width - wipeOverlay.splitX) > 44
+                        visible: control.hasPair && (wipeOverlay.wipeHorizontal ? (wipeOverlay.height - wipeOverlay.splitY) > 44 : (wipeOverlay.width - wipeOverlay.splitX) > 44)
                         width: wipeIdentityRight.width + 18
                         height: wipeIdentityRight.implicitHeight + 12
                         radius: Theme.radiusSmall
@@ -3466,8 +5164,9 @@ Rectangle {
                         border.width: 1
                         border.color: Theme.stageLabelBorder
                         anchors {
-                            top: parent.top
-                            right: parent.right
+                            bottom: wipeOverlay.wipeHorizontal ? parent.bottom : undefined
+                            right: wipeOverlay.wipeHorizontal ? undefined : parent.right
+                            top: wipeOverlay.wipeHorizontal ? undefined : parent.top
                             margins: 10
                         }
 
@@ -3481,7 +5180,7 @@ Rectangle {
                             font.pixelSize: 12
                             font.weight: Font.DemiBold
                             elide: Text.ElideRight
-                            width: Math.max(0, wipeOverlay.width - wipeOverlay.splitX - 36)
+                            width: Math.max(0, (wipeOverlay.wipeHorizontal ? wipeOverlay.width : wipeOverlay.width - wipeOverlay.splitX) - 36)
                             anchors.centerIn: parent
                         }
                     }
@@ -3502,10 +5201,10 @@ Rectangle {
                                 control.imageReview.panBy(dx, dy);
                                 dragStart = Qt.point(mouse.x, mouse.y);
                             }
-                            const leftSide = mouse.x < wipeOverlay.splitX;
+                            const firstSide = wipeOverlay.wipeHorizontal ? mouse.y < wipeOverlay.splitY : mouse.x < wipeOverlay.splitX;
                             control.applyHover({
-                                "image": leftSide ? wipeSecondaryImage : wipePrimaryImage
-                            }, mouse.x, mouse.y, leftSide ? 3 : 2);
+                                "image": firstSide ? wipeSecondaryImage : wipePrimaryImage
+                            }, mouse.x, mouse.y, firstSide ? 3 : 2);
                         }
                         onExited: {
                             if (control.imageReview)
@@ -3536,7 +5235,7 @@ Rectangle {
                                     const m1 = control.mapToImage({
                                         "image": wipePrimaryImage
                                     }, right, bottom);
-                                    if (m0 && m1) {
+                                    if (m0 && m1 && !(m0.x >= wipePrimaryImage.sourceSize.width || m0.y >= wipePrimaryImage.sourceSize.height || m1.x <= 0 || m1.y <= 0)) {
                                         const sw = wipePrimaryImage.sourceSize.width;
                                         const sh = wipePrimaryImage.sourceSize.height;
                                         const normX0 = Math.max(0, Math.min(1, m0.x / sw));
@@ -3545,20 +5244,16 @@ Rectangle {
                                         const normY1 = Math.max(0, Math.min(1, m1.y / sh));
                                         if (control.imageReview)
                                             control.imageReview.zoomToRect(normX0, normY0, normX1, normY1);
+                                    } else {
+                                        control.showMarqueeNotice(qsTr("框选超出画面范围，未放大"));
                                     }
+                                } else if (Math.abs(right - left) >= 8 || Math.abs(bottom - top) >= 8) {
+                                    control.showMarqueeNotice(qsTr("框选区域太小（至少 8×8 像素），未放大"));
                                 }
                             }
                         }
                         onDoubleClicked: mouse => {
-                            if (control.trueSize) {
-                                control.trueSize = false;
-                                if (control.imageReview)
-                                    control.imageReview.resetView();
-                            } else {
-                                control.trueSize = true;
-                                if (control.imageReview)
-                                    control.imageReview.setZoom(1.0);
-                            }
+                            control.toggleTrueSize();
                         }
                         onWheel: wheel => {
                             if (!control.imageReview)
@@ -3578,8 +5273,17 @@ Rectangle {
 
                     WipeHandle {
                         surfaceItem: wipeOverlay
+                        orientation: wipeOverlay.wipeOrientation
                         position: control.wipePosition
                         onPositionRequested: position => control.imageReview.wipePosition = position
+                    }
+
+                    // Linked crosshair: the pointer's normalized coordinate over the shared
+                    // primary-geometry box drives the probe lines, so wipe mode keeps the
+                    // pixel-accurate coordinates of the other modes.
+                    OverlayCrosshair {
+                        imageItem: wipePrimaryImage
+                        key: "wipe"
                     }
                 }
 
@@ -3665,6 +5369,12 @@ Rectangle {
                         opacity: control.imageReview ? control.imageReview.fadePosition : 0
                     }
 
+                    ImagePixelGrid {
+                        objectName: "imagePixelGrid-fade"
+                        imageItem: fadePrimaryImage
+                        viewportItem: fadeOverlay
+                    }
+
                     // Identity for the blended pair: the fade chip reports the mix, this
                     // plate names what A and B actually are — same style as the viewport
                     // labels, and it never intercepts pan or marquee input.
@@ -3746,7 +5456,7 @@ Rectangle {
                                     const m1 = control.mapToImage({
                                         "image": fadePrimaryImage
                                     }, right, bottom);
-                                    if (m0 && m1) {
+                                    if (m0 && m1 && !(m0.x >= fadePrimaryImage.sourceSize.width || m0.y >= fadePrimaryImage.sourceSize.height || m1.x <= 0 || m1.y <= 0)) {
                                         const sw = fadePrimaryImage.sourceSize.width;
                                         const sh = fadePrimaryImage.sourceSize.height;
                                         const normX0 = Math.max(0, Math.min(1, m0.x / sw));
@@ -3755,20 +5465,16 @@ Rectangle {
                                         const normY1 = Math.max(0, Math.min(1, m1.y / sh));
                                         if (control.imageReview)
                                             control.imageReview.zoomToRect(normX0, normY0, normX1, normY1);
+                                    } else {
+                                        control.showMarqueeNotice(qsTr("框选超出画面范围，未放大"));
                                     }
+                                } else if (Math.abs(right - left) >= 8 || Math.abs(bottom - top) >= 8) {
+                                    control.showMarqueeNotice(qsTr("框选区域太小（至少 8×8 像素），未放大"));
                                 }
                             }
                         }
                         onDoubleClicked: mouse => {
-                            if (control.trueSize) {
-                                control.trueSize = false;
-                                if (control.imageReview)
-                                    control.imageReview.resetView();
-                            } else {
-                                control.trueSize = true;
-                                if (control.imageReview)
-                                    control.imageReview.setZoom(1.0);
-                            }
+                            control.toggleTrueSize();
                         }
                         onWheel: wheel => {
                             if (!control.imageReview)
@@ -3784,6 +5490,109 @@ Rectangle {
                             wheel.accepted = true;
                         }
                     }
+
+                    // Linked crosshair over the blend, driven by the same normalized
+                    // coordinate mapping as wipe (the hover samples the primary side).
+                    OverlayCrosshair {
+                        imageItem: fadePrimaryImage
+                        key: "fade"
+                    }
+                }
+
+                // View-command HUD, bottom-left of the canvas: the same glass chips as the
+                // video viewport's viewCommandRow, so zoom/base/reset live in one muscle
+                // memory across both workspaces. The marquee hint names the Shift gesture
+                // that the canvas already understands.
+                Row {
+                    id: imageViewCommandHud
+                    objectName: "imageViewCommandHud"
+                    visible: control.hasPrimary
+                    z: 30
+                    spacing: Theme.spaceMain
+                    anchors {
+                        left: parent.left
+                        leftMargin: 12
+                        bottom: parent.bottom
+                        bottomMargin: 12
+                    }
+
+                    HudCommandButton {
+                        objectName: "imageFitButton"
+                        checkable: true
+                        checked: !control.trueSize
+                        mirrorsState: true
+                        enabled: control.hasPrimary
+                        text: qsTr("适应窗口")
+                        helpText: qsTr("按窗口大小显示整张图片（快捷键 Z 在此与 100% 之间切换）。")
+                        onClicked: {
+                            control.trueSize = false;
+                            if (control.imageReview)
+                                control.imageReview.resetView();
+                        }
+                    }
+                    HudCommandButton {
+                        objectName: "imageTrueSizeButton"
+                        checkable: true
+                        checked: control.trueSize
+                        mirrorsState: true
+                        enabled: control.hasPrimary
+                        text: qsTr("100% (%1%)").arg(control.displayPercent)
+                        helpText: qsTr("1 个图像像素 = 1 个物理像素；括号内是当前实际显示比例。双击画面或按 Z 可切回适应窗口。")
+                        onClicked: {
+                            control.trueSize = true;
+                            if (control.imageReview)
+                                control.imageReview.setZoom(1.0);
+                        }
+                    }
+                    HudCommandButton {
+                        objectName: "imageResetViewButton"
+                        enabled: control.hasPrimary
+                        text: qsTr("重置")
+                        helpText: qsTr("回到适应窗口并居中（清除缩放与平移）。")
+                        onClicked: {
+                            control.trueSize = false;
+                            if (control.imageReview)
+                                control.imageReview.resetView();
+                        }
+                    }
+                    HudCommandButton {
+                        objectName: "imagePixelGridButton"
+                        text: control.pixelGridEnabled ? qsTr("网格 开") : qsTr("网格 关")
+                        helpText: qsTr("像素网格：仅在最近邻采样且实际放大达到 800% 时显示。")
+                        onClicked: control.pixelGridEnabled = !control.pixelGridEnabled
+                    }
+                    Rectangle {
+                        id: imageMarqueeHintChip
+                        objectName: "imageMarqueeHintChip"
+                        height: 24
+                        implicitWidth: marqueeHintText.implicitWidth + 16
+                        radius: Theme.radiusMicro
+                        color: Theme.oscGlass
+                        border.width: 1
+                        border.color: Theme.oscBorder
+
+                        Row {
+                            id: marqueeHintText
+                            spacing: Theme.spaceMicro
+                            anchors.centerIn: parent
+
+                            Text {
+                                text: qsTr("框选放大")
+                                color: Theme.mutedText
+                                font.pixelSize: Theme.fontCaption
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                        }
+
+                        HoverHandler {
+                            id: marqueeHintHover
+                        }
+
+                        VcsToolTip {
+                            visible: marqueeHintHover.hovered
+                            text: qsTr("按住 Shift 并在画面上拖动，框出要放大的区域（至少 8×8 像素）；在画面外松开会提示并取消。")
+                        }
+                    }
                 }
             }
         }
@@ -3791,7 +5600,9 @@ Rectangle {
 
     // Fade blend control floats over the viewport so it never occupies toolbar space;
     // 0 shows A, 1 shows B, and the readout names both sides so the direction cannot be
-    // misread while dragging (semantics unchanged from the previous inline slider).
+    // misread while dragging (semantics unchanged from the previous inline slider). The
+    // snap chips park the blend on the three review positions, and the wheel over the
+    // plate adjusts it in ±5% steps without hunting for the handle.
     Rectangle {
         id: fadeSliderOverlay
 
@@ -3809,11 +5620,109 @@ Rectangle {
         }
         z: 20
 
+        WheelHandler {
+            objectName: "imageFadeWheelHandler"
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+            onWheel: event => {
+                if (!control.imageReview)
+                    return;
+                const step = event.angleDelta.y / 120 * 0.05;
+                const next = Math.max(0, Math.min(1, Number(control.imageReview.fadePosition) + step));
+                control.imageReview.fadePosition = next;
+                event.accepted = true;
+            }
+        }
+
         Row {
             id: fadeRow
 
             spacing: 10
             anchors.centerIn: parent
+
+            Rectangle {
+                id: fadeSnap0
+                objectName: "imageFadeSnap0"
+                width: 36
+                height: Theme.hitAreaMinimum
+                radius: Theme.radiusMicro
+                color: fadeSnap0Mouse.pressed ? Theme.fluentPressed : (control.imageReview && control.imageReview.fadePosition <= 0.001 ? Theme.controlChecked : (fadeSnap0Mouse.containsMouse ? Theme.fluentHover : "transparent"))
+                border.width: 1
+                border.color: fadeSnap0Mouse.containsMouse ? Theme.borderHover : Theme.controlBorder
+
+                Text {
+                    anchors.centerIn: parent
+                    text: qsTr("全A")
+                    color: Theme.secondaryText
+                    font.pixelSize: Theme.fontCaption
+                }
+
+                MouseArea {
+                    id: fadeSnap0Mouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        if (control.imageReview)
+                            control.imageReview.fadePosition = 0;
+                    }
+                }
+            }
+            Rectangle {
+                id: fadeSnap50
+                objectName: "imageFadeSnap50"
+                width: 36
+                height: Theme.hitAreaMinimum
+                radius: Theme.radiusMicro
+                color: fadeSnap50Mouse.pressed ? Theme.fluentPressed : (control.imageReview && Math.abs(control.imageReview.fadePosition - 0.5) <= 0.001 ? Theme.controlChecked : (fadeSnap50Mouse.containsMouse ? Theme.fluentHover : "transparent"))
+                border.width: 1
+                border.color: fadeSnap50Mouse.containsMouse ? Theme.borderHover : Theme.controlBorder
+
+                Text {
+                    anchors.centerIn: parent
+                    text: "50%"
+                    color: Theme.secondaryText
+                    font.pixelSize: Theme.fontCaption
+                }
+
+                MouseArea {
+                    id: fadeSnap50Mouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        if (control.imageReview)
+                            control.imageReview.fadePosition = 0.5;
+                    }
+                }
+            }
+            Rectangle {
+                id: fadeSnap100
+                objectName: "imageFadeSnap100"
+                width: 36
+                height: Theme.hitAreaMinimum
+                radius: Theme.radiusMicro
+                color: fadeSnap100Mouse.pressed ? Theme.fluentPressed : (control.imageReview && control.imageReview.fadePosition >= 0.999 ? Theme.controlChecked : (fadeSnap100Mouse.containsMouse ? Theme.fluentHover : "transparent"))
+                border.width: 1
+                border.color: fadeSnap100Mouse.containsMouse ? Theme.borderHover : Theme.controlBorder
+
+                Text {
+                    anchors.centerIn: parent
+                    text: qsTr("全B")
+                    color: Theme.secondaryText
+                    font.pixelSize: Theme.fontCaption
+                }
+
+                MouseArea {
+                    id: fadeSnap100Mouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        if (control.imageReview)
+                            control.imageReview.fadePosition = 1;
+                    }
+                }
+            }
 
             Text {
                 // Fixed width: a readout that resizes with its own digits would make the whole
@@ -3875,7 +5784,12 @@ Rectangle {
         id: statusBar
 
         objectName: "imageStatusBar"
-        height: 34
+        // The bar grows with the readout it carries: a two-line probe block (or a pair
+        // readout that wrapped in a narrow window) needs its lines, and the alternative -
+        // squeezing the numbers into a shorter row - is exactly what this layout removed.
+        // Reserve a readout row before the first sample so hovering cannot resize the image
+        // underneath the pointer and change the coordinate it names.
+        height: statusHints.height + Math.max(Theme.hitAreaMinimum, statusDetails.implicitHeight) + Theme.spaceMain
         color: Theme.panel
         border.color: Theme.border
         anchors {
@@ -3891,76 +5805,498 @@ Rectangle {
             anchors {
                 left: parent.left
                 leftMargin: 14
-                right: statusHints.left
-                rightMargin: 12
-                verticalCenter: parent.verticalCenter
+                right: parent.right
+                rightMargin: 14
+                top: statusHints.bottom
+                topMargin: Theme.spaceMicro
             }
 
-            Text {
-                text: qsTr("缩放 %1%（%2）").arg(control.displayPercent).arg(control.displayPercentMode)
-                color: Theme.primaryText
-                font.pixelSize: 12
-                Layout.maximumWidth: implicitWidth
-            }
-            // T6: current folder-row context — which row is committed, whether one side
-            // is missing, and whether the pairing is ambiguous.
-            Text {
-                objectName: "imagePairContextLabel"
-                visible: Boolean(control.pairModel && control.pairModel.pairCount > 0 && control.pairModel.currentPair >= 0)
-                text: {
-                    if (!control.pairModel || control.pairModel.currentPair < 0)
-                        return "";
-                    const info = control.pairModel.pairUrlsAt(Number(control.pairModel.currentPair));
-                    if (!info || info.row === undefined)
-                        return "";
-                    const parts = [qsTr("第 %1/%2 行").arg(Number(info.row) + 1).arg(control.pairModel.pairCount)];
-                    if (!info.hasBoth)
-                        parts.push(info.hasLeft ? qsTr("仅 A 存在") : qsTr("仅 B 存在"));
-                    if (info.caseConflict)
-                        parts.push(qsTr("大小写冲突"));
-                    return parts.join(" · ");
-                }
-                color: Theme.mutedText
-                font.pixelSize: 12
-                elide: Text.ElideRight
-                Layout.maximumWidth: Math.min(implicitWidth, 160)
-            }
-            Text {
+            // Structured two-line probe readout. The old single sentence carried the
+            // coordinate, RGBA, the hex value, the alpha percentage, the observation label
+            // and the high-depth detail in one elided Text: at the 960 px floor the hex and
+            // the trailing detail were cut off and only a tooltip could show them. The
+            // fields are now separate fixed-width monospace Texts laid out as a Flow, so a
+            // narrow window wraps them onto further lines instead of hiding them, and a
+            // value 1 -> 255 or a coordinate gaining a digit reshapes nothing.
+            Item {
                 id: pixelReadout
                 objectName: "imagePixelReadout"
-                visible: Boolean((control.editModeActive && control.hoverPoint) || (control.cursorPixel && control.cursorPixel.valid))
-                text: {
-                    if (control.editModeActive)
-                        return control.hoverPoint ? qsTr("编辑副本 · 像素 (%1, %2)").arg(control.hoverPoint.imgX).arg(control.hoverPoint.imgY) : "";
-                    if (!control.cursorPixel || !control.cursorPixel.valid)
-                        return "";
-                    let t = "";
-                    if (control.imageReview && (control.imageReview.primaryDisplayConverted || control.imageReview.secondaryDisplayConverted))
-                        t = qsTr("像素 (%1, %2) [显示 RGBA8: R %3 G %4 B %5 A %6 %7 α %8%]").arg(control.cursorPixel.x).arg(control.cursorPixel.y).arg(control.cursorPixel.r).arg(control.cursorPixel.g).arg(control.cursorPixel.b).arg(control.cursorPixel.a).arg(control.cursorPixel.hex).arg(control.cursorPixel.alphaPercent);
-                    else
-                        t = qsTr("像素 (%1, %2)  R %3  G %4  B %5  A %6  %7  α %8%").arg(control.cursorPixel.x).arg(control.cursorPixel.y).arg(control.cursorPixel.r).arg(control.cursorPixel.g).arg(control.cursorPixel.b).arg(control.cursorPixel.a).arg(control.cursorPixel.hex).arg(control.cursorPixel.alphaPercent);
-                    if (control.cursorPixel.channelView === "alphaGray")
-                        t += " · " + qsTr("Alpha 灰度");
-                    else if (control.cursorPixel.channelView === "rgbOpaque")
-                        t += " · " + qsTr("RGB 忽略透明度");
+                // The single-side sentence (native-depth detail, edit-copy coordinates)
+                // yields the row while the pair columns are live: the same-coordinate
+                // A/B/Δ readout is the comparison's hard requirement, not a second copy
+                // of one side's values.
+                visible: control.readoutPairSample === null && Boolean((control.editModeActive && control.hoverPoint) || (control.statusPixel && control.statusPixel.valid))
+                // Bounded field: the block never pushes the zoom or folder context out of
+                // the bar, and the Flow inside wraps rather than clips when the window (or
+                // an open sidebar) leaves less room than the fields need.
+                Layout.fillWidth: true
+                Layout.minimumWidth: 240
+                implicitHeight: readoutFlow.height
+
+                readonly property bool showNativeDetail: !control.editModeActive && control.statusPixel && control.statusPixel.nativeBitDepth !== undefined && control.statusPixel.nativeBitDepth > 8
+
+                Flow {
+                    id: readoutFlow
+
+                    spacing: 6
+                    width: parent.width
+
+                    Text {
+                        objectName: "imagePixelReadoutCoordinate"
+                        text: {
+                            if (control.editModeActive)
+                                return control.hoverPoint ? qsTr("编辑副本 · 像素 (%1, %2)").arg(control.hoverPoint.imgX).arg(control.hoverPoint.imgY) : "";
+                            if (!control.statusPixel || !control.statusPixel.valid)
+                                return "";
+                            return qsTr("像素 (%1, %2)").arg(control.statusPixel.x).arg(control.statusPixel.y);
+                        }
+                        color: Theme.mutedText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                    }
+                    Text {
+                        objectName: "imagePixelReadoutHex"
+                        // Always #RRGGBBAA: the alpha byte is never dropped and the order is
+                        // never ARGB, so the value in the status bar is the value the copy
+                        // button puts on the clipboard.
+                        visible: !control.editModeActive && Boolean(control.statusPixel && control.statusPixel.valid)
+                        text: {
+                            if (!control.statusPixel || !control.statusPixel.valid)
+                                return "";
+                            const hex = control.imageReview && typeof control.imageReview.hexText === "function" ? control.imageReview.hexText(control.statusPixel.r, control.statusPixel.g, control.statusPixel.b, control.statusPixel.a) : String(control.statusPixel.hex || "");
+                            return hex;
+                        }
+                        color: Theme.primaryText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                        font.weight: Font.DemiBold
+                    }
+                    Text {
+                        visible: !control.editModeActive && Boolean(control.statusPixel && control.statusPixel.valid)
+                        text: !control.editModeActive && control.statusPixel && control.statusPixel.valid ? qsTr("α %1%").arg(control.statusPixel.alphaPercent) : ""
+                        color: Theme.mutedText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                    }
+                    Text {
+                        visible: !control.editModeActive && Boolean(control.statusPixel && control.statusPixel.valid)
+                        text: {
+                            if (!control.statusPixel || !control.statusPixel.valid)
+                                return "";
+                            if (control.statusPixel.channelView === "alphaGray")
+                                return qsTr("观察 · Alpha 灰度");
+                            if (control.statusPixel.channelView === "rgbOpaque")
+                                return qsTr("观察 · RGB 忽略透明度");
+                            if (control.imageReview && (control.imageReview.primaryDisplayConverted || control.imageReview.secondaryDisplayConverted))
+                                return qsTr("显示 RGBA8");
+                            return qsTr("原码值");
+                        }
+                        color: Theme.mutedText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                    }
+                    // A pixel the active alpha threshold hides keeps its original RGBA here
+                    // and says so: the filter changes the picture, never the reading.
+                    Text {
+                        objectName: "imagePixelReadoutAlphaHidden"
+                        visible: Boolean(control.statusPixel && control.statusPixel.valid && control.statusPixel.alphaHidden === true)
+                        text: qsTr("已被当前 Alpha 阈值隐藏")
+                        color: Theme.warningText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                    }
+                    Text {
+                        objectName: "imagePixelColR"
+                        visible: !control.editModeActive && Boolean(control.statusPixel && control.statusPixel.valid)
+                        width: control.channelColumnWidth
+                        horizontalAlignment: Text.AlignRight
+                        text: control.statusPixel && control.statusPixel.valid ? "R " + control.fmtChannel(control.statusPixel.r) : ""
+                        color: Theme.primaryText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                    }
+                    Text {
+                        objectName: "imagePixelColG"
+                        visible: !control.editModeActive && Boolean(control.statusPixel && control.statusPixel.valid)
+                        width: control.channelColumnWidth
+                        horizontalAlignment: Text.AlignRight
+                        text: control.statusPixel && control.statusPixel.valid ? "G " + control.fmtChannel(control.statusPixel.g) : ""
+                        color: Theme.primaryText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                    }
+                    Text {
+                        objectName: "imagePixelColB"
+                        visible: !control.editModeActive && Boolean(control.statusPixel && control.statusPixel.valid)
+                        width: control.channelColumnWidth
+                        horizontalAlignment: Text.AlignRight
+                        text: control.statusPixel && control.statusPixel.valid ? "B " + control.fmtChannel(control.statusPixel.b) : ""
+                        color: Theme.primaryText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                    }
+                    Text {
+                        objectName: "imagePixelColA"
+                        visible: !control.editModeActive && Boolean(control.statusPixel && control.statusPixel.valid)
+                        width: control.channelColumnWidth
+                        horizontalAlignment: Text.AlignRight
+                        text: control.statusPixel && control.statusPixel.valid ? "A " + control.fmtChannel(control.statusPixel.a) : ""
+                        color: Theme.primaryText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                    }
                     // I-02: a >8-bit source also reports its original-depth code values so the
                     // readout never implies the 8-bit display numbers are the file's codes.
-                    if (control.cursorPixel.nativeBitDepth !== undefined && control.cursorPixel.nativeBitDepth > 8)
-                        t += " · " + qsTr("源 %1-bit → 转换后 16-bit：A %2（%3%） R %4 G %5 B %6").arg(control.cursorPixel.nativeBitDepth).arg(control.cursorPixel.a16).arg((Number(control.cursorPixel.a16) / 65535 * 100).toFixed(4)).arg(control.cursorPixel.r16).arg(control.cursorPixel.g16).arg(control.cursorPixel.b16);
-                    return t;
+                    // The numbers follow the same integer/float switch and stay labelled as
+                    // converted values, never as raw file planes.
+                    Text {
+                        objectName: "imagePixelReadoutNative"
+                        visible: pixelReadout.showNativeDetail
+                        text: {
+                            const sample = control.statusPixel;
+                            if (!pixelReadout.showNativeDetail || !sample)
+                                return "";
+                            // Capture the format dependency outside the invokable calls.
+                            const fullScale = control.numericFloat ? 65535 : 1;
+                            if (control.imageReview && typeof control.imageReview.channelText16 === "function") {
+                                return qsTr("源 %1-bit → 转换后 16-bit：A %2（%3%） R %4 G %5 B %6").arg(sample.nativeBitDepth).arg(control.imageReview.channelText16(sample.a16)).arg((Number(sample.a16) / 65535 * 100).toFixed(4)).arg(control.imageReview.channelText16(sample.r16)).arg(control.imageReview.channelText16(sample.g16)).arg(control.imageReview.channelText16(sample.b16));
+                            }
+                            return qsTr("源 %1-bit → 转换后 16-bit：A %2（%3%） R %4 G %5 B %6").arg(sample.nativeBitDepth).arg(sample.a16 / fullScale).arg((Number(sample.a16) / 65535 * 100).toFixed(4)).arg(sample.r16 / fullScale).arg(sample.g16 / fullScale).arg(sample.b16 / fullScale);
+                        }
+                        color: Theme.mutedText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                    }
                 }
-                color: Theme.primaryText
-                font.pixelSize: 12
-                font.family: "Consolas"
-                elide: Text.ElideRight
-                Layout.fillWidth: true
-                Layout.minimumWidth: 0
+
                 HoverHandler {
                     id: pixelReadoutHover
                 }
-                ToolTip.visible: pixelReadoutHover.hovered && pixelReadout.truncated
-                ToolTip.text: text
+
+                VcsToolTip {
+                    visible: pixelReadoutHover.hovered && control.readoutPairSample === null && Boolean(control.statusPixel && control.statusPixel.valid)
+                    // pixelReadoutSentence is declared on the enclosing statusDetails
+                    // RowLayout, not on `control` and not on the readout Item itself: a wrong
+                    // scope here silently kills the whole tooltip with a TypeError.
+                    text: statusDetails.pixelReadoutSentence()
+                }
             }
+
+            // The plain one-line sentence, kept as the tooltip and as the single source of
+            // truth for the numbers a test can read back.
+            function pixelReadoutSentence() {
+                if (control.editModeActive)
+                    return control.hoverPoint ? qsTr("编辑副本 · 像素 (%1, %2)").arg(control.hoverPoint.imgX).arg(control.hoverPoint.imgY) : "";
+                const sample = control.statusPixel;
+                if (!sample || !sample.valid)
+                    return "";
+                const converted = Boolean(control.imageReview && (control.imageReview.primaryDisplayConverted || control.imageReview.secondaryDisplayConverted));
+                let text = converted ? qsTr("像素 (%1, %2) [显示 RGBA8: R %3 G %4 B %5 A %6 %7 α %8%]").arg(sample.x).arg(sample.y).arg(control.fmtChannel(sample.r)).arg(control.fmtChannel(sample.g)).arg(control.fmtChannel(sample.b)).arg(control.fmtChannel(sample.a)).arg(control.imageReview && typeof control.imageReview.hexText === "function" ? control.imageReview.hexText(sample.r, sample.g, sample.b, sample.a) : String(sample.hex || "")).arg(sample.alphaPercent) : qsTr("像素 (%1, %2)  R %3  G %4  B %5  A %6  %7  α %8%").arg(sample.x).arg(sample.y).arg(control.fmtChannel(sample.r)).arg(control.fmtChannel(sample.g)).arg(control.fmtChannel(sample.b)).arg(control.fmtChannel(sample.a)).arg(control.imageReview && typeof control.imageReview.hexText === "function" ? control.imageReview.hexText(sample.r, sample.g, sample.b, sample.a) : String(sample.hex || "")).arg(sample.alphaPercent);
+                if (sample.channelView === "alphaGray")
+                    text += " · " + qsTr("Alpha 灰度");
+                else if (sample.channelView === "rgbOpaque")
+                    text += " · " + qsTr("RGB 忽略透明度");
+                if (sample.alphaHidden === true)
+                    text += " · " + qsTr("已被当前 Alpha 阈值隐藏");
+                if (sample.nativeBitDepth !== undefined && sample.nativeBitDepth > 8)
+                    text += " · " + qsTr("源 %1-bit → 转换后 16-bit：A %2（%3%） R %4 G %5 B %6").arg(sample.nativeBitDepth).arg(sample.a16).arg((Number(sample.a16) / 65535 * 100).toFixed(4)).arg(sample.r16).arg(sample.g16).arg(sample.b16);
+                return text;
+            }
+
+            // Same-coordinate pair readout as real fixed-width columns: every channel is one
+            // right-aligned fixed-width monospace Text, so a value 1→255 or a coordinate
+            // gaining a digit reshapes nothing — each column keeps its start, and the A/B/Δ
+            // triple stays readable down to the 960px floor. The columns live in a Flow, so
+            // a narrow window (or an open sidebar) wraps the A, B and Δ groups onto further
+            // lines instead of truncating the coordinates or the hex values. Delta columns
+            // carry the beyond-threshold warning colour at the column level (no rich text,
+            // no collapsed spaces, no elide on the numbers themselves).
+            Item {
+                id: pairPixelReadout
+                objectName: "imagePairPixelReadout"
+                visible: control.readoutPairSample !== null
+                Layout.fillWidth: true
+                Layout.minimumWidth: 240
+                implicitHeight: pairReadoutFlow.height
+
+                readonly property var sample: control.readoutPairSample
+                readonly property bool aOk: Boolean(sample && sample.a && sample.a.valid)
+                readonly property var b: sample ? sample.b : null
+                readonly property bool bOk: Boolean(b && b.valid)
+                readonly property bool bNamed: Boolean(b && b.unaligned)
+                // Channel deltas for the four Δ columns, null-guarded so the colour and text
+                // bindings stay valid in every state.
+                readonly property int dR: aOk && bOk ? Number(b.r) - Number(sample.a.r) : 0
+                readonly property int dG: aOk && bOk ? Number(b.g) - Number(sample.a.g) : 0
+                readonly property int dB: aOk && bOk ? Number(b.b) - Number(sample.a.b) : 0
+                readonly property int dA: aOk && bOk ? Number(b.a) - Number(sample.a.a) : 0
+                readonly property bool deltaReady: aOk && bOk
+                // dR/dG/dB/dA above stay in raw 8-bit steps in either display format.
+                readonly property real deltaWarnStep: control.pairDeltaWarnThreshold
+
+                function deltaExceeds(value) {
+                    return Math.abs(Number(value)) > pairPixelReadout.deltaWarnStep + 1e-9;
+                }
+
+                // #RRGGBBAA for one side, or "" when the side has no valid sample. The same
+                // helper the copy button uses, so the bar and the clipboard cannot differ.
+                function sideHex(sample) {
+                    if (!sample || sample.valid !== true)
+                        return "";
+                    if (control.imageReview && typeof control.imageReview.hexText === "function")
+                        return String(control.imageReview.hexText(sample.r, sample.g, sample.b, sample.a));
+                    return "";
+                }
+
+                Flow {
+                    id: pairReadoutFlow
+
+                    spacing: 4
+                    width: parent.width
+
+                    Text {
+                        objectName: "imagePairCoordA"
+                        visible: pairPixelReadout.aOk
+                        width: 112
+                        height: 20
+                        verticalAlignment: Text.AlignVCenter
+                        text: pairPixelReadout.aOk ? "A (" + pairPixelReadout.sample.a.x + ", " + pairPixelReadout.sample.a.y + ")" : ""
+                        color: Theme.mutedText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                    }
+                    Text {
+                        objectName: "imagePairHexA"
+                        visible: pairPixelReadout.aOk
+                        width: 78
+                        height: 20
+                        verticalAlignment: Text.AlignVCenter
+                        // `visible` only hides the item; the binding still evaluates. Without
+                        // the guard a window that never had a pair (or one whose pair was just
+                        // closed) dereferences a null `sample` on every re-evaluation.
+                        text: pairPixelReadout.aOk ? pairPixelReadout.sideHex(pairPixelReadout.sample.a) : ""
+                        color: Theme.primaryText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                    }
+                    Text {
+                        objectName: "imagePairColAR"
+                        visible: pairPixelReadout.aOk
+                        width: control.channelColumnWidth
+                        height: 20
+                        horizontalAlignment: Text.AlignRight
+                        verticalAlignment: Text.AlignVCenter
+                        text: pairPixelReadout.aOk ? control.fmtChannel(pairPixelReadout.sample.a.r) : ""
+                        color: Theme.primaryText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                    }
+                    Text {
+                        objectName: "imagePairColAG"
+                        visible: pairPixelReadout.aOk
+                        width: control.channelColumnWidth
+                        height: 20
+                        horizontalAlignment: Text.AlignRight
+                        verticalAlignment: Text.AlignVCenter
+                        text: pairPixelReadout.aOk ? control.fmtChannel(pairPixelReadout.sample.a.g) : ""
+                        color: Theme.primaryText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                    }
+                    Text {
+                        objectName: "imagePairColAB"
+                        visible: pairPixelReadout.aOk
+                        width: control.channelColumnWidth
+                        height: 20
+                        horizontalAlignment: Text.AlignRight
+                        verticalAlignment: Text.AlignVCenter
+                        text: pairPixelReadout.aOk ? control.fmtChannel(pairPixelReadout.sample.a.b) : ""
+                        color: Theme.primaryText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                    }
+                    Text {
+                        objectName: "imagePairColAAlpha"
+                        visible: pairPixelReadout.aOk
+                        width: control.channelColumnWidth
+                        height: 20
+                        horizontalAlignment: Text.AlignRight
+                        verticalAlignment: Text.AlignVCenter
+                        text: pairPixelReadout.aOk ? control.fmtChannel(pairPixelReadout.sample.a.a) : ""
+                        color: Theme.primaryText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                    }
+                    Text {
+                        visible: !pairPixelReadout.aOk
+                        width: 224
+                        height: 20
+                        verticalAlignment: Text.AlignVCenter
+                        text: qsTr("A: 无有效值")
+                        color: Theme.mutedText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                        elide: Text.ElideRight
+                    }
+
+                    Text {
+                        objectName: "imagePairCoordB"
+                        visible: pairPixelReadout.bOk
+                        width: 112
+                        height: 20
+                        verticalAlignment: Text.AlignVCenter
+                        text: pairPixelReadout.bOk ? "B (" + pairPixelReadout.b.x + ", " + pairPixelReadout.b.y + ")" : ""
+                        color: Theme.mutedText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                    }
+                    Text {
+                        objectName: "imagePairHexB"
+                        visible: pairPixelReadout.bOk
+                        width: 78
+                        height: 20
+                        verticalAlignment: Text.AlignVCenter
+                        text: pairPixelReadout.sideHex(pairPixelReadout.b)
+                        color: Theme.primaryText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                    }
+                    Text {
+                        objectName: "imagePairColBR"
+                        visible: pairPixelReadout.bOk
+                        width: control.channelColumnWidth
+                        height: 20
+                        horizontalAlignment: Text.AlignRight
+                        verticalAlignment: Text.AlignVCenter
+                        text: pairPixelReadout.bOk ? control.fmtChannel(pairPixelReadout.b.r) : ""
+                        color: Theme.primaryText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                    }
+                    Text {
+                        objectName: "imagePairColBG"
+                        visible: pairPixelReadout.bOk
+                        width: control.channelColumnWidth
+                        height: 20
+                        horizontalAlignment: Text.AlignRight
+                        verticalAlignment: Text.AlignVCenter
+                        text: pairPixelReadout.bOk ? control.fmtChannel(pairPixelReadout.b.g) : ""
+                        color: Theme.primaryText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                    }
+                    Text {
+                        objectName: "imagePairColBB"
+                        visible: pairPixelReadout.bOk
+                        width: control.channelColumnWidth
+                        height: 20
+                        horizontalAlignment: Text.AlignRight
+                        verticalAlignment: Text.AlignVCenter
+                        text: pairPixelReadout.bOk ? control.fmtChannel(pairPixelReadout.b.b) : ""
+                        color: Theme.primaryText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                    }
+                    Text {
+                        objectName: "imagePairColBAlpha"
+                        visible: pairPixelReadout.bOk
+                        width: control.channelColumnWidth
+                        height: 20
+                        horizontalAlignment: Text.AlignRight
+                        verticalAlignment: Text.AlignVCenter
+                        text: pairPixelReadout.bOk ? control.fmtChannel(pairPixelReadout.b.a) : ""
+                        color: Theme.primaryText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                    }
+                    Text {
+                        visible: !pairPixelReadout.bOk
+                        width: 224
+                        height: 20
+                        verticalAlignment: Text.AlignVCenter
+                        text: pairPixelReadout.bNamed ? qsTr("B: 未对齐无有效值") : qsTr("B: 无有效值")
+                        color: Theme.mutedText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                        elide: Text.ElideRight
+                    }
+
+                    Text {
+                        objectName: "imagePairDeltaLabel"
+                        visible: pairPixelReadout.deltaReady
+                        width: 56
+                        height: 20
+                        horizontalAlignment: Text.AlignRight
+                        verticalAlignment: Text.AlignVCenter
+                        text: "Δ(B−A)"
+                        color: Theme.mutedText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                    }
+                    Text {
+                        objectName: "imagePairColDeltaR"
+                        visible: pairPixelReadout.deltaReady
+                        width: control.deltaColumnWidth
+                        height: 20
+                        horizontalAlignment: Text.AlignRight
+                        verticalAlignment: Text.AlignVCenter
+                        text: pairPixelReadout.deltaReady ? control.fmtSigned(pairPixelReadout.sample.a.r, pairPixelReadout.b.r) : ""
+                        color: pairPixelReadout.deltaReady && pairPixelReadout.deltaExceeds(pairPixelReadout.dR) ? Theme.warningText : Theme.primaryText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                        font.weight: Font.DemiBold
+                    }
+                    Text {
+                        objectName: "imagePairColDeltaG"
+                        visible: pairPixelReadout.deltaReady
+                        width: control.deltaColumnWidth
+                        height: 20
+                        horizontalAlignment: Text.AlignRight
+                        verticalAlignment: Text.AlignVCenter
+                        text: pairPixelReadout.deltaReady ? control.fmtSigned(pairPixelReadout.sample.a.g, pairPixelReadout.b.g) : ""
+                        color: pairPixelReadout.deltaReady && pairPixelReadout.deltaExceeds(pairPixelReadout.dG) ? Theme.warningText : Theme.primaryText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                        font.weight: Font.DemiBold
+                    }
+                    Text {
+                        objectName: "imagePairColDeltaB"
+                        visible: pairPixelReadout.deltaReady
+                        width: control.deltaColumnWidth
+                        height: 20
+                        horizontalAlignment: Text.AlignRight
+                        verticalAlignment: Text.AlignVCenter
+                        text: pairPixelReadout.deltaReady ? control.fmtSigned(pairPixelReadout.sample.a.b, pairPixelReadout.b.b) : ""
+                        color: pairPixelReadout.deltaReady && pairPixelReadout.deltaExceeds(pairPixelReadout.dB) ? Theme.warningText : Theme.primaryText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                        font.weight: Font.DemiBold
+                    }
+                    Text {
+                        objectName: "imagePairColDeltaAlpha"
+                        visible: pairPixelReadout.deltaReady
+                        width: control.deltaColumnWidth
+                        height: 20
+                        horizontalAlignment: Text.AlignRight
+                        verticalAlignment: Text.AlignVCenter
+                        text: pairPixelReadout.deltaReady ? control.fmtSigned(pairPixelReadout.sample.a.a, pairPixelReadout.b.a) : ""
+                        color: pairPixelReadout.deltaReady && pairPixelReadout.deltaExceeds(pairPixelReadout.dA) ? Theme.warningText : Theme.primaryText
+                        font.pixelSize: 12
+                        font.family: Theme.fontFamilyMono
+                        font.weight: Font.DemiBold
+                    }
+                }
+
+                HoverHandler {
+                    id: pairReadoutHover
+                }
+
+                VcsToolTip {
+                    visible: pairReadoutHover.hovered
+                    text: control.pairReadoutText()
+                }
+            }
+
             Text {
                 visible: control.errorText.length > 0
                 text: control.errorText
@@ -3972,16 +6308,157 @@ Rectangle {
             }
         }
 
-        Row {
+        Flow {
             id: statusHints
             objectName: "imageStatusHints"
+            onWidthChanged: forceLayout()
             anchors {
+                left: parent.left
+                leftMargin: 14
                 right: parent.right
                 rightMargin: 14
-                verticalCenter: parent.verticalCenter
+                top: parent.top
+                topMargin: Theme.spaceMicro
             }
             spacing: 12
 
+            Text {
+                text: qsTr("缩放 %1%（%2）").arg(control.displayPercent).arg(control.displayPercentMode)
+                color: Theme.primaryText
+                font.pixelSize: 12
+                height: Theme.hitAreaMinimum
+                verticalAlignment: Text.AlignVCenter
+            }
+            // T6: current folder-row context — which row is committed, whether one side
+            // is missing, and whether the pairing is ambiguous.
+            Text {
+                objectName: "imagePairContextLabel"
+                height: Theme.hitAreaMinimum
+                verticalAlignment: Text.AlignVCenter
+                visible: Boolean(control.pairModel && control.pairModel.pairCount > 0 && control.pairModel.currentPair >= 0)
+                text: {
+                    const model = control.pairModel;
+                    if (!model || model.pairCount <= 0)
+                        return "";
+                    // Number(undefined) is NaN, and NaN fails every comparison, so a
+                    // model without a current pair must be rejected with !(row >= 0)
+                    // instead of a bare `< 0` guard before touching row helpers.
+                    const row = Number(model.currentPair);
+                    if (!(row >= 0) || typeof model.pairUrlsAt !== "function")
+                        return "";
+                    const info = model.pairUrlsAt(row);
+                    if (!info || info.row === undefined)
+                        return "";
+                    const parts = [qsTr("第 %1/%2 行").arg(Number(info.row) + 1).arg(model.pairCount)];
+                    if (!info.hasBoth)
+                        parts.push(info.hasLeft ? qsTr("仅 A 存在") : qsTr("仅 B 存在"));
+                    if (info.caseConflict)
+                        parts.push(qsTr("大小写冲突"));
+                    return parts.join(" · ");
+                }
+                color: Theme.mutedText
+                font.pixelSize: 12
+                elide: Text.ElideRight
+            }
+            // ---- Numeric format -------------------------------------------------------------
+            // One compact selector for the whole readout family. Integer code values or
+            // normalized float; Hex stays hexadecimal either way. It only changes what is
+            // printed and copied, never the image, a sampling value, the difference field
+            // or a statistic.
+            ImageCommandButton {
+                objectName: "imageNumericFormatButton"
+                implicitHeight: Theme.hitAreaMinimum
+                leftPadding: 8
+                rightPadding: 8
+                text: control.numericFloat ? qsTr("数值：归一化浮点 ▾") : qsTr("数值：整数码值 ▾")
+                enabled: control.hasPrimary
+                helpText: qsTr("整数码值：缓冲区实际码值（8-bit 0–255）。\n归一化浮点：channel/255；转换后 16-bit 为 channel16/65535，并另行标注。\n不表示线性光、HDR 或色彩管理后的值；Hex 始终是十六进制。")
+                onClicked: numericFormatMenu.open()
+
+                VcsMenu {
+                    id: numericFormatMenu
+
+                    menuWidth: 260
+
+                    VcsRadioMenuItem {
+                        objectName: "imageNumericFormatInteger"
+                        text: qsTr("整数码值")
+                        checked: !control.numericFloat
+                        onTriggered: control.setNumericFormat(0)
+                    }
+                    VcsRadioMenuItem {
+                        objectName: "imageNumericFormatFloat"
+                        text: qsTr("归一化浮点")
+                        checked: control.numericFloat
+                        onTriggered: control.setNumericFormat(1)
+                    }
+                }
+            }
+
+            // ---- Probe colour copy -----------------------------------------------------------
+            // The button copies the frozen sample, so the pointer may leave the pixel long
+            // before the click. Its menu names the material, the coordinate and the value,
+            // and offers RGB / RGBA / Hex instead of three permanent buttons.
+            ImageCommandButton {
+                objectName: "imageCopyColorButton"
+                implicitHeight: Theme.hitAreaMinimum
+                leftPadding: 8
+                rightPadding: 8
+                text: qsTr("复制颜色 ▾")
+                enabled: control.probeSampleReady
+                helpText: control.probeSampleLabel + "\n" + qsTr("复制的是该样本的原始解码像素，不是按钮下的屏幕颜色。\n源被关闭、替换或图像代次改变后样本失效。")
+                onClicked: probeCopyMenu.open()
+
+                VcsMenu {
+                    id: probeCopyMenu
+
+                    menuWidth: 300
+
+                    VcsMenuItem {
+                        objectName: "imageCopyColorSample"
+                        enabled: false
+                        text: control.probeSampleLabel
+                        contentItem: Text {
+                            text: control.probeSampleLabel
+                            wrapMode: Text.Wrap
+                            color: Theme.mutedText
+                            font.pixelSize: Theme.fontSecondary
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+                    VcsMenuSeparator {}
+                    VcsMenuItem {
+                        objectName: "imageCopyRgbAction"
+                        text: control.numericFloat ? qsTr("复制 RGB（归一化浮点）") : qsTr("复制 RGB")
+                        enabled: control.probeSampleReady
+                        onTriggered: control.copyProbeColor(0)
+                    }
+                    VcsMenuItem {
+                        objectName: "imageCopyRgbaAction"
+                        text: control.numericFloat ? qsTr("复制 RGBA（归一化浮点）") : qsTr("复制 RGBA（Alpha 0–255）")
+                        enabled: control.probeSampleReady
+                        onTriggered: control.copyProbeColor(1)
+                    }
+                    VcsMenuItem {
+                        objectName: "imageCopyHexAction"
+                        text: qsTr("复制 Hex（#RRGGBBAA）")
+                        enabled: control.probeSampleReady
+                        onTriggered: control.copyProbeColor(2)
+                    }
+                }
+            }
+
+            Text {
+                objectName: "imageMarqueeNotice"
+                visible: control.marqueeNoticeText.length > 0
+                text: control.marqueeNoticeText
+                color: Theme.secondaryText
+                font.pixelSize: 12
+                elide: Text.ElideRight
+                width: Math.min(implicitWidth, 230)
+                height: Theme.hitAreaMinimum
+                verticalAlignment: Text.AlignVCenter
+            }
             StatusBadge {
                 id: displayConversionBadge
                 objectName: "displayConversionBadge"
@@ -4029,6 +6506,27 @@ Rectangle {
                 }
             }
 
+            // Alpha threshold observation filter state. It says what the filter is doing
+            // *right now*, including the two states a user must not have to guess: the
+            // threshold at which nothing passes, and the modes where the filter is not
+            // applied at all.
+            StatusBadge {
+                id: alphaFilterBadge
+                objectName: "imageAlphaFilterBadge"
+                visible: control.alphaFilterBadgeText.length > 0
+                text: control.alphaFilterBadgeText
+                dotColor: Theme.information
+
+                HoverHandler {
+                    id: alphaFilterBadgeHover
+                }
+
+                VcsToolTip {
+                    visible: alphaFilterBadgeHover.hovered
+                    text: qsTr("仅显示 A > T（严格大于；A=25、T=25 隐藏，A=26 显示）。\n这是观察滤镜：不修改素材、编辑副本、原始读数、差异或统计。\n无 Alpha 的素材按完全不透明处理；高位深 Alpha 不降到 8-bit 再比较。\n当前仅在 RGB 忽略透明度观察（单图／并排／Wipe）生效。")
+                }
+            }
+
             StatusBadge {
                 visible: Boolean(control.imageReview && control.hasPrimary && (control.imageReview.primaryHasAlpha || control.imageReview.secondaryHasAlpha))
                 text: qsTr("直通（未预乘）")
@@ -4040,13 +6538,56 @@ Rectangle {
                 visible: statusBar.width >= 1120
                 text: qsTr("滚轮缩放 · 拖动平移 · Shift+拖动框选放大")
                 color: Theme.mutedText
-                font.pixelSize: 11
+                font.pixelSize: Theme.fontCaption
             }
+        }
+    }
+
+    // Marquee notices are transient: a couple of seconds on the status bar, then the text
+    // leaves the row again so the readouts keep their space.
+    Timer {
+        id: marqueeNoticeTimer
+
+        interval: 2600
+        repeat: false
+        onTriggered: control.marqueeNoticeText = ""
+    }
+
+    // Bounded commit of the alpha-threshold slider: one threshold change per quiet
+    // interval, plus one immediate commit when the drag ends. Rebuilding a derived channel
+    // view is a full-image pass over the decoded buffer, so an unbounded per-pixel commit
+    // would stall the GUI on a large source; this keeps the number of rebuilds bounded by
+    // the drag duration, not by the slider's travel.
+    Timer {
+        id: alphaThresholdCommit
+
+        interval: 120
+        repeat: false
+        property int pendingValue: 0
+        onTriggered: control.setAlphaThreshold(pendingValue)
+    }
+
+    // Window deactivation (alt-tab, another window on top) must end a held peek the same
+    // way a key release does: the user cannot keep holding a key that now belongs to
+    // another window. The attached lookup must go through control: a Connections object
+    // is not an Item, so a bare `Window.window` inside the handler cannot resolve and
+    // the whole handler would error out instead of ending the peek.
+    Connections {
+        target: control.Window.window
+
+        function onActiveChanged() {
+            const window = control.Window.window;
+            if (window && !window.active)
+                control.endPeek();
         }
     }
 
     Connections {
         target: control.imageEdit
+
+        // Isolated harnesses mock the edit controller without every signal; the real
+        // ImageEditController does carry historyChanged.
+        ignoreUnknownSignals: true
 
         function onHistoryChanged() {
             // Committed edits and undo/redo retire rectangles from the previous image state.
@@ -4059,6 +6600,9 @@ Rectangle {
     // request cancels outstanding prefetches and the visible pair never changes.
     Connections {
         target: control.pairModel
+
+        // Same mock tolerance as above: ImageFolderPairModel carries the signal.
+        ignoreUnknownSignals: true
 
         function onPairOpenFinished(row, success, error) {
             if (!success || !control.imageReview || !control.pairModel)

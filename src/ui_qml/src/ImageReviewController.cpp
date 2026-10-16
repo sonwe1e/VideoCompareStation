@@ -55,6 +55,48 @@ std::atomic<quint64> g_loaderRevision{1U};
             mode == ImageReviewController::AlphaDifference);
 }
 
+// The neutral mask drawn where the alpha filter hides a pixel. Byte-identical to the QML
+// CheckerboardBackground pair (#272727 / #404040) so a filtered region reads as "no value
+// here" and never as "this pixel was black".
+constexpr QRgb kAlphaFilterMaskA = 0xff272727;
+constexpr QRgb kAlphaFilterMaskB = 0xff404040;
+// The filter ships off; "off" and "on with T = 0" are deliberately different states.
+constexpr int kDefaultAlphaThreshold = 0;
+constexpr int kMaxAlphaThreshold = 255;
+// Digits after the decimal point in the normalized readout. Six is enough to tell a
+// 1/255 step (0.003922) from a 1/65535 step while keeping the field width stable.
+constexpr int kNormalizedDigits = 6;
+
+// Six decimals, never a negative zero, and no exponent form: the readout and the copied
+// text must stay byte-comparable between the two.
+[[nodiscard]] QString fixedNormalized(const qreal value) {
+    qreal clamped = value;
+    if (!std::isfinite(clamped)) {
+        clamped = 0.0;
+    }
+    // Snap values that round to zero so "-0.000000" can never reach the UI or the
+    // clipboard; the sign of a real delta is unaffected.
+    if (std::abs(clamped) < 0.5e-6) {
+        clamped = 0.0;
+    }
+    return QString::number(clamped, 'f', kNormalizedDigits);
+}
+
+// A signed delta on the normalized scale: the sign is part of the meaning (Δ = B − A), so
+// a negative value keeps it and a positive one is marked, exactly as the integer form
+// does. Only a value that rounds to zero carries no sign, which is what keeps
+// "-0.000000" out of the readout and the clipboard.
+[[nodiscard]] QString signedNormalized(const qreal delta) {
+    QString magnitude = fixedNormalized(std::abs(delta));
+    if (delta > 0.0) {
+        return QString(QChar('+')) + magnitude;
+    }
+    if (delta < 0.0) {
+        return QString(QChar('-')) + magnitude;
+    }
+    return magnitude;
+}
+
 [[nodiscard]] bool dimensionsWithinBudget(const int width, const int height, QString* error) {
     if (width <= 0 || height <= 0) {
         if (error != nullptr) {
@@ -264,6 +306,18 @@ void ImageReviewController::setWipePosition(const qreal position) {
     const qreal clamped = std::max(0.0, std::min(1.0, position));
     if (!qFuzzyCompare(clamped, wipePosition_)) {
         wipePosition_ = clamped;
+        emit viewChanged();
+    }
+}
+
+int ImageReviewController::wipeOrientation() const noexcept {
+    return wipeOrientation_;
+}
+
+void ImageReviewController::setWipeOrientation(const int orientation) {
+    const int clamped = std::max(0, std::min(1, orientation));
+    if (wipeOrientation_ != clamped) {
+        wipeOrientation_ = clamped;
         emit viewChanged();
     }
 }
@@ -1111,6 +1165,9 @@ QVariantMap ImageReviewController::samplePixel(const int imageSlot,
     if (x < 0 || y < 0 || x >= image->width() || y >= image->height()) {
         return {{QStringLiteral("valid"), false}};
     }
+    // Captured before the observation view rewrites the pixel: the filter decision must be
+    // made on the source alpha, not on a derived view's alpha.
+    const int sourceAlpha = qAlpha(image->pixel(x, y));
     // Hover sampling runs on the GUI thread. Derive one observed pixel directly instead
     // of waiting for the image provider to build and lock an entire channel-view image.
     QRgb pixel = image->pixel(x, y);
@@ -1125,16 +1182,24 @@ QVariantMap ImageReviewController::samplePixel(const int imageSlot,
     // opaque; report the true alpha value/percent from the brightness so the readout shows
     // A=128 → 50.2% instead of the forced opaque 255.
     if (imageSlot != DisplayDiffSlot && viewMode_ == AlphaGrayView) {
-        const int sourceAlpha = qRed(pixel);
-        result[QStringLiteral("a")] = sourceAlpha;
+        const int grayAlpha = qRed(pixel);
+        result[QStringLiteral("a")] = grayAlpha;
         result[QStringLiteral("alphaPercent")] =
-            QString::number(static_cast<double>(sourceAlpha) / 255.0 * 100.0, 'f', 1);
+            QString::number(static_cast<double>(grayAlpha) / 255.0 * 100.0, 'f', 1);
     }
     // Sampling source label: original pixels for the primary/secondary slots, derived
     // pixels for the diff slot (T2 原图/派生取样来源).
     result.insert(QStringLiteral("source"),
                   imageSlot == DisplayDiffSlot ? QStringLiteral("diff")
                                                : QStringLiteral("original"));
+    if (imageSlot != DisplayDiffSlot) {
+        // The alpha filter is an observation, so the probe keeps reporting the original
+        // RGBA and only names that the current threshold hides it.
+        const bool sampleSecondary =
+            imageSlot == SecondarySlot || imageSlot == DisplaySecondarySlot;
+        result.insert(QStringLiteral("alphaHidden"),
+                      alphaHiddenAt(!sampleSecondary, x, y, sourceAlpha));
+    }
     // The channel view may alter what the RGB values mean; name it so the readout is
     // never mistaken for plain RGBA.
     if (imageSlot != DisplayDiffSlot && viewMode_ == AlphaGrayView) {
@@ -1163,6 +1228,49 @@ QVariantMap ImageReviewController::samplePixel(const int imageSlot,
     return result;
 }
 
+QVariantMap ImageReviewController::samplePixelOriginal(const int imageSlot,
+                                                       const qreal imageX,
+                                                       const qreal imageY) const {
+    // Pair readouts (A/B and Δ) must name the committed decode buffers, never the derived
+    // channel view and never the difference image, so the observation mode cannot repaint
+    // the numbers a comparison is judged by.
+    const QImage* image = nullptr;
+    switch (imageSlot) {
+    case PrimarySlot:
+    case DisplayPrimarySlot:
+        image = &primary_;
+        break;
+    case SecondarySlot:
+    case DisplaySecondarySlot:
+        image = &secondary_;
+        break;
+    default:
+        break;
+    }
+    if (image == nullptr || image->isNull() || !std::isfinite(imageX) || !std::isfinite(imageY)) {
+        return {{QStringLiteral("valid"), false}};
+    }
+    const int x = static_cast<int>(std::floor(imageX));
+    const int y = static_cast<int>(std::floor(imageY));
+    if (x < 0 || y < 0 || x >= image->width() || y >= image->height()) {
+        return {{QStringLiteral("valid"), false}};
+    }
+    const bool sampleSecondary = imageSlot == SecondarySlot || imageSlot == DisplaySecondarySlot;
+    QVariantMap result = pixelMap(x, y, image->pixel(x, y));
+    result.insert(QStringLiteral("source"), QStringLiteral("original"));
+    const QImage& native = sampleSecondary ? secondaryNative_ : primaryNative_;
+    const StillImageSourceInfo& sideInfo = sampleSecondary ? secondaryInfo_ : primaryInfo_;
+    if (!native.isNull() && x < native.width() && y < native.height()) {
+        const QRgba64 sample = native.pixelColor(x, y).rgba64();
+        result.insert(QStringLiteral("nativeBitDepth"), sideInfo.bitDepth);
+        result.insert(QStringLiteral("r16"), static_cast<int>(sample.red()));
+        result.insert(QStringLiteral("g16"), static_cast<int>(sample.green()));
+        result.insert(QStringLiteral("b16"), static_cast<int>(sample.blue()));
+        result.insert(QStringLiteral("a16"), static_cast<int>(sample.alpha()));
+    }
+    return result;
+}
+
 void ImageReviewController::updateCursorPixel(const int imageSlot,
                                               const qreal imageX,
                                               const qreal imageY) {
@@ -1182,8 +1290,355 @@ void ImageReviewController::clearCursorPixel() {
     emit cursorPixelChanged();
 }
 
+// ---- Single-side close ------------------------------------------------------------------
+
+bool ImageReviewController::closeSecondary() {
+    if (!hasSecondary()) {
+        return false;
+    }
+    // Any in-flight load for this side is cancelled first: the terminal it eventually
+    // delivers is rejected by the request-id check, so a late B can never land in a slot
+    // the user just closed.
+    cancelPendingOpen();
+    cancelDifferenceRequest();
+    ++async_->sourceGeneration;
+    secondary_ = QImage();
+    secondaryNative_ = QImage();
+    secondaryPath_.clear();
+    secondaryInfo_ = StillImageSourceInfo{};
+    async_->secondaryIdentity.clear();
+    // No pair is committed any more, so the analysis field and its source buffers are
+    // released instead of being retained for a comparison that no longer exists.
+    async_->loader.clearAnalysisCache();
+    resetDifferenceState();
+    // A single image cannot carry a pair-only mode: difference, wipe and fade all become
+    // meaningless, so the workspace falls back to the plain single view.
+    compareMode_ = PrimaryOnly;
+    committedPairId_ = -1;
+    primaryViewCache_ = QImage();
+    secondaryViewCache_ = QImage();
+    viewCacheGeneration_ = -1;
+    viewCacheMode_ = -1;
+    viewCacheFilterEnabled_ = false;
+    viewCacheThreshold_ = -1;
+    clearFrozenProbeSample();
+    clearCursorPixel();
+    errorText_.clear();
+    // Zoom and pan are deliberately kept: the surviving image is already decoded and in
+    // memory, and the user's observation position is worth more than a reset.
+    bumpGeneration();
+    return true;
+}
+
+bool ImageReviewController::closePrimary() {
+    if (!hasPrimary()) {
+        return false;
+    }
+    if (!hasSecondary()) {
+        // The last image: the honest empty state, reached through the same teardown the
+        // session close uses. This is not a single-side close standing in for closeAll -
+        // there is no other side to keep.
+        closeAll();
+        return true;
+    }
+    cancelPendingOpen();
+    cancelDifferenceRequest();
+    ++async_->sourceGeneration;
+    // Promote B into the internal primary slot. The buffers, the labels, the provenance
+    // and the frozen identities all travel together, so the surviving file keeps its own
+    // identity, content and source information instead of being relabelled as A.
+    primary_ = std::move(secondary_);
+    primaryNative_ = std::move(secondaryNative_);
+    primaryPath_ = std::move(secondaryPath_);
+    primaryInfo_ = std::move(secondaryInfo_);
+    async_->primaryIdentity = std::move(async_->secondaryIdentity);
+    async_->secondaryIdentity.clear();
+    secondary_ = QImage();
+    secondaryNative_ = QImage();
+    secondaryInfo_ = StillImageSourceInfo{};
+    async_->loader.clearAnalysisCache();
+    resetDifferenceState();
+    compareMode_ = PrimaryOnly;
+    committedPairId_ = -1;
+    primaryViewCache_ = QImage();
+    secondaryViewCache_ = QImage();
+    viewCacheGeneration_ = -1;
+    viewCacheMode_ = -1;
+    viewCacheFilterEnabled_ = false;
+    viewCacheThreshold_ = -1;
+    clearFrozenProbeSample();
+    clearCursorPixel();
+    errorText_.clear();
+    bumpGeneration();
+    return true;
+}
+
+// ---- Numeric readout format -------------------------------------------------------------
+
+int ImageReviewController::numericFormat() const noexcept {
+    return numericFormat_;
+}
+
+void ImageReviewController::setNumericFormat(const int format) {
+    const int next = format == NormalizedFloat ? NormalizedFloat : IntegerCodeValues;
+    if (numericFormat_ == next) {
+        return;
+    }
+    numericFormat_ = next;
+    // Presentation only: no buffer, no sampling value, no difference field and no
+    // statistic is touched, so the generation deliberately does not move.
+    emit stateChanged();
+}
+
+QString ImageReviewController::channelText(const int channel8) const {
+    if (numericFormat_ == NormalizedFloat) {
+        // 8-bit display buffer: the normalized value is channel / 255.
+        return fixedNormalized(static_cast<qreal>(channel8) / 255.0);
+    }
+    return QString::number(channel8);
+}
+
+QString ImageReviewController::channelText16(const int channel16) const {
+    if (numericFormat_ == NormalizedFloat) {
+        // Converted 16-bit sidecar: channel16 / 65535, never quantized to 8 bits first.
+        return fixedNormalized(static_cast<qreal>(channel16) / 65535.0);
+    }
+    return QString::number(channel16);
+}
+
+QString ImageReviewController::deltaText(const int low8, const int high8) const {
+    if (numericFormat_ == NormalizedFloat) {
+        return signedNormalized((static_cast<qreal>(high8) - static_cast<qreal>(low8)) / 255.0);
+    }
+    const int difference = high8 - low8;
+    return difference >= 0 ? QString(QChar('+')) + QString::number(difference)
+                           : QString::number(difference);
+}
+
+QString ImageReviewController::deltaText16(const int low16, const int high16) const {
+    if (numericFormat_ == NormalizedFloat) {
+        return signedNormalized((static_cast<qreal>(high16) - static_cast<qreal>(low16)) / 65535.0);
+    }
+    const int difference = high16 - low16;
+    return difference >= 0 ? QString(QChar('+')) + QString::number(difference)
+                           : QString::number(difference);
+}
+
+QString ImageReviewController::hexText(const int r, const int g, const int b, const int a) {
+    // Always #RRGGBBAA: the alpha byte is never dropped, and the order is never ARGB.
+    // Hex stays a hexadecimal expression of the code values, so the numeric-format switch
+    // does not change what it means.
+    return QStringLiteral("#%1%2%3%4")
+        .arg(channel8(r), 2, 16, QChar('0'))
+        .arg(channel8(g), 2, 16, QChar('0'))
+        .arg(channel8(b), 2, 16, QChar('0'))
+        .arg(channel8(a), 2, 16, QChar('0'))
+        .toUpper();
+}
+
+QString ImageReviewController::rgbText(const int r, const int g, const int b) const {
+    if (numericFormat_ == NormalizedFloat) {
+        return QStringLiteral("rgb(%1, %2, %3)")
+            .arg(fixedNormalized(static_cast<qreal>(r) / 255.0))
+            .arg(fixedNormalized(static_cast<qreal>(g) / 255.0))
+            .arg(fixedNormalized(static_cast<qreal>(b) / 255.0));
+    }
+    return QStringLiteral("rgb(%1, %2, %3)").arg(r).arg(g).arg(b);
+}
+
+QString ImageReviewController::rgbaText(const int r, const int g, const int b, const int a) const {
+    if (numericFormat_ == NormalizedFloat) {
+        return QStringLiteral("rgba(%1, %2, %3, %4)")
+            .arg(fixedNormalized(static_cast<qreal>(r) / 255.0))
+            .arg(fixedNormalized(static_cast<qreal>(g) / 255.0))
+            .arg(fixedNormalized(static_cast<qreal>(b) / 255.0))
+            .arg(fixedNormalized(static_cast<qreal>(a) / 255.0));
+    }
+    // The alpha component is on the 0..255 code-value scale, stated by the label next to
+    // the button so it can never be read as a 0..1 fraction.
+    return QStringLiteral("rgba(%1, %2, %3, %4)").arg(r).arg(g).arg(b).arg(a);
+}
+
+// ---- Alpha threshold observation filter -------------------------------------------------
+
+bool ImageReviewController::alphaFilterEnabled() const noexcept {
+    return alphaFilterEnabled_;
+}
+
+void ImageReviewController::setAlphaFilterEnabled(const bool enabled) {
+    if (alphaFilterEnabled_ == enabled) {
+        return;
+    }
+    alphaFilterEnabled_ = enabled;
+    // The derived views depend on the filter, so their cache has to be dropped.
+    primaryViewCache_ = QImage();
+    secondaryViewCache_ = QImage();
+    viewCacheGeneration_ = -1;
+    viewCacheMode_ = -1;
+    viewCacheFilterEnabled_ = false;
+    viewCacheThreshold_ = -1;
+    // The frozen sample's "hidden by the current threshold" hint is recomputed on read,
+    // so the probe readout has to be re-evaluated as well.
+    emit frozenProbeSampleChanged();
+    emit stateChanged();
+}
+
+int ImageReviewController::alphaThreshold() const noexcept {
+    return alphaThreshold_;
+}
+
+void ImageReviewController::setAlphaThreshold(const int threshold) {
+    const int next = std::clamp(threshold, 0, kMaxAlphaThreshold);
+    if (alphaThreshold_ == next) {
+        return;
+    }
+    alphaThreshold_ = next;
+    primaryViewCache_ = QImage();
+    secondaryViewCache_ = QImage();
+    viewCacheGeneration_ = -1;
+    viewCacheMode_ = -1;
+    viewCacheFilterEnabled_ = false;
+    viewCacheThreshold_ = -1;
+    // The frozen sample's hidden-by-threshold hint is recomputed on read, so the probe
+    // readout follows the live threshold instead of the one that was set when the sample
+    // was captured.
+    emit frozenProbeSampleChanged();
+    emit stateChanged();
+}
+
+bool ImageReviewController::alphaFilterActive() const noexcept {
+    return alphaFilterEnabled_ && viewMode_ == RgbOpaqueView;
+}
+
+bool ImageReviewController::alphaPassesFilter(const bool primarySide,
+                                              const int alpha8,
+                                              const quint16 alpha16) const {
+    if (!alphaFilterEnabled_) {
+        return true;
+    }
+    const QImage& native = primarySide ? primaryNative_ : secondaryNative_;
+    if (!native.isNull()) {
+        // High depth: compare the un-quantized sidecar alpha. T corresponds to T/255 in
+        // normalized terms, so the 16-bit bound is T * 65535 / 255. The cross-multiplied
+        // integer form keeps the boundary exact and testable (A=26, T=25 passes;
+        // A=25, T=25 does not).
+        return static_cast<qint64>(alpha16) * 255LL >
+               static_cast<qint64>(alphaThreshold_) * 65535LL;
+    }
+    // 8-bit display buffer: strict greater-than on its own code value.
+    return static_cast<qint64>(alpha8) > static_cast<qint64>(alphaThreshold_);
+}
+
+bool ImageReviewController::alphaHiddenAt(const bool primarySide,
+                                          const int x,
+                                          const int y,
+                                          const int alpha8) const {
+    if (!alphaFilterEnabled_) {
+        return false;
+    }
+    const QImage& native = primarySide ? primaryNative_ : secondaryNative_;
+    if (!native.isNull() && x < native.width() && y < native.height()) {
+        // Read the sidecar's own alpha at this pixel instead of the 8-bit display value:
+        // a high-depth source must not be quantized before the comparison. QColor::alpha()
+        // is an 8-bit accessor, so the 64-bit form has to be used explicitly.
+        const quint16 alpha16 = native.pixelColor(x, y).rgba64().alpha();
+        return !alphaPassesFilter(primarySide, alpha8, alpha16);
+    }
+    return !alphaPassesFilter(primarySide, alpha8, 0U);
+}
+
+// ---- Frozen probe sample ----------------------------------------------------------------
+
+QVariantMap ImageReviewController::frozenProbeSample() const {
+    if (frozenProbe_.isEmpty() || frozenProbe_.value(QStringLiteral("valid")).toBool() != true) {
+        return {};
+    }
+    // The "hidden by the current threshold" hint is recomputed on every read rather than
+    // frozen at capture time: the threshold is live view state, so a sample captured
+    // before the filter was enabled (or before the slider moved) must still name the
+    // state the user is looking at now. The values themselves never change.
+    QVariantMap next = frozenProbe_;
+    const bool primarySide =
+        next.value(QStringLiteral("slot")).toInt() == SecondarySlot ||
+                next.value(QStringLiteral("slot")).toInt() == DisplaySecondarySlot
+            ? false
+            : true;
+    next.insert(QStringLiteral("alphaHidden"),
+                alphaHiddenAt(primarySide,
+                              next.value(QStringLiteral("x")).toInt(),
+                              next.value(QStringLiteral("y")).toInt(),
+                              next.value(QStringLiteral("a")).toInt()));
+    return next;
+}
+
+bool ImageReviewController::captureProbeSample(const int imageSlot,
+                                               const qreal imageX,
+                                               const qreal imageY) {
+    if (!std::isfinite(imageX) || !std::isfinite(imageY)) {
+        return false;
+    }
+    const QVariantMap sample = samplePixelOriginal(imageSlot, imageX, imageY);
+    if (sample.value(QStringLiteral("valid")).toBool() != true) {
+        // No valid sample at this position: the previously frozen one stays, because it
+        // still names a real pixel of the current generation. It is only dropped when the
+        // material itself changes (see clearFrozenProbeSample callers).
+        return false;
+    }
+    QVariantMap next = sample;
+    next.insert(QStringLiteral("slot"), imageSlot);
+    next.insert(QStringLiteral("side"),
+                imageSlot == SecondarySlot || imageSlot == DisplaySecondarySlot
+                    ? QStringLiteral("B")
+                    : QStringLiteral("A"));
+    next.insert(QStringLiteral("generation"), contentGeneration_);
+    const bool primarySide = !(imageSlot == SecondarySlot || imageSlot == DisplaySecondarySlot);
+    const int alpha8 = sample.value(QStringLiteral("a")).toInt();
+    const auto alpha16 = static_cast<quint16>(sample.value(QStringLiteral("a16")).toUInt());
+    next.insert(QStringLiteral("alphaHidden"), !alphaPassesFilter(primarySide, alpha8, alpha16));
+    if (next == frozenProbe_) {
+        return true;
+    }
+    frozenProbe_ = next;
+    emit frozenProbeSampleChanged();
+    return true;
+}
+
+void ImageReviewController::clearFrozenProbeSample() {
+    if (frozenProbe_.isEmpty()) {
+        return;
+    }
+    frozenProbe_ = QVariantMap{};
+    emit frozenProbeSampleChanged();
+}
+
+QString ImageReviewController::probeColorText(const int format) const {
+    if (frozenProbe_.isEmpty() || frozenProbe_.value(QStringLiteral("valid")).toBool() != true) {
+        return {};
+    }
+    const int r = frozenProbe_.value(QStringLiteral("r")).toInt();
+    const int g = frozenProbe_.value(QStringLiteral("g")).toInt();
+    const int b = frozenProbe_.value(QStringLiteral("b")).toInt();
+    const int a = frozenProbe_.value(QStringLiteral("a")).toInt();
+    switch (format) {
+    case ProbeRgba:
+        return rgbaText(r, g, b, a);
+    case ProbeHex:
+        return hexText(r, g, b, a);
+    case ProbeRgb:
+    default:
+        return rgbText(r, g, b);
+    }
+}
+
 QString ImageReviewController::imageUrl(const int imageSlot) const {
-    return QStringLiteral("image://vcs-review/%1/%2").arg(imageSlot).arg(contentGeneration_);
+    // A display filter changes the provider result without changing the decoded material
+    // generation (and without invalidating its probe). Give Qt's image cache a distinct URL.
+    return QStringLiteral("image://vcs-review/%1/%2/%3/%4/%5")
+        .arg(imageSlot)
+        .arg(contentGeneration_)
+        .arg(viewMode_)
+        .arg(alphaFilterEnabled_ ? 1 : 0)
+        .arg(alphaThreshold_);
 }
 
 QImage ImageReviewController::imageForSlot(const int imageSlot) const {
@@ -1212,6 +1667,9 @@ void ImageReviewController::setError(QString text) {
 
 void ImageReviewController::bumpGeneration() {
     ++contentGeneration_;
+    // A new generation replaces the pixels the frozen sample named, so the copy button can
+    // never offer a value from a buffer that no longer exists.
+    clearFrozenProbeSample();
     emit stateChanged();
 }
 
@@ -1638,10 +2096,10 @@ QImage ImageReviewController::displayImage(const int slot) const {
     switch (slot) {
     case PrimarySlot:
     case DisplayPrimarySlot:
-        return channelView(primary_, viewMode_, true);
+        return channelView(primary_, primaryNative_, viewMode_, true);
     case SecondarySlot:
     case DisplaySecondarySlot:
-        return channelView(secondary_, viewMode_, false);
+        return channelView(secondary_, secondaryNative_, viewMode_, false);
     case DisplayDiffSlot:
         return diff_;
     default:
@@ -1650,6 +2108,7 @@ QImage ImageReviewController::displayImage(const int slot) const {
 }
 
 QImage ImageReviewController::channelView(const QImage& source,
+                                          const QImage& native,
                                           const int mode,
                                           const bool primarySide) const {
     if (source.isNull() || mode == RgbaView) {
@@ -1660,11 +2119,16 @@ QImage ImageReviewController::channelView(const QImage& source,
     // mutable state, so every access must hold the lock; whichever thread arrives first pays
     // the single build, and hover afterwards reads a cached view without a GUI stall.
     const std::lock_guard lock{viewCacheMutex_};
-    // One derived view per side and mode; invalidated on commit and view mode changes.
+    // One derived view per side and mode; invalidated on commit, view mode changes and
+    // alpha-filter changes.
     QImage& cache = primarySide ? primaryViewCache_ : secondaryViewCache_;
-    if (viewCacheGeneration_ != contentGeneration_ || viewCacheMode_ != mode) {
+    if (viewCacheGeneration_ != contentGeneration_ || viewCacheMode_ != mode ||
+        viewCacheFilterEnabled_ != alphaFilterEnabled_ ||
+        viewCacheThreshold_ != (alphaFilterEnabled_ ? alphaThreshold_ : -1)) {
         viewCacheGeneration_ = contentGeneration_;
         viewCacheMode_ = mode;
+        viewCacheFilterEnabled_ = alphaFilterEnabled_;
+        viewCacheThreshold_ = alphaFilterEnabled_ ? alphaThreshold_ : -1;
         primaryViewCache_ = QImage();
         secondaryViewCache_ = QImage();
     }
@@ -1685,8 +2149,23 @@ QImage ImageReviewController::channelView(const QImage& source,
     if (canonical.isNull() || view.isNull()) {
         return source;
     }
+    // The alpha filter only ever applies to the "RGB ignoring alpha" observation. Alpha
+    // gray, the difference image and every other mode keep their own explicit rule, so no
+    // mode silently inherits an undefined behaviour.
+    const bool filterAlpha = mode == RgbOpaqueView && alphaFilterEnabled_;
+    // A high-depth sidecar is read in its own format so the filter never rounds alpha to
+    // 8 bits before comparing it with T (T maps to T/255, i.e. T * 65535 / 255 at 16 bit).
+    const QImage nativeCanonical = filterAlpha && !native.isNull() && native.size() == source.size()
+                                       ? (native.format() == QImage::Format_RGBA64
+                                              ? native
+                                              : native.convertToFormat(QImage::Format_RGBA64))
+                                       : QImage{};
     for (int y = 0; y < canonical.height(); ++y) {
         const uchar* sourceLine = canonical.constScanLine(y);
+        const QRgba64* nativeLine =
+            nativeCanonical.isNull()
+                ? nullptr
+                : reinterpret_cast<const QRgba64*>(nativeCanonical.constScanLine(y));
         auto* viewLine = reinterpret_cast<QRgb*>(view.scanLine(y));
         for (int x = 0; x < canonical.width(); ++x) {
             const uchar* const pixel = sourceLine + static_cast<std::size_t>(x) * 4U;
@@ -1696,7 +2175,18 @@ QImage ImageReviewController::channelView(const QImage& source,
                 viewLine[x] = qRgb(alpha, alpha, alpha);
             } else { // RgbOpaqueView
                 // Colors hidden in transparent regions: RGB unchanged, alpha forced opaque.
-                viewLine[x] = qRgb(pixel[0], pixel[1], pixel[2]);
+                if (!filterAlpha ||
+                    alphaPassesFilter(primarySide,
+                                      pixel[3],
+                                      nativeLine != nullptr ? nativeLine[x].alpha()
+                                                            : static_cast<quint16>(0U))) {
+                    viewLine[x] = qRgb(pixel[0], pixel[1], pixel[2]);
+                } else {
+                    // Neutral checkerboard mask: the same two grays as the content-area
+                    // CheckerboardBackground, so a filtered cell can never be mistaken for
+                    // a pixel that was actually black.
+                    viewLine[x] = ((x + y) & 1) == 0 ? kAlphaFilterMaskA : kAlphaFilterMaskB;
+                }
             }
         }
     }

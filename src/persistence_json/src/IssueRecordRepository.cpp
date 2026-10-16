@@ -3,6 +3,7 @@
 #include "dvs/platform/AtomicFilePublisher.h"
 #include "dvs/platform/WindowsPaths.h"
 
+#include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -145,6 +146,18 @@ void readUnsigned64(const Json& value, const char* const key, std::uint64_t* out
         {"panY", record.view.panY},
         {"resampleAllowed", record.view.resampleAllowed},
     };
+    // E1: valid wipe pairs are written as the exact {orientation, ratio}; the invalid
+    // sentinel (-2) is written explicitly instead of being omitted, so a re-save can never
+    // masquerade rejected data as a legacy record that simply lacked the fields. Absent on
+    // write only when the record itself carries no wipe state (-1), which keeps legacy files
+    // byte-identical to what older writers produced.
+    if (record.view.wipeOrientation == -2) {
+        value["view"]["wipeOrientation"] = -2;
+        value["view"]["wipePosition"] = -2.0;
+    } else if (record.view.wipeOrientation >= 0 && record.view.wipePosition >= 0.0) {
+        value["view"]["wipeOrientation"] = record.view.wipeOrientation;
+        value["view"]["wipePosition"] = record.view.wipePosition;
+    }
     // Written only when the record carries a diagnostic interval, so legacy files stay
     // byte-identical to what older writers produced.
     if (record.interval.anchorFrame >= 0) {
@@ -234,6 +247,37 @@ void readUnsigned64(const Json& value, const char* const key, std::uint64_t* out
         record.view.panX = readNumber("panX", 0.5);
         record.view.panY = readNumber("panY", 0.5);
         readBoolean(view, "resampleAllowed", &record.view.resampleAllowed);
+        // E1: the wipe pair is validated as a pair. Absent in legacy records (-1/-1 = "no
+        // wipe state"); present-but-invalid (wrong type, half-present, orientation outside
+        // {0,1} - including wide integers that would narrow into 0/1 - ratio outside [0,1]
+        // or non-finite) is rejected to an explicit invalid sentinel (-2) instead of being
+        // clamped into a plausible-looking observation.
+        const bool hasOrientation = view.contains("wipeOrientation");
+        const bool hasPosition = view.contains("wipePosition");
+        if (hasOrientation != hasPosition) {
+            record.view.wipeOrientation = -2;
+            record.view.wipePosition = -2.0;
+        } else if (hasOrientation && hasPosition) {
+            const Json& orientation = view["wipeOrientation"];
+            const Json& position = view["wipePosition"];
+            // Compare against the raw JSON values first: a wide integer such as 4294967296
+            // would narrow to 0 through get<int>() and sneak past a {0,1} membership check.
+            const bool typesValid = orientation.is_number_integer() &&
+                                    (orientation == 0 || orientation == 1) && position.is_number();
+            bool pairValid = false;
+            if (typesValid) {
+                const double positionValue = position.get<double>();
+                pairValid =
+                    std::isfinite(positionValue) && positionValue >= 0.0 && positionValue <= 1.0;
+            }
+            if (pairValid) {
+                record.view.wipeOrientation = orientation.get<int>();
+                record.view.wipePosition = position.get<double>();
+            } else {
+                record.view.wipeOrientation = -2;
+                record.view.wipePosition = -2.0;
+            }
+        }
     }
     // Absent in records written before the interval existed; the defaults then keep the record
     // at "no diagnostic interval" instead of inventing a neighborhood.

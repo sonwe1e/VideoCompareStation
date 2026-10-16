@@ -62,6 +62,13 @@ Item {
         signalName: "zoomStepRequested"
     }
 
+    SignalSpy {
+        id: panSpy
+
+        target: strip
+        signalName: "roiPanRequested"
+    }
+
     TestCase {
         name: "RoiTripletStrip"
         when: windowShown
@@ -237,6 +244,86 @@ Item {
             strip.roiEnabled = true;
             wait(0);
             compare(hint.visible, false);
+        }
+
+        // Phase-3 direct manipulation: dragging inside a resolvable local window reports the
+        // cell-local logical-pixel deltas (slot included - the shared ROI follows from any
+        // window), and the cursor names the verb: size-all on hover, closed hand while held.
+        function test_window_drag_reports_roi_pan_deltas() {
+            strip.windowRects = [
+                { "slot": 0, "valid": true, "width": 100, "height": 80 },
+                { "slot": 1, "valid": true, "width": 100, "height": 80 },
+                { "slot": 2, "valid": true, "width": 100, "height": 80 }
+            ];
+            wait(0);
+            const dragArea = findChild(cell(1), "roiTripletWindowDragArea");
+            verify(dragArea !== null);
+            verify(dragArea.enabled, "a valid footage entry plus an active ROI arm the drag");
+
+            const cx = cell(1).width / 2;
+            const cy = cell(1).height / 2;
+            mouseMove(dragArea, cx, cy);
+            tryVerify(() => dragArea.containsMouse);
+            compare(dragArea.cursorShape, Qt.SizeAllCursor);
+
+            panSpy.clear();
+            mousePress(dragArea, cx, cy);
+            compare(dragArea.cursorShape, Qt.ClosedHandCursor);
+            mouseMove(dragArea, cx + 10, cy - 5);
+            mouseMove(dragArea, cx + 14, cy - 1);
+            compare(panSpy.count, 2, "one signal per drag move, none for the press");
+            // SignalSpy hands each emission's parameters as an Arguments object, not an
+            // Array, and compare cannot deep-match that container against an array literal -
+            // assert the three parameters element-wise instead.
+            compare(panSpy.signalArguments[0][0], 1);
+            compare(panSpy.signalArguments[0][1], 10);
+            compare(panSpy.signalArguments[0][2], -5);
+            compare(panSpy.signalArguments[1][0], 1);
+            compare(panSpy.signalArguments[1][1], 4);
+            compare(panSpy.signalArguments[1][2], 4);
+            mouseRelease(dragArea, cx + 14, cy - 1);
+            compare(panSpy.count, 2, "release ends the drag without an extra sample");
+        }
+
+        // Without a resolvable ROI the windows stay read-only: the drag area is inert and no
+        // pan request can leave the strip.
+        function test_drag_stays_silent_without_roi() {
+            strip.windowRects = [
+                { "slot": 0, "valid": true, "width": 100, "height": 80 }
+            ];
+            strip.roiEnabled = false;
+            wait(0);
+            const dragArea = findChild(cell(0), "roiTripletWindowDragArea");
+            verify(dragArea !== null);
+            verify(!dragArea.enabled);
+            panSpy.clear();
+            mousePress(cell(0), 20, 20);
+            mouseMove(cell(0), 60, 40);
+            mouseRelease(cell(0), 60, 40);
+            compare(panSpy.count, 0);
+        }
+
+        // The wheel ladder is directional: wheel up climbs toward higher magnification, wheel
+        // down descends, both wrap; the header button keeps its forward cycle.
+        function test_wheel_ladder_is_directional_and_wraps() {
+            strip.zoomPercent = 100;
+            zoomSpy.clear();
+            strip.cycleZoom(1);
+            compare(zoomSpy.signalArguments[0][0], 200);
+            // The viewport owns zoomPercent and the strip only requests, so the test walks
+            // the ladder itself: descending from 200 must land on 100 (without this step the
+            // descent runs from the still-current 100 and correctly yields the fit step).
+            strip.zoomPercent = 200;
+            strip.cycleZoom(-1);
+            compare(zoomSpy.signalArguments[1][0], 100);
+            // Below the fit step, descending wraps to the top of the ladder.
+            strip.zoomPercent = 0;
+            strip.cycleZoom(-1);
+            compare(zoomSpy.signalArguments[2][0], 400);
+            // The legacy no-argument call keeps cycling forward.
+            strip.zoomPercent = 400;
+            strip.cycleZoom();
+            compare(zoomSpy.signalArguments[3][0], 0);
         }
 
         function test_labels_follow_source_list() {

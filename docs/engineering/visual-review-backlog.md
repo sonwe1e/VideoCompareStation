@@ -1,8 +1,556 @@
 # 视觉审查问题台账
 
-更新：2026-10-14（计划清单逐条实核轮：先确认缺陷再修，P3/F1/F4 性能与 I5–I11、U4–U12/U17
-交互与可读性落地，token 纪律门禁未做）。需求见 [产品目标](../product/visual-review.md)，代码路由与命令见
-[Agent 快速定位指南](../agent-guide.md)。此页是当前任务入口，不是发布完成清单。
+## 2026-10-16 2.5.0 发布准备（跳过本地物理门禁）
+
+用户明确要求发布最新版本为 2.5.0，且不经过本地物理门禁。本轮更新 CMake／vcpkg 版本、
+README、版本说明、未签名发布范围与新发布说明；保留全部硬件／性能工作流及阈值。
+自托管 runner `Sonwe-RTX4090` 离线，采用本地软件验收与手动发布；标签工作流将在推送后
+取消，避免以后自动启动本次已跳过的物理门禁，不将未运行的 CI 记为通过。
+
+- Release 当前候选完整回归 **1392** 项：1380 通过、8 项环境／素材跳过、4 项既有禁用、
+  **0 失败**，353.59s。软件门禁：帧提供器终态退休重复 **100/100**、三档 DPI
+  packaged-smoke **3/3**、shutdown-soak **20 次关闭**全部通过。
+- 修复仓库指南检查仍匹配旧措辞的问题：匹配现行「An assertion is coverage only if it can
+  detect broken behaviour」，并断言 44 个条款／15 个命令；删除指南中的规则或删除检查表
+  条目均拒绝，**3/3 检查、2 个反例**通过。未修改 AGENTS.md 中的工程约束。
+- 重配置曾误启用 manifest 安装并触发依赖重建；停止该构建后，从原 ABI 的二进制缓存
+  恢复 23 个包、11,470 个文件，保留原 status 并恢复安装清单；8 个关键 Qt／FFmpeg
+  运行库哈希与前一已验证构建一致。随后使用 `-UseInstalledDependencies` 构建并通过本轮
+  全量回归；未在此发行中引入依赖升级。备份与核对为 `dependency-recovery/` 和对应 JSON。
+- 标准 CPack ZIP **28,316,760 bytes**、272 文件、解压后 **70,390,087 bytes**，SHA256
+  `6572F050F8870729CBDD015B31F65297EB7E36DFC81DBF9CAB8ED61DFA5C1E9A`。
+  比较基线为 GitHub 正式 2.3.0（下载后对照 GitHub asset digest），非本地同名旧候选。
+  新增 `CompareStationShell-2.5.dll` 替换 `CompareStationShell-2.3.dll`；GUI／CLI 更新，
+  其余 269 文件字节一致；ZIP **27,963,932 → 28,316,760**，压缩前
+  **69,727,047 → 70,390,087 bytes**。新增 DLL 对应按产品主／次版本推导的真实注册路径，
+  没有新增第三方运行时依赖。逐文件清单与压缩大小见 `package-comparison.json`。
+- 版本／包体门禁、自注册检查 **16/16**、二进制与 CRT／UCRT 读回 **7/7**、解压包软件
+  smoke **9/9**、弹窗像素 **12/12**、完整 format-check 与 C++／QML lint 全部通过。
+- 真实 D3D11VA／性能门禁按本次授权跳过，干净 Windows 未验收。证据目录为
+  `out/verification/release-v2.5.0-20261016-01/`。公开目标为
+  [2.5.0](https://github.com/sonwe1e/VideoCompareStation/releases/tag/v2.5.0)，上传后读回、
+  标签／main 身份与实际发布状态记录在该目录的 `publication.json`。
+
+## 2026-10-16 用户反馈：工具栏可操作性与局部比较语义（当前工作区）
+
+本节优先于同日较早的完成记录。基线仍为 `72a8234` 加既有未提交实现，修复保留原工作区。
+证据目录：`out/verification/ui-feedback/`。
+
+- **像素读数与数值／复制**：删除读数固定 392px 的上限，底部读数使用整行宽度。
+  十字准星继续使用实时 hover，状态栏使用当前素材代次最后一个有效样本；A/B/Δ 在
+  移到按钮后仍可读，素材更换后失效。真实 `ImageReviewController` 未向 QML 暴露
+  setter 及格式化方法，旧 typeof 防护会静默跳过；现经 Q_PROPERTY 写数值格式／过滤值，
+  channel/delta/hex/rgb/rgba 格式化函数显式 Q_INVOKABLE。测试改由真实菜单触发，断言
+  实际显示列的浮点字符串；QML 鼠标从画面移到复制按钮后检查保留值并触发复制菜单。
+  另修复 Main 到 ImageWorkspace 的 colorClipboard 同名遮蔽，主窗先解析服务再显式传入；
+  真实主窗测试读取复制端实际收到的文本。格式化 helper 显式捕获 numericFormat 依赖，
+  避免 C++ invokable 内部的状态读取无法使 QML 的 Δ／复制说明／16-bit 详情重新求值；
+  Δ 高亮仍比较原始整数步长，不因显示格式变化而改变阈值。
+  首次悬停预留读数行高，避免读数出现改变 Fit 比例、使鼠标下像素漂移；原十字准星
+  边缘测试保留坐标要求，并新增状态栏悬停前后等高断言。
+- **Alpha**：开关自动选择可应用过滤的 RGB 忽略透明观察，保留滑块／精确输入／重置。
+  补齐包含过滤参数的 image-provider URL，避免阈值变化只更新文字却命中旧图缓存；不
+  改素材 generation。真实控制器测试驱动滑块，验证图片 URL 与实际中性棋盘遮罩改变。
+- **入出点与相邻帧**：设端点后仍保留两个设点按钮，恢复可见的播放区间按钮。
+  移除工具组随宽度换父容器的机制，区间组固定第二行；走带按钮、区间组、相邻帧条使用
+  相同宽度与中心。导出入口与现有真实导出服务相连，保留未设区间／导出中门控。
+- **文件与历史**：固定 232px，删除拖宽分隔条；四个操作两行两列等宽，历史页也不挪位。
+  保留画布宽度保护及自动恢复，修改原可拖宽测试以验证新需求。
+- **局部总览**：局部窗存在时，主画面绘制、命中映射、像素网格及选框轮廓采用总览坐标；
+  局部额外绘制仍采用共享 ROI。WARP 测试选取黑白双色源的暗半边，断言总览像素完全
+  不变、指针映射不变、下方实际显示暗色 ROI，且选区轮廓只覆盖总览的一半。
+- **直看与模式**：Main 的统一模式动作退出 canvas focus 与锁定 GT peek，即使点击的
+  是已存储模式；覆盖顶栏、快捷键和画面菜单。真实主窗反复 A/B → 并排／划线／局部，
+  验证画布回到比较布局且没有 seek。直看时比较模式按钮不再同时标为选中。
+- **源标签**：删除三点按钮，保留右键菜单及身份绑定；菜单事件用真实右键测试。
+  图片 A/B 芯片增加内部左右留白。
+
+验证结果（本轮源码与工作区，不沿用前轮结论）：
+
+- 定向覆盖图片控制器 59 项、WARP 渲染 47 项、主窗真实接线／区间导出／固定侧栏、
+  图片鼠标交互、走带条与源标签右键样式／DPI 矩阵。真实主窗读回浮点通道、带符号 Δ、
+  复制端实际收到的文本；滑块改变 image-provider URL 与实际遮罩。修正侧栏底部导航
+  的等宽布局，232px、320px 高度且显示错误时仍保留可点击文件行。
+- 最终完整 `build.ps1 -Preset dev -Test -TestJobs 8` 选择 **1392** 项，耗时 523.02s：
+  1378 通过、8 项环境／素材跳过、4 项既有禁用、2 项并行异常（追踪脚本 20s 超时；
+  `app.ui-shell-smoke` 在快捷键步骤等待超时）。本次功能用例全部通过。
+- 保持同一源码／二进制和原阈值，使用 `-TestRegex
+  '^app.(playback-trace-gate-schema|ui-shell-smoke)$' -TestJobs 1` 串行重测，**2/2 通过**
+  （2.49s、3.32s）；最终没有未解决的可运行测试失败。未将上面的并行运行记为全绿。
+  完整日志 `full-tests-final-03.log`，串行结果 `serial-recheck-final.log`。
+- `format-check`、完整 `lint`（全部生产 C++、QML `--max-warnings 0`）和
+  `git diff --check` 通过。日志：`format-check-final-04.log`、`lint-final-04.log`。
+- 截图在 `screenshots/`：`image-probe-readout-960.png`（整数 A/B/Δ 使用整行）、
+  `image-probe-readout-float-1440.png`（浮点通道／Δ 同步更新）、
+  `single-image-crosshair.png`、`transport-export-chip.png` 和导出对话框宽窄窗。
+  均为测试素材；截图回读用于检查布局，不能代替真实素材的视觉质量判断。
+- ROI 修复复用既有主画面与局部窗绘制，不增加解码、回读循环或 FrameSet／ACK 路径。
+  本轮不代表真实 D3D11VA 五分钟性能或发布包验收；开发版输出在 `out/build/dev/bin/`。
+
+### 上述修复后的 ZIP（2026-10-16）
+
+证据目录：`out/verification/ui-feedback-package-20261016-01/`。本节包覆盖下方较早的同名包。
+
+- Release 重新构建后，额外包内弹窗检查暴露两处遗漏：自动化仍通过已删除的
+  `sourceOverflowButton-*` 查找源菜单；菜单 Rectangle 的半透明边框替换底色，导致直边透出
+  背景。自动化改从实际 `sourceChip-*` 取得菜单并保留可见／pending／身份保护；边框先与
+  菜单底色合成。像素门禁的圆角排除范围同步当前 12px 半径，直边中心仍要求 Alpha=255。
+  菜单 Basic／Windows × 四档 DPI **8/8** 通过，实际四类菜单采样通过。
+- 最终完整 Release 预设选择 **1392** 项，351.40s：1379 通过、8 项环境／素材跳过、
+  4 项既有禁用、1 项 `ui.video_file_sidebar.Basic` 并行失败（日志没有断言详情）。
+  同一源码／二进制、原阈值串行复测 **1/1 通过**（5.46s），未把该完整并行轮写成全绿。
+  日志 `release-final-tests.log`、`sidebar-serial-recheck.log`；没有未解决的可运行测试失败。
+- 标准 `cpack --preset release-zip` 通过 staging／运行时载荷门禁，最终包
+  `out/package/zip/CompareStation-2.4.0-windows-x64.zip`，**28,316,756 bytes**（约 27.0 MiB），
+  SHA256 `F1E99D730A8E0353B951156A68CC0D85C6015A76D884D6916E5979BA720D32BD`。
+- 上一份同名 ZIP 已先复制并读回核对 SHA256 `E7573A2B…A5E701`。逐文件比较：
+  **272 → 272** 文件，新增／删除均为 **0**；GUI 与 CLI 更新，其余 270 个文件字节一致。
+  压缩前 **70,382,407 → 70,390,087 bytes**，ZIP **28,314,754 → 28,316,756 bytes**；
+  GUI 增加 7,680 bytes、压缩后增加 2,002 bytes，CLI 大小与压缩大小相同、重建后哈希改变。
+  没有新增依赖；完整清单与逐项差异为 `manifest.json`、`package-comparison.json`。
+- 最终包解压后 `verify-release-package.ps1` **16/16** 通过，GUI／CLI／shell DLL 与当前
+  Release 构建哈希一致，四个 app-local CRT／UCRT DLL 非空，读回检查 **7/7**。
+  仅使用 Windows 系统目录 PATH、清除 Qt/QML 环境覆盖后，CLI 启动／媒体探测、单／双／
+  三视频、Alpha 渐变图片对与差异、三档 DPI 的菜单采样 **9/9** 通过，弹窗 **12/12**
+  Alpha=255。结果 `smoke-results.json`、`smoke-final.log`、`package-final-checks.log`。
+- 最终 `format-check` 通过（412 个 C++ 文件及生产 QML）；完整 `lint`（生产 C++ 与
+  QML `--max-warnings 0`）通过，日志 `final-format.log`、`final-lint.log`。
+  本机收窄 PATH 的验证不等于干净 Windows；硬件／性能／soak 门禁未运行。
+
+## 2026-10-16 右键关闭素材 / A/B 入口收敛 / 像素探针增强（当前工作区）
+
+基线 `72a8234` + 既有未提交工作区；本轮在其上实现与修复。证据目录
+`out/verification/close-and-probe/`。
+
+- **右键关闭单个视频**：复用 `ActiveSourceStrip` 右键菜单既有「关闭此视频」项与
+  `ReviewShellController::removeActiveSourceByIdentity`（按冻结身份寻址，不按显示序号或
+  文件名）。右键处理器只接受右键，左键的直看／管理选择／拖动不会先触发；`pending` 与
+  空身份时拒绝开菜单；菜单关闭后经 `viewerFocusRequested` 恢复观察区焦点。数量保护仍在
+  移除命令自身（`activeSources_.size() <= 1` 拒绝），最后一个视频走既有关闭会话路径。
+- **右键关闭单张图片**：`ImageSourceChip` 新增右键菜单（`imageClosePrimaryAction` /
+  `imageCloseSecondaryAction` + 拒绝原因项），信号只携带自身槽位；控制器新增
+  `closePrimary()`／`closeSecondary()`。关闭 B 保留 A；关闭 A 把 B 提升进内部主槽，
+  文件身份、内容与来源信息（格式／位深／Alpha／显示转换）一起迁移；最后一张走
+  `closeAll()`。关闭时取消在途加载与差异请求、提升源代次、清空分析缓存与派生视图缓存、
+  清除探针／悬停／冻结样本，并把 `committedPairId` 复位为 -1；缩放与平移刻意保留。
+- **A/B 入口收敛**：「手动闪烁」更名**单图 A/B**；删除独立「切至 A／切至 B」常驻按钮
+  （与 A/B 文件标签、`空格`／`T`、画布内指示器重复）。画布内徽标改为两段式当前来源
+  指示（填充点与边框标明正在看的一侧，另一段是可点击的切换目标），peek 期间隐藏。
+  删除的按钮没有留下隐藏可执行副本；`imageCloseButton` 的隐藏兼容件一并删除。
+- **像素探针增强**：新增 `frozenProbeSample`（当前素材代次内最后一个有效样本，指针离开
+  后仍在）、`captureProbeSample`、`probeColorText`、`channelText`/`channelText16`/
+  `deltaText`/`deltaText16`/`hexText`/`rgbText`/`rgbaText`、`numericFormat`、
+  `alphaFilterEnabled`/`alphaThreshold`/`alphaFilterActive`/`alphaPassesFilter`/
+  `alphaHiddenAt`；新增 `ColorClipboardController`（仅 Qt 标准剪贴板，写后读回校验）。
+  状态栏读数改为结构化两行布局：坐标、Hex、Alpha、通道列与高位深详情各自定宽等宽字段，
+  窄窗口自动换行而非省略号。
+- **本轮发现并修复的产品缺陷**（均有测试钉住）：
+  1. `ImageWorkspace.qml` 悬停提示调用不存在的 `control.pixelReadoutSentence()`，
+     整条 tooltip 因 TypeError 失效（函数实际声明在 `statusDetails` 上）。
+  2. 双图读数块 `pairPixelReadout.sample.a` 在无配对时解引用 null，每次求值都报错。
+  3. 归一化浮点下的 Δ 丢失负号（`std::abs` 后未补符号），负差值被读成正差值。
+  4. `alphaHiddenAt` 经 `QColor::alpha()` 读高位深 sidecar 的 Alpha，被量化到 8-bit，
+     高位深素材的隐藏判断与实际显示不一致。
+  5. `alphaHidden` 曾在采样时刻冻结，阈值改变后不跟随；改为读取时重算，过滤器 setter
+     补发 `frozenProbeSampleChanged`。
+  6. 画布内徽标两个分段只有 `implicitWidth` 而没有实际宽高，点击命中区为零。
+- **验证**：最终完整 dev 预设（含 UI 样式／DPI 矩阵）**exit 0**：component 968、ui_qml 719、
+  domain 89、unit 407、media 186、platform_windows 183、warp/graphics 123、
+  persistence_json 28、shell_windows 45、presentation_contract 5、e2e 14、quality 3、
+  architecture 1，合计 1771 项注册；6 项环境性跳过、4 项原有禁用，0 失败。
+  聚焦轮：`ui.ImageReviewControllerTests` 59/59（新增单侧关闭、数值格式、冻结样本与
+  复制、Alpha 阈值边界含高位深与 8-bit 对照等用例）；`ui.ImageWorkspaceManual` 34/34
+  （新增数值格式选择器、复制颜色按钮与菜单、Alpha 过滤开关／阈值／徽章、右键开菜单不
+  触发左键动作、画布徽标点击切换等用例）；`ui.MainQmlContractTests` 相关六例（四个原引用
+  已删除的 `imageToggleSourceButton` 的用例改为验证新真实入口，外加帮助表与新探针读数族
+  合同测试）通过；受影响面 274 项全通过（2 项环境跳过）。
+  `format-check`（clang-format 412 文件 + qmlformat）、`qmllint --max-warnings 0`
+  （改动 QML）、改动 C++ 文件的 `clang-tidy`、QML token 字面量门禁（90 项）均通过。
+- **未覆盖／限制（如实记录）**：
+  - C++ 合同测试无法把真实鼠标事件送进工作区（offscreen/basic 渲染循环限制，与仓库既有
+    记录的 A/B 芯片拖放缺口同因），画布内徽标分段与 A/B 芯片的点击改由 QML harness 的
+    真实 `mouseClick` 验证；结构契约在 C++ 侧断言。
+  - 视频侧源芯片右键关闭缺少真实事件级测试（既有记录缺口，本轮未补）。
+  - Alpha 过滤只落在单图／并排／Wipe 的「忽略透明」RGB 观察；Alpha 灰度、差异结果等
+    模式明确标注「未应用」，不静默套用规则。
+- **截图证据**（`out/verification/close-and-probe/`，由 `DVS_REVIEW_EVIDENCE_DIR` 在真实
+  主窗中采集）：`image-single-ab-entries.png`（收敛后的单图 A/B 芯片、A/B 文件标签、画布内
+  当前来源徽标、复制颜色与数值格式按钮、Alpha 过滤开关；已删除的切至 A/B 按钮不在场）、
+  `image-hold-to-peek.png`（差异模式下按住查看原图，A/B 徽标让位给 peek 徽标）、
+  `image-probe-readout-960.png` 与 `image-probe-readout-1440.png`（960px 窄窗与常用宽窗下
+  坐标／Hex／Alpha／通道列与高位深详情完整可读，Alpha 过滤阈值行与未应用徽标）、
+  `high-depth-alpha.png` 与 `high-depth-alpha-float.png`（整数码值与归一化浮点两种格式下的
+  同一读数，均无截断）。
+
+### 本轮 ZIP 打包（2026-10-16）
+
+- 流程按 AGENTS.md：`build.ps1 -Preset release` → `build.ps1 -Preset release -Test`
+  （**exit 0**，968 component + 719 ui_qml + 其余各层，0 失败，6 项环境跳过、4 项原有禁用）
+  → `cpack --preset release-zip` → `verify-release-package.ps1` **16/16 通过**。
+- 产物：`out/package/zip/CompareStation-2.4.0-windows-x64.zip`，
+  SHA256 `E7573A2BAE4915E0200AE9D14D134CFC8697B218512F91260AB671960AA5E701`，
+  27 MiB；解压后 272 个文件、压缩前 70,382,407 bytes，清单与哈希见
+  `out/verification/package-manifest.txt`。
+- 解压后的包上实测：`CompareStationCli.exe --startup-check` exit 0；`CompareStation.exe
+  --ui-smoke <单源>` 与 `--ui-smoke <双源>`（含对比确认对话框）均 exit 0；
+  `--ui-image-folder` 真实 Alpha 渐变图对 `passed:true`（两侧解码成功、SHA256 记录、
+  差异 MAE 86.67／峰值 188）。三个关键二进制与 `out/build/release/bin` 字节级一致。
+- 载荷符合「ZIP 只打包必要运行时」：app-local CRT/UCRT（msvcp140/vcruntime140/ucrtbase 等）
+  非空；FFmpeg 与 Qt 运行时、QML 模块、Basic 样式、licenses、注册入口与 INSTALL.txt 在位；
+  未出现 PDB/ILK、`dxcompiler.dll`/`dxil.dll`/`d3dcompiler_47.dll`、`vc_redist.x64.exe`、
+  外部 ffmpeg/ffprobe。
+- **未做（如实记录）**：本工作区内没有上一版 ZIP 可做清单逐项对比，因此「对比上一发布」
+  这一条只给出本次完整清单，未宣称差异结论；硬件／性能／soak 门禁未运行。
+
+## 2026-10-16 Codex 收尾更新（当前工作区）
+
+本节优先于下方 10-15 的阶段记录。初始产品实现使用冻结的 Flow Next 1.8.1 +
+GLM-5.3-Flash / Max；用户要求后由 Codex 直接补完实现、修复与验收。不是无监督模型对照。
+
+- E1 双向 Wipe、E4 全片位置条保留；视频问题记录保存方向与比例。图片问题记录仍只重开
+  素材，未恢复完整模式／缩放／平移。图片、视频的 W／Alt 轴向入口与原观察位置保持。
+- E2 图片／视频新增“网格 开／关”，默认关闭；最近邻且横纵物理放大均 ≥800% 才显示。
+  网格仅分配可见格线，无逐帧回读和密集数字。视频复用旋转／SAR／ROI／letterbox 几何，
+  图片跟随实际 Image，包含 Wipe 两侧与工作副本；ROI 三窗的额外局部窗暂不另画网格。
+- E3 协调器拥有往返方向、端点、暂停与恢复，两腿均逐帧完整。真实三源检查发现 Reverse
+  共用 latest-wins 队列，预提交下一帧会取消当前帧；现禁止该预提交并复用已有有界 GOP 窗口。
+  往返区间修改／清除作废旧 provider／ACK／timer 代次；普通正向区间保留原在途语义。
+  九项边界用例通过，另保留完整两腿与真实端点时序控制；不增第二个解码器或 QML 计时器。
+- 最终程序真实 3×1080p60：42–48 帧选 0.25×、跨 GOP 区间选 0.5×，完整发布／渲染确认／
+  协调器确认／提交序列分别 13／400 组，无邻接重复或漏组；均完整返回 In，长区间在暂停
+  生效前另提交下一腿一帧。每轮四个删记录反例均拒绝。帧预算峰值 93,312,000 B
+  （约 89 MiB）。UI 轮询只是
+  辅助采样，不能当作完整序列。当前虚拟桌面实测速率约 0.10×／0.16×，低于所选速度；
+  这是逐帧功能证据，未证明反向流畅度或正式硬件性能达标。
+- Popover 暂缓：主窗实测 1440×900 的区间前后 transport 均高 142px；960×640 区间状态
+  高 178px，折行最多多占 36px。隐藏整行会丢入口／状态，不能算合格收益；本轮未做
+  Popover 原型及可用性对照，保留现有 inline／折行。
+- 最终完整 dev 预设（含 UI 样式／DPI 矩阵）选择 1377 项：1365 通过、8 环境／素材跳过、
+  4 原有禁用，0 失败。format-check、完整 C++ lint、最终 QML lint 通过；C++ lint 后的
+  全部生产源码／头文件哈希仍相同。dev 预设本来排除 hardware／performance／packaged／soak。
+- 实际原生覆盖率：domain 96.19%（1162/1208）、application 84.34%（3841/4554），均超过
+  80%。独立 dev-coverage 构建使用 MSVC 静态插桩运行 89／212 项核心测试；应用静态库以
+  WHOLEARCHIVE 保留未引用对象，未执行代码仍记零。初次报告遗漏 Module.cpp 的拒绝日志保留。
+- 物理 ≥120Hz 性能门禁等用户通知；之前 300s 观察的失败数据继续保留，未改阈值、未新增
+  禁用／跳过、未打包发布。按用户要求本轮交付后停止，不启动进一步模型试验或性能优化。
+
+证据目录：`out/verification/flow181-quality/`。实际往返报告：
+`root-range-2026-10-15T18-21-07-904Z/report.json`（最终程序）；边界检查 `root-boundary-final.log`；
+网格几何 `root-grid-geometry.log`；图片入口 `root-grid-ui-02.log`；主窗测量
+`root-ui-captures/chrome-geometry.txt`。最终门禁：`root-all-tests-final-03.log`、
+`root-format-check-final-05.log`、`root-lint-final-03.log`、`root-qml-lint-final-02.log`、
+`native-coverage-final/gate-whole.log`。完整交付清单在工作流仓库
+`bench/comparestation-glm53flash-flow181-20261015/product-delivery-codex.json`；早期失败和阶段
+自述均保留，不能以当前通过结果覆盖其原有状态。
+
+## 2026-10-15 原阶段记录（保留当时状态）
+
+更新：2026-10-15（Flow181 001 修复批次完成 + 002 增强 E1 双向 Wipe 与 E4 时间轴位置条
+已实现并验证；E2 像素网格与 E3 区间往返循环进行中。详见「2026-10-15 Flow181 001 修复
+批次」与「2026-10-15 Flow181 002 增强批次（进行中）」节）。需求见
+[产品目标](../product/visual-review.md)，代码路由与命令见 [Agent 快速定位指南](../agent-guide.md)。
+此页是当前任务入口，不是发布完成清单。
+
+## 2026-10-15 Flow181 002 增强批次（进行中，当前工作区）
+
+授权见 inbox/002-review-enhancements.json；逐项决定（四项实施 + 其余原方案项明确暂缓）
+见记录目录 plan-review.json 的 batch002Decisions。E2/E3 完成前本节不宣称批次完成。
+
+- **E1 水平/垂直 Wipe（已实现）**：渲染层 `SurfaceWipeOrientation`（Vertical/Horizontal）
+  贯穿 state/panel layout/appendWipe 的目标矩形与 UV 裁剪（含 letterbox 与不可用侧黑底）；
+  ComparisonSurface 新增 `wipeOrientation` 属性、`wipeSplitLogicalY`、
+  `wipePositionForLogicalY`，hit 面板归属随轴切换；WipeHandle 双轴几何（命中区/拖动/
+  双击归中/光标/抓手镜像）；图片侧 `ImageReviewController.wipeOrientation` + wipeClip/
+  标识牌/hover 归属/句柄 + 工具行「分屏：左右/上下」入口（命中面积用 Theme.hitAreaMinimum）；
+  视频侧 viewCommandRow 同款入口；W 键（wipeSplitActive = wipe 模式且 canvasFocus<0，
+  另受 presentationShortcutsEnabled 保护）与 Alt+↑/↓（仅水平切分）/Alt+←/→（仅垂直切分）
+  轴一致门控；问题记录 M 的 wipe 方向/比例仅在 wipe 捕获时写入，恢复区分有效回放 / -2
+  无效（明确提示） / -1 legacy（保持当前切分），非法形状（半对、宽整数窄化、越界比例）
+  在仓库层拒绝为 -2 且重存显式保留 -2。验收：ComparisonSurfaceWarpTests 45/46（新增
+  `WipeHorizontalOrientationSplitsTopBottomAlongY`——中性 Cb/Cr 亮度 oracle、左右均匀性、
+  边界 0/1 归属翻转、比例与 view transform 保持；1 项环境 skip 同前）；MainQml 契约含
+  双向 handle/入口/轴保持断言；persistence_json 7/7 含 WipePair 往返/半对/宽整数/越界
+  反例；WipeHandle scale-1/1.25/1.5/2 全绿。
+- **E4 时间轴全片位置指示条（已实现）**：`timelineWindowPositionStrip`——缩放>1 时在
+  mainRail 内显示 2px 细条，几何单向计算（clamped 端点 → rawWidth → x；x 读 width 而
+  width 不读 x，无求值环）；first 端点钳到 totalFrames-2，last ≥ first+1，缩水会话不会
+  出现 from>to；0/1 帧退化时间线走显式空分支（unit=0、有限 x/width，隐藏项求值不产
+  Infinity/NaN）；tooltip 与 Accessible 名报 1-based 可见帧范围。无新增 seek 控制器，
+  zoom/pan/followPlayhead 仍是唯一窗口状态源。验收：tst_timeline_tracks 新增
+  `test_window_position_strip_tracks_the_visible_window`——1x 隐藏、32x 起点贴左且宽度
+  有界、4x 中点 x 跟随有界窗口起点、终点贴右、0/1 帧退化有限有界、端点有序、Accessible
+  名含 1-based 端点；套件通过。
+- **E2 像素网格（进行中）**：设计约束见 plan-review batch002Decisions.approved.
+  pixel_grid（>=800% 真实像素 + 最近邻 + 显式开关默认关 + 显示叠层无采样/统计改动）。
+- **E3 区间往返循环（进行中，协调器核心已实现）**：命令层 pingPong 字段（需 loop）；
+  协调器 PlaybackRun 增加 rangePingPong/rangeDirection，端点转向即翻方向并把新腿锚在
+  刚呈现的端点帧（真实提交 wall 时间），completedLoops 仅在回到 In 的完整往返 +1；
+  显式暂停优先于任何腿翻转（端点 ACK 后停在边界帧）；反向腿请求走
+  FrameRequestPriority::Reverse（经 MultiSourceFrameProvider.decodePriority 真实映射到
+  SourceDecodeActor.fillReverseWindow，已追链）；ping-pong 两腿均以 nextMinimum 驱动
+  （反向不做 forward wall 投影，VFR 逐帧诚实，慢速如实报告）。
+  **未验收**：fake-clock 走查驱动（PingPongRangeWalks... 测试）卡在正向腿首帧的
+  cadence 触发/激活顺序，已带 WIP 注释保留源码；端点暂停优先两例、双策略 VFR、
+  seek/改区间/清除/陈旧 ACK 反例、真实短区间三源慢放与跨 GOP 均待驱动修复后补跑。
+  正向回归 application 套件 96/96 绿（协调器改动未破坏既有正向/catch-up/VFR/暂停）。
+- **基础设施边界（如实记录）**：真实 120Hz 物理显示器预检未通过（当前仅虚拟显示适配
+  器），物理门禁等用户桌面就绪通知；外层 pre-E3 三源 300s 观察该轮 exit=1
+  （drop_ratio 0.67%>0.5%、held_step 296/300、sequence_errors=4），speed_ratio=0.9984、
+  三源 D3D11VA 零拷贝无拆组、seekP95=216ms；该观察不能归因于本批改动，也不是门禁通过，
+  相关失败留待稳定门用 trace 区分真实丢提交/ACK 丢失/UI 漏观测/负载能力后修复，不改
+  门槛。000 修订期间 Flow Evidence 指纹失败为 1.8.1 路径规范化缺陷（外层零模型复现），
+  留待产品交付后统一修复。
+
+
+## 2026-10-15 Flow181 001 修复批次（当前工作区）
+
+基线 `72a8234` + 1.7.7 保留工作区；产品改动均由本 GLM 会话实施，外层 Codex 独立复核与
+纠偏。证据目录 `out/verification/flow181-quality/`。审查记录与逐项裁定见
+`G:/Workspaces/dsh-mode-bench/bench/comparestation-glm53flash-flow181-20261015/plan-review.json`
+（区分原文/当前代码/推断/历史背景，保留第一轮原回答与外层六条纠正）。
+
+### A · 像素探针修复（真机「读取失败」根因闭合）
+
+- **根因（外层 P01 与本会话独立一致）**：零拷贝 D3D11VA 路径的
+  `createDirectSource` 把同一 NV12/P010 Texture2DArray 本体挂为双平面纹理
+  （GpuTransferActor.cpp:351-352），而 `copyProbePlane` 只接受 R8/R8G8/R16/R16G16 资源
+  格式且 `CopySubresourceRegion` 硬编码子资源 0——真机硬件路径必然 ReadbackFailed 并读
+  错切片；CPU 上传路径（独立 R8/RG8 平面纹理）不受影响，解释 WARP/单测绿而真机红。
+- **修复**：新增 `D3d11SourcePixelProbe`（platform_windows）：经显示路径同一 SRV 用
+  `Load()` 读原始码值（无 RGB 转换/滤波/8-bit 量化），PS 输出 uint4（raw float bits），
+  CPU 侧 `round(sample/containerMax) >> codeShift` 精确还原 8/10-bit 码值；区分 Texture2D
+  与 Texture2DArray 视图（零拷贝视图为单切片 Texture2DArray，FirstArraySlice=帧切片）；
+  坐标用可见区域（`createDirectSource` 改用 `direct.geometry` 可见宽高而非对齐填充纹理
+  尺寸）；GPU 工作一次发布 + DO_NOT_WAIT 轮询；身份钉扎/重试/取消/设备丢失沿用渲染器
+  批次机制；`ProbeReadback.requestId` 保留完整 64 位（截断会让同低半请求碰撞或永不完成，
+  合同测试以 0x100000001 与同低 32 位高位不同请求钉住）。
+- **状态隔离**：探针绘制经 D3D11.1 `ID3DDeviceContextState` 原子换出/换回
+  （CreateDeviceContextState 需非空 feature-level 数组、EmulatedInterface=__uuidof(
+  ID3D11Device)、chosen-level 输出参数在 state 之前——按官方签名装配）；换回前在隔离态
+  内解绑帧 SRV 与 RT 并立即释放 previous state，不钉旧帧。独立审查指出初版进程级 static
+  pipeline 的跨设备数据竞争与不完整保存/恢复（多 viewport/多 RT/GS 等阶段）后重写为
+  槽位自持；行为验证覆盖双设备交错、调用方状态保持（t0/t1 SRV、RT、双 viewport、blend）
+  与帧引用释放（AddRef 计数），**实测范围仅此四项，其余依赖换出保证**，头文件如实分工。
+- **同步包装**：`probeSourcePixelSync` 仅测试/检查 API，不进 GUI/render 生产链；以
+  250ms 截止的 DO_NOT_WAIT 轮询完成，无超时阻塞 Map。
+- **测试**（platform 62/62 全绿，含既有回归）：`ProbePixelReadsNv12ArraySliceVisibleRegion
+  CodeValues`（真机硬件+VIDEO_SUPPORT、BIND_DECODER|SHADER_RESOURCE、FirstArraySlice=1、
+  可见 5×3 vs 填充 8×4、切片 0 填异种子防串读）；`ProbePixelReadsP010ArraySliceTenBit
+  CodeValues`（同形 10-bit 左对齐 >>6 精确）；`ProbeSlotsAreDeviceOwnedAndInterleaveAcross
+  Runtimes`；`ProbeIssuePreservesCallerStateAndFrameReferences`；`SourcePixelProbeRequest
+  IdsKeepFullWidth`。**变异证据**：切片选择改回常量 0 / 平面混淆即新用例红（评审修正
+  middle=(2,1)→色度(1,0) 期望并保留修订理由）；视图矩阵诊断（test-probe-diag-02/03.log）
+  确认：MipLevels 未赋值的 array cast E_INVALIDARG、WARP 连 NV12 纹理都建不出
+  （video=1 建设备 DXGI_ERROR_UNSUPPORTED）——修正 MipLevels=1 后硬件无需 VIDEO_SUPPORT
+  即通过，排除"缺 VIDEO_SUPPORT"误判。
+- **死代码处置**：`D3d11GpuFrameBacking::probePixel`（有已批准行为测试）保留并统一走
+  同一探针实现；渲染器旧 `copyProbePlane`/`pollProbePlane` 删除，其行为由上述新用例承接。
+
+### B · 取证诚实化（--ui-video-evidence）
+
+- **取证实现缺陷（外层逐行核对发现，旧结论据此修订）**：WaitPixelPlate 超时分支曾把
+  `pixel_readout_plate_visible` **无条件写 false**，并把"缺有效样本"编码成"面板隐藏"。
+  因此 video-04/video-02 的 plate_visible:false **只证明 row=读取失败，不证明隐藏**；
+  「四条件全真却隐藏」改记为【待动态核验/可能是取证误报】。第一轮与 1.7.7 均误信该字段，
+  此处保留修订记录；旧报告原件不修改不重标。
+- **修正后取证读取**：plate_visible 记录真实观察值（查询缺失记 unknown）；
+  `sample_valid` 与 `sample_current` 独立字段（冻结有效样本=valid true/current false）；
+  逐源结构化样本经 `pixelReadoutResults` 读取：request/frame/session/generation 身份与
+  issued request、expected 坐标、presented 三元组逐项核对（同帧旧光标/旧请求不得冒充
+  current）；身份字段以 64 位十进制字符串表示（`EvidenceIdentityJson.h`——toUInt 窄化是
+  0x100000001→1 的直接原因，字符串形式同时消除 >2^53 的 double 整数悬崖；高位样本测试
+  `Identity64StaysExactBeyondTheDoubleRange` 钉住）；缺失查询一律 unknown，不把默认值
+  伪造成观察。成功门=plate 可见 + 每源 known/valid/current；父链诊断
+  （objectName/className/visible/opacity/几何/x/y/z/clip/scene 坐标）成功与失败分支都
+  落盘。
+- **真实三源正常控制**（DPR2/2880×1800 截图）：`forensic-video-01` passed=true，三源
+  sample_valid/current/request_matches/position_matches 全 true，行文本
+  「像素 (1919, 367) Y 79 Cb 144 Cr 119 NV12 8-bit Limited 来源 yuv420p」，父链全程
+  visible——**证实面板本就可见，旧失败纯属探针故障+取证误报**。
+- **负控制（判定扰动对照，`--negative` 模式，报告带 negative_control 字段）**：
+  stale-request（request+1）与 stale-position（expected_x+1）均产出
+  plate_visible=true、sample_valid=true、sample_current=false 且 exit=1——证明"可见但
+  陈旧不放行"；missing-source 多查一个不存在槽 → 全字段 unknown 且失败。
+  **变异反例（与 A 支持回归共用）**：临时令 planeContainerMax 拒绝 8-bit 平面（同类于
+  原 NV12 缺陷），重建后真实三源取证产出 plate_visible=true、sample_valid=false、
+  reason=readback-failed、exit=1；恢复源码后 SHA256 与变异前一致
+  （5097094F…D8），platform 62/62 恢复全绿。编译失败不计为检出。
+- **P010 10-bit 真实取证**：`forensic-p010-01`（复制既有 h265_10bit 夹具为双源，未扩
+  编码依赖）passed=true，行「Y 680 Cb 664 Cr 64 P010 10-bit Limited 来源 yuv420p10le」，
+  bit_depth=10——真实硬件解码窗口的 10-bit 码值，非 WARP/人工纹理。
+
+### C · I8 与 H/D1 收口
+
+- **I8 逐预设对齐**：播放器预设下按钮行为确为 ±30 秒（PlayerOsc onPrevious/NextSecond
+  Requested→stepSeconds(±30)），但 Ctrl+A/D 恒为 ±1 秒（ReviewShortcuts.cpp 不随预设）；
+  tooltip 改为「快退 30 秒 / 快捷键：Ctrl+←（Ctrl+A 仍后退 1 秒）」，不再把 Ctrl+A/D
+  合并进 30 秒承诺；tst_player_osc 断言"仍后退/快进 1 秒"在场。按键语义未改。
+- **D1 残留**：沉浸恢复胶囊改「按 H 或点击恢复」（原写 Tab），注释同步；合同测试断言
+  胶囊文本含「按 H」且不含 Tab。
+- **H 文本上下文守卫**：真实入口 manualAnchorDialog 打开后聚焦 canonicalAnchorFrame
+  （editable ReviewOffsetSpinBox），H 不触发且焦点链落编辑器内——诚实范围说明：弹窗
+  （modal）与文本上下文同时在场，无法单独归因；补充非 modal 隔离场景——测试自持可见
+  TextInput（声明既有 textEditingInputContext 契约）真实持焦，带 text 的 QKeyEvent
+  postEvent 后 **文本收到 "h"**（真实键盘路由，非只置布尔）且 chrome 不变，焦点还
+  viewport 后同原语 H 正常切换（正控制同原语对照）。Tab/Shift+Tab 真实导航由既有
+  断言保持；曾尝试检查器 thresholdSpinBox（非 modal）但该内容在首次可见才实例化的
+  Loader 内，小窗 harness 不加载，记录为夹具局限。
+
+### D · 显式 GT 角色与 C 键反馈
+
+- **生产者事实**：ReviewController 在 validatedComparison 无 referenceSourceId 时把
+  `referenceSourceIndex` 回退为 canonicalSourceIndex（1511-1515，非仅 removal-time），
+  Main 层只查 `>=0` 会在真实"有效三源无 GT"会话误判有 GT。新增
+  `ReviewController::hasExplicitReference`（视图字段+Q_PROPERTY）：仅当
+  referenceSourceId 存在为真；canonical 回退保持原语义不变。
+- **Main 门控改读显式事实**：`switchCandidateEdge`（C 键）在
+  `!hasExplicitReference || index 越界` 时经 showActionFeedback 报
+  「未设置参考（GT）源…」并保持 pair 不变、不提交命令；`differencePeekTargetValid`
+  （按住看 GT 的按钮与 ` 键共用）同样加挂 hasExplicitReference。
+- **反例即真实投影**：新 `installAllPredictionVideoSet`（ValidatedComparisonSet 合法、
+  全 Prediction、canonical>=0），合同测试断言 referenceSourceIndex==canonical 且
+  hasExplicitReference=false、C 键报原因、edge 不变、无 SetActiveComparisonPair 提交、
+  peek 按钮不可见、真实 ` 按下/松开全程 inert；有 GT 正常路径（identifyReferenceSlot）
+  断言 hasExplicitReference=true 且 index=1。
+- **DualDifference 按住 GT**：既有 D4 测试（真实按键 press/release/lock 交互）保持
+  绿；无 GT 门控由上条反例补充。
+
+### E · tnum 与 token
+
+- `VcsTheme.js` 新增 `fontFeaturesNumeric = { "tnum": 1 }`（注释明确：Qt 6.6+ 支持
+  font.features，渲染效果取决于字体携带该特性，主题不承诺平台 100% 保证）；应用于
+  数字跳动文本——TimelineTracks 缩放徽章；坐标/表格类保持 Cascadia Mono 等宽不强行替换。
+  tst_vcs_theme 断言 token 形状（仅 tnum=1）与该 Qt 构建接受 font.features 赋值。
+
+### 验证与本批边界
+
+- 平台探针套件**逐轮分列**（不合并计数）：
+  - 修复后轮（test-probe-04.log）：62 项=62 通过+0 跳过+0 失败（当时无新用例红，后两用例
+    因期望值/夹具问题返工重跑）。
+  - 期望修正轮（test-probe-02.log）：62 项=59 通过+2 失败+1 未列（失败为 NV12 数组用例与
+    requestId 用例，均已修复；记录保留）。
+  - **变异恢复轮**（test-probe-restore-01.log）：62 项=**61 通过+1 跳过+0 失败**——
+    RendersUnequalAspectNv12AcrossAnOddSplitWithoutABlackSeam Skipped，原因：当前 DPR2
+    屏幕无法产生奇数物理窗口宽（该用例自身 101–109 逻辑宽扫描的 GTEST_SKIP，环境性）；
+    **补充证据**：QT_SCALE_FACTOR=1.5 下同用例单独通过（test-odd-split-scale15.log）。
+    恢复轮源码哈希 5097094F…D8 与变异前一致（外层独立确认）。修复后轮的 62 全通过记录
+    保留其原范围，不冒充恢复轮。
+- 受影响 UI 套件**逐轮分列**：
+  - test-abcde-06 轮：MainQmlContractTests 134 项=129 通过+4 Disabled+1 失败
+    （H 守卫用例：夹具焦点断言问题，见下）；player_osc/timeline_tracks/vcs_theme 通过。
+  - H 守卫用例两轮返工（编辑器焦点断言→anchorDialog 弹窗 overlay 遍历→带 text 键事件+
+    同原语正控制）后单例通过（test-h-guard-03.log），D3/T 两用例同批单例通过
+    （test-d3-h-02.log 前 2/3）。
+  - EvidenceIdentityJsonTests（UINT64_MAX/0x100000001/unknown）通过。
+- 真实取证：正常三源 NV12、双源 P010 10-bit 均 passed=true；三个 `--negative` 负控制与
+  8-bit 拒识别变异反例均诚实失败且字段符合预期；变异恢复经 SHA256+上述平台恢复轮确认。
+- **未验/边界（不宣称）**：无过滤全量 -Test、format-check、完整 lint 留到整体修订稳定
+  统一运行；非 modal 纯文本守卫与 popup 守卫的完全隔离未在自动化内构造（弹窗场景为
+  复合验证 + TextInput 隔离场景互补）；8-bit 拒识别变异仅验证了探针拒绝路径。
+  **随 002 最终稳定阶段完成的剩余变异清单**：64 位异步身份端到端变异（身份截断/换代
+  竞争须检出）、共享状态隔离变异（probe 绘制污染调用方状态须检出）——按相关行为选择
+  目标，不逐断言铺开。执行日志（含构建失败 01/02 与诊断 01-03）完整保留于
+  `out/verification/flow181-quality/logs/`；各轮通过/跳过/禁用/失败以上述逐轮分列与
+  日志汇总行为准。
+- 台账更新策略：本节为工作区记录；commit/发布/mode_bench 仍冻结待监督者指令。
+
+
+## 2026-10-14 修复阶段（已知失败修复、图片套件漏选与集成验收，当前工作区）
+
+承接上一节的工作区。范围：上一阶段 10 项已知失败全部修复、ui.ImageWorkspaceManual 漏选
+修正并整套执行、真实事件级图片芯片拖放路由修复、token 门禁守卫修复与超标收敛；不展开
+后续美化。证据目录 `out/verification/flow177-glm53-repair/`。
+
+- **已知失败 10/10 修复**（integration-batch1 + image-theme-suites 的失败项）：
+  - CompareModeBar 配对胶囊**自锁隐藏**（产品缺陷）：`comparePairGroup.visible` 最初 OR 了
+    三个子项的 `.visible`，而 QML 读子项 visible 得到含祖先的有效可见——胶囊一旦在并排
+    模式隐藏过一次就永远打不开（子项"透过"父项读为隐藏）。改为纯意图条件（三源+配对相
+    关任务，或差异任务+可 peek 参考）。
+  - 胶囊**零宽布局**与**布局饥饿**（产品缺陷）：胶囊 Rectangle 未显式 width/height（Flow
+    按二者布局）；且本条 bar 所在的无渲染宿主（gtest 合同测试）从不跑渲染 polish，胶囊
+    Row 的子项宽度翻转后无人重排。补显式尺寸 + 镜像 bar 既有纪律的显式
+    `Qt.callLater` 重排链（子项宽度翻转、胶囊自身可见性翻转都会重排 Row→Flow）。
+    ModeBarReflows 在 960–1920px 两模式恢复无重叠不越界。
+  - **T 三源交替**（测试 harness 缺口）：假会话不落地 SetActiveComparisonPairCommand、
+    不回执命令终态（busy 卡死禁用快捷键）、无焦点项（Shortcut 经焦点项派发）。测试补齐
+    三者；真实按键 T 在 B↔C 对上交替、播放中 inert 全部通过。
+  - **导出芯片契约回归**（产品缺陷，TransportBar）：双面折叠把导出芯片藏进端点门控面且
+    文案改「导出片段…」，违背 HEAD 既有契约（未设点可见+禁用+点击解释、idle 文本
+    「导出」）。芯片提升为 cluster 直接子项、文本恢复；真实鼠标点击 mapToScene 命中恢复。
+  - **rangeInline/rangeInlineFloor 绑定循环**（产品缺陷）：floor 读被 ParentChange 写入的
+    `rangeCluster.parent`/`buttons.implicitWidth` 造成重入断环、rangeInline 卡死。重写为
+    固定成员宽求和（13 成员+13 间距+簇宽+16），两态代数等价、无重入通道；900px 回窄分支
+    历史上从未健康求值，测试改为自校准阈值+双向不越界几何断言。
+  - **RoiTripletStrip 两例**：滚轮梯级=测试未推进 viewport 拥有的 zoomPercent（补状态步，
+    方向断言原强度）；拖动信号=Arguments 对象深比较写法缺陷（逐元素断言）。
+  - **player_osc 焦点环**：mouseClick 已给按钮 mouse-reason 焦点，对其再
+    forceActiveFocus(TabFocusReason) 不改写原因——测试先移焦再到达（tst_review_action_button
+    既有模式）；`statusText` 的 `height: visible ? implicitHeight : 0` 重入判环，删除显式
+    绑定（无消费者）。
+  - **ReviewOffsetSpinBox 两处产品缺陷**：Basic 样式 40px 双指示器把 76px 控件文本区压成
+    0 宽（点击永远打在指示器上）；editable SpinBox 焦点转发给 TextInput（Control 非
+    FocusScope），control 级 activeFocus/visualFocus 恒假——上一阶段的 visualFocus 环是
+    死代码。重排为 32×32 横排步进（−/+）、implicitWidth 124、文本区 42px；新增
+    `keyboardFocusRing`（编辑器焦点+键盘 focusReason 派生）；测试改观察真正接收焦点的
+    编辑器并加 32px 命中区/不重叠断言（外层质量审查确认 24×17 违反 hitAreaMinimum 后返工）。
+    VcsTheme.js U12 契约补注 editable Control 的焦点环派生规则。
+- **图片套件漏选修正**：上一阶段命令过滤器误写 `ui.image_workspace_manual`（真实 CTest 名
+  `ui.ImageWorkspaceManual`，#1281），整套从未执行。Images 分组正则
+  `ui[.](Image|MainQmlContractTests[.](Image|FolderSidebar))` 本就覆盖该名（空跑验证 140 项
+  选中含 #1281；错误过滤器空跑 0 项——漏选可被 `--no-tests=error` 检出，不会静默）。
+  `images-group-run-01.log`：140 项=137 通过+1 超时+2 跳过（Skipped 不计通过）。
+  整套执行暴露的缺陷见下。
+- **ImageWorkspaceManual 26→27 用例全绿**（六轮迭代）：产品缺陷 5 处——并排模式悬停侧
+  坐标卡被旧单视图条件隐藏；`pairUrlsAt` 守卫 NaN 免疫缺失；`Window.window` 在非 Item 的
+  Connections handler 内不可解析（窗口失活结束 peek 从未生效）；裁剪悬浮动作条 y 无视口
+  上界钳制（深缩放下条形落在 clip 外不可点）；动作条与左下 HUD 同带重叠（更高 z 的 HUD
+  吃掉左端芯片点击）。FolderPairSidebar 三处 null-safe 投影。测试缺陷：定位器时序
+  （`TestCase.waitForPolish` 才冲刷子布局，`Item.ensurePolished` 只跑自身 updatePolish）、
+  图外取样坐标、零位移悬停、DropEvent 信号参数强制、API 误用两处、算错的 crop 高度期望
+  （10→30）。CMake TIMEOUT 20→60（串行 13s，-j8 负载下 20s 截断）。
+- **真实事件级图片芯片拖放**（新增 MainQmlContractTests.ImageChipDropsRouteRealDragEvents）：
+  QDrag 真事件穿过真实窗口。暴露并修复根因链——窗口级 workspaceDropArea 同 z 后声明居上
+  截获一切拖放（z:0→内容 z:1）；无渲染宿主下 imageCommandPanel 零高使拖放遍历在祖先处
+  剪枝整个芯片子树（命令面板补显式重排纪律）。现在：有效单图→芯片 A/B 各自槽位信号且
+  不泄漏窗口级；画布投递→窗口级 dropped 收到同一 URL（打开/追加路径保持）；非图片/多
+  URL/无 URL 反例不产生替换。**同类已知缺口**：视频侧源芯片无真实事件测试；DropArea 的
+  onEntered 过滤器与 onDropped 事件跃迁在 QML 测试不可驱动（Qt 6 禁止外部调用 on*
+  处理器），信号级转发已有覆盖、事件级待 C++ 合同扩展。
+- **token 门禁**：duration 家族全收敛触发守卫误报（"零字面值=扫描失效"不分收敛与失效）。
+  check-qml-token-literals.ps1 守卫重写：零字面值时合成样本行验证正则活性+原始属性在场
+  验证语料，两腿健康判收敛通过；未知值/corpus 漂移/正则漂移三反例仍拒绝（独立运行证据
+  token-gate-fix-02..05）。守卫修复揭开的真实超标全部收敛：radius 3/3.5→token、spacing
+  0/5/6→token 或默认值说明、26px→hitAreaMinimum。24px 新增站首轮曾整组记基线 8→19，
+  外层审查否决（HUD/裁剪芯片是真实高频操作，不得以视频侧旧站扩大旧问题）：恢复 24=8，
+  新增交互面改外层 32px 命中接收器（24px 内部绘制保留，U10 峰值点先例），纯 tooltip 对象
+  精准去误分类并要求带 onClicked 反例证明分类精度。
+- **取证入口（--ui-video-evidence）**：argc 守卫负例（过少/过多参数）exit 1；
+  `evidence-settings.json` 独立存储验证（用户 %LOCALAPPDATA%\CompareStation\settings.json
+  三次运行字节级不变，DVS_DISABLE_SHELL_REGISTRATION=1）；hover 坐标改 mapToScene、行文
+  本改调 `pixelReadoutRowText(slot)`（表格化后容器不再是 Text）。**本轮确认未解决、来源
+  未归因**：真实硬件像素探针回读返回「读取失败」（D3D11 平台能力、采样接线、取证入口
+  自身均在候选内，未做旧源码同配置复现，不排除本轮问题；forensic-video-04 report.json
+  保留 passed:false + 诊断字段）；读数板四可见条件全真却有效隐藏（祖先链未定位）。入口
+  诚实失败（exit 1 + 诊断），不假报通过。
+- **ChromeGeometryAndScreenshotEvidence（分运行记录）**：单独取图运行（
+  chrome-geometry-evidence-03）按宽高双条件逐一屏幕候选后无屏容纳 1440×900 →
+  GTEST_SKIP 明示未获证据，**该运行未产出新 1440×900 PNG**；较晚全量门禁
+  （full-gate-final-03）中同一用例几何断言通过（4.36s），但断言通过不等于生成图片——
+  hit-area-v2 截图集记为本阶段缺口。不用任意实际高度冒充。
+- **验证（2026-10-14 起、10-15 止，上海时区）**：见
+  `out/verification/flow177-glm53-repair/logs/`。最终稳定门禁（稳定树按序收口）：
+  全量 `dev -Test -TestJobs 8`（full-gate-final-03：1348 注册 = 1340 通过 + 0 失败 +
+  4 环境跳过 + 4 原有禁用，490.37s；1344 为含跳过的启用分母非成功数；新拖放测试与
+  ui.ImageWorkspaceManual 均在选中集合通过）、format-check、lint、Images 组
+  （141 注册 = 139 通过 + 2 跳过）、生产语料 token gate 全部 exit 0。早前 DPR 1.75 的
+  12 张截图（screenshots/，ChromeGeometry 变更前）保留为历史；forensic-video-04/ 为三源
+  1080p60 三态真实画面。
+- **仍开放**：像素回读「读取失败」与读数板隐藏异常（来源未归因，上条）；视频侧芯片
+  拖放无真实事件测试；拖放更外层覆盖缺口——Qt 原生 enter/move/drop 已由新测试覆盖，
+  仍缺 Windows OLE/Explorer 实际拖入；视频侧 viewCommandRow 24px 与图片侧 32px 统一
+  （两侧同升，非本轮）；hit-area-v2 1440×900 截图未取得（屏幕所限）；取证像素阶段
+  修复前入口保持诚实失败。
+
 
 ## 2026-10-14 计划清单逐条实核与修复（当前工作区）
 

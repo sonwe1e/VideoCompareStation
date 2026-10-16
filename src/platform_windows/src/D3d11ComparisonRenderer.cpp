@@ -7,6 +7,7 @@
 #include "dvs/platform/RenderActivitySink.h"
 
 #include "D3d11GpuFrameBacking.h"
+#include "D3d11SourcePixelProbe.h"
 #include "GpuFrameResource.h"
 #include "GpuFrameSet.h"
 
@@ -996,6 +997,8 @@ bool SurfaceRenderState::isValid() const noexcept {
            dvs::platform::isValid(differenceEdge) && dvs::platform::isValid(differenceFilter) &&
            dvs::platform::isValid(videoFilter) && dvs::platform::isValid(thresholdPolicy) &&
            std::isfinite(threshold) && threshold >= 0.0F && threshold <= 1.0F &&
+           (wipeOrientation == SurfaceWipeOrientation::Vertical ||
+            wipeOrientation == SurfaceWipeOrientation::Horizontal) &&
            viewTransform.isValid() && (!roiEnabled || roi.isValid()) &&
            std::isfinite(wipePosition) && wipePosition >= 0.0F && wipePosition <= 1.0F &&
            canvasFocusSlot >= -1 && canvasFocusSlot <= 2 && referenceSlot < 3U &&
@@ -1101,19 +1104,23 @@ computeReferenceFocusLayout(const float logicalWidth,
     };
 }
 
-SurfacePanelLayout computeSurfacePanelLayout(const SurfaceViewMode viewMode,
-                                             const float logicalWidth,
-                                             const float logicalHeight,
-                                             const std::uint32_t pixelWidth,
-                                             const std::uint32_t pixelHeight,
-                                             const std::uint8_t referenceSlot,
-                                             const SurfaceDifferenceEdge differenceEdge,
-                                             const float wipePosition) noexcept {
+SurfacePanelLayout
+computeSurfacePanelLayout(const SurfaceViewMode viewMode,
+                          const float logicalWidth,
+                          const float logicalHeight,
+                          const std::uint32_t pixelWidth,
+                          const std::uint32_t pixelHeight,
+                          const std::uint8_t referenceSlot,
+                          const SurfaceDifferenceEdge differenceEdge,
+                          const float wipePosition,
+                          const SurfaceWipeOrientation wipeOrientation) noexcept {
     SurfacePanelLayout result;
     if (!isValid(viewMode) || !std::isfinite(logicalWidth) || !std::isfinite(logicalHeight) ||
         logicalWidth <= 0.0F || logicalHeight <= 0.0F || pixelWidth == 0U || pixelHeight == 0U ||
         referenceSlot > 2U || !isValid(differenceEdge) || !std::isfinite(wipePosition) ||
-        wipePosition < 0.0F || wipePosition > 1.0F) {
+        wipePosition < 0.0F || wipePosition > 1.0F ||
+        (wipeOrientation != SurfaceWipeOrientation::Vertical &&
+         wipeOrientation != SurfaceWipeOrientation::Horizontal)) {
         return result;
     }
     const SurfaceRect full{
@@ -1132,15 +1139,30 @@ SurfacePanelLayout computeSurfacePanelLayout(const SurfaceViewMode viewMode,
         return result;
     }
     if (viewMode == SurfaceViewMode::Wipe) {
-        const float split = logicalWidth * wipePosition;
-        result.sourceRects[0U] =
-            SurfaceRect{.x = 0.0F, .y = 0.0F, .width = split, .height = logicalHeight};
-        result.sourceRects[1U] = SurfaceRect{
-            .x = split,
-            .y = 0.0F,
-            .width = logicalWidth - split,
-            .height = logicalHeight,
-        };
+        // E1: the split axis follows the wipe orientation. Vertical keeps the historical
+        // left/right split along X; Horizontal splits top/bottom along Y. Every wipe consumer
+        // reads the same orientation value.
+        if (wipeOrientation == SurfaceWipeOrientation::Horizontal) {
+            const float split = logicalHeight * wipePosition;
+            result.sourceRects[0U] =
+                SurfaceRect{.x = 0.0F, .y = 0.0F, .width = logicalWidth, .height = split};
+            result.sourceRects[1U] = SurfaceRect{
+                .x = 0.0F,
+                .y = split,
+                .width = logicalWidth,
+                .height = logicalHeight - split,
+            };
+        } else {
+            const float split = logicalWidth * wipePosition;
+            result.sourceRects[0U] =
+                SurfaceRect{.x = 0.0F, .y = 0.0F, .width = split, .height = logicalHeight};
+            result.sourceRects[1U] = SurfaceRect{
+                .x = split,
+                .y = 0.0F,
+                .width = logicalWidth - split,
+                .height = logicalHeight,
+            };
+        }
         if (differenceEdge == SurfaceDifferenceEdge::Between0And2) {
             result.sourceSlots = {0U, 2U, 1U};
         } else if (differenceEdge == SurfaceDifferenceEdge::Between1And2) {
@@ -1263,6 +1285,7 @@ computeSurfacePresentationGeometry(const SurfaceViewMode viewMode,
                                    const std::uint8_t referenceSlot,
                                    const SurfaceDifferenceEdge differenceEdge,
                                    const float wipePosition,
+                                   const SurfaceWipeOrientation wipeOrientation,
                                    const std::array<SurfaceDisplayExtent, 3U>& sourceDisplayExtents,
                                    const bool differenceSuppressed,
                                    const std::int8_t canvasFocusSlot) noexcept {
@@ -1299,7 +1322,8 @@ computeSurfacePresentationGeometry(const SurfaceViewMode viewMode,
                                               pixelHeight,
                                               referenceSlot,
                                               differenceEdge,
-                                              wipePosition);
+                                              wipePosition,
+                                              wipeOrientation);
     for (std::size_t index = 0U; index < result.panels.sourceCount; ++index) {
         result.sourceContentRects[index] =
             fitted(result.panels.sourceRects[index], result.panels.sourceSlots[index]);
@@ -1646,9 +1670,7 @@ public:
         pixelProbeBatchSet_.reset();
         pixelProbeBatchRequests_.clear();
         for (auto& readback : pixelReadbacks_) {
-            readback.set.reset();
-            readback.luma.values.reset();
-            readback.chroma.values.reset();
+            readback.clear();
         }
     }
 
@@ -1657,7 +1679,9 @@ public:
         // deleters can observe a still-valid broker/device generation during teardown.
         frontPublication_.reset();
         cancelSourcePixelProbes();
-        pixelReadbacks_ = {};
+        for (auto& readback : pixelReadbacks_) {
+            readback.teardown();
+        }
         for (ComPtr<ID3D11Buffer>& buffer : videoColorBuffers_) {
             buffer.Reset();
         }
@@ -1739,125 +1763,77 @@ private:
                        static_cast<double>(dimensions.height - 1U)));
         result.x = pixelX;
         result.y = pixelY;
-        PixelReadback& readback = pixelReadbacks_[request.slot];
-        if (!readback.set || readback.set != set || readback.result.requestId != result.requestId ||
-            readback.result.x != pixelX || readback.result.y != pixelY) {
-            readback.set = set;
-            readback.result = result;
-            readback.luma.values.reset();
-            readback.chroma.values.reset();
-            if (!copyProbePlane(
-                    device, context, backing->yTexture(), pixelX, pixelY, readback.luma) ||
-                !copyProbePlane(device,
-                                context,
-                                backing->uvTexture(),
-                                pixelX >> 1U,
-                                pixelY >> 1U,
-                                readback.chroma)) {
-                readback.set.reset();
+        // The probe reads through the shader views the display path uses; they encode the
+        // plane format and - for zero-copy D3D11VA frames - the non-zero array slice.
+        const std::optional<D3d11ProbePlane> lumaPlane = lumaProbePlane(*backing);
+        const std::optional<D3d11ProbePlane> chromaPlane = chromaProbePlane(*backing);
+        if (!lumaPlane.has_value() || !chromaPlane.has_value()) {
+            result.reason = SourcePixelProbe::Reason::ReadbackFailed;
+            return result;
+        }
+        ProbeReadback& readback = pixelReadbacks_[request.slot];
+        if (!readback.key.matches(set.get(), request.requestId, pixelX, pixelY)) {
+            readback.key.start(set.get(), request.requestId, pixelX, pixelY);
+            readback.set = set; // pin the staged set while its probe copy is in flight
+            // Chroma is co-sited with the luma pixel's 2x2 block corner; visible dimensions
+            // guarantee (pixelX >> 1, pixelY >> 1) stays inside the chroma plane.
+            if (!readback.slot.issue(device,
+                                     context,
+                                     *lumaPlane,
+                                     *chromaPlane,
+                                     pixelX,
+                                     pixelY,
+                                     pixelX >> 1U,
+                                     pixelY >> 1U)) {
+                readback.clear();
                 result.reason = SourcePixelProbe::Reason::ReadbackFailed;
                 return result;
             }
             probeCopiesIssued_ = true;
         }
-        const HRESULT lumaStatus = pollProbePlane(context, readback.luma);
-        const HRESULT chromaStatus = pollProbePlane(context, readback.chroma);
-        if (lumaStatus == DXGI_ERROR_WAS_STILL_DRAWING ||
-            chromaStatus == DXGI_ERROR_WAS_STILL_DRAWING) {
+        const std::optional<bool> polled = readback.slot.poll(context);
+        if (!polled.has_value()) {
             result.reason = SourcePixelProbe::Reason::DeviceBusy;
             return result;
         }
-        if (FAILED(lumaStatus) || FAILED(chromaStatus)) {
-            readback.set.reset();
+        if (!*polled) {
+            readback.clear();
             result.reason = SourcePixelProbe::Reason::ReadbackFailed;
             return result;
         }
-        result.luma = (*readback.luma.values)[0];
-        result.cb = (*readback.chroma.values)[0];
-        result.cr = (*readback.chroma.values)[1];
-        result.bitDepth = readback.luma.format == DXGI_FORMAT_R8_UNORM ? 8U : 10U;
+        const D3d11SourcePixel& values = readback.slot.values();
+        result.luma = values.y;
+        result.cb = values.cb;
+        result.cr = values.cr;
+        result.bitDepth = values.bitDepth;
         result.available = true;
-        readback.set.reset();
+        readback.clear();
         return result;
     }
 
-    struct ProbePlane final {
-        ComPtr<ID3D11Texture2D> staging;
-        DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
-        std::optional<std::array<std::uint32_t, 2U>> values;
-    };
-
-    struct PixelReadback final {
-        ProbePlane luma;
-        ProbePlane chroma;
+    // One probe slot per source: the bounded GPU probe resources, the pending-request key
+    // (the same PendingProbeKey the unit tests exercise - start/match/clear transitions, full
+    // 64-bit request id), and the set pin for the request currently staged in it. Reads go
+    // through the shader views with an isolated D3D11.1 device-context state; polling is
+    // DO_NOT_WAIT.
+    struct ProbeReadback final {
+        D3d11SourcePixelProbeSlot slot;
+        PendingProbeKey key;
         std::shared_ptr<const GpuFrameSet> set;
-        SourcePixelProbe result;
+
+        void clear() noexcept {
+            slot.clearResult();
+            key.clear();
+            set.reset();
+        }
+
+        void teardown() noexcept {
+            slot.reset();
+            clear();
+        }
     };
 
-    // Six 1x1 staging resources at most, reused across cursor positions. Copies are issued once
-    // per request; subsequent render passes only poll with DO_NOT_WAIT and never stall the GPU.
-    [[nodiscard]] static bool copyProbePlane(ID3D11Device* device,
-                                             ID3D11DeviceContext* context,
-                                             ID3D11Texture2D* source,
-                                             std::uint32_t x,
-                                             std::uint32_t y,
-                                             ProbePlane& plane) {
-        D3D11_TEXTURE2D_DESC sourceDescription{};
-        source->GetDesc(&sourceDescription);
-        const auto format = sourceDescription.Format;
-        if (x >= sourceDescription.Width || y >= sourceDescription.Height ||
-            (format != DXGI_FORMAT_R8_UNORM && format != DXGI_FORMAT_R8G8_UNORM &&
-             format != DXGI_FORMAT_R16_UNORM && format != DXGI_FORMAT_R16G16_UNORM)) {
-            return false;
-        }
-        if (!plane.staging || plane.format != format) {
-            plane.staging.Reset();
-            D3D11_TEXTURE2D_DESC description{};
-            description.Width = 1U;
-            description.Height = 1U;
-            description.MipLevels = 1U;
-            description.ArraySize = 1U;
-            description.Format = format;
-            description.SampleDesc.Count = 1U;
-            description.Usage = D3D11_USAGE_STAGING;
-            description.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-            if (FAILED(
-                    device->CreateTexture2D(&description, nullptr, plane.staging.GetAddressOf()))) {
-                return false;
-            }
-            plane.format = format;
-        }
-        const D3D11_BOX region{x, y, 0U, x + 1U, y + 1U, 1U};
-        context->CopySubresourceRegion(plane.staging.Get(), 0U, 0U, 0U, 0U, source, 0U, &region);
-        return true;
-    }
-
-    [[nodiscard]] static HRESULT pollProbePlane(ID3D11DeviceContext* context, ProbePlane& plane) {
-        if (plane.values.has_value()) {
-            return S_OK;
-        }
-        D3D11_MAPPED_SUBRESOURCE mapped{};
-        const HRESULT status = context->Map(
-            plane.staging.Get(), 0U, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped);
-        if (FAILED(status)) {
-            return status;
-        }
-        std::array<std::uint32_t, 2U> values{};
-        if (plane.format == DXGI_FORMAT_R8_UNORM || plane.format == DXGI_FORMAT_R8G8_UNORM) {
-            const auto* const bytes = static_cast<const std::uint8_t*>(mapped.pData);
-            values = {bytes[0], plane.format == DXGI_FORMAT_R8G8_UNORM ? bytes[1] : bytes[0]};
-        } else {
-            const auto* const words = static_cast<const std::uint16_t*>(mapped.pData);
-            values = {static_cast<std::uint32_t>(words[0] >> 6),
-                      static_cast<std::uint32_t>(
-                          (plane.format == DXGI_FORMAT_R16G16_UNORM ? words[1] : words[0]) >> 6)};
-        }
-        context->Unmap(plane.staging.Get(), 0U);
-        plane.values = values;
-        return S_OK;
-    }
-
-    std::array<PixelReadback, 3U> pixelReadbacks_;
+    std::array<ProbeReadback, 3U> pixelReadbacks_;
     std::shared_ptr<const GpuFrameSet> pixelProbeBatchSet_;
     std::vector<SourcePixelProbeRequest> pixelProbeBatchRequests_;
     bool probeCopiesIssued_ = false;
@@ -2320,47 +2296,78 @@ private:
             const float position = std::clamp(state.wipePosition, 0.0F, 1.0F);
             // Wipe is positioned in the full presentation surface, not in the aspect-fitted
             // content rect. This keeps the renderer, handle, and hit mapping on one logical
-            // coordinate system even while the video is letterboxed.
+            // coordinate system even while the video is letterboxed. The split axis follows
+            // the wipe orientation: Vertical clips left/right along X, Horizontal clips
+            // top/bottom along Y, with the UV windows cut along the same axis so both sides
+            // keep showing the same frame content at the split.
             const float splitX = bounds.x + bounds.width * position;
+            const float splitY = bounds.y + bounds.height * position;
             const float leftWidth = std::clamp(splitX - destination.x, 0.0F, destination.width);
             const float contentPosition = leftWidth / destination.width;
-            if (!leftUsable && leftWidth > 0.0F &&
-                !appendUnavailableBlack(SurfaceRect{
+            const float topHeight = std::clamp(splitY - destination.y, 0.0F, destination.height);
+            const float contentPositionY = topHeight / destination.height;
+            const bool horizontal = state.wipeOrientation == SurfaceWipeOrientation::Horizontal;
+            const float firstExtent = horizontal ? topHeight : leftWidth;
+            const bool firstUsable = leftUsable;
+            const float secondExtent =
+                horizontal ? destination.height - topHeight : destination.width - leftWidth;
+            const bool secondUsable = rightUsable;
+            if (!firstUsable && firstExtent > 0.0F) {
+                const SurfaceRect firstBlack{
                     .x = destination.x,
                     .y = destination.y,
-                    .width = leftWidth,
-                    .height = destination.height,
-                })) {
-                return false;
+                    .width = horizontal ? destination.width : firstExtent,
+                    .height = horizontal ? firstExtent : destination.height,
+                };
+                if (!appendUnavailableBlack(firstBlack)) {
+                    return false;
+                }
             }
-            if (leftUsable && leftWidth > 0.0F) {
-                VideoDraw left = makeVideoDraw(state, destination, *leftFrame, *leftBacking);
-                left.compose.destinationRect[2U] = leftWidth;
-                left.compose.displayUvRect = {0.0F, 0.0F, contentPosition, 1.0F};
-                prepared.videoDraws[prepared.videoDrawCount] = std::move(left);
+            if (firstUsable && firstExtent > 0.0F) {
+                VideoDraw first = makeVideoDraw(state, destination, *leftFrame, *leftBacking);
+                if (horizontal) {
+                    first.compose.destinationRect[3U] = topHeight;
+                    first.compose.displayUvRect = {0.0F, 0.0F, 1.0F, contentPositionY};
+                } else {
+                    first.compose.destinationRect[2U] = leftWidth;
+                    first.compose.displayUvRect = {0.0F, 0.0F, contentPosition, 1.0F};
+                }
+                prepared.videoDraws[prepared.videoDrawCount] = std::move(first);
                 ++prepared.videoDrawCount;
             }
-            const float rightWidth = destination.width - leftWidth;
-            if (!rightUsable && rightWidth > 0.0F &&
-                !appendUnavailableBlack(SurfaceRect{
-                    .x = destination.x + leftWidth,
-                    .y = destination.y,
-                    .width = rightWidth,
-                    .height = destination.height,
-                })) {
-                return false;
-            }
-            if (rightUsable && rightWidth > 0.0F) {
-                VideoDraw right = makeVideoDraw(state, destination, *rightFrame, *rightBacking);
-                right.compose.destinationRect[0U] = destination.x + leftWidth;
-                right.compose.destinationRect[2U] = rightWidth;
-                right.compose.displayUvRect = {
-                    contentPosition,
-                    0.0F,
-                    1.0F - contentPosition,
-                    1.0F,
+            if (!secondUsable && secondExtent > 0.0F) {
+                const SurfaceRect secondBlack{
+                    .x = horizontal ? destination.x : destination.x + leftWidth,
+                    .y = horizontal ? destination.y + topHeight : destination.y,
+                    .width = horizontal ? destination.width : secondExtent,
+                    .height = horizontal ? secondExtent : destination.height,
                 };
-                prepared.videoDraws[prepared.videoDrawCount] = std::move(right);
+                if (!appendUnavailableBlack(secondBlack)) {
+                    return false;
+                }
+            }
+            if (secondUsable && secondExtent > 0.0F) {
+                VideoDraw second = makeVideoDraw(state, destination, *rightFrame, *rightBacking);
+                if (horizontal) {
+                    second.compose.destinationRect[1U] = destination.y + topHeight;
+                    second.compose.destinationRect[3U] = secondExtent;
+                    second.compose.displayUvRect = {
+                        0.0F,
+                        contentPositionY,
+                        1.0F,
+                        1.0F - contentPositionY,
+                    };
+                } else {
+                    second.compose.destinationRect[0U] = destination.x + leftWidth;
+                    second.compose.destinationRect[2U] = secondExtent;
+                    second.compose.displayUvRect = {
+                        contentPosition,
+                        0.0F,
+                        1.0F - contentPosition,
+                        1.0F,
+                    };
+                }
+                prepared.videoDraws[prepared.videoDrawCount] = std::move(second);
                 ++prepared.videoDrawCount;
             }
             return true;
@@ -2519,7 +2526,9 @@ private:
                     frame->geometry().presentation.rotationDegrees,
                     frame->geometry().presentation.sampleAspectNumerator,
                     frame->geometry().presentation.sampleAspectDenominator,
-                    state.roiEnabled,
+                    // Main panels may show the full overview while local windows retain
+                    // the shared selection. A cleared ROI is the full normalized rectangle.
+                    true,
                     state.roi,
                     window.zoomPercent);
                 if (!geometry.valid) {

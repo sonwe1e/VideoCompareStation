@@ -137,6 +137,8 @@ struct SessionSnapshot final {
     std::optional<domain::FrameId> playbackRangeOut;
     bool playbackRangeLoop = false;
     bool playbackRangeLoopActive = false;
+    // E3: back-and-forth range walk (in..out..in); requires playbackRangeLoop.
+    bool playbackRangePingPong = false;
     std::uint64_t playbackRangeCompletedLoops = 0U;
     std::optional<domain::FrameId> displayedFrame;
     std::optional<domain::FrameId> requestedFrame;

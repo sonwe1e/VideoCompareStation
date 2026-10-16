@@ -22,6 +22,12 @@ Item {
     property real windowStartFrame: 0
     readonly property int visibleFrameCount: Math.max(2, Math.min(totalFrames, Math.ceil(totalFrames / zoomFactor)))
     readonly property real maximumWindowStart: Math.max(0, totalFrames - visibleFrameCount)
+    // I5 playhead auto-follow safety band. While zoomed in, playback or stepping that carries
+    // the current frame past 90% (or before 10%) of the visible window scrolls the window so
+    // the playhead re-enters at its centre; a frame inside the band never moves the window.
+    readonly property real followLowerBand: 0.1
+    readonly property real followUpperBand: 0.9
+    readonly property int playheadFrame: Math.round(progress * Math.max(0, totalFrames - 1))
 
     signal previewRequested(int frame)
     signal seekRequested(int frame)
@@ -52,8 +58,43 @@ Item {
         windowStartFrame = Math.max(0, Math.min(totalFrames - nextVisible, anchorFrame - anchorPosition * (nextVisible - 1)));
     }
 
+    function resetZoom() {
+        zoomFactor = 1.0;
+        windowStartFrame = 0;
+    }
+
     function panFrames(delta) {
         windowStartFrame = Math.max(0, Math.min(maximumWindowStart, windowStartFrame + delta));
+    }
+
+    // I5: scroll the visible window so the playhead sits at its centre again. Called from the
+    // progress change while zoomed in; the guard belongs to the caller, which knows whether a
+    // manual drag currently owns the window. Clamped to [0, maximumWindowStart] so the follow
+    // itself can never push the window out of range at either edge.
+    function followPlayhead() {
+        if (zoomFactor <= 1.0 || totalFrames <= 1)
+            return false;
+        const visible = visibleFrameCount;
+        const frame = playheadFrame;
+        const lowerEdge = windowStartFrame + (visible - 1) * followLowerBand;
+        const upperEdge = windowStartFrame + (visible - 1) * followUpperBand;
+        if (frame >= lowerEdge && frame <= upperEdge)
+            return false;
+        windowStartFrame = Math.max(0, Math.min(maximumWindowStart, Math.round(frame - (visible - 1) / 2)));
+        return true;
+    }
+
+    onPlayheadFrameChanged: {
+        // A live scrub owns the window: the follow must not fight the hand that is dragging
+        // the playhead. Zoom changes and wheel pans re-arm it naturally because the next
+        // frame change re-runs this handler.
+        if (!dragging)
+            followPlayhead();
+    }
+    onTotalFramesChanged: {
+        // A new task (or the first frame-count answer) invalidates the window's frame base;
+        // restart from the whole timeline rather than keeping a clamped stale window.
+        windowStartFrame = 0;
     }
 
     Rectangle {
@@ -67,6 +108,67 @@ Item {
             right: parent.right
             bottom: parent.bottom
             bottomMargin: 5
+        }
+
+        // E4: whole-timeline position indicator. When the window is zoomed in, this thin
+        // strip inside the rail shows WHERE the visible window sits in the full timeline -
+        // start/middle/end are all distinguishable at any zoom, including 32x. Static by
+        // design: zoom/pan and followPlayhead remain the only way the window moves, and this
+        // strip adds no second seek controller. A tooltip names the visible frame range in
+        // the same 1-based frames the transport uses.
+        //
+        // Geometry is computed in one direction only: clamped frame endpoints -> raw width ->
+        // x (x may read width, width never reads x), so the pair cannot form an evaluation
+        // cycle. firstVisibleFrame carries an explicit upper bound (totalFrames - 2) so a
+        // stale windowStart from a shrunken session can never display from > to. Degenerate
+        // timelines (0 or 1 frame) take the explicit empty branch: unit = 0 and finite x /
+        // width, because hidden items still evaluate their bindings and dividing by
+        // totalFrames - 1 = 0 would poison them with Infinity/NaN.
+        Rectangle {
+            id: windowPositionStrip
+
+            objectName: "timelineWindowPositionStrip"
+            visible: control.zoomFactor > 1 && control.totalFrames > 1
+            // Frame endpoints are clamped strictly inside [0, totalFrames-1] in both
+            // directions: first gets the totalFrames-2 upper bound, last gets the
+            // first+1 lower bound AND its own totalFrames-1 upper bound, so a degenerate
+            // 1-frame timeline resolves to 0/0 instead of last overrunning the last frame.
+            readonly property int firstVisibleFrame: Math.max(0, Math.min(control.totalFrames - 2, control.windowStartFrame))
+            readonly property int lastVisibleFrame: Math.min(Math.max(firstVisibleFrame + 1, Math.min(control.totalFrames - 1, control.windowStartFrame + control.visibleFrameCount - 1)), control.totalFrames - 1)
+            readonly property real unit: control.totalFrames > 1 ? control.width / (control.totalFrames - 1) : 0
+            readonly property real rawX: control.totalFrames > 1 ? firstVisibleFrame * unit : 0
+            readonly property real rawWidth: control.totalFrames > 1 ? Math.min(control.width, (lastVisibleFrame - firstVisibleFrame) * unit + 2) : 2
+            width: Math.max(2, rawWidth)
+            x: Math.max(0, Math.min(control.width - width, rawX))
+            height: 2
+            radius: height / 2
+            color: Theme.information
+            opacity: 0.9
+            anchors.verticalCenter: parent.verticalCenter
+
+            Accessible.role: Accessible.Indicator
+            Accessible.name: {
+                const from = firstVisibleFrame + 1;
+                const to = lastVisibleFrame + 1;
+                return from === to ? qsTr("可见窗口：第 %1 帧 / 共 %2 帧").arg(from).arg(control.totalFrames) : qsTr("可见窗口：第 %1 至 %2 帧 / 共 %3 帧").arg(from).arg(to).arg(control.totalFrames);
+            }
+
+            MouseArea {
+                id: windowStripHover
+
+                anchors.fill: parent
+                acceptedButtons: Qt.NoButton
+                hoverEnabled: true
+            }
+
+            VcsToolTip {
+                visible: windowStripHover.containsMouse
+                text: {
+                    const from = windowPositionStrip.firstVisibleFrame + 1;
+                    const to = windowPositionStrip.lastVisibleFrame + 1;
+                    return from === to ? qsTr("第 %1 帧").arg(from) : qsTr("第 %1 – %2 帧").arg(from).arg(to);
+                }
+            }
         }
 
         Behavior on height {
@@ -242,6 +344,7 @@ Item {
         objectName: "playheadThumb"
         width: 13
         height: 13
+        // Geometric half of the 13 px thumb, like VcsScrollBar's width/2 - not a token step.
         radius: 6.5
         x: Math.max(0, Math.min(control.width - width, control.positionForFrame(Math.round(control.progress * Math.max(0, control.totalFrames - 1))) * control.width - width / 2))
         color: control.enabled ? Theme.inverseText : Theme.disabledText
@@ -252,7 +355,7 @@ Item {
 
         Behavior on scale {
             NumberAnimation {
-                duration: 100
+                duration: Theme.animationFast
                 easing.type: Easing.OutQuad
             }
         }
@@ -300,16 +403,67 @@ Item {
         }
     }
 
-    Text {
+    // I5: the zoom readout is also the one-click way back to the whole timeline. The pill
+    // states the factor; clicking (or keyboard activation once focused) resets zoom and
+    // window, so leaving a 32x inspection no longer depends on remembering Ctrl+wheel.
+    Rectangle {
+        id: zoomBadge
+
+        objectName: "timelineZoomBadge"
         visible: control.zoomFactor > 1
-        text: qsTr("%1×").arg(control.zoomFactor.toFixed(1))
-        color: Theme.information
+        // Reachable by keyboard like the U10 lane toggle: an action-bearing item must not be
+        // mouse-only.
+        activeFocusOnTab: visible
+        radius: Theme.radiusMedium
+        color: zoomMouse.containsMouse || zoomBadge.activeFocus ? Theme.oscGlassHover : Theme.oscGlass
+        border.width: zoomBadge.activeFocus ? 2 : 1
+        border.color: zoomBadge.activeFocus ? Theme.focus : Theme.oscBorder
+        width: zoomBadgeLabel.implicitWidth + 18
+        height: 20
         // The zoom factor is a must-read value, so it sits at the secondary size, never the
         // decorative fontMicro floor.
-        font.pixelSize: Theme.fontSecondary
+        Accessible.role: Accessible.Button
+        Accessible.name: qsTr("缩放 %1×，点击重置为完整时间轴").arg(control.zoomFactor.toFixed(1))
         anchors {
             right: parent.right
             top: parent.top
+        }
+
+        Text {
+            id: zoomBadgeLabel
+
+            anchors.centerIn: parent
+            text: qsTr("%1× · 点击重置").arg(control.zoomFactor.toFixed(1))
+            color: Theme.information
+            font.pixelSize: Theme.fontSecondary
+            // The digits tick while the user scrubs the zoom; tabular figures keep the badge
+            // from breathing horizontally (E: fontFeaturesNumeric token).
+            font.features: Theme.fontFeaturesNumeric
+        }
+
+        MouseArea {
+            id: zoomMouse
+
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: {
+                control.resetZoom();
+                control.forceActiveFocus();
+            }
+        }
+
+        Keys.onSpacePressed: event => {
+            control.resetZoom();
+            event.accepted = true;
+        }
+        Keys.onReturnPressed: event => {
+            control.resetZoom();
+            event.accepted = true;
+        }
+        Keys.onEnterPressed: event => {
+            control.resetZoom();
+            event.accepted = true;
         }
     }
 }

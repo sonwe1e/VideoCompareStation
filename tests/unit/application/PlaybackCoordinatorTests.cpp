@@ -4968,6 +4968,586 @@ TEST(PlaybackCoordinatorTests, LoopSeamAndPauseDwellAreExcludedFromSteadySpeedRa
     EXPECT_EQ(after->playbackRunPresentedFrames, 2U * kFramesPerPass);
 }
 
+TEST(PlaybackCoordinatorTests, PingPongRangeWalksBothLegsWithoutRepeatingEndpoints) {
+    const auto scheduler = std::make_shared<FakeDeadlineScheduler>();
+    const auto clock = std::make_shared<FakeSteadyClock>();
+    const auto probe = std::make_shared<FakeMediaProbe>();
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator = makeCoordinator(provider, render, probe, scheduler, clock);
+    markGraphicsReady(coordinator, domain::DeviceGeneration{1});
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate.hasValue());
+    openReadyWithRate(coordinator, provider, render, rate.value());
+
+    constexpr std::int64_t kRangeIn = 1;
+    constexpr std::int64_t kRangeOut = 9;
+    // Baseline BEFORE the command: StartRangePlayback requests the run's first target (In)
+    // synchronously while being processed, so the walk's first frame is the request that
+    // crosses this baseline.
+    const std::size_t publishedBeforeStart = render->publishedCount();
+    ASSERT_EQ(coordinator->submit(StartRangePlaybackCommand{
+                  .context = commandContext(coordinator, domain::CommandId{2}),
+                  .range =
+                      PlaybackRange{
+                          .inInclusive = domain::FrameId{kRangeIn},
+                          .outInclusive = domain::FrameId{kRangeOut},
+                      },
+                  .loop = true,
+                  .pingPong = true,
+              }),
+              PortSubmitResult::Accepted);
+    EXPECT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+
+    std::vector<std::int64_t> presented;
+    std::map<std::int64_t, std::size_t> visitCount;
+    std::size_t publishedCount = publishedBeforeStart;
+    // Absolute cadence index with a constant per-walk-step stride of 2 (one activation
+    // deadline + one next cadence per step, the same 2k-2 layout the forward-loop test
+    // uses). The In anchor step does not fire but still advances the index by 2: the open
+    // frame's entry and the anchor activation occupy 0 and 1, so frame In+1's cadence sits
+    // at index 2.
+    std::size_t nextCadenceIndex = 0U;
+    bool sawReversePriority = false;
+    bool sawForwardPriority = false;
+
+    const auto walkFrame = [&](const std::int64_t expectedFrame,
+                               const bool anchorActivated,
+                               const bool expectReversePriority) {
+        if (!anchorActivated) {
+            const bool cadenceReady = waitUntil([&scheduler, next = nextCadenceIndex] {
+                return scheduler->scheduleCount() > next;
+            });
+            if (!cadenceReady) {
+                ADD_FAILURE() << "no cadence timer at index " << nextCadenceIndex << " (frame "
+                              << expectedFrame << "), scheduleCount=" << scheduler->scheduleCount();
+                for (std::size_t i = 0U; i < scheduler->scheduleCount(); ++i) {
+                    const std::optional<DeadlineRequest> entry = scheduler->request(i);
+                    if (entry.has_value()) {
+                        ADD_FAILURE()
+                            << "  entry[" << i << "] timer=" << entry->timerId << " dueDeltaUs="
+                            << std::chrono::duration_cast<std::chrono::microseconds>(
+                                   entry->due.time_since_epoch())
+                                   .count();
+                    }
+                }
+                return;
+            }
+            const std::optional<DeadlineRequest> cadence = scheduler->request(nextCadenceIndex);
+            ASSERT_TRUE(cadence.has_value());
+            clock->set(cadence->due);
+            ASSERT_TRUE(scheduler->fire(nextCadenceIndex));
+        }
+        // This frame's OWN visit: wait for its per-frame occurrence count to grow, then use
+        // the FIRST matching request - the fake tolerates re-posting the same request object
+        // for a later visit, exactly like the forward-loop test's second pass.
+        const std::size_t visit = ++visitCount[expectedFrame];
+        ASSERT_TRUE(waitUntil([&provider, expectedFrame, visit] {
+            return countFrameRequestsFor(provider, domain::FrameId{expectedFrame}) >= visit;
+        })) << "frame "
+            << expectedFrame << " visit " << visit << " never requested";
+        if (::testing::Test::HasFatalFailure()) {
+            return;
+        }
+        const std::optional<FrameRequest> request =
+            findFrameRequestFor(provider, domain::FrameId{expectedFrame});
+        ASSERT_TRUE(request.has_value());
+        EXPECT_EQ(request->frameId, domain::FrameId{expectedFrame});
+        if (expectReversePriority) {
+            EXPECT_EQ(request->priority, FrameRequestPriority::Reverse);
+            sawReversePriority = true;
+        } else {
+            EXPECT_EQ(request->priority, FrameRequestPriority::Sequential);
+            sawForwardPriority = true;
+        }
+        ASSERT_TRUE(provider->postFrameReady(*request, makeFrameSet(request->frameId)));
+        ASSERT_TRUE(render->waitForPublishedCount(publishedCount + 1U));
+        presentPublished(coordinator, render, publishedCount);
+        ++publishedCount;
+        ASSERT_TRUE(provider->postFrameSucceeded(*request));
+        ASSERT_TRUE(waitUntil([&coordinator, expectedFrame] {
+            return coordinator->snapshot()->displayedFrame == domain::FrameId{expectedFrame};
+        }));
+        presented.push_back(expectedFrame);
+        ++nextCadenceIndex;
+        ++nextCadenceIndex;
+    };
+
+    // Forward leg 1..9: In is the run anchor (no timer), 2..9 each fire their cadence.
+    walkFrame(kRangeIn, true, false);
+    if (!::testing::Test::HasFatalFailure()) {
+        for (std::int64_t frame = kRangeIn + 1; frame <= kRangeOut; ++frame) {
+            walkFrame(frame, false, false);
+            if (::testing::Test::HasFatalFailure()) {
+                break;
+            }
+        }
+    }
+    // Reverse leg 8..1: every request must carry the Reverse priority.
+    if (!::testing::Test::HasFatalFailure()) {
+        for (std::int64_t frame = kRangeOut - 1; frame >= kRangeIn; --frame) {
+            walkFrame(frame, false, true);
+            if (::testing::Test::HasFatalFailure()) {
+                break;
+            }
+        }
+    }
+    if (::testing::Test::HasFatalFailure()) {
+        return;
+    }
+    EXPECT_EQ(coordinator->snapshot()->playbackRangeCompletedLoops, 1U)
+        << "one full out->in return leg equals one completed ping-pong cycle";
+    // Next forward leg begins at in+1 = 2 (the In endpoint never repeats back-to-back).
+    walkFrame(kRangeIn + 1, false, false);
+    if (::testing::Test::HasFatalFailure()) {
+        return;
+    }
+    EXPECT_EQ(coordinator->snapshot()->playbackRangeCompletedLoops, 1U);
+    EXPECT_TRUE(sawReversePriority) << "the reverse leg must use the Reverse priority";
+    EXPECT_TRUE(sawForwardPriority) << "the forward legs keep the Sequential priority";
+
+    // Sequence contract: consecutive presented frames differ by exactly one and the walk
+    // never leaves the closed interval. In legitimately appears twice (start of the forward
+    // leg and end of the reverse leg, a full cycle apart) - only adjacent repeats are banned.
+    ASSERT_GE(presented.size(), 2U * static_cast<std::size_t>(kRangeOut - kRangeIn));
+    for (std::size_t index = 1U; index < presented.size(); ++index) {
+        const std::int64_t previous = presented[index - 1U];
+        const std::int64_t current = presented[index];
+        EXPECT_EQ(std::abs(current - previous), 1)
+            << "presented sequence must step by exactly one frame at index " << index;
+        ASSERT_GE(current, kRangeIn);
+        ASSERT_LE(current, kRangeOut);
+    }
+
+    ASSERT_EQ(coordinator->submit(PauseCommand{
+                  .context = commandContext(coordinator, domain::CommandId{3}),
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_TRUE(waitUntil([&coordinator] {
+        return coordinator->snapshot()->playbackState == domain::PlaybackState::kPaused;
+    }));
+}
+
+// E3 reverse-turn scheduling (independent timing control, range 1..3 only): after the Out
+// endpoint's ACK at its real PTS boundary, the turn must schedule the reverse neighbor
+// frame 2 with a request due at ackWall + (t3 - t2) - lead. Anchoring the turn on the
+// neighbor frame instead (the historical draft bug) makes that due collapse to "now": the
+// run activates immediately and appends a 5 s presentation deadline instead of the expected
+// future cadence - this assertion detects that mutation.
+TEST(PlaybackCoordinatorTests, ReverseTurnSchedulesNeighborAtRealBoundaryAfterOutAck) {
+    const auto scheduler = std::make_shared<FakeDeadlineScheduler>();
+    const auto clock = std::make_shared<FakeSteadyClock>();
+    const auto probe = std::make_shared<FakeMediaProbe>();
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator = makeCoordinator(provider, render, probe, scheduler, clock);
+    markGraphicsReady(coordinator, domain::DeviceGeneration{1});
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate.hasValue());
+    openReadyWithRate(coordinator, provider, render, rate.value());
+    const auto pts = [&rate](const std::int64_t frame) {
+        return rateStartTimeMicroseconds(rate.value(), frame);
+    };
+
+    ASSERT_EQ(coordinator->submit(StartRangePlaybackCommand{
+                  .context = commandContext(coordinator, domain::CommandId{2}),
+                  .range =
+                      PlaybackRange{
+                          .inInclusive = domain::FrameId{1},
+                          .outInclusive = domain::FrameId{3},
+                      },
+                  .loop = true,
+                  .pingPong = true,
+              }),
+              PortSubmitResult::Accepted);
+    EXPECT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+
+    // Frame 1 (In anchor) was requested synchronously; its presentation boundary is this
+    // instant by definition (t(1) - t(anchor=1) = 0).
+    std::size_t publishedCount = render->publishedCount();
+    const std::int64_t b1 =
+        std::chrono::duration_cast<std::chrono::microseconds>(clock->now().time_since_epoch())
+            .count();
+    const std::optional<FrameRequest> request1 = findFrameRequestFor(provider, domain::FrameId{1});
+    ASSERT_TRUE(request1.has_value());
+    clock->set(std::chrono::steady_clock::time_point(std::chrono::microseconds{b1}));
+    ASSERT_TRUE(provider->postFrameReady(*request1, makeFrameSet(request1->frameId)));
+    ASSERT_TRUE(render->waitForPublishedCount(publishedCount + 1U));
+    presentPublished(coordinator, render, publishedCount);
+    ++publishedCount;
+    ASSERT_TRUE(provider->postFrameSucceeded(*request1));
+    ASSERT_TRUE(waitUntil(
+        [&coordinator] { return coordinator->snapshot()->displayedFrame == domain::FrameId{1}; }));
+
+    const std::int64_t t1 = pts(1);
+    const std::int64_t t2 = pts(2);
+    const std::int64_t t3 = pts(3);
+    const std::int64_t b3 = b1 + (t3 - t1);
+    const std::chrono::steady_clock::time_point wallAnchor =
+        std::chrono::steady_clock::time_point(std::chrono::microseconds{b1});
+    // Frames 2 and 3 ride the existing steady-state helper (absolute cadence indices 2 and
+    // 4 per the loop protocol; the helper owns the ready-at-request-due / present-at-real-
+    // boundary / ACK discipline).
+    deliverSteadyFrameAtBoundary(
+        coordinator, provider, render, clock, scheduler, wallAnchor, t2 - t1, 2, 2U);
+    deliverSteadyFrameAtBoundary(
+        coordinator, provider, render, clock, scheduler, wallAnchor, t3 - t1, 3, 4U);
+    EXPECT_EQ(coordinator->snapshot()->displayedFrame, domain::FrameId{3});
+
+    // The Out turn must schedule the reverse neighbor (frame 2) at
+    // ackWall(=b3) + (t3 - t2) - lead. lead = min(14 ms, interval/2) = 14 ms. A
+    // neighbor-frame anchor (the draft bug) would activate frame 2 immediately and append
+    // a 5 s presentation deadline here instead of this future cadence.
+    ASSERT_TRUE(scheduler->waitForScheduleCount(7U));
+    const std::optional<DeadlineRequest> reverseCadence = scheduler->request(6U);
+    ASSERT_TRUE(reverseCadence.has_value());
+    const std::int64_t expectedDue = b3 + (t3 - t2) - 14000;
+    EXPECT_NEAR(static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                        reverseCadence->due.time_since_epoch())
+                                        .count()),
+                static_cast<double>(expectedDue),
+                1.0)
+        << "the reverse neighbor must be scheduled one real PTS interval after the Out ACK";
+    EXPECT_GT(reverseCadence->due,
+              std::chrono::steady_clock::time_point(std::chrono::microseconds{b3}))
+        << "the reverse-neighbor cadence must be in the future, not immediately due";
+}
+
+class PingPongBoundaryTests : public ::testing::Test {
+protected:
+    std::shared_ptr<FakeDeadlineScheduler> scheduler = std::make_shared<FakeDeadlineScheduler>();
+    std::shared_ptr<FakeSteadyClock> clock = std::make_shared<FakeSteadyClock>();
+    std::shared_ptr<FakeMediaProbe> probe = std::make_shared<FakeMediaProbe>();
+    std::shared_ptr<FakeFrameProvider> provider = std::make_shared<FakeFrameProvider>();
+    std::shared_ptr<FakeRenderChannel> render = std::make_shared<FakeRenderChannel>();
+    std::shared_ptr<PlaybackCoordinator> coordinator =
+        makeCoordinator(provider, render, probe, scheduler, clock);
+    std::vector<std::size_t> consumed;
+    std::size_t cadence = 0;
+    std::uint64_t commandId = 2;
+    std::chrono::steady_clock::time_point boundary;
+
+    CommandContext context() {
+        return commandContext(coordinator, domain::CommandId{commandId++});
+    }
+
+    void open(const bool vfr = false) {
+        markGraphicsReady(coordinator, domain::DeviceGeneration{1});
+        if (vfr) {
+            openVfrReady(
+                coordinator,
+                probe,
+                provider,
+                render,
+                makeVfrTimeline(),
+                makeVfrDescriptor("C:/media/a.mp4", {320, 180}, 4, domain::MediaTime{69800}),
+                makeDescriptor("C:/media/b.mp4", {160, 90}, 4));
+        } else {
+            openReadyWithRate(
+                coordinator, provider, render, domain::RationalRate::create(30, 1).value());
+        }
+    }
+
+    void start(const std::int64_t out = 3) {
+        ASSERT_EQ(coordinator->submit(
+                      StartRangePlaybackCommand{.context = context(),
+                                                .range = {domain::FrameId{1}, domain::FrameId{out}},
+                                                .loop = true,
+                                                .pingPong = true}),
+                  PortSubmitResult::Accepted);
+        ASSERT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+        boundary = clock->now();
+        cadence = 0;
+    }
+
+    void pause() {
+        ASSERT_EQ(coordinator->submit(PauseCommand{.context = context()}),
+                  PortSubmitResult::Accepted);
+        ASSERT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+    }
+
+    void resume() {
+        cadence = scheduler->scheduleCount();
+        boundary = clock->now();
+        ASSERT_EQ(coordinator->submit(PlayCommand{.context = context()}),
+                  PortSubmitResult::Accepted);
+        ASSERT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+    }
+
+    // Deliver at the actual presentation boundary, always advancing wall time even on the
+    // reverse leg. Prepared requests may precede their cadence; consume each exact request once.
+    void step(const std::int64_t frame,
+              const std::chrono::microseconds interval,
+              const bool reverse = false,
+              const bool pauseBeforeAck = false,
+              const bool immediate = false) {
+        boundary += interval;
+        if (!immediate) {
+            ASSERT_TRUE(scheduler->waitForScheduleCount(cadence + 1));
+            const auto timer = scheduler->request(cadence);
+            ASSERT_TRUE(timer.has_value());
+            EXPECT_LE(timer->due, boundary);
+            EXPECT_GE(timer->due, clock->now());
+            clock->set(timer->due);
+            ASSERT_TRUE(scheduler->fire(cadence));
+        }
+        std::optional<FrameRequest> request;
+        ASSERT_TRUE(waitUntil([&] {
+            for (std::size_t i = 1; i < provider->frameRequestCount(); ++i) {
+                const auto candidate = provider->frameRequest(i);
+                if (candidate && candidate->frameId == domain::FrameId{frame} &&
+                    candidate->context.playback.playbackGeneration ==
+                        coordinator->snapshot()->playbackGeneration &&
+                    std::find(consumed.begin(), consumed.end(), i) == consumed.end()) {
+                    consumed.push_back(i);
+                    request = candidate;
+                    return true;
+                }
+            }
+            return false;
+        }));
+        EXPECT_EQ(request->priority,
+                  reverse ? FrameRequestPriority::Reverse : FrameRequestPriority::Sequential);
+        clock->set(boundary);
+        const auto published = render->publishedCount();
+        ASSERT_TRUE(provider->postFrameReady(*request, makeFrameSet(request->frameId)));
+        ASSERT_TRUE(render->waitForPublishedCount(published + 1));
+        if (pauseBeforeAck) {
+            pause();
+            EXPECT_NE(coordinator->snapshot()->displayedFrame, domain::FrameId{frame});
+        }
+        presentPublished(coordinator, render, published);
+        ASSERT_TRUE(provider->postFrameSucceeded(*request));
+        ASSERT_TRUE(waitUntil(
+            [&] { return coordinator->snapshot()->displayedFrame == domain::FrameId{frame}; }));
+        cadence += 2;
+    }
+};
+
+TEST_F(PingPongBoundaryTests, PauseAtOutPendingAckResumesWithTwoReverseNeighbors) {
+    open();
+    start();
+    step(1, 0us, false, false, true);
+    step(2, 33333us);
+    step(3, 33334us, false, true);
+    ASSERT_EQ(coordinator->snapshot()->playbackState, domain::PlaybackState::kPaused);
+    resume();
+    step(2, 33334us, true);
+    step(1, 33333us, true);
+    EXPECT_EQ(coordinator->snapshot()->playbackRangeCompletedLoops, 1U);
+}
+
+TEST_F(PingPongBoundaryTests, PauseAtInPendingAckResumesWithTwoForwardNeighbors) {
+    open();
+    start();
+    step(1, 0us, false, false, true);
+    step(2, 33333us);
+    step(3, 33334us);
+    step(2, 33334us, true);
+    step(1, 33333us, true, true);
+    resume();
+    step(2, 33333us);
+    step(3, 33334us);
+    EXPECT_EQ(coordinator->snapshot()->playbackRangeCompletedLoops, 1U);
+}
+
+TEST_F(PingPongBoundaryTests, PauseInsideReverseLegPreservesDirectionOnResume) {
+    open();
+    start(4);
+    step(1, 0us, false, false, true);
+    step(2, 33333us);
+    step(3, 33334us);
+    step(4, 33333us);
+    step(3, 33333us, true, true);
+    resume();
+    step(2, 33334us, true);
+    step(1, 33333us, true);
+}
+
+TEST_F(PingPongBoundaryTests, VfrWalkUsesBothNonuniformLegsWithBothContinuityPreferences) {
+    open(true);
+    for (const auto policy : {domain::PlaybackContinuityPolicy::RealTime,
+                              domain::PlaybackContinuityPolicy::ReviewEveryFrame}) {
+        ASSERT_EQ(coordinator->submit(
+                      SetPlaybackContinuityPolicyCommand{.context = context(), .policy = policy}),
+                  PortSubmitResult::Accepted);
+        ASSERT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+        start();
+        EXPECT_EQ(coordinator->snapshot()->playbackContinuityPolicyEffective,
+                  domain::PlaybackContinuityPolicy::ReviewEveryFrame);
+        // A previous cycle ends at In. Starting there follows its next neighbor; the first
+        // cycle enters In from the open frame zero.
+        if (coordinator->snapshot()->displayedFrame == domain::FrameId{0}) {
+            step(1, 0us, false, false, true);
+        } else {
+            cadence = scheduler->scheduleCount() - 1;
+        }
+        step(2, 40000us);
+        step(3, 19800us);
+        step(2, 19800us, true);
+        step(1, 40000us, true, true);
+    }
+}
+
+TEST_F(PingPongBoundaryTests, FreshStartDiscardsActiveReverseDirection) {
+    open();
+    start(4);
+    step(1, 0us, false, false, true);
+    step(2, 33333us);
+    step(3, 33334us);
+    step(4, 33333us);
+    step(3, 33333us, true);
+    start(4);
+    cadence = scheduler->scheduleCount() - 1;
+    step(4, 33333us);
+    step(3, 33333us, true);
+}
+
+TEST_F(PingPongBoundaryTests, EditingReverseRangeRejectsOldWorkAndReanchorsForward) {
+    open();
+    start(4);
+    step(1, 0us, false, false, true);
+    step(2, 33333us);
+    step(3, 33334us);
+    step(4, 33333us);
+    step(3, 33333us, true);
+    const auto oldGeneration = coordinator->snapshot()->playbackGeneration;
+    ASSERT_TRUE(scheduler->waitForScheduleCount(cadence + 1));
+    clock->set(scheduler->request(cadence)->due);
+    ASSERT_TRUE(scheduler->fire(cadence));
+    ASSERT_TRUE(waitUntil([&] {
+        for (std::size_t i = 1; i < provider->frameRequestCount(); ++i) {
+            const auto request = provider->frameRequest(i);
+            if (request && request->frameId == domain::FrameId{2} &&
+                request->priority == FrameRequestPriority::Reverse) {
+                return true;
+            }
+        }
+        return false;
+    }));
+    cadence = scheduler->scheduleCount();
+    ASSERT_EQ(coordinator->submit(SetPlaybackRangeCommand{
+                  .context = context(),
+                  .range = PlaybackRange{domain::FrameId{2}, domain::FrameId{4}},
+                  .loop = true,
+                  .pingPong = true}),
+              PortSubmitResult::Accepted);
+    ASSERT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+    EXPECT_NE(coordinator->snapshot()->playbackGeneration, oldGeneration);
+    for (std::size_t i = 1; i < provider->frameRequestCount(); ++i) {
+        const auto old = provider->frameRequest(i);
+        if (old && old->frameId == domain::FrameId{2} &&
+            old->priority == FrameRequestPriority::Reverse &&
+            old->context.playback.playbackGeneration == oldGeneration) {
+            ASSERT_TRUE(provider->postFrameReady(*old, makeFrameSet(old->frameId)));
+            ASSERT_TRUE(provider->postFrameSucceeded(*old));
+        }
+    }
+    boundary = clock->now();
+    step(4, 33333us);
+    step(3, 33333us, true);
+    step(2, 33334us, true);
+    EXPECT_EQ(coordinator->snapshot()->playbackRunSkippedFrameSets, 0U);
+}
+
+TEST_F(PingPongBoundaryTests, ReverseRequestHasNoSpeculativeSuccessorBeforeItsAck) {
+    open();
+    start();
+    step(1, 0us, false, false, true);
+    step(2, 33333us);
+    step(3, 33334us);
+    ASSERT_TRUE(scheduler->waitForScheduleCount(cadence + 1));
+    clock->set(scheduler->request(cadence)->due);
+    ASSERT_TRUE(scheduler->fire(cadence));
+    ASSERT_TRUE(waitUntil([&] {
+        for (std::size_t i = 1; i < provider->frameRequestCount(); ++i) {
+            const auto request = provider->frameRequest(i);
+            if (request && request->priority == FrameRequestPriority::Reverse) {
+                return true;
+            }
+        }
+        return false;
+    }));
+    // Queue barrier: the coordinator has finished its active-frame submission, including
+    // any eager look-ahead. The real provider would let that look-ahead cancel frame 2.
+    ASSERT_EQ(
+        coordinator->submit(SetPlaybackContinuityPolicyCommand{
+            .context = context(), .policy = domain::PlaybackContinuityPolicy::ReviewEveryFrame}),
+        PortSubmitResult::Accepted);
+    ASSERT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+    std::size_t reverseRequests = 0;
+    for (std::size_t i = 1; i < provider->frameRequestCount(); ++i) {
+        const auto request = provider->frameRequest(i);
+        if (request && request->priority == FrameRequestPriority::Reverse) {
+            ++reverseRequests;
+            EXPECT_EQ(request->frameId, domain::FrameId{2});
+        }
+    }
+    EXPECT_EQ(reverseRequests, 1U);
+}
+
+TEST_F(PingPongBoundaryTests, SingleFrameStopsAndTwoFrameRangeAlternatesWithoutRepeats) {
+    open();
+    start(1);
+    step(1, 0us, false, false, true);
+    ASSERT_TRUE(waitUntil(
+        [&] { return coordinator->snapshot()->playbackState == domain::PlaybackState::kPaused; }));
+    const auto requests = provider->frameRequestCount();
+    const auto timers = scheduler->scheduleCount();
+    for (std::size_t i = 0; i < timers; ++i) {
+        ASSERT_TRUE(scheduler->fire(i));
+    }
+    pause(); // Queue barrier: stale timers above must not restart the run.
+    EXPECT_EQ(provider->frameRequestCount(), requests);
+    start(2);
+    cadence = scheduler->scheduleCount() - 1;
+    step(2, 33333us);
+    step(1, 33333us, true);
+    step(2, 33333us);
+}
+
+TEST_F(PingPongBoundaryTests, ClearRangeRejectsOldPublishedAckAndResumesForward) {
+    open();
+    start();
+    step(1, 0us, false, false, true);
+    step(2, 33333us);
+    step(3, 33334us);
+    ASSERT_TRUE(scheduler->waitForScheduleCount(cadence + 1));
+    clock->set(scheduler->request(cadence)->due);
+    ASSERT_TRUE(scheduler->fire(cadence));
+    std::optional<FrameRequest> old;
+    ASSERT_TRUE(waitUntil([&] {
+        for (std::size_t i = provider->frameRequestCount(); i-- > 1;) {
+            const auto candidate = provider->frameRequest(i);
+            if (candidate && candidate->frameId == domain::FrameId{2} &&
+                candidate->priority == FrameRequestPriority::Reverse) {
+                old = candidate;
+                return true;
+            }
+        }
+        return false;
+    }));
+    const auto published = render->publishedCount();
+    ASSERT_TRUE(provider->postFrameReady(*old, makeFrameSet(old->frameId)));
+    ASSERT_TRUE(render->waitForPublishedCount(published + 1));
+    cadence = scheduler->scheduleCount();
+    ASSERT_EQ(coordinator->submit(SetPlaybackRangeCommand{.context = context()}),
+              PortSubmitResult::Accepted);
+    ASSERT_EQ(waitForTerminals(coordinator, 1U).front().outcome, CommandOutcome::Succeeded);
+    EXPECT_NE(coordinator->snapshot()->playbackGeneration,
+              old->context.playback.playbackGeneration);
+    const auto staleAck = render->presentation(published);
+    ASSERT_TRUE(staleAck.has_value());
+    ASSERT_EQ(coordinator->postCritical(ApplicationEvent{*staleAck}), EventPostResult::Accepted);
+    ASSERT_TRUE(provider->postFrameSucceeded(*old));
+    for (std::size_t i = 0; i < cadence; ++i) {
+        ASSERT_TRUE(scheduler->fire(i));
+    }
+    boundary = clock->now();
+    step(4, 33333us);
+    EXPECT_FALSE(coordinator->snapshot()->playbackRangeIn.has_value());
+}
+
 TEST(PlaybackCoordinatorTests, LoopSeamDoesNotBookItsOwnDecodeTimeAsLateness) {
     const auto scheduler = std::make_shared<FakeDeadlineScheduler>();
     const auto clock = std::make_shared<FakeSteadyClock>();

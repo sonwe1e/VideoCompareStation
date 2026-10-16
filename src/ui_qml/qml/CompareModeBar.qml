@@ -148,71 +148,138 @@ Rectangle {
             objectName: "diffModeButton"
             text: control.differenceFlavorLabel.length > 0 ? qsTr("差异·%1 ▾").arg(control.differenceFlavorLabel) : qsTr("差异定位 ▾")
         }
-        // Hold-to-peek: while held the surface shows the reference (GT) source instead of the
-        // difference pass; releasing restores the difference view. The label names that target
-        // and stays visible while the keyboard lock holds it.
-        VcsToolButton {
-            id: differencePeekButton
-
-            objectName: "differencePeekButton"
-            text: control.peekLocked ? qsTr("GT 原图·已锁定") : qsTr("按住看 GT 原图")
-            visible: control.currentMode === ComparisonSurface.Difference
-            enabled: !control.busy && control.peekTargetValid
-            prominent: pressed || control.peekLocked
-            implicitWidth: 136
-            implicitHeight: Theme.hitAreaMinimum
-            labelPixelSize: Theme.fontBody
-            Accessible.description: control.peekTargetValid ? qsTr("按住显示会话的参考（GT）源，即使 GT 不在当前比较对中；松开恢复差异视图。键盘 ` 切换，Shift+` 锁定。") : qsTr("当前会话没有可直看的参考（GT）源。")
-            onPressed: control.differencePeekChanged(true)
-            onReleased: control.differencePeekChanged(false)
-            onCanceled: control.differencePeekChanged(false)
-        }
-        // qmllint enable import unqualified unresolved-type
-
+        // qmllint disable import unqualified unresolved-type
+        // Middle group - "who is compared against whom": one shallow capsule carries the pair
+        // selector, the candidate switch and (while a difference task with a valid reference is
+        // active) the hold-to-peek entry, so the pairing cluster reads as one unit between the
+        // layout tasks (left) and the direct-look group (right). The capsule keeps the row's
+        // own 32 px band so the bar stays at its 40 px height, and the Flow still wraps the
+        // whole capsule as one item on narrow windows.
+        // The visibility condition states the INTENT (three sources in a pair-relevant task,
+        // or a difference task with a peekable reference) from control properties only. It
+        // must not OR the children's own `visible` values: reading an item's `visible` from
+        // QML yields the effective visibility (ancestors included), so once this capsule hid
+        // itself - e.g. created in side-by-side - the children would read as hidden THROUGH
+        // the capsule and the group could never light up again (self-latch).
         Rectangle {
-            visible: control.sourceCount === 3 && control.pairRelevant
-            width: 1
-            height: Theme.hitAreaMinimum
-            color: Theme.border
-        }
-
-        ToolbarCombo {
-            id: pairComboBox
-
-            objectName: "pairCombo"
-            visible: control.sourceCount === 3 && control.pairRelevant
-            implicitWidth: 104
+            objectName: "comparePairGroup"
+            visible: (control.sourceCount === 3 && control.pairRelevant) || ((control.currentMode === ComparisonSurface.Difference || control.currentMode === ComparisonSurface.DualDifference) && control.peekTargetValid)
+            // The Flow positions by width/height, and this capsule's own inputs are only
+            // correct after the inner Row has distributed its children - which, in the
+            // no-render hosts this bar's explicit relayout chain exists for, needs that
+            // chain to run first. Stating width/height here (instead of leaving them to
+            // follow the implicit size) makes the Flow read the settled values, and the
+            // visible-gated collapse keeps a hidden capsule from reserving a ghost slot.
+            implicitWidth: pairGroupRow.implicitWidth + 8
+            width: visible ? implicitWidth : 0
             implicitHeight: Theme.hitAreaMinimum
-            // V02: the selector names the two real files ("gt.mp4 ↔ model.mp4") instead of the
-            // A/B/C slot letters, so a same-letter relabel can never masquerade as a pair
-            // switch. The role keeping the letters ("label") stays for the inspector rows.
-            model: control.differenceEdges
-            textRole: "pairLabel"
-            currentIndex: control.currentEdgeIndex
-            Accessible.name: qsTr("比较对象")
-            hoverEnabled: true
-            leftPadding: 10
-            rightPadding: 26
-            font.pixelSize: Theme.fontBody
-            onActivated: index => {
-                if (index >= 0 && index < control.differenceEdges.length)
-                    control.edgeRequested(Number(control.differenceEdges[index].preferenceValue));
+            height: implicitHeight
+            // The width collapse above makes this capsule a moving target for the outer
+            // Flow, and the Flow's own re-layout is driven by the explicit hooks below the
+            // bar - not by a render pass. Re-arm that hook whenever the capsule resizes, or
+            // the Flow keeps stale offsets for the entries after it.
+            onWidthChanged: Qt.callLater(modeActions.forceLayout)
+            // Positioners skip children whose EFFECTIVE visibility is off, and this
+            // capsule's own flip can evaluate after its children's width flips: a re-layout
+            // armed by the children alone then runs while the capsule is still hidden and
+            // skips every child, never to be re-armed. Re-run the chain once the capsule's
+            // own visibility settles, after the current binding cycle completes.
+            onVisibleChanged: Qt.callLater(() => {
+                pairGroupRow.forceLayout();
+                modeActions.forceLayout();
+            })
+            radius: Theme.radiusMedium
+            color: Theme.control
+            border.width: 1
+            border.color: Theme.border
+
+            Row {
+                id: pairGroupRow
+
+                spacing: Theme.spaceMicro
+                anchors {
+                    verticalCenter: parent.verticalCenter
+                    left: parent.left
+                    leftMargin: 4
+                }
+                // The children's widths flip with their `visible` (collapse trick above),
+                // but this bar's explicit-forceLayout discipline exists precisely because
+                // its host can pump the event loop without a render-driven polish pass
+                // (the contract harness never renders). childrenRect follows the children's
+                // geometry, so re-distribute off it instead of waiting for a polish that
+                // never comes; the call settles once the row is laid out.
+                onChildrenRectChanged: forceLayout()
+
+                ToolbarCombo {
+                    id: pairComboBox
+
+                    objectName: "pairCombo"
+                    visible: control.sourceCount === 3 && control.pairRelevant
+                    // Positioners reserve width for invisible children; collapse so a
+                    // peek-only capsule (dual difference) does not carry the combo's ghost.
+                    width: visible ? implicitWidth : 0
+                    implicitWidth: 104
+                    implicitHeight: Theme.hitAreaMinimum
+                    // V02: the selector names the two real files ("gt.mp4 ↔ model.mp4") instead
+                    // of the A/B/C slot letters, so a same-letter relabel can never masquerade as
+                    // a pair switch. The role keeping the letters ("label") stays for the
+                    // inspector rows.
+                    model: control.differenceEdges
+                    textRole: "pairLabel"
+                    currentIndex: control.currentEdgeIndex
+                    Accessible.name: qsTr("比较对象")
+                    hoverEnabled: true
+                    leftPadding: 10
+                    rightPadding: 26
+                    font.pixelSize: Theme.fontBody
+                    onActivated: index => {
+                        if (index >= 0 && index < control.differenceEdges.length)
+                            control.edgeRequested(Number(control.differenceEdges[index].preferenceValue));
+                    }
+                }
+
+                VcsToolButton {
+                    id: switchCandidateButton
+
+                    objectName: "switchCandidateButton"
+                    text: qsTr("切候选")
+                    visible: control.sourceCount === 3 && control.pairRelevant
+                    width: visible ? implicitWidth : 0
+                    enabled: !control.busy
+                    implicitWidth: 86
+                    implicitHeight: Theme.hitAreaMinimum
+                    labelPixelSize: Theme.fontBody
+                    Accessible.name: qsTr("固定参考切换候选")
+                    onClicked: control.switchCandidateRequested()
+                }
+
+                // Hold-to-peek: while held the surface shows the reference (GT) source instead
+                // of the difference pass; releasing restores the difference view. The label
+                // names that target and stays visible while the keyboard lock holds it.
+                // D2: the dual-reference difference is a difference task too, and the keyboard
+                // backtick works there - so the button follows the same condition instead of
+                // hiding while the shortcut stays armed. Both entries additionally require an
+                // identified reference, matching Main's differencePeekAvailable.
+                VcsToolButton {
+                    id: differencePeekButton
+
+                    objectName: "differencePeekButton"
+                    text: control.peekLocked ? qsTr("GT 原图·已锁定") : qsTr("按住看 GT 原图")
+                    visible: (control.currentMode === ComparisonSurface.Difference || control.currentMode === ComparisonSurface.DualDifference) && control.peekTargetValid
+                    width: visible ? implicitWidth : 0
+                    enabled: !control.busy && control.peekTargetValid
+                    prominent: pressed || control.peekLocked
+                    implicitWidth: 136
+                    implicitHeight: Theme.hitAreaMinimum
+                    labelPixelSize: Theme.fontBody
+                    Accessible.description: control.peekTargetValid ? qsTr("按住显示会话的参考（GT）源，即使 GT 不在当前比较对中；松开恢复差异视图。键盘 ` 切换，Shift+` 锁定。") : qsTr("当前会话没有可直看的参考（GT）源。")
+                    onPressed: control.differencePeekChanged(true)
+                    onReleased: control.differencePeekChanged(false)
+                    onCanceled: control.differencePeekChanged(false)
+                }
             }
         }
-
-        VcsToolButton {
-            id: switchCandidateButton
-
-            objectName: "switchCandidateButton"
-            text: qsTr("切候选")
-            visible: control.sourceCount === 3 && control.pairRelevant
-            enabled: !control.busy
-            implicitWidth: 86
-            implicitHeight: Theme.hitAreaMinimum
-            labelPixelSize: Theme.fontBody
-            Accessible.name: qsTr("固定参考切换候选")
-            onClicked: control.switchCandidateRequested()
-        }
+        // qmllint enable import unqualified unresolved-type
 
         // V02: one direct-look entry per participating source, generated from the session
         // (A/B/C). The source that currently carries the reference (GT) role shows a GT badge
@@ -298,7 +365,7 @@ Rectangle {
 
         required property int modeValue
         checkable: true
-        checked: control.currentMode === modeValue
+        checked: control.canvasFocusSlot < 0 && control.currentMode === modeValue
         mirrorsState: true
         implicitHeight: Theme.hitAreaMinimum
         implicitWidth: 80
@@ -421,8 +488,12 @@ Rectangle {
                     return Theme.fluentHover;
                 return "transparent";
             }
-            border.width: focusButton.activeFocus ? 2 : 1
-            border.color: focusButton.activeFocus ? Theme.focus : "transparent"
+            // Direct-look is a strong canvas state: while the whole canvas shows this one
+            // source, the button wears the source's own identity colour as its edge, so a
+            // focused single view cannot be mistaken for a comparison. Keyboard focus keeps
+            // the canonical ring.
+            border.width: focusButton.checked ? 2 : (focusButton.activeFocus ? 2 : 1)
+            border.color: focusButton.checked ? Theme.sourceBorder(focusButton.focusSlot) : (focusButton.activeFocus ? Theme.focus : "transparent")
 
             Behavior on color {
                 ColorAnimation {
@@ -444,7 +515,7 @@ Rectangle {
         checkable: true
         // V03: "差异定位" covers both pair differences and the GT-anchored dual difference -
         // one task, two scopes.
-        checked: control.currentMode === ComparisonSurface.Difference || control.currentMode === ComparisonSurface.DualDifference
+        checked: control.canvasFocusSlot < 0 && (control.currentMode === ComparisonSurface.Difference || control.currentMode === ComparisonSurface.DualDifference)
         // Opening the flavour menu must not light the button up before a flavour is chosen.
         mirrorsState: true
         implicitHeight: Theme.hitAreaMinimum

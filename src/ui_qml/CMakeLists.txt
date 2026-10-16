@@ -61,11 +61,13 @@ if(DVS_BUILD_ADAPTERS)
         STATIC
             include/dvs/ui/ComparisonExportController.h
             include/dvs/ui/ComparisonSurface.h
+            include/dvs/ui/ColorClipboardController.h
             include/dvs/ui/DesktopApplication.h
             include/dvs/ui/DiagnosticsProbe.h
             include/dvs/ui/DirectCompare.h
             include/dvs/ui/EditImageProvider.h
             include/dvs/ui/GraphicsBackend.h
+            include/dvs/ui/HoldKeyHandler.h
             include/dvs/ui/ImageEditController.h
             include/dvs/ui/ImageEditOperations.h
             include/dvs/ui/ImagePairLoader.h
@@ -79,12 +81,14 @@ if(DVS_BUILD_ADAPTERS)
             include/dvs/ui/StartupSplash.h
             include/dvs/ui/TimingDiagnosticsController.h
             src/ComparisonExportController.cpp
+            src/ColorClipboardController.cpp
             src/DesktopApplication.cpp
             src/DiagnosticsProbe.cpp
             src/DirectCompare.cpp
             src/ComparisonSurface.cpp
             src/EditImageProvider.cpp
             src/GraphicsBackend.cpp
+            src/HoldKeyHandler.cpp
             src/ImageEditController.cpp
             src/ImageEditOperations.cpp
             src/ImagePairLoader.cpp

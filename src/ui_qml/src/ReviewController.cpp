@@ -355,6 +355,11 @@ struct ReviewView final {
     int sourceCount = 0;
     int canonicalSourceIndex = -1;
     int referenceSourceIndex = -1;
+    // True only when the validated comparison actually identifies a reference (GT) source.
+    // referenceSourceIndex carries the canonical-source fallback for its existing readers,
+    // so the explicit role fact needs its own field - a predictions-only three-source set
+    // must not read as "GT present".
+    bool hasExplicitReference = false;
     ReviewController::ReviewDisplayState displayState = ReviewController::ReviewDisplayState::Empty;
     bool busy = false;
     bool framePending = false;
@@ -364,6 +369,7 @@ struct ReviewView final {
     qint64 playbackRangeOut = -1;
     bool playbackRangeLoop = false;
     bool playbackRangeLoopActive = false;
+    bool playbackRangePingPong = false;
     bool graphicsReady = false;
     qint64 currentFrame = -1;
     qulonglong totalFrames = 0U;
@@ -957,8 +963,10 @@ public:
             });
     }
 
-    [[nodiscard]] bool
-    setPlaybackRange(const qint64 inFrame, const qint64 outFrame, const bool loop) {
+    [[nodiscard]] bool setPlaybackRange(const qint64 inFrame,
+                                        const qint64 outFrame,
+                                        const bool loop,
+                                        const bool pingPong = false) {
         if (!onOwnerThread() || stopped_) {
             return false;
         }
@@ -984,6 +992,7 @@ public:
                         .context = *context,
                         .range = range,
                         .loop = loop && range.has_value(),
+                        .pingPong = loop && range.has_value() && pingPong,
                     }}) != application::PortSubmitResult::Accepted) {
                 return false;
             }
@@ -996,10 +1005,23 @@ public:
         view_.playbackRangeIn = range.has_value() ? inFrame : -1;
         view_.playbackRangeOut = range.has_value() ? outFrame : -1;
         view_.playbackRangeLoop = range.has_value() && loop;
+        view_.playbackRangePingPong = view_.playbackRangeLoop && pingPong;
         view_.playbackRangeLoopActive =
             view_.playing && view_.playbackRangeLoop && range.has_value();
         Q_EMIT owner_.stateChanged();
         return true;
+    }
+
+    // E3: flip the back-and-forth intent on the current loop range. Requires an active loop
+    // range (both endpoints valid); submits loop=true with the flipped ping-pong flag so the
+    // coordinator keeps the interval and only the walk mode changes.
+    [[nodiscard]] bool togglePlaybackRangePingPong() {
+        const qint64 inFrame = view_.playbackRangeIn;
+        const qint64 outFrame = view_.playbackRangeOut;
+        if (inFrame < 0 || outFrame < inFrame) {
+            return false;
+        }
+        return setPlaybackRange(inFrame, outFrame, true, !view_.playbackRangePingPong);
     }
 
     // C-07: continuity is a coordinator side-channel; do not latch pendingCommand_ busy.
@@ -1167,6 +1189,9 @@ public:
                                 .outInclusive = domain::FrameId{outFrame},
                             },
                         .loop = true,
+                        // E3: a walk armed BEFORE range playback must survive the play
+                        // entry - the StartRangePlayback command carries the same intent.
+                        .pingPong = view_.playbackRangePingPong,
                         .speed = view_.playbackRate,
                     }}) != application::PortSubmitResult::Accepted) {
                 return false;
@@ -1511,8 +1536,12 @@ private:
                 if (snapshot_->validatedComparison->referenceSourceId().has_value()) {
                     next.referenceSourceIndex =
                         static_cast<int>(*snapshot_->validatedComparison->referenceSourceId());
+                    next.hasExplicitReference = true;
                 } else {
+                    // Canonical fallback for existing referenceSourceIndex readers; the
+                    // explicit-GT fact stays false so GT-anchored actions can refuse.
                     next.referenceSourceIndex = next.canonicalSourceIndex;
+                    next.hasExplicitReference = false;
                 }
                 const domain::MediaDescriptor& canonical =
                     snapshot_->validatedComparison->canonicalDescriptor();
@@ -1618,6 +1647,7 @@ private:
                                         : -1;
             next.playbackRangeLoop = snapshot_->playbackRangeLoop;
             next.playbackRangeLoopActive = snapshot_->playbackRangeLoopActive;
+            next.playbackRangePingPong = snapshot_->playbackRangePingPong;
             next.alignmentRequired = snapshot_->alignmentRequired;
             next.automaticAlignmentPending = snapshot_->automaticAlignmentPending;
             next.canConfirmAutomaticAlignment = snapshot_->canConfirmAutomaticAlignment;
@@ -2553,6 +2583,10 @@ int ReviewController::referenceSourceIndex() const noexcept {
     return impl_->view().referenceSourceIndex;
 }
 
+bool ReviewController::hasExplicitReference() const noexcept {
+    return impl_->view().hasExplicitReference;
+}
+
 QString ReviewController::playbackContinuityPolicyName() const {
     return impl_->view().playbackContinuityPolicyName;
 }
@@ -2631,6 +2665,13 @@ bool ReviewController::playbackRangeLoop() const noexcept {
 
 bool ReviewController::playbackRangeLoopActive() const noexcept {
     return impl_->view().playbackRangeLoopActive;
+}
+bool ReviewController::playbackRangePingPong() const noexcept {
+    return impl_->view().playbackRangePingPong;
+}
+
+bool ReviewController::togglePlaybackRangePingPong() {
+    return impl_->togglePlaybackRangePingPong();
 }
 
 bool ReviewController::graphicsReady() const noexcept {

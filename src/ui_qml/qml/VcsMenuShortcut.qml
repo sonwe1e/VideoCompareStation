@@ -12,7 +12,7 @@ Text {
     property bool shortcutEnabled: true
 
     color: control.shortcutEnabled ? control.shortcutColor : control.disabledColor
-    font.pixelSize: 12
+    font.pixelSize: Theme.fontSecondary
     verticalAlignment: Text.AlignVCenter
     horizontalAlignment: Text.AlignRight
 }

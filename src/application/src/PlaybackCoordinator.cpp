@@ -487,7 +487,12 @@ private:
         // SetPlaybackRangeCommand). Targets must never leave this closed interval.
         std::optional<PlaybackRange> range;
         bool rangeLoop = false;
+        // E3: ping-pong walk (in..out..in) instead of always restarting at in. Requires
+        // rangeLoop; direction flips at each boundary and endpoints never repeat.
+        bool rangePingPong = false;
         std::uint64_t completedLoops = 0U;
+        // +1 walking toward out, -1 walking toward in. Only meaningful while rangePingPong.
+        std::int8_t rangeDirection = 1;
     };
 
     // A forward step stream: consecutive +1 steps that reuse the provider's Sequential decode path
@@ -754,17 +759,29 @@ private:
         if (!anchorStart || !displayedStart) {
             return;
         }
-        const std::int64_t mediaUs =
+        const std::int64_t rawMediaUs =
             displayedStart.value().microseconds() - anchorStart.value().microseconds();
+        // E3: a reverse leg walks from the anchor TOWARD In, so the raw PTS delta is
+        // negative. The presented-distance metric reports the real PTS distance (absolute
+        // value) instead of recording a negative or zero rate; conditional negation keeps
+        // INT64_MIN representable.
+        const bool reverseLeg = run.rangePingPong && run.rangeDirection < 0;
+        const std::int64_t mediaUs =
+            reverseLeg ? (rawMediaUs < 0 ? -rawMediaUs : rawMediaUs) : rawMediaUs;
         state_.playbackPresentationRate =
             static_cast<double>(mediaUs) / static_cast<double>(wallUs);
-        // Expected media position at this wall instant is wall * speed (playbackDue's inverse).
+        // Expected media distance at this wall instant is wall * speed (playbackDue's inverse).
         const double expectedMediaUs = static_cast<double>(wallUs) * run.speed;
         const double lagUs = expectedMediaUs - static_cast<double>(mediaUs);
         if (std::isfinite(lagUs) &&
             lagUs >= static_cast<double>(std::numeric_limits<std::int64_t>::min()) &&
             lagUs <= static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
             state_.playbackLagMicroseconds = static_cast<std::int64_t>(lagUs);
+        }
+        // E3: a ping-pong walk never skips whole frame sets in either leg, so catch-up
+        // reporting does not apply while it is active.
+        if (run.rangePingPong) {
+            return;
         }
         const domain::PlaybackContinuityPolicy effective = domain::resolveContinuityPolicy(
             playbackContinuityPolicy_, static_cast<std::size_t>(state_.sources.size()));
@@ -788,9 +805,16 @@ private:
         }
         state_.playbackSpeed =
             playbackRun_.has_value() ? playbackRun_->speed : pendingPlaybackSpeed_.value_or(1.0);
+        // E3: while a ping-pong walk is active the run actually presents every frame in both
+        // legs (nextMinimum-driven, no wall catch-up). Projecting the REVIEWED effective
+        // policy keeps the UI/status honest instead of claiming RealTime frame-set skips that
+        // the walk never performs.
         state_.playbackContinuityPolicy = playbackContinuityPolicy_;
-        state_.playbackContinuityPolicyEffective = domain::resolveContinuityPolicy(
-            playbackContinuityPolicy_, static_cast<std::size_t>(state_.sources.size()));
+        state_.playbackContinuityPolicyEffective =
+            (playbackRun_.has_value() && playbackRun_->rangePingPong)
+                ? domain::PlaybackContinuityPolicy::ReviewEveryFrame
+                : domain::resolveContinuityPolicy(playbackContinuityPolicy_,
+                                                  static_cast<std::size_t>(state_.sources.size()));
         state_.playbackSkippedFrameSets = playbackSkippedFrameSets_;
         state_.playbackRunSkippedFrameSets = playbackRunSkippedFrameSets_;
         state_.playbackRunPresentedFrames = playbackRunPresentedFrames_;
@@ -815,6 +839,7 @@ private:
         state_.playbackRangeOut =
             playbackRange_.has_value() ? std::optional{playbackRange_->outInclusive} : std::nullopt;
         state_.playbackRangeLoop = playbackRangeLoop_ && playbackRange_.has_value();
+        state_.playbackRangePingPong = state_.playbackRangeLoop && playbackRangePingPong_;
         state_.playbackRangeLoopActive =
             playbackRun_.has_value() && playbackRange_.has_value() && playbackRangeLoop_;
         state_.playbackRangeCompletedLoops =
@@ -1034,8 +1059,17 @@ private:
 
     [[nodiscard]] std::optional<std::chrono::steady_clock::time_point>
     playbackDue(const domain::FrameId target) const {
-        if (!playbackRun_.has_value() || !canonicalTimeline_.has_value() ||
-            target < playbackRun_->firstTarget) {
+        if (!playbackRun_.has_value() || !canonicalTimeline_.has_value()) {
+            return std::nullopt;
+        }
+        // E3: the firstTarget guard is direction-aware. A forward walk never goes back under
+        // its first target; a reverse leg's first target is its HIGHEST frame and every
+        // later target is smaller, so the walk only rejects targets beyond the leg's far end.
+        if (playbackRun_->rangePingPong && playbackRun_->rangeDirection < 0) {
+            if (target > playbackRun_->firstTarget) {
+                return std::nullopt;
+            }
+        } else if (target < playbackRun_->firstTarget) {
             return std::nullopt;
         }
         // due(n) = wallAnchor + timelineTime(n) - timelineTime(anchorFrame). The two timeline
@@ -1054,10 +1088,23 @@ private:
         if (!deltaMicroseconds.has_value()) {
             return std::nullopt;
         }
+        // E3: a ping-pong reverse leg walks from the leg anchor (the Out endpoint) toward In,
+        // so the raw PTS delta is negative. The contract schedules the walk by the REAL PTS
+        // DISTANCE at positive speed - negating the checked delta (conditionally, so
+        // INT64_MIN stays representable) is what makes reverse VFR honest instead of
+        // reusing the forward atOrBefore projection and pre-selecting lower frames.
+        const std::optional<std::int64_t> directedDelta =
+            playbackRun_->rangePingPong && playbackRun_->rangeDirection < 0
+                ? std::optional<std::int64_t>{*deltaMicroseconds < 0 ? -*deltaMicroseconds
+                                                                     : *deltaMicroseconds}
+                : deltaMicroseconds;
+        if (!directedDelta.has_value()) {
+            return std::nullopt;
+        }
         // Speed divides the media-time delta: 2x halves the wall time between frames, 0.5x
         // doubles it. The speed comes from a validated positive ladder, so the scaled delta
         // stays finite; it is re-clamped into int64 through the checked helper below.
-        const double scaled = static_cast<double>(*deltaMicroseconds) / playbackRun_->speed;
+        const double scaled = static_cast<double>(*directedDelta) / playbackRun_->speed;
         if (!std::isfinite(scaled) ||
             scaled > static_cast<double>(std::numeric_limits<int64_t>::max()) ||
             scaled < static_cast<double>(std::numeric_limits<int64_t>::min())) {
@@ -1094,7 +1141,12 @@ private:
             playbackContinuityPolicy_, static_cast<std::size_t>(state_.sources.size()));
         // C-07 ReviewEveryFrame: never skip whole FrameSets to recover wall-clock. The cadence
         // slips instead; dropped-frame stats stay zero under this policy.
-        if (effective == domain::PlaybackContinuityPolicy::ReviewEveryFrame) {
+        // E3: a ping-pong leg shares the same deterministic step contract. The forward wall
+        // projection (canonicalFrameAtOrBefore) assumes display-order progress and would
+        // pre-select lower frames on the reverse leg; a ping-pong walk is therefore driven
+        // purely by nextMinimum in both legs, which keeps VFR intervals honest frame by frame
+        // and reports a slower-than-realtime reverse leg honestly instead of skipping.
+        if (effective == domain::PlaybackContinuityPolicy::ReviewEveryFrame || run.rangePingPong) {
             return domain::FrameId{
                 (std::min)(maximum, (std::max)(minimum, run.nextMinimum.value()))};
         }
@@ -1163,6 +1215,11 @@ private:
         }
         // E03: the run is ending (pause, seek, session change, failure); fold the final steady
         // segment in before the run state moves. Run-scoped accounting members survive below.
+        // E3: a ping-pong walk's direction survives the stop so pause/resume continues the
+        // active leg; it is reset only when the range itself changes or clears.
+        if (playbackRun_->rangePingPong && playbackRun_->range.has_value()) {
+            playbackRangeResumeDirection_ = playbackRun_->rangeDirection;
+        }
         closeSteadyPlaybackSegment();
         PlaybackRun stopped = std::move(*playbackRun_);
         playbackRun_.reset();
@@ -1749,10 +1806,18 @@ private:
     }
 
     [[nodiscard]] PortSubmitResult submitPlaybackRequest(PendingPlaybackFrame& frame) {
+        // E3: the reverse leg of a ping-pong range walk requests FrameRequestPriority::Reverse
+        // so the real SourceDecodeActor builds its bounded reverse window (fillReverseWindow
+        // only runs for Reverse); the forward leg and non-range playback keep Sequential.
+        const FrameRequestPriority priority = playbackRun_.has_value() &&
+                                                      playbackRun_->rangePingPong &&
+                                                      playbackRun_->rangeDirection < 0
+                                                  ? FrameRequestPriority::Reverse
+                                                  : FrameRequestPriority::Sequential;
         const FrameRequest request{
             .context = frame.context,
             .frameId = frame.expectedFrame,
-            .priority = FrameRequestPriority::Sequential,
+            .priority = priority,
             .sourceOffsets = sourceMappingsFor(frame.expectedFrame),
             .alignmentRevision = state_.alignmentRevision,
         };
@@ -1764,13 +1829,28 @@ private:
             playbackRun_->preparedFrame.has_value() || !target.isValid()) {
             return;
         }
-        const std::int64_t ceiling = playbackCeiling(*playbackRun_);
-        // Never prepare past the session playback-range Out point (or the canonical end).
-        if (target.value() >= ceiling) {
+        // Reverse shares the provider's latest-wins exact queue. A speculative successor
+        // would cancel the active reverse request. Its decoder-owned GOP window already
+        // supplies bounded reuse; submit the next reverse target only after this one's ACK.
+        if (playbackRun_->rangePingPong && playbackRun_->rangeDirection < 0) {
             return;
         }
-        const domain::FrameId following{target.value() + 1};
-        if (following.value() > ceiling) {
+        // E3: the reverse leg walks toward In - the successor is target - 1 and the bound is
+        // the range floor instead of the Out ceiling. The +1/-1 successor mirrors the active
+        // leg so prefetch never crosses a boundary.
+        const std::int64_t successorDelta =
+            playbackRun_->rangePingPong && playbackRun_->rangeDirection < 0 ? -1 : 1;
+        const std::int64_t floor = playbackFloor(*playbackRun_);
+        const std::int64_t ceiling = playbackCeiling(*playbackRun_);
+        // Never prepare past the leg's boundary in the active direction.
+        if (target.value() >= ceiling && successorDelta > 0) {
+            return;
+        }
+        if (target.value() <= floor && successorDelta < 0) {
+            return;
+        }
+        const domain::FrameId following{target.value() + successorDelta};
+        if (following.value() > ceiling || following.value() < floor) {
             return;
         }
         playbackRun_->preparedFrame = PendingPlaybackFrame{
@@ -1855,10 +1935,18 @@ private:
         }
         const auto wallDelta = std::chrono::duration_cast<std::chrono::microseconds>(
             *run.lastCommitWall - run.wallAnchor);
-        if (*mediaDelta < 0 || wallDelta < kPlaybackSteadySegmentMinimumWall) {
+        // E3: a reverse leg walks from the anchor toward In, so its PTS delta is negative.
+        // The steady-segment accounting reports the REAL PTS distance covered (absolute
+        // value, conditional negation keeps INT64_MIN representable) at the elapsed wall
+        // time - a reverse leg is never silently dropped from the totals. A forward-leg
+        // negative delta stays rejected (non-monotonic media time is not progress).
+        const bool reverseLeg = run.rangePingPong && run.rangeDirection < 0;
+        const std::int64_t directedMediaDelta =
+            reverseLeg ? (*mediaDelta < 0 ? -*mediaDelta : *mediaDelta) : *mediaDelta;
+        if (directedMediaDelta < 0 || wallDelta < kPlaybackSteadySegmentMinimumWall) {
             return;
         }
-        playbackRunSteadyMediaMicroseconds_ += static_cast<std::uint64_t>(*mediaDelta);
+        playbackRunSteadyMediaMicroseconds_ += static_cast<std::uint64_t>(directedMediaDelta);
         playbackRunSteadyWallMicroseconds_ += static_cast<std::uint64_t>(wallDelta.count());
         playbackRunSteadySegmentCount_ += 1U;
     }
@@ -1972,11 +2060,17 @@ private:
         // canonical timeline, so irregular spacing is honored frame by frame.
         std::chrono::microseconds presentationLead =
             std::chrono::duration_cast<std::chrono::microseconds>(kPlaybackPresentationLead);
-        if (target > playbackRun_->firstTarget) {
-            if (const auto previousDue = playbackDue(domain::FrameId{target.value() - 1})) {
-                // The clock's native duration is nanoseconds on this toolchain, so the interval
-                // must be narrowed to microseconds before it is compared with the lead; comparing
-                // raw nanosecond counts would inflate it a thousandfold and never cap anything.
+        // E3: the interval neighbor follows the ACTIVE LEG DIRECTION. On the reverse leg the
+        // previous boundary is target+1 (the walk's real predecessor in time order is the
+        // next-higher frame); on the forward leg it stays target-1.
+        const bool reverseLeg = playbackRun_->rangePingPong && playbackRun_->rangeDirection < 0;
+        const bool hasIntervalNeighbor =
+            reverseLeg ? (playbackRun_->range.has_value() &&
+                          target.value() < playbackRun_->range->outInclusive.value())
+                       : target > playbackRun_->firstTarget;
+        if (hasIntervalNeighbor) {
+            const domain::FrameId neighbor{reverseLeg ? target.value() + 1 : target.value() - 1};
+            if (const auto previousDue = playbackDue(neighbor)) {
                 const auto dueMicroseconds =
                     std::chrono::duration_cast<std::chrono::microseconds>(due->time_since_epoch())
                         .count();
@@ -1986,8 +2080,12 @@ private:
                         .count();
                 if (const auto intervalMicroseconds =
                         detail::checkedSubtract(dueMicroseconds, previousDueMicroseconds);
-                    intervalMicroseconds.has_value() && *intervalMicroseconds > 0) {
-                    const std::int64_t halfInterval = *intervalMicroseconds / 2;
+                    intervalMicroseconds.has_value() && *intervalMicroseconds != 0) {
+                    // Reverse legs yield a negative raw delta here (direction-aware due);
+                    // the real interval distance is what caps the lead.
+                    const std::int64_t interval =
+                        *intervalMicroseconds < 0 ? -*intervalMicroseconds : *intervalMicroseconds;
+                    const std::int64_t halfInterval = interval / 2;
                     if (halfInterval < presentationLead.count()) {
                         presentationLead = std::chrono::microseconds{halfInterval};
                     }
@@ -2068,13 +2166,39 @@ private:
             const PlaybackRange& range = *playbackRange_;
             const std::int64_t inValue = range.inInclusive.value();
             const std::int64_t outValue = range.outInclusive.value();
-            if (inValue == outValue) {
+            if (displayedValue < inValue || displayedValue > outValue) {
+                playbackRangeResumeDirection_.reset();
+            }
+            // E3: a ping-pong resume owns one unified path. The saved direction continues
+            // the active leg; resuming exactly ON an endpoint completes the turn the paused
+            // run never performed - bookkeeping only (direction flip, In turn counts the
+            // finished round trip), no extra leg request is emitted.
+            if (playbackRangePingPong_ && playbackRangeResumeDirection_.has_value() &&
+                inValue < outValue) {
+                std::int8_t direction = *playbackRangeResumeDirection_;
+                if (displayedValue == outValue && direction > 0) {
+                    direction = -1;
+                    anchorFrame = range.outInclusive;
+                } else if (displayedValue == inValue && direction < 0) {
+                    direction = 1;
+                    anchorFrame = range.inInclusive;
+                    playbackRangeCompletedLoops_ += 1U;
+                }
+                playbackRangeResumeDirection_ = direction;
+                firstTarget = domain::FrameId{displayedValue + direction};
+            } else if (inValue == outValue) {
                 if (displayedValue == inValue) {
                     completeCommand(command.context, CommandOutcome::Succeeded);
                     return;
                 }
                 firstTarget = range.inInclusive;
                 anchorFrame = range.inInclusive;
+            } else if (playbackRangePingPong_ && displayedValue == outValue) {
+                // E3: a FRESH ping-pong start already sitting on Out begins the downward
+                // leg instead of jumping back to In.
+                playbackRangeResumeDirection_ = static_cast<std::int8_t>(-1);
+                firstTarget = domain::FrameId{outValue - 1};
+                anchorFrame = range.outInclusive;
             } else if (displayedValue < inValue || displayedValue > outValue ||
                        (playbackRangeLoop_ && displayedValue == outValue)) {
                 // Play from outside the closed range (or loop restart from Out) begins at In.
@@ -2085,7 +2209,12 @@ private:
                 completeCommand(command.context, CommandOutcome::Succeeded);
                 return;
             } else {
-                firstTarget = domain::FrameId{displayedValue + 1};
+                // E3: a ping-pong resume continues the ACTIVE leg - the first target follows
+                // the saved direction and the new leg re-anchors on the displayed frame
+                // (already the default anchor) with a fresh wall anchor below.
+                const bool reverseResume =
+                    playbackRangePingPong_ && playbackRangeResumeDirection_.value_or(1) < 0;
+                firstTarget = domain::FrameId{displayedValue + (reverseResume ? -1 : 1)};
             }
         } else {
             restartFromEnd = displayedValue == canonicalEnd;
@@ -2109,7 +2238,11 @@ private:
             .restartFromEnd = restartFromEnd,
             .range = playbackRange_,
             .rangeLoop = playbackRangeLoop_ && playbackRange_.has_value(),
+            .rangePingPong =
+                playbackRangeLoop_ && playbackRange_.has_value() && playbackRangePingPong_,
             .completedLoops = playbackRangeCompletedLoops_,
+            // E3: resume continues the saved walk direction; a fresh interval walk starts +1.
+            .rangeDirection = playbackRangeResumeDirection_.value_or(1),
         };
         playbackRunSkippedFrameSets_ = 0U;
         playbackRunPresentedFrames_ = 0U;
@@ -2182,6 +2315,9 @@ private:
     }
 
     void beginSetPlaybackRange(const SetPlaybackRangeCommand& command) {
+        const bool reanchorWalk = playbackRun_.has_value() &&
+                                  (playbackRun_->rangePingPong ||
+                                   (command.range.has_value() && command.loop && command.pingPong));
         if (command.range.has_value()) {
             if (!command.range->isValid()) {
                 rejectCommand(
@@ -2205,14 +2341,91 @@ private:
             }
             playbackRange_ = command.range;
             playbackRangeLoop_ = command.loop;
+            // E3: ping-pong requires an active loop; without it the flag is ignored so a
+            // later loop-less range never silently keeps the back-and-forth contract. Any
+            // range change starts a new walk session: drop the resume direction.
+            playbackRangePingPong_ = command.loop && command.pingPong;
+            playbackRangeResumeDirection_.reset();
         } else {
             playbackRange_.reset();
             playbackRangeLoop_ = false;
+            playbackRangePingPong_ = false;
+            playbackRangeResumeDirection_.reset();
             playbackRangeCompletedLoops_ = 0U;
         }
-        if (playbackRun_.has_value()) {
+        if (reanchorWalk && state_.displayedFrame.has_value()) {
+            // A range edit is a navigation boundary. Retain run accounting, but invalidate
+            // all old provider work, presentation ACKs and timers before planning anew.
+            closeSteadyPlaybackSegment();
+            dependencies_.directFrameProvider->cancel(playbackRun_->providerContext);
+            if (playbackRun_->frame.has_value()) {
+                if (playbackRun_->frame->presentationTimerId.has_value()) {
+                    static_cast<void>(dependencies_.deadlineScheduler->cancel(
+                        *playbackRun_->frame->presentationTimerId));
+                }
+                if (playbackRun_->frame->framePublished) {
+                    dependencies_.renderChannel->clear(playbackRun_->providerContext);
+                }
+            }
+            if (playbackRun_->cadenceTimerId.has_value()) {
+                static_cast<void>(
+                    dependencies_.deadlineScheduler->cancel(*playbackRun_->cadenceTimerId));
+            }
+            playbackRun_->frame.reset();
+            playbackRun_->preparedFrame.reset();
+            playbackRun_->cadenceTimerId.reset();
+            playbackRun_->cadenceTarget.reset();
+            playbackRun_->lastCommittedFrame.reset();
+            playbackRun_->lastCommitWall.reset();
+            state_.requestedFrame.reset();
+            state_.playbackGeneration = increment(state_.playbackGeneration);
+            playbackRun_->providerContext = currentPlaybackScope();
+            playbackRun_->cadenceContext = makePlaybackContext();
             playbackRun_->range = playbackRange_;
             playbackRun_->rangeLoop = playbackRangeLoop_ && playbackRange_.has_value();
+            playbackRun_->rangePingPong = playbackRangePingPong_;
+            playbackRun_->rangeDirection = 1;
+            playbackRun_->restartFromEnd = false;
+            const std::int64_t displayed = state_.displayedFrame->value();
+            std::int64_t next = displayed + 1;
+            std::int64_t anchor = displayed;
+            bool canContinue = static_cast<std::uint64_t>(next) < state_.canonicalFrameCount;
+            if (!playbackRange_.has_value()) {
+                playbackRun_->completedLoops = 0U;
+            } else {
+                const auto in = playbackRange_->inInclusive.value();
+                const auto out = playbackRange_->outInclusive.value();
+                if (displayed < in || displayed > out) {
+                    next = in;
+                    anchor = in;
+                    canContinue = playbackRun_->rangeLoop;
+                } else if (displayed == out) {
+                    canContinue = playbackRun_->rangeLoop && in < out;
+                    if (playbackRun_->rangePingPong && in < out) {
+                        playbackRun_->rangeDirection = -1;
+                        next = out - 1;
+                    } else {
+                        next = in;
+                        anchor = in;
+                    }
+                } else {
+                    canContinue = true;
+                }
+            }
+            if (canContinue) {
+                playbackRun_->anchorFrame = domain::FrameId{anchor};
+                playbackRun_->firstTarget = domain::FrameId{next};
+                playbackRun_->nextMinimum = domain::FrameId{next};
+                playbackRun_->wallAnchor = dependencies_.clock->now();
+                static_cast<void>(schedulePlaybackTarget(domain::FrameId{next}));
+            } else {
+                stopPlayback();
+            }
+        } else if (playbackRun_.has_value()) {
+            playbackRun_->range = playbackRange_;
+            playbackRun_->rangeLoop = playbackRangeLoop_ && playbackRange_.has_value();
+            playbackRun_->rangePingPong = false;
+            playbackRun_->rangeDirection = 1;
             if (!playbackRange_.has_value()) {
                 playbackRun_->completedLoops = 0U;
             } else if (state_.displayedFrame.has_value()) {
@@ -2320,6 +2533,9 @@ private:
         }
         playbackRange_ = command.range;
         playbackRangeLoop_ = command.loop;
+        playbackRangePingPong_ = command.loop && command.pingPong;
+        // E3: a fresh StartRangePlayback is a new walk session.
+        playbackRangeResumeDirection_.reset();
         pendingPlaybackSpeed_ = command.speed;
         if (interactiveStepRun_.has_value()) {
             cancelInteractiveStepRun(InteractiveStepStopReason::PlaybackStarted);
@@ -2327,6 +2543,8 @@ private:
         if (playbackRun_.has_value()) {
             stopPlayback();
         }
+        // stopPlayback saves the old walk's direction; a fresh start must discard it.
+        playbackRangeResumeDirection_.reset();
         if (pendingProbe_.has_value()) {
             completeCommand(command.context, CommandOutcome::Busy);
             return;
@@ -3774,8 +3992,79 @@ private:
         state_.requestedFrame.reset();
         state_.lastError.reset();
         publishPlaybackSnapshot();
+        // E3: an explicit pause outranks every range walk decision. When the endpoint frame's
+        // ACK is still pending, the pause takes effect only after that frame is fully
+        // presented (we are here, so it is) - the run stops on the boundary instead of
+        // silently starting another leg.
+        if (playbackRun_->pauseRequested) {
+            if (playbackRun_->preparedFrame.has_value()) {
+                dependencies_.directFrameProvider->cancel(playbackRun_->providerContext);
+            }
+            // E3: this stop bypasses stopPlayback, so the resume direction is saved here too.
+            if (playbackRun_->rangePingPong && playbackRun_->range.has_value()) {
+                playbackRangeResumeDirection_ = playbackRun_->rangeDirection;
+            }
+            closeSteadyPlaybackSegment();
+            emitTrace(TraceEventKind::PlaybackRunStopped,
+                      makeTraceIdentity(),
+                      static_cast<std::uint64_t>(displayedFrame.value()));
+            playbackRangeCompletedLoops_ = playbackRun_->completedLoops;
+            playbackRun_.reset();
+            lastPlaybackProjectionAt_.reset();
+            state_.playbackState = domain::PlaybackState::kPaused;
+            publishSnapshot();
+            return;
+        }
         if (playbackRun_->range.has_value()) {
             const PlaybackRange& range = *playbackRun_->range;
+            // E3 ping-pong: a turn at a boundary is a direction flip, not a completed round
+            // trip. completedLoops only advances when the walk re-anchoring at in completes a
+            // full out->in return leg (matching the field's documented round-trip contract).
+            if (playbackRun_->rangePingPong &&
+                range.inInclusive.value() < range.outInclusive.value()) {
+                const std::int64_t inValue = range.inInclusive.value();
+                const std::int64_t outValue = range.outInclusive.value();
+                bool turnToReverse =
+                    playbackRun_->rangeDirection > 0 && displayedFrame.value() >= outValue;
+                bool turnToForward =
+                    playbackRun_->rangeDirection < 0 && displayedFrame.value() <= inValue;
+                if (turnToReverse || turnToForward) {
+                    if (playbackRun_->preparedFrame.has_value()) {
+                        dependencies_.directFrameProvider->cancel(playbackRun_->providerContext);
+                        playbackRun_->preparedFrame.reset();
+                    }
+                    // The turn is a seam: the finished leg's steady segment closes so the
+                    // direction flip is never recorded as ordinary forward progress.
+                    closeSteadyPlaybackSegment();
+                    // A full out->in return leg IS one completed ping-pong cycle: the loop
+                    // counter advances only on the In turn, never on the Out turn.
+                    if (turnToForward) {
+                        playbackRun_->completedLoops += 1U;
+                        playbackRangeCompletedLoops_ = playbackRun_->completedLoops;
+                    }
+                    playbackRun_->rangeDirection =
+                        turnToReverse ? static_cast<std::int8_t>(-1) : static_cast<std::int8_t>(1);
+                    const std::int64_t turnFrame = turnToReverse ? outValue - 1 : inValue + 1;
+                    // The turn anchors the new leg on the endpoint frame that was just
+                    // PRESENTED (Out for the forward leg, In for the reverse leg) with its
+                    // real commit wall time - anchoring on the neighbor frame instead would
+                    // collapse the endpoint's media interval and skip its presentation slot.
+                    // nextMinimum is the adjacent frame; playbackDue derives its due from the
+                    // real PTS distance to this anchor at positive speed.
+                    playbackRun_->anchorFrame = domain::FrameId{turnToReverse ? outValue : inValue};
+                    // The endpoint's commit wall instant anchors the new leg (presented above,
+                    // so the optional is populated).
+                    playbackRun_->wallAnchor = *playbackRun_->lastCommitWall;
+                    playbackRun_->nextMinimum = domain::FrameId{turnFrame};
+                    // E3: the new leg's FIRST target is its first walked frame - the
+                    // direction-aware playbackDue guard validates against this, so the turn
+                    // must rebase it (a reverse leg's first target is its highest frame).
+                    playbackRun_->firstTarget = domain::FrameId{turnFrame};
+                    publishPlaybackSnapshot();
+                    static_cast<void>(schedulePlaybackTarget(domain::FrameId{turnFrame}));
+                    return;
+                }
+            }
             if (displayedFrame.value() >= range.outInclusive.value()) {
                 // Out is fully presented. Loop re-anchors inside the kernel; non-loop pauses.
                 // Single-frame ranges never spin: they present once and stop.
@@ -3841,6 +4130,11 @@ private:
             playbackRun_->firstTarget = domain::FrameId{1};
             playbackRun_->nextMinimum = domain::FrameId{1};
             playbackRun_->wallAnchor = dependencies_.clock->now();
+        } else if (playbackRun_->rangePingPong) {
+            // E3: the next minimum follows the active leg direction. A turn re-anchored above;
+            // reaching this point means the walk continues along the same leg.
+            playbackRun_->nextMinimum =
+                domain::FrameId{displayedFrame.value() + playbackRun_->rangeDirection};
         } else {
             playbackRun_->nextMinimum = domain::FrameId{displayedFrame.value() + 1};
         }
@@ -3848,6 +4142,13 @@ private:
             const std::int64_t ceiling = playbackCeiling(*playbackRun_);
             if (playbackRun_->nextMinimum.value() > ceiling) {
                 playbackRun_->nextMinimum = domain::FrameId{ceiling};
+            }
+            // E3: the reverse leg's floor is the range In - nextMinimum must not walk under it.
+            if (playbackRun_->rangePingPong) {
+                const std::int64_t floor = playbackFloor(*playbackRun_);
+                if (playbackRun_->nextMinimum.value() < floor) {
+                    playbackRun_->nextMinimum = domain::FrameId{floor};
+                }
             }
         }
         const domain::FrameId nextTarget = playbackTargetAt(dependencies_.clock->now());
@@ -4811,6 +5112,13 @@ private:
     // live-updated into an active PlaybackRun.
     std::optional<PlaybackRange> playbackRange_;
     bool playbackRangeLoop_ = false;
+    // E3: back-and-forth range walk. Survives pause like the loop flag; live-updated into an
+    // active PlaybackRun.
+    bool playbackRangePingPong_ = false;
+    // E3: the walk direction at the moment the run stopped. Pause/resume inside a ping-pong
+    // range must continue the active leg instead of restarting at +1; reset when the range
+    // itself changes or clears (a new interval is a new walk session).
+    std::optional<std::int8_t> playbackRangeResumeDirection_;
     std::uint64_t playbackRangeCompletedLoops_ = 0U;
     // C-07/D03: requested continuity policy (Contextual is smoothness-first RealTime).
     domain::PlaybackContinuityPolicy playbackContinuityPolicy_ =

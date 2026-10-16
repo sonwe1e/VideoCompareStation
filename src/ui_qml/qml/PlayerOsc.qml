@@ -38,6 +38,15 @@ Item {
     property int sourceDuplicateCount: 0
     property string sourceRateText: ""
     property string statusLegend: qsTr("源重复数来自有限的对齐标记；播放器跳过数表示追赶时跳过的完整帧组；呈现间隙表示呈现确认的帧号间隔，可能与播放器跳过重合。三项不能相加，也不代表显示器实际漏刷次数。")
+    // I8: mirrors the active shortcut preset so the transport's ±1 s / ±30 s buttons follow the
+    // same preset ReviewShortcuts resolves. 0 = frame-review, 1 = player. Forwarded to the
+    // TransportBar (tooltips) and consulted below (action routing).
+    property int shortcutPreset: 0
+    // C-07 quiet-capsule rule: a run earns the full warning rail only once something is
+    // actually wrong - skipped FrameSets, catch-up, >= 200 ms lag, or a run that has not
+    // presented a single frame yet (an unmeasured run is not a clean one). Everything else
+    // keeps the one-line quiet summary; the full rail stays one hover away.
+    readonly property bool playbackStatusAlert: control.playbackRunSkippedFrameSets > 0 || control.playbackCatchingUp || control.playbackLagMilliseconds >= 200 || control.playbackRunPresentedFrames === 0
     required property bool timelineEnabled
     required property int currentFrame
     required property int totalFrames
@@ -55,6 +64,8 @@ Item {
     property int inFrame: -1
     property int outFrame: -1
     property bool loopRangeActive: false
+    // E3: back-and-forth range walk toggle state, forwarded to the transport bar.
+    property bool loopRangePingPongActive: false
     // Range clip export, forwarded to the transport chip. The host owns the export adapter, so the
     // OSC only relays visibility, gate and progress.
     property bool rangeExportVisible: false
@@ -85,6 +96,7 @@ Item {
     signal markOutRequested
     signal playRangeRequested
     signal rangeLoopRequested
+    signal rangePingPongRequested
     signal clearRangeRequested
     signal exportRangeRequested
     signal exportSampleRequested
@@ -133,6 +145,64 @@ Item {
             hideTimer.restart();
     }
 
+    // The full status rail: every delivered observation, one part each. A function (not just a
+    // binding) so the warning rail and the quiet capsule's hover tooltip render the exact same
+    // text and can never drift apart.
+    function playbackStatusFullText() {
+        const parts = [];
+        if (control.playbackModeLabel.length > 0)
+            parts.push(control.playbackModeLabel);
+        const target = control.playbackTargetRate;
+        const actual = control.playbackPresentationRate;
+        if (control.playing && actual > 0)
+            parts.push(qsTr("目标 %1× · 实际 %2×").arg(target.toFixed(2)).arg(actual.toFixed(2)));
+        else
+            parts.push(qsTr("目标 %1×").arg(target.toFixed(2)));
+        if (control.playbackRunSkippedFrameSets > 0 || control.playbackCatchingUp)
+            parts.push(qsTr("播放器跳过 %1 组").arg(control.playbackRunSkippedFrameSets));
+        const lagMs = control.playbackLagMilliseconds;
+        if (control.playbackCatchingUp)
+            parts.push(qsTr("追赶中"));
+        else if (lagMs >= 500)
+            parts.push(qsTr("明显落后 %1s").arg((lagMs / 1000).toFixed(1)));
+        else if (lagMs >= 200)
+            parts.push(qsTr("落后 %1s").arg((lagMs / 1000).toFixed(1)));
+        if (control.sourceDuplicateCount > 0)
+            parts.push(qsTr("重复标记 %1").arg(control.sourceDuplicateCount));
+        if (control.displayGapCount > 0)
+            parts.push(qsTr("呈现间隙 %1").arg(control.displayGapCount));
+        // A run that has not finished presenting a single FrameSet has no sample behind any
+        // of those counters. Omitting them reads as "nothing went wrong"; saying so is the
+        // difference between an unmeasured run and a clean one (product section 2).
+        if (control.playbackRunPresentedFrames === 0)
+            parts.push(qsTr("本次播放尚未测量"));
+        return parts.join(" · ");
+    }
+
+    // C-07 quiet summary: mode and target rate only. Actual presentation rate, duplicates and
+    // gaps stay in the full rail (hover) until one of them is actually wrong.
+    function playbackStatusQuietText() {
+        const parts = [];
+        if (control.playbackModeLabel.length > 0)
+            parts.push(control.playbackModeLabel);
+        parts.push(qsTr("目标 %1×").arg(control.playbackTargetRate.toFixed(2)));
+        return parts.join(" · ");
+    }
+
+    // One tooltip for both status surfaces (quiet capsule and warning rail): the strategy
+    // explanation that used to own its own line, the source rate note, the full observation
+    // rail and the counters' legend. Nothing delivered is dropped - the capsule only decides
+    // how loudly the normal state speaks.
+    function playbackStatusToolTipText() {
+        const parts = [];
+        if (control.playbackModeDetail.length > 0)
+            parts.push(control.playbackModeDetail);
+        if (control.sourceRateText.length > 0)
+            parts.push(control.sourceRateText);
+        const detail = parts.join(" · ");
+        return (detail.length > 0 ? detail + "\n" : "") + control.playbackStatusFullText() + "\n\n" + control.statusLegend;
+    }
+
     // In/out points are the OSC's own vocabulary; a marker's kind comes from the one shared
     // mapping (`Theme.timelineMarkerLabel`) that the timeline tooltip and the inspector legend
     // also read, so the same kind never gets two different names.
@@ -176,7 +246,7 @@ Item {
 
         Behavior on opacity {
             NumberAnimation {
-                duration: 140
+                duration: Theme.animationFast
             }
         }
 
@@ -194,42 +264,50 @@ Item {
             }
         }
 
-        Text {
-            id: sourceLabelReadout
-            objectName: "sourceLabelReadout"
-            visible: control.sourceLabel !== ""
-            height: visible ? implicitHeight : 0
-            text: control.sourceLabel
-            color: Theme.mutedText
-            font.family: "Consolas"
-            font.pixelSize: Theme.fontSecondary
-            // Elide long filenames instead of overflowing the panel edge (the panel has no clip).
-            elide: Text.ElideRight
-            anchors {
-                top: parent.top
-                topMargin: 8
-                left: parent.left
-                leftMargin: 16
-                right: parent.right
-                rightMargin: 16
-            }
-        }
-
+        // One info line (Phase-3): filename, timecode, frame counter, metric summary, the
+        // metric-lane toggle and the quiet status capsule share the row under the panel top.
+        // The filename used to own a dedicated line even though the source strip above already
+        // names the file for multi-source sessions; it stays readable here (elided) for the
+        // single-source sessions where the strip is hidden.
         Row {
             id: readout
 
             spacing: 14
             anchors {
-                top: sourceLabelReadout.visible ? sourceLabelReadout.bottom : parent.top
-                topMargin: sourceLabelReadout.visible ? 2 : 8
+                top: parent.top
+                topMargin: 8
                 left: parent.left
                 leftMargin: 16
             }
 
             Text {
+                id: sourceLabelReadout
+                objectName: "sourceLabelReadout"
+                visible: control.sourceLabel !== ""
+                text: control.sourceLabel
+                color: Theme.mutedText
+                font.family: Theme.fontFamilyMono
+                font.pixelSize: Theme.fontSecondary
+                // Elide long filenames instead of overflowing the panel edge (the panel has
+                // no clip); the hover tooltip carries the full name.
+                width: Math.min(implicitWidth, 180)
+                elide: Text.ElideRight
+                anchors.verticalCenter: parent.verticalCenter
+
+                HoverHandler {
+                    id: sourceLabelHover
+                }
+
+                VcsToolTip {
+                    visible: sourceLabelHover.hovered && control.sourceLabel.length > 0
+                    text: control.sourceLabel
+                }
+            }
+
+            Text {
                 text: control.timecodeText
                 color: Theme.primaryText
-                font.family: "Consolas"
+                font.family: Theme.fontFamilyMono
                 font.pixelSize: Theme.fontMono
                 font.weight: Font.DemiBold
             }
@@ -263,57 +341,81 @@ Item {
                 // alerts, and this panel shows those one row down.
                 color: Theme.secondaryText
                 font.pixelSize: Theme.fontSecondary
-                font.family: "Consolas"
+                font.family: Theme.fontFamilyMono
+            }
+
+            // Phase-3: the metric curve rides behind an explicit toggle. Collapsed keeps the
+            // single-frame MAE/PSNR summary above as the always-on readout; the button is a
+            // Control, so its keyboard focus ring follows the visualFocus-only contract.
+            ReviewActionButton {
+                id: metricsLaneToggle
+
+                objectName: "oscMetricsLaneToggle"
+                visible: control.metrics !== null && control.metrics.available
+                enabled: visible
+                // The theme's hit-area minimum, not a smaller literal: this is an interactive
+                // control sharing the info row with texts, the row's height is content-driven
+                // (nothing below anchors into a fixed band), and the token-literal gate keeps
+                // 26 px sites on a frozen baseline.
+                implicitHeight: Theme.hitAreaMinimum
+                leftPadding: 10
+                rightPadding: 10
+                text: control.metrics !== null && control.metrics.laneEnabled ? qsTr("收起指标曲线 ▴") : qsTr("展开指标曲线 ▾")
+                helpText: qsTr("展开或收起全时间轴的差异指标曲线（MAE 泳道）。\n收起时保留上方当前帧的 MAE / PSNR 摘要。")
+                onClicked: {
+                    if (control.metrics !== null)
+                        control.metrics.laneEnabled = !control.metrics.laneEnabled;
+                }
+            }
+
+            // C-07 quiet capsule, inline in the info line: a normal run keeps one calm summary
+            // on the same row as timecode, frame counter and metrics. Only a run that skipped
+            // FrameSets, is catching up, lags >= 200 ms or has no measurement yet expands the
+            // dedicated warning rail below; the full text stays one hover away in both states.
+            Text {
+                id: statusQuiet
+
+                objectName: "playbackStatusQuiet"
+                visible: !control.playbackStatusAlert && control.playbackModeLabel.length > 0
+                text: control.playbackStatusQuietText()
+                color: Theme.mutedText
+                font.pixelSize: Theme.fontSecondary
+                Accessible.name: text
+                Accessible.description: control.playbackStatusToolTipText()
+                anchors.verticalCenter: parent.verticalCenter
+
+                HoverHandler {
+                    id: statusQuietHover
+                }
+
+                VcsToolTip {
+                    visible: statusQuietHover.hovered
+                    text: control.playbackStatusToolTipText()
+                }
             }
         }
 
-        // C-07 playback status rail. Separates source duplicates, player FrameSet skips, and
-        // display/present gaps so a stall is never mistaken for algorithm judder.
+        // C-07 playback status rail, alert-only edition: the row exists while something is
+        // actually wrong (see playbackStatusAlert), showing the full warning text. Source
+        // duplicates, player FrameSet skips, and display/present gaps stay separated so a
+        // stall is never mistaken for judder.
         Text {
             id: statusText
 
             objectName: "playbackStatusText"
-            visible: control.playbackModeLabel.length > 0
-            height: visible ? implicitHeight : 0
+            visible: control.playbackStatusAlert && control.playbackModeLabel.length > 0
+            // No height binding on purpose: this Text is anchored (not a positioner child),
+            // the items below switch their top anchor on `statusText.visible`, and the hidden
+            // statusHint anchor consumes nothing - so the old `visible ? implicitHeight : 0`
+            // collapse had no reader while invisible while re-entering QQuickText's implicit
+            // height (Qt logged a height binding loop on every alert-state flip). The default
+            // implicit-height tracking gives the identical visible-state layout.
             elide: Text.ElideRight
-            text: {
-                const parts = [];
-                if (control.playbackModeLabel.length > 0)
-                    parts.push(control.playbackModeLabel);
-                const target = control.playbackTargetRate;
-                const actual = control.playbackPresentationRate;
-                if (control.playing && actual > 0)
-                    parts.push(qsTr("目标 %1× · 实际 %2×").arg(target.toFixed(2)).arg(actual.toFixed(2)));
-                else
-                    parts.push(qsTr("目标 %1×").arg(target.toFixed(2)));
-                if (control.playbackRunSkippedFrameSets > 0 || control.playbackCatchingUp)
-                    parts.push(qsTr("播放器跳过 %1 组").arg(control.playbackRunSkippedFrameSets));
-                const lagMs = control.playbackLagMilliseconds;
-                if (control.playbackCatchingUp)
-                    parts.push(qsTr("追赶中"));
-                else if (lagMs >= 500)
-                    parts.push(qsTr("明显落后 %1s").arg((lagMs / 1000).toFixed(1)));
-                else if (lagMs >= 200)
-                    parts.push(qsTr("落后 %1s").arg((lagMs / 1000).toFixed(1)));
-                if (control.sourceDuplicateCount > 0)
-                    parts.push(qsTr("重复标记 %1").arg(control.sourceDuplicateCount));
-                if (control.displayGapCount > 0)
-                    parts.push(qsTr("呈现间隙 %1").arg(control.displayGapCount));
-                // A run that has not finished presenting a single FrameSet has no sample behind any
-                // of those counters. Omitting them reads as "nothing went wrong"; saying so is the
-                // difference between an unmeasured run and a clean one (product section 2).
-                if (control.playbackRunPresentedFrames === 0)
-                    parts.push(qsTr("本次播放尚未测量"));
-                return parts.join(" · ");
-            }
-            color: {
-                if (control.playbackCatchingUp || control.playbackLagMilliseconds >= 500 || control.playbackRunSkippedFrameSets > 0)
-                    return Theme.warning;
-                return Theme.mutedText;
-            }
+            text: control.playbackStatusFullText()
+            color: Theme.warning
             font.pixelSize: Theme.fontSecondary
             Accessible.name: text
-            Accessible.description: (control.playbackModeDetail.length > 0 ? control.playbackModeDetail + "。" : "") + control.statusLegend
+            Accessible.description: control.playbackStatusToolTipText()
             anchors {
                 left: parent.left
                 leftMargin: 16
@@ -322,14 +424,27 @@ Item {
                 top: readout.bottom
                 topMargin: 2
             }
+
+            HoverHandler {
+                id: statusHover
+            }
+
+            VcsToolTip {
+                visible: statusHover.hovered
+                text: control.playbackStatusToolTipText()
+            }
         }
 
+        // The strategy explanation (playbackModeDetail) and the source-rate note moved into the
+        // status tooltip (playbackStatusToolTipText). The item stays as a hidden anchor so its
+        // objectName and text stay reachable for the contract suite's font assertions, but it
+        // no longer spends a layout line in either state.
         Text {
             id: statusHint
 
             objectName: "playbackStatusHint"
-            visible: statusText.visible && control.playbackModeDetail.length > 0
-            height: visible ? implicitHeight : 0
+            visible: false
+            height: 0
             text: control.playbackModeDetail + (control.sourceRateText.length > 0 ? " · " + control.sourceRateText : "")
             // Live readouts, not a disabled state: mutedText keeps ~4.5:1 on the panel glass,
             // while disabledText is reserved for controls that cannot be used.
@@ -360,7 +475,7 @@ Item {
                 leftMargin: 16
                 right: parent.right
                 rightMargin: 16
-                top: statusHint.visible ? statusHint.bottom : (statusText.visible ? statusText.bottom : readout.bottom)
+                top: statusText.visible ? statusText.bottom : readout.bottom
                 topMargin: 2
             }
             onSeekRequested: frame => control.seekRequested(frame)
@@ -380,7 +495,7 @@ Item {
                 leftMargin: 16
                 right: parent.right
                 rightMargin: 16
-                top: metricLane.visible ? metricLane.bottom : (statusHint.visible ? statusHint.bottom : (statusText.visible ? statusText.bottom : readout.bottom))
+                top: metricLane.visible ? metricLane.bottom : (statusText.visible ? statusText.bottom : readout.bottom)
                 topMargin: 2
             }
             onPreviewRequested: frame => control.previewRequested(frame)
@@ -413,10 +528,13 @@ Item {
             // Anchored to the tracks (the content above it), NOT the panel bottom — anchoring to the
             // panel bottom would form a bottom-to-bottom binding loop with the control's height. The
             // 13 px top margin clears the playhead thumb, which extends ~6 px below the tracks box.
+            // All transport rows share the panel width and centre, including the permanent
+            // range row and the optional adjacent-frame strip.
             anchors {
                 top: tracks.bottom
                 topMargin: 13
-                horizontalCenter: parent.horizontalCenter
+                left: parent.left
+                right: parent.right
             }
             canFirst: control.canFirst
             canPrevious: control.canPrevious
@@ -427,6 +545,7 @@ Item {
             playing: control.playing
             playbackRate: control.playbackRate
             jogRate: control.jogRate
+            shortcutPreset: control.shortcutPreset
             playbackContinuityPolicy: control.playbackContinuityPolicy
             currentFrame: control.currentFrame
             totalFrames: control.totalFrames
@@ -436,6 +555,7 @@ Item {
             rangeInFrame: control.inFrame
             rangeOutFrame: control.outFrame
             rangeLoopActive: control.loopRangeActive
+            rangePingPongActive: control.loopRangePingPongActive
             rangeExportVisible: control.rangeExportVisible
             rangeExportEnabled: control.rangeExportEnabled
             rangeExportBusy: control.rangeExportBusy
@@ -449,13 +569,23 @@ Item {
             onMarkOutRequested: control.markOutRequested()
             onPlayRangeRequested: control.playRangeRequested()
             onRangeLoopRequested: control.rangeLoopRequested()
+            onRangePingPongRequested: control.rangePingPongRequested()
             onClearRangeRequested: control.clearRangeRequested()
             onProtocolLoadRequested: control.protocolLoadRequested()
             onProtocolClearRequested: control.protocolClearRequested()
             onPreviousGeneratedFrameRequested: control.previousGeneratedFrameRequested()
             onNextGeneratedFrameRequested: control.nextGeneratedFrameRequested()
             onFirstRequested: control.actions.firstFrame()
-            onPreviousSecondRequested: control.actions.stepBackwardSecond()
+            // I8: the player preset turns the second-step buttons into the same ±30 s jump
+            // their Ctrl+←/→ shortcuts perform; the frame-review preset keeps the exact
+            // second. The typeof guard keeps minimal standalone harnesses working, like every
+            // other optional action below.
+            onPreviousSecondRequested: {
+                if (control.shortcutPreset === 1 && control.actions && typeof control.actions.stepSeconds === "function")
+                    control.actions.stepSeconds(-30);
+                else
+                    control.actions.stepBackwardSecond();
+            }
             onPreviousFiveRequested: control.actions.stepBackwardFive()
             // E04: hold-to-jog on the single-frame buttons — pressed starts the walk (tap step
             // plus hold window), release stops feeding. Clicks still step exactly one frame.
@@ -492,7 +622,12 @@ Item {
             }
             onNextRequested: control.actions.nextFrame()
             onNextFiveRequested: control.actions.stepForwardFive()
-            onNextSecondRequested: control.actions.stepForwardSecond()
+            onNextSecondRequested: {
+                if (control.shortcutPreset === 1 && control.actions && typeof control.actions.stepSeconds === "function")
+                    control.actions.stepSeconds(30);
+                else
+                    control.actions.stepForwardSecond();
+            }
             onLastRequested: control.actions.lastFrame()
         }
     }

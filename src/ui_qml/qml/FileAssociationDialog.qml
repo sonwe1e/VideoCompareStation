@@ -173,7 +173,7 @@ Item {
                         Rectangle {
                             width: parent.width
                             implicitHeight: statusColumn.implicitHeight + 18
-                            radius: 6
+                            radius: Theme.radiusSubtle
                             color: Theme.window
                             border.width: 1
                             border.color: Theme.border
@@ -215,7 +215,7 @@ Item {
                                     width: parent.width
                                     text: qsTr("状态读自系统记录，打开设置页本身不算完成；在系统中选择后回到此处刷新。")
                                     color: Theme.mutedText
-                                    font.pixelSize: 11
+                                    font.pixelSize: Theme.fontCaption
                                     wrapMode: Text.WordWrap
                                 }
                             }

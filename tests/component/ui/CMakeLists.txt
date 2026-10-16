@@ -4,6 +4,8 @@ add_executable(
     dvs_ui_component_tests
     ClipExportControllerTests.cpp
     DiagnosticsProbeTests.cpp
+    EvidenceIdentityJsonTests.cpp
+    HoldKeyHandlerTests.cpp
     JogKeyHandlerTests.cpp
     JogStateMachineTests.cpp
     PairMetricsControllerTests.cpp
@@ -229,7 +231,10 @@ set_tests_properties(
     ui.ImageWorkspaceManual
     PROPERTIES
         LABELS "component;ui_qml"
-        TIMEOUT 20
+        # The suite measures ~13 s serial but is RUN_SERIAL only per-suite: under the full
+        # -TestJobs 8 gate the machine runs other suites between its cases, and 20 s cut it
+        # off mid-run (standalone it passed). 60 s matches the menu suites' headroom.
+        TIMEOUT 60
         RUN_SERIAL TRUE
         ENVIRONMENT "QSG_RHI_BACKEND=d3d11;QSG_RENDER_LOOP=basic;QT_QUICK_CONTROLS_STYLE=Basic"
 )
@@ -283,7 +288,7 @@ set_tests_properties(
         ENVIRONMENT "QT_QUICK_CONTROLS_STYLE=Basic;QSG_RENDER_LOOP=basic"
 )
 
-foreach(dvs_review_shell_test IN ITEMS empty_review_view player_osc timeline_tracks timeline_thumbnail_cache review_action_button vcs_theme layout_metrics stage_states clip_export_dialog)
+foreach(dvs_review_shell_test IN ITEMS empty_review_view player_osc timeline_tracks timeline_thumbnail_cache review_action_button review_offset_spin_box vcs_theme layout_metrics stage_states clip_export_dialog)
     add_test(
         NAME "ui.${dvs_review_shell_test}"
         COMMAND

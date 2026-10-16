@@ -46,7 +46,7 @@ Rectangle {
                 Rectangle {
                     width: 21
                     height: parent.height
-                    radius: 6
+                    radius: Theme.radiusSubtle
                     color: Theme.sourceA
                 }
 
@@ -54,14 +54,14 @@ Rectangle {
                     x: 25
                     width: 21
                     height: parent.height
-                    radius: 6
+                    radius: Theme.radiusSubtle
                     color: Theme.sourceB
                 }
 
                 Rectangle {
                     width: 12
                     height: 12
-                    radius: 6
+                    radius: Theme.radiusSubtle
                     color: Theme.inverseText
                     border.width: 2
                     border.color: card.color
@@ -163,7 +163,7 @@ Rectangle {
                     leftPadding: 6
                     rightPadding: 6
                     flat: true
-                    helpText: qsTr("选择两张图片，并排、分割线或闪烁比较。")
+                    helpText: qsTr("选择两张图片，并排、分割线、单图 A/B 或淡化比较。")
                     onClicked: control.openImagePairRequested()
                 }
 

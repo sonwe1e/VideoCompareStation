@@ -7,6 +7,7 @@
 #include "dvs/platform/GraphicsDeviceBroker.h"
 
 #include "D3d11GpuFrameBacking.h"
+#include "D3d11SourcePixelProbe.h"
 #include "GpuFrameResource.h"
 #include "GpuFrameSet.h"
 #include "MinimalQuickRenderHarness.h"
@@ -22,6 +23,7 @@
 #include <cstdint>
 #include <d3d11.h>
 #include <gtest/gtest.h>
+#include <iostream>
 #include <memory>
 #include <optional>
 #include <span>
@@ -1007,6 +1009,617 @@ TEST(GpuTransferActorTests, ProbePixelReadsTenBitP010CodeValues) {
     EXPECT_EQ(firstPixel->y, 64U);
     EXPECT_EQ(firstPixel->cb, 940U);
     EXPECT_EQ(firstPixel->cr, 64U);
+}
+
+// Zero-copy D3D11VA frames arrive as one NV12 Texture2DArray with aligned (padded) surface
+// dimensions and per-frame plane views over a non-zero array slice. The probe must read the
+// slice the view designates, address visible samples only (never the padding), and return
+// exact code values. Before the shader-view probe this shape failed on real hardware with
+// "readback failed": the plane-copy whitelist rejected the NV12 resource format and copied
+// array slice 0 regardless of the view's slice. Plane-cast views additionally require the
+// device to carry D3D11_CREATE_DEVICE_VIDEO_SUPPORT - the production decoder path and this
+// test both create it that way (the view matrix in test-probe-diag-02.log shows a device
+// without the flag rejects the same view with E_INVALIDARG).
+TEST(GpuTransferActorTests, ProbePixelReadsNv12ArraySliceVisibleRegionCodeValues) {
+    Microsoft::WRL::ComPtr<ID3D11Device> deviceHolder;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> contextHolder;
+    HRESULT deviceResult =
+        D3D11CreateDevice(nullptr,
+                          D3D_DRIVER_TYPE_HARDWARE,
+                          nullptr,
+                          D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+                          nullptr,
+                          0U,
+                          D3D11_SDK_VERSION,
+                          deviceHolder.GetAddressOf(),
+                          nullptr,
+                          contextHolder.GetAddressOf());
+    if (FAILED(deviceResult)) {
+        GTEST_SKIP() << "no hardware D3D11 video device (hr=0x" << std::hex << deviceResult << ")";
+    }
+    ID3D11Device* const device = deviceHolder.Get();
+    ID3D11DeviceContext* const immediateContext = contextHolder.Get();
+
+    constexpr std::uint32_t textureWidth = 8U;
+    constexpr std::uint32_t textureHeight = 4U;
+    constexpr std::uint32_t visibleWidth = 5U;
+    constexpr std::uint32_t visibleHeight = 3U;
+
+    D3D11_TEXTURE2D_DESC textureDescription{};
+    textureDescription.Width = textureWidth;
+    textureDescription.Height = textureHeight;
+    textureDescription.MipLevels = 1U;
+    textureDescription.ArraySize = 2U;
+    textureDescription.Format = DXGI_FORMAT_NV12;
+    textureDescription.SampleDesc.Count = 1U;
+    textureDescription.Usage = D3D11_USAGE_DEFAULT;
+    // The production decoder-surface shape; the plane-cast views depend on it.
+    textureDescription.BindFlags = D3D11_BIND_DECODER | D3D11_BIND_SHADER_RESOURCE;
+    ComPtr<ID3D11Texture2D> texture;
+    ASSERT_TRUE(
+        SUCCEEDED(device->CreateTexture2D(&textureDescription, nullptr, texture.GetAddressOf())));
+
+    // Slice s: visible luma(x, y) = 30 + 100s + 11y + x; padding stays 0xF0. Visible chroma
+    // (cx, cy) = 60 + 100s + 7cy + 5cx (+1 for Cr); padding chroma stays 0xF1. Slice 0 uses a
+    // different seed so reading slice 0 can never satisfy the slice-1 expectations below.
+    const auto fillSlice = [&](const std::uint32_t slice) {
+        std::vector<std::uint8_t> bytes(static_cast<std::size_t>(textureWidth) * textureHeight * 2U,
+                                        0x80U);
+        const std::uint8_t lumaSeed = static_cast<std::uint8_t>(30U + 100U * slice);
+        const std::uint8_t chromaSeed = static_cast<std::uint8_t>(60U + 100U * slice);
+        for (std::uint32_t row = 0U; row < textureHeight; ++row) {
+            for (std::uint32_t column = 0U; column < textureWidth; ++column) {
+                bytes[static_cast<std::size_t>(row) * textureWidth + column] =
+                    (column < visibleWidth && row < visibleHeight)
+                        ? static_cast<std::uint8_t>(lumaSeed + 11U * row + column)
+                        : 0xF0U;
+            }
+        }
+        const std::size_t chromaBase = static_cast<std::size_t>(textureWidth) * textureHeight;
+        for (std::uint32_t row = 0U; row < textureHeight / 2U; ++row) {
+            for (std::uint32_t column = 0U; column < textureWidth / 2U; ++column) {
+                const std::size_t offset = chromaBase +
+                                           (static_cast<std::size_t>(row) * textureWidth) +
+                                           (static_cast<std::size_t>(column) * 2U);
+                if (column < (visibleWidth + 1U) / 2U && row < (visibleHeight + 1U) / 2U) {
+                    const std::uint8_t value =
+                        static_cast<std::uint8_t>(chromaSeed + 7U * row + 5U * column);
+                    bytes[offset] = value;
+                    bytes[offset + 1U] = static_cast<std::uint8_t>(value + 1U);
+                } else {
+                    bytes[offset] = 0xF1U;
+                    bytes[offset + 1U] = 0xF1U;
+                }
+            }
+        }
+        // Planar UpdateSubresource layout: plane 1 begins at the depth-pitch argument.
+        const D3D11_SUBRESOURCE_DATA data{
+            .pSysMem = bytes.data(), .SysMemPitch = textureWidth, .SysMemSlicePitch = 0U};
+        immediateContext->UpdateSubresource(texture.Get(),
+                                            slice,
+                                            nullptr,
+                                            data.pSysMem,
+                                            data.SysMemPitch,
+                                            textureWidth * textureHeight);
+    };
+    fillSlice(0U);
+    fillSlice(1U);
+
+    const auto makePlaneView = [&](const DXGI_FORMAT format) {
+        D3D11_SHADER_RESOURCE_VIEW_DESC viewDescription{};
+        viewDescription.Format = format;
+        viewDescription.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+        // Mirror production createDirectSource exactly: MipLevels must be 1, not the
+        // zero-initialized "all remaining" reading the earlier matrix run missed.
+        viewDescription.Texture2DArray.MostDetailedMip = 0U;
+        viewDescription.Texture2DArray.MipLevels = 1U;
+        viewDescription.Texture2DArray.FirstArraySlice = 1U;
+        viewDescription.Texture2DArray.ArraySize = 1U;
+        ComPtr<ID3D11ShaderResourceView> view;
+        const HRESULT viewResult =
+            device->CreateShaderResourceView(texture.Get(), &viewDescription, view.GetAddressOf());
+        EXPECT_TRUE(SUCCEEDED(viewResult)) << "plane-cast view hr=0x" << std::hex << viewResult;
+        return view;
+    };
+    ComPtr<ID3D11ShaderResourceView> lumaView = makePlaneView(DXGI_FORMAT_R8_UNORM);
+    ComPtr<ID3D11ShaderResourceView> chromaView = makePlaneView(DXGI_FORMAT_R8G8_UNORM);
+    ASSERT_NE(lumaView.Get(), nullptr);
+    ASSERT_NE(chromaView.Get(), nullptr);
+
+    const D3d11GpuFrameBacking backing{
+        texture,
+        lumaView,
+        D3d11PlaneDimensions{.width = visibleWidth, .height = visibleHeight},
+        texture,
+        chromaView,
+        D3d11PlaneDimensions{.width = (visibleWidth + 1U) / 2U,
+                             .height = (visibleHeight + 1U) / 2U}};
+
+    const std::optional<D3d11SourcePixel> origin =
+        backing.probePixel(device, immediateContext, 0U, 0U);
+    ASSERT_TRUE(origin.has_value());
+    EXPECT_EQ(origin->y, 30U + 100U);
+    EXPECT_EQ(origin->cb, 60U + 100U);
+    EXPECT_EQ(origin->cr, 60U + 100U + 1U);
+    EXPECT_EQ(origin->bitDepth, 8U);
+
+    const std::optional<D3d11SourcePixel> middle =
+        backing.probePixel(device, immediateContext, 2U, 1U);
+    ASSERT_TRUE(middle.has_value());
+    // Revised during review: chroma is co-sited at (x>>1, y>>1) = (1, 0), so the middle pixel
+    // reads cy=0, cx=1 -> 60+100+7*0+5*1. The earlier 7+10 terms belonged to the corner's
+    // (2, 1) chroma sample; the product sampling contract was never in question.
+    EXPECT_EQ(middle->y, 30U + 100U + 11U + 2U);
+    EXPECT_EQ(middle->cb, 60U + 100U + 5U);
+    EXPECT_EQ(middle->cr, 60U + 100U + 5U + 1U);
+
+    // The far corner pairs with the co-sited chroma sample inside slice 1.
+    const std::optional<D3d11SourcePixel> corner =
+        backing.probePixel(device, immediateContext, 4U, 2U);
+    ASSERT_TRUE(corner.has_value());
+    EXPECT_EQ(corner->y, 30U + 100U + 22U + 4U);
+    EXPECT_EQ(corner->cb, 60U + 100U + 7U + 10U);
+    EXPECT_EQ(corner->cr, 60U + 100U + 7U + 10U + 1U);
+
+    // Visible-region addressing: padding samples are never reachable.
+    EXPECT_FALSE(backing.probePixel(device, immediateContext, 5U, 0U).has_value());
+    EXPECT_FALSE(backing.probePixel(device, immediateContext, 0U, 3U).has_value());
+    EXPECT_FALSE(backing.probePixel(device, immediateContext, 7U, 3U).has_value());
+    EXPECT_FALSE(backing.probePixel(nullptr, immediateContext, 0U, 0U).has_value());
+    EXPECT_FALSE(backing.probePixel(device, nullptr, 0U, 0U).has_value());
+}
+
+// P010 zero-copy frames keep each 10-bit sample in the most significant bits of a 16-bit word
+// inside a decoder-owned Texture2DArray. The probe must read the non-zero array slice the
+// view designates, address visible samples only, right-shift out the exact 10-bit codes, and
+// stay bit-exact against the words the fixture uploaded.
+TEST(GpuTransferActorTests, ProbePixelReadsP010ArraySliceTenBitCodeValues) {
+    Microsoft::WRL::ComPtr<ID3D11Device> deviceHolder;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> contextHolder;
+    HRESULT deviceResult =
+        D3D11CreateDevice(nullptr,
+                          D3D_DRIVER_TYPE_HARDWARE,
+                          nullptr,
+                          D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+                          nullptr,
+                          0U,
+                          D3D11_SDK_VERSION,
+                          deviceHolder.GetAddressOf(),
+                          nullptr,
+                          contextHolder.GetAddressOf());
+    if (FAILED(deviceResult)) {
+        GTEST_SKIP() << "no hardware D3D11 video device (hr=0x" << std::hex << deviceResult << ")";
+    }
+    ID3D11Device* const device = deviceHolder.Get();
+    ID3D11DeviceContext* const immediateContext = contextHolder.Get();
+
+    constexpr std::uint32_t textureWidth = 8U;
+    constexpr std::uint32_t textureHeight = 4U;
+    constexpr std::uint32_t visibleWidth = 5U;
+    constexpr std::uint32_t visibleHeight = 3U;
+    constexpr std::uint16_t lumaPaddingCode = 1000U;
+    constexpr std::uint16_t chromaPaddingCode = 999U;
+
+    D3D11_TEXTURE2D_DESC textureDescription{};
+    textureDescription.Width = textureWidth;
+    textureDescription.Height = textureHeight;
+    textureDescription.MipLevels = 1U;
+    textureDescription.ArraySize = 2U;
+    textureDescription.Format = DXGI_FORMAT_P010;
+    textureDescription.SampleDesc.Count = 1U;
+    textureDescription.Usage = D3D11_USAGE_DEFAULT;
+    textureDescription.BindFlags = D3D11_BIND_DECODER | D3D11_BIND_SHADER_RESOURCE;
+    ComPtr<ID3D11Texture2D> texture;
+    ASSERT_TRUE(
+        SUCCEEDED(device->CreateTexture2D(&textureDescription, nullptr, texture.GetAddressOf())));
+
+    // Slice s: visible luma(x, y) = 300 + 100s + 11y + x (10-bit, left-justified by 6);
+    // padding words stay 1000 << 6. Visible chroma (cx, cy) = 600 + 100s + 7cy + 5cx (+1 for
+    // Cr); padding chroma words stay 999 << 6. Slice 0 uses a different seed so reading slice
+    // 0 can never satisfy the slice-1 expectations below.
+    const auto fillSlice = [&](const std::uint32_t slice) {
+        std::vector<std::uint16_t> words(
+            static_cast<std::size_t>(textureWidth) * textureHeight * 2U, 0x8000U);
+        const std::uint16_t lumaSeed = static_cast<std::uint16_t>(300U + 100U * slice);
+        const std::uint16_t chromaSeed = static_cast<std::uint16_t>(600U + 100U * slice);
+        for (std::uint32_t row = 0U; row < textureHeight; ++row) {
+            for (std::uint32_t column = 0U; column < textureWidth; ++column) {
+                words[static_cast<std::size_t>(row) * textureWidth + column] =
+                    (column < visibleWidth && row < visibleHeight)
+                        ? static_cast<std::uint16_t>((lumaSeed + 11U * row + column) << 6U)
+                        : static_cast<std::uint16_t>(lumaPaddingCode << 6U);
+            }
+        }
+        const std::size_t chromaBase = static_cast<std::size_t>(textureWidth) * textureHeight;
+        for (std::uint32_t row = 0U; row < textureHeight / 2U; ++row) {
+            for (std::uint32_t column = 0U; column < textureWidth / 2U; ++column) {
+                const std::size_t offset = chromaBase +
+                                           (static_cast<std::size_t>(row) * textureWidth) +
+                                           (static_cast<std::size_t>(column) * 2U);
+                if (column < (visibleWidth + 1U) / 2U && row < (visibleHeight + 1U) / 2U) {
+                    const std::uint16_t value =
+                        static_cast<std::uint16_t>(chromaSeed + 7U * row + 5U * column);
+                    words[offset] = static_cast<std::uint16_t>(value << 6U);
+                    words[offset + 1U] = static_cast<std::uint16_t>((value + 1U) << 6U);
+                } else {
+                    words[offset] = static_cast<std::uint16_t>(chromaPaddingCode << 6U);
+                    words[offset + 1U] = static_cast<std::uint16_t>(chromaPaddingCode << 6U);
+                }
+            }
+        }
+        // Planar UpdateSubresource layout: plane 1 begins at the depth-pitch argument.
+        const D3D11_SUBRESOURCE_DATA data{
+            .pSysMem = words.data(), .SysMemPitch = textureWidth * 2U, .SysMemSlicePitch = 0U};
+        immediateContext->UpdateSubresource(texture.Get(),
+                                            slice,
+                                            nullptr,
+                                            data.pSysMem,
+                                            data.SysMemPitch,
+                                            textureWidth * 2U * textureHeight);
+    };
+    fillSlice(0U);
+    fillSlice(1U);
+
+    const auto makePlaneView = [&](const DXGI_FORMAT format) {
+        D3D11_SHADER_RESOURCE_VIEW_DESC viewDescription{};
+        viewDescription.Format = format;
+        viewDescription.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+        // Production createDirectSource shape: MostDetailedMip 0, MipLevels 1, one slice.
+        viewDescription.Texture2DArray.MostDetailedMip = 0U;
+        viewDescription.Texture2DArray.MipLevels = 1U;
+        viewDescription.Texture2DArray.FirstArraySlice = 1U;
+        viewDescription.Texture2DArray.ArraySize = 1U;
+        ComPtr<ID3D11ShaderResourceView> view;
+        const HRESULT viewResult =
+            device->CreateShaderResourceView(texture.Get(), &viewDescription, view.GetAddressOf());
+        EXPECT_TRUE(SUCCEEDED(viewResult)) << "plane-cast view hr=0x" << std::hex << viewResult;
+        return view;
+    };
+    ComPtr<ID3D11ShaderResourceView> lumaView = makePlaneView(DXGI_FORMAT_R16_UNORM);
+    ComPtr<ID3D11ShaderResourceView> chromaView = makePlaneView(DXGI_FORMAT_R16G16_UNORM);
+    ASSERT_NE(lumaView.Get(), nullptr);
+    ASSERT_NE(chromaView.Get(), nullptr);
+
+    const D3d11GpuFrameBacking backing{
+        texture,
+        lumaView,
+        D3d11PlaneDimensions{.width = visibleWidth, .height = visibleHeight},
+        texture,
+        chromaView,
+        D3d11PlaneDimensions{.width = (visibleWidth + 1U) / 2U,
+                             .height = (visibleHeight + 1U) / 2U}};
+
+    const std::optional<D3d11SourcePixel> origin =
+        backing.probePixel(device, immediateContext, 0U, 0U);
+    ASSERT_TRUE(origin.has_value());
+    EXPECT_EQ(origin->y, 300U + 100U);
+    EXPECT_EQ(origin->cb, 600U + 100U);
+    EXPECT_EQ(origin->cr, 600U + 100U + 1U);
+    EXPECT_EQ(origin->bitDepth, 10U);
+
+    const std::optional<D3d11SourcePixel> middle =
+        backing.probePixel(device, immediateContext, 2U, 1U);
+    ASSERT_TRUE(middle.has_value());
+    EXPECT_EQ(middle->y, 300U + 100U + 11U + 2U);
+    EXPECT_EQ(middle->cb, 600U + 100U + 5U);
+    EXPECT_EQ(middle->cr, 600U + 100U + 5U + 1U);
+
+    const std::optional<D3d11SourcePixel> corner =
+        backing.probePixel(device, immediateContext, 4U, 2U);
+    ASSERT_TRUE(corner.has_value());
+    EXPECT_EQ(corner->y, 300U + 100U + 22U + 4U);
+    EXPECT_EQ(corner->cb, 600U + 100U + 7U + 10U);
+    EXPECT_EQ(corner->cr, 600U + 100U + 7U + 10U + 1U);
+
+    // Visible-region addressing: padding samples are never reachable.
+    EXPECT_FALSE(backing.probePixel(device, immediateContext, 5U, 0U).has_value());
+    EXPECT_FALSE(backing.probePixel(device, immediateContext, 0U, 3U).has_value());
+    EXPECT_FALSE(backing.probePixel(device, immediateContext, 7U, 3U).has_value());
+    EXPECT_FALSE(backing.probePixel(nullptr, immediateContext, 0U, 0U).has_value());
+    EXPECT_FALSE(backing.probePixel(device, nullptr, 0U, 0U).has_value());
+}
+
+// E1: the pending-probe key's start/match/clear transitions, exercised without any GPU wait.
+// The full-width request id is the contract: a key staged with a wide id must match the same
+// wide id, must NOT match a request that shares only the low 32 bits, and a compiled
+// truncation of the stored id must be detected by the same-lower-half request flipping to
+// non-matching. Set identity and coordinates are part of every comparison.
+TEST(GpuTransferActorTests, PendingProbeKeyTransitionsDetectTruncatedRequestIds) {
+    int setA = 0;
+    int setB = 0;
+    PendingProbeKey key;
+    key.start(&setA, 0x1'0000'0001ULL, 8U, 4U);
+
+    // Exact re-match: same set, same full-width id, same texel.
+    EXPECT_TRUE(key.matches(&setA, 0x1'0000'0001ULL, 8U, 4U));
+    // Same low 32 bits, different high half: must NOT match.
+    EXPECT_FALSE(key.matches(&setA, 0x2'0000'0001ULL, 8U, 4U));
+    // Set identity and coordinates are part of the key.
+    EXPECT_FALSE(key.matches(&setB, 0x1'0000'0001ULL, 8U, 4U));
+    EXPECT_FALSE(key.matches(&setA, 0x1'0000'0001ULL, 9U, 4U));
+    EXPECT_FALSE(key.matches(&setA, 0x1'0000'0001ULL, 8U, 5U));
+
+    key.clear();
+    EXPECT_FALSE(key.matches(&setA, 0x1'0000'0001ULL, 8U, 4U))
+        << "a cleared key must not match anything";
+
+    // The compiled truncation mutation (store through uint32) is detected: a key staged with
+    // a truncated id stops matching the same full-width request.
+    PendingProbeKey truncatedKey;
+    truncatedKey.start(&setA, static_cast<std::uint32_t>(0x1'0000'0001ULL), 8U, 4U);
+    EXPECT_FALSE(truncatedKey.matches(&setA, 0x1'0000'0001ULL, 8U, 4U))
+        << "a truncated stored id must not match the wide request";
+}
+
+namespace {
+
+// Small separate-plane backing (Texture2D views, the CPU-upload shape) for probe-slot tests.
+struct ProbePlaneFixture final {
+    ComPtr<ID3D11Texture2D> luma;
+    ComPtr<ID3D11Texture2D> chroma;
+    ComPtr<ID3D11ShaderResourceView> lumaView;
+    ComPtr<ID3D11ShaderResourceView> chromaView;
+    std::unique_ptr<const D3d11GpuFrameBacking> backing;
+};
+
+[[nodiscard]] ProbePlaneFixture makeSeparatePlaneBacking(ID3D11Device* const device,
+                                                         const std::uint8_t lumaCode,
+                                                         const std::uint8_t cbCode,
+                                                         const std::uint8_t crCode) {
+    ProbePlaneFixture fixture;
+    D3D11_TEXTURE2D_DESC lumaDescription{};
+    lumaDescription.Width = 2U;
+    lumaDescription.Height = 2U;
+    lumaDescription.MipLevels = 1U;
+    lumaDescription.ArraySize = 1U;
+    lumaDescription.Format = DXGI_FORMAT_R8_UNORM;
+    lumaDescription.SampleDesc.Count = 1U;
+    lumaDescription.Usage = D3D11_USAGE_DEFAULT;
+    lumaDescription.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    const std::array<std::uint8_t, 4U> lumaBytes{lumaCode, lumaCode, lumaCode, lumaCode};
+    const D3D11_SUBRESOURCE_DATA lumaData{.pSysMem = lumaBytes.data(), .SysMemPitch = 2U};
+    EXPECT_TRUE(SUCCEEDED(device->CreateTexture2D(
+        &lumaDescription, &lumaData, fixture.luma.ReleaseAndGetAddressOf())));
+    D3D11_TEXTURE2D_DESC chromaDescription = lumaDescription;
+    chromaDescription.Width = 1U;
+    chromaDescription.Height = 1U;
+    chromaDescription.Format = DXGI_FORMAT_R8G8_UNORM;
+    const std::array<std::uint8_t, 2U> chromaBytes{cbCode, crCode};
+    const D3D11_SUBRESOURCE_DATA chromaData{.pSysMem = chromaBytes.data(), .SysMemPitch = 2U};
+    EXPECT_TRUE(SUCCEEDED(device->CreateTexture2D(
+        &chromaDescription, &chromaData, fixture.chroma.ReleaseAndGetAddressOf())));
+    EXPECT_TRUE(SUCCEEDED(device->CreateShaderResourceView(
+        fixture.luma.Get(), nullptr, fixture.lumaView.ReleaseAndGetAddressOf())));
+    EXPECT_TRUE(SUCCEEDED(device->CreateShaderResourceView(
+        fixture.chroma.Get(), nullptr, fixture.chromaView.ReleaseAndGetAddressOf())));
+    fixture.backing = std::make_unique<const D3d11GpuFrameBacking>(
+        fixture.luma,
+        fixture.lumaView,
+        D3d11PlaneDimensions{.width = 2U, .height = 2U},
+        fixture.chroma,
+        fixture.chromaView,
+        D3d11PlaneDimensions{.width = 1U, .height = 1U});
+    return fixture;
+}
+
+[[nodiscard]] ULONG liveRefs(IUnknown* const object) {
+    const ULONG afterAdd = object->AddRef();
+    static_cast<void>(object->Release());
+    return afterAdd - 1U;
+}
+
+} // namespace
+
+// Probe slots own their pipeline objects per device: two slots on two independent broker
+// devices interleave issue/poll without seeing each other's shaders, a slot re-targeted at a
+// different device rebuilds, and a reset slot is reusable.
+TEST(GpuTransferActorTests, ProbeSlotsAreDeviceOwnedAndInterleaveAcrossRuntimes) {
+    WarpRuntime runtimeA;
+    ASSERT_TRUE(runtimeA.start());
+    WarpRuntime runtimeB;
+    ASSERT_TRUE(runtimeB.start());
+    const GraphicsDeviceLeaseResult leaseA = runtimeA.broker->tryLease();
+    const GraphicsDeviceLeaseResult leaseB = runtimeB.broker->tryLease();
+    ASSERT_EQ(leaseA.status, GraphicsDeviceLeaseStatus::Available);
+    ASSERT_EQ(leaseB.status, GraphicsDeviceLeaseStatus::Available);
+    ASSERT_TRUE(leaseA.lease.has_value());
+    ASSERT_TRUE(leaseB.lease.has_value());
+    ID3D11Device* const deviceA = leaseA.lease->device.Get();
+    ID3D11Device* const deviceB = leaseB.lease->device.Get();
+    ASSERT_NE(deviceA, deviceB);
+    ID3D11DeviceContext* const contextA = leaseA.lease->immediateContext.Get();
+    ID3D11DeviceContext* const contextB = leaseB.lease->immediateContext.Get();
+
+    const ProbePlaneFixture fixtureA = makeSeparatePlaneBacking(deviceA, 40U, 90U, 91U);
+    const ProbePlaneFixture fixtureB = makeSeparatePlaneBacking(deviceB, 50U, 100U, 101U);
+    const std::optional<D3d11ProbePlane> lumaA = lumaProbePlane(*fixtureA.backing);
+    const std::optional<D3d11ProbePlane> chromaA = chromaProbePlane(*fixtureA.backing);
+    const std::optional<D3d11ProbePlane> lumaB = lumaProbePlane(*fixtureB.backing);
+    const std::optional<D3d11ProbePlane> chromaB = chromaProbePlane(*fixtureB.backing);
+    ASSERT_TRUE(lumaA.has_value() && chromaA.has_value());
+    ASSERT_TRUE(lumaB.has_value() && chromaB.has_value());
+
+    D3d11SourcePixelProbeSlot slotA;
+    D3d11SourcePixelProbeSlot slotB;
+    ASSERT_TRUE(slotA.issue(deviceA, contextA, *lumaA, *chromaA, 1U, 1U, 0U, 0U));
+    ASSERT_TRUE(slotB.issue(deviceB, contextB, *lumaB, *chromaB, 0U, 0U, 0U, 0U));
+    contextA->Flush();
+    contextB->Flush();
+
+    bool aReady = false;
+    bool bReady = false;
+    ASSERT_TRUE(waitUntil(
+        [&] {
+            if (!aReady) {
+                aReady = slotA.poll(contextA).value_or(false);
+            }
+            if (!bReady) {
+                bReady = slotB.poll(contextB).value_or(false);
+            }
+            return aReady && bReady;
+        },
+        5s));
+    EXPECT_EQ(slotA.values().y, 40U);
+    EXPECT_EQ(slotA.values().cb, 90U);
+    EXPECT_EQ(slotA.values().cr, 91U);
+    EXPECT_EQ(slotA.values().bitDepth, 8U);
+    EXPECT_EQ(slotB.values().y, 50U);
+    EXPECT_EQ(slotB.values().cb, 100U);
+    EXPECT_EQ(slotB.values().cr, 101U);
+
+    // A slot re-targeted at another device rebuilds its device-scoped objects and answers
+    // from that device; a reset slot is reusable from scratch.
+    ASSERT_TRUE(slotA.issue(deviceB, contextB, *lumaB, *chromaB, 0U, 0U, 0U, 0U));
+    contextB->Flush();
+    aReady = false;
+    ASSERT_TRUE(waitUntil(
+        [&] {
+            aReady = slotA.poll(contextB).value_or(false);
+            return aReady;
+        },
+        5s));
+    EXPECT_EQ(slotA.values().y, 50U);
+    slotA.reset();
+    ASSERT_TRUE(slotA.issue(deviceA, contextA, *lumaA, *chromaA, 0U, 0U, 0U, 0U));
+    contextA->Flush();
+    aReady = false;
+    ASSERT_TRUE(waitUntil(
+        [&] {
+            aReady = slotA.poll(contextA).value_or(false);
+            return aReady;
+        },
+        5s));
+    EXPECT_EQ(slotA.values().y, 40U);
+}
+
+// The probe draw must leave the caller's immediate-context state exactly as it found it
+// (shader resources, render target, every viewport, blend state) and must not retain
+// references to the probed frame planes after the call.
+TEST(GpuTransferActorTests, ProbeIssuePreservesCallerStateAndFrameReferences) {
+    WarpRuntime runtime;
+    ASSERT_TRUE(runtime.start());
+    const GraphicsDeviceLeaseResult lease = runtime.broker->tryLease();
+    ASSERT_EQ(lease.status, GraphicsDeviceLeaseStatus::Available);
+    ASSERT_TRUE(lease.lease.has_value());
+    ID3D11Device* const device = lease.lease->device.Get();
+    ID3D11DeviceContext* const context = lease.lease->immediateContext.Get();
+
+    D3D11_TEXTURE2D_DESC targetDescription{};
+    targetDescription.Width = 8U;
+    targetDescription.Height = 8U;
+    targetDescription.MipLevels = 1U;
+    targetDescription.ArraySize = 1U;
+    targetDescription.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    targetDescription.SampleDesc.Count = 1U;
+    targetDescription.Usage = D3D11_USAGE_DEFAULT;
+    targetDescription.BindFlags = D3D11_BIND_RENDER_TARGET;
+    ComPtr<ID3D11Texture2D> callerTargetTexture;
+    ASSERT_TRUE(SUCCEEDED(
+        device->CreateTexture2D(&targetDescription, nullptr, callerTargetTexture.GetAddressOf())));
+    ComPtr<ID3D11RenderTargetView> callerTarget;
+    ASSERT_TRUE(SUCCEEDED(device->CreateRenderTargetView(
+        callerTargetTexture.Get(), nullptr, callerTarget.GetAddressOf())));
+
+    D3D11_TEXTURE2D_DESC srvDescription = targetDescription;
+    srvDescription.Width = 4U;
+    srvDescription.Height = 4U;
+    srvDescription.Format = DXGI_FORMAT_R8_UNORM;
+    srvDescription.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    ComPtr<ID3D11Texture2D> srvTextures[2U];
+    ComPtr<ID3D11ShaderResourceView> srvViews[2U];
+    for (ComPtr<ID3D11Texture2D>& texture : srvTextures) {
+        ASSERT_TRUE(SUCCEEDED(
+            device->CreateTexture2D(&srvDescription, nullptr, texture.ReleaseAndGetAddressOf())));
+    }
+    for (std::size_t index = 0U; index < 2U; ++index) {
+        ASSERT_TRUE(SUCCEEDED(device->CreateShaderResourceView(
+            srvTextures[index].Get(), nullptr, srvViews[index].ReleaseAndGetAddressOf())));
+    }
+    ID3D11ShaderResourceView* const srvPointers[2U] = {srvViews[0U].Get(), srvViews[1U].Get()};
+    context->PSSetShaderResources(0U, 2U, srvPointers);
+    context->OMSetRenderTargets(1U, callerTarget.GetAddressOf(), nullptr);
+
+    const std::array<D3D11_VIEWPORT, 2U> callerViewports{
+        D3D11_VIEWPORT{0.0F, 0.0F, 4.0F, 4.0F, 0.0F, 1.0F},
+        D3D11_VIEWPORT{4.0F, 0.0F, 4.0F, 4.0F, 0.0F, 1.0F}};
+    context->RSSetViewports(static_cast<UINT>(callerViewports.size()), callerViewports.data());
+
+    D3D11_BLEND_DESC blendDescription{};
+    blendDescription.RenderTarget[0U].BlendEnable = TRUE;
+    blendDescription.RenderTarget[0U].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+    blendDescription.RenderTarget[0U].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+    blendDescription.RenderTarget[0U].BlendOp = D3D11_BLEND_OP_ADD;
+    blendDescription.RenderTarget[0U].SrcBlendAlpha = D3D11_BLEND_ONE;
+    blendDescription.RenderTarget[0U].DestBlendAlpha = D3D11_BLEND_ZERO;
+    blendDescription.RenderTarget[0U].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    blendDescription.RenderTarget[0U].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    ComPtr<ID3D11BlendState> callerBlend;
+    ASSERT_TRUE(SUCCEEDED(device->CreateBlendState(&blendDescription, callerBlend.GetAddressOf())));
+    FLOAT blendFactors[4U] = {0.0F, 0.0F, 0.0F, 0.0F};
+    context->OMSetBlendState(callerBlend.Get(), blendFactors, 0xFFFFFFFFU);
+
+    // Baselines: capture what the caller has bound so the post-probe state must match.
+    ComPtr<ID3D11ShaderResourceView> keptSrvs[2U];
+    ComPtr<ID3D11RenderTargetView> keptTarget;
+    ComPtr<ID3D11DepthStencilView> keptDepth;
+    ComPtr<ID3D11BlendState> keptBlend;
+    FLOAT keptBlendFactors[4U] = {};
+    UINT keptSampleMask = 0U;
+    UINT keptViewportCount = static_cast<UINT>(callerViewports.size());
+    std::array<D3D11_VIEWPORT, 2U> keptViewports{};
+    context->PSGetShaderResources(0U, 2U, keptSrvs[0U].ReleaseAndGetAddressOf());
+    context->OMGetRenderTargets(
+        1U, keptTarget.ReleaseAndGetAddressOf(), keptDepth.ReleaseAndGetAddressOf());
+    context->OMGetBlendState(keptBlend.ReleaseAndGetAddressOf(), keptBlendFactors, &keptSampleMask);
+    context->RSGetViewports(&keptViewportCount, keptViewports.data());
+    ASSERT_EQ(keptViewportCount, 2U);
+    ASSERT_EQ(keptSrvs[0U].Get(), srvViews[0U].Get());
+    ASSERT_EQ(keptTarget.Get(), callerTarget.Get());
+
+    const ProbePlaneFixture fixture = makeSeparatePlaneBacking(device, 70U, 120U, 121U);
+    const std::optional<D3d11ProbePlane> luma = lumaProbePlane(*fixture.backing);
+    const std::optional<D3d11ProbePlane> chroma = chromaProbePlane(*fixture.backing);
+    ASSERT_TRUE(luma.has_value() && chroma.has_value());
+    const ULONG lumaRefsBefore = liveRefs(fixture.luma.Get());
+
+    D3d11SourcePixelProbeSlot slot;
+    ASSERT_TRUE(slot.issue(device, context, *luma, *chroma, 1U, 0U, 0U, 0U));
+    context->Flush();
+    ASSERT_TRUE(slot.completeBounded(context));
+    EXPECT_EQ(slot.values().y, 70U);
+    EXPECT_EQ(slot.values().cb, 120U);
+    EXPECT_EQ(slot.values().cr, 121U);
+    EXPECT_EQ(slot.values().bitDepth, 8U);
+
+    // Caller state restored exactly.
+    ComPtr<ID3D11ShaderResourceView> restoredSrvs[2U];
+    ComPtr<ID3D11RenderTargetView> restoredTarget;
+    ComPtr<ID3D11DepthStencilView> restoredDepth;
+    ComPtr<ID3D11BlendState> restoredBlend;
+    FLOAT restoredBlendFactors[4U] = {};
+    UINT restoredSampleMask = 0U;
+    UINT restoredViewportCount = static_cast<UINT>(callerViewports.size());
+    std::array<D3D11_VIEWPORT, 2U> restoredViewports{};
+    context->PSGetShaderResources(0U, 2U, restoredSrvs[0U].ReleaseAndGetAddressOf());
+    context->OMGetRenderTargets(
+        1U, restoredTarget.ReleaseAndGetAddressOf(), restoredDepth.ReleaseAndGetAddressOf());
+    context->OMGetBlendState(
+        restoredBlend.ReleaseAndGetAddressOf(), restoredBlendFactors, &restoredSampleMask);
+    context->RSGetViewports(&restoredViewportCount, restoredViewports.data());
+    EXPECT_EQ(restoredSrvs[0U].Get(), srvViews[0U].Get());
+    EXPECT_EQ(restoredSrvs[1U].Get(), srvViews[1U].Get());
+    EXPECT_EQ(restoredTarget.Get(), callerTarget.Get());
+    EXPECT_EQ(restoredDepth.Get(), nullptr);
+    EXPECT_EQ(restoredBlend.Get(), callerBlend.Get());
+    EXPECT_EQ(restoredSampleMask, keptSampleMask);
+    EXPECT_EQ(restoredViewportCount, 2U);
+    for (std::size_t index = 0U; index < 2U; ++index) {
+        EXPECT_FLOAT_EQ(restoredViewports[index].TopLeftX, keptViewports[index].TopLeftX);
+        EXPECT_FLOAT_EQ(restoredViewports[index].Width, keptViewports[index].Width);
+    }
+
+    // The probe call released its captured frame references: no budget pinning.
+    EXPECT_EQ(liveRefs(fixture.luma.Get()), lumaRefsBefore);
 }
 
 } // namespace

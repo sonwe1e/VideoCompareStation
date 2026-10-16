@@ -29,7 +29,7 @@ MenuBar {
         contentItem: Text {
             text: topLevelItem.text
             color: topLevelItem.enabled ? control.textColor : control.mutedTextColor
-            font.pixelSize: 13
+            font.pixelSize: Theme.fontMono
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
         }
@@ -41,8 +41,10 @@ MenuBar {
                     return "transparent";
                 if (topLevelItem.highlighted || topLevelItem.down)
                     return control.accentColor;
-                if (topLevelItem.activeFocus)
-                    return "#2bffffff";
+                // Keyboard focus only (the contract in VcsTheme.js): a mouse click must not
+                // leave the open-title veil behind after the menu closes.
+                if (topLevelItem.visualFocus)
+                    return control.accentColor;
                 if (topLevelItem.hovered)
                     return Theme.control;
                 return "transparent";

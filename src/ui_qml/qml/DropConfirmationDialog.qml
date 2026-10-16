@@ -181,7 +181,7 @@ Popup {
                                         anchors.centerIn: parent
                                         text: String.fromCharCode(65 + droppedRow.index)
                                         color: Theme.sourceColor(droppedRow.index)
-                                        font.pixelSize: 11
+                                        font.pixelSize: Theme.fontCaption
                                         font.bold: true
                                     }
                                 }
@@ -215,7 +215,7 @@ Popup {
                                 visible: text.length > 0
                                 text: control.sourcePathAt(droppedRow.index)
                                 color: Theme.mutedText
-                                font.pixelSize: 11
+                                font.pixelSize: Theme.fontCaption
                                 elide: Text.ElideMiddle
                             }
                         }

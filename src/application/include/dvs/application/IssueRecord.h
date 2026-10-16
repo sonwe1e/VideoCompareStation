@@ -76,6 +76,12 @@ struct IssueViewContext final {
     double zoom = 1.0;
     double centerX = 0.5;
     double centerY = 0.5;
+    // E1: wipe split axis (0 vertical, 1 horizontal) and split ratio. -1 / negative means the
+    // record carries no wipe state (legacy records, or a capture outside wipe mode): restore
+    // keeps the current orientation and must not claim an exact split-ratio replay. Records
+    // written with a wipe view carry the real values so orientation and ratio round-trip.
+    std::int32_t wipeOrientation = -1;
+    double wipePosition = -1.0;
     // Image workspace only.
     std::int32_t compareMode = 0;
     double panX = 0.5;

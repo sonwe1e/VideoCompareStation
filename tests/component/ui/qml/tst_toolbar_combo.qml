@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtTest
 import "../../../../src/ui_qml/qml" as Dvs
+import "../../../../src/ui_qml/qml/VcsTheme.js" as Theme
 
 Item {
     id: root
@@ -128,9 +129,32 @@ Item {
             focusProbe.forceActiveFocus();
             keyClick(Qt.Key_Tab);
             tryCompare(combo, "activeFocus", true);
+            // Real Tab focus is keyboard navigation, so the focus contract (VcsTheme.js,
+            // at Theme.focus) must be up: a 2 px Theme.focus ring while visualFocus is true.
+            tryVerify(() => combo.visualFocus);
+            const background = findChild(combo, "toolbarComboBackground");
+            tryVerify(() => background.border.width === 2);
+            verify(Qt.colorEqual(background.border.color, Theme.focus),
+                "ring colour must be Theme.focus, the shared focus-ring token");
 
             openPopup();
             mouseClick(outsideTarget);
+            tryCompare(combo.popup, "visible", false);
+        }
+
+        // The quiet half of the contract, also with a real event: focus arrives by mouse
+        // click from another control, so no ring may appear. The click opens the popup;
+        // Escape closes it again.
+        function test_mouse_focus_shows_no_ring() {
+            const background = findChild(combo, "toolbarComboBackground");
+            focusProbe.forceActiveFocus();
+            verify(!combo.activeFocus);
+            mouseClick(combo, combo.width / 2, combo.height / 2);
+            tryVerify(() => combo.activeFocus);
+            verify(!combo.visualFocus, "a mouse-focused combo must show no ring");
+            tryVerify(() => background.border.width === 1);
+            verify(Qt.colorEqual(background.border.color, "transparent"));
+            keyClick(Qt.Key_Escape);
             tryCompare(combo.popup, "visible", false);
         }
 

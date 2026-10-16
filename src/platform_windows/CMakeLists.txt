@@ -32,6 +32,7 @@ add_library(
         src/CpuP010FrameResource.cpp
         src/D3d11DecodedFrameResource.cpp
         src/D3d11GpuFrameBacking.cpp
+        src/D3d11SourcePixelProbe.cpp
         src/D3d11ComparisonRenderer.cpp
         src/D3d11RenderChannel.cpp
         src/FrameResourceFactory.cpp

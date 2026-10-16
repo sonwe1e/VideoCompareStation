@@ -21,6 +21,7 @@
 #include "dvs/ui/SourceListModel.h"
 #include "dvs/ui/StartupMilestone.h"
 
+#include "EvidenceIdentityJson.h"
 #include "FileAssociationService.h"
 #include "PlaybackTraceEnvironment.h"
 #include "ReviewRuntime.h"
@@ -31,12 +32,15 @@
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
+#include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSaveFile>
+#include <QStringList>
 #include <QTimer>
 #include <QUrl>
 
@@ -2958,7 +2962,8 @@ struct PopupProbeResult final {
     result.captured = true;
     // Popup.Window preserves the rounded VcsMenu corners as transparent pixels. Exclude only those
     // four corners so the gate still verifies the top, bottom, left, and right edge centers.
-    constexpr qreal kSafeLogicalCornerExtent = 10.0;
+    // VcsMenu uses Theme.radiusLarge (12 logical pixels); retain all straight edge centers.
+    constexpr qreal kSafeLogicalCornerExtent = 12.0;
     const int cornerExtent =
         static_cast<int>(std::ceil(kSafeLogicalCornerExtent * rgba.devicePixelRatio()));
     if (cornerExtent <= 0 || rgba.width() <= cornerExtent * 2 ||
@@ -2991,6 +2996,819 @@ struct PopupProbeResult final {
     result.passed = sampledPixels > 0U && minimumAlpha == 255;
     if (!result.passed) {
         result.failureReason = sampledPixels == 0U ? "no-pixels" : "transparent-background";
+    }
+    return result;
+}
+
+// UI evidence automation for the video workspace: opens REAL media through the real open
+// path, waits for real presented frames, then captures window screenshots of the review
+// states the QML contract harness cannot render (it has no decode pipeline, so its stage
+// stays black). Each capture is validated against a bright-pixel floor so "the shot exists"
+// never masquerades as "the footage is there", and the captured states double as geometry
+// probes for the OSC/chrome measurements.
+struct VideoEvidenceInvocation final {
+    std::filesystem::path outputDirectory;
+    SmokeSources sources;
+    // Negative-control perturbation for the pixel-readout gate itself (001 B): the mode
+    // shifts one comparison baseline the gate uses, and the run must then fail honestly
+    // with the failure fields showing exactly which check refused. "none" is the normal
+    // acceptance run.
+    enum class NegativeControl : std::uint8_t {
+        None,
+        // Pretend the issued request id is one past what the samples carry: a stale
+        // request must not pass as current.
+        StaleRequest,
+        // Pretend the expected hover position sits one pixel right: a sample taken at the
+        // old cursor position must not pass as current.
+        StalePosition,
+        // Demand one source more than the session has: a missing slot must stay
+        // "unknown"/failing instead of being silently skipped.
+        MissingSource,
+    };
+    NegativeControl negativeControl = NegativeControl::None;
+};
+
+[[nodiscard]] std::optional<VideoEvidenceInvocation>
+parseVideoEvidenceInvocation(const int argc, char** const argv) {
+    // --ui-video-evidence <outputDir> <source1> [source2] [source3]
+    //     [--negative stale-request|stale-position|missing-source]
+    if (argc < 4 || argc > 8 || argv == nullptr ||
+        std::string_view{argv[1]} != "--ui-video-evidence") {
+        return std::nullopt;
+    }
+    VideoEvidenceInvocation invocation;
+    invocation.outputDirectory = std::filesystem::path{argv[2]};
+    int index = 3;
+    std::vector<std::filesystem::path> paths;
+    for (; index < argc; ++index) {
+        if (std::string_view{argv[index]} == "--negative") {
+            if (index + 1 >= argc) {
+                return std::nullopt;
+            }
+            const std::string_view mode{argv[index + 1]};
+            if (mode == "stale-request") {
+                invocation.negativeControl = VideoEvidenceInvocation::NegativeControl::StaleRequest;
+            } else if (mode == "stale-position") {
+                invocation.negativeControl =
+                    VideoEvidenceInvocation::NegativeControl::StalePosition;
+            } else if (mode == "missing-source") {
+                invocation.negativeControl =
+                    VideoEvidenceInvocation::NegativeControl::MissingSource;
+            } else {
+                return std::nullopt;
+            }
+            ++index;
+            continue;
+        }
+        paths.emplace_back(argv[index]);
+    }
+    if (paths.empty() || paths.size() > 3U) {
+        return std::nullopt;
+    }
+    invocation.sources.first = paths.front();
+    if (paths.size() >= 2U) {
+        invocation.sources.second = paths[1U];
+    }
+    if (paths.size() == 3U) {
+        invocation.sources.third = paths[2U];
+    }
+    return invocation;
+}
+
+[[nodiscard]] int
+runVideoEvidence(int& argc, char** argv, const VideoEvidenceInvocation& invocation) {
+    // Optional range acceptance route through the real I/O keys and transport buttons.
+    // The regular forensic capture remains the default invocation.
+    const int rangeOut = qEnvironmentVariableIntValue("DVS_EVIDENCE_RANGE_OUT");
+    const double rangeRate = qEnvironmentVariable("DVS_EVIDENCE_RANGE_RATE", "0.5").toDouble();
+    dvs::ui::configureGraphicsBackend();
+    dvs::ui::DesktopApplication desktop{
+        argc,
+        argv,
+        dvs::ui::DesktopApplicationOptions{
+            .smokeMode = false,
+            .preferSoftwareDevice = false,
+            .preferHighRefreshScreen = true,
+        },
+    };
+    // Isolated settings: evidence runs must neither resume from the user's real playback
+    // positions nor record fixture positions into them. The file lives in the evidence
+    // output directory, so repeated runs are reproducible and self-contained.
+    QDir().mkpath(QString::fromStdWString(invocation.outputDirectory.wstring()));
+    const QDir evidenceDir{QString::fromStdWString(invocation.outputDirectory.wstring())};
+    std::unique_ptr<dvs::app::ReviewRuntime> runtime =
+        dvs::app::ReviewRuntime::createWithSettingsFile(std::filesystem::path{
+            evidenceDir.filePath(QStringLiteral("evidence-settings.json")).toStdWString()});
+    if (!runtime || runtime->controller() == nullptr || runtime->preferences() == nullptr ||
+        !desktop.load(*runtime->controller(),
+                      *runtime->preferences(),
+                      [&runtime](dvs::ui::ComparisonSurface& surface) {
+                          return runtime->attachSurface(surface);
+                      })) {
+        writeStandardError("DVS_VIDEO_EVIDENCE_UI_LOAD_FAILED\n");
+        if (runtime) {
+            runtime->prepareForSceneGraphRelease();
+            desktop.releaseSceneGraph();
+            static_cast<void>(runtime->shutdownAfterSceneGraphRelease());
+        }
+        return EXIT_FAILURE;
+    }
+
+    installPlaybackTrace(*runtime);
+    enum class Stage : std::uint8_t {
+        WaitingForGraphics,
+        WaitingForFirstFrame,
+        RangeMarkIn,
+        RangeMarkOut,
+        RangeArm,
+        RangeStart,
+        RangePlay,
+        RangeWalk,
+        RangePaused,
+        FixFrame,
+        ToastWait,
+        CaptureDefault,
+        CaptureDifference,
+        CaptureRoiTriplet,
+        ProbePixelReadout,
+        WaitPixelPlate,
+        Completed,
+    };
+    Stage stage = Stage::WaitingForGraphics;
+    bool failed = false;
+    bool completed = false;
+    std::string failureReason;
+    int settleRemainingMs = 0;
+    int pixelPlateWaitMs = 0;
+    QJsonObject shots;
+    QStringList geometryLines;
+    std::string pixelRowText;
+    QJsonArray rangeFrames;
+    std::optional<std::int64_t> lastRangeFrame;
+    bool rangeSawOut = false;
+    std::size_t rangePeakBytes = 0;
+    std::shared_ptr<const dvs::application::SessionSnapshot> rangeAccounting;
+    int recordedRangeStage = -1;
+
+    const auto fail = [&](std::string reason) {
+        if (!failed) {
+            failed = true;
+            failureReason = std::move(reason);
+            desktop.exit(EXIT_FAILURE);
+        }
+    };
+    const auto settle = [&](const int milliseconds) { settleRemainingMs = milliseconds; };
+    const auto captureWindow = [&](const char* const name, const double minimumBrightRatio) {
+        const std::optional<QImage> image = desktop.captureWindowForAutomation();
+        if (!image.has_value() || image->isNull()) {
+            fail(std::string{"capture-failed:"} + name);
+            return;
+        }
+        std::uint64_t sampledPixels = 0U;
+        const double ratio = brightPixelRatio(*image, sampledPixels);
+        shots.insert(QString::fromLatin1(name),
+                     QJsonObject{{"bright_ratio", ratio},
+                                 {"sampled_pixels", static_cast<double>(sampledPixels)},
+                                 {"width", image->width()},
+                                 {"height", image->height()}});
+        if (sampledPixels == 0U || ratio < minimumBrightRatio) {
+            fail(std::string{"footage-not-visible:"} + name);
+            return;
+        }
+        const QString path = QDir(QString::fromStdWString(invocation.outputDirectory.wstring()))
+                                 .filePath(QString::fromLatin1(name));
+        if (!image->save(path)) {
+            fail(std::string{"save-failed:"} + name);
+        }
+    };
+    const auto recordGeometry = [&](const char* const prefix, const char* const objectName) {
+        const std::string name{objectName};
+        for (const char* const property : {"x", "y", "width", "height", "visible"}) {
+            const std::optional<int> value = desktop.objectIntPropertyForAutomation(name, property);
+            geometryLines << QString("%1.%2.%3=%4")
+                                 .arg(QLatin1String{prefix},
+                                      QLatin1String{name},
+                                      QLatin1String{property},
+                                      value.has_value() ? QString::number(*value)
+                                                        : QStringLiteral("missing"));
+        }
+    };
+
+    QTimer poll;
+    poll.setInterval(5);
+    QObject::connect(&poll, &QTimer::timeout, runtime->controller(), [&] {
+        if (failed || completed) {
+            return;
+        }
+        dvs::ui::ReviewController& controller = *runtime->controller();
+        if (settleRemainingMs > 0) {
+            settleRemainingMs -= 5;
+            return;
+        }
+        if (hasReviewError(controller) && !controller.busy()) {
+            fail("media-error:" + controller.lastErrorTechnicalDetail().toStdString());
+            return;
+        }
+        const bool threeSources = invocation.sources.third.has_value();
+        if (rangeOut > 41 && recordedRangeStage != static_cast<int>(stage)) {
+            recordedRangeStage = static_cast<int>(stage);
+            QSaveFile stateFile{evidenceDir.filePath(QStringLiteral("range-state.json"))};
+            if (stateFile.open(QIODevice::WriteOnly)) {
+                stateFile.write(QJsonDocument{
+                    QJsonObject{{"stage", recordedRangeStage},
+                                {"frame", static_cast<double>(controller.currentFrame())},
+                                {"in", static_cast<double>(controller.playbackRangeIn())},
+                                {"out", static_cast<double>(controller.playbackRangeOut())},
+                                {"ping_pong", controller.playbackRangePingPong()},
+                                {"playing", controller.playing()}}}
+                                    .toJson());
+                static_cast<void>(stateFile.commit());
+            }
+        }
+        switch (stage) {
+        case Stage::WaitingForGraphics: {
+            if (!controller.graphicsReady()) {
+                return;
+            }
+            QList<QUrl> automationSources{localFileUrl(invocation.sources.first)};
+            if (invocation.sources.second.has_value()) {
+                automationSources.push_back(localFileUrl(*invocation.sources.second));
+            }
+            if (threeSources) {
+                automationSources.push_back(localFileUrl(*invocation.sources.third));
+            }
+            if (!desktop.openSourcesForAutomation(automationSources)) {
+                fail("open-rejected");
+                return;
+            }
+            stage = Stage::WaitingForFirstFrame;
+            return;
+        }
+        case Stage::WaitingForFirstFrame:
+            if (controller.busy() || controller.currentFrame() < 0) {
+                return;
+            }
+            if (rangeOut > 41) {
+                if (!std::isfinite(rangeRate) || rangeRate <= 0 ||
+                    static_cast<qulonglong>(rangeOut) >= controller.totalFrames() ||
+                    !controller.seekFrame(41)) {
+                    fail("range-evidence-invalid-input");
+                    return;
+                }
+                stage = Stage::RangeMarkIn;
+                return;
+            }
+            // Pin the review to a fixed mid frame through the real timeline click path, so
+            // the captures describe one deterministic frame instead of wherever the resume
+            // feature parked the playhead.
+            if (!desktop.clickTimelineForAutomation(0.5)) {
+                fail("timeline-click-rejected");
+                return;
+            }
+            stage = Stage::FixFrame;
+            settle(800);
+            return;
+        case Stage::RangeMarkIn:
+            if (controller.busy() || controller.framePending() || controller.currentFrame() != 41) {
+                return;
+            }
+            if (!desktop.sendKeyForAutomation(Qt::Key_I) || !controller.seekFrame(rangeOut)) {
+                fail("range-mark-in-failed");
+                return;
+            }
+            stage = Stage::RangeMarkOut;
+            return;
+        case Stage::RangeMarkOut:
+            if (controller.busy() || controller.framePending() ||
+                controller.currentFrame() != rangeOut) {
+                return;
+            }
+            if (!desktop.sendKeyForAutomation(Qt::Key_O)) {
+                fail("range-mark-out-failed");
+                return;
+            }
+            if (!controller.seekFrame(40)) {
+                fail("range-anchor-seek-failed");
+                return;
+            }
+            stage = Stage::RangeArm;
+            return;
+        case Stage::RangeArm:
+            if (controller.busy() || controller.framePending() || controller.currentFrame() != 40) {
+                return;
+            }
+            // Seeking deliberately cancels the kernel range; arm it only after navigation.
+            if (!controller.setPlaybackRange(41, rangeOut, true) ||
+                !controller.setPlaybackRate(rangeRate)) {
+                fail("range-arm-failed");
+                return;
+            }
+            stage = Stage::RangeStart;
+            return;
+        case Stage::RangeStart:
+            if (controller.playbackRangeIn() != 41 || controller.playbackRangeOut() != rangeOut) {
+                return;
+            }
+            if (!desktop.clickControlForAutomation("transportPingPongRangeButton")) {
+                fail("range-ping-pong-button-failed");
+                return;
+            }
+            stage = Stage::RangePlay;
+            return;
+        case Stage::RangePlay:
+            if (!controller.playbackRangePingPong()) {
+                return;
+            }
+            if (!desktop.clickControlForAutomation("transportLoopRangeButton")) {
+                fail("range-play-button-failed");
+                return;
+            }
+            stage = Stage::RangeWalk;
+            return;
+        case Stage::RangeWalk: {
+            rangePeakBytes = (std::max)(rangePeakBytes, runtime->reservedFrameBytes());
+            const auto snapshot = runtime->sessionSnapshot();
+            if (!snapshot || !snapshot->displayedFrame) {
+                return;
+            }
+            const auto frame = snapshot->displayedFrame->value();
+            if (frame == 40 || lastRangeFrame == frame) {
+                return;
+            }
+            if (frame < 41 || frame > rangeOut ||
+                snapshot->presentedSources.size() !=
+                    (1U + (invocation.sources.second.has_value() ? 1U : 0U) +
+                     (threeSources ? 1U : 0U)) ||
+                rangePeakBytes > std::size_t{256} * 1024U * 1024U) {
+                fail("range-sequence-or-budget-failed");
+                return;
+            }
+            for (const auto& source : snapshot->presentedSources) {
+                if (!source.sourceFrameId || source.missingReason) {
+                    fail("range-source-missing");
+                    return;
+                }
+            }
+            rangeFrames.push_back(
+                QJsonObject{{"frame", static_cast<double>(frame)},
+                            {"media_us", static_cast<double>(controller.currentMediaTime())},
+                            {"sources", static_cast<int>(snapshot->presentedSources.size())}});
+            lastRangeFrame = frame;
+            rangeSawOut = rangeSawOut || frame == rangeOut;
+            if (rangeSawOut && frame == 41) {
+                if (!controller.pause()) {
+                    fail("range-pause-failed");
+                    return;
+                }
+                stage = Stage::RangePaused;
+            }
+            return;
+        }
+        case Stage::RangePaused:
+            if (controller.playing() || controller.framePending()) {
+                return;
+            }
+            rangeAccounting = runtime->sessionSnapshot();
+            if (!rangeAccounting || rangeAccounting->playbackRangeCompletedLoops < 1) {
+                fail("range-cycle-incomplete");
+                return;
+            }
+            captureWindow("video-range-cycle.png", 0.02);
+            completed = !failed;
+            desktop.exit(failed ? EXIT_FAILURE : EXIT_SUCCESS);
+            return;
+        case Stage::FixFrame:
+            if (controller.busy() || controller.framePending()) {
+                return;
+            }
+            if (controller.currentFrame() < 0) {
+                fail("fixed-frame-missing");
+                return;
+            }
+            // The resume toast ("已恢复到上次位置") is transient; let it lapse before any
+            // capture so no chrome state but the reviewed frame differs between runs.
+            stage = Stage::ToastWait;
+            settle(5500);
+            return;
+        case Stage::ToastWait:
+            stage = Stage::CaptureDefault;
+            return;
+        case Stage::CaptureDefault:
+            recordGeometry("default", "activeSourceStrip");
+            recordGeometry("default", "compareModeBar");
+            recordGeometry("default", "transport");
+            captureWindow("video-real-default.png", 0.03);
+            runtime->preferences()->setViewMode(
+                dvs::ui::ReviewPreferencesController::ViewMode::Difference);
+            stage = Stage::CaptureDifference;
+            settle(700);
+            return;
+        case Stage::CaptureDifference:
+            recordGeometry("difference", "transport");
+            captureWindow("video-real-difference.png", 0.02);
+            if (threeSources) {
+                runtime->preferences()->setViewMode(
+                    dvs::ui::ReviewPreferencesController::ViewMode::RoiTriplet);
+                stage = Stage::CaptureRoiTriplet;
+                settle(700);
+            } else {
+                runtime->preferences()->setViewMode(
+                    dvs::ui::ReviewPreferencesController::ViewMode::SideBySide);
+                stage = Stage::ProbePixelReadout;
+                settle(500);
+            }
+            return;
+        case Stage::CaptureRoiTriplet:
+            recordGeometry("roiTriplet", "roiTripletStrip");
+            captureWindow("video-real-roi-triplet.png", 0.02);
+            runtime->preferences()->setViewMode(
+                dvs::ui::ReviewPreferencesController::ViewMode::SideBySide);
+            stage = Stage::ProbePixelReadout;
+            settle(500);
+            return;
+        case Stage::ProbePixelReadout: {
+            // Hover the real pointer path over the stage so the render-thread pixel probes
+            // run against the presented frames; the readout plate is the thing under test.
+            // The scene point comes from mapToScene (via the automation helper) because item
+            // x/y properties are parent-relative and drift with the surrounding layout.
+            const std::optional<QPointF> hoverPoint =
+                desktop.objectScenePointForAutomation("mediaViewportFocusTarget", 0.5, 0.4);
+            if (!hoverPoint.has_value()) {
+                fail("viewport-geometry-missing");
+                return;
+            }
+            if (!desktop.sendMouseMoveForAutomation(hoverPoint->x(), hoverPoint->y())) {
+                fail("mouse-move-rejected");
+                return;
+            }
+            pixelPlateWaitMs = 5000;
+            stage = Stage::WaitPixelPlate;
+            return;
+        }
+        case Stage::WaitPixelPlate: {
+            const std::optional<int> plateVisible =
+                desktop.objectIntPropertyForAutomation("viewportPixelReadoutPlate", "visible");
+            // Structured per-source readout facts, read fresh at this instant: the viewport's
+            // pixelReadoutResults map carries each slot's sample with its own request and
+            // frame identity, and the surface exposes the identity it is presenting right
+            // now. A slot counts only when its sample is valid AND current - the same
+            // definition the viewport itself enforces: the sample's request id must be the
+            // one still issued, its coordinates must match the expected hover position, and
+            // its frame identity must be exactly the presented one. A stale answer from an
+            // earlier hover on the same frame is rejected, never passed off as current.
+            const int readoutSourceCount =
+                (1 + (invocation.sources.second.has_value() ? 1 : 0) + (threeSources ? 1 : 0)) +
+                (invocation.negativeControl ==
+                         VideoEvidenceInvocation::NegativeControl::MissingSource
+                     ? 1
+                     : 0);
+            // Negative-control baselines: shift one comparison input so the gate must refuse
+            // a sample that would otherwise look good. The report records the mode, so the
+            // failure is auditable as a control, never as a product regression.
+            const qlonglong requestBaselineShift =
+                invocation.negativeControl == VideoEvidenceInvocation::NegativeControl::StaleRequest
+                    ? 1
+                    : 0;
+            const uint positionBaselineShift =
+                invocation.negativeControl ==
+                        VideoEvidenceInvocation::NegativeControl::StalePosition
+                    ? 1U
+                    : 0U;
+            const QVariantMap results = desktop
+                                            .objectVariantPropertyForAutomation(
+                                                "mediaViewportFocusTarget", "pixelReadoutResults")
+                                            .toMap();
+            const QVariantMap expectedPixels =
+                desktop
+                    .objectVariantPropertyForAutomation("mediaViewportFocusTarget",
+                                                        "pixelReadoutExpected")
+                    .toMap();
+            // Negative controls for the gate itself. sampleValid flags the last delivered
+            // sample; sampleCurrent additionally demands the issued request id, the expected
+            // hover coordinates and the presented frame identity. They are independent: a
+            // frozen valid sample from an earlier hover on this same frame is valid=true and
+            // current=false, and a visible plate with an invalid sample must still fail.
+            const QVariant requestIdVariant = desktop.objectVariantPropertyForAutomation(
+                "mediaViewportFocusTarget", "pixelReadoutRequestId");
+            const bool requestIdKnown = requestIdVariant.isValid();
+            const qlonglong issuedRequestId = requestIdVariant.toLongLong();
+            const QVariant presentedFrameValidVariant = desktop.objectVariantPropertyForAutomation(
+                "dualVideoSurface", "presentedFrameValid");
+            const bool presentedFrameValid =
+                presentedFrameValidVariant.isValid() && presentedFrameValidVariant.toBool();
+            const qulonglong presentedFrameId =
+                desktop.objectVariantPropertyForAutomation("dualVideoSurface", "presentedFrameId")
+                    .toULongLong();
+            const qulonglong presentedSessionEpoch =
+                desktop
+                    .objectVariantPropertyForAutomation("dualVideoSurface", "presentedSessionEpoch")
+                    .toULongLong();
+            const qulonglong presentedPlaybackGeneration =
+                desktop
+                    .objectVariantPropertyForAutomation("dualVideoSurface",
+                                                        "presentedPlaybackGeneration")
+                    .toULongLong();
+            const bool identityKnown = presentedFrameValidVariant.isValid();
+            // Identity fields (request id, frame id, session epoch, playback generation) go
+            // through the exact 64-bit decimal-string representation. The historical
+            // truncation was the uint narrowing (0x100000001 became 1); the string form also
+            // guarantees precision for JSON/JS consumers above 2^53. Code values and
+            // coordinates stay plain numbers; a missing query is the literal "unknown" in
+            // both cases.
+            namespace evidence = ::dvs::app::evidence;
+            const auto numberOrUnknown = [](const QVariant& value) -> QJsonValue {
+                return evidence::codeValueOrUnknown(value);
+            };
+            const auto identityOrUnknown = [](const QVariant& value) -> QJsonValue {
+                return evidence::identity64OrUnknown(value);
+            };
+            QJsonArray sourcesReport;
+            bool allSamplesValid = readoutSourceCount > 0;
+            bool allSamplesCurrent =
+                readoutSourceCount > 0 && presentedFrameValid && requestIdKnown;
+            bool everySourceKnown = true;
+            for (int slot = 0; slot < readoutSourceCount; ++slot) {
+                const QVariantMap entry = results.value(QString::number(slot)).toMap();
+                const QVariantMap expected = expectedPixels.value(QString::number(slot)).toMap();
+                const bool entryKnown = !entry.isEmpty();
+                everySourceKnown = everySourceKnown && entryKnown;
+                const bool sampleValid = entry.value(QStringLiteral("valid")).toBool();
+                const bool identityValid = entry.value(QStringLiteral("identityValid")).toBool();
+                bool requestMatches = false;
+                bool positionMatches = false;
+                if (entryKnown && requestIdKnown) {
+                    requestMatches = entry.value(QStringLiteral("requestId")).toLongLong() ==
+                                     issuedRequestId + requestBaselineShift;
+                }
+                if (entryKnown && !expected.isEmpty()) {
+                    bool xKnown = false;
+                    bool yKnown = false;
+                    const uint expectedX =
+                        expected.value(QStringLiteral("x")).toUInt(&xKnown) + positionBaselineShift;
+                    const uint expectedY = expected.value(QStringLiteral("y")).toUInt(&yKnown);
+                    positionMatches = xKnown && yKnown &&
+                                      entry.value(QStringLiteral("x")).toUInt() == expectedX &&
+                                      entry.value(QStringLiteral("y")).toUInt() == expectedY;
+                }
+                const bool sampleCurrent =
+                    entryKnown && sampleValid && identityValid && requestMatches &&
+                    positionMatches &&
+                    entry.value(QStringLiteral("frameId")).toULongLong() == presentedFrameId &&
+                    entry.value(QStringLiteral("sessionEpoch")).toULongLong() ==
+                        presentedSessionEpoch &&
+                    entry.value(QStringLiteral("playbackGeneration")).toULongLong() ==
+                        presentedPlaybackGeneration;
+                allSamplesValid = allSamplesValid && sampleValid;
+                allSamplesCurrent = allSamplesCurrent && sampleCurrent;
+                QJsonObject slotReport;
+                slotReport.insert(QStringLiteral("slot"), slot);
+                slotReport.insert(QStringLiteral("sample_current"),
+                                  entryKnown ? QJsonValue{sampleCurrent}
+                                             : QJsonValue{QStringLiteral("unknown")});
+                slotReport.insert(QStringLiteral("sample_valid"),
+                                  entryKnown ? QJsonValue{sampleValid}
+                                             : QJsonValue{QStringLiteral("unknown")});
+                slotReport.insert(QStringLiteral("request_matches"),
+                                  entryKnown && requestIdKnown
+                                      ? QJsonValue{requestMatches}
+                                      : QJsonValue{QStringLiteral("unknown")});
+                slotReport.insert(QStringLiteral("position_matches"),
+                                  entryKnown && !expected.isEmpty()
+                                      ? QJsonValue{positionMatches}
+                                      : QJsonValue{QStringLiteral("unknown")});
+                slotReport.insert(QStringLiteral("request_id"),
+                                  identityOrUnknown(entry.value(QStringLiteral("requestId"))));
+                slotReport.insert(QStringLiteral("issued_request_id"),
+                                  requestIdKnown ? evidence::identity64OrUnknown(issuedRequestId)
+                                                 : QJsonValue{QStringLiteral("unknown")});
+                slotReport.insert(QStringLiteral("frame_id"),
+                                  identityOrUnknown(entry.value(QStringLiteral("frameId"))));
+                slotReport.insert(QStringLiteral("session_epoch"),
+                                  identityOrUnknown(entry.value(QStringLiteral("sessionEpoch"))));
+                slotReport.insert(
+                    QStringLiteral("playback_generation"),
+                    identityOrUnknown(entry.value(QStringLiteral("playbackGeneration"))));
+                slotReport.insert(QStringLiteral("x"),
+                                  numberOrUnknown(entry.value(QStringLiteral("x"))));
+                slotReport.insert(QStringLiteral("y"),
+                                  numberOrUnknown(entry.value(QStringLiteral("y"))));
+                slotReport.insert(QStringLiteral("expected_x"),
+                                  numberOrUnknown(expected.value(QStringLiteral("x"))));
+                slotReport.insert(QStringLiteral("expected_y"),
+                                  numberOrUnknown(expected.value(QStringLiteral("y"))));
+                slotReport.insert(QStringLiteral("luma"),
+                                  numberOrUnknown(entry.value(QStringLiteral("luma"))));
+                slotReport.insert(QStringLiteral("cb"),
+                                  numberOrUnknown(entry.value(QStringLiteral("cb"))));
+                slotReport.insert(QStringLiteral("cr"),
+                                  numberOrUnknown(entry.value(QStringLiteral("cr"))));
+                slotReport.insert(QStringLiteral("bit_depth"),
+                                  numberOrUnknown(entry.value(QStringLiteral("bitDepth"))));
+                slotReport.insert(QStringLiteral("negative_control"),
+                                  invocation.negativeControl ==
+                                          VideoEvidenceInvocation::NegativeControl::None
+                                      ? QStringLiteral("none")
+                                  : invocation.negativeControl ==
+                                          VideoEvidenceInvocation::NegativeControl::StaleRequest
+                                      ? QStringLiteral("stale-request")
+                                  : invocation.negativeControl ==
+                                          VideoEvidenceInvocation::NegativeControl::StalePosition
+                                      ? QStringLiteral("stale-position")
+                                      : QStringLiteral("missing-source"));
+                slotReport.insert(QStringLiteral("reason"),
+                                  entry.value(QStringLiteral("reason")).toString());
+                slotReport.insert(QStringLiteral("presented_frame_id"),
+                                  presentedFrameValidVariant.isValid()
+                                      ? evidence::identity64OrUnknown(presentedFrameId)
+                                      : QJsonValue{QStringLiteral("unknown")});
+                slotReport.insert(QStringLiteral("presented_session_epoch"),
+                                  presentedFrameValidVariant.isValid()
+                                      ? evidence::identity64OrUnknown(presentedSessionEpoch)
+                                      : QJsonValue{QStringLiteral("unknown")});
+                slotReport.insert(QStringLiteral("presented_playback_generation"),
+                                  presentedFrameValidVariant.isValid()
+                                      ? evidence::identity64OrUnknown(presentedPlaybackGeneration)
+                                      : QJsonValue{QStringLiteral("unknown")});
+                sourcesReport.append(slotReport);
+            }
+            if (plateVisible.has_value() && *plateVisible == 1 && allSamplesValid &&
+                allSamplesCurrent && everySourceKnown && identityKnown) {
+                // Elision guard via the legacy row Text object when reachable; a missing
+                // geometry query is recorded as unknown and never treated as proof of
+                // non-truncation - the captured screenshot carries the visual evidence.
+                const std::optional<int> rowWidth =
+                    desktop.objectIntPropertyForAutomation("pixelReadoutRowText", "width");
+                const std::optional<int> rowImplicit =
+                    desktop.objectIntPropertyForAutomation("pixelReadoutRowText", "implicitWidth");
+                const bool rowGeometryKnown = rowWidth.has_value() && rowImplicit.has_value();
+                if (rowGeometryKnown && *rowImplicit > *rowWidth) {
+                    fail("pixel-row-truncated");
+                    return;
+                }
+                const std::optional<std::string> rowText = desktop.objectStringMethodForAutomation(
+                    "mediaViewportFocusTarget", "pixelReadoutRowText", 0);
+                if (rowText.has_value()) {
+                    pixelRowText = *rowText;
+                }
+                shots.insert(QStringLiteral("pixel_readout_plate_visible"), true);
+                shots.insert(QStringLiteral("pixel_readout_sample_valid"), true);
+                shots.insert(QStringLiteral("pixel_readout_sample_current"), true);
+                shots.insert(QStringLiteral("pixel_readout_sources"), sourcesReport);
+                shots.insert(QStringLiteral("pixel_readout_presented_frame_id"),
+                             evidence::identity64OrUnknown(presentedFrameId));
+                shots.insert(QStringLiteral("pixel_readout_presented_session_epoch"),
+                             evidence::identity64OrUnknown(presentedSessionEpoch));
+                shots.insert(QStringLiteral("pixel_readout_presented_playback_generation"),
+                             evidence::identity64OrUnknown(presentedPlaybackGeneration));
+                shots.insert(QStringLiteral("pixel_readout_row_width_known"), rowGeometryKnown);
+                shots.insert(QStringLiteral("pixel_readout_row"),
+                             rowText.has_value() ? QString::fromStdString(*rowText)
+                                                 : QStringLiteral("missing"));
+                shots.insert(QStringLiteral("pixel_readout_plate_ancestors"),
+                             QJsonArray::fromVariantList(desktop.itemAncestorReportForAutomation(
+                                 "viewportPixelReadoutPlate")));
+                captureWindow("video-real-pixel-readout.png", 0.02);
+                static_cast<void>(desktop.sendKeyForAutomation(Qt::Key_I));
+                static_cast<void>(desktop.sendKeyForAutomation(Qt::Key_O));
+                settle(500);
+                recordGeometry("range", "transport");
+                captureWindow("video-real-range.png", 0.02);
+                stage = Stage::Completed;
+                completed = true;
+                desktop.exit(EXIT_SUCCESS);
+                return;
+            }
+            pixelPlateWaitMs -= 5;
+            if (pixelPlateWaitMs <= 0) {
+                // Forensic honesty: separate facts, each the actually observed value. The
+                // plate's visibility is whatever the property reported (unknown when the
+                // query failed); per-source sample validity is what the viewport answered;
+                // a missing valid SAMPLE must never be encoded as "panel hidden". The
+                // video-04/video-02 baselines hardcoded plate_visible=false, so their field
+                // cannot prove hiding - only that no valid sample arrived ("读取失败").
+                if (plateVisible.has_value()) {
+                    shots.insert(QStringLiteral("pixel_readout_plate_visible"), *plateVisible == 1);
+                } else {
+                    shots.insert(QStringLiteral("pixel_readout_plate_visible"),
+                                 QStringLiteral("unknown"));
+                }
+                shots.insert(QStringLiteral("pixel_readout_sample_valid"),
+                             everySourceKnown ? QJsonValue{allSamplesValid}
+                                              : QJsonValue{QStringLiteral("unknown")});
+                shots.insert(QStringLiteral("pixel_readout_sample_current"),
+                             everySourceKnown ? QJsonValue{allSamplesCurrent}
+                                              : QJsonValue{QStringLiteral("unknown")});
+                shots.insert(QStringLiteral("pixel_readout_sources"), sourcesReport);
+                shots.insert(QStringLiteral("pixel_readout_presented_frame_id"),
+                             presentedFrameValid ? evidence::identity64OrUnknown(presentedFrameId)
+                                                 : QJsonValue{QStringLiteral("unknown")});
+                shots.insert(QStringLiteral("pixel_readout_presented_session_epoch"),
+                             presentedFrameValid
+                                 ? evidence::identity64OrUnknown(presentedSessionEpoch)
+                                 : QJsonValue{QStringLiteral("unknown")});
+                shots.insert(QStringLiteral("pixel_readout_presented_playback_generation"),
+                             presentedFrameValid
+                                 ? evidence::identity64OrUnknown(presentedPlaybackGeneration)
+                                 : QJsonValue{QStringLiteral("unknown")});
+                const std::optional<std::string> rowText = desktop.objectStringMethodForAutomation(
+                    "mediaViewportFocusTarget", "pixelReadoutRowText", 0);
+                shots.insert(QStringLiteral("pixel_readout_row"),
+                             rowText.has_value() ? QString::fromStdString(*rowText)
+                                                 : QStringLiteral("missing"));
+                // Diagnostics for an honest failure: whether the hover ever produced a usable
+                // position and whether playback held the readout frozen.
+                const std::optional<int> positionValid = desktop.objectIntPropertyForAutomation(
+                    "mediaViewportFocusTarget", "pixelReadoutPositionValid");
+                const std::optional<int> playbackActive = desktop.objectIntPropertyForAutomation(
+                    "mediaViewportFocusTarget", "playbackActive");
+                const std::optional<int> chromeVisible = desktop.objectIntPropertyForAutomation(
+                    "mediaViewportFocusTarget", "chromeVisible");
+                const std::optional<int> hudRevealed = desktop.objectIntPropertyForAutomation(
+                    "mediaViewportFocusTarget", "hudRevealed");
+                shots.insert(QStringLiteral("pixel_readout_position_valid"),
+                             positionValid.value_or(-1));
+                shots.insert(QStringLiteral("pixel_readout_playback_active"),
+                             playbackActive.value_or(-1));
+                shots.insert(QStringLiteral("pixel_readout_chrome_visible"),
+                             chromeVisible.value_or(-1));
+                shots.insert(QStringLiteral("pixel_readout_hud_revealed"),
+                             hudRevealed.value_or(-1));
+                // Dynamic parent-chain diagnostics: per-ancestor visibility, opacity,
+                // geometry, z and clip decide whether the plate can appear. Static reads of
+                // any single binding never locate the culprit - this report is the evidence.
+                shots.insert(QStringLiteral("pixel_readout_plate_ancestors"),
+                             QJsonArray::fromVariantList(desktop.itemAncestorReportForAutomation(
+                                 "viewportPixelReadoutPlate")));
+                fail("pixel-readout-no-valid-sample");
+                return;
+            }
+            return;
+        }
+        case Stage::Completed:
+            return;
+        }
+    });
+
+    QTimer timeout;
+    timeout.setSingleShot(true);
+    timeout.setInterval(90 * 1000);
+    QObject::connect(
+        &timeout, &QTimer::timeout, runtime->controller(), [&] { fail("video-evidence-timeout"); });
+
+    poll.start();
+    timeout.start();
+    int result = desktop.exec();
+    poll.stop();
+    timeout.stop();
+
+    runtime->prepareForSceneGraphRelease();
+    desktop.releaseSceneGraph();
+    if (!runtime->shutdownAfterSceneGraphRelease()) {
+        result = EXIT_FAILURE;
+    }
+
+    QJsonObject report;
+    report.insert(QStringLiteral("passed"), result == EXIT_SUCCESS);
+    if (failed) {
+        report.insert(QStringLiteral("failure"), QString::fromStdString(failureReason));
+    }
+    report.insert(QStringLiteral("shots"), shots);
+    if (rangeOut > 41) {
+        report.insert("range_frames", rangeFrames);
+        report.insert("range_sequence_evidence",
+                      "Verify complete ACK/commit sequence in playback-trace.jsonl; range_frames "
+                      "are UI polling samples.");
+        report.insert("range_in", 41);
+        report.insert("range_out", rangeOut);
+        report.insert("range_rate", rangeRate);
+        report.insert("range_peak_reserved_bytes", static_cast<double>(rangePeakBytes));
+        if (rangeAccounting) {
+            report.insert("range_steady_speed_ratio", rangeAccounting->playbackRunSteadySpeedRatio);
+            report.insert("range_presented_sets",
+                          static_cast<double>(rangeAccounting->playbackRunPresentedFrames));
+        }
+    }
+    // The window opens at its 1440x900 default; the shot's pixel size over that default is
+    // the device pixel ratio the capture actually ran at.
+    const QJsonObject defaultShot =
+        shots.value(QStringLiteral("video-real-default.png")).toObject();
+    if (defaultShot.contains(QStringLiteral("width"))) {
+        report.insert(QStringLiteral("dpr_estimated"),
+                      static_cast<double>(defaultShot.value(QStringLiteral("width")).toInt()) /
+                          1440.0);
+    }
+    report.insert(QStringLiteral("pixel_readout_row"),
+                  pixelRowText.empty() ? QStringLiteral("missing")
+                                       : QString::fromStdString(pixelRowText));
+    QFile reportFile{QDir(QString::fromStdWString(invocation.outputDirectory.wstring()))
+                         .filePath(QStringLiteral("report.json"))};
+    if (reportFile.open(QIODevice::WriteOnly)) {
+        reportFile.write(QJsonDocument{report}.toJson());
+    }
+    QFile geometryFile{QDir(QString::fromStdWString(invocation.outputDirectory.wstring()))
+                           .filePath(QStringLiteral("app-geometry.txt"))};
+    if (geometryFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        geometryFile.write(geometryLines.join('\n').toUtf8() + '\n');
     }
     return result;
 }
@@ -3443,6 +4261,15 @@ int main(int argc, char* argv[]) {
                     "Usage: --ui-image-folder <leftFolder> <rightFolder>", true);
             }
             return runImageFolderEvidence(argc, argv, *invocation);
+        }
+        if (argc >= 2 && std::string_view{argv[1]} == "--ui-video-evidence") {
+            const std::optional<VideoEvidenceInvocation> invocation =
+                parseVideoEvidenceInvocation(argc, argv);
+            if (!invocation.has_value()) {
+                return dvs::app::reportFatalStartup(
+                    "Usage: --ui-video-evidence <outputDir> <source1> [source2] [source3]", true);
+            }
+            return runVideoEvidence(argc, argv, *invocation);
         }
         if (argc == 4 && std::string_view{argv[1]} == "--ui-shutdown-smoke") {
             return runDesktop(argc,

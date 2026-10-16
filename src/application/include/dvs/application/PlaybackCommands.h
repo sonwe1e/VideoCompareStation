@@ -59,10 +59,13 @@ struct PlaybackRange final {
 
 // Installs, replaces, or clears the session playback range. `loop` only applies when a valid
 // range is present. Clearing sends `range = nullopt` (loop is then ignored).
+// E3: `pingPong` requires `loop` and makes the range walk in, in+1, ... out, out-1, ... in
+// without repeating the endpoints; with pingPong=false the wrap always restarts at in.
 struct SetPlaybackRangeCommand final {
     CommandContext context;
     std::optional<PlaybackRange> range;
     bool loop = false;
+    bool pingPong = false;
 };
 
 // Atomically install a playback range (with loop intent) and start a playback run under that
@@ -71,6 +74,7 @@ struct StartRangePlaybackCommand final {
     CommandContext context;
     PlaybackRange range;
     bool loop = true;
+    bool pingPong = false;
     double speed = 1.0;
 };
 

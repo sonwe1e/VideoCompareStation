@@ -527,7 +527,7 @@ VcsMenuBar {
         }
 
         VcsMenuItem {
-            text: control.chromeVisible ? qsTr("隐藏界面 · Tab") : qsTr("显示界面 · Tab")
+            text: control.chromeVisible ? qsTr("隐藏界面 · H") : qsTr("显示界面 · H")
             onTriggered: {
                 control.chromeToggleRequested();
                 control.returnViewerFocusAfterClose = true;
