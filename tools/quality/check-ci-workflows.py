@@ -33,7 +33,7 @@ def validate(workflows, action):
                 f"{name}/{job_name}: unexpected runner {runner}",
             )
             if not hardware and runner == "windows-2022" and job_name in (
-                "build-test", "native-quality", "quality", "release"
+                "build-test", "native-quality", "quality", "release", "ui-models"
             ):
                 require(any(s.get("uses") == "./.github/actions/setup-windows"
                             for s in job.get("steps", [])), f"{name}: missing hosted setup")
@@ -47,12 +47,14 @@ def validate(workflows, action):
             "Full regression must use the preset and reject zero tests")
     require(not any(x in command.split() for x in ("-R", "-E", "-L", "-LE", "--exclude-regex")),
             "Complete regression must not filter tests")
+    model = workflows["build-test.yml"]["jobs"]["ui-models"]
+    native_steps = build["steps"] + model["steps"]
     for preset in ("core-dev", "ui-dev"):
-        require(any(f"ctest --preset {preset}" in s.get("run", "") for s in build["steps"]),
+        require(any(f"ctest --preset {preset}" in s.get("run", "") for s in native_steps),
                 f"Missing {preset} validation")
     for mode in ("on", "off"):
         require(any("check-ui-test-routing.py" in s.get("run", "") and
-                    f"--adapters {mode}" in s["run"] for s in build["steps"]),
+                    f"--adapters {mode}" in s["run"] for s in native_steps),
                 f"Missing generated source check, adapters={mode}")
     quality = workflows["quality.yml"]["jobs"]["native-quality"]
     for target in ("format-check", "lint"):
@@ -91,8 +93,8 @@ def main():
                        Loader=yaml.BaseLoader)
     checks = validate(workflows, action)
     # Exact count detects removed jobs/checks; new workflows require a deliberate policy update.
-    if len(paths) != 4 or checks != 45:
-        raise ValueError(f"Expected 4 workflows and 45 checks, got {len(paths)} and {checks}")
+    if len(paths) != 4 or checks != 48:
+        raise ValueError(f"Expected 4 workflows and 48 checks, got {len(paths)} and {checks}")
     cases = 0
     if args.self_test:
         def rejected(mutate):
@@ -120,7 +122,8 @@ def main():
         rejected(lambda w, a: w["quality.yml"]["jobs"]["native-quality"].update({"steps": []}))
         for mode in ("on", "off"):
             rejected(lambda w, a, mode=mode: [s.update({"run": "echo removed"})
-                     for s in w["build-test.yml"]["jobs"]["build-test"]["steps"]
+                     for s in (w["build-test.yml"]["jobs"]["build-test"]["steps"] +
+                               w["build-test.yml"]["jobs"]["ui-models"]["steps"])
                      if f"--adapters {mode}" in s.get("run", "")])
         if cases != 10:
             raise ValueError(f"Expected 10 counterexamples, ran {cases}")
