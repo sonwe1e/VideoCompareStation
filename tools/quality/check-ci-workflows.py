@@ -34,7 +34,7 @@ def validate(workflows, action, save_action):
                 f"{name}/{job_name}: unexpected runner {runner}",
             )
             if not hardware and runner == "windows-2022" and job_name in (
-                "build-test", "native-quality", "quality", "release", "ui-models"
+                "build-test", "native-quality", "quality", "release", "ui-models", "core-windows"
             ):
                 require(any(s.get("uses") == "./.github/actions/setup-windows"
                             for s in job.get("steps", [])), f"{name}: missing hosted setup")
@@ -63,7 +63,8 @@ def validate(workflows, action, save_action):
     require(not any(x in command.split() for x in ("-R", "-E", "-L", "-LE", "--exclude-regex")),
             "Complete regression must not filter tests")
     model = workflows["build-test.yml"]["jobs"]["ui-models"]
-    native_steps = build["steps"] + model["steps"]
+    core = workflows["build-test.yml"]["jobs"]["core-windows"]
+    native_steps = build["steps"] + model["steps"] + core["steps"]
     for preset in ("core-dev", "ui-dev"):
         require(any(f"ctest --preset {preset}" in s.get("run", "") for s in native_steps),
                 f"Missing {preset} validation")
@@ -126,8 +127,8 @@ def main():
         encoding="utf-8"), Loader=yaml.BaseLoader)
     checks = validate(workflows, action, save_action)
     # Exact count detects removed jobs/checks; new workflows require a deliberate policy update.
-    if len(paths) != 4 or checks != 66:
-        raise ValueError(f"Expected 4 workflows and 66 checks, got {len(paths)} and {checks}")
+    if len(paths) != 4 or checks != 70:
+        raise ValueError(f"Expected 4 workflows and 70 checks, got {len(paths)} and {checks}")
     cases = 0
     if args.self_test:
         def rejected(mutate):

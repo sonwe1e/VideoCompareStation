@@ -47,6 +47,10 @@ CMake/LLVM 版本不满足本项目要求，所以不只替换 `runs-on`。
 一个运行中和最新一个待运行批次，过期的待运行批次由 GitHub 替换。代价是新提交可能需要
 等待当前批次完成。首次运行仍需完整验收，不因等待较久就在个人电脑补跑。
 
+Windows core-only 是独立托管 job，使用同一固定工具链与依赖缓存，保留完整 core-dev
+配置、构建和测试。其 vcpkg 身份、配置调用 trace、CMakeCache 与测试日志独立归档，
+便于定位最小配置失败，不把已通过的 Debug/Release 软件回归与 core 依赖配置混为一项。
+
 来源：[Windows 镜像清单](https://github.com/actions/runner-images/blob/main/images/windows/Windows2022-Readme.md)、
 [vcpkg 二进制缓存](https://learn.microsoft.com/en-us/vcpkg/reference/binarycaching)、
 [LLVM 19.1.5 校验来源](https://github.com/microsoft/winget-pkgs/blob/master/manifests/l/LLVM/LLVM/19.1.5/LLVM.LLVM.installer.yaml)。

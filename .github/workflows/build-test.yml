@@ -93,15 +93,6 @@ jobs:
           ".\out\build\${{ matrix.preset }}\bin\CompareStationCli.exe"
           --startup-check
 
-      - name: Windows core-only build and tests
-        if: matrix.preset == 'dev'
-        shell: pwsh
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $true
-          pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --preset core-dev --fresh
-          pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --build --preset core-dev
-          pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset core-dev
-
       - name: Upload software test and dependency logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -113,6 +104,56 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      - name: Preserve completed dependency archives
+        if: always()
+        uses: ./.github/actions/save-windows-cache
+        with:
+          key: ${{ steps.hosted.outputs.vcpkg-cache-key }}
+          cache-hit: ${{ steps.hosted.outputs.vcpkg-cache-hit }}
+
+  core-windows:
+    name: Windows core-only tests
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+          persist-credentials: false
+      - name: Enter MSVC x64 environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+      - name: Prepare hosted toolchain and dependency cache
+        id: hosted
+        uses: ./.github/actions/setup-windows
+        with:
+          cache-scope: dev
+      - name: Verify isolated vcpkg and build the core preset
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $root = $env:VCPKG_ROOT
+          $expected = '7d1c862c25e1bde631d866d82fdc86213983271c'
+          if ((git -C $root rev-parse HEAD).Trim() -cne $expected) { throw 'vcpkg checkout drifted.' }
+          & (Join-Path $root 'vcpkg.exe') version
+          Get-Content vcpkg-configuration.json
+          New-Item -ItemType Directory -Path out/verification -Force | Out-Null
+          pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --preset core-dev --fresh --trace-expand --trace-redirect=out/verification/core-windows-cmake.trace
+          pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --build --preset core-dev
+          pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset core-dev --output-on-failure --no-tests=error
+      - name: Upload core configuration and test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-core-${{ github.sha }}
+          path: |
+            out/build/core-dev/Testing/**
+            out/build/core-dev/CMakeCache.txt
+            out/build/core-dev/vcpkg*.log
+            out/verification/core-windows-cmake.trace
+          if-no-files-found: error
+          retention-days: 14
       - name: Preserve completed dependency archives
         if: always()
         uses: ./.github/actions/save-windows-cache
