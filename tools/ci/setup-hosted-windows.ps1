@@ -61,6 +61,12 @@ if ($LASTEXITCODE -ne 0 -or $ninjaVersion -notmatch '^1\.13\.0(?:[.-].*)?$') {
 $checks++
 Get-Command cl.exe, lib.exe -ErrorAction Stop | Select-Object Name, Source
 if ($checks -ne 6) { throw "Expected six tool checks, ran $checks." }
+# LLVM supplies quality tools, but its clang++ must not become Ninja's default compiler.
+$compiler = (Get-Command cl.exe -ErrorAction Stop).Source
+$env:CC = $compiler
+$env:CXX = $compiler
+"CC=$compiler" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+"CXX=$compiler" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 @($llvmBin, $toolScripts) | Out-File $env:GITHUB_PATH -Encoding utf8 -Append
 "DVS_LLVM_BIN=$llvmBin" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 "msvc=$($env:VCToolsVersion.Trim())" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
