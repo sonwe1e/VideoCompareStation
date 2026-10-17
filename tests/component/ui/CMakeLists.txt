@@ -1,29 +1,23 @@
 include(GoogleTest)
 
+# Model-only sources: everything here builds in the ui-dev preset, which links Qt Core
+# only (the ui-models vcpkg feature) and never links the Qt Quick bridge or the adapters.
 add_executable(
     dvs_ui_component_tests
     ClipExportControllerTests.cpp
-    DiagnosticsProbeTests.cpp
     EvidenceIdentityJsonTests.cpp
-    HoldKeyHandlerTests.cpp
-    JogKeyHandlerTests.cpp
     JogStateMachineTests.cpp
     PairMetricsControllerTests.cpp
     PreviewThumbnailControllerTests.cpp
-    ReviewControllerTests.cpp
-    "${PROJECT_SOURCE_DIR}/src/app/RuntimeBridges.cpp"
     ReviewPreferencesControllerTests.cpp
     SampleExportControllerTests.cpp
     SourceIdentityTests.cpp
-    StartupSplashTests.cpp
     VideoFolderModelTests.cpp
 )
 target_link_libraries(
     dvs_ui_component_tests
     PRIVATE
         dvs_ui_qml
-        dvs_media_ffmpeg
-        dvs_persistence_json
         dvs::test_dependencies
 )
 target_include_directories(
@@ -43,14 +37,26 @@ dvs_add_gtest(
 )
 
 if(DVS_BUILD_ADAPTERS)
-# IssueLogControllerTests includes dvs/persistence/IssueRecordRepository.h from the
-# persistence adapter, so it can only compile when the adapters (and their include
-# paths) exist; the ui-dev model-only preset builds without them.
+# Adapter/GUI-dependent test sources, deliberately kept inside this guard: the ui-dev
+# model-only preset links Qt Core only (no Qt Quick bridge, no media/persistence
+# adapters), so anything including QKeyEvent, the bridge headers with bridge symbols, the
+# Win32 splash or the media adapters can only compile and link here.
 target_sources(dvs_ui_component_tests PRIVATE
+    DiagnosticsProbeTests.cpp
+    HoldKeyHandlerTests.cpp
     InterpolationProtocolControllerTests.cpp
     IssueLogControllerTests.cpp
+    JogKeyHandlerTests.cpp
     PairMetricsThresholdReuseTests.cpp
+    # ReviewControllerTests exercises the GUI-thread projection bridge from src/app,
+    # whose header includes the platform adapter's sink interface.
+    ReviewControllerTests.cpp
+    "${PROJECT_SOURCE_DIR}/src/app/RuntimeBridges.cpp"
+    StartupSplashTests.cpp
     TimingDiagnosticsControllerTests.cpp
+)
+target_link_libraries(
+    dvs_ui_component_tests PRIVATE dvs_media_ffmpeg dvs_persistence_json
 )
 target_include_directories(
     dvs_ui_component_tests PRIVATE "${PROJECT_SOURCE_DIR}/src/media_ffmpeg/src"

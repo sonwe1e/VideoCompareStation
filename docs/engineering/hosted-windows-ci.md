@@ -31,7 +31,8 @@ CMake/LLVM 版本不满足本项目要求，所以不只替换 `runs-on`。
   baseline：旧检出的版本数据库不包含 FFmpeg 8.1.2#3，干净环境不能使用它解析现有 overrides。
   准备阶段逐一验证四个 override 存在，不读取个人电脑的仓库变量路径。
 - 只缓存 vcpkg 二进制 archives，不搬运个人电脑的安装树、CMakeCache 或运行库。
-  cache key 包含 MSVC、manifest 和准备脚本身份；vcpkg 自身继续按 ABI 验证包。
+  cache key 包含 MSVC、manifest、准备脚本身份与构建角色，避免 Release 最先写入的不可变缓存
+  挤掉 ui-dev 独有包。允许恢复同编译器的其他 archive 快照，vcpkg 继续按 ABI 验证每个包。
 - 首次冷缓存仍需编译 Qt/FFmpeg，因此构建 job 允许 240 分钟；失败保留依赖日志。
   后续利用二进制缓存。缓存缺失时可从固定来源重建，不能改回 self-hosted 作为兜底。
 
@@ -49,9 +50,12 @@ component/e2e 标签筛选。preset 已有 hardware/performance/packaged/soak �
 测试结果按原规则记录；需要真实显示硬件的项目仍由手动门禁承担。JUnit、CTest 与依赖构建
 日志保留 14 天。跳过和未执行不写成通过。
 
-轻量路由检查解析 YAML，并对四个 workflow 计数。八个反例覆盖自动任务误回 self-hosted、
-硬件自动触发/可复用调用、发布漏依赖、完整套件被筛选、漏 workflow、漏准备和漏质量门禁。
-硬件证据检查另有正例及五个字段反例；两类检查都在云端 Quality 执行。
+轻量路由检查解析 YAML，并对四个 workflow 计数。十个反例覆盖自动任务误回 self-hosted、
+硬件自动触发/可复用调用、发布漏依赖、完整套件被筛选、漏 workflow、漏准备、漏质量门禁，
+以及完整/UI 最小配置的源清单检查被移除。硬件证据检查另有正例及五个字段反例；两类检查都在
+云端 Quality 执行。ui-dev 的既有构建守卫修复只将 GUI/适配器源与依赖移入适配器条件，
+不减少 dev/release 测试。生成的 compile_commands 必须分别包含 9 个模型源、或全部 19 个源，
+空清单、完整配置漏适配器、最小配置混入 GUI 的反例均失败。
 
 ## 手动硬件和发布步骤
 
@@ -66,3 +70,6 @@ component/e2e 标签筛选。preset 已有 hardware/performance/packaged/soak �
 
 此迁移不暂停或改装个人电脑 runner，也不自动执行任何 GPU 测试。部署前若有旧配置的自动任务
 排队，应单独取消；仅合入新 YAML 不会把旧运行转移到云端。
+
+2026-10-17 已取消两条旧排队的软件运行，并从 `Sonwe-RTX4090` 移除 `dvs-toolchain-4.4`
+标签，保留 `dvs-gpu`。旧软件 workflow 在合入前也不能再匹配该机；不要重新加回普通软件标签。

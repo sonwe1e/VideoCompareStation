@@ -1,5 +1,9 @@
 name: Prepare hosted Windows
 description: Provision the pinned toolchain and vcpkg binary cache on a GitHub-hosted VM
+inputs:
+  cache-scope:
+    description: Separate immutable archive snapshots for full and model-only build roles
+    default: software
 runs:
   using: composite
   steps:
@@ -48,7 +52,9 @@ runs:
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         path: ${{ runner.temp }}/dvs-ci/vcpkg-archives
-        key: windows-2022-vcpkg-${{ steps.tools.outputs.msvc }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', '.github/actions/setup-windows/action.yml', 'tools/ci/setup-hosted-windows.ps1') }}-v1
+        key: windows-2022-vcpkg-${{ steps.tools.outputs.msvc }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', '.github/actions/setup-windows/action.yml', 'tools/ci/setup-hosted-windows.ps1') }}-${{ inputs.cache-scope }}-v1
+        restore-keys: |
+          windows-2022-vcpkg-${{ steps.tools.outputs.msvc }}-
 
     - name: Bootstrap isolated vcpkg
       shell: pwsh

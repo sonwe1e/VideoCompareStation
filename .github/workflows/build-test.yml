@@ -54,12 +54,18 @@ jobs:
 
       - name: Prepare hosted toolchain and dependency cache
         uses: ./.github/actions/setup-windows
+        with:
+          cache-scope: ${{ matrix.preset }}
 
       - name: Configure
         shell: pwsh
         run: >-
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake
           --preset ${{ matrix.preset }} --fresh
+
+      - name: Check generated full UI test source routing
+        shell: pwsh
+        run: python tools/quality/check-ui-test-routing.py --build-dir out/build/${{ matrix.preset }} --adapters on
 
       - name: Build
         shell: pwsh
@@ -94,6 +100,8 @@ jobs:
         shell: pwsh
         run: |
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --preset ui-dev --fresh
+          python tools/quality/check-ui-test-routing.py --build-dir out/build/ui-dev --adapters off
+          if ($LASTEXITCODE -ne 0) { throw 'Model-only test source routing failed.' }
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --build --preset ui-dev
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset ui-dev
 

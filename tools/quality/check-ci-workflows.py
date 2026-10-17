@@ -50,6 +50,10 @@ def validate(workflows, action):
     for preset in ("core-dev", "ui-dev"):
         require(any(f"ctest --preset {preset}" in s.get("run", "") for s in build["steps"]),
                 f"Missing {preset} validation")
+    for mode in ("on", "off"):
+        require(any("check-ui-test-routing.py" in s.get("run", "") and
+                    f"--adapters {mode}" in s["run"] for s in build["steps"]),
+                f"Missing generated source check, adapters={mode}")
     quality = workflows["quality.yml"]["jobs"]["native-quality"]
     for target in ("format-check", "lint"):
         require(any(f"--target {target}" in s.get("run", "") for s in quality["steps"]),
@@ -70,7 +74,8 @@ def validate(workflows, action):
     require(any(s.get("with", {}).get("ref") == "7d1c862c25e1bde631d866d82fdc86213983271c"
                 for s in steps), "Pinned vcpkg checkout missing")
     require(any("vcpkg-archives" in s.get("with", {}).get("path", "") and
-                "hashFiles" in s["with"].get("key", "") and "msvc" in s["with"]["key"]
+                "hashFiles" in s["with"].get("key", "") and "msvc" in s["with"]["key"] and
+                "inputs.cache-scope" in s["with"]["key"]
                 for s in steps), "Dependency cache must include compiler and manifest identity")
     return checks
 
@@ -86,8 +91,8 @@ def main():
                        Loader=yaml.BaseLoader)
     checks = validate(workflows, action)
     # Exact count detects removed jobs/checks; new workflows require a deliberate policy update.
-    if len(paths) != 4 or checks != 43:
-        raise ValueError(f"Expected 4 workflows and 43 checks, got {len(paths)} and {checks}")
+    if len(paths) != 4 or checks != 45:
+        raise ValueError(f"Expected 4 workflows and 45 checks, got {len(paths)} and {checks}")
     cases = 0
     if args.self_test:
         def rejected(mutate):
@@ -113,8 +118,12 @@ def main():
         rejected(lambda w, a: w.pop("quality.yml"))
         rejected(lambda w, a: a["runs"]["steps"].pop(0))
         rejected(lambda w, a: w["quality.yml"]["jobs"]["native-quality"].update({"steps": []}))
-        if cases != 8:
-            raise ValueError(f"Expected 8 counterexamples, ran {cases}")
+        for mode in ("on", "off"):
+            rejected(lambda w, a, mode=mode: [s.update({"run": "echo removed"})
+                     for s in w["build-test.yml"]["jobs"]["build-test"]["steps"]
+                     if f"--adapters {mode}" in s.get("run", "")])
+        if cases != 10:
+            raise ValueError(f"Expected 10 counterexamples, ran {cases}")
     print(f"CI workflow policy passed: {len(paths)} workflows, {checks} checks, {cases} counterexamples.")
 
 

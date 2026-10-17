@@ -44,6 +44,8 @@ jobs:
           python tools/quality/check-ci-workflows.py --self-test
           if ($LASTEXITCODE -ne 0) { throw 'CI routing checks failed.' }
           .\tools\quality\check-ci-evidence.ps1
+          python tools/quality/check-ui-test-routing.py --self-test
+          if ($LASTEXITCODE -ne 0) { throw 'UI source routing contracts failed.' }
 
       - name: Check contributor guide
         shell: pwsh
