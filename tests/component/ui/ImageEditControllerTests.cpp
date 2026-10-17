@@ -7,6 +7,7 @@
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QImage>
+#include <QPoint>
 #include <QTemporaryDir>
 #include <QUrl>
 
@@ -254,14 +255,26 @@ TEST(ImageEditControllerTests, TransformedTextAndShapesRemainSelectableAndUndoab
     ASSERT_TRUE(controller.addText(20, 40, QStringLiteral("AB"), Qt::red, 16));
     ASSERT_TRUE(controller.addArrow(10, 70, 40, 70, Qt::green, 2));
     const QImage before = controller.editedImage();
+    // Locate an actual glyph pixel: the default font differs between Windows installations.
+    QPoint textPixel{-1, -1};
+    for (int y = 0; y < before.height() && textPixel.x() < 0; ++y) {
+        for (int x = 0; x < before.width(); ++x) {
+            if (before.pixelColor(x, y).red() > 200) {
+                textPixel = QPoint{x, y};
+                break;
+            }
+        }
+    }
+    ASSERT_GE(textPixel.x(), 0);
     ASSERT_TRUE(controller.rotateImage());
     const QImage rotated = controller.editedImage();
+    const QPoint rotatedText{before.height() - 1 - textPixel.y(), textPixel.x()};
     // Text that was wide becomes tall, and its hit box follows that orientation.
-    EXPECT_GT(rotated.pixelColor(65, 25).red(), 0);
-    ASSERT_TRUE(controller.selectAnnotationAt(65, 25));
+    EXPECT_GT(rotated.pixelColor(rotatedText).red(), 0);
+    ASSERT_TRUE(controller.selectAnnotationAt(rotatedText.x(), rotatedText.y()));
     EXPECT_EQ(controller.selectedAnnotation(), 0);
     ASSERT_TRUE(controller.deleteSelectedAnnotation());
-    EXPECT_EQ(controller.editedImage().pixelColor(65, 25), QColor(Qt::black));
+    EXPECT_EQ(controller.editedImage().pixelColor(rotatedText), QColor(Qt::black));
     ASSERT_TRUE(controller.undo());
     EXPECT_EQ(controller.editedImage(), rotated);
     ASSERT_TRUE(controller.selectAnnotationAt(30, 25));
@@ -269,8 +282,9 @@ TEST(ImageEditControllerTests, TransformedTextAndShapesRemainSelectableAndUndoab
     ASSERT_TRUE(controller.undo());
     EXPECT_EQ(controller.editedImage(), before);
     ASSERT_TRUE(controller.mirrorImage());
-    EXPECT_GT(controller.editedImage().pixelColor(95, 35).red(), 0);
-    ASSERT_TRUE(controller.selectAnnotationAt(95, 35));
+    const QPoint mirroredText{before.width() - 1 - textPixel.x(), textPixel.y()};
+    EXPECT_GT(controller.editedImage().pixelColor(mirroredText).red(), 0);
+    ASSERT_TRUE(controller.selectAnnotationAt(mirroredText.x(), mirroredText.y()));
     EXPECT_EQ(controller.selectedAnnotation(), 0);
 }
 
@@ -907,8 +921,13 @@ TEST(ImageEditControllerTests, ResizeClampsToTheSupportedEdgeRangeAndRejectsTheN
     EXPECT_EQ(controller.imageHeight(), ImageEditController::minimumImageEdge());
     ASSERT_TRUE(controller.undo());
 
-    ASSERT_TRUE(controller.resizeImage(999999, 999999));
+    // Check both clamps without allocating a maximum-width by maximum-height image.
+    ASSERT_TRUE(controller.resizeImage(999999, 20));
     EXPECT_EQ(controller.imageWidth(), ImageEditController::maximumImageEdge());
+    EXPECT_EQ(controller.imageHeight(), 20);
+    ASSERT_TRUE(controller.undo());
+    ASSERT_TRUE(controller.resizeImage(20, 999999));
+    EXPECT_EQ(controller.imageWidth(), 20);
     EXPECT_EQ(controller.imageHeight(), ImageEditController::maximumImageEdge());
     ASSERT_TRUE(controller.undo());
     EXPECT_EQ(controller.imageWidth(), 20);

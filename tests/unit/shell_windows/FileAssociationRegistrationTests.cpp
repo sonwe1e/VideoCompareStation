@@ -289,6 +289,8 @@ TEST_F(FileAssociationRegistrationTests, RefusesAMissingExecutableWithoutWriting
     const FileAssociationResult result = registerFileAssociation(missing, roots_);
     EXPECT_EQ(result.state, FileAssociationState::Failed);
     EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("NotFound.exe"), std::string::npos);
+    EXPECT_NE(result.error.find("安装 目录 One"), std::string::npos);
     EXPECT_FALSE(keyExistsAt(roots_.classes));
     EXPECT_FALSE(keyExistsAt(roots_.capabilities));
     EXPECT_FALSE(keyExistsAt(roots_.registeredApplications));

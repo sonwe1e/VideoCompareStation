@@ -75,6 +75,10 @@ jobs:
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake
           --build --preset ${{ matrix.preset }}
 
+      - name: Verify complete software and manual hardware test inventory
+        shell: pwsh
+        run: python tools/quality/check-ci-test-routing.py --preset ${{ matrix.preset }}
+
       - name: Complete software regression
         shell: pwsh
         run: >-

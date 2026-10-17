@@ -56,6 +56,8 @@ def validate(workflows, action, save_action):
     full = [s for s in build["steps"] if s.get("name") == "Complete software regression"]
     require(len(full) == 1, "Exactly one complete preset regression step is required")
     command = full[0].get("run", "")
+    require(any("check-ci-test-routing.py --preset ${{ matrix.preset }}" in s.get("run", "")
+                for s in build["steps"]), "Generated software/hardware inventory must be verified")
     require("--preset ${{ matrix.preset }}" in command and "--no-tests=error" in command,
             "Full regression must use the preset and reject zero tests")
     require(not any(x in command.split() for x in ("-R", "-E", "-L", "-LE", "--exclude-regex")),
@@ -124,8 +126,8 @@ def main():
         encoding="utf-8"), Loader=yaml.BaseLoader)
     checks = validate(workflows, action, save_action)
     # Exact count detects removed jobs/checks; new workflows require a deliberate policy update.
-    if len(paths) != 4 or checks != 65:
-        raise ValueError(f"Expected 4 workflows and 65 checks, got {len(paths)} and {checks}")
+    if len(paths) != 4 or checks != 66:
+        raise ValueError(f"Expected 4 workflows and 66 checks, got {len(paths)} and {checks}")
     cases = 0
     if args.self_test:
         def rejected(mutate):
@@ -167,8 +169,11 @@ def main():
         rejected(lambda w, a: a["outputs"]["vcpkg-cache-key"].update({"value": "stale-key"}))
         rejected(lambda w, a: [s.update({"run": s["run"].replace("VCPKG_ROOT=$shortRoot",
                  "VCPKG_ROOT=$vcpkgRoot")}) for s in a["runs"]["steps"] if "run" in s])
-        if cases != 15:
-            raise ValueError(f"Expected 15 counterexamples, ran {cases}")
+        rejected(lambda w, a: [s.update({"run": "echo removed"})
+                 for s in w["build-test.yml"]["jobs"]["build-test"]["steps"]
+                 if "check-ci-test-routing.py" in s.get("run", "")])
+        if cases != 16:
+            raise ValueError(f"Expected 16 counterexamples, ran {cases}")
         # Exercise pwsh native failure propagation without configuring/building the product.
         runs = 0
         for exit_code in (0, 19):
