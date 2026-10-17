@@ -82,7 +82,7 @@ def validate(workflows, action):
                 for s in steps), "Pinned vcpkg checkout missing")
     require(any("vcpkg-archives" in s.get("with", {}).get("path", "") and
                 "hashFiles" in s["with"].get("key", "") and "msvc" in s["with"]["key"] and
-                "inputs.cache-scope" in s["with"]["key"]
+                "sdk" in s["with"]["key"] and "inputs.cache-scope" in s["with"]["key"]
                 for s in steps), "Dependency cache must include compiler and manifest identity")
     return checks
 

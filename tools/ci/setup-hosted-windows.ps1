@@ -8,8 +8,8 @@ $ErrorActionPreference = 'Stop'
 if ($env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:RUNNER_OS -cne 'Windows') {
     throw 'Provisioning is restricted to disposable GitHub-hosted Windows runners.'
 }
-if (-not $env:RUNNER_TEMP -or -not $env:VCToolsVersion) {
-    throw 'RUNNER_TEMP and the MSVC x64 developer environment are required.'
+if (-not $env:RUNNER_TEMP -or -not $env:VCToolsVersion -or -not $env:WindowsSDKVersion) {
+    throw 'RUNNER_TEMP and the MSVC x64/Windows SDK developer environment are required.'
 }
 $toolRoot = Join-Path $env:RUNNER_TEMP 'dvs-ci'
 $pythonRoot = Join-Path $toolRoot 'python'
@@ -64,4 +64,6 @@ if ($checks -ne 6) { throw "Expected six tool checks, ran $checks." }
 @($llvmBin, $toolScripts) | Out-File $env:GITHUB_PATH -Encoding utf8 -Append
 "DVS_LLVM_BIN=$llvmBin" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 "msvc=$($env:VCToolsVersion.Trim())" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+"sdk=$($env:WindowsSDKVersion.TrimEnd([char]92))" |
+    Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
 Write-Host "Hosted Windows toolchain ready: $checks pinned tool checks."

@@ -31,7 +31,7 @@ CMake/LLVM 版本不满足本项目要求，所以不只替换 `runs-on`。
   baseline：旧检出的版本数据库不包含 FFmpeg 8.1.2#3，干净环境不能使用它解析现有 overrides。
   准备阶段逐一验证四个 override 存在，不读取个人电脑的仓库变量路径。
 - 只缓存 vcpkg 二进制 archives，不搬运个人电脑的安装树、CMakeCache 或运行库。
-  cache key 包含 MSVC、manifest、准备脚本身份与构建角色，避免 Release 最先写入的不可变缓存
+  cache key 包含 MSVC、Windows SDK、manifest、准备脚本身份与构建角色，避免 Release 最先写入的不可变缓存
   挤掉 ui-dev 独有包。允许恢复同编译器的其他 archive 快照，vcpkg 继续按 ABI 验证每个包。
 - 首次冷缓存仍需编译 Qt/FFmpeg，因此构建 job 允许 240 分钟；失败保留依赖日志。
   后续利用二进制缓存。缓存缺失时可从固定来源重建，不能改回 self-hosted 作为兜底。
