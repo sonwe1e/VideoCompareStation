@@ -2,12 +2,13 @@
 
 import argparse
 import copy
+import subprocess
 from pathlib import Path
 
 import yaml
 
 
-def validate(workflows, action):
+def validate(workflows, action, save_action):
     checks = 0
 
     def require(condition, message):
@@ -37,6 +38,18 @@ def validate(workflows, action):
             ):
                 require(any(s.get("uses") == "./.github/actions/setup-windows"
                             for s in job.get("steps", [])), f"{name}: missing hosted setup")
+                require(any(s.get("uses") == "./.github/actions/save-windows-cache" and
+                            s.get("if") == "always()" and s.get("with", {}).get("key") ==
+                            "${{ steps.hosted.outputs.vcpkg-cache-key }}" for s in job["steps"]) and
+                        any(s.get("id") == "hosted" and s.get("uses") ==
+                            "./.github/actions/setup-windows" for s in job["steps"]),
+                        f"{name}/{job_name}: preserve completed archives after failures")
+            for step in job.get("steps", []):
+                script = step.get("run", "")
+                if "invoke-low-impact.ps1" in script and "\n" in script.strip():
+                    require(script.lstrip().startswith(
+                        "$PSNativeCommandUseErrorActionPreference = $true\n"),
+                        f"{name}/{job_name}: a later command could hide a failed native gate")
     build = workflows["build-test.yml"]["jobs"]["build-test"]
     require({x["preset"] for x in build["strategy"]["matrix"]["include"]} == {"dev", "release"},
             "Both native build configurations are required")
@@ -84,6 +97,14 @@ def validate(workflows, action):
                 "hashFiles" in s["with"].get("key", "") and "msvc" in s["with"]["key"] and
                 "sdk" in s["with"]["key"] and "inputs.cache-scope" in s["with"]["key"]
                 for s in steps), "Dependency cache must include compiler and manifest identity")
+    require(action.get("outputs", {}).get("vcpkg-cache-key", {}).get("value") ==
+            "${{ steps.vcpkg-cache.outputs.cache-primary-key }}" and
+            any(s.get("id") == "vcpkg-cache" and s.get("uses", "").startswith(
+                "actions/cache/restore@") for s in steps), "Expose the exact restored cache key")
+    require(any(s.get("uses", "").startswith("actions/cache/save@") and
+                s.get("with", {}).get("key") == "${{ inputs.key }}" and
+                s.get("if") == "steps.archives.outputs.present == 'True'"
+                for s in save_action["runs"]["steps"]), "Save only completed dependency archives")
     return checks
 
 
@@ -96,10 +117,12 @@ def main():
     workflows = {p.name: yaml.load(p.read_text(encoding="utf-8"), Loader=yaml.BaseLoader) for p in paths}
     action = yaml.load((root / ".github/actions/setup-windows/action.yml").read_text(encoding="utf-8"),
                        Loader=yaml.BaseLoader)
-    checks = validate(workflows, action)
+    save_action = yaml.load((root / ".github/actions/save-windows-cache/action.yml").read_text(
+        encoding="utf-8"), Loader=yaml.BaseLoader)
+    checks = validate(workflows, action, save_action)
     # Exact count detects removed jobs/checks; new workflows require a deliberate policy update.
-    if len(paths) != 4 or checks != 49:
-        raise ValueError(f"Expected 4 workflows and 49 checks, got {len(paths)} and {checks}")
+    if len(paths) != 4 or checks != 64:
+        raise ValueError(f"Expected 4 workflows and 64 checks, got {len(paths)} and {checks}")
     cases = 0
     if args.self_test:
         def rejected(mutate):
@@ -107,7 +130,7 @@ def main():
             sample, setup = copy.deepcopy(workflows), copy.deepcopy(action)
             mutate(sample, setup)
             try:
-                validate(sample, setup)
+                validate(sample, setup, save_action)
             except (ValueError, KeyError):
                 cases += 1
                 return
@@ -132,9 +155,33 @@ def main():
                      if f"--adapters {mode}" in s.get("run", "")])
         rejected(lambda w, a: w["release.yml"]["jobs"]["validate-version"]["steps"][0]["with"].update(
             {"ref": "${{ inputs.tag || github.ref }}"}))
-        if cases != 11:
-            raise ValueError(f"Expected 11 counterexamples, ran {cases}")
-    print(f"CI workflow policy passed: {len(paths)} workflows, {checks} checks, {cases} counterexamples.")
+        rejected(lambda w, a: [s.update({"if": "success()"})
+                 for s in w["quality.yml"]["jobs"]["native-quality"]["steps"]
+                 if s.get("uses") == "./.github/actions/save-windows-cache"])
+        rejected(lambda w, a: [s.update({"run": s["run"].replace(
+            "$PSNativeCommandUseErrorActionPreference = $true\n", "")})
+            for s in w["build-test.yml"]["jobs"]["ui-models"]["steps"] if "run" in s])
+        rejected(lambda w, a: a["outputs"]["vcpkg-cache-key"].update({"value": "stale-key"}))
+        if cases != 14:
+            raise ValueError(f"Expected 14 counterexamples, ran {cases}")
+        # Exercise pwsh native failure propagation without configuring/building the product.
+        runs = 0
+        for exit_code in (0, 19):
+            script = (
+                "$ErrorActionPreference = 'Stop'; "
+                "$PSNativeCommandUseErrorActionPreference = $true; "
+                f"& pwsh -NoProfile -NonInteractive -Command 'exit {exit_code}'; "
+                "& pwsh -NoProfile -NonInteractive -Command 'exit 0'"
+            )
+            result = subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-Command", script],
+                                    capture_output=True, text=True)
+            if (result.returncode == 0) != (exit_code == 0):
+                raise ValueError("A later successful command hid a failed native gate")
+            runs += 1
+        if runs != 2:
+            raise ValueError(f"Expected 2 native exit probes, ran {runs}")
+    print(f"CI workflow policy passed: {len(paths)} workflows, {checks} checks, "
+          f"{cases} counterexamples, {2 if args.self_test else 0} native exit probes.")
 
 
 if __name__ == "__main__":

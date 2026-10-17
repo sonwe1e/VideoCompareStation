@@ -84,11 +84,13 @@ jobs:
           arch: x64
 
       - name: Prepare hosted toolchain and dependency cache
+        id: hosted
         uses: ./.github/actions/setup-windows
 
       - name: Debug build, tests, and quality
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --preset dev --fresh
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --build --preset dev
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset dev --output-on-failure
@@ -98,9 +100,17 @@ jobs:
       - name: Release build and tests
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --preset release --fresh
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --build --preset release
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset release --output-on-failure
+
+      - name: Preserve completed dependency archives
+        if: always()
+        uses: ./.github/actions/save-windows-cache
+        with:
+          key: ${{ steps.hosted.outputs.vcpkg-cache-key }}
+          cache-hit: ${{ steps.hosted.outputs.vcpkg-cache-hit }}
 
   hardware-performance:
     name: Verify prior manual hardware evidence
@@ -171,11 +181,13 @@ jobs:
           }
 
       - name: Prepare hosted toolchain and dependency cache
+        id: hosted
         uses: ./.github/actions/setup-windows
 
       - name: Build and test Release
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --preset release --fresh
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --build --preset release
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset release --output-on-failure
@@ -195,6 +207,7 @@ jobs:
       - name: Package and validate release identity
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cpack --preset release-zip
           $version = '${{ needs.validate-version.outputs.version }}'
           $zip = Resolve-Path ".\out\package\zip\CompareStation-$version-windows-x64.zip"
@@ -207,6 +220,7 @@ jobs:
       - name: Packaged upgrade and shutdown gates
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset packaged-smoke --output-on-failure
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset shutdown-soak --output-on-failure
 
@@ -228,3 +242,10 @@ jobs:
           files: |
             out/package/zip/CompareStation-${{ needs.validate-version.outputs.version }}-windows-x64.zip
             out/package/SHA256SUMS.txt
+
+      - name: Preserve completed dependency archives
+        if: always()
+        uses: ./.github/actions/save-windows-cache
+        with:
+          key: ${{ steps.hosted.outputs.vcpkg-cache-key }}
+          cache-hit: ${{ steps.hosted.outputs.vcpkg-cache-hit }}

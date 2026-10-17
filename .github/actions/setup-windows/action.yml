@@ -4,6 +4,13 @@ inputs:
   cache-scope:
     description: Separate immutable archive snapshots for full and model-only build roles
     default: software
+outputs:
+  vcpkg-cache-key:
+    description: Exact archive cache key restored by this job
+    value: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
+  vcpkg-cache-hit:
+    description: Whether the exact immutable archive snapshot already exists
+    value: ${{ steps.vcpkg-cache.outputs.cache-hit }}
 runs:
   using: composite
   steps:
@@ -49,7 +56,8 @@ runs:
         persist-credentials: false
 
     - name: Restore vcpkg binary archives
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      id: vcpkg-cache
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         path: ${{ runner.temp }}/dvs-ci/vcpkg-archives
         key: windows-2022-vcpkg-${{ steps.tools.outputs.msvc }}-${{ steps.tools.outputs.sdk }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', '.github/actions/setup-windows/action.yml', 'tools/ci/setup-hosted-windows.ps1') }}-${{ inputs.cache-scope }}-v1

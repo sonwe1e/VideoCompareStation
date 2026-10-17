@@ -54,6 +54,7 @@ jobs:
           arch: x64
 
       - name: Prepare hosted toolchain and dependency cache
+        id: hosted
         uses: ./.github/actions/setup-windows
         with:
           cache-scope: ${{ matrix.preset }}
@@ -92,6 +93,7 @@ jobs:
         if: matrix.preset == 'dev'
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --preset core-dev --fresh
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --build --preset core-dev
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset core-dev
@@ -106,6 +108,13 @@ jobs:
             out/ci/vcpkg/buildtrees/**/*.log
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Preserve completed dependency archives
+        if: always()
+        uses: ./.github/actions/save-windows-cache
+        with:
+          key: ${{ steps.hosted.outputs.vcpkg-cache-key }}
+          cache-hit: ${{ steps.hosted.outputs.vcpkg-cache-hit }}
 
   ui-models:
     name: Windows UI model-only tests
@@ -124,18 +133,21 @@ jobs:
         with:
           arch: x64
       - name: Prepare hosted toolchain and dependency cache
+        id: hosted
         uses: ./.github/actions/setup-windows
         with:
           cache-scope: models
       - name: Configure model-only preset and verify its source boundary
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --preset ui-dev --fresh
           python tools/quality/check-ui-test-routing.py --build-dir out/build/ui-dev --adapters off
           if ($LASTEXITCODE -ne 0) { throw 'Model-only test source routing failed.' }
       - name: Build and test UI models
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --build --preset ui-dev
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset ui-dev --output-on-failure --no-tests=error
       - name: Upload model test and dependency logs
@@ -148,6 +160,13 @@ jobs:
             out/ci/vcpkg/buildtrees/**/*.log
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Preserve completed dependency archives
+        if: always()
+        uses: ./.github/actions/save-windows-cache
+        with:
+          key: ${{ steps.hosted.outputs.vcpkg-cache-key }}
+          cache-hit: ${{ steps.hosted.outputs.vcpkg-cache-hit }}
 
   core-linux:
     name: Linux Clang core
