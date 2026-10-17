@@ -67,7 +67,7 @@ def validate(workflows, action):
     steps = action["runs"]["steps"]
     require(any("RUNNER_ENVIRONMENT" in s.get("run", "") and "github-hosted" in s["run"]
                 for s in steps), "Hosted provisioning must reject self-hosted runners")
-    require(any(s.get("with", {}).get("ref") == "e6ed7c5be05eaedc2d06ee3e51bd059409429c5e"
+    require(any(s.get("with", {}).get("ref") == "7d1c862c25e1bde631d866d82fdc86213983271c"
                 for s in steps), "Pinned vcpkg checkout missing")
     require(any("vcpkg-archives" in s.get("with", {}).get("path", "") and
                 "hashFiles" in s["with"].get("key", "") and "msvc" in s["with"]["key"]

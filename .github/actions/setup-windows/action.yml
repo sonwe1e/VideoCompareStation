@@ -17,7 +17,8 @@ runs:
         python-version: '3.12'
 
     - name: Cache pinned LLVM
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      id: llvm-cache
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         path: ${{ runner.temp }}/dvs-ci/llvm
         key: windows-2022-llvm-19.1.5-v1
@@ -27,11 +28,19 @@ runs:
       shell: pwsh
       run: .\tools\ci\setup-hosted-windows.ps1
 
+    - name: Save verified LLVM before the dependency build
+      if: steps.llvm-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: ${{ runner.temp }}/dvs-ci/llvm
+        key: windows-2022-llvm-19.1.5-v1
+
     - name: Check out pinned vcpkg registry
       uses: actions/checkout@v6
       with:
         repository: microsoft/vcpkg
-        ref: e6ed7c5be05eaedc2d06ee3e51bd059409429c5e
+        ref: 7d1c862c25e1bde631d866d82fdc86213983271c
+        fetch-depth: 0
         path: out/ci/vcpkg
         persist-credentials: false
 
@@ -45,9 +54,21 @@ runs:
       shell: pwsh
       run: |
         $vcpkgRoot = Join-Path $env:GITHUB_WORKSPACE 'out/ci/vcpkg'
-        $expected = (Get-Content vcpkg-configuration.json -Raw | ConvertFrom-Json).'default-registry'.baseline
+        $expected = '7d1c862c25e1bde631d866d82fdc86213983271c'
         $actual = (git -C $vcpkgRoot rev-parse HEAD).Trim()
-        if ($LASTEXITCODE -ne 0 -or $actual -cne $expected) { throw 'vcpkg baseline mismatch.' }
+        if ($LASTEXITCODE -ne 0 -or $actual -cne $expected) { throw 'vcpkg tool checkout mismatch.' }
+        $overrides = (Get-Content vcpkg.json -Raw | ConvertFrom-Json).overrides
+        $checked = 0
+        foreach ($override in $overrides) {
+          $name = $override.name
+          $database = Join-Path $vcpkgRoot "versions/$($name.Substring(0, 1))-/$name.json"
+          $entries = (Get-Content -LiteralPath $database -Raw | ConvertFrom-Json).versions
+          $revision = if ($override.PSObject.Properties['port-version']) { $override.'port-version' } else { 0 }
+          $match = @($entries | Where-Object { $_.version -eq $override.version -and $_.'port-version' -eq $revision })
+          if ($match.Count -ne 1) { throw "Pinned dependency not found: $name $($override.version)#$revision" }
+          $checked++
+        }
+        if ($checked -ne 4) { throw "Expected four pinned dependency checks, ran $checked." }
         & (Join-Path $vcpkgRoot 'bootstrap-vcpkg.bat') -disableMetrics
         if ($LASTEXITCODE -ne 0) { throw 'vcpkg bootstrap failed.' }
         $archives = Join-Path $env:RUNNER_TEMP 'dvs-ci/vcpkg-archives'

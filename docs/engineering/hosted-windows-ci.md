@@ -25,9 +25,11 @@ CMake/LLVM 版本不满足本项目要求，所以不只替换 `runs-on`。
 - 使用隔离 Python 环境安装 CMake 4.4.0、Ninja 1.13.0，不改全局 Python。
 - 在临时目录安装 LLVM 19.1.5，执行前验证固定 SHA256；通过 `DVS_LLVM_BIN` 优先发现固定工具，
   避免 CMake 的 VS 搜索提示优先选中预装的另一版本。缓存恢复后仍核对工具版本。
-- vcpkg 检出到 `out/ci/vcpkg`，提交与 manifest baseline
-  `e6ed7c5be05eaedc2d06ee3e51bd059409429c5e` 一致；不读取个人电脑的仓库变量路径。
-  现有 Qt 6.11.1、FFmpeg 8.1.2#3 overrides 保留。
+- vcpkg 工具和版本数据库固定检出 `7d1c862c25e1bde631d866d82fdc86213983271c`，放在
+  `out/ci/vcpkg`；完整历史用于解析原 registry baseline。原 baseline
+  `e6ed7c5be05eaedc2d06ee3e51bd059409429c5e` 与依赖版本均保留。工具检出不等于 registry
+  baseline：旧检出的版本数据库不包含 FFmpeg 8.1.2#3，干净环境不能使用它解析现有 overrides。
+  准备阶段逐一验证四个 override 存在，不读取个人电脑的仓库变量路径。
 - 只缓存 vcpkg 二进制 archives，不搬运个人电脑的安装树、CMakeCache 或运行库。
   cache key 包含 MSVC、manifest 和准备脚本身份；vcpkg 自身继续按 ABI 验证包。
 - 首次冷缓存仍需编译 Qt/FFmpeg，因此构建 job 允许 240 分钟；失败保留依赖日志。
