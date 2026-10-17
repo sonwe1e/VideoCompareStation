@@ -49,6 +49,14 @@ function(dvs_add_quality_targets)
     )
 
     set(dvs_quality_tool_hints)
+    # Hosted CI provisions the exact LLVM release outside Visual Studio. Prefer that
+    # directory to the image's bundled LLVM; version checks below remain mandatory.
+    if(NOT "$ENV{DVS_LLVM_BIN}" STREQUAL "")
+        if(NOT IS_DIRECTORY "$ENV{DVS_LLVM_BIN}")
+            message(FATAL_ERROR "DVS_LLVM_BIN must name an existing LLVM bin directory.")
+        endif()
+        list(APPEND dvs_quality_tool_hints "$ENV{DVS_LLVM_BIN}")
+    endif()
     if(NOT "$ENV{VCINSTALLDIR}" STREQUAL "")
         file(TO_CMAKE_PATH "$ENV{VCINSTALLDIR}" dvs_vc_install_dir)
         cmake_path(APPEND dvs_vc_install_dir "Tools/Llvm/x64/bin"

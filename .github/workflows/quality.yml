@@ -95,7 +95,7 @@ jobs:
         shell: pwsh
         run: >-
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake
-          --preset dev --fresh -DCLANG_FORMAT_EXECUTABLE="$env:DVS_CI_LLVM_BIN/clang-format.exe" -DCLANG_TIDY_EXECUTABLE="$env:DVS_CI_LLVM_BIN/clang-tidy.exe"
+          --preset dev --fresh
 
       - name: Build development preset
         shell: pwsh

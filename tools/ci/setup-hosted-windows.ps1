@@ -62,6 +62,6 @@ $checks++
 Get-Command cl.exe, lib.exe -ErrorAction Stop | Select-Object Name, Source
 if ($checks -ne 6) { throw "Expected six tool checks, ran $checks." }
 @($llvmBin, $toolScripts) | Out-File $env:GITHUB_PATH -Encoding utf8 -Append
-"DVS_CI_LLVM_BIN=$llvmBin" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+"DVS_LLVM_BIN=$llvmBin" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 "msvc=$($env:VCToolsVersion.Trim())" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
 Write-Host "Hosted Windows toolchain ready: $checks pinned tool checks."

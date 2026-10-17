@@ -89,7 +89,7 @@ jobs:
       - name: Debug build, tests, and quality
         shell: pwsh
         run: |
-          pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --preset dev --fresh -DCLANG_FORMAT_EXECUTABLE="$env:DVS_CI_LLVM_BIN/clang-format.exe" -DCLANG_TIDY_EXECUTABLE="$env:DVS_CI_LLVM_BIN/clang-tidy.exe"
+          pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --preset dev --fresh
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --build --preset dev
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset dev --output-on-failure
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --build --preset dev --target format-check
@@ -98,7 +98,7 @@ jobs:
       - name: Release build and tests
         shell: pwsh
         run: |
-          pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --preset release --fresh -DCLANG_FORMAT_EXECUTABLE="$env:DVS_CI_LLVM_BIN/clang-format.exe" -DCLANG_TIDY_EXECUTABLE="$env:DVS_CI_LLVM_BIN/clang-tidy.exe"
+          pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --preset release --fresh
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --build --preset release
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset release --output-on-failure
 
@@ -176,7 +176,7 @@ jobs:
       - name: Build and test Release
         shell: pwsh
         run: |
-          pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --preset release --fresh -DCLANG_FORMAT_EXECUTABLE="$env:DVS_CI_LLVM_BIN/clang-format.exe" -DCLANG_TIDY_EXECUTABLE="$env:DVS_CI_LLVM_BIN/clang-tidy.exe"
+          pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --preset release --fresh
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --build --preset release
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset release --output-on-failure
           $metadata = Get-Content '.\out\build\release\release-metadata.json' -Raw |

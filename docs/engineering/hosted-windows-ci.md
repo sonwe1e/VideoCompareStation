@@ -23,7 +23,7 @@
 CMake/LLVM 版本不满足本项目要求，所以不只替换 `runs-on`。
 
 - 使用隔离 Python 环境安装 CMake 4.4.0、Ninja 1.13.0，不改全局 Python。
-- 在临时目录安装 LLVM 19.1.5，执行前验证固定 SHA256；配置时显式指定 clang-format/tidy，
+- 在临时目录安装 LLVM 19.1.5，执行前验证固定 SHA256；通过 `DVS_LLVM_BIN` 优先发现固定工具，
   避免 CMake 的 VS 搜索提示优先选中预装的另一版本。缓存恢复后仍核对工具版本。
 - vcpkg 检出到 `out/ci/vcpkg`，提交与 manifest baseline
   `e6ed7c5be05eaedc2d06ee3e51bd059409429c5e` 一致；不读取个人电脑的仓库变量路径。
