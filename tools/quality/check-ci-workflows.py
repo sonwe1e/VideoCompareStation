@@ -61,6 +61,11 @@ def validate(workflows, action):
         require(any(f"--target {target}" in s.get("run", "") for s in quality["steps"]),
                 f"Missing {target} gate")
     release = workflows["release.yml"]
+    tag_ref = release["jobs"]["validate-version"]["steps"][0]["with"]["ref"]
+    require("refs/tags/" in tag_ref and all(
+        release["jobs"][name]["steps"][0]["with"]["ref"] == "${{ needs.validate-version.outputs.commit }}"
+        for name in ("quality", "hardware-performance", "release")),
+        "Resolve the tag namespace once, then check out the immutable validated SHA")
     guard = release["jobs"]["hardware-performance"]
     require(guard.get("if") == "github.event_name == 'workflow_dispatch'",
             "Hardware evidence checks are manual release steps")
@@ -93,8 +98,8 @@ def main():
                        Loader=yaml.BaseLoader)
     checks = validate(workflows, action)
     # Exact count detects removed jobs/checks; new workflows require a deliberate policy update.
-    if len(paths) != 4 or checks != 48:
-        raise ValueError(f"Expected 4 workflows and 48 checks, got {len(paths)} and {checks}")
+    if len(paths) != 4 or checks != 49:
+        raise ValueError(f"Expected 4 workflows and 49 checks, got {len(paths)} and {checks}")
     cases = 0
     if args.self_test:
         def rejected(mutate):
@@ -125,8 +130,10 @@ def main():
                      for s in (w["build-test.yml"]["jobs"]["build-test"]["steps"] +
                                w["build-test.yml"]["jobs"]["ui-models"]["steps"])
                      if f"--adapters {mode}" in s.get("run", "")])
-        if cases != 10:
-            raise ValueError(f"Expected 10 counterexamples, ran {cases}")
+        rejected(lambda w, a: w["release.yml"]["jobs"]["validate-version"]["steps"][0]["with"].update(
+            {"ref": "${{ inputs.tag || github.ref }}"}))
+        if cases != 11:
+            raise ValueError(f"Expected 11 counterexamples, ran {cases}")
     print(f"CI workflow policy passed: {len(paths)} workflows, {checks} checks, {cases} counterexamples.")
 
 
