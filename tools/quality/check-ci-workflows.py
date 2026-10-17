@@ -93,6 +93,9 @@ def validate(workflows, action, save_action):
                 for s in steps), "Hosted provisioning must reject self-hosted runners")
     require(any(s.get("with", {}).get("ref") == "7d1c862c25e1bde631d866d82fdc86213983271c"
                 for s in steps), "Pinned vcpkg checkout missing")
+    require(any("subst.exe" in s.get("run", "") and "VCPKG_ROOT=$shortRoot" in s["run"] and
+                "$mappedSha -cne $expected" in s["run"] and ".Length -ge 240" in s["run"]
+                for s in steps), "Qt dependencies need a verified short build root")
     require(any("vcpkg-archives" in s.get("with", {}).get("path", "") and
                 "hashFiles" in s["with"].get("key", "") and "msvc" in s["with"]["key"] and
                 "sdk" in s["with"]["key"] and "inputs.cache-scope" in s["with"]["key"]
@@ -121,8 +124,8 @@ def main():
         encoding="utf-8"), Loader=yaml.BaseLoader)
     checks = validate(workflows, action, save_action)
     # Exact count detects removed jobs/checks; new workflows require a deliberate policy update.
-    if len(paths) != 4 or checks != 64:
-        raise ValueError(f"Expected 4 workflows and 64 checks, got {len(paths)} and {checks}")
+    if len(paths) != 4 or checks != 65:
+        raise ValueError(f"Expected 4 workflows and 65 checks, got {len(paths)} and {checks}")
     cases = 0
     if args.self_test:
         def rejected(mutate):
@@ -162,8 +165,10 @@ def main():
             "$PSNativeCommandUseErrorActionPreference = $true\n", "")})
             for s in w["build-test.yml"]["jobs"]["ui-models"]["steps"] if "run" in s])
         rejected(lambda w, a: a["outputs"]["vcpkg-cache-key"].update({"value": "stale-key"}))
-        if cases != 14:
-            raise ValueError(f"Expected 14 counterexamples, ran {cases}")
+        rejected(lambda w, a: [s.update({"run": s["run"].replace("VCPKG_ROOT=$shortRoot",
+                 "VCPKG_ROOT=$vcpkgRoot")}) for s in a["runs"]["steps"] if "run" in s])
+        if cases != 15:
+            raise ValueError(f"Expected 15 counterexamples, ran {cases}")
         # Exercise pwsh native failure propagation without configuring/building the product.
         runs = 0
         for exit_code in (0, 19):

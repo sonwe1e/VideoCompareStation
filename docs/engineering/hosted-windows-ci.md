@@ -30,6 +30,9 @@ CMake/LLVM 版本不满足本项目要求，所以不只替换 `runs-on`。
   `e6ed7c5be05eaedc2d06ee3e51bd059409429c5e` 与依赖版本均保留。工具检出不等于 registry
   baseline：旧检出的版本数据库不包含 FFmpeg 8.1.2#3，干净环境不能使用它解析现有 overrides。
   准备阶段逐一验证四个 override 存在，不读取个人电脑的仓库变量路径。
+  GitHub 的重复仓库目录使 QtDeclarative 的一个生成对象路径达到 261 字符，MSVC 报 C1083。
+  因此仅在托管 VM 上将该检出映射到空闲盘符根，验证映射后的 SHA 和代表路径长度，再向
+  依赖工具导出短根路径；真实文件和上传日志仍在 `out/ci/vcpkg`，不改变依赖或测试范围。
 - 只缓存 vcpkg 二进制 archives，不搬运个人电脑的安装树、CMakeCache 或运行库。
   cache key 包含 MSVC、Windows SDK、manifest、准备脚本身份与构建角色，避免 Release 最先写入的不可变缓存
   挤掉 ui-dev 独有包。允许恢复同编译器的其他 archive 快照，vcpkg 继续按 ABI 验证每个包。
@@ -59,10 +62,10 @@ component/e2e 标签筛选。preset 已有 hardware/performance/packaged/soak �
 多命令 PowerShell 步骤开启原生命令失败传播，第一条失败立即终止，防止后面的成功命令
 掩盖测试失败。云端脚本检查另用两个空命令退出码探针验证此行为，不构建产品。
 
-轻量路由检查解析 YAML，并对四个 workflow 计数。十四个反例覆盖自动任务误回 self-hosted、
+轻量路由检查解析 YAML，并对四个 workflow 计数。十五个反例覆盖自动任务误回 self-hosted、
 硬件自动触发/可复用调用、发布漏依赖、完整套件被筛选、漏 workflow、漏准备、漏质量门禁，
 完整/UI 最小配置的源清单检查被移除、发布标签与不可变提交身份丢失，以及缓存失败保存、
-精确缓存键与多命令失败传播丢失。硬件证据检查另有
+精确缓存键、多命令失败传播和依赖短路径丢失。硬件证据检查另有
 正例及五个字段反例；两类检查都在
 云端 Quality 执行。ui-dev 的既有构建守卫修复只将 GUI/适配器源与依赖移入适配器条件，
 不减少 dev/release 测试。生成的 compile_commands 必须分别包含 9 个模型源、或全部 19 个源，
