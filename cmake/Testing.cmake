@@ -67,7 +67,7 @@ function(dvs_add_gtest)
         PARSE_ARGV 0
         argument
         "RUN_SERIAL"
-        "TARGET;TEST_PREFIX;LAYER;MODULE;TIMEOUT"
+        "TARGET;TEST_PREFIX;LAYER;MODULE;TIMEOUT;TEST_FILTER"
         "ENVIRONMENT;EXTRA_LABELS;EXTRA_PROPERTIES"
     )
     foreach(requiredArgument TARGET TEST_PREFIX LAYER MODULE)
@@ -98,11 +98,16 @@ function(dvs_add_gtest)
         list(APPEND properties ENVIRONMENT "${environmentValue}")
     endif()
     list(APPEND properties ${argument_EXTRA_PROPERTIES})
+    set(discoveryArguments)
+    if(argument_TEST_FILTER)
+        list(APPEND discoveryArguments TEST_FILTER "${argument_TEST_FILTER}")
+    endif()
 
     gtest_discover_tests(
         "${argument_TARGET}"
         TEST_PREFIX "${argument_TEST_PREFIX}"
         DISCOVERY_MODE PRE_TEST
+        ${discoveryArguments}
         PROPERTIES ${properties}
     )
 endfunction()

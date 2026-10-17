@@ -1,12 +1,26 @@
 name: Release
 
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag whose exact commit is being released
+        required: true
+        type: string
+      hardware_run_id:
+        description: Successful manual Hardware and Performance run for that exact commit
+        required: true
+        type: string
   push:
     tags:
       - 'v*'
 
+env:
+  DVS_RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -15,16 +29,18 @@ concurrency:
 jobs:
   validate-version:
     name: Validate release identity
-    runs-on: [self-hosted, Windows, X64, dvs-toolchain-4.4]
+    runs-on: windows-2022
     timeout-minutes: 10
     outputs:
       version: ${{ steps.version.outputs.version }}
+      commit: ${{ steps.identity.outputs.commit }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
           lfs: true
           persist-credentials: false
 
@@ -32,31 +48,29 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          .\tools\release\verify-release-version.ps1 -Tag $env:GITHUB_REF_NAME
-          $version = $env:GITHUB_REF_NAME.Substring(1)
+          .\tools\release\verify-release-version.ps1 -Tag $env:DVS_RELEASE_TAG
+          $version = $env:DVS_RELEASE_TAG.Substring(1)
           "version=$version" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Verify release commit
+        id: identity
         shell: pwsh
         run: |
           $actualSha = (git rev-parse HEAD).Trim()
-          if ($actualSha -cne '${{ github.sha }}') {
-            throw "Expected commit ${{ github.sha }}, checked out $actualSha."
-          }
           .\tools\release\verify-release-commit.ps1
+          "commit=$actualSha" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
   quality:
     name: Quality suites
     needs: validate-version
-    runs-on: [self-hosted, Windows, X64, dvs-toolchain-4.4]
-    timeout-minutes: 180
-    env:
-      DVS_VCPKG_ROOT: ${{ vars.DVS_VCPKG_ROOT }}
+    runs-on: windows-2022
+    timeout-minutes: 240
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
         with:
+          ref: ${{ needs.validate-version.outputs.commit }}
           lfs: true
           persist-credentials: false
 
@@ -69,39 +83,14 @@ jobs:
         with:
           arch: x64
 
-      - name: Resolve pinned toolchain
-        shell: pwsh
-        run: |
-          $actualSha = (git rev-parse HEAD).Trim()
-          if ($actualSha -cne '${{ github.sha }}') {
-            throw "Expected commit ${{ github.sha }}, checked out $actualSha."
-          }
-          $cmakeVersion = cmake --version | Select-Object -First 1
-          if ($cmakeVersion -notmatch '^cmake version 4\.4(\.|$)') {
-            throw "Expected CMake 4.4.x, found: $cmakeVersion"
-          }
-          $vcpkgRoot = if ($env:DVS_VCPKG_ROOT) {
-            $env:DVS_VCPKG_ROOT
-          } elseif ($env:VCPKG_ROOT) {
-            $env:VCPKG_ROOT
-          } elseif ($env:VCPKG_INSTALLATION_ROOT) {
-            $env:VCPKG_INSTALLATION_ROOT
-          } else {
-            throw 'Set the DVS_VCPKG_ROOT repository variable.'
-          }
-          if (-not (Test-Path -LiteralPath "$vcpkgRoot\scripts\buildsystems\vcpkg.cmake")) {
-            throw "Invalid vcpkg root: $vcpkgRoot"
-          }
-          "VCPKG_ROOT=$vcpkgRoot" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-          $llvmBin = Join-Path $env:VCINSTALLDIR 'Tools\Llvm\x64\bin'
-          if (-not (Test-Path -LiteralPath $llvmBin -PathType Container)) {
-            throw "Visual Studio LLVM tools were not found: $llvmBin"
-          }
-          $llvmBin | Out-File $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Prepare hosted toolchain and dependency cache
+        id: hosted
+        uses: ./.github/actions/setup-windows
 
       - name: Debug build, tests, and quality
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --preset dev --fresh
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --build --preset dev
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset dev --output-on-failure
@@ -111,33 +100,59 @@ jobs:
       - name: Release build and tests
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --preset release --fresh
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --build --preset release
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset release --output-on-failure
 
+      - name: Preserve completed dependency archives
+        if: always()
+        uses: ./.github/actions/save-windows-cache
+        with:
+          key: ${{ steps.hosted.outputs.vcpkg-cache-key }}
+          cache-hit: ${{ steps.hosted.outputs.vcpkg-cache-hit }}
+
   hardware-performance:
-    name: Hardware and performance suites
+    name: Verify prior manual hardware evidence
+    if: github.event_name == 'workflow_dispatch'
     needs: validate-version
-    uses: ./.github/workflows/hardware-performance.yml
-    with:
-      commit_sha: ${{ github.sha }}
+    runs-on: windows-2022
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DVS_HARDWARE_RUN_ID: ${{ inputs.hardware_run_id }}
+      DVS_EXPECTED_SHA: ${{ needs.validate-version.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate-version.outputs.commit }}
+          persist-credentials: false
+      - name: Require successful hardware run for the release commit
+        shell: pwsh
+        run: |
+          if ($env:DVS_HARDWARE_RUN_ID -notmatch '^[0-9]+$') { throw 'Expected a numeric hardware run ID.' }
+          $response = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:DVS_HARDWARE_RUN_ID"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read hardware evidence.' }
+          $run = $response | ConvertFrom-Json
+          .\tools\ci\test-hardware-evidence.ps1 -Run $run -ExpectedSha $env:DVS_EXPECTED_SHA
 
   release:
+    if: github.event_name == 'workflow_dispatch'
     name: Build and publish release
     needs:
       - validate-version
       - quality
       - hardware-performance
-    runs-on: [self-hosted, Windows, X64, dvs-toolchain-4.4]
-    timeout-minutes: 180
+    runs-on: windows-2022
+    timeout-minutes: 240
     env:
-      DVS_VCPKG_ROOT: ${{ vars.DVS_VCPKG_ROOT }}
       GH_TOKEN: ${{ github.token }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
         with:
+          ref: ${{ needs.validate-version.outputs.commit }}
           lfs: true
           persist-credentials: false
 
@@ -158,37 +173,21 @@ jobs:
           # The guard names the one tag it is allowed to publish so that a tag cannot silently
           # turn into a release nobody verified. Widen it deliberately, one version at a time.
           $allowed = @('v2.0.3', 'v2.1.0', 'v2.2.0', 'v2.3.0', 'v2.4.0', 'v2.5.0')
-          if ($env:GITHUB_REF_NAME -cnotin $allowed) {
+          if ($env:DVS_RELEASE_TAG -cnotin $allowed) {
             throw (
               "This workflow publishes only the explicitly unsigned build(s): " +
               ($allowed -join ', ')
             )
           }
 
-      - name: Resolve toolchain and previous release
-        shell: pwsh
-        run: |
-          $actualSha = (git rev-parse HEAD).Trim()
-          if ($actualSha -cne '${{ github.sha }}') {
-            throw "Expected commit ${{ github.sha }}, checked out $actualSha."
-          }
-          $vcpkgRoot = if ($env:DVS_VCPKG_ROOT) {
-            $env:DVS_VCPKG_ROOT
-          } elseif ($env:VCPKG_ROOT) {
-            $env:VCPKG_ROOT
-          } else {
-            throw 'Set the DVS_VCPKG_ROOT repository variable.'
-          }
-          "VCPKG_ROOT=$vcpkgRoot" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-          $llvmBin = Join-Path $env:VCINSTALLDIR 'Tools\Llvm\x64\bin'
-          if (-not (Test-Path -LiteralPath (Join-Path $llvmBin 'clang-format.exe'))) {
-            throw "Visual Studio LLVM tools were not found: $llvmBin"
-          }
-          $llvmBin | Out-File $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Prepare hosted toolchain and dependency cache
+        id: hosted
+        uses: ./.github/actions/setup-windows
 
       - name: Build and test Release
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --preset release --fresh
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --build --preset release
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset release --output-on-failure
@@ -208,11 +207,12 @@ jobs:
       - name: Package and validate release identity
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cpack --preset release-zip
           $version = '${{ needs.validate-version.outputs.version }}'
           $zip = Resolve-Path ".\out\package\zip\CompareStation-$version-windows-x64.zip"
           .\tools\release\verify-release-version.ps1 `
-            -Tag $env:GITHUB_REF_NAME `
+            -Tag $env:DVS_RELEASE_TAG `
             -Executable '.\out\build\release\bin\CompareStation.exe' `
             -ZipPath $zip.Path
           "DVS_RELEASE_ZIP=$($zip.Path)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
@@ -220,6 +220,7 @@ jobs:
       - name: Packaged upgrade and shutdown gates
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset packaged-smoke --output-on-failure
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset shutdown-soak --output-on-failure
 
@@ -236,7 +237,15 @@ jobs:
         uses: softprops/action-gh-release@6da8fa9354ddfdc4aeace5fc48d7f679b5214090 # v2.4.1
         with:
           draft: true
+          tag_name: ${{ env.DVS_RELEASE_TAG }}
           body_path: docs/releases/v${{ needs.validate-version.outputs.version }}.md
           files: |
             out/package/zip/CompareStation-${{ needs.validate-version.outputs.version }}-windows-x64.zip
             out/package/SHA256SUMS.txt
+
+      - name: Preserve completed dependency archives
+        if: always()
+        uses: ./.github/actions/save-windows-cache
+        with:
+          key: ${{ steps.hosted.outputs.vcpkg-cache-key }}
+          cache-hit: ${{ steps.hosted.outputs.vcpkg-cache-hit }}

@@ -1,8 +1,14 @@
 # Windows self-hosted runner
 
-CompareStation 的原生 CI 需要一台处于登录状态的 Windows x64 工作站。常规
-Debug/Release、format/lint 使用 `dvs-toolchain-4.4` 标签，D3D11VA 与五分钟性能门禁
-使用 `dvs-gpu` 标签；同一台工作站可以同时拥有这两个标签。
+2026-10-17 调度调整：常规构建、完整软件回归、format/lint 和发布软件任务迁移到 GitHub
+托管 `windows-2022`。self-hosted 仅保留手动 Hardware and Performance；标签发布不再间接
+调用它，手动发布核验同提交的成功运行。迁移条件与操作见
+[Windows 云端 CI](engineering/hosted-windows-ci.md)。下文工作站配置为硬件门禁及历史部署参考，
+不代表普通提交仍需本机接单。
+
+CompareStation 的手动 D3D11VA 与性能门禁需要一台处于登录状态的 Windows x64 工作站，
+使用 `dvs-gpu` 标签。常规 Debug/Release、format/lint 在 GitHub 托管 Windows 执行；
+个人电脑不再配置普通软件调度标签 `dvs-toolchain-4.4`。
 
 ## 本机基线（2026-07-30）
 
@@ -42,14 +48,14 @@ SHA-256 d59123a43003e357b0805b5d0f611d0bd2f65ab67d51bd070dd4e7a0f685c162
 ```powershell
 $runnerRoot = 'G:\GitHubActions\Toy-runner'
 $token = gh api --method POST `
-  repos/sonwe1e/CompareStation/actions/runners/registration-token --jq .token
+  repos/sonwe1e/VideoCompareStation/actions/runners/registration-token --jq .token
 
 Set-Location $runnerRoot
 .\config.cmd --unattended `
   --url https://github.com/sonwe1e/VideoCompareStation `
   --token $token `
   --name Sonwe-RTX4090 `
-  --labels dvs-toolchain-4.4,dvs-gpu `
+  --labels dvs-gpu `
   --work _work `
   --replace
 ```
@@ -122,7 +128,7 @@ runner 控制台显示 `Listening for Jobs` 后，GitHub 的 runner API 应显�
 
 ```text
 status: online
-labels: self-hosted, Windows, X64, dvs-toolchain-4.4, dvs-gpu
+labels: self-hosted, Windows, X64, dvs-gpu
 ```
 
 常规 PR checks 全绿后，再手动运行 `Hardware and Performance`。配置和编译仍以 4 核

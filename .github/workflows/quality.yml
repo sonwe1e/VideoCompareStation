@@ -1,6 +1,7 @@
 name: Quality
 
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches:
@@ -12,7 +13,8 @@ permissions:
 
 concurrency:
   group: quality-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Preserve the active dependency snapshot; superseded pending runs are still replaced.
+  cancel-in-progress: false
 
 jobs:
   repository-guide:
@@ -30,6 +32,23 @@ jobs:
       - name: Materialize LFS files
         shell: pwsh
         run: git lfs checkout
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Check workflow routing and counterexamples
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check PyYAML==6.0.3
+          if ($LASTEXITCODE -ne 0) { throw 'Could not install the workflow parser.' }
+          python tools/quality/check-ci-workflows.py --self-test
+          if ($LASTEXITCODE -ne 0) { throw 'CI routing checks failed.' }
+          .\tools\quality\check-ci-evidence.ps1
+          python tools/quality/check-ui-test-routing.py --self-test
+          if ($LASTEXITCODE -ne 0) { throw 'UI source routing contracts failed.' }
+          python tools/quality/check-ci-test-routing.py --self-test
+          if ($LASTEXITCODE -ne 0) { throw 'CTest routing contracts failed.' }
 
       - name: Check contributor guide
         shell: pwsh
@@ -55,14 +74,8 @@ jobs:
 
   native-quality:
     name: Native format and lint
-    # Never execute code from an untrusted fork on the workstation runner.
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, Windows, X64, dvs-toolchain-4.4]
-    timeout-minutes: 60
-    env:
-      DVS_VCPKG_ROOT: ${{ vars.DVS_VCPKG_ROOT }}
+    runs-on: windows-2022
+    timeout-minutes: 240
 
     steps:
       - name: Check out repository
@@ -80,33 +93,9 @@ jobs:
         with:
           arch: x64
 
-      - name: Verify pinned toolchain
-        shell: pwsh
-        run: |
-          $cmakeVersion = cmake --version | Select-Object -First 1
-          if ($cmakeVersion -notmatch '^cmake version 4\.4(\.|$)') {
-            throw "Expected CMake 4.4.x, found: $cmakeVersion"
-          }
-          $vcpkgRoot = if ($env:DVS_VCPKG_ROOT) {
-            $env:DVS_VCPKG_ROOT
-          } elseif ($env:VCPKG_ROOT) {
-            $env:VCPKG_ROOT
-          } elseif ($env:VCPKG_INSTALLATION_ROOT) {
-            $env:VCPKG_INSTALLATION_ROOT
-          } else {
-            throw 'Set the DVS_VCPKG_ROOT repository variable.'
-          }
-          if (-not (Test-Path -LiteralPath "$vcpkgRoot\scripts\buildsystems\vcpkg.cmake")) {
-            throw "Invalid vcpkg root: $vcpkgRoot"
-          }
-          "VCPKG_ROOT=$vcpkgRoot" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-          $llvmBin = Join-Path $env:VCINSTALLDIR 'Tools\Llvm\x64\bin'
-          if (-not (Test-Path -LiteralPath $llvmBin -PathType Container)) {
-            throw "Visual Studio LLVM tools were not found: $llvmBin"
-          }
-          $env:PATH = "$llvmBin;$env:PATH"
-          $llvmBin | Out-File $env:GITHUB_PATH -Encoding utf8 -Append
-          Get-Command cl.exe, ninja.exe, clang-format.exe, clang-tidy.exe -ErrorAction Stop
+      - name: Prepare hosted toolchain and dependency cache
+        id: hosted
+        uses: ./.github/actions/setup-windows
 
       - name: Configure development preset
         shell: pwsh
@@ -131,3 +120,21 @@ jobs:
         run: >-
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake
           --build --preset dev --target lint
+
+      - name: Upload native quality logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-quality-${{ github.sha }}
+          path: |
+            out/build/dev/Testing/**
+            out/ci/vcpkg/buildtrees/**/*.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Preserve completed dependency archives
+        if: always()
+        uses: ./.github/actions/save-windows-cache
+        with:
+          key: ${{ steps.hosted.outputs.vcpkg-cache-key }}
+          cache-hit: ${{ steps.hosted.outputs.vcpkg-cache-hit }}

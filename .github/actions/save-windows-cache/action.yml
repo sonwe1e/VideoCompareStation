@@ -1,0 +1,26 @@
+name: Save hosted Windows dependency archives
+description: Preserve completed ABI-verified archives even when a later build or test fails
+inputs:
+  key:
+    description: Exact key returned by the hosted setup action
+    required: true
+  cache-hit:
+    description: Whether an exact immutable snapshot was restored
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - name: Check for completed dependency archives
+      id: archives
+      if: inputs.key != '' && inputs.cache-hit != 'true'
+      shell: pwsh
+      run: |
+        $archives = Join-Path $env:RUNNER_TEMP 'dvs-ci/vcpkg-archives'
+        $files = @(Get-ChildItem -LiteralPath $archives -Filter '*.zip' -File -Recurse -ErrorAction SilentlyContinue)
+        "present=$($files.Count -gt 0)" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+    - name: Save completed dependency archives
+      if: steps.archives.outputs.present == 'True'
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: ${{ runner.temp }}/dvs-ci/vcpkg-archives
+        key: ${{ inputs.key }}
