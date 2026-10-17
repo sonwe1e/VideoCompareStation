@@ -1,0 +1,58 @@
+name: Prepare hosted Windows
+description: Provision the pinned toolchain and vcpkg binary cache on a GitHub-hosted VM
+runs:
+  using: composite
+  steps:
+    - name: Require GitHub-hosted Windows
+      shell: pwsh
+      run: |
+        if ($env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:RUNNER_OS -cne 'Windows') {
+          throw 'Software CI must run on GitHub-hosted Windows, never the personal workstation.'
+        }
+        "runner=$env:RUNNER_NAME image=$env:ImageOS version=$env:ImageVersion" |
+          Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+    - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      with:
+        python-version: '3.12'
+
+    - name: Cache pinned LLVM
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: ${{ runner.temp }}/dvs-ci/llvm
+        key: windows-2022-llvm-19.1.5-v1
+
+    - name: Provision and verify pinned tools
+      id: tools
+      shell: pwsh
+      run: .\tools\ci\setup-hosted-windows.ps1
+
+    - name: Check out pinned vcpkg registry
+      uses: actions/checkout@v6
+      with:
+        repository: microsoft/vcpkg
+        ref: e6ed7c5be05eaedc2d06ee3e51bd059409429c5e
+        path: out/ci/vcpkg
+        persist-credentials: false
+
+    - name: Restore vcpkg binary archives
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: ${{ runner.temp }}/dvs-ci/vcpkg-archives
+        key: windows-2022-vcpkg-${{ steps.tools.outputs.msvc }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', '.github/actions/setup-windows/action.yml', 'tools/ci/setup-hosted-windows.ps1') }}-v1
+
+    - name: Bootstrap isolated vcpkg
+      shell: pwsh
+      run: |
+        $vcpkgRoot = Join-Path $env:GITHUB_WORKSPACE 'out/ci/vcpkg'
+        $expected = (Get-Content vcpkg-configuration.json -Raw | ConvertFrom-Json).'default-registry'.baseline
+        $actual = (git -C $vcpkgRoot rev-parse HEAD).Trim()
+        if ($LASTEXITCODE -ne 0 -or $actual -cne $expected) { throw 'vcpkg baseline mismatch.' }
+        & (Join-Path $vcpkgRoot 'bootstrap-vcpkg.bat') -disableMetrics
+        if ($LASTEXITCODE -ne 0) { throw 'vcpkg bootstrap failed.' }
+        $archives = Join-Path $env:RUNNER_TEMP 'dvs-ci/vcpkg-archives'
+        New-Item -ItemType Directory -Path $archives -Force | Out-Null
+        "VCPKG_ROOT=$vcpkgRoot" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+        "DVS_VCPKG_ROOT=$vcpkgRoot" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+        "VCPKG_BINARY_SOURCES=clear;files,$archives,readwrite" |
+          Out-File $env:GITHUB_ENV -Encoding utf8 -Append

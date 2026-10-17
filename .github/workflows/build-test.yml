@@ -1,6 +1,7 @@
 name: Build and Test
 
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches:
@@ -8,8 +9,7 @@ on:
       - dev
     paths-ignore:
       # Documentation-only pushes do not touch code, scripts, or workflow definitions;
-      # running the full build+test matrix for them on the single self-hosted runner
-      # only delays every queued run (2026-10-08: a docs-only push cost ~1 h there).
+      # Avoid rebuilding the native matrix for documentation-only pushes.
       - 'docs/**'
       - '**.md'
       - '**.txt'
@@ -24,14 +24,8 @@ concurrency:
 jobs:
   build-test:
     name: ${{ matrix.name }}
-    # Never execute code from an untrusted fork on the workstation runner.
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, Windows, X64, dvs-toolchain-4.4]
-    timeout-minutes: 120
-    env:
-      DVS_VCPKG_ROOT: ${{ vars.DVS_VCPKG_ROOT }}
+    runs-on: windows-2022
+    timeout-minutes: 240
 
     strategy:
       fail-fast: false
@@ -58,39 +52,14 @@ jobs:
         with:
           arch: x64
 
-      - name: Verify pinned toolchain
-        shell: pwsh
-        run: |
-          $cmakeVersion = cmake --version | Select-Object -First 1
-          if ($cmakeVersion -notmatch '^cmake version 4\.4(\.|$)') {
-            throw "Expected CMake 4.4.x, found: $cmakeVersion"
-          }
-          $vcpkgRoot = if ($env:DVS_VCPKG_ROOT) {
-            $env:DVS_VCPKG_ROOT
-          } elseif ($env:VCPKG_ROOT) {
-            $env:VCPKG_ROOT
-          } elseif ($env:VCPKG_INSTALLATION_ROOT) {
-            $env:VCPKG_INSTALLATION_ROOT
-          } else {
-            throw 'Set the DVS_VCPKG_ROOT repository variable.'
-          }
-          if (-not (Test-Path -LiteralPath "$vcpkgRoot\scripts\buildsystems\vcpkg.cmake")) {
-            throw "Invalid vcpkg root: $vcpkgRoot"
-          }
-          "VCPKG_ROOT=$vcpkgRoot" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-          $llvmBin = Join-Path $env:VCINSTALLDIR 'Tools\Llvm\x64\bin'
-          if (-not (Test-Path -LiteralPath $llvmBin -PathType Container)) {
-            throw "Visual Studio LLVM tools were not found: $llvmBin"
-          }
-          $env:PATH = "$llvmBin;$env:PATH"
-          $llvmBin | Out-File $env:GITHUB_PATH -Encoding utf8 -Append
-          Get-Command cl.exe, ninja.exe, clang-format.exe, clang-tidy.exe -ErrorAction Stop
+      - name: Prepare hosted toolchain and dependency cache
+        uses: ./.github/actions/setup-windows
 
       - name: Configure
         shell: pwsh
         run: >-
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake
-          --preset ${{ matrix.preset }} --fresh
+          --preset ${{ matrix.preset }} --fresh -DCLANG_FORMAT_EXECUTABLE="$env:DVS_CI_LLVM_BIN/clang-format.exe" -DCLANG_TIDY_EXECUTABLE="$env:DVS_CI_LLVM_BIN/clang-tidy.exe"
 
       - name: Build
         shell: pwsh
@@ -98,18 +67,12 @@ jobs:
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake
           --build --preset ${{ matrix.preset }}
 
-      - name: Unit tests
+      - name: Complete software regression
         shell: pwsh
         run: >-
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest
-          --preset ${{ matrix.preset }} -L unit --output-on-failure
-
-      - name: Component and smoke tests
-        shell: pwsh
-        run: >-
-          pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest
-          --preset ${{ matrix.preset }}
-          -L "component|e2e" --output-on-failure
+          --preset ${{ matrix.preset }} --output-on-failure --no-tests=error
+          --output-junit "${{ github.workspace }}/out/build/${{ matrix.preset }}/Testing/ci-full.xml"
 
       - name: Run startup check
         shell: pwsh
@@ -133,6 +96,17 @@ jobs:
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --preset ui-dev --fresh
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 cmake --build --preset ui-dev
           pwsh -NoProfile -File .\tools\ci\invoke-low-impact.ps1 ctest --preset ui-dev
+
+      - name: Upload software test and dependency logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.preset }}-${{ github.sha }}
+          path: |
+            out/build/**/Testing/**
+            out/ci/vcpkg/buildtrees/**/*.log
+          if-no-files-found: warn
+          retention-days: 14
 
   core-linux:
     name: Linux Clang core
