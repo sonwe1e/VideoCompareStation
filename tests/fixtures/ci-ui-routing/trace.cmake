@@ -1,3 +1,5 @@
+cmake_minimum_required(VERSION 3.24)
+
 # Evaluate the production source conditions without configuring a compiler or creating a window.
 foreach(required SOURCE_ROOT TEST_CMAKE TRACE_OUTPUT ADAPTERS)
     if(NOT DEFINED ${required})
