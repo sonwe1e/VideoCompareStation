@@ -19,7 +19,8 @@ permissions:
 
 concurrency:
   group: build-test-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Finish the active cold build/cache; concurrency retains only the latest pending run.
+  cancel-in-progress: false
 
 jobs:
   build-test:

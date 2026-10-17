@@ -36,6 +36,10 @@ CMake/LLVM 版本不满足本项目要求，所以不只替换 `runs-on`。
 - 首次冷缓存仍需编译 Qt/FFmpeg，因此构建 job 允许 240 分钟；失败保留依赖日志。
   后续利用二进制缓存。缓存缺失时可从固定来源重建，不能改回 self-hosted 作为兜底。
 
+软件 workflow 不取消正在运行的批次，以免在依赖编译完成前丢掉冷缓存；同一分支只保留
+一个运行中和最新一个待运行批次，过期的待运行批次由 GitHub 替换。代价是新提交可能需要
+等待当前批次完成。首次运行仍需完整验收，不因等待较久就在个人电脑补跑。
+
 来源：[Windows 镜像清单](https://github.com/actions/runner-images/blob/main/images/windows/Windows2022-Readme.md)、
 [vcpkg 二进制缓存](https://learn.microsoft.com/en-us/vcpkg/reference/binarycaching)、
 [LLVM 19.1.5 校验来源](https://github.com/microsoft/winget-pkgs/blob/master/manifests/l/LLVM/LLVM/19.1.5/LLVM.LLVM.installer.yaml)。
