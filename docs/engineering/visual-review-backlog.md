@@ -2,30 +2,33 @@
 
 ## 2026-10-17 Windows 软件 CI 迁移到 GitHub 托管环境
 
-状态：迁移候选；本机只执行轻量脚本验证，云端运行结果另行补充。
-首轮完整云端回归已运行，发现代码页依赖、真实 D3D11VA 用例误路由、最小 Qt Core 缺少
-线程能力，以及字形／大尺寸测试的环境假设。修正与完整清单反例已提交继续云端验收；
-style/DPI 菜单失败补充文件日志定位，仍未宣告通过或合入。
+状态：已合入 main（`66475bb`，2026-10-17），验收绑定 PR head `4f2e0dd`。首轮完整云端回归
+发现的代码页依赖、真实 D3D11VA 用例误路由、最小 Qt Core 缺少线程能力，以及字形／大尺寸
+测试的环境假设均已修正；最终云端结果为 Debug 1373 通过 / 10 跳过 / 4 禁用 / 0 失败、
+Release 1372 / 11 / 4 / 0，core-only 306、Linux core 306、UI model-only 424，原生
+format-check 与 lint 通过。上述数字属于 `4f2e0dd`，不转移到本仓库后续提交。
 构建、完整 dev/release 回归、原生 format/lint、发布软件任务改为 `windows-2022`；
 固定 CMake/LLVM、隔离 vcpkg 与二进制缓存。保留 core-dev/ui-dev、Linux core 与完整测试矩阵。
 GPU workflow 只接受手动触发，发布不再自动调用硬件任务，而核验先前成功的同提交运行。
 新增 YAML 路由/反例和硬件身份/反例检查，防止自动任务重新占用主力电脑或发布绕过硬件门禁。
 范围、迁移条件与执行入口见 [Windows 云端 CI](hosted-windows-ci.md)。
 
-## 2026-10-17 收尾后分阶段计划：阶段 0/1 与 MEDIA1 调查（当前工作区）
+## 2026-10-17 收尾后分阶段计划：阶段 0/1 与 MEDIA1 调查（已合入本地 `1f5da53`）
 
-本节在 `8c90005` + 未提交工作区上执行
+本节内容在 `8c90005` 上开发，2026-10-18 与上游 `66475bb` 合并后落在本地 `main @ 1f5da53`，
+执行
 [收尾后分阶段改进计划](../plans/CompareStation_收尾后分阶段改进计划_2026-10-17.md) 的
-BASE、COLOR1 至 COLOR3 与 MEDIA1 调查部分。工作区记录；未提交/未合入前不得当作已验收。
+BASE、COLOR1 至 COLOR3 与 MEDIA1 调查部分。**合并后提交尚未运行任何云端构建、测试或 lint**，
+因此下面引用的定向结果只属于开发时的 `8c90005` + 工作区，不能当作 `1f5da53` 的通过证据。
 颜色契约、状态语义和未完成项见 [图片像素与颜色数据契约](image-color-contract.md)；
 基线与环境分离见 [可复现基线](reproducible-baseline.md) 与
 [测试环境分离](test-environment-separation.md)。
 
 - **BASE**：固定计划基线提交 `8c90005…`、本地 2.5.0 ZIP（28,327,485 bytes，
   `28176C…0BEBDE4`）、dev 工具链（MSVC 14.44.35207 / Qt 6.11.1 / FFmpeg 8.1.2），
-  登记样本清单与本机只读环境；**环境分离未迁移**：Windows 构建/native-quality/release/
-  hardware 仍全部选择 self-hosted 标签，主力桌面不会自动执行完整回归、可见窗口或 GPU/物理
-  显示门禁，相关验收保持待验。
+  登记样本清单与本机只读环境。**环境分离**：普通软件门禁已由 `66475bb` 迁到
+  GitHub 托管 `windows-2022`，唯一保留的 self-hosted 标签是手动触发的 GPU 作业；
+  合并后的提交仍无云端结果，可见窗口与 GPU/物理显示门禁继续待验。
 - **COLOR1/COLOR3 数据契约**：新增 `ImageColorContract`（配置分类、SHA-256、ICC 签名、
   文件声明 primaries/transfer、每个侧的状态文案、分析值路径枚举）；`StillImage` 保留
   ICC/颜色声明，差异分析与探针仍只读解码缓冲。**重要环境事实**：当前 FFmpeg 构建

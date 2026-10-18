@@ -1,6 +1,8 @@
 # Media Support
 
-Video baseline: **working tree on `8c90005`**, reviewed 2026-10-17. The three implementation
+Video baseline: **`main @ 1f5da53`** (the workspace work merged onto `66475bb`), reviewed
+2026-10-18. No cloud build, test or lint has run on that commit yet, so every row below still
+describes the code as written, not a verified package. The three implementation
 stages below exist in code; actual performance and release claims require evidence for the
 tested SHA. VP9, AV1 and HDR/tone mapping are outside the current playback gate. AV1/VP9 have
 real investigation fixtures plus explicit-rejection tests; they remain candidates for MEDIA2,
