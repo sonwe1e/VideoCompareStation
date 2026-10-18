@@ -519,5 +519,84 @@ TEST_F(IssueLogControllerTests, CapturesDiagnosticIntervalAndLoopSeamFromCommitt
     EXPECT_TRUE(controller_->intervalAt(5).isEmpty());
 }
 
+// FLOW1: an image capture must freeze the observation settings and hand them back on restore.
+// The restored pair is selected first (Main.qml stages the open); this test pins the captured
+// payload and its persistence so a restore can replay exactly what was recorded.
+TEST_F(IssueLogControllerTests, CapturesAndRestoresImageObservationSettings) {
+    ensureCoreApplication();
+    const QString pathA = tempDir_.path() + QStringLiteral("/left.png");
+    const QString pathB = tempDir_.path() + QStringLiteral("/right.png");
+    ASSERT_TRUE(writeFile(pathA));
+    ASSERT_TRUE(writeFile(pathB));
+
+    ImageReviewController image;
+    controller_->setImageController(&image);
+    controller_->setWorkspaceMode(QStringLiteral("image"));
+    QImage left(4, 4, QImage::Format_ARGB32);
+    left.fill(QColor(10, 20, 30));
+    QImage right(4, 4, QImage::Format_ARGB32);
+    right.fill(QColor(40, 50, 60));
+    ASSERT_TRUE(
+        image.openPairImages(std::move(left), pathA, std::move(right), pathB, /*pairId=*/4));
+    image.setCompareMode(ImageReviewController::SignedDifference);
+    image.restoreObservationPosition(2.5, 0.2, 0.8);
+    image.setViewMode(ImageReviewController::RgbOpaqueView);
+    image.setResampleAllowed(true);
+    image.setDiffGain(11);
+    image.setAlphaFilterEnabled(true);
+    image.setAlphaThreshold(222);
+    controller_->setImageBackgroundMode(3);
+    ASSERT_TRUE(controller_->captureCurrentIssue(QStringLiteral("image-observation")));
+
+    QVariantMap restore = controller_->restoreIssue(0);
+    EXPECT_EQ(restore.value(QStringLiteral("decision")).toString(), QStringLiteral("ready"));
+    EXPECT_EQ(restore.value(QStringLiteral("compareMode")).toInt(),
+              ImageReviewController::SignedDifference);
+    EXPECT_DOUBLE_EQ(restore.value(QStringLiteral("zoom")).toDouble(), 2.5);
+    EXPECT_DOUBLE_EQ(restore.value(QStringLiteral("panX")).toDouble(), 0.2);
+    EXPECT_DOUBLE_EQ(restore.value(QStringLiteral("panY")).toDouble(), 0.8);
+    EXPECT_EQ(restore.value(QStringLiteral("imageViewMode")).toInt(),
+              ImageReviewController::RgbOpaqueView);
+    EXPECT_EQ(restore.value(QStringLiteral("imageBackgroundMode")).toInt(), 3);
+    EXPECT_EQ(restore.value(QStringLiteral("imageDiffGain")).toInt(), 11);
+    EXPECT_EQ(restore.value(QStringLiteral("imageAlphaFilterEnabled")).toInt(), 1);
+    EXPECT_EQ(restore.value(QStringLiteral("imageAlphaThreshold")).toInt(), 222);
+    EXPECT_TRUE(restore.value(QStringLiteral("resampleAllowed")).toBool());
+
+    // Save → reload → restore keeps the observation identity and settings.
+    const QString file = tempDir_.path() + QStringLiteral("/image-observation.json");
+    ASSERT_TRUE(controller_->saveIssues(QUrl::fromLocalFile(file)));
+    controller_->clearIssues();
+    ASSERT_TRUE(controller_->loadIssues(QUrl::fromLocalFile(file)));
+    restore = controller_->restoreIssue(0);
+    EXPECT_EQ(restore.value(QStringLiteral("decision")).toString(), QStringLiteral("ready"));
+    EXPECT_EQ(restore.value(QStringLiteral("imageViewMode")).toInt(),
+              ImageReviewController::RgbOpaqueView);
+    EXPECT_EQ(restore.value(QStringLiteral("imageDiffGain")).toInt(), 11);
+    EXPECT_EQ(restore.value(QStringLiteral("imageAlphaThreshold")).toInt(), 222);
+}
+
+// A capture outside the image workspace must not claim settings it never saw: the sentinels
+// stay -1 and the restore reports them as missing instead of replaying defaults.
+TEST_F(IssueLogControllerTests, ImageSettingsStayNotCapturedWhenTheWorkspaceDidNotProvideThem) {
+    ensureCoreApplication();
+    const QString pathA = tempDir_.path() + QStringLiteral("/left.png");
+    const QString pathB = tempDir_.path() + QStringLiteral("/right.png");
+    ASSERT_TRUE(writeFile(pathA));
+    ASSERT_TRUE(writeFile(pathB));
+    ImageReviewController image;
+    controller_->setImageController(&image);
+    controller_->setWorkspaceMode(QStringLiteral("image"));
+    QImage left(4, 4, QImage::Format_ARGB32);
+    QImage right(4, 4, QImage::Format_ARGB32);
+    ASSERT_TRUE(
+        image.openPairImages(std::move(left), pathA, std::move(right), pathB, /*pairId=*/5));
+    // No background mode was supplied by the QML caller.
+    controller_->setImageBackgroundMode(-1);
+    ASSERT_TRUE(controller_->captureCurrentIssue(QString()));
+    const QVariantMap restore = controller_->restoreIssue(0);
+    EXPECT_EQ(restore.value(QStringLiteral("imageBackgroundMode")).toInt(), -1);
+}
+
 } // namespace
 } // namespace dvs::ui

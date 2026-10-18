@@ -1,29 +1,23 @@
 include(GoogleTest)
 
+# Model-only sources: everything here builds in the ui-dev preset, which links Qt Core
+# only (the ui-models vcpkg feature) and never links the Qt Quick bridge or the adapters.
 add_executable(
     dvs_ui_component_tests
     ClipExportControllerTests.cpp
-    DiagnosticsProbeTests.cpp
     EvidenceIdentityJsonTests.cpp
-    HoldKeyHandlerTests.cpp
-    JogKeyHandlerTests.cpp
     JogStateMachineTests.cpp
     PairMetricsControllerTests.cpp
     PreviewThumbnailControllerTests.cpp
-    ReviewControllerTests.cpp
-    "${PROJECT_SOURCE_DIR}/src/app/RuntimeBridges.cpp"
     ReviewPreferencesControllerTests.cpp
     SampleExportControllerTests.cpp
     SourceIdentityTests.cpp
-    StartupSplashTests.cpp
     VideoFolderModelTests.cpp
 )
 target_link_libraries(
     dvs_ui_component_tests
     PRIVATE
         dvs_ui_qml
-        dvs_media_ffmpeg
-        dvs_persistence_json
         dvs::test_dependencies
 )
 target_include_directories(
@@ -43,14 +37,26 @@ dvs_add_gtest(
 )
 
 if(DVS_BUILD_ADAPTERS)
-# IssueLogControllerTests includes dvs/persistence/IssueRecordRepository.h from the
-# persistence adapter, so it can only compile when the adapters (and their include
-# paths) exist; the ui-dev model-only preset builds without them.
+# Adapter/GUI-dependent test sources, deliberately kept inside this guard: the ui-dev
+# model-only preset links Qt Core only (no Qt Quick bridge, no media/persistence
+# adapters), so anything including QKeyEvent, the bridge headers with bridge symbols, the
+# Win32 splash or the media adapters can only compile and link here.
 target_sources(dvs_ui_component_tests PRIVATE
+    DiagnosticsProbeTests.cpp
+    HoldKeyHandlerTests.cpp
     InterpolationProtocolControllerTests.cpp
     IssueLogControllerTests.cpp
+    JogKeyHandlerTests.cpp
     PairMetricsThresholdReuseTests.cpp
+    # ReviewControllerTests exercises the GUI-thread projection bridge from src/app,
+    # whose header includes the platform adapter's sink interface.
+    ReviewControllerTests.cpp
+    "${PROJECT_SOURCE_DIR}/src/app/RuntimeBridges.cpp"
+    StartupSplashTests.cpp
     TimingDiagnosticsControllerTests.cpp
+)
+target_link_libraries(
+    dvs_ui_component_tests PRIVATE dvs_media_ffmpeg dvs_persistence_json
 )
 target_include_directories(
     dvs_ui_component_tests PRIVATE "${PROJECT_SOURCE_DIR}/src/media_ffmpeg/src"
@@ -64,9 +70,48 @@ target_compile_definitions(
     dvs_ui_component_tests PRIVATE DVS_MEDIA_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures/media"
 )
 
+# The Dvs.Ui registration contract: typed properties resolve for the composition-root
+# controllers, missing required dependencies fail creation, the uncreatable/creatable
+# split holds, and the generated tooling description matches the runtime registry. Lives
+# behind the adapters guard because the registration entry links the Qt Quick bridge that
+# defines the controllers.
+add_executable(
+    dvs_qml_type_registration_tests
+    QmlTypeRegistrationTests.cpp
+)
+target_link_libraries(
+    dvs_qml_type_registration_tests
+    PRIVATE
+        dvs_ui_qml
+        dvs::qt_dependencies
+        dvs::test_dependencies
+)
+# The consistency test reads the artifact qmllint consumes and compares it with the
+# runtime registry, so the build must generate it first.
+target_compile_definitions(
+    dvs_qml_type_registration_tests
+    PRIVATE DVS_QMLTYPES_PATH="${DVS_QML_TYPES_IMPORT_DIR}/Dvs/Ui/dvs.qmltypes"
+)
+add_dependencies(dvs_qml_type_registration_tests dvs_ui_qml_types_generate)
+
+dvs_apply_project_warnings(dvs_qml_type_registration_tests)
+set_target_properties(
+    dvs_qml_type_registration_tests
+    PROPERTIES FOLDER "Tests/Component/UI"
+)
+
+dvs_add_gtest(
+    TARGET dvs_qml_type_registration_tests
+    TEST_PREFIX "ui."
+    LAYER component
+    MODULE ui_qml
+    TIMEOUT 10
+)
+
 add_executable(
     dvs_image_review_controller_tests
     ImageReviewControllerTests.cpp
+    ImageColorContractTests.cpp
 )
 target_link_libraries(
     dvs_image_review_controller_tests
@@ -84,6 +129,66 @@ set_target_properties(
 
 dvs_add_gtest(
     TARGET dvs_image_review_controller_tests
+    TEST_PREFIX "ui."
+    LAYER component
+    MODULE ui_qml
+    TIMEOUT 10
+)
+
+add_executable(
+    dvs_image_color_sample_tests
+    ImageColorSampleTests.cpp
+    ImageColorConversionTests.cpp
+)
+target_link_libraries(
+    dvs_image_color_sample_tests
+    PRIVATE
+        dvs_ui_qml
+        dvs_media_ffmpeg
+        dvs::ffmpeg_dependencies
+        dvs::json_dependencies
+        dvs::qt_dependencies
+        dvs::test_dependencies
+)
+target_compile_definitions(
+    dvs_image_color_sample_tests
+    PRIVATE DVS_IMAGE_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures/images"
+)
+
+dvs_apply_project_warnings(dvs_image_color_sample_tests)
+set_target_properties(
+    dvs_image_color_sample_tests
+    PROPERTIES FOLDER "Tests/Component/UI"
+)
+
+dvs_add_gtest(
+    TARGET dvs_image_color_sample_tests
+    TEST_PREFIX "ui."
+    LAYER component
+    MODULE ui_qml
+    TIMEOUT 30
+)
+
+add_executable(
+    dvs_color_clipboard_controller_tests
+    ColorClipboardControllerTests.cpp
+)
+target_link_libraries(
+    dvs_color_clipboard_controller_tests
+    PRIVATE
+        dvs_ui_qml
+        dvs::qt_dependencies
+        dvs::test_dependencies
+)
+
+dvs_apply_project_warnings(dvs_color_clipboard_controller_tests)
+set_target_properties(
+    dvs_color_clipboard_controller_tests
+    PROPERTIES FOLDER "Tests/Component/UI"
+)
+
+dvs_add_gtest(
+    TARGET dvs_color_clipboard_controller_tests
     TEST_PREFIX "ui."
     LAYER component
     MODULE ui_qml
@@ -221,10 +326,35 @@ foreach(dvs_scale_factor ${dvs_dpi_scale_factors})
 endforeach()
 
 set(dvs_wipe_handle_qml_test "${CMAKE_CURRENT_SOURCE_DIR}/qml/tst_wipe_handle.qml")
+# Repo-built Qt Quick Test runner for the image workspace: the stock qmltestrunner cannot
+# register the Dvs.Ui types, and the typed workspace rejects QtObject stand-in controllers
+# at component compile time. The runner mirrors the production composition root (types,
+# real controller and clipboard, review image provider); see the file header.
+add_executable(
+    dvs_image_workspace_qml_tests
+    ImageWorkspaceQmlTestMain.cpp
+)
+target_link_libraries(
+    dvs_image_workspace_qml_tests
+    PRIVATE
+        dvs_ui_qml
+        dvs::qt_dependencies
+        Qt6::QuickTest
+)
+dvs_apply_project_warnings(dvs_image_workspace_qml_tests)
+set_target_properties(
+    dvs_image_workspace_qml_tests
+    PROPERTIES
+        FOLDER "Tests/Component/UI"
+        # Q_OBJECT classes live in the runner's .cpp; AUTOMOC generates the .moc file the
+        # source includes.
+        AUTOMOC ON
+)
+
 add_test(
     NAME ui.ImageWorkspaceManual
     COMMAND
-        "$<TARGET_FILE:Qt6::qmltestrunner>"
+        "$<TARGET_FILE:dvs_image_workspace_qml_tests>"
         -input "${CMAKE_CURRENT_SOURCE_DIR}/qml/tst_image_workspace_manual.qml"
 )
 set_tests_properties(

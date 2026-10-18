@@ -151,6 +151,13 @@ TEST(ClipExportWriterTests, CopiesTheRequestedRangeIntoAStandaloneClip) {
     EXPECT_EQ(report.outcome, application::ClipExportOutcome::kCompleted);
     EXPECT_EQ(report.packetsWritten, 5);
     EXPECT_EQ(report.firstPresentationMicroseconds, 0);
+    // FLOW2 result provenance: the report echoes the requested frame count and the keyframe
+    // shift, and names the actual copied tail plus which limit stopped the copy.
+    EXPECT_EQ(report.requestedFrameCount, 5);
+    EXPECT_EQ(report.startShiftMicroseconds, 0);
+    EXPECT_GT(report.lastPresentationMicroseconds, report.firstPresentationMicroseconds);
+    EXPECT_TRUE(report.stoppedAtRequestedEnd);
+    EXPECT_FALSE(report.endOfStreamReached);
     EXPECT_TRUE(report.technicalDetail.empty());
     ASSERT_TRUE(std::filesystem::exists(target));
     EXPECT_EQ(partialFileCount(workspace.path()), 0U);
@@ -355,6 +362,9 @@ TEST(ClipExportWriterTests, RunsToTheEndOfTheStreamWhenThePlanHasNoEndBound) {
 
     EXPECT_EQ(report.outcome, application::ClipExportOutcome::kCompleted);
     EXPECT_EQ(report.packetsWritten, 12);
+    EXPECT_TRUE(report.endOfStreamReached);
+    EXPECT_FALSE(report.stoppedAtRequestedEnd);
+    EXPECT_GT(report.lastPresentationMicroseconds, 0);
     const auto descriptor = MediaProbe::inspect(target, 0U);
     ASSERT_TRUE(descriptor.hasValue()) << descriptor.error().technicalDetail;
     EXPECT_EQ(descriptor.value().frameCount.value, 12);

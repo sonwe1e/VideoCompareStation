@@ -21,7 +21,9 @@
 
 namespace {
 
+using dvs::ui::ImageColorProfileStatus;
 using dvs::ui::ImageReviewController;
+using dvs::ui::StillImageSourceInfo;
 
 void ensureCoreApplication() {
     if (QCoreApplication::instance() != nullptr) {
@@ -570,6 +572,60 @@ TEST(ImageReviewControllerTests, AsyncPairOpenReturnsImmediatelyAndRejectsLateN)
     }
     EXPECT_EQ(controller.committedPairId(), 2);
     EXPECT_TRUE(controller.primaryPath().endsWith(QStringLiteral("fastA.bin")));
+    EXPECT_FALSE(controller.openPending());
+}
+
+TEST(ImageReviewControllerTests, StaleLoadResultCannotCommitUnderANewerPendingRequest) {
+    ensureCoreApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QUrl pendingA =
+        writeBytes(directory, QStringLiteral("pendingA.bin"), QByteArrayLiteral("pendingA"));
+    ASSERT_FALSE(pendingA.isEmpty());
+
+    QSemaphore entered;
+    QSemaphore release;
+    ScopedStillImageLoader loader{[&entered, &release](const QByteArray& bytes,
+                                                       QImage* image,
+                                                       QImage*,
+                                                       dvs::ui::StillImageSourceInfo*,
+                                                       std::string*) {
+        if (bytes.startsWith("pending")) {
+            entered.release();
+            release.tryAcquire(1, 8000);
+        }
+        QImage decoded(2, 2, QImage::Format_RGBA8888);
+        decoded.fill(bytes.startsWith("pending") ? QColor(1, 2, 3) : QColor(200, 0, 0));
+        *image = decoded;
+        return true;
+    }};
+
+    ImageReviewController controller;
+    ASSERT_TRUE(controller.openPairImages(solidImage(Qt::black),
+                                          QStringLiteral("oldA.bin"),
+                                          solidImage(Qt::white),
+                                          QStringLiteral("oldB.bin"),
+                                          3));
+    const int pendingRequest = controller.requestOpenPrimary(pendingA);
+    ASSERT_GT(pendingRequest, 0);
+    ASSERT_TRUE(entered.tryAcquire(1, 8000));
+    EXPECT_TRUE(controller.openPending());
+
+    // A stale (older request id) successful result arrives while the newer request is still
+    // pending. It must be dropped: the pending material is the only one that may commit.
+    dvs::ui::ImagePairLoader::Result stale;
+    stale.requestId = static_cast<quint64>(pendingRequest - 1);
+    stale.primary = solidImage(QColor(255, 0, 0));
+    stale.primaryLabel = QStringLiteral("stale.bin");
+    stale.primaryIdentity = QStringLiteral("stale-identity");
+    controller.deliverLoadResultForTesting(std::move(stale));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(controller.primaryPath(), QStringLiteral("oldA.bin"));
+    EXPECT_TRUE(controller.openPending());
+
+    release.release();
+    ASSERT_TRUE(waitForControllerIdle(controller));
+    EXPECT_TRUE(controller.primaryPath().endsWith(QStringLiteral("pendingA.bin")));
     EXPECT_FALSE(controller.openPending());
 }
 
@@ -2107,6 +2163,141 @@ TEST(ImageReviewControllerTests, AlphaFilterChangesTheViewButNeverTheSamplesOrSt
     EXPECT_FALSE(controller.frozenProbeSample().value(QStringLiteral("alphaHidden")).toBool());
     EXPECT_EQ(controller.probeColorText(ImageReviewController::ProbeRgba),
               QStringLiteral("rgba(10, 20, 30, 0)"));
+}
+
+// COLOR4: the display derivative may be colour-converted, but the committed buffer, its raw
+// sampling path and the status switch must keep the same honesty contract.
+TEST(ImageReviewControllerTests, ColorDisplayConversionChangesOnlyThePresentedImage) {
+    ensureCoreApplication();
+    ImageReviewController controller;
+    StillImageSourceInfo info;
+    info.bitDepth = 8;
+    info.channels = 4;
+    info.sourceFormat = QStringLiteral("rgba");
+    info.color.profileStatus = ImageColorProfileStatus::EmbeddedSupported;
+    info.color.profileDataSpace = QStringLiteral("RGB ");
+    info.colorSpace = QColorSpace{QColorSpace::DisplayP3};
+
+    const QImage source = solidImage(QColor(200, 100, 50));
+    ASSERT_TRUE(controller.openPrimaryImage(source, QStringLiteral("p3.png"), info));
+    ASSERT_TRUE(controller.primaryColorDisplayApplied());
+    EXPECT_TRUE(controller.colorDisplayEnabled());
+    EXPECT_TRUE(controller.primaryColorStatusText().contains(QStringLiteral("已应用文件配置转换")))
+        << controller.primaryColorStatusText().toStdString();
+    EXPECT_TRUE(controller.primaryColorStatusText().contains(QStringLiteral("显示环境未验证")));
+    EXPECT_TRUE(controller.primaryColorStateCompactText().contains(QStringLiteral("已转换")));
+
+    const QImage rawBefore = controller.rawImageForSlot(ImageReviewController::PrimarySlot);
+    const QColor rawPixel = rawBefore.pixelColor(2, 2);
+    const QImage converted = controller.imageForSlot(ImageReviewController::PrimarySlot);
+    const QColor convertedPixel = converted.pixelColor(2, 2);
+    // Display P3 codes rendered in sRGB are not the same numbers; if they were, the conversion
+    // would be silently absent.
+    EXPECT_NE(convertedPixel.rgba(), rawPixel.rgba())
+        << "raw " << rawPixel.rgba() << " display " << convertedPixel.rgba();
+    EXPECT_FALSE(controller.imageUrl(ImageReviewController::PrimarySlot).isEmpty());
+
+    const QString enabledUrl = controller.imageUrl(ImageReviewController::PrimarySlot);
+    controller.setColorDisplayEnabled(false);
+    EXPECT_FALSE(controller.primaryColorDisplayApplied());
+    EXPECT_FALSE(controller.colorDisplayEnabled());
+    EXPECT_TRUE(controller.primaryColorStatusText().contains(QStringLiteral("显示转换已关闭")))
+        << controller.primaryColorStatusText().toStdString();
+    // Switching the presentation off returns the decoded pixels exactly; the committed raw
+    // buffer never changed while the converted frames were on screen.
+    EXPECT_EQ(controller.imageForSlot(ImageReviewController::PrimarySlot).pixelColor(2, 2).rgba(),
+              rawPixel.rgba());
+    EXPECT_EQ(
+        controller.rawImageForSlot(ImageReviewController::PrimarySlot).pixelColor(2, 2).rgba(),
+        rawPixel.rgba());
+    EXPECT_NE(controller.imageUrl(ImageReviewController::PrimarySlot), enabledUrl);
+
+    controller.setColorDisplayEnabled(true);
+    EXPECT_TRUE(controller.primaryColorDisplayApplied());
+    EXPECT_EQ(controller.imageForSlot(ImageReviewController::PrimarySlot).pixelColor(2, 2).rgba(),
+              convertedPixel.rgba());
+}
+
+TEST(ImageReviewControllerTests, ColorDisplayConversionNeedsAParsedProfile) {
+    ensureCoreApplication();
+    ImageReviewController controller;
+    StillImageSourceInfo info;
+    info.channels = 4;
+    info.sourceFormat = QStringLiteral("rgba");
+    info.color.profileStatus = ImageColorProfileStatus::EmbeddedSupported;
+    info.color.profileDataSpace = QStringLiteral("RGB ");
+    // Structurally supported but the engine did not build a colour space: no conversion.
+    ASSERT_FALSE(info.colorSpace.isValid());
+    const QImage source = solidImage(QColor(20, 140, 60));
+    ASSERT_TRUE(controller.openPrimaryImage(source, QStringLiteral("engine-less.png"), info));
+    EXPECT_FALSE(controller.primaryColorDisplayApplied());
+    EXPECT_TRUE(controller.primaryColorStatusText().contains(QStringLiteral("转换引擎未就绪")))
+        << controller.primaryColorStatusText().toStdString();
+    EXPECT_EQ(controller.imageForSlot(ImageReviewController::PrimarySlot).pixelColor(1, 1).rgba(),
+              QColor(20, 140, 60).rgba());
+}
+
+TEST(ImageReviewControllerTests, UnsupportedOrCorruptProfilesNeverGetConverted) {
+    ensureCoreApplication();
+    for (const ImageColorProfileStatus status :
+         {ImageColorProfileStatus::EmbeddedUnsupported, ImageColorProfileStatus::Corrupt}) {
+        SCOPED_TRACE(static_cast<int>(status));
+        ImageReviewController controller;
+        StillImageSourceInfo info;
+        info.channels = 4;
+        info.sourceFormat = QStringLiteral("rgba");
+        info.color.profileStatus = status;
+        info.color.profileDataSpace = QStringLiteral("Lab ");
+        info.colorSpace = QColorSpace{QColorSpace::DisplayP3}; // Even if one is attached.
+        const QImage source = solidImage(QColor(30, 60, 120));
+        ASSERT_TRUE(controller.openPrimaryImage(source, QStringLiteral("fallback.png"), info));
+        EXPECT_FALSE(controller.primaryColorDisplayApplied());
+        EXPECT_TRUE(controller.primaryColorProfileNeedsFallback());
+        EXPECT_EQ(
+            controller.imageForSlot(ImageReviewController::PrimarySlot).pixelColor(1, 1).rgba(),
+            QColor(30, 60, 120).rgba());
+    }
+}
+
+TEST(ImageReviewControllerTests, ColorDisplayToggleDoesNotMoveDifferenceStatistics) {
+    ensureCoreApplication();
+    ImageReviewController controller;
+    StillImageSourceInfo info;
+    info.channels = 4;
+    info.sourceFormat = QStringLiteral("rgba");
+    info.color.profileStatus = ImageColorProfileStatus::EmbeddedSupported;
+    info.color.profileDataSpace = QStringLiteral("RGB ");
+    info.colorSpace = QColorSpace{QColorSpace::DisplayP3};
+    QImage left(8, 8, QImage::Format_ARGB32);
+    left.fill(QColor(180, 90, 40));
+    QImage right(8, 8, QImage::Format_ARGB32);
+    right.fill(QColor(60, 120, 200));
+    ASSERT_TRUE(controller.openPairImages(std::move(left),
+                                          QStringLiteral("left.png"),
+                                          std::move(right),
+                                          QStringLiteral("right.png"),
+                                          -1,
+                                          info,
+                                          info));
+    controller.setCompareMode(ImageReviewController::AbsDifference);
+    ASSERT_TRUE(waitUntil([&controller] {
+        return !controller.openPending() && !controller.diffPending() && controller.hasDiffResult();
+    }));
+    const int peak = controller.maxAbsDifference();
+    const double mean = controller.meanAbsDifference();
+    const QImage rawPrimary = controller.rawImageForSlot(ImageReviewController::PrimarySlot);
+    const QImage rawSecondary = controller.rawImageForSlot(ImageReviewController::SecondarySlot);
+    EXPECT_TRUE(controller.primaryColorDisplayApplied());
+    EXPECT_TRUE(controller.secondaryColorDisplayApplied());
+
+    controller.setColorDisplayEnabled(false);
+    ASSERT_TRUE(waitUntil([&controller] { return !controller.diffPending(); }));
+    EXPECT_EQ(controller.maxAbsDifference(), peak);
+    EXPECT_DOUBLE_EQ(controller.meanAbsDifference(), mean);
+    EXPECT_EQ(controller.rawImageForSlot(ImageReviewController::PrimarySlot), rawPrimary);
+    EXPECT_EQ(controller.rawImageForSlot(ImageReviewController::SecondarySlot), rawSecondary);
+    EXPECT_FALSE(controller.primaryColorDisplayApplied());
+    EXPECT_FALSE(controller.secondaryColorDisplayApplied());
 }
 
 } // namespace

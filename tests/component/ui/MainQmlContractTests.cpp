@@ -4,18 +4,19 @@
 #include "dvs/domain/ComparisonValidator.h"
 #include "dvs/domain/InterpolationProtocol.h"
 #include "dvs/ui/ClipExportController.h"
+#include "dvs/ui/ColorClipboardController.h"
 #include "dvs/ui/ComparisonExportController.h"
 #include "dvs/ui/ComparisonSurface.h"
 #include "dvs/ui/EditImageProvider.h"
 #include "dvs/ui/FileAssociationController.h"
 #include "dvs/ui/GraphicsBackend.h"
-#include "dvs/ui/HoldKeyHandler.h"
 #include "dvs/ui/ImageEditController.h"
 #include "dvs/ui/ImageFolderPairModel.h"
 #include "dvs/ui/ImageReviewController.h"
 #include "dvs/ui/InterpolationProtocolController.h"
 #include "dvs/ui/IssueLogController.h"
-#include "dvs/ui/JogKeyHandler.h"
+#include "dvs/ui/MainWindowDependencies.h"
+#include "dvs/ui/QmlTypeRegistration.h"
 #include "dvs/ui/ReviewController.h"
 #include "dvs/ui/ReviewImageProvider.h"
 #include "dvs/ui/ReviewPreferencesController.h"
@@ -27,6 +28,7 @@
 
 #include <QClipboard>
 #include <QColor>
+#include <QColorSpace>
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
@@ -236,6 +238,21 @@ QQuickItem* openEditToolsItem(QObject* root, const QString& objectName) {
 namespace dvs::ui {
 namespace {
 
+// Main.qml declares its pilot services as required typed properties, so every load must
+// supply them exactly like the production composition root does. Tests that exercise the
+// image workspace pass their own instances through pilotWindowProperties(); the rest share
+// one inert real pair through defaultPilotWindowProperties().
+[[nodiscard]] QVariantMap pilotWindowProperties(ImageReviewController& imageReview,
+                                                ColorClipboardController& colorClipboard) {
+    return mainWindowPilotProperties(imageReview, colorClipboard);
+}
+
+[[nodiscard]] QVariantMap defaultPilotWindowProperties() {
+    static ImageReviewController imageReview;
+    static ColorClipboardController colorClipboard;
+    return pilotWindowProperties(imageReview, colorClipboard);
+}
+
 class ClosedSettingsRepository final : public application::ISettingsRepository {
 public:
     [[nodiscard]] application::PortSubmitResult
@@ -315,6 +332,12 @@ public:
         report.outcome = cancelRequested.load() ? application::ClipExportOutcome::kCanceled
                                                 : application::ClipExportOutcome::kCompleted;
         report.packetsWritten = 5;
+        report.firstPresentationMicroseconds = job.plan.startMicroseconds;
+        report.lastPresentationMicroseconds = job.plan.endMicroseconds.value_or(0);
+        report.endOfStreamReached = !job.plan.endMicroseconds.has_value();
+        report.stoppedAtRequestedEnd = job.plan.endMicroseconds.has_value();
+        report.requestedFrameCount = job.plan.requestedFrameCount;
+        report.startShiftMicroseconds = job.plan.startShiftMicroseconds;
         return report;
     }
 
@@ -719,7 +742,6 @@ public:
         engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
         engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), shell.get());
         engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), facade.get());
-        engine.rootContext()->setContextProperty(QStringLiteral("imageReview"), &imageReview);
         engine.rootContext()->setContextProperty(QStringLiteral("imageFolderPairs"), &folderPairs);
         if (withVideoFolder) {
             videoFolder.attachPreferences(preferences);
@@ -811,7 +833,8 @@ QtObject {
             error = componentErrors(component);
             return false;
         }
-        root.reset(component.create());
+        root.reset(component.createWithInitialProperties(
+            pilotWindowProperties(imageReview, colorClipboard)));
         if (!root) {
             error = componentErrors(component);
             return false;
@@ -898,6 +921,9 @@ QtObject {
     std::unique_ptr<ReviewShellController> shell;
     std::unique_ptr<ReviewSessionFacade> facade;
     ImageReviewController imageReview;
+    // The root's required clipboard service; the copy tests assert through the real
+    // clipboard the adapter writes to.
+    ColorClipboardController colorClipboard;
     ImageFolderPairModel folderPairs;
     VideoFolderModel videoFolder;
     bool withVideoFolder = false;
@@ -1476,7 +1502,8 @@ TEST(MainQmlContractTests, InstantiatesRootAndSeparatesManualAlignmentStates) {
     QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
     ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
 
-    std::unique_ptr<QObject> root{component.create()};
+    std::unique_ptr<QObject> root{
+        component.createWithInitialProperties(defaultPilotWindowProperties())};
     ASSERT_NE(root, nullptr) << componentErrors(component);
     ASSERT_NE(qobject_cast<QQuickWindow*>(root.get()), nullptr);
     QCoreApplication::processEvents();
@@ -1993,7 +2020,8 @@ TEST(MainQmlContractTests, DockedTransportResolvesContextuallyAndClearsViewport)
     QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
     ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
 
-    std::unique_ptr<QObject> root{component.create()};
+    std::unique_ptr<QObject> root{
+        component.createWithInitialProperties(defaultPilotWindowProperties())};
     ASSERT_NE(root, nullptr) << componentErrors(component);
     auto* const window = qobject_cast<QQuickWindow*>(root.get());
     ASSERT_NE(window, nullptr);
@@ -2139,7 +2167,8 @@ TEST(MainQmlContractTests, NarrowWindowKeepsViewportCornerControlsReachable) {
     QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
     ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
 
-    std::unique_ptr<QObject> root{component.create()};
+    std::unique_ptr<QObject> root{
+        component.createWithInitialProperties(defaultPilotWindowProperties())};
     ASSERT_NE(root, nullptr) << componentErrors(component);
     auto* const window = qobject_cast<QQuickWindow*>(root.get());
     ASSERT_NE(window, nullptr);
@@ -3192,7 +3221,8 @@ TEST(MainQmlContractTests, ExportRangeEnablesAfterAuthoritativeSnapshotArrives) 
     engine.rootContext()->setContextProperty(QStringLiteral("clipExport"), &clipExport);
     QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
     ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
-    std::unique_ptr<QObject> root{component.create()};
+    std::unique_ptr<QObject> root{
+        component.createWithInitialProperties(defaultPilotWindowProperties())};
     ASSERT_NE(root, nullptr) << componentErrors(component);
     auto* const window = qobject_cast<QQuickWindow*>(root.get());
     ASSERT_NE(window, nullptr);
@@ -3446,10 +3476,13 @@ TEST(MainQmlContractTests, ExportRangeButtonStartsAClipExport) {
     // The outcome lands once, on the channel the user can actually see: the export finishes
     // while the chrome is up (the dialog may even be closed), so the intent toast carries it and
     // the immersive HUD - which only renders with the chrome hidden - stays empty.
-    EXPECT_EQ(harness.root->property("intentMessage").toString(),
-              QStringLiteral("已导出所选区间。"));
+    const QString exportMessage = harness.root->property("intentMessage").toString();
+    EXPECT_TRUE(exportMessage.startsWith(QStringLiteral("已导出所选区间。")))
+        << exportMessage.toStdString();
+    EXPECT_TRUE(exportMessage.contains(QStringLiteral("实际起点"))) << exportMessage.toStdString();
+    EXPECT_TRUE(exportMessage.contains(QStringLiteral("实际终点"))) << exportMessage.toStdString();
     EXPECT_TRUE(harness.root->property("immersiveHudText").toString().isEmpty());
-    EXPECT_EQ(harness.clipExport->lastStatus(), QStringLiteral("已导出所选区间。"));
+    EXPECT_EQ(harness.clipExport->lastStatus(), exportMessage);
     EXPECT_EQ(harness.clipExport->lastOutputPath(), QDir::toNativeSeparators(targetPath));
     EXPECT_TRUE(harness.clipExport->lastFailureDetail().isEmpty());
     EXPECT_DOUBLE_EQ(harness.clipExport->progress(), 1.0);
@@ -3712,7 +3745,8 @@ TEST(MainQmlContractTests, ShowsIntentMessageOnSynchronousRejection) {
     QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
     ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
 
-    std::unique_ptr<QObject> root{component.create()};
+    std::unique_ptr<QObject> root{
+        component.createWithInitialProperties(defaultPilotWindowProperties())};
     ASSERT_NE(root, nullptr) << componentErrors(component);
     QCoreApplication::processEvents();
 
@@ -3878,7 +3912,8 @@ TEST(MainQmlContractTests, ResumeRestoresRecordedPositionAndStaysOffForeignOrSta
     QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
     ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
 
-    std::unique_ptr<QObject> root{component.create()};
+    std::unique_ptr<QObject> root{
+        component.createWithInitialProperties(defaultPilotWindowProperties())};
     ASSERT_NE(root, nullptr) << componentErrors(component);
     auto* const window = qobject_cast<QQuickWindow*>(root.get());
     ASSERT_NE(window, nullptr);
@@ -4053,7 +4088,8 @@ TEST(MainQmlContractTests, AutomationDeterminismKeepsStoredResumePositionsOffThe
     QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
     ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
 
-    std::unique_ptr<QObject> root{component.create()};
+    std::unique_ptr<QObject> root{
+        component.createWithInitialProperties(defaultPilotWindowProperties())};
     ASSERT_NE(root, nullptr) << componentErrors(component);
     auto* const window = qobject_cast<QQuickWindow*>(root.get());
     ASSERT_NE(window, nullptr);
@@ -4192,7 +4228,8 @@ TEST(MainQmlContractTests, ActiveSourceStripKeepsEveryChipReachableAtMinimumWidt
     QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
     ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
 
-    std::unique_ptr<QObject> root{component.create()};
+    std::unique_ptr<QObject> root{
+        component.createWithInitialProperties(defaultPilotWindowProperties())};
     ASSERT_NE(root, nullptr) << componentErrors(component);
     auto* const window = qobject_cast<QQuickWindow*>(root.get());
     ASSERT_NE(window, nullptr);
@@ -4360,7 +4397,8 @@ TEST(MainQmlContractTests, StripChipsFollowDisplayOrderWithoutChangingTheirSourc
     QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
     ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
 
-    std::unique_ptr<QObject> root{component.create()};
+    std::unique_ptr<QObject> root{
+        component.createWithInitialProperties(defaultPilotWindowProperties())};
     ASSERT_NE(root, nullptr) << componentErrors(component);
     auto* const window = qobject_cast<QQuickWindow*>(root.get());
     ASSERT_NE(window, nullptr);
@@ -4599,7 +4637,8 @@ TEST(MainQmlContractTests, DrawerScrimTransportShrinkAndEscClose) {
     QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
     ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
 
-    std::unique_ptr<QObject> root{component.create()};
+    std::unique_ptr<QObject> root{
+        component.createWithInitialProperties(defaultPilotWindowProperties())};
     ASSERT_NE(root, nullptr) << componentErrors(component);
     auto* const window = qobject_cast<QQuickWindow*>(root.get());
     ASSERT_NE(window, nullptr);
@@ -5012,7 +5051,8 @@ TEST(MainQmlContractTests, NestedPopupMouseTraversal) {
     QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
     ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
 
-    std::unique_ptr<QObject> root{component.create()};
+    std::unique_ptr<QObject> root{
+        component.createWithInitialProperties(defaultPilotWindowProperties())};
     ASSERT_NE(root, nullptr) << componentErrors(component);
     auto* const window = qobject_cast<QQuickWindow*>(root.get());
     ASSERT_NE(window, nullptr);
@@ -5310,7 +5350,8 @@ TEST(MainQmlContractTests, SwitchingCandidateKeepsReferenceAnchoredPairAndObserv
     QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
     ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
 
-    std::unique_ptr<QObject> root{component.create()};
+    std::unique_ptr<QObject> root{
+        component.createWithInitialProperties(defaultPilotWindowProperties())};
     ASSERT_NE(root, nullptr) << componentErrors(component);
     auto* const window = qobject_cast<QQuickWindow*>(root.get());
     ASSERT_NE(window, nullptr);
@@ -5451,7 +5492,8 @@ TEST(MainQmlContractTests, DifferenceButtonOffersFlavorsAndPeekTogglesSuppressio
     QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
     ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
 
-    std::unique_ptr<QObject> root{component.create()};
+    std::unique_ptr<QObject> root{
+        component.createWithInitialProperties(defaultPilotWindowProperties())};
     ASSERT_NE(root, nullptr) << componentErrors(component);
     auto* const window = qobject_cast<QQuickWindow*>(root.get());
     ASSERT_NE(window, nullptr);
@@ -5578,7 +5620,7 @@ public:
             error = componentErrors(component);
             return false;
         }
-        root.reset(component.create());
+        root.reset(component.createWithInitialProperties(defaultPilotWindowProperties()));
         if (!root) {
             error = componentErrors(component);
             return false;
@@ -6529,7 +6571,8 @@ TEST(MainQmlContractTests, CopyComparisonButtonPutsLabeledViewportOnClipboard) {
     QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
     ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
 
-    std::unique_ptr<QObject> root{component.create()};
+    std::unique_ptr<QObject> root{
+        component.createWithInitialProperties(defaultPilotWindowProperties())};
     ASSERT_NE(root, nullptr) << componentErrors(component);
     auto* const window = qobject_cast<QQuickWindow*>(root.get());
     ASSERT_NE(window, nullptr);
@@ -7662,7 +7705,8 @@ TEST(MainQmlContractTests, DISABLED_RangeLoopNeverPresentsOutsideInclusiveRange)
     engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
     QQmlComponent component{&engine, QUrl{QUrl{QStringLiteral("qrc:/qml/Main.qml")}}};
     ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
-    std::unique_ptr<QObject> root{component.create()};
+    std::unique_ptr<QObject> root{
+        component.createWithInitialProperties(defaultPilotWindowProperties())};
     ASSERT_NE(root, nullptr) << componentErrors(component);
     auto* const window = qobject_cast<QQuickWindow*>(root.get());
     ASSERT_NE(window, nullptr);
@@ -7794,7 +7838,8 @@ TEST(MainQmlContractTests, DISABLED_WipeHandleIsKeyboardAdjustable) {
     engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
     QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
     ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
-    std::unique_ptr<QObject> root{component.create()};
+    std::unique_ptr<QObject> root{
+        component.createWithInitialProperties(defaultPilotWindowProperties())};
     ASSERT_NE(root, nullptr) << componentErrors(component);
     auto* const window = qobject_cast<QQuickWindow*>(root.get());
     ASSERT_NE(window, nullptr);
@@ -7842,7 +7887,8 @@ TEST(MainQmlContractTests, DISABLED_TimelineAccessibleValueMatchesPreviewOrCurre
     engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
     QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
     ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
-    std::unique_ptr<QObject> root{component.create()};
+    std::unique_ptr<QObject> root{
+        component.createWithInitialProperties(defaultPilotWindowProperties())};
     ASSERT_NE(root, nullptr) << componentErrors(component);
     auto* const window = qobject_cast<QQuickWindow*>(root.get());
     ASSERT_NE(window, nullptr);
@@ -7889,6 +7935,7 @@ TEST(MainQmlContractTests, ImageWorkspaceReloadsViewportSourceAfterImageOpen) {
     ReviewShellController shell{controller, preferences};
     ReviewSessionFacade facade{controller, preferences, shell};
     ImageReviewController imageReview;
+    ColorClipboardController colorClipboard;
 
     QQmlEngine engine;
     engine.addImportPath(
@@ -7897,12 +7944,12 @@ TEST(MainQmlContractTests, ImageWorkspaceReloadsViewportSourceAfterImageOpen) {
     engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
     engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
     engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
-    engine.rootContext()->setContextProperty(QStringLiteral("imageReview"), &imageReview);
     engine.addImageProvider(QStringLiteral("vcs-review"), new ReviewImageProvider(&imageReview));
     QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
     ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
 
-    std::unique_ptr<QObject> root{component.create()};
+    std::unique_ptr<QObject> root{
+        component.createWithInitialProperties(pilotWindowProperties(imageReview, colorClipboard))};
     ASSERT_NE(root, nullptr) << componentErrors(component);
     auto* const window = qobject_cast<QQuickWindow*>(root.get());
     ASSERT_NE(window, nullptr);
@@ -7963,6 +8010,261 @@ TEST(MainQmlContractTests, ImageWorkspaceReloadsViewportSourceAfterImageOpen) {
     EXPECT_NE(imageItem->property("source").toString(), alphaUrl);
 }
 
+TEST(MainQmlContractTests, ImageColorStateIsVisiblePerSideWithoutHover) {
+    // COLOR3: the colour state must be readable from the always-visible status strip, per
+    // side, and it must be independent of the "format converted to RGBA8" badge. A native
+    // RGBA8 image with an embedded ICC profile still reports "配置未应用"; a side without a
+    // profile reports the explicit sRGB assumption; both say the display is unverified.
+    // Swap, single-side replace, a failed open and a fast pair switch must all keep the
+    // badges on the currently committed material.
+    auto snapshot = std::make_shared<application::SessionSnapshot>();
+    snapshot->graphicsReady = true;
+    snapshot->sessionState = domain::SessionState::kEmpty;
+    std::vector<application::PlaybackCommand> submitted;
+    std::vector<application::CommandTerminal> terminals;
+    ReviewController controller{
+        ReviewController::Dependencies{
+            .submit =
+                [&submitted](application::PlaybackCommand command) {
+                    submitted.push_back(std::move(command));
+                    return application::PortSubmitResult::Accepted;
+                },
+            .snapshot = [snapshot] { return snapshot; },
+            .takeCompletedCommands =
+                [&terminals] {
+                    std::vector<application::CommandTerminal> result = std::move(terminals);
+                    terminals.clear();
+                    return result;
+                },
+        },
+    };
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    ReviewShellController shell{controller, preferences};
+    ReviewSessionFacade facade{controller, preferences, shell};
+    ImageReviewController imageReview;
+    ColorClipboardController colorClipboard;
+
+    QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
+    engine.addImageProvider(QStringLiteral("vcs-review"), new ReviewImageProvider(&imageReview));
+    QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
+    ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
+
+    std::unique_ptr<QObject> root{
+        component.createWithInitialProperties(pilotWindowProperties(imageReview, colorClipboard))};
+    ASSERT_NE(root, nullptr) << componentErrors(component);
+    auto* const window = qobject_cast<QQuickWindow*>(root.get());
+    ASSERT_NE(window, nullptr);
+    window->resize(960, 640);
+    QCoreApplication::processEvents();
+
+    QVariant imageWorkspaceActivated;
+    ASSERT_TRUE(QMetaObject::invokeMethod(root.get(),
+                                          "activateWorkspace",
+                                          Q_RETURN_ARG(QVariant, imageWorkspaceActivated),
+                                          Q_ARG(QVariant, QVariant{1})));
+    ASSERT_TRUE(imageWorkspaceActivated.toBool());
+    QCoreApplication::processEvents();
+
+    auto* const primaryBadge =
+        root->findChild<QQuickItem*>(QStringLiteral("imagePrimaryColorStatusBadge"));
+    auto* const secondaryBadge =
+        root->findChild<QQuickItem*>(QStringLiteral("imageSecondaryColorStatusBadge"));
+    auto* const conversionBadge =
+        root->findChild<QQuickItem*>(QStringLiteral("displayConversionBadge"));
+    ASSERT_NE(primaryBadge, nullptr);
+    ASSERT_NE(secondaryBadge, nullptr);
+    ASSERT_NE(conversionBadge, nullptr);
+
+    const auto pump = [&imageReview]() {
+        QElapsedTimer timer;
+        timer.start();
+        while (imageReview.openPending() && timer.elapsed() < 5000) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+        }
+        for (int iteration = 0; iteration < 5; ++iteration) {
+            QCoreApplication::processEvents();
+        }
+    };
+    const auto rgba8Info = [](int profileStatus) {
+        StillImageSourceInfo info;
+        info.bitDepth = 8;
+        info.channels = 4;
+        info.hasAlpha = true;
+        info.straightAlpha = true;
+        info.sourceFormat = QStringLiteral("rgba");
+        info.displayConverted = false;
+        info.color.profileStatus = static_cast<ImageColorProfileStatus>(profileStatus);
+        return info;
+    };
+
+    QImage imageA(64, 48, QImage::Format_ARGB32);
+    imageA.fill(QColor(200, 30, 30));
+    QImage imageB(32, 24, QImage::Format_ARGB32);
+    imageB.fill(QColor(20, 30, 200));
+
+    StillImageSourceInfo primaryInfo =
+        rgba8Info(static_cast<int>(ImageColorProfileStatus::EmbeddedSupported));
+    // COLOR4: a parsed SDR profile turns the display conversion on (default) and the compact
+    // badge must say "converted", still followed by the unverified-display admission.
+    primaryInfo.colorSpace = QColorSpace{QColorSpace::DisplayP3};
+    primaryInfo.color.profileSha256 =
+        QStringLiteral("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+    primaryInfo.color.profileDataSpace = QStringLiteral("RGB ");
+    primaryInfo.color.profileClass = QStringLiteral("mntr");
+    primaryInfo.color.profileVersionMajor = 4;
+    StillImageSourceInfo secondaryInfo = rgba8Info(static_cast<int>(ImageColorProfileStatus::None));
+    ASSERT_TRUE(imageReview.openPairImages(std::move(imageA),
+                                           QStringLiteral("a.png"),
+                                           std::move(imageB),
+                                           QStringLiteral("b.png"),
+                                           -1,
+                                           primaryInfo,
+                                           secondaryInfo));
+    pump();
+
+    EXPECT_TRUE(primaryBadge->isVisible()) << visibleChainText(primaryBadge);
+    EXPECT_TRUE(secondaryBadge->isVisible()) << visibleChainText(secondaryBadge);
+    const QString aText = primaryBadge->property("text").toString();
+    const QString bText = secondaryBadge->property("text").toString();
+    EXPECT_TRUE(aText.contains(QStringLiteral("A · 颜色：已转换"))) << aText.toStdString();
+    EXPECT_TRUE(aText.contains(QStringLiteral("显示未验证"))) << aText.toStdString();
+    EXPECT_TRUE(bText.contains(QStringLiteral("B · 颜色：无配置"))) << bText.toStdString();
+    // A native RGBA8 pair needed no format conversion, so the conversion badge is hidden
+    // while the colour state is not: the two facts are no longer coupled.
+    EXPECT_FALSE(conversionBadge->isVisible()) << visibleChainText(conversionBadge);
+
+    // COLOR4 observation path: the toggle badge is the in-product way to prove the display
+    // derivative is converted while the raw buffer stays untouched.
+    auto* const colorDisplayBadge =
+        root->findChild<QQuickItem*>(QStringLiteral("imageColorDisplayBadge"));
+    auto* const colorDisplayToggle =
+        root->findChild<QQuickItem*>(QStringLiteral("imageColorDisplayToggleButton"));
+    ASSERT_NE(colorDisplayBadge, nullptr);
+    ASSERT_NE(colorDisplayToggle, nullptr);
+    EXPECT_TRUE(colorDisplayBadge->isVisible()) << visibleChainText(colorDisplayBadge);
+    const QString convertedUrl = imageReview.imageUrl(0);
+    const QColor rawPixel = imageReview.rawImageForSlot(0).pixelColor(10, 10);
+    const QColor convertedPixel = imageReview.imageForSlot(0).pixelColor(10, 10);
+    EXPECT_NE(convertedPixel.rgba(), rawPixel.rgba());
+    // The QML function lives on the workspace root; parent walking avoids depending on which
+    // Loader wrapper owns the objectName in this harness.
+    QObject* imageWorkspace = primaryBadge->parent();
+    while (imageWorkspace != nullptr &&
+           imageWorkspace->metaObject()->indexOfMethod("toggleColorDisplay()") < 0) {
+        imageWorkspace = imageWorkspace->parent();
+    }
+    ASSERT_NE(imageWorkspace, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(imageWorkspace, "toggleColorDisplay"));
+    pump();
+    EXPECT_FALSE(imageReview.colorDisplayEnabled());
+    EXPECT_TRUE(
+        primaryBadge->property("text").toString().contains(QStringLiteral("颜色：转换已关闭")))
+        << primaryBadge->property("text").toString().toStdString();
+    EXPECT_NE(imageReview.imageUrl(0), convertedUrl);
+    EXPECT_EQ(imageReview.imageForSlot(0).pixelColor(10, 10).rgba(), rawPixel.rgba());
+    EXPECT_EQ(imageReview.rawImageForSlot(0).pixelColor(10, 10).rgba(), rawPixel.rgba());
+    ASSERT_TRUE(QMetaObject::invokeMethod(imageWorkspace, "toggleColorDisplay"));
+    pump();
+    EXPECT_TRUE(imageReview.colorDisplayEnabled());
+    EXPECT_TRUE(primaryBadge->property("text").toString().contains(QStringLiteral("已转换")))
+        << primaryBadge->property("text").toString().toStdString();
+    EXPECT_EQ(imageReview.imageUrl(0), convertedUrl);
+    EXPECT_EQ(imageReview.imageForSlot(0).pixelColor(10, 10).rgba(), convertedPixel.rgba());
+
+    // Swap: the badges follow the sides, not their original slot.
+    ASSERT_TRUE(imageReview.swapSides());
+    pump();
+    EXPECT_TRUE(primaryBadge->property("text").toString().contains(QStringLiteral("无配置")))
+        << primaryBadge->property("text").toString().toStdString();
+    EXPECT_TRUE(
+        secondaryBadge->property("text").toString().contains(QStringLiteral("颜色：已转换")))
+        << secondaryBadge->property("text").toString().toStdString();
+
+    // Replace A with a corrupt profile: only A's state changes, B keeps its own.
+    QImage imageC(16, 16, QImage::Format_ARGB32);
+    imageC.fill(QColor(10, 200, 10));
+    StillImageSourceInfo corruptInfo =
+        rgba8Info(static_cast<int>(ImageColorProfileStatus::Corrupt));
+    ASSERT_TRUE(
+        imageReview.openPrimaryImage(std::move(imageC), QStringLiteral("c.png"), corruptInfo));
+    pump();
+    const QString corruptText = primaryBadge->property("text").toString();
+    EXPECT_TRUE(corruptText.contains(QStringLiteral("配置损坏"))) << corruptText.toStdString();
+    EXPECT_TRUE(
+        secondaryBadge->property("text").toString().contains(QStringLiteral("颜色：已转换")))
+        << secondaryBadge->property("text").toString().toStdString();
+
+    // A failed open keeps the committed pair and therefore the same badge state.
+    const int failedRequest = imageReview.requestOpenPair(
+        QUrl::fromLocalFile(QStringLiteral("Z:/missing-color-contract/a.png")),
+        QUrl::fromLocalFile(QStringLiteral("Z:/missing-color-contract/b.png")));
+    ASSERT_GT(failedRequest, 0);
+    pump();
+    EXPECT_FALSE(imageReview.errorText().isEmpty());
+    EXPECT_TRUE(primaryBadge->property("text").toString().contains(QStringLiteral("配置损坏")))
+        << primaryBadge->property("text").toString().toStdString();
+
+    // Fast pair switch: the badges name the latest committed pair, not the previous one.
+    QImage imageD(16, 16, QImage::Format_ARGB32);
+    imageD.fill(QColor(5, 5, 5));
+    QImage imageE(16, 16, QImage::Format_ARGB32);
+    imageE.fill(QColor(6, 6, 6));
+    ASSERT_TRUE(
+        imageReview.openPairImages(std::move(imageD),
+                                   QStringLiteral("d.png"),
+                                   std::move(imageE),
+                                   QStringLiteral("e.png"),
+                                   -1,
+                                   rgba8Info(static_cast<int>(ImageColorProfileStatus::None)),
+                                   rgba8Info(static_cast<int>(ImageColorProfileStatus::None))));
+    pump();
+    EXPECT_TRUE(primaryBadge->property("text").toString().contains(QStringLiteral("无配置")))
+        << primaryBadge->property("text").toString().toStdString();
+    EXPECT_TRUE(secondaryBadge->property("text").toString().contains(QStringLiteral("无配置")))
+        << secondaryBadge->property("text").toString().toStdString();
+
+    // Single-side close removes exactly that badge; the surviving side keeps its state.
+    ASSERT_TRUE(imageReview.closeSecondary());
+    pump();
+    EXPECT_TRUE(primaryBadge->isVisible()) << visibleChainText(primaryBadge);
+    EXPECT_TRUE(primaryBadge->property("text").toString().contains(QStringLiteral("无配置")))
+        << primaryBadge->property("text").toString().toStdString();
+    EXPECT_FALSE(secondaryBadge->isVisible()) << visibleChainText(secondaryBadge);
+
+    // Closing A while a pair is committed promotes B into the internal primary slot, so the
+    // workspace still shows one image and its own colour state.
+    QImage imageF(16, 16, QImage::Format_ARGB32);
+    imageF.fill(QColor(7, 7, 7));
+    QImage imageG(16, 16, QImage::Format_ARGB32);
+    imageG.fill(QColor(8, 8, 8));
+    ASSERT_TRUE(
+        imageReview.openPairImages(std::move(imageF),
+                                   QStringLiteral("f.png"),
+                                   std::move(imageG),
+                                   QStringLiteral("g.png"),
+                                   -1,
+                                   rgba8Info(static_cast<int>(ImageColorProfileStatus::None)),
+                                   rgba8Info(static_cast<int>(ImageColorProfileStatus::None))));
+    pump();
+    ASSERT_TRUE(imageReview.closePrimary());
+    pump();
+    EXPECT_TRUE(primaryBadge->isVisible()) << visibleChainText(primaryBadge);
+    EXPECT_TRUE(primaryBadge->property("text").toString().contains(QStringLiteral("无配置")))
+        << primaryBadge->property("text").toString().toStdString();
+    EXPECT_FALSE(secondaryBadge->isVisible()) << visibleChainText(secondaryBadge);
+
+    // The last image closes to the empty state: no side, no colour badge.
+    ASSERT_TRUE(imageReview.closePrimary());
+    pump();
+    EXPECT_FALSE(primaryBadge->isVisible()) << visibleChainText(primaryBadge);
+}
+
 TEST(MainQmlContractTests, ImageWorkspaceWipeHandleMovesSplitPosition) {
     // Regression: ImageWorkspace wired WipeHandle.positionRequested to a method call on
     // the controller (imageReview.setWipePosition(...)), but that method is only the
@@ -7994,6 +8296,7 @@ TEST(MainQmlContractTests, ImageWorkspaceWipeHandleMovesSplitPosition) {
     ReviewShellController shell{controller, preferences};
     ReviewSessionFacade facade{controller, preferences, shell};
     ImageReviewController imageReview;
+    ColorClipboardController colorClipboard;
 
     QQmlEngine engine;
     engine.addImportPath(
@@ -8002,12 +8305,12 @@ TEST(MainQmlContractTests, ImageWorkspaceWipeHandleMovesSplitPosition) {
     engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
     engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
     engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
-    engine.rootContext()->setContextProperty(QStringLiteral("imageReview"), &imageReview);
     engine.addImageProvider(QStringLiteral("vcs-review"), new ReviewImageProvider(&imageReview));
     QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
     ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
 
-    std::unique_ptr<QObject> root{component.create()};
+    std::unique_ptr<QObject> root{
+        component.createWithInitialProperties(pilotWindowProperties(imageReview, colorClipboard))};
     ASSERT_NE(root, nullptr) << componentErrors(component);
     auto* const window = qobject_cast<QQuickWindow*>(root.get());
     ASSERT_NE(window, nullptr);
@@ -8270,6 +8573,9 @@ TEST(MainQmlContractTests, ImageFolderComparisonLoadsSidebarAndOpensFirstPair) {
     ReviewShellController shell{controller, preferences};
     ReviewSessionFacade facade{controller, preferences, shell};
     ImageReviewController imageReview;
+    // The root's required clipboard service; the copy tests assert through the real
+    // clipboard the adapter writes to.
+    ColorClipboardController colorClipboard;
     ImageFolderPairModel folderPairs;
     folderPairs.setAsyncPairOpener(
         [&imageReview](
@@ -8308,13 +8614,13 @@ TEST(MainQmlContractTests, ImageFolderComparisonLoadsSidebarAndOpensFirstPair) {
     engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
     engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
     engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
-    engine.rootContext()->setContextProperty(QStringLiteral("imageReview"), &imageReview);
     engine.rootContext()->setContextProperty(QStringLiteral("imageFolderPairs"), &folderPairs);
     engine.addImageProvider(QStringLiteral("vcs-review"), new ReviewImageProvider(&imageReview));
     QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
     ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
 
-    std::unique_ptr<QObject> root{component.create()};
+    std::unique_ptr<QObject> root{
+        component.createWithInitialProperties(pilotWindowProperties(imageReview, colorClipboard))};
     ASSERT_NE(root, nullptr) << componentErrors(component);
     auto* const window = qobject_cast<QQuickWindow*>(root.get());
     ASSERT_NE(window, nullptr);
@@ -8445,6 +8751,9 @@ TEST(MainQmlContractTests, FolderSidebarExposesPairingContextAndOpensMissingSide
     ReviewShellController shell{controller, preferences};
     ReviewSessionFacade facade{controller, preferences, shell};
     ImageReviewController imageReview;
+    // The root's required clipboard service; the copy tests assert through the real
+    // clipboard the adapter writes to.
+    ColorClipboardController colorClipboard;
     ImageFolderPairModel folderPairs;
     folderPairs.setAsyncPairOpener(
         [&imageReview](
@@ -8483,13 +8792,13 @@ TEST(MainQmlContractTests, FolderSidebarExposesPairingContextAndOpensMissingSide
     engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
     engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
     engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
-    engine.rootContext()->setContextProperty(QStringLiteral("imageReview"), &imageReview);
     engine.rootContext()->setContextProperty(QStringLiteral("imageFolderPairs"), &folderPairs);
     engine.addImageProvider(QStringLiteral("vcs-review"), new ReviewImageProvider(&imageReview));
     QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
     ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
 
-    std::unique_ptr<QObject> root{component.create()};
+    std::unique_ptr<QObject> root{
+        component.createWithInitialProperties(pilotWindowProperties(imageReview, colorClipboard))};
     ASSERT_NE(root, nullptr) << componentErrors(component);
     auto* const window = qobject_cast<QQuickWindow*>(root.get());
     ASSERT_NE(window, nullptr);
@@ -8918,6 +9227,7 @@ TEST(MainQmlContractTests, ImageChipDropsRouteRealDragEvents) {
     ReviewShellController shell{controller, preferences};
     ReviewSessionFacade facade{controller, preferences, shell};
     ImageReviewController imageReview;
+    ColorClipboardController colorClipboard;
 
     QQmlEngine engine;
     engine.addImportPath(
@@ -8926,12 +9236,12 @@ TEST(MainQmlContractTests, ImageChipDropsRouteRealDragEvents) {
     engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
     engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
     engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
-    engine.rootContext()->setContextProperty(QStringLiteral("imageReview"), &imageReview);
     engine.addImageProvider(QStringLiteral("vcs-review"), new ReviewImageProvider(&imageReview));
     QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
     ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
 
-    std::unique_ptr<QObject> root{component.create()};
+    std::unique_ptr<QObject> root{
+        component.createWithInitialProperties(pilotWindowProperties(imageReview, colorClipboard))};
     ASSERT_NE(root, nullptr) << componentErrors(component);
     auto* const window = qobject_cast<QQuickWindow*>(root.get());
     ASSERT_NE(window, nullptr);
@@ -10207,20 +10517,11 @@ TEST(MainQmlContractTests, ImageWorkspaceManualFlickerContract) {
 // fully readable at the 960px floor. Everything is driven through the real UI objects, and the
 // env-gated captures give the visual evidence for the layout claim.
 TEST(MainQmlContractTests, ImageProbeReadoutFamilyIsReachableAndReadableAtNarrowWidth) {
+    // The copy end is the real adapter the harness hands to the root as initial property:
+    // it writes through the system clipboard and verifies by reading the value back, so
+    // this test can assert exactly what a user would paste. A QtObject stand-in could not
+    // be assigned to the typed colorClipboard boundary anyway.
     WorkspaceHarness harness;
-    QQmlComponent clipboardComponent{&harness.engine};
-    clipboardComponent.setData(QByteArrayLiteral("import QtQml\n"
-                                                 "QtObject {\n"
-                                                 "    property string copiedText: \"\"\n"
-                                                 "    function copyText(value) {\n"
-                                                 "        copiedText = value; return true;\n"
-                                                 "    }\n"
-                                                 "}\n"),
-                               QUrl{});
-    std::unique_ptr<QObject> clipboard{clipboardComponent.create()};
-    ASSERT_NE(clipboard, nullptr);
-    harness.engine.rootContext()->setContextProperty(QStringLiteral("colorClipboard"),
-                                                     clipboard.get());
     ASSERT_TRUE(harness.create()) << harness.error;
     harness.window->resize(960, 640);
     harness.window->show();
@@ -10239,7 +10540,7 @@ TEST(MainQmlContractTests, ImageProbeReadoutFamilyIsReachableAndReadableAtNarrow
     auto* const workspace =
         harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
     ASSERT_NE(workspace, nullptr);
-    EXPECT_EQ(workspace->property("colorClipboard").value<QObject*>(), clipboard.get());
+    EXPECT_EQ(workspace->property("colorClipboard").value<QObject*>(), &harness.colorClipboard);
     // A real sample, produced exactly the way the workspace's hover handler produces one:
     // updateCursorPixel then captureProbeSample. The mouse path into the workspace cannot be
     // driven from this harness (the same offscreen limitation that keeps the A/B chip drag a
@@ -10302,11 +10603,8 @@ TEST(MainQmlContractTests, ImageProbeReadoutFamilyIsReachableAndReadableAtNarrow
     EXPECT_EQ(deltaColumn->property("text").toString(), QStringLiteral("+0.737255"));
     EXPECT_TRUE(copyLabel->property("text").toString().contains(
         QStringLiteral("rgb(0.047059, 0.133333, 0.219608)")));
-    auto* const copyRgb = harness.root->findChild<QObject*>(QStringLiteral("imageCopyRgbAction"));
-    ASSERT_NE(copyRgb, nullptr);
-    ASSERT_TRUE(QMetaObject::invokeMethod(copyRgb, "triggered"));
-    EXPECT_EQ(clipboard->property("copiedText").toString(),
-              QStringLiteral("rgb(0.047059, 0.133333, 0.219608)"));
+    // The copy success path is a dedicated case below (ImageCopyColorButtonCopiesTheVerified
+    // FrozenSample) so this readout/layout test is never gated on clipboard availability.
     ASSERT_TRUE(QMetaObject::invokeMethod(integerAction, "triggered"));
     harness.settle();
 
@@ -10428,6 +10726,88 @@ TEST(MainQmlContractTests, ImageProbeReadoutFamilyIsReachableAndReadableAtNarrow
             QDir(evidenceDirectory)
                 .filePath(QStringLiteral("image-probe-readout-float-1440.png"))));
     }
+}
+
+// The probe-colour copy through the real production main window: the workspace's copy action
+// writes the frozen sample through the real clipboard adapter and verifies the write. The
+// success path is a mandatory acceptance condition - the session's clipboard is confirmed
+// writable first (a distinct sentinel, retried against transient OLE contention), then the
+// real menu action must overwrite that sentinel with the exact payload and report 已复制. A
+// session whose clipboard cannot be written at all is skipped, never counted as a pass; a copy
+// that only ever reports failure keeps the sentinel and fails here.
+TEST(MainQmlContractTests, ImageCopyColorButtonCopiesTheVerifiedFrozenSample) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->resize(960, 640);
+    harness.window->show();
+    harness.settle();
+
+    QImage primary(64, 64, QImage::Format_ARGB32);
+    primary.fill(QColor(12, 34, 56, 200));
+    QImage secondary(64, 64, QImage::Format_ARGB32);
+    secondary.fill(QColor(200, 100, 50, 255));
+    ASSERT_TRUE(harness.imageReview.openPairImages(std::move(primary),
+                                                   QStringLiteral("a.png"),
+                                                   std::move(secondary),
+                                                   QStringLiteral("b.png")));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    harness.settle();
+    auto* const workspace =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
+    ASSERT_NE(workspace, nullptr);
+
+    // Freeze a real probe sample exactly the way the hover handler does, then leave the pixel.
+    harness.imageReview.updateCursorPixel(ImageReviewController::DisplayPrimarySlot, 10, 20);
+    harness.settle();
+    ASSERT_TRUE(harness.imageReview.cursorPixel().value(QStringLiteral("valid")).toBool());
+    ASSERT_TRUE(
+        harness.imageReview.captureProbeSample(ImageReviewController::DisplayPrimarySlot, 10, 20));
+    ASSERT_TRUE(QMetaObject::invokeMethod(workspace, "clearImageHover"));
+    harness.settle();
+
+    auto* const copyButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageCopyColorButton"));
+    auto* const copyRgb = harness.root->findChild<QObject*>(QStringLiteral("imageCopyRgbAction"));
+    ASSERT_NE(copyButton, nullptr);
+    ASSERT_NE(copyRgb, nullptr);
+    ASSERT_TRUE(copyButton->property("enabled").toBool());
+    // The action copies format 0 (ProbeRgb); the payload is whatever the controller prints.
+    const QString payload = harness.imageReview.probeColorText(ImageReviewController::ProbeRgb);
+
+    // Availability gate: confirm the clipboard is writable by writing a distinct sentinel
+    // through the real adapter, retried against transient OLE contention. Persistent failure
+    // means no usable clipboard, so the success case is skipped, never counted as a pass.
+    QClipboard* const clipboard = QGuiApplication::clipboard();
+    if (clipboard == nullptr) {
+        GTEST_SKIP()
+            << "no GUI clipboard in this session: the copy success path cannot be exercised";
+    }
+    const QString sentinel = QStringLiteral("DVS-COPY-SENTINEL-should-be-overwritten");
+    bool sentinelWritten = false;
+    for (int attempt = 0; attempt < 5 && !sentinelWritten; ++attempt) {
+        clipboard->setText(sentinel);
+        harness.settle();
+        sentinelWritten = (clipboard->text() == sentinel);
+    }
+    if (!sentinelWritten) {
+        GTEST_SKIP() << "clipboard not writable in this session (transient or absent): "
+                        "the copy success path is not exercised";
+    }
+
+    // Drive the real menu action and require a verified success that overwrites the sentinel.
+    // A copy that always reports failure never shows 已复制 and fails here; a transient miss is
+    // retried.
+    QString notice;
+    for (int attempt = 0; attempt < 5; ++attempt) {
+        ASSERT_TRUE(QMetaObject::invokeMethod(copyRgb, "triggered"));
+        harness.settle();
+        notice = workspace->property("marqueeNoticeText").toString();
+        if (notice.contains(QStringLiteral("已复制"))) {
+            break;
+        }
+    }
+    EXPECT_TRUE(notice.contains(QStringLiteral("已复制"))) << notice.toStdString();
+    EXPECT_EQ(clipboard->text(), payload);
 }
 
 TEST(MainQmlContractTests, VideoPixelGridButtonUsesSurfaceGeometryAndActualSampling) {
@@ -12235,6 +12615,229 @@ TEST(MainQmlContractTests, ShortcutBindingsMenuAndHelpStayInSync) {
 // so playback advancing while the note is typed cannot shift what was recorded. Enter attaches
 // the typed note to that frozen record; Escape attaches an empty one - the note is optional,
 // never a gate.
+// FLOW1 end-to-end through the real main window: capture a non-default observation (mode,
+// zoom/pan, channel view, background, diff gain, alpha filter, resampling), change all of it,
+// then restore the record and prove the staged machine reopened the same files and replayed the
+// recorded state. This is the main-window wiring test, not just a controller payload test.
+TEST(MainQmlContractTests, ImageIssueRestoreReplaysTheRecordedObservation) {
+    QTemporaryDir temporaryDirectory;
+    ASSERT_TRUE(temporaryDirectory.isValid());
+    const QString pathA = temporaryDirectory.filePath(QStringLiteral("issue-left.png"));
+    const QString pathB = temporaryDirectory.filePath(QStringLiteral("issue-right.png"));
+    ASSERT_TRUE(writeTestPng(pathA));
+    ASSERT_TRUE(writeTestPng(pathB));
+
+    WorkspaceHarness harness;
+    harness.withIssueLog = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    QVariant activated;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "activateWorkspace",
+                                          Q_RETURN_ARG(QVariant, activated),
+                                          Q_ARG(QVariant, QVariant{1})));
+    ASSERT_TRUE(activated.toBool());
+    harness.settle();
+
+    auto* const imageWorkspace = qvariant_cast<QObject*>(harness.root->property("imageWorkspace"));
+    ASSERT_NE(imageWorkspace, nullptr);
+    // The reopened files decode to 1×1; keep the injected pair the same size so the retained
+    // difference mode is not rejected by the geometry guard during the restore.
+    QImage left(1, 1, QImage::Format_ARGB32);
+    left.fill(QColor(10, 20, 30));
+    QImage right(1, 1, QImage::Format_ARGB32);
+    right.fill(QColor(40, 50, 60));
+    ASSERT_TRUE(harness.imageReview.openPairImages(
+        std::move(left), pathA, std::move(right), pathB, /*pairId=*/6));
+    harness.imageReview.setCompareMode(ImageReviewController::SignedDifference);
+    harness.imageReview.restoreObservationPosition(2.5, 0.2, 0.8);
+    harness.imageReview.setViewMode(ImageReviewController::RgbOpaqueView);
+    harness.imageReview.setDiffGain(11);
+    harness.imageReview.setAlphaFilterEnabled(true);
+    harness.imageReview.setAlphaThreshold(222);
+    harness.imageReview.setResampleAllowed(true);
+    imageWorkspace->setProperty("backgroundMode", 3);
+    harness.settle();
+
+    QVariant captured;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        harness.root.get(), "captureIssueLog", Q_RETURN_ARG(QVariant, captured)));
+    ASSERT_TRUE(captured.toBool());
+    harness.settle();
+    ASSERT_EQ(harness.issueLog.count(), 1);
+    auto* const noteDialog = harness.root->findChild<QObject*>(QStringLiteral("issueNoteDialog"));
+    ASSERT_NE(noteDialog, nullptr);
+    if (noteDialog->property("visible").toBool()) {
+        auto* const noteField = noteDialog->findChild<QObject*>(QStringLiteral("issueNoteField"));
+        ASSERT_NE(noteField, nullptr);
+        sendKeyToFocus(noteField, QEvent::KeyPress, Qt::Key_Escape);
+        sendKeyToFocus(noteField, QEvent::KeyRelease, Qt::Key_Escape);
+        harness.settle();
+    }
+
+    // Move every recorded setting away from what was captured.
+    harness.imageReview.setCompareMode(ImageReviewController::SideBySide);
+    harness.imageReview.restoreObservationPosition(1.0, 0.5, 0.5);
+    harness.imageReview.setViewMode(ImageReviewController::RgbaView);
+    harness.imageReview.setDiffGain(4);
+    harness.imageReview.setAlphaFilterEnabled(false);
+    harness.imageReview.setAlphaThreshold(0);
+    harness.imageReview.setResampleAllowed(false);
+    imageWorkspace->setProperty("backgroundMode", 1);
+    harness.settle();
+
+    const QVariantMap payload = harness.issueLog.restoreIssue(0);
+    ASSERT_EQ(payload.value(QStringLiteral("decision")).toString(), QStringLiteral("ready"))
+        << payload.value(QStringLiteral("message")).toString().toStdString();
+    const bool restored = harness.waitUntil([&harness, imageWorkspace] {
+        return harness.imageReview.hasPair() &&
+               harness.imageReview.compareMode() == ImageReviewController::SignedDifference &&
+               harness.imageReview.viewMode() == ImageReviewController::RgbOpaqueView &&
+               harness.imageReview.diffGain() == 11 && harness.imageReview.alphaFilterEnabled() &&
+               harness.imageReview.alphaThreshold() == 222 &&
+               harness.imageReview.resampleAllowed() &&
+               imageWorkspace->property("backgroundMode").toInt() == 3;
+    });
+    ASSERT_TRUE(restored) << harness.imageReview.errorText().toStdString()
+                          << " primary=" << harness.imageReview.primaryPath().toStdString()
+                          << " secondary=" << harness.imageReview.secondaryPath().toStdString();
+    const auto samePath = [](const QString& left, const QString& right) {
+        return QDir::cleanPath(left).compare(QDir::cleanPath(right), Qt::CaseInsensitive) == 0;
+    };
+    EXPECT_TRUE(samePath(harness.imageReview.primaryPath(), pathA));
+    EXPECT_TRUE(samePath(harness.imageReview.secondaryPath(), pathB));
+    EXPECT_DOUBLE_EQ(harness.imageReview.zoom(), 2.5);
+    EXPECT_DOUBLE_EQ(harness.imageReview.panX(), 0.2);
+    EXPECT_DOUBLE_EQ(harness.imageReview.panY(), 0.8);
+    harness.window->close();
+}
+
+// FLOW1 folder-row restore: the record was captured on a non-first row. Restore must reopen the
+// folder session, return to that row (not row 0), and replay the observation only after that
+// pair commits.
+TEST(MainQmlContractTests, ImageFolderIssueRestoreReturnsToTheRecordedRow) {
+    QTemporaryDir temporaryDirectory;
+    ASSERT_TRUE(temporaryDirectory.isValid());
+    const QString leftDir = QDir(temporaryDirectory.path()).filePath(QStringLiteral("row_left"));
+    const QString rightDir = QDir(temporaryDirectory.path()).filePath(QStringLiteral("row_right"));
+    ASSERT_TRUE(QDir{}.mkpath(leftDir));
+    ASSERT_TRUE(QDir{}.mkpath(rightDir));
+    for (const QString& folder : {leftDir, rightDir}) {
+        for (const char* name : {"frame001.png", "frame002.png"}) {
+            ASSERT_TRUE(writeTestPng(QDir(folder).filePath(QString::fromLatin1(name))));
+        }
+    }
+
+    WorkspaceHarness harness;
+    harness.withIssueLog = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    QVariant activated;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "activateWorkspace",
+                                          Q_RETURN_ARG(QVariant, activated),
+                                          Q_ARG(QVariant, QVariant{1})));
+    ASSERT_TRUE(activated.toBool());
+    harness.root->setProperty("imageFolderLeftUrl", QUrl::fromLocalFile(leftDir));
+    harness.root->setProperty("imageFolderRightUrl", QUrl::fromLocalFile(rightDir));
+    QVariant loaded;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        harness.root.get(), "loadFolderComparison", Q_RETURN_ARG(QVariant, loaded)));
+    ASSERT_TRUE(loaded.toBool());
+    ASSERT_TRUE(harness.waitUntil([&harness] {
+        return harness.folderPairs.currentPair() == 0 && harness.imageReview.hasPair();
+    }));
+
+    // Move to the second row, which is the observation the record will capture.
+    ASSERT_TRUE(harness.folderPairs.openPairAt(1));
+    ASSERT_TRUE(harness.waitUntil([&harness] {
+        return harness.folderPairs.currentPair() == 1 && harness.imageReview.hasPair() &&
+               harness.imageReview.secondaryPath().endsWith(QStringLiteral("frame002.png"));
+    }));
+    harness.imageReview.setCompareMode(ImageReviewController::Highlight);
+    harness.imageReview.restoreObservationPosition(3.0, 0.3, 0.7);
+    harness.imageReview.setViewMode(ImageReviewController::AlphaGrayView);
+    harness.imageReview.setDiffGain(7);
+    harness.settle();
+
+    QVariant captured;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        harness.root.get(), "captureIssueLog", Q_RETURN_ARG(QVariant, captured)));
+    ASSERT_TRUE(captured.toBool());
+    harness.settle();
+    ASSERT_EQ(harness.issueLog.count(), 1);
+    auto* const noteDialog = harness.root->findChild<QObject*>(QStringLiteral("issueNoteDialog"));
+    ASSERT_NE(noteDialog, nullptr);
+    if (noteDialog->property("visible").toBool()) {
+        auto* const noteField = noteDialog->findChild<QObject*>(QStringLiteral("issueNoteField"));
+        ASSERT_NE(noteField, nullptr);
+        sendKeyToFocus(noteField, QEvent::KeyPress, Qt::Key_Escape);
+        sendKeyToFocus(noteField, QEvent::KeyRelease, Qt::Key_Escape);
+        harness.settle();
+    }
+
+    // Go back to row 0 and reset the view; restore must return to row 1 and replay the mode.
+    ASSERT_TRUE(harness.folderPairs.openPairAt(0));
+    ASSERT_TRUE(harness.waitUntil([&harness] {
+        return harness.folderPairs.currentPair() == 0 && harness.imageReview.hasPair() &&
+               harness.imageReview.secondaryPath().endsWith(QStringLiteral("frame001.png"));
+    }));
+    harness.imageReview.setCompareMode(ImageReviewController::SideBySide);
+    harness.imageReview.restoreObservationPosition(1.0, 0.5, 0.5);
+    harness.imageReview.setViewMode(ImageReviewController::RgbaView);
+    harness.imageReview.setDiffGain(4);
+    harness.settle();
+
+    const QVariantMap payload = harness.issueLog.restoreIssue(0);
+    ASSERT_EQ(payload.value(QStringLiteral("decision")).toString(), QStringLiteral("ready"));
+    ASSERT_TRUE(harness.waitUntil([&harness] {
+        return harness.folderPairs.currentPair() == 1 && harness.imageReview.hasPair() &&
+               harness.imageReview.compareMode() == ImageReviewController::Highlight &&
+               harness.imageReview.viewMode() == ImageReviewController::AlphaGrayView &&
+               harness.imageReview.diffGain() == 7 &&
+               qFuzzyCompare(harness.imageReview.zoom(), 3.0);
+    })) << "row="
+        << harness.folderPairs.currentPair()
+        << " primary=" << harness.imageReview.primaryPath().toStdString();
+    EXPECT_TRUE(harness.imageReview.secondaryPath().endsWith(QStringLiteral("frame002.png")));
+    EXPECT_DOUBLE_EQ(harness.imageReview.panX(), 0.3);
+    EXPECT_DOUBLE_EQ(harness.imageReview.panY(), 0.7);
+    harness.window->close();
+}
+
+// FLOW2: the shared comparison capture is the display result, and its annotation contract says
+// so on every image. A receiver must not read the PNG as source code values or as a
+// colour-managed export.
+TEST(MainQmlContractTests, ComparisonCaptionStatesTheDisplayResultContract) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+    QVariant captionValue;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        harness.root.get(), "comparisonCaptionLines", Q_RETURN_ARG(QVariant, captionValue)));
+    const QVariantList lines = captionValue.toList();
+    bool displayContract = false;
+    bool appStamp = false;
+    for (const QVariant& line : lines) {
+        const QString text = line.toString();
+        if (text.contains(QStringLiteral("显示结果")) &&
+            text.contains(QStringLiteral("未色彩管理"))) {
+            displayContract = true;
+        }
+        if (text.startsWith(QStringLiteral("CompareStation"))) {
+            appStamp = true;
+        }
+    }
+    EXPECT_TRUE(displayContract);
+    EXPECT_TRUE(appStamp);
+    harness.window->close();
+}
+
 TEST(MainQmlContractTests, MarkKeyCapturesIssueThroughNoteDialog) {
     QTemporaryDir temporaryDirectory;
     ASSERT_TRUE(temporaryDirectory.isValid());
@@ -13933,7 +14536,8 @@ createThreeSourceRoiTripletRoot(QQmlEngine& engine,
         *error = componentErrors(component);
         return nullptr;
     }
-    std::unique_ptr<QObject> root{component.create()};
+    std::unique_ptr<QObject> root{
+        component.createWithInitialProperties(defaultPilotWindowProperties())};
     if (!root) {
         *error = componentErrors(component);
         return nullptr;
@@ -14644,6 +15248,86 @@ TEST(MainQmlContractTests, ChromeGeometryAndScreenshotEvidence) {
     }
 }
 
+// The production root declares its pilot services as required typed properties and the
+// production loader verifies their identity before showing the window. These
+// counterexamples exercise the REAL Main.qml contract with the REAL services the
+// composition root supplies:
+//   correct services    -> creation and verification both succeed;
+//   missing entirely    -> creation itself fails on the required property;
+//   missing clipboard   -> creation fails on that property as well;
+//   explicit null       -> creation succeeds, the production verifier rejects;
+//   wrong-typed object  -> Qt warns and degrades the property to null, the verifier rejects.
+TEST(MainQmlContractTests, MainWindowRequiredPilotServicesAreEnforced) {
+    ReviewController controller{ReviewController::Dependencies{
+        .submit =
+            [](application::PlaybackCommand) { return application::PortSubmitResult::Accepted; },
+        .snapshot = [] { return std::make_shared<application::SessionSnapshot>(); },
+        .takeCompletedCommands = [] { return std::vector<application::CommandTerminal>{}; },
+    }};
+    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
+    ReviewShellController shell{controller, preferences};
+    ReviewSessionFacade facade{controller, preferences, shell};
+    ImageReviewController imageReview;
+    ColorClipboardController colorClipboard;
+
+    QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
+    engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
+    QQmlComponent component{&engine, QUrl{QStringLiteral("qrc:/qml/Main.qml")}};
+    ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
+
+    {
+        const std::unique_ptr<QObject> root{component.createWithInitialProperties(
+            pilotWindowProperties(imageReview, colorClipboard))};
+        ASSERT_NE(root, nullptr) << componentErrors(component);
+        QString error;
+        EXPECT_TRUE(verifyMainWindowPilotServices(*root, imageReview, colorClipboard, &error))
+            << error.toStdString();
+    }
+    {
+        const std::unique_ptr<QObject> root{component.create()};
+        EXPECT_EQ(root, nullptr);
+        const std::string errors = componentErrors(component);
+        EXPECT_NE(errors.find("Required property stillImageController was not initialized"),
+                  std::string::npos)
+            << errors;
+    }
+    {
+        QVariantMap properties = pilotWindowProperties(imageReview, colorClipboard);
+        properties.remove(QStringLiteral("colorClipboardService"));
+        const std::unique_ptr<QObject> root{component.createWithInitialProperties(properties)};
+        EXPECT_EQ(root, nullptr);
+        const std::string errors = componentErrors(component);
+        EXPECT_NE(errors.find("Required property colorClipboardService was not initialized"),
+                  std::string::npos)
+            << errors;
+    }
+    {
+        QVariantMap properties = pilotWindowProperties(imageReview, colorClipboard);
+        properties.insert(QStringLiteral("stillImageController"),
+                          QVariant::fromValue(static_cast<QObject*>(nullptr)));
+        const std::unique_ptr<QObject> root{component.createWithInitialProperties(properties)};
+        ASSERT_NE(root, nullptr) << componentErrors(component);
+        QString error;
+        EXPECT_FALSE(verifyMainWindowPilotServices(*root, imageReview, colorClipboard, &error));
+        EXPECT_FALSE(error.isEmpty());
+    }
+    {
+        QObject wrongType;
+        QVariantMap properties = pilotWindowProperties(imageReview, colorClipboard);
+        properties.insert(QStringLiteral("stillImageController"), QVariant::fromValue(&wrongType));
+        const std::unique_ptr<QObject> root{component.createWithInitialProperties(properties)};
+        ASSERT_NE(root, nullptr) << componentErrors(component);
+        QString error;
+        EXPECT_FALSE(verifyMainWindowPilotServices(*root, imageReview, colorClipboard, &error));
+        EXPECT_FALSE(error.isEmpty());
+    }
+}
+
 } // namespace
 } // namespace dvs::ui
 
@@ -14651,10 +15335,9 @@ int main(int argumentCount, char* arguments[]) {
     dvs::ui::configureGraphicsBackend();
     QGuiApplication application{argumentCount, arguments};
     initializeMainQmlContractResources();
-    static_cast<void>(
-        qmlRegisterType<dvs::ui::ComparisonSurface>("Dvs.Ui", 1, 0, "ComparisonSurface"));
-    static_cast<void>(qmlRegisterType<dvs::ui::JogKeyHandler>("Dvs.Ui", 1, 0, "JogKeyHandler"));
-    static_cast<void>(qmlRegisterType<dvs::ui::HoldKeyHandler>("Dvs.Ui", 1, 0, "HoldKeyHandler"));
+    // The single Dvs.Ui registration entry: every type name the QML files can reference,
+    // registered exactly once for the whole process.
+    dvs::ui::registerDvsUiTypes();
     testing::InitGoogleTest(&argumentCount, arguments);
     return RUN_ALL_TESTS();
 }

@@ -23,6 +23,19 @@ extern "C" {
 namespace dvs::media {
 namespace {
 
+// Copies the decoded frame's embedded ICC payload. libavcodec attaches the file's profile
+// bytes as frame side data for the formats that can carry one (PNG iCCP, JPEG APP2, WebP
+// ICCP); it never applies them. An absent or empty side data leaves the vector empty.
+void copyIccProfile(const AVFrame* frame, StillImage* image) {
+    const AVFrameSideData* const sideData =
+        av_frame_get_side_data(frame, AV_FRAME_DATA_ICC_PROFILE);
+    if (sideData == nullptr || sideData->data == nullptr || sideData->size <= 0) {
+        return;
+    }
+    const auto* const begin = sideData->data;
+    image->iccProfile.assign(begin, begin + sideData->size);
+}
+
 void setError(std::string* error, const char* message) {
     if (error != nullptr) {
         *error = message != nullptr ? message : "Unknown image decode failure.";
@@ -133,6 +146,10 @@ bool convertFrameToRgba(const AVFrame* frame, StillImage* image, std::string* er
         image->sourceFormat = formatName != nullptr ? formatName : std::string{};
     }
     image->colorRange = frame->color_range;
+    image->colorPrimaries = static_cast<int>(frame->color_primaries);
+    image->colorTransfer = static_cast<int>(frame->color_trc);
+    image->colorSpace = static_cast<int>(frame->colorspace);
+    copyIccProfile(frame, image);
 
     // High-bit-depth sidecar: keep the original-depth samples so pixel sampling can report
     // code values that were not quantized to 8 bits by the display conversion. Both source

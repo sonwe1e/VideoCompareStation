@@ -158,6 +158,23 @@ void readUnsigned64(const Json& value, const char* const key, std::uint64_t* out
         value["view"]["wipeOrientation"] = record.view.wipeOrientation;
         value["view"]["wipePosition"] = record.view.wipePosition;
     }
+    // FLOW1 image observation settings are written only when captured (-1 = legacy/absent),
+    // so records captured outside the image workspace stay byte-identical to older files.
+    if (record.view.imageViewMode >= 0) {
+        value["view"]["imageViewMode"] = record.view.imageViewMode;
+    }
+    if (record.view.imageBackgroundMode >= 0) {
+        value["view"]["imageBackgroundMode"] = record.view.imageBackgroundMode;
+    }
+    if (record.view.imageDiffGain >= 0) {
+        value["view"]["imageDiffGain"] = record.view.imageDiffGain;
+    }
+    if (record.view.imageAlphaFilterEnabled >= 0) {
+        value["view"]["imageAlphaFilterEnabled"] = record.view.imageAlphaFilterEnabled;
+    }
+    if (record.view.imageAlphaThreshold >= 0) {
+        value["view"]["imageAlphaThreshold"] = record.view.imageAlphaThreshold;
+    }
     // Written only when the record carries a diagnostic interval, so legacy files stay
     // byte-identical to what older writers produced.
     if (record.interval.anchorFrame >= 0) {
@@ -247,6 +264,23 @@ void readUnsigned64(const Json& value, const char* const key, std::uint64_t* out
         record.view.panX = readNumber("panX", 0.5);
         record.view.panY = readNumber("panY", 0.5);
         readBoolean(view, "resampleAllowed", &record.view.resampleAllowed);
+        // FLOW1: image observation settings are optional and validated individually. A
+        // missing, mistyped or out-of-range field becomes -1 ("not captured") so restore
+        // reports a partial observation instead of clamping bad data into a plausible state.
+        auto readBounded = [&view](const char* key, const int minimum, const int maximum) {
+            if (!view.contains(key) || !view[key].is_number_integer()) {
+                return std::int32_t{-1};
+            }
+            if (view[key] < minimum || view[key] > maximum) {
+                return std::int32_t{-1};
+            }
+            return view[key].get<std::int32_t>();
+        };
+        record.view.imageViewMode = readBounded("imageViewMode", 0, 2);
+        record.view.imageBackgroundMode = readBounded("imageBackgroundMode", 0, 3);
+        record.view.imageDiffGain = readBounded("imageDiffGain", 1, 16);
+        record.view.imageAlphaFilterEnabled = readBounded("imageAlphaFilterEnabled", 0, 1);
+        record.view.imageAlphaThreshold = readBounded("imageAlphaThreshold", 0, 255);
         // E1: the wipe pair is validated as a pair. Absent in legacy records (-1/-1 = "no
         // wipe state"); present-but-invalid (wrong type, half-present, orientation outside
         // {0,1} - including wide integers that would narrow into 0/1 - ratio outside [0,1]

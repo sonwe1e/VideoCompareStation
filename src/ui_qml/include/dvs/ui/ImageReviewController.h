@@ -3,6 +3,7 @@
 #include "dvs/ui/ImagePairLoader.h"
 
 #include <QByteArray>
+#include <QColorSpace>
 #include <QImage>
 #include <QObject>
 #include <QUrl>
@@ -89,6 +90,74 @@ class ImageReviewController final : public QObject {
     Q_PROPERTY(QString secondarySourceFormat READ secondarySourceFormat NOTIFY stateChanged)
     Q_PROPERTY(bool secondaryDisplayConverted READ secondaryDisplayConverted NOTIFY stateChanged)
 
+    // ---- COLOR1 colour/data contract, COLOR3 status source --------------------------------
+    // Per side: the embedded ICC profile state (classified, never applied here), the ICC
+    // signatures, and the colour declarations the file carried. The status text is the one
+    // source the badge, its tooltip and any exported caption must share.
+    Q_PROPERTY(int primaryColorProfileStatus READ primaryColorProfileStatus NOTIFY stateChanged)
+    Q_PROPERTY(QString primaryColorProfileSha256 READ primaryColorProfileSha256 NOTIFY stateChanged)
+    Q_PROPERTY(
+        QString primaryColorProfileDataSpace READ primaryColorProfileDataSpace NOTIFY stateChanged)
+    Q_PROPERTY(QString primaryColorProfileClass READ primaryColorProfileClass NOTIFY stateChanged)
+    Q_PROPERTY(int primaryColorProfileVersionMajor READ primaryColorProfileVersionMajor NOTIFY
+                   stateChanged)
+    Q_PROPERTY(int primaryDeclaredPrimaries READ primaryDeclaredPrimaries NOTIFY stateChanged)
+    Q_PROPERTY(int primaryDeclaredTransfer READ primaryDeclaredTransfer NOTIFY stateChanged)
+    Q_PROPERTY(int primaryDeclaredColorSpace READ primaryDeclaredColorSpace NOTIFY stateChanged)
+    Q_PROPERTY(
+        bool primaryColorConversionApplied READ primaryColorConversionApplied NOTIFY stateChanged)
+    Q_PROPERTY(QString primaryColorStatusText READ primaryColorStatusText NOTIFY stateChanged)
+    // Compact form for the always-visible A/B status badges; the full sentence above is the
+    // tooltip and the exported explanation. Both come from the same state switch.
+    Q_PROPERTY(
+        QString primaryColorStateCompactText READ primaryColorStateCompactText NOTIFY stateChanged)
+    // Unsupported or corrupt profile: the UI must style this as a fallback, not as a neutral
+    // "profile declared but not applied" note.
+    Q_PROPERTY(bool primaryColorProfileNeedsFallback READ primaryColorProfileNeedsFallback NOTIFY
+                   stateChanged)
+    Q_PROPERTY(int secondaryColorProfileStatus READ secondaryColorProfileStatus NOTIFY stateChanged)
+    Q_PROPERTY(
+        QString secondaryColorProfileSha256 READ secondaryColorProfileSha256 NOTIFY stateChanged)
+    Q_PROPERTY(QString secondaryColorProfileDataSpace READ secondaryColorProfileDataSpace NOTIFY
+                   stateChanged)
+    Q_PROPERTY(
+        QString secondaryColorProfileClass READ secondaryColorProfileClass NOTIFY stateChanged)
+    Q_PROPERTY(int secondaryColorProfileVersionMajor READ secondaryColorProfileVersionMajor NOTIFY
+                   stateChanged)
+    Q_PROPERTY(int secondaryDeclaredPrimaries READ secondaryDeclaredPrimaries NOTIFY stateChanged)
+    Q_PROPERTY(int secondaryDeclaredTransfer READ secondaryDeclaredTransfer NOTIFY stateChanged)
+    Q_PROPERTY(int secondaryDeclaredColorSpace READ secondaryDeclaredColorSpace NOTIFY stateChanged)
+    Q_PROPERTY(bool secondaryColorConversionApplied READ secondaryColorConversionApplied NOTIFY
+                   stateChanged)
+    Q_PROPERTY(QString secondaryColorStatusText READ secondaryColorStatusText NOTIFY stateChanged)
+    Q_PROPERTY(QString secondaryColorStateCompactText READ secondaryColorStateCompactText NOTIFY
+                   stateChanged)
+    Q_PROPERTY(bool secondaryColorProfileNeedsFallback READ secondaryColorProfileNeedsFallback
+                   NOTIFY stateChanged)
+    // Which point of the pixel path the probe/difference statistics read for each side. The
+    // UI uses this instead of inferring "original" from the format string.
+    Q_PROPERTY(int primaryAnalysisValuePath READ primaryAnalysisValuePath NOTIFY stateChanged)
+    Q_PROPERTY(int secondaryAnalysisValuePath READ secondaryAnalysisValuePath NOTIFY stateChanged)
+    Q_PROPERTY(bool primaryNativeValuePathAvailable READ primaryNativeValuePathAvailable NOTIFY
+                   stateChanged)
+    Q_PROPERTY(bool secondaryNativeValuePathAvailable READ secondaryNativeValuePathAvailable NOTIFY
+                   stateChanged)
+    // Windows/display output verification is a COLOR5 claim. Until then no screen result may
+    // be presented as a verified colour-managed display.
+    Q_PROPERTY(bool displayColorEnvironmentVerified READ displayColorEnvironmentVerified NOTIFY
+                   stateChanged)
+
+    // ---- COLOR4 display colour conversion -----------------------------------------------
+    // Applies the parsed embedded SDR profile to the display derivative only. Turning it off
+    // shows the decoded values unchanged; neither state touches analysis buffers, statistics,
+    // probe samples or exported source values. The status text and these flags are the one
+    // source of truth for what the screen currently shows.
+    Q_PROPERTY(bool colorDisplayEnabled READ colorDisplayEnabled WRITE setColorDisplayEnabled NOTIFY
+                   colorDisplayChanged)
+    Q_PROPERTY(bool primaryColorDisplayApplied READ primaryColorDisplayApplied NOTIFY stateChanged)
+    Q_PROPERTY(
+        bool secondaryColorDisplayApplied READ secondaryColorDisplayApplied NOTIFY stateChanged)
+
     // ---- Alpha threshold observation filter --------------------------------------------
     // A view-only filter over the "RGB ignoring alpha" observation. It never reaches the
     // committed buffers, the difference pipeline, the statistics, the edit working copy or
@@ -117,6 +186,11 @@ public:
     // the loader still decodes and checks the decoded size afterwards.
     using StillImageProbe = std::function<bool(const QByteArray& fileBytes, QSize* size)>;
     static void setProcessStillImageProbe(StillImageProbe probe);
+    // Optional container-level ICC extraction, used when the decoder path does not expose the
+    // profile bytes. In production it is backed by media::extractEmbeddedIccProfile(), which
+    // is what keeps PNG colour state alive while the Qt fallback decodes PNG.
+    using StillImageColorProbe = ImagePairLoader::ImageColorProbe;
+    static void setProcessStillImageColorProbe(StillImageColorProbe probe);
 
     enum CompareMode : int {
         PrimaryOnly = 0,
@@ -246,6 +320,47 @@ public:
     [[nodiscard]] QString secondarySourceFormat() const;
     [[nodiscard]] bool secondaryDisplayConverted() const noexcept;
 
+    // ---- COLOR1 colour/data contract, COLOR3 status source ------------------------------
+    [[nodiscard]] int primaryColorProfileStatus() const noexcept;
+    [[nodiscard]] QString primaryColorProfileSha256() const;
+    [[nodiscard]] QString primaryColorProfileDataSpace() const;
+    [[nodiscard]] QString primaryColorProfileClass() const;
+    [[nodiscard]] int primaryColorProfileVersionMajor() const noexcept;
+    [[nodiscard]] int primaryDeclaredPrimaries() const noexcept;
+    [[nodiscard]] int primaryDeclaredTransfer() const noexcept;
+    [[nodiscard]] int primaryDeclaredColorSpace() const noexcept;
+    [[nodiscard]] bool primaryColorConversionApplied() const noexcept;
+    // The single localized colour-state sentence for one side. The badge, its tooltip, the
+    // copy/export captions and any status line must read this instead of re-deriving state.
+    [[nodiscard]] QString primaryColorStatusText() const;
+    [[nodiscard]] QString primaryColorStateCompactText() const;
+    [[nodiscard]] bool primaryColorProfileNeedsFallback() const noexcept;
+    [[nodiscard]] int secondaryColorProfileStatus() const noexcept;
+    [[nodiscard]] QString secondaryColorProfileSha256() const;
+    [[nodiscard]] QString secondaryColorProfileDataSpace() const;
+    [[nodiscard]] QString secondaryColorProfileClass() const;
+    [[nodiscard]] int secondaryColorProfileVersionMajor() const noexcept;
+    [[nodiscard]] int secondaryDeclaredPrimaries() const noexcept;
+    [[nodiscard]] int secondaryDeclaredTransfer() const noexcept;
+    [[nodiscard]] int secondaryDeclaredColorSpace() const noexcept;
+    [[nodiscard]] bool secondaryColorConversionApplied() const noexcept;
+    [[nodiscard]] QString secondaryColorStatusText() const;
+    [[nodiscard]] QString secondaryColorStateCompactText() const;
+    [[nodiscard]] bool secondaryColorProfileNeedsFallback() const noexcept;
+    [[nodiscard]] int primaryAnalysisValuePath() const noexcept;
+    [[nodiscard]] int secondaryAnalysisValuePath() const noexcept;
+    [[nodiscard]] bool primaryNativeValuePathAvailable() const noexcept;
+    [[nodiscard]] bool secondaryNativeValuePathAvailable() const noexcept;
+    [[nodiscard]] bool displayColorEnvironmentVerified() const noexcept;
+
+    // ---- COLOR4 display colour conversion ----------------------------------------------
+    [[nodiscard]] bool colorDisplayEnabled() const noexcept;
+    void setColorDisplayEnabled(bool enabled);
+    // True when the current side's display derivative really passed through the file's
+    // profile. False for no profile, an unsupported/corrupt profile, or the switch being off.
+    [[nodiscard]] bool primaryColorDisplayApplied() const noexcept;
+    [[nodiscard]] bool secondaryColorDisplayApplied() const noexcept;
+
     // ---- Single-side close ---------------------------------------------------------------
     // Closes exactly one side of the workspace. Neither is a disguised closeAll: with a
     // pair committed the surviving side is kept (closing A promotes B into the internal
@@ -334,6 +449,10 @@ public:
     zoomToRect(qreal normalizedX0, qreal normalizedY0, qreal normalizedX1, qreal normalizedY1);
     Q_INVOKABLE void panBy(qreal deltaNormalizedX, qreal deltaNormalizedY);
     Q_INVOKABLE void setZoom(qreal value);
+    // Restores a recorded observation position (zoom + normalized pan) in one step. Out of
+    // range or non-finite values are clamped so restore cannot move the view to an invalid
+    // state.
+    Q_INVOKABLE void restoreObservationPosition(qreal zoom, qreal panX, qreal panY);
     Q_INVOKABLE QVariantMap samplePixel(int imageSlot, qreal imageX, qreal imageY) const;
     // Same-coordinate pair readout support: samples the committed decode buffer of one side
     // WITHOUT the active channel observation view (the derived Alpha-gray/RGB-opaque view is
@@ -378,6 +497,12 @@ public:
     bool openSecondaryImage(QImage image, QString pathLabel);
     bool openSecondaryImage(QImage image, QString pathLabel, StillImageSourceInfo info);
 
+    // Test seam: delivers a loader result to the completion handler without going through the
+    // loader. Used to prove a stale request id cannot commit over a newer pending request;
+    // production code never calls it. The delivered result still passes every identity check
+    // the asynchronous path uses.
+    void deliverLoadResultForTesting(ImagePairLoader::Result result);
+
     // Used by ReviewImageProvider. Thread: GUI only (still images are CPU-resident).
     [[nodiscard]] QImage imageForSlot(int imageSlot) const;
     // Committed decoded buffer without the channel observation view. Editing and other
@@ -390,6 +515,7 @@ signals:
     void viewChanged();
     void cursorPixelChanged();
     void frozenProbeSampleChanged();
+    void colorDisplayChanged();
     // T4 completion contract: exactly one terminal per accepted asynchronous request.
     void openFinished(int requestId, int pairId, bool success, QString error);
 
@@ -404,6 +530,11 @@ private:
                                           StillImageSourceInfo* info,
                                           QString* error);
     [[nodiscard]] QImage displayImage(int slot) const;
+    // COLOR4: converts a decoded buffer to sRGB for presentation when the switch is on, the
+    // profile state is supported and the side carries a parsed profile. Never used for
+    // analysis, statistics or probe samples.
+    [[nodiscard]] QImage displayColorImage(const QImage& source,
+                                           const StillImageSourceInfo& info) const;
     // Derived channel view of a decoded buffer for the active observation mode. Result is
     // cached across calls and invalidated when the generation, the view mode or the alpha
     // filter changes. `native` is the side's original-depth sidecar (null for 8-bit
@@ -482,6 +613,10 @@ private:
     // invalidate the cached views exactly like changing the observation mode does.
     mutable bool viewCacheFilterEnabled_ = false;
     mutable int viewCacheThreshold_ = -1;
+    // COLOR4: colour conversion changes presented pixels without changing the decoded
+    // generation, so it is part of the derived-view identity as well.
+    mutable bool viewCacheColorEnabled_ = false;
+    bool colorDisplayEnabled_ = true;
     // Row identity of the last atomically committed pair; -1 when no pair commit happened
     // (including after closeAll). Updated only by openPairAtomically/openPairImages and
     // closeAll so the canvas identity matches the folder list selection exactly.

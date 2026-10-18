@@ -89,6 +89,18 @@ struct ClipExportReport final {
     // start was pre-rolled onto an earlier keyframe this is smaller than the requested in-point.
     // Output timestamps are rebased separately on the first copied decode timestamp.
     std::int64_t firstPresentationMicroseconds = 0;
+    // Presentation time of the last copied packet relative to the first source frame; -1 when no
+    // packet was written. Reordered (B-frame) sources can carry reference frames whose
+    // presentation time is past the requested out point, so this is the actual copied tail.
+    std::int64_t lastPresentationMicroseconds = -1;
+    // Which limit ended the copy: the source ran out, or the requested end bound was reached.
+    bool endOfStreamReached = false;
+    bool stoppedAtRequestedEnd = false;
+    // The request echo: how many frames the user asked for and how far the copy start had to move
+    // earlier to land on a keyframe. Kept on the report so a result can be interpreted without the
+    // plan object that produced it.
+    std::int64_t requestedFrameCount = 0;
+    std::int64_t startShiftMicroseconds = 0;
     // Diagnostic only; never shown as a user-visible label.
     std::string technicalDetail;
 };

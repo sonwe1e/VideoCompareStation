@@ -32,6 +32,16 @@ struct StillImage final {
     std::string sourceFormat;
     // FFmpeg AVCOL_RANGE of the source frame, or -1 when unknown.
     int colorRange = -1;
+    // Embedded ICC profile bytes carried by the decoded frame (empty when the file declares
+    // none). The payload is passed through verbatim; the decoder never applies it. Callers
+    // classify and hash it so a reading never implies a colour-managed conversion happened.
+    std::vector<std::uint8_t> iccProfile;
+    // FFmpeg AVColorPrimaries / AVColorTransferCharacteristic / AVColorSpace declarations of
+    // the decoded frame, or -1 when the file did not declare them. These are declarations,
+    // not an applied conversion.
+    int colorPrimaries = -1;
+    int colorTransfer = -1;
+    int colorSpace = -1;
 };
 
 // Decode from an in-memory container (Unicode-path safe: read the file first).

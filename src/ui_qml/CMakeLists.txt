@@ -68,12 +68,15 @@ if(DVS_BUILD_ADAPTERS)
             include/dvs/ui/EditImageProvider.h
             include/dvs/ui/GraphicsBackend.h
             include/dvs/ui/HoldKeyHandler.h
+            include/dvs/ui/ImageColorContract.h
             include/dvs/ui/ImageEditController.h
             include/dvs/ui/ImageEditOperations.h
             include/dvs/ui/ImagePairLoader.h
             include/dvs/ui/ImageReviewController.h
             include/dvs/ui/JogKeyHandler.h
+            include/dvs/ui/MainWindowDependencies.h
             include/dvs/ui/Module.h
+            include/dvs/ui/QmlTypeRegistration.h
             include/dvs/ui/RenderAckRelay.h
             include/dvs/ui/ReviewImageProvider.h
             include/dvs/ui/Sam2Segmenter.h
@@ -89,12 +92,15 @@ if(DVS_BUILD_ADAPTERS)
             src/EditImageProvider.cpp
             src/GraphicsBackend.cpp
             src/HoldKeyHandler.cpp
+            src/ImageColorContract.cpp
             src/ImageEditController.cpp
             src/ImageEditOperations.cpp
             src/ImagePairLoader.cpp
             src/ImageReviewController.cpp
             src/JogKeyHandler.cpp
+            src/MainWindowDependencies.cpp
             src/Module.cpp
+            src/QmlTypeRegistration.cpp
             src/RenderAckRelay.cpp
             src/ReviewImageProvider.cpp
             src/Sam2Segmenter.cpp
@@ -132,6 +138,73 @@ if(DVS_BUILD_ADAPTERS)
     dvs_apply_project_warnings(dvs_ui_d3d11_bridge)
     dvs_register_architecture_target(dvs_ui_d3d11_bridge)
     set_target_properties(dvs_ui_d3d11_bridge PROPERTIES FOLDER "Adapters/UI")
+
+    # Build-time description of the Dvs.Ui module for QML tooling (qmllint/qmlls). The
+    # foreign wrappers live here, the wrapped classes stay in dvs_ui_d3d11_bridge; the
+    # generated .qmltypes is consumed through an import path, never linked at runtime.
+    # See docs/adr/0006-qml-type-registration.md.
+    add_library(
+        dvs_ui_qml_types
+        STATIC
+            qmltypes/DvsQmlTypes.cpp
+            qmltypes/DvsQmlTypes.h
+    )
+    target_include_directories(dvs_ui_qml_types PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/qmltypes")
+    target_link_libraries(dvs_ui_qml_types PRIVATE dvs_ui_d3d11_bridge Qt6::Qml)
+    set_target_properties(dvs_ui_qml_types PROPERTIES AUTOMOC ON)
+    dvs_apply_project_warnings(dvs_ui_qml_types)
+    dvs_register_architecture_target(dvs_ui_qml_types)
+    set_target_properties(dvs_ui_qml_types PROPERTIES FOLDER "Adapters/UI")
+
+    # qmltyperegistrar reads the wrappers from this target's aggregated moc JSON and the
+    # wrapped members from the bridge's; the tooling module is generated, never compiled
+    # into a registration function (see the ADR for why the generated C++ is unused).
+    qt6_extract_metatypes(dvs_ui_d3d11_bridge)
+    qt6_extract_metatypes(dvs_ui_qml_types)
+
+    set(
+        DVS_QML_TYPES_IMPORT_DIR
+        "${CMAKE_BINARY_DIR}/qml-imports"
+        CACHE INTERNAL "Import directory that exposes the generated Dvs.Ui .qmltypes to QML tooling"
+    )
+    set(dvs_qml_types_module_dir "${DVS_QML_TYPES_IMPORT_DIR}/Dvs/Ui")
+    configure_file(qmltypes/Dvs.Ui.qmldir.in "${dvs_qml_types_module_dir}/qmldir" @ONLY)
+    add_custom_command(
+        OUTPUT "${dvs_qml_types_module_dir}/dvs.qmltypes"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${dvs_qml_types_module_dir}"
+        COMMAND
+            "$<TARGET_FILE:Qt6::qmltyperegistrar>"
+            "--generate-qmltypes" "${dvs_qml_types_module_dir}/dvs.qmltypes.raw"
+            "--import-name" "Dvs.Ui"
+            "--major-version" "1"
+            "--minor-version" "0"
+            "--foreign-types"
+            "$<TARGET_PROPERTY:dvs_ui_d3d11_bridge,INTERFACE_QT_META_TYPES_BUILD_FILE>"
+            "$<TARGET_PROPERTY:dvs_ui_qml_types,INTERFACE_QT_META_TYPES_BUILD_FILE>"
+        # moc spells Q_PROPERTY(qreal ...) with the C++ name; QML tooling knows the type as
+        # "double". Normalize the generated description and fail loudly if a spelling
+        # survives that qmllint could not resolve (see cmake/NormalizeQmlTypes.cmake).
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DINPUT=${dvs_qml_types_module_dir}/dvs.qmltypes.raw"
+            "-DOUTPUT=${dvs_qml_types_module_dir}/dvs.qmltypes"
+            -P
+            "${PROJECT_SOURCE_DIR}/cmake/NormalizeQmlTypes.cmake"
+        DEPENDS
+            dvs_ui_d3d11_bridge
+            dvs_ui_qml_types
+            "${PROJECT_SOURCE_DIR}/cmake/NormalizeQmlTypes.cmake"
+            "$<TARGET_PROPERTY:dvs_ui_d3d11_bridge,INTERFACE_QT_META_TYPES_BUILD_FILE>"
+            "$<TARGET_PROPERTY:dvs_ui_qml_types,INTERFACE_QT_META_TYPES_BUILD_FILE>"
+        COMMENT "Generating the Dvs.Ui .qmltypes for QML tooling"
+        VERBATIM
+    )
+    add_custom_target(
+        dvs_ui_qml_types_generate
+        ALL
+        DEPENDS "${dvs_qml_types_module_dir}/dvs.qmltypes"
+    )
+    set_target_properties(dvs_ui_qml_types_generate PROPERTIES FOLDER "Adapters/UI")
 endif()
 
 # Stable aggregate consumed by the application and existing tests.

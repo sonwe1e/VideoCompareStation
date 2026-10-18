@@ -1,10 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-// qmllint disable import
 import Dvs.Ui 1.0
-
-// qmllint enable import
 
 Item {
     id: control

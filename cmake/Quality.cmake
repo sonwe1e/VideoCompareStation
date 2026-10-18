@@ -251,12 +251,24 @@ function(dvs_add_quality_targets)
                 "${PROJECT_SOURCE_DIR}/cmake/CheckQmlFormat.cmake"
             VERBATIM
         )
+        # The generated Dvs.Ui .qmltypes (see docs/adr/0006-qml-type-registration.md) is
+        # what lets qmllint resolve the module's types, enums and members; without the
+        # import path every Dvs.Ui use is invisible to the analyzer.
+        set(dvs_qmllint_args --max-warnings 0)
+        set(dvs_qmllint_dependencies)
+        if(TARGET dvs_ui_qml_types_generate)
+            list(APPEND dvs_qmllint_args -I "${DVS_QML_TYPES_IMPORT_DIR}")
+            list(APPEND dvs_qmllint_dependencies dvs_ui_qml_types_generate)
+        endif()
         add_custom_target(
             dvs_lint_qml
-            COMMAND "${QMLLINT_EXECUTABLE}" --max-warnings 0 ${qmlFiles}
+            COMMAND "${QMLLINT_EXECUTABLE}" ${dvs_qmllint_args} ${qmlFiles}
             COMMAND_EXPAND_LISTS
             VERBATIM
         )
+        if(dvs_qmllint_dependencies)
+            add_dependencies(dvs_lint_qml ${dvs_qmllint_dependencies})
+        endif()
 
         add_dependencies(format dvs_format_qml)
         add_dependencies(format-check dvs_format_check_qml)

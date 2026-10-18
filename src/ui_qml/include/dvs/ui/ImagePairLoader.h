@@ -1,6 +1,9 @@
 #pragma once
 
+#include "dvs/ui/ImageColorContract.h"
+
 #include <QByteArray>
+#include <QColorSpace>
 #include <QImage>
 #include <QObject>
 #include <QSize>
@@ -66,6 +69,15 @@ struct StillImageSourceInfo final {
     // True when the source differs from the display buffer (bit depth, channels or color
     // space), i.e. sampled pixels are display-converted values, not original code values.
     bool displayConverted = false;
+    // COLOR1 colour contract: the file's embedded ICC profile state (classified, not applied)
+    // plus the colour primaries/transfer/space the file declared. Kept separate from the
+    // conversion fields above so the UI can show "profile present but not applied" even for a
+    // native RGBA8 image whose display buffer was not converted at all.
+    ImageColorInfo color;
+    // COLOR4: Qt colour space parsed from the same embedded profile at load time. Invalid when
+    // the file has no usable SDR profile. Only the display derivative may use it; analysis
+    // buffers, statistics and probe samples never do.
+    QColorSpace colorSpace;
 };
 
 // Worker-off-thread still-image loader/difference service. Completion handlers always run on
@@ -87,11 +99,18 @@ public:
     // Returns true when the header dimensions could be read without decoding. False means
     // the header is unknown; the loader then falls back to the decoded image's dimensions.
     using ImageProbe = std::function<bool(const QByteArray&, QSize*)>;
+    // Container-level ICC extraction for paths whose decoder does not expose the profile
+    // (the current FFmpeg build has its PNG decoder disabled, so PNG opens through Qt).
+    // Returns true when payload bytes were extracted; profileDeclared distinguishes "no
+    // profile" from "the container declared one that could not be read".
+    using ImageColorProbe =
+        std::function<bool(const QByteArray&, QByteArray*, bool*, std::string*)>;
 
     struct DecodePolicy final {
         std::uint64_t revision = 0;
         ImageLoader loader;
         ImageProbe probe;
+        ImageColorProbe colorProbe;
     };
 
     struct Result final {

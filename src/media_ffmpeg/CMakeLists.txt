@@ -3,6 +3,7 @@ add_library(
     STATIC
         src/AlignmentAnalysisService.cpp
         src/ClipExportWriter.cpp
+        src/ImageColorProfileProbe.cpp
         src/Module.cpp
         src/MultiSourceFrameProvider.cpp
         src/PresentationIndexCache.cpp
@@ -22,6 +23,12 @@ add_library(
 )
 add_library(dvs::media_ffmpeg ALIAS dvs_media_ffmpeg)
 
+# Container-level ICC extraction (PNG iCCP needs zlib). zlib is already a deployed runtime
+# dependency through Qt; this adds no new shipped package. The FFmpeg build itself has zlib
+# disabled, which is why the PNG decoder is absent and the Qt fallback plus this probe carry
+# PNG colour metadata.
+find_package(ZLIB REQUIRED)
+
 target_include_directories(
     dvs_media_ffmpeg
     PUBLIC
@@ -36,6 +43,7 @@ target_link_libraries(
         dvs_graphics_d3d11
         dvs::ffmpeg_dependencies
         dvs::json_dependencies
+        ZLIB::ZLIB
         ole32
         windowscodecs
 )

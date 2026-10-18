@@ -1,0 +1,5 @@
+module Dvs.Ui
+typeinfo dvs.qmltypes
+# ComparisonSurface derives QQuickItem; the dependency entry is what lets qmllint resolve
+# the prototype chain from the generated .qmltypes (same shape as Qt's own modules).
+depends QtQuick auto

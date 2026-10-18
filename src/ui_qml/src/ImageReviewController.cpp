@@ -25,6 +25,7 @@ constexpr qint64 kMaxDecodedImageBytes = 128LL * 1024LL * 1024LL;
 std::mutex g_loaderMutex;
 ImageReviewController::StillImageLoader g_stillImageLoader;
 ImageReviewController::StillImageProbe g_stillImageProbe;
+ImageReviewController::StillImageColorProbe g_stillImageColorProbe;
 std::atomic<quint64> g_loaderRevision{1U};
 
 [[nodiscard]] ImageReviewController::StillImageLoader processStillImageLoader() {
@@ -201,6 +202,14 @@ void ImageReviewController::setProcessStillImageProbe(StillImageProbe probe) {
     {
         const std::lock_guard lock{g_loaderMutex};
         g_stillImageProbe = std::move(probe);
+    }
+    ++g_loaderRevision;
+}
+
+void ImageReviewController::setProcessStillImageColorProbe(StillImageColorProbe probe) {
+    {
+        const std::lock_guard lock{g_loaderMutex};
+        g_stillImageColorProbe = std::move(probe);
     }
     ++g_loaderRevision;
 }
@@ -438,6 +447,250 @@ bool ImageReviewController::secondaryDisplayConverted() const noexcept {
     return secondaryInfo_.displayConverted;
 }
 
+namespace {
+
+// COLOR1: which point of the pixel path the probe/difference statistics read. A source that
+// needed a decode conversion is labelled as display values; only a plain RGBA8 source keeps
+// the file's own code values in the analysis buffer.
+[[nodiscard]] ImagePixelValuePath analysisValuePath(const StillImageSourceInfo& info) noexcept {
+    return info.displayConverted ? ImagePixelValuePath::DecodedDisplayRgba8
+                                 : ImagePixelValuePath::FileRgba8CodeValues;
+}
+
+// COLOR3: one sentence naming every colour state the user can be in. The status must never
+// let "profile declared" read as "colour-managed display"; the display-environment clause is
+// appended until COLOR5 actually verifies a Windows output path. COLOR4 adds the display
+// conversion state: applied only when the engine parsed the profile and the switch is on.
+[[nodiscard]] QString colorStatusText(const StillImageSourceInfo& info,
+                                      const bool displayVerified,
+                                      const bool displayEnabled) {
+    QString text;
+    const bool displayApplied =
+        info.color.profileStatus == ImageColorProfileStatus::EmbeddedSupported &&
+        info.colorSpace.isValid() && displayEnabled;
+    switch (info.color.profileStatus) {
+    case ImageColorProfileStatus::NotProbed:
+        text = QObject::tr("颜色：未探测（该加载路径未提供配置文件）");
+        break;
+    case ImageColorProfileStatus::None:
+        text = QObject::tr("颜色：无嵌入配置（按 sRGB 假设观察，未验证）");
+        break;
+    case ImageColorProfileStatus::EmbeddedSupported:
+        if (displayApplied) {
+            text = QObject::tr("颜色：已应用文件配置转换");
+        } else if (!displayEnabled) {
+            text = QObject::tr("颜色：嵌入配置有效，显示转换已关闭");
+        } else {
+            text = QObject::tr("颜色：嵌入配置有效，转换引擎未就绪");
+        }
+        break;
+    case ImageColorProfileStatus::EmbeddedUnsupported:
+        text = QObject::tr("颜色：配置不受支持（未应用，回退显示）");
+        break;
+    case ImageColorProfileStatus::Corrupt:
+        text = QObject::tr("颜色：配置损坏（未应用，回退显示）");
+        break;
+    }
+    if (!info.color.profileDataSpace.isEmpty()) {
+        text += QObject::tr(" · %1").arg(info.color.profileDataSpace.trimmed());
+    }
+    if (!displayVerified) {
+        text += QObject::tr(" · 显示环境未验证");
+    }
+    return text;
+}
+
+// Compact form for the always-visible status badge. It keeps the same state switch and the
+// same "not verified" admission, but fits next to the readouts at the minimum window size.
+[[nodiscard]] QString colorStateCompactText(const StillImageSourceInfo& info,
+                                            const bool displayVerified,
+                                            const bool displayEnabled) {
+    QString text;
+    const bool displayApplied =
+        info.color.profileStatus == ImageColorProfileStatus::EmbeddedSupported &&
+        info.colorSpace.isValid() && displayEnabled;
+    switch (info.color.profileStatus) {
+    case ImageColorProfileStatus::NotProbed:
+        text = QObject::tr("颜色未探测");
+        break;
+    case ImageColorProfileStatus::None:
+        text = QObject::tr("颜色：无配置·sRGB 假设");
+        break;
+    case ImageColorProfileStatus::EmbeddedSupported:
+        if (displayApplied) {
+            text = QObject::tr("颜色：已转换");
+        } else if (!displayEnabled) {
+            text = QObject::tr("颜色：转换已关闭");
+        } else {
+            text = QObject::tr("颜色：配置未转换");
+        }
+        break;
+    case ImageColorProfileStatus::EmbeddedUnsupported:
+        text = QObject::tr("颜色：配置不支持");
+        break;
+    case ImageColorProfileStatus::Corrupt:
+        text = QObject::tr("颜色：配置损坏");
+        break;
+    }
+    if (!displayVerified) {
+        text += QObject::tr(" · 显示未验证");
+    }
+    return text;
+}
+
+} // namespace
+
+int ImageReviewController::primaryColorProfileStatus() const noexcept {
+    return static_cast<int>(primaryInfo_.color.profileStatus);
+}
+
+QString ImageReviewController::primaryColorProfileSha256() const {
+    return primaryInfo_.color.profileSha256;
+}
+
+QString ImageReviewController::primaryColorProfileDataSpace() const {
+    return primaryInfo_.color.profileDataSpace;
+}
+
+QString ImageReviewController::primaryColorProfileClass() const {
+    return primaryInfo_.color.profileClass;
+}
+
+int ImageReviewController::primaryColorProfileVersionMajor() const noexcept {
+    return primaryInfo_.color.profileVersionMajor;
+}
+
+int ImageReviewController::primaryDeclaredPrimaries() const noexcept {
+    return primaryInfo_.color.declaredPrimaries;
+}
+
+int ImageReviewController::primaryDeclaredTransfer() const noexcept {
+    return primaryInfo_.color.declaredTransfer;
+}
+
+int ImageReviewController::primaryDeclaredColorSpace() const noexcept {
+    return primaryInfo_.color.declaredColorSpace;
+}
+
+bool ImageReviewController::primaryColorConversionApplied() const noexcept {
+    return primaryInfo_.color.conversionApplied;
+}
+
+QString ImageReviewController::primaryColorStatusText() const {
+    return colorStatusText(primaryInfo_, displayColorEnvironmentVerified(), colorDisplayEnabled_);
+}
+
+QString ImageReviewController::primaryColorStateCompactText() const {
+    return colorStateCompactText(
+        primaryInfo_, displayColorEnvironmentVerified(), colorDisplayEnabled_);
+}
+
+bool ImageReviewController::primaryColorProfileNeedsFallback() const noexcept {
+    return imageColorProfileNeedsFallback(primaryInfo_.color.profileStatus);
+}
+
+int ImageReviewController::secondaryColorProfileStatus() const noexcept {
+    return static_cast<int>(secondaryInfo_.color.profileStatus);
+}
+
+QString ImageReviewController::secondaryColorProfileSha256() const {
+    return secondaryInfo_.color.profileSha256;
+}
+
+QString ImageReviewController::secondaryColorProfileDataSpace() const {
+    return secondaryInfo_.color.profileDataSpace;
+}
+
+QString ImageReviewController::secondaryColorProfileClass() const {
+    return secondaryInfo_.color.profileClass;
+}
+
+int ImageReviewController::secondaryColorProfileVersionMajor() const noexcept {
+    return secondaryInfo_.color.profileVersionMajor;
+}
+
+int ImageReviewController::secondaryDeclaredPrimaries() const noexcept {
+    return secondaryInfo_.color.declaredPrimaries;
+}
+
+int ImageReviewController::secondaryDeclaredTransfer() const noexcept {
+    return secondaryInfo_.color.declaredTransfer;
+}
+
+int ImageReviewController::secondaryDeclaredColorSpace() const noexcept {
+    return secondaryInfo_.color.declaredColorSpace;
+}
+
+bool ImageReviewController::secondaryColorConversionApplied() const noexcept {
+    return secondaryInfo_.color.conversionApplied;
+}
+
+QString ImageReviewController::secondaryColorStatusText() const {
+    return colorStatusText(secondaryInfo_, displayColorEnvironmentVerified(), colorDisplayEnabled_);
+}
+
+QString ImageReviewController::secondaryColorStateCompactText() const {
+    return colorStateCompactText(
+        secondaryInfo_, displayColorEnvironmentVerified(), colorDisplayEnabled_);
+}
+
+bool ImageReviewController::secondaryColorProfileNeedsFallback() const noexcept {
+    return imageColorProfileNeedsFallback(secondaryInfo_.color.profileStatus);
+}
+
+int ImageReviewController::primaryAnalysisValuePath() const noexcept {
+    return static_cast<int>(analysisValuePath(primaryInfo_));
+}
+
+int ImageReviewController::secondaryAnalysisValuePath() const noexcept {
+    return static_cast<int>(analysisValuePath(secondaryInfo_));
+}
+
+bool ImageReviewController::primaryNativeValuePathAvailable() const noexcept {
+    return !primaryNative_.isNull();
+}
+
+bool ImageReviewController::secondaryNativeValuePathAvailable() const noexcept {
+    return !secondaryNative_.isNull();
+}
+
+bool ImageReviewController::displayColorEnvironmentVerified() const noexcept {
+    // COLOR5 owns this claim. Until a Windows output path has been verified, every display
+    // status says so instead of inheriting "colour managed" from a profile being present.
+    return false;
+}
+
+bool ImageReviewController::colorDisplayEnabled() const noexcept {
+    return colorDisplayEnabled_;
+}
+
+void ImageReviewController::setColorDisplayEnabled(const bool enabled) {
+    if (colorDisplayEnabled_ == enabled) {
+        return;
+    }
+    colorDisplayEnabled_ = enabled;
+    {
+        const std::lock_guard lock{viewCacheMutex_};
+        primaryViewCache_ = QImage();
+        secondaryViewCache_ = QImage();
+        viewCacheGeneration_ = -1;
+    }
+    emit colorDisplayChanged();
+    emit stateChanged();
+}
+
+bool ImageReviewController::primaryColorDisplayApplied() const noexcept {
+    return colorDisplayEnabled_ &&
+           primaryInfo_.color.profileStatus == ImageColorProfileStatus::EmbeddedSupported &&
+           primaryInfo_.colorSpace.isValid();
+}
+
+bool ImageReviewController::secondaryColorDisplayApplied() const noexcept {
+    return colorDisplayEnabled_ &&
+           secondaryInfo_.color.profileStatus == ImageColorProfileStatus::EmbeddedSupported &&
+           secondaryInfo_.colorSpace.isValid();
+}
+
 bool ImageReviewController::resampleAllowed() const noexcept {
     return resampleAllowed_;
 }
@@ -624,6 +877,10 @@ bool ImageReviewController::openSecondaryImage(QImage image,
     }
     bumpGeneration();
     return true;
+}
+
+void ImageReviewController::deliverLoadResultForTesting(ImagePairLoader::Result result) {
+    handleLoadFinished(std::move(result));
 }
 
 bool ImageReviewController::openPrimary(const QUrl& url) {
@@ -1138,6 +1395,22 @@ void ImageReviewController::setZoom(const qreal value) {
     emit viewChanged();
 }
 
+void ImageReviewController::restoreObservationPosition(const qreal zoom,
+                                                       const qreal panX,
+                                                       const qreal panY) {
+    const qreal nextZoom = clampZoom(zoom);
+    const qreal nextPanX = std::isfinite(panX) ? std::clamp(panX, 0.0, 1.0) : 0.5;
+    const qreal nextPanY = std::isfinite(panY) ? std::clamp(panY, 0.0, 1.0) : 0.5;
+    if (qFuzzyCompare(nextZoom, zoom_) && qFuzzyCompare(nextPanX, panX_) &&
+        qFuzzyCompare(nextPanY, panY_)) {
+        return;
+    }
+    zoom_ = nextZoom;
+    panX_ = nextPanX;
+    panY_ = nextPanY;
+    emit viewChanged();
+}
+
 QVariantMap ImageReviewController::samplePixel(const int imageSlot,
                                                const qreal imageX,
                                                const qreal imageY) const {
@@ -1633,12 +1906,13 @@ QString ImageReviewController::probeColorText(const int format) const {
 QString ImageReviewController::imageUrl(const int imageSlot) const {
     // A display filter changes the provider result without changing the decoded material
     // generation (and without invalidating its probe). Give Qt's image cache a distinct URL.
-    return QStringLiteral("image://vcs-review/%1/%2/%3/%4/%5")
+    return QStringLiteral("image://vcs-review/%1/%2/%3/%4/%5/%6")
         .arg(imageSlot)
         .arg(contentGeneration_)
         .arg(viewMode_)
         .arg(alphaFilterEnabled_ ? 1 : 0)
-        .arg(alphaThreshold_);
+        .arg(alphaThreshold_)
+        .arg(colorDisplayEnabled_ ? 1 : 0);
 }
 
 QImage ImageReviewController::imageForSlot(const int imageSlot) const {
@@ -1679,6 +1953,7 @@ ImagePairLoader::DecodePolicy ImageReviewController::currentDecodePolicy() const
     const std::lock_guard lock{g_loaderMutex};
     policy.loader = g_stillImageLoader;
     policy.probe = g_stillImageProbe;
+    policy.colorProbe = g_stillImageColorProbe;
     return policy;
 }
 
@@ -2092,14 +2367,32 @@ void ImageReviewController::applyDifferenceResult(const ImagePairLoader::Differe
     nativeBeyondDisplayPixels_ = result.nativeBeyondDisplayPixels;
 }
 
+QImage ImageReviewController::displayColorImage(const QImage& source,
+                                                const StillImageSourceInfo& info) const {
+    // COLOR4: only the presentation derivative is converted. Analysis buffers, statistics and
+    // probe samples keep reading primary_/secondary_ as delivered by the decoder. An
+    // unsupported or corrupt profile must fall back even if a stale colour space were attached.
+    if (!colorDisplayEnabled_ ||
+        info.color.profileStatus != ImageColorProfileStatus::EmbeddedSupported ||
+        !info.colorSpace.isValid() || source.isNull()) {
+        return source;
+    }
+    QImage tagged = source;
+    tagged.setColorSpace(info.colorSpace);
+    const QImage converted = tagged.convertedToColorSpace(QColorSpace::SRgb);
+    return converted.isNull() ? source : converted;
+}
+
 QImage ImageReviewController::displayImage(const int slot) const {
     switch (slot) {
     case PrimarySlot:
     case DisplayPrimarySlot:
-        return channelView(primary_, primaryNative_, viewMode_, true);
+        return channelView(
+            displayColorImage(primary_, primaryInfo_), primaryNative_, viewMode_, true);
     case SecondarySlot:
     case DisplaySecondarySlot:
-        return channelView(secondary_, secondaryNative_, viewMode_, false);
+        return channelView(
+            displayColorImage(secondary_, secondaryInfo_), secondaryNative_, viewMode_, false);
     case DisplayDiffSlot:
         return diff_;
     default:
@@ -2124,11 +2417,13 @@ QImage ImageReviewController::channelView(const QImage& source,
     QImage& cache = primarySide ? primaryViewCache_ : secondaryViewCache_;
     if (viewCacheGeneration_ != contentGeneration_ || viewCacheMode_ != mode ||
         viewCacheFilterEnabled_ != alphaFilterEnabled_ ||
-        viewCacheThreshold_ != (alphaFilterEnabled_ ? alphaThreshold_ : -1)) {
+        viewCacheThreshold_ != (alphaFilterEnabled_ ? alphaThreshold_ : -1) ||
+        viewCacheColorEnabled_ != colorDisplayEnabled_) {
         viewCacheGeneration_ = contentGeneration_;
         viewCacheMode_ = mode;
         viewCacheFilterEnabled_ = alphaFilterEnabled_;
         viewCacheThreshold_ = alphaFilterEnabled_ ? alphaThreshold_ : -1;
+        viewCacheColorEnabled_ = colorDisplayEnabled_;
         primaryViewCache_ = QImage();
         secondaryViewCache_ = QImage();
     }

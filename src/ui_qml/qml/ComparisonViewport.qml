@@ -5,22 +5,17 @@ import QtQuick.Controls
 import QtQuick.Window
 import "VcsTheme.js" as Theme
 import "LayoutMetrics.js" as LayoutMetrics
-// qmllint disable import
 import Dvs.Ui 1.0
-
-// qmllint enable import
 
 Rectangle {
     id: control
 
     property bool pixelGridEnabled: false
-    // Dvs.Ui is registered by C++ at runtime; the lint-only import has no generated
-    // enum metadata. Keep these values bound to the real type rather than copying numbers.
-    // qmllint disable unqualified
+    // The enum values stay bound to the real type rather than copying numbers; the
+    // generated .qmltypes makes qmllint resolve them now.
     readonly property int videoFilterAutoValue: ComparisonSurface.VideoFilterAuto
     readonly property int videoFilterSmoothValue: ComparisonSurface.VideoFilterSmooth
     readonly property int videoFilterPixelValue: ComparisonSurface.VideoFilterPixel
-    // qmllint enable unqualified
 
     Repeater {
         parent: surfaceLayer

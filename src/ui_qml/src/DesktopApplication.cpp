@@ -8,14 +8,14 @@
 #include "dvs/ui/DiagnosticsProbe.h"
 #include "dvs/ui/EditImageProvider.h"
 #include "dvs/ui/FileAssociationController.h"
-#include "dvs/ui/HoldKeyHandler.h"
 #include "dvs/ui/ImageEditController.h"
 #include "dvs/ui/ImageFolderPairModel.h"
 #include "dvs/ui/ImageReviewController.h"
 #include "dvs/ui/InterpolationProtocolController.h"
 #include "dvs/ui/IssueLogController.h"
-#include "dvs/ui/JogKeyHandler.h"
+#include "dvs/ui/MainWindowDependencies.h"
 #include "dvs/ui/PairMetricsController.h"
+#include "dvs/ui/QmlTypeRegistration.h"
 #include "dvs/ui/ReviewController.h"
 #include "dvs/ui/ReviewImageProvider.h"
 #include "dvs/ui/ReviewPreferencesController.h"
@@ -57,7 +57,6 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
-#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -131,12 +130,7 @@ void applyWindowsNativeChrome(QQuickWindow* const window) noexcept {
 #endif
 
 void registerQmlTypes() {
-    static std::once_flag registered;
-    std::call_once(registered, [] {
-        static_cast<void>(qmlRegisterType<ComparisonSurface>("Dvs.Ui", 1, 0, "ComparisonSurface"));
-        static_cast<void>(qmlRegisterType<JogKeyHandler>("Dvs.Ui", 1, 0, "JogKeyHandler"));
-        static_cast<void>(qmlRegisterType<HoldKeyHandler>("Dvs.Ui", 1, 0, "HoldKeyHandler"));
-    });
+    registerDvsUiTypes();
 }
 
 [[nodiscard]] bool disableNativeMenuWindows() {
@@ -255,8 +249,6 @@ public:
         engine->rootContext()->setContextProperty(QStringLiteral("reviewFacade"),
                                                   sessionFacade_.get());
         imageReview_ = std::make_unique<ImageReviewController>();
-        engine->rootContext()->setContextProperty(QStringLiteral("imageReview"),
-                                                  imageReview_.get());
         engine->addImageProvider(QStringLiteral("vcs-review"),
                                  new ReviewImageProvider(imageReview_.get()));
         // Step-3 image editing: an edit session always starts from the committed decoded
@@ -333,12 +325,10 @@ public:
         comparisonExport_ = std::make_unique<ComparisonExportController>();
         engine->rootContext()->setContextProperty(QStringLiteral("comparisonExport"),
                                                   comparisonExport_.get());
-        // Pixel-probe colour copy. Always registered: the workspace degrades to a disabled
-        // button when the property is absent, so isolated harnesses that do not set it keep
-        // working, while the real window gets a verified Qt clipboard write.
+        // Pixel-probe colour copy. The composition root owns the adapter and hands it to
+        // the root object below; a session without a GUI clipboard is reported by the
+        // adapter itself (copyText verifies its write and reports the failure).
         colorClipboard_ = std::make_unique<ColorClipboardController>();
-        engine->rootContext()->setContextProperty(QStringLiteral("colorClipboard"),
-                                                  colorClipboard_.get());
         // Range clip export: only offered when the composition root injected an exporter
         // adapter (ui_qml never links media_ffmpeg). Main.qml guards every read on the
         // context property being set, so isolated harnesses can omit it.
@@ -427,6 +417,10 @@ public:
                 qmlWarnings_.insert(qmlWarnings_.end(), warnings.cbegin(), warnings.cend());
             });
         markStartupMilestone("context-ready");
+        // The root declares its pilot services as required typed properties; the
+        // composition root supplies them as initial properties, so a missing service
+        // fails creation instead of degrading an unseen workspace.
+        engine->setInitialProperties(mainWindowPilotProperties(*imageReview_, *colorClipboard_));
         engine->load(QUrl{QStringLiteral("qrc:/qml/Main.qml")});
         markStartupMilestone("qml-loaded");
         static_cast<void>(QObject::disconnect(warningConnection));
@@ -441,6 +435,16 @@ public:
                 ? window->findChild<ComparisonSurface*>(QStringLiteral("dualVideoSurface"))
                 : nullptr;
         if (window == nullptr || surface == nullptr || !bindSurface(*surface)) {
+            reportWarnings(qmlWarnings_);
+            return false;
+        }
+        // Creation already fails when a required property is absent; an explicit null or
+        // a wrong-typed object only degrades the property to null with a warning, so the
+        // services' identity is verified before the window is shown.
+        QString dependencyError;
+        if (!verifyMainWindowPilotServices(
+                *window, *imageReview_, *colorClipboard_, &dependencyError)) {
+            qWarning("%s", qUtf8Printable(dependencyError));
             reportWarnings(qmlWarnings_);
             return false;
         }

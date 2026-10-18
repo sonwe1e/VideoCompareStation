@@ -421,9 +421,33 @@ TEST(SampleExportWriterTests, ExportsThePlannedTripletWithExactFrameIdentityAndM
     EXPECT_EQ(manifest["members"]["gt"], "frames/gt.png");
     EXPECT_EQ(manifest["members"]["input1"], "frames/input1.png");
     EXPECT_EQ(manifest["members"]["prediction"], "frames/prediction.png");
+    // FLOW2 provenance: each member names its source asset and exact frame, the prediction's
+    // candidate output frame is explicit, and both source identities are recorded. A receiver
+    // does not have to guess which file produced which PNG.
+    EXPECT_EQ(manifest["display_index_base"], 0);
+    EXPECT_EQ(manifest["candidate_output_frame"], 1);
+    EXPECT_EQ(manifest["member_identity"]["input0"]["source"], "gt");
+    EXPECT_EQ(manifest["member_identity"]["input0"]["frame_index"], 0);
+    EXPECT_EQ(manifest["member_identity"]["gt"]["source"], "gt");
+    EXPECT_EQ(manifest["member_identity"]["gt"]["frame_index"], 1);
+    EXPECT_EQ(manifest["member_identity"]["input1"]["frame_index"], 2);
+    EXPECT_EQ(manifest["member_identity"]["prediction"]["source"], "candidate");
+    EXPECT_EQ(manifest["member_identity"]["prediction"]["frame_index"], 1);
+    EXPECT_EQ(manifest["sources"]["gt"]["path"], gt.generic_string());
+    EXPECT_EQ(manifest["sources"]["gt"]["file_name"], "h264_a_320x180_30fps_12.mp4");
+    EXPECT_EQ(manifest["sources"]["gt"]["width"], 320);
+    EXPECT_EQ(manifest["sources"]["gt"]["height"], 180);
+    EXPECT_EQ(manifest["sources"]["candidate"]["path"], candidate.generic_string());
+    EXPECT_EQ(manifest["sources"]["candidate"]["width"], 160);
+    EXPECT_EQ(manifest["sources"]["candidate"]["frame_count"], 12);
     EXPECT_TRUE(manifest["crop"].is_null());
     EXPECT_NE(manifest["pixel_conversion_policy"].get<std::string>().find("swscale"),
               std::string::npos);
+    // COLOR4: the exporter has no colour engine; it must say so instead of letting a receiver
+    // read the members as colour-managed or as verified display output.
+    EXPECT_FALSE(manifest["color_management"]["source_profile_applied"].get<bool>());
+    EXPECT_EQ(manifest["color_management"]["member_reference"], "decoded_rgba8_swscale");
+    EXPECT_FALSE(manifest["color_management"]["display_environment_verified"].get<bool>());
     // Which encoder serves a build is a probe outcome, not a constant: the repository's FFmpeg is
     // built --disable-zlib (no avcodec png encoder), so this tree answers "windows-wic" while a
     // fuller build answers "ffmpeg-avcodec". Both names are legitimate; anything else is not.

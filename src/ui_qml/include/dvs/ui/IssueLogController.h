@@ -36,6 +36,10 @@ public:
     // Invokable because Main.qml switches the mode on every workspace change and before
     // every capture; a plain member was unreachable from QML and silently kept the old mode.
     Q_INVOKABLE void setWorkspaceMode(const QString& mode) noexcept;
+    // FLOW1: the background choice lives in ImageWorkspace's QML view state, so the capture
+    // entry point receives it from Main.qml before captureCurrentIssue(). -1 means "not in the
+    // image workspace / not captured".
+    Q_INVOKABLE void setImageBackgroundMode(int mode) noexcept;
     void setDefaultDocumentPath(const QUrl& path) noexcept;
 
     [[nodiscard]] int count() const noexcept;
@@ -82,6 +86,7 @@ private:
     QObject* imageController_ = nullptr;
     QObject* videoSurface_ = nullptr;
     QString workspaceMode_ = QStringLiteral("video");
+    int imageBackgroundMode_ = -1;
     QString documentPath_;
     std::vector<StoredIssue> issues_;
     QString statusText_;

@@ -87,6 +87,14 @@ struct IssueViewContext final {
     double panX = 0.5;
     double panY = 0.5;
     bool resampleAllowed = false;
+    // FLOW1 image observation settings. -1 means "not captured" (legacy record or a capture
+    // outside the image workspace); valid values replay exactly. Alpha filtering is a
+    // tri-state for the same reason: -1 not captured, 0 off, 1 on.
+    std::int32_t imageViewMode = -1;
+    std::int32_t imageBackgroundMode = -1;
+    std::int32_t imageDiffGain = -1;
+    std::int32_t imageAlphaFilterEnabled = -1;
+    std::int32_t imageAlphaThreshold = -1;
 };
 
 // P06 (D02) nearby-frames diagnostic interval. The anchor is the frame the session actually
