@@ -254,6 +254,31 @@ PR #52 的实际范围是普通软件门禁迁移（`.github/workflows` 三份 +
 注意：首轮的 Release 作业在构建后即被路由门禁拦下，**测试没有执行**；Debug 与
 Native format/lint 在本轮没有结果。三者都不能计入通过。
 
+#### 1A 第二轮云端结果（提交 `1c1588b`）
+
+| 作业 | 结果 | 说明 |
+|---|---|---|
+| Repository guide and script contracts | 通过 | 48s；路由计数 1465/1443 生效 |
+| Native format and lint | 通过 | 31m55s；新增 104 个文件通过 format-check、clang-tidy、qmllint |
+| Linux Clang core | 通过 | 1m31s |
+| Windows core-only | 通过 | 2m58s |
+| Windows UI model-only | 通过 | 3m26s |
+| Release tests | 失败 | 15m48s；**1439 项执行，1 项失败**（11 项 Skipped、8 项 Disabled） |
+| Debug tests | 未执行 | 本轮结束时仍排队 |
+
+唯一失败：`ui.MainQmlContractTests.ImageWorkspaceReloadsViewportSourceAfterImageOpen`。
+它断言 `image://vcs-review/2/0/0/0/0`（五段），而 COLOR4 把「颜色转换开关」加进了
+provider URL 成为第六段，实际值是 `image://vcs-review/2/0/0/0/0/1`。
+
+这条测试**从未在 COLOR4 之后跑过**：该轮只做了定向验证（173/173），没有完整回归，所以
+URL 契约变化没有机会被检出。这正是"旧成绩不能转移到新提交"的实例——不是新写坏的代码，
+而是既有断言与新的缓存身份契约脱节。
+
+修正（`a9bd352`）：四处字面量改为六段；把"URL 已改变"的断言从硬编码字面量改为与**实际
+呈现过的 URL** 比较（否则契约再增一段时该断言会静默失去意义）；顺带修正
+`ReviewImageProvider.h` 里过时的两段式注释。provider 只解析 slot 段，其余是缓存身份，
+因此没有产品行为变化。
+
 ### 批次 1B：交接可信度收口（可与批次 2A 并行；FLOW3 硬前置）
 
 **范围**：把"未保存编辑"从单点拦截改为全路径一致规则，并把 `imageEdit` 提升为 required
