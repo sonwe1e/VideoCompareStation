@@ -1,9 +1,11 @@
 # Media Support
 
-Video baseline: **main @ 0a74c46**, reviewed 2026-09-22. The three implementation stages below
-exist in code; actual performance and release claims require evidence for the tested SHA.
-VP9, AV1 and HDR/tone mapping are outside this baseline. AV1/VP9 are candidates for the current
-compatibility work; audio/subtitles are outside the current product scope, not planned playback requirements.
+Video baseline: **working tree on `8c90005`**, reviewed 2026-10-17. The three implementation
+stages below exist in code; actual performance and release claims require evidence for the
+tested SHA. VP9, AV1 and HDR/tone mapping are outside the current playback gate. AV1/VP9 have
+real investigation fixtures plus explicit-rejection tests; they remain candidates for MEDIA2,
+not supported playback. Audio/subtitles are outside the current product scope, not planned
+playback requirements.
 See [product intent](product/visual-review.md) and the [issue ledger](engineering/visual-review-backlog.md).
 
 ## What opens today
@@ -13,6 +15,7 @@ The probe (`src/media_ffmpeg/src/MediaProbe.cpp`) accepts exactly:
 | Dimension | Accepted | Rejected with |
 |---|---|---|
 | Codec | H.264, HEVC, MPEG-4 Part 2 (and a decoder must exist) | `kUnsupportedCodec` in `MediaProbe.cpp` |
+| AV1 / VP9 | Not supported; real 12-frame 64×48 fixtures assert the explicit rejection | `kUnsupportedCodec`; `.webm` is outside the video-extension entry gate |
 | Pixel format | 8/10-bit YUV 4:2:0/4:2:2/4:4:4 and 8-bit RGB | unsupported depth/layout → `kUnsupportedPixelFormat` |
 | Transfer | SDR only — PQ (SMPTE2084) and HLG are rejected | `kUnsupportedPixelFormat` in transfer validation |
 | Color matrix | BT.709, BT.601, RGB, Unspecified (normalized/inferred as needed) | unsupported matrix → `kUnsupportedPixelFormat` |
@@ -41,19 +44,45 @@ The application injects its image loader in `src/app/Main.cpp`; the main decoder
 `src/media_ffmpeg/src/StillImageDecoder.cpp`, with a Qt fallback in `ImagePairLoader.cpp`.
 The separate stb implementation under `ui_qml` is not the application's complete support matrix.
 
-| Capability | Committed baseline `0a74c46` | Working-tree observation on 2026-09-22, not a release claim |
+| Capability | Verified 2026-10-17 on the dev build | Still not verified |
 |---|---|---|
-| PNG/JPEG/BMP/GIF/WebP/TIFF | Explicit decoder and file-entry paths | Retained; verify actual variants and packaged decoder availability |
-| PNM/PBM/PGM/PPM/PAM | No complete first-class entry contract | P1–P7 decoding/probing and folder recognition added; PNM-family dialogs expanded but `.pam` still missing from their filters |
-| Pixel representation | Decoded RGBA8 | Still RGBA8; source depth/format/conversion labels added, not original 16-bit sampling |
-| Alpha | RGBA sampling; RGB differences with Alpha-only hint | Alpha grayscale, opaque RGB, Alpha difference/statistics and checker/black/white backgrounds added; awaiting end-to-end validation |
-| Color profiles | No complete ICC management pipeline | Still a gap; metadata labels do not implement color management |
-| Animated/multipage files | Still-image workflow | Do not infer animation, page selection or image-sequence playback from recognizing GIF/WebP/TIFF |
+| PNG | Opens through the Qt fallback: this FFmpeg build disables zlib and therefore has **no PNG decoder**. Embedded ICC bytes are read by the container probe, so the colour state is real on this path | 16-bit PNG precision: the Qt fallback yields RGBA8 without the converted RGBA64 sidecar; a zlib-enabled FFmpeg build would need a dependency/payload decision |
+| JPEG/BMP/GIF/WebP/PNM | Real encoded fixtures decode through the FFmpeg-backed entry (`media.StillImageDecoderTests.DecodesRealFormatsWithEnabledFfmpegDecoders`, `DecodesEveryRealPnmSubtype`); extension routing includes all families | Release-ZIP decoder availability and real user photographs/screenshots |
+| TIFF | Decoder exists and metadata is readable, but this FFmpeg build has zlib disabled: a Deflate-compressed TIFF fails explicitly in the decoder (`DeflateTiffFailsExplicitlyInsteadOfClaimingSupport`). Uncompressed TIFF was not added as a fixture in this round | Any TIFF support claim until an uncompressed fixture passes and the compressed variants are either enabled (zlib) or listed as unsupported |
+| PNM/PBM/PGM/PPM/PAM | Real P1–P7 files decode 8×8; routing and dialogs include `.pnm/.ppm/.pgm/.pbm/.pam` | Damaged/oversized PNM rejection and real world samples |
+| Pixel representation | Decoded RGBA8 plus an RGBA64 sidecar for >8-bit sources decoded by FFmpeg; source depth/format/alpha provenance is recorded | Original-depth sampling for PNG through the Qt fallback |
+| Alpha | Straight (unassociated); the alpha-edge fixture keeps non-zero RGB under alpha 0; exact raw bytes are verified by `tools/fixtures/verify-fixtures.py` | Background-composited appearance on a physical display |
+| Color profiles | Embedded ICC bytes are captured, hashed and structurally classified (COLOR1/COLOR3). COLOR4 parses the SDR profiles with Qt and converts **only the display derivative**; raw buffers, statistics, probes and exports stay decoded values | COLOR5 Windows output and physical-display verification; 16-bit colour precision; per-format profile quirks beyond the committed samples |
+| Animated/multipage files | Still-image workflow only; GIF/WebP/TIFF are read as one image | Animation, page selection or image-sequence playback are not supported |
+| Entry consistency | A JPEG renamed to `.png` decodes by content sniffing (the decoder sees MJPEG bytes); PNG/JPEG/BMP/GIF/WebP/TIFF/PNM share one extension list | Drag/drop, Explorer and folder-entry parity on Windows real sessions |
 
-All working-tree observations must be rechecked against the current diff. The documentation task
-did not run new decoder/Alpha tests. Use ledger I-01/I-02/I-03/I-06 for acceptance conditions.
+All working-tree observations must be rechecked against the current diff. The committed fixture
+manifests (`tests/fixtures/images/color/manifest.json`,
+`tests/fixtures/images/formats/manifest.json`, `tests/fixtures/manifest.json`) record SHA-256,
+generation method, bit depth, alpha and colour declarations; `tools/fixtures/verify-fixtures.py`
+rechecks hashes, categories, ICC open/reject behavior, PNM dimensions, corrupt/fake-extension
+behavior and AV1/VP9 probe facts. Use ledger I-01/I-02/I-03 for acceptance conditions.
 Source numeric values, decoded RGBA8 samples and background-composited appearance are distinct.
 Straight/premultiplied Alpha interpretation needs format-specific validation before making fidelity claims.
+
+### MEDIA2 dependency decision (2026-10-17, not implemented)
+
+The remaining format gaps are dependency choices, not missing code paths. The current
+`vcpkg.json` selects only `avcodec`/`avformat`/`swscale` with default features off, which is why
+this FFmpeg has no zlib, AV1 or VP9 decoder.
+
+- **PNG / Deflate TIFF:** add the `zlib` feature to the FFmpeg dependency and rebuild. This would
+  give the FFmpeg PNG decoder and Deflate TIFF support, and a 16-bit PNG path with the native
+  decoder (still subject to the viewer's RGBA64 sidecar rules). It changes the packaged FFmpeg
+  payload and must be followed by real PNG/TIFF decode tests, decoder-availability checks in the
+  unpacked package, and the existing Qt-fallback tests re-run as a fallback path.
+- **AV1:** add `aom` and/or `dav1d` (and possibly `svt-av1` for encode; decode needs only one) plus
+  the extension gate and probe expectations. **VP9:** add `vpx`. Both grow the payload and need
+  real decode fixtures (the committed `.mkv`/`.webm` samples currently only prove the explicit
+  rejection gate).
+- Because a rebuild is long and changes shipped dependencies, implement this on the independent
+  test environment with the normal packaging gate, not as an ad-hoc local build. Until then the
+  support matrix keeps saying "unsupported" and the app keeps rejecting AV1/VP9 explicitly.
 
 ## Still-image difference pipeline
 

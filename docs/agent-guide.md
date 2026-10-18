@@ -40,7 +40,7 @@
 | 热力图、高亮、阈值或颜色结果不可信 | `TabbedInspector.qml`、`src/presentation_contract/include/dvs/presentation/ComparisonContract.h`；`D3d11ComparisonRenderer.cpp`；`SoftwareDecoder.cpp` | `tests/unit/presentation_contract/ComparisonContractTests.cpp`；平台像素回读测试；台账 `V-04`、`V-05` |
 | 从文件夹选视频、上一项／下一项、点击后播放 | `VideoFolderModel.cpp` → `ReviewShellController::openVideo` → `ReviewController`；`VideoFolderSidebar.qml`、`ReviewInputDialogs.qml`、`Main.qml`；`DesktopApplication.cpp` 调用 `VideoFolderModel::attachPlayback` 接线 | `VideoFolderModelTests.cpp`、`MainQmlContractTests` 的 `VideoFolder*`／`NewerNonBrowser*`；[范围与证据](engineering/video-folder-browser.md) |
 | 视频格式打不开／软解回退 | `src/media_ffmpeg/src/MediaProbe.cpp` → `SoftwareDecoder.cpp`；`vcpkg.json` | `tests/component/media/MediaProbeTests.cpp`、`SoftwareDecoderTests.cpp`；[支持范围](media-support.md) |
-| 图片打不开、PNM、位深或颜色不对 | `src/app/Main.cpp` 注入 loader → `src/media_ffmpeg/src/StillImageDecoder.cpp`；`ImagePairLoader.cpp`、`ImageHeaderProbe.h`、`ImageFolderPairModel.cpp`；`Main.qml` 文件入口 | `tests/component/ui/ImageReviewControllerTests.cpp`、`ImageFolderPairModelTests.cpp`；工作区新增的 `StillImageDecoderTests.cpp`，先确认已纳入构建 |
+| 图片打不开、PNM、位深或颜色不对 | `src/app/Main.cpp` 注入 loader → `src/media_ffmpeg/src/StillImageDecoder.cpp`；`ImagePairLoader.cpp`、`ImageHeaderProbe.h`、`ImageFolderPairModel.cpp`；`Main.qml` 文件入口。颜色状态/ICC：`ImageColorContract.h`、`ImagePairLoader::StillImageSourceInfo`、`src/media_ffmpeg/src/ImageColorProfileProbe.cpp`；契约见 [image-color-contract.md](engineering/image-color-contract.md) | `tests/component/ui/ImageReviewControllerTests.cpp`、`ImageFolderPairModelTests.cpp`、`StillImageDecoderTests.cpp`、`ImageColorContractTests.cpp`、`ImageColorSampleTests.cpp`；样本清单 `tests/fixtures/images/` |
 | 透明边缘、RGBA 数值、Alpha 差异 | `ImageWorkspace.qml` → `ImageReviewController.cpp`：`samplePixel`、`displayImage` → `ImagePairLoader.cpp`：`analyzeDifference`（差值场与全部统计）、`renderDifference`（按模式/增益派生显示变体） | `tests/component/ui/ImageReviewControllerTests.cpp`；台账 `I-01`、`I-02`、`I-06` |
 | 图片 100%、单图／裁剪十字线、手动 A/B 闪烁、分割线 | `ImageWorkspace.qml` 的 `applyHover`／`refreshHover`、`ImageReviewController.h/.cpp`、`ImageFolderPairModel.cpp` | `MainQmlContractTests.ImageSingleCrosshair*`、`ImageReviewControllerTests.cpp`；台账 `I-04`、`C-01`、`C-02` |
 | 图片连续裁剪、镜像／翻转／旋转、编辑撤销与副本保存 | `ImageWorkspace.qml` 的 `updateCropSelection`、变换菜单 → `ImageEditController.cpp` 的 `cropToImageRect`／`transformImage` 与有界历史 → `EditImageProvider`；不修改审查原图 | `ImageEditControllerTests`、`MainQmlContractTests.ImageEdit*`；产品目标 §5、台账「2026-10-10 图片连续裁剪与整图变换」 |
@@ -63,13 +63,35 @@
 - 视频已有三源、联动缩放、平移、ROI、高亮与热力图；图片仍须单独核对其模式枚举和 UI。
 - `ComparisonCoordinator` 是旧架构图中的概念名；当前实现类仍是 `PlaybackCoordinator`。
 - `ReviewSessionFacade` 中多个 capability 仍转发同一个控制器，不能把接口预留当作拆分已完成。
+- `Dvs.Ui` 类型由 `dvs::ui::registerDvsUiTypes()`（bridge）统一注册：可创建类型沿用原语义，
+  `ImageReviewController`／`ColorClipboardController` 为 uncreatable（组合根持有实例）。
+  新增或改名类型要同时更新注册函数与 `src/ui_qml/qmltypes/DvsQmlTypes.h`；`dvs_ui_qml_types`
+  目标生成 `.qmltypes` 到 `<build>/qml-imports` 供 qmllint 解析（`-I`），生成由
+  `cmake/NormalizeQmlTypes.cmake` 做带计数检查的契约校验（`quality.qmltypes_contract` 跑
+  正例与八个反例），生成物不进入运行期载荷。
+- `Main.qml` 把两个试点服务声明为 **required 类型化属性**（`stillImageController`、
+  `colorClipboardService`），由组合根以 initial properties 传入，装载后在显示窗口前用
+  `verifyMainWindowPilotServices` 核验身份；C++ 主窗测试统一用 `pilotWindowProperties()` /
+  `defaultPilotWindowProperties()`。`ImageWorkspace` 的 `controller`／`colorClipboard` 也是
+  required 类型化属性，因此它的 QML 测试跑仓库自建的 QuickTest runner
+  （`tests/component/ui/ImageWorkspaceQmlTestMain.cpp`，真实控制器＋真实剪贴板＋注入图片），
+  不再用 `qmltestrunner` 的 QtObject 假控制器（那与类型化属性在编译期不兼容）。改动
+  `ui.ImageWorkspaceManual` 的夹具或命令时同步核对这一约束（见 ADR 0006）。
 - 时间线主源、GT 参考源、当前比较对是不同角色。改变 GT 不应改变时间轴，A/B/C 槽位不应充当跨会话文件身份。
 - 图片 `requestOpenPrimary` 会清空 B（新的单图任务）；「只换 A」用 `requestReplacePrimary`。
   对调与单侧替换不改写 `committedPairId`。
 - 渲染了差异图，不等于已经接通 MAE/PSNR；有解码器，不等于有格式验收或无损显示路径。
+- 当前 FFmpeg 构建 `--disable-zlib`：**没有 PNG 解码器**，Deflate 压缩的 TIFF 也解不了。PNG 走
+  Qt 回退解码，ICC 由 `ImageColorProfileProbe.cpp` 从容器读取；不要把 `StillImageDecoder` 的
+  格式分支当成打包解码器已验收。16-bit PNG 经该回退只有 RGBA8，没有 RGBA64 sidecar。支持
+  边界见 [媒体支持](media-support.md)。
 - 图片差异已拆成“每对素材一次分析”和“按模式/增益渲染”：增益（1–16）只放大显示变体，
   统计始终是原始 8-bit 差值；改增益不会重算统计，但会新增一条 `diffCache` 渲染条目。
   16-bit 统计只在两侧都有同尺寸 RGBA64 sidecar 且未重采样时出现，且是解码转换值。
+- 图片显示颜色（COLOR4）只在 `displayColorImage()` 里把显示派生结果按 ICC 转 sRGB；探针、
+  统计、差异图和导出码值都不经过颜色引擎，原始缓冲在开关切换前后逐字节不变。状态句和
+  「颜色转换：开/关」徽章都来自控制器；Qt 解析不了的配置降级为 `EmbeddedUnsupported`。
+  “显示环境已验证”仍属 COLOR5，不要在文档或 UI 里提前声明。
 - 源重复帧、播放器跳过完整帧组、呈现间隙、DF 时间码分别解释。无检测结果应显示未知，不应当作零缺陷。
 
 ## 验证与证据
