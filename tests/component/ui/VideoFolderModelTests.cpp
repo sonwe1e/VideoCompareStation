@@ -14,6 +14,8 @@
 #include <utility>
 #include <vector>
 
+static_assert(QT_CONFIG(thread), "Asynchronous UI models require a thread-enabled Qt Core.");
+
 namespace dvs::ui {
 namespace {
 

@@ -33,6 +33,9 @@
         {
           "name": "qtbase",
           "default-features": false,
+          "features": [
+            "thread"
+          ],
           "version>=": "6.11.1",
           "platform": "windows & x64"
         }

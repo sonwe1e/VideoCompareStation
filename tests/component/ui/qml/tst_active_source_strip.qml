@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Window
 import QtTest
 import "../../../../src/ui_qml/qml" as Dvs
 
@@ -211,7 +212,18 @@ Item {
         function test_thirdSourceChipHasEqualDirectLookEntry() {
             prepareThreeSources();
             const thirdChip = strip.chipAt("source-c");
-            mouseClick(thirdChip, thirdChip.width / 2, thirdChip.height / 2);
+            // Keep the full layout and DPI, but pan this identity test's harness to the
+            // third card: the hosted VM can clamp the window below the row's pixel width.
+            const left = thirdChip.mapToItem(root, 0, 0).x;
+            strip.x -= left;
+            try {
+                const point = thirdChip.mapToItem(root, thirdChip.width / 2, thirdChip.height / 2);
+                verify(point.x >= 0 && point.x < root.Window.window.width);
+                verify(point.y >= 0 && point.y < root.Window.window.height);
+                mouseClick(thirdChip, thirdChip.width / 2, thirdChip.height / 2);
+            } finally {
+                strip.x = 0;
+            }
             compare(directLookSpy.count, 1);
             compare(directLookSpy.signalArguments[0][0], 2);
             compare(selectionSpy.count, 0);

@@ -51,6 +51,17 @@ dvs_add_gtest(
     LAYER component
     MODULE media_ffmpeg
     EXTRA_LABELS media_software
+    TEST_FILTER "-SoftwareDecoderHardwareTests.*"
+    TIMEOUT 10
+)
+
+dvs_add_gtest(
+    TARGET dvs_media_component_tests
+    TEST_PREFIX "media."
+    LAYER component
+    MODULE media_ffmpeg
+    EXTRA_LABELS hardware d3d11va
+    TEST_FILTER "SoftwareDecoderHardwareTests.*"
     TIMEOUT 10
 )
 

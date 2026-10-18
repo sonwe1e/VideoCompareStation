@@ -70,12 +70,35 @@ set_target_properties(
     PROPERTIES FOLDER "Tests/Component/Platform"
 )
 
+set(dvs_decoder_surface_tests
+    GpuTransferActorTests.PublishesDecoderOwnedNv12ArraySlicesWithoutACopy
+    GpuTransferActorTests.HardwareOnlySetPublishesWithoutAnImmediateContextFlush
+    GpuTransferActorTests.ProbePixelReadsNv12ArraySliceVisibleRegionCodeValues
+    GpuTransferActorTests.ProbePixelReadsP010ArraySliceTenBitCodeValues
+)
+string(JOIN ":" dvs_decoder_surface_filter ${dvs_decoder_surface_tests})
+
 dvs_add_gtest(
     TARGET dvs_graphics_device_broker_component_tests
     TEST_PREFIX "platform."
     LAYER component
     MODULE platform_windows
     EXTRA_LABELS ui_qml graphics warp
+    TEST_FILTER "-${dvs_decoder_surface_filter}"
+    TIMEOUT 20
+    RUN_SERIAL
+    ENVIRONMENT QSG_RENDER_LOOP=threaded
+)
+
+# These cases explicitly create HARDWARE video devices and DECODER-bound surfaces.
+# Keep their identities and assertions in the manual hardware preset, outside WARP CI.
+dvs_add_gtest(
+    TARGET dvs_graphics_device_broker_component_tests
+    TEST_PREFIX "platform."
+    LAYER component
+    MODULE platform_windows
+    EXTRA_LABELS ui_qml graphics hardware d3d11va
+    TEST_FILTER "${dvs_decoder_surface_filter}"
     TIMEOUT 20
     RUN_SERIAL
     ENVIRONMENT QSG_RENDER_LOOP=threaded

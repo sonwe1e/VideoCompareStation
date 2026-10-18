@@ -642,7 +642,7 @@ FileAssociationResult registerFileAssociation(const FileAssociationTargets& targ
         // Registering a path Windows cannot launch would leave a dead entry that looks current,
         // exactly the ZIP-moved failure this registration is supposed to repair.
         return {FileAssociationState::Failed,
-                "the executable does not exist: " + targets.executable.string()};
+                "the executable does not exist: " + toUtf8(targets.executable.native())};
     }
     const FileAssociationResult result = applyShape(registrationShape(targets, roots));
     if (result.state == FileAssociationState::Ok) {

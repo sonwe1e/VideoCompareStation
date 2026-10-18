@@ -3,15 +3,9 @@ name: Hardware and Performance
 # Kept separate from Build and Test on purpose: these suites need a GPU-equipped,
 # interactively logged-in self-hosted runner and external performance fixtures. It includes
 # actual Wipe/Diff pixel captures before the source-count performance profiles.
-# They run on demand instead of accepting pull-request code on the workstation.
+# Only workflow_dispatch may start this workflow; releases verify a prior successful run.
 
 on:
-  workflow_call:
-    inputs:
-      commit_sha:
-        description: Exact commit that must be tested
-        required: true
-        type: string
   workflow_dispatch:
 
 permissions:
@@ -29,7 +23,7 @@ jobs:
     env:
       DVS_VCPKG_ROOT: ${{ vars.DVS_VCPKG_ROOT }}
       DVS_PERFORMANCE_FIXTURE_ROOT: ${{ vars.DVS_PERFORMANCE_FIXTURE_ROOT }}
-      DVS_EXPECTED_SHA: ${{ inputs.commit_sha || github.sha }}
+      DVS_EXPECTED_SHA: ${{ github.sha }}
 
     steps:
       - name: Check out repository

@@ -445,6 +445,8 @@ foreach(dvs_menu_qml_test IN ITEMS vcs_menu application_menu_bar active_source_s
                 COMMAND
                     "$<TARGET_FILE:Qt6::qmltestrunner>"
                     -input "${CMAKE_CURRENT_SOURCE_DIR}/qml/tst_${dvs_menu_qml_test}.qml"
+                    -o "${CMAKE_BINARY_DIR}/Testing/qml-${dvs_menu_qml_test}-${dvs_qml_style}-${dvs_scale_name}.txt,txt"
+                    -o "-,txt"
             )
             # The expanded source-strip drag suite needs ~21 s locally but measured 77.8 s
             # on the shared self-hosted runner (run 37713625606's main-push sibling), so it
