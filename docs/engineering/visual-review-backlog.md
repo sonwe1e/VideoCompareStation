@@ -13,6 +13,15 @@ GPU workflow 只接受手动触发，发布不再自动调用硬件任务，而�
 新增 YAML 路由/反例和硬件身份/反例检查，防止自动任务重新占用主力电脑或发布绕过硬件门禁。
 范围、迁移条件与执行入口见 [Windows 云端 CI](hosted-windows-ci.md)。
 
+**2026-10-18 合并后的门禁修正（PR #53）**：新目标 `dvs_qml_type_registration_tests` 调用
+`add_dependencies`，而 `check-ui-test-routing.py --self-test` 用 `cmake -P` 求值真实
+CMakeLists，脚本模式不支持该命令，探针在比较源集合之前退出；`add_dependencies` 不影响
+编译源集合，已加入 `tests/fixtures/ci-ui-routing/trace.cmake` 的桩命令表。同时路由门禁
+报告合并后清单为 **1465 总数 / 1443 软件**（较 `4f2e0dd` 的 1409/1387 多 55 个 gtest 用例
+与 1 个 `quality.qmltypes_contract`），固定计数已按此回填。首轮云端结果：Linux core、
+Windows core-only、UI model-only 通过；Release 在路由门禁处停止、**测试未执行**；
+Debug 与 native-quality 未取得结果。三者均不计入通过。
+
 ## 2026-10-17 收尾后分阶段计划：阶段 0/1 与 MEDIA1 调查（已合入本地 `1f5da53`）
 
 本节内容在 `8c90005` 上开发，2026-10-18 与上游 `66475bb` 合并后落在本地 `main @ 1f5da53`，

@@ -228,6 +228,32 @@ PR #52 的实际范围是普通软件门禁迁移（`.github/workflows` 三份 +
   `lint`，并分列执行/跳过/禁用/失败。
 - 推送属于外部动作，需用户确认后才会触发上述云端作业。
 
+#### 1A 首轮云端结果（PR #53，提交 `44a17fb`）
+
+| 作业 | 结果 | 说明 |
+|---|---|---|
+| Linux Clang core | 通过 | 1m30s |
+| Windows core-only | 通过 | 2m23s |
+| Windows UI model-only | 通过 | 4m15s |
+| Repository guide and script contracts | 失败 | `add_dependencies command is not scriptable`，见下 |
+| Release tests | 失败 | 构建完成，在路由门禁处停止；**测试未执行** |
+| Debug tests | 未完成 | 本轮结束时仍在运行 |
+| Native format and lint | 未完成 | 同上 |
+
+两个真实缺陷（均已修复，待下一轮云端验证）：
+
+1. **脚本模式探针被新目标打断**。`check-ui-test-routing.py --self-test` 用 `cmake -P`
+   求值真实的 `tests/component/ui/CMakeLists.txt`；新目标里的 `add_dependencies` 在脚本模式
+   不可用，探针在任何源集合比较之前就退出。`add_dependencies` 不影响目标编译哪些源，
+   已加入 `tests/fixtures/ci-ui-routing/trace.cmake` 的桩命令表。本地重跑：
+   `5 cases, 9 model and 10 adapter sources`。
+2. **清单计数已漂移**。路由门禁报告 `total=1465 software=1443`，比 `4f2e0dd` 的
+   1409/1387 多 56：55 个新 gtest 用例 + 1 个 `quality.qmltypes_contract`。已回填常量，
+   自检仍用独立字面量（1443）构造合成清单，一侧漏改仍会失败。
+
+注意：首轮的 Release 作业在构建后即被路由门禁拦下，**测试没有执行**；Debug 与
+Native format/lint 在本轮没有结果。三者都不能计入通过。
+
 ### 批次 1B：交接可信度收口（可与批次 2A 并行；FLOW3 硬前置）
 
 **范围**：把"未保存编辑"从单点拦截改为全路径一致规则，并把 `imageEdit` 提升为 required
