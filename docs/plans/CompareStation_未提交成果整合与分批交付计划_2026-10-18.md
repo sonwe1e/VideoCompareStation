@@ -477,3 +477,45 @@ AV1/VP9（2C）、COLOR5、FLOW3、`verify-fixtures.py` 入门禁（可延后到
 风险提示：`check-ci-test-routing.py` 的自检是"用固定数字构造清单再校验"，如果只改
 `validate()` 里的常量而不改 `--self-test` 的构造算术，自检会变成同义反复——它会通过，
 但不再证明任何东西。这一处必须同时改，并保留 4 个反例。
+
+## 10. PR 组织：使用 gh stack（2026-10-18 增补）
+
+多批次交付改为栈式 PR，不再每次从 `main` 切一条独立分支。工具是官方扩展
+`github/gh-stack`（本机已安装 `gh stack version 0.2.1`）。
+
+### 10.1 栈层映射
+
+| 层 | 分支（建议） | 批次 | 目标 |
+|---|---|---|---|
+| 1 | `feat/integrate-hosted-ci` | 1A 整合 | PR #53 → `main` |
+| 2 | `feat/image-edit-dirty-guard` | 1B 交接收口 | → 层 1 |
+| 3 | `feat/media-format-closeout` | 2A 格式收口 + 精度标签 | → 层 2 |
+| 4 | `feat/media-dependency-route` | 2B zlib 或 Qt 16-bit | → 层 3 |
+| 5 | `feat/media-codec-av1` | 2C 单个新编码 | → 层 4 |
+| 6 | `feat/colour-windows-output` | 3 COLOR5 | → 层 5（需独立显示环境） |
+| 7 | `feat/image-folder-browse` | 4 FLOW3 | → 层 6 |
+
+栈允许非相邻依赖：COLOR5 与 FLOW3 之间没有代码依赖，但都排在计数与标签收口之后，
+所以按栈顺序排列不会造成互相等待。
+
+### 10.2 规则
+
+- 栈至少两层才有意义：`gh stack link` 要求两个以上参数，单分支不构成栈。层 1 已用
+  `gh stack init feat/integrate-hosted-ci` 纳入本地跟踪，待层 2 出现后一起 `submit`。
+- 每层必须独立可评审、独立可回退；上一层的未验证结果不能当作下一层的通过证据。
+- 栈底未绿时不合并，但可以在栈上继续开发与评审。计数修正（`EXPECTED_TOTAL`/
+  `EXPECTED_SOFTWARE`）必须落在栈底层，避免下游层替底层背门禁。
+- 底层修正后，下游层用 `gh stack sync` / `gh stack rebase` 跟随，不要手工 merge 造成
+  分叉。
+- 合并用 `gh stack merge`，从栈底开始；不单独 `gh pr merge` 中间层，否则栈结构断裂。
+
+### 10.3 常用命令
+
+```bash
+gh stack view                     # 看当前栈与每层的 PR
+gh stack add feat/<branch>        # 在栈顶加一层（-Am "msg" 可直接提交暂存改动）
+gh stack submit                   # 推所有层并创建/更新 PR，最后把 PR 链成 GitHub Stack
+gh stack sync                     # 与远端同步（底层合并或修正后）
+gh stack checkout <PR 号或分支>   # 切到某一层
+gh stack merge                    # 从栈底合并整个栈
+```
