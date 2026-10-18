@@ -13,8 +13,8 @@ permissions:
 
 concurrency:
   group: quality-${{ github.workflow }}-${{ github.ref }}
-  # Preserve the active dependency snapshot; superseded pending runs are still replaced.
-  cancel-in-progress: false
+  # Same rule as build-test: a superseded pull-request run is cancelled, a push run is kept.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   repository-guide:

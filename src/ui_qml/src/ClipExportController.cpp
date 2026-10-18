@@ -258,13 +258,35 @@ void ClipExportController::applyFinished(const application::ClipExportReport& re
     }
 
     switch (report.outcome) {
-    case application::ClipExportOutcome::kCompleted:
+    case application::ClipExportOutcome::kCompleted: {
         setProgress(1.0);
         lastOutputPath_ = pendingOutputPath_;
         lastFailureDetail_.clear();
-        setStatus(tr("已导出所选区间。"));
+        // The result names the limits that produced it: the requested range can only start at a
+        // keyframe, and a reordered source can end a little past the requested out point.
+        QString status =
+            tr("已导出所选区间。实际起点 %1 ms，实际终点 %2 ms%3")
+                .arg(QString::number(
+                    static_cast<double>(report.firstPresentationMicroseconds) / 1000.0, 'f', 1))
+                .arg(report.lastPresentationMicroseconds >= 0
+                         ? QString::number(
+                               static_cast<double>(report.lastPresentationMicroseconds) / 1000.0,
+                               'f',
+                               1)
+                         : tr("未知"))
+                .arg(report.endOfStreamReached
+                         ? tr("（到文件末尾）")
+                         : (report.stoppedAtRequestedEnd ? tr("（按出点停止）") : QString{}));
+        if (report.startShiftMicroseconds < 0) {
+            status +=
+                tr("；起点比请求早 %1 ms")
+                    .arg(QString::number(
+                        static_cast<double>(-report.startShiftMicroseconds) / 1000.0, 'f', 1));
+        }
+        setStatus(status);
         emit exportFinished(true, lastStatus_);
         break;
+    }
     case application::ClipExportOutcome::kCanceled:
         setProgress(0.0);
         lastOutputPath_.clear();

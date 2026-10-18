@@ -18,9 +18,12 @@ function(target_sources target visibility)
         set_property(GLOBAL APPEND PROPERTY DVS_ROUTING_SOURCES "${ARGN}")
     endif()
 endfunction()
+# Commands the production file uses that either cannot run in script mode (add_dependencies
+# is not scriptable) or do not affect the source set. Stubbing them keeps the probe focused on
+# source routing instead of failing on an unrelated target-level edge.
 foreach(command target_link_libraries target_include_directories target_compile_definitions
                 dvs_apply_project_warnings set_target_properties dvs_add_gtest add_test
-                set_tests_properties)
+                set_tests_properties add_dependencies)
     function(${command})
     endfunction()
 endforeach()

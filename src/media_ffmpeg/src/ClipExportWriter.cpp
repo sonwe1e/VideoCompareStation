@@ -64,6 +64,8 @@ struct CancelState final {
     report.requestId = job.requestId;
     report.outcome = outcome;
     report.packetsWritten = packetsWritten;
+    report.requestedFrameCount = job.plan.requestedFrameCount;
+    report.startShiftMicroseconds = job.plan.startShiftMicroseconds;
     report.technicalDetail = std::move(detail);
     return report;
 }
@@ -195,9 +197,12 @@ struct ClipCopyState final {
     const CancelState* cancelState = nullptr;
     std::int64_t packetsWritten = 0;
     std::int64_t firstPresentationMicroseconds = 0;
+    std::int64_t lastPresentationMicroseconds = -1;
     std::int64_t timestampBase = 0;
     std::int64_t presentationOrigin = 0;
     bool headerWritten = false;
+    bool endOfStreamReached = false;
+    bool stoppedAtRequestedEnd = false;
     std::string failureDetail;
 };
 
@@ -279,6 +284,7 @@ struct ClipCopyState final {
     }
 
     // The clip starts at zero, so the first accepted packet's decode timestamp becomes the origin.
+    const std::int64_t sourcePresentationTimestamp = packet->pts;
     if (packet->pts != AV_NOPTS_VALUE) {
         packet->pts -= state.timestampBase;
     }
@@ -293,6 +299,14 @@ struct ClipCopyState final {
     if (writeResult < 0) {
         state.failureDetail = "FFmpeg could not write a clip packet: " + ffmpegError(writeResult);
         return false;
+    }
+    if (sourcePresentationTimestamp != AV_NOPTS_VALUE) {
+        const std::int64_t relativePresentation =
+            av_rescale_q(sourcePresentationTimestamp - state.presentationOrigin,
+                         state.sourceStream->time_base,
+                         kMicrosecondsBase);
+        state.lastPresentationMicroseconds =
+            std::max(state.lastPresentationMicroseconds, relativePresentation);
     }
     ++state.packetsWritten;
     return true;
@@ -541,6 +555,7 @@ application::ClipExportReport ClipExportWriter::perform(const application::ClipE
 
         const int readResult = av_read_frame(opened.context.get(), packet.get());
         if (readResult < 0) {
+            copyState.endOfStreamReached = (readResult == AVERROR_EOF);
             if (readResult != AVERROR_EOF) {
                 copyState.failureDetail =
                     "FFmpeg could not read the source: " + ffmpegError(readResult);
@@ -582,6 +597,7 @@ application::ClipExportReport ClipExportWriter::perform(const application::ClipE
         const std::int64_t presentationCursor =
             packet->pts != AV_NOPTS_VALUE ? packet->pts : decodeCursor;
         if (job.plan.endMicroseconds.has_value() && decodeCursor >= endPts) {
+            copyState.stoppedAtRequestedEnd = true;
             av_packet_unref(packet.get());
             break;
         }
@@ -700,6 +716,9 @@ application::ClipExportReport ClipExportWriter::perform(const application::ClipE
     application::ClipExportReport report =
         makeReport(job, application::ClipExportOutcome::kCompleted, copyState.packetsWritten, {});
     report.firstPresentationMicroseconds = copyState.firstPresentationMicroseconds;
+    report.lastPresentationMicroseconds = copyState.lastPresentationMicroseconds;
+    report.endOfStreamReached = copyState.endOfStreamReached;
+    report.stoppedAtRequestedEnd = copyState.stoppedAtRequestedEnd;
     return report;
 }
 

@@ -9,7 +9,7 @@ macro(dvs_resolve_dependencies)
         target_link_libraries(dvs_qt_core_dependencies INTERFACE Qt6::Core)
 
         if(DVS_BUILD_ADAPTERS)
-            find_package(Qt6 6.11 REQUIRED COMPONENTS Gui Network Qml Quick ShaderTools)
+            find_package(Qt6 6.11 REQUIRED COMPONENTS Gui Network Qml Quick QuickTest ShaderTools)
 
             add_library(dvs_qt_dependencies INTERFACE)
             add_library(dvs::qt_dependencies ALIAS dvs_qt_dependencies)

@@ -1,3 +1,4 @@
+#include "dvs/application/MediaPaths.h"
 #include "dvs/media/MediaProbe.h"
 
 #include "MediaProbeTestHooks.h"
@@ -393,6 +394,30 @@ TEST(MediaProbeTests, AdmitsTwoWorkersAndPostsOneTerminalForEachRequest) {
     EXPECT_EQ(canceledTerminals, 1U);
     EXPECT_EQ(completions, 1U);
     EXPECT_EQ(successfulTerminals, 1U);
+}
+
+// MEDIA1/MEDIA2 investigation baseline: AV1 and VP9 fixtures are real encoded files, and the
+// current v1 gate rejects them explicitly instead of decoding them under the SDR matrix.
+// MEDIA2 may change this expectation together with the support table and the entry lists.
+TEST(MediaProbeTests, RejectsAv1WithTheExplicitCodecGate) {
+    const auto result = MediaProbe::inspect(fixture("av1_64x48_30fps_12.mkv"), 0U);
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code, domain::MediaErrorCode::kUnsupportedCodec);
+}
+
+TEST(MediaProbeTests, RejectsVp9WithTheExplicitCodecGate) {
+    const auto result = MediaProbe::inspect(fixture("vp9_64x48_30fps_12.webm"), 0U);
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code, domain::MediaErrorCode::kUnsupportedCodec);
+}
+
+TEST(MediaProbeTests, WebmIsStillOutsideTheVideoExtensionEntryGate) {
+    // The codec gate and the extension gate must agree: a probe that already rejects VP9 must
+    // not be reachable through a .webm entry that the rest of the app still refuses.
+    EXPECT_FALSE(application::isVideoPath(std::filesystem::path{"clip.webm"}));
+    EXPECT_FALSE(application::isVideoPath(std::filesystem::path{"clip.av1"}));
+    EXPECT_TRUE(application::isVideoPath(std::filesystem::path{"clip.mkv"}));
+    EXPECT_TRUE(application::isVideoPath(std::filesystem::path{"clip.MKV"}));
 }
 
 } // namespace

@@ -10,13 +10,11 @@ import "StageStates.js" as StageStates
 import "MediaLabels.js" as MediaLabels
 import "ShortcutCatalog.js" as ShortcutCatalog
 
-// Dvs.Ui is registered by the C++ host before this document is loaded.
-
-// qmllint disable import
+// Dvs.Ui is registered by the C++ host before this document is loaded; the generated
+// .qmltypes (see docs/adr/0006-qml-type-registration.md) lets qmllint resolve the module's
+// types and enums instead of suppressing the import.
 
 import Dvs.Ui 1.0
-
-// qmllint enable import
 
 ApplicationWindow {
     id: root
@@ -100,7 +98,6 @@ ApplicationWindow {
     // qmllint disable unqualified
     readonly property var issueLogModel: typeof issueLog !== "undefined" ? issueLog : null
     readonly property var comparisonExportService: typeof comparisonExport !== "undefined" ? comparisonExport : null
-    readonly property var colorClipboardService: typeof colorClipboard !== "undefined" ? colorClipboard : null
     // P03 interpolation-protocol controller from the composition root. The typeof guard keeps
     // lightweight QML-only harnesses valid: without the controller the transport renders no
     // protocol row and every protocol action below is skipped.
@@ -132,15 +129,14 @@ ApplicationWindow {
     property string pendingImageOpenKind: ""
     property int pendingFolderPairRow: -1
 
-    // Captured from the C++ context property so nested scopes never resolve a same-named
-
-    // Item property (ImageWorkspace.imageReview) into a circular binding. The typeof guard
-
-    // keeps lightweight QML-only tests without the image context valid and warning-free.
-
+    // The pilot's required services, declared by the root itself: the composition root
+    // passes the real adapter instances as initial properties, a missing one fails
+    // creation, and the production loader verifies identity before showing the window
+    // (an explicit null or a wrong-typed object degrades the property to null with a
+    // warning instead of failing creation). See docs/adr/0006-qml-type-registration.md.
+    required property ImageReviewController stillImageController
+    required property ColorClipboardController colorClipboardService
     // qmllint disable unqualified
-
-    readonly property var stillImageController: typeof imageReview !== "undefined" ? imageReview : null
     // Step-3 image editing service from the composition root; the typeof guard keeps
     // lightweight QML-only harnesses valid (they simply see no edit tools).
     readonly property var imageEditService: typeof imageEdit !== "undefined" ? imageEdit : null
@@ -216,6 +212,15 @@ ApplicationWindow {
     property var pendingIssueRestorePairCommandId: 0
     property var pendingIssueRestoreSeekCommandId: 0
     property bool issueRestoreContinuing: false
+    // FLOW1 image-restore state machine. The folder/pair open is asynchronous, so the machine
+    // waits for the committed pair to match the record, opens the recorded folder row, and
+    // only then replays the observation settings. A workspace switch cancels it so a late
+    // result cannot land on another material.
+    property var pendingImageIssueRestore: null
+    property int pendingImageIssueRestoreStage: 0
+    property bool pendingImageIssueRestoreApplied: false
+    property bool pendingImageIssueRestoreRowOpened: false
+    property bool imageIssueRestoreContinuing: false
     property string dropError: ""
     property string intentMessage: ""
     // C1 resume: the identity currently open, and the one identity a restore has already been
@@ -1290,6 +1295,8 @@ ApplicationWindow {
         }
         if (root.videoFolderModel)
             root.videoFolderModel.finishPendingImageOpen(true, "", target.primaryPath);
+
+        root.continueImageIssueRestore();
     }
 
     // Folder rows finish through ImageFolderPairModel. Commit the folder workspace only
@@ -1322,6 +1329,8 @@ ApplicationWindow {
         root.dropError = "";
 
         root.commitWorkspace(workspaceSession.imageMedia, pairModel.leftFolderPath + "\n" + pairModel.rightFolderPath);
+
+        root.continueImageIssueRestore();
     }
 
     // Pure view switch used after a commit or a close; it owns no media command by itself so
@@ -1330,6 +1339,9 @@ ApplicationWindow {
 
     function showWorkspace(media) {
         const target = Number(media) === workspaceSession.imageMedia ? workspaceSession.imageMedia : workspaceSession.videoMedia;
+
+        if (target !== workspaceSession.imageMedia)
+            root.cancelPendingImageIssueRestore();
 
         workspaceSession.pendingMedia = -1;
 
@@ -1825,6 +1837,10 @@ ApplicationWindow {
 
         root.issueLogModel.setWorkspaceMode(root.imageWorkspaceActive ? "image" : "video");
 
+        // FLOW1: the background choice is QML view state; hand it to the capture so restore
+        // can replay it. Outside the image workspace it stays "not captured" (-1).
+        root.issueLogModel.setImageBackgroundMode(root.imageWorkspaceActive && root.imageWorkspace ? root.imageWorkspace.backgroundMode : -1);
+
         const ok = root.issueLogModel.captureCurrentIssue("");
 
         if (!ok)
@@ -1917,6 +1933,9 @@ ApplicationWindow {
             context += qsTr(" · 阈值 %1").arg(differenceThresholdCode);
         if (context.length > 0)
             lines.push(context);
+        // FLOW2 display contract: a saved/copied comparison is the screen result, not source
+        // pixels and not a colour-managed export. Every shared capture carries that statement.
+        lines.push(qsTr("显示结果 · 屏幕像素 · 未色彩管理；非源文件原始码值"));
         lines.push(qsTr("CompareStation · %1").arg(Qt.formatDateTime(new Date(), "yyyy-MM-dd hh:mm")));
         return lines;
     }
@@ -1979,27 +1998,37 @@ ApplicationWindow {
             return true;
         }
 
-        // Image-pair restore: folders + row identity only after evaluation said Ready. The
-        // recorded image view state (compare mode, zoom, pan, row) is not replayed yet, so the
-        // message says what was actually restored instead of implying the same observation.
-        const imageViewRecorded = payload.zoom !== undefined || payload.panX !== undefined || payload.compareMode !== undefined;
+        // FLOW1 image-pair restore: reopen the recorded material first, then wait for that
+        // pair to commit, open the recorded folder row, and only then replay the observation
+        // settings. Nothing is replayed onto whatever happens to be open.
+        root.cancelPendingImageIssueRestore();
 
-        if (payload.leftFolder && payload.rightFolder) {
+        const hasFolders = Boolean(payload.leftFolder && payload.rightFolder);
+        const hasPaths = Boolean(payload.leftPath && payload.rightPath);
+
+        if (!hasFolders && !hasPaths) {
+            root.showIntentMessage(qsTr("部分恢复：记录没有可重开的图片素材"));
+
+            return false;
+        }
+
+        root.pendingImageIssueRestore = payload;
+        root.pendingImageIssueRestoreStage = 1;
+        root.pendingImageIssueRestoreApplied = false;
+        root.pendingImageIssueRestoreRowOpened = false;
+
+        if (hasFolders) {
             root.imageFolderLeftUrl = "file:///" + String(payload.leftFolder).replace(/\\/g, "/");
-
             root.imageFolderRightUrl = "file:///" + String(payload.rightFolder).replace(/\\/g, "/");
-
             root.loadFolderComparison();
-        } else if (payload.leftPath && payload.rightPath && root.stillImageController) {
+        } else {
             const leftUrl = "file:///" + String(payload.leftPath).replace(/\\/g, "/");
-
             const rightUrl = "file:///" + String(payload.rightPath).replace(/\\/g, "/");
-
             root.performImageReview([leftUrl, rightUrl]);
         }
 
-        if (imageViewRecorded)
-            root.showIntentMessage(qsTr("部分恢复：正在打开记录中的图片，观察模式、缩放和平移未恢复"));
+        imageIssueRestoreDeadline.restart();
+        root.continueImageIssueRestore();
 
         return true;
     }
@@ -2165,6 +2194,14 @@ ApplicationWindow {
         onTriggered: root.abandonPendingIssueRestore(qsTr("恢复超时：未能确认记录中的观察位置"))
     }
 
+    Timer {
+        id: imageIssueRestoreDeadline
+
+        objectName: "imageIssueRestoreDeadline"
+        interval: 15000
+        onTriggered: root.abandonPendingImageIssueRestore(qsTr("恢复超时：未能确认记录中的图片与观察状态"))
+    }
+
     // Ends a pending restore that cannot complete, and says so. A silent drop would leave the
     // user believing the recorded observation was restored.
     function abandonPendingIssueRestore(message) {
@@ -2184,6 +2221,161 @@ ApplicationWindow {
         root.pendingIssueRestorePairCommandId = 0;
         root.pendingIssueRestoreSeekCommandId = 0;
         issueRestoreDeadline.stop();
+    }
+
+    // FLOW1: staged continuation of an image issue restore. It waits for the recorded pair to
+    // commit, opens the recorded folder row, then replays the captured observation settings once.
+    function continueImageIssueRestore() {
+        if (root.imageIssueRestoreContinuing)
+            return;
+
+        root.imageIssueRestoreContinuing = true;
+
+        try {
+            root.advanceImageIssueRestore();
+        } finally {
+            root.imageIssueRestoreContinuing = false;
+        }
+    }
+
+    function advanceImageIssueRestore() {
+        const payload = root.pendingImageIssueRestore;
+
+        if (!payload)
+            return;
+
+        if (!root.imageWorkspaceActive || !root.stillImageController) {
+            root.abandonPendingImageIssueRestore(qsTr("恢复已取消：工作区已切换"));
+
+            return;
+        }
+
+        const target = root.stillImageController;
+        const pairModel = root.folderPairModel;
+        const recordedRow = Number(payload.rowIndex);
+        const leftPath = String(payload.leftPath || "");
+        const rightPath = String(payload.rightPath || "");
+        const committedMatches = Boolean(target.hasPair && (leftPath.length === 0 || root.sameFilePath(target.primaryPath, leftPath)) && (rightPath.length === 0 || root.sameFilePath(target.secondaryPath, rightPath)));
+
+        // Stage 1: make the committed pair the recorded one. Folder sessions open their first
+        // complete row first; move to the recorded row once the scan has produced it. A row
+        // that never opens, or a pair that does not match, is reported instead of replayed.
+        if (!committedMatches) {
+            if (target.openPending || (pairModel && pairModel.openPending) || root.pendingFolderPairRow >= 0)
+                return;
+
+            if (pairModel && pairModel.pairCount > 0 && recordedRow >= 0 && !root.pendingImageIssueRestoreRowOpened) {
+                root.pendingImageIssueRestoreRowOpened = true;
+                root.pendingFolderPairRow = recordedRow;
+
+                if (!pairModel.openPairAt(recordedRow)) {
+                    root.abandonPendingImageIssueRestore(qsTr("恢复失败：无法打开记录中的文件夹行"));
+
+                    return;
+                }
+
+                return;
+            }
+
+            if (!root.pendingImageIssueRestoreRowOpened) {
+                root.abandonPendingImageIssueRestore(qsTr("恢复失败：打开的图片与记录不一致"));
+            }
+
+            return;
+        }
+
+        if (root.pendingImageIssueRestoreApplied)
+            return;
+
+        root.pendingImageIssueRestoreApplied = true;
+
+        const missing = [];
+        const compareMode = Number(payload.compareMode);
+
+        if (Number.isInteger(compareMode) && compareMode >= 0 && compareMode <= 7)
+            target.compareMode = compareMode;
+        else
+            missing.push(qsTr("比较模式"));
+
+        const zoom = Number(payload.zoom);
+        const panX = Number(payload.panX);
+        const panY = Number(payload.panY);
+
+        if (Number.isFinite(zoom) && zoom > 0 && Number.isFinite(panX) && Number.isFinite(panY))
+            target.restoreObservationPosition(zoom, panX, panY);
+        else
+            missing.push(qsTr("缩放和平移"));
+
+        const viewMode = Number(payload.imageViewMode);
+
+        if (Number.isInteger(viewMode) && viewMode >= 0 && viewMode <= 2)
+            target.viewMode = viewMode;
+        else
+            missing.push(qsTr("通道观察"));
+
+        const background = Number(payload.imageBackgroundMode);
+
+        if (root.imageWorkspace && Number.isInteger(background) && background >= 0 && background <= 3)
+            root.imageWorkspace.backgroundMode = background;
+        else
+            missing.push(qsTr("背景"));
+
+        const gain = Number(payload.imageDiffGain);
+
+        if (Number.isInteger(gain) && gain >= 1 && gain <= 16)
+            target.diffGain = gain;
+        else
+            missing.push(qsTr("差异增益"));
+
+        if (typeof payload.resampleAllowed === "boolean")
+            target.resampleAllowed = payload.resampleAllowed;
+        else
+            missing.push(qsTr("重采样"));
+
+        const wipeOrientation = Number(payload.wipeOrientation);
+        const wipePosition = Number(payload.wipePosition);
+
+        if ((wipeOrientation === 0 || wipeOrientation === 1) && Number.isFinite(wipePosition) && wipePosition >= 0 && wipePosition <= 1) {
+            target.wipeOrientation = wipeOrientation;
+            target.wipePosition = wipePosition;
+        } else if (compareMode === 5) {
+            missing.push(qsTr("分割方向与比例"));
+        }
+
+        const alphaEnabled = Number(payload.imageAlphaFilterEnabled);
+        const alphaThreshold = Number(payload.imageAlphaThreshold);
+
+        if (alphaEnabled === 0 || alphaEnabled === 1) {
+            target.alphaFilterEnabled = alphaEnabled === 1;
+
+            if (Number.isInteger(alphaThreshold) && alphaThreshold >= 0 && alphaThreshold <= 255)
+                target.alphaThreshold = alphaThreshold;
+            else
+                missing.push(qsTr("Alpha 阈值"));
+        } else {
+            missing.push(qsTr("Alpha 过滤"));
+        }
+
+        root.cancelPendingImageIssueRestore();
+
+        if (missing.length > 0)
+            root.showIntentMessage(qsTr("部分恢复：%1 未恢复").arg(missing.join(qsTr("、"))));
+        else
+            root.showIntentMessage(qsTr("已恢复记录中的图片与观察状态"));
+    }
+
+    function abandonPendingImageIssueRestore(message) {
+        root.cancelPendingImageIssueRestore();
+
+        root.showIntentMessage(message);
+    }
+
+    function cancelPendingImageIssueRestore() {
+        root.pendingImageIssueRestore = null;
+        root.pendingImageIssueRestoreStage = 0;
+        root.pendingImageIssueRestoreApplied = false;
+        root.pendingImageIssueRestoreRowOpened = false;
+        imageIssueRestoreDeadline.stop();
     }
 
     // A restore only proceeds while the session still shows the recorded sources.
@@ -3363,6 +3555,10 @@ ApplicationWindow {
 
         function onOpenFinished(requestId, pairId, success, error) {
             root.completeImageOpen(requestId, pairId, success, error);
+        }
+
+        function onStateChanged() {
+            root.continueImageIssueRestore();
         }
     }
 

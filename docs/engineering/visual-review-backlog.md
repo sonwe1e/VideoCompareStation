@@ -2,15 +2,165 @@
 
 ## 2026-10-17 Windows 软件 CI 迁移到 GitHub 托管环境
 
-状态：迁移候选；本机只执行轻量脚本验证，云端运行结果另行补充。
-首轮完整云端回归已运行，发现代码页依赖、真实 D3D11VA 用例误路由、最小 Qt Core 缺少
-线程能力，以及字形／大尺寸测试的环境假设。修正与完整清单反例已提交继续云端验收；
-style/DPI 菜单失败补充文件日志定位，仍未宣告通过或合入。
+状态：已合入 main（`66475bb`，2026-10-17），验收绑定 PR head `4f2e0dd`。首轮完整云端回归
+发现的代码页依赖、真实 D3D11VA 用例误路由、最小 Qt Core 缺少线程能力，以及字形／大尺寸
+测试的环境假设均已修正；最终云端结果为 Debug 1373 通过 / 10 跳过 / 4 禁用 / 0 失败、
+Release 1372 / 11 / 4 / 0，core-only 306、Linux core 306、UI model-only 424，原生
+format-check 与 lint 通过。上述数字属于 `4f2e0dd`，不转移到本仓库后续提交。
 构建、完整 dev/release 回归、原生 format/lint、发布软件任务改为 `windows-2022`；
 固定 CMake/LLVM、隔离 vcpkg 与二进制缓存。保留 core-dev/ui-dev、Linux core 与完整测试矩阵。
 GPU workflow 只接受手动触发，发布不再自动调用硬件任务，而核验先前成功的同提交运行。
 新增 YAML 路由/反例和硬件身份/反例检查，防止自动任务重新占用主力电脑或发布绕过硬件门禁。
 范围、迁移条件与执行入口见 [Windows 云端 CI](hosted-windows-ci.md)。
+
+**2026-10-18 合并后的门禁修正（PR #53）**：新目标 `dvs_qml_type_registration_tests` 调用
+`add_dependencies`，而 `check-ui-test-routing.py --self-test` 用 `cmake -P` 求值真实
+CMakeLists，脚本模式不支持该命令，探针在比较源集合之前退出；`add_dependencies` 不影响
+编译源集合，已加入 `tests/fixtures/ci-ui-routing/trace.cmake` 的桩命令表。同时路由门禁
+报告合并后清单为 **1465 总数 / 1443 软件**（较 `4f2e0dd` 的 1409/1387 多 55 个 gtest 用例
+与 1 个 `quality.qmltypes_contract`），固定计数已按此回填。首轮云端结果：Linux core、
+Windows core-only、UI model-only 通过；Release 在路由门禁处停止、**测试未执行**；
+Debug 与 native-quality 未取得结果。三者均不计入通过。
+
+## 2026-10-17 收尾后分阶段计划：阶段 0/1 与 MEDIA1 调查（已合入本地 `1f5da53`）
+
+本节内容在 `8c90005` 上开发，2026-10-18 与上游 `66475bb` 合并后落在本地 `main @ 1f5da53`，
+执行
+[收尾后分阶段改进计划](../plans/CompareStation_收尾后分阶段改进计划_2026-10-17.md) 的
+BASE、COLOR1 至 COLOR3 与 MEDIA1 调查部分。**合并后提交尚未运行任何云端构建、测试或 lint**，
+因此下面引用的定向结果只属于开发时的 `8c90005` + 工作区，不能当作 `1f5da53` 的通过证据。
+颜色契约、状态语义和未完成项见 [图片像素与颜色数据契约](image-color-contract.md)；
+基线与环境分离见 [可复现基线](reproducible-baseline.md) 与
+[测试环境分离](test-environment-separation.md)。
+
+- **BASE**：固定计划基线提交 `8c90005…`、本地 2.5.0 ZIP（28,327,485 bytes，
+  `28176C…0BEBDE4`）、dev 工具链（MSVC 14.44.35207 / Qt 6.11.1 / FFmpeg 8.1.2），
+  登记样本清单与本机只读环境。**环境分离**：普通软件门禁已由 `66475bb` 迁到
+  GitHub 托管 `windows-2022`，唯一保留的 self-hosted 标签是手动触发的 GPU 作业；
+  合并后的提交仍无云端结果，可见窗口与 GPU/物理显示门禁继续待验。
+- **COLOR1/COLOR3 数据契约**：新增 `ImageColorContract`（配置分类、SHA-256、ICC 签名、
+  文件声明 primaries/transfer、每个侧的状态文案、分析值路径枚举）；`StillImage` 保留
+  ICC/颜色声明，差异分析与探针仍只读解码缓冲。**重要环境事实**：当前 FFmpeg 构建
+  `--disable-zlib`，没有 PNG 解码器；PNG 由 Qt 回退解码，颜色状态由容器级
+  `media::extractEmbeddedIccProfile()`（PNG iCCP/JPEG APP2/WebP ICCP/TIFF tag）注入，
+  因此 PNG 颜色状态真实可见，而不是“未探测”。`ui.ImageColorContractTests` 11 项通过
+  （含容器探测回填、声明但不可读→Corrupt、观察模式/过滤/增益/数值格式后统计与原始缓冲不变）。
+  **变异证据**：把差异请求参数换成派生缓冲 → 分析不变性测试失败；去掉载入完成身份校验 →
+  新增 `StaleLoadResultCannotCommitUnderANewerPendingRequest` 失败（旧成功结果抢占新的待提交
+  素材）；恢复后 3/3 通过。原有迟到测试在取消路径下不可触发该行，未当作已覆盖。
+- **COLOR3 界面**：状态区新增 A/B 常驻颜色徽章（`imagePrimaryColorStatusBadge`、
+  `imageSecondaryColorStatusBadge`），文本来自控制器单一状态源；“格式转换到 RGBA8”徽章与
+  颜色状态已解耦；主窗契约测试覆盖打开、对调、单侧替换、失败保留、快速切换与关闭。
+  **未完成**：真实窗口视觉验收、最低窗口尺寸/DPI 矩阵截图。
+- **COLOR2 样本**：`tests/fixtures/images/color/` 25 个真实样本（sRGB/Display P3/Adobe RGB/
+  无配置/损坏×2/不支持×2/透明边缘/灰阶/16-bit 渐变/低位差异对/同码异色/异码同色/PNM P1–P7），
+  manifest 记录 SHA-256、ICC 哈希、LittleCMS 参考值、容差与生成方法；
+  `tools/fixtures/verify-fixtures.py --check-reproduction` **652 项检查通过、37/37 文件
+  字节一致**；`ui.ImageColorSampleTests` 校验总数/必需类别/哈希/参考字段/分类。
+  测量范围以 Pillow 12.3.0 + LittleCMS 2.19 为准；Qt 待测实现的数值对拍属于 COLOR4。
+- **MEDIA1 调查**：新增真实格式夹具与 `media.StillImageDecoderTests`：PNM P1–P7、JPEG、
+  BMP、GIF、WebP 经 FFmpeg 解码通过；TIFF 解码器存在但 Deflate 压缩样本因无 zlib 明确失败；
+  AV1/VP9 真实样本确认仍返回 `kUnsupportedCodec`，`.webm` 不在视频扩展名入口。
+  **未完成**：PNG/压缩 TIFF 的正式支持决定（启用 zlib 属依赖/载荷变更，未在本轮实施）、
+  16-bit PNG 精度（Qt 回退仅 RGBA8，无 RGBA64 sidecar）、Release ZIP 内解码器验证。
+- **本轮门禁（2026-10-17，dev 预设）**：定向 **173/173 通过**（阶段 0/1、MEDIA1、FLOW1、
+  FLOW2、COLOR4 合并范围，另有一轮 62 项中间回归全过）；样本独立校验 **652/652
+  检查、37/37 字节一致**；
+  `format-check` 通过（clang-format 427 文件 + qmlformat）；`lint` 通过（clang-tidy 0 用户代码
+  发现；qmllint 包含在内）。**未执行**：dev/release 全量回归、Release 构建、ZIP 逐文件读回、
+  Windows 可见窗口/DPI 矩阵、硬件/物理显示门禁；不得据定向结果声称发布通过。按用户约束，
+  这些门禁留在独立环境，本轮不因“当前空闲”自动补跑。
+- **FLOW1 图片观察恢复**：`IssueViewContext` 新增 5 个可选字段（通道观察、背景、差异增益、
+  Alpha 过滤/阈值，-1=未捕获）；repository 逐字段校验，缺省/非法不写入，旧记录不升级。
+  capture 从控制器读值，背景由 `captureIssueLog` 经 `setImageBackgroundMode` 传入；
+  `Main.qml` 改为分阶段恢复：重开素材 → 等正确配对提交 → 文件夹记录回到录制行
+  （`openPairAt(rowIndex)`）→ 一次性重放观察设置；失败/切换/超时明确提示部分或取消。
+  新增 `restoreObservationPosition` 一次性恢复缩放与平移。验证：repository 3 项、controller 2 项、
+  主窗直接路径与文件夹非首行 2 项通过；**变异**（不应用缩放/平移；去掉身份与行校验）均使
+  对应主窗测试失败，恢复后重测通过。**未完成**：真实 Windows 实窗与跨 DPI 人工验收；
+  编辑副本未保存修改的离开处理仍需在编辑会话回归中确认。
+- **FLOW2 导出交接**：样本 manifest 新增 `member_identity`（每个成员写 source + frame_index）、
+  `candidate_output_frame`、`sources`（路径/文件名/尺寸/帧数/编码/位深）与 `display_index_base`；
+  发布前的读回校验核对这些身份，缺字段或帧号不符即拒绝发布。片段导出报告新增实际尾帧
+  `lastPresentationMicroseconds`、`endOfStreamReached`、`stoppedAtRequestedEnd`、
+  `requestedFrameCount`、`startShiftMicroseconds`；成功后状态显示实际起点/终点与结束限制。
+  对比截图标注新增「显示结果 · 屏幕像素 · 未色彩管理；非源文件原始码值」。验证：
+  SampleExportWriter 12 项、ClipExportWriter 9 项（含 VFR、非零起始、多 GOP、B 帧样本
+  `h264_a` 的流拷贝首尾）、ClipExportController 与主窗导出/标注测试通过；**变异**（不写
+  member_identity、不上报实际尾帧）均被检出，恢复后重测通过。**未完成**：真实素材与
+  Windows 解压包上的导出人工复核；搬移源文件后的便携问题包不承诺。
+- **COLOR4 SDR 显示颜色**：显示派生结果经 Qt `QColorSpace` 按嵌入配置转 sRGB；分析缓冲、
+  统计、探针和导出码值不变。状态条新增「颜色转换：开/关」徽章，状态句区分已应用/已关闭/
+  引擎未就绪，并继续标注「显示环境未验证」。组合根用同一 ICC 字节构建色彩空间，Qt 解析失败
+  时降级为 `EmbeddedUnsupported`，不做近似。**独立校验**：9 个带 LittleCMS 参考的首批样本
+  逐探针容差内一致；同码值不同配置的显示结果必须不同；损坏/Lab 必须被拒绝。样本 manifest
+  新增 `color_management`（`source_profile_applied=false`、`decoded_rgba8_swscale`、
+  `display_environment_verified=false`）并读回校验。验证：`ui.ImageColorConversionTests` 3 项、
+  controller 3 项、主窗开关联动 1 项、样本 manifest 1 项通过；**变异**（去掉
+  `EmbeddedSupported` 守卫，让损坏配置也转换）被 `UnsupportedOrCorruptProfilesNeverGetConverted`
+  检出，恢复后通过。**未完成**：COLOR5 的 Windows 输出链路与物理显示验证；16-bit 显示精度；
+  开关尚未持久化；真实素材人工观感复核。
+- **未完成工单/后续阶段**：FLOW3（图片单目录浏览，按计划可独立交付，下一步可先做）、COLOR5
+  （Windows 输出边界与物理显示）、MEDIA2（AV1/VP9、PNG/Deflate TIFF 的 zlib 依赖：需改
+  vcpkg feature 并重建 FFmpeg，按测试环境分离放到独立环境）、RELEASE（dev/release
+  全量回归、Release 构建、ZIP 逐文件读回与解压 smoke、Windows 可见窗口/DPI、硬件/物理显示）。
+  RELEASE 与可见/物理门禁受测试环境分离约束，保持待验；本轮定向测试通过不等于发布验收。
+
+## 2026-10-16/17 QML 类型注册、类型化接线与生成契约（当前工作区）
+
+本节在工作区 `8c90005` 基线上落实接口可靠性第一轮试点（P1：图片探针「数值格式切换与复制
+颜色」的类型化接线），并按 2026-10-17 审查结论完成 R1（真实功能类型化）、R2（生产依赖契约）、
+R3（生成与交付验证）三条修复线；同时提交颜色样本与数据口径设计（P2/P3 输入）。设计决策、
+探针反例与逐项验证见 [ADR 0006](../adr/0006-qml-type-registration.md) 与
+[QML 类型注册与类型化接线验证](qml-interface-pilot.md)；证据目录
+`out/verification/qml-interface-pilot/`（首轮）与 `out/verification/p1-real-controller/`（修复轮）
+及两个独立探针工程 `out/verification/{qml-wiring-probe,qml-module-probe}/`。
+本节是工作区记录；未提交/未合入前不得当作已验收。
+
+- **单一注册入口**：`dvs::ui::registerDvsUiTypes()`（bridge）替换重复注册；
+  `ComparisonSurface`／`JogKeyHandler`／`HoldKeyHandler` 可创建，
+  `ImageReviewController`／`ColorClipboardController` uncreatable（组合根持有实例）。
+- **工具化模块与生成契约**：`dvs_ui_qml_types`（登记进 Architecture.cmake；不链接进运行期
+  产物）生成 `dvs.qmltypes` 到 `<build>/qml-imports/Dvs/Ui`；`qmldir` 声明 `depends QtQuick auto`。
+  `cmake/NormalizeQmlTypes.cmake` 重写为三阶段（契约校验→拼写归一化→发布读回），**37 项
+  计数校验**自断言；映射 `qreal→double`、`qint64→qlonglong`、`quint64→qulonglong`，残留
+  即失败。`quality.qmltypes_contract` 以正例 + 8 反例回归（9 例 + 3 检查通过）。`dvs_lint_qml`
+  带 `-I` 与生成依赖。
+- **R1 真实功能类型化**：`ImageWorkspace` 的 `controller`／`colorClipboard` 为 required 类型化
+  属性；试点链路删除 `typeof` 防护与重复格式化回退（保留 `numericFloat` 绑定依赖与真实业务
+  条件）。`ui.ImageWorkspaceManual` 迁到仓库自建 QuickTest runner（真实控制器/剪贴板、
+  注入小型素材、含 16-bit sidecar 高位深对、`vcs-review` provider），35 项全部通过。
+  **变异**：`channelTxt`／`copyTxt` 均使 lint 失败（修复前这两条调用链对工具不可见）。
+- **R2 生产依赖契约**：`Main.qml` 的 `stillImageController`／`colorClipboardService` 为 required
+  类型化根属性，组合根经 initial properties 传入并在显示窗口前核验身份
+  （`verifyMainWindowPilotServices`，覆盖显式 null 与错类型降级）。25 处主窗装载点统一经
+  `pilotWindowProperties()`／`defaultPilotWindowProperties()` 注入。真实入口反例五例
+  （正确／缺控制器／缺剪贴板／显式 null／错类型）全部按预期；**变异**：核验失效后用例失败，
+  恢复哈希一致并重测通过。
+- **R3 一致性**：`GeneratedDescriptionMatchesTheRuntimeRegistration` 读 `.qmltypes` 与运行期
+  注册比对名称集合、可解析性与可创建性；**变异**：运行期改名 → 注册套件 3/7 失败，恢复后
+  重测通过。
+- **最小配置**：core-dev `-Test` **307/307**。ui-dev 修复了此前未守卫的 GUI/适配器测试源
+  （移入 `if(DVS_BUILD_ADAPTERS)`）后 configure/build 通过；`-Test` **402/425**，23 项超时
+  集中在两个等待后台线程的套件，归因为 `out/vcpkg-ui` 新构建 QtCore 调试 DLL 的 Qt 内部断言
+  `previous > 0`（qcoreapplication.cpp:1902）+ MSVC CRT 对话框劫持：同一二进制直接运行通过、
+  换 dev 树的 Qt6Core 后经同样 ctest 启动通过、涉及代码均未被本轮改动 —— 作为依赖构建/环境
+  问题单列，不用改阈值或屏蔽断言掩盖（详见验证页 §4）。
+- **定向门禁**：MainQml 契约/工作区人工/注册/生成契约四类合计 **143/143**（4 既有禁用、
+  1 环境跳过）；注册套件 7/7；生成契约 9 例 + 3 检查；R2 反例用例通过；R1/R2/R3 三组变异
+  证据均已留存。**最终 dev 完整回归** 1397 项启用 = **1396 通过 + 1 并行 flake**
+  （`ui.StartupSplashTests.DismissBeforeShowIsInertAndRepeatable` 在 `-j 8` 下窗口计数竞态；
+  同源码/二进制串行复测通过、直接 20 次重复全过，未改阈值也不把并行轮记为全绿）；
+  `format-check` 通过；`lint` = clang-tidy 零发现 + qmllint（修复 Main.qml 抑制区间后）零告警。
+- **发布与硬件门禁**：release 全量回归 **100% 通过（1397 项启用**；9 环境/素材跳过、
+  4 既有禁用，328.48s）；ZIP `CompareStation-2.5.0-windows-x64.zip` **28,327,485 bytes**、
+  SHA256 `28176C2663…0BEBDE4`，与上一 2.5.0 候选相比 272→272 文件、0 增 0 删、57 变化
+  （入口二进制 + 重建后重新部署的 Qt/FFmpeg 运行库，无新增第三方依赖）；
+  `verify-release-package.ps1` **16/16**；独立目录、仅系统 PATH、清除 Qt/QML 覆盖下解压
+  smoke **9/9 探针 + 12 弹窗像素检查**通过。硬件/性能门禁未运行。详见验证页 §5。
+- **未完成（如实记录）**：`imageEdit`／`folderPairModel`／`pairMetricsModel` 等控制器仍是
+  `var`（按功能逐个迁移）；ui-dev 的 Qt 断言问题未归因到具体 Qt 变更；颜色管理/显示路径/
+  性能诊断未开始，本轮只提交[颜色样本与数据口径设计](image-color-samples.md)。
 
 ## 2026-10-16 2.5.0 发布准备（跳过本地物理门禁）
 

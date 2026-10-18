@@ -12,7 +12,11 @@ runs:
   steps:
     - name: Check for completed dependency archives
       id: archives
-      if: inputs.key != '' && inputs.cache-hit != 'true'
+      # A cancelled job can leave one or two archives behind. Saving that partial set under the
+      # exact key hides the complete snapshot on the base branch, and the next run on this
+      # branch then rebuilds every dependency from source. Only a run that reached its end may
+      # publish an archive set.
+      if: inputs.key != '' && inputs.cache-hit != 'true' && !cancelled()
       shell: pwsh
       run: |
         $archives = Join-Path $env:RUNNER_TEMP 'dvs-ci/vcpkg-archives'

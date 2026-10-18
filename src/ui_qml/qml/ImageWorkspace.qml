@@ -5,6 +5,7 @@ import QtQuick.Controls
 import QtQuick.Dialogs
 import QtQuick.Layouts
 import QtQuick.Window
+import Dvs.Ui 1.0
 import "VcsTheme.js" as Theme
 import "MediaLabels.js" as MediaLabels
 
@@ -12,13 +13,13 @@ import "MediaLabels.js" as MediaLabels
 Rectangle {
     id: control
 
-    required property var controller
+    // The composition root owns both adapters and passes them in: the controller is a real
+    // ImageReviewController, the clipboard a real ColorClipboardController (typed properties,
+    // so member typos fail qmllint and a wrong object cannot become the controller).
+    required property ImageReviewController controller
+    required property ColorClipboardController colorClipboard
     required property var pairModel
     required property bool sidebarVisible
-    // Optional Qt clipboard adapter for the probe colour copy (Main.qml sets it from the
-    // composition root). Absent in isolated harnesses, where the copy button explains
-    // itself instead of failing silently.
-    property var colorClipboard: null
 
     signal openImageRequested
     signal addImageRequested
@@ -55,7 +56,10 @@ Rectangle {
             Qt.callLater(() => control.forceActiveFocus());
     }
 
-    readonly property var imageReview: controller
+    // Typed, non-nullable in every real session (the main window hands in the composition
+    // root's controller); the concrete type is kept here so every member access below is
+    // checked by qmllint instead of degrading to a dynamic lookup.
+    readonly property ImageReviewController imageReview: controller
     readonly property bool hasPrimary: Boolean(controller && controller.hasPrimary)
     readonly property bool hasSecondary: Boolean(imageReview && imageReview.hasSecondary)
     readonly property bool hasPair: Boolean(imageReview && imageReview.hasPair)
@@ -262,6 +266,14 @@ Rectangle {
         imageReview.viewMode = (imageReview.viewMode === 1 ? 0 : 1);
     }
 
+    // COLOR4: one switch for the display-only colour conversion, used by the status-strip
+    // badge. It never touches the analysis buffers or the source values.
+    function toggleColorDisplay() {
+        if (!imageReview)
+            return;
+        imageReview.colorDisplayEnabled = !imageReview.colorDisplayEnabled;
+    }
+
     function toggleRgbOpaqueView() {
         if (!imageReview || !hasPrimary)
             return;
@@ -398,28 +410,28 @@ Rectangle {
     // for the converted 16-bit sidecar). Neither form is linear light, HDR or colour
     // managed, and Hex stays hexadecimal in both modes. The controller owns the exact
     // text so the readout, the tooltip and the clipboard can never disagree.
-    readonly property bool numericFloat: Boolean(imageReview && Number(imageReview.numericFormat) === 1)
+    //
+    // Binding dependency: the typed invokables below read numericFormat inside C++, and
+    // invokable state reads are invisible to QML's dependency tracking. Every textual
+    // helper therefore reads `control.numericFloat` first (the const name documents why
+    // it exists); a binding that shows formatted text then re-evaluates when the format
+    // flips even though the sample itself is unchanged.
+    readonly property bool numericFloat: imageReview.numericFormat === 1
 
     function setNumericFormat(format) {
-        if (imageReview)
-            imageReview.numericFormat = Number(format);
+        imageReview.numericFormat = Number(format);
     }
 
     function channelText(value) {
-        const fallback = control.numericFloat ? (Number(value) / 255).toFixed(6) : String(value);
-        if (imageReview && typeof imageReview.channelText === "function")
-            return String(imageReview.channelText(Number(value)));
-        return fallback;
+        // Read, not consumed: this is the caller binding's subscription to the format
+        // switch (see the section comment). The controller formats the value itself.
+        const bindingDependency = control.numericFloat;
+        return imageReview.channelText(Number(value));
     }
 
     function deltaText(low, high) {
-        // Invokable method calls do not track the C++ properties read inside them. Read the
-        // format here as well so an unchanged sample updates when its format changes.
-        const difference = Number(high) - Number(low);
-        const text = control.numericFloat ? (difference / 255).toFixed(6) : String(difference);
-        if (imageReview && typeof imageReview.deltaText === "function")
-            return String(imageReview.deltaText(Number(low), Number(high)));
-        return difference > 0 ? "+" + text : text;
+        const bindingDependency = control.numericFloat;
+        return imageReview.deltaText(Number(low), Number(high));
     }
 
     // Fixed-width monospace channel text: spaces pad to three columns in integer mode and
@@ -487,7 +499,7 @@ Rectangle {
     // then), it is not the screen colour under the button, and it dies with the generation
     // that produced it - a closed, replaced or re-opened side invalidates it.
 
-    readonly property var probeSample: imageReview ? imageReview.frozenProbeSample : null
+    readonly property var probeSample: imageReview.frozenProbeSample
     readonly property bool probeSampleReady: Boolean(probeSample && probeSample.valid === true)
     readonly property var statusPixel: cursorPixel && cursorPixel.valid ? cursorPixel : (probeSampleReady ? probeSample : ({}))
     // The crosshair follows the live pointer. The status bar keeps the last valid coordinate
@@ -519,22 +531,17 @@ Rectangle {
     }
 
     function rgbText(r, g, b) {
-        const fallback = "rgb(" + control.channelText(r) + ", " + control.channelText(g) + ", " + control.channelText(b) + ")";
-        if (imageReview && typeof imageReview.rgbText === "function")
-            return String(imageReview.rgbText(r, g, b));
-        return fallback;
+        const bindingDependency = control.numericFloat;
+        return imageReview.rgbText(r, g, b);
     }
 
     function captureProbeSample(slot, x, y) {
-        if (imageReview && typeof imageReview.captureProbeSample === "function")
-            imageReview.captureProbeSample(slot, x, y);
+        imageReview.captureProbeSample(slot, x, y);
     }
 
     function copyProbeColor(format) {
-        if (!imageReview || typeof imageReview.probeColorText !== "function") {
-            showMarqueeNotice(qsTr("当前运行环境不能复制颜色。"));
-            return false;
-        }
+        // Business conditions only: the typed dependencies are non-null in every real
+        // session (the composition root owns them); "no sample yet" is a user state.
         if (!control.probeSampleReady) {
             showMarqueeNotice(qsTr("没有可复制的颜色样本：请先把指针移到图片像素上。"));
             return false;
@@ -544,15 +551,11 @@ Rectangle {
             showMarqueeNotice(qsTr("没有可复制的颜色样本。"));
             return false;
         }
-        const clipboard = control.colorClipboard;
-        if (!clipboard || typeof clipboard.copyText !== "function") {
-            showMarqueeNotice(qsTr("当前运行环境没有剪贴板。"));
-            return false;
-        }
         // The adapter verifies its own write by reading the value back, so a failure can
-        // never be reported as a success here.
-        const copied = Boolean(clipboard.copyText(text));
-        showMarqueeNotice(copied ? qsTr("已复制 %1").arg(text) : qsTr("复制失败：%1").arg(String(clipboard.statusText || "")));
+        // never be reported as a success here (and an absent GUI clipboard is reported
+        // through its status text below).
+        const copied = Boolean(colorClipboard.copyText(text));
+        showMarqueeNotice(copied ? qsTr("已复制 %1").arg(text) : qsTr("复制失败：%1").arg(String(colorClipboard.statusText || "")));
         return copied;
     }
 
@@ -5863,8 +5866,7 @@ Rectangle {
                         text: {
                             if (!control.statusPixel || !control.statusPixel.valid)
                                 return "";
-                            const hex = control.imageReview && typeof control.imageReview.hexText === "function" ? control.imageReview.hexText(control.statusPixel.r, control.statusPixel.g, control.statusPixel.b, control.statusPixel.a) : String(control.statusPixel.hex || "");
-                            return hex;
+                            return control.imageReview.hexText(control.statusPixel.r, control.statusPixel.g, control.statusPixel.b, control.statusPixel.a);
                         }
                         color: Theme.primaryText
                         font.pixelSize: 12
@@ -5956,12 +5958,11 @@ Rectangle {
                             const sample = control.statusPixel;
                             if (!pixelReadout.showNativeDetail || !sample)
                                 return "";
-                            // Capture the format dependency outside the invokable calls.
-                            const fullScale = control.numericFloat ? 65535 : 1;
-                            if (control.imageReview && typeof control.imageReview.channelText16 === "function") {
-                                return qsTr("源 %1-bit → 转换后 16-bit：A %2（%3%） R %4 G %5 B %6").arg(sample.nativeBitDepth).arg(control.imageReview.channelText16(sample.a16)).arg((Number(sample.a16) / 65535 * 100).toFixed(4)).arg(control.imageReview.channelText16(sample.r16)).arg(control.imageReview.channelText16(sample.g16)).arg(control.imageReview.channelText16(sample.b16));
-                            }
-                            return qsTr("源 %1-bit → 转换后 16-bit：A %2（%3%） R %4 G %5 B %6").arg(sample.nativeBitDepth).arg(sample.a16 / fullScale).arg((Number(sample.a16) / 65535 * 100).toFixed(4)).arg(sample.r16 / fullScale).arg(sample.g16 / fullScale).arg(sample.b16 / fullScale);
+                            // Read, not consumed: the binding must re-evaluate when the
+                            // numeric format flips even though the sample is unchanged
+                            // (invokable state reads are invisible to QML).
+                            const bindingDependency = control.numericFloat;
+                            return qsTr("源 %1-bit → 转换后 16-bit：A %2（%3%） R %4 G %5 B %6").arg(sample.nativeBitDepth).arg(control.imageReview.channelText16(sample.a16)).arg((Number(sample.a16) / 65535 * 100).toFixed(4)).arg(control.imageReview.channelText16(sample.r16)).arg(control.imageReview.channelText16(sample.g16)).arg(control.imageReview.channelText16(sample.b16));
                         }
                         color: Theme.mutedText
                         font.pixelSize: 12
@@ -5990,8 +5991,8 @@ Rectangle {
                 const sample = control.statusPixel;
                 if (!sample || !sample.valid)
                     return "";
-                const converted = Boolean(control.imageReview && (control.imageReview.primaryDisplayConverted || control.imageReview.secondaryDisplayConverted));
-                let text = converted ? qsTr("像素 (%1, %2) [显示 RGBA8: R %3 G %4 B %5 A %6 %7 α %8%]").arg(sample.x).arg(sample.y).arg(control.fmtChannel(sample.r)).arg(control.fmtChannel(sample.g)).arg(control.fmtChannel(sample.b)).arg(control.fmtChannel(sample.a)).arg(control.imageReview && typeof control.imageReview.hexText === "function" ? control.imageReview.hexText(sample.r, sample.g, sample.b, sample.a) : String(sample.hex || "")).arg(sample.alphaPercent) : qsTr("像素 (%1, %2)  R %3  G %4  B %5  A %6  %7  α %8%").arg(sample.x).arg(sample.y).arg(control.fmtChannel(sample.r)).arg(control.fmtChannel(sample.g)).arg(control.fmtChannel(sample.b)).arg(control.fmtChannel(sample.a)).arg(control.imageReview && typeof control.imageReview.hexText === "function" ? control.imageReview.hexText(sample.r, sample.g, sample.b, sample.a) : String(sample.hex || "")).arg(sample.alphaPercent);
+                const converted = Boolean(control.imageReview.primaryDisplayConverted || control.imageReview.secondaryDisplayConverted);
+                let text = converted ? qsTr("像素 (%1, %2) [显示 RGBA8: R %3 G %4 B %5 A %6 %7 α %8%]").arg(sample.x).arg(sample.y).arg(control.fmtChannel(sample.r)).arg(control.fmtChannel(sample.g)).arg(control.fmtChannel(sample.b)).arg(control.fmtChannel(sample.a)).arg(control.imageReview.hexText(sample.r, sample.g, sample.b, sample.a)).arg(sample.alphaPercent) : qsTr("像素 (%1, %2)  R %3  G %4  B %5  A %6  %7  α %8%").arg(sample.x).arg(sample.y).arg(control.fmtChannel(sample.r)).arg(control.fmtChannel(sample.g)).arg(control.fmtChannel(sample.b)).arg(control.fmtChannel(sample.a)).arg(control.imageReview.hexText(sample.r, sample.g, sample.b, sample.a)).arg(sample.alphaPercent);
                 if (sample.channelView === "alphaGray")
                     text += " · " + qsTr("Alpha 灰度");
                 else if (sample.channelView === "rgbOpaque")
@@ -6043,9 +6044,7 @@ Rectangle {
                 function sideHex(sample) {
                     if (!sample || sample.valid !== true)
                         return "";
-                    if (control.imageReview && typeof control.imageReview.hexText === "function")
-                        return String(control.imageReview.hexText(sample.r, sample.g, sample.b, sample.a));
-                    return "";
+                    return String(control.imageReview.hexText(sample.r, sample.g, sample.b, sample.a));
                 }
 
                 Flow {
@@ -6459,6 +6458,73 @@ Rectangle {
                 height: Theme.hitAreaMinimum
                 verticalAlignment: Text.AlignVCenter
             }
+            // COLOR3: the colour state is its own always-visible A/B pair. It is driven by
+            // the embedded-profile state, not by the RGBA8 conversion badge below, so a
+            // native RGBA8 image with an ICC profile still shows "配置未应用". The badge
+            // text is the controller's compact state sentence; the tooltip is the long form
+            // of the same state, so the two can never disagree.
+            StatusBadge {
+                id: primaryColorStatusBadge
+                objectName: "imagePrimaryColorStatusBadge"
+                visible: Boolean(control.imageReview && control.hasPrimary)
+                text: control.imageReview ? qsTr("A · ") + control.imageReview.primaryColorStateCompactText : ""
+                dotColor: control.imageReview && control.imageReview.primaryColorProfileNeedsFallback ? Theme.warning : Theme.information
+
+                HoverHandler {
+                    id: primaryColorStatusHover
+                }
+
+                VcsToolTip {
+                    visible: primaryColorStatusHover.hovered
+                    text: control.imageReview ? control.imageReview.primaryColorStatusText : ""
+                }
+            }
+
+            StatusBadge {
+                id: secondaryColorStatusBadge
+                objectName: "imageSecondaryColorStatusBadge"
+                visible: Boolean(control.imageReview && control.hasSecondary)
+                text: control.imageReview ? qsTr("B · ") + control.imageReview.secondaryColorStateCompactText : ""
+                dotColor: control.imageReview && control.imageReview.secondaryColorProfileNeedsFallback ? Theme.warning : Theme.information
+
+                HoverHandler {
+                    id: secondaryColorStatusHover
+                }
+
+                VcsToolTip {
+                    visible: secondaryColorStatusHover.hovered
+                    text: control.imageReview ? control.imageReview.secondaryColorStatusText : ""
+                }
+            }
+
+            // COLOR4: the only in-product way to observe the display conversion on/off. The
+            // conversion is display-only, so the tooltip repeats what does not change
+            // (probe values, statistics, exported source values) and that the Windows output
+            // path is still unverified.
+            StatusBadge {
+                id: colorDisplayToggleBadge
+                objectName: "imageColorDisplayBadge"
+                visible: Boolean(control.imageReview && control.hasPrimary && (control.imageReview.primaryColorProfileStatus === 2 || control.imageReview.secondaryColorProfileStatus === 2))
+                text: control.imageReview && control.imageReview.colorDisplayEnabled ? qsTr("颜色转换：开") : qsTr("颜色转换：关")
+                dotColor: Theme.information
+
+                MouseArea {
+                    objectName: "imageColorDisplayToggleButton"
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: control.toggleColorDisplay()
+                }
+
+                HoverHandler {
+                    id: colorDisplayToggleHover
+                }
+
+                VcsToolTip {
+                    visible: colorDisplayToggleHover.hovered
+                    text: qsTr("按嵌入的 SDR 配置文件把画面转换到 sRGB 显示。只影响显示：像素读数、差异统计、导出码值和原始缓冲都不变。Windows 输出链路与物理显示尚未验证。")
+                }
+            }
+
             StatusBadge {
                 id: displayConversionBadge
                 objectName: "displayConversionBadge"
@@ -6474,7 +6540,7 @@ Rectangle {
 
                 VcsToolTip {
                     visible: displayConversionHover.hovered
-                    text: qsTr("像素格式/位深已转换到 RGBA8 显示缓冲，不是文件平面原始码值。\n未应用 ICC/颜色配置文件；YUV→RGB 使用解码器默认系数，颜色外观不作色彩管理承诺。\n高位深源请参考像素状态栏的转换后 16-bit 码值。")
+                    text: qsTr("像素格式/位深已转换到 RGBA8 显示缓冲，不是文件平面原始码值。\nA/B 颜色徽章写明是否已应用文件颜色配置转换；显示环境仍未验证。\n高位深源请参考像素状态栏的转换后 16-bit 码值。")
                 }
             }
 

@@ -215,5 +215,66 @@ TEST_F(IssueRecordRepositoryTests, EncodeDecodeHelpersRejectOldEntrySchema) {
     EXPECT_TRUE(document.records.empty());
 }
 
+TEST_F(IssueRecordRepositoryTests, RoundTripsImageObservationSettings) {
+    IssueRecordRepository repository{documentPath()};
+    application::IssueRecord record = sampleRecord();
+    record.kind = application::IssueRecordKind::ImagePair;
+    record.view.imageViewMode = 2;
+    record.view.imageBackgroundMode = 3;
+    record.view.imageDiffGain = 9;
+    record.view.imageAlphaFilterEnabled = 1;
+    record.view.imageAlphaThreshold = 200;
+    std::string error;
+    ASSERT_TRUE(repository.save(documentPath(), {record}, &error)) << error;
+    const application::IssueRecordIoResult loaded = repository.load(documentPath());
+    ASSERT_TRUE(loaded.ok) << loaded.error;
+    ASSERT_EQ(loaded.records.size(), 1U);
+    EXPECT_EQ(loaded.records.front().view.imageViewMode, 2);
+    EXPECT_EQ(loaded.records.front().view.imageBackgroundMode, 3);
+    EXPECT_EQ(loaded.records.front().view.imageDiffGain, 9);
+    EXPECT_EQ(loaded.records.front().view.imageAlphaFilterEnabled, 1);
+    EXPECT_EQ(loaded.records.front().view.imageAlphaThreshold, 200);
+}
+
+TEST_F(IssueRecordRepositoryTests, UncapturedImageSettingsStayAbsentAndLoadAsNotCaptured) {
+    IssueRecordRepository repository{documentPath()};
+    application::IssueRecord record = sampleRecord();
+    record.kind = application::IssueRecordKind::ImagePair;
+    const std::string encoded = IssueRecordRepository::encodeDocument({record});
+    // A legacy capture (or a video record) must not grow empty image keys; the sentinel stays
+    // -1 and a reload must not invent a captured observation.
+    EXPECT_EQ(encoded.find("imageViewMode"), std::string::npos);
+    EXPECT_EQ(encoded.find("imageBackgroundMode"), std::string::npos);
+    EXPECT_EQ(encoded.find("imageDiffGain"), std::string::npos);
+    EXPECT_EQ(encoded.find("imageAlphaFilterEnabled"), std::string::npos);
+    EXPECT_EQ(encoded.find("imageAlphaThreshold"), std::string::npos);
+    const IssueRecordDocument document = IssueRecordRepository::decodeDocument(encoded);
+    ASSERT_TRUE(document.ok) << document.error;
+    EXPECT_EQ(document.records.front().view.imageViewMode, -1);
+    EXPECT_EQ(document.records.front().view.imageBackgroundMode, -1);
+    EXPECT_EQ(document.records.front().view.imageDiffGain, -1);
+    EXPECT_EQ(document.records.front().view.imageAlphaFilterEnabled, -1);
+    EXPECT_EQ(document.records.front().view.imageAlphaThreshold, -1);
+}
+
+TEST_F(IssueRecordRepositoryTests, OutOfRangeImageSettingsBecomeNotCaptured) {
+    const std::string text = R"({"schemaVersion":1,"kind":"comparestation-issue-log","records":[
+        {"schemaVersion":1,"kind":"image-pair","view":{
+            "imageViewMode":9,
+            "imageBackgroundMode":-1,
+            "imageDiffGain":0,
+            "imageAlphaFilterEnabled":2,
+            "imageAlphaThreshold":300
+        }}]})";
+    const IssueRecordDocument document = IssueRecordRepository::decodeDocument(text);
+    ASSERT_TRUE(document.ok) << document.error;
+    const application::IssueViewContext& view = document.records.front().view;
+    EXPECT_EQ(view.imageViewMode, -1);
+    EXPECT_EQ(view.imageBackgroundMode, -1);
+    EXPECT_EQ(view.imageDiffGain, -1);
+    EXPECT_EQ(view.imageAlphaFilterEnabled, -1);
+    EXPECT_EQ(view.imageAlphaThreshold, -1);
+}
+
 } // namespace
 } // namespace dvs::persistence

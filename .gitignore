@@ -36,6 +36,9 @@
 # --- Local tool state ---
 .claude/
 **/.serena/
+# Local agent workspace and session transcripts: project data, never part of a commit.
+/.workbuddy-ai/
+/.sessions/
 
 # Neutralized nested repositories (local history backups, not for upload;
 # rename a folder back to .git to restore that project's standalone repo)

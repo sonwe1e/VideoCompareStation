@@ -30,7 +30,9 @@ target_link_libraries(
 )
 target_compile_definitions(
     dvs_media_component_tests
-    PRIVATE DVS_MEDIA_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures/media"
+    PRIVATE
+        DVS_MEDIA_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures/media"
+        DVS_IMAGE_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures/images"
 )
 target_include_directories(
     dvs_media_component_tests

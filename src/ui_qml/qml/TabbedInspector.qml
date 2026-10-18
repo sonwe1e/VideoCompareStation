@@ -5,10 +5,6 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import "VcsTheme.js" as Theme
 import "LayoutMetrics.js" as LayoutMetrics
-// qmllint disable import
-import Dvs.Ui 1.0
-
-// qmllint enable import
 
 Rectangle {
     id: control

@@ -4,6 +4,7 @@
 
 #include "dvs/application/PlaybackTrace.h"
 #include "dvs/application/SessionSnapshot.h"
+#include "dvs/media/ImageColorProfileProbe.h"
 #include "dvs/media/StillImageDecoder.h"
 #include "dvs/persistence/InterpolationProtocolRepository.h"
 #include "dvs/platform/ProcessTelemetry.h"
@@ -30,6 +31,7 @@
 #include "StartupRequestBroker.h"
 #include "StartupRequestDispatch.h"
 
+#include <QColorSpace>
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
@@ -4151,6 +4153,34 @@ int main(int argc, char* argv[]) {
                 info->displayConverted =
                     still.sourceBitDepth != 8 || still.sourceChannels != 4 ||
                     (!still.sourceFormat.empty() && still.sourceFormat != "rgba");
+                // COLOR1: classify the embedded profile bytes and keep the declared colour
+                // metadata. This records what the file said, not a colour-managed result.
+                const QByteArray profileBytes =
+                    still.iccProfile.empty()
+                        ? QByteArray{}
+                        : QByteArray(reinterpret_cast<const char*>(still.iccProfile.data()),
+                                     static_cast<qsizetype>(still.iccProfile.size()));
+                info->color = dvs::ui::classifyImageColorProfile(
+                    profileBytes,
+                    still.sourceChannels == 1 ? dvs::ui::ImageColorSourceLayout::Gray
+                                              : dvs::ui::ImageColorSourceLayout::Rgb);
+                info->color.declaredPrimaries = still.colorPrimaries;
+                info->color.declaredTransfer = still.colorTransfer;
+                info->color.declaredColorSpace = still.colorSpace;
+                // COLOR4: parse the same bytes with the display engine. A structurally usable
+                // profile that the engine cannot build is downgraded to "unsupported" so the UI
+                // reports a fallback instead of silently showing decoded values as converted.
+                if (info->color.profileStatus ==
+                        dvs::ui::ImageColorProfileStatus::EmbeddedSupported &&
+                    !profileBytes.isEmpty()) {
+                    QColorSpace space = QColorSpace::fromIccProfile(profileBytes);
+                    if (space.isValid()) {
+                        info->colorSpace = std::move(space);
+                    } else {
+                        info->color.profileStatus =
+                            dvs::ui::ImageColorProfileStatus::EmbeddedUnsupported;
+                    }
+                }
             }
             return !image->isNull();
         });
@@ -4177,6 +4207,35 @@ int main(int argc, char* argv[]) {
             size->setHeight(height);
             return true;
         });
+    // The FFmpeg build in this tree disables zlib, so it has no PNG decoder and PNG files are
+    // decoded by the Qt fallback. This container probe keeps the embedded ICC state available
+    // on that path; it also covers a decoded container whose decoder did not attach the
+    // profile as side data.
+    dvs::ui::ImageReviewController::setProcessStillImageColorProbe([](const QByteArray& bytes,
+                                                                      QByteArray* profileBytes,
+                                                                      bool* profileDeclared,
+                                                                      std::string* error) {
+        if (bytes.isEmpty() || profileBytes == nullptr) {
+            return false;
+        }
+        std::vector<std::uint8_t> profile;
+        bool declared = false;
+        const bool extracted = dvs::media::extractEmbeddedIccProfile(
+            reinterpret_cast<const std::uint8_t*>(bytes.constData()),
+            static_cast<std::size_t>(bytes.size()),
+            &profile,
+            &declared,
+            error);
+        if (profileDeclared != nullptr) {
+            *profileDeclared = declared;
+        }
+        if (!extracted) {
+            return false;
+        }
+        *profileBytes = QByteArray(reinterpret_cast<const char*>(profile.data()),
+                                   static_cast<qsizetype>(profile.size()));
+        return true;
+    });
 
     const bool smokeArgument = argc >= 2 && std::string_view{argv[1]}.starts_with("--ui-");
     try {

@@ -89,6 +89,10 @@ void IssueLogController::setWorkspaceMode(const QString& mode) noexcept {
     workspaceMode_ = mode;
 }
 
+void IssueLogController::setImageBackgroundMode(const int mode) noexcept {
+    imageBackgroundMode_ = mode;
+}
+
 void IssueLogController::setDefaultDocumentPath(const QUrl& path) noexcept {
     documentPath_ = path.isLocalFile() ? path.toLocalFile() : path.toString();
 }
@@ -299,6 +303,16 @@ bool IssueLogController::captureImageIssue(StoredIssue& issue, const QString& no
         record.view.panX = imageController_->property("panX").toDouble();
         record.view.panY = imageController_->property("panY").toDouble();
         record.view.resampleAllowed = imageController_->property("resampleAllowed").toBool();
+        // FLOW1: observation settings that change what the pair looks like, not the analysis
+        // buffer. They are view state and are captured so restore can replay them.
+        record.view.imageViewMode = imageController_->property("viewMode").toInt();
+        record.view.imageDiffGain = imageController_->property("diffGain").toInt();
+        record.view.imageAlphaFilterEnabled =
+            imageController_->property("alphaFilterEnabled").toBool() ? 1 : 0;
+        record.view.imageAlphaThreshold = imageController_->property("alphaThreshold").toInt();
+        if (imageBackgroundMode_ >= 0) {
+            record.view.imageBackgroundMode = imageBackgroundMode_;
+        }
         // E1: same wipe-only capture rule as the video branch.
         if (record.view.compareMode == 5) {
             record.view.wipeOrientation = imageController_->property("wipeOrientation").toInt();
@@ -575,6 +589,15 @@ QVariantMap IssueLogController::performRestore(const StoredIssue& issue) {
         result.insert(QStringLiteral("compareMode"), issue.record.view.compareMode);
         result.insert(QStringLiteral("panX"), issue.record.view.panX);
         result.insert(QStringLiteral("panY"), issue.record.view.panY);
+        result.insert(QStringLiteral("resampleAllowed"), issue.record.view.resampleAllowed);
+        // FLOW1: sentinel -1 values stay in the payload. Main.qml applies only the fields this
+        // record actually captured and reports the rest as a partial observation.
+        result.insert(QStringLiteral("imageViewMode"), issue.record.view.imageViewMode);
+        result.insert(QStringLiteral("imageBackgroundMode"), issue.record.view.imageBackgroundMode);
+        result.insert(QStringLiteral("imageDiffGain"), issue.record.view.imageDiffGain);
+        result.insert(QStringLiteral("imageAlphaFilterEnabled"),
+                      issue.record.view.imageAlphaFilterEnabled);
+        result.insert(QStringLiteral("imageAlphaThreshold"), issue.record.view.imageAlphaThreshold);
         result.insert(QStringLiteral("leftPath"), QString::fromStdString(issue.record.leftPath));
         result.insert(QStringLiteral("rightPath"), QString::fromStdString(issue.record.rightPath));
         result.insert(QStringLiteral("leftFolder"),

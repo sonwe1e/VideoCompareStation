@@ -599,7 +599,7 @@ private:
 }
 
 [[nodiscard]] bool validateStagedManifest(const std::filesystem::path& path,
-                                          const std::string& expectedSampleId,
+                                          const application::SampleExportJob& job,
                                           std::string* const error) {
     std::ifstream stream{path, std::ios::binary};
     const std::string text{std::istreambuf_iterator<char>{stream},
@@ -610,11 +610,36 @@ private:
     }
     try {
         const nlohmann::json manifest = nlohmann::json::parse(text);
-        if (!manifest.is_object() || manifest.value("schema_version", 0) != 1 ||
-            manifest.value("sample_id", std::string{}) != expectedSampleId ||
-            !manifest.contains("members") || !manifest["members"].contains("input0") ||
-            !manifest["members"].contains("gt") || !manifest["members"].contains("input1") ||
-            !manifest["members"].contains("prediction")) {
+        const auto memberMatches =
+            [&manifest](const char* member, const char* source, const std::int64_t frameIndex) {
+                if (!manifest.contains("member_identity") ||
+                    !manifest["member_identity"].contains(member)) {
+                    return false;
+                }
+                const nlohmann::json& identity = manifest["member_identity"][member];
+                return identity.value("source", std::string{}) == source &&
+                       identity.value("frame_index", std::int64_t{-1}) == frameIndex;
+            };
+        const application::SampleTripletPlan& plan = job.plan;
+        const bool identityComplete =
+            manifest.is_object() && manifest.value("schema_version", 0) == 1 &&
+            manifest.value("sample_id", std::string{}) == job.sampleId &&
+            !manifest.value("sources", nlohmann::json::object()).empty() &&
+            manifest["sources"].contains("gt") && manifest["sources"].contains("candidate") &&
+            manifest.value("candidate_output_frame", std::int64_t{-1}) ==
+                plan.candidateOutputFrame.value() &&
+            manifest.value("display_index_base", -1) == 0 &&
+            !manifest.value("pixel_conversion_policy", std::string{}).empty() &&
+            manifest.contains("color_management") &&
+            manifest["color_management"].value("source_profile_applied", true) == false &&
+            manifest.contains("members") && manifest["members"].contains("input0") &&
+            manifest["members"].contains("gt") && manifest["members"].contains("input1") &&
+            manifest["members"].contains("prediction") &&
+            memberMatches("input0", "gt", plan.input0GtFrame.value()) &&
+            memberMatches("gt", "gt", plan.targetGtFrame.value()) &&
+            memberMatches("input1", "gt", plan.input1GtFrame.value()) &&
+            memberMatches("prediction", "candidate", plan.candidateOutputFrame.value());
+        if (!identityComplete) {
             *error = "The staged manifest does not carry this sample's identity.";
             return false;
         }
@@ -666,8 +691,22 @@ private:
 // A4 manifest subset, filled in honestly. Content fingerprints (SHA-256 of members and sources)
 // are deliberately absent: they belong to E04 lineage work, and a fake or placeholder digest
 // would be worse than a missing field.
+[[nodiscard]] nlohmann::json sourceIdentityJson(const std::filesystem::path& path,
+                                                const domain::MediaDescriptor& descriptor) {
+    return nlohmann::json{{"path", path.generic_string()},
+                          {"file_name", path.filename().generic_string()},
+                          {"width", descriptor.extent.width},
+                          {"height", descriptor.extent.height},
+                          {"frame_count", descriptor.frameCount.value},
+                          {"codec_id", descriptor.codecId},
+                          {"pixel_format_id", descriptor.pixelFormatId},
+                          {"bit_depth", descriptor.bitDepth}};
+}
+
 [[nodiscard]] nlohmann::json buildManifest(const application::SampleExportJob& job,
-                                           const char* const selectedEncoder) {
+                                           const char* const selectedEncoder,
+                                           const domain::MediaDescriptor& gtDescriptor,
+                                           const domain::MediaDescriptor& candidateDescriptor) {
     const application::SampleTripletPlan& plan = job.plan;
 
     nlohmann::json interpolation = nlohmann::json::object();
@@ -693,13 +732,38 @@ private:
                               {"height", plan.cropRect->height}};
     }
 
+    // FLOW2 provenance: a receiver must be able to name each member's source and frame from the
+    // published directory alone, without guessing which asset produced which PNG. Paths are
+    // recorded as captured (the source is expected to stay where it was handed to the exporter).
+    nlohmann::json memberIdentity = nlohmann::json::object();
+    const auto memberEntry = [](const char* source, const std::int64_t frameIndex) {
+        return nlohmann::json{{"source", source}, {"frame_index", frameIndex}};
+    };
+    memberIdentity["input0"] = memberEntry("gt", plan.input0GtFrame.value());
+    memberIdentity["gt"] = memberEntry("gt", plan.targetGtFrame.value());
+    memberIdentity["input1"] = memberEntry("gt", plan.input1GtFrame.value());
+    memberIdentity["prediction"] = memberEntry("candidate", plan.candidateOutputFrame.value());
+
+    nlohmann::json sources = nlohmann::json::object();
+    sources["gt"] = sourceIdentityJson(job.gtAssetPath, gtDescriptor);
+    sources["candidate"] = sourceIdentityJson(job.candidateAssetPath, candidateDescriptor);
+
     nlohmann::json manifest = nlohmann::json::object();
     manifest["schema_version"] = 1;
     manifest["sample_id"] = job.sampleId;
     manifest["interpolation"] = std::move(interpolation);
     manifest["members"] = std::move(members);
+    manifest["member_identity"] = std::move(memberIdentity);
+    manifest["candidate_output_frame"] = plan.candidateOutputFrame.value();
+    manifest["display_index_base"] = 0;
+    manifest["sources"] = std::move(sources);
     manifest["crop"] = std::move(crop);
     manifest["pixel_conversion_policy"] = std::string{kPixelConversionPolicy};
+    // COLOR4: the exporter decodes with swscale but has no colour engine, so it must not
+    // imply colour-managed members. The viewer's display conversion is separate.
+    manifest["color_management"] = nlohmann::json{{"source_profile_applied", false},
+                                                  {"member_reference", "decoded_rgba8_swscale"},
+                                                  {"display_environment_verified", false}};
     manifest["png_encoder"] = selectedEncoder;
     manifest["exporter"] = std::string{kExporterVersion};
     return manifest;
@@ -919,9 +983,13 @@ SampleExportWriter::perform(const application::SampleExportJob& job,
 
     const std::filesystem::path stagedManifestPath = stagingDirectory / "manifest.json";
     std::string detail;
-    if (!writeTextFile(stagedManifestPath,
-                       buildManifest(job, pngEncoderName(encoder)).dump(2) + "\n",
-                       &detail)) {
+    if (!writeTextFile(
+            stagedManifestPath,
+            buildManifest(
+                job, pngEncoderName(encoder), gtDescriptor.value(), candidateDescriptor.value())
+                    .dump(2) +
+                "\n",
+            &detail)) {
         return makeReport(job, application::SampleExportOutcome::kFailed, detail);
     }
     notifyStagedMember(stagedManifestPath);
@@ -935,7 +1003,7 @@ SampleExportWriter::perform(const application::SampleExportJob& job,
                               "The staged sample failed read-back validation: " + detail);
         }
     }
-    if (!validateStagedManifest(stagedManifestPath, job.sampleId, &detail)) {
+    if (!validateStagedManifest(stagedManifestPath, job, &detail)) {
         return makeReport(job,
                           application::SampleExportOutcome::kFailed,
                           "The staged sample failed read-back validation: " + detail);

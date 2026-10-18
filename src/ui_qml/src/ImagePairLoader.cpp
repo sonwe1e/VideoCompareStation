@@ -252,6 +252,24 @@ namespace {
         info->displayConverted =
             info->bitDepth != 8 || info->channels != 4 ||
             (!info->sourceFormat.isEmpty() && info->sourceFormat != QStringLiteral("rgba"));
+        // COLOR1: when the decoder did not expose the profile (Qt fallback), read it from the
+        // container so the colour state is still real. A container that declares a profile but
+        // cannot yield it becomes Corrupt, never "no profile".
+        if (policy.colorProbe && (info->color.profileStatus == ImageColorProfileStatus::NotProbed ||
+                                  info->color.profileStatus == ImageColorProfileStatus::None)) {
+            QByteArray profileBytes;
+            bool profileDeclared = false;
+            std::string colorProbeError;
+            if (policy.colorProbe(bytes, &profileBytes, &profileDeclared, &colorProbeError)) {
+                info->color =
+                    classifyImageColorProfile(profileBytes,
+                                              info->channels == 1 ? ImageColorSourceLayout::Gray
+                                                                  : ImageColorSourceLayout::Rgb);
+            } else if (profileDeclared) {
+                info->color = ImageColorInfo{};
+                info->color.profileStatus = ImageColorProfileStatus::Corrupt;
+            }
+        }
     }
     *image = std::move(decoded);
     if (nativeImage != nullptr) {

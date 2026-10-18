@@ -88,6 +88,21 @@ if(DVS_BUILD_DESKTOP)
     )
 endif()
 
+# The generated Dvs.Ui .qmltypes feeds qmllint/qmlls; the generation step itself must
+# reject drifted or corrupted descriptions with counted checks. The driver runs the real
+# script against a valid baseline plus eight counterexamples and asserts its own counts.
+dvs_add_test(
+    NAME quality.qmltypes_contract
+    LAYER unit
+    MODULE app
+    TIMEOUT 30
+    COMMAND
+        "${CMAKE_COMMAND}"
+        "-DDVS_QMLTYPES_SCRIPT=${PROJECT_SOURCE_DIR}/cmake/NormalizeQmlTypes.cmake"
+        "-DDVS_TEST_ROOT=${CMAKE_BINARY_DIR}/Testing/qmltypes-contract"
+        -P "${PROJECT_SOURCE_DIR}/cmake/CheckQmlTypesContractTests.cmake"
+)
+
 add_subdirectory(unit)
 if(DVS_BUILD_ADAPTERS OR DVS_BUILD_UI)
     add_subdirectory(component)

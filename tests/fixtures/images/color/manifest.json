@@ -1,0 +1,2030 @@
+{
+  "fixtureFormatVersion": 1,
+  "fixtureSet": "COLOR2",
+  "fixtureCount": 25,
+  "directory": "tests/fixtures/images/color",
+  "pathBase": "repository-root",
+  "generatorScript": "tools/fixtures/generate-color-fixtures.py",
+  "generationDate": "2026-10-17",
+  "referenceTool": {
+    "engine": "Pillow ImageCms (LittleCMS 2)",
+    "pillowVersion": "12.3.0",
+    "littlecmsVersion": "2.19",
+    "pythonVersion": "3.12.14",
+    "outputProfile": "Pillow ImageCms built-in sRGB",
+    "renderingIntent": "relative colorimetric (LittleCMS intent 1)",
+    "conversionCall": "ImageCms.profileToProfile(image.convert('RGB'), source, ImageCms.createProfile('sRGB'), renderingIntent=1, outputMode='RGB')",
+    "independenceNote": "LittleCMS is the reference engine here.  If the application later uses LittleCMS too, these converted values are not an independent-engine check; the raw codepoints, profile sha256 values and standard primaries/white points remain the anchors.  A Qt QColorSpace result must be compared to these values under the stated tolerance, not generated from them."
+  },
+  "profiles": [
+    {
+      "key": "srgb",
+      "name": "CompareStation sRGB (ICC v2 matrix-shaper)",
+      "class": "mntr",
+      "dataSpace": "RGB ",
+      "pcs": "XYZ ",
+      "transfer": "sRGB piecewise curve sampled at 4096 16-bit table entries",
+      "bytes": 25148,
+      "sha256": "80715bed39d278395a1b96fa133572a7024911a222272df53f4e81abc1108ebe"
+    },
+    {
+      "key": "display-p3",
+      "name": "CompareStation Display P3 (ICC v2 matrix-shaper)",
+      "class": "mntr",
+      "dataSpace": "RGB ",
+      "pcs": "XYZ ",
+      "transfer": "sRGB piecewise curve sampled at 4096 16-bit table entries",
+      "bytes": 25152,
+      "sha256": "e1bc47a48af6065734a54924781b32b528140132333b34398e262c1a6018ec03"
+    },
+    {
+      "key": "adobe-rgb",
+      "name": "CompareStation Adobe RGB (1998) (ICC v2 matrix-shaper)",
+      "class": "mntr",
+      "dataSpace": "RGB ",
+      "pcs": "XYZ ",
+      "transfer": "gamma 2.2 encoded as ICC u8Fixed8 563 (2.19921875)",
+      "bytes": 596,
+      "sha256": "0077be79316cbede5c17da05074871ce8bd7d7085b1199c7574e1efab78cba40"
+    },
+    {
+      "key": "gray",
+      "name": "CompareStation Gray sRGB TRC (ICC v2)",
+      "class": "mntr",
+      "dataSpace": "GRAY",
+      "pcs": "XYZ ",
+      "transfer": "sRGB piecewise curve sampled at 4096 16-bit table entries",
+      "bytes": 8612,
+      "sha256": "3ae10777d6bfd8328db309b91a2184bec9a7fbe1bc081465416b281999eb1041"
+    },
+    {
+      "key": "lab",
+      "name": "CompareStation Lab (unsupported data space sample)",
+      "class": "mntr",
+      "dataSpace": "Lab ",
+      "pcs": "Lab ",
+      "transfer": "none (no transform tags; data-space rejection sample)",
+      "bytes": 412,
+      "sha256": "6aca67d96ea6bc0a59fc9d064bfefcf0f932a57d33e72d54aec4bb4c5b3d44bd"
+    }
+  ],
+  "profileRoundTrips": {
+    "colours": [
+      [
+        128,
+        64,
+        32
+      ],
+      [
+        200,
+        180,
+        160
+      ],
+      [
+        64,
+        128,
+        192
+      ],
+      [
+        30,
+        40,
+        50
+      ]
+    ],
+    "tolerance": 2,
+    "reason": "In-gamut sRGB colours are converted to each hand-built profile and back with relative colorimetric intent. ±2 8-bit code values covers TRC table quantization and 8-bit rounding; it is not a claim about out-of-gamut appearance.",
+    "results": [
+      {
+        "profile": "srgb",
+        "forward": [
+          [
+            128,
+            64,
+            32
+          ],
+          [
+            200,
+            180,
+            160
+          ],
+          [
+            64,
+            128,
+            192
+          ],
+          [
+            30,
+            40,
+            50
+          ]
+        ],
+        "roundTripped": [
+          [
+            128,
+            64,
+            32
+          ],
+          [
+            200,
+            180,
+            160
+          ],
+          [
+            64,
+            128,
+            192
+          ],
+          [
+            30,
+            40,
+            50
+          ]
+        ],
+        "maxChannelError": 0
+      },
+      {
+        "profile": "display-p3",
+        "forward": [
+          [
+            120,
+            67,
+            39
+          ],
+          [
+            197,
+            181,
+            162
+          ],
+          [
+            80,
+            126,
+            187
+          ],
+          [
+            32,
+            40,
+            49
+          ]
+        ],
+        "roundTripped": [
+          [
+            128,
+            64,
+            32
+          ],
+          [
+            200,
+            180,
+            160
+          ],
+          [
+            64,
+            127,
+            192
+          ],
+          [
+            30,
+            40,
+            50
+          ]
+        ],
+        "maxChannelError": 1
+      },
+      {
+        "profile": "adobe-rgb",
+        "forward": [
+          [
+            114,
+            66,
+            39
+          ],
+          [
+            193,
+            179,
+            159
+          ],
+          [
+            89,
+            127,
+            188
+          ],
+          [
+            38,
+            44,
+            53
+          ]
+        ],
+        "roundTripped": [
+          [
+            128,
+            64,
+            32
+          ],
+          [
+            200,
+            180,
+            160
+          ],
+          [
+            65,
+            128,
+            192
+          ],
+          [
+            30,
+            40,
+            50
+          ]
+        ],
+        "maxChannelError": 1
+      }
+    ],
+    "unsupportedDataSpaceCheck": {
+      "profile": "lab",
+      "transformResult": "PyCMSError: cannot build transform",
+      "expected": "rejected: Lab is not an RGB source profile and the sample has no LUT"
+    }
+  },
+  "profileTimestamp": "2024-01-01T00:00:00",
+  "categoryCounts": {
+    "adobe-rgb": 1,
+    "alpha-edges": 1,
+    "corrupt-profile": 2,
+    "different-codepoints-same-color": 2,
+    "display-p3": 1,
+    "gray": 1,
+    "high-bit-depth": 1,
+    "low-bit-difference": 2,
+    "no-profile": 1,
+    "pnm": 8,
+    "same-codepoints-different-profile": 2,
+    "srgb": 1,
+    "unsupported-profile": 2
+  },
+  "reproducibility": "Every image is written without wall-clock metadata.  The ICC header timestamp is fixed at 2024-01-01T00:00:00 and zlib level 9 is used.  Regeneration is byte-identical with the same Pillow, zlib and LittleCMS versions; the generationDate field is the only run-dependent manifest value.",
+  "license": "All fixture bytes are generated by this script from public standard primaries, white points and transfer functions.  No third-party ICC profile or image data is copied into the repository.",
+  "fixtures": [
+    {
+      "path": "tests/fixtures/images/color/srgb_rgb8_16x16.png",
+      "sha256": "d02131c6db28a3fd3c5fd13b7b66a54662a3e11bbddcf86f586f951b06d3b863",
+      "bytes": 8745,
+      "width": 16,
+      "height": 16,
+      "bitDepth": 8,
+      "colorType": "RGB8",
+      "alpha": false,
+      "category": "srgb",
+      "embeddedProfile": {
+        "name": "CompareStation sRGB (ICC v2 matrix-shaper)",
+        "class": "mntr",
+        "dataSpace": "RGB ",
+        "pcs": "XYZ ",
+        "bytes": 25148,
+        "sha256": "80715bed39d278395a1b96fa133572a7024911a222272df53f4e81abc1108ebe",
+        "valid": true,
+        "transfer": "sRGB piecewise curve sampled at 4096 16-bit table entries"
+      },
+      "expectedPurpose": "sRGB-tagged RGB8 baseline; same codepoints as the Display P3, Adobe RGB and untagged variants so a profile-ignored pipeline can be detected.",
+      "generationMethod": "Pillow Image.save(format='PNG') with a hand-built ICC v2 matrix-shaper profile embedded as iCCP",
+      "referenceValues": {
+        "probePixels": [
+          {
+            "x": 0,
+            "y": 0,
+            "raw": [
+              0,
+              0,
+              255
+            ]
+          },
+          {
+            "x": 8,
+            "y": 8,
+            "raw": [
+              136,
+              136,
+              119
+            ]
+          },
+          {
+            "x": 15,
+            "y": 0,
+            "raw": [
+              255,
+              0,
+              0
+            ]
+          },
+          {
+            "x": 15,
+            "y": 15,
+            "raw": [
+              255,
+              255,
+              0
+            ]
+          }
+        ],
+        "expectedSrgb8": [
+          {
+            "x": 0,
+            "y": 0,
+            "srgb8": [
+              0,
+              0,
+              255
+            ]
+          },
+          {
+            "x": 8,
+            "y": 8,
+            "srgb8": [
+              136,
+              136,
+              119
+            ]
+          },
+          {
+            "x": 15,
+            "y": 0,
+            "srgb8": [
+              255,
+              0,
+              0
+            ]
+          },
+          {
+            "x": 15,
+            "y": 15,
+            "srgb8": [
+              255,
+              255,
+              0
+            ]
+          }
+        ],
+        "outputProfile": "Pillow ImageCms built-in sRGB",
+        "renderingIntent": "relative colorimetric (LittleCMS intent 1)",
+        "conversionCall": "ImageCms.profileToProfile(image.convert('RGB'), source, ImageCms.createProfile('sRGB'), renderingIntent=1, outputMode='RGB')",
+        "tolerance": {
+          "type": "per-channel-8bit",
+          "value": 1,
+          "appliesTo": "each expectedSrgb8 RGB channel",
+          "reason": "The embedded profiles are built from public primaries with a 4096-entry 16-bit TRC table; converting to Pillow's built-in sRGB involves table interpolation and 8-bit rounding, so one code value per channel is allowed. For Display P3 and Adobe RGB out-of-gamut probes, clipping at 0/255 is part of the expected LittleCMS result."
+        },
+        "referenceEngine": "Pillow 12.3.0 ImageCms (LittleCMS 2.19)"
+      },
+      "comparisonGroup": "same-codepoints-different-profile"
+    },
+    {
+      "path": "tests/fixtures/images/color/display-p3_rgb8_16x16.png",
+      "sha256": "ef383e0392f696ad0456b183ad6026d24bb2fc5b6b8eb118f4950ec7cb338d1a",
+      "bytes": 8753,
+      "width": 16,
+      "height": 16,
+      "bitDepth": 8,
+      "colorType": "RGB8",
+      "alpha": false,
+      "category": "display-p3",
+      "embeddedProfile": {
+        "name": "CompareStation Display P3 (ICC v2 matrix-shaper)",
+        "class": "mntr",
+        "dataSpace": "RGB ",
+        "pcs": "XYZ ",
+        "bytes": 25152,
+        "sha256": "e1bc47a48af6065734a54924781b32b528140132333b34398e262c1a6018ec03",
+        "valid": true,
+        "transfer": "sRGB piecewise curve sampled at 4096 16-bit table entries"
+      },
+      "expectedPurpose": "Display P3 primaries with the sRGB transfer curve; identical codepoints to the sRGB baseline, so only the embedded profile changes the expected conversion.",
+      "generationMethod": "Pillow Image.save(format='PNG') with a hand-built ICC v2 matrix-shaper profile embedded as iCCP",
+      "referenceValues": {
+        "probePixels": [
+          {
+            "x": 0,
+            "y": 0,
+            "raw": [
+              0,
+              0,
+              255
+            ]
+          },
+          {
+            "x": 8,
+            "y": 8,
+            "raw": [
+              136,
+              136,
+              119
+            ]
+          },
+          {
+            "x": 15,
+            "y": 0,
+            "raw": [
+              255,
+              0,
+              0
+            ]
+          },
+          {
+            "x": 15,
+            "y": 15,
+            "raw": [
+              255,
+              255,
+              0
+            ]
+          }
+        ],
+        "expectedSrgb8": [
+          {
+            "x": 0,
+            "y": 0,
+            "srgb8": [
+              0,
+              0,
+              255
+            ]
+          },
+          {
+            "x": 8,
+            "y": 8,
+            "srgb8": [
+              136,
+              136,
+              117
+            ]
+          },
+          {
+            "x": 15,
+            "y": 0,
+            "srgb8": [
+              255,
+              0,
+              0
+            ]
+          },
+          {
+            "x": 15,
+            "y": 15,
+            "srgb8": [
+              255,
+              255,
+              0
+            ]
+          }
+        ],
+        "outputProfile": "Pillow ImageCms built-in sRGB",
+        "renderingIntent": "relative colorimetric (LittleCMS intent 1)",
+        "conversionCall": "ImageCms.profileToProfile(image.convert('RGB'), source, ImageCms.createProfile('sRGB'), renderingIntent=1, outputMode='RGB')",
+        "tolerance": {
+          "type": "per-channel-8bit",
+          "value": 1,
+          "appliesTo": "each expectedSrgb8 RGB channel",
+          "reason": "The embedded profiles are built from public primaries with a 4096-entry 16-bit TRC table; converting to Pillow's built-in sRGB involves table interpolation and 8-bit rounding, so one code value per channel is allowed. For Display P3 and Adobe RGB out-of-gamut probes, clipping at 0/255 is part of the expected LittleCMS result."
+        },
+        "referenceEngine": "Pillow 12.3.0 ImageCms (LittleCMS 2.19)"
+      },
+      "comparisonGroup": "same-codepoints-different-profile"
+    },
+    {
+      "path": "tests/fixtures/images/color/adobe-rgb_rgb8_16x16.png",
+      "sha256": "19df764df932f613348d7b0e3ee87186b621181eb51a2f8784c0d5b7dcaad9ad",
+      "bytes": 429,
+      "width": 16,
+      "height": 16,
+      "bitDepth": 8,
+      "colorType": "RGB8",
+      "alpha": false,
+      "category": "adobe-rgb",
+      "embeddedProfile": {
+        "name": "CompareStation Adobe RGB (1998) (ICC v2 matrix-shaper)",
+        "class": "mntr",
+        "dataSpace": "RGB ",
+        "pcs": "XYZ ",
+        "bytes": 596,
+        "sha256": "0077be79316cbede5c17da05074871ce8bd7d7085b1199c7574e1efab78cba40",
+        "valid": true,
+        "transfer": "gamma 2.2 encoded as ICC u8Fixed8 563 (2.19921875)"
+      },
+      "expectedPurpose": "Adobe RGB (1998) primaries with gamma 2.2; same codepoints as the sRGB baseline.",
+      "generationMethod": "Pillow Image.save(format='PNG') with a hand-built ICC v2 matrix-shaper profile embedded as iCCP",
+      "referenceValues": {
+        "probePixels": [
+          {
+            "x": 0,
+            "y": 0,
+            "raw": [
+              0,
+              0,
+              255
+            ]
+          },
+          {
+            "x": 8,
+            "y": 8,
+            "raw": [
+              136,
+              136,
+              119
+            ]
+          },
+          {
+            "x": 15,
+            "y": 0,
+            "raw": [
+              255,
+              0,
+              0
+            ]
+          },
+          {
+            "x": 15,
+            "y": 15,
+            "raw": [
+              255,
+              255,
+              0
+            ]
+          }
+        ],
+        "expectedSrgb8": [
+          {
+            "x": 0,
+            "y": 0,
+            "srgb8": [
+              0,
+              0,
+              255
+            ]
+          },
+          {
+            "x": 8,
+            "y": 8,
+            "srgb8": [
+              137,
+              137,
+              119
+            ]
+          },
+          {
+            "x": 15,
+            "y": 0,
+            "srgb8": [
+              255,
+              0,
+              0
+            ]
+          },
+          {
+            "x": 15,
+            "y": 15,
+            "srgb8": [
+              255,
+              255,
+              0
+            ]
+          }
+        ],
+        "outputProfile": "Pillow ImageCms built-in sRGB",
+        "renderingIntent": "relative colorimetric (LittleCMS intent 1)",
+        "conversionCall": "ImageCms.profileToProfile(image.convert('RGB'), source, ImageCms.createProfile('sRGB'), renderingIntent=1, outputMode='RGB')",
+        "tolerance": {
+          "type": "per-channel-8bit",
+          "value": 1,
+          "appliesTo": "each expectedSrgb8 RGB channel",
+          "reason": "The embedded profiles are built from public primaries with a 4096-entry 16-bit TRC table; converting to Pillow's built-in sRGB involves table interpolation and 8-bit rounding, so one code value per channel is allowed. For Display P3 and Adobe RGB out-of-gamut probes, clipping at 0/255 is part of the expected LittleCMS result."
+        },
+        "referenceEngine": "Pillow 12.3.0 ImageCms (LittleCMS 2.19)"
+      },
+      "comparisonGroup": "same-codepoints-different-profile"
+    },
+    {
+      "path": "tests/fixtures/images/color/no-profile_rgb8_16x16.png",
+      "sha256": "999db39b721ad0a1206684afb7b2c62037f982fd2b3cab504b161e0e21310538",
+      "bytes": 93,
+      "width": 16,
+      "height": 16,
+      "bitDepth": 8,
+      "colorType": "RGB8",
+      "alpha": false,
+      "category": "no-profile",
+      "embeddedProfile": null,
+      "expectedPurpose": "No embedded profile; same codepoints as the tagged variants.  The application must report a colour state rather than silently claiming a verified profile.",
+      "generationMethod": "Pillow Image.save(format='PNG') without an ICC profile",
+      "referenceValues": {
+        "probePixels": [
+          {
+            "x": 0,
+            "y": 0,
+            "raw": [
+              0,
+              0,
+              255
+            ]
+          },
+          {
+            "x": 8,
+            "y": 8,
+            "raw": [
+              136,
+              136,
+              119
+            ]
+          },
+          {
+            "x": 15,
+            "y": 0,
+            "raw": [
+              255,
+              0,
+              0
+            ]
+          },
+          {
+            "x": 15,
+            "y": 15,
+            "raw": [
+              255,
+              255,
+              0
+            ]
+          }
+        ],
+        "expectedFallback": "raw codepoints are preserved; no colour transform is applied",
+        "tolerance": {
+          "type": "exact",
+          "value": 0,
+          "appliesTo": "each probe codepoint",
+          "reason": "no usable embedded profile exists, so the fallback is identity"
+        }
+      },
+      "comparisonGroup": "same-codepoints-different-profile"
+    },
+    {
+      "path": "tests/fixtures/images/color/corrupt-profile_broken-acsp_16x16.png",
+      "sha256": "76dbbd2784c7f734e6be4428647859dc9857dcbbdf857e2c1653fd7e8da8d76c",
+      "bytes": 8741,
+      "width": 16,
+      "height": 16,
+      "bitDepth": 8,
+      "colorType": "RGB8",
+      "alpha": false,
+      "category": "corrupt-profile",
+      "embeddedProfile": {
+        "name": "CompareStation sRGB (ICC v2 matrix-shaper)",
+        "class": "mntr",
+        "dataSpace": "RGB ",
+        "pcs": "XYZ ",
+        "bytes": 25148,
+        "sha256": "b2c167c33487c0ca58ca081827cec954f80bd2b8106ba0d99b8afcf3ff1c05c1",
+        "valid": false,
+        "transfer": "sRGB piecewise curve sampled at 4096 16-bit table entries",
+        "corruptKind": "broken-acsp",
+        "note": "LittleCMS open failed: OSError: cannot open profile from string"
+      },
+      "expectedPurpose": "Valid sRGB profile bytes with the 'acsp' file signature replaced by 'BAD!'; LittleCMS rejects the profile, but the PNG pixels still decode.",
+      "generationMethod": "Pillow PNG encode of the sRGB baseline, then the iCCP chunk is decompressed, the profile is corrupted (broken-acsp) and the chunk is rewritten",
+      "referenceValues": {
+        "probePixels": [
+          {
+            "x": 0,
+            "y": 0,
+            "raw": [
+              0,
+              0,
+              255
+            ]
+          },
+          {
+            "x": 8,
+            "y": 8,
+            "raw": [
+              136,
+              136,
+              119
+            ]
+          },
+          {
+            "x": 15,
+            "y": 0,
+            "raw": [
+              255,
+              0,
+              0
+            ]
+          },
+          {
+            "x": 15,
+            "y": 15,
+            "raw": [
+              255,
+              255,
+              0
+            ]
+          }
+        ],
+        "expectedFallback": "raw codepoints are preserved; the corrupt profile is ignored",
+        "tolerance": {
+          "type": "exact",
+          "value": 0,
+          "appliesTo": "each probe codepoint",
+          "reason": "the profile must not influence pixels; the decoder fallback is identity"
+        },
+        "corruptProfileRejection": "OSError: cannot open profile from string"
+      },
+      "corruptProfile": {
+        "kind": "broken-acsp",
+        "littleCmsOpenResult": "OSError: cannot open profile from string",
+        "pixelsStillDecode": true
+      }
+    },
+    {
+      "path": "tests/fixtures/images/color/corrupt-profile_declared-length_16x16.png",
+      "sha256": "618313b6ec0c51740427a9261d221f6ae0c17cc2d08bf6cc0ee9c16fbc18ae9f",
+      "bytes": 225,
+      "width": 16,
+      "height": 16,
+      "bitDepth": 8,
+      "colorType": "RGB8",
+      "alpha": false,
+      "category": "corrupt-profile",
+      "embeddedProfile": {
+        "name": "CompareStation sRGB (ICC v2 matrix-shaper)",
+        "class": "mntr",
+        "dataSpace": "RGB ",
+        "pcs": "XYZ ",
+        "bytes": 200,
+        "sha256": "9fc2e660a7bb4b4c6ebc660aa1ccaaffe9da28b6c4657dbda742e0f6f87f0c8f",
+        "valid": false,
+        "transfer": "sRGB piecewise curve sampled at 4096 16-bit table entries",
+        "corruptKind": "declared-length-mismatch",
+        "note": "LittleCMS open failed: OSError: cannot open profile from string"
+      },
+      "expectedPurpose": "Profile header still declares 25116 bytes but only the first 200 bytes are embedded; LittleCMS rejects the truncated profile, but the PNG pixels still decode.",
+      "generationMethod": "Pillow PNG encode of the sRGB baseline, then the iCCP chunk is decompressed, the profile is corrupted (declared-length-mismatch) and the chunk is rewritten",
+      "referenceValues": {
+        "probePixels": [
+          {
+            "x": 0,
+            "y": 0,
+            "raw": [
+              0,
+              0,
+              255
+            ]
+          },
+          {
+            "x": 8,
+            "y": 8,
+            "raw": [
+              136,
+              136,
+              119
+            ]
+          },
+          {
+            "x": 15,
+            "y": 0,
+            "raw": [
+              255,
+              0,
+              0
+            ]
+          },
+          {
+            "x": 15,
+            "y": 15,
+            "raw": [
+              255,
+              255,
+              0
+            ]
+          }
+        ],
+        "expectedFallback": "raw codepoints are preserved; the corrupt profile is ignored",
+        "tolerance": {
+          "type": "exact",
+          "value": 0,
+          "appliesTo": "each probe codepoint",
+          "reason": "the profile must not influence pixels; the decoder fallback is identity"
+        },
+        "corruptProfileRejection": "OSError: cannot open profile from string"
+      },
+      "corruptProfile": {
+        "kind": "declared-length-mismatch",
+        "littleCmsOpenResult": "OSError: cannot open profile from string",
+        "pixelsStillDecode": true
+      }
+    },
+    {
+      "path": "tests/fixtures/images/color/unsupported-profile_gray-in-rgb_16x16.png",
+      "sha256": "018ef89bce6e8ab1280ac8052af7acb2cd3ac949fb44146025f041eee7f4271d",
+      "bytes": 8483,
+      "width": 16,
+      "height": 16,
+      "bitDepth": 8,
+      "colorType": "RGB8",
+      "alpha": false,
+      "category": "unsupported-profile",
+      "embeddedProfile": {
+        "name": "CompareStation Gray sRGB TRC (ICC v2)",
+        "class": "mntr",
+        "dataSpace": "GRAY",
+        "pcs": "XYZ ",
+        "bytes": 8612,
+        "sha256": "3ae10777d6bfd8328db309b91a2184bec9a7fbe1bc081465416b281999eb1041",
+        "valid": true,
+        "transfer": "sRGB piecewise curve sampled at 4096 16-bit table entries"
+      },
+      "expectedPurpose": "An RGB PNG embedding a fully valid GRAY data-space profile; the application must report unsupported/corrupt profile handling instead of treating it as an RGB source profile.",
+      "generationMethod": "Pillow PNG encode with a hand-built ICC v2 profile whose data colour space is not RGB embedded as iCCP",
+      "referenceValues": {
+        "probePixels": [
+          {
+            "x": 0,
+            "y": 0,
+            "raw": [
+              0,
+              0,
+              255
+            ]
+          },
+          {
+            "x": 8,
+            "y": 8,
+            "raw": [
+              136,
+              136,
+              119
+            ]
+          },
+          {
+            "x": 15,
+            "y": 0,
+            "raw": [
+              255,
+              0,
+              0
+            ]
+          },
+          {
+            "x": 15,
+            "y": 15,
+            "raw": [
+              255,
+              255,
+              0
+            ]
+          }
+        ],
+        "expectedFallback": "raw codepoints are preserved; the unsupported profile is ignored",
+        "tolerance": {
+          "type": "exact",
+          "value": 0,
+          "appliesTo": "each probe codepoint",
+          "reason": "the unsupported data space must not influence pixels"
+        },
+        "profileOpensInLittleCms": "CompareStation Gray sRGB TRC (ICC v2)"
+      },
+      "unsupportedProfile": {
+        "dataSpace": "GRAY",
+        "littleCmsDescription": "CompareStation Gray sRGB TRC (ICC v2)",
+        "reason": "data colour space is not RGB; not a valid RGB source profile"
+      }
+    },
+    {
+      "path": "tests/fixtures/images/color/unsupported-profile_lab-in-rgb_16x16.png",
+      "sha256": "d6b81dc6ad404e6194037f49ad057e22236e134c74b7b2389c64818b8d4cd576",
+      "bytes": 325,
+      "width": 16,
+      "height": 16,
+      "bitDepth": 8,
+      "colorType": "RGB8",
+      "alpha": false,
+      "category": "unsupported-profile",
+      "embeddedProfile": {
+        "name": "CompareStation Lab (unsupported data space sample)",
+        "class": "mntr",
+        "dataSpace": "Lab ",
+        "pcs": "Lab ",
+        "bytes": 412,
+        "sha256": "6aca67d96ea6bc0a59fc9d064bfefcf0f932a57d33e72d54aec4bb4c5b3d44bd",
+        "valid": true,
+        "transfer": "none (no transform tags; data-space rejection sample)"
+      },
+      "expectedPurpose": "An RGB PNG embedding a structurally loadable Lab data-space profile with no transform tags; the data space is not RGB, so it is an unsupported source profile.",
+      "generationMethod": "Pillow PNG encode with a hand-built ICC v2 profile whose data colour space is not RGB embedded as iCCP",
+      "referenceValues": {
+        "probePixels": [
+          {
+            "x": 0,
+            "y": 0,
+            "raw": [
+              0,
+              0,
+              255
+            ]
+          },
+          {
+            "x": 8,
+            "y": 8,
+            "raw": [
+              136,
+              136,
+              119
+            ]
+          },
+          {
+            "x": 15,
+            "y": 0,
+            "raw": [
+              255,
+              0,
+              0
+            ]
+          },
+          {
+            "x": 15,
+            "y": 15,
+            "raw": [
+              255,
+              255,
+              0
+            ]
+          }
+        ],
+        "expectedFallback": "raw codepoints are preserved; the unsupported profile is ignored",
+        "tolerance": {
+          "type": "exact",
+          "value": 0,
+          "appliesTo": "each probe codepoint",
+          "reason": "the unsupported data space must not influence pixels"
+        },
+        "profileOpensInLittleCms": "CompareStation Lab (unsupported data space sample)"
+      },
+      "unsupportedProfile": {
+        "dataSpace": "Lab ",
+        "littleCmsDescription": "CompareStation Lab (unsupported data space sample)",
+        "reason": "data colour space is not RGB; not a valid RGB source profile"
+      }
+    },
+    {
+      "path": "tests/fixtures/images/color/alpha-edges_rgba8_8x8.png",
+      "sha256": "bb4dd82358fdb842b68fe3992fb729a3fa1a54d3afe4e554b749917651d6de5d",
+      "bytes": 8759,
+      "width": 8,
+      "height": 8,
+      "bitDepth": 8,
+      "colorType": "RGBA8",
+      "alpha": true,
+      "category": "alpha-edges",
+      "embeddedProfile": {
+        "name": "CompareStation sRGB (ICC v2 matrix-shaper)",
+        "class": "mntr",
+        "dataSpace": "RGB ",
+        "pcs": "XYZ ",
+        "bytes": 25148,
+        "sha256": "80715bed39d278395a1b96fa133572a7024911a222272df53f4e81abc1108ebe",
+        "valid": true,
+        "transfer": "sRGB piecewise curve sampled at 4096 16-bit table entries"
+      },
+      "expectedPurpose": "Straight (non-premultiplied) RGBA8 PNG with alpha 0/1/64/128/255; the fully transparent probe keeps non-zero RGB so transparent RGB cannot be silently zeroed, and alpha filtering boundaries can be tested.",
+      "generationMethod": "Pillow Image.save(format='PNG') of a generated straight-alpha RGBA image with the hand-built sRGB profile embedded",
+      "referenceValues": {
+        "probePixels": [
+          {
+            "x": 0,
+            "y": 0,
+            "raw": [
+              200,
+              40,
+              90,
+              0
+            ]
+          },
+          {
+            "x": 1,
+            "y": 0,
+            "raw": [
+              191,
+              40,
+              97,
+              1
+            ]
+          },
+          {
+            "x": 2,
+            "y": 0,
+            "raw": [
+              182,
+              40,
+              104,
+              64
+            ]
+          },
+          {
+            "x": 3,
+            "y": 0,
+            "raw": [
+              173,
+              40,
+              111,
+              128
+            ]
+          },
+          {
+            "x": 4,
+            "y": 0,
+            "raw": [
+              164,
+              40,
+              118,
+              255
+            ]
+          }
+        ],
+        "expectedSrgb8": [
+          {
+            "x": 0,
+            "y": 0,
+            "srgb8": [
+              200,
+              40,
+              90
+            ],
+            "alpha": 0
+          },
+          {
+            "x": 1,
+            "y": 0,
+            "srgb8": [
+              191,
+              40,
+              97
+            ],
+            "alpha": 1
+          },
+          {
+            "x": 2,
+            "y": 0,
+            "srgb8": [
+              182,
+              40,
+              104
+            ],
+            "alpha": 64
+          },
+          {
+            "x": 3,
+            "y": 0,
+            "srgb8": [
+              173,
+              40,
+              111
+            ],
+            "alpha": 128
+          },
+          {
+            "x": 4,
+            "y": 0,
+            "srgb8": [
+              164,
+              40,
+              118
+            ],
+            "alpha": 255
+          }
+        ],
+        "outputProfile": "Pillow ImageCms built-in sRGB",
+        "renderingIntent": "relative colorimetric (LittleCMS intent 1)",
+        "conversionCall": "ImageCms.profileToProfile(image.convert('RGB'), source, ImageCms.createProfile('sRGB'), renderingIntent=1, outputMode='RGB')",
+        "tolerance": {
+          "type": "per-channel-8bit",
+          "value": 1,
+          "appliesTo": "each expectedSrgb8 RGB channel",
+          "reason": "sRGB profile conversion is identity in intent but passes through a 16-bit TRC table and 8-bit rounding; alpha is not colour data and must stay bit-exact."
+        },
+        "alphaTolerance": {
+          "type": "exact",
+          "value": 0,
+          "appliesTo": "each probe alpha value",
+          "reason": "alpha is copied, not colour-managed"
+        },
+        "alphaProbes": [
+          {
+            "alpha": 0,
+            "note": "fully transparent with non-zero RGB (200,40,90); hidden RGB retained"
+          },
+          {
+            "alpha": 1,
+            "note": "near-zero alpha boundary; strict alpha filtering must not drop it"
+          },
+          {
+            "alpha": 64,
+            "note": "low but visible alpha"
+          },
+          {
+            "alpha": 128,
+            "note": "half alpha"
+          },
+          {
+            "alpha": 255,
+            "note": "opaque"
+          }
+        ]
+      }
+    },
+    {
+      "path": "tests/fixtures/images/color/gray8_srgb-trc_16x16.png",
+      "sha256": "767e8e206476f001bdcca20a985ef820ba5db81504ec337c7eeb8ffd69061cb0",
+      "bytes": 8466,
+      "width": 16,
+      "height": 16,
+      "bitDepth": 8,
+      "colorType": "Gray8",
+      "alpha": false,
+      "category": "gray",
+      "embeddedProfile": {
+        "name": "CompareStation Gray sRGB TRC (ICC v2)",
+        "class": "mntr",
+        "dataSpace": "GRAY",
+        "pcs": "XYZ ",
+        "bytes": 8612,
+        "sha256": "3ae10777d6bfd8328db309b91a2184bec9a7fbe1bc081465416b281999eb1041",
+        "valid": true,
+        "transfer": "sRGB piecewise curve sampled at 4096 16-bit table entries"
+      },
+      "expectedPurpose": "Grayscale 8-bit PNG with a valid GRAY data-space ICC v2 profile; exercises single-channel profile parsing and gray-to-sRGB reference conversion.",
+      "generationMethod": "Pillow Image.save(format='PNG') of a generated L-mode gradient with the hand-built GRAY profile embedded",
+      "referenceValues": {
+        "probePixels": [
+          {
+            "x": 0,
+            "y": 0,
+            "raw": [
+              0
+            ]
+          },
+          {
+            "x": 5,
+            "y": 6,
+            "raw": [
+              86
+            ]
+          },
+          {
+            "x": 15,
+            "y": 15,
+            "raw": [
+              255
+            ]
+          }
+        ],
+        "expectedSrgb8": [
+          {
+            "x": 0,
+            "y": 0,
+            "srgb8": [
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "x": 5,
+            "y": 6,
+            "srgb8": [
+              86,
+              86,
+              86
+            ]
+          },
+          {
+            "x": 15,
+            "y": 15,
+            "srgb8": [
+              255,
+              255,
+              255
+            ]
+          }
+        ],
+        "outputProfile": "Pillow ImageCms built-in sRGB",
+        "renderingIntent": "relative colorimetric (LittleCMS intent 1)",
+        "conversionCall": "ImageCms.profileToProfile(image, source, ImageCms.createProfile('sRGB'), renderingIntent=1, outputMode='RGB')",
+        "tolerance": {
+          "type": "per-channel-8bit",
+          "value": 1,
+          "appliesTo": "each expectedSrgb8 RGB channel",
+          "reason": "The GRAY profile shares the sRGB transfer curve but is a separate hand-built profile; LittleCMS applies its 4096-entry 16-bit table and rounds the sRGB output to 8 bits."
+        }
+      }
+    },
+    {
+      "path": "tests/fixtures/images/color/rgb16-gradient_16x16.png",
+      "sha256": "24f49e9db47607f840557ec6225f55c71fe751844fa0ecdb7de0a2604a847027",
+      "bytes": 9778,
+      "width": 16,
+      "height": 16,
+      "bitDepth": 16,
+      "colorType": "RGB16",
+      "alpha": false,
+      "category": "high-bit-depth",
+      "embeddedProfile": {
+        "name": "CompareStation sRGB (ICC v2 matrix-shaper)",
+        "class": "mntr",
+        "dataSpace": "RGB ",
+        "pcs": "XYZ ",
+        "bytes": 25148,
+        "sha256": "80715bed39d278395a1b96fa133572a7024911a222272df53f4e81abc1108ebe",
+        "valid": true,
+        "transfer": "sRGB piecewise curve sampled at 4096 16-bit table entries"
+      },
+      "expectedPurpose": "True RGB48 PNG (16 bits per channel) with the sRGB profile embedded; exercises 16-bit source depth and the RGBA64 sidecar path.  The raw file codes are the authoritative reference; display-buffer conversion may quantize.",
+      "generationMethod": "Hand-written PNG (IHDR colour type 2, bit depth 16, filter 0) with a 16-bit big-endian gradient and the hand-built sRGB profile embedded; zlib level 9",
+      "referenceValues": {
+        "probePixels": [
+          {
+            "x": 0,
+            "y": 0,
+            "rawRgb16": [
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "x": 8,
+            "y": 8,
+            "rawRgb16": [
+              34952,
+              34952,
+              34944
+            ]
+          },
+          {
+            "x": 15,
+            "y": 0,
+            "rawRgb16": [
+              65535,
+              0,
+              32760
+            ]
+          },
+          {
+            "x": 15,
+            "y": 15,
+            "rawRgb16": [
+              65535,
+              65535,
+              65520
+            ]
+          }
+        ],
+        "expectedHighByte8": [
+          {
+            "x": 0,
+            "y": 0,
+            "rgb8": [
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "x": 8,
+            "y": 8,
+            "rgb8": [
+              136,
+              136,
+              136
+            ]
+          },
+          {
+            "x": 15,
+            "y": 0,
+            "rgb8": [
+              255,
+              0,
+              127
+            ]
+          },
+          {
+            "x": 15,
+            "y": 15,
+            "rgb8": [
+              255,
+              255,
+              255
+            ]
+          }
+        ],
+        "tolerance": {
+          "type": "per-channel-8bit",
+          "value": 1,
+          "appliesTo": "each expectedHighByte8 channel",
+          "reason": "A 16-bit PNG stores 0..65535 per channel; an 8-bit display buffer takes (or rounds) the high byte, so one code value is allowed.  Assertions about precision must use the raw 16-bit codes, not the display buffer."
+        },
+        "note": "Pillow decodes this file to 8-bit RGB for display; the committed bytes remain RGB48 and ffprobe reports rgb48be."
+      }
+    },
+    {
+      "path": "tests/fixtures/images/color/gray16-lowbit_0x1000_8x8.png",
+      "sha256": "e34112b561a18a24d710570ca6aeedcdc1e3eacfe9dd6b9fc3ebb7efccbcbc5e",
+      "bytes": 75,
+      "width": 8,
+      "height": 8,
+      "bitDepth": 16,
+      "colorType": "Gray16",
+      "alpha": false,
+      "category": "low-bit-difference",
+      "embeddedProfile": null,
+      "expectedPurpose": "16-bit grayscale pair whose 8-bit display value is 16 for both files while the 16-bit codes differ by 8; proves a display-only comparison cannot detect the difference and the 16-bit sidecar can.",
+      "generationMethod": "Pillow Image.save(format='PNG') of a uniform 8x8 I;16 image; PNG colour type 0, bit depth 16, no ICC profile",
+      "referenceValues": {
+        "probePixels": [
+          {
+            "x": 0,
+            "y": 0,
+            "rawGray16": 4096
+          },
+          {
+            "x": 7,
+            "y": 7,
+            "rawGray16": 4096
+          }
+        ],
+        "expectedDisplay8": 16,
+        "tolerance": {
+          "type": "exact",
+          "value": 0,
+          "appliesTo": "the 8-bit display value",
+          "reason": "0x1000/257 = 15.94 and 0x1008/257 = 15.97; both truncation and rounding produce exactly 16, so the 8-bit display value is identical"
+        },
+        "note": "The 16-bit raw codes differ by 8 (0x1008 - 0x1000); the RGBA64 sidecar must preserve that difference."
+      },
+      "lowBitPairmate": "tests/fixtures/images/color/gray16-lowbit_0x1008_8x8.png"
+    },
+    {
+      "path": "tests/fixtures/images/color/gray16-lowbit_0x1008_8x8.png",
+      "sha256": "22be51ea66c65e48341c6047cb2941180d36aa7b5687f3dfa3cff28ba82b2d50",
+      "bytes": 76,
+      "width": 8,
+      "height": 8,
+      "bitDepth": 16,
+      "colorType": "Gray16",
+      "alpha": false,
+      "category": "low-bit-difference",
+      "embeddedProfile": null,
+      "expectedPurpose": "16-bit grayscale pair whose 8-bit display value is 16 for both files while the 16-bit codes differ by 8; proves a display-only comparison cannot detect the difference and the 16-bit sidecar can.",
+      "generationMethod": "Pillow Image.save(format='PNG') of a uniform 8x8 I;16 image; PNG colour type 0, bit depth 16, no ICC profile",
+      "referenceValues": {
+        "probePixels": [
+          {
+            "x": 0,
+            "y": 0,
+            "rawGray16": 4104
+          },
+          {
+            "x": 7,
+            "y": 7,
+            "rawGray16": 4104
+          }
+        ],
+        "expectedDisplay8": 16,
+        "tolerance": {
+          "type": "exact",
+          "value": 0,
+          "appliesTo": "the 8-bit display value",
+          "reason": "0x1000/257 = 15.94 and 0x1008/257 = 15.97; both truncation and rounding produce exactly 16, so the 8-bit display value is identical"
+        },
+        "note": "The 16-bit raw codes differ by 8 (0x1008 - 0x1000); the RGBA64 sidecar must preserve that difference."
+      },
+      "lowBitPairmate": "tests/fixtures/images/color/gray16-lowbit_0x1000_8x8.png"
+    },
+    {
+      "path": "tests/fixtures/images/color/same-codepoints_srgb_8x8.png",
+      "sha256": "6249c2ffd1ffb6208e8177d6e606e0c446d4a13b6f5a80d1e38b2c4661c96d0d",
+      "bytes": 8745,
+      "width": 8,
+      "height": 8,
+      "bitDepth": 8,
+      "colorType": "RGB8",
+      "alpha": false,
+      "category": "same-codepoints-different-profile",
+      "embeddedProfile": {
+        "name": "CompareStation sRGB (ICC v2 matrix-shaper)",
+        "class": "mntr",
+        "dataSpace": "RGB ",
+        "pcs": "XYZ ",
+        "bytes": 25148,
+        "sha256": "80715bed39d278395a1b96fa133572a7024911a222272df53f4e81abc1108ebe",
+        "valid": true,
+        "transfer": "sRGB piecewise curve sampled at 4096 16-bit table entries"
+      },
+      "expectedPurpose": "Identical raw RGB codepoints as its pairmate, tagged with a different ICC profile.  A pipeline that ignores the profile returns identical output; a pipeline that applies it must reproduce the recorded LittleCMS conversion.",
+      "generationMethod": "Pillow Image.save(format='PNG') of the same 8x8 palette with the hand-built srgb profile embedded",
+      "referenceValues": {
+        "probePixels": [
+          {
+            "x": 0,
+            "y": 0,
+            "raw": [
+              136,
+              136,
+              119
+            ]
+          },
+          {
+            "x": 1,
+            "y": 0,
+            "raw": [
+              200,
+              120,
+              60
+            ]
+          },
+          {
+            "x": 3,
+            "y": 0,
+            "raw": [
+              220,
+              180,
+              30
+            ]
+          },
+          {
+            "x": 7,
+            "y": 7,
+            "raw": [
+              0,
+              0,
+              255
+            ]
+          }
+        ],
+        "expectedSrgb8": [
+          {
+            "x": 0,
+            "y": 0,
+            "srgb8": [
+              136,
+              136,
+              119
+            ]
+          },
+          {
+            "x": 1,
+            "y": 0,
+            "srgb8": [
+              200,
+              120,
+              60
+            ]
+          },
+          {
+            "x": 3,
+            "y": 0,
+            "srgb8": [
+              220,
+              180,
+              30
+            ]
+          },
+          {
+            "x": 7,
+            "y": 7,
+            "srgb8": [
+              0,
+              0,
+              255
+            ]
+          }
+        ],
+        "outputProfile": "Pillow ImageCms built-in sRGB",
+        "renderingIntent": "relative colorimetric (LittleCMS intent 1)",
+        "conversionCall": "ImageCms.profileToProfile(image.convert('RGB'), source, ImageCms.createProfile('sRGB'), renderingIntent=1, outputMode='RGB')",
+        "tolerance": {
+          "type": "per-channel-8bit",
+          "value": 1,
+          "appliesTo": "each expectedSrgb8 RGB channel",
+          "reason": "Relative colorimetric conversion through hand-built matrix/shaper profiles; ±1 covers 16-bit TRC interpolation and 8-bit output rounding.  The pair is useful only if the two converted results differ beyond this tolerance for at least one probe."
+        },
+        "comparisonResult": "3 of 4 probes convert differently beyond ±1"
+      },
+      "comparisonGroup": "same-codepoints-pair",
+      "comparisonCounterpart": "tests/fixtures/images/color/same-codepoints_p3_8x8.png"
+    },
+    {
+      "path": "tests/fixtures/images/color/same-codepoints_p3_8x8.png",
+      "sha256": "c9bd82a4e416a83f5012cdc5ca0bf5643def68bde9570cfa87b7ea2b79fefbbd",
+      "bytes": 8753,
+      "width": 8,
+      "height": 8,
+      "bitDepth": 8,
+      "colorType": "RGB8",
+      "alpha": false,
+      "category": "same-codepoints-different-profile",
+      "embeddedProfile": {
+        "name": "CompareStation Display P3 (ICC v2 matrix-shaper)",
+        "class": "mntr",
+        "dataSpace": "RGB ",
+        "pcs": "XYZ ",
+        "bytes": 25152,
+        "sha256": "e1bc47a48af6065734a54924781b32b528140132333b34398e262c1a6018ec03",
+        "valid": true,
+        "transfer": "sRGB piecewise curve sampled at 4096 16-bit table entries"
+      },
+      "expectedPurpose": "Identical raw RGB codepoints as its pairmate, tagged with a different ICC profile.  A pipeline that ignores the profile returns identical output; a pipeline that applies it must reproduce the recorded LittleCMS conversion.",
+      "generationMethod": "Pillow Image.save(format='PNG') of the same 8x8 palette with the hand-built display-p3 profile embedded",
+      "referenceValues": {
+        "probePixels": [
+          {
+            "x": 0,
+            "y": 0,
+            "raw": [
+              136,
+              136,
+              119
+            ]
+          },
+          {
+            "x": 1,
+            "y": 0,
+            "raw": [
+              200,
+              120,
+              60
+            ]
+          },
+          {
+            "x": 3,
+            "y": 0,
+            "raw": [
+              220,
+              180,
+              30
+            ]
+          },
+          {
+            "x": 7,
+            "y": 7,
+            "raw": [
+              0,
+              0,
+              255
+            ]
+          }
+        ],
+        "expectedSrgb8": [
+          {
+            "x": 0,
+            "y": 0,
+            "srgb8": [
+              136,
+              136,
+              117
+            ]
+          },
+          {
+            "x": 1,
+            "y": 0,
+            "srgb8": [
+              213,
+              115,
+              42
+            ]
+          },
+          {
+            "x": 3,
+            "y": 0,
+            "srgb8": [
+              228,
+              178,
+              0
+            ]
+          },
+          {
+            "x": 7,
+            "y": 7,
+            "srgb8": [
+              0,
+              0,
+              255
+            ]
+          }
+        ],
+        "outputProfile": "Pillow ImageCms built-in sRGB",
+        "renderingIntent": "relative colorimetric (LittleCMS intent 1)",
+        "conversionCall": "ImageCms.profileToProfile(image.convert('RGB'), source, ImageCms.createProfile('sRGB'), renderingIntent=1, outputMode='RGB')",
+        "tolerance": {
+          "type": "per-channel-8bit",
+          "value": 1,
+          "appliesTo": "each expectedSrgb8 RGB channel",
+          "reason": "Relative colorimetric conversion through hand-built matrix/shaper profiles; ±1 covers 16-bit TRC interpolation and 8-bit output rounding.  The pair is useful only if the two converted results differ beyond this tolerance for at least one probe."
+        },
+        "comparisonResult": "3 of 4 probes convert differently beyond ±1"
+      },
+      "comparisonGroup": "same-codepoints-pair",
+      "comparisonCounterpart": "tests/fixtures/images/color/same-codepoints_srgb_8x8.png"
+    },
+    {
+      "path": "tests/fixtures/images/color/different-codepoints_srgb-red_8x8.png",
+      "sha256": "ce73037edf425456785d19cc6eed3b20cd658494037e7eef163377063d8cd6f1",
+      "bytes": 8727,
+      "width": 8,
+      "height": 8,
+      "bitDepth": 8,
+      "colorType": "RGB8",
+      "alpha": false,
+      "category": "different-codepoints-same-color",
+      "embeddedProfile": {
+        "name": "CompareStation sRGB (ICC v2 matrix-shaper)",
+        "class": "mntr",
+        "dataSpace": "RGB ",
+        "pcs": "XYZ ",
+        "bytes": 25148,
+        "sha256": "80715bed39d278395a1b96fa133572a7024911a222272df53f4e81abc1108ebe",
+        "valid": true,
+        "transfer": "sRGB piecewise curve sampled at 4096 16-bit table entries"
+      },
+      "expectedPurpose": "sRGB-coded pure red (255,0,0); the reference member of the different-codepoints, same-expected-colour pair.",
+      "generationMethod": "Pillow Image.save(format='PNG') of a uniform 8x8 colour with the hand-built srgb profile embedded",
+      "referenceValues": {
+        "probePixels": [
+          {
+            "x": 0,
+            "y": 0,
+            "raw": [
+              255,
+              0,
+              0
+            ]
+          },
+          {
+            "x": 7,
+            "y": 7,
+            "raw": [
+              255,
+              0,
+              0
+            ]
+          }
+        ],
+        "expectedSrgb8": [
+          {
+            "x": 0,
+            "y": 0,
+            "srgb8": [
+              255,
+              0,
+              0
+            ]
+          },
+          {
+            "x": 7,
+            "y": 7,
+            "srgb8": [
+              255,
+              0,
+              0
+            ]
+          }
+        ],
+        "outputProfile": "Pillow ImageCms built-in sRGB",
+        "renderingIntent": "relative colorimetric (LittleCMS intent 1)",
+        "conversionCall": "ImageCms.profileToProfile(image.convert('RGB'), source, ImageCms.createProfile('sRGB'), renderingIntent=1, outputMode='RGB')",
+        "tolerance": {
+          "type": "per-channel-8bit",
+          "value": 1,
+          "appliesTo": "each expectedSrgb8 RGB channel",
+          "reason": "Both files are expected to convert to sRGB (255,0,0) within ±1.  The P3 code (255,16,8) is outside the sRGB gamut; relative colorimetric intent clips it to the sRGB red primary, and the final 8-bit rounding is allowed one code value."
+        },
+        "conversionExpectation": "sRGB8 (255, 0, 0) within ±1 per channel",
+        "comparisonResult": "raw (255,0,0) converts to sRGB (255,0,0)"
+      },
+      "comparisonGroup": "different-codepoints-same-color-pair",
+      "comparisonCounterpart": "tests/fixtures/images/color/different-codepoints_p3-red_8x8.png"
+    },
+    {
+      "path": "tests/fixtures/images/color/different-codepoints_p3-red_8x8.png",
+      "sha256": "1b6a89fbedb9872d4b8c9b934a1bcc7a70dc09fb33f4451de7b17d1c464f8387",
+      "bytes": 8737,
+      "width": 8,
+      "height": 8,
+      "bitDepth": 8,
+      "colorType": "RGB8",
+      "alpha": false,
+      "category": "different-codepoints-same-color",
+      "embeddedProfile": {
+        "name": "CompareStation Display P3 (ICC v2 matrix-shaper)",
+        "class": "mntr",
+        "dataSpace": "RGB ",
+        "pcs": "XYZ ",
+        "bytes": 25152,
+        "sha256": "e1bc47a48af6065734a54924781b32b528140132333b34398e262c1a6018ec03",
+        "valid": true,
+        "transfer": "sRGB piecewise curve sampled at 4096 16-bit table entries"
+      },
+      "expectedPurpose": "Display P3 code (255,16,8) whose LittleCMS relative-colorimetric conversion to sRGB is (255,0,0) within ±1; same expected colour as the sRGB red, different raw codepoints.",
+      "generationMethod": "Pillow Image.save(format='PNG') of a uniform 8x8 colour with the hand-built display-p3 profile embedded",
+      "referenceValues": {
+        "probePixels": [
+          {
+            "x": 0,
+            "y": 0,
+            "raw": [
+              255,
+              16,
+              8
+            ]
+          },
+          {
+            "x": 7,
+            "y": 7,
+            "raw": [
+              255,
+              16,
+              8
+            ]
+          }
+        ],
+        "expectedSrgb8": [
+          {
+            "x": 0,
+            "y": 0,
+            "srgb8": [
+              255,
+              0,
+              0
+            ]
+          },
+          {
+            "x": 7,
+            "y": 7,
+            "srgb8": [
+              255,
+              0,
+              0
+            ]
+          }
+        ],
+        "outputProfile": "Pillow ImageCms built-in sRGB",
+        "renderingIntent": "relative colorimetric (LittleCMS intent 1)",
+        "conversionCall": "ImageCms.profileToProfile(image.convert('RGB'), source, ImageCms.createProfile('sRGB'), renderingIntent=1, outputMode='RGB')",
+        "tolerance": {
+          "type": "per-channel-8bit",
+          "value": 1,
+          "appliesTo": "each expectedSrgb8 RGB channel",
+          "reason": "Both files are expected to convert to sRGB (255,0,0) within ±1.  The P3 code (255,16,8) is outside the sRGB gamut; relative colorimetric intent clips it to the sRGB red primary, and the final 8-bit rounding is allowed one code value."
+        },
+        "conversionExpectation": "sRGB8 (255, 0, 0) within ±1 per channel",
+        "comparisonResult": "raw (255,16,8) converts to sRGB (255, 0, 0)"
+      },
+      "comparisonGroup": "different-codepoints-same-color-pair",
+      "comparisonCounterpart": "tests/fixtures/images/color/different-codepoints_srgb-red_8x8.png"
+    },
+    {
+      "path": "tests/fixtures/images/color/pnm_p1_bitmap_8x8.pbm",
+      "sha256": "69a41efc55afad12c8206113e90f87af62dba0b17b15a9beecb4da77547607ff",
+      "bytes": 135,
+      "width": 8,
+      "height": 8,
+      "bitDepth": 1,
+      "colorType": "PBM",
+      "alpha": false,
+      "category": "pnm",
+      "embeddedProfile": null,
+      "expectedPurpose": "ASCII bitmap (P1); 1 is black, 0 is white; decoder entry is AV_CODEC_ID_PBM.",
+      "generationMethod": "Hand-written P1 PNM payload with ASCII header and deterministic samples; no image library is used for the file bytes",
+      "referenceValues": {
+        "probePixels": [
+          {
+            "x": 0,
+            "y": 0,
+            "note": "first raster sample"
+          }
+        ],
+        "tolerance": {
+          "type": "exact",
+          "value": 0,
+          "appliesTo": "decoded dimensions and pixel bits",
+          "reason": "PBM stores one bit per pixel; no colour conversion applies"
+        },
+        "note": "PNM has no ICC mechanism; category 'pnm' exists to test the format entry contract, not colour management."
+      }
+    },
+    {
+      "path": "tests/fixtures/images/color/pnm_p2_gray_ascii_8x8.pgm",
+      "sha256": "038c4c799e66619f537617a76c900fdb3c5c9bf0bebfebace9e43014a42e8ffe",
+      "bytes": 207,
+      "width": 8,
+      "height": 8,
+      "bitDepth": 8,
+      "colorType": "PGM",
+      "alpha": false,
+      "category": "pnm",
+      "embeddedProfile": null,
+      "expectedPurpose": "ASCII grayscale (P2) with maxval 255; decoder entry is AV_CODEC_ID_PGM.",
+      "generationMethod": "Hand-written P2 PNM payload with ASCII header and deterministic samples; no image library is used for the file bytes",
+      "referenceValues": {
+        "probePixels": [
+          {
+            "x": 0,
+            "y": 0,
+            "note": "first raster sample"
+          }
+        ],
+        "tolerance": {
+          "type": "exact",
+          "value": 0,
+          "appliesTo": "decoded dimensions and gray values",
+          "reason": "ASCII samples are exact integers; no colour conversion applies"
+        },
+        "note": "PNM has no ICC mechanism; category 'pnm' exists to test the format entry contract, not colour management."
+      }
+    },
+    {
+      "path": "tests/fixtures/images/color/pnm_p3_rgb_ascii_8x8.ppm",
+      "sha256": "c5f5e697a9fa1aae4ec7eb3ca245ca517496af5872e69974563dae4c64f67cdf",
+      "bytes": 603,
+      "width": 8,
+      "height": 8,
+      "bitDepth": 8,
+      "colorType": "PPM",
+      "alpha": false,
+      "category": "pnm",
+      "embeddedProfile": null,
+      "expectedPurpose": "ASCII RGB (P3) with maxval 255; decoder entry is AV_CODEC_ID_PPM.",
+      "generationMethod": "Hand-written P3 PNM payload with ASCII header and deterministic samples; no image library is used for the file bytes",
+      "referenceValues": {
+        "probePixels": [
+          {
+            "x": 0,
+            "y": 0,
+            "note": "first raster sample"
+          }
+        ],
+        "tolerance": {
+          "type": "exact",
+          "value": 0,
+          "appliesTo": "decoded dimensions and RGB values",
+          "reason": "ASCII samples are exact integers; no colour conversion applies"
+        },
+        "note": "PNM has no ICC mechanism; category 'pnm' exists to test the format entry contract, not colour management."
+      }
+    },
+    {
+      "path": "tests/fixtures/images/color/pnm_p4_bitmap_binary_8x8.pbm",
+      "sha256": "07f57599beab36dffcd960de19dc670e0bd58982df7a22cc8ff5892e76b01489",
+      "bytes": 15,
+      "width": 8,
+      "height": 8,
+      "bitDepth": 1,
+      "colorType": "PBM",
+      "alpha": false,
+      "category": "pnm",
+      "embeddedProfile": null,
+      "expectedPurpose": "Binary bitmap (P4), MSB first, 1 is black; decoder entry is AV_CODEC_ID_PBM.",
+      "generationMethod": "Hand-written P4 PNM payload with ASCII header and deterministic samples; no image library is used for the file bytes",
+      "referenceValues": {
+        "probePixels": [
+          {
+            "x": 0,
+            "y": 0,
+            "note": "first raster sample"
+          }
+        ],
+        "tolerance": {
+          "type": "exact",
+          "value": 0,
+          "appliesTo": "decoded dimensions and pixel bits",
+          "reason": "PBM stores one bit per pixel; padding bits are zero"
+        },
+        "note": "PNM has no ICC mechanism; category 'pnm' exists to test the format entry contract, not colour management."
+      }
+    },
+    {
+      "path": "tests/fixtures/images/color/pnm_p5_gray_8bit_8x8.pgm",
+      "sha256": "36143228258fc461e94f93883dfb6bafca6bc4db170b6cdd547d24f79130897a",
+      "bytes": 75,
+      "width": 8,
+      "height": 8,
+      "bitDepth": 8,
+      "colorType": "PGM",
+      "alpha": false,
+      "category": "pnm",
+      "embeddedProfile": null,
+      "expectedPurpose": "Binary 8-bit grayscale (P5) with maxval 255; decoder entry is AV_CODEC_ID_PGM.",
+      "generationMethod": "Hand-written P5 PNM payload with ASCII header and deterministic samples; no image library is used for the file bytes",
+      "referenceValues": {
+        "probePixels": [
+          {
+            "x": 0,
+            "y": 0,
+            "note": "first raster sample"
+          }
+        ],
+        "tolerance": {
+          "type": "exact",
+          "value": 0,
+          "appliesTo": "decoded dimensions and gray values",
+          "reason": "8-bit samples are byte-exact; no colour conversion applies"
+        },
+        "note": "PNM has no ICC mechanism; category 'pnm' exists to test the format entry contract, not colour management."
+      }
+    },
+    {
+      "path": "tests/fixtures/images/color/pnm_p5_gray_16bit_8x8.pgm",
+      "sha256": "130b0c1d247341dd455b45da9c39a1b5832f53cb64048260136c217658f90fbe",
+      "bytes": 141,
+      "width": 8,
+      "height": 8,
+      "bitDepth": 16,
+      "colorType": "PGM",
+      "alpha": false,
+      "category": "pnm",
+      "embeddedProfile": null,
+      "expectedPurpose": "Binary 16-bit grayscale (P5) with maxval 65535 and big-endian samples; decoder entry is AV_CODEC_ID_PGM and the source depth must be retained.",
+      "generationMethod": "Hand-written P5 PNM payload with ASCII header and deterministic samples; no image library is used for the file bytes",
+      "referenceValues": {
+        "probePixels": [
+          {
+            "x": 0,
+            "y": 0,
+            "note": "first raster sample"
+          }
+        ],
+        "tolerance": {
+          "type": "exact",
+          "value": 0,
+          "appliesTo": "decoded dimensions and 16-bit gray codes",
+          "reason": "16-bit samples are stored big-endian; the source bit depth must remain 16"
+        },
+        "note": "PNM has no ICC mechanism; category 'pnm' exists to test the format entry contract, not colour management."
+      }
+    },
+    {
+      "path": "tests/fixtures/images/color/pnm_p6_rgb_8bit_8x8.ppm",
+      "sha256": "63c6e2eeda5dc112286a84ec2f504b24e78bfabc2ae9018ea2f35424121745e3",
+      "bytes": 203,
+      "width": 8,
+      "height": 8,
+      "bitDepth": 8,
+      "colorType": "PPM",
+      "alpha": false,
+      "category": "pnm",
+      "embeddedProfile": null,
+      "expectedPurpose": "Binary 8-bit RGB (P6) with maxval 255; decoder entry is AV_CODEC_ID_PPM.",
+      "generationMethod": "Hand-written P6 PNM payload with ASCII header and deterministic samples; no image library is used for the file bytes",
+      "referenceValues": {
+        "probePixels": [
+          {
+            "x": 0,
+            "y": 0,
+            "note": "first raster sample"
+          }
+        ],
+        "tolerance": {
+          "type": "exact",
+          "value": 0,
+          "appliesTo": "decoded dimensions and RGB values",
+          "reason": "8-bit samples are byte-exact; no colour conversion applies"
+        },
+        "note": "PNM has no ICC mechanism; category 'pnm' exists to test the format entry contract, not colour management."
+      }
+    },
+    {
+      "path": "tests/fixtures/images/color/pnm_p7_rgba_8x8.pam",
+      "sha256": "747aeb933c700470c8dc8b23c4bafa0a8ff360870e3b6f1d629a2f39dc7109c8",
+      "bytes": 321,
+      "width": 8,
+      "height": 8,
+      "bitDepth": 8,
+      "colorType": "PAM",
+      "alpha": true,
+      "category": "pnm",
+      "embeddedProfile": null,
+      "expectedPurpose": "PAM (P7) RGBA with DEPTH 4 and TUPLTYPE RGB_ALPHA; decoder entry is AV_CODEC_ID_PAM.  Pillow's PPM plugin does not identify PAM; the application decodes it through FFmpeg and the verifier uses ffprobe.",
+      "generationMethod": "Hand-written P7 PNM payload with ASCII header and deterministic samples; no image library is used for the file bytes",
+      "referenceValues": {
+        "probePixels": [
+          {
+            "x": 0,
+            "y": 0,
+            "note": "first raster sample"
+          }
+        ],
+        "tolerance": {
+          "type": "exact",
+          "value": 0,
+          "appliesTo": "decoded dimensions and RGBA values",
+          "reason": "8-bit samples are byte-exact; alpha is stored straight"
+        },
+        "note": "PNM has no ICC mechanism; category 'pnm' exists to test the format entry contract, not colour management."
+      }
+    }
+  ]
+}

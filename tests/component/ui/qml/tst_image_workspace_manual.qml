@@ -2,216 +2,22 @@ import QtQuick
 import QtTest
 import "../../../../src/ui_qml/qml" as Dvs
 
+// Image workspace suite, driven through the REAL services the C++ runner installs
+// (ImageWorkspaceQmlTestMain.cpp): a real ImageReviewController fed with small injected
+// images, a real ColorClipboardController, and the review image provider. Mouse and
+// keyboard events are real throughout. The runner exists because the stock qmltestrunner
+// cannot register Dvs.Ui types, and the typed workspace rejects QtObject stand-ins at
+// component compile time.
 Item {
     id: root
 
     width: 960
     height: 640
 
-    // A real decoded 1x1 PNG: the workspace's hover mapping needs an Image with
-    // status Ready and a nonzero sourceSize. The mock pair geometry below is wider
-    // so the pair sampling coordinate math has room to change digit counts.
+    // A real decoded 1x1 PNG for the edit-controller stand-in's derived URL.
     readonly property string tinyPng: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
-    QtObject {
-        id: imageReview
-
-        property bool hasPrimary: true
-        property bool hasSecondary: true
-        property bool hasPair: true
-        property int compareMode: 0
-        property int viewMode: 0
-        property int contentGeneration: 1
-        property int primaryWidth: 64
-        property int primaryHeight: 64
-        property int secondaryWidth: 64
-        property int secondaryHeight: 64
-        property real zoom: 1
-        property real panX: 0.5
-        property real panY: 0.5
-        property real wipePosition: 0.5
-        property real fadePosition: 0.5
-        property int diffGain: 4
-        property bool diffResampled: false
-        property bool hasDiffResult: false
-        property string primaryPath: "file:///mock/a.png"
-        property string secondaryPath: "file:///mock/b.png"
-        property var cursorPixel: ({})
-        property string errorText: ""
-        property int panCalls: 0
-        property int zoomRectCalls: 0
-        // Mutable sample values: the column-stability test flips them 1 ↔ 255 and
-        // asserts the readout columns never move.
-        property var mockPixelsA: ({ "r": 120, "g": 130, "b": 140, "a": 255 })
-        property var mockPixelsB: ({ "r": 122, "g": 128, "b": 140, "a": 255 })
-
-        function imageUrl(slot) {
-            return root.tinyPng;
-        }
-        function clearCursorPixel() {
-            cursorPixel = ({});
-        }
-        // Mirrors the real controller: the hovered side's observation-aware sample is
-        // published as cursorPixel (the pair readout separately uses samplePixelOriginal).
-        function updateCursorPixel(slot, x, y) {
-            cursorPixel = samplePixel(slot, x, y);
-        }
-        // The observation-aware variant mirrors the real controller: a derived channel
-        // view repaints the values. The pair readout must never be built from this one.
-        function samplePixel(slot, x, y) {
-            const px = Math.floor(x);
-            const py = Math.floor(y);
-            if (px < 0 || py < 0)
-                return { "valid": false };
-            if (viewMode === 1)
-                return { "valid": true, "x": px, "y": py, "r": 255, "g": 255, "b": 255, "a": 255, "source": "original", "channelView": "alphaGray" };
-            return originalSample(slot, px, py);
-        }
-        // The original-buffer variant the pair readout is built on: raw values whatever
-        // the observation view is. Asymmetric pair by default: A=(120,130,140,255),
-        // B=(122,128,140,255) → Δ(B−A) = +2, −2, 0, 0.
-        function samplePixelOriginal(slot, x, y) {
-            const px = Math.floor(x);
-            const py = Math.floor(y);
-            if (px < 0 || py < 0)
-                return { "valid": false };
-            return originalSample(slot, px, py);
-        }
-        function originalSample(slot, px, py) {
-            const width = slot === 3 ? secondaryWidth : primaryWidth;
-            const height = slot === 3 ? secondaryHeight : primaryHeight;
-            if (px >= width || py >= height)
-                return { "valid": false };
-            const values = slot === 3 ? mockPixelsB : mockPixelsA;
-            return {
-                "valid": true,
-                "x": px,
-                "y": py,
-                "r": values.r,
-                "g": values.g,
-                "b": values.b,
-                "a": values.a,
-                "source": "original"
-            };
-        }
-        function panBy(x, y) {
-            panCalls++;
-        }
-        function setZoom(value) {
-            zoom = value;
-        }
-        function resetView() {
-            zoom = 1;
-        }
-        function zoomToRect(x0, y0, x1, y1) {
-            zoomRectCalls++;
-        }
-
-        // ---- Numeric readout format ------------------------------------------------------
-        // The controller owns the exact text so the readout, the tooltip and the clipboard
-        // can never disagree. The mock mirrors the two forms the real controller produces.
-        property int numericFormat: 0
-
-        function setNumericFormat(format) {
-            numericFormat = format;
-        }
-        function channelText(channel8) {
-            return numericFormat === 1 ? (channel8 / 255).toFixed(6) : String(channel8);
-        }
-        function channelText16(channel16) {
-            return numericFormat === 1 ? (channel16 / 65535).toFixed(6) : String(channel16);
-        }
-        function deltaText(low, high) {
-            const d = high - low;
-            if (numericFormat === 1) {
-                const value = (d / 255).toFixed(6);
-                return d > 0 ? "+" + value : (d < 0 ? value : value);
-            }
-            return d >= 0 ? "+" + d : String(d);
-        }
-        function deltaText16(low, high) {
-            const d = high - low;
-            if (numericFormat === 1) {
-                const value = (d / 65535).toFixed(6);
-                return d > 0 ? "+" + value : (d < 0 ? value : value);
-            }
-            return d >= 0 ? "+" + d : String(d);
-        }
-        function hexText(r, g, b, a) {
-            function byte(v) {
-                return (v & 0xff).toString(16).toUpperCase().padStart(2, "0");
-            }
-            return "#" + byte(r) + byte(g) + byte(b) + byte(a);
-        }
-        function rgbText(r, g, b) {
-            return numericFormat === 1
-                ? "rgb(" + (r / 255).toFixed(6) + ", " + (g / 255).toFixed(6) + ", " + (b / 255).toFixed(6) + ")"
-                : "rgb(" + r + ", " + g + ", " + b + ")";
-        }
-        function rgbaText(r, g, b, a) {
-            return numericFormat === 1
-                ? "rgba(" + (r / 255).toFixed(6) + ", " + (g / 255).toFixed(6) + ", " + (b / 255).toFixed(6) + ", " + (a / 255).toFixed(6) + ")"
-                : "rgba(" + r + ", " + g + ", " + b + ", " + a + ")";
-        }
-
-        // ---- Alpha threshold observation filter -------------------------------------------
-        property bool alphaFilterEnabled: false
-        property int alphaThreshold: 0
-        property bool alphaFilterActive: alphaFilterEnabled && viewMode === 2
-
-        function setAlphaFilterEnabled(enabled) {
-            alphaFilterEnabled = enabled;
-        }
-        function setAlphaThreshold(threshold) {
-            alphaThreshold = Math.max(0, Math.min(255, Math.round(threshold)));
-        }
-
-        // ---- Frozen probe sample & colour copy --------------------------------------------
-        property var frozenProbeSample: ({})
-
-        function captureProbeSample(slot, x, y) {
-            const sample = samplePixelOriginal(slot, x, y);
-            if (!sample.valid)
-                return false;
-            const copy = Object.assign({}, sample);
-            copy.slot = slot;
-            copy.side = slot === 3 ? "B" : "A";
-            copy.generation = contentGeneration;
-            copy.alphaHidden = alphaFilterEnabled && sample.a <= alphaThreshold;
-            frozenProbeSample = copy;
-            return true;
-        }
-        function clearFrozenProbeSample() {
-            frozenProbeSample = ({});
-        }
-        function probeColorText(format) {
-            const sample = frozenProbeSample;
-            if (!sample.valid)
-                return "";
-            if (format === 2)
-                return hexText(sample.r, sample.g, sample.b, sample.a);
-            if (format === 1)
-                return rgbaText(sample.r, sample.g, sample.b, sample.a);
-            return rgbText(sample.r, sample.g, sample.b);
-        }
-
-        // ---- Single-side close -------------------------------------------------------------
-        property int closePrimaryCalls: 0
-        property int closeSecondaryCalls: 0
-
-        function closePrimary() {
-            closePrimaryCalls++;
-            hasSecondary = false;
-            hasPair = false;
-            return true;
-        }
-        function closeSecondary() {
-            closeSecondaryCalls++;
-            hasSecondary = false;
-            hasPair = false;
-            return true;
-        }
-    }
+    readonly property var imageReview: fixture.controller
 
     QtObject {
         id: pairModel
@@ -233,7 +39,8 @@ Item {
     }
 
     // Minimal edit-controller mock: enough surface for the workspace bindings and the
-    // crop-ratio tests (the real behaviour lives in the controller suites).
+    // crop-ratio tests (the real behaviour lives in the controller suites). The edit
+    // controller is outside this pilot's typed boundary.
     QtObject {
         id: imageEditMock
 
@@ -285,19 +92,10 @@ Item {
     Dvs.ImageWorkspace {
         id: workspace
         anchors.fill: parent
-        controller: imageReview
+        controller: fixture.controller
+        colorClipboard: fixture.clipboard
         pairModel: pairModel
         sidebarVisible: false
-        colorClipboard: clipboardMock
-    }
-
-    QtObject {
-        id: clipboardMock
-        property string copiedText: ""
-        function copyText(text) {
-            copiedText = text;
-            return true;
-        }
     }
 
     TestCase {
@@ -305,19 +103,18 @@ Item {
         when: windowShown
 
         function init() {
+            // Every case starts from the same real material: the standard 64x64 solids.
+            // Re-opening bumps the content generation, which is exactly what invalidates
+            // stale probe samples and stale hover state from the previous case.
+            verify(fixture.openStandardPair());
             imageReview.compareMode = 0;
             imageReview.viewMode = 0;
-            imageReview.contentGeneration = 1;
-            imageReview.primaryWidth = 64;
-            imageReview.primaryHeight = 64;
-            imageReview.secondaryWidth = 64;
-            imageReview.secondaryHeight = 64;
+            imageReview.numericFormat = 0;
             imageReview.fadePosition = 0.5;
             imageReview.diffGain = 4;
-            imageReview.hasPair = true;
-            imageReview.hasSecondary = true;
-            imageReview.mockPixelsA = { "r": 120, "g": 130, "b": 140, "a": 255 };
-            imageReview.mockPixelsB = { "r": 122, "g": 128, "b": 140, "a": 255 };
+            imageReview.alphaFilterEnabled = false;
+            imageReview.alphaThreshold = 0;
+            imageReview.resetView();
             workspace.singleViewShowSecondary = false;
             workspace.trueSize = false;
             workspace.pixelGridEnabled = false;
@@ -331,9 +128,6 @@ Item {
             imageEditMock.endSession();
             workspace.marqueeNoticeText = "";
             workspace.clearImageHover();
-            imageReview.clearFrozenProbeSample();
-            imageReview.panCalls = 0;
-            imageReview.zoomRectCalls = 0;
             root.width = 960;
             workspace.forceActiveFocus();
             waitForRendering(workspace);
@@ -347,17 +141,17 @@ Item {
             verify(!grid.requested, "default is off");
             workspace.pixelGridEnabled = true;
             workspace.trueSize = true;
-            imageReview.zoom = 7.9;
+            imageReview.setZoom(7.9);
             wait(0);
             verify(!grid.active, "fit-relative zoom must not bypass 800% physical gate");
-            imageReview.zoom = 8;
+            imageReview.setZoom(8);
             tryCompare(grid, "active", true);
             verify(grid.columns + grid.rows < 600, "only visible grid lines are allocated");
             image.smooth = true;
             tryCompare(grid, "active", false);
             image.smooth = Qt.binding(function () { return workspace.zoom <= 2; });
             tryCompare(grid, "active", true);
-            imageReview.zoom = 1;
+            imageReview.setZoom(1);
             tryCompare(grid, "active", false);
         }
 
@@ -377,9 +171,9 @@ Item {
             return canvas;
         }
 
-        // Hover at a ratio of the DRAWN IMAGE rect, not of the canvas: the 1x1 fixture
-        // paints as a centred square, so canvas ratios outside that square land in the
-        // letterbox where applyHover clears the hover instead of establishing one.
+        // Hover at a ratio of the DRAWN IMAGE rect, not of the canvas: the 64x64 fixture
+        // paints as a centred square at fit, so canvas ratios outside that square land in
+        // the letterbox where applyHover clears the hover instead of establishing one.
         function hoverImageAt(ratioX) {
             const canvas = findChild(workspace, "imageCanvasMouseArea-2");
             verify(canvas !== null);
@@ -407,22 +201,27 @@ Item {
         function test_small_pointer_motion_switches_without_panning() {
             const canvas = findChild(workspace, "imageCanvasMouseArea-2");
             verify(canvas !== null);
-            imageReview.panCalls = 0;
             workspace.singleViewShowSecondary = false;
+            const zoomBefore = imageReview.zoom;
+            const panXBefore = imageReview.panX;
+            const panYBefore = imageReview.panY;
             const x = canvas.width / 2;
             const y = canvas.height / 2;
             mousePress(canvas, x, y, Qt.LeftButton);
             mouseMove(canvas, x + 2, y);
             mouseRelease(canvas, x + 2, y, Qt.LeftButton);
-            compare(imageReview.panCalls, 0);
+            compare(imageReview.zoom, zoomBefore);
+            compare(imageReview.panX, panXBefore, "a click must not pan the view");
+            compare(imageReview.panY, panYBefore);
             compare(workspace.singleViewShowSecondary, true);
         }
 
         function test_drag_pans_without_switching() {
             const canvas = findChild(workspace, "imageCanvasMouseArea-2");
             verify(canvas !== null);
-            imageReview.panCalls = 0;
             workspace.singleViewShowSecondary = false;
+            const panXBefore = imageReview.panX;
+            const panYBefore = imageReview.panY;
             const x = canvas.width / 2;
             const y = canvas.height / 2;
             mousePress(canvas, x, y, Qt.LeftButton);
@@ -439,7 +238,8 @@ Item {
             verify(active.parent.dragActive);
             compare(active.cursorShape, Qt.ClosedHandCursor);
             mouseRelease(canvas, x + 10, y, Qt.LeftButton);
-            verify(imageReview.panCalls > 0);
+            verify(imageReview.panX !== panXBefore || imageReview.panY !== panYBefore,
+                   "a real drag must move the view");
             compare(workspace.singleViewShowSecondary, false);
             compare(active.parent.dragActive, false);
             verify(active.cursorShape !== Qt.ClosedHandCursor);
@@ -456,16 +256,15 @@ Item {
         }
 
         function test_long_pixel_readout_stays_inside_available_status_width() {
-            imageReview.hasPair = false;
-            imageReview.hasSecondary = false;
-            imageReview.cursorPixel = ({ "valid": true, "x": 8000, "y": 8000,
-                "r": 255, "g": 255, "b": 255, "a": 255, "hex": "#FFFFFFFF",
-                "alphaPercent": 100, "nativeBitDepth": 16, "r16": 65535,
-                "g16": 65535, "b16": 65535 });
-            // No clearImageHover() after seeding: it clears the controller's
-            // cursorPixel on purpose (a stale readout must not outlive the pointer
-            // leaving the canvas), so it would erase this fixture. init() already
-            // reset the hover state for this case.
+            // A real display-converted high-depth pair: the readout carries the unquantized
+            // 16-bit details row plus 4-digit coordinates, the same long content the status
+            // bar must lay out without overlap at the 960px floor.
+            verify(fixture.openHighDepthPair(1200, 1200), "the high-depth fixture must open");
+            imageReview.closeSecondary();
+            verify(imageReview.hasPrimary);
+            verify(!imageReview.hasPair);
+            imageReview.updateCursorPixel(2, 1199, 1199);
+            verify(imageReview.captureProbeSample(2, 1199, 1199));
             const details = findChild(workspace, "imageStatusDetails");
             const hints = findChild(workspace, "imageStatusHints");
             const pixel = findChild(workspace, "imagePixelReadout");
@@ -476,7 +275,6 @@ Item {
             wait(100);
             tryVerify(() => details.y >= hints.y + hints.height);
             tryVerify(() => pixel.width <= details.width);
-            imageReview.cursorPixel = ({});
         }
 
         // ---- Pair sampling: A/B originals and Δ = B−A ----------------------------------
@@ -517,11 +315,12 @@ Item {
             hoverAt(0.5, 0.5);
             verify(workspace.pairSample !== null);
             verify(workspace.pairSample.b && workspace.pairSample.b.valid);
-            imageReview.secondaryWidth = 48;
-            imageReview.secondaryHeight = 48;
-            // A stationary pointer must not keep a stale sample: the view flip refreshes.
-            imageReview.viewMode = 2;
-            imageReview.viewMode = 0;
+            // Re-open with an unequal pair. The displayed images reload under the pointer
+            // (a stationary pointer over reloading material is not a valid sample), so the
+            // hover is re-established against the NEW material: a stale aligned sample must
+            // not survive the generation change, and the fresh one must name B unaligned.
+            verify(fixture.openPair(64, 64, [120, 130, 140, 255], 48, 48, [122, 128, 140, 255]));
+            hoverAt(0.5, 0.5);
             verify(workspace.pairSample !== null);
             verify(workspace.pairSample.b && workspace.pairSample.b.unaligned === true);
             const text = workspace.pairReadoutText();
@@ -533,19 +332,12 @@ Item {
             verify(colBR !== null);
             compare(colBR.visible, false, "unaligned B must not show fabricated columns");
             workspace.clearImageHover();
-            imageReview.secondaryWidth = 64;
-            imageReview.secondaryHeight = 64;
         }
 
         function test_pair_columns_keep_their_positions_across_values_and_widths() {
-            // Wide mock geometry so hover positions change the coordinate digit count
+            // Wide injected geometry so hover positions change the coordinate digit count
             // (3 digits near the left of the picture, 4 digits near the right).
-            imageReview.primaryWidth = 9999;
-            imageReview.primaryHeight = 9999;
-            imageReview.secondaryWidth = 9999;
-            imageReview.secondaryHeight = 9999;
-            imageReview.mockPixelsA = { "r": 1, "g": 2, "b": 3, "a": 4 };
-            imageReview.mockPixelsB = { "r": 255, "g": 255, "b": 255, "a": 255 };
+            verify(fixture.openPair(2000, 2000, [1, 2, 3, 4], 2000, 2000, [255, 255, 255, 255]));
             const names = ["imagePairCoordA", "imagePairColAR", "imagePairColAG", "imagePairColAB", "imagePairColAAlpha", "imagePairCoordB", "imagePairColBR", "imagePairColBG", "imagePairColBB", "imagePairColBAlpha", "imagePairDeltaLabel", "imagePairColDeltaR", "imagePairColDeltaG", "imagePairColDeltaB", "imagePairColDeltaAlpha"];
             const columns = {};
             for (const name of names) {
@@ -570,7 +362,7 @@ Item {
             for (const name of names)
                 xsBefore[name] = columns[name].x;
             // Values flip 1 → 3 digits, coordinates keep their width budget.
-            imageReview.mockPixelsA = { "r": 100, "g": 101, "b": 102, "a": 103 };
+            verify(fixture.openPair(2000, 2000, [100, 101, 102, 103], 2000, 2000, [255, 255, 255, 255]));
             hoverImageAt(0.05);
             wait(30);
             for (const name of names)
@@ -626,8 +418,8 @@ Item {
             verify(card !== null);
             verify(card.text.indexOf("A 原图") >= 0, "pair hover names the side's original");
             // A single image with a derived channel view must not claim original RGBA.
-            imageReview.hasPair = false;
-            imageReview.hasSecondary = false;
+            imageReview.closeSecondary();
+            verify(!imageReview.hasPair);
             workspace.clearImageHover();
             hoverAt(0.5, 0.5);
             imageReview.viewMode = 1;
@@ -640,8 +432,6 @@ Item {
             imageReview.viewMode = 0;
             workspace.crosshairVerbose = false;
             workspace.clearImageHover();
-            imageReview.hasPair = true;
-            imageReview.hasSecondary = true;
         }
 
         // ---- Peek -----------------------------------------------------------------------
@@ -703,7 +493,8 @@ Item {
             workspace.forceActiveFocus();
             keyPress(Qt.Key_QuoteLeft);
             verify(workspace.peekActive);
-            imageReview.contentGeneration = 2;
+            // A new material generation (here: the same images re-opened) must end the peek.
+            verify(fixture.openStandardPair());
             tryCompare(workspace, "peekActive", false);
             if (!workspace.peekActive)
                 keyRelease(Qt.Key_QuoteLeft);
@@ -826,7 +617,7 @@ Item {
 
         function test_z_flips_fit_and_true_size() {
             workspace.trueSize = false;
-            imageReview.zoom = 2.5;
+            imageReview.setZoom(2.5);
             workspace.forceActiveFocus();
             keyClick(Qt.Key_Z);
             compare(workspace.trueSize, true);
@@ -840,12 +631,12 @@ Item {
 
         function test_marquee_outside_reports_and_inside_zooms() {
             const canvas = hoverAt(0.5, 0.5);
+            const zoomBefore = imageReview.zoom;
             // Far-left letterbox: the whole rectangle misses the image.
-            imageReview.zoomRectCalls = 0;
             mousePress(canvas, 20, 20, Qt.LeftButton, Qt.ShiftModifier);
             mouseMove(canvas, 60, 60);
             mouseRelease(canvas, 60, 60, Qt.LeftButton);
-            compare(imageReview.zoomRectCalls, 0);
+            compare(imageReview.zoom, zoomBefore, "a marquee that misses the image must not zoom");
             tryVerify(() => workspace.marqueeNoticeText.length > 0);
             verify(workspace.marqueeNoticeText.indexOf("框选") >= 0);
             // Negative control: a marquee on the picture zooms and stays quiet.
@@ -857,7 +648,7 @@ Item {
             mousePress(canvas, cx - 30, cy - 30, Qt.LeftButton, Qt.ShiftModifier);
             mouseMove(canvas, cx + 30, cy + 30);
             mouseRelease(canvas, cx + 30, cy + 30, Qt.LeftButton);
-            tryVerify(() => imageReview.zoomRectCalls === 1);
+            tryVerify(() => imageReview.zoom > zoomBefore);
             compare(workspace.marqueeNoticeText, "");
             workspace.clearImageHover();
         }
@@ -938,7 +729,7 @@ Item {
             verify(chip169 !== null);
             // Binding-chain guards: the chip rides the floating action bar, whose
             // visibility follows the selection (cropActionBar -> cropOverlay -> box).
-            // With this fixture the 1x1 image makes imgScale ~500, so the mock's
+            // With this fixture the image maps with a high scale, so the mock's
             // 64x48-pixel selection maps far below the viewport — the bar only stays
             // clickable because its y clamps inside the viewport and above the HUD.
             verify(chip169.visible, "the 16:9 chip must be visible in the crop bar");
@@ -1037,7 +828,7 @@ Item {
             verify(fit !== null && trueSize !== null && reset !== null);
             verify(fit.visible && trueSize.visible && reset.visible);
             workspace.trueSize = true;
-            imageReview.zoom = 3;
+            imageReview.setZoom(3);
             mouseClick(fit, fit.width / 2, fit.height / 2, Qt.LeftButton);
             tryCompare(workspace, "trueSize", false);
             compare(imageReview.zoom, 1);
@@ -1110,7 +901,6 @@ Item {
             tryCompare(button, "visible", true);
             verify(button.text.indexOf("整数码值") >= 0, "the integer form is the default");
 
-            imageReview.numericFormat = 0;
             workspace.setNumericFormat(0);
             compare(workspace.channelText(12), "12");
             compare(imageReview.hexText(12, 34, 56, 200), "#0C2238C8");
@@ -1171,10 +961,6 @@ Item {
             compare(imageReview.probeColorText(0), "rgb(120, 130, 140)");
             compare(imageReview.probeColorText(1), "rgba(120, 130, 140, 255)");
             compare(imageReview.probeColorText(2), "#78828CFF");
-            mouseClick(button, button.width / 2, button.height / 2);
-            tryCompare(rgb.parent, "visible", true);
-            rgb.triggered();
-            tryCompare(clipboardMock, "copiedText", "rgb(120, 130, 140)");
 
             // The normalized form is offered as its own labelled entry, never silently
             // mixed with the integer one.
@@ -1185,11 +971,65 @@ Item {
             compare(imageReview.probeColorText(2), "#78828CFF");
             workspace.setNumericFormat(0);
 
-            // With no sample at all the copy is disabled and says why, rather than failing
-            // after the click.
+            // The real adapter writes through the system clipboard and verifies the write.
+            // The success path is a mandatory acceptance condition. First confirm the session
+            // has a usable clipboard by writing a distinct sentinel DIRECTLY to the clipboard
+            // (retried against transient OLE contention, and independent of the copy
+            // controller); a clipboard that cannot be written at all skips this case - never
+            // counted as a pass. Then drive the real menu action and require the success notice
+            // plus the exact payload on the clipboard: a copy that only ever reports failure
+            // fails here instead of passing on a failure branch.
+            var sentinelWritten = false;
+            for (var gi = 0; gi < 5 && !sentinelWritten; ++gi) {
+                sentinelWritten = fixture.setClipboardText("DVS-CLIPBOARD-SENTINEL-should-be-overwritten");
+                if (!sentinelWritten)
+                    wait(20);
+            }
+            if (!sentinelWritten)
+                skip("no usable clipboard in this session: the copy success path cannot be exercised here");
+            var copyOk = false;
+            for (var ci = 0; ci < 5 && !copyOk; ++ci) {
+                mouseClick(button, button.width / 2, button.height / 2);
+                tryCompare(rgb.parent, "visible", true);
+                rgb.triggered();
+                wait(30);
+                copyOk = workspace.marqueeNoticeText.indexOf("已复制") >= 0;
+            }
+            verify(copyOk,
+                   "a verified copy must report success, not a silent failure: "
+                   + workspace.marqueeNoticeText);
+            compare(fixture.clipboardText(), "rgb(120, 130, 140)");
+        }
+
+        // ---- Probe colour copy: the failure path -------------------------------------------
+        //
+        // The controllable failure boundary at the UI: with no frozen sample the copy action
+        // explains itself, returns false, and keeps the button disabled - it never writes and
+        // never reports a silent success.
+
+        function test_copy_reports_failure_and_returns_false_without_a_sample() {
+            const canvas = hoverImageAt(0.5);
+            verify(canvas !== null);
+            const button = findChild(workspace, "imageCopyColorButton");
+            const label = findChild(workspace, "imageCopyColorSample");
+            verify(button !== null && label !== null);
+            tryCompare(button, "enabled", true);
+
+            // Park the pointer off the pixel so the frozen sample is the last valid one and a
+            // live hover cannot re-populate it after it is cleared.
+            mouseMove(button, button.width / 2, button.height / 2);
+            tryCompare(workspace, "hoverPoint", null);
+
+            // Drop the sample: the copy is disabled and the menu says why.
             imageReview.clearFrozenProbeSample();
             tryCompare(button, "enabled", false);
             verify(label.text.indexOf("无有效样本") >= 0, "the menu explains the disabled state");
+
+            // Driving the action anyway must report the failure and return false.
+            const copied = workspace.copyProbeColor(0);
+            verify(copied === false, "a copy with no sample must return false");
+            verify(workspace.marqueeNoticeText.indexOf("没有可复制的颜色样本") >= 0,
+                   "the copy must explain the missing sample: " + workspace.marqueeNoticeText);
         }
 
         // ---- Alpha threshold observation filter -------------------------------------------------
@@ -1270,10 +1110,14 @@ Item {
             const reason = findChild(workspace, "imageCloseSecondaryReason");
             verify(chipB !== null && menu !== null && closeAction !== null && reason !== null);
             tryCompare(chipB, "visible", true);
+            // The spy must be bound to the function-local chip explicitly: an unqualified
+            // name in the temporary object's scope resolves to nothing, which used to
+            // leave the target null and the "no direct look" assertion vacuous.
             const spyDirect = createTemporaryQmlObject(
-                "import QtTest; SignalSpy { target: chipB; signalName: \"directLookRequested\" }",
+                "import QtTest; SignalSpy { signalName: \"directLookRequested\" }",
                 root);
             verify(spyDirect !== null);
+            spyDirect.target = chipB;
             const spyClose = createTemporaryQmlObject(
                 "import QtTest; SignalSpy { target: workspace; signalName: \"closeSideRequested\" }",
                 root);
@@ -1291,20 +1135,22 @@ Item {
             compare(spyDirect.count, 0);
 
             // Closing B keeps A; closing A keeps B. The chip asks for exactly its own side,
-            // and the workspace routes it through the guarded single-side close.
+            // and the workspace routes it through the guarded single-side close. The real
+            // controller's state names the outcome: closing B keeps A as the only image,
+            // and closing the last image reaches the empty state.
             closeAction.triggered();
             compare(spyClose.count, 1);
             compare(String(spyClose.signalArguments[0][0]), "3", "the B chip asks for slot 3");
-            compare(imageReview.closeSecondaryCalls, 1, "closing B goes through closeSecondary");
-            compare(imageReview.closePrimaryCalls, 0, "closing B must not touch A");
+            verify(imageReview.hasPrimary, "closing B must keep A");
+            verify(!imageReview.hasSecondary, "closing B removes exactly B");
             const chipA = findChild(workspace, "imageSourceChipA");
             const closeA = findChild(workspace, "imageClosePrimaryAction");
             verify(chipA !== null && closeA !== null);
             closeA.triggered();
             compare(spyClose.count, 2);
             compare(String(spyClose.signalArguments[1][0]), "2", "the A chip asks for slot 2");
-            compare(imageReview.closePrimaryCalls, 1, "closing A goes through closePrimary");
-            compare(imageReview.closeSecondaryCalls, 1, "closing A must not close B twice");
+            verify(!imageReview.hasPrimary,
+                   "closing the last image must reach the empty state, not a fabricated side");
         }
     }
 }

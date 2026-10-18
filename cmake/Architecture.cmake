@@ -35,6 +35,10 @@ function(_dvs_allowed_dependencies target outputVariable)
             dvs_graphics_d3d11
             dvs_presentation_contract
         )
+    elseif(target STREQUAL "dvs_ui_qml_types")
+        # Tooling-only module: the QML_FOREIGN wrappers describe the bridge's types, so the
+        # only project edge is the bridge itself. Nothing links this leaf.
+        set(allowed dvs_ui_d3d11_bridge)
     elseif(target STREQUAL "dvs_ui_qml")
         set(allowed dvs_ui_models dvs_ui_d3d11_bridge)
     elseif(target STREQUAL "dvs_media_ffmpeg")
