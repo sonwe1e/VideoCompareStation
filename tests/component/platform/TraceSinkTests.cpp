@@ -100,26 +100,6 @@ TEST(TraceSinkTests, FileSinkExportsOptionalIncomingIdentityFields) {
               R"("is":1,"ie":1,"igen":2,"idev":3,"ireq":9})");
 }
 
-TEST(TraceSinkTests, MemorySinkRemainsBoundedAndAccumulatesOverflow) {
-    MemoryTraceSink sink{1U};
-    const application::TraceEvent event{
-        .kind = application::TraceEventKind::CacheHit,
-        .timestampMicroseconds = 1U,
-    };
-    EXPECT_TRUE(sink.append(event));
-    EXPECT_FALSE(sink.append(event));
-    EXPECT_TRUE(sink.recordOverflow(2U));
-    EXPECT_TRUE(sink.recordOverflow(3U));
-    EXPECT_TRUE(sink.finalize());
-
-    EXPECT_EQ(sink.events().size(), 1U);
-    EXPECT_EQ(sink.overflowCount(), 5U);
-
-    sink.clear();
-    EXPECT_TRUE(sink.events().empty());
-    EXPECT_EQ(sink.overflowCount(), 0U);
-}
-
 TEST(TraceSinkTests, FileSinkDoesNotDropMaximumWidthSchemaValues) {
     test::ScopedTemporaryDirectory directory{"dvs-trace-width"};
     const std::filesystem::path path = directory.path() / "trace.jsonl";

@@ -128,6 +128,10 @@ Item {
             imageEditMock.endSession();
             workspace.marqueeNoticeText = "";
             workspace.clearImageHover();
+            // FLOW3: the directory cursor is host-owned state; a leftover flag would make the
+            // arrow keys step through a folder in a case that never opened one.
+            workspace.folderBrowseActive = false;
+            workspace.folderBrowseText = "";
             root.width = 960;
             workspace.forceActiveFocus();
             waitForRendering(workspace);
@@ -569,8 +573,45 @@ Item {
             workspace.imageEdit = null;
         }
 
-        function test_modifier_combos_never_toggle_or_peek() {
-            // Ctrl/Alt variants keep their platform meanings: no pair flip, no peek.
+        // ---- FLOW3 single-directory stepping ------------------------------------------
+
+        function test_arrows_step_the_single_directory_only_while_a_cursor_is_active() {
+            const steps = [];
+            const jumps = [];
+            const onStep = delta => steps.push(delta);
+            const onJump = toLast => jumps.push(toLast);
+            workspace.folderStepRequested.connect(onStep);
+            workspace.folderJumpRequested.connect(onJump);
+            try {
+                workspace.forceActiveFocus();
+                keyClick(Qt.Key_Right);
+                keyClick(Qt.Key_Left);
+                compare(steps.length, 0, "without a directory cursor the arrows must stay quiet");
+
+                workspace.folderBrowseActive = true;
+                workspace.folderBrowseText = "2 / 7";
+                keyClick(Qt.Key_Right);
+                keyClick(Qt.Key_Left);
+                keyClick(Qt.Key_Down);
+                keyClick(Qt.Key_Up);
+                compare(steps.join(","), "1,-1,1,-1", "arrow direction maps to directory direction");
+                keyClick(Qt.Key_Home);
+                keyClick(Qt.Key_End);
+                compare(jumps.join(","), "false,true", "Home/End reach the directory edges");
+
+                const label = findChild(workspace, "imageFolderPositionLabel");
+                verify(label !== null);
+                compare(label.visible, true);
+                compare(label.text, "2 / 7", "the toolbar states the position the keys will move from");
+            } finally {
+                workspace.folderStepRequested.disconnect(onStep);
+                workspace.folderJumpRequested.disconnect(onJump);
+                workspace.folderBrowseActive = false;
+                workspace.folderBrowseText = "";
+            }
+        }
+
+        function test_modifier_combos_never_toggle_or_peek() {            // Ctrl/Alt variants keep their platform meanings: no pair flip, no peek.
             imageReview.compareMode = 7;
             workspace.singleViewShowSecondary = false;
             workspace.forceActiveFocus();

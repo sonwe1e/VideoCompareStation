@@ -23,25 +23,21 @@ public:
     explicit IssueRecordRepository(std::filesystem::path documentPath = {});
     ~IssueRecordRepository() override;
 
-    [[nodiscard]] const std::filesystem::path& documentPath() const noexcept;
-
     [[nodiscard]] application::IssueRecordIoResult
     load(const std::filesystem::path& path) const override;
     [[nodiscard]] bool save(const std::filesystem::path& path,
                             const std::vector<application::IssueRecord>& records,
                             std::string* error) const override;
 
-    // Legacy helpers used by tests; load/save are the port surface.
-    [[nodiscard]] IssueRecordDocument loadDocument() const;
-    [[nodiscard]] IssueRecordDocument loadDocumentFrom(const std::filesystem::path& path) const;
-    [[nodiscard]] bool saveDocument(const std::vector<application::IssueRecord>& records,
-                                    std::string* error) const;
-
+    // Canonical serialization of one document; exposed so the round-trip and legacy-shape tests
+    // can inspect the wire format without a temporary file.
     [[nodiscard]] static std::string
     encodeDocument(const std::vector<application::IssueRecord>& records);
     [[nodiscard]] static IssueRecordDocument decodeDocument(const std::string& text);
 
 private:
+    [[nodiscard]] IssueRecordDocument loadDocumentFrom(const std::filesystem::path& path) const;
+
     std::filesystem::path documentPath_;
 };
 

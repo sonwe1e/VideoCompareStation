@@ -1,5 +1,68 @@
 # 视觉审查问题台账
 
+## 2026-10-19 发布 2.5.1
+
+状态：已发布（tag `v2.5.1`，未签名 ZIP + SHA256SUMS）。本版包含上面 FLOW3 首个切片
+（状态已随之转为已交付）、未使用代码审计的修复与清理，以及版本号 `2.5.0→2.5.1`。
+
+- 交付内容与用户可见变化见 [发布说明](../releases/v2.5.1.md)。
+- Release 预设 1449 项：1446 通过，3 项仅在 `-j 8` 并发下超时／偶发失败，串行重跑全过；
+  `packaged-smoke` 3/3、`shutdown-soak` 20 次、`format-check`（432 个 C++ 文件）与 lint 通过。
+- 包身份：272 文件，ZIP 28,355,788 bytes，SHA256 `46570CA1…AC4C6B`；与 2.5.0 清单一一对应，
+  58 个文件字节不同（3 个应用二进制 + 46 个 Qt + 9 个第三方运行时，版本未变）。
+- **未执行**：真实 D3D11VA／性能门禁与物理显示、干净 Windows 验收。本机为日常设备，
+  按[测试环境分离](test-environment-separation.md)不自动启动；不据此宣称硬件性能达标。
+- 证据：`out/verification/release-v2.5.1/`（release-ctest、packaged-smoke、shutdown-soak、
+  format-check、lint、cpack 日志与产物哈希）。
+
+## 2026-10-18 FLOW3 单目录图片连续查看（工作区实现，未提交）
+
+状态：**已随 2.5.1 交付**（2026-10-19）。下列"未提交、未跑完整回归"等描述保留为当时记录；
+Release 全量回归结果见上一条。范围是计划中 FLOW3 的首个切片：
+单图打开后在同目录内手动翻页；不含递归扫描、媒体库、自动轮播或多图模型。
+
+- **新增 `ui::ImageFolderCursor`**（`src/ui_qml/include/dvs/ui/ImageFolderCursor.h`）：只列当前目录，
+  扩展名走 `application::stillImageExtensions()`（13 种，与路由同一来源）；自然序；首尾不绕回；
+  每次定位重新扫描，因此目录内新增/删除会在下一次翻页时生效；目录超过 10000 张时
+  **关闭浏览而不是给出截断序列**，避免"下一张"不是真正的下一张。
+- **自然序抽为 `dvs/ui/NaturalOrder.h`**，`VideoFolderModel` 改为共用；视频侧行为未变
+  （其套件 14 项通过、2 项按大小写不敏感文件系统跳过）。
+- **`Main.qml` 接线**：单图提交后 `setCurrentFile(primaryPath)`；图片对、双文件夹与关闭任务时
+  `clear()`（清空在 `commitWorkspace` 内统一发生，单图随后重新定位）。翻页仍走
+  `performImageReview`，沿用 T4 的请求身份规则：失败的邻居保留当前图，迟到的请求不能覆盖新请求。
+  编辑副本有未保存修改时拒绝翻页并提示先另存或结束编辑。
+- **`ImageWorkspace.qml`**：无配对列表时 `←`/`→`/`↑`/`↓` 翻目录、`Home`/`End` 到首尾；有配对
+  列表时仍逐行切换配对（原行为优先）。工具栏显示「当前 / 总数」。
+- **验证**：`ui.ImageFolderCursorTests` 8 项通过；`ui.ImageWorkspaceManual` 新增键位契约通过；
+  `ui.MainQmlContractTests.SingleImageOpenArmsTheDirectoryCursorAndOneStepOpensTheNeighbour` 与
+  `DirtyEditCopyBlocksDirectoryStepping` 通过。**变异**：把 `setCurrentFile` 换成空语句后，端到端
+  用例在 "a committed single image must arm the directory cursor" 处失败；恢复后通过。
+  格式与静态检查：clang-format 19.1.5（改动文件 dry-run 无差异）、`qmllint --max-warnings 0`
+  （`Main.qml`、`ImageWorkspace.qml`）通过。
+- **未执行**：完整 dev 回归（本会话 CTest 在 `dvs_graphics_device_broker` 的用例发现阶段超时，
+  疑似无交互桌面/GPU，非用例失败）、Release 构建、真实 Windows 实窗与跨 DPI 人工验收、
+  `shutdown-soak` 与 `packaged-smoke`。
+- **尾巴（同日补齐）**：
+  1. **目录变更的刷新**：窗口重新获得激活且当前是单图任务时调用 `refreshImageFolderCursor()` 重扫，
+     删除/改名后序号与邻居列表立即更新；游标为空（图片对或双文件夹任务）时不动，避免给配对任务
+     装上目录序列。
+  2. **未保存编辑的拦截扩到全部入口**：`imageTaskSwitchBlocked()` 统一在 `performImageReview`、
+     `requestCompareFolders` 与 `closeCurrentTask` 前置判断；干净会话在提交新图时自动 `endSession()`，
+     避免编辑态停在与会话不一致的另一张图上。
+  3. **中文排序**：保持码点序、不引入 ICU/拼音，理由写入 `NaturalOrder.h` 与决策册 D-013。
+- **新增验证**：`DirtyEditCopyBlocksDirectoryStepping` 扩展到"直接打开 / Ctrl+W / 干净会话放行"三条路径；
+  变异（把 `performImageReview` 的守卫短路）使该用例失败，恢复后通过。基线对比：把
+  `ImageWorkspace.qml` 与对应 QML 测试回退到 `723e7e1` 后连跑 3 次，`test_each_side_card_names_its_own_original`
+  仍失败 2 次——**该 hover 偶发失败与本轮改动无关**，属于既有测试抖动，未在本轮处理。
+- **本地打包副作用（必须知道）**：为体验本轮改动执行了 `cpack --preset release-zip`，CPack 会写同名
+  `out/package/zip/CompareStation-2.5.0-windows-x64.zip`，**覆盖了 2026-10-17 记录的基线包**
+  （28,327,485 bytes / SHA256 `28176C…0BEBDE4`）。本次产物已改名为
+  `CompareStation-2.5.0-local-flow3-20261018.zip`（28,175,860 bytes / SHA256
+  `99d2BF6F7FE3C8597E53F52675C10D8EA14F12FDE526539712AF59A98CED7B97`），解压后
+  `CompareStationCli --startup-check` 退出 0。基线包需从发布资产取回或在 `8c90005` 重新打包，
+  才能继续作为 [可复现基线](reproducible-baseline.md) 的证据；`out/package/SHA256SUMS.txt` 里的
+  `6572f050…` 已不再指向磁盘上的同名文件。
+
 ## 2026-10-17 Windows 软件 CI 迁移到 GitHub 托管环境
 
 状态：已合入 main（`66475bb`，2026-10-17），验收绑定 PR head `4f2e0dd`。首轮完整云端回归

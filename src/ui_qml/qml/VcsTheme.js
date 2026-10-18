@@ -64,7 +64,6 @@ var accentPressed = "#0054b8"
 // `focusReason` naming a keyboard reason; ReviewOffsetSpinBox's keyboardFocusRing is the
 // pattern and tst_review_offset_spin_box pins it.
 var focus = "#64d2ff"
-var strongFocus = "#d1e7ff"
 
 // Hairline separators and control outlines. Everything is a white veil so the line adapts to
 // the surface underneath; only floating popups carry a slightly stronger edge.
@@ -86,7 +85,6 @@ var warningBorder = "#b89b0e"
 var warningText = "#ffe066"
 var success = "#30d158"
 var successFill = "#248a3d"
-var successFillHover = "#2ea54b"
 var successBorder = "#30d158"
 // Badge ground for success-coloured text; successFill is too light for it to reach AA.
 var successPanel = "#123f22"

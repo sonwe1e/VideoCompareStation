@@ -171,7 +171,14 @@ HRESULT ExplorerCommand::GetTitle(IShellItemArray* const selection, LPWSTR* cons
     if (title == nullptr) {
         return E_POINTER;
     }
-    return SHStrDupW(titleFor(classifySelection(selectedPaths(selection))), title);
+    // This runs inside Explorer's process: an escaping bad_alloc would take the host down, so the
+    // allocation-heavy path is contained like GetIcon/GetState/Invoke.
+    *title = nullptr;
+    try {
+        return SHStrDupW(titleFor(classifySelection(selectedPaths(selection))), title);
+    } catch (...) {
+        return E_OUTOFMEMORY;
+    }
 }
 
 HRESULT ExplorerCommand::GetIcon(IShellItemArray*, LPWSTR* const icon) noexcept {
@@ -192,7 +199,12 @@ HRESULT ExplorerCommand::GetToolTip(IShellItemArray* const selection,
     if (toolTip == nullptr) {
         return E_POINTER;
     }
-    return SHStrDupW(toolTipFor(classifySelection(selectedPaths(selection))), toolTip);
+    *toolTip = nullptr;
+    try {
+        return SHStrDupW(toolTipFor(classifySelection(selectedPaths(selection))), toolTip);
+    } catch (...) {
+        return E_OUTOFMEMORY;
+    }
 }
 
 HRESULT ExplorerCommand::GetCanonicalName(GUID* const commandName) noexcept {

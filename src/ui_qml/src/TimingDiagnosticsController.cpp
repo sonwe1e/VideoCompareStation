@@ -392,10 +392,6 @@ double TimingDiagnosticsController::renderToAckP95Ms() const noexcept {
     return renderToAckP95Ms_;
 }
 
-double TimingDiagnosticsController::renderToAckMaxMs() const noexcept {
-    return renderToAckMaxMs_;
-}
-
 QString TimingDiagnosticsController::systemPresentationStatus() const {
     return systemPresentationStatus_;
 }
@@ -544,7 +540,6 @@ void TimingDiagnosticsController::updateFromSummary(
         drawToAckP95Ms_ = 0.0;
         drawToAckMaxMs_ = 0.0;
         renderToAckP95Ms_ = 0.0;
-        renderToAckMaxMs_ = 0.0;
         return;
     }
 
@@ -572,7 +567,6 @@ void TimingDiagnosticsController::updateFromSummary(
     const auto& ackStage = latestRun.stages[static_cast<std::size_t>(
         application::PlaybackEvidenceStage::kRenderToPresentationAck)];
     renderToAckP95Ms_ = static_cast<double>(ackStage.p95Microseconds) / 1000.0;
-    renderToAckMaxMs_ = static_cast<double>(ackStage.maxMicroseconds) / 1000.0;
 }
 
 } // namespace dvs::ui

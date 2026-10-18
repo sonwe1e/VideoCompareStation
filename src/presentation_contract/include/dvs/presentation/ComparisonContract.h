@@ -74,7 +74,6 @@ struct ComparisonModeDescriptor final {
     std::uint8_t maximumSourceCount = 3U;
     bool usesPair = false;
     bool supportsThreshold = false;
-    bool supportsRoi = true;
 
     [[nodiscard]] constexpr bool supportsSourceCount(const std::size_t sourceCount) const noexcept {
         return sourceCount >= minimumSourceCount && sourceCount <= maximumSourceCount;

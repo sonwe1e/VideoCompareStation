@@ -20,7 +20,6 @@ class IssueLogController final : public QObject {
     Q_PROPERTY(int count READ count NOTIFY issuesChanged)
     Q_PROPERTY(QString statusText READ statusText NOTIFY statusChanged)
     Q_PROPERTY(QString lastError READ lastError NOTIFY statusChanged)
-    Q_PROPERTY(QString documentPath READ documentPath NOTIFY issuesChanged)
 
 public:
     explicit IssueLogController(application::IIssueRecordRepository* repository,
@@ -40,12 +39,10 @@ public:
     // entry point receives it from Main.qml before captureCurrentIssue(). -1 means "not in the
     // image workspace / not captured".
     Q_INVOKABLE void setImageBackgroundMode(int mode) noexcept;
-    void setDefaultDocumentPath(const QUrl& path) noexcept;
 
     [[nodiscard]] int count() const noexcept;
     [[nodiscard]] QString statusText() const noexcept;
     [[nodiscard]] QString lastError() const noexcept;
-    [[nodiscard]] QString documentPath() const noexcept;
 
     Q_INVOKABLE bool captureCurrentIssue(const QString& note);
     // Attaches (or replaces) the note of an already-captured record: the observation is
@@ -87,7 +84,6 @@ private:
     QObject* videoSurface_ = nullptr;
     QString workspaceMode_ = QStringLiteral("video");
     int imageBackgroundMode_ = -1;
-    QString documentPath_;
     std::vector<StoredIssue> issues_;
     QString statusText_;
     QString lastError_;

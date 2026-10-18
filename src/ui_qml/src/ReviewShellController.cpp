@@ -504,14 +504,6 @@ QVariantMap ReviewShellController::takePendingAction() {
     return action;
 }
 
-void ReviewShellController::cancelPendingAction() {
-    if (pendingAction_.isEmpty()) {
-        return;
-    }
-    pendingAction_.clear();
-    Q_EMIT stateChanged();
-}
-
 bool ReviewShellController::enqueueStartupRequest(const int kind, const QVariantList& files) {
     if (kind <= 0 || files.isEmpty() || files.size() > 3) {
         return false;

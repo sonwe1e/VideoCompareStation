@@ -443,6 +443,10 @@ runDesktop(int& argc,
             std::filesystem::path{std::filesystem::temp_directory_path() / "dvs_still_open.log"}};
         early << "START " << stillImage->string() << '\n';
     }
+    // P03 protocol import: the stateless repository is constructed here because only the
+    // composition root may build persistence adapters. It is declared before the window so it
+    // outlives every QML object that holds the controller which points at it.
+    dvs::persistence::InterpolationProtocolRepository interpolationProtocolRepository;
     dvs::ui::DesktopApplication desktop{
         argc,
         argv,
@@ -481,9 +485,6 @@ runDesktop(int& argc,
     desktop.setIssueRecordRepository(runtime->issueRecordRepository());
     desktop.setClipExporter(runtime->clipExporter());
     desktop.setSampleExporter(runtime->sampleExporter());
-    // P03 protocol import: the stateless repository is constructed here because only the
-    // composition root may build persistence adapters, and lives for the whole run.
-    dvs::persistence::InterpolationProtocolRepository interpolationProtocolRepository;
     desktop.setInterpolationProtocolRepository(&interpolationProtocolRepository);
     // I03 default-app registration: the shell adapter is constructed here for the same reason -
     // only the composition root may build concrete adapters - and writes nothing until the user

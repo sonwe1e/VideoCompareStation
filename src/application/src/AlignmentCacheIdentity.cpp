@@ -12,30 +12,6 @@
 namespace dvs::application {
 namespace {
 
-template <typename T> void appendInteger(std::uint64_t& hash, const T value) noexcept {
-    constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
-    using Unsigned = std::make_unsigned_t<T>;
-    const Unsigned converted = static_cast<Unsigned>(value);
-    for (std::size_t byte = 0U; byte < sizeof(Unsigned); ++byte) {
-        hash ^= static_cast<std::uint8_t>(converted >> (byte * 8U));
-        hash *= kFnvPrime;
-    }
-}
-
-void appendText(std::uint64_t& hash, const std::string_view text) noexcept {
-    constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
-    for (const unsigned char value : text) {
-        hash ^= value;
-        hash *= kFnvPrime;
-    }
-    hash ^= 0xFFU;
-    hash *= kFnvPrime;
-}
-
-void appendFloat(std::uint64_t& hash, const float value) noexcept {
-    appendInteger(hash, std::bit_cast<std::uint32_t>(value));
-}
-
 [[nodiscard]] bool unitFloat(const float value) noexcept {
     return std::isfinite(value) && value >= 0.0F && value <= 1.0F;
 }
@@ -56,33 +32,6 @@ void appendFloat(std::uint64_t& hash, const float value) noexcept {
     return kind == SequenceAlignmentAnomalyKind::TargetFrameMissing ||
            kind == SequenceAlignmentAnomalyKind::TargetFrameExtra ||
            kind == SequenceAlignmentAnomalyKind::TargetFrameDuplicate;
-}
-
-[[nodiscard]] std::string hexadecimal(const std::uint64_t value) {
-    constexpr std::array<char, 16> kHex{
-        '0',
-        '1',
-        '2',
-        '3',
-        '4',
-        '5',
-        '6',
-        '7',
-        '8',
-        '9',
-        'a',
-        'b',
-        'c',
-        'd',
-        'e',
-        'f',
-    };
-    std::string result(16U, '0');
-    for (std::size_t index = 0U; index < result.size(); ++index) {
-        const std::size_t shift = (result.size() - 1U - index) * 4U;
-        result[index] = kHex[(value >> shift) & 0x0FU];
-    }
-    return result;
 }
 
 } // namespace
@@ -155,62 +104,6 @@ bool validateDerivedSequenceAlignments(
         }
     }
     return true;
-}
-
-std::string makeDerivedAlignmentCacheKey(const domain::ValidatedComparisonSet& sources,
-                                         const std::span<const SequenceAlignmentResult> results) {
-    constexpr std::uint64_t kFnvOffset = 14695981039346656037ULL;
-    std::uint64_t hash = kFnvOffset;
-    appendText(hash, kSequenceAlignmentAlgorithmVersion);
-    appendInteger(hash, sources.canonicalSourceId());
-    appendInteger(hash, sources.canonicalFrameCount());
-    for (const domain::ComparisonSource& source : sources.sources()) {
-        appendInteger(hash, source.id);
-        appendInteger(hash, source.descriptor.frameCount.value);
-        if (source.descriptor.sourceIdentity.has_value()) {
-            appendInteger(hash, source.descriptor.sourceIdentity->byteSize);
-            appendInteger(hash, source.descriptor.sourceIdentity->modifiedUtcMilliseconds);
-            appendText(hash, source.descriptor.sourceIdentity->fingerprintSha256);
-        }
-    }
-    for (const SequenceAlignmentResult& result : results) {
-        appendInteger(hash, result.sourceId);
-        appendFloat(hash, result.totalCost);
-        appendFloat(hash, result.meanMatchCost);
-        appendFloat(hash, result.confidence);
-        appendInteger(hash, static_cast<std::uint8_t>(result.autoApplicable));
-        for (const SequenceAlignmentEntry& entry : result.entries) {
-            appendInteger(hash, entry.canonicalFrameId.value());
-            appendInteger(hash,
-                          entry.sourceFrameId.has_value() ? entry.sourceFrameId->value() : -1);
-            appendInteger(hash,
-                          static_cast<std::underlying_type_t<FrameMatchKind>>(entry.matchKind));
-            appendFloat(hash, entry.confidence);
-        }
-        for (const SequenceAlignmentSegment& segment : result.segments) {
-            appendInteger(hash, segment.firstCanonicalFrame.value());
-            appendInteger(hash, segment.lastCanonicalFrame.value());
-            appendInteger(
-                hash, static_cast<std::underlying_type_t<AlignmentSegmentState>>(segment.state));
-            appendFloat(hash, segment.meanConfidence);
-            appendFloat(hash, segment.p10Confidence);
-            appendInteger(hash, segment.maximumLowConfidenceRun);
-            appendFloat(hash, segment.anomalyDensity);
-            appendInteger(hash, static_cast<std::uint8_t>(segment.sceneCutProximity));
-            appendFloat(hash, segment.mappingSlope);
-        }
-        for (const SequenceAlignmentAnomaly& anomaly : result.anomalies) {
-            appendInteger(
-                hash,
-                static_cast<std::underlying_type_t<SequenceAlignmentAnomalyKind>>(anomaly.kind));
-            appendInteger(hash,
-                          anomaly.canonicalFrameId.has_value() ? anomaly.canonicalFrameId->value()
-                                                               : -1);
-            appendInteger(hash,
-                          anomaly.sourceFrameId.has_value() ? anomaly.sourceFrameId->value() : -1);
-        }
-    }
-    return "alignment-v3-" + hexadecimal(hash);
 }
 
 } // namespace dvs::application

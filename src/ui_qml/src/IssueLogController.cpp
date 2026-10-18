@@ -93,10 +93,6 @@ void IssueLogController::setImageBackgroundMode(const int mode) noexcept {
     imageBackgroundMode_ = mode;
 }
 
-void IssueLogController::setDefaultDocumentPath(const QUrl& path) noexcept {
-    documentPath_ = path.isLocalFile() ? path.toLocalFile() : path.toString();
-}
-
 int IssueLogController::count() const noexcept {
     return static_cast<int>(issues_.size());
 }
@@ -107,10 +103,6 @@ QString IssueLogController::statusText() const noexcept {
 
 QString IssueLogController::lastError() const noexcept {
     return lastError_;
-}
-
-QString IssueLogController::documentPath() const noexcept {
-    return documentPath_;
 }
 
 void IssueLogController::setStatus(QString text, QString error) {
@@ -393,9 +385,6 @@ bool IssueLogController::saveIssues(const QUrl& fileUrl) {
         setStatus(QStringLiteral("保存失败"), toQString(error));
         return false;
     }
-    if (!pathText.isEmpty()) {
-        documentPath_ = pathText;
-    }
     setStatus(QStringLiteral("已保存 %1 条问题记录").arg(records.size()));
     Q_EMIT issuesChanged();
     return true;
@@ -424,9 +413,6 @@ bool IssueLogController::loadIssues(const QUrl& fileUrl) {
     issues_.reserve(result.records.size());
     for (const IssueRecord& record : result.records) {
         issues_.push_back(StoredIssue{record, summarize(record)});
-    }
-    if (!pathText.isEmpty()) {
-        documentPath_ = pathText;
     }
     setStatus(QStringLiteral("已加载 %1 条问题记录").arg(issues_.size()));
     Q_EMIT issuesChanged();

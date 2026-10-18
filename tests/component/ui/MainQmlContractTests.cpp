@@ -11,6 +11,7 @@
 #include "dvs/ui/FileAssociationController.h"
 #include "dvs/ui/GraphicsBackend.h"
 #include "dvs/ui/ImageEditController.h"
+#include "dvs/ui/ImageFolderCursor.h"
 #include "dvs/ui/ImageFolderPairModel.h"
 #include "dvs/ui/ImageReviewController.h"
 #include "dvs/ui/InterpolationProtocolController.h"
@@ -26,6 +27,7 @@
 #include "dvs/ui/SourceListModel.h"
 #include "dvs/ui/VideoFolderModel.h"
 
+#include <QAccessible>
 #include <QClipboard>
 #include <QColor>
 #include <QColorSpace>
@@ -743,6 +745,8 @@ public:
         engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), shell.get());
         engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), facade.get());
         engine.rootContext()->setContextProperty(QStringLiteral("imageFolderPairs"), &folderPairs);
+        engine.rootContext()->setContextProperty(QStringLiteral("imageFolderCursor"),
+                                                 &imageFolderCursor);
         if (withVideoFolder) {
             videoFolder.attachPreferences(preferences);
             videoFolder.attachPlayback(*controller, *shell);
@@ -925,6 +929,9 @@ QtObject {
     // clipboard the adapter writes to.
     ColorClipboardController colorClipboard;
     ImageFolderPairModel folderPairs;
+    // FLOW3: the harness exposes the same directory cursor the composition root installs, so
+    // the arrow-key path is exercised against a real cursor rather than a mock.
+    ImageFolderCursor imageFolderCursor;
     VideoFolderModel videoFolder;
     bool withVideoFolder = false;
     // Step-3 editing stays opt-in so harnesses that predate it keep their exact layout.
@@ -7654,157 +7661,11 @@ TEST(MainQmlContractTests, ImageEditFillDialogPadsTheCanvasAndKeepsTheImage) {
     harness.settle();
 }
 
-// Phase 0 baseline: the Range Loop must never present a frame outside [In,Out]. Today the loop is
-// driven by Main.qml::onCurrentFrameChanged reacting to displayedFrame, with no kernel Range clamp,
-// so after a >2000ms stall catch-up can present Out+Δ before QML seeks back. This QML-level test
-// sets a range, drives playback forward, and asserts the presented frame never exceeds Out.
-// Expected to FAIL/present-out-of-bounds on current code; passes after Phase 3's native Range Loop.
-TEST(MainQmlContractTests, DISABLED_RangeLoopNeverPresentsOutsideInclusiveRange) {
-    auto snapshot = std::make_shared<application::SessionSnapshot>();
-    snapshot->graphicsReady = true;
-    snapshot->sessionState = domain::SessionState::kReady;
-    snapshot->playbackState = domain::PlaybackState::kPlaying;
-    snapshot->displayedFrame = domain::FrameId{0};
-    snapshot->canonicalFrameCount = 30U;
-    snapshot->sources = {
-        application::SessionSourceView{.sourceId = 0U, .displayName = "A"},
-    };
-    snapshot->presentedSources = {
-        application::PresentedSourceState{
-            .sourceId = 0U,
-            .sourceFrameId = domain::FrameId{0},
-            .matchKind = application::FrameMatchKind::ExactIndex,
-        },
-    };
-    std::vector<application::PlaybackCommand> submitted;
-    std::vector<application::CommandTerminal> terminals;
-    ReviewController controller{ReviewController::Dependencies{
-        .submit =
-            [&submitted](application::PlaybackCommand command) {
-                submitted.push_back(std::move(command));
-                return application::PortSubmitResult::Accepted;
-            },
-        .snapshot = [snapshot] { return snapshot; },
-        .takeCompletedCommands =
-            [&terminals] {
-                std::vector<application::CommandTerminal> result = std::move(terminals);
-                terminals.clear();
-                return result;
-            },
-    }};
-    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
-    ReviewShellController shell{controller, preferences};
-    ReviewSessionFacade facade{controller, preferences, shell};
-
-    QQmlEngine engine;
-    engine.addImportPath(
-        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
-    engine.rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
-    engine.rootContext()->setContextProperty(QStringLiteral("reviewPreferences"), &preferences);
-    engine.rootContext()->setContextProperty(QStringLiteral("reviewSession"), &shell);
-    engine.rootContext()->setContextProperty(QStringLiteral("reviewFacade"), &facade);
-    QQmlComponent component{&engine, QUrl{QUrl{QStringLiteral("qrc:/qml/Main.qml")}}};
-    ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
-    std::unique_ptr<QObject> root{
-        component.createWithInitialProperties(defaultPilotWindowProperties())};
-    ASSERT_NE(root, nullptr) << componentErrors(component);
-    auto* const window = qobject_cast<QQuickWindow*>(root.get());
-    ASSERT_NE(window, nullptr);
-    QCoreApplication::processEvents();
-
-    // Establish range [3, 8] and activate range playback.
-    ASSERT_TRUE(QMetaObject::invokeMethod(root.get(), "setInPoint"));
-    // setInPoint uses current frame; set Out beyond it via the shell directly for determinism.
-    EXPECT_TRUE(shell.setRangeIn(3, controller.mediaTimeForFrame(3)));
-    EXPECT_TRUE(shell.setRangeOut(8, controller.mediaTimeForFrame(8)));
-    EXPECT_TRUE(shell.setRangePlaybackState(true, false));
-    QCoreApplication::processEvents();
-    EXPECT_TRUE(shell.rangePlaybackActive());
-    EXPECT_EQ(shell.inFrame(), 3);
-    EXPECT_EQ(shell.outFrame(), 8);
-
-    // Drive playback forward past Out. Today onCurrentFrameChanged seeks back to In when the
-    // presented frame reaches Out; it must never present Out+1. We advance displayedFrame in the
-    // snapshot (simulating presentation) and let the QML handler react.
-    auto advanceTo = [&](std::int64_t frame) {
-        snapshot->displayedFrame = domain::FrameId{frame};
-        controller.refreshProjection();
-        for (int i = 0; i < 5; ++i) {
-            QCoreApplication::processEvents();
-        }
-    };
-    bool presentedOutsideRange = false;
-    for (std::int64_t frame = 3; frame <= 12; ++frame) {
-        advanceTo(frame);
-        const std::int64_t presented = controller.currentFrame();
-        if (presented < shell.inFrame() || presented > shell.outFrame()) {
-            presentedOutsideRange = true;
-            break;
-        }
-        if (!shell.rangePlaybackActive()) {
-            break;
-        }
-    }
-    EXPECT_FALSE(presentedOutsideRange)
-        << "Range loop presented a frame outside [In,Out] (no kernel Range clamp today).";
-    shell.clearRange();
-}
-
-// Phase 0 baseline: rapid scrubbing (fast successive seeks) must be latest-wins and must not spawn
-// a generation storm (one generation increment per pointer event). Today each seek is an Exact that
-// advances the generation; the plan's Scrub workflow (Phase 4) must coalesce. This test submits
-// rapid seeks and asserts the latest target wins and generation growth is bounded. Expected to show
-// unbounded generation growth today; bounded after Phase 4.
-TEST(MainQmlContractTests, DISABLED_ScrubLatestWinsWithoutGenerationStorm) {
-    auto snapshot = std::make_shared<application::SessionSnapshot>();
-    snapshot->graphicsReady = true;
-    snapshot->sessionState = domain::SessionState::kReady;
-    snapshot->playbackState = domain::PlaybackState::kPaused;
-    snapshot->displayedFrame = domain::FrameId{0};
-    snapshot->canonicalFrameCount = 60U;
-    snapshot->sources = {
-        application::SessionSourceView{.sourceId = 0U, .displayName = "A"},
-    };
-    std::vector<application::PlaybackCommand> submitted;
-    ReviewController controller{ReviewController::Dependencies{
-        .submit =
-            [&submitted](application::PlaybackCommand command) {
-                submitted.push_back(std::move(command));
-                return application::PortSubmitResult::Accepted;
-            },
-        .snapshot = [snapshot] { return snapshot; },
-        .takeCompletedCommands = [] { return std::vector<application::CommandTerminal>{}; },
-    }};
-    ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
-    ReviewShellController shell{controller, preferences};
-
-    // Rapid scrub: submit many seeks to random targets as fast as possible.
-    constexpr int scrubCount = 20;
-    for (int i = 0; i < scrubCount; ++i) {
-        const std::int64_t target = (i * 3) % 60;
-        EXPECT_TRUE(controller.seekFrame(target));
-    }
-    // Latest-wins: the most recent seek must be the last submitted target.
-    ASSERT_FALSE(submitted.empty());
-    const auto* const lastSeek = std::get_if<application::SeekFrameCommand>(&submitted.back());
-    ASSERT_NE(lastSeek, nullptr);
-    EXPECT_EQ(lastSeek->frameId.value(), (scrubCount - 1) * 3 % 60);
-    // Generation storm check: count distinct SeekFrameCommands submitted (today one per pointer
-    // event; the plan's scrub coalescing must reduce this). Document the baseline count.
-    std::size_t seekCommands = 0;
-    for (const auto& command : submitted) {
-        if (std::holds_alternative<application::SeekFrameCommand>(command)) {
-            ++seekCommands;
-        }
-    }
-    EXPECT_EQ(seekCommands, static_cast<std::size_t>(scrubCount))
-        << "Today each scrub seek submits a separate Exact seek (baseline for Phase 4 coalescing).";
-}
-
-// Phase 0 baseline: the Wipe handle must be keyboard-operable (Accessible role Slider + cursor
-// keys) for accessibility. Today WipeHandle.qml has no activeFocusOnTab / Accessible.role / value /
-// cursor keys. This test asserts the handle exposes a Slider role and is keyboard-adjustable.
-// Expected to FAIL on current code; passes after Phase 4 a11y work.
+// The Wipe handle still has no accessibility surface: WipeHandle.qml exposes no
+// activeFocusOnTab, Accessible.role, value or cursor keys, so a screen-reader user cannot reach or
+// operate it. The split can only be adjusted through the global Alt+arrow shortcuts. This test
+// pins the missing contract and stays disabled until the handle implements it; the reads go
+// through QQmlProperty because Attached properties are not QObject dynamic properties.
 TEST(MainQmlContractTests, DISABLED_WipeHandleIsKeyboardAdjustable) {
     auto snapshot = std::make_shared<application::SessionSnapshot>();
     snapshot->graphicsReady = true;
@@ -7847,18 +7708,23 @@ TEST(MainQmlContractTests, DISABLED_WipeHandleIsKeyboardAdjustable) {
 
     QObject* const wipeHandle = root->findChild<QObject*>(QStringLiteral("wipeHandle"));
     ASSERT_NE(wipeHandle, nullptr);
-    // Accessible.role must be Slider (value 8) for a adjustable split control.
-    EXPECT_EQ(wipeHandle->property("Accessible.role").toInt(), 8)
-        << "Wipe handle must expose Accessible.Slider (value 8).";
+    // Accessible.role must be QAccessible::Slider for an adjustable split control. Attached
+    // properties live on the attached object, so read them through QQmlProperty, not
+    // QObject::property().
+    EXPECT_EQ(QQmlProperty(wipeHandle, QStringLiteral("Accessible.role"), qmlContext(wipeHandle))
+                  .read()
+                  .toInt(),
+              static_cast<int>(QAccessible::Slider))
+        << "Wipe handle must expose Accessible.Slider.";
     EXPECT_TRUE(wipeHandle->property("activeFocusOnTab").toBool())
         << "Wipe handle must be tab-focusable.";
 }
 
-// Phase 0 baseline: the Timeline must expose an Accessible.value matching the preview or current
-// frame so screen-reader users know the position. Today TimelineTracks.qml has Accessible.role/
-// name but no value/keyboard. This test asserts the timeline's accessible value reflects the frame.
-// Expected to FAIL on current code; passes after Phase 4 a11y work.
-TEST(MainQmlContractTests, DISABLED_TimelineAccessibleValueMatchesPreviewOrCurrentFrame) {
+// The Timeline must be reachable by a screen reader: a Slider role, a name, and tab focus. Qt
+// 6.11's Accessible attached type has no numeric value property, so the frame position cannot be
+// exposed from QML alone; that gap stays in the backlog and would need a custom accessible
+// interface rather than a test-only property.
+TEST(MainQmlContractTests, TimelineExposesAccessibleSliderRoleAndName) {
     auto snapshot = std::make_shared<application::SessionSnapshot>();
     snapshot->graphicsReady = true;
     snapshot->sessionState = domain::SessionState::kReady;
@@ -7896,11 +7762,18 @@ TEST(MainQmlContractTests, DISABLED_TimelineAccessibleValueMatchesPreviewOrCurre
 
     QObject* const timeline = root->findChild<QObject*>(QStringLiteral("timelineSlider"));
     ASSERT_NE(timeline, nullptr);
-    EXPECT_EQ(timeline->property("Accessible.role").toInt(), 8)
-        << "Timeline must expose Accessible.Slider (value 8).";
-    // Accessible.value must reflect the current/preview frame (here 5).
-    EXPECT_EQ(timeline->property("Accessible.value").toInt(), controller.currentFrame())
-        << "Timeline Accessible.value must match the current frame.";
+    EXPECT_EQ(QQmlProperty(timeline, QStringLiteral("Accessible.role"), qmlContext(timeline))
+                  .read()
+                  .toInt(),
+              static_cast<int>(QAccessible::Slider))
+        << "Timeline must expose Accessible.Slider.";
+    EXPECT_FALSE(QQmlProperty(timeline, QStringLiteral("Accessible.name"), qmlContext(timeline))
+                     .read()
+                     .toString()
+                     .isEmpty())
+        << "Timeline must expose an accessible name.";
+    EXPECT_TRUE(timeline->property("activeFocusOnTab").toBool())
+        << "Timeline must be tab-focusable.";
 }
 
 TEST(MainQmlContractTests, ImageWorkspaceReloadsViewportSourceAfterImageOpen) {
@@ -15261,6 +15134,183 @@ TEST(MainQmlContractTests, ChromeGeometryAndScreenshotEvidence) {
 //   missing clipboard   -> creation fails on that property as well;
 //   explicit null       -> creation succeeds, the production verifier rejects;
 //   wrong-typed object  -> Qt warns and degrades the property to null, the verifier rejects.
+TEST(MainQmlContractTests, SingleImageOpenArmsTheDirectoryCursorAndOneStepOpensTheNeighbour) {
+    WorkspaceHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    QTemporaryDir folder;
+    ASSERT_TRUE(folder.isValid());
+    // One real 1x1 PNG, written twice: the cursor reads names and suffixes, the decode still
+    // has to succeed for the open to commit.
+    const QByteArray png = QByteArray::fromBase64(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJ"
+        "RU5ErkJggg==");
+    const auto writeImage = [&folder, &png](const QString& name) {
+        const QString path = QDir{folder.path()}.filePath(name);
+        QFile file{path};
+        if (!file.open(QIODevice::WriteOnly)) {
+            return QUrl{};
+        }
+        file.write(png);
+        file.close();
+        return QUrl::fromLocalFile(path);
+    };
+    const QUrl first = writeImage(QStringLiteral("shot1.png"));
+    const QUrl second = writeImage(QStringLiteral("shot2.png"));
+    ASSERT_FALSE(first.isEmpty());
+    ASSERT_FALSE(second.isEmpty());
+
+    QVariant opened;
+    ASSERT_TRUE(
+        QMetaObject::invokeMethod(harness.root.get(),
+                                  "performImageReview",
+                                  Q_RETURN_ARG(QVariant, opened),
+                                  Q_ARG(QVariant, QVariant::fromValue(QVariantList{first}))));
+    ASSERT_TRUE(opened.toBool());
+    ASSERT_TRUE(harness.waitUntil([&harness] {
+        return harness.imageFolderCursor.count() == 2 && harness.imageReview.hasPrimary();
+    })) << "a committed single image must arm the directory cursor";
+
+    EXPECT_EQ(harness.root->property("imageFolderBrowseText").toString(), QStringLiteral("1 / 2"));
+
+    QVariant stepped;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "stepImageFolder",
+                                          Q_RETURN_ARG(QVariant, stepped),
+                                          Q_ARG(QVariant, QVariant{1})));
+    ASSERT_TRUE(stepped.toBool());
+    ASSERT_TRUE(harness.waitUntil([&harness] {
+        return harness.imageFolderCursor.currentIndex() == 2;
+    })) << "one right-step must commit the next image in the same directory";
+
+    EXPECT_EQ(QFileInfo{harness.imageReview.primaryPath()}.fileName(), QStringLiteral("shot2.png"));
+    EXPECT_EQ(harness.root->property("imageFolderBrowseText").toString(), QStringLiteral("2 / 2"));
+
+    // Backwards past the first image is a boundary, not a wrap: the committed image stays.
+    QVariant again;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "stepImageFolder",
+                                          Q_RETURN_ARG(QVariant, again),
+                                          Q_ARG(QVariant, QVariant{1})));
+    EXPECT_FALSE(again.toBool());
+    harness.settle();
+    EXPECT_EQ(QFileInfo{harness.imageReview.primaryPath()}.fileName(), QStringLiteral("shot2.png"));
+
+    // A delete in Explorer while the window is hidden must not leave a stale sequence: the
+    // activation hook re-scans, and a cleared cursor (pair or folder task) stays empty.
+    ASSERT_TRUE(QFile::remove(QDir{folder.path()}.filePath(QStringLiteral("shot1.png"))));
+    QVariant refreshed;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        harness.root.get(), "refreshImageFolderCursor", Q_RETURN_ARG(QVariant, refreshed)));
+    EXPECT_TRUE(refreshed.toBool());
+    EXPECT_EQ(harness.imageFolderCursor.count(), 1);
+
+    harness.imageFolderCursor.clear();
+    QVariant refreshedEmpty;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        harness.root.get(), "refreshImageFolderCursor", Q_RETURN_ARG(QVariant, refreshedEmpty)));
+    EXPECT_FALSE(refreshedEmpty.toBool()) << "a pair/folder task must not gain a directory list";
+    EXPECT_EQ(harness.imageFolderCursor.count(), 0);
+}
+
+TEST(MainQmlContractTests, DirtyEditCopyBlocksDirectoryStepping) {
+    WorkspaceHarness harness;
+    harness.withImageEdit = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    QTemporaryDir folder;
+    ASSERT_TRUE(folder.isValid());
+    const QByteArray png = QByteArray::fromBase64(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJ"
+        "RU5ErkJggg==");
+    const auto writeImage = [&folder, &png](const QString& name) {
+        const QString path = QDir{folder.path()}.filePath(name);
+        QFile file{path};
+        if (!file.open(QIODevice::WriteOnly)) {
+            return QUrl{};
+        }
+        file.write(png);
+        file.close();
+        return QUrl::fromLocalFile(path);
+    };
+    const QUrl first = writeImage(QStringLiteral("shot1.png"));
+    const QUrl second = writeImage(QStringLiteral("shot2.png"));
+    ASSERT_FALSE(first.isEmpty());
+    ASSERT_FALSE(second.isEmpty());
+
+    QVariant opened;
+    ASSERT_TRUE(
+        QMetaObject::invokeMethod(harness.root.get(),
+                                  "performImageReview",
+                                  Q_RETURN_ARG(QVariant, opened),
+                                  Q_ARG(QVariant, QVariant::fromValue(QVariantList{first}))));
+    ASSERT_TRUE(opened.toBool());
+    ASSERT_TRUE(harness.waitUntil([&harness] {
+        return harness.imageFolderCursor.count() == 2 && harness.imageReview.hasPrimary();
+    }));
+
+    ASSERT_TRUE(harness.imageEdit.beginSession(
+        ImageReviewController::DisplayPrimarySlot, QStringLiteral("shot1"), first));
+    ASSERT_TRUE(harness.imageEdit.fillImageRect(0, 0, 1, 1, QColor(10, 20, 30, 255)));
+    ASSERT_TRUE(harness.imageEdit.dirty());
+
+    // Stepping would end the session and drop the in-memory working copy; the refusal has to
+    // happen before the open request, not after the image has already been replaced.
+    QVariant stepped;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "stepImageFolder",
+                                          Q_RETURN_ARG(QVariant, stepped),
+                                          Q_ARG(QVariant, QVariant{1})));
+    EXPECT_FALSE(stepped.toBool());
+    harness.settle();
+    EXPECT_TRUE(harness.imageEdit.dirty());
+    EXPECT_EQ(QFileInfo{harness.imageReview.primaryPath()}.fileName(), QStringLiteral("shot1.png"));
+
+    // The direct open paths share the same refusal: a dialog, a drop or the recent list must not
+    // replace the image under a dirty session either.
+    QVariant openedAgain;
+    ASSERT_TRUE(
+        QMetaObject::invokeMethod(harness.root.get(),
+                                  "performImageReview",
+                                  Q_RETURN_ARG(QVariant, openedAgain),
+                                  Q_ARG(QVariant, QVariant::fromValue(QVariantList{second}))));
+    EXPECT_FALSE(openedAgain.toBool());
+    harness.settle();
+    EXPECT_EQ(QFileInfo{harness.imageReview.primaryPath()}.fileName(), QStringLiteral("shot1.png"));
+
+    // Ctrl+W would close the task while the working copy still lives only in memory.
+    QVariant closed;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        harness.root.get(), "closeCurrentTask", Q_RETURN_ARG(QVariant, closed)));
+    EXPECT_FALSE(closed.toBool());
+    harness.settle();
+    EXPECT_TRUE(harness.imageReview.hasPrimary());
+    EXPECT_TRUE(harness.imageEdit.dirty());
+
+    // A clean session has nothing to lose: it must not block the open, and it must not survive
+    // on top of a different image.
+    harness.imageEdit.endSession();
+    ASSERT_TRUE(harness.imageEdit.beginSession(
+        ImageReviewController::DisplayPrimarySlot, QStringLiteral("shot1"), first));
+    ASSERT_FALSE(harness.imageEdit.dirty());
+    QVariant cleanOpen;
+    ASSERT_TRUE(
+        QMetaObject::invokeMethod(harness.root.get(),
+                                  "performImageReview",
+                                  Q_RETURN_ARG(QVariant, cleanOpen),
+                                  Q_ARG(QVariant, QVariant::fromValue(QVariantList{second}))));
+    EXPECT_TRUE(cleanOpen.toBool());
+    ASSERT_TRUE(harness.waitUntil([&harness] {
+        return QFileInfo{harness.imageReview.primaryPath()}.fileName() ==
+               QStringLiteral("shot2.png");
+    }));
+    EXPECT_FALSE(harness.imageEdit.active());
+}
+
 TEST(MainQmlContractTests, MainWindowRequiredPilotServicesAreEnforced) {
     ReviewController controller{ReviewController::Dependencies{
         .submit =

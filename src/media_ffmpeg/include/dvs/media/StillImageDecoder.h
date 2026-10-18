@@ -55,7 +55,4 @@ struct StillImage final {
 [[nodiscard]] bool probeStillImageBytes(
     const std::uint8_t* data, std::size_t size, int* width, int* height, std::string* error);
 
-[[nodiscard]] bool
-decodeStillImageFile(const std::string& path, StillImage* image, std::string* error);
-
 } // namespace dvs::media

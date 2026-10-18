@@ -291,6 +291,27 @@ TEST(PlaybackEvidenceTests, CountsSkippedFrameSetsFromPublishGapsOnly) {
     EXPECT_EQ(summary.runs.front().skippedFrameSetCount, 2U);
 }
 
+TEST(PlaybackEvidenceTests, CountsPublishGapsAfterALoopRewind) {
+    PlaybackEvidenceCollector collector;
+    collector.ingest(
+        traceEvent(TraceEventKind::PlaybackRunStarted, 0U, 0U, coordinatorScope(1, 1, 1)));
+    const auto publish = [&collector](const std::uint64_t at, const std::uint64_t frame) {
+        collector.ingest(
+            traceEvent(TraceEventKind::RenderPublished, at, frame, coordinatorScope(1, 1, 1)));
+    };
+
+    publish(100U, 90U);
+    publish(110U, 91U);
+    // The loop wraps to the range start: the backward jump itself is not a skip.
+    publish(120U, 40U);
+    // 41-44 are never published after the wrap; a high-water-mark baseline would miss them.
+    publish(130U, 45U);
+
+    const PlaybackEvidenceSummary summary = collector.summary();
+    ASSERT_EQ(summary.runs.size(), 1U);
+    EXPECT_EQ(summary.runs.front().skippedFrameSetCount, 4U);
+}
+
 TEST(PlaybackEvidenceTests, ExcludesStaleEpochRunAndSessionEventsFromRunStatistics) {
     PlaybackEvidenceCollector collector;
     collector.ingest(

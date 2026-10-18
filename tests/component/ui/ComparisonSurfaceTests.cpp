@@ -181,18 +181,6 @@ void expectColorNear(const QColor& actual, const QColor& expected, const int tol
     return maximum;
 }
 
-TEST(ComparisonSurfaceGeometryTests, SplitsEveryOddPhysicalPixelWithoutAGap) {
-    const platform::SurfaceSplitLayout split =
-        platform::computeSurfaceSplit(101.0F, 60.0F, 101U, 60U);
-
-    EXPECT_EQ(split.leftPixelWidth, 50U);
-    EXPECT_EQ(split.rightPixelWidth, 51U);
-    EXPECT_FLOAT_EQ(split.left.x + split.left.width, split.right.x);
-    EXPECT_FLOAT_EQ(split.right.x + split.right.width, 101.0F);
-    EXPECT_FLOAT_EQ(split.left.height, 60.0F);
-    EXPECT_FLOAT_EQ(split.right.height, 60.0F);
-}
-
 TEST(ComparisonSurfaceGeometryTests, AspectFitsUnequalSourcesWithinTheirOwnHalves) {
     const platform::SurfaceRect bounds{
         .x = 50.0F,
@@ -200,8 +188,8 @@ TEST(ComparisonSurfaceGeometryTests, AspectFitsUnequalSourcesWithinTheirOwnHalve
         .width = 50.0F,
         .height = 60.0F,
     };
-    const platform::SurfaceRect landscape = platform::aspectFitRect(bounds, 16U, 9U);
-    const platform::SurfaceRect portrait = platform::aspectFitRect(bounds, 9U, 16U);
+    const platform::SurfaceRect landscape = platform::aspectFitRectFloat(bounds, 16.0F, 9.0F);
+    const platform::SurfaceRect portrait = platform::aspectFitRectFloat(bounds, 9.0F, 16.0F);
 
     EXPECT_FLOAT_EQ(landscape.x, 50.0F);
     EXPECT_NEAR(landscape.height, 28.125F, 0.001F);
@@ -408,7 +396,7 @@ TEST(ComparisonSurfaceGeometryTests, DistinguishesNominalNativeIntentFromRounded
     EXPECT_FLOAT_EQ(customGrid.scaleX, 1047.0F / 805.0F);
     EXPECT_FLOAT_EQ(customGrid.scaleY, 787.0F / 605.0F);
     const platform::SurfaceRect bounds{0.0F, 0.0F, 801.0F, 601.0F};
-    const auto fitted = platform::aspectFitRect(bounds, 160U, 90U);
+    const auto fitted = platform::aspectFitRectFloat(bounds, 160.0F, 90.0F);
     const platform::SurfaceRect pixels{0.0F, 0.0F, 160.0F, 90.0F};
     const float nativeScale = 160.0F / (801.0F * 1.5F);
     const auto native = platform::transformedSurfaceContentRect(
@@ -423,7 +411,7 @@ TEST(ComparisonSurfaceGeometryTests, DistinguishesNominalNativeIntentFromRounded
     EXPECT_FLOAT_EQ(fractional.width, fitted.width * nativeScale * 0.998F);
     EXPECT_LT(fractional.width * grid.scaleX, 160.0F);
     const platform::SurfaceRect tightBounds{0.0F, 0.0F, 160.02F, 90.02F};
-    const auto tightFit = platform::aspectFitRect(tightBounds, 160U, 90U);
+    const auto tightFit = platform::aspectFitRectFloat(tightBounds, 160.0F, 90.0F);
     EXPECT_FALSE(platform::transformedSurfaceContentRect(tightBounds,
                                                          tightFit,
                                                          {0.5F, 0.5F, 160.0F / tightFit.width},
@@ -482,7 +470,7 @@ TEST(ComparisonSurfaceGeometryTests, DistinguishesNominalNativeIntentFromRounded
 
 TEST(ComparisonSurfaceGeometryTests, NativeTexelCentersAlignInAnOddInsetViewportAtEveryDpr) {
     const platform::SurfaceRect bounds{0.0F, 0.0F, 801.0F, 601.0F};
-    const platform::SurfaceRect fitted = platform::aspectFitRect(bounds, 160U, 90U);
+    const platform::SurfaceRect fitted = platform::aspectFitRectFloat(bounds, 160.0F, 90.0F);
     const platform::SurfaceRect source{0.0F, 0.0F, 160.0F, 90.0F};
     constexpr std::array<std::array<float, 2U>, 5U> kTexels{
         {{0.0F, 0.0F}, {159.0F, 0.0F}, {0.0F, 89.0F}, {159.0F, 89.0F}, {79.0F, 44.0F}}};

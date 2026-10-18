@@ -249,6 +249,32 @@ dvs_add_gtest(
 )
 
 add_executable(
+    dvs_image_folder_cursor_tests
+    ImageFolderCursorTests.cpp
+)
+target_link_libraries(
+    dvs_image_folder_cursor_tests
+    PRIVATE
+        dvs_ui_models
+        dvs::qt_dependencies
+        dvs::test_dependencies
+)
+
+dvs_apply_project_warnings(dvs_image_folder_cursor_tests)
+set_target_properties(
+    dvs_image_folder_cursor_tests
+    PROPERTIES FOLDER "Tests/Component/UI"
+)
+
+dvs_add_gtest(
+    TARGET dvs_image_folder_cursor_tests
+    TEST_PREFIX "ui."
+    LAYER component
+    MODULE ui_qml
+    TIMEOUT 10
+)
+
+add_executable(
     dvs_main_qml_contract_tests
     MainQmlContractTests.cpp
     ViewportPixelScaleTests.cpp

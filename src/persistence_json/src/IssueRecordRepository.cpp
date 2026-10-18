@@ -362,10 +362,6 @@ IssueRecordRepository::IssueRecordRepository(std::filesystem::path documentPath)
 
 IssueRecordRepository::~IssueRecordRepository() = default;
 
-const std::filesystem::path& IssueRecordRepository::documentPath() const noexcept {
-    return documentPath_;
-}
-
 std::string IssueRecordRepository::encodeDocument(const std::vector<IssueRecord>& records) {
     Json recordsArray = Json::array();
     for (const IssueRecord& record : records) {
@@ -423,10 +419,6 @@ IssueRecordDocument IssueRecordRepository::decodeDocument(const std::string& tex
     }
 }
 
-IssueRecordDocument IssueRecordRepository::loadDocument() const {
-    return loadDocumentFrom(documentPath_);
-}
-
 IssueRecordDocument
 IssueRecordRepository::loadDocumentFrom(const std::filesystem::path& path) const {
     IssueRecordDocument document;
@@ -468,11 +460,6 @@ IssueRecordRepository::load(const std::filesystem::path& path) const {
     result.error = document.error;
     result.records = document.records;
     return result;
-}
-
-bool IssueRecordRepository::saveDocument(const std::vector<IssueRecord>& records,
-                                         std::string* error) const {
-    return save(documentPath_, records, error);
 }
 
 bool IssueRecordRepository::save(const std::filesystem::path& path,

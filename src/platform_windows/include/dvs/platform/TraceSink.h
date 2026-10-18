@@ -8,33 +8,10 @@
 #include <filesystem>
 #include <memory>
 #include <string>
-#include <vector>
 
 namespace dvs::platform {
 
 class AtomicFilePublisher;
-
-// Default in-memory trace sink used when no file export is requested. Accumulates events in a
-// vector bounded by `capacity`; once full it stops appending (events are still counted by the
-// buffer's overflow counter) so a diagnostic capture cannot grow without bound. Tests use this
-// to assert on the recorded trace without touching the filesystem.
-class MemoryTraceSink final : public application::ITraceSink {
-public:
-    explicit MemoryTraceSink(std::size_t capacity = 4096U);
-
-    [[nodiscard]] bool append(const application::TraceEvent& event) noexcept override;
-    [[nodiscard]] bool recordOverflow(std::uint64_t lostCount) noexcept override;
-    [[nodiscard]] bool finalize() noexcept override;
-
-    [[nodiscard]] std::uint64_t overflowCount() const noexcept;
-    [[nodiscard]] const std::vector<application::TraceEvent>& events() const noexcept;
-    void clear() noexcept;
-
-private:
-    std::vector<application::TraceEvent> events_;
-    std::size_t capacity_;
-    std::uint64_t overflow_ = 0U;
-};
 
 // File-backed trace sink. Writes JSONL to a same-directory transaction when the trace buffer is
 // drained, then atomically publishes the final path only after finalize() flushes and closes the

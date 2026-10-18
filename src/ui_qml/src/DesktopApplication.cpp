@@ -9,6 +9,7 @@
 #include "dvs/ui/EditImageProvider.h"
 #include "dvs/ui/FileAssociationController.h"
 #include "dvs/ui/ImageEditController.h"
+#include "dvs/ui/ImageFolderCursor.h"
 #include "dvs/ui/ImageFolderPairModel.h"
 #include "dvs/ui/ImageReviewController.h"
 #include "dvs/ui/InterpolationProtocolController.h"
@@ -214,9 +215,6 @@ public:
         auto engine = std::make_unique<QQmlApplicationEngine>();
         engine->addImportPath(
             QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
-        engine->rootContext()->setContextProperty(QStringLiteral("reviewController"), &controller);
-        engine->rootContext()->setContextProperty(QStringLiteral("reviewPreferences"),
-                                                  &preferences);
         // Automation determinism: QML reads this to keep user-session conveniences that move the
         // playhead (resume restore) out of the performance gates' frame-zero baseline. Smoke runs
         // share that contract: a developer profile holding a resume position for a smoke fixture
@@ -237,8 +235,6 @@ public:
                                      new TimelinePreviewImageProvider(previewThumbnails));
         }
         shellController_ = std::make_unique<ReviewShellController>(controller, preferences);
-        engine->rootContext()->setContextProperty(QStringLiteral("reviewSession"),
-                                                  shellController_.get());
         videoFolder_ = std::make_unique<VideoFolderModel>();
         videoFolder_->attachPreferences(preferences);
         videoFolder_->attachPlayback(controller, *shellController_);
@@ -303,6 +299,12 @@ public:
             });
         engine->rootContext()->setContextProperty(QStringLiteral("imageFolderPairs"),
                                                   folderPairs_.get());
+        // FLOW3 single-directory browsing. The cursor only remembers the neighbour list; every
+        // step still goes through the ordinary asynchronous open so a failed decode keeps the
+        // current image and stale requests stay unable to commit.
+        imageFolderCursor_ = std::make_unique<ImageFolderCursor>();
+        engine->rootContext()->setContextProperty(QStringLiteral("imageFolderCursor"),
+                                                  imageFolderCursor_.get());
         issueLog_ = std::make_unique<IssueLogController>(issueRecordRepository_);
         issueLog_->setReviewController(&controller);
         issueLog_->setPreferences(&preferences);
@@ -552,6 +554,10 @@ public:
         }
 #endif
         markStartupMilestone("native-chrome");
+        // Hand the splash over before show(): show() is where the render thread starts and can
+        // emit sceneGraphInitialized, and that handler reads splash_ to dismiss it. Assigning
+        // afterwards both loses the early dismissal and races the render thread's read.
+        splash_ = std::move(splashGuard.pending);
         markStartupMilestone("show-enter");
         window_->show();
         markStartupMilestone("post-show");
@@ -573,9 +579,6 @@ public:
             activeScreenRefreshRate_ = window_->screen()->refreshRate();
         }
         markStartupMilestone("window-shown");
-        // Hand the splash to the object that outlives load(). The guard below
-        // then has nothing to dismiss.
-        splash_ = std::move(splashGuard.pending);
         return true;
     }
 
@@ -1222,6 +1225,7 @@ private:
     std::unique_ptr<ReviewSessionFacade> sessionFacade_;
     std::unique_ptr<ImageReviewController> imageReview_;
     std::unique_ptr<ImageFolderPairModel> folderPairs_;
+    std::unique_ptr<ImageFolderCursor> imageFolderCursor_;
     application::IIssueRecordRepository* issueRecordRepository_ = nullptr;
     std::unique_ptr<IssueLogController> issueLog_;
     application::IInterpolationProtocolRepository* interpolationProtocolRepository_ = nullptr;

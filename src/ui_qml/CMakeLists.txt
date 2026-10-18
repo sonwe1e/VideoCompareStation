@@ -3,10 +3,12 @@ add_library(
     STATIC
         include/dvs/ui/ClipExportController.h
         include/dvs/ui/FileAssociationController.h
+        include/dvs/ui/ImageFolderCursor.h
         include/dvs/ui/ImageFolderPairModel.h
         include/dvs/ui/InterpolationProtocolController.h
         include/dvs/ui/IssueLogController.h
         include/dvs/ui/JogStateMachine.h
+        include/dvs/ui/NaturalOrder.h
         include/dvs/ui/PairMetricsController.h
         include/dvs/ui/PreviewThumbnailController.h
         include/dvs/ui/ReviewController.h
@@ -19,6 +21,7 @@ add_library(
         include/dvs/ui/VideoFolderModel.h
         src/ClipExportController.cpp
         src/FileAssociationController.cpp
+        src/ImageFolderCursor.cpp
         src/ImageFolderPairModel.cpp
         src/InterpolationProtocolController.cpp
         src/IssueLogController.cpp

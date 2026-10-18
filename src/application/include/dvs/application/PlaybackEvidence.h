@@ -99,8 +99,6 @@ struct PlaybackRunEvidence final {
     std::uint64_t runId = 0U;
     domain::SessionId session{0};
     domain::SessionEpoch epoch{0};
-    std::uint64_t startedAtMicroseconds = 0U;
-    std::uint64_t stoppedAtMicroseconds = 0U;
     // True while the run is still open (no PlaybackRunStopped ingested yet). Pending counters
     // are a live view for an open run and the closing snapshot for a completed run.
     bool open = false;
@@ -200,7 +198,7 @@ public:
 private:
     struct RunState;
 
-    void closeActiveRun(std::uint64_t stoppedAtMicroseconds);
+    void closeActiveRun();
 
     mutable std::mutex mutex_;
     std::vector<PlaybackRunEvidence> completedRuns_;

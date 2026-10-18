@@ -13,7 +13,7 @@ GPU 门禁按计划留在独立环境，尚未在主力桌面执行。本页只�
 | 计划基线提交 | `8c90005e0f6ba5b71ceb284682259df8d29a307a`（`feat: release CompareStation 2.5.0 review workflow updates`） |
 | 计划日工作区 | 17 个已修改文件、24 个未跟踪文件（QML 类型注册、类型化接线、界面修改；详见计划文档与 `docs/engineering/qml-interface-pilot.md`） |
 | dev 构建 | Ninja，Debug，MSVC 14.44.35207，vcpkg triplet `x64-windows`，Qt 6.11.1，FFmpeg 8.1.2 |
-| 本地 2.5.0 ZIP | `out/package/zip/CompareStation-2.5.0-windows-x64.zip`，28,327,485 bytes，SHA256 `28176C26632573ACE8338D7B817D5780625791EB93E9A0ABCC6B0B8920BEBDE4` |
+| 本地 2.5.0 ZIP | `out/package/zip/CompareStation-2.5.0-windows-x64.zip`，28,327,485 bytes，SHA256 `28176C26632573ACE8338D7B817D5780625791EB93E9A0ABCC6B0B8920BEBDE4` — **该路径已于 2026-10-18 被一次本地 `cpack` 覆盖，见 [台账](visual-review-backlog.md) 同日条目；重新取得该包前不要把本行当作磁盘现状** |
 | 构建日期/工具链证据 | `docs/engineering/qml-interface-pilot.md` §5；release 全量 1397 项启用 100% 通过 |
 
 ### 2026-10-18 整合后的身份
@@ -31,6 +31,21 @@ GPU 门禁按计划留在独立环境，尚未在主力桌面执行。本页只�
 公开 2.5.0 ZIP 与本地候选虽然版本号相同，哈希不同。任何结果必须绑定实际构建、提交、
 工作区 diff 与二进制/ZIP 哈希，不能只写版本号；2.5.0 曾跳过本地物理门禁的授权不自动
 延续到后续发布。
+
+### 2026-10-19 2.5.1 发布身份
+
+| 项目 | 值 |
+|---|---|
+| 发布标签 | `v2.5.1`（提交即 tag 指向的 release commit） |
+| 版本变更 | `CMakeLists.txt` 与 `vcpkg.json` `2.5.0→2.5.1`；`.github/workflows/release.yml` 免签名清单加入 `v2.5.1` |
+| 构建 | Ninja Release，MSVC 14.44.35207，Qt 6.11.1，FFmpeg 8.1.2，Windows SDK 10.0.26100.0 |
+| 测试 | Release 预设 1449 项：1446 通过；3 项并发超时／偶发失败，串行重跑全过；0 断言失败 |
+| 包 | `CompareStation-2.5.1-windows-x64.zip`，272 文件，28,355,788 bytes，SHA256 `46570CA1516EE1FA30B360F19F1553C4A6064ABC6776E0360960F26416AC4C6B` |
+| 未验证 | 真实 D3D11VA／性能门禁、物理显示与干净 Windows；按[测试环境分离](test-environment-separation.md)未在主力桌面启动 |
+
+本机 Release 依赖树为 2026-10-17 以相同版本重建的本地 vcpkg 安装；包内 Qt／FFmpeg 版本
+与 2.5.0 相同但字节不同，不能把 2.5.0 的单文件哈希当作本版证据。原始日志与包哈希保存在
+`out/verification/release-v2.5.1/`。
 
 ## 2. 执行环境（本机只读测量）
 

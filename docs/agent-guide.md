@@ -56,13 +56,14 @@
 
 ## 当前接线与易误判点
 
-- 当前视频主界面由 `Main.qml` 实例化 `PlayerOsc` 和 `CompareModeBar`；不要只改旧
-  `TimelineBar.qml` 或 `ComparisonToolbar.qml` 就认为用户能看到修复。
+- 当前视频主界面由 `Main.qml` 实例化 `PlayerOsc` 和 `CompareModeBar`；旧的
+  `TimelineBar.qml` 与 `ComparisonToolbar.qml` 已删除，不要按这两个名字找入口。
 - 图片实际 loader 在 `src/app/Main.cpp` 注入，主要实现位于 `src/media_ffmpeg`。
-  `src/ui_qml/src/StillImageDecoder.cpp` 的 stb 格式开关不代表应用最终支持矩阵。
+  `src/media_ffmpeg/src/StillImageDecoder.cpp` 的 stb 格式开关不代表应用最终支持矩阵。
 - 视频已有三源、联动缩放、平移、ROI、高亮与热力图；图片仍须单独核对其模式枚举和 UI。
 - `ComparisonCoordinator` 是旧架构图中的概念名；当前实现类仍是 `PlaybackCoordinator`。
-- `ReviewSessionFacade` 中多个 capability 仍转发同一个控制器，不能把接口预留当作拆分已完成。
+- `ReviewSessionFacade` 只组合三块彼此独立的 capability（`playback`/`comparison`/`shell`），
+  不再把多个迁移步骤转发到同一个控制器；新增属性必须同时有第一个读取者。
 - `Dvs.Ui` 类型由 `dvs::ui::registerDvsUiTypes()`（bridge）统一注册：可创建类型沿用原语义，
   `ImageReviewController`／`ColorClipboardController` 为 uncreatable（组合根持有实例）。
   新增或改名类型要同时更新注册函数与 `src/ui_qml/qmltypes/DvsQmlTypes.h`；`dvs_ui_qml_types`

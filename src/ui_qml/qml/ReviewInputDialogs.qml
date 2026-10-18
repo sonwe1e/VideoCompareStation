@@ -10,7 +10,6 @@ Item {
     required property var fileNameFunction
     property var pathNameFunction: null
     required property int initialReferenceIndex
-    readonly property bool comparisonVisible: comparisonDialog.visible
     readonly property bool modalVisible: comparisonDialog.visible || videoFilesDialog.visible || addVideoDialog.visible || replaceVideoDialog.visible || videoFolderDialog.visible || mediaFilesDialog.visible
 
     signal videoFolderAccepted(url folder)

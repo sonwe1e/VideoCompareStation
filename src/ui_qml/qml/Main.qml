@@ -141,6 +141,16 @@ ApplicationWindow {
     // lightweight QML-only harnesses valid (they simply see no edit tools).
     readonly property var imageEditService: typeof imageEdit !== "undefined" ? imageEdit : null
     readonly property var folderPairModel: typeof imageFolderPairs !== "undefined" ? imageFolderPairs : null
+    // FLOW3 single-directory browsing cursor. It only remembers the neighbour list of the last
+    // single image opened; every step still goes through performImageReview, so failure and
+    // request-identity rules stay exactly the ones the direct open already uses.
+    readonly property var imageFolderCursorModel: typeof imageFolderCursor !== "undefined" ? imageFolderCursor : null
+    readonly property bool imageFolderBrowseActive: root.imageFolderCursorModel !== null && root.imageFolderCursorModel.count > 1
+    readonly property string imageFolderBrowseText: root.imageFolderBrowseActive ? qsTr("%1 / %2").arg(root.imageFolderCursorModel.currentIndex).arg(root.imageFolderCursorModel.count) : ""
+    // Replacing or closing the image task ends the edit session, and the working copy lives only
+    // in memory. Every entry point that would do so asks this first, so the same refusal the
+    // single-side close uses also covers dialogs, drops, folder comparison and Ctrl+W.
+    readonly property string imageLeaveBlockedReason: (root.imageEditService && root.imageEditService.active && root.imageEditService.dirty) ? qsTr("编辑副本有未保存修改：请先「另存副本…」或「结束编辑」，再切换图片。") : ""
     readonly property var videoFolderModel: typeof videoFolder !== "undefined" ? videoFolder : null
     property bool videoFolderSidebarVisible: false
     // videoFolderListVisible / videoFolderInset live with the other U01 layout properties
@@ -735,6 +745,25 @@ ApplicationWindow {
         reviewShortcuts.cancelJog();
     }
 
+    // The directory can change while the window is hidden (a delete or rename in Explorer).
+    // Re-scanning refreshes both the neighbour list and the "n / N" label without a file watcher.
+    // An empty cursor means the current task is a pair or folder session, which must not gain a
+    // directory list here.
+    function refreshImageFolderCursor() {
+        if (!root.stillImageController || !root.imageFolderCursorModel)
+            return false;
+        if (root.imageFolderCursorModel.count <= 0)
+            return false;
+        if (!root.stillImageController.hasPrimary || root.stillImageController.hasSecondary)
+            return false;
+        root.imageFolderCursorModel.setCurrentFile(root.stillImageController.primaryPath);
+        return root.imageFolderCursorModel.count > 0;
+    }
+    onActiveChanged: {
+        if (active)
+            root.refreshImageFolderCursor();
+    }
+
     // Fade was removed from the video compare modes; fall back to Wipe for persisted preferences
 
     // that still point at it, so the UI never lands on an unselectable mode.
@@ -1284,6 +1313,15 @@ ApplicationWindow {
 
         root.commitWorkspace(workspaceSession.imageMedia, identity);
 
+        // A committed single image becomes the directory-cursor position; a committed pair is a
+        // different task, so the single-directory cursor must stop offering neighbours.
+        if (root.imageFolderCursorModel) {
+            if (kind === "single")
+                root.imageFolderCursorModel.setCurrentFile(target.primaryPath);
+            else
+                root.imageFolderCursorModel.clear();
+        }
+
         root.dropError = "";
 
         // A committed image task joins the shared recent-media list; a sidebar-staged open
@@ -1377,8 +1415,19 @@ ApplicationWindow {
 
         workspaceSession.markCommitted(target, identity);
 
-        if (target === workspaceSession.imageMedia)
+        if (target === workspaceSession.imageMedia) {
             ensureVideoPaused();
+            // Every image commit ends the previous directory sequence. A single open re-arms the
+            // cursor immediately after this call; a pair or folder session leaves it empty so
+            // the arrow keys cannot walk into an unrelated folder.
+            if (root.imageFolderCursorModel)
+                root.imageFolderCursorModel.clear();
+            // A committed image also replaces the edit session's source. A clean session has
+            // nothing to lose and ends here; a dirty one is refused before the open starts, so
+            // edit mode can never sit on top of a different image.
+            if (root.imageEditService && root.imageEditService.active && !root.imageEditService.dirty)
+                root.imageEditService.endSession();
+        }
 
         return showWorkspace(target);
     }
@@ -1394,6 +1443,9 @@ ApplicationWindow {
             if (!imageTarget || (!root.imageHasContent && root.pendingImageRequestId <= 0))
                 return false;
 
+            if (root.imageTaskSwitchBlocked())
+                return false;
+
             root.pendingImageRequestId = -1;
 
             root.pendingImageOpenKind = "";
@@ -1402,6 +1454,11 @@ ApplicationWindow {
 
             if (imageTarget)
                 imageTarget.closeAll();
+
+            // Closing the task drops the directory cursor with it; otherwise the arrow keys
+            // would reopen an image the user just closed.
+            if (root.imageFolderCursorModel)
+                root.imageFolderCursorModel.clear();
 
             detachFolderSession();
 
@@ -1774,6 +1831,9 @@ ApplicationWindow {
     }
 
     function requestCompareFolders() {
+        if (root.imageTaskSwitchBlocked())
+            return false;
+
         workspaceSession.beginOpen(workspaceSession.imageMedia);
 
         root.imageFolderStage = 0;
@@ -2456,10 +2516,24 @@ ApplicationWindow {
         return true;
     }
 
+    // One refusal for every path that would replace or close the image task. Returns true when
+    // the action was blocked (and already explained), so callers only have to early-return.
+    function imageTaskSwitchBlocked() {
+        const reason = root.imageLeaveBlockedReason;
+
+        if (reason.length === 0)
+            return false;
+
+        root.showIntentMessage(reason);
+
+        return true;
+    }
     function performImageReview(normalizedUrls) {
         const target = root.stillImageController;
 
         if (!target)
+            return false;
+        if (root.imageTaskSwitchBlocked())
             return false;
         if (!normalizedUrls || normalizedUrls.length < 1 || normalizedUrls.length > 2) {
             const detail = qsTr("一次只能打开一张或两张图片。");
@@ -2510,6 +2584,37 @@ ApplicationWindow {
         dropError = "";
 
         return true;
+    }
+    // FLOW3 single-directory stepping. The cursor supplies a URL only; the ordinary image open
+    // decides whether it commits, so a neighbour that fails to decode leaves the current image
+    // on screen and the request-identity rules are the same ones a direct open already uses.
+    function stepImageFolder(delta) {
+        const cursor = root.imageFolderCursorModel;
+
+        if (!cursor || delta === 0)
+            return false;
+
+        const url = delta > 0 ? cursor.nextUrl() : cursor.previousUrl();
+
+        if (!url || String(url).length === 0) {
+            root.showIntentMessage(delta > 0 ? qsTr("已经是本目录的最后一张图片。") : qsTr("已经是本目录的第一张图片。"));
+            return false;
+        }
+
+        return root.performImageReview([url]);
+    }
+    function jumpImageFolder(toLast) {
+        const cursor = root.imageFolderCursorModel;
+
+        if (!cursor)
+            return false;
+
+        const url = toLast ? cursor.lastUrl() : cursor.firstUrl();
+
+        if (!url || String(url).length === 0)
+            return false;
+
+        return root.performImageReview([url]);
     }
     function performImagePairSelection(urls) {
         const selected = urls ? Array.from(urls).filter(url => url && url.toString().length > 0) : [];
@@ -4267,6 +4372,10 @@ ApplicationWindow {
             controller: root.stillImageController
             imageEdit: root.imageEditService
             pairModel: root.folderPairModel
+            folderBrowseActive: root.imageFolderBrowseActive
+            folderBrowseText: root.imageFolderBrowseText
+            onFolderStepRequested: delta => root.stepImageFolder(delta)
+            onFolderJumpRequested: toLast => root.jumpImageFolder(toLast)
             sidebarVisible: root.imageFolderSidebarVisible
             onOpenImageRequested: root.requestImageOpen()
             onAddImageRequested: root.requestImageAdd()

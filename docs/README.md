@@ -12,6 +12,9 @@ CompareStation documentation is grouped by lifecycle and audience:
   clearly separates recommended designs from agreed scope. Audio and subtitles are out of scope.
 - [engineering/visual-review-backlog.md](engineering/visual-review-backlog.md) is the current
   issue and acceptance index; inspect HEAD and local changes before acting on a dated status.
+- [engineering/decision-register.md](engineering/decision-register.md) records which side a
+  dispute was settled on, with its status (confirmed, temporary assumption, rejected, not
+  triggered). Check it before treating a product doc's default as agreed.
 - [architecture.md](architecture.md), [architecture/](architecture/), and [adr/](adr/) define
   current architecture, dependency rules, state ownership, and accepted decisions.
 - [engineering/](engineering/) contains active engineering contracts and diagnostics. Start with

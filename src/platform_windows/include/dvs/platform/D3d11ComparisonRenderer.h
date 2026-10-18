@@ -247,13 +247,6 @@ struct SurfaceRenderState final {
     [[nodiscard]] bool isValid() const noexcept;
 };
 
-struct SurfaceSplitLayout final {
-    std::uint32_t leftPixelWidth = 0U;
-    std::uint32_t rightPixelWidth = 0U;
-    SurfaceRect left;
-    SurfaceRect right;
-};
-
 struct SurfacePanelLayout final {
     std::array<SurfaceRect, 3U> sourceRects{};
     std::array<std::uint8_t, 3U> sourceSlots{0U, 1U, 2U};
@@ -286,11 +279,6 @@ struct Nv12ColorTransform final {
     [[nodiscard]] constexpr bool operator==(const Nv12ColorTransform&) const = default;
 };
 
-[[nodiscard]] SurfaceSplitLayout computeSurfaceSplit(float logicalWidth,
-                                                     float logicalHeight,
-                                                     std::uint32_t pixelWidth,
-                                                     std::uint32_t pixelHeight) noexcept;
-
 [[nodiscard]] SurfacePanelLayout computeSurfacePanelLayout(
     SurfaceViewMode viewMode,
     float logicalWidth,
@@ -301,10 +289,6 @@ struct Nv12ColorTransform final {
     SurfaceDifferenceEdge differenceEdge,
     float wipePosition,
     SurfaceWipeOrientation wipeOrientation = SurfaceWipeOrientation::Vertical) noexcept;
-
-[[nodiscard]] SurfaceRect aspectFitRect(const SurfaceRect& bounds,
-                                        std::uint32_t sourceWidth,
-                                        std::uint32_t sourceHeight) noexcept;
 
 // Floating-point aspect fit for already-scaled display extents (SAR/ROI applied).
 [[nodiscard]] SurfaceRect

@@ -101,7 +101,6 @@ struct PlaybackEvidenceCollector::RunState final {
         evidence.runId = start.identity.run;
         evidence.session = start.identity.session;
         evidence.epoch = start.identity.epoch;
-        evidence.startedAtMicroseconds = start.timestampMicroseconds;
         evidence.open = true;
     }
 
@@ -142,8 +141,7 @@ void PlaybackEvidenceCollector::ingest(const TraceEvent& event) {
             // A start while a run is still open means the stop was lost (truncated capture).
             // The open run is frozen as truncated and its tables are not merged anywhere.
             activeRun_->evidence.truncated = true;
-            const std::uint64_t stoppedAt = event.timestampMicroseconds;
-            closeActiveRun(stoppedAt);
+            closeActiveRun();
         }
         activeRun_ = std::make_unique<RunState>(event);
         return;
@@ -163,7 +161,7 @@ void PlaybackEvidenceCollector::ingest(const TraceEvent& event) {
             }
             return;
         }
-        closeActiveRun(event.timestampMicroseconds);
+        closeActiveRun();
         return;
     }
     case TraceEventKind::ProviderSubmitted:
@@ -264,15 +262,23 @@ void PlaybackEvidenceCollector::ingest(const TraceEvent& event) {
     }
     case TraceEventKind::RenderPublished: {
         const std::uint64_t frame = event.payload;
-        if (run.lastPublishedFrame.has_value() && frame > *run.lastPublishedFrame + 1U) {
-            // A gap between consecutive published canonical ids is a frame set the
-            // application never published. Gap-based by definition: a long interval between
-            // consecutive ids is never a skip, and there is no inference before the first
-            // publication of a run.
-            run.evidence.skippedFrameSetCount += frame - *run.lastPublishedFrame - 1U;
-        }
         if (run.lastPublishedFrame.has_value()) {
-            *run.lastPublishedFrame = std::max(*run.lastPublishedFrame, frame);
+            const std::uint64_t previous = *run.lastPublishedFrame;
+            if (frame > previous) {
+                // A gap between consecutive published canonical ids is a frame set the
+                // application never published. Gap-based by definition: a long interval
+                // between consecutive ids is never a skip, and there is no inference before
+                // the first publication of a run.
+                if (frame - previous > 1U) {
+                    run.evidence.skippedFrameSetCount += frame - previous - 1U;
+                }
+            }
+            // Every publication becomes the next baseline, including a rewind (loop restart or
+            // a backward seek). Keeping the high-water mark instead would miss every gap after
+            // the playhead wrapped, because the ids would not exceed the pre-rewind maximum.
+            if (frame != previous) {
+                run.lastPublishedFrame = frame;
+            }
         } else {
             run.lastPublishedFrame = frame;
         }
@@ -371,10 +377,9 @@ void PlaybackEvidenceCollector::reset() noexcept {
     cumulativeNonPlaybackWindowEventCount_ = 0U;
 }
 
-void PlaybackEvidenceCollector::closeActiveRun(const std::uint64_t stoppedAtMicroseconds) {
+void PlaybackEvidenceCollector::closeActiveRun() {
     RunState& run = *activeRun_;
     run.evidence.open = false;
-    run.evidence.stoppedAtMicroseconds = stoppedAtMicroseconds;
     for (std::size_t stage = 0U; stage < kPlaybackEvidenceStageCount; ++stage) {
         run.reservoirs[stage].finalizeStats(run.evidence.stages[stage]);
     }

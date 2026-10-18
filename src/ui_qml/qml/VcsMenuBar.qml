@@ -8,7 +8,6 @@ MenuBar {
     id: control
 
     property color menuBarColor: Theme.headerBackground
-    property color menuBarBorderColor: "transparent"
     property color textColor: Theme.primaryText
     property color mutedTextColor: Theme.mutedText
     // Fill behind the top-level item whose menu is open (or held down). A neutral veil, not a

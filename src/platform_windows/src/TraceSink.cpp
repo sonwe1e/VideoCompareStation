@@ -9,7 +9,6 @@
 #include <filesystem>
 #include <span>
 #include <utility>
-#include <vector>
 
 namespace dvs::platform {
 
@@ -100,44 +99,6 @@ namespace {
 }
 
 } // namespace
-
-MemoryTraceSink::MemoryTraceSink(const std::size_t capacity) : capacity_(capacity) {
-    events_.reserve(capacity);
-}
-
-bool MemoryTraceSink::append(const application::TraceEvent& event) noexcept {
-    if (events_.size() < capacity_) {
-        try {
-            events_.push_back(event);
-            return true;
-        } catch (...) {
-            return false;
-        }
-    }
-    return false;
-}
-
-bool MemoryTraceSink::recordOverflow(const std::uint64_t lostCount) noexcept {
-    overflow_ += lostCount;
-    return true;
-}
-
-bool MemoryTraceSink::finalize() noexcept {
-    return true;
-}
-
-std::uint64_t MemoryTraceSink::overflowCount() const noexcept {
-    return overflow_;
-}
-
-const std::vector<application::TraceEvent>& MemoryTraceSink::events() const noexcept {
-    return events_;
-}
-
-void MemoryTraceSink::clear() noexcept {
-    events_.clear();
-    overflow_ = 0U;
-}
 
 FileTraceSink::FileTraceSink(std::filesystem::path path) : path_(std::move(path)) {}
 

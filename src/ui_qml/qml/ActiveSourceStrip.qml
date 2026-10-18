@@ -63,10 +63,11 @@ Rectangle {
     signal removeSelectedRequested
     readonly property real chipSpacing: 7
 
+    readonly property string sourceSetSignature: control.displayOrder.join("\u0001") + "|" + control.sourceCount
+
     // Session change detector: the shell clears its selection list whenever the active source set
     // changes, but the explicit management mode is strip-local. Without leaving it, an ordinary
     // chip click after an open/replace/append would keep selecting instead of direct-looking.
-    readonly property string sourceSetSignature: control.displayOrder.join("\u0001") + "|" + control.sourceCount
     onSourceSetSignatureChanged: control.manageSelection = false
 
     // V02: the drag reorder is gone (see the displayOrder note above). Positions stay

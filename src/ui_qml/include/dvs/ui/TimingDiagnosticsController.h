@@ -33,7 +33,6 @@ class TimingDiagnosticsController final : public QObject, public application::IT
     Q_PROPERTY(double drawToAckP95Ms READ drawToAckP95Ms NOTIFY diagnosticsUpdated)
     Q_PROPERTY(double drawToAckMaxMs READ drawToAckMaxMs NOTIFY diagnosticsUpdated)
     Q_PROPERTY(double renderToAckP95Ms READ renderToAckP95Ms NOTIFY diagnosticsUpdated)
-    Q_PROPERTY(double renderToAckMaxMs READ renderToAckMaxMs NOTIFY diagnosticsUpdated)
     Q_PROPERTY(
         QString systemPresentationStatus READ systemPresentationStatus NOTIFY diagnosticsUpdated)
     Q_PROPERTY(QString driverKind READ driverKind NOTIFY diagnosticsUpdated)
@@ -91,7 +90,6 @@ public:
     [[nodiscard]] double drawToAckP95Ms() const noexcept;
     [[nodiscard]] double drawToAckMaxMs() const noexcept;
     [[nodiscard]] double renderToAckP95Ms() const noexcept;
-    [[nodiscard]] double renderToAckMaxMs() const noexcept;
     [[nodiscard]] QString systemPresentationStatus() const;
     [[nodiscard]] QString driverKind() const;
     [[nodiscard]] bool isIndirectDisplayWarning() const noexcept;
@@ -156,7 +154,6 @@ private:
     double drawToAckP95Ms_ = 0.0;
     double drawToAckMaxMs_ = 0.0;
     double renderToAckP95Ms_ = 0.0;
-    double renderToAckMaxMs_ = 0.0;
     QString systemPresentationStatus_;
     QString driverKind_;
     bool isIndirectDisplayWarning_ = false;

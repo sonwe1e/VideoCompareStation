@@ -70,6 +70,13 @@ Rectangle {
     readonly property var cursorPixel: imageReview ? imageReview.cursorPixel : ({})
     readonly property string errorText: imageReview ? String(imageReview.errorText || "") : ""
     readonly property bool hasFolders: Boolean(pairModel && pairModel.pairCount > 0)
+    // FLOW3 single-directory browsing. The host owns the cursor and the open request; this
+    // component only reports the key gesture and shows the position, so a failed decode is
+    // decided in exactly one place.
+    property bool folderBrowseActive: false
+    property string folderBrowseText: ""
+    signal folderStepRequested(int delta)
+    signal folderJumpRequested(bool toLast)
     readonly property bool sizesDiffer: Boolean(imageReview && imageReview.hasPair && imageReview.primaryWidth > 0 && imageReview.primaryWidth !== imageReview.secondaryWidth || imageReview && imageReview.hasPair && imageReview.primaryHeight > 0 && imageReview.primaryHeight !== imageReview.secondaryHeight)
     // Alpha difference (6) is a per-pixel diff over the straight-alpha channel.
     readonly property bool diffModeActive: Boolean(imageReview && imageReview.hasPair && compareMode >= 2 && (compareMode <= 4 || compareMode === 6))
@@ -3280,6 +3287,18 @@ Rectangle {
                         visible: control.hasFolders
                         onClicked: control.toggleSidebarRequested()
                     }
+
+                    // FLOW3: where the arrow keys are in the current directory. The count is not
+                    // decoration - it says the image belongs to a sequence and how far it runs,
+                    // which is what tells the user a neighbour exists before pressing a key.
+                    Text {
+                        objectName: "imageFolderPositionLabel"
+                        visible: control.folderBrowseText.length > 0
+                        text: control.folderBrowseText
+                        color: Theme.secondaryText
+                        font.pixelSize: Theme.fontCaption
+                        verticalAlignment: Text.AlignVCenter
+                    }
                 }
             }
 
@@ -4418,11 +4437,15 @@ Rectangle {
         focusTarget: control
     }
 
-    // Left/Right/Up/Down walk folder pairs when a comparison list is loaded; Home/End jump
-    // to the first/last complete pair.
+    // Left/Right/Up/Down walk folder pairs when a comparison list is loaded; with only a single
+    // image open they step through that image's own directory instead (FLOW3). Home/End jump to
+    // the first/last complete pair, or to the first/last neighbour in the single-image case.
     Keys.onLeftPressed: event => {
         if (control.hasFolders && folderPairSidebar) {
             folderPairSidebar.stepPair(-1);
+            event.accepted = true;
+        } else if (control.folderBrowseActive) {
+            control.folderStepRequested(-1);
             event.accepted = true;
         }
     }
@@ -4430,17 +4453,26 @@ Rectangle {
         if (control.hasFolders && folderPairSidebar) {
             folderPairSidebar.stepPair(1);
             event.accepted = true;
+        } else if (control.folderBrowseActive) {
+            control.folderStepRequested(1);
+            event.accepted = true;
         }
     }
     Keys.onUpPressed: event => {
         if (control.hasFolders && folderPairSidebar) {
             folderPairSidebar.stepPair(-1);
             event.accepted = true;
+        } else if (control.folderBrowseActive) {
+            control.folderStepRequested(-1);
+            event.accepted = true;
         }
     }
     Keys.onDownPressed: event => {
         if (control.hasFolders && folderPairSidebar) {
             folderPairSidebar.stepPair(1);
+            event.accepted = true;
+        } else if (control.folderBrowseActive) {
+            control.folderStepRequested(1);
             event.accepted = true;
         }
     }
@@ -4465,10 +4497,16 @@ Rectangle {
             if (control.hasFolders && folderPairSidebar) {
                 folderPairSidebar.stepFirst();
                 event.accepted = true;
+            } else if (control.folderBrowseActive) {
+                control.folderJumpRequested(false);
+                event.accepted = true;
             }
         } else if (event.key === Qt.Key_End) {
             if (control.hasFolders && folderPairSidebar) {
                 folderPairSidebar.stepLast();
+                event.accepted = true;
+            } else if (control.folderBrowseActive) {
+                control.folderJumpRequested(true);
                 event.accepted = true;
             }
         } else if ((event.modifiers === Qt.NoModifier || event.modifiers === Qt.KeypadModifier) && event.key === Qt.Key_T) {

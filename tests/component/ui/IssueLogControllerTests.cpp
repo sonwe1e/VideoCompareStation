@@ -134,8 +134,6 @@ protected:
         repository_ = std::make_unique<persistence::IssueRecordRepository>(
             (tempDir_.path() + QStringLiteral("/issues.json")).toStdString());
         controller_ = std::make_unique<IssueLogController>(repository_.get());
-        controller_->setDefaultDocumentPath(
-            QUrl::fromLocalFile(tempDir_.path() + QStringLiteral("/issues.json")));
     }
 
     QTemporaryDir tempDir_;

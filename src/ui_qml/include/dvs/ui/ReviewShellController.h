@@ -196,7 +196,6 @@ public:
     Q_INVOKABLE void cancelAllQueuedIntents();
     Q_INVOKABLE bool beginPendingAction(const QVariantMap& action);
     Q_INVOKABLE QVariantMap takePendingAction();
-    Q_INVOKABLE void cancelPendingAction();
     Q_INVOKABLE bool enqueueStartupRequest(int kind, const QVariantList& files);
     Q_INVOKABLE bool setRangeIn(qint64 frame, double mediaTime);
     Q_INVOKABLE bool setRangeOut(qint64 frame, double mediaTime);

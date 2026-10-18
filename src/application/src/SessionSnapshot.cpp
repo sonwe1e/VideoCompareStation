@@ -29,9 +29,6 @@ bool SessionSnapshot::isConsistent() const noexcept {
         if (!validFrame(playbackRangeIn) || !validFrame(playbackRangeOut)) {
             return false;
         }
-        if (playbackRangeLoop && !playbackRangeIn.has_value()) {
-            return false;
-        }
     } else if (playbackRangeLoop || playbackRangeLoopActive) {
         return false;
     }

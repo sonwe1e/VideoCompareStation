@@ -130,7 +130,6 @@ Item {
         property bool popupInputContext: true
 
         default property alias shellBody: bodySlot.data
-        readonly property alias bodyWidth: bodySlot.width
 
         signal confirmed
 

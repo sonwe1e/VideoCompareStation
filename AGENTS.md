@@ -3,8 +3,10 @@
 ## Agent Start Here
 
 Read [docs/agent-guide.md](docs/agent-guide.md) first for the code/test routing map,
-[product intent](docs/product/visual-review.md), and the
-[current issue ledger](docs/engineering/visual-review-backlog.md).
+[product intent](docs/product/visual-review.md), the
+[current issue ledger](docs/engineering/visual-review-backlog.md), and the
+[decision register](docs/engineering/decision-register.md) for which side a settled
+dispute landed on and whether it is still a temporary assumption.
 The product covers silent video/image viewing and quality comparison; audio and subtitles
 are outside the current scope. Check HEAD and the working-tree diff before treating an issue
 as open or fixed. Older playback plans describe earlier baselines, not current completion status.

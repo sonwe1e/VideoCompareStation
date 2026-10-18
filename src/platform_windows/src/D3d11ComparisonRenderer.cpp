@@ -1009,33 +1009,6 @@ bool SurfaceRenderState::isValid() const noexcept {
                [](const SurfaceLocalWindow& window) { return window.isValid(); });
 }
 
-SurfaceSplitLayout computeSurfaceSplit(const float logicalWidth,
-                                       const float logicalHeight,
-                                       const std::uint32_t pixelWidth,
-                                       const std::uint32_t pixelHeight) noexcept {
-    if (!std::isfinite(logicalWidth) || !std::isfinite(logicalHeight) || logicalWidth <= 0.0F ||
-        logicalHeight <= 0.0F || pixelWidth < 2U || pixelHeight == 0U) {
-        return {};
-    }
-
-    const std::uint32_t leftPixels = pixelWidth / 2U;
-    const std::uint32_t rightPixels = pixelWidth - leftPixels;
-    const float split =
-        logicalWidth * static_cast<float>(leftPixels) / static_cast<float>(pixelWidth);
-    return SurfaceSplitLayout{
-        .leftPixelWidth = leftPixels,
-        .rightPixelWidth = rightPixels,
-        .left = SurfaceRect{.x = 0.0F, .y = 0.0F, .width = split, .height = logicalHeight},
-        .right =
-            SurfaceRect{
-                .x = split,
-                .y = 0.0F,
-                .width = logicalWidth - split,
-                .height = logicalHeight,
-            },
-    };
-}
-
 // Equal-width column regions for the two-up and three-up layouts. Region boundaries snap to
 // pixel columns so adjacent panels never overlap or drop a pixel column.
 struct SurfaceColumnLayout final {
@@ -1267,13 +1240,6 @@ SurfaceRect aspectFitRectFloat(const SurfaceRect& bounds,
         .width = fittedWidth,
         .height = fittedHeight,
     };
-}
-
-SurfaceRect aspectFitRect(const SurfaceRect& bounds,
-                          const std::uint32_t sourceWidth,
-                          const std::uint32_t sourceHeight) noexcept {
-    return aspectFitRectFloat(
-        bounds, static_cast<float>(sourceWidth), static_cast<float>(sourceHeight));
 }
 
 SurfacePresentationGeometry
@@ -1678,6 +1644,12 @@ public:
         // Drop the front publication before the device objects so its deferred-retirement
         // deleters can observe a still-valid broker/device generation during teardown.
         frontPublication_.reset();
+        // Acknowledgement state belongs to the device generation being torn down: a pending
+        // push must not resurface on the next device, and a "mailbox closed" answer from the
+        // old lease must not make every later frame report Closed.
+        pendingAcknowledgement_.reset();
+        highestAcknowledgementSerial_ = 0U;
+        acknowledgementClosed_ = false;
         cancelSourcePixelProbes();
         for (auto& readback : pixelReadbacks_) {
             readback.teardown();
