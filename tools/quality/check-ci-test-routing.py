@@ -18,8 +18,12 @@ HARDWARE = {
 # re-enumerate and update both numbers here *and* the self-test's construction below: the two
 # literals are deliberately independent so a one-sided edit fails the self-test instead of
 # turning it into a tautology.
-EXPECTED_TOTAL = 1409
-EXPECTED_SOFTWARE = 1387
+#
+# 1465/1443 comes from PR #53 (merge of 66475bb onto the workspace work), +56 over the 1409/1387
+# of 4f2e0dd: 55 new gtest cases plus the new quality.qmltypes_contract entry. The inventory
+# carries 11 hardware-labelled tests; only the five named below are asserted by identity.
+EXPECTED_TOTAL = 1465
+EXPECTED_SOFTWARE = 1443
 
 
 def validate(inventory, software, hardware):
@@ -63,7 +67,8 @@ def main():
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
-        software = [f"software.{i}" for i in range(1387)]
+        # Independent of EXPECTED_SOFTWARE on purpose: a one-sided pin fails here.
+        software = [f"software.{i}" for i in range(1443)]
         hardware = sorted(HARDWARE)
         inventory = ([{"name": n, "labels": []} for n in software] +
                      [{"name": n, "labels": ["hardware"]} for n in hardware] +
@@ -97,7 +102,8 @@ def main():
     hardware = [t["name"] for t in read_tests("--preset", "hardware-d3d11", "--test-dir",
                                              f"out/build/{args.preset}")]
     count = validate(inventory, software, hardware)
-    print(f"CTest routing passed: {count} checks, 1409 total, 1387 software; "
+    print(f"CTest routing passed: {count} checks, {EXPECTED_TOTAL} total, "
+          f"{EXPECTED_SOFTWARE} software; "
           "five decoder cases preserved in the manual hardware preset.")
 
 
