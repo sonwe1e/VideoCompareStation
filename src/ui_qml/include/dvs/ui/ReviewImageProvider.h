@@ -7,7 +7,9 @@
 
 namespace dvs::ui {
 
-// Serves image://vcs-review/<slot>/<generation> from ImageReviewController.
+// Serves image://vcs-review/<slot>/<generation>/<view-mode>/<alpha-filter>/<alpha-threshold>/
+// <colour-toggle> from ImageReviewController. Every presentation input is part of the id, so
+// Qt's image cache cannot hand back a pixmap built for a different view.
 class ReviewImageProvider final : public QQuickImageProvider {
 public:
     explicit ReviewImageProvider(ImageReviewController* controller);

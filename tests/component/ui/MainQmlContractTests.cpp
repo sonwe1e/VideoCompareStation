@@ -7972,11 +7972,13 @@ TEST(MainQmlContractTests, ImageWorkspaceReloadsViewportSourceAfterImageOpen) {
     ASSERT_NE(imageItem, nullptr);
 
     // Before any image is loaded the binding holds the generation-0 URL and the Image
-    // element received a null pixmap from the provider.
+    // element received a null pixmap from the provider. The provider URL is
+    // slot/generation/view-mode/alpha-filter/alpha-threshold/colour-toggle: the colour
+    // toggle is part of the identity so flipping it cannot reuse a cached pixmap.
     EXPECT_EQ(viewport->property("imageUrl").toString(),
-              QStringLiteral("image://vcs-review/2/0/0/0/0"));
+              QStringLiteral("image://vcs-review/2/0/0/0/0/1"));
     EXPECT_EQ(imageItem->property("source").toString(),
-              QStringLiteral("image://vcs-review/2/0/0/0/0"));
+              QStringLiteral("image://vcs-review/2/0/0/0/0/1"));
 
     QImage image(64, 48, QImage::Format_ARGB32);
     image.fill(QColor(200, 30, 30));
@@ -7988,20 +7990,22 @@ TEST(MainQmlContractTests, ImageWorkspaceReloadsViewportSourceAfterImageOpen) {
     // The binding must re-evaluate (generation 0 -> 1) so the Image element reloads the
     // provider and actually paints the decoded pixels instead of staying black.
     EXPECT_EQ(viewport->property("imageUrl").toString(),
-              QStringLiteral("image://vcs-review/2/1/0/0/0"));
+              QStringLiteral("image://vcs-review/2/1/0/0/0/1"));
     EXPECT_EQ(imageItem->property("source").toString(),
-              QStringLiteral("image://vcs-review/2/1/0/0/0"));
+              QStringLiteral("image://vcs-review/2/1/0/0/0/1"));
     // 1 == QQuickImage::Ready.
     EXPECT_EQ(imageItem->property("status").toInt(), 1)
         << "Image element must reach Ready after the source URL refreshes.";
     EXPECT_EQ(imageItem->property("sourceSize").toSize(), QSize(64, 48));
 
     // Channel changes must refresh the provider URL even when the source image is unchanged.
+    // Compare against the URL that was actually presented, not a literal: a literal would
+    // silently stop proving "the URL changed" the next time the URL contract grows a field.
+    const QString rgbaUrl = imageItem->property("source").toString();
     imageReview.setViewMode(ImageReviewController::AlphaGrayView);
     QCoreApplication::processEvents();
     EXPECT_EQ(imageItem->property("source").toString(), imageReview.imageUrl(2));
-    EXPECT_NE(imageItem->property("source").toString(),
-              QStringLiteral("image://vcs-review/2/1/0/0/0"));
+    EXPECT_NE(imageItem->property("source").toString(), rgbaUrl);
     EXPECT_EQ(imageItem->property("status").toInt(), 1);
     const QString alphaUrl = imageItem->property("source").toString();
     imageReview.setViewMode(ImageReviewController::RgbaView);
