@@ -19,8 +19,11 @@ permissions:
 
 concurrency:
   group: build-test-${{ github.workflow }}-${{ github.ref }}
-  # Finish the active cold build/cache; concurrency retains only the latest pending run.
-  cancel-in-progress: false
+  # On a pull request only the newest commit matters, so a superseded run is cancelled instead
+  # of holding the group while a cold dependency build runs for up to the 240-minute timeout.
+  # Pushes keep the previous behaviour: the run that produces a commit's evidence is never
+  # cancelled mid-flight.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build-test:
@@ -57,7 +60,11 @@ jobs:
         id: hosted
         uses: ./.github/actions/setup-windows
         with:
-          cache-scope: ${{ matrix.preset }}
+          # dev and release inherit the same base preset and neither sets
+          # VCPKG_MANIFEST_FEATURES, so both resolve the identical vcpkg archive set. They
+          # share the full-role snapshot instead of keeping two ~1.4 GiB copies, which also
+          # lets a Debug job restore what a Release job already built.
+          cache-scope: software
 
       - name: Configure
         shell: pwsh
