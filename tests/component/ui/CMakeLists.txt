@@ -221,6 +221,8 @@ dvs_add_gtest(
     MODULE ui_qml
     TIMEOUT 10
 )
+set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
+    "${CMAKE_CURRENT_LIST_DIR}/ImageEditTestProperties.cmake")
 
 add_executable(
     dvs_image_folder_pair_model_tests

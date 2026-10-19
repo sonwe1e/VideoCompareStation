@@ -5,7 +5,9 @@ param(
     [string]$VcpkgRoot = '',
     [string]$VcvarsAll = '',
     [string]$CMakeExecutable = '',
-    [string]$NinjaExecutable = ''
+    [string]$NinjaExecutable = '',
+    [string]$BuildDirectory = '',
+    [switch]$QualityTools
 )
 
 $ErrorActionPreference = 'Stop'
@@ -155,24 +157,69 @@ $buildVcRoot = [System.IO.Path]::GetFullPath((Join-Path (Split-Path $env:VCVARSA
 $buildVsRoot = Split-Path $buildVcRoot -Parent
 
 function Resolve-BuildTool {
-    param([string]$Override, [string]$Name, [string]$Fallback)
-    if ($Override) { return Resolve-BuildFile $Override $Name }
-    $command = Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-    if ($command) { return $command.Source }
-    return Resolve-BuildFile $Fallback $Name
+    param([string]$Override, [string]$Name, [string[]]$Preferred,
+        [version]$Minimum = '0.0', [string]$Exact = '')
+    $candidates = if ($Override) { @(Resolve-BuildFile $Override $Name) } else {
+        @($Preferred) + @(Get-Command $Name -All -CommandType Application -ErrorAction SilentlyContinue |
+            ForEach-Object Source)
+    }
+    $rejected = @()
+    foreach ($candidate in ($candidates | Where-Object { $_ } | Select-Object -Unique)) {
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+        $output = (& $candidate --version 2>&1 | Out-String)
+        if ($LASTEXITCODE -eq 0 -and $output -match '\b(\d+\.\d+(?:\.\d+)?)\b') {
+            $version = $Matches[1]
+            $compatible = ([version]$version -ge $Minimum) -and (-not $Exact -or $version -eq $Exact)
+            if ($Name -eq 'cmake.exe') {
+                $compatible = $compatible -and (Test-Path -LiteralPath (Join-Path (Split-Path $candidate) 'ctest.exe'))
+            }
+            if ($compatible) {
+                Write-Host "build tool: $Name $version -> $candidate"
+                return (Resolve-Path -LiteralPath $candidate).Path
+            }
+        }
+        $rejected += "$candidate ($($output.Trim()))"
+    }
+    throw "No compatible $Name found (minimum $Minimum$(if ($Exact) { "; required $Exact" })). Set its explicit override. Rejected: $($rejected -join '; ')"
+}
+
+$buildToolCache = @{}
+if ($BuildDirectory -and (Test-Path -LiteralPath (Join-Path $BuildDirectory 'CMakeCache.txt'))) {
+    foreach ($line in (Get-Content -LiteralPath (Join-Path $BuildDirectory 'CMakeCache.txt'))) {
+        if ($line -match '^([^#/:][^:]*):[^=]+=(.*)$') { $buildToolCache[$Matches[1]] = $Matches[2] }
+    }
 }
 
 if (-not $CMakeExecutable) { $CMakeExecutable = $env:CMAKE_EXECUTABLE }
 if (-not $NinjaExecutable) { $NinjaExecutable = $env:NINJA_BIN }
-$env:CMAKE_EXECUTABLE = Resolve-BuildTool $CMakeExecutable 'cmake.exe' (Join-Path $buildVsRoot 'Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe')
+$env:CMAKE_EXECUTABLE = Resolve-BuildTool $CMakeExecutable 'cmake.exe' @(
+    $buildToolCache['CMAKE_COMMAND']
+    (Join-Path $env:ProgramFiles 'CMake/bin/cmake.exe')
+    (Join-Path $buildVsRoot 'Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe')
+) -Minimum '4.4'
 $env:CTEST_EXECUTABLE = Resolve-BuildFile (Join-Path (Split-Path $env:CMAKE_EXECUTABLE) 'ctest.exe') 'ctest.exe (beside CMake)'
-$env:NINJA_BIN = Resolve-BuildTool $NinjaExecutable 'ninja.exe' (Join-Path $buildVsRoot 'Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe')
+$env:NINJA_BIN = Resolve-BuildTool $NinjaExecutable 'ninja.exe' @(
+    $buildToolCache['CMAKE_MAKE_PROGRAM']
+    (Join-Path $buildVsRoot 'Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe')
+) -Minimum '1.12'
+
+$buildQualityPaths = @{}
+if ($QualityTools) {
+    foreach ($entry in @(@('CLANG_FORMAT_EXECUTABLE', 'clang-format.exe'), @('CLANG_TIDY_EXECUTABLE', 'clang-tidy.exe'))) {
+        $override = if ($env:DVS_LLVM_BIN) { Join-Path $env:DVS_LLVM_BIN $entry[1] } else { '' }
+        $buildQualityPaths[$entry[0]] = Resolve-BuildTool $override $entry[1] @(
+            $buildToolCache[$entry[0]]
+            (Join-Path $buildVcRoot "Tools/Llvm/x64/bin/$($entry[1])")
+            (Join-Path $env:ProgramFiles "LLVM/bin/$($entry[1])")
+        ) -Exact '19.1.5'
+    }
+}
 
 $buildToolDirectories = @(
     (Split-Path $env:CMAKE_EXECUTABLE)
     (Split-Path $env:NINJA_BIN)
-    (Join-Path $buildVcRoot 'Tools/Llvm/x64/bin')
+    $env:VCPKG_ROOT
+    ($buildQualityPaths.Values | ForEach-Object { Split-Path $_ })
 ) | Where-Object { Test-Path -LiteralPath $_ -PathType Container } | Select-Object -Unique
 $env:PATH = ($buildToolDirectories -join [System.IO.Path]::PathSeparator) +
     [System.IO.Path]::PathSeparator + $env:PATH
@@ -185,6 +232,46 @@ Write-Host "build env: CMAKE=$env:CMAKE_EXECUTABLE"
 Write-Host "build env: CTEST=$env:CTEST_EXECUTABLE"
 Write-Host "build env: NINJA=$env:NINJA_BIN"
 Write-Host "build env: VSLANG=$env:VSLANG"
+
+function Set-ResolvedBuildPath {
+    # vcvars prepends bundled CMake/Ninja/LLVM. Reapply the selected directories AFTER it.
+    $msvcDirectory = Get-MsvcToolDirectory
+    if (-not $msvcDirectory) { throw 'vcvarsall did not provide VCToolsInstallDir; no MSVC compiler can be selected safely.' }
+    $qtDirectories = @()
+    if ($buildToolCache['VCPKG_INSTALLED_DIR']) {
+        $qtDirectories += Join-Path $buildToolCache['VCPKG_INSTALLED_DIR'] 'x64-windows/tools/Qt6/bin'
+    }
+    $directories = @(@($msvcDirectory) + @($buildToolDirectories) + $qtDirectories +
+        @($env:PATH -split [IO.Path]::PathSeparator) |
+        Where-Object { $_ } | Select-Object -Unique)
+    $env:PATH = $directories -join [IO.Path]::PathSeparator
+    $expectedTools = @{
+        'cmake.exe' = $env:CMAKE_EXECUTABLE
+        'ctest.exe' = $env:CTEST_EXECUTABLE
+        'ninja.exe' = $env:NINJA_BIN
+    }
+    if ($msvcDirectory) {
+        foreach ($name in @('cl.exe', 'link.exe', 'lib.exe')) {
+            $expectedTools[$name] = Resolve-BuildFile (Join-Path $msvcDirectory $name) $name
+        }
+    }
+    foreach ($key in $buildQualityPaths.Keys) {
+        $expectedTools[[IO.Path]::GetFileName($buildQualityPaths[$key])] = $buildQualityPaths[$key]
+    }
+    foreach ($directory in $qtDirectories) {
+        foreach ($name in @('qmlformat.exe', 'qmllint.exe')) {
+            $tool = Join-Path $directory $name
+            if (Test-Path -LiteralPath $tool -PathType Leaf) { $expectedTools[$name] = $tool }
+        }
+    }
+    foreach ($name in $expectedTools.Keys) {
+        $actual = (Get-Command $name -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+        if ([IO.Path]::GetFullPath($actual) -ine [IO.Path]::GetFullPath($expectedTools[$name])) {
+            throw "PATH resolves $name to '$actual', expected '$($expectedTools[$name])'."
+        }
+        Write-Host "build PATH: $name -> $actual"
+    }
+}
 
 # --- Environment preflight -------------------------------------------------------------------
 # Tool discovery proves nothing about whether the selected tools actually work together. The

@@ -5,8 +5,8 @@
 #   pwsh tools/build/build.ps1 -Preset dev -Target format-check
 #   pwsh tools/build/build.ps1 -Preset dev -Target lint
 #   pwsh tools/build/build.ps1 -Preset dev -Test -TestRegex 'ui.ImageReviewControllerTests'
-#   pwsh tools/build/build.ps1 -Preset dev -Test -TestJobs 8
-#   pwsh tools/build/build.ps1 -Preset dev -Test -TestGroup Sidebar -TestJobs 8
+#   pwsh tools/build/build.ps1 -Preset dev -Test -TestJobs 2
+#   pwsh tools/build/build.ps1 -Preset dev -Test -TestGroup Sidebar -TestJobs 2
 [CmdletBinding()]
 param(
     [string]$Preset = 'dev',
@@ -70,9 +70,16 @@ if ($TestOnly -and (-not $TestRegex -or $Fresh -or $Configure -or $UseInstalledD
     throw '-TestOnly requires -TestRegex or -TestGroup and cannot combine with configure/build options.'
 }
 
-. (Join-Path $PSScriptRoot 'env.ps1') -VcpkgRoot $VcpkgRoot -VcvarsAll $VcvarsAll -CMakeExecutable $CMakeExecutable -NinjaExecutable $NinjaExecutable
 $binaryDir = Join-Path $repoRoot "out/build/$Preset"
 $cacheFile = Join-Path $binaryDir 'CMakeCache.txt'
+$originalEnvironment = [Environment]::GetEnvironmentVariables('Process')
+. (Join-Path $PSScriptRoot 'resource-policy.ps1')
+$resourceState = $null
+try {
+$resourceState = Enter-BuildResourcePolicy
+$qualityTools = -not ($configurePreset.cacheVariables.PSObject.Properties['DVS_ENABLE_QUALITY_TOOLS'] -and
+    $configurePreset.cacheVariables.DVS_ENABLE_QUALITY_TOOLS -eq $false)
+. (Join-Path $PSScriptRoot 'env.ps1') -VcpkgRoot $VcpkgRoot -VcvarsAll $VcvarsAll -CMakeExecutable $CMakeExecutable -NinjaExecutable $NinjaExecutable -BuildDirectory $binaryDir -QualityTools:$qualityTools
 
 function Invoke-BuildTool {
     param([string]$Executable, [string[]]$ToolArguments)
@@ -116,6 +123,7 @@ function Import-VcEnvironment {
     $env:VSLANG = '1033'
     # VS may inject its own bundled vcpkg; preserve the resolver/user selection.
     $env:VCPKG_ROOT = $selectedVcpkgRoot
+    Set-ResolvedBuildPath
 }
 
 function Get-CacheProblems {
@@ -128,6 +136,17 @@ function Get-CacheProblems {
         CMAKE_HOME_DIRECTORY = $repoRoot
         CMAKE_TOOLCHAIN_FILE = Join-Path $env:VCPKG_ROOT 'scripts/buildsystems/vcpkg.cmake'
         CMAKE_MAKE_PROGRAM = $env:NINJA_BIN
+    }
+    $msvcDirectory = Get-MsvcToolDirectory
+    if ($msvcDirectory) {
+        $expected['CMAKE_CXX_COMPILER'] = Join-Path $msvcDirectory 'cl.exe'
+        $expected['CMAKE_AR'] = Join-Path $msvcDirectory 'lib.exe'
+    }
+    foreach ($key in $buildQualityPaths.Keys) { $expected[$key] = $buildQualityPaths[$key] }
+    if ($cache['VCPKG_INSTALLED_DIR']) {
+        $qtTools = Join-Path $cache['VCPKG_INSTALLED_DIR'] 'x64-windows/tools/Qt6/bin'
+        $expected['QMLFORMAT_EXECUTABLE'] = Join-Path $qtTools 'qmlformat.exe'
+        $expected['QMLLINT_EXECUTABLE'] = Join-Path $qtTools 'qmllint.exe'
     }
     foreach ($key in $expected.Keys) {
         if (-not $cache.ContainsKey($key)) { continue }
@@ -204,14 +223,18 @@ function Assert-BuildEnvironment {
 }
 
 $buildLock = $null
+$repositoryLock = $null
 if (-not $Doctor) {
     $lockDirectory = Join-Path $repoRoot 'out/build'
     New-Item -ItemType Directory -Path $lockDirectory -Force | Out-Null
     try {
+        $repositoryLock = [IO.File]::Open((Join-Path $lockDirectory '.build.lock'),
+            [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
         $buildLock = [IO.File]::Open((Join-Path $lockDirectory ".$Preset.lock"),
             [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
     } catch [IO.IOException] {
-        throw "Another build or test is using preset '$Preset'. Wait for it to finish before retrying."
+        if ($null -ne $repositoryLock) { $repositoryLock.Dispose() }
+        throw "Another build or test is using this repository (requested preset '$Preset'). Wait for it to finish before retrying."
     }
 }
 Push-Location -LiteralPath $repoRoot
@@ -264,6 +287,13 @@ try {
     if (-not $TestOnly) {
         if ($Fresh -or $Configure -or $UseInstalledDependencies -or -not (Test-Path -LiteralPath $cacheFile)) {
             $configureArgs = @('--preset', $Preset, "-DCMAKE_MAKE_PROGRAM=$env:NINJA_BIN")
+            $msvcDirectory = Get-MsvcToolDirectory
+            if ($msvcDirectory) {
+                $configureArgs += "-DCMAKE_CXX_COMPILER=$(Join-Path $msvcDirectory 'cl.exe')"
+            }
+            foreach ($key in $buildQualityPaths.Keys) {
+                $configureArgs += "-D${key}:FILEPATH=$($buildQualityPaths[$key])"
+            }
             if ($Fresh) { $configureArgs += '--fresh' }
             if ($UseInstalledDependencies) {
                 $configureArgs += '-DVCPKG_MANIFEST_INSTALL=OFF'
@@ -276,7 +306,7 @@ try {
             # Never ask a relocated cache to clean outputs in its previous workspace.
             Invoke-BuildTool $env:NINJA_BIN @('-C', $binaryDir, '-t', 'clean')
         }
-        $buildArgs = @('--build', '--preset', $Preset)
+        $buildArgs = @('--build', '--preset', $Preset, '--parallel', [string]$resourceState.Jobs)
         if ($Target.Count -gt 0) { $buildArgs += @('--target') + $Target }
         Invoke-BuildTool $env:CMAKE_EXECUTABLE $buildArgs
         Test-HeaderDependencies
@@ -291,10 +321,35 @@ try {
             Write-Host "Development group: $TestGroup; UI matrix: representative (use -FullMatrix for all variants)."
         }
         if ($TestJobs -gt 0) { $testArgs += @('-j', $TestJobs) }
-        Invoke-BuildTool $env:CTEST_EXECUTABLE $testArgs
+        # Keep timed UI/shutdown tests schedulable without releasing the CPU budget.
+        # BelowNormal is useful for compilers but can consume an application's deadline
+        # through scheduler starvation rather than expose a product defect.
+        $buildResourceProfile = $env:DVS_GATE_RESOURCE_PROFILE
+        try {
+            $resourceState.Process.PriorityClass = [Diagnostics.ProcessPriorityClass]::Normal
+            $env:DVS_GATE_RESOURCE_PROFILE = "bounded-test-$($resourceState.CpuCount)-cpu"
+            Write-Host "test resources: CPUs=$($resourceState.CpuCount); priority=Normal; affinity remains bounded"
+            Invoke-BuildTool $env:CTEST_EXECUTABLE $testArgs
+        } finally {
+            $resourceState.Process.PriorityClass = [Diagnostics.ProcessPriorityClass]::BelowNormal
+            $env:DVS_GATE_RESOURCE_PROFILE = $buildResourceProfile
+        }
     }
     Write-Host "Done: preset=$Preset"
 } finally {
     Pop-Location
     if ($null -ne $buildLock) { $buildLock.Dispose() }
+    if ($null -ne $repositoryLock) { $repositoryLock.Dispose() }
+}
+} finally {
+    Exit-BuildResourcePolicy $resourceState
+    # Calling & build.ps1 from an existing pwsh must not leave a different PATH/toolchain.
+    foreach ($name in @([Environment]::GetEnvironmentVariables('Process').Keys)) {
+        if (-not $originalEnvironment.Contains($name)) {
+            [Environment]::SetEnvironmentVariable($name, $null, 'Process')
+        }
+    }
+    foreach ($name in $originalEnvironment.Keys) {
+        [Environment]::SetEnvironmentVariable($name, $originalEnvironment[$name], 'Process')
+    }
 }

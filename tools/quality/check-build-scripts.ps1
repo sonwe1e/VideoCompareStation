@@ -19,6 +19,9 @@ $fixtureRoot = Join-Path ([IO.Path]::GetFullPath($TestRoot)) ([guid]::NewGuid().
 $fixtureRepository = Join-Path $fixtureRoot 'repository with spaces'
 $outsideDirectory = Join-Path $fixtureRoot 'outside repository'
 $toolDirectory = Join-Path $fixtureRoot 'tools with spaces'
+$shadowDirectory = Join-Path $fixtureRoot 'old-tools'
+$msvcRoot = Join-Path $fixtureRoot 'msvc'
+$msvcDirectory = Join-Path $msvcRoot 'bin/Hostx64/x64'
 $vcpkgRoot = Join-Path $fixtureRoot 'vcpkg with spaces'
 $buildDirectory = Join-Path $fixtureRepository 'out\build\dev'
 $argumentLog = Join-Path $fixtureRoot 'arguments.log'
@@ -26,13 +29,14 @@ $vcvarsPath = Join-Path $toolDirectory 'vcvarsall.bat'
 $fixtureBuild = Join-Path $fixtureRepository 'tools\build\build.ps1'
 $pwshPath = (Get-Process -Id $PID).Path
 $directories = @(
-    (Join-Path $fixtureRepository 'tools\build'), $outsideDirectory, $toolDirectory,
-    (Join-Path $vcpkgRoot 'scripts\buildsystems'), $buildDirectory
+    (Join-Path $fixtureRepository 'tools\build'), $outsideDirectory, $toolDirectory, $shadowDirectory,
+    (Join-Path $vcpkgRoot 'scripts\buildsystems'), $buildDirectory,
+    (Join-Path $msvcDirectory '1033')
 )
 foreach ($directory in $directories) {
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
 }
-foreach ($fileName in @('build.ps1', 'env.ps1')) {
+foreach ($fileName in @('build.ps1', 'env.ps1', 'resource-policy.ps1')) {
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "tools\build\$fileName") `
         -Destination (Join-Path $fixtureRepository "tools\build\$fileName")
 }
@@ -45,7 +49,9 @@ Set-Content -LiteralPath $vcvarsPath -Encoding ascii -Value @'
 set TOY_BUILD_TEST_VCVARS=imported value with spaces
 set VSCMD_ARG_HOST_ARCH=x64
 set VSCMD_ARG_TGT_ARCH=x64
+set VCToolsInstallDir=%TOY_BUILD_TEST_MSVC%
 set VCPKG_ROOT=Z:\overridden-by-vcvars\vcpkg
+set PATH=%TOY_BUILD_TEST_SHADOW%;%PATH%
 exit /b 0
 '@
 
@@ -76,18 +82,40 @@ internal static class FixtureTool {
 
     public static int Main(string[] args) {
         string tool = Path.GetFileNameWithoutExtension(Environment.GetCommandLineArgs()[0]);
+        if (tool == "cl" && Has(args, "/showIncludes")) {
+            Console.WriteLine("probe.cpp");
+            Console.WriteLine("Note: including file: " + Path.Combine(Environment.GetEnvironmentVariable("WINDIR"), "fixture.h"));
+            return 0;
+        }
+        if (Has(args, "--version")) {
+            string version = tool == "ninja" ? "1.13.2" :
+                tool.StartsWith("clang-") ? "19.1.5" : "4.4.0";
+            if (Environment.GetEnvironmentVariable("TOY_BUILD_TEST_MODE") == "old-cmake" && tool == "cmake") version = "3.31.8";
+            if (Environment.GetCommandLineArgs()[0].Contains("old-tools") && tool == "cmake") version = "3.31.8";
+            Console.WriteLine(tool + " version " + version);
+            return 0;
+        }
         string log = Environment.GetEnvironmentVariable("TOY_BUILD_TEST_LOG");
         StringBuilder record = new StringBuilder(tool);
         record.Append('\t').Append(Encode(Environment.CurrentDirectory));
         record.Append('\t').Append(Encode(Environment.GetEnvironmentVariable("TOY_BUILD_TEST_VCVARS")));
         record.Append('\t').Append(Encode(Environment.GetEnvironmentVariable("VSLANG")));
+        record.Append('\t').Append(Encode(System.Diagnostics.Process.GetCurrentProcess().ProcessorAffinity.ToInt64().ToString()));
+        record.Append('\t').Append(Encode(System.Diagnostics.Process.GetCurrentProcess().PriorityClass.ToString()));
+        record.Append('\t').Append(Encode(Environment.GetEnvironmentVariable("PATH")));
+        record.Append('\t').Append(Encode(Environment.GetEnvironmentVariable("VCPKG_MAX_CONCURRENCY")));
+        record.Append('\t').Append(Encode(Environment.GetEnvironmentVariable("TOY_BUILD_TEST_ORIGINAL_AFFINITY")));
         foreach (string arg in args) record.Append('\t').Append(Encode(arg));
         File.AppendAllText(log, record.ToString() + Environment.NewLine);
-        if (Has(args, "--version")) {
-            Console.WriteLine(tool == "ninja" ? "1.12.1" : tool + " version 3.31.8");
-            return 0;
-        }
         string mode = Environment.GetEnvironmentVariable("TOY_BUILD_TEST_MODE");
+        if (Has(args, "--resource-child")) return 0;
+        if (mode == "resource-tree" && Has(args, "--build")) {
+            var child = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {
+                FileName = Environment.GetCommandLineArgs()[0], Arguments = "--resource-child", UseShellExecute = false
+            });
+            child.WaitForExit();
+            return child.ExitCode;
+        }
         if (tool == "ctest" && mode == "no-tests") {
             Console.Error.WriteLine("No tests were found!!!");
             return Has(args, "--no-tests=error") ? 8 : 0;
@@ -102,6 +130,7 @@ internal static class FixtureTool {
             Directory.CreateDirectory(binary);
             File.WriteAllText(Path.Combine(binary, "CMakeCache.txt"),
                 "CMAKE_HOME_DIRECTORY:INTERNAL=" + Environment.CurrentDirectory + "\n" +
+                "CMAKE_COMMAND:INTERNAL=" + Environment.GetCommandLineArgs()[0] + "\n" +
                 "CMAKE_TOOLCHAIN_FILE:FILEPATH=" + Path.Combine(root, "scripts", "buildsystems", "vcpkg.cmake") + "\n" +
                 "CMAKE_GENERATOR:INTERNAL=Ninja\n" +
                 "CMAKE_MAKE_PROGRAM:FILEPATH=" + Path.Combine(Path.GetDirectoryName(Environment.GetCommandLineArgs()[0]), "ninja.exe") + "\n");
@@ -116,8 +145,14 @@ $fixtureExecutable = Join-Path $toolDirectory 'cmake.exe'
 if ($LASTEXITCODE -ne 0) {
     throw "Could not compile native build fixtures (exit $LASTEXITCODE)."
 }
-foreach ($toolName in @('ctest', 'ninja')) {
+foreach ($toolName in @('ctest', 'ninja', 'clang-format', 'clang-tidy')) {
     Copy-Item -LiteralPath $fixtureExecutable -Destination (Join-Path $toolDirectory "$toolName.exe")
+}
+foreach ($toolName in @('cmake', 'ctest', 'ninja', 'clang-format', 'clang-tidy')) {
+    Copy-Item -LiteralPath $fixtureExecutable -Destination (Join-Path $shadowDirectory "$toolName.exe")
+}
+foreach ($toolName in @('cl', 'link', 'lib')) {
+    Copy-Item -LiteralPath $fixtureExecutable -Destination (Join-Path $msvcDirectory "$toolName.exe")
 }
 
 $runner = Join-Path $fixtureRoot 'run-case.ps1'
@@ -129,20 +164,41 @@ $settings = Get-Content -LiteralPath $SettingsPath -Raw | ConvertFrom-Json -AsHa
 $env:TOY_BUILD_TEST_LOG = $settings.Log
 $env:TOY_BUILD_TEST_MODE = $settings.Mode
 $env:TOY_BUILD_TEST_VCVARS = ''
+$env:TOY_BUILD_TEST_SHADOW = $settings.ShadowDirectory
+$env:TOY_BUILD_TEST_MSVC = $settings.MsvcRoot
 # Keep machine-local overrides from contaminating the fixture's explicit paths.
 $env:VCPKG_ROOT = ''
+$env:DVS_VCPKG_ROOT = ''
 $env:VCVARSALL_PATH = ''
 $env:NINJA_BIN = ''
+$env:CMAKE_EXECUTABLE = ''
+$env:DVS_LLVM_BIN = $settings.ToolDirectory
+$env:VCToolsInstallDir = ''
 $env:VSLANG = '2052'
+$env:PATH = $settings.ShadowDirectory + ';' + $env:PATH
 Set-Location -LiteralPath $settings.WorkingDirectory
 $arguments = $settings.Arguments
 $global:LASTEXITCODE = 0
+if ($settings.Mode -eq 'priority-mutation') {
+    (Get-Process -Id $PID).PriorityClass = [Diagnostics.ProcessPriorityClass]::Normal
+}
+$beforePath = $env:PATH
+$beforeAffinity = (Get-Process -Id $PID).ProcessorAffinity
+$env:TOY_BUILD_TEST_ORIGINAL_AFFINITY = $beforeAffinity.ToInt64().ToString()
+$beforePriority = (Get-Process -Id $PID).PriorityClass
 try {
     & $settings.Script @arguments
     exit $LASTEXITCODE
 } catch {
     [Console]::Error.WriteLine($_.ToString())
     exit 1
+} finally {
+    if ($env:PATH -cne $beforePath -or
+        (Get-Process -Id $PID).ProcessorAffinity -ne $beforeAffinity -or
+        (Get-Process -Id $PID).PriorityClass -ne $beforePriority) {
+        [Console]::Error.WriteLine('WRAPPER STATE LEAKED')
+        exit 98
+    }
 }
 '@
 
@@ -166,6 +222,9 @@ function Invoke-WrapperCase {
         Arguments = $parameters
         Log = $argumentLog
         Mode = $Mode
+        ToolDirectory = $toolDirectory
+        ShadowDirectory = $shadowDirectory
+        MsvcRoot = $msvcRoot
     } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $settingsPath -Encoding utf8
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $pwshPath
@@ -186,6 +245,9 @@ function Invoke-WrapperCase {
         }
         $stdout = $stdoutTask.GetAwaiter().GetResult()
         $stderr = $stderrTask.GetAwaiter().GetResult()
+        if ($process.ExitCode -eq 98) {
+            throw "Wrapper leaked caller PATH, affinity or priority, including on failure: $stderr"
+        }
         $records = @(foreach ($line in (Get-Content -LiteralPath $argumentLog)) {
             if (-not $line) { continue }
             $fields = $line.Split([char]9)
@@ -197,7 +259,12 @@ function Invoke-WrapperCase {
                 WorkingDirectory = $decoded[0]
                 VcvarsValue = $decoded[1]
                 VSLang = $decoded[2]
-                Arguments = @($decoded | Select-Object -Skip 3)
+                Affinity = [long]$decoded[3]
+                Priority = $decoded[4]
+                Path = $decoded[5]
+                DependencyJobs = $decoded[6]
+                OriginalAffinity = [long]$decoded[7]
+                Arguments = @($decoded | Select-Object -Skip 8)
             }
         })
         return [pscustomobject]@{
@@ -457,5 +524,102 @@ Assert-Contract (@($result.Records | Where-Object {
 Write-Host 'PASS: Doctor diagnoses without configuring or building'
 $passed++
 
-if ($passed -ne 28) { throw "Expected 28 build-script contract cases; ran $passed." }
+$result = Invoke-WrapperCase @{ Test = $true; TestJobs = 8 } 'resource-tree'
+Assert-Contract ($result.ExitCode -eq 0) 'Resource-tree fixture failed or leaked caller state.' $result
+Assert-Contract (@($result.Records | Where-Object { $_.Arguments -contains '--resource-child' }).Count -eq 1) `
+    'Resource test did not execute a grandchild.' $result
+foreach ($record in $result.Records) {
+    $cpuCount = @(0..63 | Where-Object { ($record.Affinity -band ([long]1 -shl $_)) -ne 0 }).Count
+    $originalCpuCount = @(0..63 | Where-Object { ($record.OriginalAffinity -band ([long]1 -shl $_)) -ne 0 }).Count
+    $cpuBudget = [Math]::Min(4, [Math]::Max(1, [Math]::Floor($originalCpuCount / 2)))
+    $expectedPriority = if ($record.Tool -eq 'ctest') { 'Normal' } else { 'BelowNormal' }
+    Assert-Contract ($cpuCount -ge 1 -and $cpuCount -le $cpuBudget -and $record.Priority -eq $expectedPriority -and
+        ($record.Affinity -band $record.OriginalAffinity) -eq $record.Affinity) `
+        'Build, test or grandchild escaped CPU/priority policy.' $result
+    Assert-Contract ([int]$record.DependencyJobs -le 2 -and [int]$record.DependencyJobs -ge 1) `
+        'Dependency compilation escaped the jobs budget.' $result
+    Assert-Contract (($record.Path -split ';')[0].TrimEnd('\', '/') -eq $msvcDirectory) `
+        'Selected tool directory was not restored after vcvars.' $result
+}
+$build = @($result.Records | Where-Object { $_.Arguments -contains '--build' })[0]
+$parallelIndex = [Array]::IndexOf($build.Arguments, '--parallel')
+Assert-Contract ($parallelIndex -ge 0 -and [int]$build.Arguments[$parallelIndex + 1] -le 2) `
+    'Preset jobs can override the local budget.' $result
+Write-Host 'PASS: native build/test/grandchild affinity, priority, dependency jobs and PATH; caller restored'
+$passed++
+
+$heldLock = [IO.File]::Open((Join-Path $fixtureRepository 'out/build/.build.lock'),
+    [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+try {
+    foreach ($preset in @('dev', 'release')) {
+        $result = Invoke-WrapperCase @{ Preset = $preset }
+        Assert-Contract ($result.ExitCode -ne 0 -and $result.Records.Count -eq 0) `
+            'A different preset bypassed the repository resource lock.' $result
+    }
+} finally { $heldLock.Dispose() }
+Write-Host 'PASS: different presets cannot multiply the resource budget'
+$passed++
+
+$result = Invoke-WrapperCase @{} 'old-cmake'
+Assert-Contract ($result.ExitCode -ne 0 -and $result.Records.Count -eq 0 -and
+    ($result.Stderr + $result.Stdout).Contains('minimum 4.4')) `
+    'Explicit incompatible CMake must fail before configure/build.' $result
+$passed++
+
+$result = Invoke-WrapperCase @{ CMakeExecutable = ''; NinjaExecutable = '' }
+Assert-Contract ($result.ExitCode -eq 0 -and
+    $result.Stdout.Contains("cmake.exe 4.4.0 -> $fixtureExecutable")) `
+    'A shadowing PATH tool displaced the cached compatible CMake.' $result
+Write-Host 'PASS: cache selection survives PATH pollution and vcvars prepending other tools'
+$passed++
+
+# Counterexamples change only the isolated fixture, never production scripts or objects.
+$fixtureResource = Join-Path $fixtureRepository 'tools/build/resource-policy.ps1'
+$resourceSource = Get-Content -LiteralPath $fixtureResource -Raw
+$priorityAnchor = '$process.PriorityClass = [Diagnostics.ProcessPriorityClass]::BelowNormal'
+Assert-Contract ($resourceSource.Split($priorityAnchor).Count -eq 2) `
+    'The resource mutation anchor is missing or ambiguous.' $null
+try {
+    $resourceSource.Replace($priorityAnchor, '# mutation: priority assignment removed') |
+        Set-Content -LiteralPath $fixtureResource
+    $result = Invoke-WrapperCase @{} 'priority-mutation'
+    Assert-Contract ($result.ExitCode -eq 0 -and
+        @($result.Records | Where-Object { $_.Priority -ne 'BelowNormal' }).Count -gt 0) `
+        'Removing priority enforcement was not detected in the native descendant evidence.' $result
+} finally { Set-Content -LiteralPath $fixtureResource -Value $resourceSource -NoNewline }
+$passed++
+
+$wrapperSource = Get-Content -LiteralPath $fixtureBuild -Raw
+$pathAnchor = '    Set-ResolvedBuildPath'
+Assert-Contract ($wrapperSource.Split($pathAnchor).Count -eq 2) `
+    'The PATH mutation anchor is missing or ambiguous.' $null
+try {
+    $wrapperSource.Replace($pathAnchor, '    # mutation: post-vcvars PATH repair removed') |
+        Set-Content -LiteralPath $fixtureBuild
+    $result = Invoke-WrapperCase
+    Assert-Contract ($result.ExitCode -eq 0 -and
+        @($result.Records | Where-Object { ($_.Path -split ';')[0] -eq $shadowDirectory }).Count -gt 0) `
+        'Removing PATH repair was not detected in the native tool environment.' $result
+} finally { Set-Content -LiteralPath $fixtureBuild -Value $wrapperSource -NoNewline }
+$passed++
+Write-Host 'PASS: removing priority or post-vcvars PATH repair exposes the respective regressions'
+
+$affinityAnchor = '$process.ProcessorAffinity = [IntPtr]$mask'
+Assert-Contract ($resourceSource.Split($affinityAnchor).Count -eq 2) `
+    'The CPU-budget mutation anchor is missing or ambiguous.' $null
+try {
+    $resourceSource.Replace($affinityAnchor, '# mutation: CPU affinity assignment removed') |
+        Set-Content -LiteralPath $fixtureResource
+    $result = Invoke-WrapperCase @{} 'resource-tree'
+    Assert-Contract ($result.ExitCode -eq 0 -and $result.Records.Count -gt 0) `
+        'The affinity mutation did not execute native processes.' $result
+    foreach ($record in $result.Records) {
+        Assert-Contract ($record.Affinity -eq $record.OriginalAffinity) `
+            'The affinity mutation did not expose the original, unnarrowed CPU set.' $result
+    }
+    Write-Host 'PASS: removing affinity enforcement exposes the original CPU set (single-CPU hosts cannot be narrowed)'
+} finally { Set-Content -LiteralPath $fixtureResource -Value $resourceSource -NoNewline }
+$passed++
+
+if ($passed -ne 35) { throw "Expected 35 build-script contract cases; ran $passed." }
 Write-Host "Build-script contracts passed: $passed cases. Fixtures: $fixtureRoot"

@@ -1,5 +1,16 @@
 cmake_minimum_required(VERSION 4.4 FATAL_ERROR)
 
+# Ninja's own default is CPU count + 2, even when build presets specify jobs.
+# Protect direct ninja/IDE invocations as well as the PowerShell wrapper. Compile
+# and link share one pool so their combined memory pressure stays bounded.
+set(CMAKE_JOB_POOLS dvs_background=2)
+set(CMAKE_JOB_POOL_COMPILE dvs_background)
+set(CMAKE_JOB_POOL_LINK dvs_background)
+set(CMAKE_AUTOGEN_PARALLEL 2)
+# This project uses headers, not C++20 modules. Avoid a separate compiler preprocessing
+# pass for every translation unit; /showIncludes still tracks ordinary header dependencies.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+
 project(CompareStation VERSION 2.5.1 LANGUAGES CXX)
 
 option(DVS_BUILD_DESKTOP "Build the Windows desktop application and packaging" ON)

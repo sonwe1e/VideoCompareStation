@@ -236,8 +236,17 @@ function(dvs_add_quality_targets)
             )
         endif()
 
-        find_program(QMLFORMAT_EXECUTABLE NAMES qmlformat HINTS ${qtToolHints} REQUIRED)
-        find_program(QMLLINT_EXECUTABLE NAMES qmllint HINTS ${qtToolHints} REQUIRED)
+        # Qt host tools must belong to this dependency tree, never an unrelated Qt on PATH.
+        find_program(QMLFORMAT_EXECUTABLE NAMES qmlformat PATHS ${qtToolHints} NO_DEFAULT_PATH REQUIRED)
+        find_program(QMLLINT_EXECUTABLE NAMES qmllint PATHS ${qtToolHints} NO_DEFAULT_PATH REQUIRED)
+        foreach(qtTool IN ITEMS QMLFORMAT_EXECUTABLE QMLLINT_EXECUTABLE)
+            cmake_path(GET ${qtTool} PARENT_PATH qtToolDirectory)
+            if(NOT qtToolDirectory IN_LIST qtToolHints)
+                message(FATAL_ERROR
+                    "${qtTool} points outside this build's Qt tree: ${${qtTool}}. "
+                    "Clear this cache entry or use build.ps1 -Fresh.")
+            endif()
+        endforeach()
 
         set(qmlFileList "${CMAKE_BINARY_DIR}/dvs-qml-format-files.txt")
         string(REPLACE ";" "\n" qmlFileListContents "${qmlFiles}")

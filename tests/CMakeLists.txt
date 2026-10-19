@@ -39,7 +39,8 @@ if(DVS_BUILD_DESKTOP)
         NAME quality.build-scripts
         LAYER unit
         MODULE app
-        TIMEOUT 60
+        # Native child-process contracts also run inside the one-CPU background budget.
+        TIMEOUT 600
         COMMAND
             "${DVS_POWERSHELL_EXECUTABLE}"
             -NoLogo
@@ -49,6 +50,19 @@ if(DVS_BUILD_DESKTOP)
 
     # Both run in the default test suite so the rules they encode cannot silently lapse: a formatter
     # applied to the wrong file type, and a machine path left behind by a moved or renamed checkout.
+    dvs_add_test(
+        NAME quality.resource-limits
+        LAYER unit
+        MODULE app
+        TIMEOUT 60
+        COMMAND
+            "${DVS_POWERSHELL_EXECUTABLE}"
+            -NoLogo
+            -NoProfile
+            -File "${PROJECT_SOURCE_DIR}/tools/quality/check-resource-limits.ps1"
+            -BuildDirectory "${CMAKE_BINARY_DIR}"
+    )
+
     dvs_add_test(
         NAME quality.script-integrity
         LAYER unit

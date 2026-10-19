@@ -26,14 +26,22 @@ centralized in `tools/build/env.ps1`; do not hardcode machine paths. See
 [docs/building.md](docs/building.md) for diagnostics and cache recovery.
 Use the wrapper:
 
+Local build/check/test work must use this wrapper, including single-target probes. It limits the
+process tree to at most four logical CPUs, limits compilation to two jobs at BelowNormal priority,
+and serializes all presets in this checkout. Tests keep Normal priority inside the same CPU bound
+so scheduler starvation does not invalidate UI/shutdown deadlines.
+Do not bypass it with raw Ninja or hand-built PATH/cmd invocations: Ninja defaults
+to CPU-count-based parallelism, and missing VSLANG can corrupt incremental header dependencies.
+Generated compile/link pools are additional protection, not a substitute for the wrapper.
+
 ```powershell
 pwsh tools/build/build.ps1 -Preset dev
 pwsh tools/build/build.ps1 -Preset release -Test
 pwsh tools/build/build.ps1 -Preset dev -Target format-check
 pwsh tools/build/build.ps1 -Preset dev -Target lint
 pwsh tools/build/build.ps1 -Preset dev -Test -TestRegex 'ui.ImageReviewControllerTests'
-pwsh tools/build/build.ps1 -Preset dev -Test -TestJobs 8
-pwsh tools/build/build.ps1 -Preset dev -Test -TestGroup Sidebar -TestJobs 8
+pwsh tools/build/build.ps1 -Preset dev -Test -TestJobs 2
+pwsh tools/build/build.ps1 -Preset dev -Test -TestGroup Sidebar -TestJobs 2
 ```
 
 The preset keeps `CTEST_PARALLEL_LEVEL=1` for CI's low CPU impact; `-TestJobs N` is the local

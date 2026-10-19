@@ -3,13 +3,35 @@
 适用于当前 Windows x64 工作区。脚本入口是 `tools/build/build.ps1`，工具发现集中在
 `tools/build/env.ps1`。所有命令使用 PowerShell 7；无需手工拼接 `cmd /c` 或修改系统 PATH。
 
+默认采用低占用构建：wrapper 在启动工具前，将自身和继承的子进程限制为最多 **4 个逻辑处理器**
+（不超过继承可用处理器的一半，至少 1 个）。编译／静态检查使用 `BelowNormal` 优先级，
+编译最多 2 个任务；测试在同一 CPU 范围内使用 `Normal` 优先级，为 Qt/WARP 启动和关闭
+保留调度余量，启动／关闭门禁时限不变。构建显式传入并行数；
+CTest 默认仍为 1，依赖构建 preset 上限为 2。`-TestJobs` 只改变同时运行的测试数量，
+不会解除 CPU 限制。此策略覆盖配置、编译、格式检查、静态分析和测试；退出或失败后恢复调用者的
+环境、PATH、亲和性及优先级。单逻辑处理器环境只能靠低优先级让出资源。
+
+所有 preset 共用仓库构建锁，避免 dev、release、lint、test 叠加抢资源及同时修改依赖树。
+生成的 Ninja 图还为编译／链接设置共享的 2 槽任务池，Qt 自动生成器内部并行上限也为 2，
+防止直接 `ninja` 使用默认的“逻辑处理器数 + 2”并发。**完整进程树的 CPU／优先级限制依赖 wrapper**；
+任务池只保护其对应步骤，不替代入口。日常与代理验证都使用下方 wrapper，不手动运行裸 Ninja，
+也不通过拼 PATH 或临时指定其他编译器修复失败。正式硬件性能测量仍走 CI 的 Interactive 门禁，
+不把受限环境测得的帧率当作硬件性能结果。
+
+项目当前没有 C++20 modules，因此关闭每个翻译单元的额外模块扫描；MSVC `/showIncludes`
+头文件跟踪和相应依赖验证不变。以后引入 modules 时再针对对应目标启用扫描。
+
+本地存在 SAM2 模型时，智能抠图集成测试包含冷加载和 CPU 推理；两核环境实测约 17–18 秒，
+该单项使用 60 秒超时，其他图片编辑测试仍为 10 秒。测试名称、命令、断言及性能门禁未改变，
+CTest 发现列表必须恰好包含这一项，不能通过过滤掉模型测试来适应资源限制。
+
 ## 日常使用
 
 ```powershell
 pwsh tools/build/build.ps1 -Preset dev -Doctor
-pwsh tools/build/build.ps1 -Preset dev -Test -TestGroup Sidebar -TestJobs 8
+pwsh tools/build/build.ps1 -Preset dev -Test -TestGroup Sidebar -TestJobs 2
 pwsh tools/build/build.ps1 -Preset dev -Test -TestRegex '^ui[.]ImageReviewControllerTests[.]'
-pwsh tools/build/build.ps1 -Preset dev -Test -TestJobs 8
+pwsh tools/build/build.ps1 -Preset dev -Test -TestJobs 2
 pwsh tools/build/build.ps1 -Preset dev -Target format-check
 pwsh tools/build/build.ps1 -Preset dev -Target lint
 pwsh tools/quality/check-build-scripts.ps1
@@ -47,8 +69,8 @@ pwsh tools/quality/check-hardcoded-paths.ps1
 和无过滤器的 `-Test` 保持完整矩阵，不会因为新增开发分组而缩小原有门禁。
 
 ```powershell
-pwsh tools/build/build.ps1 -Preset dev -Test -TestGroup Images -TestJobs 8
-pwsh tools/build/build.ps1 -Preset dev -Test -TestGroup Sidebar -FullMatrix -TestJobs 8
+pwsh tools/build/build.ps1 -Preset dev -Test -TestGroup Images -TestJobs 2
+pwsh tools/build/build.ps1 -Preset dev -Test -TestGroup Sidebar -FullMatrix -TestJobs 2
 ```
 
 `-TestJobs N` 只改变本次 CTest 并行度；默认仍遵循 preset 的单线程设置。真实窗口输入测试
@@ -59,7 +81,7 @@ pwsh tools/build/build.ps1 -Preset dev -Test -TestGroup Sidebar -FullMatrix -Tes
 文档／脚本检查；一次完整 CTest 已包含脚本检查时，不再单独重复运行它们。变异验证按改变的
 关键行为提供反例，相关断言共享证据，不为低风险文案逐断言重建整个项目。
 
-同一 preset 的包装器构建和测试互斥，避免 smoke 正在运行 EXE 时重新链接造成 LNK1168。
+整个仓库的包装器构建和测试互斥，避免不同 preset 堆叠负载，以及 smoke 运行 EXE 时重新链接造成 LNK1168。
 不要同时绕过包装器运行同目录的 Ninja/CTest。日志实时输出；需要保存时重定向到 `out/`。
 静态分析会建立所需生产目标，因此也应与测试串行执行。
 
@@ -74,7 +96,7 @@ pwsh tools/build/build.ps1 -Preset dev -Fresh
 
 依赖安装树要慢得多：`out/vcpkg` 一旦不完整（或依赖声明变化），ffmpeg 与 Qt6 就得从源码重建，
 本机实测光 Qt6 就要几十分钟；这段时间 configure 之后的 ctest、format-check、lint 全都被挡住。
-**先把重建放到后台跑起来，再动代码**，把等待与实现重叠掉。
+依赖重建也通过低占用 wrapper；运行期间可以编辑源码，但不要另起构建／测试进程叠加负载。
 
 脚本里不得硬编码机器路径，一律从 `$PSScriptRoot` 推导（工具发现仍集中在 `tools/build/env.ps1`）。
 `tools/quality/check-hardcoded-paths.ps1` 在 `ctest` 中拦截这类路径，改名留下的过期默认值不会再
@@ -86,10 +108,15 @@ pwsh tools/build/build.ps1 -Preset dev -Fresh
 |---|---|
 | vcpkg | `-VcpkgRoot`；否则 `DVS_VCPKG_ROOT`、`VCPKG_ROOT`、`VCPKG_INSTALLATION_ROOT`、PATH 中 vcpkg、仓库相邻的 vcpkg 目录。无效显式参数报错，失效的自动候选报告并继续查找。 |
 | MSVC | `-VcvarsAll`、`VCVARSALL_PATH`、当前 `VCINSTALLDIR`，或通过 vswhere 查找安装了 C++ 工具的 VS 2022。导入 x64 环境后保留所选 vcpkg。 |
-| CMake | `-CMakeExecutable`、`CMAKE_EXECUTABLE`、PATH、VS 内置 CMake；CTest 必须来自同一目录。项目要求 CMake 4.4。 |
-| Ninja | `-NinjaExecutable`、`NINJA_BIN`、PATH、所选 VS 内置 Ninja。配置时显式写入 `CMAKE_MAKE_PROGRAM`。 |
-| LLVM | 所选 VS 的 `VC/Tools/Llvm/x64/bin` 和 PATH；CMake 校验 clang-format、clang-tidy 都为 19.1.5。 |
-| Qt 工具 | CMake 从当前 vcpkg 安装树发现 qmlformat、qmllint。不要使用其他 Qt 版本的工具。 |
+| CMake | `-CMakeExecutable`、`CMAKE_EXECUTABLE`；未覆盖时优先当前 preset 缓存、标准安装目录、VS 内置目录，再遍历 PATH 候选。必须 ≥4.4 且旁边有 CTest；不兼容的自动候选跳过，显式指定不兼容工具则报错。 |
+| Ninja | `-NinjaExecutable`、`NINJA_BIN`；未覆盖时优先当前 preset 缓存、所选 VS 内置 Ninja，再遍历 PATH。必须 ≥1.12；配置时显式写入 `CMAKE_MAKE_PROGRAM`。 |
+| LLVM | 显式 `DVS_LLVM_BIN`；否则当前缓存、所选 VS 的 `VC/Tools/Llvm/x64/bin`、标准 LLVM 安装、PATH。两个工具都必须为 19.1.5，解析出的绝对路径显式传入 CMake。关闭质量工具的 preset 不要求 LLVM。 |
+| Qt 工具 | qmlformat、qmllint 只能来自当前 vcpkg 安装树，CMake 不回退到其他 Qt 的 PATH；已有缓存指向别处也报错。 |
+
+导入 vcvars 后重新排列进程内 PATH，并逐项核验 `cl`、`link`、`lib`、CMake／CTest、Ninja、
+启用的 LLVM 工具，以及已配置的 Qt 工具。`-Doctor` 输出实际绝对路径和所选工具版本；工具无须
+永久加入系统 PATH。已有缓存编译器／归档器必须与当前 MSVC 匹配，不能因旧文件仍存在就混用。
+本次选择有效时不会因 PATH 前面多了一个程序而切换工具或触发无谓重编。
 
 显式参数示例（替换为实际安装路径）：
 

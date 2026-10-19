@@ -32,11 +32,11 @@
         "VCPKG_TARGET_TRIPLET": "x64-windows"
       },
       "environment": {
-        "CMAKE_BUILD_PARALLEL_LEVEL": "4",
+        "CMAKE_BUILD_PARALLEL_LEVEL": "2",
         "CTEST_PARALLEL_LEVEL": "1",
         "VSLANG": "1033",
         "VCPKG_FEATURE_FLAGS": "manifests,versions,binarycaching",
-        "VCPKG_MAX_CONCURRENCY": "4"
+        "VCPKG_MAX_CONCURRENCY": "2"
       }
     },
     {
@@ -55,6 +55,11 @@
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/out/build/core-dev",
       "installDir": "${sourceDir}/out/install/core-dev",
+      "environment": {
+        "CMAKE_BUILD_PARALLEL_LEVEL": "2",
+        "CTEST_PARALLEL_LEVEL": "1",
+        "VCPKG_MAX_CONCURRENCY": "2"
+      },
       "cacheVariables": {
         "BUILD_TESTING": true,
         "CMAKE_BUILD_TYPE": "Debug",
@@ -122,32 +127,32 @@
     {
       "name": "core-dev",
       "configurePreset": "core-dev",
-      "jobs": 4
+      "jobs": 2
     },
     {
       "name": "ui-dev",
       "configurePreset": "ui-dev",
-      "jobs": 4
+      "jobs": 2
     },
     {
       "name": "dev",
       "configurePreset": "dev",
-      "jobs": 4
+      "jobs": 2
     },
     {
       "name": "dev-coverage",
       "configurePreset": "dev-coverage",
-      "jobs": 4
+      "jobs": 2
     },
     {
       "name": "asan",
       "configurePreset": "asan",
-      "jobs": 4
+      "jobs": 2
     },
     {
       "name": "release",
       "configurePreset": "release",
-      "jobs": 4
+      "jobs": 2
     }
   ],
   "testPresets": [

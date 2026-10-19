@@ -3,7 +3,8 @@
 param(
     [string]$PresetPath,
 
-    [string]$WorkflowRoot
+    [string]$WorkflowRoot,
+    [string]$BuildDirectory = ''
 )
 
 Set-StrictMode -Version Latest
@@ -20,6 +21,53 @@ $errors = [System.Collections.Generic.List[string]]::new()
 $presets = Get-Content -LiteralPath $PresetPath -Raw | ConvertFrom-Json
 $runnerPath = Join-Path $PSScriptRoot '..\ci\invoke-low-impact.ps1'
 $performanceGatePath = Join-Path $PSScriptRoot '..\testing\run-performance-gate.ps1'
+$projectContent = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../CMakeLists.txt') -Raw
+$poolRequirements = @(
+    'set\(CMAKE_JOB_POOLS dvs_background=2\)',
+    'set\(CMAKE_JOB_POOL_COMPILE dvs_background\)',
+    'set\(CMAKE_JOB_POOL_LINK dvs_background\)',
+    'set\(CMAKE_AUTOGEN_PARALLEL 2\)',
+    'set\(CMAKE_CXX_SCAN_FOR_MODULES OFF\)'
+)
+$poolChecks = 0
+foreach ($requirement in $poolRequirements) {
+    $poolChecks++
+    if ([regex]::Matches($projectContent, $requirement).Count -ne 1) {
+        $errors.Add("Direct Ninja resource protection is missing or ambiguous: $requirement")
+    }
+}
+if ($poolChecks -ne 5) { throw "Expected 5 direct-Ninja resource checks; ran $poolChecks." }
+
+function Test-NinjaResourcePools {
+    param([string]$Graph, [string]$Rules)
+    if ($Rules -notmatch '(?m)^pool dvs_background\r?\n  depth = 2\r?$') { return $false }
+    $edges = [regex]::Matches($Graph,
+        '(?m)^build [^\r\n]+: CXX_(?:COMPILER|EXECUTABLE_LINKER|STATIC_LIBRARY_LINKER|SHARED_LIBRARY_LINKER)[^\r\n]*\r?\n(?:  [^\r\n]*\r?\n)*')
+    if ($edges.Count -eq 0) { return $false }
+    foreach ($edge in $edges) {
+        if ($edge.Value -notmatch '(?m)^  pool = dvs_background\r?$') { return $false }
+    }
+    return $true
+}
+if ($BuildDirectory) {
+    $graph = Get-Content -LiteralPath (Join-Path $BuildDirectory 'build.ninja') -Raw
+    $rules = Get-Content -LiteralPath (Join-Path $BuildDirectory 'CMakeFiles/rules.ninja') -Raw
+    if (-not (Test-NinjaResourcePools $graph $rules)) {
+        $errors.Add('Generated Ninja compile/link edges do not all share the two-slot pool.')
+    }
+    # Mutate in memory only. These counterexamples must be rejected by the same check.
+    $counterexamples = 0
+    foreach ($mutant in @(
+            @($graph.Replace('  pool = dvs_background', ''), $rules),
+            @($graph, $rules.Replace('depth = 2', 'depth = 24')))) {
+        if (Test-NinjaResourcePools $mutant[0] $mutant[1]) {
+            throw 'Ninja resource check accepted a missing pool or widened CPU budget.'
+        }
+        $counterexamples++
+    }
+    if ($counterexamples -ne 2) { throw 'Expected two Ninja resource counterexamples.' }
+    Write-Host 'Generated Ninja pools verified; two resource-policy counterexamples rejected.'
+}
 
 $runnerContent = Get-Content -LiteralPath $runnerPath -Raw
 $runnerRequirements = @(
@@ -50,26 +98,25 @@ foreach ($requirement in @(
     }
 }
 
-$basePreset = $presets.configurePresets | Where-Object name -CEQ 'base'
-if (-not $basePreset) {
-    $errors.Add('Missing base configure preset.')
-} else {
+$environmentPresets = @($presets.configurePresets | Where-Object name -In @('base', 'core-dev'))
+if ($environmentPresets.Count -ne 2) { $errors.Add('Expected base and core-dev resource environments.') }
+foreach ($basePreset in $environmentPresets) {
     $expectedEnvironment = @{
-        CMAKE_BUILD_PARALLEL_LEVEL = '4'
+        CMAKE_BUILD_PARALLEL_LEVEL = '2'
         CTEST_PARALLEL_LEVEL = '1'
-        VCPKG_MAX_CONCURRENCY = '4'
+        VCPKG_MAX_CONCURRENCY = '2'
     }
     foreach ($entry in $expectedEnvironment.GetEnumerator()) {
         $actual = $basePreset.environment.($entry.Key)
         if ($actual -cne $entry.Value) {
-            $errors.Add("Expected base environment $($entry.Key)=$($entry.Value); found '$actual'.")
+            $errors.Add("Expected $($basePreset.name) environment $($entry.Key)=$($entry.Value); found '$actual'.")
         }
     }
 }
 
 foreach ($preset in $presets.buildPresets) {
-    if ($preset.jobs -ne 4) {
-        $errors.Add("Build preset '$($preset.name)' must set jobs to 4.")
+    if ($preset.jobs -ne 2) {
+        $errors.Add("Build preset '$($preset.name)' must set jobs to 2.")
     }
 }
 
