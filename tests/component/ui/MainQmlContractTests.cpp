@@ -3426,6 +3426,23 @@ TEST(MainQmlContractTests, ExportRangeButtonStartsAClipExport) {
     auto* const popup = harness.root->findChild<QObject*>(QStringLiteral("clipExportPopup"));
     ASSERT_NE(popup, nullptr);
     EXPECT_TRUE(popup->property("visible").toBool());
+    // Layout contract at the supported window floor: the body scrolls between a pinned
+    // header and footer, so the primary action stays on screen instead of falling below
+    // the window edge when the content grows.
+    harness.window->resize(960, 640);
+    harness.settle();
+    auto* const bodyScroll =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("clipExportBodyScroll"));
+    ASSERT_NE(bodyScroll, nullptr);
+    EXPECT_LE(bodyScroll->height(), 640.0 - 48.0);
+    auto* const chooseButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("clipExportChooseButton"));
+    ASSERT_NE(chooseButton, nullptr);
+    const QPointF chooseBottom = chooseButton->mapToScene(QPointF{0.0, chooseButton->height()});
+    EXPECT_GT(chooseBottom.y(), 0.0);
+    EXPECT_LE(chooseBottom.y(), 640.0);
+    harness.window->resize(1280, 800);
+    harness.settle();
     // The picker is part of the dialog but must never open by itself: a test cannot answer a system
     // modal, and neither can a user who only wanted to read the range before committing to a file.
     auto* const picker =
@@ -9527,6 +9544,20 @@ TEST(MainQmlContractTests, DialogsAndWorkspacesOwnTheKeyboardBeforeMediaShortcut
     auto* const dialog = harness.root->findChild<QObject*>(QStringLiteral("dropReviewDialog"));
     ASSERT_NE(dialog, nullptr);
     ASSERT_TRUE(dialog->property("visible").toBool());
+    // The confirm button must survive the window floor: the source list scrolls inside the
+    // shell while header and footer stay pinned.
+    harness.window->resize(960, 640);
+    harness.settle();
+    auto* const dropBody = harness.root->findChild<QQuickItem*>(QStringLiteral("dropBodyScroll"));
+    ASSERT_NE(dropBody, nullptr);
+    EXPECT_LE(dropBody->height(), 640.0 - 48.0);
+    auto* const dropOk = harness.root->findChild<QQuickItem*>(QStringLiteral("dropFooterOkButton"));
+    ASSERT_NE(dropOk, nullptr);
+    const QPointF dropOkBottom = dropOk->mapToScene(QPointF{0.0, dropOk->height()});
+    EXPECT_GT(dropOkBottom.y(), 0.0);
+    EXPECT_LE(dropOkBottom.y(), 640.0);
+    harness.window->resize(1280, 800);
+    harness.settle();
     EXPECT_EQ(harness.root->property("inputContext").toInt(), 3);
     EXPECT_FALSE(harness.root->property("globalMediaShortcutsEnabled").toBool());
     EXPECT_FALSE(reviewShortcuts->property("shortcutsEnabled").toBool());

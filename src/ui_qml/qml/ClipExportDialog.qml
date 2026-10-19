@@ -107,6 +107,9 @@ Item {
         focus: true
         padding: 0
         width: Math.min(460, (parent ? parent.width : 800) - 48)
+        // Vertical budget at the 640 px window minimum. 48 px keeps the shell clear of the
+        // window edges; the body scrolls inside whatever is left after header and footer.
+        readonly property real shellMaxHeight: Math.max(320, (parent ? parent.height : 640) - 48)
         // Closing while an export runs is allowed on purpose: the work continues on the worker
         // thread, the transport chip keeps showing progress, and the outcome is reported through
         // the action-feedback channel (intent toast with the chrome up, HUD when hidden), so
@@ -134,6 +137,8 @@ Item {
                 width: parent.width
 
                 Rectangle {
+                    id: headerBar
+
                     width: parent.width
                     height: 48
                     color: Theme.panel
@@ -186,19 +191,27 @@ Item {
                     }
                 }
 
-                Item {
+                // Header and footer stay pinned; only the body scrolls. The shell used to take
+                // the whole column height, so a wrapped FFmpeg failure detail or taller text
+                // metrics could push 选择位置… past the window edge with no way to reach it.
+                Flickable {
+                    id: bodyScroll
+
+                    objectName: "clipExportBodyScroll"
                     width: parent.width
-                    height: bodyColumn.implicitHeight + 28
+                    height: Math.max(0, Math.min(bodyColumn.implicitHeight + 28, dialog.shellMaxHeight - headerBar.height - footerBar.height))
+                    contentWidth: width
+                    contentHeight: bodyColumn.implicitHeight + 28
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    ScrollBar.vertical: VcsScrollBar {}
 
                     Column {
                         id: bodyColumn
 
-                        width: parent.width - 40
-                        anchors {
-                            top: parent.top
-                            topMargin: 16
-                            horizontalCenter: parent.horizontalCenter
-                        }
+                        x: 20
+                        y: 16
+                        width: bodyScroll.width - 40
                         spacing: 12
 
                         // Structured Metadata Card
@@ -404,6 +417,8 @@ Item {
                 }
 
                 Rectangle {
+                    id: footerBar
+
                     width: parent.width
                     height: footerRow.implicitHeight + 24
                     color: Theme.panel

@@ -249,6 +249,48 @@ Item {
             verify(active.cursorShape !== Qt.ClosedHandCursor);
         }
 
+        // The drawn origin must never expose canvas: at fit the image is centred whatever the
+        // pan says, and when it is larger than the viewport its edges stay outside or on the
+        // viewport edge. Without this a 100% drag slid the picture off-centre.
+        function test_image_draw_edge_never_exposes_canvas() {
+            compare(workspace.imageDrawEdge(800, 600, 0.0), 100, "fit stays centred at pan 0");
+            compare(workspace.imageDrawEdge(800, 600, 1.0), 100, "fit stays centred at pan 1");
+            compare(workspace.imageDrawEdge(800, 1600, 0.0), 0,
+                    "zoomed: the leading edge stops at the viewport edge");
+            compare(workspace.imageDrawEdge(800, 1600, 1.0), -800,
+                    "zoomed: the trailing edge still covers the viewport");
+            compare(workspace.imageDrawEdge(800, 1600, 1.4), -800,
+                    "an out-of-range pan cannot invert the clamp");
+        }
+
+        // Clamping the display is only safe while sampling reads the same geometry. A probe
+        // computed from the unclamped pan would look right but report the wrong pixel, which
+        // is worse than a blank edge for a quality-review tool.
+        function test_probe_pixel_matches_the_clamped_drawn_rect() {
+            const canvas = findChild(workspace, "imageCanvasMouseArea-2");
+            const image = findChild(workspace, "imageViewport-2");
+            verify(canvas !== null && image !== null);
+            tryVerify(() => image.status === Image.Ready);
+
+            imageReview.restoreObservationPosition(4, 1.0, 1.0);
+            tryVerify(() => image.width > canvas.width, 5000);
+            verify(image.x <= 0 && image.y <= 0, "a zoomed image must start outside the viewport");
+            verify(image.x + image.width >= canvas.width, "no blank column may remain");
+            verify(image.y + image.height >= canvas.height, "no blank row may remain");
+
+            mouseMove(canvas, 4, 4);
+            mouseMove(canvas, 2, 2);
+            tryVerify(() => workspace.hoverPoint !== null, 5000,
+                      "the clamped image must still accept a probe at the corner");
+            const scale = image.width / image.sourceSize.width;
+            verify(Math.abs(workspace.hoverPoint.imgX - Math.floor((2 - image.x) / scale)) <= 1,
+                   "probe x must follow the drawn origin, was " + workspace.hoverPoint.imgX);
+            verify(Math.abs(workspace.hoverPoint.imgY - Math.floor((2 - image.y) / scale)) <= 1,
+                   "probe y must follow the drawn origin, was " + workspace.hoverPoint.imgY);
+
+            imageReview.restoreObservationPosition(1, 0.5, 0.5);
+        }
+
         function test_double_click_zoom_keeps_selected_source() {
             const canvas = findChild(workspace, "imageCanvasMouseArea-2");
             verify(canvas !== null);

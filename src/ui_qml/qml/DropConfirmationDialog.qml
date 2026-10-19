@@ -91,9 +91,13 @@ Popup {
         border.color: Theme.menuBorder
     }
 
+    // Vertical budget at the 640 px window minimum. The source list is the only part that
+    // grows; header and footer stay pinned so 取消/确定 remain reachable without hunting.
+    readonly property real shellMaxHeight: Math.max(320, (parent ? parent.height : 640) - 48)
+
     contentItem: Item {
         implicitWidth: 560
-        implicitHeight: dialogColumn.implicitHeight
+        implicitHeight: Math.min(dialogColumn.implicitHeight, control.shellMaxHeight)
 
         Column {
             id: dialogColumn
@@ -101,6 +105,8 @@ Popup {
             width: parent.width
 
             Rectangle {
+                id: headerBar
+
                 objectName: "dropDialogHeader"
                 width: parent.width
                 height: 52
@@ -130,19 +136,27 @@ Popup {
                 }
             }
 
-            Item {
+            // Only the source list scrolls. The dialog previously took the whole column
+            // height, so a long list of sources could exceed a short window and leave 确定
+            // off-screen with no way to reach it.
+            Flickable {
+                id: bodyScroll
+
+                objectName: "dropBodyScroll"
                 width: parent.width
-                height: bodyColumn.implicitHeight + 28
+                height: Math.max(0, Math.min(bodyColumn.implicitHeight + 28, control.shellMaxHeight - headerBar.height - footerBar.height))
+                contentWidth: width
+                contentHeight: bodyColumn.implicitHeight + 28
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                ScrollBar.vertical: VcsScrollBar {}
 
                 Column {
                     id: bodyColumn
 
-                    width: parent.width - 40
-                    anchors {
-                        top: parent.top
-                        topMargin: 16
-                        horizontalCenter: parent.horizontalCenter
-                    }
+                    x: 20
+                    y: 16
+                    width: bodyScroll.width - 40
                     spacing: 12
 
                     Text {
@@ -241,6 +255,8 @@ Popup {
             }
 
             Rectangle {
+                id: footerBar
+
                 objectName: "dropDialogFooter"
                 width: parent.width
                 height: footerRow.implicitHeight + 24

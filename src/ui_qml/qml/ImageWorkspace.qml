@@ -727,9 +727,15 @@ Rectangle {
     }
 
     // Position of one edge of the drawn image rect: centered, then shifted by the pan offset
-    // (0.5 = centered).
+    // (0.5 = centered). Pan is normalised to the drawn image, so at fit zoom the image is
+    // smaller than the viewport and any offset would slide it off-centre with empty canvas
+    // behind it. Clamp the origin: a smaller image stays centred, a larger one may only move
+    // as far as its edges still cover the viewport.
     function imageDrawEdge(containerSize, drawSize, pan) {
-        return (containerSize - drawSize) / 2 + (0.5 - pan) * drawSize;
+        const centered = (containerSize - drawSize) / 2;
+        if (drawSize <= containerSize)
+            return centered;
+        return Math.min(0, Math.max(containerSize - drawSize, centered + (0.5 - pan) * drawSize));
     }
 
     // The drag-selection rectangle, shared by the slot viewports and the wipe/fade overlays.
