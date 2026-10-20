@@ -34,6 +34,9 @@
 | D-011 | 硬件/性能门禁**不恢复为每批阻塞**；发布采用"已验证/未验证/已知不支持"三段声明 | 临时假设 | README「验证状态与发布声明」；2.5.0 例外一次性 | 发布流程、README |
 | D-012 | 批量审查上下文、跨天复盘、问题记录旧 schema 兼容均为**未触发** | 未触发 | 触发器：手动切目录成为可感知摩擦；每周重开旧目录找缺陷＞1 次 | `ImageFolderPairModel`、`IssueLogController` |
 | D-013 | 目录排序＝自然序（数字按量级、大小写折叠）+ 非 ASCII 按码点；**不引入 ICU/拼音排序** | 已证实 | `src/ui_qml/include/dvs/ui/NaturalOrder.h`；同一份实现供视频列表与图片游标使用 | 视频文件夹列表、单图翻页 |
+| D-014 | 解码帧缓存**不按系统内存总量分档**：默认播放池保持 224 MiB，每源容量只由 `min(预算份额, 24 帧)` 决定，不设固定字节上限 | 临时假设（待单源长 GOP 实测确认 24 帧够用；触发改判：素材变 4K／10-bit 或三源满窗） | [缓存优先路线](../plans/cache-first-roadmap-2026-10-20.md) §0、§2C；`src/app/ReviewRuntime.cpp:52`；`src/media_ffmpeg/src/SourceFrameCache.h:49` | `MultiSourceFrameProvider` 份额、`ReviewRuntime` 预算、设置面 |
+| D-015 | **16-bit PNG 与 Deflate TIFF 保存不做**；图片保存只维护 PNG／JPEG，JPEG 另存沿用显式合成背景 | 已否决 | 路线 §4；`NormalizedFrameFormat` 只有 NV12／P010／BGRA8；`src/ui_qml/src/ImageEditController.cpp:1759,1778` | 图片保存、发布载荷、能力台账 F03 邻项 |
+| D-016 | 倒退（Left／A）体验以**单源**为主场景，双源比较不据此优化；反向窗口准入与门禁 profile 按单源设计 | 已证实 | 用户 2026-10-20 陈述，记录于[缓存优先路线](../plans/cache-first-roadmap-2026-10-20.md) §0 | 反向窗口准入规则、性能门禁素材选择 |
 
 ## 新增或修改一条的步骤
 

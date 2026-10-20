@@ -31,6 +31,11 @@ CompareStation documentation is grouped by lifecycle and audience:
   contrast, and minimum-window layout. It records findings against that revision; most items have
   since been implemented, and the ledger entry of 2026-10-19 (整改) carries the per-item status,
   the deliberately deferred ones, and the contract tests that now lock them.
+- [plans/cache-first-roadmap-2026-10-20.md](plans/cache-first-roadmap-2026-10-20.md) is the current
+  execution order: cache and held-backward first, then comparing an edit against its original, then
+  the common light edits, then multiple candidates. It records the settled material baseline
+  (1080p 8-bit, PNG and JPG, reverse steps mostly on a single source) and what is deliberately not
+  built (16-bit PNG, Deflate TIFF, memory-proportional budgets).
 - [plans/playback-overhaul/](plans/playback-overhaul/) preserves the earlier playback overhaul
   plan and review reports. Some changes have landed; use the current ledger and ADRs to identify
   remaining work. Its old priorities and optional audio expansion are not current product scope.
