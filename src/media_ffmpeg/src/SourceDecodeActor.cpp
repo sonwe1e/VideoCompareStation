@@ -237,6 +237,10 @@ application::PortSubmitResult SourceDecodeActor::submit(SourceDecodeRequest requ
         }
 
         std::deque<DecodeJob>& queue = queueFor(job.request.priority);
+        // Any new decode job retires a speculative reverse seed: playback, a seek and a step all
+        // need the worker more than an opportunistic window build does. Set under the mailbox
+        // lock, before the job is visible, so the worker cannot clear it in between.
+        reverseSeedCancelled_.store(true, std::memory_order_release);
         while (queue.size() >= capacityFor(job.request.priority)) {
             displaced.push_back(std::move(queue.front()));
             queue.pop_front();
@@ -369,6 +373,11 @@ void SourceDecodeActor::run() noexcept { // NOLINT(bugprone-exception-escape): a
                 controlQueue_.pop_front();
             } else {
                 decode = takeNextDecodeLocked();
+                // Serving a job retires the preemption signal that admitted it; anything stored
+                // after this point belongs to a later request.
+                if (decode.has_value()) {
+                    reverseSeedCancelled_.store(false, std::memory_order_release);
+                }
             }
         }
 
@@ -485,9 +494,10 @@ void SourceDecodeActor::run() noexcept { // NOLINT(bugprone-exception-escape): a
                 return true;
             }
             const std::scoped_lock lock{mutex_};
-            // Stale reverse warmup must yield to playback, a new exact seek, open/close, or
-            // sequential work. An already-queued reverse successor is the normal held-backward
-            // pipeline the window exists to serve and is not an interruption (D04).
+            // Speculative warmup must yield to playback, a new exact seek, open/close, or
+            // sequential work. A queued successor is also a stop, not a reason to keep walking:
+            // it means the caller is stepping faster than one window build, so finishing the
+            // walk would delay the step the window was meant to serve.
             return stopping_ || !controlQueue_.empty() || !exactQueue_.empty() ||
                    !sequentialQueue_.empty();
         };
@@ -769,7 +779,7 @@ void SourceDecodeActor::fillReverseGopWindow(
         return;
     }
 
-    if (interrupted(request)) {
+    if (interrupted(request) || reverseSeedCancelled_.load(std::memory_order_acquire)) {
         {
             std::scoped_lock lock{mutex_};
             ++reverseExactFallbackCount_;
@@ -785,14 +795,16 @@ void SourceDecodeActor::fillReverseGopWindow(
 
     const auto buildStarted = std::chrono::steady_clock::now();
     // ADR-006/ADR-003: one Exact seed at the lowest uncached reverse target, then sequential
-    // walk upward. A long GOP costs one seek instead of one seek per held-backward step.
+    // walk upward. A long GOP costs one seek instead of one seek per held-backward step. The
+    // seed carries the preemption flag rather than the request flag: a newer step must be able
+    // to stop this speculative seek mid-flight, and the caller's frame is already delivered.
     cacheKey_.sourceFrame = domain::FrameId{lowestMissing};
     emitDecodeStageTrace(application::TraceEventKind::SourceDecodeStarted,
                          request,
                          sourceId_,
                          domain::FrameId{lowestMissing});
     domain::Result<DecodedFrame> seed =
-        selectedDecoder.decodeExact(domain::FrameId{lowestMissing}, *request.cancellationRequested);
+        selectedDecoder.decodeExact(domain::FrameId{lowestMissing}, reverseSeedCancelled_);
     emitDecodeStageTrace(application::TraceEventKind::SourceDecodeCompleted,
                          request,
                          sourceId_,

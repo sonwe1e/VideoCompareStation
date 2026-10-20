@@ -1,5 +1,6 @@
 #include "SourceFrameCache.h"
 
+#include <algorithm>
 #include <functional>
 #include <type_traits>
 #include <utility>
@@ -12,6 +13,44 @@ void combineHash(std::size_t& seed, const std::size_t value) noexcept {
 }
 
 } // namespace
+
+std::size_t estimatedFrameBytes(const std::uint32_t width,
+                                const std::uint32_t height,
+                                const application::NormalizedFrameFormat format) noexcept {
+    if (width == 0U || height == 0U) {
+        return 0U;
+    }
+    // Twice the bytes-per-pixel so NV12's 1.5 stays integral: 3 = NV12, 6 = P010, 8 = BGRA.
+    std::uint64_t twiceBytesPerPixel = 8U;
+    switch (format) {
+    case application::NormalizedFrameFormat::Nv12_8:
+        twiceBytesPerPixel = 3U;
+        break;
+    case application::NormalizedFrameFormat::P010_10:
+        twiceBytesPerPixel = 6U;
+        break;
+    case application::NormalizedFrameFormat::Bgra8:
+        twiceBytesPerPixel = 8U;
+        break;
+    }
+    const std::uint64_t pixels =
+        static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height);
+    // Round up: a frame estimate below the stored size would let the cache overrun its share.
+    return static_cast<std::size_t>(((pixels * twiceBytesPerPixel) + 1U) / 2U);
+}
+
+std::size_t sourceCacheCapacityBytes(const std::size_t budgetShareBytes,
+                                     const std::size_t frameBytes) noexcept {
+    if (budgetShareBytes == 0U || frameBytes == 0U) {
+        return 0U;
+    }
+    const std::uint64_t framesCap =
+        static_cast<std::uint64_t>(frameBytes) * kMaximumSourceCacheFrames;
+    const std::uint64_t byteCap =
+        (std::min)(static_cast<std::uint64_t>(kMaximumSourceCacheBytesPerSource), framesCap);
+    return static_cast<std::size_t>(
+        (std::min)(static_cast<std::uint64_t>(budgetShareBytes), byteCap));
+}
 
 std::size_t SourceFrameCacheKeyHash::operator()(const SourceFrameCacheKey& key) const noexcept {
     std::size_t result = std::hash<std::string>{}(key.sourceFingerprint);

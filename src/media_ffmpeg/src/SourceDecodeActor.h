@@ -160,6 +160,14 @@ private:
     std::uint64_t reverseWindowBuildMicroseconds_ = 0U;
     std::uint64_t reverseWindowBuildMaximumMicroseconds_ = 0U;
     std::uint64_t reverseExactFallbackCount_ = 0U;
+    // Set when an Exact/Reverse request is admitted and cleared when the worker starts serving
+    // it, so it means "newer interactive work exists than the job now running". The reverse
+    // window seed decodes against this flag: the primary reverse frame of the running job has
+    // already been delivered, so abandoning the speculative walk costs nothing the caller
+    // observes, while finishing it would keep the next held-backward step queued behind a
+    // seek it does not need. Not the provider-wide external interrupt: that one would also
+    // abort the running job's own interactive decode.
+    std::atomic<bool> reverseSeedCancelled_{false};
     media::DecoderBackendStatus backendStatus_;
     SourceFrameCache cache_;
     SourceFrameCacheKey cacheKey_;

@@ -457,10 +457,13 @@ try {
     # JOG walk gate (E04 acceptance / plan §8.4 JOG line). Structural correctness is hard-gated:
     # the stage must have run its legs, every leg must have settled into a stop sample, and the
     # forward walk must have advanced. Stale post-settle motion already hard-fails inside the
-    # executable (jog-stale-update). The absolute 100 ms stop target stays a recorded value plus
-    # a soft warning until a hardware baseline exists, matching the held-step P95 discipline.
+    # executable (jog-stale-update). The experience thresholds below are hard gates too, while
+    # staying behavior gates rather than structural ones: they measure what a held-direction walk
+    # feels like (release latency and reverse throughput), not that the walk mechanically ran.
     $jogLegs = [int]$json.jog_legs
     $jogForwardFrames = [int]$json.jog_forward_frames
+    $jogForwardFps = [double]$json.jog_forward_fps
+    $jogReverseFps = [double]$json.jog_reverse_fps
     $jogStopSamples = [int]$json.jog_stop_samples
     $jogStopP95 = [double]$json.jog_stop_p95_ms
     $jogStaleUpdates = [int]$json.jog_stale_updates
@@ -489,16 +492,53 @@ try {
         Write-Warning (
             "The $runName JOG stage reported jog_stop_p95_ms=$jogStopP95 (no stop samples); " +
             "measurement may have been skipped.")
-    } elseif ($jogStopP95 -gt 100) {
-        Write-Warning (
-            "The $runName JOG stage recorded jog_stop_p95_ms=$jogStopP95, above the plan's " +
-            "100 ms stop target. This is a recorded first-baseline value, not a hard gate; the " +
-            "structural gates (stop samples, forward advance, stale updates) are enforced.")
+    } elseif ($jogStopP95 -gt 500) {
+        throw (
+            "The $runName JOG stage recorded jog_stop_p95_ms=$jogStopP95, above the 500 ms " +
+            "experience budget ($jogStopSamples stop samples). This is an experience baseline " +
+            "gate, not a structural gate: the measured release-to-stop latency is too slow to " +
+            "feel settled, even though every leg did run and settle."
+        )
     } else {
-        Write-Warning (
-            "The $runName JOG stage recorded jog_stop_p95_ms=$jogStopP95; " +
-            "within the plan's 100 ms target — value captured for the first-baseline record.")
+        # Still recorded: the experience thresholds are gates, but the first-baseline discipline
+        # is to write every measured value down, not only the ones that failed.
+        Write-Host (
+            "The $runName JOG stage recorded jog_stop_p95_ms=$jogStopP95 over " +
+            "$jogStopSamples stop sample(s): inside the 500 ms experience budget.")
     }
+    # Reverse throughput is gated relative to the forward walk because the absolute value depends
+    # on source resolution, codec, and hardware. A reverse walk under a fifth of its forward walk
+    # means held-backward is paying a per-step seek it should be serving from the GOP window.
+    if ($jogForwardFps -le 0) {
+        throw (
+            "The $runName JOG stage reported jog_forward_fps=$jogForwardFps with " +
+            "$jogForwardFrames forward frame(s); the forward walk rate is unmeasurable, so the " +
+            "reverse/forward ratio cannot be evaluated."
+        )
+    }
+    if ($jogReverseFps -le 0) {
+        throw (
+            "The $runName JOG stage reported jog_reverse_fps=$jogReverseFps; held-backward " +
+            "presented no frames. This is an experience baseline gate, not a structural gate."
+        )
+    }
+    $jogReverseRatio = $jogReverseFps / $jogForwardFps
+    $jogReverseRatioText = $jogReverseRatio.ToString(
+        'F3',
+        [System.Globalization.CultureInfo]::InvariantCulture)
+    if ($jogReverseRatio -lt 0.2) {
+        throw (
+            "The $runName JOG stage recorded jog_reverse_fps=$jogReverseFps against " +
+            "jog_forward_fps=$jogForwardFps (ratio $jogReverseRatioText, floor 0.2). This is " +
+            "an experience baseline gate, not a structural gate: held-backward is stepping far " +
+            "slower than held-forward."
+        )
+    }
+    # Recorded on the way through as well: the ratio is the number that tells the reverse cache
+    # whether its GOP window is actually being used.
+    Write-Host (
+        "The $runName JOG stage recorded jog_forward_fps=$jogForwardFps against " +
+        "jog_reverse_fps=$jogReverseFps (ratio $jogReverseRatioText).")
 } catch {
     & $emitBenchmarkSummary 'FAIL' $_.Exception.Message
     throw

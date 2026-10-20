@@ -6,6 +6,8 @@
 #include "dvs/media/MultiSourceFrameProvider.h"
 #include "dvs/platform/FrameBudget.h"
 
+#include "SourceFrameCache.h"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -1559,6 +1561,55 @@ TEST(MultiSourceFrameProviderTests, PublishedFrameSetsCarryEverySourceAtItsMappe
         EXPECT_EQ(*slot1->sourceFrameId, domain::FrameId{canonical + 2});
         EXPECT_EQ(slot0->matchKind, application::FrameMatchKind::ExactIndex);
     }
+}
+
+// EX-01: the per-source cache is sized in frames, not by one flat byte cap. These assertions pin
+// the material a review actually runs: a 1080p pair must retain a reverse window (>=12 NV12 or
+// >=6 P010 frames), 4K NV12 must keep at least two, and a 4K P010 source in a three-way
+// comparison must stay inside its budget share (one frame, i.e. Exact fallback) rather than
+// widening the global budget to give it a second frame.
+TEST(MultiSourceFrameProviderTests, SourceCacheCapacityYieldsAUsableWindowPerPixelFormat) {
+    constexpr std::size_t kDecodeBudgetBytes = std::size_t{224U} * 1024U * 1024U;
+    constexpr auto kNv12 = application::NormalizedFrameFormat::Nv12_8;
+    constexpr auto kP010 = application::NormalizedFrameFormat::P010_10;
+    const auto capacityFor = [=](std::uint32_t width,
+                                 std::uint32_t height,
+                                 std::uint32_t bitDepth,
+                                 std::size_t sources) {
+        const std::size_t share = kDecodeBudgetBytes / (2U * sources);
+        return internal::sourceCacheCapacityBytes(
+            share, internal::estimatedFrameBytes(width, height, bitDepth == 10U ? kP010 : kNv12));
+    };
+    const auto framesFor = [](std::size_t capacityBytes, std::size_t frameBytes) {
+        return capacityBytes / frameBytes;
+    };
+
+    // The estimates themselves are exact sample layouts, not guesses: 1920*1080 NV12 is
+    // 3,110,400 bytes and the same extent in P010 is exactly twice that.
+    const std::size_t nv12HdFrame = internal::estimatedFrameBytes(1920U, 1080U, kNv12);
+    const std::size_t p010HdFrame = internal::estimatedFrameBytes(1920U, 1080U, kP010);
+    const std::size_t nv12UhdFrame = internal::estimatedFrameBytes(3840U, 2160U, kNv12);
+    const std::size_t p010UhdFrame = internal::estimatedFrameBytes(3840U, 2160U, kP010);
+    ASSERT_EQ(nv12HdFrame, 3'110'400U);
+    ASSERT_EQ(p010HdFrame, 6'220'800U);
+    ASSERT_EQ(nv12UhdFrame, 12'441'600U);
+    ASSERT_EQ(p010UhdFrame, 24'883'200U);
+
+    EXPECT_GE(framesFor(capacityFor(1920U, 1080U, 8U, 2U), nv12HdFrame), 12U);
+    EXPECT_GE(framesFor(capacityFor(1920U, 1080U, 10U, 2U), p010HdFrame), 6U);
+    EXPECT_GE(framesFor(capacityFor(3840U, 2160U, 8U, 2U), nv12UhdFrame), 2U);
+    EXPECT_GE(framesFor(capacityFor(3840U, 2160U, 10U, 2U), p010UhdFrame), 2U);
+
+    // The pair's caches must stay inside the half-budget share they were partitioned, and the
+    // three-way 4K P010 case must not be raised to a two-frame window either.
+    const std::size_t pairShare = kDecodeBudgetBytes / 4U;
+    EXPECT_LE(2U * capacityFor(1920U, 1080U, 8U, 2U), kDecodeBudgetBytes / 2U);
+    EXPECT_LE(2U * capacityFor(3840U, 2160U, 8U, 2U), kDecodeBudgetBytes / 2U);
+    EXPECT_LE(capacityFor(1920U, 1080U, 8U, 2U), pairShare);
+    const std::size_t threeWayUhdP010Share = kDecodeBudgetBytes / 6U;
+    const std::size_t threeWayUhdP010 = capacityFor(3840U, 2160U, 10U, 3U);
+    EXPECT_LE(threeWayUhdP010, threeWayUhdP010Share);
+    EXPECT_LT(framesFor(threeWayUhdP010, p010UhdFrame), 2U);
 }
 
 } // namespace

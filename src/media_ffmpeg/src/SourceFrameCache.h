@@ -38,6 +38,32 @@ struct CachedSourceFrame final {
     domain::MediaTime presentationTime;
 };
 
+// Per-source capacity planning. The previous flat byte cap was sized for 1080p NV12 only: it held
+// four NV12 frames, two P010 frames, and a single 4K frame, so held-backward had no window to
+// consume and 4K fell through to one exact seek per step. Sizing from the descriptor's pixel
+// layout expresses the same global budget in frames, which is the unit the reverse window and
+// read-ahead actually need.
+//
+// The frame caps bound a single source so one large source cannot hold the whole budget, and the
+// 48 MiB cap keeps two sources at 96 MiB, i.e. inside the half-budget share they are given.
+inline constexpr std::size_t kMaximumSourceCacheFrames = 24U;
+inline constexpr std::size_t kMaximumSourceCacheBytesPerSource = std::size_t{48U} * 1024U * 1024U;
+
+// Bytes one normalized frame occupies for the given storage format. NV12 is 1.5 bytes/pixel and
+// P010 is 3 bytes/pixel; unknown or packed formats use 4 bytes/pixel so the estimate never
+// understates a frame the cache will really retain (understating would overfill the budget).
+[[nodiscard]] std::size_t estimatedFrameBytes(std::uint32_t width,
+                                              std::uint32_t height,
+                                              application::NormalizedFrameFormat format) noexcept;
+
+// Capacity for one source cache: the smaller of the source's budget share and the
+// byte/frame-count caps. Never larger than `budgetShareBytes`, so the actor caches across all
+// sources stay inside the share the provider partitioned for them; a source whose share cannot
+// hold two frames is left that small on purpose, and the actor's `< 2` window gate sends it to
+// per-step Exact instead of the planner widening the global budget for it.
+[[nodiscard]] std::size_t sourceCacheCapacityBytes(std::size_t budgetShareBytes,
+                                                   std::size_t frameBytes) noexcept;
+
 // Actor-owned byte-bounded LRU. It is intentionally not synchronized: the owning decode actor
 // is the only thread that reads or mutates it.
 class SourceFrameCache final {

@@ -813,5 +813,58 @@ TEST(SourceDecodeActorTests, BackendStatusReportsDecodeLatencyPercentiles) {
     EXPECT_EQ(after.decodeLatencyTruncatedSamples, 0U);
 }
 
+// EX-02: a reverse GOP window seed is speculative work, so the next held-backward step must not
+// queue behind it. The successor is submitted from the boundary where a real step arrives - as
+// soon as the previous frame is delivered, while its seed is still walking - and the abandoned
+// seed has to stay invisible to the caller: the delivered frame keeps its success, and every
+// following step still decodes. A seed that turned cancellation into a frame failure, or that
+// left the preemption signal set, would fail here.
+TEST(SourceDecodeActorTests, ReverseSeedYieldsToTheNextReverseStepWithoutFailingTheFrame) {
+    platform::FrameBudget budget{16U * 1024U * 1024U};
+    std::atomic<bool> interrupted = false;
+    auto canceled = std::make_shared<std::atomic<bool>>(false);
+    // 10-bit H.265 is the slowest fixture available, which keeps the seed walk in flight long
+    // enough for the successor submission to overlap it.
+    SourceDecodeActor actor{
+        0U,
+        descriptor("h265_10bit_320x180_30fps_12.mp4"),
+        budget,
+        &interrupted,
+        false,
+        4U * 1024U * 1024U,
+    };
+    ASSERT_TRUE(actor.open(*canceled));
+
+    const auto reverse = [&actor, &canceled](const std::int64_t frame) {
+        SourceDecodeSubmission submitted = actor.submit(SourceDecodeRequest{
+            .frameId = domain::FrameId{frame},
+            .priority = SourceDecodePriority::Reverse,
+            .reverseWindowFrames = 10U,
+            .cancellationRequested = canceled,
+        });
+        EXPECT_EQ(submitted.status, application::PortSubmitResult::Accepted);
+        return submitted.completion.get();
+    };
+
+    const domain::Result<DecodedFrame> first = reverse(11);
+    ASSERT_TRUE(first) << first.error().technicalDetail;
+    const domain::Result<DecodedFrame> second = reverse(10);
+    ASSERT_TRUE(second) << second.error().technicalDetail;
+
+    // The whole held-backward burst must keep delivering: a preempted window is not a frame
+    // failure, it only means the next step decodes instead of consuming cache.
+    for (std::int64_t frame = 9; frame >= 0; --frame) {
+        const domain::Result<DecodedFrame> step = reverse(frame);
+        ASSERT_TRUE(step) << step.error().technicalDetail;
+    }
+
+    const media::DecoderBackendStatus status = actor.backendStatus();
+    const std::uint64_t reverseDecisions = status.reverseWindowBuildCount +
+                                           status.reverseWindowHitCount +
+                                           status.reverseExactFallbackCount;
+    EXPECT_GE(reverseDecisions, 1U);
+    EXPECT_GT(status.completedDecodeCount, 0U);
+}
+
 } // namespace
 } // namespace dvs::media::internal

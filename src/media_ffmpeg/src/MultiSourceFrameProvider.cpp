@@ -40,7 +40,6 @@ inline constexpr std::size_t kExactRequestSlots = 1U;
 inline constexpr std::size_t kSequentialRequestSlots = 2U;
 inline constexpr std::size_t kPrefetchRequestSlots = 8U;
 inline constexpr std::size_t kSetTableCapacity = 4U;
-inline constexpr std::size_t kMaximumSourceCacheBytes = std::size_t{12U} * 1024U * 1024U;
 inline constexpr std::size_t kMaximumFrameSetCacheBytes = std::size_t{96U} * 1024U * 1024U;
 
 enum class ProviderOperationKind : std::uint8_t {
@@ -876,12 +875,24 @@ private:
         interruptRequested_.store(false, std::memory_order_release);
         try {
             decodeActors_.reserve(request.sources.size());
-            const std::size_t cacheCapacity =
+            // Half the decode budget is partitioned across the sources; each source then converts
+            // its share into frames using its own descriptor, so a 1080p pair keeps a full
+            // reverse window while a 4K P010 source stays inside the same share even when that
+            // means it only caches one frame and every reverse step has to exact-seek.
+            const std::size_t cacheBudgetShare =
                 lowPriority_ || request.sources.empty()
                     ? 0U
-                    : std::min(kMaximumSourceCacheBytes,
-                               frameBudget_.capacityBytes() / (2U * request.sources.size()));
+                    : frameBudget_.capacityBytes() / (2U * request.sources.size());
             for (std::size_t slot = 0; slot < request.sources.size(); ++slot) {
+                const domain::MediaDescriptor& sourceDescriptor = request.sources[slot].descriptor;
+                const std::size_t cacheCapacity = internal::sourceCacheCapacityBytes(
+                    cacheBudgetShare,
+                    internal::estimatedFrameBytes(
+                        sourceDescriptor.extent.width,
+                        sourceDescriptor.extent.height,
+                        sourceDescriptor.bitDepth == 10U
+                            ? application::NormalizedFrameFormat::P010_10
+                            : application::NormalizedFrameFormat::Nv12_8));
                 decodeActors_.push_back(
                     std::make_unique<internal::SourceDecodeActor>(request.sources[slot].id,
                                                                   request.sources[slot].descriptor,
