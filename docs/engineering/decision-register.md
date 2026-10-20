@@ -37,7 +37,7 @@
 | D-014 | 解码帧缓存**不按系统内存总量分档**：默认播放池保持 224 MiB，每源容量只由 `min(预算份额, 24 帧)` 决定，不设固定字节上限 | 临时假设（待单源长 GOP 实测确认 24 帧够用；触发改判：素材变 4K／10-bit 或三源满窗） | [缓存优先路线](../plans/cache-first-roadmap-2026-10-20.md) §0、§2C；`src/app/ReviewRuntime.cpp:52`；`src/media_ffmpeg/src/SourceFrameCache.h:49` | `MultiSourceFrameProvider` 份额、`ReviewRuntime` 预算、设置面 |
 | D-015 | **16-bit PNG 与 Deflate TIFF 保存不做**；图片保存只维护 PNG／JPEG，JPEG 另存沿用显式合成背景 | 已否决 | 路线 §4；`NormalizedFrameFormat` 只有 NV12／P010／BGRA8；`src/ui_qml/src/ImageEditController.cpp:1759,1778` | 图片保存、发布载荷、能力台账 F03 邻项 |
 | D-016 | 倒退（Left／A）体验以**单源**为主场景，双源比较不据此优化；反向窗口准入与门禁 profile 按单源设计 | 已证实 | 用户 2026-10-20 陈述，记录于[缓存优先路线](../plans/cache-first-roadmap-2026-10-20.md) §0 | 反向窗口准入规则、性能门禁素材选择 |
-| D-017 | 倒退体验统一为**尾迹保留**一条原语：播放后的回退与 seek 后的回退共用"解码器刚走过的帧不丢"，播放环收敛为显式小常数 K，独立的反向窗口构建不再保留 | 临时假设（探针确认 D3D11VA 显存占用与播放环现状后改判） | 路线 §批次 B 修订（2026-10-20）；播放路径已由 `fillReadAhead` 形成隐式环（`SourceDecodeActor.cpp:505-570,572`），缓存只在 open／close 清空（`:406,423`） | `SourceDecodeActor` 缓存策略、`SoftwareDecoder` 逐帧出口、性能门禁诊断口径 |
+| D-017 | 倒退体验统一为**尾迹保留**一条原语：播放后的回退与 seek 后的回退共用"解码器刚走过的帧不丢"，播放环显式化但**不缩小**现有深度，独立的反向窗口构建不再保留 | 临时假设（探针确认 D3D11VA 显存占用与播放环现状后改判） | 路线 §批次 B 修订（2026-10-20）；播放路径已由 `fillReadAhead` 形成隐式环（`SourceDecodeActor.cpp:505-570,572`），缓存只在 open／close 清空（`:406,423`） | `SourceDecodeActor` 缓存策略、`SoftwareDecoder` 逐帧出口、性能门禁诊断口径 |
 
 ## 新增或修改一条的步骤
 
