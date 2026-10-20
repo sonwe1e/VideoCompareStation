@@ -3598,6 +3598,50 @@ resize 后继续沿用相对 Fit 的旧行为。详细范围、红例、有限�
   定向套件、format、lint 见本轮日志。
 - **余项**：第二增补画笔＋马赛克；第三增补填充/清除＋箭头/矩形/文字标注；JPEG 编码器接入。
 
+## 2026-10-21 对比图改为纯净画面并补「另存为…」（用户实测反馈，基线 `1aff330` + 本轮工作区）
+
+用户反馈：「复制对比图」带上了界面内容，希望直接复制视频帧；且复制结果无法在文件夹里
+粘贴，需要另存为入口。
+
+- **裁剪目标从视口改为对比画面本身**：`ComparisonViewport` 新增 `comparisonPicture`
+  （即 `dualVideoSurface`）。`ComparisonExportController::capturePicture` 在抓取前把画面项的
+  **全部兄弟节点**置为不可见——来源标签、缩放徽章、视图按钮、提示横幅都是 surface 的
+  兄弟节点且与画面矩形重叠，仅靠裁剪无法排除。`grabWindow()` 是阻塞式场景图同步/渲染
+  屏障，抑制状态会被同一次抓取观察到，用户看不到闪烁。抓取做两次：第一次消费
+  `QQuickRenderNode` 的属性同步帧，第二次才是成品。
+- **沿祖先链向上抑制（2026-10-21 实测后修正）**：首轮只抑制了画面在视口内的兄弟节点，
+  漏掉了浮在舞台上、位于视口**之外**的 `PlayerOsc`（`transport`，`z: 50`，窗口 contentItem
+  的直接子项）。现在改为从画面沿 `parentItem()` 链一路爬到窗口，在每一级隐藏**场景矩形
+  与画面重叠**的可见兄弟节点；祖先永不被触碰（视口自己的 stage-well 底色要留在 letterbox
+  后面）。兄弟矩形先内缩 0.5 px，避免 merely 贴边的项（正好压在舞台上方的模式栏）被无谓
+  抑制。因为裁剪目标改成了 surface 本身，`roiTripletMode` 的 ROI 轮廓线（surfaceLayer 的
+  另一个子项）也一并被排除了。
+- **排除 aspect-fit letterbox（2026-10-21 实测后修正）**：视频宽高比与画面区域不一致时渲染器
+  会留黑边，首轮把整块画面矩形都存了下来。`ComparisonSurface` 新增
+  `displayedContentRect()`，复用 `roiTripletOutlineRects` 的同一套几何
+  （`transformedSurfaceContentRect`，已含 viewScale／ROI／旋转），返回渲染路径真正画进视频的
+  矩形并集；控制器把它映射到场景坐标后与画面矩形相交。无源时返回 null，控制器回退到整个
+  画面矩形。
+- **默认文件名「视频名_帧号」**：`Main.qml::suggestedComparisonFileName()` 取时间线主源
+  的文件名、去掉扩展名（结果读作 `name_123.png` 而非 `name.mp4_123.png`），拼上 1 起始的
+  当前帧号，并把 Windows 文件名非法字符替换为 `_`；打开对话框前预填到 `currentFile`。
+- **去掉标注条**：`composeLabeledCapture`／`captionBarHeight` 随之删除。来源与观察信息
+  改存 PNG 文本元数据（`Description` 键，换行拼接），像素保持纯净；剪贴板没有元数据
+  通道，复制路径不带这则声明。决策见 D-018，D-004 在复制/另存为路径上被取代。
+- **「另存为…」入口**：`CompareModeBar` 在「复制对比图」左侧新增按钮与
+  `saveComparisonRequested` 信号；`Main.qml` 用原生 `FileDialog`（SaveFile，PNG 过滤器）
+  选位置后调用控制器既有的 `saveComparison`（`QSaveFile` 事务性写 PNG，失败不覆盖既有
+  文件）。`comparisonCaptionLines()` 保留，改为只供元数据使用。
+- **测试**：`ComparisonExportSuppressesSiblingOverlays`（合成树：红色画面＋绿色 chrome
+  兄弟节点＋**上一级**的 transport 覆盖层，逐像素断言成品全为画面色、无任何覆盖层泄漏，
+  并读回 PNG `Description` 元数据）；
+  `DisplayedContentRectExcludesAspectFitLetterbox`／`DisplayedContentRectIsNullWithoutSources`
+  （16:9 源进 800×800 画面，内容矩形＝(0, 175, 800, 450)，即居中适配带；无源时返回 null）；
+  `CopyComparisonButtonPutsBarePictureOnClipboard`（契约：按钮→剪贴板尺寸≈画面设备像素
+  且**不再高于**画面（无标注条）、保存按钮存在、PNG 魔数与事务性另存）。全套
+  `ComparisonSurfaceGeometryTests`＋`ui.MainQmlContractTests` 175/175 通过；format-check 通过。
+- **边界**：图片工作区有自己的导出路径，本次不改。
+
 ## 2026-09-25 一键复制带标注对比图（P1 · 实施第二步「做好比较」余项二，基线 `5b1ced8` + 本轮工作区）
 
 对应 2026-09-25 审查 §五最后一项：「一键复制／导出带 GT、预测名称、局部裁剪和标注的

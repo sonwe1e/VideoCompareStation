@@ -1244,6 +1244,35 @@ TEST(ComparisonSurfaceGeometryTests, RejectsLetterboxAndMapsAnalysisDifferenceCo
     EXPECT_DOUBLE_EQ(difference.value(QStringLiteral("normalizedY")).toDouble(), 0.5);
 }
 
+TEST(ComparisonSurfaceGeometryTests, DisplayedContentRectExcludesAspectFitLetterbox) {
+    ComparisonSurface surface;
+    surface.setWidth(800.0);
+    surface.setHeight(800.0);
+    surface.setSourceDisplayInfo(
+        {QVariantMap{{QStringLiteral("width"), 1920}, {QStringLiteral("height"), 1080}}});
+    surface.setViewMode(ComparisonSurface::Single);
+
+    // A 16:9 source inside a square surface letterboxes top and bottom. The drawn content is
+    // the fitted 800x450 band, centred - exactly the rect an export must crop to so the
+    // letterbox never travels into a shared image.
+    const QRectF content = surface.displayedContentRect();
+    EXPECT_TRUE(content.isValid());
+    EXPECT_NEAR(content.x(), 0.0, 0.01);
+    EXPECT_NEAR(content.y(), 175.0, 0.01);
+    EXPECT_NEAR(content.width(), 800.0, 0.01);
+    EXPECT_NEAR(content.height(), 450.0, 0.01);
+}
+
+TEST(ComparisonSurfaceGeometryTests, DisplayedContentRectIsNullWithoutSources) {
+    ComparisonSurface surface;
+    surface.setWidth(800.0);
+    surface.setHeight(600.0);
+
+    // Nothing presented: callers fall back to the whole item rect rather than cropping to
+    // an empty rect.
+    EXPECT_TRUE(surface.displayedContentRect().isNull());
+}
+
 TEST(ComparisonSurfaceGeometryTests, MapsReferencePeekUsingTheReferenceAspectAndRotation) {
     ComparisonSurface surface;
     surface.setWidth(800.0);

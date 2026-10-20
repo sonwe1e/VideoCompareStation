@@ -86,7 +86,7 @@ SDR 到 sRGB 的转换；分析输入、统计、像素读数与导出码值仍�
   RGBA64 sidecar；其颜色转换作用于 8-bit 显示值。
 - **导出语义**：样本 manifest 明确写 `color_management.source_profile_applied = false`、
   `member_reference = decoded_rgba8_swscale`、`display_environment_verified = false`；
-  复制/保存对比图带「显示结果 · 屏幕像素 · 未色彩管理」标注；片段导出仍是原始码流拷贝，
+  复制/保存对比图带「显示结果 · 屏幕像素 · 未色彩管理」标注（2026-10-21 起写入 PNG 文本元数据而非烧录成画面标注条，见 D-018）；片段导出仍是原始码流拷贝，
   不做颜色转换。
 
 ## 4. 不变量

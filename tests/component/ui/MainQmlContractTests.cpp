@@ -6507,56 +6507,105 @@ TEST(MainQmlContractTests, DualDifferenceWithoutReferenceStaysExplainedAndDisabl
     EXPECT_TRUE(dualItem->property("text").toString().contains(QStringLiteral("GT 基准")));
 }
 
-// Step-2 comparison export: the composed capture is the exact viewport crop plus a
-// neutral-gray caption bar (true grays — an exported image must not tint color judgment).
-TEST(MainQmlContractTests, ComparisonExportComposesCaptionBarInNeutralGray) {
-    QImage windowCapture(64, 32, QImage::Format_RGBA8888);
-    windowCapture.fill(QColor{200, 40, 30});
-    const QRect viewportRect{8, 4, 48, 24};
-    const QStringList caption{QStringLiteral("GT:a.mp4 / P:b.mp4"),
-                              QStringLiteral("split - frame 12")};
-
-    const QImage composed = ComparisonExportController::composeLabeledCapture(
-        windowCapture, viewportRect, caption, 1.0);
-    ASSERT_FALSE(composed.isNull());
-    EXPECT_EQ(composed.width(), 48);
-    const int barHeight = ComparisonExportController::captionBarHeight(2, 1.0);
-    EXPECT_GT(barHeight, 0);
-    EXPECT_EQ(composed.height(), 24 + barHeight);
-
-    // The viewport part is the exact crop of the source capture.
-    EXPECT_EQ(composed.pixelColor(24, 12), QColor(200, 40, 30));
-
-    // The bar background is true neutral gray and clearly darker than the content.
-    const QColor bar = composed.pixelColor(4, 24 + barHeight / 2);
-    EXPECT_EQ(bar.red(), bar.green());
-    EXPECT_EQ(bar.green(), bar.blue());
-    EXPECT_LT(bar.lightness(), 64);
-
-    // The elided caption text actually drew ink into the bar.
-    int inkPixels = 0;
-    for (int y = 24; y < composed.height(); ++y) {
-        for (int x = 0; x < composed.width(); ++x) {
-            if (composed.pixelColor(x, y).lightness() > bar.lightness() + 40) {
-                ++inkPixels;
-            }
+// Step-2 comparison export: the capture is the bare comparison picture - the rendered
+// comparison with every overlapping overlay suppressed and no annotation bar. Cropping alone
+// would keep the chrome, because the labels, badges, commands and the floating transport all
+// overlap the picture rect.
+TEST(MainQmlContractTests, ComparisonExportSuppressesSiblingOverlays) {
+    // A synthetic tree: a picture with a chrome sibling inside the viewport, plus a transport
+    // overlay one level further up (the PlayerOsc case). The capture must contain the picture
+    // and none of the overlays - cropping alone would keep them, because they overlap the
+    // picture rect.
+    QQuickWindow window;
+    window.resize(200, 100);
+    window.show();
+    QQmlEngine engine;
+    engine.addImportPath(
+        QDir{QCoreApplication::applicationDirPath()}.filePath(QStringLiteral("qml")));
+    QQmlComponent component{&engine};
+    component.setData(R"qml(
+import QtQuick
+Item {
+    // Stage level: the floating transport overlays the bottom of the picture, exactly like
+    // PlayerOsc does over the comparison stage. It is a sibling of the viewport, not of the
+    // picture, so a one-level suppression would miss it.
+    Rectangle {
+        objectName: "transport"
+        x: 0
+        y: 60
+        width: 200
+        height: 40
+        color: "#ff0000"
+    }
+    Item {
+        // Viewport level.
+        anchors.fill: parent
+        Rectangle {
+            objectName: "picture"
+            anchors.fill: parent
+            color: "#204080"
+        }
+        Rectangle {
+            objectName: "chrome"
+            x: 40
+            y: 20
+            width: 80
+            height: 40
+            color: "#00ff00"
         }
     }
-    EXPECT_GT(inkPixels, 20);
+}
+)qml",
+                      QUrl{});
+    if (component.status() != QQmlComponent::Ready) {
+        qWarning() << "comparison-export chrome probe failed to compile:"
+                   << component.errorString();
+    }
+    ASSERT_EQ(component.status(), QQmlComponent::Ready) << componentErrors(component);
+    std::unique_ptr<QObject> holder{component.create()};
+    ASSERT_NE(holder, nullptr) << componentErrors(component);
+    auto* const rootItem = qobject_cast<QQuickItem*>(holder.get());
+    ASSERT_NE(rootItem, nullptr);
+    rootItem->setParentItem(window.contentItem());
+    rootItem->setSize(QSizeF{200.0, 100.0});
+    for (int iteration = 0; iteration < 10; ++iteration) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
+    auto* const picture = rootItem->findChild<QQuickItem*>(QStringLiteral("picture"));
+    ASSERT_NE(picture, nullptr);
 
-    // An empty caption returns the bare crop; an empty crop returns a null image.
-    EXPECT_EQ(
-        ComparisonExportController::composeLabeledCapture(windowCapture, viewportRect, {}, 1.0)
-            .height(),
-        24);
-    EXPECT_TRUE(ComparisonExportController::composeLabeledCapture(
-                    windowCapture, QRect{100, 100, 10, 10}, caption, 1.0)
-                    .isNull());
+    ComparisonExportController controller;
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("capture.png"));
+    if (!controller.saveComparison(
+            picture, QStringList{QStringLiteral("provenance line")}, QUrl::fromLocalFile(path))) {
+        // grabWindow() yields nothing on a desktop that cannot render; the production path
+        // reports exactly that instead of saving.
+        if (controller.lastStatus().contains(QStringLiteral("无法抓取当前画面"))) {
+            GTEST_SKIP() << "window capture unavailable on this desktop: "
+                         << controller.lastStatus().toStdString();
+        }
+        FAIL() << controller.lastStatus().toStdString();
+    }
+    QImage saved;
+    ASSERT_TRUE(saved.load(path));
+    // Every pixel is the picture: the chrome sibling never reaches the capture.
+    for (int y = 0; y < saved.height(); ++y) {
+        for (int x = 0; x < saved.width(); ++x) {
+            const QColor pixel = saved.pixelColor(x, y);
+            ASSERT_TRUE(pixel.red() == 0x20 && pixel.green() == 0x40 && pixel.blue() == 0x80)
+                << "viewport chrome leaked into the comparison capture at " << x << "," << y;
+        }
+    }
+    // The provenance travels in the file's text metadata, never in the pixels.
+    EXPECT_TRUE(saved.text(QStringLiteral("Description")).contains(QStringLiteral("provenance")));
 }
 
-// Step-2 comparison export wiring: the toolbar button composes the labeled viewport
-// capture onto the clipboard, and the controller saves the same composition as a PNG.
-TEST(MainQmlContractTests, CopyComparisonButtonPutsLabeledViewportOnClipboard) {
+// Step-2 comparison export wiring: the toolbar button copies the bare comparison picture to
+// the clipboard, and the controller saves the same capture as a PNG whose provenance lives in
+// the file's text metadata.
+TEST(MainQmlContractTests, CopyComparisonButtonPutsBarePictureOnClipboard) {
     auto snapshot = std::make_shared<application::SessionSnapshot>();
     snapshot->graphicsReady = true;
     snapshot->sessionState = domain::SessionState::kReady;
@@ -6628,8 +6677,19 @@ TEST(MainQmlContractTests, CopyComparisonButtonPutsLabeledViewportOnClipboard) {
     auto* const copyButton = root->findChild<QQuickItem*>(QStringLiteral("copyComparisonButton"));
     ASSERT_NE(copyButton, nullptr);
     EXPECT_TRUE(copyButton->isVisible());
+    auto* const saveButton = root->findChild<QQuickItem*>(QStringLiteral("saveComparisonButton"));
+    ASSERT_NE(saveButton, nullptr);
+    EXPECT_TRUE(saveButton->isVisible());
     auto* const viewport = root->findChild<QQuickItem*>(QStringLiteral("mediaViewportFocusTarget"));
     ASSERT_NE(viewport, nullptr);
+    // The capture target is the comparison surface itself, not the whole viewport: the
+    // viewport's chrome (labels, badges, commands) and the floating transport must stay out
+    // of the shared image, and the controller suppresses every overlapping sibling up the
+    // ancestor chain to achieve that.
+    const QVariant pictureValue = viewport->property("comparisonPicture");
+    auto* const picture = pictureValue.value<QQuickItem*>();
+    ASSERT_NE(picture, nullptr);
+    EXPECT_EQ(picture->parentItem()->parentItem(), viewport);
 
     // A sentinel makes the clipboard state deterministic before the copy. The Windows
     // OLE clipboard completes asynchronously, so pump events between writes and retry
@@ -6662,21 +6722,19 @@ TEST(MainQmlContractTests, CopyComparisonButtonPutsLabeledViewportOnClipboard) {
                      << exportController.lastStatus().toStdString();
     }
     EXPECT_NE(pasted.size(), QSize(3, 3));
-    // The capture is the viewport's device-pixel rect plus the caption bar.
+    // The capture is the picture's device-pixel rect with no annotation bar appended.
     const qreal devicePixelRatio = window->devicePixelRatio();
-    EXPECT_NEAR(pasted.width(), viewport->width() * devicePixelRatio, 3.0);
-    EXPECT_GT(pasted.height(), qRound(viewport->height() * devicePixelRatio));
+    EXPECT_NEAR(pasted.width(), picture->width() * devicePixelRatio, 3.0);
+    EXPECT_NEAR(pasted.height(), picture->height() * devicePixelRatio, 3.0);
     EXPECT_TRUE(exportController.lastStatus().contains(QStringLiteral("已复制")))
         << exportController.lastStatus().toStdString();
 
-    // The same composition saves transactionally as a PNG file.
+    // The same capture saves transactionally as a PNG file.
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
     const QString path = directory.filePath(QStringLiteral("comparison.png"));
-    ASSERT_TRUE(
-        exportController.saveComparison(viewport,
-                                        QStringList{QStringLiteral("A"), QStringLiteral("B")},
-                                        QUrl::fromLocalFile(path)));
+    ASSERT_TRUE(exportController.saveComparison(
+        picture, QStringList{QStringLiteral("A"), QStringLiteral("B")}, QUrl::fromLocalFile(path)));
     QFile saved{path};
     ASSERT_TRUE(saved.open(QIODevice::ReadOnly));
     const QByteArray bytes = saved.readAll();

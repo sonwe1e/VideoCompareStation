@@ -1,12 +1,12 @@
 #include "dvs/ui/ComparisonExportController.h"
 
+#include "dvs/ui/ComparisonSurface.h"
+
 #include <QClipboard>
-#include <QColor>
 #include <QDir>
-#include <QFont>
-#include <QFontMetrics>
 #include <QGuiApplication>
-#include <QPainter>
+#include <QImage>
+#include <QList>
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QSaveFile>
@@ -16,21 +16,35 @@
 namespace dvs::ui {
 namespace {
 
-// Neutral gray annotation bar: the app chrome is dark-themed, but the exported capture
-// must not tint color judgment, so the bar uses true neutral grays.
-constexpr QColor kBarBackground{0x1a, 0x1a, 0x1a};
-constexpr QColor kBarSeparator{0x30, 0x30, 0x30};
-constexpr QColor kBarText{0xed, 0xed, 0xed};
-
-[[nodiscard]] QStringList normalizedCaption(const QStringList& captionLines) {
+[[nodiscard]] QStringList normalizedLines(const QStringList& lines) {
     QStringList result;
-    for (const QString& line : captionLines) {
+    for (const QString& line : lines) {
         const QString trimmed = line.trimmed();
         if (!trimmed.isEmpty()) {
             result.push_back(trimmed);
         }
     }
     return result;
+}
+
+// Maps a scene-space rect into the window capture's device pixels.
+[[nodiscard]] QRect sceneRectToCapturePixels(const QRectF& sceneRect,
+                                             const QQuickWindow& window,
+                                             const QImage& windowCapture) {
+    if (windowCapture.isNull() || window.width() <= 0 || window.height() <= 0) {
+        return {};
+    }
+    const qreal scaleX =
+        static_cast<qreal>(windowCapture.width()) / static_cast<qreal>(window.width());
+    const qreal scaleY =
+        static_cast<qreal>(windowCapture.height()) / static_cast<qreal>(window.height());
+    const QRect pixels{
+        static_cast<int>(std::floor(sceneRect.left() * scaleX)),
+        static_cast<int>(std::floor(sceneRect.top() * scaleY)),
+        static_cast<int>(std::ceil(sceneRect.width() * scaleX)),
+        static_cast<int>(std::ceil(sceneRect.height() * scaleY)),
+    };
+    return pixels.intersected(windowCapture.rect());
 }
 
 } // namespace
@@ -41,132 +55,97 @@ QString ComparisonExportController::lastStatus() const {
     return lastStatus_;
 }
 
-int ComparisonExportController::captionBarHeight(const int lineCount,
-                                                 const qreal devicePixelRatio) {
-    if (lineCount <= 0) {
-        return 0;
-    }
-    const qreal scale = std::max(1.0, devicePixelRatio);
-    const int padding = qRound(7.0 * scale);
-    const int lineHeight = qRound(21.0 * scale);
-    return padding * 2 + lineCount * lineHeight;
-}
-
-QRect ComparisonExportController::viewportPixelRect(const QQuickItem& viewport,
-                                                    const QQuickWindow& window,
-                                                    const QImage& windowCapture) {
-    if (windowCapture.isNull() || window.width() <= 0 || window.height() <= 0) {
-        return {};
-    }
-    const QPointF topLeft = viewport.mapToScene(QPointF{});
-    const qreal scaleX =
-        static_cast<qreal>(windowCapture.width()) / static_cast<qreal>(window.width());
-    const qreal scaleY =
-        static_cast<qreal>(windowCapture.height()) / static_cast<qreal>(window.height());
-    const QRect pixelBounds{
-        static_cast<int>(std::floor(topLeft.x() * scaleX)),
-        static_cast<int>(std::floor(topLeft.y() * scaleY)),
-        static_cast<int>(std::ceil(viewport.width() * scaleX)),
-        static_cast<int>(std::ceil(viewport.height() * scaleY)),
-    };
-    return pixelBounds.intersected(windowCapture.rect());
-}
-
-QImage ComparisonExportController::composeLabeledCapture(const QImage& windowCapture,
-                                                         const QRect& viewportRect,
-                                                         const QStringList& captionLines,
-                                                         const qreal devicePixelRatio) {
-    if (windowCapture.isNull()) {
-        return {};
-    }
-    const QRect bounded = viewportRect.intersected(windowCapture.rect());
-    if (bounded.isEmpty()) {
-        return {};
-    }
-    QImage viewportCapture = windowCapture.copy(bounded);
-    const QStringList caption = normalizedCaption(captionLines);
-    if (caption.isEmpty()) {
-        return std::move(viewportCapture);
-    }
-    const qreal scale = std::max(1.0, devicePixelRatio);
-    const int barHeight = captionBarHeight(static_cast<int>(caption.size()), scale);
-    QImage composed(
-        viewportCapture.width(), viewportCapture.height() + barHeight, QImage::Format_RGBA8888);
-    if (composed.isNull()) {
-        return {};
-    }
-    composed.fill(Qt::transparent);
-    QPainter painter(&composed);
-    painter.drawImage(0, 0, viewportCapture);
-    const int barTop = viewportCapture.height();
-    painter.fillRect(0, barTop, composed.width(), barHeight, kBarBackground);
-    painter.fillRect(0, barTop, composed.width(), qMax(1, qRound(scale)), kBarSeparator);
-    QFont font = painter.font();
-    font.setPixelSize(std::max(9, qRound(13.0 * scale)));
-    font.setWeight(QFont::DemiBold);
-    painter.setFont(font);
-    painter.setPen(kBarText);
-    const QFontMetrics metrics{font};
-    const int padding = qRound(7.0 * scale);
-    const int lineHeight = qRound(21.0 * scale);
-    const int textWidth = composed.width() - padding * 2;
-    int baseline = barTop + padding + metrics.ascent();
-    for (const QString& line : caption) {
-        painter.drawText(QPoint{padding, baseline},
-                         metrics.elidedText(line, Qt::ElideMiddle, qMax(1, textWidth)));
-        baseline += lineHeight;
-    }
-    painter.end();
-    return composed;
-}
-
-QImage ComparisonExportController::composeFromViewport(QQuickItem* const viewport,
-                                                       const QStringList& captionLines,
-                                                       QString* const error) {
-    if (viewport == nullptr || viewport->window() == nullptr) {
+QImage ComparisonExportController::capturePicture(QQuickItem* const picture, QString* const error) {
+    if (picture == nullptr || picture->window() == nullptr) {
         if (error != nullptr) {
             *error = tr("对比画面不可用。");
         }
         return {};
     }
-    QQuickWindow* const window = viewport->window();
+    QQuickWindow* const window = picture->window();
+
+    // Suppress every overlay that would otherwise land inside the captured rect. The viewport
+    // draws its chrome (source labels, badges, view commands, banners) beside the picture, and
+    // the transport floats over the whole stage one level further up - so the walk climbs from
+    // the picture to the window and hides each visible sibling whose scene rect overlaps the
+    // picture. Ancestors are never touched: the viewport's own stage-well background behind a
+    // letterbox must stay. grabWindow() is a blocking scene-graph sync/render barrier, so the
+    // suppressed state is what gets captured and no intermediate frame is ever presented.
+    const QRectF pictureSceneRect = picture->mapRectToScene(picture->boundingRect());
+    QList<QQuickItem*> suppressed;
+    for (QQuickItem* level = picture; level != nullptr;) {
+        QQuickItem* const parent = level->parentItem();
+        if (parent == nullptr) {
+            break;
+        }
+        for (QQuickItem* sibling : parent->childItems()) {
+            if (sibling == level || !sibling->isVisible()) {
+                continue;
+            }
+            // Shrink by a hair so an item that merely touches the picture's edge - the mode
+            // bar sitting exactly above the stage - is not suppressed for nothing.
+            QRectF siblingRect = sibling->mapRectToScene(sibling->boundingRect());
+            siblingRect.adjust(0.5, 0.5, -0.5, -0.5);
+            if (!siblingRect.intersects(pictureSceneRect)) {
+                continue;
+            }
+            sibling->setVisible(false);
+            suppressed.append(sibling);
+        }
+        level = parent;
+    }
+
+    // The comparison surface is a QQuickRenderNode and synchronizes GUI-thread properties on
+    // the next scene-graph frame, so a grab taken right after a state change can still observe
+    // the previous one. One discarded pass consumes that frame; the second is the capture.
+    static_cast<void>(window->grabWindow());
     const QImage windowCapture = window->grabWindow();
+
+    for (QQuickItem* sibling : suppressed) {
+        sibling->setVisible(true);
+    }
+
     if (windowCapture.isNull()) {
         if (error != nullptr) {
             *error = tr("无法抓取当前画面。");
         }
         return {};
     }
-    const QRect rect = viewportPixelRect(*viewport, *window, windowCapture);
+    // The capture is the picture's own rect, narrowed to the rendered content when the
+    // surface can say where the video actually sits: aspect-fit letterbox is empty stage,
+    // not picture, so it must not travel into a shared image.
+    QRectF captureSceneRect = picture->mapRectToScene(picture->boundingRect());
+    if (const auto* const surface = qobject_cast<const ComparisonSurface*>(picture);
+        surface != nullptr) {
+        const QRectF content = surface->displayedContentRect();
+        if (content.isValid() && !content.isNull()) {
+            captureSceneRect = surface->mapRectToScene(content);
+        }
+    }
+    const QRect rect = sceneRectToCapturePixels(captureSceneRect, *window, windowCapture);
     if (rect.isEmpty()) {
         if (error != nullptr) {
             *error = tr("对比画面区域为空。");
         }
         return {};
     }
-    QImage composed = composeLabeledCapture(
-        windowCapture, rect, captionLines, window->effectiveDevicePixelRatio());
-    if (composed.isNull() && error != nullptr) {
-        *error = tr("无法合成对比图。");
-    }
-    return composed;
+    return windowCapture.copy(rect);
 }
 
-bool ComparisonExportController::copyComparison(QQuickItem* const viewport,
-                                                const QStringList& captionLines) {
+bool ComparisonExportController::copyComparison(QQuickItem* const picture) {
     QString error;
-    const QImage composed = composeFromViewport(viewport, captionLines, &error);
-    if (composed.isNull()) {
+    const QImage capture = capturePicture(picture, &error);
+    if (capture.isNull()) {
         setStatus(error);
         return false;
     }
-    QGuiApplication::clipboard()->setImage(composed);
-    setStatus(tr("已复制对比图（含来源与观察标注）"));
+    QGuiApplication::clipboard()->setImage(capture);
+    setStatus(tr("已复制对比图"));
     return true;
 }
 
-bool ComparisonExportController::saveComparison(QQuickItem* const viewport,
-                                                const QStringList& captionLines,
+bool ComparisonExportController::saveComparison(QQuickItem* const picture,
+                                                const QStringList& provenanceLines,
                                                 const QUrl& target) {
     const QString path = target.isLocalFile() ? target.toLocalFile() : target.toString();
     if (path.isEmpty()) {
@@ -174,17 +153,23 @@ bool ComparisonExportController::saveComparison(QQuickItem* const viewport,
         return false;
     }
     QString error;
-    const QImage composed = composeFromViewport(viewport, captionLines, &error);
-    if (composed.isNull()) {
+    QImage capture = capturePicture(picture, &error);
+    if (capture.isNull()) {
         setStatus(error);
         return false;
+    }
+    // The provenance travels in the PNG text metadata, never in the pixels: the saved image
+    // stays the bare comparison picture while the file still records what it shows.
+    const QStringList lines = normalizedLines(provenanceLines);
+    if (!lines.isEmpty()) {
+        capture.setText(QStringLiteral("Description"), lines.join(QLatin1Char('\n')));
     }
     QSaveFile file{path};
     if (!file.open(QIODevice::WriteOnly)) {
         setStatus(tr("无法写入 %1。").arg(QDir::toNativeSeparators(path)));
         return false;
     }
-    if (!composed.save(&file, "PNG")) {
+    if (!capture.save(&file, "PNG")) {
         setStatus(tr("无法编码 PNG：%1").arg(QDir::toNativeSeparators(path)));
         return false;
     }

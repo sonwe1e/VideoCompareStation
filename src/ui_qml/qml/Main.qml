@@ -1951,10 +1951,11 @@ ApplicationWindow {
         return root.controller.playRange(inF, outF);
     }
 
-    // Step-2 comparison export: the caption names the compared sources (GT and
-    // predictions), the observation context and a timestamp, so the pasted image stands
-    // alone in a report. The capture itself is the presented display result, cropped to
-    // the comparison viewport — never original code values.
+    // Step-2 comparison export: the provenance names the compared sources (GT and
+    // predictions), the observation context and a timestamp. It travels in the saved PNG's
+    // text metadata, never in the pixels, so the exported image stays the bare comparison
+    // picture. The capture itself is the presented display result, cropped to the comparison
+    // picture — never original code values.
     function comparisonCaptionLines() {
         const lines = [];
         const names = [sourceAName, sourceBName, sourceCName];
@@ -2005,9 +2006,33 @@ ApplicationWindow {
             showActionFeedback(qsTr("复制对比图不可用"));
             return false;
         }
-        const ok = Boolean(comparisonExportService.copyComparison(viewportFrame, comparisonCaptionLines()));
-        showActionFeedback(ok ? qsTr("已复制对比图（含标注）") : qsTr("复制失败：%1").arg(comparisonExportService.lastStatus));
+        const ok = Boolean(comparisonExportService.copyComparison(viewportFrame.comparisonPicture));
+        showActionFeedback(ok ? qsTr("已复制对比图") : qsTr("复制失败：%1").arg(comparisonExportService.lastStatus));
         return ok;
+    }
+
+    function saveComparisonImage() {
+        if (!comparisonExportService) {
+            showActionFeedback(qsTr("另存为对比图不可用"));
+            return false;
+        }
+        comparisonSaveDialog.currentFile = root.suggestedComparisonFileName();
+        comparisonSaveDialog.open();
+        return true;
+    }
+
+    // Default save name: the compared video's base name plus the current frame number, so a
+    // folder of captures stays sortable and traceable back to the source. The source extension
+    // is dropped so the result reads "name_123.png", not "name.mp4_123.png".
+    function suggestedComparisonFileName() {
+        const raw = (sourceAName && sourceAName.length > 0) ? sourceAName : qsTr("对比图");
+        const dot = raw.lastIndexOf(".");
+        const slash = Math.max(raw.lastIndexOf("/"), raw.lastIndexOf("\\"));
+        const base = (dot > slash + 1) ? raw.substring(0, dot) : raw;
+        const frame = currentFrame >= 0 ? String(currentFrame + 1) : qsTr("无帧");
+        // Characters Windows rejects in a file name would make the save fail outright.
+        const safe = (base + "_" + frame).replace(/[<>:"\/\\|?*]/g, "_");
+        return safe + ".png";
     }
 
     function applyIssueRestore(payload) {
@@ -4114,6 +4139,7 @@ ApplicationWindow {
                 root.shell.requestCanvasFocus(requestCode, sourceSlot);
         }
         onCopyComparisonRequested: root.copyComparisonImage()
+        onSaveComparisonRequested: root.saveComparisonImage()
         onInspectorRequested: root.shell.inspectorVisible = !root.inspectorOpen
         // EX-03: one add path - the bar's button runs the same action as the menu and Ctrl+Shift+O.
         onAddVideoRequested: root.requestAddVideo()
@@ -4556,6 +4582,25 @@ ApplicationWindow {
 
             if (root.issueLogModel && picked && picked.toString().length > 0)
                 root.issueLogModel.saveIssues(picked);
+        }
+    }
+    // Comparison-picture save. The controller writes the PNG transactionally and carries the
+    // provenance in the file's text metadata; the dialog only picks the destination, so the
+    // saved image stays the bare comparison picture.
+    NativeDialogs.FileDialog {
+        id: comparisonSaveDialog
+
+        objectName: "comparisonSaveDialog"
+        title: qsTr("另存为对比图")
+        fileMode: NativeDialogs.FileDialog.SaveFile
+        nameFilters: [qsTr("PNG 图片 (*.png)"), qsTr("所有文件 (*)")]
+        onAccepted: {
+            const picked = selectedFile && selectedFile.toString().length > 0 ? selectedFile : currentFile;
+
+            if (!root.comparisonExportService || !picked || picked.toString().length === 0)
+                return;
+            const ok = Boolean(root.comparisonExportService.saveComparison(viewportFrame.comparisonPicture, root.comparisonCaptionLines(), picked));
+            root.showActionFeedback(ok ? qsTr("已保存对比图") : qsTr("保存失败：%1").arg(root.comparisonExportService.lastStatus));
         }
     }
     NativeDialogs.FileDialog {

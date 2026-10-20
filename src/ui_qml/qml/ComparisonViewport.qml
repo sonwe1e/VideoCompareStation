@@ -189,6 +189,13 @@ Rectangle {
     property string lastRoiRejectReason: ""
     property alias surface: dualVideoSurface
     property alias videoOutput: surfaceLayer
+    // The comparison picture itself, without any viewport chrome. The export controller
+    // captures this item and suppresses every overlapping sibling up the ancestor chain, so a
+    // copied or saved comparison carries only the rendered comparison - no source labels,
+    // badges, view commands, banners or floating transport. It is the surface (not the layer
+    // around it) because the surface also knows where the video actually sits, which is how
+    // the aspect-fit letterbox stays out of the export.
+    readonly property Item comparisonPicture: dualVideoSurface
     readonly property bool roiEnabled: dualVideoSurface.roiEnabled
     // Normalized shared-ROI rect (V04 nearby-frames strip). Re-exported from the typed
     // surface so other files never touch the var-typed surface alias.

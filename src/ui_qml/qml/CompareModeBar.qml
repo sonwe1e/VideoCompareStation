@@ -48,8 +48,10 @@ Rectangle {
     // CanvasFocusRequest (0 off, 1 reference, 2 session slot); sourceSlot addresses the
     // session order (A=0, B=1). Re-clicking the active entry requests Off.
     signal fullCanvasFocusRequested(int requestCode, int sourceSlot)
-    // Step-2 comparison export: one action copies the labeled comparison capture.
+    // Step-2 comparison export: one action copies the comparison picture, one saves it as a
+    // PNG file. Copying cannot reach a folder, so the same capture gets both entry points.
     signal copyComparisonRequested
+    signal saveComparisonRequested
     signal inspectorRequested
     // EX-03: a single-video session keeps this bar on screen, and the way out of that state is
     // the very same "添加视频" action the menu bar and the source strip already use.
@@ -122,7 +124,7 @@ Rectangle {
         anchors {
             left: parent.left
             leftMargin: 12
-            right: copyComparisonButton.left
+            right: saveComparisonButton.left
             rightMargin: 12
             top: parent.top
             topMargin: 4
@@ -679,8 +681,8 @@ Rectangle {
         }
     }
 
-    // Step-2 comparison export: copies the comparison viewport plus an annotation bar
-    // (source names, observation context) to the clipboard in one action.
+    // Step-2 comparison export: copies the comparison picture - the rendered comparison with
+    // every viewport overlay suppressed - to the clipboard in one action.
     VcsToolButton {
         id: copyComparisonButton
 
@@ -690,11 +692,33 @@ Rectangle {
         implicitWidth: 112
         implicitHeight: Theme.hitAreaMinimum
         labelPixelSize: Theme.fontBody
-        helpText: qsTr("复制当前画面 → 带来源标注到剪贴板")
+        helpText: qsTr("复制当前对比画面到剪贴板")
         Accessible.name: qsTr("复制对比图")
         onClicked: control.copyComparisonRequested()
         anchors {
             right: inspectorToggleButton.left
+            rightMargin: 8
+            top: parent.top
+            topMargin: 4
+        }
+    }
+
+    // The same capture as a file: the clipboard cannot reach a folder, so the picture gets a
+    // destination picker beside the clipboard entry point.
+    VcsToolButton {
+        id: saveComparisonButton
+
+        objectName: "saveComparisonButton"
+        text: qsTr("另存为…")
+        enabled: !control.busy
+        implicitWidth: 96
+        implicitHeight: Theme.hitAreaMinimum
+        labelPixelSize: Theme.fontBody
+        helpText: qsTr("把当前对比画面另存为 PNG 文件")
+        Accessible.name: qsTr("另存为对比图")
+        onClicked: control.saveComparisonRequested()
+        anchors {
+            right: copyComparisonButton.left
             rightMargin: 8
             top: parent.top
             topMargin: 4

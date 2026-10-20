@@ -24,7 +24,7 @@
 | D-001 | 默认帧对齐＝严格索引（按序号），30/60 fps 混比不插值、不补帧；可切自动/手动对齐 | 已证实 | [对齐说明](../alignment.md)；模式徽章 `Main.qml:3811` | `MultiSourceFrameProvider`、对比浮标 |
 | D-002 | "平均差异"＝RGB 三通道绝对差均值；Alpha 永不混入 MAE/MSE，单独统计 | 已证实 | `src/domain/include/dvs/domain/PixelDifference.h:33`；图片侧 Alpha 独立均值 `ImagePairLoader.cpp:557-562` | 图片读数、视频指标、导出标注 |
 | D-003 | 视频 100%＝一个源像素占一个**物理**像素（含 DPR）；不可达时禁用并说明原因。图片 100% 标注为"100% 真实尺寸"，与"1:1 像素基准"区分 | 已证实 | [视口像素尺度](../engineering/viewport-pixel-scale.md)（DPR 1/1.25/1.5/2 各 40/40）；`ImageWorkspace.qml:638` | 100% 按钮、读数、截图 |
-| D-004 | 对比截图标注＝"显示结果 · 屏幕像素 · 未色彩管理；非源文件原始码值" | 已证实 | 台账 FLOW2（2026-10-17）；样本 manifest `member_identity` | 导出标注 |
+| D-004 | 对比截图标注＝"显示结果 · 屏幕像素 · 未色彩管理；非源文件原始码值" | 已证实（复制/另存为路径由 D-018 取代） | 台账 FLOW2（2026-10-17）；样本 manifest `member_identity` | 导出标注；片段导出与样本 manifest 仍带该声明 |
 | D-005 | 图片**不做**三图对比 | 已否决 | 台账 C-01（2026-09-22 用户拍板） | `CompareModeBar`、`ImageReviewController` |
 | D-006 | 放大镜**不作为新组件**实现，只保留"按住放大"快捷键 | 已否决（作为新组件） | 需求洞察报告 R-10 裁决；缩放＋ROI 已覆盖 | 工具栏 |
 | D-007 | AV1/VP9 **不扩解码器**，只保证报错可读 | 已证实 | 台账 MEDIA1：真实样本返回 `kUnsupportedCodec`，语料库无此类素材 | `MediaProbe.cpp`、README 格式矩阵 |
@@ -38,6 +38,7 @@
 | D-015 | **16-bit PNG 与 Deflate TIFF 保存不做**；图片保存只维护 PNG／JPEG，JPEG 另存沿用显式合成背景 | 已否决 | 路线 §4；`NormalizedFrameFormat` 只有 NV12／P010／BGRA8；`src/ui_qml/src/ImageEditController.cpp:1759,1778` | 图片保存、发布载荷、能力台账 F03 邻项 |
 | D-016 | 倒退（Left／A）体验以**单源**为主场景，双源比较不据此优化；反向窗口准入与门禁 profile 按单源设计 | 已证实 | 用户 2026-10-20 陈述，记录于[缓存优先路线](../plans/cache-first-roadmap-2026-10-20.md) §0 | 反向窗口准入规则、性能门禁素材选择 |
 | D-017 | 倒退体验统一为**尾迹保留**一条原语：播放后的回退与 seek 后的回退共用"解码器刚走过的帧不丢"，播放环显式化但**不缩小**现有深度，独立的反向窗口构建不再保留 | 临时假设（探针确认 D3D11VA 显存占用与播放环现状后改判） | 路线 §批次 B 修订（2026-10-20）；播放路径已由 `fillReadAhead` 形成隐式环（`SourceDecodeActor.cpp:505-570,572`），缓存只在 open／close 清空（`:406,423`） | `SourceDecodeActor` 缓存策略、`SoftwareDecoder` 逐帧出口、性能门禁诊断口径 |
+| D-018 | 复制／另存为对比图＝**纯净对比画面**：不拼标注条，也不含视口内的来源标签、徽章、视图按钮与横幅。来源与观察信息改存 PNG 文本元数据（`Description`），剪贴板路径不带 | 已证实（用户 2026-10-21 明确选择"完全只要视频帧"，已知会失去烧录在画面上的声明） | 用户选择记录于本轮对话；`ComparisonExportController::capturePicture` 抓取前抑制画面项的全部兄弟节点；`ComparisonExportSuppressesSiblingOverlays` 逐像素验证无 chrome 泄漏且元数据可读回 | `CompareModeBar`、`ComparisonExportController`、`Main.qml`；取代 D-004 在复制/另存为路径上的做法 |
 
 ## 新增或修改一条的步骤
 

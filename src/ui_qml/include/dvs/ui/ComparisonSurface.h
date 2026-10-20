@@ -309,6 +309,11 @@ public:
     Q_INVOKABLE qreal wipePositionForLogicalX(qreal x) const;
     Q_INVOKABLE qreal wipePositionForLogicalY(qreal y) const;
     Q_INVOKABLE QVariantMap mapSurfacePoint(qreal x, qreal y) const;
+    // Union of the rects the renderer actually draws video into, in this item's local logical
+    // coordinates. Aspect-fit letterbox and any panned/zoomed/ROI view state are already
+    // applied, so it is exactly the on-screen extent of the comparison content. An invalid
+    // (null) rect means nothing is being presented; callers fall back to the item rect.
+    Q_INVOKABLE QRectF displayedContentRect() const;
     // Asks for one raw source-pixel read of the given slot at normalized source coordinates.
     // The probe runs on the render thread against the frame set the renderer is presenting and
     // the result arrives asynchronously on sourcePixelProbed. Requests are one-shot; a new

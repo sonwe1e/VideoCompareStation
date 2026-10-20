@@ -1880,6 +1880,68 @@ QVariantList ComparisonSurface::roiTripletOutlineRects() const {
     return result;
 }
 
+QRectF ComparisonSurface::displayedContentRect() const {
+    const platform::SurfacePresentationGeometry geometry = surfacePresentationGeometry(*this);
+    const platform::SurfacePixelGrid grid = surfacePixelGrid(*this);
+    const qreal devicePixelRatio =
+        window() != nullptr ? window()->effectiveDevicePixelRatio() : 1.0;
+    const platform::SurfaceViewTransform transform{
+        static_cast<float>(viewCenterX_),
+        static_cast<float>(viewCenterY_),
+        static_cast<float>(viewScale_),
+    };
+    const platform::SurfaceNormalizedRect roi{static_cast<float>(roiLeft_),
+                                              static_cast<float>(roiTop_),
+                                              static_cast<float>(roiRight_),
+                                              static_cast<float>(roiBottom_)};
+    const std::array<platform::SurfaceDisplayExtent, 3U> extents = sourceDisplayExtents(
+        *this, mainViewRoiEnabled(*this), QSizeF{roiRight_ - roiLeft_, roiBottom_ - roiTop_});
+    // Same geometry the render path draws for each panel, so the union can never drift from
+    // the picture. Unlike the ROI outline this keeps the whole drawn content, not the ROI
+    // sub-rect: an export wants the video, letterbox excluded.
+    QRectF unionRect;
+    for (std::size_t index = 0U; index < geometry.panels.sourceCount; ++index) {
+        const std::uint8_t slot = geometry.panels.sourceSlots[index];
+        if (slot >= extents.size() || !extents[slot].isValid()) {
+            continue;
+        }
+        const QVariantMap info = slot < sourceDisplayInfo_.size()
+                                     ? sourceDisplayInfo_.at(static_cast<qsizetype>(slot)).toMap()
+                                     : QVariantMap{};
+        const float sourceWidth =
+            static_cast<float>(info.value(QStringLiteral("width")).toDouble());
+        const float sourceHeight =
+            static_cast<float>(info.value(QStringLiteral("height")).toDouble());
+        if (sourceWidth <= 0.0F || sourceHeight <= 0.0F) {
+            continue;
+        }
+        const std::uint16_t rotation =
+            static_cast<std::uint16_t>(sourceRotationDegrees(*this, static_cast<int>(slot)));
+        const platform::SurfaceRect fitted = aspectFitRectFloat(
+            geometry.panels.sourceRects[index], extents[slot].width, extents[slot].height);
+        const platform::SurfaceNormalizedRect sample =
+            effectiveSurfaceSampleRect(transform, mainViewRoiEnabled(*this), roi);
+        const platform::SurfaceRect sourcePixels =
+            orientedSurfaceSamplePixels(sourceWidth, sourceHeight, rotation, sample);
+        const platform::SurfaceRect content =
+            transformedSurfaceContentRect(geometry.panels.sourceRects[index],
+                                          fitted,
+                                          transform,
+                                          grid,
+                                          sourcePixels,
+                                          static_cast<float>(devicePixelRatio));
+        if (!content.isValid()) {
+            continue;
+        }
+        const QRectF panelRect{static_cast<qreal>(content.x),
+                               static_cast<qreal>(content.y),
+                               static_cast<qreal>(content.width),
+                               static_cast<qreal>(content.height)};
+        unionRect = unionRect.isNull() ? panelRect : unionRect.united(panelRect);
+    }
+    return unionRect;
+}
+
 void ComparisonSurface::emitRoiTripletGeometryChanged() {
     emit roiTripletGeometryChanged();
 }
