@@ -125,6 +125,26 @@ Rectangle {
 
             Item {
                 width: 1
+                height: 6
+            }
+
+            // EX-04: the one sentence a first run needs - what the file dialog will do with
+            // the count the user is about to pick. A visible caption, not a tooltip: it has
+            // to be readable before the first click.
+            Text {
+                objectName: "emptyCompareHint"
+
+                width: parent.width
+                text: qsTr("选 2–3 个视频自动进入对比；选 2 张图片自动配对。")
+                color: control.mutedTextColor
+                font.pixelSize: Theme.fontCaption
+                lineHeight: Theme.lineHeightCompact
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+            }
+
+            Item {
+                width: 1
                 height: 28
             }
 
@@ -157,7 +177,10 @@ Rectangle {
 
                 ReviewActionButton {
                     objectName: "emptyOpenImagePairButton"
-                    text: qsTr("对比两张图片…")
+                    // Same name as the menu item, the dialog title and the help row: one action
+                    // called 打开图片对, not two actions that look different (UX-11). The
+                    // sentence below still explains the outcome for a first-time user.
+                    text: qsTr("打开图片对…")
                     implicitWidth: (parent.width - 8) / 3
                     implicitHeight: 36
                     leftPadding: 6

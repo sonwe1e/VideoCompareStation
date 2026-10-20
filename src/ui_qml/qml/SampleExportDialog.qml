@@ -252,7 +252,7 @@ Item {
                                             Text {
                                                 text: qsTr("生成帧 / GT")
                                                 color: Theme.accentText
-                                                font.pixelSize: 10
+                                                font.pixelSize: Theme.fontCaption
                                                 anchors.horizontalCenter: parent.horizontalCenter
                                             }
 

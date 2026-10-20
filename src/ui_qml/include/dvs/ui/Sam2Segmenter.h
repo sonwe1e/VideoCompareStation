@@ -43,21 +43,31 @@ public:
     void clearCache();
 
     // Runs the Mask Decoder using an image-pixel bounding box prompt.
-    // Returns a binary QImage (Format_Grayscale8, 255 = foreground, 0 = background)
-    // with dimensions identical to the encoded image.
+    // Returns a soft-alpha QImage (Format_Grayscale8, 255 = solid foreground, 0 = background)
+    // with dimensions identical to the encoded image. Edge pixels carry intermediate values
+    // so the cutout can fade over roughly one source pixel instead of stepping.
     [[nodiscard]] QImage segmentBox(const QRect& box);
 
     // Runs the Mask Decoder using image-pixel points and positive/negative labels.
     [[nodiscard]] QImage segmentPoints(const std::vector<QPoint>& points,
                                        const std::vector<int>& labels);
 
-    // Applies the binary mask to the original image by making non-foreground pixels
-    // transparent (Alpha = 0). If cropToBoundingBox is true, crops tightly to the mask bounds.
-    // If outBoundingBox is non-null, writes the bounding box of foreground pixels.
+    // Applies the soft mask to the original image. Output alpha is
+    // round(srcAlpha * smoothstep(low, high, mask)), so the foreground keeps its original RGB
+    // and true alpha while the background becomes fully transparent. If cropToBoundingBox is
+    // true, crops tightly to the solid mask bounds. If outBoundingBox is non-null, writes the
+    // bounding box of solid foreground pixels. Returns a null image when no solid foreground
+    // pixel exists, which lets callers reject an empty result instead of committing a
+    // fully transparent frame.
     [[nodiscard]] static QImage applyCutout(const QImage& original,
                                             const QImage& mask,
                                             bool cropToBoundingBox = false,
                                             QRect* outBoundingBox = nullptr);
+
+    // Fraction (0..1) of mask pixels above the solid-foreground threshold. The controller
+    // rejects degenerate masks (nothing found, or the whole frame selected) before pushing a
+    // no-op history step.
+    [[nodiscard]] static qreal solidCoverage(const QImage& mask);
 
 private:
     class Impl;

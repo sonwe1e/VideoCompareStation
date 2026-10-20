@@ -61,6 +61,10 @@ Rectangle {
     signal selectionToggled(string sourceIdentity)
     signal selectionCleared
     signal removeSelectedRequested
+    // EX-04: with a single source the strip's own close entry closes the session (the same
+    // path the 文件 menu and Ctrl+W run), because the per-source removal deliberately refuses
+    // to leave a session without sources.
+    signal closeSessionRequested
     readonly property real chipSpacing: 7
 
     readonly property string sourceSetSignature: control.displayOrder.join("\u0001") + "|" + control.sourceCount
@@ -97,7 +101,7 @@ Rectangle {
         let fallback = null;
         for (let index = 0; index < chips.children.length; ++index) {
             const child = chips.children[index];
-            if (child.objectName === "addSourceChipButton" || child.objectName === "removeSelectedChipButton" || child.objectName === "manageSourcesButton")
+            if (child.objectName === "addSourceChipButton" || child.objectName === "removeSelectedChipButton" || child.objectName === "manageSourcesButton" || child.objectName === "closeSessionChipButton")
                 continue;
             if (child.resolvedSourceIdentity === wanted)
                 return child;
@@ -126,7 +130,7 @@ Rectangle {
         let cursor = 12;
         for (let index = 0; index < chips.children.length; ++index) {
             const child = chips.children[index];
-            if (child.objectName === "addSourceChipButton" || child.objectName === "removeSelectedChipButton" || child.objectName === "manageSourcesButton")
+            if (child.objectName === "addSourceChipButton" || child.objectName === "removeSelectedChipButton" || child.objectName === "manageSourcesButton" || child.objectName === "closeSessionChipButton")
                 continue;
             if (child.width > 0.0)
                 cursor += child.width + control.chipSpacing;
@@ -153,8 +157,11 @@ Rectangle {
     }
 
     objectName: "activeSourceStrip"
-    height: sourceCount > 1 ? Theme.barRowHeight : 0
-    visible: sourceCount > 1
+    // EX-04: the strip stays for a single video too - it is the one place that names the
+    // material on screen and carries that material's own actions, so it must not vanish with
+    // the second source.
+    height: sourceCount >= 1 ? Theme.barRowHeight : 0
+    visible: sourceCount >= 1
     color: "transparent"
     border.color: "transparent"
     opacity: singleMode && !sourceHover.hovered ? 0.68 : 1.0
@@ -602,10 +609,12 @@ Rectangle {
                             objectName: "removeSourceAction-" + chip.sourceId
                             text: qsTr("关闭此视频")
                             // Quantity protection is the removal command's own: the last
-                            // source of a session cannot be removed through it. The strip is
-                            // hidden at sourceCount <= 1, and closing the final video goes
-                            // through the session-close path (Main.closeCurrentTask), so this
-                            // guard is the boundary and is deliberately not bypassed here.
+                            // source of a session cannot be removed through it. The strip now
+                            // stays visible at sourceCount === 1, where removing the only
+                            // source would leave an empty comparison - closing that session
+                            // goes through closeSessionRequested (Main.closeCurrentTask)
+                            // instead, so this guard is the boundary and is deliberately not
+                            // bypassed here.
                             enabled: control.sourceCount > 1
                             onTriggered: chip.requestRemoval()
                         }
@@ -617,6 +626,10 @@ Rectangle {
         // V02: batch management is explicit. The toggle enters the selection mode (chip clicks
         // select, the remove button appears); leaving it drops the selection so a hidden
         // batch state can never linger under a click that now means direct look.
+        // EX-04: one source has nothing to manage in batch, so the toggle starts with the
+        // second source and leaves the single-source row to the close entry.
+        readonly property real trailingActionStartX: control.trailingButtonX + (manageSourcesButton.visible ? manageSourcesButton.width + control.chipSpacing : 0)
+
         VcsToolButton {
             id: manageSourcesButton
 
@@ -624,6 +637,7 @@ Rectangle {
             // Not checkable on purpose: `checked` is a live mirror of manageSelection and a
             // checkable button would break that binding on the first click. The prominent fill
             // carries the active state instead.
+            visible: !control.singleMode
             prominent: control.manageSelection
             x: control.trailingButtonX
             width: 34
@@ -644,14 +658,35 @@ Rectangle {
             id: addSourceChipButton
 
             objectName: "addSourceChipButton"
-            visible: control.sourceCount < 3
-            x: control.trailingButtonX + manageSourcesButton.width + control.chipSpacing
+            // EX-04: a single video already has its add entry in the mode bar, in words; the
+            // icon-only "+" stays the strip's own entry once the strip is a source set.
+            visible: control.sourceCount < 3 && !control.singleMode
+            x: chips.trailingActionStartX
             width: 34
             height: chips.height
             text: "+"
             enabled: true
             helpText: qsTr("添加视频")
             onClicked: control.addRequested()
+            controlRadius: 8
+        }
+
+        // EX-04: single-source close. The chip menu's "关闭此视频" is the per-source removal and
+        // must stay disabled for the last source, so the strip offers the session close itself
+        // here instead of showing a dead entry.
+        VcsToolButton {
+            id: closeSessionChipButton
+
+            objectName: "closeSessionChipButton"
+            visible: control.singleMode
+            x: chips.trailingActionStartX
+            width: 34
+            height: chips.height
+            text: "×"
+            enabled: true
+            helpText: qsTr("关闭视频")
+            Accessible.name: qsTr("关闭视频")
+            onClicked: control.closeSessionRequested()
             controlRadius: 8
         }
 
@@ -663,7 +698,7 @@ Rectangle {
             // select), so "something is selected" is itself the visibility condition - the batch
             // action must stay reachable for whatever put the selection there.
             visible: control.anySelected
-            x: control.trailingButtonX + manageSourcesButton.width + control.chipSpacing + (addSourceChipButton.visible ? addSourceChipButton.width + control.chipSpacing : 0)
+            x: chips.trailingActionStartX + (addSourceChipButton.visible ? addSourceChipButton.width + control.chipSpacing : 0) + (closeSessionChipButton.visible ? closeSessionChipButton.width + control.chipSpacing : 0)
             width: 34
             height: chips.height
             text: "−"

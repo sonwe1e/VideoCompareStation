@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QPainter>
+#include <QStringList>
 
 #include <algorithm>
 #include <array>
@@ -24,8 +25,54 @@ using OrtGetApiBaseFn = const OrtApiBase*(ORT_API_CALL*)();
 
 constexpr int kTargetImageSize = 1024;
 constexpr int kMaskSize = 256;
+constexpr int kMaskScale = kTargetImageSize / kMaskSize;
+// Neutral grey used to fill transparent pixels before encoding. Black would be read as a real
+// dark object on the second pass over an already cut-out image.
+constexpr int kNeutralFill = 128;
+// Soft-alpha band. Values outside the band are fully transparent/opaque; inside it a
+// smoothstep ramp keeps the edge antialiased without a wide halo.
+constexpr int kMaskLow = 89;   // 0.35 * 255
+constexpr int kMaskHigh = 166; // 0.65 * 255
 constexpr std::array<float, 3> kImageNetMean{0.485f, 0.456f, 0.406f};
 constexpr std::array<float, 3> kImageNetStd{0.229f, 0.224f, 0.225f};
+
+// Names reported to the user when a candidate directory is incomplete.
+[[nodiscard]] QStringList missingModelFiles(const QDir& dir) {
+    QStringList missing;
+    if (!dir.exists(QStringLiteral("onnxruntime.dll"))) {
+        missing << QStringLiteral("onnxruntime.dll");
+    }
+    if (!dir.exists(QStringLiteral("sam2_encoder.onnx")) &&
+        !dir.exists(QStringLiteral("sam2.1_hiera_tiny.encoder.onnx"))) {
+        missing << QStringLiteral("sam2_encoder.onnx");
+    }
+    if (!dir.exists(QStringLiteral("sam2_decoder.onnx")) &&
+        !dir.exists(QStringLiteral("sam2.1_hiera_tiny.decoder.onnx"))) {
+        missing << QStringLiteral("sam2_decoder.onnx");
+    }
+    return missing;
+}
+
+// smoothstep(low, high, value) mapped to 0..255, with a single multiply chain per pixel.
+[[nodiscard]] uchar softAlphaFromMask(const uchar value) {
+    if (value <= kMaskLow) {
+        return 0;
+    }
+    if (value >= kMaskHigh) {
+        return 255;
+    }
+    const float t = static_cast<float>(value - kMaskLow) / static_cast<float>(kMaskHigh - kMaskLow);
+    const float smooth = t * t * (3.0f - 2.0f * t);
+    return static_cast<uchar>(std::clamp(static_cast<int>(smooth * 255.0f + 0.5f), 0, 255));
+}
+
+// One exp per mask cell. 256x256 bounds the cost (about 65k calls), and the true logistic
+// curve matches how the decoder logits were trained; a linear ramp would misprice the middle
+// of the confidence range.
+[[nodiscard]] uchar sigmoidToByte(const float logit) {
+    const float value = 1.0f / (1.0f + std::exp(-logit));
+    return static_cast<uchar>(std::clamp(static_cast<int>(value * 255.0f + 0.5f), 0, 255));
+}
 
 } // namespace
 
@@ -84,25 +131,43 @@ public:
         };
 
         QString chosenDir;
+        // Best incomplete candidate, so the failure message can name the files that are
+        // actually missing for the directory the user is most likely looking at.
+        QString closestDir;
+        QStringList closestMissing;
         for (const QString& candidate : candidates) {
             if (candidate.isEmpty()) {
                 continue;
             }
             const QDir dir(candidate);
-            if (dir.exists(QStringLiteral("onnxruntime.dll")) &&
-                (dir.exists(QStringLiteral("sam2_encoder.onnx")) ||
-                 dir.exists(QStringLiteral("sam2.1_hiera_tiny.encoder.onnx"))) &&
-                (dir.exists(QStringLiteral("sam2_decoder.onnx")) ||
-                 dir.exists(QStringLiteral("sam2.1_hiera_tiny.decoder.onnx")))) {
+            if (!dir.exists()) {
+                continue;
+            }
+            const QStringList missing = missingModelFiles(dir);
+            if (missing.isEmpty()) {
                 chosenDir = dir.absolutePath();
                 break;
+            }
+            if (closestDir.isEmpty() || missing.size() < closestMissing.size()) {
+                closestDir = dir.absolutePath();
+                closestMissing = missing;
             }
         }
 
         if (chosenDir.isEmpty()) {
-            status_ = QCoreApplication::translate(
-                "Sam2Segmenter",
-                "未检测到模型文件：请将 onnxruntime.dll 及 sam2 模型放入 models 目录。");
+            if (closestDir.isEmpty()) {
+                status_ = QCoreApplication::translate(
+                    "Sam2Segmenter",
+                    "未找到模型目录：请将 onnxruntime.dll、sam2_encoder.onnx、sam2_decoder.onnx "
+                    "放入 models 目录后点击「检测模型」。");
+            } else {
+                // File names lead so the status line (which elides) still names what is
+                // missing before it runs out of room.
+                status_ = QCoreApplication::translate(
+                              "Sam2Segmenter", "缺少 %1（目录：%2）。放入后点击「检测模型」。")
+                              .arg(closestMissing.join(QStringLiteral("、")),
+                                   QDir::toNativeSeparators(closestDir));
+            }
             return false;
         }
 
@@ -190,21 +255,37 @@ public:
         origHeight_ = image.height();
         scale_ = static_cast<float>(kTargetImageSize) /
                  static_cast<float>(std::max(origWidth_, origHeight_));
-        scaledWidth_ = static_cast<int>(std::round(static_cast<float>(origWidth_) * scale_));
-        scaledHeight_ = static_cast<int>(std::round(static_cast<float>(origHeight_) * scale_));
+        // A very thin crop can round one edge to zero, which would produce a null scaled image
+        // and an empty tensor row; clamp so a 1-pixel-wide prompt still encodes.
+        scaledWidth_ =
+            std::max(1, static_cast<int>(std::round(static_cast<float>(origWidth_) * scale_)));
+        scaledHeight_ =
+            std::max(1, static_cast<int>(std::round(static_cast<float>(origHeight_) * scale_)));
 
-        QImage rgb = image.convertToFormat(QImage::Format_RGB888);
-        QImage resized = rgb.scaled(
-            scaledWidth_, scaledHeight_, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        // Scale first, composite second: the temporary stays at the 1024 encoder size, so a
+        // 16k source never allocates a full-size RGB copy. Transparent pixels are blended onto
+        // neutral grey, not black, so a second cutout of an already cut image does not feed
+        // the old background to the encoder as a real dark object.
+        const QImage scaled =
+            image
+                .scaled(
+                    scaledWidth_, scaledHeight_, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                .convertToFormat(QImage::Format_ARGB32);
 
         std::vector<float> inputTensor(
             static_cast<std::size_t>(3) * kTargetImageSize * kTargetImageSize, 0.0f);
         for (int y = 0; y < scaledHeight_; ++y) {
-            const uchar* scan = resized.constScanLine(y);
+            const auto* scan = reinterpret_cast<const QRgb*>(scaled.constScanLine(y));
             for (int x = 0; x < scaledWidth_; ++x) {
-                const float r = static_cast<float>(scan[x * 3 + 0]) / 255.0f;
-                const float g = static_cast<float>(scan[x * 3 + 1]) / 255.0f;
-                const float b = static_cast<float>(scan[x * 3 + 2]) / 255.0f;
+                const QRgb pixel = scan[x];
+                const int alpha = qAlpha(pixel);
+                const int inverse = 255 - alpha;
+                const float r = static_cast<float>(qRed(pixel) * alpha + kNeutralFill * inverse) /
+                                (255.0f * 255.0f);
+                const float g = static_cast<float>(qGreen(pixel) * alpha + kNeutralFill * inverse) /
+                                (255.0f * 255.0f);
+                const float b = static_cast<float>(qBlue(pixel) * alpha + kNeutralFill * inverse) /
+                                (255.0f * 255.0f);
 
                 const int idxR =
                     0 * (kTargetImageSize * kTargetImageSize) + y * kTargetImageSize + x;
@@ -331,7 +412,8 @@ public:
                 }
             }
 
-            // Extract 256x256 binary mask
+            // Keep the decoder's logits as a soft alpha ramp. A hard 0/255 split at zero is
+            // what produced the visible staircase after upsampling.
             QImage mask256(kMaskSize, kMaskSize, QImage::Format_Grayscale8);
             const float* bestMaskSlice =
                 maskData + static_cast<std::ptrdiff_t>(bestIdx) *
@@ -339,18 +421,25 @@ public:
             for (int y = 0; y < kMaskSize; ++y) {
                 uchar* scan = mask256.scanLine(y);
                 for (int x = 0; x < kMaskSize; ++x) {
-                    scan[x] = (bestMaskSlice[y * kMaskSize + x] > 0.0f) ? 255 : 0;
+                    scan[x] = sigmoidToByte(bestMaskSlice[y * kMaskSize + x]);
                 }
             }
 
-            // Scale to 1024x1024, crop to valid scaled bounds, then scale to original image size
-            QImage mask1024 = mask256.scaled(kTargetImageSize,
-                                             kTargetImageSize,
-                                             Qt::IgnoreAspectRatio,
-                                             Qt::SmoothTransformation);
-            QImage maskValid = mask1024.copy(0, 0, scaledWidth_, scaledHeight_);
+            // Drop the zero-padded letterbox region in mask space, then go straight to the
+            // original size with a smooth (bilinear) filter. One interpolation step instead of
+            // "nearest to original", so the soft band survives instead of snapping back to a
+            // hard edge.
+            const int validWidth = std::clamp(
+                static_cast<int>(std::lround(static_cast<double>(scaledWidth_) / kMaskScale)),
+                1,
+                kMaskSize);
+            const int validHeight = std::clamp(
+                static_cast<int>(std::lround(static_cast<double>(scaledHeight_) / kMaskScale)),
+                1,
+                kMaskSize);
+            const QImage maskValid = mask256.copy(0, 0, validWidth, validHeight);
             return maskValid.scaled(
-                origWidth_, origHeight_, Qt::IgnoreAspectRatio, Qt::FastTransformation);
+                origWidth_, origHeight_, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
         } catch (const std::exception& ex) {
             status_ = QCoreApplication::translate("Sam2Segmenter", "解码掩膜失败: %1")
                           .arg(QString::fromUtf8(ex.what()));
@@ -447,23 +536,39 @@ QImage Sam2Segmenter::applyCutout(const QImage& original,
     int minY = cutout.height();
     int maxX = -1;
     int maxY = -1;
+    bool solidFound = false;
 
     for (int y = 0; y < cutout.height(); ++y) {
         auto* scanPixels = reinterpret_cast<QRgb*>(cutout.scanLine(y));
         const uchar* scanMask = monoMask.constScanLine(y);
         for (int x = 0; x < cutout.width(); ++x) {
-            if (scanMask[x] > 128) {
+            const uchar maskValue = scanMask[x];
+            const uchar edge = softAlphaFromMask(maskValue);
+            // The bounding box includes the soft ramp, not just the solid core: a tight crop
+            // that stopped at the core would slice the feather off and hand back a hard edge,
+            // which is exactly the artefact this ramp exists to remove. The ramp is only one or
+            // two source pixels wide, so the grown box stays honest.
+            if (edge > 0) {
                 minX = std::min(minX, x);
                 minY = std::min(minY, y);
                 maxX = std::max(maxX, x);
                 maxY = std::max(maxY, y);
-            } else {
-                scanPixels[x] = qRgba(0, 0, 0, 0);
             }
+            solidFound = solidFound || maskValue > kMaskHigh;
+            if (edge == 0) {
+                scanPixels[x] = qRgba(0, 0, 0, 0);
+                continue;
+            }
+            // Preserve the source RGB and modulate only its alpha, so the foreground is not
+            // darkened by the edge ramp. Round to the nearest byte to avoid a systematic
+            // one-step darkening on fully opaque pixels.
+            const QRgb source = scanPixels[x];
+            const int alpha = (qAlpha(source) * static_cast<int>(edge) + 127) / 255;
+            scanPixels[x] = qRgba(qRed(source), qGreen(source), qBlue(source), alpha);
         }
     }
 
-    if (minX <= maxX && minY <= maxY) {
+    if (solidFound && minX <= maxX && minY <= maxY) {
         const QRect bbox(QPoint(minX, minY), QPoint(maxX, maxY));
         if (outBoundingBox) {
             *outBoundingBox = bbox;
@@ -471,8 +576,29 @@ QImage Sam2Segmenter::applyCutout(const QImage& original,
         if (cropToBoundingBox) {
             return cutout.copy(bbox);
         }
+        return cutout;
     }
-    return cutout;
+    // No solid pixel: report failure instead of handing back a fully transparent canvas that
+    // a caller could mistake for a successful cutout.
+    return {};
+}
+
+qreal Sam2Segmenter::solidCoverage(const QImage& mask) {
+    if (mask.isNull()) {
+        return 0.0;
+    }
+    const QImage monoMask = mask.convertToFormat(QImage::Format_Grayscale8);
+    qint64 solid = 0;
+    for (int y = 0; y < monoMask.height(); ++y) {
+        const uchar* scan = monoMask.constScanLine(y);
+        for (int x = 0; x < monoMask.width(); ++x) {
+            if (scan[x] > kMaskHigh) {
+                ++solid;
+            }
+        }
+    }
+    const qint64 total = static_cast<qint64>(monoMask.width()) * monoMask.height();
+    return total > 0 ? static_cast<qreal>(solid) / static_cast<qreal>(total) : 0.0;
 }
 
 } // namespace dvs::ui

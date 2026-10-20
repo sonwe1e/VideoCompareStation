@@ -1194,6 +1194,9 @@ TEST(ImageEditControllerTests, SmartSegmentGracefullyDegradesWhenModelAbsent) {
     // When model is absent, calling smartSegmentRect fails gracefully without crashing
     EXPECT_FALSE(controller.smartSegmentRect(0, 0, 20, 20));
     EXPECT_FALSE(controller.lastStatus().isEmpty());
+    // The message names the concrete missing artifact so the user has a next step.
+    EXPECT_TRUE(controller.lastStatus().contains(QStringLiteral("onnxruntime.dll")));
+    EXPECT_FALSE(controller.canUndo());
 }
 
 TEST(ImageEditControllerTests, Sam2SegmenterDirectCutoutAlphaChannel) {
@@ -1227,6 +1230,132 @@ TEST(ImageEditControllerTests, Sam2SegmenterDirectCutoutAlphaChannel) {
     // Non-foreground pixel in cutout (0, 1) or (1, 0) must be fully transparent
     EXPECT_EQ(qAlpha(cutout.pixel(0, 1)), 0);
     EXPECT_EQ(qAlpha(cutout.pixel(1, 0)), 0);
+}
+
+TEST(ImageEditControllerTests, Sam2SegmenterSoftAlphaKeepsForegroundColourAndTightBBox) {
+    QImage original(5, 5, QImage::Format_ARGB32);
+    for (int y = 0; y < 5; ++y) {
+        for (int x = 0; x < 5; ++x) {
+            original.setPixel(x, y, qRgba(10 * x, 20 * y, 200, 255));
+        }
+    }
+
+    // Three bands: a solid core, the middle of the soft ramp, and background.
+    QImage mask(5, 5, QImage::Format_Grayscale8);
+    mask.fill(0);
+    for (int y = 0; y < 5; ++y) {
+        mask.scanLine(y)[0] = 255;
+        mask.scanLine(y)[1] = 128;
+    }
+
+    QRect bbox;
+    const QImage soft = Sam2Segmenter::applyCutout(original, mask, false, &bbox);
+    ASSERT_FALSE(soft.isNull());
+
+    // The tight bbox keeps the soft ramp: cropping at the solid core would slice the feather
+    // off and hand back the hard edge this path exists to avoid.
+    EXPECT_EQ(bbox, QRect(0, 0, 2, 5));
+    EXPECT_EQ(qAlpha(soft.pixel(0, 2)), 255);
+    EXPECT_EQ(soft.pixelColor(0, 2).rgb(), original.pixelColor(0, 2).rgb());
+
+    // The mid-ramp pixel keeps its RGB but gets a partial alpha: neither 0 nor 255.
+    const int edgeAlpha = qAlpha(soft.pixel(1, 2));
+    EXPECT_GT(edgeAlpha, 0);
+    EXPECT_LT(edgeAlpha, 255);
+    EXPECT_EQ(soft.pixelColor(1, 2).rgb(), original.pixelColor(1, 2).rgb());
+
+    // Outside the band the background is fully transparent.
+    EXPECT_EQ(qAlpha(soft.pixel(2, 2)), 0);
+
+    QRect tightBbox;
+    const QImage tight = Sam2Segmenter::applyCutout(original, mask, true, &tightBbox);
+    EXPECT_EQ(tightBbox, QRect(0, 0, 2, 5));
+    EXPECT_EQ(tight.size(), QSize(2, 5));
+}
+
+TEST(ImageEditControllerTests, ApplyCutoutRejectsAnEmptyMask) {
+    QImage original(4, 4, QImage::Format_ARGB32);
+    original.fill(qRgba(20, 30, 40, 255));
+    QImage mask(4, 4, QImage::Format_Grayscale8);
+    mask.fill(0);
+
+    QRect bbox;
+    EXPECT_TRUE(Sam2Segmenter::applyCutout(original, mask, false, &bbox).isNull());
+    EXPECT_FALSE(bbox.isValid());
+    EXPECT_DOUBLE_EQ(Sam2Segmenter::solidCoverage(mask), 0.0);
+}
+
+TEST(ImageEditControllerTests, SmartSegmentRejectsDegenerateMasksWithoutTouchingHistory) {
+    ImageEditController controller;
+    setSource(controller, cornerImage(64, 64));
+    ASSERT_TRUE(controller.beginSession(
+        1, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+    ASSERT_FALSE(controller.canUndo());
+
+    controller.setSmartMaskProducerForTesting([](const QImage& image, const QRect& box) {
+        static_cast<void>(box);
+        QImage mask(image.size(), QImage::Format_Grayscale8);
+        mask.fill(0);
+        return mask;
+    });
+    EXPECT_FALSE(controller.smartSegmentRect(8, 8, 48, 48, true));
+    EXPECT_FALSE(controller.canUndo());
+    EXPECT_EQ(controller.imageWidth(), 64);
+    EXPECT_FALSE(controller.lastStatus().isEmpty());
+
+    // An all-foreground mask would be a no-op cutout, so it is rejected the same way.
+    controller.setSmartMaskProducerForTesting([](const QImage& image, const QRect& box) {
+        static_cast<void>(box);
+        QImage mask(image.size(), QImage::Format_Grayscale8);
+        mask.fill(255);
+        return mask;
+    });
+    EXPECT_FALSE(controller.smartSegmentRect(8, 8, 48, 48, true));
+    EXPECT_FALSE(controller.canUndo());
+    EXPECT_EQ(controller.imageWidth(), 64);
+}
+
+TEST(ImageEditControllerTests, SmartSegmentSmallTargetEncodesACropAndMapsTheBBoxBack) {
+    ImageEditController controller;
+    setSource(controller, cornerImage(400, 300));
+    ASSERT_TRUE(controller.beginSession(
+        1, QStringLiteral("a.png"), QUrl::fromLocalFile(QStringLiteral("C:/tmp/a.png"))));
+
+    QSize seenImageSize;
+    QRect seenPrompt;
+    controller.setSmartMaskProducerForTesting(
+        [&seenImageSize, &seenPrompt](const QImage& image, const QRect& prompt) {
+            seenImageSize = image.size();
+            seenPrompt = prompt;
+            QImage mask(image.size(), QImage::Format_Grayscale8);
+            mask.fill(0);
+            for (int y = 5; y <= 14; ++y) {
+                for (int x = 10; x <= 29; ++x) {
+                    mask.scanLine(y)[x] = 255;
+                }
+            }
+            return mask;
+        });
+
+    // An 80x60 prompt inside 400x300 is a small target: the encoder should see the 1.5x
+    // expanded 120x90 crop, with the prompt translated into crop coordinates.
+    ASSERT_TRUE(controller.smartSegmentRect(200, 120, 80, 60, false));
+    EXPECT_EQ(seenImageSize, QSize(120, 90));
+    EXPECT_EQ(seenPrompt, QRect(20, 15, 80, 60));
+
+    // Without a tight crop the result keeps the original canvas; the cutout is pasted back at
+    // the crop offset, so the bbox in working coordinates is (190, 110)-(209, 119).
+    const QImage kept = controller.editedImage();
+    ASSERT_EQ(kept.size(), QSize(400, 300));
+    EXPECT_EQ(qAlpha(kept.pixel(190, 110)), 255);
+    EXPECT_EQ(qAlpha(kept.pixel(189, 110)), 0);
+    EXPECT_TRUE(controller.canUndo());
+
+    ASSERT_TRUE(controller.undo());
+    ASSERT_TRUE(controller.smartSegmentRect(200, 120, 80, 60, true));
+    // The tight crop is the 20x10 core, proving the bbox offset was added back.
+    EXPECT_EQ(controller.editedImage().size(), QSize(20, 10));
+    EXPECT_EQ(controller.undoLabel(), QStringLiteral("智能抠图"));
 }
 
 TEST(ImageEditControllerTests, SmartSegmentWithStagedModelExecutesAndCanUndo) {

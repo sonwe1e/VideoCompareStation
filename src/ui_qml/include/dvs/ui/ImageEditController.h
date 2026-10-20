@@ -3,6 +3,7 @@
 #include <QColor>
 #include <QImage>
 #include <QObject>
+#include <QRect>
 #include <QString>
 #include <QUrl>
 
@@ -185,6 +186,12 @@ public:
     [[nodiscard]] QString smartSegmentStatus() const;
     Q_INVOKABLE bool probeSmartSegment(const QString& explicitDir = QString());
     Q_INVOKABLE bool smartSegmentRect(int x, int y, int width, int height, bool tightCrop = true);
+    // Test seam: substitutes mask inference so the post-processing can be exercised without
+    // the ONNX models. Production never sets it. The producer receives the image actually fed
+    // to the encoder (a crop on the small-target path) and the prompt box in that image's
+    // coordinates, and must return a same-size mask.
+    void
+    setSmartMaskProducerForTesting(std::function<QImage(const QImage&, const QRect&)> producer);
 
 signals:
     void stateChanged();

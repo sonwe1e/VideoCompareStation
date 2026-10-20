@@ -98,6 +98,34 @@ Item {
             }
         }
 
+        // UX-16: inactive controls are exempt from WCAG 1.4.3, and that exemption is only
+        // honest while nothing a user must read is published in this colour. The floor here is
+        // the legibility one the token's comment promises (>= 3.5:1 on the darkest menu
+        // surface, >= 4.5:1 on the window), plus the separation that keeps a disabled row from
+        // looking like the explanation text next to it - menu explanations moved to
+        // `mutedText` precisely so this colour never has to carry them.
+        function test_disabled_text_is_legible_but_stays_visibly_inactive() {
+            function luminance(hex) {
+                const channels = [1, 3, 5].map(function(offset) {
+                    const value = parseInt(hex.substring(offset, offset + 2), 16) / 255;
+                    return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+                });
+                return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+            }
+            function contrast(first, second) {
+                const a = luminance(first);
+                const b = luminance(second);
+                return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+            }
+            verify(contrast(Theme.disabledText, Theme.menu) >= 3.5,
+                "disabledText on menu: " + contrast(Theme.disabledText, Theme.menu).toFixed(2));
+            verify(contrast(Theme.disabledText, Theme.window) >= 4.5,
+                "disabledText on window: " + contrast(Theme.disabledText, Theme.window).toFixed(2));
+            verify(contrast(Theme.mutedText, Theme.menu)
+                    > contrast(Theme.disabledText, Theme.menu) + 1.0,
+                "mutedText must stay clearly brighter than disabledText on the same surface");
+        }
+
         function test_timeline_markers_avoid_every_source_identity_hue() {
             const kinds = ["duplicate", "extra", "anchor", "other"];
             for (let i = 0; i < kinds.length; ++i) {
@@ -155,10 +183,20 @@ Item {
             verify(Theme.lineHeightCompact < Theme.lineHeightBody);
         }
 
-        function test_spacing_tokens_are_the_micro_step_and_primary_grid() {
+        // EX-06: the spacing ladder runs from the inside of a control outwards. One case pins
+        // all four steps, so a component that reaches for "12" or "16" without the token (or a
+        // token edited to a value off the 4 px grid) fails here before it reaches a screenshot.
+        function test_spacing_tokens_form_the_planned_ladder() {
             compare(Theme.spaceMicro, 4);
             compare(Theme.spaceMain, 8);
-            verify(Theme.spaceMicro < Theme.spaceMain);
+            compare(Theme.spaceGroup, 12);
+            compare(Theme.spaceSection, 16);
+            verify(Theme.spaceMicro < Theme.spaceMain,
+                "micro must stay inside main");
+            verify(Theme.spaceMain < Theme.spaceGroup,
+                "main (inside a control) must stay below group (between groups)");
+            verify(Theme.spaceGroup < Theme.spaceSection,
+                "group (between groups) must stay below section (card padding)");
         }
 
         function test_hit_area_and_play_button_tokens() {

@@ -9,6 +9,10 @@ Item {
     required property var controller
     required property bool shortcutsEnabled
     required property bool presentationShortcutsEnabled
+    // The help table describes both workspaces and the empty first screen, so its key may not
+    // ride on `shortcutsEnabled` (video session only). The host passes "no modal, no menu, no
+    // text editing" instead; default true keeps standalone QML tests working.
+    property bool helpShortcutEnabled: true
     required property int oneSecondStepFrames
     required property bool wipeEnabled
     required property real wipePosition
@@ -251,7 +255,7 @@ Item {
         enabled: reviewActions.shortcutsEnabled && reviewActions.wipeEnabled && control.wipeSplitActive && control.presentationShortcutsEnabled
         onActivated: control.wipeOrientationToggleRequested()
         property string helpKeys: qsTr("W")
-        property string helpLabel: qsTr("切换分屏线方向（水平 / 垂直）")
+        property string helpLabel: qsTr("切换分割线方向（水平 / 垂直）")
     }
     Shortcut {
         sequence: "Alt+Up"
@@ -259,7 +263,7 @@ Item {
         enabled: reviewActions.shortcutsEnabled && reviewActions.wipeEnabled && control.wipeSplitActive && control.wipeHorizontal
         onActivated: control.wipeMoveYRequested(-0.01)
         property string helpKeys: qsTr("Alt+↑ / Alt+↓")
-        property string helpLabel: qsTr("水平分屏线上移 / 下移（Shift 大步；仅上下切分）")
+        property string helpLabel: qsTr("水平分割线上移 / 下移（Shift 大步；仅上下切分）")
     }
     Shortcut {
         sequence: "Alt+Down"
@@ -285,7 +289,7 @@ Item {
         enabled: reviewActions.shortcutsEnabled && reviewActions.wipeEnabled && control.wipeSplitActive && !control.wipeHorizontal
         onActivated: reviewActions.moveWipe(-0.01)
         property string helpKeys: qsTr("Alt+← / →")
-        property string helpLabel: qsTr("垂直分屏线左移 / 右移（仅左右切分）")
+        property string helpLabel: qsTr("垂直分割线左移 / 右移（仅左右切分）")
     }
     Shortcut {
         sequence: "Alt+Right"
@@ -299,7 +303,7 @@ Item {
         enabled: reviewActions.shortcutsEnabled && reviewActions.wipeEnabled && control.wipeSplitActive && !control.wipeHorizontal
         onActivated: reviewActions.moveWipe(-0.05)
         property string helpKeys: qsTr("Shift+Alt+← / →")
-        property string helpLabel: qsTr("垂直分屏线大步左移 / 右移（仅左右切分）")
+        property string helpLabel: qsTr("垂直分割线大步左移 / 右移（仅左右切分）")
     }
     Shortcut {
         sequence: "Shift+Alt+Right"
@@ -347,7 +351,9 @@ Item {
         sequence: "?"
         context: Qt.ApplicationShortcut
         autoRepeat: false
-        enabled: control.shortcutsEnabled
+        // Reachable wherever nothing else owns the keyboard, not only while a video is open:
+        // the image help table and the first-run screen used to have no way in (UX-07).
+        enabled: control.helpShortcutEnabled
         onActivated: control.shortcutHelpRequested()
         property string helpKeys: qsTr("?")
         property string helpLabel: qsTr("本帮助")
@@ -361,7 +367,7 @@ Item {
         enabled: control.shortcutsEnabled && control.currentFrame >= 0
         onActivated: control.inPointRequested()
         property string helpKeys: qsTr("I / O")
-        property string helpLabel: qsTr("设置入点 / 出点")
+        property string helpLabel: qsTr("设置区间起点 / 终点")
     }
     Shortcut {
         sequence: "O"

@@ -23,6 +23,16 @@ Item {
         property var stepSecondsCalls: []
         property int backwardSecondCalls: 0
         property int forwardSecondCalls: 0
+        // The continuity switch is the one transport intent PlayerOsc does not re-emit as a
+        // signal: it calls straight through to the host action. Recording the call here is the
+        // only way to observe it, and it is the same seam the pointer path uses.
+        property int continuityPolicyCalls: 0
+        property int lastContinuityPolicy: -1
+
+        function setPlaybackContinuityPolicy(policy) {
+            continuityPolicyCalls += 1;
+            lastContinuityPolicy = policy;
+        }
 
         function firstFrame() {
         }
@@ -209,6 +219,11 @@ Item {
         id: pingPongSpy
         target: osc
         signalName: "rangePingPongRequested"
+    }
+    SignalSpy {
+        id: exportRangeSpy
+        target: osc
+        signalName: "exportRangeRequested"
     }
 
     // P03 protocol-controller stand-in: a plain QtObject carrying the properties the transport
@@ -570,7 +585,7 @@ Item {
             orderedOsc.visible = false;
         }
 
-        // E04 walk-rate completion: the 连帧 combo mirrors the controller projection and its
+        // E04 walk-rate completion: the 长按逐帧 combo mirrors the controller projection and its
         // selection reaches the same action seam the jog keys use. Driven by the real activation
         // path (open, arrow, confirm) so a handler wired to the wrong signal fails here.
         function test_jog_rate_selector_mirrors_and_forwards_the_walk_rate() {
@@ -670,10 +685,18 @@ Item {
             osc.displayGapCount = 0;
             osc.playing = false;
             const status = findChild(osc, "playbackStatusText");
+            const quiet = findChild(osc, "playbackStatusQuiet");
             verify(status !== null);
+            verify(quiet !== null);
             // Nothing has been observed yet, so a zero skip count is not evidence of a clean run.
-            // The rail has to say so rather than print nothing and let silence read as "no drops".
-            verify(status.text.indexOf("尚未测量") >= 0);
+            // Silence would read as "no drops", so the capsule states what it does not know -
+            // but in mutedText, not warning yellow: an unmeasured run is a caveat, not a
+            // failure, and yellow has to keep meaning "look at this" (UX-02).
+            verify(!osc.playbackStatusAlert, "an unmeasured run is not an alert");
+            verify(quiet.visible);
+            verify(quiet.text.indexOf("尚未测量") >= 0);
+            verify(Qt.colorEqual(quiet.color, Theme.mutedText));
+            verify(!status.visible, "the warning rail stays off-stage for an unmeasured run");
         }
 
         function test_status_drops_unmeasured_marker_once_the_run_has_samples() {
@@ -690,8 +713,13 @@ Item {
             osc.displayGapCount = 0;
             osc.playing = false;
             const status = findChild(osc, "playbackStatusText");
+            const quiet = findChild(osc, "playbackStatusQuiet");
             verify(status !== null);
-            // 120 frames presented and still no skip: now silence IS the measurement.
+            verify(quiet !== null);
+            // 120 frames presented and still no skip: now silence IS the measurement, so both
+            // surfaces drop the admission and the capsule is back to mode + target rate.
+            verify(!osc.playbackStatusUnmeasured);
+            verify(quiet.text.indexOf("尚未测量") < 0);
             verify(status.text.indexOf("尚未测量") < 0);
             verify(status.text.indexOf("播放器跳过") < 0);
         }
@@ -894,6 +922,79 @@ Item {
             }
         }
 
+        // UX-06: the range chips and the continuity segments are drawn rectangles, not Controls.
+        // They could always be *named* by a screen reader and clicked by a pointer, but there was
+        // no way to reach or press them from the keyboard. Each now owns its tab stop, its
+        // activation keys and the same 2 px ring the rest of the chrome uses.
+        function test_range_chip_and_continuity_option_are_keyboard_operable() {
+            // The fixture already carries the range preconditions (timelineEnabled, currentFrame
+            // 10 → canMarkRange) and PlayerOsc pins rangeControlsVisible on its own transport, so
+            // the only thing to arrange is the panel being on screen.
+            osc.revealActive = true;
+            osc.playing = false;
+            osc.inFrame = -1;
+            osc.outFrame = -1;
+            wait(0);
+            try {
+                const chip = findChild(osc, "transportMarkInButton");
+                verify(chip !== null);
+                verify(chip.visible, "the expanded range row must show the chip");
+                verify(chip.chipEnabled);
+                verify(chip.activeFocusOnTab, "the chip must be reachable with Tab");
+
+                // Same shape as the metric-lane toggle above: the ring is the only borderless-fill
+                // child that carries a border, so finding it by `border` is unambiguous.
+                let ring = null;
+                for (const child of chip.children) {
+                    if (child.border !== undefined)
+                        ring = child;
+                }
+                verify(ring !== null, "a chip must own a focus ring");
+                verify(!ring.visible, "an unfocused chip draws no ring");
+
+                chip.forceActiveFocus(Qt.TabFocusReason);
+                verify(chip.activeFocus);
+                verify(ring.visible);
+                compare(ring.border.width, 2);
+                verify(Qt.colorEqual(ring.border.color, Theme.focus));
+
+                const marksBefore = markInSpy.count;
+                keyClick(Qt.Key_Return);
+                compare(markInSpy.count, marksBefore + 1, "Return presses the focused chip");
+                keyClick(Qt.Key_Space);
+                compare(markInSpy.count, marksBefore + 2, "Space presses it too");
+
+                // The ring belongs to focus alone.
+                root.forceActiveFocus();
+                verify(!chip.activeFocus);
+                verify(!ring.visible);
+
+                // PlayerOsc does not re-emit the transport's continuity signal; it routes it to
+                // actions.setPlaybackContinuityPolicy, which is what the pointer path does too.
+                // Asserting on that call keeps the keyboard and pointer paths on one seam.
+                const option = findChild(osc, "realTimeContinuityButton");
+                verify(option !== null);
+                verify(option.visible);
+                verify(option.activeFocusOnTab, "a continuity segment must be reachable with Tab");
+                option.forceActiveFocus(Qt.TabFocusReason);
+                verify(option.activeFocus);
+                const policiesBefore = actions.continuityPolicyCalls;
+                keyClick(Qt.Key_Return);
+                compare(actions.continuityPolicyCalls, policiesBefore + 1,
+                        "Return presses the focused segment");
+                compare(actions.lastContinuityPolicy, 1,
+                        "the focused segment reports its own policy");
+                keyClick(Qt.Key_Space);
+                compare(actions.continuityPolicyCalls, policiesBefore + 2,
+                        "Space presses it too");
+            } finally {
+                osc.inFrame = -1;
+                osc.outFrame = -1;
+                osc.revealActive = false;
+                root.forceActiveFocus();
+            }
+        }
+
         // V-07 U10: the peak marker's visible dot stays 6x6 (a data marker on a 22px curve), but
         // its pointer target must reach the theme's 32px hit-area minimum, stay centred on the
         // dot and never reach outside the curve area - including at the lane's left edge.
@@ -1069,16 +1170,17 @@ Item {
             markIn.clicked();
             compare(markInSpy.count, 1);
 
-            // One endpoint expands the working face with the contract wording unchanged.
+            // One endpoint expands the working face; the capsule speaks the task language
+            // (起点/终点) while the mark chips keep the I / O shortcut in their tooltip.
             osc.inFrame = 41;
-            tryCompare(label, "text", qsTr("入 42 · 出 —（区间无效）"));
+            tryCompare(label, "text", qsTr("起 42 · 终 —（区间无效）"));
             tryCompare(loopRange, "visible", true);
             tryCompare(clearRange, "visible", true);
             verify(!playRange.visible, "playback needs both endpoints");
 
             // A complete range names itself with the frame count, exactly as before.
             osc.outFrame = 47;
-            tryCompare(label, "text", qsTr("入 42 · 出 48 · 7 帧"));
+            tryCompare(label, "text", qsTr("起 42 · 终 48 · 7 帧"));
 
             osc.inFrame = -1;
             osc.outFrame = -1;
@@ -1111,6 +1213,60 @@ Item {
             osc.outFrame = -1;
             // Restore the shared fixture width for the alphabetically later cases.
             osc.width = root.width;
+        }
+
+        // EX-08: the export chip keeps answering while the range is not exportable. The gate
+        // stays on `chipEnabled` (so the disabled styling and the C++ contract are unchanged),
+        // but a hover names the reason and a click still reaches the host's existing
+        // explanation path - which in Main.qml is the intent toast, not a dialog.
+        function test_export_chip_explains_an_unavailable_range() {
+            osc.revealActive = true;
+            osc.playing = false;
+            osc.rangeExportVisible = true;
+            osc.rangeExportEnabled = false;
+            osc.inFrame = -1;
+            osc.outFrame = -1;
+            wait(0);
+            try {
+                const chip = findChild(osc, "transportExportRangeButton");
+                verify(chip !== null);
+                tryVerify(() => chip.visible && chip.width > 0);
+                // The row re-centres when the export chip joins it; a click mapped from the
+                // pre-reflow position would land where the chip no longer is.
+                waitForRendering(chip);
+                wait(50);
+                verify(!chip.chipEnabled, "an unmarked range keeps the disabled styling");
+                verify(chip.chipHelp.indexOf(qsTr("请先设置有效的区间起点和终点")) >= 0,
+                    "the hover text must state the reason before the click is spent");
+
+                exportRangeSpy.clear();
+                mouseClick(chip, chip.width / 2, chip.height / 2);
+                compare(exportRangeSpy.count, 1,
+                    "the click must still reach the host's explanation path");
+
+                // Keyboard reaches the same seam: the gate is on the action, not the reason.
+                chip.forceActiveFocus(Qt.TabFocusReason);
+                verify(chip.activeFocus, "an explainable chip stays tabbable");
+                keyClick(Qt.Key_Return);
+                compare(exportRangeSpy.count, 2);
+            } finally {
+                // Retire the reveal before parking the cursor off the controls, in that order:
+                // the shared fixture arms its auto-hide countdown on the inside→outside
+                // transition, and a countdown left running here would expire inside the next
+                // case and hide the bar from under that case's cursor.
+                osc.revealActive = false;
+                // Hovering the chip raises its help tooltip after its 500 ms delay, and that
+                // popup's overlay swallows mouse events until it has finished closing - the next
+                // case's clicks would silently land on nothing. Parking the cursor and giving
+                // the popup time to retire keeps the shared pointer usable.
+                mouseMove(root, 2, 2);
+                wait(600);
+                osc.inFrame = -1;
+                osc.outFrame = -1;
+                osc.rangeExportVisible = false;
+                osc.rangeExportEnabled = false;
+                root.forceActiveFocus();
+            }
         }
 
         // C-07 quiet capsule: a clean run shows the one-line summary inline in the info row

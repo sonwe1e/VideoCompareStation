@@ -43,6 +43,7 @@ MenuItem {
         Text {
             id: labelText
 
+            objectName: control.objectName.length > 0 ? control.objectName + "Label" : ""
             anchors {
                 left: parent.left
                 right: trailingText.left
@@ -51,7 +52,10 @@ MenuItem {
             }
             text: control.text
             color: control.enabled ? control.textColor : control.disabledTextColor
-            font.pixelSize: Theme.fontMono
+            // Menu rows use the body step. `fontMono` is the timecode/frame-counter size and
+            // must not be borrowed for prose: it made every menu one step smaller than the
+            // copy it leads to.
+            font.pixelSize: Theme.fontBody
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight
         }
@@ -59,6 +63,7 @@ MenuItem {
         VcsMenuShortcut {
             id: trailingText
 
+            objectName: control.objectName.length > 0 ? control.objectName + "Trailing" : ""
             anchors {
                 right: parent.right
                 verticalCenter: parent.verticalCenter
@@ -66,7 +71,9 @@ MenuItem {
             shortcutEnabled: control.enabled
             text: control.subMenu ? "›" : control.shortcutText
             shortcutColor: control.subMenu ? control.textColor : control.shortcutColor
-            font.pixelSize: control.subMenu ? Theme.fontBody : Theme.fontSecondary
+            // The arrow marks the row; it must never outweigh the label it follows, so it
+            // stays at the shortcut/arrow step (12) below the 14 px label.
+            font.pixelSize: Theme.fontSecondary
             font.bold: control.subMenu
         }
     }

@@ -142,7 +142,9 @@ Rectangle {
     component DarkTabButton: TabButton {
         id: darkTabButton
 
-        implicitHeight: 30
+        // 32 px of label plus the tab bar's 4 px padding is the 40 px chrome row; only the
+        // height grows, the width each tab receives is unchanged.
+        implicitHeight: 32
         leftPadding: 10
         rightPadding: 10
         topPadding: 0
@@ -262,7 +264,7 @@ Rectangle {
                 anchors.left: parent.left
                 anchors.right: inspectorCloseButton.left
                 anchors.rightMargin: 4
-                implicitHeight: 38
+                implicitHeight: 40
                 padding: 4
                 background: Rectangle {
                     color: Theme.menu
@@ -354,7 +356,7 @@ Rectangle {
                             objectName: "activePairTimeBlock"
                             visible: Boolean(control.controller && control.controller.activePairTimeInfo && control.controller.activePairTimeInfo.aligned)
                             width: parent.width
-                            height: visible ? activePairTimeColumn.implicitHeight + 18 : 0
+                            height: visible ? activePairTimeColumn.implicitHeight + Theme.spaceGroup * 2 : 0
                             radius: Theme.radiusSmall
                             color: Theme.panelElevated
                             border.color: Theme.border
@@ -372,9 +374,9 @@ Rectangle {
                             Column {
                                 id: activePairTimeColumn
                                 spacing: 5
-                                x: 10
-                                y: 9
-                                width: parent.width - 20
+                                x: Theme.spaceGroup
+                                y: Theme.spaceGroup
+                                width: parent.width - Theme.spaceGroup * 2
 
                                 Label {
                                     text: qsTr("对比对时间与帧号")
@@ -447,7 +449,7 @@ Rectangle {
                             objectName: "inspectorInexactReasonBlock"
                             visible: Boolean(control.controller && control.controller.currentInexactReason && control.controller.currentInexactReason.length > 0)
                             width: parent.width
-                            height: visible ? inexactReasonCol.implicitHeight + 16 : 0
+                            height: visible ? inexactReasonCol.implicitHeight + Theme.spaceGroup * 2 : 0
                             radius: Theme.radiusSmall
                             color: Theme.warningPanel
                             border.color: Theme.warningBorder
@@ -455,10 +457,10 @@ Rectangle {
 
                             Column {
                                 id: inexactReasonCol
-                                spacing: 3
-                                x: 10
-                                y: 8
-                                width: parent.width - 20
+                                spacing: 6
+                                x: Theme.spaceGroup
+                                y: Theme.spaceGroup
+                                width: parent.width - Theme.spaceGroup * 2
 
                                 Label {
                                     text: qsTr("⚠️ 无法精确对应原因")
@@ -533,7 +535,9 @@ Rectangle {
 
                         Label {
                             visible: control.differenceMode
-                            text: qsTr("增益")
+                            // The task name for the same setting; the property stays
+                            // `preferences.differenceGain` (storage name, not user vocabulary).
+                            text: qsTr("差异放大")
                             color: control.mutedTextColor
                         }
                         ToolbarCombo {
@@ -546,7 +550,9 @@ Rectangle {
 
                         Label {
                             visible: control.differenceMode
-                            text: qsTr("滤镜")
+                            // Recent-neighbour / bilinear / bicubic: this dropdown picks the
+                            // resampling kernel for the difference view, not a look.
+                            text: qsTr("缩放采样")
                             color: control.mutedTextColor
                         }
                         ToolbarCombo {
@@ -604,7 +610,7 @@ Rectangle {
 
                             visible: control.differenceMode && control.metrics !== null && control.metrics.available
                             width: parent.width
-                            height: visible ? metricsColumn.implicitHeight + 20 : 0
+                            height: visible ? metricsColumn.implicitHeight + Theme.spaceGroup * 2 : 0
                             radius: Theme.radiusSmall
                             color: Theme.panelElevated
                             border.color: Theme.border
@@ -613,10 +619,10 @@ Rectangle {
                             Column {
                                 id: metricsColumn
 
-                                spacing: Theme.spaceMicro
-                                x: 10
-                                y: 10
-                                width: parent.width - 20
+                                spacing: 6
+                                x: Theme.spaceGroup
+                                y: Theme.spaceGroup
+                                width: parent.width - Theme.spaceGroup * 2
 
                                 Label {
                                     text: qsTr("当前帧指标 · %1").arg(control.metrics ? control.metrics.metricId : "")
@@ -764,11 +770,11 @@ Rectangle {
                             onToggled: control.dropFrameTimecodeRequested(checked)
                         }
                         Label {
-                            text: qsTr("入点：%1").arg(control.inFrame >= 0 ? control.inFrame + 1 : "—")
+                            text: qsTr("区间起点：%1").arg(control.inFrame >= 0 ? control.inFrame + 1 : "—")
                             color: control.mutedTextColor
                         }
                         Label {
-                            text: qsTr("出点：%1").arg(control.outFrame >= 0 ? control.outFrame + 1 : "—")
+                            text: qsTr("区间终点：%1").arg(control.outFrame >= 0 ? control.outFrame + 1 : "—")
                             color: control.mutedTextColor
                         }
 
@@ -782,8 +788,8 @@ Rectangle {
                                 objectName: "setInButton"
                                 Layout.fillWidth: true
                                 implicitHeight: 34
-                                text: qsTr("设置入点")
-                                helpText: qsTr("将区间起点设为当前帧（I）。")
+                                text: qsTr("设置区间起点")
+                                helpText: qsTr("将区间起点设为当前帧（I，入点）。")
                                 enabled: control.currentFrame >= 0
                                 onClicked: control.inPointRequested()
                             }
@@ -791,8 +797,8 @@ Rectangle {
                                 objectName: "setOutButton"
                                 Layout.fillWidth: true
                                 implicitHeight: 34
-                                text: qsTr("设置出点")
-                                helpText: qsTr("将区间终点设为当前帧（O）。")
+                                text: qsTr("设置区间终点")
+                                helpText: qsTr("将区间终点设为当前帧（O，出点）。")
                                 enabled: control.currentFrame >= 0
                                 onClicked: control.outPointRequested()
                             }
@@ -801,7 +807,7 @@ Rectangle {
                                 Layout.fillWidth: true
                                 implicitHeight: 34
                                 text: qsTr("清除区间")
-                                helpText: qsTr("清除入点、出点和循环播放。")
+                                helpText: qsTr("清除区间起点、区间终点和循环播放。")
                                 enabled: control.inFrame >= 0 || control.outFrame >= 0
                                 onClicked: control.clearRangeRequested()
                             }
@@ -858,7 +864,9 @@ Rectangle {
                                     id: legendEntry
                                     required property var modelData
                                     objectName: "timelineMarkerLegendEntry-" + modelData.kind
-                                    spacing: 6
+                                    // Swatch-to-label gap on the main step: the legend is a list of
+                                    // entries, not a control's internal padding.
+                                    spacing: Theme.spaceMain
 
                                     Rectangle {
                                         objectName: "timelineMarkerLegendSwatch-" + legendEntry.modelData.kind
@@ -899,7 +907,7 @@ Rectangle {
                             objectName: "timingDiagnosticsCard"
                             visible: Boolean(control.timingDiagnostics)
                             width: parent.width
-                            height: timingCol.implicitHeight + 20
+                            height: timingCol.implicitHeight + Theme.spaceGroup * 2
                             radius: Theme.radiusSmall
                             color: Theme.panelElevated
                             border.color: Theme.border
@@ -907,14 +915,15 @@ Rectangle {
 
                             Column {
                                 id: timingCol
-                                width: parent.width - 20
-                                x: 10
-                                y: 10
+                                width: parent.width - Theme.spaceGroup * 2
+                                x: Theme.spaceGroup
+                                y: Theme.spaceGroup
                                 spacing: Theme.spaceMain
 
                                 RowLayout {
                                     width: parent.width
-                                    spacing: 6
+                                    // Same step as the card's own rows (timingCol above).
+                                    spacing: Theme.spaceMain
 
                                     Label {
                                         text: qsTr("呈现时序与卡顿诊断")
@@ -939,7 +948,7 @@ Rectangle {
                                             anchors.centerIn: parent
                                             text: control.timingDiagnostics && control.timingDiagnostics.hasActivePlayback ? qsTr("实时采样") : qsTr("就绪")
                                             color: control.timingDiagnostics && control.timingDiagnostics.hasActivePlayback ? Theme.success : control.mutedTextColor
-                                            font.pixelSize: 10
+                                            font.pixelSize: Theme.fontCaption
                                             font.bold: true
                                         }
                                     }
@@ -951,7 +960,7 @@ Rectangle {
                                     objectName: "timingIndirectWarningBanner"
                                     visible: Boolean(control.timingDiagnostics && control.timingDiagnostics.isIndirectDisplayWarning)
                                     width: parent.width
-                                    height: indirectWarningCol.implicitHeight + 12
+                                    height: indirectWarningCol.implicitHeight + Theme.spaceMain * 2
                                     radius: Theme.radiusMicro
                                     color: Theme.warningPanel
                                     border.width: 1
@@ -959,10 +968,10 @@ Rectangle {
 
                                     Column {
                                         id: indirectWarningCol
-                                        width: parent.width - 12
-                                        x: 6
-                                        y: 6
-                                        spacing: 2
+                                        width: parent.width - Theme.spaceMain * 2
+                                        x: Theme.spaceMain
+                                        y: Theme.spaceMain
+                                        spacing: 6
 
                                         Text {
                                             text: qsTr("⚠️ 间接显示驱动环境")
@@ -1017,7 +1026,7 @@ Rectangle {
                                     width: parent.width
                                     columns: 2
                                     columnSpacing: 10
-                                    rowSpacing: 4
+                                    rowSpacing: 6
 
                                     Text {
                                         text: qsTr("解码耗时 P95 / Max:")
@@ -1121,7 +1130,7 @@ Rectangle {
 
                                 required property var modelData
                                 width: infoColumn.width
-                                height: mediaCardCol.implicitHeight + 20
+                                height: mediaCardCol.implicitHeight + Theme.spaceGroup * 2
                                 radius: Theme.radiusSmall
                                 color: Theme.panelElevated
                                 border.color: Theme.border
@@ -1129,9 +1138,9 @@ Rectangle {
 
                                 Column {
                                     id: mediaCardCol
-                                    width: parent.width - 20
-                                    x: 10
-                                    y: 10
+                                    width: parent.width - Theme.spaceGroup * 2
+                                    x: Theme.spaceGroup
+                                    y: Theme.spaceGroup
                                     spacing: 6
 
                                     RowLayout {

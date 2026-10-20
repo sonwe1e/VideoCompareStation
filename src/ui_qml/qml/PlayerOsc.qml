@@ -43,10 +43,12 @@ Item {
     // TransportBar (tooltips) and consulted below (action routing).
     property int shortcutPreset: 0
     // C-07 quiet-capsule rule: a run earns the full warning rail only once something is
-    // actually wrong - skipped FrameSets, catch-up, >= 200 ms lag, or a run that has not
-    // presented a single frame yet (an unmeasured run is not a clean one). Everything else
-    // keeps the one-line quiet summary; the full rail stays one hover away.
-    readonly property bool playbackStatusAlert: control.playbackRunSkippedFrameSets > 0 || control.playbackCatchingUp || control.playbackLagMilliseconds >= 200 || control.playbackRunPresentedFrames === 0
+    // actually wrong - skipped FrameSets, catch-up, or >= 200 ms lag. "Not measured yet" is
+    // NOT one of them: it is a caveat on the same readouts, so it rides in the quiet capsule
+    // in a neutral colour instead of borrowing the yellow that real failures need. Reporting
+    // every freshly opened session in warning yellow taught users that yellow means normal.
+    readonly property bool playbackStatusAlert: control.playbackRunSkippedFrameSets > 0 || control.playbackCatchingUp || control.playbackLagMilliseconds >= 200
+    readonly property bool playbackStatusUnmeasured: control.playbackRunPresentedFrames === 0
     required property bool timelineEnabled
     required property int currentFrame
     required property int totalFrames
@@ -107,7 +109,9 @@ Item {
     signal nextGeneratedFrameRequested
 
     objectName: "transport"
-    height: Math.max(0, tracks.y) + tracks.height + 13 + transport.implicitHeight + 5
+    // The trailing gap is the main step, so the transport sits under the timeline the same way
+    // it does inside the panel instead of hugging the panel edge.
+    height: Math.max(0, tracks.y) + tracks.height + 13 + transport.implicitHeight + Theme.spaceMain
     visible: controllerState !== 2
 
     onPointerInsidePanelChanged: {
@@ -179,13 +183,19 @@ Item {
         return parts.join(" · ");
     }
 
-    // C-07 quiet summary: mode and target rate only. Actual presentation rate, duplicates and
-    // gaps stay in the full rail (hover) until one of them is actually wrong.
+    // C-07 quiet summary: mode, target rate, and - while the run has no sample behind it -
+    // the unmeasured admission. Actual presentation rate, duplicates and gaps stay in the
+    // full rail (hover) until one of them is actually wrong.
     function playbackStatusQuietText() {
         const parts = [];
         if (control.playbackModeLabel.length > 0)
             parts.push(control.playbackModeLabel);
         parts.push(qsTr("目标 %1×").arg(control.playbackTargetRate.toFixed(2)));
+        // Silence would read as "clean" before the first presented frame, so the capsule has
+        // to say what it does not know (product intent section 2). It says it in `mutedText`,
+        // the same weight as the numbers it qualifies.
+        if (control.playbackStatusUnmeasured)
+            parts.push(qsTr("本次播放尚未测量"));
         return parts.join(" · ");
     }
 
@@ -203,16 +213,16 @@ Item {
         return (detail.length > 0 ? detail + "\n" : "") + control.playbackStatusFullText() + "\n\n" + control.statusLegend;
     }
 
-    // In/out points are the OSC's own vocabulary; a marker's kind comes from the one shared
-    // mapping (`Theme.timelineMarkerLabel`) that the timeline tooltip and the inspector legend
-    // also read, so the same kind never gets two different names.
+    // The range endpoints speak the task language (区间起点 / 区间终点); a marker's kind comes
+    // from the one shared mapping (`Theme.timelineMarkerLabel`) that the timeline tooltip and
+    // the inspector legend also read, so the same kind never gets two different names.
     function markerLabelForFrame(frame) {
         if (frame < 0)
             return "";
         if (control.inFrame >= 0 && frame === control.inFrame)
-            return qsTr("入点标记");
+            return qsTr("区间起点标记");
         if (control.outFrame >= 0 && frame === control.outFrame)
-            return qsTr("出点标记");
+            return qsTr("区间终点标记");
         for (let i = 0; i < control.markers.length; ++i) {
             const m = control.markers[i];
             if (Math.abs(Number(m.frame) - frame) <= 1)
@@ -272,7 +282,7 @@ Item {
         Row {
             id: readout
 
-            spacing: 14
+            spacing: Theme.spaceGroup
             anchors {
                 top: parent.top
                 topMargin: 8
@@ -312,9 +322,13 @@ Item {
                 font.weight: Font.DemiBold
             }
             Text {
+                objectName: "frameCounterText"
                 text: control.currentFrame >= 0 ? qsTr("第 %1 / %2 帧").arg(control.currentFrame + 1).arg(control.totalFrames) : qsTr("无帧")
                 color: Theme.mutedText
                 font.pixelSize: Theme.fontSecondary
+                // Stepping re-writes these digits in place; tabular figures keep the row from
+                // shuffling sideways on every frame (UX-18).
+                font.features: Theme.fontFeaturesNumeric
             }
             // The in/out range readout moved into the transport's range row
             // (`transportRangeLabel`): endpoints, their buttons and the frame count now sit in one
@@ -370,8 +384,9 @@ Item {
 
             // C-07 quiet capsule, inline in the info line: a normal run keeps one calm summary
             // on the same row as timecode, frame counter and metrics. Only a run that skipped
-            // FrameSets, is catching up, lags >= 200 ms or has no measurement yet expands the
-            // dedicated warning rail below; the full text stays one hover away in both states.
+            // FrameSets, is catching up or lags >= 200 ms expands the dedicated warning rail
+            // below; an unmeasured run is stated here instead, in the same neutral colour as
+            // the readouts it qualifies. The full text stays one hover away in both states.
             Text {
                 id: statusQuiet
 
@@ -395,10 +410,12 @@ Item {
             }
         }
 
-        // C-07 playback status rail, alert-only edition: the row exists while something is
-        // actually wrong (see playbackStatusAlert), showing the full warning text. Source
-        // duplicates, player FrameSet skips, and display/present gaps stay separated so a
-        // stall is never mistaken for judder.
+        // C-07 playback status rail, failure-only edition: the row exists while something is
+        // actually wrong (see playbackStatusAlert), showing the full warning text in the
+        // warning colour. An unmeasured run never reaches this rail - it is admitted by the
+        // neutral quiet capsule above, so warning yellow keeps meaning "look at this".
+        // Source duplicates, player FrameSet skips, and display/present gaps stay separated
+        // so a stall is never mistaken for judder.
         Text {
             id: statusText
 
@@ -422,7 +439,7 @@ Item {
                 right: parent.right
                 rightMargin: 16
                 top: readout.bottom
-                topMargin: 2
+                topMargin: Theme.spaceMicro
             }
 
             HoverHandler {
@@ -476,7 +493,7 @@ Item {
                 right: parent.right
                 rightMargin: 16
                 top: statusText.visible ? statusText.bottom : readout.bottom
-                topMargin: 2
+                topMargin: Theme.spaceMicro
             }
             onSeekRequested: frame => control.seekRequested(frame)
         }
@@ -496,7 +513,9 @@ Item {
                 right: parent.right
                 rightMargin: 16
                 top: metricLane.visible ? metricLane.bottom : (statusText.visible ? statusText.bottom : readout.bottom)
-                topMargin: 2
+                // Six pixels: the time axis is the object the whole panel is read against, so it
+                // gets one step more air than the status block above it.
+                topMargin: 6
             }
             onPreviewRequested: frame => control.previewRequested(frame)
             onSeekRequested: frame => control.seekRequested(frame)

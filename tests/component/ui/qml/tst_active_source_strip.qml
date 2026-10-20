@@ -118,6 +118,13 @@ Item {
         signalName: "removeSelectedRequested"
     }
 
+    SignalSpy {
+        id: closeSessionSpy
+
+        target: strip
+        signalName: "closeSessionRequested"
+    }
+
     TestCase {
         name: "ActiveSourceStrip"
         when: windowShown
@@ -139,6 +146,7 @@ Item {
             strip.manageSelection = false;
             strip.selectedIdentities = [];
             strip.enabled = true;
+            strip.singleMode = false;
             root.width = 720;
             strip.pendingSourceIdentities = [];
             strip.returnViewerFocusAfterClose = false;
@@ -317,6 +325,41 @@ Item {
             verify(removeButton.visible);
             mouseClick(removeButton, removeButton.width / 2, removeButton.height / 2);
             compare(removeSelectedSpy.count, 1);
+        }
+
+        // EX-04: a single video keeps the strip - it still names the material on screen - and
+        // the strip's own close entry closes the session, since the per-source removal
+        // deliberately refuses to leave a session without sources. The add entry lives in the
+        // mode bar for that state, so the strip's "+" stays out of the way.
+        function test_singleSourceKeepsStripAndClosesTheSession() {
+            sources.clear();
+            sources.append({sourceId: 0, sourceIdentity: "source-a", filename: "only.mp4", parentLabel: "", fullPath: "", changedOnDisk: false});
+            strip.sourceCount = 1;
+            strip.singleMode = true;
+            strip.sourceIdentities = ["source-a"];
+            strip.displayOrder = ["source-a"];
+            strip.referenceSourceIndex = 0;
+            strip.referenceSourceIdentity = "source-a";
+            wait(0);
+
+            verify(strip.visible);
+            // The close button is not a chip: the positional helpers must keep ignoring it.
+            const chip = strip.chipAt("source-a");
+            verify(chip !== null);
+            compare(chip.objectName, "sourceChip-0");
+
+            compare(findChild(strip, "addSourceChipButton").visible, false);
+
+            const closeButton = findChild(strip, "closeSessionChipButton");
+            verify(closeButton !== null);
+            verify(closeButton.visible);
+            compare(findChild(strip, "sourceChip-0").removeSourceAction.enabled, false);
+
+            closeSessionSpy.clear();
+            mouseClick(closeButton, closeButton.width / 2, closeButton.height / 2);
+            compare(closeSessionSpy.count, 1);
+            compare(removalSpy.count, 0);
+            compare(directLookSpy.count, 0);
         }
 
         // V02: dragging a chip must never reorder anything. The picture panels follow the

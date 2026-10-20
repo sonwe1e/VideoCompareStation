@@ -177,7 +177,11 @@ Rectangle {
     property int pixelReadoutRequestId: 0
 
     signal wipePositionRequested(real position)
-    signal oscRevealRequested
+    // `interactive` separates a real canvas gesture (press, drag, wheel) from a pointer that
+    // merely happens to be over the canvas. The host reveals the controls for both while the
+    // chrome is visible; with the chrome hidden only the interactive case may wake them, so a
+    // cursor parked on the canvas cannot undo the H the user just pressed.
+    signal oscRevealRequested(bool interactive)
     signal contextMenuRequested
     signal roiRejected(string reason)
     // Mirrors the last roiRejected() argument so the C++ contract suite (which does not link
@@ -249,7 +253,9 @@ Rectangle {
     // Hover/drag moves extracted from the navigation MouseArea so contract tests can drive
     // the exact path (pan, marquee tracking, pixel readout) with synthetic positions.
     function handleNavigationMove(x, y) {
-        control.oscRevealRequested();
+        // Reveal normally, pan/track readouts as before. A press that is still down counts as
+        // interactive, so a pan keeps the controls up.
+        control.oscRevealRequested(viewportNavigation.pressed || control.roiSelecting);
         const point = control.panelPoint(x, y);
         if (control.roiSelecting) {
             control.roiCurrentX = x;
@@ -859,7 +865,7 @@ Rectangle {
         cursorShape: control.roiSelectMode || control.roiSelecting ? Qt.CrossCursor : Qt.ArrowCursor
 
         onWheel: wheel => {
-            control.oscRevealRequested();
+            control.oscRevealRequested(true);
             const point = control.panelPoint(wheel.x, wheel.y);
             if (!point.insideContent) {
                 control.issuePixelReadout(point);
@@ -872,7 +878,7 @@ Rectangle {
             wheel.accepted = true;
         }
         onPressed: mouse => {
-            control.oscRevealRequested();
+            control.oscRevealRequested(true);
             if (mouse.button === Qt.RightButton) {
                 control.contextMenuRequested();
                 return;
@@ -1216,8 +1222,8 @@ Rectangle {
             bottom: viewCommandRow.top
             bottomMargin: 8
         }
-        Accessible.name: qsTr("像素规范化帧值读数")
-        Accessible.description: qsTr("光标位置的帧平面 YCbCr 码值，逐源显示；Δ 列为该源减去当前参考源的差值。")
+        Accessible.name: qsTr("像素原始帧取值读数")
+        Accessible.description: qsTr("光标位置的帧平面 Y/Cb/Cr 取值，逐源显示；Δ 列为该源减去当前参考源的差值。")
 
         // Fixed column widths measured on the widest value each column can carry, so digits
         // changing under the cursor never make neighbouring columns jitter. The monospace
@@ -1254,9 +1260,9 @@ Rectangle {
                 spacing: 6
 
                 Text {
-                    text: qsTr("规范化帧值 YCbCr")
+                    text: qsTr("原始帧取值 Y/Cb/Cr")
                     color: control.mutedTextColor
-                    font.pixelSize: 10
+                    font.pixelSize: Theme.fontCaption
                     font.weight: Font.DemiBold
                 }
 
@@ -1266,7 +1272,7 @@ Rectangle {
                     // the session actually identifies a reference.
                     text: qsTr("· Δ 相对 %1").arg(String.fromCharCode(65 + control.referenceSourceIndex))
                     color: Theme.accentText
-                    font.pixelSize: 10
+                    font.pixelSize: Theme.fontCaption
                     font.weight: Font.DemiBold
                 }
 
@@ -1276,7 +1282,7 @@ Rectangle {
 
                 VcsToolTip {
                     visible: pixelReadoutHeaderHover.hovered
-                    text: qsTr("光标位置的帧平面 YCbCr 码值（数值审查路径）。\n读数是 NV12/P010 帧平面中的样本；来源的色度或位深可能在解码时已转换，逐行标出来源格式和「已转换」。\n画面本身经过显示转换（观看路径），两者不承诺一致。\n位深来自帧格式，Limited/Full 来自源元数据。\nΔ 列 = 该源 − 当前参考源（同一呈现帧、同一坐标下的差值）；无参考源或样本不完整时显示 —。\n播放中冻结读数并标出帧号；暂停后按呈现帧和光标位置重新取样。")
+                    text: qsTr("光标位置的帧平面 Y/Cb/Cr 取值（数值审查路径）。\n读数是 NV12/P010 帧平面中的样本；来源的色度或位深可能在解码时已转换，逐行标出来源格式和「已转换」。\n画面本身经过显示转换（观看路径），两者不承诺一致。\n位深来自帧格式，Limited/Full 来自源元数据。\nΔ 列 = 该源 − 当前参考源（同一呈现帧、同一坐标下的差值）；无参考源或样本不完整时显示 —。\n播放中冻结读数并标出帧号；暂停后按呈现帧和光标位置重新取样。")
                 }
             }
 
@@ -1444,17 +1450,19 @@ Rectangle {
             onClicked: control.fitToWindow()
         }
         // E1: wipe split axis toggle - a discoverable entry next to the fit/reset commands,
-        // visible only in wipe mode while the full canvas is not in a direct look. The label
-        // names the halves (左右/上下) instead of the axis jargon. ViewCommandButton is
-        // 24 px tall by default, below the 32 px hit-area minimum, so this new instance
-        // raises only its own height (the legacy buttons keep theirs; no whitelist entry).
+        // visible only in wipe mode while the full canvas is not in a direct look. The noun is
+        // 分割线, the same one the mode bar, the image workspace and the shortcut table use
+        // (UX-10); the qualifier names the halves (左右/上下) instead of the axis jargon.
+        // ViewCommandButton is 24 px tall by default, below the 32 px hit-area minimum, so this
+        // new instance raises only its own height (the legacy buttons keep theirs; no whitelist
+        // entry).
         ViewCommandButton {
             objectName: "viewportWipeOrientationButton"
             visible: control.wipeMode && control.canvasFocusSlot < 0
             enabled: visible && !control.overlayVisible
             height: Theme.hitAreaMinimum
-            text: control.wipeOrientation === 1 ? qsTr("分屏：上下") : qsTr("分屏：左右")
-            helpText: control.wipeOrientation === 1 ? qsTr("当前上下切分；点击改为左右切分（W 键）。分屏比例保持不变。") : qsTr("当前左右切分；点击改为上下切分（W 键）。分屏比例保持不变。")
+            text: control.wipeOrientation === 1 ? qsTr("分割线：上下") : qsTr("分割线：左右")
+            helpText: control.wipeOrientation === 1 ? qsTr("当前上下切分；点击改为左右切分（W 键）。分割位置保持不变。") : qsTr("当前左右切分；点击改为上下切分（W 键）。分割位置保持不变。")
             onClicked: control.setWipeOrientation(control.wipeOrientation === 1 ? 0 : 1)
         }
         ViewCommandButton {

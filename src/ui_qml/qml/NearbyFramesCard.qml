@@ -237,7 +237,7 @@ Rectangle {
                 visible: control.previewThumbnails !== null
                 text: control.thumbnailSourceName.length > 0 ? qsTr("缩略图源：%1").arg(control.thumbnailSourceName) : qsTr("缩略图源：未知")
                 color: control.thumbnailSourceName.length > 0 ? Theme.secondaryText : Theme.warningText
-                font.pixelSize: 10
+                font.pixelSize: Theme.fontCaption
                 elide: Text.ElideMiddle
                 width: 150
                 anchors.verticalCenter: parent.verticalCenter

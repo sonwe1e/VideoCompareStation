@@ -802,7 +802,7 @@ ApplicationWindow {
 
                 // A chrome-time action: the immersive HUD only renders while the chrome is
                 // hidden, so the confirmation must ride the channel that is actually visible.
-                showActionFeedback(qsTr("入点 · 第 %1 帧").arg(frame + 1));
+                showActionFeedback(qsTr("区间起点 · 第 %1 帧").arg(frame + 1));
             }
         }
     }
@@ -818,7 +818,7 @@ ApplicationWindow {
             if (shell.setRangeOut(frame, mediaTime)) {
                 syncApplicationRange();
 
-                showActionFeedback(qsTr("出点 · 第 %1 帧").arg(frame + 1));
+                showActionFeedback(qsTr("区间终点 · 第 %1 帧").arg(frame + 1));
             }
         }
     }
@@ -867,7 +867,7 @@ ApplicationWindow {
             return false;
 
         if (!rangeExportEnabled) {
-            showActionFeedback(qsTr("当前视频或所选区间暂不可导出，请检查素材和入点、出点。"));
+            showActionFeedback(qsTr("当前视频或所选区间暂不可导出，请检查素材和区间起点、终点。"));
 
             return false;
         }
@@ -2201,15 +2201,15 @@ ApplicationWindow {
         const restoreWipePosition = payload.wipePosition !== undefined ? Number(payload.wipePosition) : -1;
         if (payload.viewMode === 5 && restoreWipeOrientation !== -1) {
             if (restoreWipeOrientation === -2) {
-                root.showIntentMessage(qsTr("部分恢复：记录中的分屏线状态无效，已保持当前切分"));
+                root.showIntentMessage(qsTr("部分恢复：记录中的分割线状态无效，已保持当前切分"));
             } else if ((restoreWipeOrientation === 0 || restoreWipeOrientation === 1) && Number.isFinite(restoreWipePosition) && restoreWipePosition >= 0 && restoreWipePosition <= 1) {
                 viewportFrame.setWipeOrientation(restoreWipeOrientation);
                 root.wipePosition = restoreWipePosition;
             } else {
-                root.showIntentMessage(qsTr("部分恢复：记录中的分屏线状态无效，已保持当前切分"));
+                root.showIntentMessage(qsTr("部分恢复：记录中的分割线状态无效，已保持当前切分"));
             }
         } else if (payload.viewMode === 5) {
-            root.showIntentMessage(qsTr("部分恢复：记录未含分屏线方向/位置，保持当前切分"));
+            root.showIntentMessage(qsTr("部分恢复：记录未含分割线方向/位置，保持当前切分"));
         }
 
         // A recorded pair the session would not take is a partial restore: the files, mode, frame
@@ -3383,6 +3383,9 @@ ApplicationWindow {
         onChromeToggleRequested: root.toggleChrome()
         onFullScreenToggleRequested: root.toggleFullScreen()
         onViewerFocusRequested: root.returnFocusToViewer()
+        // Same one-turn delay as the association dialog: the menu is still closing while the
+        // item handler runs, and a popup raised inside a closing menu is popped with it.
+        onShortcutHelpRequested: Qt.callLater(shortcutHelp.open)
     }
 
     ReviewShortcuts {
@@ -3392,6 +3395,7 @@ ApplicationWindow {
         preferences: root.preferences
         shortcutsEnabled: root.globalMediaShortcutsEnabled
         presentationShortcutsEnabled: root.presentationShortcutsEnabled
+        helpShortcutEnabled: root.presentationShortcutsEnabled
         oneSecondStepFrames: root.oneSecondStepFrames
         wipeEnabled: root.wipeMode
         // E1: W/Alt axis keys act only while a real wipe composite is on screen - the shell's
@@ -3454,7 +3458,10 @@ ApplicationWindow {
         // split ratio, sources, frame, zoom and pan untouched by construction.
         onWipeOrientationToggleRequested: {
             viewportFrame.setWipeOrientation(viewportFrame.wipeOrientation === 1 ? 0 : 1);
-            root.showActionFeedback(viewportFrame.wipeOrientation === 1 ? qsTr("分屏线：水平（上下切分）") : qsTr("分屏线：垂直（左右切分）"));
+            // One noun and one qualifier vocabulary across the mode bar, the canvas HUD and this
+            // toast (UX-10): 分割线 + which halves it divides. The previous text mixed 水平/垂直
+            // axis jargon into the same sentence as 上下切分.
+            root.showActionFeedback(viewportFrame.wipeOrientation === 1 ? qsTr("分割线：上下切分") : qsTr("分割线：左右切分"));
         }
         onWipeMoveYRequested: delta => {
             // The delta is already a normalized split-ratio step: apply it to the single
@@ -3499,6 +3506,20 @@ ApplicationWindow {
     // Workspace-level shortcuts stay active across both workspaces; media transport shortcuts
     // remain owned by ReviewShortcuts and are gated by globalMediaShortcutsEnabled. Sequences
     // come from ShortcutCatalog.js - the same constants the menu labels and the help rows use.
+    //
+    // F10 is the Windows menu key. Qt Quick's MenuBar template exposes no Alt/F10 activation
+    // and the custom delegate never entered the tab order, so the menu bar was pointer-only
+    // (UX-05). This opens the first menu at its item with the popup focused; arrows, Enter and
+    // Esc then behave exactly as in the pointer path. Alt alone is not bound: it would need a
+    // key-release state machine and per-language mnemonics the Chinese titles do not carry.
+    Shortcut {
+        sequence: "F10"
+        context: Qt.ApplicationShortcut
+        autoRepeat: false
+        enabled: root.inputContext === 0 && root.chromeVisible && !root.fullScreen
+        onActivated: applicationMenuBar.focusFirstMenu()
+    }
+
     Shortcut {
         sequence: ShortcutCatalog.openVideoFolder
         context: Qt.ApplicationShortcut
@@ -3989,7 +4010,9 @@ ApplicationWindow {
     ActiveSourceStrip {
         id: sourceBar
 
-        visible: !root.imageWorkspaceActive && root.sourceCount > 1
+        // EX-04: the strip is the silent record of what is on screen, so it survives down to a
+        // single video instead of disappearing with the second one.
+        visible: !root.imageWorkspaceActive && root.sourceCount > 0
         sourcesModel: root.controller ? root.controller.sources : null
         sourceCount: root.sourceCount
         singleMode: root.singleMode
@@ -4015,6 +4038,7 @@ ApplicationWindow {
             leftMargin: root.singleMode ? 8 : 0
         }
         onAddRequested: root.requestAddVideo()
+        onCloseSessionRequested: root.closeCurrentTask()
         onRemoveRequested: sourceIdentity => root.removeSelectedSource(sourceIdentity)
         onReferenceRequested: sourceIdentity => root.changeReference(sourceIdentity)
         onReplaceRequested: sourceIdentity => root.requestReplaceSource(sourceIdentity)
@@ -4041,7 +4065,10 @@ ApplicationWindow {
     CompareModeBar {
         id: comparisonBar
 
-        visible: !root.imageWorkspaceActive && root.sourceCount > 1
+        // EX-03: the comparison tasks stay on screen for a single video (disabled, with the
+        // reason printed in the bar) so the way into a comparison is discoverable before the
+        // user has a second file.
+        visible: !root.imageWorkspaceActive && root.sourceCount > 0
         sourceCount: root.sourceCount
         currentMode: root.effectiveViewMode
         // qmllint disable unqualified
@@ -4088,6 +4115,8 @@ ApplicationWindow {
         }
         onCopyComparisonRequested: root.copyComparisonImage()
         onInspectorRequested: root.shell.inspectorVisible = !root.inspectorOpen
+        // EX-03: one add path - the bar's button runs the same action as the menu and Ctrl+Shift+O.
+        onAddVideoRequested: root.requestAddVideo()
     }
     Rectangle {
         id: inspectorScrim
@@ -4101,7 +4130,10 @@ ApplicationWindow {
             right: parent.right
             bottom: parent.bottom
             top: parent.top
-            topMargin: root.singleMode ? 0 : sourceBar.height + comparisonBar.height
+            // EX-03/EX-04: both chrome rows now stay on screen for a single video, so the
+            // drawer starts below them in every video session (both report height 0 when the
+            // session is empty).
+            topMargin: sourceBar.height + comparisonBar.height
         }
 
         MouseArea {
@@ -4152,7 +4184,10 @@ ApplicationWindow {
         z: 20
         anchors {
             top: parent.top
-            topMargin: root.singleMode ? 0 : sourceBar.height + comparisonBar.height
+            // EX-03/EX-04: both chrome rows now stay on screen for a single video, so the
+            // drawer starts below them in every video session (both report height 0 when the
+            // session is empty).
+            topMargin: sourceBar.height + comparisonBar.height
             right: parent.right
             bottom: parent.bottom
             bottomMargin: 0
@@ -4275,7 +4310,7 @@ ApplicationWindow {
         playbackHudRevealed: transport.revealActive
         anchors {
             top: parent.top
-            topMargin: root.chromeVisible && !root.singleMode ? sourceBar.height + comparisonBar.height + 6 : 0
+            topMargin: root.chromeVisible ? sourceBar.height + comparisonBar.height + 6 : 0
             bottom: parent.bottom
             bottomMargin: root.transportDocked ? root.transportDockHeight : 0
             left: parent.left
@@ -4284,7 +4319,14 @@ ApplicationWindow {
             rightMargin: root.chromeVisible ? LayoutMetrics.canvasEdgeMargin : 0
         }
         onWipePositionRequested: position => root.wipePosition = position
-        onOscRevealRequested: root.revealOsc()
+        // Immersive mode owns one deliberate affordance for waking the transport: the bottom
+        // wake strip. A pointer that merely ends up over the canvas (it was already there when
+        // H was pressed, and the collapsing chrome moves the layout under it) must not raise
+        // the controls again, so only real gestures carry the request through.
+        onOscRevealRequested: interactive => {
+            if (root.chromeVisible || interactive)
+                root.revealOsc();
+        }
         onContextMenuRequested: root.openViewerContextMenu()
         // A dropped ROI marquee (released in the letterbox or too small) reaches the user on the
         // same action-feedback channel as every other chrome action, so it renders with the
@@ -4312,7 +4354,7 @@ ApplicationWindow {
         anchors.left: parent.left
         anchors.leftMargin: LayoutMetrics.fileSidebarLoaderMargin
         anchors.top: parent.top
-        anchors.topMargin: root.imageWorkspaceActive ? 10 : (root.chromeVisible && !root.singleMode ? sourceBar.height + comparisonBar.height + 6 : 0)
+        anchors.topMargin: root.imageWorkspaceActive ? 10 : (root.chromeVisible ? sourceBar.height + comparisonBar.height + 6 : 0)
         anchors.bottom: parent.bottom
         anchors.bottomMargin: root.imageWorkspaceActive ? 0 : (root.transportDocked ? root.transportDockHeight : 0)
         sourceComponent: VideoFolderSidebar {
@@ -5033,9 +5075,14 @@ ApplicationWindow {
         onViewerFocusRequested: root.returnFocusToViewer()
     }
 
-    // Transient notices share one stack at the bottom of the stage, above the stage's own
-    // bottom controls and a floating transport, so they never cover the header toolbars. With
-    // the chrome hidden the stack sits under the restore pill, clear of the immersive HUD.
+    // Transient notices share one stack above the stage's own bottom controls and a floating
+    // transport, so they never cover the header toolbars. With the chrome hidden the stack sits
+    // under the restore pill, clear of the immersive HUD.
+    //
+    // Aligned to the stage's right edge, not centred: the comparison divider is the one column
+    // a reviewer reads continuously, and a centred notice sat exactly across it for as long as
+    // the message lasted (UX-14). On the right, a transient covers one source's corner instead
+    // of the seam the two sources are being judged against.
     Column {
         id: notificationStack
 
@@ -5058,7 +5105,9 @@ ApplicationWindow {
 
         z: 990
         spacing: Theme.spaceMain
-        x: Math.round((root.chromeVisible ? (notificationStack.stageLeft + notificationStack.stageRight) / 2 : root.width / 2) - notificationStack.width / 2)
+        // Right edge of the stage, inset 16; the children anchor to `parent.right` so a narrow
+        // toast does not drift back towards the divider.
+        x: Math.round((root.chromeVisible ? notificationStack.stageRight : root.width) - notificationStack.width - 16)
         y: Math.round(root.chromeVisible ? notificationStack.stageFloor - 12 - notificationStack.height : chromeRestorePill.y + chromeRestorePill.height + 10)
 
         Rectangle {
@@ -5068,7 +5117,7 @@ ApplicationWindow {
             radius: Theme.radiusLarge
             color: Theme.oscGlass
             border.color: Theme.oscBorder
-            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.right: parent.right
 
             Text {
                 id: intentToastText
@@ -5094,7 +5143,7 @@ ApplicationWindow {
             radius: Theme.radiusLarge
             color: Theme.oscGlass
             border.color: Theme.oscBorder
-            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.right: parent.right
 
             Column {
                 id: queueColumn
@@ -5182,7 +5231,7 @@ ApplicationWindow {
             radius: Theme.radiusLarge
             color: Theme.oscGlass
             border.color: Theme.oscBorder
-            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.right: parent.right
 
             Row {
                 id: progressRow
@@ -5228,7 +5277,7 @@ ApplicationWindow {
             radius: Theme.radiusLarge
             color: Theme.errorPanel
             border.color: Theme.errorBorder
-            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.right: parent.right
 
             Text {
                 id: dropErrorText
@@ -5318,6 +5367,13 @@ ApplicationWindow {
         }
 
         HoverHandler {
+            // While the chrome is hidden this band is the one *passive* affordance that wakes
+            // the transport: canvas hover stays quiet there (see onOscRevealRequested), and the
+            // gesture paths (press / drag / wheel) wake it without the pointer ever reaching the
+            // band. The objectName lets the contract suite read the hover state instead of
+            // guessing from where the physical cursor happens to sit.
+            objectName: "immersiveWakeHover"
+
             onHoveredChanged: {
                 if (hovered)
                     root.revealImmersiveOsc();

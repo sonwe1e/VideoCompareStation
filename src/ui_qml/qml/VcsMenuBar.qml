@@ -28,7 +28,9 @@ MenuBar {
         contentItem: Text {
             text: topLevelItem.text
             color: topLevelItem.enabled ? control.textColor : control.mutedTextColor
-            font.pixelSize: Theme.fontMono
+            // Body size, not the mono readout size: the menu is an entry point, and it used to
+            // render one pixel smaller than the copy it opens.
+            font.pixelSize: Theme.fontBody
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
         }

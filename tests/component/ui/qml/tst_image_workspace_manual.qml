@@ -111,6 +111,8 @@ Item {
             imageReview.viewMode = 0;
             imageReview.numericFormat = 0;
             imageReview.fadePosition = 0.5;
+            imageReview.wipeOrientation = 0;
+            imageReview.wipePosition = 0.5;
             imageReview.diffGain = 4;
             imageReview.alphaFilterEnabled = false;
             imageReview.alphaThreshold = 0;
@@ -578,6 +580,55 @@ Item {
             keyClick(Qt.Key_T);
             compare(imageReview.compareMode, 0);
             compare(workspace.singleViewShowSecondary, true);
+        }
+
+        // UX-15: the image split line used to be drag-only while the video surface had
+        // Alt+arrows since E1. Same chords, same steps, same axis gate as ReviewShortcuts.
+        // They are application Shortcuts for the same reason the video side uses them: arrow
+        // keys are consumed by whichever child owns the arrow keys for its own navigation, so
+        // a branch in the workspace key handler would only fire when nothing else wanted them.
+        function test_alt_arrows_move_the_split_line_on_its_own_axis() {
+            imageReview.compareMode = 5;
+            imageReview.wipeOrientation = 0; // vertical line: it travels left/right
+            imageReview.wipePosition = 0.5;
+            keyClick(Qt.Key_Right, Qt.AltModifier);
+            compare(imageReview.wipePosition, 0.51);
+            keyClick(Qt.Key_Left, Qt.AltModifier);
+            compare(imageReview.wipePosition, 0.5);
+            keyClick(Qt.Key_Right, Qt.ShiftModifier | Qt.AltModifier);
+            compare(imageReview.wipePosition, 0.55, "Shift takes the 5 % step");
+            // The axis the line cannot travel stays free for the platform binding.
+            keyClick(Qt.Key_Up, Qt.AltModifier);
+            compare(imageReview.wipePosition, 0.55);
+
+            imageReview.wipeOrientation = 1; // horizontal line: it travels up/down
+            keyClick(Qt.Key_Right, Qt.AltModifier);
+            compare(imageReview.wipePosition, 0.55, "the wrong axis must not move the line");
+            keyClick(Qt.Key_Up, Qt.AltModifier);
+            compare(imageReview.wipePosition, 0.54);
+            keyClick(Qt.Key_Down, Qt.AltModifier);
+            compare(imageReview.wipePosition, 0.55);
+
+            // Both ends clamp instead of running past the frame.
+            imageReview.wipePosition = 0.995;
+            keyClick(Qt.Key_Down, Qt.AltModifier);
+            compare(imageReview.wipePosition, 1);
+
+            // Edit mode is the only place this workspace has text entry, and it turns the
+            // chords off wholesale rather than trusting focus to sort it out.
+            imageReview.wipePosition = 0.5;
+            workspace.imageEdit = imageEditMock;
+            imageEditMock.beginSession(2, "mock", "mock");
+            keyClick(Qt.Key_Down, Qt.AltModifier);
+            compare(imageReview.wipePosition, 0.5, "editing keeps the split still");
+            imageEditMock.endSession();
+            workspace.imageEdit = null;
+
+            // Outside the wipe comparison the chord is inert - the same gate the W key uses.
+            imageReview.compareMode = 0;
+            imageReview.wipePosition = 0.5;
+            keyClick(Qt.Key_Down, Qt.AltModifier);
+            compare(imageReview.wipePosition, 0.5);
         }
 
         function test_space_does_not_switch_while_editing_or_in_a_text_field() {

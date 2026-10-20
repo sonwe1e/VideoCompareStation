@@ -35,7 +35,14 @@ var controlChecked = "#3d0a84ff"
 var primaryText = "#f5f5f7"
 var secondaryText = "#e5e5ea"
 var mutedText = "#a5a5ab"
-var disabledText = "#6c6c70"
+// Inactive controls are exempt from WCAG 1.4.3, and the exemption is only honest while
+// nothing a user must read is published in this colour. The old value (#6c6c70) measured
+// 2.37:1 on `menu`, which made a greyed row unreadable rather than merely inactive - and the
+// comparison menu used to publish its whole "why" through disabled rows. Raised to Apple's
+// dark systemGray (#8e8e93: ~3.7:1 on `menu`, ~5.1:1 on `window`) so the state still reads
+// as unavailable while the label remains legible. Explanations live in `mutedText`, never
+// here; tst_vcs_theme pins both the floor and the separation from `mutedText`.
+var disabledText = "#8e8e93"
 var inverseText = "#ffffff"
 
 // accent is for borders, indicators and focus; filled buttons use accentFill so white labels
@@ -184,6 +191,12 @@ var fontCaption = 11
 // fallback (contextFontMerging exists since 6.8); which substitute font Qt picks is not
 // promised here. Binding either token forces the family - text that should keep the platform
 // default simply leaves font.family unset.
+//
+// fontFamilyUi is the one token QML never binds: a single-family binding is exactly what the
+// token exists to avoid. Its consumer is the application font in DesktopApplication.cpp,
+// which can carry the fallback list ("Segoe UI Variable Text" -> "Segoe UI" ->
+// "Microsoft YaHei UI"). Change this name and that list together; every Text that does not
+// name a family inherits the result.
 var fontFamilyUi = "Segoe UI Variable Text"
 var fontFamilyMono = "Cascadia Mono"
 
@@ -198,10 +211,17 @@ var fontFeaturesNumeric = { "tnum": 1 }
 var lineHeightBody = 1.35
 var lineHeightCompact = 1.25
 
-// Spacing: 4 is the micro step, 8 the primary grid. Larger paddings stay multiples or
-// deliberate literals inside their components.
+// Spacing ladder, from the inside of a control outwards:
+//   micro   (4)  gap between the icons or key labels of one group
+//   main    (8)  horizontal breathing room inside a control
+//   group   (12) between groups - a 1 px divider may take this slot instead
+//   section (16) block/card padding and the space between a card and its neighbours
+// Deliberate, component-specific paddings outside this ladder stay literals in their
+// components; every step above is a multiple of the micro step so nothing drifts to 5 or 7.
 var spaceMicro = 4
 var spaceMain = 8
+var spaceGroup = 12
+var spaceSection = 16
 
 // Hit areas. Common interactive controls are at least 32x32 logical pixels so a 100% DPI
 // pointer still lands on them; the main play/pause button sits in its own 40-44 band.

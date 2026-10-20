@@ -1608,6 +1608,75 @@ Rectangle {
         }
     }
 
+    // UX-15: this workspace's split line was drag-only, while the video surface has had
+    // Alt+arrows since E1. These mirror ReviewShortcuts one-for-one - 1 % steps, Shift for 5 %,
+    // axis-gated - so the same chord moves the same control in both workspaces.
+    //
+    // They are application Shortcuts, not extra branches in the workspace key handler: arrow
+    // keys never reach that handler because a focused child (canvas, list) consumes them for
+    // its own navigation, which is exactly why the video side uses Shortcuts too. `W` stays in
+    // the key handler - a bare letter there is what keeps text fields safe; an Alt chord has
+    // no such competition, and edit mode (the only place this workspace has text entry) turns
+    // these off wholesale.
+    readonly property bool wipeKeysActive: control.visible && !control.editModeActive && !control.anyEditDialogOpen && control.compareMode === 5 && control.hasPair
+    readonly property bool wipeHorizontal: control.imageReview ? control.imageReview.wipeOrientation === 1 : false
+
+    function nudgeWipe(delta) {
+        if (!control.imageReview)
+            return;
+        const current = Number(control.imageReview.wipePosition);
+        control.imageReview.wipePosition = Math.max(0, Math.min(1, current + delta));
+    }
+
+    Shortcut {
+        sequence: "Alt+Left"
+        context: Qt.ApplicationShortcut
+        enabled: control.wipeKeysActive && !control.wipeHorizontal
+        onActivated: control.nudgeWipe(-0.01)
+    }
+    Shortcut {
+        sequence: "Alt+Right"
+        context: Qt.ApplicationShortcut
+        enabled: control.wipeKeysActive && !control.wipeHorizontal
+        onActivated: control.nudgeWipe(0.01)
+    }
+    Shortcut {
+        sequence: "Shift+Alt+Left"
+        context: Qt.ApplicationShortcut
+        enabled: control.wipeKeysActive && !control.wipeHorizontal
+        onActivated: control.nudgeWipe(-0.05)
+    }
+    Shortcut {
+        sequence: "Shift+Alt+Right"
+        context: Qt.ApplicationShortcut
+        enabled: control.wipeKeysActive && !control.wipeHorizontal
+        onActivated: control.nudgeWipe(0.05)
+    }
+    Shortcut {
+        sequence: "Alt+Up"
+        context: Qt.ApplicationShortcut
+        enabled: control.wipeKeysActive && control.wipeHorizontal
+        onActivated: control.nudgeWipe(-0.01)
+    }
+    Shortcut {
+        sequence: "Alt+Down"
+        context: Qt.ApplicationShortcut
+        enabled: control.wipeKeysActive && control.wipeHorizontal
+        onActivated: control.nudgeWipe(0.01)
+    }
+    Shortcut {
+        sequence: "Shift+Alt+Up"
+        context: Qt.ApplicationShortcut
+        enabled: control.wipeKeysActive && control.wipeHorizontal
+        onActivated: control.nudgeWipe(-0.05)
+    }
+    Shortcut {
+        sequence: "Shift+Alt+Down"
+        context: Qt.ApplicationShortcut
+        enabled: control.wipeKeysActive && control.wipeHorizontal
+        onActivated: control.nudgeWipe(0.05)
+    }
+
     // Shared status-bar chip: a dark raised plate with a hairline border, where the semantic
     // colour lives in one 6 px dot (or a single glyph) instead of a whole saturated pill. A row
     // of them then reads as one instrument strip rather than a rainbow of one-off badges.
@@ -1619,6 +1688,10 @@ Rectangle {
         property color dotColor: Theme.mutedText
         property color glyphColor: Theme.mutedText
         property bool dotVisible: true
+        // Hollow ring for "no reading yet". A filled dot is a claim; a ring is the absence of
+        // one, so an unprobed/unapplied state stays distinguishable from an applied state at
+        // 6 px without inventing a fourth hue next to the source-identity colours.
+        property bool dotHollow: false
 
         height: Theme.hitAreaMinimum
         implicitWidth: badgeContent.implicitWidth + 20
@@ -1638,7 +1711,9 @@ Rectangle {
                 width: 6
                 height: 6
                 radius: 3
-                color: badge.dotColor
+                color: badge.dotHollow ? "transparent" : badge.dotColor
+                border.width: badge.dotHollow ? 1 : 0
+                border.color: badge.dotColor
                 anchors.verticalCenter: parent.verticalCenter
             }
 
@@ -3366,9 +3441,11 @@ Rectangle {
                         visible: control.hasPair
                     }
                     // E1: wipe split axis toggle - the discoverable entry for the image
-                    // workspace, shown only while the wipe comparison is active. The label
-                    // names the halves (左右/上下) instead of the axis jargon, and switching
-                    // keeps the ratio, the pair and the decoded buffers untouched.
+                    // workspace, shown only while the wipe comparison is active. The noun is
+                    // 分割线, the same one the mode bar, the video HUD and the shortcut table
+                    // use (UX-10); the qualifier names the halves (左右/上下) instead of the
+                    // axis jargon. Switching keeps the ratio, the pair and the decoded buffers
+                    // untouched.
                     ImageCommandButton {
                         objectName: "imageWipeOrientationButton"
                         visible: control.hasPair && control.compareMode === 5
@@ -3376,7 +3453,7 @@ Rectangle {
                         implicitHeight: Theme.hitAreaMinimum
                         leftPadding: 8
                         rightPadding: 8
-                        text: control.imageReview && control.imageReview.wipeOrientation === 1 ? qsTr("分屏：上下") : qsTr("分屏：左右")
+                        text: control.imageReview && control.imageReview.wipeOrientation === 1 ? qsTr("分割线：上下") : qsTr("分割线：左右")
                         onClicked: {
                             if (control.imageReview)
                                 control.imageReview.wipeOrientation = control.imageReview.wipeOrientation === 1 ? 0 : 1;
@@ -3876,12 +3953,17 @@ Rectangle {
                         }
                         ImageCommandButton {
                             objectName: "imageEditToolSmartSelectButton"
+                            // Always present: hiding the tool when the runtime is missing made
+                            // its own "检测模型" entry unreachable (you had to select the tool
+                            // to find the button that enables it). Disabled plus an actionable
+                            // reason keeps the path discoverable.
                             visible: control.editModeActive
+                            enabled: !!(control.imageEdit && control.imageEdit.smartSegmentAvailable)
                             checkable: true
                             checked: control.editTool === "smart_select"
                             mirrorsState: true
                             text: qsTr("智能抠图")
-                            helpText: qsTr("框选目标物体，AI 自动分割轮廓并抠出透明背景。")
+                            helpText: (control.imageEdit && control.imageEdit.smartSegmentAvailable) ? qsTr("框选目标物体，AI 自动分割轮廓并抠出透明背景。") : qsTr("需要 models 目录下的 onnxruntime.dll 与 sam2_encoder/decoder.onnx。放入文件后，点击下方编辑栏的「检测模型」。")
                             onClicked: control.editTool = "smart_select"
                         }
                         ImageCommandButton {
@@ -4126,6 +4208,34 @@ Rectangle {
                                 verticalCenter: parent.verticalCenter
                             }
 
+                            // Persistent model probe: reachable from every tool, so a user who
+                            // drops the runtime into models/ never has to discover a hidden
+                            // tool to re-check. Its result lands in the workspace status line.
+                            ReviewActionButton {
+                                objectName: "imageEditProbeSmartSelectButton"
+                                visible: control.imageEdit !== null
+                                text: qsTr("检测模型")
+                                implicitHeight: 30
+                                leftPadding: 10
+                                rightPadding: 10
+                                helpText: qsTr("在 models 目录中查找 onnxruntime.dll、sam2_encoder.onnx 与 sam2_decoder.onnx；就绪后「智能抠图」会变为可用。")
+                                onClicked: {
+                                    if (control.imageEdit)
+                                        // QML does not apply C++ default arguments, so the
+                                        // explicit empty directory is required here.
+                                        control.imageEdit.probeSmartSegment("");
+                                }
+                            }
+                            Text {
+                                objectName: "imageEditSmartSegmentReadyText"
+                                visible: control.imageEdit !== null && control.imageEdit.smartSegmentAvailable
+                                height: 30
+                                verticalAlignment: Text.AlignVCenter
+                                text: qsTr("智能抠图已就绪")
+                                color: Theme.mutedText
+                                font.pixelSize: Theme.fontCaption
+                            }
+
                             ReviewActionButton {
                                 objectName: "imageEditBrushColorButton"
                                 visible: control.editTool === "brush" || control.editTool === "fill" || control.editTool === "rect" || control.editTool === "arrow" || control.editTool === "text"
@@ -4333,7 +4443,7 @@ Rectangle {
                                     if (!control.imageEdit)
                                         return "";
                                     if (!control.imageEdit.smartSegmentAvailable)
-                                        return qsTr("AI 模型未就绪 (将 onnxruntime.dll 与 sam2 模型放入 models 目录后自动使能)");
+                                        return qsTr("AI 模型未就绪：请将 onnxruntime.dll 与 sam2_encoder/decoder.onnx 放入 models 目录，再点击「检测模型」。");
                                     return qsTr("在画面上拖拽框选要抠出的目标物体 (支持调整选区与锚点)");
                                 }
                                 color: (control.imageEdit && control.imageEdit.smartSegmentAvailable) ? Theme.mutedText : Theme.warning
@@ -4345,18 +4455,6 @@ Rectangle {
                                 text: qsTr("紧凑裁剪")
                                 checked: control.smartSegmentTightCrop
                                 onToggled: control.smartSegmentTightCrop = checked
-                            }
-                            ReviewActionButton {
-                                objectName: "imageEditProbeSmartSelectButton"
-                                visible: control.editTool === "smart_select" && control.imageEdit && !control.imageEdit.smartSegmentAvailable
-                                text: qsTr("检测模型")
-                                implicitHeight: 30
-                                leftPadding: 10
-                                rightPadding: 10
-                                onClicked: {
-                                    if (control.imageEdit)
-                                        control.imageEdit.probeSmartSegment();
-                                }
                             }
                             ReviewActionButton {
                                 objectName: "imageEditCancelSmartSelectButton"
@@ -6366,9 +6464,14 @@ Rectangle {
             spacing: 12
 
             Text {
+                objectName: "imageZoomReadout"
                 text: qsTr("缩放 %1%（%2）").arg(control.displayPercent).arg(control.displayPercentMode)
                 color: Theme.primaryText
                 font.pixelSize: 12
+                // The one readout the theme's tnum token was written for: zooming re-renders
+                // these digits in place, and proportional figures made the whole status row
+                // shift left and right on every step (UX-18).
+                font.features: Theme.fontFeaturesNumeric
                 height: Theme.hitAreaMinimum
                 verticalAlignment: Text.AlignVCenter
             }
@@ -6512,7 +6615,23 @@ Rectangle {
                 objectName: "imagePrimaryColorStatusBadge"
                 visible: Boolean(control.imageReview && control.hasPrimary)
                 text: control.imageReview ? qsTr("A · ") + control.imageReview.primaryColorStateCompactText : ""
-                dotColor: control.imageReview && control.imageReview.primaryColorProfileNeedsFallback ? Theme.warning : Theme.information
+                // "未探测" / "配置未转换" are absences of colour management, not successes. Only
+                // a conversion that actually ran earns the filled information dot; an
+                // unsupported/corrupt profile keeps warning; everything else is the hollow
+                // neutral ring that means "no reading". Without this split the badge reported
+                // "I do not know" in the same green as "applied", which is the one thing this
+                // product must not do (product intent section 2).
+                //
+                // The dot reads colorDisplayApplied, not colorConversionApplied: the latter
+                // only records the decode-time format conversion and stays false for a native
+                // RGBA8 source that still gets a display-profile transform. Display-applied is
+                // the very predicate colorStateCompactText uses to decide it may print
+                // "已转换", so the ring and the sentence are driven by one expression and can
+                // never disagree.
+                readonly property bool colorFallback: control.imageReview ? control.imageReview.primaryColorProfileNeedsFallback : false
+                readonly property bool colorApplied: control.imageReview ? control.imageReview.primaryColorDisplayApplied : false
+                dotColor: colorFallback ? Theme.warning : (colorApplied ? Theme.information : Theme.mutedText)
+                dotHollow: !colorFallback && !colorApplied
 
                 HoverHandler {
                     id: primaryColorStatusHover
@@ -6529,7 +6648,12 @@ Rectangle {
                 objectName: "imageSecondaryColorStatusBadge"
                 visible: Boolean(control.imageReview && control.hasSecondary)
                 text: control.imageReview ? qsTr("B · ") + control.imageReview.secondaryColorStateCompactText : ""
-                dotColor: control.imageReview && control.imageReview.secondaryColorProfileNeedsFallback ? Theme.warning : Theme.information
+                // Same three-state rule as the A badge, same predicate: display-applied is what
+                // the "已转换" sentence means, so the ring follows it.
+                readonly property bool colorFallback: control.imageReview ? control.imageReview.secondaryColorProfileNeedsFallback : false
+                readonly property bool colorApplied: control.imageReview ? control.imageReview.secondaryColorDisplayApplied : false
+                dotColor: colorFallback ? Theme.warning : (colorApplied ? Theme.information : Theme.mutedText)
+                dotHollow: !colorFallback && !colorApplied
 
                 HoverHandler {
                     id: secondaryColorStatusHover

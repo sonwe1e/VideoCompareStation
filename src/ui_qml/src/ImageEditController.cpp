@@ -52,6 +52,19 @@ constexpr int kMaximumAnnotations = 64;
 constexpr int kMaximumAnnotationWidth = 64;
 constexpr int kMaximumTextSize = 512;
 constexpr int kAnnotationHitTolerance = 5;
+// Smart cutout: a prompt box whose area is below this share of the frame, or whose short side
+// is below kSmallTargetShortEdge, is fed to the encoder as an expanded crop so the target gets
+// more of the 1024-pixel input. The crop is 1.5x the box (a quarter of its size on each side).
+constexpr qreal kSmallTargetAreaShare = 0.25;
+constexpr int kSmallTargetShortEdge = 512;
+constexpr qreal kCropContextMargin = 0.25;
+// Reject a mask that selected nothing or effectively the whole frame: the cutout would either
+// be a fully transparent frame or a no-op step, and both should surface as an error instead of
+// landing on the undo stack. "Nothing" is any zero solid coverage (a fraction would reject a
+// legitimately tiny target on a very large frame). The upper bound keeps a little slack for a
+// soft frame border, so a subject that legitimately fills a tight crop is not refused.
+constexpr qreal kMinimumSolidCoverage = 0.0;
+constexpr qreal kMaximumSolidCoverage = 0.999;
 
 [[nodiscard]] QFont annotationFont(const int pixelSize) {
     QFont font;
@@ -727,6 +740,9 @@ public:
     QElapsedTimer annotationPreviewClock;
     Sam2Segmenter segmenter;
     qint64 segmenterEncodedCacheKey = 0;
+    // Test-only override; empty in production. Kept beside the segmenter so both paths share
+    // the same post-processing in smartSegmentRect.
+    std::function<QImage(const QImage&, const QRect&)> smartMaskProducer;
 
     [[nodiscard]] bool canAddAnnotation() const {
         return annotations.size() < static_cast<std::size_t>(kMaximumAnnotations);
@@ -1828,7 +1844,15 @@ QString ImageEditController::smartSegmentStatus() const {
 bool ImageEditController::probeSmartSegment(const QString& explicitDir) {
     const bool available = impl_->segmenter.probe(explicitDir);
     emit smartSegmentStateChanged();
+    // The model state has no dedicated status line; routing it through the shared status
+    // surface is what makes "click 检测模型" produce observable feedback.
+    setStatus(available ? tr("智能抠图已就绪。") : impl_->segmenter.statusMessage());
     return available;
+}
+
+void ImageEditController::setSmartMaskProducerForTesting(
+    std::function<QImage(const QImage&, const QRect&)> producer) {
+    impl_->smartMaskProducer = std::move(producer);
 }
 
 bool ImageEditController::smartSegmentRect(
@@ -1837,11 +1861,12 @@ bool ImageEditController::smartSegmentRect(
         setStatus(tr("没有正在编辑的图片。"));
         return false;
     }
-    if (!impl_->segmenter.isAvailable()) {
+    const bool hasProducer = impl_->smartMaskProducer != nullptr;
+    if (!hasProducer && !impl_->segmenter.isAvailable()) {
         const bool probed = impl_->segmenter.probe();
         emit smartSegmentStateChanged();
         if (!probed) {
-            setStatus(tr("AI 抠图模型未就绪，请将 onnxruntime.dll 及 sam2 模型放入 models 目录。"));
+            setStatus(impl_->segmenter.statusMessage());
             return false;
         }
     }
@@ -1849,35 +1874,95 @@ bool ImageEditController::smartSegmentRect(
         setStatus(tr("选区无效。"));
         return false;
     }
+    const QRect imageBounds{0, 0, impl_->working.width(), impl_->working.height()};
     const QRect wanted{x, y, width, height};
-    const QRect bounded =
-        wanted.intersected(QRect{0, 0, impl_->working.width(), impl_->working.height()});
+    const QRect bounded = wanted.intersected(imageBounds);
     if (bounded.isEmpty()) {
         setStatus(tr("选区超出图片范围。"));
         return false;
     }
 
-    if (impl_->working.cacheKey() != impl_->segmenterEncodedCacheKey) {
+    // Small-target path: the encoder always sees a 1024-wide downscale, which can leave a
+    // small subject at only a handful of pixels. Feed it an expanded crop instead, so the
+    // subject gets proportionally more input resolution. The crop is skipped when the
+    // expansion covers the whole frame anyway.
+    const bool smallTarget =
+        bounded.width() < kSmallTargetShortEdge || bounded.height() < kSmallTargetShortEdge ||
+        static_cast<qreal>(bounded.width()) * static_cast<qreal>(bounded.height()) <
+            kSmallTargetAreaShare * static_cast<qreal>(imageBounds.width()) *
+                static_cast<qreal>(imageBounds.height());
+    QRect cropRect = imageBounds;
+    if (smallTarget) {
+        const int marginX = static_cast<int>(std::lround(bounded.width() * kCropContextMargin));
+        const int marginY = static_cast<int>(std::lround(bounded.height() * kCropContextMargin));
+        cropRect = bounded.adjusted(-marginX, -marginY, marginX, marginY).intersected(imageBounds);
+    }
+    const bool cropped = cropRect != imageBounds;
+    const QImage inferenceImage = cropped ? impl_->working.copy(cropRect) : impl_->working;
+    const QRect prompt = bounded.translated(-cropRect.topLeft());
+
+    QImage mask;
+    if (hasProducer) {
+        mask = impl_->smartMaskProducer(inferenceImage, prompt);
+    } else if (cropped) {
+        // A crop is always a new image, so the whole-frame embedding cannot be reused. Reset
+        // the key as well: leaving it pointed at the last whole-frame encoding would let the
+        // next full-frame request trust the crop's embeddings.
+        impl_->segmenterEncodedCacheKey = 0;
         setStatus(tr("正在进行特征编码..."));
-        if (!impl_->segmenter.encodeImage(impl_->working)) {
+        if (!impl_->segmenter.encodeImage(inferenceImage)) {
             setStatus(impl_->segmenter.statusMessage());
             return false;
         }
-        impl_->segmenterEncodedCacheKey = impl_->working.cacheKey();
+        setStatus(tr("正在分割目标..."));
+        mask = impl_->segmenter.segmentBox(prompt);
+    } else {
+        if (impl_->working.cacheKey() != impl_->segmenterEncodedCacheKey) {
+            setStatus(tr("正在进行特征编码..."));
+            if (!impl_->segmenter.encodeImage(impl_->working)) {
+                setStatus(impl_->segmenter.statusMessage());
+                return false;
+            }
+            impl_->segmenterEncodedCacheKey = impl_->working.cacheKey();
+        }
+        setStatus(tr("正在分割目标..."));
+        mask = impl_->segmenter.segmentBox(bounded);
     }
-
-    setStatus(tr("正在分割目标..."));
-    const QImage mask = impl_->segmenter.segmentBox(bounded);
     if (mask.isNull()) {
         setStatus(tr("智能抠图失败: 未能生成有效分割。"));
         return false;
     }
 
+    // Degenerate masks are errors, not steps: a fully transparent frame or a no-op cutout on
+    // the undo stack would look like success and give the user nothing to undo meaningfully.
+    const qreal coverage = Sam2Segmenter::solidCoverage(mask);
+    if (coverage <= kMinimumSolidCoverage) {
+        setStatus(tr("智能抠图失败: 未识别到目标，请调整选区后重试。"));
+        return false;
+    }
+    if (coverage > kMaximumSolidCoverage) {
+        setStatus(tr("智能抠图失败: 选区覆盖了整张图片，请缩小选区后重试。"));
+        return false;
+    }
+
     QRect cutoutBbox;
-    QImage cutout = Sam2Segmenter::applyCutout(impl_->working, mask, tightCrop, &cutoutBbox);
+    QImage cutout = Sam2Segmenter::applyCutout(inferenceImage, mask, tightCrop, &cutoutBbox);
     if (cutout.isNull()) {
         setStatus(tr("智能抠图失败: 目标为空。"));
         return false;
+    }
+    // The command and the annotations live in working-image coordinates; both the tight bbox
+    // and the non-tight canvas have to be offset back out of the inference crop.
+    if (cropped) {
+        cutoutBbox.translate(cropRect.topLeft());
+    }
+    if (cropped && !tightCrop) {
+        QImage composed(impl_->working.size(), QImage::Format_ARGB32);
+        composed.fill(Qt::transparent);
+        QPainter painter(&composed);
+        painter.drawImage(cropRect.topLeft(), cutout);
+        painter.end();
+        cutout = composed;
     }
 
     impl_->pushStep(std::make_unique<Impl::SmartCutoutCommand>(

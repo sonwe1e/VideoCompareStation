@@ -51,6 +51,9 @@ Rectangle {
     // Step-2 comparison export: one action copies the labeled comparison capture.
     signal copyComparisonRequested
     signal inspectorRequested
+    // EX-03: a single-video session keeps this bar on screen, and the way out of that state is
+    // the very same "添加视频" action the menu bar and the source strip already use.
+    signal addVideoRequested
 
     // qmllint disable import unqualified unresolved-type
     readonly property bool pairRelevant: currentMode === ComparisonSurface.Wipe || currentMode === ComparisonSurface.Difference || currentMode === ComparisonSurface.AnalysisGrid
@@ -80,9 +83,16 @@ Rectangle {
     readonly property int canvasFocusRequestReference: 1
     readonly property int canvasFocusRequestSourceSlot: 2
 
+    // EX-03: a session with one video is not a comparison yet, but it is the state every
+    // comparison starts from - so the bar stays visible and the four comparison tasks stay on
+    // screen, disabled, next to the one sentence that says why. The entries that only make
+    // sense once a second source exists (direct look, layout menu) appear with it.
+    readonly property bool comparisonReady: sourceCount > 1
+    readonly property bool singleSource: sourceCount === 1
+
     objectName: "compareModeBar"
-    height: sourceCount > 1 ? Math.max(Theme.barRowHeight, modeActions.implicitHeight + 8) : 0
-    visible: sourceCount > 1
+    height: sourceCount >= 1 ? Math.max(Theme.barRowHeight, modeActions.implicitHeight + 8) : 0
+    visible: sourceCount >= 1
     color: "transparent"
     border.color: "transparent"
 
@@ -123,11 +133,15 @@ Rectangle {
             objectName: "sideModeButton"
             text: qsTr("并排")
             modeValue: ComparisonSurface.SideBySide
+            helpText: qsTr("按 1 → 左右两窗看同一帧")
         }
         ModeButton {
             objectName: "wipeModeButton"
-            text: qsTr("划线")
+            // One name for this control everywhere it appears: toolbar, menu, inspector and
+            // help all say 分割线 (UX-10). The old toolbar label was the only 划线.
+            text: qsTr("分割线")
             modeValue: ComparisonSurface.Wipe
+            helpText: qsTr("按 2 → 拖分界线对照同一位置")
         }
         // V03: local comparison is a top-level task, not an overflow entry. V01 already
         // samples the decoded source textures for 2-3 same-ROI windows under one shared ROI,
@@ -138,12 +152,44 @@ Rectangle {
             objectName: "roiTripletTaskButton"
             text: qsTr("局部联动")
             modeValue: ComparisonSurface.RoiTriplet
+            helpText: qsTr("同一关注区域 → 2–3 个窗口同步放大")
         }
         // Step-2 difference entry: the button itself offers the flavors the review named
         // (overlay highlight / pure diff), mirroring the image workspace's diff dropdown.
         DiffModeButton {
             objectName: "diffModeButton"
             text: control.differenceFlavorLabel.length > 0 ? qsTr("差异·%1 ▾").arg(control.differenceFlavorLabel) : qsTr("差异定位 ▾")
+            helpText: qsTr("按 3 → 画出像素差，再回原图确认")
+        }
+        // EX-03: the four tasks above are disabled without a second source, and a greyed
+        // button alone never says why. This sentence sits in the same row, in the muted
+        // caption colour, and wraps instead of shrinking whenever the window is narrow.
+        Text {
+            objectName: "singleSourceCompareHint"
+
+            visible: control.singleSource
+            // A fixed, wrap-friendly width: the sentence keeps its font size on a narrow
+            // window and takes a second line instead of being clipped or shrunk.
+            width: 160
+            text: qsTr("对比需要至少两个视频")
+            color: Theme.mutedText
+            font.pixelSize: Theme.fontCaption
+            lineHeight: Theme.lineHeightCompact
+            wrapMode: Text.WordWrap
+        }
+        // EX-03: the way out of the single-source state, in the bar itself - the same action
+        // the 文件 menu and the source strip run, so there is one add path, not a second one.
+        VcsToolButton {
+            objectName: "modeBarAddVideoButton"
+            visible: control.singleSource
+            text: qsTr("添加视频…")
+            implicitWidth: 96
+            implicitHeight: Theme.hitAreaMinimum
+            labelPixelSize: Theme.fontBody
+            enabled: !control.busy
+            helpText: qsTr("选好第二个视频 → 自动进入对比")
+            Accessible.name: qsTr("添加视频")
+            onClicked: control.addVideoRequested()
         }
         // qmllint disable import unqualified unresolved-type
         // Middle group - "who is compared against whom": one shallow capsule carries the pair
@@ -246,6 +292,7 @@ Rectangle {
                     implicitWidth: 86
                     implicitHeight: Theme.hitAreaMinimum
                     labelPixelSize: Theme.fontBody
+                    helpText: qsTr("按 C → 参考不动，换另一个版本")
                     Accessible.name: qsTr("固定参考切换候选")
                     onClicked: control.switchCandidateRequested()
                 }
@@ -269,6 +316,8 @@ Rectangle {
                     implicitWidth: 136
                     implicitHeight: Theme.hitAreaMinimum
                     labelPixelSize: Theme.fontBody
+                    helpText: control.peekTargetValid ? qsTr("按住 → 看参考原图，松开恢复（`）") : qsTr("会话里还没有可直看的参考源")
+                    Accessible.name: text
                     Accessible.description: control.peekTargetValid ? qsTr("按住显示会话的参考（GT）源，即使 GT 不在当前比较对中；松开恢复差异视图。键盘 ` 切换，Shift+` 锁定。") : qsTr("当前会话没有可直看的参考（GT）源。")
                     onPressed: control.differencePeekChanged(true)
                     onReleased: control.differencePeekChanged(false)
@@ -286,7 +335,7 @@ Rectangle {
         // comparison view. The switch keeps the frame, ROI/zoom/pan, the GT role and every
         // other entry on this bar untouched (P05 canvasFocus chain, no new state).
         Rectangle {
-            visible: control.sourceCount > 1
+            visible: control.comparisonReady
             width: 1
             height: Theme.hitAreaMinimum
             color: Theme.border
@@ -304,6 +353,12 @@ Rectangle {
                 text: qsTr("看 %1").arg(String.fromCharCode(65 + index))
                 focusSlot: index
                 referenceBadge: index === control.referenceSourceSlot
+                // EX-03: direct look is a way to look at a source *instead of* comparing it, so
+                // it appears with the second source. The delegate stays instantiated and hidden
+                // rather than dropped from the model, so a single-source session has no entry
+                // here but the per-source binding still exists for anyone holding it.
+                visible: control.comparisonReady
+                helpText: qsTr("单击 → 整屏只看 %1，再点返回").arg(String.fromCharCode(65 + index))
             }
         }
 
@@ -315,8 +370,10 @@ Rectangle {
 
             objectName: "layoutModesButton"
             text: control.layoutModeActive ? qsTr("布局·%1 ▾").arg(control.layoutModeLabel) : qsTr("布局 ▾")
+            visible: control.comparisonReady
             implicitWidth: control.layoutModeActive ? 136 : 84
             implicitHeight: Theme.hitAreaMinimum
+            helpText: qsTr("换排布 → 三联、参考聚焦、分析网格")
             onClicked: layoutMenu.open()
             labelPixelSize: Theme.fontBody
 
@@ -366,7 +423,9 @@ Rectangle {
         mirrorsState: true
         implicitHeight: Theme.hitAreaMinimum
         implicitWidth: 80
-        enabled: !control.busy
+        // EX-03: a comparison task needs something to compare against. The reason is printed
+        // beside the buttons (singleSourceCompareHint), never left to the grey alone.
+        enabled: !control.busy && control.comparisonReady
         leftPadding: 10
         rightPadding: 10
         onClicked: control.modeRequested(modeValue)
@@ -517,7 +576,8 @@ Rectangle {
         mirrorsState: true
         implicitHeight: Theme.hitAreaMinimum
         implicitWidth: control.differenceFlavorLabel.length > 0 ? 136 : 100
-        enabled: !control.busy
+        // Same single-source rule as ModeButton (EX-03).
+        enabled: !control.busy && control.comparisonReady
         leftPadding: 10
         rightPadding: 10
         onClicked: diffFlavorMenu.open()
@@ -608,6 +668,8 @@ Rectangle {
         leftPadding: 12
         rightPadding: 12
         prominent: control.inspectorOpen
+        helpText: qsTr("打开检查器 → 看源信息与差异统计")
+        Accessible.name: control.inspectorOpen ? qsTr("隐藏检查器") : qsTr("检查器")
         onClicked: control.inspectorRequested()
         anchors {
             right: parent.right
@@ -628,6 +690,8 @@ Rectangle {
         implicitWidth: 112
         implicitHeight: Theme.hitAreaMinimum
         labelPixelSize: Theme.fontBody
+        helpText: qsTr("复制当前画面 → 带来源标注到剪贴板")
+        Accessible.name: qsTr("复制对比图")
         onClicked: control.copyComparisonRequested()
         anchors {
             right: inspectorToggleButton.left

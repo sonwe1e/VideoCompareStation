@@ -2,9 +2,42 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import "ShortcutCatalog.js" as ShortcutCatalog
+import "VcsTheme.js" as Theme
 
 VcsMenuBar {
     id: control
+
+    // A row that states a fact instead of offering an action (version, supported formats). A
+    // disabled MenuItem would be the wrong vehicle: grey rows read as "temporarily broken" and
+    // can be focused by nobody. This keeps the menu's 35 px rhythm with no hover and no trigger.
+    component MenuNote: Item {
+        id: note
+
+        property string noteText: ""
+
+        implicitWidth: 0
+        implicitHeight: noteLabel.implicitHeight + 14
+        // A hidden note must cost nothing, exactly like VcsMenuItem's hidden rows: the menu
+        // layout reads `height`, so leaving it at implicitHeight would reserve a blank band.
+        height: visible ? implicitHeight : 0
+
+        Text {
+            id: noteLabel
+
+            anchors {
+                left: parent.left
+                leftMargin: 12
+                right: parent.right
+                rightMargin: 12
+                verticalCenter: parent.verticalCenter
+            }
+            text: note.noteText
+            color: Theme.mutedText
+            font.pixelSize: Theme.fontCaption
+            lineHeight: Theme.lineHeightCompact
+            wrapMode: Text.Wrap
+        }
+    }
 
     required property var controller
     required property var preferences
@@ -65,9 +98,25 @@ VcsMenuBar {
     signal chromeToggleRequested
     signal fullScreenToggleRequested
     signal viewerFocusRequested
+    signal shortcutHelpRequested
 
     property bool returnViewerFocusAfterClose: false
-    readonly property bool anyMenuOpen: fileMenu.opened || compareMenu.opened || analyzeMenu.opened || viewMenu.opened || settingsMenu.opened
+    readonly property bool anyMenuOpen: fileMenu.opened || compareMenu.opened || analyzeMenu.opened || viewMenu.opened || settingsMenu.opened || helpMenu.opened
+
+    // F10 entry point. Qt Quick's MenuBar has no Alt/F10 activation of its own (the template
+    // only exposes delegate/menus/contentData/menuAt), so the window owns the key and this
+    // function opens the first menu the same way a click would: at the item, with the popup
+    // focused. Up/Down/Enter/Esc then behave exactly as in the pointer path.
+    function focusFirstMenu() {
+        if (control.count <= 0)
+            return false;
+        const item = control.itemAt(0);
+        if (!item || !item.menu || !item.enabled)
+            return false;
+        item.menu.popup(item, 0, item.height);
+        item.menu.forceActiveFocus();
+        return true;
+    }
 
     function changeReferenceByIndex(sourceIndex) {
         if (!control.session || sourceIndex < 0 || sourceIndex >= control.sourceIdentities.length)
@@ -177,7 +226,10 @@ VcsMenuBar {
         id: compareMenu
         objectName: "compareMenu"
         title: qsTr("对比")
-        enabled: control.sourceCount > 1 && !control.busy
+        // No menu-level `enabled`. This menu also owns playback continuity and the inspector
+        // toggle, which are useful with a single video; a disabled parent used to make those
+        // unreachable while greying them out for a reason that had nothing to do with them
+        // (UX-09). Comparison rows carry their own source-count gate instead.
         onClosed: {
             if (control.returnViewerFocusAfterClose) {
                 control.returnViewerFocusAfterClose = false;
@@ -185,9 +237,21 @@ VcsMenuBar {
             }
         }
 
+        // The comparison rows are gated per row, so the menu has to say *why* they are grey -
+        // otherwise the user gets three dead rows and no reason, which is the failure mode this
+        // whole change was meant to remove. The reason differs by state, so the note does too:
+        // an image session, an empty window and a single video are not the same situation.
+        MenuNote {
+            objectName: "compareGateNote"
+
+            visible: control.workspaceMode === 1 || control.sourceCount < 2
+            noteText: control.workspaceMode === 1 ? qsTr("图片工作区的左右对比在图片工具里，不使用这三个视频对比方式。") : (control.sourceCount === 0 ? qsTr("还没有打开视频。") : qsTr("对比方式需要至少两个视频。当前只打开了一个。"))
+        }
+
         VcsRadioMenuItem {
             objectName: "sideBySideMenuItem"
             text: qsTr("并排")
+            enabled: control.videoHasSession && control.sourceCount > 1
             checked: control.currentViewMode === 0
             onTriggered: {
                 control.preferences.viewMode = 0;
@@ -197,6 +261,7 @@ VcsMenuBar {
         VcsRadioMenuItem {
             objectName: "wipeMenuItem"
             text: qsTr("分割线")
+            enabled: control.videoHasSession && control.sourceCount > 1
             checked: control.currentViewMode === 5
             onTriggered: {
                 control.preferences.viewMode = 5;
@@ -206,6 +271,7 @@ VcsMenuBar {
         VcsRadioMenuItem {
             objectName: "differenceMenuItem"
             text: qsTr("差异")
+            enabled: control.videoHasSession && control.sourceCount > 1
             checked: control.currentViewMode === 3
             onTriggered: {
                 control.preferences.viewMode = 3;
@@ -566,6 +632,39 @@ VcsMenuBar {
             }
         }
         VcsMenuSeparator {}
+    }
+
+    // I03: the Windows default-open entry point. The controller context property only exists
+    // when the composition root injected the association service, and without it the entry
+    // stays hidden like the other optional services. The dialog itself must NOT be declared
+    // here: a MenuBar only parents Menu children into the scene, so a dialog item declared in
+    // it never reaches a window and its popup silently never opens. Main.qml owns the dialog
+    // and opens it on fileAssociationDialogRequested.
+    // qmllint disable unqualified
+    readonly property var fileAssociationService: typeof fileAssociation !== "undefined" ? fileAssociation : null
+    // qmllint enable unqualified
+
+    VcsMenu {
+        id: settingsMenu
+
+        objectName: "settingsMenu"
+        title: qsTr("设置")
+        // A top-level menu never appears and disappears with the runtime environment (UX-08).
+        // Whether the association service exists now decides one row's enabled state, not the
+        // existence of the whole menu - a menu bar whose shape depends on which services the
+        // build injected is unpredictable.
+        //
+        // The preference rows that used to live under 视图 and 对比 moved here so "where do I
+        // change X" has one answer: shortcuts, autoplay and file association are all settings,
+        // not views and not comparisons.
+
+        VcsMenuItem {
+            objectName: "fileAssociationMenuItem"
+            text: qsTr("文件关联…")
+            enabled: control.fileAssociationService !== null
+            onTriggered: control.fileAssociationDialogRequested()
+        }
+        VcsMenuSeparator {}
         VcsMenu {
             id: shortcutPresetMenu
 
@@ -604,27 +703,36 @@ VcsMenuBar {
         }
     }
 
-    // I03: the Windows default-open entry point. The controller context property only exists
-    // when the composition root injected the association service, and without it the entry
-    // stays hidden like the other optional services. The dialog itself must NOT be declared
-    // here: a MenuBar only parents Menu children into the scene, so a dialog item declared in
-    // it never reaches a window and its popup silently never opens. Main.qml owns the dialog
-    // and opens it on fileAssociationDialogRequested.
-    // qmllint disable unqualified
-    readonly property var fileAssociationService: typeof fileAssociation !== "undefined" ? fileAssociation : null
-    // qmllint enable unqualified
-
+    // Help has its own top-level menu: the shortcut table was already written, tested and
+    // unreachable outside a video session (UX-07), and version/formats had no home at all.
+    // The one action opens the same overlay the ? key does; the notes state facts instead of
+    // pretending to be commands.
     VcsMenu {
-        id: settingsMenu
+        id: helpMenu
 
-        objectName: "settingsMenu"
-        title: qsTr("设置")
-        menuItemVisible: control.fileAssociationService !== null
+        objectName: "helpMenu"
+        title: qsTr("帮助")
+        onClosed: {
+            if (control.returnViewerFocusAfterClose) {
+                control.returnViewerFocusAfterClose = false;
+                control.viewerFocusRequested();
+            }
+        }
 
         VcsMenuItem {
-            objectName: "fileAssociationMenuItem"
-            text: qsTr("文件关联…")
-            onTriggered: control.fileAssociationDialogRequested()
+            objectName: "shortcutHelpMenuItem"
+            text: qsTr("快捷键总表…")
+            onTriggered: {
+                control.shortcutHelpRequested();
+                control.returnViewerFocusAfterClose = true;
+            }
+        }
+        VcsMenuSeparator {}
+        MenuNote {
+            noteText: qsTr("视频 MP4 · MKV · MOV · AVI · M4V\n图片 PNG · JPG · TIFF · BMP · GIF · WebP · PNM")
+        }
+        MenuNote {
+            noteText: qsTr("CompareStation %1 · 视觉审查").arg(Qt.application.version)
         }
     }
 }

@@ -113,7 +113,9 @@ Item {
         implicitHeight: control.compact ? Theme.hitAreaMinimum : 38
         iconExtent: control.compact ? 18 : 22
         controlRadius: control.compact ? 6 : 8
-        toolTipDelay: 650
+        // One tooltip delay for the whole transport: the chips below use the same 500 ms as
+        // this default instead of a slower second feel.
+        toolTipDelay: 500
         // Centred on the taller play button so every icon in the row shares one centre line.
         anchors.verticalCenter: parent.verticalCenter
     }
@@ -130,15 +132,41 @@ Item {
         property bool chipEnabled: true
         property bool chipActive: false
         property bool prominent: false
+        // A chip whose gate can be explained stays hoverable and pressable while disabled:
+        // `chipEnabled` keeps the disabled styling (and stays the contract-tested state), while
+        // the pointer and keyboard path still reach the owner's reason instead of going silent.
+        property bool explainWhenDisabled: false
+        readonly property bool chipInteractive: chip.chipEnabled || chip.explainWhenDisabled
+        // Hover feedback for a disabled-but-explainable chip: it lifts one step without
+        // pretending the action itself is available.
+        readonly property bool explainHover: chip.explainWhenDisabled && !chip.chipEnabled && chipMouse.containsMouse
 
         signal clicked
+
+        // Keyboard reachability. The transport chips are drawn rectangles rather than Controls,
+        // so they declare their own tab stop, activation keys and focus ring. The MouseArea
+        // never takes focus, which is what keeps this ring honest: `activeFocus` can only
+        // arrive through Tab, so a mouse click cannot light it (the focus contract in
+        // VcsTheme.js). Screen readers already got role/name/description; this is the missing
+        // way to reach and press them without a pointer (UX-06).
+        activeFocusOnTab: chip.chipInteractive
+        Accessible.focusable: true
+        Accessible.onPressAction: chip.clicked()
+
+        Keys.onPressed: event => {
+            if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) {
+                event.accepted = true;
+                if (chip.chipInteractive)
+                    chip.clicked();
+            }
+        }
 
         implicitWidth: chipLabel.implicitWidth + (control.compact ? 16 : 20)
         implicitHeight: control.compact ? Theme.hitAreaMinimum : 36
         radius: Theme.radiusMedium
         // Neutral chips read as ordinary controls; export keeps a green edge because it is the only
         // chip that writes a file.
-        color: !chip.chipEnabled ? Theme.disabledPanel : (chip.chipActive ? Theme.accentFill : (chipMouse.containsMouse ? Theme.controlHover : Theme.control))
+        color: !chip.chipEnabled ? (chip.explainHover ? Theme.controlHover : Theme.disabledPanel) : (chip.chipActive ? Theme.accentFill : (chipMouse.containsMouse ? Theme.controlHover : Theme.control))
         // Flat by default: the fill and the label carry the state. Only the active range keeps
         // an accent hairline, because it marks a selected interval rather than a hover.
         border.color: !chip.chipEnabled ? "transparent" : (chip.chipActive ? Theme.accent : (chip.prominent ? (chipMouse.containsMouse ? Theme.successBorder : Theme.successFill) : "transparent"))
@@ -159,6 +187,17 @@ Item {
         Accessible.name: chip.chipText
         Accessible.description: chip.chipHelp
 
+        // 2 px focus ring, keyboard arrival only (same contract as ReviewActionButton).
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: -2
+            radius: chip.radius + 2
+            color: "transparent"
+            border.width: 2
+            border.color: Theme.focus
+            visible: chip.activeFocus
+        }
+
         Text {
             id: chipLabel
 
@@ -166,16 +205,18 @@ Item {
             text: chip.chipText
             font.pixelSize: control.compact ? Theme.fontSecondary : Theme.fontBody
             font.weight: chip.chipActive || chip.prominent ? Font.DemiBold : Font.Normal
-            color: !chip.chipEnabled ? Theme.disabledText : (chip.chipActive ? Theme.inverseText : (chip.prominent ? Theme.success : (chipMouse.containsMouse ? Theme.primaryText : Theme.secondaryText)))
+            color: !chip.chipEnabled ? (chip.explainHover ? Theme.mutedText : Theme.disabledText) : (chip.chipActive ? Theme.inverseText : (chip.prominent ? Theme.success : (chipMouse.containsMouse ? Theme.primaryText : Theme.secondaryText)))
         }
 
         MouseArea {
             id: chipMouse
 
             anchors.fill: parent
-            enabled: chip.chipEnabled
+            // `chipEnabled` gates the action, not the explanation: an explainable chip keeps
+            // receiving hover and clicks so the host can say why the action is unavailable.
+            enabled: chip.chipInteractive
             hoverEnabled: true
-            cursorShape: chip.chipEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+            cursorShape: chip.chipInteractive ? Qt.PointingHandCursor : Qt.ArrowCursor
             onClicked: {
                 chip.clicked();
                 control.restoreFocus();
@@ -184,7 +225,7 @@ Item {
 
         ToolTip.visible: chip.chipHelp.length > 0 && chipMouse.containsMouse
         ToolTip.text: chip.chipHelp
-        ToolTip.delay: 650
+        ToolTip.delay: 500
     }
 
     // One segment of the playback continuity switch. Same toggle language as the compare mode
@@ -215,6 +256,30 @@ Item {
         Accessible.description: option.optionHelp
         Accessible.checkable: true
         Accessible.checked: option.isSelected
+        // Same tab-stop and activation rule as RangeChip: the drawn pill becomes reachable
+        // and pressable without a pointer. Each segment is its own stop - two segments make
+        // the group cheap to traverse, and a roving tab stop would need group-level state the
+        // bar does not otherwise keep.
+        activeFocusOnTab: true
+        Accessible.focusable: true
+        Accessible.onPressAction: control.continuityPolicyRequested(option.policyCode)
+
+        Keys.onPressed: event => {
+            if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) {
+                event.accepted = true;
+                control.continuityPolicyRequested(option.policyCode);
+            }
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: -2
+            radius: option.radius + 2
+            color: "transparent"
+            border.width: 2
+            border.color: Theme.focus
+            visible: option.activeFocus
+        }
 
         Text {
             anchors.centerIn: parent
@@ -238,13 +303,15 @@ Item {
 
         ToolTip.visible: option.optionHelp.length > 0 && optionMouse.containsMouse
         ToolTip.text: option.optionHelp
-        ToolTip.delay: 650
+        ToolTip.delay: 500
     }
 
     Column {
         id: transportColumn
 
-        spacing: Theme.spaceMicro
+        // One group (the button row) per line; the group step keeps four stacked rows from
+        // reading as a single dense block.
+        spacing: Theme.spaceMain
         width: control.width
         anchors.horizontalCenter: parent.horizontalCenter
 
@@ -487,8 +554,9 @@ Item {
                 }
             }
 
-            // E04 walk-rate selector for the long-press step walk. The labels carry the 连帧 prefix
-            // because a bare "1×" beside the playback-rate combo would be ambiguous.
+            // E04 walk-rate selector for the long-press step walk. The labels carry the 长按逐帧
+            // prefix because a bare "1×" beside the playback-rate combo would be ambiguous, and
+            // the prefix names the gesture the rate applies to.
             ToolbarCombo {
                 id: jogRateCombo
 
@@ -496,7 +564,7 @@ Item {
                 implicitWidth: Math.ceil(jogRateLabelMetrics.advanceWidth) + jogRateCombo.leftPadding + jogRateCombo.rightPadding + 4
                 implicitHeight: control.compact ? Theme.hitAreaMinimum : 36
                 anchors.verticalCenter: parent.verticalCenter
-                model: [qsTr("连帧 0.5×"), qsTr("连帧 1×"), qsTr("连帧 2×")]
+                model: [qsTr("长按逐帧 0.5×"), qsTr("长按逐帧 1×"), qsTr("长按逐帧 2×")]
                 currentIndex: {
                     // Nearest ladder value: the controller clamps to the same [0.5, 2.0] range, so
                     // the projection never has to invent an index outside the three labels.
@@ -522,7 +590,7 @@ Item {
                     id: jogRateLabelMetrics
 
                     font: jogRateCombo.font
-                    text: qsTr("连帧 0.5×")
+                    text: qsTr("长按逐帧 0.5×")
                 }
             }
 
@@ -587,7 +655,9 @@ Item {
             // Collapse this row for hosts without range controls.
             height: visible ? implicitHeight : 0
             anchors.horizontalCenter: parent.horizontalCenter
-            spacing: control.compact ? 4 : 6
+            // The three faces (mark / working / export) are separate groups: the group step
+            // separates them while each face keeps its own tight intra-group spacing.
+            spacing: Theme.spaceGroup
 
             // Keep both marking actions after either endpoint has been set.
             Row {
@@ -599,16 +669,18 @@ Item {
 
                 RangeChip {
                     objectName: "transportMarkInButton"
-                    chipText: qsTr("设入点 I")
-                    chipHelp: qsTr("把当前帧设为入点\n快捷键：I")
+                    // Task language on the chip, the editing term in the tooltip: "in point" is
+                    // what the I key is called, "range start" is what the user is doing.
+                    chipText: qsTr("设区间起点 I")
+                    chipHelp: qsTr("把当前帧设为区间起点（入点）\n快捷键：I")
                     chipEnabled: control.canMarkRange
                     onClicked: control.markInRequested()
                 }
 
                 RangeChip {
                     objectName: "transportMarkOutButton"
-                    chipText: qsTr("设出点 O")
-                    chipHelp: qsTr("把当前帧设为出点\n快捷键：O")
+                    chipText: qsTr("设区间终点 O")
+                    chipHelp: qsTr("把当前帧设为区间终点（出点）\n快捷键：O")
                     chipEnabled: control.canMarkRange
                     onClicked: control.markOutRequested()
                 }
@@ -623,9 +695,8 @@ Item {
                 spacing: control.compact ? 4 : 6
 
                 // The single-source range readout, restyled as the capsule that groups the
-                // working chips. The text binding is byte-for-byte the contract-tested one
-                // (MainQmlContractTests reads `transportRangeLabel.text` in every range state,
-                // including the unset state while this capsule is hidden).
+                // working chips. MainQmlContractTests reads `transportRangeLabel.text` in every
+                // range state, including the unset state while this capsule is hidden.
                 Rectangle {
                     id: rangeCapsule
 
@@ -650,9 +721,9 @@ Item {
                             const inText = control.rangeInFrame >= 0 ? String(control.rangeInFrame + 1) : "—";
                             const outText = control.rangeOutFrame >= 0 ? String(control.rangeOutFrame + 1) : "—";
                             if (!control.hasCompleteRange)
-                                return qsTr("入 %1 · 出 %2（区间无效）").arg(inText).arg(outText);
+                                return qsTr("起 %1 · 终 %2（区间无效）").arg(inText).arg(outText);
                             const frameCount = control.rangeOutFrame - control.rangeInFrame + 1;
-                            return qsTr("入 %1 · 出 %2 · %3 帧%4").arg(inText).arg(outText).arg(frameCount).arg(control.rangeLoopActive ? qsTr(" · 循环") : "");
+                            return qsTr("起 %1 · 终 %2 · %3 帧%4").arg(inText).arg(outText).arg(frameCount).arg(control.rangeLoopActive ? qsTr(" · 循环") : "");
                         }
                         color: control.hasCompleteRange ? Theme.accentText : Theme.mutedText
                         font.family: Theme.fontFamilyMono
@@ -670,7 +741,7 @@ Item {
                     objectName: "transportPlayRangeButton"
                     visible: control.hasCompleteRange
                     chipText: qsTr("播放区间")
-                    chipHelp: qsTr("播放入点到出点\n快捷键：\\")
+                    chipHelp: qsTr("播放区间起点到终点\n快捷键：\\")
                     chipEnabled: control.hasCompleteRange
                     onClicked: control.playRangeRequested()
                 }
@@ -678,7 +749,7 @@ Item {
                 RangeChip {
                     objectName: "transportLoopRangeButton"
                     chipText: qsTr("循环 \\")
-                    chipHelp: control.rangeLoopActive ? qsTr("停止循环，改为单次播放区间") : qsTr("循环播放入点到出点；\\ 键单次播放区间")
+                    chipHelp: control.rangeLoopActive ? qsTr("停止循环，改为单次播放区间") : qsTr("循环播放区间起点到终点；\\ 键单次播放区间")
                     chipEnabled: control.hasCompleteRange
                     chipActive: control.rangeLoopActive
                     onClicked: control.rangeLoopRequested()
@@ -691,7 +762,7 @@ Item {
                     // so a loop can be configured before playback starts).
                     visible: control.hasCompleteRange
                     chipText: qsTr("往返")
-                    chipHelp: control.rangePingPongActive ? qsTr("往返开启中：到出点后倒放返回入点；点击恢复单向循环") : qsTr("循环到出点后倒放返回入点，端点不重复")
+                    chipHelp: control.rangePingPongActive ? qsTr("往返开启中：到区间终点后倒放返回起点；点击恢复单向循环") : qsTr("循环到区间终点后倒放返回起点，端点不重复")
                     chipEnabled: control.hasCompleteRange
                     chipActive: control.rangePingPongActive
                     onClicked: control.rangePingPongRequested()
@@ -700,7 +771,7 @@ Item {
                 RangeChip {
                     objectName: "transportClearRangeButton"
                     chipText: qsTr("清除")
-                    chipHelp: qsTr("清除入点与出点")
+                    chipHelp: qsTr("清除区间起点与终点")
                     chipEnabled: control.hasRangeEndpoints
                     onClicked: control.clearRangeRequested()
                 }
@@ -708,9 +779,10 @@ Item {
 
             // Export chip, hoisted out of the two faces (the MainQmlContractTests contract):
             // it stays visible in BOTH faces whenever the host publishes an export service.
-            // With no endpoints it is visible but disabled - a click then answers through the
-            // intent toast, which is why chipEnabled (not visible) carries the gate - and once
-            // a range is marked it enables and opens the clip export dialog. Hoisting also
+            // With no endpoints it is visible but not enabled, and `explainWhenDisabled` keeps
+            // hover and clicks alive: the click still reports the intent, the host's guard
+            // answers with the reason in the existing intent toast, and no dialog opens. Once a
+            // range is marked the chip enables and opens the clip export dialog. Hoisting also
             // keeps the chip off the mark/working face flip, so its geometry never rides that
             // relayout and a real mouse click cannot land on stale coordinates. Trailing
             // position matches the pre-cluster flat row (…, 清除, 导出).
@@ -719,8 +791,10 @@ Item {
                 visible: control.rangeExportVisible
                 prominent: true
                 chipText: control.rangeExportBusy ? qsTr("导出中 %1%").arg(Math.round(control.rangeExportProgress * 100)) : qsTr("导出")
-                chipHelp: qsTr("把入点到出点导出为无损片段（起点对齐到前一个关键帧）")
+                // The hover text carries the gate before the click is spent on it.
+                chipHelp: control.rangeExportEnabled || control.rangeExportBusy ? qsTr("把区间起点到终点导出为无损片段（起点对齐到前一个关键帧）") : qsTr("暂不可导出：请先设置有效的区间起点和终点")
                 chipEnabled: control.rangeExportEnabled || control.rangeExportBusy
+                explainWhenDisabled: true
                 chipActive: control.rangeExportBusy
                 onClicked: control.exportRangeRequested()
             }
@@ -818,7 +892,9 @@ Item {
             // Collapses while hidden or while playing: positioners keep layout space for
             // invisible children otherwise.
             height: visible ? implicitHeight : 0
-            spacing: Theme.spaceMicro
+            // 6 px between the label and the cells (and between the cells themselves) so a
+            // 30 px cell still reads as a separate target, not a wall of buttons.
+            spacing: 6
             anchors.horizontalCenter: parent.horizontalCenter
 
             Text {
@@ -840,7 +916,9 @@ Item {
                     readonly property bool isValid: adjacentItem.targetFrame >= 0 && (control.totalFrames <= 0 || adjacentItem.targetFrame < control.totalFrames)
 
                     implicitWidth: adjacentItem.isCurrent ? 58 : 30
-                    implicitHeight: 24
+                    // 28 px keeps the pointer target at the hit-area minimum while the row
+                    // still stays one compact line under the transport.
+                    implicitHeight: 28
                     radius: Theme.radiusSmall
                     color: adjacentItem.isCurrent ? Theme.accentFill : (!adjacentItem.isValid ? Theme.disabledPanel : (adjacentMouse.containsMouse ? Theme.controlHover : Theme.control))
                     border.color: adjacentItem.isCurrent ? Theme.accent : (!adjacentItem.isValid ? Theme.disabledBorder : (adjacentMouse.containsMouse ? Theme.borderHover : Theme.controlBorder))

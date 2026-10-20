@@ -1734,6 +1734,15 @@ TEST(MainQmlContractTests, InstantiatesRootAndSeparatesManualAlignmentStates) {
     EXPECT_FALSE(root->property("chromeVisible").toBool());
     EXPECT_TRUE(root->property("globalMediaShortcutsEnabled").toBool());
     EXPECT_TRUE(viewport->hasActiveFocus());
+    // The pointer sits over the canvas here (it did before H was pressed, and collapsing the
+    // chrome moves the layout under it). A passive hover must not wake the transport back up:
+    // immersive mode has the bottom wake strip for that. The message carries the two flags the
+    // verdict is derived from so a failure names which one broke.
+    auto* const wakeHover = root->findChild<QObject*>(QStringLiteral("immersiveWakeHover"));
+    ASSERT_NE(wakeHover, nullptr);
+    EXPECT_FALSE(wakeHover->property("hovered").toBool());
+    EXPECT_EQ(root->property("oscState").toInt(), 2)
+        << "immersiveOscRevealed=" << root->property("immersiveOscRevealed").toBool();
     EXPECT_FALSE(transport->isVisible());
     EXPECT_FALSE(analysisChrome->property("visible").toBool());
     EXPECT_DOUBLE_EQ(viewport->property("radius").toDouble(), 0.0);
@@ -1920,7 +1929,16 @@ TEST(MainQmlContractTests, InstantiatesRootAndSeparatesManualAlignmentStates) {
     QCoreApplication::processEvents();
     EXPECT_EQ(surfaceLabelRepeater->property("count").toInt(), 1);
     EXPECT_EQ(activeSourceRepeater->property("count").toInt(), 1);
-    EXPECT_FALSE(compareBar->isVisible());
+    // EX-03: the comparison bar survives a single video, with the tasks disabled and the
+    // reason printed in the bar; the way into a comparison is one click away.
+    EXPECT_TRUE(compareBar->isVisible());
+    auto* const singleHint =
+        compareBar->findChild<QObject*>(QStringLiteral("singleSourceCompareHint"));
+    ASSERT_NE(singleHint, nullptr);
+    EXPECT_TRUE(singleHint->property("visible").toBool());
+    auto* const addVideo = compareBar->findChild<QObject*>(QStringLiteral("modeBarAddVideoButton"));
+    ASSERT_NE(addVideo, nullptr);
+    EXPECT_TRUE(addVideo->property("visible").toBool());
 
     shell.setInspectorVisible(true);
     QCoreApplication::processEvents();
@@ -1955,7 +1973,10 @@ TEST(MainQmlContractTests, InstantiatesRootAndSeparatesManualAlignmentStates) {
     QCoreApplication::processEvents();
     EXPECT_EQ(root->property("oscState").toInt(), 2);
     EXPECT_FALSE(transport->isVisible());
-    EXPECT_FALSE(compareMenu->property("enabled").toBool());
+    // The compare menu stays openable with an empty session: its inspector row and the
+    // single-source explanation have to remain reachable (UX-09). Only the comparison rows
+    // carry the source-count gate now.
+    EXPECT_TRUE(compareMenu->property("enabled").toBool());
     EXPECT_FALSE(analyzeMenu->property("enabled").toBool());
     EXPECT_TRUE(reviewContextMenu->property("emptyStateOnly").toBool());
     EXPECT_EQ(reviewContextMenu->property("availableActionCount").toInt(), 2);
@@ -2750,9 +2771,10 @@ TEST(MainQmlContractTests, TerminologySpeaksUserActionsAndLayeringFollowsTheTask
     harness.controller->refreshProjection();
     harness.settle();
     ASSERT_EQ(harness.controller->sourceCount(), 1);
-    EXPECT_FALSE(compareBar->isVisible())
-        << "an ordinary single video hides the comparison pair and GT chrome";
-    EXPECT_FALSE(sourceBar->isVisible());
+    EXPECT_TRUE(compareBar->isVisible())
+        << "a single video keeps the comparison tasks on screen, disabled, so the product's "
+           "purpose is visible before a second file exists";
+    EXPECT_TRUE(sourceBar->isVisible());
 
     // The transport names the user action, not the continuity policy enum.
     EXPECT_EQ(harness.root->property("playbackModeLabel").toString(), QStringLiteral("流畅优先"));
@@ -2845,14 +2867,14 @@ TEST(MainQmlContractTests, TransportRangeRowMarksInAndOutFromTheCurrentFrame) {
     // An open-ended range cannot be played or looped, but can be cleared.
     EXPECT_FALSE(playRange->property("chipEnabled").toBool());
     EXPECT_TRUE(clearRange->property("chipEnabled").toBool());
-    EXPECT_EQ(label->property("text").toString(), QStringLiteral("入 42 · 出 —（区间无效）"))
+    EXPECT_EQ(label->property("text").toString(), QStringLiteral("起 42 · 终 —（区间无效）"))
         << "an in point alone is not a range";
 
     // Marking a point is a chrome-time action, so its confirmation must ride the intent toast:
     // the immersive HUD does not render while the chrome is visible, and a set point that
     // reports nothing reads as a dead chip.
     EXPECT_EQ(harness.root->property("intentMessage").toString(),
-              QStringLiteral("入点 · 第 42 帧"));
+              QStringLiteral("区间起点 · 第 42 帧"));
     EXPECT_TRUE(harness.root->property("immersiveHudText").toString().isEmpty());
 
     // Seek to frame 47 and mark the matching out point.
@@ -2867,7 +2889,7 @@ TEST(MainQmlContractTests, TransportRangeRowMarksInAndOutFromTheCurrentFrame) {
                      static_cast<double>(harness.controller->mediaTimeForFrame(47)));
     EXPECT_TRUE(playRange->property("chipEnabled").toBool());
     EXPECT_TRUE(loopRange->property("chipEnabled").toBool());
-    EXPECT_EQ(label->property("text").toString(), QStringLiteral("入 42 · 出 48 · 7 帧"));
+    EXPECT_EQ(label->property("text").toString(), QStringLiteral("起 42 · 终 48 · 7 帧"));
 
     // The chips and the transport read the same range: the row forwards what the shell holds.
     auto* const transportBar = harness.root->findChild<QQuickItem*>(QStringLiteral("transportBar"));
@@ -2891,7 +2913,7 @@ TEST(MainQmlContractTests, TransportRangeRowMarksInAndOutFromTheCurrentFrame) {
     sendKey(*harness.window, Qt::Key_I);
     harness.settle();
     EXPECT_EQ(harness.root->property("immersiveHudText").toString(),
-              QStringLiteral("入点 · 第 51 帧"));
+              QStringLiteral("区间起点 · 第 51 帧"));
     EXPECT_TRUE(harness.root->property("intentMessage").toString().isEmpty());
     harness.shell->setChromeVisible(true);
     harness.settle();
@@ -3048,7 +3070,7 @@ TEST(MainQmlContractTests, TransportRangeRowPlaysAndLoopsTheMarkedRange) {
     harness.settle();
     EXPECT_FALSE(harness.root->property("rangePlaybackActive").toBool());
     EXPECT_FALSE(loopRange->property("chipActive").toBool());
-    EXPECT_EQ(label->property("text").toString(), QStringLiteral("入 42 · 出 48 · 7 帧"));
+    EXPECT_EQ(label->property("text").toString(), QStringLiteral("起 42 · 终 48 · 7 帧"));
     EXPECT_EQ(harness.shell->inFrame(), 41);
     EXPECT_EQ(harness.shell->outFrame(), 47);
     EXPECT_TRUE(playRange->property("chipEnabled").toBool());
@@ -3386,7 +3408,7 @@ TEST(MainQmlContractTests, ExportRangeButtonStartsAClipExport) {
     // The chip is a chrome-time control, so its feedback must land on the intent toast — the
     // immersive HUD only renders while the chrome is hidden.
     EXPECT_EQ(harness.root->property("intentMessage").toString(),
-              QStringLiteral("当前视频或所选区间暂不可导出，请检查素材和入点、出点。"));
+              QStringLiteral("当前视频或所选区间暂不可导出，请检查素材和区间起点、终点。"));
     EXPECT_TRUE(harness.clipExporter->performedJobs().empty());
 
     // A validated canonical source plus a marked range is what makes a session exportable.
@@ -5965,16 +5987,15 @@ TEST(MainQmlContractTests, FullCanvasFocusGroupShowsOnlyApplicableEntriesPerSess
     EXPECT_EQ(harness.shell->canvasFocusSlot(), 0);
     EXPECT_EQ(harness.shell->canvasFocusIdentity(), identities.at(0));
 
-    // Shrinking to a single source hides the whole bar - no canvas switching to offer. The
-    // focused source is the one that survives, so the focus stays meaningful, but a request
-    // for the removed slot refuses.
+    // EX-03: shrinking to one source keeps the bar (with the disabled tasks and the reason),
+    // but the direct-look group and the pair controls still retire with the second source.
     harness.snapshot->sources.erase(harness.snapshot->sources.begin() + 1);
     harness.snapshot->presentedSources.erase(harness.snapshot->presentedSources.begin() + 1);
     identifyReferenceSlot(harness.snapshot, 0);
     harness.controller->refreshProjection();
     QCoreApplication::processEvents();
     EXPECT_EQ(harness.controller->sourceCount(), 1);
-    EXPECT_FALSE(bar->isVisible());
+    EXPECT_TRUE(bar->isVisible());
     EXPECT_FALSE(focusA->isVisible());
     const QStringList remaining = harness.shell->activeSourceIdentities();
     ASSERT_EQ(remaining.size(), 1);
@@ -6208,7 +6229,7 @@ TEST(MainQmlContractTests, PairComboNamesTheTwoRealSourceFiles) {
               QStringLiteral("A ↔ B"));
 }
 
-// V03: the mode bar is organized by task. The four daily tasks - 并排 / 划线 / 局部联动 /
+// V03: the mode bar is organized by task. The four daily tasks - 并排 / 分割线 / 局部联动 /
 // 差异定位 - are one-click top-level entries; the three secondary layouts (三联 / 参考聚焦 /
 // 分析网格) live one level down in the labelled 布局 menu and keep driving the same ViewMode
 // enum. The 局部联动 task reaches the existing RoiTriplet preset end-to-end: the surface
@@ -6326,7 +6347,7 @@ TEST(MainQmlContractTests, ModeBarOrganizesTasksWithLayoutSubmenu) {
     // Four one-click tasks at the top level; the anonymous "…" overflow is gone.
     EXPECT_TRUE(sideButton->isVisible());
     EXPECT_TRUE(wipeButton->isVisible());
-    EXPECT_TRUE(wipeButton->property("text").toString().contains(QStringLiteral("划线")));
+    EXPECT_TRUE(wipeButton->property("text").toString().contains(QStringLiteral("分割线")));
     EXPECT_TRUE(roiTripletButton->isVisible());
     EXPECT_TRUE(roiTripletButton->property("enabled").toBool());
     EXPECT_TRUE(diffButton->isVisible());
@@ -8029,6 +8050,12 @@ TEST(MainQmlContractTests, ImageColorStateIsVisiblePerSideWithoutHover) {
     EXPECT_TRUE(aText.contains(QStringLiteral("A · 颜色：已转换"))) << aText.toStdString();
     EXPECT_TRUE(aText.contains(QStringLiteral("显示未验证"))) << aText.toStdString();
     EXPECT_TRUE(bText.contains(QStringLiteral("B · 颜色：无配置"))) << bText.toStdString();
+    // UX-01: the dot has to mean what the sentence means. A applied its profile, so it keeps
+    // the filled information dot; B carries no profile at all, which is an unmeasured state -
+    // a hollow neutral ring, never the green that reads as "colour managed".
+    EXPECT_FALSE(primaryBadge->property("dotHollow").toBool());
+    EXPECT_TRUE(secondaryBadge->property("dotHollow").toBool());
+    EXPECT_NE(primaryBadge->property("dotColor"), secondaryBadge->property("dotColor"));
     // A native RGBA8 pair needed no format conversion, so the conversion badge is hidden
     // while the colour state is not: the two facts are no longer coupled.
     EXPECT_FALSE(conversionBadge->isVisible()) << visibleChainText(conversionBadge);
@@ -8060,12 +8087,17 @@ TEST(MainQmlContractTests, ImageColorStateIsVisiblePerSideWithoutHover) {
     EXPECT_TRUE(
         primaryBadge->property("text").toString().contains(QStringLiteral("颜色：转换已关闭")))
         << primaryBadge->property("text").toString().toStdString();
+    // With the conversion off nothing is colour-managed on screen any more, so the badge must
+    // stop claiming a state and fall back to the hollow "no reading" ring.
+    EXPECT_TRUE(primaryBadge->property("dotHollow").toBool())
+        << "a disabled display conversion is not an applied colour state";
     EXPECT_NE(imageReview.imageUrl(0), convertedUrl);
     EXPECT_EQ(imageReview.imageForSlot(0).pixelColor(10, 10).rgba(), rawPixel.rgba());
     EXPECT_EQ(imageReview.rawImageForSlot(0).pixelColor(10, 10).rgba(), rawPixel.rgba());
     ASSERT_TRUE(QMetaObject::invokeMethod(imageWorkspace, "toggleColorDisplay"));
     pump();
     EXPECT_TRUE(imageReview.colorDisplayEnabled());
+    EXPECT_FALSE(primaryBadge->property("dotHollow").toBool());
     EXPECT_TRUE(primaryBadge->property("text").toString().contains(QStringLiteral("已转换")))
         << primaryBadge->property("text").toString().toStdString();
     EXPECT_EQ(imageReview.imageUrl(0), convertedUrl);
@@ -11436,7 +11468,7 @@ TEST(MainQmlContractTests, ShortcutHelpMatchesBoundShortcuts) {
         EXPECT_EQ(descriptionFor(model, QStringLiteral("Home / End")),
                   QStringLiteral("第一帧 / 最后一帧"));
         EXPECT_EQ(descriptionFor(model, QStringLiteral("Alt+← / →")),
-                  QStringLiteral("垂直分屏线左移 / 右移（仅左右切分）"));
+                  QStringLiteral("垂直分割线左移 / 右移（仅左右切分）"));
         EXPECT_FALSE(descriptionFor(model, QStringLiteral("A / D")).isEmpty());
     }
 

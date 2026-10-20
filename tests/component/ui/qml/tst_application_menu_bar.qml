@@ -4,6 +4,7 @@ import QtQuick
 import QtQuick.Controls
 import QtTest
 import "../../../../src/ui_qml/qml" as Dvs
+import "../../../../src/ui_qml/qml/VcsTheme.js" as Theme
 
 Item {
     id: root
@@ -76,6 +77,9 @@ Item {
         shortcutPreset: 0
         autoplayOnOpen: true
         sourceIdentities: ["source-a", "source-b", "source-c"]
+        // A real menu is always attached to a session; the comparison rows gate on it, so the
+        // fixture has to say which state it represents instead of leaving it at false.
+        videoHasSession: true
     }
 
     TestCase {
@@ -98,6 +102,47 @@ Item {
                     total += item.height;
             }
             return total;
+        }
+
+        // UX-04: the menu used to take fontMono (13) for its label - one step below body copy -
+        // and then render the submenu arrow at fontBody (14), larger than the label it follows.
+        // Both are now pinned here so the hierarchy cannot invert again silently.
+        function test_menu_typography_uses_the_body_step() {
+            const wipeLabel = findChild(menuBar, "wipeMenuItemLabel");
+            const openFiles = findChild(menuBar, "openFilesMenuItem");
+            const openFilesTrailing = findChild(menuBar, "openFilesMenuItemTrailing");
+            verify(wipeLabel !== null);
+            verify(openFiles !== null);
+            verify(openFilesTrailing !== null);
+            compare(wipeLabel.font.pixelSize, Theme.fontBody);
+            compare(openFilesTrailing.font.pixelSize, Theme.fontSecondary);
+            verify(openFilesTrailing.font.pixelSize < wipeLabel.font.pixelSize,
+                "the trailing column must never outweigh the label it follows");
+        }
+
+        // UX-07 / UX-05: the help entry exists even without a video session, and F10 opens the
+        // first menu at its item - the two keyboard/menu gaps the review found.
+        function test_help_menu_reports_the_shortcut_table_and_f10_opens_the_first_menu() {
+            const helpMenu = findChild(menuBar, "helpMenu");
+            const helpItem = findChild(menuBar, "shortcutHelpMenuItem");
+            const fileMenu = findChild(menuBar, "fileMenu");
+            verify(helpMenu !== null);
+            verify(helpItem !== null);
+            verify(fileMenu !== null);
+
+            let fired = 0;
+            const handler = function() {
+                fired += 1;
+            };
+            menuBar.shortcutHelpRequested.connect(handler);
+            helpItem.triggered();
+            compare(fired, 1, "the help row raises the same request the ? key does");
+            menuBar.shortcutHelpRequested.disconnect(handler);
+
+            verify(menuBar.focusFirstMenu());
+            tryCompare(fileMenu, "opened", true);
+            fileMenu.close();
+            tryCompare(fileMenu, "opened", false);
         }
 
         function test_hides_three_source_layout_for_a_pair() {
@@ -165,27 +210,39 @@ Item {
             compare(menuRowsHeight(compareMenu), compactRowsHeight + 70);
         }
 
-        function test_single_video_compare_is_disabled_and_cannot_open() {
+        function test_single_video_menu_stays_open_and_gates_only_comparison_rows() {
             const compareMenu = findChild(menuBar, "compareMenu");
             const compareButton = findChild(menuBar, "compareMenuButton");
+            const side = findChild(menuBar, "sideBySideMenuItem");
+            const continuity = findChild(menuBar, "playbackContinuityMenu");
+            const inspector = findChild(menuBar, "compareInspectorMenuItem");
             verify(compareMenu !== null);
             verify(compareButton !== null);
+            verify(side !== null);
+            verify(continuity !== null);
+            verify(inspector !== null);
 
+            // UX-09: one video no longer locks the whole menu. The title button stays live and
+            // the menu opens; only the rows that need a second source are unavailable, while
+            // the session-scoped rows in the same menu (continuity, inspector) stay usable.
             menuBar.sourceCount = 1;
-            tryCompare(compareMenu, "enabled", false);
-            tryCompare(compareButton, "enabled", false);
-
+            tryCompare(compareButton, "enabled", true);
             compareMenu.open();
-            wait(0);
-            compare(compareMenu.opened, false);
-
-            mouseClick(compareButton, compareButton.width / 2, compareButton.height / 2);
-            wait(0);
-            compare(compareMenu.opened, false);
-
-            keyClick(compareButton, Qt.Key_Return);
-            wait(0);
-            compare(compareMenu.opened, false);
+            tryCompare(compareMenu, "opened", true);
+            compare(side.enabled, false);
+            compare(continuity.menuItemEnabled, true);
+            compare(inspector.enabled, true);
+            // Three grey rows with no reason is the failure mode this replaced, so the menu has
+            // to name the reason and the note has to follow the state instead of staying on.
+            const gateNote = findChild(compareMenu, "compareGateNote");
+            verify(gateNote !== null);
+            compare(gateNote.visible, true);
+            verify(gateNote.noteText.indexOf("至少两个视频") >= 0, gateNote.noteText);
+            menuBar.sourceCount = 2;
+            tryCompare(gateNote, "visible", false);
+            menuBar.sourceCount = 1;
+            compareMenu.close();
+            tryCompare(compareMenu, "opened", false);
         }
 
         function test_open_state_and_reference_use_source_identity() {

@@ -31,6 +31,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QEventLoop>
+#include <QFont>
 #include <QGuiApplication>
 #include <QIcon>
 #include <QImage>
@@ -148,11 +149,28 @@ public:
           application_(argc, argv) {
         initializeQmlResources();
         registerQmlTypes();
-        application_.setApplicationDisplayName(QStringLiteral("CompareStation"));
+        // Deliberately no setApplicationDisplayName: on Windows the platform window title
+        // formatter appends the display name to every title that does not already end with
+        // it, which turned "CompareStation 2.5.1 - 视觉审查" into "... - CompareStation" in the
+        // title bar, the taskbar and every screenshot (UX-12). Main.qml owns the full title;
+        // dialogs that fall back to applicationName still get "CompareStation".
         application_.setApplicationName(QStringLiteral("CompareStation"));
         application_.setApplicationVersion(QString::fromLatin1(DVS_PROJECT_VERSION));
         application_.setOrganizationName(QStringLiteral("CompareStation"));
         application_.setWindowIcon(QIcon{QStringLiteral(":/branding/comparestation-icon.png")});
+
+        // Wire the UI family token (VcsTheme.js `fontFamilyUi`) to the application font. QML's
+        // `font` value type carries one family with no fallback list, which is why the token had
+        // no consumer; QFont does carry the list, so the fallback chain lives here instead of a
+        // single-family binding. Segoe UI Variable ships with Windows 11 (the first family);
+        // Windows 10 resolves the classic Segoe UI, and CJK text keeps the system UI face
+        // rather than an arbitrary substitute. Text that should keep the platform default still
+        // leaves `font.family` unset, as the token's comment promises.
+        QFont uiFont = QGuiApplication::font();
+        uiFont.setFamilies({QStringLiteral("Segoe UI Variable Text"),
+                            QStringLiteral("Segoe UI"),
+                            QStringLiteral("Microsoft YaHei UI")});
+        QGuiApplication::setFont(uiFont);
     }
 
     ~Impl() {
