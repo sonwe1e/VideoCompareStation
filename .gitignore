@@ -38,6 +38,7 @@
 **/.serena/
 # Local agent workspace and session transcripts: project data, never part of a commit.
 /.workbuddy-ai/
+/.workbuddy/
 /.sessions/
 
 # Neutralized nested repositories (local history backups, not for upload;

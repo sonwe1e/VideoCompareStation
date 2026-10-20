@@ -1,5 +1,141 @@
 # 视觉审查问题台账
 
+## 2026-10-19 产品体验质量整改（EX-01 ~ EX-08，工作区实现）
+
+依据 [产品体验质量评审](product-quality-review-2026-10-19.md)。评审区分"用不了"与"做得不好"，
+本节的 `EX-` 编号与 `UX-` 不重叠；每条的可观察验收写在评审正文，这里只记状态。
+
+| 条目 | 状态 | 落点 | 钉住它的验证 |
+|---|---|---|---|
+| EX-01 反向缓存额度与窗口自废 | 实现中 | 每源上限按帧数吃预算；seed 可被后继 `-1` 抢占 | 容量换算断言 + seed 抢占后仍成功 |
+| EX-02 反向体感门禁 | 实现中 | `jog_stop_p95 > 500 ms`、反向帧率为 0 或低于前向 20% 时失败 | 门禁脚本退出码 |
+| EX-03 单视频时对比能力消失 | 实现中 | 模式栏/源条按 `>=1` 可见；单视频禁用对比项并说明；条内"添加视频…" | 单视频可见性契约 |
+| EX-04 核心模式栏无解释 | 实现中 | 并排/分割线/局部/差异/切候选/布局补 `helpText`（含 `1/2/3`、`C`） | 悬停文案断言 |
+| EX-05 抠图三重死锁与硬边缘 | 实现中 | 入口常驻禁用+原因；软 alpha；小目标裁剪后编码；空 mask 显式失败 | 后处理单测 + 无模型降级 |
+| EX-06 间距只有 4/8 两级 | 实现中 | 新增 `spaceGroup`/`spaceSection`，只落走带组间、播放状态条、检查器卡片 | 令牌阶梯断言 |
+| EX-07 术语缺通俗层 | 实现中 | 区间起点/终点、参考原片（GT）、对比版本、长按逐帧、原始帧取值 | 文案契约同步 |
+| EX-08 禁用导出无反馈 | 实现中 | chip 可点击，只弹原因、不开对话框 | 点击不触发导出 |
+
+**未验收**：真实影片、4K/P010 反向窗口、模型边缘质量、窄窗截图均未跑；构建与测试由本轮
+统一执行，结果补在本节末尾。
+
+## 2026-10-19 界面与交互审查整改（工作区实现，未提交）
+
+状态：UX-01 ~ UX-12、UX-14、UX-16 ~ UX-20 已实现并各有契约测试锁定；UX-13、UX-15 的手柄
+键盘路径、UX-19 的发布载荷缺口仍未处理（理由见下）。审查原文与行号证据保留在
+[ui-ux-review-8d937eb.md](ui-ux-review-8d937eb.md)，本节只记录落到哪里、被什么钉住。
+
+### 已落地
+
+| 条目 | 做法 | 钉住它的契约 |
+|---|---|---|
+| UX-01 | A/B 颜色徽章改成三态：`warning` 只留给回退/损坏，`information` 只在显示转换**实际生效**时点亮，其余为空心中性环（`StatusBadge.dotHollow`）。判据从 `colorConversionApplied` 换成 `colorDisplayApplied`——前者只记录解码期格式转换，原生 RGBA8 带配置时恒为 `false`，会让"已转换"的句子配空心点 | `ImageColorStateIsVisiblePerSideWithoutHover`（实心/空心/关闭后复归空心/再开后恢复） |
+| UX-02 | "未测量"移出告警集合，成为独立的 `playbackStatusUnmeasured`；静息胶囊用 `mutedText` 而非 `warning`，句子仍如实播报"本次播放尚未测量"，告警条只为真实跳帧/追赶亮起 | `tst_player_osc.qml` 两个用例 |
+| UX-03 | `fontFamilyUi` 接到 `QGuiApplication::setFont`（`Segoe UI Variable Text → Segoe UI → Microsoft YaHei UI`）。QML 的 `font` 值类型没有 `families`，单族绑定会丢掉中文回退，所以这个令牌只能由应用字体消费 | `DesktopApplication` 启动路径；`tst_vcs_theme` 仍只管令牌值 |
+| UX-04 | 菜单与菜单项字号改用 `fontBody`(14)；子菜单箭头降到 `fontSecondary`(12)，不再大于自己的标签 | `test_menu_typography_uses_the_body_step` |
+| UX-05 | 应用级 `F10` 打开第一个菜单并聚焦弹出项（`focusFirstMenu()`），之后方向键/Enter/Esc 与指针路径同源。**Alt 明确不绑定**：需要按键释放状态机 + 中文标题没有的助记符 | 同上（`test_help_menu_..._f10_opens_the_first_menu`） |
+| UX-06 | `RangeChip` / `ContinuityOption` 进 Tab 序：`activeFocusOnTab`、`Accessible.focusable`、Return/Enter/Space、2px `Theme.focus` 焦点环。连续性段的上报走 `actions.setPlaybackContinuityPolicy`——`PlayerOsc` 本身不转发该信号，键盘与指针共用这一条缝 | `test_range_chip_and_continuity_option_are_keyboard_operable`（Tab 停靠点、焦点环随焦点出现/消失、Return 与 Space 各触发一次、段回报自己的 `policyCode`） |
+| UX-07 | `?` 改由 `helpShortcutEnabled`（= `presentationShortcutsEnabled`）门控，不再绑 `videoActive`；新增"帮助"菜单项打开同一份快捷键表 | `test_help_menu_reports_the_shortcut_table_...` |
+| UX-08 | 设置菜单去掉 `menuItemVisible`，条目改 `enabled: fileAssociationService !== null`；快捷键方案与"打开即播放"从「视图」迁入，菜单不再只有一条 | `tst_application_menu_bar` 全量 |
+| UX-09 | 「对比」菜单去掉菜单级 `enabled`，门槛下放到条目；单源时用 `MenuNote` 说明为什么比较项点不动，而"播放连续性"和检查器开关仍可用 | `test_single_video_menu_stays_open_and_gates_only_comparison_rows` |
+| UX-10 | 统一到"分割线"：模式栏、快捷键表 4 处、主窗口 5 处（含沉浸提示与恢复提示）、画布 HUD、图片模式栏。方位词保留"上下/左右"（用户看到的是切分后的半幅），不再混入"水平/垂直" | `ModeBarOrganizesTasksWithLayoutSubmenu`、`ShortcutHelpMatchesBoundShortcuts` |
+| UX-11 | 空态主按钮改为"打开图片对…"，与菜单同词 | `ui.empty_review_view` |
+| UX-12 | 删掉 `setApplicationDisplayName`，标题只由 `Main.qml` 的 `title`（含版本号）提供，不再被 Qt 追加一次应用名。`setApplicationName` 保留，无标题的对话框仍能取到应用名 | 无自动化断言：标题栏由 DWM 合成，只能实机观察；静态上重复来源已移除 |
+| UX-14 | 提示条从"横跨分割线居中"改为贴 stage 右边缘内缩 16，子项 `anchors.right`；一条瞬时提示只遮一侧的角，不遮被判定所依据的接缝 | 几何断言 + 截图 |
+| UX-15 | 图片侧补 `Alt+方向`（Shift 为 5%）移动分割线，1% / 5% 步长与轴向门控同 `ReviewShortcuts`。写成应用级 `Shortcut` 而不是工作区按键处理器里多一个分支：方向键会被当前持有焦点的子项（画布、列表）先吃掉用于自己的导航，这正是视频侧也用 `Shortcut` 的原因；编辑态（本工作区唯一有文字输入的地方）整体关闭这组键。`W` 换向本来就有，未重复实现 | 新增 `test_alt_arrows_move_the_split_line_on_its_own_axis`（步长/轴向/端点夹紧/编辑态/非涂写模式） |
+| UX-16 | `disabledText` `#6c6c70 → #8e8e93`：菜单上 ≥3.7:1、窗口上 ≥5.1:1，仍明显暗于 `mutedText`（>1.0 亮度差），保住"非活动"的可读性 | `test_disabled_text_is_legible_but_stays_visibly_inactive` |
+| UX-17 | 5 处"必须读却用 10px"（YCbCr 表头、Δ 基准、生成帧/GT、缩略图源警告等）提到 `fontCaption` | 令牌契约 |
+| UX-18 | 缩放读数与帧计数加 `font.features: { "tnum": 1 }`，数字原地跳动不再抖宽 | 同上 |
+| UX-19 | 智能抠图按钮按 `smartSegmentAvailable` 显隐，不再在无模型环境里常驻一个必然失败的入口 | `ImageWorkspace*` 契约 |
+| UX-20 | 统一 `ToolTip.delay` 到 500 ms（`TransportBar` 的 650 与 `VcsToolButton` 对齐） | — |
+
+### 评审之外顺带修掉的一处
+
+- **沉浸模式下纯悬停唤出走带**：`ComparisonViewport.oscRevealRequested` 增加 `interactive`
+  参数。过去画布 hover 也会请求唤出，于是在指针停在画布上时按 `H`，收起 chrome 引起重排后
+  悬浮走带会立刻弹回来——正好抵消用户刚下的命令。现在只有真实手势（按下、拖拽、滚轮）和
+  底部唤醒条会唤出；chrome 可见时行为不变。
+  `InstantiatesRootAndSeparatesManualAlignmentStates` 断言 `oscState === 2` 且唤醒条未悬停。
+
+### 未处理，连同理由
+
+- **UX-13（960×640 折叠）**：不是调参问题。窗口高度 640 时 chrome 占 32%，画布只剩 908×386
+  （大窗面积的 37%）。要动的是层叠结构：源条/模式栏/对齐条在窄高下该合并成一行、走带是否
+  允许浮动而不是常驻 180 px。这类重排必须配两档截图对比逐轮验证，塞进本轮会把前面 20 条的
+  回归面搅在一起，建议单独一轮。
+- **UX-15 的 `WipeHandle` 手柄路径**：画布手柄自身仍不可聚焦（`DISABLED_WipeHandleIsKeyboardAdjustable`
+  记录着这个缺口）。根级快捷键已经覆盖同一个能力，所以手柄只差"聚焦 + 方向键微调"这层，
+  属于纯增量，留待与 UX-13 的布局一起动。
+- **UX-19 的发布载荷**：按钮已按能力显隐，但发布 ZIP 仍不带 `onnxruntime` 与 `models/`，
+  本机模型 138.6 MB 也没有安装规则。这是打包问题，不是界面问题，需要在打包流水线里决定。
+- **UX-17 的剩余量**：156 处字号字面量、31 处 10px 里只处理了"必须读"的 5 处。剩下的多数是
+  装饰性小字，值得一次性收敛，但不该在功能修复里顺手大改。
+- **仍未验证**：真实影片观感、4K/HDR、多屏 DPI、读屏软件实测、触摸输入、系统高对比度主题。
+  本轮改的是令牌与控件，这些环境仍需独立验收。
+
+### 验证
+
+`ctest --preset dev -R '^ui\.' -j 2`：645 项中 644 项运行，**全部通过**；3 项环境性
+`Skipped`（`LoadsUserPngFromDisk`、`ImageFolderPairModelTests` 两项），1 项 `Disabled`
+（上面记录的 `WipeHandleIsKeyboardAdjustable`）。上一轮同组曾出现 2 项并行偶发失败
+（`UnsuccessfulStartupVideoOpenKeepsImageWorkspace`、`ui.video_file_sidebar.Windows`），
+串行复跑与本次全量均未复现，判为并行/桌面对焦抖动。
+
+截图与几何证据：`out/verification/ui-audit-2026-10-19/`（12 张 PNG + `chrome-geometry.txt`，
+`QT_SCALE_FACTOR=0.5714` 适配本机 DPR 1.75 的 900 逻辑像素高屏）。
+
+## 2026-10-19 界面与交互审查（评审，无代码改动）
+
+状态：评审完成，当时未修复任何一条；整改结果见上一节。完整报告见
+[ui-ux-review-8d937eb.md](ui-ux-review-8d937eb.md)（范围 `main` @ `8d937eb`）。
+本轮只读核查设计令牌消费、字体接线、菜单与键盘可达性、对比度与最小窗口布局；
+证据为仓库自带 `ChromeGeometryAndScreenshotEvidence` 实抓的 21 张截图与
+`out/verification/ui-audit/chrome-geometry.txt`，加上运行中 2.5.1 进程的真实窗口标题
+与发布 ZIP 条目表。
+
+- **UX-01 未知状态用成功色**：图片 A/B 颜色徽章在「未探测 / 显示未验证」时取
+  `Theme.information`（绿），仅配置回退才转黄（`ImageWorkspace.qml:6515/6532`）。
+  与产品目标 §2「无检测结果应显示未知」冲突。
+- **UX-02 未测量用警告色**：`playbackRunPresentedFrames === 0` 进入告警集合
+  （`PlayerOsc.qml:49`），于是每次打开视频都出现黄色「本次播放尚未测量」（`:178`、`:415`），
+  与真实跳帧同色。
+- **UX-03 字体令牌空转**：`Theme.fontFamilyUi`（`VcsTheme.js:187`）在全部 QML 中引用数 0，
+  应用层也无 `setFont`；`tst_vcs_theme.qml:222` 只断言令牌值，不检查控件消费。
+- **UX-04 菜单字号错用令牌**：菜单与菜单项用 `Theme.fontMono`(13) 作字号
+  （`VcsMenuBar.qml:31`、`VcsMenuItem.qml:54`），比正文 14 小；子菜单箭头用 14
+  （`VcsMenuItem.qml:69`），大于其标签。
+- **UX-05 菜单栏无键盘入口**：全仓无应用级 `Alt`/`F10` 处理，`VcsMenuBar` delegate 无
+  `activeFocusOnTab`；侧栏上下文菜单却支持 `Menu`/`Shift+F10`（`VideoFolderSidebar.qml:342`）。
+- **UX-06 走带芯片不可聚焦**：`RangeChip` 与 `ContinuityOption` 为自绘 `Rectangle+MouseArea`，
+  有 `Accessible.*` 但无 `activeFocusOnTab`/`Keys`。
+- **UX-07 帮助入口未接通**：`?` 绑定 `globalMediaShortcutsEnabled`（`Main.qml:649`，
+  首项为 `videoActive`），图片工作区与空态均失效，且无「帮助」菜单；
+  图片版帮助表已写完并被 `MainQmlContractTests.ImageShortcutHelpDescribesTheRealEntries`
+  （`MainQmlContractTests.cpp:11459`）验收，却无产品内打开路径。
+- **UX-08/UX-09 菜单结构**：设置菜单仅一条且 `menuItemVisible: fileAssociationService !== null`
+  （`ApplicationMenuBar.qml:622`）；「对比」菜单整体 `enabled: sourceCount > 1`（`:180`）
+  连带灰掉只需单视频的「播放连续性」（`:345`）与检查器开关（`:424`）。
+- **UX-10/UX-11 命名**：分割线 / 划线（`CompareModeBar.qml:129`，被测试钉死）/ 分屏线
+  （`ReviewShortcuts.qml:254`）三写；空态「对比两张图片…」与菜单「打开图片对…」
+  （`EmptyReviewView.qml:160`、`ApplicationMenuBar.qml:114`）同走 `requestImagePairOpen()`。
+- **UX-12 标题重复**：实测运行进程标题 `CompareStation 2.5.1 — 视觉审查 - CompareStation`，
+  `setApplicationDisplayName`（`DesktopApplication.cpp:151`）被 Qt 追加一次。
+- **UX-13/UX-14 布局**：960×640 下画布 908×386（面积为大窗的 37%），chrome 占 32% 高度；
+  视频 `transport.h` 两档均为 180；居中提示条落在逻辑 y 591–626 并跨越分割线。
+- **UX-15 图片分割线无键盘兜底**：`Alt+方向键` 依赖 `root.wipeMode`
+  （`Main.qml:3396` → `:421`），图片工作区不驱动该状态；`WipeHandle` 的键盘缺口
+  仍由禁用测试 `MainQmlContractTests.cpp:7686` 记录。
+- **UX-16 对比度**：`disabledText` 在 window/panel/menu 上为 3.25/2.96/2.37，均低于 4.5；
+  `tst_vcs_theme.qml:89` 的用例未覆盖该令牌。
+- **UX-17/UX-18 排版**：156 处字号字面量、10 处离阶、31 处 10px（含「规范化帧值 YCbCr」
+  表头、Δ 基准、「生成帧 / GT」、警告「缩略图源：未知」）；`tnum` 仅 1 处消费。
+- **UX-19 智能抠图**：按钮在编辑模式下常驻（`ImageWorkspace.qml:3876`），而发布 ZIP
+  （27.0 MB）无 `onnxruntime`、无 `models/`，本机模型 138.6 MB 且无安装规则。
+- **UX-20 提示延迟**：`VcsToolButton.qml:16` 500 ms vs `TransportBar.qml:116` 650 ms。
+
+- **未覆盖**：真实影片观感、4K/HDR/多屏 DPI、读屏软件实测、触摸输入、系统高对比度主题。
+  上述需独立环境，本文不宣称已验收。真实 D3D11VA／性能门禁本轮未执行。
+
 ## 2026-10-19 本机构建资源与工具路径治理（工作区实现，未提交）
 
 状态：工作区实现及最终本地验证完成，未提交。调查发现裸 Ninja 会按本机 24 个逻辑处理器展开大量

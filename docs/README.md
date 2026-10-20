@@ -22,6 +22,15 @@ CompareStation documentation is grouped by lifecycle and audience:
   cleanup and validation boundary, [the frozen behavior baseline](engineering/behavior-baseline.md)
   for pre-overhaul observations at `d04339c`, and [the trace schema](engineering/trace-schema.md) for the
   implemented diagnostic format and its current limitations.
+- [engineering/product-quality-review-2026-10-19.md](engineering/product-quality-review-2026-10-19.md)
+  is the dated product-experience review (`EX-` items) covering reverse-step stutter, smart
+  matting, the single-video comparison dead end, spacing tokens and terminology, plus the
+  execution order and acceptance for this round.
+- [engineering/ui-ux-review-8d937eb.md](engineering/ui-ux-review-8d937eb.md) is the dated UI/UX
+  review at `8d937eb`: design-token consumption, typography, menu and keyboard reachability,
+  contrast, and minimum-window layout. It records findings against that revision; most items have
+  since been implemented, and the ledger entry of 2026-10-19 (整改) carries the per-item status,
+  the deliberately deferred ones, and the contract tests that now lock them.
 - [plans/playback-overhaul/](plans/playback-overhaul/) preserves the earlier playback overhaul
   plan and review reports. Some changes have landed; use the current ledger and ADRs to identify
   remaining work. Its old priorities and optional audio expansion are not current product scope.
