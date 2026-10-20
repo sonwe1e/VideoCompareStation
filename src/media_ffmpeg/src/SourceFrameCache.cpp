@@ -46,10 +46,8 @@ std::size_t sourceCacheCapacityBytes(const std::size_t budgetShareBytes,
     }
     const std::uint64_t framesCap =
         static_cast<std::uint64_t>(frameBytes) * kMaximumSourceCacheFrames;
-    const std::uint64_t byteCap =
-        (std::min)(static_cast<std::uint64_t>(kMaximumSourceCacheBytesPerSource), framesCap);
     return static_cast<std::size_t>(
-        (std::min)(static_cast<std::uint64_t>(budgetShareBytes), byteCap));
+        (std::min)(static_cast<std::uint64_t>(budgetShareBytes), framesCap));
 }
 
 std::size_t SourceFrameCacheKeyHash::operator()(const SourceFrameCacheKey& key) const noexcept {

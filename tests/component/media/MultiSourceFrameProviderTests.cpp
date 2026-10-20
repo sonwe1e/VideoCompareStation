@@ -1563,11 +1563,11 @@ TEST(MultiSourceFrameProviderTests, PublishedFrameSetsCarryEverySourceAtItsMappe
     }
 }
 
-// EX-01: the per-source cache is sized in frames, not by one flat byte cap. These assertions pin
-// the material a review actually runs: a 1080p pair must retain a reverse window (>=12 NV12 or
-// >=6 P010 frames), 4K NV12 must keep at least two, and a 4K P010 source in a three-way
-// comparison must stay inside its budget share (one frame, i.e. Exact fallback) rather than
-// widening the global budget to give it a second frame.
+// EX-01: the per-source cache is sized in frames against the source's own share of the decode
+// budget, not by one flat byte cap. These assertions pin the material a review actually runs:
+// a single 1080p source must get the whole 24-frame window (that is the mode held-backward is
+// used in), a pair keeps a usable one, and a 4K P010 source in a three-way comparison must stay
+// inside its share (one frame, i.e. Exact fallback) rather than widening the global budget.
 TEST(MultiSourceFrameProviderTests, SourceCacheCapacityYieldsAUsableWindowPerPixelFormat) {
     constexpr std::size_t kDecodeBudgetBytes = std::size_t{224U} * 1024U * 1024U;
     constexpr auto kNv12 = application::NormalizedFrameFormat::Nv12_8;
@@ -1595,7 +1595,13 @@ TEST(MultiSourceFrameProviderTests, SourceCacheCapacityYieldsAUsableWindowPerPix
     ASSERT_EQ(nv12UhdFrame, 12'441'600U);
     ASSERT_EQ(p010UhdFrame, 24'883'200U);
 
-    EXPECT_GE(framesFor(capacityFor(1920U, 1080U, 8U, 2U), nv12HdFrame), 12U);
+    // One 1080p NV12 source holds the full window in 71.2 MiB, well inside its 112 MiB share, so
+    // the frame cap is what stops it. This is the case the removed byte cap used to truncate at
+    // sixteen frames.
+    EXPECT_EQ(framesFor(capacityFor(1920U, 1080U, 8U, 1U), nv12HdFrame), 24U);
+    EXPECT_EQ(framesFor(capacityFor(1920U, 1080U, 10U, 1U), p010HdFrame), 18U);
+    EXPECT_EQ(framesFor(capacityFor(1920U, 1080U, 8U, 2U), nv12HdFrame), 18U);
+    EXPECT_EQ(framesFor(capacityFor(1920U, 1080U, 8U, 3U), nv12HdFrame), 12U);
     EXPECT_GE(framesFor(capacityFor(1920U, 1080U, 10U, 2U), p010HdFrame), 6U);
     EXPECT_GE(framesFor(capacityFor(3840U, 2160U, 8U, 2U), nv12UhdFrame), 2U);
     EXPECT_GE(framesFor(capacityFor(3840U, 2160U, 10U, 2U), p010UhdFrame), 2U);

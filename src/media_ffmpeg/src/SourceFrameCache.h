@@ -44,10 +44,13 @@ struct CachedSourceFrame final {
 // layout expresses the same global budget in frames, which is the unit the reverse window and
 // read-ahead actually need.
 //
-// The frame caps bound a single source so one large source cannot hold the whole budget, and the
-// 48 MiB cap keeps two sources at 96 MiB, i.e. inside the half-budget share they are given.
+// The frame count is the only per-source bound. An additional byte cap was removed because it
+// truncated the one case the window exists for: a single 1080p source has a 112 MiB share and
+// can hold the full 24-frame window in 71 MiB, while the old 48 MiB cap stopped it at 16. What
+// keeps one large source from swallowing the budget is the share itself, which is divided by
+// both the source count and a factor of two for in-flight work; the actor's `< 2` frame gate
+// still sends a share that cannot hold a window to per-step Exact.
 inline constexpr std::size_t kMaximumSourceCacheFrames = 24U;
-inline constexpr std::size_t kMaximumSourceCacheBytesPerSource = std::size_t{48U} * 1024U * 1024U;
 
 // Bytes one normalized frame occupies for the given storage format. NV12 is 1.5 bytes/pixel and
 // P010 is 3 bytes/pixel; unknown or packed formats use 4 bytes/pixel so the estimate never
@@ -56,11 +59,11 @@ inline constexpr std::size_t kMaximumSourceCacheBytesPerSource = std::size_t{48U
                                               std::uint32_t height,
                                               application::NormalizedFrameFormat format) noexcept;
 
-// Capacity for one source cache: the smaller of the source's budget share and the
-// byte/frame-count caps. Never larger than `budgetShareBytes`, so the actor caches across all
-// sources stay inside the share the provider partitioned for them; a source whose share cannot
-// hold two frames is left that small on purpose, and the actor's `< 2` window gate sends it to
-// per-step Exact instead of the planner widening the global budget for it.
+// Capacity for one source cache: the smaller of the source's budget share and the frame cap.
+// Never larger than `budgetShareBytes`, so the actor caches across all sources stay inside the
+// share the provider partitioned for them; a source whose share cannot hold two frames is left
+// that small on purpose, and the actor's `< 2` window gate sends it to per-step Exact instead of
+// the planner widening the global budget for it.
 [[nodiscard]] std::size_t sourceCacheCapacityBytes(std::size_t budgetShareBytes,
                                                    std::size_t frameBytes) noexcept;
 
