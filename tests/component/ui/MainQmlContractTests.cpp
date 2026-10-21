@@ -7757,12 +7757,13 @@ TEST(MainQmlContractTests, ImageEditFillDialogPadsTheCanvasAndKeepsTheImage) {
     harness.settle();
 }
 
-// The Wipe handle still has no accessibility surface: WipeHandle.qml exposes no
-// activeFocusOnTab, Accessible.role, value or cursor keys, so a screen-reader user cannot reach or
-// operate it. The split can only be adjusted through the global Alt+arrow shortcuts. This test
-// pins the missing contract and stays disabled until the handle implements it; the reads go
-// through QQmlProperty because Attached properties are not QObject dynamic properties.
-TEST(MainQmlContractTests, DISABLED_WipeHandleIsKeyboardAdjustable) {
+// The wipe split handle must be reachable and operable from the keyboard and a screen reader:
+// Slider role, an accessible name, and a tab stop, with arrow stepping (1%, Shift 5%, clamped,
+// own-axis only) handled by WipeHandle.qml itself. The global Alt+arrow shortcuts cover the
+// split while focus lives elsewhere; this pins the handle-focused path (UX-15). Step semantics
+// are covered by tst_wipe_handle.qml. The reads go through QQmlProperty because Attached
+// properties are not QObject dynamic properties.
+TEST(MainQmlContractTests, WipeHandleIsKeyboardAdjustable) {
     auto snapshot = std::make_shared<application::SessionSnapshot>();
     snapshot->graphicsReady = true;
     snapshot->sessionState = domain::SessionState::kReady;
@@ -7812,6 +7813,11 @@ TEST(MainQmlContractTests, DISABLED_WipeHandleIsKeyboardAdjustable) {
                   .toInt(),
               static_cast<int>(QAccessible::Slider))
         << "Wipe handle must expose Accessible.Slider.";
+    EXPECT_FALSE(QQmlProperty(wipeHandle, QStringLiteral("Accessible.name"), qmlContext(wipeHandle))
+                     .read()
+                     .toString()
+                     .isEmpty())
+        << "Wipe handle must expose an accessible name.";
     EXPECT_TRUE(wipeHandle->property("activeFocusOnTab").toBool())
         << "Wipe handle must be tab-focusable.";
 }

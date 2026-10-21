@@ -43,6 +43,48 @@ Item {
         }
     }
 
+    // Keyboard twin of updatePosition: same [0, 1] clamp as ReviewActions.moveWipe, applied to
+    // the live `position` both hosts keep bound to the shell (ComparisonViewport binds it to
+    // control.wipePosition, ImageWorkspace to imageReview.wipePosition), so a nudge never
+    // restarts from a stale offset.
+    function stepPosition(delta) {
+        control.positionRequested(Math.max(0, Math.min(1, control.position + delta)));
+    }
+
+    // UX-15 (handle path): the handle is keyboard-adjustable in its own right, not only a drag
+    // affordance. The global Alt+arrows (ReviewShortcuts / ImageWorkspace) already move the
+    // split while focus lives elsewhere; this path covers the handle-focused case with the same
+    // semantics - 1% steps, Shift for 5%, clamped, and gated to the handle's own axis so the
+    // wrong arrow pair cannot drag a split the on-screen rail no longer shows. The pointer
+    // handlers above never take focus, so `activeFocus` can only arrive through Tab: the same
+    // honest-ring contract as the transport chips (UX-06). Qt 6.11's Accessible attached type
+    // has no numeric value property, so the live readout rides in the description.
+    Accessible.role: Accessible.Slider
+    Accessible.name: control.horizontal ? qsTr("水平分割线位置") : qsTr("垂直分割线位置")
+    readonly property int accessiblePositionPercent: Math.round(control.position * 100)
+    Accessible.description: control.horizontal ? qsTr("上下切分 · 当前 %1%。上下方向键每次移动 1%，按住 Shift 移动 5%；双击回到正中。").arg(accessiblePositionPercent) : qsTr("左右切分 · 当前 %1%。左右方向键每次移动 1%，按住 Shift 移动 5%；双击回到正中。").arg(accessiblePositionPercent)
+    Accessible.focusable: true
+    activeFocusOnTab: true
+
+    Keys.onPressed: event => {
+        const step = (event.modifiers & Qt.ShiftModifier) !== 0 ? 0.05 : 0.01;
+        let delta = 0;
+        if (!control.horizontal) {
+            if (event.key === Qt.Key_Left)
+                delta = -step;
+            else if (event.key === Qt.Key_Right)
+                delta = step;
+        } else if (event.key === Qt.Key_Up) {
+            delta = -step;
+        } else if (event.key === Qt.Key_Down) {
+            delta = step;
+        }
+        if (delta !== 0) {
+            event.accepted = true;
+            control.stepPosition(delta);
+        }
+    }
+
     // A faint dark halo keeps the white split line visible over bright footage.
     Rectangle {
         width: control.horizontal ? parent.width : 4
@@ -136,6 +178,19 @@ Item {
                 radius: Math.min(width, height) / 2
                 color: drag.active || hover.hovered ? Theme.primaryText : Theme.secondaryText
             }
+        }
+
+        // 2 px focus ring, keyboard arrival only (same contract as RangeChip, UX-06): the
+        // pointer handlers on the root never take focus, so a mouse click cannot light it.
+        Rectangle {
+            objectName: "wipeFocusRing"
+            anchors.fill: parent
+            anchors.margins: -2
+            radius: knob.radius + 2
+            color: "transparent"
+            border.width: 2
+            border.color: Theme.focus
+            visible: control.activeFocus
         }
     }
 

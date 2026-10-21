@@ -1215,7 +1215,7 @@ Rectangle {
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
             color: !chip.enabled ? Theme.disabledText : (chip.checked || chip.hovered ? Theme.primaryText : Theme.mutedText)
-            font.pixelSize: 12
+            font.pixelSize: Theme.fontSecondary
             font.weight: chip.checked ? Font.DemiBold : Font.Normal
         }
 
@@ -1523,7 +1523,7 @@ Rectangle {
                 width: parent.width + 2
                 height: parent.height
                 z: -1
-                color: "#99000000"
+                color: Theme.probeHalo
             }
         }
 
@@ -1541,7 +1541,7 @@ Rectangle {
                 width: parent.width
                 height: parent.height + 2
                 z: -1
-                color: "#99000000"
+                color: Theme.probeHalo
             }
         }
 
@@ -1721,7 +1721,7 @@ Rectangle {
                 visible: badge.glyph.length > 0
                 text: badge.glyph
                 color: badge.glyphColor
-                font.pixelSize: 12
+                font.pixelSize: Theme.fontSecondary
                 font.weight: Font.Bold
                 anchors.verticalCenter: parent.verticalCenter
             }
@@ -1754,7 +1754,7 @@ Rectangle {
             Rectangle {
                 width: 14
                 height: 3
-                color: "#ffffff"
+                color: Theme.cropHandle
                 x: handleArea.handleMode.indexOf("l") !== -1 ? 10 : (parent.width - 10 - width)
                 y: handleArea.handleMode.indexOf("t") !== -1 ? 10 : (parent.height - 10 - height)
 
@@ -1763,14 +1763,14 @@ Rectangle {
                     anchors.margins: -1
                     z: -1
                     color: "transparent"
-                    border.color: "#80000000"
+                    border.color: Theme.cropHandleHalo
                     border.width: 1
                 }
             }
             Rectangle {
                 width: 3
                 height: 14
-                color: "#ffffff"
+                color: Theme.cropHandle
                 x: handleArea.handleMode.indexOf("l") !== -1 ? 10 : (parent.width - 10 - width)
                 y: handleArea.handleMode.indexOf("t") !== -1 ? 10 : (parent.height - 10 - height)
 
@@ -1779,7 +1779,7 @@ Rectangle {
                     anchors.margins: -1
                     z: -1
                     color: "transparent"
-                    border.color: "#80000000"
+                    border.color: Theme.cropHandleHalo
                     border.width: 1
                 }
             }
@@ -1792,7 +1792,7 @@ Rectangle {
             width: 18
             height: 4
             radius: 2
-            color: "#ffffff"
+            color: Theme.cropHandle
 
             Rectangle {
                 anchors.fill: parent
@@ -1800,7 +1800,7 @@ Rectangle {
                 radius: 2
                 z: -1
                 color: "transparent"
-                border.color: "#80000000"
+                border.color: Theme.cropHandleHalo
                 border.width: 1
             }
         }
@@ -1812,7 +1812,7 @@ Rectangle {
             width: 4
             height: 18
             radius: 2
-            color: "#ffffff"
+            color: Theme.cropHandle
 
             Rectangle {
                 anchors.fill: parent
@@ -1820,7 +1820,7 @@ Rectangle {
                 radius: 2
                 z: -1
                 color: "transparent"
-                border.color: "#80000000"
+                border.color: Theme.cropHandleHalo
                 border.width: 1
             }
         }
@@ -1974,7 +1974,7 @@ Rectangle {
                     objectName: "imageViewportTitle-" + viewport.slot
                     text: viewport.title
                     color: Theme.primaryText
-                    font.pixelSize: 12
+                    font.pixelSize: Theme.fontSecondary
                     font.weight: Font.DemiBold
                     elide: Text.ElideMiddle
                     width: Math.min(implicitWidth, Math.max(160, viewport.width - 76))
@@ -2033,7 +2033,7 @@ Rectangle {
                     width: parent.width + 2
                     height: parent.height
                     z: -1
-                    color: "#99000000"
+                    color: Theme.probeHalo
                 }
             }
 
@@ -2051,7 +2051,7 @@ Rectangle {
                     width: parent.width
                     height: parent.height + 2
                     z: -1
-                    color: "#99000000"
+                    color: Theme.probeHalo
                 }
             }
 
@@ -2279,7 +2279,7 @@ Rectangle {
                 y: cropOverlay.imgTop
                 width: Math.max(0, cropOverlay.imgRight - cropOverlay.imgLeft)
                 height: Math.max(0, cropOverlay.boxTop - cropOverlay.imgTop)
-                color: "#73000000"
+                color: Theme.cropScrim
             }
             // Bottom Scrim: strictly bounded within the image below the crop box
             Rectangle {
@@ -2289,7 +2289,7 @@ Rectangle {
                 y: cropOverlay.boxTop + cropOverlay.boxHeight
                 width: Math.max(0, cropOverlay.imgRight - cropOverlay.imgLeft)
                 height: Math.max(0, cropOverlay.imgBottom - (cropOverlay.boxTop + cropOverlay.boxHeight))
-                color: "#73000000"
+                color: Theme.cropScrim
             }
             // Left Scrim: strictly bounded within the image on the left side of the crop box
             Rectangle {
@@ -2299,7 +2299,7 @@ Rectangle {
                 y: cropOverlay.boxTop
                 width: Math.max(0, cropOverlay.boxLeft - cropOverlay.imgLeft)
                 height: Math.max(0, cropOverlay.boxHeight)
-                color: "#73000000"
+                color: Theme.cropScrim
             }
             // Right Scrim: strictly bounded within the image on the right side of the crop box
             Rectangle {
@@ -2309,7 +2309,7 @@ Rectangle {
                 y: cropOverlay.boxTop
                 width: Math.max(0, cropOverlay.imgRight - (cropOverlay.boxLeft + cropOverlay.boxWidth))
                 height: Math.max(0, cropOverlay.boxHeight)
-                color: "#73000000"
+                color: Theme.cropScrim
             }
 
             // The Crop Bounding Box Item
@@ -2327,7 +2327,7 @@ Rectangle {
                     objectName: "imageCropRect-" + viewport.slot
                     anchors.fill: parent
                     color: cropOverlay.isDraggingNew ? Theme.cropFill : "transparent"
-                    border.color: "#ffffff"
+                    border.color: Theme.cropBoxBorder
                     border.width: 1.5
 
                     // Outer dark border to ensure contrast on white pictures
@@ -2336,7 +2336,7 @@ Rectangle {
                         anchors.margins: -1
                         z: -1
                         color: "transparent"
-                        border.color: "#66000000"
+                        border.color: Theme.cropBoxHalo
                         border.width: 1
                     }
                 }
@@ -2352,28 +2352,28 @@ Rectangle {
                         y: Math.round(parent.height / 3)
                         width: parent.width
                         height: 1
-                        color: "#40ffffff"
+                        color: Theme.cropGridLine
                     }
                     Rectangle {
                         x: 0
                         y: Math.round(parent.height * 2 / 3)
                         width: parent.width
                         height: 1
-                        color: "#40ffffff"
+                        color: Theme.cropGridLine
                     }
                     Rectangle {
                         x: Math.round(parent.width / 3)
                         y: 0
                         width: 1
                         height: parent.height
-                        color: "#40ffffff"
+                        color: Theme.cropGridLine
                     }
                     Rectangle {
                         x: Math.round(parent.width * 2 / 3)
                         y: 0
                         width: 1
                         height: parent.height
-                        color: "#40ffffff"
+                        color: Theme.cropGridLine
                     }
                 }
 
@@ -4378,7 +4378,7 @@ Rectangle {
                                 height: 30
                                 placeholderText: qsTr("输入标注文字，再点击画面放置")
                                 text: control.annotationText
-                                font.pixelSize: 12
+                                font.pixelSize: Theme.fontSecondary
                                 onTextEdited: control.annotationText = text
                             }
                             Text {
@@ -4727,7 +4727,7 @@ Rectangle {
                         width: parent.width
                         text: qsTr("「打开图片…」查看单张的通道与透明度；\n「打开图片对…」载入 A / B 后可做差异、分割线与淡化对比。")
                         color: Theme.mutedText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         lineHeight: 1.4
                         wrapMode: Text.WordWrap
                         horizontalAlignment: Text.AlignHCenter
@@ -4894,7 +4894,7 @@ Rectangle {
                         Text {
                             text: qsTr("peek：%1 原图（松开 ` 恢复）").arg(control.peekSource === 1 ? "B" : "A")
                             color: Theme.primaryText
-                            font.pixelSize: 12
+                            font.pixelSize: Theme.fontSecondary
                             font.weight: Font.DemiBold
                             anchors.verticalCenter: parent.verticalCenter
                         }
@@ -4962,7 +4962,7 @@ Rectangle {
                                 return qsTr("背景 · %1").arg(bgNames[control.backgroundMode] || "");
                             }
                             color: Theme.primaryText
-                            font.pixelSize: 12
+                            font.pixelSize: Theme.fontSecondary
                             font.weight: Font.DemiBold
                             anchors.verticalCenter: parent.verticalCenter
                         }
@@ -4995,7 +4995,7 @@ Rectangle {
                             anchors.centerIn: parent
                             text: "×"
                             color: alphaResetMouse.containsMouse ? Theme.primaryText : Theme.mutedText
-                            font.pixelSize: 12
+                            font.pixelSize: Theme.fontSecondary
                             font.weight: Font.DemiBold
                         }
 
@@ -5292,7 +5292,7 @@ Rectangle {
                             visible: width > 4
                             text: control.hasSecondary ? qsTr("B · %1").arg(control.imageTitle(control.imageReview.secondaryPath, control.imageReview.primaryPath)) : ""
                             color: Theme.primaryText
-                            font.pixelSize: 12
+                            font.pixelSize: Theme.fontSecondary
                             font.weight: Font.DemiBold
                             elide: Text.ElideRight
                             width: Math.max(0, (wipeOverlay.wipeHorizontal ? wipeOverlay.width : wipeOverlay.splitX) - 36)
@@ -5322,7 +5322,7 @@ Rectangle {
                             visible: width > 4
                             text: control.hasPrimary ? qsTr("A · %1").arg(control.imageTitle(control.imageReview.primaryPath, control.imageReview.secondaryPath)) : ""
                             color: Theme.primaryText
-                            font.pixelSize: 12
+                            font.pixelSize: Theme.fontSecondary
                             font.weight: Font.DemiBold
                             elide: Text.ElideRight
                             width: Math.max(0, (wipeOverlay.wipeHorizontal ? wipeOverlay.width : wipeOverlay.width - wipeOverlay.splitX) - 36)
@@ -5542,7 +5542,7 @@ Rectangle {
 
                             text: control.hasPair ? qsTr("A · %1 ↔ B · %2").arg(control.imageTitle(control.imageReview.primaryPath, control.imageReview.secondaryPath)).arg(control.imageTitle(control.imageReview.secondaryPath, control.imageReview.primaryPath)) : ""
                             color: Theme.primaryText
-                            font.pixelSize: 12
+                            font.pixelSize: Theme.fontSecondary
                             font.weight: Font.DemiBold
                             elide: Text.ElideMiddle
                             width: Math.min(implicitWidth, Math.max(160, fadeOverlay.width - 76))
@@ -5877,7 +5877,7 @@ Rectangle {
                 verticalAlignment: Text.AlignVCenter
                 text: qsTr("淡化 · A %1% / B %2%").arg(Math.round((1 - (control.imageReview ? control.imageReview.fadePosition : 0.5)) * 100)).arg(Math.round((control.imageReview ? control.imageReview.fadePosition : 0.5) * 100))
                 color: Theme.mutedText
-                font.pixelSize: 12
+                font.pixelSize: Theme.fontSecondary
             }
             Slider {
                 id: imageFadeSlider
@@ -5996,7 +5996,7 @@ Rectangle {
                             return qsTr("像素 (%1, %2)").arg(control.statusPixel.x).arg(control.statusPixel.y);
                         }
                         color: Theme.mutedText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                     }
                     Text {
@@ -6011,7 +6011,7 @@ Rectangle {
                             return control.imageReview.hexText(control.statusPixel.r, control.statusPixel.g, control.statusPixel.b, control.statusPixel.a);
                         }
                         color: Theme.primaryText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                         font.weight: Font.DemiBold
                     }
@@ -6019,7 +6019,7 @@ Rectangle {
                         visible: !control.editModeActive && Boolean(control.statusPixel && control.statusPixel.valid)
                         text: !control.editModeActive && control.statusPixel && control.statusPixel.valid ? qsTr("α %1%").arg(control.statusPixel.alphaPercent) : ""
                         color: Theme.mutedText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                     }
                     Text {
@@ -6036,7 +6036,7 @@ Rectangle {
                             return qsTr("原码值");
                         }
                         color: Theme.mutedText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                     }
                     // A pixel the active alpha threshold hides keeps its original RGBA here
@@ -6046,7 +6046,7 @@ Rectangle {
                         visible: Boolean(control.statusPixel && control.statusPixel.valid && control.statusPixel.alphaHidden === true)
                         text: qsTr("已被当前 Alpha 阈值隐藏")
                         color: Theme.warningText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                     }
                     Text {
@@ -6056,7 +6056,7 @@ Rectangle {
                         horizontalAlignment: Text.AlignRight
                         text: control.statusPixel && control.statusPixel.valid ? "R " + control.fmtChannel(control.statusPixel.r) : ""
                         color: Theme.primaryText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                     }
                     Text {
@@ -6066,7 +6066,7 @@ Rectangle {
                         horizontalAlignment: Text.AlignRight
                         text: control.statusPixel && control.statusPixel.valid ? "G " + control.fmtChannel(control.statusPixel.g) : ""
                         color: Theme.primaryText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                     }
                     Text {
@@ -6076,7 +6076,7 @@ Rectangle {
                         horizontalAlignment: Text.AlignRight
                         text: control.statusPixel && control.statusPixel.valid ? "B " + control.fmtChannel(control.statusPixel.b) : ""
                         color: Theme.primaryText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                     }
                     Text {
@@ -6086,7 +6086,7 @@ Rectangle {
                         horizontalAlignment: Text.AlignRight
                         text: control.statusPixel && control.statusPixel.valid ? "A " + control.fmtChannel(control.statusPixel.a) : ""
                         color: Theme.primaryText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                     }
                     // I-02: a >8-bit source also reports its original-depth code values so the
@@ -6107,7 +6107,7 @@ Rectangle {
                             return qsTr("源 %1-bit → 转换后 16-bit：A %2（%3%） R %4 G %5 B %6").arg(sample.nativeBitDepth).arg(control.imageReview.channelText16(sample.a16)).arg((Number(sample.a16) / 65535 * 100).toFixed(4)).arg(control.imageReview.channelText16(sample.r16)).arg(control.imageReview.channelText16(sample.g16)).arg(control.imageReview.channelText16(sample.b16));
                         }
                         color: Theme.mutedText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                     }
                 }
@@ -6203,7 +6203,7 @@ Rectangle {
                         verticalAlignment: Text.AlignVCenter
                         text: pairPixelReadout.aOk ? "A (" + pairPixelReadout.sample.a.x + ", " + pairPixelReadout.sample.a.y + ")" : ""
                         color: Theme.mutedText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                     }
                     Text {
@@ -6217,7 +6217,7 @@ Rectangle {
                         // closed) dereferences a null `sample` on every re-evaluation.
                         text: pairPixelReadout.aOk ? pairPixelReadout.sideHex(pairPixelReadout.sample.a) : ""
                         color: Theme.primaryText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                     }
                     Text {
@@ -6229,7 +6229,7 @@ Rectangle {
                         verticalAlignment: Text.AlignVCenter
                         text: pairPixelReadout.aOk ? control.fmtChannel(pairPixelReadout.sample.a.r) : ""
                         color: Theme.primaryText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                     }
                     Text {
@@ -6241,7 +6241,7 @@ Rectangle {
                         verticalAlignment: Text.AlignVCenter
                         text: pairPixelReadout.aOk ? control.fmtChannel(pairPixelReadout.sample.a.g) : ""
                         color: Theme.primaryText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                     }
                     Text {
@@ -6253,7 +6253,7 @@ Rectangle {
                         verticalAlignment: Text.AlignVCenter
                         text: pairPixelReadout.aOk ? control.fmtChannel(pairPixelReadout.sample.a.b) : ""
                         color: Theme.primaryText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                     }
                     Text {
@@ -6265,7 +6265,7 @@ Rectangle {
                         verticalAlignment: Text.AlignVCenter
                         text: pairPixelReadout.aOk ? control.fmtChannel(pairPixelReadout.sample.a.a) : ""
                         color: Theme.primaryText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                     }
                     Text {
@@ -6275,7 +6275,7 @@ Rectangle {
                         verticalAlignment: Text.AlignVCenter
                         text: qsTr("A: 无有效值")
                         color: Theme.mutedText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                         elide: Text.ElideRight
                     }
@@ -6288,7 +6288,7 @@ Rectangle {
                         verticalAlignment: Text.AlignVCenter
                         text: pairPixelReadout.bOk ? "B (" + pairPixelReadout.b.x + ", " + pairPixelReadout.b.y + ")" : ""
                         color: Theme.mutedText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                     }
                     Text {
@@ -6299,7 +6299,7 @@ Rectangle {
                         verticalAlignment: Text.AlignVCenter
                         text: pairPixelReadout.sideHex(pairPixelReadout.b)
                         color: Theme.primaryText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                     }
                     Text {
@@ -6311,7 +6311,7 @@ Rectangle {
                         verticalAlignment: Text.AlignVCenter
                         text: pairPixelReadout.bOk ? control.fmtChannel(pairPixelReadout.b.r) : ""
                         color: Theme.primaryText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                     }
                     Text {
@@ -6323,7 +6323,7 @@ Rectangle {
                         verticalAlignment: Text.AlignVCenter
                         text: pairPixelReadout.bOk ? control.fmtChannel(pairPixelReadout.b.g) : ""
                         color: Theme.primaryText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                     }
                     Text {
@@ -6335,7 +6335,7 @@ Rectangle {
                         verticalAlignment: Text.AlignVCenter
                         text: pairPixelReadout.bOk ? control.fmtChannel(pairPixelReadout.b.b) : ""
                         color: Theme.primaryText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                     }
                     Text {
@@ -6347,7 +6347,7 @@ Rectangle {
                         verticalAlignment: Text.AlignVCenter
                         text: pairPixelReadout.bOk ? control.fmtChannel(pairPixelReadout.b.a) : ""
                         color: Theme.primaryText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                     }
                     Text {
@@ -6357,7 +6357,7 @@ Rectangle {
                         verticalAlignment: Text.AlignVCenter
                         text: pairPixelReadout.bNamed ? qsTr("B: 未对齐无有效值") : qsTr("B: 无有效值")
                         color: Theme.mutedText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                         elide: Text.ElideRight
                     }
@@ -6371,7 +6371,7 @@ Rectangle {
                         verticalAlignment: Text.AlignVCenter
                         text: "Δ(B−A)"
                         color: Theme.mutedText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                     }
                     Text {
@@ -6383,7 +6383,7 @@ Rectangle {
                         verticalAlignment: Text.AlignVCenter
                         text: pairPixelReadout.deltaReady ? control.fmtSigned(pairPixelReadout.sample.a.r, pairPixelReadout.b.r) : ""
                         color: pairPixelReadout.deltaReady && pairPixelReadout.deltaExceeds(pairPixelReadout.dR) ? Theme.warningText : Theme.primaryText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                         font.weight: Font.DemiBold
                     }
@@ -6396,7 +6396,7 @@ Rectangle {
                         verticalAlignment: Text.AlignVCenter
                         text: pairPixelReadout.deltaReady ? control.fmtSigned(pairPixelReadout.sample.a.g, pairPixelReadout.b.g) : ""
                         color: pairPixelReadout.deltaReady && pairPixelReadout.deltaExceeds(pairPixelReadout.dG) ? Theme.warningText : Theme.primaryText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                         font.weight: Font.DemiBold
                     }
@@ -6409,7 +6409,7 @@ Rectangle {
                         verticalAlignment: Text.AlignVCenter
                         text: pairPixelReadout.deltaReady ? control.fmtSigned(pairPixelReadout.sample.a.b, pairPixelReadout.b.b) : ""
                         color: pairPixelReadout.deltaReady && pairPixelReadout.deltaExceeds(pairPixelReadout.dB) ? Theme.warningText : Theme.primaryText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                         font.weight: Font.DemiBold
                     }
@@ -6422,7 +6422,7 @@ Rectangle {
                         verticalAlignment: Text.AlignVCenter
                         text: pairPixelReadout.deltaReady ? control.fmtSigned(pairPixelReadout.sample.a.a, pairPixelReadout.b.a) : ""
                         color: pairPixelReadout.deltaReady && pairPixelReadout.deltaExceeds(pairPixelReadout.dA) ? Theme.warningText : Theme.primaryText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                         font.family: Theme.fontFamilyMono
                         font.weight: Font.DemiBold
                     }
@@ -6442,7 +6442,7 @@ Rectangle {
                 visible: control.errorText.length > 0
                 text: control.errorText
                 color: Theme.error
-                font.pixelSize: 12
+                font.pixelSize: Theme.fontSecondary
                 elide: Text.ElideRight
                 Layout.fillWidth: true
                 Layout.minimumWidth: 0
@@ -6467,7 +6467,7 @@ Rectangle {
                 objectName: "imageZoomReadout"
                 text: qsTr("缩放 %1%（%2）").arg(control.displayPercent).arg(control.displayPercentMode)
                 color: Theme.primaryText
-                font.pixelSize: 12
+                font.pixelSize: Theme.fontSecondary
                 // The one readout the theme's tnum token was written for: zooming re-renders
                 // these digits in place, and proportional figures made the whole status row
                 // shift left and right on every step (UX-18).
@@ -6503,7 +6503,7 @@ Rectangle {
                     return parts.join(" · ");
                 }
                 color: Theme.mutedText
-                font.pixelSize: 12
+                font.pixelSize: Theme.fontSecondary
                 elide: Text.ElideRight
             }
             // ---- Numeric format -------------------------------------------------------------
@@ -6599,7 +6599,7 @@ Rectangle {
                 visible: control.marqueeNoticeText.length > 0
                 text: control.marqueeNoticeText
                 color: Theme.secondaryText
-                font.pixelSize: 12
+                font.pixelSize: Theme.fontSecondary
                 elide: Text.ElideRight
                 width: Math.min(implicitWidth, 230)
                 height: Theme.hitAreaMinimum

@@ -98,6 +98,19 @@ Item {
             }
         }
 
+        // On-footage overlay marks (crop overlay, crosshair) pin the literals ImageWorkspace.qml
+        // used to inline, so extracting them into tokens stayed a zero-visual-change refactor.
+        // Reverting any single line in VcsTheme.js fails exactly one compare here.
+        function test_footage_overlay_marks_keep_their_pinned_values() {
+            compare(Theme.probeHalo, "#99000000");
+            compare(Theme.cropScrim, "#73000000");
+            compare(Theme.cropBoxBorder, "#ffffff");
+            compare(Theme.cropBoxHalo, "#66000000");
+            compare(Theme.cropHandle, "#ffffff");
+            compare(Theme.cropHandleHalo, "#80000000");
+            compare(Theme.cropGridLine, "#40ffffff");
+        }
+
         // UX-16: inactive controls are exempt from WCAG 1.4.3, and that exemption is only
         // honest while nothing a user must read is published in this colour. The floor here is
         // the legibility one the token's comment promises (>= 3.5:1 on the darkest menu

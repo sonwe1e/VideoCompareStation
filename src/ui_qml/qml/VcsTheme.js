@@ -127,12 +127,25 @@ var lineHalo = "#4d000000"
 var selectionFill = "#220a84ff"
 var cropFill = "#2214b8a6"
 var cropBorder = "#5eead4"
+// Marks drawn on top of user footage. Each token pins a literal the image crop overlay used to
+// inline, so the marks can be retuned in one place without editing the workspace file. The halo
+// tokens are the dark outline drawn behind a light mark (the same z:-1 backing pattern as
+// lineHalo) so the mark stays readable over bright pixels.
+var cropScrim = "#73000000"
+var cropBoxBorder = "#ffffff"
+var cropBoxHalo = "#66000000"
+var cropHandle = "#ffffff"
+var cropHandleHalo = "#80000000"
+var cropGridLine = "#40ffffff"
 // Pixel probe. Yellow stays clear of the accent-blue selection, the teal crop and every
 // source hue; the pointer's own panel gets a faint white line so it never hides the cursor.
 var probe = "#facc15"
 var probeLine = "#d9facc15"
 var probeLineMuted = "#55ffffff"
 var probePip = "#ccffffff"
+// Dark backing behind the crosshair hairlines: the z:-1 halo that keeps a 1 px line readable
+// over bright pixels, shared by the hover and synced crosshairs.
+var probeHalo = "#99000000"
 
 var timelineRail = "#2e2e31"
 // In/out band: accentText at 30 % alpha, so the brackets drawn on top of it stay fully opaque.
