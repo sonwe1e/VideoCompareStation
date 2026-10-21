@@ -7,7 +7,9 @@ Item {
     id: root
 
     width: 900
-    height: 400
+    // 700 keeps the default compactChrome derivation (hosting window <= 640) off for the
+    // legacy fixtures; the compact tier gets its own explicitly-pinned instance below.
+    height: 700
 
     QtObject {
         id: actions
@@ -245,7 +247,7 @@ Item {
     QtObject {
         id: metricsFake
 
-        signal samplesChanged()
+        signal samplesChanged
 
         property bool available: true
         property bool laneEnabled: true
@@ -363,6 +365,39 @@ Item {
         canPause: false
         canNext: true
         canLast: true
+        anchors.top: root.top
+    }
+
+    // UX-13 S1 compact-tier instance: pinned explicitly (not window-derived) so the tier's
+    // layout is testable regardless of this suite's window size. Width mirrors the 960x640
+    // evidence tier's docked transport (932 logical pixels).
+    Dvs.PlayerOsc {
+        id: compactOsc
+
+        z: 8
+        visible: false
+        width: 932
+        compactChrome: true
+        controllerState: 0
+        docked: true
+        playing: false
+        timelineEnabled: true
+        currentFrame: 41
+        totalFrames: 100
+        progress: 0.41
+        timecodeText: "00:00:01:11"
+        markers: []
+        actions: actions
+        focusTarget: focusTarget
+        canFirst: true
+        canPrevious: true
+        canPlay: true
+        canPause: false
+        canNext: true
+        canLast: true
+        inFrame: 41
+        outFrame: 47
+        rangeExportVisible: true
         anchors.top: root.top
     }
 
@@ -887,9 +922,13 @@ Item {
                 // Hover answers with the readable accent; leaving returns to the resting one.
                 verify(Qt.colorEqual(toggle.color, Theme.accent));
                 mouseMove(toggle, toggle.width / 2, toggle.height / 2);
-                tryVerify(function() { return Qt.colorEqual(toggle.color, Theme.accentText); });
+                tryVerify(function () {
+                    return Qt.colorEqual(toggle.color, Theme.accentText);
+                });
                 mouseMove(root, 1, 1);
-                tryVerify(function() { return Qt.colorEqual(toggle.color, Theme.accent); });
+                tryVerify(function () {
+                    return Qt.colorEqual(toggle.color, Theme.accent);
+                });
 
                 // Keyboard reachable, with the repo's canonical ring (2px Theme.focus). A Text
                 // has no visualFocus, so the ring follows activeFocus.
@@ -980,13 +1019,10 @@ Item {
                 verify(option.activeFocus);
                 const policiesBefore = actions.continuityPolicyCalls;
                 keyClick(Qt.Key_Return);
-                compare(actions.continuityPolicyCalls, policiesBefore + 1,
-                        "Return presses the focused segment");
-                compare(actions.lastContinuityPolicy, 1,
-                        "the focused segment reports its own policy");
+                compare(actions.continuityPolicyCalls, policiesBefore + 1, "Return presses the focused segment");
+                compare(actions.lastContinuityPolicy, 1, "the focused segment reports its own policy");
                 keyClick(Qt.Key_Space);
-                compare(actions.continuityPolicyCalls, policiesBefore + 2,
-                        "Space presses it too");
+                compare(actions.continuityPolicyCalls, policiesBefore + 2, "Space presses it too");
             } finally {
                 osc.inFrame = -1;
                 osc.outFrame = -1;
@@ -1002,9 +1038,18 @@ Item {
             metricOsc.visible = true;
             metricOsc.revealActive = true;
             metricsFake.peaks = [
-                { "frame": 1, "mae": 5.0 },
-                { "frame": 10, "mae": 4.0 },
-                { "frame": 90, "mae": 2.0 }
+                {
+                    "frame": 1,
+                    "mae": 5.0
+                },
+                {
+                    "frame": 10,
+                    "mae": 4.0
+                },
+                {
+                    "frame": 90,
+                    "mae": 2.0
+                }
             ];
             metricOsc.metrics = metricsFake;
             try {
@@ -1236,13 +1281,11 @@ Item {
                 waitForRendering(chip);
                 wait(50);
                 verify(!chip.chipEnabled, "an unmarked range keeps the disabled styling");
-                verify(chip.chipHelp.indexOf(qsTr("请先设置有效的区间起点和终点")) >= 0,
-                    "the hover text must state the reason before the click is spent");
+                verify(chip.chipHelp.indexOf(qsTr("请先设置有效的区间起点和终点")) >= 0, "the hover text must state the reason before the click is spent");
 
                 exportRangeSpy.clear();
                 mouseClick(chip, chip.width / 2, chip.height / 2);
-                compare(exportRangeSpy.count, 1,
-                    "the click must still reach the host's explanation path");
+                compare(exportRangeSpy.count, 1, "the click must still reach the host's explanation path");
 
                 // Keyboard reaches the same seam: the gate is on the action, not the reason.
                 chip.forceActiveFocus(Qt.TabFocusReason);
@@ -1370,6 +1413,63 @@ Item {
             tryVerify(() => !toggle.visible);
             osc.playing = false;
             transport.adjacentExpanded = false;
+        }
+
+        // UX-13 S1 compact tier: the in/out chips stay visible, the working actions fold
+        // behind the summary chip, and the summary carries the range state.
+        function test_compact_tier_keeps_io_visible_and_folds_working_actions() {
+            compactOsc.visible = true;
+            try {
+                const markIn = findChild(compactOsc, "transportMarkInButton");
+                const markOut = findChild(compactOsc, "transportMarkOutButton");
+                const summary = findChild(compactOsc, "transportRangeSummaryCompact");
+                verify(markIn !== null && markIn.visible, "in point chip must stay visible");
+                verify(markOut !== null && markOut.visible, "out point chip must stay visible");
+                verify(summary !== null && summary.visible);
+                // Endpoints are set on the fixture, so the chip carries the state summary.
+                verify(summary.chipText.indexOf("42") !== -1, "summary must name the range: " + summary.chipText);
+                const playRange = findChild(compactOsc, "transportPlayRangeButton");
+                const exportChip = findChild(compactOsc, "transportExportRangeButton");
+                verify(playRange !== null && !playRange.visible, "working face starts folded");
+                verify(exportChip !== null && !exportChip.visible, "export starts folded");
+                compactOsc.rangeExpandedCompact = true;
+                tryVerify(() => playRange.visible);
+                verify(exportChip.visible);
+                compactOsc.rangeExpandedCompact = false;
+                tryVerify(() => !playRange.visible);
+            } finally {
+                compactOsc.rangeExpandedCompact = false;
+                compactOsc.visible = false;
+            }
+        }
+
+        function test_compact_tier_height_stays_within_two_transport_rows() {
+            compactOsc.visible = true;
+            try {
+                // Budget: micro + timeline 42 + playhead clearance + main row 40 + micro + the
+                // always-visible in/out row 32 + micro. The design doc's <= 120 ambition is
+                // traded for the always-visible in/out chips (user revision 2026-10-16); the
+                // tier must still stay inside this pinned two-row band.
+                verify(compactOsc.height <= 140, "compact transport height: " + compactOsc.height);
+                verify(compactOsc.height >= 100, "compact transport collapsed below its own rows: " + compactOsc.height);
+            } finally {
+                compactOsc.visible = false;
+            }
+        }
+
+        function test_compact_tier_keeps_the_unmeasured_sentence_visible() {
+            compactOsc.visible = true;
+            try {
+                compactOsc.playbackModeLabel = "逐帧完整";
+                compactOsc.playbackRunPresentedFrames = 0;
+                const quiet = findChild(compactOsc, "playbackStatusQuiet");
+                verify(quiet !== null && quiet.visible, "the UX-02 quiet capsule rides the compact overlay line");
+                verify(quiet.text.indexOf("本次播放尚未测量") !== -1);
+            } finally {
+                compactOsc.playbackModeLabel = "";
+                compactOsc.playbackRunPresentedFrames = 41;
+                compactOsc.visible = false;
+            }
         }
 
         function collectPeakHitAreas(item, found) {

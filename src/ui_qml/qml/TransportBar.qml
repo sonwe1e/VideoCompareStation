@@ -21,6 +21,14 @@ Item {
     readonly property var jogRateLadder: [0.5, 1.0, 2.0]
     property Item focusTarget: null
     property bool compact: false
+    // UX-13 S1 compact-chrome tier, mirrored from PlayerOsc. The range row stays visible with
+    // the always-shown in/out chips plus a summary toggle chip; the working actions (play
+    // range, loop, ping-pong, clear, export) stay behind that toggle until asked for.
+    property bool compactChrome: false
+    property bool rangeExpandedCompact: false
+    // Vertical centre of the first transport row inside the control, for hosts that overlay
+    // their info line on the row's free right side (PlayerOsc compact tier).
+    readonly property real mainRowCenterY: buttons.height / 2
     // I8: the second-step buttons follow the active shortcut preset so their tooltips never
     // promise a different jump than ReviewShortcuts performs. 0 = frame-review preset
     // (Ctrl+←/→ steps one second), 1 = player preset (Ctrl+←/→ jumps 30 seconds). The host
@@ -310,8 +318,9 @@ Item {
         id: transportColumn
 
         // One group (the button row) per line; the group step keeps four stacked rows from
-        // reading as a single dense block.
-        spacing: Theme.spaceMain
+        // reading as a single dense block. The compact tier spends the micro step between the
+        // rows instead - giving those pixels back to the canvas is the tier's whole purpose.
+        spacing: control.compactChrome ? Theme.spaceMicro : Theme.spaceMain
         width: control.width
         anchors.horizontalCenter: parent.horizontalCenter
 
@@ -319,6 +328,9 @@ Item {
             id: buttons
 
             anchors.horizontalCenter: parent.horizontalCenter
+            // Compact tier left-aligns the row so the host's info line can overlay the free
+            // right side without crowding the buttons.
+            anchors.horizontalCenterOffset: control.compactChrome ? Theme.spaceMain * 2 + implicitWidth / 2 - parent.width / 2 : 0
 
             spacing: control.compact ? 4 : 6
 
@@ -643,6 +655,28 @@ Item {
                     }
                 }
             }
+
+            // UX-13 S1 compact tier: the range state rides this chip so collapsing the working
+            // actions never hides "is a range set". The in/out chips stay outside the toggle -
+            // always visible per the product's 2026-10-16 user revision.
+            RangeChip {
+                objectName: "transportRangeSummaryCompact"
+                visible: control.compactChrome
+                anchors.verticalCenter: parent.verticalCenter
+                chipActive: control.rangeExpandedCompact
+                chipText: {
+                    if (!control.hasRangeEndpoints)
+                        return qsTr("区间 ▾");
+                    const inText = control.rangeInFrame >= 0 ? String(control.rangeInFrame + 1) : "—";
+                    const outText = control.rangeOutFrame >= 0 ? String(control.rangeOutFrame + 1) : "—";
+                    const stateSuffix = control.rangeLoopActive ? qsTr(" · 循环") : (control.rangePingPongActive ? qsTr(" · 往返") : "");
+                    // QML's String.arg() is single-argument: a multi-arg call fails at runtime
+                    // ("Invalid arguments"), so the substitutions chain.
+                    return qsTr("%1–%2%3 %4").arg(inText).arg(outText).arg(stateSuffix).arg(control.rangeExpandedCompact ? "▴" : "▾");
+                }
+                chipHelp: qsTr("展开或收起区间操作（播放区间、循环、往返、清除与导出）；设点 I / O 始终可见")
+                onClicked: control.rangeExpandedCompact = !control.rangeExpandedCompact
+            }
         }
 
         // A stable second row keeps mark, playback and export controls reachable in
@@ -690,7 +724,9 @@ Item {
             Row {
                 id: rangeWorkingFace
 
-                visible: control.hasRangeEndpoints
+                // Compact tier folds the working face behind the summary chip; the row keeps
+                // the always-visible in/out chips.
+                visible: control.hasRangeEndpoints && (!control.compactChrome || control.rangeExpandedCompact)
                 width: visible ? implicitWidth : 0
                 spacing: control.compact ? 4 : 6
 
@@ -788,7 +824,9 @@ Item {
             // position matches the pre-cluster flat row (…, 清除, 导出).
             RangeChip {
                 objectName: "transportExportRangeButton"
-                visible: control.rangeExportVisible
+                // Compact tier folds the export chip behind the summary chip with the rest of
+                // the working face; its explain-on-click contract keeps working once expanded.
+                visible: control.rangeExportVisible && (!control.compactChrome || control.rangeExpandedCompact)
                 prominent: true
                 chipText: control.rangeExportBusy ? qsTr("导出中 %1%").arg(Math.round(control.rangeExportProgress * 100)) : qsTr("导出")
                 // The hover text carries the gate before the click is spent on it.

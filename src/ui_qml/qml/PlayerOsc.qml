@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import QtQuick.Window
 import "VcsTheme.js" as Theme
 
 Item {
@@ -88,6 +89,23 @@ Item {
     // was triggered.
     readonly property bool pointerInsidePanel: panelHover.hovered || tracks.pointerInside
     readonly property bool controlsEnabled: control.docked || control.controllerState === 0 || control.revealActive
+    // UX-13 S1 compact-chrome tier (docs/plans/ux13-narrow-window-redesign.md §2 D1): the
+    // 960x640 problem tier sheds every non-essential layout line. Derived from the hosting
+    // window so Main.qml needs no wiring; a plain property so standalone QML tests can pin
+    // either tier explicitly. S4 moves the switch up to the shell.
+    property bool compactChrome: Window.window !== null && Window.window.height <= 640
+    // Single authority for whether the metrics lane renders. Big windows follow the
+    // controller's laneEnabled toggle; the compact tier keeps the lane off the stack entirely -
+    // the inspector stays the metrics surface, and no sampling is added or removed by this gate.
+    readonly property bool metricsLaneVisible: control.metrics !== null && control.metrics.available && !control.compactChrome && control.metrics.laneEnabled
+    // Compact-tier overlay: the info line leaves the vertical stack and rides the transport
+    // main row's free right side (the row is left-aligned in this tier), so timecode, frame
+    // counter and the UX-02 quiet sentence stay on screen without spending a layout line.
+    // Width-guarded so the overlay never crowds the buttons on a narrower window.
+    readonly property bool readoutOverlay: control.compactChrome && control.width >= 920
+    // UX-13 S1: forwards the compact range-row toggle so hosts and the QML suite reach the
+    // summary chip's state without digging into the transport bar.
+    property alias rangeExpandedCompact: transport.rangeExpandedCompact
 
     signal previewRequested(int frame)
     signal seekRequested(int frame)
@@ -111,7 +129,10 @@ Item {
     objectName: "transport"
     // The trailing gap is the main step, so the transport sits under the timeline the same way
     // it does inside the panel instead of hugging the panel edge.
-    height: Math.max(0, tracks.y) + tracks.height + 13 + transport.implicitHeight + Theme.spaceMain
+    // Compact tier: the info line overlays the transport row and the metrics lane stays
+    // hidden, so the stack is only the (failure-only) warning line above the timeline; both
+    // gaps drop to the micro step. The 13 px clearance still guards the playhead thumb.
+    height: control.compactChrome ? Theme.spaceMicro + (statusText.visible ? statusText.height + Theme.spaceMicro : 0) + (!control.readoutOverlay ? readout.height + Theme.spaceMicro : 0) + tracks.height + 13 + transport.implicitHeight + Theme.spaceMicro : Math.max(0, tracks.y) + tracks.height + 13 + transport.implicitHeight + Theme.spaceMain
     visible: controllerState !== 2
 
     onPointerInsidePanelChanged: {
@@ -282,18 +303,25 @@ Item {
         Row {
             id: readout
 
-            spacing: Theme.spaceGroup
+            // Compact tier: the row overlays the transport main row's free right side
+            // (right-aligned through a computed left margin, so no anchor line switch is
+            // needed) and paints above the transport; z keeps it there. The big window keeps
+            // the stacked info line under the panel top.
+            z: 2
+            spacing: control.readoutOverlay ? Theme.spaceMain : Theme.spaceGroup
             anchors {
-                top: parent.top
-                topMargin: 8
+                top: control.readoutOverlay ? transport.top : parent.top
                 left: parent.left
-                leftMargin: 16
+                leftMargin: control.readoutOverlay ? parent.width - Theme.spaceMain - width : 16
+                topMargin: control.readoutOverlay ? transport.mainRowCenterY - Math.round(height / 2) : (control.compactChrome ? Theme.spaceMicro : 8)
             }
 
             Text {
                 id: sourceLabelReadout
                 objectName: "sourceLabelReadout"
-                visible: control.sourceLabel !== ""
+                // Compact overlay drops the filename: the source strip above already names the
+                // session and the overlay line budget belongs to the readouts.
+                visible: control.sourceLabel !== "" && !control.readoutOverlay
                 text: control.sourceLabel
                 color: Theme.mutedText
                 font.family: Theme.fontFamilyMono
@@ -340,7 +368,9 @@ Item {
             Text {
                 objectName: "metricsSummaryText"
 
-                visible: control.metrics !== null && control.metrics.available
+                // Compact tier hides the inline summary with the lane: the inspector carries
+                // the metrics surface there.
+                visible: control.metrics !== null && control.metrics.available && !control.compactChrome
                 text: {
                     if (control.metrics === null)
                         return "";
@@ -365,7 +395,7 @@ Item {
                 id: metricsLaneToggle
 
                 objectName: "oscMetricsLaneToggle"
-                visible: control.metrics !== null && control.metrics.available
+                visible: control.metrics !== null && control.metrics.available && !control.compactChrome
                 enabled: visible
                 // The theme's hit-area minimum, not a smaller literal: this is an interactive
                 // control sharing the info row with texts, the row's height is content-driven
@@ -395,6 +425,10 @@ Item {
                 text: control.playbackStatusQuietText()
                 color: Theme.mutedText
                 font.pixelSize: Theme.fontSecondary
+                // Compact overlay caps the capsule so the info line never reaches the buttons;
+                // the hover tooltip keeps the full sentence in every tier (UX-02).
+                elide: Text.ElideRight
+                width: control.readoutOverlay ? Math.min(implicitWidth, 150) : implicitWidth
                 Accessible.name: text
                 Accessible.description: control.playbackStatusToolTipText()
                 anchors.verticalCenter: parent.verticalCenter
@@ -438,7 +472,7 @@ Item {
                 leftMargin: 16
                 right: parent.right
                 rightMargin: 16
-                top: readout.bottom
+                top: control.readoutOverlay ? parent.top : readout.bottom
                 topMargin: Theme.spaceMicro
             }
 
@@ -487,6 +521,9 @@ Item {
             metrics: control.metrics
             totalFrames: control.totalFrames
             progress: control.progress
+            // Overrides the component's own visible binding: the compact tier keeps the lane
+            // (curve and header) off the stack entirely, per metricsLaneVisible above.
+            visible: control.metricsLaneVisible
             anchors {
                 left: parent.left
                 leftMargin: 16
@@ -496,6 +533,20 @@ Item {
                 topMargin: Theme.spaceMicro
             }
             onSeekRequested: frame => control.seekRequested(frame)
+        }
+
+        // Vertical bus for the timeline's top edge. The timeline anchors to this single static
+        // line: branching the three sources straight onto its top anchor made Qt's anchor
+        // watcher report possible vertical anchor loops once the compact overlay joined the
+        // chain (S1 gate, 4x per run). Plain-number bindings on a zero-height item keep the
+        // identical layout while the anchor system sees one unambiguous dependency.
+        Item {
+            id: timelineTopBus
+
+            anchors.left: parent.left
+            anchors.right: parent.right
+            y: metricLane.visible ? metricLane.y + metricLane.height : (statusText.visible ? statusText.y + statusText.height : (control.readoutOverlay ? 0 : readout.y + readout.height))
+            height: 0
         }
 
         TimelineTracks {
@@ -512,10 +563,11 @@ Item {
                 leftMargin: 16
                 right: parent.right
                 rightMargin: 16
-                top: metricLane.visible ? metricLane.bottom : (statusText.visible ? statusText.bottom : readout.bottom)
+                top: timelineTopBus.top
                 // Six pixels: the time axis is the object the whole panel is read against, so it
-                // gets one step more air than the status block above it.
-                topMargin: 6
+                // gets one step more air than the status block above it. The compact tier spends
+                // the micro step instead - those pixels are the canvas the tier recovers.
+                topMargin: control.compactChrome ? Theme.spaceMicro : 6
             }
             onPreviewRequested: frame => control.previewRequested(frame)
             onSeekRequested: frame => control.seekRequested(frame)
@@ -544,6 +596,7 @@ Item {
             id: transport
             objectName: "transportBar"
             compact: true
+            compactChrome: control.compactChrome
             // Anchored to the tracks (the content above it), NOT the panel bottom — anchoring to the
             // panel bottom would form a bottom-to-bottom binding loop with the control's height. The
             // 13 px top margin clears the playhead thumb, which extends ~6 px below the tracks box.

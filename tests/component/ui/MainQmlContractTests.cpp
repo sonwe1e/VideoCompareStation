@@ -4842,8 +4842,14 @@ TEST(MainQmlContractTests, DrawerScrimTransportShrinkAndEscClose) {
 
     const QImage grab = window->grabWindow();
     const double dpr = window->devicePixelRatio();
-    const int expectedGrabWidth = static_cast<int>(900.0 * dpr);
-    const int expectedGrabHeight = static_cast<int>(640.0 * dpr);
+    // UX-13 S1: window height 640 is the compact-chrome tier, and the shell re-polishes after
+    // the explicit resize, so the grabbed device buffer settles a rounding step off the
+    // scale-factor product of the requested 900x640 (900x640 grabbed vs 899x639 expected on
+    // the S1 gate run). The gate's job is "the grab covers the window it came from", so derive
+    // the expectation from the window's own settled logical size and round - never re-derive
+    // it from the requested size with truncation.
+    const int expectedGrabWidth = qRound(window->width() * dpr);
+    const int expectedGrabHeight = qRound(window->height() * dpr);
     EXPECT_EQ(grab.width(), expectedGrabWidth);
     EXPECT_EQ(grab.height(), expectedGrabHeight);
 
