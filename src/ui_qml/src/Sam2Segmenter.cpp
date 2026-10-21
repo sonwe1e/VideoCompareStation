@@ -63,7 +63,7 @@ constexpr std::array<float, 3> kImageNetStd{0.229f, 0.224f, 0.225f};
     }
     const float t = static_cast<float>(value - kMaskLow) / static_cast<float>(kMaskHigh - kMaskLow);
     const float smooth = t * t * (3.0f - 2.0f * t);
-    return static_cast<uchar>(std::clamp(static_cast<int>(smooth * 255.0f + 0.5f), 0, 255));
+    return static_cast<uchar>(std::clamp(std::lround(smooth * 255.0f), 0L, 255L));
 }
 
 // One exp per mask cell. 256x256 bounds the cost (about 65k calls), and the true logistic
@@ -71,7 +71,7 @@ constexpr std::array<float, 3> kImageNetStd{0.229f, 0.224f, 0.225f};
 // of the confidence range.
 [[nodiscard]] uchar sigmoidToByte(const float logit) {
     const float value = 1.0f / (1.0f + std::exp(-logit));
-    return static_cast<uchar>(std::clamp(static_cast<int>(value * 255.0f + 0.5f), 0, 255));
+    return static_cast<uchar>(std::clamp(std::lround(value * 255.0f), 0L, 255L));
 }
 
 } // namespace

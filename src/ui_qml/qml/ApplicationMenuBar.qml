@@ -111,10 +111,13 @@ VcsMenuBar {
         if (control.count <= 0)
             return false;
         const item = control.itemAt(0);
-        if (!item || !item.menu || !item.enabled)
+        if (!item || !item.enabled)
             return false;
-        item.menu.popup(item, 0, item.height);
-        item.menu.forceActiveFocus();
+        const menu = control.menuAt(0);
+        if (!menu)
+            return false;
+        menu.popup(item, 0, item.height);
+        menu.forceActiveFocus();
         return true;
     }
 
