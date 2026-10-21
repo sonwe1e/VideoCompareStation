@@ -1,5 +1,27 @@
 # 视觉审查问题台账
 
+## 2026-10-21 清债小件轮（A 轮，已提交）
+
+四专家团队（视觉/体验/性能/工程）首轮交付：只读盘点后四镜头并行实现，lead 统一跑门禁。
+实现提交 `37db81e`，lint 旧债修复 `3384943`。
+
+| 条目 | 落点 | 钉住它的验证 |
+|---|---|---|
+| UX-15 手柄路径收口：WipeHandle 键盘可达 | `WipeHandle.qml`：activeFocusOnTab、Accessible.Slider（数值走 description）、方向键沿自身轴 1%/Shift 5% 夹紧、2px 焦点环（wipeFocusRing）；三个指针 handler 未动，环只能经 Tab 点亮 | `WipeHandleIsKeyboardAdjustable` 启用并通过（MainQmlContractTests）；`ui.wipe_handle` 新增步进/轴向门控/端点夹紧/焦点环用例 |
+| ImageWorkspace 令牌收敛（同值子集） | 45 处 `font.pixelSize: 12` → `Theme.fontSecondary`；叠加色入令牌 probeHalo/cropScrim/cropBoxBorder/cropBoxHalo/cropHandle/cropHandleHalo/cropGridLine（7 个新令牌，值＝原字面量，零视觉变化）；离阶 10/13/17 未动，留给 UX-17 全量轮 | `tst_vcs_theme` 新增钉值用例；grep 目标字面量零残留；`ui.ImageWorkspaceManual` 通过 |
+| D-009 改判 + 台账漂移修正 | D-009「未定」→「未触发」（触发/到期条件按 D-012 先例）；`transport.h` 过期引用加注（现内容驱动 161px）；UX-17 计数 156→151 注明口径 | decision-register 状态列仅含四个枚举值 |
+| 真机验收走查 runbook | 新页 `real-environment-verification.md`：性能四门槛素材/命令/判据/证据落点 + 9 项真机走查 + 占机估计 | 纯文档；执行仍受测试环境分离约束 |
+| UX-19 打包决策入册 | decision-register 新增 D-019（临时假设：SAM2 不进发布 ZIP，待用户在「内置 vs 本机安装」间拍板） | D-019 行 |
+
+两处 **HEAD 既有 lint 旧债**顺带修复（均由 2026-10-20/21 批次在最近一次完整 lint 之后引入，与本轮改动无关）：
+
+- `ApplicationMenuBar.focusFirstMenu`：`item.menu` 在 QQuickItem 上不可解析（qmllint missing-property ×3）→ 改用 `control.menuAt(0)`，行为等价；UX-05 的 F10 契约由 `ui.application_menu_bar` 八档配置全绿确认。
+- `Sam2Segmenter.cpp:66/74`：`+0.5f` 截断式取整（bugprone-incorrect-roundings ×4）→ `std::lround`，非负输入下行为一致。
+
+**门禁（2026-10-21，dev 预设，lead 串行）**：format-check 通过（clang-format 432 个 C++ 文件 + qmlformat）；完整 lint 通过（qmllint `--max-warnings 0` 零告警、clang-tidy 零发现）；定向 `-TestRegex 'ui.(MainQmlContractTests|ImageWorkspaceManual|wipe_handle|vcs_theme|application_menu_bar)'` **153/153 全部通过**（含启用的 `WipeHandleIsKeyboardAdjustable`、`ChromeGeometryAndScreenshotEvidence`、application_menu_bar 8 档 DPI 配置）。
+
+**剩余**：焦点环实机观感、读屏播报按 runbook 待真机走查；UX-13 窄窗重排提案已定稿（`docs/plans/ux13-narrow-window-redesign.md`，Q1/Q2/Q3 裁定见 §7），动工前先补 video960 三项基线锚点。
+
 ## 2026-10-19 产品体验质量整改（EX-01 ~ EX-08，工作区实现）
 
 依据 [产品体验质量评审](product-quality-review-2026-10-19.md)。评审区分"用不了"与"做得不好"，
@@ -68,7 +90,9 @@
   属于纯增量，留待与 UX-13 的布局一起动。
 - **UX-19 的发布载荷**：按钮已按能力显隐，但发布 ZIP 仍不带 `onnxruntime` 与 `models/`，
   本机模型 138.6 MB 也没有安装规则。这是打包问题，不是界面问题，需要在打包流水线里决定。
-- **UX-17 的剩余量**：156 处字号字面量、31 处 10px 里只处理了"必须读"的 5 处。剩下的多数是
+- **UX-17 的剩余量**：151 处字号字面量（2026-10-21 复测，口径：`src/ui_qml/qml/` 下
+  `font.pixelSize: <裸数字>` 字面量，grep 实测；与评审基线记 156 的差值恰为 UX-17 已收敛
+  到 `fontCaption` 的 5 处）、31 处 10px 里只处理了"必须读"的 5 处。剩下的多数是
   装饰性小字，值得一次性收敛，但不该在功能修复里顺手大改。
 - **仍未验证**：真实影片观感、4K/HDR、多屏 DPI、读屏软件实测、触摸输入、系统高对比度主题。
   本轮改的是令牌与控件，这些环境仍需独立验收。
@@ -122,6 +146,10 @@
   `setApplicationDisplayName`（`DesktopApplication.cpp:151`）被 Qt 追加一次。
 - **UX-13/UX-14 布局**：960×640 下画布 908×386（面积为大窗的 37%），chrome 占 32% 高度；
   视频 `transport.h` 两档均为 180；居中提示条落在逻辑 y 591–626 并跨越分割线。
+  （注：走带高度记录现已过期——当前走带条由 `TransportBar.qml` 内容驱动，不再有固定两档
+  180；2026-10-19 复测三档均为 161.0，见
+  `out/verification/ui-audit-2026-10-19/chrome-geometry.txt` 的
+  `video1440/videoRange1440/video960.transport.h`。上行 180 为本次评审时的记录，保留不改。）
 - **UX-15 图片分割线无键盘兜底**：`Alt+方向键` 依赖 `root.wipeMode`
   （`Main.qml:3396` → `:421`），图片工作区不驱动该状态；`WipeHandle` 的键盘缺口
   仍由禁用测试 `MainQmlContractTests.cpp:7686` 记录。
@@ -129,6 +157,8 @@
   `tst_vcs_theme.qml:89` 的用例未覆盖该令牌。
 - **UX-17/UX-18 排版**：156 处字号字面量、10 处离阶、31 处 10px（含「规范化帧值 YCbCr」
   表头、Δ 基准、「生成帧 / GT」、警告「缩略图源：未知」）；`tnum` 仅 1 处消费。
+  （注：156 为本次评审基线计数，保留不改；2026-10-21 复测 `src/ui_qml/qml/` 裸字号
+  字面量为 151，差值与 UX-17 已收敛的 5 处一致，见上方「未处理」条目。）
 - **UX-19 智能抠图**：按钮在编辑模式下常驻（`ImageWorkspace.qml:3876`），而发布 ZIP
   （27.0 MB）无 `onnxruntime`、无 `models/`，本机模型 138.6 MB 且无安装规则。
 - **UX-20 提示延迟**：`VcsToolButton.qml:16` 500 ms vs `TransportBar.qml:116` 650 ms。
