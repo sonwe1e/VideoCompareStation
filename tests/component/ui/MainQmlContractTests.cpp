@@ -15145,7 +15145,15 @@ TEST(MainQmlContractTests, ChromeGeometryAndScreenshotEvidence) {
     EXPECT_EQ(harness.window->height(), 640);
     shot("video-min-960.png");
     recordWindow(QStringLiteral("video960"));
+    // UX-13 S1 baseline prep: the floor-size capture used to record only the transport, so the
+    // narrow-window chrome budget (two top rows + docked transport) had no measured baseline.
+    // Mirror the video1440 anchors exactly - same names, same requiredness - so the S1
+    // before/after comparison covers every chrome row at 960x640 too.
+    recordItem("video960", QStringLiteral("activeSourceStrip"), true);
+    recordItem("video960", QStringLiteral("compareModeBar"), true);
     recordItem("video960", QStringLiteral("transport"), true);
+    recordItem("video960", QStringLiteral("mediaViewportFocusTarget"), true);
+    recordItem("video960", QStringLiteral("viewportPixelReadoutPlate"));
 
     // ---- Image workspace: one pair, every comparison mode + edit mode. ----
     QImage imageA(320, 240, QImage::Format_ARGB32);
