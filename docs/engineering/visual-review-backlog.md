@@ -1,5 +1,37 @@
 # 视觉审查问题台账
 
+## 2026-10-22 UX-13 窄窗重排 S1–S3（已实现，S3 本轮收尾）
+
+依据 [窄窗重排提案](../plans/ux13-narrow-window-redesign.md)（Q1/Q2/Q3 裁定见其 §7，执行状态见 §8）。
+三档各自一个提交，触发档位统一为宿主窗口高度 ≤ 680（提案 §1：960×640 是窗口最小值，640 的阈值
+压在 OS 钳制与帧取整的抖动带上）。
+
+| 步 | 提交 | 落点 | 实测（960×640；大窗 1440×900 为回归对照） | 钉住它的验证 |
+|---|---|---|---|---|
+| S1 视频走带 | `9ea57e0` | `PlayerOsc` 指标道折叠、读数并成单行；`TransportBar` 区间动作收进摘要 chip | 走带 172→139（提案目标 ≤120，未达 19px）、视口 306→339；大窗走带 172（提案的 161 基线已过期） | `tst_player_osc` 紧凑档用例；`ChromeGeometry` 两档证据 |
+| S2 图片命令面板 | `47e2525` | 查看态单行 ≤48、编辑态两行 ≤88；次要簇进按需「更多」菜单 | 960 档查看态面板 40、编辑态由契约钉住 ≤88；大窗面板 81（提案基线 119） | `ImageCommandPanelCompactTierCollapsesToBands` |
+| S3 图片状态栏 | 本轮 | 提示行单行 ≤40：芯片按档封顶、隐藏项塌缩；读数表移入「详情」浮层；错误句镜像到摘要行 | 状态栏 72→40、画布高 465→496（同为 960 地板档）；大窗状态栏仍 72 | `ImageStatusBarCompactTierCollapsesToSingleBand`；`out/verification/ux13-s3-after/` |
+
+S3 的边界（代码注释与契约同步记录）：点「详情」把既有 `statusDetails` 块重挂到 bar 上方的根级
+面板，不新增常驻对象；展开不改变 bar 高度与画布尺寸，但会临时盖住画布底缘一条，内容随采样长高，
+收起后回到 40。提案 D3 写的是「浮层展开可读且不遮画布」，当前实现按"不改画布尺寸、只临时遮挡"
+执行；是否接受这层遮挡留 S5 复核裁定，若要完全不遮挡得换一种面板位置（上移画布或占用命令面板行），
+不属于本轮范围。
+
+S3 门禁抓到的真实缺陷：芯片按档封顶后，Flow 在无渲染宿主里保留宽窗宽度的折行，状态栏停在 62 而
+不是 40。修法是 tier 翻转/源切换时与命令面板同一条显式重排纪律
+（`Qt.callLater(relayoutStatusHints)`）——只在 Flow 自己的 `onWidthChanged` 里 `forceLayout()` 不够，
+因为它跑在封顶宽度生效之前。
+
+**门禁（2026-10-22，dev 预设，本机）**：`format-check` 通过；完整 `lint`（qmllint `--max-warnings 0`
+零告警、clang-tidy 零发现）通过；定向
+`-TestRegex 'ui.(MainQmlContractTests|ImageWorkspaceManual|wipe_handle|vcs_theme|application_menu_bar)'`
+**155/155 通过**；证据重录在 `out/verification/ux13-s3-after/`（含新截图 `image-details-960.png`，
+浮层展开态）。
+
+**剩余**：S4（视频源条+模式栏合并行，风险最高）与 S5（两档全量截图对比、UX-13 台账状态改
+「已实现（窄档）」、D3 遮挡语义复核）未做；真实 DPI/可见窗口走查仍按 runbook 待办。
+
 ## 2026-10-21 清债小件轮（A 轮，已提交）
 
 四专家团队（视觉/体验/性能/工程）首轮交付：只读盘点后四镜头并行实现，lead 统一跑门禁。

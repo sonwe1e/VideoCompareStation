@@ -162,6 +162,16 @@ Rectangle {
         commandColumn.forceLayout();
     }
 
+    // The status hints band is the same kind of Flow (S3 caps the chip widths by tier, and
+    // the badges appear/disappear with the sources). Its own onWidthChanged fires before
+    // the capped widths re-evaluate, so the deferred call is what actually sees the new
+    // widths; forceLayout then runs the positioning that the polish pass would have run,
+    // which is what a host without a render pass (the drag harness) needs to avoid keeping
+    // the wide-width wrap in the compact band.
+    function relayoutStatusHints() {
+        statusHints.forceLayout();
+    }
+
     onHasPairChanged: {
         endPeek();
         if (!hasPair) {
@@ -169,6 +179,7 @@ Rectangle {
             hoverPoint = null;
         }
         Qt.callLater(relayoutCommandPanel);
+        Qt.callLater(relayoutStatusHints);
     }
     onCompareModeChanged: {
         if (compareMode !== 0)
@@ -181,8 +192,14 @@ Rectangle {
         clearImageHover();
         Qt.callLater(relayoutCommandPanel);
     }
-    onHasPrimaryChanged: Qt.callLater(relayoutCommandPanel)
-    onHasSecondaryChanged: Qt.callLater(relayoutCommandPanel)
+    onHasPrimaryChanged: {
+        Qt.callLater(relayoutCommandPanel);
+        Qt.callLater(relayoutStatusHints);
+    }
+    onHasSecondaryChanged: {
+        Qt.callLater(relayoutCommandPanel);
+        Qt.callLater(relayoutStatusHints);
+    }
     onActiveFocusChanged: {
         // Losing the keyboard (a TextField grabbed it, another pane took focus) must not
         // strand the workspace in a peek state the user can no longer release.
@@ -1189,11 +1206,20 @@ Rectangle {
     // gate run evidence). Same derivation and test override contract as PlayerOsc. S4 moves
     // the switch up to the shell.
     property bool compactChrome: Window.window !== null && Window.window.height <= 680
+    // UX-13 S3: the readout tables lift into a panel above the bar while this is open. The
+    // panel is the existing details block re-anchored (no new resident object); the chip in
+    // the hints row is the explicit expand/collapse entry.
+    property bool compactDetailsOpen: false
     // The tier flip changes band heights in place and re-parents the session flow; the
     // command-panel chain needs the same explicit relayout discipline the row flips use, or
     // a restored wide band keeps its compact-wrapped height (S2 gate: 107 vs 81 after
-    // leaving the tier).
-    onCompactChromeChanged: Qt.callLater(relayoutCommandPanel)
+    // leaving the tier). The status hints band needs the same call: the chip caps only
+    // change width once the tier binding has re-evaluated (S3 gate: the compact band kept
+    // the wide-width wrap and grew to 58).
+    onCompactChromeChanged: {
+        Qt.callLater(relayoutCommandPanel);
+        Qt.callLater(relayoutStatusHints);
+    }
     // UX-13 S2: the secondary command clusters (session, view, background, gain) live in one
     // on-demand menu. The component instantiates on first open and is cached afterwards - no
     // resident scene cost, no timer.
@@ -2030,8 +2056,12 @@ Rectangle {
         // 6 px without inventing a fourth hue next to the source-identity colours.
         property bool dotHollow: false
 
-        height: Theme.hitAreaMinimum
         implicitWidth: badgeContent.implicitWidth + 20
+        // Compact tier caps the badge so the hints row stays one band (dot + elided label),
+        // and an invisible badge collapses to zero - positioners reserve slots for invisible
+        // children, and the reserved widths wrapped the row into a second line (S3 gate).
+        width: control.compactChrome ? (visible ? Math.min(implicitWidth, 100) : 0) : implicitWidth
+        height: control.compactChrome && !visible ? 0 : Theme.hitAreaMinimum
         radius: Theme.radiusSubtle
         color: Theme.raisedPanel
         border.width: 1
@@ -2068,6 +2098,10 @@ Rectangle {
                 color: Theme.primaryText
                 font.pixelSize: Theme.fontCaption
                 anchors.verticalCenter: parent.verticalCenter
+                // Compact tier: elide against the capped badge (the dot and paddings share
+                // the width); the wide window keeps the natural label.
+                elide: Text.ElideRight
+                width: control.compactChrome ? Math.max(24, badge.width - 34) : implicitWidth
             }
         }
     }
@@ -4311,15 +4345,16 @@ Rectangle {
                         Text {
                             objectName: "imageEditingSourceLabel"
                             // Compact tier: the A/B chips carry the identity; this caption
-                            // returns with the wide layout.
+                            // returns with the wide layout. Collapses while hidden - the
+                            // tools flow must not inherit its reserved width.
                             visible: !control.compactChrome
-                            height: 30
+                            width: control.compactChrome && !visible ? 0 : Math.min(200, implicitWidth)
+                            height: control.compactChrome && !visible ? 0 : 30
                             verticalAlignment: Text.AlignVCenter
                             text: control.imageEdit ? qsTr("正在编辑：%1 的副本 (%2×%3)").arg(control.editSourceSlot === 3 ? "B" : "A").arg(control.imageEdit.imageWidth).arg(control.imageEdit.imageHeight) : ""
                             color: Theme.secondaryText
                             font.pixelSize: Theme.fontCaption
                             elide: Text.ElideRight
-                            width: Math.min(200, implicitWidth)
                         }
 
                         RowSeparator {
@@ -6330,7 +6365,11 @@ Rectangle {
         // squeezing the numbers into a shorter row - is exactly what this layout removed.
         // Reserve a readout row before the first sample so hovering cannot resize the image
         // underneath the pointer and change the coordinate it names.
-        height: statusHints.height + Math.max(Theme.hitAreaMinimum, statusDetails.implicitHeight) + Theme.spaceMain
+        // Compact tier: one hints band - the readout tables lift into the on-demand panel
+        // above the bar (compactDetailsOpen), so nothing user-resident is squeezed. The
+        // band still grows if a badge-heavy session needs a second hints line: clipping a
+        // warning is worse than missing the 40 px target by an honest few pixels.
+        height: control.compactChrome ? Math.max(Theme.barRowHeight, statusHints.height + Theme.spaceMicro) : statusHints.height + Math.max(Theme.hitAreaMinimum, statusDetails.implicitHeight) + Theme.spaceMain
         color: Theme.panel
         border.color: Theme.border
         anchors {
@@ -6342,14 +6381,20 @@ Rectangle {
         RowLayout {
             id: statusDetails
             objectName: "imageStatusDetails"
+            // Compact tier: the tables re-parent into the on-demand panel above the bar (see
+            // imageCompactDetailsPanel) while expanded, and hide when folded. The bar's own
+            // height binding never reads this block in the compact tier - the S3 gate caught
+            // the expanded geometry riding the bar's polish pass (62 vs 40).
+            parent: control.compactChrome && control.compactDetailsOpen ? compactDetailsOverlayHost : statusBar
+            visible: !control.compactChrome || control.compactDetailsOpen
             spacing: 12
             anchors {
                 left: parent.left
                 leftMargin: 14
                 right: parent.right
                 rightMargin: 14
-                top: statusHints.bottom
-                topMargin: Theme.spaceMicro
+                top: parent.top
+                topMargin: parent === statusBar ? statusHints.height + Theme.spaceMicro : 0
             }
 
             // Structured two-line probe readout. The old single sentence carried the
@@ -6875,7 +6920,10 @@ Rectangle {
             // is missing, and whether the pairing is ambiguous.
             Text {
                 objectName: "imagePairContextLabel"
-                height: Theme.hitAreaMinimum
+                // Compact tier: invisible conditional children collapse to zero - positioners
+                // reserve slots for them otherwise, and the reserved widths wrapped the hints
+                // row into a second line (S3 gate: 58 vs 40).
+                height: !control.compactChrome || visible ? Theme.hitAreaMinimum : 0
                 verticalAlignment: Text.AlignVCenter
                 visible: Boolean(control.pairModel && control.pairModel.pairCount > 0 && control.pairModel.currentPair >= 0)
                 text: {
@@ -6910,6 +6958,8 @@ Rectangle {
             ImageCommandButton {
                 objectName: "imageNumericFormatButton"
                 implicitHeight: Theme.hitAreaMinimum
+                // Compact tier caps the selector; the full wording rides the tooltip.
+                width: control.compactChrome ? Math.min(implicitWidth, 90) : implicitWidth
                 leftPadding: 8
                 rightPadding: 8
                 text: control.numericFloat ? qsTr("数值：归一化浮点 ▾") : qsTr("数值：整数码值 ▾")
@@ -6944,6 +6994,8 @@ Rectangle {
             ImageCommandButton {
                 objectName: "imageCopyColorButton"
                 implicitHeight: Theme.hitAreaMinimum
+                // Compact tier caps the entry; the sample label rides its menu.
+                width: control.compactChrome ? Math.min(implicitWidth, 80) : implicitWidth
                 leftPadding: 8
                 rightPadding: 8
                 text: qsTr("复制颜色 ▾")
@@ -6997,8 +7049,9 @@ Rectangle {
                 color: Theme.secondaryText
                 font.pixelSize: Theme.fontSecondary
                 elide: Text.ElideRight
-                width: Math.min(implicitWidth, 230)
-                height: Theme.hitAreaMinimum
+                // Compact tier: transient notices collapse when absent (positioner reserve).
+                width: control.compactChrome ? (visible ? Math.min(implicitWidth, 230) : 0) : Math.min(implicitWidth, 230)
+                height: !control.compactChrome || visible ? Theme.hitAreaMinimum : 0
                 verticalAlignment: Text.AlignVCenter
             }
             // COLOR3: the colour state is its own always-visible A/B pair. It is driven by
@@ -7159,9 +7212,62 @@ Rectangle {
 
             StatusBadge {
                 visible: Boolean(control.imageReview && control.hasPrimary && (control.imageReview.primaryHasAlpha || control.imageReview.secondaryHasAlpha))
+                // Compact tier tightens this badge further than the component cap, and it
+                // collapses to zero while invisible like the rest of the hints row.
+                width: control.compactChrome ? (visible ? Math.min(implicitWidth, 80) : 0) : implicitWidth
                 text: qsTr("直通（未预乘）")
                 glyph: "α"
                 glyphColor: Theme.information
+            }
+
+            // UX-13 S3 compact tier: the readout tables lift into the on-demand panel above
+            // the bar; this chip is the explicit expand/collapse entry.
+            ImageCommandButton {
+                objectName: "imageCompactDetailsButton"
+                visible: control.compactChrome
+                implicitHeight: Theme.hitAreaMinimum
+                leftPadding: 8
+                rightPadding: 8
+                text: control.compactDetailsOpen ? qsTr("详情 ▴") : qsTr("详情 ▾")
+                helpText: qsTr("展开或收起完整像素读数与 YCbCr 通道表；收起时警告句与本行徽章保持可见。")
+                onClicked: control.compactDetailsOpen = !control.compactDetailsOpen
+            }
+            // Compact tier mirrors the details-band error sentence ON the summary line - the
+            // must-read rule means "same row", not "a second layout row". The mirror takes
+            // whatever width the other hints children leave (one-way sum over the row, the
+            // fileRow pattern reversed), elides with a 60 px floor, and the full sentence
+            // stays on the tooltip. Collapses to zero when absent or at the wide window,
+            // where the original sentence in the details band carries it.
+            Text {
+                id: compactErrorNotice
+
+                objectName: "imageCompactErrorNotice"
+                visible: control.compactChrome && control.errorText.length > 0
+                text: control.errorText
+                color: Theme.error
+                font.pixelSize: Theme.fontSecondary
+                elide: Text.ElideRight
+                readonly property real rowRemainder: {
+                    let used = 0;
+                    for (let i = 0; i < parent.children.length; ++i) {
+                        const sibling = parent.children[i];
+                        if (sibling === compactErrorNotice || !sibling.visible)
+                            continue;
+                        used += parent.spacing + sibling.width;
+                    }
+                    return parent.width - used;
+                }
+                width: control.compactChrome ? Math.max(60, rowRemainder) : 0
+                height: control.compactChrome && visible ? implicitHeight : 0
+
+                HoverHandler {
+                    id: compactErrorHover
+                }
+
+                VcsToolTip {
+                    visible: compactErrorHover.hovered
+                    text: control.errorText
+                }
             }
 
             Text {
@@ -7169,7 +7275,42 @@ Rectangle {
                 text: qsTr("滚轮缩放 · 拖动平移 · Shift+拖动框选放大")
                 color: Theme.mutedText
                 font.pixelSize: Theme.fontCaption
+                // Compact tier: the hint is width-gated off below 1120 - collapse it instead
+                // of reserving its slot in the single-band row.
+                width: control.compactChrome && !visible ? 0 : implicitWidth
+                height: control.compactChrome && !visible ? 0 : implicitHeight
             }
+        }
+    }
+
+    // UX-13 S3 compact tier: the readout tables lift OUT of the bar into this panel above
+    // it - explicit expand/collapse from the details chip, no new resident object. The whole
+    // assembly is a workspace-root child, never a bar child: the bar's height binding must
+    // not see the expanded tables at all (S3 gate - the expanded geometry rode the bar's
+    // polish pass and pushed the bar to 62). While open it is a transient overlay over the
+    // canvas's bottom edge: the image keeps its size and the panel grows upward as the
+    // sample fills in. statusDetails re-parents in on expand and back to the bar on collapse
+    // or at the wide window; the panel positions itself one-way from the bar's geometry.
+    Rectangle {
+        objectName: "imageCompactDetailsPanel"
+        visible: control.compactChrome && control.compactDetailsOpen
+        anchors {
+            left: parent.left
+            right: parent.right
+        }
+        anchors.leftMargin: 14
+        anchors.rightMargin: 14
+        y: statusBar.y - height - 6
+        height: statusDetails.implicitHeight + 24
+        radius: Theme.radiusSmall
+        color: Theme.menu
+        border.color: Theme.menuBorder
+
+        Item {
+            id: compactDetailsOverlayHost
+
+            anchors.fill: parent
+            anchors.margins: 12
         }
     }
 

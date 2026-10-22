@@ -15087,6 +15087,198 @@ TEST(MainQmlContractTests, ImageCommandPanelCompactTierCollapsesToBands) {
     EXPECT_DOUBLE_EQ(panel->height(), wideHeight);
 }
 
+// UX-13 S3: the compact tier collapses the image status bar to a single hints band (<= 40)
+// with the readout tables lifting into the on-demand panel above the bar; the wide layout
+// keeps the two-band bar and acts as the zero-regression witness. The resident entries
+// (numeric-format toggle, colour copy) and the summary-line warnings stay on the band in
+// every state - nothing user-resident is squeezed into a menu.
+TEST(MainQmlContractTests, ImageStatusBarCompactTierCollapsesToSingleBand) {
+    QTemporaryDir temporaryDirectory;
+    ASSERT_TRUE(temporaryDirectory.isValid());
+    std::vector<std::filesystem::path> videoPaths;
+    for (const char name : {'a', 'b', 'c'}) {
+        videoPaths.push_back(std::filesystem::path{
+            (temporaryDirectory.filePath(QString{"evidence-%1.mp4"}.arg(QLatin1Char{name})))
+                .toStdWString()});
+        QFile file{QString::fromStdWString(videoPaths.back().wstring())};
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_GT(file.write("evidence-source-bytes", 10), 0);
+    }
+    const auto rate = domain::RationalRate::create(30, 1);
+    ASSERT_TRUE(rate);
+
+    WorkspaceHarness harness;
+    harness.withImageEdit = true;
+    ASSERT_TRUE(installValidatedVideoSet(harness.snapshot, videoPaths, rate.value(), 120, 400'000));
+    harness.snapshot->sessionState = domain::SessionState::kReady;
+    harness.snapshot->playbackState = domain::PlaybackState::kPaused;
+    harness.snapshot->displayedFrame = domain::FrameId{41};
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    QImage imageA(320, 240, QImage::Format_ARGB32);
+    QImage imageB(320, 240, QImage::Format_ARGB32);
+    for (int y = 0; y < 240; ++y) {
+        for (int x = 0; x < 320; ++x) {
+            imageA.setPixelColor(x, y, QColor(x % 256, (x / 2) % 256, y % 256, 255));
+            imageB.setPixelColor(x, y, QColor((x + 12) % 256, (x / 2) % 256, (y + 5) % 256, 255));
+        }
+    }
+    ASSERT_TRUE(harness.imageReview.openPairImages(
+        imageA, QStringLiteral("compact-a.png"), imageB, QStringLiteral("compact-b.png")));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    harness.settle();
+
+    auto* const bar = harness.root->findChild<QQuickItem*>(QStringLiteral("imageStatusBar"));
+    ASSERT_NE(bar, nullptr);
+    // Main.qml re-names the workspace root (imageWorkspaceRoot); the tier switch lives there.
+    auto* const workspace =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageWorkspaceRoot"));
+    ASSERT_NE(workspace, nullptr);
+    auto* const hints = harness.root->findChild<QQuickItem*>(QStringLiteral("imageStatusHints"));
+    ASSERT_NE(hints, nullptr);
+    auto* const details =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageStatusDetails"));
+    ASSERT_NE(details, nullptr);
+    auto* const formatButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageNumericFormatButton"));
+    ASSERT_NE(formatButton, nullptr);
+    auto* const copyButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageCopyColorButton"));
+    ASSERT_NE(copyButton, nullptr);
+    auto* const detailsButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageCompactDetailsButton"));
+    ASSERT_NE(detailsButton, nullptr);
+    auto* const overlayPanel =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageCompactDetailsPanel"));
+    ASSERT_NE(overlayPanel, nullptr);
+
+    // Wide window: the two-band bar is the zero-regression witness.
+    harness.window->resize(1440, 900);
+    harness.settle();
+    harness.settleAnimations();
+    EXPECT_FALSE(workspace->property("compactChrome").toBool())
+        << "the wide window must stay outside the compact tier";
+    const double wideHeight = bar->height();
+    EXPECT_GT(wideHeight, 60.0) << wideHeight;
+
+    // Compact tier: a single band with the resident entries and warnings on it; the tables
+    // are folded (details hidden, overlay closed).
+    harness.window->resize(960, 640);
+    harness.settle();
+    harness.settleAnimations();
+    EXPECT_TRUE(workspace->property("compactChrome").toBool())
+        << "the window-derived tier switch must be on at a <= 680 window";
+    EXPECT_LE(bar->height(), 40.0) << "compact status bar height " << bar->height();
+    EXPECT_TRUE(hints->isVisible());
+    EXPECT_TRUE(formatButton->isVisible()) << "numeric format toggle stays resident";
+    EXPECT_TRUE(copyButton->isVisible()) << "colour copy entry stays resident";
+    // Compact width discipline (the S2 chip-cap ruling): the dot / three-state signal stays
+    // visible, the label elides, the tooltip keeps the full wording.
+    EXPECT_LE(formatButton->width(), 90.0)
+        << "compact numeric-format cap: " << formatButton->width();
+    EXPECT_LE(copyButton->width(), 80.0) << "compact colour-copy cap: " << copyButton->width();
+    EXPECT_TRUE(detailsButton->isVisible());
+    EXPECT_FALSE(details->isVisible()) << "tables start folded at the compact tier";
+    EXPECT_FALSE(overlayPanel->isVisible()) << "details overlay starts closed";
+
+    // Explicit expand: the tables lift into the panel above the bar and the bar keeps its
+    // single-band height while the overlay is open. On failure, dump every direct child of
+    // the bar and of the hints row (name/visible/position/size) plus the tier state and the
+    // details parent, so the 62-vs-40 contributor names itself instead of being guessed at.
+    ASSERT_TRUE(QMetaObject::invokeMethod(detailsButton, "clicked"));
+    harness.settle();
+    harness.settleAnimations();
+    EXPECT_TRUE(overlayPanel->isVisible());
+    EXPECT_TRUE(details->isVisible()) << "the tables must be readable while expanded";
+    QString barChildrenDump;
+    for (QQuickItem* const child : bar->childItems()) {
+        barChildrenDump += QStringLiteral("\n  bar child '%1' visible=%2 height=%3")
+                               .arg(child->objectName(),
+                                    child->isVisible() ? QStringLiteral("1") : QStringLiteral("0"),
+                                    QString::number(child->height()));
+    }
+    QString hintsChildrenDump;
+    for (QQuickItem* const child : hints->childItems()) {
+        if (!child->isVisible() && child->implicitWidth() <= 0)
+            continue;
+        hintsChildrenDump +=
+            QStringLiteral(
+                "\n  hint child '%1' visible=%2 x=%3 y=%4 width=%5 height=%6 implicit=%7x%8")
+                .arg(child->objectName(),
+                     child->isVisible() ? QStringLiteral("1") : QStringLiteral("0"),
+                     QString::number(child->x()),
+                     QString::number(child->y()),
+                     QString::number(child->width()),
+                     QString::number(child->height()),
+                     QString::number(child->implicitWidth()),
+                     QString::number(child->implicitHeight()));
+    }
+    EXPECT_LE(bar->height(), 40.0)
+        << "expanded overlay must not grow the bar: bar=" << bar->height() << "; bar width "
+        << bar->width() << "; hints width " << hints->width() << "; hints implicitHeight "
+        << hints->implicitHeight()
+        << "; compactChrome=" << workspace->property("compactChrome").toBool()
+        << "; statusHints height " << hints->height() << "; statusDetails implicitHeight "
+        << details->property("implicitHeight").toDouble() << "; details parent '"
+        << (details->parentItem() ? details->parentItem()->objectName().toStdString()
+                                  : std::string())
+        << "';" << barChildrenDump.toStdString() << hintsChildrenDump.toStdString();
+
+    // Collapse again: tables fold, the summary line stays.
+    ASSERT_TRUE(QMetaObject::invokeMethod(detailsButton, "clicked"));
+    harness.settle();
+    harness.settleAnimations();
+    EXPECT_FALSE(overlayPanel->isVisible());
+    EXPECT_FALSE(details->isVisible());
+
+    // Back to the wide window, still without a probe sample: the exact two-band height
+    // returns. (A wide bar grows with a populated readout - pre-existing behaviour, not a
+    // tier effect - so the sample is frozen only after this round trip, below.)
+    harness.window->resize(1440, 900);
+    harness.settle();
+    harness.settleAnimations();
+    EXPECT_FALSE(workspace->property("compactChrome").toBool())
+        << "the wide window must stay outside the compact tier";
+    EXPECT_TRUE(details->isVisible());
+    EXPECT_FALSE(detailsButton->isVisible());
+    EXPECT_DOUBLE_EQ(bar->height(), wideHeight);
+
+    // The panel exists to carry the readout: back in the compact tier, freeze a sample the
+    // way the workspace's hover handler does (the offscreen harness cannot drive the mouse
+    // into the viewport) and expand. The lifted tables populate without moving the bar; the
+    // panel grows upward from its one-way geometry binding and stays clear of the bar.
+    harness.window->resize(960, 640);
+    harness.settle();
+    harness.settleAnimations();
+    ASSERT_TRUE(workspace->property("compactChrome").toBool());
+    ASSERT_TRUE(QMetaObject::invokeMethod(detailsButton, "clicked"));
+    harness.settle();
+    harness.settleAnimations();
+    ASSERT_TRUE(overlayPanel->isVisible());
+    harness.imageReview.updateCursorPixel(ImageReviewController::DisplayPrimarySlot, 40, 30);
+    harness.settle();
+    ASSERT_TRUE(
+        harness.imageReview.captureProbeSample(ImageReviewController::DisplayPrimarySlot, 40, 30));
+    harness.settle();
+    // The readout is a Flow inside the details block; a render pass lays it out (the same
+    // reason the wide-window hover contract grabs before measuring).
+    static_cast<void>(harness.window->grabWindow());
+    harness.settle();
+    EXPECT_GT(details->property("implicitHeight").toDouble(), 0.0)
+        << "the expanded tables must carry the frozen sample";
+    EXPECT_GT(overlayPanel->height(), 24.0) << overlayPanel->height();
+    EXPECT_LE(bar->height(), 40.0) << "the sample must not grow the compact bar: " << bar->height();
+    EXPECT_LE(overlayPanel->y() + overlayPanel->height(), bar->y())
+        << "the panel must sit above the bar it was lifted from";
+    ASSERT_TRUE(QMetaObject::invokeMethod(detailsButton, "clicked"));
+    harness.settle();
+    harness.settleAnimations();
+    EXPECT_FALSE(overlayPanel->isVisible());
+    EXPECT_FALSE(details->isVisible());
+}
+
 // Flow176 UI rework evidence harness. Runs the same measurement and screenshot protocol
 // before and after the layout rework (gated by DVS_REVIEW_EVIDENCE_DIR): identical window
 // sizes, identical session states. The chrome-height, canvas-space and OSC-height claims are
@@ -15400,6 +15592,25 @@ TEST(MainQmlContractTests, ChromeGeometryAndScreenshotEvidence) {
                     recordItem("image960", QStringLiteral("imageWorkspaceRoot"), true),
                     recordItem("image960", QStringLiteral("imageCommandPanel"), true),
                     recordItem("image960", QStringLiteral("imageStatusBar"), true));
+
+    // S3: the lifted readout panel while open. "Readable while expanded" has no number of
+    // its own, so it gets a picture: freeze a sample the way the hover handler does (the
+    // offscreen harness cannot drive the mouse into the viewport), expand, capture, fold.
+    {
+        auto* const detailsButton =
+            harness.root->findChild<QQuickItem*>(QStringLiteral("imageCompactDetailsButton"));
+        ASSERT_NE(detailsButton, nullptr);
+        ASSERT_TRUE(detailsButton->isVisible());
+        harness.imageReview.updateCursorPixel(ImageReviewController::DisplayPrimarySlot, 40, 30);
+        harness.settle();
+        ASSERT_TRUE(harness.imageReview.captureProbeSample(
+            ImageReviewController::DisplayPrimarySlot, 40, 30));
+        harness.settle();
+        ASSERT_TRUE(QMetaObject::invokeMethod(detailsButton, "clicked"));
+        shot("image-details-960.png");
+        ASSERT_TRUE(QMetaObject::invokeMethod(detailsButton, "clicked"));
+        harness.settle();
+    }
 
     if (!evidenceDirectory.isEmpty()) {
         QFile geometryFile{QDir(evidenceDirectory).filePath(QStringLiteral("chrome-geometry.txt"))};
