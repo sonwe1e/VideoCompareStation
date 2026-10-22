@@ -78,7 +78,7 @@ Rectangle {
                 width: parent.width
                 text: qsTr("看清每一处细节")
                 color: control.textColor
-                font.pixelSize: 28
+                font.pixelSize: Theme.fontLargeTitle
                 font.weight: Font.DemiBold
                 horizontalAlignment: Text.AlignHCenter
             }

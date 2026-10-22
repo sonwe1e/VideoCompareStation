@@ -91,7 +91,7 @@ Rectangle {
             text: control.comparisonState
             visible: text.length > 0
             color: Theme.accentText
-            font.pixelSize: 10
+            font.pixelSize: Theme.fontCaption
             anchors.horizontalCenter: control.hasThumbnail ? undefined : parent.horizontalCenter
         }
 
@@ -102,7 +102,7 @@ Rectangle {
             text: qsTr("预览 · 邻近第 %1 帧").arg(control.sampleFrame + 1)
             visible: control.sampleFrame >= 0 && control.sampleFrame !== control.previewFrame
             color: Theme.warning
-            font.pixelSize: 10
+            font.pixelSize: Theme.fontCaption
             anchors.horizontalCenter: control.hasThumbnail ? undefined : parent.horizontalCenter
         }
     }

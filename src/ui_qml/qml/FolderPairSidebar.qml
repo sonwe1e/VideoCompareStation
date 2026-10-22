@@ -124,7 +124,7 @@ Rectangle {
                     width: parent.width
                     text: qsTr("文件夹对比")
                     color: Theme.primaryText
-                    font.pixelSize: 13
+                    font.pixelSize: Theme.fontCompact
                     font.weight: Font.DemiBold
                 }
 
@@ -293,7 +293,7 @@ Rectangle {
                             }
                             text: pairRow.fileName
                             color: pairRow.hasBoth ? Theme.primaryText : Theme.mutedText
-                            font.pixelSize: 12
+                            font.pixelSize: Theme.fontSecondary
                             elide: Text.ElideMiddle
                         }
 
@@ -308,7 +308,7 @@ Rectangle {
                             }
                             text: "⚠"
                             color: Theme.warning
-                            font.pixelSize: 12
+                            font.pixelSize: Theme.fontSecondary
 
                             HoverHandler {
                                 id: conflictHover
@@ -329,7 +329,7 @@ Rectangle {
                             }
                             text: pairRow.hasLeft ? qsTr("仅 A") : qsTr("仅 B")
                             color: Theme.mutedText
-                            font.pixelSize: 10
+                            font.pixelSize: Theme.fontCaption
                         }
 
                         HoverHandler {
@@ -357,7 +357,7 @@ Rectangle {
                         visible: control.pairModel && control.pairModel.pairCount === 0
                         text: control.modelErrorText.length > 0 ? control.modelErrorText : qsTr("没有可对比的图片。")
                         color: Theme.mutedText
-                        font.pixelSize: 12
+                        font.pixelSize: Theme.fontSecondary
                     }
                 }
             }
@@ -410,7 +410,7 @@ Rectangle {
                         return control.pairModel.openPending ? qsTr("%1 打开中…").arg(base) : base;
                     }
                     color: Theme.primaryText
-                    font.pixelSize: 12
+                    font.pixelSize: Theme.fontSecondary
                 }
 
                 ReviewActionButton {

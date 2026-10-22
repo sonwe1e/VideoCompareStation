@@ -1962,7 +1962,7 @@ Rectangle {
                         return "%1 · %2 · R %3 G %4 B %5 A %6 · α %7%".arg(control.crosshairCardLabel(hoverSlot, s)).arg(coords).arg(control.channelText(s.r)).arg(control.channelText(s.g)).arg(control.channelText(s.b)).arg(control.channelText(s.a)).arg(s.alphaPercent);
                     }
                     color: Theme.probe
-                    font.pixelSize: 10
+                    font.pixelSize: Theme.fontCaption
                     font.family: Theme.fontFamilyMono
                     font.weight: Font.Bold
                     anchors.verticalCenter: parent.verticalCenter
@@ -2501,7 +2501,7 @@ Rectangle {
                             return "%1 · %2 · R %3 G %4 B %5 A %6 · α %7%%8".arg(control.crosshairCardLabel(viewport.slot, s)).arg(coords).arg(control.channelText(s.r)).arg(control.channelText(s.g)).arg(control.channelText(s.b)).arg(control.channelText(s.a)).arg(s.alphaPercent).arg(s.alphaHidden === true ? qsTr(" · 已被当前 Alpha 阈值隐藏") : "");
                         }
                         color: Theme.probe
-                        font.pixelSize: 10
+                        font.pixelSize: Theme.fontCaption
                         font.family: Theme.fontFamilyMono
                         font.weight: Font.Bold
                         anchors.verticalCenter: parent.verticalCenter
@@ -5149,7 +5149,7 @@ Rectangle {
                         width: parent.width
                         text: qsTr("还没有打开图片")
                         color: Theme.primaryText
-                        font.pixelSize: 17
+                        font.pixelSize: Theme.fontStageTitle
                         font.weight: Font.DemiBold
                         horizontalAlignment: Text.AlignHCenter
                     }
@@ -5573,7 +5573,7 @@ Rectangle {
                             return qsTr("差异暂不可用。");
                         }
                         color: Theme.warning
-                        font.pixelSize: 13
+                        font.pixelSize: Theme.fontCompact
                     }
 
                     ReviewActionButton {

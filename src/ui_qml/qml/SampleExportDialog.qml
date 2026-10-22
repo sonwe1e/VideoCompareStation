@@ -138,7 +138,7 @@ Item {
                         Text {
                             text: qsTr("导出训练样本 · Training Triplet")
                             color: Theme.primaryText
-                            font.pixelSize: 15
+                            font.pixelSize: Theme.fontSubheading
                             font.weight: Font.DemiBold
                             anchors.verticalCenter: parent.verticalCenter
                         }
@@ -157,7 +157,7 @@ Item {
 
                                 anchors.centerIn: parent
                                 text: qsTr("无损 PNG + manifest.json")
-                                font.pixelSize: 10
+                                font.pixelSize: Theme.fontCaption
                                 font.weight: Font.DemiBold
                                 color: Theme.success
                             }
@@ -216,14 +216,14 @@ Item {
                                             Text {
                                                 text: qsTr("输入帧 0")
                                                 color: Theme.mutedText
-                                                font.pixelSize: 10
+                                                font.pixelSize: Theme.fontCaption
                                                 anchors.horizontalCenter: parent.horizontalCenter
                                             }
 
                                             Text {
                                                 text: control.planSummary && control.planSummary.input0Frame !== undefined ? ("#" + (Number(control.planSummary.input0Frame) + 1)) : "—"
                                                 color: Theme.primaryText
-                                                font.pixelSize: 12
+                                                font.pixelSize: Theme.fontSecondary
                                                 font.weight: Font.DemiBold
                                                 anchors.horizontalCenter: parent.horizontalCenter
                                             }
@@ -233,7 +233,7 @@ Item {
                                     Text {
                                         text: "→"
                                         color: Theme.mutedText
-                                        font.pixelSize: 14
+                                        font.pixelSize: Theme.fontBody
                                         anchors.verticalCenter: parent.verticalCenter
                                     }
 
@@ -265,7 +265,7 @@ Item {
                                                     return r.length > 0 ? ("#" + f + " (" + r + ")") : ("#" + f);
                                                 }
                                                 color: Theme.accentText
-                                                font.pixelSize: 12
+                                                font.pixelSize: Theme.fontSecondary
                                                 font.weight: Font.DemiBold
                                                 anchors.horizontalCenter: parent.horizontalCenter
                                             }
@@ -275,7 +275,7 @@ Item {
                                     Text {
                                         text: "→"
                                         color: Theme.mutedText
-                                        font.pixelSize: 14
+                                        font.pixelSize: Theme.fontBody
                                         anchors.verticalCenter: parent.verticalCenter
                                     }
 
@@ -294,14 +294,14 @@ Item {
                                             Text {
                                                 text: qsTr("输入帧 1")
                                                 color: Theme.mutedText
-                                                font.pixelSize: 10
+                                                font.pixelSize: Theme.fontCaption
                                                 anchors.horizontalCenter: parent.horizontalCenter
                                             }
 
                                             Text {
                                                 text: control.planSummary && control.planSummary.input1Frame !== undefined ? ("#" + (Number(control.planSummary.input1Frame) + 1)) : "—"
                                                 color: Theme.primaryText
-                                                font.pixelSize: 12
+                                                font.pixelSize: Theme.fontSecondary
                                                 font.weight: Font.DemiBold
                                                 anchors.horizontalCenter: parent.horizontalCenter
                                             }
@@ -340,7 +340,7 @@ Item {
                                 width: parent.width
                                 text: control.sampleIdText
                                 color: Theme.primaryText
-                                font.pixelSize: 12
+                                font.pixelSize: Theme.fontSecondary
                                 selectByMouse: true
                                 background: Rectangle {
                                     radius: Theme.radiusSmall
@@ -353,7 +353,7 @@ Item {
                             Text {
                                 text: qsTr("将保存为：<目标目录>/%1/frames/{input0, gt, input1, prediction}.png").arg(sampleIdField.text.length > 0 ? sampleIdField.text : "sample_id")
                                 color: Theme.mutedText
-                                font.pixelSize: 10
+                                font.pixelSize: Theme.fontCaption
                                 elide: Text.ElideMiddle
                                 width: parent.width
                             }
@@ -442,7 +442,7 @@ Item {
                                         visible: control.cropToRoi
                                         text: "✓"
                                         color: Theme.inverseText
-                                        font.pixelSize: 10
+                                        font.pixelSize: Theme.fontMicro
                                     }
 
                                     MouseArea {
@@ -472,7 +472,7 @@ Item {
                                             return qsTr("当前未激活 ROI 区域，将导出完整源分辨率");
                                         }
                                         color: Theme.mutedText
-                                        font.pixelSize: 10
+                                        font.pixelSize: Theme.fontCaption
                                     }
                                 }
                             }
@@ -530,7 +530,7 @@ Item {
                                 text: control.lastOutputPath
                                 color: Theme.mutedText
                                 font.family: Theme.fontFamilyMono
-                                font.pixelSize: 10
+                                font.pixelSize: Theme.fontCaption
                                 elide: Text.ElideMiddle
                             }
 
@@ -540,7 +540,7 @@ Item {
                                 visible: control.lastFailureDetail.length > 0
                                 text: control.lastFailureDetail
                                 color: Theme.warning
-                                font.pixelSize: 10
+                                font.pixelSize: Theme.fontCaption
                                 wrapMode: Text.WordWrap
                             }
                         }

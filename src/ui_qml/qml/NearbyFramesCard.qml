@@ -214,7 +214,7 @@ Rectangle {
 
                 text: qsTr("附近帧诊断卡")
                 color: Theme.primaryText
-                font.pixelSize: 13
+                font.pixelSize: Theme.fontCompact
                 font.weight: Font.DemiBold
                 anchors.verticalCenter: parent.verticalCenter
             }
@@ -261,7 +261,7 @@ Rectangle {
                     anchors.centerIn: parent
                     text: qsTr("跨会话记录")
                     color: Theme.warningText
-                    font.pixelSize: 10
+                    font.pixelSize: Theme.fontCaption
                 }
             }
 
@@ -381,7 +381,7 @@ Rectangle {
 
                         Text {
                             text: "#" + cellRect.cellDisplayFrame
-                            font.pixelSize: 10
+                            font.pixelSize: Theme.fontMicro
                             font.weight: cellRect.isAnchor ? Font.Bold : Font.Normal
                             color: cellRect.isAnchor ? Theme.accentText : Theme.primaryText
                         }
@@ -419,7 +419,7 @@ Rectangle {
                             visible: cellRect.thumbnailUrl.toString().length === 0
                             text: "#" + cellRect.cellDisplayFrame
                             color: Theme.mutedText
-                            font.pixelSize: 10
+                            font.pixelSize: Theme.fontMicro
                         }
                     }
 

@@ -190,6 +190,28 @@ Item {
             verify(Theme.fontBody < Theme.fontGroupTitle);
         }
 
+        // UX-17 convergence wave 1 (2026-10-22): the corpus's remaining font magnitudes
+        // became named tokens so check-qml-token-literals.ps1 could drop its 15/17/20/28
+        // ceilings. Each value equals the literal its sites already rendered, so the
+        // migration is zero-visual-change by construction; these compares (and the ladder
+        // order below) discriminate against any future "rounding" of the ladder.
+        function test_ux17_convergence_tokens_pin_their_original_literals() {
+            compare(Theme.fontCompact, 13);
+            compare(Theme.fontSubheading, 15);
+            compare(Theme.fontStageTitle, 17);
+            compare(Theme.fontOverlayTitle, 20);
+            compare(Theme.fontLargeTitle, 28);
+            verify(Theme.fontSecondary < Theme.fontCompact,
+                "fontCompact sits between fontSecondary and fontBody");
+            verify(Theme.fontCompact < Theme.fontBody);
+            verify(Theme.fontBody < Theme.fontSubheading,
+                "fontSubheading sits between fontBody and fontGroupTitle");
+            verify(Theme.fontSubheading < Theme.fontGroupTitle);
+            verify(Theme.fontGroupTitle < Theme.fontStageTitle);
+            verify(Theme.fontStageTitle < Theme.fontOverlayTitle);
+            verify(Theme.fontOverlayTitle < Theme.fontLargeTitle);
+        }
+
         function test_line_height_tokens_stay_compact() {
             compare(Theme.lineHeightCompact, 1.25);
             compare(Theme.lineHeightBody, 1.35);

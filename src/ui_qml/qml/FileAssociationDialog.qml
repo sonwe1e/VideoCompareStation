@@ -141,7 +141,7 @@ Item {
                         }
                         text: qsTr("文件关联 · Windows 默认打开")
                         color: Theme.primaryText
-                        font.pixelSize: 15
+                        font.pixelSize: Theme.fontSubheading
                         font.weight: Font.DemiBold
                     }
                 }
@@ -166,7 +166,7 @@ Item {
                             width: parent.width
                             text: qsTr("本程序是静音视觉审查工具：设为视频默认打开后不播放音频；不注册任何音频文件类型。视频与图片分别注册，可只选其一设为默认。")
                             color: Theme.mutedText
-                            font.pixelSize: 12
+                            font.pixelSize: Theme.fontSecondary
                             wrapMode: Text.WordWrap
                         }
 
@@ -190,7 +190,7 @@ Item {
                                     width: parent.width
                                     text: qsTr("注册状态：%1").arg(control.healthLabel())
                                     color: Theme.primaryText
-                                    font.pixelSize: 12
+                                    font.pixelSize: Theme.fontSecondary
                                     elide: Text.ElideMiddle
                                 }
 
@@ -199,7 +199,7 @@ Item {
                                     width: parent.width
                                     text: qsTr("视频默认打开（mp4/mkv/mov/avi/m4v）：%1").arg(control.ownershipLabel(control.videoDefault))
                                     color: Theme.primaryText
-                                    font.pixelSize: 12
+                                    font.pixelSize: Theme.fontSecondary
                                 }
 
                                 Text {
@@ -207,7 +207,7 @@ Item {
                                     width: parent.width
                                     text: qsTr("图片默认打开（png/jpg/bmp/webp 等 13 种）：%1").arg(control.ownershipLabel(control.imageDefault))
                                     color: Theme.primaryText
-                                    font.pixelSize: 12
+                                    font.pixelSize: Theme.fontSecondary
                                 }
 
                                 Text {
@@ -229,7 +229,7 @@ Item {
                             width: parent.width
                             text: qsTr("「注册为可选应用」只把本应用加入系统的「打开方式」列表；要把视频或图片默认打开为本应用，请在系统设置中选择本应用。")
                             color: Theme.mutedText
-                            font.pixelSize: 12
+                            font.pixelSize: Theme.fontSecondary
                             wrapMode: Text.WordWrap
                         }
 
@@ -239,7 +239,7 @@ Item {
                             visible: !control.busy && control.lastResult.length > 0
                             text: control.lastResult
                             color: Theme.success
-                            font.pixelSize: 12
+                            font.pixelSize: Theme.fontSecondary
                             wrapMode: Text.WordWrap
                         }
 
@@ -249,7 +249,7 @@ Item {
                             visible: control.lastError.length > 0
                             text: control.localizedError()
                             color: Theme.error
-                            font.pixelSize: 12
+                            font.pixelSize: Theme.fontSecondary
                             wrapMode: Text.WordWrap
                         }
 
@@ -308,7 +308,7 @@ Item {
                             visible: control.busy
                             text: qsTr("正在执行…")
                             color: Theme.mutedText
-                            font.pixelSize: 12
+                            font.pixelSize: Theme.fontSecondary
                         }
                     }
                 }

@@ -62,14 +62,14 @@ Popup {
         Label {
             text: qsTr("记录当前问题")
             color: Theme.primaryText
-            font.pixelSize: 16
+            font.pixelSize: Theme.fontGroupTitle
             font.weight: Font.DemiBold
         }
         Label {
             width: parent.width - parent.padding * 2
             text: qsTr("备注可留空。回车保存，Esc 直接记录。")
             color: Theme.secondaryText
-            font.pixelSize: 12
+            font.pixelSize: Theme.fontSecondary
             wrapMode: Text.Wrap
         }
         TextField {
@@ -82,7 +82,7 @@ Popup {
             placeholderTextColor: Theme.disabledText
             selectionColor: Theme.accent
             selectedTextColor: "#ffffff"
-            font.pixelSize: 13
+            font.pixelSize: Theme.fontCompact
             background: Rectangle {
                 radius: Theme.radiusSmall
                 color: Theme.panel

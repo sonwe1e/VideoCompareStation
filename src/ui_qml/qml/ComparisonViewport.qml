@@ -1325,7 +1325,7 @@ Rectangle {
                             text: String.fromCharCode(65 + pixelReadoutRow.index)
                             color: Theme.sourceInk
                             font.bold: true
-                            font.pixelSize: 10
+                            font.pixelSize: Theme.fontCaption
                         }
                     }
                     Text {
@@ -1379,7 +1379,7 @@ Rectangle {
                         elide: Text.ElideRight
                         text: control.pixelReadoutFormatText(pixelReadoutRow.index)
                         color: control.mutedTextColor
-                        font.pixelSize: 10
+                        font.pixelSize: Theme.fontCaption
                     }
                 }
             }
@@ -1549,7 +1549,7 @@ Rectangle {
                 horizontalAlignment: Text.AlignHCenter
                 text: qsTr("差异不可用")
                 color: control.primaryTextColor
-                font.pixelSize: 17
+                font.pixelSize: Theme.fontStageTitle
                 font.weight: Font.DemiBold
             }
 
@@ -1559,7 +1559,7 @@ Rectangle {
                 wrapMode: Text.WordWrap
                 text: control.differenceUnavailableDetail
                 color: Theme.warningText
-                font.pixelSize: 13
+                font.pixelSize: Theme.fontCompact
             }
         }
     }
@@ -1588,7 +1588,7 @@ Rectangle {
             width: Math.min(implicitWidth, alignmentStatus.width - 24)
             text: control.combinedAlignmentStatus
             color: Theme.secondaryText
-            font.pixelSize: 12
+            font.pixelSize: Theme.fontSecondary
             font.weight: Font.Medium
             elide: Text.ElideRight
             anchors.centerIn: parent
@@ -1714,7 +1714,7 @@ Rectangle {
                         text: String.fromCharCode(65 + Number(surfaceLabel.modelData.slot))
                         color: Theme.sourceInk
                         font.bold: true
-                        font.pixelSize: 13
+                        font.pixelSize: Theme.fontCompact
                     }
                 }
 
@@ -1733,7 +1733,7 @@ Rectangle {
                         return parent.length > 0 ? "%1 (%2)".arg(name).arg(parent) : name;
                     }
                     color: control.primaryTextColor
-                    font.pixelSize: 12
+                    font.pixelSize: Theme.fontSecondary
                     elide: Text.ElideMiddle
                     anchors {
                         left: parent.left
@@ -1833,7 +1833,7 @@ Rectangle {
                 horizontalAlignment: Text.AlignHCenter
                 text: control.overlayTitle
                 color: control.hasErrors && !control.busy ? Theme.errorText : control.primaryTextColor
-                font.pixelSize: 17
+                font.pixelSize: Theme.fontStageTitle
                 font.weight: Font.DemiBold
                 wrapMode: Text.Wrap
             }

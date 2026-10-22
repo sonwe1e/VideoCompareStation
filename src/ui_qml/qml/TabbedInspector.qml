@@ -156,7 +156,7 @@ Rectangle {
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight
             color: darkTabButton.checked ? Theme.primaryText : (darkTabButton.hovered ? Theme.primaryText : Theme.mutedText)
-            font.pixelSize: 12
+            font.pixelSize: Theme.fontSecondary
             font.weight: darkTabButton.checked ? Font.DemiBold : Font.Normal
         }
 
@@ -200,7 +200,7 @@ Rectangle {
 
         contentItem: Text {
             text: darkCheckBox.text
-            font.pixelSize: 12
+            font.pixelSize: Theme.fontSecondary
             color: darkCheckBox.enabled ? Theme.primaryText : Theme.disabledText
             verticalAlignment: Text.AlignVCenter
             leftPadding: darkCheckBox.indicator.width + darkCheckBox.spacing
@@ -226,7 +226,7 @@ Rectangle {
                 anchors.centerIn: parent
                 text: darkCheckBox.checked ? "✓" : ""
                 color: Theme.inverseText
-                font.pixelSize: 10
+                font.pixelSize: Theme.fontMicro
                 font.bold: true
             }
         }
@@ -331,7 +331,7 @@ Rectangle {
                         Label {
                             text: qsTr("对比")
                             color: control.primaryTextColor
-                            font.pixelSize: 16
+                            font.pixelSize: Theme.fontGroupTitle
                             font.weight: Font.DemiBold
                         }
 
@@ -750,7 +750,7 @@ Rectangle {
                         Label {
                             text: qsTr("播放")
                             color: control.primaryTextColor
-                            font.pixelSize: 16
+                            font.pixelSize: Theme.fontGroupTitle
                             font.weight: Font.DemiBold
                         }
                         Label {
@@ -928,7 +928,7 @@ Rectangle {
                                     Label {
                                         text: qsTr("呈现时序与卡顿诊断")
                                         color: control.primaryTextColor
-                                        font.pixelSize: 13
+                                        font.pixelSize: Theme.fontCompact
                                         font.weight: Font.DemiBold
                                         Layout.fillWidth: true
                                     }
@@ -1015,7 +1015,7 @@ Rectangle {
                                             anchors.centerIn: parent
                                             text: (control.timingDiagnostics && control.timingDiagnostics.skippedFrameSetCount > 0) ? qsTr("%1 帧集跳帧").arg(Number(control.timingDiagnostics.skippedFrameSetCount)) : qsTr("0 跳帧 (平稳)")
                                             color: (control.timingDiagnostics && control.timingDiagnostics.skippedFrameSetCount > 0) ? Theme.warningText : Theme.success
-                                            font.pixelSize: 10
+                                            font.pixelSize: Theme.fontCaption
                                             font.bold: true
                                         }
                                     }
@@ -1118,7 +1118,7 @@ Rectangle {
                         Label {
                             text: qsTr("媒体信息")
                             color: control.primaryTextColor
-                            font.pixelSize: 16
+                            font.pixelSize: Theme.fontGroupTitle
                             font.weight: Font.DemiBold
                         }
                         Repeater {
@@ -1167,7 +1167,7 @@ Rectangle {
                                             Layout.fillWidth: true
                                             text: String(mediaCard.modelData.filename || "")
                                             color: Theme.primaryText
-                                            font.pixelSize: 12
+                                            font.pixelSize: Theme.fontSecondary
                                             font.weight: Font.DemiBold
                                             elide: Text.ElideMiddle
                                         }

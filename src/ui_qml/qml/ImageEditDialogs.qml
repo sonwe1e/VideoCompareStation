@@ -94,7 +94,7 @@ Item {
 
             text: field.textFromValue(field.value, field.locale)
             color: Theme.primaryText
-            font.pixelSize: 13
+            font.pixelSize: Theme.fontCompact
             selectByMouse: true
             horizontalAlignment: Qt.AlignHCenter
             verticalAlignment: Qt.AlignVCenter
@@ -182,7 +182,7 @@ Item {
                     Text {
                         text: shell.title
                         color: Theme.primaryText
-                        font.pixelSize: 15
+                        font.pixelSize: Theme.fontSubheading
                         font.weight: Font.DemiBold
                         anchors {
                             left: parent.left
@@ -212,7 +212,7 @@ Item {
                             visible: shell.subtitle.length > 0
                             text: shell.subtitle
                             color: Theme.mutedText
-                            font.pixelSize: 12
+                            font.pixelSize: Theme.fontSecondary
                             wrapMode: Text.WordWrap
                         }
                     }
@@ -305,7 +305,7 @@ Item {
                     width: 44
                     text: qsTr("宽")
                     color: Theme.mutedText
-                    font.pixelSize: 12
+                    font.pixelSize: Theme.fontSecondary
                     anchors.verticalCenter: parent.verticalCenter
                 }
                 EdgeField {
@@ -321,7 +321,7 @@ Item {
                 Text {
                     text: qsTr("px")
                     color: Theme.mutedText
-                    font.pixelSize: 12
+                    font.pixelSize: Theme.fontSecondary
                     anchors.verticalCenter: parent.verticalCenter
                 }
             }
@@ -333,7 +333,7 @@ Item {
                     width: 44
                     text: qsTr("高")
                     color: Theme.mutedText
-                    font.pixelSize: 12
+                    font.pixelSize: Theme.fontSecondary
                     anchors.verticalCenter: parent.verticalCenter
                 }
                 EdgeField {
@@ -349,7 +349,7 @@ Item {
                 Text {
                     text: qsTr("px")
                     color: Theme.mutedText
-                    font.pixelSize: 12
+                    font.pixelSize: Theme.fontSecondary
                     anchors.verticalCenter: parent.verticalCenter
                 }
             }
@@ -439,7 +439,7 @@ Item {
                     width: 44
                     text: qsTr("画布宽")
                     color: Theme.mutedText
-                    font.pixelSize: 12
+                    font.pixelSize: Theme.fontSecondary
                     anchors.verticalCenter: parent.verticalCenter
                 }
                 EdgeField {
@@ -451,7 +451,7 @@ Item {
                 Text {
                     text: qsTr("px")
                     color: Theme.mutedText
-                    font.pixelSize: 12
+                    font.pixelSize: Theme.fontSecondary
                     anchors.verticalCenter: parent.verticalCenter
                 }
             }
@@ -463,7 +463,7 @@ Item {
                     width: 44
                     text: qsTr("画布高")
                     color: Theme.mutedText
-                    font.pixelSize: 12
+                    font.pixelSize: Theme.fontSecondary
                     anchors.verticalCenter: parent.verticalCenter
                 }
                 EdgeField {
@@ -475,7 +475,7 @@ Item {
                 Text {
                     text: qsTr("px")
                     color: Theme.mutedText
-                    font.pixelSize: 12
+                    font.pixelSize: Theme.fontSecondary
                     anchors.verticalCenter: parent.verticalCenter
                 }
             }
@@ -487,7 +487,7 @@ Item {
                     width: 44
                     text: qsTr("填充色")
                     color: Theme.mutedText
-                    font.pixelSize: 12
+                    font.pixelSize: Theme.fontSecondary
                     anchors.verticalCenter: parent.verticalCenter
                 }
 

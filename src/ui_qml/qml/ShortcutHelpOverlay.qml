@@ -83,13 +83,13 @@ Popup {
 
                     text: qsTr("键盘快捷键")
                     color: Theme.primaryText
-                    font.pixelSize: 20
+                    font.pixelSize: Theme.fontOverlayTitle
                     font.weight: Font.DemiBold
                 }
                 Label {
                     text: qsTr("Esc 关闭")
                     color: Theme.mutedText
-                    font.pixelSize: 12
+                    font.pixelSize: Theme.fontSecondary
                     anchors {
                         right: parent.right
                         verticalCenter: parent.verticalCenter
@@ -99,7 +99,7 @@ Popup {
             Label {
                 text: control.imagePreset ? qsTr("图像与透明度检查快捷键") : (control.playerPreset ? qsTr("播放器快捷键") : qsTr("逐帧检查快捷键"))
                 color: Theme.accentText
-                font.pixelSize: 12
+                font.pixelSize: Theme.fontSecondary
                 font.weight: Font.DemiBold
             }
             GridLayout {
@@ -138,7 +138,7 @@ Popup {
                                     anchors.centerIn: parent
                                     text: String(shortcutRow.modelData[0])
                                     color: Theme.primaryText
-                                    font.pixelSize: 12
+                                    font.pixelSize: Theme.fontSecondary
                                     font.weight: Font.DemiBold
                                 }
                             }
@@ -148,7 +148,7 @@ Popup {
                             Layout.fillWidth: true
                             text: String(shortcutRow.modelData[1])
                             color: Theme.secondaryText
-                            font.pixelSize: 13
+                            font.pixelSize: Theme.fontCompact
                         }
                     }
                 }

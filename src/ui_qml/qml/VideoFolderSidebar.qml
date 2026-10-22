@@ -93,7 +93,7 @@ Rectangle {
                 text: reasonItem.text
                 wrapMode: Text.Wrap
                 color: Theme.mutedText
-                font.pixelSize: 12
+                font.pixelSize: Theme.fontSecondary
                 verticalAlignment: Text.AlignVCenter
             }
         }
@@ -215,7 +215,7 @@ Rectangle {
             elide: Text.ElideRight
             text: control.showRecent ? qsTr("%1 项 · 上限 50").arg(control.folderModel ? control.folderModel.recentFiles.length : 0) : (control.folderModel && control.folderModel.scanning ? qsTr("正在读取文件列表…") : qsTr("%1 个媒体文件 · 点击即打开").arg(control.folderModel ? control.folderModel.fileCount : 0))
             color: Theme.mutedText
-            font.pixelSize: 12
+            font.pixelSize: Theme.fontSecondary
         }
     }
 
@@ -287,7 +287,7 @@ Rectangle {
                     anchors.centerIn: parent
                     text: qsTr("图")
                     color: Theme.mutedText
-                    font.pixelSize: 10
+                    font.pixelSize: Theme.fontMicro
                 }
             }
             background: Rectangle {
@@ -335,7 +335,7 @@ Rectangle {
                 elide: Text.ElideMiddle
                 verticalAlignment: Text.AlignVCenter
                 color: row.highlighted ? Theme.accentText : Theme.primaryText
-                font.pixelSize: 13
+                font.pixelSize: Theme.fontCompact
             }
         }
         Keys.onPressed: event => {
@@ -358,7 +358,7 @@ Rectangle {
             anchors.centerIn: parent
             text: qsTr("没有可浏览的媒体文件")
             color: Theme.mutedText
-            font.pixelSize: 12
+            font.pixelSize: Theme.fontSecondary
         }
     }
 
@@ -411,7 +411,7 @@ Rectangle {
                     anchors.centerIn: parent
                     text: qsTr("图")
                     color: Theme.mutedText
-                    font.pixelSize: 10
+                    font.pixelSize: Theme.fontMicro
                 }
             }
             background: Rectangle {
@@ -459,7 +459,7 @@ Rectangle {
                 elide: Text.ElideMiddle
                 verticalAlignment: Text.AlignVCenter
                 color: recentRow.highlighted ? Theme.accentText : Theme.primaryText
-                font.pixelSize: 13
+                font.pixelSize: Theme.fontCompact
             }
         }
         Keys.onPressed: event => {
@@ -482,7 +482,7 @@ Rectangle {
             anchors.centerIn: parent
             text: qsTr("成功打开的视频与图片会显示在这里")
             color: Theme.mutedText
-            font.pixelSize: 12
+            font.pixelSize: Theme.fontSecondary
         }
     }
 
@@ -501,20 +501,20 @@ Rectangle {
             maximumLineCount: control.compact ? 2 : 4
             elide: Text.ElideRight
             color: Theme.errorText
-            font.pixelSize: 12
+            font.pixelSize: Theme.fontSecondary
         }
         Text {
             visible: Boolean(control.folderModel && control.folderModel.openPending)
             text: qsTr("正在打开所选文件…")
             color: Theme.mutedText
-            font.pixelSize: 12
+            font.pixelSize: Theme.fontSecondary
         }
         Text {
             width: parent.width
             text: qsTr("点击打开；图片进入图片工作区；… 或右键查看操作")
             wrapMode: Text.Wrap
             color: Theme.mutedText
-            font.pixelSize: 12
+            font.pixelSize: Theme.fontSecondary
         }
         Row {
             visible: !control.showRecent

@@ -299,7 +299,7 @@ Rectangle {
                         visible: control.sourceLabel(windowCell.slot).length > 0
                         text: control.sourceLabel(windowCell.slot)
                         color: Theme.secondaryText
-                        font.pixelSize: 10
+                        font.pixelSize: Theme.fontCaption
                         elide: Text.ElideMiddle
                         anchors {
                             left: parent.left

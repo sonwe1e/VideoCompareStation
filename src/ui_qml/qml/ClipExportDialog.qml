@@ -165,7 +165,7 @@ Item {
                         Text {
                             text: qsTr("导出区间片段")
                             color: Theme.primaryText
-                            font.pixelSize: 15
+                            font.pixelSize: Theme.fontSubheading
                             font.weight: Font.DemiBold
                             anchors.verticalCenter: parent.verticalCenter
                         }
@@ -183,7 +183,7 @@ Item {
                                 id: streamCopyText
                                 anchors.centerIn: parent
                                 text: qsTr("无损流拷贝 · Stream Copy")
-                                font.pixelSize: 10
+                                font.pixelSize: Theme.fontCaption
                                 font.weight: Font.DemiBold
                                 color: Theme.success
                             }
@@ -237,7 +237,7 @@ Item {
                                         objectName: "clipExportSourceRole"
                                         text: control.busy ? qsTr("正在导出（时间线主源）") : qsTr("待导出源（时间线主源）")
                                         color: Theme.mutedText
-                                        font.pixelSize: 12
+                                        font.pixelSize: Theme.fontSecondary
                                     }
 
                                     Text {
@@ -246,7 +246,7 @@ Item {
                                         text: control.sourceFileName.length > 0 ? control.sourceFileName : qsTr("（不可导出）")
                                         textFormat: Text.PlainText
                                         color: Theme.primaryText
-                                        font.pixelSize: 13
+                                        font.pixelSize: Theme.fontCompact
                                         font.weight: Font.DemiBold
                                         elide: Text.ElideMiddle
                                         Accessible.name: qsTr("导出源（时间线主源）：%1").arg(control.sourcePath)
@@ -266,7 +266,7 @@ Item {
                                     Text {
                                         text: qsTr("导出区间：")
                                         color: Theme.mutedText
-                                        font.pixelSize: 12
+                                        font.pixelSize: Theme.fontSecondary
                                         anchors.verticalCenter: parent.verticalCenter
                                     }
 
@@ -274,7 +274,7 @@ Item {
                                         width: parent.width - 70
                                         text: control.rangeSummary.length > 0 ? control.rangeSummary : qsTr("未设区间")
                                         color: Theme.primaryText
-                                        font.pixelSize: 13
+                                        font.pixelSize: Theme.fontCompact
                                         font.weight: Font.DemiBold
                                         elide: Text.ElideRight
                                         anchors.verticalCenter: parent.verticalCenter
@@ -288,7 +288,7 @@ Item {
                                     Text {
                                         text: qsTr("建议文件：")
                                         color: Theme.mutedText
-                                        font.pixelSize: 12
+                                        font.pixelSize: Theme.fontSecondary
                                         anchors.verticalCenter: parent.verticalCenter
                                     }
 
@@ -297,7 +297,7 @@ Item {
                                         text: control.fileName.length > 0 ? control.fileName : qsTr("（待选择）")
                                         color: control.fileName.length > 0 ? Theme.primaryText : Theme.mutedText
                                         font.family: Theme.fontFamilyMono
-                                        font.pixelSize: 12
+                                        font.pixelSize: Theme.fontSecondary
                                         elide: Text.ElideMiddle
                                         anchors.verticalCenter: parent.verticalCenter
                                     }
@@ -347,7 +347,7 @@ Item {
                             visible: control.statusText.length > 0 || control.outputPath.length > 0
                             text: control.busy ? qsTr("当前导出状态") : qsTr("上次导出结果")
                             color: Theme.mutedText
-                            font.pixelSize: 12
+                            font.pixelSize: Theme.fontSecondary
                         }
 
                         Text {
@@ -355,7 +355,7 @@ Item {
                             visible: control.statusText.length > 0
                             text: control.statusText
                             color: control.failureDetail.length > 0 ? Theme.error : (control.outputPath.length > 0 ? Theme.success : Theme.mutedText)
-                            font.pixelSize: 12
+                            font.pixelSize: Theme.fontSecondary
                             wrapMode: Text.WordWrap
                         }
 

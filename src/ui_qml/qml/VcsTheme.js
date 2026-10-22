@@ -197,6 +197,26 @@ var fontGroupTitle = 16
 var fontMicro = 10
 var fontMono = 13
 var fontCaption = 11
+// UX-17 convergence wave 1 (2026-10-22). The five sizes below pin exact values that
+// already rendered at these numbers in the corpus, so binding a site to its token
+// changes nothing visually; tst_vcs_theme pins the values. Roles, each shared by the
+// sites that converged onto it:
+//   fontCompact (13)     dense primary text one step above secondary - file-list rows,
+//                        text inputs, emphasized row values, card subheadings. It equals
+//                        fontMono in this tuning by coincidence; they are separate
+//                        decisions, so retuning one must never drag the other.
+//   fontSubheading (15)  the DemiBold header row inside a dialog pane (clip export, file
+//                        association, sample training); modal titles lead with
+//                        fontGroupTitle, one step above.
+//   fontStageTitle (17)  centered headings on the stage itself - the difference-
+//                        unavailable overlay and the image empty state.
+//   fontOverlayTitle (20) the title of the modal shortcut-help overlay.
+//   fontLargeTitle (28)  the empty-review hero headline - the largest type in the product.
+var fontCompact = 13
+var fontSubheading = 15
+var fontStageTitle = 17
+var fontOverlayTitle = 20
+var fontLargeTitle = 28
 
 // Font families. QML's `font` value type exposes a single `family` string only (Qt 6.11 has
 // no `font.families`; tst_vcs_theme records the probe), so a CSS-style fallback stack cannot

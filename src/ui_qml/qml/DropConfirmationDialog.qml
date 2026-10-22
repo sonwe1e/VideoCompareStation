@@ -126,7 +126,7 @@ Popup {
                 Text {
                     text: control.title
                     color: Theme.primaryText
-                    font.pixelSize: 16
+                    font.pixelSize: Theme.fontGroupTitle
                     font.weight: Font.DemiBold
                     anchors {
                         left: parent.left
