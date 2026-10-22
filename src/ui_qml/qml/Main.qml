@@ -3875,7 +3875,7 @@ ApplicationWindow {
             Text {
                 text: qsTr("手动对齐锚点")
                 color: root.primaryTextColor
-                font.pixelSize: 16
+                font.pixelSize: Theme.fontGroupTitle
                 font.weight: Font.DemiBold
             }
 
@@ -3977,7 +3977,7 @@ ApplicationWindow {
                 objectName: "alignmentModeStatus"
                 text: root.anyManualAlignmentActive ? qsTr("手动对齐") : (root.autoAlignmentActive ? qsTr("自动对齐") : qsTr("严格索引"))
                 color: root.anyManualAlignmentActive || root.autoAlignmentActive ? Theme.warning : Theme.success
-                font.pixelSize: 12
+                font.pixelSize: Theme.fontSecondary
                 font.weight: Font.DemiBold
             }
 
@@ -4032,7 +4032,7 @@ ApplicationWindow {
                 visible: root.anyManualAlignmentActive || root.autoAlignmentActive
                 text: qsTr("缺失的映射帧保持黑色；偏移不会被截断。")
                 color: root.mutedTextColor
-                font.pixelSize: 10
+                font.pixelSize: Theme.fontCaption
                 width: parent.width
                 wrapMode: Text.WordWrap
             }
@@ -4041,7 +4041,7 @@ ApplicationWindow {
                 visible: root.compatibilityDetails().length > 0
                 text: root.compatibilityDetails()
                 color: Theme.warning
-                font.pixelSize: 10
+                font.pixelSize: Theme.fontCaption
                 width: parent.width
                 wrapMode: Text.WordWrap
             }
@@ -5483,7 +5483,7 @@ ApplicationWindow {
             Text {
                 text: qsTr("松开即可在 CompareStation 中打开")
                 color: root.primaryTextColor
-                font.pixelSize: 24
+                font.pixelSize: Theme.fontDropOverlayTitle
                 font.bold: true
                 anchors.horizontalCenter: parent.horizontalCenter
             }

@@ -4,7 +4,7 @@
 Keeps QML dimension literals from drifting away from the design tokens in VcsTheme.js.
 
 .DESCRIPTION
-The theme owns one value per design decision: eleven font sizes, seven radii, three animation
+The theme owns one value per design decision: twelve font sizes, seven radii, three animation
 durations, two spacing steps and one hit-area minimum. Nothing stopped a component from
 writing the number inline, so every review round re-counted the drift by hand: 11 px became
 a de-facto sixth font size across 78 sites, `radius: 6` appeared 20 times with no token
@@ -68,14 +68,15 @@ if (-not (Test-Path -LiteralPath $qmlRoot -PathType Container)) {
 # entries were removed - the shadow check below rejects a baseline entry whose value a
 # token already defines - and duration '100' dropped to 6 when VcsMenuItem converged to
 # animationFast.
-# 2026-10-22, UX-17 wave 1: 15/17/20/28 converged into fontSubheading/fontStageTitle/
-# fontOverlayTitle/fontLargeTitle (token values equal the retired literals, zero visual
-# change), so those entries were removed - the shadow check would reject them. '24' stays
-# for Main.qml's drop-overlay headline; wave 2 converges it after the S4 merge row lands.
+# 2026-10-22, UX-17 waves 1-2: 15/17/20/28 converged into fontSubheading/fontStageTitle/
+# fontOverlayTitle/fontLargeTitle, and 24 into fontDropOverlayTitle (token values equal
+# the retired literals, zero visual change), so those entries were removed - the shadow
+# check would reject them. The font table is now empty by design: every font size in the
+# corpus is a token binding, the zero literal count is held honest by the convergence
+# probes below (the regex probe plus the raw-property presence check over tokenized
+# bindings), and re-adding an entry needs a fresh justification, not a rollback here.
 # ---------------------------------------------------------------------------
-$fontBaseline = [ordered]@{
-    '24' = 1
-}
+$fontBaseline = [ordered]@{}
 $radiusBaseline = [ordered]@{
     '1'   = 3
     '1.5' = 1
@@ -123,7 +124,7 @@ $hitAreaBaseline = [ordered]@{
 # literals, so the structural checks below verify the pairing.
 $fontTokens = @('fontMicro', 'fontCaption', 'fontSecondary', 'fontMono', 'fontCompact',
     'fontBody', 'fontSubheading', 'fontGroupTitle', 'fontStageTitle', 'fontOverlayTitle',
-    'fontLargeTitle')
+    'fontDropOverlayTitle', 'fontLargeTitle')
 $radiusTokens = @('radiusMicro', 'radiusSubtle', 'radiusSmall', 'radiusMedium', 'radiusLarge', 'radiusCard', 'radiusPill')
 $durationTokens = @('animationFast', 'animationBase', 'animationSlow')
 $spacingTokens = @('spaceMicro', 'spaceMain')

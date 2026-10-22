@@ -197,7 +197,7 @@ var fontGroupTitle = 16
 var fontMicro = 10
 var fontMono = 13
 var fontCaption = 11
-// UX-17 convergence wave 1 (2026-10-22). The five sizes below pin exact values that
+// UX-17 convergence waves 1-2 (2026-10-22). The six sizes below pin exact values that
 // already rendered at these numbers in the corpus, so binding a site to its token
 // changes nothing visually; tst_vcs_theme pins the values. Roles, each shared by the
 // sites that converged onto it:
@@ -211,11 +211,14 @@ var fontCaption = 11
 //   fontStageTitle (17)  centered headings on the stage itself - the difference-
 //                        unavailable overlay and the image empty state.
 //   fontOverlayTitle (20) the title of the modal shortcut-help overlay.
+//   fontDropOverlayTitle (24) the headline of the drag-and-drop scrim - the
+//                        release-to-open instruction shown over the whole window.
 //   fontLargeTitle (28)  the empty-review hero headline - the largest type in the product.
 var fontCompact = 13
 var fontSubheading = 15
 var fontStageTitle = 17
 var fontOverlayTitle = 20
+var fontDropOverlayTitle = 24
 var fontLargeTitle = 28
 
 // Font families. QML's `font` value type exposes a single `family` string only (Qt 6.11 has
