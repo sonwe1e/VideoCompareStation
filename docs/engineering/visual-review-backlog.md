@@ -26,37 +26,63 @@
   包装测试不在 `-Preset release -Test` 的选择范围内（release test preset 继承 dev，排除
   `packaged` 标签），要跑这一层用 `ctest --preset packaged-smoke`。
 
-## 2026-10-22 UX-13 窄窗重排 S1–S3（已实现，S3 本轮收尾）
+## 2026-10-22 UX-13 窄窗重排 S1–S5（已实现·窄档，待用户复核四项）
 
 依据 [窄窗重排提案](../plans/ux13-narrow-window-redesign.md)（Q1/Q2/Q3 裁定见其 §7，执行状态见 §8）。
-三档各自一个提交，触发档位统一为宿主窗口高度 ≤ 680（提案 §1：960×640 是窗口最小值，640 的阈值
-压在 OS 钳制与帧取整的抖动带上）。
+触发档位统一为宿主窗口高度 ≤ 680（提案 §1：960×640 是窗口最小值，640 的阈值压在 OS 钳制与
+帧取整的抖动带上）；S1–S4 各一个实现提交，S5 为证据/台账收尾轮。
 
 | 步 | 提交 | 落点 | 实测（960×640；大窗 1440×900 为回归对照） | 钉住它的验证 |
 |---|---|---|---|---|
 | S1 视频走带 | `9ea57e0` | `PlayerOsc` 指标道折叠、读数并成单行；`TransportBar` 区间动作收进摘要 chip | 走带 172→139（提案目标 ≤120，未达 19px）、视口 306→339；大窗走带 172（提案的 161 基线已过期） | `tst_player_osc` 紧凑档用例；`ChromeGeometry` 两档证据 |
 | S2 图片命令面板 | `47e2525` | 查看态单行 ≤48、编辑态两行 ≤88；次要簇进按需「更多」菜单 | 960 档查看态面板 40、编辑态由契约钉住 ≤88；大窗面板 81（提案基线 119） | `ImageCommandPanelCompactTierCollapsesToBands` |
-| S3 图片状态栏 | 本轮 | 提示行单行 ≤40：芯片按档封顶、隐藏项塌缩；读数表移入「详情」浮层；错误句镜像到摘要行 | 状态栏 72→40、画布高 465→496（同为 960 地板档）；大窗状态栏仍 72 | `ImageStatusBarCompactTierCollapsesToSingleBand`；`out/verification/ux13-s3-after/` |
+| S3 图片状态栏 | `d7de619` | 提示行单行 ≤40：芯片按档封顶、隐藏项塌缩；读数表移入「详情」浮层；错误句镜像到摘要行 | 状态栏 72→40、画布高 465→496（同为 960 地板档）；大窗状态栏仍 72 | `ImageStatusBarCompactTierCollapsesToSingleBand`；`out/verification/ux13-s3-after/` |
+| S4 源条+模式栏合并行 | `50784d2` | 紧凑档一行三簇：源 chips 字母+状态点（身份色不变，长名/角色/状态进 chip tooltip）；模式两字分段控件（Q2）；直看/布局/比较对/切候选/导出收进按需「更多」菜单（折叠行驱动与宽档同信号、同 enabled）；按住看 GT 留在行内 | 顶部 chrome 两行 118→合并单行 40（strip 259/40/y=0、modeBar 689/40/x=271/y=0）；transport 139@y471 不变；视口 339→417（+78=消除的 modeBar 折行）；1440 对照 strip/modeBar 40/40 堆叠不变、transport 173（1.25 标尺与 s3-after 精确一致；s4-after@1.5 逻辑值逐项相同） | `CompactTierMergesVideoSourceStripAndModeBar`（宽档 witness/合并几何/折叠行/EX-03/ghost 守卫/档位回翻）；`ModeBarOrganizesTasksWithLayoutSubmenu` 紧凑段；`ChromeGeometry` 内嵌两档 witness；硬化 `deffc66` |
+| S5 收尾 | —（文档轮） | 两档全量证据重录、台账/提案落定、用户复核清单汇总 | `out/verification/ux13-s5-final/`（scale=1.25，G322U，与 s3-after 同标尺直接可比）：960 走带 139、视口 417、图片 statusBar 40/面板 40/画布 496；1440 全项回归不变 | 本节 + 提案 §8；材料 `out/verification/ux13-s5/notes/`（runbook+草稿） |
 
 S3 的边界（代码注释与契约同步记录）：点「详情」把既有 `statusDetails` 块重挂到 bar 上方的根级
 面板，不新增常驻对象；展开不改变 bar 高度与画布尺寸，但会临时盖住画布底缘一条，内容随采样长高，
 收起后回到 40。提案 D3 写的是「浮层展开可读且不遮画布」，当前实现按"不改画布尺寸、只临时遮挡"
-执行；是否接受这层遮挡留 S5 复核裁定，若要完全不遮挡得换一种面板位置（上移画布或占用命令面板行），
-不属于本轮范围。
+执行；S5 已备妥两选项裁定材料——**A 接受临时遮挡**（显式展开、可收起、无常驻遮挡）或
+**B 要求零遮挡**（须换面板位置：上移画布或占用命令面板行，属新工作量，超出本轮范围）——
+**待用户裁定**（材料引 `out/verification/ux13-s3-after/image-details-960.png` 与
+`out/verification/ux13-s5/notes/ledger-and-plan-updates-draft.md` §(b)）。
 
 S3 门禁抓到的真实缺陷：芯片按档封顶后，Flow 在无渲染宿主里保留宽窗宽度的折行，状态栏停在 62 而
 不是 40。修法是 tier 翻转/源切换时与命令面板同一条显式重排纪律
 （`Qt.callLater(relayoutStatusHints)`）——只在 Flow 自己的 `onWidthChanged` 里 `forceLayout()` 不够，
 因为它跑在封顶宽度生效之前。
 
-**门禁（2026-10-22，dev 预设，本机）**：`format-check` 通过；完整 `lint`（qmllint `--max-warnings 0`
-零告警、clang-tidy 零发现）通过；定向
-`-TestRegex 'ui.(MainQmlContractTests|ImageWorkspaceManual|wipe_handle|vcs_theme|application_menu_bar)'`
-**155/155 通过**；证据重录在 `out/verification/ux13-s3-after/`（含新截图 `image-details-960.png`，
-浮层展开态）。
+S1 目标对齐（S5 汇总，**待用户裁定**）：实测 139 与提案 ≤120 的 19px 缺口，构成正是 2026-10-16
+用户裁定常驻的区间 in/out 行（`9ea57e0` 提交说明）。建议把窄档走带目标改写为 ≤139（含该常驻行）；
+裁定前不改口径，上表 S1 行仍如实记「未达 19px」。
 
-**剩余**：S4（视频源条+模式栏合并行，风险最高）与 S5（两档全量截图对比、UX-13 台账状态改
-「已实现（窄档）」、D3 遮挡语义复核）未做；真实 DPI/可见窗口走查仍按 runbook 待办。
+S4 对抗审查处置（s5-verify，2026-10-22）：无阻断项——大窗路径逐值等价（锚点算术→显式几何、
+topMargin、隐藏尾按钮保留 34 幽灵宽），折叠行驱动与宽档相同信号，契约为行为级（折叠 pair 行提交
+真实 `SetActiveComparisonPairCommand` 经端口落地、边缘真翻转、档位回翻、ghost 行守卫）。采纳的
+硬化已落 `deffc66`（`compactRowWidth` 259=48+3×(52+7)+34 算术钉值 + 3 源态尾按钮右缘包含性）；
+2 源 compact 档可达性断言与 singleMode compact 尾钮预算（48+59+34=141 案）登记 follow-up；
+紧凑状态点三态同色环与 UX-17 fontMicro 次要信息两处保留现状，转用户复核（见「剩余」）。
+
+**门禁（2026-10-22，dev 预设，lead 串行，分轮）**：`format-check` 与完整 `lint`（qmllint
+`--max-warnings 0` 零告警、clang-tidy 零发现）各轮通过。定向：S3 轮 **155/155**；S4+UX-17 波 1 链
+**161/161**（regex 自第一轮即含 `player_osc` 与 `wipe_handle`，V-10/U-03 每轮覆盖）；UX-17 波 2 链再
+**161/161**（含 `quality.qml-token-literals` 终态：`font.pixelSize: fully converged - no literal
+values remain (333 property sites, all tokenized)`，及 `tst_vcs_theme` 新旧令牌钉值与阶梯序断言）；
+test-only 硬化（`deffc66`）后 **146/146**。**完整 dev 回归（`-Test` 无选择器）exit 0、0 失败：
+1484 项注册，9 项环境性跳过**（platform 硬件探针 5、PNG zlib 解码 1、大小写不敏感文件系统 3——
+均为台账既有跳过类）。证据链：`out/verification/ux13-s3-after/`（1.25）、
+`ux13-s4-after/`（1.5）、`ux13-s5-final/`（1.25，G322U，与 s3-after 同标尺直接可比；
+s4-after 与 s5-final 跨标尺逻辑值逐项一致，双注记引用、禁止换算）。
+
+**剩余**：S1–S4 实现与 S5 收尾完成，UX-13 状态改「已实现（窄档）」。**待用户裁定/复核四项**
+（材料 `out/verification/ux13-s5/notes/ledger-and-plan-updates-draft.md`）：① S1 窄档走带目标
+≤120→≤139 改写（19px 缺口即 2026-10-16 裁定常驻的 in/out 行）；② D3 详情浮层临时遮挡
+（A 接受 / B 零遮挡=换面板位置的新工作量）；③ S4 紧凑状态点把 focus/selected/reference 折叠为
+同一 sourceAccent 环（tooltip 分辨）；④ UX-17 fontMicro 6 处中 4 处次要信息维持 10px（近帧卡
+单元帧号 ×2、视频侧栏「图」类型徽记 ×2）。follow-up 两条待后续轮：2 源 compact 档 add 按钮
+可达性断言、singleMode compact 尾钮预算覆盖。真实 DPI/可见窗口走查仍按
+real-environment-verification.md §3.8/阶段 S5 待办（UX-13 前置本轮已满足）。
 
 ## 2026-10-21 清债小件轮（A 轮，已提交）
 
@@ -139,10 +165,13 @@ S3 门禁抓到的真实缺陷：芯片按档封顶后，Flow 在无渲染宿主
 
 ### 未处理，连同理由
 
-- **UX-13（960×640 折叠）**：不是调参问题。窗口高度 640 时 chrome 占 32%，画布只剩 908×386
-  （大窗面积的 37%）。要动的是层叠结构：源条/模式栏/对齐条在窄高下该合并成一行、走带是否
-  允许浮动而不是常驻 180 px。这类重排必须配两档截图对比逐轮验证，塞进本轮会把前面 20 条的
-  回归面搅在一起，建议单独一轮。
+- **UX-13（960×640 折叠）**：**已实现（窄档）**——2026-10-22 轮按
+  [窄窗重排提案](../plans/ux13-narrow-window-redesign.md) 分五步落地（S1–S4 各一提交、S5 证据/
+  台账收尾），证据与门禁见上文 2026-10-22 UX-13 节；四项用户裁定/复核与两条 follow-up 待办。
+  原评审记录（当时判断单独一轮是正确的，本轮即该轮）：不是调参问题。窗口高度 640 时 chrome
+  占 32%，画布只剩 908×386（大窗面积的 37%）。要动的是层叠结构：源条/模式栏/对齐条在窄高下
+  该合并成一行、走带是否允许浮动而不是常驻 180 px。这类重排必须配两档截图对比逐轮验证，
+  塞进本轮会把前面 20 条的回归面搅在一起，建议单独一轮。
 - **UX-15 的 `WipeHandle` 手柄路径**：画布手柄自身仍不可聚焦（`DISABLED_WipeHandleIsKeyboardAdjustable`
   记录着这个缺口）。根级快捷键已经覆盖同一个能力，所以手柄只差"聚焦 + 方向键微调"这层，
   属于纯增量，留待与 UX-13 的布局一起动。
@@ -163,8 +192,10 @@ S3 门禁抓到的真实缺陷：芯片按档封顶后，Flow 在无渲染宿主
 （`UnsuccessfulStartupVideoOpenKeepsImageWorkspace`、`ui.video_file_sidebar.Windows`），
 串行复跑与本次全量均未复现，判为并行/桌面对焦抖动。
 
-截图与几何证据：`out/verification/ui-audit-2026-10-19/`（12 张 PNG + `chrome-geometry.txt`，
-`QT_SCALE_FACTOR=0.5714` 适配本机 DPR 1.75 的 900 逻辑像素高屏）。
+截图与几何证据：`out/verification/ui-audit-2026-10-19/`（11 张 PNG + `chrome-geometry.txt`——
+本节原记「12 张」为计数漂移，2026-10-22 按目录实存核正；S3 起证据用例新增
+`image-details-960.png`，现行用例产 12 张。`QT_SCALE_FACTOR=0.5714` 适配本机 DPR 1.75 的
+900 逻辑像素高屏）。
 
 ## 2026-10-19 界面与交互审查（评审，无代码改动）
 

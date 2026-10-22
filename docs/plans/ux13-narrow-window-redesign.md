@@ -83,7 +83,7 @@
 
 ## 5. 验证计划
 
-- 证据台：仓库自带 `ChromeGeometryAndScreenshotEvidence`，两档 960×640 + 1440×900 各采一轮（沿用 ui-audit-2026-10-19 的做法：12 张 PNG + `chrome-geometry.txt`，`QT_SCALE_FACTOR=0.5714` 适配 DPR 1.75）。证据落 `out/verification/ux13-<步骤号>/`。
+- 证据台：仓库自带 `ChromeGeometryAndScreenshotEvidence`，两档 960×640 + 1440×900 各采一轮（做法沿袭 ui-audit-2026-10-19：`QT_SCALE_FACTOR=0.5714` 适配 DPR 1.75 的 900 逻辑像素高屏；该轮实存 11 张 PNG，现行用例自 S3 起新增 `image-details-960.png` 后产 12 张）。证据落 `out/verification/ux13-<步骤号>/`。
 - **补测量缺口**：现有证据缺 `video960` 的源条/模式栏/视口三项。缺口位置明确：`MainQmlContractTests.ChromeGeometryAndScreenshotEvidence` 的 video960 段（`tests/component/ui/MainQmlContractTests.cpp`，"Supported floor size" 注释后 `resize(960, 640)` 处）目前只 `recordItem("video960", "transport", true)`，而 video1440 段记录了 `activeSourceStrip`/`compareModeBar`/`transport`/`mediaViewportFocusTarget` 四个 required 项加可选 `viewportPixelReadoutPlate`。S1 的第一步是在 video960 段补齐同样的三个 required 项（+可选读数板），随后由 lead 以 `DVS_REVIEW_EVIDENCE_DIR` 指向 `out/verification/ux13-s1-baseline/` 跑一次证据用例，重录**改动前**基线（chrome-geometry.txt 三项齐全 + `video-min-960.png`），之后 S1 的布局改动才有完整 before/after。
 - 每步验收判据：① §2 表中对应几何数字达标；② 两档截图并排人工对比无回归（重点：分割线两侧、提示条位置、源身份色）；③ 相关 ui.* 套件由 lead 统一跑绿。
 - 需改基线/重录的契约测试清单：`ModeBarOrganizesTasksWithLayoutSubmenu`、`ShortcutHelpMatchesBoundShortcuts`（UX-10）；EX-03/04/06/08 契约；`tst_player_osc`（UX-02 未测量句、U-03）；ImageWorkspace 命令面板/状态栏相关契约（含 UX-19 显隐、UX-01 徽章）；V-10 窄窗 45 用例；ChromeGeometry 两档基线全量重录。EX-06 令牌阶梯断言必须继续通过（§2 所有间距/字号均取自既有阶梯，无新令牌；若实现中发现确需新令牌，按 task-2 模式在 VcsTheme.js 定义 + tst_vcs_theme 钉值后再用）。
@@ -116,19 +116,23 @@
 |---|---|---|
 | S1 | 已提交（`9ea57e0`） | 960×640 走带 172→139、视口 306→339；1440×900 走带 172。`out/verification/ux13-s1-after/` |
 | S2 | 已提交（`47e2525`） | 960×640 命令面板 40（目标 ≤48）、编辑态契约钉住 88（目标 ≤88）；1440×900 命令面板 81。`out/verification/ux13-s2-after/` |
-| S3 | 已实现（本轮） | 960×640 状态栏 72→40（目标 ≤40）、画布高 465→496；1440×900 状态栏 72。`out/verification/ux13-s3-after/` |
-| S4 | 未开始 | — |
-| S5 | 未开始 | — |
+| S3 | 已提交（`d7de619`） | 960×640 状态栏 72→40（目标 ≤40）、画布高 465→496；1440×900 状态栏 72。`out/verification/ux13-s3-after/` |
+| S4 | 已提交（`50784d2`） | 960×640 顶部 chrome 118（strip 40+modeBar 78）→合并单行 40（strip 259/40/y=0、modeBar 689/40/x=271/y=0）；transport.y 471 不变（h 139）；视口 339→417（+78，恰为消除的 modeBar 折行）；1440×900 回归：strip/modeBar 40/40 堆叠不变、transport 173（1.25 标尺与 s3-after 精确一致）。`out/verification/ux13-s4-after/`（scale=1.5）+ `ux13-s5-final/`（scale=1.25）双注记，两轮逻辑值逐项一致 |
+| S5 | 已完成（文档轮） | 两档全量证据 `out/verification/ux13-s5-final/`（scale=1.25，G322U，与 s3-after 同标尺直接可比）：960 走带 139、视口 417、图片 statusBar 40/面板 40/画布 496；1440 全项回归不变。test-only 硬化 `deffc66`（compactRowWidth 259 钉值+尾钮包含性）；台账 UX-13 状态改「已实现（窄档）」；用户复核四项与 follow-up 两条见台账 2026-10-22 节 |
 
 S1 与提案目标有 19px 缺口：目标写 ≤120，实测 139。区间 in/out 常驻行按 2026-10-16 的用户裁定
-保留（`9ea57e0` 记录），本轮没有再压；S5 需把"≤120 目标"与"in/out 常驻裁定"对齐（下调目标到
-139 或另找压缩位），不能当作已达标。
+保留（`9ea57e0` 记录），本轮没有再压。**S5 处置（2026-10-22，待用户裁定）**：建议把窄档走带
+目标改写为 ≤139（19px 缺口即该裁定要求常驻的 in/out 行；再压只能违反裁定或另找压缩位，均超出
+已评议的 S1 范围）；裁定前本表维持「目标 ≤120、实测 139、未达 19px」的如实口径，不当作已达标。
 
 S3 落地与 D3 措辞的差异：D3 写「浮层展开可读且不遮画布」，实现是点击「详情」把既有 `statusDetails`
 块重挂到 bar 上方的根级面板。展开不改变画布尺寸、不占常驻高度，但会临时盖住画布底缘一条；内容随
 采样长高，收起后回到 40。契约测试钉住「浮层打开时 bar 仍 ≤40」「面板位于 bar 之上」「采样填入后
-表格长高且 bar 不动」。是否接受这层"临时遮挡"，留 S5 与用户复核时裁定；若须完全不遮挡，得改为把
-面板放进另一种布局（例如上移画布或占用命令面板行），不属于本轮 S3 的收尾范围。
+表格长高且 bar 不动」。**S5 已备妥两选项裁定材料，待用户裁定**：A 接受「展开浮层临时盖住
+画布底缘一条」（显式展开、可收起、无常驻遮挡）；B 要求完全不遮挡——须改为把面板放进另一种
+布局（例如上移画布或占用命令面板行），属新工作量，不属于本轮 S3 的收尾范围。裁定材料引
+`out/verification/ux13-s3-after/image-details-960.png` 与 `out/verification/ux13-s5/notes/`
+草稿 §(b)。
 
 S3 门禁发现的真实缺陷：芯片宽度按档封顶后，Flow 在无渲染宿主里保留宽窗宽度的折行，状态栏停在
 62 而不是 40。修法是 tier 翻转/源切换时与命令面板同一条显式重排纪律
