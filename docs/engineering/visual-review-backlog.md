@@ -1,5 +1,31 @@
 # 视觉审查问题台账
 
+## 2026-10-22 2.5.1 候选 ZIP 冒烟（局部，非发布验收）
+
+从 `d7de619`（S3 收尾）的 release 构建打出的候选包，验证"打包出来的 exe 能不能跑"。**这是局部冒烟，
+不等于 B2 RELEASE 整包验收**，未跑项见本节末尾。
+
+- 包：`out/package/zip/CompareStation-2.5.1-windows-x64.zip`，28,383,034 字节（27.1 MiB），
+  sha256 `51059B49…151BADC`；解压后 272 个文件。版本号仍是 2.5.1，但包内含 2.5.1 之后
+  UX-13 S1–S3 的界面改动——**发布前需先定版本号**，不能拿同名 2.5.1 冒充上一版。
+- 与上一版 `CompareStation-2.5.1-ui-fix-2439cdb-windows-x64.zip`（10-19，267 文件）逐项对比：
+  无删除；新增 5 个 `api-ms-win-*` 转发 DLL；42 个文件大小变化，其中 40 个 `api-ms-win-crt-*` +
+  `ucrtbase.dll` 是 UCRT 载荷换代（`10.0.10240.16384` 旧回退 → `10.0.26100.7705`，取自 Windows SDK
+  10.0.26100 redist；`Install.cmake` 的 `CMAKE_INSTALL_UCRT_LIBRARIES TRUE` 装的是整套 UCRT，
+  不是新增产品依赖），另一个是 `CompareStation.exe` 3,077,120 → 3,117,568（本次构建）。
+  UCRT 换代源自 10-20 的 release 重新配置（`CMakeCache.txt` 时间 10-20 22:41），早于本轮的
+  S3 代码改动，与 UX-13 无关。
+- 已通过：release 构建；CPack staging 门禁（运行时载荷清单、PE 子系统、用包内
+  `CompareStationCli.exe --probe` 解一个真实 H.264 素材）；`verify-release-package.ps1` **16/16**；
+  解压包内 CLI `--probe` / `--compare … --frame 11` 均 exit 0；解压包内
+  `CompareStation.exe --ui-smoke` exit 0；正常窗口启动（1000×660，触发紧凑档）后
+  `CloseMainWindow` 在 12s 内退出、exit 0；`ctest --preset packaged-smoke` **3/3**（DPI 1.0/1.25/1.5
+  弹窗像素探针）。
+- 未做：完整 release 套件（`-Test` 无选择器，1461 项）；干净 Windows / 无预装 VC++ 运行库环境；
+  真实 DPI、多显示器与可见窗口人工走查；媒体播放/性能门禁；包内 UI 截图没有人工目检。
+  包装测试不在 `-Preset release -Test` 的选择范围内（release test preset 继承 dev，排除
+  `packaged` 标签），要跑这一层用 `ctest --preset packaged-smoke`。
+
 ## 2026-10-22 UX-13 窄窗重排 S1–S3（已实现，S3 本轮收尾）
 
 依据 [窄窗重排提案](../plans/ux13-narrow-window-redesign.md)（Q1/Q2/Q3 裁定见其 §7，执行状态见 §8）。
