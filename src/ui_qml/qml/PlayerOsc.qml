@@ -90,10 +90,15 @@ Item {
     readonly property bool pointerInsidePanel: panelHover.hovered || tracks.pointerInside
     readonly property bool controlsEnabled: control.docked || control.controllerState === 0 || control.revealActive
     // UX-13 S1 compact-chrome tier (docs/plans/ux13-narrow-window-redesign.md §2 D1): the
-    // 960x640 problem tier sheds every non-essential layout line. Derived from the hosting
-    // window so Main.qml needs no wiring; a plain property so standalone QML tests can pin
-    // either tier explicitly. S4 moves the switch up to the shell.
-    property bool compactChrome: Window.window !== null && Window.window.height <= 640
+    // small-window tier sheds every non-essential layout line. 680, not 640: Main.qml's
+    // window minimum is 960x640, so the OS clamps every smaller request and the settled
+    // height dithers between 640 and 641 - a 640 threshold sat exactly on the minimum and
+    // the tier flipped at random (S2 gate run). 680 gives the minimum + frame rounding a
+    // stable band, and real small windows (641-680, the laptop norm) enter the tier
+    // reliably. Derived from the hosting window so Main.qml needs no wiring; a plain
+    // property so standalone QML tests can pin either tier explicitly. S4 moves the switch
+    // up to the shell.
+    property bool compactChrome: Window.window !== null && Window.window.height <= 680
     // Single authority for whether the metrics lane renders. Big windows follow the
     // controller's laneEnabled toggle; the compact tier keeps the lane off the stack entirely -
     // the inspector stays the metrics surface, and no sampling is added or removed by this gate.

@@ -7,7 +7,7 @@ Item {
     id: root
 
     width: 900
-    // 700 keeps the default compactChrome derivation (hosting window <= 640) off for the
+    // 700 keeps the default compactChrome derivation (hosting window <= 680) off for the
     // legacy fixtures; the compact tier gets its own explicitly-pinned instance below.
     height: 700
 

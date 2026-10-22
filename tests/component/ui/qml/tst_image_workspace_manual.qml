@@ -12,7 +12,10 @@ Item {
     id: root
 
     width: 960
-    height: 640
+    // 700 keeps the default compactChrome derivation (hosting window <= 680) off: this suite
+    // pins the wide two-band command panel and its controls; the compact tier has its own
+    // contract (ImageCommandPanelCompactTierCollapsesToBands).
+    height: 700
 
     // A real decoded 1x1 PNG for the edit-controller stand-in's derived URL.
     readonly property string tinyPng: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="

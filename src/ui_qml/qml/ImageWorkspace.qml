@@ -1182,6 +1182,340 @@ Rectangle {
         }
     }
 
+    // UX-13 S2 compact-chrome tier (docs/plans/ux13-narrow-window-redesign.md §2 D2): the
+    // small-window tier collapses the command panel to one 40px band (normal) or a
+    // tools+params pair (edit). 680, not 640: same threshold rule as PlayerOsc's tier - the
+    // window minimum clamps smaller requests and the settled height dithers 640/641 (S2
+    // gate run evidence). Same derivation and test override contract as PlayerOsc. S4 moves
+    // the switch up to the shell.
+    property bool compactChrome: Window.window !== null && Window.window.height <= 680
+    // The tier flip changes band heights in place and re-parents the session flow; the
+    // command-panel chain needs the same explicit relayout discipline the row flips use, or
+    // a restored wide band keeps its compact-wrapped height (S2 gate: 107 vs 81 after
+    // leaving the tier).
+    onCompactChromeChanged: Qt.callLater(relayoutCommandPanel)
+    // UX-13 S2: the secondary command clusters (session, view, background, gain) live in one
+    // on-demand menu. The component instantiates on first open and is cached afterwards - no
+    // resident scene cost, no timer.
+    property var compactMoreMenu: null
+
+    function openCompactMoreMenu(anchorItem) {
+        if (control.compactMoreMenu === null)
+            control.compactMoreMenu = compactMoreMenuComponent.createObject(anchorItem);
+        control.compactMoreMenu.popup(anchorItem);
+    }
+
+    // Indirections so the on-demand menu (an inline component, which sees the root id only)
+    // can reach the edit dialogs declared deeper in the document.
+    function compactOpenScaleDialog() {
+        imageEditDialogs.openScale();
+    }
+
+    function compactOpenFillDialog() {
+        imageEditDialogs.openFill();
+    }
+
+    component CompactMoreMenu: VcsMenu {
+        menuWidth: 250
+
+        VcsMenuItem {
+            objectName: "imageCompactEditToggleItem"
+            text: control.editModeActive ? qsTr("结束编辑") : qsTr("编辑画面")
+            visible: control.hasPrimary && control.imageEdit !== null
+            enabled: visible
+            onTriggered: {
+                if (control.editModeActive)
+                    control.finishImageEdit();
+                else
+                    control.beginImageEdit();
+            }
+        }
+        VcsMenuSeparator {
+            visible: control.hasPrimary && control.imageEdit !== null
+        }
+        VcsMenuItem {
+            objectName: "imageCompactOpenSingleItem"
+            text: qsTr("打开图片…")
+            onTriggered: control.openImageRequested()
+        }
+        VcsMenuItem {
+            text: qsTr("打开图片对…")
+            onTriggered: control.openPairRequested()
+        }
+        VcsMenuItem {
+            text: qsTr("对比文件夹…")
+            onTriggered: control.compareFoldersRequested()
+        }
+        VcsMenuItem {
+            text: qsTr("添加图片…")
+            enabled: control.hasPrimary && !control.hasSecondary
+            onTriggered: control.addImageRequested()
+        }
+        VcsMenuSeparator {}
+        VcsMenuItem {
+            objectName: "imageCompactSwapItem"
+            text: qsTr("对调 A/B")
+            visible: control.hasPair
+            enabled: visible
+            onTriggered: control.swapSidesRequested()
+        }
+        VcsMenuItem {
+            text: qsTr("替换 A…")
+            visible: control.hasPrimary
+            enabled: control.hasPrimary
+            onTriggered: control.replacePrimaryRequested()
+        }
+        VcsMenuItem {
+            text: control.hasSecondary ? qsTr("替换 B…") : qsTr("添加 B…")
+            visible: control.hasPrimary
+            enabled: control.hasPrimary
+            onTriggered: control.replaceSecondaryRequested()
+        }
+        VcsMenuItem {
+            text: qsTr("关闭图片")
+            enabled: control.hasPrimary && control.closeSideBlockedReason.length === 0
+            onTriggered: {
+                if (control.closeSideBlockedReason.length > 0) {
+                    control.showMarqueeNotice(control.closeSideBlockedReason);
+                    return;
+                }
+                control.closeSide(3);
+                control.closeSide(2);
+            }
+        }
+        VcsMenuItem {
+            text: control.sidebarVisible ? qsTr("隐藏列表") : qsTr("显示列表")
+            visible: control.hasFolders
+            onTriggered: control.toggleSidebarRequested()
+        }
+        VcsMenuSeparator {}
+        VcsMenuItem {
+            text: qsTr("查看方式")
+            VcsMenu {
+                menuWidth: 200
+                VcsRadioMenuItem {
+                    text: qsTr("RGBA")
+                    checked: control.imageReview && control.imageReview.viewMode === 0
+                    enabled: control.hasPrimary
+                    onTriggered: {
+                        if (control.imageReview)
+                            control.imageReview.viewMode = 0;
+                    }
+                }
+                VcsRadioMenuItem {
+                    text: qsTr("Alpha (A)")
+                    checked: control.imageReview && control.imageReview.viewMode === 1
+                    enabled: control.hasPrimary
+                    onTriggered: {
+                        if (control.imageReview && control.imageReview.viewMode === 1)
+                            control.imageReview.viewMode = 0;
+                        else if (control.imageReview)
+                            control.imageReview.viewMode = 1;
+                    }
+                }
+                VcsRadioMenuItem {
+                    text: qsTr("忽略透明 (O)")
+                    checked: control.imageReview && control.imageReview.viewMode === 2
+                    enabled: control.hasPrimary
+                    onTriggered: {
+                        if (control.imageReview && control.imageReview.viewMode === 2)
+                            control.imageReview.viewMode = 0;
+                        else if (control.imageReview)
+                            control.imageReview.viewMode = 2;
+                    }
+                }
+            }
+        }
+        VcsMenuItem {
+            text: qsTr("背景")
+            VcsMenu {
+                menuWidth: 200
+                VcsRadioMenuItem {
+                    text: qsTr("深色")
+                    checked: control.backgroundMode === 0
+                    enabled: control.hasPrimary
+                    onTriggered: control.backgroundMode = 0
+                }
+                VcsRadioMenuItem {
+                    text: qsTr("棋盘")
+                    checked: control.backgroundMode === 1
+                    enabled: control.hasPrimary
+                    onTriggered: control.backgroundMode = 1
+                }
+                VcsRadioMenuItem {
+                    text: qsTr("黑色")
+                    checked: control.backgroundMode === 2
+                    enabled: control.hasPrimary
+                    onTriggered: control.backgroundMode = 2
+                }
+                VcsRadioMenuItem {
+                    text: qsTr("白色")
+                    checked: control.backgroundMode === 3
+                    enabled: control.hasPrimary
+                    onTriggered: control.backgroundMode = 3
+                }
+            }
+        }
+        // UX-13 S2: the diff modes fold here at the compact tier - the current mode stays
+        // visible on each item's checked state.
+        VcsRadioMenuItem {
+            text: qsTr("绝对差异")
+            visible: control.hasPair
+            checked: control.compareMode === 2
+            onTriggered: control.modeButton(2)
+        }
+        VcsRadioMenuItem {
+            text: qsTr("带符号差异")
+            visible: control.hasPair
+            checked: control.compareMode === 3
+            onTriggered: control.modeButton(3)
+        }
+        VcsRadioMenuItem {
+            text: qsTr("高亮")
+            visible: control.hasPair
+            checked: control.compareMode === 4
+            onTriggered: control.modeButton(4)
+        }
+        VcsRadioMenuItem {
+            text: qsTr("Alpha 差异")
+            visible: control.hasPair
+            enabled: Boolean(control.imageReview && (control.imageReview.primaryHasAlpha || control.imageReview.secondaryHasAlpha))
+            checked: control.compareMode === 6
+            onTriggered: control.modeButton(6)
+        }
+        VcsMenuItem {
+            text: qsTr("差异增益")
+            visible: control.diffModeActive
+            VcsMenu {
+                menuWidth: 200
+                VcsRadioMenuItem {
+                    text: qsTr("×1")
+                    checked: control.imageReview && control.imageReview.diffGain === 1
+                    enabled: Boolean(control.imageReview)
+                    onTriggered: {
+                        if (control.imageReview)
+                            control.imageReview.diffGain = 1;
+                    }
+                }
+                VcsRadioMenuItem {
+                    text: qsTr("×2")
+                    checked: control.imageReview && control.imageReview.diffGain === 2
+                    enabled: Boolean(control.imageReview)
+                    onTriggered: {
+                        if (control.imageReview)
+                            control.imageReview.diffGain = 2;
+                    }
+                }
+                VcsRadioMenuItem {
+                    text: qsTr("×4")
+                    checked: control.imageReview && control.imageReview.diffGain === 4
+                    enabled: Boolean(control.imageReview)
+                    onTriggered: {
+                        if (control.imageReview)
+                            control.imageReview.diffGain = 4;
+                    }
+                }
+                VcsRadioMenuItem {
+                    text: qsTr("×8")
+                    checked: control.imageReview && control.imageReview.diffGain === 8
+                    enabled: Boolean(control.imageReview)
+                    onTriggered: {
+                        if (control.imageReview)
+                            control.imageReview.diffGain = 8;
+                    }
+                }
+                VcsRadioMenuItem {
+                    text: qsTr("×16")
+                    checked: control.imageReview && control.imageReview.diffGain === 16
+                    enabled: Boolean(control.imageReview)
+                    onTriggered: {
+                        if (control.imageReview)
+                            control.imageReview.diffGain = 16;
+                    }
+                }
+            }
+        }
+        VcsMenuSeparator {
+            visible: control.hasPrimary
+        }
+        VcsMenuItem {
+            text: control.alphaFilterEnabled ? qsTr("Alpha 过滤：开") : qsTr("Alpha 过滤：关")
+            visible: control.hasPrimary
+            checkable: true
+            checked: control.alphaFilterEnabled
+            // VcsMenuItem has no helpText surface; the codebase's menu-row description channel
+            // is the Accessible attachment (same mapping VcsToolButton applies to its buttons).
+            Accessible.description: qsTr("仅显示 A > T（严格大于）。阈值的滑杆与精确输入在大窗口的命令条上。")
+            onTriggered: control.setAlphaFilterEnabled(!control.alphaFilterEnabled)
+        }
+        VcsMenuSeparator {
+            visible: control.editModeActive
+        }
+        VcsMenuItem {
+            text: qsTr("撤销")
+            visible: control.editModeActive
+            enabled: control.imageEdit && control.imageEdit.canUndo
+            onTriggered: {
+                if (control.imageEdit)
+                    control.imageEdit.undo();
+            }
+        }
+        VcsMenuItem {
+            text: qsTr("重做")
+            visible: control.editModeActive
+            enabled: control.imageEdit && control.imageEdit.canRedo
+            onTriggered: {
+                if (control.imageEdit)
+                    control.imageEdit.redo();
+            }
+        }
+        VcsMenuItem {
+            text: qsTr("缩放…")
+            visible: control.editModeActive
+            onTriggered: control.compactOpenScaleDialog()
+        }
+        VcsMenuItem {
+            text: qsTr("填充画布…")
+            visible: control.editModeActive
+            onTriggered: control.compactOpenFillDialog()
+        }
+        VcsMenuItem {
+            text: qsTr("旋转 / 翻转")
+            visible: control.editModeActive
+            enabled: control.imageEdit && !control.imageEdit.strokeActive
+            VcsMenu {
+                menuWidth: 240
+                VcsMenuItem {
+                    text: qsTr("水平镜像（左右）")
+                    onTriggered: control.applyImageMirror(false)
+                }
+                VcsMenuItem {
+                    text: qsTr("垂直翻转（上下）")
+                    onTriggered: control.applyImageMirror(true)
+                }
+                VcsMenuSeparator {}
+                VcsMenuItem {
+                    text: qsTr("顺时针旋转 90°")
+                    onTriggered: control.applyImageRotation(1)
+                }
+                VcsMenuItem {
+                    text: qsTr("逆时针旋转 90°")
+                    onTriggered: control.applyImageRotation(-1)
+                }
+                VcsMenuItem {
+                    text: qsTr("旋转 180°")
+                    onTriggered: control.applyImageRotation(2)
+                }
+            }
+        }
+    }
+
+    Component {
+        id: compactMoreMenuComponent
+
+        CompactMoreMenu {}
+    }
+
     component ModeChip: ReviewActionButton {
         id: chip
 
@@ -1287,7 +1621,10 @@ Rectangle {
         signal closeRequested
 
         implicitHeight: 30
-        implicitWidth: Math.min(220, Math.max(120, sourceChipLabel.implicitWidth + 34))
+        // Compact tier caps the chip harder (90/24) so the identity pair + modes + menu fit
+        // the single band partition; the middle-elided label keeps the name readable and the
+        // tooltip keeps the full title.
+        implicitWidth: Math.min(control.compactChrome ? 90 : 220, Math.max(control.compactChrome ? 90 : 120, sourceChipLabel.implicitWidth + 34))
         leftPadding: Theme.spaceMain
         rightPadding: Theme.spaceMain
         focusTarget: control
@@ -1343,7 +1680,7 @@ Rectangle {
                 color: sourceChip.enabled ? (sourceChip.isDisplayed ? Theme.primaryText : Theme.secondaryText) : Theme.disabledText
                 font.pixelSize: Theme.fontSecondary
                 elide: Text.ElideMiddle
-                width: Math.min(implicitWidth, 150)
+                width: Math.min(implicitWidth, control.compactChrome ? 48 : 150)
                 anchors.verticalCenter: parent.verticalCenter
 
                 HoverHandler {
@@ -3161,20 +3498,33 @@ Rectangle {
 
                 objectName: "imageSourceRow"
                 width: parent.width
-                height: Math.max(Theme.barRowHeight, fileRow.implicitHeight + 8)
+                // Compact tier: the flow re-parents into the surviving band (the mode row, or
+                // the edit ribbon) and right-aligns inside it, so the panel keeps ONE 40px
+                // line (normal) or tools+params (edit). The emptied band collapses to zero.
+                height: control.compactChrome ? 0 : Math.max(Theme.barRowHeight, fileRow.implicitHeight + 8)
 
                 Flow {
                     id: fileRow
 
                     objectName: "imageFileRow"
+                    parent: control.compactChrome ? (control.editModeActive ? editRow : modeRowHost) : sourceRow
                     spacing: Theme.spaceMain
-                    anchors {
-                        left: parent.left
-                        leftMargin: 12
-                        right: parent.right
-                        rightMargin: 12
-                        verticalCenter: parent.verticalCenter
+                    // Compact tier derives the width ONE way, from the visible children, and
+                    // takes the LEFT partition of the surviving band (the mode row starts
+                    // after it via its leftMargin) - never reading the Flow's own implicit
+                    // geometry here: that fed the wrap calculation back into width and looped
+                    // ("Binding loop detected for width" on the first S2 gate run).
+                    readonly property real compactContentWidth: {
+                        let total = 0;
+                        for (let i = 0; i < children.length; ++i) {
+                            if (children[i].visible)
+                                total += (total > 0 ? spacing : 0) + children[i].width;
+                        }
+                        return total;
                     }
+                    x: 12
+                    y: (parent.height - height) / 2
+                    width: control.compactChrome ? compactContentWidth : parent.width - 24
                     // See the forceLayout note in Component.onCompleted above.
                     onWidthChanged: {
                         forceLayout();
@@ -3233,6 +3583,8 @@ Rectangle {
                     }
                     ImageCommandButton {
                         objectName: "imageOpenPairButton"
+                        // Compact tier folds these entries into the 更多 menu.
+                        visible: !control.compactChrome
                         text: qsTr("打开/添加 ▾")
                         implicitHeight: 30
                         leftPadding: 8
@@ -3269,7 +3621,7 @@ Rectangle {
                     }
                     ImageCommandButton {
                         objectName: "imageSwapSidesButton"
-                        visible: control.hasPair
+                        visible: control.hasPair && !control.compactChrome
                         implicitHeight: 30
                         leftPadding: 8
                         rightPadding: 8
@@ -3284,7 +3636,7 @@ Rectangle {
                         implicitHeight: 30
                         leftPadding: 8
                         rightPadding: 8
-                        visible: control.hasPrimary
+                        visible: control.hasPrimary && !control.compactChrome
                         enabled: control.hasPrimary
                         helpText: qsTr("只替换其中一侧，另一侧保持不变。失败时原图保留。")
                         onClicked: replaceSidesMenu.open()
@@ -3331,7 +3683,7 @@ Rectangle {
 
                     ImageCommandButton {
                         objectName: "imageEditStartButton"
-                        visible: control.hasPrimary && control.imageEdit !== null
+                        visible: control.hasPrimary && control.imageEdit !== null && !control.compactChrome
                         // An action label, not a state: the filled button while editing is 另存副本….
                         text: control.editModeActive ? qsTr("结束编辑") : qsTr("编辑画面")
                         helpText: qsTr("在原图的副本上编辑；原文件保持不变，编辑结果必须另存为副本。")
@@ -3365,7 +3717,7 @@ Rectangle {
                         implicitHeight: 30
                         leftPadding: 10
                         rightPadding: 10
-                        visible: control.hasFolders
+                        visible: control.hasFolders && !control.compactChrome
                         onClicked: control.toggleSidebarRequested()
                     }
 
@@ -3374,16 +3726,31 @@ Rectangle {
                     // which is what tells the user a neighbour exists before pressing a key.
                     Text {
                         objectName: "imageFolderPositionLabel"
-                        visible: control.folderBrowseText.length > 0
+                        visible: control.folderBrowseText.length > 0 && !control.compactChrome
                         text: control.folderBrowseText
                         color: Theme.secondaryText
                         font.pixelSize: Theme.fontCaption
                         verticalAlignment: Text.AlignVCenter
                     }
+
+                    // UX-13 S2 compact tier: one on-demand menu carries the folded session,
+                    // view and background clusters. Created on first open, cached afterwards -
+                    // no resident scene cost (design doc §4).
+                    ImageCommandButton {
+                        objectName: "imageCompactMoreButton"
+                        visible: control.compactChrome
+                        text: qsTr("更多 ▾")
+                        implicitHeight: 30
+                        leftPadding: 8
+                        rightPadding: 8
+                        helpText: qsTr("会话、查看方式、背景与差异增益的其余命令")
+                        onClicked: control.openCompactMoreMenu(this)
+                    }
                 }
             }
 
             Rectangle {
+                visible: !control.compactChrome
                 width: parent.width
                 height: 1
                 color: Theme.border
@@ -3407,7 +3774,9 @@ Rectangle {
                     spacing: Theme.spaceMain
                     anchors {
                         left: parent.left
-                        leftMargin: 12
+                        // Compact tier: the mode row starts where the session flow ends, so
+                        // the two flows partition the band instead of overlapping.
+                        leftMargin: control.compactChrome ? Theme.spaceMain * 3 + fileRow.width : 12
                         right: parent.right
                         rightMargin: 12
                         verticalCenter: parent.verticalCenter
@@ -3477,7 +3846,9 @@ Rectangle {
                         implicitHeight: 30
                         leftPadding: 8
                         rightPadding: 8
-                        visible: control.hasPair
+                        // Compact tier folds the diff modes into the 更多 menu (the current
+                        // diff mode stays readable on the 更多 items' checked state).
+                        visible: control.hasPair && !control.compactChrome
                         onClicked: diffMenu.open()
 
                         VcsMenu {
@@ -3617,7 +3988,8 @@ Rectangle {
                         implicitHeight: 30
                         leftPadding: 8
                         rightPadding: 8
-                        visible: control.diffModeActive && !imageDiffGainChipRow.visible
+                        // Compact tier folds the gain into the 更多 menu.
+                        visible: control.diffModeActive && !imageDiffGainChipRow.visible && !control.compactChrome
                         helpText: qsTr("只放大显示，方便看清弱差异；峰值/平均差异读数仍是原始差值。")
                         onClicked: diffGainMenu.open()
 
@@ -3679,18 +4051,21 @@ Rectangle {
                     // clicking the active chip returns to plain RGBA).
                     ModeChip {
                         objectName: "imageViewChipRgba"
+                        visible: !control.compactChrome
                         text: qsTr("RGBA")
                         selectGroup: 1
                         modeValue: 0
                     }
                     ModeChip {
                         objectName: "imageViewChipAlphaGray"
+                        visible: !control.compactChrome
                         text: qsTr("Alpha (A)")
                         selectGroup: 1
                         modeValue: 1
                     }
                     ModeChip {
                         objectName: "imageViewChipRgbOpaque"
+                        visible: !control.compactChrome
                         text: qsTr("忽略透明 (O)")
                         selectGroup: 1
                         modeValue: 2
@@ -3702,7 +4077,9 @@ Rectangle {
                     // T = 0" are deliberately different states (T = 0 still hides A = 0).
                     ImageCommandButton {
                         objectName: "imageAlphaFilterButton"
-                        visible: control.hasPrimary
+                        // Compact tier: the on/off toggle lives in the 更多 menu; the threshold
+                        // slider stays a big-window affordance.
+                        visible: control.hasPrimary && !control.compactChrome
                         implicitHeight: Theme.hitAreaMinimum
                         leftPadding: 8
                         rightPadding: 8
@@ -3716,7 +4093,7 @@ Rectangle {
                     // box and the reset commit immediately.
                     Row {
                         objectName: "imageAlphaFilterRow"
-                        visible: control.alphaFilterEnabled && control.hasPrimary
+                        visible: control.alphaFilterEnabled && control.hasPrimary && !control.compactChrome
                         spacing: Theme.spaceMicro
                         height: Theme.hitAreaMinimum
 
@@ -3789,24 +4166,28 @@ Rectangle {
                     // Background quick chips under transparent regions.
                     ModeChip {
                         objectName: "imageBgChipDark"
+                        visible: !control.compactChrome
                         text: qsTr("深色")
                         selectGroup: 2
                         modeValue: 0
                     }
                     ModeChip {
                         objectName: "imageBgChipChecker"
+                        visible: !control.compactChrome
                         text: qsTr("棋盘")
                         selectGroup: 2
                         modeValue: 1
                     }
                     ModeChip {
                         objectName: "imageBgChipBlack"
+                        visible: !control.compactChrome
                         text: qsTr("黑底")
                         selectGroup: 2
                         modeValue: 2
                     }
                     ModeChip {
                         objectName: "imageBgChipWhite"
+                        visible: !control.compactChrome
                         text: qsTr("白底")
                         selectGroup: 2
                         modeValue: 3
@@ -3929,6 +4310,9 @@ Rectangle {
 
                         Text {
                             objectName: "imageEditingSourceLabel"
+                            // Compact tier: the A/B chips carry the identity; this caption
+                            // returns with the wide layout.
+                            visible: !control.compactChrome
                             height: 30
                             verticalAlignment: Text.AlignVCenter
                             text: control.imageEdit ? qsTr("正在编辑：%1 的副本 (%2×%3)").arg(control.editSourceSlot === 3 ? "B" : "A").arg(control.imageEdit.imageWidth).arg(control.imageEdit.imageHeight) : ""
@@ -3977,7 +4361,9 @@ Rectangle {
                         }
                         ImageCommandButton {
                             objectName: "imageEditToolSelectButton"
-                            visible: control.editModeActive
+                            // Compact tier keeps the annotation-only tool on the 更多工具 menu
+                            // so the chips+tools line stays one band.
+                            visible: control.editModeActive && !control.compactChrome
                             checkable: true
                             checked: control.editTool === "select"
                             mirrorsState: true
@@ -4002,6 +4388,15 @@ Rectangle {
 
                                 // Radio rows: the tools are exclusive, and an exclusive item
                                 // stays checked when the active tool is chosen again.
+                                // Compact tier: the annotation-only tool rides the menu so
+                                // the chips+tools line stays one band.
+                                VcsRadioMenuItem {
+                                    objectName: "imageEditToolSelectMenuItem"
+                                    visible: control.compactChrome
+                                    text: qsTr("选择")
+                                    checked: control.editTool === "select"
+                                    onTriggered: control.editTool = "select"
+                                }
                                 VcsRadioMenuItem {
                                     objectName: "imageEditToolMosaicButton"
                                     text: qsTr("马赛克")
@@ -4071,14 +4466,15 @@ Rectangle {
                         // than the pixels under the cursor, so they sit together in their own group.
                         ImageCommandButton {
                             objectName: "imageEditScaleButton"
-                            visible: control.editModeActive
+                            // Compact tier folds whole-image geometry into the 更多 menu.
+                            visible: control.editModeActive && !control.compactChrome
                             text: qsTr("缩放…")
                             helpText: qsTr("把画面重采样到指定的像素尺寸；锁定比例时改一边会自动推算另一边。")
                             onClicked: imageEditDialogs.openScale()
                         }
                         ImageCommandButton {
                             objectName: "imageEditFillButton"
-                            visible: control.editModeActive
+                            visible: control.editModeActive && !control.compactChrome
                             text: qsTr("填充画布…")
                             helpText: qsTr("把原图居中放到更大的画布上，四周用指定颜色补齐。")
                             onClicked: imageEditDialogs.openFill()
@@ -4086,7 +4482,7 @@ Rectangle {
 
                         ImageCommandButton {
                             objectName: "imageEditTransformButton"
-                            visible: control.editModeActive
+                            visible: control.editModeActive && !control.compactChrome
                             text: qsTr("旋转 / 翻转 ▾")
                             enabled: control.imageEdit && !control.imageEdit.strokeActive
                             helpText: qsTr("水平镜像、垂直翻转、90° 或 180° 旋转；每次操作都可撤销。")
@@ -4133,7 +4529,7 @@ Rectangle {
 
                         ImageCommandButton {
                             objectName: "imageEditUndoButton"
-                            visible: control.editModeActive
+                            visible: control.editModeActive && !control.compactChrome
                             text: qsTr("撤销")
                             enabled: control.imageEdit && control.imageEdit.canUndo
                             onClicked: {
@@ -4143,7 +4539,7 @@ Rectangle {
                         }
                         ImageCommandButton {
                             objectName: "imageEditRedoButton"
-                            visible: control.editModeActive
+                            visible: control.editModeActive && !control.compactChrome
                             text: qsTr("重做")
                             enabled: control.imageEdit && control.imageEdit.canRedo
                             onClicked: {
@@ -4173,7 +4569,7 @@ Rectangle {
                             color: Theme.mutedText
                             font.pixelSize: Theme.fontCaption
                             elide: Text.ElideRight
-                            width: Math.min(240, implicitWidth)
+                            width: Math.min(control.compactChrome ? 100 : 240, implicitWidth)
                         }
                     }
 
