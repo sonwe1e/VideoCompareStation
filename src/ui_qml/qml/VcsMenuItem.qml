@@ -11,6 +11,11 @@ MenuItem {
 
     property bool popupInputContext: true
     property string shortcutText: ""
+    // EX-04 (UX-13 S4): optional hover explanation, carried by the folded mode entries of
+    // compact-tier "more" menus. Purely additive: the default empty string keeps the tooltip
+    // permanently invisible and its popup content unbuilt, so every existing menu renders
+    // and behaves exactly as before this property existed.
+    property string helpText: ""
     property color textColor: Theme.primaryText
     property color disabledTextColor: Theme.disabledText
     property color shortcutColor: Theme.mutedText
@@ -75,6 +80,15 @@ MenuItem {
             // stays at the shortcut/arrow step (12) below the 14 px label.
             font.pixelSize: Theme.fontSecondary
             font.bold: control.subMenu
+        }
+
+        // Same tooltip component and delay step every chrome control uses (UX-20's 500 ms
+        // lives in VcsToolTip). Declared inside the content item so the menu's own content
+        // model never sees it; invisible - and its content unbuilt - while helpText is empty.
+        VcsToolTip {
+            objectName: control.objectName.length > 0 ? control.objectName + "Tip" : ""
+            visible: control.helpText.length > 0 && control.hovered
+            text: control.helpText
         }
     }
 

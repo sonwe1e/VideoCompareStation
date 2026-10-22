@@ -25,6 +25,16 @@ Rectangle {
     // bindings once Main.qml wires them.
     property int canvasFocusSlot: -1
     property int referenceSourceSlot: -1
+    // UX-13 S4 compact tier (docs/plans/ux13-narrow-window-redesign.md §2 D4, ruling Q2):
+    // below 680 px window height this bar shares one 40 px row with the source strip. The
+    // four daily tasks stay on the row as two-character segmented labels (并排/分割/局部/
+    // 差异, the UX-10 vocabulary shortened, each keeping its wide-row helpText); the direct
+    // look buttons, the layout submenu, the pair selector, the candidate switch and both
+    // comparison exports fold into the on-demand 更多 menu. The hold-to-peek GT button
+    // stays on the row while a difference task is active - a menu row cannot be held down.
+    // A plain property so standalone hosts pin the tier explicitly; Main.qml derives it
+    // from the hosting window the same way PlayerOsc and ImageWorkspace do.
+    property bool compactChrome: false
     property color panelColor: Theme.menu
     property color borderColor: Theme.border
     property color accentColor: Theme.accent
@@ -85,6 +95,20 @@ Rectangle {
     readonly property int canvasFocusRequestReference: 1
     readonly property int canvasFocusRequestSourceSlot: 2
 
+    // UX-13 S4: guarded accessors for the folded pair-edge rows of the compact 更多 menu.
+    // differenceEdges is a QVariantList; the static bounded rows (three sources cap the set
+    // at C(3,2) = 3 edges) read through these so an absent entry yields "" / -1 instead of a
+    // TypeError on undefined - and the row's own visible guard keeps the empty values off
+    // the screen. preferenceValue follows the exact conversion the wide-row combo's
+    // onActivated applies.
+    function pairEdgeLabel(index) {
+        return index >= 0 && index < differenceEdges.length ? String(differenceEdges[index].pairLabel) : "";
+    }
+
+    function pairEdgePreference(index) {
+        return index >= 0 && index < differenceEdges.length ? Number(differenceEdges[index].preferenceValue) : -1;
+    }
+
     // EX-03: a session with one video is not a comparison yet, but it is the state every
     // comparison starts from - so the bar stays visible and the four comparison tasks stay on
     // screen, disabled, next to the one sentence that says why. The entries that only make
@@ -93,7 +117,9 @@ Rectangle {
     readonly property bool singleSource: sourceCount === 1
 
     objectName: "compareModeBar"
-    height: sourceCount >= 1 ? Math.max(Theme.barRowHeight, modeActions.implicitHeight + 8) : 0
+    // Compact tier pins the row to the 40 px band (barRowHeight; barRowHeightMin is not used
+    // by UX-13): a wrap here must be an overflow into the 更多 menu, never a second line.
+    height: sourceCount >= 1 ? (compactChrome ? Theme.barRowHeight : Math.max(Theme.barRowHeight, modeActions.implicitHeight + 8)) : 0
     visible: sourceCount >= 1
     color: "transparent"
     border.color: "transparent"
@@ -103,6 +129,10 @@ Rectangle {
     Component.onCompleted: modeActions.forceLayout()
     onCurrentModeChanged: Qt.callLater(modeActions.forceLayout)
     onSourceCountChanged: Qt.callLater(modeActions.forceLayout)
+    // S4/S3 lesson: the tier flip rewrites the Flow's right anchor and every button's
+    // implicit width between frames, and the Flow's own onWidthChanged fires before those
+    // settle - re-arm the explicit relayout once, after the current binding cycle.
+    onCompactChromeChanged: Qt.callLater(modeActions.forceLayout)
 
     // The mode bar is the last chrome row above the stage; one hairline separates the two.
     Rectangle {
@@ -124,7 +154,9 @@ Rectangle {
         anchors {
             left: parent.left
             leftMargin: 12
-            right: saveComparisonButton.left
+            // Compact tier: the folded copy/save buttons leave the right edge, so the flow
+            // reaches the inspector toggle directly (same AnchorLine type, discrete switch).
+            right: control.compactChrome ? inspectorToggleButton.left : saveComparisonButton.left
             rightMargin: 12
             top: parent.top
             topMargin: 4
@@ -133,6 +165,7 @@ Rectangle {
         // qmllint disable import unqualified unresolved-type
         ModeButton {
             objectName: "sideModeButton"
+            // Compact tier keeps the two-character segmented label (ruling Q2).
             text: qsTr("并排")
             modeValue: ComparisonSurface.SideBySide
             helpText: qsTr("按 1 → 左右两窗看同一帧")
@@ -140,8 +173,10 @@ Rectangle {
         ModeButton {
             objectName: "wipeModeButton"
             // One name for this control everywhere it appears: toolbar, menu, inspector and
-            // help all say 分割线 (UX-10). The old toolbar label was the only 划线.
-            text: qsTr("分割线")
+            // help all say 分割线 (UX-10). The old toolbar label was the only 划线. The
+            // compact tier shortens it to 分割 - the same UX-10 noun minus its suffix, with
+            // the full wording living on in the item's helpText below.
+            text: control.compactChrome ? qsTr("分割") : qsTr("分割线")
             modeValue: ComparisonSurface.Wipe
             helpText: qsTr("按 2 → 拖分界线对照同一位置")
         }
@@ -152,7 +187,7 @@ Rectangle {
         // give three.
         ModeButton {
             objectName: "roiTripletTaskButton"
-            text: qsTr("局部联动")
+            text: control.compactChrome ? qsTr("局部") : qsTr("局部联动")
             modeValue: ComparisonSurface.RoiTriplet
             helpText: qsTr("同一关注区域 → 2–3 个窗口同步放大")
         }
@@ -160,7 +195,9 @@ Rectangle {
         // (overlay highlight / pure diff), mirroring the image workspace's diff dropdown.
         DiffModeButton {
             objectName: "diffModeButton"
-            text: control.differenceFlavorLabel.length > 0 ? qsTr("差异·%1 ▾").arg(control.differenceFlavorLabel) : qsTr("差异定位 ▾")
+            // Compact tier: the two-character task label; the active flavor stays readable
+            // through the flavor menu's checked rows instead of the button title.
+            text: control.compactChrome ? qsTr("差异 ▾") : (control.differenceFlavorLabel.length > 0 ? qsTr("差异·%1 ▾").arg(control.differenceFlavorLabel) : qsTr("差异定位 ▾"))
             helpText: qsTr("按 3 → 画出像素差，再回原图确认")
         }
         // EX-03: the four tasks above are disabled without a second source, and a greyed
@@ -170,14 +207,25 @@ Rectangle {
             objectName: "singleSourceCompareHint"
 
             visible: control.singleSource
-            // A fixed, wrap-friendly width: the sentence keeps its font size on a narrow
-            // window and takes a second line instead of being clipped or shrunk.
-            width: 160
+            // Compact tier: one 40 px row cannot afford the wrap, so the sentence elides on
+            // a fixed band and the full wording rides on the tooltip - the reason stays on
+            // screen next to the disabled tasks either way (EX-03), never shrunk or hidden.
+            width: control.compactChrome ? 120 : 160
             text: qsTr("对比需要至少两个视频")
             color: Theme.mutedText
             font.pixelSize: Theme.fontCaption
             lineHeight: Theme.lineHeightCompact
-            wrapMode: Text.WordWrap
+            elide: control.compactChrome ? Text.ElideRight : Text.ElideNone
+            wrapMode: control.compactChrome ? Text.NoWrap : Text.WordWrap
+
+            HoverHandler {
+                id: singleHintHover
+            }
+
+            VcsToolTip {
+                visible: control.compactChrome && singleHintHover.hovered
+                text: qsTr("对比需要至少两个视频")
+            }
         }
         // EX-03: the way out of the single-source state, in the bar itself - the same action
         // the 文件 menu and the source strip run, so there is one add path, not a second one.
@@ -208,7 +256,7 @@ Rectangle {
         // the capsule and the group could never light up again (self-latch).
         Rectangle {
             objectName: "comparePairGroup"
-            visible: (control.sourceCount === 3 && control.pairRelevant) || ((control.currentMode === ComparisonSurface.Difference || control.currentMode === ComparisonSurface.DualDifference) && control.peekTargetValid)
+            visible: ((control.sourceCount === 3 && control.pairRelevant && !control.compactChrome) || ((control.currentMode === ComparisonSurface.Difference || control.currentMode === ComparisonSurface.DualDifference) && control.peekTargetValid))
             // The Flow positions by width/height, and this capsule's own inputs are only
             // correct after the inner Row has distributed its children - which, in the
             // no-render hosts this bar's explicit relayout chain exists for, needs that
@@ -259,7 +307,10 @@ Rectangle {
                     id: pairComboBox
 
                     objectName: "pairCombo"
-                    visible: control.sourceCount === 3 && control.pairRelevant
+                    // Compact tier: the pair selector folds into the 更多 menu (per-edge rows
+                    // named by the same pairLabel role); the capsule below then carries the
+                    // peek alone.
+                    visible: control.sourceCount === 3 && control.pairRelevant && !control.compactChrome
                     // Positioners reserve width for invisible children; collapse so a
                     // peek-only capsule (dual difference) does not carry the combo's ghost.
                     width: visible ? implicitWidth : 0
@@ -288,7 +339,7 @@ Rectangle {
 
                     objectName: "switchCandidateButton"
                     text: qsTr("切候选")
-                    visible: control.sourceCount === 3 && control.pairRelevant
+                    visible: control.sourceCount === 3 && control.pairRelevant && !control.compactChrome
                     width: visible ? implicitWidth : 0
                     enabled: !control.busy
                     implicitWidth: 86
@@ -310,12 +361,15 @@ Rectangle {
                     id: differencePeekButton
 
                     objectName: "differencePeekButton"
-                    text: control.peekLocked ? qsTr("GT 原图·已锁定") : qsTr("按住看 GT 原图")
+                    // Compact tier keeps the hold on the row: a menu row cannot be held down,
+                    // so the entry narrows to 按住 instead of folding away. The lock wording
+                    // shortens the same way; helpText below keeps both full sentences.
+                    text: control.peekLocked ? (control.compactChrome ? qsTr("已锁定") : qsTr("GT 原图·已锁定")) : (control.compactChrome ? qsTr("按住") : qsTr("按住看 GT 原图"))
                     visible: (control.currentMode === ComparisonSurface.Difference || control.currentMode === ComparisonSurface.DualDifference) && control.peekTargetValid
                     width: visible ? implicitWidth : 0
                     enabled: !control.busy && control.peekTargetValid
                     prominent: pressed || control.peekLocked
-                    implicitWidth: 136
+                    implicitWidth: control.compactChrome ? 64 : 136
                     implicitHeight: Theme.hitAreaMinimum
                     labelPixelSize: Theme.fontBody
                     helpText: control.peekTargetValid ? qsTr("按住 → 看参考原图，松开恢复（`）") : qsTr("会话里还没有可直看的参考源")
@@ -337,7 +391,9 @@ Rectangle {
         // comparison view. The switch keeps the frame, ROI/zoom/pan, the GT role and every
         // other entry on this bar untouched (P05 canvasFocus chain, no new state).
         Rectangle {
-            visible: control.comparisonReady
+            // Compact tier: the separator folds with the button group behind it; the focused
+            // source stays visible through the strip chip's own highlight (V02).
+            visible: control.comparisonReady && !control.compactChrome
             width: 1
             height: Theme.hitAreaMinimum
             color: Theme.border
@@ -359,7 +415,9 @@ Rectangle {
                 // it appears with the second source. The delegate stays instantiated and hidden
                 // rather than dropped from the model, so a single-source session has no entry
                 // here but the per-source binding still exists for anyone holding it.
-                visible: control.comparisonReady
+                // Compact tier (S4): the row folds these into the 更多 menu - the strip chip
+                // click stays the one-gesture direct-look entry in both tiers.
+                visible: control.comparisonReady && !control.compactChrome
                 helpText: qsTr("单击 → 整屏只看 %1，再点返回").arg(String.fromCharCode(65 + index))
             }
         }
@@ -372,7 +430,9 @@ Rectangle {
 
             objectName: "layoutModesButton"
             text: control.layoutModeActive ? qsTr("布局·%1 ▾").arg(control.layoutModeLabel) : qsTr("布局 ▾")
-            visible: control.comparisonReady
+            // Compact tier: the submenu moves into the 更多 menu (ruling Q2), where each
+            // layout keeps its own checked row and its digit shortcut.
+            visible: control.comparisonReady && !control.compactChrome
             implicitWidth: control.layoutModeActive ? 136 : 84
             implicitHeight: Theme.hitAreaMinimum
             helpText: qsTr("换排布 → 三联、参考聚焦、分析网格")
@@ -414,6 +474,181 @@ Rectangle {
                 // qmllint enable import unqualified unresolved-type
             }
         }
+
+        // UX-13 S4 compact tier (ruling Q2): one labelled 更多 menu carries everything the
+        // merged row cannot spend width on - the direct-look group, the layout submenu, the
+        // pair selector, the candidate switch and both comparison exports. Every entry
+        // drives the exact signal its wide-row twin drives, and keeps its digit/letter
+        // shortcut in the trailing column, so folding costs width only, never a path. The
+        // menu is a popup: its rows materialize on open, nothing sits in the scene graph
+        // while it is closed (plan §4).
+        VcsToolButton {
+            id: compactModeMoreButton
+
+            objectName: "compactModeMoreButton"
+            visible: control.compactChrome
+            text: qsTr("更多 ▾")
+            implicitWidth: 72
+            implicitHeight: Theme.hitAreaMinimum
+            labelPixelSize: Theme.fontBody
+            helpText: qsTr("直看、布局排布、比较对象与对比图导出")
+            onClicked: compactMoreMenu.open()
+
+            VcsMenu {
+                id: compactMoreMenu
+
+                objectName: "compactModeMoreMenu"
+                menuWidth: 220
+
+                // V02 direct look, folded: one radio row per slot, the checked row naming
+                // the source the whole canvas shows; the strip chip click stays the
+                // one-gesture entry, this is the labelled one.
+                VcsRadioMenuItem {
+                    objectName: "compactCanvasFocusAItem"
+                    visible: control.comparisonReady
+                    text: control.referenceSourceSlot === 0 ? qsTr("看 A（GT）") : qsTr("看 A")
+                    helpText: qsTr("单击 → 整屏只看 A，再点返回")
+                    checked: control.canvasFocusSlot === 0
+                    onTriggered: {
+                        if (control.canvasFocusSlot === 0)
+                            control.fullCanvasFocusRequested(control.canvasFocusRequestOff, 0);
+                        else
+                            control.fullCanvasFocusRequested(control.canvasFocusRequestSourceSlot, 0);
+                    }
+                }
+                VcsRadioMenuItem {
+                    objectName: "compactCanvasFocusBItem"
+                    visible: control.comparisonReady
+                    text: control.referenceSourceSlot === 1 ? qsTr("看 B（GT）") : qsTr("看 B")
+                    helpText: qsTr("单击 → 整屏只看 B，再点返回")
+                    checked: control.canvasFocusSlot === 1
+                    onTriggered: {
+                        if (control.canvasFocusSlot === 1)
+                            control.fullCanvasFocusRequested(control.canvasFocusRequestOff, 0);
+                        else
+                            control.fullCanvasFocusRequested(control.canvasFocusRequestSourceSlot, 1);
+                    }
+                }
+                VcsRadioMenuItem {
+                    objectName: "compactCanvasFocusCItem"
+                    visible: control.comparisonReady && control.sourceCount === 3
+                    text: control.referenceSourceSlot === 2 ? qsTr("看 C（GT）") : qsTr("看 C")
+                    helpText: qsTr("单击 → 整屏只看 C，再点返回")
+                    checked: control.canvasFocusSlot === 2
+                    onTriggered: {
+                        if (control.canvasFocusSlot === 2)
+                            control.fullCanvasFocusRequested(control.canvasFocusRequestOff, 0);
+                        else
+                            control.fullCanvasFocusRequested(control.canvasFocusRequestSourceSlot, 2);
+                    }
+                }
+                VcsMenuSeparator {
+                    visible: control.comparisonReady
+                }
+                // The layout submenu, one level flatter than the wide row's 布局 button.
+                // qmllint disable import unqualified unresolved-type
+                VcsRadioMenuItem {
+                    objectName: "compactThreeUpItem"
+                    text: qsTr("三联")
+                    shortcutText: qsTr("4")
+                    // Same wording the shortcut table builds for this key (ReviewShortcuts
+                    // ModeKeyShortcut: 切换视图：%1), so the menu row and the help table say
+                    // the same sentence (EX-04).
+                    helpText: qsTr("按 4 → 切换视图：三联")
+                    enabled: control.sourceCount === 3
+                    checked: control.currentMode === ComparisonSurface.ThreeUp
+                    onTriggered: control.modeRequested(ComparisonSurface.ThreeUp)
+                }
+                VcsRadioMenuItem {
+                    objectName: "compactReferenceFocusItem"
+                    text: qsTr("参考聚焦")
+                    shortcutText: qsTr("5")
+                    helpText: qsTr("按 5 → 切换视图：参考聚焦")
+                    enabled: control.sourceCount === 3
+                    checked: control.currentMode === ComparisonSurface.ReferenceFocus
+                    onTriggered: control.modeRequested(ComparisonSurface.ReferenceFocus)
+                }
+                VcsRadioMenuItem {
+                    objectName: "compactAnalysisGridItem"
+                    text: qsTr("分析网格")
+                    shortcutText: qsTr("6")
+                    helpText: qsTr("按 6 → 切换视图：分析网格")
+                    enabled: control.sourceCount === 3
+                    checked: control.currentMode === ComparisonSurface.AnalysisGrid
+                    onTriggered: control.modeRequested(ComparisonSurface.AnalysisGrid)
+                }
+                // qmllint enable import unqualified unresolved-type
+                VcsMenuSeparator {
+                    visible: control.sourceCount === 3 && control.pairRelevant
+                }
+                // The pair selector, folded: one radio row per edge, named by the same
+                // pairLabel role the wide-row combo shows (the two real files, never A↔B).
+                // Static bounded rows, not dynamic insertion: the product caps a session at
+                // three sources, so C(3,2) = 3 edges is the hard maximum, and this Qt build's
+                // VcsMenu instances do not expose QQuickMenu's indexOf/insertItem/removeItem
+                // invokables at runtime (the S4 gate TypeError). Every row is a pure binding
+                // over differenceEdges with its own length guard - no invokable, no
+                // dynamic menu mutation, nothing to relayout.
+                VcsRadioMenuItem {
+                    objectName: "compactPairEdgeItem-0"
+
+                    visible: control.sourceCount === 3 && control.pairRelevant && control.differenceEdges.length > 0
+                    text: control.pairEdgeLabel(0)
+                    // Same selector the wide-row combo exposes (Accessible.name), so the
+                    // folded row explains itself with the one word the pair UI uses.
+                    helpText: qsTr("比较对象：切换要对比的两个视频")
+                    checked: control.currentEdgeIndex === 0
+                    onTriggered: control.edgeRequested(control.pairEdgePreference(0))
+                }
+                VcsRadioMenuItem {
+                    objectName: "compactPairEdgeItem-1"
+
+                    visible: control.sourceCount === 3 && control.pairRelevant && control.differenceEdges.length > 1
+                    text: control.pairEdgeLabel(1)
+                    helpText: qsTr("比较对象：切换要对比的两个视频")
+                    checked: control.currentEdgeIndex === 1
+                    onTriggered: control.edgeRequested(control.pairEdgePreference(1))
+                }
+                VcsRadioMenuItem {
+                    objectName: "compactPairEdgeItem-2"
+
+                    visible: control.sourceCount === 3 && control.pairRelevant && control.differenceEdges.length > 2
+                    text: control.pairEdgeLabel(2)
+                    helpText: qsTr("比较对象：切换要对比的两个视频")
+                    checked: control.currentEdgeIndex === 2
+                    onTriggered: control.edgeRequested(control.pairEdgePreference(2))
+                }
+                VcsMenuItem {
+                    id: compactSwitchCandidateItem
+
+                    objectName: "compactSwitchCandidateItem"
+                    visible: control.sourceCount === 3 && control.pairRelevant
+                    text: qsTr("切候选（固定参考）")
+                    shortcutText: qsTr("C")
+                    // EX-04: the exact sentence the wide-row switchCandidateButton carries.
+                    helpText: qsTr("按 C → 参考不动，换另一个版本")
+                    enabled: !control.busy
+                    onTriggered: control.switchCandidateRequested()
+                }
+                VcsMenuSeparator {}
+                VcsMenuItem {
+                    objectName: "compactCopyComparisonItem"
+                    text: qsTr("复制对比图")
+                    // EX-04: the exact sentence the wide-row copyComparisonButton carries.
+                    helpText: qsTr("复制当前对比画面到剪贴板")
+                    enabled: !control.busy
+                    onTriggered: control.copyComparisonRequested()
+                }
+                VcsMenuItem {
+                    objectName: "compactSaveComparisonItem"
+                    text: qsTr("另存为对比图…")
+                    // EX-04: the exact sentence the wide-row saveComparisonButton carries.
+                    helpText: qsTr("把当前对比画面另存为 PNG 文件")
+                    enabled: !control.busy
+                    onTriggered: control.saveComparisonRequested()
+                }
+            }
+        }
     }
 
     component ModeButton: ReviewActionButton {
@@ -424,7 +659,8 @@ Rectangle {
         checked: control.canvasFocusSlot < 0 && control.currentMode === modeValue
         mirrorsState: true
         implicitHeight: Theme.hitAreaMinimum
-        implicitWidth: 80
+        // Compact tier: the segmented band tightens around the two-character labels.
+        implicitWidth: control.compactChrome ? 56 : 80
         // EX-03: a comparison task needs something to compare against. The reason is printed
         // beside the buttons (singleSourceCompareHint), never left to the grey alone.
         enabled: !control.busy && control.comparisonReady
@@ -577,7 +813,7 @@ Rectangle {
         // Opening the flavour menu must not light the button up before a flavour is chosen.
         mirrorsState: true
         implicitHeight: Theme.hitAreaMinimum
-        implicitWidth: control.differenceFlavorLabel.length > 0 ? 136 : 100
+        implicitWidth: control.compactChrome ? 64 : (control.differenceFlavorLabel.length > 0 ? 136 : 100)
         // Same single-source rule as ModeButton (EX-03).
         enabled: !control.busy && control.comparisonReady
         leftPadding: 10
@@ -665,6 +901,8 @@ Rectangle {
         id: inspectorToggleButton
 
         objectName: "inspectorToggleButton"
+        // Compact tier: the merged row's right cluster is this toggle (plus the single-video
+        // add entry); copy/save live one level down in the 更多 menu.
         text: control.inspectorOpen ? qsTr("隐藏检查器") : qsTr("检查器")
         implicitHeight: Theme.hitAreaMinimum
         leftPadding: 12
@@ -687,6 +925,8 @@ Rectangle {
         id: copyComparisonButton
 
         objectName: "copyComparisonButton"
+        // Compact tier: folded into the 更多 menu (compactCopyComparisonItem).
+        visible: !control.compactChrome
         text: qsTr("复制对比图")
         enabled: !control.busy
         implicitWidth: 112
@@ -709,6 +949,8 @@ Rectangle {
         id: saveComparisonButton
 
         objectName: "saveComparisonButton"
+        // Compact tier: folded into the 更多 menu (compactSaveComparisonItem).
+        visible: !control.compactChrome
         text: qsTr("另存为…")
         enabled: !control.busy
         implicitWidth: 96

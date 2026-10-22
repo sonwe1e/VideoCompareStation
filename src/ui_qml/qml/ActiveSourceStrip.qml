@@ -67,6 +67,30 @@ Rectangle {
     signal closeSessionRequested
     readonly property real chipSpacing: 7
 
+    // UX-13 S4 compact tier (docs/plans/ux13-narrow-window-redesign.md §2 D4): below 680 px
+    // window height this strip shares one 40 px row with the mode bar, so the chips collapse
+    // to "letter + status dot" - the identity colour pair (sourceBackground/sourceBorder and
+    // the sourceAccent badge) survives untouched, the long name and every role tag move into
+    // the chip's tooltip, and the click/right-click/drop semantics are exactly the wide-row
+    // ones. A plain property so standalone hosts pin the tier explicitly; Main.qml derives it
+    // from the hosting window the same way PlayerOsc and ImageWorkspace do.
+    property bool compactChrome: false
+    // Constant chip width in the compact tier (12 padding + 18 badge + 5 gap + 6 dot + 11
+    // padding): the row budget below is pure arithmetic over constants, so a no-render host
+    // (the contract harness) computes the same width a rendered window would - the S3 lesson
+    // was that delegate-derived widths keep stale wraps there.
+    readonly property real compactChipWidth: 52
+    readonly property real trailingButtonWidth: 34
+    // Which trailing buttons the compact row carries: manage (+ add) for a source set, the
+    // session close for a single source, and the batch remove only while a selection exists.
+    readonly property int compactTrailingButtonCount: (control.singleMode ? 0 : 1) + (!control.singleMode && control.sourceCount < 3 ? 1 : 0) + (control.singleMode ? 1 : 0) + (control.anySelected ? 1 : 0)
+    // Total width the merged row needs for this strip. Mirrors the placement algebra above
+    // exactly: 12 (strip margin) + 12 (chipStartX origin) + chips (each followed by one
+    // chipSpacing) + trailing buttons (each but the last followed by one chipSpacing) +
+    // 12 (right padding) + 12 (strip margin). Constant arithmetic only - no delegate
+    // geometry reads - so a no-render host computes the same row a rendered window shows.
+    readonly property real compactRowWidth: 48 + Math.max(0, control.sourceCount) * (control.compactChipWidth + control.chipSpacing) + (control.compactTrailingButtonCount > 0 ? control.compactTrailingButtonCount * control.trailingButtonWidth + (control.compactTrailingButtonCount - 1) * control.chipSpacing : 0)
+
     readonly property string sourceSetSignature: control.displayOrder.join("\u0001") + "|" + control.sourceCount
 
     // Session change detector: the shell clears its selection list whenever the active source set
@@ -207,7 +231,8 @@ Rectangle {
                 // implicit width, so sum the pieces here to size the chip from the real text.
                 readonly property real chipLabelPlainWidth: letterBadge.width + separatorOne.implicitWidth + filenameLabel.implicitWidth + 10
                 readonly property real chipLabelTaggedWidth: chipLabelPlainWidth + (chip.isCanvasFocus ? directLookTag.implicitWidth + 10 : 0) + (chip.isReference ? referenceTag.implicitWidth + separatorTwo.implicitWidth + 10 : 0) + (chip.isTimelineMaster ? masterTag.implicitWidth + separatorThree.implicitWidth + 10 : 0)
-                width: Math.min(280, Math.max(128, ((chip.isReference || chip.isTimelineMaster || chip.isCanvasFocus) ? chipLabelTaggedWidth : chipLabelPlainWidth) + (control.singleMode ? 24 : 84)))
+                // Compact tier: the constant letter+dot width above. Wide row unchanged.
+                width: control.compactChrome ? control.compactChipWidth : Math.min(280, Math.max(128, ((chip.isReference || chip.isTimelineMaster || chip.isCanvasFocus) ? chipLabelTaggedWidth : chipLabelPlainWidth) + (control.singleMode ? 24 : 84)))
                 radius: Theme.radiusLarge
                 readonly property string resolvedSourceIdentity: chip.sourceIdentity.length > 0 ? chip.sourceIdentity : (chip.sourceId >= 0 && chip.sourceId < control.sourceIdentities.length ? String(control.sourceIdentities[chip.sourceId]) : "")
                 // D08: timeline master and comparison reference are independent projections.
@@ -363,8 +388,10 @@ Rectangle {
                     anchors {
                         left: parent.left
                         leftMargin: 12
-                        right: control.singleMode ? parent.right : chipControls.left
-                        rightMargin: control.singleMode ? 12 : 6
+                        // Compact tier: the trailing control row is folded away, so the label
+                        // runs to the chip's own right edge.
+                        right: (control.compactChrome || control.singleMode) ? parent.right : chipControls.left
+                        rightMargin: control.compactChrome ? 11 : (control.singleMode ? 12 : 6)
                         verticalCenter: parent.verticalCenter
                     }
 
@@ -386,9 +413,27 @@ Rectangle {
                         }
                     }
 
+                    // Compact tier status dot: one 6 px dot carries pending (accent fill), a
+                    // changed-on-disk file (warning fill) and the otherwise-empty state (hairline
+                    // ring; the identity border of the chip itself carries the focus/reference
+                    // highlight). The tooltip below spells every state out in words.
+                    Rectangle {
+                        id: compactStatusDot
+
+                        visible: control.compactChrome
+                        implicitWidth: 6
+                        implicitHeight: 6
+                        Layout.alignment: Qt.AlignVCenter
+                        radius: width / 2
+                        color: chip.pending ? control.accentColor : (chip.changedOnDisk ? Theme.warning : "transparent")
+                        border.width: 1
+                        border.color: chip.pending ? control.accentColor : (chip.changedOnDisk ? Theme.warningBorder : (chip.isCanvasFocus || chip.selected || chip.isReference ? chip.sourceAccent : Theme.border))
+                    }
+
                     Text {
                         id: separatorOne
 
+                        visible: !control.compactChrome
                         text: "·"
                         color: control.mutedTextColor
                         font.pixelSize: Theme.fontBody
@@ -400,7 +445,7 @@ Rectangle {
                         id: directLookTag
 
                         objectName: "sourceDirectLookTag-" + chip.sourceId
-                        visible: chip.isCanvasFocus
+                        visible: chip.isCanvasFocus && !control.compactChrome
                         text: qsTr("直看")
                         color: chip.sourceAccent
                         font.pixelSize: Theme.fontSecondary
@@ -420,7 +465,7 @@ Rectangle {
                     Text {
                         id: directLookSeparator
 
-                        visible: chip.isCanvasFocus && (chip.isTimelineMaster || chip.isReference)
+                        visible: chip.isCanvasFocus && (chip.isTimelineMaster || chip.isReference) && !control.compactChrome
                         text: "·"
                         color: control.mutedTextColor
                         font.pixelSize: Theme.fontBody
@@ -429,7 +474,7 @@ Rectangle {
                         id: masterTag
 
                         objectName: "sourceTimelineMasterTag-" + chip.sourceId
-                        visible: chip.isTimelineMaster
+                        visible: chip.isTimelineMaster && !control.compactChrome
                         text: qsTr("主时间线")
                         color: control.mutedTextColor
                         font.pixelSize: Theme.fontSecondary
@@ -449,7 +494,7 @@ Rectangle {
                     Text {
                         id: separatorThree
 
-                        visible: chip.isTimelineMaster && chip.isReference
+                        visible: chip.isTimelineMaster && chip.isReference && !control.compactChrome
                         text: "·"
                         color: control.mutedTextColor
                         font.pixelSize: Theme.fontBody
@@ -458,7 +503,7 @@ Rectangle {
                         id: referenceTag
 
                         objectName: "sourceReferenceTag-" + chip.sourceId
-                        visible: chip.isReference
+                        visible: chip.isReference && !control.compactChrome
                         text: qsTr("参考")
                         // The reference chip is drawn entirely in its source colour.
                         color: chip.sourceAccent
@@ -479,7 +524,7 @@ Rectangle {
                     Text {
                         id: separatorTwo
 
-                        visible: chip.isReference
+                        visible: chip.isReference && !control.compactChrome
                         text: "·"
                         color: control.mutedTextColor
                         font.pixelSize: Theme.fontBody
@@ -487,6 +532,7 @@ Rectangle {
                     Text {
                         id: filenameLabel
 
+                        visible: !control.compactChrome
                         text: chip.parentLabel.length > 0 ? "%1 (%2)".arg(chip.filename).arg(chip.parentLabel) : chip.filename
                         color: control.textColor
                         font.pixelSize: Theme.fontBody
@@ -502,12 +548,47 @@ Rectangle {
                             text: chip.fullPath
                         }
                     }
+
+                    // Compact tier tooltip: the folded name, every role tag and every dot state
+                    // read here in words, so nothing the wide row printed is lost to the
+                    // letter+dot chip - the row just stops spending width on it (D4).
+                    VcsToolTip {
+                        objectName: "sourceChipCompactTip-" + chip.sourceId
+
+                        visible: control.compactChrome && chipHover.hovered
+                        text: {
+                            const title = chip.parentLabel.length > 0 ? "%1 (%2)".arg(chip.filename).arg(chip.parentLabel) : chip.filename;
+                            const roles = [];
+                            if (chip.isCanvasFocus)
+                                roles.push(qsTr("直看"));
+                            if (chip.isTimelineMaster)
+                                roles.push(qsTr("主时间线"));
+                            if (chip.isReference)
+                                roles.push(qsTr("参考"));
+                            const states = [];
+                            if (chip.pending)
+                                states.push(qsTr("正在切换"));
+                            if (chip.changedOnDisk)
+                                states.push(qsTr("文件已在磁盘上被修改"));
+                            let lines = [title];
+                            if (roles.length > 0)
+                                lines.push(roles.join(" · "));
+                            if (states.length > 0)
+                                lines.push(states.join(" · "));
+                            if (chip.fullPath.length > 0)
+                                lines.push(chip.fullPath);
+                            return lines.join("\n");
+                        }
+                    }
                 }
 
                 Row {
                     id: chipControls
 
-                    visible: !control.singleMode
+                    // Compact tier: the pending spinner and the changed-on-disk plate fold into
+                    // the chip's status dot + tooltip. The source menu below is a popup, not a
+                    // visible child - the right-click entry keeps this exact menu either way.
+                    visible: !control.singleMode && !control.compactChrome
                     spacing: 3
                     anchors {
                         right: parent.right
@@ -628,6 +709,10 @@ Rectangle {
         // batch state can never linger under a click that now means direct look.
         // EX-04: one source has nothing to manage in batch, so the toggle starts with the
         // second source and leaves the single-source row to the close entry.
+        // UX-13 S4: in the compact tier a hidden trailing button collapses to zero width, so
+        // the narrowed strip never reserves a ghost slot outside its own row budget (the
+        // wide row keeps the wide geometry exactly - positioners there read sizes, not
+        // visibility, and existing reachability contracts were measured against that).
         readonly property real trailingActionStartX: control.trailingButtonX + (manageSourcesButton.visible ? manageSourcesButton.width + control.chipSpacing : 0)
 
         VcsToolButton {
@@ -640,7 +725,7 @@ Rectangle {
             visible: !control.singleMode
             prominent: control.manageSelection
             x: control.trailingButtonX
-            width: 34
+            width: (visible || !control.compactChrome) ? control.trailingButtonWidth : 0
             height: chips.height
             text: "☰"
             enabled: true
@@ -662,7 +747,7 @@ Rectangle {
             // icon-only "+" stays the strip's own entry once the strip is a source set.
             visible: control.sourceCount < 3 && !control.singleMode
             x: chips.trailingActionStartX
-            width: 34
+            width: (visible || !control.compactChrome) ? control.trailingButtonWidth : 0
             height: chips.height
             text: "+"
             enabled: true
@@ -680,7 +765,7 @@ Rectangle {
             objectName: "closeSessionChipButton"
             visible: control.singleMode
             x: chips.trailingActionStartX
-            width: 34
+            width: (visible || !control.compactChrome) ? control.trailingButtonWidth : 0
             height: chips.height
             text: "×"
             enabled: true
@@ -699,7 +784,7 @@ Rectangle {
             // action must stay reachable for whatever put the selection there.
             visible: control.anySelected
             x: chips.trailingActionStartX + (addSourceChipButton.visible ? addSourceChipButton.width + control.chipSpacing : 0) + (closeSessionChipButton.visible ? closeSessionChipButton.width + control.chipSpacing : 0)
-            width: 34
+            width: (visible || !control.compactChrome) ? control.trailingButtonWidth : 0
             height: chips.height
             text: "−"
             enabled: true

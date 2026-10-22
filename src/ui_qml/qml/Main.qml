@@ -73,6 +73,22 @@ ApplicationWindow {
     readonly property int canonicalSourceIndex: controller ? Number(controller.canonicalSourceIndex) : -1
     readonly property bool inspectorOpen: shell ? Boolean(shell.inspectorVisible) : false
     readonly property bool chromeVisible: shell ? Boolean(shell.chromeVisible) : true
+    // UX-13 S4 compact-chrome tier (docs/plans/ux13-narrow-window-redesign.md §2 D4): same
+    // threshold and derivation as PlayerOsc (S1) and ImageWorkspace (S2) - the hosting
+    // window's height decides, 680 gives the 960x640 window minimum + frame rounding a
+    // stable band (plan §1). Below it the video source strip and the mode bar merge into one
+    // 40 px row; every other layout stays exactly as the wide window renders it. A plain
+    // property so the contract tests can pin either tier explicitly.
+    // The S1/S2 consumers write `Window.window.height <= 680` because their roots are Items;
+    // this root IS the window, and the Window attached property only resolves to a window
+    // for Item attachees - on the window itself it reads null at runtime (qmllint's static
+    // type cannot see that), so the shell reads its own height directly instead. Same
+    // threshold, same meaning, no attached indirection.
+    property bool compactChrome: height <= 680
+    // The video chrome budget everything below the top rows consumes: one merged 40 px row
+    // in the compact tier, the two stacked 40 px rows otherwise (both bars report height 0
+    // for an empty session, so the value collapses with them).
+    readonly property real videoChromeHeight: compactChrome ? Math.max(sourceBar.height, comparisonBar.height) : sourceBar.height + comparisonBar.height
     // The file sidebar has a fixed width; the inspector retains its session width preference.
     // The canvas guard can temporarily suppress the sidebar without losing its visible flag.
     readonly property real videoFolderSidebarWidth: Theme.fileSidebarWidthDefault
@@ -4051,17 +4067,21 @@ ApplicationWindow {
         selectedIdentities: root.shell ? root.shell.selectedSourceIdentities : []
         // V02: the chip highlights the source the whole canvas is focused on; pure mirror.
         canvasFocusIdentity: root.shell ? root.shell.canvasFocusIdentity : ""
+        compactChrome: root.compactChrome
         z: 30
         borderColor: root.borderColor
         accentColor: root.accentColor
         textColor: root.primaryTextColor
         mutedTextColor: root.mutedTextColor
-        anchors {
-            top: parent.top
-            left: parent.left
-            right: parent.right
-            leftMargin: root.singleMode ? 8 : 0
-        }
+        // UX-13 S4: explicit geometry instead of the old top/left/right anchors, so the
+        // compact tier can switch the strip from full-width to its chip-content width
+        // without tearing an anchor line mid-flip. The wide values are the exact anchor
+        // arithmetic they replace (x = singleMode leftMargin, y = 0, width = window width
+        // minus that margin); the compact value narrows to the letter+dot chips so the mode
+        // bar can share the row's remainder.
+        x: root.singleMode ? 8 : 0
+        y: 0
+        width: root.compactChrome ? compactRowWidth : root.width - (root.singleMode ? 8 : 0)
         onAddRequested: root.requestAddVideo()
         onCloseSessionRequested: root.closeCurrentTask()
         onRemoveRequested: sourceIdentity => root.removeSelectedSource(sourceIdentity)
@@ -4109,14 +4129,17 @@ ApplicationWindow {
         // reference slot so the 看A/看B/看GT checked states name what the canvas shows.
         canvasFocusSlot: root.shell ? root.shell.canvasFocusSlot : -1
         referenceSourceSlot: root.referenceSourceIndex
+        compactChrome: root.compactChrome
         borderColor: root.borderColor
         accentColor: root.accentColor
         textColor: root.primaryTextColor
-        anchors {
-            top: sourceBar.bottom
-            left: parent.left
-            right: parent.right
-        }
+        // UX-13 S4: explicit geometry instead of the old stacked anchors. Wide values are
+        // the anchor arithmetic exactly (x = 0, y = strip height, width = window width);
+        // compact shares the strip's top edge and starts one spaceGroup gap right of the
+        // strip's chip content, so the two 40 px bars read as one merged row.
+        x: root.compactChrome ? sourceBar.x + sourceBar.width + Theme.spaceGroup : 0
+        y: root.compactChrome ? 0 : sourceBar.height
+        width: root.compactChrome ? root.width - x : root.width
         onModeRequested: mode => root.selectComparisonMode(mode)
         onEdgeRequested: edge => root.applyDifferenceEdge(edge)
         // qmllint disable unqualified
@@ -4158,8 +4181,8 @@ ApplicationWindow {
             top: parent.top
             // EX-03/EX-04: both chrome rows now stay on screen for a single video, so the
             // drawer starts below them in every video session (both report height 0 when the
-            // session is empty).
-            topMargin: sourceBar.height + comparisonBar.height
+            // session is empty). UX-13 S4: the compact tier spends one merged row here.
+            topMargin: root.videoChromeHeight
         }
 
         MouseArea {
@@ -4212,8 +4235,8 @@ ApplicationWindow {
             top: parent.top
             // EX-03/EX-04: both chrome rows now stay on screen for a single video, so the
             // drawer starts below them in every video session (both report height 0 when the
-            // session is empty).
-            topMargin: sourceBar.height + comparisonBar.height
+            // session is empty). UX-13 S4: the compact tier spends one merged row here.
+            topMargin: root.videoChromeHeight
             right: parent.right
             bottom: parent.bottom
             bottomMargin: 0
@@ -4336,7 +4359,7 @@ ApplicationWindow {
         playbackHudRevealed: transport.revealActive
         anchors {
             top: parent.top
-            topMargin: root.chromeVisible ? sourceBar.height + comparisonBar.height + 6 : 0
+            topMargin: root.chromeVisible ? root.videoChromeHeight + 6 : 0
             bottom: parent.bottom
             bottomMargin: root.transportDocked ? root.transportDockHeight : 0
             left: parent.left
@@ -4380,7 +4403,7 @@ ApplicationWindow {
         anchors.left: parent.left
         anchors.leftMargin: LayoutMetrics.fileSidebarLoaderMargin
         anchors.top: parent.top
-        anchors.topMargin: root.imageWorkspaceActive ? 10 : (root.chromeVisible ? sourceBar.height + comparisonBar.height + 6 : 0)
+        anchors.topMargin: root.imageWorkspaceActive ? 10 : (root.chromeVisible ? root.videoChromeHeight + 6 : 0)
         anchors.bottom: parent.bottom
         anchors.bottomMargin: root.imageWorkspaceActive ? 0 : (root.transportDocked ? root.transportDockHeight : 0)
         sourceComponent: VideoFolderSidebar {

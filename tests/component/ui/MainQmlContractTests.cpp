@@ -4324,12 +4324,19 @@ TEST(MainQmlContractTests, ActiveSourceStripKeepsEveryChipReachableAtMinimumWidt
     }
     auto* const addButton = root->findChild<QQuickItem*>(QStringLiteral("addSourceChipButton"));
     ASSERT_NE(addButton, nullptr);
-    const QPointF addTopLeft = addButton->mapToItem(window->contentItem(), QPointF{0.0, 0.0});
-    const QRectF addRect{addTopLeft.x(), addTopLeft.y(), addButton->width(), addButton->height()};
-    EXPECT_TRUE(stripRect.contains(addRect))
-        << "the add-source button is outside the strip at the 960 px minimum width (button="
-        << addRect.x() << "," << addRect.y() << " " << addRect.width() << "x" << addRect.height()
-        << ")";
+    // UX-13 S4: with three sources the add entry is not offered (nothing to add a fourth
+    // to), and the compact tier collapses hidden trailing buttons to zero width so the
+    // narrowed strip reserves no ghost slot - the reachability claim below only means
+    // anything while the button is actually offered.
+    if (addButton->isVisible()) {
+        const QPointF addTopLeft = addButton->mapToItem(window->contentItem(), QPointF{0.0, 0.0});
+        const QRectF addRect{
+            addTopLeft.x(), addTopLeft.y(), addButton->width(), addButton->height()};
+        EXPECT_TRUE(stripRect.contains(addRect))
+            << "the add-source button is outside the strip at the 960 px minimum width (button="
+            << addRect.x() << "," << addRect.y() << " " << addRect.width() << "x"
+            << addRect.height() << ")";
+    }
     controller.stop();
 }
 
@@ -5652,7 +5659,16 @@ public:
                     return application::PortSubmitResult::Accepted;
                 },
             .snapshot = [this] { return snapshot; },
-            .takeCompletedCommands = [] { return std::vector<application::CommandTerminal>{}; },
+            // Same fake-port completion WorkspaceHarness offers: a test that needs a
+            // submitted command to land pushes a terminal here (the
+            // TAlternatesTheActualThreeSourcePairWithRealKeys precedent), while tests that
+            // never push keep the old always-empty behaviour.
+            .takeCompletedCommands =
+                [this] {
+                    std::vector<application::CommandTerminal> result = std::move(terminals);
+                    terminals.clear();
+                    return result;
+                },
         });
         shell = std::make_unique<ReviewShellController>(*controller, preferences);
         facade = std::make_unique<ReviewSessionFacade>(*controller, preferences, *shell);
@@ -5690,9 +5706,29 @@ public:
         return true;
     }
 
+    // Same settling ladder WorkspaceHarness uses: settle() drains the queued events, while
+    // settleAnimations() spends real wall-clock time so the platform window can deliver the
+    // asynchronously-applied geometry (a resize is not reflected in window->height() until
+    // the platform event lands - DPI-dependent, observed at 175% in the S4 gate run).
+    void settle(const int iterations = 5) {
+        for (int iteration = 0; iteration < iterations; ++iteration) {
+            QCoreApplication::processEvents();
+        }
+    }
+
+    void settleAnimations(const int milliseconds = 250) {
+        QElapsedTimer timer;
+        timer.start();
+        while (timer.elapsed() < milliseconds) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+            QThread::msleep(5U);
+        }
+    }
+
     std::shared_ptr<application::SessionSnapshot> snapshot =
         std::make_shared<application::SessionSnapshot>();
     std::vector<application::PlaybackCommand> submitted;
+    std::vector<application::CommandTerminal> terminals;
     std::unique_ptr<ReviewController> controller;
     ReviewPreferencesController preferences{std::make_shared<ClosedSettingsRepository>()};
     std::unique_ptr<ReviewShellController> shell;
@@ -6414,6 +6450,51 @@ TEST(MainQmlContractTests, ModeBarOrganizesTasksWithLayoutSubmenu) {
     EXPECT_EQ(harness.root->property("effectiveViewMode").toInt(),
               static_cast<int>(dvs::ui::ComparisonSurface::SideBySide));
     EXPECT_FALSE(roiStrip->property("visible").toBool());
+    EXPECT_EQ(harness.submitted.size(), submittedBefore);
+
+    // UX-13 S4 compact tier (960x640 sits inside the <= 680 window-height band): the same
+    // task organization survives the merge - the four daily tasks stay on the row as
+    // two-character segmented labels, the secondary layouts and the overflow clusters live
+    // in the 更多 menu, and the anonymous overflow this test guards against stays gone.
+    harness.window->resize(960, 640);
+    harness.settle();
+    harness.settleAnimations();
+    EXPECT_TRUE(harness.root->property("compactChrome").toBool())
+        << "tier diagnostics: window " << harness.window->width() << "x" << harness.window->height()
+        << " at DPR " << harness.window->devicePixelRatio();
+    EXPECT_TRUE(sideButton->isVisible());
+    EXPECT_EQ(sideButton->property("text").toString(), QStringLiteral("并排"));
+    EXPECT_TRUE(wipeButton->isVisible());
+    EXPECT_TRUE(wipeButton->property("text").toString().contains(QStringLiteral("分割")))
+        << "the compact tier shortens 分割线 to its two-character form (ruling Q2)";
+    // EX-04: the wide-row helpText sentence survives the shortened label untouched.
+    EXPECT_TRUE(wipeButton->property("helpText").toString().contains(QStringLiteral("分界线")));
+    EXPECT_TRUE(roiTripletButton->isVisible());
+    EXPECT_TRUE(roiTripletButton->property("text").toString().contains(QStringLiteral("局部")));
+    EXPECT_TRUE(diffButton->isVisible());
+    EXPECT_TRUE(diffButton->property("text").toString().contains(QStringLiteral("差异")));
+    EXPECT_EQ(harness.root->findChild<QObject*>(QStringLiteral("moreCompareModesButton")), nullptr);
+    auto* const compactMoreButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("compactModeMoreButton"));
+    ASSERT_NE(compactMoreButton, nullptr);
+    EXPECT_TRUE(compactMoreButton->isVisible());
+    EXPECT_FALSE(layoutButton->isVisible()) << "the 布局 submenu folded into the 更多 menu";
+    // The folded layout rows drive the same ViewMode enum and carry their digit shortcut.
+    auto* const compactThreeUp =
+        harness.root->findChild<QObject*>(QStringLiteral("compactThreeUpItem"));
+    ASSERT_NE(compactThreeUp, nullptr);
+    EXPECT_EQ(compactThreeUp->property("shortcutText").toString(), QStringLiteral("4"));
+    EXPECT_TRUE(compactThreeUp->property("helpText").toString().contains(QStringLiteral("三联")));
+    ASSERT_TRUE(QMetaObject::invokeMethod(compactThreeUp, "triggered"));
+    for (int iteration = 0; iteration < 8; ++iteration) {
+        QCoreApplication::processEvents();
+    }
+    EXPECT_EQ(harness.root->property("effectiveViewMode").toInt(),
+              static_cast<int>(dvs::ui::ComparisonSurface::ThreeUp));
+    ASSERT_TRUE(QMetaObject::invokeMethod(sideButton, "clicked"));
+    for (int iteration = 0; iteration < 8; ++iteration) {
+        QCoreApplication::processEvents();
+    }
     EXPECT_EQ(harness.submitted.size(), submittedBefore);
 }
 
@@ -15279,6 +15360,229 @@ TEST(MainQmlContractTests, ImageStatusBarCompactTierCollapsesToSingleBand) {
     EXPECT_FALSE(details->isVisible());
 }
 
+// UX-13 S4 (docs/plans/ux13-narrow-window-redesign.md §2 D4, rulings Q2 + the folded-entry
+// EX-04 ruling): below the 680 px window-height tier the video source strip and the mode bar
+// merge into ONE 40 px row. The strip's chips collapse to letter + status dot - identity
+// colours intact, the folded long name and role tags on the chip's tooltip - and the click /
+// direct-look semantics are exactly the wide-row ones. The mode bar keeps the four daily
+// tasks as two-character segmented labels and folds the direct-look group, the layout
+// submenu, the pair selector, the candidate switch and the exports into the on-demand 更多
+// menu; every folded entry drives the exact signal its wide-row twin drives, carries its
+// shortcut in the trailing column and its hover explanation in helpText. The hold-to-peek
+// GT entry stays on the row - a menu row cannot be held down. The wide window is the
+// zero-regression witness: two stacked 40 px rows and the full labels.
+TEST(MainQmlContractTests, CompactTierMergesVideoSourceStripAndModeBar) {
+    ThreeSourceFocusHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    // Self-explaining tier diagnostics (the S4 gate lesson): the failure message names the
+    // settled window size and the screen scale, so a tier that refuses to flip points at
+    // the platform geometry instead of leaving the reader to guess.
+    const auto tierDiagnostics = [&harness] {
+        return QStringLiteral("tier diagnostics: window %1x%2 at DPR %3")
+            .arg(harness.window->width())
+            .arg(harness.window->height())
+            .arg(harness.window->devicePixelRatio())
+            .toStdString();
+    };
+
+    auto* const strip = harness.root->findChild<QQuickItem*>(QStringLiteral("activeSourceStrip"));
+    auto* const bar = harness.root->findChild<QQuickItem*>(QStringLiteral("compareModeBar"));
+    ASSERT_NE(strip, nullptr);
+    ASSERT_NE(bar, nullptr);
+    auto* const wipeButton = findItemByName(bar, QStringLiteral("wipeModeButton"));
+    ASSERT_NE(wipeButton, nullptr);
+
+    // Wide witness (1440x900): the two stacked 40 px rows and the full 分割线 label.
+    EXPECT_FALSE(harness.root->property("compactChrome").toBool()) << tierDiagnostics();
+    EXPECT_DOUBLE_EQ(strip->y(), 0.0);
+    EXPECT_DOUBLE_EQ(strip->height(), 40.0);
+    EXPECT_DOUBLE_EQ(bar->y(), 40.0);
+    EXPECT_DOUBLE_EQ(bar->height(), 40.0);
+    EXPECT_DOUBLE_EQ(bar->x(), 0.0);
+    EXPECT_TRUE(wipeButton->property("text").toString().contains(QStringLiteral("分割线")));
+
+    // Compact tier (960x640 floor): one merged 40 px row, the strip narrowed to its chip
+    // content and the mode bar starting right of it - never on top of it.
+    harness.window->resize(960, 640);
+    harness.settle();
+    harness.settleAnimations();
+    EXPECT_TRUE(harness.root->property("compactChrome").toBool())
+        << "the floor-size window must sit inside the compact tier; " << tierDiagnostics();
+    EXPECT_DOUBLE_EQ(strip->height(), 40.0);
+    EXPECT_DOUBLE_EQ(bar->height(), 40.0);
+    EXPECT_DOUBLE_EQ(strip->y(), 0.0);
+    EXPECT_DOUBLE_EQ(bar->y(), 0.0) << "the mode bar must share the strip's top edge";
+    EXPECT_GE(bar->x(), strip->x() + strip->width())
+        << "the mode bar must start right of the strip's chip content";
+    EXPECT_LT(strip->width(), static_cast<double>(harness.window->width()) / 2.0)
+        << "the compact strip narrows to its letter+dot chips";
+
+    // The chips collapsed to the letter+dot width and stay inside the narrowed strip.
+    auto* const chipA = findItemByName(strip, QStringLiteral("sourceChip-0"));
+    ASSERT_NE(chipA, nullptr);
+    EXPECT_LE(chipA->width(), 56.0) << "compact chip width: " << chipA->width();
+    const QPointF chipTopLeft = chipA->mapToItem(strip, QPointF{0.0, 0.0});
+    EXPECT_GE(chipTopLeft.x(), 0.0);
+    EXPECT_LE(chipTopLeft.x() + chipA->width(), strip->width())
+        << "the collapsed chip must stay inside the narrowed strip";
+    // The folded name and role state ride the compact tooltip (D4: long names move into the
+    // tooltip; nothing the wide row printed is silently lost). VcsToolTip is a ToolTip
+    // (Popup-derived), so it never joins the QQuickItem childItems walk - and the chips are
+    // view delegates, which get a visual parent but no QObject parent under the strip, so a
+    // strip- or root-scoped findChild cannot see into them at all. The delegate root item is
+    // the QObject root of everything created inside the chip, so the lookup starts there.
+    auto* const chipTip = chipA->findChild<QObject*>(QStringLiteral("sourceChipCompactTip-0"));
+    ASSERT_NE(chipTip, nullptr) << "compact tip candidates: " << [chipItem = chipA] {
+        QStringList names;
+        const auto chipChildren = chipItem->findChildren<QObject*>();
+        for (const auto* candidate : chipChildren)
+            if (candidate->objectName().contains(QStringLiteral("Tip")))
+                names << candidate->objectName();
+        names << QStringLiteral("chip-children=%1").arg(chipChildren.size());
+        return names.join(u", ").toStdString();
+    }();
+    const QString tipText = chipTip->property("text").toString();
+    EXPECT_TRUE(tipText.contains(QStringLiteral("A"))) << tipText.toStdString();
+
+    // V02 direct look through the chip body: the plain click path is the wide-row one, and
+    // the chip's own highlight carries the focused-source state on the merged row.
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        strip, "chipClicked", Q_ARG(QVariant, QVariant::fromValue(chipA))));
+    harness.settle();
+    EXPECT_EQ(harness.shell->canvasFocusSlot(), 0);
+    EXPECT_TRUE(chipA->property("isCanvasFocus").toBool());
+    // The folded direct-look row mirrors the same shell state and requests Off the same way.
+    auto* const compactFocusA =
+        harness.root->findChild<QObject*>(QStringLiteral("compactCanvasFocusAItem"));
+    ASSERT_NE(compactFocusA, nullptr);
+    EXPECT_TRUE(compactFocusA->property("checked").toBool())
+        << "the folded 看A row must mirror the canvas focus";
+    ASSERT_TRUE(QMetaObject::invokeMethod(compactFocusA, "triggered"));
+    harness.settle();
+    EXPECT_EQ(harness.shell->canvasFocusSlot(), -1);
+    EXPECT_FALSE(compactFocusA->property("checked").toBool());
+
+    // The folded pair selector names the two real files (never slot letters) and switches
+    // the edge through the same edgeRequested signal the wide combo emits. The pair
+    // selection travels as SetActiveComparisonPairCommand through the fake port (D07), so
+    // it lands the way the TAlternatesTheActualThreeSourcePairWithRealKeys precedent lands
+    // it: the submitted pair writes back into the snapshot, succeeded terminals come back
+    // for every pending command (so `busy` clears the way the application layer would), and
+    // the projection refreshes.
+    const auto landSubmittedPairCommand = [&harness]() -> void {
+        ASSERT_TRUE(std::holds_alternative<application::SetActiveComparisonPairCommand>(
+            harness.submitted.back()))
+            << "the folded row must submit a real pair command, not something else";
+        const auto& pairCommand =
+            std::get<application::SetActiveComparisonPairCommand>(harness.submitted.back());
+        ASSERT_TRUE(pairCommand.pair.has_value());
+        auto accepted = std::make_shared<application::SessionSnapshot>(*harness.snapshot);
+        accepted->activeComparisonPair = *pairCommand.pair;
+        harness.snapshot = accepted;
+        for (const application::PlaybackCommand& command : harness.submitted) {
+            harness.terminals.push_back(application::CommandTerminal{
+                .context = application::commandContext(command),
+                .outcome = application::CommandOutcome::Succeeded,
+            });
+        }
+        harness.controller->refreshProjection();
+        harness.settle();
+    };
+
+    harness.preferences.setViewMode(ReviewPreferencesController::ViewMode::Difference);
+    harness.settle();
+    auto* const foldedPairCombo = bar->findChild<QQuickItem*>(QStringLiteral("pairCombo"));
+    ASSERT_NE(foldedPairCombo, nullptr);
+    EXPECT_FALSE(foldedPairCombo->isVisible());
+    auto* const compactEdge1 =
+        harness.root->findChild<QObject*>(QStringLiteral("compactPairEdgeItem-1"));
+    ASSERT_NE(compactEdge1, nullptr);
+    const QString edgeLabel = compactEdge1->property("text").toString();
+    EXPECT_TRUE(edgeLabel.contains(QStringLiteral("↔"))) << edgeLabel.toStdString();
+    const int edgeBefore = harness.controller->effectiveDifferenceEdge();
+    const std::size_t submittedBeforeEdge = harness.submitted.size();
+    ASSERT_TRUE(QMetaObject::invokeMethod(compactEdge1, "triggered"));
+    harness.settle();
+    ASSERT_GT(harness.submitted.size(), submittedBeforeEdge)
+        << "the folded pair row must submit a real pair command through the port";
+    landSubmittedPairCommand();
+    EXPECT_NE(harness.controller->effectiveDifferenceEdge(), edgeBefore)
+        << "the folded pair row must drive the real edge";
+    // The folded candidate switch flips the edge the same way C does, and both folded rows
+    // keep their explanation (EX-04) and their shortcut in the trailing column.
+    auto* const compactSwitch =
+        harness.root->findChild<QObject*>(QStringLiteral("compactSwitchCandidateItem"));
+    ASSERT_NE(compactSwitch, nullptr);
+    EXPECT_EQ(compactSwitch->property("shortcutText").toString(), QStringLiteral("C"));
+    EXPECT_TRUE(compactSwitch->property("helpText").toString().contains(QStringLiteral("按 C")))
+        << "the folded row carries the wide-row button's own sentence";
+    const int edgeAfterPairSwitch = harness.controller->effectiveDifferenceEdge();
+    const std::size_t submittedBeforeSwitch = harness.submitted.size();
+    ASSERT_TRUE(QMetaObject::invokeMethod(compactSwitch, "triggered"));
+    harness.settle();
+    ASSERT_GT(harness.submitted.size(), submittedBeforeSwitch)
+        << "the folded candidate switch must submit a real pair command through the port";
+    landSubmittedPairCommand();
+    EXPECT_NE(harness.controller->effectiveDifferenceEdge(), edgeAfterPairSwitch)
+        << "the folded candidate switch must flip the compared pair";
+    // The hold-to-peek GT entry stays on the merged row in a difference task with a valid
+    // reference: a menu row cannot be held down (D4 folding rule).
+    auto* const peekButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("differencePeekButton"));
+    ASSERT_NE(peekButton, nullptr);
+    EXPECT_TRUE(peekButton->isVisible()) << visibleChainText(peekButton);
+
+    // Back to the wide window WHILE the three sources are still live: the exact stacked
+    // layout, the full labels and the wide direct-look buttons return. The single-source
+    // EX-03 pass below runs last and never restores the topology:
+    // ReviewController::sourceCount() is the SourceListModel row count
+    // (ReviewController.cpp:2574), refreshProjection propagates shrinkage only (row
+    // additions travel the open-command chain), so a snapshot re-grow is a silent no-op
+    // for the model - shrinking, never restoring, is the only in-place topology change
+    // this harness can make.
+    harness.window->resize(1440, 900);
+    harness.settle();
+    harness.settleAnimations();
+    EXPECT_FALSE(harness.root->property("compactChrome").toBool()) << tierDiagnostics();
+    EXPECT_DOUBLE_EQ(bar->y(), 40.0);
+    EXPECT_DOUBLE_EQ(bar->x(), 0.0);
+    EXPECT_TRUE(wipeButton->property("text").toString().contains(QStringLiteral("分割线")));
+    // The direct-look buttons are Repeater delegates: like the strip chips, they live in the
+    // item tree with no QObject parent under the bar, so the lookup walks childItems.
+    auto* const wideFocusA = findItemByName(bar, QStringLiteral("canvasFocusAButton"));
+    ASSERT_NE(wideFocusA, nullptr)
+        << "the three-source projection must still own the direct-look group"
+        << " (controller sourceCount=" << harness.controller->sourceCount()
+        << ", bar sourceCount=" << bar->property("sourceCount").toInt()
+        << ", repeater count=" << [&bar]() -> int {
+        auto* const repeater =
+            bar->findChild<QObject*>(QStringLiteral("canvasFocusButtonRepeater"));
+        return repeater == nullptr ? -1 : repeater->property("count").toInt();
+    }();
+    EXPECT_TRUE(wideFocusA->isVisible());
+
+    // EX-03 in the merged row's vocabulary, as the closing pass (tier-independent
+    // assertions): a single video keeps the four tasks visible and disabled with the
+    // reason printed beside them, and the add entry stays one click away.
+    harness.snapshot->sources.resize(1);
+    harness.snapshot->presentedSources.resize(1);
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_EQ(harness.controller->sourceCount(), 1);
+    auto* const singleHint = bar->findChild<QObject*>(QStringLiteral("singleSourceCompareHint"));
+    ASSERT_NE(singleHint, nullptr);
+    EXPECT_TRUE(singleHint->property("visible").toBool());
+    EXPECT_EQ(singleHint->property("text").toString(), QStringLiteral("对比需要至少两个视频"));
+    EXPECT_FALSE(wipeButton->property("enabled").toBool());
+    auto* const addVideo = bar->findChild<QObject*>(QStringLiteral("modeBarAddVideoButton"));
+    ASSERT_NE(addVideo, nullptr);
+    EXPECT_TRUE(addVideo->property("visible").toBool());
+    // Static bounded rows guard on the edge count: a single-source session has no pair
+    // edges at all, so no ghost row may stay offered in the folded menu.
+    EXPECT_FALSE(compactEdge1->property("visible").toBool())
+        << "the bounded pair-edge rows must hide when the session has no edges";
+}
+
 // Flow176 UI rework evidence harness. Runs the same measurement and screenshot protocol
 // before and after the layout rework (gated by DVS_REVIEW_EVIDENCE_DIR): identical window
 // sizes, identical session states. The chrome-height, canvas-space and OSC-height claims are
@@ -15444,8 +15748,19 @@ TEST(MainQmlContractTests, ChromeGeometryAndScreenshotEvidence) {
     EXPECT_EQ(harness.window->height(), 900);
     shot("video-default-1440.png");
     recordWindow(QStringLiteral("video1440"));
-    recordItem("video1440", QStringLiteral("activeSourceStrip"), true);
-    recordItem("video1440", QStringLiteral("compareModeBar"), true);
+    {
+        // UX-13 S4 zero-regression witness: the wide window keeps the two stacked 40 px
+        // chrome rows exactly - the strip at y=0, the mode bar starting at y=40.
+        auto* const stripItem = recordItem("video1440", QStringLiteral("activeSourceStrip"), true);
+        auto* const modeBarItem = recordItem("video1440", QStringLiteral("compareModeBar"), true);
+        ASSERT_NE(stripItem, nullptr);
+        ASSERT_NE(modeBarItem, nullptr);
+        EXPECT_DOUBLE_EQ(stripItem->y(), 0.0);
+        EXPECT_DOUBLE_EQ(stripItem->height(), 40.0);
+        EXPECT_DOUBLE_EQ(modeBarItem->y(), 40.0);
+        EXPECT_DOUBLE_EQ(modeBarItem->height(), 40.0);
+        EXPECT_DOUBLE_EQ(modeBarItem->x(), 0.0);
+    }
     recordItem("video1440", QStringLiteral("transport"), true);
     recordItem("video1440", QStringLiteral("mediaViewportFocusTarget"), true);
     recordItem("video1440", QStringLiteral("viewportPixelReadoutPlate"));
@@ -15487,8 +15802,29 @@ TEST(MainQmlContractTests, ChromeGeometryAndScreenshotEvidence) {
     // narrow-window chrome budget (two top rows + docked transport) had no measured baseline.
     // Mirror the video1440 anchors exactly - same names, same requiredness - so the S1
     // before/after comparison covers every chrome row at 960x640 too.
-    recordItem("video960", QStringLiteral("activeSourceStrip"), true);
-    recordItem("video960", QStringLiteral("compareModeBar"), true);
+    // UX-13 S4: at the floor size the compact tier (window height <= 680) merges the two
+    // bars into ONE 40 px row - both required anchors stay live and now record the merged
+    // geometry: same top edge (y=0), the strip narrowed to its chip content, the mode bar
+    // starting right of it, and the top chrome budget dropping from the stacked rows to a
+    // single band. The wide-window witness above pins the two-row layout this replaces.
+    {
+        auto* const stripItem = recordItem("video960", QStringLiteral("activeSourceStrip"), true);
+        auto* const modeBarItem = recordItem("video960", QStringLiteral("compareModeBar"), true);
+        ASSERT_NE(stripItem, nullptr);
+        ASSERT_NE(modeBarItem, nullptr);
+        EXPECT_TRUE(harness.root->property("compactChrome").toBool())
+            << "the 960x640 floor window must sit inside the compact tier; tier diagnostics: "
+            << "window " << harness.window->width() << "x" << harness.window->height() << " at DPR "
+            << harness.window->devicePixelRatio();
+        EXPECT_DOUBLE_EQ(stripItem->y(), 0.0);
+        EXPECT_DOUBLE_EQ(stripItem->height(), 40.0);
+        EXPECT_DOUBLE_EQ(modeBarItem->y(), 0.0) << "the mode bar must share the strip's row";
+        EXPECT_DOUBLE_EQ(modeBarItem->height(), 40.0) << "the merged row is one 40 px band";
+        EXPECT_GE(modeBarItem->x(), stripItem->x() + stripItem->width())
+            << "the mode bar must start right of the strip's chip content, not on it";
+        EXPECT_LT(stripItem->width(), static_cast<double>(harness.window->width()) / 2.0)
+            << "the compact strip narrows to its letter+dot chips instead of the full width";
+    }
     recordItem("video960", QStringLiteral("transport"), true);
     recordItem("video960", QStringLiteral("mediaViewportFocusTarget"), true);
     recordItem("video960", QStringLiteral("viewportPixelReadoutPlate"));
