@@ -15416,6 +15416,28 @@ TEST(MainQmlContractTests, CompactTierMergesVideoSourceStripAndModeBar) {
         << "the mode bar must start right of the strip's chip content";
     EXPECT_LT(strip->width(), static_cast<double>(harness.window->width()) / 2.0)
         << "the compact strip narrows to its letter+dot chips";
+    // S4-2 arithmetic pin: the strip width must be the EXACT value of the component's
+    // constant-arithmetic row budget, mirrored term by term from ActiveSourceStrip.qml -
+    // compactChipWidth 52, chipSpacing 7, trailingButtonWidth 34, and for this state
+    // (three sources, not singleMode, no selection) compactTrailingButtonCount = 1 (the
+    // manage button alone: add needs sourceCount < 3, close needs singleMode, remove
+    // needs a selection). So compactRowWidth = 48 + 3*(52+7) + (1*34 + (1-1)*7) = 259.
+    // This pins the no-render-host discipline itself: the constant formula and the
+    // rendered row can never drift apart (corroborated by the s4-after evidence).
+    EXPECT_DOUBLE_EQ(strip->width(), 259.0)
+        << "compactRowWidth = 48 + 3*(52+7) + (1*34 + (1-1)*7); a drift means the QML row "
+        << "budget and the placement algebra diverged";
+    // S4-1 single-line form: the last visible trailing control (manage, in this state)
+    // must stay inside the narrowed strip - the row budget has to actually cover the
+    // controls it is derived from.
+    auto* const manageButton = strip->findChild<QQuickItem*>(QStringLiteral("manageSourcesButton"));
+    ASSERT_NE(manageButton, nullptr);
+    ASSERT_TRUE(manageButton->isVisible());
+    const QPointF manageTopLeft = manageButton->mapToItem(strip, QPointF{0.0, 0.0});
+    EXPECT_LE(manageTopLeft.x() + manageButton->width(), strip->width())
+        << "the last visible trailing control (" << manageTopLeft.x() << "+"
+        << manageButton->width() << ") must stay inside the narrowed strip (" << strip->width()
+        << ")";
 
     // The chips collapsed to the letter+dot width and stay inside the narrowed strip.
     auto* const chipA = findItemByName(strip, QStringLiteral("sourceChip-0"));
