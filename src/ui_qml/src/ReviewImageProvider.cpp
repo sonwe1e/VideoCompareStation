@@ -1,40 +1,66 @@
 #include "dvs/ui/ReviewImageProvider.h"
 
+#include <QStringList>
+
 #include <cstring>
+#include <utility>
 
 namespace dvs::ui {
+namespace {
+
+[[nodiscard]] QString tokenFromId(const QString& id) {
+    const qsizetype query = id.indexOf(QLatin1Char('?'));
+    if (query < 0) {
+        return {};
+    }
+    const QStringList parameters = id.mid(query + 1).split(QLatin1Char('&'), Qt::SkipEmptyParts);
+    for (const QString& parameter : parameters) {
+        if (parameter.startsWith(QStringLiteral("w="))) {
+            return parameter.mid(2);
+        }
+    }
+    return {};
+}
+
+} // namespace
 
 ReviewImageProvider::ReviewImageProvider(ImageReviewController* controller)
     : QQuickImageProvider(QQuickImageProvider::Image), controller_(controller) {}
 
+ReviewImageProvider::ReviewImageProvider(ImageReviewController* controller, TokenResolver resolver)
+    : QQuickImageProvider(QQuickImageProvider::Image), controller_(controller),
+      resolver_(std::move(resolver)) {}
+
 QImage
 ReviewImageProvider::requestImage(const QString& id, QSize* size, const QSize& requestedSize) {
-    if (controller_ == nullptr) {
-        if (size) {
-            *size = {};
+    if (size) {
+        *size = {};
+    }
+    const QString token = tokenFromId(id);
+    ImageReviewController* controller = controller_;
+    if (!token.isEmpty()) {
+        controller = resolver_ ? resolver_(token) : nullptr;
+        if (controller == nullptr) {
+            // A stale tab URL must never be served from another task's live buffers.
+            return {};
         }
+    }
+    if (controller == nullptr) {
         return {};
     }
-    const QStringList parts = id.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    const qsizetype query = id.indexOf(QLatin1Char('?'));
+    const QString idPath = query < 0 ? id : id.left(query);
+    const QStringList parts = idPath.split(QLatin1Char('/'), Qt::SkipEmptyParts);
     if (parts.isEmpty()) {
-        if (size) {
-            *size = {};
-        }
         return {};
     }
     bool ok = false;
     const int slot = parts.constFirst().toInt(&ok);
     if (!ok) {
-        if (size) {
-            *size = {};
-        }
         return {};
     }
-    QImage image = controller_->imageForSlot(slot);
+    QImage image = controller->imageForSlot(slot);
     if (image.isNull()) {
-        if (size) {
-            *size = {};
-        }
         return {};
     }
     if (size) {

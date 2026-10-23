@@ -76,6 +76,7 @@ if(DVS_BUILD_ADAPTERS)
             include/dvs/ui/ImageEditOperations.h
             include/dvs/ui/ImagePairLoader.h
             include/dvs/ui/ImageReviewController.h
+            include/dvs/ui/ImageTaskHost.h
             include/dvs/ui/JogKeyHandler.h
             include/dvs/ui/MainWindowDependencies.h
             include/dvs/ui/Module.h
@@ -100,6 +101,7 @@ if(DVS_BUILD_ADAPTERS)
             src/ImageEditOperations.cpp
             src/ImagePairLoader.cpp
             src/ImageReviewController.cpp
+            src/ImageTaskHost.cpp
             src/JogKeyHandler.cpp
             src/MainWindowDependencies.cpp
             src/Module.cpp
@@ -132,6 +134,7 @@ if(DVS_BUILD_ADAPTERS)
             dvs::qt_dependencies
         PRIVATE
             dwmapi
+            gdiplus
     )
 
     qt6_add_resources(dvs_ui_qml_resource_sources dvs_ui_qml_resources.qrc)

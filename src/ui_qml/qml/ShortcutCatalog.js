@@ -12,6 +12,8 @@ const openImagePair = "Ctrl+Shift+I";
 const addImage = "Ctrl+Alt+I";
 const compareImageFolders = "Ctrl+Shift+F";
 const closeCurrentTask = "Ctrl+W";
+const nextImageTab = "Ctrl+Tab";
+const previousImageTab = "Ctrl+Shift+Tab";
 const captureIssue = "M";
 // Displayed by the menu only: the window manager owns Alt+F4 delivery, no app Shortcut
 // binds it. The contract test knows this one exception.

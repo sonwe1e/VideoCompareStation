@@ -82,12 +82,22 @@ Item {
 
         property string accessibleLabel: ""
 
+        // The one edit notification the dialogs listen to. A typed number is committed from
+        // the editor below: assigning `field.value` from script would neither emit
+        // valueModified nor keep the use site's `value:` binding alive, which is how a
+        // typed edge stopped reaching the model and its aspect-locked partner. The stock
+        // SpinBox edits (step keys, buttons, wheel and the built-in focus-out commit)
+        // already report themselves through valueModified.
+        signal userEdited(int edge)
+
         implicitWidth: 132
         implicitHeight: 30
         editable: true
         from: control.minimumEdge
         to: control.maximumEdge
         Accessible.name: field.accessibleLabel
+
+        onValueModified: field.userEdited(field.value)
 
         contentItem: TextInput {
             id: fieldInput
@@ -103,7 +113,13 @@ Item {
                 bottom: control.minimumEdge
                 top: control.maximumEdge
             }
-            onEditingFinished: field.value = Math.max(control.minimumEdge, Math.min(control.maximumEdge, field.valueFromText(fieldInput.text, field.locale)))
+            // An IntValidator keeps the text digits-only, but the field can still be
+            // emptied or left partial; an unparseable commit falls back to the current
+            // value instead of coercing NaN to 0 and writing that into the model.
+            onEditingFinished: {
+                const parsed = Math.round(Number(field.valueFromText(fieldInput.text, field.locale)));
+                field.userEdited(isFinite(parsed) ? Math.max(control.minimumEdge, Math.min(control.maximumEdge, parsed)) : field.value);
+            }
         }
 
         background: Rectangle {
@@ -312,10 +328,10 @@ Item {
                     objectName: "imageEditScaleWidthField"
                     accessibleLabel: qsTr("宽度像素")
                     value: control.scaleWidth
-                    onValueModified: {
-                        control.scaleWidth = value;
+                    onUserEdited: function (edge) {
+                        control.scaleWidth = edge;
                         if (control.scaleLockAspect)
-                            control.scaleHeight = Math.max(control.minimumEdge, Math.min(control.maximumEdge, Math.round(value / scaleDialog.aspectRatio)));
+                            control.scaleHeight = Math.max(control.minimumEdge, Math.min(control.maximumEdge, Math.round(edge / scaleDialog.aspectRatio)));
                     }
                 }
                 Text {
@@ -340,10 +356,10 @@ Item {
                     objectName: "imageEditScaleHeightField"
                     accessibleLabel: qsTr("高度像素")
                     value: control.scaleHeight
-                    onValueModified: {
-                        control.scaleHeight = value;
+                    onUserEdited: function (edge) {
+                        control.scaleHeight = edge;
                         if (control.scaleLockAspect)
-                            control.scaleWidth = Math.max(control.minimumEdge, Math.min(control.maximumEdge, Math.round(value * scaleDialog.aspectRatio)));
+                            control.scaleWidth = Math.max(control.minimumEdge, Math.min(control.maximumEdge, Math.round(edge * scaleDialog.aspectRatio)));
                     }
                 }
                 Text {
@@ -446,7 +462,9 @@ Item {
                     objectName: "imageEditFillWidthField"
                     accessibleLabel: qsTr("画布宽度像素")
                     value: control.fillWidth
-                    onValueModified: control.fillWidth = value
+                    onUserEdited: function (edge) {
+                        control.fillWidth = edge;
+                    }
                 }
                 Text {
                     text: qsTr("px")
@@ -470,7 +488,9 @@ Item {
                     objectName: "imageEditFillHeightField"
                     accessibleLabel: qsTr("画布高度像素")
                     value: control.fillHeight
-                    onValueModified: control.fillHeight = value
+                    onUserEdited: function (edge) {
+                        control.fillHeight = edge;
+                    }
                 }
                 Text {
                     text: qsTr("px")

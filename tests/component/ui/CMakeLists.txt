@@ -112,6 +112,7 @@ add_executable(
     dvs_image_review_controller_tests
     ImageReviewControllerTests.cpp
     ImageColorContractTests.cpp
+    ImageTaskHostTests.cpp
 )
 target_link_libraries(
     dvs_image_review_controller_tests
@@ -446,7 +447,7 @@ set_tests_properties(
         ENVIRONMENT "QT_QUICK_CONTROLS_STYLE=Basic;QSG_RENDER_LOOP=basic"
 )
 
-foreach(dvs_review_shell_test IN ITEMS empty_review_view player_osc timeline_tracks timeline_thumbnail_cache review_action_button review_offset_spin_box vcs_theme layout_metrics stage_states clip_export_dialog)
+foreach(dvs_review_shell_test IN ITEMS empty_review_view player_osc timeline_tracks timeline_thumbnail_cache review_action_button review_offset_spin_box vcs_theme layout_metrics stage_states clip_export_dialog image_task_tabs)
     add_test(
         NAME "ui.${dvs_review_shell_test}"
         COMMAND

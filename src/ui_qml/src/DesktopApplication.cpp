@@ -12,6 +12,7 @@
 #include "dvs/ui/ImageFolderCursor.h"
 #include "dvs/ui/ImageFolderPairModel.h"
 #include "dvs/ui/ImageReviewController.h"
+#include "dvs/ui/ImageTaskHost.h"
 #include "dvs/ui/InterpolationProtocolController.h"
 #include "dvs/ui/IssueLogController.h"
 #include "dvs/ui/MainWindowDependencies.h"
@@ -49,6 +50,7 @@
 #include <QResource>
 #include <QScreen>
 #include <QString>
+#include <QTimer>
 #include <QUrl>
 #include <QVariant>
 #include <QtQml/qqml.h>
@@ -212,9 +214,9 @@ public:
         // B2: the splash is a guard, not a plain local, so every `return false`
         // below dismisses it on the way out and no early failure can leave an
         // orphan window on screen. On success the ownership moves to splash_,
-        // which survives past window->show() and is dismissed by the
-        // sceneGraphInitialized handler, because the window is still blank for
-        // ~180 ms after show().
+        // which survives past window->show() and is dismissed when the first
+        // frame has actually been presented (frameSwapped): between show() and
+        // that swap the window is on screen but unrendered - a black block.
         auto splash = std::make_unique<StartupSplash>();
         if (!options_.smokeMode) {
             splash->show("CompareStation", QObject::tr("正在准备审阅环境").toStdString());
@@ -263,46 +265,52 @@ public:
         engine->rootContext()->setContextProperty(QStringLiteral("reviewFacade"),
                                                   sessionFacade_.get());
         imageReview_ = std::make_unique<ImageReviewController>();
-        engine->addImageProvider(QStringLiteral("vcs-review"),
-                                 new ReviewImageProvider(imageReview_.get()));
+        imageTasks_ = std::make_unique<ImageTaskHost>(imageReview_.get());
+        engine->rootContext()->setContextProperty(QStringLiteral("imageTasks"), imageTasks_.get());
+        engine->addImageProvider(
+            QStringLiteral("vcs-review"),
+            new ReviewImageProvider(
+                imageReview_.get(), [host = imageTasks_.get()](const QString& token) {
+                    return host != nullptr ? host->controllerForToken(token) : nullptr;
+                }));
         // Step-3 image editing: an edit session always starts from the committed decoded
-        // buffer (never a derived channel view) and saves to a copy.
+        // buffer (never a derived channel view) and saves to a copy. The editable source is
+        // the active task's controller, so switching tabs cannot edit another tab's pixels.
         imageEdit_ = std::make_unique<ImageEditController>();
-        imageEdit_->setSourceImageProvider([review = imageReview_.get()](const int slot) {
-            return review->rawImageForSlot(slot);
+        imageEdit_->setSourceImageProvider([host = imageTasks_.get()](const int slot) {
+            ImageReviewController* const active =
+                host != nullptr ? host->activeController() : nullptr;
+            return active != nullptr ? active->rawImageForSlot(slot) : QImage{};
         });
         engine->rootContext()->setContextProperty(QStringLiteral("imageEdit"), imageEdit_.get());
         engine->addImageProvider(QStringLiteral("dvs-edit"),
                                  new EditImageProvider(imageEdit_.get()));
         folderPairs_ = std::make_unique<ImageFolderPairModel>();
         folderPairs_->setAsyncPairOpener(
-            [review = imageReview_.get()](
+            [host = imageTasks_.get()](
                 const QUrl& primary, const QUrl& secondary, const int pairId, QString* error) {
-                // T4: accept the candidate asynchronously. The controller keeps the previous
-                // committed pair visible until both sides decode, then emits openFinished once.
-                const int requestId = review->requestOpenPair(primary, secondary, pairId);
-                if (requestId <= 0 && error != nullptr) {
-                    *error = review->errorText();
-                }
-                return requestId;
+                // Folder rows open into the active image tab, creating one only when the
+                // workspace is still empty. The host keeps the previous committed pair
+                // visible until both sides decode, then emits openFinished once.
+                return host != nullptr
+                           ? host->requestOpenPairInActiveTask(primary, secondary, pairId, error)
+                           : -1;
             });
-        folderPairs_->setAsyncPairCancel([review = imageReview_.get()](const int requestId) {
-            review->cancelOpenRequest(requestId);
+        folderPairs_->setAsyncPairCancel([host = imageTasks_.get()](const int requestId) {
+            if (host != nullptr) {
+                host->cancelOpenRequest(requestId);
+            }
         });
         // T6: single-sided rows open the side that exists. The row identity rides on the
         // request as pairId, so the completion can advance that row's selection; each
         // terminal handler ignores request ids it does not own.
         folderPairs_->setSingleSideOpener(
-            [review = imageReview_.get()](const QUrl& url, const int row, QString* error) {
-                const int requestId = review->requestOpenPrimary(url, row);
-                if (requestId <= 0 && error != nullptr) {
-                    *error = review->errorText();
-                }
-                return requestId;
+            [host = imageTasks_.get()](const QUrl& url, const int row, QString* error) {
+                return host != nullptr ? host->requestOpenPrimaryInActiveTask(url, row, error) : -1;
             });
         QObject::connect(
-            imageReview_.get(),
-            &ImageReviewController::openFinished,
+            imageTasks_.get(),
+            &ImageTaskHost::controllerOpenFinished,
             folderPairs_.get(),
             [folderPairs = folderPairs_.get()](
                 const int requestId, const int pairId, const bool success, const QString& error) {
@@ -328,6 +336,11 @@ public:
         issueLog_->setPreferences(&preferences);
         issueLog_->setFolderModel(folderPairs_.get());
         issueLog_->setImageController(imageReview_.get());
+        QObject::connect(imageTasks_.get(), &ImageTaskHost::activeChanged, issueLog_.get(), [this] {
+            ImageReviewController* const active =
+                imageTasks_ != nullptr ? imageTasks_->activeController() : nullptr;
+            issueLog_->setImageController(active != nullptr ? active : imageReview_.get());
+        });
         engine->rootContext()->setContextProperty(QStringLiteral("issueLog"), issueLog_.get());
         // P03 protocol import and generated-frame navigation. Optional like the issue log: the
         // composition root owns the persistence adapter, and when it is absent the protocol row
@@ -481,12 +494,10 @@ public:
                 if (!*sceneGraphInitializedMarked) {
                     *sceneGraphInitializedMarked = true;
                     markStartupMilestone("sg-initialized");
-                    // The main window has a first frame, so the splash has done
-                    // its job. requestDismiss() is non-blocking and safe from
-                    // this render thread; exec() joins the worker.
-                    if (splash_ != nullptr) {
-                        splash_->requestDismiss();
-                    }
+                    // Not the splash dismissal point: the scene graph existing only
+                    // proves the renderer is ready, and the window stays an
+                    // unrendered black block until the first frame is swapped. The
+                    // frameSwapped handler below owns the dismissal.
                 }
             },
             Qt::DirectConnection);
@@ -500,10 +511,28 @@ public:
             window,
             &QQuickWindow::frameSwapped,
             window,
-            [windowFirstFrameMarked] {
+            [windowFirstFrameMarked, window, this] {
                 if (!*windowFirstFrameMarked) {
                     *windowFirstFrameMarked = true;
                     markStartupMilestone("window-first-frame");
+                    // The window was shown with opacity 0 because between show() and
+                    // this first swap it is on screen but unrendered - the black
+                    // block. The first presented frame is therefore also the reveal
+                    // moment: make the window visible and dismiss the splash, whose
+                    // whole job is to cover that gap. setOpacity must run on the GUI
+                    // thread, so it is queued (the event loop starts right after
+                    // load()); requestDismiss() is non-blocking and safe from this
+                    // render thread. The worker ends on its own and is reaped by the
+                    // splash destructor (or by its lifetime ceiling if no frame ever
+                    // arrives). splash_ is assigned before show(), so no frame can
+                    // swap before the pointer is set.
+                    if (!options_.smokeMode) {
+                        QMetaObject::invokeMethod(
+                            window, [window] { window->setOpacity(1.0); }, Qt::QueuedConnection);
+                    }
+                    if (splash_ != nullptr) {
+                        splash_->requestDismiss();
+                    }
                 }
             },
             Qt::DirectConnection);
@@ -572,10 +601,20 @@ public:
         }
 #endif
         markStartupMilestone("native-chrome");
-        // Hand the splash over before show(): show() is where the render thread starts and can
-        // emit sceneGraphInitialized, and that handler reads splash_ to dismiss it. Assigning
-        // afterwards both loses the early dismissal and races the render thread's read.
+        // Hand the splash over before show(): show() is where the render thread
+        // starts, and both the sceneGraphInitialized and frameSwapped handlers run
+        // on that thread - the latter reads splash_ to dismiss it. Assigning
+        // afterwards both loses the dismissal and races the render thread's read.
         splash_ = std::move(splashGuard.pending);
+        // The window must go through show() before it can render anything (show is
+        // what starts the scene graph), and between show() and the first swap the
+        // compositor fills its surface with black. Showing it fully transparent
+        // keeps the pipeline identical while making that black block invisible; the
+        // frameSwapped handler reveals it once real content exists. Smoke mode
+        // stays invisible for its whole run and sets its own opacity below.
+        if (!options_.smokeMode) {
+            window->setOpacity(0.0);
+        }
         markStartupMilestone("show-enter");
         window_->show();
         markStartupMilestone("post-show");
@@ -604,13 +643,19 @@ public:
         if (!engine_ || window_ == nullptr) {
             return EXIT_FAILURE;
         }
-        // The splash worker owns an HWND and its own message loop. Joining here
-        // is safe: the render thread has already asked it to close and it is
-        // idle, so this is not a wait on a busy thread.
-        if (splash_ != nullptr) {
-            splash_->requestDismiss();
-            splash_->join();
-            splash_.reset();
+        // exec() deliberately does not dismiss the splash. Dismissal belongs to the
+        // first frameSwapped, which may only fire once this event loop is running;
+        // force-dismissing here would re-expose the gap the splash is covering, and
+        // joining an undismissed worker would block the GUI thread before the loop
+        // that the first frame needs. The worker ends itself after the dismissal (or
+        // its lifetime ceiling); the splash destructor, which runs after this loop
+        // returns, reaps the thread.
+        if (!options_.smokeMode) {
+            // Safety net for the opacity-0 reveal: if no frame was ever swapped, the
+            // queued setOpacity(1.0) never ran and a permanently transparent window
+            // would hide even the error UI, so after a bound far beyond any healthy
+            // startup the window is revealed regardless. Idempotent otherwise.
+            QTimer::singleShot(3'000, window_, [window = window_] { window->setOpacity(1.0); });
         }
         return application_.exec();
     }
@@ -664,7 +709,7 @@ public:
         }
         QVariant opened;
         if (!QMetaObject::invokeMethod(window_,
-                                       "performImageReview",
+                                       "openImageInNewTab",
                                        Q_RETURN_ARG(QVariant, opened),
                                        Q_ARG(QVariant, QVariant{urls}))) {
             return false;
@@ -726,7 +771,7 @@ public:
         urls.push_back(url);
         QVariant opened;
         if (!QMetaObject::invokeMethod(window_,
-                                       "performImageReview",
+                                       "openImageInNewTab",
                                        Q_RETURN_ARG(QVariant, opened),
                                        Q_ARG(QVariant, QVariant{urls}))) {
             return false;
@@ -1174,6 +1219,9 @@ public:
         engine_.reset();
         sessionFacade_.reset();
         shellController_.reset();
+        // The engine owns the image providers; their token resolver points at the host, so
+        // the host must outlive the engine.
+        imageTasks_.reset();
         imageReview_.reset();
         QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
     }
@@ -1242,6 +1290,7 @@ private:
     std::unique_ptr<VideoFolderModel> videoFolder_;
     std::unique_ptr<ReviewSessionFacade> sessionFacade_;
     std::unique_ptr<ImageReviewController> imageReview_;
+    std::unique_ptr<ImageTaskHost> imageTasks_;
     std::unique_ptr<ImageFolderPairModel> folderPairs_;
     std::unique_ptr<ImageFolderCursor> imageFolderCursor_;
     application::IIssueRecordRepository* issueRecordRepository_ = nullptr;

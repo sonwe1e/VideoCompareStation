@@ -30,6 +30,7 @@
         <file alias="PixelGrid.qml">qml/PixelGrid.qml</file>
         <file alias="EmptyReviewView.qml">qml/EmptyReviewView.qml</file>
         <file alias="ImageWorkspace.qml">qml/ImageWorkspace.qml</file>
+        <file alias="ImageTaskTabs.qml">qml/ImageTaskTabs.qml</file>
         <file alias="ImageEditDialogs.qml">qml/ImageEditDialogs.qml</file>
         <file alias="FolderPairSidebar.qml">qml/FolderPairSidebar.qml</file>
         <file alias="VideoFolderSidebar.qml">qml/VideoFolderSidebar.qml</file>

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <string>
 #include <thread>
 
@@ -9,7 +10,7 @@ namespace dvs::ui {
 // A native startup splash that owns its own thread and its own HWND.
 //
 // Why it is not QML: the gap it has to cover is `context-ready -> qml-loaded`
-// (~550 ms) plus `show-enter -> sg-initialized` (~180 ms), and the GUI thread is
+// (~550 ms) plus `show-enter -> first presented frame`, and the GUI thread is
 // synchronously blocked for all of it. A QQuickWindow cannot paint before the
 // event loop runs, so a QML splash would itself be a blank window. A worker
 // thread with a plain GDI window paints while the GUI thread is still busy.
@@ -20,11 +21,18 @@ namespace dvs::ui {
 //    after the event loop is up, where the worker is already idle.
 //  - requestDismiss() is idempotent and safe before show(), so every early
 //    return in DesktopApplication::load() can dismiss through a guard.
+//  - The worker never assumes a dismissal will arrive: once maxLifetime has
+//    passed since show() it closes itself, so a launch whose window never
+//    presents a frame cannot strand a topmost splash over the desktop.
 //  - Any failure to create the window degrades to "no splash"; it must never
 //    stop or delay startup.
 class StartupSplash final {
 public:
-    StartupSplash() = default;
+    // The first presented frame normally dismisses the splash in well under a
+    // second; the ceiling only exists so a broken launch cannot keep it forever.
+    static constexpr std::chrono::milliseconds kDefaultMaxLifetime{std::chrono::seconds{10}};
+
+    explicit StartupSplash(std::chrono::milliseconds maxLifetime = kDefaultMaxLifetime);
     ~StartupSplash();
     StartupSplash(const StartupSplash&) = delete;
     StartupSplash& operator=(const StartupSplash&) = delete;
@@ -49,6 +57,7 @@ private:
     // render thread; atomic because a plain pointer read would be a race.
     std::atomic<void*> hwnd_{nullptr};
     std::thread worker_;
+    std::chrono::milliseconds maxLifetime_{kDefaultMaxLifetime};
 };
 
 } // namespace dvs::ui

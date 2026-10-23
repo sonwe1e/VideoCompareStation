@@ -188,3 +188,25 @@ TEST(StartupSplashTests, RepeatedCreateAndDropNeverLeavesAWindowBehind) {
     }
     EXPECT_EQ(countSplashWindows(), 0) << "a dropped splash left a window behind";
 }
+
+// The splash's dismissal owner is the first presented frame of the main window.
+// If that frame never arrives (graphics failure, hung launch), a topmost splash
+// parked over the desktop forever would make the broken launch worse, so the
+// worker must close itself once its lifetime ceiling passes. The destructor's
+// own dismiss cannot stand in for this: the assertion below runs while the
+// splash object is still alive, so only the worker's self-timeout can remove
+// the window.
+TEST(StartupSplashTests, WorkerClosesItselfOnceItsLifetimeCeilingPasses) {
+    ASSERT_EQ(countSplashWindows(), 0) << "a splash window leaked in from another test";
+    {
+        dvs::ui::StartupSplash splash{std::chrono::milliseconds(200)};
+        splash.show("CompareStation", "lifetime ceiling");
+        ASSERT_TRUE(waitFor([&] { return countSplashWindows() > 0 && splash.windowVisible(); },
+                            std::chrono::milliseconds(5000)))
+            << "show never produced a native splash window";
+        EXPECT_TRUE(waitFor([&] { return countSplashWindows() == 0 && !splash.windowVisible(); },
+                            std::chrono::milliseconds(5000)))
+            << "the splash outlived its lifetime ceiling without any dismissal";
+    }
+    ASSERT_EQ(countSplashWindows(), 0) << "the self-timed splash left a window behind";
+}

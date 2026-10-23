@@ -465,6 +465,11 @@ public:
     Q_INVOKABLE void updateCursorPixel(int imageSlot, qreal imageX, qreal imageY);
     Q_INVOKABLE void clearCursorPixel();
     Q_INVOKABLE QString imageUrl(int imageSlot) const;
+    // Task identity for the still-image tab host. It only namespaces the image-provider URL;
+    // the host sets it before a request and never exposes it as app state. Empty keeps the
+    // historical single-controller URL shape used by isolated tests and harnesses.
+    void setImageToken(const QString& token);
+    [[nodiscard]] QString imageToken() const noexcept;
 
     // T4 asynchronous entries. Each returns a positive request id when accepted; the final
     // commit or error is delivered through openFinished on the GUI thread. A newer request
@@ -593,6 +598,7 @@ private:
     int wipeOrientation_ = 0;
     qreal fadePosition_ = 0.5;
     int contentGeneration_ = 0;
+    QString imageToken_;
     int maxAbsDifference_ = 0;
     double meanAbsDifference_ = 0.0;
     int peakAlphaDifference_ = 0;

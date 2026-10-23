@@ -29,6 +29,15 @@ Rectangle {
     signal swapSidesRequested
     signal replacePrimaryRequested
     signal replaceSecondaryRequested
+    signal imageTabActivated(int index)
+    signal imageTabCloseRequested(int index)
+    signal editStartRefused(string reason)
+    // Tab heap supplied by the main window (the C++ task host owns the actual controllers).
+    // The defaults keep isolated harnesses and the single-task contract tests unchanged.
+    property var imageTabsModel: []
+    property int imageTabsActiveIndex: -1
+    property int imageTabsDirtyIndex: -1
+    property string editStartBlockedReason: ""
     // Drop-to-replace on the A/B source chips carries the dropped URL directly, so Main can
     // stage the in-place slot replace (requestReplacePrimary/Secondary) without a file
     // dialog. Mirrors the video strip's replaceDropped(identity, url) contract.
@@ -54,6 +63,17 @@ Rectangle {
     onVisibleChanged: {
         if (visible)
             Qt.callLater(() => control.forceActiveFocus());
+    }
+    // Tab switching rebinds this workspace to another task's controller. Every value that
+    // described the previous task's observation must go away; retaining a stale pixel reading
+    // or peek would make the visible image look like it produced that value.
+    onControllerChanged: {
+        control.endPeek();
+        control.hoverPoint = null;
+        control.pairSample = null;
+        control.cropSelection = null;
+        control.singleViewShowSecondary = false;
+        control.marqueeNoticeText = "";
     }
 
     // Typed, non-nullable in every real session (the main window hands in the composition
@@ -92,7 +112,22 @@ Rectangle {
     // always starts from the committed original, and the workspace only *displays* the
     // working copy — comparison and difference statistics keep using the originals.
     property var imageEdit: null
-    readonly property bool editModeActive: Boolean(imageEdit && imageEdit.active)
+    // A tab switch can leave the single edit session attached to another tab. The session
+    // keeps its working copy, but this workspace must not present it as the current images.
+    readonly property bool editSessionMatchesActive: {
+        if (!imageEdit || !imageEdit.active)
+            return true;
+        const label = String(imageEdit.sourceLabel || "");
+        if (label.length === 0)
+            return true;
+        return control.sameLocalPath(label, imageReview ? imageReview.primaryPath : "") || control.sameLocalPath(label, imageReview ? imageReview.secondaryPath : "");
+    }
+    readonly property bool editModeActive: Boolean(imageEdit && imageEdit.active && editSessionMatchesActive)
+    function sameLocalPath(first, second) {
+        const left = String(first || "").replace(/\\/g, "/").toLowerCase();
+        const right = String(second || "").replace(/\\/g, "/").toLowerCase();
+        return left.length > 0 && left === right;
+    }
     // The scale/fill dialogs are modal popups that own the keyboard while open; Main.qml reads
     // this to keep workspace shortcuts inert behind them (the dialogs themselves carry the
     // popupInputContext marker for the focus walk).
@@ -901,6 +936,10 @@ Rectangle {
     }
 
     function beginImageEdit() {
+        if (control.editStartBlockedReason.length > 0) {
+            control.editStartRefused(control.editStartBlockedReason);
+            return false;
+        }
         if (!imageEdit)
             return false;
         const slot = control.editDisplayedSlot();
@@ -3522,6 +3561,17 @@ Rectangle {
                 top: parent.top
             }
             // Bands butt exactly: a Column's default spacing is 0, no literal needed.
+
+            ImageTaskTabs {
+                width: parent.width
+                height: visible ? 34 : 0
+                visible: control.imageTabsModel && control.imageTabsModel.length > 0
+                tabsModel: control.imageTabsModel
+                activeIndex: control.imageTabsActiveIndex
+                dirtyIndex: control.imageTabsDirtyIndex
+                onTabActivated: index => control.imageTabActivated(index)
+                onTabCloseRequested: index => control.imageTabCloseRequested(index)
+            }
 
             // Row 1 — sources & session. The A/B chips give the pair a visible identity
             // (click = direct look, drop = replace that slot); the session commands sit in

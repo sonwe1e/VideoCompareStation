@@ -1906,13 +1906,27 @@ QString ImageReviewController::probeColorText(const int format) const {
 QString ImageReviewController::imageUrl(const int imageSlot) const {
     // A display filter changes the provider result without changing the decoded material
     // generation (and without invalidating its probe). Give Qt's image cache a distinct URL.
-    return QStringLiteral("image://vcs-review/%1/%2/%3/%4/%5/%6")
-        .arg(imageSlot)
-        .arg(contentGeneration_)
-        .arg(viewMode_)
-        .arg(alphaFilterEnabled_ ? 1 : 0)
-        .arg(alphaThreshold_)
-        .arg(colorDisplayEnabled_ ? 1 : 0);
+    QString url = QStringLiteral("image://vcs-review/%1/%2/%3/%4/%5/%6")
+                      .arg(imageSlot)
+                      .arg(contentGeneration_)
+                      .arg(viewMode_)
+                      .arg(alphaFilterEnabled_ ? 1 : 0)
+                      .arg(alphaThreshold_)
+                      .arg(colorDisplayEnabled_ ? 1 : 0);
+    if (!imageToken_.isEmpty()) {
+        // Two tasks can legitimately share slot and generation values; the token keeps their
+        // cached textures apart while the provider resolves the same token back to the task.
+        url += QStringLiteral("?w=") + imageToken_;
+    }
+    return url;
+}
+
+void ImageReviewController::setImageToken(const QString& token) {
+    imageToken_ = token.trimmed();
+}
+
+QString ImageReviewController::imageToken() const noexcept {
+    return imageToken_;
 }
 
 QImage ImageReviewController::imageForSlot(const int imageSlot) const {

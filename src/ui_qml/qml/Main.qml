@@ -153,6 +153,44 @@ ApplicationWindow {
     required property ImageReviewController stillImageController
     required property ColorClipboardController colorClipboardService
     // qmllint disable unqualified
+    // Multi-task host from the composition root. Absent in isolated harnesses, where the
+    // single stillImageController remains the whole image workspace.
+    readonly property var imageTaskHost: typeof imageTasks !== "undefined" ? imageTasks : null
+    // qmllint enable unqualified
+    readonly property ImageReviewController activeImageController: root.imageTaskHost && root.imageTaskHost.activeController ? root.imageTaskHost.activeController : root.stillImageController
+    readonly property var imageTabList: root.imageTaskHost ? root.imageTaskHost.tabs : []
+    readonly property int imageTabCount: root.imageTaskHost ? Number(root.imageTaskHost.count) : 0
+    readonly property int imageTabActiveIndex: root.imageTaskHost ? Number(root.imageTaskHost.activeIndex) : -1
+    // An in-place image or folder open still commits into the task that started it. Switching
+    // or closing the active tab during that window would apply the terminal to the wrong task.
+    readonly property bool imageTabOpenPending: root.pendingImageRequestId > 0 || root.pendingFolderPairRow >= 0 || Boolean(root.folderPairModel && root.folderPairModel.openPending)
+    // Which tab the single edit session belongs to. With no host the historical
+    // single-controller behaviour is preserved by returning -1 for both sides.
+    readonly property int imageEditTabIndex: {
+        if (!root.imageEditService || !root.imageEditService.active)
+            return -1;
+        const tabs = root.imageTabList;
+        if (!tabs || tabs.length === 0)
+            return -1;
+        const label = String(root.imageEditService.sourceLabel || "");
+        if (label.length === 0)
+            return root.imageTabActiveIndex;
+        for (let index = 0; index < tabs.length; ++index) {
+            const tab = tabs[index];
+            if (root.sameFilePath(label, String(tab.primaryPath || "")) || root.sameFilePath(label, String(tab.secondaryPath || "")))
+                return index;
+        }
+        return -1;
+    }
+    readonly property int imageTabDirtyIndex: root.imageEditService && root.imageEditService.active && root.imageEditService.dirty ? root.imageEditTabIndex : -1
+    readonly property string imageEditStartBlockedReason: {
+        if (!root.imageEditService || !root.imageEditService.active || !root.imageEditService.dirty)
+            return "";
+        if (root.imageEditTabIndex === root.imageTabActiveIndex)
+            return "";
+        return qsTr("另一个标签页有未保存的编辑副本：请先切回该标签页，另存副本或结束编辑。");
+    }
+    // qmllint disable unqualified
     // Step-3 image editing service from the composition root; the typeof guard keeps
     // lightweight QML-only harnesses valid (they simply see no edit tools).
     readonly property var imageEditService: typeof imageEdit !== "undefined" ? imageEdit : null
@@ -163,10 +201,10 @@ ApplicationWindow {
     readonly property var imageFolderCursorModel: typeof imageFolderCursor !== "undefined" ? imageFolderCursor : null
     readonly property bool imageFolderBrowseActive: root.imageFolderCursorModel !== null && root.imageFolderCursorModel.count > 1
     readonly property string imageFolderBrowseText: root.imageFolderBrowseActive ? qsTr("%1 / %2").arg(root.imageFolderCursorModel.currentIndex).arg(root.imageFolderCursorModel.count) : ""
-    // Replacing or closing the image task ends the edit session, and the working copy lives only
-    // in memory. Every entry point that would do so asks this first, so the same refusal the
-    // single-side close uses also covers dialogs, drops, folder comparison and Ctrl+W.
-    readonly property string imageLeaveBlockedReason: (root.imageEditService && root.imageEditService.active && root.imageEditService.dirty) ? qsTr("编辑副本有未保存修改：请先「另存副本…」或「结束编辑」，再切换图片。") : ""
+    // Replacing or closing the active image task ends the edit session, and the working copy
+    // lives only in memory. A session that belongs to another tab is allowed to sit there while
+    // this tab is replaced; only the active session's dirty state can refuse the action.
+    readonly property string imageLeaveBlockedReason: (root.imageEditService && root.imageEditService.active && root.imageEditService.dirty && root.imageEditTabIndex === root.imageTabActiveIndex) ? qsTr("编辑副本有未保存修改：请先「另存副本…」或「结束编辑」，再切换图片。") : ""
     readonly property var videoFolderModel: typeof videoFolder !== "undefined" ? videoFolder : null
     property bool videoFolderSidebarVisible: false
     // videoFolderListVisible / videoFolderInset live with the other U01 layout properties
@@ -217,7 +255,7 @@ ApplicationWindow {
     // Workspace-level help rows. The sequences come from ShortcutCatalog.js - the same
     // constants the bindings and the menu labels use - and the contract test cross-checks
     // rows, labels and bindings against each other.
-    readonly property var workspaceHelpEntries: [[ShortcutCatalog.openVideos, qsTr("打开文件")], [ShortcutCatalog.openVideoFolder, qsTr("打开文件夹")], [ShortcutCatalog.addVideo, qsTr("向当前对比添加视频")], [ShortcutCatalog.openImagePair, qsTr("打开图片对")], [ShortcutCatalog.addImage, qsTr("向当前图片对添加图片")], [ShortcutCatalog.compareImageFolders, qsTr("对比图片文件夹")], [ShortcutCatalog.closeCurrentTask, qsTr("关闭当前任务")], [ShortcutCatalog.captureIssue, qsTr("记录当前问题，可填备注")]]
+    readonly property var workspaceHelpEntries: [[ShortcutCatalog.openVideos, qsTr("打开文件")], [ShortcutCatalog.openVideoFolder, qsTr("打开文件夹")], [ShortcutCatalog.addVideo, qsTr("向当前对比添加视频")], [ShortcutCatalog.openImagePair, qsTr("打开图片对")], [ShortcutCatalog.addImage, qsTr("向当前图片对添加图片")], [ShortcutCatalog.compareImageFolders, qsTr("对比图片文件夹")], [ShortcutCatalog.closeCurrentTask, qsTr("关闭当前任务")], [ShortcutCatalog.nextImageTab, qsTr("下一个图片标签")], [ShortcutCatalog.previousImageTab, qsTr("上一个图片标签")], [ShortcutCatalog.captureIssue, qsTr("记录当前问题，可填备注")]]
     property bool pendingComparisonPreservesPosition: false
     property bool pendingSidebarComparison: false
     property bool pendingNewReviewWantsThreeUp: false
@@ -353,9 +391,9 @@ ApplicationWindow {
         root.differencePeekLocked = false;
     }
     readonly property bool singleMode: sourceCount === 1
-    readonly property bool imageHasContent: Boolean(stillImageController && (stillImageController.hasPrimary || stillImageController.hasSecondary))
+    readonly property bool imageHasContent: Boolean(root.activeImageController && (root.activeImageController.hasPrimary || root.activeImageController.hasSecondary))
     readonly property bool videoHasSession: sourceCount > 0
-    readonly property bool activeTaskHasMedia: workspaceSession.imageActive ? imageHasContent : videoHasSession
+    readonly property bool activeTaskHasMedia: workspaceSession.imageActive ? (imageHasContent || imageTabCount > 0) : videoHasSession
     readonly property int preferredOscState: preferences ? Number(preferences.oscMode) : -1
     property bool immersiveOscRevealed: false
     readonly property int oscState: sourceCount === 0 ? 2 : (!chromeVisible ? (immersiveOscRevealed ? 1 : 2) : (preferredOscState >= 0 ? preferredOscState : (singleMode ? 1 : 0)))
@@ -766,13 +804,25 @@ ApplicationWindow {
     // An empty cursor means the current task is a pair or folder session, which must not gain a
     // directory list here.
     function refreshImageFolderCursor() {
-        if (!root.stillImageController || !root.imageFolderCursorModel)
+        if (!root.activeImageController || !root.imageFolderCursorModel)
             return false;
         if (root.imageFolderCursorModel.count <= 0)
             return false;
-        if (!root.stillImageController.hasPrimary || root.stillImageController.hasSecondary)
+        if (!root.activeImageController.hasPrimary || root.activeImageController.hasSecondary)
             return false;
-        root.imageFolderCursorModel.setCurrentFile(root.stillImageController.primaryPath);
+        root.imageFolderCursorModel.setCurrentFile(root.activeImageController.primaryPath);
+        return root.imageFolderCursorModel.count > 0;
+    }
+    // A tab switch owns its own cursor hand-off: a single-image tab re-scans its directory,
+    // while a pair tab must drop the previous single-image neighbour list.
+    function armImageFolderCursorForActiveTab() {
+        if (!root.activeImageController || !root.imageFolderCursorModel)
+            return false;
+        if (!root.activeImageController.hasPrimary || root.activeImageController.hasSecondary) {
+            root.imageFolderCursorModel.clear();
+            return false;
+        }
+        root.imageFolderCursorModel.setCurrentFile(root.activeImageController.primaryPath);
         return root.imageFolderCursorModel.count > 0;
     }
     onActiveChanged: {
@@ -1114,7 +1164,7 @@ ApplicationWindow {
         }
 
         if (action.kind === "openImages") {
-            performImageReview(action.urls);
+            openImageInNewTab(action.urls);
 
             return;
         }
@@ -1252,8 +1302,8 @@ ApplicationWindow {
     // merely hide the dialog. The already-committed canvas is untouched.
 
     function cancelWorkspaceOpen() {
-        if (root.pendingImageRequestId > 0 && root.stillImageController) {
-            root.stillImageController.cancelOpenRequest(root.pendingImageRequestId);
+        if (root.pendingImageRequestId > 0 && root.activeImageController) {
+            root.activeImageController.cancelOpenRequest(root.pendingImageRequestId);
 
             root.pendingImageRequestId = -1;
 
@@ -1286,7 +1336,7 @@ ApplicationWindow {
 
         const kind = root.pendingImageOpenKind;
 
-        const target = root.stillImageController;
+        const target = root.activeImageController;
 
         root.pendingImageRequestId = -1;
 
@@ -1454,7 +1504,23 @@ ApplicationWindow {
 
     function closeCurrentTask() {
         if (workspaceSession.imageActive) {
-            const imageTarget = root.stillImageController;
+            if (root.imageTaskHost && root.imageTabCount > 0) {
+                const tabIndex = root.imageTabActiveIndex;
+                if (tabIndex < 0)
+                    return false;
+                if (root.imageTabOpenPending) {
+                    root.showIntentMessage(qsTr("正在打开图片，请稍候再关闭标签。"));
+                    return false;
+                }
+                if (root.imageTabDirtyIndex === tabIndex) {
+                    root.showIntentMessage(root.imageLeaveBlockedReason);
+                    return false;
+                }
+                if (root.imageEditService && root.imageEditService.active && root.imageEditTabIndex === tabIndex)
+                    root.imageEditService.endSession();
+                return Boolean(root.imageTaskHost.closeActive());
+            }
+            const imageTarget = root.activeImageController;
 
             if (!imageTarget || (!root.imageHasContent && root.pendingImageRequestId <= 0))
                 return false;
@@ -1587,7 +1653,7 @@ ApplicationWindow {
             workspaceSession.cancelOpen();
             return false;
         }
-        if (!performImageReview([url])) {
+        if (!openImageInNewTab([url])) {
             videoFolderModel.cancelPendingImageOpen();
             workspaceSession.cancelOpen();
             return false;
@@ -1618,7 +1684,7 @@ ApplicationWindow {
         let openReason = "";
         // Still images open in the image workspace; they never join a video comparison.
         if (videoFolderModel && videoFolderModel.isImageUrl(url)) {
-            if (!stillImageController)
+            if (!root.activeImageController)
                 openReason = qsTr("图片打开服务暂不可用");
             else if (busy || videoFolderModel.openPending || (reviewInputDialogs && reviewInputDialogs.modalVisible))
                 openReason = qsTr("请等待当前打开操作完成");
@@ -1750,7 +1816,7 @@ ApplicationWindow {
         workspaceSession.beginOpen(workspaceSession.imageMedia);
 
         if (files.length === 1)
-            return performImageReview([files[0]]);
+            return openImageInNewTab([files[0]]);
 
         return performImagePairSelection(files);
     }
@@ -1788,7 +1854,7 @@ ApplicationWindow {
     }
 
     function requestImageSwapSides() {
-        const target = root.stillImageController;
+        const target = root.activeImageController;
         if (!target || !target.hasPair)
             return false;
         if (!target.swapSides()) {
@@ -1802,7 +1868,7 @@ ApplicationWindow {
     }
 
     function requestImageReplacePrimary() {
-        const target = root.stillImageController;
+        const target = root.activeImageController;
         if (!target || !target.hasPrimary)
             return false;
         // In-place slot replace: no workspace beginOpen — failure must not tear down
@@ -1812,7 +1878,7 @@ ApplicationWindow {
     }
 
     function requestImageReplaceSecondary() {
-        const target = root.stillImageController;
+        const target = root.activeImageController;
         if (!target || !target.hasPrimary)
             return false;
         imageReplaceSecondaryDialog.open();
@@ -1820,7 +1886,7 @@ ApplicationWindow {
     }
 
     function performImageSideReplace(url, side) {
-        const target = root.stillImageController;
+        const target = root.activeImageController;
         if (!target || !target.hasPrimary || !url || url.toString().length === 0)
             return false;
         if (root.pendingImageRequestId > 0)
@@ -2345,13 +2411,13 @@ ApplicationWindow {
         if (!payload)
             return;
 
-        if (!root.imageWorkspaceActive || !root.stillImageController) {
+        if (!root.imageWorkspaceActive || !root.activeImageController) {
             root.abandonPendingImageIssueRestore(qsTr("恢复已取消：工作区已切换"));
 
             return;
         }
 
-        const target = root.stillImageController;
+        const target = root.activeImageController;
         const pairModel = root.folderPairModel;
         const recordedRow = Number(payload.rowIndex);
         const leftPath = String(payload.leftPath || "");
@@ -2570,10 +2636,15 @@ ApplicationWindow {
         return true;
     }
     function performImageReview(normalizedUrls) {
-        const target = root.stillImageController;
+        const target = root.activeImageController;
 
         if (!target)
             return false;
+        // A restore or an internal in-place open can start with no image task at all. It must
+        // still own a tab, or the resident workspace would commit content the tab strip and
+        // host do not know about.
+        if (root.imageTaskHost && root.imageTabCount <= 0)
+            return root.openImageInNewTab(normalizedUrls);
         if (root.imageTaskSwitchBlocked())
             return false;
         if (!normalizedUrls || normalizedUrls.length < 1 || normalizedUrls.length > 2) {
@@ -2626,6 +2697,151 @@ ApplicationWindow {
 
         return true;
     }
+    // New-tab open used by the file dialogs, drops, the sidebar and external opens. A task in
+    // the middle of an in-place open owns pendingImageRequestId; switching active tabs then
+    // would apply that commit to the wrong task, so the brief wait is explicit.
+    function openImageInNewTab(normalizedUrls) {
+        if (!root.imageTaskHost)
+            return root.performImageReview(normalizedUrls);
+        if (!normalizedUrls || normalizedUrls.length < 1 || normalizedUrls.length > 2) {
+            const detail = qsTr("一次只能打开一张或两张图片。");
+
+            dropError = detail;
+            root.showIntentMessage(detail);
+            workspaceSession.cancelOpen();
+            return false;
+        }
+        if (root.pendingImageRequestId > 0 || root.imageTabOpenPending) {
+            root.showIntentMessage(qsTr("正在打开图片，请稍候再打开新的标签。"));
+            return false;
+        }
+        const accepted = Number(root.imageTaskHost.openImages(normalizedUrls));
+        if (!(accepted >= 0)) {
+            workspaceSession.cancelOpen();
+            return false;
+        }
+        workspaceSession.beginOpen(workspaceSession.imageMedia);
+        root.dropError = "";
+        if (root.activeImageController && (root.activeImageController.hasPrimary || root.activeImageController.hasSecondary))
+            root.adoptActiveImageTab();
+        return true;
+    }
+    // Commit a task switch/open to the visible workspace. This deliberately does not end a
+    // clean edit session and does not detach a folder session: both belong to the tab, not to
+    // the act of looking at it.
+    function adoptActiveImageTab() {
+        const target = root.activeImageController;
+        if (!target || (!target.hasPrimary && !target.hasSecondary))
+            return false;
+        root.ensureVideoPaused();
+        // The active task may change while the same workspace item stays resident. Assigning
+        // the typed controller explicitly is what makes the workspace rebind; a required
+        // property is not re-evaluated as a live binding after its initial creation.
+        if (root.imageWorkspace && root.imageWorkspace.controller !== target)
+            root.imageWorkspace.controller = target;
+        const identity = target.hasSecondary ? target.primaryPath + "\n" + target.secondaryPath : target.primaryPath;
+        workspaceSession.markCommitted(workspaceSession.imageMedia, identity);
+        root.showWorkspace(workspaceSession.imageMedia);
+        root.armImageFolderCursorForActiveTab();
+        root.focusActiveWorkspace();
+        return true;
+    }
+    function activateImageTab(index) {
+        if (!root.imageTaskHost)
+            return false;
+        if (root.imageTabOpenPending) {
+            root.showIntentMessage(qsTr("正在打开图片，请稍候再切换标签。"));
+            return false;
+        }
+        return Boolean(root.imageTaskHost.activate(Number(index)));
+    }
+    function closeImageTab(index) {
+        if (!root.imageTaskHost)
+            return false;
+        const tabIndex = Number(index);
+        if (root.imageTabOpenPending) {
+            root.showIntentMessage(qsTr("正在打开图片，请稍候再关闭标签。"));
+            return false;
+        }
+        if (root.imageTabDirtyIndex === tabIndex) {
+            root.showIntentMessage(root.imageLeaveBlockedReason);
+            return false;
+        }
+        if (root.imageEditService && root.imageEditService.active && root.imageEditTabIndex === tabIndex)
+            root.imageEditService.endSession();
+        return Boolean(root.imageTaskHost.closeAt(tabIndex));
+    }
+    function cycleImageTab(delta) {
+        if (!root.imageTaskHost || root.imageTabCount < 2)
+            return false;
+        if (root.imageTabOpenPending) {
+            root.showIntentMessage(qsTr("正在打开图片，请稍候再切换标签。"));
+            return false;
+        }
+        root.imageTaskHost.cycle(Number(delta));
+        return true;
+    }
+    function handleImageTaskHostActiveChanged() {
+        const host = root.imageTaskHost;
+        if (!host || Number(host.count) <= 0) {
+            // The closed task's controller may already be gone (owned tabs are destroyed with
+            // the task). Point the resident workspace back at the composition root's live
+            // controller before any later binding reads it.
+            if (root.imageWorkspace)
+                root.imageWorkspace.controller = root.stillImageController;
+            return;
+        }
+        const target = root.activeImageController;
+        if (!target || (!target.hasPrimary && !target.hasSecondary))
+            return;
+        root.adoptActiveImageTab();
+    }
+    function finishOpenedImageTask(index) {
+        const target = root.activeImageController;
+        if (!target)
+            return;
+        // A direct open is a new review context, not a folder-session row.
+        root.pendingImageRequestId = -1;
+        root.pendingImageOpenKind = "";
+        root.dropError = "";
+        root.detachFolderSession();
+        root.adoptActiveImageTab();
+        if (root.preferences) {
+            root.preferences.rememberMediaPath(target.primaryPath);
+            if (target.secondaryPath && target.secondaryPath.length > 0)
+                root.preferences.rememberMediaPath(target.secondaryPath);
+        }
+        if (root.videoFolderModel)
+            root.videoFolderModel.finishPendingImageOpen(true, "", target.primaryPath);
+        root.continueImageIssueRestore();
+    }
+    function handleImageTaskOpenFailure(error) {
+        const detail = String(error || "").length > 0 ? String(error) : qsTr("无法打开图片。");
+        root.dropError = detail;
+        root.showIntentMessage(detail);
+        workspaceSession.cancelOpen();
+        if (root.videoFolderModel)
+            root.videoFolderModel.cancelPendingImageOpen();
+        if (root.imageTabCount <= 0 && !root.videoHasSession)
+            root.focusActiveWorkspace();
+    }
+    function handleAllImageTasksClosed() {
+        root.pendingImageRequestId = -1;
+        root.pendingImageOpenKind = "";
+        root.pendingFolderPairRow = -1;
+        if (root.imageWorkspace)
+            root.imageWorkspace.controller = root.stillImageController;
+        if (root.imageEditService && root.imageEditService.active)
+            root.imageEditService.endSession();
+        if (root.imageFolderCursorModel)
+            root.imageFolderCursorModel.clear();
+        root.detachFolderSession();
+        workspaceSession.clearCommitted(workspaceSession.imageMedia);
+        if (root.videoHasSession)
+            root.showWorkspace(workspaceSession.videoMedia);
+        else
+            root.focusActiveWorkspace();
+    }
     // FLOW3 single-directory stepping. The cursor supplies a URL only; the ordinary image open
     // decides whether it commits, so a neighbour that fails to decode leaves the current image
     // on screen and the request-identity rules are the same ones a direct open already uses.
@@ -2669,7 +2885,7 @@ ApplicationWindow {
             return false;
         }
 
-        return performImageReview(selected);
+        return openImageInNewTab(selected);
     }
     function reviewUrls(urls, allowSingleSourceAppend, sidebarAppend = false) {
         const reviewed = controller.handleDroppedUrls(urls);
@@ -2685,7 +2901,7 @@ ApplicationWindow {
         const normalizedUrls = reviewed.urls;
 
         if (reviewed.kind === "images") {
-            const imageTarget = root.stillImageController;
+            const imageTarget = root.activeImageController;
 
             if (allowSingleSourceAppend && imageTarget && imageTarget.hasPrimary && !imageTarget.hasSecondary && normalizedUrls.length === 1) {
                 const primary = imageTarget.primaryPath;
@@ -3385,8 +3601,8 @@ ApplicationWindow {
             return Number.isFinite(fromSession) && controller.displayState === 2 ? fromSession : fromPref;
         }
         workspaceMode: root.workspaceMode
-        imageHasPrimary: Boolean(root.stillImageController && root.stillImageController.hasPrimary)
-        imageHasSecondary: Boolean(root.stillImageController && root.stillImageController.hasSecondary)
+        imageHasPrimary: Boolean(root.activeImageController && root.activeImageController.hasPrimary)
+        imageHasSecondary: Boolean(root.activeImageController && root.activeImageController.hasSecondary)
         automaticAlignmentPending: root.automaticAlignmentPending
         canConfirmAutomaticAlignment: root.canConfirmAutomaticAlignment
         canUndoAutomaticAlignment: root.canUndoAutomaticAlignment
@@ -3592,7 +3808,7 @@ ApplicationWindow {
     Shortcut {
         sequence: ShortcutCatalog.addImage
         context: Qt.ApplicationShortcut
-        enabled: root.inputContext === 0 && root.imageHasContent && !Boolean(root.stillImageController && root.stillImageController.hasSecondary)
+        enabled: root.inputContext === 0 && root.imageHasContent && !Boolean(root.activeImageController && root.activeImageController.hasSecondary)
         onActivated: root.requestImageAdd()
     }
 
@@ -3602,6 +3818,22 @@ ApplicationWindow {
         autoRepeat: false
         enabled: root.inputContext === 0 && root.activeTaskHasMedia
         onActivated: root.closeCurrentTask()
+    }
+
+    Shortcut {
+        sequence: ShortcutCatalog.nextImageTab
+        context: Qt.ApplicationShortcut
+        autoRepeat: false
+        enabled: root.inputContext === 0 && root.imageWorkspaceActive && root.imageTabCount > 1
+        onActivated: root.cycleImageTab(1)
+    }
+
+    Shortcut {
+        sequence: ShortcutCatalog.previousImageTab
+        context: Qt.ApplicationShortcut
+        autoRepeat: false
+        enabled: root.inputContext === 0 && root.imageWorkspaceActive && root.imageTabCount > 1
+        onActivated: root.cycleImageTab(-1)
     }
 
     Shortcut {
@@ -3718,7 +3950,7 @@ ApplicationWindow {
     }
 
     Connections {
-        target: root.stillImageController
+        target: root.activeImageController
 
         function onOpenFinished(requestId, pairId, success, error) {
             root.completeImageOpen(requestId, pairId, success, error);
@@ -3726,6 +3958,30 @@ ApplicationWindow {
 
         function onStateChanged() {
             root.continueImageIssueRestore();
+        }
+    }
+
+    Connections {
+        target: root.imageTaskHost
+
+        // Isolated harnesses may provide a minimal host stand-in; only the real host's
+        // signals are required for the tab routes exercised below.
+        ignoreUnknownSignals: true
+
+        function onActiveChanged() {
+            root.handleImageTaskHostActiveChanged();
+        }
+
+        function onTaskOpened(index) {
+            root.finishOpenedImageTask(index);
+        }
+
+        function onOpenFailed(error) {
+            root.handleImageTaskOpenFailure(error);
+        }
+
+        function onAllTasksClosed() {
+            root.handleAllImageTasksClosed();
         }
     }
 
@@ -4460,8 +4716,12 @@ ApplicationWindow {
             objectName: "imageWorkspaceRoot"
             anchors.fill: parent
             visible: root.imageWorkspaceActive
-            controller: root.stillImageController
+            controller: root.activeImageController
             imageEdit: root.imageEditService
+            imageTabsModel: root.imageTabList
+            imageTabsActiveIndex: root.imageTabActiveIndex
+            imageTabsDirtyIndex: root.imageTabDirtyIndex
+            editStartBlockedReason: root.imageEditStartBlockedReason
             pairModel: root.folderPairModel
             folderBrowseActive: root.imageFolderBrowseActive
             folderBrowseText: root.imageFolderBrowseText
@@ -4476,6 +4736,9 @@ ApplicationWindow {
             onSwapSidesRequested: root.requestImageSwapSides()
             onReplacePrimaryRequested: root.requestImageReplacePrimary()
             onReplaceSecondaryRequested: root.requestImageReplaceSecondary()
+            onImageTabActivated: index => root.activateImageTab(index)
+            onImageTabCloseRequested: index => root.closeImageTab(index)
+            onEditStartRefused: reason => root.showIntentMessage(reason)
             // A single image dropped on the A/B identity chip replaces exactly that side
             // through the same in-place swap the replace dialogs use; the other side, the
             // committed pair and the observation position stay put.
@@ -4487,6 +4750,10 @@ ApplicationWindow {
             onCloseSideRequested: sourceSlot => {
                 if (root.imageHasContent)
                     return;
+                if (root.imageTaskHost && root.imageTabCount > 0) {
+                    root.imageTaskHost.closeAt(root.imageTabActiveIndex);
+                    return;
+                }
                 if (root.videoHasSession)
                     root.showWorkspace(workspaceSession.videoMedia);
                 else
@@ -4532,7 +4799,7 @@ ApplicationWindow {
             const picked = selectedFile && selectedFile.toString().length > 0 ? selectedFile : currentFile;
 
             if (picked && picked.toString().length > 0)
-                root.performImageReview([picked]);
+                root.openImageInNewTab([picked]);
         }
         onRejected: root.cancelWorkspaceOpen()
     }

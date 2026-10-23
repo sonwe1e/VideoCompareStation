@@ -14,6 +14,7 @@
 #include "dvs/ui/ImageFolderCursor.h"
 #include "dvs/ui/ImageFolderPairModel.h"
 #include "dvs/ui/ImageReviewController.h"
+#include "dvs/ui/ImageTaskHost.h"
 #include "dvs/ui/InterpolationProtocolController.h"
 #include "dvs/ui/IssueLogController.h"
 #include "dvs/ui/MainWindowDependencies.h"
@@ -214,6 +215,41 @@ QQuickItem* openEditToolsItem(QObject* root, const QString& objectName) {
     }
     field->setProperty("value", value);
     return QMetaObject::invokeMethod(field, "valueModified");
+}
+
+// Types into an EdgeField the way a user does: focus the field's editor, select the current
+// digits, replace them with text-carrying key events and commit with Return. The forced
+// signal variant above proves the dialog wiring, not the path: the shipped defect (a typed
+// edge wrote the SpinBox value directly, so valueModified never fired and the aspect-locked
+// partner never followed) only reproduces through this real editing route.
+[[nodiscard]] bool typeEdgeFieldText(QQuickWindow* window, QQuickItem* field, const QString& text) {
+    if (!window || !field) {
+        return false;
+    }
+    auto* const input = field->property("contentItem").value<QQuickItem*>();
+    if (!input) {
+        return false;
+    }
+    QMetaObject::invokeMethod(input, "forceActiveFocus");
+    QMetaObject::invokeMethod(input, "selectAll");
+    for (const QChar& character : text) {
+        QKeyEvent press{QEvent::KeyPress,
+                        static_cast<int>(character.unicode()),
+                        Qt::NoModifier,
+                        QString{character}};
+        QKeyEvent release{QEvent::KeyRelease,
+                          static_cast<int>(character.unicode()),
+                          Qt::NoModifier,
+                          QString{character}};
+        QCoreApplication::sendEvent(window, &press);
+        QCoreApplication::sendEvent(window, &release);
+    }
+    QKeyEvent returnPress{QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier};
+    QKeyEvent returnRelease{QEvent::KeyRelease, Qt::Key_Return, Qt::NoModifier};
+    QCoreApplication::sendEvent(window, &returnPress);
+    QCoreApplication::sendEvent(window, &returnRelease);
+    QCoreApplication::processEvents();
+    return true;
 }
 
 // Hand-rolled 1x1 PNG bytes: the pair opener routes through the still-image decoder, so
@@ -706,33 +742,33 @@ public:
         facade = std::make_unique<ReviewSessionFacade>(*controller, preferences, *shell);
         folderPairs.setAsyncPairOpener(
             [this](const QUrl& primary, const QUrl& secondary, const int pairId, QString* error) {
+                if (imageTasks) {
+                    return imageTasks->requestOpenPairInActiveTask(
+                        primary, secondary, pairId, error);
+                }
                 const int requestId = imageReview.requestOpenPair(primary, secondary, pairId);
                 if (requestId <= 0 && error != nullptr) {
                     *error = imageReview.errorText();
                 }
                 return requestId;
             });
-        folderPairs.setAsyncPairCancel(
-            [this](const int requestId) { imageReview.cancelOpenRequest(requestId); });
+        folderPairs.setAsyncPairCancel([this](const int requestId) {
+            if (imageTasks) {
+                imageTasks->cancelOpenRequest(requestId);
+                return;
+            }
+            imageReview.cancelOpenRequest(requestId);
+        });
         folderPairs.setSingleSideOpener([this](const QUrl& url, const int row, QString* error) {
+            if (imageTasks) {
+                return imageTasks->requestOpenPrimaryInActiveTask(url, row, error);
+            }
             const int requestId = imageReview.requestOpenPrimary(url, row);
             if (requestId <= 0 && error != nullptr) {
                 *error = imageReview.errorText();
             }
             return requestId;
         });
-        QObject::connect(
-            &imageReview,
-            &ImageReviewController::openFinished,
-            &folderPairs,
-            [this](
-                const int requestId, const int pairId, const bool success, const QString& error) {
-                if (pairId >= 0) {
-                    folderPairs.completePairOpen(static_cast<quint64>(requestId), success, error);
-                    folderPairs.completeSingleSideOpen(
-                        static_cast<quint64>(requestId), success, error);
-                }
-            });
     }
 
     [[nodiscard]] bool create() {
@@ -752,11 +788,54 @@ public:
             videoFolder.attachPlayback(*controller, *shell);
             engine.rootContext()->setContextProperty(QStringLiteral("videoFolder"), &videoFolder);
         }
-        engine.addImageProvider(QStringLiteral("vcs-review"),
-                                new ReviewImageProvider(&imageReview));
+        if (withImageTasks) {
+            imageTasks = std::make_unique<ImageTaskHost>(&imageReview);
+            engine.rootContext()->setContextProperty(QStringLiteral("imageTasks"),
+                                                     imageTasks.get());
+            engine.addImageProvider(
+                QStringLiteral("vcs-review"),
+                new ReviewImageProvider(&imageReview,
+                                        [host = imageTasks.get()](const QString& token) {
+                                            return host->controllerForToken(token);
+                                        }));
+            QObject::connect(imageTasks.get(),
+                             &ImageTaskHost::controllerOpenFinished,
+                             &folderPairs,
+                             [this](const int requestId,
+                                    const int pairId,
+                                    const bool success,
+                                    const QString& error) {
+                                 if (pairId >= 0) {
+                                     folderPairs.completePairOpen(
+                                         static_cast<quint64>(requestId), success, error);
+                                     folderPairs.completeSingleSideOpen(
+                                         static_cast<quint64>(requestId), success, error);
+                                 }
+                             });
+        } else {
+            engine.addImageProvider(QStringLiteral("vcs-review"),
+                                    new ReviewImageProvider(&imageReview));
+            QObject::connect(&imageReview,
+                             &ImageReviewController::openFinished,
+                             &folderPairs,
+                             [this](const int requestId,
+                                    const int pairId,
+                                    const bool success,
+                                    const QString& error) {
+                                 if (pairId >= 0) {
+                                     folderPairs.completePairOpen(
+                                         static_cast<quint64>(requestId), success, error);
+                                     folderPairs.completeSingleSideOpen(
+                                         static_cast<quint64>(requestId), success, error);
+                                 }
+                             });
+        }
         if (withImageEdit) {
-            imageEdit.setSourceImageProvider(
-                [this](const int slot) { return imageReview.rawImageForSlot(slot); });
+            imageEdit.setSourceImageProvider([this](const int slot) {
+                ImageReviewController* const active =
+                    imageTasks ? imageTasks->activeController() : &imageReview;
+                return active != nullptr ? active->rawImageForSlot(slot) : QImage{};
+            });
             engine.rootContext()->setContextProperty(QStringLiteral("imageEdit"), &imageEdit);
             engine.addImageProvider(QStringLiteral("dvs-edit"), new EditImageProvider(&imageEdit));
         }
@@ -925,6 +1004,8 @@ QtObject {
     std::unique_ptr<ReviewShellController> shell;
     std::unique_ptr<ReviewSessionFacade> facade;
     ImageReviewController imageReview;
+    std::unique_ptr<ImageTaskHost> imageTasks;
+    bool withImageTasks = false;
     // The root's required clipboard service; the copy tests assert through the real
     // clipboard the adapter writes to.
     ColorClipboardController colorClipboard;
@@ -7776,6 +7857,89 @@ TEST(MainQmlContractTests, ImageEditScaleDialogResizesTheWorkingCopy) {
     harness.settle();
     EXPECT_FALSE(harness.imageEdit.active());
     EXPECT_TRUE(modeRow->isVisible()) << "leaving edit mode restores comparison controls";
+}
+
+// The typed path of the scale dialog: a number keyed into an EdgeField must commit on
+// Return, drive the aspect-locked partner, and reach the applied size. The shipped defect
+// sat exactly here: the editor's editingFinished wrote the SpinBox value directly, so
+// valueModified never fired and the locked partner (and the applied size) kept the values
+// the dialog opened with.
+TEST(MainQmlContractTests, ImageEditScaleDialogTypedEdgesDriveTheLockedPartner) {
+    WorkspaceHarness harness;
+    harness.withImageEdit = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    QImage primary(96, 64, QImage::Format_ARGB32);
+    primary.fill(QColor(30, 90, 150));
+    QImage secondary(32, 32, QImage::Format_ARGB32);
+    secondary.fill(QColor(40, 40, 40));
+    ASSERT_TRUE(harness.imageReview.openPairImages(std::move(primary),
+                                                   QStringLiteral("a.png"),
+                                                   std::move(secondary),
+                                                   QStringLiteral("b.png")));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    harness.settle();
+
+    auto* const startButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditStartButton"));
+    auto* const scaleButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditScaleButton"));
+    auto* const applyButton =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditScaleApplyButton"));
+    auto* const lockAspect =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditScaleLockAspect"));
+    auto* const widthField =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditScaleWidthField"));
+    auto* const heightField =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditScaleHeightField"));
+    ASSERT_NE(startButton, nullptr);
+    ASSERT_NE(scaleButton, nullptr);
+    ASSERT_NE(applyButton, nullptr);
+    ASSERT_NE(lockAspect, nullptr);
+    ASSERT_NE(widthField, nullptr);
+    ASSERT_NE(heightField, nullptr);
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(startButton, "clicked"));
+    harness.settle();
+    ASSERT_TRUE(QMetaObject::invokeMethod(scaleButton, "clicked"));
+    harness.settle();
+    EXPECT_TRUE(lockAspect->property("checked").toBool());
+
+    // Typing 144 into the width commits on Return and recomputes the height by the ratio
+    // the dialog opened with (96:64 = 3:2 -> 96).
+    ASSERT_TRUE(typeEdgeFieldText(harness.window, widthField, QStringLiteral("144")));
+    harness.settle();
+    EXPECT_EQ(widthField->property("value").toInt(), 144);
+    EXPECT_EQ(heightField->property("value").toInt(), 96);
+
+    // The other direction: typing 50 into the height recomputes the width (50 * 3:2 = 75).
+    ASSERT_TRUE(typeEdgeFieldText(harness.window, heightField, QStringLiteral("50")));
+    harness.settle();
+    EXPECT_EQ(heightField->property("value").toInt(), 50);
+    EXPECT_EQ(widthField->property("value").toInt(), 75);
+
+    // With the lock off, a typed edge commits alone and leaves the partner untouched. The
+    // lock is a checkable button: its checked state only flips through real input, so this
+    // is a real click rather than a forced clicked() emission.
+    const QPointF lockCenter =
+        lockAspect->mapToScene(QPointF{lockAspect->width() / 2, lockAspect->height() / 2});
+    sendMouseMove(*harness.window, lockCenter);
+    sendMousePress(*harness.window, lockCenter);
+    sendMouseRelease(*harness.window, lockCenter);
+    harness.settle();
+    EXPECT_FALSE(lockAspect->property("checked").toBool());
+    ASSERT_TRUE(typeEdgeFieldText(harness.window, heightField, QStringLiteral("40")));
+    harness.settle();
+    EXPECT_EQ(heightField->property("value").toInt(), 40);
+    EXPECT_EQ(widthField->property("value").toInt(), 75);
+
+    // Apply uses the typed numbers, not the sizes the dialog opened with.
+    ASSERT_TRUE(QMetaObject::invokeMethod(applyButton, "clicked"));
+    harness.settle();
+    EXPECT_EQ(harness.imageEdit.imageWidth(), 75);
+    EXPECT_EQ(harness.imageEdit.imageHeight(), 40);
 }
 
 // The canvas-fill dialog's contract: the image keeps its pixels and lands in the middle of the
@@ -16232,6 +16396,198 @@ TEST(MainQmlContractTests, MainWindowRequiredPilotServicesAreEnforced) {
         EXPECT_FALSE(verifyMainWindowPilotServices(*root, imageReview, colorClipboard, &error));
         EXPECT_FALSE(error.isEmpty());
     }
+}
+
+TEST(MainQmlContractTests, ImageTabsOpenSwitchAndCloseBackToTheNeighbour) {
+    WorkspaceHarness harness;
+    harness.withImageTasks = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    QTemporaryDir folder;
+    ASSERT_TRUE(folder.isValid());
+    const QString firstPath = folder.filePath(QStringLiteral("tab-a.png"));
+    const QString secondPath = folder.filePath(QStringLiteral("tab-b.png"));
+    ASSERT_TRUE(writeTestPng(firstPath));
+    ASSERT_TRUE(writeTestPng(secondPath));
+    const QUrl first = QUrl::fromLocalFile(firstPath);
+    const QUrl second = QUrl::fromLocalFile(secondPath);
+
+    const auto openTab = [&harness](const QUrl& url) {
+        QVariant accepted;
+        return QMetaObject::invokeMethod(harness.root.get(),
+                                         "openImageInNewTab",
+                                         Q_RETURN_ARG(QVariant, accepted),
+                                         Q_ARG(QVariant, QVariant::fromValue(QVariantList{url}))) &&
+               accepted.toBool();
+    };
+
+    ASSERT_TRUE(openTab(first));
+    ASSERT_TRUE(harness.waitUntil([&harness] {
+        return harness.imageTasks != nullptr && harness.imageTasks->count() == 1 &&
+               harness.imageTasks->activeIndex() == 0 && harness.imageReview.hasPrimary();
+    })) << "the first image must commit into the initial tab";
+    ImageReviewController* const firstController = harness.imageTasks->activeController();
+    ASSERT_EQ(firstController, &harness.imageReview);
+
+    ASSERT_TRUE(openTab(second));
+    ASSERT_TRUE(harness.waitUntil([&harness, firstController] {
+        return harness.imageTasks->count() == 2 && harness.imageTasks->activeIndex() == 1 &&
+               harness.imageTasks->activeController() != nullptr &&
+               harness.imageTasks->activeController() != firstController &&
+               harness.imageTasks->activeController()->hasPrimary();
+    })) << "the second open must add a tab and activate it";
+    EXPECT_TRUE(firstController->hasPrimary()) << "the first tab must stay alive behind the second";
+
+    auto* const strip = harness.root->findChild<QObject*>(QStringLiteral("imageTaskTabs"));
+    ASSERT_NE(strip, nullptr);
+    EXPECT_TRUE(strip->property("visible").toBool());
+    auto* const tabList = strip->findChild<QObject*>(QStringLiteral("imageTaskTabList"));
+    ASSERT_NE(tabList, nullptr);
+    EXPECT_EQ(tabList->property("count").toInt(), 2);
+    auto* const workspace = qvariant_cast<QObject*>(harness.root->property("imageWorkspace"));
+    ASSERT_NE(workspace, nullptr);
+    EXPECT_EQ(workspace->property("controller").value<QObject*>(),
+              static_cast<QObject*>(harness.imageTasks->activeController()));
+
+    QVariant switched;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "activateImageTab",
+                                          Q_RETURN_ARG(QVariant, switched),
+                                          Q_ARG(QVariant, QVariant{0})));
+    EXPECT_TRUE(switched.toBool());
+    harness.settle();
+    EXPECT_EQ(harness.imageTasks->activeIndex(), 0);
+    EXPECT_EQ(QFileInfo{harness.imageReview.primaryPath()}.fileName(), QStringLiteral("tab-a.png"));
+    EXPECT_EQ(harness.root->property("activeImageController").value<QObject*>(),
+              static_cast<QObject*>(firstController));
+    EXPECT_EQ(workspace->property("controller").value<QObject*>(),
+              static_cast<QObject*>(firstController))
+        << "the image workspace must rebind to the activated task";
+
+    QVariant closed;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        harness.root.get(), "closeCurrentTask", Q_RETURN_ARG(QVariant, closed)));
+    EXPECT_TRUE(closed.toBool());
+    ASSERT_TRUE(harness.waitUntil([&harness] {
+        return harness.imageTasks->count() == 1 && harness.imageTasks->activeIndex() == 0 &&
+               harness.imageTasks->activeController() != nullptr &&
+               harness.imageTasks->activeController()->hasPrimary();
+    })) << "closing the active tab must select the surviving neighbour";
+    EXPECT_EQ(QFileInfo{harness.imageTasks->activeController()->primaryPath()}.fileName(),
+              QStringLiteral("tab-b.png"));
+
+    // Closing the last tab must hand the stage back to the retained video task and must not
+    // leave the resident image workspace pointing at a destroyed controller.
+    QVariant closedLast;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        harness.root.get(), "closeCurrentTask", Q_RETURN_ARG(QVariant, closedLast)));
+    EXPECT_TRUE(closedLast.toBool());
+    ASSERT_TRUE(harness.waitUntil([&harness] { return harness.imageTasks->count() == 0; }));
+    EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 0);
+    EXPECT_EQ(workspace->property("controller").value<QObject*>(),
+              static_cast<QObject*>(&harness.imageReview));
+}
+
+TEST(MainQmlContractTests, ImageTabEditSessionStaysBoundToItsOwnTab) {
+    WorkspaceHarness harness;
+    harness.withImageTasks = true;
+    harness.withImageEdit = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    QTemporaryDir folder;
+    ASSERT_TRUE(folder.isValid());
+    const QString firstPath = folder.filePath(QStringLiteral("edit-tab-a.png"));
+    const QString secondPath = folder.filePath(QStringLiteral("edit-tab-b.png"));
+    ASSERT_TRUE(writeTestPng(firstPath));
+    ASSERT_TRUE(writeTestPng(secondPath));
+    const QUrl first = QUrl::fromLocalFile(firstPath);
+    const QUrl second = QUrl::fromLocalFile(secondPath);
+
+    const auto openTab = [&harness](const QUrl& url) {
+        QVariant accepted;
+        return QMetaObject::invokeMethod(harness.root.get(),
+                                         "openImageInNewTab",
+                                         Q_RETURN_ARG(QVariant, accepted),
+                                         Q_ARG(QVariant, QVariant::fromValue(QVariantList{url}))) &&
+               accepted.toBool();
+    };
+    ASSERT_TRUE(openTab(first));
+    ASSERT_TRUE(harness.waitUntil([&harness] {
+        return harness.imageTasks != nullptr && harness.imageTasks->count() == 1 &&
+               harness.imageTasks->activeController() != nullptr &&
+               harness.imageTasks->activeController()->hasPrimary();
+    }));
+    ASSERT_TRUE(openTab(second));
+    ASSERT_TRUE(harness.waitUntil([&harness] {
+        return harness.imageTasks != nullptr && harness.imageTasks->count() == 2 &&
+               harness.imageTasks->activeIndex() == 1 &&
+               harness.imageTasks->activeController() != nullptr &&
+               harness.imageTasks->activeController()->hasPrimary();
+    }));
+
+    QVariant switched;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "activateImageTab",
+                                          Q_RETURN_ARG(QVariant, switched),
+                                          Q_ARG(QVariant, QVariant{0})));
+    ASSERT_TRUE(switched.toBool());
+    harness.settle();
+    ASSERT_EQ(harness.imageTasks->activeIndex(), 0);
+
+    ASSERT_TRUE(harness.imageEdit.beginSession(0, firstPath, first));
+    ASSERT_TRUE(harness.imageEdit.rotateImage(1));
+    harness.settle();
+    EXPECT_TRUE(harness.imageEdit.dirty());
+    EXPECT_EQ(harness.root->property("imageTabDirtyIndex").toInt(), 0);
+
+    auto* const workspace = qvariant_cast<QObject*>(harness.root->property("imageWorkspace"));
+    ASSERT_NE(workspace, nullptr);
+    EXPECT_TRUE(workspace->property("editModeActive").toBool());
+
+    // The unsaved session may sit behind another tab, but it stays owned by tab 0.
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "activateImageTab",
+                                          Q_RETURN_ARG(QVariant, switched),
+                                          Q_ARG(QVariant, QVariant{1})));
+    ASSERT_TRUE(switched.toBool());
+    harness.settle();
+    EXPECT_TRUE(harness.imageEdit.active());
+    EXPECT_EQ(harness.root->property("imageTabDirtyIndex").toInt(), 0);
+    EXPECT_FALSE(workspace->property("editModeActive").toBool());
+
+    QVariant closedDirty;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "closeImageTab",
+                                          Q_RETURN_ARG(QVariant, closedDirty),
+                                          Q_ARG(QVariant, QVariant{0})));
+    EXPECT_FALSE(closedDirty.toBool()) << "a dirty tab must not close behind another tab";
+    EXPECT_EQ(harness.imageTasks->count(), 2);
+    QVariant startedElsewhere;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        workspace, "beginImageEdit", Q_RETURN_ARG(QVariant, startedElsewhere)));
+    EXPECT_FALSE(startedElsewhere.toBool())
+        << "a second edit session must not start while the first tab is dirty";
+    EXPECT_EQ(harness.imageEdit.sourceLabel(), firstPath);
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "activateImageTab",
+                                          Q_RETURN_ARG(QVariant, switched),
+                                          Q_ARG(QVariant, QVariant{0})));
+    ASSERT_TRUE(switched.toBool());
+    harness.settle();
+    EXPECT_TRUE(workspace->property("editModeActive").toBool());
+    harness.imageEdit.endSession();
+    QVariant closedClean;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "closeImageTab",
+                                          Q_RETURN_ARG(QVariant, closedClean),
+                                          Q_ARG(QVariant, QVariant{0})));
+    EXPECT_TRUE(closedClean.toBool());
+    EXPECT_EQ(harness.imageTasks->count(), 1);
 }
 
 } // namespace
