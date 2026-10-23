@@ -51,11 +51,23 @@ development routes and runs one representative UI style/DPI per suite; add `-Ful
 style, popup, layout or DPI changes. Groups are starting points, not automatic impact analysis:
 use `-TestRegex` for a narrower case or additional affected suites. Do not combine both selectors.
 
-Run focused tests while editing. Once the patch is stable, run the full suite and applicable
-format/lint gates once before handoff (`-Test` without a selector keeps the complete preset).
-After a failure, rerun the failing scope first; repeat the full gate only after the corrective
-changes are settled. Do not repeat a successful gate on identical inputs without a new concern.
-Documentation-only changes need the applicable documentation/script checks, not a media/UI run.
+Use impact-based validation for both iteration and handoff; a small, isolated change may finish
+with relevant tests and applicable checks, without a full suite or whole-repository lint.
+Choose scope from changed behavior and callers, not line count. See the required selection table
+in [docs/building.md](docs/building.md#开发循环与完整验收).
+For local C++ changes, build with warning-fatal compilation, run the affected suite and C++ format
+check; full clang-tidy may be deferred only for low-risk changes that do not alter ownership,
+lifetime, concurrency, public contracts or data integrity. QML-only changes use the existing QML
+format/lint targets and affected behavior tests; retain affected style/DPI variants for layout changes.
+Shared contracts, broad cross-layer changes, toolchain/global build changes, unclear impact, and
+release acceptance require the full suite and applicable format/lint gates once after stabilization.
+Critical behavior changes also retain targeted mutation/performance evidence where applicable.
+CI and release gates are unchanged; `-Test` without a selector still runs the complete preset.
+After a failure, rerun the failing scope first. Do not repeat a successful gate on identical inputs
+without a new concern. Documentation-only changes need applicable documentation/script checks,
+not a media/UI run. Report selected scope and deferred checks briefly; never call a subset a full pass.
+Diagnose prolonged silent checks using the current job log and process activity over time; a live
+process or cumulative CPU time alone does not prove progress. Do not repeatedly read stale job logs.
 
 Raw preset commands require a configured MSVC x64 developer environment:
 
@@ -100,7 +112,8 @@ See [the packaging policy](docs/building.md#zip-只打包必要运行时) for ev
 
 Indent C++/QML four spaces, JSON/YAML two, cap C++ at 100 columns. Attached braces,
 left-bound pointers, deterministic includes, `clang-format` 19.1.5, `qmlformat`; matching
-`clang-tidy` and warning-fatal `qmllint` must pass. A formatter only ever touches the file types it
+`clang-tidy` and warning-fatal `qmllint` must pass when required by the validation scope above.
+A formatter only ever touches the file types it
 owns - run them through the `format-check` and `lint` targets rather than by hand, because
 clang-format reads an unknown extension as C++ and has destroyed a `.ps1` that way. C++ types and
 files use `PascalCase`, functions and variables `lowerCamelCase`, constants `kPascalCase`,
