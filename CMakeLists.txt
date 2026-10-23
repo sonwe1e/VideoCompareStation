@@ -11,7 +11,7 @@ set(CMAKE_AUTOGEN_PARALLEL 2)
 # pass for every translation unit; /showIncludes still tracks ordinary header dependencies.
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
-project(CompareStation VERSION 2.5.1 LANGUAGES CXX)
+project(CompareStation VERSION 2.5.2 LANGUAGES CXX)
 
 option(DVS_BUILD_DESKTOP "Build the Windows desktop application and packaging" ON)
 option(DVS_BUILD_ADAPTERS "Build Windows, FFmpeg, and JSON adapters" ON)

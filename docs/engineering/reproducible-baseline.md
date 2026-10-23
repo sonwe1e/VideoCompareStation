@@ -47,6 +47,18 @@ GPU 门禁按计划留在独立环境，尚未在主力桌面执行。本页只�
 与 2.5.0 相同但字节不同，不能把 2.5.0 的单文件哈希当作本版证据。原始日志与包哈希保存在
 `out/verification/release-v2.5.1/`。
 
+### 2026-10-23 2.5.2 发布身份
+
+| 项目 | 值 |
+|---|---|
+| 发布标签 | `v2.5.2`（提交即 tag 指向的 release commit） |
+| 版本变更 | `CMakeLists.txt` 与 `vcpkg.json` `2.5.1→2.5.2`；`.github/workflows/release.yml` 免签名清单加入 `v2.5.2` |
+| 构建 | Ninja Release，MSVC 14.44.35207，Qt 6.11.1，FFmpeg 8.1.2，Windows SDK 10.0.26100.0 |
+| 测试 | Release 预设 1473 项全部通过（首轮 1 项 QML 令牌字面量失败，修复后完整重跑全过）；9 项既有环境跳过 |
+| 包 | `CompareStation-2.5.2-windows-x64.zip`，272 文件，28,410,775 bytes，SHA256 `7BDC441D0757219B28A47477EB7BC6055C59527A611DF77C55B98925F732F36E` |
+| 包级 | `packaged-smoke` 3/3；`shutdown-soak` 1/1；`verify-release-package.ps1` 16/16 |
+| 未验证 | 真实 D3D11VA／性能门禁、物理显示与干净 Windows；按[测试环境分离](test-environment-separation.md)未在主力桌面启动 |
+
 ## 2. 执行环境（本机只读测量）
 
 | 项目 | 实测值 |

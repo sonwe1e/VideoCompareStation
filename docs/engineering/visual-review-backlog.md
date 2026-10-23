@@ -1,5 +1,96 @@
 # 视觉审查问题台账
 
+## 2026-10-23 图片工作区标签页（用户请求，未提交）
+
+- **需求**：连续打开多张图片时当前只有一张/一对，打开下一张会替换上一张；用户要求按
+  桌面软件惯例做成标签页。
+- **实现**：新增 `ImageTaskHost`（`src/ui_qml/src/ImageTaskHost.cpp`）持有多个
+  `ImageReviewController`；一个标签是一次图片审查任务（单图或 A/B 对），每个任务保留自己的
+  配对、解码缓冲、差异缓存、缩放/平移和比较模式。`Main.qml` 的 `activeImageController`
+  随活动标签切换，并把一个常驻 `ImageWorkspace` 显式重绑到活动控制器；新增
+  `ImageTaskTabs.qml` 标签条。图片地址增加 `?w=<token>`，`ReviewImageProvider` 按 token
+  路由到任务控制器，避免不同标签命中同一 Qt 图片缓存。
+- **打开/关闭规则**：单图或图片对、拖入、资源管理器打开默认新建并激活标签；同一素材再次
+  打开只聚焦已有标签。加载失败不保留空标签。`Ctrl+W` 关闭当前标签；`Ctrl+Tab` /
+  `Ctrl+Shift+Tab` 循环切换；关闭活动标签后选相邻标签，关闭最后一个回到视频任务或空态。
+  标签不跨重启保存，不引入项目文件。一次选择三张以上仍按原规则拒绝（连续打开逐次进行）。
+- **容量**：最多 12 个标签；总工作集沿用单对原有的 1.5 GiB 硬顶，超限明确拒绝，不静默淘汰。
+- **编辑边界**：仍只有一个 `ImageEditController`。编辑会话按素材路径归属于标签：可以带着
+  未保存编辑切走标签，但关闭该标签、或在另一个标签开始新的编辑会被拒绝并说明原因；切回
+  原标签恢复编辑视图。每标签独立编辑会话留后续批次。
+- **验证**：`ImageTaskHostTests` 6/6（首个标签、第二标签保留首标签、重复打开不重载、关闭活动
+  标签选邻居、预算拒绝、token URL）；`tst_image_task_tabs.qml`（标签渲染、点击、关闭按钮、
+  脏标记）；`MainQmlContractTests.ImageTabsOpenSwitchAndCloseBackToTheNeighbour`（真实主窗
+  两个标签、切换后 `ImageWorkspace.controller` 重绑、关闭回邻标签、关闭最后一个回视频）与
+  `MainQmlContractTests.ImageTabEditSessionStaysBoundToItsOwnTab`（脏编辑标签可切走、不能关闭、
+  不能在另一标签开始新编辑、切回恢复）。`format-check` 与 `lint` 已在本批修复后重跑；
+  图片相关及主窗契约套件 291/291 通过（4 项既有跳过），全量回归见本轮执行记录。
+- **剩余限制**：每标签独立编辑会话；标签跨重启恢复（不做）；窄窗/高 DPI 下标签条视觉矩阵；
+  一次多选 >2 张开多个标签。当前标签条不提供“关闭其他/全部”右键菜单。
+
+## 2026-10-22 启动黑块：splash 撤销点早于第一帧（用户报告，未提交）
+
+- **现象**：启动时出现黑块。复盘实测时间线：splash ~57 ms 上屏，主窗口 ~642 ms 上屏，但到第一帧交换
+  （`window-first-frame`）前窗口一直是未渲染的黑块；旧实现在 `sceneGraphInitialized`（渲染器就绪、
+  未画任何像素）即撤 splash，`exec()` 另有一次无条件 `requestDismiss()+join()` 强撤，两个撤点都早于
+  第一帧，于是「splash 消失 → 黑块独占 → 内容出现」。
+- **修复**（`DesktopApplication.cpp`、`StartupSplash.h/.cpp`）：撤销点移到 `frameSwapped` 一次性处理器
+  （渲染线程，`requestDismiss()` 非阻塞线程安全）；`exec()` 不再触碰 splash（强撤会重新暴露黑块窗口，
+  join 未撤销 worker 会阻塞事件循环启动）；兜底改为 worker 自超时（默认 10 s，可注入），渲染永久失败时
+  splash 自行关闭。用户复验仍见黑块后追加第二轮：splash 只有 360×180，盖不住整窗，主窗口在
+  show()→首帧交换之间的整块黑色依旧可见——改为**主窗口以 opacity 0 显示**（渲染管线不变，DWM 不绘制
+  未渲染表面），`frameSwapped` 一次性处理器排队把 opacity 恢复为 1 并撤 splash，黑块彻底不可见；
+  `exec()` 里 3 s 单发定时器兜底揭示（首帧永不到来时不让错误 UI 藏在透明窗口后），smoke 模式维持全程
+  透明、不揭示。
+- **回归**：新增 `ui.StartupSplashTests.WorkerClosesItselfOnceItsLifetimeCeilingPasses`（注入 200 ms
+  上限，断言发生在对象存活时，仅自超时可使窗口消失）；`ui.StartupSplashTests` 7/7 通过（含全部既有
+  用例：所有权、不抢焦点、提前 dismiss 幂等、析构清理、反复建撤），自超时用例另做 20 次重复全过
+  （~290 ms/次）。实现自超时时发现并修掉一个既有结构隐患：worker 消息循环用 `GetMessage` 阻塞取消息，
+  `MsgWaitForMultipleObjects` 被「已发送（非排队）消息」唤醒后 `GetMessage` 可永久阻塞、回不到循环顶部，
+  任何循环内的自驱动时限都会被错过（实测窗口滞留 5 s 直到外线程发 `WM_CLOSE` 才解锁）；改为
+  `PeekMessage(PM_REMOVE)` 有界排空 + `WM_QUIT` 显式处理，循环顶部每 50 ms 必达。
+- **文档**：`startup-performance-v2.md` Step 9 追记本轮时间线复盘与撤点变更。
+- **第三轮（同日晚，用户复验后追问「黑块可以不显示吗，或者做成 PyCharm 式启动画面」）**：opacity 方案
+  生效后，启动期可见的深色块只剩 splash 本身——360×180 纯 `#1c1c1e`、无图标无动画，观感上就是
+  「黑块」而非启动画面。直接去掉 splash 不可取：主窗口要等首帧才显示（~800 ms），去掉后双击启动
+  期间屏幕完全无反馈。改为把 splash 升级为品牌化启动画面（`StartupSplash.cpp`，架构不变：独立线程、
+  被拥有的窗口、不抢焦点、`frameSwapped` 撤销、自超时）：480×320（按系统 DPI 缩放）、应用图标
+  （qrc `:/branding/comparestation-icon.png`，GDI+ 绘制，加载失败降级为无图标）、标题＋副标题＋
+  右下角版本号（`DVS_PROJECT_VERSION`）、底部 indeterminate 加载条（`Theme.accent` #0a84ff，
+  1600 ms 三角波往返，40 ms 定时器只失效进度条条带，`WM_ERASEBKGND` 返回 1 防闪白）。GDI+ 生命周期：
+  `GdiplusStartup`/`Shutdown` 在 worker 内配对；`Bitmap::FromStream` 不接管 `IStream`，流与
+  Bitmap 同存亡（`SplashState` 同时持有，`destroySplashState` 先删 Bitmap 再 Release 流）。
+  `dvs_ui_d3d11_bridge` 新增链接 `gdiplus`。
+- **回归（第三轮）**：`ui.StartupSplashTests` 7/7（窗口类名、所有权、焦点、dismiss 幂等、析构清理、
+  反复建撤、自超时全部不涉观感，行为协议未动）；`format-check`、`lint` 通过。
+- **边界**：黑块消除与 splash 新观感的最终效果待用户实机肉眼确认（本轮仍由用户实测驱动）；splash
+  上屏时刻（`splash-painted` ~57 ms）与生命周期不变。
+
+## 2026-10-22 图片缩放对话框：锁定比例下键入不联动（用户报告，未提交）
+
+- **现象**：图片编辑「缩放图片」对话框勾选「锁定比例」后手动改宽或高，另一边不随比例变化。
+  同根因的第二症状：两个对话框里键入的数字原本到不了模型——「填充画布」点应用时仍用打开时的旧尺寸，
+  「缩放」在仅键入（未触发热键/滚轮）时同样如此。
+- **根因**：`ImageEditDialogs.qml` 的 `EdgeField`（自定义 TextInput contentItem 的可编辑 SpinBox）
+  在 `onEditingFinished` 里命令式赋值 `field.value`。对本机 vcpkg Qt 6.11.1 的一次性探针
+  （`out/verification/spinbox-commit-probe.qml`）证实：该赋值不发出 `valueModified`（联动逻辑的
+  唯一触发器），还会把 SpinBox 内置的失焦提交短路（探针 B：失焦后 value 已到 77 但
+  `valueModified` 零次），同时打断使用点的 `value:` 绑定。既有测试助手 `typeSpinBoxValue` 直接
+  强制发射 `valueModified`，绕过真实输入路径，因此从未暴露该缺陷。
+- **修复**：`EdgeField` 新增 `userEdited(edge)` 信号作为对话框的唯一编辑通知：键入提交
+  （`editingFinished`，解析失败回退当前值，不把 NaN 强转为 0 写入模型）与 SpinBox 自带交互
+  （步进键、滚轮、内置失焦提交，经 `valueModified`）都汇入它；缩放宽/高与填充宽/高四个使用点改在
+  `onUserEdited` 中写模型，声明式 `value:` 绑定保持存活，再次打开对话框仍显示当前尺寸。
+- **回归**：新增 `MainQmlContractTests.ImageEditScaleDialogTypedEdgesDriveTheLockedPartner`，用
+  带文本的真实按键（全选→键入→Return）驱动：键入宽 144 → 高联动 96；键入高 50 → 宽联动 75；
+  真实鼠标点击解除锁定后键入高 40 只提交一边；应用结果 75×40（证明键入值到达模型）。取消锁定改用
+  真实点击：可选中按钮的 `checked` 只随真实输入翻转，强制发射 `clicked` 信号不翻转（本轮测试踩到，
+  已按仓库 `sendMousePress/Release` 惯例修正）。
+- **验证**：`-TestRegex 'MainQmlContractTests.ImageEdit'` 8/8 通过（含既有缩放/填充/裁剪/变换契约）；
+  `format`（应用后）`format-check`、`lint` 均通过。证据与逐轮日志在
+  `out/verification/image-edit-aspect-lock/`。低风险呈现层改动，按仓库约定以聚焦行为测试为证，
+  未做变异矩阵；未做实机人工走查。
+
 ## 2026-10-22 2.5.1 候选 ZIP 冒烟（局部，非发布验收）
 
 从 `d7de619`（S3 收尾）的 release 构建打出的候选包，验证"打包出来的 exe 能不能跑"。**这是局部冒烟，

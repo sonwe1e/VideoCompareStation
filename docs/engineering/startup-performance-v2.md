@@ -521,6 +521,58 @@ v2.0.0 记录为 835.1 ms / ~243 ms。但按本文档 L178 的教训（环境日
 去掉 `WS_EX_NOACTIVATE` → 焦点断言失败），产品文件按字节还原。
 **未验证**：本环境拿不到屏幕确认，启动画面的**观感**（位置、字号、留白）未经人眼或截图核对。
 
+### 2026-10-22 追记：撤销点从 sg-initialized 移到第一帧（用户报告「启动黑块」）
+
+用户实测报告启动时出现黑块。复盘时间线：splash 从 ~57 ms 挂到 `sg-initialized`（~791 ms），但主窗口
+在 ~642 ms 就已上屏，且直到第一帧交换（E01 的 `window-first-frame`）之前一直是**未渲染的黑块**；旧实现在
+`sceneGraphInitialized`（渲染器就绪、尚未画任何像素）就撤 splash，`exec()` 里还有一次无条件
+`requestDismiss()+join()` 兜底强撤——两个撤点都早于第一帧，于是出现「splash 消失 → 黑块独占 → 内容出现」
+的观感。Qt Quick 结构上无法在 show() 之前渲染第一帧（show 正是触发场景图初始化的入口），黑块窗口本身
+无法消除，只能用 splash 盖住。
+
+改动（`DesktopApplication.cpp` / `StartupSplash.*`）：
+
+- splash 撤销点改为 `frameSwapped` 一次性处理器（渲染线程 DirectConnection，`requestDismiss()`
+  非阻塞、线程安全，与旧 sg-init 处理器同一模式）；`sg-initialized` 只留里程碑打点。
+- `exec()` 不再触碰 splash：强撤会重新暴露黑块窗口，join 未撤销的 worker 又会在事件循环启动前阻塞
+  GUI 线程。worker 线程在撤销后自行退出，由 splash 析构（应用退出时）回收。
+- 兜底改为 **worker 自超时**：`StartupSplash` 构造可注入生命周期上限（默认 10 s），show() 起算；
+  渲染永久失败（第一帧永不到来）时 splash 自行关闭，不再可能置顶滞留。回归
+  `ui.StartupSplashTests.WorkerClosesItselfOnceItsLifetimeCeilingPasses`（200 ms 上限注入，
+  断言发生在对象仍存活时，只有自超时能让窗口消失）。
+
+**未验证**：黑块消除的最终观感仍需实机肉眼确认（本轮由用户实测驱动，随后人工体验）。
+
+### 2026-10-22 追记二：splash 观感升级为品牌化启动画面（用户第二轮反馈）
+
+opacity 方案生效后，用户复验仍报「黑块」。此时启动期可见的深色块只剩 splash 本身：360×180
+纯 `#1c1c1e`、无图标无动画——观感上是一个「黑块」，不是启动画面。去掉 splash 不可取：主窗口
+要等首帧才显示（~800 ms 窗口期），去掉后启动期间屏幕完全无反馈，比黑块更差。正确方向是把
+splash 做成体面的等待画面（用户原话参照 PyCharm 启动画面）。
+
+改动只在 `StartupSplash.cpp`（行为协议、线程模型、撤点、自超时全部不动）：
+
+- **尺寸与布局**：480×320（`GetDpiForSystem` 缩放，布局常量按 96 DPI 标注）。
+- **图标**：qrc `:/branding/comparestation-icon.png`（1024×1024）经 GDI+ 以双三次插值绘到 72×72。
+  GDI+ 失败、资源缺失、解码失败均降级为「无图标」，窗口照常。
+- **文字**：标题（24 semibold）＋副标题（14）沿用；右下角新增版本号（11，`DVS_PROJECT_VERSION`）。
+- **加载条**：底部 indeterminate 条——轨道 `#3a3a3c`，滑块 `Theme.accent` `#0a84ff`，1600 ms
+  三角波往返；`SetTimer` 40 ms，`WM_TIMER` 只失效进度条条带（其余区域不重绘，无闪烁）。
+  启动里程碑都在被同步阻塞的 GUI 线程上，splash 线程拿不到真实进度，indeterminate 是诚实选择。
+- **防闪白**：`WM_ERASEBKGND` 返回 1，背景与内容一次画完。
+- **GDI+ 生命周期**：`GdiplusStartup`/`Shutdown` 在 worker 内配对（每个提前退出路径都有 Shutdown）。
+  踩点：`Bitmap::FromStream` **不接管 IStream**，GDI+ 可能在绘制时惰性读流，流必须与 Bitmap
+  同存亡——`SplashState` 同时持有两者，`destroySplashState` 先 `delete` Bitmap 再 `Release()`
+  流，`GdiplusShutdown` 在消息循环（连同 `WM_NCDESTROY` 的状态销毁）之后。
+- `dvs_ui_d3d11_bridge` 新增链接 `gdiplus`（`CMakeLists.txt`）。
+
+回归：`ui.StartupSplashTests` **7/7**（类名、所有权、焦点、dismiss 幂等、析构清理、反复建撤、
+自超时均与观感无关，未改）；`format-check`、`lint` 通过。动画定时器是消息循环里的新排队消息源，
+对 dismiss 路径无影响（`PeekMessage(PM_REMOVE)` 全量排空），由 `RepeatedCreateAndDrop…` 与全部
+用例的实际建撤路径覆盖。
+**未验证**：新观感（图标、字号、进度条节奏）待实机肉眼确认；`splash-painted` 时点与生命周期
+不变，启动时间线不受影响（图标解码 ~12 KB PNG，在窗口显示前的 worker 线程上）。
+
 ## Step 10 · B3 worker 侧预探测 —— **收益不足，不做**（2026-10-04 实测）
 
 B3 想让探测与 550 ms 的 QML 段、~172 ms 的设备初始化重叠。先测余量再决定要不要动媒体路径。
