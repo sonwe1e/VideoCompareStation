@@ -87,6 +87,7 @@ if(DVS_BUILD_ADAPTERS)
             include/dvs/ui/StartupMilestone.h
             include/dvs/ui/StartupSplash.h
             include/dvs/ui/TimingDiagnosticsController.h
+            include/dvs/ui/VideoTaskHost.h
             src/ComparisonExportController.cpp
             src/ColorClipboardController.cpp
             src/DesktopApplication.cpp
@@ -112,6 +113,7 @@ if(DVS_BUILD_ADAPTERS)
             src/StartupMilestone.cpp
             src/StartupSplash.cpp
             src/TimingDiagnosticsController.cpp
+            src/VideoTaskHost.cpp
     )
     add_library(dvs::ui_d3d11_bridge ALIAS dvs_ui_d3d11_bridge)
 

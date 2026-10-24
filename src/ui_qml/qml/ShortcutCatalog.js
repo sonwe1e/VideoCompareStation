@@ -14,6 +14,11 @@ const compareImageFolders = "Ctrl+Shift+F";
 const closeCurrentTask = "Ctrl+W";
 const nextImageTab = "Ctrl+Tab";
 const previousImageTab = "Ctrl+Shift+Tab";
+// Same sequences as the image-tab pair by design (video task tabs design §8): the two
+// workspaces bind them as mutually exclusive Shortcuts - imageWorkspaceActive versus the
+// video workspace - so one key pair cycles whichever task strip is on screen.
+const nextVideoTab = "Ctrl+Tab";
+const previousVideoTab = "Ctrl+Shift+Tab";
 const captureIssue = "M";
 // Displayed by the menu only: the window manager owns Alt+F4 delivery, no app Shortcut
 // binds it. The contract test knows this one exception.

@@ -91,8 +91,13 @@ Item {
             // frame or two, and mouseClick on an item mapped through the un-laid-out
             // column misses the popup (probe evidence: content height 0 -> 70 within
             // 50 ms). Wait for the real layout before any menu-item mouse click.
+            // 1500 ms (30x the observed settle) instead of the 5 s default: when the
+            // desktop stops polishing popups (unattended full-matrix nights), each
+            // waiter must fail fast, not spend 5 s — thirteen 5 s penalties are what
+            // turned two real interaction failures into opaque ctest Timeouts
+            // (out/verification/final-ui-fullmatrix.log, 2026-10-24).
             const menu = findChild(sidebar, "videoFileContextMenu");
-            tryVerify(function() { return menu.contentItem.height > 8; });
+            tryVerify(function() { return menu.contentItem.height > 8; }, 1500);
         }
 
         function rowActionData() {

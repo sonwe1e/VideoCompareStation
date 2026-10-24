@@ -24,9 +24,9 @@ set(content_check_count 0)
 set(expected_case_count 11)
 set(expected_content_check_count 7)
 
-# A minimal but structurally complete module description: all five components, the two
-# controllers uncreatable, the pilot-critical members, and one C++-spelled property type
-# that normalization must rewrite.
+# A minimal but structurally complete module description: all six components, the three
+# composition-root-owned types uncreatable, the pilot-critical members, and one C++-spelled
+# property type that normalization must rewrite.
 set(baseline [=[
 import QtQuick.tooling 1.2
 
@@ -122,6 +122,22 @@ Module {
         prototype: "QObject"
         exports: ["Dvs.Ui/JogKeyHandler 1.0"]
         exportMetaObjectRevisions: [256]
+    }
+    Component {
+        file: "DvsQmlTypes.h"
+        lineNumber: 61
+        name: "dvs::ui::VideoTaskHost"
+        accessSemantics: "reference"
+        prototype: "QObject"
+        exports: ["Dvs.Ui/VideoTaskHost 1.0"]
+        isCreatable: false
+        exportMetaObjectRevisions: [256]
+        Property {
+            name: "activeIndex"
+            type: "int"
+            read: "activeIndex"
+            notify: "activeChanged"
+        }
     }
 }
 ]=])

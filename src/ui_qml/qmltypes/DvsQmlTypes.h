@@ -13,14 +13,15 @@
 //
 // Keep the names and creatability here identical to registerDvsUiTypes():
 //   - ComparisonSurface / JogKeyHandler / HoldKeyHandler: creatable;
-//   - ImageReviewController / ColorClipboardController: uncreatable, owned by the
-//     composition root.
+//   - ImageReviewController / ColorClipboardController / VideoTaskHost: uncreatable,
+//     owned by the composition root.
 
 #include "dvs/ui/ColorClipboardController.h"
 #include "dvs/ui/ComparisonSurface.h"
 #include "dvs/ui/HoldKeyHandler.h"
 #include "dvs/ui/ImageReviewController.h"
 #include "dvs/ui/JogKeyHandler.h"
+#include "dvs/ui/VideoTaskHost.h"
 
 #include <QtQml/qqmlregistration.h>
 
@@ -55,6 +56,13 @@ struct ColorClipboardControllerForeign {
     Q_GADGET
     QML_FOREIGN(dvs::ui::ColorClipboardController)
     QML_NAMED_ELEMENT(ColorClipboardController)
+    QML_UNCREATABLE("provided by the CompareStation composition root")
+};
+
+struct VideoTaskHostForeign {
+    Q_GADGET
+    QML_FOREIGN(dvs::ui::VideoTaskHost)
+    QML_NAMED_ELEMENT(VideoTaskHost)
     QML_UNCREATABLE("provided by the CompareStation composition root")
 };
 

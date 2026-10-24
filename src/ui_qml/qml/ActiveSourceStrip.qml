@@ -230,10 +230,16 @@ Rectangle {
                 // Explicit label width: RowLayout.fillWidth children do not feed back into an
                 // implicit width, so sum the pieces here to size the chip from the real text.
                 readonly property real chipLabelPlainWidth: letterBadge.width + separatorOne.implicitWidth + filenameLabel.implicitWidth + 10
-                readonly property real chipLabelTaggedWidth: chipLabelPlainWidth + (chip.isCanvasFocus ? directLookTag.implicitWidth + 10 : 0) + (chip.isReference ? referenceTag.implicitWidth + separatorTwo.implicitWidth + 10 : 0) + (chip.isTimelineMaster ? masterTag.implicitWidth + separatorThree.implicitWidth + 10 : 0)
+                // §9 order (name first, roles after): the identity-to-roles separator joins
+                // whenever any role tag is on screen, then each visible tag adds itself.
+                readonly property real chipLabelTaggedWidth: chipLabelPlainWidth + ((chip.isCanvasFocus || chip.isTimelineMaster || chip.isReference) ? separatorTwo.implicitWidth + 10 : 0) + (chip.isCanvasFocus ? directLookTag.implicitWidth + 10 : 0) + (chip.isTimelineMaster ? masterTag.implicitWidth + separatorThree.implicitWidth + 10 : 0) + (chip.isReference ? referenceTag.implicitWidth + 10 : 0)
                 // Compact tier: the constant letter+dot width above. Wide row unchanged.
                 width: control.compactChrome ? control.compactChipWidth : Math.min(280, Math.max(128, ((chip.isReference || chip.isTimelineMaster || chip.isCanvasFocus) ? chipLabelTaggedWidth : chipLabelPlainWidth) + (control.singleMode ? 24 : 84)))
-                radius: Theme.radiusLarge
+                // Source-card shape (workspace redesign §3.3): a file row, not a pill - subtle
+                // radius, no thick colour frame. Identity lives in the letter badge, roles in
+                // their word tags and a hairline, and the live view state reuses the same
+                // active ground as a selected mode button, so nothing dyes the whole card.
+                radius: Theme.radiusSubtle
                 readonly property string resolvedSourceIdentity: chip.sourceIdentity.length > 0 ? chip.sourceIdentity : (chip.sourceId >= 0 && chip.sourceId < control.sourceIdentities.length ? String(control.sourceIdentities[chip.sourceId]) : "")
                 // D08: timeline master and comparison reference are independent projections.
                 readonly property bool isTimelineMaster: chip.resolvedSourceIdentity.length > 0 ? chip.resolvedSourceIdentity === control.canonicalSourceIdentity : chip.sourceId === control.canonicalSourceIndex
@@ -263,10 +269,12 @@ Rectangle {
                 readonly property color sourceBorder: Theme.sourceBorder(chip.sourceId)
 
                 // Direct look wins the highlight: it names what the whole canvas is showing
-                // right now, while selection is only a management-mode batch state.
-                color: chip.isCanvasFocus ? chip.sourceBg : (chip.selected ? chip.sourceBg : (chip.isReference ? chip.sourceBg : Theme.raisedPanel))
-                border.color: chip.isCanvasFocus ? chip.sourceAccent : (chip.selected ? chip.sourceAccent : (chip.isReference ? chip.sourceAccent : (chipHover.hovered ? chip.sourceBorder : "transparent")))
-                border.width: (chip.isCanvasFocus || chip.selected || chip.isReference) ? 1.5 : 1
+                // right now, while selection is only a management-mode batch state. Both use
+                // the quiet active ground; the reference role stays a neutral card with a
+                // hairline in its identity colour plus the word tag.
+                color: (chip.isCanvasFocus || chip.selected) ? Theme.controlChecked : (chipHover.hovered ? Theme.raisedPanelHover : Theme.raisedPanel)
+                border.color: chip.isReference ? chip.sourceBorder : "transparent"
+                border.width: 1
 
                 // I01: one dropped video on this chip replaces this source. The visible
                 // "松开替换" plate is the drop-target contract - the user sees which slot the
@@ -294,7 +302,7 @@ Rectangle {
                     objectName: "sourceChipDropHint-" + chip.sourceId
                     visible: chip.dropReplaceHovered
                     anchors.fill: parent
-                    radius: Theme.radiusLarge
+                    radius: Theme.radiusSubtle
                     color: Theme.dropScrim
                     border.color: control.accentColor
                     border.width: 2
@@ -401,7 +409,10 @@ Rectangle {
                         implicitHeight: 18
                         Layout.alignment: Qt.AlignVCenter
                         radius: Theme.radiusMicro
-                        color: chip.isReference ? chip.sourceAccent : Theme.fluentHover
+                        // The badge is where the slot's identity colour lives: dark source
+                        // ground with the source-coloured letter (reference flips to a solid
+                        // accent fill), so the card body stays neutral.
+                        color: chip.isReference ? chip.sourceAccent : chip.sourceBg
 
                         Text {
                             id: letterLabel
@@ -415,8 +426,9 @@ Rectangle {
 
                     // Compact tier status dot: one 6 px dot carries pending (accent fill), a
                     // changed-on-disk file (warning fill) and the otherwise-empty state (hairline
-                    // ring; the identity border of the chip itself carries the focus/reference
-                    // highlight). The tooltip below spells every state out in words.
+                    // ring in the source identity colour while the card is in its active or
+                    // reference role, since the compact card itself shows no hairline). The
+                    // tooltip below spells every state out in words.
                     Rectangle {
                         id: compactStatusDot
 
@@ -434,6 +446,40 @@ Rectangle {
                         id: separatorOne
 
                         visible: !control.compactChrome
+                        text: "·"
+                        color: control.mutedTextColor
+                        font.pixelSize: Theme.fontBody
+                    }
+                    // Workspace redesign §9: identity leads, roles annotate - the filename
+                    // follows the letter badge and the role tags close the chip, so the row
+                    // reads "A 文件名 [主时间线] [参考]" and a role never gets read as part
+                    // of the file's name. The fillWidth label keeps the tags right-aligned
+                    // inside the chip.
+                    Text {
+                        id: filenameLabel
+
+                        visible: !control.compactChrome
+                        text: chip.parentLabel.length > 0 ? "%1 (%2)".arg(chip.filename).arg(chip.parentLabel) : chip.filename
+                        color: control.textColor
+                        font.pixelSize: Theme.fontBody
+                        elide: Text.ElideMiddle
+                        Layout.fillWidth: true
+
+                        HoverHandler {
+                            id: filenameHover
+                        }
+
+                        VcsToolTip {
+                            visible: filenameHover.hovered && chip.fullPath.length > 0
+                            text: chip.fullPath
+                        }
+                    }
+                    // Separator between the identity and the first visible role tag; with no
+                    // role on screen the chip ends with the name.
+                    Text {
+                        id: separatorTwo
+
+                        visible: (chip.isCanvasFocus || chip.isTimelineMaster || chip.isReference) && !control.compactChrome
                         text: "·"
                         color: control.mutedTextColor
                         font.pixelSize: Theme.fontBody
@@ -519,33 +565,6 @@ Rectangle {
                         VcsToolTip {
                             visible: referenceTagHover.hovered
                             text: qsTr("参考源")
-                        }
-                    }
-                    Text {
-                        id: separatorTwo
-
-                        visible: chip.isReference && !control.compactChrome
-                        text: "·"
-                        color: control.mutedTextColor
-                        font.pixelSize: Theme.fontBody
-                    }
-                    Text {
-                        id: filenameLabel
-
-                        visible: !control.compactChrome
-                        text: chip.parentLabel.length > 0 ? "%1 (%2)".arg(chip.filename).arg(chip.parentLabel) : chip.filename
-                        color: control.textColor
-                        font.pixelSize: Theme.fontBody
-                        elide: Text.ElideMiddle
-                        Layout.fillWidth: true
-
-                        HoverHandler {
-                            id: filenameHover
-                        }
-
-                        VcsToolTip {
-                            visible: filenameHover.hovered && chip.fullPath.length > 0
-                            text: chip.fullPath
                         }
                     }
 

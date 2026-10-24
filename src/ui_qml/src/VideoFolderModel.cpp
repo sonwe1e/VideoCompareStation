@@ -550,6 +550,21 @@ QUrl VideoFolderModel::urlForRow(const int row) const {
     return files_[static_cast<std::size_t>(row)].url;
 }
 
+bool VideoFolderModel::setRowHighlight(const int row) {
+    if (row < 0 || row >= fileCount()) {
+        return false;
+    }
+    if (currentRow_ == row) {
+        return true;
+    }
+    // View-only echo (decision c): no open is staged, currentUrl_ keeps describing the
+    // session, and the next synchronizeSources recomputes the row from that source - a
+    // restore highlight must never masquerade as a session change.
+    currentRow_ = row;
+    Q_EMIT stateChanged();
+    return true;
+}
+
 bool VideoFolderModel::isRecentImage(const int row) const {
     return row >= 0 && row < recentUrls_.size() && detail::isStillMediaUrl(QUrl{recentUrls_[row]});
 }

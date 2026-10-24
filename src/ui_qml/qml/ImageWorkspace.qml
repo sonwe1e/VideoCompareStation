@@ -8,6 +8,7 @@ import QtQuick.Window
 import Dvs.Ui 1.0
 import "VcsTheme.js" as Theme
 import "MediaLabels.js" as MediaLabels
+import "LayoutMetrics.js" as LayoutMetrics
 
 // Still-image workspace: single-image channel inspector + two-image DiffChecker.
 Rectangle {
@@ -54,8 +55,9 @@ Rectangle {
     property bool pixelGridEnabled: false
 
     // Distance from the workspace's bottom edge to the top of the stage's bottom controls;
-    // Main floats its notices above this line so they never cover the stage chrome.
-    readonly property real bottomControlsInset: fadeSliderOverlay.visible ? control.height - fadeSliderOverlay.y : control.height - (stage.y + stage.height)
+    // Main floats its notices above this line so they never cover the stage chrome. With an
+    // image open the fixed view-command bar is that line; the empty state has no bar.
+    readonly property real bottomControlsInset: control.height - (stage.y + (imageViewCommandBar.visible ? stageRow.height + Theme.spaceMain : stage.height))
 
     objectName: "imageWorkspace"
     color: Theme.stageWell
@@ -190,7 +192,7 @@ Rectangle {
         fileRow.forceLayout();
         modeRow.forceLayout();
         editRow.forceLayout();
-        editParamsRow.forceLayout();
+        editBandParamsRow.forceLayout();
         // The Column re-sums only on its own layout pass; without it the rows above
         // settle while commandPanel.height (bound to commandColumn.implicitHeight)
         // still reads zero.
@@ -261,7 +263,15 @@ Rectangle {
     // and on content flips (rows, chips appearing and disappearing) through the
     // relayout hooks above — the Column itself must re-sum in every one of those
     // passes, or commandPanel.height stays at its zero creation value.
-    Component.onCompleted: relayoutCommandPanel()
+    Component.onCompleted: {
+        relayoutCommandPanel();
+        // Open the gate only back on the event loop: the first recompute writes root
+        // state, and a write during the startup layout pass is what poisons the pass.
+        Qt.callLater(() => {
+            control.stageLayoutSettled = true;
+            control.recomputeCanvasWidthWithoutPanel();
+        });
+    }
 
     function toggleSinglePairSource() {
         if (!canSwitchSingleSource)
@@ -285,7 +295,7 @@ Rectangle {
             return "";
         if (!imageEdit || !imageEdit.dirty)
             return "";
-        return qsTr("编辑副本有未保存修改：请先「另存副本…」或「结束编辑」，再关闭此图片。");
+        return qsTr("编辑副本有未保存修改：请先「另存副本…」或「返回查看」，再关闭此图片。");
     }
 
     // Closes one side of the pair. Closing B keeps A; closing A keeps B (the controller
@@ -874,9 +884,10 @@ Rectangle {
         return (compareMode === 0 && hasPair && singleViewShowSecondary) ? 3 : 2;
     }
 
-    // Label of the 「更多工具」dropdown. It names the active tool only when that tool lives
-    // inside the dropdown — a tool that already has its own button keeps the plain label, so
-    // the row never shows two buttons with the same name.
+    // Label of the 「更多」rail button. It names the active tool only when that tool lives
+    // inside its menu — a tool that already has its own rail button keeps the plain label,
+    // so the rail never shows two buttons with the same name (workspace redesign §7: the
+    // annotation group button names the selected annotation tool).
     function imageEditToolLabel(tool) {
         switch (String(tool || "")) {
         case "mosaic":
@@ -1264,6 +1275,48 @@ Rectangle {
     // resident scene cost, no timer.
     property var compactMoreMenu: null
 
+    // Workspace redesign §2/§6/§7 (P3 second cut): the right parameter / inspector column.
+    // While editing it carries the tool parameter stack; while viewing it is the image
+    // inspector. The inspector follows the shell's shared 检查器 toggle so one concept spans
+    // both workspaces; the edit panel is its own always-there home while a session is open.
+    // The injected shell is optional like the other context objects - a bare workspace keeps
+    // the inspector simply closed.
+    property var reviewShell: null
+    readonly property bool imageInspectorOpen: control.reviewShell !== null ? Boolean(control.reviewShell.inspectorVisible) : false
+    property int imageInspectorTab: 0
+    property real imagePanelWidth: Theme.inspectorWidthDefault
+    // Drawer-tier open flag for the edit panel only (§10.2: the drawer starts closed and the
+    // fixed short row carries the tool's confirm/cancel, so submitting never needs the drawer).
+    property bool imagePanelDrawerOpen: false
+
+    // The canvas width before the panel claims anything - the number the dock decision reads,
+    // never the raw window width (§10.1).
+    // Updated IMPERATIVELY (width/visibility hooks in the stage), and only AFTER the
+    // startup layout settles: any write that lands during the initial layout pass
+    // cascades notifications into the still-forming item tree and froze the viewport
+    // preview images at 0x0 (caught by the hover suite).
+    property bool stageLayoutSettled: false
+    property real canvasWidthWithoutPanel: Theme.canvasMinimumWidth
+
+    function recomputeCanvasWidthWithoutPanel() {
+        if (!stageLayoutSettled)
+            return;
+        canvasWidthWithoutPanel = stageRow.width - (editToolRail.visible ? editToolRail.width + stageRow.spacing : 0) - (folderPairSidebar.visible ? folderPairSidebar.width + stageRow.spacing : 0);
+    }
+
+    // Single source for the stage row's horizontal gap. The docked inset below reads this
+    // number instead of reaching into the item tree: any binding that reads a later-created
+    // item's geometry during the initial binding pass poisoned the viewport preview images
+    // (frozen 0x0), so the canvas column references ROOT-level numbers only.
+    readonly property int stageColumnGap: 12
+    // Width the docked right panel claims from the canvas column (panel + gap), 0 while
+    // the panel is hidden or overlaying as a drawer. Pure root-state binding - no item
+    // geometry - so the initial pass can evaluate it freely.
+    readonly property real imagePanelDockedInset: (imagePanelVisible && imagePanelDocked) ? imagePanelWidthClamped + stageColumnGap : 0
+    readonly property real imagePanelWidthClamped: LayoutMetrics.clampInspectorWidth(control.imagePanelWidth)
+    readonly property bool imagePanelDocked: LayoutMetrics.inspectorShouldDock(control.canvasWidthWithoutPanel, control.imagePanelWidthClamped + stageRow.spacing, Theme.canvasMinimumWidth)
+    readonly property bool imagePanelVisible: control.editModeActive ? (control.hasPrimary && control.imageEdit !== null && (control.imagePanelDocked || control.imagePanelDrawerOpen)) : (control.hasPrimary && control.imageInspectorOpen)
+
     function openCompactMoreMenu(anchorItem) {
         if (control.compactMoreMenu === null)
             control.compactMoreMenu = compactMoreMenuComponent.createObject(anchorItem);
@@ -1285,7 +1338,7 @@ Rectangle {
 
         VcsMenuItem {
             objectName: "imageCompactEditToggleItem"
-            text: control.editModeActive ? qsTr("结束编辑") : qsTr("编辑画面")
+            text: control.editModeActive ? qsTr("返回查看") : qsTr("编辑画面")
             visible: control.hasPrimary && control.imageEdit !== null
             enabled: visible
             onTriggered: {
@@ -1352,6 +1405,18 @@ Rectangle {
             text: control.sidebarVisible ? qsTr("隐藏列表") : qsTr("显示列表")
             visible: control.hasFolders
             onTriggered: control.toggleSidebarRequested()
+        }
+        VcsMenuItem {
+            objectName: "imageCompactInspectorItem"
+            text: control.imageInspectorOpen ? qsTr("隐藏检查器") : qsTr("显示检查器")
+            // The edit session's parameter panel is not toggleable; this entry is the
+            // viewing inspector only.
+            visible: control.hasPrimary && !control.editModeActive
+            enabled: visible
+            onTriggered: {
+                if (control.reviewShell)
+                    control.reviewShell.inspectorVisible = !control.imageInspectorOpen;
+            }
         }
         VcsMenuSeparator {}
         VcsMenuItem {
@@ -1728,7 +1793,10 @@ Rectangle {
                 width: 18
                 height: 18
                 radius: Theme.radiusMicro
-                color: sourceChip.isDisplayed ? sourceChip.sourceAccent : Theme.fluentHover
+                // The badge carries the slot's identity colour (dark source ground, source
+                // letter); the card body stays neutral so a chip never reads as a second
+                // task-tab language.
+                color: sourceChip.isDisplayed ? sourceChip.sourceAccent : (sourceChip.isSecondary ? Theme.sourceBBackground : Theme.sourceABackground)
                 anchors.verticalCenter: parent.verticalCenter
 
                 Text {
@@ -1760,12 +1828,14 @@ Rectangle {
         }
 
         background: Rectangle {
-            radius: Theme.radiusLarge
+            radius: Theme.radiusSubtle
             color: {
                 if (!sourceChip.enabled)
                     return "transparent";
+                // The side the canvas is showing reuses the quiet active ground the mode
+                // chips use; the resting card is a neutral file row, never a dyed pill.
                 if (sourceChip.isDisplayed)
-                    return sourceChip.isSecondary ? Theme.sourceBBackground : Theme.sourceABackground;
+                    return Theme.controlChecked;
                 if (sourceChip.down)
                     return Theme.fluentPressed;
                 if (sourceChip.hovered)
@@ -1773,7 +1843,7 @@ Rectangle {
                 return Theme.raisedPanel;
             }
             border.width: 1
-            border.color: sourceChip.isDisplayed || sourceChip.hovered ? sourceChip.sourceBorder : Theme.controlBorder
+            border.color: sourceChip.hovered && !sourceChip.isDisplayed ? Theme.controlBorder : "transparent"
         }
 
         // One still image replaces this side. Multi-URL and non-image drags are rejected so
@@ -3564,7 +3634,7 @@ Rectangle {
 
             ImageTaskTabs {
                 width: parent.width
-                height: visible ? 34 : 0
+                height: visible ? implicitHeight : 0
                 visible: control.imageTabsModel && control.imageTabsModel.length > 0
                 tabsModel: control.imageTabsModel
                 activeIndex: control.imageTabsActiveIndex
@@ -3573,10 +3643,11 @@ Rectangle {
                 onTabCloseRequested: index => control.imageTabCloseRequested(index)
             }
 
-            // Row 1 — sources & session. The A/B chips give the pair a visible identity
-            // (click = direct look, drop = replace that slot); the session commands sit in
-            // the same flow so a narrow window wraps instead of overlapping. Opening
-            // variants live behind one dropdown so the strip never grows past one band.
+            // Row 1 — session commands only (workspace redesign §6): open/add,
+            // per-side replacement, the slot swap. The A/B file identities live in
+            // their own strip directly above the canvas (imageSourceStrip below), so
+            // a source never reads as another toolbar button. Opening variants live
+            // behind one dropdown so the strip never grows past one band.
             Item {
                 id: sourceRow
 
@@ -3613,43 +3684,6 @@ Rectangle {
                     onWidthChanged: {
                         forceLayout();
                         Qt.callLater(commandColumn.forceLayout);
-                    }
-
-                    ImageSourceChip {
-                        objectName: "imageSourceChipA"
-                        sourceSlot: 2
-                        visible: control.hasPrimary
-                        chipTitle: control.imageTitle(control.imageReview.primaryPath, control.imageReview.secondaryPath)
-                        chipPath: String((control.imageReview && control.imageReview.primaryPath) || "")
-                        onDirectLookRequested: {
-                            if (!control.canSwitchSingleSource)
-                                return;
-                            if (control.compareMode !== 0)
-                                control.modeButton(0);
-                            control.singleViewShowSecondary = false;
-                        }
-                        onCloseRequested: control.closeSide(2)
-                        onReplaceDropped: url => control.replacePrimaryDropped(url)
-                    }
-                    ImageSourceChip {
-                        objectName: "imageSourceChipB"
-                        sourceSlot: 3
-                        visible: control.hasSecondary
-                        chipTitle: control.imageTitle(control.imageReview.secondaryPath, control.imageReview.primaryPath)
-                        chipPath: String((control.imageReview && control.imageReview.secondaryPath) || "")
-                        onDirectLookRequested: {
-                            if (!control.canSwitchSingleSource)
-                                return;
-                            if (control.compareMode !== 0)
-                                control.modeButton(0);
-                            control.singleViewShowSecondary = true;
-                        }
-                        onCloseRequested: control.closeSide(3)
-                        onReplaceDropped: url => control.replaceSecondaryDropped(url)
-                    }
-
-                    RowSeparator {
-                        visible: control.hasPrimary
                     }
 
                     ImageCommandButton {
@@ -3703,17 +3737,9 @@ Rectangle {
                             }
                         }
                     }
-                    ImageCommandButton {
-                        objectName: "imageSwapSidesButton"
-                        visible: control.hasPair && !control.compactChrome
-                        implicitHeight: 30
-                        leftPadding: 8
-                        rightPadding: 8
-                        text: qsTr("对调 A/B")
-                        helpText: qsTr("交换 A 与 B 的槽位方向。\n不改变文件夹配对身份；带符号差异、分割线与淡化会跟随新的 A/B 方向。")
-                        onClicked: control.swapSidesRequested()
-                    }
-
+                    // Session commands read left-to-right in the redesign's order (§6):
+                    // open/add first, then per-side replacement, then the slot swap - the
+                    // rarer whole-pair action comes last.
                     ImageCommandButton {
                         objectName: "imageReplaceSidesButton"
                         text: qsTr("换图… ▾")
@@ -3764,13 +3790,25 @@ Rectangle {
                             }
                         }
                     }
+                    ImageCommandButton {
+                        objectName: "imageSwapSidesButton"
+                        visible: control.hasPair && !control.compactChrome
+                        implicitHeight: 30
+                        leftPadding: 8
+                        rightPadding: 8
+                        text: qsTr("对调 A/B")
+                        helpText: qsTr("交换 A 与 B 的槽位方向。\n不改变文件夹配对身份；带符号差异、分割线与淡化会跟随新的 A/B 方向。")
+                        onClicked: control.swapSidesRequested()
+                    }
 
                     ImageCommandButton {
                         objectName: "imageEditStartButton"
                         visible: control.hasPrimary && control.imageEdit !== null && !control.compactChrome
                         // An action label, not a state: the filled button while editing is 另存副本….
-                        text: control.editModeActive ? qsTr("结束编辑") : qsTr("编辑画面")
-                        helpText: qsTr("在原图的副本上编辑；原文件保持不变，编辑结果必须另存为副本。")
+                        // §7 names the exit "return to viewing" - it restores the previous
+                        // comparison state without saving or discarding anything by itself.
+                        text: control.editModeActive ? qsTr("返回查看") : qsTr("编辑画面")
+                        helpText: control.editModeActive ? qsTr("返回查看模式；未保存的修改保留在编辑副本中。") : qsTr("在原图的副本上编辑；原文件保持不变，编辑结果必须另存为副本。")
                         onClicked: {
                             if (control.editModeActive)
                                 control.finishImageEdit();
@@ -3803,6 +3841,24 @@ Rectangle {
                         rightPadding: 10
                         visible: control.hasFolders && !control.compactChrome
                         onClicked: control.toggleSidebarRequested()
+                    }
+
+                    // Workspace redesign §2/§6: the inspector entry rides the command row's
+                    // right cluster and toggles the shell's shared 检查器 state - the image
+                    // inspector and the video inspector answer to the same switch. While
+                    // editing the right column is the parameter home and needs no toggle.
+                    ImageCommandButton {
+                        objectName: "imageInspectorToggleButton"
+                        text: control.imageInspectorOpen ? qsTr("隐藏检查器") : qsTr("检查器")
+                        implicitHeight: 30
+                        leftPadding: 10
+                        rightPadding: 10
+                        visible: control.hasPrimary && !control.compactChrome && !control.editModeActive
+                        helpText: qsTr("显示或隐藏右侧检查器：差异统计与图像信息。")
+                        onClicked: {
+                            if (control.reviewShell)
+                                control.reviewShell.inspectorVisible = !control.imageInspectorOpen;
+                        }
                     }
 
                     // FLOW3: where the arrow keys are in the current directory. The count is not
@@ -4247,7 +4303,11 @@ Rectangle {
                         }
                     }
 
-                    // Background quick chips under transparent regions.
+                    // ---- Background quick chips under transparent regions --------------------
+                    // One group boundary per observation concern (§6): modes | channel view |
+                    // background. The separators keep the band readable without adding a row.
+                    RowSeparator {}
+
                     ModeChip {
                         objectName: "imageBgChipDark"
                         visible: !control.compactChrome
@@ -4356,12 +4416,98 @@ Rectangle {
                 }
             }
 
-            // Row 2 (edit) — the comparison band is replaced wholesale by the edit ribbon.
-            // The original file is never written to: the session edits a working copy and
-            // saving always produces a new file. Every tool takes its geometry in image
-            // pixels, so zooming or panning cannot drift a selection, a stroke or an
-            // annotation. The tool only changes what the left button does; middle-drag
-            // still pans. 进入/结束编辑的入口固定在第 1 层（编辑画面/结束编辑）。
+            // Row 3 — source identity strip (workspace redesign §2/§5): the A/B file
+            // identities sit in their own 32 px band at the panel's lower edge, directly
+            // above the canvas - a different shape and place from the task tabs and the
+            // session commands, so a source can no longer read as either. Click = direct
+            // look, drop = replace that slot, right-click = that side's close menu. The
+            // strip survives the compact tier (§10.3: the A/B identity must not vanish);
+            // only the size summaries fold away.
+            Item {
+                id: imageSourceStrip
+
+                objectName: "imageSourceStrip"
+                width: parent.width
+                visible: control.hasPrimary
+                height: visible ? 32 : 0
+
+                Rectangle {
+                    anchors {
+                        left: parent.left
+                        right: parent.right
+                        top: parent.top
+                    }
+                    height: 1
+                    color: Theme.border
+                }
+
+                Row {
+                    spacing: Theme.spaceMain
+                    anchors {
+                        left: parent.left
+                        leftMargin: 12
+                        verticalCenter: parent.verticalCenter
+                    }
+
+                    ImageSourceChip {
+                        objectName: "imageSourceChipA"
+                        sourceSlot: 2
+                        visible: control.hasPrimary
+                        chipTitle: control.imageTitle(control.imageReview.primaryPath, control.imageReview.secondaryPath)
+                        chipPath: String((control.imageReview && control.imageReview.primaryPath) || "")
+                        onDirectLookRequested: {
+                            if (!control.canSwitchSingleSource)
+                                return;
+                            if (control.compareMode !== 0)
+                                control.modeButton(0);
+                            control.singleViewShowSecondary = false;
+                        }
+                        onCloseRequested: control.closeSide(2)
+                        onReplaceDropped: url => control.replacePrimaryDropped(url)
+                    }
+                    Text {
+                        objectName: "imageSourceSizeA"
+                        visible: control.hasPrimary && !control.compactChrome && control.imageReview && control.imageReview.primaryWidth > 0
+                        text: "%1×%2".arg(control.imageReview.primaryWidth).arg(control.imageReview.primaryHeight)
+                        color: Theme.mutedText
+                        font.pixelSize: Theme.fontSecondary
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    ImageSourceChip {
+                        objectName: "imageSourceChipB"
+                        sourceSlot: 3
+                        visible: control.hasSecondary
+                        chipTitle: control.imageTitle(control.imageReview.secondaryPath, control.imageReview.primaryPath)
+                        chipPath: String((control.imageReview && control.imageReview.secondaryPath) || "")
+                        onDirectLookRequested: {
+                            if (!control.canSwitchSingleSource)
+                                return;
+                            if (control.compareMode !== 0)
+                                control.modeButton(0);
+                            control.singleViewShowSecondary = true;
+                        }
+                        onCloseRequested: control.closeSide(3)
+                        onReplaceDropped: url => control.replaceSecondaryDropped(url)
+                    }
+                    Text {
+                        objectName: "imageSourceSizeB"
+                        visible: control.hasSecondary && !control.compactChrome && control.imageReview && control.imageReview.secondaryWidth > 0
+                        text: "%1×%2".arg(control.imageReview.secondaryWidth).arg(control.imageReview.secondaryHeight)
+                        color: Theme.mutedText
+                        font.pixelSize: Theme.fontSecondary
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+            }
+
+            // Row 2 (edit) — the edit session's top ribbon: identity, history and the one
+            // submit. Tool selection lives in the left rail beside the working copy
+            // (imageEditToolRail); per-tool parameters and whole-image geometry fill the
+            // plate below. The original file is never written to: the session edits a
+            // working copy and saving always produces a new file. Every tool takes its
+            // geometry in image pixels, so zooming or panning cannot drift a selection, a
+            // stroke or an annotation. The tool only changes what the left button does;
+            // middle-drag still pans. 进入编辑的入口固定在第 1 层（编辑画面），返回经「返回查看」。
             Item {
                 id: editBarHost
 
@@ -4411,206 +4557,10 @@ Rectangle {
                             hairlineHeight: 20
                         }
 
-                        ImageCommandButton {
-                            objectName: "imageEditToolCropButton"
-                            visible: control.editModeActive
-                            checkable: true
-                            checked: control.editTool === "crop"
-                            mirrorsState: true
-                            text: qsTr("裁剪")
-                            onClicked: control.editTool = "crop"
-                        }
-                        ImageCommandButton {
-                            objectName: "imageEditToolSmartSelectButton"
-                            // Always present: hiding the tool when the runtime is missing made
-                            // its own "检测模型" entry unreachable (you had to select the tool
-                            // to find the button that enables it). Disabled plus an actionable
-                            // reason keeps the path discoverable.
-                            visible: control.editModeActive
-                            enabled: !!(control.imageEdit && control.imageEdit.smartSegmentAvailable)
-                            checkable: true
-                            checked: control.editTool === "smart_select"
-                            mirrorsState: true
-                            text: qsTr("智能抠图")
-                            helpText: (control.imageEdit && control.imageEdit.smartSegmentAvailable) ? qsTr("框选目标物体，AI 自动分割轮廓并抠出透明背景。") : qsTr("需要 models 目录下的 onnxruntime.dll 与 sam2_encoder/decoder.onnx。放入文件后，点击下方编辑栏的「检测模型」。")
-                            onClicked: control.editTool = "smart_select"
-                        }
-                        ImageCommandButton {
-                            objectName: "imageEditToolBrushButton"
-                            visible: control.editModeActive
-                            checkable: true
-                            checked: control.editTool === "brush"
-                            mirrorsState: true
-                            text: qsTr("画笔")
-                            onClicked: control.editTool = "brush"
-                        }
-                        ImageCommandButton {
-                            objectName: "imageEditToolSelectButton"
-                            // Compact tier keeps the annotation-only tool on the 更多工具 menu
-                            // so the chips+tools line stays one band.
-                            visible: control.editModeActive && !control.compactChrome
-                            checkable: true
-                            checked: control.editTool === "select"
-                            mirrorsState: true
-                            text: qsTr("选择")
-                            helpText: qsTr("点击选中标注后可拖动；Delete 键或「删除标注」可删除。")
-                            onClicked: control.editTool = "select"
-                        }
-
-                        // Drawing and annotation tools dropdown
-                        ImageCommandButton {
-                            objectName: "imageEditMoreToolsButton"
-                            visible: control.editModeActive
-                            text: control.imageEditToolLabel(control.editTool) + " ▾"
-                            helpText: qsTr("马赛克、填充、清除、矩形、箭头、文字与标注管理。")
-                            onClicked: moreToolsMenu.open()
-
-                            VcsMenu {
-                                id: moreToolsMenu
-
-                                objectName: "imageEditMoreToolsMenu"
-                                menuWidth: 240
-
-                                // Radio rows: the tools are exclusive, and an exclusive item
-                                // stays checked when the active tool is chosen again.
-                                // Compact tier: the annotation-only tool rides the menu so
-                                // the chips+tools line stays one band.
-                                VcsRadioMenuItem {
-                                    objectName: "imageEditToolSelectMenuItem"
-                                    visible: control.compactChrome
-                                    text: qsTr("选择")
-                                    checked: control.editTool === "select"
-                                    onTriggered: control.editTool = "select"
-                                }
-                                VcsRadioMenuItem {
-                                    objectName: "imageEditToolMosaicButton"
-                                    text: qsTr("马赛克")
-                                    checked: control.editTool === "mosaic"
-                                    onTriggered: control.editTool = "mosaic"
-                                }
-                                VcsRadioMenuItem {
-                                    objectName: "imageEditToolFillButton"
-                                    text: qsTr("填充")
-                                    checked: control.editTool === "fill"
-                                    onTriggered: control.editTool = "fill"
-                                }
-                                VcsRadioMenuItem {
-                                    objectName: "imageEditToolClearButton"
-                                    text: qsTr("清除")
-                                    checked: control.editTool === "clear"
-                                    onTriggered: control.editTool = "clear"
-                                }
-                                VcsRadioMenuItem {
-                                    objectName: "imageEditToolRectButton"
-                                    text: qsTr("矩形")
-                                    checked: control.editTool === "rect"
-                                    onTriggered: control.editTool = "rect"
-                                }
-                                VcsRadioMenuItem {
-                                    objectName: "imageEditToolArrowButton"
-                                    text: qsTr("箭头")
-                                    checked: control.editTool === "arrow"
-                                    onTriggered: control.editTool = "arrow"
-                                }
-                                VcsRadioMenuItem {
-                                    objectName: "imageEditToolTextButton"
-                                    text: qsTr("文字")
-                                    checked: control.editTool === "text"
-                                    onTriggered: control.editTool = "text"
-                                }
-
-                                VcsMenuSeparator {}
-
-                                VcsMenuItem {
-                                    objectName: "imageEditDeleteAnnotationMenuItem"
-                                    text: qsTr("删除选中标注")
-                                    enabled: control.imageEdit !== null && control.imageEdit.selectedAnnotation >= 0
-                                    onTriggered: {
-                                        if (control.imageEdit)
-                                            control.imageEdit.deleteSelectedAnnotation();
-                                    }
-                                }
-                                VcsMenuItem {
-                                    objectName: "imageEditClearAnnotationsMenuItem"
-                                    text: qsTr("清空所有标注")
-                                    enabled: control.imageEdit !== null && control.imageEdit.annotationCount > 0
-                                    onTriggered: {
-                                        if (control.imageEdit)
-                                            control.imageEdit.clearAnnotations();
-                                    }
-                                }
-                            }
-                        }
-
-                        RowSeparator {
-                            visible: control.editModeActive
-                            hairlineHeight: 20
-                        }
-
-                        // Whole-image geometry, not a brush: these change the working copy's size rather
-                        // than the pixels under the cursor, so they sit together in their own group.
-                        ImageCommandButton {
-                            objectName: "imageEditScaleButton"
-                            // Compact tier folds whole-image geometry into the 更多 menu.
-                            visible: control.editModeActive && !control.compactChrome
-                            text: qsTr("缩放…")
-                            helpText: qsTr("把画面重采样到指定的像素尺寸；锁定比例时改一边会自动推算另一边。")
-                            onClicked: imageEditDialogs.openScale()
-                        }
-                        ImageCommandButton {
-                            objectName: "imageEditFillButton"
-                            visible: control.editModeActive && !control.compactChrome
-                            text: qsTr("填充画布…")
-                            helpText: qsTr("把原图居中放到更大的画布上，四周用指定颜色补齐。")
-                            onClicked: imageEditDialogs.openFill()
-                        }
-
-                        ImageCommandButton {
-                            objectName: "imageEditTransformButton"
-                            visible: control.editModeActive && !control.compactChrome
-                            text: qsTr("旋转 / 翻转 ▾")
-                            enabled: control.imageEdit && !control.imageEdit.strokeActive
-                            helpText: qsTr("水平镜像、垂直翻转、90° 或 180° 旋转；每次操作都可撤销。")
-                            onClicked: transformMenu.open()
-
-                            VcsMenu {
-                                id: transformMenu
-                                objectName: "imageEditTransformMenu"
-                                menuWidth: 240
-
-                                VcsMenuItem {
-                                    objectName: "imageEditMirrorHorizontalItem"
-                                    text: qsTr("水平镜像（左右）")
-                                    onTriggered: control.applyImageMirror(false)
-                                }
-                                VcsMenuItem {
-                                    objectName: "imageEditFlipVerticalItem"
-                                    text: qsTr("垂直翻转（上下）")
-                                    onTriggered: control.applyImageMirror(true)
-                                }
-                                VcsMenuSeparator {}
-                                VcsMenuItem {
-                                    objectName: "imageEditRotateClockwiseItem"
-                                    text: qsTr("顺时针旋转 90°")
-                                    onTriggered: control.applyImageRotation(1)
-                                }
-                                VcsMenuItem {
-                                    objectName: "imageEditRotateCounterclockwiseItem"
-                                    text: qsTr("逆时针旋转 90°")
-                                    onTriggered: control.applyImageRotation(-1)
-                                }
-                                VcsMenuItem {
-                                    objectName: "imageEditRotateHalfTurnItem"
-                                    text: qsTr("旋转 180°")
-                                    onTriggered: control.applyImageRotation(2)
-                                }
-                            }
-                        }
-
-                        RowSeparator {
-                            visible: control.editModeActive
-                            hairlineHeight: 20
-                        }
+                        // Workspace redesign §7: the top ribbon carries only the session
+                        // actions of the edit (history and the one submit). Tool selection
+                        // lives in the left rail (imageEditToolRail); whole-image geometry
+                        // opens the parameter plate below (editParamsRow).
 
                         ImageCommandButton {
                             objectName: "imageEditUndoButton"
@@ -4658,347 +4608,63 @@ Rectangle {
                         }
                     }
 
-                    // Row D — parameters for the active tool. The plate uses the canvas colour so the
-                    // strip reads as a recessed well inside the raised edit ribbon, and it wraps
-                    // instead of clipping once a tool carries more controls than fit on one line.
-                    Rectangle {
-                        visible: control.hasPrimary && control.editModeActive
-                        width: parent.width
-                        height: editParamsRow.implicitHeight + 12
-                        radius: Theme.radiusSubtle
-                        color: Theme.canvas
-                        border.width: 1
-                        border.color: Theme.border
+                    // Drawer-tier fallback (workspace redesign §7/§10.2): while the right
+                    // parameter panel cannot dock beside the canvas, the tool name and the
+                    // tool's confirm/cancel pair stay on this fixed short row - submitting a
+                    // crop or a segmentation never requires opening the drawer. The full
+                    // parameter stack lives in imageParamsPanel; the「参数」entry opens it.
+                    Row {
+                        id: editBandParamsRow
 
-                        Flow {
-                            id: editParamsRow
-                            objectName: "imageEditParamsRow"
-                            spacing: Theme.spaceMain
-                            visible: control.hasPrimary && control.editModeActive
-                            // See the forceLayout note in Component.onCompleted above.
-                            onWidthChanged: {
-                                forceLayout();
-                                Qt.callLater(commandColumn.forceLayout);
-                            }
+                        objectName: "imageEditParamsRow"
+                        visible: control.hasPrimary && control.editModeActive && !control.imagePanelDocked && !control.imagePanelDrawerOpen
+                        height: visible ? implicitHeight : 0
+                        spacing: Theme.spaceMain
 
-                            anchors {
-                                left: parent.left
-                                right: parent.right
-                                leftMargin: 10
-                                rightMargin: 10
-                                verticalCenter: parent.verticalCenter
-                            }
+                        Text {
+                            objectName: "imageEditBandToolLabel"
+                            height: 30
+                            verticalAlignment: Text.AlignVCenter
+                            text: control.imageEditToolLabel(control.editTool)
+                            color: Theme.secondaryText
+                            font.pixelSize: Theme.fontCaption
+                        }
 
-                            // Persistent model probe: reachable from every tool, so a user who
-                            // drops the runtime into models/ never has to discover a hidden
-                            // tool to re-check. Its result lands in the workspace status line.
-                            ReviewActionButton {
-                                objectName: "imageEditProbeSmartSelectButton"
-                                visible: control.imageEdit !== null
-                                text: qsTr("检测模型")
-                                implicitHeight: 30
-                                leftPadding: 10
-                                rightPadding: 10
-                                helpText: qsTr("在 models 目录中查找 onnxruntime.dll、sam2_encoder.onnx 与 sam2_decoder.onnx；就绪后「智能抠图」会变为可用。")
-                                onClicked: {
-                                    if (control.imageEdit)
-                                        // QML does not apply C++ default arguments, so the
-                                        // explicit empty directory is required here.
-                                        control.imageEdit.probeSmartSegment("");
-                                }
+                        // The band's own confirm/cancel pair. Distinct objectNames on purpose:
+                        // the canonical actions (imageEditApplyCropButton …) live inside the
+                        // panel, and findChild must never return the wrong twin.
+                        ReviewActionButton {
+                            objectName: "imageEditBandApplyButton"
+                            visible: control.editTool === "crop" || control.editTool === "mosaic" || control.editTool === "smart_select"
+                            prominent: true
+                            text: control.editTool === "smart_select" ? qsTr("识别并抠出目标") : (control.editTool === "mosaic" ? qsTr("应用马赛克") : qsTr("应用裁剪"))
+                            enabled: control.cropSelection !== null && control.imageEdit && control.imageEdit.active && (control.editTool !== "smart_select" || control.imageEdit.smartSegmentAvailable)
+                            implicitHeight: Theme.hitAreaMinimum
+                            leftPadding: 10
+                            rightPadding: 10
+                            onClicked: control.applyCropSelection()
+                        }
+                        ReviewActionButton {
+                            objectName: "imageEditBandCancelButton"
+                            visible: (control.editTool === "crop" || control.editTool === "mosaic" || control.editTool === "smart_select") && control.cropSelection !== null
+                            text: qsTr("取消选区")
+                            implicitHeight: Theme.hitAreaMinimum
+                            leftPadding: 10
+                            rightPadding: 10
+                            onClicked: {
+                                control.cropSelection = null;
+                                control.forceActiveFocus();
                             }
-                            Text {
-                                objectName: "imageEditSmartSegmentReadyText"
-                                visible: control.imageEdit !== null && control.imageEdit.smartSegmentAvailable
-                                height: 30
-                                verticalAlignment: Text.AlignVCenter
-                                text: qsTr("智能抠图已就绪")
-                                color: Theme.mutedText
-                                font.pixelSize: Theme.fontCaption
-                            }
+                        }
 
-                            ReviewActionButton {
-                                objectName: "imageEditBrushColorButton"
-                                visible: control.editTool === "brush" || control.editTool === "fill" || control.editTool === "rect" || control.editTool === "arrow" || control.editTool === "text"
-                                text: qsTr("颜色 ▾")
-                                implicitHeight: 30
-                                leftPadding: 24
-                                rightPadding: 8
-                                onClicked: brushColorMenu.open()
-
-                                Rectangle {
-                                    width: 10
-                                    height: 10
-                                    radius: 5
-                                    // Full strength: the swatch previews the exact colour the brush paints.
-                                    color: control.brushColor
-                                    border.width: 1
-                                    border.color: Theme.primaryText
-                                    anchors {
-                                        left: parent.left
-                                        leftMargin: 8
-                                        verticalCenter: parent.verticalCenter
-                                    }
-                                }
-
-                                VcsMenu {
-                                    id: brushColorMenu
-                                    menuWidth: 150
-
-                                    VcsRadioMenuItem {
-                                        objectName: "imageEditBrushColorRed"
-                                        text: qsTr("红")
-                                        checked: control.brushColor === "#ff3b30"
-                                        onTriggered: control.brushColor = "#ff3b30"
-                                    }
-                                    VcsRadioMenuItem {
-                                        objectName: "imageEditBrushColorYellow"
-                                        text: qsTr("黄")
-                                        checked: control.brushColor === "#ffd60a"
-                                        onTriggered: control.brushColor = "#ffd60a"
-                                    }
-                                    VcsRadioMenuItem {
-                                        objectName: "imageEditBrushColorGreen"
-                                        text: qsTr("绿")
-                                        checked: control.brushColor === "#34c759"
-                                        onTriggered: control.brushColor = "#34c759"
-                                    }
-                                    VcsRadioMenuItem {
-                                        objectName: "imageEditBrushColorCyan"
-                                        text: qsTr("青")
-                                        checked: control.brushColor === "#32ade6"
-                                        onTriggered: control.brushColor = "#32ade6"
-                                    }
-                                    VcsRadioMenuItem {
-                                        objectName: "imageEditBrushColorWhite"
-                                        text: qsTr("白")
-                                        checked: control.brushColor === "#ffffff"
-                                        onTriggered: control.brushColor = "#ffffff"
-                                    }
-                                    VcsRadioMenuItem {
-                                        objectName: "imageEditBrushColorBlack"
-                                        text: qsTr("黑")
-                                        checked: control.brushColor === "#000000"
-                                        onTriggered: control.brushColor = "#000000"
-                                    }
-                                }
-                            }
-                            Text {
-                                objectName: "imageEditBrushWidthLabel"
-                                visible: control.editTool === "brush" || control.editTool === "rect" || control.editTool === "arrow"
-                                height: 30
-                                verticalAlignment: Text.AlignVCenter
-                                text: control.editTool === "brush" ? qsTr("粗细 %1").arg(control.brushWidth) : qsTr("线宽 %1").arg(control.brushWidth)
-                                color: Theme.mutedText
-                                font.pixelSize: Theme.fontCaption
-                            }
-                            Slider {
-                                objectName: "imageEditBrushWidthSlider"
-                                visible: control.editTool === "brush" || control.editTool === "rect" || control.editTool === "arrow"
-                                width: 96
-                                height: 30
-                                from: 1
-                                to: 64
-                                stepSize: 1
-                                value: control.brushWidth
-                                onMoved: control.brushWidth = Math.round(value)
-                            }
-                            Text {
-                                objectName: "imageEditBrushOpacityLabel"
-                                visible: control.editTool === "brush"
-                                height: 30
-                                verticalAlignment: Text.AlignVCenter
-                                text: qsTr("透明 %1%").arg(Math.round(control.brushOpacity * 100))
-                                color: Theme.mutedText
-                                font.pixelSize: Theme.fontCaption
-                            }
-                            Slider {
-                                objectName: "imageEditBrushOpacitySlider"
-                                visible: control.editTool === "brush"
-                                width: 96
-                                height: 30
-                                from: 0.05
-                                to: 1
-                                stepSize: 0.05
-                                value: control.brushOpacity
-                                onMoved: control.brushOpacity = value
-                            }
-                            Text {
-                                objectName: "imageEditMosaicBlockLabel"
-                                visible: control.editTool === "mosaic"
-                                height: 30
-                                verticalAlignment: Text.AlignVCenter
-                                text: qsTr("块大小 %1").arg(control.mosaicBlock)
-                                color: Theme.mutedText
-                                font.pixelSize: Theme.fontCaption
-                            }
-                            Slider {
-                                objectName: "imageEditMosaicBlockSlider"
-                                visible: control.editTool === "mosaic"
-                                width: 120
-                                height: 30
-                                from: 2
-                                to: 48
-                                stepSize: 1
-                                value: control.mosaicBlock
-                                onMoved: control.mosaicBlock = Math.round(value)
-                            }
-                            Text {
-                                objectName: "imageEditAnnotationTextLabel"
-                                visible: control.editTool === "text"
-                                height: 30
-                                verticalAlignment: Text.AlignVCenter
-                                text: qsTr("文字")
-                                color: Theme.mutedText
-                                font.pixelSize: Theme.fontCaption
-                            }
-                            TextField {
-                                objectName: "imageEditAnnotationTextField"
-                                visible: control.editTool === "text"
-                                width: 180
-                                height: 30
-                                placeholderText: qsTr("输入标注文字，再点击画面放置")
-                                text: control.annotationText
-                                font.pixelSize: Theme.fontSecondary
-                                onTextEdited: control.annotationText = text
-                            }
-                            Text {
-                                objectName: "imageEditAnnotationTextSizeLabel"
-                                visible: control.editTool === "text"
-                                height: 30
-                                verticalAlignment: Text.AlignVCenter
-                                text: qsTr("字号 %1").arg(control.annotationTextSize)
-                                color: Theme.mutedText
-                                font.pixelSize: Theme.fontCaption
-                            }
-                            Slider {
-                                objectName: "imageEditAnnotationTextSizeSlider"
-                                visible: control.editTool === "text"
-                                width: 110
-                                height: 30
-                                from: 10
-                                to: 160
-                                stepSize: 1
-                                value: control.annotationTextSize
-                                onMoved: control.annotationTextSize = Math.round(value)
-                            }
-                            Text {
-                                objectName: "imageEditCropHelpText"
-                                visible: control.editTool === "crop" && control.cropSelection === null
-                                height: 30
-                                verticalAlignment: Text.AlignVCenter
-                                text: qsTr("在画面上拖拽框选裁剪区域；支持 8 锚点调整与移动；Enter 确认，Esc 取消")
-                                color: Theme.mutedText
-                                font.pixelSize: Theme.fontCaption
-                            }
-                            ReviewActionButton {
-                                objectName: "imageEditCancelCropButton"
-                                visible: control.editTool === "crop" && control.cropSelection !== null
-                                text: qsTr("取消选区")
-                                implicitHeight: 30
-                                leftPadding: 10
-                                rightPadding: 10
-                                onClicked: {
-                                    control.cropSelection = null;
-                                    control.forceActiveFocus();
-                                }
-                            }
-                            ReviewActionButton {
-                                objectName: "imageEditApplyCropButton"
-                                visible: control.editTool === "crop" || control.editTool === "mosaic"
-                                prominent: true
-                                text: control.cropSelection ? (control.editTool === "mosaic" ? qsTr("应用马赛克 %1×%2").arg(control.cropSelection.width).arg(control.cropSelection.height) : qsTr("应用裁剪 %1×%2").arg(control.cropSelection.width).arg(control.cropSelection.height)) : (control.editTool === "mosaic" ? qsTr("应用马赛克") : qsTr("应用裁剪"))
-                                enabled: control.cropSelection !== null && control.imageEdit && control.imageEdit.active
-                                implicitHeight: 30
-                                leftPadding: 10
-                                rightPadding: 10
-                                helpText: qsTr("编辑模式下左键框选区域，中键仍可平移；画笔工具下左键直接涂画。")
-                                onClicked: control.applyCropSelection()
-                            }
-                            Text {
-                                objectName: "imageEditSmartSelectHelpText"
-                                visible: control.editTool === "smart_select" && control.cropSelection === null
-                                height: 30
-                                verticalAlignment: Text.AlignVCenter
-                                text: {
-                                    if (!control.imageEdit)
-                                        return "";
-                                    if (!control.imageEdit.smartSegmentAvailable)
-                                        return qsTr("AI 模型未就绪：请将 onnxruntime.dll 与 sam2_encoder/decoder.onnx 放入 models 目录，再点击「检测模型」。");
-                                    return qsTr("在画面上拖拽框选要抠出的目标物体 (支持调整选区与锚点)");
-                                }
-                                color: (control.imageEdit && control.imageEdit.smartSegmentAvailable) ? Theme.mutedText : Theme.warning
-                                font.pixelSize: Theme.fontCaption
-                            }
-                            CheckBox {
-                                objectName: "imageEditSmartSelectTightCropCheck"
-                                visible: control.editTool === "smart_select" && control.imageEdit && control.imageEdit.smartSegmentAvailable
-                                text: qsTr("紧凑裁剪")
-                                checked: control.smartSegmentTightCrop
-                                onToggled: control.smartSegmentTightCrop = checked
-                            }
-                            ReviewActionButton {
-                                objectName: "imageEditCancelSmartSelectButton"
-                                visible: control.editTool === "smart_select" && control.cropSelection !== null
-                                text: qsTr("取消选区")
-                                implicitHeight: 30
-                                leftPadding: 10
-                                rightPadding: 10
-                                onClicked: {
-                                    control.cropSelection = null;
-                                    control.forceActiveFocus();
-                                }
-                            }
-                            ReviewActionButton {
-                                objectName: "imageEditApplySmartSelectButton"
-                                visible: control.editTool === "smart_select"
-                                prominent: true
-                                text: control.cropSelection ? qsTr("识别并抠出目标 (%1×%2)").arg(control.cropSelection.width).arg(control.cropSelection.height) : qsTr("识别并抠出目标")
-                                enabled: control.cropSelection !== null && control.imageEdit && control.imageEdit.active && control.imageEdit.smartSegmentAvailable
-                                implicitHeight: 30
-                                leftPadding: 12
-                                rightPadding: 12
-                                helpText: qsTr("使用 SAM 2.1 智能识别选区内的主体轮廓，背景自动转为透明。")
-                                onClicked: {
-                                    control.applyCropSelection();
-                                    control.forceActiveFocus();
-                                }
-                            }
-                            ReviewActionButton {
-                                objectName: "imageEditDeleteAnnotationButton"
-                                visible: control.editTool === "select"
-                                text: qsTr("删除标注")
-                                enabled: control.imageEdit && control.imageEdit.selectedAnnotation >= 0
-                                implicitHeight: 30
-                                leftPadding: 10
-                                rightPadding: 10
-                                onClicked: {
-                                    if (control.imageEdit)
-                                        control.imageEdit.deleteSelectedAnnotation();
-                                }
-                            }
-                            ReviewActionButton {
-                                objectName: "imageEditClearAnnotationsButton"
-                                visible: control.editTool === "select"
-                                text: qsTr("清除全部标注")
-                                enabled: control.imageEdit && control.imageEdit.annotationCount > 0
-                                implicitHeight: 30
-                                leftPadding: 10
-                                rightPadding: 10
-                                onClicked: {
-                                    if (control.imageEdit)
-                                        control.imageEdit.clearAnnotations();
-                                }
-                            }
-                            Text {
-                                objectName: "imageEditAnnotationCountText"
-                                visible: control.editTool === "select"
-                                height: 30
-                                verticalAlignment: Text.AlignVCenter
-                                text: control.imageEdit ? qsTr("标注 %1 个").arg(control.imageEdit.annotationCount) : ""
-                                color: Theme.mutedText
-                                font.pixelSize: Theme.fontCaption
-                            }
+                        ReviewActionButton {
+                            objectName: "imageEditBandOpenPanelButton"
+                            text: qsTr("参数 ▸")
+                            implicitHeight: Theme.hitAreaMinimum
+                            leftPadding: 10
+                            rightPadding: 10
+                            helpText: qsTr("打开右侧参数面板：整图操作与当前工具的全部参数。")
+                            onClicked: control.imagePanelDrawerOpen = true
                         }
                     }
                 }
@@ -5020,6 +4686,192 @@ Rectangle {
         // the last command instead of toggling A/B as the shortcut help promises. The transport
         // bar restores focus the same way after a click.
         focusTarget: control
+    }
+
+    // One label/value line of the image inspector (workspace redesign §6): default plain
+    // text organized by columns and spacing, not a button-backed field (§3.3). The value
+    // text carries the row's objectName so contract tests can read exactly what the user
+    // reads.
+    component InspectorMetricRow: Item {
+        id: metricRow
+
+        property string rowLabel: ""
+        property string rowValue: ""
+        // Long scope wording wraps to a second line instead of eliding away the 口径.
+        property bool wrapValue: false
+        property string valueObjectName: ""
+        // Numbers use the shared mono face with tabular figures (§3.1); wording stays UI.
+        property bool valueMono: false
+
+        width: parent ? parent.width : 0
+        height: Math.max(rowLabelText.implicitHeight, metricValueText.implicitHeight) + 8
+
+        Text {
+            id: rowLabelText
+
+            anchors {
+                left: parent.left
+                top: parent.top
+                topMargin: 4
+            }
+            width: Math.min(implicitWidth, parent.width * 0.4)
+            text: metricRow.rowLabel
+            color: Theme.mutedText
+            font.pixelSize: Theme.fontCaption
+            elide: Text.ElideRight
+        }
+
+        Text {
+            id: metricValueText
+
+            objectName: metricRow.valueObjectName
+            anchors {
+                left: rowLabelText.right
+                leftMargin: Theme.spaceMain
+                right: parent.right
+                top: parent.top
+                topMargin: 4
+            }
+            text: metricRow.rowValue
+            color: Theme.primaryText
+            font.pixelSize: Theme.fontCaption
+            font.family: metricRow.valueMono ? Theme.fontFamilyMono : Theme.fontFamilyUi
+            font.features: metricRow.valueMono ? Theme.fontFeaturesNumeric : ({})
+            wrapMode: metricRow.wrapValue ? Text.WordWrap : Text.NoWrap
+            elide: metricRow.wrapValue ? Text.ElideNone : Text.ElideRight
+        }
+    }
+
+    // Segment of the image inspector's page row (对比 / 信息): the mode-group language -
+    // one shared well, only the selected page tinted.
+    component InspectorTabButton: Rectangle {
+        id: inspectorTab
+
+        property string tabText: ""
+        property bool active: false
+        signal activated
+
+        implicitWidth: inspectorTabLabel.implicitWidth + 24
+        implicitHeight: 30
+        radius: Theme.radiusSubtle
+        color: inspectorTab.active ? Theme.controlChecked : (inspectorTabMouse.containsMouse ? Theme.controlHover : "transparent")
+
+        Behavior on color {
+            ColorAnimation {
+                duration: Theme.animationFast
+            }
+        }
+
+        Accessible.role: Accessible.RadioButton
+        Accessible.name: inspectorTab.tabText
+        Accessible.checkable: true
+        Accessible.checked: inspectorTab.active
+        activeFocusOnTab: true
+        Accessible.focusable: true
+        Accessible.onPressAction: inspectorTab.activated()
+
+        Keys.onPressed: event => {
+            if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) {
+                event.accepted = true;
+                inspectorTab.activated();
+            }
+        }
+
+        Rectangle {
+            anchors {
+                fill: parent
+                margins: -2
+            }
+            radius: inspectorTab.radius + 2
+            color: "transparent"
+            border.width: 2
+            border.color: Theme.focus
+            visible: inspectorTab.activeFocus
+        }
+
+        Text {
+            id: inspectorTabLabel
+
+            anchors.centerIn: parent
+            text: inspectorTab.tabText
+            font.pixelSize: Theme.fontCaption
+            font.weight: inspectorTab.active ? Font.DemiBold : Font.Normal
+            color: inspectorTab.active ? Theme.primaryText : (inspectorTabMouse.containsMouse ? Theme.primaryText : Theme.mutedText)
+        }
+
+        MouseArea {
+            id: inspectorTabMouse
+
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: inspectorTab.activated()
+        }
+
+        ToolTip.visible: false
+    }
+
+    // Rail button for the 64 px edit tool rail (workspace redesign §7): a compact vertical
+    // tool selector - transparent at rest, the shared active ground while checked, so tool
+    // selection reads as the same language as a selected mode, one column beside the
+    // working copy.
+    component EditRailButton: Button {
+        id: railButton
+
+        property string helpText: ""
+        // Same mirror contract as ReviewActionButton: Qt flips `checked` itself before
+        // onClicked, so undo the flip and leave the caller's binding in charge.
+        property bool mirrorsState: false
+
+        implicitWidth: 56
+        implicitHeight: 40
+        padding: 2
+        activeFocusOnTab: true
+        hoverEnabled: true
+        Accessible.description: helpText
+
+        onToggled: {
+            if (railButton.mirrorsState)
+                railButton.toggle();
+        }
+
+        background: Rectangle {
+            radius: Theme.radiusSubtle
+            color: {
+                if (railButton.checked)
+                    return Theme.controlChecked;
+                if (!railButton.enabled)
+                    return "transparent";
+                if (railButton.down)
+                    return Theme.fluentPressed;
+                return railButton.hovered ? Theme.fluentHover : "transparent";
+            }
+            border.width: railButton.visualFocus ? 2 : 0
+            border.color: Theme.focus
+
+            Behavior on color {
+                ColorAnimation {
+                    duration: Theme.animationBase
+                    easing.type: Easing.OutCubic
+                }
+            }
+        }
+
+        contentItem: Text {
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            text: railButton.text
+            // Checked wins over disabled: the active tool must stay readable while busy.
+            color: railButton.checked ? Theme.primaryText : (!railButton.enabled ? Theme.disabledText : Theme.primaryText)
+            font.pixelSize: Theme.fontSecondary
+            font.weight: railButton.checked ? Font.DemiBold : Font.Normal
+            elide: Text.ElideRight
+        }
+
+        VcsToolTip {
+            visible: railButton.hovered && railButton.helpText.length > 0
+            text: railButton.helpText
+        }
     }
 
     // Left/Right/Up/Down walk folder pairs when a comparison list is loaded; with only a single
@@ -5165,16 +5017,178 @@ Rectangle {
         Row {
             id: stageRow
 
-            anchors.fill: parent
-            spacing: 12
+            // The canvas column stops above the fixed view-command bar (workspace redesign
+            // §2: the view strip is a stable band under the canvas, not a floating overlay),
+            // so the picture can never hide under its own zoom tools.
+            anchors {
+                top: parent.top
+                left: parent.left
+                right: parent.right
+            }
+            height: parent.height - (imageViewCommandBar.visible ? imageViewCommandBar.height + Theme.spaceMain : 0)
+            spacing: control.stageColumnGap
+            // Imperative dock-input refresh (see canvasWidthWithoutPanel): never a
+            // binding, so the initial binding pass stays out of the item tree.
+            onWidthChanged: control.recomputeCanvasWidthWithoutPanel()
+
+            // Edit tool rail (workspace redesign §7): while editing, the file list yields
+            // its column to a 64 px vertical rail - tool selection lives beside the working
+            // copy instead of growing the top ribbon. The rail keeps every tool one click
+            // away and stays in the compact tier too (§10.2: editing keeps the rail).
+            Column {
+                id: editToolRail
+
+                objectName: "imageEditToolRail"
+                visible: control.editModeActive && control.hasPrimary && control.imageEdit !== null
+                width: 64
+                height: parent.height
+                spacing: Theme.spaceMicro
+                onVisibleChanged: control.recomputeCanvasWidthWithoutPanel()
+
+                Rectangle {
+                    anchors {
+                        left: parent.left
+                        right: parent.right
+                    }
+                    height: 1
+                    color: Theme.border
+                }
+
+                EditRailButton {
+                    objectName: "imageEditToolSelectButton"
+                    visible: !control.compactChrome
+                    checkable: true
+                    checked: control.editTool === "select"
+                    mirrorsState: true
+                    text: qsTr("选择")
+                    helpText: qsTr("点击选中标注后可拖动；Delete 键或「删除标注」可删除。")
+                    onClicked: control.editTool = "select"
+                }
+                EditRailButton {
+                    objectName: "imageEditToolCropButton"
+                    checkable: true
+                    checked: control.editTool === "crop"
+                    mirrorsState: true
+                    text: qsTr("裁剪")
+                    onClicked: control.editTool = "crop"
+                }
+                EditRailButton {
+                    objectName: "imageEditToolBrushButton"
+                    checkable: true
+                    checked: control.editTool === "brush"
+                    mirrorsState: true
+                    text: qsTr("画笔")
+                    onClicked: control.editTool = "brush"
+                }
+                EditRailButton {
+                    objectName: "imageEditToolSmartSelectButton"
+                    // Always present: hiding the tool when the runtime is missing made its
+                    // own "检测模型" entry unreachable. Disabled plus an actionable reason
+                    // keeps the path discoverable.
+                    enabled: !!(control.imageEdit && control.imageEdit.smartSegmentAvailable)
+                    checkable: true
+                    checked: control.editTool === "smart_select"
+                    mirrorsState: true
+                    text: qsTr("智能抠图")
+                    helpText: (control.imageEdit && control.imageEdit.smartSegmentAvailable) ? qsTr("框选目标物体，AI 自动分割轮廓并抠出透明背景。") : qsTr("需要 models 目录下的 onnxruntime.dll 与 sam2_encoder/decoder.onnx。放入文件后，点击下方编辑栏的「检测模型」。")
+                    onClicked: control.editTool = "smart_select"
+                }
+
+                // The remaining tools and the annotation management stay behind one rail
+                // button that names the active tool - mosaic, fill, clear and the
+                // annotation shapes (workspace redesign §7 groups 2-4).
+                EditRailButton {
+                    objectName: "imageEditMoreToolsButton"
+                    text: control.imageEditToolLabel(control.editTool) + " ▾"
+                    helpText: qsTr("马赛克、填充、清除、矩形、箭头、文字与标注管理。")
+                    onClicked: moreToolsMenu.open()
+
+                    VcsMenu {
+                        id: moreToolsMenu
+
+                        objectName: "imageEditMoreToolsMenu"
+                        menuWidth: 240
+
+                        // Radio rows: the tools are exclusive, and an exclusive item
+                        // stays checked when the active tool is chosen again.
+                        // Compact tier: the annotation-only tool rides the menu so
+                        // the chips+tools line stays one band.
+                        VcsRadioMenuItem {
+                            objectName: "imageEditToolSelectMenuItem"
+                            visible: control.compactChrome
+                            text: qsTr("选择")
+                            checked: control.editTool === "select"
+                            onTriggered: control.editTool = "select"
+                        }
+                        VcsRadioMenuItem {
+                            objectName: "imageEditToolMosaicButton"
+                            text: qsTr("马赛克")
+                            checked: control.editTool === "mosaic"
+                            onTriggered: control.editTool = "mosaic"
+                        }
+                        VcsRadioMenuItem {
+                            objectName: "imageEditToolFillButton"
+                            text: qsTr("填充")
+                            checked: control.editTool === "fill"
+                            onTriggered: control.editTool = "fill"
+                        }
+                        VcsRadioMenuItem {
+                            objectName: "imageEditToolClearButton"
+                            text: qsTr("清除")
+                            checked: control.editTool === "clear"
+                            onTriggered: control.editTool = "clear"
+                        }
+                        VcsRadioMenuItem {
+                            objectName: "imageEditToolRectButton"
+                            text: qsTr("矩形")
+                            checked: control.editTool === "rect"
+                            onTriggered: control.editTool = "rect"
+                        }
+                        VcsRadioMenuItem {
+                            objectName: "imageEditToolArrowButton"
+                            text: qsTr("箭头")
+                            checked: control.editTool === "arrow"
+                            onTriggered: control.editTool = "arrow"
+                        }
+                        VcsRadioMenuItem {
+                            objectName: "imageEditToolTextButton"
+                            text: qsTr("文字")
+                            checked: control.editTool === "text"
+                            onTriggered: control.editTool = "text"
+                        }
+
+                        VcsMenuSeparator {}
+
+                        VcsMenuItem {
+                            objectName: "imageEditDeleteAnnotationMenuItem"
+                            text: qsTr("删除选中标注")
+                            enabled: control.imageEdit !== null && control.imageEdit.selectedAnnotation >= 0
+                            onTriggered: {
+                                if (control.imageEdit)
+                                    control.imageEdit.deleteSelectedAnnotation();
+                            }
+                        }
+                        VcsMenuItem {
+                            objectName: "imageEditClearAnnotationsMenuItem"
+                            text: qsTr("清空所有标注")
+                            enabled: control.imageEdit !== null && control.imageEdit.annotationCount > 0
+                            onTriggered: {
+                                if (control.imageEdit)
+                                    control.imageEdit.clearAnnotations();
+                            }
+                        }
+                    }
+                }
+            }
 
             FolderPairSidebar {
                 id: folderPairSidebar
 
                 objectName: "folderPairSidebarHost"
-                visible: control.sidebarVisible && control.hasFolders
+                visible: control.sidebarVisible && control.hasFolders && !control.editModeActive
                 width: 250
                 height: parent.height
+                onVisibleChanged: control.recomputeCanvasWidthWithoutPanel()
                 pairModel: control.pairModel
                 hasFolders: control.hasFolders
                 onPairSelected: row => control.forceActiveFocus()
@@ -5184,7 +5198,8 @@ Rectangle {
             Item {
                 id: stageContent
 
-                width: parent.width - (folderPairSidebar.visible ? folderPairSidebar.width + parent.spacing : 0)
+                objectName: "imageStageContent"
+                width: parent.width - (editToolRail.visible ? editToolRail.width + parent.spacing : 0) - (folderPairSidebar.visible ? folderPairSidebar.width + parent.spacing : 0) - control.imagePanelDockedInset
                 height: parent.height
 
                 // Empty state: a headline that names the state and a second line that spells out
@@ -5571,67 +5586,76 @@ Rectangle {
                     // image://vcs-review/4 otherwise makes the provider fail (slot 4 has no
                     // source image) and pollutes the hover chain with load errors.
                     imageUrl: visible && control.imageReview && control.imageReview.contentGeneration >= 0 ? control.imageReview.imageUrl(4) : ""
+                    // Workspace redesign §6 (P3 second cut): the canvas keeps only the mode
+                    // identity, one headline number and the honesty warnings; the full metric
+                    // table, the scope wording and the 16-bit converted statistics live in
+                    // the image inspector's 对比 page, so the long sentence no longer parks
+                    // itself over the middle of the picture.
                     label: {
                         if (!control.imageReview || !control.imageReview.hasDiffResult)
                             return "";
                         const alphaMode = control.compareMode === 6;
                         const modeName = control.compareMode === 2 ? qsTr("绝对差异") : (control.compareMode === 3 ? qsTr("带符号差异") : (control.compareMode === 4 ? qsTr("高亮") : qsTr("Alpha 差异")));
-                        let text;
-                        if (alphaMode)
-                            text = qsTr("%1 · 峰值 α %2 · 均值 α %3 · 变化像素 %4 · 统计 %5").arg(modeName).arg(control.imageReview.peakAlphaDifference).arg(control.imageReview.meanAlphaDifference.toFixed(2)).arg(control.imageReview.alphaChangedPixels).arg(control.imageReview.diffScopeText);
-                        else
-                            text = qsTr("%1 · 峰值 %2 · RGB MAE %3 · 统计 %4").arg(modeName).arg(control.imageReview.maxAbsDifference).arg(control.imageReview.meanAbsDifference.toFixed(2)).arg(control.imageReview.diffScopeText);
+                        let text = alphaMode ? qsTr("%1 · 峰值 α %2").arg(modeName).arg(control.imageReview.peakAlphaDifference) : qsTr("%1 · 峰值 %2").arg(modeName).arg(control.imageReview.maxAbsDifference);
                         if (control.imageReview.diffResampled)
                             text += " · " + qsTr("已重采样对齐");
-                        if (control.imageReview.alphaDifferenceOnly)
-                            text += " · " + qsTr("RGB 相同，alpha 存在差异");
-                        // Converted 16-bit statistics: the numbers that stay meaningful when the
-                        // RGBA8 display buffer cannot show the difference. The peak uses the
-                        // largest RGB channel delta and the MAE averages all three channel deltas,
-                        // matching the video metric; the gain sentence lives in diffScopeText and
-                        // reports the gain actually in use.
-                        if (control.imageReview.nativeStatsText.length > 0)
-                            text += " · " + control.imageReview.nativeStatsText;
                         if (control.imageReview.displayEqualButNativeDifferent)
-                            text += " · " + qsTr("⚠️ 显示缓冲看不出该差异，只有读数能看出");
+                            text += " · " + qsTr("⚠️ 显示缓冲看不出该差异，详见检查器");
                         return text;
                     }
                 }
 
                 // Diff mode on an unequal-size pair without resampling: no pixels are
-                // fabricated and no stats are pretended (T2). The controller errorText
-                // carries the exact sizes; the toggle in the toolbar opts into resampling.
-                // A retained diff mode on a same-size pair reports the in-flight
-                // computation instead of a false size complaint (T6).
-                Column {
-                    id: diffNoticeColumn
+                // fabricated and no stats are pretended (T2). The banner sits at the top of
+                // the canvas (workspace redesign §6: a persistent explanation strip above
+                // the picture, not a sentence floating over the middle of it); the action
+                // that opts into resampling rides the same strip. A retained diff mode on a
+                // same-size pair reports the in-flight computation instead of a false size
+                // complaint (T6).
+                Rectangle {
+                    id: diffNoticeBanner
                     objectName: "imageDiffUnavailableNotice"
                     visible: control.diffModeActive && control.imageReview && !control.imageReview.hasDiffResult
-                    anchors.centerIn: parent
-                    width: parent.width * 0.7
-                    spacing: 12
+                    anchors {
+                        top: parent.top
+                        left: parent.left
+                        right: parent.right
+                    }
+                    height: 32
+                    color: Theme.warningPanel
+                    border.color: Theme.warningBorder
+                    border.width: 1
 
                     Text {
-                        width: parent.width
-                        horizontalAlignment: Text.AlignHCenter
-                        wrapMode: Text.WordWrap
+                        objectName: "imageDiffUnavailableText"
+                        anchors {
+                            left: parent.left
+                            leftMargin: Theme.spaceMain
+                            verticalCenter: parent.verticalCenter
+                        }
+                        width: parent.width - (diffEnableResampleButton.visible ? diffEnableResampleButton.width + Theme.spaceGroup + Theme.spaceMain : Theme.spaceMain) - Theme.spaceMain
+                        elide: Text.ElideRight
                         text: {
                             if (control.imageReview && control.imageReview.diffPending)
                                 return qsTr("正在后台计算差异…");
                             if (control.sizesDiffer)
-                                return qsTr("A 与 B 尺寸不同，未计算逐像素差异。可开启“重采样对齐差异”后再比较。");
+                                return qsTr("A 与 B 尺寸不同（%1×%2 / %3×%4），未计算逐像素差异。").arg(control.imageReview.primaryWidth).arg(control.imageReview.primaryHeight).arg(control.imageReview.secondaryWidth).arg(control.imageReview.secondaryHeight);
                             return qsTr("差异暂不可用。");
                         }
-                        color: Theme.warning
+                        color: Theme.warningText
                         font.pixelSize: Theme.fontCompact
                     }
 
                     ReviewActionButton {
+                        id: diffEnableResampleButton
                         objectName: "diffEnableResampleButton"
-                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors {
+                            right: parent.right
+                            rightMargin: Theme.spaceMain
+                            verticalCenter: parent.verticalCenter
+                        }
                         visible: control.sizesDiffer && control.imageReview && !control.imageReview.resampleAllowed
                         text: qsTr("开启重采样对齐")
-                        prominent: true
                         implicitHeight: 28
                         leftPadding: 12
                         rightPadding: 12
@@ -6124,288 +6148,1223 @@ Rectangle {
                         key: "fade"
                     }
                 }
+            }
+        }
 
-                // View-command HUD, bottom-left of the canvas: the same glass chips as the
-                // video viewport's viewCommandRow, so zoom/base/reset live in one muscle
-                // memory across both workspaces. The marquee hint names the Shift gesture
-                // that the canvas already understands.
-                Row {
-                    id: imageViewCommandHud
-                    objectName: "imageViewCommandHud"
-                    visible: control.hasPrimary
-                    z: 30
-                    spacing: Theme.spaceMain
-                    anchors {
-                        left: parent.left
-                        leftMargin: 12
-                        bottom: parent.bottom
-                        bottomMargin: 12
+        // The right parameter / inspector column (workspace redesign §2/§6/§7, P3 second
+        // cut). One shell serves both modes: the edit session's tool parameters, and the
+        // image inspector with the difference statistics that used to sit as a long
+        // sentence over the middle of the diff canvas. Docked it claims its width beside
+        // the canvas - the same 600 px canvas guard and the same 260-320 clamp band as the
+        // video inspector (§10.1); below the guard the identical item overlays as a drawer
+        // (§10.2), closable so it never has to sit on top of a selection. The panel's top
+        // edge sits level with the canvas column - directly under the source strip - and
+        // the view-command bar stops at its structural hairline.
+        Rectangle {
+            id: imageParamsPanel
+
+            objectName: "imageParamsPanel"
+            visible: control.imagePanelVisible
+            z: control.imagePanelDocked ? 0 : 30
+            width: control.imagePanelWidthClamped
+            anchors {
+                right: parent.right
+                top: stageRow.top
+                bottom: stageRow.bottom
+            }
+            color: Theme.panel
+
+            // One boundary line and the surface step to Theme.panel carry the whole
+            // separation - no second rounded card (§2).
+            Rectangle {
+                anchors {
+                    left: parent.left
+                    top: parent.top
+                    bottom: parent.bottom
+                }
+                width: 1
+                color: Theme.border
+            }
+
+            // Resize handle while docked - the same clamp and half-width overlap as the
+            // video inspector's splitter, so resizing behaves the same on both workspaces.
+            MouseArea {
+                id: imagePanelSplitter
+
+                objectName: "imageInspectorSplitter"
+                visible: control.imagePanelDocked
+                enabled: visible
+                width: 8
+                cursorShape: Qt.SizeHorCursor
+                anchors {
+                    left: parent.left
+                    leftMargin: -width / 2
+                    top: parent.top
+                    bottom: parent.bottom
+                }
+
+                property real dragStartWidth: 0
+
+                onPressed: mouse => {
+                    imagePanelSplitter.dragStartWidth = control.imagePanelWidth;
+                    mouse.accepted = true;
+                }
+                onPositionChanged: mouse => {
+                    if (!imagePanelSplitter.pressed)
+                        return;
+                    control.imagePanelWidth = LayoutMetrics.clampInspectorWidth(imagePanelSplitter.dragStartWidth - mouse.x + imagePanelSplitter.width / 2);
+                }
+            }
+
+            Column {
+                anchors.fill: parent
+
+                // Header: mode-named title plus the close entry. A docked edit panel keeps
+                // no close - it is the parameter home, not an overlay.
+                Item {
+                    id: panelHeader
+
+                    width: parent.width
+                    height: 40
+
+                    Text {
+                        objectName: "imageParamsPanelTitle"
+                        anchors {
+                            left: parent.left
+                            leftMargin: Theme.spaceGroup
+                            verticalCenter: parent.verticalCenter
+                        }
+                        text: control.editModeActive ? qsTr("编辑参数") : qsTr("检查器")
+                        color: Theme.secondaryText
+                        font.pixelSize: Theme.fontCaption
+                        font.weight: Font.DemiBold
                     }
 
-                    HudCommandButton {
-                        objectName: "imageFitButton"
-                        checkable: true
-                        checked: !control.trueSize
-                        mirrorsState: true
-                        enabled: control.hasPrimary
-                        text: qsTr("适应窗口")
-                        helpText: qsTr("按窗口大小显示整张图片（快捷键 Z 在此与 100% 之间切换）。")
+                    ReviewActionButton {
+                        objectName: "imagePanelCloseButton"
+                        anchors {
+                            right: parent.right
+                            rightMargin: Theme.spaceMicro
+                            verticalCenter: parent.verticalCenter
+                        }
+                        visible: !control.imagePanelDocked || !control.editModeActive
+                        text: qsTr("关闭")
+                        implicitHeight: 28
+                        leftPadding: 10
+                        rightPadding: 10
+                        helpText: control.editModeActive ? qsTr("收起参数抽屉；当前工具与确认操作保留在命令栏的固定短行。") : qsTr("隐藏检查器；命令栏的「检查器」按钮可再次打开。")
                         onClicked: {
-                            control.trueSize = false;
-                            if (control.imageReview)
-                                control.imageReview.resetView();
+                            if (control.editModeActive)
+                                control.imagePanelDrawerOpen = false;
+                            else if (control.reviewShell)
+                                control.reviewShell.inspectorVisible = false;
                         }
                     }
-                    HudCommandButton {
-                        objectName: "imageTrueSizeButton"
-                        checkable: true
-                        checked: control.trueSize
-                        mirrorsState: true
-                        enabled: control.hasPrimary
-                        text: qsTr("100% (%1%)").arg(control.displayPercent)
-                        helpText: qsTr("1 个图像像素 = 1 个物理像素；括号内是当前实际显示比例。双击画面或按 Z 可切回适应窗口。")
-                        onClicked: {
-                            control.trueSize = true;
-                            if (control.imageReview)
-                                control.imageReview.setZoom(1.0);
-                        }
-                    }
-                    HudCommandButton {
-                        objectName: "imageResetViewButton"
-                        enabled: control.hasPrimary
-                        text: qsTr("重置")
-                        helpText: qsTr("回到适应窗口并居中（清除缩放与平移）。")
-                        onClicked: {
-                            control.trueSize = false;
-                            if (control.imageReview)
-                                control.imageReview.resetView();
-                        }
-                    }
-                    HudCommandButton {
-                        objectName: "imagePixelGridButton"
-                        text: control.pixelGridEnabled ? qsTr("网格 开") : qsTr("网格 关")
-                        helpText: qsTr("像素网格：仅在最近邻采样且实际放大达到 800% 时显示。")
-                        onClicked: control.pixelGridEnabled = !control.pixelGridEnabled
-                    }
+
                     Rectangle {
-                        id: imageMarqueeHintChip
-                        objectName: "imageMarqueeHintChip"
-                        height: 24
-                        implicitWidth: marqueeHintText.implicitWidth + 16
-                        radius: Theme.radiusMicro
-                        color: Theme.oscGlass
-                        border.width: 1
-                        border.color: Theme.oscBorder
+                        anchors {
+                            left: parent.left
+                            right: parent.right
+                            bottom: parent.bottom
+                        }
+                        height: 1
+                        color: Theme.border
+                    }
+                }
 
-                        Row {
-                            id: marqueeHintText
+                // ---- Edit session: the tool parameter stack (§7) ------------------------
+                Item {
+                    id: editPanelBody
+
+                    visible: control.editModeActive
+                    width: parent.width
+                    height: visible ? parent.height - panelHeader.height : 0
+
+                    // Fixed top group: whole-image geometry. Size, canvas and transforms
+                    // belong with the parameters that review them, above every tool's own
+                    // parameters (§7).
+                    Item {
+                        id: wholeImageOps
+
+                        anchors {
+                            left: parent.left
+                            right: parent.right
+                            top: parent.top
+                        }
+                        height: wholeImageColumn.implicitHeight + Theme.spaceMain * 2
+
+                        Column {
+                            id: wholeImageColumn
+
+                            anchors {
+                                left: parent.left
+                                right: parent.right
+                                top: parent.top
+                                margins: Theme.spaceGroup
+                            }
                             spacing: Theme.spaceMicro
-                            anchors.centerIn: parent
 
                             Text {
-                                text: qsTr("框选放大")
+                                text: qsTr("整图操作")
                                 color: Theme.mutedText
                                 font.pixelSize: Theme.fontCaption
-                                anchors.verticalCenter: parent.verticalCenter
+                            }
+
+                            Row {
+                                spacing: Theme.spaceMicro
+
+                                ImageCommandButton {
+                                    objectName: "imageEditScaleButton"
+                                    text: qsTr("缩放…")
+                                    helpText: qsTr("把画面重采样到指定的像素尺寸；锁定比例时改一边会自动推算另一边。")
+                                    onClicked: imageEditDialogs.openScale()
+                                }
+                                ImageCommandButton {
+                                    objectName: "imageEditFillButton"
+                                    text: qsTr("填充画布…")
+                                    helpText: qsTr("把原图居中放到更大的画布上，四周用指定颜色补齐。")
+                                    onClicked: imageEditDialogs.openFill()
+                                }
+                                ImageCommandButton {
+                                    objectName: "imageEditTransformButton"
+                                    text: qsTr("旋转 / 翻转 ▾")
+                                    enabled: control.imageEdit && !control.imageEdit.strokeActive
+                                    helpText: qsTr("水平镜像、垂直翻转、90° 或 180° 旋转；每次操作都可撤销。")
+                                    onClicked: transformMenu.open()
+
+                                    VcsMenu {
+                                        id: transformMenu
+                                        objectName: "imageEditTransformMenu"
+                                        menuWidth: 240
+
+                                        VcsMenuItem {
+                                            objectName: "imageEditMirrorHorizontalItem"
+                                            text: qsTr("水平镜像（左右）")
+                                            onTriggered: control.applyImageMirror(false)
+                                        }
+                                        VcsMenuItem {
+                                            objectName: "imageEditFlipVerticalItem"
+                                            text: qsTr("垂直翻转（上下）")
+                                            onTriggered: control.applyImageMirror(true)
+                                        }
+                                        VcsMenuSeparator {}
+                                        VcsMenuItem {
+                                            objectName: "imageEditRotateClockwiseItem"
+                                            text: qsTr("顺时针旋转 90°")
+                                            onTriggered: control.applyImageRotation(1)
+                                        }
+                                        VcsMenuItem {
+                                            objectName: "imageEditRotateCounterclockwiseItem"
+                                            text: qsTr("逆时针旋转 90°")
+                                            onTriggered: control.applyImageRotation(-1)
+                                        }
+                                        VcsMenuItem {
+                                            objectName: "imageEditRotateHalfTurnItem"
+                                            text: qsTr("旋转 180°")
+                                            onTriggered: control.applyImageRotation(2)
+                                        }
+                                    }
+                                }
                             }
                         }
 
-                        HoverHandler {
-                            id: marqueeHintHover
+                        Rectangle {
+                            anchors {
+                                left: parent.left
+                                right: parent.right
+                                bottom: parent.bottom
+                            }
+                            height: 1
+                            color: Theme.border
+                        }
+                    }
+
+                    // Pinned confirm row (§7): the tool's primary action and its cancel
+                    // stay adjacent and always on screen - never inside the scroll.
+                    Item {
+                        id: editPinnedActions
+
+                        anchors {
+                            left: parent.left
+                            right: parent.right
+                            bottom: parent.bottom
+                        }
+                        height: visible ? 48 : 0
+                        visible: control.editTool === "crop" || control.editTool === "mosaic" || control.editTool === "smart_select"
+
+                        Rectangle {
+                            anchors {
+                                left: parent.left
+                                right: parent.right
+                                top: parent.top
+                            }
+                            height: 1
+                            color: Theme.border
                         }
 
-                        VcsToolTip {
-                            visible: marqueeHintHover.hovered
-                            text: qsTr("按住 Shift 并在画面上拖动，框出要放大的区域（至少 8×8 像素）；在画面外松开会提示并取消。")
+                        Row {
+                            anchors {
+                                left: parent.left
+                                leftMargin: Theme.spaceGroup
+                                verticalCenter: parent.verticalCenter
+                            }
+                            spacing: Theme.spaceMain
+
+                            ReviewActionButton {
+                                objectName: "imageEditCancelCropButton"
+                                visible: control.editTool === "crop" && control.cropSelection !== null
+                                text: qsTr("取消选区")
+                                implicitHeight: 30
+                                leftPadding: 10
+                                rightPadding: 10
+                                onClicked: {
+                                    control.cropSelection = null;
+                                    control.forceActiveFocus();
+                                }
+                            }
+                            ReviewActionButton {
+                                objectName: "imageEditApplyCropButton"
+                                visible: control.editTool === "crop" || control.editTool === "mosaic"
+                                prominent: true
+                                text: control.cropSelection ? (control.editTool === "mosaic" ? qsTr("应用马赛克 %1×%2").arg(control.cropSelection.width).arg(control.cropSelection.height) : qsTr("应用裁剪 %1×%2").arg(control.cropSelection.width).arg(control.cropSelection.height)) : (control.editTool === "mosaic" ? qsTr("应用马赛克") : qsTr("应用裁剪"))
+                                enabled: control.cropSelection !== null && control.imageEdit && control.imageEdit.active
+                                implicitHeight: 30
+                                leftPadding: 10
+                                rightPadding: 10
+                                helpText: qsTr("编辑模式下左键框选区域，中键仍可平移；画笔工具下左键直接涂画。")
+                                onClicked: control.applyCropSelection()
+                            }
+                            ReviewActionButton {
+                                objectName: "imageEditCancelSmartSelectButton"
+                                visible: control.editTool === "smart_select" && control.cropSelection !== null
+                                text: qsTr("取消选区")
+                                implicitHeight: 30
+                                leftPadding: 10
+                                rightPadding: 10
+                                onClicked: {
+                                    control.cropSelection = null;
+                                    control.forceActiveFocus();
+                                }
+                            }
+                            ReviewActionButton {
+                                objectName: "imageEditApplySmartSelectButton"
+                                visible: control.editTool === "smart_select"
+                                prominent: true
+                                text: control.cropSelection ? qsTr("识别并抠出目标 (%1×%2)").arg(control.cropSelection.width).arg(control.cropSelection.height) : qsTr("识别并抠出目标")
+                                enabled: control.cropSelection !== null && control.imageEdit && control.imageEdit.active && control.imageEdit.smartSegmentAvailable
+                                implicitHeight: 30
+                                leftPadding: 12
+                                rightPadding: 12
+                                helpText: qsTr("使用 SAM 2.1 智能识别选区内的主体轮廓，背景自动转为透明。")
+                                onClicked: {
+                                    control.applyCropSelection();
+                                    control.forceActiveFocus();
+                                }
+                            }
+                        }
+                    }
+
+                    // The per-tool parameters scroll between the two fixed groups (§10.4:
+                    // complex panels scroll inside, confirm and save stay reachable).
+                    Flickable {
+                        id: editParamsScroll
+
+                        anchors {
+                            left: parent.left
+                            right: parent.right
+                            top: wholeImageOps.bottom
+                            bottom: editPinnedActions.top
+                        }
+                        clip: true
+                        contentWidth: width
+                        contentHeight: editParamsColumn.implicitHeight + Theme.spaceMain * 2
+                        boundsBehavior: Flickable.StopAtBounds
+
+                        Column {
+                            id: editParamsColumn
+
+                            x: Theme.spaceGroup
+                            y: Theme.spaceMain
+                            width: parent.width - Theme.spaceGroup * 2
+                            spacing: Theme.spaceMain
+
+                            Text {
+                                objectName: "imageEditPanelToolTitle"
+                                text: control.imageEditToolLabel(control.editTool)
+                                color: Theme.secondaryText
+                                font.pixelSize: Theme.fontCaption
+                                font.weight: Font.DemiBold
+                            }
+
+                            // ---- crop -------------------------------------------------------
+                            Text {
+                                objectName: "imageEditCropHelpText"
+                                visible: control.editTool === "crop" && control.cropSelection === null
+                                width: parent.width
+                                wrapMode: Text.WordWrap
+                                text: qsTr("在画面上拖拽框选裁剪区域；支持 8 锚点调整与移动；Enter 确认，Esc 取消")
+                                color: Theme.mutedText
+                                font.pixelSize: Theme.fontCaption
+                            }
+
+                            // ---- colour (brush / fill / annotations) ------------------------
+                            ReviewActionButton {
+                                objectName: "imageEditBrushColorButton"
+                                visible: control.editTool === "brush" || control.editTool === "fill" || control.editTool === "rect" || control.editTool === "arrow" || control.editTool === "text"
+                                text: qsTr("颜色 ▾")
+                                implicitHeight: 30
+                                leftPadding: 24
+                                rightPadding: 8
+                                onClicked: brushColorMenu.open()
+
+                                Rectangle {
+                                    width: 10
+                                    height: 10
+                                    radius: 5
+                                    // Full strength: the swatch previews the exact colour the brush paints.
+                                    color: control.brushColor
+                                    border.width: 1
+                                    border.color: Theme.primaryText
+                                    anchors {
+                                        left: parent.left
+                                        leftMargin: 8
+                                        verticalCenter: parent.verticalCenter
+                                    }
+                                }
+
+                                VcsMenu {
+                                    id: brushColorMenu
+                                    menuWidth: 150
+
+                                    VcsRadioMenuItem {
+                                        objectName: "imageEditBrushColorRed"
+                                        text: qsTr("红")
+                                        checked: control.brushColor === "#ff3b30"
+                                        onTriggered: control.brushColor = "#ff3b30"
+                                    }
+                                    VcsRadioMenuItem {
+                                        objectName: "imageEditBrushColorYellow"
+                                        text: qsTr("黄")
+                                        checked: control.brushColor === "#ffd60a"
+                                        onTriggered: control.brushColor = "#ffd60a"
+                                    }
+                                    VcsRadioMenuItem {
+                                        objectName: "imageEditBrushColorGreen"
+                                        text: qsTr("绿")
+                                        checked: control.brushColor === "#34c759"
+                                        onTriggered: control.brushColor = "#34c759"
+                                    }
+                                    VcsRadioMenuItem {
+                                        objectName: "imageEditBrushColorCyan"
+                                        text: qsTr("青")
+                                        checked: control.brushColor === "#32ade6"
+                                        onTriggered: control.brushColor = "#32ade6"
+                                    }
+                                    VcsRadioMenuItem {
+                                        objectName: "imageEditBrushColorWhite"
+                                        text: qsTr("白")
+                                        checked: control.brushColor === "#ffffff"
+                                        onTriggered: control.brushColor = "#ffffff"
+                                    }
+                                    VcsRadioMenuItem {
+                                        objectName: "imageEditBrushColorBlack"
+                                        text: qsTr("黑")
+                                        checked: control.brushColor === "#000000"
+                                        onTriggered: control.brushColor = "#000000"
+                                    }
+                                }
+                            }
+
+                            // ---- brush ------------------------------------------------------
+                            Text {
+                                objectName: "imageEditBrushWidthLabel"
+                                visible: control.editTool === "brush" || control.editTool === "rect" || control.editTool === "arrow"
+                                text: control.editTool === "brush" ? qsTr("粗细 %1").arg(control.brushWidth) : qsTr("线宽 %1").arg(control.brushWidth)
+                                color: Theme.mutedText
+                                font.pixelSize: Theme.fontCaption
+                            }
+                            Slider {
+                                objectName: "imageEditBrushWidthSlider"
+                                visible: control.editTool === "brush" || control.editTool === "rect" || control.editTool === "arrow"
+                                width: parent.width
+                                height: Theme.hitAreaMinimum
+                                from: 1
+                                to: 64
+                                stepSize: 1
+                                value: control.brushWidth
+                                onMoved: control.brushWidth = Math.round(value)
+                            }
+                            Text {
+                                objectName: "imageEditBrushOpacityLabel"
+                                visible: control.editTool === "brush"
+                                text: qsTr("透明 %1%").arg(Math.round(control.brushOpacity * 100))
+                                color: Theme.mutedText
+                                font.pixelSize: Theme.fontCaption
+                            }
+                            Slider {
+                                objectName: "imageEditBrushOpacitySlider"
+                                visible: control.editTool === "brush"
+                                width: parent.width
+                                height: Theme.hitAreaMinimum
+                                from: 0.05
+                                to: 1
+                                stepSize: 0.05
+                                value: control.brushOpacity
+                                onMoved: control.brushOpacity = value
+                            }
+
+                            // ---- mosaic -----------------------------------------------------
+                            Text {
+                                objectName: "imageEditMosaicBlockLabel"
+                                visible: control.editTool === "mosaic"
+                                text: qsTr("块大小 %1").arg(control.mosaicBlock)
+                                color: Theme.mutedText
+                                font.pixelSize: Theme.fontCaption
+                            }
+                            Slider {
+                                objectName: "imageEditMosaicBlockSlider"
+                                visible: control.editTool === "mosaic"
+                                width: parent.width
+                                height: Theme.hitAreaMinimum
+                                from: 2
+                                to: 48
+                                stepSize: 1
+                                value: control.mosaicBlock
+                                onMoved: control.mosaicBlock = Math.round(value)
+                            }
+
+                            // ---- text annotation ---------------------------------------------
+                            Text {
+                                objectName: "imageEditAnnotationTextLabel"
+                                visible: control.editTool === "text"
+                                text: qsTr("文字")
+                                color: Theme.mutedText
+                                font.pixelSize: Theme.fontCaption
+                            }
+                            TextField {
+                                objectName: "imageEditAnnotationTextField"
+                                visible: control.editTool === "text"
+                                width: parent.width
+                                height: 30
+                                placeholderText: qsTr("输入标注文字，再点击画面放置")
+                                text: control.annotationText
+                                font.pixelSize: Theme.fontSecondary
+                                onTextEdited: control.annotationText = text
+                            }
+                            Text {
+                                objectName: "imageEditAnnotationTextSizeLabel"
+                                visible: control.editTool === "text"
+                                text: qsTr("字号 %1").arg(control.annotationTextSize)
+                                color: Theme.mutedText
+                                font.pixelSize: Theme.fontCaption
+                            }
+                            Slider {
+                                objectName: "imageEditAnnotationTextSizeSlider"
+                                visible: control.editTool === "text"
+                                width: parent.width
+                                height: Theme.hitAreaMinimum
+                                from: 10
+                                to: 160
+                                stepSize: 1
+                                value: control.annotationTextSize
+                                onMoved: control.annotationTextSize = Math.round(value)
+                            }
+
+                            // ---- smart select --------------------------------------------------
+                            Text {
+                                objectName: "imageEditSmartSelectHelpText"
+                                visible: control.editTool === "smart_select"
+                                width: parent.width
+                                wrapMode: Text.WordWrap
+                                text: {
+                                    if (!control.imageEdit)
+                                        return "";
+                                    if (!control.imageEdit.smartSegmentAvailable)
+                                        return qsTr("AI 模型未就绪：请将 onnxruntime.dll 与 sam2_encoder/decoder.onnx 放入 models 目录，再点击「检测模型」。");
+                                    return qsTr("在画面上拖拽框选要抠出的目标物体 (支持调整选区与锚点)");
+                                }
+                                color: (control.imageEdit && control.imageEdit.smartSegmentAvailable) ? Theme.mutedText : Theme.warning
+                                font.pixelSize: Theme.fontCaption
+                            }
+                            CheckBox {
+                                objectName: "imageEditSmartSelectTightCropCheck"
+                                visible: control.editTool === "smart_select" && control.imageEdit && control.imageEdit.smartSegmentAvailable
+                                text: qsTr("紧凑裁剪")
+                                checked: control.smartSegmentTightCrop
+                                onToggled: control.smartSegmentTightCrop = checked
+                            }
+                            ReviewActionButton {
+                                objectName: "imageEditProbeSmartSelectButton"
+                                visible: control.editTool === "smart_select"
+                                text: qsTr("检测模型")
+                                implicitHeight: 30
+                                leftPadding: 10
+                                rightPadding: 10
+                                helpText: qsTr("在 models 目录中查找 onnxruntime.dll、sam2_encoder.onnx 与 sam2_decoder.onnx；就绪后「智能抠图」会变为可用。")
+                                onClicked: {
+                                    if (control.imageEdit)
+                                        // QML does not apply C++ default arguments, so the
+                                        // explicit empty directory is required here.
+                                        control.imageEdit.probeSmartSegment("");
+                                }
+                            }
+                            Text {
+                                objectName: "imageEditSmartSegmentReadyText"
+                                visible: control.editTool === "smart_select" && control.imageEdit !== null && control.imageEdit.smartSegmentAvailable
+                                text: qsTr("智能抠图已就绪")
+                                color: Theme.mutedText
+                                font.pixelSize: Theme.fontCaption
+                            }
+
+                            // ---- select (annotation management) --------------------------------
+                            Text {
+                                objectName: "imageEditAnnotationCountText"
+                                visible: control.editTool === "select"
+                                text: control.imageEdit ? qsTr("标注 %1 个").arg(control.imageEdit.annotationCount) : ""
+                                color: Theme.mutedText
+                                font.pixelSize: Theme.fontCaption
+                            }
+                            ReviewActionButton {
+                                objectName: "imageEditDeleteAnnotationButton"
+                                visible: control.editTool === "select"
+                                text: qsTr("删除标注")
+                                enabled: control.imageEdit && control.imageEdit.selectedAnnotation >= 0
+                                implicitHeight: 30
+                                leftPadding: 10
+                                rightPadding: 10
+                                onClicked: {
+                                    if (control.imageEdit)
+                                        control.imageEdit.deleteSelectedAnnotation();
+                                }
+                            }
+                            // §7 keeps 删除全部 out of the pinned row and away from the save
+                            // action; in the panel it stays a plain secondary action, and the
+                            // 更多工具 menu keeps its own entry.
+                            ReviewActionButton {
+                                objectName: "imageEditClearAnnotationsButton"
+                                visible: control.editTool === "select"
+                                text: qsTr("清除全部标注")
+                                enabled: control.imageEdit && control.imageEdit.annotationCount > 0
+                                implicitHeight: 30
+                                leftPadding: 10
+                                rightPadding: 10
+                                onClicked: {
+                                    if (control.imageEdit)
+                                        control.imageEdit.clearAnnotations();
+                                }
+                            }
                         }
                     }
                 }
-            }
-        }
-    }
 
-    // Fade blend control floats over the viewport so it never occupies toolbar space;
-    // 0 shows A, 1 shows B, and the readout names both sides so the direction cannot be
-    // misread while dragging (semantics unchanged from the previous inline slider). The
-    // snap chips park the blend on the three review positions, and the wheel over the
-    // plate adjusts it in ±5% steps without hunting for the handle.
-    Rectangle {
-        id: fadeSliderOverlay
+                // ---- Viewing: the image inspector (§6/§9) --------------------------------
+                Item {
+                    id: inspectorBody
 
-        visible: control.hasPair && control.compareMode === 7
-        width: fadeRow.implicitWidth + 24
-        height: 36
-        radius: Theme.radiusSmall
-        color: Theme.oscGlass
-        border.width: 1
-        border.color: Theme.oscBorder
-        anchors {
-            right: stage.right
-            bottom: stage.bottom
-            margins: 14
-        }
-        z: 20
+                    visible: !control.editModeActive
+                    width: parent.width
+                    height: visible ? parent.height - panelHeader.height : 0
 
-        WheelHandler {
-            objectName: "imageFadeWheelHandler"
-            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-            onWheel: event => {
-                if (!control.imageReview)
-                    return;
-                const step = event.angleDelta.y / 120 * 0.05;
-                const next = Math.max(0, Math.min(1, Number(control.imageReview.fadePosition) + step));
-                control.imageReview.fadePosition = next;
-                event.accepted = true;
-            }
-        }
+                    Row {
+                        id: inspectorTabRow
 
-        Row {
-            id: fadeRow
+                        objectName: "imageInspectorTabRow"
+                        anchors {
+                            left: parent.left
+                            leftMargin: Theme.spaceGroup
+                            top: parent.top
+                            topMargin: Theme.spaceMicro
+                        }
+                        spacing: Theme.spaceMicro
 
-            spacing: 10
-            anchors.centerIn: parent
-
-            Rectangle {
-                id: fadeSnap0
-                objectName: "imageFadeSnap0"
-                width: 36
-                height: Theme.hitAreaMinimum
-                radius: Theme.radiusMicro
-                color: fadeSnap0Mouse.pressed ? Theme.fluentPressed : (control.imageReview && control.imageReview.fadePosition <= 0.001 ? Theme.controlChecked : (fadeSnap0Mouse.containsMouse ? Theme.fluentHover : "transparent"))
-                border.width: 1
-                border.color: fadeSnap0Mouse.containsMouse ? Theme.borderHover : Theme.controlBorder
-
-                Text {
-                    anchors.centerIn: parent
-                    text: qsTr("全A")
-                    color: Theme.secondaryText
-                    font.pixelSize: Theme.fontCaption
-                }
-
-                MouseArea {
-                    id: fadeSnap0Mouse
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: {
-                        if (control.imageReview)
-                            control.imageReview.fadePosition = 0;
+                        InspectorTabButton {
+                            objectName: "imageInspectorCompareTab"
+                            tabText: qsTr("对比")
+                            active: control.imageInspectorTab === 0
+                            onActivated: control.imageInspectorTab = 0
+                        }
+                        InspectorTabButton {
+                            objectName: "imageInspectorInfoTab"
+                            tabText: qsTr("信息")
+                            active: control.imageInspectorTab === 1
+                            onActivated: control.imageInspectorTab = 1
+                        }
                     }
-                }
-            }
-            Rectangle {
-                id: fadeSnap50
-                objectName: "imageFadeSnap50"
-                width: 36
-                height: Theme.hitAreaMinimum
-                radius: Theme.radiusMicro
-                color: fadeSnap50Mouse.pressed ? Theme.fluentPressed : (control.imageReview && Math.abs(control.imageReview.fadePosition - 0.5) <= 0.001 ? Theme.controlChecked : (fadeSnap50Mouse.containsMouse ? Theme.fluentHover : "transparent"))
-                border.width: 1
-                border.color: fadeSnap50Mouse.containsMouse ? Theme.borderHover : Theme.controlBorder
-
-                Text {
-                    anchors.centerIn: parent
-                    text: "50%"
-                    color: Theme.secondaryText
-                    font.pixelSize: Theme.fontCaption
-                }
-
-                MouseArea {
-                    id: fadeSnap50Mouse
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: {
-                        if (control.imageReview)
-                            control.imageReview.fadePosition = 0.5;
-                    }
-                }
-            }
-            Rectangle {
-                id: fadeSnap100
-                objectName: "imageFadeSnap100"
-                width: 36
-                height: Theme.hitAreaMinimum
-                radius: Theme.radiusMicro
-                color: fadeSnap100Mouse.pressed ? Theme.fluentPressed : (control.imageReview && control.imageReview.fadePosition >= 0.999 ? Theme.controlChecked : (fadeSnap100Mouse.containsMouse ? Theme.fluentHover : "transparent"))
-                border.width: 1
-                border.color: fadeSnap100Mouse.containsMouse ? Theme.borderHover : Theme.controlBorder
-
-                Text {
-                    anchors.centerIn: parent
-                    text: qsTr("全B")
-                    color: Theme.secondaryText
-                    font.pixelSize: Theme.fontCaption
-                }
-
-                MouseArea {
-                    id: fadeSnap100Mouse
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: {
-                        if (control.imageReview)
-                            control.imageReview.fadePosition = 1;
-                    }
-                }
-            }
-
-            Text {
-                // Fixed width: a readout that resizes with its own digits would make the whole
-                // chip jitter under the cursor while the slider is being dragged.
-                width: 156
-                height: 30
-                verticalAlignment: Text.AlignVCenter
-                text: qsTr("淡化 · A %1% / B %2%").arg(Math.round((1 - (control.imageReview ? control.imageReview.fadePosition : 0.5)) * 100)).arg(Math.round((control.imageReview ? control.imageReview.fadePosition : 0.5) * 100))
-                color: Theme.mutedText
-                font.pixelSize: Theme.fontSecondary
-            }
-            Slider {
-                id: imageFadeSlider
-
-                objectName: "imageFadeSlider"
-                width: 170
-                height: 30
-                from: 0
-                to: 1
-                value: control.imageReview ? control.imageReview.fadePosition : 0.5
-                padding: 6
-                onMoved: {
-                    if (control.imageReview)
-                        control.imageReview.fadePosition = value;
-                }
-
-                background: Rectangle {
-                    x: imageFadeSlider.leftPadding + (imageFadeSlider.horizontal ? 0 : (imageFadeSlider.availableWidth - width) / 2)
-                    y: imageFadeSlider.topPadding + (imageFadeSlider.horizontal ? (imageFadeSlider.availableHeight - height) / 2 : 0)
-                    width: imageFadeSlider.horizontal ? imageFadeSlider.availableWidth : implicitWidth
-                    height: imageFadeSlider.horizontal ? implicitHeight : imageFadeSlider.availableHeight
-                    implicitWidth: 200
-                    implicitHeight: 6
-                    radius: 3
-                    color: Theme.menuBorder
 
                     Rectangle {
-                        y: imageFadeSlider.horizontal ? 0 : imageFadeSlider.visualPosition * parent.height
-                        width: imageFadeSlider.horizontal ? imageFadeSlider.position * parent.width : 6
-                        height: imageFadeSlider.horizontal ? 6 : imageFadeSlider.position * parent.height
-                        radius: 3
-                        color: Theme.accent
+                        id: inspectorTabHairline
+
+                        anchors {
+                            left: parent.left
+                            right: parent.right
+                            top: inspectorTabRow.bottom
+                            topMargin: Theme.spaceMicro
+                        }
+                        height: 1
+                        color: Theme.border
+                    }
+
+                    Flickable {
+                        id: inspectorScroll
+
+                        anchors {
+                            left: parent.left
+                            right: parent.right
+                            top: inspectorTabHairline.bottom
+                            bottom: parent.bottom
+                        }
+                        clip: true
+                        contentWidth: width
+                        contentHeight: (control.imageInspectorTab === 0 ? inspectorCompareColumn.implicitHeight : inspectorInfoColumn.implicitHeight) + Theme.spaceGroup * 2
+                        boundsBehavior: Flickable.StopAtBounds
+
+                        // 对比 page: the difference statistics table (§6). Every number
+                        // comes from the review controller's own aggregates - nothing is
+                        // fabricated, and a state without a measurement says so in neutral
+                        // wording instead of pretending zero (§3.2).
+                        Column {
+                            id: inspectorCompareColumn
+
+                            x: Theme.spaceGroup
+                            y: Theme.spaceGroup
+                            width: parent.width - Theme.spaceGroup * 2
+                            spacing: Theme.spaceMicro
+                            visible: control.imageInspectorTab === 0
+
+                            Text {
+                                text: qsTr("差异统计")
+                                color: Theme.mutedText
+                                font.pixelSize: Theme.fontCaption
+                                bottomPadding: Theme.spaceMicro
+                            }
+
+                            InspectorMetricRow {
+                                visible: control.imageReview && control.imageReview.hasDiffResult
+                                rowLabel: qsTr("模式")
+                                valueObjectName: "imageDiffStatMode"
+                                rowValue: control.imageReview && control.imageReview.hasDiffResult ? (control.compareMode === 2 ? qsTr("绝对差异") : (control.compareMode === 3 ? qsTr("带符号差异") : (control.compareMode === 4 ? qsTr("高亮") : qsTr("Alpha 差异")))) : ""
+                            }
+                            InspectorMetricRow {
+                                visible: control.imageReview && control.imageReview.hasDiffResult && control.compareMode !== 6
+                                rowLabel: qsTr("峰值（最大绝对差）")
+                                valueObjectName: "imageDiffStatPeak"
+                                valueMono: true
+                                rowValue: control.imageReview ? String(control.imageReview.maxAbsDifference) : ""
+                            }
+                            InspectorMetricRow {
+                                visible: control.imageReview && control.imageReview.hasDiffResult && control.compareMode !== 6
+                                rowLabel: qsTr("RGB MAE")
+                                valueObjectName: "imageDiffStatMae"
+                                valueMono: true
+                                rowValue: control.imageReview ? control.imageReview.meanAbsDifference.toFixed(2) : ""
+                            }
+                            InspectorMetricRow {
+                                visible: control.imageReview && control.imageReview.hasDiffResult && control.compareMode === 6
+                                rowLabel: qsTr("峰值 α")
+                                valueObjectName: "imageDiffStatPeakAlpha"
+                                valueMono: true
+                                rowValue: control.imageReview ? String(control.imageReview.peakAlphaDifference) : ""
+                            }
+                            InspectorMetricRow {
+                                visible: control.imageReview && control.imageReview.hasDiffResult && control.compareMode === 6
+                                rowLabel: qsTr("均值 α")
+                                valueObjectName: "imageDiffStatMeanAlpha"
+                                valueMono: true
+                                rowValue: control.imageReview ? control.imageReview.meanAlphaDifference.toFixed(2) : ""
+                            }
+                            InspectorMetricRow {
+                                visible: control.imageReview && control.imageReview.hasDiffResult && control.compareMode === 6
+                                rowLabel: qsTr("变化像素")
+                                valueObjectName: "imageDiffStatChangedPixels"
+                                valueMono: true
+                                rowValue: control.imageReview ? String(control.imageReview.alphaChangedPixels) : ""
+                            }
+                            InspectorMetricRow {
+                                visible: control.imageReview && control.imageReview.hasDiffResult
+                                rowLabel: qsTr("统计口径")
+                                valueObjectName: "imageDiffStatScope"
+                                wrapValue: true
+                                rowValue: control.imageReview ? control.imageReview.diffScopeText : ""
+                            }
+                            InspectorMetricRow {
+                                visible: control.imageReview && control.imageReview.hasDiffResult
+                                rowLabel: qsTr("重采样对齐")
+                                valueObjectName: "imageDiffStatResampled"
+                                rowValue: control.imageReview && control.imageReview.diffResampled ? qsTr("已开启") : qsTr("未开启")
+                            }
+
+                            // RGB-identical pairs whose alpha still differs: a scope note the
+                            // numbers above cannot express (§11 颜色与数值).
+                            Text {
+                                objectName: "imageDiffStatAlphaOnlyNote"
+                                visible: control.imageReview && control.imageReview.hasDiffResult && control.imageReview.alphaDifferenceOnly
+                                width: parent.width
+                                wrapMode: Text.WordWrap
+                                text: qsTr("RGB 相同，alpha 存在差异。")
+                                color: Theme.mutedText
+                                font.pixelSize: Theme.fontCaption
+                                topPadding: Theme.spaceMicro
+                            }
+
+                            // Converted 16-bit statistics: the numbers that stay meaningful
+                            // when the RGBA8 display buffer cannot show the difference.
+                            Text {
+                                objectName: "imageDiffStatNative"
+                                visible: control.imageReview && control.imageReview.hasDiffResult && control.imageReview.nativeStatsText.length > 0
+                                width: parent.width
+                                wrapMode: Text.WordWrap
+                                text: control.imageReview ? control.imageReview.nativeStatsText : ""
+                                color: Theme.secondaryText
+                                font.pixelSize: Theme.fontCaption
+                                topPadding: Theme.spaceMain
+                            }
+
+                            // The precision warning stays visible wherever the stats live
+                            // (§5: an unverified display path is never presented as a pass).
+                            Text {
+                                objectName: "imageDiffStatDisplayWarning"
+                                visible: control.imageReview && control.imageReview.hasDiffResult && control.imageReview.displayEqualButNativeDifferent
+                                width: parent.width
+                                wrapMode: Text.WordWrap
+                                text: qsTr("⚠️ 显示缓冲看不出该差异，只有读数能看出")
+                                color: Theme.warning
+                                font.pixelSize: Theme.fontCaption
+                                topPadding: Theme.spaceMicro
+                            }
+
+                            // States without a measurement - neutral wording, never a fake
+                            // zero (§3.2 "尚未测量").
+                            Text {
+                                objectName: "imageDiffStatPendingText"
+                                visible: control.diffModeActive && control.imageReview && !control.imageReview.hasDiffResult
+                                width: parent.width
+                                wrapMode: Text.WordWrap
+                                text: control.imageReview && control.imageReview.diffPending ? qsTr("正在后台计算差异…") : (control.sizesDiffer ? qsTr("A 与 B 尺寸不同，未计算逐像素差异；可开启重采样对齐。") : qsTr("差异暂不可用。"))
+                                color: Theme.mutedText
+                                font.pixelSize: Theme.fontCaption
+                            }
+                            Text {
+                                objectName: "imageDiffStatEmptyPairText"
+                                visible: !control.diffModeActive && control.hasPair
+                                width: parent.width
+                                wrapMode: Text.WordWrap
+                                text: qsTr("切换到差异模式后，这里显示逐像素统计。")
+                                color: Theme.mutedText
+                                font.pixelSize: Theme.fontCaption
+                            }
+                            Text {
+                                objectName: "imageDiffStatEmptySingleText"
+                                visible: !control.hasPair && control.hasPrimary
+                                width: parent.width
+                                wrapMode: Text.WordWrap
+                                text: qsTr("打开图片对后可比较两图差异。")
+                                color: Theme.mutedText
+                                font.pixelSize: Theme.fontCaption
+                            }
+                        }
+
+                        // 信息 page: per-side image identity from the controller's own
+                        // metadata - the same facts the viewport labels carry, in the
+                        // panel's reading order (§5: the source row owns identity, the
+                        // inspector carries the supporting detail).
+                        Column {
+                            id: inspectorInfoColumn
+
+                            x: Theme.spaceGroup
+                            y: Theme.spaceGroup
+                            width: parent.width - Theme.spaceGroup * 2
+                            spacing: Theme.spaceMicro
+                            visible: control.imageInspectorTab === 1
+
+                            Text {
+                                text: qsTr("图像 A")
+                                color: Theme.mutedText
+                                font.pixelSize: Theme.fontCaption
+                                bottomPadding: Theme.spaceMicro
+                            }
+                            Text {
+                                objectName: "imageInspectorTitleA"
+                                visible: control.hasPrimary
+                                width: parent.width
+                                wrapMode: Text.WordWrap
+                                text: control.hasPrimary ? control.imageTitle(control.imageReview.primaryPath, control.imageReview.secondaryPath) : ""
+                                color: Theme.primaryText
+                                font.pixelSize: Theme.fontCaption
+                            }
+                            Text {
+                                objectName: "imageInspectorPathA"
+                                visible: control.hasPrimary
+                                width: parent.width
+                                elide: Text.ElideMiddle
+                                text: control.hasPrimary ? String(control.imageReview.primaryPath || "") : ""
+                                color: Theme.mutedText
+                                font.pixelSize: Theme.fontMicro
+
+                                HoverHandler {
+                                    id: inspectorPathAHover
+                                }
+
+                                VcsToolTip {
+                                    visible: inspectorPathAHover.hovered && text.length > 0
+                                    text: control.hasPrimary ? String(control.imageReview.primaryPath || "") : ""
+                                }
+                            }
+                            InspectorMetricRow {
+                                visible: control.hasPrimary
+                                rowLabel: qsTr("尺寸")
+                                valueObjectName: "imageInspectorSizeA"
+                                valueMono: true
+                                rowValue: control.imageReview && control.imageReview.primaryWidth > 0 ? "%1×%2".arg(control.imageReview.primaryWidth).arg(control.imageReview.primaryHeight) : ""
+                            }
+                            InspectorMetricRow {
+                                visible: control.hasPrimary
+                                rowLabel: qsTr("内容")
+                                valueObjectName: "imageInspectorSummaryA"
+                                wrapValue: true
+                                rowValue: control.imageReview ? control.sourceSummary(control.imageReview.primaryBitDepth, control.imageReview.primarySourceFormat, control.imageReview.primaryHasAlpha, control.imageReview.primaryDisplayConverted) : ""
+                            }
+
+                            // B mirrors A once a pair exists.
+                            Text {
+                                visible: control.hasSecondary
+                                text: qsTr("图像 B")
+                                color: Theme.mutedText
+                                font.pixelSize: Theme.fontCaption
+                                topPadding: Theme.spaceMain
+                                bottomPadding: Theme.spaceMicro
+                            }
+                            Text {
+                                objectName: "imageInspectorTitleB"
+                                visible: control.hasSecondary
+                                width: parent.width
+                                wrapMode: Text.WordWrap
+                                text: control.hasSecondary ? control.imageTitle(control.imageReview.secondaryPath, control.imageReview.primaryPath) : ""
+                                color: Theme.primaryText
+                                font.pixelSize: Theme.fontCaption
+                            }
+                            Text {
+                                objectName: "imageInspectorPathB"
+                                visible: control.hasSecondary
+                                width: parent.width
+                                elide: Text.ElideMiddle
+                                text: control.hasSecondary ? String(control.imageReview.secondaryPath || "") : ""
+                                color: Theme.mutedText
+                                font.pixelSize: Theme.fontMicro
+                            }
+                            InspectorMetricRow {
+                                visible: control.hasSecondary
+                                rowLabel: qsTr("尺寸")
+                                valueObjectName: "imageInspectorSizeB"
+                                valueMono: true
+                                rowValue: control.imageReview && control.imageReview.secondaryWidth > 0 ? "%1×%2".arg(control.imageReview.secondaryWidth).arg(control.imageReview.secondaryHeight) : ""
+                            }
+                            InspectorMetricRow {
+                                visible: control.hasSecondary
+                                rowLabel: qsTr("内容")
+                                valueObjectName: "imageInspectorSummaryB"
+                                wrapValue: true
+                                rowValue: control.imageReview ? control.sourceSummary(control.imageReview.secondaryBitDepth, control.imageReview.secondarySourceFormat, control.imageReview.secondaryHasAlpha, control.imageReview.secondaryDisplayConverted) : ""
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fixed view-command bar under the canvas (workspace redesign §2/§5/§6): zoom and
+        // observation-view tools live in one stable band on the canvas's lower edge instead
+        // of floating chips over the picture, and the fade blend parks in the same band
+        // instead of drifting inside the image. The bar shares the canvas column's left
+        // edge (right of the file sidebar), keeps the HUD's glass chips so both workspaces
+        // keep one muscle memory, and hides with the empty state.
+        Item {
+            id: imageViewCommandBar
+
+            objectName: "imageViewCommandBar"
+            visible: control.hasPrimary
+            height: visible ? Theme.barRowHeightMin : 0
+            anchors {
+                left: parent.left
+                leftMargin: folderPairSidebar.visible ? folderPairSidebar.width + stageRow.spacing : 0
+                // The strip shares the canvas column's left/right bounds (§2): while the
+                // right panel is docked it stops at the panel's structural hairline instead
+                // of running under it. Numeric root-state only - see imagePanelDockedInset.
+                right: parent.right
+                rightMargin: control.imagePanelDockedInset
+                bottom: parent.bottom
+            }
+
+            Rectangle {
+                anchors {
+                    left: parent.left
+                    right: parent.right
+                    top: parent.top
+                }
+                height: 1
+                color: Theme.border
+            }
+
+            Row {
+                id: imageViewCommandHud
+
+                objectName: "imageViewCommandHud"
+                spacing: Theme.spaceMain
+                anchors {
+                    left: parent.left
+                    verticalCenter: parent.verticalCenter
+                }
+
+                HudCommandButton {
+                    objectName: "imageFitButton"
+                    checkable: true
+                    checked: !control.trueSize
+                    mirrorsState: true
+                    enabled: control.hasPrimary
+                    text: qsTr("适应窗口")
+                    helpText: qsTr("按窗口大小显示整张图片（快捷键 Z 在此与 100% 之间切换）。")
+                    onClicked: {
+                        control.trueSize = false;
+                        if (control.imageReview)
+                            control.imageReview.resetView();
+                    }
+                }
+                HudCommandButton {
+                    objectName: "imageTrueSizeButton"
+                    checkable: true
+                    checked: control.trueSize
+                    mirrorsState: true
+                    enabled: control.hasPrimary
+                    text: qsTr("100% (%1%)").arg(control.displayPercent)
+                    helpText: qsTr("1 个图像像素 = 1 个物理像素；括号内是当前实际显示比例。双击画面或按 Z 可切回适应窗口。")
+                    onClicked: {
+                        control.trueSize = true;
+                        if (control.imageReview)
+                            control.imageReview.setZoom(1.0);
+                    }
+                }
+                HudCommandButton {
+                    objectName: "imageResetViewButton"
+                    enabled: control.hasPrimary
+                    text: qsTr("重置")
+                    helpText: qsTr("回到适应窗口并居中（清除缩放与平移）。")
+                    onClicked: {
+                        control.trueSize = false;
+                        if (control.imageReview)
+                            control.imageReview.resetView();
+                    }
+                }
+                HudCommandButton {
+                    objectName: "imagePixelGridButton"
+                    text: control.pixelGridEnabled ? qsTr("网格 开") : qsTr("网格 关")
+                    helpText: qsTr("像素网格：仅在最近邻采样且实际放大达到 800% 时显示。")
+                    onClicked: control.pixelGridEnabled = !control.pixelGridEnabled
+                }
+                Rectangle {
+                    id: imageMarqueeHintChip
+                    objectName: "imageMarqueeHintChip"
+                    height: 24
+                    implicitWidth: marqueeHintText.implicitWidth + 16
+                    radius: Theme.radiusMicro
+                    color: Theme.oscGlass
+                    border.width: 1
+                    border.color: Theme.oscBorder
+
+                    Row {
+                        id: marqueeHintText
+                        spacing: Theme.spaceMicro
+                        anchors.centerIn: parent
+
+                        Text {
+                            text: qsTr("框选放大")
+                            color: Theme.mutedText
+                            font.pixelSize: Theme.fontCaption
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                    }
+
+                    HoverHandler {
+                        id: marqueeHintHover
+                    }
+
+                    VcsToolTip {
+                        visible: marqueeHintHover.hovered
+                        text: qsTr("按住 Shift 并在画面上拖动，框出要放大的区域（至少 8×8 像素）；在画面外松开会提示并取消。")
+                    }
+                }
+            }
+
+            // Fade blend parameter band, right end of the view bar (§6: the A/B ratio
+            // slider belongs below the canvas with the view tools, not floating in the
+            // picture). 0 shows A, 1 shows B, and the readout names both sides so the
+            // direction cannot be misread while dragging. The snap chips park the blend on
+            // the three review positions, and the wheel over the band adjusts it in ±5 %
+            // steps without hunting for the handle.
+            Row {
+                id: fadeSliderOverlay
+
+                visible: control.hasPair && control.compareMode === 7
+                spacing: 10
+                anchors {
+                    right: parent.right
+                    verticalCenter: parent.verticalCenter
+                }
+
+                WheelHandler {
+                    objectName: "imageFadeWheelHandler"
+                    acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                    onWheel: event => {
+                        if (!control.imageReview)
+                            return;
+                        const step = event.angleDelta.y / 120 * 0.05;
+                        const next = Math.max(0, Math.min(1, Number(control.imageReview.fadePosition) + step));
+                        control.imageReview.fadePosition = next;
+                        event.accepted = true;
                     }
                 }
 
-                handle: Rectangle {
-                    x: imageFadeSlider.leftPadding + imageFadeSlider.visualPosition * (imageFadeSlider.availableWidth - width)
-                    y: imageFadeSlider.topPadding + imageFadeSlider.availableHeight / 2 - height / 2
-                    implicitWidth: 14
-                    implicitHeight: 14
-                    radius: 7
-                    color: imageFadeSlider.pressed ? Theme.accent : Theme.primaryText
-                    border.color: Theme.border
+                Rectangle {
+                    id: fadeSnap0
+                    objectName: "imageFadeSnap0"
+                    width: 36
+                    height: Theme.hitAreaMinimum
+                    radius: Theme.radiusMicro
+                    color: fadeSnap0Mouse.pressed ? Theme.fluentPressed : (control.imageReview && control.imageReview.fadePosition <= 0.001 ? Theme.controlChecked : (fadeSnap0Mouse.containsMouse ? Theme.fluentHover : "transparent"))
+                    border.width: 1
+                    border.color: fadeSnap0Mouse.containsMouse ? Theme.borderHover : Theme.controlBorder
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: qsTr("全A")
+                        color: Theme.secondaryText
+                        font.pixelSize: Theme.fontCaption
+                    }
+
+                    MouseArea {
+                        id: fadeSnap0Mouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (control.imageReview)
+                                control.imageReview.fadePosition = 0;
+                        }
+                    }
+                }
+                Rectangle {
+                    id: fadeSnap50
+                    objectName: "imageFadeSnap50"
+                    width: 36
+                    height: Theme.hitAreaMinimum
+                    radius: Theme.radiusMicro
+                    color: fadeSnap50Mouse.pressed ? Theme.fluentPressed : (control.imageReview && Math.abs(control.imageReview.fadePosition - 0.5) <= 0.001 ? Theme.controlChecked : (fadeSnap50Mouse.containsMouse ? Theme.fluentHover : "transparent"))
+                    border.width: 1
+                    border.color: fadeSnap50Mouse.containsMouse ? Theme.borderHover : Theme.controlBorder
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "50%"
+                        color: Theme.secondaryText
+                        font.pixelSize: Theme.fontCaption
+                    }
+
+                    MouseArea {
+                        id: fadeSnap50Mouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (control.imageReview)
+                                control.imageReview.fadePosition = 0.5;
+                        }
+                    }
+                }
+                Rectangle {
+                    id: fadeSnap100
+                    objectName: "imageFadeSnap100"
+                    width: 36
+                    height: Theme.hitAreaMinimum
+                    radius: Theme.radiusMicro
+                    color: fadeSnap100Mouse.pressed ? Theme.fluentPressed : (control.imageReview && control.imageReview.fadePosition >= 0.999 ? Theme.controlChecked : (fadeSnap100Mouse.containsMouse ? Theme.fluentHover : "transparent"))
+                    border.width: 1
+                    border.color: fadeSnap100Mouse.containsMouse ? Theme.borderHover : Theme.controlBorder
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: qsTr("全B")
+                        color: Theme.secondaryText
+                        font.pixelSize: Theme.fontCaption
+                    }
+
+                    MouseArea {
+                        id: fadeSnap100Mouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (control.imageReview)
+                                control.imageReview.fadePosition = 1;
+                        }
+                    }
+                }
+
+                Text {
+                    // Fixed width: a readout that resizes with its own digits would make the whole
+                    // chip jitter under the cursor while the slider is being dragged.
+                    width: 156
+                    height: 30
+                    verticalAlignment: Text.AlignVCenter
+                    text: qsTr("淡化 · A %1% / B %2%").arg(Math.round((1 - (control.imageReview ? control.imageReview.fadePosition : 0.5)) * 100)).arg(Math.round((control.imageReview ? control.imageReview.fadePosition : 0.5) * 100))
+                    color: Theme.mutedText
+                    font.pixelSize: Theme.fontSecondary
+                }
+                Slider {
+                    id: imageFadeSlider
+
+                    objectName: "imageFadeSlider"
+                    width: 170
+                    height: 30
+                    from: 0
+                    to: 1
+                    value: control.imageReview ? control.imageReview.fadePosition : 0.5
+                    padding: 6
+                    onMoved: {
+                        if (control.imageReview)
+                            control.imageReview.fadePosition = value;
+                    }
+
+                    background: Rectangle {
+                        x: imageFadeSlider.leftPadding + (imageFadeSlider.horizontal ? 0 : (imageFadeSlider.availableWidth - width) / 2)
+                        y: imageFadeSlider.topPadding + (imageFadeSlider.horizontal ? (imageFadeSlider.availableHeight - height) / 2 : 0)
+                        width: imageFadeSlider.horizontal ? imageFadeSlider.availableWidth : implicitWidth
+                        height: imageFadeSlider.horizontal ? implicitHeight : imageFadeSlider.availableHeight
+                        implicitWidth: 200
+                        implicitHeight: 6
+                        radius: 3
+                        color: Theme.menuBorder
+
+                        Rectangle {
+                            y: imageFadeSlider.horizontal ? 0 : imageFadeSlider.visualPosition * parent.height
+                            width: imageFadeSlider.horizontal ? imageFadeSlider.position * parent.width : 6
+                            height: imageFadeSlider.horizontal ? 6 : imageFadeSlider.visualPosition * parent.height
+                            radius: 3
+                            color: Theme.accent
+                        }
+                    }
+
+                    handle: Rectangle {
+                        x: imageFadeSlider.leftPadding + imageFadeSlider.visualPosition * (imageFadeSlider.availableWidth - width)
+                        y: imageFadeSlider.topPadding + imageFadeSlider.availableHeight / 2 - height / 2
+                        implicitWidth: 14
+                        implicitHeight: 14
+                        radius: 7
+                        color: imageFadeSlider.pressed ? Theme.accent : Theme.primaryText
+                        border.color: Theme.border
+                    }
                 }
             }
         }
     }
+
     Rectangle {
         id: statusBar
 

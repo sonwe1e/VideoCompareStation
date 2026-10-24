@@ -17,7 +17,9 @@ Menu {
     property bool menuItemEnabled: true
     property color menuBackgroundColor: Theme.menu
     property color menuBorderColor: Theme.menuBorder
-    property real menuRadius: Theme.radiusLarge
+    // Popups round at the 10 px step (workspace redesign §3.3: 8-10 for dialogs and floating
+    // panels), one tier below cards.
+    property real menuRadius: Theme.radiusMedium
     property real menuWidth: 280
 
     topMargin: 6

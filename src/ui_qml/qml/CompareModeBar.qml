@@ -28,9 +28,11 @@ Rectangle {
     // UX-13 S4 compact tier (docs/plans/ux13-narrow-window-redesign.md §2 D4, ruling Q2):
     // below 680 px window height this bar shares one 40 px row with the source strip. The
     // four daily tasks stay on the row as two-character segmented labels (并排/分割/局部/
-    // 差异, the UX-10 vocabulary shortened, each keeping its wide-row helpText); the direct
-    // look buttons, the layout submenu, the pair selector, the candidate switch and both
-    // comparison exports fold into the on-demand 更多 menu. The hold-to-peek GT button
+    // 差异, the UX-10 vocabulary shortened, each keeping its wide-row helpText); the
+    // direct-look buttons, the layout submenu, the candidate switch and both comparison
+    // exports fold into the on-demand 更多 menu. The pair-edge button group stays on the
+    // row in both tiers - the pair is the review's high-frequency choice, so it narrows to
+    // its letter caption ("A↔B") instead of folding. The hold-to-peek GT button also
     // stays on the row while a difference task is active - a menu row cannot be held down.
     // A plain property so standalone hosts pin the tier explicitly; Main.qml derives it
     // from the hosting window the same way PlayerOsc and ImageWorkspace do.
@@ -94,20 +96,6 @@ Rectangle {
     readonly property int canvasFocusRequestOff: 0
     readonly property int canvasFocusRequestReference: 1
     readonly property int canvasFocusRequestSourceSlot: 2
-
-    // UX-13 S4: guarded accessors for the folded pair-edge rows of the compact 更多 menu.
-    // differenceEdges is a QVariantList; the static bounded rows (three sources cap the set
-    // at C(3,2) = 3 edges) read through these so an absent entry yields "" / -1 instead of a
-    // TypeError on undefined - and the row's own visible guard keeps the empty values off
-    // the screen. preferenceValue follows the exact conversion the wide-row combo's
-    // onActivated applies.
-    function pairEdgeLabel(index) {
-        return index >= 0 && index < differenceEdges.length ? String(differenceEdges[index].pairLabel) : "";
-    }
-
-    function pairEdgePreference(index) {
-        return index >= 0 && index < differenceEdges.length ? Number(differenceEdges[index].preferenceValue) : -1;
-    }
 
     // EX-03: a session with one video is not a comparison yet, but it is the state every
     // comparison starts from - so the bar stays visible and the four comparison tasks stay on
@@ -242,21 +230,21 @@ Rectangle {
             onClicked: control.addVideoRequested()
         }
         // qmllint disable import unqualified unresolved-type
-        // Middle group - "who is compared against whom": one shallow capsule carries the pair
-        // selector, the candidate switch and (while a difference task with a valid reference is
-        // active) the hold-to-peek entry, so the pairing cluster reads as one unit between the
-        // layout tasks (left) and the direct-look group (right). The capsule keeps the row's
-        // own 32 px band so the bar stays at its 40 px height, and the Flow still wraps the
-        // whole capsule as one item on narrow windows.
-        // The visibility condition states the INTENT (three sources in a pair-relevant task,
+        // Middle group - "who is compared against whom": one shallow capsule carries the
+        // pair-edge button group, the candidate switch and (while a difference task with a
+        // valid reference is active) the hold-to-peek entry, so the pairing cluster reads
+        // as one unit between the layout tasks (left) and the direct-look group (right).
+        // The capsule keeps the row's own 32 px band so the bar stays at its 40 px height,
+        // and the Flow still wraps the whole capsule as one item on narrow windows.
+        // The visibility condition states the INTENT (a session with at least two sources,
         // or a difference task with a peekable reference) from control properties only. It
         // must not OR the children's own `visible` values: reading an item's `visible` from
         // QML yields the effective visibility (ancestors included), so once this capsule hid
-        // itself - e.g. created in side-by-side - the children would read as hidden THROUGH
-        // the capsule and the group could never light up again (self-latch).
+        // itself - e.g. created in the empty state - the children would read as hidden
+        // THROUGH the capsule and the group could never light up again (self-latch).
         Rectangle {
             objectName: "comparePairGroup"
-            visible: ((control.sourceCount === 3 && control.pairRelevant && !control.compactChrome) || ((control.currentMode === ComparisonSurface.Difference || control.currentMode === ComparisonSurface.DualDifference) && control.peekTargetValid))
+            visible: control.sourceCount >= 2 || ((control.currentMode === ComparisonSurface.Difference || control.currentMode === ComparisonSurface.DualDifference) && control.peekTargetValid)
             // The Flow positions by width/height, and this capsule's own inputs are only
             // correct after the inner Row has distributed its children - which, in the
             // no-render hosts this bar's explicit relayout chain exists for, needs that
@@ -303,34 +291,34 @@ Rectangle {
                 // never comes; the call settles once the row is laid out.
                 onChildrenRectChanged: forceLayout()
 
-                ToolbarCombo {
-                    id: pairComboBox
+                // "任意比较对一步切换": one persistent, mutually exclusive button per
+                // comparison edge. Three sources show three buttons (A↔B / A↔C / B↔C),
+                // two show their single pair as one always-lit button, and a session
+                // without edges (single source) simply has none. A click drives the same
+                // edgeRequested(preferenceValue) signal the context menu and the
+                // inspector rows drive; checked follows currentEdgeIndex, so exactly one
+                // edge is lit at any time. GT stays an optional role - every edge
+                // (candidate-only B↔C included) is equally selectable, and choosing one
+                // neither requires nor changes the GT. The caption is the slot letters so
+                // the group fits beside the mode tasks on the compact row too; the two
+                // REAL file names (pairLabel) ride on helpText/tooltip/Accessible.name,
+                // so a same-letter relabel can never masquerade as a pair switch (V02).
+                Repeater {
+                    id: pairEdgeRepeater
 
-                    objectName: "pairCombo"
-                    // Compact tier: the pair selector folds into the 更多 menu (per-edge rows
-                    // named by the same pairLabel role); the capsule below then carries the
-                    // peek alone.
-                    visible: control.sourceCount === 3 && control.pairRelevant && !control.compactChrome
-                    // Positioners reserve width for invisible children; collapse so a
-                    // peek-only capsule (dual difference) does not carry the combo's ghost.
-                    width: visible ? implicitWidth : 0
-                    implicitWidth: 104
-                    implicitHeight: Theme.hitAreaMinimum
-                    // V02: the selector names the two real files ("gt.mp4 ↔ model.mp4") instead
-                    // of the A/B/C slot letters, so a same-letter relabel can never masquerade as
-                    // a pair switch. The role keeping the letters ("label") stays for the
-                    // inspector rows.
+                    objectName: "pairEdgeButtonRepeater"
                     model: control.differenceEdges
-                    textRole: "pairLabel"
-                    currentIndex: control.currentEdgeIndex
-                    Accessible.name: qsTr("比较对象")
-                    hoverEnabled: true
-                    leftPadding: 10
-                    rightPadding: 26
-                    font.pixelSize: Theme.fontBody
-                    onActivated: index => {
-                        if (index >= 0 && index < control.differenceEdges.length)
-                            control.edgeRequested(Number(control.differenceEdges[index].preferenceValue));
+
+                    PairEdgeButton {
+                        required property int index
+                        required property var modelData
+
+                        objectName: "pairEdgeButton-" + index
+                        edgeIndex: index
+                        pairFullName: String(modelData.pairLabel)
+                        preference: Number(modelData.preferenceValue)
+                        primarySlot: Number(modelData.primarySlot)
+                        secondarySlot: Number(modelData.secondarySlot)
                     }
                 }
 
@@ -347,6 +335,18 @@ Rectangle {
                     labelPixelSize: Theme.fontBody
                     helpText: qsTr("按 C → 参考不动，换另一个版本")
                     Accessible.name: qsTr("固定参考切换候选")
+                    // The capsule no longer flips with the task (the pair group is
+                    // resident), so the row's re-layout chain cannot ride the capsule's
+                    // own visibility hook anymore - THESE children are the ones that
+                    // materialize mid-session, and a positioner skips invisible children
+                    // without touching their x. A newly-visible child therefore re-enters
+                    // at its stale x=0, INSIDE the row's existing childrenRect union, so
+                    // neither onChildrenRectChanged nor the width collapse re-arms the
+                    // layout. Re-run the chain once the flip settles.
+                    onVisibleChanged: Qt.callLater(() => {
+                        pairGroupRow.forceLayout();
+                        modeActions.forceLayout();
+                    })
                     onClicked: control.switchCandidateRequested()
                 }
 
@@ -367,6 +367,13 @@ Rectangle {
                     text: control.peekLocked ? (control.compactChrome ? qsTr("已锁定") : qsTr("GT 原图·已锁定")) : (control.compactChrome ? qsTr("按住") : qsTr("按住看 GT 原图"))
                     visible: (control.currentMode === ComparisonSurface.Difference || control.currentMode === ComparisonSurface.DualDifference) && control.peekTargetValid
                     width: visible ? implicitWidth : 0
+                    // Same mid-session materialization rule as switchCandidateButton
+                    // above: the row re-layouts off the child's own visibility flip,
+                    // because the resident capsule never flips anymore.
+                    onVisibleChanged: Qt.callLater(() => {
+                        pairGroupRow.forceLayout();
+                        modeActions.forceLayout();
+                    })
                     enabled: !control.busy && control.peekTargetValid
                     prominent: pressed || control.peekLocked
                     implicitWidth: control.compactChrome ? 64 : 136
@@ -477,11 +484,12 @@ Rectangle {
 
         // UX-13 S4 compact tier (ruling Q2): one labelled 更多 menu carries everything the
         // merged row cannot spend width on - the direct-look group, the layout submenu, the
-        // pair selector, the candidate switch and both comparison exports. Every entry
-        // drives the exact signal its wide-row twin drives, and keeps its digit/letter
-        // shortcut in the trailing column, so folding costs width only, never a path. The
-        // menu is a popup: its rows materialize on open, nothing sits in the scene graph
-        // while it is closed (plan §4).
+        // candidate switch and both comparison exports. The pair-edge buttons no longer fold
+        // here: they stay on the row in both tiers (the pair is the high-frequency choice).
+        // Every entry drives the exact signal its wide-row twin drives, and keeps its
+        // digit/letter shortcut in the trailing column, so folding costs width only, never a
+        // path. The menu is a popup: its rows materialize on open, nothing sits in the scene
+        // graph while it is closed (plan §4).
         VcsToolButton {
             id: compactModeMoreButton
 
@@ -491,7 +499,7 @@ Rectangle {
             implicitWidth: 72
             implicitHeight: Theme.hitAreaMinimum
             labelPixelSize: Theme.fontBody
-            helpText: qsTr("直看、布局排布、比较对象与对比图导出")
+            helpText: qsTr("直看、布局排布、切候选与对比图导出")
             onClicked: compactMoreMenu.open()
 
             VcsMenu {
@@ -581,43 +589,9 @@ Rectangle {
                 VcsMenuSeparator {
                     visible: control.sourceCount === 3 && control.pairRelevant
                 }
-                // The pair selector, folded: one radio row per edge, named by the same
-                // pairLabel role the wide-row combo shows (the two real files, never A↔B).
-                // Static bounded rows, not dynamic insertion: the product caps a session at
-                // three sources, so C(3,2) = 3 edges is the hard maximum, and this Qt build's
-                // VcsMenu instances do not expose QQuickMenu's indexOf/insertItem/removeItem
-                // invokables at runtime (the S4 gate TypeError). Every row is a pure binding
-                // over differenceEdges with its own length guard - no invokable, no
-                // dynamic menu mutation, nothing to relayout.
-                VcsRadioMenuItem {
-                    objectName: "compactPairEdgeItem-0"
-
-                    visible: control.sourceCount === 3 && control.pairRelevant && control.differenceEdges.length > 0
-                    text: control.pairEdgeLabel(0)
-                    // Same selector the wide-row combo exposes (Accessible.name), so the
-                    // folded row explains itself with the one word the pair UI uses.
-                    helpText: qsTr("比较对象：切换要对比的两个视频")
-                    checked: control.currentEdgeIndex === 0
-                    onTriggered: control.edgeRequested(control.pairEdgePreference(0))
-                }
-                VcsRadioMenuItem {
-                    objectName: "compactPairEdgeItem-1"
-
-                    visible: control.sourceCount === 3 && control.pairRelevant && control.differenceEdges.length > 1
-                    text: control.pairEdgeLabel(1)
-                    helpText: qsTr("比较对象：切换要对比的两个视频")
-                    checked: control.currentEdgeIndex === 1
-                    onTriggered: control.edgeRequested(control.pairEdgePreference(1))
-                }
-                VcsRadioMenuItem {
-                    objectName: "compactPairEdgeItem-2"
-
-                    visible: control.sourceCount === 3 && control.pairRelevant && control.differenceEdges.length > 2
-                    text: control.pairEdgeLabel(2)
-                    helpText: qsTr("比较对象：切换要对比的两个视频")
-                    checked: control.currentEdgeIndex === 2
-                    onTriggered: control.edgeRequested(control.pairEdgePreference(2))
-                }
+                // The candidate switch, folded: the fixed-GT flip is the one pair-adjacent
+                // action that stays a menu row in the compact tier (the pair buttons
+                // themselves live on the row above; see pairEdgeRepeater).
                 VcsMenuItem {
                     id: compactSwitchCandidateItem
 
@@ -695,6 +669,79 @@ Rectangle {
             }
             border.width: modeButton.activeFocus ? 2 : 1
             border.color: modeButton.activeFocus ? Theme.focus : "transparent"
+
+            Behavior on color {
+                ColorAnimation {
+                    duration: Theme.animationFast
+                }
+            }
+            Behavior on border.color {
+                ColorAnimation {
+                    duration: Theme.animationFast
+                }
+            }
+        }
+    }
+
+    // "任意比较对一步切换": the persistent pair-edge button. One per comparison edge,
+    // mutually exclusive through currentEdgeIndex, in every task and both tiers. The
+    // caption stays the slot letters so all three fit beside the mode tasks (compact row
+    // included); the two real file names ride on helpText/tooltip/Accessible.name (V02).
+    // Styled after ModeButton so the pair group reads as part of the same segmented
+    // control language.
+    component PairEdgeButton: ReviewActionButton {
+        id: pairEdgeButton
+
+        required property int edgeIndex
+        required property int preference
+        required property int primarySlot
+        required property int secondarySlot
+        required property string pairFullName
+        checkable: true
+        checked: control.currentEdgeIndex === pairEdgeButton.edgeIndex
+        mirrorsState: true
+        implicitHeight: Theme.hitAreaMinimum
+        // Compact tier: the letter band ("A↔B") keeps the whole group on the 40 px row;
+        // the wide row gives the same caption a little more air. With two sources the
+        // single button stays lit (there is exactly one pair) and a click is an
+        // informational no-op switch, not an error.
+        implicitWidth: control.compactChrome ? 44 : 56
+        text: String.fromCharCode(65 + pairEdgeButton.primarySlot) + "↔" + String.fromCharCode(65 + pairEdgeButton.secondarySlot)
+        // The real names explain the button on hover and for assistive tech alike - the
+        // letters alone never carry file identity (V02).
+        helpText: pairEdgeButton.pairFullName
+        Accessible.name: pairEdgeButton.pairFullName
+        enabled: !control.busy
+        leftPadding: 4
+        rightPadding: 4
+        onClicked: control.edgeRequested(pairEdgeButton.preference)
+
+        contentItem: Text {
+            text: pairEdgeButton.text
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            // Same checked-over-disabled rule as ModeButton.
+            color: pairEdgeButton.checked ? Theme.primaryText : (!pairEdgeButton.enabled ? Theme.disabledText : (pairEdgeButton.hovered ? Theme.primaryText : Theme.mutedText))
+            font.pixelSize: Theme.fontBody
+            font.weight: pairEdgeButton.checked ? Font.DemiBold : Font.Normal
+            elide: Text.ElideRight
+        }
+
+        background: Rectangle {
+            radius: Theme.radiusMedium
+            color: {
+                if (pairEdgeButton.checked)
+                    return Theme.controlChecked;
+                if (!pairEdgeButton.enabled)
+                    return "transparent";
+                if (pairEdgeButton.down)
+                    return Theme.fluentPressed;
+                if (pairEdgeButton.hovered)
+                    return Theme.fluentHover;
+                return "transparent";
+            }
+            border.width: pairEdgeButton.activeFocus ? 2 : 1
+            border.color: pairEdgeButton.activeFocus ? Theme.focus : "transparent"
 
             Behavior on color {
                 ColorAnimation {

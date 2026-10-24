@@ -131,6 +131,38 @@ TEST_F(VideoFolderModelTests, ContextOpenRejectsInvalidUrlsAndKeepsCommittedSele
     EXPECT_EQ(plays, 0);
 }
 
+// Decision c (video task tabs design §11): a task restore replays only the recorded row
+// highlight. The setter moves the highlight inside the loaded folder without staging an
+// open, playing, or claiming the row as the session's current video.
+TEST_F(VideoFolderModelTests, RowHighlightMovesSelectionWithoutOpeningOrPlaying) {
+    threeFiles();
+    model->synchronizeSources({at(0)});
+    ASSERT_EQ(model->currentRow(), 0);
+    ASSERT_TRUE(opened.empty());
+
+    EXPECT_TRUE(model->setRowHighlight(2));
+    EXPECT_EQ(model->currentRow(), 2);
+    EXPECT_TRUE(opened.empty()) << "highlighting must not stage an open";
+    EXPECT_EQ(plays, 0);
+    EXPECT_FALSE(model->openPending());
+    // currentUrl still describes the committed session video, so the model's follow
+    // state is untouched by a pure highlight.
+    EXPECT_EQ(model->currentUrl(), at(0));
+
+    // A row outside the loaded folder refuses; an idempotent repeat succeeds quietly.
+    EXPECT_FALSE(model->setRowHighlight(-1));
+    EXPECT_FALSE(model->setRowHighlight(model->fileCount()));
+    EXPECT_EQ(model->currentRow(), 2);
+    EXPECT_TRUE(model->setRowHighlight(2));
+
+    // The next session synchronization recomputes the row from the session source - a
+    // restore highlight must never masquerade as a session change.
+    model->synchronizeSources({at(1)});
+    EXPECT_EQ(model->currentRow(), 1);
+    EXPECT_TRUE(opened.empty());
+    EXPECT_EQ(plays, 0);
+}
+
 TEST_F(VideoFolderModelTests, ScansAsynchronouslyFiltersAndNaturallySortsWithoutDecoding) {
     const auto unicode = write(QString::fromUtf8("片段.MP4"));
     const auto image = write(QString::fromUtf8("ignore.png"));

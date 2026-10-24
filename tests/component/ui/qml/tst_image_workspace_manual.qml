@@ -41,6 +41,15 @@ Item {
         property string caseConflictDetail: ""
     }
 
+    // Stand-in for the shell's shared 检查器 switch (workspace redesign §6, P3 second
+    // cut): the workspace only reads and writes this boolean, never the wider shell
+    // surface, so a two-line mock is the whole contract.
+    QtObject {
+        id: shellMock
+
+        property bool inspectorVisible: false
+    }
+
     // Minimal edit-controller mock: enough surface for the workspace bindings and the
     // crop-ratio tests (the real behaviour lives in the controller suites). The edit
     // controller is outside this pilot's typed boundary.
@@ -106,7 +115,17 @@ Item {
         when: windowShown
 
         function init() {
-            // Every case starts from the same real material: the standard 64x64 solids.
+            // Every case starts from the same real material and the same stage size: the
+            // docked-panel case widens the root, and a failed case must not leave that
+            // width behind for the neighbours.
+            root.width = 960;
+            root.height = 700;
+            // Pin the WIDE tier explicitly (PlayerOsc's compact-tier pin, mirrored): the
+            // hosting window is OS-clamped on small/high-DPI screens and can settle below
+            // the 680 threshold, which would flip the whole suite into the compact tier
+            // without any product change. The compact tier has its own contract
+            // (ImageCommandPanelCompactTierCollapsesToBands) on a real window.
+            workspace.compactChrome = false;
             // Re-opening bumps the content generation, which is exactly what invalidates
             // stale probe samples and stale hover state from the previous case.
             verify(fixture.openStandardPair());
@@ -953,7 +972,7 @@ Item {
             imageReview.compareMode = 0;
         }
 
-        // ---- HUD buttons live in the canvas corner ----------------------------------------------
+        // ---- View-command bar under the canvas ----------------------------------------------------
 
         function test_hud_holds_fit_truesize_and_reset() {
             const hud = findChild(workspace, "imageViewCommandHud");
@@ -1288,6 +1307,233 @@ Item {
             compare(String(spyClose.signalArguments[1][0]), "2", "the A chip asks for slot 2");
             verify(!imageReview.hasPrimary,
                    "closing the last image must reach the empty state, not a fabricated side");
+        }
+
+        // Workspace redesign §1/§2: the A/B identities live in their own strip directly
+        // above the canvas - never back in the session flow - and each chip carries its
+        // side's size. A source must not read as another toolbar button or a second tab
+        // language, so the containment is the contract, not just the look.
+        function test_source_strip_holds_identity_and_sizes_above_the_canvas() {
+            verify(fixture.openStandardPair());
+            const strip = findChild(workspace, "imageSourceStrip");
+            const chipA = findChild(workspace, "imageSourceChipA");
+            const chipB = findChild(workspace, "imageSourceChipB");
+            verify(strip !== null && chipA !== null && chipB !== null);
+            tryCompare(strip, "visible", true);
+            tryCompare(chipA, "visible", true);
+            tryCompare(chipB, "visible", true);
+
+            function hasAncestor(item, candidate) {
+                let node = item.parent;
+                while (node) {
+                    if (node === candidate)
+                        return true;
+                    node = node.parent;
+                }
+                return false;
+            }
+            verify(hasAncestor(chipA, strip), "the A chip must live in the source strip");
+            verify(hasAncestor(chipB, strip), "the B chip must live in the source strip");
+            const fileRow = findChild(workspace, "imageFileRow");
+            verify(fileRow !== null);
+            verify(!hasAncestor(chipA, fileRow),
+                   "the identity chips must not return to the session command flow");
+
+            // The strip sits below the mode band and above the stage: its mapped bottom is
+            // the command panel's bottom, so it is the band the canvas touches.
+            const commandPanel = findChild(workspace, "imageCommandPanel");
+            verify(commandPanel !== null);
+            const stripBottom = strip.mapToItem(commandPanel, 0, strip.height).y;
+            compare(stripBottom, commandPanel.height);
+
+            // Each side's size follows its chip (the standard pair is 64x64).
+            const sizeA = findChild(workspace, "imageSourceSizeA");
+            const sizeB = findChild(workspace, "imageSourceSizeB");
+            verify(sizeA !== null && sizeB !== null);
+            tryCompare(sizeA, "visible", true);
+            tryCompare(sizeB, "visible", true);
+            compare(String(sizeA.text), "64×64");
+            compare(String(sizeB.text), "64×64");
+        }
+
+        // Workspace redesign §6: an unequal-size pair in a difference mode explains itself
+        // in a persistent strip above the canvas - naming both sizes, never showing 0 -
+        // and the strip's own action opts into resampling.
+        function test_size_mismatch_banner_names_both_sizes_and_opts_into_resampling() {
+            verify(fixture.openPair(64, 48, [120, 130, 140, 255], 32, 24, [122, 128, 140, 255]));
+            imageReview.compareMode = 2;
+            const banner = findChild(workspace, "imageDiffUnavailableNotice");
+            verify(banner !== null);
+            tryCompare(banner, "visible", true);
+            const noticeText = findChild(workspace, "imageDiffUnavailableText");
+            verify(noticeText !== null);
+            const sentence = String(noticeText.text);
+            verify(sentence.indexOf("64×48") >= 0, "the banner must name A's size: " + sentence);
+            verify(sentence.indexOf("32×24") >= 0, "the banner must name B's size: " + sentence);
+
+            // The strip rides the top edge of the canvas area, not its middle.
+            compare(banner.y, 0);
+            verify(banner.height <= 36);
+
+            const enableButton = findChild(workspace, "diffEnableResampleButton");
+            verify(enableButton !== null);
+            tryCompare(enableButton, "visible", true);
+            mouseClick(enableButton, enableButton.width / 2, enableButton.height / 2);
+            tryCompare(imageReview, "resampleAllowed", true);
+            // Once resampling is on the action leaves the strip; the explanation no longer
+            // blocks the diff the user just opted into.
+            tryCompare(enableButton, "visible", false);
+        }
+
+        // ---- P3 second cut: the right parameter / inspector column -----------------------
+
+        // Workspace redesign §7: while editing, the tool parameter stack lives in the
+        // right panel beside the canvas - whole-image operations as its fixed top group,
+        // the tool's confirm pair pinned at its bottom - and the command band keeps only
+        // the session actions while the panel is docked.
+        function test_edit_parameters_live_in_a_docked_right_panel() {
+            root.width = 1180;
+            verify(fixture.openStandardPair());
+            workspace.imageEdit = imageEditMock;
+            const canvas = findChild(workspace, "imageStageContent");
+            verify(canvas !== null);
+            waitForRendering(workspace);
+            const canvasWidthWhileViewing = canvas.width;
+
+            verify(workspace.beginImageEdit());
+            tryCompare(workspace, "editModeActive", true);
+            tryCompare(workspace, "imagePanelDocked", true);
+            const panel = findChild(workspace, "imageParamsPanel");
+            verify(panel !== null);
+            tryCompare(panel, "visible", true);
+            compare(panel.width, 288, "the panel keeps the shared inspector default width");
+
+            // Docked means the canvas column really ceded the rail, the panel and the two
+            // row gaps - the panel never slides over the picture.
+            waitForRendering(workspace);
+            compare(Math.round(canvasWidthWhileViewing - canvas.width),
+                    64 + 12 + 288 + 12,
+                    "the canvas must shrink by rail + gap + panel + gap while the panel docks");
+            const canvasEndX = canvas.mapToItem(panel, canvas.width, 0).x;
+            verify(canvasEndX <= 0, "the canvas must end before the panel starts");
+
+            // The pinned confirm pair and the fixed whole-image group are on screen
+            // without any scrolling.
+            const apply = findChild(workspace, "imageEditApplyCropButton");
+            verify(apply !== null);
+            tryCompare(apply, "visible", true);
+            const scale = findChild(workspace, "imageEditScaleButton");
+            verify(scale !== null);
+            tryCompare(scale, "visible", true);
+
+            // The command band keeps only the session actions while the panel is docked:
+            // the fixed short row stays out of the layout.
+            const bandRow = findChild(workspace, "imageEditParamsRow");
+            verify(bandRow !== null);
+            tryCompare(bandRow, "visible", false);
+
+            workspace.finishImageEdit();
+            workspace.imageEdit = null;
+        }
+
+        // Workspace redesign §10.2: when the panel cannot dock (the canvas guard), it
+        // becomes a closable drawer and the command band carries the tool name plus the
+        // confirm/cancel pair on a fixed short row - submitting a crop never requires
+        // opening the drawer, and opening it never narrows the canvas.
+        function test_edit_drawer_keeps_confirm_actions_on_the_fixed_short_row() {
+            verify(fixture.openStandardPair());
+            workspace.imageEdit = imageEditMock;
+            verify(workspace.beginImageEdit());
+            tryCompare(workspace, "editModeActive", true);
+
+            tryCompare(workspace, "imagePanelDocked", false);
+            const panel = findChild(workspace, "imageParamsPanel");
+            verify(panel !== null);
+            tryCompare(panel, "visible", false);
+
+            const bandRow = findChild(workspace, "imageEditParamsRow");
+            verify(bandRow !== null);
+            tryCompare(bandRow, "visible", true);
+            const bandApply = findChild(workspace, "imageEditBandApplyButton");
+            verify(bandApply !== null);
+            tryCompare(bandApply, "visible", true);
+
+            const canvas = findChild(workspace, "imageStageContent");
+            const canvasWidthWhileClosed = canvas.width;
+
+            // Opening the drawer overlays the canvas; it must not reflow it. Keyboard
+            // activation (Space on the focused button) drives the same clicked() path as a
+            // mouse press while staying immune to this host's clamped-window mouse
+            // delivery quirks; the button keeps activeFocusOnTab, so the path is real.
+            const openButton = findChild(workspace, "imageEditBandOpenPanelButton");
+            verify(openButton !== null);
+            waitForPolish(openButton);
+            openButton.forceActiveFocus();
+            verify(openButton.activeFocus);
+            keyClick(Qt.Key_Space);
+            tryCompare(panel, "visible", true);
+            tryCompare(workspace, "imagePanelDocked", false);
+            compare(canvas.width, canvasWidthWhileClosed, "a drawer overlays, it never narrows the canvas");
+
+            // Closing the drawer restores the short row without losing the tool state.
+            const closeButton = findChild(workspace, "imagePanelCloseButton");
+            verify(closeButton !== null);
+            waitForPolish(closeButton);
+            closeButton.forceActiveFocus();
+            keyClick(Qt.Key_Space);
+            tryCompare(panel, "visible", false);
+            tryCompare(bandRow, "visible", true);
+
+            workspace.finishImageEdit();
+            workspace.imageEdit = null;
+        }
+
+        // Workspace redesign §6: the difference statistics live in the image inspector's
+        // 对比 page as a metric table; the canvas keeps only the mode identity, one
+        // headline number and the honesty warnings - the long sentence no longer parks
+        // over the middle of the picture.
+        function test_diff_statistics_live_in_the_inspector_compare_page() {
+            verify(fixture.openStandardPair());
+            imageReview.compareMode = 2;
+            tryVerify(() => imageReview.hasDiffResult);
+            const diffViewport = findChild(workspace, "diffViewport");
+            verify(diffViewport !== null);
+
+            // Inspector closed: the canvas shows the short headline, never the table.
+            workspace.reviewShell = shellMock;
+            shellMock.inspectorVisible = false;
+            const panel = findChild(workspace, "imageParamsPanel");
+            verify(panel !== null);
+            tryCompare(panel, "visible", false);
+            const shortLabel = String(diffViewport.label);
+            verify(shortLabel.indexOf("峰值") >= 0, "the canvas keeps one headline number: " + shortLabel);
+            verify(shortLabel.indexOf("MAE") < 0, "the aggregate wording belongs to the inspector: " + shortLabel);
+
+            // One shared toggle opens the image inspector (same switch as the video side).
+            shellMock.inspectorVisible = true;
+            tryCompare(panel, "visible", true);
+            const peak = findChild(workspace, "imageDiffStatPeak");
+            const mae = findChild(workspace, "imageDiffStatMae");
+            const scope = findChild(workspace, "imageDiffStatScope");
+            verify(peak !== null && mae !== null && scope !== null);
+            tryCompare(peak, "visible", true);
+            verify(String(peak.text).length > 0, "the peak value must be present, not elided away");
+            verify(/^\d+\.\d\d$/.test(String(mae.text)), "MAE keeps its two-decimal reading: " + mae.text);
+            verify(String(scope.text).length > 0, "the 口径 line must stay readable in the panel");
+
+            // The 信息 page carries the per-side identity facts the viewport labels own.
+            workspace.imageInspectorTab = 1;
+            const sizeA = findChild(workspace, "imageInspectorSizeA");
+            verify(sizeA !== null);
+            tryCompare(sizeA, "visible", true);
+            compare(String(sizeA.text), "64×64");
+            const peakWhileOnInfo = findChild(workspace, "imageDiffStatPeak");
+            tryCompare(peakWhileOnInfo, "visible", false);
+            workspace.imageInspectorTab = 0;
+
+            shellMock.inspectorVisible = false;
+            tryCompare(panel, "visible", false);
+            workspace.reviewShell = null;
         }
     }
 }

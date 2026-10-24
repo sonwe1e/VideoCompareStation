@@ -5,6 +5,7 @@
 #include "dvs/ui/HoldKeyHandler.h"
 #include "dvs/ui/ImageReviewController.h"
 #include "dvs/ui/JogKeyHandler.h"
+#include "dvs/ui/VideoTaskHost.h"
 
 #include <QString>
 #include <QtQml/qqml.h>
@@ -46,6 +47,12 @@ void registerDvsUiTypes() {
             kUiModuleMinorVersion,
             "ColorClipboardController",
             QString::fromLatin1(kCompositionRootOwned)));
+        static_cast<void>(
+            qmlRegisterUncreatableType<VideoTaskHost>(kUiModuleUri,
+                                                      kUiModuleMajorVersion,
+                                                      kUiModuleMinorVersion,
+                                                      "VideoTaskHost",
+                                                      QString::fromLatin1(kCompositionRootOwned)));
     });
 }
 

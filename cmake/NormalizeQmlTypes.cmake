@@ -12,8 +12,8 @@
 #   and every Component block is cut out by real brace matching, so a tail that lost its
 #   final "}" - or any unbalanced truncation - fails instead of publishing a half-file.
 # Phase 3 - contract validation on the real component blocks: each component exports into
-#   Dvs.Ui at 1.0 under its own name (the export identity, not the C++ class name), the two
-#   composition-root-owned controllers are uncreatable while the other three stay creatable,
+#   Dvs.Ui at 1.0 under its own name (the export identity, not the C++ class name), the
+#   three composition-root-owned types are uncreatable while the other three stay creatable,
 #   and the pilot-critical members exist inside their own block.
 # Phase 4 - publish only after every check passed: the validated content is written to a
 #   temporary file, read back and compared byte-for-byte, and only then does it replace the
@@ -32,7 +32,7 @@ if(NOT EXISTS "${INPUT}")
 endif()
 
 set(dvs_check_count 0)
-set(dvs_expected_check_count 38)
+set(dvs_expected_check_count 40)
 
 macro(dvs_require description)
     math(EXPR dvs_check_count "${dvs_check_count} + 1")
@@ -50,6 +50,7 @@ set(
     HoldKeyHandler
     ImageReviewController
     JogKeyHandler
+    VideoTaskHost
 )
 
 # --- Phase 1: spelling normalization ------------------------------------------------------
@@ -115,14 +116,14 @@ math(EXPR dvs_last_index "${dvs_trimmed_length} - 1")
 string(SUBSTRING "${dvs_content_trimmed}" ${dvs_last_index} 1 dvs_last_char)
 dvs_require("the artifact must end with a closing brace, not a truncated tail" dvs_last_char STREQUAL "}")
 
-# Exactly five component blocks and exactly five component name lines. A duplicated name
+# Exactly six component blocks and exactly six component name lines. A duplicated name
 # inside a block is caught by the name-line count; a stray or missing block by the block
 # count. (A rename that stays a single well-formed block is caught by the export contract.)
 list(LENGTH dvs_blocks dvs_block_count)
-dvs_require("the module must describe exactly its five components" dvs_block_count EQUAL 5)
+dvs_require("the module must describe exactly its six components" dvs_block_count EQUAL 6)
 string(REGEX MATCHALL "name: \"dvs::ui::[A-Za-z0-9]+\"" dvs_name_lines "${content}")
 list(LENGTH dvs_name_lines dvs_name_line_count)
-dvs_require("the module must contain exactly five component name lines" dvs_name_line_count EQUAL 5)
+dvs_require("the module must contain exactly six component name lines" dvs_name_line_count EQUAL 6)
 
 # Map each block to its C++ name. The per-component blocks start empty so a missing or
 # renamed component is reported by the export contract below instead of dereferencing an
@@ -147,9 +148,10 @@ foreach(component IN LISTS dvs_expected_components)
     dvs_require("${component} must export as Dvs.Ui/${component} 1.0" dvs_export_anchor GREATER -1)
 endforeach()
 
-# The two controllers are uncreatable; the other three stay creatable.
+# The three composition-root-owned types are uncreatable; the other three stay creatable.
 foreach(component IN LISTS dvs_expected_components)
-    if(component STREQUAL "ImageReviewController" OR component STREQUAL "ColorClipboardController")
+    if(component STREQUAL "ImageReviewController" OR component STREQUAL "ColorClipboardController"
+       OR component STREQUAL "VideoTaskHost")
         string(FIND "${dvs_block_${component}}" "isCreatable: false" dvs_uncreatable)
         dvs_require("${component} must be uncreatable" dvs_uncreatable GREATER -1)
     else()

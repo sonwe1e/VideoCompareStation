@@ -1208,6 +1208,22 @@ computeSurfacePanelLayout(const SurfaceViewMode viewMode,
         result.sourceCount = 3U;
         return result;
     }
+    if (viewMode == SurfaceViewMode::SideBySide) {
+        const SurfaceColumnLayout columns =
+            computeSurfaceColumns(logicalWidth, logicalHeight, pixelWidth, pixelHeight, 2U);
+        result.sourceRects = columns.columns;
+        // The current pair edge picks the two columns, mirroring the wipe branch above:
+        // Between0And1 keeps the default {0, 1, 2} so two-source sessions stay identical,
+        // Between0And2 shows slots 0 and 2, Between1And2 shows slots 1 and 2. The third
+        // entry keeps the remaining slot bound for peek and difference-suppression consumers.
+        if (differenceEdge == SurfaceDifferenceEdge::Between0And2) {
+            result.sourceSlots = {0U, 2U, 1U};
+        } else if (differenceEdge == SurfaceDifferenceEdge::Between1And2) {
+            result.sourceSlots = {1U, 2U, 0U};
+        }
+        result.sourceCount = columns.count;
+        return result;
+    }
     const SurfaceColumnLayout columns =
         computeSurfaceColumns(logicalWidth, logicalHeight, pixelWidth, pixelHeight, 2U);
     result.sourceRects = columns.columns;

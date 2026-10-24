@@ -18,7 +18,7 @@ Item {
     signal tabActivated(int index)
     signal tabCloseRequested(int index)
 
-    implicitHeight: 34
+    implicitHeight: 36
 
     Rectangle {
         anchors {
@@ -41,7 +41,7 @@ Item {
             bottom: parent.bottom
         }
         orientation: ListView.Horizontal
-        spacing: 0
+        spacing: Theme.spaceNone
         clip: true
         boundsBehavior: Flickable.StopAtBounds
 
@@ -54,9 +54,25 @@ Item {
             required property int index
 
             objectName: "imageTaskTab-" + index
-            width: Math.min(240, Math.max(136, tabLabel.implicitWidth + 56))
+            width: Math.min(240, Math.max(160, tabLabel.implicitWidth + 56))
             height: tabList.height
+            // Task-tab shape (workspace redesign §3.3): light radius on the top corners, a
+            // square bottom edge sitting on the strip's hairline, and the active underline.
+            // The bottom patch re-covers the rounded corners with the same colour, so the
+            // translucent hover fill stays one veil (no alpha stacking) while the foot reads
+            // flat - one glance separates a task tab from any source chip.
+            radius: Theme.radiusSubtle
             color: index === root.activeIndex ? Theme.panelElevated : (tabHoverArea.containsMouse ? Theme.controlHover : "transparent")
+
+            Rectangle {
+                anchors {
+                    left: parent.left
+                    right: parent.right
+                    bottom: parent.bottom
+                }
+                height: tabItem.radius
+                color: tabItem.color
+            }
 
             Rectangle {
                 anchors {
@@ -106,6 +122,17 @@ Item {
                 textFormat: Text.PlainText
                 maximumLineCount: 1
                 opacity: tabItem.modelData.loading ? 0.7 : 1
+
+                HoverHandler {
+                    id: tabLabelHover
+                }
+
+                // The elided title stays inspectable: the full title (and the task's paths,
+                // when the host publishes them) reads on hover.
+                VcsToolTip {
+                    visible: tabLabelHover.hovered && tabLabel.truncated
+                    text: tabItem.modelData.loading ? "" : (String(tabItem.modelData.detail || tabItem.modelData.title || ""))
+                }
             }
 
             Rectangle {

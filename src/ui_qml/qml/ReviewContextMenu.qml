@@ -14,10 +14,15 @@ VcsMenu {
     required property int currentEdgeIndex
     required property var sourceIdentities
     readonly property bool emptyStateOnly: sourceCount === 0
+    // With the pair-edge group resident in the mode bar, the context menu's 对比对
+    // submenu follows the same session rule: three sources offer all three edges, two
+    // show their single pair (one row, always checked), a single source has no pair to
+    // compare and no submenu. No task/mode gating either - the pair is selectable from
+    // any view (Main.qml returns a full-group view to the last two-path mode).
     readonly property int availableActionCount: {
         if (emptyStateOnly || sourceCount === 1)
             return 2;
-        return sourceCount === 3 ? 5 : 4;
+        return sourceCount >= 2 ? 5 : 4;
     }
 
     signal sideRequested
@@ -94,8 +99,11 @@ VcsMenu {
     VcsMenu {
         objectName: "contextPairMenu"
         title: qsTr("对比对")
-        enabled: control.sourceCount === 3
-        visible: control.sourceCount === 3
+        // Two sources show their only pair; the Repeater then carries the single edge
+        // row (always checked). A single source keeps the submenu hidden with the
+        // rest of the pair chrome.
+        enabled: control.sourceCount >= 2
+        visible: control.sourceCount >= 2
 
         Repeater {
             model: control.differenceEdges

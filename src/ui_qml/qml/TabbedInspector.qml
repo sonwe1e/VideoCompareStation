@@ -335,6 +335,16 @@ Rectangle {
                             font.weight: Font.DemiBold
                         }
 
+                        // Workspace redesign §9: the compare page reads as named groups -
+                        // 对齐 (mode, per-pair times, inexactness), then the comparison
+                        // objects, then 差异参数, then the metrics table. Group captions use
+                        // the muted caption face so they organize without shouting.
+                        Label {
+                            text: qsTr("对齐")
+                            color: control.mutedTextColor
+                            font.pixelSize: Theme.fontCaption
+                            font.weight: Font.DemiBold
+                        }
                         Label {
                             text: qsTr("对齐方式")
                             color: control.mutedTextColor
@@ -520,6 +530,15 @@ Rectangle {
                             }
                         }
 
+                        // §9 差异参数 group: metric, gain, resampling kernel and threshold
+                        // are one named cluster, separate from the alignment facts above.
+                        Label {
+                            visible: control.differenceMode
+                            text: qsTr("差异参数")
+                            color: control.mutedTextColor
+                            font.pixelSize: Theme.fontCaption
+                            font.weight: Font.DemiBold
+                        }
                         Label {
                             visible: control.differenceMode
                             text: qsTr("差异度量")

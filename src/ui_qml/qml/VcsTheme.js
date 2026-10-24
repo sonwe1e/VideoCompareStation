@@ -9,14 +9,16 @@
 
 // Surfaces, darkest to lightest. The review stage sits below the chrome so footage keeps the
 // strongest contrast; every raised layer is one step lighter than the layer it sits on.
-// Tuned to macOS dark-mode neutrals: pure neutral charcoal, no blue or purple cast.
-var canvas = "#0a0a0b"
-var window = "#1c1c1e"
+// Pure neutral charcoal, no blue or purple cast. The 2026-10-24 workspace redesign pinned the
+// chrome roles to explicit swatches: #111111 canvas surround, #202020 window chrome, #252525
+// tool panels - a one-step ladder so structure reads through lightness, not outlines.
+var canvas = "#111111"
+var window = "#202020"
 // The DWM caption colour in DesktopApplication.cpp mirrors this value; change both together.
-var headerBackground = "#1c1c1e"
-var panel = "#242426"
+var headerBackground = "#202020"
+var panel = "#252525"
 var panelElevated = "#2c2c2e"
-var menu = "#343438"
+var menu = "#333333"
 var raisedPanel = "#3a3a3c"
 var disabledPanel = "#2a2a2c"
 // Opaque row highlight for popup lists (combo boxes). The translucent control veils are for
@@ -26,15 +28,17 @@ var raisedPanelHover = "#48484a"
 
 // Neutral control states. Resting fills are translucent white so the same control reads
 // correctly on the window, a panel or a floating surface; hover and press only deepen the
-// veil, and a checked control keeps an accent-tinted fill (never just a border).
+// veil, and a checked control keeps a quiet opaque accent-tinted ground (never just a
+// border) - the redesign's active mode ground, deliberately not the fill of a primary
+// action so a selected mode cannot read as a submit button.
 var control = "#1affffff"
 var controlHover = "#29ffffff"
 var controlPressed = "#3dffffff"
-var controlChecked = "#3d0a84ff"
+var controlChecked = "#293748"
 
-var primaryText = "#f5f5f7"
-var secondaryText = "#e5e5ea"
-var mutedText = "#a5a5ab"
+var primaryText = "#ececec"
+var secondaryText = "#d0d0d4"
+var mutedText = "#b0b0b0"
 // Inactive controls are exempt from WCAG 1.4.3, and the exemption is only honest while
 // nothing a user must read is published in this colour. The old value (#6c6c70) measured
 // 2.37:1 on `menu`, which made a greyed row unreadable rather than merely inactive - and the
@@ -47,9 +51,10 @@ var inverseText = "#ffffff"
 
 // accent is for borders, indicators and focus; filled buttons use accentFill so white labels
 // keep an AA contrast ratio, and accentText is the readable accent for text on dark panels.
-// Aligned to macOS systemBlue dark.
+// accentText is the redesign's active-information tone (#8bb9ff): softer than the focus ring,
+// reserved for the current mode and selection so "active" stays distinct from "normal".
 var accent = "#0a84ff"
-var accentText = "#64d2ff"
+var accentText = "#8bb9ff"
 var accentFill = "#0964d4"
 var accentHover = "#0b6bdc"
 var accentPressed = "#0054b8"
@@ -107,7 +112,7 @@ var information = "#22c55e"
 var modalScrim = "#a6000000"
 var oscPanel = "#ed1f1f21"
 var thumbnailPanel = "#f229292c"
-var thumbnailWell = "#0a0a0b"
+var thumbnailWell = "#111111"
 
 // Translucent overlays drawn on top of footage: they must stay legible over bright pixels.
 var stageLabel = "#c71c1c1e"
@@ -121,7 +126,9 @@ var dropScrim = "#e00a0a0c"
 
 // The stage itself: the well behind footage and the marks drawn on the picture. Their
 // translucency lives in the colour, never in `opacity`, so child items cannot fade with them.
-var stageWell = "#050506"
+// The well matches the canvas surround (#111111): one quiet ground outside the material, with
+// video-black still owned by the displayed frames, not by chrome.
+var stageWell = "#111111"
 var stageDivider = "#bfd8e2f2"
 var lineHalo = "#4d000000"
 var selectionFill = "#220a84ff"
@@ -248,12 +255,14 @@ var lineHeightBody = 1.35
 var lineHeightCompact = 1.25
 
 // Spacing ladder, from the inside of a control outwards:
+//   none    (0)  deliberately flush elements - segmented rows whose neighbours touch
 //   micro   (4)  gap between the icons or key labels of one group
 //   main    (8)  horizontal breathing room inside a control
 //   group   (12) between groups - a 1 px divider may take this slot instead
 //   section (16) block/card padding and the space between a card and its neighbours
 // Deliberate, component-specific paddings outside this ladder stay literals in their
 // components; every step above is a multiple of the micro step so nothing drifts to 5 or 7.
+var spaceNone = 0
 var spaceMicro = 4
 var spaceMain = 8
 var spaceGroup = 12

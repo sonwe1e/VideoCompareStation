@@ -128,7 +128,7 @@ T.ComboBox {
 
         background: Rectangle {
             objectName: "toolbarComboPopupBackground"
-            radius: Theme.radiusLarge
+            radius: Theme.radiusMedium
             color: Theme.menu
             border.width: 1
             border.color: Theme.menuBorder

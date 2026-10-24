@@ -164,6 +164,23 @@ ApplicationWindow {
     // An in-place image or folder open still commits into the task that started it. Switching
     // or closing the active tab during that window would apply the terminal to the wrong task.
     readonly property bool imageTabOpenPending: root.pendingImageRequestId > 0 || root.pendingFolderPairRow >= 0 || Boolean(root.folderPairModel && root.folderPairModel.openPending)
+    // qmllint disable unqualified
+    // Video task-tab host from the composition root (video task tabs design §1). Absent in
+    // isolated harnesses, where the legacy single-session open paths stay in force.
+    readonly property var videoTaskHost: typeof videoTasks !== "undefined" ? videoTasks : null
+    // qmllint enable unqualified
+    readonly property var videoTabList: root.videoTaskHost ? root.videoTaskHost.tabs : []
+    readonly property int videoTabCount: root.videoTaskHost ? Number(root.videoTaskHost.count) : 0
+    readonly property int videoTabActiveIndex: root.videoTaskHost ? Number(root.videoTaskHost.activeIndex) : -1
+    // One shell open may be in flight per window (design §6): the shell queue replaces
+    // queued opens, so a second open while one record is still loading would strand it.
+    readonly property bool videoTaskOpenPending: {
+        for (let index = 0; index < root.videoTabList.length; ++index) {
+            if (root.videoTabList[index].loading)
+                return true;
+        }
+        return false;
+    }
     // Which tab the single edit session belongs to. With no host the historical
     // single-controller behaviour is preserved by returning -1 for both sides.
     readonly property int imageEditTabIndex: {
@@ -255,7 +272,7 @@ ApplicationWindow {
     // Workspace-level help rows. The sequences come from ShortcutCatalog.js - the same
     // constants the bindings and the menu labels use - and the contract test cross-checks
     // rows, labels and bindings against each other.
-    readonly property var workspaceHelpEntries: [[ShortcutCatalog.openVideos, qsTr("打开文件")], [ShortcutCatalog.openVideoFolder, qsTr("打开文件夹")], [ShortcutCatalog.addVideo, qsTr("向当前对比添加视频")], [ShortcutCatalog.openImagePair, qsTr("打开图片对")], [ShortcutCatalog.addImage, qsTr("向当前图片对添加图片")], [ShortcutCatalog.compareImageFolders, qsTr("对比图片文件夹")], [ShortcutCatalog.closeCurrentTask, qsTr("关闭当前任务")], [ShortcutCatalog.nextImageTab, qsTr("下一个图片标签")], [ShortcutCatalog.previousImageTab, qsTr("上一个图片标签")], [ShortcutCatalog.captureIssue, qsTr("记录当前问题，可填备注")]]
+    readonly property var workspaceHelpEntries: [[ShortcutCatalog.openVideos, qsTr("打开文件")], [ShortcutCatalog.openVideoFolder, qsTr("打开文件夹")], [ShortcutCatalog.addVideo, qsTr("向当前对比添加视频")], [ShortcutCatalog.openImagePair, qsTr("打开图片对")], [ShortcutCatalog.addImage, qsTr("向当前图片对添加图片")], [ShortcutCatalog.compareImageFolders, qsTr("对比图片文件夹")], [ShortcutCatalog.closeCurrentTask, qsTr("关闭当前任务")], [ShortcutCatalog.nextImageTab, qsTr("下一个图片标签")], [ShortcutCatalog.previousImageTab, qsTr("上一个图片标签")], [ShortcutCatalog.nextVideoTab, qsTr("下一个视频标签")], [ShortcutCatalog.previousVideoTab, qsTr("上一个视频标签")], [ShortcutCatalog.captureIssue, qsTr("记录当前问题，可填备注")]]
     property bool pendingComparisonPreservesPosition: false
     property bool pendingSidebarComparison: false
     property bool pendingNewReviewWantsThreeUp: false
@@ -285,6 +302,40 @@ ApplicationWindow {
     property bool pendingImageIssueRestoreApplied: false
     property bool pendingImageIssueRestoreRowOpened: false
     property bool imageIssueRestoreContinuing: false
+    // Video task tabs (design §2.2/§4, slice-2 minimal skeleton). pendingVideoTaskOpen is
+    // the loading record whose shell open is in flight; it is keyed by the shell intent id
+    // captured at submission. Startup-origin opens are adopted at their terminal: the shell
+    // owns their queue entry before QML ever sees the URLs.
+    property var pendingVideoTaskOpen: null
+    property var videoStartupOpenIntentIds: []
+    property url pendingVideoAppendUrl: ""
+    // Sidebar routing (design §5 rows 5-8): while an in-place disc switch is in flight,
+    // the url of the material the ACTIVE single-video tab is switching to. Its successful
+    // OpenSourcesIntent terminal rewrites that tab's record group (position not carried).
+    property url pendingSidebarInPlaceUrl: ""
+    // Minimal tab-switch machine (design §4): pause -> snapshot -> replace-open without the
+    // displayed-time mapping -> seek the snapshot frame -> replay the view mode -> stay
+    // paused. Every stage is bound to the session epoch plus the target task's URL list;
+    // a terminal from any other session cancels the restore instead of landing on it.
+    property var pendingVideoTaskSwitch: null
+    property var pendingVideoTaskSwitchOpenCommandId: 0
+    property int pendingVideoTaskSwitchOpenOutcome: -1
+    property var pendingVideoTaskSwitchOpenSessionEpoch: 0
+    property var pendingVideoTaskSwitchSessionEpoch: 0
+    property var pendingVideoTaskSwitchSeekCommandId: 0
+    // Stage-2 pair replay (design §4.5): the recorded pair is a command, so its terminal
+    // is awaited before the presentation family replays; a refused or unverified pair is
+    // a partial-restore note, never a blocker.
+    property bool pendingVideoTaskSwitchContextApplied: false
+    property var pendingVideoTaskSwitchPairCommandId: 0
+    property bool pendingVideoTaskSwitchPairApplied: true
+    property var pendingVideoTaskSwitchPartial: []
+    property bool videoTaskSwitchContinuing: false
+    // Identity of the task the switch machinery last adopted (urls + reference slot), not
+    // its index: closing the active tab can slide a neighbour into the same numeric index
+    // without any activeChanged, while a background close shifts indexes without switching.
+    property string videoLastActivatedKey: ""
+    readonly property bool videoTaskSwitchPending: pendingVideoTaskSwitch !== null
     property string dropError: ""
     property string intentMessage: ""
     // C1 resume: the identity currently open, and the one identity a restore has already been
@@ -474,6 +525,22 @@ ApplicationWindow {
     readonly property bool peekDifferenceTask: effectiveViewMode === ComparisonSurface.Difference || dualDifferenceMode
     readonly property bool wipeMode: effectiveViewMode === ComparisonSurface.Wipe
     readonly property int threeUpViewMode: ComparisonSurface.ThreeUp
+
+    // "任意比较对一步切换": the four full-group views show every participating source at
+    // once, so none of them displays a single compared pair. RoiTriplet counts as a
+    // full-group view for the same reason - its shared-ROI windows cover all sources, not
+    // just the active pair.
+    readonly property bool fullGroupView: effectiveViewMode === ComparisonSurface.ThreeUp || effectiveViewMode === ComparisonSurface.ReferenceFocus || effectiveViewMode === ComparisonSurface.DualDifference || effectiveViewMode === ComparisonSurface.RoiTriplet
+    // The last two-path comparison mode the user actually had on screen (并排 / 分割线 /
+    // 差异 / 分析网格); SideBySide until one of them is used. Tracked from the effective
+    // mode so every entry point records the same fact - mode bar, context menu,
+    // shortcuts, presets and restores alike.
+    property int lastPairMode: ComparisonSurface.SideBySide
+    onEffectiveViewModeChanged: {
+        const mode = root.effectiveViewMode;
+        if (mode === ComparisonSurface.SideBySide || mode === ComparisonSurface.Wipe || mode === ComparisonSurface.Difference || mode === ComparisonSurface.AnalysisGrid)
+            root.lastPairMode = mode;
+    }
 
     // qmllint enable unqualified
 
@@ -710,6 +777,11 @@ ApplicationWindow {
     readonly property string overlayDetail: busy ? qsTr("请稍候，正在准备媒体。") : (!graphicsReady ? qsTr("图形设备就绪前，导航和打开操作不可用。") : (hasErrors ? errorDetails() : qsTr("打开一个视频可播放和逐帧检查，两三个视频可对比；图片也可直接拖入查看。")))
     readonly property bool overlayVisible: (busy && currentFrame < 0) || !graphicsReady || (hasErrors && !frameErrorBannerVisible)
     readonly property string currentTimecode: controller ? controller.timecodeForFrame(currentFrame, dropFrameTimecode) : "00:00:00:00"
+
+    // Whole-timeline duration in the same timecode vocabulary (workspace redesign §8 layer 1);
+    // evaluated at the last frame, and empty while no session exists so the flank only states
+    // the frame total it can honestly report.
+    readonly property string totalTimecode: controller && root.totalFrames > 0 ? controller.timecodeForFrame(root.totalFrames - 1, dropFrameTimecode) : ""
 
     // The hover popup must only ever describe the frame its thumbnail actually shows. Thumbnails
 
@@ -1463,6 +1535,14 @@ ApplicationWindow {
     function activateWorkspace(media) {
         ensureVideoPaused();
 
+        if (Number(media) !== workspaceSession.imageMedia && root.videoTaskHost) {
+            // Leaving the video workspace keeps the runtime alive: refresh the active
+            // task's snapshot so the recorded position matches what the user actually
+            // left, and drop an in-flight tab restore instead of yanking the user back.
+            root.snapshotVideoSessionTask();
+            root.cancelPendingVideoTaskSwitch();
+        }
+
         if (root.issueLogModel) {
             const modeName = Number(media) === workspaceSession.imageMedia ? "image" : "video";
 
@@ -1559,6 +1639,28 @@ ApplicationWindow {
         if (!root.videoHasSession || !shell)
             return false;
 
+        // Video task tabs (design §6/§8): with more than one tab, Ctrl+W closes the
+        // current task's tab; the host selects the neighbour and its restore rebuilds the
+        // session. Closing the last tab goes through allTasksClosed, which keeps the
+        // legacy whole-session close and its feedback.
+        if (root.videoTaskHost && root.videoTabCount > 0) {
+            if (root.videoTaskOpenPending) {
+                root.showIntentMessage(qsTr("正在打开视频，请稍候再关闭标签。"));
+                return false;
+            }
+            const closing = root.videoTabActiveIndex;
+            if (closing >= 0 && closing < root.videoTabList.length && root.videoTabList[closing].restoring) {
+                root.showIntentMessage(qsTr("正在恢复视频标签，请稍候再关闭。"));
+                return false;
+            }
+            if (!root.videoTaskHost.closeActive())
+                return false;
+            // Same rationale as closeVideoTab: the neighbour may keep the numeric index,
+            // so the identity-keyed adoption runs once more, idempotently.
+            root.handleVideoTaskActiveChanged();
+            return true;
+        }
+
         // ReviewShellController owns the source-topology intent, but a projector/sync race can
 
         // leave its cached Active Sources empty while the media truth already has sources.
@@ -1637,7 +1739,7 @@ ApplicationWindow {
         workspaceSession.beginOpen(isImage ? workspaceSession.imageMedia : workspaceSession.videoMedia);
         if (isImage)
             return openSidebarImage(url);
-        if (!videoFolderModel.openAt(Number(row))) {
+        if (!root.routeSidebarVideoSubmit(url, () => videoFolderModel.openAt(Number(row)))) {
             workspaceSession.cancelOpen();
             return false;
         }
@@ -1670,9 +1772,11 @@ ApplicationWindow {
             workspaceSession.beginOpen(workspaceSession.imageMedia);
             return openSidebarImage(entry.fileUrl);
         }
+        const entry = videoFolderModel.recentFiles[row];
+        const url = entry && entry.fileUrl ? entry.fileUrl : "";
         cancelWorkspaceOpen();
         workspaceSession.beginOpen(workspaceSession.videoMedia);
-        if (!videoFolderModel.openRecent(Number(row))) {
+        if (!root.routeSidebarVideoSubmit(url, () => videoFolderModel.openRecent(Number(row)))) {
             workspaceSession.cancelOpen();
             return false;
         }
@@ -1731,12 +1835,76 @@ ApplicationWindow {
         }
         cancelWorkspaceOpen();
         workspaceSession.beginOpen(workspaceSession.videoMedia);
-        if (!videoFolderModel.openFile(url)) {
+        if (!root.routeSidebarVideoSubmit(url, () => videoFolderModel.openFile(url))) {
             workspaceSession.cancelOpen();
             return false;
         }
         pendingNewReviewWantsThreeUp = false;
         return true;
+    }
+
+    // Row 7: the sidebar context menu's 「打开为新单视频任务」 is an explicit new task,
+    // so it skips the in-place disc-switch judgement entirely. Without the task host it
+    // degrades to the legacy plain open.
+    function openSidebarVideoInNewTab(url) {
+        const reason = sidebarVideoActionState(url).openReason;
+        if (reason.length > 0) {
+            showIntentMessage(reason);
+            return false;
+        }
+        if (videoFolderModel && videoFolderModel.isImageUrl(url)) {
+            cancelWorkspaceOpen();
+            workspaceSession.beginOpen(workspaceSession.imageMedia);
+            return openSidebarImage(url);
+        }
+        cancelWorkspaceOpen();
+        workspaceSession.beginOpen(workspaceSession.videoMedia);
+        if (!root.armSidebarAdoptOpen(() => videoFolderModel.openFile(url))) {
+            workspaceSession.cancelOpen();
+            return false;
+        }
+        pendingNewReviewWantsThreeUp = false;
+        return true;
+    }
+
+    // Sidebar video routing (design §5 rows 5-8). With a single-video task active whose
+    // session still shows that task, the sidebar (and folder stepping) switch the disc
+    // IN PLACE: the record's group is rewritten at the successful open terminal, the
+    // state snapshot is reset (the new material has nothing to restore) and the folder
+    // model's own autoplay chain is untouched. Every other shape (comparison active, no
+    // task, foreign session) opens a NEW task tab by adopting the intent's terminal -
+    // the same adoption the startup opens use.
+    function routeSidebarVideoSubmit(url, submit) {
+        if (!root.videoTaskHost || !root.shell || !root.controller)
+            return submit();
+        const active = root.videoTabActiveIndex;
+        const tabs = root.videoTabList;
+        const activeTab = active >= 0 && active < tabs.length ? tabs[active] : null;
+        const singleActive = activeTab && !activeTab.loading && !activeTab.restoring && (activeTab.urls || []).length === 1 && root.videoSessionTaskIndex() === active;
+        if (singleActive) {
+            root.pendingSidebarInPlaceUrl = url;
+            const accepted = submit();
+            if (!accepted)
+                root.pendingSidebarInPlaceUrl = "";
+            return accepted;
+        }
+        return root.armSidebarAdoptOpen(submit);
+    }
+
+    // Registers the shell intent a sidebar submit just created for terminal adoption
+    // (new-tab shape); without the host it is a plain legacy submit.
+    function armSidebarAdoptOpen(submit) {
+        if (!root.videoTaskHost || !root.shell) {
+            return submit();
+        }
+        const before = root.shellIntentIds();
+        const accepted = submit();
+        if (accepted) {
+            const id = root.firstNewShellIntentId(before);
+            if (id > 0 && root.videoStartupOpenIntentIds.indexOf(id) < 0)
+                root.videoStartupOpenIntentIds = root.videoStartupOpenIntentIds.concat([id]);
+        }
+        return accepted;
     }
 
     function cancelSidebarComparison() {
@@ -1747,6 +1915,7 @@ ApplicationWindow {
             shell.clearStagedSources();
         pendingComparisonPreservesPosition = false;
         pendingNewReviewWantsThreeUp = false;
+        pendingVideoAppendUrl = "";
         cancelWorkspaceOpen();
     }
 
@@ -1931,6 +2100,11 @@ ApplicationWindow {
 
         if (normalizedUrls.length === 1) {
             dropError = "";
+
+            // Video task tabs (design §5 row 1): the host decides new tab versus focus;
+            // openRequested submits through this same staged chain.
+            if (root.videoTaskHost)
+                return root.openVideoTask(normalizedUrls, 0, "Review");
 
             if (!setDroppedVideoOrder(normalizedUrls) || !shell || !shell.openStagedSources(false)) {
                 workspaceSession.cancelOpen();
@@ -2326,6 +2500,11 @@ ApplicationWindow {
             root.showIntentMessage(qsTr("部分恢复：记录中的比较对未能应用"));
 
         root.cancelPendingIssueRestore();
+        // Slice-4 adoption: the restore machine has finished rebuilding the session, so
+        // the task records must describe it again (matching record adopted in place,
+        // otherwise the active record rewritten - never a new tab). Cancelled, failed
+        // or timed-out restores never reach this point and leave records untouched.
+        root.syncActiveVideoTaskWithSession();
     }
 
     function acceptIssueRestoreCommand(commandId, sessionEpoch, outcome) {
@@ -2367,6 +2546,16 @@ ApplicationWindow {
         objectName: "imageIssueRestoreDeadline"
         interval: 15000
         onTriggered: root.abandonPendingImageIssueRestore(qsTr("恢复超时：未能确认记录中的图片与观察状态"))
+    }
+
+    // Video tab-switch restore deadline (decision a): one 15 s bound for the whole
+    // pause -> reopen -> seek -> mode chain, mirroring the issue-restore precedent.
+    Timer {
+        id: videoTaskSwitchDeadline
+
+        objectName: "videoTaskSwitchDeadline"
+        interval: 15000
+        onTriggered: root.abandonPendingVideoTaskSwitch(qsTr("恢复超时：未能确认视频标签的观察位置"))
     }
 
     // Ends a pending restore that cannot complete, and says so. A silent drop would leave the
@@ -2842,6 +3031,769 @@ ApplicationWindow {
         else
             root.focusActiveWorkspace();
     }
+
+    // --- Video task tabs: open routing, switch skeleton, close/cycle ----------------------
+    // (docs/plans/video-task-tabs-design.md §2.2/§4/§5/§6; slice 2 keeps the sidebar and
+    // issue-restore paths on their legacy single-session routes.)
+
+    function shellIntentIds() {
+        const ids = [];
+        if (!root.shell)
+            return ids;
+        const running = root.shell.activeIntent;
+        if (Number(running.id || 0) > 0)
+            ids.push(Number(running.id));
+        const queued = root.shell.queuedIntents || [];
+        for (let index = 0; index < queued.length; ++index)
+            ids.push(Number(queued[index].id || 0));
+        return ids;
+    }
+
+    // The id of the intent a shell submission just added: the one id present now that was
+    // absent before. A synchronous submission either starts running or joins the queue, so
+    // exactly one candidate appears.
+    function firstNewShellIntentId(before) {
+        if (!root.shell)
+            return 0;
+        const known = id => before.indexOf(Number(id)) >= 0;
+        const running = root.shell.activeIntent;
+        if (Number(running.id || 0) > 0 && !known(running.id))
+            return Number(running.id);
+        const queued = root.shell.queuedIntents || [];
+        for (let index = 0; index < queued.length; ++index) {
+            const id = Number(queued[index].id || 0);
+            if (id > 0 && !known(id))
+                return id;
+        }
+        return 0;
+    }
+
+    // Session-fact check: the controller projection must show exactly this slot-ordered
+    // URL list. The comparison runs in C++ (VideoTaskHost::urlsMatch): the JS String()
+    // of a QVariant-wrapped QUrl is not stable across engine states, and an identity
+    // gate must not depend on it. The shell's Active Sources mirror is deliberately NOT
+    // consulted - it can lag the controller by one publish.
+    function sessionShowsUrls(urls) {
+        if (!root.controller || !urls || urls.length === 0)
+            return false;
+        if (!root.videoTaskHost)
+            return false;
+        return Boolean(root.videoTaskHost.urlsMatch(root.controller.sourceUrls || [], urls));
+    }
+
+    // The host tab whose group the runtime session currently shows (slot order compared as
+    // exact URL strings - the same canonicalized round-trip matchesOpenUrls relies on), or
+    // -1 when the session belongs to no tab (sidebar open, issue restore, no session).
+    function videoSessionTaskIndex() {
+        if (!root.videoTaskHost || root.videoTabCount <= 0 || !root.controller)
+            return -1;
+        const current = root.controller.sourceUrls || [];
+        if (current.length === 0)
+            return -1;
+        for (let index = 0; index < root.videoTabList.length; ++index) {
+            const tab = root.videoTabList[index];
+            const urls = tab.urls || [];
+            if (urls.length !== current.length)
+                continue;
+            let same = true;
+            for (let slot = 0; slot < urls.length; ++slot) {
+                if (String(urls[slot]) !== String(current[slot])) {
+                    same = false;
+                    break;
+                }
+            }
+            if (!same)
+                continue;
+            // The reference identity is part of the task fact (design §2.1). A session
+            // without an explicit reference cannot disagree with the recorded slot.
+            if (current.length > 1 && root.hasExplicitReference && Number(tab.referenceIndex) !== root.referenceSourceIndex)
+                continue;
+            return index;
+        }
+        return -1;
+    }
+
+    function videoTaskFrozenIdentities(urls) {
+        const frozen = [];
+        if (!root.controller)
+            return frozen;
+        for (let index = 0; index < urls.length; ++index)
+            frozen.push(String(root.controller.frozenSourceIdentity(urls[index])));
+        return frozen;
+    }
+
+    // Per-task snapshot (design §3, the full slice-3 set). Everything below is view or
+    // session state the tab must come back to; the pack stays opaque to the host and is
+    // captured after the pause and before any rebuild command is submitted (§4.2).
+    function captureVideoTaskSnapshot() {
+        const surface = viewportFrame && viewportFrame.surface ? viewportFrame.surface : null;
+        const state = {
+            urls: [],
+            referenceIndex: root.referenceSourceIndex,
+            hasExplicitReference: root.hasExplicitReference,
+            canonicalSourceIndex: root.canonicalSourceIndex,
+            frame: Number(root.currentFrame),
+            mediaTime: root.controller ? Number(root.controller.currentMediaTime) : -1,
+            viewMode: root.preferences ? Number(root.preferences.viewMode) : -1,
+            // #4 alignment mode and manual offsets (decision g: analysis results and
+            // manual anchors are deliberately NOT saved).
+            alignmentMode: root.controller ? Number(root.controller.alignmentMode) : -1,
+            sourceOffsets: root.sourceOffsets(),
+            // #6 rate.
+            playbackRate: root.controller ? Number(root.controller.playbackRate) : -1,
+            // #7 range family: the shell mirror first, the kernel command second.
+            rangeIn: root.inFrame,
+            rangeOut: root.outFrame,
+            rangeInMediaTime: root.inMediaTime,
+            rangeOutMediaTime: root.outMediaTime,
+            rangeActive: root.rangePlaybackActive,
+            rangeLoop: Boolean(root.controller && root.controller.playbackRangeLoop),
+            rangePingPong: Boolean(root.controller && root.controller.playbackRangePingPong),
+            // #8 the current pair; single-source tasks have none.
+            differenceEdge: root.sourceCount > 1 ? Number(root.differenceEdge) : -1,
+            // #10 viewport zoom/pan/ROI.
+            viewport: surface ? {
+                centerX: Number(surface.viewCenterX),
+                centerY: Number(surface.viewCenterY),
+                scale: Number(surface.viewScale),
+                roiEnabled: Boolean(surface.roiEnabled),
+                roiLeft: Number(surface.roiLeft),
+                roiTop: Number(surface.roiTop),
+                roiRight: Number(surface.roiRight),
+                roiBottom: Number(surface.roiBottom)
+            } : null,
+            // #11 wipe split.
+            wipeOrientation: viewportFrame ? Number(viewportFrame.wipeOrientation) : -1,
+            wipePosition: Number(root.wipePosition),
+            // #12 difference parameters (threshold family is QML observation state).
+            differenceThresholdEnabled: root.differenceThresholdEnabled,
+            differenceThresholdCode: root.differenceThresholdCode,
+            differenceThresholdPolicy: root.differenceThresholdPolicy,
+            differenceMetric: root.preferences ? Number(root.preferences.differenceMetric) : -1,
+            differenceGain: root.preferences ? Number(root.preferences.differenceGain) : -1,
+            differenceFilter: root.preferences ? Number(root.preferences.differenceFilter) : -1,
+            pairMetricsThreshold: root.pairMetricsModel ? Number(root.pairMetricsModel.threshold) : -1,
+            pairMetricsThresholdPolicy: root.pairMetricsModel ? Number(root.pairMetricsModel.thresholdPolicy) : -1,
+            // #13 GT direct look identity (transient peek deliberately not saved).
+            canvasFocusIdentity: root.shell ? String(root.shell.canvasFocusIdentity) : "",
+            // #14 folder navigation (decision c: the directory stays global; the row
+            // highlight is recorded - its replay needs a model setter slice 4 owns).
+            folderUrl: root.videoFolderModel ? String(root.videoFolderModel.folderUrl) : "",
+            folderRow: root.videoFolderModel ? Number(root.videoFolderModel.currentRow) : -1
+        };
+        const current = root.controller ? (root.controller.sourceUrls || []) : [];
+        for (let index = 0; index < current.length; ++index)
+            state.urls.push(String(current[index]));
+        return state;
+    }
+
+    // Snapshot the task the session currently shows (design §4.2). Must run before any
+    // rebuild command replaces the session: the leaving task's position is the restore
+    // target when it comes back.
+    function snapshotVideoSessionTask() {
+        if (!root.videoTaskHost)
+            return false;
+        const index = root.videoSessionTaskIndex();
+        if (index < 0)
+            return false;
+        root.videoTaskHost.updateTaskState(index, root.captureVideoTaskSnapshot());
+        return true;
+    }
+
+    // Routes a new-review video open through the task host (design §5 rows 1/2/9): the host
+    // decides "focus the existing tab" versus "new loading record"; openRequested drives the
+    // existing shell chain. Callers have already begun the workspace open.
+    function openVideoTask(urls, referenceIndex, purpose) {
+        if (!root.videoTaskHost || !root.controller || !root.shell)
+            return false;
+        const requested = [];
+        for (let index = 0; urls && index < urls.length; ++index) {
+            if (urls[index] && urls[index].toString().length > 0)
+                requested.push(urls[index]);
+        }
+        if (requested.length === 0 || requested.length > 3)
+            return false;
+        if (root.videoTaskOpenPending) {
+            root.showIntentMessage(qsTr("正在打开视频，请稍候再打开新的标签。"));
+            workspaceSession.cancelOpen();
+            return false;
+        }
+        const reference = Number(referenceIndex) >= 0 && Number(referenceIndex) < requested.length ? Number(referenceIndex) : 0;
+        const index = Number(root.videoTaskHost.openTask(requested, reference, String(purpose || "Review")));
+        if (index < 0) {
+            workspaceSession.cancelOpen();
+            return false;
+        }
+        if (!root.pendingVideoTaskOpen || Number(root.pendingVideoTaskOpen.index) !== index) {
+            // Focus: the record and its snapshot stay untouched (design §2.2 step 2); the
+            // activation already started the delta/restore path synchronously.
+            workspaceSession.cancelOpen();
+            if (root.videoTabActiveIndex === index && !root.videoTaskSwitchPending)
+                root.showWorkspace(workspaceSession.videoMedia);
+            return true;
+        }
+        return true;
+    }
+
+    // openRequested: the host created a loading record; submit the actual open through the
+    // shell queue exactly like the legacy paths did. Runs synchronously inside openTask().
+    function handleVideoTaskOpenRequested(index, urls, referenceIndex, purpose) {
+        if (!root.videoTaskHost || !root.controller || !root.shell)
+            return;
+        // Adoption: the session already shows exactly this request - a startup open whose
+        // shell intent finished before any record existed. Commit the session facts into
+        // the record instead of submitting a second open.
+        if (root.sessionShowsUrls(urls)) {
+            root.commitVideoTaskOpen(Number(index), urls);
+            return;
+        }
+        // Snapshot the task being left before the new open replaces the session.
+        root.snapshotVideoSessionTask();
+        const before = root.shellIntentIds();
+        const staged = root.shell.stageSources(Array.from(urls), Number(referenceIndex));
+        const opened = Boolean(staged && root.shell.openStagedSources(false));
+        if (!opened) {
+            root.videoTaskHost.failOpen(Number(index), qsTr("无法打开暂存的视频源。"));
+            workspaceSession.cancelOpen();
+            root.showIntentMessage(qsTr("无法打开该视频。"));
+            root.focusActiveWorkspace();
+            return;
+        }
+        root.pendingVideoTaskOpen = {
+            index: Number(index),
+            urls: Array.from(urls),
+            referenceIndex: Number(referenceIndex),
+            purpose: String(purpose || "Review"),
+            intentId: root.firstNewShellIntentId(before)
+        };
+        root.dropError = "";
+        root.commitWorkspace(workspaceSession.videoMedia, urls[0].toString());
+    }
+
+    function commitVideoTaskOpen(index, urls) {
+        if (!root.videoTaskHost)
+            return;
+        root.videoTaskHost.commitOpen(Number(index), root.videoTaskFrozenIdentities(urls));
+        root.dropError = "";
+    }
+
+    // Rewrites the ACTIVE task record from the session facts (design §6/§11-f): an
+    // in-place disc switch resets the state snapshot (nothing to restore on new
+    // material); a group evolution - one source removed - keeps it (decision f).
+    function evolveActiveTaskFromSession(resetState) {
+        if (!root.videoTaskHost || !root.controller)
+            return false;
+        const index = root.videoTabActiveIndex;
+        if (index < 0)
+            return false;
+        const urls = root.controller.sourceUrls || [];
+        if (urls.length === 0)
+            return false;
+        const reference = root.referenceSourceIndex >= 0 && root.referenceSourceIndex < urls.length ? root.referenceSourceIndex : 0;
+        if (!root.videoTaskHost.replaceActiveTaskGroup(urls, reference, resetState))
+            return false;
+        root.videoTaskHost.commitOpen(index, root.videoTaskFrozenIdentities(urls));
+        return true;
+    }
+
+    // Issue-restore adoption (slice 4): once a video record's restore machine has
+    // finished, the task records must describe the session again. A matching record is
+    // adopted in place (no new tab); otherwise the ACTIVE record's group is rewritten.
+    // Cancelled, failed or timed-out restores deliberately leave the records untouched.
+    function syncActiveVideoTaskWithSession() {
+        if (!root.videoTaskHost || !root.controller)
+            return false;
+        const urls = root.controller.sourceUrls || [];
+        if (urls.length === 0 || urls.length > 3)
+            return false;
+        const reference = root.referenceSourceIndex >= 0 && root.referenceSourceIndex < urls.length ? root.referenceSourceIndex : 0;
+        const matched = Number(root.videoTaskHost.indexOfTask(urls, reference));
+        if (matched >= 0) {
+            root.videoTaskHost.commitOpen(matched, root.videoTaskFrozenIdentities(urls));
+            if (matched !== root.videoTabActiveIndex)
+                root.videoTaskHost.activate(matched);
+            return true;
+        }
+        return root.evolveActiveTaskFromSession(true);
+    }
+
+    // Terminal of a shell OpenSourcesIntent: commit the pending host record, or adopt a
+    // startup open the shell queued before any record existed (design §5 row 9).
+    function settleVideoTaskOpenIntent(intentId) {
+        if (root.pendingVideoTaskOpen && (Number(root.pendingVideoTaskOpen.intentId) === Number(intentId) || Number(root.pendingVideoTaskOpen.intentId) === 0)) {
+            const record = root.pendingVideoTaskOpen;
+            root.pendingVideoTaskOpen = null;
+            root.commitVideoTaskOpen(Number(record.index), record.urls);
+            return;
+        }
+        if (!root.videoTaskHost)
+            return;
+        if (root.videoStartupOpenIntentIds.indexOf(Number(intentId)) < 0)
+            return;
+        root.videoStartupOpenIntentIds = root.videoStartupOpenIntentIds.filter(id => Number(id) !== Number(intentId));
+        const sessionUrls = root.activeSourceUrls();
+        if (sessionUrls.length === 0 || sessionUrls.length > 3)
+            return;
+        const reference = root.referenceSourceIndex >= 0 && root.referenceSourceIndex < sessionUrls.length ? root.referenceSourceIndex : 0;
+        // May focus an existing task or create a record; the openRequested handler sees
+        // the session already showing the request and commits directly (adoption).
+        root.videoTaskHost.openTask(sessionUrls, reference, "Startup");
+    }
+
+    // Startup-origin OpenSourcesIntents are adopted at their terminal; their ids are
+    // learned from the shell's intent maps because the queue belongs to C++. A pending
+    // host open whose queued intent was replaced, rejected or canceled must not stay a
+    // loading tab forever: no terminal will ever arrive for it.
+    function observeVideoTaskIntentEvent(intentId, status, kind) {
+        if (!root.shell)
+            return;
+        if (kind === 0 && (status === 0 || status === 1)) {
+            // Careful with || fallbacks here: kind 0 (OpenSourcesIntent) is falsy, so an
+            // absent field must be told apart from a present zero.
+            const candidates = [];
+            const running = root.shell.activeIntent;
+            const runningKind = running.kind === undefined ? -1 : Number(running.kind);
+            const runningOrigin = running.origin === undefined ? -1 : Number(running.origin);
+            if (runningKind === 0 && runningOrigin === 1)
+                candidates.push(running.id === undefined ? 0 : Number(running.id));
+            const queued = root.shell.queuedIntents || [];
+            for (let index = 0; index < queued.length; ++index) {
+                const entry = queued[index];
+                const entryKind = entry.kind === undefined ? -1 : Number(entry.kind);
+                const entryOrigin = entry.origin === undefined ? -1 : Number(entry.origin);
+                if (entryKind === 0 && entryOrigin === 1)
+                    candidates.push(entry.id === undefined ? 0 : Number(entry.id));
+            }
+            for (const id of candidates) {
+                if (id > 0 && root.videoStartupOpenIntentIds.indexOf(id) < 0)
+                    root.videoStartupOpenIntentIds = root.videoStartupOpenIntentIds.concat([id]);
+            }
+        }
+        if (root.pendingVideoTaskOpen && Number(root.pendingVideoTaskOpen.intentId) === intentId && (status === 4 || status === 5 || status === 6)) {
+            const record = root.pendingVideoTaskOpen;
+            root.pendingVideoTaskOpen = null;
+            root.videoTaskHost.failOpen(Number(record.index), status === 6 ? qsTr("更新的请求已取代本次打开。") : qsTr("本次打开已取消。"));
+            workspaceSession.cancelOpen();
+        }
+    }
+
+    // Group-evolution writeback for the append chain (design §5 row 3, decision f): the
+    // shell path stays untouched; the active task's record grows in place on success.
+    function applyVideoAppendWriteback() {
+        if (!root.videoTaskHost || root.pendingVideoAppendUrl.toString().length === 0)
+            return;
+        const appended = root.pendingVideoAppendUrl;
+        root.pendingVideoAppendUrl = "";
+        const index = root.videoTabActiveIndex;
+        if (index < 0 || !root.videoTaskHost.appendSourceToActiveTask(appended))
+            return;
+        const current = root.controller ? (root.controller.sourceUrls || []) : [];
+        const urls = [];
+        for (let slot = 0; slot < current.length; ++slot)
+            urls.push(current[slot]);
+        if (urls.length > 0)
+            root.videoTaskHost.commitOpen(index, root.videoTaskFrozenIdentities(urls));
+    }
+
+    // A pure tab switch must not churn the workspace commit bookkeeping: an open that is
+    // still pending finishes through its own terminal path.
+    function focusVideoWorkspaceForTab() {
+        if (workspaceSession.openPending)
+            return;
+        if (root.imageWorkspaceActive)
+            root.showWorkspace(workspaceSession.videoMedia);
+        else
+            root.focusActiveWorkspace();
+    }
+
+    // Tab activation (click, cycle, focus-after-reopen, neighbour after close): pause,
+    // snapshot the task being left, then either confirm focus (the session still shows the
+    // target - nothing was lost, the live paused position is the truth) or rebuild the
+    // session for the target without the displayed-time mapping (design §4.3).
+    function beginVideoTaskSwitch(targetIndex) {
+        if (!root.videoTaskHost || !root.controller)
+            return false;
+        const tabs = root.videoTabList;
+        if (targetIndex < 0 || targetIndex >= tabs.length)
+            return false;
+        const tab = tabs[targetIndex];
+        if (tab.loading || tab.restoring)
+            return false;
+        // A switch still in flight is superseded, not queued (design §4.5 step 4).
+        root.cancelPendingVideoTaskSwitch();
+        root.ensureVideoPaused();
+        const sessionIndex = root.videoSessionTaskIndex();
+        if (sessionIndex >= 0 && sessionIndex !== targetIndex)
+            root.videoTaskHost.updateTaskState(sessionIndex, root.captureVideoTaskSnapshot());
+        if (sessionIndex === targetIndex) {
+            // Same group as the runtime session: no reopen, the epoch stays put.
+            root.focusVideoWorkspaceForTab();
+            return true;
+        }
+        const urls = [];
+        for (let slot = 0; slot < tab.urls.length; ++slot)
+            urls.push(tab.urls[slot]);
+        const reference = Number(tab.referenceIndex) >= 0 && Number(tab.referenceIndex) < urls.length ? Number(tab.referenceIndex) : 0;
+        root.videoTaskHost.setTaskRestoring(targetIndex, true);
+        root.showIntentMessage(qsTr("正在恢复视频标签…"));
+        const reopened = Boolean(root.controller.reopenSourcesWithoutMapping(urls, reference));
+        if (!reopened) {
+            root.failVideoTaskSwitch(targetIndex, qsTr("恢复失败：无法重新打开该标签的视频来源。"), urls);
+            return false;
+        }
+        root.pendingVideoTaskSwitch = {
+            targetIndex: targetIndex,
+            urls: urls,
+            state: root.videoTaskHost.taskState(targetIndex) || {}
+        };
+        root.pendingVideoTaskSwitchOpenCommandId = Number(root.controller.lastSubmittedCommandId);
+        root.pendingVideoTaskSwitchOpenSessionEpoch = root.controller.sessionEpoch;
+        root.pendingVideoTaskSwitchOpenOutcome = -1;
+        root.pendingVideoTaskSwitchSessionEpoch = 0;
+        root.pendingVideoTaskSwitchSeekCommandId = 0;
+        root.pendingVideoTaskSwitchContextApplied = false;
+        root.pendingVideoTaskSwitchPairCommandId = 0;
+        root.pendingVideoTaskSwitchPairApplied = true;
+        root.pendingVideoTaskSwitchPartial = [];
+        videoTaskSwitchDeadline.restart();
+        root.continueVideoTaskSwitch();
+        return true;
+    }
+
+    function continueVideoTaskSwitch() {
+        if (root.videoTaskSwitchContinuing)
+            return;
+        root.videoTaskSwitchContinuing = true;
+        try {
+            root.advanceVideoTaskSwitch();
+        } finally {
+            root.videoTaskSwitchContinuing = false;
+        }
+    }
+
+    function advanceVideoTaskSwitch() {
+        const plan = root.pendingVideoTaskSwitch;
+        if (!plan || !root.controller || !root.videoTaskHost)
+            return;
+        const urls = plan.urls;
+        // Stage 1: the reopen terminal, bound to the submit-time epoch (design §4.6). A
+        // terminal from any other session is not this switch's answer.
+        if (root.pendingVideoTaskSwitchOpenCommandId !== 0)
+            return;
+        if (root.pendingVideoTaskSwitchOpenOutcome !== 0 || root.sourceCount === 0) {
+            root.failVideoTaskSwitch(Number(plan.targetIndex), qsTr("恢复失败：无法重新打开该标签的视频来源。"), urls);
+            return;
+        }
+        if (!root.sessionShowsUrls(urls)) {
+            root.abandonPendingVideoTaskSwitch(qsTr("恢复已取消：打开的素材与标签不一致"));
+            return;
+        }
+        if (root.pendingVideoTaskSwitchSessionEpoch === 0) {
+            root.pendingVideoTaskSwitchSessionEpoch = root.controller.sessionEpoch;
+        } else if (root.controller.sessionEpoch !== root.pendingVideoTaskSwitchSessionEpoch || !root.sessionShowsUrls(urls)) {
+            root.abandonPendingVideoTaskSwitch(qsTr("恢复已取消：打开的素材与标签不一致"));
+            return;
+        }
+        root.ensureVideoPaused();
+        // Stage 2: the recorded pair exactly once - a pure submission, never the
+        // full-group fallback - with the recorded mode landing right after it (the
+        // issue-restore order: pair first, mode last so it survives; D07). A refused
+        // pair is a partial-restore note, never a blocker.
+        if (!root.pendingVideoTaskSwitchContextApplied) {
+            root.pendingVideoTaskSwitchContextApplied = true;
+            const edge = Number(plan.state.differenceEdge);
+            if (Number.isFinite(edge) && edge >= 0 && root.sourceCount > 1) {
+                root.pendingVideoTaskSwitchPairApplied = false;
+                if (root.submitDifferenceEdge(edge)) {
+                    root.pendingVideoTaskSwitchPairCommandId = Number(root.controller.lastSubmittedCommandId);
+                } else {
+                    root.noteVideoTaskPartialRestore(qsTr("比较对"));
+                }
+            }
+            if (Number(plan.state.viewMode) >= 0 && root.preferences)
+                root.preferences.viewMode = Number(plan.state.viewMode);
+        }
+        if (root.pendingVideoTaskSwitchPairCommandId !== 0)
+            return;
+        // Stage 3: land the snapshot frame and stay paused (design §4.4 - the protocol
+        // never plays). A position that cannot land is a partial note; the family below
+        // still replays (§4.6 tier 2).
+        const frame = Number(plan.state.frame);
+        if (Number.isFinite(frame) && frame > 0 && root.currentFrame !== frame) {
+            if (root.totalFrames > 0 && frame >= root.totalFrames) {
+                root.noteVideoTaskPartialRestore(qsTr("位置"));
+            } else if (root.busy || root.framePending) {
+                return;
+            } else if (root.pendingVideoTaskSwitchSeekCommandId === 0) {
+                if (!root.controller.seekFrame(frame)) {
+                    root.noteVideoTaskPartialRestore(qsTr("位置"));
+                } else {
+                    root.pendingVideoTaskSwitchSeekCommandId = Number(root.controller.lastSubmittedCommandId);
+                    return;
+                }
+            } else {
+                return;
+            }
+        }
+        if (root.pendingVideoTaskSwitchSeekCommandId !== 0 || root.framePending)
+            return;
+        root.finishVideoTaskSwitch();
+    }
+
+    // Design §4.5 stages 4-5: replay the presentation family, order mirroring the
+    // issue-restore machine (viewport, wipe, difference parameters, range, alignment,
+    // direct look, rate). Pure assignments need no terminal; nothing here blocks.
+    function finishVideoTaskSwitch() {
+        const plan = root.pendingVideoTaskSwitch;
+        if (!plan)
+            return;
+        const state = plan.state || {};
+        const surface = viewportFrame && viewportFrame.surface ? viewportFrame.surface : null;
+        if (state.viewport && surface)
+            surface.restoreViewport(Number(state.viewport.centerX), Number(state.viewport.centerY), Number(state.viewport.scale), Boolean(state.viewport.roiEnabled), Number(state.viewport.roiLeft), Number(state.viewport.roiTop), Number(state.viewport.roiRight), Number(state.viewport.roiBottom));
+        if (Number.isFinite(Number(state.wipeOrientation)) && Number(state.wipeOrientation) >= 0 && viewportFrame)
+            viewportFrame.setWipeOrientation(Number(state.wipeOrientation));
+        root.wipePosition = Number(state.wipePosition);
+        root.differenceThresholdEnabled = Boolean(state.differenceThresholdEnabled);
+        root.differenceThresholdCode = Number(state.differenceThresholdCode);
+        root.differenceThresholdPolicy = Number(state.differenceThresholdPolicy);
+        if (root.preferences) {
+            if (Number.isFinite(Number(state.differenceMetric)) && Number(state.differenceMetric) >= 0)
+                root.preferences.differenceMetric = Number(state.differenceMetric);
+            if (Number.isFinite(Number(state.differenceGain)) && Number(state.differenceGain) >= 0)
+                root.preferences.differenceGain = Number(state.differenceGain);
+            if (Number.isFinite(Number(state.differenceFilter)) && Number(state.differenceFilter) >= 0)
+                root.preferences.differenceFilter = Number(state.differenceFilter);
+        }
+        if (root.pairMetricsModel) {
+            if (Number.isFinite(Number(state.pairMetricsThreshold)) && Number(state.pairMetricsThreshold) >= 0)
+                root.pairMetricsModel.threshold = Number(state.pairMetricsThreshold);
+            if (Number.isFinite(Number(state.pairMetricsThresholdPolicy)) && Number(state.pairMetricsThresholdPolicy) >= 0)
+                root.pairMetricsModel.thresholdPolicy = Number(state.pairMetricsThresholdPolicy);
+        }
+        if (root.shell) {
+            // Range family: the shell mirror first, then the kernel command (the
+            // playIntervalRange precedent order); ping-pong rides its own toggle.
+            const rangeIn = Number(state.rangeIn);
+            const rangeOut = Number(state.rangeOut);
+            if (Number.isFinite(rangeIn) && rangeIn >= 0 && Number.isFinite(rangeOut) && rangeOut >= rangeIn) {
+                root.shell.setRangeIn(rangeIn, Number(state.rangeInMediaTime));
+                root.shell.setRangeOut(rangeOut, Number(state.rangeOutMediaTime));
+                root.shell.setRangePlaybackState(Boolean(state.rangeActive), false);
+                root.shell.setRangeStartPending(false);
+                if (root.controller) {
+                    root.controller.setPlaybackRange(rangeIn, rangeOut, Boolean(state.rangeLoop));
+                    if (Boolean(state.rangePingPong) && !root.controller.playbackRangePingPong)
+                        root.controller.togglePlaybackRangePingPong();
+                }
+            } else {
+                root.shell.clearRange();
+                if (root.controller)
+                    root.controller.setPlaybackRange(-1, -1, false);
+            }
+        }
+        if (root.controller) {
+            if (Number.isFinite(Number(state.alignmentMode)) && Number(state.alignmentMode) >= 0)
+                root.controller.setAlignmentMode(Number(state.alignmentMode));
+            if (state.sourceOffsets && state.sourceOffsets.length > 0)
+                root.controller.applySourceOffsets(state.sourceOffsets);
+            if (Number(state.playbackRate) > 0)
+                root.controller.setPlaybackRate(Number(state.playbackRate));
+            // GT direct look replays by frozen identity, never remapped onto whatever
+            // source sits in the slot now (the C2 rule the shell itself follows).
+            if (root.shell) {
+                const focusIdentity = String(state.canvasFocusIdentity || "");
+                if (focusIdentity.length > 0) {
+                    const slot = root.shell.activeSourceIdentities ? root.shell.activeSourceIdentities.indexOf(focusIdentity) : -1;
+                    if (slot >= 0)
+                        root.shell.requestCanvasFocus(comparisonBar.canvasFocusRequestSourceSlot, slot);
+                } else if (root.shell.canvasFocusSlot >= 0) {
+                    root.shell.requestCanvasFocus(comparisonBar.canvasFocusRequestOff, 0);
+                }
+            }
+        }
+        // #14 folder row highlight: the directory stays global (decision c); replaying
+        // the row highlight needs a VideoFolderModel setter that slice 4 owns, so the
+        // recorded values ride along in the snapshot for that slice.
+        // #14 folder row highlight (decision c): the directory stays global and follows
+        // the session source; the restore only replays the recorded row highlight, and
+        // only when the model is still showing that task's folder.
+        if (root.videoFolderModel && String(state.folderUrl).length > 0 && String(root.videoFolderModel.folderUrl) === String(state.folderUrl) && Number(state.folderRow) >= 0)
+            root.videoFolderModel.setRowHighlight(Number(state.folderRow));
+        const partial = root.pendingVideoTaskSwitchPartial;
+        if (!root.pendingVideoTaskSwitchPairApplied && partial.indexOf(qsTr("比较对")) < 0)
+            partial.push(qsTr("比较对"));
+        root.cancelPendingVideoTaskSwitch();
+        root.focusVideoWorkspaceForTab();
+        if (partial.length > 0) {
+            root.showIntentMessage(qsTr("部分恢复：%1 未恢复").arg(partial.join(qsTr("、"))));
+        } else {
+            root.showIntentMessage(qsTr("已恢复视频标签 · %1").arg(root.frameTextFor(Number(state.frame))));
+        }
+    }
+
+    // Tier-2 partial-restore bookkeeping (§4.6): a named part that could not come back;
+    // the restore itself continues.
+    function noteVideoTaskPartialRestore(what) {
+        if (root.pendingVideoTaskSwitchPartial.indexOf(what) < 0)
+            root.pendingVideoTaskSwitchPartial = root.pendingVideoTaskSwitchPartial.concat([what]);
+    }
+
+    // Design §4.6 first failure tier: the reopen failed, so the previous session is
+    // untouched (the ReplaceSources contract). Fall back to the tab the session still
+    // shows and name the files that refused to reopen.
+    function failVideoTaskSwitch(targetIndex, message, urls) {
+        if (root.videoTaskHost && targetIndex >= 0 && targetIndex < root.videoTabCount) {
+            // Covers the synchronous failure too, where no plan exists yet to cancel.
+            root.videoTaskHost.setTaskRestoring(Number(targetIndex), false);
+            root.videoTaskHost.failOpen(targetIndex, message);
+        }
+        root.cancelPendingVideoTaskSwitch();
+        const names = [];
+        for (let index = 0; urls && index < urls.length; ++index)
+            names.push(root.fileName(urls[index]));
+        root.showIntentMessage(names.length > 0 ? message + qsTr("（%1）").arg(names.join(qsTr("、"))) : message);
+        const sessionIndex = root.videoSessionTaskIndex();
+        if (sessionIndex >= 0 && sessionIndex !== targetIndex)
+            root.videoTaskHost.activate(sessionIndex);
+    }
+
+    function abandonPendingVideoTaskSwitch(message) {
+        root.cancelPendingVideoTaskSwitch();
+        root.showIntentMessage(message);
+    }
+
+    function cancelPendingVideoTaskSwitch() {
+        const plan = root.pendingVideoTaskSwitch;
+        if (plan && root.videoTaskHost && Number(plan.targetIndex) >= 0 && Number(plan.targetIndex) < root.videoTabCount)
+            root.videoTaskHost.setTaskRestoring(Number(plan.targetIndex), false);
+        root.pendingVideoTaskSwitch = null;
+        root.pendingVideoTaskSwitchOpenCommandId = 0;
+        root.pendingVideoTaskSwitchOpenOutcome = -1;
+        root.pendingVideoTaskSwitchOpenSessionEpoch = 0;
+        root.pendingVideoTaskSwitchSessionEpoch = 0;
+        root.pendingVideoTaskSwitchSeekCommandId = 0;
+        root.pendingVideoTaskSwitchContextApplied = false;
+        root.pendingVideoTaskSwitchPairCommandId = 0;
+        root.pendingVideoTaskSwitchPairApplied = true;
+        root.pendingVideoTaskSwitchPartial = [];
+        videoTaskSwitchDeadline.stop();
+    }
+
+    function acceptVideoTaskSwitchCommand(commandId, sessionEpoch, outcome) {
+        if (!root.pendingVideoTaskSwitch)
+            return;
+        if (commandId === root.pendingVideoTaskSwitchOpenCommandId) {
+            if (sessionEpoch !== root.pendingVideoTaskSwitchOpenSessionEpoch)
+                return;
+            root.pendingVideoTaskSwitchOpenCommandId = 0;
+            root.pendingVideoTaskSwitchOpenOutcome = Number(outcome);
+        } else if (root.pendingVideoTaskSwitchSessionEpoch !== 0 && sessionEpoch !== root.pendingVideoTaskSwitchSessionEpoch) {
+            return;
+        } else if (commandId === root.pendingVideoTaskSwitchSeekCommandId) {
+            root.pendingVideoTaskSwitchSeekCommandId = 0;
+            if (Number(outcome) !== 0)
+                root.noteVideoTaskPartialRestore(qsTr("位置"));
+        } else if (commandId === root.pendingVideoTaskSwitchPairCommandId) {
+            // The pair terminal only counts when the session now shows the recorded
+            // edge; anything else is a partial note, not a blocker (§4.5 step 1).
+            root.pendingVideoTaskSwitchPairCommandId = 0;
+            const expected = Number(root.pendingVideoTaskSwitch.state ? root.pendingVideoTaskSwitch.state.differenceEdge : -1);
+            root.pendingVideoTaskSwitchPairApplied = Number(outcome) === 0 && root.differenceEdge === expected;
+            if (!root.pendingVideoTaskSwitchPairApplied)
+                root.noteVideoTaskPartialRestore(qsTr("比较对"));
+        } else {
+            return;
+        }
+        root.continueVideoTaskSwitch();
+    }
+
+    function handleVideoTaskActiveChanged() {
+        if (!root.videoTaskHost || root.videoTabCount <= 0)
+            return;
+        const index = root.videoTabActiveIndex;
+        if (index < 0 || index >= root.videoTabList.length)
+            return;
+        const tab = root.videoTabList[index];
+        const key = (tab.urls || []).join("\n") + "#" + String(tab.referenceIndex);
+        if (key === root.videoLastActivatedKey)
+            return;
+        root.videoLastActivatedKey = key;
+        root.beginVideoTaskSwitch(index);
+    }
+
+    function activateVideoTab(index) {
+        if (!root.videoTaskHost)
+            return false;
+        const tabIndex = Number(index);
+        if (tabIndex < 0 || tabIndex >= root.videoTabList.length)
+            return false;
+        if (root.videoTaskOpenPending) {
+            root.showIntentMessage(qsTr("正在打开视频，请稍候再切换标签。"));
+            return false;
+        }
+        if (root.videoTabList[tabIndex].restoring) {
+            root.showIntentMessage(qsTr("正在恢复视频标签，请稍候。"));
+            return false;
+        }
+        if (tabIndex === root.videoTabActiveIndex)
+            return true;
+        return Boolean(root.videoTaskHost.activate(tabIndex));
+    }
+
+    function closeVideoTab(index) {
+        if (!root.videoTaskHost)
+            return false;
+        const tabIndex = Number(index);
+        if (tabIndex < 0 || tabIndex >= root.videoTabList.length)
+            return false;
+        if (root.videoTaskOpenPending) {
+            root.showIntentMessage(qsTr("正在打开视频，请稍候再关闭标签。"));
+            return false;
+        }
+        if (root.videoTabList[tabIndex].restoring) {
+            root.showIntentMessage(qsTr("正在恢复视频标签，请稍候再关闭。"));
+            return false;
+        }
+        if (!root.videoTaskHost.closeAt(tabIndex))
+            return false;
+        // Closing the active tab can slide the right neighbour into the same numeric
+        // index without any activeChanged; the identity-keyed handler is idempotent, so
+        // calling it after every close covers both orders.
+        root.handleVideoTaskActiveChanged();
+        return true;
+    }
+
+    function cycleVideoTab(delta) {
+        if (!root.videoTaskHost || root.videoTabCount < 2)
+            return false;
+        if (root.videoTaskOpenPending) {
+            root.showIntentMessage(qsTr("正在打开视频，请稍候再切换标签。"));
+            return false;
+        }
+        root.videoTaskHost.cycle(Number(delta));
+        return true;
+    }
+
+    // The last video tab closed through the host: the shared session must close with it
+    // (the legacy Ctrl+W tail), and the stage goes to a surviving image task if any.
+    function handleAllVideoTasksClosed() {
+        root.videoLastActivatedKey = "";
+        root.cancelPendingVideoTaskSwitch();
+        if (!root.shell || !root.controller || !root.videoHasSession)
+            return;
+        const shellHadSources = Boolean(shell.activeSources && shell.activeSources.length > 0);
+        if (!shell.closeSources())
+            return;
+        if (!shellHadSources && root.videoHasSession && controller && Number(controller.sourceCount) > 0)
+            controller.closeSources();
+        workspaceSession.clearCommitted(workspaceSession.videoMedia);
+        showIntentMessage(qsTr("正在关闭视频…"));
+        if (root.imageHasContent || root.imageTabCount > 0)
+            showWorkspace(workspaceSession.imageMedia);
+        else
+            focusActiveWorkspace();
+    }
     // FLOW3 single-directory stepping. The cursor supplies a URL only; the ordinary image open
     // decides whether it commits, so a neighbour that fails to decode leaves the current image
     // on screen and the request-identity rules are the same ones a direct open already uses.
@@ -2966,6 +3918,10 @@ ApplicationWindow {
 
                 dropError = "";
 
+                // Video task tabs (design §5 row 3): remember the appended source so the
+                // successful terminal can grow the active task's record in place.
+                pendingVideoAppendUrl = normalizedUrls[0];
+
                 // The confirmation dialog is still a pending open: keep the current workspace
 
                 // visible until the user accepts. Cancelling must preserve it untouched.
@@ -3068,12 +4024,32 @@ ApplicationWindow {
     }
 
     function openNewReviewUrls(urls) {
-        reviewUrls(urls, false);
+        return reviewUrls(urls, false);
     }
 
     function openDroppedComparison(referenceIndex) {
         if (shell)
             shell.stagedReferenceIndex = referenceIndex;
+
+        // Video task tabs (design §5 row 2): for a new comparison review the reference
+        // dialog only decides the task key's reference slot; the host routes new tab
+        // versus focus and openRequested submits the staged sources. The append flow
+        // (row 3) keeps the legacy preserve-position chain untouched.
+        const appendFlow = pendingSidebarComparison || (pendingComparisonPreservesPosition && sourceCount > 0);
+        if (!appendFlow && root.videoTaskHost && shell) {
+            const staged = Array.from(shell.stagedSources);
+            if (staged.length >= 2 && staged.length <= 3) {
+                pendingNewReviewWantsThreeUp = staged.length === 3;
+                if (root.openVideoTask(staged, Number(referenceIndex), "Review")) {
+                    if (!root.pendingVideoTaskOpen && root.shell)
+                        root.shell.clearStagedSources();
+                    pendingSidebarComparison = false;
+                    pendingComparisonPreservesPosition = false;
+                    return true;
+                }
+                return false;
+            }
+        }
 
         pendingNewReviewWantsThreeUp = Boolean(shell && shell.stagedSources.length === 3);
 
@@ -3336,14 +4312,36 @@ ApplicationWindow {
         return differenceEdges.length > 0 ? 0 : -1;
     }
 
+    // D07: the pair command itself, with no view change of any kind. Shared by the
+    // explicit pair entries (applyDifferenceEdge, which adds the full-group fallback)
+    // and the fixed-GT candidate switch - C keeps its original meaning
+    // ("按 C → 参考不动，换另一个版本"): a pure pair flip that never leaves the current
+    // view, including the GT-anchored DualDifference, whose canvas does not follow the
+    // active edge (the layout takes the reference slot and the two non-reference slots).
+    function submitDifferenceEdge(value) {
+        if (!controller || !controller.applyComparisonPairFromEdge)
+            return false;
+        const pairPolicy = preferences ? Number(preferences.defaultPairPolicy) : 2;
+        return Boolean(controller.applyComparisonPairFromEdge(Number(value), Number.isFinite(pairPolicy) ? pairPolicy : 2));
+    }
+
     // D07: user selection sends SetActiveComparisonPairCommand. Preferences only store
     // DefaultPairPolicy; canvas/menus read the committed effective pair.
     function applyDifferenceEdge(edge) {
-        if (!controller || !controller.applyComparisonPairFromEdge)
-            return false;
-        const value = Number(edge);
-        const pairPolicy = preferences ? Number(preferences.defaultPairPolicy) : 2;
-        return Boolean(controller.applyComparisonPairFromEdge(value, Number.isFinite(pairPolicy) ? pairPolicy : 2));
+        const applied = submitDifferenceEdge(edge);
+        // From a full-group view (every source on screen) choosing a pair means going
+        // back to a two-path comparison on that pair: the last used two-path mode,
+        // SideBySide before any was used. selectComparisonMode also leaves a canvas
+        // direct look and a locked peek behind - the same edge behaviour a mode click
+        // has. Inside a two-path mode the switch stays presentation-only (V02: no
+        // seek, no mode change, observation kept); the fallback only fires from the
+        // full-group set above. Because the fallback lives here, every EXPLICIT pair
+        // entry gets it - the button group, the context menu and the inspector rows.
+        // The candidate switch deliberately calls submitDifferenceEdge instead: it is
+        // not a "pick a pair" entry, it is the C-key flip against the fixed GT.
+        if (applied && fullGroupView)
+            selectComparisonMode(lastPairMode);
+        return applied;
     }
 
     // Step-2 core interaction "固定 GT 切候选": flip the active pair to the other edge
@@ -3385,7 +4383,10 @@ ApplicationWindow {
                 continue;
             if (!currentHasReference && first !== primary && second !== primary)
                 continue;
-            return applyDifferenceEdge(Number(edge.preferenceValue));
+            // Pure pair submission (submitDifferenceEdge), NOT applyDifferenceEdge: the
+            // C key never triggers the full-group fallback, so a DualDifference canvas
+            // (edge-independent layout) survives the candidate flip untouched.
+            return submitDifferenceEdge(Number(edge.preferenceValue));
         }
         return false;
     }
@@ -3432,6 +4433,7 @@ ApplicationWindow {
 
         function onStateChanged() {
             root.continueIssueRestore();
+            root.continueVideoTaskSwitch();
             const key = root.playbackPrefsSessionKey();
             if (key.length === 0 || key === root.playbackPrefsAppliedKey)
                 return;
@@ -3441,10 +4443,12 @@ ApplicationWindow {
 
         function onFrameStateChanged() {
             root.continueIssueRestore();
+            root.continueVideoTaskSwitch();
         }
 
         function onCommandFinished(commandId, sessionEpoch, outcome, errorKey) {
             root.acceptIssueRestoreCommand(commandId, sessionEpoch, outcome);
+            root.acceptVideoTaskSwitchCommand(commandId, sessionEpoch, outcome);
         }
 
         function onSnapshotRefreshed() {
@@ -3681,8 +4685,10 @@ ApplicationWindow {
         }
         onManualNavigationRequested: {
             // The user took the wheel: a restore still waiting for its frame stops here
-            // instead of fighting the navigation.
+            // instead of fighting the navigation. The same rule ends an in-flight video
+            // tab restore - the manual position is the truth now.
             root.cancelPendingIssueRestore();
+            root.cancelPendingVideoTaskSwitch();
             root.revealOsc();
 
             if (!root.chromeVisible)
@@ -3836,6 +4842,25 @@ ApplicationWindow {
         onActivated: root.cycleImageTab(-1)
     }
 
+    // Same sequences as the image-tab pair (video task tabs design §8): the enabled
+    // conditions are mutually exclusive on the active workspace, so one key pair cycles
+    // whichever task strip is on screen and never reaches the hidden one.
+    Shortcut {
+        sequence: ShortcutCatalog.nextVideoTab
+        context: Qt.ApplicationShortcut
+        autoRepeat: false
+        enabled: root.inputContext === 0 && !root.imageWorkspaceActive && root.videoTabCount > 1
+        onActivated: root.cycleVideoTab(1)
+    }
+
+    Shortcut {
+        sequence: ShortcutCatalog.previousVideoTab
+        context: Qt.ApplicationShortcut
+        autoRepeat: false
+        enabled: root.inputContext === 0 && !root.imageWorkspaceActive && root.videoTabCount > 1
+        onActivated: root.cycleVideoTab(-1)
+    }
+
     Shortcut {
         sequence: ShortcutCatalog.compareImageFolders
         context: Qt.ApplicationShortcut
@@ -3893,6 +4918,8 @@ ApplicationWindow {
         target: root.shell
 
         function onIntentEvent(intentId, status, kind, error, sourceCountValue) {
+            if (root.videoTaskHost)
+                root.observeVideoTaskIntentEvent(Number(intentId), Number(status), Number(kind));
             if (Number(status) === 5)
                 root.showIntentMessage(root.messageCatalog.intentErrorText(error));
             else if (Number(status) === 6)
@@ -3903,8 +4930,22 @@ ApplicationWindow {
             if (Number(outcome) !== 0) {
                 if (Number(kind) === 0) {
                     root.pendingNewReviewWantsThreeUp = false;
+                    // The loading record whose open failed goes away again (design §2.2
+                    // step 4); a loaded record never gets destroyed by a failed reopen.
+                    if (root.videoTaskHost && root.pendingVideoTaskOpen && (Number(root.pendingVideoTaskOpen.intentId) === Number(intentId) || Number(root.pendingVideoTaskOpen.intentId) === 0)) {
+                        const record = root.pendingVideoTaskOpen;
+                        root.pendingVideoTaskOpen = null;
+                        root.videoTaskHost.failOpen(Number(record.index), errorKey.length > 0 ? root.messageCatalog.errorMessage(errorKey) : qsTr("无法打开视频。"));
+                    }
+                    // A failed or superseded sidebar switch adopts nothing; its intent
+                    // id must not linger in the adoption list either.
+                    root.pendingSidebarInPlaceUrl = "";
+                    if (root.videoTaskHost)
+                        root.videoStartupOpenIntentIds = root.videoStartupOpenIntentIds.filter(id => Number(id) !== Number(intentId));
                     if (!root.videoFolderModel || !root.videoFolderModel.openPending)
                         workspaceSession.cancelOpen();
+                } else if (Number(kind) === 1 || Number(kind) === 2) {
+                    root.pendingVideoAppendUrl = "";
                 }
 
                 root.showIntentMessage(errorKey.length > 0 ? root.messageCatalog.errorMessage(errorKey) : qsTr("检查请求失败。"));
@@ -3923,10 +4964,34 @@ ApplicationWindow {
                 // after the shell has adopted the successful source set, not on submission.
                 const identity = root.activeSourceUrls().map(url => url.toString()).join("\n");
                 root.commitWorkspace(workspaceSession.videoMedia, identity);
+                // Sidebar in-place disc switch (design §5 rows 5/8): the terminal rebuilt
+                // the session on the new material, so the active single-video task's
+                // record follows it - same tab, fresh group, state reset; the autoplay
+                // itself stays the folder model's own chain.
+                if (root.pendingSidebarInPlaceUrl.toString().length > 0) {
+                    const switched = root.pendingSidebarInPlaceUrl;
+                    root.pendingSidebarInPlaceUrl = "";
+                    if (root.videoTaskHost && root.sessionShowsUrls([switched]))
+                        root.evolveActiveTaskFromSession(true);
+                }
+                // Video task tabs: commit the pending host record, or adopt a startup or
+                // sidebar open whose intent never had one (design §5 rows 6/9).
+                if (root.videoTaskHost)
+                    root.settleVideoTaskOpenIntent(Number(intentId));
+            } else if (Number(kind) === 1 || Number(kind) === 2) {
+                // Group evolution (design §5 row 3): the append chain grew the session;
+                // grow the active task's record on the same tab.
+                root.applyVideoAppendWriteback();
             } else if (Number(kind) === 3) {
                 root.showIntentMessage(qsTr("已移除视频。"));
+                // §6/§11-f: removing one source evolves the ACTIVE record in place
+                // (3->2, 2->1 on the same tab), keeping the state snapshot.
+                if (root.videoTaskHost)
+                    root.evolveActiveTaskFromSession(false);
             } else if (Number(kind) === 4) {
                 root.showIntentMessage(qsTr("已更换参考源。"));
+                if (root.videoTaskHost && root.videoTabActiveIndex >= 0)
+                    root.videoTaskHost.setTaskReference(root.videoTabActiveIndex, root.referenceSourceIndex);
             } else if (Number(kind) === 5) {
                 root.clearReviewUi();
             }
@@ -3982,6 +5047,34 @@ ApplicationWindow {
 
         function onAllTasksClosed() {
             root.handleAllImageTasksClosed();
+        }
+    }
+
+    Connections {
+        target: root.videoTaskHost
+
+        // Same stand-in allowance as the image host: without the composition root's host
+        // the legacy single-session paths never emit these signals.
+        ignoreUnknownSignals: true
+
+        function onOpenRequested(index, urls, referenceIndex, purpose) {
+            root.handleVideoTaskOpenRequested(index, urls, referenceIndex, purpose);
+        }
+
+        function onActiveChanged() {
+            root.handleVideoTaskActiveChanged();
+        }
+
+        function onOpenFailed(error) {
+            const detail = String(error || "").length > 0 ? String(error) : qsTr("无法打开视频。");
+            root.dropError = detail;
+            root.showIntentMessage(detail);
+            if (!root.videoHasSession && root.videoTabCount <= 0 && !root.imageHasContent)
+                root.focusActiveWorkspace();
+        }
+
+        function onAllTasksClosed() {
+            root.handleAllVideoTasksClosed();
         }
     }
 
@@ -4332,11 +5425,12 @@ ApplicationWindow {
         // UX-13 S4: explicit geometry instead of the old top/left/right anchors, so the
         // compact tier can switch the strip from full-width to its chip-content width
         // without tearing an anchor line mid-flip. The wide values are the exact anchor
-        // arithmetic they replace (x = singleMode leftMargin, y = 0, width = window width
-        // minus that margin); the compact value narrows to the letter+dot chips so the mode
-        // bar can share the row's remainder.
+        // arithmetic they replace (x = singleMode leftMargin, width = window width minus
+        // that margin); the compact value narrows to the letter+dot chips so the mode bar
+        // can share the row's remainder. Workspace redesign §2: the source strip is the band
+        // closest to the canvas - the command bar sits above it, the tabs above that.
         x: root.singleMode ? 8 : 0
-        y: 0
+        y: (root.videoTabsStripVisible ? videoTabs.height : 0) + (root.compactChrome ? 0 : comparisonBar.height)
         width: root.compactChrome ? compactRowWidth : root.width - (root.singleMode ? 8 : 0)
         onAddRequested: root.requestAddVideo()
         onCloseSessionRequested: root.closeCurrentTask()
@@ -4390,11 +5484,12 @@ ApplicationWindow {
         accentColor: root.accentColor
         textColor: root.primaryTextColor
         // UX-13 S4: explicit geometry instead of the old stacked anchors. Wide values are
-        // the anchor arithmetic exactly (x = 0, y = strip height, width = window width);
-        // compact shares the strip's top edge and starts one spaceGroup gap right of the
-        // strip's chip content, so the two 40 px bars read as one merged row.
+        // the anchor arithmetic exactly (x = 0, width = window width); compact shares the
+        // source strip's top edge and starts one spaceGroup gap right of the strip's chip
+        // content, so the two 40 px bars read as one merged row. Workspace redesign §2: the
+        // command bar is the band under the task tabs, above the source strip.
         x: root.compactChrome ? sourceBar.x + sourceBar.width + Theme.spaceGroup : 0
-        y: root.compactChrome ? 0 : sourceBar.height
+        y: root.videoTabsStripVisible ? videoTabs.height : 0
         width: root.compactChrome ? root.width - x : root.width
         onModeRequested: mode => root.selectComparisonMode(mode)
         onEdgeRequested: edge => root.applyDifferenceEdge(edge)
@@ -4423,6 +5518,29 @@ ApplicationWindow {
         // EX-03: one add path - the bar's button runs the same action as the menu and Ctrl+Shift+O.
         onAddVideoRequested: root.requestAddVideo()
     }
+
+    // Video task-tab strip (video task tabs design §6 + workspace redesign §2): inside the
+    // video workspace the tabs sit directly under the menu bar, above the command chrome -
+    // the same stacking the image workspace uses, so a task tab always reads as the window's
+    // top-level switch and never as chrome under the source strip.
+    readonly property bool videoTabsStripVisible: !root.imageWorkspaceActive && root.chromeVisible && root.videoTabCount > 0
+    VideoTaskTabs {
+        id: videoTabs
+
+        objectName: "videoTaskTabs"
+        visible: root.videoTabsStripVisible
+        z: 15
+        height: implicitHeight
+        tabsModel: root.videoTabList
+        activeIndex: root.videoTabActiveIndex
+        anchors {
+            left: parent.left
+            right: parent.right
+            top: parent.top
+        }
+        onTabActivated: index => root.activateVideoTab(index)
+        onTabCloseRequested: index => root.closeVideoTab(index)
+    }
     Rectangle {
         id: inspectorScrim
 
@@ -4438,7 +5556,8 @@ ApplicationWindow {
             // EX-03/EX-04: both chrome rows now stay on screen for a single video, so the
             // drawer starts below them in every video session (both report height 0 when the
             // session is empty). UX-13 S4: the compact tier spends one merged row here.
-            topMargin: root.videoChromeHeight
+            // Workspace redesign §2: the task tabs sit above the chrome when present.
+            topMargin: (root.videoTabsStripVisible ? videoTabs.height : 0) + root.videoChromeHeight
         }
 
         MouseArea {
@@ -4492,7 +5611,8 @@ ApplicationWindow {
             // EX-03/EX-04: both chrome rows now stay on screen for a single video, so the
             // drawer starts below them in every video session (both report height 0 when the
             // session is empty). UX-13 S4: the compact tier spends one merged row here.
-            topMargin: root.videoChromeHeight
+            // Workspace redesign §2: below the task tabs when present.
+            topMargin: (root.videoTabsStripVisible ? videoTabs.height : 0) + root.videoChromeHeight
             right: parent.right
             bottom: parent.bottom
             bottomMargin: 0
@@ -4615,7 +5735,7 @@ ApplicationWindow {
         playbackHudRevealed: transport.revealActive
         anchors {
             top: parent.top
-            topMargin: root.chromeVisible ? root.videoChromeHeight + 6 : 0
+            topMargin: root.chromeVisible ? root.videoChromeHeight + 6 + (root.videoTabsStripVisible ? videoTabs.height + 4 : 0) : 0
             bottom: parent.bottom
             bottomMargin: root.transportDocked ? root.transportDockHeight : 0
             left: parent.left
@@ -4659,14 +5779,14 @@ ApplicationWindow {
         anchors.left: parent.left
         anchors.leftMargin: LayoutMetrics.fileSidebarLoaderMargin
         anchors.top: parent.top
-        anchors.topMargin: root.imageWorkspaceActive ? 10 : (root.chromeVisible ? root.videoChromeHeight + 6 : 0)
+        anchors.topMargin: root.imageWorkspaceActive ? 10 : (root.chromeVisible ? (root.videoTabsStripVisible ? videoTabs.height : 0) + root.videoChromeHeight + 6 : 0)
         anchors.bottom: parent.bottom
         anchors.bottomMargin: root.imageWorkspaceActive ? 0 : (root.transportDocked ? root.transportDockHeight : 0)
         sourceComponent: VideoFolderSidebar {
             folderModel: root.videoFolderModel
             fileActionState: url => root.sidebarVideoActionState(url)
             actionRevision: JSON.stringify([root.shell ? root.shell.activeSources : [], root.referenceSourceIndex, root.busy, root.graphicsReady, root.imageWorkspaceActive, root.videoFolderModel ? root.videoFolderModel.scanning : false, root.shell ? root.shell.activeIntent : {}, root.shell ? root.shell.queuedIntentCount : 0])
-            onContextOpenRequested: url => root.openSidebarVideo(url)
+            onContextOpenRequested: url => root.openSidebarVideoInNewTab(url)
             onCompareRequested: url => root.compareSidebarVideo(url)
             errorText: {
                 const text = root.videoFolderModel ? root.videoFolderModel.errorText : "";
@@ -4760,6 +5880,9 @@ ApplicationWindow {
                     root.focusActiveWorkspace();
             }
             colorClipboard: root.colorClipboardService
+            // Workspace redesign §6: the image inspector answers to the shell's shared
+            // 检查器 toggle, so one switch spans both workspaces.
+            reviewShell: root.shell
         }
     }
     NativeDialogs.FolderDialog {
@@ -5223,6 +6346,9 @@ ApplicationWindow {
         totalFrames: Number(root.totalFrames)
         progress: root.timelineProgress
         timecodeText: root.currentTimecode
+        // Plan §8 layer 1 right flank: the whole-timeline duration, evaluated at the last
+        // frame so it shares the current timecode's vocabulary and drop-frame setting.
+        durationText: root.totalTimecode
         markers: root.alignmentTimelineMarkers
         actions: reviewShortcuts.actions
         focusTarget: viewportFrame

@@ -353,7 +353,8 @@ TEST(QmlTypeRegistrationTests, GeneratedDescriptionMatchesTheRuntimeRegistration
                                     QStringLiteral("ComparisonSurface"),
                                     QStringLiteral("HoldKeyHandler"),
                                     QStringLiteral("ImageReviewController"),
-                                    QStringLiteral("JogKeyHandler")};
+                                    QStringLiteral("JogKeyHandler"),
+                                    QStringLiteral("VideoTaskHost")};
     QStringList sortedExpected = expectedNames;
     sortedExpected.sort();
 

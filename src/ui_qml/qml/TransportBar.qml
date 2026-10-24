@@ -26,9 +26,16 @@ Item {
     // range, loop, ping-pong, clear, export) stay behind that toggle until asked for.
     property bool compactChrome: false
     property bool rangeExpandedCompact: false
+    // Plan 2026-10-24 §8 layer 4 (on-demand layer): collapsed by default. One entry chip in the
+    // playback layer opens it; the layer itself hosts the adjacent-frame switch, the adjacent
+    // strip and - until a protocol is loaded - the protocol import row. Pure view state: the
+    // host never needs to know the layer is open.
+    property bool transportExpanded: false
     // Vertical centre of the first transport row inside the control, for hosts that overlay
-    // their info line on the row's free right side (PlayerOsc compact tier).
-    readonly property real mainRowCenterY: buttons.height / 2
+    // their info line on the row's free right side (PlayerOsc compact tier). The playback
+    // layer is the transport column's first line, so the centre row's y inside the layer is
+    // the whole row's centre in control coordinates.
+    readonly property real mainRowCenterY: buttons.y + buttons.height / 2
     // I8: the second-step buttons follow the active shortcut preset so their tooltips never
     // promise a different jump than ReviewShortcuts performs. 0 = frame-review preset
     // (Ctrl+←/→ steps one second), 1 = player preset (Ctrl+←/→ jumps 30 seconds). The host
@@ -106,8 +113,15 @@ Item {
     signal previousGeneratedFrameRequested
     signal nextGeneratedFrameRequested
 
-    implicitWidth: transportColumn.implicitWidth
-    implicitHeight: transportColumn.implicitHeight
+    // Qt's Column only publishes its implicit size after its first layout polish, and a
+    // subtree that is currently invisible (the floating OSC between reveals) never
+    // polishes - the panel then sized itself against a zero-height transport and the
+    // range chips painted outside the window. The layer heights are plain bindings, so
+    // sum them directly; the gap count mirrors the Column's own rule (one spacing step
+    // between consecutive VISIBLE layers, invisible layers cost neither height nor gap).
+    readonly property int visibleLayerCount: (playbackLayer.visible ? 1 : 0) + (rangeLayer.visible ? 1 : 0) + (protocolRow.visible ? 1 : 0) + (expandedLayer.visible ? 1 : 0)
+    implicitWidth: Math.max(playbackLayer.implicitWidth, rangeLayer.implicitWidth, protocolRow.implicitWidth, expandedLayer.implicitWidth)
+    implicitHeight: Math.max(0, visibleLayerCount - 1) * transportColumn.spacing + playbackLayer.height + rangeLayer.height + protocolRow.height + expandedLayer.height
 
     function restoreFocus() {
         if (focusTarget)
@@ -317,389 +331,416 @@ Item {
     Column {
         id: transportColumn
 
-        // One group (the button row) per line; the group step keeps four stacked rows from
+        // One layer (plan 2026-10-24 §8) per line; the group step keeps the stacked layers from
         // reading as a single dense block. The compact tier spends the micro step between the
         // rows instead - giving those pixels back to the canvas is the tier's whole purpose.
         spacing: control.compactChrome ? Theme.spaceMicro : Theme.spaceMain
         width: control.width
         anchors.horizontalCenter: parent.horizontalCenter
 
-        Row {
-            id: buttons
+        // ── Layer 2: playback operations ─────────────────────────────────────────────
+        // Three columns (plan §8): current playback rate left, the navigation buttons centred
+        // on the play key, long-press walk rate plus the continuity switch right. The columns
+        // are x-positioned Rows inside one full-width layer item, so the same controls flow as
+        // one left-aligned line in the compact tier (UX-13 S1 keeps that tier's single row so
+        // the host's info overlay keeps its free right side).
+        Item {
+            id: playbackLayer
 
-            anchors.horizontalCenter: parent.horizontalCenter
-            // Compact tier left-aligns the row so the host's info line can overlay the free
-            // right side without crowding the buttons.
-            anchors.horizontalCenterOffset: control.compactChrome ? Theme.spaceMain * 2 + implicitWidth / 2 - parent.width / 2 : 0
+            objectName: "transportPlaybackLayer"
+            width: parent.width
+            implicitWidth: Math.max(playbackLeftCell.implicitWidth, buttons.implicitWidth, playbackRightCell.implicitWidth)
+            implicitHeight: Math.max(playbackLeftCell.implicitHeight, buttons.implicitHeight, playbackRightCell.implicitHeight)
+            height: implicitHeight
 
-            spacing: control.compact ? 4 : 6
+            Row {
+                id: playbackLeftCell
 
-            TransportButton {
-                id: firstButton
-
-                objectName: "firstButton"
-                iconSource: "qrc:/icons/first.svg"
-                helpText: qsTr("第一帧\n快捷键：Home")
-                enabled: control.canFirst
-                onClicked: {
-                    control.firstRequested();
-                    control.restoreFocus();
-                }
-            }
-            TransportButton {
-                id: previousSecondButton
-
-                objectName: "previousSecondButton"
-                iconSource: "qrc:/icons/previous-second.svg"
-                // I8: preset-bound wording. The player preset turns this control (and its
-                // Ctrl+← shortcut) into the ±30 s jump; the frame-review preset keeps the
-                // exact second. Ctrl+A always stays the one-second chord, so the player
-                // listing must not present it as a 30-second alias.
-                helpText: control.shortcutPreset === 1 ? qsTr("快退 30 秒\n快捷键：Ctrl+←（Ctrl+A 仍后退 1 秒）") : qsTr("后退 1 秒\n快捷键：Ctrl+← / Ctrl+A")
-                enabled: control.canPrevious
-                onClicked: {
-                    control.previousSecondRequested();
-                    control.restoreFocus();
-                }
-            }
-            TransportButton {
-                id: previousFiveButton
-
-                objectName: "previousFiveButton"
-                iconSource: "qrc:/icons/previous-five.svg"
-                helpText: qsTr("后退 5 帧\n快捷键：↓ / Shift+← / Shift+A")
-                enabled: control.canPrevious
-                onClicked: {
-                    control.previousFiveRequested();
-                    control.restoreFocus();
-                }
-            }
-            TransportButton {
-                id: previousButton
-
-                // Guards the click/press split: mouse presses step via onPressed, keyboard
-                // activation (Space/Enter) has no press phase and steps via onClicked.
-                // jogArmed spans the hold; jogPressed survives the release handlers because
-                // released() reaches the button before clicked() and the click must still be
-                // able to tell "mouse already stepped" from "keyboard activation".
-                property bool jogArmed: false
-                property bool jogPressed: false
-
-                objectName: "previousButton"
-                iconSource: "qrc:/icons/previous.svg"
-                // The player preset adds the , alias (JogKeyHandler owns it while active).
-                helpText: control.shortcutPreset === 1 ? qsTr("上一帧（长按可连续逐帧）\n快捷键：← / A / ,") : qsTr("上一帧（长按可连续逐帧）\n快捷键：← / A")
-                enabled: control.canPrevious
-                onPressed: {
-                    previousButton.jogArmed = true;
-                    previousButton.jogPressed = true;
-                    control.previousPressed();
-                    // No restoreFocus here: a focus change while the button is held makes
-                    // AbstractButton cancel the press, which ends the hold after one frame.
-                    // The click path below restores focus after the release.
-                }
-                onReleased: {
-                    // Idempotent: some synthesized releases deliver both released and canceled,
-                    // and either path alone must end the hold exactly once. jogPressed stays set
-                    // here on purpose: released() arrives before clicked(), and the click path
-                    // below still needs to tell "the mouse already stepped" from a keyboard
-                    // activation.
-                    if (previousButton.jogArmed) {
-                        previousButton.jogArmed = false;
-                        control.navigationReleased();
-                    }
-                }
-                onCanceled: {
-                    // Released off-button or stolen by a grab: still end the hold. No clicked
-                    // follows a canceled press, so this is the only path that can clear the flag -
-                    // leaving it set would make the next keyboard activation believe the mouse
-                    // had already stepped and silently drop one frame.
-                    if (previousButton.jogArmed) {
-                        previousButton.jogArmed = false;
-                        control.navigationReleased();
-                    }
-                    previousButton.jogPressed = false;
-                }
-                onClicked: {
-                    // Keyboard activation (Space/Enter) fires clicked without a press/release;
-                    // mouse clicks already stepped via onPressed, so only the keyboard path
-                    // steps here.
-                    if (!previousButton.jogPressed)
-                        control.previousRequested();
-                    previousButton.jogPressed = false;
-                    control.restoreFocus();
-                }
-            }
-            TransportButton {
-                id: playbackButton
-
-                objectName: "playbackButton"
-                prominent: true
-                implicitWidth: control.compact ? 48 : 56
-                implicitHeight: control.compact ? Theme.playButtonHeight : Theme.playButtonHeightLarge
-                iconExtent: control.compact ? 20 : 24
-                controlRadius: control.compact ? 20 : 22
-                iconSource: control.playing ? "qrc:/icons/pause.svg" : "qrc:/icons/play.svg"
-                helpText: control.playing ? qsTr("暂停\n快捷键：空格") : qsTr("播放\n快捷键：空格")
-                enabled: control.playing ? control.canPause : control.canPlay
-                onClicked: {
-                    control.playbackRequested();
-                    control.restoreFocus();
-                }
-            }
-            TransportButton {
-                id: nextButton
-
-                // Same jog/jogPressed split as previousButton.
-                property bool jogArmed: false
-                property bool jogPressed: false
-
-                objectName: "nextButton"
-                iconSource: "qrc:/icons/next.svg"
-                // The player preset adds the . alias (JogKeyHandler owns it while active).
-                helpText: control.shortcutPreset === 1 ? qsTr("下一帧（长按可连续逐帧）\n快捷键：→ / D / .") : qsTr("下一帧（长按可连续逐帧）\n快捷键：→ / D")
-                enabled: control.canNext
-                onPressed: {
-                    nextButton.jogArmed = true;
-                    nextButton.jogPressed = true;
-                    control.nextPressed();
-                    // Same guard as previousButton: no focus change during the hold.
-                }
-                onReleased: {
-                    // jogPressed stays set on purpose: released() arrives before clicked(), and
-                    // the click path below still needs the "mouse already stepped" marker.
-                    if (nextButton.jogArmed) {
-                        nextButton.jogArmed = false;
-                        control.navigationReleased();
-                    }
-                }
-                onCanceled: {
-                    // No clicked follows a canceled press, so this is the only path that can
-                    // clear the flag; leaving it set would silently drop the next keyboard step.
-                    if (nextButton.jogArmed) {
-                        nextButton.jogArmed = false;
-                        control.navigationReleased();
-                    }
-                    nextButton.jogPressed = false;
-                }
-                onClicked: {
-                    if (!nextButton.jogPressed)
-                        control.nextRequested();
-                    nextButton.jogPressed = false;
-                    control.restoreFocus();
-                }
-            }
-            TransportButton {
-                id: nextFiveButton
-
-                objectName: "nextFiveButton"
-                iconSource: "qrc:/icons/next-five.svg"
-                helpText: qsTr("前进 5 帧\n快捷键：↑ / Shift+→ / Shift+D")
-                enabled: control.canNext
-                onClicked: {
-                    control.nextFiveRequested();
-                    control.restoreFocus();
-                }
-            }
-            TransportButton {
-                id: nextSecondButton
-
-                objectName: "nextSecondButton"
-                iconSource: "qrc:/icons/next-second.svg"
-                // I8: same preset binding as previousSecondButton, mirrored for the forward
-                // jump. Ctrl+D always stays the one-second chord, like Ctrl+A.
-                helpText: control.shortcutPreset === 1 ? qsTr("快进 30 秒\n快捷键：Ctrl+→（Ctrl+D 仍快进 1 秒）") : qsTr("前进 1 秒\n快捷键：Ctrl+→ / Ctrl+D")
-                enabled: control.canNext
-                onClicked: {
-                    control.nextSecondRequested();
-                    control.restoreFocus();
-                }
-            }
-            TransportButton {
-                id: lastButton
-
-                objectName: "lastButton"
-                iconSource: "qrc:/icons/last.svg"
-                helpText: qsTr("最后一帧\n快捷键：End")
-                enabled: control.canLast
-                onClicked: {
-                    control.lastRequested();
-                    control.restoreFocus();
-                }
-            }
-            ToolbarCombo {
-                id: playbackRateCombo
-
-                objectName: "playbackRateCombo"
-                // Sized from the widest rate label: a fixed 58/68 px left the current rate elided to "…".
-                implicitWidth: Math.ceil(rateLabelMetrics.advanceWidth) + playbackRateCombo.leftPadding + playbackRateCombo.rightPadding + 4
-                // Same height as the continuity switch beside it, so the row's boxed controls line up.
-                implicitHeight: control.compact ? Theme.hitAreaMinimum : 36
+                spacing: control.compact ? 4 : 6
+                // Compact tier flows after the centred buttons (the pre-redesign single row);
+                // the big window pins the column to the layer's left edge.
+                x: control.compactChrome ? buttons.x + buttons.width + spacing : 0
                 anchors.verticalCenter: parent.verticalCenter
-                model: [qsTr("0.25×"), qsTr("0.5×"), qsTr("1×"), qsTr("1.5×"), qsTr("2×"), qsTr("4×")]
-                currentIndex: {
-                    const rate = control.playbackRate;
-                    if (rate < 0.375)
-                        return 0;
-                    if (rate < 0.75)
-                        return 1;
-                    if (rate < 1.25)
-                        return 2;
-                    if (rate < 1.75)
-                        return 3;
-                    if (rate < 3)
-                        return 4;
-                    return 5;
-                }
-                Accessible.name: qsTr("播放速度")
-                onActivated: index => {
-                    const ladder = [0.25, 0.5, 1, 1.5, 2, 4];
-                    control.playbackRateRequested(ladder[index]);
-                    control.restoreFocus();
+
+                ToolbarCombo {
+                    id: playbackRateCombo
+
+                    objectName: "playbackRateCombo"
+                    // Sized from the widest rate label: a fixed 58/68 px left the current rate elided to "…".
+                    implicitWidth: Math.ceil(rateLabelMetrics.advanceWidth) + playbackRateCombo.leftPadding + playbackRateCombo.rightPadding + 4
+                    // Same height as the continuity switch beside it, so the row's boxed controls line up.
+                    implicitHeight: control.compact ? Theme.hitAreaMinimum : 36
+                    anchors.verticalCenter: parent.verticalCenter
+                    model: [qsTr("0.25×"), qsTr("0.5×"), qsTr("1×"), qsTr("1.5×"), qsTr("2×"), qsTr("4×")]
+                    currentIndex: {
+                        const rate = control.playbackRate;
+                        if (rate < 0.375)
+                            return 0;
+                        if (rate < 0.75)
+                            return 1;
+                        if (rate < 1.25)
+                            return 2;
+                        if (rate < 1.75)
+                            return 3;
+                        if (rate < 3)
+                            return 4;
+                        return 5;
+                    }
+                    Accessible.name: qsTr("播放速度")
+                    onActivated: index => {
+                        const ladder = [0.25, 0.5, 1, 1.5, 2, 4];
+                        control.playbackRateRequested(ladder[index]);
+                        control.restoreFocus();
+                    }
+
+                    TextMetrics {
+                        id: rateLabelMetrics
+
+                        font: playbackRateCombo.font
+                        text: qsTr("0.25×")
+                    }
                 }
 
-                TextMetrics {
-                    id: rateLabelMetrics
+                // Layer-4 entry (plan §8 on-demand layer). Lives beside the rate selector so it
+                // stays reachable in every range/protocol state - the adjacent strip needs a
+                // paused frame and the protocol import entry only exists before a protocol is
+                // loaded, but the layer itself must open unconditionally.
+                RangeChip {
+                    id: expandToggle
 
-                    font: playbackRateCombo.font
-                    text: qsTr("0.25×")
+                    objectName: "transportExpandToggle"
+                    chipText: control.transportExpanded ? qsTr("收起 ▴") : qsTr("更多 ▾")
+                    chipHelp: qsTr("展开或收起按需层：相邻帧快捷条与插帧协议入口")
+                    chipActive: control.transportExpanded
+                    onClicked: control.transportExpanded = !control.transportExpanded
                 }
             }
 
-            // E04 walk-rate selector for the long-press step walk. The labels carry the 长按逐帧
-            // prefix because a bare "1×" beside the playback-rate combo would be ambiguous, and
-            // the prefix names the gesture the rate applies to.
-            ToolbarCombo {
-                id: jogRateCombo
+            Row {
+                id: buttons
 
-                objectName: "jogRateCombo"
-                implicitWidth: Math.ceil(jogRateLabelMetrics.advanceWidth) + jogRateCombo.leftPadding + jogRateCombo.rightPadding + 4
-                implicitHeight: control.compact ? Theme.hitAreaMinimum : 36
+                spacing: control.compact ? 4 : 6
                 anchors.verticalCenter: parent.verticalCenter
-                model: [qsTr("长按逐帧 0.5×"), qsTr("长按逐帧 1×"), qsTr("长按逐帧 2×")]
-                currentIndex: {
-                    // Nearest ladder value: the controller clamps to the same [0.5, 2.0] range, so
-                    // the projection never has to invent an index outside the three labels.
-                    const ladder = control.jogRateLadder;
-                    let best = 0;
-                    let bestDistance = Math.abs(ladder[0] - control.jogRate);
-                    for (let index = 1; index < ladder.length; ++index) {
-                        const distance = Math.abs(ladder[index] - control.jogRate);
-                        if (distance < bestDistance) {
-                            bestDistance = distance;
-                            best = index;
+                // The button row is symmetric around the play key, so a centred row centres the
+                // play key itself. The clamp keeps the row clear of both side columns when the
+                // window is too narrow for an exact centring (at the 960 px floor the walk-rate
+                // combo plus the continuity switch leave ~20 px too little; the play key then
+                // drifts that far left instead of overlapping a column).
+                x: {
+                    if (control.compactChrome)
+                        return Theme.spaceMain * 2;
+                    const gap = Theme.spaceMain;
+                    const leftEdge = playbackLeftCell.width + gap;
+                    const rightEdge = parent.width - playbackRightCell.width - gap - width;
+                    const centred = (parent.width - width) / 2;
+                    return Math.max(leftEdge, Math.min(rightEdge, centred));
+                }
+
+                TransportButton {
+                    id: firstButton
+
+                    objectName: "firstButton"
+                    iconSource: "qrc:/icons/first.svg"
+                    helpText: qsTr("第一帧\n快捷键：Home")
+                    enabled: control.canFirst
+                    onClicked: {
+                        control.firstRequested();
+                        control.restoreFocus();
+                    }
+                }
+                TransportButton {
+                    id: previousSecondButton
+
+                    objectName: "previousSecondButton"
+                    iconSource: "qrc:/icons/previous-second.svg"
+                    // I8: preset-bound wording. The player preset turns this control (and its
+                    // Ctrl+← shortcut) into the ±30 s jump; the frame-review preset keeps the
+                    // exact second. Ctrl+A always stays the one-second chord, so the player
+                    // listing must not present it as a 30-second alias.
+                    helpText: control.shortcutPreset === 1 ? qsTr("快退 30 秒\n快捷键：Ctrl+←（Ctrl+A 仍后退 1 秒）") : qsTr("后退 1 秒\n快捷键：Ctrl+← / Ctrl+A")
+                    enabled: control.canPrevious
+                    onClicked: {
+                        control.previousSecondRequested();
+                        control.restoreFocus();
+                    }
+                }
+                TransportButton {
+                    id: previousFiveButton
+
+                    objectName: "previousFiveButton"
+                    iconSource: "qrc:/icons/previous-five.svg"
+                    helpText: qsTr("后退 5 帧\n快捷键：↓ / Shift+← / Shift+A")
+                    enabled: control.canPrevious
+                    onClicked: {
+                        control.previousFiveRequested();
+                        control.restoreFocus();
+                    }
+                }
+                TransportButton {
+                    id: previousButton
+
+                    // Guards the click/press split: mouse presses step via onPressed, keyboard
+                    // activation (Space/Enter) has no press phase and steps via onClicked.
+                    // jogArmed spans the hold; jogPressed survives the release handlers because
+                    // released() reaches the button before clicked() and the click must still be
+                    // able to tell "mouse already stepped" from "keyboard activation".
+                    property bool jogArmed: false
+                    property bool jogPressed: false
+
+                    objectName: "previousButton"
+                    iconSource: "qrc:/icons/previous.svg"
+                    // The player preset adds the , alias (JogKeyHandler owns it while active).
+                    helpText: control.shortcutPreset === 1 ? qsTr("上一帧（长按可连续逐帧）\n快捷键：← / A / ,") : qsTr("上一帧（长按可连续逐帧）\n快捷键：← / A")
+                    enabled: control.canPrevious
+                    onPressed: {
+                        previousButton.jogArmed = true;
+                        previousButton.jogPressed = true;
+                        control.previousPressed();
+                        // No restoreFocus here: a focus change while the button is held makes
+                        // AbstractButton cancel the press, which ends the hold after one frame.
+                        // The click path below restores focus after the release.
+                    }
+                    onReleased: {
+                        // Idempotent: some synthesized releases deliver both released and canceled,
+                        // and either path alone must end the hold exactly once. jogPressed stays set
+                        // here on purpose: released() arrives before clicked(), and the click path
+                        // below still needs to tell "the mouse already stepped" from a keyboard
+                        // activation.
+                        if (previousButton.jogArmed) {
+                            previousButton.jogArmed = false;
+                            control.navigationReleased();
                         }
                     }
-                    return best;
-                }
-                Accessible.name: qsTr("长按连续逐帧的速率")
-                onActivated: index => {
-                    control.jogRateRequested(control.jogRateLadder[index]);
-                    control.restoreFocus();
-                }
-
-                TextMetrics {
-                    id: jogRateLabelMetrics
-
-                    font: jogRateCombo.font
-                    text: qsTr("长按逐帧 0.5×")
-                }
-            }
-
-            // Secondary paused-review tool, collapsed behind this chip (Phase-3): the strip
-            // costs a layout line, so it only exists while the user asked for it.
-            RangeChip {
-                id: adjacentToggle
-
-                objectName: "transportAdjacentToggle"
-                visible: !control.playing && control.currentFrame >= 0
-                width: visible ? implicitWidth : 0
-                chipText: control.adjacentStripVisible ? qsTr("相邻帧 ▴") : qsTr("相邻帧 ▾")
-                chipHelp: qsTr("展开或收起相邻帧快捷条（±3 帧一步直达；仅暂停时可用）")
-                chipEnabled: true
-                chipActive: control.adjacentStripVisible
-                onClicked: control.adjacentExpanded = !control.adjacentExpanded
-            }
-
-            // Segmented switch: both options share one well so they read as a single choice.
-            Rectangle {
-                id: continuityToggleGroup
-
-                objectName: "continuityPolicyToggleGroup"
-                implicitWidth: continuityGroup.implicitWidth + 6
-                implicitHeight: continuityGroup.implicitHeight + 6
-                radius: Theme.radiusMedium
-                color: Theme.window
-                border.width: 1
-                border.color: Theme.controlBorder
-                anchors.verticalCenter: parent.verticalCenter
-
-                Row {
-                    id: continuityGroup
-
-                    spacing: 2
-                    anchors.centerIn: parent
-
-                    ContinuityOption {
-                        objectName: "realTimeContinuityButton"
-                        policyCode: 1
-                        optionText: qsTr("流畅优先")
-                        optionHelp: qsTr("保持实时节奏；解码跟不上时整组跳帧")
+                    onCanceled: {
+                        // Released off-button or stolen by a grab: still end the hold. No clicked
+                        // follows a canceled press, so this is the only path that can clear the flag -
+                        // leaving it set would make the next keyboard activation believe the mouse
+                        // had already stepped and silently drop one frame.
+                        if (previousButton.jogArmed) {
+                            previousButton.jogArmed = false;
+                            control.navigationReleased();
+                        }
+                        previousButton.jogPressed = false;
                     }
-
-                    ContinuityOption {
-                        objectName: "reviewEveryFrameContinuityButton"
-                        policyCode: 0
-                        optionText: qsTr("逐帧完整")
-                        optionHelp: qsTr("每一帧都显示，不跳帧；负载高时播放会变慢")
+                    onClicked: {
+                        // Keyboard activation (Space/Enter) fires clicked without a press/release;
+                        // mouse clicks already stepped via onPressed, so only the keyboard path
+                        // steps here.
+                        if (!previousButton.jogPressed)
+                            control.previousRequested();
+                        previousButton.jogPressed = false;
+                        control.restoreFocus();
                     }
                 }
+                TransportButton {
+                    id: playbackButton
+
+                    objectName: "playbackButton"
+                    prominent: true
+                    implicitWidth: control.compact ? 48 : 56
+                    implicitHeight: control.compact ? Theme.playButtonHeight : Theme.playButtonHeightLarge
+                    iconExtent: control.compact ? 20 : 24
+                    controlRadius: control.compact ? 20 : 22
+                    iconSource: control.playing ? "qrc:/icons/pause.svg" : "qrc:/icons/play.svg"
+                    helpText: control.playing ? qsTr("暂停\n快捷键：空格") : qsTr("播放\n快捷键：空格")
+                    enabled: control.playing ? control.canPause : control.canPlay
+                    onClicked: {
+                        control.playbackRequested();
+                        control.restoreFocus();
+                    }
+                }
+                TransportButton {
+                    id: nextButton
+
+                    // Same jog/jogPressed split as previousButton.
+                    property bool jogArmed: false
+                    property bool jogPressed: false
+
+                    objectName: "nextButton"
+                    iconSource: "qrc:/icons/next.svg"
+                    // The player preset adds the . alias (JogKeyHandler owns it while active).
+                    helpText: control.shortcutPreset === 1 ? qsTr("下一帧（长按可连续逐帧）\n快捷键：→ / D / .") : qsTr("下一帧（长按可连续逐帧）\n快捷键：→ / D")
+                    enabled: control.canNext
+                    onPressed: {
+                        nextButton.jogArmed = true;
+                        nextButton.jogPressed = true;
+                        control.nextPressed();
+                        // Same guard as previousButton: no focus change during the hold.
+                    }
+                    onReleased: {
+                        // jogPressed stays set on purpose: released() arrives before clicked(), and
+                        // the click path below still needs the "mouse already stepped" marker.
+                        if (nextButton.jogArmed) {
+                            nextButton.jogArmed = false;
+                            control.navigationReleased();
+                        }
+                    }
+                    onCanceled: {
+                        // No clicked follows a canceled press, so this is the only path that can
+                        // clear the flag; leaving it set would silently drop the next keyboard step.
+                        if (nextButton.jogArmed) {
+                            nextButton.jogArmed = false;
+                            control.navigationReleased();
+                        }
+                        nextButton.jogPressed = false;
+                    }
+                    onClicked: {
+                        if (!nextButton.jogPressed)
+                            control.nextRequested();
+                        nextButton.jogPressed = false;
+                        control.restoreFocus();
+                    }
+                }
+                TransportButton {
+                    id: nextFiveButton
+
+                    objectName: "nextFiveButton"
+                    iconSource: "qrc:/icons/next-five.svg"
+                    helpText: qsTr("前进 5 帧\n快捷键：↑ / Shift+→ / Shift+D")
+                    enabled: control.canNext
+                    onClicked: {
+                        control.nextFiveRequested();
+                        control.restoreFocus();
+                    }
+                }
+                TransportButton {
+                    id: nextSecondButton
+
+                    objectName: "nextSecondButton"
+                    iconSource: "qrc:/icons/next-second.svg"
+                    // I8: same preset binding as previousSecondButton, mirrored for the forward
+                    // jump. Ctrl+D always stays the one-second chord, like Ctrl+A.
+                    helpText: control.shortcutPreset === 1 ? qsTr("快进 30 秒\n快捷键：Ctrl+→（Ctrl+D 仍快进 1 秒）") : qsTr("前进 1 秒\n快捷键：Ctrl+→ / Ctrl+D")
+                    enabled: control.canNext
+                    onClicked: {
+                        control.nextSecondRequested();
+                        control.restoreFocus();
+                    }
+                }
+                TransportButton {
+                    id: lastButton
+
+                    objectName: "lastButton"
+                    iconSource: "qrc:/icons/last.svg"
+                    helpText: qsTr("最后一帧\n快捷键：End")
+                    enabled: control.canLast
+                    onClicked: {
+                        control.lastRequested();
+                        control.restoreFocus();
+                    }
+                }
             }
 
-            // UX-13 S1 compact tier: the range state rides this chip so collapsing the working
-            // actions never hides "is a range set". The in/out chips stay outside the toggle -
-            // always visible per the product's 2026-10-16 user revision.
-            RangeChip {
-                objectName: "transportRangeSummaryCompact"
-                visible: control.compactChrome
+            Row {
+                id: playbackRightCell
+
+                spacing: control.compact ? 4 : 6
+                // Compact tier continues the single left-aligned line; the big window pins the
+                // column to the layer's right edge.
+                x: control.compactChrome ? playbackLeftCell.x + playbackLeftCell.width + spacing : parent.width - width
                 anchors.verticalCenter: parent.verticalCenter
-                chipActive: control.rangeExpandedCompact
-                chipText: {
-                    if (!control.hasRangeEndpoints)
-                        return qsTr("区间 ▾");
-                    const inText = control.rangeInFrame >= 0 ? String(control.rangeInFrame + 1) : "—";
-                    const outText = control.rangeOutFrame >= 0 ? String(control.rangeOutFrame + 1) : "—";
-                    const stateSuffix = control.rangeLoopActive ? qsTr(" · 循环") : (control.rangePingPongActive ? qsTr(" · 往返") : "");
-                    // QML's String.arg() is single-argument: a multi-arg call fails at runtime
-                    // ("Invalid arguments"), so the substitutions chain.
-                    return qsTr("%1–%2%3 %4").arg(inText).arg(outText).arg(stateSuffix).arg(control.rangeExpandedCompact ? "▴" : "▾");
+
+                // E04 walk-rate selector for the long-press step walk. The labels carry the 长按逐帧
+                // prefix because a bare "1×" beside the playback-rate combo would be ambiguous, and
+                // the prefix names the gesture the rate applies to.
+                ToolbarCombo {
+                    id: jogRateCombo
+
+                    objectName: "jogRateCombo"
+                    implicitWidth: Math.ceil(jogRateLabelMetrics.advanceWidth) + jogRateCombo.leftPadding + jogRateCombo.rightPadding + 4
+                    implicitHeight: control.compact ? Theme.hitAreaMinimum : 36
+                    anchors.verticalCenter: parent.verticalCenter
+                    model: [qsTr("长按逐帧 0.5×"), qsTr("长按逐帧 1×"), qsTr("长按逐帧 2×")]
+                    currentIndex: {
+                        // Nearest ladder value: the controller clamps to the same [0.5, 2.0] range, so
+                        // the projection never has to invent an index outside the three labels.
+                        const ladder = control.jogRateLadder;
+                        let best = 0;
+                        let bestDistance = Math.abs(ladder[0] - control.jogRate);
+                        for (let index = 1; index < ladder.length; ++index) {
+                            const distance = Math.abs(ladder[index] - control.jogRate);
+                            if (distance < bestDistance) {
+                                bestDistance = distance;
+                                best = index;
+                            }
+                        }
+                        return best;
+                    }
+                    Accessible.name: qsTr("长按连续逐帧的速率")
+                    onActivated: index => {
+                        control.jogRateRequested(control.jogRateLadder[index]);
+                        control.restoreFocus();
+                    }
+
+                    TextMetrics {
+                        id: jogRateLabelMetrics
+
+                        font: jogRateCombo.font
+                        text: qsTr("长按逐帧 0.5×")
+                    }
                 }
-                chipHelp: qsTr("展开或收起区间操作（播放区间、循环、往返、清除与导出）；设点 I / O 始终可见")
-                onClicked: control.rangeExpandedCompact = !control.rangeExpandedCompact
+
+                // Segmented switch: both options share one well so they read as a single choice.
+                Rectangle {
+                    id: continuityToggleGroup
+
+                    objectName: "continuityPolicyToggleGroup"
+                    implicitWidth: continuityGroup.implicitWidth + 6
+                    implicitHeight: continuityGroup.implicitHeight + 6
+                    radius: Theme.radiusMedium
+                    color: Theme.window
+                    border.width: 1
+                    border.color: Theme.controlBorder
+                    anchors.verticalCenter: parent.verticalCenter
+
+                    Row {
+                        id: continuityGroup
+
+                        spacing: 2
+                        anchors.centerIn: parent
+
+                        ContinuityOption {
+                            objectName: "realTimeContinuityButton"
+                            policyCode: 1
+                            optionText: qsTr("流畅优先")
+                            optionHelp: qsTr("保持实时节奏；解码跟不上时整组跳帧")
+                        }
+
+                        ContinuityOption {
+                            objectName: "reviewEveryFrameContinuityButton"
+                            policyCode: 0
+                            optionText: qsTr("逐帧完整")
+                            optionHelp: qsTr("每一帧都显示，不跳帧；负载高时播放会变慢")
+                        }
+                    }
+                }
             }
         }
 
-        // A stable second row keeps mark, playback and export controls reachable in
-        // every range state. Its position never changes when an endpoint is added.
-        Row {
-            id: rangeCluster
+        // ── Layer 3: range sub-row ────────────────────────────────────────────────────
+        // Plan §8: in/out marking plus the range summary left, the range playback actions
+        // centred, clear/export right. A stable layer keeps every range control reachable in
+        // every range state; its position never changes when an endpoint is added. The compact
+        // tier keeps the pre-redesign single left-to-right flow (UX-13 S1): the always-visible
+        // in/out chips and the summary chip first, the working actions folded behind the
+        // summary until asked for (product revision 2026-10-16).
+        Item {
+            id: rangeLayer
 
             objectName: "transportRangeRow"
             visible: control.rangeControlsVisible
-            // Collapse this row for hosts without range controls.
+            // Collapse this layer for hosts without range controls.
             height: visible ? implicitHeight : 0
-            anchors.horizontalCenter: parent.horizontalCenter
-            // The three faces (mark / working / export) are separate groups: the group step
-            // separates them while each face keeps its own tight intra-group spacing.
-            spacing: Theme.spaceGroup
+            width: parent.width
+            implicitWidth: Math.max(rangeLeftCell.implicitWidth, rangeCenterCell.implicitWidth, rangeRightCell.implicitWidth)
+            implicitHeight: Math.max(rangeLeftCell.implicitHeight, rangeCenterCell.implicitHeight, rangeRightCell.implicitHeight)
 
-            // Keep both marking actions after either endpoint has been set.
             Row {
-                id: rangeMarkFace
+                id: rangeLeftCell
 
-                visible: true
-                width: visible ? implicitWidth : 0
                 spacing: control.compact ? 4 : 6
+                x: 0
+                anchors.verticalCenter: parent.verticalCenter
 
                 RangeChip {
                     objectName: "transportMarkInButton"
@@ -718,17 +759,27 @@ Item {
                     chipEnabled: control.canMarkRange
                     onClicked: control.markOutRequested()
                 }
-            }
 
-            // Working face: the range readout as one capsule plus the chips that act on it.
-            Row {
-                id: rangeWorkingFace
-
-                // Compact tier folds the working face behind the summary chip; the row keeps
-                // the always-visible in/out chips.
-                visible: control.hasRangeEndpoints && (!control.compactChrome || control.rangeExpandedCompact)
-                width: visible ? implicitWidth : 0
-                spacing: control.compact ? 4 : 6
+                // UX-13 S1 compact tier: the range state rides this chip so collapsing the working
+                // actions never hides "is a range set". The in/out chips stay outside the toggle -
+                // always visible per the product's 2026-10-16 user revision.
+                RangeChip {
+                    objectName: "transportRangeSummaryCompact"
+                    visible: control.compactChrome
+                    chipActive: control.rangeExpandedCompact
+                    chipText: {
+                        if (!control.hasRangeEndpoints)
+                            return qsTr("区间 ▾");
+                        const inText = control.rangeInFrame >= 0 ? String(control.rangeInFrame + 1) : "—";
+                        const outText = control.rangeOutFrame >= 0 ? String(control.rangeOutFrame + 1) : "—";
+                        const stateSuffix = control.rangeLoopActive ? qsTr(" · 循环") : (control.rangePingPongActive ? qsTr(" · 往返") : "");
+                        // QML's String.arg() is single-argument: a multi-arg call fails at runtime
+                        // ("Invalid arguments"), so the substitutions chain.
+                        return qsTr("%1–%2%3 %4").arg(inText).arg(outText).arg(stateSuffix).arg(control.rangeExpandedCompact ? "▴" : "▾");
+                    }
+                    chipHelp: qsTr("展开或收起区间操作（播放区间、循环、往返、清除与导出）；设点 I / O 始终可见")
+                    onClicked: control.rangeExpandedCompact = !control.rangeExpandedCompact
+                }
 
                 // The single-source range readout, restyled as the capsule that groups the
                 // working chips. MainQmlContractTests reads `transportRangeLabel.text` in every
@@ -737,6 +788,10 @@ Item {
                     id: rangeCapsule
 
                     objectName: "transportRangeCapsule"
+                    // The capsule belonged to the old "working face"; it keeps that face's fold
+                    // rule so the compact tier never spends the line before the summary chip
+                    // is asked for.
+                    visible: control.hasRangeEndpoints && (!control.compactChrome || control.rangeExpandedCompact)
                     radius: Theme.radiusMedium
                     implicitHeight: control.compact ? Theme.hitAreaMinimum : 36
                     implicitWidth: Math.min(rangeLabel.implicitWidth, control.compact ? 168 : 210) + 20
@@ -764,7 +819,7 @@ Item {
                         color: control.hasCompleteRange ? Theme.accentText : Theme.mutedText
                         font.family: Theme.fontFamilyMono
                         font.pixelSize: Theme.fontSecondary
-                        // Cap instead of overflowing: the cluster has no clip, and a three-digit
+                        // Cap instead of overflowing: the layer has no clip, and a three-digit
                         // frame count still fits, so elision only ever triggers on an
                         // unexpectedly narrow window.
                         width: Math.min(implicitWidth, control.compact ? 168 : 210)
@@ -772,10 +827,19 @@ Item {
                         anchors.centerIn: parent
                     }
                 }
+            }
+
+            // Working actions: the chips that act on a marked interval, centred on the layer.
+            Row {
+                id: rangeCenterCell
+
+                spacing: control.compact ? 4 : 6
+                x: control.compactChrome ? rangeLeftCell.x + rangeLeftCell.width + spacing : (parent.width - width) / 2
+                anchors.verticalCenter: parent.verticalCenter
 
                 RangeChip {
                     objectName: "transportPlayRangeButton"
-                    visible: control.hasCompleteRange
+                    visible: control.hasRangeEndpoints && control.hasCompleteRange && (!control.compactChrome || control.rangeExpandedCompact)
                     chipText: qsTr("播放区间")
                     chipHelp: qsTr("播放区间起点到终点\n快捷键：\\")
                     chipEnabled: control.hasCompleteRange
@@ -784,6 +848,7 @@ Item {
 
                 RangeChip {
                     objectName: "transportLoopRangeButton"
+                    visible: control.hasRangeEndpoints && (!control.compactChrome || control.rangeExpandedCompact)
                     chipText: qsTr("循环 \\")
                     chipHelp: control.rangeLoopActive ? qsTr("停止循环，改为单次播放区间") : qsTr("循环播放区间起点到终点；\\ 键单次播放区间")
                     chipEnabled: control.hasCompleteRange
@@ -796,58 +861,67 @@ Item {
                     // E3: the click flips the back-and-forth intent on the SAME interval;
                     // available whenever a complete range exists (armed even while paused,
                     // so a loop can be configured before playback starts).
-                    visible: control.hasCompleteRange
+                    visible: control.hasRangeEndpoints && control.hasCompleteRange && (!control.compactChrome || control.rangeExpandedCompact)
                     chipText: qsTr("往返")
                     chipHelp: control.rangePingPongActive ? qsTr("往返开启中：到区间终点后倒放返回起点；点击恢复单向循环") : qsTr("循环到区间终点后倒放返回起点，端点不重复")
                     chipEnabled: control.hasCompleteRange
                     chipActive: control.rangePingPongActive
                     onClicked: control.rangePingPongRequested()
                 }
+            }
+
+            Row {
+                id: rangeRightCell
+
+                spacing: control.compact ? 4 : 6
+                x: control.compactChrome ? rangeCenterCell.x + rangeCenterCell.width + spacing : parent.width - width
+                anchors.verticalCenter: parent.verticalCenter
 
                 RangeChip {
                     objectName: "transportClearRangeButton"
+                    visible: control.hasRangeEndpoints && (!control.compactChrome || control.rangeExpandedCompact)
                     chipText: qsTr("清除")
                     chipHelp: qsTr("清除区间起点与终点")
                     chipEnabled: control.hasRangeEndpoints
                     onClicked: control.clearRangeRequested()
                 }
-            }
 
-            // Export chip, hoisted out of the two faces (the MainQmlContractTests contract):
-            // it stays visible in BOTH faces whenever the host publishes an export service.
-            // With no endpoints it is visible but not enabled, and `explainWhenDisabled` keeps
-            // hover and clicks alive: the click still reports the intent, the host's guard
-            // answers with the reason in the existing intent toast, and no dialog opens. Once a
-            // range is marked the chip enables and opens the clip export dialog. Hoisting also
-            // keeps the chip off the mark/working face flip, so its geometry never rides that
-            // relayout and a real mouse click cannot land on stale coordinates. Trailing
-            // position matches the pre-cluster flat row (…, 清除, 导出).
-            RangeChip {
-                objectName: "transportExportRangeButton"
-                // Compact tier folds the export chip behind the summary chip with the rest of
-                // the working face; its explain-on-click contract keeps working once expanded.
-                visible: control.rangeExportVisible && (!control.compactChrome || control.rangeExpandedCompact)
-                prominent: true
-                chipText: control.rangeExportBusy ? qsTr("导出中 %1%").arg(Math.round(control.rangeExportProgress * 100)) : qsTr("导出")
-                // The hover text carries the gate before the click is spent on it.
-                chipHelp: control.rangeExportEnabled || control.rangeExportBusy ? qsTr("把区间起点到终点导出为无损片段（起点对齐到前一个关键帧）") : qsTr("暂不可导出：请先设置有效的区间起点和终点")
-                chipEnabled: control.rangeExportEnabled || control.rangeExportBusy
-                explainWhenDisabled: true
-                chipActive: control.rangeExportBusy
-                onClicked: control.exportRangeRequested()
+                // Export chip, hoisted out of the working chips (the MainQmlContractTests
+                // contract): it stays visible whenever the host publishes an export service.
+                // With no endpoints it is visible but not enabled, and `explainWhenDisabled`
+                // keeps hover and clicks alive: the click still reports the intent, the host's
+                // guard answers with the reason in the existing intent toast, and no dialog
+                // opens. Once a range is marked the chip enables and opens the clip export
+                // dialog.
+                RangeChip {
+                    objectName: "transportExportRangeButton"
+                    // Compact tier folds the export chip behind the summary chip with the rest of
+                    // the working actions; its explain-on-click contract keeps working once
+                    // expanded.
+                    visible: control.rangeExportVisible && (!control.compactChrome || control.rangeExpandedCompact)
+                    prominent: true
+                    chipText: control.rangeExportBusy ? qsTr("导出中 %1%").arg(Math.round(control.rangeExportProgress * 100)) : qsTr("导出")
+                    // The hover text carries the gate before the click is spent on it.
+                    chipHelp: control.rangeExportEnabled || control.rangeExportBusy ? qsTr("把区间起点到终点导出为无损片段（起点对齐到前一个关键帧）") : qsTr("暂不可导出：请先设置有效的区间起点和终点")
+                    chipEnabled: control.rangeExportEnabled || control.rangeExportBusy
+                    explainWhenDisabled: true
+                    chipActive: control.rangeExportBusy
+                    onClicked: control.exportRangeRequested()
+                }
             }
         }
 
         // P03 protocol navigation row: jump to the next/previous generated output position and
-        // read the current frame's provenance. The row exists only when a protocol controller is
-        // wired; the navigation chips additionally require a loaded protocol, so with no protocol
-        // imported nothing here can seek. The badge is text-first so provenance never relies on
-        // colour alone.
+        // read the current frame's provenance. With a protocol loaded the row keeps its
+        // permanent place (plan §8 keeps the loaded state's presentation: summary, generated
+        // frame jumps, sample export and close). Before a protocol is imported the import
+        // entry only exists inside the on-demand layer 4 - it no longer costs a permanent line
+        // of its own. The badge is text-first so provenance never relies on colour alone.
         Row {
             id: protocolRow
 
             objectName: "transportProtocolRow"
-            visible: control.protocol !== null
+            visible: control.protocol !== null && (control.transportExpanded || Boolean(control.protocol.protocolLoaded))
             // Column positioners reserve a slot for invisible children; collapse so hosts
             // without a protocol controller lose the row's height, not just its paint.
             height: visible ? implicitHeight : 0
@@ -922,66 +996,123 @@ Item {
             }
         }
 
-        Row {
-            id: adjacentStrip
+        // ── Layer 4: on-demand expansion ──────────────────────────────────────────────
+        // Plan §8: collapsed by default; one entry chip in the playback layer opens it. The
+        // layer carries the adjacent-frame switch at its left edge, the quick-stepping strip
+        // centred, and a close control at its right edge. The protocol import entry rides the
+        // protocol row directly above this layer while no protocol is loaded.
+        Item {
+            id: expandedLayer
 
-            objectName: "adjacentFramesStrip"
-            visible: control.adjacentStripVisible
-            // Collapses while hidden or while playing: positioners keep layout space for
-            // invisible children otherwise.
+            objectName: "transportExpandedLayer"
+            visible: control.transportExpanded
             height: visible ? implicitHeight : 0
-            // 6 px between the label and the cells (and between the cells themselves) so a
-            // 30 px cell still reads as a separate target, not a wall of buttons.
-            spacing: 6
-            anchors.horizontalCenter: parent.horizontalCenter
+            width: parent.width
+            implicitWidth: Math.max(expandedLeftCell.implicitWidth, adjacentStrip.implicitWidth, expandedRightCell.implicitWidth)
+            implicitHeight: Math.max(expandedLeftCell.implicitHeight, adjacentStrip.implicitHeight, expandedRightCell.implicitHeight)
 
-            Text {
-                text: qsTr("相邻帧：")
-                font.pixelSize: Theme.fontSecondary
-                color: Theme.mutedText
+            Row {
+                id: expandedLeftCell
+
+                spacing: control.compact ? 4 : 6
+                x: 0
                 anchors.verticalCenter: parent.verticalCenter
+
+                // Secondary paused-review tool (Phase-3): the switch keeps its own gate - a
+                // switch the user cannot meaningfully flip while playing stays out of the
+                // layer, exactly like the strip it owns.
+                RangeChip {
+                    id: adjacentToggle
+
+                    objectName: "transportAdjacentToggle"
+                    visible: !control.playing && control.currentFrame >= 0
+                    chipText: control.adjacentStripVisible ? qsTr("相邻帧 ▴") : qsTr("相邻帧 ▾")
+                    chipHelp: qsTr("展开或收起相邻帧快捷条（±3 帧一步直达；仅暂停时可用）")
+                    chipEnabled: true
+                    chipActive: control.adjacentStripVisible
+                    onClicked: control.adjacentExpanded = !control.adjacentExpanded
+                }
             }
 
-            Repeater {
-                model: [-3, -2, -1, 0, 1, 2, 3]
+            Row {
+                id: adjacentStrip
 
-                Rectangle {
-                    id: adjacentItem
-                    required property int modelData
-                    readonly property int delta: adjacentItem.modelData
-                    readonly property int targetFrame: control.currentFrame + adjacentItem.delta
-                    readonly property bool isCurrent: adjacentItem.delta === 0
-                    readonly property bool isValid: adjacentItem.targetFrame >= 0 && (control.totalFrames <= 0 || adjacentItem.targetFrame < control.totalFrames)
+                objectName: "adjacentFramesStrip"
+                visible: control.adjacentStripVisible
+                // 6 px between the label and the cells (and between the cells themselves) so a
+                // 30 px cell still reads as a separate target, not a wall of buttons.
+                spacing: 6
+                anchors {
+                    horizontalCenter: parent.horizontalCenter
+                    verticalCenter: parent.verticalCenter
+                }
 
-                    implicitWidth: adjacentItem.isCurrent ? 58 : 30
-                    // 28 px keeps the pointer target at the hit-area minimum while the row
-                    // still stays one compact line under the transport.
-                    implicitHeight: 28
-                    radius: Theme.radiusSmall
-                    color: adjacentItem.isCurrent ? Theme.accentFill : (!adjacentItem.isValid ? Theme.disabledPanel : (adjacentMouse.containsMouse ? Theme.controlHover : Theme.control))
-                    border.color: adjacentItem.isCurrent ? Theme.accent : (!adjacentItem.isValid ? Theme.disabledBorder : (adjacentMouse.containsMouse ? Theme.borderHover : Theme.controlBorder))
-                    opacity: adjacentItem.isValid ? 1.0 : 0.4
+                Text {
+                    text: qsTr("相邻帧：")
+                    font.pixelSize: Theme.fontSecondary
+                    color: Theme.mutedText
+                    anchors.verticalCenter: parent.verticalCenter
+                }
 
-                    Text {
-                        anchors.centerIn: parent
-                        text: adjacentItem.isCurrent ? qsTr("当前 %1").arg(adjacentItem.targetFrame + 1) : (adjacentItem.delta > 0 ? "+" + adjacentItem.delta : String(adjacentItem.delta))
-                        font.pixelSize: Theme.fontSecondary
-                        font.weight: adjacentItem.isCurrent ? Font.DemiBold : Font.Normal
-                        color: adjacentItem.isCurrent ? Theme.inverseText : (adjacentMouse.containsMouse ? Theme.primaryText : Theme.mutedText)
-                    }
+                Repeater {
+                    model: [-3, -2, -1, 0, 1, 2, 3]
 
-                    MouseArea {
-                        id: adjacentMouse
+                    Rectangle {
+                        id: adjacentItem
+                        required property int modelData
+                        readonly property int delta: adjacentItem.modelData
+                        readonly property int targetFrame: control.currentFrame + adjacentItem.delta
+                        readonly property bool isCurrent: adjacentItem.delta === 0
+                        readonly property bool isValid: adjacentItem.targetFrame >= 0 && (control.totalFrames <= 0 || adjacentItem.targetFrame < control.totalFrames)
 
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        enabled: !adjacentItem.isCurrent && adjacentItem.isValid
-                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                        onClicked: {
-                            control.stepFramesRequested(adjacentItem.delta);
-                            control.restoreFocus();
+                        implicitWidth: adjacentItem.isCurrent ? 58 : 30
+                        // 28 px keeps the pointer target at the hit-area minimum while the row
+                        // still stays one compact line under the transport.
+                        implicitHeight: 28
+                        radius: Theme.radiusSmall
+                        color: adjacentItem.isCurrent ? Theme.accentFill : (!adjacentItem.isValid ? Theme.disabledPanel : (adjacentMouse.containsMouse ? Theme.controlHover : Theme.control))
+                        border.color: adjacentItem.isCurrent ? Theme.accent : (!adjacentItem.isValid ? Theme.disabledBorder : (adjacentMouse.containsMouse ? Theme.borderHover : Theme.controlBorder))
+                        opacity: adjacentItem.isValid ? 1.0 : 0.4
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: adjacentItem.isCurrent ? qsTr("当前 %1").arg(adjacentItem.targetFrame + 1) : (adjacentItem.delta > 0 ? "+" + adjacentItem.delta : String(adjacentItem.delta))
+                            font.pixelSize: Theme.fontSecondary
+                            font.weight: adjacentItem.isCurrent ? Font.DemiBold : Font.Normal
+                            color: adjacentItem.isCurrent ? Theme.inverseText : (adjacentMouse.containsMouse ? Theme.primaryText : Theme.mutedText)
+                        }
+
+                        MouseArea {
+                            id: adjacentMouse
+
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            enabled: !adjacentItem.isCurrent && adjacentItem.isValid
+                            cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                            onClicked: {
+                                control.stepFramesRequested(adjacentItem.delta);
+                                control.restoreFocus();
+                            }
                         }
                     }
+                }
+            }
+
+            Row {
+                id: expandedRightCell
+
+                spacing: control.compact ? 4 : 6
+                x: parent.width - width
+                anchors.verticalCenter: parent.verticalCenter
+
+                // The plan's "close the expansion" affordance: the entry chip in the playback
+                // layer also toggles, but once the layer is open the close control belongs at
+                // its right edge, where the layer ends.
+                RangeChip {
+                    objectName: "transportCollapseLayerButton"
+                    chipText: qsTr("收起 ▴")
+                    chipHelp: qsTr("收起按需展开层（相邻帧快捷条与协议导入入口）")
+                    onClicked: control.transportExpanded = false
                 }
             }
         }

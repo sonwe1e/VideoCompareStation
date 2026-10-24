@@ -100,7 +100,8 @@ $durationBaseline = [ordered]@{
     '160' = 1
 }
 $spacingBaseline = [ordered]@{
-    '0'  = 1
+    # 0 left the baseline when spaceNone (0) became a token: flush rows must name the
+    # token, so a new literal 0 fails instead of spending a hidden allowance.
     '2'  = 12
     '3'  = 4
     '5'  = 2
@@ -127,7 +128,7 @@ $fontTokens = @('fontMicro', 'fontCaption', 'fontSecondary', 'fontMono', 'fontCo
     'fontDropOverlayTitle', 'fontLargeTitle')
 $radiusTokens = @('radiusMicro', 'radiusSubtle', 'radiusSmall', 'radiusMedium', 'radiusLarge', 'radiusCard', 'radiusPill')
 $durationTokens = @('animationFast', 'animationBase', 'animationSlow')
-$spacingTokens = @('spaceMicro', 'spaceMain')
+$spacingTokens = @('spaceNone', 'spaceMicro', 'spaceMain')
 
 $families = @(
     @{

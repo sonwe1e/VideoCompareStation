@@ -92,6 +92,11 @@ public:
     [[nodiscard]] Q_INVOKABLE bool isImageUrl(const QUrl& url) const;
     [[nodiscard]] Q_INVOKABLE bool isRecentImage(int row) const;
     [[nodiscard]] Q_INVOKABLE QUrl urlForRow(int row) const;
+    // Decision c (video task tabs design §11): the folder stays global and follows the
+    // session source; a task restore only replays the recorded ROW HIGHLIGHT. This setter
+    // moves the highlight inside the already-loaded folder without staging any open,
+    // touching currentUrl_ or following a folder - the restore's view-only echo.
+    Q_INVOKABLE bool setRowHighlight(int row);
     void synchronizeSources(const QVariantList& sources);
     void completeOpen(qulonglong intentId, bool success, const QString& error);
     void recordCommittedVideo();

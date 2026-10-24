@@ -113,6 +113,7 @@ add_executable(
     ImageReviewControllerTests.cpp
     ImageColorContractTests.cpp
     ImageTaskHostTests.cpp
+    VideoTaskHostTests.cpp
 )
 target_link_libraries(
     dvs_image_review_controller_tests
@@ -526,12 +527,18 @@ foreach(dvs_sidebar_style IN ITEMS Basic Windows)
             "$<TARGET_FILE:Qt6::qmltestrunner>"
             -input "${CMAKE_CURRENT_SOURCE_DIR}/qml/tst_video_file_sidebar.qml"
     )
+    # Aligned with every other windowed QuickTest suite here (RUN_SERIAL + basic render
+    # loop): this block was registered without either in 6923ff12 ([skip ci]), so under
+    # -TestJobs >= 2 it could overlap other windowed tests and ran on the threaded loop.
+    # Both styles measure ~4 s under QSG_RENDER_LOOP=basic locally (timeout-sleuth
+    # probes, out/verification/timeout-sleuth-sidebar-*.log, 2026-10-24).
     set_tests_properties(
         "ui.video_file_sidebar.${dvs_sidebar_style}"
         PROPERTIES
             LABELS "component;ui_qml"
             TIMEOUT 60
-            ENVIRONMENT "QT_QUICK_CONTROLS_STYLE=${dvs_sidebar_style}"
+            RUN_SERIAL TRUE
+            ENVIRONMENT "QT_QUICK_CONTROLS_STYLE=${dvs_sidebar_style};QSG_RENDER_LOOP=basic"
     )
 endforeach()
 endif()

@@ -1,5 +1,368 @@
 # 视觉审查问题台账
 
+## 2026-10-24 工作区改版 P6 收口（方案同上，未提交）
+
+- **需求**：方案 §12 P6 行与 §13——五工作区互转、打开/错误/恢复/空态、弹窗、高 DPI 与
+  长中文/长文件名的整体验收；改版稳定后的完整 dev 测试与适用格式/lint。
+- **本批代码修正**（全量验收第一轮暴露，均已修复）：
+  - **token 门禁**：P3 新增的 3 处内联 `implicitHeight: 30`（编辑短行按钮）与 3 处
+    `spacing: 2`（检查器页签行/指标列）改为 `Theme.hitAreaMinimum`/`Theme.spaceMicro`
+    （`check-qml-token-literals` 基线不新增站点）。
+  - **排列契约更新**（`MainQmlContractTests`）：§8 三列排布下速度下拉在左列、长按逐帧
+    在右列——见证改为场景坐标比较（各单元格是兄弟行，父级相对 x 恒 0）；协议行"清除后
+    导入入口可达"改为先开展开层再断言（层 4 新契约）。
+  - **视口两处几何修正**（`ComparisonViewport.qml`，P4 第一刀合并行的滞后修复）：
+    ① 缩放徽章 x 由"行右+8"改为钳制在视口内（窄合成画布下贴右缘而非溢出，
+    `InvalidNearOneToOne…` 契约）；② 像素读数板在行上方抬高一个带位
+    （bottomMargin 8→48）——`mapSurfacePoint` 在 viewScale≥1 时命中区域=适配矩形，
+    读数板贴行会在宽幅素材下把中心压进底部留白带，穿透拖拽因此无法平移
+    （`HudPlatesStayTransparentToCanvasInput` 契约；探针定位：按压点
+    insidePanel=true 而 insideVideoContent=false，差 1.2px）。
+- **解释性决定**：弹窗轻阴影（§3.3）经评估对 `popupType: Window` 的原生窗口菜单
+  （VcsMenu/ToolbarCombo 弹层）需负边距配合、收益低风险高；弹窗已有实底+发丝边+模态
+  遮罩，记录为有意推迟，不阻塞本方案完成。
+- **验证**：全量 dev `-Test -TestJobs 2` 第一轮 5 失败（token 1＋UI 契约 2＋视口 2，
+  均如上修复；另 1 处 `PairMetricsServiceTests.RetainedScratch…` 在 -j2 下偶发、单独
+  复跑即过，判定环境性并发抖动）；修复后**第二轮全量 dev 通过（退出码 0，无失败；
+  9 项环境性跳过：5 项 D3D 呈现统计探针本轮不可用、4 项与首轮相同的既有跳过）**；
+  `dvs_format_check_qml`、`dvs_lint_qml` ✓。证据目录
+  `out/verification/ui-redesign-2026-10-24/`（P0–P5 各批次）。
+- **方案状态**：P0–P6 全部完成，方案目标（五类工作区视觉与布局）在工作区实现完毕，
+  未提交。后续可选项：弹窗阴影（推迟项）、用户真机走查反馈。
+
+## 2026-10-24 工作区改版 P5（方案同上，未提交）
+
+- **需求**：方案 §9/P5 行——模式与比较对分组、来源身份、ROI 三窗、详细对齐/差异参数与
+  输出组织。核对现状后确认大部分已在既有批次沉淀：命令栏三组结构（模式组、比较对胶囊
+  `comparePairGroup`（A↔B/A↔C/B↔C 常驻＋切候选＋按住看 GT）、直看组＋布局菜单、右侧
+  复制/另存/检查器）已落地；检查器"对比"页已有对齐方式、对比对帧号/PTS/Δ 表
+  （`activePairTimeBlock`）、不可精确对应原因块、差异参数组与指标表；视口底部已有
+  对齐摘要与不可精确提示（ComparisonViewport 状态行/横幅）。本批做剩余可见增量。
+- **实现**：
+  - **来源行 §9 字面顺序**（`ActiveSourceStrip.qml`）：芯片重排为 `字母徽标 · 文件名 ·
+    [直看][主时间线][参考]`——身份在前、角色标签后置注释，fillWidth 文件名使角色标签
+    右对齐收尾；分隔符语义同步（`separatorTwo` 改为"任一角色可见时"分隔身份与角色区，
+    `chipLabelTaggedWidth` 算式同步）。紧凑档字母+状态点芯片不变。
+  - **检查器对比页组标题**（`TabbedInspector.qml`）：加"对齐"与"差异参数"两个小节
+    标题（muted caption 面），阅读顺序显式化为 对齐→对象→差异参数→指标（§9"调整
+    内部组与阅读顺序，不新增顶层页"）。
+- **解释性决定**：方案 §9 命令栏推荐组序以"添加素材"开头；现状按 EX-03/EX-04 既定设计，
+  添加入口为单源时模式栏文字按钮＋多源时来源行尾部"+"，不另在命令栏复制第三入口——
+  记录为本批对方案的取舍说明。
+- **验证**：`ui.MainQmlContractTests.ActiveSourceStripKeepsEveryChipReachableAtMinimumWidth` ✓、
+  `CompactTierMergesVideoSourceStripAndModeBar` ✓、`ui.active_source_strip.Basic.scale-1/1_25/1_5`
+  ✓（Windows 风格变体在全量内）、`-TestGroup Playback` 404 项 ✓、`dvs_format_check_qml` ✓。
+  证据 `out/verification/ui-redesign-2026-10-24/after-p5/`（13 文件；三源 ROI 场景经视觉
+  核验：卡片顺序、三比较对按钮、无重叠截断）。
+- **边界**：P6（弹窗统一、全流程收口、全量 dev）未动。
+
+## 2026-10-24 工作区改版 P3 第二刀与 P4 第二刀（方案 docs/plans/ui-workspace-redesign-2026-10-24.md，未提交）
+
+- **需求**：P3 §7 剩余半边（工具参数从顶部横排迁入右侧 288 参数竖板；图片检查器；
+  差异统计从画布中央长句归位检查器"对比"页）与 P4 §8 剩余半边（时间控制区四层排布）。
+  P4 先以并行子代理实施，派发运行约 31 分钟后因宿主模型并发上限阵亡，留下
+  TransportBar/PlayerOsc 半成品；主线接手补完。
+- **P3 第二刀实现**（`ImageWorkspace.qml`、`Main.qml`）：
+  - **右侧参数/检查器列 `imageParamsPanel`**：同一外壳双态——编辑态为工具参数栈
+    （固定顶部"整图操作"组：缩放…/填充画布…/旋转翻转▾；中部按工具竖排画笔颜色/粗细/
+    不透明度、马赛克块、文字与字号、抠图说明+紧凑裁剪+检测模型、标注管理；底部常驻
+    应用/取消确认行）；查看态为图片检查器（"对比/信息"两页：对比页=差异统计指标表
+    模式/峰值/RGB MAE 或 α 三项/统计口径/重采样对齐 + RGB相同α差异注记 + 16bit 转换
+    统计 + 显示缓冲警告；信息页=A/B 标题、路径、尺寸、内容口径）。停泊判定沿用
+    `LayoutMetrics.inspectorShouldDock` 与 600 画布保护、260–320 宽钳制、共享分隔条
+    `imageInspectorSplitter`；不停泊时为可关闭抽屉（§10.2），命令栏固定短行保留工具名+
+    应用/取消+「参数 ▸」，提交裁剪/抠图不依赖开抽屉。
+  - **检查器开关共享**：`reviewShell` 注入（`Main.qml` 传 `root.shell`），图片检查器与
+    视频检查器应答同一个 `inspectorVisible`；命令栏「检查器」按钮 + 紧凑档菜单项。
+  - **差异画布标签短句化**：`diffViewport.label` 只留 模式+峰值+重采样/警告；均值、
+    变化像素、口径长句、nativeStatsText 全部移入检查器；"尚未测量/尺寸不同"在检查器
+    用中性文字（不显示 0）。
+  - objectName 保留策略：面板内沿用 `imageEditScaleButton`/`imageEditTransformButton`/
+    `imageEditBrush*`/`imageEditMosaic*`/`imageEditAnnotation*`/`imageEditApplyCropButton`/
+    `imageEditCancelCropButton`/`imageEdit*SmartSelect*` 等原路径；命令栏短行用新
+    `imageEditBand*` 前缀避免 findChild 双胞胎。`imageEditParamsRow` 让给短行。
+  - **关键工程教训（启动期绑定毒化，hover 套件捕获）**：根级属性读 `stageRow.width`
+    的绑定会在初始绑定 pass 触碰深层 item 几何，冻结视口预览图为 0×0。修复：停靠输入
+    `canvasWidthWithoutPanel` 改为命令式更新（宽度/可见性钩子 + `stageLayoutSettled`
+    门闩在回到事件循环后才放行）；画布列/视图条只读根级存储数字
+    `imagePanelDockedInset`，不再引用面板 item 几何。
+- **P4 第二刀实现**（`TransportBar.qml`、`PlayerOsc.qml`、`Main.qml`，接手子代理半成品）：
+  - **四层**：L1 时间与定位（时间轴跨宽；左翼=当前时间码+当前帧、右翼=总时长·总帧数，
+    `PlayerOsc` 新增 `durationText`，`Main` 以末帧 `timecodeForFrame` 绑定；紧凑档沿用
+    信息行）；L2 播放操作（速度左、按钮组居中播放键、长按逐帧倍率+流畅/逐帧右；
+    `buttons`/`playbackRightCell` 分列）；L3 区间次行（I/O+摘要+区间胶囊左、播放/循环/
+    往返中、清除/导出右）；L4 按需展开（相邻帧开关左、±3 帧条中、收起右；未载入协议时
+    「导入协议」也收进本层，载入后协议行常驻——协议入口落位为本批的解释性决定）。
+  - objectName 全保留；`transportExpanded`（层 4 视图态）、`transportExpandToggle`/
+    `transportCollapseLayerButton`、`timelineLeftReadout`/`transportTimecodeReadout`/
+    `transportFrameReadout`/`transportTotalsReadout` 为新契约。
+  - **接手修复三处**：① 子代理漏了 `adjacentStrip` Row 与 `buttons` Row 的闭合括号
+    （全部 Main 场景测试 162/169 因此全灭）；② **Qt Column 的 implicitHeight 需首次
+    polish 才发布，OSC 不可见期间面板按 0 高传输条自算高度，区间芯片画到窗外**——
+    `TransportBar` 隐式尺寸改为对四层高度直接求和（间距按可见层数计，紧凑档两行预算
+    断言 139/140 通过）；③ 导出芯片点击前补 5 轮 processEvents（右列 x 绑定在 polish
+    后落位）。
+  - 紧凑档维持 UX-13 S1 单行流 + 区间摘要折叠语义；浮动 OSC 淡出/指针驻留行为不变。
+- **测试**：新增 `tst_image_workspace_manual.qml` 三用例（停靠面板几何/画布让位 376px、
+  抽屉态短行+开关抽屉不改画布宽、差异统计入检查器+短句画布+信息页）+ `init()` 显式
+  pin `compactChrome=false`（PlayerOsc 先例；本机多显示器/高缩放会把测试窗钳到
+  822×594 逻辑，窗口派生档位被误开——环境观察，非产品缺陷）。更新
+  `MainQmlContractTests`：紧凑档编辑预算注释、差异截图先开检查器、变换菜单测试在抽屉
+  宽度先 `imagePanelDrawerOpen=true`、导出芯片点击前排空事件。`tst_player_osc` 四用例
+  按层 4 新契约更新（先开层、finally 复位）。
+- **验证**：`ui.ImageWorkspaceManual` 45 项 ✓（连跑两次稳定）、`ui.player_osc` 34 项 ✓、
+  `-TestGroup Playback` 404 项 ✓、`-TestGroup Images` 213 项 ✓、`dvs_format_check_qml`/
+  `dvs_format_qml`/`dvs_lint_qml` ✓。证据
+  `out/verification/ui-redesign-2026-10-24/after-p3-p4-second-cut/`（12 张+几何记录；本轮
+  在 G322U 1.75 标尺下采集，transport 1412×173 与上一刀持平；编辑竖栏+右参数板、检查器
+  统计表、时间区四层经视觉核验无重叠溢出）。
+- **边界**：P5（视频对比分组/来源身份/检查器"对比"页整理）、P6（全流程收口+全量 dev）
+  未动。图片检查器"对比"页目前承载差异统计；视频侧对齐/偏移入检查器分组属 P5。
+
+## 2026-10-24 工作区改版补刀：视频侧顶部堆叠对齐方案 §2（用户实测反馈，未提交）
+
+- **需求**：用户在运行的应用中指出"视频的标签页还没改"。核对属实：P1 只改了两套标签的
+  形状，视频侧的**位置**仍是旧行——任务标签挂在来源行/模式栏之下（视口上方），而方案 §2
+  的堆叠是 菜单 → 任务标签 → 命令栏 → 来源行（紧贴画布）→ 画布，图片侧已经如此。
+- **实现**（`Main.qml`）：
+  - `videoTabs` 从 `topMargin: videoChromeHeight`（chrome 之下、锚 viewportFrame）改为
+    `top: parent.top` 贯穿窗口（菜单正下方），与图片侧同堆叠。
+  - 模式栏（`compareModeBar`）与来源行（`activeSourceStrip`）交换顺序：模式栏为命令带在
+    上（宽窗 y=0），来源行成为紧贴画布的横带（宽窗 y=模式栏高）；紧凑档两者仍合并同一行
+    （同 `videoTabsStripVisible ? videoTabs.height : 0` 顶边），UX-13 S4 合并语义不变。
+  - 检查器抽屉/遮罩与文件侧栏的 topMargin 补任务标签偏移；视口 topMargin 总量不变。
+- **测试**：两处"UX-13 S4 宽窗堆叠见证"断言按新契约更新（模式栏 y=0、来源行 y=40；
+  `CompactTierMerges…` 的紧凑同行断言不变），理由记录于注释。复跑
+  `ui.MainQmlContractTests` 169 项 ✓、`-TestGroup Playback` 404 项 ✓、
+  `dvs_format_check_qml` ✓。
+- **观察项**（非本轮引入）：证据测试运行时打印一次
+  `ImageWorkspace.qml:7516 QQuickText: Binding loop detected for property "height"`
+  （statusHints 手势提示 Text 的 `visible ? implicitHeight : 0` 自引用三元），qmllint
+  不报、布局断言全过；留待后续批次排查根因。
+- **边界**：未重拍截图证据（几何由两处见证断言锁定）；P3 第二刀、P4 第二刀、P5/P6 未动。
+
+## 2026-10-24 工作区改版 P3 第一刀与 P4 第一刀（方案同上，未提交）
+
+- **需求**：P3 §7"用左右分工替代不断增长的顶部工具排"的第一步（工具选择进左竖栏）与
+  P4 §8"画面下沿统一视图操作"的第一步（视频左下两行合并）。并行子代理第三次派发仍因
+  宿主模型并发上限失败，P4 由主线完成。
+- **P3 第一刀实现**（`ImageWorkspace.qml`）：
+  - **左工具竖栏**：新增 `imageEditToolRail`（stage 左列 64 宽，编辑时 `FolderPairSidebar`
+    让位、结束恢复；紧凑档保留，§10.2）。竖栏承载 选择／裁剪／画笔／智能抠图 直达按钮
+    ＋「更多工具 ▾」（马赛克、填充、清除、矩形、箭头、文字与标注管理；按钮文字随当前
+    工具命名，测试锁定的契约保留）。新内联组件 `EditRailButton`（56×40、透明静息、选中
+    用全局活动浅底、visualFocus 焦点环、tooltip）。
+  - **顶部条收敛**：编辑态顶部只剩 身份标签｜撤销｜重做｜另存副本…（主按钮）＋状态文本；
+    整图操作组（缩放…／填充画布…／旋转翻转 ▾）移入参数板 `editParamsRow` 行首固定组
+    （§7"整图操作放右侧参数面板上部"的第一步——参数板仍在顶部下方横排，右侧 288 竖板
+    与图片检查器合并为下一批）。
+  - **文案**：「结束编辑」→「返回查看」（顶部按钮、紧凑菜单、未保存阻止提示三处同步，
+    §7 命名）；`imageEditToolLabel` 保留。
+  - objectName 全部保留（含菜单项），契约测试的 `openEditToolsItem` 路径不变。
+- **P4 第一刀实现**（`ComparisonViewport.qml`）：
+  - 视频左下原有两行（缩放徽章／采样／网格底行 ＋ 适应／分割线方向／重置／框选上排）
+    合并为同一基线的单行视图条：`viewCommandRow` 下移贴底（与底行同
+    `12 + bottomOverlayInset + roiTripletStageInset` 边距），`pixelScaleBadge`（设为
+    100%＋倍率读数）、`videoFilterBadge`（采样）、`videoPixelGridButton`（网格）依次右随。
+  - 控件统一 32 高命中区（ViewCommandButton 24→`hitAreaMinimum`；徽章 28→32）；像素读数
+    板与直看标签的上方锚定自动跟随。缩放徽章帮助文案方位同步（"上方按钮"→"左侧按钮"）。
+  - hudRevealed 淡出、chromeVisible、ROI 三联条避让等行为不变。
+- **验证**：P3 后 `ui.MainQmlContractTests..*[Ee]dit` 10 项 ✓、`ui.ImageWorkspaceManual` ✓；
+  一次契约全量 169 项中 1 项失败，与已死子代理并发跑 UI 测试的窗口竞争吻合，单独复跑
+  169 项全过。P4 后终验：`ui.MainQmlContractTests` 169 项 ✓、`-TestGroup Playback` 404 项 ✓、
+  `dvs_format_check_qml` ✓、`dvs_lint_qml` ✓。证据
+  `out/verification/ui-redesign-2026-10-24/after-p3-p4/`（12 张，同 1.25 标尺；编辑竖栏与
+  视频视图行场景在列，几何记录含 pixelReadoutPlate 新基线上方锚定）。
+- **边界**：P3 第二刀（右参数竖板 288＋图片检查器＋差异统计归位）、P4 第二刀（时间控制
+  区四层排布）、P5/P6 未动。
+
+## 2026-10-24 工作区改版 P2 收口：来源行独立与尺寸提示条（方案同上，未提交）
+
+- **需求**：P2 首切片之后的剩余布局项——§1 切入口 1 的位置半边（来源从会话行移出）与
+  §6 尺寸不匹配提示条。并行尝试：两次派发 P4 视频视图条的子代理均因宿主模型并发上限
+  失败，P4 未动，改由后续批次承担。
+- **实现**（全部 `ImageWorkspace.qml`，状态所有权不动）：
+  - **来源行独立**：`imageSourceChipA/B` 从会话流（`imageFileRow`）移入新
+    `imageSourceStrip`——commandPanel 底部独立 32 高横带、hairline 顶线、紧贴画布；
+    每侧芯片后跟尺寸文本（`imageSourceSizeA/B`，muted 12px，紧凑档折叠）。紧凑档来源行
+    保留（§10.3 身份不消失），仅尺寸折叠。会话行只剩 打开/添加、换图、对调、编辑、列表、
+    目录位置、更多（§6 命令栏左组）。
+  - **芯片视觉同步**：`ImageSourceChip` 去胶囊（`radiusLarge`→`radiusSubtle`）；直看态从
+    整卡源色染底改用全局活动浅底 `controlChecked`（与视频侧 `ActiveSourceStrip` 同一
+    语言）；字母徽标改源色暗底＋源色字母；悬停中性弱底。
+  - **尺寸不匹配提示条**：`imageDiffUnavailableNotice` 从画布中央大字（Column+centerIn）
+    改为画布顶部通栏 32 高持久横条（`warningPanel` 底＋`warningBorder` 细线），文本点名
+    两侧具体尺寸（"A 与 B 尺寸不同（64×48 / 32×24）…"，不显示 0），"开启重采样对齐"
+    按钮随条右置，开启后按钮退场（§6"画布上方持久提示条"）。
+  - **测试**：`tst_image_workspace_manual.qml` 新增
+    `test_source_strip_holds_identity_and_sizes_above_the_canvas`（芯片归属 strip 而非
+    会话流、strip 底边=commandPanel 底边、尺寸 64×64）与
+    `test_size_mismatch_banner_names_both_sizes_and_opts_into_resampling`（横条点名两侧
+    尺寸、贴顶、高度≤36、按钮开启后 visible=false）——补上两处此前无断言的覆盖缺口。
+  - **契约预算更新**：紧凑档 commandPanel 查看 48→80（单带 48＋来源行 32）、编辑
+    88→120；理由记录在测试注释（§2/§10.3 来源行常驻）。
+- **验证**：构建 ✓；`ui.ImageWorkspaceManual`（含 2 个新测试）✓；横条改动后全量复跑
+  `ui.MainQmlContractTests` 169 项 ✓、`-TestGroup Images` 213 项 ✓（3 项环境跳过与本次
+  无关）；`dvs_format_check_qml`、`dvs_lint_qml` ✓。证据
+  `out/verification/ui-redesign-2026-10-24/after-p2-source-strip/`（12 张，同 1.25 标尺，
+  尺寸不同横条场景由上述新测试锁定，不在固定截图协议内）。
+- **边界**：差异统计归位（§6 检查器"对比"页）依赖图片检查器停靠机制，与 P3 编辑右参数
+  面板共享基础设施，合并进下一批；P3–P6 未动。
+
+## 2026-10-24 工作区改版 P0/P1 与 P2 首切片（方案 docs/plans/ui-workspace-redesign-2026-10-24.md，未提交）
+
+- **需求**：按五类工作区方案实施。本轮交付 P0（证据与 token 校准）＋P1（视觉基元与
+  外壳）＋P2 首切片（图片视图条与命令分组）；P3–P6 未动。
+- **P1 实现**（外观层，不动状态所有权）：
+  - `VcsTheme.js`：chrome 色板校准为方案 §3.2 角色 swatch——`canvas`/`stageWell`/
+    `thumbnailWell` `#111111`、`window`/`headerBackground` `#202020`、`panel` `#252525`、
+    `menu` `#333333`、`primaryText` `#ececec`、`secondaryText` `#d0d0d4`、`mutedText`
+    `#b0b0b0`、`accentText` `#8bb9ff`、`controlChecked` 改不透明活动浅底 `#293748`。
+    半透明白 veil 体系保留（在 `panel` 上合成 ≈`#373738`，与方案分隔线 `#383838` 收敛，
+    不换实色边）。`DesktopApplication.cpp` DWM caption（32,32,32）/文字（236,236,236）同步。
+  - 任务标签（`ImageTaskTabs`/`VideoTaskTabs` 平级同步）：34→36 高、上边 6 px 轻圆角＋
+    底部补丁保持平直底边（同色覆盖、半透明 hover 不叠加）、活动下划线保留、最小宽
+    136→160（方案 §2 160–240），省略标题悬停可读全文（`VcsToolTip`）。
+  - 来源芯片（`ActiveSourceStrip`）：去胶囊 `radiusLarge`→`radiusSubtle`；整卡不再染色
+    ——直看/管理模式选中改用全局活动浅底 `controlChecked`（与模式按钮同一活动语言），
+    参考角色只留 1 px 身份细线＋文字标签；字母徽标改为各源暗底＋源色字母（身份收敛到
+    徽标）。悬停中性弱底，去彩边。
+  - 弹窗圆角：`VcsMenu`/`ToolbarCombo` 弹层 `radiusLarge`(12)→`radiusMedium`(10)（方案
+    §3.3 8–10 档）。弹窗阴影留待 P6 弹窗统一批次。
+- **P2 首切片实现**（`ImageWorkspace.qml`）：
+  - 视图条固定行：`imageViewCommandHud` 从画布左下浮层（z=30）迁到画布下沿 36 高固定行
+    `imageViewCommandBar`（hairline 顶线，左对齐画布列、空态收起）；按钮 objectName 全部
+    保留。
+  - 淡化参数带归位：`fadeSliderOverlay`（oscGlass 浮层、画布右下）撤销，snap 芯片＋读数＋
+    滑杆＋滚轮进视图条右端（方案 §6"不漂在图像内部"）；`fadeOverlay`（画布内淡化图像
+    容器）不动。`bottomControlsInset` 通知避让线改指视图条顶。
+  - 命令行：Row 1 顺序改为 打开/添加 → 换图… → 对调 A/B（方案 §6）；Row 2 背景组前补
+    `RowSeparator`，形成 模式｜通道｜背景 三组分隔。
+- **验证**（影响范围选择，均走 wrapper）：构建 ✓；`ui.(ImageTaskTabs|active_source_strip|
+  toolbar_combo|vcs_menu|vcs_theme)` 17 项（含样式/DPI 变体）✓；`ui.MainQmlContractTests`
+  169 项 ✓（P2 后重跑）；`ui.ImageWorkspaceManual` ✓；`-TestGroup Images` 213 项 ✓；
+  `dvs_format_check_qml`、`dvs_lint_qml` ✓。对比度门禁复核：mutedText/disabledText/
+  accentText 在新表面上 5.0/3.9/6.3:1，均过既有阈值。
+- **证据**：`out/verification/ui-redesign-2026-10-24/after-p1/`、`after-p2/` 各 12 张
+  （`QT_ENABLE_HIGHDPI_SCALING=0 QT_SCALE_FACTOR=1.25`，与 ux13-s5-final 同标尺；1440×900
+  全场景＋960×640 窄窗）。「前」参照沿用 `ux13-s5-final/`（早于标签/选对变更）——本轮
+  改动叠加在未提交基线上，无法回退拍严格前态，属已知限制。
+- **边界**：来源行独立成行（§2 紧贴画布的 32 高来源行）、图片检查器/差异统计归位、
+  P3 编辑工具栏、P4/P5 视频分区未开始；方案 §14 两项待拍板决策（停靠默认、编辑布局）
+  未触及，不登记。中屏宽度（1080–1200）与 150%/200% DPI 的样式/DPI 全矩阵未跑（组代表
+  变体已过），留待布局批次扩展时补 `-FullMatrix`。
+
+
+
+- **需求**：上一大批工作约 7 小时中构建/验证墙钟占主导（单轮套件 ~7 分钟、lint ~18 分钟、
+  FullMatrix ~12 分钟且多 agent 共享一个串行构建槽）；用户授权实施 1/2/3/4/6 五项，不动
+  CPU 预算上限（第 5 项）。
+- **实现**：
+  - **sccache 编译缓存**：env.ps1 软探测（PATH／winget 包目录 glob／cargo；`DVS_SCCACHE`
+    指定、`DVS_DISABLE_SCCACHE=1` 关闭），configure 时注入 `CMAKE_C(XX)_COMPILER_LAUNCHER`
+    ＋MSVC 调试信息切 `/Z7`（缓存键稳定、不受 PDB 并发影响），缓存在 `out/sccache`（10G，
+    随 checkout）；已有构建目录一次 `-Configure` 采纳；未装 sccache 的机器完全不变。
+  - **双构建槽**：仓库锁（`.build.lock`）只保护会写共享状态的 configure 与 `-Fresh`；常规
+    构建/测试只持自己 preset 的锁；新增 `dev2` 预设；`-LockWaitSeconds` 有界等待。顺带修两处
+    脚本缺陷：纯继承 preset 无 `cacheVariables` 在 StrictMode 下崩溃；sccache 0.18 的
+    `--stats` 已更名 `--show-stats`。
+  - **lint-changed 定向 lint**（cmake/Quality.cmake＋cmake/RunClangTidyChanged.cmake）：只对
+    工作区改动（含未跟踪）的 src/*.cpp 跑 clang-tidy，planned==executed 自计数、git 失败即
+    报错、空选择合法明示。首版存在 git 相对路径 vs 清单绝对路径导致选择恒空的缺陷——正是
+    自计数断言无法覆盖的静默通过形态，人工核对发现并修复（cmake_path 归一化）。
+  - **三例超时根因**（timeout-sleuth，完整报告
+    out/verification/timeout-sleuth-summary.md）：**非挂死**——无人值守长跑中显示状态退化
+    致合成鼠标/弹窗布局失灵 × 有界等待失败惩罚累积烧穿 ctest 预算；现在各类复跑均绿
+    （player_osc 5.2s、sidebar 4.4s）。修复：video_file_sidebar 补 `RUN_SERIAL`＋
+    `QSG_RENDER_LOOP=basic`（6923ff12 引入时与其他窗口化套件的一致性缺口）；
+    settleContextMenu tryVerify 收紧 1500ms，布局退化时快速报真实断言而非不透明超时。
+    夜跑再出现这三例 Timeout，先查当时会话显示状态（锁屏/RDP 类）。
+  - **约定与文档**：单用例迭代＋每片一轮全套写入 AGENTS.md 与 building.md
+    「构建加速：sccache、双槽与定向 lint」节。
+  - **门禁顺带抓出并修复**：VideoTaskTabs 复制 ImageTaskTabs 带入第二个 `spacing: 0` 超
+    token 基线——新增 `spaceNone (0)` token 并收敛两处标签条，撤 0 的 spacing 基线（新字面
+    0 必须用 token）；check-build-scripts 的锁契约从「第二 preset 必须被拒」更新为新语义
+    （configure 仓库级串行；有缓存 preset 的普通构建并行）。
+- **验证**：冷全量构建（293 步，253 编译全经 sccache、0 错误）exit 0；dev2 全新目录 8 秒
+  建完 domain、10/10 命中缓存；dev 持 preset 锁时 dev2 并行完成（跨槽无阻塞）；lint-changed
+  选中本批 5 个改动 src/*.cpp 全净（~3 分钟 vs 全量 ~18 分钟）；三例超时用例 3/3 通过；
+  quality.build-scripts 与 quality.qml-token-literals 修复后重跑绿；收尾全量门禁
+  `-Test` 1518 例零失败（仅既有合法跳过，三例原超时用例亦通过）＋format-check＋lint 全过
+  （out/verification/infra-final-gates-2.log，2026-10-24 12:23）。
+
+## 2026-10-24 视频任务标签（用户提案实施，未提交）
+
+- **需求**：用户提案（两步实施的第二步）：视频以「一次审查任务一个标签」组织，类比图片
+  D-022；打开/聚焦/关闭规则、离开暂停切回恢复、仅当前标签解码、资源总预算约束。
+- **实现**（设计文档 docs/plans/video-task-tabs-design.md，§11 九项已拍板执行）：
+  - 宿主：`VideoTaskHost`（ui_qml，uncreatable QML 类型）持任务记录（组/参考身份/frozen/
+    QVariantMap 快照，只存不解释）；身份匹配＝规范化本地路径大小写不敏感多重集＋参考槽
+    身份（顺序无关，AB 与 AC 不合并），上限 12；关闭选相邻、cycle 跳过 loading/restoring。
+  - 接线（Main.qml）：文件菜单/拖入/启动打开收敛 `host.openTask`，intent id 差分捕获＋
+    `intentFinished` 终态 commitOpen/failOpen；「加入对比」与移除一路/换参考在成功终态原地
+    演化记录（组 2→1 同标签迁移）；侧栏四入口经 `routeSidebarVideoSubmit`：单视频任务活动
+    就地换片（保留自动播放链），否则新标签；右键「在新标签打开」强制新建；issue-restore
+    成功末端收养/改写活动记录防漂移。无 host 的隔离 harness 全部回落原路径（图片侧与既有
+    侧栏用例零改动通过）。
+  - 切换协议：暂停→十五项状态快照（组/参考/帧+时间/模式/对齐+偏移/倍率/范围族/比较对/
+    视口/wipe/差异参数族/pairMetrics 阈值/canvasFocus/文件夹记录）→同组聚焦不重开（epoch
+    不前进）；跨任务 `ReviewController::reopenSourcesWithoutMapping`（新 invokable：
+    ReplaceSources＋preserve=false，跨任务不得沿用上一任务时间线映射）→等终态（epoch+URL
+    双门，宿主 C++ `urlsMatch` 确定性比较——QML `String(QUrl)` 不稳定是本轮实际修复）→
+    seek 快照帧→比较对纯提交（submitDifferenceEdge，不走全组回落）→纯赋值族重放→**保持
+    暂停**；15s deadline；失败三档（回退点名文件/部分恢复明示不清任务/超时放弃不回滚）。
+  - 标签条 `VideoTaskTabs.qml`（独立文件保证图片侧零变化），Ctrl+Tab/Ctrl+Shift+Tab/Ctrl+W
+    视频侧与图片侧按工作区互斥；`reopenSourcesWithoutMapping`、`setRowHighlight`（只回显
+    行高亮不开）为配套小 API。
+- **验证**：`VideoTaskHostTests` 21/21、`VideoFolderModelTests` 行高亮单测、
+  `MainQmlContractTests` 含 VideoTabs* 13 条（C1–C9 打开路由、全状态往返、R1 迟到终态
+  双路径、R2 失败回退点名文件、Ctrl+W/Ctrl+Tab、就地换片自动播放保留、记录演化、issue
+  收养）；切片终态 217/217（ctest -N 核对）＋format-check＋lint 全绿；qmltypes 契约
+  （组件 5→6，quality.qmltypes_contract 正例+8 反例）专项通过；身份门变异证据
+  `out/verification/video-tab-identity-gates-mutation.ps1` PASSED（命令门/URL 门各一次
+  变异→对应 R1 用例失败→还原复绿）。
+- **剩余限制（真机项，B 组）**：切换恢复 P95（对照 500 ms 冷 seek 门禁的可行性）、
+  D3D11VA 三源切换稳定性、标签数不放大内存的实测、倍率回放值断言（假后端无
+  playbackRate 投影，命令已断言）；自动对齐分析/手动锚点不随标签保存、后台不跑分析为
+  显式决议（设计 §11 g/i）非缺陷。最终 Ui FullMatrix 702/705：仅 ui.player_osc 与
+  ui.video_file_sidebar 两套件三例超时，与第一步同轮 FullMatrix 失败集完全一致，且经
+  git stash 干净 HEAD 基线复跑证实为本机 QuickTest 窗口环境既有问题，非本批回归；本批
+  全部新增/更新用例在全部 style/DPI 变体下通过。
+
+## 2026-10-23 视频任意比较对一步切换（用户提案实施，未提交）
+
+- **需求**：三源会话的任意两两比较（A↔B/A↔C/B↔C）此前主入口是下拉且集中在差异类模式，
+  紧凑档折叠进「更多」；并排恒显 A/B 不随比较对。用户提案（本轮确认两步实施的第一步）：
+  比较对象做成常驻互斥按钮组，两路模式跟随当前对，全组视图点击比较对回落两路模式。
+- **实现**：
+  - 渲染：`D3d11ComparisonRenderer.cpp` `computeSurfacePanelLayout` 新增显式 SideBySide
+    分支，sourceSlots 按 differenceEdge 重排（与 Wipe 同义：0And2→{0,2,1}、1And2→{1,2,0}，
+    第三槽保留绑定供 peek/差异抑制）；QML 面板字母、命中映射与像素读数经共用
+    presentation geometry 自动跟随。
+  - 入口：`CompareModeBar.qml` 以 Repeater＋PairEdgeButton（`pairEdgeButton-0/1/2`）替换
+    pairCombo；可见性＝源数≥2（两源单钮恒亮、单源无钮），不再按 pairRelevant/compactChrome
+    门控；槽位字母短标＋pairLabel 实名 tooltip/Accessible（V02 防同名顶替）；紧凑档三钮行内
+    保留（44px），「更多」菜单删除比较对三行；修复常驻后原 forceLayout 钩子失效导致的按钮
+    重叠（钩子移至切候选/peek 子按钮自身 onVisibleChanged）。
+  - 接线：`Main.qml` 新增 `fullGroupView`（三联/参考聚焦/双参考差异/局部联动）与
+    `lastPairMode`（onEffectiveViewModeChanged 记录、初始并排）；`applyDifferenceEdge`＝
+    `submitDifferenceEdge`＋全组回落；`switchCandidateEdge` 走纯提交保持 `C` 键「固定 GT
+    切候选」原义（DualDifference 下不跳出视图）；`ReviewContextMenu.qml` 对比对子菜单两源
+    显示唯一对。
+  - 切对不变量沿用 V02：不 seek、不改 GT/时间轴、不重置 ROI/缩放、两路内不改模式；
+    PairMetrics 换对即取消清空、旧对批次按 Scope 丢弃（核对既有行为无残留）。
+- **验证**：`ComparisonSurface`（platform 前缀）93/93 含 3 个新几何用例＋变异自证
+  （`out/verification/task-1-sbs-pair-mutation.ps1`，15 项自计数，变异体恰击中 2 个配对
+  用例）；`ui.MainQmlContractTests` 152/152（新用例 PairEdgeButtonGroupNamesRealFilesAndLightsOneEdge、
+  PairEdgeButtonGroupSwitchesThePairInOneClick、PairSelectionFromFullGroupViewsReturnsToTheLastPairMode、
+  CandidateSwitchKeepsTheDualDifferenceCanvas；S4 紧凑几何 witness 更新：比较对胶囊
+  202px→148px，960 宽最坏态单行 40px 不折行）；集成门禁：组合 261 例＋format-check
+  （438 文件）＋lint 全过；Ui FullMatrix 679/682，3 例超时（ui.player_osc、
+  ui.video_file_sidebar.Basic/.Windows）经 stash 干净 HEAD 基线复跑证实为本机既有环境
+  问题，非本次回归；ChromeGeometryAndScreenshotEvidence 屏幕环境跳过沿旧例需证据机重录。
+- **剩余限制**：真机 D3D11VA 三源并排连续切对手感未验；画布直看（canvasFocus）下点比较对
+  保持直看不变（P05 语义，如需「选对即退出直看」另行裁决）。
+
 ## 2026-10-23 图片工作区标签页（用户请求，未提交）
 
 - **需求**：连续打开多张图片时当前只有一张/一对，打开下一张会替换上一张；用户要求按

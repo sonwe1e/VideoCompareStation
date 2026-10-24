@@ -793,6 +793,10 @@ Item {
             // Show the protocol instance only while this test drives it; `finally` restores the
             // shared fake and the visibility so a failure cannot poison the later tests.
             protocolOsc.visible = true;
+            const protocolTransport = findChild(protocolOsc, "transportBar");
+            // Plan §8: while no protocol is loaded the import entry lives inside the on-demand
+            // layer 4; once loaded the row owns its permanent place again.
+            protocolTransport.transportExpanded = true;
             try {
                 const row = findChild(protocolOsc, "transportProtocolRow");
                 const loadButton = findChild(protocolOsc, "transportLoadProtocolButton");
@@ -856,6 +860,7 @@ Item {
                 protocolFake.currentOriginBadge = "";
                 protocolFake.statusText = "无协议（协议导航关闭）";
                 protocolFake.lastError = "";
+                protocolTransport.transportExpanded = false;
                 protocolOsc.visible = false;
             }
         }
@@ -866,6 +871,10 @@ Item {
             protocolNextSpy.clear();
             protocolPreviousSpy.clear();
             protocolOsc.visible = true;
+            const protocolTransport = findChild(protocolOsc, "transportBar");
+            // The import chip lives in the on-demand layer 4 until a protocol is loaded
+            // (plan §8), so the intents start from the layer being open.
+            protocolTransport.transportExpanded = true;
             try {
                 const loadButton = findChild(protocolOsc, "transportLoadProtocolButton");
                 const nextButton = findChild(protocolOsc, "transportNextGeneratedButton");
@@ -900,6 +909,7 @@ Item {
                 protocolFake.protocolLoaded = false;
                 protocolFake.canGoNextGenerated = false;
                 protocolFake.canGoPreviousGenerated = false;
+                protocolTransport.transportExpanded = false;
                 protocolOsc.visible = false;
             }
         }
@@ -1235,6 +1245,9 @@ Item {
             const cluster = findChild(transport, "transportRangeRow");
             const buttonRow = findChild(transport, "firstButton").parent;
             const strip = findChild(transport, "adjacentFramesStrip");
+            // Layer 4 carries the strip (plan §8); open it so the centring assertions below
+            // measure a strip that is actually on screen.
+            transport.transportExpanded = true;
             transport.adjacentExpanded = true;
             for (const width of [960, 1280]) {
                 osc.width = width;
@@ -1254,6 +1267,7 @@ Item {
                 verify(clusterRect.y + clusterRect.height <= transport.height);
             }
             transport.adjacentExpanded = false;
+            transport.transportExpanded = false;
             osc.inFrame = -1;
             osc.outFrame = -1;
             // Restore the shared fixture width for the alphabetically later cases.
@@ -1397,6 +1411,10 @@ Item {
             osc.playing = false;
             osc.currentFrame = 10;
             transport.adjacentExpanded = false;
+            // Plan §8 layer 4: the strip and its entry live in the on-demand expansion. The
+            // entry stays one click away in the playback layer; the strip's line only
+            // exists while the expansion is open.
+            transport.transportExpanded = true;
             wait(0);
             const toggle = findChild(osc, "transportAdjacentToggle");
             const strip = findChild(osc, "adjacentFramesStrip");
@@ -1413,6 +1431,7 @@ Item {
             tryVerify(() => !toggle.visible);
             osc.playing = false;
             transport.adjacentExpanded = false;
+            transport.transportExpanded = false;
         }
 
         // UX-13 S1 compact tier: the in/out chips stay visible, the working actions fold

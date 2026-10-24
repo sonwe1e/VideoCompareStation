@@ -28,6 +28,7 @@
 #include "dvs/ui/StartupSplash.h"
 #include "dvs/ui/TimingDiagnosticsController.h"
 #include "dvs/ui/VideoFolderModel.h"
+#include "dvs/ui/VideoTaskHost.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -118,16 +119,16 @@ void applyWindowsNativeChrome(QQuickWindow* const window) noexcept {
     constexpr DWORD kDwmwcpRound = 2;
     setAttr(kDwmwaWindowCornerPreference, &kDwmwcpRound);
 
-    // 3. Caption colour matches Theme.headerBackground (#1c1c1e) in VcsTheme.js, so the title
+    // 3. Caption colour matches Theme.headerBackground (#202020) in VcsTheme.js, so the title
     //    bar and the menu bar read as one header. No system backdrop is requested: the window
     //    paints an opaque background, so Mica would never show through.
     constexpr DWORD kDwmwaCaptionColor = 35;
-    constexpr COLORREF kCaptionColor = RGB(28, 28, 30);
+    constexpr COLORREF kCaptionColor = RGB(32, 32, 32);
     setAttr(kDwmwaCaptionColor, &kCaptionColor);
 
-    // 4. Caption text matches Theme.primaryText (#f5f5f7).
+    // 4. Caption text matches Theme.primaryText (#ececec).
     constexpr DWORD kDwmwaTextColor = 36;
-    constexpr COLORREF kTextColor = RGB(245, 245, 247);
+    constexpr COLORREF kTextColor = RGB(236, 236, 236);
     setAttr(kDwmwaTextColor, &kTextColor);
     markStartupMilestone("native-attrs");
 }
@@ -267,6 +268,12 @@ public:
         imageReview_ = std::make_unique<ImageReviewController>();
         imageTasks_ = std::make_unique<ImageTaskHost>(imageReview_.get());
         engine->rootContext()->setContextProperty(QStringLiteral("imageTasks"), imageTasks_.get());
+        // Video task tabs (docs/plans/video-task-tabs-design.md): the host owns the task
+        // records over the single decode runtime; Main.qml drives the opens and the switch
+        // skeleton through it. Composition-root owned and exposed like imageTasks, so
+        // isolated harnesses can omit it and keep the legacy single-session behaviour.
+        videoTasks_ = std::make_unique<VideoTaskHost>();
+        engine->rootContext()->setContextProperty(QStringLiteral("videoTasks"), videoTasks_.get());
         engine->addImageProvider(
             QStringLiteral("vcs-review"),
             new ReviewImageProvider(
@@ -1222,6 +1229,7 @@ public:
         // The engine owns the image providers; their token resolver points at the host, so
         // the host must outlive the engine.
         imageTasks_.reset();
+        videoTasks_.reset();
         imageReview_.reset();
         QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
     }
@@ -1291,6 +1299,7 @@ private:
     std::unique_ptr<ReviewSessionFacade> sessionFacade_;
     std::unique_ptr<ImageReviewController> imageReview_;
     std::unique_ptr<ImageTaskHost> imageTasks_;
+    std::unique_ptr<VideoTaskHost> videoTasks_;
     std::unique_ptr<ImageFolderPairModel> folderPairs_;
     std::unique_ptr<ImageFolderCursor> imageFolderCursor_;
     application::IIssueRecordRepository* issueRecordRepository_ = nullptr;

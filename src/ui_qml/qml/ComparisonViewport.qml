@@ -1047,7 +1047,7 @@ Rectangle {
         objectName: "viewportPixelScaleBadge"
         enabled: visible && control.sourceCount > 0 && !control.overlayVisible && targetReachable
         text: targetReachable ? qsTr("设为 100%") : qsTr("100% 不可达")
-        helpText: qsTr("按首个显示源围绕观察中心缩放到 100%，保留 ROI。\n小于适应窗口时显示完整 ROI 并居中；放大时中心受视口范围约束。\n非方形像素保留显示比例。\n放大上限仍为适应窗口倍率的 64 倍；缩小时每个显示轴至少占一个物理像素。\n以旁边的实际倍率为准；适应窗口请用上方按钮。")
+        helpText: qsTr("按首个显示源围绕观察中心缩放到 100%，保留 ROI。\n小于适应窗口时显示完整 ROI 并居中；放大时中心受视口范围约束。\n非方形像素保留显示比例。\n放大上限仍为适应窗口倍率的 64 倍；缩小时每个显示轴至少占一个物理像素。\n以旁边的实际倍率为准；适应窗口请用左侧按钮。")
         Accessible.name: text
         Accessible.description: pixelScaleLabel.text + "\n" + helpText
         visible: control.chromeVisible && control.hudRevealed && pixelScaleBadge.effectivePercent > 0
@@ -1059,15 +1059,19 @@ Rectangle {
                 duration: Theme.animationBase
             }
         }
-        height: 28
+        height: 32
         width: pixelScaleContents.implicitWidth + 18
         leftPadding: 9
         rightPadding: 9
         topPadding: 0
         bottomPadding: 0
+        // Workspace redesign §8: the zoom readout rides the same baseline as the view
+        // commands - one strip along the canvas's lower edge (the video twin of the image
+        // workspace's view-command bar), instead of two stacked corner rows. The x clamp
+        // keeps the badge inside the viewport when a narrow canvas cannot fit the whole
+        // strip: it tucks against the right edge rather than spilling outside.
+        x: Math.min(viewCommandRow.x + viewCommandRow.width + 8, parent.width - width - 12)
         anchors {
-            left: parent.left
-            leftMargin: 12
             bottom: parent.bottom
             bottomMargin: 12 + control.bottomOverlayInset + control.roiTripletStageInset
         }
@@ -1158,7 +1162,7 @@ Rectangle {
                 duration: Theme.animationBase
             }
         }
-        height: 28
+        height: 32
         leftPadding: 9
         rightPadding: 9
         topPadding: 0
@@ -1227,7 +1231,12 @@ Rectangle {
             left: parent.left
             leftMargin: 12
             bottom: viewCommandRow.top
-            bottomMargin: 8
+            // One full band above the merged single row: at fit the surface's hit/content
+            // region IS the fitted extent (mapSurfacePoint returns the fit rect while
+            // viewScale >= 1), so a plate hugging the row lands its centre in the bottom
+            // letterbox for wide sources - and a drag starting there cannot pan (the press
+            // never reaches content). The extra band restores the pre-merge clearance.
+            bottomMargin: 48
         }
         Accessible.name: qsTr("像素原始帧取值读数")
         Accessible.description: qsTr("光标位置的帧平面 Y/Cb/Cr 取值，逐源显示；Δ 列为该源减去当前参考源的差值。")
@@ -1427,7 +1436,9 @@ Rectangle {
         }
     }
 
-    // Fit / reset commands, same product verbs as the image workspace toolbar.
+    // Fit / reset commands, same product verbs as the image workspace toolbar. One strip
+    // along the canvas's lower edge (workspace redesign §8): commands, the zoom readout,
+    // sampling and the grid share a baseline instead of stacking two corner rows.
     Row {
         id: viewCommandRow
 
@@ -1446,8 +1457,8 @@ Rectangle {
         anchors {
             left: parent.left
             leftMargin: 12
-            bottom: pixelScaleBadge.top
-            bottomMargin: 8
+            bottom: parent.bottom
+            bottomMargin: 12 + control.bottomOverlayInset + control.roiTripletStageInset
         }
 
         ViewCommandButton {
@@ -1460,14 +1471,10 @@ Rectangle {
         // visible only in wipe mode while the full canvas is not in a direct look. The noun is
         // 分割线, the same one the mode bar, the image workspace and the shortcut table use
         // (UX-10); the qualifier names the halves (左右/上下) instead of the axis jargon.
-        // ViewCommandButton is 24 px tall by default, below the 32 px hit-area minimum, so this
-        // new instance raises only its own height (the legacy buttons keep theirs; no whitelist
-        // entry).
         ViewCommandButton {
             objectName: "viewportWipeOrientationButton"
             visible: control.wipeMode && control.canvasFocusSlot < 0
             enabled: visible && !control.overlayVisible
-            height: Theme.hitAreaMinimum
             text: control.wipeOrientation === 1 ? qsTr("分割线：上下") : qsTr("分割线：左右")
             helpText: control.wipeOrientation === 1 ? qsTr("当前上下切分；点击改为左右切分（W 键）。分割位置保持不变。") : qsTr("当前左右切分；点击改为上下切分（W 键）。分割位置保持不变。")
             onClicked: control.setWipeOrientation(control.wipeOrientation === 1 ? 0 : 1)
@@ -1500,7 +1507,7 @@ Rectangle {
         Accessible.name: text
         Accessible.description: helpText
         width: commandLabel.implicitWidth + 16
-        height: 24
+        height: Theme.hitAreaMinimum
         leftPadding: 8
         rightPadding: 8
         topPadding: 0

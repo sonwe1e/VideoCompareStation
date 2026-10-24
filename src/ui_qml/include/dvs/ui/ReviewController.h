@@ -282,6 +282,13 @@ public:
     // Rebuilds a ready session with a new 1-3 source topology while mapping the current
     // canonical MediaTime onto the replacement timeline. The rebuilt session stays paused.
     Q_INVOKABLE bool reopenSources(const QVariantList& urls, int referenceSourceIndex);
+    // Same ReplaceSources rebuild, but WITHOUT the displayed-time mapping: the rebuilt
+    // session starts from its own frame 0. Cross-task video-tab switches use this (video
+    // task tabs design §4.3) - the preserved MediaTime belongs to the task being left, never
+    // to the one being restored, which then seeks its own snapshot frame explicitly. The
+    // rebuilt session stays paused and a failure keeps the previous session.
+    Q_INVOKABLE bool reopenSourcesWithoutMapping(const QVariantList& urls,
+                                                 int referenceSourceIndex);
     // Rebuilds the active review with a new canonical/reference source. The active source list
     // remains unchanged until the rebuild succeeds.
     Q_INVOKABLE bool changeReference(int sourceIndex);

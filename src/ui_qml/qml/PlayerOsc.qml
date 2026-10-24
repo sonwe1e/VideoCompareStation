@@ -53,6 +53,11 @@ Item {
     required property bool timelineEnabled
     required property int currentFrame
     required property int totalFrames
+    // Plan 2026-10-24 §8 layer 1: the totals column right of the timeline states the whole-timeline
+    // duration in the same timecode vocabulary as the current position. Optional (empty default)
+    // so standalone QML tests and hosts without a duration formatter keep working; the host binds
+    // it to the same formatter that produces `timecodeText`, evaluated at the last frame.
+    property string durationText: ""
     required property real progress
     required property string timecodeText
     required property var markers
@@ -347,7 +352,12 @@ Item {
                 }
             }
 
+            // The timecode and frame counter keep their compact-tier home on this line (the
+            // overlay and the stacked narrow-window variant both spend exactly this row). The
+            // big window moves them to the timeline's flanks instead - see the layer-1 clusters
+            // besides TimelineTracks below - so they do not render twice.
             Text {
+                visible: control.compactChrome
                 text: control.timecodeText
                 color: Theme.primaryText
                 font.family: Theme.fontFamilyMono
@@ -356,6 +366,7 @@ Item {
             }
             Text {
                 objectName: "frameCounterText"
+                visible: control.compactChrome
                 text: control.currentFrame >= 0 ? qsTr("第 %1 / %2 帧").arg(control.currentFrame + 1).arg(control.totalFrames) : qsTr("无帧")
                 color: Theme.mutedText
                 font.pixelSize: Theme.fontSecondary
@@ -554,6 +565,70 @@ Item {
             height: 0
         }
 
+        // Plan 2026-10-24 §8 layer 1, left flank: the current timecode and current frame
+        // number sit left of the timeline. The compact tier keeps them on the overlaid info
+        // line instead (UX-13 S1), so the flanks stay big-window only; the timeline then spans
+        // the full panel width exactly as before.
+        Row {
+            id: timelineLeftReadout
+
+            objectName: "timelineLeftReadout"
+            visible: !control.compactChrome
+            spacing: Theme.spaceMain
+            x: 16
+            anchors.verticalCenter: tracks.verticalCenter
+
+            Text {
+                objectName: "transportTimecodeReadout"
+                text: control.timecodeText
+                color: Theme.primaryText
+                font.family: Theme.fontFamilyMono
+                font.pixelSize: Theme.fontMono
+                font.weight: Font.DemiBold
+            }
+
+            Text {
+                objectName: "transportFrameReadout"
+                text: control.currentFrame >= 0 ? qsTr("第 %1 帧").arg(control.currentFrame + 1) : qsTr("无帧")
+                color: Theme.mutedText
+                font.pixelSize: Theme.fontSecondary
+                // Stepping re-writes these digits in place; tabular figures keep the flank
+                // from shuffling sideways on every frame (UX-18).
+                font.features: Theme.fontFeaturesNumeric
+            }
+        }
+
+        // Layer 1, right flank: the whole-timeline totals. The frame count always states
+        // itself; the duration joins once the host binds `durationText`.
+        Row {
+            id: timelineRightReadout
+
+            objectName: "timelineRightReadout"
+            visible: !control.compactChrome
+            spacing: Theme.spaceMain
+            anchors {
+                right: parent.right
+                rightMargin: 16
+                verticalCenter: tracks.verticalCenter
+            }
+
+            Text {
+                objectName: "transportTotalsReadout"
+                text: {
+                    const frames = qsTr("共 %1 帧").arg(control.totalFrames);
+                    return control.durationText.length > 0 ? control.durationText + " · " + frames : frames;
+                }
+                color: Theme.mutedText
+                font.family: Theme.fontFamilyMono
+                font.pixelSize: Theme.fontSecondary
+                font.features: Theme.fontFeaturesNumeric
+                // Cap instead of overflowing: a bound duration plus the frame count must elide
+                // rather than push into the timeline.
+                width: Math.min(implicitWidth, 220)
+                elide: Text.ElideRight
+            }
+        }
+
         TimelineTracks {
             id: tracks
 
@@ -565,9 +640,11 @@ Item {
             outFrame: control.outFrame
             anchors {
                 left: parent.left
-                leftMargin: 16
+                // The timeline spans the width between the layer-1 flanks (plan §8); the
+                // compact tier has no flanks and keeps the full-width margins.
+                leftMargin: control.compactChrome ? 16 : 16 + timelineLeftReadout.width + Theme.spaceGroup
                 right: parent.right
-                rightMargin: 16
+                rightMargin: control.compactChrome ? 16 : 16 + timelineRightReadout.width + Theme.spaceGroup
                 top: timelineTopBus.top
                 // Six pixels: the time axis is the object the whole panel is read against, so it
                 // gets one step more air than the status block above it. The compact tier spends

@@ -27,6 +27,7 @@
 #include "dvs/ui/SourceIdentity.h"
 #include "dvs/ui/SourceListModel.h"
 #include "dvs/ui/VideoFolderModel.h"
+#include "dvs/ui/VideoTaskHost.h"
 
 #include <QAccessible>
 #include <QClipboard>
@@ -408,14 +409,15 @@ installValidatedVideoSet(const std::shared_ptr<application::SessionSnapshot>& sn
                          const std::vector<std::filesystem::path>& paths,
                          const domain::RationalRate& rate,
                          const std::int64_t frameCount,
-                         const std::int64_t durationMicroseconds) {
+                         const std::int64_t durationMicroseconds,
+                         const std::size_t referenceSlot = 0U) {
     std::vector<domain::ComparisonSource> sources;
     for (std::size_t index = 0U; index < paths.size(); ++index) {
         const QFileInfo info{QString::fromStdWString(paths[index].wstring())};
         sources.push_back(domain::ComparisonSource{
             .id = static_cast<domain::SourceId>(index),
-            .role = index == 0U ? domain::ComparisonRole::kReference
-                                : domain::ComparisonRole::kPrediction,
+            .role = index == referenceSlot ? domain::ComparisonRole::kReference
+                                           : domain::ComparisonRole::kPrediction,
             .descriptor =
                 domain::MediaDescriptor{
                     .normalizedPath = paths[index],
@@ -788,6 +790,13 @@ public:
             videoFolder.attachPlayback(*controller, *shell);
             engine.rootContext()->setContextProperty(QStringLiteral("videoFolder"), &videoFolder);
         }
+        if (withVideoTasks) {
+            // The composition root publishes the video task host exactly like imageTasks;
+            // harnesses that predate it keep the legacy single-session open paths.
+            videoTasks = std::make_unique<VideoTaskHost>();
+            engine.rootContext()->setContextProperty(QStringLiteral("videoTasks"),
+                                                     videoTasks.get());
+        }
         if (withImageTasks) {
             imageTasks = std::make_unique<ImageTaskHost>(&imageReview);
             engine.rootContext()->setContextProperty(QStringLiteral("imageTasks"),
@@ -1006,6 +1015,10 @@ QtObject {
     ImageReviewController imageReview;
     std::unique_ptr<ImageTaskHost> imageTasks;
     bool withImageTasks = false;
+    // Video task tabs (docs/plans/video-task-tabs-design.md): the host is opt-in so the
+    // harnesses that predate it keep their exact single-session expectations.
+    std::unique_ptr<VideoTaskHost> videoTasks;
+    bool withVideoTasks = false;
     // The root's required clipboard service; the copy tests assert through the real
     // clipboard the adapter writes to.
     ColorClipboardController colorClipboard;
@@ -1049,6 +1062,42 @@ QtObject {
     QQuickWindow* window = nullptr;
     std::string error;
 };
+
+// Video task tabs: drives the open command the QML just submitted through the fake media
+// backend - installs the validated set, succeeds the terminal, settles - the same steps the
+// startup tests spell out inline. The terminal targets the LAST OpenComparisonCommand by
+// identity, because every publish also triggers the preference replays (continuity, pair,
+// range) that submit their own commands after the open. `referenceSlot` must match what the
+// intent requested so the projected session facts agree with the recorded task key.
+[[nodiscard]] bool succeedPendingVideoOpen(WorkspaceHarness& harness,
+                                           const std::vector<std::filesystem::path>& paths,
+                                           const std::size_t referenceSlot = 0U) {
+    const auto rate = domain::RationalRate::create(30, 1);
+    if (!rate.hasValue()) {
+        return false;
+    }
+    const auto openCommand =
+        std::find_if(harness.submitted.rbegin(),
+                     harness.submitted.rend(),
+                     [](const application::PlaybackCommand& command) {
+                         return std::holds_alternative<application::OpenComparisonCommand>(command);
+                     });
+    if (openCommand == harness.submitted.rend()) {
+        return false;
+    }
+    if (!installValidatedVideoSet(
+            harness.snapshot, paths, rate.value(), 100, 3'333'334, referenceSlot)) {
+        return false;
+    }
+    harness.snapshot->displayedFrame = domain::FrameId{0};
+    harness.terminals.push_back(application::CommandTerminal{
+        .context = application::commandContext(*openCommand),
+        .outcome = application::CommandOutcome::Succeeded,
+    });
+    harness.controller->refreshProjection();
+    harness.settle();
+    return true;
+}
 
 // The real inspector's Repeater consumes [label, value] pairs. A bare label string
 // is indexable too, but silently renders its first two characters instead of the ratio.
@@ -1712,7 +1761,19 @@ TEST(MainQmlContractTests, InstantiatesRootAndSeparatesManualAlignmentStates) {
     EXPECT_LT(nextButton->x(), nextFiveButton->x());
     EXPECT_LT(nextFiveButton->x(), nextSecondButton->x());
     EXPECT_LT(nextSecondButton->x(), lastButton->x());
-    EXPECT_LT(lastButton->x(), playbackRateCombo->x());
+    // Plan 2026-10-24 §8 layer 2: the playback-rate combo moved from the row's tail into
+    // the LEFT column (current rate beside the centred navigation row), and the long-press
+    // walk-rate selector joined the continuity switch in the RIGHT column. The row-order
+    // witness keeps its inner-button ordering and adds the three-column placement - mapped
+    // to scene coordinates, because the cells are sibling rows inside the layer item.
+    auto* const jogRateCombo = root->findChild<QQuickItem*>(QStringLiteral("jogRateCombo"));
+    ASSERT_NE(jogRateCombo, nullptr);
+    const double rateComboSceneX = playbackRateCombo->mapToScene(QPointF{}).x();
+    const double firstButtonSceneX = firstButton->mapToScene(QPointF{}).x();
+    const double lastButtonSceneX = lastButton->mapToScene(QPointF{}).x();
+    const double jogComboSceneX = jogRateCombo->mapToScene(QPointF{}).x();
+    EXPECT_LT(rateComboSceneX, firstButtonSceneX);
+    EXPECT_GT(jogComboSceneX, lastButtonSceneX);
     // The alignment chip (对齐：…) is always present in a video session, so the analysis
     // chrome stays visible even without difference/ROI/threshold conditions.
     EXPECT_TRUE(analysisChrome->property("visible").toBool());
@@ -2491,13 +2552,23 @@ TEST(MainQmlContractTests, RoleStatesCarryLabelsNotColourAlone) {
         << "the focused chip must carry the 直看 text tag, not just its hue";
     EXPECT_EQ(directLookTag->property("text").toString(), QStringLiteral("直看"));
 
-    // The current comparison pair is named by the two real files in the combo, never by hue.
-    auto* const pairCombo = harness.root->findChild<QQuickItem*>(QStringLiteral("pairCombo"));
-    ASSERT_NE(pairCombo, nullptr);
+    // The current comparison pair is named by the two real files, never by hue or the
+    // slot letters alone: the two-source single pair button stays lit and carries the
+    // real pairLabel on its accessible name (V02).
+    auto* const pairEdge0 = findItemByName(compareBar, QStringLiteral("pairEdgeButton-0"));
+    ASSERT_NE(pairEdge0, nullptr);
+    EXPECT_TRUE(pairEdge0->isVisible());
+    EXPECT_TRUE(pairEdge0->property("checked").toBool());
     const QVariantList edgeList = harness.root->property("differenceEdges").toList();
     ASSERT_FALSE(edgeList.isEmpty());
-    EXPECT_FALSE(edgeList.first().toMap().value(QStringLiteral("pairLabel")).toString().isEmpty())
+    const QString firstPairLabel =
+        edgeList.first().toMap().value(QStringLiteral("pairLabel")).toString();
+    EXPECT_FALSE(firstPairLabel.isEmpty())
         << "the pair selector must name the two compared files as text";
+    EXPECT_EQ(QQmlProperty(pairEdge0, QStringLiteral("Accessible.name"), qmlContext(pairEdge0))
+                  .read()
+                  .toString(),
+              firstPairLabel);
 }
 
 // U01: the docked/drawer reflow reads the canvas width left after the panels that actually
@@ -2817,12 +2888,18 @@ TEST(MainQmlContractTests, TerminologySpeaksUserActionsAndLayeringFollowsTheTask
     ASSERT_NE(sourceBar, nullptr);
     EXPECT_TRUE(compareBar->isVisible());
     EXPECT_TRUE(sourceBar->isVisible());
-    auto* const pairCombo = harness.root->findChild<QQuickItem*>(QStringLiteral("pairCombo"));
-    ASSERT_NE(pairCombo, nullptr);
-    EXPECT_EQ(QQmlProperty(pairCombo, QStringLiteral("Accessible.name"), qmlContext(pairCombo))
+    // Two sources name their one pair: the single resident button stays lit and its
+    // accessible name is the two real files (the pairLabel role), never the bare slot
+    // letters (V02).
+    auto* const pairEdge0 = findItemByName(compareBar, QStringLiteral("pairEdgeButton-0"));
+    ASSERT_NE(pairEdge0, nullptr);
+    EXPECT_TRUE(pairEdge0->isVisible()) << visibleChainText(pairEdge0);
+    const QVariantList edgeList = harness.root->property("differenceEdges").toList();
+    ASSERT_FALSE(edgeList.isEmpty());
+    EXPECT_EQ(QQmlProperty(pairEdge0, QStringLiteral("Accessible.name"), qmlContext(pairEdge0))
                   .read()
                   .toString(),
-              QStringLiteral("比较对象"));
+              edgeList.first().toMap().value(QStringLiteral("pairLabel")).toString());
 
     // A single ordinary video: the comparison pair and the GT role chrome disappear.
     auto single = domain::ComparisonValidator::validate(std::vector<domain::ComparisonSource>{
@@ -2856,6 +2933,9 @@ TEST(MainQmlContractTests, TerminologySpeaksUserActionsAndLayeringFollowsTheTask
         << "a single video keeps the comparison tasks on screen, disabled, so the product's "
            "purpose is visible before a second file exists";
     EXPECT_TRUE(sourceBar->isVisible());
+    // The pair selector retires with the second source: no edges, no buttons.
+    EXPECT_EQ(findItemByName(compareBar, QStringLiteral("pairEdgeButton-0")), nullptr)
+        << "a single video has no comparison pair to select";
 
     // The transport names the user action, not the continuity policy enum.
     EXPECT_EQ(harness.root->property("playbackModeLabel").toString(), QStringLiteral("流畅优先"));
@@ -3226,6 +3306,10 @@ TEST(MainQmlContractTests, ProtocolRowNavigatesGeneratedFramesThroughTheCommandC
     ASSERT_NE(clearChip, nullptr);
     ASSERT_NE(loadChip, nullptr);
     ASSERT_NE(badge, nullptr);
+    // Plan §8 layer 4: with a protocol loaded the row owns its permanent place; before a
+    // protocol exists the import entry lives inside the on-demand expansion, so the entry
+    // chip of this contract starts from the layer being open (the row below opens with a
+    // loaded protocol regardless).
     EXPECT_TRUE(loadChip->property("visible").toBool());
     EXPECT_TRUE(nextChip->property("visible").toBool());
     EXPECT_TRUE(nextChip->property("chipEnabled").toBool());
@@ -3270,7 +3354,17 @@ TEST(MainQmlContractTests, ProtocolRowNavigatesGeneratedFramesThroughTheCommandC
     EXPECT_FALSE(nextChip->property("visible").toBool());
     EXPECT_FALSE(previousChip->property("visible").toBool());
     EXPECT_FALSE(clearChip->property("visible").toBool());
+    // Plan §8 layer 4: an unloaded protocol no longer costs a permanent row - the import
+    // entry returns to the on-demand expansion, so its reachability witness opens the layer
+    // the way the playback row's 更多 entry does and finds the chip there.
+    auto* const transportBar =
+        harness.root->findChild<QQuickItem*>(QStringLiteral("transportBar"));
+    ASSERT_NE(transportBar, nullptr);
+    EXPECT_FALSE(loadChip->property("visible").toBool());
+    transportBar->setProperty("transportExpanded", true);
+    harness.settle();
     EXPECT_TRUE(loadChip->property("visible").toBool());
+    transportBar->setProperty("transportExpanded", false);
 }
 
 // Range commands reach the authoritative snapshot after the shell has already notified QML.
@@ -3377,6 +3471,11 @@ TEST(MainQmlContractTests, ExportRangeEnablesAfterAuthoritativeSnapshotArrives) 
     EXPECT_EQ(availabilityNotifications, 1);
 
     // Exercise real mouse delivery rather than invoking the clicked signal on a disabled item.
+    // The right-hand range cell positions itself by binding (plan §8 layer 3); those bindings
+    // settle on polish, so drain the queue first or the mapped point describes the pre-reflow
+    // position and the press lands where the chip no longer is.
+    for (int iteration = 0; iteration < 5; ++iteration)
+        QCoreApplication::processEvents();
     const QPointF chipCenter = chip->mapToScene(QPointF{chip->width() / 2, chip->height() / 2});
     sendMousePress(*window, chipCenter);
     sendMouseRelease(*window, chipCenter);
@@ -6041,16 +6140,16 @@ TEST(MainQmlContractTests, FullCanvasFocusSwitchesSourceWithoutSeekOrPairOrRoleC
     EXPECT_EQ(harness.submitted.size(), submittedBefore);
 
     // The original switching entries survive the new group and stay functional: mode buttons,
-    // the pair combo and the fixed-GT candidate switch are visible in this 3-source
-    // pair-relevant mode, and the difference peek is offered next to the new direct-look
-    // entries.
+    // the resident pair-edge group and the fixed-GT candidate switch are visible in this
+    // 3-source difference task, and the difference peek is offered next to the new
+    // direct-look entries.
     auto* const sideModeButton =
         harness.root->findChild<QQuickItem*>(QStringLiteral("sideModeButton"));
     ASSERT_NE(sideModeButton, nullptr);
     EXPECT_TRUE(sideModeButton->isVisible());
-    auto* const pairCombo = harness.root->findChild<QQuickItem*>(QStringLiteral("pairCombo"));
-    ASSERT_NE(pairCombo, nullptr);
-    EXPECT_TRUE(pairCombo->isVisible()) << visibleChainText(pairCombo);
+    auto* const pairEdge0 = findItemByName(bar, QStringLiteral("pairEdgeButton-0"));
+    ASSERT_NE(pairEdge0, nullptr);
+    EXPECT_TRUE(pairEdge0->isVisible()) << visibleChainText(pairEdge0);
     auto* const switchCandidate =
         harness.root->findChild<QQuickItem*>(QStringLiteral("switchCandidateButton"));
     ASSERT_NE(switchCandidate, nullptr);
@@ -6318,7 +6417,12 @@ TEST(MainQmlContractTests, SourceChipDirectLookSwitchesWithoutTouchingMediaTruth
 // V02: the three-source pair selector names the two real files of each edge, so "which clip
 // am I comparing" never hides behind the A/B/C slot letters. The letters stay available on
 // the "label" role for the inspector rows.
-TEST(MainQmlContractTests, PairComboNamesTheTwoRealSourceFiles) {
+// "任意比较对一步切换": the resident pair-edge button group. Three sources show three
+// mutually exclusive buttons beside the mode tasks in every tier; the caption is the slot
+// letters (A↔B / A↔C / B↔C) so the group fits the compact row, while the two REAL file
+// names (pairLabel) ride on tooltip/helpText/Accessible.name - a same-letter relabel can
+// never masquerade as a pair switch (V02, the old combo's contract carried over).
+TEST(MainQmlContractTests, PairEdgeButtonGroupNamesRealFilesAndLightsOneEdge) {
     ThreeSourceFocusHarness harness;
     ASSERT_TRUE(harness.create()) << harness.error;
 
@@ -6332,24 +6436,241 @@ TEST(MainQmlContractTests, PairComboNamesTheTwoRealSourceFiles) {
     harness.preferences.setViewMode(ReviewPreferencesController::ViewMode::Difference);
     QCoreApplication::processEvents();
 
-    auto* const pairCombo = harness.root->findChild<QQuickItem*>(QStringLiteral("pairCombo"));
-    ASSERT_NE(pairCombo, nullptr);
-    EXPECT_TRUE(pairCombo->isVisible()) << visibleChainText(pairCombo);
-    // The default edge is A↔B; the selector names both files, not "A ↔ B".
-    EXPECT_EQ(pairCombo->property("currentText").toString(),
+    auto* const bar = harness.root->findChild<QQuickItem*>(QStringLiteral("compareModeBar"));
+    ASSERT_NE(bar, nullptr);
+    QQuickItem* const edges[3] = {findItemByName(bar, QStringLiteral("pairEdgeButton-0")),
+                                  findItemByName(bar, QStringLiteral("pairEdgeButton-1")),
+                                  findItemByName(bar, QStringLiteral("pairEdgeButton-2"))};
+    for (auto* const edge : edges) {
+        ASSERT_NE(edge, nullptr);
+        EXPECT_TRUE(edge->isVisible()) << visibleChainText(edge);
+    }
+    // Captions come from the edge's session slots (String.fromCharCode(65 + slot)).
+    EXPECT_EQ(edges[0]->property("text").toString(), QStringLiteral("A↔B"));
+    EXPECT_EQ(edges[1]->property("text").toString(), QStringLiteral("A↔C"));
+    EXPECT_EQ(edges[2]->property("text").toString(), QStringLiteral("B↔C"));
+
+    // Every offered edge names its two real files; the accessible name of each button is
+    // exactly that pairLabel, so hover and assistive tech read the real identity.
+    const QVariantList edgeRows = harness.controller->differenceEdges();
+    ASSERT_EQ(edgeRows.size(), 3);
+    EXPECT_EQ(edgeRows.at(0).toMap().value(QStringLiteral("pairLabel")).toString(),
               QStringLiteral("gt.mp4 ↔ model-1.mp4"));
-    // Every offered edge names its two real files.
-    const QVariantList edges = harness.controller->differenceEdges();
-    ASSERT_EQ(edges.size(), 3);
-    EXPECT_EQ(edges.at(0).toMap().value(QStringLiteral("pairLabel")).toString(),
-              QStringLiteral("gt.mp4 ↔ model-1.mp4"));
-    EXPECT_EQ(edges.at(1).toMap().value(QStringLiteral("pairLabel")).toString(),
+    EXPECT_EQ(edgeRows.at(1).toMap().value(QStringLiteral("pairLabel")).toString(),
               QStringLiteral("gt.mp4 ↔ model-2.mp4"));
-    EXPECT_EQ(edges.at(2).toMap().value(QStringLiteral("pairLabel")).toString(),
+    EXPECT_EQ(edgeRows.at(2).toMap().value(QStringLiteral("pairLabel")).toString(),
               QStringLiteral("model-1.mp4 ↔ model-2.mp4"));
+    EXPECT_EQ(QQmlProperty(edges[1], QStringLiteral("Accessible.name"), qmlContext(edges[1]))
+                  .read()
+                  .toString(),
+              QStringLiteral("gt.mp4 ↔ model-2.mp4"));
     // The slot-letter role stays for callers that address slots.
-    EXPECT_EQ(edges.at(0).toMap().value(QStringLiteral("label")).toString(),
+    EXPECT_EQ(edgeRows.at(0).toMap().value(QStringLiteral("label")).toString(),
               QStringLiteral("A ↔ B"));
+
+    // Exactly one button is lit - the default edge A↔B; GT is an optional role, so the
+    // candidate-only and reference pairs light up the same way once selected.
+    EXPECT_TRUE(edges[0]->property("checked").toBool());
+    EXPECT_FALSE(edges[1]->property("checked").toBool());
+    EXPECT_FALSE(edges[2]->property("checked").toBool());
+}
+
+// The same group in a two-path task: one click switches the compared pair through the
+// real command chain and NOTHING else - the mode stays exactly where it was (V02: no
+// seek, no mode change, observation kept).
+TEST(MainQmlContractTests, PairEdgeButtonGroupSwitchesThePairInOneClick) {
+    ThreeSourceFocusHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    auto* const bar = harness.root->findChild<QQuickItem*>(QStringLiteral("compareModeBar"));
+    ASSERT_NE(bar, nullptr);
+    QQuickItem* const edges[3] = {findItemByName(bar, QStringLiteral("pairEdgeButton-0")),
+                                  findItemByName(bar, QStringLiteral("pairEdgeButton-1")),
+                                  findItemByName(bar, QStringLiteral("pairEdgeButton-2"))};
+    for (auto* const edge : edges)
+        ASSERT_NE(edge, nullptr);
+
+    // Resident in every task - the pair is not a difference-only affordance anymore
+    // (no pairRelevant gating): layout tasks and difference tasks all keep the group.
+    for (const auto mode : {ReviewPreferencesController::ViewMode::SideBySide,
+                            ReviewPreferencesController::ViewMode::ThreeUp,
+                            ReviewPreferencesController::ViewMode::Wipe,
+                            ReviewPreferencesController::ViewMode::Difference}) {
+        harness.preferences.setViewMode(mode);
+        harness.settle();
+        for (auto* const edge : edges)
+            EXPECT_TRUE(edge->isVisible()) << visibleChainText(edge);
+    }
+
+    // The switch itself, inside a two-path task: exclusive highlight, real command, no
+    // mode change. The selection travels as SetActiveComparisonPairCommand through the
+    // fake port (D07) and lands the way the application layer would land it.
+    const auto landSubmittedPairCommand = [&harness]() -> void {
+        ASSERT_TRUE(std::holds_alternative<application::SetActiveComparisonPairCommand>(
+            harness.submitted.back()))
+            << "the pair button must submit a real pair command, not something else";
+        const auto& pairCommand =
+            std::get<application::SetActiveComparisonPairCommand>(harness.submitted.back());
+        ASSERT_TRUE(pairCommand.pair.has_value());
+        auto accepted = std::make_shared<application::SessionSnapshot>(*harness.snapshot);
+        accepted->activeComparisonPair = *pairCommand.pair;
+        harness.snapshot = accepted;
+        for (const application::PlaybackCommand& command : harness.submitted) {
+            harness.terminals.push_back(application::CommandTerminal{
+                .context = application::commandContext(command),
+                .outcome = application::CommandOutcome::Succeeded,
+            });
+        }
+        harness.controller->refreshProjection();
+        harness.settle();
+    };
+
+    EXPECT_TRUE(edges[0]->property("checked").toBool());
+    const std::size_t submittedBefore = harness.submitted.size();
+    ASSERT_TRUE(QMetaObject::invokeMethod(edges[1], "clicked"));
+    harness.settle();
+    ASSERT_GT(harness.submitted.size(), submittedBefore)
+        << "the pair button must submit a real pair command through the port";
+    landSubmittedPairCommand();
+    EXPECT_EQ(harness.controller->effectiveDifferenceEdge(), ComparisonSurface::Edge0And2);
+    EXPECT_FALSE(edges[0]->property("checked").toBool());
+    EXPECT_TRUE(edges[1]->property("checked").toBool());
+    EXPECT_FALSE(edges[2]->property("checked").toBool());
+    // V02 regression guard: the pair switch never switches the mode.
+    EXPECT_EQ(harness.root->property("effectiveViewMode").toInt(),
+              static_cast<int>(ComparisonSurface::Difference));
+}
+
+// "任意比较对一步切换" fallback: the four full-group views (ThreeUp / ReferenceFocus /
+// DualDifference / RoiTriplet) show every source at once, so choosing a pair from one of
+// them returns to the last used two-path comparison mode on that pair - 并排 before any
+// two-path mode was used, the remembered one afterwards. RoiTriplet is a full-group view
+// because its shared-ROI windows cover all sources, not just the active pair.
+TEST(MainQmlContractTests, PairSelectionFromFullGroupViewsReturnsToTheLastPairMode) {
+    ThreeSourceFocusHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    auto* const bar = harness.root->findChild<QQuickItem*>(QStringLiteral("compareModeBar"));
+    ASSERT_NE(bar, nullptr);
+    QQuickItem* const edges[3] = {findItemByName(bar, QStringLiteral("pairEdgeButton-0")),
+                                  findItemByName(bar, QStringLiteral("pairEdgeButton-1")),
+                                  findItemByName(bar, QStringLiteral("pairEdgeButton-2"))};
+    for (auto* const edge : edges)
+        ASSERT_NE(edge, nullptr);
+
+    const auto landSubmittedPairCommand = [&harness]() -> void {
+        ASSERT_TRUE(std::holds_alternative<application::SetActiveComparisonPairCommand>(
+            harness.submitted.back()));
+        const auto& pairCommand =
+            std::get<application::SetActiveComparisonPairCommand>(harness.submitted.back());
+        ASSERT_TRUE(pairCommand.pair.has_value());
+        auto accepted = std::make_shared<application::SessionSnapshot>(*harness.snapshot);
+        accepted->activeComparisonPair = *pairCommand.pair;
+        harness.snapshot = accepted;
+        for (const application::PlaybackCommand& command : harness.submitted) {
+            harness.terminals.push_back(application::CommandTerminal{
+                .context = application::commandContext(command),
+                .outcome = application::CommandOutcome::Succeeded,
+            });
+        }
+        harness.controller->refreshProjection();
+        harness.settle();
+    };
+    const auto clickEdge = [&harness, &landSubmittedPairCommand](QQuickItem* edge) -> void {
+        ASSERT_TRUE(QMetaObject::invokeMethod(edge, "clicked"));
+        harness.settle();
+        landSubmittedPairCommand();
+    };
+
+    // First fallback, from ThreeUp: no two-path mode was used yet, so the pair click
+    // lands on 并排 (SideBySide) with the chosen pair applied. This pass must run
+    // before any mode cycling below - every two-path mode it enters is remembered.
+    harness.preferences.setViewMode(ReviewPreferencesController::ViewMode::ThreeUp);
+    harness.settle();
+    clickEdge(edges[1]);
+    EXPECT_EQ(harness.root->property("effectiveViewMode").toInt(),
+              static_cast<int>(ComparisonSurface::SideBySide));
+    EXPECT_EQ(harness.controller->effectiveDifferenceEdge(), ComparisonSurface::Edge0And2);
+
+    // Remembered mode: use 分割线 (Wipe), go full-group again (RoiTriplet), and the
+    // same click returns to Wipe - not to the initial default.
+    harness.preferences.setViewMode(ReviewPreferencesController::ViewMode::Wipe);
+    harness.settle();
+    harness.preferences.setViewMode(ReviewPreferencesController::ViewMode::RoiTriplet);
+    harness.settle();
+    clickEdge(edges[2]);
+    EXPECT_EQ(harness.root->property("effectiveViewMode").toInt(),
+              static_cast<int>(ComparisonSurface::Wipe));
+    EXPECT_EQ(harness.controller->effectiveDifferenceEdge(), ComparisonSurface::Edge1And2);
+
+    // Pin the full-group set itself (last, because the cycling is remembered): a typo
+    // in the QML boolean would otherwise narrow the fallback to a subset of the four
+    // views.
+    for (const auto mode : {ReviewPreferencesController::ViewMode::SideBySide,
+                            ReviewPreferencesController::ViewMode::Wipe,
+                            ReviewPreferencesController::ViewMode::Difference,
+                            ReviewPreferencesController::ViewMode::AnalysisGrid}) {
+        harness.preferences.setViewMode(mode);
+        harness.settle();
+        EXPECT_FALSE(harness.root->property("fullGroupView").toBool())
+            << "two-path modes are not full-group views";
+    }
+    for (const auto mode : {ReviewPreferencesController::ViewMode::ThreeUp,
+                            ReviewPreferencesController::ViewMode::ReferenceFocus,
+                            ReviewPreferencesController::ViewMode::RoiTriplet,
+                            ReviewPreferencesController::ViewMode::DualDifference}) {
+        harness.preferences.setViewMode(mode);
+        harness.settle();
+        EXPECT_TRUE(harness.root->property("fullGroupView").toBool())
+            << "every source-covering view is a full-group view";
+    }
+}
+
+// C keeps its original meaning ("按 C → 参考不动，换另一个版本"): the fixed-GT candidate
+// switch is a pure pair flip and never leaves the current view. The GT-anchored
+// DualDifference is the case that would regress - its canvas does not follow the active
+// edge (the layout takes the reference slot and the two non-reference slots), so the
+// switch must keep it, while the EXPLICIT pair entries (button group, context menu,
+// inspector rows) still apply the full-group fallback (the test above).
+TEST(MainQmlContractTests, CandidateSwitchKeepsTheDualDifferenceCanvas) {
+    ThreeSourceFocusHarness harness;
+    ASSERT_TRUE(harness.create()) << harness.error;
+
+    harness.preferences.setViewMode(ReviewPreferencesController::ViewMode::DualDifference);
+    harness.settle();
+    ASSERT_EQ(harness.root->property("effectiveViewMode").toInt(),
+              static_cast<int>(ComparisonSurface::DualDifference));
+    ASSERT_EQ(harness.controller->effectiveDifferenceEdge(), ComparisonSurface::Edge0And1);
+
+    // The C key path runs through the same switchCandidateEdge the button and the folded
+    // menu row call; this harness anchors the GT on slot 2 (C), so the flip from {A,B}
+    // lands on {A,GT}.
+    const std::size_t submittedBefore = harness.submitted.size();
+    QVariant switched;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        harness.root.get(), "switchCandidateEdge", Q_RETURN_ARG(QVariant, switched)));
+    EXPECT_TRUE(switched.toBool());
+    harness.settle();
+    ASSERT_GT(harness.submitted.size(), submittedBefore)
+        << "the candidate switch must submit a real pair command through the port";
+    ASSERT_TRUE(std::holds_alternative<application::SetActiveComparisonPairCommand>(
+        harness.submitted.back()));
+    const auto& pairCommand =
+        std::get<application::SetActiveComparisonPairCommand>(harness.submitted.back());
+    ASSERT_TRUE(pairCommand.pair.has_value());
+    auto accepted = std::make_shared<application::SessionSnapshot>(*harness.snapshot);
+    accepted->activeComparisonPair = *pairCommand.pair;
+    harness.snapshot = accepted;
+    for (const application::PlaybackCommand& command : harness.submitted) {
+        harness.terminals.push_back(application::CommandTerminal{
+            .context = application::commandContext(command),
+            .outcome = application::CommandOutcome::Succeeded,
+        });
+    }
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_EQ(harness.controller->effectiveDifferenceEdge(), ComparisonSurface::Edge0And2);
+    // The view never left the GT-anchored dual difference.
+    EXPECT_EQ(harness.root->property("effectiveViewMode").toInt(),
+              static_cast<int>(ComparisonSurface::DualDifference));
 }
 
 // V03: the mode bar is organized by task. The four daily tasks - 并排 / 分割线 / 局部联动 /
@@ -6368,7 +6689,9 @@ TEST(MainQmlContractTests, ModeBarReflowsWithoutOverlappingActions) {
                             QStringLiteral("roiTripletTaskButton"),
                             QStringLiteral("diffModeButton"),
                             QStringLiteral("differencePeekButton"),
-                            QStringLiteral("pairCombo"),
+                            QStringLiteral("pairEdgeButton-0"),
+                            QStringLiteral("pairEdgeButton-1"),
+                            QStringLiteral("pairEdgeButton-2"),
                             QStringLiteral("switchCandidateButton"),
                             QStringLiteral("canvasFocusAButton"),
                             QStringLiteral("canvasFocusBButton"),
@@ -7283,6 +7606,12 @@ TEST(MainQmlContractTests, ImageEditTransformMenuChangesTheWorkingPixelsAndRetir
         harness.imageReview.setCompareMode(editingSecondary ? 0 : 2);
         workspace->setProperty("singleViewShowSecondary", editingSecondary);
         ASSERT_TRUE(QMetaObject::invokeMethod(start, "clicked"));
+        harness.settle();
+        // P3 second cut: whole-image operations live in the right parameter panel, which
+        // is a closable drawer at this window width (the canvas guard keeps 600 px).
+        // Open it the way the band's 参数 entry does, then the transform group is on
+        // screen and the menu contract below drives the real visible button.
+        workspace->setProperty("imagePanelDrawerOpen", true);
         harness.settle();
         EXPECT_EQ(harness.imageReview.compareMode(), editingSecondary ? 0 : 2);
         EXPECT_EQ(workspace->property("compareMode").toInt(), 0);
@@ -12835,14 +13164,29 @@ TEST(MainQmlContractTests, ShortcutBindingsMenuAndHelpStayInSync) {
 
     // Duplicate keys inside one activation context shadow each other. Esc is the one
     // documented overlap: the presentation Esc (full screen / hidden chrome) and the
-    // narrow-window drawer Esc are never enabled for the same state.
+    // narrow-window drawer Esc are never enabled for the same state. The Ctrl+Tab pair is
+    // the second documented one (video task tabs design §8): the image and video tab
+    // cycles share the sequences by design, and their enabled bindings are mutually
+    // exclusive on the active workspace - the video-tabs tests pin that exclusivity for
+    // real, by triggering the bindings in both workspaces.
+    const QStringList documentedOverlaps{
+        QStringLiteral("Esc"),
+        QStringLiteral("Ctrl+Tab"),
+        QStringLiteral("Ctrl+Shift+Tab"),
+    };
     QStringList sorted = sequences;
     sorted.sort();
     for (qsizetype index = 1; index < sorted.size(); ++index) {
-        if (sorted.at(index) == sorted.at(index - 1) && sorted.at(index) != QStringLiteral("Esc")) {
+        if (sorted.at(index) == sorted.at(index - 1) &&
+            !documentedOverlaps.contains(sorted.at(index))) {
             ADD_FAILURE() << "sequence " << sorted.at(index).toStdString()
                           << " is bound more than once";
         }
+    }
+    for (const QString& pairSequence :
+         {QStringLiteral("Ctrl+Tab"), QStringLiteral("Ctrl+Shift+Tab")}) {
+        EXPECT_EQ(sequences.count(pairSequence), 2)
+            << pairSequence.toStdString() << " must stay exactly the image/video tab-cycle pair";
     }
 
     // Menu labels must reference a real binding; Alt+F4 is menu-only because the window
@@ -15280,9 +15624,12 @@ TEST(MainQmlContractTests, ImageCommandPanelCompactTierCollapsesToBands) {
     const double wideHeight = panel->height();
     EXPECT_GT(wideHeight, 60.0) << wideHeight;
 
-    // Compact tier, viewing state: a single band, with the identity chips, the mode row and
-    // the on-demand menu all alive in it. The tier threshold is 680 (window minimum + frame
-    // rounding band), so the requested 960x640 - settled 961x641 - sits safely inside it.
+    // Compact tier, viewing state: one command band plus the source identity strip, with
+    // the identity chips, the mode row and the on-demand menu all alive in it. The tier
+    // threshold is 680 (window minimum + frame rounding band), so the requested 960x640 -
+    // settled 961x641 - sits safely inside it. Budget: 48 for the merged command band
+    // (mode row + folded session flow) + 32 for the always-on source strip (workspace
+    // redesign §2/§10.3 - the A/B identity survives the compact tier).
     harness.window->resize(960, 640);
     harness.settle();
     harness.settleAnimations();
@@ -15300,12 +15647,15 @@ TEST(MainQmlContractTests, ImageCommandPanelCompactTierCollapsesToBands) {
     EXPECT_TRUE(moreButton->isVisible());
     // Self-explaining width diagnostics: a wrap in either flow is what pushes the band past
     // its budget, and the two numbers below name the offender directly.
-    EXPECT_LE(panel->height(), 48.0)
+    EXPECT_LE(panel->height(), 80.0)
         << "compact viewing panel height " << panel->height() << "; fileRow compact width "
         << fileRow->property("compactContentWidth").toDouble() << "; modeRow width "
         << modeRow->width();
 
-    // Compact tier, edit state: chips+tools line plus the params plate (Q3 keeps two rows).
+    // Compact tier, edit state: the session line plus the fixed short row (workspace
+    // redesign §7/§10.2 - the full parameter stack moved into the right panel, which is a
+    // closable drawer at this width, so the short row carries the tool name and the
+    // confirm/cancel pair), plus the source strip. imageEditParamsRow is that short row.
     ASSERT_TRUE(QMetaObject::invokeMethod(workspace, "beginImageEdit"));
     harness.settle();
     harness.settleAnimations();
@@ -15313,15 +15663,15 @@ TEST(MainQmlContractTests, ImageCommandPanelCompactTierCollapsesToBands) {
         harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditParamsRow"));
     ASSERT_NE(paramsRow, nullptr);
     EXPECT_TRUE(paramsRow->isVisible());
-    EXPECT_LE(panel->height(), 88.0) << "compact editing panel height " << panel->height()
-                                     << "; params plate height " << paramsRow->height();
+    EXPECT_LE(panel->height(), 120.0) << "compact editing panel height " << panel->height()
+                                      << "; params short row height " << paramsRow->height();
 
     // Ending the edit inside the tier must restore the single viewing band - the state the
     // zero-regression witness below is measured against.
     ASSERT_TRUE(QMetaObject::invokeMethod(workspace, "finishImageEdit"));
     harness.settle();
     harness.settleAnimations();
-    EXPECT_LE(panel->height(), 48.0) << "compact viewing band must return after finishing the edit";
+    EXPECT_LE(panel->height(), 80.0) << "compact viewing band must return after finishing the edit";
 
     // Back to the wide window: the exact two-band viewing height returns.
     harness.window->resize(1440, 900);
@@ -15530,10 +15880,12 @@ TEST(MainQmlContractTests, ImageStatusBarCompactTierCollapsesToSingleBand) {
 // colours intact, the folded long name and role tags on the chip's tooltip - and the click /
 // direct-look semantics are exactly the wide-row ones. The mode bar keeps the four daily
 // tasks as two-character segmented labels and folds the direct-look group, the layout
-// submenu, the pair selector, the candidate switch and the exports into the on-demand 更多
+// submenu, the candidate switch and the exports into the on-demand 更多
 // menu; every folded entry drives the exact signal its wide-row twin drives, carries its
-// shortcut in the trailing column and its hover explanation in helpText. The hold-to-peek
-// GT entry stays on the row - a menu row cannot be held down. The wide window is the
+// shortcut in the trailing column and its hover explanation in helpText. The pair-edge
+// button group is the one pair entry that does NOT fold: it stays on the merged row with
+// letter captions ("任意比较对一步切换"). The hold-to-peek
+// GT entry stays on the row too - a menu row cannot be held down. The wide window is the
 // zero-regression witness: two stacked 40 px rows and the full labels.
 TEST(MainQmlContractTests, CompactTierMergesVideoSourceStripAndModeBar) {
     ThreeSourceFocusHarness harness;
@@ -15557,11 +15909,13 @@ TEST(MainQmlContractTests, CompactTierMergesVideoSourceStripAndModeBar) {
     ASSERT_NE(wipeButton, nullptr);
 
     // Wide witness (1440x900): the two stacked 40 px rows and the full 分割线 label.
+    // Workspace redesign §2: the mode bar (command band) is the upper row, the source strip
+    // the band directly above the canvas.
     EXPECT_FALSE(harness.root->property("compactChrome").toBool()) << tierDiagnostics();
-    EXPECT_DOUBLE_EQ(strip->y(), 0.0);
-    EXPECT_DOUBLE_EQ(strip->height(), 40.0);
-    EXPECT_DOUBLE_EQ(bar->y(), 40.0);
+    EXPECT_DOUBLE_EQ(bar->y(), 0.0);
     EXPECT_DOUBLE_EQ(bar->height(), 40.0);
+    EXPECT_DOUBLE_EQ(strip->y(), 40.0);
+    EXPECT_DOUBLE_EQ(strip->height(), 40.0);
     EXPECT_DOUBLE_EQ(bar->x(), 0.0);
     EXPECT_TRUE(wipeButton->property("text").toString().contains(QStringLiteral("分割线")));
 
@@ -15648,17 +16002,17 @@ TEST(MainQmlContractTests, CompactTierMergesVideoSourceStripAndModeBar) {
     EXPECT_EQ(harness.shell->canvasFocusSlot(), -1);
     EXPECT_FALSE(compactFocusA->property("checked").toBool());
 
-    // The folded pair selector names the two real files (never slot letters) and switches
-    // the edge through the same edgeRequested signal the wide combo emits. The pair
-    // selection travels as SetActiveComparisonPairCommand through the fake port (D07), so
-    // it lands the way the TAlternatesTheActualThreeSourcePairWithRealKeys precedent lands
-    // it: the submitted pair writes back into the snapshot, succeeded terminals come back
-    // for every pending command (so `busy` clears the way the application layer would), and
+    // The resident pair-edge group switches the edge through the same edgeRequested
+    // signal every pair entry drives. The pair selection travels as
+    // SetActiveComparisonPairCommand through the fake port (D07), so it lands the way
+    // the TAlternatesTheActualThreeSourcePairWithRealKeys precedent lands it: the
+    // submitted pair writes back into the snapshot, succeeded terminals come back for
+    // every pending command (so `busy` clears the way the application layer would), and
     // the projection refreshes.
     const auto landSubmittedPairCommand = [&harness]() -> void {
         ASSERT_TRUE(std::holds_alternative<application::SetActiveComparisonPairCommand>(
             harness.submitted.back()))
-            << "the folded row must submit a real pair command, not something else";
+            << "the pair entry must submit a real pair command, not something else";
         const auto& pairCommand =
             std::get<application::SetActiveComparisonPairCommand>(harness.submitted.back());
         ASSERT_TRUE(pairCommand.pair.has_value());
@@ -15677,23 +16031,38 @@ TEST(MainQmlContractTests, CompactTierMergesVideoSourceStripAndModeBar) {
 
     harness.preferences.setViewMode(ReviewPreferencesController::ViewMode::Difference);
     harness.settle();
-    auto* const foldedPairCombo = bar->findChild<QQuickItem*>(QStringLiteral("pairCombo"));
-    ASSERT_NE(foldedPairCombo, nullptr);
-    EXPECT_FALSE(foldedPairCombo->isVisible());
-    auto* const compactEdge1 =
-        harness.root->findChild<QObject*>(QStringLiteral("compactPairEdgeItem-1"));
-    ASSERT_NE(compactEdge1, nullptr);
-    const QString edgeLabel = compactEdge1->property("text").toString();
+    // The pair-edge group stays ON the merged row in the compact tier (letter captions),
+    // and the 更多 menu no longer carries the folded pair rows: neither the old combo nor
+    // the folded radio rows exist anywhere in the tree.
+    EXPECT_EQ(bar->findChild<QQuickItem*>(QStringLiteral("pairCombo")), nullptr)
+        << "the combo was replaced by the resident button group";
+    EXPECT_EQ(harness.root->findChild<QObject*>(QStringLiteral("compactPairEdgeItem-1")), nullptr)
+        << "the folded pair rows left the 更多 menu with the group going resident";
+    QQuickItem* const inlineEdge1 = findItemByName(bar, QStringLiteral("pairEdgeButton-1"));
+    ASSERT_NE(inlineEdge1, nullptr);
+    EXPECT_TRUE(inlineEdge1->isVisible()) << visibleChainText(inlineEdge1);
+    // Inline means inside the merged 40 px band: the button must sit on the single row
+    // and inside the bar's own bounds.
+    const QPointF inlineEdgeTopLeft = inlineEdge1->mapToItem(bar, QPointF{0.0, 0.0});
+    EXPECT_GE(inlineEdgeTopLeft.y(), 0.0);
+    EXPECT_LE(inlineEdgeTopLeft.y() + inlineEdge1->height(), bar->height());
+    EXPECT_GE(inlineEdgeTopLeft.x(), 0.0);
+    EXPECT_LE(inlineEdgeTopLeft.x() + inlineEdge1->width(), bar->width());
+    const QString edgeLabel = inlineEdge1->property("text").toString();
     EXPECT_TRUE(edgeLabel.contains(QStringLiteral("↔"))) << edgeLabel.toStdString();
     const int edgeBefore = harness.controller->effectiveDifferenceEdge();
     const std::size_t submittedBeforeEdge = harness.submitted.size();
-    ASSERT_TRUE(QMetaObject::invokeMethod(compactEdge1, "triggered"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(inlineEdge1, "clicked"));
     harness.settle();
     ASSERT_GT(harness.submitted.size(), submittedBeforeEdge)
-        << "the folded pair row must submit a real pair command through the port";
+        << "the inline pair button must submit a real pair command through the port";
     landSubmittedPairCommand();
     EXPECT_NE(harness.controller->effectiveDifferenceEdge(), edgeBefore)
-        << "the folded pair row must drive the real edge";
+        << "the inline pair button must drive the real edge";
+    // A pair click from a two-path task (Difference) switches the pair only: even in the
+    // compact tier the mode must not move (V02).
+    EXPECT_EQ(harness.root->property("effectiveViewMode").toInt(),
+              static_cast<int>(ComparisonSurface::Difference));
     // The folded candidate switch flips the edge the same way C does, and both folded rows
     // keep their explanation (EX-04) and their shortcut in the trailing column.
     auto* const compactSwitch =
@@ -15730,7 +16099,7 @@ TEST(MainQmlContractTests, CompactTierMergesVideoSourceStripAndModeBar) {
     harness.settle();
     harness.settleAnimations();
     EXPECT_FALSE(harness.root->property("compactChrome").toBool()) << tierDiagnostics();
-    EXPECT_DOUBLE_EQ(bar->y(), 40.0);
+    EXPECT_DOUBLE_EQ(bar->y(), 0.0);
     EXPECT_DOUBLE_EQ(bar->x(), 0.0);
     EXPECT_TRUE(wipeButton->property("text").toString().contains(QStringLiteral("分割线")));
     // The direct-look buttons are Repeater delegates: like the strip chips, they live in the
@@ -15763,10 +16132,10 @@ TEST(MainQmlContractTests, CompactTierMergesVideoSourceStripAndModeBar) {
     auto* const addVideo = bar->findChild<QObject*>(QStringLiteral("modeBarAddVideoButton"));
     ASSERT_NE(addVideo, nullptr);
     EXPECT_TRUE(addVideo->property("visible").toBool());
-    // Static bounded rows guard on the edge count: a single-source session has no pair
-    // edges at all, so no ghost row may stay offered in the folded menu.
-    EXPECT_FALSE(compactEdge1->property("visible").toBool())
-        << "the bounded pair-edge rows must hide when the session has no edges";
+    // A single-source session has no pair edges at all, so the resident group loses its
+    // whole model: no ghost button may stay offered on the row.
+    EXPECT_EQ(findItemByName(bar, QStringLiteral("pairEdgeButton-0")), nullptr)
+        << "the pair-edge buttons must retire when the session has no edges";
 }
 
 // Flow176 UI rework evidence harness. Runs the same measurement and screenshot protocol
@@ -15935,16 +16304,18 @@ TEST(MainQmlContractTests, ChromeGeometryAndScreenshotEvidence) {
     shot("video-default-1440.png");
     recordWindow(QStringLiteral("video1440"));
     {
-        // UX-13 S4 zero-regression witness: the wide window keeps the two stacked 40 px
-        // chrome rows exactly - the strip at y=0, the mode bar starting at y=40.
+        // Workspace redesign §2 zero-regression witness: the wide window keeps two stacked
+        // 40 px chrome rows - the mode bar (the command band) at y=0 and the source strip
+        // directly above the canvas at y=40; task tabs, when present, sit above both,
+        // right under the menu bar (this harness runs without the task host, so none show).
         auto* const stripItem = recordItem("video1440", QStringLiteral("activeSourceStrip"), true);
         auto* const modeBarItem = recordItem("video1440", QStringLiteral("compareModeBar"), true);
         ASSERT_NE(stripItem, nullptr);
         ASSERT_NE(modeBarItem, nullptr);
-        EXPECT_DOUBLE_EQ(stripItem->y(), 0.0);
-        EXPECT_DOUBLE_EQ(stripItem->height(), 40.0);
-        EXPECT_DOUBLE_EQ(modeBarItem->y(), 40.0);
+        EXPECT_DOUBLE_EQ(modeBarItem->y(), 0.0);
         EXPECT_DOUBLE_EQ(modeBarItem->height(), 40.0);
+        EXPECT_DOUBLE_EQ(stripItem->y(), 40.0);
+        EXPECT_DOUBLE_EQ(stripItem->height(), 40.0);
         EXPECT_DOUBLE_EQ(modeBarItem->x(), 0.0);
     }
     recordItem("video1440", QStringLiteral("transport"), true);
@@ -16085,7 +16456,20 @@ TEST(MainQmlContractTests, ChromeGeometryAndScreenshotEvidence) {
         ASSERT_NE(diff, nullptr);
         EXPECT_TRUE(diff->isVisible());
     }
+    // P3 second cut: the difference statistics live in the image inspector's 对比 page, so
+    // the evidence capture must open the panel through the shell's shared 检查器 switch -
+    // otherwise the capture would miss the table the redesign moved the numbers into.
+    EXPECT_TRUE(harness.shell->setProperty("inspectorVisible", true));
+    harness.settle();
+    {
+        auto* const paramsPanel =
+            harness.root->findChild<QQuickItem*>(QStringLiteral("imageParamsPanel"));
+        ASSERT_NE(paramsPanel, nullptr);
+        EXPECT_TRUE(paramsPanel->isVisible()) << "the inspector must ride the capture";
+    }
     shot("image-diff-1440.png");
+    EXPECT_TRUE(harness.shell->setProperty("inspectorVisible", false));
+    harness.settle();
 
     clickMode(QStringLiteral("imageModePrimary"), 0);
     EXPECT_TRUE(clickItem(QStringLiteral("imageEditStartButton"), "clicked"));
@@ -16588,6 +16972,1399 @@ TEST(MainQmlContractTests, ImageTabEditSessionStaysBoundToItsOwnTab) {
                                           Q_ARG(QVariant, QVariant{0})));
     EXPECT_TRUE(closedClean.toBool());
     EXPECT_EQ(harness.imageTasks->count(), 1);
+}
+
+// --- Video task tabs (docs/plans/video-task-tabs-design.md, slice 2) ----------------------
+//
+// C1: the merged 打开文件 entry with one video opens a new task tab that activates on the
+// open terminal, and the strip renders above the viewport.
+TEST(MainQmlContractTests, VideoTabsMenuSingleVideoOpensANewActiveTab) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("video_c1.mp4"));
+    ASSERT_TRUE(writeTestPng(path));
+
+    WorkspaceHarness harness;
+    harness.withVideoTasks = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    QVariant accepted;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        harness.root.get(),
+        "openMediaFilesSelection",
+        Q_RETURN_ARG(QVariant, accepted),
+        Q_ARG(QVariant, QVariant::fromValue(QVariantList{QUrl::fromLocalFile(path)}))));
+    // openMediaFilesSelection forwards reviewUrls' verdict to its callers; the drop result
+    // of the merged open entry was historically lost (openNewReviewUrls returned nothing),
+    // which this slice's host routing now relies on.
+    EXPECT_TRUE(accepted.toBool());
+    // The loading record exists before the media terminal arrives (design §2.2 step 3).
+    EXPECT_EQ(harness.videoTasks->count(), 1);
+    EXPECT_EQ(harness.videoTasks->activeIndex(), -1);
+
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {std::filesystem::path{path.toStdWString()}}));
+    EXPECT_EQ(harness.videoTasks->count(), 1);
+    EXPECT_EQ(harness.videoTasks->activeIndex(), 0);
+    const QVariantMap tab = harness.videoTasks->tabs().first().toMap();
+    EXPECT_EQ(tab.value(QStringLiteral("title")).toString(), QStringLiteral("video_c1.mp4"));
+    EXPECT_FALSE(tab.value(QStringLiteral("comparison")).toBool());
+    EXPECT_FALSE(tab.value(QStringLiteral("loading")).toBool());
+    EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 0);
+
+    auto* const strip = harness.root->findChild<QObject*>(QStringLiteral("videoTaskTabs"));
+    ASSERT_NE(strip, nullptr);
+    EXPECT_TRUE(strip->property("visible").toBool());
+    auto* const tabList = strip->findChild<QObject*>(QStringLiteral("videoTaskTabList"));
+    ASSERT_NE(tabList, nullptr);
+    EXPECT_EQ(tabList->property("count").toInt(), 1);
+}
+
+// C2: two videos opened as one comparison task keep the reference dialog's choice as the
+// task key's reference slot.
+TEST(MainQmlContractTests, VideoTabsComparisonOpenRecordsTheReferenceSlot) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    std::vector<std::filesystem::path> paths;
+    QVariantList urls;
+    for (const auto* const name : {"video_c2_a.mp4", "video_c2_b.mp4"}) {
+        const QString path = directory.filePath(QString::fromLatin1(name));
+        ASSERT_TRUE(writeTestPng(path));
+        paths.emplace_back(path.toStdWString());
+        urls.push_back(QUrl::fromLocalFile(path));
+    }
+
+    WorkspaceHarness harness;
+    harness.withVideoTasks = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    // The staged multi-video flow: performVideoReview stages and opens the reference
+    // dialog; accepting B (index 1) as the reference routes through the task host.
+    QVariant reviewed;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "performVideoReview",
+                                          Q_RETURN_ARG(QVariant, reviewed),
+                                          Q_ARG(QVariant, QVariant::fromValue(urls))));
+    EXPECT_TRUE(reviewed.toBool());
+    harness.settle();
+    EXPECT_EQ(harness.shell->stagedSources().size(), 2);
+
+    QVariant opened;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "openDroppedComparison",
+                                          Q_RETURN_ARG(QVariant, opened),
+                                          Q_ARG(QVariant, QVariant{1})));
+    EXPECT_TRUE(opened.toBool());
+    EXPECT_EQ(harness.videoTasks->count(), 1);
+    EXPECT_EQ(harness.videoTasks->activeIndex(), -1);
+
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, paths, 1U));
+    EXPECT_EQ(harness.videoTasks->count(), 1);
+    const QVariantMap tab = harness.videoTasks->tabs().first().toMap();
+    EXPECT_TRUE(tab.value(QStringLiteral("comparison")).toBool());
+    EXPECT_EQ(tab.value(QStringLiteral("sourceCount")).toInt(), 2);
+    EXPECT_EQ(tab.value(QStringLiteral("referenceIndex")).toInt(), 1);
+
+    // The submitted open command carried slot 1 as the reference (GT) role - the recorded
+    // key and the real open agree on the reference identity.
+    const auto openCommand =
+        std::find_if(harness.submitted.cbegin(),
+                     harness.submitted.cend(),
+                     [](const application::PlaybackCommand& command) {
+                         return std::holds_alternative<application::OpenComparisonCommand>(command);
+                     });
+    ASSERT_NE(openCommand, harness.submitted.cend());
+    const auto& sources = std::get<application::OpenComparisonCommand>(*openCommand).sources;
+    ASSERT_EQ(sources.size(), 2U);
+    EXPECT_EQ(sources.at(1U).role, domain::ComparisonRole::kReference);
+}
+
+// C4: reopening the same task focuses its tab - no second record, no rebuild, and the
+// progress the user reached survives untouched.
+TEST(MainQmlContractTests, VideoTabsReopeningTheSameTaskFocusesTheTabAndKeepsProgress) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("video_c4.mp4"));
+    ASSERT_TRUE(writeTestPng(path));
+    const QUrl url = QUrl::fromLocalFile(path);
+    const std::filesystem::path nativePath = path.toStdWString();
+
+    WorkspaceHarness harness;
+    harness.withVideoTasks = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    QVariant first;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "openMediaFilesSelection",
+                                          Q_RETURN_ARG(QVariant, first),
+                                          Q_ARG(QVariant, QVariant::fromValue(QVariantList{url}))));
+    ASSERT_TRUE(first.toBool());
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {nativePath}));
+
+    // Move the live position to frame 40.
+    harness.snapshot->displayedFrame = domain::FrameId{40};
+    harness.controller->refreshProjection();
+    harness.settle();
+    ASSERT_EQ(harness.root->property("currentFrame").toLongLong(), 40);
+
+    const qulonglong epochBefore = harness.controller->sessionEpoch();
+    const auto openCountBefore = std::count_if(
+        harness.submitted.cbegin(),
+        harness.submitted.cend(),
+        [](const application::PlaybackCommand& command) {
+            return std::holds_alternative<application::OpenComparisonCommand>(command);
+        });
+
+    QVariant second;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "openMediaFilesSelection",
+                                          Q_RETURN_ARG(QVariant, second),
+                                          Q_ARG(QVariant, QVariant::fromValue(QVariantList{url}))));
+    EXPECT_TRUE(second.toBool());
+    harness.settle();
+
+    EXPECT_EQ(harness.videoTasks->count(), 1) << "the same task must not open a second tab";
+    EXPECT_EQ(harness.videoTasks->activeIndex(), 0);
+    EXPECT_EQ(harness.controller->sessionEpoch(), epochBefore)
+        << "focusing the current task must not rebuild the session";
+    EXPECT_EQ(harness.root->property("currentFrame").toLongLong(), 40)
+        << "the reached position is the task's progress and stays";
+    const auto openCountAfter = std::count_if(
+        harness.submitted.cbegin(),
+        harness.submitted.cend(),
+        [](const application::PlaybackCommand& command) {
+            return std::holds_alternative<application::OpenComparisonCommand>(command);
+        });
+    EXPECT_EQ(openCountAfter, openCountBefore) << "no second open command may be submitted";
+
+    // Redundant activation of the already-active tab is a no-op on the same group.
+    QVariant activated;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "activateVideoTab",
+                                          Q_RETURN_ARG(QVariant, activated),
+                                          Q_ARG(QVariant, QVariant{0})));
+    EXPECT_TRUE(activated.toBool());
+    harness.settle();
+    EXPECT_EQ(harness.controller->sessionEpoch(), epochBefore);
+    EXPECT_EQ(harness.root->property("currentFrame").toLongLong(), 40);
+}
+
+// C9: startup opens (double-clicked single video, Explorer compare verb) adopt into task
+// records at their terminal; the autoplay semantics stay the shell's own.
+TEST(MainQmlContractTests, VideoTabsStartupOpensAdoptIntoTasks) {
+    for (const int kind : {1, 2}) {
+        SCOPED_TRACE(kind);
+        QTemporaryDir directory;
+        ASSERT_TRUE(directory.isValid());
+        std::vector<std::filesystem::path> paths;
+        QVariantList urls;
+        const int fileCount = kind == 1 ? 1 : 2;
+        for (int index = 0; index < fileCount; ++index) {
+            const QString path = directory.filePath(QStringLiteral("video_c9_%1.mp4").arg(index));
+            ASSERT_TRUE(writeTestPng(path));
+            paths.emplace_back(path.toStdWString());
+            urls.push_back(QUrl::fromLocalFile(path));
+        }
+
+        WorkspaceHarness harness;
+        harness.withVideoTasks = true;
+        ASSERT_TRUE(harness.create()) << harness.error;
+        harness.window->show();
+        harness.settle();
+        harness.submitted.clear();
+
+        ASSERT_TRUE(harness.shell->enqueueStartupRequest(kind, urls));
+        EXPECT_EQ(harness.videoTasks->count(), 0)
+            << "the record is adopted only at the successful terminal";
+        ASSERT_TRUE(succeedPendingVideoOpen(harness, paths));
+
+        ASSERT_EQ(harness.videoTasks->count(), 1)
+            << "one startup open is one task; startupIds="
+            << harness.root->property("videoStartupOpenIntentIds").toList().count()
+            << " pendingOpenNull=" << harness.root->property("pendingVideoTaskOpen").isNull()
+            << " activeSources=" << harness.shell->activeSources().size()
+            << " sourceUrls=" << harness.controller->sourceUrls().size()
+            << " dropError=" << harness.root->property("dropError").toString().toStdString()
+            << " intentMessage="
+            << harness.root->property("intentMessage").toString().toStdString();
+        const QVariantMap tab = harness.videoTasks->tabs().first().toMap();
+        EXPECT_EQ(harness.videoTasks->activeIndex(), 0);
+        EXPECT_EQ(tab.value(QStringLiteral("sourceCount")).toInt(), fileCount);
+        EXPECT_EQ(tab.value(QStringLiteral("comparison")).toBool(), kind == 2);
+
+        const int playCommands = static_cast<int>(
+            std::count_if(harness.submitted.cbegin(),
+                          harness.submitted.cend(),
+                          [](const application::PlaybackCommand& command) {
+                              return std::holds_alternative<application::PlayCommand>(command);
+                          }));
+        EXPECT_EQ(playCommands, kind == 1 ? 1 : 0)
+            << "only the playback-purpose single-video open autoplays";
+    }
+}
+
+// The slice-2 switch skeleton: leaving a task snapshots it; switching back rebuilds the
+// session for the target with ReplaceSources semantics but WITHOUT the displayed-time
+// mapping, then lands exactly on the snapshot frame, paused.
+TEST(MainQmlContractTests, VideoTabsSwitchAwayAndBackRestoresTheSnapshotFramePaused) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString pathA = directory.filePath(QStringLiteral("video_sw_a.mp4"));
+    const QString pathB = directory.filePath(QStringLiteral("video_sw_b.mp4"));
+    ASSERT_TRUE(writeTestPng(pathA));
+    ASSERT_TRUE(writeTestPng(pathB));
+    const QUrl urlA = QUrl::fromLocalFile(pathA);
+    const QUrl urlB = QUrl::fromLocalFile(pathB);
+    const std::filesystem::path nativeA = pathA.toStdWString();
+    const std::filesystem::path nativeB = pathB.toStdWString();
+
+    WorkspaceHarness harness;
+    harness.withVideoTasks = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    const auto openVideo = [&harness](const QUrl& url) {
+        QVariant accepted;
+        return QMetaObject::invokeMethod(harness.root.get(),
+                                         "openMediaFilesSelection",
+                                         Q_RETURN_ARG(QVariant, accepted),
+                                         Q_ARG(QVariant, QVariant::fromValue(QVariantList{url}))) &&
+               accepted.toBool();
+    };
+
+    ASSERT_TRUE(openVideo(urlA));
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {nativeA}));
+
+    harness.snapshot->displayedFrame = domain::FrameId{40};
+    harness.controller->refreshProjection();
+    harness.settle();
+    ASSERT_EQ(harness.root->property("currentFrame").toLongLong(), 40);
+
+    ASSERT_TRUE(openVideo(urlB));
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {nativeB}));
+    ASSERT_EQ(harness.videoTasks->count(), 2);
+    ASSERT_EQ(harness.videoTasks->activeIndex(), 1);
+    // Leaving A snapshotted its position (design §4.2).
+    EXPECT_EQ(harness.videoTasks->taskState(0).value(QStringLiteral("frame")).toInt(), 40);
+    EXPECT_EQ(harness.root->property("currentFrame").toLongLong(), 0);
+
+    // Switch back to tab 0: the restore rebuilds the session for A.
+    QVariant activated;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "activateVideoTab",
+                                          Q_RETURN_ARG(QVariant, activated),
+                                          Q_ARG(QVariant, QVariant{0})));
+    EXPECT_TRUE(activated.toBool());
+    EXPECT_TRUE(
+        harness.videoTasks->tabs().first().toMap().value(QStringLiteral("restoring")).toBool())
+        << "the tab shows the restoring state while the session rebuilds";
+
+    // The rebuild is a ReplaceSources open that does NOT preserve the displayed time -
+    // the mapped MediaTime belongs to the task being left (design §4.3). Identified by
+    // variant identity: the preference replays submit their own commands after the open.
+    const auto reopenCommand =
+        std::find_if(harness.submitted.rbegin(),
+                     harness.submitted.rend(),
+                     [](const application::PlaybackCommand& command) {
+                         return std::holds_alternative<application::OpenComparisonCommand>(command);
+                     });
+    ASSERT_NE(reopenCommand, harness.submitted.rend());
+    const auto& reopen = std::get<application::OpenComparisonCommand>(*reopenCommand);
+    EXPECT_EQ(reopen.intent, application::OpenReviewIntent::ReplaceSources);
+    EXPECT_FALSE(reopen.preserveDisplayedTime);
+
+    // The epoch bump itself is real-runtime coordinator behaviour; the fake snapshot never
+    // advances sessionEpoch, so the rebuild is proven here by the ReplaceSources-without-
+    // mapping command above plus the restored position below, not by the epoch counter.
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {nativeA}));
+
+    // The machine now seeks the snapshot frame; land its terminal (by identity - the
+    // preference replays submit their own commands around it).
+    ASSERT_TRUE(harness.waitUntil([&harness] {
+        for (const application::PlaybackCommand& command : harness.submitted) {
+            if (std::holds_alternative<application::SeekFrameCommand>(command)) {
+                return true;
+            }
+        }
+        return false;
+    })) << "the restore must submit the snapshot seek";
+    const auto seekCommand =
+        std::find_if(harness.submitted.rbegin(),
+                     harness.submitted.rend(),
+                     [](const application::PlaybackCommand& command) {
+                         return std::holds_alternative<application::SeekFrameCommand>(command);
+                     });
+    ASSERT_NE(seekCommand, harness.submitted.rend());
+    harness.snapshot->displayedFrame = domain::FrameId{40};
+    harness.terminals.push_back(application::CommandTerminal{
+        .context = application::commandContext(*seekCommand),
+        .outcome = application::CommandOutcome::Succeeded,
+    });
+    harness.controller->refreshProjection();
+
+    ASSERT_TRUE(harness.waitUntil([&harness] {
+        return !harness.videoTasks->tabs()
+                    .first()
+                    .toMap()
+                    .value(QStringLiteral("restoring"))
+                    .toBool();
+    })) << "the restoring flag must clear when the restore completes";
+    harness.settle();
+
+    EXPECT_EQ(harness.videoTasks->activeIndex(), 0);
+    EXPECT_FALSE(harness.root->property("playing").toBool()) << "a restore never plays";
+    EXPECT_EQ(harness.root->property("currentFrame").toLongLong(), 40)
+        << "the playhead lands on the snapshot frame";
+
+    // The delta path: activating the tab the session already shows must not rebuild.
+    const qulonglong epochAfterRestore = harness.controller->sessionEpoch();
+    QVariant redundant;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "activateVideoTab",
+                                          Q_RETURN_ARG(QVariant, redundant),
+                                          Q_ARG(QVariant, QVariant{0})));
+    EXPECT_TRUE(redundant.toBool());
+    harness.settle();
+    EXPECT_EQ(harness.controller->sessionEpoch(), epochAfterRestore);
+}
+
+// Design §4.6 first failure tier: a target whose file disappeared fails the restore, falls
+// back to the tab the session still shows, keeps both records and the live position, and
+// names the file that refused to reopen.
+TEST(MainQmlContractTests, VideoTabsRestoreFailureFallsBackToTheSessionTab) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString pathA = directory.filePath(QStringLiteral("video_fail_a.mp4"));
+    const QString pathB = directory.filePath(QStringLiteral("video_fail_b.mp4"));
+    ASSERT_TRUE(writeTestPng(pathA));
+    ASSERT_TRUE(writeTestPng(pathB));
+    const QUrl urlA = QUrl::fromLocalFile(pathA);
+    const QUrl urlB = QUrl::fromLocalFile(pathB);
+    const std::filesystem::path nativeA = pathA.toStdWString();
+    const std::filesystem::path nativeB = pathB.toStdWString();
+
+    WorkspaceHarness harness;
+    harness.withVideoTasks = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    const auto openVideo = [&harness](const QUrl& url) {
+        QVariant accepted;
+        return QMetaObject::invokeMethod(harness.root.get(),
+                                         "openMediaFilesSelection",
+                                         Q_RETURN_ARG(QVariant, accepted),
+                                         Q_ARG(QVariant, QVariant::fromValue(QVariantList{url}))) &&
+               accepted.toBool();
+    };
+    ASSERT_TRUE(openVideo(urlA));
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {nativeA}));
+    harness.snapshot->displayedFrame = domain::FrameId{25};
+    harness.controller->refreshProjection();
+    harness.settle();
+    ASSERT_TRUE(openVideo(urlB));
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {nativeB}));
+    ASSERT_EQ(harness.videoTasks->activeIndex(), 1);
+
+    // A's file disappears while it sits in the background.
+    ASSERT_TRUE(QFile::remove(pathA));
+
+    QVariant activated;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "activateVideoTab",
+                                          Q_RETURN_ARG(QVariant, activated),
+                                          Q_ARG(QVariant, QVariant{0})));
+    EXPECT_TRUE(activated.toBool())
+        << "the tab activates; the restore fails afterwards and falls back";
+
+    EXPECT_EQ(harness.videoTasks->count(), 2) << "the failed task keeps its record";
+    EXPECT_FALSE(
+        harness.videoTasks->tabs().first().toMap().value(QStringLiteral("restoring")).toBool());
+    EXPECT_EQ(harness.videoTasks->activeIndex(), 1) << "the session's own tab stays active";
+    ASSERT_EQ(harness.controller->sourceUrls().size(), 1);
+    EXPECT_EQ(harness.controller->sourceUrls().front().toString(), urlB.toString())
+        << "the previous session is untouched (ReplaceSources contract)";
+    EXPECT_TRUE(harness.root->property("intentMessage")
+                    .toString()
+                    .contains(QStringLiteral("video_fail_a.mp4")))
+        << "the failure names the file that refused to reopen";
+
+    // §9 R2 completion: the retained task's picture position does not move either. Move
+    // the live playhead, retry the same broken restore, and prove nothing seeks.
+    harness.snapshot->displayedFrame = domain::FrameId{25};
+    harness.controller->refreshProjection();
+    harness.settle();
+    ASSERT_EQ(harness.root->property("currentFrame").toLongLong(), 25);
+    QVariant retryBroken;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "activateVideoTab",
+                                          Q_RETURN_ARG(QVariant, retryBroken),
+                                          Q_ARG(QVariant, QVariant{0})));
+    EXPECT_TRUE(retryBroken.toBool());
+    harness.settle();
+    EXPECT_EQ(harness.root->property("currentFrame").toLongLong(), 25)
+        << "a failed restore leaves the session's position untouched";
+}
+
+// Ctrl+W (design §8): with several tabs it closes the current video tab and the neighbour
+// is restored; the last tab keeps the legacy whole-session close.
+TEST(MainQmlContractTests, VideoTabsCtrlWClosesTheActiveTabThenTheSession) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString pathA = directory.filePath(QStringLiteral("video_w_a.mp4"));
+    const QString pathB = directory.filePath(QStringLiteral("video_w_b.mp4"));
+    ASSERT_TRUE(writeTestPng(pathA));
+    ASSERT_TRUE(writeTestPng(pathB));
+    const QUrl urlA = QUrl::fromLocalFile(pathA);
+    const QUrl urlB = QUrl::fromLocalFile(pathB);
+    const std::filesystem::path nativeA = pathA.toStdWString();
+    const std::filesystem::path nativeB = pathB.toStdWString();
+
+    WorkspaceHarness harness;
+    harness.withVideoTasks = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    const auto openVideo = [&harness](const QUrl& url) {
+        QVariant accepted;
+        return QMetaObject::invokeMethod(harness.root.get(),
+                                         "openMediaFilesSelection",
+                                         Q_RETURN_ARG(QVariant, accepted),
+                                         Q_ARG(QVariant, QVariant::fromValue(QVariantList{url}))) &&
+               accepted.toBool();
+    };
+    ASSERT_TRUE(openVideo(urlA));
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {nativeA}));
+    ASSERT_TRUE(openVideo(urlB));
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {nativeB}));
+    ASSERT_EQ(harness.videoTasks->activeIndex(), 1);
+
+    QVariant closed;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        harness.root.get(), "closeCurrentTask", Q_RETURN_ARG(QVariant, closed)));
+    EXPECT_TRUE(closed.toBool());
+    EXPECT_EQ(harness.videoTasks->count(), 1);
+    // The neighbour's restore rebuilds the session for A; drive it home.
+    ASSERT_TRUE(
+        harness.videoTasks->tabs().first().toMap().value(QStringLiteral("restoring")).toBool());
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {nativeA}));
+    ASSERT_TRUE(harness.waitUntil([&harness] {
+        return !harness.videoTasks->tabs()
+                    .first()
+                    .toMap()
+                    .value(QStringLiteral("restoring"))
+                    .toBool();
+    })) << "restore stuck; switch="
+        << harness.root->property("pendingVideoTaskSwitch").toString().toStdString()
+        << " openCommandId="
+        << harness.root->property("pendingVideoTaskSwitchOpenCommandId").toLongLong()
+        << " outcome=" << harness.root->property("pendingVideoTaskSwitchOpenOutcome").toInt()
+        << " submittedBack=" << harness.submitted.back().index();
+    EXPECT_EQ(harness.videoTasks->activeIndex(), 0);
+    EXPECT_EQ(harness.controller->sourceUrls().size(), 1);
+
+    // The last tab keeps the legacy close: session close intent plus its feedback.
+    QVariant closedLast;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        harness.root.get(), "closeCurrentTask", Q_RETURN_ARG(QVariant, closedLast)));
+    EXPECT_TRUE(closedLast.toBool());
+    EXPECT_EQ(harness.videoTasks->count(), 0);
+    EXPECT_TRUE(std::any_of(harness.submitted.cbegin(),
+                            harness.submitted.cend(),
+                            [](const application::PlaybackCommand& command) {
+                                return std::holds_alternative<application::CloseSessionCommand>(
+                                    command);
+                            }))
+        << "the last tab closes the shared session";
+    EXPECT_EQ(harness.root->property("intentMessage").toString(), QStringLiteral("正在关闭视频…"));
+}
+
+// Ctrl+Tab / Ctrl+Shift+Tab (design §8): the sequences belong to whichever task strip is on
+// screen; the two bindings are mutually exclusive on the active workspace.
+TEST(MainQmlContractTests, VideoTabsCycleShortcutsStayWorkspaceExclusive) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString videoPath = directory.filePath(QStringLiteral("video_cycle.mp4"));
+    const QString firstImage = directory.filePath(QStringLiteral("image_cycle_a.png"));
+    const QString secondImage = directory.filePath(QStringLiteral("image_cycle_b.png"));
+    ASSERT_TRUE(writeTestPng(videoPath));
+    ASSERT_TRUE(writeTestPng(firstImage));
+    ASSERT_TRUE(writeTestPng(secondImage));
+
+    WorkspaceHarness harness;
+    harness.withVideoTasks = true;
+    harness.withImageTasks = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    // Two video tabs...
+    const auto openVideo = [&harness](const QString& path) {
+        QVariant accepted;
+        return QMetaObject::invokeMethod(
+                   harness.root.get(),
+                   "openMediaFilesSelection",
+                   Q_RETURN_ARG(QVariant, accepted),
+                   Q_ARG(QVariant, QVariant::fromValue(QVariantList{QUrl::fromLocalFile(path)}))) &&
+               accepted.toBool();
+    };
+    ASSERT_TRUE(openVideo(videoPath));
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {videoPath.toStdWString()}));
+    // A second, different single video makes a second task so cycling has two video tabs.
+    const QString videoCopy = directory.filePath(QStringLiteral("video_cycle_2.mp4"));
+    ASSERT_TRUE(QFile::copy(videoPath, videoCopy));
+    ASSERT_TRUE(openVideo(videoCopy));
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {videoCopy.toStdWString()}));
+    ASSERT_EQ(harness.videoTasks->count(), 2);
+
+    // ...and two image tabs.
+    const auto openImage = [&harness](const QString& path) {
+        QVariant accepted;
+        return QMetaObject::invokeMethod(
+                   harness.root.get(),
+                   "openImageInNewTab",
+                   Q_RETURN_ARG(QVariant, accepted),
+                   Q_ARG(QVariant, QVariant::fromValue(QVariantList{QUrl::fromLocalFile(path)}))) &&
+               accepted.toBool();
+    };
+    ASSERT_TRUE(openImage(firstImage));
+    ASSERT_TRUE(harness.waitUntil([&harness] {
+        return harness.imageTasks->count() == 1 &&
+               harness.imageTasks->activeController() != nullptr &&
+               harness.imageTasks->activeController()->hasPrimary();
+    }));
+    ASSERT_TRUE(openImage(secondImage));
+    // Wait for the decode COMMIT, not just the record: the commit is what switches the
+    // workspace, and a commit landing after activateWorkspace(0) below would flip it back.
+    ASSERT_TRUE(harness.waitUntil([&harness] {
+        return harness.imageTasks->count() == 2 && harness.imageTasks->activeIndex() == 1 &&
+               harness.imageTasks->activeController() != nullptr &&
+               harness.imageTasks->activeController()->hasPrimary();
+    }));
+    // The image opens committed the image workspace; go back to video for the first half.
+    ASSERT_TRUE(harness.activateWorkspace(0));
+    harness.settle();
+
+    // The two Ctrl+Tab bindings: in the video workspace only the video one is enabled.
+    const auto shortcutsFor = [&harness](const QString& sequence) {
+        QList<QObject*> found;
+        const QList<QObject*> all = harness.root->findChildren<QObject*>();
+        for (QObject* const object : all) {
+            if (object->property("sequence").toString() == sequence) {
+                found.push_back(object);
+            }
+        }
+        return found;
+    };
+    const QList<QObject*> nextTabShortcuts = shortcutsFor(QStringLiteral("Ctrl+Tab"));
+    ASSERT_EQ(nextTabShortcuts.size(), 2);
+    const auto enabledCount = [&nextTabShortcuts] {
+        return static_cast<int>(std::count_if(
+            nextTabShortcuts.cbegin(), nextTabShortcuts.cend(), [](QObject* const object) {
+                return object->property("enabled").toBool();
+            }));
+    };
+    ASSERT_EQ(harness.root->property("workspaceMode").toInt(), 0);
+    EXPECT_EQ(enabledCount(), 1) << "exactly one Ctrl+Tab owner per workspace";
+    QObject* videoCycle = nullptr;
+    for (QObject* const object : nextTabShortcuts) {
+        if (object->property("enabled").toBool()) {
+            videoCycle = object;
+        }
+    }
+    ASSERT_NE(videoCycle, nullptr);
+
+    const int imageActiveBefore = harness.imageTasks->activeIndex();
+    ASSERT_TRUE(QMetaObject::invokeMethod(videoCycle, "activated"));
+    ASSERT_TRUE(
+        harness.waitUntil([&harness] { return harness.videoTasks->activeIndex() == 0; }, 8000));
+    harness.settle();
+    EXPECT_EQ(harness.imageTasks->activeIndex(), imageActiveBefore)
+        << "the video cycle must not touch the image tabs";
+
+    // In the image workspace the ownership flips.
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    harness.settle();
+    ASSERT_EQ(enabledCount(), 1);
+    QObject* imageCycle = nullptr;
+    for (QObject* const object : nextTabShortcuts) {
+        if (object->property("enabled").toBool()) {
+            imageCycle = object;
+        }
+    }
+    ASSERT_NE(imageCycle, nullptr);
+    ASSERT_NE(imageCycle, videoCycle);
+
+    const int videoActiveBefore = harness.videoTasks->activeIndex();
+    ASSERT_TRUE(QMetaObject::invokeMethod(imageCycle, "activated"));
+    ASSERT_TRUE(harness.waitUntil([&harness] { return harness.imageTasks->activeIndex() == 0; }));
+    harness.settle();
+    EXPECT_EQ(harness.videoTasks->activeIndex(), videoActiveBefore)
+        << "the image cycle must not touch the video tabs";
+    EXPECT_EQ(harness.root->property("workspaceMode").toInt(), 1);
+}
+
+// Shared driver for the staged-restore tests: two single-video tasks, a non-default
+// observation state pinned on the first, then the switch away and back is driven to
+// completion. Returns false when any driving step failed.
+struct VideoTabsRestoreFixture {
+    QTemporaryDir directory;
+    QString pathA;
+    QString pathB;
+    QUrl urlA;
+    QUrl urlB;
+    std::filesystem::path nativeA;
+    std::filesystem::path nativeB;
+
+    [[nodiscard]] bool prepare() {
+        pathA = directory.filePath(QStringLiteral("video_rs_a.mp4"));
+        pathB = directory.filePath(QStringLiteral("video_rs_b.mp4"));
+        if (!writeTestPng(pathA) || !writeTestPng(pathB)) {
+            return false;
+        }
+        urlA = QUrl::fromLocalFile(pathA);
+        urlB = QUrl::fromLocalFile(pathB);
+        nativeA = pathA.toStdWString();
+        nativeB = pathB.toStdWString();
+        return true;
+    }
+
+    // The C1 resume machinery (attemptResume/recordResumePosition) reacts to identity
+    // changes on a 1.5 s debounce, which races the staged restore in these tests and
+    // can inject an unrelated seek. The automation sentinel disables it - the same
+    // contract the performance gates use for deterministic playheads. It must be set
+    // BEFORE the QML loads: a context property that first appears after component
+    // creation never re-evaluates the binding that captured "undefined".
+    static void pinDeterministicPlayback(WorkspaceHarness& harness) {
+        harness.engine.rootContext()->setContextProperty(QStringLiteral("dvsPerformanceAutomation"),
+                                                         true);
+    }
+
+    [[nodiscard]] bool openVideo(WorkspaceHarness& harness, const QUrl& url) {
+        QVariant accepted;
+        return QMetaObject::invokeMethod(harness.root.get(),
+                                         "openMediaFilesSelection",
+                                         Q_RETURN_ARG(QVariant, accepted),
+                                         Q_ARG(QVariant, QVariant::fromValue(QVariantList{url}))) &&
+               accepted.toBool();
+    }
+
+    [[nodiscard]] bool activateTab(WorkspaceHarness& harness, const int index) {
+        QVariant activated;
+        return QMetaObject::invokeMethod(harness.root.get(),
+                                         "activateVideoTab",
+                                         Q_RETURN_ARG(QVariant, activated),
+                                         Q_ARG(QVariant, QVariant{index})) &&
+               activated.toBool();
+    }
+};
+
+// The full slice-3 state set (design §3): every recorded family - position, mode, wipe,
+// threshold family, gain, viewport, range mirrors - comes back exactly after the task
+// left the runtime and was rebuilt.
+TEST(MainQmlContractTests, VideoTabsRestoreReplaysTheFullObservationState) {
+    VideoTabsRestoreFixture fixture;
+    ASSERT_TRUE(fixture.prepare());
+
+    WorkspaceHarness harness;
+    harness.withVideoTasks = true;
+    VideoTabsRestoreFixture::pinDeterministicPlayback(harness);
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    ASSERT_TRUE(fixture.openVideo(harness, fixture.urlA));
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {fixture.nativeA}));
+
+    // Pin a non-default observation state on task A.
+    harness.snapshot->displayedFrame = domain::FrameId{40};
+    harness.controller->refreshProjection();
+    harness.settle();
+    ASSERT_TRUE(harness.root->setProperty("wipePosition", 0.7));
+    harness.root->setProperty("differenceThresholdEnabled", true);
+    harness.root->setProperty("differenceThresholdCode", 42);
+    harness.root->setProperty("differenceThresholdPolicy", 2);
+    harness.preferences.setDifferenceGainCode(4);
+    harness.preferences.setViewModeCode(ComparisonSurface::Difference);
+    auto* const surface =
+        harness.root->findChild<ComparisonSurface*>(QStringLiteral("dualVideoSurface"));
+    ASSERT_NE(surface, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(surface,
+                                          "restoreViewport",
+                                          Q_ARG(qreal, 0.4),
+                                          Q_ARG(qreal, 0.6),
+                                          Q_ARG(qreal, 2.0),
+                                          Q_ARG(bool, true),
+                                          Q_ARG(qreal, 0.1),
+                                          Q_ARG(qreal, 0.2),
+                                          Q_ARG(qreal, 0.3),
+                                          Q_ARG(qreal, 0.4)));
+    harness.shell->setRangeIn(10, 333'333.0);
+    harness.shell->setRangeOut(50, 1'666'667.0);
+    harness.shell->setRangePlaybackState(true, false);
+    harness.snapshot->playbackRangeIn = domain::FrameId{10};
+    harness.snapshot->playbackRangeOut = domain::FrameId{50};
+    harness.snapshot->playbackRangeLoop = true;
+    harness.controller->refreshProjection();
+    harness.settle();
+    ASSERT_EQ(harness.root->property("currentFrame").toLongLong(), 40);
+    ASSERT_EQ(harness.shell->inFrame(), 10);
+    ASSERT_TRUE(harness.root->property("rangePlaybackActive").toBool());
+
+    // Leave A for B; B's open resets the visual state, proving the restore re-applies it.
+    ASSERT_TRUE(fixture.openVideo(harness, fixture.urlB));
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {fixture.nativeB}));
+    ASSERT_EQ(harness.videoTasks->activeIndex(), 1);
+    EXPECT_FALSE(harness.root->property("differenceThresholdEnabled").toBool());
+    EXPECT_NEAR(harness.root->property("wipePosition").toDouble(), 0.5, 1e-9);
+
+    // Back to A: the reopen rebuilds, the seek lands the frame, the family replays.
+    ASSERT_TRUE(fixture.activateTab(harness, 0));
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {fixture.nativeA}));
+    ASSERT_TRUE(harness.waitUntil([&harness] {
+        for (const application::PlaybackCommand& command : harness.submitted) {
+            if (std::holds_alternative<application::SeekFrameCommand>(command)) {
+                return true;
+            }
+        }
+        return false;
+    })) << "the restore must submit the snapshot seek";
+    const auto seekCommand =
+        std::find_if(harness.submitted.rbegin(),
+                     harness.submitted.rend(),
+                     [](const application::PlaybackCommand& command) {
+                         return std::holds_alternative<application::SeekFrameCommand>(command);
+                     });
+    ASSERT_NE(seekCommand, harness.submitted.rend());
+    harness.snapshot->displayedFrame = domain::FrameId{40};
+    harness.terminals.push_back(application::CommandTerminal{
+        .context = application::commandContext(*seekCommand),
+        .outcome = application::CommandOutcome::Succeeded,
+    });
+    harness.controller->refreshProjection();
+    ASSERT_TRUE(harness.waitUntil([&harness] {
+        return !harness.videoTasks->tabs()
+                    .first()
+                    .toMap()
+                    .value(QStringLiteral("restoring"))
+                    .toBool();
+    })) << "the restore must complete";
+    harness.settle();
+
+    EXPECT_FALSE(harness.root->property("playing").toBool());
+    EXPECT_EQ(harness.root->property("currentFrame").toLongLong(), 40);
+    // Mode, wipe, threshold family, gain.
+    EXPECT_EQ(harness.preferences.viewModeCode(), static_cast<int>(ComparisonSurface::Difference));
+    EXPECT_NEAR(harness.root->property("wipePosition").toDouble(), 0.7, 1e-9);
+    EXPECT_TRUE(harness.root->property("differenceThresholdEnabled").toBool());
+    EXPECT_EQ(harness.root->property("differenceThresholdCode").toInt(), 42);
+    EXPECT_EQ(harness.root->property("differenceThresholdPolicy").toInt(), 2);
+    EXPECT_EQ(harness.preferences.differenceGainCode(), 4);
+    // Viewport zoom/pan/ROI.
+    EXPECT_NEAR(surface->viewCenterX(), 0.4, 1e-6);
+    EXPECT_NEAR(surface->viewCenterY(), 0.6, 1e-6);
+    EXPECT_NEAR(surface->viewScale(), 2.0, 1e-6);
+    EXPECT_TRUE(surface->roiEnabled());
+    EXPECT_NEAR(surface->roiLeft(), 0.1, 1e-6);
+    EXPECT_NEAR(surface->roiBottom(), 0.4, 1e-6);
+    // Range mirrors (shell first, command second).
+    EXPECT_EQ(harness.shell->inFrame(), 10);
+    EXPECT_EQ(harness.shell->outFrame(), 50);
+    EXPECT_TRUE(harness.shell->rangePlaybackActive());
+    // A complete restore is reported, not a partial one.
+    EXPECT_TRUE(harness.root->property("intentMessage")
+                    .toString()
+                    .contains(QStringLiteral("已恢复视频标签")))
+        << harness.root->property("intentMessage").toString().toStdString();
+}
+
+// The recorded comparison pair replays as a pure submission (never the full-group
+// fallback), its terminal is awaited, and a verified pair is not reported partial.
+TEST(MainQmlContractTests, VideoTabsRestoreSubmitsAndVerifiesTheRecordedPair) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    std::vector<std::filesystem::path> paths;
+    QVariantList urls;
+    for (const auto* const name : {"video_pair_a.mp4", "video_pair_b.mp4"}) {
+        const QString path = directory.filePath(QString::fromLatin1(name));
+        ASSERT_TRUE(writeTestPng(path));
+        paths.emplace_back(path.toStdWString());
+        urls.push_back(QUrl::fromLocalFile(path));
+    }
+    const QString singlePath = directory.filePath(QStringLiteral("video_pair_single.mp4"));
+    ASSERT_TRUE(writeTestPng(singlePath));
+
+    WorkspaceHarness harness;
+    harness.withVideoTasks = true;
+    // Same determinism pin as the fixture tests, set before the QML loads: the resume
+    // machinery must not race the staged restore here either.
+    harness.engine.rootContext()->setContextProperty(QStringLiteral("dvsPerformanceAutomation"),
+                                                     true);
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    QVariant reviewed;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "performVideoReview",
+                                          Q_RETURN_ARG(QVariant, reviewed),
+                                          Q_ARG(QVariant, QVariant::fromValue(urls))));
+    ASSERT_TRUE(reviewed.toBool());
+    QVariant opened;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "openDroppedComparison",
+                                          Q_RETURN_ARG(QVariant, opened),
+                                          Q_ARG(QVariant, QVariant{0})));
+    ASSERT_TRUE(opened.toBool());
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, paths, 0U));
+    ASSERT_EQ(harness.videoTasks->count(), 1);
+
+    harness.snapshot->displayedFrame = domain::FrameId{30};
+    harness.controller->refreshProjection();
+    harness.settle();
+    harness.preferences.setViewModeCode(ComparisonSurface::Difference);
+
+    // Leave the comparison for a single-video task; the pair (edge 0 for two sources)
+    // and the difference mode are recorded in the leaving snapshot.
+    QVariant single;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        harness.root.get(),
+        "openMediaFilesSelection",
+        Q_RETURN_ARG(QVariant, single),
+        Q_ARG(QVariant, QVariant::fromValue(QVariantList{QUrl::fromLocalFile(singlePath)}))));
+    ASSERT_TRUE(single.toBool());
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {singlePath.toStdWString()}));
+    ASSERT_EQ(harness.videoTasks->count(), 2);
+    ASSERT_EQ(harness.videoTasks->activeIndex(), 1);
+    harness.submitted.clear();
+
+    const auto pairCommandCount = [&harness] {
+        return static_cast<std::size_t>(std::count_if(
+            harness.submitted.cbegin(),
+            harness.submitted.cend(),
+            [](const application::PlaybackCommand& command) {
+                return std::holds_alternative<application::SetActiveComparisonPairCommand>(command);
+            }));
+    };
+    // Baseline before any restore command: the preference replays around every publish
+    // also submit pair commands, so the count growing only proves new submissions.
+    const std::size_t pairCountBaseline = pairCommandCount();
+
+    QVariant activated;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "activateVideoTab",
+                                          Q_RETURN_ARG(QVariant, activated),
+                                          Q_ARG(QVariant, QVariant{0})));
+    ASSERT_TRUE(activated.toBool());
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, paths, 0U));
+
+    // Stage 2 submitted the recorded pair after the reopen terminal (the preference
+    // replays also submit pair commands around every publish, so the machine's own is
+    // simply the last one). Drive a terminal for every pair command: the accept gate
+    // ignores the ones it does not own, so this is order-independent.
+    ASSERT_TRUE(harness.waitUntil([&pairCommandCount, pairCountBaseline] {
+        return pairCommandCount() > pairCountBaseline;
+    })) << "the restore must submit the recorded pair";
+    EXPECT_GE(pairCommandCount(), 2U) << "the machine's pair plus at least one preference replay";
+    for (std::size_t index = 0U; index < harness.submitted.size(); ++index) {
+        if (!std::holds_alternative<application::SetActiveComparisonPairCommand>(
+                harness.submitted.at(index))) {
+            continue;
+        }
+        harness.terminals.push_back(application::CommandTerminal{
+            .context = application::commandContext(harness.submitted.at(index)),
+            .outcome = application::CommandOutcome::Succeeded,
+        });
+    }
+    harness.controller->refreshProjection();
+
+    // Then the seek; land it and let the family replay.
+    ASSERT_TRUE(harness.waitUntil([&harness] {
+        for (const application::PlaybackCommand& command : harness.submitted) {
+            if (std::holds_alternative<application::SeekFrameCommand>(command)) {
+                return true;
+            }
+        }
+        return false;
+    }));
+    const auto seekCommand =
+        std::find_if(harness.submitted.rbegin(),
+                     harness.submitted.rend(),
+                     [](const application::PlaybackCommand& command) {
+                         return std::holds_alternative<application::SeekFrameCommand>(command);
+                     });
+    ASSERT_NE(seekCommand, harness.submitted.rend());
+    harness.snapshot->displayedFrame = domain::FrameId{30};
+    harness.terminals.push_back(application::CommandTerminal{
+        .context = application::commandContext(*seekCommand),
+        .outcome = application::CommandOutcome::Succeeded,
+    });
+    harness.controller->refreshProjection();
+    ASSERT_TRUE(harness.waitUntil([&harness] {
+        return !harness.videoTasks->tabs()
+                    .first()
+                    .toMap()
+                    .value(QStringLiteral("restoring"))
+                    .toBool();
+    }));
+    harness.settle();
+
+    EXPECT_EQ(harness.videoTasks->activeIndex(), 0);
+    EXPECT_EQ(harness.root->property("currentFrame").toLongLong(), 30);
+    EXPECT_EQ(harness.preferences.viewModeCode(), static_cast<int>(ComparisonSurface::Difference));
+    EXPECT_FALSE(
+        harness.root->property("intentMessage").toString().contains(QStringLiteral("部分恢复")))
+        << "a verified pair restore is complete, not partial";
+}
+
+// R1, command-identity path: terminals and command-finished deliveries that do not name
+// the restore's own command ids must not complete, advance or corrupt the restore.
+TEST(MainQmlContractTests, VideoTabsRestoreIgnoresTerminalsForOtherCommands) {
+    VideoTabsRestoreFixture fixture;
+    ASSERT_TRUE(fixture.prepare());
+
+    WorkspaceHarness harness;
+    harness.withVideoTasks = true;
+    VideoTabsRestoreFixture::pinDeterministicPlayback(harness);
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    ASSERT_TRUE(fixture.openVideo(harness, fixture.urlA));
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {fixture.nativeA}));
+    ASSERT_TRUE(fixture.openVideo(harness, fixture.urlB));
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {fixture.nativeB}));
+    ASSERT_EQ(harness.videoTasks->count(), 2);
+
+    ASSERT_TRUE(fixture.activateTab(harness, 0));
+    EXPECT_TRUE(
+        harness.videoTasks->tabs().first().toMap().value(QStringLiteral("restoring")).toBool());
+    const std::size_t reopenIndex = harness.submitted.size() - 1U;
+    const application::CommandContext reopenContext =
+        application::commandContext(harness.submitted.at(reopenIndex));
+    const qulonglong staleCommandId = reopenContext.commandId.value() + 1U;
+
+    // A late terminal for another command id, plus a direct mismatched delivery into the
+    // machine's own accept entry - both must be dropped without side effects.
+    harness.terminals.push_back(application::CommandTerminal{
+        .context =
+            application::CommandContext{
+                .sessionId = reopenContext.sessionId,
+                .sessionEpoch = reopenContext.sessionEpoch,
+                .commandId = domain::CommandId{staleCommandId},
+            },
+        .outcome = application::CommandOutcome::Succeeded,
+    });
+    QVariant ignored;
+    ASSERT_TRUE(
+        QMetaObject::invokeMethod(harness.root.get(),
+                                  "acceptVideoTaskSwitchCommand",
+                                  Q_RETURN_ARG(QVariant, ignored),
+                                  Q_ARG(QVariant, QVariant::fromValue(staleCommandId)),
+                                  Q_ARG(QVariant, QVariant::fromValue(reopenContext.sessionEpoch)),
+                                  Q_ARG(QVariant, QVariant{0})));
+    harness.controller->refreshProjection();
+    harness.settle();
+    EXPECT_TRUE(
+        harness.videoTasks->tabs().first().toMap().value(QStringLiteral("restoring")).toBool())
+        << "a terminal for another command must not complete the restore";
+
+    // The real reopen terminal still drives the restore home. Task A was recorded at
+    // frame 0 (never moved), so the machine lands without a seek - this test proves the
+    // command gate, not the position restore the skeleton tests already pin.
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {fixture.nativeA}));
+    ASSERT_TRUE(harness.waitUntil([&harness] {
+        return !harness.videoTasks->tabs()
+                    .first()
+                    .toMap()
+                    .value(QStringLiteral("restoring"))
+                    .toBool();
+    })) << "the correct terminal must complete the restore";
+    harness.settle();
+    EXPECT_EQ(harness.videoTasks->activeIndex(), 0);
+    EXPECT_FALSE(harness.root->property("playing").toBool());
+    EXPECT_FALSE(
+        harness.root->property("intentMessage").toString().contains(QStringLiteral("部分恢复")));
+}
+
+// R1, URL-identity path: when the rebuilt session turns out to show different sources
+// than the task being restored, the restore cancels instead of replaying onto them.
+TEST(MainQmlContractTests, VideoTabsRestoreCancelsWhenTheSessionShowsOtherUrls) {
+    VideoTabsRestoreFixture fixture;
+    ASSERT_TRUE(fixture.prepare());
+    const QString otherPath = fixture.directory.filePath(QStringLiteral("video_rs_other.mp4"));
+    ASSERT_TRUE(writeTestPng(otherPath));
+
+    WorkspaceHarness harness;
+    harness.withVideoTasks = true;
+    VideoTabsRestoreFixture::pinDeterministicPlayback(harness);
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    ASSERT_TRUE(fixture.openVideo(harness, fixture.urlA));
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {fixture.nativeA}));
+    harness.snapshot->displayedFrame = domain::FrameId{40};
+    harness.controller->refreshProjection();
+    harness.settle();
+    ASSERT_TRUE(fixture.openVideo(harness, fixture.urlB));
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {fixture.nativeB}));
+
+    ASSERT_TRUE(fixture.activateTab(harness, 0));
+    // The terminal succeeds, but the session the backend built shows a DIFFERENT file
+    // than the task's recorded group: the URL gate must refuse to replay onto it.
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {otherPath.toStdWString()}));
+    EXPECT_FALSE(
+        harness.videoTasks->tabs().first().toMap().value(QStringLiteral("restoring")).toBool())
+        << "the mismatch cancels the restore immediately";
+    EXPECT_EQ(harness.root->property("intentMessage").toString(),
+              QStringLiteral("恢复已取消：打开的素材与标签不一致"));
+    // Nothing replayed: the seek for the recorded frame was never submitted.
+    EXPECT_FALSE(std::any_of(harness.submitted.cbegin(),
+                             harness.submitted.cend(),
+                             [](const application::PlaybackCommand& command) {
+                                 return std::holds_alternative<application::SeekFrameCommand>(
+                                     command);
+                             }))
+        << "no observation state may be replayed onto a foreign session";
+}
+
+namespace {
+
+// Sidebar-routing fixture (design §5 rows 5-8): a loaded folder with three files plus
+// the task host and the automation pin.
+struct VideoSidebarFixture {
+    QTemporaryDir directory;
+    QString pathA;
+    QString pathB;
+    QString pathC;
+    QUrl urlA;
+    QUrl urlB;
+    QUrl urlC;
+    std::vector<std::filesystem::path> allPaths() const {
+        return {pathA.toStdWString(), pathB.toStdWString(), pathC.toStdWString()};
+    }
+    // The comparison task's exact group (A+B) - session facts must match the record.
+    std::vector<std::filesystem::path> comparisonPaths() const {
+        return {pathA.toStdWString(), pathB.toStdWString()};
+    }
+
+    [[nodiscard]] bool prepare() {
+        pathA = directory.filePath(QStringLiteral("sb_a.mp4"));
+        pathB = directory.filePath(QStringLiteral("sb_b.mp4"));
+        pathC = directory.filePath(QStringLiteral("sb_c.mp4"));
+        for (const QString& name : {pathA, pathB, pathC}) {
+            if (!writeTestPng(name)) {
+                return false;
+            }
+        }
+        urlA = QUrl::fromLocalFile(pathA);
+        urlB = QUrl::fromLocalFile(pathB);
+        urlC = QUrl::fromLocalFile(pathC);
+        return true;
+    }
+
+    [[nodiscard]] bool
+    invokeRoot(WorkspaceHarness& harness, const QString& method, const QUrl& argument) {
+        QVariant returned;
+        return QMetaObject::invokeMethod(harness.root.get(),
+                                         method.toUtf8().constData(),
+                                         Q_RETURN_ARG(QVariant, returned),
+                                         Q_ARG(QVariant, QVariant::fromValue(argument))) &&
+               returned.toBool();
+    }
+
+    [[nodiscard]] int playCommandCount(const WorkspaceHarness& harness) const {
+        return static_cast<int>(
+            std::count_if(harness.submitted.cbegin(),
+                          harness.submitted.cend(),
+                          [](const application::PlaybackCommand& command) {
+                              return std::holds_alternative<application::PlayCommand>(command);
+                          }));
+    }
+};
+
+} // namespace
+
+// C5 + C8: with a single-video task active, sidebar clicks and folder stepping switch
+// the disc IN PLACE - same tab, record group replaced, state reset, and the folder
+// model's autoplay chain still runs (design §5 rows 5/8, §4.7).
+TEST(MainQmlContractTests, VideoTabsSidebarSwitchesTheSingleVideoTabInPlace) {
+    VideoSidebarFixture fixture;
+    ASSERT_TRUE(fixture.prepare());
+
+    WorkspaceHarness harness;
+    harness.withVideoTasks = true;
+    harness.withVideoFolder = true;
+    VideoTabsRestoreFixture::pinDeterministicPlayback(harness);
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+    ASSERT_TRUE(harness.videoFolder.loadFolder(QUrl::fromLocalFile(fixture.directory.path())));
+    ASSERT_TRUE(harness.waitUntil([&harness] { return !harness.videoFolder.scanning(); }));
+    harness.settle();
+
+    QVariant opened;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        harness.root.get(),
+        "openMediaFilesSelection",
+        Q_RETURN_ARG(QVariant, opened),
+        Q_ARG(QVariant, QVariant::fromValue(QVariantList{fixture.urlA}))));
+    ASSERT_TRUE(opened.toBool());
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {fixture.pathA.toStdWString()}));
+    ASSERT_EQ(harness.videoTasks->count(), 1);
+    harness.videoTasks->updateTaskState(0, QVariantMap{{QStringLiteral("frame"), 77}});
+
+    // Sidebar click on B: in-place switch.
+    ASSERT_TRUE(fixture.invokeRoot(harness, "openSidebarVideo", fixture.urlB));
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {fixture.pathB.toStdWString()}));
+    ASSERT_EQ(harness.videoTasks->count(), 1) << "the disc switch must not add a tab";
+    QVariantMap switched = harness.videoTasks->tabs().first().toMap();
+    EXPECT_EQ(switched.value(QStringLiteral("urls")).toStringList(),
+              QStringList{fixture.urlB.toString()});
+    EXPECT_EQ(switched.value(QStringLiteral("title")).toString(), QStringLiteral("sb_b.mp4"));
+    EXPECT_FALSE(switched.value(QStringLiteral("comparison")).toBool());
+    EXPECT_TRUE(harness.videoTasks->taskState(0).isEmpty())
+        << "switched material has no positions to restore";
+    EXPECT_GE(fixture.playCommandCount(harness), 1) << "the folder autoplay chain still runs";
+    {
+        // The fake backend never delivers the autoplay Play terminal, and the controller
+        // keeps its single foreground slot occupied - free it so the next open is not
+        // queued behind a play that already happened.
+        const auto playCommand =
+            std::find_if(harness.submitted.rbegin(),
+                         harness.submitted.rend(),
+                         [](const application::PlaybackCommand& command) {
+                             return std::holds_alternative<application::PlayCommand>(command);
+                         });
+        ASSERT_NE(playCommand, harness.submitted.rend());
+        harness.terminals.push_back(application::CommandTerminal{
+            .context = application::commandContext(*playCommand),
+            .outcome = application::CommandOutcome::Succeeded,
+        });
+        harness.controller->refreshProjection();
+        harness.settle();
+    }
+
+    // C8: 上一项/下一项 goes through the same in-place route (B -> C via stepping).
+    const int playsBeforeStep = fixture.playCommandCount(harness);
+    QVariant stepped;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "stepFolderVideo",
+                                          Q_RETURN_ARG(QVariant, stepped),
+                                          Q_ARG(QVariant, QVariant{1})));
+    ASSERT_TRUE(stepped.toBool());
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {fixture.pathC.toStdWString()}));
+    ASSERT_EQ(harness.videoTasks->count(), 1);
+    switched = harness.videoTasks->tabs().first().toMap();
+    EXPECT_EQ(switched.value(QStringLiteral("urls")).toStringList(),
+              QStringList{fixture.urlC.toString()});
+    EXPECT_GT(fixture.playCommandCount(harness), playsBeforeStep)
+        << "stepping keeps the browser autoplay";
+}
+
+// C6: with a comparison task active, a sidebar single-video open starts a NEW task tab
+// and the comparison record stays alive behind it (design §5 row 6).
+TEST(MainQmlContractTests, VideoTabsSidebarSingleVideoWhileComparisonActiveOpensANewTab) {
+    VideoSidebarFixture fixture;
+    ASSERT_TRUE(fixture.prepare());
+
+    WorkspaceHarness harness;
+    harness.withVideoTasks = true;
+    harness.withVideoFolder = true;
+    VideoTabsRestoreFixture::pinDeterministicPlayback(harness);
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    QVariant reviewed;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        harness.root.get(),
+        "performVideoReview",
+        Q_RETURN_ARG(QVariant, reviewed),
+        Q_ARG(QVariant, QVariant::fromValue(QVariantList{fixture.urlA, fixture.urlB}))));
+    ASSERT_TRUE(reviewed.toBool());
+    QVariant accepted;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "openDroppedComparison",
+                                          Q_RETURN_ARG(QVariant, accepted),
+                                          Q_ARG(QVariant, QVariant{0})));
+    ASSERT_TRUE(accepted.toBool());
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, fixture.comparisonPaths(), 0U));
+    ASSERT_EQ(harness.videoTasks->count(), 1);
+    // The comparison dialog was bypassed by driving openDroppedComparison directly; close
+    // the still-open popup so the sidebar action state sees no modal.
+    if (auto* const dropDialog =
+            harness.root->findChild<QObject*>(QStringLiteral("dropReviewDialog"))) {
+        QMetaObject::invokeMethod(dropDialog, "close");
+        harness.settle();
+    }
+
+    ASSERT_TRUE(fixture.invokeRoot(harness, "openSidebarVideo", fixture.urlC));
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {fixture.pathC.toStdWString()}));
+    ASSERT_EQ(harness.videoTasks->count(), 2) << "a single video beside a comparison is a new task";
+    ASSERT_EQ(harness.videoTasks->activeIndex(), 1);
+    const QVariantMap comparison = harness.videoTasks->tabs().first().toMap();
+    EXPECT_TRUE(comparison.value(QStringLiteral("comparison")).toBool());
+    EXPECT_EQ(comparison.value(QStringLiteral("sourceCount")).toInt(), 2)
+        << "the original comparison task stays alive behind the new tab";
+    const QVariantMap single = harness.videoTasks->tabs().at(1).toMap();
+    EXPECT_FALSE(single.value(QStringLiteral("comparison")).toBool());
+    EXPECT_EQ(single.value(QStringLiteral("urls")).toStringList(),
+              QStringList{fixture.urlC.toString()});
+    EXPECT_GE(fixture.playCommandCount(harness), 1);
+}
+
+// C7: the context menu's 「打开为新单视频任务」 forces a new task even when the in-place
+// disc-switch judgement would apply (design §5 row 7).
+TEST(MainQmlContractTests, VideoTabsSidebarContextMenuForcesANewTask) {
+    VideoSidebarFixture fixture;
+    ASSERT_TRUE(fixture.prepare());
+
+    WorkspaceHarness harness;
+    harness.withVideoTasks = true;
+    harness.withVideoFolder = true;
+    VideoTabsRestoreFixture::pinDeterministicPlayback(harness);
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    QVariant opened;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        harness.root.get(),
+        "openMediaFilesSelection",
+        Q_RETURN_ARG(QVariant, opened),
+        Q_ARG(QVariant, QVariant::fromValue(QVariantList{fixture.urlA}))));
+    ASSERT_TRUE(opened.toBool());
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {fixture.pathA.toStdWString()}));
+    ASSERT_EQ(harness.videoTasks->count(), 1);
+
+    ASSERT_TRUE(fixture.invokeRoot(harness, "openSidebarVideoInNewTab", fixture.urlB));
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {fixture.pathB.toStdWString()}));
+    ASSERT_EQ(harness.videoTasks->count(), 2)
+        << "the explicit new-task entry must not switch in place";
+    ASSERT_EQ(harness.videoTasks->activeIndex(), 1);
+    EXPECT_EQ(
+        harness.videoTasks->tabs().first().toMap().value(QStringLiteral("urls")).toStringList(),
+        QStringList{fixture.urlA.toString()});
+    EXPECT_EQ(harness.videoTasks->tabs().at(1).toMap().value(QStringLiteral("urls")).toStringList(),
+              QStringList{fixture.urlB.toString()});
+}
+
+// §6/§11-f: removing one source evolves the ACTIVE record in place (2 -> 1 on the same
+// tab) and keeps the recorded state snapshot; the title and badge follow the new shape.
+TEST(MainQmlContractTests, VideoTabsRemovingOneSourceEvolvesTheActiveRecord) {
+    VideoSidebarFixture fixture;
+    ASSERT_TRUE(fixture.prepare());
+
+    WorkspaceHarness harness;
+    harness.withVideoTasks = true;
+    harness.withVideoFolder = true;
+    VideoTabsRestoreFixture::pinDeterministicPlayback(harness);
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    QVariant reviewed;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        harness.root.get(),
+        "performVideoReview",
+        Q_RETURN_ARG(QVariant, reviewed),
+        Q_ARG(QVariant, QVariant::fromValue(QVariantList{fixture.urlA, fixture.urlB}))));
+    ASSERT_TRUE(reviewed.toBool());
+    QVariant accepted;
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "openDroppedComparison",
+                                          Q_RETURN_ARG(QVariant, accepted),
+                                          Q_ARG(QVariant, QVariant{0})));
+    ASSERT_TRUE(accepted.toBool());
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, fixture.comparisonPaths(), 0U));
+    ASSERT_EQ(harness.videoTasks->count(), 1);
+    harness.videoTasks->updateTaskState(0, QVariantMap{{QStringLiteral("frame"), 55}});
+    EXPECT_TRUE(
+        harness.videoTasks->tabs().first().toMap().value(QStringLiteral("comparison")).toBool());
+
+    // Remove source B through the shell's identity API - the same chain the source chip
+    // context menu uses - and drive the removal terminal to a single-source session.
+    QVariant removed;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        harness.root.get(),
+        "removeSelectedSource",
+        Q_RETURN_ARG(QVariant, removed),
+        Q_ARG(QVariant, QVariant::fromValue(harness.shell->activeSourceIdentities().at(1)))));
+    ASSERT_TRUE(removed.toBool());
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {fixture.pathA.toStdWString()}));
+    harness.settle();
+
+    ASSERT_EQ(harness.videoTasks->count(), 1) << "the removal evolves the tab, never splits it";
+    const QVariantMap evolved = harness.videoTasks->tabs().first().toMap();
+    EXPECT_FALSE(evolved.value(QStringLiteral("comparison")).toBool());
+    EXPECT_EQ(evolved.value(QStringLiteral("sourceCount")).toInt(), 1);
+    EXPECT_EQ(evolved.value(QStringLiteral("urls")).toStringList(),
+              QStringList{fixture.urlA.toString()});
+    EXPECT_EQ(evolved.value(QStringLiteral("title")).toString(), QStringLiteral("sb_a.mp4"));
+    EXPECT_EQ(harness.videoTasks->taskState(0).value(QStringLiteral("frame")).toInt(), 55)
+        << "a group evolution keeps the recorded observation state (decision f)";
+}
+
+// Slice-4 issue-restore adoption: the sync adopts the matching record in place (never a
+// new tab) or rewrites the active record when no record matches the session.
+TEST(MainQmlContractTests, VideoTabsIssueRestoreSyncAdoptsOrRewritesTheActiveRecord) {
+    VideoSidebarFixture fixture;
+    ASSERT_TRUE(fixture.prepare());
+
+    WorkspaceHarness harness;
+    harness.withVideoTasks = true;
+    VideoTabsRestoreFixture::pinDeterministicPlayback(harness);
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    harness.settle();
+
+    for (const QUrl* const url : {&fixture.urlA, &fixture.urlB}) {
+        QVariant opened;
+        ASSERT_TRUE(
+            QMetaObject::invokeMethod(harness.root.get(),
+                                      "openMediaFilesSelection",
+                                      Q_RETURN_ARG(QVariant, opened),
+                                      Q_ARG(QVariant, QVariant::fromValue(QVariantList{*url}))));
+        ASSERT_TRUE(opened.toBool());
+        ASSERT_TRUE(succeedPendingVideoOpen(
+            harness, {QFileInfo{url->toLocalFile()}.filePath().toStdWString()}));
+    }
+    ASSERT_EQ(harness.videoTasks->count(), 2);
+    ASSERT_EQ(harness.videoTasks->activeIndex(), 1);
+
+    // A restore that ends on task A's material adopts tab A: activated in place, no
+    // third tab, facts refreshed.
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {fixture.pathA.toStdWString()}));
+    QVariant synced;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        harness.root.get(), "syncActiveVideoTaskWithSession", Q_RETURN_ARG(QVariant, synced)));
+    ASSERT_TRUE(synced.toBool());
+    EXPECT_EQ(harness.videoTasks->count(), 2) << "adoption never creates a tab";
+    EXPECT_EQ(harness.videoTasks->activeIndex(), 0) << "the matching record is adopted";
+    EXPECT_EQ(harness.videoTasks->tabs().first().toMap().value(QStringLiteral("active")).toBool(),
+              true);
+
+    // A restore whose material matches no record rewrites the ACTIVE record's group.
+    const QString foreign = fixture.directory.filePath(QStringLiteral("sb_foreign.mp4"));
+    ASSERT_TRUE(writeTestPng(foreign));
+    ASSERT_TRUE(succeedPendingVideoOpen(harness, {foreign.toStdWString()}));
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        harness.root.get(), "syncActiveVideoTaskWithSession", Q_RETURN_ARG(QVariant, synced)));
+    ASSERT_TRUE(synced.toBool());
+    EXPECT_EQ(harness.videoTasks->count(), 2);
+    EXPECT_EQ(harness.videoTasks->activeIndex(), 0);
+    EXPECT_EQ(
+        harness.videoTasks->tabs().first().toMap().value(QStringLiteral("urls")).toStringList(),
+        QStringList{QUrl::fromLocalFile(foreign).toString()});
 }
 
 } // namespace

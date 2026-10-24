@@ -2881,6 +2881,12 @@ bool ReviewController::reopenSources(const QVariantList& urls, const int referen
         urls, referenceSourceIndex, true, application::OpenReviewIntent::ReplaceSources);
 }
 
+bool ReviewController::reopenSourcesWithoutMapping(const QVariantList& urls,
+                                                   const int referenceSourceIndex) {
+    return impl_->openSources(
+        urls, referenceSourceIndex, false, application::OpenReviewIntent::ReplaceSources);
+}
+
 bool ReviewController::changeReference(const int sourceIndex) {
     return impl_->changeReference(sourceIndex);
 }

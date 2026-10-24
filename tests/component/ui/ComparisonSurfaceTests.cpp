@@ -1031,6 +1031,120 @@ TEST(ComparisonSurfaceGeometryTests, MapsWipeLabelsToSelectedPairAndSplit) {
     EXPECT_FLOAT_EQ(wipe.sourceRects[1U].x, 200.0F);
 }
 
+// The side-by-side pair follows the current difference edge exactly like the wipe split:
+// a three-source session shows the compared pair in its two columns (A-C or B-C rebinds
+// them), while Between0And1 keeps the historical {0, 1} columns so two-source sessions
+// stay unchanged. The third entry keeps the remaining slot bound for peek consumers.
+TEST(ComparisonSurfaceGeometryTests, SideBySideLayoutPairsColumnsWithTheCurrentDifferenceEdge) {
+    const platform::SurfacePanelLayout firstPair =
+        platform::computeSurfacePanelLayout(platform::SurfaceViewMode::SideBySide,
+                                            901.0F,
+                                            600.0F,
+                                            901U,
+                                            600U,
+                                            0U,
+                                            platform::SurfaceDifferenceEdge::Between0And1,
+                                            0.5F);
+    ASSERT_EQ(firstPair.sourceCount, 2U);
+    EXPECT_EQ(firstPair.sourceSlots, (std::array<std::uint8_t, 3U>{0U, 1U, 2U}));
+
+    const platform::SurfacePanelLayout zeroAndTwo =
+        platform::computeSurfacePanelLayout(platform::SurfaceViewMode::SideBySide,
+                                            901.0F,
+                                            600.0F,
+                                            901U,
+                                            600U,
+                                            0U,
+                                            platform::SurfaceDifferenceEdge::Between0And2,
+                                            0.5F);
+    ASSERT_EQ(zeroAndTwo.sourceCount, 2U);
+    EXPECT_EQ(zeroAndTwo.sourceSlots, (std::array<std::uint8_t, 3U>{0U, 2U, 1U}));
+
+    const platform::SurfacePanelLayout oneAndTwo =
+        platform::computeSurfacePanelLayout(platform::SurfaceViewMode::SideBySide,
+                                            901.0F,
+                                            600.0F,
+                                            901U,
+                                            600U,
+                                            0U,
+                                            platform::SurfaceDifferenceEdge::Between1And2,
+                                            0.5F);
+    ASSERT_EQ(oneAndTwo.sourceCount, 2U);
+    EXPECT_EQ(oneAndTwo.sourceSlots, (std::array<std::uint8_t, 3U>{1U, 2U, 0U}));
+
+    // The pair choice only rebinds slots to columns; the two pixel-snapped column rects stay
+    // identical across the edges (odd width 901 splits into 450 + 451 device columns).
+    for (std::size_t index = 0U; index < 2U; ++index) {
+        EXPECT_FLOAT_EQ(zeroAndTwo.sourceRects[index].x, firstPair.sourceRects[index].x);
+        EXPECT_FLOAT_EQ(zeroAndTwo.sourceRects[index].width, firstPair.sourceRects[index].width);
+        EXPECT_FLOAT_EQ(oneAndTwo.sourceRects[index].x, firstPair.sourceRects[index].x);
+        EXPECT_FLOAT_EQ(oneAndTwo.sourceRects[index].width, firstPair.sourceRects[index].width);
+    }
+    EXPECT_FLOAT_EQ(firstPair.sourceRects[0U].x, 0.0F);
+    EXPECT_FLOAT_EQ(firstPair.sourceRects[0U].width, 450.0F);
+    EXPECT_FLOAT_EQ(firstPair.sourceRects[0U].height, 600.0F);
+    EXPECT_FLOAT_EQ(firstPair.sourceRects[1U].x, 450.0F);
+    EXPECT_FLOAT_EQ(firstPair.sourceRects[1U].width, 451.0F);
+    EXPECT_FALSE(firstPair.differenceRect.has_value());
+    EXPECT_FALSE(firstPair.secondaryDifferenceRect.has_value());
+}
+
+// Two-source sessions only ever run Between0And1; their layout must stay item-for-item
+// identical to the historical behaviour: default slot binding and two pixel-snapped columns.
+TEST(ComparisonSurfaceGeometryTests, SideBySideLayoutKeepsTwoSourceBehaviourUnchanged) {
+    const platform::SurfacePanelLayout layout =
+        platform::computeSurfacePanelLayout(platform::SurfaceViewMode::SideBySide,
+                                            800.0F,
+                                            450.0F,
+                                            800U,
+                                            450U,
+                                            0U,
+                                            platform::SurfaceDifferenceEdge::Between0And1,
+                                            0.25F);
+    ASSERT_EQ(layout.sourceCount, 2U);
+    EXPECT_EQ(layout.sourceSlots, (std::array<std::uint8_t, 3U>{0U, 1U, 2U}));
+    EXPECT_FLOAT_EQ(layout.sourceRects[0U].x, 0.0F);
+    EXPECT_FLOAT_EQ(layout.sourceRects[0U].y, 0.0F);
+    EXPECT_FLOAT_EQ(layout.sourceRects[0U].width, 400.0F);
+    EXPECT_FLOAT_EQ(layout.sourceRects[0U].height, 450.0F);
+    EXPECT_FLOAT_EQ(layout.sourceRects[1U].x, 400.0F);
+    EXPECT_FLOAT_EQ(layout.sourceRects[1U].width, 400.0F);
+    EXPECT_FLOAT_EQ(layout.sourceRects[1U].height, 450.0F);
+}
+
+// Labels, hit mapping and the pixel probe read computeSurfacePresentationGeometry, so the
+// pair rebinding must flow into the fitted content rects: with the A-C pair active, the left
+// column fits slot 0's extent and the right column fits slot 2's extent, not slot 1's.
+TEST(ComparisonSurfaceGeometryTests, SideBySidePresentationGeometryFollowsPairForOverlaysAndProbe) {
+    const std::array<platform::SurfaceDisplayExtent, 3U> extents{
+        platform::SurfaceDisplayExtent{.width = 1600.0F, .height = 900.0F},
+        platform::SurfaceDisplayExtent{.width = 800.0F, .height = 800.0F},
+        platform::SurfaceDisplayExtent{.width = 600.0F, .height = 1200.0F}};
+    const platform::SurfacePresentationGeometry geometry =
+        platform::computeSurfacePresentationGeometry(platform::SurfaceViewMode::SideBySide,
+                                                     900.0F,
+                                                     600.0F,
+                                                     900U,
+                                                     600U,
+                                                     0U,
+                                                     platform::SurfaceDifferenceEdge::Between0And2,
+                                                     0.5F,
+                                                     platform::SurfaceWipeOrientation::Vertical,
+                                                     extents,
+                                                     false,
+                                                     -1);
+    ASSERT_EQ(geometry.panels.sourceCount, 2U);
+    EXPECT_EQ(geometry.panels.sourceSlots, (std::array<std::uint8_t, 3U>{0U, 2U, 1U}));
+    // Column 0 fits slot 0 (16:9 into 450x600 -> 450x253.125); column 1 fits slot 2
+    // (portrait into 450x600 -> 300x600, centered at x = 525).
+    EXPECT_FLOAT_EQ(geometry.sourceContentRects[0U].width, 450.0F);
+    EXPECT_NEAR(geometry.sourceContentRects[0U].height, 253.125F, 0.001F);
+    EXPECT_FLOAT_EQ(geometry.sourceContentRects[0U].x, 0.0F);
+    EXPECT_FLOAT_EQ(geometry.sourceContentRects[1U].width, 300.0F);
+    EXPECT_FLOAT_EQ(geometry.sourceContentRects[1U].height, 600.0F);
+    EXPECT_FLOAT_EQ(geometry.sourceContentRects[1U].x, 525.0F);
+}
+
 TEST(ComparisonSurfaceGeometryTests, DualDifferenceLayoutPlacesTwoDifferencePanelsAndReference) {
     const platform::SurfacePanelLayout dualDiff =
         platform::computeSurfacePanelLayout(platform::SurfaceViewMode::DualDifference,

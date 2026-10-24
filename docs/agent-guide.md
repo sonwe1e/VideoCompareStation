@@ -79,6 +79,12 @@
   不再用 `qmltestrunner` 的 QtObject 假控制器（那与类型化属性在编译期不兼容）。改动
   `ui.ImageWorkspaceManual` 的夹具或命令时同步核对这一约束（见 ADR 0006）。
 - 时间线主源、GT 参考源、当前比较对是不同角色。改变 GT 不应改变时间轴，A/B/C 槽位不应充当跨会话文件身份。
+- 视频侧按「一次审查任务一个标签」组织（D-024）：`VideoTaskHost`（ui_qml，uncreatable）
+  只持任务记录与身份匹配（素材组多重集＋参考槽身份，顺序无关），仍是**单一** ReviewRuntime；
+  打开入口收敛 `host.openTask`，切换经 `ReviewController::reopenSourcesWithoutMapping`
+  （跨任务不得沿用 preserveDisplayedTime）＋Main.qml 四阶段恢复；侧栏单视频任务活动时就地
+  换片。设计全貌见 [视频任务标签设计](plans/video-task-tabs-design.md)，行为证据见台账
+  2026-10-24 条目。
 - 图片 `requestOpenPrimary` 会清空 B（新的单图任务）；「只换 A」用 `requestReplacePrimary`。
   对调与单侧替换不改写 `committedPairId`。
 - 渲染了差异图，不等于已经接通 MAE/PSNR；有解码器，不等于有格式验收或无损显示路径。
