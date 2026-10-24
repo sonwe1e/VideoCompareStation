@@ -4303,35 +4303,42 @@ Rectangle {
                         }
                     }
 
-                    // ---- Background quick chips under transparent regions --------------------
+                    // ---- Background selector under transparent regions --------------------------
                     // One group boundary per observation concern (§6): modes | channel view |
-                    // background. The separators keep the band readable without adding a row.
+                    // background. The separator keeps the band readable without adding a row.
+                    // Workspace redesign §5: the four mutually exclusive backgrounds are ONE
+                    // labelled selector ("背景·棋盘格 ▾" states the current value), not four
+                    // quick chips - the wide mode row already carries ten controls and a
+                    // checked chip among them never says which ground is active as plainly as
+                    // the label does. The dormant chips stay declared (and their radio entries
+                    // stay testable through the menu) so the one-click form can return if a
+                    // future width budget asks for it.
                     RowSeparator {}
 
                     ModeChip {
                         objectName: "imageBgChipDark"
-                        visible: !control.compactChrome
+                        visible: false
                         text: qsTr("深色")
                         selectGroup: 2
                         modeValue: 0
                     }
                     ModeChip {
                         objectName: "imageBgChipChecker"
-                        visible: !control.compactChrome
+                        visible: false
                         text: qsTr("棋盘")
                         selectGroup: 2
                         modeValue: 1
                     }
                     ModeChip {
                         objectName: "imageBgChipBlack"
-                        visible: !control.compactChrome
+                        visible: false
                         text: qsTr("黑底")
                         selectGroup: 2
                         modeValue: 2
                     }
                     ModeChip {
                         objectName: "imageBgChipWhite"
-                        visible: !control.compactChrome
+                        visible: false
                         text: qsTr("白底")
                         selectGroup: 2
                         modeValue: 3
@@ -4373,9 +4380,13 @@ Rectangle {
                             }
                         }
                     }
+                    // The wide-tier background entry: one labelled selector naming the current
+                    // ground (redesign §5). The compact tier folds the same four options into
+                    // the 更多 menu's 背景 submenu, so this button stays wide-only.
                     ImageCommandButton {
                         objectName: "imageBackgroundButton"
-                        visible: false
+                        visible: !control.compactChrome
+                        enabled: control.hasPrimary
                         text: control.backgroundModeLabel + " ▾"
                         implicitHeight: 30
                         leftPadding: 8

@@ -40,6 +40,17 @@ constexpr int kMaximumSourcesPerTask = 3;
     return name.isEmpty() ? path : name;
 }
 
+// The last path segment of the file's folder - the only part that stays short enough for a
+// tab. Empty for a bare file name with no folder.
+[[nodiscard]] QString parentFolderNameFor(const QString& path) {
+    if (path.isEmpty()) {
+        return {};
+    }
+    const QString folder = QFileInfo{path}.absolutePath();
+    const qsizetype slash = folder.lastIndexOf(QLatin1Char('/'));
+    return slash >= 0 ? folder.mid(slash + 1) : folder;
+}
+
 // Multiset equality of a task's source identities: order-independent and case-insensitive
 // (decision e), so B↔A and A↔B with the same reference source are the same task.
 [[nodiscard]] bool sameIdentityMultiset(const QStringList& first, const QStringList& second) {
@@ -481,6 +492,17 @@ QString VideoTaskHost::titleFor(const Task& task) const {
         return names.front();
     }
     if (names.size() == 2) {
+        if (names.at(0) == names.at(1)) {
+            // Two materials can share a file name across folders; the bare pair then reads
+            // as one file compared against itself. Name the parent folder on both sides so
+            // the tab still identifies which two materials the task holds.
+            const QString firstFolder = parentFolderNameFor(task.urlIdentities.at(0));
+            const QString secondFolder = parentFolderNameFor(task.urlIdentities.at(1));
+            if (!firstFolder.isEmpty() && firstFolder != secondFolder) {
+                return QStringLiteral("%1 (%2)  ↔  %3 (%4)")
+                    .arg(names.at(0), firstFolder, names.at(1), secondFolder);
+            }
+        }
         return QStringLiteral("%1  ↔  %2").arg(names.at(0), names.at(1));
     }
     return QStringLiteral("%1 + %2").arg(names.at(0)).arg(names.size() - 1);

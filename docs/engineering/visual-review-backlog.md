@@ -1,5 +1,52 @@
 # 视觉审查问题台账
 
+## 2026-10-24 设计指令轮：命令栏密度收敛与任务标签同名消歧
+
+- **需求**：UI 设计指令（Craft/Clarity/Distinction）——在已落地的五工作区改版基础上继续
+  打磨高影响视觉问题；先提交在途工作，再按 CHECK 维度实机核对。
+- **实机核对结论（分辨率先行）**：本机唯一显示器 2194×1234、Windows 缩放 100%，但显示器
+  EDID 物理 DPI ≈ 170，Qt 据此推得 devicePixelRatio ≈ 1.77。**应用无 DPI 清单且继承启动
+  进程的感知性**：从资源管理器等感知父进程启动时 DPR≈1.77、一切正常；从终端等非感知父进程
+  启动时 DPR=1，出现底部内容绘制越界（视频 OSC、图片视图条/状态栏被画面盖住）。该项目既有
+  视觉证据全部来自感知启动，故该问题长期未被发现。本轮所有验证截图均取自感知启动
+  （窗口逻辑尺寸约 1242×697 宽档；1440×900 参考宽档超出 2194 物理宽的屏幕容纳能力，
+  由 DPR=1 截图补充 chrome 核对）。
+- **实现**：
+  ① 图片命令栏背景四 chip（深色/棋盘/黑底/白底）收敛为**一个带当前值的选择器**
+  （`背景·棋盘格 ▾`，复用同排 `差异·选择▾` 的下拉模式；休眠的 `imageBackgroundButton`
+  直接启用，chip 转为 visible:false 保留可恢复形态）。双图模式行由 13 个控件降为 10 个，
+  单图由 9 个降为 6 个，落点为改版方案 §5「背景收成带文字的选择器」。
+  ② 图片/视频任务标签**同名文件消歧**：`shot.png ↔ shot.png` 改为
+  `shot.png (pairL) ↔ shot.png (pairR)`（仅两侧同名且父目录不同时附加；不同名标题不变）。
+- **验证**：`ui.ImageTaskHostTests`/`ui.VideoTaskHostTests`/`ui.ImageWorkspaceManual`
+  28/28；`ui.MainQmlContractTests` 169/169；`-TestGroup Images -FullMatrix` 通过
+  （3 项环境性跳过为既有）；`format-check`（含一次既有 clang-format 违规的顺带修复：
+  `MainQmlContractTests.cpp` 一行合并）、`dvs_format_check_qml`、`dvs_lint_qml` ✓。
+  截图证据 `out/verification/ui-design-2026-10-24/baseline/`（wide2-*/verify-*）。
+  选择器的点击展开未经合成输入验证（Windows 前台锁下原生弹窗不接受合成点击），
+  其菜单项由契约测试直接触发验证。
+
+## 2026-10-24 待办 P0：DPI 非感知启动时视频/图片底部控制被画面盖住
+
+- **现象**：从终端等非感知父进程启动（DPI 未声明应用继承启动进程感知性 → DPR=1）：
+  视频工作区的时间控制坞（视图条/时间轴/播放行/区间行）与图片工作区的视图条、状态读数行
+  不渲染，视频/画面内容绘制到窗口底缘之外将其覆盖。状态机本身正确
+  （实测 oscState=0/docked=true、OSC 几何 1412×189@y680、视口 bottomMargin=197、
+  舞台 1410×544 均已正确收缩），纯粹是绘制顺序/越界问题：将 PlayerOsc 的 z 由 50 提高到
+  500 即使其可见（实验性验证，未作为修复采用）。
+- **影响面**：所有从命令行/脚本启动的会话（开发、自动化、部分用户场景）；资源管理器启动
+  不受影响。属既有缺陷，非本轮改版引入（10-22 证据同样只覆盖感知启动）。
+- **复现**：以非感知父进程启动 CompareStation 并打开两个测试视频
+  （`tests/fixtures/media/h264_a_320x180_30fps_12.mp4` 与
+  `h264_disputed_metadata_320x180_30fps_12.mp4`），窗口 1440×900 逻辑宽档，观察底部。
+- **证据**：`out/verification/ui-design-2026-10-24/baseline/` 下
+  `video-pair-pristine*.png`（缺失 OSC）、`video-pair-aware-parent.png` 与
+  `wide2-video-pair.png`（感知启动正常）、`image-single.png`（DPR=1 缺底栏）与
+  `wide2-image-single.png`（感知启动正常）。
+- **建议方向**：排查 ComparisonRenderNode/图片提供者在 DPR=1 下的绘制边界（synchronize 的
+  bounds 与 scissor 使用）或显式声明应用 DPI 感知性（需评估对既有用户的影响），修复时补
+  一个非感知启动的宽档截图用例。
+
 ## 2026-10-24 工作区改版 P6 收口（方案同上，未提交）
 
 - **需求**：方案 §12 P6 行与 §13——五工作区互转、打开/错误/恢复/空态、弹窗、高 DPI 与
@@ -27,8 +74,9 @@
   9 项环境性跳过：5 项 D3D 呈现统计探针本轮不可用、4 项与首轮相同的既有跳过）**；
   `dvs_format_check_qml`、`dvs_lint_qml` ✓。证据目录
   `out/verification/ui-redesign-2026-10-24/`（P0–P5 各批次）。
-- **方案状态**：P0–P6 全部完成，方案目标（五类工作区视觉与布局）在工作区实现完毕，
-  未提交。后续可选项：弹窗阴影（推迟项）、用户真机走查反馈。
+- **方案状态**：P0–P6 全部完成，方案目标（五类工作区视觉与布局）已随 `9640b52`
+  （feat(ui): land video task tabs and the five-workspace redesign）合入。后续可选项：
+  弹窗阴影（推迟项）、用户真机走查反馈。
 
 ## 2026-10-24 工作区改版 P5（方案同上，未提交）
 

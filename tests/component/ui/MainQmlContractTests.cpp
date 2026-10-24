@@ -3357,8 +3357,7 @@ TEST(MainQmlContractTests, ProtocolRowNavigatesGeneratedFramesThroughTheCommandC
     // Plan §8 layer 4: an unloaded protocol no longer costs a permanent row - the import
     // entry returns to the on-demand expansion, so its reachability witness opens the layer
     // the way the playback row's 更多 entry does and finds the chip there.
-    auto* const transportBar =
-        harness.root->findChild<QQuickItem*>(QStringLiteral("transportBar"));
+    auto* const transportBar = harness.root->findChild<QQuickItem*>(QStringLiteral("transportBar"));
     ASSERT_NE(transportBar, nullptr);
     EXPECT_FALSE(loadChip->property("visible").toBool());
     transportBar->setProperty("transportExpanded", true);

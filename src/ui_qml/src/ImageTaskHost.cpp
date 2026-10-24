@@ -42,6 +42,17 @@ constexpr qint64 kMiB = 1024LL * 1024LL;
     return name.isEmpty() ? path : name;
 }
 
+// The last path segment of the file's folder - the only part that stays short enough for a
+// tab. Empty for a bare file name with no folder.
+[[nodiscard]] QString parentFolderNameFor(const QString& path) {
+    if (path.isEmpty()) {
+        return {};
+    }
+    const QString folder = QFileInfo{path}.absolutePath();
+    const qsizetype slash = folder.lastIndexOf(QLatin1Char('/'));
+    return slash >= 0 ? folder.mid(slash + 1) : folder;
+}
+
 [[nodiscard]] bool sameIdentityList(const QStringList& first, const QStringList& second) {
     if (first.size() != second.size()) {
         return false;
@@ -527,6 +538,17 @@ QString ImageTaskHost::titleFor(const Task& task) const {
     }
     if (primary.isEmpty()) {
         return secondary;
+    }
+    if (primary == secondary) {
+        // Two materials can share a file name across folders; the bare pair then reads as
+        // one file compared against itself. Name the parent folder on both sides so the
+        // tab still identifies which two materials the task holds.
+        const QString primaryFolder = parentFolderNameFor(task.primaryPath);
+        const QString secondaryFolder = parentFolderNameFor(task.secondaryPath);
+        if (!primaryFolder.isEmpty() && primaryFolder != secondaryFolder) {
+            return QStringLiteral("%1 (%2)  ↔  %3 (%4)")
+                .arg(primary, primaryFolder, secondary, secondaryFolder);
+        }
     }
     return QStringLiteral("%1  ↔  %2").arg(primary, secondary);
 }
