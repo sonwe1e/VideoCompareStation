@@ -28,8 +28,9 @@ Use the wrapper:
 
 Local build/check/test work must use this wrapper, including single-target probes. It limits the
 process tree to at most four logical CPUs, limits compilation to two jobs at BelowNormal priority,
-and serializes all presets in this checkout. Tests keep Normal priority inside the same CPU bound
-so scheduler starvation does not invalidate UI/shutdown deadlines.
+and serializes configures and `-Fresh` repository-wide; plain build/test runs of different presets
+(`dev` and `dev2`) may proceed concurrently under per-preset locks. Tests keep Normal priority
+inside the same CPU bound so scheduler starvation does not invalidate UI/shutdown deadlines.
 Do not bypass it with raw Ninja or hand-built PATH/cmd invocations: Ninja defaults
 to CPU-count-based parallelism, and missing VSLANG can corrupt incremental header dependencies.
 Generated compile/link pools are additional protection, not a substitute for the wrapper.
@@ -50,6 +51,15 @@ default dev loop. `-TestGroup Core|Media|Images|Playback|Sidebar|Ui|Build|Shell`
 development routes and runs one representative UI style/DPI per suite; add `-FullMatrix` for
 style, popup, layout or DPI changes. Groups are starting points, not automatic impact analysis:
 use `-TestRegex` for a narrower case or additional affected suites. Do not combine both selectors.
+
+Fast-iteration aids (details in [docs/building.md](docs/building.md#构建加速sccache双槽与定向-lint)):
+during development iterate with a single-case `-TestRegex` and run the full affected suite once per
+slice; `-Target lint-changed` clang-tidy-lints only the working tree's changed C++ files (the full
+`lint` target stays the hand-off gate); `-LockWaitSeconds <n>` waits for a busy preset instead of
+failing fast; a second preset (`dev2`) builds and tests concurrently with `dev`. When sccache is
+installed it is auto-detected and injected at configure time (cache under `out/sccache`, `/Z7`
+debug info; opt out with `DVS_DISABLE_SCCACHE=1`); adopt it on an existing build directory with
+one `-Configure` run.
 
 Use impact-based validation for both iteration and handoff; a small, isolated change may finish
 with relevant tests and applicable checks, without a full suite or whole-repository lint.

@@ -50,6 +50,11 @@
       }
     },
     {
+      "name": "dev2",
+      "displayName": "Second Debug development slot (parallel verification)",
+      "inherits": "dev"
+    },
+    {
       "name": "core-dev",
       "displayName": "Platform-neutral core development build",
       "generator": "Ninja",
@@ -140,6 +145,11 @@
       "jobs": 2
     },
     {
+      "name": "dev2",
+      "configurePreset": "dev2",
+      "jobs": 2
+    },
+    {
       "name": "dev-coverage",
       "configurePreset": "dev-coverage",
       "jobs": 2
@@ -198,6 +208,11 @@
       "name": "dev-coverage",
       "inherits": "dev",
       "configurePreset": "dev-coverage"
+    },
+    {
+      "name": "dev2",
+      "inherits": "dev",
+      "configurePreset": "dev2"
     },
     {
       "name": "asan",

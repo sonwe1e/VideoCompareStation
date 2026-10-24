@@ -215,6 +215,41 @@ if ($QualityTools) {
     }
 }
 
+# Optional compiler cache. Unlike the required tools above, a missing sccache is not an
+# error: build.ps1 injects the launcher only at configure time and only when the binary
+# exists, so machines without it keep building unchanged. DVS_SCCACHE points at an explicit
+# binary; DVS_DISABLE_SCCACHE=1 opts out entirely.
+$env:SCCACHE_BIN = ''
+if (-not $env:DVS_DISABLE_SCCACHE) {
+    $sccacheCommand = Get-Command sccache -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    # winget installs without a PATH refresh and without the Links alias for this package;
+    # the versioned package directory is globbed so detection survives version bumps.
+    $sccacheWingetPackages = Get-ChildItem -LiteralPath (
+            Join-Path $env:LOCALAPPDATA 'Microsoft/WinGet/Packages') -Directory -Filter 'Mozilla.sccache_*' |
+        ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Recurse -Filter sccache.exe |
+            Select-Object -ExpandProperty FullName -First 1 }
+    $sccacheCandidates = @(
+        $env:DVS_SCCACHE
+        $(if ($sccacheCommand) { $sccacheCommand.Source })
+        @($sccacheWingetPackages)
+        (Join-Path $env:LOCALAPPDATA 'Microsoft/WinGet/Links/sccache.exe')
+        (Join-Path $env:USERPROFILE '.cargo/bin/sccache.exe')
+    )
+    foreach ($candidate in ($sccacheCandidates | Where-Object { $_ } | Select-Object -Unique)) {
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+        $versionOutput = (& $candidate --version 2>&1 | Out-String)
+        if ($LASTEXITCODE -eq 0 -and $versionOutput -match 'sccache\s+(\d+\.\d+(?:\.\d+)?)') {
+            $env:SCCACHE_BIN = (Resolve-Path -LiteralPath $candidate).Path
+            Write-Host "build tool: sccache $($Matches[1]) -> $env:SCCACHE_BIN (optional compiler cache)"
+            break
+        }
+    }
+    if (-not $env:SCCACHE_BIN) {
+        Write-Host 'build tool: sccache not found; compiler cache stays off (optional)'
+    }
+}
+
 $buildToolDirectories = @(
     (Split-Path $env:CMAKE_EXECUTABLE)
     (Split-Path $env:NINJA_BIN)

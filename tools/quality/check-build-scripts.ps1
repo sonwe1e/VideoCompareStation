@@ -551,13 +551,20 @@ $passed++
 $heldLock = [IO.File]::Open((Join-Path $fixtureRepository 'out/build/.build.lock'),
     [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
 try {
-    foreach ($preset in @('dev', 'release')) {
-        $result = Invoke-WrapperCase @{ Preset = $preset }
-        Assert-Contract ($result.ExitCode -ne 0 -and $result.Records.Count -eq 0) `
-            'A different preset bypassed the repository resource lock.' $result
-    }
+    # Repository-lock policy (2026-10-24): the repository-wide lock serializes configures
+    # and -Fresh only - they write shared state (out/vcpkg, the toolchain cache). A plain
+    # build or test of a preset with an existing cache runs under its own preset lock, so a
+    # second preset must proceed while the repository lock is held by someone else.
+    $result = Invoke-WrapperCase @{ Preset = 'dev' }
+    Assert-Contract ($result.ExitCode -eq 0) 'A plain build of a cached preset was blocked by the repository configure lock.' $result
+    # A preset without a cache has to configure, and an explicit -Configure asks for one;
+    # both must still refuse while the repository lock is held, before running any tool.
+    $result = Invoke-WrapperCase @{ Preset = 'release' }
+    Assert-Contract ($result.ExitCode -ne 0 -and $result.Records.Count -eq 0) 'An implicit configure bypassed the repository resource lock.' $result
+    $result = Invoke-WrapperCase @{ Configure = $true }
+    Assert-Contract ($result.ExitCode -ne 0 -and $result.Records.Count -eq 0) 'An explicit configure bypassed the repository resource lock.' $result
 } finally { $heldLock.Dispose() }
-Write-Host 'PASS: different presets cannot multiply the resource budget'
+Write-Host 'PASS: configures serialize repository-wide; cached-preset builds run under per-preset locks'
 $passed++
 
 $result = Invoke-WrapperCase @{} 'old-cmake'

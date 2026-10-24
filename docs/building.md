@@ -74,7 +74,8 @@ pwsh tools/build/build.ps1 -Preset dev -Test -TestGroup Sidebar -FullMatrix -Tes
 ```
 
 `-TestJobs N` 只改变本次 CTest 并行度；默认仍遵循 preset 的单线程设置。真实窗口输入测试
-保持 `RUN_SERIAL`，不会同时争抢焦点。不要自行并发启动同一构建目录的多个 wrapper。
+保持 `RUN_SERIAL`，不会同时争抢焦点。不要自行并发启动**同一构建目录**的多个 wrapper；
+不同 preset（`dev`／`dev2`）的并行构建与测试是允许的，见下节。
 
 自 2026-10-22 起，**小改动允许以相关验证完成交付**，不再要求每项修改最后追加全套。
 按行为、依赖和风险选择，不能以改动行数代替影响分析。以下规则同时适用于开发循环和最终交付：
@@ -101,7 +102,8 @@ pwsh tools/build/build.ps1 -Preset dev -Test -TestGroup Sidebar -FullMatrix -Tes
   `dvs_format_check_cpp`／`dvs_format_check_qml` 仍扫描该语言的全仓文件，并非按 diff 增量。
 - 当前 `lint` 在 `cmake/Quality.cmake` 中是一个 custom target，依次执行全部纳入范围的生产
   C++ 翻译单元，且依赖生产构建和 QML lint；每次调用都会重新分析。增大 `-TestJobs` 不会
-  加速它。它尚无可靠的按改动文件／头文件依赖缓存，不能把它称为增量 lint。
+  加速它。开发循环可用 `lint-changed`（见下节）只分析工作区改动的 C++ 文件；全量 `lint`
+  仍是交付门禁，且没有按头文件依赖的缓存——改动头文件时仍需全量。
 - 默认 `-Test` 先构建全部目标；已明确测试二进制及其依赖时，可用 `-Target` 限定构建目标后
   搭配 `-TestRegex`。必须确认所选测试依赖均已重建，不能为省时运行旧二进制。
 - 已经对最终源码构建通过，仅重跑测试时可用 `-TestOnly`；源码或依赖变化后先重新构建。
@@ -116,6 +118,24 @@ pwsh tools/build/build.ps1 -Preset dev -Test -TestGroup Sidebar -FullMatrix -Tes
 & ./tools/build/build.ps1 -Preset dev -Target @('dvs_format_check_qml', 'dvs_lint_qml')
 pwsh tools/build/build.ps1 -Preset dev -Test -TestRegex '^ui[.]player_osc$'
 ```
+
+### 构建加速：sccache、双槽与定向 lint
+
+- **编译缓存（sccache，可选）**：wrapper 在 configure 时自动探测 sccache（`DVS_SCCACHE`
+  指定路径，`DVS_DISABLE_SCCACHE=1` 关闭）。启用时注入 `CMAKE_C/CXX_COMPILER_LAUNCHER` 并把
+  MSVC 调试信息切为 `/Z7`（嵌入式，保证缓存键稳定、不受 PDB 并发影响）；缓存在
+  `out/sccache`（默认上限 10 GB，随 checkout、不进漫游目录）。**已有构建目录需跑一次
+  `-Preset dev -Configure` 采纳**。未安装 sccache 的机器构建行为完全不变。
+- **双构建槽（`dev`／`dev2`）**：仓库级锁现在只保护会写共享状态的 configure 与 `-Fresh`
+  （vcpkg manifest 安装、工具链缓存）；普通构建／测试只持有自己 preset 的锁，因此 `dev2`
+  可以与 `dev` 并行构建和测试。两个槽各自仍受 4 CPU／2 作业预算约束，CPU 时间片共享——
+  一槽跑测试（多为等待）时另一槽编译收益最明显。同一 preset 内仍严格串行。锁忙时可用
+  `-LockWaitSeconds <n>` 有界等待代替立即失败。
+- **定向 lint（`lint-changed`）**：`-Target lint-changed` 只对工作区改动（已修改＋未跟踪）
+  的生产 C++ 文件运行 clang-tidy；脚本自计数（planned==executed 断言、git 失败即报错），
+  空选择（纯头文件／纯 QML 改动）合法通过并明示。全量 `lint` 语义不变，仍是交付门禁。
+- **单用例迭代约定**：迭代期用 `-TestRegex` 精确到单个用例（秒级反馈），每片改动结束时
+  跑一次受影响套件全量，交付前按上方选择表补齐门禁；不要每轮编辑都跑整套套件。
 
 慢检查应读取**本次任务**日志，比较进程 CPU 时间／I/O 在两个采样点之间是否变化，并核对当前
 命令和子进程；不能仅凭进程存在或累计 CPU 时间断言正常推进，也不能把 Ninja 的总步骤数当作

@@ -17,6 +17,10 @@ param(
     [string[]]$Target = @(),
     [switch]$Test,
     [string]$TestRegex = '',
+    # Bounded wait for the build locks instead of failing fast when another build is
+    # running; 0 (the default) keeps the historical immediate refusal.
+    [ValidateRange(0, 3600)]
+    [int]$LockWaitSeconds = 0,
     # Named development routes use one representative UI style/DPI by default.
     # An unfiltered -Test still runs the complete preset, including the UI matrix.
     [ValidateSet('Core', 'Media', 'Images', 'Playback', 'Sidebar', 'Ui', 'Build', 'Shell')]
@@ -77,9 +81,25 @@ $originalEnvironment = [Environment]::GetEnvironmentVariables('Process')
 $resourceState = $null
 try {
 $resourceState = Enter-BuildResourcePolicy
-$qualityTools = -not ($configurePreset.cacheVariables.PSObject.Properties['DVS_ENABLE_QUALITY_TOOLS'] -and
-    $configurePreset.cacheVariables.DVS_ENABLE_QUALITY_TOOLS -eq $false)
+# A purely inheriting preset (for example dev2) defines no cacheVariables of its own, so
+# the raw JSON read must tolerate the property's absence instead of throwing under
+# StrictMode. Inheritance itself is resolved by CMake, not by this script.
+$presetCacheVariables = if ($configurePreset.PSObject.Properties['cacheVariables']) {
+    $configurePreset.cacheVariables
+} else {
+    $null
+}
+$qualityTools = -not ($presetCacheVariables -and
+    $presetCacheVariables.PSObject.Properties['DVS_ENABLE_QUALITY_TOOLS'] -and
+    $presetCacheVariables.DVS_ENABLE_QUALITY_TOOLS -eq $false)
 . (Join-Path $PSScriptRoot 'env.ps1') -VcpkgRoot $VcpkgRoot -VcvarsAll $VcvarsAll -CMakeExecutable $CMakeExecutable -NinjaExecutable $NinjaExecutable -BuildDirectory $binaryDir -QualityTools:$qualityTools
+
+# The compiler cache daemon adopts its environment at first start, so pin the cache to the
+# checkout (bounded, no roaming profile) before any compile can launch it.
+if ($env:SCCACHE_BIN) {
+    if (-not $env:SCCACHE_DIR) { $env:SCCACHE_DIR = Join-Path $repoRoot 'out/sccache' }
+    if (-not $env:SCCACHE_CACHE_SIZE) { $env:SCCACHE_CACHE_SIZE = '10G' }
+}
 
 function Invoke-BuildTool {
     param([string]$Executable, [string[]]$ToolArguments)
@@ -227,14 +247,32 @@ $repositoryLock = $null
 if (-not $Doctor) {
     $lockDirectory = Join-Path $repoRoot 'out/build'
     New-Item -ItemType Directory -Path $lockDirectory -Force | Out-Null
-    try {
-        $repositoryLock = [IO.File]::Open((Join-Path $lockDirectory '.build.lock'),
-            [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
-        $buildLock = [IO.File]::Open((Join-Path $lockDirectory ".$Preset.lock"),
-            [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
-    } catch [IO.IOException] {
-        if ($null -ne $repositoryLock) { $repositoryLock.Dispose() }
-        throw "Another build or test is using this repository (requested preset '$Preset'). Wait for it to finish before retrying."
+    # The repository-wide lock guards state shared beyond one build directory: a configure
+    # (the vcpkg manifest writes out/vcpkg and refreshes the toolchain cache) and the
+    # -Fresh dependency rebuild. Plain build and test runs touch only their own preset
+    # directory, so two presets (for example dev and dev2) may build and test concurrently
+    # while configures still serialize.
+    $willConfigure = $Fresh -or $Configure -or $UseInstalledDependencies -or
+        -not (Test-Path -LiteralPath $cacheFile)
+    $lockDeadline = [DateTime]::UtcNow.AddSeconds($LockWaitSeconds)
+    while ($true) {
+        try {
+            if ($willConfigure) {
+                $repositoryLock = [IO.File]::Open((Join-Path $lockDirectory '.build.lock'),
+                    [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+            }
+            $buildLock = [IO.File]::Open((Join-Path $lockDirectory ".$Preset.lock"),
+                [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+            break
+        } catch [IO.IOException] {
+            if ($null -ne $repositoryLock) { $repositoryLock.Dispose(); $repositoryLock = $null }
+            if ($null -ne $buildLock) { $buildLock.Dispose(); $buildLock = $null }
+            if ([DateTime]::UtcNow -ge $lockDeadline) {
+                $scope = if ($willConfigure) { 'repository (a configure is running) or preset' } else { "preset '$Preset'" }
+                throw "Another build or test is using this $scope (requested preset '$Preset'). Wait for it to finish, pass -LockWaitSeconds, or use the second preset (dev2)."
+            }
+            Start-Sleep -Milliseconds 500
+        }
     }
 }
 Push-Location -LiteralPath $repoRoot
@@ -294,6 +332,17 @@ try {
             foreach ($key in $buildQualityPaths.Keys) {
                 $configureArgs += "-D${key}:FILEPATH=$($buildQualityPaths[$key])"
             }
+            if ($env:SCCACHE_BIN) {
+                # Launcher + /Z7 (embedded debug info): cached compiles stay reusable and
+                # PDB contention cannot leak into the cache key. Machines without sccache
+                # configure exactly as before; these variables only land when it was found.
+                $configureArgs += @(
+                    "-DCMAKE_C_COMPILER_LAUNCHER=$env:SCCACHE_BIN",
+                    "-DCMAKE_CXX_COMPILER_LAUNCHER=$env:SCCACHE_BIN",
+                    '-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT:STRING=Embedded'
+                )
+                Write-Host "compiler cache: sccache enabled (SCCACHE_DIR=$env:SCCACHE_DIR)"
+            }
             if ($Fresh) { $configureArgs += '--fresh' }
             if ($UseInstalledDependencies) {
                 $configureArgs += '-DVCPKG_MANIFEST_INSTALL=OFF'
@@ -309,6 +358,10 @@ try {
         $buildArgs = @('--build', '--preset', $Preset, '--parallel', [string]$resourceState.Jobs)
         if ($Target.Count -gt 0) { $buildArgs += @('--target') + $Target }
         Invoke-BuildTool $env:CMAKE_EXECUTABLE $buildArgs
+        if ($env:SCCACHE_BIN) {
+            # Best-effort cache report; a not-yet-started daemon just prints nothing.
+            $null = & $env:SCCACHE_BIN --show-stats 2>$null
+        }
         Test-HeaderDependencies
     }
     if ($Test -or $TestOnly) {

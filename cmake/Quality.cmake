@@ -163,6 +163,28 @@ function(dvs_add_quality_targets)
     endforeach()
     add_custom_target(lint ${dvs_clang_tidy_commands} VERBATIM)
 
+    # Targeted lint for the development loop: lint-changed re-runs clang-tidy on exactly
+    # the lintable C++ files touched by the working tree (modified plus untracked), so an
+    # iteration pays seconds instead of the whole-repository pass. The full `lint` target
+    # remains the hand-off gate; a header-only change legitimately selects zero files.
+    set(cppLintFileList "${CMAKE_BINARY_DIR}/dvs-cpp-lint-files.txt")
+    string(REPLACE ";" "\n" cppLintFileListContents "${cppLintFiles}")
+    file(GENERATE OUTPUT "${cppLintFileList}" CONTENT "${cppLintFileListContents}\n")
+    find_package(Git REQUIRED)
+    add_custom_target(
+        lint-changed
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DCLANG_TIDY_EXECUTABLE=${CLANG_TIDY_EXECUTABLE}"
+            "-DBINARY_DIR=${CMAKE_BINARY_DIR}"
+            "-DFILE_LIST=${cppLintFileList}"
+            "-DGIT_EXECUTABLE=${GIT_EXECUTABLE}"
+            "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}"
+            -P "${PROJECT_SOURCE_DIR}/cmake/RunClangTidyChanged.cmake"
+        VERBATIM
+    )
+    add_dependencies(lint-changed dvs_check_msvc_dependencies)
+
     add_custom_target(format DEPENDS dvs_format_cpp)
     add_custom_target(format-check DEPENDS dvs_format_check_cpp)
     add_dependencies(format-check dvs_check_no_playback_qimage)
