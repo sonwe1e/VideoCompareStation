@@ -2426,11 +2426,89 @@ Rectangle {
             viewportItem: viewport
         }
 
-        // The title and the size/format readout sit on the image itself, so they get a
-        // translucent plate: readable over bright or busy content, and it never takes canvas
-        // input away from panning, marquee selection or tool strokes underneath.
+        // Source identity on the canvas is one quiet pill - the slot's letter badge plus the
+        // file name, the same language the video stage's source pills already use. The
+        // size/format/alpha/viewing-path line that used to sit under the name had three other
+        // homes (source strip, probe readout, inspector); the canvas stops repeating it over
+        // the material, and a hover still reveals the full path.
         Rectangle {
-            visible: viewport.label.length > 0 || viewport.title.length > 0
+            id: canvasIdentityPill
+
+            visible: (viewport.slot === 2 || viewport.slot === 3) && viewport.title.length > 0
+            readonly property bool isSecondary: viewport.slot === 3
+            readonly property color badgeGround: isSecondary ? Theme.sourceBBackground : Theme.sourceABackground
+            readonly property color badgeInk: isSecondary ? Theme.sourceB : Theme.sourceA
+            // The plate hugs the file name (18 px badge column + end insets) and only elides
+            // once the name outgrows the panel or the 280 px cap.
+            width: Math.min(280, Math.max(80, viewport.width - 24), canvasPillName.implicitWidth + 44)
+            height: canvasPillBadge.height + 10
+            radius: Theme.radiusSmall
+            color: Theme.stageLabel
+            border.width: 1
+            border.color: Theme.stageLabelBorder
+            anchors {
+                top: parent.top
+                left: parent.left
+                margins: 10
+            }
+
+            Rectangle {
+                id: canvasPillBadge
+
+                width: 18
+                height: 18
+                radius: Theme.radiusMicro
+                // The badge carries the slot's identity colour (dark source ground, source
+                // letter); the plate body stays neutral, matching the source chip language.
+                color: canvasIdentityPill.badgeGround
+                anchors {
+                    left: parent.left
+                    leftMargin: 6
+                    verticalCenter: parent.verticalCenter
+                }
+
+                Text {
+                    anchors.centerIn: parent
+                    text: canvasIdentityPill.isSecondary ? "B" : "A"
+                    color: canvasIdentityPill.badgeInk
+                    font.pixelSize: Theme.fontSecondary
+                    font.weight: Font.Bold
+                }
+            }
+
+            Text {
+                id: canvasPillName
+
+                objectName: "imageViewportTitle-" + viewport.slot
+                text: viewport.title
+                color: Theme.primaryText
+                font.pixelSize: Theme.fontSecondary
+                elide: Text.ElideMiddle
+                anchors {
+                    left: parent.left
+                    leftMargin: 30
+                    right: parent.right
+                    rightMargin: 10
+                    verticalCenter: parent.verticalCenter
+                }
+
+                HoverHandler {
+                    id: canvasPillNameHover
+                }
+
+                VcsToolTip {
+                    visible: canvasPillNameHover.hovered && viewport.titlePath.length > 0
+                    text: viewport.titlePath
+                }
+            }
+        }
+
+        // The difference canvas keeps its one short line (mode + peak + resampling warning):
+        // the full metric table lives in the inspector, so the long sentence no longer parks
+        // itself over the middle of the picture. Source viewports (slots 2/3) use the identity
+        // pill above instead of this plate.
+        Rectangle {
+            visible: viewport.slot !== 2 && viewport.slot !== 3 && viewport.label.length > 0
             width: Math.min(viewportLabelColumn.implicitWidth + 18, Math.max(200, viewport.width - 60))
             height: viewportLabelColumn.implicitHeight + 12
             radius: Theme.radiusSmall
@@ -2448,26 +2526,6 @@ Rectangle {
 
                 spacing: 2
                 anchors.centerIn: parent
-
-                Text {
-                    visible: viewport.title.length > 0
-                    objectName: "imageViewportTitle-" + viewport.slot
-                    text: viewport.title
-                    color: Theme.primaryText
-                    font.pixelSize: Theme.fontSecondary
-                    font.weight: Font.DemiBold
-                    elide: Text.ElideMiddle
-                    width: Math.min(implicitWidth, Math.max(160, viewport.width - 76))
-
-                    HoverHandler {
-                        id: viewportTitleHover
-                    }
-
-                    VcsToolTip {
-                        visible: viewportTitleHover.hovered && viewport.titlePath.length > 0
-                        text: viewport.titlePath
-                    }
-                }
 
                 Text {
                     visible: viewport.label.length > 0
