@@ -466,7 +466,30 @@ foreach(dvs_review_shell_test IN ITEMS empty_review_view player_osc timeline_tra
     )
 endforeach()
 
-foreach(dvs_menu_qml_test IN ITEMS vcs_menu application_menu_bar active_source_strip)
+set(dvs_edit_continuity_filter
+    "MainQmlContractTests.ImageEditModeCropsAWorkingCopyAndKeepsTheOriginal:MainQmlContractTests.ImageEditComparisonIncludesAnnotationsAndReturnsToThePreservedSession:MainQmlContractTests.ImageUnsavedWorkingCopyBlocksWindowCloseUntilExplicitDiscard:MainQmlContractTests.ImageTabEditSessionStaysBoundToItsOwnTab"
+)
+foreach(dvs_edit_style IN ITEMS Basic Windows)
+    foreach(dvs_scale_factor ${dvs_dpi_scale_factors})
+        string(REPLACE "." "_" dvs_scale_name "${dvs_scale_factor}")
+        add_test(
+            NAME "ui.ImageEditContinuity.${dvs_edit_style}.scale-${dvs_scale_name}"
+            COMMAND "$<TARGET_FILE:dvs_main_qml_contract_tests>"
+                "--gtest_filter=${dvs_edit_continuity_filter}"
+        )
+        set_tests_properties(
+            "ui.ImageEditContinuity.${dvs_edit_style}.scale-${dvs_scale_name}"
+            PROPERTIES
+                LABELS "component;ui_qml"
+                TIMEOUT 120
+                RUN_SERIAL TRUE
+                ENVIRONMENT
+                    "QSG_RENDER_LOOP=basic;QT_QUICK_CONTROLS_STYLE=${dvs_edit_style};QT_SCALE_FACTOR=${dvs_scale_factor}"
+        )
+    endforeach()
+endforeach()
+
+foreach(dvs_menu_qml_test IN ITEMS vcs_menu application_menu_bar active_source_strip image_task_tabs)
     foreach(dvs_qml_style IN ITEMS Basic Windows)
         foreach(dvs_scale_factor ${dvs_dpi_scale_factors})
             string(REPLACE "." "_" dvs_scale_name "${dvs_scale_factor}")

@@ -13,6 +13,7 @@
 namespace dvs::ui {
 
 class ImageReviewController;
+class ImageEditController;
 
 // Owns the still-image review tasks shown as tabs in one window. Each task is an independent
 // ImageReviewController, so switching tabs keeps the pair, decode buffers, difference cache and
@@ -63,6 +64,9 @@ public:
     // drops and external opens; duplicate material activates the existing tab instead of
     // loading it twice.
     Q_INVOKABLE int openImages(const QVariantList& urls);
+    // Immutable in-memory original/edit snapshot. Never enters recent-file history or
+    // pretends to be a reopenable file; charged against the existing task/heap limits.
+    Q_INVOKABLE int openEditComparison(ImageEditController* edit);
     Q_INVOKABLE bool activate(int index);
     Q_INVOKABLE bool closeAt(int index);
     Q_INVOKABLE bool closeActive();
@@ -94,6 +98,8 @@ private:
         bool loaded = false;
         bool autoCreatedForFolder = false;
         bool activateWhenLoaded = false;
+        QString editSnapshotKey;
+        QString editSourceLabel;
         int pendingRequestId = 0;
         int folderRequestId = 0;
     };

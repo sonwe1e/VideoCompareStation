@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import QtQuick.Controls
 import "VcsTheme.js" as Theme
 
 // One tab per video review task (docs/plans/video-task-tabs-design.md §6). Deliberately the
@@ -17,11 +18,31 @@ Item {
 
     property var tabsModel: []
     property int activeIndex: -1
+    property bool blocksGlobalMediaShortcuts: true
 
     signal tabActivated(int index)
     signal tabCloseRequested(int index)
 
     implicitHeight: 36
+
+    function revealActiveTab() {
+        if (root.activeIndex >= 0)
+            tabList.positionViewAtIndex(root.activeIndex, ListView.Contain);
+    }
+    function navigateTo(index) {
+        if (index < 0 || index >= root.tabsModel.length)
+            return;
+        root.tabActivated(index);
+        Qt.callLater(() => {
+            root.revealActiveTab();
+            const item = tabList.itemAtIndex(root.activeIndex);
+            if (item)
+                item.forceActiveFocus(Qt.TabFocusReason);
+        });
+    }
+    onActiveIndexChanged: Qt.callLater(revealActiveTab)
+    onWidthChanged: Qt.callLater(revealActiveTab)
+    onTabsModelChanged: Qt.callLater(revealActiveTab)
 
     Rectangle {
         anchors {
@@ -49,12 +70,44 @@ Item {
         boundsBehavior: Flickable.StopAtBounds
 
         model: root.tabsModel
+        currentIndex: root.activeIndex
+        ScrollBar.horizontal: ScrollBar {
+            policy: ScrollBar.AsNeeded
+            Accessible.name: qsTr("任务标签滚动")
+        }
 
         delegate: Rectangle {
             id: tabItem
 
             required property var modelData
             required property int index
+            property bool keepsTaskTabFocus: true
+            activeFocusOnTab: index === root.activeIndex
+            Accessible.role: Accessible.PageTab
+            Accessible.name: String(modelData.title || "")
+            Accessible.description: String(modelData.detail || modelData.title || "")
+            Accessible.selected: index === root.activeIndex
+            Accessible.focusable: true
+            Accessible.onPressAction: root.navigateTo(index)
+            border.width: activeFocus ? 2 : 0
+            border.color: Theme.focus
+            Keys.onPressed: event => {
+                if (event.key === Qt.Key_Left)
+                    root.navigateTo(Math.max(0, tabItem.index - 1));
+                else if (event.key === Qt.Key_Right)
+                    root.navigateTo(Math.min(root.tabsModel.length - 1, tabItem.index + 1));
+                else if (event.key === Qt.Key_Home)
+                    root.navigateTo(0);
+                else if (event.key === Qt.Key_End)
+                    root.navigateTo(root.tabsModel.length - 1);
+                else if (event.key === Qt.Key_Return || event.key === Qt.Key_Space)
+                    root.navigateTo(tabItem.index);
+                else if (event.key === Qt.Key_Delete)
+                    root.tabCloseRequested(tabItem.index);
+                else
+                    return;
+                event.accepted = true;
+            }
 
             objectName: "videoTaskTab-" + index
             width: Math.min(240, Math.max(160, tabLabel.implicitWidth + (tabBadge.visible ? tabBadge.width + 10 : 0) + 56))
@@ -135,7 +188,7 @@ Item {
                 // The elided title stays inspectable: the host-generated title reads in full
                 // on hover while the strip keeps its clipped width.
                 VcsToolTip {
-                    visible: tabLabelHover.hovered && tabLabel.truncated && !tabItem.modelData.loading && !tabItem.modelData.restoring
+                    visible: (tabLabelHover.hovered || tabItem.activeFocus || tabCloseArea.activeFocus) && tabLabel.truncated && !tabItem.modelData.loading && !tabItem.modelData.restoring
                     text: String(tabItem.modelData.title || "")
                 }
             }
@@ -166,8 +219,18 @@ Item {
                 }
             }
 
-            Item {
+            Button {
                 id: tabCloseArea
+                property bool keepsTaskTabFocus: true
+                activeFocusOnTab: tabItem.index === root.activeIndex
+                Accessible.name: qsTr("关闭任务：%1").arg(String(tabItem.modelData.title || ""))
+                onClicked: root.tabCloseRequested(tabItem.index)
+                background: Rectangle {
+                    color: tabCloseArea.hovered ? Theme.controlHover : "transparent"
+                    radius: Theme.radiusMicro
+                    border.width: tabCloseArea.visualFocus ? 2 : 0
+                    border.color: Theme.focus
+                }
 
                 objectName: "videoTaskTabClose-" + tabItem.index
                 width: 24
@@ -182,17 +245,8 @@ Item {
                 Text {
                     anchors.centerIn: parent
                     text: "\u2715"
-                    color: closeHoverArea.containsMouse ? Theme.primaryText : Theme.mutedText
+                    color: tabCloseArea.hovered ? Theme.primaryText : Theme.mutedText
                     font.pixelSize: Theme.fontCaption
-                }
-
-                MouseArea {
-                    id: closeHoverArea
-
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    acceptedButtons: Qt.LeftButton
-                    onClicked: root.tabCloseRequested(tabItem.index)
                 }
             }
         }

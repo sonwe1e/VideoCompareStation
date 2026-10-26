@@ -1,5 +1,6 @@
 #include "dvs/ui/ImageTaskHost.h"
 
+#include "dvs/ui/ImageEditController.h"
 #include "dvs/ui/ImagePairLoader.h"
 #include "dvs/ui/ImageReviewController.h"
 
@@ -108,6 +109,8 @@ QVariantList ImageTaskHost::tabs() const {
         entry.insert(QStringLiteral("primaryPath"), task.primaryPath);
         entry.insert(QStringLiteral("secondaryPath"), task.secondaryPath);
         entry.insert(QStringLiteral("pair"), !task.secondaryPath.isEmpty());
+        entry.insert(QStringLiteral("editComparison"), !task.editSnapshotKey.isEmpty());
+        entry.insert(QStringLiteral("editSourceLabel"), task.editSourceLabel);
         result.push_back(entry);
     }
     return result;
@@ -128,8 +131,11 @@ qint64 ImageTaskHost::workingSetBytes() const noexcept {
         const bool nativeSidecars =
             task.controller->primaryBitDepth() > 8 || task.controller->secondaryBitDepth() > 8;
         if (!secondary.isEmpty()) {
-            total += estimatePairWorkingSet(
-                         primary, secondary, nativeSidecars, task.controller->diffResampled())
+            total += estimatePairWorkingSet(primary,
+                                            secondary,
+                                            nativeSidecars,
+                                            task.controller->diffResampled() ||
+                                                !task.editSnapshotKey.isEmpty())
                          .totalBytes;
         } else {
             total +=
@@ -184,6 +190,13 @@ int ImageTaskHost::requestOpenPairInActiveTask(const QUrl& primary,
                                                const int pairId,
                                                QString* error) {
     ImageReviewController* const controller = ensureActiveController();
+    if (activeIndex_ >= 0 &&
+        !tasks_[static_cast<std::size_t>(activeIndex_)].editSnapshotKey.isEmpty()) {
+        if (error != nullptr) {
+            *error = tr("编辑对比是固定快照，请在其他图片任务中打开文件。");
+        }
+        return -1;
+    }
     if (controller == nullptr) {
         if (error != nullptr) {
             *error = tr("没有可用的图片标签。");
@@ -218,6 +231,13 @@ int ImageTaskHost::requestOpenPrimaryInActiveTask(const QUrl& url,
                                                   const int pairId,
                                                   QString* error) {
     ImageReviewController* const controller = ensureActiveController();
+    if (activeIndex_ >= 0 &&
+        !tasks_[static_cast<std::size_t>(activeIndex_)].editSnapshotKey.isEmpty()) {
+        if (error != nullptr) {
+            *error = tr("编辑对比是固定快照，请在其他图片任务中打开文件。");
+        }
+        return -1;
+    }
     if (controller == nullptr) {
         if (error != nullptr) {
             *error = tr("没有可用的图片标签。");
@@ -325,6 +345,68 @@ int ImageTaskHost::openImages(const QVariantList& urls) {
         return -1;
     }
     tasks_[static_cast<std::size_t>(index)].pendingRequestId = requestId;
+    return index;
+}
+
+int ImageTaskHost::openEditComparison(ImageEditController* const edit) {
+    if (edit == nullptr || !edit->active() || edit->strokeActive()) {
+        emit openFailed(tr("请先完成当前编辑操作，再与原图比较。"));
+        return -1;
+    }
+    const QString key = QStringLiteral("%1:%2").arg(edit->sourceLabel()).arg(edit->revision());
+    for (std::size_t index = 0; index < tasks_.size(); ++index) {
+        if (tasks_[index].editSnapshotKey == key) {
+            activate(static_cast<int>(index));
+            return static_cast<int>(index);
+        }
+    }
+    if (tasks_.size() >= static_cast<std::size_t>(kMaximumImageTasks)) {
+        emit openFailed(tr("最多同时打开 %1 个图片标签，请先关闭一个。").arg(kMaximumImageTasks));
+        return -1;
+    }
+    QImage original = edit->sourceImage();
+    QImage edited = edit->editedImage();
+    const qint64 estimate =
+        estimatePairWorkingSet(original.size(), edited.size(), false, true).totalBytes;
+    if (original.isNull() || edited.isNull() ||
+        estimate > workingSetBudgetBytes_ - workingSetBytes()) {
+        emit openFailed(tr("无法建立编辑对比：图片工作集不足，请先关闭其他图片标签。"));
+        return -1;
+    }
+    Task task;
+    task.ownedController = std::make_unique<ImageReviewController>();
+    task.controller = task.ownedController.get();
+    task.token = QStringLiteral("w%1").arg(++nextToken_);
+    task.controller->setImageToken(task.token);
+    task.editSnapshotKey = key;
+    task.editSourceLabel = edit->sourceLabel();
+    task.primaryPath = tr("原图 · %1").arg(fileNameFor(edit->sourceLabel()));
+    task.secondaryPath = tr("编辑副本 · 版本 %1（含标注）").arg(edit->revision());
+    StillImageSourceInfo info;
+    info.displayConverted = true;
+    info.sourceFormat = QStringLiteral("RGBA8 edit snapshot");
+    info.hasAlpha = original.hasAlphaChannel() || edited.hasAlphaChannel();
+    if (!task.controller->openPairImages(std::move(original),
+                                         task.primaryPath,
+                                         std::move(edited),
+                                         task.secondaryPath,
+                                         -1,
+                                         info,
+                                         info)) {
+        emit openFailed(task.controller->errorText());
+        return -1;
+    }
+    task.controller->setCompareMode(ImageReviewController::SideBySide);
+    task.controller->setColorDisplayEnabled(false);
+    if (const auto* source = activeController()) {
+        task.controller->restoreObservationPosition(source->zoom(), source->panX(), source->panY());
+    }
+    task.loaded = true;
+    attachController(task.controller);
+    tasks_.push_back(std::move(task));
+    const int index = static_cast<int>(tasks_.size()) - 1;
+    emit tabsChanged();
+    setActiveIndex(index);
     return index;
 }
 
@@ -492,6 +574,9 @@ void ImageTaskHost::refreshTaskMetadata(const int index) {
     if (task.controller == nullptr) {
         return;
     }
+    if (!task.editSnapshotKey.isEmpty()) {
+        return;
+    }
     if (task.loading && !task.controller->hasPrimary() && !task.controller->hasSecondary()) {
         const QString title = tr("正在打开…");
         if (task.title != title) {
@@ -525,6 +610,9 @@ void ImageTaskHost::refreshTaskMetadata(const int index) {
 }
 
 QString ImageTaskHost::titleFor(const Task& task) const {
+    if (!task.editSnapshotKey.isEmpty()) {
+        return tr("编辑对比 · %1").arg(fileNameFor(task.editSourceLabel));
+    }
     QString primary = fileNameFor(task.primaryPath);
     QString secondary = fileNameFor(task.secondaryPath);
     if (task.loading && primary.isEmpty()) {
@@ -554,6 +642,10 @@ QString ImageTaskHost::titleFor(const Task& task) const {
 }
 
 QString ImageTaskHost::detailFor(const Task& task) const {
+    if (!task.editSnapshotKey.isEmpty()) {
+        return tr("%1\n%2\n%3\n临时快照，差异包含标注；不随后续编辑变化。")
+            .arg(task.editSourceLabel, task.primaryPath, task.secondaryPath);
+    }
     QStringList paths;
     if (!task.primaryPath.isEmpty()) {
         paths.push_back(task.primaryPath);

@@ -57,6 +57,7 @@ Item {
         id: imageEditMock
 
         property bool active: false
+        property bool editingVisible: true
         property int sourceSlot: -1
         property int imageWidth: 64
         property int imageHeight: 48
@@ -74,6 +75,7 @@ Item {
         function beginSession(slot, path, url) {
             sourceSlot = slot;
             active = true;
+            editingVisible = true;
             return true;
         }
         function endSession() {

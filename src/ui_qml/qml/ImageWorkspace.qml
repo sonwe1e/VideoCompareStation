@@ -33,6 +33,9 @@ Rectangle {
     signal imageTabActivated(int index)
     signal imageTabCloseRequested(int index)
     signal editStartRefused(string reason)
+    signal compareEditRequested
+    signal resumeEditRequested
+    property bool editComparisonTask: false
     // Tab heap supplied by the main window (the C++ task host owns the actual controllers).
     // The defaults keep isolated harnesses and the single-task contract tests unchanged.
     property var imageTabsModel: []
@@ -124,7 +127,8 @@ Rectangle {
             return true;
         return control.sameLocalPath(label, imageReview ? imageReview.primaryPath : "") || control.sameLocalPath(label, imageReview ? imageReview.secondaryPath : "");
     }
-    readonly property bool editModeActive: Boolean(imageEdit && imageEdit.active && editSessionMatchesActive)
+    readonly property bool hasEditSession: Boolean(imageEdit && imageEdit.active && editSessionMatchesActive && !editComparisonTask)
+    readonly property bool editModeActive: hasEditSession && (imageEdit.editingVisible === undefined || Boolean(imageEdit.editingVisible))
     function sameLocalPath(first, second) {
         const left = String(first || "").replace(/\\/g, "/").toLowerCase();
         const right = String(second || "").replace(/\\/g, "/").toLowerCase();
@@ -133,7 +137,7 @@ Rectangle {
     // The scale/fill dialogs are modal popups that own the keyboard while open; Main.qml reads
     // this to keep workspace shortcuts inert behind them (the dialogs themselves carry the
     // popupInputContext marker for the focus walk).
-    readonly property bool anyEditDialogOpen: imageEditDialogs.anyVisible
+    readonly property bool anyEditDialogOpen: imageEditDialogs.anyVisible || discardEditDialog.visible
     readonly property int editSourceSlot: editModeActive ? Number(imageEdit.sourceSlot) : -1
     // Selection in image pixels (null while nothing is selected); shared by crop and mosaic.
     property var cropSelection: null
@@ -291,11 +295,13 @@ Rectangle {
     // the original file is never written, so dropping it here would lose the work without
     // saying so. The user is told to save a copy (or end the edit) instead.
     readonly property string closeSideBlockedReason: {
-        if (!editModeActive)
+        if (editComparisonTask)
+            return qsTr("这是固定的编辑对比快照；请关闭整个标签，或切回原任务修改。");
+        if (!hasEditSession)
             return "";
         if (!imageEdit || !imageEdit.dirty)
             return "";
-        return qsTr("编辑副本有未保存修改：请先「另存副本…」或「返回查看」，再关闭此图片。");
+        return qsTr("编辑副本有未保存修改：请先「继续编辑」并另存副本，或明确「放弃修改」，再关闭此图片。");
     }
 
     // Closes one side of the pair. Closing B keeps A; closing A keeps B (the controller
@@ -309,8 +315,8 @@ Rectangle {
             return false;
         }
         // A clean edit session has nothing to lose, so it is ended before the side goes.
-        if (editModeActive)
-            control.finishImageEdit();
+        if (hasEditSession)
+            imageEdit.endSession();
         const isSecondary = Number(sourceSlot) === 3;
         const closed = isSecondary ? Boolean(imageReview.closeSecondary()) : Boolean(imageReview.closePrimary());
         if (!closed)
@@ -947,12 +953,20 @@ Rectangle {
     }
 
     function beginImageEdit() {
+        if (control.editComparisonTask) {
+            control.resumeEditRequested();
+            return false;
+        }
         if (control.editStartBlockedReason.length > 0) {
             control.editStartRefused(control.editStartBlockedReason);
             return false;
         }
         if (!imageEdit)
             return false;
+        if (control.hasEditSession) {
+            imageEdit.editingVisible = true;
+            return true;
+        }
         const slot = control.editDisplayedSlot();
         const path = slot === 3 ? control.imageReview.secondaryPath : control.imageReview.primaryPath;
         control.cropSelection = null;
@@ -962,7 +976,23 @@ Rectangle {
     function finishImageEdit() {
         control.cropSelection = null;
         if (imageEdit)
+            imageEdit.editingVisible = false;
+    }
+
+    function requestDiscardEdit() {
+        if (!control.hasEditSession)
+            return;
+        if (!imageEdit.dirty) {
             imageEdit.endSession();
+            return;
+        }
+        discardEditDialog.sourceLabel = String(imageEdit.sourceLabel);
+        discardEditDialog.open();
+    }
+
+    function saveEditCopy() {
+        if (control.hasEditSession)
+            editSaveDialog.open();
     }
 
     function applyCropSelection() {
@@ -1338,7 +1368,7 @@ Rectangle {
 
         VcsMenuItem {
             objectName: "imageCompactEditToggleItem"
-            text: control.editModeActive ? qsTr("返回查看") : qsTr("编辑画面")
+            text: control.editModeActive ? qsTr("返回查看") : (control.hasEditSession || control.editComparisonTask ? qsTr("继续编辑") : qsTr("编辑画面"))
             visible: control.hasPrimary && control.imageEdit !== null
             enabled: visible
             onTriggered: {
@@ -1350,6 +1380,17 @@ Rectangle {
         }
         VcsMenuSeparator {
             visible: control.hasPrimary && control.imageEdit !== null
+        }
+        VcsMenuItem {
+            objectName: "imageCompactCompareEditItem"
+            text: qsTr("与原图比较")
+            visible: control.hasEditSession
+            onTriggered: control.compareEditRequested()
+        }
+        VcsMenuItem {
+            text: qsTr("放弃修改…")
+            visible: control.hasEditSession
+            onTriggered: control.requestDiscardEdit()
         }
         VcsMenuItem {
             objectName: "imageCompactOpenSingleItem"
@@ -3865,7 +3906,7 @@ Rectangle {
                         // An action label, not a state: the filled button while editing is 另存副本….
                         // §7 names the exit "return to viewing" - it restores the previous
                         // comparison state without saving or discarding anything by itself.
-                        text: control.editModeActive ? qsTr("返回查看") : qsTr("编辑画面")
+                        text: control.editModeActive ? qsTr("返回查看") : (control.hasEditSession || control.editComparisonTask ? qsTr("继续编辑") : qsTr("编辑画面"))
                         helpText: control.editModeActive ? qsTr("返回查看模式；未保存的修改保留在编辑副本中。") : qsTr("在原图的副本上编辑；原文件保持不变，编辑结果必须另存为副本。")
                         onClicked: {
                             if (control.editModeActive)
@@ -3873,6 +3914,19 @@ Rectangle {
                             else
                                 control.beginImageEdit();
                         }
+                    }
+
+                    ImageCommandButton {
+                        objectName: "imageCompareEditButton"
+                        visible: control.hasEditSession && !control.compactChrome && !control.editModeActive
+                        text: qsTr("与原图比较")
+                        onClicked: control.compareEditRequested()
+                    }
+                    ImageCommandButton {
+                        objectName: "imageDiscardEditButton"
+                        visible: control.hasEditSession && !control.compactChrome
+                        text: qsTr("放弃修改…")
+                        onClicked: control.requestDiscardEdit()
                     }
 
                     // Preserved objectName: the close action moved into the 换图 dropdown
@@ -4663,6 +4717,13 @@ Rectangle {
                             prominent: true
                             text: qsTr("另存副本…")
                             onClicked: editSaveDialog.open()
+                        }
+                        ImageCommandButton {
+                            objectName: "imageEditCompareButton"
+                            visible: control.editModeActive
+                            text: qsTr("与原图比较")
+                            helpText: qsTr("打开原图与当前编辑结果的固定快照，包含标注；原编辑任务保留。")
+                            onClicked: control.compareEditRequested()
                         }
                         Text {
                             objectName: "imageEditStatusText"
@@ -7203,8 +7264,8 @@ Rectangle {
                     checked: control.trueSize
                     mirrorsState: true
                     enabled: control.hasPrimary
-                    text: qsTr("100% (%1%)").arg(control.displayPercent)
-                    helpText: qsTr("1 个图像像素 = 1 个物理像素；括号内是当前实际显示比例。双击画面或按 Z 可切回适应窗口。")
+                    text: qsTr("原大 100%")
+                    helpText: qsTr("1 个图像像素 = 1 个物理像素；当前显示比例见状态栏。双击画面或按 Z 可切回适应窗口。")
                     onClicked: {
                         control.trueSize = true;
                         if (control.imageReview)
@@ -8482,6 +8543,43 @@ Rectangle {
         onFillApplied: function (width, height, fillColor) {
             return control.applyImageCanvasFill(width, height, fillColor);
         }
+    }
+
+    Dialog {
+        id: discardEditDialog
+        objectName: "imageDiscardEditDialog"
+        property string sourceLabel: ""
+        title: qsTr("放弃未保存的修改？")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(control.width - 40, 440)
+        contentItem: Label {
+            text: qsTr("将丢弃当前编辑副本和撤销历史，原文件保持不变。")
+            wrapMode: Text.WordWrap
+        }
+        footer: Row {
+            spacing: 8
+            padding: 12
+            ReviewActionButton {
+                objectName: "imageConfirmDiscardEditButton"
+                text: qsTr("放弃修改")
+                onClicked: {
+                    discardEditDialog.discarded();
+                    discardEditDialog.close();
+                }
+            }
+            ReviewActionButton {
+                id: cancelDiscardEditButton
+                text: qsTr("取消")
+                onClicked: discardEditDialog.reject()
+            }
+        }
+        onDiscarded: {
+            if (control.hasEditSession && String(control.imageEdit.sourceLabel) === sourceLabel)
+                control.imageEdit.endSession();
+        }
+        onOpened: cancelDiscardEditButton.forceActiveFocus(Qt.TabFocusReason)
+        onClosed: control.forceActiveFocus()
     }
 
     // Editing always writes a new file. PNG is the default because it keeps transparency;

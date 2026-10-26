@@ -73,6 +73,61 @@ void setSource(ImageEditController& controller, const QImage& image) {
 
 } // namespace
 
+TEST(ImageEditControllerTests, ReturningToReviewPreservesPixelsAnnotationsAndHistory) {
+    ImageEditController controller;
+    const QImage source = cornerImage(40, 30);
+    setSource(controller, source);
+    ASSERT_TRUE(controller.beginSession(2, QStringLiteral("original.png"), {}));
+    ASSERT_TRUE(controller.cropToImageRect(4, 3, 24, 20));
+    ASSERT_TRUE(controller.addRectangle(2, 2, 18, 14, Qt::red, 2));
+    const QImage edited = controller.editedImage().copy();
+    const int revision = controller.revision();
+
+    controller.setEditingVisible(false);
+    EXPECT_TRUE(controller.active());
+    EXPECT_FALSE(controller.editingVisible());
+    EXPECT_TRUE(controller.dirty());
+    EXPECT_TRUE(controller.canUndo());
+    EXPECT_EQ(controller.annotationCount(), 1);
+    EXPECT_EQ(controller.revision(), revision);
+    EXPECT_EQ(controller.editedImage(), edited);
+    EXPECT_EQ(controller.sourceImage(), source);
+    controller.setEditingVisible(true);
+    EXPECT_TRUE(controller.editingVisible());
+    EXPECT_EQ(controller.editedImage(), edited);
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.annotationCount(), 0);
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.editedImage(), source);
+    ASSERT_TRUE(controller.redo());
+    ASSERT_TRUE(controller.redo());
+    EXPECT_EQ(controller.editedImage(), edited);
+
+    controller.endSession();
+    EXPECT_FALSE(controller.active());
+    EXPECT_FALSE(controller.editingVisible());
+    EXPECT_FALSE(controller.canUndo());
+    EXPECT_TRUE(controller.editedImage().isNull());
+}
+
+TEST(ImageEditControllerTests, ReturningToReviewCommitsAnOpenStrokeAsOneUndoStep) {
+    ImageEditController controller;
+    const QImage source = cornerImage(40, 30);
+    setSource(controller, source);
+    ASSERT_TRUE(controller.beginSession(2, QStringLiteral("original.png"), {}));
+    ASSERT_TRUE(controller.beginStroke(Qt::red, 4, 1.0));
+    ASSERT_TRUE(controller.strokeTo(10, 10));
+    ASSERT_TRUE(controller.strokeTo(20, 10));
+    controller.setEditingVisible(false);
+    EXPECT_FALSE(controller.strokeActive());
+    EXPECT_TRUE(controller.dirty());
+    EXPECT_NE(controller.editedImage(), source);
+    controller.setEditingVisible(true);
+    ASSERT_TRUE(controller.undo());
+    EXPECT_EQ(controller.editedImage(), source);
+    EXPECT_FALSE(controller.canUndo());
+}
+
 TEST(ImageEditControllerTests, BeginSessionKeepsTheOriginalImmutableWhileCropping) {
     ImageEditController controller;
     const QImage source = cornerImage(40, 30);

@@ -23,6 +23,7 @@ namespace dvs::ui {
 class ImageEditController final : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool active READ active NOTIFY stateChanged)
+    Q_PROPERTY(bool editingVisible READ editingVisible WRITE setEditingVisible NOTIFY stateChanged)
     Q_PROPERTY(bool dirty READ dirty NOTIFY stateChanged)
     Q_PROPERTY(int revision READ revision NOTIFY imageChanged)
     Q_PROPERTY(int sourceSlot READ sourceSlot NOTIFY stateChanged)
@@ -76,6 +77,8 @@ public:
     void setSourceImageProvider(SourceImageProvider provider);
 
     [[nodiscard]] bool active() const noexcept;
+    [[nodiscard]] bool editingVisible() const noexcept;
+    void setEditingVisible(bool visible);
     [[nodiscard]] bool dirty() const noexcept;
     [[nodiscard]] int revision() const noexcept;
     [[nodiscard]] int sourceSlot() const noexcept;
@@ -96,8 +99,8 @@ public:
     // Starts an edit session from the committed original of the given display slot. The
     // original buffer is copied once and never modified; all tools work on the copy.
     Q_INVOKABLE bool beginSession(int slot, const QString& label, const QUrl& sourceUrl);
-    // Ends the session. Dirty edits are simply dropped; the original file was never
-    // written to, so nothing else has to be restored.
+    // Explicit discard/clean teardown only. Returning to review uses editingVisible=false
+    // and keeps the working copy and history; callers must confirm discarding dirty work.
     Q_INVOKABLE void endSession();
     // Crops the working copy to an image-pixel rect, clamped to the current image. The
     // rect is in image coordinates, never viewport coordinates.
@@ -136,7 +139,8 @@ public:
     Q_INVOKABLE bool clearImageRect(int x, int y, int width, int height);
     // Annotations live above the pixel edits as a flat, bounded list — deliberately not a
     // layer panel. They are rendered into the displayed and saved image but never into the
-    // comparison metrics or the difference pipeline. Geometry is in image pixels.
+    // live review's comparison metrics or difference pipeline. An explicit edit-comparison
+    // snapshot includes annotations as flattened pixels. Geometry is in image pixels.
     Q_INVOKABLE bool
     addArrow(int fromX, int fromY, int toX, int toY, const QColor& color, int width);
     Q_INVOKABLE bool

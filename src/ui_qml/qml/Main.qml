@@ -161,6 +161,7 @@ ApplicationWindow {
     readonly property var imageTabList: root.imageTaskHost ? root.imageTaskHost.tabs : []
     readonly property int imageTabCount: root.imageTaskHost ? Number(root.imageTaskHost.count) : 0
     readonly property int imageTabActiveIndex: root.imageTaskHost ? Number(root.imageTaskHost.activeIndex) : -1
+    readonly property bool imageEditComparisonTask: root.imageTabActiveIndex >= 0 && root.imageTabActiveIndex < root.imageTabList.length && Boolean(root.imageTabList[root.imageTabActiveIndex].editComparison)
     // An in-place image or folder open still commits into the task that started it. Switching
     // or closing the active tab during that window would apply the terminal to the wrong task.
     readonly property bool imageTabOpenPending: root.pendingImageRequestId > 0 || root.pendingFolderPairRow >= 0 || Boolean(root.folderPairModel && root.folderPairModel.openPending)
@@ -201,11 +202,13 @@ ApplicationWindow {
     }
     readonly property int imageTabDirtyIndex: root.imageEditService && root.imageEditService.active && root.imageEditService.dirty ? root.imageEditTabIndex : -1
     readonly property string imageEditStartBlockedReason: {
+        if (root.imageEditComparisonTask)
+            return qsTr("此标签是固定的编辑对比快照，请切回原编辑任务继续修改。");
         if (!root.imageEditService || !root.imageEditService.active || !root.imageEditService.dirty)
             return "";
         if (root.imageEditTabIndex === root.imageTabActiveIndex)
             return "";
-        return qsTr("另一个标签页有未保存的编辑副本：请先切回该标签页，另存副本或结束编辑。");
+        return qsTr("另一个标签页有未保存的编辑副本：请先切回该标签页，另存副本或放弃修改。");
     }
     // qmllint disable unqualified
     // Step-3 image editing service from the composition root; the typeof guard keeps
@@ -221,7 +224,7 @@ ApplicationWindow {
     // Replacing or closing the active image task ends the edit session, and the working copy
     // lives only in memory. A session that belongs to another tab is allowed to sit there while
     // this tab is replaced; only the active session's dirty state can refuse the action.
-    readonly property string imageLeaveBlockedReason: (root.imageEditService && root.imageEditService.active && root.imageEditService.dirty && root.imageEditTabIndex === root.imageTabActiveIndex) ? qsTr("编辑副本有未保存修改：请先「另存副本…」或「结束编辑」，再切换图片。") : ""
+    readonly property string imageLeaveBlockedReason: (root.imageEditService && root.imageEditService.active && root.imageEditService.dirty && root.imageEditTabIndex === root.imageTabActiveIndex) ? qsTr("编辑副本有未保存修改：请先「另存副本…」或「放弃修改」，再切换图片。") : ""
     readonly property var videoFolderModel: typeof videoFolder !== "undefined" ? videoFolder : null
     property bool videoFolderSidebarVisible: false
     // videoFolderListVisible / videoFolderInset live with the other U01 layout properties
@@ -758,7 +761,7 @@ ApplicationWindow {
     // popupInputContext marker the focus walk below reads, but a visibility-driven gate covers
     // the frames before focus has landed inside the popup and keeps the ownership honest as new
     // popups are added. Native dialogs need no entry: the OS takes focus for them.
-    readonly property bool anyModalPopupOpen: Boolean(clipExportDialog && clipExportDialog.dialogVisible) || Boolean(sampleExportDialog && sampleExportDialog.dialogVisible) || fileAssociationDialog.dialogVisible || Boolean(imageWorkspace && imageWorkspace.anyEditDialogOpen)
+    readonly property bool anyModalPopupOpen: Boolean(clipExportDialog && clipExportDialog.dialogVisible) || Boolean(sampleExportDialog && sampleExportDialog.dialogVisible) || fileAssociationDialog.dialogVisible || unsavedEditDialog.visible || Boolean(imageWorkspace && imageWorkspace.anyEditDialogOpen)
 
     // Modal/input routing is intentionally computed in one place. Native image dialogs are
 
@@ -857,11 +860,18 @@ ApplicationWindow {
             showImmersiveHud(playing ? qsTr("播放中 · %1").arg(frameText) : qsTr("已暂停 · %1").arg(frameText));
     }
 
-    // Closing the window never prompts to save. Alignment, probe, and decode work are cancelled
-
-    // by the host shutdown path; the review session needs no persistence guard.
-
-    onClosing: {
+    // Only an unsaved image working copy needs a close guard. Review state and background
+    // work retain their existing persistence and host shutdown paths.
+    onClosing: close => {
+        if (root.imageEditService && root.imageEditService.active) {
+            root.imageEditService.endStroke();
+            root.imageEditService.endAnnotationDrag();
+        }
+        if (root.imageEditService && root.imageEditService.active && root.imageEditService.dirty) {
+            close.accepted = false;
+            root.showUnsavedEditDialog(root.imageEditTabIndex, true);
+            return;
+        }
         // C1: the debounce can still be pending when the window goes away, and the last thing the
         // user did was move the playhead. Record synchronously so the position survives the close.
         resumeRecordTimer.stop();
@@ -1257,6 +1267,8 @@ ApplicationWindow {
 
     function focusActiveWorkspace() {
         Qt.callLater(() => {
+            if (root.focusIsTaskTab(root.activeFocusItem))
+                return;
             if (workspaceSession.imageActive) {
                 if (imageWorkspace)
                     imageWorkspace.forceActiveFocus();
@@ -1593,7 +1605,7 @@ ApplicationWindow {
                     return false;
                 }
                 if (root.imageTabDirtyIndex === tabIndex) {
-                    root.showIntentMessage(root.imageLeaveBlockedReason);
+                    root.showUnsavedEditDialog(tabIndex, false, true);
                     return false;
                 }
                 if (root.imageEditService && root.imageEditService.active && root.imageEditTabIndex === tabIndex)
@@ -2015,6 +2027,8 @@ ApplicationWindow {
     }
 
     function requestImageAdd() {
+        if (!root.canChangeImageSources())
+            return false;
         workspaceSession.beginOpen(workspaceSession.imageMedia);
 
         imageAddDialog.open();
@@ -2023,6 +2037,8 @@ ApplicationWindow {
     }
 
     function requestImageSwapSides() {
+        if (!root.canChangeImageSources())
+            return false;
         const target = root.activeImageController;
         if (!target || !target.hasPair)
             return false;
@@ -2037,6 +2053,8 @@ ApplicationWindow {
     }
 
     function requestImageReplacePrimary() {
+        if (!root.canChangeImageSources())
+            return false;
         const target = root.activeImageController;
         if (!target || !target.hasPrimary)
             return false;
@@ -2047,6 +2065,8 @@ ApplicationWindow {
     }
 
     function requestImageReplaceSecondary() {
+        if (!root.canChangeImageSources())
+            return false;
         const target = root.activeImageController;
         if (!target || !target.hasPrimary)
             return false;
@@ -2055,6 +2075,8 @@ ApplicationWindow {
     }
 
     function performImageSideReplace(url, side) {
+        if (!root.canChangeImageSources())
+            return false;
         const target = root.activeImageController;
         if (!target || !target.hasPrimary || !url || url.toString().length === 0)
             return false;
@@ -2145,6 +2167,10 @@ ApplicationWindow {
     // folder choice still switches to the image workspace when no complete pair exists.
 
     function captureIssueLog() {
+        if (root.imageWorkspaceActive && root.imageEditComparisonTask) {
+            root.showIntentMessage(qsTr("临时编辑快照不能跨重启恢复；请先另存编辑副本，再打开文件记录问题。"));
+            return false;
+        }
         // M freezes the observation the moment it is pressed: the record (frame, sources,
         // ROI, zoom, pair) is captured now, so playback advancing while the note is typed can
         // no longer shift what was recorded. The dialog only attaches text to that record.
@@ -2944,6 +2970,72 @@ ApplicationWindow {
         }
         return Boolean(root.imageTaskHost.activate(Number(index)));
     }
+    function canChangeImageSources() {
+        if (root.imageEditComparisonTask) {
+            root.showIntentMessage(qsTr("编辑对比快照保持固定；请打开新任务，或切回原编辑任务修改。"));
+            return false;
+        }
+        if (root.imageLeaveBlockedReason.length > 0) {
+            root.showUnsavedEditDialog(root.imageEditTabIndex, false);
+            return false;
+        }
+        return true;
+    }
+    function showUnsavedEditDialog(index, exiting, closeTask) {
+        const tab = index >= 0 && index < root.imageTabList.length ? root.imageTabList[index] : null;
+        unsavedEditDialog.taskTitle = tab ? String(tab.title) : qsTr("当前图片");
+        unsavedEditDialog.sourceLabel = root.imageEditService ? String(root.imageEditService.sourceLabel) : "";
+        unsavedEditDialog.exiting = exiting;
+        unsavedEditDialog.closingTask = Boolean(closeTask);
+        root.showIntentMessage(qsTr("%1 有未保存的编辑副本，请切回保存或明确放弃修改。").arg(unsavedEditDialog.taskTitle));
+        unsavedEditDialog.open();
+    }
+    function resumeOriginalImageEdit() {
+        const source = root.imageEditComparisonTask ? String(root.imageTabList[root.imageTabActiveIndex].editSourceLabel || "") : String(root.imageEditService ? root.imageEditService.sourceLabel : "");
+        return root.resumeImageEditForSource(source);
+    }
+    function resumeImageEditForSource(source) {
+        let index = root.imageEditTabIndex;
+        let secondary = false;
+        if (source.length > 0 && root.imageTaskHost) {
+            index = -1;
+            for (let i = 0; i < root.imageTabList.length; ++i) {
+                const tab = root.imageTabList[i];
+                if (!tab.editComparison && (root.sameFilePath(source, String(tab.primaryPath)) || root.sameFilePath(source, String(tab.secondaryPath)))) {
+                    index = i;
+                    secondary = root.sameFilePath(source, String(tab.secondaryPath));
+                    break;
+                }
+            }
+        }
+        if (!root.imageTaskHost && root.imageEditService && root.imageEditService.active && root.imageWorkspace) {
+            root.activateWorkspace(1);
+            return root.imageWorkspace.beginImageEdit();
+        }
+        if (index >= 0 && root.activateImageTab(index) && root.imageWorkspace) {
+            if (!root.imageEditService.active) {
+                root.activeImageController.compareMode = 0;
+                root.imageWorkspace.singleViewShowSecondary = secondary;
+            }
+            return root.imageWorkspace.beginImageEdit();
+        }
+        root.showIntentMessage(qsTr("原编辑任务已关闭，请重新打开原文件后编辑；当前快照仍可比较。"));
+        return false;
+    }
+    function compareEditedImage() {
+        if (!root.imageTaskHost || !root.imageWorkspace || !root.imageWorkspace.hasEditSession)
+            return false;
+        const wasEditing = root.imageEditService.editingVisible;
+        root.imageWorkspace.finishImageEdit();
+        const index = Number(root.imageTaskHost.openEditComparison(root.imageEditService));
+        if (index < 0) {
+            root.imageEditService.editingVisible = wasEditing;
+            return false;
+        }
+        root.detachFolderSession();
+        root.showIntentMessage(qsTr("编辑对比快照：A 原图，B 当前编辑结果（含标注）；继续编辑后可再次建立新版本。"));
+        return true;
+    }
     function closeImageTab(index) {
         if (!root.imageTaskHost)
             return false;
@@ -2953,7 +3045,7 @@ ApplicationWindow {
             return false;
         }
         if (root.imageTabDirtyIndex === tabIndex) {
-            root.showIntentMessage(root.imageLeaveBlockedReason);
+            root.showUnsavedEditDialog(tabIndex, false, true);
             return false;
         }
         if (root.imageEditService && root.imageEditService.active && root.imageEditTabIndex === tabIndex)
@@ -4496,6 +4588,16 @@ ApplicationWindow {
         sourceOffsetValues = next;
     }
 
+    function focusIsTaskTab(item) {
+        let candidate = item;
+        while (candidate) {
+            if (candidate.keepsTaskTabFocus === true)
+                return true;
+            candidate = candidate.parent;
+        }
+        return false;
+    }
+
     function focusBlocksGlobalMediaShortcuts(item) {
         let candidate = item;
 
@@ -5178,6 +5280,61 @@ ApplicationWindow {
 
     // footer strip) around custom content, which looks like stray bars in the dark theme.
 
+    Dialog {
+        id: unsavedEditDialog
+        objectName: "unsavedImageEditDialog"
+        property string taskTitle: ""
+        property string sourceLabel: ""
+        property bool exiting: false
+        property bool closingTask: false
+        title: exiting ? qsTr("退出前处理未保存的编辑") : qsTr("图片有未保存的编辑")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(root.width - 40, 520)
+        contentItem: Label {
+            text: qsTr("%1 的编辑副本尚未保存。返回查看不会清除这些修改。请选择切回保存、放弃修改或取消。").arg(unsavedEditDialog.taskTitle)
+            wrapMode: Text.WordWrap
+        }
+        footer: Row {
+            spacing: 8
+            padding: 12
+            ReviewActionButton {
+                objectName: "unsavedImageEditSaveButton"
+                text: qsTr("切回保存…")
+                onClicked: {
+                    unsavedEditDialog.close();
+                    if (root.resumeImageEditForSource(unsavedEditDialog.sourceLabel) && root.imageWorkspace)
+                        root.imageWorkspace.saveEditCopy();
+                }
+            }
+            ReviewActionButton {
+                objectName: "unsavedImageEditDiscardButton"
+                text: unsavedEditDialog.exiting ? qsTr("放弃修改并退出") : (unsavedEditDialog.closingTask ? qsTr("放弃修改并关闭") : qsTr("放弃修改"))
+                onClicked: {
+                    if (!root.imageEditService || String(root.imageEditService.sourceLabel) !== unsavedEditDialog.sourceLabel) {
+                        unsavedEditDialog.close();
+                        return;
+                    }
+                    const ownerIndex = root.imageEditTabIndex;
+                    root.imageEditService.endSession();
+                    const exiting = unsavedEditDialog.exiting;
+                    unsavedEditDialog.close();
+                    if (exiting)
+                        root.close();
+                    else if (unsavedEditDialog.closingTask && ownerIndex >= 0)
+                        root.closeImageTab(ownerIndex);
+                }
+            }
+            ReviewActionButton {
+                id: cancelUnsavedEditButton
+                text: qsTr("取消")
+                onClicked: unsavedEditDialog.close()
+            }
+        }
+        onOpened: cancelUnsavedEditButton.forceActiveFocus(Qt.TabFocusReason)
+        onClosed: root.focusActiveWorkspace()
+    }
+
     Popup {
         id: anchorDialog
 
@@ -5842,6 +5999,9 @@ ApplicationWindow {
             imageTabsActiveIndex: root.imageTabActiveIndex
             imageTabsDirtyIndex: root.imageTabDirtyIndex
             editStartBlockedReason: root.imageEditStartBlockedReason
+            editComparisonTask: root.imageEditComparisonTask
+            onCompareEditRequested: root.compareEditedImage()
+            onResumeEditRequested: root.resumeOriginalImageEdit()
             pairModel: root.folderPairModel
             folderBrowseActive: root.imageFolderBrowseActive
             folderBrowseText: root.imageFolderBrowseText

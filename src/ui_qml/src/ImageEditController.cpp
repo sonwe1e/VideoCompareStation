@@ -712,6 +712,7 @@ public:
     std::vector<Annotation> annotations;
     int selectedAnnotation = -1;
     int slot = -1;
+    bool editingVisible = false;
     QString label;
     QString sourcePath;
     int revision = 0;
@@ -949,6 +950,24 @@ bool ImageEditController::active() const noexcept {
     return impl_->slot >= 0 && !impl_->working.isNull();
 }
 
+bool ImageEditController::editingVisible() const noexcept {
+    return active() && impl_->editingVisible;
+}
+
+void ImageEditController::setEditingVisible(const bool visible) {
+    if (!active() || impl_->editingVisible == visible) {
+        return;
+    }
+    if (!visible) {
+        if (impl_->strokeOpen) {
+            static_cast<void>(endStroke());
+        }
+        static_cast<void>(endAnnotationDrag());
+    }
+    impl_->editingVisible = visible;
+    emit stateChanged();
+}
+
 bool ImageEditController::dirty() const noexcept {
     return active() && !impl_->history.isClean();
 }
@@ -1073,6 +1092,7 @@ bool ImageEditController::beginSession(const int slot,
     impl_->working = original.copy();
     impl_->clearAnnotationState();
     impl_->slot = slot;
+    impl_->editingVisible = true;
     impl_->label = label;
     impl_->sourcePath = sourceUrl.isLocalFile() ? sourceUrl.toLocalFile() : sourceUrl.toString();
     impl_->history.clear();
@@ -1108,6 +1128,7 @@ void ImageEditController::endSession() {
     impl_->composite = QImage();
     impl_->clearAnnotationState();
     impl_->slot = -1;
+    impl_->editingVisible = false;
     impl_->label.clear();
     impl_->sourcePath.clear();
     // A session can end mid-stroke (workspace closed); the stroke preview buffer must not

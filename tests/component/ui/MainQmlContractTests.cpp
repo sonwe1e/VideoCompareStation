@@ -7285,7 +7285,34 @@ TEST(MainQmlContractTests, ImageEditModeCropsAWorkingCopyAndKeepsTheOriginal) {
     auto* const startButton =
         harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditStartButton"));
     ASSERT_NE(startButton, nullptr);
-    EXPECT_TRUE(startButton->isVisible());
+    const bool compact = workspace->property("compactChrome").toBool();
+    EXPECT_EQ(startButton->isVisible(), !compact);
+    if (compact) {
+        auto* const more =
+            harness.root->findChild<QQuickItem*>(QStringLiteral("imageCompactMoreButton"));
+        ASSERT_NE(more, nullptr);
+        EXPECT_TRUE(more->isVisible());
+    }
+    const auto toggleEdit = [&harness, workspace, startButton] {
+        if (workspace->property("compactChrome").toBool()) {
+            auto* const more =
+                harness.root->findChild<QObject*>(QStringLiteral("imageCompactMoreButton"));
+            if (more == nullptr || !QMetaObject::invokeMethod(more, "clicked")) {
+                return false;
+            }
+            harness.settle();
+            auto* const menu = qvariant_cast<QObject*>(workspace->property("compactMoreMenu"));
+            if (menu == nullptr) {
+                return false;
+            }
+            auto* const action =
+                menu->findChild<QObject*>(QStringLiteral("imageCompactEditToggleItem"));
+            const bool activated =
+                action != nullptr && QMetaObject::invokeMethod(action, "triggered");
+            return QMetaObject::invokeMethod(menu, "close") && activated;
+        }
+        return QMetaObject::invokeMethod(startButton, "clicked");
+    };
     auto* const applyCrop =
         harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditApplyCropButton"));
     auto* const undoButton =
@@ -7301,7 +7328,7 @@ TEST(MainQmlContractTests, ImageEditModeCropsAWorkingCopyAndKeepsTheOriginal) {
     ASSERT_NE(preview, nullptr);
 
     // Entering edit mode starts the session from the committed original.
-    ASSERT_TRUE(QMetaObject::invokeMethod(startButton, "clicked"));
+    ASSERT_TRUE(toggleEdit());
     harness.settle();
     EXPECT_TRUE(harness.imageEdit.active());
     EXPECT_TRUE(workspace->property("editModeActive").toBool());
@@ -7355,14 +7382,39 @@ TEST(MainQmlContractTests, ImageEditModeCropsAWorkingCopyAndKeepsTheOriginal) {
     harness.settle();
     EXPECT_EQ(harness.imageEdit.imageWidth(), 32);
 
-    // Leaving edit mode drops the session and restores the committed pane source.
-    ASSERT_TRUE(QMetaObject::invokeMethod(startButton, "clicked"));
+    // Returning to review restores the committed pane, preserving the working copy/history.
+    ASSERT_TRUE(toggleEdit());
     harness.settle();
-    EXPECT_FALSE(harness.imageEdit.active());
+    EXPECT_TRUE(harness.imageEdit.active());
+    EXPECT_TRUE(harness.imageEdit.dirty());
+    EXPECT_TRUE(harness.imageEdit.canUndo());
     EXPECT_FALSE(workspace->property("editModeActive").toBool());
     EXPECT_TRUE(
         preview->property("source").toString().startsWith(QStringLiteral("image://vcs-review/")))
         << preview->property("source").toString().toStdString();
+    ASSERT_TRUE(toggleEdit());
+    harness.settle();
+    EXPECT_TRUE(workspace->property("editModeActive").toBool());
+    EXPECT_EQ(harness.imageEdit.imageWidth(), 32);
+    ASSERT_TRUE(harness.imageEdit.undo());
+    EXPECT_EQ(harness.imageEdit.imageWidth(), 64);
+    ASSERT_TRUE(harness.imageEdit.redo());
+    ASSERT_TRUE(QMetaObject::invokeMethod(workspace, "requestDiscardEdit"));
+    auto* const discard =
+        harness.root->findChild<QObject*>(QStringLiteral("imageDiscardEditDialog"));
+    ASSERT_NE(discard, nullptr);
+    EXPECT_TRUE(discard->property("visible").toBool());
+    ASSERT_TRUE(QMetaObject::invokeMethod(discard, "reject"));
+    EXPECT_TRUE(harness.imageEdit.active());
+    EXPECT_EQ(harness.imageEdit.imageWidth(), 32);
+    ASSERT_TRUE(QMetaObject::invokeMethod(workspace, "requestDiscardEdit"));
+    auto* const confirmDiscard =
+        harness.root->findChild<QObject*>(QStringLiteral("imageConfirmDiscardEditButton"));
+    ASSERT_NE(confirmDiscard, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(confirmDiscard, "clicked"));
+    EXPECT_FALSE(harness.imageEdit.active());
+    EXPECT_EQ(harness.imageReview.rawImageForSlot(ImageReviewController::PrimarySlot).size(),
+              QSize(64, 48));
 }
 
 TEST(MainQmlContractTests, ImageCropOverlayHandlesAndActionButtons) {
@@ -7726,6 +7778,10 @@ TEST(MainQmlContractTests, ImageEditTransformMenuChangesTheWorkingPixelsAndRetir
         EXPECT_TRUE(workspace->property("cropSelection").isNull());
         ASSERT_TRUE(QMetaObject::invokeMethod(start, "clicked"));
         EXPECT_EQ(workspace->property("compareMode").toInt(), editingSecondary ? 0 : 2);
+        EXPECT_TRUE(harness.imageEdit.active());
+        EXPECT_FALSE(harness.imageEdit.editingVisible());
+        // Each transform is a new fixture; returning to review now preserves the old one.
+        harness.imageEdit.endSession();
     }
     EXPECT_EQ(harness.imageReview.rawImageForSlot(ImageReviewController::PrimarySlot), original);
 }
@@ -8173,7 +8229,7 @@ TEST(MainQmlContractTests, ImageEditScaleDialogResizesTheWorkingCopy) {
     EXPECT_EQ(harness.imageEdit.undoLabel(), QStringLiteral("缩放"));
     EXPECT_TRUE(undoButton->property("enabled").toBool());
 
-    // The committed original keeps its own size; leaving edit mode drops the working copy.
+    // The committed original keeps its size; returning to review preserves redo history.
     ASSERT_TRUE(QMetaObject::invokeMethod(undoButton, "clicked"));
     harness.settle();
     EXPECT_EQ(harness.imageEdit.imageWidth(), 96);
@@ -8183,7 +8239,9 @@ TEST(MainQmlContractTests, ImageEditScaleDialogResizesTheWorkingCopy) {
 
     ASSERT_TRUE(QMetaObject::invokeMethod(startButton, "clicked"));
     harness.settle();
-    EXPECT_FALSE(harness.imageEdit.active());
+    EXPECT_TRUE(harness.imageEdit.active());
+    EXPECT_FALSE(harness.imageEdit.editingVisible());
+    EXPECT_TRUE(harness.imageEdit.canRedo());
     EXPECT_TRUE(modeRow->isVisible()) << "leaving edit mode restores comparison controls";
 }
 
@@ -16482,7 +16540,8 @@ TEST(MainQmlContractTests, ChromeGeometryAndScreenshotEvidence) {
                     recordItem("imageEdit1440", QStringLiteral("imageStatusBar"), true));
     EXPECT_TRUE(clickItem(QStringLiteral("imageEditStartButton"), "clicked"));
     harness.settle();
-    EXPECT_FALSE(harness.imageEdit.property("active").toBool());
+    EXPECT_TRUE(harness.imageEdit.active());
+    EXPECT_FALSE(harness.imageEdit.editingVisible());
 
     harness.window->resize(960, 640);
     harness.settle();
@@ -16873,6 +16932,106 @@ TEST(MainQmlContractTests, ImageTabsOpenSwitchAndCloseBackToTheNeighbour) {
               static_cast<QObject*>(&harness.imageReview));
 }
 
+TEST(MainQmlContractTests, ImageEditComparisonIncludesAnnotationsAndReturnsToThePreservedSession) {
+    WorkspaceHarness harness;
+    harness.withImageTasks = true;
+    harness.withImageEdit = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    auto* const original = harness.imageTasks->ensureActiveController();
+    ASSERT_NE(original, nullptr);
+    QImage image(160, 120, QImage::Format_ARGB32);
+    image.fill(QColor(32, 80, 120));
+    ASSERT_TRUE(original->openPrimaryImage(image, QStringLiteral("snapshot-original.png")));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    harness.settle();
+    auto* const workspace = qvariant_cast<QObject*>(harness.root->property("imageWorkspace"));
+    ASSERT_NE(workspace, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(workspace, "beginImageEdit"));
+    ASSERT_TRUE(harness.imageEdit.fillImageRect(20, 20, 40, 30, Qt::green));
+    ASSERT_TRUE(harness.imageEdit.addArrow(10, 90, 110, 40, Qt::red, 4));
+    const QImage edited = harness.imageEdit.editedImage().copy();
+    QVariant compared;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        harness.root.get(), "compareEditedImage", Q_RETURN_ARG(QVariant, compared)));
+    ASSERT_TRUE(compared.toBool());
+    harness.settle();
+    ASSERT_EQ(harness.imageTasks->count(), 2);
+    EXPECT_EQ(harness.imageTasks->activeIndex(), 1);
+    EXPECT_TRUE(harness.root->property("imageEditComparisonTask").toBool());
+    EXPECT_TRUE(harness.imageEdit.active());
+    EXPECT_TRUE(harness.imageEdit.dirty());
+    EXPECT_FALSE(harness.imageEdit.editingVisible());
+    EXPECT_FALSE(workspace->property("editModeActive").toBool());
+    auto* const snapshot = harness.imageTasks->activeController();
+    EXPECT_EQ(snapshot->rawImageForSlot(ImageReviewController::PrimarySlot), image);
+    EXPECT_EQ(snapshot->rawImageForSlot(ImageReviewController::SecondarySlot), edited);
+
+    const QString evidence = qEnvironmentVariable("DVS_REVIEW_EVIDENCE_DIR");
+    if (!evidence.isEmpty()) {
+        ASSERT_TRUE(QDir().mkpath(evidence));
+        harness.settleAnimations();
+        ASSERT_TRUE(
+            harness.window->grabWindow().save(QDir(evidence).filePath("edit-comparison.png")));
+    }
+    QVariant resumed;
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        harness.root.get(), "resumeOriginalImageEdit", Q_RETURN_ARG(QVariant, resumed)));
+    EXPECT_TRUE(resumed.toBool());
+    harness.settle();
+    EXPECT_EQ(harness.imageTasks->activeIndex(), 0);
+    EXPECT_TRUE(harness.imageEdit.editingVisible());
+    EXPECT_EQ(harness.imageEdit.editedImage(), edited);
+    ASSERT_TRUE(harness.imageEdit.undo());
+    EXPECT_EQ(harness.imageEdit.annotationCount(), 0);
+    EXPECT_EQ(snapshot->rawImageForSlot(ImageReviewController::SecondarySlot), edited);
+    EXPECT_EQ(original->rawImageForSlot(ImageReviewController::PrimarySlot), image);
+}
+
+TEST(MainQmlContractTests, ImageUnsavedWorkingCopyBlocksWindowCloseUntilExplicitDiscard) {
+    WorkspaceHarness harness;
+    harness.withImageEdit = true;
+    ASSERT_TRUE(harness.create()) << harness.error;
+    harness.window->show();
+    QImage image(64, 48, QImage::Format_ARGB32);
+    image.fill(Qt::blue);
+    ASSERT_TRUE(harness.imageReview.openPrimaryImage(image, QStringLiteral("unsaved.png")));
+    ASSERT_TRUE(harness.activateWorkspace(1));
+    ASSERT_TRUE(harness.imageEdit.beginSession(2, QStringLiteral("unsaved.png"), {}));
+    ASSERT_TRUE(harness.imageEdit.fillImageRect(2, 2, 8, 8, Qt::red));
+    harness.imageEdit.setEditingVisible(false);
+    harness.settle();
+    EXPECT_FALSE(harness.window->close());
+    harness.settle();
+    EXPECT_TRUE(harness.window->isVisible());
+    auto* const dialog =
+        harness.root->findChild<QObject*>(QStringLiteral("unsavedImageEditDialog"));
+    ASSERT_NE(dialog, nullptr);
+    EXPECT_TRUE(dialog->property("visible").toBool());
+    EXPECT_TRUE(dialog->property("exiting").toBool());
+    ASSERT_TRUE(QMetaObject::invokeMethod(dialog, "reject"));
+    EXPECT_TRUE(harness.imageEdit.dirty());
+    EXPECT_TRUE(harness.window->isVisible());
+    // Alt+F4 may arrive before mouse release; a live stroke must enter history before
+    // the dirty-state guard, otherwise a previously clean session would be lost.
+    ASSERT_TRUE(harness.imageEdit.undo());
+    ASSERT_FALSE(harness.imageEdit.dirty());
+    harness.imageEdit.setEditingVisible(true);
+    ASSERT_TRUE(harness.imageEdit.beginStroke(Qt::red, 3, 1.0));
+    ASSERT_TRUE(harness.imageEdit.strokeTo(10, 10));
+    EXPECT_FALSE(harness.window->close());
+    EXPECT_TRUE(harness.imageEdit.dirty());
+    EXPECT_FALSE(harness.imageEdit.strokeActive());
+    auto* const discard =
+        harness.root->findChild<QObject*>(QStringLiteral("unsavedImageEditDiscardButton"));
+    ASSERT_NE(discard, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(discard, "clicked"));
+    harness.settle();
+    EXPECT_FALSE(harness.imageEdit.active());
+    EXPECT_FALSE(harness.window->isVisible());
+    EXPECT_EQ(harness.imageReview.rawImageForSlot(ImageReviewController::PrimarySlot), image);
+}
+
 TEST(MainQmlContractTests, ImageTabEditSessionStaysBoundToItsOwnTab) {
     WorkspaceHarness harness;
     harness.withImageTasks = true;
@@ -16949,27 +17108,59 @@ TEST(MainQmlContractTests, ImageTabEditSessionStaysBoundToItsOwnTab) {
                                           Q_ARG(QVariant, QVariant{0})));
     EXPECT_FALSE(closedDirty.toBool()) << "a dirty tab must not close behind another tab";
     EXPECT_EQ(harness.imageTasks->count(), 2);
+    auto* const unsaved =
+        harness.root->findChild<QObject*>(QStringLiteral("unsavedImageEditDialog"));
+    ASSERT_NE(unsaved, nullptr);
+    EXPECT_TRUE(unsaved->property("visible").toBool());
+    EXPECT_TRUE(
+        unsaved->property("taskTitle").toString().contains(QStringLiteral("edit-tab-a.png")));
+    EXPECT_EQ(unsaved->property("sourceLabel").toString(), firstPath);
+    const QString evidence = qEnvironmentVariable("DVS_REVIEW_EVIDENCE_DIR");
+    if (!evidence.isEmpty()) {
+        ASSERT_TRUE(QDir().mkpath(evidence));
+        harness.settleAnimations();
+        ASSERT_TRUE(harness.window->grabWindow().save(
+            QDir(evidence).filePath("unsaved-background-tab.png")));
+    }
+    ASSERT_TRUE(QMetaObject::invokeMethod(unsaved, "reject"));
     QVariant startedElsewhere;
     ASSERT_TRUE(QMetaObject::invokeMethod(
         workspace, "beginImageEdit", Q_RETURN_ARG(QVariant, startedElsewhere)));
     EXPECT_FALSE(startedElsewhere.toBool())
         << "a second edit session must not start while the first tab is dirty";
     EXPECT_EQ(harness.imageEdit.sourceLabel(), firstPath);
-
-    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
-                                          "activateImageTab",
-                                          Q_RETURN_ARG(QVariant, switched),
-                                          Q_ARG(QVariant, QVariant{0})));
-    ASSERT_TRUE(switched.toBool());
-    harness.settle();
-    EXPECT_TRUE(workspace->property("editModeActive").toBool());
-    harness.imageEdit.endSession();
-    QVariant closedClean;
+    // The prompt's save action returns to the dirty owner and opens its save dialog.
     ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
                                           "closeImageTab",
-                                          Q_RETURN_ARG(QVariant, closedClean),
+                                          Q_RETURN_ARG(QVariant, closedDirty),
                                           Q_ARG(QVariant, QVariant{0})));
-    EXPECT_TRUE(closedClean.toBool());
+    auto* const save =
+        harness.root->findChild<QObject*>(QStringLiteral("unsavedImageEditSaveButton"));
+    auto* const saveDialog =
+        harness.root->findChild<QObject*>(QStringLiteral("imageEditSaveDialog"));
+    ASSERT_NE(save, nullptr);
+    ASSERT_NE(saveDialog, nullptr);
+    QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs, true);
+    ASSERT_TRUE(QMetaObject::invokeMethod(save, "clicked"));
+    harness.settle();
+    EXPECT_EQ(harness.imageTasks->activeIndex(), 0);
+    EXPECT_TRUE(saveDialog->property("visible").toBool());
+    ASSERT_TRUE(QMetaObject::invokeMethod(saveDialog, "close"));
+    QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs, false);
+    EXPECT_TRUE(harness.imageEdit.dirty());
+    EXPECT_EQ(harness.imageEdit.sourceLabel(), firstPath);
+    EXPECT_TRUE(workspace->property("editModeActive").toBool());
+    // Explicit discard completes the original close request without another click.
+    ASSERT_TRUE(QMetaObject::invokeMethod(harness.root.get(),
+                                          "closeImageTab",
+                                          Q_RETURN_ARG(QVariant, closedDirty),
+                                          Q_ARG(QVariant, QVariant{0})));
+    EXPECT_FALSE(closedDirty.toBool());
+    auto* const discard =
+        harness.root->findChild<QObject*>(QStringLiteral("unsavedImageEditDiscardButton"));
+    ASSERT_NE(discard, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(discard, "clicked"));
+    EXPECT_FALSE(harness.imageEdit.active());
     EXPECT_EQ(harness.imageTasks->count(), 1);
 }
 

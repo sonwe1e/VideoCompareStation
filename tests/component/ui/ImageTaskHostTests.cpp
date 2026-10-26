@@ -1,3 +1,4 @@
+#include "dvs/ui/ImageEditController.h"
 #include "dvs/ui/ImageReviewController.h"
 #include "dvs/ui/ImageTaskHost.h"
 
@@ -96,6 +97,112 @@ writeBytes(const QTemporaryDir& directory, const QString& name, const QByteArray
 }
 
 } // namespace
+
+TEST(ImageTaskHostTests, EditComparisonKeepsAnImmutableVersionAndIndependentTaskIdentity) {
+    ensureCoreApplication();
+    ImageReviewController initial;
+    dvs::ui::ImageTaskHost host{&initial};
+    ASSERT_EQ(host.ensureActiveController(), &initial);
+    QImage source(32, 24, QImage::Format_ARGB32);
+    source.fill(Qt::blue);
+    ASSERT_TRUE(initial.openPrimaryImage(source, QStringLiteral("source.png")));
+    initial.restoreObservationPosition(2.0, 0.1, 0.2);
+    dvs::ui::ImageEditController edit;
+    edit.setSourceImageProvider([source](int) { return source; });
+    ASSERT_TRUE(edit.beginSession(2, QStringLiteral("source.png"), {}));
+    ASSERT_TRUE(edit.fillImageRect(2, 3, 8, 6, Qt::red));
+    const QImage firstRevision = edit.editedImage().copy();
+    const qint64 beforeBytes = host.workingSetBytes();
+    int recentOpenCount = 0;
+    QObject::connect(
+        &host, &dvs::ui::ImageTaskHost::taskOpened, [&recentOpenCount](int) { ++recentOpenCount; });
+
+    ASSERT_EQ(host.openEditComparison(&edit), 1);
+    auto* const snapshot = host.activeController();
+    ASSERT_NE(snapshot, nullptr);
+    EXPECT_NE(snapshot, &initial);
+    EXPECT_NE(snapshot->imageToken(), initial.imageToken());
+    EXPECT_EQ(host.controllerForToken(snapshot->imageToken()), snapshot);
+    EXPECT_EQ(snapshot->rawImageForSlot(ImageReviewController::PrimarySlot), source);
+    EXPECT_EQ(snapshot->rawImageForSlot(ImageReviewController::SecondarySlot), firstRevision);
+    EXPECT_EQ(snapshot->compareMode(), ImageReviewController::SideBySide);
+    EXPECT_DOUBLE_EQ(snapshot->zoom(), initial.zoom());
+    EXPECT_FALSE(snapshot->colorDisplayEnabled());
+    EXPECT_GT(host.workingSetBytes(), beforeBytes);
+    EXPECT_EQ(recentOpenCount, 0);
+    EXPECT_TRUE(host.tabs().at(1).toMap().value(QStringLiteral("editComparison")).toBool());
+    ASSERT_EQ(host.openEditComparison(&edit), 1);
+    EXPECT_EQ(host.count(), 2);
+    snapshot->setCompareMode(ImageReviewController::AbsDifference);
+    ASSERT_TRUE(
+        waitUntil([snapshot] { return !snapshot->diffPending() && snapshot->hasDiffResult(); }));
+    EXPECT_EQ(snapshot->maxAbsDifference(), 255);
+    EXPECT_GT(snapshot->meanAbsDifference(), 0.0);
+
+    ASSERT_TRUE(edit.undo());
+    EXPECT_EQ(snapshot->rawImageForSlot(ImageReviewController::SecondarySlot), firstRevision);
+    ASSERT_EQ(host.openEditComparison(&edit), 2);
+    EXPECT_EQ(host.count(), 3);
+    EXPECT_EQ(host.activeController()->rawImageForSlot(ImageReviewController::SecondarySlot),
+              source);
+    auto* const reverted = host.activeController();
+    reverted->setCompareMode(ImageReviewController::AbsDifference);
+    ASSERT_TRUE(
+        waitUntil([reverted] { return !reverted->diffPending() && reverted->hasDiffResult(); }));
+    EXPECT_EQ(reverted->maxAbsDifference(), 0);
+    EXPECT_EQ(snapshot->maxAbsDifference(), 255);
+    EXPECT_EQ(initial.rawImageForSlot(ImageReviewController::PrimarySlot), source);
+    edit.endSession();
+    ASSERT_TRUE(host.activate(1));
+    EXPECT_EQ(snapshot->rawImageForSlot(ImageReviewController::SecondarySlot), firstRevision);
+}
+
+TEST(ImageTaskHostTests, EditComparisonRejectsFolderReplacementWithoutChangingItsPixels) {
+    ensureCoreApplication();
+    ImageReviewController initial;
+    dvs::ui::ImageTaskHost host{&initial};
+    ASSERT_EQ(host.ensureActiveController(), &initial);
+    QImage source(16, 16, QImage::Format_ARGB32);
+    source.fill(Qt::blue);
+    ASSERT_TRUE(initial.openPrimaryImage(source, QStringLiteral("source.png")));
+    dvs::ui::ImageEditController edit;
+    edit.setSourceImageProvider([source](int) { return source; });
+    ASSERT_TRUE(edit.beginSession(2, QStringLiteral("source.png"), {}));
+    ASSERT_EQ(host.openEditComparison(&edit), 1);
+    auto* const snapshot = host.activeController();
+    QString error;
+    EXPECT_EQ(host.requestOpenPrimaryInActiveTask(QUrl{"file:///replacement.png"}, 0, &error), -1);
+    EXPECT_TRUE(error.contains(QStringLiteral("固定快照")));
+    error.clear();
+    EXPECT_EQ(
+        host.requestOpenPairInActiveTask(QUrl{"file:///a.png"}, QUrl{"file:///b.png"}, 0, &error),
+        -1);
+    EXPECT_TRUE(error.contains(QStringLiteral("固定快照")));
+    EXPECT_FALSE(snapshot->openPending());
+    EXPECT_EQ(snapshot->rawImageForSlot(ImageReviewController::PrimarySlot), source);
+    EXPECT_EQ(host.count(), 2);
+}
+
+TEST(ImageTaskHostTests, EditComparisonBudgetFailurePreservesTheOriginalTaskAndWorkingCopy) {
+    ensureCoreApplication();
+    ImageReviewController initial;
+    dvs::ui::ImageTaskHost host{&initial, 1};
+    ASSERT_EQ(host.ensureActiveController(), &initial);
+    QImage source(16, 16, QImage::Format_ARGB32);
+    source.fill(Qt::blue);
+    ASSERT_TRUE(initial.openPrimaryImage(source, QStringLiteral("source.png")));
+    dvs::ui::ImageEditController edit;
+    edit.setSourceImageProvider([source](int) { return source; });
+    ASSERT_TRUE(edit.beginSession(2, QStringLiteral("source.png"), {}));
+    ASSERT_TRUE(edit.fillImageRect(0, 0, 4, 4, Qt::red));
+    const QImage edited = edit.editedImage().copy();
+    EXPECT_EQ(host.openEditComparison(&edit), -1);
+    EXPECT_EQ(host.count(), 1);
+    EXPECT_EQ(host.activeController(), &initial);
+    EXPECT_TRUE(edit.active());
+    EXPECT_TRUE(edit.dirty());
+    EXPECT_EQ(edit.editedImage(), edited);
+}
 
 TEST(ImageTaskHostTests, OpensFirstImageAsTheInitialTab) {
     ensureCoreApplication();
