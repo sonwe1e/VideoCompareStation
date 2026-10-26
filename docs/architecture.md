@@ -2,8 +2,8 @@
 
 Current product scope and issue status: [product intent](product/visual-review.md),
 [agent routing guide](agent-guide.md), and [issue ledger](engineering/visual-review-backlog.md).
-The phase numbers below refer to the historical architecture rollout, not completion of every
-item in the later playback-overhaul plan or the current four-workflow product requirements.
+The phase numbers below describe the original architecture rollout. Current acceptance gaps
+are tracked in the issue ledger, independently of whether a component is implemented.
 
 Focused references: [state ownership](architecture/state-ownership.md),
 [dependency rules](architecture/dependency-rules.md),
@@ -15,8 +15,8 @@ Status: **phases 0–6 implemented and locally validated**. The FrameSet model,
 multi-source decode/render pipeline, three-up/reference-focus layouts, selectable
 difference edges, confidence-gated global/sequence alignment, manual anchors, and
 timeline diagnostics are in the codebase today. The GUI project open/save/relink loop and
-schema v4 were removed — CompareStation manages only the current open 1–3 video session and does
-not persist projects. The review surface includes synchronized pan/zoom, ROI,
+schema v4 were removed. Task tabs keep in-memory review state, with one active 1–3 source video
+session; background video tasks do not decode, and tasks are not persisted as projects. The review surface includes synchronized pan/zoom, ROI,
 threshold masks, the four-panel analysis grid, exact-plane difference with a persistent
 exactness classification, P010/10-bit software decode, broader YUV/RGB normalization,
 transfer metadata, rotation, SAR, and shared-device D3D11VA decode. Decoder-owned NV12/P010
@@ -26,8 +26,7 @@ five-minute gates and single-/two-/three-source 1080p120 one-minute gates, inclu
 two-source 1080p60 path. Those gates require the external fixture root and an interactive 120 Hz
 D3D11VA runner; each release SHA must supply its own uploaded evidence before publication. Small
 P010 fixtures retain local 10-bit and zero-copy correctness coverage without an active 4K profile.
-The historical A/B design is archived in
-[design/architecture-overview.md](design/architecture-overview.md).
+Superseded A/B architecture documents are available in Git history.
 
 CompareStation is a frame-exact Windows video workstation. It directly plays one
 source, or presents one canonical frame position across two to three sources atomically with

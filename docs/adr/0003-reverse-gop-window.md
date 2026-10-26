@@ -2,7 +2,8 @@
 
 Status: accepted
 
-Plan reference: `docs/plans/playback-overhaul` ADR-006 / §04.3 (C-03).
+This ADR records the implemented reverse-window contract. The proposed replacement by seek
+trail retention remains unimplemented; see [D-017](../engineering/decision-register.md).
 
 ## Decision
 

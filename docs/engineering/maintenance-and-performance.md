@@ -91,50 +91,20 @@ retain a prior target). See
 `PlaybackTraceTests` covers bounded overflow reporting, sink-failure accounting, producer progress
 while sink I/O is blocked, safe sink removal during a drain, and the disabled/enabled global path.
 `TraceSinkTests` covers the JSON header, identity fields (including `dev`), event and overflow
-records, Unicode output paths, and the bounded memory sink. `PlaybackTraceGateTests.ps1` covers
+records and Unicode output paths. The superseded memory sink has been removed. `PlaybackTraceGateTests.ps1` covers
 header/event types, uint64 boundaries, event-kind ranges, nullable commands, malformed input, and
 overflow rejection.
 
-## Verification commands
+## Verification entry points
 
-Run the relevant code checks from the repository root:
+Use [the build wrapper and impact-based validation table](../building.md). For changes to the
+cache or trace path, select the affected `SourceFrameCacheTests`, `PlaybackTraceTests`,
+`TraceSinkTests` and direct callers; do not append an unrelated full suite by default.
 
-```powershell
-cmake --preset dev
-cmake --build --preset dev
-ctest --preset dev -R "PlaybackTraceTests|TraceSinkTests|SourceFrameCacheTests" --output-on-failure
-ctest --preset dev --output-on-failure
-cmake --build --preset dev --target format-check
-cmake --build --preset dev --target lint
-```
-
-On this workstation, the first command needs the environment overrides from the
-[local build environment notes](#local-build-environment-notes-this-workstation) below; the plain
-preset would trigger a package re-validation that is destructive here.
-
-The two playback gate entry points are:
-
-```powershell
-.\tools\testing\run-navigation-gate.ps1 `
-    -Executable .\out\build\dev\bin\CompareStation.exe `
-    -Fixtures @('D:\media\a.mp4', 'D:\media\b.mp4')
-.\tools\testing\run-comparison-semantics-gate.ps1 `
-    -Executable .\out\build\dev\bin\CompareStation.exe `
-    -Fixtures @('D:\media\a.mp4', 'D:\media\b.mp4')
-```
-
-They propagate the child result and reject a missing, malformed, empty, or overflowed trace.
-Passing either script does not prove the three asynchronous invariants described in the trace
-schema.
-
-## Local build environment notes
-
-Current tool discovery, dependency setup, and cache recovery are documented in
-[the build guide](../building.md). Use the wrapper instead of copying workstation paths.
-The current workstation has a slim vcpkg tree without Git history and an existing dependency
-installation; reconfiguration here requires the explicit `-UseInstalledDependencies` switch.
-Normal full checkouts and CI use manifest installation. Older ad-hoc PATH surgery and package
-copying notes are not the supported build procedure.
+`tools/testing/run-navigation-gate.ps1` and `run-comparison-semantics-gate.ps1` retain their
+trace checks. They reject missing, malformed, empty and overflowing captures; see
+[the trace schema](trace-schema.md) for semantic limits. Hardware evidence follows
+[the runner protocol](../self-hosted-runner.md).
 
 ## Outstanding evidence and follow-up
 
@@ -174,7 +144,3 @@ The following work remains open or requires the intended Windows/D3D11VA runner:
 - Confirm with target-hardware measurements that the cache index reduces lookup cost without
   regressing decode, memory, or frame-set behavior. Unit/component coverage alone is not that
   performance evidence.
-- Rebuild the Release baseline after the vcpkg VS-detection failure on this workstation
-  (`vcpkg visualstudio.cpp Value was null` during `cmake --preset release`); the 2026-09-21
-  `out/build/release/bin/CompareStation.exe` remains the last known-good Release artifact until
-  reconfigure succeeds.

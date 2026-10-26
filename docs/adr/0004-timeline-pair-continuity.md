@@ -2,7 +2,8 @@
 
 Status: accepted
 
-Plan references: playback-overhaul C-01 / C-02 / C-07, ADR-003 (SourceKey), ADR-006 (GOP).
+Related contract: [reverse GOP window](0003-reverse-gop-window.md).
+The C-01/C-02/C-07 identifiers below name the original design topics, not current issue status.
 
 ## C-01 — Timeline master ≠ Reference
 

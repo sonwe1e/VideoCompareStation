@@ -1,6 +1,6 @@
 # Agent 快速定位指南
 
-更新日期：2026-10-02。用途：先定位产品问题，再进入最小相关代码和验证入口。
+更新日期：2026-10-25。用途：先定位产品问题，再进入最小相关代码和验证入口。
 这不是完整架构说明，也不是发布验收记录。
 
 ## 开始工作前的五分钟
@@ -13,15 +13,14 @@
    git status --short
    git log -1 --format='%H %s'
    git diff --stat
-   git diff -- src/ui_qml/qml/PlayerOsc.qml
+   git diff -- <本次相关路径>
    ```
 
 4. 沿下表读取实际调用链；先确认组件被主界面实例化，不能只搜索到一个属性或枚举就判定功能可用。
 5. 修改前选择与问题相关的验收场景；完成后更新台账中的状态、代码依据和验证证据。
 
-2026-09-22 的审查基线为 `main @ 0a74c466f3bef7aa8becf77463efaa424de15c55`。
-当次工作区另有播放状态、图片 Alpha/PNM 等未提交实现，台账分别记录，不能当作 main 已合入。
-后续工作必须重新检查自己的 SHA 和 diff；已有未提交修改不应被覆盖或重复实现。
+开始时检查自己的 SHA 和 diff；不要覆盖已有修改，也不要按旧计划重复实现已有能力。
+涉及默认行为或产品取舍时再查 [决策登记册](engineering/decision-register.md)。
 
 ## 从用户现象找代码
 
@@ -33,7 +32,7 @@
 | 点时间轴、快速逐帧、倒退、区间循环 | `ReviewActions.qml`、`TimelineTracks.qml` → `PlaybackCoordinator.cpp` → `src/media_ffmpeg/src/SourceDecodeActor.cpp`、`SoftwareDecoder.cpp` | `PlaybackCoordinatorTests.cpp`、`SourceDecodeActorTests.cpp`；[反向 GOP ADR](adr/0003-reverse-gop-window.md) |
 | 长按走带（单击/长按/松手即停、速率 0.5×/1×/2×、停稳与过期追跑） | `src/ui_qml/src/JogStateMachine.cpp`、`JogKeyHandler.cpp`；`ReviewController.cpp`：`jogPress`/`jogRelease`/`setJogRate`/`framePending`；`TransportBar.qml`：`jogRateCombo` | `tests/component/ui/JogStateMachineTests.cpp`、`JogKeyHandlerTests.cpp`、`ReviewControllerTests.cpp`（jog 系列）、`qml/tst_player_osc.qml`、`qml/tst_review_actions.qml`、`MainQmlContractTests.cpp`（`JogRateSelectorMirrorsAndReachesTheController`）；真机数字走 `tools/testing/run-performance-gate.ps1` 的 JOG 结构门与 `DVS_BENCHMARK_SUMMARY`（`--ui-performance` 报告的 `jog_*` 键） |
 | 鼠标在控制条（进度条）上，控制条自己淡出 | `PlayerOsc.qml`：`pointerInsidePanel`、`reveal`、`hideTimer`、`onPointerInsidePanelChanged`；`TimelineTracks.qml`：`pointerInside`；`Main.qml`：`immersiveOscTimer` | `tests/component/ui/qml/tst_player_osc.qml`；台账 `U-03` |
-| 悬停未播放位置无缩略图 | `TimelineThumbnailCache.qml`：`capture`、`urlForFrame`；`TimelineThumbnailPopup.qml` | `tests/component/ui/qml/tst_timeline_thumbnail_cache.qml`；台账 `V-06` |
+| 悬停预览不显示或帧身份错误 | `PreviewThumbnailService` → `PreviewThumbnailController`；`TimelineThumbnailCache.qml`、`TimelineThumbnailPopup.qml` | `PreviewThumbnailServiceTests`、`PreviewThumbnailControllerTests`、`tst_timeline_thumbnail_cache.qml`；台账 `V-06` |
 | GT／候选切换后比较错对象 | `src/domain/src/ComparisonSelection.cpp`、`ComparisonValidator.cpp`；`PlaybackCoordinator.cpp`；`CompareModeBar.qml` | `ComparisonSelectionTests.cpp`、`PlaybackCoordinatorTests.cpp`；[比较语义 ADR](adr/0004-timeline-pair-continuity.md) |
 | 不同帧率或 VFR 看起来不同步 | `src/media_ffmpeg/src/MultiSourceFrameProvider.cpp`；`src/application/src/Alignment.cpp`、`ComparisonExactness.cpp`；`ComparisonViewport.qml` | `ComparisonExactnessTests.cpp`、`AlignmentTests.cpp`、`MultiSourceFrameProviderTests.cpp`；[对齐说明](alignment.md) |
 | 滚轮缩放、拖动、框选、分割线不对 | `ComparisonViewport.qml` → `ComparisonSurface.cpp` → `src/platform_windows/src/D3d11ComparisonRenderer.cpp` | `tests/component/ui/ComparisonSurfaceTests.cpp`、`MainQmlContractTests.cpp`、`qml/tst_wipe_handle.qml` |
@@ -43,12 +42,12 @@
 | 图片打不开、PNM、位深或颜色不对 | `src/app/Main.cpp` 注入 loader → `src/media_ffmpeg/src/StillImageDecoder.cpp`；`ImagePairLoader.cpp`、`ImageHeaderProbe.h`、`ImageFolderPairModel.cpp`；`Main.qml` 文件入口。颜色状态/ICC：`ImageColorContract.h`、`ImagePairLoader::StillImageSourceInfo`、`src/media_ffmpeg/src/ImageColorProfileProbe.cpp`；契约见 [image-color-contract.md](engineering/image-color-contract.md) | `tests/component/ui/ImageReviewControllerTests.cpp`、`ImageFolderPairModelTests.cpp`、`StillImageDecoderTests.cpp`、`ImageColorContractTests.cpp`、`ImageColorSampleTests.cpp`；样本清单 `tests/fixtures/images/` |
 | 透明边缘、RGBA 数值、Alpha 差异 | `ImageWorkspace.qml` → `ImageReviewController.cpp`：`samplePixel`、`displayImage` → `ImagePairLoader.cpp`：`analyzeDifference`（差值场与全部统计）、`renderDifference`（按模式/增益派生显示变体） | `tests/component/ui/ImageReviewControllerTests.cpp`；台账 `I-01`、`I-02`、`I-06` |
 | 图片 100%、单图／裁剪十字线、手动 A/B 闪烁、分割线 | `ImageWorkspace.qml` 的 `applyHover`／`refreshHover`、`ImageReviewController.h/.cpp`、`ImageFolderPairModel.cpp` | `MainQmlContractTests.ImageSingleCrosshair*`、`ImageReviewControllerTests.cpp`；台账 `I-04`、`C-01`、`C-02` |
-| 图片连续裁剪、镜像／翻转／旋转、编辑撤销与副本保存 | `ImageWorkspace.qml` 的 `updateCropSelection`、变换菜单 → `ImageEditController.cpp` 的 `cropToImageRect`／`transformImage` 与有界历史 → `EditImageProvider`；不修改审查原图 | `ImageEditControllerTests`、`MainQmlContractTests.ImageEdit*`；产品目标 §5、台账「2026-10-10 图片连续裁剪与整图变换」 |
+| 图片连续裁剪、镜像／翻转／旋转、编辑撤销与副本保存 | `ImageWorkspace.qml` 的 `updateCropSelection`、变换菜单 → `ImageEditController.cpp` 的 `cropToImageRect`／`transformImage` 与有界历史 → `EditImageProvider`；不修改审查原图 | `ImageEditControllerTests`、`MainQmlContractTests.ImageEdit*`；产品目标 §5 |
 | 对调 A/B、只替换一张图 | `ImageReviewController::swapSides`、`requestReplacePrimary/Secondary`；`ImageWorkspace.qml`、`Main.qml` 换图对话框 | `ImageReviewControllerTests` 的 `SwapSides*`/`Replace*`；台账 `U-02` |
 | 视频阈值／策略复用、分析缓存和异步采样 | `PixelDifference.cpp`、`ComparisonMetrics.cpp`、`PairMetricsService.cpp`、`PairMetricsController.cpp` | `PixelDifferenceTests.cpp`、`ComparisonMetricsTests.cpp`、`PairMetricsControllerTests.cpp`、`PairMetricsThresholdReuseTests.cpp`；[复用协议与反例](engineering/pair-metrics-threshold-reuse.md) |
 | MAE／PSNR、统计和误差图含义 | `src/domain/src/PixelDifference.cpp`；`src/application/include/dvs/application/ComparisonMetrics.h`；图片另查 `ImagePairLoader.cpp`（`DifferenceOptions::gain` 只改渲染，统计为原始 8-bit 差值；工作集见 `estimatePairWorkingSet`） | `PixelDifferenceTests.cpp`、`ComparisonMetricsTests.cpp`、`ImageReviewControllerTests.cpp`；[指标 ADR](adr/0005-pixel-difference-metrics.md) |
 | 记录问题、截图、恢复观察位置 | `src/ui_qml/src/IssueLogController.cpp` → `src/application/include/dvs/application/IssueRecord.h` → `src/persistence_json/src/IssueRecordRepository.cpp` | `IssueLogControllerTests.cpp`、`IssueRecordTests.cpp`、`IssueRecordRepositoryTests.cpp` |
-| 把入点到出点导出成片段（无损流拷贝裁剪）、导出失败或起点不在入点 | `TransportBar.qml`／`PlayerOsc.qml` 的「导出」芯片 → `ClipExportDialog.qml` → `ClipExportController.cpp`：`exportRange`（源取 `ValidatedComparisonSet` 的规范源）→ `src/application/src/ClipExportPlanner.cpp`（计划与关键帧对齐）→ `src/media_ffmpeg/src/ClipExportWriter.cpp`（按包复制、临时文件改名） | `ui.MainQmlContractTests.ExportRangeButtonStartsAClipExport`、`tests/component/media/ClipExportWriterTests.cpp`、`tests/unit/application/ClipExportPlannerTests.cpp`；台账「视频第六增补」、产品目标 §3 的两条限制 |
+| 把入点到出点导出成片段（无损流拷贝裁剪）、导出失败或起点不在入点 | `TransportBar.qml`／`PlayerOsc.qml` 的「导出」芯片 → `ClipExportDialog.qml` → `ClipExportController.cpp`：`exportRange`（源取 `ValidatedComparisonSet` 的规范源）→ `src/application/src/ClipExportPlanner.cpp`（计划与关键帧对齐）→ `src/media_ffmpeg/src/ClipExportWriter.cpp`（按包复制、临时文件改名） | `ui.MainQmlContractTests.ExportRangeButtonStartsAClipExport`、`tests/component/media/ClipExportWriterTests.cpp`、`tests/unit/application/ClipExportPlannerTests.cpp`；产品目标 §6 的输出边界 |
 | 不知道功能在哪里、模式太多 | `EmptyReviewView.qml`、`ApplicationMenuBar.qml`、`CompareModeBar.qml`、`TabbedInspector.qml`、`ImageWorkspace.qml` | 对应 QML 测试与 `MainQmlContractTests.cpp`；按产品工作流做人工验收 |
 
 表中无前缀的 UI 文件位于 `src/ui_qml/qml`、`src/ui_qml/src` 或 `src/ui_qml/include/dvs/ui`；
@@ -83,8 +82,9 @@
   只持任务记录与身份匹配（素材组多重集＋参考槽身份，顺序无关），仍是**单一** ReviewRuntime；
   打开入口收敛 `host.openTask`，切换经 `ReviewController::reopenSourcesWithoutMapping`
   （跨任务不得沿用 preserveDisplayedTime）＋Main.qml 四阶段恢复；侧栏单视频任务活动时就地
-  换片。设计全貌见 [视频任务标签设计](plans/video-task-tabs-design.md)，行为证据见台账
-  2026-10-24 条目。
+  换片。设计全貌见 [视频任务标签设计](plans/video-task-tabs-design.md)，待验边界见台账 TASK-01。
+- 图片任务由 `ImageTaskHost` 与 `ImageTaskTabs.qml` 管理；工作区 `controller` 随标签重绑，
+  编辑会话按源路径归属。对应验证在 `ImageTaskHostTests` 与主窗 `ImageTab*` 用例。
 - 图片 `requestOpenPrimary` 会清空 B（新的单图任务）；「只换 A」用 `requestReplacePrimary`。
   对调与单侧替换不改写 `committedPairId`。
 - 渲染了差异图，不等于已经接通 MAE/PSNR；有解码器，不等于有格式验收或无损显示路径。
@@ -104,7 +104,7 @@
 ## 验证与证据
 
 仓库脚本要求 PowerShell 7。工具路径、缓存重建和脚本回归见 [构建指南](building.md)。
-先用 `pwsh tools/build/build.ps1 -Preset dev -Doctor` 检查环境；不要猜测工具安装目录。
+首次配置或遇到环境故障时用 `pwsh tools/build/build.ps1 -Preset dev -Doctor`；不要每轮重复自检或猜工具路径。
 同一构建目录的 build/lint/test 必须串行执行。下列是后续实现任务的建议命令，不表示本次文档更新执行过这些测试：
 
 ```powershell
@@ -141,7 +141,6 @@ WARP/单元测试不能证明实际 D3D11VA 流畅度；已有一次测试通过
 - [问题台账](engineering/visual-review-backlog.md) 是当前问题定位入口，源码和针对当前版本的实测是行为证据。
 - [依赖规则](architecture/dependency-rules.md)、[状态所有权](architecture/state-ownership.md)、
   [ADR](adr/) 和现行测试门禁约束实现；保持单一协调循环、异步身份和完整 FrameSet。
-- `plans/playback-overhaul` 与 `engineering/behavior-baseline.md` 记录较早 SHA 的调查和迁移目标。
-  它们的 Reference 耦合、无反向窗口、QML Range Loop 等描述须重新核对；音频扩展不在当前产品范围。
+- 被替代的调查、执行计划和已完成批次从 Git 历史查阅；不再把旧架构基线加入每次任务的阅读链。
 - 每个问题保留稳定 ID。合入后补提交、验证命令和结果，再将状态改为已验证；不能仅凭新增测试代码关闭问题。
 - 避免另建与台账平行的缺陷列表；新功能同时更新产品范围、台账状态和有关的媒体支持说明。

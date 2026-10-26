@@ -9,7 +9,7 @@ Read [docs/agent-guide.md](docs/agent-guide.md) first for the code/test routing 
 dispute landed on and whether it is still a temporary assumption.
 The product covers silent video/image viewing and quality comparison; audio and subtitles
 are outside the current scope. Check HEAD and the working-tree diff before treating an issue
-as open or fixed. Older playback plans describe earlier baselines, not current completion status.
+as open or fixed. Use the current topic contracts; superseded plans and completed execution logs are available in Git history.
 
 ## Project Structure and Dependencies
 
@@ -54,8 +54,8 @@ use `-TestRegex` for a narrower case or additional affected suites. Do not combi
 
 Fast-iteration aids (details in [docs/building.md](docs/building.md#构建加速sccache双槽与定向-lint)):
 during development iterate with a single-case `-TestRegex` and run the full affected suite once per
-slice; `-Target lint-changed` clang-tidy-lints only the working tree's changed C++ files (the full
-`lint` target stays the hand-off gate); `-LockWaitSeconds <n>` waits for a busy preset instead of
+slice; `-Target lint-changed` clang-tidy-lints only the working tree's changed C++ files (use the full
+`lint` target when the impact-based validation scope requires it); `-LockWaitSeconds <n>` waits for a busy preset instead of
 failing fast; a second preset (`dev2`) builds and tests concurrently with `dev`. When sccache is
 installed it is auto-detected and injected at configure time (cache under `out/sccache`, `/Z7`
 debug info; opt out with `DVS_DISABLE_SCCACHE=1`); adopt it on an existing build directory with
@@ -79,7 +79,8 @@ not a media/UI run. Report selected scope and deferred checks briefly; never cal
 Diagnose prolonged silent checks using the current job log and process activity over time; a live
 process or cumulative CPU time alone does not prove progress. Do not repeatedly read stale job logs.
 
-Raw preset commands require a configured MSVC x64 developer environment:
+The following raw preset commands document CI/tooling internals and require a configured MSVC
+x64 developer environment. Local build/check/test work still uses the wrapper above:
 
 ```powershell
 cmake --preset dev

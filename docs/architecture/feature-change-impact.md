@@ -9,8 +9,8 @@ gaps and acceptance conditions live in the [issue ledger](../engineering/visual-
 | --- | --- | --- | --- |
 | Playback speed | Playback workflow and cadence | Playback capability | Add a clock policy |
 | Compare mode | Contract descriptor table and renderer | Comparison capability | None |
-| Evidence export | Export use case and output port | Notification capability | Adapter owned by composition |
-| Alignment algorithm | Alignment workflow and analysis port | Alignment capability | New worker only if required |
+| Evidence export | Export use case and output port | Export controller and shell status | Adapter owned by composition |
+| Alignment algorithm | Alignment workflow and analysis port | Comparison capability | New worker only if required |
 | Renderer | Render-channel port and render bridge | No UI-model dependency | Replace graphics composition |
 | Setting | Typed value and repository mapping | Owning capability only | None |
 | Media format | FFmpeg probe/decode/cache internals | Media information only | None |

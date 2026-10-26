@@ -1,55 +1,45 @@
 # 决策登记册
 
-- 建立日期：2026-10-18
-- 目的：把"拍过的板、假设、否决、触发结论"集中到一处，让任何一条都能回答三个问题：
-  **谁定的、凭什么、现在还算不算数。**
-- 与 [问题台账](visual-review-backlog.md) 的分工：台账记"哪里有问题、验收到什么程度"；
-  本册记"遇到分歧时选了哪一边"。同一件事两边都出现时，以本册的状态为准，以台账的证据为准。
+更新：2026-10-25。这里记录产品/工程取舍；实现缺口与验收状态见
+[问题台账](visual-review-backlog.md)。代码可证明实现，不能单独证明用户已批准某个默认选择。
 
-## 状态定义
+## 状态与使用
 
-| 状态 | 含义 | 什么时候可以改 |
-|---|---|---|
-| **已证实** | 有代码、测试或实测证据支持，当前行为与决策一致 | 新证据推翻时改为"已否决"并留旧证据 |
-| **临时假设** | 为解除阻塞先按此推进，**不是批准**。文档与 UI 必须能看出它是假设 | 决策人或实测证据确认后改"已证实"，否则过期 |
-| **已否决** | 明确不做；需要重启必须写新条目并引用旧条目 | 不得在原条目上直接翻转 |
-| **未触发** | 条件项，等待触发条件出现 | 触发条件满足时改为"临时假设"或"已证实" |
+- **已证实**：已记录的选择或实现事实有对应依据；不自动代表真机验收完成。
+- **临时假设**：当前采用或建议的方案，尚有列出的决策/证据条件，不冒充用户批准。
+- **已否决**：不采用的提案，或已被明确后继取代的旧结论；重新讨论时保留后继关系。
+- **未触发**：条件成立前不开展。时间过去、两批没碰到或实现已存在，都不自动改变产品授权。
 
-规则：**纯口头拍板不计入任何状态。** 每条必须落到"UI 可见"或"文档可查"或"测试可复现"之一。
+修改相关行为时才复核对应条目；不要求每个无关小批次重审整册。
+记录一句话取舍、依据和具体待定条件，使用符号/文档链接而非易漂移的源码行号。
 
 ## 登记内容
 
-| ID | 决策 | 状态 | 依据与证据 | 影响位置 |
-|---|---|---|---|---|
-| D-001 | 默认帧对齐＝严格索引（按序号），30/60 fps 混比不插值、不补帧；可切自动/手动对齐 | 已证实 | [对齐说明](../alignment.md)；模式徽章 `Main.qml:3811` | `MultiSourceFrameProvider`、对比浮标 |
-| D-002 | "平均差异"＝RGB 三通道绝对差均值；Alpha 永不混入 MAE/MSE，单独统计 | 已证实 | `src/domain/include/dvs/domain/PixelDifference.h:33`；图片侧 Alpha 独立均值 `ImagePairLoader.cpp:557-562` | 图片读数、视频指标、导出标注 |
-| D-003 | 视频 100%＝一个源像素占一个**物理**像素（含 DPR）；不可达时禁用并说明原因。图片 100% 标注为"100% 真实尺寸"，与"1:1 像素基准"区分 | 已证实 | [视口像素尺度](../engineering/viewport-pixel-scale.md)（DPR 1/1.25/1.5/2 各 40/40）；`ImageWorkspace.qml:638` | 100% 按钮、读数、截图 |
-| D-004 | 对比截图标注＝"显示结果 · 屏幕像素 · 未色彩管理；非源文件原始码值" | 已证实（复制/另存为路径由 D-018 取代） | 台账 FLOW2（2026-10-17）；样本 manifest `member_identity` | 导出标注；片段导出与样本 manifest 仍带该声明 |
-| D-005 | 图片**不做**三图对比 | 已否决 | 台账 C-01（2026-09-22 用户拍板） | `CompareModeBar`、`ImageReviewController` |
-| D-006 | 放大镜**不作为新组件**实现，只保留"按住放大"快捷键 | 已否决（作为新组件） | 需求洞察报告 R-10 裁决；缩放＋ROI 已覆盖 | 工具栏 |
-| D-007 | AV1/VP9 **不扩解码器**，只保证报错可读 | 已证实 | 台账 MEDIA1：真实样本返回 `kUnsupportedCodec`，语料库无此类素材 | `MediaProbe.cpp`、README 格式矩阵 |
-| D-008 | 三源默认画幅＝固定 GT＋候选切换精看；五宫格只作为可切 Overview，不作默认 | 临时假设 | 代码中无五宫格布局痕迹；两份材料（PRD 与工具栏改版）仍写成 A/B 两说 | `Main.qml` 三源布局 |
-| D-009 | 生成帧识别规则＝命名／元数据／用户指定三选一，先落规则文档，不建工具 | 未触发 | 需求洞察报告 R-15（阻塞 R-16）；触发器：用户给出生成帧判定规则，或插帧审查成为现实需求；到期：连续两批未触发按登记册规则降级为已否决 | 插帧协议、问题记录 |
-| D-010 | 图片格式范围以 [README 支持矩阵](../../README.md#支持的格式) 为准，未列出格式诚实报错 | 临时假设 → 待一次实测复核 | README（2026-10-18）；台账 MEDIA1 | `MediaPaths.cpp`、README |
-| D-011 | 硬件/性能门禁**不恢复为每批阻塞**；发布采用"已验证/未验证/已知不支持"三段声明 | 临时假设 | README「验证状态与发布声明」；2.5.0 例外一次性 | 发布流程、README |
-| D-012 | 批量审查上下文、跨天复盘、问题记录旧 schema 兼容均为**未触发** | 未触发 | 触发器：手动切目录成为可感知摩擦；每周重开旧目录找缺陷＞1 次 | `ImageFolderPairModel`、`IssueLogController` |
-| D-013 | 目录排序＝自然序（数字按量级、大小写折叠）+ 非 ASCII 按码点；**不引入 ICU/拼音排序** | 已证实 | `src/ui_qml/include/dvs/ui/NaturalOrder.h`；同一份实现供视频列表与图片游标使用 | 视频文件夹列表、单图翻页 |
-| D-014 | 解码帧缓存**不按系统内存总量分档**：默认播放池保持 224 MiB，每源容量只由 `min(预算份额, 24 帧)` 决定，不设固定字节上限 | 临时假设（待单源长 GOP 实测确认 24 帧够用；触发改判：素材变 4K／10-bit 或三源满窗） | [缓存优先路线](../plans/cache-first-roadmap-2026-10-20.md) §0、§2C；`src/app/ReviewRuntime.cpp:52`；`src/media_ffmpeg/src/SourceFrameCache.h:49` | `MultiSourceFrameProvider` 份额、`ReviewRuntime` 预算、设置面 |
-| D-015 | **16-bit PNG 与 Deflate TIFF 保存不做**；图片保存只维护 PNG／JPEG，JPEG 另存沿用显式合成背景 | 已否决 | 路线 §4；`NormalizedFrameFormat` 只有 NV12／P010／BGRA8；`src/ui_qml/src/ImageEditController.cpp:1759,1778` | 图片保存、发布载荷、能力台账 F03 邻项 |
-| D-016 | 倒退（Left／A）体验以**单源**为主场景，双源比较不据此优化；反向窗口准入与门禁 profile 按单源设计 | 已证实 | 用户 2026-10-20 陈述，记录于[缓存优先路线](../plans/cache-first-roadmap-2026-10-20.md) §0 | 反向窗口准入规则、性能门禁素材选择 |
-| D-017 | 倒退体验统一为**尾迹保留**一条原语：播放后的回退与 seek 后的回退共用"解码器刚走过的帧不丢"，播放环显式化但**不缩小**现有深度，独立的反向窗口构建不再保留 | 临时假设（探针确认 D3D11VA 显存占用与播放环现状后改判） | 路线 §批次 B 修订（2026-10-20）；播放路径已由 `fillReadAhead` 形成隐式环（`SourceDecodeActor.cpp:505-570,572`），缓存只在 open／close 清空（`:406,423`） | `SourceDecodeActor` 缓存策略、`SoftwareDecoder` 逐帧出口、性能门禁诊断口径 |
-| D-018 | 复制／另存为对比图＝**纯净对比画面**：不拼标注条，也不含视口内的来源标签、徽章、视图按钮与横幅。来源与观察信息改存 PNG 文本元数据（`Description`），剪贴板路径不带 | 已证实（用户 2026-10-21 明确选择"完全只要视频帧"，已知会失去烧录在画面上的声明） | 用户选择记录于本轮对话；`ComparisonExportController::capturePicture` 抓取前抑制画面项的全部兄弟节点；`ComparisonExportSuppressesSiblingOverlays` 逐像素验证无 chrome 泄漏且元数据可读回 | `CompareModeBar`、`ComparisonExportController`、`Main.qml`；取代 D-004 在复制/另存为路径上的做法 |
-| D-019 | 智能抠图（SAM2）**不进发布 ZIP**：发布包维持无 `onnxruntime`、无 `models/`；入口按 `smartSegmentAvailable` 能力显隐，需要者本机自置模型目录解锁；改为内置须另起打包批次，先解决 S03 的 GUI 线程同步推理风险并重审载荷门禁 | 临时假设（待用户在“内置 vs 本机安装”之间正式拍板；UX-19 已把入口做成能力可知的显隐，不冒充可用） | 2.5.0／2.5.1 包清单均 272 文件、无 onnxruntime／models（[发布说明](../releases/v2.5.1.md)）；[能力台账](capability-ledger.md) F03／S03；UX-19 契约（ImageWorkspace* 显隐）；本机模型 138.6 MB 无安装规则 | CPack 载荷门禁、ImageWorkspace 智能抠图入口、EX-05 验收（真实模型边缘质量仍待验） |
-| D-020 | 图片窄窗档的「详情」面板用 **bar 上方的根级临时浮层**：显式展开/收起，展开时不改画布尺寸，但会临时盖住画布底缘一条 | 临时假设（S3 按此落地；提案 D3 的「不遮画布」字面更严格，须用户复核后改判——若要完全不遮挡须换面板位置） | [窄窗提案](../plans/ux13-narrow-window-redesign.md) §8；`ImageWorkspace.qml` 的 `imageCompactDetailsPanel`／`relayoutStatusHints`；`ImageStatusBarCompactTierCollapsesToSingleBand`（浮层打开时 bar ≤40、面板在 bar 之上、采样填入后表格长高） | ImageWorkspace 状态栏、详情浮层、S5 验收 |
-| D-021 | 日常代码修改按影响范围验收；小且隔离的修改允许相关测试通过后交付，不默认追加全仓测试／lint；高风险、广泛影响和发布仍保留对应门禁 | 已证实（流程决策已落文档，耗时收益未测量） | 用户 2026-10-22 明确授权减轻验证负担；[构建指南选择表](../building.md#开发循环与完整验收)、根目录 AGENTS.md；现有测试与 CI 不删减 | Agent 验收选择、日常构建与 lint 调用 |
-| D-022 | 图片标签页以**一次审查任务**为单位（单图或 A/B 对），打开默认新建标签、重复素材聚焦；标签不跨重启保存；最多 12 个，总工作集沿用单对 1.5 GiB 硬顶；当前仍只有一个编辑会话，按素材路径归属到标签 | 临时假设（用户按行业惯例授权；每标签独立编辑、窄窗视觉矩阵和真实使用反馈待验） | `ImageTaskHostTests` 6/6、`tst_image_task_tabs.qml`、`MainQmlContractTests.ImageTabsOpenSwitchAndCloseBackToTheNeighbour`、`MainQmlContractTests.ImageTabEditSessionStaysBoundToItsOwnTab`；`Main.qml` 的 `adoptActiveImageTab` 显式重绑；`ReviewImageProvider` token 路由 | `ImageTaskHost`、`ImageTaskTabs.qml`、`Main.qml` 图片打开/关闭路由、`ImageWorkspace.controller` |
-| D-023 | 视频比较对象以**常驻互斥按钮组为主入口**（三源 A↔B/A↔C/B↔C 三钮、两源单钮、单源隐藏；不按比较模式与紧凑档门控，紧凑档行内保留）；显式选对入口（按钮/右键菜单/检查器行）在全组视图（三联/参考聚焦/双参考差异/局部联动）下点击回落**上次两路模式**（首次并排）；`C` 键固定-GT-切候选保持纯切换不触发回落；并排（SideBySide）渲染随当前比较对取两路，第三槽保留绑定 | 已证实（真机 D3D11VA 手感未验） | 用户提案 2026-10-23 实施两步走的第一步；`CompareModeBar.qml` pairEdgeButton-Repeater、`Main.qml` fullGroupView/lastPairMode/submitDifferenceEdge、`ReviewContextMenu.qml`、`D3d11ComparisonRenderer.cpp` SideBySide 分支；`MainQmlContractTests` 152/152（PairEdgeButtonGroup* / PairSelectionFromFullGroupViewsReturnsToTheLastPairMode / CandidateSwitchKeepsTheDualDifferenceCanvas）；`ComparisonSurfaceTests` 93/93＋变异 `out/verification/task-1-sbs-pair-mutation.ps1`；集成门禁 261 例＋format-check＋lint；Ui FullMatrix 679/682（3 例超时经 HEAD 基线证实为本机既有环境问题） | `CompareModeBar`、`ReviewContextMenu`、`Main.qml`、`D3d11ComparisonRenderer`、快捷键帮助表 |
-| D-024 | 视频任务标签＝**一次审查任务一个标签**（单视频或 2–3 路比较）；后台任务只存状态记录（QVariantMap 快照，只存不解释）不解码；切换经 `reopenSourcesWithoutMapping` 重建＋四阶段恢复（暂停→快照→重开/同组差量→定位与重放，全程保持暂停；跨任务重开不得沿用 preserveDisplayedTime 映射）；身份＝素材组多重集＋参考槽身份（顺序无关），AB 与 AC 不合并；上限 12 对齐图片；首版不跨重启、不保存对齐分析与手动锚点、后台不跑分析、文件夹导航全局唯一 | 临时假设（实现已全部落地：宿主＋QML 注册＋打开路由＋标签条＋快捷键＋完整恢复协议＋侧栏路由，217/217＋变异证据＋qmltypes 契约；待真机切换时延/稳定性证据与真实使用反馈后改判） | 用户提案 2026-10-23 确认实施；[设计文档](../plans/video-task-tabs-design.md)（§11 决议记录 a–i）；`VideoTaskHost.h/.cpp`、`VideoTaskTabs.qml`、`ReviewController::reopenSourcesWithoutMapping`、`VideoFolderModel::setRowHighlight`；`VideoTaskHostTests` 21/21、`MainQmlContractTests.VideoTabs*`、变异 `out/verification/video-tab-identity-gates-mutation.ps1`；台账 2026-10-24 条目 | `Main.qml` 打开路由、`VideoTaskHost`、快捷键、视频标签条、README/帮助 |
-
-## 新增或修改一条的步骤
-
-1. 起一个 `D-0NN` 编号，写清"决策一句话"，不要写成愿望或待办。
-2. 状态必须是上表四个之一；`临时假设` 要写明"何时过期"或"谁来证伪"。
-3. 证据只接受三类：代码位置（文件:行）、文档链接、可复现测试名。
-4. 若推翻旧条目，不删旧行，改为 `已否决` 并链接新条目。
-5. 每批交付结束复查一次：连续两批未触发的 `未触发` 项，正式降级为 `已否决`。
+| ID | 取舍 | 状态 | 依据与待定条件 |
+|---|---|---|---|
+| D-001 | 默认严格索引，不对30/60 fps混比自动插值或补帧；另有时间/人工对齐 | 已证实 | [对齐规则](../alignment.md)、`MultiSourceFrameProvider`；默认选择与时间精确性分别解释 |
+| D-002 | RGB平均差异为三通道绝对差均值，Alpha独立统计，不混入RGB MAE/MSE | 已证实 | [ADR 0005](../adr/0005-pixel-difference-metrics.md)、`PixelDifference`、`ImagePairLoader::analyzeDifference` |
+| D-003 | 视频100%按物理像素（含DPR）；图片真实尺寸与适应窗口明确区分 | 已证实 | [像素尺度契约](viewport-pixel-scale.md)；不可达时禁用并解释 |
+| D-004 | 对比图烧录“显示结果/非源文件码值”等标注条的旧方案 | 已否决 | 复制/另存路径已由 D-018 取代；相关输出仍须保存适用的口径说明 |
+| D-005 | 图片三图对比 | 已否决 | 2026-09-22 用户明确选择“图片不做3图”；视频三源不受此限制 |
+| D-006 | 将放大镜另做独立组件 | 已否决 | 原登记取舍保留，已有缩放/ROI不因旧计划再次造组件；“按住放大”须另核对实际入口，不能据旧报告宣称已实现 |
+| D-007 | 当前不扩 AV1/VP9 解码器，维持明确的不支持报错 | 已证实 | MEDIA1样本调查、[媒体支持](../media-support.md)、`MediaProbe`；有真实新素材需求时另评估 |
+| D-008 | 三源默认优先固定GT切候选精看，其他布局可切换 | 临时假设 | 默认产品选择仍待真实任务确认；当前已有ThreeUp/ReferenceFocus/AnalysisGrid/DualDifference，旧“没有相关布局”的推断不能作为依据 |
+| D-009 | “生成帧只写规则、不建工具”的旧结论 | 已否决 | 与已实现的协议导入/导航不符，由 D-025 更正；不是否决生成帧审查能力 |
+| D-010 | 图片格式按README支持矩阵声明，未支持格式如实报错 | 临时假设 | [支持矩阵](../../README.md#支持的格式)已有，具体发布候选仍需格式样本复核；不把扩展名当作可解码证明 |
+| D-011 | 日常批次按影响范围验证，硬件/性能证据不要求每次小修改重跑 | 临时假设 | D-021明确开发选择规则；发布仍按既有门禁。2.5.0等历史发布例外仅适用当次，三段式声明不能自动豁免后续发布 |
+| D-012 | 批量审查上下文、跨天复盘及进一步旧schema兼容扩展 | 未触发 | 当目录切换成为可感知摩擦或每周反复重开旧目录找缺陷时再评估；已有旧记录兼容不能回退 |
+| D-013 | 文件名自然序：数字按量级、大小写折叠，非ASCII按码点；不引入ICU/拼音排序 | 已证实 | `NaturalOrder.h`共享给视频列表与图片游标 |
+| D-014 | 默认播放池224 MiB，每源按预算份额与24帧取较小值，不按系统内存总量分档 | 临时假设 | `ReviewRuntime`、`SourceFrameCache`；容量规则已实现，单源长GOP效果待测。4K/10-bit或三源满窗需求触发重评，256 MiB发布红线不变 |
+| D-015 | 新增16-bit PNG及Deflate TIFF保存 | 已否决 | [缓存路线](../plans/cache-first-roadmap-2026-10-20.md)明确范围；当前维护PNG/JPEG，JPEG显式合成背景 |
+| D-016 | 倒退体验优化以单源为主场景 | 已证实 | 用户2026-10-20素材/操作说明，记录于[缓存路线](../plans/cache-first-roadmap-2026-10-20.md)；不能据此放松既有多源正确性门禁 |
+| D-017 | 播放与seek回退共用尾迹保留，未来替代独立反向窗口构建 | 临时假设 | [缓存路线](../plans/cache-first-roadmap-2026-10-20.md)批次B；当前仍保留seed/walk，须先测诊断分账、解码中间帧出口和D3D11VA资源占用，不写成已替换 |
+| D-018 | 复制/另存对比图只含纯净画面，观察信息写PNG `Description`；剪贴板不带元数据 | 已证实 | 用户2026-10-21明确选择；`ComparisonExportController`、`ComparisonExportSuppressesSiblingOverlays`；排除标签、徽章、横幅、按钮和letterbox，取代D-004 |
+| D-019 | SAM2不进当前发布ZIP，按本机模型/运行库能力显隐入口 | 临时假设 | [2.5.1发布记录](../releases/v2.5.1.md)、`smartSegmentAvailable`；内置或本机安装仍待用户正式选择，内置前需处理S03同步推理与载荷门禁 |
+| D-020 | 图片窄档详情用状态栏上方的临时浮层，不改画布尺寸但会暂时遮住底缘 | 临时假设 | `ImageWorkspace.imageCompactDetailsPanel`、[窄窗约定](../plans/ux13-narrow-window-redesign.md)；是否接受临时遮挡待用户复核，不能自行改写“不遮画布”目标 |
+| D-021 | 日常修改按行为、调用者和风险选验收范围，小而隔离的修改不默认追加全仓测试/lint | 已证实 | 用户2026-10-22明确授权；[构建选择表](../building.md#开发循环与完整验收)、AGENTS；公共契约/广泛跨层/全局工具链/影响不明/发布仍保留完整门禁，耗时收益未测 |
+| D-022 | 图片标签按审查任务组织、重复素材聚焦、最多12个、不跨重启、总工作集1.5 GiB；目前共用一个按路径归属的编辑会话 | 临时假设 | 用户按行业惯例授权，`ImageTaskHostTests`与主窗ImageTab契约；独立编辑会话和窄窗/DPI真实体验仍待验/后续设计 |
+| D-023 | 比较对常驻互斥按钮；显式选对从全组视图回到上次两路模式，C键仅固定GT切候选 | 已证实 | 用户2026-10-23提案、`CompareModeBar`、`submitDifferenceEdge`、主窗PairEdge/PairSelection契约及SideBySide渲染回读；真机连续切对待验 |
+| D-024 | 视频标签按任务存状态，后台不解码；切回重开/差量恢复且保持暂停；身份为素材组多重集＋参考源，AB与AC不合并 | 临时假设 | [完整契约与决议](../plans/video-task-tabs-design.md)、`VideoTaskHostTests`、主窗VideoTabs契约；上限12，不保存跨重启/对齐分析/手动锚点，文件夹导航全局唯一；恢复时延、稳定性与真实使用反馈待验 |
+| D-025 | 生成帧来源由用户导入的显式协议确定，不自动按奇偶或命名猜测 | 已证实 | `InterpolationProtocolRepository`、`InterpolationProtocolController`、`TransportBar`协议导航和`SampleExportController`入口已存在；更正D-009，自动识别扩展仍需单独需求 |
+| D-026 | 返回查看保留编辑会话；编辑结果直接比较采用按版本固定的临时 RGBA8 快照，A 原图、B 含标注结果 | 临时假设 | 用户2026-10-27批准体验改进；[实施方案](../plans/ux-continuity-2026-10-27.md)。同版复用、新版独立，计入图片任务预算；快照不替换源、不伪装为磁盘路径，不直接持久化问题记录。实现与行为测试可验证，真实连续操作体验仍待走查 |

@@ -1,13 +1,10 @@
 # Media Support
 
-Video baseline: **`main @ 1f5da53`** (the workspace work merged onto `66475bb`), reviewed
-2026-10-18. No cloud build, test or lint has run on that commit yet, so every row below still
-describes the code as written, not a verified package. The three implementation
-stages below exist in code; actual performance and release claims require evidence for the
-tested SHA. VP9, AV1 and HDR/tone mapping are outside the current playback gate. AV1/VP9 have
-real investigation fixtures plus explicit-rejection tests; they remain candidates for MEDIA2,
-not supported playback. Audio/subtitles are outside the current product scope, not planned
-playback requirements.
+Scope checked against `4ca3abb` on 2026-10-25. This page describes the implemented
+format and pixel contracts; release validation remains tied to each tested candidate.
+AV1/VP9 have explicit-rejection fixtures and are currently deferred by D-007; HDR/tone mapping,
+audio and subtitles are outside the current playback scope. A file extension alone does not
+prove that a particular package can decode or encode it.
 See [product intent](product/visual-review.md) and the [issue ledger](engineering/visual-review-backlog.md).
 
 ## What opens today

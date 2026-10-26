@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Plan references: playback-overhaul phase 5 (Comparison Analytics), C-01/C-02 pair identity.
+Related contract: [timeline and pair identity](0004-timeline-pair-continuity.md).
 
 ## Decision
 

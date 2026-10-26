@@ -1,49 +1,32 @@
-# Documentation
+# 文档导航
 
-Start here: [Agent 快速定位指南](agent-guide.md) → [产品目标](product/visual-review.md)
-→ [当前问题台账](engineering/visual-review-backlog.md)。台账区分已提交基线、工作区实现、
-未实现能力和待实机验证风险，并提供代码与测试入口。
+日常修改从 [Agent 路由](agent-guide.md) 定位代码和测试，只读取与任务有关的专题。
+产品范围、问题状态和设计取舍分别由下面三份文档维护；历史执行记录不作为当前待办。
 
-CompareStation documentation is grouped by lifecycle and audience:
+| 要回答的问题 | 入口 |
+|---|---|
+| 产品做什么、哪些行为必须保留 | [产品目标与工作流](product/visual-review.md) |
+| 当前还有什么缺口、哪些仅缺验收 | [问题台账](engineering/visual-review-backlog.md) |
+| 默认行为与产品取舍是否已确认 | [决策登记册](engineering/decision-register.md) |
+| 从哪里改代码、跑哪些测试 | [Agent 快速定位指南](agent-guide.md) |
+| 怎么构建、选择验收范围、恢复环境 | [构建指南](building.md) |
+| 层次与状态由谁负责 | [架构](architecture.md)、[依赖规则](architecture/dependency-rules.md)、[状态所有权](architecture/state-ownership.md)、[ADR](adr/) |
+| 格式、颜色、像素与对齐的边界 | [媒体支持](media-support.md)、[图片颜色契约](engineering/image-color-contract.md)、[对齐规则](alignment.md)、[像素尺度](engineering/viewport-pixel-scale.md) |
+| 性能和真实显示如何验证 | [runner 协议](self-hosted-runner.md)、[真实环境走查](engineering/real-environment-verification.md)、[证据记录方法](engineering/reproducible-baseline.md) |
+| 测试在哪运行、CI 如何路由 | [测试环境](engineering/test-environment-separation.md)、[托管 Windows CI](engineering/hosted-windows-ci.md) |
+| 已发布版本具有什么证据 | [发布记录](releases/)、[版本约定](versioning.md) |
 
-- [building.md](building.md) defines the build wrapper, tool overrides, dependency setup,
-  and recovery from stale caches or missing header dependencies.
-- [product/visual-review.md](product/visual-review.md) records current user requirements and
-  clearly separates recommended designs from agreed scope. Audio and subtitles are out of scope.
-- [engineering/visual-review-backlog.md](engineering/visual-review-backlog.md) is the current
-  issue and acceptance index; inspect HEAD and local changes before acting on a dated status.
-- [engineering/decision-register.md](engineering/decision-register.md) records which side a
-  dispute was settled on, with its status (confirmed, temporary assumption, rejected, not
-  triggered). Check it before treating a product doc's default as agreed.
-- [architecture.md](architecture.md), [architecture/](architecture/), and [adr/](adr/) define
-  current architecture, dependency rules, state ownership, and accepted decisions.
-- [engineering/](engineering/) contains active engineering contracts and diagnostics. Start with
-  [maintenance and performance](engineering/maintenance-and-performance.md) for the current
-  cleanup and validation boundary, [the frozen behavior baseline](engineering/behavior-baseline.md)
-  for pre-overhaul observations at `d04339c`, and [the trace schema](engineering/trace-schema.md) for the
-  implemented diagnostic format and its current limitations.
-- [engineering/product-quality-review-2026-10-19.md](engineering/product-quality-review-2026-10-19.md)
-  is the dated product-experience review (`EX-` items) covering reverse-step stutter, smart
-  matting, the single-video comparison dead end, spacing tokens and terminology, plus the
-  execution order and acceptance for this round.
-- [engineering/ui-ux-review-8d937eb.md](engineering/ui-ux-review-8d937eb.md) is the dated UI/UX
-  review at `8d937eb`: design-token consumption, typography, menu and keyboard reachability,
-  contrast, and minimum-window layout. It records findings against that revision; most items have
-  since been implemented, and the ledger entry of 2026-10-19 (整改) carries the per-item status,
-  the deliberately deferred ones, and the contract tests that now lock them.
-- [plans/cache-first-roadmap-2026-10-20.md](plans/cache-first-roadmap-2026-10-20.md) is the current
-  execution order: cache and held-backward first, then comparing an edit against its original, then
-  the common light edits, then multiple candidates. It records the settled material baseline
-  (1080p 8-bit, PNG and JPG, reverse steps mostly on a single source) and what is deliberately not
-  built (16-bit PNG, Deflate TIFF, memory-proportional budgets).
-- [plans/playback-overhaul/](plans/playback-overhaul/) preserves the earlier playback overhaul
-  plan and review reports. Some changes have landed; use the current ledger and ADRs to identify
-  remaining work. Its old priorities and optional audio expansion are not current product scope.
-- [releases/](releases/) records shipped behavior and release-specific validation.
-- [design/](design/) preserves the historical A/B design overview; the current target design lives
-  in [architecture.md](architecture.md).
-- [archive/](archive/) preserves superseded designs, implementation plans, and historical reviews;
-  archived documents are not current requirements.
+`engineering/` 的其余专题记录具体契约、诊断方法和带版本的测量证据，按路由链接读取。
+`plans/` 保留仍有待办或承载当前设计约定的方案；完成状态回写问题台账，不另建第二份状态表。
+[长期路线](CompareStation_长期产品与技术路线_2026-10-10.md)与[能力索引](engineering/capability-ledger.md)
+用于评估后续扩展，不是每次修改必须执行的工单。
 
-Topic guides such as [alignment.md](alignment.md), [media-support.md](media-support.md), and
-[self-hosted-runner.md](self-hosted-runner.md) remain at this level for direct access.
+## 维护方式
+
+- 同一规则只保留一个主要出处，其他页面链接过去。不要复制构建命令、支持矩阵和整轮测试数字。
+- 当前说明直接描述当前行为；已完成工作的逐轮日志由 Git 和发布记录追溯。
+  只保留仍影响后续判断的契约、反例、测量协议与未解决事项。
+- 旧问题改写为最新状态，保留 ID；不在页首不断追加相互冲突的“当前工作区”记录。
+- 删除被替代的文档时同步修复引用。旧文档可用 `git log -- <路径>` 找到，
+  再用 `git show <提交>:<路径>` 读取，不另建重复归档目录。
+- 文档清理不代表产品缺陷已修复，也不把旧版本的测试通过转移到新版本。

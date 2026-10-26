@@ -11,7 +11,8 @@ CTest 默认仍为 1，依赖构建 preset 上限为 2。`-TestJobs` 只改变�
 不会解除 CPU 限制。此策略覆盖配置、编译、格式检查、静态分析和测试；退出或失败后恢复调用者的
 环境、PATH、亲和性及优先级。单逻辑处理器环境只能靠低优先级让出资源。
 
-所有 preset 共用仓库构建锁，避免 dev、release、lint、test 叠加抢资源及同时修改依赖树。
+configure 与 `-Fresh` 持有仓库级锁，保护共享依赖树；普通构建/测试只持有 preset 锁，
+不同 preset 可并行，同一 preset 必须串行。
 生成的 Ninja 图还为编译／链接设置共享的 2 槽任务池，Qt 自动生成器内部并行上限也为 2，
 防止直接 `ninja` 使用默认的“逻辑处理器数 + 2”并发。**完整进程树的 CPU／优先级限制依赖 wrapper**；
 任务池只保护其对应步骤，不替代入口。日常与代理验证都使用下方 wrapper，不手动运行裸 Ninja，
@@ -103,7 +104,8 @@ pwsh tools/build/build.ps1 -Preset dev -Test -TestGroup Sidebar -FullMatrix -Tes
 - 当前 `lint` 在 `cmake/Quality.cmake` 中是一个 custom target，依次执行全部纳入范围的生产
   C++ 翻译单元，且依赖生产构建和 QML lint；每次调用都会重新分析。增大 `-TestJobs` 不会
   加速它。开发循环可用 `lint-changed`（见下节）只分析工作区改动的 C++ 文件；全量 `lint`
-  仍是交付门禁，且没有按头文件依赖的缓存——改动头文件时仍需全量。
+  是否需要在本次交付运行由上方选择表决定；没有按头文件依赖的缓存，涉及头文件时不能用
+  `lint-changed` 冒充依赖调用者的检查。
 - 默认 `-Test` 先构建全部目标；已明确测试二进制及其依赖时，可用 `-Target` 限定构建目标后
   搭配 `-TestRegex`。必须确认所选测试依赖均已重建，不能为省时运行旧二进制。
 - 已经对最终源码构建通过，仅重跑测试时可用 `-TestOnly`；源码或依赖变化后先重新构建。
@@ -133,7 +135,7 @@ pwsh tools/build/build.ps1 -Preset dev -Test -TestRegex '^ui[.]player_osc$'
   `-LockWaitSeconds <n>` 有界等待代替立即失败。
 - **定向 lint（`lint-changed`）**：`-Target lint-changed` 只对工作区改动（已修改＋未跟踪）
   的生产 C++ 文件运行 clang-tidy；脚本自计数（planned==executed 断言、git 失败即报错），
-  空选择（纯头文件／纯 QML 改动）合法通过并明示。全量 `lint` 语义不变，仍是交付门禁。
+  空选择（纯头文件／纯 QML 改动）合法通过并明示。全量 `lint` 语义不变，是否必跑按上方选择表。
 - **单用例迭代约定**：迭代期用 `-TestRegex` 精确到单个用例（秒级反馈），每片改动结束时
   跑一次受影响套件全量，交付前按上方选择表补齐门禁；不要每轮编辑都跑整套套件。
 
@@ -142,7 +144,7 @@ pwsh tools/build/build.ps1 -Preset dev -Test -TestRegex '^ui[.]player_osc$'
 当前 C++ 文件的分析进度。持续无输出时先诊断，不反复盲等或叠加新的 lint。交付简述实际范围、
 结果和未运行项即可；不要把定向通过写成全量通过。CI、无过滤器 `-Test` 及发布门禁保持原义。
 
-整个仓库的包装器构建和测试互斥，避免不同 preset 堆叠负载，以及 smoke 运行 EXE 时重新链接造成 LNK1168。
+同一 preset 的构建与测试互斥，避免 smoke 运行该目录 EXE 时重新链接造成 LNK1168。
 不要同时绕过包装器运行同目录的 Ninja/CTest。日志实时输出；需要保存时重定向到 `out/`。
 静态分析会建立所需生产目标，因此也应与测试串行执行。
 
@@ -186,7 +188,7 @@ pwsh tools/build/build.ps1 -Preset dev -VcpkgRoot 'D:\dev\vcpkg' -Doctor
 ```
 
 `-Target` 接受真实 CMake target；PowerShell 内调用脚本时可传数组。
-查看目标用已配置目录的 `cmake --build --preset dev --target help`。
+查看目标用 `pwsh tools/build/build.ps1 -Preset dev -Target help`。
 不存在 `dvs_ui_qml` 目标，也没有 `-FormatCheck -Lint` 参数；使用上方独立目标命令。
 
 ## 依赖安装与缓存恢复
@@ -206,8 +208,8 @@ vcpkg 的 builtin registry 通过 git 读取端口和 baseline，所以 manifest
 体积小得多，但缺 blob 时会按需联网拉取，一旦网络不可用就变成难以归因的失败，比明确报错更糟。
 若根确实没有 `.git`，环境自检会报出该能力缺失并提示本地改用
 `-UseInstalledDependencies`（`VCPKG_MANIFEST_INSTALL=OFF`，直接用已装好的 `out/vcpkg` 树）。
-当前工作站两者都可用：已为该根补上真实 git 仓库（含 baseline ref），本地仍推荐预装模式，
-因为它更快、更确定。这不是 CI 或新机器的默认设置。
+是否使用预装模式取决于当前依赖树与工具自检，不沿用其他工作站或旧任务的状态。
+CI 与新机器仍默认 manifest 安装。
 
 移动工作区、切换工具、升级编译器或发现头文件变化不触发重编时：
 
@@ -300,10 +302,6 @@ Qt／CMake 自动复制了某个文件，不等于该文件已获准进入发布
    构建一致。干净 Windows 环境验证不得借用开发机 PATH、Qt 安装树或预装 VC++ 运行库。
 4. 保留既有硬件／性能和其他发布门禁。精简包验证不代替这些门禁，旧候选证据不认证新候选。
 
-本轮 2.0.2 → 2.0.3 草稿的差异证据为 27,908,959 → 62,665,162 bytes；新增的四个文件
-`vc_redist.x64.exe`、`dxcompiler.dll`、`d3dcompiler_47.dll`、`dxil.dll` 贡献 34,752,984 bytes
-压缩体积，几乎占全部增量。此次规则收紧解决的是部署范围，不是降低产品功能或修改压缩率。
-
 ## 修改完成前
 
 按改动运行相关测试、format-check、lint，并检查实际执行数量。
@@ -311,4 +309,4 @@ Qt／CMake 自动复制了某个文件，不等于该文件已获准进入发布
 真实编译仍由项目构建与头文件依赖门禁验证。脚本测试同时进入 CTest 和 CI。
 视频性能验收仍遵循 [runner 门禁](self-hosted-runner.md)，不以构建或 WARP 测试代替硬件证据。
 
-本次构建可靠性修复和验证结果见 [问题台账 E-01](engineering/visual-review-backlog.md#e-01-构建工具与增量依赖可靠性)。
+相关构建问题统一在 [问题台账](engineering/visual-review-backlog.md) 记录；旧版本验证数字不作为当前构建证据。
