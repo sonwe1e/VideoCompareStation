@@ -9,6 +9,7 @@
 #include <QVariantList>
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <memory>
@@ -97,6 +98,9 @@ private:
     QTimer* debounce_ = nullptr;
     mutable std::mutex cacheMutex_;
     std::map<qint64, RawThumbnail> cache_;
+    // Insertion order for cache eviction (FIFO): hover revisits recent frames often, and
+    // evicting the lowest frame id could discard the newest thumbnails first.
+    std::deque<qint64> insertionOrder_;
     qint64 pendingFrame_ = -1;
     qint64 inflightFrame_ = -1;
     std::optional<application::RequestContext> inflightContext_;

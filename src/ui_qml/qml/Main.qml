@@ -6473,6 +6473,7 @@ ApplicationWindow {
         currentFrame: Number(root.currentFrame)
         totalFrames: Number(root.totalFrames)
         generation: root.shell ? root.shell.activeGeneration : 0
+        playing: root.controller ? root.controller.playing : false
     }
     PlayerOsc {
         id: transport

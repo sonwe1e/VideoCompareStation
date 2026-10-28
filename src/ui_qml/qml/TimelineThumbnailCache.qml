@@ -11,6 +11,10 @@ QtObject {
     required property int currentFrame
     required property int totalFrames
     required property var generation
+    // Grab-capture only serves paused/stepping review: while playing, currentFrame advances
+    // before the asynchronous grab callback runs, so the result would be discarded by the
+    // callback guard anyway and the offscreen render + readback is wasted work.
+    property bool playing: false
     // UI trace bridge (DiagnosticsProbe). Optional so a component test can supply a stub; when
     // absent, or when tracing is disabled, recording is a no-op.
     property var diagnostics: (typeof dvsDiagnostics !== "undefined") ? dvsDiagnostics : null
@@ -41,6 +45,8 @@ QtObject {
     }
 
     function capture(frame) {
+        if (playing)
+            return;
         if (!sourceItem || sourceItem.width <= 0 || sourceItem.height <= 0 || frame < 0)
             return;
         const sample = nearestSample(frame);

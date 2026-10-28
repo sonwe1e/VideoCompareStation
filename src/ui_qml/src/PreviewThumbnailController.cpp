@@ -193,6 +193,7 @@ void PreviewThumbnailController::syncSessionIdentity() {
     {
         std::scoped_lock lock(cacheMutex_);
         cache_.clear();
+        insertionOrder_.clear();
     }
     ++generation_;
     Q_EMIT stateChanged();
@@ -237,14 +238,27 @@ void PreviewThumbnailController::onResult(application::PreviewThumbnailResult re
     }
     {
         std::scoped_lock lock(cacheMutex_);
-        if (cache_.size() >= kMaximumCachedFrames) {
-            cache_.erase(cache_.begin());
+        const qint64 frameId = result.frameId.value();
+        const auto existing = cache_.find(frameId);
+        if (existing != cache_.end()) {
+            existing->second = RawThumbnail{
+                std::move(result.rgba),
+                static_cast<int>(result.width),
+                static_cast<int>(result.height),
+            };
+        } else {
+            if (cache_.size() >= kMaximumCachedFrames && !insertionOrder_.empty()) {
+                const qint64 oldest = insertionOrder_.front();
+                insertionOrder_.pop_front();
+                cache_.erase(oldest);
+            }
+            cache_[frameId] = RawThumbnail{
+                std::move(result.rgba),
+                static_cast<int>(result.width),
+                static_cast<int>(result.height),
+            };
+            insertionOrder_.push_back(frameId);
         }
-        cache_[result.frameId.value()] = RawThumbnail{
-            std::move(result.rgba),
-            static_cast<int>(result.width),
-            static_cast<int>(result.height),
-        };
     }
     // A superseded job can still deliver after its replacement was submitted. Its result is
     // cached (it is a valid decode of a frame that was requested) but must not clear the

@@ -84,6 +84,18 @@ Item {
             compare(cache.urlForFrame(10), "image://stub/10");
         }
 
+        // While playing, the asynchronous grab result would be discarded by the callback guard
+        // anyway (currentFrame advances before the callback runs), so capture must not spend
+        // the offscreen render at all; paused stepping resumes grabbing.
+        function test_capture_skips_while_playing() {
+            cache.playing = true;
+            cache.currentFrame = 20;
+            compare(grabTarget.grabRequests, 0, "playing frames must not grab");
+            cache.playing = false;
+            cache.currentFrame = 25;
+            compare(grabTarget.grabRequests, 1, "paused steps must resume grabbing");
+        }
+
         // urlForFrame stays a pure lookup: an uncached sample returns an empty url so the hover
         // popup hides instead of showing a frame it does not have.
         function test_url_for_uncached_sample_is_empty() {
