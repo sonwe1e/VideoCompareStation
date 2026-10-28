@@ -46,7 +46,8 @@ GameViewer/Oray 等虚拟显示适配器不能替代物理显示、硬件解码�
    物理输出，不得用虚拟显示或降刷新率绕过。
 2. 构建（走 wrapper，约 10–20 分钟，可安排在占机时段外）：
    `pwsh tools/build/build.ps1 -Preset release`，
-   得到 `out\build\release\bin\CompareStationCli.exe`。
+   得到 `out\build\release\bin\CompareStation.exe`（GUI 可执行；`--ui-performance`
+   只由它处理。`CompareStationCli.exe` 仅用于 `--startup-check` 冒烟）。
 3. 素材：门禁默认从 `out\performance`（或 `DVS_PERFORMANCE_FIXTURE_ROOT`）读取。
    执行前核对以下素材是否齐备及其哈希，不沿用旧任务的缺失结论：
 
@@ -64,7 +65,7 @@ GameViewer/Oray 等虚拟显示适配器不能替代物理显示、硬件解码�
 ```powershell
 pwsh tools/testing/run-performance-gate.ps1 `
   -Profile 1080p60-2source `
-  -Executable out\build\release\bin\CompareStationCli.exe `
+  -Executable out\build\release\bin\CompareStation.exe `
   -ComparisonMode side -DisplayPath physical -BuildType release `
   -RunName 1080p60-2source-20261020
 ```

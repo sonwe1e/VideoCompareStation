@@ -23,6 +23,21 @@
 | A11Y-01 | 待实现/验证 | 时间线已有可访问角色、名称与焦点；向读屏器提供当前位置值仍需自定义可访问接口或等效实现。Wipe 手柄键盘路径已落地；焦点环、读屏、触摸和系统高对比度需真实环境走查 |
 | A3（旧界面收口） | 待复核 | 通知栈与窄窗右侧面板可能重叠的旧观察未复现也未关闭；五工作区改版后先检查 `Main.qml` 的舞台边界，不能照旧截图直接修改 |
 | A-01 | 持续维护 | 保留分层、单一协调循环、完整 FrameSet、呈现 ACK 与异步身份。Facade 已是 playback/comparison/shell 三 capability 组合；其余 `var` 服务按功能迁移为类型化接口，不为局部修复强制全量重构。见 [ADR 0006](../adr/0006-qml-type-registration.md) |
+| PERF-01（2026-10-28 性能批次） | 待修复 | CPU 上传路径（软解回退/无 D3D11VA 源）每帧组新建 staging/default 纹理+SRV+事件查询并在发布前同步等 fence（`GpuTransferActor.cpp`）。硬门禁要求全源 D3D11VA，标准门禁测不到该路径。方向：按 (格式,宽,高,设备代) 池化 + 拷贝入队后立即发布、staging 按 fence 完成延迟回收；须先按 FrameBudget 记账口径与 ENG-02 换代语义补证据 |
+| PERF-02 | 待决策/待证据 | 协调层播放期前视深度恒 1 帧，`PrefetchScheduler::duringForwardPlayback`（3 帧前视）是死代码。exactPrefetchWindow 注释记录过投机解码引发 DecoderReopen（kind 11）风暴的教训；加深须以 fps 阈值+队列空闲为前提并用 kind 11 计数验证，先补恢复期 trace 证据 |
+| PERF-03 | 待修复 | `postCritical` 满队（256）阻塞等待把唯一的节奏定时器线程与 ACK relay 变成队头阻塞点。改投递语义须保持 DeadlineElapsed 至少一次送达且不得与 postRealtime 单槽混用 |
+| PERF-04 | 待增强 | 测量工具缺口：通用 profile 无交错 A/B 入口（run-t5-gate-ab.ps1 范式未推广）、gate 结果不落机器可读 JSON、物理呈现层无采样（0.5% 掉帧门只覆盖应用 ACK 口径，与 V-01 相邻）、基础素材无哈希 contract、UI 响应门实际只有 play 一个样本。定位为门禁/发布证据增强，不进日常开发循环 |
+
+2026-10-28 性能批次工作区实现（行为测试已过，实机硬件门禁待验，见 V-01/D-011）：节奏
+定时器改高分辨率等待定时器；播放遥测拆独立 `playbackTelemetryChanged`（约 4 Hz 节流、
+异常态即时）并按输入身份缓存投影集合（markers/媒体信息/兼容性），消除播放期每帧
+`stateChanged` 全量扇出；多源解码器并行开箱、每 actor 只做一次源身份验证；PTS 索引落盘
+（含回读校验）移出探测关键路径；D3D11VA 零拷贝 y/uv SRV 随解码表面资源缓存；对齐分析
+worker 降 BELOW_NORMAL；软解 sws 色彩配置按需重设；悬停缩略图缓存改插入序逐出、播放中
+跳过无效 grab。测试入口：`SteadyDeadlineSchedulerTests`（新增亚量子精度用例）、
+`ReviewControllerTests`（遥测拆分/缓存重建）、`tst_timeline_thumbnail_cache.qml`。暖缓存
+启动 A/B（同机交替、GameViewer 虚拟显示会话）：空载 810→790ms、单源 803→780ms、双源
+首帧组 1240→1200ms（median）；物理屏硬件门禁未跑，虚拟桌面数字不作为发布证据。
 
 2026-10-27 体验改进的工作区实现还包括：返回查看保留编辑会话与撤销历史；未保存的后台任务和窗口退出提供按任务命名的保存/放弃入口；图片/视频标签补键盘、可访问名称和活动项滚入视野；原大按钮明确为「原大 100%」。新截图与样式/DPI 测试来自测试宿主，不作为 DPI-01 的自然启动或真实读屏验收。详见同一[实施方案](../plans/ux-continuity-2026-10-27.md)。
 
