@@ -18,6 +18,7 @@ extern "C" {
 #include <mutex>
 #include <span>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -236,6 +237,34 @@ deserialize(const TimestampIndexRequest& request, const std::filesystem::path& p
     return timestamps;
 }
 
+// Disk half of a cache store: temp write, read-back verification, then atomic publish. Runs
+// with copied inputs only (callers may run it concurrently with anything else).
+void persistIndexToDisk(const TimestampIndexRequest& request,
+                        const PresentationTimestampIndex& index) {
+    const std::optional<std::filesystem::path> path = cachePath(request);
+    if (!path.has_value()) {
+        return;
+    }
+    const std::vector<std::byte> bytes = serialize(request, *index);
+    auto publisher = platform::AtomicFilePublisher::begin(
+        *path,
+        platform::TemporaryFileIdentity{
+            .operation = "pts-index",
+            .ownerId = request.sourceIdentity->fingerprintSha256.substr(0U, 16U),
+            .revision = kSchemaVersion,
+        });
+    if (!publisher || !publisher.value()->write(bytes) || !publisher.value()->flush() ||
+        !deserialize(request, publisher.value()->temporaryPath()).has_value()) {
+        return;
+    }
+    std::error_code error;
+    if (std::filesystem::exists(*path, error) && !error) {
+        static_cast<void>(publisher.value()->publishReplacingExisting());
+    } else {
+        static_cast<void>(publisher.value()->publishNew());
+    }
+}
+
 } // namespace
 
 std::optional<PresentationTimestampIndex>
@@ -284,29 +313,26 @@ void PresentationIndexCache::store(const TimestampIndexRequest& request,
             std::scoped_lock lock{state.mutex};
             state.indexes.insert_or_assign(key, index);
         }
-        const std::optional<std::filesystem::path> path = cachePath(request);
-        if (!path.has_value()) {
-            return;
+        // The disk serialization (write + read-back verification + atomic publish) runs off
+        // the probe critical path: a cold open already paid the full-file scan, and blocking
+        // ProbeCompleted for the write only added to the open latency. The detached lambda
+        // captures copies only and touches no process-lifetime state, so static-destruction
+        // races cannot reach it; an interrupted attempt dies inside the temp file and never
+        // publishes, preserving the read-back-before-publish invariant. The thread function
+        // swallows every exception: an escaping one would terminate the process from a
+        // detached thread, and cache persistence failures stay non-fatal by contract.
+        std::thread persistence([request = request, index = index]() noexcept {
+            try {
+                persistIndexToDisk(request, index);
+            } catch (...) { // NOLINT(bugprone-empty-catch): cache write failures are non-fatal
+            }
+        });
+        persistence.detach();
+    } catch (...) { // NOLINT(bugprone-empty-catch): fall back to synchronous persistence
+        try {
+            persistIndexToDisk(request, index);
+        } catch (...) { // NOLINT(bugprone-empty-catch): cache write failures are non-fatal
         }
-        const std::vector<std::byte> bytes = serialize(request, *index);
-        auto publisher = platform::AtomicFilePublisher::begin(
-            *path,
-            platform::TemporaryFileIdentity{
-                .operation = "pts-index",
-                .ownerId = request.sourceIdentity->fingerprintSha256.substr(0U, 16U),
-                .revision = kSchemaVersion,
-            });
-        if (!publisher || !publisher.value()->write(bytes) || !publisher.value()->flush() ||
-            !deserialize(request, publisher.value()->temporaryPath()).has_value()) {
-            return;
-        }
-        std::error_code error;
-        if (std::filesystem::exists(*path, error) && !error) {
-            static_cast<void>(publisher.value()->publishReplacingExisting());
-        } else {
-            static_cast<void>(publisher.value()->publishNew());
-        }
-    } catch (...) { // NOLINT(bugprone-empty-catch): cache write failures are non-fatal
     }
 }
 
