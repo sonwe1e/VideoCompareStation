@@ -232,6 +232,14 @@ public:
     std::uint32_t softwareThreadCount = 0U;
     // Forward-walk bound for decodeSequential; see kDefaultMaximumSequentialStrideFrames.
     std::int64_t maximumSequentialStride = kDefaultMaximumSequentialStrideFrames;
+    // Colorspace configuration last applied to the sws context. sws_setColorspaceDetails is
+    // re-run only when the source format/range change or sws_getCachedContext hands back a
+    // fresh context; per-frame calls with identical inputs are pure repetition on the
+    // software-fallback decode path.
+    SwsContext* swsColorspaceOwner = nullptr;
+    int swsColorspaceFormat = -1;
+    int swsColorspaceSourceRange = -1;
+    int swsColorspaceDestinationRange = -1;
 };
 
 SoftwareDecoder::SoftwareDecoder(const domain::SourceId sourceId,
@@ -904,18 +912,29 @@ SoftwareDecoder::decodeInternal(const domain::FrameId frameId,
                     sourceRgb || impl_->frame->color_range == AVCOL_RANGE_JPEG ? 1 : 0;
                 const int destinationFullRange =
                     impl_->descriptor.colorMetadata.range == domain::ColorRange::kFull ? 1 : 0;
-                if (coefficients == nullptr || sws_setColorspaceDetails(impl_->sws.get(),
-                                                                        coefficients,
-                                                                        sourceFullRange,
-                                                                        coefficients,
-                                                                        destinationFullRange,
-                                                                        0,
-                                                                        1 << 16,
-                                                                        1 << 16) < 0) {
-                    return domain::Result<DecodedFrame>::failure(
-                        decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
-                                    sourceId,
-                                    "FFmpeg could not configure normalized color conversion."));
+                // Apply the colorspace details only when the context was recreated or the
+                // source format/range changed; identical inputs are skipped per frame.
+                if (cached != impl_->swsColorspaceOwner ||
+                    impl_->swsColorspaceFormat != impl_->frame->format ||
+                    impl_->swsColorspaceSourceRange != sourceFullRange ||
+                    impl_->swsColorspaceDestinationRange != destinationFullRange) {
+                    if (coefficients == nullptr || sws_setColorspaceDetails(impl_->sws.get(),
+                                                                            coefficients,
+                                                                            sourceFullRange,
+                                                                            coefficients,
+                                                                            destinationFullRange,
+                                                                            0,
+                                                                            1 << 16,
+                                                                            1 << 16) < 0) {
+                        return domain::Result<DecodedFrame>::failure(
+                            decodeError(domain::MediaErrorCode::kMediaDecodeFailed,
+                                        sourceId,
+                                        "FFmpeg could not configure normalized color conversion."));
+                    }
+                    impl_->swsColorspaceOwner = cached;
+                    impl_->swsColorspaceFormat = impl_->frame->format;
+                    impl_->swsColorspaceSourceRange = sourceFullRange;
+                    impl_->swsColorspaceDestinationRange = destinationFullRange;
                 }
                 const std::span<std::uint8_t> yPlane =
                     outputP010 ? writableP010->yPlane() : writableNv12->yPlane();
