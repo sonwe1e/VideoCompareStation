@@ -722,6 +722,10 @@ private:
     }
 
     void run() {
+        // Analysis competes with the decode actors for the same disk and CPU; run it at the
+        // same below-normal priority so concurrent playback keeps its cold-seek and decode
+        // headroom (SourceDecodeActor workers already use THREAD_PRIORITY_BELOW_NORMAL).
+        static_cast<void>(SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL));
         static_cast<void>(SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL));
         for (;;) {
             std::shared_ptr<AnalysisOperation> operation;
