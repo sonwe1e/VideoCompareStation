@@ -54,19 +54,25 @@ class ReviewController final : public QObject {
     // always show the active state instead of looking unset on the default preference.
     Q_PROPERTY(int playbackContinuityPolicyEffective READ playbackContinuityPolicyEffective NOTIFY
                    stateChanged)
-    Q_PROPERTY(
-        qulonglong playbackSkippedFrameSets READ playbackSkippedFrameSets NOTIFY stateChanged)
-    Q_PROPERTY(
-        qulonglong playbackRunSkippedFrameSets READ playbackRunSkippedFrameSets NOTIFY stateChanged)
+    // Playback telemetry rides its own throttled notification (about 4 Hz while playing) so a
+    // per-frame counter change no longer re-evaluates the whole controller binding fan-out.
+    // Anomaly transitions (new skipped FrameSets, catch-up start, lag crossing the 200 ms
+    // display threshold) and any update while paused or stepping still notify immediately.
+    Q_PROPERTY(qulonglong playbackSkippedFrameSets READ playbackSkippedFrameSets NOTIFY
+                   playbackTelemetryChanged)
+    Q_PROPERTY(qulonglong playbackRunSkippedFrameSets READ playbackRunSkippedFrameSets NOTIFY
+                   playbackTelemetryChanged)
     // 0 means the current run has not finished presenting any FrameSet yet, so the per-run skip
     // count is unmeasured rather than clean. The status rail must say so instead of silently
     // omitting the counter (docs/product/visual-review.md section 2).
+    Q_PROPERTY(qulonglong playbackRunPresentedFrames READ playbackRunPresentedFrames NOTIFY
+                   playbackTelemetryChanged)
+    Q_PROPERTY(qreal playbackTargetRate READ playbackTargetRate NOTIFY playbackTelemetryChanged)
+    Q_PROPERTY(qreal playbackPresentationRate READ playbackPresentationRate NOTIFY
+                   playbackTelemetryChanged)
     Q_PROPERTY(
-        qulonglong playbackRunPresentedFrames READ playbackRunPresentedFrames NOTIFY stateChanged)
-    Q_PROPERTY(qreal playbackTargetRate READ playbackTargetRate NOTIFY stateChanged)
-    Q_PROPERTY(qreal playbackPresentationRate READ playbackPresentationRate NOTIFY stateChanged)
-    Q_PROPERTY(qint64 playbackLagMicroseconds READ playbackLagMicroseconds NOTIFY stateChanged)
-    Q_PROPERTY(bool playbackCatchingUp READ playbackCatchingUp NOTIFY stateChanged)
+        qint64 playbackLagMicroseconds READ playbackLagMicroseconds NOTIFY playbackTelemetryChanged)
+    Q_PROPERTY(bool playbackCatchingUp READ playbackCatchingUp NOTIFY playbackTelemetryChanged)
     Q_PROPERTY(int effectiveDifferenceEdge READ effectiveDifferenceEdge NOTIFY stateChanged)
     Q_PROPERTY(ReviewDisplayState displayState READ displayState NOTIFY stateChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY stateChanged)
@@ -151,6 +157,8 @@ public:
         domain::SourceId sourceId = 0U;
         bool d3d11Va = false;
         std::string fallbackReason;
+
+        [[nodiscard]] bool operator==(const DecoderBackendState&) const = default;
     };
 
     struct SourceFileMetadata final {
@@ -386,6 +394,9 @@ Q_SIGNALS:
     void snapshotRefreshed();
     void stateChanged();
     void frameStateChanged();
+    // Throttled per-run playback telemetry notification (see the telemetry Q_PROPERTY block
+    // above for the immediate-emission exceptions).
+    void playbackTelemetryChanged();
     void jogStateChanged();
     void foregroundCommandFinished(qulonglong commandId, int outcome, const QString& errorKey);
     void commandFinished(qulonglong commandId,

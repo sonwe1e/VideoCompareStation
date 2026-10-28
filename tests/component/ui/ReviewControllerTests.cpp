@@ -504,6 +504,110 @@ TEST_F(ReviewControllerTests, FrameAdvanceEmitsFrameStateWithoutBroadStateNotifi
     controller.stop();
 }
 
+TEST_F(ReviewControllerTests, PlaybackTelemetryChangesNotifyTelemetrySignalWithoutBroadState) {
+    auto backend = std::make_shared<FakeBackend>();
+    backend->currentSnapshot = readySnapshot(2, 12);
+    backend->currentSnapshot.playbackState = domain::PlaybackState::kPlaying;
+    backend->currentSnapshot.playbackRunPresentedFrames = 1U;
+    ReviewController controller{dependenciesFor(backend)};
+    int broadNotifications = 0;
+    int telemetryNotifications = 0;
+    QObject::connect(
+        &controller, &ReviewController::stateChanged, &controller, [&] { ++broadNotifications; });
+    QObject::connect(&controller, &ReviewController::playbackTelemetryChanged, &controller, [&] {
+        ++telemetryNotifications;
+    });
+
+    controller.refreshProjection();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    const int initialBroad = broadNotifications;
+    EXPECT_EQ(telemetryNotifications, 0);
+
+    // A telemetry-only change while playing must never widen into stateChanged; the
+    // notification itself waits out the throttle interval instead of firing per frame.
+    backend->currentSnapshot.playbackRunPresentedFrames = 2U;
+    controller.refreshProjection();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    EXPECT_EQ(broadNotifications, initialBroad);
+    EXPECT_EQ(telemetryNotifications, 0);
+
+    // The throttled playbackTelemetryChanged still arrives without a further snapshot change.
+    EXPECT_TRUE(waitUntil([&] { return telemetryNotifications == 1; }, 2s));
+    EXPECT_EQ(controller.playbackRunPresentedFrames(), 2U);
+    EXPECT_EQ(broadNotifications, initialBroad);
+
+    // An anomaly transition (a new skipped FrameSet) notifies synchronously with the refresh
+    // instead of waiting out the throttle interval.
+    backend->currentSnapshot.playbackRunSkippedFrameSets = 1U;
+    controller.refreshProjection();
+    EXPECT_EQ(telemetryNotifications, 2);
+    EXPECT_EQ(controller.playbackRunSkippedFrameSets(), 1U);
+    EXPECT_EQ(broadNotifications, initialBroad);
+
+    controller.stop();
+}
+
+TEST_F(ReviewControllerTests, AlignmentMarkerProjectionRebuildsWhenAlignmentInputsChange) {
+    auto backend = std::make_shared<FakeBackend>();
+    backend->currentSnapshot = readySnapshotWithSources({"C:/media/a.mp4", "C:/media/b.mp4"});
+    application::SequenceAlignmentSummary summary;
+    summary.sourceId = 1U;
+    summary.anomalies.push_back(application::SequenceAlignmentAnomaly{
+        .kind = application::SequenceAlignmentAnomalyKind::TargetFrameDuplicate,
+        .canonicalFrameId = domain::FrameId{3},
+        .sourceFrameId = std::nullopt,
+    });
+    backend->currentSnapshot.sequenceAlignments.push_back(summary);
+    ReviewController controller{dependenciesFor(backend)};
+    controller.refreshProjection();
+    ASSERT_EQ(controller.alignmentTimelineMarkers().size(), 1U);
+    EXPECT_EQ(controller.alignmentTimelineMarkers()
+                  .front()
+                  .toMap()
+                  .value(QStringLiteral("kind"))
+                  .toString(),
+              QStringLiteral("duplicate"));
+
+    // A later frame with identical alignment inputs keeps the projected markers.
+    backend->currentSnapshot.displayedFrame = domain::FrameId{5};
+    controller.refreshProjection();
+    ASSERT_EQ(controller.alignmentTimelineMarkers().size(), 1U);
+
+    // Changed alignment inputs must rebuild the projection.
+    summary.anomalies.clear();
+    backend->currentSnapshot.sequenceAlignments.front() = summary;
+    controller.refreshProjection();
+    EXPECT_TRUE(controller.alignmentTimelineMarkers().isEmpty());
+
+    controller.stop();
+}
+
+TEST_F(ReviewControllerTests, SourceMediaInfoRebuildsWhenDecoderBackendChanges) {
+    auto backend = std::make_shared<FakeBackend>();
+    backend->currentSnapshot = readySnapshotWithSources({"C:/media/a.mp4", "C:/media/b.mp4"});
+    ReviewController controller{dependenciesFor(backend)};
+    controller.refreshProjection();
+    ASSERT_EQ(controller.sourceMediaInfo().size(), 2U);
+    EXPECT_EQ(controller.sourceMediaInfo()
+                  .front()
+                  .toMap()
+                  .value(QStringLiteral("decodeBackend"))
+                  .toString(),
+              QStringLiteral("Initializing"));
+
+    backend->decoderBackendStates.push_back(
+        ReviewController::DecoderBackendState{.sourceId = 0U, .d3d11Va = true});
+    controller.refreshProjection();
+    EXPECT_EQ(controller.sourceMediaInfo()
+                  .front()
+                  .toMap()
+                  .value(QStringLiteral("decodeBackend"))
+                  .toString(),
+              QStringLiteral("D3D11VA"));
+
+    controller.stop();
+}
+
 TEST_F(ReviewControllerTests, RejectsDuplicateAndMissingDroppedFiles) {
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());

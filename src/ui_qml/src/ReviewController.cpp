@@ -448,6 +448,50 @@ struct ReviewView final {
     }
 };
 
+// Projection collections whose inputs do not change during playback are rebuilt only when the
+// inputs differ. A cache hit hands the view implicitly shared copies of the stored lists, so the
+// per-publish equality check compares shared backing stores instead of walking every marker map.
+struct SourceInfoCache final {
+    bool valid = false;
+    const void* comparison = nullptr;
+    std::vector<ReviewController::DecoderBackendState> backends;
+    QVariantList sourceUrls;
+    QVariantList sourceMediaInfo;
+    QString sourceAFilename;
+    QString sourceBFilename;
+    QString sourceCFilename;
+    QString timingMode;
+    QString rationalFrameRate;
+    bool dropFrameTimecodeAvailable = false;
+    int oneSecondStepFrames = 30;
+    int canonicalSourceIndex = -1;
+    int referenceSourceIndex = -1;
+    bool hasExplicitReference = false;
+};
+
+struct AlignmentViewCache final {
+    bool valid = false;
+    std::vector<application::GlobalOffsetEstimate> estimates;
+    std::vector<application::SequenceAlignmentSummary> summaries;
+    std::vector<application::SourceAlignmentAnchors> anchors;
+    std::vector<application::CompatibilityFindingView> findings;
+    bool automaticAlignmentPending = false;
+    QVariantList markers;
+    qulonglong markerOverflowCount = 0U;
+    QVariantList compatibilityFindings;
+    QString estimateStatus;
+    QString sequenceStatus;
+    QString anchorStatus;
+    bool manualAnchorActive = false;
+};
+
+// Playback telemetry notification cadence while playing (about 4 Hz); anomaly transitions and
+// non-playing updates bypass this interval.
+inline constexpr int kPlaybackTelemetryNotifyIntervalMs = 250;
+// The status rail calls lag at or above 200 ms out; crossing into that band is an anomaly
+// transition that must notify without waiting for the throttle interval.
+inline constexpr qint64 kPlaybackTelemetryLagThresholdMicroseconds = 200'000;
+
 [[nodiscard]] QString sourceName(const domain::SourceId sourceId) {
     return sourceId < 3U ? QString{QChar{static_cast<char16_t>(u'A' + sourceId)}}
                          : QString::number(sourceId);
@@ -502,6 +546,11 @@ public:
             scheduleSourceDiskStatusRefresh();
         });
         sourceDiskStatusRefreshTimer_.setSingleShot(true);
+        telemetryTimer_.setSingleShot(true);
+        QObject::connect(&telemetryTimer_, &QTimer::timeout, &owner_, [this] {
+            emitPlaybackTelemetry(telemetryClock_.elapsed());
+        });
+        telemetryClock_.start();
         refresh();
         if (!stopped_ && !dependencies_.eventDriven) {
             projectionTimer_.start();
@@ -510,6 +559,7 @@ public:
 
     ~Impl() {
         projectionTimer_.stop();
+        telemetryTimer_.stop();
         sourceDiskStatusPollTimer_.stop();
         sourceDiskStatusRefreshTimer_.stop();
     }
@@ -1498,6 +1548,7 @@ private:
     void failClosed() noexcept {
         stopped_ = true;
         projectionTimer_.stop();
+        telemetryTimer_.stop();
         jog_.cancel();
         jogPacingTimer_.stop();
         sourceDiskStatusPollTimer_.stop();
@@ -1508,6 +1559,266 @@ private:
         pendingNavigationCommand_.reset();
         pendingTransportCommand_.reset();
         publishProjection();
+    }
+
+    // Rebuilds the comparison-derived projection cache. Inputs are the validated comparison
+    // identity plus the per-source decoder backend states; a cache hit skips this entirely.
+    void rebuildSourceInfoCache(const domain::ValidatedComparisonSet& comparison,
+                                const std::vector<DecoderBackendState>& decoderBackends) {
+        SourceInfoCache cache;
+        cache.comparison = &comparison;
+        cache.backends = decoderBackends;
+        if (comparison.canonicalRate().has_value()) {
+            cache.oneSecondStepFrames =
+                std::clamp(qRound(comparison.canonicalRate()->displayFps()), 1, 1000);
+        }
+        // C-01: canonicalSourceIndex is the timeline master, not the Reference role.
+        cache.canonicalSourceIndex = static_cast<int>(comparison.canonicalSourceId());
+        if (comparison.referenceSourceId().has_value()) {
+            cache.referenceSourceIndex = static_cast<int>(*comparison.referenceSourceId());
+            cache.hasExplicitReference = true;
+        } else {
+            // Canonical fallback for existing referenceSourceIndex readers; the
+            // explicit-GT fact stays false so GT-anchored actions can refuse.
+            cache.referenceSourceIndex = cache.canonicalSourceIndex;
+            cache.hasExplicitReference = false;
+        }
+        const domain::MediaDescriptor& canonical = comparison.canonicalDescriptor();
+        cache.timingMode = timingModeName(canonical.timingConfidence);
+        if (canonical.frameRate.has_value()) {
+            cache.rationalFrameRate = QStringLiteral("%1/%2")
+                                          .arg(canonical.frameRate->numerator())
+                                          .arg(canonical.frameRate->denominator());
+            cache.dropFrameTimecodeAvailable = supportsDropFrame(*canonical.frameRate);
+        }
+        for (const domain::ComparisonSource& source : comparison.sources()) {
+            const QString sourcePath =
+                QString::fromStdWString(source.descriptor.normalizedPath.wstring());
+            cache.sourceUrls.push_back(QUrl::fromLocalFile(sourcePath));
+            const QString filename = QFileInfo{sourcePath}.fileName();
+            if (source.id == 0U) {
+                cache.sourceAFilename = filename;
+            } else if (source.id == 1U) {
+                cache.sourceBFilename = filename;
+            } else if (source.id == 2U) {
+                cache.sourceCFilename = filename;
+            }
+            const domain::MediaDescriptor& descriptor = source.descriptor;
+            const auto backend = std::find_if(decoderBackends.begin(),
+                                              decoderBackends.end(),
+                                              [&source](const DecoderBackendState& state) {
+                                                  return state.sourceId == source.id;
+                                              });
+            const QString decodeBackend =
+                backend == decoderBackends.end()
+                    ? QStringLiteral("Initializing")
+                    : (backend->d3d11Va ? QStringLiteral("D3D11VA") : QStringLiteral("Software"));
+            const QString decodeFallbackReason =
+                backend != decoderBackends.end() ? QString::fromStdString(backend->fallbackReason)
+                                                 : QString{};
+            const QString rate = descriptor.frameRate.has_value()
+                                     ? QStringLiteral("%1/%2 fps")
+                                           .arg(descriptor.frameRate->numerator())
+                                           .arg(descriptor.frameRate->denominator())
+                                     : QStringLiteral("VFR");
+            cache.sourceMediaInfo.push_back(QVariantMap{
+                {QStringLiteral("label"), sourceName(source.id)},
+                {QStringLiteral("filename"), filename},
+                {QStringLiteral("width"), descriptor.extent.width},
+                {QStringLiteral("height"), descriptor.extent.height},
+                {QStringLiteral("rotationDegrees"), descriptor.rotationDegrees},
+                {QStringLiteral("sampleAspectNumerator"), descriptor.sampleAspectRatio.numerator},
+                {QStringLiteral("sampleAspectDenominator"),
+                 descriptor.sampleAspectRatio.denominator},
+                {QStringLiteral("frameRate"), rate},
+                {QStringLiteral("frameCount"), descriptor.frameCount.value},
+                {QStringLiteral("timingMode"), timingModeName(descriptor.timingConfidence)},
+                {QStringLiteral("codec"), QString::fromStdString(descriptor.codecId)},
+                {QStringLiteral("pixelFormat"), QString::fromStdString(descriptor.pixelFormatId)},
+                {QStringLiteral("bitDepth"), descriptor.bitDepth},
+                {QStringLiteral("colorMatrix"), colorMatrixName(descriptor.colorMetadata.matrix)},
+                {QStringLiteral("colorRange"), colorRangeName(descriptor.colorMetadata.range)},
+                {QStringLiteral("decodeBackend"), decodeBackend},
+                {QStringLiteral("decodeFallbackReason"), decodeFallbackReason},
+                // D08: project timeline master and reference independently.
+                {QStringLiteral("isTimelineMaster"), source.id == comparison.canonicalSourceId()},
+                {QStringLiteral("isReference"), source.role == domain::ComparisonRole::kReference},
+                {QStringLiteral("role"),
+                 source.id == comparison.canonicalSourceId() &&
+                         source.role == domain::ComparisonRole::kReference
+                     ? QStringLiteral("TimelineMaster+Reference")
+                     : (source.id == comparison.canonicalSourceId()
+                            ? QStringLiteral("TimelineMaster")
+                            : (source.role == domain::ComparisonRole::kReference
+                                   ? QStringLiteral("Reference")
+                                   : QStringLiteral("Prediction")))},
+            });
+        }
+        cache.valid = true;
+        sourceInfoCache_ = std::move(cache);
+    }
+
+    // Rebuilds the alignment-derived projection cache (statuses, timeline markers and
+    // compatibility findings). The value-compared inputs are bounded UI-facing summaries, so
+    // the cache check stays cheap while steady playback skips up to 256 marker maps per frame.
+    void rebuildAlignmentViewCache(const application::SessionSnapshot& snapshot) {
+        AlignmentViewCache cache;
+        cache.estimates = snapshot.alignmentEstimates;
+        cache.summaries = snapshot.sequenceAlignments;
+        cache.anchors = snapshot.manualAlignmentAnchors;
+        cache.findings = snapshot.compatibilityFindings;
+        cache.automaticAlignmentPending = snapshot.automaticAlignmentPending;
+        QVariantList& markers = cache.markers;
+        QStringList estimateParts;
+        for (const application::GlobalOffsetEstimate& estimate : snapshot.alignmentEstimates) {
+            const QString currentSourceName = sourceName(estimate.sourceId);
+            const QString signedOffset =
+                QStringLiteral("%1%2")
+                    .arg(estimate.bestOffset >= 0 ? QStringLiteral("+") : QString{})
+                    .arg(estimate.bestOffset);
+            const int confidence = qRound(estimate.confidence * 100.0F);
+            if (estimate.autoApplicable) {
+                const QString mode = snapshot.automaticAlignmentPending ? QStringLiteral("proposal")
+                                                                        : QStringLiteral("auto");
+                estimateParts.push_back(QStringLiteral("%1: %2 %3 (%4%)")
+                                            .arg(currentSourceName, mode, signedOffset)
+                                            .arg(confidence));
+            } else {
+                estimateParts.push_back(QStringLiteral("%1: suggested %2 (%3%, review manually)")
+                                            .arg(currentSourceName, signedOffset)
+                                            .arg(confidence));
+            }
+        }
+        cache.estimateStatus = estimateParts.join(QStringLiteral("  |  "));
+        QStringList sequenceParts;
+        QVariantList lowConfidenceTimelineMarkers;
+        qulonglong lowConfidenceMarkerOverflowCount = 0U;
+        for (const application::SequenceAlignmentSummary& result : snapshot.sequenceAlignments) {
+            const QString currentSourceName = sourceName(result.sourceId);
+            QStringList anomalyParts;
+            for (const application::SequenceAlignmentAnomaly& anomaly : result.anomalies) {
+                QString kind;
+                switch (anomaly.kind) {
+                case application::SequenceAlignmentAnomalyKind::TargetFrameMissing:
+                    kind = QStringLiteral("missing");
+                    break;
+                case application::SequenceAlignmentAnomalyKind::TargetFrameExtra:
+                    kind = QStringLiteral("extra");
+                    break;
+                case application::SequenceAlignmentAnomalyKind::TargetFrameDuplicate:
+                    kind = QStringLiteral("duplicate");
+                    break;
+                }
+                const std::optional<domain::FrameId> position = anomaly.canonicalFrameId.has_value()
+                                                                    ? anomaly.canonicalFrameId
+                                                                    : anomaly.sourceFrameId;
+                if (position.has_value()) {
+                    appendTimelineMarker(
+                        markers, cache.markerOverflowCount, *position, kind, currentSourceName);
+                }
+                anomalyParts.push_back(
+                    position.has_value()
+                        ? QStringLiteral("%1 @ %2").arg(kind).arg(position->value() + 1)
+                        : kind);
+                if (anomalyParts.size() >= 3) {
+                    break;
+                }
+            }
+            const QString mode = snapshot.automaticAlignmentPending
+                                     ? QStringLiteral("proposal")
+                                     : (result.autoApplicable ? QStringLiteral("mapped")
+                                                              : QStringLiteral("suggested"));
+            qsizetype reviewSegments = 0;
+            qsizetype rejectedSegments = 0;
+            for (const application::SequenceAlignmentSegment& segment : result.segments) {
+                if (segment.state == application::AlignmentSegmentState::Accepted) {
+                    continue;
+                }
+                const bool rejected = segment.state == application::AlignmentSegmentState::Rejected;
+                if (rejected) {
+                    ++rejectedSegments;
+                } else {
+                    ++reviewSegments;
+                }
+                appendTimelineMarker(markers,
+                                     cache.markerOverflowCount,
+                                     segment.firstCanonicalFrame,
+                                     rejected ? QStringLiteral("rejected-segment")
+                                              : QStringLiteral("review-segment"),
+                                     currentSourceName,
+                                     qRound(segment.p10Confidence * 100.0F));
+            }
+            QString segmentStatus;
+            if (reviewSegments > 0 || rejectedSegments > 0) {
+                segmentStatus = QStringLiteral(", %1 review / %2 rejected segments")
+                                    .arg(reviewSegments)
+                                    .arg(rejectedSegments);
+            }
+            sequenceParts.push_back(
+                QStringLiteral("%1: sequence %2, %3% confidence%4%5")
+                    .arg(currentSourceName)
+                    .arg(mode)
+                    .arg(qRound(result.confidence * 100.0F))
+                    .arg(anomalyParts.isEmpty()
+                             ? QStringLiteral(", no local anomalies")
+                             : QStringLiteral(", %1").arg(anomalyParts.join(QStringLiteral(", "))))
+                    .arg(segmentStatus));
+            for (const application::SequenceAlignmentLowConfidenceRun& run :
+                 result.lowConfidenceRuns) {
+                appendTimelineMarker(lowConfidenceTimelineMarkers,
+                                     lowConfidenceMarkerOverflowCount,
+                                     run.firstCanonicalFrame,
+                                     QStringLiteral("low-confidence"),
+                                     currentSourceName,
+                                     qRound(run.minimumConfidence * 100.0F));
+            }
+        }
+        cache.sequenceStatus = sequenceParts.join(QStringLiteral("  |  "));
+        cache.markerOverflowCount += lowConfidenceMarkerOverflowCount;
+        QStringList anchorParts;
+        for (const application::SourceAlignmentAnchors& sourceAnchors :
+             snapshot.manualAlignmentAnchors) {
+            const QString currentSourceName = sourceName(sourceAnchors.sourceId);
+            QStringList pairs;
+            for (const application::ManualAlignmentAnchor& anchor : sourceAnchors.anchors) {
+                pairs.push_back(QStringLiteral("%1↔%2")
+                                    .arg(anchor.canonicalFrameId.value() + 1)
+                                    .arg(anchor.sourceFrameId.value() + 1));
+                appendTimelineMarker(markers,
+                                     cache.markerOverflowCount,
+                                     anchor.canonicalFrameId,
+                                     QStringLiteral("anchor"),
+                                     currentSourceName);
+            }
+            anchorParts.push_back(
+                QStringLiteral("%1: anchors %2").arg(currentSourceName, pairs.join(", ")));
+        }
+        cache.anchorStatus = anchorParts.join(QStringLiteral("  |  "));
+        cache.manualAnchorActive = !snapshot.manualAlignmentAnchors.empty();
+        for (const QVariant& marker : lowConfidenceTimelineMarkers) {
+            if (markers.size() >= kMaximumAlignmentTimelineMarkers) {
+                ++cache.markerOverflowCount;
+                continue;
+            }
+            markers.push_back(marker);
+        }
+        for (const application::CompatibilityFindingView& finding :
+             snapshot.compatibilityFindings) {
+            QVariantList sourceIds;
+            sourceIds.reserve(static_cast<qsizetype>(finding.sources.size()));
+            for (const domain::SourceId sourceId : finding.sources) {
+                sourceIds.push_back(QVariant::fromValue<qulonglong>(sourceId));
+            }
+            const std::string_view stableCode = domain::stableId(finding.code);
+            cache.compatibilityFindings.push_back(QVariantMap{
+                {QStringLiteral("severity"), static_cast<int>(finding.severity)},
+                {QStringLiteral("code"),
+                 QString::fromLatin1(stableCode.data(), static_cast<qsizetype>(stableCode.size()))},
+                {QStringLiteral("sources"), sourceIds},
+            });
+        }
+        cache.valid = true;
+        alignmentViewCache_ = std::move(cache);
     }
 
     // View assembly allocates Qt strings; callers are noexcept and Qt terminates on OOM.
@@ -1523,107 +1834,27 @@ private:
                                     ? static_cast<qint64>(snapshot_->displayedFrame->value())
                                     : -1;
             next.totalFrames = static_cast<qulonglong>(snapshot_->canonicalFrameCount);
-            if (snapshot_->validatedComparison &&
-                snapshot_->validatedComparison->canonicalRate().has_value()) {
-                next.oneSecondStepFrames = std::clamp(
-                    qRound(snapshot_->validatedComparison->canonicalRate()->displayFps()), 1, 1000);
-            }
             if (snapshot_->validatedComparison) {
                 const std::vector<DecoderBackendState> decoderBackends = decoderBackendStates();
-                // C-01: canonicalSourceIndex is the timeline master, not the Reference role.
-                next.canonicalSourceIndex =
-                    static_cast<int>(snapshot_->validatedComparison->canonicalSourceId());
-                if (snapshot_->validatedComparison->referenceSourceId().has_value()) {
-                    next.referenceSourceIndex =
-                        static_cast<int>(*snapshot_->validatedComparison->referenceSourceId());
-                    next.hasExplicitReference = true;
-                } else {
-                    // Canonical fallback for existing referenceSourceIndex readers; the
-                    // explicit-GT fact stays false so GT-anchored actions can refuse.
-                    next.referenceSourceIndex = next.canonicalSourceIndex;
-                    next.hasExplicitReference = false;
+                if (!sourceInfoCache_.valid ||
+                    sourceInfoCache_.comparison != snapshot_->validatedComparison.get() ||
+                    sourceInfoCache_.backends != decoderBackends) {
+                    rebuildSourceInfoCache(*snapshot_->validatedComparison, decoderBackends);
                 }
-                const domain::MediaDescriptor& canonical =
-                    snapshot_->validatedComparison->canonicalDescriptor();
-                next.timingMode = timingModeName(canonical.timingConfidence);
-                if (canonical.frameRate.has_value()) {
-                    next.rationalFrameRate = QStringLiteral("%1/%2")
-                                                 .arg(canonical.frameRate->numerator())
-                                                 .arg(canonical.frameRate->denominator());
-                    next.dropFrameTimecodeAvailable = supportsDropFrame(*canonical.frameRate);
-                }
-                for (const domain::ComparisonSource& source :
-                     snapshot_->validatedComparison->sources()) {
-                    const QString sourcePath =
-                        QString::fromStdWString(source.descriptor.normalizedPath.wstring());
-                    next.sourceUrls.push_back(QUrl::fromLocalFile(sourcePath));
-                    const QString filename = QFileInfo{sourcePath}.fileName();
-                    if (source.id == 0U) {
-                        next.sourceAFilename = filename;
-                    } else if (source.id == 1U) {
-                        next.sourceBFilename = filename;
-                    } else if (source.id == 2U) {
-                        next.sourceCFilename = filename;
-                    }
-                    const domain::MediaDescriptor& descriptor = source.descriptor;
-                    const auto backend = std::find_if(decoderBackends.begin(),
-                                                      decoderBackends.end(),
-                                                      [&source](const DecoderBackendState& state) {
-                                                          return state.sourceId == source.id;
-                                                      });
-                    const QString decodeBackend =
-                        backend == decoderBackends.end()
-                            ? QStringLiteral("Initializing")
-                            : (backend->d3d11Va ? QStringLiteral("D3D11VA")
-                                                : QStringLiteral("Software"));
-                    const QString decodeFallbackReason =
-                        backend != decoderBackends.end()
-                            ? QString::fromStdString(backend->fallbackReason)
-                            : QString{};
-                    const QString rate = descriptor.frameRate.has_value()
-                                             ? QStringLiteral("%1/%2 fps")
-                                                   .arg(descriptor.frameRate->numerator())
-                                                   .arg(descriptor.frameRate->denominator())
-                                             : QStringLiteral("VFR");
-                    next.sourceMediaInfo.push_back(QVariantMap{
-                        {QStringLiteral("label"), sourceName(source.id)},
-                        {QStringLiteral("filename"), filename},
-                        {QStringLiteral("width"), descriptor.extent.width},
-                        {QStringLiteral("height"), descriptor.extent.height},
-                        {QStringLiteral("rotationDegrees"), descriptor.rotationDegrees},
-                        {QStringLiteral("sampleAspectNumerator"),
-                         descriptor.sampleAspectRatio.numerator},
-                        {QStringLiteral("sampleAspectDenominator"),
-                         descriptor.sampleAspectRatio.denominator},
-                        {QStringLiteral("frameRate"), rate},
-                        {QStringLiteral("frameCount"), descriptor.frameCount.value},
-                        {QStringLiteral("timingMode"), timingModeName(descriptor.timingConfidence)},
-                        {QStringLiteral("codec"), QString::fromStdString(descriptor.codecId)},
-                        {QStringLiteral("pixelFormat"),
-                         QString::fromStdString(descriptor.pixelFormatId)},
-                        {QStringLiteral("bitDepth"), descriptor.bitDepth},
-                        {QStringLiteral("colorMatrix"),
-                         colorMatrixName(descriptor.colorMetadata.matrix)},
-                        {QStringLiteral("colorRange"),
-                         colorRangeName(descriptor.colorMetadata.range)},
-                        {QStringLiteral("decodeBackend"), decodeBackend},
-                        {QStringLiteral("decodeFallbackReason"), decodeFallbackReason},
-                        // D08: project timeline master and reference independently.
-                        {QStringLiteral("isTimelineMaster"),
-                         source.id == snapshot_->validatedComparison->canonicalSourceId()},
-                        {QStringLiteral("isReference"),
-                         source.role == domain::ComparisonRole::kReference},
-                        {QStringLiteral("role"),
-                         source.id == snapshot_->validatedComparison->canonicalSourceId() &&
-                                 source.role == domain::ComparisonRole::kReference
-                             ? QStringLiteral("TimelineMaster+Reference")
-                             : (source.id == snapshot_->validatedComparison->canonicalSourceId()
-                                    ? QStringLiteral("TimelineMaster")
-                                    : (source.role == domain::ComparisonRole::kReference
-                                           ? QStringLiteral("Reference")
-                                           : QStringLiteral("Prediction")))},
-                    });
-                }
+                // A cache hit hands the view implicitly shared copies of the stored lists, so
+                // steady playback skips all per-source QVariantMap construction below.
+                next.canonicalSourceIndex = sourceInfoCache_.canonicalSourceIndex;
+                next.referenceSourceIndex = sourceInfoCache_.referenceSourceIndex;
+                next.hasExplicitReference = sourceInfoCache_.hasExplicitReference;
+                next.timingMode = sourceInfoCache_.timingMode;
+                next.rationalFrameRate = sourceInfoCache_.rationalFrameRate;
+                next.dropFrameTimecodeAvailable = sourceInfoCache_.dropFrameTimecodeAvailable;
+                next.oneSecondStepFrames = sourceInfoCache_.oneSecondStepFrames;
+                next.sourceAFilename = sourceInfoCache_.sourceAFilename;
+                next.sourceBFilename = sourceInfoCache_.sourceBFilename;
+                next.sourceCFilename = sourceInfoCache_.sourceCFilename;
+                next.sourceUrls = sourceInfoCache_.sourceUrls;
+                next.sourceMediaInfo = sourceInfoCache_.sourceMediaInfo;
             }
             if (next.currentFrame >= 0) {
                 next.currentTimecode = timecodeForFrame(next.currentFrame, false);
@@ -1724,163 +1955,22 @@ private:
                 }
             }
             next.frameMappingStatus = mappingParts.join(QStringLiteral("  |  "));
-            QStringList estimateParts;
-            for (const application::GlobalOffsetEstimate& estimate :
-                 snapshot_->alignmentEstimates) {
-                const QString currentSourceName = sourceName(estimate.sourceId);
-                const QString signedOffset =
-                    QStringLiteral("%1%2")
-                        .arg(estimate.bestOffset >= 0 ? QStringLiteral("+") : QString{})
-                        .arg(estimate.bestOffset);
-                const int confidence = qRound(estimate.confidence * 100.0F);
-                if (estimate.autoApplicable) {
-                    const QString mode = snapshot_->automaticAlignmentPending
-                                             ? QStringLiteral("proposal")
-                                             : QStringLiteral("auto");
-                    estimateParts.push_back(QStringLiteral("%1: %2 %3 (%4%)")
-                                                .arg(currentSourceName, mode, signedOffset)
-                                                .arg(confidence));
-                } else {
-                    estimateParts.push_back(
-                        QStringLiteral("%1: suggested %2 (%3%, review manually)")
-                            .arg(currentSourceName, signedOffset)
-                            .arg(confidence));
-                }
+            if (!alignmentViewCache_.valid ||
+                alignmentViewCache_.estimates != snapshot_->alignmentEstimates ||
+                alignmentViewCache_.summaries != snapshot_->sequenceAlignments ||
+                alignmentViewCache_.anchors != snapshot_->manualAlignmentAnchors ||
+                alignmentViewCache_.findings != snapshot_->compatibilityFindings ||
+                alignmentViewCache_.automaticAlignmentPending !=
+                    snapshot_->automaticAlignmentPending) {
+                rebuildAlignmentViewCache(*snapshot_);
             }
-            next.alignmentEstimateStatus = estimateParts.join(QStringLiteral("  |  "));
-            QStringList sequenceParts;
-            QVariantList lowConfidenceTimelineMarkers;
-            qulonglong lowConfidenceMarkerOverflowCount = 0U;
-            for (const application::SequenceAlignmentSummary& result :
-                 snapshot_->sequenceAlignments) {
-                const QString currentSourceName = sourceName(result.sourceId);
-                QStringList anomalyParts;
-                for (const application::SequenceAlignmentAnomaly& anomaly : result.anomalies) {
-                    QString kind;
-                    switch (anomaly.kind) {
-                    case application::SequenceAlignmentAnomalyKind::TargetFrameMissing:
-                        kind = QStringLiteral("missing");
-                        break;
-                    case application::SequenceAlignmentAnomalyKind::TargetFrameExtra:
-                        kind = QStringLiteral("extra");
-                        break;
-                    case application::SequenceAlignmentAnomalyKind::TargetFrameDuplicate:
-                        kind = QStringLiteral("duplicate");
-                        break;
-                    }
-                    const std::optional<domain::FrameId> position =
-                        anomaly.canonicalFrameId.has_value() ? anomaly.canonicalFrameId
-                                                             : anomaly.sourceFrameId;
-                    if (position.has_value()) {
-                        appendTimelineMarker(next.alignmentTimelineMarkers,
-                                             next.alignmentTimelineMarkerOverflowCount,
-                                             *position,
-                                             kind,
-                                             currentSourceName);
-                    }
-                    anomalyParts.push_back(
-                        position.has_value()
-                            ? QStringLiteral("%1 @ %2").arg(kind).arg(position->value() + 1)
-                            : kind);
-                    if (anomalyParts.size() >= 3) {
-                        break;
-                    }
-                }
-                const QString mode = snapshot_->automaticAlignmentPending
-                                         ? QStringLiteral("proposal")
-                                         : (result.autoApplicable ? QStringLiteral("mapped")
-                                                                  : QStringLiteral("suggested"));
-                qsizetype reviewSegments = 0;
-                qsizetype rejectedSegments = 0;
-                for (const application::SequenceAlignmentSegment& segment : result.segments) {
-                    if (segment.state == application::AlignmentSegmentState::Accepted) {
-                        continue;
-                    }
-                    const bool rejected =
-                        segment.state == application::AlignmentSegmentState::Rejected;
-                    if (rejected) {
-                        ++rejectedSegments;
-                    } else {
-                        ++reviewSegments;
-                    }
-                    appendTimelineMarker(next.alignmentTimelineMarkers,
-                                         next.alignmentTimelineMarkerOverflowCount,
-                                         segment.firstCanonicalFrame,
-                                         rejected ? QStringLiteral("rejected-segment")
-                                                  : QStringLiteral("review-segment"),
-                                         currentSourceName,
-                                         qRound(segment.p10Confidence * 100.0F));
-                }
-                QString segmentStatus;
-                if (reviewSegments > 0 || rejectedSegments > 0) {
-                    segmentStatus = QStringLiteral(", %1 review / %2 rejected segments")
-                                        .arg(reviewSegments)
-                                        .arg(rejectedSegments);
-                }
-                sequenceParts.push_back(QStringLiteral("%1: sequence %2, %3% confidence%4%5")
-                                            .arg(currentSourceName)
-                                            .arg(mode)
-                                            .arg(qRound(result.confidence * 100.0F))
-                                            .arg(anomalyParts.isEmpty()
-                                                     ? QStringLiteral(", no local anomalies")
-                                                     : QStringLiteral(", %1").arg(
-                                                           anomalyParts.join(QStringLiteral(", "))))
-                                            .arg(segmentStatus));
-                for (const application::SequenceAlignmentLowConfidenceRun& run :
-                     result.lowConfidenceRuns) {
-                    appendTimelineMarker(lowConfidenceTimelineMarkers,
-                                         lowConfidenceMarkerOverflowCount,
-                                         run.firstCanonicalFrame,
-                                         QStringLiteral("low-confidence"),
-                                         currentSourceName,
-                                         qRound(run.minimumConfidence * 100.0F));
-                }
-            }
-            next.sequenceAlignmentStatus = sequenceParts.join(QStringLiteral("  |  "));
-            next.alignmentTimelineMarkerOverflowCount += lowConfidenceMarkerOverflowCount;
-            QStringList anchorParts;
-            for (const application::SourceAlignmentAnchors& sourceAnchors :
-                 snapshot_->manualAlignmentAnchors) {
-                const QString currentSourceName = sourceName(sourceAnchors.sourceId);
-                QStringList pairs;
-                for (const application::ManualAlignmentAnchor& anchor : sourceAnchors.anchors) {
-                    pairs.push_back(QStringLiteral("%1↔%2")
-                                        .arg(anchor.canonicalFrameId.value() + 1)
-                                        .arg(anchor.sourceFrameId.value() + 1));
-                    appendTimelineMarker(next.alignmentTimelineMarkers,
-                                         next.alignmentTimelineMarkerOverflowCount,
-                                         anchor.canonicalFrameId,
-                                         QStringLiteral("anchor"),
-                                         currentSourceName);
-                }
-                anchorParts.push_back(
-                    QStringLiteral("%1: anchors %2").arg(currentSourceName, pairs.join(", ")));
-            }
-            next.manualAnchorStatus = anchorParts.join(QStringLiteral("  |  "));
-            next.manualAnchorActive = !snapshot_->manualAlignmentAnchors.empty();
-            for (const QVariant& marker : lowConfidenceTimelineMarkers) {
-                if (next.alignmentTimelineMarkers.size() >= kMaximumAlignmentTimelineMarkers) {
-                    ++next.alignmentTimelineMarkerOverflowCount;
-                    continue;
-                }
-                next.alignmentTimelineMarkers.push_back(marker);
-            }
-            for (const application::CompatibilityFindingView& finding :
-                 snapshot_->compatibilityFindings) {
-                QVariantList sourceIds;
-                sourceIds.reserve(static_cast<qsizetype>(finding.sources.size()));
-                for (const domain::SourceId sourceId : finding.sources) {
-                    sourceIds.push_back(QVariant::fromValue<qulonglong>(sourceId));
-                }
-                const std::string_view stableCode = domain::stableId(finding.code);
-                next.compatibilityFindings.push_back(QVariantMap{
-                    {QStringLiteral("severity"), static_cast<int>(finding.severity)},
-                    {QStringLiteral("code"),
-                     QString::fromLatin1(stableCode.data(),
-                                         static_cast<qsizetype>(stableCode.size()))},
-                    {QStringLiteral("sources"), sourceIds},
-                });
-            }
+            next.alignmentEstimateStatus = alignmentViewCache_.estimateStatus;
+            next.sequenceAlignmentStatus = alignmentViewCache_.sequenceStatus;
+            next.manualAnchorStatus = alignmentViewCache_.anchorStatus;
+            next.manualAnchorActive = alignmentViewCache_.manualAnchorActive;
+            next.alignmentTimelineMarkers = alignmentViewCache_.markers;
+            next.alignmentTimelineMarkerOverflowCount = alignmentViewCache_.markerOverflowCount;
+            next.compatibilityFindings = alignmentViewCache_.compatibilityFindings;
 
             if (snapshot_->lastError.has_value()) {
                 const QString key = QString::fromStdString(snapshot_->lastError->userMessageKey);
@@ -2216,26 +2306,50 @@ private:
 
         const bool changed = !(next == view_);
         const bool frameStateChanged = !next.sameFrameState(view_);
-        const bool otherStateChanged = changed && (!frameStateChanged || [&] {
-                                           ReviewView normalized = next;
-                                           normalized.currentFrame = view_.currentFrame;
-                                           normalized.sourceAMissing = view_.sourceAMissing;
-                                           normalized.sourceBMissing = view_.sourceBMissing;
-                                           normalized.sourceCMissing = view_.sourceCMissing;
-                                           normalized.frameMappingStatus = view_.frameMappingStatus;
-                                           normalized.autoAlignmentActive =
-                                               view_.autoAlignmentActive;
-                                           normalized.differenceEdges = view_.differenceEdges;
-                                           normalized.canPrevious = view_.canPrevious;
-                                           normalized.canNext = view_.canNext;
-                                           // Timecode/media time are derived from the frame
-                                           // position and canonical timeline, so they are
-                                           // frame-scoped state: their change must not widen a
-                                           // frame-only advance into a broad notification.
-                                           normalized.currentTimecode = view_.currentTimecode;
-                                           normalized.currentMediaTime = view_.currentMediaTime;
-                                           return !(normalized == view_);
-                                       }());
+        // Playback telemetry rides its own throttled playbackTelemetryChanged notification; a
+        // per-frame counter change must not widen a frame advance into the broad stateChanged
+        // fan-out (which re-evaluates every controller binding, including timeline markers).
+        const bool telemetryChanged =
+            next.playbackSkippedFrameSets != view_.playbackSkippedFrameSets ||
+            next.playbackRunSkippedFrameSets != view_.playbackRunSkippedFrameSets ||
+            next.playbackRunPresentedFrames != view_.playbackRunPresentedFrames ||
+            next.playbackTargetRate != view_.playbackTargetRate ||
+            next.playbackPresentationRate != view_.playbackPresentationRate ||
+            next.playbackLagMicroseconds != view_.playbackLagMicroseconds ||
+            next.playbackCatchingUp != view_.playbackCatchingUp;
+        // Broad state only when something outside the frame-scoped and telemetry groups
+        // differs. The normalization must run for every changed projection: short-circuiting
+        // it when no frame state changed would let a telemetry-only update (a rate estimate
+        // moving on an unchanged frame) widen into stateChanged.
+        const bool otherStateChanged = changed && [&] {
+            ReviewView normalized = next;
+            normalized.currentFrame = view_.currentFrame;
+            normalized.sourceAMissing = view_.sourceAMissing;
+            normalized.sourceBMissing = view_.sourceBMissing;
+            normalized.sourceCMissing = view_.sourceCMissing;
+            normalized.frameMappingStatus = view_.frameMappingStatus;
+            normalized.autoAlignmentActive = view_.autoAlignmentActive;
+            normalized.differenceEdges = view_.differenceEdges;
+            normalized.canPrevious = view_.canPrevious;
+            normalized.canNext = view_.canNext;
+            // Timecode/media time are derived from the frame
+            // position and canonical timeline, so they are
+            // frame-scoped state: their change must not widen a
+            // frame-only advance into a broad notification.
+            normalized.currentTimecode = view_.currentTimecode;
+            normalized.currentMediaTime = view_.currentMediaTime;
+            // Playback telemetry has the same frame-scoped
+            // treatment for the same reason: it notifies through
+            // playbackTelemetryChanged instead.
+            normalized.playbackSkippedFrameSets = view_.playbackSkippedFrameSets;
+            normalized.playbackRunSkippedFrameSets = view_.playbackRunSkippedFrameSets;
+            normalized.playbackRunPresentedFrames = view_.playbackRunPresentedFrames;
+            normalized.playbackTargetRate = view_.playbackTargetRate;
+            normalized.playbackPresentationRate = view_.playbackPresentationRate;
+            normalized.playbackLagMicroseconds = view_.playbackLagMicroseconds;
+            normalized.playbackCatchingUp = view_.playbackCatchingUp;
+            return !(normalized == view_);
+        }();
         if (changed) {
             view_ = std::move(next);
         }
@@ -2245,6 +2359,37 @@ private:
         if (frameStateChanged) {
             Q_EMIT owner_.frameStateChanged();
         }
+        if (telemetryChanged) {
+            maybeEmitPlaybackTelemetry();
+        }
+    }
+
+    // Throttles playbackTelemetryChanged while playing. Immediate exceptions: any update
+    // while paused or stepping, a new skipped FrameSet in the current run, the catch-up state
+    // starting, and lag entering the 200 ms band the status rail reports (C-07/V-01).
+    void maybeEmitPlaybackTelemetry() noexcept {
+        const qint64 now = telemetryClock_.elapsed();
+        const bool anomaly =
+            view_.playbackRunSkippedFrameSets > lastEmittedRunSkippedFrameSets_ ||
+            (view_.playbackCatchingUp && !lastEmittedCatchingUp_) ||
+            (qAbs(view_.playbackLagMicroseconds) >= kPlaybackTelemetryLagThresholdMicroseconds &&
+             qAbs(lastEmittedLagMicroseconds_) < kPlaybackTelemetryLagThresholdMicroseconds);
+        if (!view_.playing || anomaly || now >= telemetryNextEmitAllowedMs_) {
+            emitPlaybackTelemetry(now);
+            return;
+        }
+        if (!telemetryTimer_.isActive()) {
+            telemetryTimer_.start(static_cast<int>(telemetryNextEmitAllowedMs_ - now));
+        }
+    }
+
+    void emitPlaybackTelemetry(const qint64 now) noexcept {
+        telemetryTimer_.stop();
+        telemetryNextEmitAllowedMs_ = now + kPlaybackTelemetryNotifyIntervalMs;
+        lastEmittedRunSkippedFrameSets_ = view_.playbackRunSkippedFrameSets;
+        lastEmittedCatchingUp_ = view_.playbackCatchingUp;
+        lastEmittedLagMicroseconds_ = view_.playbackLagMicroseconds;
+        Q_EMIT owner_.playbackTelemetryChanged();
     }
 
     [[nodiscard]] std::optional<application::CommandContext> allocateCommandContext() noexcept {
@@ -2500,6 +2645,14 @@ public:
     SourceListModel sourceModel_;
     JogStateMachine jog_;
     QTimer projectionTimer_;
+    QTimer telemetryTimer_;
+    QElapsedTimer telemetryClock_;
+    qint64 telemetryNextEmitAllowedMs_ = 0;
+    qulonglong lastEmittedRunSkippedFrameSets_ = 0U;
+    bool lastEmittedCatchingUp_ = false;
+    qint64 lastEmittedLagMicroseconds_ = 0;
+    SourceInfoCache sourceInfoCache_;
+    AlignmentViewCache alignmentViewCache_;
     QTimer jogPacingTimer_;
     QTimer sourceDiskStatusPollTimer_;
     QTimer sourceDiskStatusRefreshTimer_;
