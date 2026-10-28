@@ -37,6 +37,13 @@ public:
     [[nodiscard]] application::NormalizedFrameFormat format() const noexcept;
     [[nodiscard]] const domain::ColorMetadata& colorMetadata() const noexcept;
     [[nodiscard]] std::size_t byteCount() const noexcept;
+    // Luma/chroma shader resource views for this decoder surface slice, created once with the
+    // resource so the transfer actor can reuse them per frame set instead of recreating two
+    // views per source per set. They stay null when creation failed; the transfer actor then
+    // falls back to creating the views on demand. The views die with the resource and its
+    // device generation, so a stale-generation view can never outlive its texture.
+    [[nodiscard]] ID3D11ShaderResourceView* yShaderResourceView() const noexcept;
+    [[nodiscard]] ID3D11ShaderResourceView* uvShaderResourceView() const noexcept;
 
 private:
     D3d11DecodedFrameResource(Microsoft::WRL::ComPtr<ID3D11Texture2D> texture,
@@ -48,6 +55,8 @@ private:
                               FrameBudget::Reservation reservation) noexcept;
 
     Microsoft::WRL::ComPtr<ID3D11Texture2D> texture_;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> yView_;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> uvView_;
     std::uint32_t arraySlice_ = 0U;
     domain::DeviceGeneration deviceGeneration_{0U};
     application::NormalizedFrameFormat format_ = application::NormalizedFrameFormat::Nv12_8;

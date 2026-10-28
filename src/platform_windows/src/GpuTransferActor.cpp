@@ -359,6 +359,15 @@ struct UploadSource final {
     };
     output.y.texture = direct.resource->texture();
     output.uv.texture = direct.resource->texture();
+    // The decoded resource pre-created its plane views; reuse them instead of paying two
+    // CreateShaderResourceView calls per source per frame set. The device match was verified
+    // above against the texture itself, so the cached views belong to the same device.
+    if (direct.resource->yShaderResourceView() != nullptr &&
+        direct.resource->uvShaderResourceView() != nullptr) {
+        output.y.view = direct.resource->yShaderResourceView();
+        output.uv.view = direct.resource->uvShaderResourceView();
+        return S_OK;
+    }
     HRESULT result = createView(yFormat, output.y.view);
     if (FAILED(result)) {
         return result;

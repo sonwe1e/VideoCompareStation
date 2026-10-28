@@ -83,6 +83,38 @@ D3d11DecodedFrameResource::create(Microsoft::WRL::ComPtr<ID3D11Texture2D> textur
     if (!resource) {
         return std::nullopt;
     }
+    // Pre-create the plane views once per surface slice: the D3D11VA surface pool cycles
+    // through a bounded slice set, so steady playback reuses these views instead of paying
+    // two CreateShaderResourceView calls per source per frame set. A failure here only
+    // downgrades the resource to on-demand view creation by the transfer actor.
+    Microsoft::WRL::ComPtr<ID3D11Device> device;
+    resource->texture_->GetDevice(device.GetAddressOf());
+    if (device != nullptr) {
+        const DXGI_FORMAT yFormat = format == application::NormalizedFrameFormat::P010_10
+                                        ? DXGI_FORMAT_R16_UNORM
+                                        : DXGI_FORMAT_R8_UNORM;
+        const DXGI_FORMAT uvFormat = format == application::NormalizedFrameFormat::P010_10
+                                         ? DXGI_FORMAT_R16G16_UNORM
+                                         : DXGI_FORMAT_R8G8_UNORM;
+        D3D11_SHADER_RESOURCE_VIEW_DESC yDescription{};
+        yDescription.Format = yFormat;
+        yDescription.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+        yDescription.Texture2DArray.MostDetailedMip = 0U;
+        yDescription.Texture2DArray.MipLevels = 1U;
+        yDescription.Texture2DArray.FirstArraySlice = arraySlice;
+        yDescription.Texture2DArray.ArraySize = 1U;
+        D3D11_SHADER_RESOURCE_VIEW_DESC uvDescription = yDescription;
+        uvDescription.Format = uvFormat;
+        if (FAILED(device->CreateShaderResourceView(resource->texture_.Get(),
+                                                    &yDescription,
+                                                    resource->yView_.ReleaseAndGetAddressOf())) ||
+            FAILED(device->CreateShaderResourceView(resource->texture_.Get(),
+                                                    &uvDescription,
+                                                    resource->uvView_.ReleaseAndGetAddressOf()))) {
+            resource->yView_.Reset();
+            resource->uvView_.Reset();
+        }
+    }
     return application::FrameHandle::create(
         std::move(resource),
         application::FrameGeometry{
@@ -134,6 +166,14 @@ const domain::ColorMetadata& D3d11DecodedFrameResource::colorMetadata() const no
 
 std::size_t D3d11DecodedFrameResource::byteCount() const noexcept {
     return reservation_.bytes();
+}
+
+ID3D11ShaderResourceView* D3d11DecodedFrameResource::yShaderResourceView() const noexcept {
+    return yView_.Get();
+}
+
+ID3D11ShaderResourceView* D3d11DecodedFrameResource::uvShaderResourceView() const noexcept {
+    return uvView_.Get();
 }
 
 } // namespace dvs::platform
