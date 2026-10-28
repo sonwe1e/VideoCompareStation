@@ -1,5 +1,6 @@
 #include "dvs/platform/SteadyDeadlineScheduler.h"
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -239,6 +240,34 @@ TEST(SteadyDeadlineSchedulerTests, DestructorWakesWorkerAndDropsPendingDeadline)
     EXPECT_LT(std::chrono::steady_clock::now() - startedAt, 250ms);
     std::this_thread::sleep_for(100ms);
     EXPECT_TRUE(events->deadlines().empty());
+}
+
+TEST(SteadyDeadlineSchedulerTests, DispatchesShortDeadlinesWithoutSystemTimerQuantumDelay) {
+    // The playback cadence arms deadlines only a few milliseconds ahead of their due time
+    // (14 ms lead at 60 fps, half a frame at 120 fps). Waiting on the default system timer
+    // quantum (~15.6 ms) would swallow that whole margin and make cadence systematically
+    // late, so short deadlines must be dispatched near their due time instead.
+    SteadyDeadlineScheduler scheduler;
+    const auto events = std::make_shared<RecordingEventSink>();
+    constexpr int kSamples = 12;
+    std::vector<std::chrono::milliseconds> latenessSamples;
+    latenessSamples.reserve(kSamples);
+    for (int index = 0; index < kSamples; ++index) {
+        const auto submittedAt = std::chrono::steady_clock::now();
+        ASSERT_EQ(
+            scheduler.schedule(makeRequest(static_cast<std::uint64_t>(60U + index), 4ms), events),
+            application::PortSubmitResult::Accepted);
+        ASSERT_TRUE(events->waitForDeadlineCount(static_cast<std::size_t>(index) + 1U, 2s));
+        latenessSamples.push_back(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - submittedAt - 4ms));
+    }
+    std::sort(latenessSamples.begin(), latenessSamples.end());
+    // Median: the old condition-variable wait spent ~half a quantum asleep past the deadline
+    // (median ~8 ms over-sleep with a 4 ms deadline); the high-resolution wait stays in the
+    // low single digits. The bound leaves scheduler and test-thread jitter headroom.
+    const auto medianLateness = latenessSamples[latenessSamples.size() / 2U];
+    EXPECT_LE(medianLateness.count(), 6);
+    EXPECT_LE(latenessSamples.back().count(), 30);
 }
 
 } // namespace
