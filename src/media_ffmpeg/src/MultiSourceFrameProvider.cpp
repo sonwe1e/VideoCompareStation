@@ -903,9 +903,18 @@ private:
                                                                   deviceBroker_));
             }
 
+            // Each actor opens on its own worker; dispatch every open before joining so a
+            // multi-source attach does not serialize N demuxer/codec/D3D11VA initializations
+            // into the first-frame latency. Results are still consumed in slot order, and a
+            // failure or cancellation tears the whole attach down exactly as before.
+            std::vector<std::future<domain::Status>> pendingOpens;
+            pendingOpens.reserve(decodeActors_.size());
             for (std::size_t slot = 0; slot < decodeActors_.size(); ++slot) {
-                const domain::Status opened =
-                    decodeActors_[slot]->open(*operation->cancellationRequested);
+                pendingOpens.push_back(
+                    decodeActors_[slot]->openAsync(*operation->cancellationRequested));
+            }
+            for (std::size_t slot = 0; slot < pendingOpens.size(); ++slot) {
+                const domain::Status opened = pendingOpens[slot].get();
                 if (operation->isCanceled()) {
                     closeDecodeActors();
                     postCanceled(operation);

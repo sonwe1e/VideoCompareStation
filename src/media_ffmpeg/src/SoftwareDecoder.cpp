@@ -252,6 +252,16 @@ SoftwareDecoder::SoftwareDecoder(const domain::SourceId sourceId,
 SoftwareDecoder::~SoftwareDecoder() = default;
 
 domain::Status SoftwareDecoder::open(const std::atomic<bool>& cancellationRequested) {
+    return openInternal(cancellationRequested, true);
+}
+
+domain::Status
+SoftwareDecoder::openWithVerifiedIdentity(const std::atomic<bool>& cancellationRequested) {
+    return openInternal(cancellationRequested, false);
+}
+
+domain::Status SoftwareDecoder::openInternal(const std::atomic<bool>& cancellationRequested,
+                                             const bool verifySourceIdentity) {
     close();
     impl_->interrupted.store(cancellationRequested.load(std::memory_order_acquire),
                              std::memory_order_release);
@@ -271,12 +281,15 @@ domain::Status SoftwareDecoder::open(const std::atomic<bool>& cancellationReques
     }
 
     const domain::SourceId sourceId = impl_->sourceId;
-    auto identity = platform::SourceIdentityService::verify(impl_->descriptor.normalizedPath,
-                                                            *impl_->descriptor.sourceIdentity,
-                                                            sourceId,
-                                                            domain::MediaOperation::kMediaDecode);
-    if (!identity) {
-        return identity;
+    if (verifySourceIdentity) {
+        auto identity =
+            platform::SourceIdentityService::verify(impl_->descriptor.normalizedPath,
+                                                    *impl_->descriptor.sourceIdentity,
+                                                    sourceId,
+                                                    domain::MediaOperation::kMediaDecode);
+        if (!identity) {
+            return identity;
+        }
     }
 
     const auto normalizedPath =

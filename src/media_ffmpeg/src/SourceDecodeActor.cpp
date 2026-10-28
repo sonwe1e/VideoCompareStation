@@ -153,6 +153,11 @@ SourceDecodeActor::~SourceDecodeActor() {
 }
 
 domain::Status SourceDecodeActor::open(const std::atomic<bool>& cancellationRequested) {
+    return openAsync(cancellationRequested).get();
+}
+
+std::future<domain::Status>
+SourceDecodeActor::openAsync(const std::atomic<bool>& cancellationRequested) {
     ControlJob job{
         .kind = ControlKind::Open,
         .cancellationRequested = &cancellationRequested,
@@ -161,13 +166,14 @@ domain::Status SourceDecodeActor::open(const std::atomic<bool>& cancellationRequ
     {
         std::scoped_lock lock{mutex_};
         if (stopping_) {
-            return domain::Status::failure(
-                actorError(sourceId_, "The source decode actor is closed."));
+            job.completion.set_value(domain::Status::failure(
+                actorError(sourceId_, "The source decode actor is closed.")));
+            return completion;
         }
         controlQueue_.push_back(std::move(job));
     }
     condition_.notify_one();
-    return completion.get();
+    return completion;
 }
 
 SourceDecodeSubmission SourceDecodeActor::submit(SourceDecodeRequest request) {
@@ -385,7 +391,11 @@ void SourceDecodeActor::run() noexcept { // NOLINT(bugprone-exception-escape): a
             if (control->kind == ControlKind::Open && control->cancellationRequested != nullptr) {
                 domain::Status status = decoder_->open(*control->cancellationRequested);
                 if (status && exactDecoder_ != nullptr) {
-                    status = exactDecoder_->open(*control->cancellationRequested);
+                    // The exact decoder opens the same file milliseconds after the main
+                    // decoder inside this control job; reuse the identity the main open just
+                    // verified instead of hashing head and tail a second time.
+                    status =
+                        exactDecoder_->openWithVerifiedIdentity(*control->cancellationRequested);
                 }
                 decoderNeedsReopen_ = false;
                 exactDecoderNeedsReopen_ = false;

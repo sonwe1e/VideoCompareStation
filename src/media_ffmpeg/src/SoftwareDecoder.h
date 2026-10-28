@@ -50,6 +50,12 @@ public:
     SoftwareDecoder& operator=(SoftwareDecoder&&) = delete;
 
     [[nodiscard]] domain::Status open(const std::atomic<bool>& cancellationRequested);
+    // Same open, but trusts a source-identity verification the caller performed moments ago
+    // for the same file (the owning actor verifies once per source open and shares the result
+    // with its exact decoder). The verify window widens only by the gap between the two opens
+    // inside one actor control job; the stream-geometry re-check inside open still applies.
+    [[nodiscard]] domain::Status
+    openWithVerifiedIdentity(const std::atomic<bool>& cancellationRequested);
     [[nodiscard]] domain::Result<DecodedFrame>
     decodeExact(domain::FrameId frameId, const std::atomic<bool>& cancellationRequested);
     // Continues from the decoder's cursor only while the target lies within the configured
@@ -72,6 +78,9 @@ public:
     void close() noexcept;
 
 private:
+    [[nodiscard]] domain::Status openInternal(const std::atomic<bool>& cancellationRequested,
+                                              bool verifySourceIdentity);
+
     [[nodiscard]] domain::Result<DecodedFrame>
     decodeInternal(domain::FrameId frameId,
                    const std::atomic<bool>& cancellationRequested,

@@ -75,6 +75,10 @@ public:
     SourceDecodeActor& operator=(SourceDecodeActor&&) = delete;
 
     [[nodiscard]] domain::Status open(const std::atomic<bool>& cancellationRequested);
+    // Posts the open control job and returns its completion; each actor runs the job on its
+    // own worker, so a provider can open several sources concurrently and join the futures.
+    [[nodiscard]] std::future<domain::Status>
+    openAsync(const std::atomic<bool>& cancellationRequested);
     [[nodiscard]] SourceDecodeSubmission submit(SourceDecodeRequest request);
     [[nodiscard]] application::PortSubmitResult submit(SourceDecodeRequest request,
                                                        SourceDecodeCompletion completion);
