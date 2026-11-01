@@ -12,10 +12,10 @@
 
 | ID | 状态 | 问题、下一步与退出依据 |
 |---|---|---|
-| DPI-01（原 10-24 P0） | 待修复、待实机复现 | `Main.qml` 默认 1440×900、最小 960×640，未按可用屏幕几何钳制。10-25 记录显示高 DPR 屏自然启动可能超出屏幕或客户区与 Qt 内容尺寸不一致，底部控件被裁。先重现自然启动与跨屏，再修窗口/DPI 适配；不同启动入口及 100–200% 缩放下底栏应可达。见下方取证更正 |
+| DPI-01（原 10-24 P0） | 源码已修，待实机验证 | 原实现 `Main.qml` 写死 1440×900、最小 960×640，未按可用屏幕几何钳制；可用区更小时窗口原点为负、底部控件被裁（10-25 取证更正见下）。2026-11-01 改为由 `LayoutMetrics.fitWindowToScreen(Screen.width, Screen.height, 1440, 900, 960, 640)` 派生尺寸与两个下限，`DesktopApplication` 的跨屏居中同时钳制在可用区内；纯函数用例 `tst_layout_metrics.qml::test_window_fit_keeps_the_frame_inside_the_screen`。**仍待**自然启动、不同启动入口、100–200% 缩放与多屏的真实环境复核；测试宿主的样式/DPI 截图不能替代 |
 | EX-01 / EX-02 / F03 | 部分实现，待测量 | 源缓存已去掉 48 MiB 固定上限；播放池 224 MiB，每源不超过预算份额和 24 帧。反向 seed/walk 仍在，新请求可抢占 seed；seek 尾迹保留尚未实现。按[缓存路线](../plans/cache-first-roadmap-2026-10-20.md)补单源长 GOP 的 seek 后首步、连续倒退、停止延迟与预算分账证据；不得把容量增加当作体验已达标 |
 | ENG-01（10-18 审计遗留） | 待修复 | `D3d11RenderChannel::publish` 把设备/无效帧组等原因折叠为 `RenderPublishResult::Closed`；`PlaybackCoordinator` 多处按解码失败上报。需保留失败原因并验证图形恢复后的错误清理，不能只改文案 |
-| ENG-02（10-18 审计遗留） | 待修复 | `GpuTransferActor` 设备换代后将 `accepting` 置 false，同一 actor 没有恢复接单路径。需明确重建或恢复协议，并验证换代、迟到结果和资源释放 |
+| ENG-02（10-18 审计遗留） | 待修复 | `GpuTransferActor` 设备换代后将 `accepting` 置 false（`graphics/GpuTransferActor.cpp` 初始化 :489，置 false :920/:933/:955/:1003/:1228，全文件无恢复路径），`submit` 在 :1152 直接返回 `Closed`；组合根 `src/app/ReviewRuntime.cpp:285-287` 只建一次 actor，`handleGraphicsReady` 只更新代次。叠加项：`FrameMailbox::shutdown` 在 `reportLoss` 中被永久调用（`FrameMailbox.cpp:187,198`，返回值在 `ReviewRuntime.cpp:118` 与 `GpuTransferActor.cpp:1008` 被丢弃），渲染侧遇 `Closed` 直接返回不绘制。需明确重建或恢复协议，并验证换代、迟到结果和资源释放；`GpuTransferActorTests.cpp:543-578` 目前断言的正是缺陷行为，必须同批改写 |
 | ENG-03（10-18 审计遗留） | 待复核 | `FileAssociationRegistration` 注册写入后的回滚记录分配、`WindowsPaths` 构造路径异常时的 `CoTaskMem` 释放曾有异常安全风险。按当前实现补故障注入后定性；不因普通成功路径测试而关闭 |
 | S03 / EX-05 | 部分实现，待修复/验证 | SAM2 仍在 `ImageEditController::smartSegmentRect` 调用链同步编码/推理，可能阻塞 GUI；模型失败后的缓存有效性也需覆盖。软 Alpha、小目标处理与空 mask 报错已实现，真实模型边缘质量待验。发布 ZIP 不含模型/运行库的当前策略见 D-019 |
 | V04（路线） | 工作区已实现，真实操作体验待验 | 2026-10-27 新增「与原图比较」：独立临时 RGBA8 快照，A 原图、B 含标注结果，同版复用、新版隔离；沿用任务数/工作集预算。像素、版本隔离、预算失败与主窗接线已有行为测试；见[实施方案](../plans/ux-continuity-2026-10-27.md)。快照不直接持久化问题记录，保留原图不可变 |
@@ -27,6 +27,24 @@
 | PERF-02 | 待决策/待证据 | 协调层播放期前视深度恒 1 帧，`PrefetchScheduler::duringForwardPlayback`（3 帧前视）是死代码。exactPrefetchWindow 注释记录过投机解码引发 DecoderReopen（kind 11）风暴的教训；加深须以 fps 阈值+队列空闲为前提并用 kind 11 计数验证，先补恢复期 trace 证据 |
 | PERF-03 | 待修复 | `postCritical` 满队（256）阻塞等待把唯一的节奏定时器线程与 ACK relay 变成队头阻塞点。改投递语义须保持 DeadlineElapsed 至少一次送达且不得与 postRealtime 单槽混用 |
 | PERF-04 | 待增强 | 测量工具缺口：通用 profile 无交错 A/B 入口（run-t5-gate-ab.ps1 范式未推广）、gate 结果不落机器可读 JSON、物理呈现层无采样（0.5% 掉帧门只覆盖应用 ACK 口径，与 V-01 相邻）、基础素材无哈希 contract、UI 响应门实际只有 play 一个样本。定位为门禁/发布证据增强，不进日常开发循环 |
+| ENG-04（2026-11-01 复核） | 待修复 | `D3d11RenderChannel::clear` 丢弃 `GpuTransferActor::clear` 的 bool（`graphics/D3d11RenderChannel.cpp:34-38`），而该值在 `!accepting`／关闭／scope 被拒时为 false；协调层 teardown 依赖 tombstone 已装上却无从得知。修复时让 `application::IRenderChannel::clear` 返回结果并由调用方记录 |
+| ACK-01（2026-11-01 复核） | 待修复 | `D3d11ComparisonRenderer::retryPendingAcknowledgement`（`graphics/D3d11ComparisonRenderer.cpp:2676-2691`）在重试仍遇队列满时不重设 pending、也不调 `notifyAckBackpressured`，`RenderAckRelay` 因此不再排重绘，`render()` 提前返回不再读邮箱，协调层要等到五秒未呈现超时。首次路径（:2731-2739）会通知，两处语义应一致 |
+
+### 2026-11-01 复核记录
+
+复核基线：目录重组提交 `315ac65` 之前的 `c0dba16` 工作树，加上当天新增的测试与文档。方法为只读
+源码核对（两名独立 agent 分工：仓库/打包结构审计与缺陷审查），未取得运行期硬件证据。
+
+- **迁移可核对**：77 个删除/新增对按 blob 哈希逐一比对为逐字节迁移；25 个 CMakeLists 的 177 条
+  `src/`/`include/` 路径全部存在，`src/*/src` 下无未被任何目标引用的 `.cpp`；迁移后的子目录都已进入
+  对应测试目标的 include 目录。
+- **打包链一致**：`Install.cmake`/`VerifyPackageStage.cmake` 引用的安装期文件、必需载荷、版本派生名
+  （`CompareStationShell-2.7.dll`、`CompareStation-2.7.0-windows-x64`）与 2.7.0 保持一致；本次只修了
+  `release.yml` 白名单与 `verify-release-package.ps1` 的示例版本，未重新生成 ZIP。
+- **仍未关闭**：ENG-01、ENG-02、PERF-01、PERF-03 与上一节新增的 ENG-04、ACK-01。它们的共同点是需要
+  反例测试（邮箱换代、失败原因通道、critical 队列满队、ACK 重武装），本轮没有硬件的运行期证据，不按
+  「已修」上报。
+- **DPI-01**：源码修复与纯函数用例已落地，实机自然启动与 100–200% 缩放仍未验证。
 
 2026-10-28 性能批次工作区实现（行为测试已过，实机硬件门禁待验，见 V-01/D-011）：节奏
 定时器改高分辨率等待定时器；播放遥测拆独立 `playbackTelemetryChanged`（约 4 Hz 节流、

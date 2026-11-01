@@ -81,3 +81,51 @@
 
 **下一步**：用户决策后，架构师定 A 的设计契约（驻留条件、超时、退出入口、设备丢失行为、
 测量协议适配），builder 实现，verifier 补行为测试 + 变异证据 + 驻留 RSS/二次打开实测。
+---
+
+## 2026-11-01 | 工程整理与缺陷复核 | 协调者 · 架构师 · 研究员 · 构建者
+
+**动作与证据**
+
+- 目录重组落库：`315ac65 refactor(repo): group ui and platform sources by feature`。提交前把 77 组
+  删除/新增对按 blob 哈希逐一核对为逐字节迁移（两个 `Module.cpp` 是同名交叉比对误报，内容正确），
+  `git status` 由「77 D + 14 未跟踪」变成 77 条 rename；提交前跑过增量 dev 构建，日志见
+  `out/verification/tidy-build-2026-11-01.log`。
+- 仓库根清理：删除 `fuzz.obj`、`probe.obj`、`symbolize.obj`、`vc140.pdb` 与 `Testing/`；`out/try-run`、
+  `out/package/verify-28168` 是过期包副本（全仓无路径引用）一并删除。`.gitignore` 原本已覆盖这些产物，
+  规则未改。
+- 团队记录补全：`TEAM.md` 迁入 `docs/engineering/team-charter.md` 并追加「本仓库落地约定」（记录位置
+  映射、证据状态、与构建/验收规则的衔接）；journal 头部死链改指该文件；`docs/README.md` 增加索引行。
+- 打包与发布：`release.yml` 的未签名发布白名单删去没有发布记录的 `v2.6.0`/`v2.6.1`；
+  `verify-release-package.ps1` 的示例版本改为 2.7.0；两个 adapter 的 CMake 源清单补入 10 个私有头，
+  让「CMakeLists 是源文件事实来源」这条自述成立。
+- 缺陷复核（只读，两名独立 agent 分行 + 主线核对）：ENG-01、ENG-02、PERF-01、PERF-03、DPI-01 在当前
+  源码**全部仍成立**，一条也不能关闭；新增 ENG-04（`clear` 丢返回值）与 ACK-01（重试未重武装背压）
+  写入台账。DPI-01 已改源码：`LayoutMetrics.fitWindowToScreen` 纯函数 + `Main.qml` 绑定 + 宿主居中
+  钳制，锁定用例在 `tst_layout_metrics.qml`，实机未验。
+
+**更正**
+
+- 本文件 10-31 首条记的「108 文件、+610/−34876」是当时扫描值；提交前 `git diff HEAD --shortstat`
+  为 109 files, +619/−34876（新增 `CheckNoPlaybackQImageTests.cmake` 与索引行）。
+
+**决策与理由**
+
+- 只做能验证的修复。DPI-01 用纯函数切出可测边界；ENG-01/ENG-02/PERF-01/PERF-03 牵动图形恢复协议与
+  调度语义，且 `GpuTransferActorTests.cpp:543-578` 现在锁定的正是 ENG-02 的缺陷行为，必须与修复同批
+  改写，因此不在本轮顺手动，避免留下未经验证的并发改动。
+- charter 采用重建而不是把 journal 链接改指别处：§5/§8 的引用需要一个真实存在的规则来源，「记录
+  位置映射」也能阻止团队再建第二份状态表。
+
+**坑**
+
+- 本机 DSH 沙箱对既有目录只读：`docs/`、`src/`、`out/`、`.git/` 的写入与删除都被拒；文件工具
+  （write/edit）可写而 `pwsh` 不可，构建、测试与提交需单独申请一次更宽的执行权限。这是本机状态，
+  不是仓库缺陷。
+
+**下一步**
+
+- ENG-02 + 邮箱换代恢复（同时改写 `RejectsWorkAfterDeviceLossTransition`）、ENG-01 的失败原因通道、
+  ACK-01 的背压重武装，各自配反例测试后单独提交。
+- DPI-01 的自然启动、跨屏与 100–200% 缩放实机复核。
+

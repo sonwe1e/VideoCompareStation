@@ -40,7 +40,7 @@ agent/IDE 的本地目录；它们不是产品功能目录。
 | 目录 | 职责与查找入口 |
 |---|---|
 | [`src/domain/`](../../src/domain/) | 不依赖 Qt、FFmpeg 或 Windows 的领域规则：素材描述、时间线、比较对、像素差、插帧协议等。 |
-| [`src/application/`](../../src/application/) | 用例、端口与协调：播放会话、完整帧组、对齐、指标、导出计划、观察记录。单一协调循环在 `src/PlaybackCoordinator.cpp`。 |
+| [`src/application/`](../../src/application/) | 用例、端口与协调：播放会话、完整帧组、对齐、指标、导出计划、观察记录。单一协调循环在 `src/application/src/PlaybackCoordinator.cpp`。 |
 | [`src/presentation_contract/`](../../src/presentation_contract/) | 纯 C++ 比较模式、枚举与能力描述；UI 和渲染器共享。 |
 | [`src/media_ffmpeg/`](../../src/media_ffmpeg/) | 媒体探测、视频解码/缓存/组帧、图片解码和颜色探测、分析与导出适配器。不要在此决定 UI 交互。 |
 | [`src/persistence_json/`](../../src/persistence_json/) | 设置、问题记录、插帧协议的 JSON 读写和事务发布。 |
