@@ -138,6 +138,38 @@ struct CommandIdentityHash final {
                                   std::move(technicalDetail));
 }
 
+// A publish rejected by the render channel is not automatically a decode failure. The device may
+// be transitioning (no device, or a stale generation) or gone for good (closed), and only an
+// unusable frame set points at the producer. Reporting the graphics cases under their own codes is
+// also what lets handleGraphicsReady clear them once a device is in service again.
+[[nodiscard]] domain::MediaError renderPublishError(const RenderPublishResult result,
+                                                    std::string technicalDetail) {
+    switch (result) {
+    case RenderPublishResult::DeviceUnavailable:
+        return domain::makeMediaError(domain::MediaErrorCode::kGraphicsUnavailable,
+                                      domain::MediaOperation::kFramePresentation,
+                                      std::nullopt,
+                                      true,
+                                      std::move(technicalDetail));
+    case RenderPublishResult::StaleContext:
+    case RenderPublishResult::Closed:
+        return domain::makeMediaError(domain::MediaErrorCode::kGraphicsDeviceLost,
+                                      domain::MediaOperation::kFramePresentation,
+                                      std::nullopt,
+                                      true,
+                                      std::move(technicalDetail));
+    case RenderPublishResult::InvalidSet:
+    case RenderPublishResult::Accepted:
+    case RenderPublishResult::Replaced:
+        break;
+    }
+    return domain::makeMediaError(domain::MediaErrorCode::kMediaDecodeFailed,
+                                  domain::MediaOperation::kMediaDecode,
+                                  std::nullopt,
+                                  false,
+                                  std::move(technicalDetail));
+}
+
 [[nodiscard]] bool matchesContext(const EventContext& context,
                                   const PlaybackRequestContext& expected) noexcept {
     const auto* const actual = std::get_if<PlaybackRequestContext>(&context);
@@ -1373,14 +1405,12 @@ private:
         if (!frame.presentationRequested || !frame.set.has_value() || frame.framePublished) {
             return;
         }
-        if (dependencies_.renderChannel->publish(frame.context, *frame.set) ==
-            RenderPublishResult::Closed) {
-            // The render channel closed before it could accept the frame set: a hard render
-            // failure, not a normal navigation — surface it via lastError.
-            failInteractiveStepRun(
-                coordinatorError(domain::MediaErrorCode::kMediaDecodeFailed,
-                                 "The render channel closed before it accepted the "
-                                 "interactive step frame set."));
+        const RenderPublishResult published =
+            dependencies_.renderChannel->publish(frame.context, *frame.set);
+        if (published != RenderPublishResult::Accepted &&
+            published != RenderPublishResult::Replaced) {
+            failInteractiveStepRun(renderPublishError(
+                published, "The interactive step frame set could not be published."));
             return;
         }
         frame.framePublished = true;
@@ -3937,10 +3967,12 @@ private:
         if (!frame.presentationRequested || !frame.set.has_value() || frame.framePublished) {
             return;
         }
-        if (dependencies_.renderChannel->publish(frame.context, *frame.set) ==
-            RenderPublishResult::Closed) {
-            stopPlayback(coordinatorError(domain::MediaErrorCode::kMediaDecodeFailed,
-                                          "The render channel closed during sequential playback."));
+        const RenderPublishResult published =
+            dependencies_.renderChannel->publish(frame.context, *frame.set);
+        if (published != RenderPublishResult::Accepted &&
+            published != RenderPublishResult::Replaced) {
+            stopPlayback(renderPublishError(published,
+                                            "Sequential playback could not publish a frame set."));
             return;
         }
         frame.framePublished = true;
@@ -4400,12 +4432,13 @@ private:
         if (pending_->framePublished) {
             return;
         }
-        if (dependencies_.renderChannel->publish(ready.context, ready.set) ==
-            RenderPublishResult::Closed) {
-            failPending(coordinatorError(
-                            domain::MediaErrorCode::kMediaDecodeFailed,
-                            "The render channel closed before it accepted the complete frame set."),
-                        CommandOutcome::Canceled);
+        const RenderPublishResult published =
+            dependencies_.renderChannel->publish(ready.context, ready.set);
+        if (published != RenderPublishResult::Accepted &&
+            published != RenderPublishResult::Replaced) {
+            failPending(
+                renderPublishError(published, "The exact frame set could not be published."),
+                CommandOutcome::Canceled);
             return;
         }
         pending_->set = ready.set;

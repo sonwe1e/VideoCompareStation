@@ -22,8 +22,11 @@ D3d11RenderChannel::publish(const application::FrameRequestContext& context,
     case GpuTransferSubmitResult::Replaced:
         return application::RenderPublishResult::Replaced;
     case GpuTransferSubmitResult::InvalidSet:
+        return application::RenderPublishResult::InvalidSet;
     case GpuTransferSubmitResult::StaleContext:
+        return application::RenderPublishResult::StaleContext;
     case GpuTransferSubmitResult::DeviceUnavailable:
+        return application::RenderPublishResult::DeviceUnavailable;
     case GpuTransferSubmitResult::Closed:
         return application::RenderPublishResult::Closed;
     }

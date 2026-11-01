@@ -403,6 +403,55 @@ TEST(GpuTransferActorTests, ClearTombstoneAndDeviceGenerationRejectLateOrStalePa
     EXPECT_TRUE(actor.shutdown(2s));
 }
 
+TEST(D3d11RenderChannelTests, KeepsTheActorReasonInsteadOfCollapsingEveryFailure) {
+    WarpRuntime runtime;
+    ASSERT_TRUE(runtime.start());
+    auto budget = std::make_shared<FrameBudget>(1U << 20U);
+    auto mailbox = std::make_shared<FrameMailbox>(domain::DeviceGeneration{1U});
+    GpuTransferActor actor{budget, runtime.broker, mailbox};
+    D3d11RenderChannel channel{std::shared_ptr<GpuTransferActor>{&actor, [](GpuTransferActor*) {}}};
+
+    const Nv12FrameLayout layout{
+        .width = 8U,
+        .height = 4U,
+        .yStride = 8U,
+        .uvStride = 8U,
+    };
+    const SourceBytes sourceA = makeSourceBytes(layout, 1U);
+    const SourceBytes sourceB = makeSourceBytes(layout, 2U);
+
+    std::optional<application::FrameSet> first = makeCpuSet(*budget, layout, sourceA, sourceB);
+    ASSERT_TRUE(first.has_value());
+    ASSERT_EQ(channel.publish(makeContext(), std::move(*first)),
+              application::RenderPublishResult::Accepted);
+    ASSERT_TRUE(actor.waitUntilIdle(2s));
+
+    // The device is gone. A publish that names the current generation has no device to reach, and a
+    // publish that still names the lost generation is stale; neither is a decode failure.
+    ASSERT_EQ(
+        runtime.broker->reportDeviceLost(domain::DeviceGeneration{1U}, DXGI_ERROR_DEVICE_REMOVED),
+        GraphicsDeviceBrokerResult::Lost);
+
+    std::optional<application::FrameSet> withoutDevice =
+        makeCpuSet(*budget, layout, sourceA, sourceB);
+    ASSERT_TRUE(withoutDevice.has_value());
+    EXPECT_EQ(channel.publish(makeContext(2U, 2U, 2U), std::move(*withoutDevice)),
+              application::RenderPublishResult::DeviceUnavailable);
+
+    std::optional<application::FrameSet> stale = makeCpuSet(*budget, layout, sourceA, sourceB);
+    ASSERT_TRUE(stale.has_value());
+    EXPECT_EQ(channel.publish(makeContext(3U, 1U, 2U), std::move(*stale)),
+              application::RenderPublishResult::StaleContext);
+
+    // A channel with no actor at all is the one case that stays closed for good.
+    D3d11RenderChannel closedChannel{nullptr};
+    std::optional<application::FrameSet> orphaned = makeCpuSet(*budget, layout, sourceA, sourceB);
+    ASSERT_TRUE(orphaned.has_value());
+    EXPECT_EQ(closedChannel.publish(makeContext(), std::move(*orphaned)),
+              application::RenderPublishResult::Closed);
+    EXPECT_TRUE(actor.shutdown(2s));
+}
+
 TEST(GpuTransferActorTests, FinalRenderReleaseRetiresComAndBudgetOnTheActorWorker) {
     WarpRuntime runtime;
     ASSERT_TRUE(runtime.start());

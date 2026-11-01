@@ -603,10 +603,20 @@ private:
 
 class FakeRenderChannel final : public IRenderChannel {
 public:
+    // The next publish answers with this result instead of accepting the frame set, so a test can
+    // drive the coordinator's failure reporting without a device.
+    void setPublishResult(const RenderPublishResult result) {
+        std::scoped_lock lock(mutex_);
+        publishResult_ = result;
+    }
+
     [[nodiscard]] RenderPublishResult publish(const FrameRequestContext& context,
                                               FrameSet set) noexcept override {
         {
             std::scoped_lock lock(mutex_);
+            if (publishResult_ != RenderPublishResult::Accepted) {
+                return publishResult_;
+            }
             published_.push_back(PublishedSet{
                 .context = context,
                 .set = std::move(set),
@@ -693,6 +703,7 @@ private:
     std::condition_variable condition_;
     std::vector<PublishedSet> published_;
     std::vector<PlaybackRequestContext> clearContexts_;
+    RenderPublishResult publishResult_ = RenderPublishResult::Accepted;
 };
 
 class IdentityOnlyRenderChannel final : public IRenderChannel {
@@ -6492,6 +6503,62 @@ TEST(PlaybackCoordinatorTests, ProviderFailureSurfacesStepStreamError) {
     const std::vector<CommandTerminal> terminals = waitForTerminals(coordinator, 1U);
     ASSERT_EQ(terminals.size(), 1U);
     EXPECT_EQ(terminals.front().outcome, CommandOutcome::Failed);
+}
+
+namespace {
+
+// Drives one interactive step whose frame set the render channel refuses. The refusal has to reach
+// the snapshot with the code its reason maps to: a transitioning device is a graphics failure, and
+// only an unusable frame set is a decode failure.
+void expectStepPublishFailureReportedAs(const RenderPublishResult publishResult,
+                                        const domain::MediaErrorCode expectedCode) {
+    const auto provider = std::make_shared<FakeFrameProvider>();
+    const auto render = std::make_shared<FakeRenderChannel>();
+    const auto coordinator = makeCoordinator(provider, render);
+    ASSERT_NE(coordinator, nullptr);
+    openReady(coordinator, provider, render);
+
+    render->setPublishResult(publishResult);
+    ASSERT_EQ(coordinator->submit(StepFramesCommand{
+                  .context = commandContext(coordinator, domain::CommandId{2}),
+                  .delta = 1,
+              }),
+              PortSubmitResult::Accepted);
+    ASSERT_TRUE(provider->waitForFrameRequestCount(2U));
+    const std::optional<FrameRequest> current = provider->frameRequest(1U);
+    ASSERT_TRUE(current.has_value());
+    ASSERT_TRUE(provider->postFrameReady(*current, makeFrameSet(current->frameId)));
+
+    ASSERT_TRUE(waitUntil([&coordinator] {
+        const std::shared_ptr<const SessionSnapshot> snapshot = coordinator->snapshot();
+        return snapshot->playbackState == domain::PlaybackState::kPaused &&
+               snapshot->lastError.has_value();
+    }));
+    const std::shared_ptr<const SessionSnapshot> snapshot = coordinator->snapshot();
+    ASSERT_TRUE(snapshot->lastError.has_value());
+    EXPECT_EQ(snapshot->lastError->code, expectedCode);
+    EXPECT_EQ(snapshot->lastError->technicalDetail,
+              "The interactive step frame set could not be published.");
+
+    const std::vector<CommandTerminal> terminals = waitForTerminals(coordinator, 1U);
+    ASSERT_EQ(terminals.size(), 1U);
+    EXPECT_EQ(terminals.front().outcome, CommandOutcome::Failed);
+}
+
+} // namespace
+
+// ENG-01: the device being unavailable is a graphics failure the next graphicsReady clears, not a
+// decode failure the user would see for the rest of the session.
+TEST(PlaybackCoordinatorTests, DeviceUnavailablePublishKeepsItsReason) {
+    expectStepPublishFailureReportedAs(RenderPublishResult::DeviceUnavailable,
+                                       domain::MediaErrorCode::kGraphicsUnavailable);
+}
+
+// ENG-01: a frame set that names an older device generation is a stale graphics context, so it is
+// reported as a lost device rather than as a decode failure.
+TEST(PlaybackCoordinatorTests, StalePublishContextIsReportedAsDeviceLost) {
+    expectStepPublishFailureReportedAs(RenderPublishResult::StaleContext,
+                                       domain::MediaErrorCode::kGraphicsDeviceLost);
 }
 
 // Plan M1.2: superseding the stream with a backward step (Previous) is a normal navigation cancel —

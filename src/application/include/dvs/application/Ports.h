@@ -28,10 +28,21 @@ enum class FrameRequestPriority {
     Prefetch,
 };
 
+// Why a frame set was, or was not, handed to the render channel. The failure reasons stay
+// apart because they are not the same failure: a device that is transitioning (no device, or a
+// stale generation) recovers, a closed channel does not, and an unusable frame set points at the
+// producer. Collapsing them into Closed reported a graphics transition as a decode failure.
 enum class RenderPublishResult {
     Accepted,
     Replaced,
+    // The channel or its owner is shut down; nothing is published through it again.
     Closed,
+    // No graphics device is in service right now; the same channel publishes once one returns.
+    DeviceUnavailable,
+    // The request names a device generation or playback scope the channel no longer serves.
+    StaleContext,
+    // The channel could not inspect the frame set at all, which points at the producer.
+    InvalidSet,
 };
 
 struct MediaProbeRequest final {
