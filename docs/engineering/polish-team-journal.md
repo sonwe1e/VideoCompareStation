@@ -168,3 +168,21 @@
 - 真实 TDR／驱动重置下 Qt 场景图是否重新交出设备——这是本路径能否被触发的上游条件，未验证。
 - ENG-01 仍未修：恢复前的 publish 失败仍按 `kMediaDecodeFailed` 上报，`handleGraphicsReady` 不会清它。
 
+---
+
+## 2026-11-01 | ENG-01 失败原因通道 | 构建者
+
+**动作**：`RenderPublishResult` 增加 `DeviceUnavailable`／`StaleContext`／`InvalidSet`，通道逐项映射
+`GpuTransferSubmitResult`；协调层三处 publish 失败统一走 `renderPublishError`，设备类原因映射为
+`kGraphicsUnavailable`／`kGraphicsDeviceLost`（操作标 `kFramePresentation`），只有帧组不可用仍是
+`kMediaDecodeFailed`。图形类错误会被 `handleGraphicsReady` 清除，恢复后不再常驻。
+
+**证据**：`application.PlaybackCoordinatorTests` 102 例 + `platform.` 187 例共 289 例全过
+（`out/verification/eng01-tests-2026-11-01.log`）；`format-check` 通过。新增
+`DeviceUnavailablePublishKeepsItsReason`、`StalePublishContextIsReportedAsDeviceLost`（用可配置
+publish 结果的 FakeRenderChannel 驱动一次交互步进失败）与
+`platform.D3d11RenderChannelTests.KeepsTheActorReasonInsteadOfCollapsingEveryFailure`。
+
+**没做**：跨代 publish 不再被误报，但仍按一次失败终止本轮播放；自动重试或续播要另立判据，否则
+容易变成「丢帧掩盖问题」。真机 TDR 仍未验，ENG-01 与 ENG-02 都停在「源码已修，待实机验证」。
+
