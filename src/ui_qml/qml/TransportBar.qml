@@ -31,11 +31,11 @@ Item {
     // strip and - until a protocol is loaded - the protocol import row. Pure view state: the
     // host never needs to know the layer is open.
     property bool transportExpanded: false
-    // Vertical centre of the first transport row inside the control, for hosts that overlay
-    // their info line on the row's free right side (PlayerOsc compact tier). The playback
-    // layer is the transport column's first line, so the centre row's y inside the layer is
-    // the whole row's centre in control coordinates.
-    readonly property real mainRowCenterY: buttons.y + buttons.height / 2
+    // The compact range row often has more room than the playback controls. Publish its
+    // occupied edge and centre so the host can place readouts only in genuinely free space.
+    readonly property real rangeRowRight: rangeRightCell.x + rangeRightCell.width
+    readonly property real rangeRowCenterY: rangeLayer.y + rangeLayer.height / 2
+    readonly property bool rangeRowWrapped: rangeLayer.compactWrap
     // I8: the second-step buttons follow the active shortcut preset so their tooltips never
     // promise a different jump than ReviewShortcuts performs. 0 = frame-review preset
     // (Ctrl+←/→ steps one second), 1 = player preset (Ctrl+←/→ jumps 30 seconds). The host
@@ -341,16 +341,17 @@ Item {
         // ── Layer 2: playback operations ─────────────────────────────────────────────
         // Three columns (plan §8): current playback rate left, the navigation buttons centred
         // on the play key, long-press walk rate plus the continuity switch right. The columns
-        // are x-positioned Rows inside one full-width layer item, so the same controls flow as
-        // one left-aligned line in the compact tier (UX-13 S1 keeps that tier's single row so
-        // the host's info overlay keeps its free right side).
+        // are x-positioned Rows inside one full-width layer item. The compact tier flows them
+        // left-to-right, moving the right group to another line only when it would overflow.
         Item {
             id: playbackLayer
 
             objectName: "transportPlaybackLayer"
+            readonly property real firstRowHeight: Math.max(playbackLeftCell.implicitHeight, buttons.implicitHeight, playbackRightCell.implicitHeight)
+            readonly property bool compactWrap: control.compactChrome && playbackLeftCell.x + playbackLeftCell.width + playbackRightCell.spacing + playbackRightCell.width > width
             width: parent.width
             implicitWidth: Math.max(playbackLeftCell.implicitWidth, buttons.implicitWidth, playbackRightCell.implicitWidth)
-            implicitHeight: Math.max(playbackLeftCell.implicitHeight, buttons.implicitHeight, playbackRightCell.implicitHeight)
+            implicitHeight: firstRowHeight + (compactWrap ? Theme.spaceMicro + playbackRightCell.implicitHeight : 0)
             height: implicitHeight
 
             Row {
@@ -360,7 +361,7 @@ Item {
                 // Compact tier flows after the centred buttons (the pre-redesign single row);
                 // the big window pins the column to the layer's left edge.
                 x: control.compactChrome ? buttons.x + buttons.width + spacing : 0
-                anchors.verticalCenter: parent.verticalCenter
+                y: (parent.firstRowHeight - height) / 2
 
                 ToolbarCombo {
                     id: playbackRateCombo
@@ -420,7 +421,7 @@ Item {
                 id: buttons
 
                 spacing: control.compact ? 4 : 6
-                anchors.verticalCenter: parent.verticalCenter
+                y: (parent.firstRowHeight - height) / 2
                 // The button row is symmetric around the play key, so a centred row centres the
                 // play key itself. The clamp keeps the row clear of both side columns when the
                 // window is too narrow for an exact centring (at the 960 px floor the walk-rate
@@ -635,10 +636,10 @@ Item {
                 id: playbackRightCell
 
                 spacing: control.compact ? 4 : 6
-                // Compact tier continues the single left-aligned line; the big window pins the
-                // column to the layer's right edge.
-                x: control.compactChrome ? playbackLeftCell.x + playbackLeftCell.width + spacing : parent.width - width
-                anchors.verticalCenter: parent.verticalCenter
+                // Compact tier follows the left group or wraps below it; the big window pins
+                // this column to the layer's right edge.
+                x: control.compactChrome ? (parent.compactWrap ? Theme.spaceMain * 2 : playbackLeftCell.x + playbackLeftCell.width + spacing) : parent.width - width
+                y: parent.compactWrap ? parent.firstRowHeight + Theme.spaceMicro : (parent.firstRowHeight - height) / 2
 
                 // E04 walk-rate selector for the long-press step walk. The labels carry the 长按逐帧
                 // prefix because a bare "1×" beside the playback-rate combo would be ambiguous, and
@@ -728,19 +729,21 @@ Item {
             id: rangeLayer
 
             objectName: "transportRangeRow"
+            readonly property real firstRowHeight: Math.max(rangeLeftCell.implicitHeight, rangeCenterCell.implicitHeight, rangeRightCell.implicitHeight)
+            readonly property bool compactWrap: control.compactChrome && rangeLeftCell.width + rangeCenterCell.spacing + rangeCenterCell.width + rangeRightCell.spacing + rangeRightCell.width > width
             visible: control.rangeControlsVisible
             // Collapse this layer for hosts without range controls.
             height: visible ? implicitHeight : 0
             width: parent.width
             implicitWidth: Math.max(rangeLeftCell.implicitWidth, rangeCenterCell.implicitWidth, rangeRightCell.implicitWidth)
-            implicitHeight: Math.max(rangeLeftCell.implicitHeight, rangeCenterCell.implicitHeight, rangeRightCell.implicitHeight)
+            implicitHeight: firstRowHeight + (compactWrap ? Theme.spaceMicro + Math.max(rangeCenterCell.implicitHeight, rangeRightCell.implicitHeight) : 0)
 
             Row {
                 id: rangeLeftCell
 
                 spacing: control.compact ? 4 : 6
                 x: 0
-                anchors.verticalCenter: parent.verticalCenter
+                y: (parent.firstRowHeight - height) / 2
 
                 RangeChip {
                     objectName: "transportMarkInButton"
@@ -834,8 +837,8 @@ Item {
                 id: rangeCenterCell
 
                 spacing: control.compact ? 4 : 6
-                x: control.compactChrome ? rangeLeftCell.x + rangeLeftCell.width + spacing : (parent.width - width) / 2
-                anchors.verticalCenter: parent.verticalCenter
+                x: control.compactChrome ? (parent.compactWrap ? 0 : rangeLeftCell.x + rangeLeftCell.width + spacing) : (parent.width - width) / 2
+                y: parent.compactWrap ? parent.firstRowHeight + Theme.spaceMicro : (parent.firstRowHeight - height) / 2
 
                 RangeChip {
                     objectName: "transportPlayRangeButton"
@@ -875,7 +878,7 @@ Item {
 
                 spacing: control.compact ? 4 : 6
                 x: control.compactChrome ? rangeCenterCell.x + rangeCenterCell.width + spacing : parent.width - width
-                anchors.verticalCenter: parent.verticalCenter
+                y: parent.compactWrap ? parent.firstRowHeight + Theme.spaceMicro : (parent.firstRowHeight - height) / 2
 
                 RangeChip {
                     objectName: "transportClearRangeButton"

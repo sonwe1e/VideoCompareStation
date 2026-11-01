@@ -1,7 +1,10 @@
 # Agent 快速定位指南
 
-更新日期：2026-10-25。用途：先定位产品问题，再进入最小相关代码和验证入口。
+更新日期：2026-10-30。用途：先定位产品问题，再进入最小相关代码和验证入口。
 这不是完整架构说明，也不是发布验收记录。
+
+初次进入仓库、按功能寻找目录或新增代码时，先看[仓库与功能地图](architecture/repository-map.md)；
+下面的表按具体现象进一步定位调用链和验收入口。
 
 ## 开始工作前的五分钟
 
@@ -30,12 +33,12 @@
 |---|---|---|
 | 卡顿、倍速不准、播放变慢、跳帧统计 | `src/application/src/PlaybackCoordinator.cpp`：`playbackTargetAt`、呈现 ACK 提交；`src/media_ffmpeg/src/SoftwareDecoder.cpp`：`decodeSequential` 步长上限（陈旧游标全量追赶是 2026-09-25 修复的连续逐帧停顿根因）；trace 事件见 `docs/engineering/trace-schema.md`（kind 2/23/24 分拣提交→解码→呈现各跳） | `tests/unit/application/PlaybackCoordinatorTests.cpp`；`tests/component/media/SoftwareDecoderTests.cpp`；`tests/component/ui/qml/tst_player_osc.qml`；真实硬件门禁 |
 | 点时间轴、快速逐帧、倒退、区间循环 | `ReviewActions.qml`、`TimelineTracks.qml` → `PlaybackCoordinator.cpp` → `src/media_ffmpeg/src/SourceDecodeActor.cpp`、`SoftwareDecoder.cpp` | `PlaybackCoordinatorTests.cpp`、`SourceDecodeActorTests.cpp`；[反向 GOP ADR](adr/0003-reverse-gop-window.md) |
-| 长按走带（单击/长按/松手即停、速率 0.5×/1×/2×、停稳与过期追跑） | `src/ui_qml/src/JogStateMachine.cpp`、`JogKeyHandler.cpp`；`ReviewController.cpp`：`jogPress`/`jogRelease`/`setJogRate`/`framePending`；`TransportBar.qml`：`jogRateCombo` | `tests/component/ui/JogStateMachineTests.cpp`、`JogKeyHandlerTests.cpp`、`ReviewControllerTests.cpp`（jog 系列）、`qml/tst_player_osc.qml`、`qml/tst_review_actions.qml`、`MainQmlContractTests.cpp`（`JogRateSelectorMirrorsAndReachesTheController`）；真机数字走 `tools/testing/run-performance-gate.ps1` 的 JOG 结构门与 `DVS_BENCHMARK_SUMMARY`（`--ui-performance` 报告的 `jog_*` 键） |
+| 长按走带（单击/长按/松手即停、速率 0.5×/1×/2×、停稳与过期追跑） | `src/ui_qml/src/playback/JogStateMachine.cpp`、`JogKeyHandler.cpp`；`ReviewController.cpp`：`jogPress`/`jogRelease`/`setJogRate`/`framePending`；`TransportBar.qml`：`jogRateCombo` | `tests/component/ui/JogStateMachineTests.cpp`、`JogKeyHandlerTests.cpp`、`ReviewControllerTests.cpp`（jog 系列）、`qml/tst_player_osc.qml`、`qml/tst_review_actions.qml`、`MainQmlContractTests.cpp`（`JogRateSelectorMirrorsAndReachesTheController`）；真机数字走 `tools/testing/run-performance-gate.ps1` 的 JOG 结构门与 `DVS_BENCHMARK_SUMMARY`（`--ui-performance` 报告的 `jog_*` 键） |
 | 鼠标在控制条（进度条）上，控制条自己淡出 | `PlayerOsc.qml`：`pointerInsidePanel`、`reveal`、`hideTimer`、`onPointerInsidePanelChanged`；`TimelineTracks.qml`：`pointerInside`；`Main.qml`：`immersiveOscTimer` | `tests/component/ui/qml/tst_player_osc.qml`；台账 `U-03` |
 | 悬停预览不显示或帧身份错误 | `PreviewThumbnailService` → `PreviewThumbnailController`；`TimelineThumbnailCache.qml`、`TimelineThumbnailPopup.qml` | `PreviewThumbnailServiceTests`、`PreviewThumbnailControllerTests`、`tst_timeline_thumbnail_cache.qml`；台账 `V-06` |
 | GT／候选切换后比较错对象 | `src/domain/src/ComparisonSelection.cpp`、`ComparisonValidator.cpp`；`PlaybackCoordinator.cpp`；`CompareModeBar.qml` | `ComparisonSelectionTests.cpp`、`PlaybackCoordinatorTests.cpp`；[比较语义 ADR](adr/0004-timeline-pair-continuity.md) |
 | 不同帧率或 VFR 看起来不同步 | `src/media_ffmpeg/src/MultiSourceFrameProvider.cpp`；`src/application/src/Alignment.cpp`、`ComparisonExactness.cpp`；`ComparisonViewport.qml` | `ComparisonExactnessTests.cpp`、`AlignmentTests.cpp`、`MultiSourceFrameProviderTests.cpp`；[对齐说明](alignment.md) |
-| 滚轮缩放、拖动、框选、分割线不对 | `ComparisonViewport.qml` → `ComparisonSurface.cpp` → `src/platform_windows/src/D3d11ComparisonRenderer.cpp` | `tests/component/ui/ComparisonSurfaceTests.cpp`、`MainQmlContractTests.cpp`、`qml/tst_wipe_handle.qml` |
+| 滚轮缩放、拖动、框选、分割线不对 | `ComparisonViewport.qml` → `ComparisonSurface.cpp` → `src/platform_windows/src/graphics/D3d11ComparisonRenderer.cpp` | `tests/component/ui/ComparisonSurfaceTests.cpp`、`MainQmlContractTests.cpp`、`qml/tst_wipe_handle.qml` |
 | 热力图、高亮、阈值或颜色结果不可信 | `TabbedInspector.qml`、`src/presentation_contract/include/dvs/presentation/ComparisonContract.h`；`D3d11ComparisonRenderer.cpp`；`SoftwareDecoder.cpp` | `tests/unit/presentation_contract/ComparisonContractTests.cpp`；平台像素回读测试；台账 `V-04`、`V-05` |
 | 从文件夹选视频、上一项／下一项、点击后播放 | `VideoFolderModel.cpp` → `ReviewShellController::openVideo` → `ReviewController`；`VideoFolderSidebar.qml`、`ReviewInputDialogs.qml`、`Main.qml`；`DesktopApplication.cpp` 调用 `VideoFolderModel::attachPlayback` 接线 | `VideoFolderModelTests.cpp`、`MainQmlContractTests` 的 `VideoFolder*`／`NewerNonBrowser*`；[范围与证据](engineering/video-folder-browser.md) |
 | 视频格式打不开／软解回退 | `src/media_ffmpeg/src/MediaProbe.cpp` → `SoftwareDecoder.cpp`；`vcpkg.json` | `tests/component/media/MediaProbeTests.cpp`、`SoftwareDecoderTests.cpp`；[支持范围](media-support.md) |
@@ -46,11 +49,11 @@
 | 对调 A/B、只替换一张图 | `ImageReviewController::swapSides`、`requestReplacePrimary/Secondary`；`ImageWorkspace.qml`、`Main.qml` 换图对话框 | `ImageReviewControllerTests` 的 `SwapSides*`/`Replace*`；台账 `U-02` |
 | 视频阈值／策略复用、分析缓存和异步采样 | `PixelDifference.cpp`、`ComparisonMetrics.cpp`、`PairMetricsService.cpp`、`PairMetricsController.cpp` | `PixelDifferenceTests.cpp`、`ComparisonMetricsTests.cpp`、`PairMetricsControllerTests.cpp`、`PairMetricsThresholdReuseTests.cpp`；[复用协议与反例](engineering/pair-metrics-threshold-reuse.md) |
 | MAE／PSNR、统计和误差图含义 | `src/domain/src/PixelDifference.cpp`；`src/application/include/dvs/application/ComparisonMetrics.h`；图片另查 `ImagePairLoader.cpp`（`DifferenceOptions::gain` 只改渲染，统计为原始 8-bit 差值；工作集见 `estimatePairWorkingSet`） | `PixelDifferenceTests.cpp`、`ComparisonMetricsTests.cpp`、`ImageReviewControllerTests.cpp`；[指标 ADR](adr/0005-pixel-difference-metrics.md) |
-| 记录问题、截图、恢复观察位置 | `src/ui_qml/src/IssueLogController.cpp` → `src/application/include/dvs/application/IssueRecord.h` → `src/persistence_json/src/IssueRecordRepository.cpp` | `IssueLogControllerTests.cpp`、`IssueRecordTests.cpp`、`IssueRecordRepositoryTests.cpp` |
+| 记录问题、截图、恢复观察位置 | `src/ui_qml/src/outputs/IssueLogController.cpp` → `src/application/include/dvs/application/IssueRecord.h` → `src/persistence_json/src/IssueRecordRepository.cpp` | `IssueLogControllerTests.cpp`、`IssueRecordTests.cpp`、`IssueRecordRepositoryTests.cpp` |
 | 把入点到出点导出成片段（无损流拷贝裁剪）、导出失败或起点不在入点 | `TransportBar.qml`／`PlayerOsc.qml` 的「导出」芯片 → `ClipExportDialog.qml` → `ClipExportController.cpp`：`exportRange`（源取 `ValidatedComparisonSet` 的规范源）→ `src/application/src/ClipExportPlanner.cpp`（计划与关键帧对齐）→ `src/media_ffmpeg/src/ClipExportWriter.cpp`（按包复制、临时文件改名） | `ui.MainQmlContractTests.ExportRangeButtonStartsAClipExport`、`tests/component/media/ClipExportWriterTests.cpp`、`tests/unit/application/ClipExportPlannerTests.cpp`；产品目标 §6 的输出边界 |
 | 不知道功能在哪里、模式太多 | `EmptyReviewView.qml`、`ApplicationMenuBar.qml`、`CompareModeBar.qml`、`TabbedInspector.qml`、`ImageWorkspace.qml` | 对应 QML 测试与 `MainQmlContractTests.cpp`；按产品工作流做人工验收 |
 
-表中无前缀的 UI 文件位于 `src/ui_qml/qml`、`src/ui_qml/src` 或 `src/ui_qml/include/dvs/ui`；
+表中无前缀的 UI 文件位于 `src/ui_qml/qml`、`src/ui_qml/src` 的功能子目录或 `src/ui_qml/include/dvs/ui`；
 应用头文件位于 `src/application/include/dvs/application`。用 `rg --files src tests` 查找同名文件。
 
 ## 当前接线与易误判点

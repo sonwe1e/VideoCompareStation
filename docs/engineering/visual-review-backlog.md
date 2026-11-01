@@ -63,7 +63,7 @@ worker 降 BELOW_NORMAL；软解 sws 色彩配置按需重设；悬停缩略图�
 | V01 / V02 / V03（路线） | 同 ROI 局部窗、全画布直看、双参考差异均已有；D3D11VA、DPR、旋转/SAR、三源持续切对仍待实机走查。盲比随机顺序等扩展未做 | `ComparisonSurface`、`D3d11ComparisonRenderer`、`MainQmlContractTests` |
 | TASK-01 / D-022 / D-024 | 图片/视频任务标签已随 `9640b52` 合入，`377cb2a` 补同名消歧。待验视频切回时延/稳定性、后台任务资源、倍率恢复和标签窄窗/DPI。图片仍只有一个编辑会话，跨重启恢复明确不做；批量多开、关闭其他/全部不属于现有能力 | [视频标签契约](../plans/video-task-tabs-design.md)、`ImageTaskHostTests`、`VideoTaskHostTests`、`MainQmlContractTests` |
 | FLOW1 / FLOW2 / E01 / E03 | 图片记录恢复、来源/观察信息交接和精确样本 UI 已接通；真实素材的打开→记录→重开→恢复→导出独立读回仍需当前候选证据；便携问题包与批处理是后续扩展 | `IssueLogController`、`SampleExportController`、`SampleExportWriter`；[记录方法](reproducible-baseline.md) |
-| UX-13 / D-020 | 窄窗重排已实现；详情浮层临时遮挡、紧凑状态点辨识与少量 fontMicro 可读性待用户复核。旧 ≤120 px 走带目标未达（10-22 为139），不能自动放宽为139；10-24 改版后需重新测量。单/双源 compact 添加按钮边界测试待补 | [窄窗约定](../plans/ux13-narrow-window-redesign.md)、[工作区布局](../plans/ui-workspace-redesign-2026-10-24.md) |
+| UX-13 / D-020 | 窄窗重排已实现；2026-10-28 工作区改动按可用宽度恢复图片打开／差异入口，并避免视频时间码与播放按钮重叠，具体验证见[工作区布局](../plans/ui-workspace-redesign-2026-10-24.md#13-2026-10-28-显示与交互精修)。详情浮层临时遮挡、紧凑状态点辨识与少量 fontMicro 可读性仍待用户复核。旧 ≤120 px 走带目标未达（10-22 为139），不能自动放宽为139；单/双源 compact 添加按钮边界仍待补 | [窄窗约定](../plans/ux13-narrow-window-redesign.md)、[工作区布局](../plans/ui-workspace-redesign-2026-10-24.md) |
 | A4b / S-01 / S-02 | 二次启动 PID 握手和前台授权已有；Explorer 双击唤起、旧安装路径迁移与用户机器重复菜单需真实桌面复验。测试进程缺前台授权时的结果不能证明产品成功或失败 | `StartupRequestBroker`、`FileAssociationRegistration`、shell smoke |
 | RELEASE | 干净 Windows 解压包、应用本地运行库、物理显示、D3D11VA 长播及适用覆盖率等门禁需绑定具体发布候选；过去的例外不会自动豁免新版本 | [发布记录](../releases/)、[打包政策](../building.md#zip-只打包必要运行时)、[真实走查](real-environment-verification.md) |
 

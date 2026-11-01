@@ -33,7 +33,7 @@ Constraints discovered while validating on the pinned Qt 6.11.1 (vcpkg):
 ## Decision
 
 1. **Single runtime registration entry.** `dvs::ui::registerDvsUiTypes()`
-   (`src/ui_qml/src/QmlTypeRegistration.cpp`, called by `DesktopApplication` and every C++
+   (`src/ui_qml/src/workspace/QmlTypeRegistration.cpp`, called by `DesktopApplication` and every C++
    harness) is the only place `Dvs.Ui` is registered. `ComparisonSurface`, `JogKeyHandler` and
    `HoldKeyHandler` stay creatable; `ImageReviewController` and `ColorClipboardController` are
    registered as uncreatable — the composition root owns the instances.
@@ -53,7 +53,7 @@ Constraints discovered while validating on the pinned Qt 6.11.1 (vcpkg):
    composition root passes the real adapters as the root's initial properties. A missing
    property fails creation ("Required property … was not initialized"); an explicit null
    or a wrong-typed object only warns and degrades the property to null, so
-   `verifyMainWindowPilotServices` (src/ui_qml/src/MainWindowDependencies.cpp) re-checks
+   `verifyMainWindowPilotServices` (src/ui_qml/src/workspace/MainWindowDependencies.cpp) re-checks
    identity before `DesktopApplication` shows the window. Tests build the same map through
    one helper (`pilotWindowProperties` / `defaultPilotWindowProperties` in the contract
    suite), and `MainWindowRequiredPilotServicesAreEnforced` pins the five creation

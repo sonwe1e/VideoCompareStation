@@ -108,11 +108,10 @@ Item {
     // controller's laneEnabled toggle; the compact tier keeps the lane off the stack entirely -
     // the inspector stays the metrics surface, and no sampling is added or removed by this gate.
     readonly property bool metricsLaneVisible: control.metrics !== null && control.metrics.available && !control.compactChrome && control.metrics.laneEnabled
-    // Compact-tier overlay: the info line leaves the vertical stack and rides the transport
-    // main row's free right side (the row is left-aligned in this tier), so timecode, frame
-    // counter and the UX-02 quiet sentence stay on screen without spending a layout line.
-    // Width-guarded so the overlay never crowds the buttons on a narrower window.
-    readonly property bool readoutOverlay: control.compactChrome && control.width >= 920
+    // Compact readouts share the range row only when its actual remaining width can hold
+    // them. Expanded range actions or longer numbers can move the readout to its own line.
+    readonly property real compactReadoutWidth: compactTimecode.implicitWidth + compactFrameCounter.implicitWidth + Theme.spaceMain + (statusQuiet.visible ? Theme.spaceMain + statusQuiet.implicitWidth : 0)
+    readonly property bool readoutOverlay: control.compactChrome && !transport.rangeRowWrapped && panel.width >= transport.rangeRowRight + Theme.spaceMain + compactReadoutWidth + Theme.spaceMain
     // UX-13 S1: forwards the compact range-row toggle so hosts and the QML suite reach the
     // summary chip's state without digging into the transport bar.
     property alias rangeExpandedCompact: transport.rangeExpandedCompact
@@ -139,9 +138,8 @@ Item {
     objectName: "transport"
     // The trailing gap is the main step, so the transport sits under the timeline the same way
     // it does inside the panel instead of hugging the panel edge.
-    // Compact tier: the info line overlays the transport row and the metrics lane stays
-    // hidden, so the stack is only the (failure-only) warning line above the timeline; both
-    // gaps drop to the micro step. The 13 px clearance still guards the playhead thumb.
+    // Compact tier keeps the metrics lane hidden. The info line joins the range row when
+    // it fits, otherwise it stays above the timeline; the 13 px clearance guards the thumb.
     height: control.compactChrome ? Theme.spaceMicro + (statusText.visible ? statusText.height + Theme.spaceMicro : 0) + (!control.readoutOverlay ? readout.height + Theme.spaceMicro : 0) + tracks.height + 13 + transport.implicitHeight + Theme.spaceMicro : Math.max(0, tracks.y) + tracks.height + 13 + transport.implicitHeight + Theme.spaceMain
     visible: controllerState !== 2
 
@@ -313,7 +311,8 @@ Item {
         Row {
             id: readout
 
-            // Compact tier: the row overlays the transport main row's free right side
+            objectName: "oscReadout"
+            // Compact tier: the row overlays the range row's free right side
             // (right-aligned through a computed left margin, so no anchor line switch is
             // needed) and paints above the transport; z keeps it there. The big window keeps
             // the stacked info line under the panel top.
@@ -323,7 +322,7 @@ Item {
                 top: control.readoutOverlay ? transport.top : parent.top
                 left: parent.left
                 leftMargin: control.readoutOverlay ? parent.width - Theme.spaceMain - width : 16
-                topMargin: control.readoutOverlay ? transport.mainRowCenterY - Math.round(height / 2) : (control.compactChrome ? Theme.spaceMicro : 8)
+                topMargin: control.readoutOverlay ? transport.rangeRowCenterY - Math.round(height / 2) : (control.compactChrome ? Theme.spaceMicro : 8)
             }
 
             Text {
@@ -357,6 +356,8 @@ Item {
             // big window moves them to the timeline's flanks instead - see the layer-1 clusters
             // besides TimelineTracks below - so they do not render twice.
             Text {
+                id: compactTimecode
+
                 visible: control.compactChrome
                 text: control.timecodeText
                 color: Theme.primaryText
@@ -365,6 +366,8 @@ Item {
                 font.weight: Font.DemiBold
             }
             Text {
+                id: compactFrameCounter
+
                 objectName: "frameCounterText"
                 visible: control.compactChrome
                 text: control.currentFrame >= 0 ? qsTr("第 %1 / %2 帧").arg(control.currentFrame + 1).arg(control.totalFrames) : qsTr("无帧")
@@ -441,10 +444,8 @@ Item {
                 text: control.playbackStatusQuietText()
                 color: Theme.mutedText
                 font.pixelSize: Theme.fontSecondary
-                // Compact overlay caps the capsule so the info line never reaches the buttons;
-                // the hover tooltip keeps the full sentence in every tier (UX-02).
-                elide: Text.ElideRight
-                width: control.readoutOverlay ? Math.min(implicitWidth, 150) : implicitWidth
+                // The placement guard accounts for the whole sentence, including the
+                // unmeasured qualification. If it cannot fit, the row moves above the track.
                 Accessible.name: text
                 Accessible.description: control.playbackStatusToolTipText()
                 anchors.verticalCenter: parent.verticalCenter

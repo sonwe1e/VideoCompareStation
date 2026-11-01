@@ -76,12 +76,12 @@ check_object_dependencies(
     "src/application/include/dvs/application/SessionSnapshot.h"
 )
 check_object_dependencies(
-    "src/ui_qml/CMakeFiles/dvs_ui_models.dir/src/ReviewController.cpp.obj" FALSE
+    "src/ui_qml/CMakeFiles/dvs_ui_models.dir/src/playback/ReviewController.cpp.obj" FALSE
     "src/ui_qml/include/dvs/ui/ReviewController.h"
     "src/application/include/dvs/application/SessionSnapshot.h"
 )
 check_object_dependencies(
-    "src/ui_qml/CMakeFiles/dvs_ui_d3d11_bridge.dir/src/ImageReviewController.cpp.obj" FALSE
+    "src/ui_qml/CMakeFiles/dvs_ui_d3d11_bridge.dir/src/image/ImageReviewController.cpp.obj" FALSE
     "src/ui_qml/include/dvs/ui/ImageReviewController.h"
 )
 check_object_dependencies(

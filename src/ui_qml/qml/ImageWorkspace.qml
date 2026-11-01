@@ -733,7 +733,10 @@ Rectangle {
 
     readonly property string viewModeLabel: viewMode === 1 ? qsTr("Alpha 灰度") : (viewMode === 2 ? qsTr("RGB 忽略") : qsTr("RGBA"))
     readonly property string backgroundModeLabel: backgroundMode === 1 ? qsTr("背景·棋盘格") : (backgroundMode === 2 ? qsTr("背景·黑底") : (backgroundMode === 3 ? qsTr("背景·白底") : qsTr("背景·深色")))
-    readonly property string diffModeLabel: compareMode === 2 ? qsTr("差异·绝对差异") : (compareMode === 3 ? qsTr("差异·带符号") : (compareMode === 4 ? qsTr("差异·高亮") : (compareMode === 6 ? qsTr("差异·Alpha") : qsTr("差异·选择"))))
+    // During a held peek the controller temporarily shows a single original; keep the
+    // comparison label stable until release so the toolbar does not move under the pointer.
+    readonly property int labelledCompareMode: peekActive && peekSnapshot ? peekSnapshot.compareMode : compareMode
+    readonly property string diffModeLabel: labelledCompareMode === 2 ? qsTr("差异·绝对差异") : (labelledCompareMode === 3 ? qsTr("差异·带符号") : (labelledCompareMode === 4 ? qsTr("差异·高亮") : (labelledCompareMode === 6 ? qsTr("差异·Alpha") : qsTr("差异·选择"))))
 
     // File-name part of a controller path ("C:/dir/shot.png" -> "shot.png"); empty for
     // injected test images whose path label carries no separator.
@@ -1693,11 +1696,15 @@ Rectangle {
         required property int modeValue
         // 0 = compare mode, 1 = channel observation, 2 = background under alpha.
         property int selectGroup: 0
-        property int chipWidth: Math.max(64, contentItem.implicitWidth + 24)
+        // Reserve the selected weight in every state. Otherwise selecting a neighbouring
+        // chip changes its width and shifts a held peek button as the original is shown.
+        property int chipWidth: Math.max(64, selectedChipLabel.width + 24)
         checkable: true
         checked: selectGroup === 0 ? control.compareMode === modeValue : selectGroup === 1 ? control.viewMode === modeValue : control.backgroundMode === modeValue
         mirrorsState: true
-        implicitHeight: 30
+        // Same metrics as the video CompareModeBar's ModeButton: the two workspaces' mode
+        // rows must read as one segmented-control language (32 px band, fontBody labels).
+        implicitHeight: Theme.hitAreaMinimum
         implicitWidth: chipWidth
         leftPadding: 10
         rightPadding: 10
@@ -1715,12 +1722,22 @@ Rectangle {
             }
         }
 
+        TextMetrics {
+            id: selectedChipLabel
+            text: chip.text
+            font.family: modeChipLabel.font.family
+            font.pixelSize: Theme.fontBody
+            font.weight: Font.DemiBold
+        }
+
         contentItem: Text {
+            id: modeChipLabel
+
             text: chip.text
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
             color: !chip.enabled ? Theme.disabledText : (chip.checked || chip.hovered ? Theme.primaryText : Theme.mutedText)
-            font.pixelSize: Theme.fontSecondary
+            font.pixelSize: Theme.fontBody
             font.weight: chip.checked ? Font.DemiBold : Font.Normal
         }
 
@@ -2190,14 +2207,17 @@ Rectangle {
         onActivated: control.nudgeWipe(0.05)
     }
 
-    // Shared status-bar chip: a dark raised plate with a hairline border, where the semantic
-    // colour lives in one 6 px dot (or a single glyph) instead of a whole saturated pill. A row
-    // of them then reads as one instrument strip rather than a rainbow of one-off badges.
+    // Status is plain text; only entries that perform an action have a control surface.
+    // This keeps colour facts distinct from buttons while retaining the semantic dot.
     component StatusBadge: Rectangle {
         id: badge
 
         property string text: ""
         property string glyph: ""
+        property bool actionable: false
+        property string actionObjectName: ""
+        property string actionDescription: ""
+        property alias labelItem: badgeLabel
         property color dotColor: Theme.mutedText
         property color glyphColor: Theme.mutedText
         property bool dotVisible: true
@@ -2206,16 +2226,42 @@ Rectangle {
         // 6 px without inventing a fourth hue next to the source-identity colours.
         property bool dotHollow: false
 
-        implicitWidth: badgeContent.implicitWidth + 20
+        signal activated
+
+        // Measure the natural label rather than the capped Text width. Otherwise the
+        // compact width feeds back into its own implicit width and cannot expand again.
+        implicitWidth: 20 + (dotVisible && glyph.length === 0 ? 6 : (glyph.length > 0 ? badgeGlyph.implicitWidth : 0)) + ((dotVisible || glyph.length > 0) ? 6 : 0) + badgeLabel.implicitWidth
         // Compact tier caps the badge so the hints row stays one band (dot + elided label),
         // and an invisible badge collapses to zero - positioners reserve slots for invisible
         // children, and the reserved widths wrapped the row into a second line (S3 gate).
         width: control.compactChrome ? (visible ? Math.min(implicitWidth, 100) : 0) : implicitWidth
         height: control.compactChrome && !visible ? 0 : Theme.hitAreaMinimum
         radius: Theme.radiusSubtle
-        color: Theme.raisedPanel
-        border.width: 1
-        border.color: Theme.border
+        color: badge.actionable ? Theme.control : "transparent"
+        border.width: 0
+
+        Button {
+            id: badgeAction
+
+            objectName: badge.actionObjectName
+            property bool blocksGlobalMediaShortcuts: true
+            visible: badge.actionable
+            enabled: badge.actionable
+            anchors.fill: parent
+            activeFocusOnTab: true
+            hoverEnabled: true
+            Accessible.name: badge.text
+            Accessible.description: badge.actionDescription
+            onClicked: badge.activated()
+
+            contentItem: Item {}
+            background: Rectangle {
+                radius: Theme.radiusSubtle
+                color: badgeAction.down ? Theme.controlPressed : (badgeAction.hovered ? Theme.controlHover : "transparent")
+                border.width: badgeAction.visualFocus ? 2 : 0
+                border.color: Theme.focus
+            }
+        }
 
         Row {
             id: badgeContent
@@ -2235,6 +2281,8 @@ Rectangle {
             }
 
             Text {
+                id: badgeGlyph
+
                 visible: badge.glyph.length > 0
                 text: badge.glyph
                 color: badge.glyphColor
@@ -2244,6 +2292,8 @@ Rectangle {
             }
 
             Text {
+                id: badgeLabel
+
                 text: badge.text
                 color: Theme.primaryText
                 font.pixelSize: Theme.fontCaption
@@ -2251,7 +2301,7 @@ Rectangle {
                 // Compact tier: elide against the capped badge (the dot and paddings share
                 // the width); the wide window keeps the natural label.
                 elide: Text.ElideRight
-                width: control.compactChrome ? Math.max(24, badge.width - 34) : implicitWidth
+                width: control.compactChrome ? Math.max(0, badge.width - (badge.implicitWidth - implicitWidth)) : implicitWidth
             }
         }
     }
@@ -3793,17 +3843,18 @@ Rectangle {
                         text: qsTr("打开图片…")
                         // Edit mode has its own primary action (另存副本…); one filled button per view.
                         prominent: !control.hasPrimary && !control.editModeActive
-                        implicitHeight: 30
                         leftPadding: 12
                         rightPadding: 12
                         onClicked: control.openImageRequested()
                     }
                     ImageCommandButton {
+                        id: imageOpenPairButton
+
                         objectName: "imageOpenPairButton"
-                        // Compact tier folds these entries into the 更多 menu.
-                        visible: !control.compactChrome
+                        // Give direct access back when the compact row has room for it and
+                        // the comparison modes. The menu remains the fallback at smaller widths.
+                        visible: !control.compactChrome || (!control.editModeActive && control.hasPrimary && modeRow.compactOpenFits)
                         text: qsTr("打开/添加 ▾")
-                        implicitHeight: 30
                         leftPadding: 8
                         rightPadding: 8
                         onClicked: openPairMenu.open()
@@ -3842,10 +3893,10 @@ Rectangle {
                     ImageCommandButton {
                         objectName: "imageReplaceSidesButton"
                         text: qsTr("换图… ▾")
-                        implicitHeight: 30
                         leftPadding: 8
                         rightPadding: 8
                         visible: control.hasPrimary && !control.compactChrome
+                        flat: true
                         enabled: control.hasPrimary
                         helpText: qsTr("只替换其中一侧，另一侧保持不变。失败时原图保留。")
                         onClicked: replaceSidesMenu.open()
@@ -3892,7 +3943,7 @@ Rectangle {
                     ImageCommandButton {
                         objectName: "imageSwapSidesButton"
                         visible: control.hasPair && !control.compactChrome
-                        implicitHeight: 30
+                        flat: true
                         leftPadding: 8
                         rightPadding: 8
                         text: qsTr("对调 A/B")
@@ -3903,6 +3954,7 @@ Rectangle {
                     ImageCommandButton {
                         objectName: "imageEditStartButton"
                         visible: control.hasPrimary && control.imageEdit !== null && !control.compactChrome
+                        flat: true
                         // An action label, not a state: the filled button while editing is 另存副本….
                         // §7 names the exit "return to viewing" - it restores the previous
                         // comparison state without saving or discarding anything by itself.
@@ -3919,12 +3971,14 @@ Rectangle {
                     ImageCommandButton {
                         objectName: "imageCompareEditButton"
                         visible: control.hasEditSession && !control.compactChrome && !control.editModeActive
+                        flat: true
                         text: qsTr("与原图比较")
                         onClicked: control.compareEditRequested()
                     }
                     ImageCommandButton {
                         objectName: "imageDiscardEditButton"
                         visible: control.hasEditSession && !control.compactChrome
+                        flat: true
                         text: qsTr("放弃修改…")
                         onClicked: control.requestDiscardEdit()
                     }
@@ -3948,10 +4002,10 @@ Rectangle {
                         objectName: "imageToggleSidebarButton"
                         // The label names the action it performs, so the button carries no checked tint.
                         text: control.sidebarVisible ? qsTr("隐藏列表") : qsTr("显示列表")
-                        implicitHeight: 30
                         leftPadding: 10
                         rightPadding: 10
                         visible: control.hasFolders && !control.compactChrome
+                        flat: true
                         onClicked: control.toggleSidebarRequested()
                     }
 
@@ -3962,10 +4016,10 @@ Rectangle {
                     ImageCommandButton {
                         objectName: "imageInspectorToggleButton"
                         text: control.imageInspectorOpen ? qsTr("隐藏检查器") : qsTr("检查器")
-                        implicitHeight: 30
                         leftPadding: 10
                         rightPadding: 10
                         visible: control.hasPrimary && !control.compactChrome && !control.editModeActive
+                        flat: true
                         helpText: qsTr("显示或隐藏右侧检查器：差异统计与图像信息。")
                         onClicked: {
                             if (control.reviewShell)
@@ -3992,7 +4046,6 @@ Rectangle {
                         objectName: "imageCompactMoreButton"
                         visible: control.compactChrome
                         text: qsTr("更多 ▾")
-                        implicitHeight: 30
                         leftPadding: 8
                         rightPadding: 8
                         helpText: qsTr("会话、查看方式、背景与差异增益的其余命令")
@@ -4024,6 +4077,27 @@ Rectangle {
 
                     objectName: "imageModeRow"
                     spacing: Theme.spaceMain
+                    // Measure the two compact partitions without either optional entry. This
+                    // avoids feeding a Flow's own implicit width back into its visibility.
+                    readonly property real compactBaseWidth: {
+                        let fileWidth = 0;
+                        let modeWidth = 0;
+                        for (let i = 0; i < fileRow.children.length; ++i) {
+                            const child = fileRow.children[i];
+                            if (child === imageOpenPairButton || !child.visible)
+                                continue;
+                            fileWidth += (fileWidth > 0 ? fileRow.spacing : 0) + child.width;
+                        }
+                        for (let i = 0; i < modeRow.children.length; ++i) {
+                            const child = modeRow.children[i];
+                            if (child === imageDiffModeButton || !child.visible)
+                                continue;
+                            modeWidth += (modeWidth > 0 ? modeRow.spacing : 0) + child.width;
+                        }
+                        return 24 + fileWidth + (fileWidth > 0 && modeWidth > 0 ? 12 : 0) + modeWidth;
+                    }
+                    readonly property bool compactDifferenceFits: commandPanel.width >= compactBaseWidth + spacing + imageDiffModeButton.implicitWidth
+                    readonly property bool compactOpenFits: commandPanel.width >= compactBaseWidth + (control.hasPair && compactDifferenceFits ? spacing + imageDiffModeButton.implicitWidth : 0) + fileRow.spacing + imageOpenPairButton.implicitWidth
                     anchors {
                         left: parent.left
                         // Compact tier: the mode row starts where the session flow ends, so
@@ -4093,14 +4167,15 @@ Rectangle {
                     // three. The remaining entries are kept and tested; the video playback
                     // shortcuts are untouched.
                     ImageCommandButton {
+                        id: imageDiffModeButton
+
                         objectName: "imageDiffModeButton"
                         text: control.diffModeLabel + " ▾"
-                        implicitHeight: 30
                         leftPadding: 8
                         rightPadding: 8
-                        // Compact tier folds the diff modes into the 更多 menu (the current
-                        // diff mode stays readable on the 更多 items' checked state).
-                        visible: control.hasPair && !control.compactChrome
+                        // Keep the current difference mode visible when the compact row has
+                        // room; the existing 更多 menu remains the narrow fallback.
+                        visible: control.hasPair && (!control.compactChrome || modeRow.compactDifferenceFits)
                         onClicked: diffMenu.open()
 
                         VcsMenu {
@@ -4147,14 +4222,20 @@ Rectangle {
                         visible: control.peekModeAvailable || control.peekActive
                         enabled: control.peekModeAvailable || control.peekActive
                         focusPolicy: Qt.TabFocus
-                        implicitHeight: 30
                         leftPadding: 8
                         rightPadding: 8
-                        text: control.peekActive ? qsTr("松开恢复 %1").arg(control.diffModeLabel) : qsTr("按住看 A/B 原图")
+                        implicitWidth: Math.max(64, peekLabelMetrics.width + leftPadding + rightPadding + 8)
+                        text: control.peekActive ? qsTr("松开恢复对比") : qsTr("按住看 A/B 原图")
                         helpText: qsTr("按住时临时直看原图：` 看 A，Shift+` 看 B；松开恢复差异/淡化视图。也可按住此按钮。")
                         onPressed: control.beginPeek(false)
                         onReleased: control.endPeek()
                         onCanceled: control.endPeek()
+
+                        TextMetrics {
+                            id: peekLabelMetrics
+                            font.pixelSize: Theme.fontBody
+                            text: qsTr("按住看 A/B 原图")
+                        }
                     }
 
                     // Difference display gain, one click per step. Wide windows show the
@@ -4166,7 +4247,7 @@ Rectangle {
                         id: imageDiffGainChipRow
 
                         objectName: "imageDiffGainChipRow"
-                        visible: control.diffModeActive && commandPanel.width >= 1180
+                        visible: control.diffModeActive && !control.compactChrome && commandPanel.width >= 1180
                         spacing: 4
                         height: Theme.hitAreaMinimum
 
@@ -4237,7 +4318,6 @@ Rectangle {
                     ImageCommandButton {
                         objectName: "imageDiffGainButton"
                         text: qsTr("差异放大 ×%1 ▾").arg(control.imageReview ? control.imageReview.diffGain : 4)
-                        implicitHeight: 30
                         leftPadding: 8
                         rightPadding: 8
                         // Compact tier folds the gain into the 更多 menu.
@@ -4297,7 +4377,9 @@ Rectangle {
                         }
                     }
 
-                    RowSeparator {}
+                    RowSeparator {
+                        visible: !control.compactChrome
+                    }
 
                     // Channel observation quick chips (A / O keep their toggle semantics:
                     // clicking the active chip returns to plain RGBA).
@@ -4425,7 +4507,9 @@ Rectangle {
                     // the label does. The dormant chips stay declared (and their radio entries
                     // stay testable through the menu) so the one-click form can return if a
                     // future width budget asks for it.
-                    RowSeparator {}
+                    RowSeparator {
+                        visible: !control.compactChrome
+                    }
 
                     ModeChip {
                         objectName: "imageBgChipDark"
@@ -4462,7 +4546,6 @@ Rectangle {
                         objectName: "imageViewModeButton"
                         visible: false
                         text: control.viewModeLabel + " ▾"
-                        implicitHeight: 30
                         leftPadding: 8
                         rightPadding: 8
                         helpText: qsTr("显示通道：正常 RGBA，或只观察 Alpha 灰度、忽略透明度。快捷键 A / O。")
@@ -4500,7 +4583,6 @@ Rectangle {
                         visible: !control.compactChrome
                         enabled: control.hasPrimary
                         text: control.backgroundModeLabel + " ▾"
-                        implicitHeight: 30
                         leftPadding: 8
                         rightPadding: 8
                         helpText: qsTr("图片背后的底色，用来判断透明区域；不影响像素读数。")
@@ -4805,7 +4887,9 @@ Rectangle {
     // File, view and edit actions share label-sized buttons. Short labels such as 100%
     // must not reserve the same width as an opening action and push useful tools onto a new row.
     component ImageCommandButton: ReviewActionButton {
-        implicitHeight: 30
+        // The documented button band (§3.1): visual and hit height 32, matching the video
+        // workspace's command rows and the chips beside these buttons.
+        implicitHeight: Theme.hitAreaMinimum
         leftPadding: 10
         rightPadding: 10
         // implicitContentWidth does not notify, so a binding to it keeps the value it had
@@ -7529,9 +7613,11 @@ Rectangle {
             spacing: 12
             anchors {
                 left: parent.left
-                leftMargin: 14
+                // The status rows share the command rows' left baseline (12 inside the
+                // workspace root); the old 14 put the readout 2 px deeper than every row above.
+                leftMargin: 12
                 right: parent.right
-                rightMargin: 14
+                rightMargin: 12
                 top: parent.top
                 topMargin: parent === statusBar ? statusHints.height + Theme.spaceMicro : 0
             }
@@ -8032,12 +8118,31 @@ Rectangle {
         Flow {
             id: statusHints
             objectName: "imageStatusHints"
+            // Share the actual spare space between the A/B colour sentences. The other
+            // controls retain their compact bounds and an error reserves its 60 px floor.
+            readonly property real compactColorCap: {
+                let used = 0;
+                let count = 0;
+                let colors = 0;
+                for (let i = 0; i < children.length; ++i) {
+                    const child = children[i];
+                    if (!child.visible)
+                        continue;
+                    ++count;
+                    if (child === primaryColorStatusBadge || child === secondaryColorStatusBadge) {
+                        ++colors;
+                    } else {
+                        used += child === compactErrorNotice ? 60 : child.width;
+                    }
+                }
+                return colors > 0 ? Math.max(100, (width - used - Math.max(0, count - 1) * spacing) / colors) : 100;
+            }
             onWidthChanged: forceLayout()
             anchors {
                 left: parent.left
-                leftMargin: 14
+                leftMargin: 12
                 right: parent.right
-                rightMargin: 14
+                rightMargin: 12
                 top: parent.top
                 topMargin: Theme.spaceMicro
             }
@@ -8099,9 +8204,9 @@ Rectangle {
                 implicitHeight: Theme.hitAreaMinimum
                 // Compact tier caps the selector; the full wording rides the tooltip.
                 width: control.compactChrome ? Math.min(implicitWidth, 90) : implicitWidth
-                leftPadding: 8
-                rightPadding: 8
-                text: control.numericFloat ? qsTr("数值：归一化浮点 ▾") : qsTr("数值：整数码值 ▾")
+                leftPadding: control.compactChrome ? 4 : 8
+                rightPadding: control.compactChrome ? 4 : 8
+                text: control.compactChrome ? (control.numericFloat ? qsTr("归一化浮点 ▾") : qsTr("整数码值 ▾")) : (control.numericFloat ? qsTr("数值：归一化浮点 ▾") : qsTr("数值：整数码值 ▾"))
                 enabled: control.hasPrimary
                 helpText: qsTr("整数码值：缓冲区实际码值（8-bit 0–255）。\n归一化浮点：channel/255；转换后 16-bit 为 channel16/65535，并另行标注。\n不表示线性光、HDR 或色彩管理后的值；Hex 始终是十六进制。")
                 onClicked: numericFormatMenu.open()
@@ -8135,8 +8240,8 @@ Rectangle {
                 implicitHeight: Theme.hitAreaMinimum
                 // Compact tier caps the entry; the sample label rides its menu.
                 width: control.compactChrome ? Math.min(implicitWidth, 80) : implicitWidth
-                leftPadding: 8
-                rightPadding: 8
+                leftPadding: control.compactChrome ? 4 : 8
+                rightPadding: control.compactChrome ? 4 : 8
                 text: qsTr("复制颜色 ▾")
                 enabled: control.probeSampleReady
                 helpText: control.probeSampleLabel + "\n" + qsTr("复制的是该样本的原始解码像素，不是按钮下的屏幕颜色。\n源被关闭、替换或图像代次改变后样本失效。")
@@ -8202,6 +8307,7 @@ Rectangle {
                 id: primaryColorStatusBadge
                 objectName: "imagePrimaryColorStatusBadge"
                 visible: Boolean(control.imageReview && control.hasPrimary)
+                width: control.compactChrome ? (visible ? Math.min(implicitWidth, statusHints.compactColorCap) : 0) : implicitWidth
                 text: control.imageReview ? qsTr("A · ") + control.imageReview.primaryColorStateCompactText : ""
                 // "未探测" / "配置未转换" are absences of colour management, not successes. Only
                 // a conversion that actually ran earns the filled information dot; an
@@ -8235,6 +8341,7 @@ Rectangle {
                 id: secondaryColorStatusBadge
                 objectName: "imageSecondaryColorStatusBadge"
                 visible: Boolean(control.imageReview && control.hasSecondary)
+                width: control.compactChrome ? (visible ? Math.min(implicitWidth, statusHints.compactColorCap) : 0) : implicitWidth
                 text: control.imageReview ? qsTr("B · ") + control.imageReview.secondaryColorStateCompactText : ""
                 // Same three-state rule as the A badge, same predicate: display-applied is what
                 // the "已转换" sentence means, so the ring follows it.
@@ -8261,15 +8368,12 @@ Rectangle {
                 id: colorDisplayToggleBadge
                 objectName: "imageColorDisplayBadge"
                 visible: Boolean(control.imageReview && control.hasPrimary && (control.imageReview.primaryColorProfileStatus === 2 || control.imageReview.secondaryColorProfileStatus === 2))
-                text: control.imageReview && control.imageReview.colorDisplayEnabled ? qsTr("颜色转换：开") : qsTr("颜色转换：关")
+                text: control.imageReview && control.imageReview.colorDisplayEnabled ? qsTr("颜色转换：开 · 关闭") : qsTr("颜色转换：关 · 开启")
                 dotColor: Theme.information
-
-                MouseArea {
-                    objectName: "imageColorDisplayToggleButton"
-                    anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: control.toggleColorDisplay()
-                }
+                actionable: true
+                actionObjectName: "imageColorDisplayToggleButton"
+                actionDescription: qsTr("切换嵌入配置的显示转换；原始读数和差异统计不变。")
+                onActivated: control.toggleColorDisplay()
 
                 HoverHandler {
                     id: colorDisplayToggleHover
@@ -8304,18 +8408,16 @@ Rectangle {
                 id: resampleBadge
                 objectName: "imageResampleBadge"
                 visible: Boolean(control.imageReview && control.hasPair && (control.imageReview.diffResampled || (control.sizesDiffer && control.imageReview.resampleAllowed)))
-                text: control.imageReview && control.imageReview.diffResampled ? qsTr("空间已重采样") : qsTr("重采样：开")
+                text: control.imageReview && control.imageReview.diffResampled ? qsTr("已重采样 · 关闭") : qsTr("重采样：开 · 关闭")
                 // Same information semantics as the conversion badge: a resample that already
                 // happened is a fact about the comparison, not a warning about it.
                 dotColor: Theme.information
-
-                MouseArea {
-                    anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: {
-                        if (control.imageReview)
-                            control.imageReview.resampleAllowed = !control.imageReview.resampleAllowed;
-                    }
+                actionable: true
+                actionObjectName: "imageResampleToggleButton"
+                actionDescription: qsTr("关闭空间重采样对齐。")
+                onActivated: {
+                    if (control.imageReview)
+                        control.imageReview.resampleAllowed = false;
                 }
 
                 HoverHandler {
@@ -8437,8 +8539,8 @@ Rectangle {
             left: parent.left
             right: parent.right
         }
-        anchors.leftMargin: 14
-        anchors.rightMargin: 14
+        anchors.leftMargin: 12
+        anchors.rightMargin: 12
         y: statusBar.y - height - 6
         height: statusDetails.implicitHeight + 24
         radius: Theme.radiusSmall

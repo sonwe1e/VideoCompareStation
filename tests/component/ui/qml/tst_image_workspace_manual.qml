@@ -508,6 +508,78 @@ Item {
 
         // ---- Peek -----------------------------------------------------------------------
 
+        function test_compact_toolbar_uses_available_width_without_wrapping() {
+            workspace.compactChrome = true;
+            root.width = 960;
+            const panel = findChild(workspace, "imageCommandPanel");
+            const row = findChild(workspace, "imageModeRow");
+            const open = findChild(workspace, "imageOpenPairButton");
+            const diff = findChild(workspace, "imageDiffModeButton");
+            const peek = findChild(workspace, "imagePeekButton");
+            verify(panel && row && open && diff && peek);
+            waitForPolish(workspace.Window.window);
+            tryCompare(open, "visible", true);
+            tryCompare(diff, "visible", true);
+            verify(panel.height <= 80, "compact commands must remain in one band");
+
+            // The visible difference entry must open the real menu and select its mode.
+            const absolute = findChild(workspace, "imageModeAbsDiff");
+            verify(absolute);
+            mouseClick(diff, diff.width / 2, diff.height / 2);
+            tryCompare(absolute.parent, "visible", true);
+            absolute.triggered();
+            tryCompare(imageReview, "compareMode", 2);
+            tryCompare(peek, "visible", true);
+            waitForPolish(workspace.Window.window);
+            verify(diff.text.indexOf("绝对差异") >= 0, "the current mode remains visible");
+            verify(panel.height <= 80, "the peek action must fit on the compact band");
+
+            const before = peek.parent.mapToItem(null, peek.x, peek.y);
+            mousePress(peek, peek.width / 2, peek.height / 2, Qt.LeftButton);
+            tryCompare(workspace, "peekActive", true);
+            wait(80);
+            const during = peek.parent.mapToItem(null, peek.x, peek.y);
+            compare(Math.round(during.x), Math.round(before.x), "peek must not move under the pointer");
+            compare(Math.round(during.y), Math.round(before.y), "peek must stay on the same band");
+            verify(diff.text.indexOf("绝对差异") >= 0, "peek retains the comparison label");
+            mouseRelease(peek, peek.width / 2, peek.height / 2, Qt.LeftButton);
+            tryCompare(imageReview, "compareMode", 2);
+
+            // With less room, optional controls can fold into 更多; the main mode and
+            // hold-to-peek controls must remain reachable without creating another band.
+            const widths = [700, 760, 820, 960, 1200];
+            const modes = [0, 2, 3, 5, 7];
+            for (let w = 0; w < widths.length; ++w) {
+                root.width = widths[w];
+                for (let m = 0; m < modes.length; ++m) {
+                    imageReview.compareMode = modes[m];
+                    waitForPolish(workspace.Window.window);
+                    tryVerify(() => panel.height <= 80, 5000,
+                        "compact toolbar wrapped at " + widths[w] + ", mode " + modes[m]);
+                    verify(findChild(workspace, "imageCompactMoreButton").visible);
+                    verify(!open.visible || open.mapToItem(panel, open.width, 0).x <= panel.width);
+                    verify(!diff.visible || diff.mapToItem(panel, diff.width, 0).x <= panel.width);
+                }
+            }
+        }
+
+        function test_compact_status_uses_spare_width_for_readable_color_state() {
+            workspace.compactChrome = true;
+            root.width = 960;
+            waitForPolish(workspace.Window.window);
+            const status = findChild(workspace, "imageStatusBar");
+            const primary = findChild(workspace, "imagePrimaryColorStatusBadge");
+            const secondary = findChild(workspace, "imageSecondaryColorStatusBadge");
+            const numeric = findChild(workspace, "imageNumericFormatButton");
+            const copy = findChild(workspace, "imageCopyColorButton");
+            verify(status && primary && secondary && numeric && copy);
+            tryVerify(() => status.height <= 40, 5000, "status must stay on one line");
+            verify(primary.labelItem.width >= primary.labelItem.implicitWidth, "A colour state: " + primary.labelItem.width + " / " + primary.labelItem.implicitWidth);
+            verify(secondary.labelItem.width >= secondary.labelItem.implicitWidth, "B colour state: " + secondary.labelItem.width + " / " + secondary.labelItem.implicitWidth);
+            verify(numeric.contentItem.implicitWidth <= numeric.availableWidth, "numeric-format label must fit");
+            verify(copy.contentItem.implicitWidth <= copy.availableWidth, "colour-copy label must fit");
+        }
+
         function test_keyboard_peek_holds_and_restores_snapshot() {
             imageReview.compareMode = 7;
             imageReview.fadePosition = 0.3;
@@ -1385,6 +1457,27 @@ Item {
             // Once resampling is on the action leaves the strip; the explanation no longer
             // blocks the diff the user just opted into.
             tryCompare(enableButton, "visible", false);
+        }
+
+        function test_resample_status_action_supports_mouse_and_keyboard() {
+            verify(fixture.openPair(64, 48, [120, 130, 140, 255], 32, 24, [122, 128, 140, 255]));
+            imageReview.compareMode = 2;
+            imageReview.resampleAllowed = true;
+            const badge = findChild(workspace, "imageResampleBadge");
+            const button = findChild(workspace, "imageResampleToggleButton");
+            verify(badge && button);
+            tryCompare(badge, "visible", true);
+            verify(badge.text.indexOf("关闭") >= 0, "the visible label names the action");
+            waitForPolish(workspace.Window.window);
+            mouseClick(button, button.width / 2, button.height / 2);
+            tryCompare(imageReview, "resampleAllowed", false);
+
+            imageReview.resampleAllowed = true;
+            tryCompare(button, "visible", true);
+            button.forceActiveFocus(Qt.TabFocusReason);
+            tryCompare(button, "activeFocus", true);
+            keyClick(Qt.Key_Space);
+            tryCompare(imageReview, "resampleAllowed", false);
         }
 
         // ---- P3 second cut: the right parameter / inspector column -----------------------

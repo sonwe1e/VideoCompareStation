@@ -3,6 +3,7 @@
 ## Agent Start Here
 
 Read [docs/agent-guide.md](docs/agent-guide.md) first for the code/test routing map,
+[repository map](docs/architecture/repository-map.md) for feature and directory ownership,
 [product intent](docs/product/visual-review.md), the
 [current issue ledger](docs/engineering/visual-review-backlog.md), and the
 [decision register](docs/engineering/decision-register.md) for which side a settled

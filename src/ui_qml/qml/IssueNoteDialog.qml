@@ -101,15 +101,25 @@ Popup {
                 rightMargin: parent.padding
             }
 
-            VcsToolButton {
+            // Dialog-family footer buttons (same metrics as ClipExportDialog): text-sized
+            // ReviewActionButtons with the primary action rightmost. The previous icon-sized
+            // VcsToolButtons were 34 px wide, so the four-character secondary label elided.
+            ReviewActionButton {
                 objectName: "issueNoteSaveButton"
                 text: qsTr("记录")
-                labelPixelSize: 14
+                prominent: true
+                implicitWidth: 80
+                implicitHeight: 30
+                leftPadding: 12
+                rightPadding: 12
                 onClicked: control.save()
             }
-            VcsToolButton {
+            ReviewActionButton {
                 text: qsTr("留空记录")
-                labelPixelSize: 14
+                implicitWidth: 104
+                implicitHeight: 30
+                leftPadding: 12
+                rightPadding: 12
                 onClicked: control.saveEmpty()
             }
         }

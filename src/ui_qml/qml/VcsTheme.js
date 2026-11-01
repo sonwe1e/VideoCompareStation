@@ -58,6 +58,12 @@ var accentText = "#8bb9ff"
 var accentFill = "#0964d4"
 var accentHover = "#0b6bdc"
 var accentPressed = "#0054b8"
+// Badge ground and border for accent-coloured text (the sample-export GT frame card),
+// mirroring the successPanel/successBorder pair: a dark accent-tinted ground keeps
+// accentText at AA without a filled accent chip, and the border stays a quiet highlight
+// that cannot be mistaken for the keyboard focus ring.
+var accentPanel = "#0f2c4a"
+var accentBorder = "#2a5f9e"
 // Keyboard focus contract (one rule per kind of item, so rings cannot drift apart again -
 // backlog U12). Control subclasses (buttons, combos, spin boxes) drive the ring from
 // `visualFocus`: the 2 px `focus` ring shows for keyboard navigation only and a mouse click

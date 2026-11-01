@@ -22,7 +22,7 @@ target_link_libraries(
 )
 target_include_directories(
     dvs_ui_component_tests
-    PRIVATE "${PROJECT_SOURCE_DIR}/src/ui_qml/src" "${PROJECT_SOURCE_DIR}/src/app"
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/ui_qml/src/comparison" "${PROJECT_SOURCE_DIR}/src/app"
 )
 
 dvs_apply_project_warnings(dvs_ui_component_tests)
@@ -64,7 +64,7 @@ target_include_directories(
 # TimingDiagnosticsControllerTests drives the presentation probe's deterministic failure seam
 # (PresentationStatisticsProbeTestHooks.h) that lives next to the platform adapter's sources.
 target_include_directories(
-    dvs_ui_component_tests PRIVATE "${PROJECT_SOURCE_DIR}/src/platform_windows/src"
+    dvs_ui_component_tests PRIVATE "${PROJECT_SOURCE_DIR}/src/platform_windows/src/graphics"
 )
 target_compile_definitions(
     dvs_ui_component_tests PRIVATE DVS_MEDIA_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures/media"

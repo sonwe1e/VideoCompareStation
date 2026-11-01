@@ -2,9 +2,10 @@
 
 > **Status note.** The CMake targets below are split as shown and validated by
 > `cmake/Architecture.cmake`; `dvs_platform_windows` and `dvs_ui_qml` are interface-only
-> compatibility aggregates. What has not yet been split is the directory layout — support and
-> graphics sources still live together under `src/platform_windows/`, and UI sources under
-> `src/ui_qml/`. The rules are the current contract, not an aspiration.
+> compatibility aggregates. Platform implementation files are grouped under `src/support/` and
+> `src/graphics/`; UI implementation files are grouped by feature. Public include paths remain
+> stable. A feature directory does not itself define a CMake target: consult the component's
+> `CMakeLists.txt` and the [repository map](repository-map.md) for target ownership.
 
 Production dependencies point inward or toward an explicit adapter contract:
 

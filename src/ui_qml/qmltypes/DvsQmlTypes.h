@@ -6,9 +6,9 @@
 // wrappers carry only metadata (QML type names, creatable/uncreatable, property and method
 // descriptions) that qmltyperegistrar reads from the moc JSON to generate a .qmltypes for
 // qmllint and qmlls. The runtime registration stays hand-written in
-// src/ui_qml/src/QmlTypeRegistration.cpp, because the controllers are non-default-constructible
-// in QML terms and the generated registration code would require dropping their `final`
-// (a compile-time error provoked by QQmlPrivate::QQmlElement<T>); see
+// src/ui_qml/src/workspace/QmlTypeRegistration.cpp, because the controllers are
+// non-default-constructible in QML terms and the generated registration code would require
+// dropping their `final` (a compile-time error provoked by QQmlPrivate::QQmlElement<T>); see
 // docs/adr/0006-qml-type-registration.md for the evidence.
 //
 // Keep the names and creatability here identical to registerDvsUiTypes():

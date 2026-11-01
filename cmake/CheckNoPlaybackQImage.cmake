@@ -12,13 +12,20 @@ file(
     "${PROJECT_SOURCE_DIR}/src/platform_windows/*.cpp"
     "${PROJECT_SOURCE_DIR}/src/platform_windows/*.h"
 )
-list(
-    APPEND playbackRenderFiles
-    "${PROJECT_SOURCE_DIR}/src/ui_qml/include/dvs/ui/DualVideoSurface.h"
+set(requiredUiFiles
     "${PROJECT_SOURCE_DIR}/src/ui_qml/include/dvs/ui/RenderAckRelay.h"
-    "${PROJECT_SOURCE_DIR}/src/ui_qml/src/DualVideoSurface.cpp"
-    "${PROJECT_SOURCE_DIR}/src/ui_qml/src/RenderAckRelay.cpp"
+    "${PROJECT_SOURCE_DIR}/src/ui_qml/src/comparison/RenderAckRelay.cpp"
 )
+list(LENGTH requiredUiFiles requiredUiFileCount)
+if(NOT requiredUiFileCount EQUAL 2)
+    message(FATAL_ERROR "The playback QImage check must include both RenderAckRelay files.")
+endif()
+foreach(requiredUiFile IN LISTS requiredUiFiles)
+    if(NOT EXISTS "${requiredUiFile}")
+        message(FATAL_ERROR "Required playback QImage check anchor is missing: ${requiredUiFile}")
+    endif()
+endforeach()
+list(APPEND playbackRenderFiles ${requiredUiFiles})
 list(REMOVE_DUPLICATES playbackRenderFiles)
 list(SORT playbackRenderFiles)
 

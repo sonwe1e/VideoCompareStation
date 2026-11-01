@@ -2,6 +2,9 @@
 
 PowerShell automation is grouped by responsibility:
 
+- `build/`: the required local build/test wrapper (`build.ps1`), tool discovery (`env.ps1`),
+  and the process resource policy it applies. Every local build, test, format and lint run goes
+  through it; see [`docs/building.md`](../docs/building.md).
 - `ci/`: wrappers used by continuous integration jobs.
 - `quality/`: repository policy, resource-limit, and coverage checks.
 - `testing/`: fixture generation and playback/performance gate entry points. The playback gates
@@ -19,6 +22,11 @@ PowerShell automation is grouped by responsibility:
   FFmpeg operations are timeout-bounded, and it publishes the video/contract pair with rollback so
   a failed replacement preserves the previous usable pair. The hardware gate consumes the default
   `gate-1080p60-diff-b` pair.
+- `shell/`: per-user Explorer command registration, including the double-click `.cmd` entry
+  point the ZIP ships.
+- `fixtures/`: media and image fixture generators plus the verifier that keeps `tests/fixtures/`
+  reproducible.
+- `branding/`: icon generation and product-rename tooling.
 - `release/`: release identity and validation operations. Releases are currently unsigned
   by policy; signing tooling stays out of the tree until a signed release is actually planned.
 

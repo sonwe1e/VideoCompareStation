@@ -1,13 +1,13 @@
 add_library(
     dvs_windows_support
     STATIC
-        src/Module.cpp
-        src/AtomicFilePublisher.cpp
-        src/ProcessTelemetry.cpp
-        src/SourceIdentityService.cpp
-        src/SteadyDeadlineScheduler.cpp
-        src/TraceSink.cpp
-        src/WindowsPaths.cpp
+        src/support/Module.cpp
+        src/support/AtomicFilePublisher.cpp
+        src/support/ProcessTelemetry.cpp
+        src/support/SourceIdentityService.cpp
+        src/support/SteadyDeadlineScheduler.cpp
+        src/support/TraceSink.cpp
+        src/support/WindowsPaths.cpp
 )
 add_library(dvs::windows_support ALIAS dvs_windows_support)
 
@@ -27,22 +27,22 @@ set_target_properties(dvs_windows_support PROPERTIES FOLDER "Adapters/Windows")
 add_library(
     dvs_graphics_d3d11
     STATIC
-        src/FrameBudget.cpp
-        src/CpuNv12FrameResource.cpp
-        src/CpuP010FrameResource.cpp
-        src/D3d11DecodedFrameResource.cpp
-        src/D3d11GpuFrameBacking.cpp
-        src/D3d11SourcePixelProbe.cpp
-        src/D3d11ComparisonRenderer.cpp
-        src/D3d11RenderChannel.cpp
-        src/FrameResourceFactory.cpp
-        src/FrameMailbox.cpp
-        src/GraphicsDeviceBroker.cpp
-        src/GpuFrameSet.cpp
-        src/GpuFrameResource.cpp
-        src/GpuTransferActor.cpp
-        src/PresentationAckMailbox.cpp
-        src/PresentationStatisticsProbe.cpp
+        src/graphics/FrameBudget.cpp
+        src/graphics/CpuNv12FrameResource.cpp
+        src/graphics/CpuP010FrameResource.cpp
+        src/graphics/D3d11DecodedFrameResource.cpp
+        src/graphics/D3d11GpuFrameBacking.cpp
+        src/graphics/D3d11SourcePixelProbe.cpp
+        src/graphics/D3d11ComparisonRenderer.cpp
+        src/graphics/D3d11RenderChannel.cpp
+        src/graphics/FrameResourceFactory.cpp
+        src/graphics/FrameMailbox.cpp
+        src/graphics/GraphicsDeviceBroker.cpp
+        src/graphics/GpuFrameSet.cpp
+        src/graphics/GpuFrameResource.cpp
+        src/graphics/GpuTransferActor.cpp
+        src/graphics/PresentationAckMailbox.cpp
+        src/graphics/PresentationStatisticsProbe.cpp
 )
 add_library(dvs::graphics_d3d11 ALIAS dvs_graphics_d3d11)
 

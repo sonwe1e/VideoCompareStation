@@ -39,7 +39,7 @@ target_include_directories(
     PRIVATE
         "${PROJECT_SOURCE_DIR}/src/media_ffmpeg/src"
         "${PROJECT_SOURCE_DIR}/src/platform_windows/include"
-        "${PROJECT_SOURCE_DIR}/src/platform_windows/src"
+        "${PROJECT_SOURCE_DIR}/src/platform_windows/src/support"
 )
 
 dvs_apply_project_warnings(dvs_media_component_tests)

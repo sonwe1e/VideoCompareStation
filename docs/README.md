@@ -9,6 +9,8 @@
 | 当前还有什么缺口、哪些仅缺验收 | [问题台账](engineering/visual-review-backlog.md) |
 | 默认行为与产品取舍是否已确认 | [决策登记册](engineering/decision-register.md) |
 | 从哪里改代码、跑哪些测试 | [Agent 快速定位指南](agent-guide.md) |
+| AI 团队怎样分工、任务怎么验收、记录放在哪 | [团队协作章程](engineering/team-charter.md) |
+| 仓库目录、功能归属与跨层入口 | [仓库与功能地图](architecture/repository-map.md) |
 | 怎么构建、选择验收范围、恢复环境 | [构建指南](building.md) |
 | 层次与状态由谁负责 | [架构](architecture.md)、[依赖规则](architecture/dependency-rules.md)、[状态所有权](architecture/state-ownership.md)、[ADR](adr/) |
 | 格式、颜色、像素与对齐的边界 | [媒体支持](media-support.md)、[图片颜色契约](engineering/image-color-contract.md)、[对齐规则](alignment.md)、[像素尺度](engineering/viewport-pixel-scale.md) |

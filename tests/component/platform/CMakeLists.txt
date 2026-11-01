@@ -23,7 +23,8 @@ target_link_libraries(
 target_include_directories(
     dvs_platform_component_tests
     PRIVATE
-        "${PROJECT_SOURCE_DIR}/src/platform_windows/src"
+        "${PROJECT_SOURCE_DIR}/src/platform_windows/src/support"
+        "${PROJECT_SOURCE_DIR}/src/platform_windows/src/graphics"
 )
 
 dvs_apply_project_warnings(dvs_platform_component_tests)
@@ -55,8 +56,8 @@ target_link_libraries(
 target_include_directories(
     dvs_graphics_device_broker_component_tests
     PRIVATE
-        "${PROJECT_SOURCE_DIR}/src/platform_windows/src"
-        "${PROJECT_SOURCE_DIR}/src/ui_qml/src"
+        "${PROJECT_SOURCE_DIR}/src/platform_windows/src/graphics"
+        "${PROJECT_SOURCE_DIR}/src/ui_qml/src/comparison"
         "${PROJECT_SOURCE_DIR}/tests/component/ui"
 )
 target_compile_definitions(

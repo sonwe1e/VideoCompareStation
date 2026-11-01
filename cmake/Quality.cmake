@@ -246,6 +246,16 @@ function(dvs_add_quality_targets)
             quality.no_playback_qimage
             PROPERTIES LABELS "quality;architecture" TIMEOUT 10
         )
+        add_test(
+            NAME quality.no_playback_qimage_contracts
+            COMMAND "${CMAKE_COMMAND}"
+                "-DDVS_TEST_ROOT=${CMAKE_BINARY_DIR}/Testing/qimage-contracts"
+                -P "${PROJECT_SOURCE_DIR}/cmake/CheckNoPlaybackQImageTests.cmake"
+        )
+        set_tests_properties(
+            quality.no_playback_qimage_contracts
+            PROPERTIES LABELS "quality;architecture" TIMEOUT 10
+        )
     endif()
 
     if(qmlFiles)

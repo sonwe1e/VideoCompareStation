@@ -667,8 +667,8 @@ Rectangle {
                     return Theme.fluentHover;
                 return "transparent";
             }
-            border.width: modeButton.activeFocus ? 2 : 1
-            border.color: modeButton.activeFocus ? Theme.focus : "transparent"
+            border.width: modeButton.visualFocus ? 2 : 1
+            border.color: modeButton.visualFocus ? Theme.focus : "transparent"
 
             Behavior on color {
                 ColorAnimation {
@@ -740,8 +740,8 @@ Rectangle {
                     return Theme.fluentHover;
                 return "transparent";
             }
-            border.width: pairEdgeButton.activeFocus ? 2 : 1
-            border.color: pairEdgeButton.activeFocus ? Theme.focus : "transparent"
+            border.width: pairEdgeButton.visualFocus ? 2 : 1
+            border.color: pairEdgeButton.visualFocus ? Theme.focus : "transparent"
 
             Behavior on color {
                 ColorAnimation {
@@ -833,8 +833,8 @@ Rectangle {
             // source, the button wears the source's own identity colour as its edge, so a
             // focused single view cannot be mistaken for a comparison. Keyboard focus keeps
             // the canonical ring.
-            border.width: focusButton.checked ? 2 : (focusButton.activeFocus ? 2 : 1)
-            border.color: focusButton.checked ? Theme.sourceBorder(focusButton.focusSlot) : (focusButton.activeFocus ? Theme.focus : "transparent")
+            border.width: focusButton.checked ? 2 : (focusButton.visualFocus ? 2 : 1)
+            border.color: focusButton.checked ? Theme.sourceBorder(focusButton.focusSlot) : (focusButton.visualFocus ? Theme.focus : "transparent")
 
             Behavior on color {
                 ColorAnimation {
@@ -891,8 +891,8 @@ Rectangle {
                     return Theme.fluentHover;
                 return "transparent";
             }
-            border.width: diffModeButton.activeFocus ? 2 : 1
-            border.color: diffModeButton.activeFocus ? Theme.focus : "transparent"
+            border.width: diffModeButton.visualFocus ? 2 : 1
+            border.color: diffModeButton.visualFocus ? Theme.focus : "transparent"
 
             Behavior on color {
                 ColorAnimation {

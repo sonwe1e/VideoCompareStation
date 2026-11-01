@@ -90,7 +90,11 @@ Item {
                 [Theme.inverseText, Theme.accentHover], [Theme.inverseText, Theme.accentPressed],
                 [Theme.mutedText, Theme.panel], [Theme.mutedText, Theme.menu],
                 [Theme.mutedText, Theme.raisedPanel],
-                [Theme.accentText, Theme.menu], [Theme.mutedText, Theme.window]];
+                [Theme.accentText, Theme.menu], [Theme.mutedText, Theme.window],
+                // The sample-export GT card publishes its whole label in accentText on
+                // accentPanel; an undefined or drifted token fails here instead of
+                // silently falling back to an unreadable ground.
+                [Theme.accentText, Theme.accentPanel]];
             for (let i = 0; i < pairs.length; ++i) {
                 const a = luminance(pairs[i][0]);
                 const b = luminance(pairs[i][1]);
@@ -109,6 +113,14 @@ Item {
             compare(Theme.cropHandle, "#ffffff");
             compare(Theme.cropHandleHalo, "#80000000");
             compare(Theme.cropGridLine, "#40ffffff");
+        }
+
+        // The accent badge ground the sample-export GT card renders on, mirroring the
+        // successPanel/successBorder pair. Pinned so the card cannot drift back to an
+        // undefined token (which QML silently replaces with a white default fill).
+        function test_accent_badge_grounds_keep_their_pinned_values() {
+            compare(Theme.accentPanel, "#0f2c4a");
+            compare(Theme.accentBorder, "#2a5f9e");
         }
 
         // UX-16: inactive controls are exempt from WCAG 1.4.3, and that exemption is only

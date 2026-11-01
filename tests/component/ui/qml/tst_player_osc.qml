@@ -7,8 +7,9 @@ Item {
     id: root
 
     width: 900
-    // 700 keeps the default compactChrome derivation (hosting window <= 680) off for the
-    // legacy fixtures; the compact tier gets its own explicitly-pinned instance below.
+    // Wide fixtures pin their tier explicitly because a high-DPI screen can clamp the
+    // hosting window below 680 even when this item requests 700. The compact instance
+    // below exercises the small-window tier separately.
     height: 700
 
     QtObject {
@@ -123,6 +124,7 @@ Item {
     Dvs.PlayerOsc {
         id: orderedOsc
 
+        compactChrome: false
         // Raised above dockedOsc (same top anchor, declared later): without this the
         // docked instance's identical transport layout occludes this one and synthetic
         // presses land on the wrong buttons.
@@ -156,6 +158,7 @@ Item {
     Dvs.PlayerOsc {
         id: osc
 
+        compactChrome: false
         width: root.width
         controllerState: 1
         docked: false
@@ -184,6 +187,7 @@ Item {
     Dvs.PlayerOsc {
         id: dockedOsc
 
+        compactChrome: false
         width: root.width
         controllerState: 0
         docked: true
@@ -275,6 +279,7 @@ Item {
     Dvs.PlayerOsc {
         id: protocolOsc
 
+        compactChrome: false
         // Only this fixture should receive protocol clicks when its centered panel
         // overlaps the top/bottom transport fixtures after a status-row reflow.
         z: 6
@@ -345,9 +350,12 @@ Item {
     Dvs.PlayerOsc {
         id: metricOsc
 
+        compactChrome: false
         z: 7
         visible: false
-        width: root.width
+        // The test item can be wider than its OS-clamped high-DPI window; keep the
+        // hover target inside the actual window instead of sending a pointer off-screen.
+        width: Math.min(root.width, metricOsc.Window.window ? metricOsc.Window.window.width : root.width)
         controllerState: 1
         docked: false
         playing: false
@@ -934,7 +942,9 @@ Item {
                 mouseMove(toggle, toggle.width / 2, toggle.height / 2);
                 tryVerify(function () {
                     return Qt.colorEqual(toggle.color, Theme.accentText);
-                });
+                }, 5000, "hover target=" + JSON.stringify(toggle.mapToItem(null, toggle.width / 2, toggle.height / 2))
+                    + ", window=" + metricOsc.Window.window.width + "x" + metricOsc.Window.window.height
+                    + ", root=" + root.width + "x" + root.height);
                 mouseMove(root, 1, 1);
                 tryVerify(function () {
                     return Qt.colorEqual(toggle.color, Theme.accent);
@@ -1476,6 +1486,64 @@ Item {
             }
         }
 
+        function test_compact_readout_never_covers_transport_actions() {
+            compactOsc.visible = true;
+            compactOsc.playbackModeLabel = "逐帧完整";
+            compactOsc.sourceLabel = "a-very-long-source-name-for-the-compact-transport.mp4";
+            compactOsc.currentFrame = 1234566;
+            compactOsc.totalFrames = 2345678;
+            try {
+                const readout = findChild(compactOsc, "oscReadout");
+                verify(readout);
+                const actions = ["firstButton", "previousSecondButton", "previousFiveButton", "previousButton",
+                    "playbackButton", "nextButton", "nextFiveButton", "nextSecondButton", "lastButton",
+                    "playbackRateCombo", "transportExpandToggle", "jogRateCombo", "continuityPolicyToggleGroup",
+                    "transportMarkInButton", "transportMarkOutButton", "transportRangeSummaryCompact",
+                    "transportRangeCapsule",
+                    "transportPlayRangeButton", "transportLoopRangeButton", "transportPingPongRangeButton",
+                    "transportClearRangeButton", "transportExportRangeButton"];
+                const widths = [700, 932, 1200];
+                for (let w = 0; w < widths.length; ++w) {
+                    compactOsc.width = widths[w];
+                    for (let expanded = 0; expanded < 2; ++expanded) {
+                        compactOsc.rangeExpandedCompact = expanded === 1;
+                        waitForPolish(compactOsc.Window.window);
+                        const r = readout.mapToItem(compactOsc, Qt.rect(0, 0, readout.width, readout.height));
+                        verify(r.left >= 0 && r.right <= compactOsc.width + 1,
+                            "readout extends beyond width " + widths[w] + ": " + r.left + "…" + r.right);
+                        const actionRects = [];
+                        for (let i = 0; i < actions.length; ++i) {
+                            const item = findChild(compactOsc, actions[i]);
+                            verify(item, actions[i]);
+                            if (!item.visible)
+                                continue;
+                            const a = item.mapToItem(compactOsc, Qt.rect(0, 0, item.width, item.height));
+                            verify(a.right <= compactOsc.width + 1, actions[i] + " extends beyond width " + widths[w]);
+                            verify(r.right <= a.left || a.right <= r.left || r.bottom <= a.top || a.bottom <= r.top,
+                                "readout covers " + actions[i] + " at width " + widths[w] + ", expanded=" + expanded);
+                            for (let j = 0; j < actionRects.length; ++j) {
+                                const other = actionRects[j];
+                                verify(a.right <= other.rect.left || other.rect.right <= a.left || a.bottom <= other.rect.top || other.rect.bottom <= a.top,
+                                    actions[i] + " overlaps " + other.name + " at width " + widths[w]);
+                            }
+                            actionRects.push({ "name": actions[i], "rect": a });
+                        }
+                    }
+                }
+                compactOsc.width = 932;
+                compactOsc.rangeExpandedCompact = false;
+                tryCompare(compactOsc, "readoutOverlay", true);
+            } finally {
+                compactOsc.width = 932;
+                compactOsc.rangeExpandedCompact = false;
+                compactOsc.playbackModeLabel = "";
+                compactOsc.sourceLabel = "";
+                compactOsc.currentFrame = 41;
+                compactOsc.totalFrames = 100;
+                compactOsc.visible = false;
+            }
+        }
+
         function test_compact_tier_keeps_the_unmeasured_sentence_visible() {
             compactOsc.visible = true;
             try {
@@ -1484,6 +1552,7 @@ Item {
                 const quiet = findChild(compactOsc, "playbackStatusQuiet");
                 verify(quiet !== null && quiet.visible, "the UX-02 quiet capsule rides the compact overlay line");
                 verify(quiet.text.indexOf("本次播放尚未测量") !== -1);
+                verify(quiet.width >= quiet.implicitWidth, "the unmeasured qualification must not be elided");
             } finally {
                 compactOsc.playbackModeLabel = "";
                 compactOsc.playbackRunPresentedFrames = 41;

@@ -478,7 +478,7 @@ v2.0.0 记录为 835.1 ms / ~243 ms。但按本文档 L178 的教训（环境日
 
 **实现要点**
 
-- `src/ui_qml/src/StartupSplash.cpp`：`WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE`
+- `src/ui_qml/src/workspace/StartupSplash.cpp`：`WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE`
   + `WS_POPUP`。不进任务栏/alt-tab，不抢焦点（主窗口几百毫秒后才 `show()` 并激活）。
 - **不阻塞 GUI 线程**：`requestDismiss()` 只置原子标志 + `PostMessage`，任何线程可调；
   只有 `join()` 会等，而它只在 `exec()` 里调用，那时 worker 已空闲。

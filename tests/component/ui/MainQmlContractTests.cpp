@@ -7334,6 +7334,16 @@ TEST(MainQmlContractTests, ImageEditModeCropsAWorkingCopyAndKeepsTheOriginal) {
     EXPECT_TRUE(workspace->property("editModeActive").toBool());
     EXPECT_EQ(harness.imageEdit.imageWidth(), 64);
     EXPECT_EQ(harness.imageEdit.imageHeight(), 48);
+    // A high scale factor can leave too little logical width to dock the parameter panel.
+    // In that layout the real "参数" action opens the same crop controls as a drawer.
+    if (!workspace->property("imagePanelDocked").toBool()) {
+        auto* const openPanel =
+            harness.root->findChild<QQuickItem*>(QStringLiteral("imageEditBandOpenPanelButton"));
+        ASSERT_NE(openPanel, nullptr);
+        ASSERT_TRUE(openPanel->isVisible());
+        ASSERT_TRUE(QMetaObject::invokeMethod(openPanel, "clicked"));
+        harness.settle();
+    }
     EXPECT_TRUE(applyCrop->isVisible());
     EXPECT_FALSE(undoButton->property("enabled").toBool());
     // The pane now serves the working copy through the edit provider.

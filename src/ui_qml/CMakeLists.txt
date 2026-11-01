@@ -19,24 +19,24 @@ add_library(
         include/dvs/ui/SourceIdentity.h
         include/dvs/ui/SourceListModel.h
         include/dvs/ui/VideoFolderModel.h
-        src/ClipExportController.cpp
-        src/FileAssociationController.cpp
-        src/ImageFolderCursor.cpp
-        src/ImageFolderPairModel.cpp
-        src/InterpolationProtocolController.cpp
-        src/IssueLogController.cpp
-        src/JogStateMachine.cpp
-        src/PairMetricsController.cpp
-        src/PreviewThumbnailController.cpp
-        src/ReviewController.cpp
-        src/RecentMediaFiles.h
-        src/ReviewPreferencesController.cpp
-        src/ReviewSessionFacade.cpp
-        src/ReviewShellController.cpp
-        src/SampleExportController.cpp
-        src/SourceIdentity.cpp
-        src/SourceListModel.cpp
-        src/VideoFolderModel.cpp
+        src/outputs/ClipExportController.cpp
+        src/workspace/FileAssociationController.cpp
+        src/image/ImageFolderCursor.cpp
+        src/image/ImageFolderPairModel.cpp
+        src/outputs/InterpolationProtocolController.cpp
+        src/outputs/IssueLogController.cpp
+        src/playback/JogStateMachine.cpp
+        src/comparison/PairMetricsController.cpp
+        src/playback/PreviewThumbnailController.cpp
+        src/playback/ReviewController.cpp
+        src/files/RecentMediaFiles.h
+        src/workspace/ReviewPreferencesController.cpp
+        src/workspace/ReviewSessionFacade.cpp
+        src/workspace/ReviewShellController.cpp
+        src/outputs/SampleExportController.cpp
+        src/workspace/SourceIdentity.cpp
+        src/workspace/SourceListModel.cpp
+        src/files/VideoFolderModel.cpp
 )
 add_library(dvs::ui_models ALIAS dvs_ui_models)
 
@@ -45,6 +45,8 @@ target_include_directories(
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/files
 )
 target_link_libraries(
     dvs_ui_models
@@ -88,32 +90,32 @@ if(DVS_BUILD_ADAPTERS)
             include/dvs/ui/StartupSplash.h
             include/dvs/ui/TimingDiagnosticsController.h
             include/dvs/ui/VideoTaskHost.h
-            src/ComparisonExportController.cpp
-            src/ColorClipboardController.cpp
-            src/DesktopApplication.cpp
-            src/DiagnosticsProbe.cpp
-            src/DirectCompare.cpp
-            src/ComparisonSurface.cpp
-            src/EditImageProvider.cpp
-            src/GraphicsBackend.cpp
-            src/HoldKeyHandler.cpp
-            src/ImageColorContract.cpp
-            src/ImageEditController.cpp
-            src/ImageEditOperations.cpp
-            src/ImagePairLoader.cpp
-            src/ImageReviewController.cpp
-            src/ImageTaskHost.cpp
-            src/JogKeyHandler.cpp
-            src/MainWindowDependencies.cpp
-            src/Module.cpp
-            src/QmlTypeRegistration.cpp
-            src/RenderAckRelay.cpp
-            src/ReviewImageProvider.cpp
-            src/Sam2Segmenter.cpp
-            src/StartupMilestone.cpp
-            src/StartupSplash.cpp
-            src/TimingDiagnosticsController.cpp
-            src/VideoTaskHost.cpp
+            src/comparison/ComparisonExportController.cpp
+            src/image/ColorClipboardController.cpp
+            src/workspace/DesktopApplication.cpp
+            src/workspace/DiagnosticsProbe.cpp
+            src/comparison/DirectCompare.cpp
+            src/comparison/ComparisonSurface.cpp
+            src/image/EditImageProvider.cpp
+            src/comparison/GraphicsBackend.cpp
+            src/workspace/HoldKeyHandler.cpp
+            src/image/ImageColorContract.cpp
+            src/image/ImageEditController.cpp
+            src/image/ImageEditOperations.cpp
+            src/image/ImagePairLoader.cpp
+            src/image/ImageReviewController.cpp
+            src/image/ImageTaskHost.cpp
+            src/playback/JogKeyHandler.cpp
+            src/workspace/MainWindowDependencies.cpp
+            src/workspace/Module.cpp
+            src/workspace/QmlTypeRegistration.cpp
+            src/comparison/RenderAckRelay.cpp
+            src/image/ReviewImageProvider.cpp
+            src/image/Sam2Segmenter.cpp
+            src/workspace/StartupMilestone.cpp
+            src/workspace/StartupSplash.cpp
+            src/workspace/TimingDiagnosticsController.cpp
+            src/playback/VideoTaskHost.cpp
     )
     add_library(dvs::ui_d3d11_bridge ALIAS dvs_ui_d3d11_bridge)
 

@@ -8,6 +8,7 @@ canonical frame position 上，支持任意两路 Wipe/Diff、显式对齐以及
 Agent 从 [快速定位指南](docs/agent-guide.md) 开始；当前需求见
 [产品目标](docs/product/visual-review.md)，问题、代码入口与验收条件见
 [问题台账](docs/engineering/visual-review-backlog.md)。
+按功能查找代码、目录职责和测试入口，请看[仓库与功能地图](docs/architecture/repository-map.md)。
 产品架构、工程说明和历史资料统一从 [docs/README.md](docs/README.md) 进入。
 [docs/architecture.md](docs/architecture.md) 描述技术约束，[docs/releases/](docs/releases/) 记录各版本发布范围；旧实现已从主线移除，
 需要时可通过 Git 历史查阅。

@@ -24,8 +24,9 @@ Rectangle {
         id: card
 
         objectName: "emptyReviewCard"
-        width: Math.min(parent.width - 48, 600)
-        height: content.implicitHeight + 72
+        // Keep the entry cluster proportional to its content on a large empty canvas.
+        width: Math.min(parent.width - 48, 480)
+        height: content.implicitHeight + 64
         radius: Theme.radiusCard
         color: Theme.panel
         border.width: 0
@@ -71,7 +72,7 @@ Rectangle {
 
             Item {
                 width: 1
-                height: 20
+                height: 16
             }
 
             Text {
@@ -100,7 +101,7 @@ Rectangle {
 
             Item {
                 width: 1
-                height: 28
+                height: 24
             }
 
             Flow {
@@ -117,6 +118,9 @@ Rectangle {
                     objectName: "emptyOpenFilesButton"
                     text: qsTr("打开文件…")
                     implicitWidth: parent.width
+                    // §3.1: the primary action earns its weight from the filled accent, not
+                    // from extra height - it shares the card's 36 px entry band.
+                    implicitHeight: 36
                     prominent: true
                     helpText: qsTr("选择视频或图片；多选两三个视频进入对比，两张图片自动配对。")
                     onClicked: control.openFilesRequested()
@@ -145,7 +149,7 @@ Rectangle {
 
             Item {
                 width: 1
-                height: 28
+                height: 24
             }
 
             Rectangle {

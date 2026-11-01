@@ -5936,7 +5936,7 @@ ApplicationWindow {
         anchors.left: parent.left
         anchors.leftMargin: LayoutMetrics.fileSidebarLoaderMargin
         anchors.top: parent.top
-        anchors.topMargin: root.imageWorkspaceActive ? 10 : (root.chromeVisible ? (root.videoTabsStripVisible ? videoTabs.height : 0) + root.videoChromeHeight + 6 : 0)
+        anchors.topMargin: root.imageWorkspaceActive ? 0 : (root.chromeVisible ? (root.videoTabsStripVisible ? videoTabs.height : 0) + root.videoChromeHeight + 6 : 0)
         anchors.bottom: parent.bottom
         anchors.bottomMargin: root.imageWorkspaceActive ? 0 : (root.transportDocked ? root.transportDockHeight : 0)
         sourceComponent: VideoFolderSidebar {
@@ -5975,7 +5975,9 @@ ApplicationWindow {
 
         anchors {
             top: parent.top
-            topMargin: root.chromeVisible ? 10 : 0
+            // The image workspace's chrome starts directly under the menu bar, matching the
+            // video workspace's mode bar - no dead window-coloured band between the two.
+            topMargin: 0
             bottom: parent.bottom
             left: parent.left
             leftMargin: (root.chromeVisible ? LayoutMetrics.canvasEdgeMargin : 0) + root.videoFolderInset
