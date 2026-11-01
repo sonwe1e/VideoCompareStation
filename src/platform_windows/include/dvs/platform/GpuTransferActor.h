@@ -37,6 +37,9 @@ struct GpuTransferStatistics final {
     std::uint64_t maximumTransferMicroseconds = 0U;
     std::uint64_t retiredResources = 0U;
     std::uint64_t deviceLossReports = 0U;
+    // Device transitions this actor accepted work for again, i.e. recoveries that did not need a
+    // new actor. A non-zero value means submit() revived a tombstoned generation.
+    std::uint64_t recoveredGenerations = 0U;
     std::thread::id workerThread;
     std::thread::id lastRetirementThread;
 };

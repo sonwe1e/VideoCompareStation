@@ -159,9 +159,11 @@ public:
             if (state_ == DeviceState::Closed) {
                 return GraphicsDeviceBrokerResult::Closed;
             }
-            if (state_ == DeviceState::Lost) {
-                return GraphicsDeviceBrokerResult::AlreadyUnavailable;
-            }
+            // Lost is not terminal for adoption. A device with a different identity is the
+            // renderer reporting that it built a new device after the old one was removed, which
+            // is exactly the recovery this broker has to expose; refusing it left every consumer
+            // without a device for the rest of the process. A late adopt of the dead device
+            // itself still fails validation below and re-reports the loss.
             observedGeneration = domain::DeviceGeneration{generation_};
             if (state_ == DeviceState::Ready && device_.Get() == rawDevice &&
                 immediateContext_.Get() == rawImmediateContext) {
@@ -193,7 +195,14 @@ public:
             return GraphicsDeviceBrokerResult::Closed;
         }
         if (state_ == DeviceState::Lost) {
-            return GraphicsDeviceBrokerResult::AlreadyUnavailable;
+            // A loss ends only for a device with a different identity: that is the renderer
+            // having built a new device, which is the recovery this broker exists to make
+            // observable. Re-offering the device that was just declared lost keeps the loss,
+            // or a component that reported it could quietly re-adopt its own failure.
+            if (!lostDeviceIdentity_ ||
+                validated->deviceIdentity.Get() == lostDeviceIdentity_.Get()) {
+                return GraphicsDeviceBrokerResult::AlreadyUnavailable;
+            }
         }
         if (state_ == DeviceState::Ready &&
             deviceIdentity_.Get() == validated->deviceIdentity.Get()) {
@@ -212,6 +221,7 @@ public:
         device_ = std::move(validated->device);
         immediateContext_ = std::move(validated->immediateContext);
         deviceIdentity_ = std::move(validated->deviceIdentity);
+        lostDeviceIdentity_.Reset();
         publishedGeneration_.store(nextGeneration, std::memory_order_release);
         publishNotification(GraphicsDeviceNotification{ready});
         return GraphicsDeviceBrokerResult::Ready;
@@ -405,6 +415,9 @@ private:
                 },
             .error = lostError(reason),
         };
+        // Keep the identity of the lost device so a later adopt can tell a rebuilt device from
+        // the same one being offered again; the device itself is released immediately.
+        lostDeviceIdentity_ = deviceIdentity_;
         clearDevice();
         generation_ = nextGeneration;
         state_ = DeviceState::Lost;
@@ -451,6 +464,7 @@ private:
     ComPtr<ID3D11Device> device_;
     ComPtr<ID3D11DeviceContext> immediateContext_;
     ComPtr<IUnknown> deviceIdentity_;
+    ComPtr<IUnknown> lostDeviceIdentity_;
 
     std::array<std::optional<GraphicsDeviceNotification>, kNotificationCapacity> notifications_{};
     std::optional<GraphicsDeviceNotification> overflowNotification_;

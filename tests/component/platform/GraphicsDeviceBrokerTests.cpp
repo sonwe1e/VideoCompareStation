@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <d3d10.h>
+#include <d3d11.h>
 #include <dxgi1_2.h>
 #include <future>
 #include <gtest/gtest.h>
@@ -151,6 +152,60 @@ TEST(GraphicsDeviceBrokerTests, PublishesMonotonicLossAndUnavailableTransitionsT
     EXPECT_EQ(broker.reportDeviceLost(domain::DeviceGeneration{2U}, DXGI_ERROR_DEVICE_REMOVED),
               GraphicsDeviceBrokerResult::Closed);
     EXPECT_EQ(broker.currentGeneration(), domain::DeviceGeneration{2U});
+}
+
+TEST(GraphicsDeviceBrokerTests, AdoptsARebuiltDeviceAfterALossButNotTheLostOne) {
+    GraphicsDeviceBroker broker;
+    test::MinimalQuickRenderHarness harness{broker};
+
+    ASSERT_TRUE(harness.showAndWait());
+    ASSERT_EQ(harness.firstResult(), ui::GraphicsBackendResult::Ready);
+    ASSERT_TRUE(broker.tryConsumeNotification().has_value());
+    const GraphicsDeviceLeaseResult lostLease = broker.tryLease();
+    ASSERT_EQ(lostLease.status, GraphicsDeviceLeaseStatus::Available);
+    ASSERT_TRUE(lostLease.lease.has_value());
+    harness.hide();
+
+    ASSERT_EQ(broker.reportDeviceLost(domain::DeviceGeneration{1U}, DXGI_ERROR_DEVICE_REMOVED),
+              GraphicsDeviceBrokerResult::Lost);
+    ASSERT_TRUE(broker.tryConsumeNotification().has_value());
+
+    // The device that was just declared lost cannot be adopted again; otherwise a component could
+    // re-adopt the very failure it reported.
+    EXPECT_EQ(broker.adoptQtDevice(lostLease.lease->device.Get(),
+                                   lostLease.lease->immediateContext.Get()),
+              GraphicsDeviceBrokerResult::AlreadyUnavailable);
+
+    // A device the renderer rebuilt is the recovery path: it advances the generation and publishes
+    // Ready so every consumer resynchronizes instead of staying lost for the rest of the process.
+    ComPtr<ID3D11Device> rebuilt;
+    ComPtr<ID3D11DeviceContext> rebuiltContext;
+    D3D_FEATURE_LEVEL featureLevel{};
+    ASSERT_EQ(D3D11CreateDevice(nullptr,
+                                D3D_DRIVER_TYPE_WARP,
+                                nullptr,
+                                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                                nullptr,
+                                0U,
+                                D3D11_SDK_VERSION,
+                                rebuilt.GetAddressOf(),
+                                &featureLevel,
+                                rebuiltContext.GetAddressOf()),
+              S_OK);
+    ASSERT_EQ(broker.adoptQtDevice(rebuilt.Get(), rebuiltContext.Get()),
+              GraphicsDeviceBrokerResult::Ready);
+    EXPECT_EQ(broker.currentGeneration(), domain::DeviceGeneration{3U});
+
+    std::optional<GraphicsDeviceNotification> notification = broker.tryConsumeNotification();
+    ASSERT_TRUE(notification.has_value());
+    const auto* const ready = std::get_if<application::GraphicsDeviceReady>(&*notification);
+    ASSERT_NE(ready, nullptr);
+    EXPECT_EQ(ready->context.deviceGeneration, domain::DeviceGeneration{3U});
+
+    const GraphicsDeviceLeaseResult recoveredLease = broker.tryLease();
+    ASSERT_EQ(recoveredLease.status, GraphicsDeviceLeaseStatus::Available);
+    ASSERT_TRUE(recoveredLease.lease.has_value());
+    EXPECT_EQ(recoveredLease.lease->deviceGeneration, domain::DeviceGeneration{3U});
 }
 
 TEST(GraphicsDeviceBrokerTests, CoalescesPressureWithoutVetoingDeviceLoss) {

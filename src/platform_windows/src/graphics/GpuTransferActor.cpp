@@ -917,11 +917,12 @@ void drainRetirement(const std::shared_ptr<GpuTransferState>& state) noexcept {
                 return false;
             }
             if (leaseResult.lease->deviceGeneration != context.deviceGeneration) {
+                // The broker already serves a newer device. Only this attempt is stale; the
+                // mailbox stays open so the next generation can publish into it.
                 state->accepting = false;
                 state->scopeTombstoned = true;
                 state->latestContext.reset();
                 state->pending.reset();
-                state->frameMailbox->shutdown();
                 return false;
             }
             state->deviceLease = std::move(*leaseResult.lease);
@@ -930,11 +931,12 @@ void drainRetirement(const std::shared_ptr<GpuTransferState>& state) noexcept {
         if (leaseResult.status != GraphicsDeviceLeaseStatus::Busy) {
             const std::lock_guard lock{state->mutex};
             if (isTaskCurrentLocked(*state, context)) {
+                // No lease right now. Tombstone this attempt, but keep the mailbox open: a
+                // device that becomes available again must not inherit a closed mailbox.
                 state->accepting = false;
                 state->scopeTombstoned = true;
                 state->latestContext.reset();
                 state->pending.reset();
-                state->frameMailbox->shutdown();
             }
             return false;
         }
@@ -959,7 +961,10 @@ void reportLoss(const std::shared_ptr<GpuTransferState>& state, const HRESULT re
         if (state->deviceLease) {
             expectedGeneration = state->deviceLease->deviceGeneration;
         }
-        state->frameMailbox->shutdown();
+        // The mailbox is deliberately left open. Closing it here is terminal (FrameMailbox has
+        // no reopen path), which turned one lost device into a process that could never present
+        // again; the generation advance in invalidateForBrokerTransition already drops the
+        // frames owned by the removed device.
     }
 
     GraphicsDeviceBrokerResult report = GraphicsDeviceBrokerResult::Busy;
@@ -1149,8 +1154,28 @@ public:
         }
 
         const std::lock_guard lock{state_->mutex};
-        if (!state_->accepting || state_->closing) {
+        if (state_->closing) {
             return GpuTransferSubmitResult::Closed;
+        }
+        // Two states mean the same thing here: the actor was tombstoned by a device transition,
+        // or it still holds a lease from the generation the broker has already left. Reaching
+        // this point means the broker serves the generation this context names, so the actor
+        // can serve the new device instead of staying closed until the process restarts.
+        const bool staleLease = state_->deviceLease &&
+                                state_->deviceLease->deviceGeneration != context.deviceGeneration;
+        if (!state_->accepting || staleLease) {
+            // Everything that belonged to the lost generation is dropped; the mailbox's own
+            // generation check rejects any frame set that is still carrying the old device.
+            state_->accepting = true;
+            state_->lossReported = false;
+            state_->scopeTombstoned = false;
+            state_->scopeHighWater.reset();
+            state_->deviceLease.reset();
+            state_->latestContext.reset();
+            state_->pending.reset();
+            static_cast<void>(
+                state_->frameMailbox->advanceDeviceGeneration(context.deviceGeneration));
+            ++state_->statistics.recoveredGenerations;
         }
         if (state_->deviceLease &&
             state_->deviceLease->deviceGeneration != context.deviceGeneration) {
@@ -1248,7 +1273,9 @@ public:
 
     [[nodiscard]] bool isClosed() const noexcept {
         const std::lock_guard lock{state_->mutex};
-        return !state_->accepting;
+        // Only shutdown is terminal. A device transition clears `accepting` too, but that actor
+        // resumes on the next generation, so reporting it as closed stopped callers driving it.
+        return state_->closing;
     }
 
     [[nodiscard]] GpuTransferStatistics statistics() const noexcept {

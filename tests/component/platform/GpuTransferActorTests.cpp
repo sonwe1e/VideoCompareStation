@@ -540,7 +540,7 @@ TEST(GpuTransferActorTests, TimedOutActorDestructionKeepsDependenciesUntilLateRe
         [&weakBudget, &weakMailbox] { return weakBudget.expired() && weakMailbox.expired(); }, 2s));
 }
 
-TEST(GpuTransferActorTests, RejectsWorkAfterBrokerDeviceLossTransition) {
+TEST(GpuTransferActorTests, RejectsWorkFromTheLostDeviceGeneration) {
     WarpRuntime runtime;
     ASSERT_TRUE(runtime.start());
     auto budget = std::make_shared<FrameBudget>(1U << 20U);
@@ -561,18 +561,86 @@ TEST(GpuTransferActorTests, RejectsWorkAfterBrokerDeviceLossTransition) {
     std::optional<FrameMailboxPublication> publication =
         waitForPublication(*mailbox, domain::DeviceGeneration{1U});
     ASSERT_TRUE(publication.has_value());
+    ASSERT_TRUE(actor.waitUntilIdle(2s));
 
     ASSERT_EQ(
         runtime.broker->reportDeviceLost(domain::DeviceGeneration{1U}, DXGI_ERROR_DEVICE_REMOVED),
         GraphicsDeviceBrokerResult::Lost);
-    ASSERT_TRUE(waitUntil([&actor] { return actor.isClosed(); }, 2s));
-    EXPECT_NE(mailbox->tryLatest(domain::DeviceGeneration{2U}).status,
-              FrameMailboxReadStatus::Available);
+    // Losing the device is not shutdown: the actor stays available for the next generation, which
+    // is what lets a recreated device resume the review instead of requiring a process restart.
+    EXPECT_FALSE(actor.isClosed());
 
+    // A frame set that still names the lost device is rejected instead of uploaded into it.
     std::optional<application::FrameSet> stale = makeCpuSet(*budget, layout, sourceA, sourceB);
     ASSERT_TRUE(stale.has_value());
     EXPECT_EQ(actor.submit(makeContext(), std::move(*stale)),
               GpuTransferSubmitResult::StaleContext);
+    EXPECT_NE(mailbox->tryLatest(domain::DeviceGeneration{2U}).status,
+              FrameMailboxReadStatus::Available);
+    publication.reset();
+    EXPECT_TRUE(actor.shutdown(2s));
+}
+
+TEST(GpuTransferActorTests, ResumesWorkAfterANewDeviceIsAdopted) {
+    WarpRuntime runtime;
+    ASSERT_TRUE(runtime.start());
+    auto budget = std::make_shared<FrameBudget>(1U << 20U);
+    auto mailbox = std::make_shared<FrameMailbox>(domain::DeviceGeneration{1U});
+    GpuTransferActor actor{budget, runtime.broker, mailbox};
+
+    const Nv12FrameLayout layout{
+        .width = 4U,
+        .height = 2U,
+        .yStride = 4U,
+        .uvStride = 4U,
+    };
+    const SourceBytes sourceA = makeSourceBytes(layout, 1U);
+    const SourceBytes sourceB = makeSourceBytes(layout, 2U);
+    std::optional<application::FrameSet> first = makeCpuSet(*budget, layout, sourceA, sourceB);
+    ASSERT_TRUE(first.has_value());
+    ASSERT_EQ(actor.submit(makeContext(), std::move(*first)), GpuTransferSubmitResult::Accepted);
+    std::optional<FrameMailboxPublication> publication =
+        waitForPublication(*mailbox, domain::DeviceGeneration{1U});
+    ASSERT_TRUE(publication.has_value());
+    ASSERT_TRUE(actor.waitUntilIdle(2s));
+
+    ASSERT_EQ(
+        runtime.broker->reportDeviceLost(domain::DeviceGeneration{1U}, DXGI_ERROR_DEVICE_REMOVED),
+        GraphicsDeviceBrokerResult::Lost);
+    EXPECT_EQ(runtime.broker->tryLease().status, GraphicsDeviceLeaseStatus::Unavailable);
+
+    // The scene graph rebuilds its device after the loss and adopts it, exactly as production does.
+    ComPtr<ID3D11Device> recoveredDevice;
+    ComPtr<ID3D11DeviceContext> recoveredContext;
+    D3D_FEATURE_LEVEL featureLevel{};
+    ASSERT_EQ(D3D11CreateDevice(nullptr,
+                                D3D_DRIVER_TYPE_WARP,
+                                nullptr,
+                                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                                nullptr,
+                                0U,
+                                D3D11_SDK_VERSION,
+                                recoveredDevice.GetAddressOf(),
+                                &featureLevel,
+                                recoveredContext.GetAddressOf()),
+              S_OK);
+    ASSERT_EQ(runtime.broker->adoptQtDevice(recoveredDevice.Get(), recoveredContext.Get()),
+              GraphicsDeviceBrokerResult::Ready);
+    const domain::DeviceGeneration recovered = runtime.broker->currentGeneration();
+    ASSERT_GT(recovered.value(), domain::DeviceGeneration{1U}.value());
+
+    std::optional<application::FrameSet> second = makeCpuSet(*budget, layout, sourceA, sourceB, 4);
+    ASSERT_TRUE(second.has_value());
+    const application::FrameRequestContext context = makeContext(2U, recovered.value(), 2U);
+    EXPECT_EQ(actor.submit(context, std::move(*second)), GpuTransferSubmitResult::Accepted);
+
+    std::optional<FrameMailboxPublication> recoveredPublication =
+        waitForPublication(*mailbox, recovered);
+    ASSERT_TRUE(recoveredPublication.has_value());
+    ASSERT_NE(recoveredPublication->set, nullptr);
+    EXPECT_EQ(recoveredPublication->set->context(), context);
+    EXPECT_EQ(actor.statistics().recoveredGenerations, 1U);
+    recoveredPublication.reset();
     publication.reset();
     EXPECT_TRUE(actor.shutdown(2s));
 }
