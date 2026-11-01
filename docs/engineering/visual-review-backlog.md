@@ -38,9 +38,12 @@
 - **迁移可核对**：77 个删除/新增对按 blob 哈希逐一比对为逐字节迁移；25 个 CMakeLists 的 177 条
   `src/`/`include/` 路径全部存在，`src/*/src` 下无未被任何目标引用的 `.cpp`；迁移后的子目录都已进入
   对应测试目标的 include 目录。
-- **打包链一致**：`Install.cmake`/`VerifyPackageStage.cmake` 引用的安装期文件、必需载荷、版本派生名
-  （`CompareStationShell-2.7.dll`、`CompareStation-2.7.0-windows-x64`）与 2.7.0 保持一致；本次只修了
-  `release.yml` 白名单与 `verify-release-package.ps1` 的示例版本，未重新生成 ZIP。
+- **打包链一致并且实跑过**：`Install.cmake`/`VerifyPackageStage.cmake` 引用的安装期文件、必需载荷、
+  版本派生名（`CompareStationShell-2.7.dll`、`CompareStation-2.7.0-windows-x64`）与 2.7.0 一致。
+  2026-11-01 本地顺序执行 release 增量构建 → `cpack --preset release-zip` → `verify-release-package.ps1`：
+  CPack 前的 staging 门通过，产物 `CompareStation-2.7.0-windows-x64.zip` 27.1 MiB，包自校验 16 项
+  全部 PASS。这证明打包管线在整理后仍可用，但**不是**发布门禁：硬件/性能门禁、干净机解压与真实
+  注册表行为都没有在本轮验证。
 - **仍未关闭**：ENG-01、ENG-02、PERF-01、PERF-03 与上一节新增的 ENG-04、ACK-01。它们的共同点是需要
   反例测试（邮箱换代、失败原因通道、critical 队列满队、ACK 重武装），本轮没有硬件的运行期证据，不按
   「已修」上报。

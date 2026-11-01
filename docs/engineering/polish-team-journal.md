@@ -96,6 +96,9 @@
   规则未改。
 - 团队记录补全：`TEAM.md` 迁入 `docs/engineering/team-charter.md` 并追加「本仓库落地约定」（记录位置
   映射、证据状态、与构建/验收规则的衔接）；journal 头部死链改指该文件；`docs/README.md` 增加索引行。
+- 打包链实跑（同日）：release 增量构建 → `cpack --preset release-zip` → `verify-release-package.ps1`。
+  CPack 前的 staging 门通过，产物 `CompareStation-2.7.0-windows-x64.zip` 27.1 MiB（sha256
+  `3D9E0BE1…B1AB360`），包自校验 16 项全 PASS。这是本机打包证据，不等于发布门禁。
 - 打包与发布：`release.yml` 的未签名发布白名单删去没有发布记录的 `v2.6.0`/`v2.6.1`；
   `verify-release-package.ps1` 的示例版本改为 2.7.0；两个 adapter 的 CMake 源清单补入 10 个私有头，
   让「CMakeLists 是源文件事实来源」这条自述成立。
