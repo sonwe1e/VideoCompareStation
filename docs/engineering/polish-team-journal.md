@@ -132,3 +132,39 @@
   ACK-01 的背压重武装，各自配反例测试后单独提交。
 - DPI-01 的自然启动、跨屏与 100–200% 缩放实机复核。
 
+---
+
+## 2026-11-01 | ENG-02 图形恢复协议 | 架构师 · 构建者
+
+**决策（协议先定，再改）**
+
+两条候选：A 组合根按代次重建 actor/通道/邮箱；B 同一 actor 复活 + 邮箱换代前移。选 B：
+`PlaybackCoordinator::Dependencies` 的 `renderChannel` 是构造期固定的 `shared_ptr`，A 需要新增跨层
+替换 API 与线程切换约定；B 只动 platform 适配器，而且 `D3d11ComparisonRenderer::ensureDeviceResources`
+本来就按 `(device, generation)` 重建着色器与状态，渲染侧已具备恢复语义。tombstone 仍只用于拒绝
+**旧代**结果，不再用于永久关闭。
+
+**动作与证据**
+
+- `GraphicsDeviceBroker`：Loss 之后接受**身份不同**的新设备（同一台被判丢失的设备继续拒绝），
+  收养后 generation+1 并发布 Ready；新增 `platform.GraphicsDeviceBrokerTests.AdoptsARebuiltDeviceAfterALossButNotTheLostOne`。
+- `GpuTransferActor`：`submit` 在「已被换代墓碑」或「仍持旧代租约」时复活（清 lease／scope 高水位／
+  lossReported，调用 `advanceDeviceGeneration`，统计 `recoveredGenerations`）；`reportLoss` 与两次
+  租约失败不再 `FrameMailbox::shutdown`；`isClosed()` 改为只表示 shutdown。
+- 测试：删除锁定缺陷行为的 `RejectsWorkAfterBrokerDeviceLossTransition`，换成
+  `RejectsWorkFromTheLostDeviceGeneration`（旧代仍被拒）与 `ResumesWorkAfterANewDeviceIsAdopted`
+  （换代 → 收养 WARP 新设备 → submit 返回 Accepted → 新代可读）。
+- 运行证据：`platform.` 组件套件 28 例全过（`out/verification/eng02-platform-suite-2026-11-01.log`）；
+  UI 全矩阵 731 例全过（`out/verification/ui-matrix-2026-11-01.log`，DPI-01 之后补跑）。
+
+**坑**
+
+- 第一次实现只在 `!accepting` 时复活，测试暴露另一种顺序：换代后 worker 还没跑
+  `invalidateForBrokerTransition`，actor 仍持旧代 lease 且 `accepting` 为真，`submit` 先撞上
+  「租约代次不符」返回 StaleContext。复活条件必须同时覆盖「持旧代租约」。
+
+**未验证**
+
+- 真实 TDR／驱动重置下 Qt 场景图是否重新交出设备——这是本路径能否被触发的上游条件，未验证。
+- ENG-01 仍未修：恢复前的 publish 失败仍按 `kMediaDecodeFailed` 上报，`handleGraphicsReady` 不会清它。
+
