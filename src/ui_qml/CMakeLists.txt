@@ -90,6 +90,7 @@ if(DVS_BUILD_ADAPTERS)
             include/dvs/ui/StartupSplash.h
             include/dvs/ui/TimingDiagnosticsController.h
             include/dvs/ui/VideoTaskHost.h
+            src/image/ByteLruCache.h
             src/comparison/ComparisonExportController.cpp
             src/image/ColorClipboardController.cpp
             src/workspace/DesktopApplication.cpp
@@ -102,6 +103,7 @@ if(DVS_BUILD_ADAPTERS)
             src/image/ImageColorContract.cpp
             src/image/ImageEditController.cpp
             src/image/ImageEditOperations.cpp
+            src/image/ImageHeaderProbe.h
             src/image/ImagePairLoader.cpp
             src/image/ImageReviewController.cpp
             src/image/ImageTaskHost.cpp
@@ -110,6 +112,7 @@ if(DVS_BUILD_ADAPTERS)
             src/workspace/Module.cpp
             src/workspace/QmlTypeRegistration.cpp
             src/comparison/RenderAckRelay.cpp
+            src/comparison/RenderRetry.h
             src/image/ReviewImageProvider.cpp
             src/image/Sam2Segmenter.cpp
             src/workspace/StartupMilestone.cpp

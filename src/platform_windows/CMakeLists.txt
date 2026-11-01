@@ -3,10 +3,12 @@ add_library(
     STATIC
         src/support/Module.cpp
         src/support/AtomicFilePublisher.cpp
+        src/support/AtomicFilePublisherTestHooks.h
         src/support/ProcessTelemetry.cpp
         src/support/SourceIdentityService.cpp
         src/support/SteadyDeadlineScheduler.cpp
         src/support/TraceSink.cpp
+        src/support/WindowsApi.h
         src/support/WindowsPaths.cpp
 )
 add_library(dvs::windows_support ALIAS dvs_windows_support)
@@ -32,17 +34,22 @@ add_library(
         src/graphics/CpuP010FrameResource.cpp
         src/graphics/D3d11DecodedFrameResource.cpp
         src/graphics/D3d11GpuFrameBacking.cpp
+        src/graphics/D3d11GpuFrameBacking.h
         src/graphics/D3d11SourcePixelProbe.cpp
+        src/graphics/D3d11SourcePixelProbe.h
         src/graphics/D3d11ComparisonRenderer.cpp
         src/graphics/D3d11RenderChannel.cpp
         src/graphics/FrameResourceFactory.cpp
         src/graphics/FrameMailbox.cpp
         src/graphics/GraphicsDeviceBroker.cpp
         src/graphics/GpuFrameSet.cpp
+        src/graphics/GpuFrameSet.h
         src/graphics/GpuFrameResource.cpp
+        src/graphics/GpuFrameResource.h
         src/graphics/GpuTransferActor.cpp
         src/graphics/PresentationAckMailbox.cpp
         src/graphics/PresentationStatisticsProbe.cpp
+        src/graphics/PresentationStatisticsProbeTestHooks.h
 )
 add_library(dvs::graphics_d3d11 ALIAS dvs_graphics_d3d11)
 
