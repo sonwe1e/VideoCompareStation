@@ -19,10 +19,15 @@ import Dvs.Ui 1.0
 ApplicationWindow {
     id: root
 
-    width: 1440
-    height: 900
-    minimumWidth: 960
-    minimumHeight: 640
+    // DPI-01: open inside the screen the window lands on. A fixed 1440x900 crops the transport
+    // bar on a 1366x768 display or at a display scale that shrinks the logical screen, so the
+    // preferred size and both floors follow the available screen.
+    // tst_layout_metrics.qml pins the arithmetic behind this binding.
+    readonly property var windowFit: LayoutMetrics.fitWindowToScreen(Screen.width, Screen.height, 1440, 900, 960, 640)
+    width: windowFit.width
+    height: windowFit.height
+    minimumWidth: windowFit.minimumWidth
+    minimumHeight: windowFit.minimumHeight
     visible: false
     title: Qt.application.version.length > 0 ? qsTr("CompareStation %1 — 视觉审查").arg(Qt.application.version) : qsTr("CompareStation — 视觉审查")
     color: Theme.window

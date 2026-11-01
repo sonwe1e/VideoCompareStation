@@ -69,5 +69,32 @@ Item {
             compare(LayoutMetrics.clampLocalStripShare(0.34), 0.34);
             compare(LayoutMetrics.localStripMinimumHeight, 132);
         }
+
+        function test_window_fit_keeps_the_frame_inside_the_screen() {
+            // A screen that fits the 1440x900 target keeps it with the design floors (DPI-01).
+            let fit = LayoutMetrics.fitWindowToScreen(2560, 1440, 1440, 900, 960, 640);
+            compare(fit.width, 1440);
+            compare(fit.height, 900);
+            compare(fit.minimumWidth, 960);
+            compare(fit.minimumHeight, 640);
+            // A 1366x768 laptop shrinks the window instead of cropping the transport bar.
+            fit = LayoutMetrics.fitWindowToScreen(1366, 728, 1440, 900, 960, 640);
+            compare(fit.width, 1366);
+            compare(fit.height, 728);
+            // The width floor still fits; the height floor does too, so the window can be resized.
+            compare(fit.minimumWidth, 960);
+            compare(fit.minimumHeight, 640);
+            // A logical screen below the design floor shrinks the floor as well (200 % scaling).
+            fit = LayoutMetrics.fitWindowToScreen(800, 480, 1440, 900, 960, 640);
+            compare(fit.width, 800);
+            compare(fit.height, 480);
+            compare(fit.minimumWidth, 800);
+            compare(fit.minimumHeight, 480);
+            // No usable screen geometry keeps the preferred size rather than collapsing to zero.
+            fit = LayoutMetrics.fitWindowToScreen(0, 0, 1440, 900, 960, 640);
+            compare(fit.width, 1440);
+            compare(fit.height, 900);
+            compare(fit.minimumWidth, 960);
+        }
     }
 }

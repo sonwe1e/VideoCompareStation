@@ -569,8 +569,12 @@ public:
             if (selected != screens.cend() && *selected != nullptr) {
                 const QRect available = (*selected)->availableGeometry();
                 window->setScreen(*selected);
-                window->setPosition(available.center() -
-                                    QPoint{window->width() / 2, window->height() / 2});
+                // Centre inside the available area and never push the frame off it: centring a
+                // window that fills or exceeds the screen would place its top-left at a negative
+                // coordinate and hide the title and transport chrome.
+                window->setPosition(QPoint{
+                    available.left() + std::max(0, (available.width() - window->width()) / 2),
+                    available.top() + std::max(0, (available.height() - window->height()) / 2)});
                 activeScreenRefreshRate_ = (*selected)->refreshRate();
             }
         }

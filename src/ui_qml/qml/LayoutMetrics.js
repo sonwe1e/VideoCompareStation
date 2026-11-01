@@ -18,6 +18,31 @@ function clamp(value, minimum, maximum) {
     return Math.max(minimum, Math.min(maximum, value));
 }
 
+// Initial window sizing (DPI-01). The 1440x900 design target is a preference, not a promise about
+// the screen the window opens on: opening at the preferred size on a 1366x768 display, or under a
+// display scale that shrinks the logical screen, pushes the transport bar past the bottom edge.
+// Both floors shrink with the same limit so a fitted window can always be made smaller than its
+// preferred size. A missing screen geometry keeps the preferred size.
+function fitWindowToScreen(availableWidth, availableHeight, preferredWidth, preferredHeight, minimumWidth, minimumHeight) {
+    if (!isFinite(availableWidth) || !isFinite(availableHeight) ||
+            availableWidth <= 0 || availableHeight <= 0) {
+        return {
+            width: preferredWidth,
+            height: preferredHeight,
+            minimumWidth: minimumWidth,
+            minimumHeight: minimumHeight
+        }
+    }
+    const width = Math.min(preferredWidth, availableWidth)
+    const height = Math.min(preferredHeight, availableHeight)
+    return {
+        width: width,
+        height: height,
+        minimumWidth: Math.min(minimumWidth, width),
+        minimumHeight: Math.min(minimumHeight, height)
+    }
+}
+
 // Stage width the file sidebar consumes while it is visible.
 function fileSidebarStageWidth(sidebarWidth) {
     return fileSidebarLoaderMargin + sidebarWidth + fileSidebarGap;
