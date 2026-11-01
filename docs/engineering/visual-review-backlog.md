@@ -27,8 +27,8 @@
 | PERF-02 | 待决策/待证据 | 协调层播放期前视深度恒 1 帧，`PrefetchScheduler::duringForwardPlayback`（3 帧前视）是死代码。exactPrefetchWindow 注释记录过投机解码引发 DecoderReopen（kind 11）风暴的教训；加深须以 fps 阈值+队列空闲为前提并用 kind 11 计数验证，先补恢复期 trace 证据 |
 | PERF-03 | 待修复 | `postCritical` 满队（256）阻塞等待把唯一的节奏定时器线程与 ACK relay 变成队头阻塞点。改投递语义须保持 DeadlineElapsed 至少一次送达且不得与 postRealtime 单槽混用 |
 | PERF-04 | 待增强 | 测量工具缺口：通用 profile 无交错 A/B 入口（run-t5-gate-ab.ps1 范式未推广）、gate 结果不落机器可读 JSON、物理呈现层无采样（0.5% 掉帧门只覆盖应用 ACK 口径，与 V-01 相邻）、基础素材无哈希 contract、UI 响应门实际只有 play 一个样本。定位为门禁/发布证据增强，不进日常开发循环 |
-| ENG-04（2026-11-01 复核） | 待修复 | `D3d11RenderChannel::clear` 丢弃 `GpuTransferActor::clear` 的 bool（`graphics/D3d11RenderChannel.cpp:34-38`），而该值在 `!accepting`／关闭／scope 被拒时为 false；协调层 teardown 依赖 tombstone 已装上却无从得知。修复时让 `application::IRenderChannel::clear` 返回结果并由调用方记录 |
-| ACK-01（2026-11-01 复核） | 待修复 | `D3d11ComparisonRenderer::retryPendingAcknowledgement`（`graphics/D3d11ComparisonRenderer.cpp:2676-2691`）在重试仍遇队列满时不重设 pending、也不调 `notifyAckBackpressured`，`RenderAckRelay` 因此不再排重绘，`render()` 提前返回不再读邮箱，协调层要等到五秒未呈现超时。首次路径（:2731-2739）会通知，两处语义应一致 |
+| ENG-04（2026-11-01 复核） | 源码已修 | `application::IRenderChannel::clear` 改为 `[[nodiscard]] bool`：`graphics/D3d11RenderChannel.cpp` 原样返回 actor 的 `clear`（无 actor 时为 false），协调层六处调用显式 `static_cast<void>` 并注明「拒绝即无 scope 可作废」，三个测试假通道与 `DirectCompare` 的 `CapturingRenderChannel` 同步返回 true。`platform.D3d11RenderChannelTests.KeepsTheActorReasonInsteadOfCollapsingEveryFailure` 断言同一 scope 只能装一次墓碑（先 true 后 false）。**仍缺**：协调层目前不消费该结果；若将来需要在 UI 提示「陈旧画面仍被保留」，可直接使用这个返回值而无需再改端口 |
+| ACK-01（2026-11-01 复核） | 源码已修，缺针对性反例 | `retryPendingAcknowledgement`（`graphics/D3d11ComparisonRenderer.cpp`）在重试仍遇 `Full` 时重新调用 `notifyAckBackpressured()`：此前只有首次路径通知，重试那次留着 pending 却不重排重绘，暂停或逐帧时没有新帧触发下一次重试，协调层要等满五秒的呈现超时。已修但**没有**新增用例——它需要「ACK 队列保持满 + 暂停态重绘」的夹具，`ComparisonSurfaceTests` 的 `CountingActivitySink` 已能计数背压通知，可作为下一次补测的接缝；本轮只以 `platform.` 187 例回归通过为准 |
 
 ### 2026-11-01 复核记录
 

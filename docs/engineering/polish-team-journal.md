@@ -186,3 +186,25 @@ publish 结果的 FakeRenderChannel 驱动一次交互步进失败）与
 **没做**：跨代 publish 不再被误报，但仍按一次失败终止本轮播放；自动重试或续播要另立判据，否则
 容易变成「丢帧掩盖问题」。真机 TDR 仍未验，ENG-01 与 ENG-02 都停在「源码已修，待实机验证」。
 
+---
+
+## 2026-11-01 | ACK-01 + ENG-04 小切片 | 构建者
+
+**动作**
+
+- ACK-01：`retryPendingAcknowledgement` 在重试仍遇 ACK 队列满时补一次 `notifyAckBackpressured()`。
+  原来只有首次路径会通知；重试那次把 pending 留着却不重排重绘，暂停/逐帧时没有新帧来触发下一次
+  重试，协调层只能等满五秒的呈现超时。
+- ENG-04：`application::IRenderChannel::clear` 改为 `[[nodiscard]] bool`，通道原样返回 actor 的结论；
+  协调层六处调用显式 `static_cast<void>`（拒绝即「没有可作废的 scope」），假通道与 `CapturingRenderChannel`
+  同步返回 true；通道测试补「同一 scope 只能装一次墓碑」。
+
+**证据**：`application.PlaybackCoordinatorTests` + `platform.` 共 289 例全过
+（`out/verification/ack-eng04-tests-2026-11-01.log`），`format-check` 通过。
+
+**坑**：`clear` 加上 `[[nodiscard]]` 后，`GpuTransferActorTests.cpp:389` 那处裸调用在 `/W4 /WX` 下直接变成
+C4834 编译错误——接口收紧会立刻暴露所有历史忽略点，这类改动要先 grep 全部调用方。
+
+**未做**：ACK-01 没有新增反例（需要「ACK 队列保持满 + 暂停态重绘」的夹具，`CountingActivitySink`
+是接缝）；协调层尚未消费 `clear` 的返回值。两者都写进了台账的当前缺口列。
+
