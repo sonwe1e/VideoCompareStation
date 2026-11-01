@@ -18,7 +18,7 @@ public:
     [[nodiscard]] application::RenderPublishResult
     publish(const application::FrameRequestContext& context,
             application::FrameSet set) noexcept override;
-    void clear(const application::PlaybackRequestContext& context) noexcept override;
+    [[nodiscard]] bool clear(const application::PlaybackRequestContext& context) noexcept override;
 
 private:
     std::shared_ptr<GpuTransferActor> transferActor_;

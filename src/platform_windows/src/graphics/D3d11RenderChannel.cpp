@@ -34,10 +34,11 @@ D3d11RenderChannel::publish(const application::FrameRequestContext& context,
     return application::RenderPublishResult::Closed;
 }
 
-void D3d11RenderChannel::clear(const application::PlaybackRequestContext& context) noexcept {
-    if (transferActor_) {
-        static_cast<void>(transferActor_->clear(context));
+bool D3d11RenderChannel::clear(const application::PlaybackRequestContext& context) noexcept {
+    if (!transferActor_) {
+        return false;
     }
+    return transferActor_->clear(context);
 }
 
 } // namespace dvs::platform

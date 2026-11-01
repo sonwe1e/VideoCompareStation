@@ -386,7 +386,7 @@ TEST(GpuTransferActorTests, ClearTombstoneAndDeviceGenerationRejectLateOrStalePa
     ASSERT_TRUE(first.has_value());
     ASSERT_EQ(channel.publish(context, std::move(*first)),
               application::RenderPublishResult::Accepted);
-    channel.clear(context.playback);
+    EXPECT_TRUE(channel.clear(context.playback));
     ASSERT_TRUE(actor.waitUntilIdle(2s));
     EXPECT_NE(mailbox->tryLatest(context.deviceGeneration).status,
               FrameMailboxReadStatus::Available);
@@ -425,6 +425,11 @@ TEST(D3d11RenderChannelTests, KeepsTheActorReasonInsteadOfCollapsingEveryFailure
     ASSERT_EQ(channel.publish(makeContext(), std::move(*first)),
               application::RenderPublishResult::Accepted);
     ASSERT_TRUE(actor.waitUntilIdle(2s));
+
+    // clear() reports whether the tombstone was installed instead of swallowing the answer: the
+    // same scope cannot tombstone twice.
+    EXPECT_TRUE(channel.clear(makeContext().playback));
+    EXPECT_FALSE(channel.clear(makeContext().playback));
 
     // The device is gone. A publish that names the current generation has no device to reach, and a
     // publish that still names the lost generation is stale; neither is a decode failure.

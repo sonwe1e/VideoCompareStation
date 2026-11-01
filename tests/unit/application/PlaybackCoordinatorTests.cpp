@@ -626,7 +626,7 @@ public:
         return RenderPublishResult::Accepted;
     }
 
-    void clear(const PlaybackRequestContext& context) noexcept override {
+    [[nodiscard]] bool clear(const PlaybackRequestContext& context) noexcept override {
         {
             std::scoped_lock lock(mutex_);
             clearContexts_.push_back(context);
@@ -637,6 +637,7 @@ public:
             }
         }
         condition_.notify_all();
+        return true;
     }
 
     [[nodiscard]] bool waitForPublishedCount(const std::size_t count) {
@@ -721,13 +722,14 @@ public:
         return RenderPublishResult::Accepted;
     }
 
-    void clear(const PlaybackRequestContext& context) noexcept override {
+    [[nodiscard]] bool clear(const PlaybackRequestContext& context) noexcept override {
         std::scoped_lock lock(mutex_);
         for (PublishedIdentity& published : published_) {
             if (published.context.playback == context) {
                 published.invalidated = true;
             }
         }
+        return true;
     }
 
     [[nodiscard]] bool waitForPublishedCount(const std::size_t count) {
@@ -769,7 +771,9 @@ public:
         return RenderPublishResult::Accepted;
     }
 
-    void clear(const PlaybackRequestContext&) noexcept override {}
+    [[nodiscard]] bool clear(const PlaybackRequestContext&) noexcept override {
+        return true;
+    }
 
     [[nodiscard]] bool waitUntilPublishBlocked() {
         std::unique_lock lock(mutex_);

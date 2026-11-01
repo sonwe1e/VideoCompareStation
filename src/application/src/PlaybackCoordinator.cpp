@@ -1026,7 +1026,7 @@ private:
         const bool failedExactFrame = failed.phase == PendingPhase::kOpeningFirstFrame ||
                                       failed.phase == PendingPhase::kSeekingFrame;
         if (failedExactFrame && failed.frameContext.has_value()) {
-            dependencies_.renderChannel->clear(failed.providerContext);
+            static_cast<void>(dependencies_.renderChannel->clear(failed.providerContext));
             state_.playbackGeneration = increment(state_.playbackGeneration);
         }
 
@@ -1270,7 +1270,7 @@ private:
         }
         dependencies_.directFrameProvider->cancel(stopped.providerContext);
         if (stopped.frame.has_value() && stopped.frame->framePublished) {
-            dependencies_.renderChannel->clear(stopped.providerContext);
+            static_cast<void>(dependencies_.renderChannel->clear(stopped.providerContext));
         }
         state_.playbackGeneration = increment(state_.playbackGeneration);
         state_.playbackState = domain::PlaybackState::kPaused;
@@ -1566,7 +1566,7 @@ private:
         }
         dependencies_.directFrameProvider->cancel(stopped.providerContext);
         if (stopped.frame.has_value() && stopped.frame->frame.framePublished) {
-            dependencies_.renderChannel->clear(stopped.providerContext);
+            static_cast<void>(dependencies_.renderChannel->clear(stopped.providerContext));
         }
         return stopped;
     }
@@ -2394,7 +2394,8 @@ private:
                         *playbackRun_->frame->presentationTimerId));
                 }
                 if (playbackRun_->frame->framePublished) {
-                    dependencies_.renderChannel->clear(playbackRun_->providerContext);
+                    static_cast<void>(
+                        dependencies_.renderChannel->clear(playbackRun_->providerContext));
                 }
             }
             if (playbackRun_->cadenceTimerId.has_value()) {
@@ -3540,7 +3541,7 @@ private:
         }
 
         const PlaybackRequestContext providerContext = currentPlaybackScope();
-        dependencies_.renderChannel->clear(providerContext);
+        static_cast<void>(dependencies_.renderChannel->clear(providerContext));
         state_.sessionEpoch = increment(state_.sessionEpoch);
         state_.playbackGeneration = increment(state_.playbackGeneration);
         state_.sessionState = domain::SessionState::kLoading;
@@ -5106,7 +5107,7 @@ private:
             if ((pending_->phase == PendingPhase::kOpeningFirstFrame ||
                  pending_->phase == PendingPhase::kSeekingFrame) &&
                 pending_->frameContext.has_value()) {
-                dependencies_.renderChannel->clear(pending_->providerContext);
+                static_cast<void>(dependencies_.renderChannel->clear(pending_->providerContext));
             }
         }
         if (analysisJob_.has_value() && dependencies_.alignmentAnalysisService) {

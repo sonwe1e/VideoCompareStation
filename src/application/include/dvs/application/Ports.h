@@ -214,7 +214,11 @@ public:
 
     [[nodiscard]] virtual RenderPublishResult publish(const FrameRequestContext& context,
                                                       FrameSet set) noexcept = 0;
-    virtual void clear(const PlaybackRequestContext& context) noexcept = 0;
+    // Installs the scope tombstone that stops an older set from being published or drawn.
+    // Returns false when it was refused - the channel is closed, or the caller's scope is not newer
+    // than the one already tombstoned - so the caller can tell a stale frame may still be retained
+    // instead of assuming the clear took effect.
+    [[nodiscard]] virtual bool clear(const PlaybackRequestContext& context) noexcept = 0;
 };
 
 } // namespace dvs::application

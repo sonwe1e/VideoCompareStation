@@ -2687,6 +2687,12 @@ private:
         } else if (result == PresentationAckPushResult::Closed) {
             pendingAcknowledgement_.reset();
             acknowledgementClosed_ = true;
+        } else if (const std::shared_ptr<IRenderActivitySink> sink = activitySink_.lock()) {
+            // Still full. Report the backpressure again so the relay schedules the next draw: the
+            // first path already did, but that one redraw may also find the queue full, and a
+            // paused or stepping review then produces no new frame to retry on. Without this the
+            // pending acknowledgement waited for its five-second presentation deadline.
+            sink->notifyAckBackpressured();
         }
     }
 

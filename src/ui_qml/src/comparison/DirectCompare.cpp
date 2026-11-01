@@ -67,11 +67,12 @@ public:
         return application::RenderPublishResult::Accepted;
     }
 
-    void clear(const application::PlaybackRequestContext& context) noexcept override {
+    [[nodiscard]] bool clear(const application::PlaybackRequestContext& context) noexcept override {
         std::scoped_lock lock(mutex_);
         std::erase_if(captured_, [&context](const CapturedSet& captured) {
             return samePlaybackScope(captured.context.playback, context);
         });
+        return true;
     }
 
     [[nodiscard]] std::optional<application::FrameSet> latestSet() const {
