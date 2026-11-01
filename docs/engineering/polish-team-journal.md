@@ -208,3 +208,17 @@ C4834 编译错误——接口收紧会立刻暴露所有历史忽略点，这�
 **未做**：ACK-01 没有新增反例（需要「ACK 队列保持满 + 暂停态重绘」的夹具，`CountingActivitySink`
 是接缝）；协调层尚未消费 `clear` 的返回值。两者都写进了台账的当前缺口列。
 
+---
+
+## 2026-11-01 | 推送前全量回归 | 验证者
+
+**证据**：`pwsh tools/build/build.ps1 -Preset dev -Test`（无过滤器 = 完整预设）——**1551 例，
+100% tests passed**，总时长 796.7 s，exit 0（`out/verification/full-ctest-2026-11-01.log`）。
+覆盖今天全部 11 个提交之后的树：目录迁移、DPI-01、ENG-02、ENG-01、ACK-01、ENG-04 及配套测试。
+
+9 例跳过：5 例 `platform.PresentationStatisticsProbeTests`（需真实显示统计）、1 例
+`media.SoftwareDecoderTests.ExactDecodeWalksEveryOrdinalOfProvidedGameDvrCapture`、1 例
+`ui.ImageReviewControllerTests.LoadsUserPngFromDisk`、2 例 `ui.ImageFolderPairModelTests` 同名冲突
+（样本缺失）。这 9 例依赖真实显示或外部样本，本轮**未**逐条核对它们在改动前是否同样跳过；
+不把它们计入通过，也不据此判断这些路径已验收。
+
